@@ -1,99 +1,149 @@
 {
   "tuf": {
-    "repository": "https://dl.flynn.io/tuf",
+    "repository": "http://localhost:8080/tuf",
     "root_keys": [
-      {"keytype":"ed25519","keyval":{"public":"6cfda23aa48f530aebd5b9c01030d06d02f25876b5508d681675270027af4731"}}
+      {
+        "keytype": "ed25519",
+        "scheme": "ed25519",
+        "keyid_hash_algorithms": [
+          "sha256",
+          "sha512"
+        ],
+        "keyval": {
+          "public": "cdad96e11e5a1dd12ae3f7afa27a450f394585cec97ef5d74a22be0eba33524a"
+        }
+      }
     ]
   },
   "base_layer": {
-    "type":   "squashfs",
-    "id":     "4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e",
-    "url":    "https://dl.flynn.io/tuf/targets/layers/8804e92cba40018baec15a29dae84d210c0fe57da12654aa53928fb4c4a2ff6a65158906d4f3d044a282ec61d59fd340694f48130023bce22243279a6af3d900.4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e.squashfs",
-    "size":   62631936,
-    "hashes": {"sha512_256": "066e1829132a8571b7a1c59e86b54340b22cfa47427725c322ca21ec63946ec5"}
+    "type": "squashfs",
+    "id": "4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e",
+    "url": "https://dl.flynn.io/tuf/targets/layers/8804e92cba40018baec15a29dae84d210c0fe57da12654aa53928fb4c4a2ff6a65158906d4f3d044a282ec61d59fd340694f48130023bce22243279a6af3d900.4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e.squashfs",
+    "size": 62631936,
+    "hashes": {
+      "sha512_256": "066e1829132a8571b7a1c59e86b54340b22cfa47427725c322ca21ec63946ec5"
+    }
   },
   "images": [
     {
       "id": "ubuntu-trusty",
-      "layers": [{
-        "script": "builder/img/ubuntu-trusty.sh",
-        "inputs": ["builder/ubuntu-setup.sh"],
-        "limits": { "temp_disk": "2GB" },
-        "linux_capabilities": ["CAP_SYS_ADMIN"]
-      }]
+      "layers": [
+        {
+          "script": "builder/img/ubuntu-trusty.sh",
+          "inputs": [
+            "builder/ubuntu-setup.sh"
+          ],
+          "limits": {
+            "temp_disk": "2GB"
+          },
+          "linux_capabilities": [
+            "CAP_SYS_ADMIN"
+          ]
+        }
+      ]
     },
     {
       "id": "ubuntu-xenial",
-      "layers": [{
-        "script": "builder/img/ubuntu-xenial.sh",
-        "inputs": ["builder/ubuntu-setup.sh"],
-        "limits": { "temp_disk": "2GB" },
-        "linux_capabilities": ["CAP_SYS_ADMIN"]
-      }]
+      "layers": [
+        {
+          "script": "builder/img/ubuntu-xenial.sh",
+          "inputs": [
+            "builder/ubuntu-setup.sh"
+          ],
+          "limits": {
+            "temp_disk": "2GB"
+          },
+          "linux_capabilities": [
+            "CAP_SYS_ADMIN"
+          ]
+        }
+      ]
     },
     {
       "id": "ubuntu-bionic",
-      "layers": [{
-        "script": "builder/img/ubuntu-bionic.sh",
-        "inputs": ["builder/ubuntu-setup.sh"],
-        "limits": { "temp_disk": "2GB" },
-        "linux_capabilities": ["CAP_SYS_ADMIN"]
-      }]
+      "layers": [
+        {
+          "script": "builder/img/ubuntu-bionic.sh",
+          "inputs": [
+            "builder/ubuntu-setup.sh"
+          ],
+          "limits": {
+            "temp_disk": "2GB"
+          },
+          "linux_capabilities": [
+            "CAP_SYS_ADMIN"
+          ]
+        }
+      ]
     },
     {
       "id": "busybox",
-      "layers": [{
-        "script": "builder/img/busybox.sh"
-      }]
+      "layers": [
+        {
+          "script": "builder/img/busybox.sh"
+        }
+      ]
     },
     {
       "id": "go",
       "base": "ubuntu-bionic",
-      "layers": [{
-        "script": "builder/img/go.sh",
-        "inputs": ["builder/go-wrapper.sh"]
-      }]
+      "layers": [
+        {
+          "script": "builder/img/go.sh",
+          "inputs": [
+            "builder/go-wrapper.sh"
+          ]
+        }
+      ]
     },
     {
       "id": "protoc",
       "base": "go",
-      "layers": [{
-        "gobin": [
-          "github.com/golang/protobuf/protoc-gen-go"
-        ],
-        "script": "builder/img/protoc.sh"
-      }]
+      "layers": [
+        {
+          "gobin": [
+            "github.com/golang/protobuf/protoc-gen-go"
+          ],
+          "script": "builder/img/protoc.sh"
+        }
+      ]
     },
     {
       "id": "builder",
       "base": "go",
-      "layers": [{
-        "gobuild": {
-          "builder": "/bin/flynn-builder"
+      "layers": [
+        {
+          "gobuild": {
+            "builder": "/bin/flynn-builder"
+          }
         }
-      }]
+      ]
     },
     {
       "id": "build-tools",
       "base": "busybox",
-      "layers": [{
-        "gobin": [
-          "github.com/flynn/go-tuf/cmd/tuf",
-          "github.com/flynn/go-tuf/cmd/tuf-client"
-        ]
-      }]
+      "layers": [
+        {
+          "gobin": [
+            "github.com/flynn/go-tuf/cmd/tuf",
+            "github.com/flynn/go-tuf/cmd/tuf-client"
+          ]
+        }
+      ]
     },
     {
       "id": "discoverd",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "discoverd": "/bin/discoverd"
-        },
-        "copy": {
-          "discoverd/start.sh": "/bin/start-discoverd"
+      "layers": [
+        {
+          "gobuild": {
+            "discoverd": "/bin/discoverd"
+          },
+          "copy": {
+            "discoverd/start.sh": "/bin/start-discoverd"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/start-discoverd"
@@ -103,12 +153,14 @@
     {
       "id": "flannel",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "flannel":         "/bin/flanneld",
-          "flannel/wrapper": "/bin/flannel-wrapper"
+      "layers": [
+        {
+          "gobuild": {
+            "flannel": "/bin/flanneld",
+            "flannel/wrapper": "/bin/flannel-wrapper"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/flannel-wrapper"
@@ -122,7 +174,9 @@
         {
           "name": "host-packages",
           "script": "host/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "host-binaries",
@@ -138,10 +192,10 @@
           },
           "copy": {
             "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem",
-            "host/zfs-mknod.sh":          "/usr/local/bin/zfs-mknod",
-            "host/udev.rules":            "/lib/udev/rules.d/10-local.rules",
-            "host/start.sh":              "/usr/local/bin/start-flynn-host.sh",
-            "host/cleanup.sh":            "/usr/local/bin/cleanup-flynn-host.sh"
+            "host/zfs-mknod.sh": "/usr/local/bin/zfs-mknod",
+            "host/udev.rules": "/lib/udev/rules.d/10-local.rules",
+            "host/start.sh": "/usr/local/bin/start-flynn-host.sh",
+            "host/cleanup.sh": "/usr/local/bin/cleanup-flynn-host.sh"
           }
         }
       ],
@@ -162,12 +216,12 @@
         },
         {
           "gobuild": {
-            "controller":           "/bin/flynn-controller",
+            "controller": "/bin/flynn-controller",
             "controller/scheduler": "/bin/flynn-scheduler",
-            "controller/worker":    "/bin/flynn-worker"
+            "controller/worker": "/bin/flynn-worker"
           },
           "copy": {
-            "controller/start.sh":        "/bin/start-flynn-controller",
+            "controller/start.sh": "/bin/start-flynn-controller",
             "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
           },
           "inputs": [
@@ -179,7 +233,9 @@
             "mkdir -p /etc/flynn-controller",
             "cp -r schema /etc/flynn-controller/jsonschema"
           ],
-          "limits": { "temp_disk": "1G" }
+          "limits": {
+            "temp_disk": "1G"
+          }
         }
       ],
       "entrypoint": {
@@ -191,11 +247,13 @@
     {
       "id": "controller-examples",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "controller/examples": "/bin/flynn-controller-examples"
+      "layers": [
+        {
+          "gobuild": {
+            "controller/examples": "/bin/flynn-controller-examples"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/flynn-controller-examples"
@@ -209,12 +267,14 @@
         {
           "name": "postgres-packages",
           "script": "appliance/postgresql/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "postgres-binaries",
           "gobuild": {
-            "appliance/postgresql/cmd/flynn-postgres":     "/bin/flynn-postgres",
+            "appliance/postgresql/cmd/flynn-postgres": "/bin/flynn-postgres",
             "appliance/postgresql/cmd/flynn-postgres-api": "/bin/flynn-postgres-api"
           },
           "copy": {
@@ -235,12 +295,14 @@
         {
           "name": "mariadb-packages",
           "script": "appliance/mariadb/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "mariadb-binaries",
           "gobuild": {
-            "appliance/mariadb/cmd/flynn-mariadb":     "/bin/flynn-mariadb",
+            "appliance/mariadb/cmd/flynn-mariadb": "/bin/flynn-mariadb",
             "appliance/mariadb/cmd/flynn-mariadb-api": "/bin/flynn-mariadb-api"
           },
           "copy": {
@@ -261,17 +323,19 @@
         {
           "name": "mongodb-packages",
           "script": "appliance/mongodb/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "mongodb-binaries",
           "gobuild": {
-            "appliance/mongodb/cmd/flynn-mongodb":     "/bin/flynn-mongodb",
+            "appliance/mongodb/cmd/flynn-mongodb": "/bin/flynn-mongodb",
             "appliance/mongodb/cmd/flynn-mongodb-api": "/bin/flynn-mongodb-api"
           },
           "copy": {
-            "appliance/mongodb/start.sh":   "/bin/start-flynn-mongodb",
-            "appliance/mongodb/dump.sh":    "/bin/dump-flynn-mongodb",
+            "appliance/mongodb/start.sh": "/bin/start-flynn-mongodb",
+            "appliance/mongodb/dump.sh": "/bin/dump-flynn-mongodb",
             "appliance/mongodb/restore.sh": "/bin/restore-flynn-mongodb"
           }
         }
@@ -289,17 +353,19 @@
         {
           "name": "redis-packages",
           "script": "appliance/redis/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "redis-binaries",
           "gobuild": {
-            "appliance/redis/cmd/flynn-redis":     "/bin/flynn-redis",
+            "appliance/redis/cmd/flynn-redis": "/bin/flynn-redis",
             "appliance/redis/cmd/flynn-redis-api": "/bin/flynn-redis-api"
           },
           "copy": {
-            "appliance/redis/start.sh":   "/bin/start-flynn-redis",
-            "appliance/redis/dump.sh":    "/bin/dump-flynn-redis",
+            "appliance/redis/start.sh": "/bin/start-flynn-redis",
+            "appliance/redis/dump.sh": "/bin/dump-flynn-redis",
             "appliance/redis/restore.sh": "/bin/restore-flynn-redis"
           }
         }
@@ -313,32 +379,39 @@
     {
       "id": "blobstore",
       "base": "ubuntu-bionic",
-      "layers": [{
-        "gobuild": {
-          "blobstore": "/bin/flynn-blobstore"
-        },
-        "copy": {
-          "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
-        },
-        "limits": { "temp_disk": "2G" }
-      }],
+      "layers": [
+        {
+          "gobuild": {
+            "blobstore": "/bin/flynn-blobstore"
+          },
+          "copy": {
+            "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
+          },
+          "limits": {
+            "temp_disk": "2G"
+          }
+        }
+      ],
       "entrypoint": {
         "args": [
-          "/bin/flynn-blobstore", "server"
+          "/bin/flynn-blobstore",
+          "server"
         ]
       }
     },
     {
       "id": "router",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "router": "/bin/flynn-router"
-        },
-        "copy": {
-          "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
+      "layers": [
+        {
+          "gobuild": {
+            "router": "/bin/flynn-router"
+          },
+          "copy": {
+            "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/flynn-router"
@@ -352,12 +425,14 @@
         {
           "name": "gitreceive-packages",
           "script": "gitreceive/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "gitreceive-binaries",
           "gobuild": {
-            "gitreceive":          "/bin/gitreceived",
+            "gitreceive": "/bin/gitreceived",
             "gitreceive/receiver": "/bin/flynn-receiver"
           },
           "copy": {
@@ -374,11 +449,13 @@
     {
       "id": "tarreceive",
       "base": "ubuntu-bionic",
-      "layers": [{
-        "gobuild": {
-          "tarreceive": "/bin/tarreceive"
+      "layers": [
+        {
+          "gobuild": {
+            "tarreceive": "/bin/tarreceive"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/tarreceive"
@@ -388,11 +465,13 @@
     {
       "id": "logaggregator",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "logaggregator": "/bin/logaggregator"
+      "layers": [
+        {
+          "gobuild": {
+            "logaggregator": "/bin/logaggregator"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/logaggregator"
@@ -406,12 +485,14 @@
         {
           "name": "taffy-packages",
           "script": "gitreceive/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "taffy-binaries",
           "gobuild": {
-            "taffy":               "/bin/taffy",
+            "taffy": "/bin/taffy",
             "gitreceive/receiver": "/bin/flynn-receiver"
           }
         }
@@ -425,26 +506,38 @@
     {
       "id": "heroku-18",
       "base": "ubuntu-bionic",
-      "layers": [{
-        "script": "builder/img/heroku-18.sh",
-        "limits": { "temp_disk": "2G" }
-      }]
+      "layers": [
+        {
+          "script": "builder/img/heroku-18.sh",
+          "limits": {
+            "temp_disk": "2G"
+          }
+        }
+      ]
     },
     {
       "id": "heroku-18-build",
       "base": "heroku-18",
-      "layers": [{
-        "script": "builder/img/heroku-18-build.sh",
-        "limits": { "temp_disk": "2G" }
-      }]
+      "layers": [
+        {
+          "script": "builder/img/heroku-18-build.sh",
+          "limits": {
+            "temp_disk": "2G"
+          }
+        }
+      ]
     },
     {
       "id": "cedar-14",
       "base": "ubuntu-trusty",
-      "layers": [{
-        "script": "builder/img/cedar-14.sh",
-        "limits": { "temp_disk": "2G" }
-      }]
+      "layers": [
+        {
+          "script": "builder/img/cedar-14.sh",
+          "limits": {
+            "temp_disk": "2G"
+          }
+        }
+      ]
     },
     {
       "id": "slugbuilder-18",
@@ -466,7 +559,7 @@
           },
           "copy": {
             "slugbuilder/convert-legacy-slug.sh": "/bin/convert-legacy-slug.sh",
-            "slugbuilder/builder/build.sh":       "/builder/build.sh",
+            "slugbuilder/builder/build.sh": "/builder/build.sh",
             "slugbuilder/builder/create-user.sh": "/builder/create-user.sh"
           }
         }
@@ -497,7 +590,7 @@
           },
           "copy": {
             "slugbuilder/convert-legacy-slug.sh": "/bin/convert-legacy-slug.sh",
-            "slugbuilder/builder/build.sh":       "/builder/build.sh",
+            "slugbuilder/builder/build.sh": "/builder/build.sh",
             "slugbuilder/builder/create-user.sh": "/builder/create-user.sh"
           }
         }
@@ -511,11 +604,13 @@
     {
       "id": "slugrunner-18",
       "base": "heroku-18",
-      "layers": [{
-        "copy": {
-          "slugrunner/runner/init": "/runner/init"
+      "layers": [
+        {
+          "copy": {
+            "slugrunner/runner/init": "/runner/init"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/runner/init"
@@ -525,11 +620,13 @@
     {
       "id": "slugrunner-14",
       "base": "cedar-14",
-      "layers": [{
-        "copy": {
-          "slugrunner/runner/init": "/runner/init"
+      "layers": [
+        {
+          "copy": {
+            "slugrunner/runner/init": "/runner/init"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/runner/init"
@@ -539,11 +636,13 @@
     {
       "id": "status",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "status": "/bin/flynn-status"
+      "layers": [
+        {
+          "gobuild": {
+            "status": "/bin/flynn-status"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/flynn-status"
@@ -553,11 +652,13 @@
     {
       "id": "updater",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "updater": "/bin/updater"
+      "layers": [
+        {
+          "gobuild": {
+            "updater": "/bin/updater"
+          }
         }
-      }],
+      ],
       "entrypoint": {
         "args": [
           "/bin/updater"
@@ -567,40 +668,57 @@
     {
       "id": "release",
       "base": "busybox",
-      "layers": [{
-        "gobuild": {
-          "util/release": "/bin/flynn-release"
+      "layers": [
+        {
+          "gobuild": {
+            "util/release": "/bin/flynn-release"
+          }
         }
-      }]
+      ]
     },
     {
       "id": "cli-linux-amd64",
       "base": "busybox",
-      "env": { "GOOS": "linux", "GOARCH": "amd64"},
+      "env": {
+        "GOOS": "linux",
+        "GOARCH": "amd64"
+      },
       "template": "cli"
     },
     {
       "id": "cli-linux-386",
       "base": "busybox",
-      "env": { "GOOS": "linux", "GOARCH": "386"},
+      "env": {
+        "GOOS": "linux",
+        "GOARCH": "386"
+      },
       "template": "cli"
     },
     {
       "id": "cli-darwin-amd64",
       "base": "busybox",
-      "env": { "GOOS": "darwin", "GOARCH": "amd64"},
+      "env": {
+        "GOOS": "darwin",
+        "GOARCH": "amd64"
+      },
       "template": "cli"
     },
     {
       "id": "cli-windows-amd64",
       "base": "busybox",
-      "env": { "GOOS": "windows", "GOARCH": "amd64"},
+      "env": {
+        "GOOS": "windows",
+        "GOARCH": "amd64"
+      },
       "template": "cli"
     },
     {
       "id": "cli-windows-386",
       "base": "busybox",
-      "env": { "GOOS": "windows", "GOARCH": "386"},
+      "env": {
+        "GOOS": "windows",
+        "GOARCH": "386"
+      },
       "template": "cli"
     },
     {
@@ -610,28 +728,30 @@
         {
           "name": "test-packages",
           "script": "test/img/packages.sh",
-          "limits": { "temp_disk": "4G" }
+          "limits": {
+            "temp_disk": "4G"
+          }
         },
         {
           "name": "test-binaries",
           "cgobuild": {
-            "test":                  "/bin/flynn-test",
-            "test/runner":           "/bin/flynn-test-runner"
+            "test": "/bin/flynn-test",
+            "test/runner": "/bin/flynn-test-runner"
           },
           "gobuild": {
             "test/util/file-server": "/bin/flynn-test-file-server"
           },
           "copy": {
-            "test/run.sh":           "/bin/run-flynn-test.sh",
-            "test/vm.sh":            "/bin/run-vm.sh",
+            "test/run.sh": "/bin/run-flynn-test.sh",
+            "test/vm.sh": "/bin/run-vm.sh",
             "test/scripts/start.sh": "/test/bin/start-runner.sh",
-            "test/rootfs/build.sh":  "/test/rootfs/build.sh",
-            "test/rootfs/setup.sh":  "/test/rootfs/setup.sh",
+            "test/rootfs/build.sh": "/test/rootfs/build.sh",
+            "test/rootfs/setup.sh": "/test/rootfs/setup.sh",
             "test/runner/assets/build-log.html": "/test/assets/",
-            "test/runner/assets/build-log.js":   "/test/assets/",
-            "test/runner/assets/builds.js":      "/test/assets/",
-            "test/runner/assets/index.html":     "/test/assets/",
-            "test/runner/assets/style.css":      "/test/assets/",
+            "test/runner/assets/build-log.js": "/test/assets/",
+            "test/runner/assets/builds.js": "/test/assets/",
+            "test/runner/assets/index.html": "/test/assets/",
+            "test/runner/assets/style.css": "/test/assets/",
             "test/runner/assets/ansi_up/ansi_up.js": "/test/assets/ansi_up/"
           }
         }
@@ -654,14 +774,14 @@
         {
           "name": "test-apps-binaries",
           "gobuild": {
-            "test/apps/echoer":         "/bin/echoer",
-            "test/apps/ping":           "/bin/pingserv",
-            "test/apps/signal":         "/bin/signal",
-            "test/apps/ish":            "/bin/ish",
+            "test/apps/echoer": "/bin/echoer",
+            "test/apps/ping": "/bin/pingserv",
+            "test/apps/signal": "/bin/signal",
+            "test/apps/ish": "/bin/ish",
             "test/apps/partial-logger": "/bin/partial-logger",
-            "test/apps/http-blocker":   "/bin/http-blocker",
-            "test/apps/oom":            "/bin/oom",
-            "test/apps/proxy":          "/bin/proxy"
+            "test/apps/http-blocker": "/bin/http-blocker",
+            "test/apps/oom": "/bin/oom",
+            "test/apps/proxy": "/bin/proxy"
           }
         }
       ]
@@ -669,20 +789,22 @@
   ],
   "templates": {
     "cli": {
-      "layers": [{
-        "env": {
-          "FLYNN_VERSION": "{{ .Version }}",
-          "TUF_ROOT_KEYS":  "{{ .TUFRootKeys }}",
-          "TUF_REPOSITORY": "{{ .TUFRepository }}"
-        },
-        "gobuild": {
-          "cli": "/bin/flynn-${GOOS}-${GOARCH}"
+      "layers": [
+        {
+          "env": {
+            "FLYNN_VERSION": "{{ .Version }}",
+            "TUF_ROOT_KEYS": "{{ .TUFRootKeys }}",
+            "TUF_REPOSITORY": "{{ .TUFRepository }}"
+          },
+          "gobuild": {
+            "cli": "/bin/flynn-${GOOS}-${GOARCH}"
+          }
         }
-      }]
+      ]
     }
   },
   "manifests": {
-    "bootstrap/manifest_template.json":  "bootstrap-manifest.json",
+    "bootstrap/manifest_template.json": "bootstrap-manifest.json",
     "util/release/images_template.json": "images.json"
   }
 }

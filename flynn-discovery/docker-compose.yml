@@ -1,0 +1,35 @@
+name: flynn
+
+volumes:
+  flynn-discovery-postgres:
+
+services:
+  discovery:
+    build: .
+    working_dir: /app
+    volumes:
+      - .:/app
+    environment:
+      PORT: 8180
+      URL: http://localhost:8180
+      DATABASE_URL: postgres://user:secret@discovery-postgres:5432/flynn_discovery
+    ports:
+      - "8180:8180"
+    depends_on:
+      discovery-postgres:
+        condition: service_healthy
+
+  discovery-postgres:
+    image: postgres:17.5-alpine3.21
+    environment:
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: flynn_discovery
+      POSTGRES_USER: user
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: --auth=md5
+    volumes:
+      - "flynn-discovery-postgres:/var/lib/postgresql/data"
+      - "./schema.sql:/docker-entrypoint-initdb.d/schema.sql"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "user", "-d", "flynn_discovery"]
+      interval: 1s

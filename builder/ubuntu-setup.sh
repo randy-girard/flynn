@@ -27,7 +27,7 @@ echo 'Acquire::GzipIndexes "true"; Acquire::CompressionTypes::Order:: "gz";' > /
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L134-L151
 echo 'Apt::AutoRemove::SuggestsImportant "false";' > /etc/apt/apt.conf.d/docker-autoremove-suggests
 
-export DEBIAN_FRONTEND=noninteractive                                                                                                         
+export DEBIAN_FRONTEND=noninteractive
 
 # update packages
 apt-get update

@@ -6,4 +6,5 @@ exec /bin/discoverd \
   -peers="${DISCOVERD_PEERS}" \
   -addr="${LISTEN_IP}:${PORT_0}" \
   -notify="http://${EXTERNAL_IP}:1113/host/discoverd" \
-  -wait-net-dns=true
+  -wait-net-dns=true \
+  > /tmp/discoverd.log 2>&1 &

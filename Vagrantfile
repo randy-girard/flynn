@@ -13,11 +13,14 @@ end
 VAGRANTFILE_API_VERSION = "2"
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "flynn-base"
-  config.vm.box_url = "https://dl.flynn.io/vagrant/flynn-base.json"
-  config.vm.box_version = "> 0"
+  config.vm.box = "ubuntu/focal64"
 
-  config.vm.synced_folder ".", "/home/vagrant/go/src/github.com/flynn/flynn", create: true, group: "vagrant", owner: "vagrant"
+  # Sync all project directories to the VM (owned by root)
+  config.vm.synced_folder ".", "/vagrant", create: true, group: "root", owner: "root"
+  config.vm.synced_folder "./flynn", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
+  config.vm.synced_folder "./flynn-discovery", "/root/go/src/github.com/flynn/flynn-discovery", create: true, group: "root", owner: "root"
+  config.vm.synced_folder "./go-tuf", "/root/go/src/github.com/flynn/go-tuf", create: true, group: "root", owner: "root"
+  config.vm.synced_folder "./repository-service-tuf", "/root/repository-service-tuf", create: true, group: "root", owner: "root"
 
   if Vagrant.has_plugin?("vagrant-vbguest")
     # vagrant-vbguest can cause the VM to not start: https://github.com/flynn/flynn/issues/2874
@@ -29,72 +32,101 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   ENV['LANG']="en_US.UTF-8"
   ENV['LANGUAGE']="en_US.UTF-8"
 
+  # Network configuration for services
+  # Flynn Discovery
+  config.vm.network "forwarded_port", guest: 1111, host: 1111, host_ip: "127.0.0.1"
+  # Repository Service TUF API
+  config.vm.network "forwarded_port", guest: 80, host: 8000, host_ip: "127.0.0.1"
+  # Repository Service TUF Web Server
+  config.vm.network "forwarded_port", guest: 8080, host: 8080, host_ip: "127.0.0.1"
+  # PostgreSQL
+  config.vm.network "forwarded_port", guest: 5432, host: 15432, host_ip: "127.0.0.1"
+  config.vm.network "forwarded_port", guest: 5433, host: 15433, host_ip: "127.0.0.1"
+  # Redis
+  config.vm.network "forwarded_port", guest: 6379, host: 16379, host_ip: "127.0.0.1"
+  # MongoDB
+  config.vm.network "forwarded_port", guest: 27017, host: 27017, host_ip: "127.0.0.1"
+
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
   config.vm.provider "virtualbox" do |v, override|
-    v.memory = ENV["VAGRANT_MEMORY"] || 4096
+    v.memory = ENV["VAGRANT_MEMORY"] || 8192  # Increased for running multiple services
     v.cpus = ENV["VAGRANT_CPUS"] || 4
 
-    # RFC 5737 TEST-NET-1 used to avoid DNS rebind protection
-    override.vm.network "private_network", ip: "192.0.2.100"
-
-    # Workaround for https://www.virtualbox.org/ticket/15705
-    v.customize ["modifyvm", :id, "--cableconnected1", "on"]
+    # Enable nested virtualization if needed for containers
+    v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
   end
 
-  config.vm.provision "shell", privileged: false, inline: <<-SCRIPT
-    set -eo pipefail
+  # Provision with Ansible (builds everything and installs to /usr/local/flynn/bin)
+  #config.vm.provision "ansible" do |ansible|
+  #  ansible.playbook = "playbook.yml"
+  #  ansible.config_file = "ansible.cfg"
+  #end
 
-    grep '^export GOPATH' ~/.bashrc || echo export GOPATH=~/go >> ~/.bashrc
-    grep '^export DISCOVERD' ~/.bashrc || echo export DISCOVERD="192.0.2.200:1111" >> ~/.bashrc
-    grep '^export GOROOT' ~/.bashrc || echo export GOROOT=~/go/src/github.com/flynn/flynn/build/_go >> ~/.bashrc
-    grep '^export PATH' ~/.bashrc || echo export PATH=~/go/bin:~/go/src/github.com/flynn/flynn/build/_go/bin:~/go/src/github.com/flynn/flynn/build/bin:~/go/src/github.com/flynn/flynn/script:\\\$PATH: >> ~/.bashrc
+  # Display helpful information after provisioning
+  config.vm.provision "shell", privileged: true, inline: <<-SHELL
+      if true; then
+        sudo su -l
 
-    # Install Docker 1.9.1 for building Flynn images
-    ~/go/src/github.com/flynn/flynn/util/docker/install.sh
+        apt-get update
+        add-apt-repository ppa:longsleep/golang-backports -y
+        apt-get install ca-certificates curl make golang
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
 
-    # For script unit tests
-    tmpdir=$(mktemp --directory)
-    trap "rm -rf ${tmpdir}" EXIT
-    git clone https://github.com/sstephenson/bats.git "${tmpdir}/bats"
-    sudo "${tmpdir}/bats/install.sh" /usr/local
-    sudo curl -sLo "/usr/local/bin/jq" "https://github.com/stedolan/jq/releases/download/jq-1.5/jq-linux64"
-    sudo chmod +x "/usr/local/bin/jq"
+        # Add the repository to Apt sources:
+        echo \
+          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+          $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+          tee /etc/apt/sources.list.d/docker.list > /dev/null
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin jq net-tools ifupdown zfsutils-linux
 
-    # Database dependencies - postgres, mariadb + percona xtrabackup, mongodb, redis
-    sudo apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 \
-      B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8 \
-      177F4010FE56CA3336300305F1656F24C74CD1D8 \
-      4D1BB29D63D98E422B2113B19334A25F8507EFA5 \
-      42F3E95A2C4F08279C4960ADD68FA50FEA312927 \
-      136221EE520DDFAF0A905689B9316A7BC7917B12
-    sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main" > /etc/apt/sources.list.d/postgresql.list'
-    sudo sh -c 'echo "deb http://sfo1.mirrors.digitalocean.com/mariadb/repo/10.1/ubuntu xenial main" > /etc/apt/sources.list.d/mariadb.list'
-    sudo sh -c 'echo "deb http://repo.percona.com/apt xenial main" > /etc/apt/sources.list.d/percona.list'
-    sudo sh -c 'echo "deb http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.2 multiverse" > /etc/apt/sources.list.d/mongodb.list'
-    sudo sh -c 'echo "deb http://ppa.launchpad.net/chris-lea/redis-server/ubuntu xenial main" > /etc/apt/sources.list.d/redis.list'
-    sudo apt-get update
-    sudo sh -c 'DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-10 postgresql-contrib-10 mariadb-server-10.1 percona-xtrabackup mongodb-org redis-server pkg-config libseccomp-dev'
+        cd /root/go/src/github.com/flynn/go-tuf/
+        docker compose up --build -d
 
-    # Stop redis by default, in case the VM is being used for integration testing
-    sudo service redis-server stop
+        # Whenever the keys expire, you have to run this
+        # script again, and then clean and build flynn
+        ./update_keys_in_flynn.sh
 
-    # Setup postgres for controller unit tests
-    sudo -u postgres createuser --superuser vagrant || true
-    grep '^export PGHOST' ~/.bashrc || echo export PGHOST=/var/run/postgresql >> ~/.bashrc
+        cd /root/go/src/github.com/flynn/flynn-discovery
+        docker compose up --build -d
 
-    # For integration tests.
-    #
-    # Override these in script/custom-vagrant if you use git to make
-    # real commits in the VM.
-    git config --global user.email "flynn.dev@example.com"
-    git config --global user.name "Flynn Dev"
+        cd /root/go/src/github.com/flynn/flynn
+        make
+        mkdir -p /etc/flynn
+        mkdir -p /tmp/discoverd-data
 
-    grep ^cd ~/.bashrc || echo cd ~/go/src/github.com/flynn/flynn >> ~/.bashrc
-    sudo chown -R vagrant:vagrant ~/go
-  SCRIPT
+        make clean
+        make
 
-  if File.exists?("script/custom-vagrant")
-    config.vm.provision "shell", path: "script/custom-vagrant"
-  end
+        #./script/clean-flynn
+        #./script/build-flynn
+        #./script/flynn-builder build --version=dev --verbose
+        #./build/bin/flynn-builder build
+
+        CGO_ENABLED=0 go build -o build/bin/flannel-wrapper ./flannel/wrapper
+
+        export CLUSTER_DOMAIN=flynn.local
+        export DISCOVERD=192.0.2.200:1111
+        export FLYNN_DISCOVERY_SERVER=http://localhost:8180
+        export EXTERNAL_IP=192.0.2.200
+        export LISTEN_IP=192.0.2.200
+        export PORT_0=1111
+        export DISCOVERD_PEERS=192.0.2.200:1111
+        export PATH="/root/go/src/github.com/flynn/flynn/build/bin:$PATH"
+        export DISCOVERY_URL=`DISCOVERY_SERVER=http://localhost:8180 ./build/bin/flynn-host init --init-discovery`
+
+        ./script/start-flynn-host 0
+        sleep 5
+        ./script/start-discoverd.sh
+        sleep 5
+        ./script/start-flanneld.sh
+      fi
+
+
+
+      exit
+  SHELL
 end

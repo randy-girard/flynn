@@ -1,0 +1,20 @@
+name: tuf
+
+services:
+  tuf-repo:
+    build: .
+    container_name: tuf-repo
+    volumes:
+      - ./repo:/repo
+      - ./:/app
+
+  nginx:
+    image: nginx:alpine
+    container_name: tuf-nginx
+    depends_on:
+      - tuf-repo
+    ports:
+      - "8080:80"
+    volumes:
+      - ./repo/repository:/usr/share/nginx/html/tuf:ro
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro

@@ -2,8 +2,8 @@
 
 TMP="$(mktemp --directory)"
 
-URL="https://partner-images.canonical.com/core/bionic/20190621/ubuntu-bionic-core-cloudimg-amd64-root.tar.gz"
-SHA="ed1753585d70724010e9ca26cf47337201ecc5c65c7251ca7a97b5d1c0ed6365"
+URL="https://partner-images.canonical.com/core/bionic/current/ubuntu-bionic-core-cloudimg-amd64-root.tar.gz"
+SHA="d44096a712fee7dc69ea0ad67d90e1364622488cdd58b1407fac135dc942a8d2"
 curl -fSLo "${TMP}/ubuntu.tar.gz" "${URL}"
 echo "${SHA}  ${TMP}/ubuntu.tar.gz" | sha256sum -c -
 
@@ -18,4 +18,5 @@ trap cleanup EXIT
 
 chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
 
+mkdir -p /mnt/out
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

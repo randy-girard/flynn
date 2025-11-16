@@ -2,8 +2,8 @@
 
 TMP="$(mktemp --directory)"
 
-URL="https://partner-images.canonical.com/core/trusty/20190502/ubuntu-trusty-core-cloudimg-amd64-root.tar.gz"
-SHA="2b1d09d5ba303e924bb8abf402620a6519bc5b8ef7b52c9179c5e958bd2e4e3f"
+URL="https://partner-images.canonical.com/core/trusty/current/ubuntu-trusty-core-cloudimg-amd64-root.tar.gz"
+SHA="e09b2c56f2239f08d97c085da8b81b47361cecf73e22063af20bf5cfbb967bc8"
 curl -fSLo "${TMP}/ubuntu.tar.gz" "${URL}"
 echo "${SHA}  ${TMP}/ubuntu.tar.gz" | sha256sum -c -
 
@@ -14,4 +14,6 @@ cp "/etc/resolv.conf" "${TMP}/root/etc/resolv.conf"
 chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
 
 >"${TMP}/root/etc/resolv.conf"
+
+mkdir -p /mnt/out
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

@@ -2,7 +2,7 @@
 
 TMP="$(mktemp --directory)"
 
-URL="http://archive.ubuntu.com/ubuntu/pool/main/b/busybox/busybox-static_1.22.0-19ubuntu2_amd64.deb"
+URL="http://launchpadlibrarian.net/280580031/busybox-static_1.22.0-19ubuntu2_amd64.deb"
 SHA="f5796bf9d10d60850ab379e3d1cfee138ae8d636691dfe62f86854980baa408b"
 curl -fSLo "${TMP}/busybox.deb" "${URL}"
 echo "${SHA}  ${TMP}/busybox.deb" | shasum -a "256" -c -
@@ -25,4 +25,5 @@ done
 cp /lib/x86_64-linux-gnu/lib{c,dl,nsl,nss_*,pthread,resolv}.so.* lib
 cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 lib
 
+mkdir -p /mnt/out
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

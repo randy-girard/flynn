@@ -7,6 +7,9 @@ set -e
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 
+echo "deb https://apt-archive.postgresql.org/pub/repos/apt focal-pgdg-archive main" \
+  | sudo tee /etc/apt/sources.list.d/pgdg-archive.list
+
 apt-get update
 
 apt-get install -y --force-yes --no-install-recommends \
