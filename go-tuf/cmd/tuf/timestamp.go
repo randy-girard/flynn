@@ -2,20 +2,17 @@ package main
 
 import (
 	"github.com/flynn/go-docopt"
-	"github.com/theupdateframework/go-tuf"
+	"github.com/flynn/go-tuf"
 )
 
 func init() {
 	register("timestamp", cmdTimestamp, `
 usage: tuf timestamp [--expires=<days>]
 
-Update the timestamp metadata file.
-
-Alternatively, passphrases can be set via environment variables in the
-form of TUF_{{ROLE}}_PASSPHRASE
+Update the timestamp manifest.
 
 Options:
-  --expires=<days>   Set the timestamp metadata file to expire <days> days from now.
+  --expires=<days>   Set the timestamp manifest to expire <days> days from now.
 `)
 }
 

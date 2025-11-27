@@ -5,15 +5,15 @@ import (
 	"os"
 
 	"github.com/flynn/go-docopt"
-	"github.com/theupdateframework/go-tuf"
+	"github.com/flynn/go-tuf"
 )
 
 func init() {
 	register("clean", cmdClean, `
 usage: tuf clean
 
-Remove all staged metadata files.
-`)
+Remove all staged manifests.
+  `)
 }
 
 func cmdClean(args *docopt.Args, repo *tuf.Repo) error {

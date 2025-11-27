@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
@@ -8,13 +9,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
-	docopt "github.com/flynn/go-docopt"
-	tuf "github.com/theupdateframework/go-tuf"
-	"github.com/theupdateframework/go-tuf/util"
-	"golang.org/x/term"
+	"github.com/docker/docker/pkg/term"
+	"github.com/flynn/go-docopt"
+	"github.com/flynn/go-tuf"
+	"github.com/flynn/go-tuf/util"
 )
 
 func main() {
@@ -28,22 +28,18 @@ Options:
   --insecure-plaintext  Don't encrypt signing keys
 
 Commands:
-  help               Show usage for a specific command
-  init               Initialize a new repository
-  gen-key            Generate a new signing key for a specific metadata file
-  revoke-key         Revoke a signing key
-  add                Add target file(s)
-  remove             Remove a target file
-  snapshot           Update the snapshot metadata file
-  timestamp          Update the timestamp metadata file
-  sign               Sign a role's metadata file
-  commit             Commit staged files to the repository
-  regenerate         Recreate the targets metadata file [Not supported yet]
-  set-threshold      Sets the threshold for a role
-  get-threshold      Outputs the threshold for a role
-  change-passphrase  Changes the passphrase for given role keys file
-  root-keys          Output a JSON serialized array of root keys to STDOUT
-  clean              Remove all staged metadata files
+  help         Show usage for a specific command
+  gen-key      Generate a new signing key for a specific manifest
+  revoke-key   Revoke a signing key
+  add          Add target file(s)
+  remove       Remove a target file
+  snapshot     Update the snapshot manifest
+  timestamp    Update the timestamp manifest
+  sign         Sign a manifest
+  commit       Commit staged files to the repository
+  regenerate   Recreate the targets manifest
+  clean        Remove all staged manifests
+  root-keys    Output a JSON serialized array of root keys to STDOUT
 
 See "tuf help <command>" for more information on a specific command
 `
@@ -126,42 +122,42 @@ func parseExpires(arg string) (time.Time, error) {
 	return time.Now().AddDate(0, 0, days).UTC(), nil
 }
 
-func getPassphrase(role string, confirm bool, change bool) ([]byte, error) {
-	// In case of change we need to prompt explicitly for a new passphrase
-	// and not read it from the environment variable, if present
-	if pass := os.Getenv(fmt.Sprintf("TUF_%s_PASSPHRASE", strings.ToUpper(role))); pass != "" && !change {
+func getPassphrase(role string, confirm bool) ([]byte, error) {
+	if pass := os.Getenv(fmt.Sprintf("TUF_%s_PASSPHRASE", strings.ToUpper(role))); pass != "" {
 		return []byte(pass), nil
 	}
-	// Alter role string if we are prompting for a passphrase change
-	if change {
-		// Check if environment variable for new passphrase exist
-		if new_pass := os.Getenv(fmt.Sprintf("TUF_NEW_%s_PASSPHRASE", strings.ToUpper(role))); new_pass != "" {
-			// If so, just read the new passphrase from it and return
-			return []byte(new_pass), nil
-		}
-		// No environment variable set, so proceed prompting for new passphrase
-		role = fmt.Sprintf("new %s", role)
+
+	state, err := term.SaveState(0)
+	if err != nil {
+		return nil, err
 	}
+	term.DisableEcho(0, state)
+	defer term.RestoreTerminal(0, state)
+
+	stdin := bufio.NewReader(os.Stdin)
+
 	fmt.Printf("Enter %s keys passphrase: ", role)
-	passphrase, err := term.ReadPassword(int(syscall.Stdin))
+	passphrase, err := stdin.ReadBytes('\n')
 	fmt.Println()
 	if err != nil {
 		return nil, err
 	}
+	passphrase = passphrase[0 : len(passphrase)-1]
 
 	if !confirm {
 		return passphrase, nil
 	}
 
 	fmt.Printf("Repeat %s keys passphrase: ", role)
-	confirmation, err := term.ReadPassword(int(syscall.Stdin))
+	confirmation, err := stdin.ReadBytes('\n')
 	fmt.Println()
 	if err != nil {
 		return nil, err
 	}
+	confirmation = confirmation[0 : len(confirmation)-1]
 
 	if !bytes.Equal(passphrase, confirmation) {
-		return nil, errors.New("the entered passphrases do not match")
+		return nil, errors.New("The entered passphrases do not match")
 	}
 	return passphrase, nil
 }

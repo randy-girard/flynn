@@ -2,7 +2,7 @@ package main
 
 import (
 	"github.com/flynn/go-docopt"
-	"github.com/theupdateframework/go-tuf"
+	"github.com/flynn/go-tuf"
 )
 
 func init() {
@@ -11,11 +11,11 @@ usage: tuf revoke-key [--expires=<days>] <role> <id>
 
 Revoke a signing key
 
-The key will be removed from the root metadata file, but the key will remain in the
+The key will be removed from the root manifest, but the key will remain in the
 "keys" directory if present.
 
 Options:
-  --expires=<days>   Set the root metadata file to expire <days> days from now.
+  --expires=<days>   Set the root manifest to expire <days> days from now.
 `)
 }
 

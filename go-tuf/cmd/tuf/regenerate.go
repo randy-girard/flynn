@@ -4,22 +4,19 @@ import (
 	"log"
 
 	"github.com/flynn/go-docopt"
-	"github.com/theupdateframework/go-tuf"
+	"github.com/flynn/go-tuf"
 )
 
 func init() {
 	register("regenerate", cmdRegenerate, `
 usage: tuf regenerate [--consistent-snapshot=false]
 
-Recreate the targets metadata file. Important: Not supported yet
-
-Alternatively, passphrases can be set via environment variables in the
-form of TUF_{{ROLE}}_PASSPHRASE
-`)
+Recreate the targets manifest.
+  `)
 }
 
 func cmdRegenerate(args *docopt.Args, repo *tuf.Repo) error {
 	// TODO: implement this
-	log.Println("Not supported yet")
+	log.Println("not implemented")
 	return nil
 }

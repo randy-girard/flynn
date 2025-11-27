@@ -6,8 +6,8 @@ import (
 	"os"
 
 	"github.com/flynn/go-docopt"
-	tuf "github.com/theupdateframework/go-tuf/client"
-	"github.com/theupdateframework/go-tuf/util"
+	tuf "github.com/flynn/go-tuf/client"
+	"github.com/flynn/go-tuf/util"
 )
 
 func init() {
@@ -44,7 +44,7 @@ func cmdGet(args *docopt.Args, client *tuf.Client) error {
 		return err
 	}
 	defer tmp.Delete()
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+	if _, err := tmp.Seek(0, os.SEEK_SET); err != nil {
 		return err
 	}
 	_, err = io.Copy(os.Stdout, file)
