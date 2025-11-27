@@ -10,3 +10,4 @@ go-tuf/client
 go-tuf/repo
 flynn-discovery/Godeps
 flynn-discovery/flynn-discovery
+.DS_Store
