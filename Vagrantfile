@@ -16,8 +16,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.box = "ubuntu/focal64"
 
   # Sync all project directories to the VM (owned by root)
-  config.vm.synced_folder ".", "/vagrant", create: true, group: "root", owner: "root"
-  config.vm.synced_folder "./flynn", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
+  config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
   config.vm.synced_folder "./flynn-discovery", "/root/go/src/github.com/flynn/flynn-discovery", create: true, group: "root", owner: "root"
   config.vm.synced_folder "./go-tuf", "/root/go/src/github.com/flynn/go-tuf", create: true, group: "root", owner: "root"
 
@@ -127,6 +126,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         echo "HASH=$HASH"
 
         cd /root/go/src/github.com/flynn/go-tuf/
+        rm -rf repo
         docker compose up --build -d
 
         # Whenever the keys expire, you have to run this
@@ -137,7 +137,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         docker compose up --build -d
 
         cd /root/go/src/github.com/flynn/flynn
-        make
         mkdir -p /etc/flynn
         mkdir -p /tmp/discoverd-data
 
@@ -146,6 +145,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         #./script/flynn-builder build --version=dev --verbose
         #./build/bin/flynn-builder build
 
+        export PATH=/usr/local/go/bin:$PATH
+        export CGO_ENABLED=1
         export CLUSTER_DOMAIN=flynn.local
         export DISCOVERD=192.0.2.200:1111
         export FLYNN_DISCOVERY_SERVER=http://localhost:8180
@@ -154,7 +155,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         export PORT_0=1111
         export DISCOVERD_PEERS=192.0.2.200:1111
         export PATH="/root/go/src/github.com/flynn/flynn/build/bin:$PATH"
-        export DISCOVERY_URL=`DISCOVERY_SERVER=http://localhost:8180 ./build/bin/flynn-host init --init-discovery`
 
         make clean
         make
@@ -163,6 +163,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         rm build/bin/flannel-wrapper
 
         go build -o build/bin/flannel-wrapper ./flannel/wrapper
+
+        export DISCOVERY_URL=`DISCOVERY_SERVER=http://localhost:8180 ./build/bin/flynn-host init --init-discovery`
 
         ./script/start-all
 
