@@ -1,0 +1,46 @@
+#!/bin/bash
+set -e
+
+PIDDIR="/var/run/flynn-local"
+
+stop() {
+    name="$1"
+    pidfile="$PIDDIR/$name.pid"
+
+    if [ ! -f "$pidfile" ]; then
+        echo "No pid file for $name"
+        return
+    fi
+
+    pid=$(cat "$pidfile")
+
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "Stopping $name (pid $pid)..."
+        kill "$pid"
+        sleep 2
+
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Force killing $name (pid $pid)..."
+            kill -9 "$pid"
+        fi
+    else
+        echo "$name not running"
+    fi
+
+    rm -f "$pidfile"
+}
+
+# Stop flannel services
+stop flanneld
+stop flanneld-wrapper
+
+# Stop discoverd
+stop discoverd
+
+# Stop flynn-host via your existing script
+if [ -x ./script/kill-flynn ]; then
+    echo "Stopping flynn-host using kill-flynn..."
+    ./script/kill-flynn || true
+else
+    echo "kill-flynn script not found!"
+fi

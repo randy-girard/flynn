@@ -1,0 +1,29 @@
+#!/bin/bash
+set -e
+
+mkdir -p /var/lib/flynn/layer-cache
+mkdir -p /var/run/flynn-local
+
+rm -f /tmp/discoverd.log /tmp/flanneld.log /tmp/flanneld-wrapper.log
+rm -rf /var/log/flynn
+
+# Start flynn-host
+./script/start-flynn-host 0 &
+echo $! > /var/run/flynn-local/flynn-host.pid
+
+sleep 3
+
+# Start discoverd
+./script/start-discoverd.sh &
+echo $! > /var/run/flynn-local/discoverd.pid
+
+sleep 3
+
+# Start flanneld
+./script/start-flanneld.sh &
+echo $! > /var/run/flynn-local/flanneld.pid
+
+sleep 3
+
+# Show networking logs
+less /var/log/flynn/host-0/flynn-host.log | grep -E 'ConfigureNetworking|configure networking progress'
