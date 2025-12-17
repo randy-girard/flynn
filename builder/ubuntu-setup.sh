@@ -34,7 +34,7 @@ apt-get update
 apt-get dist-upgrade --yes
 
 # install common Flynn image tools
-apt-get install --yes squashfs-tools curl gnupg
+apt-get install --yes squashfs-tools curl gnupg coreutils
 
 # delete all the apt list files since they're big and get stale quickly
 rm -rf /var/lib/apt/lists/*

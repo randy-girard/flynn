@@ -11,7 +11,7 @@ apt-get update
 apt-get install --yes git build-essential
 apt-get clean
 
-curl -fsSLo /tmp/go.tar.gz "https://storage.googleapis.com/golang/go${go_version}.linux-amd64.tar.gz"
+curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
 echo "${go_shasum}  /tmp/go.tar.gz" | shasum -c -
 rm -rf "${dir}/go"
 tar xzf /tmp/go.tar.gz -C "${dir}"

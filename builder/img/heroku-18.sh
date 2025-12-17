@@ -11,7 +11,7 @@ cat >/etc/apt/sources.list <<EOF
 deb http://archive.ubuntu.com/ubuntu/ bionic main universe
 deb http://archive.ubuntu.com/ubuntu/ bionic-security main universe
 deb http://archive.ubuntu.com/ubuntu/ bionic-updates main universe
-deb http://apt.postgresql.org/pub/repos/apt/ bionic-pgdg main
+deb http://apt-archive.postgresql.org/pub/repos/apt/ bionic-pgdg main
 EOF
 
 apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8

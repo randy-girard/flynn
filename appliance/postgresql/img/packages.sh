@@ -3,7 +3,7 @@
 export DEBIAN_FRONTEND=noninteractive
 
 apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
-echo "deb http://apt.postgresql.org/pub/repos/apt/ bionic-pgdg main" >> /etc/apt/sources.list.d/postgresql.list
+echo "deb http://apt-archive.postgresql.org/pub/repos/apt/ bionic-pgdg main" >> /etc/apt/sources.list.d/postgresql.list
 apt-get update
 apt-get dist-upgrade -y
 apt-get -qy --fix-missing --force-yes install language-pack-en software-properties-common

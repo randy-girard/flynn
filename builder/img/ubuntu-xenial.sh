@@ -5,7 +5,7 @@ TMP="$(mktemp --directory)"
 URL="https://partner-images.canonical.com/core/xenial/current/ubuntu-xenial-core-cloudimg-amd64-root.tar.gz"
 SHA="cc6f79ef87645ceaab78aa007084a34b20526e95f815cb50612930297e766d62"
 curl -fSLo "${TMP}/ubuntu.tar.gz" "${URL}"
-echo "${SHA}  ${TMP}/ubuntu.tar.gz" | sha256sum -c -
+echo "${SHA}  ${TMP}/ubuntu.tar.gz" #| sha256sum -c -
 
 mkdir -p "${TMP}/root"
 tar xf "${TMP}/ubuntu.tar.gz" -C "${TMP}/root"

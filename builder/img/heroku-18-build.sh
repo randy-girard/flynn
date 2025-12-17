@@ -7,8 +7,8 @@ set -e
 export LC_ALL=C
 export DEBIAN_FRONTEND=noninteractive
 
-echo "deb https://apt-archive.postgresql.org/pub/repos/apt focal-pgdg-archive main" \
-  | sudo tee /etc/apt/sources.list.d/pgdg-archive.list
+echo "deb https://apt-archive.postgresql.org/pub/repos/apt bionic-pgdg-archive main" \
+  | tee /etc/apt/sources.list.d/bionic-archive.list
 
 apt-get update
 

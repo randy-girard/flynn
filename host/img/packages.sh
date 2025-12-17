@@ -3,10 +3,20 @@
 # install packages for starting flynn-host within an existing Flynn cluster
 # either in a container or in a VM
 export DEBIAN_FRONTEND=noninteractive
+
 apt-get update
+
 # explicitly install linux 4.13 as the version of ZFS available on xenial is
 # not compatible with linux 4.15 (the 'zfs' command just hangs)
-apt-get install --yes linux-image-4.13.0-1019-gcp initramfs-tools systemd udev zfsutils-linux iptables net-tools iproute2 qemu-kvm
+apt-get install -y linux-generic \
+    initramfs-tools \
+    systemd \
+    udev \
+    zfsutils-linux \
+    iptables \
+    net-tools \
+    iproute2 \
+    qemu-kvm
 apt-get clean
 
 # support 9p rootfs when starting in a VM

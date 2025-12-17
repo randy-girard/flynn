@@ -13,7 +13,7 @@ end
 VAGRANTFILE_API_VERSION = "2"
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "ubuntu/focal64"
+  config.vm.box = "ubuntu/bionic64"
 
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
@@ -68,7 +68,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
         apt-get update
         add-apt-repository ppa:longsleep/golang-backports -y
-        apt-get install ca-certificates cur
+        apt-get install ca-certificates curl gcc
         install -m 0755 -d /etc/apt/keyrings
         curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
         chmod a+r /etc/apt/keyrings/docker.asc
@@ -94,6 +94,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
           ca-certificates \
           make \
           curl \
+          gcc \
           gnupg \
           libdigest-sha-perl \
           linux-modules-extra-$(uname -r)
@@ -110,6 +111,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         go env CGO_ENABLED
         CGO_ENABLED=1 go env CGO_ENABLED
 
+        export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
+        export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
+
         mkdir -p /var/lib/flynn/base-root
         debootstrap \
           --variant=minbase \
@@ -118,12 +122,23 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
           /var/lib/flynn/base-root \
           http://archive.ubuntu.com/ubuntu
         mkdir -p /var/lib/flynn
-        mksquashfs /var/lib/flynn/base-root /var/lib/flynn/base-layer.squashfs -noappend
-        SIZE=$(stat -c%s /var/lib/flynn/base-layer.squashfs)
-        HASH=$(openssl dgst -sha512-256 /var/lib/flynn/base-layer.squashfs | awk '{print $2}')
+        mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
+        export SIZE=$(stat -c%s "$SQUASHFS")
+        export HASH=$(openssl dgst -sha512-256 "$SQUASHFS" | awk '{print $2}')
 
         echo "SIZE=$SIZE"
         echo "HASH=$HASH"
+
+        # Update JSON file using jq
+        jq --arg url "file://$SQUASHFS" \
+           --arg size "$SIZE" \
+           --arg hash "$HASH" \
+           '.base_layer.url = $url |
+            .base_layer.size = ($size | tonumber) |
+            .base_layer.hashes.sha512_256 = $hash' \
+           "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
+
+        # Need to put the file path, size and hash in the manifest
 
         cd /root/go/src/github.com/flynn/go-tuf/
         rm -rf repo
@@ -168,7 +183,11 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
         ./script/start-all
 
-        ./script/flynn-builder build --version=dev --verbose
+        zfs set sync=disabled flynn-default
+        zfs set reservation=512M flynn-default
+        zfs set refreservation=512M flynn-default
+
+        #./script/flynn-builder build --version=dev --tuf-db=/tmp/tuf.db --verbose
       fi
 
 
