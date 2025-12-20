@@ -4,24 +4,19 @@
     "root_keys": [
       {
         "keytype": "ed25519",
-        "scheme": "ed25519",
-        "keyid_hash_algorithms": [
-          "sha256",
-          "sha512"
-        ],
         "keyval": {
-          "public": "cdad96e11e5a1dd12ae3f7afa27a450f394585cec97ef5d74a22be0eba33524a"
+          "public": "f93a875673fd4238bd36505588fb8ac9a6417ef89c27f292dc7ed5648ea60103"
         }
       }
     ]
   },
   "base_layer": {
     "type": "squashfs",
-    "id": "4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e",
-    "url": "https://dl.flynn.io/tuf/targets/layers/8804e92cba40018baec15a29dae84d210c0fe57da12654aa53928fb4c4a2ff6a65158906d4f3d044a282ec61d59fd340694f48130023bce22243279a6af3d900.4b6eb1c283dac64590f32a38e61cc448fb3ca499946d41dba51edab97b46a10e.squashfs",
-    "size": 62631936,
+    "id": "local-base",
+    "url": "file:///var/lib/flynn/base-layer.squashfs",
+    "size": 76328960,
     "hashes": {
-      "sha512_256": "066e1829132a8571b7a1c59e86b54340b22cfa47427725c322ca21ec63946ec5"
+      "sha512_256": "1861ea9fac1979d0e3c30cb31674b967664fef33fca7089edc8ad78537baff23"
     }
   },
   "images": [

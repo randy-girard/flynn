@@ -40,7 +40,7 @@ main() {
 
   alias flynn="${ROOT}/cli/bin/flynn"
   flynn -a "${app}" release show --json | jq -r 'del(.id)' > "${config}"
-  flynn -a "${app}" release add --file "${config}" "https://dl.flynn.io/tuf?name=${image_name}&id=${image_id}"
+  flynn -a "${app}" release add --file "${config}" "http://localhost:8080/tuf?name=${image_name}&id=${image_id}"
 }
 
 main $@

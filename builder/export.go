@@ -143,8 +143,8 @@ func (e *Exporter) Export(version string) error {
 		"flynn-linux-amd64",
 		"flynn-linux-386",
 		"flynn-darwin-amd64",
-		"flynn-windows-amd64",
-		"flynn-windows-386",
+		//"flynn-windows-amd64",
+		//"flynn-windows-386",
 	}
 	for _, bin := range bins {
 		if err := e.ExportBinary(bin, bin); err != nil {

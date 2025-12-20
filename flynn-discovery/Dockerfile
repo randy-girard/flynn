@@ -4,7 +4,9 @@ WORKDIR /app
 
 COPY . /app
 
-RUN go mod init && \
-  go build
+RUN rm -f go.mod && \
+  go mod init github.com/randy-girard/flynn-discovery && \
+  go mod tidy && \
+  go build -o /usr/bin/flynn-discovery
 
-CMD ["/app/flynn-discovery"]
+CMD ["/usr/bin/flynn-discovery"]

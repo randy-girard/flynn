@@ -63,134 +63,146 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # Display helpful information after provisioning
   config.vm.provision "shell", privileged: true, inline: <<-SHELL
-      if true; then
-        sudo su -l
+      sudo su -l
 
-        apt-get update
-        add-apt-repository ppa:longsleep/golang-backports -y
-        apt-get install ca-certificates curl gcc
-        install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-        chmod a+r /etc/apt/keyrings/docker.asc
+      apt-get update
+      add-apt-repository ppa:longsleep/golang-backports -y
+      apt-get install ca-certificates curl gcc
+      install -m 0755 -d /etc/apt/keyrings
+      curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+      chmod a+r /etc/apt/keyrings/docker.asc
 
-        # Add the repository to Apt sources:
-        echo \
-          "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
-          $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
-          tee /etc/apt/sources.list.d/docker.list > /dev/null
-        apt-get update
-        apt-get install -y \
-          docker-ce \
-          docker-ce-cli \
-          containerd.io \
-          docker-buildx-plugin \
-          docker-compose-plugin \
-          jq \
-          net-tools \
-          ifupdown \
-          zfsutils-linux \
-          debootstrap \
-          squashfs-tools \
-          ca-certificates \
-          make \
-          curl \
-          gcc \
-          gnupg \
-          libdigest-sha-perl \
-          linux-modules-extra-$(uname -r)
-
-        cd /usr/local
-        # adjust version as you like; 1.20+ is fine for Flynn
-        wget https://go.dev/dl/go1.21.13.linux-amd64.tar.gz
-        rm -rf go
-        tar -xzf go1.21.13.linux-amd64.tar.gz
-
-        # in your shell:
-        export PATH=/usr/local/go/bin:$PATH
-        go version
-        go env CGO_ENABLED
-        CGO_ENABLED=1 go env CGO_ENABLED
-
-        export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
-        export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
-
-        mkdir -p /var/lib/flynn/base-root
+      # Add the repository to Apt sources:
+      echo \
+        "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+        $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+        tee /etc/apt/sources.list.d/docker.list > /dev/null
+      apt-get update
+      apt-get install -y \
+        docker-ce \
+        docker-ce-cli \
+        containerd.io \
+        docker-buildx-plugin \
+        docker-compose-plugin \
+        jq \
+        net-tools \
+        ifupdown \
+        zfsutils-linux \
         debootstrap \
-          --variant=minbase \
-          --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
-          focal \
-          /var/lib/flynn/base-root \
-          http://archive.ubuntu.com/ubuntu
-        mkdir -p /var/lib/flynn
-        mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
-        export SIZE=$(stat -c%s "$SQUASHFS")
-        export HASH=$(openssl dgst -sha512-256 "$SQUASHFS" | awk '{print $2}')
+        squashfs-tools \
+        ca-certificates \
+        make \
+        curl \
+        gcc \
+        gnupg \
+        libdigest-sha-perl \
+        linux-modules-extra-$(uname -r)
 
-        echo "SIZE=$SIZE"
-        echo "HASH=$HASH"
+      cd /usr/local
+      # adjust version as you like; 1.20+ is fine for Flynn
+      wget https://go.dev/dl/go1.21.13.linux-amd64.tar.gz
+      rm -rf go
+      tar -xzf go1.21.13.linux-amd64.tar.gz
 
-        # Update JSON file using jq
-        jq --arg url "file://$SQUASHFS" \
-           --arg size "$SIZE" \
-           --arg hash "$HASH" \
-           '.base_layer.url = $url |
-            .base_layer.size = ($size | tonumber) |
-            .base_layer.hashes.sha512_256 = $hash' \
-           "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
+      # in your shell:
+      export PATH=/usr/local/go/bin:$PATH
+      go version
+      go env CGO_ENABLED
+      CGO_ENABLED=1 go env CGO_ENABLED
 
-        # Need to put the file path, size and hash in the manifest
+      export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
+      export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
 
-        cd /root/go/src/github.com/flynn/go-tuf/
-        rm -rf repo
-        docker compose up --build -d
+      mkdir -p /var/lib/flynn/base-root
+      debootstrap \
+        --variant=minbase \
+        --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
+        focal \
+        /var/lib/flynn/base-root \
+        http://archive.ubuntu.com/ubuntu
+      mkdir -p /var/lib/flynn
+      mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
+      export SIZE=$(stat -c%s "$SQUASHFS")
+      export HASH=$(openssl dgst -sha512-256 "$SQUASHFS" | awk '{print $2}')
 
-        # Whenever the keys expire, you have to run this
-        # script again, and then clean and build flynn
-        ./update_keys_in_flynn.sh
+      echo "SIZE=$SIZE"
+      echo "HASH=$HASH"
 
-        cd /root/go/src/github.com/flynn/flynn-discovery
-        docker compose up --build -d
+      # Update JSON file using jq
+      jq --arg url "file://$SQUASHFS" \
+         --arg size "$SIZE" \
+         --arg hash "$HASH" \
+         '.base_layer.url = $url |
+          .base_layer.size = ($size | tonumber) |
+          .base_layer.hashes.sha512_256 = $hash' \
+         "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-        cd /root/go/src/github.com/flynn/flynn
-        mkdir -p /etc/flynn
-        mkdir -p /tmp/discoverd-data
+      # Need to put the file path, size and hash in the manifest
 
-        #./script/clean-flynn
-        #./script/build-flynn
-        #./script/flynn-builder build --version=dev --verbose
-        #./build/bin/flynn-builder build
+      export TUF_ROOT_PASSPHRASE="password"
+      export TUF_TARGETS_PASSPHRASE="password"
+      export TUF_SNAPSHOT_PASSPHRASE="password"
+      export TUF_TIMESTAMP_PASSPHRASE="password"
 
-        export PATH=/usr/local/go/bin:$PATH
-        export CGO_ENABLED=1
-        export CLUSTER_DOMAIN=flynn.local
-        export DISCOVERD=192.0.2.200:1111
-        export FLYNN_DISCOVERY_SERVER=http://localhost:8180
-        export EXTERNAL_IP=192.0.2.200
-        export LISTEN_IP=192.0.2.200
-        export PORT_0=1111
-        export DISCOVERD_PEERS=192.0.2.200:1111
-        export PATH="/root/go/src/github.com/flynn/flynn/build/bin:$PATH"
+      cd /root/go/src/github.com/flynn/go-tuf/
+      rm -rf repo
+      docker compose up --build -d
 
-        make clean
-        make
+      # Whenever the keys expire, you have to run this
+      # script again, and then clean and build flynn
+      ./update_keys_in_flynn.sh
 
-        rm build/bin/flynn-builder
-        rm build/bin/flannel-wrapper
+      cd /root/go/src/github.com/flynn/flynn-discovery
+      docker compose up --build -d
 
-        go build -o build/bin/flannel-wrapper ./flannel/wrapper
+      cd /root/go/src/github.com/flynn/flynn
+      mkdir -p /etc/flynn
+      mkdir -p /tmp/discoverd-data
 
-        export DISCOVERY_URL=`DISCOVERY_SERVER=http://localhost:8180 ./build/bin/flynn-host init --init-discovery`
+      #./script/clean-flynn
+      #./script/build-flynn
+      #./script/flynn-builder build --version=dev --verbose
+      #./build/bin/flynn-builder build
 
-        ./script/start-all
+      # Copy keys from go-tuf repo.
 
-        zfs set sync=disabled flynn-default
-        zfs set reservation=512M flynn-default
-        zfs set refreservation=512M flynn-default
+      export PATH=/usr/local/go/bin:$PATH
+      export CGO_ENABLED=1
+      export CLUSTER_DOMAIN=flynn.local
+      export DISCOVERD=192.0.2.200:1111
+      export FLYNN_DISCOVERY_SERVER=http://localhost:8180
+      export EXTERNAL_IP=192.0.2.200
+      export LISTEN_IP=192.0.2.200
+      export PORT_0=1111
+      export DISCOVERD_PEERS=192.0.2.200:1111
+      export PATH="/root/go/src/github.com/flynn/flynn/build/bin:$PATH"
 
-        #./script/flynn-builder build --version=dev --tuf-db=/tmp/tuf.db --verbose
-      fi
+      make clean
+      make
 
+      rm build/bin/flynn-builder
+      rm build/bin/flannel-wrapper
 
+      go build -o build/bin/flannel-wrapper ./flannel/wrapper
+
+      export DISCOVERY_URL=`DISCOVERY_SERVER=http://localhost:8180 ./build/bin/flynn-host init --init-discovery`
+
+      ./script/start-all
+
+      zfs set sync=disabled flynn-default
+      zfs set reservation=512M flynn-default
+      zfs set refreservation=512M flynn-default
+
+      ./script/flynn-builder build --version=dev --tuf-db=/tmp/tuf.db --verbose
+
+      ./build/bin/flynn-builder export go-tuf/repo
+
+      ./script/stop-all
+
+      cp ./script/install-flynn.tmpl /usr/bin/install-flynn
+
+      #}export FLYNN_HOST_CHECKSUM=3190e053652b59c34982b6ac03d8a3fac0549fe2d975cf76b7bb42cf34e0985c623032f8a48215a951168562e9064d6c913983d613aa464332e620c45ddc6ce5
+      #/usr/bin/install-flynn --repo  --version dev
 
       exit
   SHELL

@@ -329,7 +329,7 @@ func (e *generator) createArtifact() {
 		RawManifest:      manifest.RawManifest(),
 		Hashes:           manifest.Hashes(),
 		Size:             int64(len(manifest.RawManifest())),
-		LayerURLTemplate: "https://dl.flynn.io/tuf?target=/layers/{id}.squashfs",
+		LayerURLTemplate: "http://localhost:8080/tuf?target=/layers/{id}.squashfs",
 	}
 	err := e.client.CreateArtifact(artifact)
 	if err != nil {

@@ -156,7 +156,7 @@ install_packages() {
 }
 
 install_flynn() {
-  local repo="${FLYNN_REPOSITORY:-"https://dl.flynn.io"}"
+  local repo="${FLYNN_REPOSITORY:-"http://localhost:8080"}"
 
   local script="install-flynn"
   if [[ -n "${FLYNN_VERSION}" ]]; then
