@@ -39,6 +39,9 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
    "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
+mkdir -p /root/.ssh
+cp /root/go/src/github.com/flynn/flynn/sshkeys/id_rsa /root/.ssh/id_rsa
+
 cd /root/go/src/github.com/flynn/go-tuf/
 docker compose down
 rm -rf repo
@@ -47,6 +50,8 @@ docker compose up --build -d
 # Whenever the keys expire, you have to run this
 # script again, and then clean and build flynn
 ./update_keys_in_flynn.sh
+
+scp -o StrictHostKeyChecking=no -r ./repo/* root@10.0.0.211:/root/go-tuf/repo/
 
 cd /root/go/src/github.com/flynn/flynn-discovery
 docker compose up --build -d
@@ -80,8 +85,12 @@ zfs set refreservation=512M flynn-default
 
 ./script/flynn-builder build --version=dev --tuf-db=/tmp/tuf.db --verbose
 
-./build/bin/flynn-builder export go-tuf/repo
+./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo
 
 ./script/stop-all
 
-cp ./script/install-flynn.tmpl /usr/bin/install-flynn
+scp -o StrictHostKeyChecking=no -r /root/go/src/github.com/flynn/flynn/go-tuf/repo/repository/ root@10.0.0.211:/root/go-tuf/repo/
+
+cp ./script/install-flynn /usr/bin/install-flynn
+
+#/usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev

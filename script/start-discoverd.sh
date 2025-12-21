@@ -4,7 +4,7 @@ set -e
 PIDDIR="/var/run/flynn-local"
 mkdir -p "$PIDDIR"
 
-discoverd \
+/root/go/src/github.com/flynn/flynn/build/bin/discoverd \
   -data-dir=/tmp/discoverd-data \
   -host=192.0.2.200 \
   -addr=192.0.2.200:1111 \

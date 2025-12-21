@@ -1,11 +1,11 @@
 {
   "tuf": {
-    "repository": "http://localhost:8080/tuf",
+    "repository": "https://dl.flynn.cloud.randygirard.com/tuf",
     "root_keys": [
       {
         "keytype": "ed25519",
         "keyval": {
-          "public": "f93a875673fd4238bd36505588fb8ac9a6417ef89c27f292dc7ed5648ea60103"
+          "public": "9e86ad840b99a03001220059648ff59b7ffe113de86438ae96dfccd190c66466"
         }
       }
     ]
@@ -16,7 +16,7 @@
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 76328960,
     "hashes": {
-      "sha512_256": "1861ea9fac1979d0e3c30cb31674b967664fef33fca7089edc8ad78537baff23"
+      "sha512_256": "781420b1c0ec5cac7ebafe4642f9d9637b79cbeac84451dd051d6aa3626b0a5f"
     }
   },
   "images": [

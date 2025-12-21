@@ -77,7 +77,7 @@ main() {
     TUF_TARGETS_PASSPHRASE="${TUF_TARGETS_PASSPHRASE}" \
     TUF_SNAPSHOT_PASSPHRASE="${TUF_SNAPSHOT_PASSPHRASE}" \
     TUF_TIMESTAMP_PASSPHRASE="${TUF_TIMESTAMP_PASSPHRASE}" \
-    /bin/flynn-builder export "${tuf_dir}"
+    ${ROOT}/build/bin/flynn-builder export "${tuf_dir}"
 
   sudo chown -R "$(id --user):$(id --group)" "${tuf_dir}"
 

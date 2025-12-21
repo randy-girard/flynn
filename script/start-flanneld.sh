@@ -4,7 +4,7 @@ set -e
 PIDDIR="/var/run/flynn-local"
 mkdir -p "$PIDDIR"
 
-flanneld \
+/root/go/src/github.com/flynn/flynn/build/bin/flanneld \
   -discoverd-url="http://${DISCOVERD}" \
   -iface="${EXTERNAL_IP}" \
   -http-port="5001" \
@@ -16,6 +16,6 @@ echo $! > "$PIDDIR/flanneld.pid"
 EXTERNAL_IP=192.0.2.200 \
   PORT=5002 \
   NETWORK=100.100.0.0/16 \
-  flannel-wrapper \
+  /root/go/src/github.com/flynn/flynn/build/bin/flannel-wrapper \
   > /tmp/flanneld-wrapper.log 2>&1 &
 echo $! > "$PIDDIR/flanneld-wrapper.pid"

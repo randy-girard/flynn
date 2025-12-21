@@ -98,7 +98,7 @@ func GetCluster(uri string) ([]*Instance, error) {
 }
 
 func NewToken() (string, error) {
-	uri := "https://discovery.flynn.io/clusters"
+	uri := "https://discovery.flynn.cloud.randygirard.com/clusters"
 	if base := os.Getenv("DISCOVERY_SERVER"); base != "" {
 		uri = base + "/clusters"
 	}
