@@ -83,14 +83,21 @@ zfs set sync=disabled flynn-default
 zfs set reservation=512M flynn-default
 zfs set refreservation=512M flynn-default
 
-./script/flynn-builder build --version=dev --tuf-db=/tmp/tuf.db --verbose
+./script/flynn-builder build --version=dev --tuf-db=/etc/flynn/tuf.db --verbose
 
 ./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo
 
 ./script/stop-all
 
+cd /root/go/src/github.com/flynn/flynn-discovery
+docker compose down
+cd /root/go/src/github.com/flynn/flynn
+
 scp -o StrictHostKeyChecking=no -r /root/go/src/github.com/flynn/flynn/go-tuf/repo/repository/ root@10.0.0.211:/root/go-tuf/repo/
 
 cp ./script/install-flynn /usr/bin/install-flynn
 
+scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-tuf/repo/install-flynn
+
+#sudo bash < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
 #/usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev
