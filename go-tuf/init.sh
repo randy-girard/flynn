@@ -24,10 +24,10 @@ else
   tuf init
 fi
 
-tuf gen-key root
-tuf gen-key targets
-tuf gen-key snapshot
-tuf gen-key timestamp
+tuf gen-key --expires=1000 root
+tuf gen-key --expires=1000  targets
+tuf gen-key --expires=1000  snapshot
+tuf gen-key --expires=1000  timestamp
 
 # Generate snapshot and timestamp metadata
 tuf add
