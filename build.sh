@@ -11,6 +11,8 @@ export EXTERNAL_IP=192.0.2.200
 export LISTEN_IP=192.0.2.200
 export PORT_0=1111
 export DISCOVERD_PEERS=192.0.2.200:1111
+export TELEMETRY_URL=http://localhost:8080/measure/scheduler
+export FLYNN_REPOSITORY=http://localhost:8080
 
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
@@ -99,5 +101,14 @@ cp ./script/install-flynn /usr/bin/install-flynn
 
 scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-tuf/repo/install-flynn
 
-#sudo bash < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
-#/usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev
+# sudo bash -s -- --version dev < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
+# /usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev
+# sudo flynn-host init --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+# sudo systemctl start flynn-host
+# sudo systemctl status flynn-host
+# Setup dns
+# sudo \
+#   CLUSTER_DOMAIN=demo.flynn.cloud.randygirard.com \
+#   flynn-host bootstrap \
+#   --min-hosts 3 \
+#    --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902

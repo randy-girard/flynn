@@ -11,7 +11,7 @@ import (
 	"github.com/flynn/flynn/pkg/version"
 )
 
-var telemetryURL = "http://localhost:8080/measure/scheduler"
+var telemetryURL = "https://dl.flynn.cloud.randygirard.com/measure/scheduler"
 
 func init() {
 	if u := os.Getenv("TELEMETRY_URL"); u != "" {

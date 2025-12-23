@@ -259,32 +259,19 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 			return err
 		}
 	}
-	log.Info("configure networking progress", "stage", "ip_forward_complete", "bridge", l.BridgeName, "subnet", l.bridgeNet.String())
 
 	// Set up iptables for outbound traffic masquerading from containers to the
 	// rest of the network.
 	if err := iptables.EnableOutboundNAT(l.BridgeName, l.bridgeNet.String()); err != nil {
 		return err
 	}
-	log.Info("configure networking progress", "stage", "iptables_complete", "bridge", l.BridgeName, "network", l.bridgeNet.String())
 
 	// Read DNS config, discoverd uses the nameservers
-	dnsConf, err := readResolvConf("/etc/resolv.conf")
+	dnsConf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
 	if err != nil {
-		log.Error("error reading resolv.conf", "err", err)
-		// Fall back to an empty resolver set; discoverd will still start,
-		// but upstream DNS lookups may fail until this is corrected.
-		dnsConf = &dns.ClientConfig{
-			Servers:  []string{},
-			Search:   []string{},
-			Port:     "53",
-			Ndots:    1,
-			Timeout:  5,
-			Attempts: 2,
-		}
+		return err
 	}
 	config.Resolvers = dnsConf.Servers
-	log.Info("configure networking progress", "stage", "dns_config_loaded", "resolvers", config.Resolvers)
 
 	// Write a resolv.conf to be bind-mounted into containers pointing at the
 	// future discoverd DNS listener
@@ -302,8 +289,6 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 
 	// Allocate IPs for running jobs
 	l.containersMtx.Lock()
-	log.Info("configure networking progress", "stage", "containers_lock_acquired", "containers", len(l.containers))
-
 	defer l.containersMtx.Unlock()
 	for _, container := range l.containers {
 		if !container.job.Config.HostNetwork {
@@ -314,7 +299,6 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 			}
 		}
 	}
-	log.Info("configure networking progress", "stage", "containers_ips_allocated")
 
 	if l.EnableDHCP {
 		go func() {
@@ -324,83 +308,9 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 		}()
 	}
 
-	log.Info("configure networking progress", "stage", "closing_network_configured")
 	close(l.networkConfigured)
 
 	return nil
-	}
-
-
-// readResolvConf is a minimal parser for /etc/resolv.conf used to avoid
-// hangs inside the miekg/dns ClientConfigFromFile on some systems.
-func readResolvConf(path string) (*dns.ClientConfig, error) {
-	data, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	c := &dns.ClientConfig{
-		Servers:  []string{},
-		Search:   []string{},
-		Port:     "53",
-		Ndots:    1,
-		Timeout:  5,
-		Attempts: 2,
-	}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		f := strings.Fields(line)
-		if len(f) == 0 {
-			continue
-		}
-		switch f[0] {
-		case "nameserver":
-			if len(f) > 1 {
-				c.Servers = append(c.Servers, f[1])
-			}
-		case "domain":
-			if len(f) > 1 {
-				c.Search = []string{f[1]}
-			} else {
-				c.Search = []string{}
-			}
-		case "search":
-			if len(f) > 1 {
-				c.Search = f[1:]
-			} else {
-				c.Search = []string{}
-			}
-		case "options":
-			for _, s := range f[1:] {
-				switch {
-				case strings.HasPrefix(s, "ndots:"):
-					n, _ := strconv.Atoi(strings.TrimPrefix(s, "ndots:"))
-					if n < 1 {
-						n = 1
-					}
-					c.Ndots = n
-				case strings.HasPrefix(s, "timeout:"):
-					n, _ := strconv.Atoi(strings.TrimPrefix(s, "timeout:"))
-					if n < 1 {
-						n = 1
-					}
-					c.Timeout = n
-				case strings.HasPrefix(s, "attempts:"):
-					n, _ := strconv.Atoi(strings.TrimPrefix(s, "attempts:"))
-					if n < 1 {
-						n = 1
-					}
-					c.Attempts = n
-				case s == "rotate":
-					// not implemented
-				}
-			}
-		}
-	}
-	return c, nil
 }
 
 func (l *LibcontainerBackend) ServeDHCP(p dhcp.Packet, msgType dhcp.MessageType, options dhcp.Options) (d dhcp.Packet) {

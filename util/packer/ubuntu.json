@@ -3,7 +3,7 @@
   "variables": {
     "boot_command_prefix": "",
     "cpus": "4",
-    "flynn_repository": "http://localhost:8080",
+    "flynn_repository": "https://dl.flynn.cloud.randygirard.com",
     "headless": "false",
     "iso_checksum": "",
     "iso_checksum_type": "sha256",

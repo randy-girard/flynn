@@ -15,5 +15,4 @@ chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
 
 >"${TMP}/root/etc/resolv.conf"
 
-mkdir -p /mnt/out
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

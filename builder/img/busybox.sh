@@ -25,5 +25,4 @@ done
 cp /lib/x86_64-linux-gnu/lib{c,dl,nsl,nss_*,pthread,resolv}.so.* lib
 cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 lib
 
-mkdir -p /mnt/out
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend
