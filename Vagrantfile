@@ -13,7 +13,7 @@ end
 VAGRANTFILE_API_VERSION = "2"
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "ubuntu/bionic64"
+  config.vm.box = "ubuntu/xenial64"
 
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
@@ -66,11 +66,12 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       sudo su -l
 
       cd /root/go/src/github.com/flynn/flynn
-      ./setup.sh
-      ./build.sh
+      ./prereq.sh
+      #./setup.sh
+      #./build.sh
 
-      #}export FLYNN_HOST_CHECKSUM=3190e053652b59c34982b6ac03d8a3fac0549fe2d975cf76b7bb42cf34e0985c623032f8a48215a951168562e9064d6c913983d613aa464332e620c45ddc6ce5
-      #/usr/bin/install-flynn --repo http://localhost:8080 --version dev
+      #}export FLYNN_HOST_CHECKSUM=d46b42b1fed7046ca78bb2eee566ba3dd20bc996f138ba438e1609f1565971e677414d5d3ad89e13cc2b1a466aaa93c0b1e77e6a39577831e8bff25ff7ff647d
+      #/usr/bin/install-flynn --repo https://dl.flynn.cloud.randygirard.com --version dev
 
 
       exit

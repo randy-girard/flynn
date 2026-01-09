@@ -1,3 +1,4 @@
+export HOST_UBUNTU=$(lsb_release -cs)
 export TUF_ROOT_PASSPHRASE="password"
 export TUF_TARGETS_PASSPHRASE="password"
 export TUF_SNAPSHOT_PASSPHRASE="password"
@@ -17,6 +18,8 @@ export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
 
+ssh -o StrictHostKeyChecking=no root@10.0.0.211 "rm -rf /root/go-tuf/repo/*"
+
 mkdir -p /var/lib/flynn/base-root
 debootstrap \
   --variant=minbase \
@@ -24,10 +27,10 @@ debootstrap \
   focal \
   /var/lib/flynn/base-root \
   http://archive.ubuntu.com/ubuntu
-mkdir -p /var/lib/flynn
 mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
+
 export SIZE=$(stat -c%s "$SQUASHFS")
-export HASH=$(openssl dgst -sha512-256 "$SQUASHFS" | awk '{print $2}')
+export HASH=$(./sha512_256_binary "$SQUASHFS")
 
 echo "SIZE=$SIZE"
 echo "HASH=$HASH"
@@ -41,13 +44,10 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
    "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-mkdir -p /root/.ssh
-cp /root/go/src/github.com/flynn/flynn/sshkeys/id_rsa /root/.ssh/id_rsa
-
 cd /root/go/src/github.com/flynn/go-tuf/
 docker compose down
 rm -rf repo
-docker compose up --build -d
+docker compose up -d --build
 
 # Whenever the keys expire, you have to run this
 # script again, and then clean and build flynn
@@ -56,7 +56,8 @@ docker compose up --build -d
 scp -o StrictHostKeyChecking=no -r ./repo/* root@10.0.0.211:/root/go-tuf/repo/
 
 cd /root/go/src/github.com/flynn/flynn-discovery
-docker compose up --build -d
+docker compose down
+docker compose up -d --build
 
 cd /root/go/src/github.com/flynn/flynn
 mkdir -p /etc/flynn
@@ -85,9 +86,12 @@ zfs set sync=disabled flynn-default
 zfs set reservation=512M flynn-default
 zfs set refreservation=512M flynn-default
 
+rm -rf /etc/flynn/tuf.db
 ./script/flynn-builder build --version=dev --tuf-db=/etc/flynn/tuf.db --verbose
 
 ./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo
+
+flynn-host ps -a
 
 ./script/stop-all
 
@@ -101,6 +105,7 @@ cp ./script/install-flynn /usr/bin/install-flynn
 
 scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-tuf/repo/install-flynn
 
+# sudo bash -s -- --remove --yes < <(curl -fsSL https://dl.flynn.cloud.randygirard.com/install-flynn)
 # sudo bash -s -- --version dev < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
 # /usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev
 # sudo flynn-host init --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
@@ -112,3 +117,8 @@ scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-
 #   flynn-host bootstrap \
 #   --min-hosts 3 \
 #    --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+#   CLUSTER_DOMAIN=demo.flynn.cloud.randygirard.com flynn-host bootstrap --min-hosts 1
+
+#
+# Notes:
+# - Make sure firewall/ports are set up properly or not running

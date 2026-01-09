@@ -25,14 +25,14 @@ else
 fi
 
 tuf gen-key --expires=1000 root
-tuf gen-key --expires=1000  targets
-tuf gen-key --expires=1000  snapshot
-tuf gen-key --expires=1000  timestamp
+tuf gen-key --expires=1000 targets
+tuf gen-key --expires=1000 snapshot
+tuf gen-key --expires=1000 timestamp
 
 # Generate snapshot and timestamp metadata
-tuf add
-tuf snapshot
-tuf timestamp
+tuf add --expires=1000
+tuf snapshot --expires=1000
+tuf timestamp --expires=1000
 
 # Commit final repository
 tuf commit

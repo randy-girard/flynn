@@ -5,7 +5,11 @@ volumes:
 
 services:
   discovery:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        HOST_UBUNTU: ${HOST_UBUNTU:-16.04}
     working_dir: /app
     volumes:
       - .:/app

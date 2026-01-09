@@ -6,9 +6,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 
-# explicitly install linux 4.13 as the version of ZFS available on xenial is
-# not compatible with linux 4.15 (the 'zfs' command just hangs)
-apt-get install -y linux-generic \
+apt-get install -y linux-gcp \
     initramfs-tools \
     systemd \
     udev \
@@ -17,7 +15,23 @@ apt-get install -y linux-generic \
     net-tools \
     iproute2 \
     qemu-kvm
+
 apt-get clean
+
+#apt-get install -y kmod
+
+# explicitly install linux 4.13 as the version of ZFS available on xenial is
+# not compatible with linux 4.15 (the 'zfs' command just hangs)
+#curl -fL \
+#  --retry 5 \
+#  --retry-delay 3 \
+#  --connect-timeout 10 \
+#  --max-time 600 \
+#  -o linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb \
+#  https://launchpad.net/~canonical-kernel-team/+archive/ubuntu/ppa/+build/14960883/+files/linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb
+
+#dpkg -i linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb
+#rm linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb
 
 # support 9p rootfs when starting in a VM
 printf '%s\n' 9p 9pnet 9pnet_virtio >> /etc/initramfs-tools/modules

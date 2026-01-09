@@ -10,12 +10,18 @@ import (
 	"path"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/host/volume/manager"
+	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/pkg/tufutil"
 	tuf "github.com/flynn/go-tuf/client"
+)
+
+const (
+	maxDownloadRetries = 3
+	retryDelay         = 2 * time.Second
 )
 
 var binaries = []string{
@@ -81,11 +87,27 @@ func (d *Downloader) DownloadConfig(dir string) (map[string]string, error) {
 	return paths, nil
 }
 
+// downloadWithRetry wraps tufutil.Download with retry logic
+func (d *Downloader) downloadWithRetry(target string) (io.ReadCloser, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxDownloadRetries; attempt++ {
+		tmp, err := tufutil.Download(d.client, target)
+		if err == nil {
+			return tmp, nil
+		}
+		lastErr = err
+		if attempt < maxDownloadRetries {
+			time.Sleep(retryDelay)
+		}
+	}
+	return nil, fmt.Errorf("download failed after %d attempts: %w", maxDownloadRetries, lastErr)
+}
+
 func (d *Downloader) DownloadImages(dir string, info chan *ct.ImagePullInfo) error {
 	defer close(info)
 
 	path := filepath.Join(d.version, "images.json.gz")
-	tmp, err := tufutil.Download(d.client, path)
+	tmp, err := d.downloadWithRetry(path)
 	if err != nil {
 		return err
 	}
@@ -160,7 +182,7 @@ func (d *Downloader) downloadSquashfsLayer(layer *ct.ImageLayer, layerURL string
 		return fmt.Errorf("missing target param in URL: %s", layerURL)
 	}
 
-	tmp, err := tufutil.Download(d.client, target)
+	tmp, err := d.downloadWithRetry(target)
 	if err != nil {
 		return err
 	}
@@ -185,7 +207,7 @@ func (d *Downloader) downloadGzippedFile(name, dir string, versionSuffix bool) (
 		dst = dst + "." + d.version
 	}
 
-	file, err := tufutil.Download(d.client, gzPath)
+	file, err := d.downloadWithRetry(gzPath)
 	if err != nil {
 		return "", err
 	}
