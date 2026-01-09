@@ -11,3 +11,6 @@ go-tuf/repo
 flynn-discovery/Godeps
 flynn-discovery/flynn-discovery
 .DS_Store
+*.log
+sha512_256_binary
+go-flynn-example
