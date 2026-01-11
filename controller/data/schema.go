@@ -957,6 +957,34 @@ $$ LANGUAGE SQL;
 	migrations.Add(49, `
 ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT false;
 	`)
+	migrations.Add(50,
+		`INSERT INTO event_types (name) VALUES ('managed_certificate')`,
+		`CREATE TABLE managed_certificate_statuses (name text PRIMARY KEY)`,
+		`INSERT INTO managed_certificate_statuses (name) VALUES
+			('pending'), ('issued'), ('failed'), ('renewing')`,
+		`CREATE TABLE managed_certificates (
+			id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+			domain varchar(255) NOT NULL CHECK (domain <> ''),
+			route_id uuid NOT NULL REFERENCES http_routes (id) ON DELETE CASCADE,
+			status text NOT NULL REFERENCES managed_certificate_statuses (name) DEFAULT 'pending',
+			cert text,
+			key text,
+			cert_sha256 bytea,
+			expires_at timestamptz,
+			last_error text,
+			last_error_at timestamptz,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			deleted_at timestamptz
+		)`,
+		`CREATE UNIQUE INDEX managed_certificates_domain_key ON managed_certificates
+			USING btree (domain) WHERE deleted_at IS NULL`,
+		`CREATE INDEX managed_certificates_route_id_idx ON managed_certificates (route_id)`,
+		`CREATE TRIGGER set_updated_at_managed_certificates
+			BEFORE UPDATE ON managed_certificates FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		`ALTER TABLE http_routes ADD COLUMN managed_certificate_domain varchar(255)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

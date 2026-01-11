@@ -19,6 +19,7 @@ require (
 	github.com/dgryski/go-skip32 v0.0.0-20131221203938-6cc5a8b574de
 	github.com/docker/go-units v0.3.0
 	github.com/dustin/go-humanize v1.0.0
+	github.com/eggsampler/acme/v3 v3.7.0 // indirect
 	github.com/flynn/go-check v0.0.0-20150613200214-592122021381
 	github.com/flynn/go-docopt v0.0.0-20140912013429-f6dd2ebbb31e
 	github.com/flynn/go-p9p v0.0.0-20170717161903-42f7901ca21a

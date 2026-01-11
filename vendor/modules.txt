@@ -65,6 +65,8 @@ github.com/dgryski/go-skip32
 github.com/docker/go-units
 # github.com/dustin/go-humanize v1.0.0
 github.com/dustin/go-humanize
+# github.com/eggsampler/acme/v3 v3.7.0
+github.com/eggsampler/acme/v3
 # github.com/flynn/go-check v0.0.0-20150613200214-592122021381
 github.com/flynn/go-check
 # github.com/flynn/go-docopt v0.0.0-20140912013429-f6dd2ebbb31e

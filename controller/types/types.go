@@ -514,6 +514,7 @@ const (
 	EventTypeSink                    EventType = "sink"
 	EventTypeSinkDeletion            EventType = "sink_deletion"
 	EventTypeVolume                  EventType = "volume"
+	EventTypeManagedCertificate      EventType = "managed_certificate"
 
 	// EventTypeDeprecatedScale is a deprecated event which is emitted for
 	// old clients waiting for formations to be scaled (new clients should
@@ -798,4 +799,64 @@ type LabelFilterExpression struct {
 	Op     LabelFilterExpressionOp `json:"op"`
 	Key    string                  `json:"key"`
 	Values []string                `json:"values"`
+}
+
+// ManagedCertificateStatus represents the status of a managed certificate
+type ManagedCertificateStatus string
+
+const (
+	// ManagedCertificateStatusPending indicates the certificate is pending issuance
+	ManagedCertificateStatusPending ManagedCertificateStatus = "pending"
+	// ManagedCertificateStatusIssued indicates the certificate has been issued
+	ManagedCertificateStatusIssued ManagedCertificateStatus = "issued"
+	// ManagedCertificateStatusFailed indicates the certificate issuance failed
+	ManagedCertificateStatusFailed ManagedCertificateStatus = "failed"
+	// ManagedCertificateStatusRenewing indicates the certificate is being renewed
+	ManagedCertificateStatusRenewing ManagedCertificateStatus = "renewing"
+)
+
+// ManagedCertificateError represents an error that occurred during certificate issuance
+type ManagedCertificateError struct {
+	Type   string `json:"type,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// ManagedCertificate represents an automatically provisioned TLS certificate (Let's Encrypt)
+type ManagedCertificate struct {
+	// ID is the unique identifier for this managed certificate
+	ID string `json:"id,omitempty"`
+	// Domain is the domain for this certificate
+	Domain string `json:"domain"`
+	// RouteID is the ID of the HTTP route this certificate is for
+	RouteID string `json:"route_id,omitempty"`
+	// Status is the current issuance status
+	Status ManagedCertificateStatus `json:"status"`
+	// Cert is the PEM-encoded certificate (once issued)
+	Cert string `json:"cert,omitempty"`
+	// Key is the PEM-encoded private key (once issued)
+	Key string `json:"key,omitempty"`
+	// ExpiresAt is when the certificate expires
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// LastError is the last error message if any
+	LastError *string `json:"last_error,omitempty"`
+	// LastErrorAt is when the last error occurred
+	LastErrorAt *time.Time `json:"last_error_at,omitempty"`
+	// OrderURL is the URL of the ACME order for this certificate
+	OrderURL string `json:"order_url,omitempty"`
+	// Errors contains any errors encountered during issuance (deprecated, use LastError)
+	Errors []*ManagedCertificateError `json:"errors,omitempty"`
+	// Certificate is the current certificate (deprecated, use Cert/Key)
+	Certificate *router.Certificate `json:"certificate,omitempty"`
+	// CreatedAt is when this managed certificate was created
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	// UpdatedAt is when this managed certificate was last updated
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// AddError adds an error to the managed certificate
+func (m *ManagedCertificate) AddError(errType, detail string) {
+	m.Errors = append(m.Errors, &ManagedCertificateError{
+		Type:   errType,
+		Detail: detail,
+	})
 }

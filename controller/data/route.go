@@ -80,10 +80,47 @@ func (r *RouteRepo) addHTTP(tx *postgres.DBTx, route *router.Route) error {
 		route.Sticky,
 		route.Path,
 		route.DisableKeepAlives,
+		route.ManagedCertificateDomain,
 	).Scan(&route.ID, &route.Path, &route.CreatedAt, &route.UpdatedAt); err != nil {
 		return err
 	}
+
+	// Create managed certificate if ManagedCertificateDomain is set
+	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+		if err := r.createManagedCertificate(tx, route); err != nil {
+			return err
+		}
+	}
+
 	return r.addRouteCertWithTx(tx, route)
+}
+
+func (r *RouteRepo) createManagedCertificate(tx *postgres.DBTx, route *router.Route) error {
+	var certID string
+	var createdAt, updatedAt time.Time
+	if err := tx.QueryRow(
+		"managed_certificate_insert",
+		*route.ManagedCertificateDomain,
+		route.ID,
+		ct.ManagedCertificateStatusPending,
+	).Scan(&certID, &createdAt, &updatedAt); err != nil {
+		return err
+	}
+
+	// Create event for the new managed certificate
+	cert := &ct.ManagedCertificate{
+		ID:        certID,
+		Domain:    *route.ManagedCertificateDomain,
+		RouteID:   route.ID,
+		Status:    ct.ManagedCertificateStatusPending,
+		CreatedAt: &createdAt,
+		UpdatedAt: &updatedAt,
+	}
+	return CreateEvent(tx.Exec, &ct.Event{
+		ObjectID:   certID,
+		ObjectType: ct.EventTypeManagedCertificate,
+		Op:         ct.EventOpCreate,
+	}, cert)
 }
 
 func (r *RouteRepo) addTCP(tx *postgres.DBTx, route *router.Route) error {
@@ -187,12 +224,13 @@ func (r *RouteRepo) getHTTP(id string) (*router.Route, error) {
 
 func scanHTTPRoute(s postgres.Scanner) (*router.Route, error) {
 	var (
-		route         router.Route
-		certID        *string
-		certCert      *string
-		certKey       *string
-		certCreatedAt *time.Time
-		certUpdatedAt *time.Time
+		route                    router.Route
+		managedCertificateDomain *string
+		certID                   *string
+		certCert                 *string
+		certKey                  *string
+		certCreatedAt            *time.Time
+		certUpdatedAt            *time.Time
 	)
 	if err := s.Scan(
 		&route.ID,
@@ -205,6 +243,7 @@ func scanHTTPRoute(s postgres.Scanner) (*router.Route, error) {
 		&route.Sticky,
 		&route.Path,
 		&route.DisableKeepAlives,
+		&managedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
 		&certID,
@@ -215,6 +254,7 @@ func scanHTTPRoute(s postgres.Scanner) (*router.Route, error) {
 	); err != nil {
 		return nil, err
 	}
+	route.ManagedCertificateDomain = managedCertificateDomain
 	route.Type = "http"
 	if certID != nil {
 		route.Certificate = &router.Certificate{
@@ -350,6 +390,7 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 		route.Sticky,
 		route.Path,
 		route.DisableKeepAlives,
+		route.ManagedCertificateDomain,
 		route.ID,
 		route.Domain,
 	).Scan(
@@ -363,6 +404,7 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 		&route.Sticky,
 		&route.Path,
 		&route.DisableKeepAlives,
+		&route.ManagedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
 	); err != nil {

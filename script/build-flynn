@@ -131,6 +131,7 @@ main() {
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-scheduler" ./controller/scheduler
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-worker" ./controller/worker
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-router" ./router
+    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-acme" ./router/acme    
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flanneld" ./flannel
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-release" ./util/release

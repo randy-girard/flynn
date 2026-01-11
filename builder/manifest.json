@@ -5,7 +5,7 @@
       {
         "keytype": "ed25519",
         "keyval": {
-          "public": "9e86ad840b99a03001220059648ff59b7ffe113de86438ae96dfccd190c66466"
+          "public": "c47f3f13151e3d6d0f69a7e232fced33424f0bb63272c2eba1bb9076ca9b98c6"
         }
       }
     ]
@@ -14,9 +14,9 @@
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
-    "size": 76328960,
+    "size": 76333056,
     "hashes": {
-      "sha512_256": "781420b1c0ec5cac7ebafe4642f9d9637b79cbeac84451dd051d6aa3626b0a5f"
+      "sha512_256": "e22f7291d1d1a30b6e0fb2aaf03ea8d61f9b396bae9a80a9757d42f88e4da8e5"
     }
   },
   "images": [
@@ -410,6 +410,25 @@
       "entrypoint": {
         "args": [
           "/bin/flynn-router"
+        ]
+      }
+    },
+    {
+      "id": "acme",
+      "base": "busybox",
+      "layers": [
+        {
+          "gobuild": {
+            "router/acme/cmd/acme": "/bin/flynn-acme"
+          },
+          "copy": {
+            "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/bin/flynn-acme"
         ]
       }
     },

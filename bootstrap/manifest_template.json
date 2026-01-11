@@ -141,6 +141,13 @@
     "encoding": "base64"
   },
   {
+    "id": "acme-account",
+    "action": "gen-acme-account",
+    "contacts": ["{{ getenv \"ACME_CONTACT_EMAIL\" }}"],
+    "terms_of_service_agreed": true,
+    "directory_url": "{{ getenv \"ACME_DIRECTORY_URL\" }}"
+  },
+  {
     "id": "postgres-wait",
     "action": "wait",
     "url": "http://postgres-api.discoverd/ping"
@@ -297,6 +304,11 @@
     "id": "redis-image",
     "action": "create-artifact",
     "artifact": $image_artifact[redis]
+  },
+  {
+    "id": "acme-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[acme]
   },
   {
     "id": "redis",
@@ -472,6 +484,33 @@
           "args": ["/bin/flynn-router", "-http-port", "80", "-https-port", "443", "-tcp-range-start", "3000", "-tcp-range-end", "3500"],
           "omni": true,
           "service": "router-api"
+        }
+      }
+    },
+    "processes": {
+      "app": 1
+    }
+  },
+  {
+    "id": "acme",
+    "action": "deploy-app",
+    "app": {
+      "name": "acme",
+      "meta": {"flynn-system-app": "true"}
+    },
+    "artifacts": [$image_artifact[acme]],
+    "release": {
+      "env": {
+        "ACCOUNT_KEY": "{{ (index .StepData \"acme-account\").Key }}",
+        "ACCOUNT_CONTACTS": "{{ getenv \"ACME_CONTACT_EMAIL\" }}",
+        "TERMS_OF_SERVICE_AGREED": "true",
+        "ACME_DIRECTORY_URL": "{{ (index .StepData \"acme-account\").DirectoryURL }}"
+      },
+      "processes": {
+        "app": {
+          "args": ["/bin/flynn-acme"],
+          "ports": [{"port": 8080, "proto": "tcp"}],
+          "service": "acme-challenge"
         }
       }
     },

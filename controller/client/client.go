@@ -101,6 +101,10 @@ type Client interface {
 	DeleteSink(sinkID string) (*ct.Sink, error)
 	ListSinks() ([]*ct.Sink, error)
 	StreamSinks(since *time.Time, output chan *ct.Sink) (stream.Stream, error)
+	ListManagedCertificates() ([]*ct.ManagedCertificate, error)
+	GetManagedCertificate(certID string) (*ct.ManagedCertificate, error)
+	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
+	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)
 }
 
 type Config struct {

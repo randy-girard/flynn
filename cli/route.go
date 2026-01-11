@@ -19,9 +19,9 @@ import (
 func init() {
 	register("route", runRoute, `
 usage: flynn route
-       flynn route add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
+       flynn route add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
        flynn route add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
-       flynn route update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
+       flynn route update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
        flynn route remove <id>
 
 Manage routes for application.
@@ -30,6 +30,8 @@ Options:
 	-s, --service=<service>    service name to route domain to (defaults to APPNAME-web)
 	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin (http only)
 	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin (http only)
+	--auto-tls                 automatically provision TLS certificate via Let's Encrypt (http only)
+	--no-auto-tls              disable automatic TLS certificate provisioning (update http only)
 	--sticky                   enable cookie-based sticky routing (http only)
 	--no-sticky                disable cookie-based sticky routing (update http only)
 	--leader                   enable leader-only routing mode
@@ -48,6 +50,8 @@ Commands:
 Examples:
 
 	$ flynn route add http example.com
+
+	$ flynn route add http --auto-tls example.com
 
 	$ flynn route add http example.com/path/
 
@@ -155,9 +159,15 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 		service = mustApp() + "-web"
 	}
 
+	autoTLS := args.Bool["--auto-tls"]
 	tlsCert, tlsKey, err := parseTLSCert(args)
 	if err != nil {
 		return err
+	}
+
+	// Validate that --auto-tls and manual TLS cert are mutually exclusive
+	if autoTLS && (tlsCert != "" || tlsKey != "") {
+		return errors.New("--auto-tls cannot be used with --tls-cert or --tls-key")
 	}
 
 	port := 0
@@ -186,6 +196,12 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 		DrainBackends:     !args.Bool["--no-drain-backends"],
 		DisableKeepAlives: args.Bool["--disable-keep-alives"],
 	}
+
+	// Set managed certificate domain if auto-TLS is enabled
+	if autoTLS {
+		hr.ManagedCertificateDomain = &u.Host
+	}
+
 	route := hr.ToRoute()
 	if err := client.CreateRoute(mustApp(), route); err != nil {
 		return err
@@ -240,6 +256,17 @@ func runRouteUpdateHTTP(args *docopt.Args, client controller.Client) error {
 	route.LegacyTLSCert, route.LegacyTLSKey, err = parseTLSCert(args)
 	if err != nil {
 		return err
+	}
+
+	// Handle auto-TLS options
+	if args.Bool["--auto-tls"] {
+		// Validate that --auto-tls and manual TLS cert are mutually exclusive
+		if route.LegacyTLSCert != "" || route.LegacyTLSKey != "" {
+			return errors.New("--auto-tls cannot be used with --tls-cert or --tls-key")
+		}
+		route.ManagedCertificateDomain = &route.Domain
+	} else if args.Bool["--no-auto-tls"] {
+		route.ManagedCertificateDomain = nil
 	}
 
 	if args.Bool["--sticky"] {

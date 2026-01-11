@@ -6,111 +6,120 @@ import (
 )
 
 var preparedStatements = map[string]string{
-	"ping":                                  pingQuery,
-	"app_list":                              appListQuery,
-	"app_list_page":                         appListPageQuery,
-	"app_select_by_name":                    appSelectByNameQuery,
-	"app_select_by_name_for_update":         appSelectByNameForUpdateQuery,
-	"app_select_by_name_or_id":              appSelectByNameOrIDQuery,
-	"app_select_by_name_or_id_for_update":   appSelectByNameOrIDForUpdateQuery,
-	"app_insert":                            appInsertQuery,
-	"app_update_strategy":                   appUpdateStrategyQuery,
-	"app_update_meta":                       appUpdateMetaQuery,
-	"app_update_release":                    appUpdateReleaseQuery,
-	"app_update_deploy_timeout":             appUpdateDeployTimeoutQuery,
-	"app_delete":                            appDeleteQuery,
-	"app_next_name_id":                      appNextNameIDQuery,
-	"app_get_release":                       appGetReleaseQuery,
-	"release_list":                          releaseListQuery,
-	"release_list_page":                     releaseListPageQuery,
-	"release_select":                        releaseSelectQuery,
-	"release_insert":                        releaseInsertQuery,
-	"release_app_list":                      releaseAppListQuery,
-	"release_artifacts_insert":              releaseArtifactsInsertQuery,
-	"release_artifacts_delete":              releaseArtifactsDeleteQuery,
-	"release_delete":                        releaseDeleteQuery,
-	"artifact_list":                         artifactListQuery,
-	"artifact_list_ids":                     artifactListIDsQuery,
-	"artifact_select":                       artifactSelectQuery,
-	"artifact_select_by_type_and_uri":       artifactSelectByTypeAndURIQuery,
-	"artifact_insert":                       artifactInsertQuery,
-	"artifact_delete":                       artifactDeleteQuery,
-	"artifact_release_count":                artifactReleaseCountQuery,
-	"artifact_layer_count":                  artifactLayerCountQuery,
-	"deployment_list":                       deploymentListQuery,
-	"deployment_list_page":                  deploymentListPageQuery,
-	"deployment_select":                     deploymentSelectQuery,
-	"deployment_select_expanded":            deploymentSelectExpandedQuery,
-	"deployment_insert":                     deploymentInsertQuery,
-	"deployment_update_finished_at":         deploymentUpdateFinishedAtQuery,
-	"deployment_update_finished_at_now":     deploymentUpdateFinishedAtNowQuery,
-	"deployment_delete":                     deploymentDeleteQuery,
-	"event_select":                          eventSelectQuery,
-	"event_insert":                          eventInsertQuery,
-	"event_insert_op":                       eventInsertOpQuery,
-	"event_insert_unique":                   eventInsertUniqueQuery,
-	"formation_list_by_app":                 formationListByAppQuery,
-	"formation_list_by_release":             formationListByReleaseQuery,
-	"formation_list_active":                 formationListActiveQuery,
-	"formation_list_since":                  formationListSinceQuery,
-	"formation_select":                      formationSelectQuery,
-	"formation_select_expanded":             formationSelectExpandedQuery,
-	"formation_insert":                      formationInsertQuery,
-	"formation_delete":                      formationDeleteQuery,
-	"formation_delete_by_app":               formationDeleteByAppQuery,
-	"scale_request_insert":                  scaleRequestInsertQuery,
-	"scale_request_cancel":                  scaleRequestCancelQuery,
-	"scale_request_update":                  scaleRequestUpdateQuery,
-	"scale_request_list":                    scaleRequestListQuery,
-	"job_list":                              jobListQuery,
-	"job_list_active":                       jobListActiveQuery,
-	"job_select":                            jobSelectQuery,
-	"job_insert":                            jobInsertQuery,
-	"job_volume_insert":                     jobVolumeInsertQuery,
-	"provider_list":                         providerListQuery,
-	"provider_select_by_name":               providerSelectByNameQuery,
-	"provider_select_by_name_or_id":         providerSelectByNameOrIDQuery,
-	"provider_insert":                       providerInsertQuery,
-	"resource_list":                         resourceListQuery,
-	"resource_list_by_provider":             resourceListByProviderQuery,
-	"resource_list_by_app":                  resourceListByAppQuery,
-	"resource_select":                       resourceSelectQuery,
-	"resource_insert":                       resourceInsertQuery,
-	"resource_delete":                       resourceDeleteQuery,
-	"app_resource_insert_app_by_name":       appResourceInsertAppByNameQuery,
-	"app_resource_insert_app_by_name_or_id": appResourceInsertAppByNameOrIDQuery,
-	"app_resource_delete_by_app":            appResourceDeleteByAppQuery,
-	"app_resource_delete_by_resource":       appResourceDeleteByResourceQuery,
-	"domain_migration_insert":               domainMigrationInsert,
-	"backup_insert":                         backupInsert,
-	"backup_update":                         backupUpdate,
-	"backup_select_latest":                  backupSelectLatest,
-	"sink_list":                             sinkListQuery,
-	"sink_list_since":                       sinkListSinceQuery,
-	"sink_select":                           sinkSelectQuery,
-	"sink_insert":                           sinkInsertQuery,
-	"sink_delete":                           sinkDeleteQuery,
-	"volume_list":                           volumeListQuery,
-	"volume_app_list":                       volumeAppListQuery,
-	"volume_list_since":                     volumeListSinceQuery,
-	"volume_select":                         volumeSelectQuery,
-	"volume_insert":                         volumeInsertQuery,
-	"volume_decommission":                   volumeDecommissionQuery,
-	"http_route_list":                       httpRouteListQuery,
-	"http_route_list_by_parent_ref":         httpRouteListByParentRefQuery,
-	"http_route_insert":                     httpRouteInsertQuery,
-	"http_route_select":                     httpRouteSelectQuery,
-	"http_route_update":                     httpRouteUpdateQuery,
-	"http_route_delete":                     httpRouteDeleteQuery,
-	"tcp_route_list":                        tcpRouteListQuery,
-	"tcp_route_list_by_parent_ref":          tcpRouteListByParentRefQuery,
-	"tcp_route_insert":                      tcpRouteInsertQuery,
-	"tcp_route_select":                      tcpRouteSelectQuery,
-	"tcp_route_update":                      tcpRouteUpdateQuery,
-	"tcp_route_delete":                      tcpRouteDeleteQuery,
-	"certificate_insert":                    certificateInsertQuery,
-	"route_certificate_delete_by_route_id":  routeCertificateDeleteByRouteIDQuery,
-	"route_certificate_insert":              routeCertificateInsertQuery,
+	"ping":                                   pingQuery,
+	"app_list":                               appListQuery,
+	"app_list_page":                          appListPageQuery,
+	"app_select_by_name":                     appSelectByNameQuery,
+	"app_select_by_name_for_update":          appSelectByNameForUpdateQuery,
+	"app_select_by_name_or_id":               appSelectByNameOrIDQuery,
+	"app_select_by_name_or_id_for_update":    appSelectByNameOrIDForUpdateQuery,
+	"app_insert":                             appInsertQuery,
+	"app_update_strategy":                    appUpdateStrategyQuery,
+	"app_update_meta":                        appUpdateMetaQuery,
+	"app_update_release":                     appUpdateReleaseQuery,
+	"app_update_deploy_timeout":              appUpdateDeployTimeoutQuery,
+	"app_delete":                             appDeleteQuery,
+	"app_next_name_id":                       appNextNameIDQuery,
+	"app_get_release":                        appGetReleaseQuery,
+	"release_list":                           releaseListQuery,
+	"release_list_page":                      releaseListPageQuery,
+	"release_select":                         releaseSelectQuery,
+	"release_insert":                         releaseInsertQuery,
+	"release_app_list":                       releaseAppListQuery,
+	"release_artifacts_insert":               releaseArtifactsInsertQuery,
+	"release_artifacts_delete":               releaseArtifactsDeleteQuery,
+	"release_delete":                         releaseDeleteQuery,
+	"artifact_list":                          artifactListQuery,
+	"artifact_list_ids":                      artifactListIDsQuery,
+	"artifact_select":                        artifactSelectQuery,
+	"artifact_select_by_type_and_uri":        artifactSelectByTypeAndURIQuery,
+	"artifact_insert":                        artifactInsertQuery,
+	"artifact_delete":                        artifactDeleteQuery,
+	"artifact_release_count":                 artifactReleaseCountQuery,
+	"artifact_layer_count":                   artifactLayerCountQuery,
+	"deployment_list":                        deploymentListQuery,
+	"deployment_list_page":                   deploymentListPageQuery,
+	"deployment_select":                      deploymentSelectQuery,
+	"deployment_select_expanded":             deploymentSelectExpandedQuery,
+	"deployment_insert":                      deploymentInsertQuery,
+	"deployment_update_finished_at":          deploymentUpdateFinishedAtQuery,
+	"deployment_update_finished_at_now":      deploymentUpdateFinishedAtNowQuery,
+	"deployment_delete":                      deploymentDeleteQuery,
+	"event_select":                           eventSelectQuery,
+	"event_insert":                           eventInsertQuery,
+	"event_insert_op":                        eventInsertOpQuery,
+	"event_insert_unique":                    eventInsertUniqueQuery,
+	"formation_list_by_app":                  formationListByAppQuery,
+	"formation_list_by_release":              formationListByReleaseQuery,
+	"formation_list_active":                  formationListActiveQuery,
+	"formation_list_since":                   formationListSinceQuery,
+	"formation_select":                       formationSelectQuery,
+	"formation_select_expanded":              formationSelectExpandedQuery,
+	"formation_insert":                       formationInsertQuery,
+	"formation_delete":                       formationDeleteQuery,
+	"formation_delete_by_app":                formationDeleteByAppQuery,
+	"scale_request_insert":                   scaleRequestInsertQuery,
+	"scale_request_cancel":                   scaleRequestCancelQuery,
+	"scale_request_update":                   scaleRequestUpdateQuery,
+	"scale_request_list":                     scaleRequestListQuery,
+	"job_list":                               jobListQuery,
+	"job_list_active":                        jobListActiveQuery,
+	"job_select":                             jobSelectQuery,
+	"job_insert":                             jobInsertQuery,
+	"job_volume_insert":                      jobVolumeInsertQuery,
+	"provider_list":                          providerListQuery,
+	"provider_select_by_name":                providerSelectByNameQuery,
+	"provider_select_by_name_or_id":          providerSelectByNameOrIDQuery,
+	"provider_insert":                        providerInsertQuery,
+	"resource_list":                          resourceListQuery,
+	"resource_list_by_provider":              resourceListByProviderQuery,
+	"resource_list_by_app":                   resourceListByAppQuery,
+	"resource_select":                        resourceSelectQuery,
+	"resource_insert":                        resourceInsertQuery,
+	"resource_delete":                        resourceDeleteQuery,
+	"app_resource_insert_app_by_name":        appResourceInsertAppByNameQuery,
+	"app_resource_insert_app_by_name_or_id":  appResourceInsertAppByNameOrIDQuery,
+	"app_resource_delete_by_app":             appResourceDeleteByAppQuery,
+	"app_resource_delete_by_resource":        appResourceDeleteByResourceQuery,
+	"domain_migration_insert":                domainMigrationInsert,
+	"backup_insert":                          backupInsert,
+	"backup_update":                          backupUpdate,
+	"backup_select_latest":                   backupSelectLatest,
+	"sink_list":                              sinkListQuery,
+	"sink_list_since":                        sinkListSinceQuery,
+	"sink_select":                            sinkSelectQuery,
+	"sink_insert":                            sinkInsertQuery,
+	"sink_delete":                            sinkDeleteQuery,
+	"volume_list":                            volumeListQuery,
+	"volume_app_list":                        volumeAppListQuery,
+	"volume_list_since":                      volumeListSinceQuery,
+	"volume_select":                          volumeSelectQuery,
+	"volume_insert":                          volumeInsertQuery,
+	"volume_decommission":                    volumeDecommissionQuery,
+	"http_route_list":                        httpRouteListQuery,
+	"http_route_list_by_parent_ref":          httpRouteListByParentRefQuery,
+	"http_route_insert":                      httpRouteInsertQuery,
+	"http_route_select":                      httpRouteSelectQuery,
+	"http_route_update":                      httpRouteUpdateQuery,
+	"http_route_delete":                      httpRouteDeleteQuery,
+	"tcp_route_list":                         tcpRouteListQuery,
+	"tcp_route_list_by_parent_ref":           tcpRouteListByParentRefQuery,
+	"tcp_route_insert":                       tcpRouteInsertQuery,
+	"tcp_route_select":                       tcpRouteSelectQuery,
+	"tcp_route_update":                       tcpRouteUpdateQuery,
+	"tcp_route_delete":                       tcpRouteDeleteQuery,
+	"certificate_insert":                     certificateInsertQuery,
+	"route_certificate_delete_by_route_id":   routeCertificateDeleteByRouteIDQuery,
+	"route_certificate_insert":               routeCertificateInsertQuery,
+	"managed_certificate_list":               managedCertificateListQuery,
+	"managed_certificate_list_since":         managedCertificateListSinceQuery,
+	"managed_certificate_select":             managedCertificateSelectQuery,
+	"managed_certificate_select_by_domain":   managedCertificateSelectByDomainQuery,
+	"managed_certificate_select_by_route_id": managedCertificateSelectByRouteIDQuery,
+	"managed_certificate_insert":             managedCertificateInsertQuery,
+	"managed_certificate_update":             managedCertificateUpdateQuery,
+	"managed_certificate_delete":             managedCertificateDeleteQuery,
+	"managed_certificate_list_expiring":      managedCertificateListExpiringQuery,
 }
 
 func PrepareStatements(conn *pgx.Conn) error {
@@ -626,31 +635,31 @@ RETURNING created_at, updated_at`
 	volumeDecommissionQuery = `
 UPDATE volumes SET updated_at = now(), decommissioned_at = now() WHERE app_id = $1 AND volume_id = $2 RETURNING updated_at, decommissioned_at`
 	httpRouteListQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.deleted_at IS NULL
 ORDER BY r.domain, r.path`
 	httpRouteListByParentRefQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.parent_ref = $1 AND r.deleted_at IS NULL
 ORDER BY r.domain, r.path`
 	httpRouteInsertQuery = `
-INSERT INTO http_routes (parent_ref, service, port, leader, drain_backends, domain, sticky, path, disable_keep_alives)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO http_routes (parent_ref, service, port, leader, drain_backends, domain, sticky, path, disable_keep_alives, managed_certificate_domain)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 RETURNING id, path, created_at, updated_at`
 	httpRouteSelectQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.id = $1 AND r.deleted_at IS NULL`
 	httpRouteUpdateQuery = `
 UPDATE http_routes as r
-SET parent_ref = $1, service = $2, port = $3, leader = $4, sticky = $5, path = $6, disable_keep_alives = $7
-WHERE id = $8 AND domain = $9 AND deleted_at IS NULL
-RETURNING r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.created_at, r.updated_at`
+SET parent_ref = $1, service = $2, port = $3, leader = $4, sticky = $5, path = $6, disable_keep_alives = $7, managed_certificate_domain = $8
+WHERE id = $9 AND domain = $10 AND deleted_at IS NULL
+RETURNING r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at`
 	httpRouteDeleteQuery = `
 UPDATE http_routes SET deleted_at = now()
 WHERE id = $1`
@@ -685,4 +694,51 @@ WHERE http_route_id = $1`
 	routeCertificateInsertQuery = `
 INSERT INTO route_certificates (http_route_id, certificate_id)
 VALUES ($1, $2)`
+
+	// managed certificates
+	managedCertificateListQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE deleted_at IS NULL
+ORDER BY created_at DESC`
+	managedCertificateListSinceQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE deleted_at IS NULL AND updated_at >= $1
+ORDER BY updated_at`
+	managedCertificateSelectQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE id = $1 AND deleted_at IS NULL`
+	managedCertificateSelectByDomainQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE domain = $1 AND deleted_at IS NULL`
+	managedCertificateSelectByRouteIDQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE route_id = $1 AND deleted_at IS NULL`
+	managedCertificateInsertQuery = `
+INSERT INTO managed_certificates (domain, route_id, status)
+VALUES ($1, $2, $3)
+RETURNING id, created_at, updated_at`
+	managedCertificateUpdateQuery = `
+UPDATE managed_certificates SET
+	status = $2,
+	cert = $3,
+	key = $4,
+	cert_sha256 = $5,
+	expires_at = $6,
+	last_error = $7,
+	last_error_at = $8
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING updated_at`
+	managedCertificateDeleteQuery = `
+UPDATE managed_certificates SET deleted_at = now()
+WHERE id = $1`
+	managedCertificateListExpiringQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE deleted_at IS NULL AND status = 'issued' AND expires_at <= $1
+ORDER BY expires_at`
 )

@@ -8,7 +8,7 @@ import (
 
 var (
 	// these constants are overridden at build time (see builder/go-wrapper.sh)
-	RootKeysJSON = `[{"keytype":"ed25519","keyval":{"public":"9e86ad840b99a03001220059648ff59b7ffe113de86438ae96dfccd190c66466"}}]`
+	RootKeysJSON = `[{"keytype":"ed25519","keyval":{"public":"c47f3f13151e3d6d0f69a7e232fced33424f0bb63272c2eba1bb9076ca9b98c6"}}]`
 	Repository   = "https://dl.flynn.cloud.randygirard.com/tuf"
 )
 

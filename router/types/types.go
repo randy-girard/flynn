@@ -1,6 +1,8 @@
 package router
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 )
@@ -15,10 +17,55 @@ type Certificate struct {
 	Cert string `json:"cert,omitempty"`
 	// TLSCert is the optional TLS private key. It is only used for HTTP routes.
 	Key string `json:"key,omitempty"`
+	// Chain is a list of DER-encoded X.509 certificates (for managed certs).
+	Chain [][]byte `json:"chain,omitempty"`
+	// NoStrict disables strict certificate validation
+	NoStrict bool `json:"no_strict,omitempty"`
 	// CreatedAt is the time this cert was created.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt is the time this cert was last updated.
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
+}
+
+// CertificateID is a typed certificate identifier
+type CertificateID struct {
+	Hash string
+}
+
+// String returns the string representation of the certificate ID
+func (id CertificateID) String() string {
+	return id.Hash
+}
+
+// KeyID is a typed key identifier
+type KeyID struct {
+	Hash string
+}
+
+// String returns the string representation of the key ID
+func (id KeyID) String() string {
+	return id.Hash
+}
+
+// ID returns a CertificateID based on the chain hash
+func (c *Certificate) ID_() CertificateID {
+	if len(c.Chain) == 0 {
+		return CertificateID{}
+	}
+	h := sha256.New()
+	for _, cert := range c.Chain {
+		h.Write(cert)
+	}
+	return CertificateID{Hash: hex.EncodeToString(h.Sum(nil))}
+}
+
+// KeyID returns a KeyID based on the key hash
+func (c *Certificate) KeyID() KeyID {
+	if c.Key == "" {
+		return KeyID{}
+	}
+	h := sha256.Sum256([]byte(c.Key))
+	return KeyID{Hash: hex.EncodeToString(h[:])}
 }
 
 // Route is a struct that combines the fields of HTTPRoute and TCPRoute
@@ -48,6 +95,10 @@ type Route struct {
 
 	// Certificate contains TLSCert and TLSKey
 	Certificate *Certificate `json:"certificate,omitempty"`
+
+	// ManagedCertificateDomain is the domain of the route's associated
+	// managed certificate (Let's Encrypt)
+	ManagedCertificateDomain *string `json:"managed_certificate_domain,omitempty"`
 
 	// Deprecated in favor of Certificate
 	LegacyTLSCert string `json:"tls_cert,omitempty"`
@@ -87,13 +138,14 @@ func (r Route) HTTPRoute() *HTTPRoute {
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
 
-		Domain:            r.Domain,
-		Certificate:       r.Certificate,
-		LegacyTLSCert:     r.LegacyTLSCert,
-		LegacyTLSKey:      r.LegacyTLSKey,
-		Sticky:            r.Sticky,
-		Path:              r.Path,
-		DisableKeepAlives: r.DisableKeepAlives,
+		Domain:                   r.Domain,
+		Certificate:              r.Certificate,
+		ManagedCertificateDomain: r.ManagedCertificateDomain,
+		LegacyTLSCert:            r.LegacyTLSCert,
+		LegacyTLSKey:             r.LegacyTLSKey,
+		Sticky:                   r.Sticky,
+		Path:                     r.Path,
+		DisableKeepAlives:        r.DisableKeepAlives,
 	}
 }
 
@@ -121,13 +173,14 @@ type HTTPRoute struct {
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 
-	Domain            string
-	Certificate       *Certificate `json:"certificate,omitempty"`
-	LegacyTLSCert     string       `json:"tls_cert,omitempty"`
-	LegacyTLSKey      string       `json:"tls_key,omitempty"`
-	Sticky            bool
-	Path              string
-	DisableKeepAlives bool
+	Domain                   string
+	Certificate              *Certificate `json:"certificate,omitempty"`
+	ManagedCertificateDomain *string      `json:"managed_certificate_domain,omitempty"`
+	LegacyTLSCert            string       `json:"tls_cert,omitempty"`
+	LegacyTLSKey             string       `json:"tls_key,omitempty"`
+	Sticky                   bool
+	Path                     string
+	DisableKeepAlives        bool
 }
 
 func (r HTTPRoute) FormattedID() string {
@@ -152,13 +205,14 @@ func (r HTTPRoute) ToRoute() *Route {
 		UpdatedAt:     r.UpdatedAt,
 
 		// http-specific fields
-		Domain:            r.Domain,
-		Certificate:       r.Certificate,
-		LegacyTLSCert:     r.LegacyTLSCert,
-		LegacyTLSKey:      r.LegacyTLSKey,
-		Sticky:            r.Sticky,
-		Path:              r.Path,
-		DisableKeepAlives: r.DisableKeepAlives,
+		Domain:                   r.Domain,
+		Certificate:              r.Certificate,
+		ManagedCertificateDomain: r.ManagedCertificateDomain,
+		LegacyTLSCert:            r.LegacyTLSCert,
+		LegacyTLSKey:             r.LegacyTLSKey,
+		Sticky:                   r.Sticky,
+		Path:                     r.Path,
+		DisableKeepAlives:        r.DisableKeepAlives,
 	}
 }
 

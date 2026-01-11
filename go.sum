@@ -41,6 +41,8 @@ github.com/docker/go-units v0.3.0 h1:69LhctGQbg0wZ2bTvwFsuPXPnhe6T2+0UMsxh+rBYZg
 github.com/docker/go-units v0.3.0/go.mod h1:fgPhTUdO+D/Jk86RDLlptpiXQzgHJF7gydDDbaIK4Dk=
 github.com/dustin/go-humanize v1.0.0 h1:VSnTsYCnlFHaM2/igO1h6X3HA71jcobQuxemgkq4zYo=
 github.com/dustin/go-humanize v1.0.0/go.mod h1:HtrtbFcZ19U5GC7JDqmcUSB87Iq5E25KnS6fMYU6eOk=
+github.com/eggsampler/acme/v3 v3.7.0 h1:l1RK3ztS7h/7PMUl9HfAKu3TmoRukbpR6jKcAOV7ptM=
+github.com/eggsampler/acme/v3 v3.7.0/go.mod h1:/qh0rKC/Dh7Jj+p4So7DbWmFNzC4dpcpK53r226Fhuo=
 github.com/envoyproxy/go-control-plane v0.9.1-0.20191026205805-5f8ba28d4473/go.mod h1:YTl/9mNaCwkRvm6d1a2C3ymFceY/DCBVvsKhRF0iEA4=
 github.com/envoyproxy/protoc-gen-validate v0.1.0/go.mod h1:iSmxcyjqTsJpI2R4NaDN7+kN2VEUnK/pcBlmesArF7c=
 github.com/flynn/go-check v0.0.0-20150613200214-592122021381 h1:wCF0McqX1H9G3+bNRLgzQPmo98lizoGbcQyPl0c4R68=

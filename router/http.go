@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,6 +58,9 @@ type HTTPListener struct {
 
 	preSync  func()
 	postSync func(<-chan struct{})
+
+	// ACME challenge service for automatic TLS certificates
+	acmeService *cache.ServiceCache
 }
 
 type DiscoverdClient interface {
@@ -106,6 +111,8 @@ func (s *HTTPListener) Start() error {
 	if s.cookieKey == nil {
 		s.cookieKey = &[32]byte{}
 	}
+
+	// ACME challenge service cache will be initialized lazily when needed
 
 	if err := s.startSync(ctx); err != nil {
 		s.Close()
@@ -454,9 +461,18 @@ func fail(w http.ResponseWriter, code int) {
 	w.Write(msg)
 }
 
+const acmeChallengePath = "/.well-known/acme-challenge/"
+
 func (s *HTTPListener) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	ctx = ctxhelper.NewContextStartTime(ctx, time.Now())
+
+	// Intercept ACME challenge requests and proxy them to the ACME service
+	if strings.HasPrefix(req.URL.Path, acmeChallengePath) {
+		s.serveACMEChallenge(w, req)
+		return
+	}
+
 	host := req.Host
 	// fwdProtoHandler pushes the "real" port onto the end of X-Forwarded-Port
 	ports := strings.Split(req.Header["X-Forwarded-Port"][0], ", ")
@@ -468,6 +484,39 @@ func (s *HTTPListener) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	r.ServeHTTP(w, req.WithContext(ctx))
+}
+
+func (s *HTTPListener) serveACMEChallenge(w http.ResponseWriter, req *http.Request) {
+	// Lazily initialize the ACME service cache if needed
+	s.mtx.Lock()
+	if s.acmeService == nil {
+		s.acmeService, _ = cache.New(s.discoverd.Service("acme-challenge"))
+	}
+	acmeSvc := s.acmeService
+	s.mtx.Unlock()
+
+	if acmeSvc == nil {
+		fail(w, 503)
+		return
+	}
+
+	instances := acmeSvc.Instances()
+	if len(instances) == 0 {
+		fail(w, 503)
+		return
+	}
+
+	// Pick the first available ACME service instance
+	instance := instances[0]
+
+	// Create a reverse proxy to the ACME service using standard library
+	target, err := url.Parse("http://" + instance.Addr)
+	if err != nil {
+		fail(w, 500)
+		return
+	}
+	rp := httputil.NewSingleHostReverseProxy(target)
+	rp.ServeHTTP(w, req)
 }
 
 // A domain served by a listener, associated TLS certs,

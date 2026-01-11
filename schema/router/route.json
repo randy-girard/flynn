@@ -42,6 +42,10 @@
     "certificate": {
       "$ref": "/schema/router/certificate#"
     },
+    "managed_certificate_domain": {
+      "type": "string",
+      "description": "Domain for which to automatically manage TLS certificate via ACME."
+    },
     "path": {
       "type": "string",
       "description": "Optional path to route to this service, HTTP routes only and exclusive with TLS options."

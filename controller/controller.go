@@ -184,28 +184,30 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	backupRepo := data.NewBackupRepo(c.db)
 	sinkRepo := data.NewSinkRepo(c.db)
 	volumeRepo := data.NewVolumeRepo(c.db)
+	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
 
 	api := controllerAPI{
-		domainMigrationRepo: domainMigrationRepo,
-		appRepo:             appRepo,
-		releaseRepo:         releaseRepo,
-		providerRepo:        providerRepo,
-		formationRepo:       formationRepo,
-		artifactRepo:        artifactRepo,
-		jobRepo:             jobRepo,
-		routeRepo:           routeRepo,
-		resourceRepo:        resourceRepo,
-		deploymentRepo:      deploymentRepo,
-		eventRepo:           eventRepo,
-		backupRepo:          backupRepo,
-		sinkRepo:            sinkRepo,
-		volumeRepo:          volumeRepo,
-		clusterClient:       c.cc,
-		logaggc:             c.lc,
-		que:                 q,
-		caCert:              c.caCert,
-		config:              c,
-		authorizer:          authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
+		domainMigrationRepo:    domainMigrationRepo,
+		appRepo:                appRepo,
+		releaseRepo:            releaseRepo,
+		providerRepo:           providerRepo,
+		formationRepo:          formationRepo,
+		artifactRepo:           artifactRepo,
+		jobRepo:                jobRepo,
+		routeRepo:              routeRepo,
+		resourceRepo:           resourceRepo,
+		deploymentRepo:         deploymentRepo,
+		eventRepo:              eventRepo,
+		backupRepo:             backupRepo,
+		sinkRepo:               sinkRepo,
+		volumeRepo:             volumeRepo,
+		managedCertificateRepo: managedCertificateRepo,
+		clusterClient:          c.cc,
+		logaggc:                c.lc,
+		que:                    q,
+		caCert:                 c.caCert,
+		config:                 c,
+		authorizer:             authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
 	}
 
 	shutdown.BeforeExit(api.Shutdown)
@@ -292,6 +294,10 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/sinks/:sink_id", httphelper.WrapHandler(api.GetSink))
 	httpRouter.DELETE("/sinks/:sink_id", httphelper.WrapHandler(api.DeleteSink))
 
+	httpRouter.GET("/managed-certificates", httphelper.WrapHandler(api.GetManagedCertificates))
+	httpRouter.GET("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.GetManagedCertificate))
+	httpRouter.PUT("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.UpdateManagedCertificate))
+
 	grpcAPI := &grpcAPI{&api, c.db}
 	grpcSrv := grpcAPI.grpcServer()
 
@@ -342,26 +348,27 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 }
 
 type controllerAPI struct {
-	domainMigrationRepo *data.DomainMigrationRepo
-	appRepo             *data.AppRepo
-	releaseRepo         *data.ReleaseRepo
-	providerRepo        *data.ProviderRepo
-	formationRepo       *data.FormationRepo
-	artifactRepo        *data.ArtifactRepo
-	jobRepo             *data.JobRepo
-	routeRepo           *data.RouteRepo
-	resourceRepo        *data.ResourceRepo
-	deploymentRepo      *data.DeploymentRepo
-	eventRepo           *data.EventRepo
-	backupRepo          *data.BackupRepo
-	sinkRepo            *data.SinkRepo
-	volumeRepo          *data.VolumeRepo
-	clusterClient       utils.ClusterClient
-	logaggc             logClient
-	que                 *que.Client
-	caCert              []byte
-	config              handlerConfig
-	authorizer          *authorizer.Authorizer
+	domainMigrationRepo    *data.DomainMigrationRepo
+	appRepo                *data.AppRepo
+	releaseRepo            *data.ReleaseRepo
+	providerRepo           *data.ProviderRepo
+	formationRepo          *data.FormationRepo
+	artifactRepo           *data.ArtifactRepo
+	jobRepo                *data.JobRepo
+	routeRepo              *data.RouteRepo
+	resourceRepo           *data.ResourceRepo
+	deploymentRepo         *data.DeploymentRepo
+	eventRepo              *data.EventRepo
+	backupRepo             *data.BackupRepo
+	sinkRepo               *data.SinkRepo
+	volumeRepo             *data.VolumeRepo
+	managedCertificateRepo *data.ManagedCertificateRepo
+	clusterClient          utils.ClusterClient
+	logaggc                logClient
+	que                    *que.Client
+	caCert                 []byte
+	config                 handlerConfig
+	authorizer             *authorizer.Authorizer
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

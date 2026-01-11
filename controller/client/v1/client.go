@@ -944,6 +944,34 @@ func (c *Client) StreamSinks(since *time.Time, output chan *ct.Sink) (stream.Str
 	return c.Stream("GET", "/sinks?since="+t, nil, output)
 }
 
+// ListManagedCertificates returns all managed certificates
+func (c *Client) ListManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	var certs []*ct.ManagedCertificate
+	return certs, c.Get("/managed-certificates", &certs)
+}
+
+// GetManagedCertificate returns a specific managed certificate
+func (c *Client) GetManagedCertificate(certID string) (*ct.ManagedCertificate, error) {
+	cert := &ct.ManagedCertificate{}
+	return cert, c.Get(fmt.Sprintf("/managed-certificates/%s", certID), cert)
+}
+
+// UpdateManagedCertificate updates a managed certificate
+func (c *Client) UpdateManagedCertificate(cert *ct.ManagedCertificate) error {
+	return c.Put(fmt.Sprintf("/managed-certificates/%s", cert.ID), cert, cert)
+}
+
+// StreamManagedCertificates yields a series of ManagedCertificate into the provided channel.
+// If since is not nil, only retrieves certificate updates since the specified time.
+func (c *Client) StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error) {
+	if since == nil {
+		s := time.Unix(0, 0)
+		since = &s
+	}
+	t := since.UTC().Format(time.RFC3339Nano)
+	return c.Stream("GET", "/managed-certificates?since="+t, nil, output)
+}
+
 func (c *Client) Put(path string, in, out interface{}) error {
 	return c.send("PUT", path, in, out)
 }
