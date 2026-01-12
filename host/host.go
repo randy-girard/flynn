@@ -113,6 +113,7 @@ Commands:
   log-sink                   Manage host log sinks
   cli-add-command            Get the 'flynn cluster add' command to manage this cluster
   volume                     Manage volumes on the Flynn node
+  acme                       Manage ACME/Let's Encrypt configuration
 
 See 'flynn-host help <command>' for more information on a specific command.
 `

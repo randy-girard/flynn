@@ -860,3 +860,29 @@ func (m *ManagedCertificate) AddError(errType, detail string) {
 		Detail: detail,
 	})
 }
+
+// ACMEConfig represents the global ACME/Let's Encrypt configuration for the cluster
+type ACMEConfig struct {
+	// Enabled indicates whether ACME/Let's Encrypt is enabled for the cluster
+	Enabled bool `json:"enabled"`
+	// ContactEmail is the contact email for the ACME account (required for Let's Encrypt)
+	ContactEmail string `json:"contact_email,omitempty"`
+	// DirectoryURL is the ACME directory URL (defaults to Let's Encrypt production)
+	DirectoryURL string `json:"directory_url,omitempty"`
+	// TermsOfServiceAgreed indicates whether the ToS have been agreed to
+	TermsOfServiceAgreed bool `json:"terms_of_service_agreed,omitempty"`
+	// AccountKey is the PEM-encoded ACME account private key
+	AccountKey string `json:"account_key,omitempty"`
+	// HasAccountKey indicates whether an account key is configured (set by server, AccountKey is stripped for security)
+	HasAccountKey bool `json:"has_account_key,omitempty"`
+	// CreatedAt is when the ACME configuration was created
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	// UpdatedAt is when the ACME configuration was last updated
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// ErrACMENotEnabled is returned when ACME is required but not enabled
+var ErrACMENotEnabled = &ValidationError{
+	Field:   "acme",
+	Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme enable' to enable it.",
+}

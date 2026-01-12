@@ -164,6 +164,56 @@ The certificate file should contain PEM-encoded certificate blocks for the
 desired certificate followed by any intermediate certificates necessary to chain
 to a trusted root.
 
+### Automatic TLS with Let's Encrypt
+
+Flynn can automatically provision and renew TLS certificates using Let's Encrypt
+(ACME). This feature must be enabled at the cluster level before it can be used.
+
+#### Enabling Let's Encrypt
+
+First, configure ACME with your contact email and agree to the Let's Encrypt
+Terms of Service:
+
+```text
+flynn-host acme configure --email=admin@example.com --agree-tos
+```
+
+Then enable ACME for the cluster:
+
+```text
+flynn-host acme enable
+```
+
+You can check the current ACME configuration status with:
+
+```text
+flynn-host acme status
+```
+
+#### Using Automatic TLS for Routes
+
+Once ACME is enabled, you can create routes with automatic TLS:
+
+```text
+flynn route add http --auto-tls www.example.com
+```
+
+Or enable automatic TLS for an existing route:
+
+```text
+flynn letsencrypt enable http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1
+```
+
+To disable automatic TLS for a route:
+
+```text
+flynn letsencrypt disable http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1
+```
+
+**Note:** The domain must be publicly accessible and DNS must be properly
+configured before requesting a certificate. Let's Encrypt validates domain
+ownership using HTTP-01 challenges.
+
 ### Service Discovery
 
 Flynn automatically registers each web process type in service discovery for

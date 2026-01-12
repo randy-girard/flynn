@@ -154,53 +154,40 @@ func (a *ACME) NewService(account *Account, controllerClient ControllerClient, r
 	}, nil
 }
 
-// RunService runs an ACME service with configuration from environment variables
+// configPollInterval is how often to poll for ACME configuration changes
+const configPollInterval = 10 * time.Second
+
+// RunService runs an ACME service with configuration from the controller
 func RunService(ctx context.Context) error {
 	log := log15.New("component", "acme")
 
-	log.Info("getting ACME account from environment variables")
-	account, err := NewAccountFromEnv()
-	if err != nil {
-		log.Error("error getting ACME account from environment variables", "err", err)
-		return err
-	}
-
+	// Initialize controller client first - we need it to fetch configuration
 	log.Info("initializing controller client")
-	instances, err := discoverd.NewService("controller").Instances()
+	var client controller.Client
+	err := attempt.Strategy{
+		Total: 2 * time.Minute,
+		Delay: time.Second,
+	}.Run(func() error {
+		instances, err := discoverd.NewService("controller").Instances()
+		if err != nil {
+			return err
+		}
+		if len(instances) == 0 {
+			return fmt.Errorf("no controller instances available")
+		}
+		inst := instances[0]
+		client, err = controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+		return err
+	})
 	if err != nil {
 		log.Error("error initializing controller client", "err", err)
-		return err
-	}
-	inst := instances[0]
-	client, err := controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
-	if err != nil {
-		log.Error("error initializing controller client", "err", err)
-		return err
-	}
-
-	directoryURL := os.Getenv("ACME_DIRECTORY_URL")
-	if directoryURL == "" {
-		directoryURL = DefaultDirectoryURL
-	}
-	log.Info("initializing ACME client", "directory", directoryURL)
-	acme, err := New(directoryURL, log)
-	if err != nil {
-		log.Error("error initializing ACME client", "err", err)
-		return err
-	}
-
-	log.Info("initializing ACME responder")
-	responder := NewResponder(log)
-
-	log.Info("initializing ACME service")
-	controllerWrapper := &controllerClientWrapper{client: client}
-	service, err := acme.NewService(account, controllerWrapper, responder)
-	if err != nil {
-		log.Error("error initializing ACME service", "err", err)
 		return err
 	}
 
 	// Start HTTP server for ACME challenge responses
+	log.Info("initializing ACME responder")
+	responder := NewResponder(log)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -231,12 +218,8 @@ func RunService(ctx context.Context) error {
 		}
 	}()
 
-	log.Info("starting ACME service")
-	go service.Run()
-
-	<-ctx.Done()
-	log.Info("stopping ACME service")
-	service.Stop()
+	// Run the main service loop that polls for configuration
+	runServiceLoop(ctx, client, responder, log)
 
 	log.Info("shutting down HTTP server")
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -246,10 +229,96 @@ func RunService(ctx context.Context) error {
 	return nil
 }
 
+// runServiceLoop polls for ACME configuration and manages the ACME service lifecycle
+func runServiceLoop(ctx context.Context, client controller.Client, responder *Responder, log log15.Logger) {
+	var service *Service
+	var currentKeyID string
+	ticker := time.NewTicker(configPollInterval)
+	defer ticker.Stop()
+
+	// Check configuration immediately, then on each tick
+	checkConfig := func() {
+		config, err := client.GetACMEConfigInternal()
+		if err != nil {
+			log.Debug("error fetching ACME config", "err", err)
+			return
+		}
+
+		account, err := NewAccountFromConfig(config)
+		if err != nil {
+			// ACME not configured or not enabled
+			if service != nil {
+				log.Info("ACME disabled, stopping service")
+				service.Stop()
+				service = nil
+				currentKeyID = ""
+			}
+			return
+		}
+
+		// Check if configuration changed (different account key)
+		keyID := account.KeyID()
+		if service != nil && keyID == currentKeyID {
+			// No change
+			return
+		}
+
+		// Configuration changed - restart service
+		if service != nil {
+			log.Info("ACME configuration changed, restarting service")
+			service.Stop()
+		}
+
+		directoryURL := config.DirectoryURL
+		if directoryURL == "" {
+			directoryURL = DefaultDirectoryURL
+		}
+
+		log.Info("initializing ACME client", "directory", directoryURL)
+		acme, err := New(directoryURL, log)
+		if err != nil {
+			log.Error("error initializing ACME client", "err", err)
+			return
+		}
+
+		log.Info("initializing ACME service")
+		controllerWrapper := &controllerClientWrapper{client: client}
+		service, err = acme.NewService(account, controllerWrapper, responder)
+		if err != nil {
+			log.Error("error initializing ACME service", "err", err)
+			return
+		}
+
+		currentKeyID = keyID
+		log.Info("starting ACME service", "key_id", keyID)
+		go service.Run()
+	}
+
+	// Initial check
+	log.Info("checking ACME configuration")
+	checkConfig()
+	if service == nil {
+		log.Info("ACME not configured, running in standby mode - configure with 'flynn-host acme configure'")
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			if service != nil {
+				log.Info("stopping ACME service")
+				service.Stop()
+			}
+			return
+		case <-ticker.C:
+			checkConfig()
+		}
+	}
+}
+
 // Run starts the service and handles pending managed certificates
 func (s *Service) Run() {
 	defer close(s.done)
-	s.log.Info("starting ACME service")
+	s.log.Info("starting ACME service - listening for managed certificates")
 
 	certs := make(chan *ct.ManagedCertificate)
 	stream, err := s.controller.StreamManagedCertificates(nil, certs)
@@ -259,24 +328,32 @@ func (s *Service) Run() {
 	}
 	defer stream.Close()
 
+	s.log.Info("streaming managed certificates started successfully")
+
 	for {
 		select {
 		case cert := <-certs:
 			if cert == nil {
+				s.log.Debug("received nil certificate from stream")
 				continue
 			}
+			s.log.Info("received certificate from stream", "domain", cert.Domain, "status", cert.Status, "id", cert.ID)
 			if cert.Status != ct.ManagedCertificateStatusPending {
+				s.log.Debug("skipping non-pending certificate", "domain", cert.Domain, "status", cert.Status)
 				continue
 			}
 			s.handlingMtx.Lock()
 			if _, ok := s.handling[cert.Domain]; ok {
 				s.handlingMtx.Unlock()
+				s.log.Debug("already handling certificate", "domain", cert.Domain)
 				continue
 			}
 			s.handling[cert.Domain] = struct{}{}
 			s.handlingMtx.Unlock()
+			s.log.Info("starting certificate handling", "domain", cert.Domain)
 			go s.handleCertificate(cert)
 		case <-s.stop:
+			s.log.Info("stopping ACME service")
 			return
 		}
 	}

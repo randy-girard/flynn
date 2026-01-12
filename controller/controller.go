@@ -185,6 +185,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	sinkRepo := data.NewSinkRepo(c.db)
 	volumeRepo := data.NewVolumeRepo(c.db)
 	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
+	acmeConfigRepo := data.NewACMEConfigRepo(c.db)
 
 	api := controllerAPI{
 		domainMigrationRepo:    domainMigrationRepo,
@@ -202,6 +203,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		sinkRepo:               sinkRepo,
 		volumeRepo:             volumeRepo,
 		managedCertificateRepo: managedCertificateRepo,
+		acmeConfigRepo:         acmeConfigRepo,
 		clusterClient:          c.cc,
 		logaggc:                c.lc,
 		que:                    q,
@@ -298,6 +300,9 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.GetManagedCertificate))
 	httpRouter.PUT("/managed-certificates/:managed_certificate_id", httphelper.WrapHandler(api.UpdateManagedCertificate))
 
+	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
+	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
+
 	grpcAPI := &grpcAPI{&api, c.db}
 	grpcSrv := grpcAPI.grpcServer()
 
@@ -363,6 +368,7 @@ type controllerAPI struct {
 	sinkRepo               *data.SinkRepo
 	volumeRepo             *data.VolumeRepo
 	managedCertificateRepo *data.ManagedCertificateRepo
+	acmeConfigRepo         *data.ACMEConfigRepo
 	clusterClient          utils.ClusterClient
 	logaggc                logClient
 	que                    *que.Client

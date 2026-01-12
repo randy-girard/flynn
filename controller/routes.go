@@ -26,6 +26,22 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
+	// Check if ACME is enabled when managed certificate is requested
+	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+		enabled, err := c.acmeConfigRepo.IsEnabled()
+		if err != nil {
+			respondWithError(w, err)
+			return
+		}
+		if !enabled {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme configure' and 'flynn-host acme enable' first.",
+			})
+			return
+		}
+	}
+
 	err := c.routeRepo.Add(&route)
 	if err != nil {
 		rjson, jerr := json.Marshal(&route)
@@ -107,6 +123,22 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	}
 	route.Type = params.ByName("routes_type")
 	route.ID = params.ByName("routes_id")
+
+	// Check if ACME is enabled when managed certificate is requested
+	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+		enabled, err := c.acmeConfigRepo.IsEnabled()
+		if err != nil {
+			respondWithError(w, err)
+			return
+		}
+		if !enabled {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme configure' and 'flynn-host acme enable' first.",
+			})
+			return
+		}
+	}
 
 	if err := c.routeRepo.Update(&route); err != nil {
 		if err == data.ErrRouteNotFound {

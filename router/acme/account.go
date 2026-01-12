@@ -5,9 +5,8 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"os"
-	"strconv"
-	"strings"
+
+	ct "github.com/flynn/flynn/controller/types"
 )
 
 // Account represents an ACME account
@@ -20,21 +19,23 @@ type Account struct {
 	TermsOfServiceAgreed bool `json:"terms_of_service_agreed,omitempty"`
 }
 
-// NewAccountFromEnv creates an Account from environment variables
-func NewAccountFromEnv() (*Account, error) {
+// NewAccountFromConfig creates an Account from an ACMEConfig
+func NewAccountFromConfig(config *ct.ACMEConfig) (*Account, error) {
+	if config == nil {
+		return nil, fmt.Errorf("ACME configuration is nil")
+	}
+	if !config.Enabled {
+		return nil, fmt.Errorf("ACME is not enabled")
+	}
+	if config.AccountKey == "" {
+		return nil, fmt.Errorf("ACME account key is not configured")
+	}
 	account := &Account{
-		Key: os.Getenv("ACCOUNT_KEY"),
+		Key:                  config.AccountKey,
+		TermsOfServiceAgreed: config.TermsOfServiceAgreed,
 	}
-	if contacts := os.Getenv("ACCOUNT_CONTACTS"); contacts != "" {
-		account.Contacts = strings.Split(contacts, ",")
-	}
-	if tos := os.Getenv("TERMS_OF_SERVICE_AGREED"); tos != "" {
-		if v, err := strconv.ParseBool(tos); err == nil {
-			account.TermsOfServiceAgreed = v
-		}
-	}
-	if account.Key == "" {
-		return nil, fmt.Errorf("ACCOUNT_KEY environment variable is required")
+	if config.ContactEmail != "" {
+		account.Contacts = []string{config.ContactEmail}
 	}
 	return account, nil
 }
@@ -66,4 +67,3 @@ func (a *Account) KeyID() string {
 	}
 	return "unknown"
 }
-

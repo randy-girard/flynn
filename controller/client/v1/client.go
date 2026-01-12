@@ -972,6 +972,26 @@ func (c *Client) StreamManagedCertificates(since *time.Time, output chan *ct.Man
 	return c.Stream("GET", "/managed-certificates?since="+t, nil, output)
 }
 
+// GetACMEConfig returns the current ACME/Let's Encrypt configuration
+func (c *Client) GetACMEConfig() (*ct.ACMEConfig, error) {
+	config := &ct.ACMEConfig{}
+	return config, c.Get("/acme/config", config)
+}
+
+// GetACMEConfigInternal returns the full ACME config including the account key
+// This should only be used by internal services (like the ACME app)
+func (c *Client) GetACMEConfigInternal() (*ct.ACMEConfig, error) {
+	config := &ct.ACMEConfig{}
+	header := http.Header{"X-Flynn-Internal": []string{"true"}}
+	_, err := c.RawReq("GET", "/acme/config", header, nil, config)
+	return config, err
+}
+
+// UpdateACMEConfig updates the ACME/Let's Encrypt configuration
+func (c *Client) UpdateACMEConfig(config *ct.ACMEConfig) error {
+	return c.Put("/acme/config", config, config)
+}
+
 func (c *Client) Put(path string, in, out interface{}) error {
 	return c.send("PUT", path, in, out)
 }

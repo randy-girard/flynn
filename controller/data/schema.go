@@ -985,6 +985,24 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 			EXECUTE PROCEDURE set_updated_at_column()`,
 		`ALTER TABLE http_routes ADD COLUMN managed_certificate_domain varchar(255)`,
 	)
+	migrations.Add(51,
+		// Add ACME/Let's Encrypt global configuration table
+		`CREATE TABLE acme_config (
+			id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			enabled boolean NOT NULL DEFAULT false,
+			contact_email varchar(255),
+			directory_url varchar(512),
+			terms_of_service_agreed boolean NOT NULL DEFAULT false,
+			account_key text,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TRIGGER set_updated_at_acme_config
+			BEFORE UPDATE ON acme_config FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		// Insert default row (ACME disabled by default)
+		`INSERT INTO acme_config (id, enabled) VALUES (1, false)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

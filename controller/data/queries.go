@@ -120,6 +120,8 @@ var preparedStatements = map[string]string{
 	"managed_certificate_update":             managedCertificateUpdateQuery,
 	"managed_certificate_delete":             managedCertificateDeleteQuery,
 	"managed_certificate_list_expiring":      managedCertificateListExpiringQuery,
+	"acme_config_select":                     acmeConfigSelectQuery,
+	"acme_config_update":                     acmeConfigUpdateQuery,
 }
 
 func PrepareStatements(conn *pgx.Conn) error {
@@ -741,4 +743,18 @@ SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_er
 FROM managed_certificates
 WHERE deleted_at IS NULL AND status = 'issued' AND expires_at <= $1
 ORDER BY expires_at`
+
+	// ACME configuration
+	acmeConfigSelectQuery = `
+SELECT enabled, contact_email, directory_url, terms_of_service_agreed, account_key, created_at, updated_at
+FROM acme_config WHERE id = 1`
+	acmeConfigUpdateQuery = `
+UPDATE acme_config SET
+	enabled = $1,
+	contact_email = $2,
+	directory_url = $3,
+	terms_of_service_agreed = $4,
+	account_key = $5
+WHERE id = 1
+RETURNING updated_at`
 )

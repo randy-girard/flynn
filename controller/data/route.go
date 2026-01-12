@@ -123,6 +123,36 @@ func (r *RouteRepo) createManagedCertificate(tx *postgres.DBTx, route *router.Ro
 	}, cert)
 }
 
+// ensureManagedCertificate creates a managed certificate if one doesn't already exist for the route
+func (r *RouteRepo) ensureManagedCertificate(tx *postgres.DBTx, route *router.Route) error {
+	// Check if a managed certificate already exists for this route
+	var existingID string
+	err := tx.QueryRow("managed_certificate_select_by_route_id", route.ID).Scan(
+		&existingID,
+		new(string),     // domain
+		new(*string),    // route_id
+		new(string),     // status
+		new(*string),    // cert
+		new(*string),    // key
+		new([]byte),     // cert_sha256
+		new(*time.Time), // expires_at
+		new(*string),    // last_error
+		new(*time.Time), // last_error_at
+		new(time.Time),  // created_at
+		new(time.Time),  // updated_at
+	)
+	if err == nil {
+		// Certificate already exists
+		return nil
+	}
+	if err != pgx.ErrNoRows {
+		return err
+	}
+
+	// No certificate exists, create one
+	return r.createManagedCertificate(tx, route)
+}
+
 func (r *RouteRepo) addTCP(tx *postgres.DBTx, route *router.Route) error {
 	// TODO: check non-default HTTP ports if set
 	if route.Port == 80 || route.Port == 443 {
@@ -410,6 +440,14 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 	); err != nil {
 		return err
 	}
+
+	// Create managed certificate if ManagedCertificateDomain is set and doesn't already exist
+	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+		if err := r.ensureManagedCertificate(tx, route); err != nil {
+			return err
+		}
+	}
+
 	return r.addRouteCertWithTx(tx, route)
 }
 

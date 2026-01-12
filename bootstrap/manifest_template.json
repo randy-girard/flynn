@@ -141,13 +141,6 @@
     "encoding": "base64"
   },
   {
-    "id": "acme-account",
-    "action": "gen-acme-account",
-    "contacts": ["{{ getenv \"ACME_CONTACT_EMAIL\" }}"],
-    "terms_of_service_agreed": true,
-    "directory_url": "{{ getenv \"ACME_DIRECTORY_URL\" }}"
-  },
-  {
     "id": "postgres-wait",
     "action": "wait",
     "url": "http://postgres-api.discoverd/ping"
@@ -500,12 +493,6 @@
     },
     "artifacts": [$image_artifact[acme]],
     "release": {
-      "env": {
-        "ACCOUNT_KEY": "{{ (index .StepData \"acme-account\").Key }}",
-        "ACCOUNT_CONTACTS": "{{ getenv \"ACME_CONTACT_EMAIL\" }}",
-        "TERMS_OF_SERVICE_AGREED": "true",
-        "ACME_DIRECTORY_URL": "{{ (index .StepData \"acme-account\").DirectoryURL }}"
-      },
       "processes": {
         "app": {
           "args": ["/bin/flynn-acme"],

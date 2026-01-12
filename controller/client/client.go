@@ -105,6 +105,9 @@ type Client interface {
 	GetManagedCertificate(certID string) (*ct.ManagedCertificate, error)
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
 	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)
+	GetACMEConfig() (*ct.ACMEConfig, error)
+	GetACMEConfigInternal() (*ct.ACMEConfig, error)
+	UpdateACMEConfig(config *ct.ACMEConfig) error
 }
 
 type Config struct {
