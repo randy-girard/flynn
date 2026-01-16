@@ -117,7 +117,7 @@ func NewProcess(c Config) *Process {
 		p.port = "5432"
 	}
 	if p.binDir == "" {
-		p.binDir = "/usr/lib/postgresql/11/bin/"
+		p.binDir = "/usr/lib/postgresql/16/bin/"
 	}
 	if p.dataDir == "" {
 		p.dataDir = "/data"
@@ -905,11 +905,12 @@ listen_addresses = '0.0.0.0'
 port = {{.Port}}
 ssl = off
 max_connections = 400
+password_encryption = md5
 shared_buffers = 32MB
-wal_level = hot_standby
+wal_level = logical
 fsync = on
 max_wal_senders = 15
-wal_keep_segments = 128
+wal_keep_size = 1024MB
 synchronous_commit = remote_write
 synchronous_standby_names = '{{.Sync}}'
 {{if .ReadOnly}}

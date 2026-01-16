@@ -44,8 +44,8 @@ main() {
     fail "this script must be executed as the root user"
   fi
 
-  if ! is_ubuntu_xenial && ! is_ubuntu_bionic; then
-    fail "this script is only compatible with Ubuntu 16.04 and 18.04"
+  if ! is_ubuntu_xenial && ! is_ubuntu_bionic && ! is_ubuntu_noble; then
+    fail "this script is only compatible with Ubuntu 16.04, 18.04, and 24.04"
   fi
 
   if ! check_overlayfs; then
@@ -200,6 +200,10 @@ main() {
 
 is_root() {
   [[ $(id -u) -eq 0 ]]
+}
+
+is_ubuntu_noble() {
+  grep -qF "Ubuntu 24.04" /etc/os-release &>/dev/null
 }
 
 is_ubuntu_bionic() {

@@ -3,35 +3,42 @@ set -e
 
 export DEBIAN_FRONTEND=noninteractive
 
-# ---- Install required tools ----
+# ---- Base dependencies ----
 apt-get update
 apt-get install -y \
-  software-properties-common \
-  apt-transport-https \
   curl \
   ca-certificates \
   gnupg \
   lsb-release \
   sudo
 
-# ---- MariaDB 10.3 repo setup (ignore EOL warning) ----
-curl -LsS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup \
-  | bash -s -- --mariadb-server-version=10.3 2>/dev/null || true
+# ---- MariaDB GPG key ----
+curl -fsSL --retry 5 --retry-delay 3 https://mariadb.org/mariadb_release_signing_key.asc \
+  | gpg --dearmor -o /usr/share/keyrings/mariadb.gpg
 
-# ---- Percona repo setup ----
-curl -fsSL https://repo.percona.com/apt/percona-release_latest.bionic_all.deb -o /tmp/percona.deb
-dpkg -i /tmp/percona.deb
+# ---- MariaDB 10.11 LTS repo (noble) ----
+echo "deb [signed-by=/usr/share/keyrings/mariadb.gpg] \
+https://mirror.mariadb.org/repo/10.11/ubuntu noble main" \
+  > /etc/apt/sources.list.d/mariadb.list
+
+# ---- Percona GPG key ----
+curl -fsSL https://repo.percona.com/apt/percona-release_latest.jammy_all.deb \
+  -o /tmp/percona-release.deb
+
+dpkg -i /tmp/percona-release.deb
+
+# ---- Enable Percona tools repo ----
+percona-release enable tools release
 
 # ---- Update package lists ----
 apt-get update
 
-# ---- Install packages ----
+# ---- Install MariaDB + XtraBackup ----
 apt-get install -y \
   mariadb-server \
-  percona-xtrabackup \
-  sudo
+  percona-xtrabackup-80
 
 # ---- Cleanup ----
 apt-get clean
-apt-get autoremove -y
-rm -f /tmp/percona.deb
+rm -rf /var/lib/apt/lists/*
+rm -f /tmp/percona-release.deb

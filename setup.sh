@@ -1,24 +1,25 @@
 apt-get update
 add-apt-repository ppa:longsleep/golang-backports -y
-apt-get install ca-certificates curl gcc
+apt-get install -y ca-certificates curl gcc
 
-# Keyring
-rm -rf /etc/apt/keyrings/docker.asc
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.asc
-chmod a+r /etc/apt/keyrings/docker.asc
+rm -f /etc/apt/sources.list.d/docker.*
 
 # Dynamic Ubuntu codename
 export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
-# Docker repo
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
-https://download.docker.com/linux/ubuntu $UBUNTU_CODENAME stable" \
-| tee /etc/apt/sources.list.d/docker.list > /dev/null
-
 if [ "$UBUNTU_CODENAME" = "xenial" ]; then
   echo "Detected Xenial — using legacy Docker setup"
 
+  # Keyring
+  rm -rf /etc/apt/keyrings/docker.asc
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  # Docker repo
+  echo "deb [arch=$(dpkg --print-architecture) trusted=yes] \
+  https://download.docker.com/linux/ubuntu $UBUNTU_CODENAME stable" \
+  | tee /etc/apt/sources.list.d/docker.list > /dev/null
   add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $UBUNTU_CODENAME-backports main universe"
   apt-get update
   apt-get install -y \
@@ -56,8 +57,59 @@ if [ "$UBUNTU_CODENAME" = "xenial" ]; then
   curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
       -o ~/.docker/cli-plugins/docker-compose
   chmod +x ~/.docker/cli-plugins/docker-compose
+elif [ "$UBUNTU_CODENAME" = "noble" ]; then
+  echo "Detected $UBUNTU_CODENAME — installing full modern Docker packages"
+
+  # Add Docker's official GPG key:
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  # Add the repository to Apt sources:
+  tee /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+  apt update
+  apt-get install -y \
+    docker-ce \
+    docker-ce-cli \
+    containerd.io \
+    docker-buildx-plugin \
+    docker-compose-plugin \
+    jq \
+    net-tools \
+    ifupdown \
+    zfsutils-linux \
+    debootstrap \
+    squashfs-tools \
+    ca-certificates \
+    make \
+    curl \
+    gcc \
+    gnupg \
+    libdigest-sha-perl \
+    linux-modules-extra-$(uname -r)
 else
   echo "Detected $UBUNTU_CODENAME — installing full modern Docker packages"
+
+  # Keyring
+  rm -rf /etc/apt/keyrings/docker.asc
+  install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.asc
+  chmod a+r /etc/apt/keyrings/docker.asc
+
+  # Dynamic Ubuntu codename
+  export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+
+  # Docker repo
+  echo "deb [arch=$(dpkg --print-architecture) trusted=yes] \
+  https://download.docker.com/linux/ubuntu $UBUNTU_CODENAME stable" \
+  | tee /etc/apt/sources.list.d/docker.list > /dev/null
 
   apt-get update
   apt-get install -y \

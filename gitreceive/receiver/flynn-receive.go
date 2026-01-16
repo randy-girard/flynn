@@ -86,21 +86,14 @@ Options:
 		return fmt.Errorf("Error getting current app release: %s", err)
 	}
 
-	slugbuilderImageID := os.Getenv("SLUGBUILDER_18_IMAGE_ID")
-	slugrunnerImageID := os.Getenv("SLUGRUNNER_18_IMAGE_ID")
-	stackName := "heroku-18"
-	cfStackName := "cflinuxfs3"
+	slugbuilderImageID := os.Getenv("SLUGBUILDER_24_IMAGE_ID")
+	slugrunnerImageID := os.Getenv("SLUGRUNNER_24_IMAGE_ID")
+	stackName := "heroku-24"
+	cfStackName := "cflinuxfs4"
 
 	if stack := prevRelease.Env["FLYNN_STACK"]; stack != "" {
 		switch stack {
-		case "heroku-18":
-		case "cedar-14":
-			fmt.Println("WARNING: The cedar-14 stack is deprecated and does not receive security updates.")
-			fmt.Println("WARNING: Unset FLYNN_STACK to use the default stack.")
-			slugbuilderImageID = os.Getenv("SLUGBUILDER_14_IMAGE_ID")
-			slugrunnerImageID = os.Getenv("SLUGRUNNER_14_IMAGE_ID")
-			stackName = "cedar-14"
-			cfStackName = "cflinuxfs2"
+		case "heroku-24":
 		default:
 			return fmt.Errorf("Unknown FLYNN_STACK: %q", stack)
 		}

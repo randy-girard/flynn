@@ -530,7 +530,8 @@ func (b *Builder) BuildImage(image *Image) error {
 					return err
 				}
 				inputs = append(inputs, i...)
-				run = append(run, fmt.Sprintf("go build -o %s %s", l.GoBuild[dir], "./"+dir))
+				// Create target directory in overlay upper dir first to prevent symlink following
+				run = append(run, fmt.Sprintf("mkdir -p %q && go build -o %s %s", filepath.Dir(l.GoBuild[dir]), l.GoBuild[dir], "./"+dir))
 			}
 			dirs = make([]string, 0, len(l.CGoBuild))
 			for dir := range l.CGoBuild {
@@ -543,7 +544,8 @@ func (b *Builder) BuildImage(image *Image) error {
 					return err
 				}
 				inputs = append(inputs, i...)
-				run = append(run, fmt.Sprintf("cgo build -o %s %s", l.CGoBuild[dir], "./"+dir))
+				// Create target directory in overlay upper dir first to prevent symlink following
+				run = append(run, fmt.Sprintf("mkdir -p %q && cgo build -o %s %s", filepath.Dir(l.CGoBuild[dir]), l.CGoBuild[dir], "./"+dir))
 			}
 		}
 
@@ -1052,7 +1054,8 @@ type fileInput struct {
 // inputs and computing the SHA512/256 sum of the resulting bytes.
 //
 // TODO: consider storing a map of filenames to hashes and cache based
-//       on the last modified time to avoid unnecessary work.
+//
+//	on the last modified time to avoid unnecessary work.
 func (b *Builder) generateLayerID(name string, run []string, env map[string]string, artifact *ct.Artifact, inputs ...string) (id string, err error) {
 	start := time.Now()
 	defer func() {

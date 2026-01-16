@@ -33,9 +33,11 @@ stop() {
 # Stop flannel services
 stop flanneld
 stop flanneld-wrapper
+killall flanneld || true
 
 # Stop discoverd
 stop discoverd
+killall discoverd || true
 
 # Stop flynn-host via your existing script
 if [ -x ./script/kill-flynn ]; then
@@ -44,3 +46,5 @@ if [ -x ./script/kill-flynn ]; then
 else
     echo "kill-flynn script not found!"
 fi
+
+killall flynn-host || true

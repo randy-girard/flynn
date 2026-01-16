@@ -27,7 +27,27 @@ echo 'Acquire::GzipIndexes "true"; Acquire::CompressionTypes::Order:: "gz";' > /
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L134-L151
 echo 'Apt::AutoRemove::SuggestsImportant "false";' > /etc/apt/apt.conf.d/docker-autoremove-suggests
 
+cat > /etc/apt/apt.conf.d/80-retries <<'EOF'
+Acquire::Retries "3";
+Acquire::http::Timeout "15";
+Acquire::https::Timeout "15";
+Acquire::Queue-Mode "access";
+EOF
+
 export DEBIAN_FRONTEND=noninteractive
+
+# ---- Configure APT mirrors early ----
+
+# Force IPv4 (prevents archive.ubuntu.com IPv6 blackholes)
+cat > /etc/apt/apt.conf.d/99force-ipv4 <<'EOF'
+Acquire::ForceIPv4 "true";
+EOF
+
+# Replace archive.ubuntu.com with reliable mirrors
+sed -i \
+  -e 's|http://archive.ubuntu.com/ubuntu|http://mirrors.edge.kernel.org/ubuntu|g' \
+  -e 's|http://security.ubuntu.com/ubuntu|http://security.ubuntu.com/ubuntu|g' \
+  /etc/apt/sources.list
 
 # update packages
 apt-get update

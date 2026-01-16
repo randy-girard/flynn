@@ -5,7 +5,7 @@
       {
         "keytype": "ed25519",
         "keyval": {
-          "public": "0a6b02d6c7518c4e3f881a9e5b5f1306fe265d612d99a2cf75d487f5b3547ff4"
+          "public": "27da292214dd17fec4c957af3786bcb1267a233290610292054b0f9114a557d7"
         }
       }
     ]
@@ -14,51 +14,17 @@
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
-    "size": 76337152,
+    "size": 81035264,
     "hashes": {
-      "sha512_256": "58711895cc0fc88a6232d88ff102e320e1138a1e0dea42090f04c49410fde4e8"
+      "sha512_256": "87a46ca5dbe8f16a6588d23b82bf87f0341a70bb0c9317c21369d8080cce5ad2"
     }
   },
   "images": [
     {
-      "id": "ubuntu-trusty",
+      "id": "ubuntu-noble",
       "layers": [
         {
-          "script": "builder/img/ubuntu-trusty.sh",
-          "inputs": [
-            "builder/ubuntu-setup.sh"
-          ],
-          "limits": {
-            "temp_disk": "2GB"
-          },
-          "linux_capabilities": [
-            "CAP_SYS_ADMIN"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "ubuntu-xenial",
-      "layers": [
-        {
-          "script": "builder/img/ubuntu-xenial.sh",
-          "inputs": [
-            "builder/ubuntu-setup.sh"
-          ],
-          "limits": {
-            "temp_disk": "2GB"
-          },
-          "linux_capabilities": [
-            "CAP_SYS_ADMIN"
-          ]
-        }
-      ]
-    },
-    {
-      "id": "ubuntu-bionic",
-      "layers": [
-        {
-          "script": "builder/img/ubuntu-bionic.sh",
+          "script": "builder/img/ubuntu-noble.sh",
           "inputs": [
             "builder/ubuntu-setup.sh"
           ],
@@ -81,7 +47,7 @@
     },
     {
       "id": "go",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "script": "builder/img/go.sh",
@@ -164,7 +130,7 @@
     },
     {
       "id": "host",
-      "base": "ubuntu-xenial",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "host-packages",
@@ -257,7 +223,7 @@
     },
     {
       "id": "postgres",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "postgres-packages",
@@ -285,7 +251,7 @@
     },
     {
       "id": "mariadb",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "mariadb-packages",
@@ -313,7 +279,7 @@
     },
     {
       "id": "mongodb",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "mongodb-packages",
@@ -343,7 +309,7 @@
     },
     {
       "id": "redis",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "redis-packages",
@@ -373,7 +339,7 @@
     },
     {
       "id": "blobstore",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "gobuild": {
@@ -434,7 +400,7 @@
     },
     {
       "id": "gitreceive",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "gitreceive-packages",
@@ -462,7 +428,7 @@
     },
     {
       "id": "tarreceive",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "gobuild": {
@@ -494,7 +460,7 @@
     },
     {
       "id": "taffy",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "taffy-packages",
@@ -518,11 +484,11 @@
       }
     },
     {
-      "id": "heroku-18",
-      "base": "ubuntu-bionic",
+      "id": "heroku-24",
+      "base": "ubuntu-noble",
       "layers": [
         {
-          "script": "builder/img/heroku-18.sh",
+          "script": "builder/img/heroku-24.sh",
           "limits": {
             "temp_disk": "2G"
           }
@@ -530,11 +496,11 @@
       ]
     },
     {
-      "id": "heroku-18-build",
-      "base": "heroku-18",
+      "id": "heroku-24-build",
+      "base": "heroku-24",
       "layers": [
         {
-          "script": "builder/img/heroku-18-build.sh",
+          "script": "builder/img/heroku-24-build.sh",
           "limits": {
             "temp_disk": "2G"
           }
@@ -542,20 +508,8 @@
       ]
     },
     {
-      "id": "cedar-14",
-      "base": "ubuntu-trusty",
-      "layers": [
-        {
-          "script": "builder/img/cedar-14.sh",
-          "limits": {
-            "temp_disk": "2G"
-          }
-        }
-      ]
-    },
-    {
-      "id": "slugbuilder-18",
-      "base": "heroku-18-build",
+      "id": "slugbuilder-24",
+      "base": "heroku-24-build",
       "layers": [
         {
           "name": "slugbuilder-packages",
@@ -585,55 +539,8 @@
       }
     },
     {
-      "id": "slugbuilder-14",
-      "base": "cedar-14",
-      "layers": [
-        {
-          "name": "slugbuilder-packages",
-          "script": "slugbuilder/img/packages.sh",
-          "inputs": [
-            "slugbuilder/builder/buildpacks.txt",
-            "slugbuilder/builder/install-buildpack"
-          ]
-        },
-        {
-          "name": "slugbuilder-binaries",
-          "gobuild": {
-            "slugbuilder/artifact": "/bin/create-artifact",
-            "slugbuilder/migrator": "/bin/slug-migrator"
-          },
-          "copy": {
-            "slugbuilder/convert-legacy-slug.sh": "/bin/convert-legacy-slug.sh",
-            "slugbuilder/builder/build.sh": "/builder/build.sh",
-            "slugbuilder/builder/create-user.sh": "/builder/create-user.sh"
-          }
-        }
-      ],
-      "entrypoint": {
-        "args": [
-          "/builder/build.sh"
-        ]
-      }
-    },
-    {
-      "id": "slugrunner-18",
-      "base": "heroku-18",
-      "layers": [
-        {
-          "copy": {
-            "slugrunner/runner/init": "/runner/init"
-          }
-        }
-      ],
-      "entrypoint": {
-        "args": [
-          "/runner/init"
-        ]
-      }
-    },
-    {
-      "id": "slugrunner-14",
-      "base": "cedar-14",
+      "id": "slugrunner-24",
+      "base": "heroku-24",
       "layers": [
         {
           "copy": {
@@ -737,7 +644,7 @@
     },
     {
       "id": "test",
-      "base": "ubuntu-bionic",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "test-packages",
@@ -781,7 +688,7 @@
       "base": "busybox",
       "layers": [
         {
-          "build_with": "ubuntu-bionic",
+          "build_with": "ubuntu-noble",
           "name": "test-apps-minio",
           "script": "test/apps/minio.sh"
         },

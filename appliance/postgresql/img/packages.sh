@@ -2,25 +2,56 @@
 
 export DEBIAN_FRONTEND=noninteractive
 
-apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8
-echo "deb http://apt-archive.postgresql.org/pub/repos/apt/ bionic-pgdg main" >> /etc/apt/sources.list.d/postgresql.list
+# ---- Base system deps ----
 apt-get update
-apt-get dist-upgrade -y
-apt-get -qy --fix-missing --force-yes install language-pack-en software-properties-common
-update-locale LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8 LC_ALL=en_US.UTF-8
-dpkg-reconfigure locales
-apt-get -y install curl sudo
-add-apt-repository ppa:timescale/timescaledb-ppa
-apt-get update
-apt-get install -y -q \
-  less \
-  postgresql-11 \
-  postgresql-contrib-11 \
-  postgresql-11-pgextwlist \
-  postgresql-11-postgis-2.5 \
-  postgresql-11-pgrouting \
-  timescaledb-postgresql-11
-apt-get clean
-apt-get autoremove -y
+apt-get install -y \
+  ca-certificates \
+  curl \
+  gnupg \
+  lsb-release \
+  sudo \
+  software-properties-common \
+  locales
 
+# ---- Locale ----
+locale-gen en_US.UTF-8
+update-locale LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8 LC_ALL=en_US.UTF-8
+
+# ---- PostgreSQL PGDG GPG key (modern method) ----
+curl -fsSL --retry 5 --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+  | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
+
+# ---- PostgreSQL PGDG repo (noble) ----
+echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] \
+https://apt.postgresql.org/pub/repos/apt noble-pgdg main" \
+  > /etc/apt/sources.list.d/postgresql.list
+
+# ---- TimescaleDB GPG key ----
+curl -fsSL --retry 5 --retry-delay 3 https://packagecloud.io/timescale/timescaledb/gpgkey \
+  | gpg --dearmor -o /usr/share/keyrings/timescaledb.gpg
+
+# ---- TimescaleDB repo (noble) ----
+echo "deb [signed-by=/usr/share/keyrings/timescaledb.gpg] \
+https://packagecloud.io/timescale/timescaledb/ubuntu/ noble main" \
+  > /etc/apt/sources.list.d/timescaledb.list
+
+# ---- Install PostgreSQL + extensions ----
+apt-get update -o Acquire::Retries=5
+apt-get install -y \
+  postgresql-16 \
+  postgresql-contrib-16 \
+  postgresql-16-pgextwlist \
+  postgresql-16-postgis-3 \
+  postgresql-16-pgrouting \
+  timescaledb-2-postgresql-16 \
+  less
+
+# ---- Enable TimescaleDB ----
+timescaledb-tune --yes
+
+# ---- Cleanup ----
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+
+# ---- Disable psql history for root ----
 echo "\set HISTFILE /dev/null" > /root/.psqlrc

@@ -3,22 +3,26 @@ set -e
 
 export DEBIAN_FRONTEND=noninteractive
 
-# ---- MongoDB 3.2 GPG key (more reliable than keyserver) ----
-apt-key adv --fetch-keys https://www.mongodb.org/static/pgp/server-3.2.asc
-
-# ---- MongoDB 3.2 repo for Trusty ----
-echo "deb [trusted=yes] http://repo.mongodb.org/apt/ubuntu trusty/mongodb-org/3.2 multiverse" \
-  > /etc/apt/sources.list.d/mongodb-org-3.2.list
-
-# ---- Allow expired Release files (repo is EOL) ----
-cat >/etc/apt/apt.conf.d/99mongodb-allow-old <<EOF
-Acquire::Check-Valid-Until "false";
-EOF
-
-# ---- Update & install ----
+# ---- Dependencies ----
 apt-get update
-apt-get install -y sudo mongodb-org
+apt-get install -y \
+  curl \
+  gnupg \
+  ca-certificates
+
+# ---- MongoDB 7.0 GPG key ----
+curl -fsSL --retry 5 --retry-delay 3 https://pgp.mongodb.com/server-7.0.asc \
+  | gpg --dearmor -o /usr/share/keyrings/mongodb-server-7.0.gpg
+
+# ---- MongoDB repo (jammy on noble) ----
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mongodb-server-7.0.gpg] \
+https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse" \
+  > /etc/apt/sources.list.d/mongodb-org-7.0.list
+
+# ---- Install MongoDB ----
+apt-get update
+apt-get install -y mongodb-org
 
 # ---- Cleanup ----
 apt-get clean
-apt-get autoremove -y
+rm -rf /var/lib/apt/lists/*

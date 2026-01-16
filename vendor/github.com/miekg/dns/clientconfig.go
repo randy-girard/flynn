@@ -83,7 +83,7 @@ func ClientConfigFromFile(resolvconf string) (*ClientConfig, error) {
 						n = 1
 					}
 					c.Timeout = n
-				case len(s) >= 8 && s[:9] == "attempts:":
+				case len(s) >= 9 && s[:9] == "attempts:":
 					n, _ := strconv.Atoi(s[9:])
 					if n < 1 {
 						n = 1

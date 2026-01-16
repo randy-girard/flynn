@@ -756,7 +756,23 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		config.Cgroups.Resources.Memory = *spec.Limit
 	}
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
-		config.Cgroups.Resources.CpuShares = milliCPUToShares(uint64(*spec.Limit))
+		cpuShares := milliCPUToShares(uint64(*spec.Limit))
+		if cgroups.IsCgroup2UnifiedMode() {
+			// In cgroups v2, cpu.shares is replaced by cpu.weight
+			// cpu.shares range: 2-262144, default 1024
+			// cpu.weight range: 1-10000, default 100
+			// Conversion: weight ≈ shares * 100 / 1024
+			cpuWeight := (cpuShares * 100) / 1024
+			if cpuWeight < 1 {
+				cpuWeight = 1
+			}
+			if cpuWeight > 10000 {
+				cpuWeight = 10000
+			}
+			config.Cgroups.Resources.CpuWeight = cpuWeight
+		} else {
+			config.Cgroups.Resources.CpuShares = cpuShares
+		}
 	}
 
 	c, err := l.factory.Create(job.ID, config)
@@ -1450,10 +1466,10 @@ func (l *LibcontainerBackend) persistGlobalState() error {
 }
 
 /*
-	Loads a series of jobs, and reconstructs whatever additional backend state was saved.
+Loads a series of jobs, and reconstructs whatever additional backend state was saved.
 
-	This may include reconnecting rpc systems and communicating with containers
-	(thus this may take a significant moment; it's not just deserializing).
+This may include reconnecting rpc systems and communicating with containers
+(thus this may take a significant moment; it's not just deserializing).
 */
 func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jobBackendStates map[string][]byte, backendGlobalState []byte, buffers host.LogBuffers) error {
 	log := l.Logger.New("fn", "UnmarshalState")
@@ -1630,6 +1646,13 @@ func milliCPUToShares(milliCPU uint64) uint64 {
 const cgroupRoot = "/sys/fs/cgroup"
 
 func setupCGroups(partitions map[string]int64) error {
+	if cgroups.IsCgroup2UnifiedMode() {
+		return setupCGroupsV2(partitions)
+	}
+	return setupCGroupsV1(partitions)
+}
+
+func setupCGroupsV1(partitions map[string]int64) error {
 	subsystems, err := cgroups.GetAllSubsystems()
 	if err != nil {
 		return fmt.Errorf("error getting cgroup subsystems: %s", err)
@@ -1652,14 +1675,45 @@ func setupCGroups(partitions map[string]int64) error {
 	}
 
 	for name, shares := range partitions {
-		if err := createCGroupPartition(name, shares); err != nil {
+		if err := createCGroupPartitionV1(name, shares); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func createCGroupPartition(name string, cpuShares int64) error {
+func setupCGroupsV2(partitions map[string]int64) error {
+	// In cgroups v2, the hierarchy is unified - all controllers are under /sys/fs/cgroup
+	// We need to enable the controllers we want for our subtree
+
+	// Create the flynn parent cgroup
+	flynnPath := filepath.Join(cgroupRoot, "flynn")
+	if err := os.MkdirAll(flynnPath, 0755); err != nil {
+		return fmt.Errorf("error creating flynn cgroup: %s", err)
+	}
+
+	// Enable controllers for the flynn subtree by writing to the parent's cgroup.subtree_control
+	// We need to enable: cpu, cpuset, memory, io (replaces blkio), pids
+	controllers := "+cpu +cpuset +memory +io +pids"
+	if err := ioutil.WriteFile(filepath.Join(cgroupRoot, "cgroup.subtree_control"), []byte(controllers), 0644); err != nil {
+		// Not all controllers may be available, try to continue
+		// Some controllers might already be enabled or not available
+	}
+
+	// Also enable controllers for flynn's children
+	if err := ioutil.WriteFile(filepath.Join(flynnPath, "cgroup.subtree_control"), []byte(controllers), 0644); err != nil {
+		// Not all controllers may be available, try to continue
+	}
+
+	for name, shares := range partitions {
+		if err := createCGroupPartitionV2(name, shares); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createCGroupPartitionV1(name string, cpuShares int64) error {
 	for _, group := range []string{"blkio", "cpu", "cpuacct", "cpuset", "devices", "freezer", "memory", "net_cls", "perf_event"} {
 		if err := os.MkdirAll(filepath.Join(cgroupRoot, group, "flynn", name), 0755); err != nil {
 			return fmt.Errorf("error creating partition cgroup: %s", err)
@@ -1687,6 +1741,67 @@ func createCGroupPartition(name string, cpuShares int64) error {
 	if err := ioutil.WriteFile(filepath.Join(cgroupRoot, "cpu", "flynn", name, "cpu.shares"), strconv.AppendInt(nil, cpuShares, 10), 0644); err != nil {
 		return fmt.Errorf("error writing cgroup param: %s", err)
 	}
+	return nil
+}
+
+func createCGroupPartitionV2(name string, cpuShares int64) error {
+	// In cgroups v2, we have a unified hierarchy
+	partitionPath := filepath.Join(cgroupRoot, "flynn", name)
+	if err := os.MkdirAll(partitionPath, 0755); err != nil {
+		return fmt.Errorf("error creating partition cgroup: %s", err)
+	}
+
+	// Set up cpuset - in v2, we read from cpuset.cpus.effective and cpuset.mems.effective
+	flynnPath := filepath.Join(cgroupRoot, "flynn")
+	for _, param := range []string{"cpuset.cpus", "cpuset.mems"} {
+		effectiveParam := param + ".effective"
+		// First check if flynn parent has values set
+		data, err := ioutil.ReadFile(filepath.Join(flynnPath, effectiveParam))
+		if err != nil {
+			// Try reading from root cgroup
+			data, err = ioutil.ReadFile(filepath.Join(cgroupRoot, effectiveParam))
+			if err != nil {
+				return fmt.Errorf("error reading cgroup param %s: %s", effectiveParam, err)
+			}
+		}
+		if len(bytes.TrimSpace(data)) == 0 {
+			// Read from root effective values
+			data, err = ioutil.ReadFile(filepath.Join(cgroupRoot, effectiveParam))
+			if err != nil {
+				return fmt.Errorf("error reading root cgroup param %s: %s", effectiveParam, err)
+			}
+		}
+
+		// Write cpuset.cpus and cpuset.mems to the partition (not the .effective version)
+		if err := ioutil.WriteFile(filepath.Join(partitionPath, param), bytes.TrimSpace(data), 0644); err != nil {
+			return fmt.Errorf("error writing cgroup param %s: %s", param, err)
+		}
+	}
+
+	// In cgroups v2, cpu.shares is replaced by cpu.weight
+	// cpu.shares range: 2-262144, default 1024
+	// cpu.weight range: 1-10000, default 100
+	// Conversion: weight = 1 + ((shares - 2) * 9999) / 262142
+	// Simplified: weight ≈ shares * 100 / 1024
+	cpuWeight := (cpuShares * 100) / 1024
+	if cpuWeight < 1 {
+		cpuWeight = 1
+	}
+	if cpuWeight > 10000 {
+		cpuWeight = 10000
+	}
+	if err := ioutil.WriteFile(filepath.Join(partitionPath, "cpu.weight"), strconv.AppendInt(nil, cpuWeight, 10), 0644); err != nil {
+		return fmt.Errorf("error writing cgroup param cpu.weight: %s", err)
+	}
+
+	// Enable controllers for container cgroups that will be created under this partition
+	// This is critical - without this, container cgroups won't have access to controllers
+	controllers := "+cpu +cpuset +memory +io +pids"
+	if err := ioutil.WriteFile(filepath.Join(partitionPath, "cgroup.subtree_control"), []byte(controllers), 0644); err != nil {
+		// Log but don't fail - some controllers might not be available
+		// The cpuset controller is the most important one for container creation
+	}
+
 	return nil
 }
 

@@ -743,13 +743,8 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			var slugRunnerID string
 			stack := release.Meta["slugrunner.stack"]
 			switch stack {
-			case "heroku-18":
-				slugRunnerID = gitreceiveRelease.Env["SLUGRUNNER_18_IMAGE_ID"]
-			case "cedar-14", "":
-				slugRunnerID = gitreceiveRelease.Env["SLUGRUNNER_14_IMAGE_ID"]
-				if slugRunnerID == "" {
-					slugRunnerID = gitreceiveRelease.Env["SLUGRUNNER_IMAGE_ID"]
-				}
+			case "heroku-24":
+				slugRunnerID = gitreceiveRelease.Env["SLUGRUNNER_24_IMAGE_ID"]
 			default:
 				return fmt.Errorf("unknown slugrunner stack %q", stack)
 			}

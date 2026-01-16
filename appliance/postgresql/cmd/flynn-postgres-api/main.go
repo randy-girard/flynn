@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/flynn/pkg/random"
@@ -78,13 +78,9 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 		httphelper.Error(w, err)
 		return
 	}
-	if err := p.db.Exec(fmt.Sprintf(`CREATE DATABASE "%s"`, database)); err != nil {
-		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
-		httphelper.Error(w, err)
-		return
-	}
-	if err := p.db.Exec(fmt.Sprintf(`GRANT ALL ON DATABASE "%s" TO "%s"`, database, username)); err != nil {
-		p.db.Exec(fmt.Sprintf(`DROP DATABASE "%s"`, database))
+	// Create database with the user as owner. This gives them full privileges
+	// including CREATE on the public schema (required for PostgreSQL 15+).
+	if err := p.db.Exec(fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, database, username)); err != nil {
 		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
 		httphelper.Error(w, err)
 		return

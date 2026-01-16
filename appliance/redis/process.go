@@ -23,7 +23,7 @@ import (
 
 const (
 	DefaultPort        = "6379"
-	DefaultBinDir      = "/usr/bin"
+	DefaultBinDir      = "/bin"
 	DefaultDataDir     = "/data"
 	DefaultPassword    = ""
 	DefaultOpTimeout   = 5 * time.Minute

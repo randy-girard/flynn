@@ -14,9 +14,14 @@ export PORT_0=1111
 export DISCOVERD_PEERS=192.0.2.200:1111
 export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
-
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
+export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+
+./script/stop-all
+./script/install-flynn --remove --clean --yes
+
+echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
 
 ssh -o StrictHostKeyChecking=no root@10.0.0.211 "rm -rf /root/go-tuf/repo/*"
 
@@ -24,9 +29,9 @@ mkdir -p /var/lib/flynn/base-root
 debootstrap \
   --variant=minbase \
   --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
-  focal \
+  $UBUNTU_CODENAME \
   /var/lib/flynn/base-root \
-  http://archive.ubuntu.com/ubuntu
+  https://archive.ubuntu.com/ubuntu
 mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
 
 export SIZE=$(stat -c%s "$SQUASHFS")
@@ -86,24 +91,17 @@ zfs set sync=disabled flynn-default
 zfs set reservation=512M flynn-default
 zfs set refreservation=512M flynn-default
 
+exit
+
 rm -rf /etc/flynn/tuf.db
-./script/flynn-builder build --version=dev --tuf-db=/etc/flynn/tuf.db --verbose
+./script/flynn-builder build --version=dev --tuf-db=/etc/flynn/tuf.db --verbose && \
 
-./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo
-
-flynn-host ps -a
-
-./script/stop-all
-
-cd /root/go/src/github.com/flynn/flynn-discovery
-docker compose down
-cd /root/go/src/github.com/flynn/flynn
-
-scp -o StrictHostKeyChecking=no -r /root/go/src/github.com/flynn/flynn/go-tuf/repo/repository/ root@10.0.0.211:/root/go-tuf/repo/
-
-cp ./script/install-flynn /usr/bin/install-flynn
-
-scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-tuf/repo/install-flynn
+./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo && \
+  flynn-host ps -a && \
+  cd /root/go/src/github.com/flynn/flynn && \
+  scp -o StrictHostKeyChecking=no -r /root/go/src/github.com/flynn/flynn/go-tuf/repo/repository/ root@10.0.0.211:/root/go-tuf/repo/ && \
+  cp ./script/install-flynn /usr/bin/install-flynn && \
+  scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-tuf/repo/install-flynn
 
 # sudo bash -s -- --remove --yes < <(curl -fsSL https://dl.flynn.cloud.randygirard.com/install-flynn)
 # sudo bash -s -- --version dev < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
@@ -117,7 +115,7 @@ scp -o StrictHostKeyChecking=no /usr/bin/install-flynn root@10.0.0.211:/root/go-
 #   flynn-host bootstrap \
 #   --min-hosts 3 \
 #    --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
-#   CLUSTER_DOMAIN=demo.flynn.cloud.randygirard.com flynn-host bootstrap --min-hosts 1
+#   CLUSTER_DOMAIN=heztner.flynn.cloud.randygirard.com flynn-host bootstrap --min-hosts 1
 
 #
 # Notes:

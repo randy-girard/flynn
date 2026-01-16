@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package fs
@@ -88,11 +89,32 @@ func (s *CpusetGroupV2) ApplyDir(dir string, cgroup *configs.Cgroup, pid int) er
 }
 
 func (s *CpusetGroupV2) getSubsystemSettings(parent string) (cpus []byte, mems []byte, err error) {
-	if cpus, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.cpus.effective")); err != nil {
-		return
+	// Try to read cpuset.cpus.effective first (preferred in cgroups v2)
+	// If that doesn't exist (e.g., newly created cgroup), fall back to cpuset.cpus
+	cpus, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.cpus.effective"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Fall back to cpuset.cpus for newly created cgroups
+			cpus, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.cpus"))
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			return nil, nil, err
+		}
 	}
-	if mems, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.mems.effective")); err != nil {
-		return
+	// Same for mems
+	mems, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.mems.effective"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Fall back to cpuset.mems for newly created cgroups
+			mems, err = ioutil.ReadFile(filepath.Join(parent, "cpuset.mems"))
+			if err != nil {
+				return nil, nil, err
+			}
+		} else {
+			return nil, nil, err
+		}
 	}
 	return cpus, mems, nil
 }

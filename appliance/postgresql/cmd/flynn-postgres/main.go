@@ -64,7 +64,7 @@ func main() {
 		ID:           id,
 		Singleton:    singleton,
 		DataDir:      filepath.Join(dataDir, "db"),
-		BinDir:       "/usr/lib/postgresql/11/bin/",
+		BinDir:       "/usr/lib/postgresql/16/bin/",
 		Password:     password,
 		Logger:       log.New("component", "postgres"),
 		TimescaleDB:  true,

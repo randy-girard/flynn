@@ -33,4 +33,4 @@ RUN rm -f go.mod && \
   go mod tidy && \
   go build -o /usr/bin/flynn-discovery
 
-CMD ["/usr/bin/flynn-discovery"]
+CMD ["/bin/flynn-discovery"]

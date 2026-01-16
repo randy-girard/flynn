@@ -1,13 +1,17 @@
 #!/bin/bash
+set -e
 
 export DEBIAN_FRONTEND=noninteractive
 
-apt-get update
-apt-get dist-upgrade -y
-apt-get install -y curl software-properties-common
-add-apt-repository ppa:chris-lea/redis-server
-apt-get update
-apt-get install -y redis-server
+# ---- Update base system ----
+apt-get update -o Acquire::Retries=5
+apt-get install -y \
+  redis-server \
+  curl
+
+# ---- Data directory ----
+mkdir -p /data
+
+# ---- Cleanup ----
 apt-get clean
-apt-get autoremove -y
-mkdir /data
+rm -rf /var/lib/apt/lists/*

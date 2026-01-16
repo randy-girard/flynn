@@ -13,7 +13,8 @@ end
 VAGRANTFILE_API_VERSION = "2"
 
 Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
-  config.vm.box = "ubuntu/xenial64"
+  #config.vm.box = "ubuntu/xenial64"
+  config.vm.box = "bento/ubuntu-24.04"
 
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
@@ -48,8 +49,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
   config.vm.provider "virtualbox" do |v, override|
-    v.memory = ENV["VAGRANT_MEMORY"] || 8192  # Increased for running multiple services
-    v.cpus = ENV["VAGRANT_CPUS"] || 4
+    v.memory = ENV["VAGRANT_MEMORY"] || 32786  # Increased for running multiple services
+    v.cpus = ENV["VAGRANT_CPUS"] || 8
 
     # Enable nested virtualization if needed for containers
     v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
@@ -63,10 +64,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # Display helpful information after provisioning
   config.vm.provision "shell", privileged: true, inline: <<-SHELL
-      sudo su -l
+      #sudo su -l
 
-      cd /root/go/src/github.com/flynn/flynn
-      ./prereq.sh
+      #cd /root/go/src/github.com/flynn/flynn
+      #./prereq.sh
       #./setup.sh
       #./build.sh
 

@@ -142,7 +142,7 @@ $$ LANGUAGE plpgsql`,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 )`,
-		`CREATE FUNCTION check_job_state() RETURNS OPAQUE AS $$
+		`CREATE FUNCTION check_job_state() RETURNS TRIGGER AS $$
     BEGIN
         IF NEW.state < OLD.state THEN
 	    RAISE EXCEPTION 'invalid job state transition: % -> %', OLD.state, NEW.state USING ERRCODE = 'check_violation';
@@ -309,7 +309,7 @@ $$ LANGUAGE plpgsql`,
 
 		// add a check to ensure releases only have a single "docker"
 		// artifact, and that artifact is added first
-		`CREATE FUNCTION check_release_artifacts() RETURNS OPAQUE AS $$
+		`CREATE FUNCTION check_release_artifacts() RETURNS TRIGGER AS $$
 			BEGIN
 			    IF (
 			      SELECT COUNT(*)
@@ -359,7 +359,7 @@ $$ LANGUAGE plpgsql`,
 		`INSERT INTO event_types (name) VALUES ('release_deletion')`,
 
 		// add a trigger to prevent current app releases from being deleted
-		`CREATE FUNCTION check_release_delete() RETURNS OPAQUE AS $$
+		`CREATE FUNCTION check_release_delete() RETURNS TRIGGER AS $$
 			BEGIN
 				IF NEW.deleted_at IS NOT NULL AND (SELECT COUNT(*) FROM apps WHERE release_id = NEW.release_id) != 0 THEN
 					RAISE EXCEPTION 'cannot delete current app release' USING ERRCODE = 'check_violation';
@@ -432,7 +432,7 @@ $$ LANGUAGE plpgsql`,
 		`ALTER TABLE artifacts ADD COLUMN hashes jsonb`,
 		`ALTER TABLE artifacts ADD COLUMN size integer`,
 		`ALTER TABLE artifacts ADD COLUMN layer_url_template text`,
-		`CREATE FUNCTION check_artifact_manifest() RETURNS OPAQUE AS $$
+		`CREATE FUNCTION check_artifact_manifest() RETURNS TRIGGER AS $$
 			BEGIN
 				IF NEW.type = 'flynn' AND NEW.manifest IS NULL THEN
 					RAISE EXCEPTION 'flynn artifacts must have a manifest' USING ERRCODE = 'check_violation';

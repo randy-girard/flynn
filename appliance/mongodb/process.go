@@ -28,7 +28,7 @@ import (
 const (
 	DefaultHost        = "127.0.0.1"
 	DefaultPort        = "27017"
-	DefaultBinDir      = "/usr/bin"
+	DefaultBinDir      = "/bin"
 	DefaultDataDir     = "/data"
 	DefaultPassword    = ""
 	DefaultOpTimeout   = 5 * time.Minute
