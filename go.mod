@@ -9,7 +9,7 @@ require (
 	github.com/Azure/azure-sdk-for-go v0.0.0-20160912221952-63d3f3e3b12f
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c
 	github.com/BurntSushi/toml v0.3.1
-	github.com/aws/aws-sdk-go v0.0.0-20170816181422-2063d937ea69
+	github.com/aws/aws-sdk-go v1.34.0
 	github.com/boltdb/bolt v1.3.1
 	github.com/cheggaaa/pb v0.0.0-20150223212723-0464652af750
 	github.com/cupcake/jsonschema v0.0.0-20160618151340-51bf6945446b
@@ -26,7 +26,7 @@ require (
 	github.com/flynn/tail v0.0.0-20180226200612-fc12669dc660
 	github.com/garyburd/redigo v0.0.0-20151219232044-836b6e58b335
 	github.com/go-bindata/go-bindata v3.1.2+incompatible
-	github.com/go-sql-driver/mysql v0.0.0-20160125151823-7c7f55628262
+	github.com/go-sql-driver/mysql v1.5.0
 	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
 	github.com/golang/groupcache v0.0.0-20160803200408-a6b377e3400b
 	github.com/golang/protobuf v1.4.1
@@ -51,7 +51,7 @@ require (
 	github.com/mitchellh/go-homedir v0.0.0-20140913165950-7d2d8c8a4e07
 	github.com/moby/term v0.5.2
 	github.com/opencontainers/runc v1.0.0-rc8
-	github.com/pkg/errors v0.8.1
+	github.com/pkg/errors v0.9.1
 	github.com/rancher/sparse-tools v0.0.0-20190307223929-666f9b3bde21
 	github.com/stevvooe/resumable v0.0.0-20150521211217-51ad44105773
 	github.com/stretchr/testify v1.8.4
@@ -83,7 +83,6 @@ require (
 	github.com/creack/pty v1.1.18 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/go-ini/ini v1.12.0 // indirect
 	github.com/go-martini/martini v0.0.0-20170121215854-22fa46961aab // indirect
 	github.com/go-stack/stack v1.7.0 // indirect
 	github.com/godbus/dbus v4.1.0+incompatible // indirect
@@ -94,7 +93,7 @@ require (
 	github.com/hashicorp/golang-lru v0.5.3 // indirect
 	github.com/howeyc/fsnotify v0.0.0-20140711012604-6b1ef893dc11 // indirect
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
-	github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8 // indirect
+	github.com/jmespath/go-jmespath v0.3.0 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/kr/binarydist v0.0.0-20120828065244-9955b0ab8708 // indirect
@@ -115,7 +114,6 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.7.0 // indirect
 	github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24 // indirect
 	github.com/sirupsen/logrus v1.4.2 // indirect
-	github.com/smartystreets/goconvey v0.0.0-20190710185942-9d28bd7c0945 // indirect
 	github.com/syndtr/gocapability v0.0.0-20180916011248-d98352740cb2 // indirect
 	github.com/vishvananda/netns v0.0.0-20170219233438-54f0e4339ce7 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
