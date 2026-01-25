@@ -96,7 +96,6 @@ require (
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8 // indirect
 	github.com/klauspost/compress v1.16.7 // indirect
-	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/kr/binarydist v0.0.0-20120828065244-9955b0ab8708 // indirect
 	github.com/kr/pretty v0.2.1 // indirect
 	github.com/kr/text v0.1.0 // indirect
@@ -114,7 +113,7 @@ require (
 	github.com/seccomp/libseccomp-golang v0.0.0-20160531183505-32f571b70023 // indirect
 	github.com/secure-systems-lab/go-securesystemslib v0.7.0 // indirect
 	github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24 // indirect
-	github.com/sirupsen/logrus v1.4.2 // indirect
+	github.com/sirupsen/logrus v1.8.3 // indirect
 	github.com/smartystreets/goconvey v0.0.0-20190710185942-9d28bd7c0945 // indirect
 	github.com/syndtr/gocapability v0.0.0-20180916011248-d98352740cb2 // indirect
 	github.com/vishvananda/netns v0.0.0-20170219233438-54f0e4339ce7 // indirect

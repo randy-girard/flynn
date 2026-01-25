@@ -244,9 +244,6 @@ github.com/klauspost/compress/internal/cpuinfo
 github.com/klauspost/compress/internal/snapref
 github.com/klauspost/compress/zstd
 github.com/klauspost/compress/zstd/internal/xxhash
-# github.com/konsorten/go-windows-terminal-sequences v1.0.2
-## explicit
-github.com/konsorten/go-windows-terminal-sequences
 # github.com/kr/binarydist v0.0.0-20120828065244-9955b0ab8708
 ## explicit
 github.com/kr/binarydist
@@ -355,8 +352,8 @@ github.com/seccomp/libseccomp-golang
 github.com/secure-systems-lab/go-securesystemslib/cjson
 # github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24
 ## explicit
-# github.com/sirupsen/logrus v1.4.2
-## explicit
+# github.com/sirupsen/logrus v1.8.3
+## explicit; go 1.13
 github.com/sirupsen/logrus
 # github.com/smartystreets/goconvey v0.0.0-20190710185942-9d28bd7c0945
 ## explicit
