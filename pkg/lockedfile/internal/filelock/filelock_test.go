@@ -8,7 +8,6 @@ package filelock_test
 
 import (
 	"fmt"
-	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -187,7 +186,9 @@ func TestRLockExcludesOnlyLock(t *testing.T) {
 }
 
 func TestLockNotDroppedByExecCommand(t *testing.T) {
-	testenv.MustHaveExec(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("skipping test: go command not available")
+	}
 
 	f, remove := mustTempFile(t)
 	defer remove()

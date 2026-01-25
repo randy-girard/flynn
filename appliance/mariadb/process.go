@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/flynn/flynn/appliance/mariadb/mdbxlog"
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
@@ -464,8 +464,9 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			return err
 		}
 
-		// Install semi-sync slave plugin. Ignore error if already installed.
-		if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 {
+		// Install semi-sync slave plugin. Ignore error if already installed (1968) or
+		// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
+		if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
 			logger.Error("error installing rpl_semi_sync_slave", "err", err)
 			return err
 		}
@@ -543,7 +544,9 @@ func (p *Process) initPrimaryDB() error {
 		logger.Error("error granting privileges", "err", err)
 		return err
 	}
-	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 {
+	// Install semi-sync master plugin. Ignore error if already installed (1968) or
+	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
+	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
 		logger.Error("error installing rpl_semi_sync_master", "err", err)
 		return err
 	}
@@ -897,7 +900,17 @@ func (p *Process) DSN() *DSN {
 }
 
 func (p *Process) XLogPosition() (xlog.Position, error) {
-	return p.nodeXLogPosition(p.DSN())
+	db, err := p.connectLocal()
+	if err != nil {
+		return p.XLog().Zero(), err
+	}
+	defer db.Close()
+
+	var gtid string
+	if err := db.QueryRow(`SELECT @@gtid_current_pos`).Scan(&gtid); err != nil {
+		return p.XLog().Zero(), err
+	}
+	return xlog.Position(gtid), nil
 }
 
 // XLogPosition returns the current XLogPosition of node specified by DSN.
@@ -922,9 +935,12 @@ func (p *Process) installDB() error {
 	logger.Debug("starting installDB")
 
 	// Ignore errors, since the db could be already initialized
+	// Use --auth-root-authentication-method=normal to allow root login via TCP
+	// without unix_socket auth (which is the default in MariaDB 10.4+)
 	p.runCmd(exec.Command(
 		filepath.Join(p.BinDir, "mysql_install_db"),
 		"--defaults-extra-file="+p.ConfigPath(),
+		"--auth-root-authentication-method=normal",
 	))
 
 	return nil

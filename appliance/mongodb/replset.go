@@ -1,5 +1,9 @@
 package mongodb
 
+import (
+	"go.mongodb.org/mongo-driver/bson/primitive"
+)
+
 // Config structures
 
 type replSetMember struct {
@@ -12,29 +16,32 @@ type replSetMember struct {
 type replSetConfig struct {
 	ID      string          `bson:"_id"`
 	Members []replSetMember `bson:"members"`
-	Version int
+	Version int             `bson:"version"`
 }
 
 // Status structures
 
 type replicaState int
 
+// MongoDB replica set member states
+// See: https://www.mongodb.com/docs/manual/reference/replica-states/
 const (
-	Startup replicaState = iota
-	Primary
-	Secondary
-	Recovering
-	Startup2
-	Unknown
-	Arbiter
-	Down
-	Rollback
-	Removed
+	Startup    replicaState = 0
+	Primary    replicaState = 1
+	Secondary  replicaState = 2
+	Recovering replicaState = 3
+	// Note: State 4 is reserved and not used
+	Startup2 replicaState = 5
+	Unknown  replicaState = 6
+	Arbiter  replicaState = 7
+	Down     replicaState = 8
+	Rollback replicaState = 9
+	Removed  replicaState = 10
 )
 
 type replSetOptime struct {
-	Timestamp int64 `bson:"ts"`
-	Term      int64 `bson:"t"`
+	Timestamp primitive.Timestamp `bson:"ts"`
+	Term      int64               `bson:"t"`
 }
 
 type replSetStatusMember struct {

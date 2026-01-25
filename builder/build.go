@@ -369,7 +369,7 @@ func (b *Builder) Build(images []*Image) error {
 				if l.BuildWith == "" {
 					l.BuildWith = "go"
 				}
-				l.Inputs = append(l.Inputs, "go.mod", "go.sum")
+				l.Inputs = append(l.Inputs, "go.mod", "go.sum", "vendor/**")
 			}
 			if l.BuildWith != "" {
 				addDependency(build, l.BuildWith)
@@ -475,6 +475,38 @@ func (b *Builder) BuildImage(image *Image) error {
 
 		// add the explicit inputs, expanding globs
 		for _, input := range l.Inputs {
+			// Special handling for vendor directory
+			if input == "vendor/**" {
+				err := filepath.Walk("vendor", func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if !info.IsDir() {
+						inputs = append(inputs, path)
+					}
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
+			// Special handling for go-tuf directory
+			if input == "go-tuf/**" {
+				err := filepath.Walk("go-tuf", func(path string, info os.FileInfo, err error) error {
+					if err != nil {
+						return err
+					}
+					if !info.IsDir() {
+						inputs = append(inputs, path)
+					}
+					return nil
+				})
+				if err != nil {
+					return err
+				}
+				continue
+			}
 			paths, err := filepath.Glob(input)
 			if err != nil {
 				return err
@@ -483,6 +515,10 @@ func (b *Builder) BuildImage(image *Image) error {
 		}
 
 		if len(l.GoBin) > 0 {
+			// Pre-download all modules from go.mod to populate the cache before gobin runs.
+			// This avoids Go 1.21+ module cache issues where zip files may not be fully
+			// written before go install attempts to read them.
+			// run = append(run, "GOPROXY=https://proxy.golang.org GO111MODULE=on go mod download all")
 			for _, bin := range l.GoBin {
 				run = append(run, "GOBIN=/bin GOBIN_CACHE=/tmp/gobin gobin -m "+bin)
 			}

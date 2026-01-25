@@ -92,7 +92,9 @@ main() {
 
     # Set up Go build environment
     export GO111MODULE=on
-    export GOFLAGS=-mod=vendor
+    # Use -mod=vendor to use vendored dependencies and -buildvcs=false to disable
+    # VCS stamping (which can fail if git state is dirty or inaccessible)
+    export GOFLAGS="-mod=vendor"
     export CGO_ENABLED=1
 
     info "building flynn-host binary (with download capability)"
@@ -131,7 +133,7 @@ main() {
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-scheduler" ./controller/scheduler
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-worker" ./controller/worker
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-router" ./router
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-acme" ./router/acme    
+    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-acme" ./router/acme
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flanneld" ./flannel
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
     CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-release" ./util/release

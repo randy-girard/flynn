@@ -15,3 +15,8 @@ curl -sL "${protoc_url}" > /tmp/protoc.zip
 echo "${protoc_shasum}  /tmp/protoc.zip" | shasum -c -
 unzip -d /usr/local /tmp/protoc.zip
 rm /tmp/protoc.zip
+
+# Build protoc-gen-go from the vendored source
+cd /mnt/src
+mkdir -p /bin
+go build -o /bin/protoc-gen-go ./vendor/github.com/golang/protobuf/protoc-gen-go

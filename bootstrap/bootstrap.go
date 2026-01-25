@@ -287,7 +287,7 @@ func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Du
 				msg += "\n" + url + "\n"
 			}
 			msg += "\n"
-			return fmt.Errorf(msg)
+			return fmt.Errorf("%s", msg)
 		default:
 			time.Sleep(time.Second)
 		}

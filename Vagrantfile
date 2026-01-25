@@ -49,8 +49,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
   config.vm.provider "virtualbox" do |v, override|
-    v.memory = ENV["VAGRANT_MEMORY"] || 32786  # Increased for running multiple services
-    v.cpus = ENV["VAGRANT_CPUS"] || 8
+    v.memory = ENV["VAGRANT_MEMORY"] || 16382  # Increased for running multiple services
+    v.cpus = ENV["VAGRANT_CPUS"] || 4
 
     # Enable nested virtualization if needed for containers
     v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]

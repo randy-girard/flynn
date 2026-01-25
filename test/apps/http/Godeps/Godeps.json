@@ -1,5 +1,0 @@
-{
-	"ImportPath": "github.com/flynn/flynn/test/apps/http",
-	"GoVersion": "go1.6",
-	"Deps": []
-}

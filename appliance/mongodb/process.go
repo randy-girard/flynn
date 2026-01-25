@@ -1,28 +1,30 @@
 package mongodb
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"text/template"
 	"time"
 
 	mongodbxlog "github.com/flynn/flynn/appliance/mongodb/xlog"
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/sirenia/xlog"
 	"github.com/inconshreveable/log15"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 const (
@@ -183,31 +185,39 @@ func (p *Process) XLog() xlog.XLog {
 }
 
 func (p *Process) getReplConfig() (*replSetConfig, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Connect to local server.
-	session, err := p.connectLocal()
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
 	// Retrieve replica set configuration.
 	var result struct {
 		Config replSetConfig `bson:"config"`
 	}
-	if session.Run(bson.D{{"replSetGetConfig", 1}}, &result); err != nil {
+	err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "replSetGetConfig", Value: 1}}).Decode(&result)
+	if err != nil {
 		return nil, err
 	}
 	return &result.Config, nil
 }
 
 func (p *Process) setReplConfig(config replSetConfig) error {
-	session, err := p.connectLocal()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
-	if session.Run(bson.D{{"replSetReconfig", config}, {"force", true}}, nil); err != nil {
+	err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "replSetReconfig", Value: config}, {Key: "force", Value: true}}).Err()
+	if err != nil {
 		return err
 	}
 	// XXX(jpg): Prevent mongodb implosion if a reconfigure comes too soon after this one
@@ -377,7 +387,7 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance, clusterState *st
 
 	if err := p.initPrimaryDB(clusterState); err != nil {
 		logger.Error("error initialising primary, attempting stop")
-		if e := p.stop(); err != nil {
+		if e := p.stop(); e != nil {
 			logger.Debug("ignoring error stopping process", "err", e)
 		}
 		return err
@@ -422,33 +432,52 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 }
 
 func (p *Process) replSetGetStatus() (*replSetStatus, error) {
-	session, err := p.connectLocal()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
-	return replSetGetStatusQuery(session)
+	return replSetGetStatusQuery(ctx, client)
 }
 
-func replSetGetStatusQuery(session *mgo.Session) (*replSetStatus, error) {
+func replSetGetStatusQuery(ctx context.Context, client *mongo.Client) (*replSetStatus, error) {
 	var status replSetStatus
-	err := session.DB("admin").Run(bson.D{{"replSetGetStatus", 1}}, &status)
+	err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "replSetGetStatus", Value: 1}}).Decode(&status)
 	return &status, err
+}
+
+// isMongoError checks if the error is a MongoDB command error with the given code
+func isMongoError(err error, code int) bool {
+	if err == nil {
+		return false
+	}
+	// Check for MongoDB command errors
+	var cmdErr mongo.CommandError
+	if errors.As(err, &cmdErr) {
+		return int(cmdErr.Code) == code
+	}
+	// Also check error message for code (fallback)
+	return strings.Contains(err.Error(), fmt.Sprintf("code %d", code))
 }
 
 func (p *Process) isReplInitialised() (bool, error) {
 	_, err := p.replSetGetStatus()
 	if err != nil {
-		if merr, ok := err.(*mgo.QueryError); ok {
-			switch merr.Code {
-			case 93: // replica set exists but is invalid/we aren't a member
-				return true, nil
-			case 94: // replica set not yet configured
-				return false, nil
-			}
-			p.Logger.Error("failed to check if replset initialized", "err", err, "code", merr.Code)
-			return false, err
+		// Error code 93: replica set exists but is invalid/we aren't a member
+		if isMongoError(err, 93) {
+			return true, nil
+		}
+		// Error code 94: replica set not yet configured
+		if isMongoError(err, 94) {
+			return false, nil
+		}
+		var cmdErr mongo.CommandError
+		if errors.As(err, &cmdErr) {
+			p.Logger.Error("failed to check if replset initialized", "err", err, "code", cmdErr.Code)
 		}
 		return false, err
 	}
@@ -456,17 +485,25 @@ func (p *Process) isReplInitialised() (bool, error) {
 }
 
 func (p *Process) isUserCreated() (bool, error) {
-	session, err := mgo.DialWithInfo(p.DialInfo())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
-	session.SetMode(mgo.Monotonic, true)
-
-	n, err := session.DB("admin").C("system.users").Find(bson.M{"user": "flynn"}).Count()
+	n, err := client.Database("admin").Collection("system.users").CountDocuments(ctx, bson.M{"user": "flynn"})
 	if err != nil {
-		if merr, ok := err.(*mgo.QueryError); ok && merr.Code == 13 {
+		// Error code 13: unauthorized - user not created yet (security enabled)
+		if isMongoError(err, 13) {
+			return false, nil
+		}
+		// Error code 13436: NotPrimaryOrSecondary - replica set not initialized
+		// Error code 94: NotYetInitialized - replica set not initialized
+		// In these cases, the user hasn't been created yet
+		if isMongoError(err, 13436) || isMongoError(err, 94) {
 			return false, nil
 		}
 		return false, err
@@ -475,24 +512,26 @@ func (p *Process) isUserCreated() (bool, error) {
 }
 
 func (p *Process) createUser() error {
-	// create a new session
-	session, err := mgo.DialWithInfo(p.DialInfo())
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
-	session.SetMode(mgo.Monotonic, true)
-
-	if err := session.DB("admin").Run(bson.D{
-		{"createUser", "flynn"},
-		{"pwd", p.Password},
-		{"roles", []bson.M{{"role": "root", "db": "admin"}, {"role": "dbOwner", "db": "admin"}}},
-	}, nil); err != nil {
+	err = client.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: "flynn"},
+		{Key: "pwd", Value: p.Password},
+		{Key: "roles", Value: []bson.M{{"role": "root", "db": "admin"}, {"role": "dbOwner", "db": "admin"}}},
+	}).Err()
+	if err != nil {
 		return err
 	}
 
-	if err := session.DB("admin").Run(bson.D{{"fsync", 1}}, nil); err != nil {
+	err = client.Database("admin").RunCommand(ctx, bson.D{{Key: "fsync", Value: 1}}).Err()
+	if err != nil {
 		return err
 	}
 
@@ -582,20 +621,24 @@ func (p *Process) initPrimaryDB(clusterState *state.State) error {
 func (p *Process) replSetInitiate() error {
 	logger := p.Logger.New("fn", "replSetInitiate")
 	logger.Info("initialising replica set")
-	session, err := p.connectLocal()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
 	logger.Info("initialising replica set")
-	err = session.Run(bson.M{
+	err = client.Database("admin").RunCommand(ctx, bson.M{
 		"replSetInitiate": replSetConfig{
 			ID:      "rs0",
 			Members: []replSetMember{{ID: 0, Host: p.addr(), Priority: 1}},
 			Version: 1,
 		},
-	}, nil)
+	}).Err()
 	if err != nil {
 		logger.Error("failed to initialise replica set", "err", err)
 		return err
@@ -607,13 +650,23 @@ func (p *Process) addr() string {
 	return net.JoinHostPort(p.Host, p.Port)
 }
 
-func (p *Process) connectLocal() (*mgo.Session, error) {
-	session, err := mgo.DialWithInfo(p.DialInfo())
+// ConnectionURI returns a MongoDB connection URI for the local process.
+// It always uses localhost for local connections.
+func (p *Process) ConnectionURI() string {
+	host := "localhost:" + p.Port
+	if p.securityEnabled() {
+		return fmt.Sprintf("mongodb://%s:%s@%s/admin?directConnection=true", "flynn", p.Password, host)
+	}
+	return fmt.Sprintf("mongodb://%s/?directConnection=true", host)
+}
+
+func (p *Process) connectLocal(ctx context.Context) (*mongo.Client, error) {
+	clientOpts := options.Client().ApplyURI(p.ConnectionURI())
+	client, err := mongo.Connect(ctx, clientOpts)
 	if err != nil {
 		return nil, err
 	}
-	session.SetMode(mgo.Eventual, true)
-	return session, nil
+	return client, nil
 }
 
 func (p *Process) start() error {
@@ -644,13 +697,17 @@ func (p *Process) start() error {
 		// Connect to server.
 		// Retry after sleep if an error occurs.
 		if err := func() error {
-			session, err := mgo.DialWithInfo(p.DialInfo())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			client, err := p.connectLocal(ctx)
 			if err != nil {
 				return err
 			}
-			defer session.Close()
+			defer client.Disconnect(ctx)
 
-			return nil
+			// Ping to verify connection
+			return client.Ping(ctx, nil)
 		}(); err != nil {
 			select {
 			case <-timer.C:
@@ -678,10 +735,15 @@ func (p *Process) stop() error {
 	p.cancelSyncWait()
 
 	logger.Info("attempting graceful shutdown")
-	session, err := p.connectLocal()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err == nil {
-		err := session.DB("admin").Run(bson.D{{"shutdown", 1}, {"force", true}}, nil)
-		if err == nil || err == io.EOF {
+		defer client.Disconnect(ctx)
+		err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "shutdown", Value: 1}, {Key: "force", Value: true}}).Err()
+		// MongoDB closes the connection immediately on shutdown, so connection errors are expected
+		if err == nil || isConnectionClosedError(err) {
 			select {
 			case <-time.After(p.OpTimeout):
 				logger.Error("timed out waiting for graceful shutdown, proceeding to kill")
@@ -720,6 +782,7 @@ func (p *Process) Info() (*client.DatabaseInfo, error) {
 		Running:          p.running(),
 		SyncedDownstream: p.syncedDownstream(),
 	}
+	logger.Debug("info status", "running", info.Running, "syncedDownstream", info.SyncedDownstream)
 	xlog, err := p.XLogPosition()
 	info.XLog = string(xlog)
 	if err != nil {
@@ -731,32 +794,54 @@ func (p *Process) Info() (*client.DatabaseInfo, error) {
 		logger.Error("error checking userExists")
 		return info, err
 	}
+	logger.Debug("user exists check", "userExists", info.UserExists)
 	info.ReadWrite, err = p.isReadWrite()
 	if err != nil {
 		logger.Error("error checking isReadWrite")
 		return info, err
 	}
+	logger.Debug("final info", "readWrite", info.ReadWrite)
 	return info, err
 }
 
 func (p *Process) isReadWrite() (bool, error) {
+	logger := p.Logger.New("fn", "isReadWrite")
 	if !p.running() {
+		logger.Debug("not running, returning false")
+		return false, nil
+	}
+	// Don't query replica set status if replication isn't enabled
+	if !p.securityEnabled() {
+		logger.Debug("security not enabled, returning false")
 		return false, nil
 	}
 	status, err := p.replSetGetStatus()
-	return status.MyState == Primary, err
+	if err != nil {
+		logger.Error("error getting replica set status", "err", err)
+		return false, err
+	}
+	isPrimary := status.MyState == Primary
+	logger.Debug("replica set status", "myState", status.MyState, "isPrimary", isPrimary)
+	return isPrimary, nil
 }
 
 func (p *Process) userExists() (bool, error) {
 	if !p.running() {
 		return false, errors.New("mongod is not running")
 	}
+	// Don't query if security/replication isn't enabled - we're still in setup mode
+	if !p.securityEnabled() {
+		return false, nil
+	}
 
-	session, err := p.connectLocal()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
 	if err != nil {
 		return false, err
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
 	type user struct {
 		ID       string `bson:"_id"`
@@ -769,7 +854,7 @@ func (p *Process) userExists() (bool, error) {
 		Ok    int    `bson:"ok"`
 	}
 
-	if err := session.DB("admin").Run(bson.D{{"usersInfo", bson.M{"user": "flynn", "db": "admin"}}}, &userInfo); err != nil {
+	if err := client.Database("admin").RunCommand(ctx, bson.D{{Key: "usersInfo", Value: bson.M{"user": "flynn", "db": "admin"}}}).Decode(&userInfo); err != nil {
 		return false, err
 	}
 
@@ -864,24 +949,6 @@ func (p *Process) waitForSync(downstream *discoverd.Instance) {
 	go p.waitForSyncInner(downstream, stopCh, doneCh)
 }
 
-// DialInfo returns dial info for connecting to the local process as the "flynn" user.
-func (p *Process) DialInfo() *mgo.DialInfo {
-	localhost := net.JoinHostPort("localhost", p.Port)
-	info := &mgo.DialInfo{
-		Addrs:   []string{localhost},
-		Timeout: 5 * time.Second,
-		Direct:  true,
-	}
-
-	if p.securityEnabled() {
-		info.Addrs = []string{p.addr()}
-		info.Database = "admin"
-		info.Username = "flynn"
-		info.Password = p.Password
-	}
-	return info
-}
-
 func (p *Process) XLogPosition() (xlog.Position, error) {
 	status, err := p.replSetGetStatus()
 	if err != nil {
@@ -893,7 +960,10 @@ func (p *Process) XLogPosition() (xlog.Position, error) {
 func (p *Process) xlogPosFromStatus(member string, status *replSetStatus) (xlog.Position, error) {
 	for _, m := range status.Members {
 		if m.Name == member {
-			return xlog.Position(strconv.FormatInt(m.Optime.Timestamp, 10)), nil
+			// Convert BSON Timestamp to a comparable int64 value
+			// Timestamp has T (seconds) and I (increment) - combine them for ordering
+			ts := int64(m.Optime.Timestamp.T)<<32 | int64(m.Optime.Timestamp.I)
+			return xlog.Position(strconv.FormatInt(ts, 10)), nil
 		}
 	}
 	return p.XLog().Zero(), fmt.Errorf("error getting xlog, couldn't find member in replSetStatus")
@@ -925,8 +995,6 @@ type configData struct {
 var configTemplate = template.Must(template.New("mongod.conf").Parse(`
 storage:
   dbPath: {{.DataDir}}
-  journal:
-    enabled: true
   engine: wiredTiger
   wiredTiger:
     engineConfig:
@@ -939,6 +1007,7 @@ storage:
 
 net:
   port: {{.Port}}
+  bindIp: 0.0.0.0
 
 {{if .SecurityEnabled}}
 security:
@@ -952,3 +1021,17 @@ replication:
   enableMajorityReadConcern: true
 {{end}}
 `[1:]))
+
+// isConnectionClosedError checks if an error indicates the connection was closed.
+// This is expected when MongoDB shuts down as it closes connections immediately.
+func isConnectionClosedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	return strings.Contains(errStr, "socket was unexpectedly closed") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "EOF") ||
+		strings.Contains(errStr, "connection reset") ||
+		strings.Contains(errStr, "broken pipe")
+}

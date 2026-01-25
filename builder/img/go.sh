@@ -2,8 +2,8 @@
 
 set -eo pipefail
 
-go_version="1.13.1"
-go_shasum="94f874037b82ea5353f4061e543681a0e79657f787437974214629af8407d124"
+go_version="1.24.12"
+go_shasum="bddf8e653c82429aea7aec2520774e79925d4bb929fe20e67ecc00dd5af44c50"
 gobin_commit="ef6664e41f0bfe3007869844d318bb2bfa2627f9"
 dir="/usr/local"
 
@@ -11,7 +11,7 @@ apt-get update
 apt-get install --yes git build-essential
 apt-get clean
 
-curl -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
+curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
 echo "${go_shasum}  /tmp/go.tar.gz" | shasum -c -
 rm -rf "${dir}/go"
 tar xzf /tmp/go.tar.gz -C "${dir}"

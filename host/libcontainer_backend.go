@@ -60,6 +60,17 @@ const (
 	RLIMIT_NPROC      = 6
 )
 
+// safeClientConfigFromFile wraps dns.ClientConfigFromFile with panic recovery
+// to handle malformed /etc/resolv.conf files that cause the miekg/dns library to panic
+func safeClientConfigFromFile(resolvconf string) (clientConfig *dns.ClientConfig, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("panic parsing %s: %v", resolvconf, r)
+		}
+	}()
+	return dns.ClientConfigFromFile(resolvconf)
+}
+
 type LibcontainerConfig struct {
 	State            *State
 	VolManager       *volumemanager.Manager
@@ -267,7 +278,7 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	}
 
 	// Read DNS config, discoverd uses the nameservers
-	dnsConf, err := dns.ClientConfigFromFile("/etc/resolv.conf")
+	dnsConf, err := safeClientConfigFromFile("/etc/resolv.conf")
 	if err != nil {
 		return err
 	}
@@ -783,7 +794,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	process := &libcontainer.Process{
 		Init: true,
 		Args: []string{"/.containerinit", job.ID},
-		User: "root",
+		User: "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
 	}
 	if err := c.Run(process); err != nil {
 		c.Destroy()
@@ -1059,16 +1070,18 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 
 	notifyOOM, err := c.container.NotifyOOM()
 	if err != nil {
-		log.Error("error subscribing to OOM notifications", "err", err)
-		return err
+		// OOM notifications may not be available on cgroups v2 with older libcontainer
+		// Log a warning but continue - the container will still function
+		log.Warn("unable to subscribe to OOM notifications (may not be supported on cgroups v2)", "err", err)
+	} else {
+		go func() {
+			logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
+			defer logger.Close()
+			for range notifyOOM {
+				logger.Crit("FATAL: a container process was killed due to lack of available memory")
+			}
+		}()
 	}
-	go func() {
-		logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
-		defer logger.Close()
-		for range notifyOOM {
-			logger.Crit("FATAL: a container process was killed due to lack of available memory")
-		}
-	}()
 
 	log.Info("watching for changes")
 	for change := range c.Client.StreamState() {

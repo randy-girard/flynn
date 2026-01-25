@@ -1,6 +1,7 @@
 package mongodb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -12,12 +13,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/attempt"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	. "github.com/flynn/go-check"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
+	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
 // Hook gocheck up to the "go test" runner
@@ -87,16 +90,31 @@ func instance(p *Process) *discoverd.Instance {
 	}
 }
 
-func connect(c *C, p *Process) *mgo.Session {
-	session, err := mgo.DialWithInfo(&mgo.DialInfo{
-		Username: "flynn",
-		Password: "password",
-		Addrs:    []string{fmt.Sprintf("127.0.0.1:%d", MustAtoi(p.Port))},
-		Database: "admin",
-		Direct:   true,
-	})
+// testClient wraps a mongo.Client with a context for test convenience
+type testClient struct {
+	*mongo.Client
+	ctx context.Context
+}
+
+func connect(c *C, p *Process) *testClient {
+	ctx := context.Background()
+	uri := fmt.Sprintf("mongodb://flynn:password@127.0.0.1:%d/admin?directConnection=true", MustAtoi(p.Port))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	c.Assert(err, IsNil)
-	return session
+	return &testClient{Client: client, ctx: ctx}
+}
+
+func connectSecondary(c *C, p *Process) *testClient {
+	ctx := context.Background()
+	uri := fmt.Sprintf("mongodb://flynn:password@127.0.0.1:%d/admin?directConnection=true", MustAtoi(p.Port))
+	opts := options.Client().ApplyURI(uri).SetReadPreference(readpref.Secondary())
+	client, err := mongo.Connect(ctx, opts)
+	c.Assert(err, IsNil)
+	return &testClient{Client: client, ctx: ctx}
+}
+
+func (tc *testClient) Close() {
+	tc.Disconnect(tc.ctx)
 }
 
 func Config(role state.Role, upstream, downstream *Process, topology *state.State) *state.Config {
@@ -116,8 +134,8 @@ var queryAttempts = attempt.Strategy{
 	Delay: 200 * time.Millisecond,
 }
 
-func assertDownstream(c *C, session *mgo.Session, upstream, downstream *Process) {
-	status, err := replSetGetStatusQuery(session)
+func assertDownstream(c *C, client *testClient, upstream, downstream *Process) {
+	status, err := replSetGetStatusQueryClient(client)
 	c.Assert(err, IsNil)
 	// ensure downstream is present in member list
 	for _, member := range status.Members {
@@ -129,12 +147,20 @@ func assertDownstream(c *C, session *mgo.Session, upstream, downstream *Process)
 	c.Fatalf("downstream not in member list: %+v", status.Members)
 }
 
-func waitRow(c *C, session *mgo.Session, n int) {
+func replSetGetStatusQueryClient(client *testClient) (*replSetStatus, error) {
+	var status replSetStatus
+	err := client.Database("admin").RunCommand(client.ctx, bson.D{{Key: "replSetGetStatus", Value: 1}}).Decode(&status)
+	return &status, err
+}
+
+func waitRow(c *C, client *testClient, n int) {
 	err := queryAttempts.Run(func() error {
 		var doc Doc
-		if err := session.DB("db0").C("test").Find(bson.M{"n": n}).One(&doc); err != nil {
+		err := client.Database("db0").Collection("test").FindOne(client.ctx, bson.M{"n": n}).Decode(&doc)
+		if err != nil {
 			return err
-		} else if doc.N != n {
+		}
+		if doc.N != n {
 			return fmt.Errorf("row n mismatch: %d != %d", n, doc.N)
 		}
 		return nil
@@ -142,13 +168,14 @@ func waitRow(c *C, session *mgo.Session, n int) {
 	c.Assert(err, IsNil)
 }
 
-func insertDoc(c *C, session *mgo.Session, n int) {
-	c.Assert(session.DB("db0").C("test").Insert(&Doc{N: n}), IsNil)
+func insertDoc(c *C, client *testClient, n int) {
+	_, err := client.Database("db0").Collection("test").InsertOne(client.ctx, &Doc{N: n})
+	c.Assert(err, IsNil)
 }
 
-func waitReadWrite(c *C, session *mgo.Session) {
+func waitReadWrite(c *C, client *testClient) {
 	err := queryAttempts.Run(func() error {
-		status, err := replSetGetStatusQuery(session)
+		status, err := replSetGetStatusQueryClient(client)
 		if err != nil || status.MyState != Primary {
 			return errors.New("not master")
 		}
@@ -195,7 +222,6 @@ func (MongoDBSuite) TestIntegration_TwoNodeSync(c *C) {
 
 	// Connect to primary
 	db1 := connect(c, node1)
-	db1.SetMode(mgo.Monotonic, true)
 	defer db1.Close()
 
 	// Start a sync
@@ -214,9 +240,8 @@ func (MongoDBSuite) TestIntegration_TwoNodeSync(c *C) {
 	// Write to the master.
 	insertDoc(c, db1, 1)
 
-	// Read from the sync
-	db2 := connect(c, node2)
-	db2.SetMode(mgo.Secondary, true)
+	// Read from the sync (use secondary read preference)
+	db2 := connectSecondary(c, node2)
 	defer db2.Close()
 	waitRow(c, db2, 1)
 }
@@ -241,7 +266,6 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	// Connect to primary
 	db1 := connect(c, node1)
 	defer db1.Close()
-	db1.SetMode(mgo.Monotonic, true)
 
 	// Start a sync
 	err = node2.Reconfigure(Config(state.RoleSync, node1, nil, topology))
@@ -254,9 +278,8 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 
 	// Check it catches up
 	waitReplSync(c, node1, 2)
-	db2 := connect(c, node2)
+	db2 := connectSecondary(c, node2)
 	defer db2.Close()
-	db2.SetMode(mgo.Secondary, true)
 	assertDownstream(c, db2, node1, node2)
 
 	// Write to the master.
@@ -289,9 +312,8 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	// check it catches up
 	waitReplSync(c, node2, 3)
 
-	db3 := connect(c, node3)
+	db3 := connectSecondary(c, node3)
 	defer db3.Close()
-	db3.SetMode(mgo.Secondary, true)
 
 	// check that data replicated successfully
 	waitRow(c, db3, 1)
@@ -322,9 +344,8 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	// check it catches up
 	waitReplSync(c, node3, 4)
 
-	db4 := connect(c, node4)
+	db4 := connectSecondary(c, node4)
 	defer db4.Close()
-	db4.SetMode(mgo.Secondary, true)
 
 	// check that data replicated successfully
 	waitRow(c, db4, 1)
@@ -347,7 +368,6 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	// Reconnect to node 2 as primary.
 	db2.Close()
 	db2 = connect(c, node2)
-	db2.SetMode(mgo.Monotonic, true)
 	defer db2.Close()
 
 	// wait for recovery and read-write transactions to come up
@@ -362,9 +382,14 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	insertDoc(c, db2, 2)
 	db2.Close()
 
-	db3.SetMode(mgo.Secondary, true)
+	// Reconnect with secondary read preference for reading
+	db3.Close()
+	db3 = connectSecondary(c, node3)
+	defer db3.Close()
 	waitRow(c, db3, 2)
-	db4.SetMode(mgo.Secondary, true)
+	db4.Close()
+	db4 = connectSecondary(c, node4)
+	defer db4.Close()
 	waitRow(c, db4, 2)
 
 	// promote node3 to primary
@@ -382,7 +407,6 @@ func (MongoDBSuite) TestIntegration_FourNode(c *C) {
 	// Reconnect to node 3 as primary.
 	db3.Close()
 	db3 = connect(c, node3)
-	db3.SetMode(mgo.Monotonic, true)
 	defer db3.Close()
 
 	// check replication
@@ -440,9 +464,8 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 	// wait for cluster to come up
 	db1 := connect(c, node1)
 	defer db1.Close()
-	db4 := connect(c, node4)
+	db4 := connectSecondary(c, node4)
 	defer db4.Close()
-	db4.SetMode(mgo.Secondary, true)
 	waitReadWrite(c, db1)
 	insertDoc(c, db1, 1)
 	waitRow(c, db4, 1)
@@ -455,9 +478,8 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 	c.Assert(err, IsNil)
 
 	// run query
-	db4 = connect(c, node4)
+	db4 = connectSecondary(c, node4)
 	defer db4.Close()
-	db4.SetMode(mgo.Secondary, true)
 	insertDoc(c, db1, 2)
 	waitRow(c, db4, 2)
 	db4.Close()
@@ -469,8 +491,7 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 
 	waitReadWrite(c, db1)
 	insertDoc(c, db1, 3)
-	db4 = connect(c, node4)
-	db4.SetMode(mgo.Secondary, true)
+	db4 = connectSecondary(c, node4)
 	defer db4.Close()
 	waitRow(c, db4, 3)
 }

@@ -5,7 +5,7 @@ import (
 	"log"
 )
 
-func ExampleHappyStream() {
+func Example_happyStream() {
 	output := make(chan *exampleWork)
 	stream, err := workerFunction(2, output)
 	if err != nil {
@@ -26,7 +26,7 @@ func ExampleHappyStream() {
 	// stream.err: <nil>
 }
 
-func ExampleClosePushbackStream() {
+func Example_closePushbackStream() {
 	output := make(chan *exampleWork)
 	stream, err := workerFunction(2, output)
 	if err != nil {
@@ -51,7 +51,7 @@ func ExampleClosePushbackStream() {
 	// stream.err: <nil>
 }
 
-func ExampleErrorDuringStream() {
+func Example_errorDuringStream() {
 	output := make(chan *exampleWork)
 	stream, err := workerFunctionBroken(1, output)
 	if err != nil {

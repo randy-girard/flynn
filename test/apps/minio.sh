@@ -17,6 +17,12 @@ apt-get install -y wget rpm # for shasum
 #mv "${TMP}/minio" "/bin/minio"
 #chmod +x "/bin/minio"
 
-wget -O /tmp/minio-0.0.20210116021944.x86_64.rpm https://dl.min.io/server/minio/release/linux-amd64/archive/minio-0.0.20210116021944.x86_64.rpm
+wget \
+  --tries=5 \
+  --retry-connrefused \
+  --waitretry=5 \
+  --timeout=30 \
+  -O /tmp/minio-0.0.20210116021944.x86_64.rpm \
+  https://dl.min.io/server/minio/release/linux-amd64/archive/minio-0.0.20210116021944.x86_64.rpm
 rpm -ivh /tmp/minio-0.0.20210116021944.x86_64.rpm
 rm -rf /tmp/minio-0.0.20210116021944.x86_64.rpm

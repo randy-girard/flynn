@@ -66,7 +66,7 @@ outer:
 				msg += "\t" + host.Addr() + "\n"
 			}
 			msg += "\n"
-			return fmt.Errorf(msg)
+			return fmt.Errorf("%s", msg)
 		case <-time.After(waitInterval):
 		}
 	}

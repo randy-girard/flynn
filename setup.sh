@@ -139,9 +139,9 @@ fi
 
 cd /usr/local
 # adjust version as you like; 1.20+ is fine for Flynn
-wget https://go.dev/dl/go1.21.13.linux-amd64.tar.gz
+wget https://go.dev/dl/go1.24.12.linux-amd64.tar.gz
 rm -rf go
-tar -xzf go1.21.13.linux-amd64.tar.gz
+tar -xzf go1.24.12.linux-amd64.tar.gz
 
 export PATH=/usr/local/go/bin:$PATH
 go version

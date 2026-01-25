@@ -134,7 +134,8 @@ func (CheckSuite) TestHTTPReadTimeout(c *C) {
 	}).Check()
 	c.Assert(err, NotNil)
 	if !strings.Contains(err.Error(), "use of closed network connection") && // <=go1.4
-		!strings.Contains(err.Error(), "Client.Timeout exceeded while reading body") { // >=go1.5
+		!strings.Contains(err.Error(), "Client.Timeout exceeded while reading body") && // >=go1.5
+		!strings.Contains(err.Error(), "context deadline exceeded") { // newer versions
 		c.Fatalf("unexpected error %q", err)
 	}
 }

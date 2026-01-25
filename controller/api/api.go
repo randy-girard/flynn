@@ -186,7 +186,8 @@ func NewError(err error, message string, args ...interface{}) error {
 	case ct.ValidationError, *ct.ValidationError:
 		errCode = codes.InvalidArgument
 	}
-	return grpc.Errorf(errCode, fmt.Sprintf(message, args...))
+	msg := fmt.Sprintf(message, args...)
+	return grpc.Errorf(errCode, "%s", msg)
 }
 
 func NewTimestamp(t *time.Time) *tspb.Timestamp {

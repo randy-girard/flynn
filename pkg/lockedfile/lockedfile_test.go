@@ -9,7 +9,6 @@ package lockedfile_test
 
 import (
 	"fmt"
-	"internal/testenv"
 	"io/ioutil"
 	"os"
 	"os/exec"
@@ -189,7 +188,9 @@ func TestSpuriousEDEADLK(t *testing.T) {
 	// 	P.2 unblocks and locks file B.
 	// 	P.2 unlocks file B.
 
-	testenv.MustHaveExec(t)
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("skipping test: go command not available")
+	}
 
 	dirVar := t.Name() + "DIR"
 

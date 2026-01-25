@@ -21,8 +21,9 @@ fi
 
 BIN="${GOROOT}/bin/go"
 if [[ $(basename $0) == "gobin" ]]; then
-  export GOPROXY=https://proxy.golang.org
-  export GOFLAGS=-mod=readonly
+  # gobin installs external tools, so it needs to download modules
+  # Don't use vendor mode for gobin - let it use the default module behavior
+  unset GOFLAGS
   BIN=/usr/local/bin/gobin-noenv
 fi
 

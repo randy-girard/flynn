@@ -45,7 +45,7 @@ func (g *grpcAPI) authorize(ctx context.Context) (context.Context, error) {
 
 	token, err := g.authorizer.AuthorizeToken(auth[0])
 	if err != nil {
-		return ctx, grpc.Errorf(codes.Unauthenticated, err.Error())
+		return ctx, grpc.Errorf(codes.Unauthenticated, "%s", err.Error())
 	}
 	ctx = ctxhelper.NewContextLogger(ctx, g.logger(ctx).New("auth_token_id", token.ID, "auth_user", token.User))
 
@@ -107,7 +107,7 @@ func (g *grpcAPI) logRequest(ctx context.Context, rpcMethod string) (context.Con
 func (g *grpcAPI) subscribeEvents(appIDs []string, objectTypes []ct.EventType, objectIDs []string) (*data.EventSubscriber, error) {
 	eventListener, err := g.maybeStartEventListener()
 	if err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 	objectTypeStrings := make([]string, len(objectTypes))
 	for i, t := range objectTypes {
@@ -115,7 +115,7 @@ func (g *grpcAPI) subscribeEvents(appIDs []string, objectTypes []ct.EventType, o
 	}
 	sub, err := eventListener.Subscribe(appIDs, objectTypeStrings, objectIDs)
 	if err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 	return sub, nil
 }
@@ -244,14 +244,14 @@ func (g *grpcAPI) StreamApps(req *api.StreamAppsRequest, stream api.Controller_S
 		var err error
 		sub, err = g.subscribeEvents(appIDs, []ct.EventType{ct.EventTypeApp, ct.EventTypeAppDeletion, ct.EventTypeAppRelease}, nil)
 		if err != nil {
-			return api.NewError(err, err.Error())
+			return api.NewError(err, "%s", err.Error())
 		}
 		defer sub.Close()
 	}
 
 	apps, nextPageToken, err := g.listApps(req)
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 
 	stream.Send(&api.StreamAppsResponse{
@@ -326,7 +326,7 @@ outer:
 		}
 	}
 	if err != nil {
-		err = api.NewError(err, err.Error())
+		err = api.NewError(err, "%s", err.Error())
 	}
 	return err
 }
@@ -362,7 +362,7 @@ func (g *grpcAPI) UpdateApp(ctx context.Context, req *api.UpdateAppRequest) (*ap
 
 	ctApp, err := g.appRepo.Update(api.ParseIDFromName(app.Name, "apps"), data)
 	if err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 	return api.NewApp(ctApp.(*ct.App)), nil
 }
@@ -375,7 +375,7 @@ func (g *grpcAPI) createScale(req *api.CreateScaleRequest) (*api.ScaleRequest, e
 
 	sub, err := g.subscribeEvents([]string{appID}, []ct.EventType{ct.EventTypeScaleRequest, ct.EventTypeScaleRequestCancelation}, nil)
 	if err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 	defer sub.Close()
 
@@ -391,7 +391,7 @@ func (g *grpcAPI) createScale(req *api.CreateScaleRequest) (*api.ScaleRequest, e
 		scaleReq.NewTags = &tags
 	}
 	if _, err := g.formationRepo.AddScaleRequest(scaleReq, false); err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 
 	timeout := time.After(ct.DefaultScaleTimeout)
@@ -424,7 +424,7 @@ outer:
 	}
 
 	if err := sub.Err; err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 
 	return api.NewScaleRequest(scaleReq), nil
@@ -462,7 +462,7 @@ func (g *grpcAPI) StreamScales(req *api.StreamScalesRequest, stream api.Controll
 	}
 	sub, err := g.subscribeEvents(streamAppIDs, []ct.EventType{ct.EventTypeScaleRequest, ct.EventTypeScaleRequestCancelation}, streamScaleIDs)
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	defer sub.Close()
 
@@ -479,7 +479,7 @@ func (g *grpcAPI) StreamScales(req *api.StreamScalesRequest, stream api.Controll
 		StateFilters: stateFilters,
 	})
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	scaleRequests := make([]*api.ScaleRequest, 0, len(list))
 	for _, ctScale := range list {
@@ -518,7 +518,7 @@ func (g *grpcAPI) StreamScales(req *api.StreamScalesRequest, stream api.Controll
 	unmarshalScaleRequest := func(event *ct.Event) (*api.ScaleRequest, error) {
 		var ctReq *ct.ScaleRequest
 		if err := json.Unmarshal(event.Data, &ctReq); err != nil {
-			return nil, api.NewError(err, err.Error())
+			return nil, api.NewError(err, "%s", err.Error())
 		}
 		return api.NewScaleRequest(ctReq), nil
 	}
@@ -612,7 +612,7 @@ func (g *grpcAPI) StreamReleases(req *api.StreamReleasesRequest, stream api.Cont
 
 	sub, err := g.subscribeEvents(appIDs, []ct.EventType{ct.EventTypeRelease}, releaseIDs)
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	defer sub.Close()
 
@@ -624,7 +624,7 @@ func (g *grpcAPI) StreamReleases(req *api.StreamReleasesRequest, stream api.Cont
 		LabelFilters: api.NewControllerLabelFilters(req.GetLabelFilters()),
 	})
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	releases := make([]*api.Release, 0, len(ctReleases))
 	for _, ctRelease := range ctReleases {
@@ -648,7 +648,7 @@ func (g *grpcAPI) StreamReleases(req *api.StreamReleasesRequest, stream api.Cont
 	unmarshalRelease := func(event *ct.Event) (*api.Release, error) {
 		var ctRelease *ct.Release
 		if err := json.Unmarshal(event.Data, &ctRelease); err != nil {
-			return nil, api.NewError(err, err.Error())
+			return nil, api.NewError(err, "%s", err.Error())
 		}
 		return api.NewRelease(ctRelease), nil
 	}
@@ -701,7 +701,7 @@ func (g *grpcAPI) CreateRelease(ctx context.Context, req *api.CreateReleaseReque
 	ctRelease := req.Release.ControllerType()
 	ctRelease.AppID = api.ParseIDFromName(req.Parent, "apps")
 	if err := g.releaseRepo.Add(ctRelease); err != nil {
-		return nil, api.NewError(err, err.Error())
+		return nil, api.NewError(err, "%s", err.Error())
 	}
 	return api.NewRelease(ctRelease), nil
 }
@@ -783,7 +783,7 @@ func (g *grpcAPI) StreamDeployments(req *api.StreamDeploymentsRequest, stream ap
 	}
 
 	if err := refreshDeployments(); err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	sendResponse()
 
@@ -795,7 +795,7 @@ func (g *grpcAPI) StreamDeployments(req *api.StreamDeploymentsRequest, stream ap
 
 	sub, err := g.subscribeEvents(appIDs, []ct.EventType{ct.EventTypeDeployment}, deploymentIDs)
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	defer sub.Close()
 
@@ -875,14 +875,14 @@ func (g *grpcAPI) CreateDeployment(req *api.CreateDeploymentRequest, ds api.Cont
 	releaseID := api.ParseIDFromName(req.Parent, "releases")
 	d, err := g.deploymentRepo.Add(appID, releaseID)
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 
 	// Wait for deployment to complete and perform scale
 
 	sub, err := g.subscribeEvents([]string{appID}, []ct.EventType{ct.EventTypeDeployment}, []string{d.ID})
 	if err != nil {
-		return api.NewError(err, err.Error())
+		return api.NewError(err, "%s", err.Error())
 	}
 	defer sub.Close()
 
@@ -922,7 +922,7 @@ func (g *grpcAPI) CreateDeployment(req *api.CreateDeploymentRequest, ds api.Cont
 		})
 
 		if de.Status == "failed" {
-			return status.Errorf(codes.FailedPrecondition, de.Error)
+			return status.Errorf(codes.FailedPrecondition, "%s", de.Error)
 		}
 		if de.Status == "complete" {
 			break
@@ -936,5 +936,5 @@ func maybeError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return api.NewError(err, err.Error())
+	return api.NewError(err, "%s", err.Error())
 }

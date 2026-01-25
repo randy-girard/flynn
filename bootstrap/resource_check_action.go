@@ -47,7 +47,7 @@ func (a *ResourceCheckAction) Run(s *State) error {
 			}
 		}
 		conflictMsg += "\n\nAfter you correct the above errors re-run bootstrap to continue setting up Flynn."
-		return fmt.Errorf(conflictMsg)
+		return fmt.Errorf("%s", conflictMsg)
 	}
 	return nil
 }

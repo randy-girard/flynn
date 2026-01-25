@@ -1,3 +1,4 @@
+export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
 export TUF_ROOT_PASSPHRASE="password"
 export TUF_TARGETS_PASSPHRASE="password"
@@ -17,6 +18,9 @@ export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
 export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+
+echo "GO VERSION"
+echo "$(go version)"
 
 ./script/stop-all
 ./script/install-flynn --remove --clean --yes
@@ -49,9 +53,9 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
    "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-cd /root/go/src/github.com/flynn/go-tuf/
-docker compose down
-rm -rf repo
+cd /root/go/src/github.com/flynn/go-tuf/ && \
+docker compose down && \
+rm -rf repo && \
 docker compose up -d --build
 
 # Whenever the keys expire, you have to run this
@@ -60,12 +64,12 @@ docker compose up -d --build
 
 scp -o StrictHostKeyChecking=no -r ./repo/* root@10.0.0.211:/root/go-tuf/repo/
 
-cd /root/go/src/github.com/flynn/flynn-discovery
-docker compose down
+cd /root/go/src/github.com/flynn/flynn-discovery && \
+docker compose down && \
 docker compose up -d --build
 
-cd /root/go/src/github.com/flynn/flynn
-mkdir -p /etc/flynn
+cd /root/go/src/github.com/flynn/flynn && \
+mkdir -p /etc/flynn && \
 mkdir -p /tmp/discoverd-data
 
 #./script/clean-flynn
@@ -75,27 +79,20 @@ mkdir -p /tmp/discoverd-data
 
 # Copy keys from go-tuf repo.
 
-make clean
-make
-
-rm build/bin/flynn-builder
-rm build/bin/flannel-wrapper
-
-go build -o build/bin/flannel-wrapper ./flannel/wrapper
-
-export DISCOVERY_URL=`./build/bin/flynn-host init --init-discovery`
-
-./script/start-all
-
-zfs set sync=disabled flynn-default
-zfs set reservation=512M flynn-default
-zfs set refreservation=512M flynn-default
-
-exit
-
-rm -rf /etc/flynn/tuf.db
+rm -rf /tmp/flynn-* && \
+rm -rf /var/log/flynn/* && \
+make clean && \
+make && \
+rm -f build/bin/flynn-builder && \
+rm -f build/bin/flannel-wrapper && \
+go build -o build/bin/flannel-wrapper ./flannel/wrapper && \
+export DISCOVERY_URL=`./build/bin/flynn-host init --init-discovery` && \
+./script/start-all && \
+zfs set sync=disabled flynn-default && \
+zfs set reservation=512M flynn-default && \
+zfs set refreservation=512M flynn-default && \
+rm -rf /etc/flynn/tuf.db && \
 ./script/flynn-builder build --version=dev --tuf-db=/etc/flynn/tuf.db --verbose && \
-
 ./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo && \
   flynn-host ps -a && \
   cd /root/go/src/github.com/flynn/flynn && \

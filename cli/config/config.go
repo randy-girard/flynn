@@ -164,7 +164,7 @@ func (c *Config) Add(s *Cluster, force bool) error {
 	// The new cluster config conflicts with an existing one
 	if msg != "" {
 		if !force {
-			return fmt.Errorf(msg)
+			return fmt.Errorf("%s", msg)
 		}
 
 		// Remove conflicting cluster

@@ -22,7 +22,7 @@ https://mirror.mariadb.org/repo/10.11/ubuntu noble main" \
   > /etc/apt/sources.list.d/mariadb.list
 
 # ---- Percona GPG key ----
-curl -fsSL https://repo.percona.com/apt/percona-release_latest.jammy_all.deb \
+curl -fsSL --retry 5 --retry-delay 3 https://repo.percona.com/apt/percona-release_latest.jammy_all.deb \
   -o /tmp/percona-release.deb
 
 dpkg -i /tmp/percona-release.deb

@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/sirenia/state"
@@ -67,13 +67,13 @@ func (c *Client) Stop() error {
 
 func (c *Client) WaitForReplSync(downstream *discoverd.Instance, timeout time.Duration) error {
 	return c.waitFor(func(status *Status) bool {
-		return status.Database.SyncedDownstream != nil && status.Database.SyncedDownstream.ID == downstream.ID
+		return status.Database != nil && status.Database.SyncedDownstream != nil && status.Database.SyncedDownstream.ID == downstream.ID
 	}, timeout)
 }
 
 func (c *Client) WaitForReadWrite(timeout time.Duration) error {
 	return c.waitFor(func(status *Status) bool {
-		return status.Database.ReadWrite
+		return status.Database != nil && status.Database.ReadWrite
 	}, timeout)
 }
 

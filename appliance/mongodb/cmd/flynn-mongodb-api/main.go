@@ -1,24 +1,26 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/resource"
 	"github.com/flynn/flynn/pkg/shutdown"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/scale"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
-	"gopkg.in/mgo.v2"
-	"gopkg.in/mgo.v2/bson"
+	"github.com/julienschmidt/httprouter"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 var app = os.Getenv("FLYNN_APP_ID")
@@ -69,6 +71,11 @@ func (a *API) logger() log15.Logger {
 	return log15.New("app", "mongodb-web")
 }
 
+// mongoURI builds a MongoDB connection URI
+func mongoURI(host, port, username, password, database string) string {
+	return fmt.Sprintf("mongodb://%s:%s@%s:%s/%s?directConnection=true", username, password, host, port, database)
+}
+
 func (a *API) createDatabase(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	// Ensure the cluster has been scaled up before attempting to create a database.
 	if err := a.scaleUp(); err != nil {
@@ -76,28 +83,28 @@ func (a *API) createDatabase(w http.ResponseWriter, req *http.Request, _ httprou
 		return
 	}
 
-	session, err := mgo.DialWithInfo(&mgo.DialInfo{
-		Addrs:    []string{net.JoinHostPort(serviceHost, "27017")},
-		Username: "flynn",
-		Password: os.Getenv("MONGO_PWD"),
-		Database: "admin",
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	uri := mongoURI(serviceHost, "27017", "flynn", os.Getenv("MONGO_PWD"), "admin")
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		httphelper.Error(w, err)
 		return
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
 	username, password, database := random.Hex(16), random.Hex(16), random.Hex(16)
 
 	// Create a user
-	if err := session.DB(database).Run(bson.D{
-		{"createUser", username},
-		{"pwd", password},
-		{"roles", []bson.M{
+	err = client.Database(database).RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: username},
+		{Key: "pwd", Value: password},
+		{Key: "roles", Value: []bson.M{
 			{"role": "dbOwner", "db": database},
 		}},
-	}, nil); err != nil {
+	}).Err()
+	if err != nil {
 		httphelper.Error(w, err)
 		return
 	}
@@ -124,26 +131,25 @@ func (a *API) dropDatabase(w http.ResponseWriter, req *http.Request, _ httproute
 	}
 	user, database := id[0], id[1]
 
-	session, err := mgo.DialWithInfo(&mgo.DialInfo{
-		Addrs:    []string{net.JoinHostPort(serviceHost, "27017")},
-		Username: "flynn",
-		Password: os.Getenv("MONGO_PWD"),
-		Database: "admin",
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	uri := mongoURI(serviceHost, "27017", "flynn", os.Getenv("MONGO_PWD"), "admin")
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		httphelper.Error(w, err)
 		return
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
 
 	// Delete user.
-	if err := session.DB(database).Run(bson.D{{"dropUser", user}}, nil); err != nil {
+	if err := client.Database(database).RunCommand(ctx, bson.D{{Key: "dropUser", Value: user}}).Err(); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
 
 	// Delete database.
-	if err := session.DB(database).Run(bson.D{{"dropDatabase", 1}}, nil); err != nil {
+	if err := client.Database(database).RunCommand(ctx, bson.D{{Key: "dropDatabase", Value: 1}}).Err(); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
@@ -171,17 +177,22 @@ func (a *API) ping(w http.ResponseWriter, req *http.Request, _ httprouter.Params
 		}
 	}
 
-	session, err := mgo.DialWithInfo(&mgo.DialInfo{
-		Addrs:    []string{net.JoinHostPort(serviceHost, "27017")},
-		Username: "flynn",
-		Password: os.Getenv("MONGO_PWD"),
-		Database: "admin",
-	})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	uri := mongoURI(serviceHost, "27017", "flynn", os.Getenv("MONGO_PWD"), "admin")
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
 	if err != nil {
 		httphelper.Error(w, err)
 		return
 	}
-	defer session.Close()
+	defer client.Disconnect(ctx)
+
+	// Verify connection with a ping
+	if err := client.Ping(ctx, nil); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
 
 	w.WriteHeader(200)
 }

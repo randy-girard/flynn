@@ -1636,7 +1636,7 @@ func (s *S) TestLegacyTLSDisallowed(c *C) {
 	client := tls.Client(conn, config)
 	err = client.Handshake()
 	c.Assert(err, Not(IsNil))
-	c.Assert(err, ErrorMatches, ".+protocol version not supported")
+	c.Assert(err, ErrorMatches, ".+(protocol version not supported|no supported versions satisfy MinVersion and MaxVersion)")
 }
 
 // httpTestBlockHandler returns a testHTTPBlockHandler using the given ID

@@ -506,10 +506,13 @@ func babySit(init *ContainerInit, hbs []discoverd.Heartbeater) int {
 	sigutil.CatchAll(sigchan)
 	go func() {
 		for sig := range sigchan {
-			log.Info("received signal", "type", sig)
-			if sig == syscall.SIGCHLD {
+			// Skip SIGCHLD (child process terminated) - handled by Wait4 below
+			// Skip SIGURG (urgent I/O condition) - commonly sent by TCP keepalives
+			// and out-of-band data, not useful to forward to applications
+			if sig == syscall.SIGCHLD || sig == syscall.SIGURG {
 				continue
 			}
+			log.Info("received signal", "type", sig)
 			if sig == syscall.SIGTERM || sig == syscall.SIGINT {
 				log.Info("deregistering service due to signal")
 				shutdownOnce.Do(closeHBs)

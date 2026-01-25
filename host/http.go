@@ -18,9 +18,9 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/host/logmux"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume/api"
-	"github.com/flynn/flynn/host/volume/manager"
+	host "github.com/flynn/flynn/host/types"
+	volumeapi "github.com/flynn/flynn/host/volume/api"
+	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/keepalive"
 	"github.com/flynn/flynn/pkg/shutdown"
@@ -28,8 +28,8 @@ import (
 	"github.com/flynn/flynn/pkg/tufutil"
 	"github.com/flynn/flynn/pkg/version"
 	tuf "github.com/flynn/go-tuf/client"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 )
 
 type Host struct {
@@ -145,8 +145,10 @@ func (h *Host) ConfigureNetworking(config *host.NetworkConfig) {
 		h.statusMtx.Unlock()
 	})
 	h.statusMtx.Lock()
-	h.status.Network.JobID = config.JobID
-	h.backend.SetNetworkConfig(h.status.Network)
+	if h.status.Network != nil {
+		h.status.Network.JobID = config.JobID
+		h.backend.SetNetworkConfig(h.status.Network)
+	}
 	h.statusMtx.Unlock()
 }
 
@@ -602,7 +604,7 @@ func (h *Host) ServeHTTP() {
 	r.POST("/attach", newAttachHandler(h.state, h.backend, h.log).ServeHTTP)
 
 	jobAPI := &jobAPI{
-		host: h,
+		host:                  h,
 		addJobRateLimitBucket: NewRateLimitBucket(h.maxJobConcurrency),
 	}
 	jobAPI.RegisterRoutes(r)

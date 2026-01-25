@@ -95,7 +95,7 @@ func runMongo(args *docopt.Args, client controller.Client, config *runConfig) er
 	config.Env["PAGER"] = "less"
 	config.Env["LESS"] = "--ignore-case --LONG-PROMPT --SILENT --tabs=4 --quit-if-one-screen --no-init --quit-at-eof"
 	config.Args = append([]string{
-		"mongo",
+		"mongosh",
 		"--host", config.Env["MONGO_HOST"],
 		"-u", config.Env["MONGO_USER"],
 		"-p", config.Env["MONGO_PWD"],

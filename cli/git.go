@@ -139,7 +139,7 @@ func appFromGitRemote(remote string) (*remoteApp, error) {
 
 		app := appFromGitURL(out)
 		if app == nil {
-			return nil, fmt.Errorf("could not find app name in " + remote + " git remote")
+			return nil, fmt.Errorf("could not find app name in %s git remote", remote)
 		}
 		return app, nil
 	}
