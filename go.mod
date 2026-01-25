@@ -61,7 +61,7 @@ require (
 	go.mongodb.org/mongo-driver v1.17.6
 	golang.org/x/crypto v0.46.0
 	golang.org/x/net v0.48.0
-	golang.org/x/oauth2 v0.0.0-20190604053449-0f29369cfe45
+	golang.org/x/oauth2 v0.27.0
 	golang.org/x/sys v0.40.0
 	google.golang.org/api v0.7.0
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013
