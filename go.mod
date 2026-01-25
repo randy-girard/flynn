@@ -27,7 +27,7 @@ require (
 	github.com/garyburd/redigo v0.0.0-20151219232044-836b6e58b335
 	github.com/go-bindata/go-bindata v3.1.2+incompatible
 	github.com/go-sql-driver/mysql v0.0.0-20160125151823-7c7f55628262
-	github.com/golang/glog v0.0.0-20160126235308-23def4e6c14b
+	github.com/golang/glog v1.2.4
 	github.com/golang/groupcache v0.0.0-20160803200408-a6b377e3400b
 	github.com/golang/protobuf v1.4.1
 	github.com/google/go-cmp v0.6.0
