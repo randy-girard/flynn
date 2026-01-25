@@ -81,7 +81,7 @@ require (
 	github.com/containerd/console v0.0.0-20181022165439-0650fd9eeb50 // indirect
 	github.com/coreos/go-systemd v0.0.0-20190719114852-fd7a80b32e1f // indirect
 	github.com/creack/pty v1.1.18 // indirect
-	github.com/cyphar/filepath-securejoin v0.2.2 // indirect
+	github.com/cyphar/filepath-securejoin v0.2.4 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ini/ini v1.12.0 // indirect
 	github.com/go-martini/martini v0.0.0-20170121215854-22fa46961aab // indirect
