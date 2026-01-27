@@ -1,0 +1,123 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v2024.01.27.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build binaries
+        run: |
+          mkdir -p release-artifacts
+
+          # Set build environment
+          export GO111MODULE=on
+          export GOFLAGS="-mod=vendor"
+          LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${{ steps.version.outputs.VERSION }}"
+
+          # Build flynn-host (Linux amd64)
+          echo "Building flynn-host-linux-amd64..."
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o release-artifacts/flynn-host-linux-amd64 ./host
+
+          # Build flynn-init (static binary)
+          echo "Building flynn-init-linux-amd64..."
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o release-artifacts/flynn-init-linux-amd64 ./host/flynn-init
+
+          # Build flynn CLI for multiple platforms
+          for platform in "linux/amd64" "darwin/amd64" "darwin/arm64" "windows/amd64"; do
+            GOOS="${platform%/*}"
+            GOARCH="${platform#*/}"
+            output="flynn-${GOOS}-${GOARCH}"
+            if [ "${GOOS}" = "windows" ]; then
+              output="${output}.exe"
+            fi
+            echo "Building ${output}..."
+            CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" go build -ldflags "${LDFLAGS}" -o "release-artifacts/${output}" ./cli
+          done
+
+      - name: Compress binaries
+        run: |
+          cd release-artifacts
+          for file in flynn-*; do
+            if [ -f "$file" ]; then
+              gzip -k "$file"
+              rm "$file"
+            fi
+          done
+
+      - name: Generate checksums
+        run: |
+          cd release-artifacts
+          sha512sum *.gz > checksums.sha512
+
+      - name: List artifacts
+        run: |
+          echo "Release artifacts:"
+          ls -la release-artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: Flynn ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            release-artifacts/*.gz
+            release-artifacts/checksums.sha512
+          body: |
+            ## Flynn ${{ steps.version.outputs.VERSION }}
+
+            ### Installation
+
+            Install from this release:
+            ```bash
+            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/install-flynn | sudo bash
+            ```
+
+            ### Binaries
+
+            | Binary | Platform |
+            |--------|----------|
+            | flynn-host-linux-amd64.gz | Linux (amd64) |
+            | flynn-init-linux-amd64.gz | Linux (amd64) |
+            | flynn-linux-amd64.gz | CLI for Linux |
+            | flynn-darwin-amd64.gz | CLI for macOS (Intel) |
+            | flynn-darwin-arm64.gz | CLI for macOS (Apple Silicon) |
+            | flynn-windows-amd64.exe.gz | CLI for Windows |
+
+            ### Checksums
+
+            All binaries are verified using SHA512 checksums. See `checksums.sha512` for verification.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

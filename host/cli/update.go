@@ -19,6 +19,7 @@ import (
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/exec"
+	"github.com/flynn/flynn/pkg/installsource"
 	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/flynn/pkg/tufutil"
 	"github.com/flynn/flynn/pkg/version"
@@ -36,10 +37,19 @@ Options:
   -t --tuf-db=<path>       local TUF file [default: /etc/flynn/tuf.db]
   -b --bin-dir=<dir>       directory to download binaries to [default: /usr/local/bin]
   -c --config-dir=<dir>    directory to download config files to [default: /etc/flynn]
+  -s --source=<source>     force update source: "github" or "tuf" (auto-detected if not specified)
+  --github-repo=<repo>     GitHub repository for updates [default: flynn/flynn]
+  --check                  only check for updates, don't install
+  --version=<ver>          update to a specific version
+  --force                  force update even if already on the latest version
   --is-latest              internal flag (skip updating local tuf DB and re-execing latest binary)
   --is-tempfile            internal flag (binary is a temp file which requires removal)
 
-Update Flynn components`)
+Update Flynn components.
+
+The update command automatically detects how Flynn was installed (via GitHub
+Releases or TUF repository) and uses the same source for updates. You can
+override this with the --source flag.`)
 }
 
 // minVersion is the minimum version that can be updated from.
@@ -56,7 +66,49 @@ Please see the updating documentation at https://flynn.io/docs/production#backup
 
 func runUpdate(args *docopt.Args) error {
 	log := log15.New()
+	configDir := args.String["--config-dir"]
 
+	// Determine update source: explicit flag, install-source.json, or default to TUF
+	source := args.String["--source"]
+	var installSource *installsource.InstallSource
+
+	if source == "" {
+		// Try to detect from install-source.json
+		var err error
+		installSource, err = installsource.Load(configDir)
+		if err == nil {
+			source = installSource.Source
+			log.Info("detected installation source", "source", source, "version", installSource.Version)
+		} else {
+			// No install-source.json found, default to TUF (legacy installation)
+			source = installsource.SourceTUF
+			log.Info("no install-source.json found, defaulting to TUF updates")
+		}
+	} else {
+		log.Info("using explicit update source", "source", source)
+	}
+
+	// Validate source
+	if source != installsource.SourceGitHub && source != installsource.SourceTUF {
+		return fmt.Errorf("invalid source %q, must be 'github' or 'tuf'", source)
+	}
+
+	// Route to appropriate updater
+	if source == installsource.SourceGitHub {
+		repo := args.String["--github-repo"]
+		if installSource != nil && installSource.Repository != "" && repo == "flynn/flynn" {
+			// Use the repository from install-source.json if not explicitly overridden
+			repo = installSource.Repository
+		}
+		return runGitHubUpdate(args, repo, configDir, log)
+	}
+
+	// Continue with TUF update (existing logic)
+	return runTUFUpdate(args, configDir, log)
+}
+
+// runTUFUpdate performs an update using the TUF repository (original update logic)
+func runTUFUpdate(args *docopt.Args, configDir string, log log15.Logger) error {
 	// create and update a TUF client
 	log.Info("initializing TUF client")
 	local, err := tuf.FileLocalStore(args.String["--tuf-db"])
@@ -72,7 +124,7 @@ func runUpdate(args *docopt.Args) error {
 	client := tuf.NewClient(local, remote)
 
 	if !args.Bool["--is-latest"] {
-		return updateAndExecLatest(args.String["--config-dir"], client, log)
+		return updateAndExecLatest(configDir, client, log)
 	}
 
 	// unlink the current binary if it is a temp file
