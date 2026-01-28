@@ -1,0 +1,433 @@
+#!/bin/bash
+#
+# A script to install Flynn from GitHub Releases.
+# This is a NEW script - the existing install-flynn script remains unchanged.
+
+set -eo pipefail
+
+GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
+VERSION="${FLYNN_VERSION:-latest}"
+CONFIG_DIR="/etc/flynn"
+BIN_DIR="/usr/local/bin"
+
+usage() {
+  cat <<USAGE >&2
+usage: $0 [options]
+
+A script to install Flynn from GitHub Releases on Ubuntu 16.04, 18.04, and 24.04.
+See https://flynn.io/docs/installation/manual for further information.
+
+OPTIONS:
+  -h, --help                       Show this message
+  -v, --version VERSION            Install explicit VERSION (e.g. v2024.01.27.0) [default: latest]
+  -r, --repo OWNER/REPO            GitHub repository [default: flynn/flynn]
+  --clean                          Install from a clean state (implies --remove) [DANGER: removes all data]
+  --remove                         Remove existing Flynn installation [DANGER: removes all data]
+  --yes                            Automatic yes to prompts
+  --no-ntp                         Don't install ntp package
+  --zpool-create-device DEVICE     Device to create the flynn-default zpool on
+  --zpool-create-options OPTIONS   Options to pass to 'zpool create'
+
+VARIABLES:
+  FLYNN_VERSION          An explicit version to install (e.g. v2024.01.27.0)
+  FLYNN_GITHUB_REPO      GitHub repository (e.g. flynn/flynn)
+USAGE
+}
+
+main() {
+  if ! is_root; then
+    fail "this script must be executed as the root user"
+  fi
+
+  if ! is_ubuntu_xenial && ! is_ubuntu_bionic && ! is_ubuntu_noble; then
+    fail "this script is only compatible with Ubuntu 16.04, 18.04, and 24.04"
+  fi
+
+  if ! check_overlayfs; then
+    fail "OverlayFS is missing or does not support multiple lower directories"
+  fi
+
+  check_installed "curl" "sha512sum"
+
+  local install=true
+  local remove=false
+  local assume_yes=false
+  local install_ntp=true
+  local zpool_dev
+  local zpool_opts
+
+  export DEBIAN_FRONTEND=noninteractive
+
+  while true; do
+    case "$1" in
+      -v | --version)
+        if [[ -z "$2" ]]; then fail "--version requires an argument"; fi
+        VERSION="$2"
+        shift 2
+        ;;
+      -r | --repo)
+        if [[ -z "$2" ]]; then fail "--repo requires an argument"; fi
+        GITHUB_REPO="$2"
+        shift 2
+        ;;
+      --clean)
+        remove=true
+        shift
+        ;;
+      --remove)
+        remove=true
+        install=false
+        shift
+        ;;
+      --yes)
+        assume_yes=true
+        shift
+        ;;
+      --no-ntp)
+        install_ntp=false
+        shift
+        ;;
+      --zpool-create-device)
+        if [[ -z "$2" ]]; then fail "--zpool-create-device requires an argument"; fi
+        zpool_dev="$2"
+        shift 2
+        ;;
+      --zpool-create-options)
+        if [[ -z "$2" ]]; then fail "--zpool-create-options requires an argument"; fi
+        zpool_opts="$2"
+        shift 2
+        ;;
+      -h | --help)
+        usage
+        exit 1
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  if [[ $# -ne 0 ]]; then
+    usage
+    exit 1
+  fi
+
+  if $remove; then
+    do_remove $assume_yes
+  fi
+
+  if [[ -e "${BIN_DIR}/flynn-host" ]]; then
+    fail "Flynn is already installed. Run 'flynn-host update' to update, or use --clean to remove first"
+  fi
+
+  if ! $install; then
+    exit
+  fi
+
+  # Determine version
+  if [[ "${VERSION}" == "latest" ]]; then
+    info "fetching latest release version from GitHub..."
+    # Use grep/sed instead of jq since jq isn't installed yet
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | \
+      grep -o '"tag_name":[^,]*' | \
+      sed 's/"tag_name":[[:space:]]*"//g' | sed 's/"//g')
+    if [[ -z "${VERSION}" || "${VERSION}" == "null" ]]; then
+      fail "failed to determine latest version from GitHub"
+    fi
+  fi
+
+  info "installing Flynn ${VERSION} from GitHub (${GITHUB_REPO})"
+
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+
+  local packages=("iptables" "zfsutils-linux" "jq")
+  if $install_ntp; then
+    packages+=("ntp")
+  fi
+
+  info "installing runtime dependencies"
+  run apt-get update
+  run apt-get install --yes ${packages[@]}
+  info "loading zfs kernel module"
+  run modprobe zfs
+
+  # Create temp directory
+  local tmp="$(mktemp --directory)"
+  trap "rm -rf ${tmp}" EXIT
+  cd "${tmp}"
+
+  # Download checksums first
+  info "downloading checksums..."
+  if ! curl -fsSL -o checksums.sha512 "${release_url}/checksums.sha512"; then
+    fail "failed to download checksums from ${release_url}"
+  fi
+
+  # Download and install flynn-host
+  download_and_install_binary "flynn-host.gz" "flynn-host"
+  download_and_install_binary "flynn-init.gz" "flynn-init"
+
+  if [[ -n "${zpool_dev}" ]]; then
+    info "creating flynn-default zpool"
+    run zpool create ${zpool_opts} "flynn-default" ${zpool_dev}
+  fi
+
+  # Create directories
+  mkdir -p "${CONFIG_DIR}"
+  mkdir -p "/var/lib/flynn/layer-cache"
+
+  # Download and install manifests
+  info "downloading manifests..."
+  download_and_extract_gz "bootstrap-manifest.json.gz" "${CONFIG_DIR}/bootstrap-manifest.json"
+  download_and_extract_gz "images.json.gz" "${CONFIG_DIR}/images.json"
+
+  # Download and install container images
+  info "downloading container image manifests..."
+  if curl -fsSL -o "images.tar.gz" "${release_url}/images.tar.gz" 2>/dev/null; then
+    info "extracting image manifests..."
+    mkdir -p "${CONFIG_DIR}/images"
+    tar xzf "images.tar.gz" -C "${CONFIG_DIR}/"
+    info "  extracted $(ls ${CONFIG_DIR}/images/*.json 2>/dev/null | wc -l) image manifests"
+  else
+    warn "images.tar.gz not found, skipping image manifests"
+  fi
+
+  # Download and install squashfs layers
+  # Extract layer IDs from images.json and download each layer individually
+  # (GitHub has a 2GB file size limit, so we can't use a single layers.tar)
+  info "downloading container layers (this may take a while)..."
+
+  # Parse images.json to get unique layer IDs
+  # The manifest structure is: { "image_name": { "manifest": { "rootfs": [{ "layers": [{ "id": "..." }] }] } } }
+  layer_ids=$(cat "${CONFIG_DIR}/images.json" | \
+    grep -o '"id":"[^"]*"' | \
+    sed 's/"id":"//g' | sed 's/"//g' | \
+    sort -u)
+
+  layer_count=0
+  layer_total=$(echo "$layer_ids" | wc -w)
+
+  for layer_id in $layer_ids; do
+    ((layer_count++)) || true
+
+    # Skip if layer already exists
+    if [[ -f "/var/lib/flynn/layer-cache/${layer_id}.squashfs" ]]; then
+      info "  [${layer_count}/${layer_total}] ${layer_id} (cached)"
+      continue
+    fi
+
+    info "  [${layer_count}/${layer_total}] downloading ${layer_id}..."
+
+    # Download the squashfs layer
+    if curl -fsSL -o "/var/lib/flynn/layer-cache/${layer_id}.squashfs" \
+        "${release_url}/${layer_id}.squashfs" 2>/dev/null; then
+      # Also try to download the layer config JSON
+      curl -fsSL -o "/var/lib/flynn/layer-cache/${layer_id}.json" \
+        "${release_url}/${layer_id}.json" 2>/dev/null || true
+    else
+      warn "    failed to download ${layer_id}.squashfs"
+    fi
+  done
+
+  info "  downloaded $(ls /var/lib/flynn/layer-cache/*.squashfs 2>/dev/null | wc -l) layers"
+
+  # Record installation source for future updates
+  info "recording installation source..."
+  cat > "${CONFIG_DIR}/install-source.json" <<EOF
+{
+  "source": "github",
+  "repository": "${GITHUB_REPO}",
+  "version": "${VERSION}",
+  "installed_at": "$(date -Iseconds)"
+}
+EOF
+
+  install_systemd_unit
+
+  info "installation complete!"
+  info "Flynn will use GitHub Releases for future updates."
+  info "Run 'flynn-host update' to check for and install updates."
+}
+
+download_and_install_binary() {
+  local asset_name="$1"
+  local dest_name="$2"
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+
+  info "downloading ${asset_name}..."
+  if ! curl -fsSL -o "${asset_name}" "${release_url}/${asset_name}"; then
+    fail "failed to download ${asset_name} from ${release_url}"
+  fi
+
+  info "verifying checksum for ${asset_name}..."
+  if ! grep "${asset_name}" checksums.sha512 | sha512sum --check --status; then
+    fail "checksum verification failed for ${asset_name}"
+  fi
+
+  info "installing ${dest_name}..."
+  gunzip -f "${asset_name}"
+  chmod +x "${asset_name%.gz}"
+  mv "${asset_name%.gz}" "${BIN_DIR}/${dest_name}"
+}
+
+download_and_extract_gz() {
+  local asset_name="$1"
+  local dest_path="$2"
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+
+  info "downloading ${asset_name}..."
+  if ! curl -fsSL -o "${asset_name}" "${release_url}/${asset_name}"; then
+    fail "failed to download ${asset_name} from ${release_url}"
+  fi
+
+  info "verifying checksum for ${asset_name}..."
+  if ! grep "${asset_name}" checksums.sha512 | sha512sum --check --status; then
+    fail "checksum verification failed for ${asset_name}"
+  fi
+
+  info "extracting to ${dest_path}..."
+  gunzip -c "${asset_name}" > "${dest_path}"
+}
+
+is_root() {
+  [[ $(id -u) -eq 0 ]]
+}
+
+is_ubuntu_noble() {
+  grep -qF "Ubuntu 24.04" /etc/os-release &>/dev/null
+}
+
+is_ubuntu_bionic() {
+  grep -qF "Ubuntu 18.04" /etc/os-release &>/dev/null
+}
+
+is_ubuntu_xenial() {
+  grep -qF "Ubuntu 16.04" /etc/os-release &>/dev/null
+}
+
+install_systemd_unit() {
+  info "installing systemd unit"
+
+  cat > /lib/systemd/system/flynn-host.service <<EOF
+[Unit]
+Description=Flynn host daemon
+Documentation=https://flynn.io/docs
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/flynn-host daemon
+Restart=on-failure
+Delegate=yes
+KillMode=process
+LimitNOFILE=10000
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl enable flynn-host.service
+}
+
+do_remove() {
+  local assume_yes=$1
+
+  warn "*** WARNING ***"
+  warn "About to stop Flynn and remove all existing data"
+
+  if ! $assume_yes; then
+    warn "Are you sure this is what you want?"
+    echo -n "(yes/no): "
+    while read answer; do
+      case "${answer}" in
+        yes) assume_yes=true; break ;;
+        no)  break ;;
+        *)   echo -n "Please type 'yes' or 'no': " ;;
+      esac
+    done
+    if ! $assume_yes; then
+      exit
+    fi
+  fi
+
+  info "stopping flynn-host daemon"
+  systemctl stop flynn-host || true
+  systemctl disable flynn-host || true
+
+  info "killing old containers"
+  start-stop-daemon --stop --oknodo --retry 5 --name ".containerinit" || true
+
+  info "destroying ZFS volumes"
+  for path in $(grep zfs /proc/mounts 2>/dev/null | cut -d ' ' -f2); do
+    umount "${path}" || true
+  done
+  if which flynn-host &>/dev/null; then
+    flynn-host destroy-volumes --include-data || true
+  fi
+  if zpool list 2>/dev/null | grep -q "flynn-default"; then
+    zpool destroy flynn-default || true
+  fi
+
+  info "removing Flynn files and directories"
+  rm -rf \
+    /usr/local/bin/flynn* \
+    /var/lib/flynn \
+    /etc/flynn \
+    /etc/init/flynn-host.conf \
+    /lib/systemd/system/flynn-host.service
+
+  info "Flynn successfully removed"
+}
+
+check_overlayfs() {
+  if ! modprobe "overlay" 2>/dev/null; then
+    return 1
+  fi
+  grep -q "overlay$" /proc/filesystems
+}
+
+check_installed() {
+  local missing=()
+
+  for bin in $@; do
+    if ! which "${bin}" &>/dev/null; then
+      missing+=("${bin}")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    fail "this script requires: ${missing[@]}"
+  fi
+}
+
+run() {
+  local cmd=$@
+  info "running \"${cmd}\""
+  $cmd
+  local status=$?
+  if [[ $status -ne 0 ]]; then
+    fail "failed to run \"${cmd}\", exit status ${status}"
+  fi
+}
+
+timestamp() {
+  date "+%H:%M:%S.%3N"
+}
+
+info() {
+  local msg=$1
+  echo -e "\e[1;32m===> $(timestamp) ${msg}\e[0m"
+}
+
+warn() {
+  local msg=$1
+  echo -e "\e[1;33m===> $(timestamp) ${msg}\e[0m"
+}
+
+fail() {
+  local msg=$1
+  echo -e "\e[1;31m===> $(timestamp) ERROR: ${msg}\e[0m"
+  exit 1
+}
+
+main "$@"
+

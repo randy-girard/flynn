@@ -1,0 +1,143 @@
+#!/bin/bash
+#
+# Package Flynn binaries for GitHub Release.
+# This script creates gzipped binaries and generates SHA512 checksums.
+
+set -eo pipefail
+
+usage() {
+  cat <<USAGE >&2
+usage: $0 [options] <version>
+
+Package Flynn binaries for GitHub Release.
+
+OPTIONS:
+  -h, --help              Show this message
+  -o, --output-dir DIR    Output directory for release artifacts [default: release-artifacts]
+  -b, --bin-dir DIR       Directory containing built binaries [default: build/bin]
+
+ARGUMENTS:
+  version                 Version string (e.g., v2024.01.27.0)
+
+EXAMPLE:
+  $0 v2024.01.27.0
+  $0 --output-dir /tmp/release v2024.01.27.0
+USAGE
+}
+
+main() {
+  local output_dir="release-artifacts"
+  local bin_dir="build/bin"
+  local version=""
+
+  while true; do
+    case "$1" in
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      -o | --output-dir)
+        if [[ -z "$2" ]]; then
+          fail "--output-dir requires an argument"
+        fi
+        output_dir="$2"
+        shift 2
+        ;;
+      -b | --bin-dir)
+        if [[ -z "$2" ]]; then
+          fail "--bin-dir requires an argument"
+        fi
+        bin_dir="$2"
+        shift 2
+        ;;
+      *)
+        break
+        ;;
+    esac
+  done
+
+  if [[ $# -ne 1 ]]; then
+    usage
+    exit 1
+  fi
+
+  version="$1"
+
+  if [[ ! -d "${bin_dir}" ]]; then
+    fail "Binary directory '${bin_dir}' does not exist. Run 'make build' first."
+  fi
+
+  info "packaging Flynn ${version} for GitHub Release"
+  info "source: ${bin_dir}"
+  info "output: ${output_dir}"
+
+  mkdir -p "${output_dir}"
+
+  # List of binaries to package
+  local binaries=(
+    "flynn-host:flynn-host-linux-amd64"
+    "flynn-init:flynn-init-linux-amd64"
+    "flynn-linux-amd64:flynn-linux-amd64"
+    "flynn-darwin-amd64:flynn-darwin-amd64"
+    "flynn-darwin-arm64:flynn-darwin-arm64"
+    "flynn-windows-amd64.exe:flynn-windows-amd64.exe"
+  )
+
+  local packaged=0
+
+  for entry in "${binaries[@]}"; do
+    local src="${entry%:*}"
+    local dest="${entry#*:}"
+    local src_path="${bin_dir}/${src}"
+    local dest_path="${output_dir}/${dest}.gz"
+
+    if [[ -f "${src_path}" ]]; then
+      info "packaging ${src} -> ${dest}.gz"
+      gzip -c "${src_path}" > "${dest_path}"
+      ((packaged++))
+    else
+      warn "skipping ${src} (not found)"
+    fi
+  done
+
+  if [[ ${packaged} -eq 0 ]]; then
+    fail "no binaries were packaged"
+  fi
+
+  info "generating SHA512 checksums"
+  cd "${output_dir}"
+  sha512sum *.gz > checksums.sha512
+
+  info "packaging complete!"
+  info "packaged ${packaged} binaries"
+  echo ""
+  info "release artifacts:"
+  ls -la
+
+  echo ""
+  info "checksums:"
+  cat checksums.sha512
+}
+
+timestamp() {
+  date "+%H:%M:%S.%3N"
+}
+
+info() {
+  local msg=$1
+  echo -e "\e[1;32m===> $(timestamp) ${msg}\e[0m"
+}
+
+warn() {
+  local msg=$1
+  echo -e "\e[1;33m===> $(timestamp) ${msg}\e[0m"
+}
+
+fail() {
+  local msg=$1
+  echo -e "\e[1;31m===> $(timestamp) ERROR: ${msg}\e[0m"
+  exit 1
+}
+
+main "$@"
+
