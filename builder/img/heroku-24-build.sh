@@ -53,8 +53,8 @@ packages=(
   libzstd-dev
   patchelf
   pigz # Parallel gzip, used by slugbuilder for build cache compression
-  python3 # Often needed during the building of non-Python apps. e.g. For Node.js packages that use node-gyp.
-  ruby # Used by slugbuilder to parse Procfile and .release YAML files
+  python3-dev
+  ruby-dev
   zlib1g-dev
 )
 
