@@ -48,6 +48,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
+  config.disksize.size = "80GB"  
   config.vm.provider "virtualbox" do |v, override|
     v.memory = ENV["VAGRANT_MEMORY"] || 16382  # Increased for running multiple services
     v.cpus = ENV["VAGRANT_CPUS"] || 4

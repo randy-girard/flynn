@@ -5,7 +5,7 @@
       {
         "keytype": "ed25519",
         "keyval": {
-          "public": "0b707867007634fc2938386455ef0dcb17658300ead1d14e52453f4e773804f0"
+          "public": "781538e2a9bda1f28592866b305f4bfd67e5c36715693347c6eb3480082f7a32"
         }
       }
     ]
@@ -16,7 +16,7 @@
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 81035264,
     "hashes": {
-      "sha512_256": "0b361a667eedcb512f3c71622a28950ea5b0e92760e2db3040487f653c69c01d"
+      "sha512_256": "6b951fdaaaa1b8f2342a88872e15e7a69ba8fccb9e464784cc810eb0a8fd7314"
     }
   },
   "images": [

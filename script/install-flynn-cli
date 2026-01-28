@@ -1,0 +1,249 @@
+#!/bin/bash
+#
+# Install Flynn CLI
+#
+# This script detects your OS and architecture and installs the appropriate
+# Flynn CLI binary from GitHub Releases.
+#
+# Usage:
+#   curl -fsSL https://raw.githubusercontent.com/randy-girard/flynn/main/script/install-flynn-cli | sudo bash
+#
+# Or with a specific version:
+#   curl -fsSL https://raw.githubusercontent.com/randy-girard/flynn/main/script/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
+#
+
+set -eo pipefail
+
+GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
+VERSION="${FLYNN_VERSION:-latest}"
+INSTALL_DIR="${FLYNN_INSTALL_DIR:-/usr/local/bin}"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+info() {
+  echo -e "${GREEN}[INFO]${NC} $*"
+}
+
+warn() {
+  echo -e "${YELLOW}[WARN]${NC} $*" >&2
+}
+
+fail() {
+  echo -e "${RED}[ERROR]${NC} $*" >&2
+  exit 1
+}
+
+usage() {
+  cat <<USAGE
+Flynn CLI Installer
+
+Usage: $0 [OPTIONS]
+
+OPTIONS:
+  -h, --help              Show this help message
+  -v, --version VERSION   Install specific version (e.g., v2024.01.27.0) [default: latest]
+  -d, --dir DIRECTORY     Installation directory [default: /usr/local/bin]
+  -r, --repo OWNER/REPO   GitHub repository [default: randy-girard/flynn]
+
+ENVIRONMENT VARIABLES:
+  FLYNN_VERSION       Version to install
+  FLYNN_GITHUB_REPO   GitHub repository
+  FLYNN_INSTALL_DIR   Installation directory
+
+EXAMPLES:
+  # Install latest version
+  curl -fsSL .../install-flynn-cli | sudo bash
+
+  # Install specific version
+  curl -fsSL .../install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
+
+  # Install to custom directory (no sudo needed if writable)
+  curl -fsSL .../install-flynn-cli | bash -s -- --dir ~/bin
+USAGE
+}
+
+detect_os() {
+  local os
+  os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+  case "$os" in
+    linux)  echo "linux" ;;
+    darwin) echo "darwin" ;;
+    *)      fail "Unsupported operating system: $os" ;;
+  esac
+}
+
+detect_arch() {
+  local arch
+  arch="$(uname -m)"
+  case "$arch" in
+    x86_64|amd64)   echo "amd64" ;;
+    i386|i686)      echo "386" ;;
+    aarch64|arm64)  echo "arm64" ;;
+    *)              fail "Unsupported architecture: $arch" ;;
+  esac
+}
+
+check_dependencies() {
+  for cmd in curl gunzip; do
+    if ! command -v "$cmd" &> /dev/null; then
+      fail "Required command not found: $cmd"
+    fi
+  done
+  
+  # Check for sha512sum or shasum
+  if ! command -v sha512sum &> /dev/null && ! command -v shasum &> /dev/null; then
+    fail "Required command not found: sha512sum or shasum"
+  fi
+}
+
+verify_checksum() {
+  local file="$1"
+  local expected="$2"
+  local actual
+  
+  if command -v sha512sum &> /dev/null; then
+    actual=$(sha512sum "$file" | awk '{print $1}')
+  else
+    actual=$(shasum -a 512 "$file" | awk '{print $1}')
+  fi
+  
+  if [[ "$actual" != "$expected" ]]; then
+    fail "Checksum verification failed for $file"
+  fi
+}
+
+get_latest_version() {
+  local url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+  local version
+  
+  version=$(curl -fsSL "$url" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"tag_name": *"([^"]+)".*/\1/')
+  
+  if [[ -z "$version" ]]; then
+    fail "Failed to get latest version from GitHub. Check your internet connection or specify a version with --version"
+  fi
+  
+  echo "$version"
+}
+
+main() {
+  # Parse arguments
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      -v|--version)
+        VERSION="$2"
+        shift 2
+        ;;
+      -d|--dir)
+        INSTALL_DIR="$2"
+        shift 2
+        ;;
+      -r|--repo)
+        GITHUB_REPO="$2"
+        shift 2
+        ;;
+      *)
+        fail "Unknown option: $1. Use --help for usage."
+        ;;
+    esac
+  done
+
+  info "Flynn CLI Installer"
+  echo ""
+
+  # Check dependencies
+  check_dependencies
+
+  # Detect platform
+  local os arch binary_name
+  os=$(detect_os)
+  arch=$(detect_arch)
+  binary_name="flynn-${os}-${arch}"
+  
+  info "Detected platform: ${os}/${arch}"
+
+  # Check for arm64 support
+  if [[ "$arch" == "arm64" ]]; then
+    warn "arm64 binaries may not be available yet. Falling back to amd64 via Rosetta/emulation."
+    arch="amd64"
+    binary_name="flynn-${os}-${arch}"
+  fi
+
+  # Get version
+  if [[ "$VERSION" == "latest" ]]; then
+    info "Fetching latest version..."
+    VERSION=$(get_latest_version)
+  fi
+  info "Version: ${VERSION}"
+
+  # Build URLs
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+  local binary_url="${release_url}/${binary_name}.gz"
+  local checksum_url="${release_url}/checksums.sha512"
+
+  # Create temp directory
+  local tmp_dir
+  tmp_dir=$(mktemp -d)
+  trap "rm -rf '$tmp_dir'" EXIT
+
+  cd "$tmp_dir"
+
+  # Download checksums
+  info "Downloading checksums..."
+  if ! curl -fsSL -o checksums.sha512 "$checksum_url"; then
+    fail "Failed to download checksums from ${checksum_url}"
+  fi
+
+  # Download binary
+  info "Downloading ${binary_name}.gz..."
+  if ! curl -fsSL -o "${binary_name}.gz" "$binary_url"; then
+    fail "Failed to download ${binary_name}.gz from ${binary_url}"
+  fi
+
+  # Verify checksum
+  info "Verifying checksum..."
+  local expected_checksum
+  expected_checksum=$(grep "${binary_name}.gz" checksums.sha512 | awk '{print $1}')
+  if [[ -z "$expected_checksum" ]]; then
+    fail "Checksum not found for ${binary_name}.gz in checksums.sha512"
+  fi
+  verify_checksum "${binary_name}.gz" "$expected_checksum"
+  info "Checksum verified!"
+
+  # Decompress
+  info "Decompressing..."
+  gunzip "${binary_name}.gz"
+  chmod +x "${binary_name}"
+
+  # Install
+  info "Installing to ${INSTALL_DIR}/flynn..."
+  mkdir -p "$INSTALL_DIR"
+  mv "${binary_name}" "${INSTALL_DIR}/flynn"
+
+  # Verify installation
+  if "${INSTALL_DIR}/flynn" version &>/dev/null; then
+    local installed_version
+    installed_version=$("${INSTALL_DIR}/flynn" version 2>/dev/null || echo "unknown")
+    echo ""
+    info "Flynn CLI installed successfully!"
+    echo ""
+    echo "  Version:  ${VERSION}"
+    echo "  Location: ${INSTALL_DIR}/flynn"
+    echo ""
+    echo "Run 'flynn help' to get started."
+  else
+    echo ""
+    info "Flynn CLI installed to ${INSTALL_DIR}/flynn"
+    echo ""
+    echo "Note: Make sure ${INSTALL_DIR} is in your PATH."
+  fi
+}
+
+main "$@"

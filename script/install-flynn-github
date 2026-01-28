@@ -5,7 +5,7 @@
 
 set -eo pipefail
 
-GITHUB_REPO="${FLYNN_GITHUB_REPO:-flynn/flynn}"
+GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 VERSION="${FLYNN_VERSION:-latest}"
 CONFIG_DIR="/etc/flynn"
 BIN_DIR="/usr/local/bin"
@@ -47,7 +47,7 @@ main() {
     fail "OverlayFS is missing or does not support multiple lower directories"
   fi
 
-  check_installed "curl" "sha512sum" "jq"
+  check_installed "curl" "sha512sum"
 
   local install=true
   local remove=false
@@ -127,7 +127,10 @@ main() {
   # Determine version
   if [[ "${VERSION}" == "latest" ]]; then
     info "fetching latest release version from GitHub..."
-    VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | jq -r .tag_name)
+    # Use grep/sed instead of jq since jq isn't installed yet
+    VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | \
+      grep -o '"tag_name":[^,]*' | \
+      sed 's/"tag_name":[[:space:]]*"//g' | sed 's/"//g')
     if [[ -z "${VERSION}" || "${VERSION}" == "null" ]]; then
       fail "failed to determine latest version from GitHub"
     fi
@@ -137,7 +140,7 @@ main() {
 
   local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
 
-  local packages=("iptables" "zfsutils-linux")
+  local packages=("iptables" "zfsutils-linux" "jq")
   if $install_ntp; then
     packages+=("ntp")
   fi
@@ -160,17 +163,75 @@ main() {
   fi
 
   # Download and install flynn-host
-  download_and_install_binary "flynn-host-linux-amd64.gz" "flynn-host"
-  download_and_install_binary "flynn-init-linux-amd64.gz" "flynn-init"
+  download_and_install_binary "flynn-host.gz" "flynn-host"
+  download_and_install_binary "flynn-init.gz" "flynn-init"
 
   if [[ -n "${zpool_dev}" ]]; then
     info "creating flynn-default zpool"
     run zpool create ${zpool_opts} "flynn-default" ${zpool_dev}
   fi
 
+  # Create directories
+  mkdir -p "${CONFIG_DIR}"
+  mkdir -p "/var/lib/flynn/layer-cache"
+
+  # Download and install manifests
+  info "downloading manifests..."
+  download_and_extract_gz "bootstrap-manifest.json.gz" "${CONFIG_DIR}/bootstrap-manifest.json"
+  download_and_extract_gz "images.json.gz" "${CONFIG_DIR}/images.json"
+
+  # Download and install container images
+  info "downloading container image manifests..."
+  if curl -fsSL -o "images.tar.gz" "${release_url}/images.tar.gz" 2>/dev/null; then
+    info "extracting image manifests..."
+    mkdir -p "${CONFIG_DIR}/images"
+    tar xzf "images.tar.gz" -C "${CONFIG_DIR}/"
+    info "  extracted $(ls ${CONFIG_DIR}/images/*.json 2>/dev/null | wc -l) image manifests"
+  else
+    warn "images.tar.gz not found, skipping image manifests"
+  fi
+
+  # Download and install squashfs layers
+  # Extract layer IDs from images.json and download each layer individually
+  # (GitHub has a 2GB file size limit, so we can't use a single layers.tar)
+  info "downloading container layers (this may take a while)..."
+
+  # Parse images.json to get unique layer IDs
+  # The manifest structure is: { "image_name": { "manifest": { "rootfs": [{ "layers": [{ "id": "..." }] }] } } }
+  layer_ids=$(cat "${CONFIG_DIR}/images.json" | \
+    grep -o '"id":"[^"]*"' | \
+    sed 's/"id":"//g' | sed 's/"//g' | \
+    sort -u)
+
+  layer_count=0
+  layer_total=$(echo "$layer_ids" | wc -w)
+
+  for layer_id in $layer_ids; do
+    ((layer_count++)) || true
+
+    # Skip if layer already exists
+    if [[ -f "/var/lib/flynn/layer-cache/${layer_id}.squashfs" ]]; then
+      info "  [${layer_count}/${layer_total}] ${layer_id} (cached)"
+      continue
+    fi
+
+    info "  [${layer_count}/${layer_total}] downloading ${layer_id}..."
+
+    # Download the squashfs layer
+    if curl -fsSL -o "/var/lib/flynn/layer-cache/${layer_id}.squashfs" \
+        "${release_url}/${layer_id}.squashfs" 2>/dev/null; then
+      # Also try to download the layer config JSON
+      curl -fsSL -o "/var/lib/flynn/layer-cache/${layer_id}.json" \
+        "${release_url}/${layer_id}.json" 2>/dev/null || true
+    else
+      warn "    failed to download ${layer_id}.squashfs"
+    fi
+  done
+
+  info "  downloaded $(ls /var/lib/flynn/layer-cache/*.squashfs 2>/dev/null | wc -l) layers"
+
   # Record installation source for future updates
   info "recording installation source..."
-  mkdir -p "${CONFIG_DIR}"
   cat > "${CONFIG_DIR}/install-source.json" <<EOF
 {
   "source": "github",
@@ -206,6 +267,25 @@ download_and_install_binary() {
   gunzip -f "${asset_name}"
   chmod +x "${asset_name%.gz}"
   mv "${asset_name%.gz}" "${BIN_DIR}/${dest_name}"
+}
+
+download_and_extract_gz() {
+  local asset_name="$1"
+  local dest_path="$2"
+  local release_url="https://github.com/${GITHUB_REPO}/releases/download/${VERSION}"
+
+  info "downloading ${asset_name}..."
+  if ! curl -fsSL -o "${asset_name}" "${release_url}/${asset_name}"; then
+    fail "failed to download ${asset_name} from ${release_url}"
+  fi
+
+  info "verifying checksum for ${asset_name}..."
+  if ! grep "${asset_name}" checksums.sha512 | sha512sum --check --status; then
+    fail "checksum verification failed for ${asset_name}"
+  fi
+
+  info "extracting to ${dest_path}..."
+  gunzip -c "${asset_name}" > "${dest_path}"
 }
 
 is_root() {
