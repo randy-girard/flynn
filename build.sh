@@ -341,6 +341,111 @@ if $PUSH_TO_GITHUB; then
   # Create or update GitHub release
   echo "===> Pushing to GitHub Release ${VERSION}..."
 
+  # Generate release notes from commits since last release
+  echo "===> Generating release notes from commits..."
+  PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+  if [[ -n "${PREVIOUS_TAG}" ]]; then
+    echo "  Previous release: ${PREVIOUS_TAG}"
+    COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
+    COMMIT_COUNT=$(git rev-list --count "${COMMIT_RANGE}" 2>/dev/null || echo "0")
+    echo "  Found ${COMMIT_COUNT} commits since ${PREVIOUS_TAG}"
+  else
+    echo "  No previous tag found, using recent commits"
+    COMMIT_RANGE="HEAD~20..HEAD"
+    COMMIT_COUNT="recent"
+  fi
+
+  # Categorize commits by conventional commit type
+  FEAT_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  FIX_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  CHORE_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^chore" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  DOCS_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^docs" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  REFACTOR_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^refactor" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  PERF_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^perf" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  TEST_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^test" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  BUILD_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^build" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  CI_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^ci" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  # Other commits (don't match any conventional prefix)
+  OTHER_COMMITS=$(git log --pretty=format:"- %s (%h)" "${COMMIT_RANGE}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" || echo "")
+
+  # Build categorized release notes
+  RELEASE_NOTES=""
+  if [[ -n "${FEAT_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ✨ Features
+
+${FEAT_COMMITS}
+
+"
+  fi
+  if [[ -n "${FIX_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🐛 Bug Fixes
+
+${FIX_COMMITS}
+
+"
+  fi
+  if [[ -n "${PERF_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ⚡ Performance
+
+${PERF_COMMITS}
+
+"
+  fi
+  if [[ -n "${REFACTOR_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ♻️ Refactoring
+
+${REFACTOR_COMMITS}
+
+"
+  fi
+  if [[ -n "${DOCS_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 📚 Documentation
+
+${DOCS_COMMITS}
+
+"
+  fi
+  if [[ -n "${TEST_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🧪 Tests
+
+${TEST_COMMITS}
+
+"
+  fi
+  if [[ -n "${BUILD_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🏗️ Build
+
+${BUILD_COMMITS}
+
+"
+  fi
+  if [[ -n "${CI_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 👷 CI
+
+${CI_COMMITS}
+
+"
+  fi
+  if [[ -n "${CHORE_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🔧 Chores
+
+${CHORE_COMMITS}
+
+"
+  fi
+  if [[ -n "${OTHER_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 📦 Other Changes
+
+${OTHER_COMMITS}
+
+"
+  fi
+
+  # Fallback if no commits found
+  if [[ -z "${RELEASE_NOTES}" ]]; then
+    RELEASE_NOTES="No changes recorded."
+  fi
+
   # Check if release already exists
   if gh release view "${VERSION}" --repo "${GITHUB_REPO}" &> /dev/null; then
     echo "  Release ${VERSION} exists, updating..."
@@ -351,7 +456,12 @@ if $PUSH_TO_GITHUB; then
   gh release create "${VERSION}" \
     --repo "${GITHUB_REPO}" \
     --title "Flynn ${VERSION}" \
-    --notes "Flynn release ${VERSION}
+    --notes "## Flynn ${VERSION}
+
+**Full Changelog**: ${PREVIOUS_TAG:-initial}...${VERSION}
+
+${RELEASE_NOTES}
+---
 
 ## Install Flynn CLI
 
