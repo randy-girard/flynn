@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authorizer"
 	"github.com/flynn/flynn/controller/data"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/ctxhelper"
@@ -44,14 +43,7 @@ func (g *grpcAPI) authorize(ctx context.Context) (context.Context, error) {
 		return ctx, grpc.Errorf(codes.Unauthenticated, "no Authorization provided")
 	}
 
-	var token *authorizer.Token
-	var err error
-	// Try Bearer token first, then fall back to auth key
-	if strings.HasPrefix(auth[0], "Bearer ") {
-		token, err = g.authorizer.AuthorizeToken(auth[0])
-	} else {
-		token, err = g.authorizer.AuthorizeKey(auth[0])
-	}
+	token, err := g.authorizer.AuthorizeToken(auth[0])
 	if err != nil {
 		return ctx, grpc.Errorf(codes.Unauthenticated, "%s", err.Error())
 	}

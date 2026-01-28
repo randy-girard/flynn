@@ -11,8 +11,8 @@ import (
 )
 
 func init() {
-	SignerMap.Store(data.KeyTypeEd25519, NewP256Signer)
-	VerifierMap.Store(data.KeyTypeEd25519, NewP256Verifier)
+	SignerMap.Store(data.KeySchemeEd25519, NewP256Signer)
+	VerifierMap.Store(data.KeySchemeEd25519, NewP256Verifier)
 }
 
 func NewP256Signer() Signer {
@@ -62,9 +62,9 @@ type Ed25519PrivateKeyValue struct {
 type ed25519Signer struct {
 	ed25519.PrivateKey
 
-	keyType       data.KeyType
-	keyScheme     data.KeyScheme
-	keyAlgorithms []data.HashAlgorithm
+	keyType       string
+	keyScheme     string
+	keyAlgorithms []string
 }
 
 func GenerateEd25519Key() (*ed25519Signer, error) {

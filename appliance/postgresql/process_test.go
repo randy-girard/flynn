@@ -3,9 +3,6 @@ package postgresql
 import (
 	"errors"
 	"fmt"
-	"os"
-	"os/user"
-	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -19,43 +16,19 @@ import (
 )
 
 // Hook gocheck up to the "go test" runner
-func Test(t *testing.T) {
-	TestingT(t)
-}
+func Test(t *testing.T) { TestingT(t) }
 
 type PostgresSuite struct{}
 
 var _ = Suite(&PostgresSuite{})
 
 func (PostgresSuite) TestSingletonPrimary(c *C) {
-	dataDir := c.MkDir()
-
-	// If running as root, set up permissions for postgres user
-	if os.Geteuid() == 0 {
-		if u, err := user.Lookup("postgres"); err == nil {
-			if uid, err := strconv.Atoi(u.Uid); err == nil {
-				if gid, err := strconv.Atoi(u.Gid); err == nil {
-					parent := filepath.Dir(dataDir)
-					os.Chmod(parent, 0755)
-					os.Chown(dataDir, uid, gid)
-					os.Chmod(dataDir, 0700)
-				}
-			}
-		}
-	}
-
 	cfg := Config{
 		ID:        "node1",
 		Singleton: true,
-		DataDir:   dataDir,
+		DataDir:   c.MkDir(),
 		Port:      "6500",
 		OpTimeout: 30 * time.Second,
-		RunAsUser: func() string {
-			if os.Geteuid() == 0 {
-				return "postgres"
-			}
-			return ""
-		}(),
 	}
 
 	p := NewProcess(cfg)
@@ -101,39 +74,12 @@ func instance(p *Process) *discoverd.Instance {
 var newPort uint32 = 6510
 
 func NewTestProcess(c *C, n int) *Process {
-	dataDir := c.MkDir()
-
-	// If running as root, run postgres as the postgres user
-	if os.Geteuid() == 0 {
-		// Ensure postgres user can access the data directory and its parent
-		if u, err := user.Lookup("postgres"); err == nil {
-			if uid, err := strconv.Atoi(u.Uid); err == nil {
-				if gid, err := strconv.Atoi(u.Gid); err == nil {
-					// Make parent directory accessible (it's created by gocheck with 0700)
-					parent := filepath.Dir(dataDir)
-					os.Chmod(parent, 0755)
-					// Change ownership of data directory
-					os.Chown(dataDir, uid, gid)
-					os.Chmod(dataDir, 0700)
-				}
-			}
-		}
-	}
-
-	cfg := Config{
+	return NewProcess(Config{
 		ID:        fmt.Sprintf("node%d", n),
-		DataDir:   dataDir,
+		DataDir:   c.MkDir(),
 		Port:      strconv.Itoa(int(atomic.AddUint32(&newPort, 1))),
 		OpTimeout: 30 * time.Second,
-		RunAsUser: func() string {
-			if os.Geteuid() == 0 {
-				return "postgres"
-			}
-			return ""
-		}(),
-	}
-
-	return NewProcess(cfg)
+	})
 }
 
 func connect(c *C, p *Process, db string) *pgx.Conn {

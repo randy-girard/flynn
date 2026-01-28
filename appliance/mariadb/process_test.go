@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"os"
-	"os/user"
-	"path/filepath"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -22,9 +19,7 @@ import (
 )
 
 // Hook gocheck up to the "go test" runner
-func Test(t *testing.T) {
-	TestingT(t)
-}
+func Test(t *testing.T) { TestingT(t) }
 
 type MariaDBSuite struct{}
 
@@ -35,30 +30,10 @@ func (MariaDBSuite) TestSingletonPrimary(c *C) {
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
-	dataDir := c.MkDir()
-	p.DataDir = dataDir
+	p.DataDir = c.MkDir()
 	p.Port = "7500"
 	p.ServerID = 1
 	p.OpTimeout = 30 * time.Second
-
-	// Set up RunAsUser if running as root
-	if os.Geteuid() == 0 {
-		p.RunAsUser = "mysql"
-		// Set ownership of data directory to mysql user
-		u, err := user.Lookup("mysql")
-		c.Assert(err, IsNil)
-		uid, _ := strconv.Atoi(u.Uid)
-		gid, _ := strconv.Atoi(u.Gid)
-
-		// Set ownership and permissions
-		c.Assert(os.Chown(dataDir, uid, gid), IsNil)
-		c.Assert(os.Chmod(dataDir, 0755), IsNil)
-
-		// Also set parent directory permissions
-		parentDir := filepath.Dir(dataDir)
-		c.Assert(os.Chmod(parentDir, 0755), IsNil)
-	}
-
 	err := p.Reconfigure(&state.Config{Role: state.RolePrimary})
 	c.Assert(err, IsNil)
 
@@ -79,30 +54,10 @@ func (MariaDBSuite) TestSingletonPrimary(c *C) {
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
-	dataDir2 := c.MkDir()
-	p.DataDir = dataDir2
+	p.DataDir = c.MkDir()
 	p.Port = "7500"
 	p.ServerID = 1
 	p.OpTimeout = 30 * time.Second
-
-	// Set up RunAsUser if running as root
-	if os.Geteuid() == 0 {
-		p.RunAsUser = "mysql"
-		// Set ownership of data directory to mysql user
-		u, err := user.Lookup("mysql")
-		c.Assert(err, IsNil)
-		uid, _ := strconv.Atoi(u.Uid)
-		gid, _ := strconv.Atoi(u.Gid)
-
-		// Set ownership and permissions
-		c.Assert(os.Chown(dataDir2, uid, gid), IsNil)
-		c.Assert(os.Chmod(dataDir2, 0755), IsNil)
-
-		// Also set parent directory permissions
-		parentDir := filepath.Dir(dataDir2)
-		c.Assert(os.Chmod(parentDir, 0755), IsNil)
-	}
-
 	err = p.Reconfigure(&state.Config{Role: state.RolePrimary})
 	c.Assert(err, IsNil)
 	c.Assert(p.Start(), IsNil)
@@ -131,7 +86,7 @@ func connect(c *C, p *Process, database string) *sql.DB {
 	dsn := DSN{
 		Host:     fmt.Sprintf("127.0.0.1:%d", MustAtoi(p.Port)),
 		User:     "root",
-		Password: p.Password,
+		Password: "",
 		Database: database,
 	}
 	db, err := sql.Open("mysql", dsn.String())
@@ -548,25 +503,6 @@ func NewTestProcess(c *C, n uint32) *Process {
 	p.ServerID = uint32(n)
 	p.OpTimeout = 30 * time.Second
 	p.Logger = p.Logger.New("id", p.ID, "port", p.Port)
-
-	// If running as root, run mysql as the mysql user
-	if os.Geteuid() == 0 {
-		p.RunAsUser = "mysql"
-		// Ensure mysql user can access the data directory and its parent
-		if u, err := user.Lookup("mysql"); err == nil {
-			if uid, err := strconv.Atoi(u.Uid); err == nil {
-				if gid, err := strconv.Atoi(u.Gid); err == nil {
-					// Make parent directory accessible (it's created by gocheck with 0700)
-					parent := filepath.Dir(p.DataDir)
-					os.Chmod(parent, 0755)
-					// Change ownership of data directory
-					os.Chown(p.DataDir, uid, gid)
-					os.Chmod(p.DataDir, 0700)
-				}
-			}
-		}
-	}
-
 	return p
 }
 

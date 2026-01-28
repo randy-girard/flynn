@@ -37,13 +37,9 @@ func createDB(t *testing.T, dbname string) *postgres.DB {
 	if err := pgtestutils.SetupPostgres(dbname); err != nil {
 		t.Fatal(err)
 	}
-	host := os.Getenv("PGHOST")
-	if host == "" {
-		host = "/var/run/postgresql"
-	}
 	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig: pgx.ConnConfig{
-			Host:     host,
+			Host:     os.Getenv("PGHOST"),
 			Database: dbname,
 		},
 	})

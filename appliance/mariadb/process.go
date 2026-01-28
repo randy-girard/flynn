@@ -80,7 +80,6 @@ type Process struct {
 	OpTimeout    time.Duration
 	ReplTimeout  time.Duration
 	WaitUpstream bool
-	RunAsUser    string
 
 	Logger log15.Logger
 
@@ -290,19 +289,16 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 func (p *Process) Backup() (io.ReadCloser, error) {
 	r := &backupReadCloser{}
 
-	// Use mariadb-backup (modern replacement for innobackupex)
-	// mariadb-backup uses --backup flag and similar syntax
-	// Use root user for backup since flynn user may not have RELOAD privilege
 	cmd := exec.Command(
-		filepath.Join(p.BinDir, "mariadb-backup"),
+		filepath.Join(p.BinDir, "innobackupex"),
 		"--defaults-file="+p.ConfigPath(),
-		"--backup",
 		"--host=127.0.0.1",
 		"--port="+p.Port,
-		"--user=root",
+		"--user=flynn",
 		"--password="+p.Password,
+		"--socket=",
 		"--stream=xbstream",
-		"--target-dir=.",
+		".",
 	)
 	cmd.Dir = p.DataDir
 	cmd.Stderr = &r.stderr
@@ -360,12 +356,11 @@ func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
 }
 
 func (p *Process) unpackXbstream(r io.Reader) error {
-	// Use mbstream (mariadb-backup's stream tool) instead of xbstream
-	cmd := exec.Command(filepath.Join(p.BinDir, "mbstream"), "-x", "--directory="+p.DataDir)
+	cmd := exec.Command(filepath.Join(p.BinDir, "xbstream"), "-x", "--directory="+p.DataDir)
 	cmd.Stdin = ioutil.NopCloser(r)
 
 	if buf, err := cmd.CombinedOutput(); err != nil {
-		p.Logger.Error("mbstream failed", "err", err, "output", string(buf))
+		p.Logger.Error("xbstream failed", "err", err, "output", string(buf))
 		return err
 	}
 
@@ -373,15 +368,14 @@ func (p *Process) unpackXbstream(r io.Reader) error {
 }
 
 func (p *Process) restoreApplyLog() error {
-	// Use mariadb-backup --prepare instead of innobackupex --apply-log
 	cmd := exec.Command(
-		filepath.Join(p.BinDir, "mariadb-backup"),
+		filepath.Join(p.BinDir, "innobackupex"),
 		"--defaults-file="+p.ConfigPath(),
-		"--prepare",
-		"--target-dir="+p.DataDir,
+		"--apply-log",
+		p.DataDir,
 	)
 	if buf, err := cmd.CombinedOutput(); err != nil {
-		p.Logger.Error("mariadb-backup prepare failed", "err", err, "output", string(buf))
+		p.Logger.Error("innobackupex apply-log failed", "err", err, "output", string(buf))
 		return err
 	}
 	return nil
@@ -529,38 +523,10 @@ func (p *Process) initPrimaryDB() error {
 	logger := p.Logger.New("fn", "initPrimaryDB")
 	logger.Info("initializing primary database")
 
-	// Use mysql command-line client to connect via socket and set up users
-	// This avoids the unix_socket authentication issue with root@localhost
-	socketPath := filepath.Join(p.DataDir, "mysql.sock")
-	initSQL := fmt.Sprintf(`
-		ALTER USER 'root'@'localhost' IDENTIFIED BY '%s';
-		GRANT ALL ON *.* TO 'root'@'%%' IDENTIFIED BY '%s' WITH GRANT OPTION;
-		CREATE USER IF NOT EXISTS 'flynn'@'%%' IDENTIFIED BY '%s';
-		GRANT ALL ON *.* TO 'flynn'@'%%' WITH GRANT OPTION;
-		FLUSH PRIVILEGES;
-	`, p.Password, p.Password, p.Password)
-
-	cmd := exec.Command(
-		"/usr/bin/mysql",
-		"--socket="+socketPath,
-		"--user=root",
-		"-e", initSQL,
-	)
-	cmd = p.wrapCommand(cmd)
-	logger.Debug("running mysql command", "cmd", cmd.Args)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		logger.Error("error initializing database users", "err", err, "output", string(out))
-		return err
-	}
-	logger.Debug("mysql command output", "output", string(out))
-
-	// Now connect via TCP as root to finish setup
 	dsn := &DSN{
-		Host:     "127.0.0.1:" + p.Port,
-		User:     "root",
-		Password: p.Password,
-		Timeout:  p.OpTimeout,
+		Host:    "127.0.0.1:" + p.Port,
+		User:    "root",
+		Timeout: p.OpTimeout,
 	}
 
 	db, err := sql.Open("mysql", dsn.String())
@@ -569,6 +535,15 @@ func (p *Process) initPrimaryDB() error {
 		return err
 	}
 	defer db.Close()
+
+	if _, err := db.Exec(fmt.Sprintf(`CREATE USER 'flynn'@'%%' IDENTIFIED BY '%s'`, p.Password)); err != nil && MySQLErrorNumber(err) != 1396 {
+		logger.Error("error creating database user", "err", err)
+		return err
+	}
+	if _, err := db.Exec(`GRANT ALL ON *.* TO 'flynn'@'%' WITH GRANT OPTION`); err != nil {
+		logger.Error("error granting privileges", "err", err)
+		return err
+	}
 	// Install semi-sync master plugin. Ignore error if already installed (1968) or
 	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
 	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
@@ -662,9 +637,7 @@ func (p *Process) start() error {
 	logger := p.Logger.New("fn", "start", "id", p.ID, "port", p.Port)
 	logger.Info("starting process")
 
-	execCmd := exec.Command(filepath.Join(p.SbinDir, "mysqld"), "--defaults-extra-file="+p.ConfigPath())
-	execCmd = p.wrapCommand(execCmd)
-	cmd := NewCmd(execCmd)
+	cmd := NewCmd(exec.Command(filepath.Join(p.SbinDir, "mysqld"), "--defaults-extra-file="+p.ConfigPath()))
 	if err := cmd.Start(); err != nil {
 		logger.Error("failed to start process", "err", err)
 		return err
@@ -964,30 +937,15 @@ func (p *Process) installDB() error {
 	// Ignore errors, since the db could be already initialized
 	// Use --auth-root-authentication-method=normal to allow root login via TCP
 	// without unix_socket auth (which is the default in MariaDB 10.4+)
-	// Use --skip-test-db to avoid creating the 'test' database
 	p.runCmd(exec.Command(
 		filepath.Join(p.BinDir, "mysql_install_db"),
 		"--defaults-extra-file="+p.ConfigPath(),
 		"--auth-root-authentication-method=normal",
-		"--skip-test-db",
 	))
 
 	return nil
 }
-func (p *Process) wrapCommand(cmd *exec.Cmd) *exec.Cmd {
-	if p.RunAsUser != "" {
-		// Wrap the command with sudo -u <user>
-		args := append([]string{"-u", p.RunAsUser, cmd.Path}, cmd.Args[1:]...)
-		sudoCmd := exec.Command("sudo", args...)
-		sudoCmd.Env = cmd.Env
-		sudoCmd.Dir = cmd.Dir
-		return sudoCmd
-	}
-	return cmd
-}
-
 func (p *Process) runCmd(cmd *exec.Cmd) error {
-	cmd = p.wrapCommand(cmd)
 	p.Logger.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -999,7 +957,6 @@ func (p *Process) writeConfig(d configData) error {
 	d.Port = p.Port
 	d.DataDir = p.DataDir
 	d.ServerID = p.ServerID
-	d.RunAsUser = p.RunAsUser
 
 	f, err := os.Create(p.ConfigPath())
 	if err != nil {
@@ -1011,25 +968,23 @@ func (p *Process) writeConfig(d configData) error {
 }
 
 type configData struct {
-	ID        string
-	Port      string
-	DataDir   string
-	ServerID  uint32
-	ReadOnly  bool
-	RunAsUser string
+	ID       string
+	Port     string
+	DataDir  string
+	ServerID uint32
+	ReadOnly bool
 }
 
 var configTemplate = template.Must(template.New("my.cnf").Parse(`
 [client]
 port = {{.Port}}
-socket = {{.DataDir}}/mysql.sock
 
 [mysqld]
-{{if not .RunAsUser}}user         = ""
-{{end}}port         = {{.Port}}
+user         = ""
+port         = {{.Port}}
 bind_address = 0.0.0.0
 server_id    = {{.ServerID}}
-socket       = {{.DataDir}}/mysql.sock
+socket       = ""
 pid_file     = {{.DataDir}}/mysql.pid
 report_host  = {{.ID}}
 

@@ -43,7 +43,6 @@ type Config struct {
 	ExtWhitelist bool
 	SHMType      string
 	WaitUpstream bool
-	RunAsUser    string // User to run postgres as (for tests running as root)
 }
 
 type Process struct {
@@ -72,7 +71,6 @@ type Process struct {
 	extWhitelist bool
 	shmType      string
 	waitUpstream bool
-	runAsUser    string
 
 	// daemon is the postgres daemon command when running
 	daemon *exec.Cmd
@@ -106,7 +104,6 @@ func NewProcess(c Config) *Process {
 		extWhitelist:   c.ExtWhitelist,
 		shmType:        c.SHMType,
 		waitUpstream:   c.WaitUpstream,
-		runAsUser:      c.RunAsUser,
 		events:         make(chan state.DatabaseEvent, 1),
 		cancelSyncWait: func() {},
 	}
@@ -351,29 +348,8 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 	if p.running() && p.config().Role == state.RoleSync {
 		log.Info("promoting to primary")
 
-		// Use pg_ctl promote to promote the standby to primary
-		// This is the recommended way in PostgreSQL 12+ and doesn't require a restart
-		cmd := exec.Command(p.binPath("pg_ctl"), "promote", "-D", p.dataDir)
-		cmd = p.wrapCommand(cmd)
-		log.Debug("running command", "cmd", cmd.Args)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			log.Error("error promoting postgres", "err", err, "output", string(out))
-			return err
-		}
-
-		// Write new config as primary
-		syncName := ""
-		if downstream != nil {
-			syncName = downstream.Meta[IDKey]
-		}
-		if err := p.writeConfig(configData{Sync: syncName}); err != nil {
-			log.Error("error writing postgres.conf", "path", p.configPath(), "err", err)
-			return err
-		}
-
-		// Reload configuration
-		if err := p.sighup(); err != nil {
-			log.Error("error reloading configuration", "err", err)
+		if err := ioutil.WriteFile(p.triggerPath(), nil, 0655); err != nil {
+			log.Error("error creating trigger file", "path", p.triggerPath(), "err", err)
 			return err
 		}
 
@@ -392,23 +368,8 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 		return err
 	}
 
-	// Remove old recovery.conf if it exists (for backwards compatibility)
 	if err := os.Remove(p.recoveryConfPath()); err != nil && !os.IsNotExist(err) {
 		log.Error("error removing recovery.conf", "path", p.recoveryConfPath(), "err", err)
-		return err
-	}
-
-	// Remove standby.signal file to promote to primary (PostgreSQL 12+)
-	standbySignalPath := p.dataPath("standby.signal")
-	if err := os.Remove(standbySignalPath); err != nil && !os.IsNotExist(err) {
-		log.Error("error removing standby.signal", "path", standbySignalPath, "err", err)
-		return err
-	}
-
-	// Remove recovery settings from postgresql.auto.conf
-	autoConfPath := p.dataPath("postgresql.auto.conf")
-	if err := os.Remove(autoConfPath); err != nil && !os.IsNotExist(err) {
-		log.Error("error removing postgresql.auto.conf", "path", autoConfPath, "err", err)
 		return err
 	}
 
@@ -603,7 +564,6 @@ func (p *Process) start() error {
 	p.daemonExit = make(chan struct{})
 
 	cmd := exec.Command(p.binPath("postgres"), "-D", p.dataDir)
-	cmd = p.wrapCommand(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -862,20 +822,7 @@ func (p *Process) initDB() error {
 
 	return p.writeHBAConf()
 }
-func (p *Process) wrapCommand(cmd *exec.Cmd) *exec.Cmd {
-	if p.runAsUser != "" {
-		// Wrap the command with sudo -u <user>
-		args := append([]string{"-u", p.runAsUser, cmd.Path}, cmd.Args[1:]...)
-		sudoCmd := exec.Command("sudo", args...)
-		sudoCmd.Env = cmd.Env
-		sudoCmd.Dir = cmd.Dir
-		return sudoCmd
-	}
-	return cmd
-}
-
 func (p *Process) runCmd(cmd *exec.Cmd) error {
-	cmd = p.wrapCommand(cmd)
 	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -897,14 +844,6 @@ func (p *Process) writeConfig(d configData) error {
 }
 
 func (p *Process) writeRecoveryConf(upstream *discoverd.Instance) error {
-	// PostgreSQL 12+ uses standby.signal file instead of recovery.conf
-	// Create standby.signal file to indicate standby mode
-	standbySignalPath := p.dataPath("standby.signal")
-	if err := ioutil.WriteFile(standbySignalPath, []byte(""), 0644); err != nil {
-		return err
-	}
-
-	// Write recovery settings to postgresql.auto.conf
 	data := recoveryData{
 		TriggerFile: p.triggerPath(),
 		PrimaryInfo: fmt.Sprintf(
@@ -913,7 +852,7 @@ func (p *Process) writeRecoveryConf(upstream *discoverd.Instance) error {
 		),
 	}
 
-	f, err := os.Create(p.dataPath("postgresql.auto.conf"))
+	f, err := os.Create(p.recoveryConfPath())
 	if err != nil {
 		return err
 	}
@@ -1013,9 +952,10 @@ type recoveryData struct {
 	TriggerFile string
 }
 
-var recoveryConfTemplate = template.Must(template.New("postgresql.auto.conf").Parse(`
-# Recovery settings for PostgreSQL 12+
+var recoveryConfTemplate = template.Must(template.New("recovery.conf").Parse(`
+standby_mode = on
 primary_conninfo = '{{.PrimaryInfo}}'
+trigger_file = '{{.TriggerFile}}'
 recovery_target_timeline = 'latest'
 `[1:]))
 
