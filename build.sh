@@ -63,6 +63,22 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+# Generate version if not provided
+if [[ -z "${VERSION}" ]]; then
+  # Format: vYYYYMMDD.N where N is incremented if multiple releases on same day
+  DATE_PREFIX="v$(date +%Y%m%d)"
+  # Check for existing tags with today's date
+  LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" 2>/dev/null | sort -V | tail -n1)
+  if [[ -n "${LATEST_TODAY}" ]]; then
+    # Extract the iteration number and increment
+    ITERATION="${LATEST_TODAY##*.}"
+    VERSION="${DATE_PREFIX}.$((ITERATION + 1))"
+  else
+    VERSION="${DATE_PREFIX}.0"
+  fi
+  echo "===> Auto-generated version: ${VERSION}"
+fi
+
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
 export TUF_ROOT_PASSPHRASE="password"
@@ -141,7 +157,7 @@ mkdir -p /tmp/discoverd-data
 rm -rf /tmp/flynn-* && \
 rm -rf /var/log/flynn/* && \
 make clean && \
-make && \
+./script/build-flynn --version "${VERSION}" && \
 rm -f build/bin/flynn-builder && \
 rm -f build/bin/flannel-wrapper && \
 go build -o build/bin/flannel-wrapper ./flannel/wrapper && \
@@ -154,8 +170,8 @@ rm -rf /etc/flynn/tuf.db
 
 # Flynn builder step with retry loop
 while true; do
-  echo "===> Running flynn-builder build..."
-  if ./script/flynn-builder build --version=${VERSION} --tuf-db=/etc/flynn/tuf.db --verbose; then
+  echo "===> Running flynn-builder build with version: ${VERSION}"
+  if ./script/flynn-builder build --version="${VERSION}" --tuf-db=/etc/flynn/tuf.db --verbose; then
     echo "===> flynn-builder build succeeded!"
     break
   else
