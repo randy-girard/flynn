@@ -1,13 +1,10 @@
 name: Build and Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v2024.01.27.0)'
+        description: 'Version tag (e.g., v202401270)'
         required: true
         type: string
 
