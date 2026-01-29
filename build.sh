@@ -8,7 +8,7 @@
 #   ./build.sh --tuf-release                # Build and push to TUF server
 #   ./build.sh --github-release             # Build and push to GitHub Releases
 #   ./build.sh --tuf-release --github-release  # Push to both
-#   ./build.sh --github-release --version v2024.01.27.0  # Specific version
+#   ./build.sh --github-release --version v20240127.0  # Specific version
 #
 
 set -eo pipefail
@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
       echo "OPTIONS:"
       echo "  --tuf-release              Push to TUF remote server"
       echo "  --github-release           Push to GitHub Releases"
-      echo "  --version VERSION          Version for GitHub release (e.g., v2024.01.27.0)"
+      echo "  --version VERSION          Version for GitHub release (e.g., v20240127)"
       echo "  --github-repo OWNER/REPO   GitHub repository [default: randy-girard/flynn]"
       echo "  --tuf-host USER@HOST       TUF remote host [default: root@10.0.0.211]"
       echo "  --tuf-path PATH            TUF remote path [default: /root/go-tuf/repo]"
@@ -137,12 +137,6 @@ cd /root/go/src/github.com/flynn/flynn && \
 mkdir -p /etc/flynn && \
 mkdir -p /tmp/discoverd-data
 
-#./script/clean-flynn
-#./script/build-flynn
-#./script/flynn-builder build --version=dev --verbose
-#./build/bin/flynn-builder build
-
-# Copy keys from go-tuf repo.
 
 rm -rf /tmp/flynn-* && \
 rm -rf /var/log/flynn/* && \
@@ -531,21 +525,3 @@ curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/instal
 fi
 
 echo "===> Build complete!"
-
-# sudo bash -s -- --remove --yes < <(curl -fsSL https://dl.flynn.cloud.randygirard.com/install-flynn)
-# sudo bash -s -- --version dev < <(curl -fsSL  https://dl.flynn.cloud.randygirard.com/install-flynn)
-# /usr/bin/install-flynn -r https://dl.flynn.cloud.randygirard.com --version dev
-# sudo flynn-host init --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
-# sudo systemctl start flynn-host
-# sudo systemctl status flynn-host
-# Setup dns
-# sudo \
-#   CLUSTER_DOMAIN=demo.flynn.cloud.randygirard.com \
-#   flynn-host bootstrap \
-#   --min-hosts 3 \
-#    --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
-#   CLUSTER_DOMAIN=heztner.flynn.cloud.randygirard.com flynn-host bootstrap --min-hosts 1
-
-#
-# Notes:
-# - Make sure firewall/ports are set up properly or not running
