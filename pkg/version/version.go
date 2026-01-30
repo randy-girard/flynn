@@ -1,14 +1,20 @@
 package version
 
 import (
+	"os"
 	"strconv"
 	"strings"
 )
 
 // version is set at build time (see builder/go-wrapper.sh)
+// It can also be overridden at runtime via FLYNN_VERSION environment variable
 var version string
 
 func String() string {
+	// Check environment variable first (allows runtime override)
+	if v := os.Getenv("FLYNN_VERSION"); v != "" {
+		return v
+	}
 	if version != "" {
 		return version
 	}

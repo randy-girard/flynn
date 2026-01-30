@@ -92,26 +92,30 @@ main() {
 
     # Set up Go build environment
     export GO111MODULE=on
-    # Use -mod=vendor to use vendored dependencies and -buildvcs=false to disable
-    # VCS stamping (which can fail if git state is dirty or inaccessible)
     export GOFLAGS="-mod=vendor"
     export CGO_ENABLED=1
 
-    info "building flynn-host binary (with download capability)"
+    # Export FLYNN_VERSION so it's available to all subprocesses
+    export FLYNN_VERSION="${version}"
+
+    # Use helper script to build with version ldflags
+    local go_build="${ROOT}/script/go-build-version"
+
+    info "building flynn-host binary (with download capability) [version=${version}]"
     cd "${ROOT}"
-    go build -o "${flynn_host}" ./host
+    "${go_build}" "${version}" -o "${flynn_host}" ./host
     chmod +x "${flynn_host}"
 
     info "building flynn-init binary"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-init" ./host/flynn-init
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-init" ./host/flynn-init
     chmod +x "${ROOT}/build/bin/flynn-init"
 
     info "building flynn-builder binary"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-builder" ./builder
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-builder" ./builder
     chmod +x "${ROOT}/build/bin/flynn-builder"
 
     info "building discoverd binary"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/discoverd" ./discoverd
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/discoverd" ./discoverd
     chmod +x "${ROOT}/build/bin/discoverd"
 
     info "building flynn CLI binaries"
@@ -123,39 +127,39 @@ main() {
         output="${output}.exe"
       fi
       info "  building flynn-${GOOS}-${GOARCH}"
-      CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" go build -o "${output}" ./cli
+      CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" "${go_build}" "${version}" -o "${output}" ./cli
       chmod +x "${output}" 2>/dev/null || true
     done
     ln -nfs "flynn-linux-amd64" "${ROOT}/build/bin/flynn"
 
     info "building other Flynn components"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-controller" ./controller
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-scheduler" ./controller/scheduler
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-worker" ./controller/worker
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-router" ./router
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-acme" ./router/acme
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flanneld" ./flannel
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-release" ./util/release
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-test-file-server" ./test
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-controller" ./controller
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-scheduler" ./controller/scheduler
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-worker" ./controller/worker
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-router" ./router
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-acme" ./router/acme
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flanneld" ./flannel
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-release" ./util/release
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test-file-server" ./test
 
     info "building database appliance binaries"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-postgres" ./appliance/postgresql/cmd/flynn-postgres
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-postgres-api" ./appliance/postgresql/cmd/flynn-postgres-api
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-mariadb" ./appliance/mariadb/cmd/flynn-mariadb
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-mariadb-api" ./appliance/mariadb/cmd/flynn-mariadb-api
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-mongodb" ./appliance/mongodb/cmd/flynn-mongodb
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-mongodb-api" ./appliance/mongodb/cmd/flynn-mongodb-api
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-redis" ./appliance/redis/cmd/flynn-redis
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-redis-api" ./appliance/redis/cmd/flynn-redis-api
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres" ./appliance/postgresql/cmd/flynn-postgres
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres-api" ./appliance/postgresql/cmd/flynn-postgres-api
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mariadb" ./appliance/mariadb/cmd/flynn-mariadb
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mariadb-api" ./appliance/mariadb/cmd/flynn-mariadb-api
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb" ./appliance/mongodb/cmd/flynn-mongodb
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb-api" ./appliance/mongodb/cmd/flynn-mongodb-api
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-redis" ./appliance/redis/cmd/flynn-redis
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-redis-api" ./appliance/redis/cmd/flynn-redis-api
 
     info "building additional Flynn services"
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-blobstore" ./blobstore
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/gitreceived" ./gitreceive
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-receiver" ./gitreceive/receiver
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/tarreceive" ./tarreceive
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/taffy" ./taffy
-    CGO_ENABLED=0 go build -o "${ROOT}/build/bin/flynn-updater" ./updater
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-blobstore" ./blobstore
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/gitreceived" ./gitreceive
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-receiver" ./gitreceive/receiver
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/tarreceive" ./tarreceive
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/taffy" ./taffy
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-updater" ./updater
 
     # Create a minimal builder image manifest
     # This is needed for the flynn-builder to work

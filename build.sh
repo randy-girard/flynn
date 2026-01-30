@@ -69,6 +69,9 @@ if [[ -z "${VERSION}" ]]; then
   echo "===> Auto-generated version: ${VERSION}"
 fi
 
+# Export FLYNN_VERSION so it's available to all subprocesses
+export FLYNN_VERSION="${VERSION}"
+
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
 export TUF_ROOT_PASSPHRASE="password"

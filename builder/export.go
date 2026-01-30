@@ -25,16 +25,25 @@ import (
 var cmdExport = Command{
 	Run: runExport,
 	Usage: `
-usage: flynn-builder export <tuf-dir>
+usage: flynn-builder export [--version=<version>] <tuf-dir>
 
 Export Flynn binaries, manifests & images to a TUF repository.
+
+Options:
+  --version=<version>  Version to use for export (defaults to flynn-host version)
 `[1:],
 }
 
 func runExport(args *docopt.Args) error {
-	version, err := determineVersion()
-	if err != nil {
-		return err
+	var version string
+	var err error
+	if v := args.String["--version"]; v != "" {
+		version = v
+	} else {
+		version, err = determineVersion()
+		if err != nil {
+			return err
+		}
 	}
 
 	manifest, err := loadManifest()

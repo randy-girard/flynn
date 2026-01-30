@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+# Helper script to build Go binaries with version ldflags
+# Usage: go-build-version <version> [go build args...]
+#
+# Example: go-build-version v20260129.0 -o ./build/bin/flynn-host ./host
+#
+
+set -eo pipefail
+
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 <version> [go build args...]" >&2
+  exit 1
+fi
+
+VERSION="$1"
+shift
+
+LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${VERSION}"
+
+exec go build -ldflags "${LDFLAGS}" "$@"
+
