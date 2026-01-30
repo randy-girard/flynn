@@ -1,4 +1,4 @@
-// Package installsource tracks how Flynn was installed (GitHub vs TUF)
+// Package installsource tracks how Flynn was installed
 // to ensure updates use the same source as the original installation.
 package installsource
 
@@ -12,8 +12,6 @@ import (
 const (
 	// SourceGitHub indicates installation from GitHub Releases
 	SourceGitHub = "github"
-	// SourceTUF indicates installation from TUF repository
-	SourceTUF = "tuf"
 
 	// DefaultConfigDir is the default Flynn configuration directory
 	DefaultConfigDir = "/etc/flynn"
@@ -23,9 +21,9 @@ const (
 
 // InstallSource records how Flynn was installed
 type InstallSource struct {
-	// Source is the installation source type ("github" or "tuf")
+	// Source is the installation source type ("github")
 	Source string `json:"source"`
-	// Repository is the source repository (GitHub owner/repo or TUF URL)
+	// Repository is the source repository (GitHub owner/repo)
 	Repository string `json:"repository"`
 	// Version is the installed version
 	Version string `json:"version"`
@@ -76,26 +74,11 @@ func (s *InstallSource) IsGitHub() bool {
 	return s.Source == SourceGitHub
 }
 
-// IsTUF returns true if installed from TUF repository
-func (s *InstallSource) IsTUF() bool {
-	return s.Source == SourceTUF
-}
-
 // NewGitHubSource creates an InstallSource for GitHub installations
 func NewGitHubSource(repo, version string) *InstallSource {
 	return &InstallSource{
 		Source:      SourceGitHub,
 		Repository:  repo,
-		Version:     version,
-		InstalledAt: time.Now(),
-	}
-}
-
-// NewTUFSource creates an InstallSource for TUF installations
-func NewTUFSource(repoURL, version string) *InstallSource {
-	return &InstallSource{
-		Source:      SourceTUF,
-		Repository:  repoURL,
 		Version:     version,
 		InstalledAt: time.Now(),
 	}
@@ -115,4 +98,3 @@ func Exists(configDir string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
-

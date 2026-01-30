@@ -29,14 +29,6 @@ fi
 
 GO_LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${FLYNN_VERSION}"
 
-if [[ -n "${TUF_ROOT_KEYS}" ]]; then
-  GO_LDFLAGS="${GO_LDFLAGS} -X github.com/flynn/flynn/pkg/tufconfig.RootKeysJSON=${TUF_ROOT_KEYS}"
-fi
-
-if [[ -n "${TUF_REPOSITORY}" ]]; then
-  GO_LDFLAGS="${GO_LDFLAGS} -X github.com/flynn/flynn/pkg/tufconfig.Repository=${TUF_REPOSITORY}"
-fi
-
 if [[ "$1" = "build" ]]; then
 	${BIN} $1 -ldflags "${GO_LDFLAGS}" ${@:2}
 else

@@ -292,115 +292,38 @@ and install the components on other hosts (e.g. in EC2).
 A Flynn release is a set of components consisting of binaries, configuration files and
 filesystem images, all of which must be installed in order to run Flynn.
 
-### The Update Framework (TUF)
+### GitHub Releases
 
-Flynn uses [The Update Framework](http://theupdateframework.com/) (also known as TUF) to
-securely distribute all of the Flynn components.
+Flynn uses GitHub Releases to distribute all of the Flynn components.
 
-To release Flynn, you will need to generate a TUF repository using the
-[go-tuf](https://github.com/flynn/go-tuf) library.
+### Build Flynn
 
-Follow the [installation instructions](https://github.com/flynn/go-tuf#install)
-and then follow the ["Create signed root manifest"](https://github.com/flynn/go-tuf#examples)
-example. You should now have a directory with the following layout:
-
+Run `script/build-flynn --version XXX` to set an explicit version:
 
 ```
-.
-├── keys
-│   ├── snapshot.json
-│   ├── targets.json
-│   └── timestamp.json
-├── repository
-└── staged
-    ├── root.json
-    └── targets
+$ script/build-flynn --version v20171206.0
 ```
 
-Commit the repository by running the following:
+### Create a GitHub Release
+
+After building Flynn, you can create a GitHub release to distribute the components:
 
 ```
-$ tuf add
-$ tuf snapshot
-$ tuf timestamp
-$ tuf commit
+$ script/github-release
 ```
 
-You should now see some files in the `repository` directory (the filenames may differ):
+This will create a new release on GitHub with the built binaries and images.
+
+### Install Flynn
+
+You can install Flynn using the install script with an explicit GitHub repository:
 
 ```
-.
-├── keys
-│   ├── snapshot.json
-│   ├── targets.json
-│   └── timestamp.json
-├── repository
-│   ├── 966421c866be59e54fca0d6e2c0f62f1790934a25c065715dce0fa3378b7200a1a47b18d60647db115f6a2c8f9bd90d96985c15799c0429f985704446c39a9d3.targets.json
-│   ├── a0f8878b84aa629271c614b6816f9e9fd12dc2d880ccdf03b3141b09b37d5b16c92e9f84c21fd064aff57b90f31c9711d4c84b5a22e70e03a21943511a905cd4.root.json
-│   ├── a8a2ce2842ffab18a5217c6192735915ed3685baad05c25b6dd499634abefaa1b62a86de2640b6bedbdc21add582d8bd01ca615b740c26c019058414c8f887eb.snapshot.json
-│   ├── root.json
-│   ├── snapshot.json
-│   ├── targets.json
-│   └── timestamp.json
-└── staged
-    └── targets
+install-flynn -r randy-girard/flynn
 ```
 
-Upload the `repository` directory to a location where you intend to serve the
-released version of Flynn from. For example, if using the `my-flynn-repo` S3
-bucket:
+Or to install a specific version:
 
 ```
-$ aws s3 cp --recursive --acl public-read repository s3://my-flynn-repo/tuf
-```
-
-### Rebuild Flynn
-
-The TUF root keys need to be compiled into the Flynn release, and image URLs must
-be relative to the file server the TUF repository is served from. This can be
-accomplished by updating the `tuf` object in `builder/manifest.json` then re-running
-`make`, e.g.:
-
-```
-"tuf": {
-  "repository": "https://s3.amazonaws.com/my-flynn-repo/tuf",
-  "root_keys": [
-    {"keytype":"ed25519","keyval":{"public":"31351ecc833417968faabf98e004d1ef48ecfd996f971aeed399a7dc735d2c8c"}}
-  ]
-}
-```
-
-*The TUF root keys can be determined by running `tuf root-keys` in the TUF repository.*
-
-Run `script/build-flynn --version XXX` instead of `make` to set an explicit version:
-
-```
-$ script/build-flynn --version v20171206.lmars
-```
-
-### Export components
-
-Export the Flynn components into the TUF repository (it expects the targets, snapshot and
-timestamp passphrases to be set in the `TUF_TARGETS_PASSPHRASE`, `TUF_SNAPSHOT_PASSPHRASE`
-and `TUF_TIMESTAMP_PASSPHRASE` environment variables respectively):
-
-```
-$ script/export-components /path/to/tuf-repo
-```
-
-### Upload components
-
-Upload the `repository` directory of the TUF repo to the remote file server.
-
-For example, if using the `my-flynn-repo` S3 bucket:
-
-```
-$ aws s3 cp --recursive --acl public-read repository s3://my-flynn-repo/tuf
-```
-
-You can now distribute `script/install-flynn` and run it with an explicit repo URL
-to install the custom built Flynn components:
-
-```
-install-flynn -r https://s3.amazonaws.com/my-flynn-repo
+FLYNN_VERSION=v20240127.0 install-flynn -r randy-girard/flynn
 ```
