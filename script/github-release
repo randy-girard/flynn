@@ -78,7 +78,22 @@ if ! gh auth status &> /dev/null; then
   fail "Not authenticated with GitHub. Run: gh auth login"
 fi
 
-# Generate version if not provided
+# Get version from flynn-host if not provided
+if [[ -z "${VERSION}" ]]; then
+  FLYNN_HOST="${ROOT}/build/bin/flynn-host"
+  if [[ -x "${FLYNN_HOST}" ]]; then
+    VERSION=$("${FLYNN_HOST}" version 2>/dev/null | head -n1)
+    # Strip any commit suffix (e.g., v20260129.0-abc1234 -> v20260129.0)
+    VERSION="${VERSION%%-*}"
+    if [[ -n "${VERSION}" && "${VERSION}" != "dev" ]]; then
+      info "Using version from flynn-host: ${VERSION}"
+    else
+      VERSION=""
+    fi
+  fi
+fi
+
+# Fall back to auto-generating version if still not set
 if [[ -z "${VERSION}" ]]; then
   # Format: vYYYYMMDD.N where N is incremented if multiple releases on same day
   DATE_PREFIX="v$(date +%Y%m%d)"
