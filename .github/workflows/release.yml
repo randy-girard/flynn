@@ -4,117 +4,457 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v202401270)'
+        description: 'Version tag (e.g., v20240127.0)'
         required: true
         type: string
 
 permissions:
   contents: write
 
+env:
+  GO_VERSION: '1.24'
+
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          fetch-depth: 0
+
+      - name: Set up Flynn environment
+        id: setup
+        run: |
+          # Set FLYNN_ROOT to the workspace directory
+          echo "FLYNN_ROOT=${{ github.workspace }}" >> $GITHUB_ENV
+          # flynn-discovery is included in the repository
+          echo "FLYNN_DISCOVERY_DIR=${{ github.workspace }}/flynn-discovery" >> $GITHUB_ENV
 
       - name: Determine version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          VERSION="${{ inputs.version }}"
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          echo "PREVIOUS_TAG=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          # Note: Docker is pre-installed on GitHub Actions runners, so we don't install docker.io
+          sudo apt-get install -y \
+            build-essential \
+            debootstrap \
+            squashfs-tools \
+            zfsutils-linux \
+            jq \
+            curl \
+            git \
+            iptables \
+            iproute2 \
+            net-tools \
+            bridge-utils \
+            libdevmapper-dev \
+            libseccomp-dev \
+            pigz
+
+          # Verify Docker is available
+          docker --version
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set up ZFS
+        run: |
+          # Create a file-backed ZFS pool for the build
+          sudo truncate -s 20G /zfs-pool.img
+          sudo zpool create -f flynn-default /zfs-pool.img
+          sudo zfs set compression=lz4 flynn-default
+          sudo zfs set sync=disabled flynn-default
+
+      - name: Set up Flynn directory structure
+        run: |
+          # Create required directories
+          sudo mkdir -p /var/lib/flynn
+          sudo mkdir -p /var/log/flynn
+          sudo mkdir -p /etc/flynn
+          sudo mkdir -p /tmp/discoverd-data
+          sudo mkdir -p /var/run/flynn-local
+
+      - name: Build sha512_256_binary tool
+        run: |
+          cd ${{ env.FLYNN_ROOT }}
+          # Build the sha512_256 tool if it exists, otherwise create a simple one
+          if [ -f sha512_256_binary.go ]; then
+            go build -o sha512_256_binary sha512_256_binary.go
           else
-            echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            # Create a simple sha512_256 hash tool
+            cat > /tmp/sha512_256.go << 'EOF'
+          package main
+          import (
+            "crypto/sha512"
+            "fmt"
+            "io"
+            "os"
+          )
+          func main() {
+            f, _ := os.Open(os.Args[1])
+            defer f.Close()
+            h := sha512.New512_256()
+            io.Copy(h, f)
+            fmt.Printf("%x\n", h.Sum(nil))
+          }
+          EOF
+            go build -o ${{ env.FLYNN_ROOT }}/sha512_256_binary /tmp/sha512_256.go
           fi
 
-      - name: Build binaries
+      - name: Create base squashfs layer
         run: |
-          mkdir -p release-artifacts
+          cd ${{ env.FLYNN_ROOT }}
+          export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+          export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 
-          # Set build environment
+          echo "==> Creating base root filesystem with debootstrap..."
+          sudo mkdir -p /var/lib/flynn/base-root
+          sudo debootstrap \
+            --variant=minbase \
+            --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
+            $UBUNTU_CODENAME \
+            /var/lib/flynn/base-root \
+            http://archive.ubuntu.com/ubuntu
+
+          echo "==> Creating squashfs layer..."
+          sudo mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
+
+          # Get size and hash
+          SIZE=$(sudo stat -c%s "$SQUASHFS")
+          HASH=$(sudo ${{ env.FLYNN_ROOT }}/sha512_256_binary "$SQUASHFS")
+
+          echo "SIZE=$SIZE"
+          echo "HASH=$HASH"
+
+          # Update manifest.json with base layer info
+          sudo jq --arg url "file://$SQUASHFS" \
+            --arg size "$SIZE" \
+            --arg hash "$HASH" \
+            '.base_layer.url = $url |
+              .base_layer.size = ($size | tonumber) |
+              .base_layer.hashes.sha512_256 = $hash' \
+            "${{ env.FLYNN_ROOT }}/builder/manifest.json" > /tmp/manifest.json.tmp
+          sudo mv /tmp/manifest.json.tmp "${{ env.FLYNN_ROOT }}/builder/manifest.json"
+
+      - name: Start flynn-discovery
+        run: |
+          # flynn-discovery is included in the repository
+          cd ${{ env.FLYNN_DISCOVERY_DIR }}
+          docker compose up -d --build
+
+          # Wait for discovery service to be ready
+          echo "Waiting for discovery service..."
+          sleep 10
+
+      - name: Build Flynn binaries
+        run: |
+          cd ${{ env.FLYNN_ROOT }}
+          export VERSION="${{ steps.version.outputs.VERSION }}"
+          export FLYNN_VERSION="${VERSION}"
           export GO111MODULE=on
           export GOFLAGS="-mod=vendor"
-          LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${{ steps.version.outputs.VERSION }}"
+          export CGO_ENABLED=1
+          export PATH="/usr/local/go/bin:$PATH"
 
-          # Build flynn-host (Linux amd64)
-          echo "Building flynn-host-linux-amd64..."
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o release-artifacts/flynn-host-linux-amd64 ./host
+          echo "==> Building Flynn with version: ${VERSION}"
+          sudo make clean || true
+          sudo ./script/build-flynn --version "${VERSION}"
 
-          # Build flynn-init (static binary)
-          echo "Building flynn-init-linux-amd64..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "${LDFLAGS}" -o release-artifacts/flynn-init-linux-amd64 ./host/flynn-init
+          # Build flannel-wrapper
+          sudo rm -f build/bin/flynn-builder
+          sudo rm -f build/bin/flannel-wrapper
+          sudo go build -o build/bin/flannel-wrapper ./flannel/wrapper
 
-          # Build flynn CLI for multiple platforms
-          for platform in "linux/amd64" "darwin/amd64" "darwin/arm64" "windows/amd64"; do
-            GOOS="${platform%/*}"
-            GOARCH="${platform#*/}"
-            output="flynn-${GOOS}-${GOARCH}"
-            if [ "${GOOS}" = "windows" ]; then
-              output="${output}.exe"
+      - name: Start Flynn services
+        run: |
+          cd ${{ env.FLYNN_ROOT }}
+          export PATH="${{ env.FLYNN_ROOT }}/build/bin:/usr/local/go/bin:$PATH"
+          export FLYNN_ROOT="${{ env.FLYNN_ROOT }}"
+          export CLUSTER_DOMAIN=flynn.local
+          export DISCOVERD=192.0.2.200:1111
+          export DISCOVERY_SERVER=http://localhost:8180
+          export EXTERNAL_IP=192.0.2.200
+          export LISTEN_IP=192.0.2.200
+          export PORT_0=1111
+          export DISCOVERD_PEERS=192.0.2.200:1111
+          export FLYNN_REPOSITORY=http://localhost:8080
+          export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+
+
+          # Initialize discovery
+          echo "==> Initializing Flynn host..."
+          export DISCOVERY_URL=$(sudo ./build/bin/flynn-host init --init-discovery)
+          echo "DISCOVERY_URL=${DISCOVERY_URL}"
+
+          # Start all Flynn services
+          echo "==> Starting Flynn services..."
+          sudo mkdir -p /var/lib/flynn/layer-cache
+          sudo mkdir -p /var/run/flynn-local
+
+          sudo -E ./script/start-flynn-host 0 &
+          sudo sleep 3
+          sudo -E  ./script/start-discoverd.sh &
+          sudo sleep 3
+          sudo -E  ./script/start-flanneld.sh &
+          sudo sleep 3
+          less /var/log/flynn/host-0/flynn-host.log | grep -E 'ConfigureNetworking|configure networking progress'
+
+          # Configure ZFS for performance
+          sudo zfs set sync=disabled flynn-default || true
+          sudo zfs set reservation=512M flynn-default || true
+          sudo zfs set refreservation=512M flynn-default || true
+
+          # Wait for services to stabilize
+          echo "Waiting for services to start..."
+          sleep 30
+
+          # Show running processes
+          sudo -E  ./build/bin/flynn-host ps -a || true
+
+          cd ${{ env.FLYNN_ROOT }}
+          export VERSION="${{ steps.version.outputs.VERSION }}"
+          export FLYNN_VERSION="${VERSION}"
+          export PATH="${{ env.FLYNN_ROOT }}/build/bin:/usr/local/go/bin:$PATH"
+          export FLYNN_ROOT="${{ env.FLYNN_ROOT }}"
+
+          echo "==> Running flynn-builder build with version: ${VERSION}"
+
+          # Run the builder with retries
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if sudo -E  ./script/flynn-builder build --version="${VERSION}" --verbose; then
+              echo "==> flynn-builder build succeeded!"
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              echo "==> flynn-builder build failed (attempt ${RETRY_COUNT}/${MAX_RETRIES})"
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "Retrying in 30 seconds..."
+                sleep 30
+              else
+                echo "==> All retries exhausted, failing build"
+                exit 1
+              fi
             fi
-            echo "Building ${output}..."
-            CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" go build -ldflags "${LDFLAGS}" -o "release-artifacts/${output}" ./cli
           done
 
-      - name: Compress binaries
+          # Show what was built
+          echo "==> Built images:"
+          ls -la build/image/ || true
+          echo ""
+          echo "==> Layer cache:"
+          ls -la /var/lib/flynn/layer-cache/ || true
+
+      - name: Package release artifacts
         run: |
-          cd release-artifacts
-          for file in flynn-*; do
-            if [ -f "$file" ]; then
-              gzip -k "$file"
-              rm "$file"
+          cd ${{ env.FLYNN_ROOT }}
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          mkdir -p release-artifacts
+
+          echo "==> Packaging binaries..."
+          cd build/bin
+          for binary in flynn-host flynn-init flynn-linux-amd64 flynn-linux-386 flynn-darwin-amd64 flynn-darwin-arm64 flynn-windows-amd64.exe; do
+            if [ -f "${binary}" ]; then
+              echo "  - ${binary}.gz"
+              gzip -c "${binary}" > "${{ env.FLYNN_ROOT }}/release-artifacts/${binary}.gz"
             fi
           done
 
-      - name: Generate checksums
-        run: |
-          cd release-artifacts
-          sha512sum *.gz > checksums.sha512
+          cd ${{ env.FLYNN_ROOT }}
 
-      - name: List artifacts
+          echo "==> Packaging manifests..."
+          if [ -f "build/images.json" ]; then
+            gzip -c build/images.json > release-artifacts/images.json.gz
+            echo "  - images.json.gz"
+          fi
+          if [ -f "build/manifests/bootstrap-manifest.json" ]; then
+            gzip -c build/manifests/bootstrap-manifest.json > release-artifacts/bootstrap-manifest.json.gz
+            echo "  - bootstrap-manifest.json.gz"
+          fi
+
+          echo "==> Packaging image manifests..."
+          if [ -d "build/image" ] && [ -n "$(ls -A build/image/*.json 2>/dev/null)" ]; then
+            tar czf release-artifacts/images.tar.gz -C build/image .
+            echo "  - images.tar.gz"
+          fi
+
+          echo "==> Packaging layers..."
+          LAYER_COUNT=0
+          if [ -d "/var/lib/flynn/layer-cache" ]; then
+            for layer in /var/lib/flynn/layer-cache/*.squashfs; do
+              if [ -f "$layer" ]; then
+                layer_name=$(basename "$layer")
+                sudo cp "$layer" "release-artifacts/${layer_name}"
+                LAYER_COUNT=$((LAYER_COUNT + 1))
+              fi
+            done
+            # Also copy layer metadata JSON files
+            for meta in /var/lib/flynn/layer-cache/*.json; do
+              if [ -f "$meta" ]; then
+                meta_name=$(basename "$meta")
+                sudo cp "$meta" "release-artifacts/${meta_name}"
+              fi
+            done
+            echo "  - ${LAYER_COUNT} layer files"
+          fi
+
+          echo "==> Copying install scripts..."
+          cp script/install-flynn-github release-artifacts/
+          cp script/install-flynn-cli release-artifacts/
+
+          echo "==> Generating checksums..."
+          cd release-artifacts
+          sha512sum *.gz *.squashfs *.json install-flynn-* 2>/dev/null > checksums.sha512 || \
+            sha512sum *.gz install-flynn-* > checksums.sha512
+
+          echo "==> Release artifacts:"
+          ls -lah
+
+
+      - name: Generate release notes
         run: |
-          echo "Release artifacts:"
-          ls -la release-artifacts/
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          PREVIOUS_TAG="${{ steps.version.outputs.PREVIOUS_TAG }}"
+
+          cd ${{ github.workspace }}
+
+          if [ -n "${PREVIOUS_TAG}" ]; then
+            COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
+            CHANGELOG_LINK="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${VERSION}"
+          else
+            COMMIT_RANGE="HEAD~20..HEAD"
+            CHANGELOG_LINK="**Initial Release**"
+          fi
+
+          cat > /tmp/release_notes.md << EOF
+          ## Flynn ${VERSION}
+
+          ${CHANGELOG_LINK}
+
+          EOF
+
+          # Add commit categories
+          FEAT=$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${COMMIT_RANGE}" 2>/dev/null || true)
+          FIX=$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${COMMIT_RANGE}" 2>/dev/null || true)
+
+          if [ -n "${FEAT}" ]; then
+            echo "### ✨ Features" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+            echo "${FEAT}" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+          fi
+
+          if [ -n "${FIX}" ]; then
+            echo "### 🐛 Bug Fixes" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+            echo "${FIX}" >> /tmp/release_notes.md
+            echo "" >> /tmp/release_notes.md
+          fi
+
+          cat >> /tmp/release_notes.md << EOF
+          ---
+
+          ## Installation
+
+          ### Install Flynn CLI
+
+          Install the Flynn command-line interface on your local machine:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/script/install-flynn-cli | sudo bash
+          \`\`\`
+
+          Or install a specific version:
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/script/install-flynn-cli | sudo bash -s -- --version ${VERSION}
+          \`\`\`
+
+          ### Install Flynn Host (Server)
+
+          Install Flynn on an Ubuntu 24.04 server:
+
+          \`\`\`bash
+          curl -fsSL https://github.com/${{ github.repository }}/releases/download/${VERSION}/install-flynn-github | sudo bash
+          \`\`\`
+
+          ## Artifacts
+
+          ### CLI Binaries
+          | Binary | Platform |
+          |--------|----------|
+          | flynn-linux-amd64.gz | Linux (x86_64) |
+          | flynn-linux-386.gz | Linux (x86) |
+          | flynn-darwin-amd64.gz | macOS (Intel) |
+          | flynn-darwin-arm64.gz | macOS (Apple Silicon) |
+          | flynn-windows-amd64.exe.gz | Windows (x86_64) |
+
+          ### Server Binaries
+          | Binary | Description |
+          |--------|-------------|
+          | flynn-host.gz | Flynn host daemon |
+          | flynn-init.gz | Flynn init binary |
+
+          ### Manifests & Images
+          | File | Description |
+          |------|-------------|
+          | images.json.gz | Images manifest |
+          | bootstrap-manifest.json.gz | Bootstrap manifest |
+          | images.tar.gz | Container image manifests |
+          | *.squashfs | Container image layers |
+
+          ### Other
+          | File | Description |
+          |------|-------------|
+          | install-flynn-cli | CLI installer script |
+          | install-flynn-github | Server installer script |
+          | checksums.sha512 | SHA512 checksums |
+          EOF
+
+          cat /tmp/release_notes.md
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flynn-release-${{ steps.version.outputs.VERSION }}
+          path: ${{ env.FLYNN_ROOT }}/release-artifacts/
+          retention-days: 7
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: Flynn ${{ steps.version.outputs.VERSION }}
-          draft: false
+          draft: true
           prerelease: false
-          files: |
-            release-artifacts/*.gz
-            release-artifacts/checksums.sha512
-          body: |
-            ## Flynn ${{ steps.version.outputs.VERSION }}
-
-            ### Installation
-
-            Install from this release:
-            ```bash
-            curl -fsSL https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.VERSION }}/install-flynn | sudo bash
-            ```
-
-            ### Binaries
-
-            | Binary | Platform |
-            |--------|----------|
-            | flynn-host-linux-amd64.gz | Linux (amd64) |
-            | flynn-init-linux-amd64.gz | Linux (amd64) |
-            | flynn-linux-amd64.gz | CLI for Linux |
-            | flynn-darwin-amd64.gz | CLI for macOS (Intel) |
-            | flynn-darwin-arm64.gz | CLI for macOS (Apple Silicon) |
-            | flynn-windows-amd64.exe.gz | CLI for Windows |
-
-            ### Checksums
-
-            All binaries are verified using SHA512 checksums. See `checksums.sha512` for verification.
+          files: ${{ env.FLYNN_ROOT }}/release-artifacts/*
+          body_path: /tmp/release_notes.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Cleanup
+        if: always()
+        run: |
+          # Stop Flynn services
+          cd ${{ env.FLYNN_ROOT }}
+          sudo ./script/stop-all || true
+
+          # Stop discovery
+          cd ${{ env.FLYNN_DISCOVERY_DIR }}
+          docker compose down || true
+
+          # Destroy ZFS pool
+          sudo zpool destroy flynn-default || true

@@ -12,6 +12,10 @@
 
 set -eo pipefail
 
+# Get the root directory of the Flynn project
+FLYNN_ROOT="$(cd "$(dirname "$0")" && pwd)"
+export FLYNN_ROOT
+
 # Parse command line arguments
 VERSION=""
 
@@ -53,9 +57,12 @@ fi
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
 
+# Flynn discovery directory (subdirectory of flynn repo by default, can be overridden)
+export FLYNN_DISCOVERY_DIR="${FLYNN_DISCOVERY_DIR:-${FLYNN_ROOT}/flynn-discovery}"
+
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
-export PATH="/root/go/src/github.com/flynn/flynn/build/bin:/usr/local/go/bin:$PATH"
+export PATH="${FLYNN_ROOT}/build/bin:/usr/local/go/bin:$PATH"
 export CGO_ENABLED=1
 export CLUSTER_DOMAIN=flynn.local
 export DISCOVERD=192.0.2.200:1111
@@ -67,7 +74,7 @@ export DISCOVERD_PEERS=192.0.2.200:1111
 export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
-export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
+export JSON_FILE="${FLYNN_ROOT}/builder/manifest.json"
 export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
 echo "GO VERSION"
@@ -102,11 +109,13 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
   "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-cd /root/go/src/github.com/flynn/flynn-discovery && \
+# Start flynn-discovery service
+cd "${FLYNN_DISCOVERY_DIR}" && \
 docker compose down && \
 docker compose up -d --build
 
-cd /root/go/src/github.com/flynn/flynn && \
+# Return to Flynn root and continue build
+cd "${FLYNN_ROOT}" && \
 mkdir -p /etc/flynn && \
 mkdir -p /tmp/discoverd-data
 
@@ -150,7 +159,7 @@ done
 
 flynn-host ps -a
 
-cd /root/go/src/github.com/flynn/flynn
+cd "${FLYNN_ROOT}"
 cp ./script/install-flynn /usr/bin/install-flynn
 
 echo "===> Build complete!"

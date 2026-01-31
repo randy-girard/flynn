@@ -2,8 +2,8 @@
 #
 # Create a GitHub Release for Flynn
 #
-# This script should be run AFTER building Flynn with build.sh and committing your changes.
-# It will use the current commit information to generate release notes.
+# This script should be run AFTER building Flynn with script/build-flynn.
+# It packages the built binaries and creates a GitHub release.
 #
 # Usage:
 #   ./script/github-release                           # Auto-generate version
@@ -11,7 +11,7 @@
 #   ./script/github-release --dry-run                # Show what would be uploaded
 #
 # Prerequisites:
-#   - Flynn must be built (run ./build.sh first)
+#   - Flynn must be built (run script/build-flynn first)
 #   - GitHub CLI (gh) must be installed and authenticated
 #   - Changes should be committed (for accurate release notes)
 #
@@ -25,7 +25,7 @@ source "${ROOT}/script/lib/ui.sh"
 VERSION=""
 GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 DRY_RUN=false
-TUF_STAGED="${ROOT}/go-tuf/repo/staged/targets"
+BUILD_DIR="${ROOT}/build/bin"
 
 usage() {
   cat <<USAGE >&2
@@ -34,10 +34,10 @@ usage: $0 [OPTIONS]
 Create a GitHub Release for Flynn.
 
 OPTIONS:
-  -h, --help              Show this message
-  --version VERSION       Version for release (e.g., v20240127.0)
-  --github-repo OWNER/REPO  GitHub repository [default: randy-girard/flynn]
-  --dry-run               Show what would be uploaded without creating release
+  -h, --help                  Show this message
+  --version VERSION           Version for release (e.g., v20240127.0)
+  --github-repo OWNER/REPO    GitHub repository [default: randy-girard/flynn]
+  --dry-run                   Show what would be uploaded without creating release
 USAGE
 }
 
@@ -80,7 +80,7 @@ fi
 
 # Get version from flynn-host if not provided
 if [[ -z "${VERSION}" ]]; then
-  FLYNN_HOST="${ROOT}/build/bin/flynn-host"
+  FLYNN_HOST="${BUILD_DIR}/flynn-host"
   if [[ -x "${FLYNN_HOST}" ]]; then
     VERSION=$("${FLYNN_HOST}" version 2>/dev/null | head -n1)
     # Strip any commit suffix (e.g., v20260129.0-abc1234 -> v20260129.0)
@@ -112,8 +112,12 @@ fi
 info "Creating GitHub Release ${VERSION} for ${GITHUB_REPO}"
 
 # Verify build artifacts exist
-if [[ ! -d "${TUF_STAGED}" ]]; then
-  fail "TUF staged directory not found: ${TUF_STAGED}\nMake sure you've run ./build.sh first!"
+if [[ ! -d "${BUILD_DIR}" ]]; then
+  fail "Build directory not found: ${BUILD_DIR}\nRun 'script/build-flynn --version ${VERSION}' first!"
+fi
+
+if [[ ! -f "${BUILD_DIR}/flynn-host" ]]; then
+  fail "flynn-host binary not found in ${BUILD_DIR}\nRun 'script/build-flynn --version ${VERSION}' first!"
 fi
 
 # Create release artifacts directory
@@ -123,85 +127,63 @@ mkdir -p "${RELEASE_DIR}"
 
 # Package binaries (gzipped)
 info "Packaging binaries..."
-for bin in flynn-host flynn-init flynn-linux-amd64 flynn-linux-386 flynn-darwin-amd64; do
-  if [[ -f "${TUF_STAGED}/${bin}.gz" ]]; then
-    cp "${TUF_STAGED}/${bin}.gz" "${RELEASE_DIR}/${bin}.gz"
+BINARIES=(
+  "flynn-host"
+  "flynn-init"
+  "flynn-linux-amd64"
+  "flynn-linux-386"
+  "flynn-darwin-amd64"
+  "flynn-darwin-arm64"
+  "flynn-windows-amd64.exe"
+)
+
+for bin in "${BINARIES[@]}"; do
+  if [[ -f "${BUILD_DIR}/${bin}" ]]; then
+    gzip -c "${BUILD_DIR}/${bin}" > "${RELEASE_DIR}/${bin}.gz"
     echo "  - ${bin}.gz"
-  elif [[ -f "${ROOT}/build/bin/${bin}" ]]; then
-    gzip -c "${ROOT}/build/bin/${bin}" > "${RELEASE_DIR}/${bin}.gz"
-    echo "  - ${bin}.gz (from build/bin)"
   fi
 done
 
-# Package manifests (gzipped)
+# Package manifests (gzipped) if they exist
 info "Packaging manifests..."
+MANIFESTS_DIR="${ROOT}/build/manifests"
 for manifest in bootstrap-manifest.json images.json; do
-  # Look in versioned directory first
-  if [[ -f "${TUF_STAGED}/${VERSION}/${manifest}.gz" ]]; then
-    cp "${TUF_STAGED}/${VERSION}/${manifest}.gz" "${RELEASE_DIR}/${manifest}.gz"
+  if [[ -f "${MANIFESTS_DIR}/${manifest}" ]]; then
+    gzip -c "${MANIFESTS_DIR}/${manifest}" > "${RELEASE_DIR}/${manifest}.gz"
     echo "  - ${manifest}.gz"
-  elif [[ -f "${ROOT}/build/manifests/${manifest}" ]]; then
-    gzip -c "${ROOT}/build/manifests/${manifest}" > "${RELEASE_DIR}/${manifest}.gz"
-    echo "  - ${manifest}.gz (from build/manifests)"
   fi
 done
 
-# Package container image manifests
+# Package container image manifests if they exist
 info "Packaging image manifests..."
-if [[ -d "${TUF_STAGED}/images" ]] && [[ -n "$(ls -A ${TUF_STAGED}/images/*.json 2>/dev/null)" ]]; then
+IMAGE_DIR="${ROOT}/build/image"
+if [[ -d "${IMAGE_DIR}" ]] && [[ -n "$(ls -A ${IMAGE_DIR}/*.json 2>/dev/null)" ]]; then
   mkdir -p "${RELEASE_DIR}/images"
-  cp -r "${TUF_STAGED}/images/"*.json "${RELEASE_DIR}/images/" 2>/dev/null || true
-  # Create a tarball of all image manifests
-  (cd "${TUF_STAGED}" && tar czf "${RELEASE_DIR}/images.tar.gz" images/)
-  echo "  - images.tar.gz [from TUF staged]"
-elif [[ -d "${ROOT}/build/image" ]] && [[ -n "$(ls -A ${ROOT}/build/image/*.json 2>/dev/null)" ]]; then
-  # Fallback: use image manifests from build/image directory
-  echo "  (TUF staged images not found, using build/image)"
-  mkdir -p "${RELEASE_DIR}/images"
-  cp "${ROOT}/build/image/"*.json "${RELEASE_DIR}/images/" 2>/dev/null || true
+  cp "${IMAGE_DIR}/"*.json "${RELEASE_DIR}/images/" 2>/dev/null || true
   # Create a tarball of all image manifests
   (cd "${RELEASE_DIR}" && tar czf "images.tar.gz" images/)
-  echo "  - images.tar.gz [from build/image]"
+  echo "  - images.tar.gz ($(ls ${RELEASE_DIR}/images/*.json 2>/dev/null | wc -l) manifests)"
+  rm -rf "${RELEASE_DIR}/images"
 else
-  echo "  WARNING: No image manifests found in ${TUF_STAGED}/images or build/image"
+  echo "  (no image manifests found in ${IMAGE_DIR})"
 fi
 
-# Package squashfs layers (as individual files, not tar - GitHub has 2GB limit)
+# Package squashfs layers if they exist (as individual files - GitHub has 2GB limit)
 info "Packaging layers..."
-LAYERS_DIR="${RELEASE_DIR}/layers"
-mkdir -p "${LAYERS_DIR}"
+LAYER_CACHE="/var/lib/flynn/layer-cache"
 LAYER_COUNT=0
 
-if [[ -d "${TUF_STAGED}/layers" ]] && [[ -n "$(ls -A ${TUF_STAGED}/layers 2>/dev/null)" ]]; then
-  # Copy layers from TUF staged directory
-  for layer_file in "${TUF_STAGED}/layers"/*; do
+if [[ -d "${LAYER_CACHE}" ]] && [[ -n "$(ls -A ${LAYER_CACHE}/*.squashfs 2>/dev/null)" ]]; then
+  for layer_file in "${LAYER_CACHE}"/*.squashfs "${LAYER_CACHE}"/*.json; do
     if [[ -f "$layer_file" ]]; then
-      cp "$layer_file" "${LAYERS_DIR}/"
+      layer_name=$(basename "$layer_file")
+      cp "$layer_file" "${RELEASE_DIR}/${layer_name}"
       LAYER_COUNT=$((LAYER_COUNT + 1))
     fi
   done
-  echo "  - ${LAYER_COUNT} layer files [from TUF staged]"
-elif [[ -d "/var/lib/flynn/layer-cache" ]] && [[ -n "$(ls -A /var/lib/flynn/layer-cache/*.squashfs 2>/dev/null)" ]]; then
-  # Fallback: copy layers from the layer-cache directory
-  echo "  (TUF staged layers not found, using layer-cache)"
-  for layer_file in /var/lib/flynn/layer-cache/*.squashfs /var/lib/flynn/layer-cache/*.json; do
-    if [[ -f "$layer_file" ]]; then
-      cp "$layer_file" "${LAYERS_DIR}/"
-      LAYER_COUNT=$((LAYER_COUNT + 1))
-    fi
-  done
-  echo "  - ${LAYER_COUNT} layer files [from layer-cache]"
+  echo "  - ${LAYER_COUNT} layer files"
 else
-  echo "  WARNING: No layers found in ${TUF_STAGED}/layers or /var/lib/flynn/layer-cache"
-fi
-
-# Show layer sizes
-if [[ ${LAYER_COUNT} -gt 0 ]]; then
-  echo "  Layer files:"
-  ls -lh "${LAYERS_DIR}" | tail -n +2 | while read line; do
-    echo "    $line"
-  done
-  echo "  Total: $(du -sh ${LAYERS_DIR} | cut -f1)"
+  echo "  (no layers found in ${LAYER_CACHE})"
 fi
 
 # Copy install scripts
@@ -214,9 +196,8 @@ info "Generating checksums..."
 
 info "Release artifacts:"
 ls -lah "${RELEASE_DIR}"
-if [[ -d "${LAYERS_DIR}" ]]; then
-  echo "===> Layer files (${LAYER_COUNT} files):"
-  du -sh "${LAYERS_DIR}"
+if [[ ${LAYER_COUNT} -gt 0 ]]; then
+  echo "  (includes ${LAYER_COUNT} layer files)"
 fi
 
 # Generate release notes from commits since last release
@@ -350,7 +331,18 @@ if gh release view "${VERSION}" --repo "${GITHUB_REPO}" &> /dev/null; then
   gh release delete "${VERSION}" --repo "${GITHUB_REPO}" --yes || true
 fi
 
-# Create the release with main artifacts first
+# Build list of files to upload
+UPLOAD_FILES=()
+for f in "${RELEASE_DIR}"/*.gz "${RELEASE_DIR}"/*.sha512 "${RELEASE_DIR}"/install-flynn-*; do
+  [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
+done
+
+# Add layer files (squashfs and json)
+for f in "${RELEASE_DIR}"/*.squashfs "${RELEASE_DIR}"/*.json; do
+  [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
+done
+
+# Create the release
 info "Pushing to GitHub Release ${VERSION}..."
 gh release create "${VERSION}" \
   --repo "${GITHUB_REPO}" \
@@ -387,40 +379,28 @@ curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/instal
 ## Artifacts
 
 ### CLI Binaries
-- \`flynn-linux-amd64.gz\` - Flynn CLI (Linux x86_64)
-- \`flynn-linux-386.gz\` - Flynn CLI (Linux x86)
-- \`flynn-darwin-amd64.gz\` - Flynn CLI (macOS x86_64)
+| Binary | Platform |
+|--------|----------|
+| flynn-linux-amd64.gz | Linux (x86_64) |
+| flynn-linux-386.gz | Linux (x86) |
+| flynn-darwin-amd64.gz | macOS (Intel) |
+| flynn-darwin-arm64.gz | macOS (Apple Silicon) |
+| flynn-windows-amd64.exe.gz | Windows (x86_64) |
 
 ### Server Binaries
-- \`flynn-host.gz\` - Flynn host daemon
-- \`flynn-init.gz\` - Flynn init binary
-
-### Manifests & Images
-- \`bootstrap-manifest.json.gz\` - Bootstrap manifest
-- \`images.json.gz\` - Images manifest
-- \`images.tar.gz\` - Container image manifests
-- \`layers/*.squashfs\` - Container image layers (individual files)
+| Binary | Description |
+|--------|-------------|
+| flynn-host.gz | Flynn host daemon |
+| flynn-init.gz | Flynn init binary |
 
 ### Other
-- \`install-flynn-cli\` - CLI installer script
-- \`install-flynn-github\` - Server installer script
-- \`checksums.sha512\` - SHA512 checksums for all artifacts
+| File | Description |
+|------|-------------|
+| install-flynn-cli | CLI installer script |
+| install-flynn-github | Server installer script |
+| checksums.sha512 | SHA512 checksums for all artifacts |
 " \
-  "${RELEASE_DIR}"/*.gz "${RELEASE_DIR}"/*.sha512 "${RELEASE_DIR}"/install-flynn-* 2>/dev/null || true
-
-# Upload layer files separately (they can be large)
-if [[ -d "${LAYERS_DIR}" ]] && [[ -n "$(ls -A ${LAYERS_DIR} 2>/dev/null)" ]]; then
-  info "Uploading layer files..."
-  for layer_file in "${LAYERS_DIR}"/*; do
-    if [[ -f "$layer_file" ]]; then
-      layer_name=$(basename "$layer_file")
-      echo "  Uploading ${layer_name}..."
-      gh release upload "${VERSION}" "$layer_file" --repo "${GITHUB_REPO}" --clobber || {
-        echo "  WARNING: Failed to upload ${layer_name}"
-      }
-    fi
-  done
-fi
+  "${UPLOAD_FILES[@]}"
 
 info "GitHub Release ${VERSION} created successfully!"
 echo "     https://github.com/${GITHUB_REPO}/releases/tag/${VERSION}"
