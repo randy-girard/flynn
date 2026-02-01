@@ -368,8 +368,8 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 		return err
 	}
 
-	if err := os.Remove(p.recoveryConfPath()); err != nil && !os.IsNotExist(err) {
-		log.Error("error removing recovery.conf", "path", p.recoveryConfPath(), "err", err)
+	if err := p.removeStandbySignal(); err != nil {
+		log.Error("error removing standby.signal", "path", p.standbySignalPath(), "err", err)
 		return err
 	}
 
@@ -443,8 +443,8 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	// http://www.databasesoup.com/2014/05/remastering-without-restarting.html
 
 	if p.running() {
-		// if we are running, we can just restart with a new recovery.conf, postgres
-		// supports streaming remastering.
+		// if we are running, we can just restart with new replication settings,
+		// postgres supports streaming remastering.
 		if err := p.stop(); err != nil {
 			return err
 		}
@@ -482,12 +482,24 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		os.Remove(p.triggerPath())
 	}
 
-	if err := p.writeConfig(configData{ReadOnly: true}); err != nil {
+	// Write postgresql.conf with replication settings (PostgreSQL 12+ style)
+	cfg := configData{
+		ReadOnly: true,
+		PrimaryConnInfo: fmt.Sprintf(
+			"host=%s port=%s user=flynn password=%s application_name=%s",
+			upstream.Host(), upstream.Port(), p.password, p.id,
+		),
+		PromoteTriggerFile:     p.triggerPath(),
+		RecoveryTargetTimeline: "latest",
+	}
+	if err := p.writeConfig(cfg); err != nil {
 		log.Error("error writing postgres.conf", "path", p.configPath(), "err", err)
 		return err
 	}
-	if err := p.writeRecoveryConf(upstream); err != nil {
-		log.Error("error writing recovery.conf", "path", p.recoveryConfPath(), "err", err)
+
+	// Create standby.signal file (PostgreSQL 12+ style instead of recovery.conf)
+	if err := p.createStandbySignal(); err != nil {
+		log.Error("error creating standby.signal", "path", p.standbySignalPath(), "err", err)
 		return err
 	}
 
@@ -843,21 +855,23 @@ func (p *Process) writeConfig(d configData) error {
 	return configTemplate.Execute(f, d)
 }
 
-func (p *Process) writeRecoveryConf(upstream *discoverd.Instance) error {
-	data := recoveryData{
-		TriggerFile: p.triggerPath(),
-		PrimaryInfo: fmt.Sprintf(
-			"host=%s port=%s user=flynn password=%s application_name=%s",
-			upstream.Host(), upstream.Port(), p.password, p.id,
-		),
-	}
-
-	f, err := os.Create(p.recoveryConfPath())
+// createStandbySignal creates the standby.signal file required by PostgreSQL 12+
+// to indicate that the server should start as a standby replica.
+func (p *Process) createStandbySignal() error {
+	f, err := os.Create(p.standbySignalPath())
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return recoveryConfTemplate.Execute(f, data)
+	return f.Close()
+}
+
+// removeStandbySignal removes the standby.signal file when promoting to primary
+func (p *Process) removeStandbySignal() error {
+	err := os.Remove(p.standbySignalPath())
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func (p *Process) writeHBAConf() error {
@@ -868,8 +882,8 @@ func (p *Process) configPath() string {
 	return p.dataPath("postgresql.conf")
 }
 
-func (p *Process) recoveryConfPath() string {
-	return p.dataPath("recovery.conf")
+func (p *Process) standbySignalPath() string {
+	return p.dataPath("standby.signal")
 }
 
 func (p *Process) hbaConfPath() string {
@@ -893,6 +907,11 @@ type configData struct {
 	Port     string
 	Sync     string
 	ReadOnly bool
+
+	// Standby replication settings (PostgreSQL 12+)
+	PrimaryConnInfo        string
+	PromoteTriggerFile     string
+	RecoveryTargetTimeline string
 
 	TimescaleDB  bool
 	ExtWhitelist bool
@@ -945,18 +964,13 @@ dynamic_shared_memory_type = '{{.SHMType}}'
 local_preload_libraries = 'pgextwlist'
 extwlist.extensions = 'btree_gin,btree_gist,chkpass,citext,cube,dblink,dict_int,earthdistance,fuzzystrmatch,hstore,intarray,isn,ltree,pg_prewarm,pg_stat_statements,pg_trgm,pgcrypto,pgrouting,pgrowlocks,pgstattuple,plpgsql,plv8,postgis,postgis_topology,postgres_fdw,tablefunc,timescaledb,unaccent,uuid-ossp'
 {{end}}
-`[1:]))
 
-type recoveryData struct {
-	PrimaryInfo string
-	TriggerFile string
-}
-
-var recoveryConfTemplate = template.Must(template.New("recovery.conf").Parse(`
-standby_mode = on
-primary_conninfo = '{{.PrimaryInfo}}'
-trigger_file = '{{.TriggerFile}}'
-recovery_target_timeline = 'latest'
+{{if .PrimaryConnInfo}}
+# Standby replication settings (PostgreSQL 12+)
+primary_conninfo = '{{.PrimaryConnInfo}}'
+promote_trigger_file = '{{.PromoteTriggerFile}}'
+recovery_target_timeline = '{{.RecoveryTargetTimeline}}'
+{{end}}
 `[1:]))
 
 var hbaConf = []byte(`
