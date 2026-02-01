@@ -33,7 +33,7 @@ import (
 
 const (
 	DefaultPort        = "3306"
-	DefaultBinDir      = "/bin"
+	DefaultBinDir      = "/usr/bin"
 	DefaultSbinDir     = "/usr/sbin"
 	DefaultDataDir     = "/data"
 	DefaultPassword    = ""
