@@ -289,8 +289,10 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 func (p *Process) Backup() (io.ReadCloser, error) {
 	r := &backupReadCloser{}
 
+	// Use mariabackup instead of deprecated innobackupex (deprecated since MariaDB 10.3)
 	cmd := exec.Command(
-		filepath.Join(p.BinDir, "innobackupex"),
+		filepath.Join(p.BinDir, "mariabackup"),
+		"--backup",
 		"--defaults-file="+p.ConfigPath(),
 		"--host=127.0.0.1",
 		"--port="+p.Port,
@@ -298,7 +300,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 		"--password="+p.Password,
 		"--socket=",
 		"--stream=xbstream",
-		".",
+		"--target-dir=.",
 	)
 	cmd.Dir = p.DataDir
 	cmd.Stderr = &r.stderr
@@ -368,14 +370,14 @@ func (p *Process) unpackXbstream(r io.Reader) error {
 }
 
 func (p *Process) restoreApplyLog() error {
+	// Use mariabackup --prepare instead of deprecated innobackupex --apply-log
 	cmd := exec.Command(
-		filepath.Join(p.BinDir, "innobackupex"),
-		"--defaults-file="+p.ConfigPath(),
-		"--apply-log",
-		p.DataDir,
+		filepath.Join(p.BinDir, "mariabackup"),
+		"--prepare",
+		"--target-dir="+p.DataDir,
 	)
 	if buf, err := cmd.CombinedOutput(); err != nil {
-		p.Logger.Error("innobackupex apply-log failed", "err", err, "output", string(buf))
+		p.Logger.Error("mariabackup prepare failed", "err", err, "output", string(buf))
 		return err
 	}
 	return nil
@@ -1007,7 +1009,7 @@ func MySQLErrorNumber(err error) uint16 {
 	return 0
 }
 
-// backupReadCloser wraps the Cmd of the innobackupex to perform error handling.
+// backupReadCloser wraps the Cmd of mariabackup to perform error handling.
 type backupReadCloser struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
@@ -1022,10 +1024,10 @@ func (r *backupReadCloser) Close() error {
 		return err
 	}
 
-	// Verify that innobackupex prints "completed OK!" at the end of STDERR.
+	// Verify that mariabackup prints "completed OK!" at the end of STDERR.
 	if !strings.HasSuffix(strings.TrimSpace(r.stderr.String()), "completed OK!") {
 		r.stderr.WriteTo(os.Stderr)
-		return errors.New("innobackupex did not complete ok")
+		return errors.New("mariabackup did not complete ok")
 	}
 
 	return nil
