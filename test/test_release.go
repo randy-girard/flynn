@@ -32,9 +32,6 @@ func (s *ReleaseSuite) addReleaseHosts(t *c.C) *tc.BootResult {
 
 var releaseScript = template.Must(template.New("release-script").Parse(`
 export DISCOVERD="{{ .Discoverd }}"
-export TUF_TARGETS_PASSPHRASE="flynn-test"
-export TUF_SNAPSHOT_PASSPHRASE="flynn-test"
-export TUF_TIMESTAMP_PASSPHRASE="flynn-test"
 export GOPATH=~/go
 
 ROOT="${GOPATH}/src/github.com/flynn/flynn"
@@ -42,9 +39,8 @@ cd "${ROOT}"
 
 # send all output to stderr so only images.json is output to stdout
 (
-  # serve the test TUF repository over HTTP
+  # serve the test release files over HTTP
   dir="$(mktemp --directory)"
-  ln -s "${ROOT}/test/release/repository" "${dir}/tuf"
   ln -s "${ROOT}/script/install-flynn" "${dir}/install-flynn"
   sudo start-stop-daemon \
     --start \
@@ -52,12 +48,11 @@ cd "${ROOT}"
     --chdir "${dir}" \
     --exec "${ROOT}/build/bin/flynn-test-file-server"
 
-  # update the builder manifest to use the test TUF repository and create new
-  # image manifests for each released image by updating entrypoints
+  # update the builder manifest to create new image manifests for each
+  # released image by updating entrypoints
   jq \
-    --argjson root_keys       "$(build/bin/tuf --dir test/release root-keys)" \
     --argjson released_images "$(jq --compact-output 'keys | reduce .[] as $name ({}; .[$name] = true)' build/manifests/images.json)" \
-    '.tuf.root_keys = $root_keys | .tuf.repository = "http://{{ .HostIP }}:8080/tuf" | .images |= map(if (.id | in($released_images)) then .entrypoint.env = {"FOO":"BAR"} else . end)' \
+    '.images |= map(if (.id | in($released_images)) then .entrypoint.env = {"FOO":"BAR"} else . end)' \
     builder/manifest.json \
     > /tmp/manifest.json
   mv /tmp/manifest.json builder/manifest.json
@@ -65,10 +60,6 @@ cd "${ROOT}"
   # build new images and binaries
   FLYNN_VERSION="v20161108.0.test"
   script/build-flynn --host "{{ .HostID }}" --version "${FLYNN_VERSION}"
-
-  # release components
-  script/export-components --host "{{ .HostID }}" "${ROOT}/test/release"
-  script/release-channel --tuf-dir "${ROOT}/test/release" --no-sync --no-changelog "stable" "${FLYNN_VERSION}"
 
   # create a slug for testing slug based app updates
   build/bin/flynn-host run \
@@ -89,16 +80,15 @@ var installScript = template.Must(template.New("install-script").Parse(`
 # download to a tmp file so the script fails on download error rather than
 # executing nothing and succeeding
 curl -sL --fail http://{{ .Blobstore }}/install-flynn > /tmp/install-flynn
-bash -e /tmp/install-flynn -r "http://{{ .Blobstore }}"
+bash -e /tmp/install-flynn -r "flynn/flynn"
 `))
 
 var updateScript = template.Must(template.New("update-script").Parse(`
 timeout --signal=QUIT --kill-after=10 10m bash -ex <<-SCRIPT
 cd ~/go/src/github.com/flynn/flynn
-build/bin/tuf --dir test/release root-keys | build/bin/tuf-client init --store /tmp/tuf.db http://{{ .Blobstore }}/tuf
 echo stable | sudo tee /etc/flynn/channel.txt
 export DISCOVERD="{{ .Discoverd }}"
-build/bin/flynn-host update --repository http://{{ .Blobstore }}/tuf --tuf-db /tmp/tuf.db
+build/bin/flynn-host update --github-repo flynn/flynn
 SCRIPT
 `))
 

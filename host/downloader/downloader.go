@@ -5,18 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"path"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/volume"
 	volumemanager "github.com/flynn/flynn/host/volume/manager"
-	"github.com/flynn/flynn/pkg/tufutil"
-	tuf "github.com/flynn/go-tuf/client"
+	"github.com/flynn/flynn/pkg/ghrelease"
+	"github.com/inconshreveable/log15"
 )
 
 const (
@@ -34,18 +31,27 @@ var config = []string{
 	"bootstrap-manifest.json",
 }
 
-// Downloader downloads versioned files using a tuf client
+// Downloader downloads versioned files from GitHub releases
 type Downloader struct {
-	client  *tuf.Client
+	client  *ghrelease.Client
+	repo    string
 	vman    *volumemanager.Manager
 	version string
+	log     log15.Logger
 }
 
-func New(client *tuf.Client, vman *volumemanager.Manager, version string) *Downloader {
-	return &Downloader{client, vman, version}
+// New creates a new Downloader that uses GitHub releases
+func New(repo string, vman *volumemanager.Manager, version string, log log15.Logger) *Downloader {
+	return &Downloader{
+		client:  ghrelease.NewClient(repo, log),
+		repo:    repo,
+		vman:    vman,
+		version: version,
+		log:     log,
+	}
 }
 
-// DownloadBinaries downloads the Flynn binaries using the tuf client to the
+// DownloadBinaries downloads the Flynn binaries from GitHub releases to the
 // given dir with the version suffixed (e.g. /usr/local/bin/flynn-host.v20150726.0)
 // and updates non-versioned symlinks.
 func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
@@ -70,7 +76,7 @@ func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
 	return paths, nil
 }
 
-// DownloadConfig downloads the Flynn config files using the tuf client to the
+// DownloadConfig downloads the Flynn config files from GitHub releases to the
 // given dir.
 func (d *Downloader) DownloadConfig(dir string) (map[string]string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -87,163 +93,196 @@ func (d *Downloader) DownloadConfig(dir string) (map[string]string, error) {
 	return paths, nil
 }
 
-// downloadWithRetry wraps tufutil.Download with retry logic
-func (d *Downloader) downloadWithRetry(target string) (io.ReadCloser, error) {
+// downloadWithRetry wraps the download with retry logic
+func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 	var lastErr error
 	for attempt := 1; attempt <= maxDownloadRetries; attempt++ {
-		tmp, err := tufutil.Download(d.client, target)
+		err := d.client.DownloadFile(assetURL, destPath)
 		if err == nil {
-			return tmp, nil
+			return nil
 		}
 		lastErr = err
 		if attempt < maxDownloadRetries {
+			d.log.Warn("download failed, retrying", "attempt", attempt, "err", err)
 			time.Sleep(retryDelay)
 		}
 	}
-	return nil, fmt.Errorf("download failed after %d attempts: %w", maxDownloadRetries, lastErr)
+	return fmt.Errorf("download failed after %d attempts: %s", maxDownloadRetries, lastErr)
 }
 
-func (d *Downloader) DownloadImages(dir string, info chan *ct.ImagePullInfo) error {
-	defer close(info)
+// downloadGzippedFile downloads a gzipped file from GitHub releases, decompresses it,
+// and optionally creates a versioned file with a symlink.
+func (d *Downloader) downloadGzippedFile(name, dir string, versioned bool) (string, error) {
+	// Construct the asset URL
+	assetName := name + ".gz"
+	assetURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + assetName
 
-	path := filepath.Join(d.version, "images.json.gz")
-	tmp, err := d.downloadWithRetry(path)
-	if err != nil {
-		return err
+	// Download to temp file
+	tmpPath := filepath.Join(dir, assetName+".tmp")
+	if err := d.downloadWithRetry(assetURL, tmpPath); err != nil {
+		return "", fmt.Errorf("error downloading %s: %s", name, err)
 	}
-	defer tmp.Close()
+	defer os.Remove(tmpPath)
 
-	gz, err := gzip.NewReader(tmp)
+	// Open and decompress
+	gzFile, err := os.Open(tmpPath)
 	if err != nil {
-		return err
+		return "", err
+	}
+	defer gzFile.Close()
+
+	gz, err := gzip.NewReader(gzFile)
+	if err != nil {
+		return "", fmt.Errorf("error creating gzip reader for %s: %s", name, err)
 	}
 	defer gz.Close()
 
-	out, err := os.Create(filepath.Join(dir, "images."+d.version+".json"))
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	var images map[string]*ct.Artifact
-	if err := json.NewDecoder(io.TeeReader(gz, out)).Decode(&images); err != nil {
-		return err
+	// Determine destination path
+	var destPath string
+	if versioned {
+		destPath = filepath.Join(dir, name+"."+d.version)
+	} else {
+		destPath = filepath.Join(dir, name)
 	}
 
-	for _, image := range images {
-		if err := d.downloadImage(image, info); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func (d *Downloader) downloadImage(artifact *ct.Artifact, info chan *ct.ImagePullInfo) error {
-	info <- &ct.ImagePullInfo{
-		Name:     artifact.Meta["flynn.component"],
-		Type:     ct.ImagePullTypeImage,
-		Artifact: artifact,
-	}
-
-	for _, rootfs := range artifact.Manifest().Rootfs {
-		for _, layer := range rootfs.Layers {
-			if layer.Type != ct.ImageLayerTypeSquashfs {
-				continue
-			}
-
-			info <- &ct.ImagePullInfo{
-				Name:  artifact.Meta["flynn.component"],
-				Type:  ct.ImagePullTypeLayer,
-				Layer: layer,
-			}
-
-			if err := d.downloadSquashfsLayer(layer, artifact.LayerURL(layer), artifact.Meta); err != nil {
-				return fmt.Errorf("error downloading layer: %s", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func (d *Downloader) downloadSquashfsLayer(layer *ct.ImageLayer, layerURL string, meta map[string]string) error {
-	if vol := d.vman.GetVolume(layer.ID); vol != nil {
-		return nil
-	}
-
-	u, err := url.Parse(layerURL)
-	if err != nil {
-		return err
-	}
-
-	target := u.Query().Get("target")
-	if target == "" {
-		return fmt.Errorf("missing target param in URL: %s", layerURL)
-	}
-
-	tmp, err := d.downloadWithRetry(target)
-	if err != nil {
-		return err
-	}
-	defer tmp.Close()
-
-	_, err = d.vman.ImportFilesystem("default", &volume.Filesystem{
-		ID:         layer.ID,
-		Data:       tmp,
-		Size:       layer.Length,
-		Type:       volume.VolumeTypeSquashfs,
-		MountFlags: syscall.MS_RDONLY,
-		Meta:       meta,
-	})
-	return err
-}
-
-func (d *Downloader) downloadGzippedFile(name, dir string, versionSuffix bool) (string, error) {
-	path := path.Join(d.version, name)
-	gzPath := path + ".gz"
-	dst := filepath.Join(dir, name)
-	if versionSuffix {
-		dst = dst + "." + d.version
-	}
-
-	file, err := d.downloadWithRetry(gzPath)
+	// Write decompressed content
+	destFile, err := os.Create(destPath)
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
-
-	// unlink the destination file in case it's in use
-	os.Remove(dst)
-
-	out, err := os.Create(dst)
-	if err != nil {
-		return "", err
+	if _, err := io.Copy(destFile, gz); err != nil {
+		destFile.Close()
+		os.Remove(destPath)
+		return "", fmt.Errorf("error decompressing %s: %s", name, err)
 	}
-	defer out.Close()
-	gz, err := gzip.NewReader(file)
-	if err != nil {
-		return "", err
-	}
-	defer gz.Close()
-	_, err = io.Copy(out, gz)
-	if err != nil {
-		return "", err
-	}
+	destFile.Close()
 
-	if versionSuffix {
-		// symlink the non-versioned path to the versioned path
-		// e.g. flynn-host -> flynn-host.v20150726.0
-		link := filepath.Join(dir, name)
-		if err := symlink(filepath.Base(dst), link); err != nil {
+	// Create symlink for versioned files
+	if versioned {
+		if err := symlink(filepath.Base(destPath), filepath.Join(dir, name)); err != nil {
 			return "", err
 		}
 	}
 
-	return dst, nil
+	return destPath, nil
 }
 
-func symlink(oldname, newname string) error {
-	os.Remove(newname)
-	return os.Symlink(oldname, newname)
+// symlink creates a symlink, removing any existing file/symlink first
+func symlink(target, link string) error {
+	os.Remove(link)
+	return os.Symlink(target, link)
+}
+
+// DownloadImages downloads container images from GitHub releases.
+// It downloads the images manifest and then downloads each layer.
+func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo) error {
+	defer close(ch)
+
+	// Download images manifest
+	manifestURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/images.json.gz"
+	manifestPath := filepath.Join(configDir, "images.json.gz.tmp")
+	if err := d.downloadWithRetry(manifestURL, manifestPath); err != nil {
+		return fmt.Errorf("error downloading images manifest: %s", err)
+	}
+	defer os.Remove(manifestPath)
+
+	// Decompress manifest
+	gzFile, err := os.Open(manifestPath)
+	if err != nil {
+		return err
+	}
+	defer gzFile.Close()
+
+	gz, err := gzip.NewReader(gzFile)
+	if err != nil {
+		return fmt.Errorf("error creating gzip reader for images manifest: %s", err)
+	}
+	defer gz.Close()
+
+	// Parse manifest
+	var images map[string]*ct.Artifact
+	if err := json.NewDecoder(gz).Decode(&images); err != nil {
+		return fmt.Errorf("error parsing images manifest: %s", err)
+	}
+
+	// Download each image's layers
+	layerCacheDir := "/var/lib/flynn/layer-cache"
+	if err := os.MkdirAll(layerCacheDir, 0755); err != nil {
+		return fmt.Errorf("error creating layer cache dir: %s", err)
+	}
+
+	for name, artifact := range images {
+		ch <- &ct.ImagePullInfo{
+			Type:     ct.ImagePullTypeImage,
+			Name:     name,
+			Artifact: artifact,
+		}
+
+		manifest := artifact.Manifest()
+		if manifest == nil {
+			continue
+		}
+
+		for _, rootfs := range manifest.Rootfs {
+			for _, layer := range rootfs.Layers {
+				// Check if layer already exists
+				layerPath := filepath.Join(layerCacheDir, layer.ID+".squashfs")
+				if _, err := os.Stat(layerPath); err == nil {
+					continue // Layer already cached
+				}
+
+				ch <- &ct.ImagePullInfo{
+					Type:  ct.ImagePullTypeLayer,
+					Name:  name,
+					Layer: layer,
+				}
+
+				// Download layer
+				if err := d.downloadLayer(layer, layerCacheDir); err != nil {
+					return fmt.Errorf("error downloading layer %s: %s", layer.ID, err)
+				}
+
+				// Import layer into volume manager
+				if d.vman != nil {
+					if err := d.importLayer(layer, layerPath); err != nil {
+						return fmt.Errorf("error importing layer %s: %s", layer.ID, err)
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// downloadLayer downloads a single layer from GitHub releases
+func (d *Downloader) downloadLayer(layer *ct.ImageLayer, cacheDir string) error {
+	layerURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/layers/" + layer.ID + ".squashfs"
+	destPath := filepath.Join(cacheDir, layer.ID+".squashfs")
+	return d.downloadWithRetry(layerURL, destPath)
+}
+
+// importLayer imports a downloaded layer into the volume manager
+func (d *Downloader) importLayer(layer *ct.ImageLayer, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+
+	fs := &volume.Filesystem{
+		ID:   layer.ID,
+		Data: f,
+		Size: info.Size(),
+		Type: volume.VolumeTypeSquashfs,
+		Meta: layer.Meta,
+	}
+
+	_, err = d.vman.ImportFilesystem("default", fs)
+	return err
 }

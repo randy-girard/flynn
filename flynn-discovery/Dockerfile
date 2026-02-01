@@ -1,5 +1,4 @@
-ARG HOST_UBUNTU
-FROM ubuntu:${HOST_UBUNTU:-16.04}
+FROM ubuntu:24.04
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -33,4 +32,4 @@ RUN rm -f go.mod && \
   go mod tidy && \
   go build -o /usr/bin/flynn-discovery
 
-CMD ["/bin/flynn-discovery"]
+CMD ["/usr/bin/flynn-discovery"]

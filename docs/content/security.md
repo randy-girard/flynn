@@ -24,10 +24,8 @@ to understand what the current security properties of Flynn are.
 ## Distribution Security
 
 All binaries that we provide including `flynn-host`, the `flynn` CLI tool, and
-container images are distributed securely using the [The Update
-Framework](http://theupdateframework.com). TUF includes a robust, role-based
-signature system and protects against many attacks including downgrades and CDN
-compromise. In addition to TUF, we serve all content exclusively over HTTPS.
+container images are distributed securely using GitHub Releases. All content is
+served exclusively over HTTPS.
 
 Our Vagrant virtual machine images are served over HTTPS but are not currently
 signed, as signatures are not supported by Vagrant.

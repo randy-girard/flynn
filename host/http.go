@@ -4,12 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +22,6 @@ import (
 	"github.com/flynn/flynn/pkg/keepalive"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sse"
-	"github.com/flynn/flynn/pkg/tufutil"
-	"github.com/flynn/flynn/pkg/version"
-	tuf "github.com/flynn/go-tuf/client"
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
 )
@@ -264,33 +258,21 @@ func (h *jobAPI) SignalJob(w http.ResponseWriter, r *http.Request, ps httprouter
 
 func (h *jobAPI) PullImages(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	log := h.host.log.New("fn", "PullImages")
-
-	log.Info("extracting TUF database")
-	tufDB, err := extractTufDB(r)
-	if err != nil {
-		log.Error("error extracting TUF database", "err", err)
-		httphelper.Error(w, err)
-		return
-	}
-	defer os.Remove(tufDB)
+	r.Body.Close()
 
 	query := r.URL.Query()
-
-	log.Info("initializing TUF client")
-	client, err := newTufClient(tufDB, query.Get("repository"))
-	if err != nil {
-		log.Error("error initializing TUF client", "err", err)
-		httphelper.Error(w, err)
-		return
+	repo := query.Get("repository")
+	if repo == "" {
+		repo = "flynn/flynn"
 	}
 
 	info := make(chan *ct.ImagePullInfo)
 	stream := sse.NewStream(w, info, nil)
 	go stream.Serve()
 
-	d := downloader.New(client, h.host.vman, query.Get("version"))
+	d := downloader.New(repo, h.host.vman, query.Get("version"), log)
 
-	log.Info("pulling images")
+	log.Info("pulling images from GitHub", "repo", repo, "version", query.Get("version"))
 	if err := d.DownloadImages(query.Get("config-dir"), info); err != nil {
 		log.Error("error pulling images", "err", err)
 		stream.CloseWithError(err)
@@ -302,29 +284,17 @@ func (h *jobAPI) PullImages(w http.ResponseWriter, r *http.Request, ps httproute
 
 func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	log := h.host.log.New("fn", "PullBinariesAndConfig")
-
-	log.Info("extracting TUF database")
-	tufDB, err := extractTufDB(r)
-	if err != nil {
-		log.Error("error extracting TUF database", "err", err)
-		httphelper.Error(w, err)
-		return
-	}
-	defer os.Remove(tufDB)
+	r.Body.Close()
 
 	query := r.URL.Query()
-
-	log.Info("initializing TUF client")
-	client, err := newTufClient(tufDB, query.Get("repository"))
-	if err != nil {
-		log.Error("error initializing TUF client", "err", err)
-		httphelper.Error(w, err)
-		return
+	repo := query.Get("repository")
+	if repo == "" {
+		repo = "flynn/flynn"
 	}
 
-	d := downloader.New(client, h.host.vman, query.Get("version"))
+	d := downloader.New(repo, h.host.vman, query.Get("version"), log)
 
-	log.Info("downloading binaries")
+	log.Info("downloading binaries from GitHub", "repo", repo, "version", query.Get("version"))
 	paths, err := d.DownloadBinaries(query.Get("bin-dir"))
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
@@ -332,7 +302,7 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
-	log.Info("downloading config")
+	log.Info("downloading config from GitHub")
 	configs, err := d.DownloadConfig(query.Get("config-dir"))
 	if err != nil {
 		log.Error("error downloading config", "err", err)
@@ -549,35 +519,6 @@ func (h *jobAPI) Update(w http.ResponseWriter, req *http.Request, _ httprouter.P
 		log.Info("exiting")
 		os.Exit(0)
 	})
-}
-
-func newTufClient(tufDB, repository string) (*tuf.Client, error) {
-	local, err := tuf.FileLocalStore(tufDB)
-	if err != nil {
-		return nil, err
-	}
-	opts := &tuf.HTTPRemoteOptions{
-		UserAgent: fmt.Sprintf("flynn-host/%s %s-%s pull", version.String(), runtime.GOOS, runtime.GOARCH),
-		Retries:   tufutil.DefaultHTTPRetries,
-	}
-	remote, err := tuf.HTTPRemoteStore(repository, opts)
-	if err != nil {
-		return nil, err
-	}
-	return tuf.NewClient(local, remote), nil
-}
-
-func extractTufDB(r *http.Request) (string, error) {
-	defer r.Body.Close()
-	tmp, err := ioutil.TempFile("", "tuf-db")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-	if _, err := io.Copy(tmp, r.Body); err != nil {
-		return "", err
-	}
-	return tmp.Name(), nil
 }
 
 func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {

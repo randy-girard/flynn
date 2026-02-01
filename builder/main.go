@@ -14,7 +14,6 @@ usage: flynn-builder <command> [<args>...]
 Commands:
   build      build Flynn images
   run        run a command and generate an image layer
-  export     export Flynn binaries, manifests & images to a TUF repository
 `[1:]
 
 type Command struct {
@@ -32,8 +31,6 @@ func main() {
 		cmd = cmdBuild
 	case "run":
 		cmd = cmdRun
-	case "export":
-		cmd = cmdExport
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		log.Fatalf("unknown command %q", name)

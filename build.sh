@@ -1,11 +1,10 @@
 #!/bin/bash
 #
 # Flynn Build Script
-# Builds Flynn components and optionally pushes to TUF server
+# Builds Flynn components
 #
 # Usage:
-#   ./build.sh                              # Build only (no upload)
-#   ./build.sh --tuf-release                # Build and push to TUF server
+#   ./build.sh                              # Build
 #   ./build.sh --version v20240127.0        # Build with specific version
 #
 # For GitHub Releases, run ./script/github-release after committing your changes.
@@ -13,28 +12,17 @@
 
 set -eo pipefail
 
+# Get the root directory of the Flynn project
+FLYNN_ROOT="$(cd "$(dirname "$0")" && pwd)"
+export FLYNN_ROOT
+
 # Parse command line arguments
-PUSH_TO_TUF=false
 VERSION=""
-TUF_REMOTE_HOST="${TUF_REMOTE_HOST:-root@10.0.0.211}"
-TUF_REMOTE_PATH="${TUF_REMOTE_PATH:-/root/go-tuf/repo}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --tuf-release)
-      PUSH_TO_TUF=true
-      shift
-      ;;
     --version)
       VERSION="$2"
-      shift 2
-      ;;
-    --tuf-host)
-      TUF_REMOTE_HOST="$2"
-      shift 2
-      ;;
-    --tuf-path)
-      TUF_REMOTE_PATH="$2"
       shift 2
       ;;
     *)
@@ -42,10 +30,7 @@ while [[ $# -gt 0 ]]; do
       echo "Usage: $0 [OPTIONS]"
       echo ""
       echo "OPTIONS:"
-      echo "  --tuf-release              Push to TUF remote server"
       echo "  --version VERSION          Version for build (e.g., v20240127)"
-      echo "  --tuf-host USER@HOST       TUF remote host [default: root@10.0.0.211]"
-      echo "  --tuf-path PATH            TUF remote path [default: /root/go-tuf/repo]"
       echo ""
       echo "For GitHub Releases, run ./script/github-release after committing."
       exit 1
@@ -72,13 +57,12 @@ fi
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
 
+# Flynn discovery directory (subdirectory of flynn repo by default, can be overridden)
+export FLYNN_DISCOVERY_DIR="${FLYNN_DISCOVERY_DIR:-${FLYNN_ROOT}/flynn-discovery}"
+
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
-export TUF_ROOT_PASSPHRASE="password"
-export TUF_TARGETS_PASSPHRASE="password"
-export TUF_SNAPSHOT_PASSPHRASE="password"
-export TUF_TIMESTAMP_PASSPHRASE="password"
-export PATH="/root/go/src/github.com/flynn/flynn/build/bin:/usr/local/go/bin:$PATH"
+export PATH="${FLYNN_ROOT}/build/bin:/usr/local/go/bin:$PATH"
 export CGO_ENABLED=1
 export CLUSTER_DOMAIN=flynn.local
 export DISCOVERD=192.0.2.200:1111
@@ -90,7 +74,7 @@ export DISCOVERD_PEERS=192.0.2.200:1111
 export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
-export JSON_FILE="/root/go/src/github.com/flynn/flynn/builder/manifest.json"
+export JSON_FILE="${FLYNN_ROOT}/builder/manifest.json"
 export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
 echo "GO VERSION"
@@ -100,8 +84,6 @@ echo "$(go version)"
 ./script/install-flynn --remove --clean --yes
 
 echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-
-ssh -o StrictHostKeyChecking=no "${TUF_REMOTE_HOST}" "rm -rf ${TUF_REMOTE_PATH}/*"
 
 mkdir -p /var/lib/flynn/base-root
 debootstrap \
@@ -127,25 +109,15 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
   "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-cd /root/go/src/github.com/flynn/go-tuf/ && \
-docker compose down && \
-rm -rf repo && \
-docker compose up -d --build
-
-# Whenever the keys expire, you have to run this
-# script again, and then clean and build flynn
-./update_keys_in_flynn.sh
-
-scp -o StrictHostKeyChecking=no -r ./repo/* root@10.0.0.211:/root/go-tuf/repo/
-
-cd /root/go/src/github.com/flynn/flynn-discovery && \
+# Start flynn-discovery service
+cd "${FLYNN_DISCOVERY_DIR}" && \
 docker compose down && \
 docker compose up -d --build
 
-cd /root/go/src/github.com/flynn/flynn && \
+# Return to Flynn root and continue build
+cd "${FLYNN_ROOT}" && \
 mkdir -p /etc/flynn && \
 mkdir -p /tmp/discoverd-data
-
 
 rm -rf /tmp/flynn-* && \
 rm -rf /var/log/flynn/* && \
@@ -158,13 +130,12 @@ export DISCOVERY_URL=`./build/bin/flynn-host init --init-discovery` && \
 ./script/start-all && \
 zfs set sync=disabled flynn-default && \
 zfs set reservation=512M flynn-default && \
-zfs set refreservation=512M flynn-default && \
-rm -rf /etc/flynn/tuf.db
+zfs set refreservation=512M flynn-default
 
 # Flynn builder step with retry loop
 while true; do
   echo "===> Running flynn-builder build with version: ${VERSION}"
-  if ./script/flynn-builder build --version="${VERSION}" --tuf-db=/etc/flynn/tuf.db --verbose; then
+  if ./script/flynn-builder build --version="${VERSION}" --verbose; then
     echo "===> flynn-builder build succeeded!"
     break
   else
@@ -186,25 +157,10 @@ while true; do
   fi
 done
 
-./script/export-components --host host0 /root/go/src/github.com/flynn/flynn/go-tuf/repo && \
 flynn-host ps -a
 
-cd /root/go/src/github.com/flynn/flynn
+cd "${FLYNN_ROOT}"
 cp ./script/install-flynn /usr/bin/install-flynn
-
-echo "===> Build and TUF export complete!"
-
-# ============================================================================
-# TUF Remote Server Push (optional)
-# ============================================================================
-if $PUSH_TO_TUF; then
-  echo "===> Pushing to TUF remote server ${TUF_REMOTE_HOST}:${TUF_REMOTE_PATH}..."
-
-  scp -o StrictHostKeyChecking=no -r /root/go/src/github.com/flynn/flynn/go-tuf/repo/repository/ "${TUF_REMOTE_HOST}:${TUF_REMOTE_PATH}/"
-  scp -o StrictHostKeyChecking=no /usr/bin/install-flynn "${TUF_REMOTE_HOST}:${TUF_REMOTE_PATH}/install-flynn"
-
-  echo "===> TUF remote push complete!"
-fi
 
 echo "===> Build complete!"
 echo ""

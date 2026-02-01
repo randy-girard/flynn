@@ -2,120 +2,107 @@ package cli
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"path"
-	"path/filepath"
 	"runtime"
-	"strings"
-	"syscall"
 
 	"github.com/docker/go-units"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/downloader"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/host/volume/zfs"
-	"github.com/flynn/flynn/pkg/tufconfig"
-	"github.com/flynn/flynn/pkg/tufutil"
-	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/pkg/ghrelease"
+	"github.com/flynn/flynn/pkg/installsource"
 	"github.com/flynn/go-docopt"
-	tuf "github.com/flynn/go-tuf/client"
 	"github.com/inconshreveable/log15"
+
+	volumemanager "github.com/flynn/flynn/host/volume/manager"
 )
 
 func init() {
 	Register("download", runDownload, `
-usage: flynn-host download [--repository=<uri>] [--tuf-db=<path>] [--config-dir=<dir>] [--bin-dir=<dir>] [--volpath=<path>]
+usage: flynn-host download [options]
 
 Options:
-  -r --repository=<uri>    TUF repository URI [default: https://dl.flynn.io/tuf]
-  -t --tuf-db=<path>       local TUF file [default: /etc/flynn/tuf.db]
-  -c --config-dir=<dir>    config directory [default: /etc/flynn]
-  -b --bin-dir=<dir>       binary directory [default: /usr/local/bin]
+  -b --bin-dir=<dir>       directory to download binaries to [default: /usr/local/bin]
+  -c --config-dir=<dir>    directory to download config files to [default: /etc/flynn]
   -v --volpath=<path>      directory to create volumes in [default: /var/lib/flynn/volumes]
+  --github-repo=<repo>     GitHub repository for downloads [default: flynn/flynn]
+  --version=<ver>          version to download (defaults to latest release)
+  --zpool=<name>           name of ZFS pool to use [default: flynn-default]
 
-Download container images and Flynn binaries from a TUF repository.
-
-Set FLYNN_VERSION to download an explicit version.`)
+Download Flynn binaries, config and images from GitHub releases.`)
 }
 
 func runDownload(args *docopt.Args) error {
 	log := log15.New()
 
-	log.Info("initializing ZFS volumes")
-	volPath := args.String["--volpath"]
-	volDB := filepath.Join(volPath, "volumes.bolt")
-	volMan := volumemanager.New(volDB, log, func() (volume.Provider, error) {
-		return zfs.NewProvider(&zfs.ProviderConfig{
-			DatasetName: zfs.DefaultDatasetName,
-			Make:        zfs.DefaultMakeDev(volPath, log),
-			WorkingDir:  filepath.Join(volPath, "zfs"),
-		})
-	})
-	if err := volMan.OpenDB(); err != nil {
-		log.Error("error opening volume database, make sure flynn-host is not running", "err", err)
-		return err
-	}
-
-	// create a TUF client and update it
-	log.Info("initializing TUF client")
-	tufDB := args.String["--tuf-db"]
-	local, err := tuf.FileLocalStore(tufDB)
-	if err != nil {
-		log.Error("error creating local TUF client", "err", err)
-		return err
-	}
-	remote, err := tuf.HTTPRemoteStore(args.String["--repository"], tufHTTPOpts("downloader"))
-	if err != nil {
-		log.Error("error creating remote TUF client", "err", err)
-		return err
-	}
-	client := tuf.NewClient(local, remote)
-	if err := updateTUFClient(client); err != nil {
-		log.Error("error updating TUF client", "err", err)
-		return err
-	}
-
+	binDir := args.String["--bin-dir"]
 	configDir := args.String["--config-dir"]
+	volPath := args.String["--volpath"]
+	zpoolName := args.String["--zpool"]
+	repo := args.String["--github-repo"]
+	targetVersion := args.String["--version"]
 
-	requestedVersion := os.Getenv("FLYNN_VERSION")
-	if requestedVersion == "" {
-		requestedVersion, err = getChannelVersion(configDir, client, log)
+	// Determine version to download
+	client := ghrelease.NewClient(repo, log)
+	var downloadVersion string
+	if targetVersion != "" {
+		downloadVersion = targetVersion
+		log.Info("using specified version", "version", downloadVersion)
+	} else {
+		log.Info("fetching latest release from GitHub", "repo", repo)
+		release, err := client.GetLatestRelease()
 		if err != nil {
+			log.Error("failed to get latest release", "err", err)
 			return err
 		}
+		downloadVersion = release.TagName
+		log.Info("found latest release", "version", downloadVersion)
 	}
-	log.Info(fmt.Sprintf("downloading components with version %s", requestedVersion))
 
-	d := downloader.New(client, volMan, requestedVersion)
+	// Initialize ZFS volume manager
+	log.Info("initializing ZFS volume manager", "zpool", zpoolName)
+	vman, err := initVolumeManager(volPath, zpoolName, log)
+	if err != nil {
+		log.Error("error initializing volume manager", "err", err)
+		return err
+	}
 
-	binDir := args.String["--bin-dir"]
-	log.Info(fmt.Sprintf("downloading binaries to %s", binDir))
-	if _, err := d.DownloadBinaries(binDir); err != nil {
+	// Create downloader
+	d := downloader.New(repo, vman, downloadVersion, log)
+
+	// Download binaries
+	log.Info("downloading binaries", "dir", binDir)
+	binPaths, err := d.DownloadBinaries(binDir)
+	if err != nil {
 		log.Error("error downloading binaries", "err", err)
 		return err
 	}
-
-	// use the requested version of flynn-host to download the images as
-	// the format changed in v20161106
-	if version.Release() != requestedVersion {
-		log.Info(fmt.Sprintf("executing %s flynn-host binary", requestedVersion))
-		binPath := filepath.Join(binDir, "flynn-host")
-		argv := append([]string{binPath}, os.Args[1:]...)
-		return syscall.Exec(binPath, argv, os.Environ())
+	for name, path := range binPaths {
+		log.Info("downloaded binary", "name", name, "path", path)
 	}
 
+	// Download config
+	log.Info("downloading config", "dir", configDir)
+	configPaths, err := d.DownloadConfig(configDir)
+	if err != nil {
+		log.Error("error downloading config", "err", err)
+		return err
+	}
+	for name, path := range configPaths {
+		log.Info("downloaded config", "name", name, "path", path)
+	}
+
+	// Download images
 	log.Info("downloading images")
 	ch := make(chan *ct.ImagePullInfo)
 	go func() {
 		for info := range ch {
 			switch info.Type {
 			case ct.ImagePullTypeImage:
-				log.Info(fmt.Sprintf("pulling %s image", info.Name))
+				log.Info("downloading image", "name", info.Name)
 			case ct.ImagePullTypeLayer:
-				log.Info(fmt.Sprintf("pulling %s layer %s (%s)",
-					info.Name, info.Layer.ID, units.BytesSize(float64(info.Layer.Length))))
+				log.Info(fmt.Sprintf("downloading layer %s (%s)",
+					info.Layer.ID, units.BytesSize(float64(info.Layer.Length))))
 			}
 		}
 	}()
@@ -124,58 +111,43 @@ func runDownload(args *docopt.Args) error {
 		return err
 	}
 
-	log.Info(fmt.Sprintf("downloading config to %s", configDir))
-	if _, err := d.DownloadConfig(configDir); err != nil {
-		log.Error("error downloading config", "err", err)
-		return err
+	// Record installation source
+	source := installsource.NewGitHubSource(repo, downloadVersion)
+	if err := installsource.Save(configDir, source); err != nil {
+		log.Warn("failed to save install-source.json", "err", err)
 	}
 
-	log.Info("download complete")
+	log.Info("download complete", "version", downloadVersion)
+	fmt.Printf("Flynn %s downloaded successfully from GitHub (%s)\n", downloadVersion, repo)
 	return nil
 }
 
-func tufHTTPOpts(name string) *tuf.HTTPRemoteOptions {
-	return &tuf.HTTPRemoteOptions{
-		UserAgent: fmt.Sprintf("flynn-host/%s %s-%s %s", version.String(), runtime.GOOS, runtime.GOARCH, name),
-		Retries:   tufutil.DefaultHTTPRetries,
+func initVolumeManager(volPath, zpoolName string, log log15.Logger) (*volumemanager.Manager, error) {
+	if runtime.GOOS != "linux" {
+		log.Warn("ZFS volume manager only available on Linux, skipping layer import")
+		return nil, nil
 	}
-}
 
-// updateTUFClient updates the given client, initializing and re-running the
-// update if ErrNoRootKeys is returned.
-func updateTUFClient(client *tuf.Client) error {
-	_, err := client.Update()
-	if err == nil || tuf.IsLatestSnapshot(err) {
-		return nil
+	// Create volume path if it doesn't exist
+	if err := os.MkdirAll(volPath, 0755); err != nil {
+		return nil, fmt.Errorf("error creating volume path: %s", err)
 	}
-	if err == tuf.ErrNoRootKeys {
-		if err := client.Init(tufconfig.RootKeys, len(tufconfig.RootKeys)); err != nil {
-			return err
-		}
-		return updateTUFClient(client)
-	}
-	return err
-}
 
-// getChannelVersion reads the locally configured release channel from
-// <configDir>/channel.txt then gets the latest version for that channel
-// using the TUF client.
-func getChannelVersion(configDir string, client *tuf.Client, log log15.Logger) (string, error) {
-	log.Info("getting configured release channel")
-	data, err := ioutil.ReadFile(filepath.Join(configDir, "channel.txt"))
+	// Initialize ZFS provider
+	provider, err := zfs.NewProvider(&zfs.ProviderConfig{
+		DatasetName: zpoolName,
+		Make:        nil,
+		WorkingDir:  volPath,
+	})
 	if err != nil {
-		log.Error("error getting configured release channel", "err", err)
-		return "", err
+		return nil, fmt.Errorf("error initializing ZFS provider: %s", err)
 	}
-	channel := strings.TrimSpace(string(data))
 
-	log.Info(fmt.Sprintf("determining latest version of %s release channel", channel))
-	version, err := tufutil.DownloadString(client, path.Join("channels", channel))
-	if err != nil {
-		log.Error("error determining latest version", "err", err)
-		return "", err
+	// Create volume manager
+	vman := volumemanager.New(volPath+"/volumes.bolt", log, nil)
+	if err := vman.AddProvider("default", provider); err != nil {
+		return nil, fmt.Errorf("error adding volume provider: %s", err)
 	}
-	version = strings.TrimSpace(version)
-	log.Info(fmt.Sprintf("latest %s version is %s", channel, version))
-	return version, nil
+
+	return vman, nil
 }
