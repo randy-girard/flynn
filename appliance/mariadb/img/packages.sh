@@ -21,24 +21,16 @@ echo "deb [signed-by=/usr/share/keyrings/mariadb.gpg] \
 https://mirror.mariadb.org/repo/10.11/ubuntu noble main" \
   > /etc/apt/sources.list.d/mariadb.list
 
-# ---- Percona GPG key ----
-curl -fsSL --retry 5 --retry-delay 3 https://repo.percona.com/apt/percona-release_latest.jammy_all.deb \
-  -o /tmp/percona-release.deb
-
-dpkg -i /tmp/percona-release.deb
-
-# ---- Enable Percona tools repo ----
-percona-release enable tools release
-
 # ---- Update package lists ----
 apt-get update
 
-# ---- Install MariaDB + XtraBackup ----
+# ---- Install MariaDB + mariabackup ----
+# mariadb-backup package contains mariabackup binary (required for MariaDB 10.3+)
+# Percona XtraBackup is NOT compatible with MariaDB 10.11
 apt-get install -y \
   mariadb-server \
-  percona-xtrabackup-80
+  mariadb-backup
 
 # ---- Cleanup ----
 apt-get clean
 rm -rf /var/lib/apt/lists/*
-rm -f /tmp/percona-release.deb
