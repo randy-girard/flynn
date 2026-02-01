@@ -348,8 +348,9 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 	if p.running() && p.config().Role == state.RoleSync {
 		log.Info("promoting to primary")
 
-		if err := ioutil.WriteFile(p.triggerPath(), nil, 0655); err != nil {
-			log.Error("error creating trigger file", "path", p.triggerPath(), "err", err)
+		// PostgreSQL 16 removed promote_trigger_file, use pg_ctl promote instead
+		if err := p.promote(); err != nil {
+			log.Error("error promoting to primary", "err", err)
 			return err
 		}
 
@@ -489,7 +490,6 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			"host=%s port=%s user=flynn password=%s application_name=%s",
 			upstream.Host(), upstream.Port(), p.password, p.id,
 		),
-		PromoteTriggerFile:     p.triggerPath(),
 		RecoveryTargetTimeline: "latest",
 	}
 	if err := p.writeConfig(cfg); err != nil {
@@ -874,6 +874,18 @@ func (p *Process) removeStandbySignal() error {
 	return nil
 }
 
+// promote promotes a standby to primary using pg_ctl promote
+// This is the PostgreSQL 16+ way to promote since promote_trigger_file was removed
+func (p *Process) promote() error {
+	log := p.log.New("fn", "promote")
+	log.Info("promoting standby to primary using pg_ctl")
+	return p.runCmd(exec.Command(
+		p.binPath("pg_ctl"),
+		"promote",
+		"-D", p.dataDir,
+	))
+}
+
 func (p *Process) writeHBAConf() error {
 	return ioutil.WriteFile(p.hbaConfPath(), hbaConf, 0644)
 }
@@ -910,7 +922,6 @@ type configData struct {
 
 	// Standby replication settings (PostgreSQL 12+)
 	PrimaryConnInfo        string
-	PromoteTriggerFile     string
 	RecoveryTargetTimeline string
 
 	TimescaleDB  bool
@@ -968,7 +979,6 @@ extwlist.extensions = 'btree_gin,btree_gist,chkpass,citext,cube,dblink,dict_int,
 {{if .PrimaryConnInfo}}
 # Standby replication settings (PostgreSQL 12+)
 primary_conninfo = '{{.PrimaryConnInfo}}'
-promote_trigger_file = '{{.PromoteTriggerFile}}'
 recovery_target_timeline = '{{.RecoveryTargetTimeline}}'
 {{end}}
 `[1:]))
