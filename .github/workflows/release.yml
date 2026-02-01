@@ -36,8 +36,27 @@ jobs:
         run: |
           VERSION="${{ inputs.version }}"
           echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+          # Fetch all tags from remote to ensure we have the latest
+          git fetch --tags --force
+
+          # Get the previous release tag (most recent tag before this one)
+          # First, get all tags sorted by version, then find the one before the current version
+          # If the current version tag doesn't exist yet, get the most recent tag
+          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+            # Tag exists, get the previous one
+            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | grep -B1 "^${VERSION}$" | head -n1)
+            # If grep returned the same tag (no previous), clear it
+            if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
+              PREVIOUS_TAG=""
+            fi
+          else
+            # Tag doesn't exist yet, get the most recent tag
+            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1)
+          fi
+
           echo "PREVIOUS_TAG=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
+          echo "Previous tag: ${PREVIOUS_TAG:-none}"
 
       - name: Install system dependencies
         run: |

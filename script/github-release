@@ -202,7 +202,25 @@ fi
 
 # Generate release notes from commits since last release
 info "Generating release notes from commits..."
-PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+
+# Fetch all tags from remote to ensure we have the latest
+echo "  Fetching tags from remote..."
+git fetch --tags --force 2>/dev/null || true
+
+# Get the previous release tag (most recent tag before this one)
+# First, get all tags sorted by version, then find the one before the current version
+if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+  # Tag exists, get the previous one
+  PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | grep -B1 "^${VERSION}$" | head -n1)
+  # If grep returned the same tag (no previous), clear it
+  if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
+    PREVIOUS_TAG=""
+  fi
+else
+  # Tag doesn't exist yet, get the most recent tag
+  PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1)
+fi
+
 if [[ -n "${PREVIOUS_TAG}" ]]; then
   echo "  Previous release: ${PREVIOUS_TAG}"
   COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
