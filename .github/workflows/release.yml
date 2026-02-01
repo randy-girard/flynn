@@ -342,6 +342,21 @@ jobs:
           echo "==> Release artifacts:"
           ls -lah
 
+      - name: Create and push tag
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+
+          # Check if tag already exists
+          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists, skipping tag creation"
+          else
+            echo "Creating tag ${VERSION}..."
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "${VERSION}" -m "Release ${VERSION}"
+            git push origin "${VERSION}"
+            echo "Tag ${VERSION} created and pushed"
+          fi
 
       - name: Generate release notes
         run: |
