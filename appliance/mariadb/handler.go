@@ -6,13 +6,13 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 )
 
 // Handler represents an HTTP API handler for the process.
@@ -88,6 +88,7 @@ func (h *Handler) handleGetStatus(w http.ResponseWriter, req *http.Request, _ ht
 func (h *Handler) handleGetBackup(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	r, err := h.Process.Backup()
 	if err != nil {
+		h.Logger.Error("error creating backup", "err", err)
 		httphelper.Error(w, err)
 		return
 	}
