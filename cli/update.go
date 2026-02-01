@@ -1,12 +1,12 @@
 package main
 
 import (
-	"bytes"
 	"compress/gzip"
 	"errors"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,15 +15,15 @@ import (
 
 	cfg "github.com/flynn/flynn/cli/config"
 	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/tufconfig"
-	"github.com/flynn/flynn/pkg/tufutil"
 	"github.com/flynn/flynn/pkg/version"
-	tuf "github.com/flynn/go-tuf/client"
 	"github.com/kardianos/osext"
 	"gopkg.in/inconshreveable/go-update.v0"
 )
 
-const upcktimePath = "cktime"
+const (
+	upcktimePath      = "cktime"
+	defaultGitHubRepo = "flynn/flynn"
+)
 
 var updateDir = filepath.Join(cfg.Dir(), "update")
 var updater = &Updater{}
@@ -77,42 +77,38 @@ func (u *Updater) update() error {
 	if err := os.MkdirAll(updateDir, 0755); err != nil {
 		return err
 	}
-	local, err := tuf.FileLocalStore(filepath.Join(updateDir, "tuf.db"))
+
+	// Get latest version from GitHub
+	latestVersion, err := u.getLatestVersion()
 	if err != nil {
-		return err
-	}
-	plat := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
-	opts := &tuf.HTTPRemoteOptions{
-		UserAgent: fmt.Sprintf("flynn-cli/%s %s", version.String(), plat),
-		Retries:   tufutil.DefaultHTTPRetries,
-	}
-	remote, err := tuf.HTTPRemoteStore(tufconfig.Repository, opts)
-	if err != nil {
-		return err
-	}
-	client := tuf.NewClient(local, remote)
-	if err := u.updateTUFClient(client); err != nil {
-		return err
+		return fmt.Errorf("failed to check for updates: %w", err)
 	}
 
-	name := fmt.Sprintf("/flynn-%s.gz", plat)
-
-	latestVersion, err := tufutil.GetVersion(client, name)
-	if err != nil {
-		return err
-	}
 	if latestVersion == version.Release() {
 		return nil
 	}
 
-	bin := &tufBuffer{}
-	if err := client.Download(name, bin); err != nil {
-		return err
+	// Download and apply update
+	plat := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
+	assetName := fmt.Sprintf("flynn-%s.gz", plat)
+	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s",
+		defaultGitHubRepo, latestVersion, assetName)
+
+	resp, err := http.Get(assetURL)
+	if err != nil {
+		return fmt.Errorf("failed to download update: %w", err)
 	}
-	gr, err := gzip.NewReader(bin)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to download update: status %d", resp.StatusCode)
+	}
+
+	gr, err := gzip.NewReader(resp.Body)
 	if err != nil {
 		return err
 	}
+	defer gr.Close()
 
 	err, errRecover := up.FromStream(gr)
 	if errRecover != nil {
@@ -125,20 +121,56 @@ func (u *Updater) update() error {
 	return nil
 }
 
-// updateTUFClient updates the given client, initializing and re-running the
-// update if ErrNoRootKeys is returned.
-func (u *Updater) updateTUFClient(client *tuf.Client) error {
-	_, err := client.Update()
-	if err == nil || tuf.IsLatestSnapshot(err) {
-		return nil
+// getLatestVersion fetches the latest release version from GitHub
+func (u *Updater) getLatestVersion() (string, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", defaultGitHubRepo)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", err
 	}
-	if err == tuf.ErrNoRootKeys {
-		if err := client.Init(tufconfig.RootKeys, len(tufconfig.RootKeys)); err != nil {
-			return err
+	req.Header.Set("User-Agent", "flynn-cli")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
+	}
+
+	// Simple JSON parsing for tag_name
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	// Extract tag_name from JSON response
+	// Format: "tag_name": "v1.2.3"
+	var tagName string
+	for i := 0; i < len(body)-12; i++ {
+		if string(body[i:i+11]) == `"tag_name":` {
+			// Find the opening quote
+			j := i + 11
+			for j < len(body) && body[j] != '"' {
+				j++
+			}
+			j++ // skip opening quote
+			// Find closing quote
+			k := j
+			for k < len(body) && body[k] != '"' {
+				k++
+			}
+			tagName = string(body[j:k])
+			break
 		}
-		return u.updateTUFClient(client)
 	}
-	return err
+
+	if tagName == "" {
+		return "", errors.New("failed to parse release version from GitHub")
+	}
+	return tagName, nil
 }
 
 // returns a random duration in [0,n).
@@ -147,7 +179,7 @@ func randDuration(n time.Duration) time.Duration {
 }
 
 func readTime(path string) time.Time {
-	p, err := ioutil.ReadFile(path)
+	p, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return time.Time{}
 	}
@@ -162,14 +194,5 @@ func readTime(path string) time.Time {
 }
 
 func writeTime(path string, t time.Time) bool {
-	return ioutil.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
-}
-
-type tufBuffer struct {
-	bytes.Buffer
-}
-
-func (b *tufBuffer) Delete() error {
-	b.Reset()
-	return nil
+	return os.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
 }

@@ -12,7 +12,7 @@ import (
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/types"
+	host "github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/pkg/stream"
@@ -200,19 +200,19 @@ func (c *Host) SendSnapshot(snapID string, assumeHaves []json.RawMessage) (io.Re
 	return res.Body, nil
 }
 
-// PullImages pulls images from a TUF repository using the local TUF file in tufDB
-func (c *Host) PullImages(repository, configDir, version string, tufDB io.Reader, ch chan *ct.ImagePullInfo) (stream.Stream, error) {
+// PullImages pulls images from a GitHub release
+func (c *Host) PullImages(repository, configDir, version string, body io.Reader, ch chan *ct.ImagePullInfo) (stream.Stream, error) {
 	header := http.Header{"Content-Type": {"application/octet-stream"}}
 	query := make(url.Values)
 	query.Set("repository", repository)
 	query.Set("config-dir", configDir)
 	query.Set("version", version)
 	path := "/host/pull/images?" + query.Encode()
-	return c.c.StreamWithHeader("POST", path, header, tufDB, ch)
+	return c.c.StreamWithHeader("POST", path, header, body, ch)
 }
 
-// PullBinariesAndConfig pulls binaries and config from a TUF repository using the local TUF file in tufDB
-func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version string, tufDB io.Reader) (map[string]string, error) {
+// PullBinariesAndConfig pulls binaries and config from a GitHub release
+func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version string, body io.Reader) (map[string]string, error) {
 	query := make(url.Values)
 	query.Set("repository", repository)
 	query.Set("bin-dir", binDir)
@@ -220,7 +220,7 @@ func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version stri
 	query.Set("version", version)
 	path := "/host/pull/binaries?" + query.Encode()
 	var paths map[string]string
-	return paths, c.c.Post(path, tufDB, &paths)
+	return paths, c.c.Post(path, body, &paths)
 }
 
 func (c *Host) ResourceCheck(request host.ResourceCheck) error {

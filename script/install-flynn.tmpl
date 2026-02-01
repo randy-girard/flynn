@@ -1,8 +1,6 @@
 #!/bin/bash
 #
-# A script to install Flynn from a TUF repository.
-
-FLYNN_HOST_CHECKSUM="${FLYNN_HOST_CHECKSUM:="{{FLYNN-HOST-CHECKSUM}}"}"
+# A script to install Flynn from GitHub releases.
 
 usage() {
   cat <<USAGE >&2
@@ -26,7 +24,7 @@ OPTIONS:
 
   --no-ntp                         Don't install ntp package
 
-  -r, --repo URL                   The TUF repository to download files from [default: https://dl.flynn.io]
+  -r, --repo REPO                  The GitHub repository to download files from [default: flynn/flynn]
 
   --zpool-create-device DEVICE     Device to create the flynn-default zpool on
 
@@ -146,7 +144,7 @@ main() {
     exit
   fi
 
-  repo_url="${repo_url:="https://dl.flynn.cloud.randygirard.com"}"
+  repo_url="${repo_url:="flynn/flynn"}"
 
   local packages=("iptables" "zfsutils-linux")
 
@@ -165,14 +163,23 @@ main() {
   local tmp="$(mktemp --directory)"
   trap "rm -rf ${tmp}" EXIT
   cd "${tmp}"
-  if ! curl -fsSL -o "${tmp}/flynn-host.gz" "${repo_url}/tuf/targets/${FLYNN_HOST_CHECKSUM}.flynn-host.gz"; then
-    fail "failed to download flynn-host binary from ${repo_url}"
+
+  # Determine the version to download
+  local version="${FLYNN_VERSION:-}"
+  if [[ -z "${version}" ]]; then
+    info "fetching latest version from GitHub"
+    version=$(curl -fsSL "https://api.github.com/repos/${repo_url}/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ -z "${version}" ]]; then
+      fail "failed to determine latest version from GitHub"
+    fi
+    info "latest version is ${version}"
   fi
 
-  info "verifying flynn-host binary checksum"
-  if ! echo "${FLYNN_HOST_CHECKSUM} *flynn-host.gz" | sha512sum --check --status; then
-    fail "failed to verify flynn-host binary checksum!"
+  local download_url="https://github.com/${repo_url}/releases/download/${version}/flynn-host.gz"
+  if ! curl -fsSL -o "${tmp}/flynn-host.gz" "${download_url}"; then
+    fail "failed to download flynn-host binary from ${download_url}"
   fi
+
   run gunzip "flynn-host.gz"
   run chmod +x "flynn-host"
 
@@ -188,10 +195,10 @@ main() {
   info "downloading Flynn components"
   mkdir -p "/etc/flynn"
   run ./flynn-host download \
-    --repository "${repo_url}/tuf" \
-    --tuf-db     "/etc/flynn/tuf.db" \
-    --config-dir "/etc/flynn" \
-    --bin-dir    "/usr/local/bin"
+    --github-repo "${repo_url}" \
+    --version     "${version}" \
+    --config-dir  "/etc/flynn" \
+    --bin-dir     "/usr/local/bin"
 
   install_systemd_unit
 

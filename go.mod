@@ -21,7 +21,6 @@ require (
 	github.com/flynn/go-check v0.0.0-20150613200214-592122021381
 	github.com/flynn/go-docopt v0.0.0-20140912013429-f6dd2ebbb31e
 	github.com/flynn/go-p9p v0.0.0-20170717161903-42f7901ca21a
-	github.com/flynn/go-tuf v0.0.0-20190425212541-cf1ac7de1ebf
 	github.com/flynn/que-go v0.0.0-20150926162331-737f00726577
 	github.com/flynn/tail v0.0.0-20180226200612-fc12669dc660
 	github.com/garyburd/redigo v0.0.0-20151219232044-836b6e58b335
@@ -49,14 +48,11 @@ require (
 	github.com/minio/minio-go v0.0.0-20170324230031-29b05151452a
 	github.com/mistifyio/go-zfs v0.0.0-20141209150540-dda1f4cd04dc
 	github.com/mitchellh/go-homedir v0.0.0-20140913165950-7d2d8c8a4e07
-	github.com/moby/term v0.5.2
 	github.com/opencontainers/runc v1.0.0-rc8
 	github.com/pkg/errors v0.8.1
 	github.com/rancher/sparse-tools v0.0.0-20190307223929-666f9b3bde21
 	github.com/stevvooe/resumable v0.0.0-20150521211217-51ad44105773
-	github.com/stretchr/testify v1.8.4
 	github.com/tent/canonical-json-go v0.0.0-20130607151641-96e4ba3a7613
-	github.com/theupdateframework/go-tuf v0.7.0
 	github.com/vishvananda/netlink v0.0.0-20170502164845-1e045880fbc2
 	go.mongodb.org/mongo-driver v1.17.6
 	golang.org/x/crypto v0.46.0
@@ -67,7 +63,6 @@ require (
 	google.golang.org/genproto v0.0.0-20200526211855-cb27e3aa2013
 	google.golang.org/grpc v1.27.0
 	google.golang.org/protobuf v1.24.0
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c
 	gopkg.in/inconshreveable/go-update.v0 v0.0.0-20150814200126-d8b0b1d421aa
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0-20151013014448-600ceb4523e5
 	gopkg.in/yaml.v2 v2.2.2
@@ -82,7 +77,6 @@ require (
 	github.com/coreos/go-systemd v0.0.0-20190719114852-fd7a80b32e1f // indirect
 	github.com/creack/pty v1.1.18 // indirect
 	github.com/cyphar/filepath-securejoin v0.2.2 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-ini/ini v1.12.0 // indirect
 	github.com/go-martini/martini v0.0.0-20170121215854-22fa46961aab // indirect
 	github.com/go-stack/stack v1.7.0 // indirect
@@ -98,8 +92,6 @@ require (
 	github.com/klauspost/compress v1.16.7 // indirect
 	github.com/konsorten/go-windows-terminal-sequences v1.0.2 // indirect
 	github.com/kr/binarydist v0.0.0-20120828065244-9955b0ab8708 // indirect
-	github.com/kr/pretty v0.2.1 // indirect
-	github.com/kr/text v0.1.0 // indirect
 	github.com/mattn/go-isatty v0.0.0-20151211000621-56b76bdf51f7 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/mrunalp/fileutils v0.0.0-20171103030105-7d4729fb3618 // indirect
@@ -108,14 +100,13 @@ require (
 	github.com/olekukonko/ts v0.0.0-20140412220145-ecf753e7c962 // indirect
 	github.com/opencontainers/runtime-spec v1.0.1 // indirect
 	github.com/opencontainers/selinux v1.2.2 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rnd42/go-jsonpointer v0.0.0-20140520035338-0480215403db // indirect
 	github.com/rs/cors v1.7.0 // indirect
 	github.com/seccomp/libseccomp-golang v0.0.0-20160531183505-32f571b70023 // indirect
-	github.com/secure-systems-lab/go-securesystemslib v0.7.0 // indirect
 	github.com/shopspring/decimal v0.0.0-20180709203117-cd690d0c9e24 // indirect
 	github.com/sirupsen/logrus v1.4.2 // indirect
 	github.com/smartystreets/goconvey v0.0.0-20190710185942-9d28bd7c0945 // indirect
+	github.com/stretchr/testify v1.8.4 // indirect
 	github.com/syndtr/gocapability v0.0.0-20180916011248-d98352740cb2 // indirect
 	github.com/vishvananda/netns v0.0.0-20170219233438-54f0e4339ce7 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
@@ -128,10 +119,10 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	golang.org/x/tools v0.40.0 // indirect
 	google.golang.org/appengine v1.6.1 // indirect
+	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/inconshreveable/log15.v2 v2.0.0-20180818164646-67afb5ed74ec // indirect
 	gopkg.in/tomb.v1 v1.0.0-20140529071818-c131134a1947 // indirect
 	gopkg.in/vmihailenco/msgpack.v2 v2.9.1 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	labix.org/v2/mgo v0.0.0-20140701140051-000000000287 // indirect
 )
 

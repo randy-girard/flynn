@@ -1,22 +1,11 @@
 {
-  "tuf": {
-    "repository": "https://dl.flynn.cloud.randygirard.com/tuf",
-    "root_keys": [
-      {
-        "keytype": "ed25519",
-        "keyval": {
-          "public": "781538e2a9bda1f28592866b305f4bfd67e5c36715693347c6eb3480082f7a32"
-        }
-      }
-    ]
-  },
   "base_layer": {
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 81035264,
     "hashes": {
-      "sha512_256": "6b951fdaaaa1b8f2342a88872e15e7a69ba8fccb9e464784cc810eb0a8fd7314"
+      "sha512_256": "6c7f97dd6dd9e8bf2b56878aea0bfcdcc0e4974b695887ebba3b22bf7f9bd36b"
     }
   },
   "images": [
@@ -83,21 +72,6 @@
       ]
     },
     {
-      "id": "build-tools",
-      "base": "go",
-      "layers": [
-        {
-          "script": "builder/img/build-tools.sh",
-          "inputs": [
-            "go.mod",
-            "go.sum",
-            "vendor/**",
-            "go-tuf/**"
-          ]
-        }
-      ]
-    },
-    {
       "id": "discoverd",
       "base": "busybox",
       "layers": [
@@ -147,8 +121,7 @@
         {
           "name": "host-binaries",
           "env": {
-            "FLYNN_VERSION": "{{ .Version }}",
-            "TUF_ROOT_KEYS": "{{ .TUFRootKeys }}"
+            "FLYNN_VERSION": "{{ .Version }}"
           },
           "cgobuild": {
             "host": "/usr/local/bin/flynn-host"
@@ -718,9 +691,7 @@
       "layers": [
         {
           "env": {
-            "FLYNN_VERSION": "{{ .Version }}",
-            "TUF_ROOT_KEYS": "{{ .TUFRootKeys }}",
-            "TUF_REPOSITORY": "{{ .TUFRepository }}"
+            "FLYNN_VERSION": "{{ .Version }}"
           },
           "gobuild": {
             "cli": "/bin/flynn-${GOOS}-${GOARCH}"
