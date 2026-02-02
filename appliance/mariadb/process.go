@@ -328,13 +328,20 @@ type BackupInfo struct {
 }
 
 func (p *Process) extractBackupInfo() (*BackupInfo, error) {
-	buf, err := ioutil.ReadFile(filepath.Join(p.DataDir, "xtrabackup_binlog_info"))
+	// MariaDB 10.11+ uses mariadb_backup_binlog_info instead of xtrabackup_binlog_info
+	binlogInfoFile := filepath.Join(p.DataDir, "mariadb_backup_binlog_info")
+	buf, err := ioutil.ReadFile(binlogInfoFile)
 	if err != nil {
-		return nil, err
+		// Fall back to old filename for compatibility
+		binlogInfoFile = filepath.Join(p.DataDir, "xtrabackup_binlog_info")
+		buf, err = ioutil.ReadFile(binlogInfoFile)
+		if err != nil {
+			return nil, err
+		}
 	}
 	fields := strings.Fields(string(buf))
 	if len(fields) < 3 {
-		return nil, fmt.Errorf("malformed xtrabackup_binlog_info, len %d", len(fields))
+		return nil, fmt.Errorf("malformed binlog_info file, len %d", len(fields))
 	}
 	return &BackupInfo{LogFile: fields[0], LogPos: fields[1], GTID: fields[2]}, nil
 }

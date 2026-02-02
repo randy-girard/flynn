@@ -118,8 +118,8 @@ apt-key adv --recv-keys --keyserver hkp://keyserver.ubuntu.com:80 \
 
 # add repos
 echo "deb http://apt.postgresql.org/pub/repos/apt/ xenial-pgdg main" >> /etc/apt/sources.list.d/postgresql.list
-echo "deb http://sfo1.mirrors.digitalocean.com/mariadb/repo/10.1/ubuntu xenial main" >> /etc/apt/sources.list.d/mariadb.list
-echo "deb http://repo.percona.com/apt xenial main" >> /etc/apt/sources.list.d/percona.list
+# Use MariaDB 10.11 LTS instead of 10.1
+echo "deb http://sfo1.mirrors.digitalocean.com/mariadb/repo/10.11/ubuntu xenial main" >> /etc/apt/sources.list.d/mariadb.list
 echo "deb http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.2 multiverse" >> /etc/apt/sources.list.d/mongo-org-3.2.list
 echo "deb http://ppa.launchpad.net/chris-lea/redis-server/ubuntu xenial main" >> /etc/apt/sources.list.d/redis.list
 
@@ -127,7 +127,8 @@ echo "deb http://ppa.launchpad.net/chris-lea/redis-server/ubuntu xenial main" >>
 apt-get update
 
 # install packages
-apt-get install -y postgresql-11 postgresql-contrib-11 redis-server mariadb-server percona-xtrabackup mongodb-org sudo net-tools
+# Use mariadb-backup instead of percona-xtrabackup (Percona XtraBackup is not compatible with MariaDB 10.11)
+apt-get install -y postgresql-11 postgresql-contrib-11 redis-server mariadb-server mariadb-backup mongodb-org sudo net-tools
 
 pg_ctlcluster --skip-systemctl-redirect 11-main start
 sudo -u postgres createuser --superuser ubuntu
