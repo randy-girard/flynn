@@ -291,6 +291,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 
 	// Use mariabackup instead of deprecated innobackupex (deprecated since MariaDB 10.3)
 	// Note: --defaults-file MUST be the first option on the command line
+	p.Logger.Info("starting backup", "user", "flynn", "port", p.Port, "password_len", len(p.Password))
 	cmd := exec.Command(
 		filepath.Join(p.BinDir, "mariabackup"),
 		"--defaults-file="+p.ConfigPath(),
@@ -301,7 +302,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 		"--password="+p.Password,
 		"--socket=",
 		"--stream=xbstream",
-		"--target-dir=.",
+		".",
 	)
 	cmd.Dir = p.DataDir
 	cmd.Stderr = &r.stderr
