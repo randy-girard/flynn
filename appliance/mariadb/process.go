@@ -328,20 +328,21 @@ type BackupInfo struct {
 }
 
 func (p *Process) extractBackupInfo() (*BackupInfo, error) {
-	// MariaDB 10.11+ uses mariadb_backup_binlog_info instead of xtrabackup_binlog_info
-	binlogInfoFile := filepath.Join(p.DataDir, "mariadb_backup_binlog_info")
+	// Try xtrabackup_binlog_info first (standard name used by mariabackup)
+	// Note: mariadb_backup_binlog_info is only created with --no-lock option
+	binlogInfoFile := filepath.Join(p.DataDir, "xtrabackup_binlog_info")
 	buf, err := ioutil.ReadFile(binlogInfoFile)
 	if err != nil {
-		// Fall back to old filename for compatibility
-		binlogInfoFile = filepath.Join(p.DataDir, "xtrabackup_binlog_info")
+		// Fall back to mariadb_backup_binlog_info (used with --no-lock option)
+		binlogInfoFile = filepath.Join(p.DataDir, "mariadb_backup_binlog_info")
 		buf, err = ioutil.ReadFile(binlogInfoFile)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("could not find binlog info file (tried xtrabackup_binlog_info and mariadb_backup_binlog_info in %s)", p.DataDir)
 		}
 	}
 	fields := strings.Fields(string(buf))
 	if len(fields) < 3 {
-		return nil, fmt.Errorf("malformed binlog_info file, len %d", len(fields))
+		return nil, fmt.Errorf("malformed binlog_info file %s, len %d", binlogInfoFile, len(fields))
 	}
 	return &BackupInfo{LogFile: fields[0], LogPos: fields[1], GTID: fields[2]}, nil
 }
@@ -354,8 +355,19 @@ func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
 	if err := p.unpackXbstream(r); err != nil {
 		return nil, err
 	}
+
+	// Debug: list files extracted from backup stream
+	if files, err := ioutil.ReadDir(p.DataDir); err == nil {
+		var fileNames []string
+		for _, f := range files {
+			fileNames = append(fileNames, f.Name())
+		}
+		p.Logger.Info("files after mbstream extraction", "files", fileNames)
+	}
+
 	backupInfo, err := p.extractBackupInfo()
 	if err != nil {
+		p.Logger.Error("error extracting backup info", "err", err, "dataDir", p.DataDir)
 		return nil, err
 	}
 	if err := p.restoreApplyLog(); err != nil {
@@ -1030,13 +1042,14 @@ func (r *backupReadCloser) Close() error {
 	defer r.stdout.Close()
 
 	if err := r.cmd.Wait(); err != nil {
-		return err
+		return fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
 	}
 
 	// Verify that mariabackup prints "completed OK!" at the end of STDERR.
-	if !strings.HasSuffix(strings.TrimSpace(r.stderr.String()), "completed OK!") {
+	stderrStr := strings.TrimSpace(r.stderr.String())
+	if !strings.HasSuffix(stderrStr, "completed OK!") {
 		r.stderr.WriteTo(os.Stderr)
-		return errors.New("mariabackup did not complete ok")
+		return fmt.Errorf("mariabackup did not complete ok, stderr: %s", stderrStr)
 	}
 
 	return nil
