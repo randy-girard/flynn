@@ -358,11 +358,13 @@ func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
 }
 
 func (p *Process) unpackXbstream(r io.Reader) error {
-	cmd := exec.Command(filepath.Join(p.BinDir, "xbstream"), "-x", "--directory="+p.DataDir)
+	// Use mbstream instead of xbstream for MariaDB
+	// mbstream is included in mariadb-backup package and is compatible with xbstream format
+	cmd := exec.Command(filepath.Join(p.BinDir, "mbstream"), "-x", "--directory="+p.DataDir)
 	cmd.Stdin = ioutil.NopCloser(r)
 
 	if buf, err := cmd.CombinedOutput(); err != nil {
-		p.Logger.Error("xbstream failed", "err", err, "output", string(buf))
+		p.Logger.Error("mbstream failed", "err", err, "output", string(buf))
 		return err
 	}
 
