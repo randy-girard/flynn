@@ -302,7 +302,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 		"--password="+p.Password,
 		"--socket=",
 		"--stream=xbstream",
-		".",
+		"--target-dir="+p.DataDir,
 	)
 	cmd.Dir = p.DataDir
 	cmd.Stderr = &r.stderr
