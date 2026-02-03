@@ -561,6 +561,14 @@ func (p *Process) initPrimaryDB() error {
 	}
 	defer db.Close()
 
+	// Delete anonymous users created by mysql_install_db.
+	// These interfere with authentication because MySQL/MariaDB matches more specific
+	// hosts first, so ''@'localhost' would match before 'flynn'@'%'.
+	if _, err := db.Exec(`DELETE FROM mysql.user WHERE User = ''`); err != nil {
+		logger.Error("error deleting anonymous users", "err", err)
+		return err
+	}
+
 	if _, err := db.Exec(fmt.Sprintf(`CREATE USER 'flynn'@'%%' IDENTIFIED BY '%s'`, p.Password)); err != nil && MySQLErrorNumber(err) != 1396 {
 		logger.Error("error creating database user", "err", err)
 		return err
