@@ -11,6 +11,7 @@
   "slugbuilder-24": $image_artifact[slugbuilder-24],
   "slugrunner-24":  $image_artifact[slugrunner-24],
   "taffy":          $image_artifact[taffy],
+  "dashboard":      $image_artifact[dashboard],
   "updater":        $image_artifact[updater],
   "logaggregator":  $image_artifact[logaggregator],
   "status":         $image_artifact[status],

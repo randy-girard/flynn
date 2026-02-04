@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/flynn/flynn/discoverd/cache"
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/status"
 )
@@ -149,6 +149,7 @@ var services = []Service{
 	},
 	{Name: "controller-scheduler", ReqFn: LeaderReqFn("controller-scheduler", "")},
 	{Name: "controller-worker"},
+	{Name: "dashboard", ReqFn: RandomReqFn("dashboard-web")},
 	{Name: "discoverd"},
 	{Name: "flannel"},
 	{Name: "gitreceive", ReqFn: RandomReqFn("gitreceive")},
