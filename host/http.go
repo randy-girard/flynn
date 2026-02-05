@@ -425,6 +425,49 @@ func (h *jobAPI) GetStatus(w http.ResponseWriter, r *http.Request, _ httprouter.
 	httphelper.JSON(w, 200, &h.host.status)
 }
 
+// GetJobStats returns runtime resource usage stats for a specific job/container.
+func (h *jobAPI) GetJobStats(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id := ps.ByName("id")
+	log := h.host.log.New("fn", "GetJobStats", "job.id", id)
+
+	stats, err := h.host.backend.GetJobStats(id)
+	if err != nil {
+		log.Error("error getting job stats", "err", err)
+		httphelper.ObjectNotFoundError(w, err.Error())
+		return
+	}
+
+	httphelper.JSON(w, 200, stats)
+}
+
+// GetAllJobsStats returns runtime resource usage stats for all jobs on this host.
+func (h *jobAPI) GetAllJobsStats(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "GetAllJobsStats")
+
+	stats, err := h.host.backend.GetAllJobsStats()
+	if err != nil {
+		log.Error("error getting all jobs stats", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+
+	httphelper.JSON(w, 200, stats)
+}
+
+// GetHostStats returns aggregated resource usage stats for the host.
+func (h *jobAPI) GetHostStats(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "GetHostStats")
+
+	stats, err := h.host.backend.GetHostStats()
+	if err != nil {
+		log.Error("error getting host stats", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+
+	httphelper.JSON(w, 200, stats)
+}
+
 func (h *jobAPI) UpdateTags(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var tags map[string]string
 	if err := httphelper.DecodeJSON(r, &tags); err != nil {
@@ -528,11 +571,14 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.DELETE("/host/jobs/:id", h.StopJob)
 	r.PUT("/host/jobs/:id/discoverd-deregister", h.DiscoverdDeregisterJob)
 	r.PUT("/host/jobs/:id/signal/:signal", h.SignalJob)
+	r.GET("/host/jobs/:id/stats", h.GetJobStats)
 	r.POST("/host/pull/images", h.PullImages)
 	r.POST("/host/pull/binaries", h.PullBinariesAndConfig)
 	r.POST("/host/discoverd", h.ConfigureDiscoverd)
 	r.POST("/host/network", h.ConfigureNetworking)
 	r.GET("/host/status", h.GetStatus)
+	r.GET("/host/stats", h.GetHostStats)
+	r.GET("/host/jobs-stats", h.GetAllJobsStats)
 	r.POST("/host/resource-check", h.ResourceCheck)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/tags", h.UpdateTags)

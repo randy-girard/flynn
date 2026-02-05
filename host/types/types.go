@@ -384,3 +384,86 @@ type Command struct {
 type LogBuffers map[string]LogBuffer
 
 type LogBuffer map[string]string
+
+// ContainerStats contains runtime resource usage for a container/job.
+// These stats are collected from cgroups and network interfaces.
+type ContainerStats struct {
+	JobID     string    `json:"job_id"`
+	Timestamp time.Time `json:"timestamp"`
+
+	// CPU stats (from cgroups cpuacct/cpu.stat)
+	CPUUsageNanoseconds uint64  `json:"cpu_usage_nanoseconds"`
+	CPUUsagePercent     float64 `json:"cpu_usage_percent,omitempty"` // Calculated if previous sample available
+	CPUThrottledPeriods uint64  `json:"cpu_throttled_periods"`
+	CPUThrottledTimeNs  uint64  `json:"cpu_throttled_time_ns"`
+
+	// Memory stats (from cgroups memory)
+	MemoryUsageBytes uint64 `json:"memory_usage_bytes"`
+	MemoryLimitBytes uint64 `json:"memory_limit_bytes"`
+	MemoryMaxUsage   uint64 `json:"memory_max_usage_bytes"`
+	MemoryCacheBytes uint64 `json:"memory_cache_bytes"`
+	MemoryRSSBytes   uint64 `json:"memory_rss_bytes"`
+
+	// Network stats (from veth interface)
+	NetworkRxBytes   uint64 `json:"network_rx_bytes"`
+	NetworkTxBytes   uint64 `json:"network_tx_bytes"`
+	NetworkRxPackets uint64 `json:"network_rx_packets"`
+	NetworkTxPackets uint64 `json:"network_tx_packets"`
+
+	// I/O stats (from cgroups blkio/io)
+	IOReadBytes  uint64 `json:"io_read_bytes"`
+	IOWriteBytes uint64 `json:"io_write_bytes"`
+
+	// PIDs (from cgroups pids)
+	PIDsCurrent uint64 `json:"pids_current"`
+	PIDsLimit   uint64 `json:"pids_limit"`
+}
+
+// HostResourceStats contains aggregated resource usage for the host.
+// These stats are collected from /proc and system calls.
+type HostResourceStats struct {
+	HostID    string    `json:"host_id"`
+	Timestamp time.Time `json:"timestamp"`
+
+	// CPU stats
+	CPUUsagePercent float64 `json:"cpu_usage_percent"`
+	CPUCount        int     `json:"cpu_count"`
+
+	// Memory stats (from /proc/meminfo)
+	MemoryTotalBytes     uint64 `json:"memory_total_bytes"`
+	MemoryUsedBytes      uint64 `json:"memory_used_bytes"`
+	MemoryAvailableBytes uint64 `json:"memory_available_bytes"`
+	MemoryFreeBytes      uint64 `json:"memory_free_bytes"`
+	MemoryCachedBytes    uint64 `json:"memory_cached_bytes"`
+	MemoryBuffersBytes   uint64 `json:"memory_buffers_bytes"`
+
+	// Disk stats
+	DiskTotalBytes uint64 `json:"disk_total_bytes"`
+	DiskUsedBytes  uint64 `json:"disk_used_bytes"`
+	DiskFreeBytes  uint64 `json:"disk_free_bytes"`
+
+	// Network stats (aggregate across interfaces)
+	NetworkRxBytes   uint64 `json:"network_rx_bytes"`
+	NetworkTxBytes   uint64 `json:"network_tx_bytes"`
+	NetworkRxPackets uint64 `json:"network_rx_packets"`
+	NetworkTxPackets uint64 `json:"network_tx_packets"`
+
+	// Load average (from /proc/loadavg)
+	LoadAvg1  float64 `json:"load_avg_1"`
+	LoadAvg5  float64 `json:"load_avg_5"`
+	LoadAvg15 float64 `json:"load_avg_15"`
+
+	// Uptime in seconds (from /proc/uptime)
+	UptimeSeconds float64 `json:"uptime_seconds"`
+
+	// Job counts
+	RunningJobsCount int `json:"running_jobs_count"`
+	TotalJobsCount   int `json:"total_jobs_count"`
+}
+
+// AllJobsStats contains stats for all jobs on a host
+type AllJobsStats struct {
+	HostID    string            `json:"host_id"`
+	Timestamp time.Time         `json:"timestamp"`
+	Jobs      []*ContainerStats `json:"jobs"`
+}

@@ -4,7 +4,7 @@ import (
 	"io"
 	"net"
 
-	"github.com/flynn/flynn/host/types"
+	host "github.com/flynn/flynn/host/types"
 )
 
 type AttachRequest struct {
@@ -39,6 +39,11 @@ type Backend interface {
 	SetNetworkConfig(*host.NetworkConfig)
 	OpenLogs(host.LogBuffers) error
 	CloseLogs() (host.LogBuffers, error)
+
+	// Stats methods for runtime resource usage
+	GetJobStats(id string) (*host.ContainerStats, error)
+	GetAllJobsStats() (*host.AllJobsStats, error)
+	GetHostStats() (*host.HostResourceStats, error)
 }
 
 type RunConfig struct {
@@ -74,3 +79,6 @@ func (MockBackend) SetHost(*Host)                                     {}
 func (MockBackend) UnmarshalState(map[string]*host.ActiveJob, map[string][]byte, []byte, host.LogBuffers) error {
 	return nil
 }
+func (MockBackend) GetJobStats(string) (*host.ContainerStats, error) { return nil, nil }
+func (MockBackend) GetAllJobsStats() (*host.AllJobsStats, error)     { return nil, nil }
+func (MockBackend) GetHostStats() (*host.HostResourceStats, error)   { return nil, nil }
