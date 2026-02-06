@@ -21,10 +21,12 @@ const (
 	retryDelay         = 2 * time.Second
 )
 
-var binaries = []string{
-	"flynn-host",
-	"flynn-linux-amd64",
-	"flynn-init",
+// binaries maps the asset name in the release to the local binary name
+// The release uses OS/arch suffixed names for host binaries
+var binaries = map[string]string{
+	"flynn-host-linux-amd64": "flynn-host",
+	"flynn-linux-amd64":      "flynn-linux-amd64",
+	"flynn-init-linux-amd64": "flynn-init",
 }
 
 var config = []string{
@@ -59,18 +61,18 @@ func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
 		return nil, fmt.Errorf("error creating bin dir: %s", err)
 	}
 	paths := make(map[string]string, len(binaries))
-	for _, bin := range binaries {
-		path, err := d.downloadGzippedFile(bin, dir, true)
+	for assetName, localName := range binaries {
+		path, err := d.downloadGzippedBinary(assetName, localName, dir)
 		if err != nil {
 			return nil, err
 		}
 		if err := os.Chmod(path, 0755); err != nil {
 			return nil, err
 		}
-		paths[bin] = path
+		paths[localName] = path
 	}
 	// symlink flynn to flynn-linux-amd64
-	if err := symlink("flynn-linux-amd64", filepath.Join(dir, "flynn")); err != nil {
+	if err := symlink("flynn-linux-amd64."+d.version, filepath.Join(dir, "flynn")); err != nil {
 		return nil, err
 	}
 	return paths, nil
@@ -84,7 +86,7 @@ func (d *Downloader) DownloadConfig(dir string) (map[string]string, error) {
 	}
 	paths := make(map[string]string, len(config))
 	for _, conf := range config {
-		path, err := d.downloadGzippedFile(conf, dir, false)
+		path, err := d.downloadGzippedFile(conf, dir)
 		if err != nil {
 			return nil, err
 		}
@@ -110,9 +112,60 @@ func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 	return fmt.Errorf("download failed after %d attempts: %s", maxDownloadRetries, lastErr)
 }
 
-// downloadGzippedFile downloads a gzipped file from GitHub releases, decompresses it,
-// and optionally creates a versioned file with a symlink.
-func (d *Downloader) downloadGzippedFile(name, dir string, versioned bool) (string, error) {
+// downloadGzippedBinary downloads a gzipped binary from GitHub releases, decompresses it,
+// and creates a versioned file with a symlink. The assetName is the name in the release
+// (e.g., flynn-host-linux-amd64) and localName is the local binary name (e.g., flynn-host).
+func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (string, error) {
+	// Construct the asset URL
+	gzName := assetName + ".gz"
+	assetURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + gzName
+
+	// Download to temp file
+	tmpPath := filepath.Join(dir, gzName+".tmp")
+	if err := d.downloadWithRetry(assetURL, tmpPath); err != nil {
+		return "", fmt.Errorf("error downloading %s: %s", assetName, err)
+	}
+	defer os.Remove(tmpPath)
+
+	// Open and decompress
+	gzFile, err := os.Open(tmpPath)
+	if err != nil {
+		return "", err
+	}
+	defer gzFile.Close()
+
+	gz, err := gzip.NewReader(gzFile)
+	if err != nil {
+		return "", fmt.Errorf("error creating gzip reader for %s: %s", assetName, err)
+	}
+	defer gz.Close()
+
+	// Destination path with version suffix
+	destPath := filepath.Join(dir, localName+"."+d.version)
+
+	// Write decompressed content
+	destFile, err := os.Create(destPath)
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(destFile, gz); err != nil {
+		destFile.Close()
+		os.Remove(destPath)
+		return "", fmt.Errorf("error decompressing %s: %s", assetName, err)
+	}
+	destFile.Close()
+
+	// Create symlink from localName to versioned file
+	if err := symlink(filepath.Base(destPath), filepath.Join(dir, localName)); err != nil {
+		return "", err
+	}
+
+	return destPath, nil
+}
+
+// downloadGzippedFile downloads a gzipped file from GitHub releases and decompresses it.
+// Used for config files that don't need versioning.
+func (d *Downloader) downloadGzippedFile(name, dir string) (string, error) {
 	// Construct the asset URL
 	assetName := name + ".gz"
 	assetURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + assetName
@@ -137,13 +190,8 @@ func (d *Downloader) downloadGzippedFile(name, dir string, versioned bool) (stri
 	}
 	defer gz.Close()
 
-	// Determine destination path
-	var destPath string
-	if versioned {
-		destPath = filepath.Join(dir, name+"."+d.version)
-	} else {
-		destPath = filepath.Join(dir, name)
-	}
+	// Destination path (no versioning for config files)
+	destPath := filepath.Join(dir, name)
 
 	// Write decompressed content
 	destFile, err := os.Create(destPath)
@@ -156,13 +204,6 @@ func (d *Downloader) downloadGzippedFile(name, dir string, versioned bool) (stri
 		return "", fmt.Errorf("error decompressing %s: %s", name, err)
 	}
 	destFile.Close()
-
-	// Create symlink for versioned files
-	if versioned {
-		if err := symlink(filepath.Base(destPath), filepath.Join(dir, name)); err != nil {
-			return "", err
-		}
-	}
 
 	return destPath, nil
 }
