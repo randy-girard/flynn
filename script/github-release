@@ -127,9 +127,9 @@ mkdir -p "${RELEASE_DIR}"
 
 # Package binaries (gzipped)
 info "Packaging binaries..."
-BINARIES=(
-  "flynn-host"
-  "flynn-init"
+
+# CLI binaries (already have OS/arch in name)
+CLI_BINARIES=(
   "flynn-linux-amd64"
   "flynn-linux-386"
   "flynn-darwin-amd64"
@@ -137,12 +137,24 @@ BINARIES=(
   "flynn-windows-amd64.exe"
 )
 
-for bin in "${BINARIES[@]}"; do
+for bin in "${CLI_BINARIES[@]}"; do
   if [[ -f "${BUILD_DIR}/${bin}" ]]; then
     gzip -c "${BUILD_DIR}/${bin}" > "${RELEASE_DIR}/${bin}.gz"
     echo "  - ${bin}.gz"
   fi
 done
+
+# Host binaries - rename to include OS/arch for update command compatibility
+# flynn-host and flynn-init are Linux-only, built for amd64
+if [[ -f "${BUILD_DIR}/flynn-host" ]]; then
+  gzip -c "${BUILD_DIR}/flynn-host" > "${RELEASE_DIR}/flynn-host-linux-amd64.gz"
+  echo "  - flynn-host-linux-amd64.gz"
+fi
+
+if [[ -f "${BUILD_DIR}/flynn-init" ]]; then
+  gzip -c "${BUILD_DIR}/flynn-init" > "${RELEASE_DIR}/flynn-init-linux-amd64.gz"
+  echo "  - flynn-init-linux-amd64.gz"
+fi
 
 # Package manifests (gzipped) if they exist
 info "Packaging manifests..."
@@ -407,8 +419,8 @@ curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/instal
 ### Server Binaries
 | Binary | Description |
 |--------|-------------|
-| flynn-host.gz | Flynn host daemon |
-| flynn-init.gz | Flynn init binary |
+| flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
+| flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
 
 ### Other
 | File | Description |
