@@ -20,7 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/sirenia/xlog"
 	"github.com/inconshreveable/log15"
 )
@@ -585,6 +585,11 @@ func (p *Peer) evalClusterState() {
 		} else if len(p.Info().State.Async) > 0 && (p.downstream == nil || p.downstream.Meta[p.idKey] != p.Info().State.Async[0].Meta[p.idKey]) {
 			p.assumeSync()
 		}
+		return
+	}
+
+	// Deposed peers should remain deposed and do nothing
+	if p.Info().Role == RoleDeposed {
 		return
 	}
 
