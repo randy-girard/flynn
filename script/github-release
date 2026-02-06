@@ -158,13 +158,25 @@ fi
 
 # Package manifests (gzipped) if they exist
 info "Packaging manifests..."
-MANIFESTS_DIR="${ROOT}/build/manifests"
-for manifest in bootstrap-manifest.json images.json; do
-  if [[ -f "${MANIFESTS_DIR}/${manifest}" ]]; then
-    gzip -c "${MANIFESTS_DIR}/${manifest}" > "${RELEASE_DIR}/${manifest}.gz"
-    echo "  - ${manifest}.gz"
-  fi
-done
+
+# images.json - check build/images.json first (builder output), then build/manifests/images.json
+if [[ -f "${ROOT}/build/images.json" ]]; then
+  gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
+  echo "  - images.json.gz (from build/images.json)"
+elif [[ -f "${ROOT}/build/manifests/images.json" ]]; then
+  gzip -c "${ROOT}/build/manifests/images.json" > "${RELEASE_DIR}/images.json.gz"
+  echo "  - images.json.gz (from build/manifests/images.json)"
+else
+  echo "  (no images.json found)"
+fi
+
+# bootstrap-manifest.json - from build/manifests/
+if [[ -f "${ROOT}/build/manifests/bootstrap-manifest.json" ]]; then
+  gzip -c "${ROOT}/build/manifests/bootstrap-manifest.json" > "${RELEASE_DIR}/bootstrap-manifest.json.gz"
+  echo "  - bootstrap-manifest.json.gz"
+else
+  echo "  (no bootstrap-manifest.json found)"
+fi
 
 # Package container image manifests if they exist
 info "Packaging image manifests..."
