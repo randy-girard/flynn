@@ -303,6 +303,13 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
 	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
 
+	// Host and stats endpoints
+	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
+	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
+	httpRouter.GET("/cluster/stats", httphelper.WrapHandler(api.GetClusterStats))
+	httpRouter.GET("/cluster/jobs-stats", httphelper.WrapHandler(api.GetClusterJobsStats))
+	httpRouter.GET("/apps/:apps_id/jobs-stats", httphelper.WrapHandler(api.appLookup(api.GetAppJobsStats)))
+
 	grpcAPI := &grpcAPI{&api, c.db}
 	grpcSrv := grpcAPI.grpcServer()
 

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/types"
+	host "github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/random"
@@ -46,6 +46,8 @@ type FakeHostClient struct {
 func (c *FakeHostClient) ID() string { return c.hostID }
 
 func (c *FakeHostClient) Tags() map[string]string { return nil }
+
+func (c *FakeHostClient) Addr() string { return "127.0.0.1:1113" }
 
 func (c *FakeHostClient) Attach(req *host.AttachReq, wait bool) (cluster.AttachClient, error) {
 	f, ok := c.attach[req.JobID]
@@ -229,6 +231,32 @@ func (c *FakeHostClient) GetStatus() (*host.HostStatus, error) {
 		return nil, errors.New("unhealthy")
 	}
 	return &host.HostStatus{ID: c.ID()}, nil
+}
+
+func (c *FakeHostClient) GetStats() (*host.HostResourceStats, error) {
+	if !c.Healthy {
+		return nil, errors.New("unhealthy")
+	}
+	return &host.HostResourceStats{HostID: c.ID()}, nil
+}
+
+func (c *FakeHostClient) GetJobStats(jobID string) (*host.ContainerStats, error) {
+	c.jobsMtx.RLock()
+	defer c.jobsMtx.RUnlock()
+	if _, ok := c.Jobs[jobID]; !ok {
+		return nil, fmt.Errorf("job not found: %s", jobID)
+	}
+	return &host.ContainerStats{JobID: jobID}, nil
+}
+
+func (c *FakeHostClient) GetAllJobsStats() (*host.AllJobsStats, error) {
+	c.jobsMtx.RLock()
+	defer c.jobsMtx.RUnlock()
+	stats := make([]*host.ContainerStats, 0, len(c.Jobs))
+	for id := range c.Jobs {
+		stats = append(stats, &host.ContainerStats{JobID: id})
+	}
+	return &host.AllJobsStats{Jobs: stats}, nil
 }
 
 func (c *FakeHostClient) GetSinks() ([]*ct.Sink, error) {

@@ -259,6 +259,7 @@ type HostClient interface {
 	VolumeCreator
 	ID() string
 	Tags() map[string]string
+	Addr() string
 	AddJob(*host.Job) error
 	GetJob(id string) (*host.ActiveJob, error)
 	Attach(*host.AttachReq, bool) (cluster.AttachClient, error)
@@ -270,6 +271,9 @@ type HostClient interface {
 	ListVolumes() ([]*volume.Info, error)
 	StreamVolumes(ch chan *volume.Event) (stream.Stream, error)
 	GetStatus() (*host.HostStatus, error)
+	GetStats() (*host.HostResourceStats, error)
+	GetJobStats(jobID string) (*host.ContainerStats, error)
+	GetAllJobsStats() (*host.AllJobsStats, error)
 	GetSinks() ([]*ct.Sink, error)
 	AddSink(*ct.Sink) error
 	RemoveSink(string) error

@@ -70,6 +70,27 @@ func (c *Host) GetStatus() (*host.HostStatus, error) {
 	return &res, err
 }
 
+// GetStats returns resource usage stats for this host.
+func (c *Host) GetStats() (*host.HostResourceStats, error) {
+	var res host.HostResourceStats
+	err := c.c.Get("/host/stats", &res)
+	return &res, err
+}
+
+// GetJobStats returns stats for a specific job on this host.
+func (c *Host) GetJobStats(jobID string) (*host.ContainerStats, error) {
+	var res host.ContainerStats
+	err := c.c.Get(fmt.Sprintf("/host/jobs/%s/stats", jobID), &res)
+	return &res, err
+}
+
+// GetAllJobsStats returns stats for all jobs on this host.
+func (c *Host) GetAllJobsStats() (*host.AllJobsStats, error) {
+	var res host.AllJobsStats
+	err := c.c.Get("/host/jobs-stats", &res)
+	return &res, err
+}
+
 func WaitForHostStatus(hostIP string, desired func(*host.HostStatus) bool) (*host.HostStatus, error) {
 	const waitInterval = 500 * time.Millisecond
 	const logInterval = time.Minute
