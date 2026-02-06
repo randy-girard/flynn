@@ -77,7 +77,17 @@ func (c *controllerAPI) GetClusterStats(ctx context.Context, w http.ResponseWrit
 	httphelper.JSON(w, 200, result)
 }
 
-// GetClusterJobsStats returns stats for all jobs running across all hosts
+// EnrichedContainerStats extends ContainerStats with job metadata
+type EnrichedContainerStats struct {
+	*host.ContainerStats
+	HostID      string `json:"host_id"`
+	AppID       string `json:"app_id,omitempty"`
+	AppName     string `json:"app_name,omitempty"`
+	ReleaseID   string `json:"release_id,omitempty"`
+	ProcessType string `json:"process_type,omitempty"`
+}
+
+// GetClusterJobsStats returns stats for all jobs running across all hosts with enriched metadata
 func (c *controllerAPI) GetClusterJobsStats(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	hosts, err := c.clusterClient.Hosts()
 	if err != nil {
@@ -85,7 +95,7 @@ func (c *controllerAPI) GetClusterJobsStats(ctx context.Context, w http.Response
 		return
 	}
 
-	result := make([]*host.ContainerStats, 0)
+	result := make([]*EnrichedContainerStats, 0)
 	for _, h := range hosts {
 		jobsStats, err := h.GetAllJobsStats()
 		if err != nil {
@@ -93,9 +103,27 @@ func (c *controllerAPI) GetClusterJobsStats(ctx context.Context, w http.Response
 			logger.Warn("failed to get jobs stats for host", "host_id", h.ID(), "error", err)
 			continue
 		}
-		result = append(result, jobsStats.Jobs...)
+
+		// Get job metadata to enrich stats
+		jobs, _ := h.ListJobs()
+
+		for _, jobStats := range jobsStats.Jobs {
+			enriched := &EnrichedContainerStats{
+				ContainerStats: jobStats,
+				HostID:         h.ID(),
+			}
+
+			// Try to get metadata from job
+			if job, ok := jobs[jobStats.JobID]; ok && job.Job != nil && job.Job.Metadata != nil {
+				enriched.AppID = job.Job.Metadata["flynn-controller.app"]
+				enriched.AppName = job.Job.Metadata["flynn-controller.app_name"]
+				enriched.ReleaseID = job.Job.Metadata["flynn-controller.release"]
+				enriched.ProcessType = job.Job.Metadata["flynn-controller.type"]
+			}
+
+			result = append(result, enriched)
+		}
 	}
 
 	httphelper.JSON(w, 200, result)
 }
-
