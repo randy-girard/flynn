@@ -203,9 +203,11 @@ fi
 # Generate release notes from commits since last release
 info "Generating release notes from commits..."
 
-# Fetch all tags from remote to ensure we have the latest
-echo "  Fetching tags from remote..."
-git fetch --tags --force 2>/dev/null || true
+# Fetch all tags from remote to ensure local tags are in sync with remote
+# This is critical for accurate release notes - we need to know the actual previous release
+echo "  Syncing tags with remote..."
+git fetch origin --tags --force 2>/dev/null || true
+echo "  Tags synced."
 
 # Get the previous release tag - the most recent tag that is an ANCESTOR of HEAD
 # This ensures we only get commits that are new since the last release in this branch's history
