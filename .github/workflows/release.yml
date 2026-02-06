@@ -285,12 +285,25 @@ jobs:
 
           echo "==> Packaging binaries..."
           cd build/bin
-          for binary in flynn-host flynn-init flynn-linux-amd64 flynn-linux-386 flynn-darwin-amd64 flynn-darwin-arm64 flynn-windows-amd64.exe; do
+
+          # CLI binaries (already have OS/arch in name)
+          for binary in flynn-linux-amd64 flynn-linux-386 flynn-darwin-amd64 flynn-darwin-arm64 flynn-windows-amd64.exe; do
             if [ -f "${binary}" ]; then
               echo "  - ${binary}.gz"
               gzip -c "${binary}" > "${{ env.FLYNN_ROOT }}/release-artifacts/${binary}.gz"
             fi
           done
+
+          # Host binaries - rename to include OS/arch for update command compatibility
+          if [ -f "flynn-host" ]; then
+            echo "  - flynn-host-linux-amd64.gz"
+            gzip -c "flynn-host" > "${{ env.FLYNN_ROOT }}/release-artifacts/flynn-host-linux-amd64.gz"
+          fi
+
+          if [ -f "flynn-init" ]; then
+            echo "  - flynn-init-linux-amd64.gz"
+            gzip -c "flynn-init" > "${{ env.FLYNN_ROOT }}/release-artifacts/flynn-init-linux-amd64.gz"
+          fi
 
           cd ${{ env.FLYNN_ROOT }}
 
@@ -504,8 +517,8 @@ jobs:
           ### Server Binaries
           | Binary | Description |
           |--------|-------------|
-          | flynn-host.gz | Flynn host daemon |
-          | flynn-init.gz | Flynn init binary |
+          | flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
+          | flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
 
           ### Manifests & Images
           | File | Description |
