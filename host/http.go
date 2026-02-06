@@ -263,7 +263,7 @@ func (h *jobAPI) PullImages(w http.ResponseWriter, r *http.Request, ps httproute
 	query := r.URL.Query()
 	repo := query.Get("repository")
 	if repo == "" {
-		repo = "flynn/flynn"
+		repo = "randy-girard/flynn"
 	}
 
 	info := make(chan *ct.ImagePullInfo)
@@ -289,7 +289,7 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 	query := r.URL.Query()
 	repo := query.Get("repository")
 	if repo == "" {
-		repo = "flynn/flynn"
+		repo = "randy-girard/flynn"
 	}
 
 	d := downloader.New(repo, h.host.vman, query.Get("version"), log)

@@ -22,7 +22,7 @@ import (
 
 const (
 	upcktimePath      = "cktime"
-	defaultGitHubRepo = "flynn/flynn"
+	defaultGitHubRepo = "randy-girard/flynn"
 )
 
 var updateDir = filepath.Join(cfg.Dir(), "update")

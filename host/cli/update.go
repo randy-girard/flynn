@@ -15,7 +15,7 @@ usage: flynn-host update [options]
 Options:
   -b --bin-dir=<dir>       directory to download binaries to [default: /usr/local/bin]
   -c --config-dir=<dir>    directory to download config files to [default: /etc/flynn]
-  --github-repo=<repo>     GitHub repository for updates [default: flynn/flynn]
+  --github-repo=<repo>     GitHub repository for updates [default: randy-girard/flynn]
   --check                  only check for updates, don't install
   --version=<ver>          update to a specific version
   --force                  force update even if already on the latest version
@@ -44,7 +44,7 @@ func runUpdate(args *docopt.Args) error {
 	installSource, err := installsource.Load(configDir)
 	if err == nil {
 		log.Info("detected installation source", "source", installSource.Source, "version", installSource.Version)
-		if installSource.Repository != "" && repo == "flynn/flynn" {
+		if installSource.Repository != "" && repo == "randy-girard/flynn" {
 			// Use the repository from install-source.json if not explicitly overridden
 			repo = installSource.Repository
 		}
