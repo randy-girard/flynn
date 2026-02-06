@@ -376,13 +376,13 @@ ${RELEASE_NOTES}
 Install the Flynn command-line interface on your local machine (Linux or macOS):
 
 \`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/script/install-flynn-cli | sudo bash
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash
 \`\`\`
 
 Or install a specific version:
 
 \`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/script/install-flynn-cli | sudo bash -s -- --version ${VERSION}
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash -s -- --version ${VERSION}
 \`\`\`
 
 ## Install Flynn Host (Server)
