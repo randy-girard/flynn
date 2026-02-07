@@ -19,8 +19,13 @@ Options:
   --check                  only check for updates, don't install
   --version=<ver>          update to a specific version
   --force                  force update even if already on the latest version
+  --no-restart             only download binaries, don't restart the daemon
 
-Update Flynn components using GitHub releases.`)
+Update Flynn components using GitHub releases.
+
+After downloading new binaries, the running flynn-host daemon is automatically
+restarted using a zero-downtime handoff. Use --no-restart to skip the restart
+and handle it manually (e.g. via systemctl restart flynn-host).`)
 }
 
 // minVersion is the minimum version that can be updated from.

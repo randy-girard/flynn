@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/installsource"
 	"github.com/flynn/flynn/pkg/version"
@@ -103,8 +105,82 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 		// Don't fail the update for this
 	}
 
+	log.Info("binaries downloaded", "version", release.TagName)
+	fmt.Printf("Flynn binaries updated to %s\n", release.TagName)
+
+	// Trigger zero-downtime daemon restart unless --no-restart was specified
+	if args.Bool["--no-restart"] {
+		log.Info("skipping daemon restart (--no-restart specified)")
+		fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
+		return nil
+	}
+
+	if err := restartDaemon(binDir, log); err != nil {
+		return err
+	}
+
 	log.Info("update complete", "version", release.TagName)
-	fmt.Printf("Flynn updated to %s\n", release.TagName)
+	fmt.Printf("Flynn daemon restarted with version %s\n", release.TagName)
+	return nil
+}
+
+// restartDaemon connects to the running flynn-host daemon and triggers a
+// zero-downtime restart by calling the /host/update API. The running daemon
+// spawns the new binary as a child process, hands off the HTTP listener and
+// state, then shuts down gracefully.
+func restartDaemon(binDir string, log log15.Logger) error {
+	log.Info("connecting to running daemon for zero-downtime restart")
+
+	clusterClient := cluster.NewClient()
+	hosts, err := clusterClient.Hosts()
+	if err != nil {
+		log.Error("error discovering hosts, cannot restart daemon automatically", "err", err)
+		return fmt.Errorf("failed to connect to cluster (is discoverd running?): %s\nRestart manually with: systemctl restart flynn-host", err)
+	}
+	if len(hosts) == 0 {
+		log.Warn("no hosts found, skipping daemon restart")
+		fmt.Println("No running hosts found. Restart manually with: systemctl restart flynn-host")
+		return nil
+	}
+
+	// Find the local host by matching the current PID or just use the first host
+	// In a typical single-node setup there is only one host
+	var localHost *cluster.Host
+	for _, h := range hosts {
+		status, err := h.GetStatus()
+		if err != nil {
+			continue
+		}
+		if status.PID == os.Getpid() || len(hosts) == 1 {
+			localHost = h
+			break
+		}
+	}
+	if localHost == nil {
+		// Fall back to the first host if we can't identify the local one
+		localHost = hosts[0]
+	}
+
+	log.Info("triggering zero-downtime daemon restart", "host", localHost.ID())
+	fmt.Printf("Restarting flynn-host daemon on %s...\n", localHost.ID())
+
+	status, err := localHost.GetStatus()
+	if err != nil {
+		log.Error("error getting host status", "err", err)
+		return fmt.Errorf("failed to get host status: %s\nRestart manually with: systemctl restart flynn-host", err)
+	}
+
+	binaryPath := filepath.Join(binDir, "flynn-host")
+	_, err = localHost.UpdateWithShutdownDelay(
+		binaryPath,
+		30*time.Second,
+		append([]string{"daemon"}, status.Flags...)...,
+	)
+	if err != nil {
+		log.Error("error triggering daemon restart", "err", err)
+		return fmt.Errorf("failed to restart daemon: %s\nRestart manually with: systemctl restart flynn-host", err)
+	}
+
 	return nil
 }
 
