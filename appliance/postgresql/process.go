@@ -942,7 +942,7 @@ fsync = on
 max_wal_senders = 15
 wal_keep_size = 1024MB
 synchronous_commit = remote_write
-synchronous_standby_names = '{{.Sync}}'
+{{if .Sync}}synchronous_standby_names = '"{{.Sync}}"'{{else}}synchronous_standby_names = ''{{end}}
 {{if .ReadOnly}}
 default_transaction_read_only = on
 {{end}}
