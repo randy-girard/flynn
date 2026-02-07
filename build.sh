@@ -132,28 +132,25 @@ zfs set sync=disabled flynn-default && \
 zfs set reservation=512M flynn-default && \
 zfs set refreservation=512M flynn-default
 
-# Flynn builder step with retry loop
-while true; do
-  echo "===> Running flynn-builder build with version: ${VERSION}"
+# Flynn builder step with automatic retry (up to 10 times)
+MAX_RETRIES=10
+ATTEMPT=1
+
+while [ $ATTEMPT -le $MAX_RETRIES ]; do
+  echo "===> Running flynn-builder build (attempt $ATTEMPT of $MAX_RETRIES) with version: ${VERSION}"
   if ./script/flynn-builder build --version="${VERSION}" --verbose; then
     echo "===> flynn-builder build succeeded!"
     break
   else
     echo ""
-    echo "===> flynn-builder build FAILED!"
-    echo ""
-    echo "Press 'r' to retry, or 'q' to quit:"
-    read -n 1 -r choice
-    echo ""
-    case "$choice" in
-      r|R)
-        echo "===> Retrying flynn-builder build..."
-        ;;
-      q|Q|*)
-        echo "===> Exiting."
-        exit 1
-        ;;
-    esac
+    echo "===> flynn-builder build FAILED (attempt $ATTEMPT of $MAX_RETRIES)!"
+    if [ $ATTEMPT -eq $MAX_RETRIES ]; then
+      echo "===> Maximum retry attempts reached. Exiting."
+      exit 1
+    fi
+    echo "===> Retrying in 5 seconds..."
+    sleep 5
+    ATTEMPT=$((ATTEMPT + 1))
   fi
 done
 
