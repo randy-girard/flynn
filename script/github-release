@@ -127,9 +127,9 @@ mkdir -p "${RELEASE_DIR}"
 
 # Package binaries (gzipped)
 info "Packaging binaries..."
-BINARIES=(
-  "flynn-host"
-  "flynn-init"
+
+# CLI binaries (already have OS/arch in name)
+CLI_BINARIES=(
   "flynn-linux-amd64"
   "flynn-linux-386"
   "flynn-darwin-amd64"
@@ -137,22 +137,46 @@ BINARIES=(
   "flynn-windows-amd64.exe"
 )
 
-for bin in "${BINARIES[@]}"; do
+for bin in "${CLI_BINARIES[@]}"; do
   if [[ -f "${BUILD_DIR}/${bin}" ]]; then
     gzip -c "${BUILD_DIR}/${bin}" > "${RELEASE_DIR}/${bin}.gz"
     echo "  - ${bin}.gz"
   fi
 done
 
+# Host binaries - rename to include OS/arch for update command compatibility
+# flynn-host and flynn-init are Linux-only, built for amd64
+if [[ -f "${BUILD_DIR}/flynn-host" ]]; then
+  gzip -c "${BUILD_DIR}/flynn-host" > "${RELEASE_DIR}/flynn-host-linux-amd64.gz"
+  echo "  - flynn-host-linux-amd64.gz"
+fi
+
+if [[ -f "${BUILD_DIR}/flynn-init" ]]; then
+  gzip -c "${BUILD_DIR}/flynn-init" > "${RELEASE_DIR}/flynn-init-linux-amd64.gz"
+  echo "  - flynn-init-linux-amd64.gz"
+fi
+
 # Package manifests (gzipped) if they exist
 info "Packaging manifests..."
-MANIFESTS_DIR="${ROOT}/build/manifests"
-for manifest in bootstrap-manifest.json images.json; do
-  if [[ -f "${MANIFESTS_DIR}/${manifest}" ]]; then
-    gzip -c "${MANIFESTS_DIR}/${manifest}" > "${RELEASE_DIR}/${manifest}.gz"
-    echo "  - ${manifest}.gz"
-  fi
-done
+
+# images.json - check build/images.json first (builder output), then build/manifests/images.json
+if [[ -f "${ROOT}/build/images.json" ]]; then
+  gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
+  echo "  - images.json.gz (from build/images.json)"
+elif [[ -f "${ROOT}/build/manifests/images.json" ]]; then
+  gzip -c "${ROOT}/build/manifests/images.json" > "${RELEASE_DIR}/images.json.gz"
+  echo "  - images.json.gz (from build/manifests/images.json)"
+else
+  echo "  (no images.json found)"
+fi
+
+# bootstrap-manifest.json - from build/manifests/
+if [[ -f "${ROOT}/build/manifests/bootstrap-manifest.json" ]]; then
+  gzip -c "${ROOT}/build/manifests/bootstrap-manifest.json" > "${RELEASE_DIR}/bootstrap-manifest.json.gz"
+  echo "  - bootstrap-manifest.json.gz"
+else
+  echo "  (no bootstrap-manifest.json found)"
+fi
 
 # Package container image manifests if they exist
 info "Packaging image manifests..."
@@ -203,22 +227,21 @@ fi
 # Generate release notes from commits since last release
 info "Generating release notes from commits..."
 
-# Fetch all tags from remote to ensure we have the latest
-echo "  Fetching tags from remote..."
-git fetch --tags --force 2>/dev/null || true
+# Fetch all tags from remote to ensure local tags are in sync with remote
+# This is critical for accurate release notes - we need to know the actual previous release
+echo "  Syncing tags with remote..."
+git fetch origin --tags --force 2>/dev/null || true
+echo "  Tags synced."
 
-# Get the previous release tag (most recent tag before this one)
-# First, get all tags sorted by version, then find the one before the current version
-if git rev-parse "${VERSION}" >/dev/null 2>&1; then
-  # Tag exists, get the previous one
-  PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | grep -B1 "^${VERSION}$" | head -n1)
-  # If grep returned the same tag (no previous), clear it
-  if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
-    PREVIOUS_TAG=""
-  fi
-else
-  # Tag doesn't exist yet, get the most recent tag
-  PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1)
+# Get the previous release tag - the most recent tag that is an ANCESTOR of HEAD
+# This ensures we only get commits that are new since the last release in this branch's history
+# Using git describe --tags --abbrev=0 finds the most recent tag reachable from HEAD
+PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo "")
+
+# If the found tag is the same as the version we're releasing, find the one before it
+if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
+  # Get the tag before this one by looking at the parent of the tagged commit
+  PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${VERSION}^" 2>/dev/null || echo "")
 fi
 
 if [[ -n "${PREVIOUS_TAG}" ]]; then
@@ -377,13 +400,13 @@ ${RELEASE_NOTES}
 Install the Flynn command-line interface on your local machine (Linux or macOS):
 
 \`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/script/install-flynn-cli | sudo bash
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash
 \`\`\`
 
 Or install a specific version:
 
 \`\`\`bash
-curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/script/install-flynn-cli | sudo bash -s -- --version ${VERSION}
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash -s -- --version ${VERSION}
 \`\`\`
 
 ## Install Flynn Host (Server)
@@ -408,8 +431,8 @@ curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/instal
 ### Server Binaries
 | Binary | Description |
 |--------|-------------|
-| flynn-host.gz | Flynn host daemon |
-| flynn-init.gz | Flynn init binary |
+| flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
+| flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
 
 ### Other
 | File | Description |

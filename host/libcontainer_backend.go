@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1857,5 +1858,276 @@ func forceMemoryOvercommit() error {
 			return fmt.Errorf("error forcing overcommit: %s", err)
 		}
 	}
+	return nil
+}
+
+// GetJobStats returns runtime resource usage stats for a specific job/container.
+func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, error) {
+	l.containersMtx.RLock()
+	container, ok := l.containers[id]
+	l.containersMtx.RUnlock()
+
+	if !ok {
+		return nil, fmt.Errorf("job not found: %s", id)
+	}
+
+	if container.container == nil {
+		return nil, fmt.Errorf("container not initialized for job: %s", id)
+	}
+
+	stats, err := container.container.Stats()
+	if err != nil {
+		return nil, fmt.Errorf("error getting container stats: %s", err)
+	}
+
+	result := &host.ContainerStats{
+		JobID:     id,
+		Timestamp: time.Now(),
+	}
+
+	// CPU stats
+	if stats.CgroupStats != nil {
+		cpuStats := stats.CgroupStats.CpuStats
+		result.CPUUsageNanoseconds = cpuStats.CpuUsage.TotalUsage
+		result.CPUThrottledPeriods = cpuStats.ThrottlingData.ThrottledPeriods
+		result.CPUThrottledTimeNs = cpuStats.ThrottlingData.ThrottledTime
+
+		// Memory stats
+		memStats := stats.CgroupStats.MemoryStats
+		result.MemoryUsageBytes = memStats.Usage.Usage
+		result.MemoryLimitBytes = memStats.Usage.Limit
+		result.MemoryMaxUsage = memStats.Usage.MaxUsage
+		result.MemoryCacheBytes = memStats.Cache
+
+		// Get RSS from detailed stats if available
+		if rss, ok := memStats.Stats["rss"]; ok {
+			result.MemoryRSSBytes = rss
+		}
+
+		// PIDs stats
+		result.PIDsCurrent = stats.CgroupStats.PidsStats.Current
+		result.PIDsLimit = stats.CgroupStats.PidsStats.Limit
+
+		// I/O stats - aggregate Read and Write operations
+		for _, entry := range stats.CgroupStats.BlkioStats.IoServiceBytesRecursive {
+			switch entry.Op {
+			case "Read":
+				result.IOReadBytes += entry.Value
+			case "Write":
+				result.IOWriteBytes += entry.Value
+			}
+		}
+	}
+
+	// Network stats - aggregate across all interfaces
+	for _, iface := range stats.Interfaces {
+		result.NetworkRxBytes += iface.RxBytes
+		result.NetworkTxBytes += iface.TxBytes
+		result.NetworkRxPackets += iface.RxPackets
+		result.NetworkTxPackets += iface.TxPackets
+	}
+
+	return result, nil
+}
+
+// GetAllJobsStats returns runtime resource usage stats for all jobs/containers on this host.
+func (l *LibcontainerBackend) GetAllJobsStats() (*host.AllJobsStats, error) {
+	l.containersMtx.RLock()
+	containerIDs := make([]string, 0, len(l.containers))
+	for id := range l.containers {
+		containerIDs = append(containerIDs, id)
+	}
+	l.containersMtx.RUnlock()
+
+	result := &host.AllJobsStats{
+		HostID:    l.host.id,
+		Timestamp: time.Now(),
+		Jobs:      make([]*host.ContainerStats, 0, len(containerIDs)),
+	}
+
+	for _, id := range containerIDs {
+		stats, err := l.GetJobStats(id)
+		if err != nil {
+			// Skip containers that error (may have exited)
+			continue
+		}
+		result.Jobs = append(result.Jobs, stats)
+	}
+
+	return result, nil
+}
+
+// GetHostStats returns aggregated resource usage stats for the host.
+func (l *LibcontainerBackend) GetHostStats() (*host.HostResourceStats, error) {
+	result := &host.HostResourceStats{
+		HostID:    l.host.id,
+		Timestamp: time.Now(),
+	}
+
+	// CPU count
+	result.CPUCount = runtime.NumCPU()
+
+	// Memory stats from /proc/meminfo
+	if err := l.readMemInfo(result); err != nil {
+		return nil, fmt.Errorf("error reading memory info: %s", err)
+	}
+
+	// Load average from /proc/loadavg
+	if err := l.readLoadAvg(result); err != nil {
+		return nil, fmt.Errorf("error reading load average: %s", err)
+	}
+
+	// Uptime from /proc/uptime
+	if err := l.readUptime(result); err != nil {
+		return nil, fmt.Errorf("error reading uptime: %s", err)
+	}
+
+	// Disk stats for container root
+	if err := l.readDiskStats(result); err != nil {
+		// Non-fatal, just log
+	}
+
+	// Network stats from /proc/net/dev
+	if err := l.readNetStats(result); err != nil {
+		// Non-fatal, just log
+	}
+
+	// Job counts
+	l.containersMtx.RLock()
+	result.TotalJobsCount = len(l.containers)
+	runningCount := 0
+	for _, c := range l.containers {
+		if c.container != nil {
+			status, err := c.container.Status()
+			if err == nil && status == libcontainer.Running {
+				runningCount++
+			}
+		}
+	}
+	l.containersMtx.RUnlock()
+	result.RunningJobsCount = runningCount
+
+	return result, nil
+}
+
+// readMemInfo reads memory statistics from /proc/meminfo
+func (l *LibcontainerBackend) readMemInfo(stats *host.HostResourceStats) error {
+	data, err := ioutil.ReadFile("/proc/meminfo")
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+
+		// Values in /proc/meminfo are in kB
+		value, _ := strconv.ParseUint(fields[1], 10, 64)
+		value *= 1024 // Convert to bytes
+
+		switch fields[0] {
+		case "MemTotal:":
+			stats.MemoryTotalBytes = value
+		case "MemFree:":
+			stats.MemoryFreeBytes = value
+		case "MemAvailable:":
+			stats.MemoryAvailableBytes = value
+		case "Buffers:":
+			stats.MemoryBuffersBytes = value
+		case "Cached:":
+			stats.MemoryCachedBytes = value
+		}
+	}
+
+	stats.MemoryUsedBytes = stats.MemoryTotalBytes - stats.MemoryAvailableBytes
+
+	return nil
+}
+
+// readLoadAvg reads load average from /proc/loadavg
+func (l *LibcontainerBackend) readLoadAvg(stats *host.HostResourceStats) error {
+	data, err := ioutil.ReadFile("/proc/loadavg")
+	if err != nil {
+		return err
+	}
+
+	fields := strings.Fields(string(data))
+	if len(fields) >= 3 {
+		stats.LoadAvg1, _ = strconv.ParseFloat(fields[0], 64)
+		stats.LoadAvg5, _ = strconv.ParseFloat(fields[1], 64)
+		stats.LoadAvg15, _ = strconv.ParseFloat(fields[2], 64)
+	}
+
+	return nil
+}
+
+// readUptime reads uptime from /proc/uptime
+func (l *LibcontainerBackend) readUptime(stats *host.HostResourceStats) error {
+	data, err := ioutil.ReadFile("/proc/uptime")
+	if err != nil {
+		return err
+	}
+
+	fields := strings.Fields(string(data))
+	if len(fields) >= 1 {
+		stats.UptimeSeconds, _ = strconv.ParseFloat(fields[0], 64)
+	}
+
+	return nil
+}
+
+// readDiskStats reads disk usage for the container root filesystem
+func (l *LibcontainerBackend) readDiskStats(stats *host.HostResourceStats) error {
+	var statfs syscall.Statfs_t
+	if err := syscall.Statfs(containerRoot, &statfs); err != nil {
+		return err
+	}
+
+	stats.DiskTotalBytes = statfs.Blocks * uint64(statfs.Bsize)
+	stats.DiskFreeBytes = statfs.Bfree * uint64(statfs.Bsize)
+	stats.DiskUsedBytes = stats.DiskTotalBytes - stats.DiskFreeBytes
+
+	return nil
+}
+
+// readNetStats reads network statistics from /proc/net/dev
+func (l *LibcontainerBackend) readNetStats(stats *host.HostResourceStats) error {
+	data, err := ioutil.ReadFile("/proc/net/dev")
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		// Skip header lines
+		if strings.Contains(line, "|") || strings.TrimSpace(line) == "" {
+			continue
+		}
+
+		// Skip loopback interface
+		if strings.HasPrefix(strings.TrimSpace(line), "lo:") {
+			continue
+		}
+
+		fields := strings.Fields(line)
+		if len(fields) < 10 {
+			continue
+		}
+
+		// Format: iface: rx_bytes rx_packets rx_errs rx_drop ... tx_bytes tx_packets tx_errs tx_drop ...
+		rxBytes, _ := strconv.ParseUint(fields[1], 10, 64)
+		rxPackets, _ := strconv.ParseUint(fields[2], 10, 64)
+		txBytes, _ := strconv.ParseUint(fields[9], 10, 64)
+		txPackets, _ := strconv.ParseUint(fields[10], 10, 64)
+
+		stats.NetworkRxBytes += rxBytes
+		stats.NetworkRxPackets += rxPackets
+		stats.NetworkTxBytes += txBytes
+		stats.NetworkTxPackets += txPackets
+	}
+
 	return nil
 }

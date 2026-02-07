@@ -10,6 +10,30 @@ VERSION="${FLYNN_VERSION:-latest}"
 CONFIG_DIR="/etc/flynn"
 BIN_DIR="/usr/local/bin"
 
+# Detect OS and architecture
+detect_platform() {
+  local os arch
+
+  # Detect OS
+  case "$(uname -s)" in
+    Linux)  os="linux" ;;
+    Darwin) os="darwin" ;;
+    *)      fail "unsupported operating system: $(uname -s)" ;;
+  esac
+
+  # Detect architecture
+  case "$(uname -m)" in
+    x86_64|amd64)  arch="amd64" ;;
+    i386|i686)     arch="386" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *)             fail "unsupported architecture: $(uname -m)" ;;
+  esac
+
+  echo "${os}-${arch}"
+}
+
+PLATFORM="$(detect_platform)"
+
 usage() {
   cat <<USAGE >&2
 usage: $0 [options]
@@ -163,8 +187,10 @@ main() {
   fi
 
   # Download and install flynn-host
-  download_and_install_binary "flynn-host.gz" "flynn-host"
-  download_and_install_binary "flynn-init.gz" "flynn-init"
+  # Binaries are named with OS/arch suffix for update command compatibility
+  info "detected platform: ${PLATFORM}"
+  download_and_install_binary "flynn-host-${PLATFORM}.gz" "flynn-host"
+  download_and_install_binary "flynn-init-${PLATFORM}.gz" "flynn-init"
 
   if [[ -n "${zpool_dev}" ]]; then
     info "creating flynn-default zpool"

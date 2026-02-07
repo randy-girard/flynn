@@ -119,7 +119,10 @@ func parseChecksums(path string) (map[string]string, error) {
 	for _, line := range strings.Split(string(data), "\n") {
 		parts := strings.Fields(line)
 		if len(parts) == 2 {
-			filename := strings.TrimPrefix(parts[1], "*")
+			// Strip common prefixes from filename (*, ./, etc.)
+			filename := parts[1]
+			filename = strings.TrimPrefix(filename, "*")
+			filename = strings.TrimPrefix(filename, "./")
 			checksums[filename] = parts[0]
 		}
 	}

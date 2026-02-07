@@ -25,7 +25,7 @@ Options:
   -b --bin-dir=<dir>       directory to download binaries to [default: /usr/local/bin]
   -c --config-dir=<dir>    directory to download config files to [default: /etc/flynn]
   -v --volpath=<path>      directory to create volumes in [default: /var/lib/flynn/volumes]
-  --github-repo=<repo>     GitHub repository for downloads [default: flynn/flynn]
+  --github-repo=<repo>     GitHub repository for downloads [default: randy-girard/flynn]
   --version=<ver>          version to download (defaults to latest release)
   --zpool=<name>           name of ZFS pool to use [default: flynn-default]
 
