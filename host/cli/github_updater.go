@@ -4,17 +4,25 @@ import (
 	"compress/gzip"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	controller "github.com/flynn/flynn/controller/client"
+	ct "github.com/flynn/flynn/controller/types"
+	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/installsource"
+	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/version"
+	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
 )
@@ -26,6 +34,8 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	targetVersion := args.String["--version"]
 	checkOnly := args.Bool["--check"]
 	force := args.Bool["--force"]
+	skipImages := args.Bool["--skip-images"]
+	imagesOnly := args.Bool["--images-only"]
 
 	currentVersion := version.String()
 	log.Info("checking for updates", "repo", repo, "current_version", currentVersion)
@@ -62,65 +72,74 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	log.Info("updating to version", "version", release.TagName)
 
-	// Create temp directory for downloads
-	tmpDir, err := os.MkdirTemp("", "flynn-update-*")
-	if err != nil {
-		return fmt.Errorf("failed to create temp directory: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Update binaries unless --images-only was specified
+	if !imagesOnly {
+		// Create temp directory for downloads
+		tmpDir, err := os.MkdirTemp("", "flynn-update-*")
+		if err != nil {
+			return fmt.Errorf("failed to create temp directory: %w", err)
+		}
+		defer os.RemoveAll(tmpDir)
 
-	// Download checksums first
-	checksumURL := ghrelease.GetReleaseURL(repo, release.TagName) + "/checksums.sha512"
-	checksumPath := filepath.Join(tmpDir, "checksums.sha512")
-	if err := client.DownloadFile(checksumURL, checksumPath); err != nil {
-		log.Error("failed to download checksums", "err", err)
-		return err
+		// Download checksums first
+		checksumURL := ghrelease.GetReleaseURL(repo, release.TagName) + "/checksums.sha512"
+		checksumPath := filepath.Join(tmpDir, "checksums.sha512")
+		if err := client.DownloadFile(checksumURL, checksumPath); err != nil {
+			log.Error("failed to download checksums", "err", err)
+			return err
+		}
+
+		checksums, err := parseChecksums(checksumPath)
+		if err != nil {
+			log.Error("failed to parse checksums", "err", err)
+			return err
+		}
+
+		// Download and install binaries
+		binaries := []struct {
+			name     string
+			destName string
+		}{
+			{"flynn-host-linux-amd64.gz", "flynn-host"},
+			{"flynn-init-linux-amd64.gz", "flynn-init"},
+		}
+
+		for _, bin := range binaries {
+			if err := downloadAndInstallBinary(client, repo, release.TagName, bin.name, bin.destName, tmpDir, binDir, checksums, log); err != nil {
+				return err
+			}
+		}
+
+		// Update install-source.json
+		source := installsource.NewGitHubSource(repo, release.TagName)
+		if err := installsource.Save(configDir, source); err != nil {
+			log.Warn("failed to update install-source.json", "err", err)
+			// Don't fail the update for this
+		}
+
+		log.Info("binaries downloaded", "version", release.TagName)
+		fmt.Printf("Flynn binaries updated to %s\n", release.TagName)
+
+		// Trigger zero-downtime daemon restart unless --no-restart was specified
+		if !args.Bool["--no-restart"] {
+			if err := restartDaemon(binDir, log); err != nil {
+				return err
+			}
+			fmt.Printf("Flynn daemon restarted with version %s\n", release.TagName)
+		} else {
+			log.Info("skipping daemon restart (--no-restart specified)")
+			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
+		}
 	}
 
-	checksums, err := parseChecksums(checksumPath)
-	if err != nil {
-		log.Error("failed to parse checksums", "err", err)
-		return err
-	}
-
-	// Download and install binaries
-	binaries := []struct {
-		name     string
-		destName string
-	}{
-		{"flynn-host-linux-amd64.gz", "flynn-host"},
-		{"flynn-init-linux-amd64.gz", "flynn-init"},
-	}
-
-	for _, bin := range binaries {
-		if err := downloadAndInstallBinary(client, repo, release.TagName, bin.name, bin.destName, tmpDir, binDir, checksums, log); err != nil {
+	// Update container images and system apps unless --skip-images was specified
+	if !skipImages {
+		if err := updateImages(repo, configDir, release.TagName, log); err != nil {
 			return err
 		}
 	}
 
-	// Update install-source.json
-	source := installsource.NewGitHubSource(repo, release.TagName)
-	if err := installsource.Save(configDir, source); err != nil {
-		log.Warn("failed to update install-source.json", "err", err)
-		// Don't fail the update for this
-	}
-
-	log.Info("binaries downloaded", "version", release.TagName)
-	fmt.Printf("Flynn binaries updated to %s\n", release.TagName)
-
-	// Trigger zero-downtime daemon restart unless --no-restart was specified
-	if args.Bool["--no-restart"] {
-		log.Info("skipping daemon restart (--no-restart specified)")
-		fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
-		return nil
-	}
-
-	if err := restartDaemon(binDir, log); err != nil {
-		return err
-	}
-
 	log.Info("update complete", "version", release.TagName)
-	fmt.Printf("Flynn daemon restarted with version %s\n", release.TagName)
 	return nil
 }
 
@@ -143,22 +162,50 @@ func restartDaemon(binDir string, log log15.Logger) error {
 		return nil
 	}
 
-	// Find the local host by matching the current PID or just use the first host
-	// In a typical single-node setup there is only one host
+	// Find the local host by matching the hostname
+	localHostname, err := os.Hostname()
+	if err != nil {
+		log.Error("error getting local hostname", "err", err)
+		return fmt.Errorf("failed to get local hostname: %s\nRestart manually with: systemctl restart flynn-host", err)
+	}
+	log.Info("looking for local host", "hostname", localHostname, "num_hosts", len(hosts))
+
+	// Normalize hostname for comparison (remove dashes, lowercase)
+	normalizedHostname := normalizeHostname(localHostname)
+
 	var localHost *cluster.Host
 	for _, h := range hosts {
-		status, err := h.GetStatus()
-		if err != nil {
-			continue
+		hostID := h.ID()
+		normalizedHostID := normalizeHostname(hostID)
+		log.Debug("checking host", "host_id", hostID, "normalized_id", normalizedHostID, "normalized_hostname", normalizedHostname)
+
+		// Exact match
+		if hostID == localHostname {
+			localHost = h
+			break
 		}
-		if status.PID == os.Getpid() || len(hosts) == 1 {
+		// Case-insensitive match
+		if strings.EqualFold(hostID, localHostname) {
+			localHost = h
+			break
+		}
+		// Normalized match (handles dashes, underscores, case differences)
+		// e.g., "flynn-test-node-3" matches "flynntestnode3"
+		if normalizedHostID == normalizedHostname {
 			localHost = h
 			break
 		}
 	}
-	if localHost == nil {
-		// Fall back to the first host if we can't identify the local one
+
+	// If no match by hostname, try single-node fallback
+	if localHost == nil && len(hosts) == 1 {
+		log.Info("single host cluster, using the only available host")
 		localHost = hosts[0]
+	}
+
+	if localHost == nil {
+		log.Error("could not identify local host in cluster", "hostname", localHostname, "available_hosts", hostIDs(hosts))
+		return fmt.Errorf("could not identify local host '%s' in cluster. Available hosts: %v\nRestart manually with: systemctl restart flynn-host", localHostname, hostIDs(hosts))
 	}
 
 	log.Info("triggering zero-downtime daemon restart", "host", localHost.ID())
@@ -182,6 +229,25 @@ func restartDaemon(binDir string, log log15.Logger) error {
 	}
 
 	return nil
+}
+
+// hostIDs returns a slice of host IDs for logging
+func hostIDs(hosts []*cluster.Host) []string {
+	ids := make([]string, len(hosts))
+	for i, h := range hosts {
+		ids[i] = h.ID()
+	}
+	return ids
+}
+
+// normalizeHostname removes dashes, underscores, and converts to lowercase
+// to allow flexible matching between hostnames and host IDs.
+// e.g., "flynn-test-node-3" -> "flynntestnode3"
+func normalizeHostname(name string) string {
+	name = strings.ToLower(name)
+	name = strings.ReplaceAll(name, "-", "")
+	name = strings.ReplaceAll(name, "_", "")
+	return name
 }
 
 // parseChecksums reads a SHA512 checksum file and returns a map of filename -> checksum
@@ -288,4 +354,242 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 	dst.Close()
 
 	return os.Rename(tmpPath, destPath)
+}
+
+const deployTimeout = 30 * time.Minute
+
+// updateImages downloads the images manifest from GitHub and updates system apps
+func updateImages(repo, configDir, targetVersion string, log log15.Logger) error {
+	log.Info("downloading images manifest from GitHub", "repo", repo, "version", targetVersion)
+
+	// Create downloader (without volume manager - we're just getting the manifest)
+	d := downloader.New(repo, nil, targetVersion, log)
+
+	// Download images manifest
+	images, err := d.DownloadImagesManifest(configDir)
+	if err != nil {
+		log.Error("error downloading images manifest", "err", err)
+		return err
+	}
+
+	log.Info("downloaded images manifest", "num_images", len(images))
+
+	// Check cluster status before updating
+	log.Info("checking cluster status")
+	req, err := http.NewRequest("GET", "http://status-web.discoverd", nil)
+	if err != nil {
+		log.Error("error creating status request", "err", err)
+		return fmt.Errorf("error creating status request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Error("error getting cluster status", "err", err)
+		return fmt.Errorf("error getting cluster status (is the cluster running?): %w", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != 200 {
+		log.Error("cluster status is unhealthy", "code", res.StatusCode)
+		return fmt.Errorf("cluster is unhealthy (status code %d)", res.StatusCode)
+	}
+
+	var statusWrapper struct {
+		Data struct {
+			Detail map[string]status.Status
+		}
+	}
+	if err := decodeJSON(res.Body, &statusWrapper); err != nil {
+		log.Error("error decoding cluster status", "err", err)
+		return fmt.Errorf("error decoding cluster status: %w", err)
+	}
+	statuses := statusWrapper.Data.Detail
+
+	// Connect to controller
+	log.Info("connecting to controller")
+	instances, err := discoverd.GetInstances("controller", 10*time.Second)
+	if err != nil {
+		log.Error("error discovering controller", "err", err)
+		return fmt.Errorf("error discovering controller: %w", err)
+	}
+	if len(instances) == 0 {
+		return fmt.Errorf("no controller instances found")
+	}
+
+	client, err := controller.NewClient("http://"+instances[0].Addr, instances[0].Meta["AUTH_KEY"])
+	if err != nil {
+		log.Error("error creating controller client", "err", err)
+		return fmt.Errorf("error creating controller client: %w", err)
+	}
+
+	// Validate images
+	log.Info("validating images for system apps")
+	for _, app := range updater.SystemApps {
+		if v := version.Parse(statuses[app.Name].Version); !v.Dev && app.MinVersion != "" && v.Before(version.Parse(app.MinVersion)) {
+			log.Info("skipping system app update (can't upgrade from running version)",
+				"app", app.Name, "version", v)
+			continue
+		}
+		if _, ok := images[app.Name]; !ok {
+			err := fmt.Errorf("missing image: %s", app.Name)
+			log.Error(err.Error())
+			return err
+		}
+	}
+
+	// Create image artifacts for common images
+	log.Info("creating image artifacts")
+	redisImage := images["redis"]
+	if err := client.CreateArtifact(redisImage); err != nil {
+		log.Error("error creating redis image artifact", "err", err)
+		return err
+	}
+	slugRunner := images["slugrunner"]
+	if err := client.CreateArtifact(slugRunner); err != nil {
+		log.Error("error creating slugrunner image artifact", "err", err)
+		return err
+	}
+	slugBuilder := images["slugbuilder"]
+	if err := client.CreateArtifact(slugBuilder); err != nil {
+		log.Error("error creating slugbuilder image artifact", "err", err)
+		return err
+	}
+
+	// Deploy system apps in order
+	log.Info("deploying system apps")
+	for _, appInfo := range updater.SystemApps {
+		if appInfo.ImageOnly {
+			continue // skip ImageOnly updates
+		}
+		appLog := log.New("name", appInfo.Name)
+		appLog.Info("starting deploy of system app")
+
+		app, err := client.GetApp(appInfo.Name)
+		if err == controller.ErrNotFound && appInfo.Optional {
+			appLog.Info("skipped deploy of system app (optional app not present)")
+			continue
+		} else if err != nil {
+			appLog.Error("error getting app", "err", err)
+			return err
+		}
+
+		if err := deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, appLog); err != nil {
+			if e, ok := err.(errDeploySkipped); ok {
+				appLog.Info("skipped deploy of system app", "reason", e.reason)
+				continue
+			}
+			return err
+		}
+		appLog.Info("finished deploy of system app")
+	}
+
+	// Deploy all other apps (Redis appliances and slugrunner apps)
+	apps, err := client.AppList()
+	if err != nil {
+		log.Error("error getting apps", "err", err)
+		return err
+	}
+
+	for _, app := range apps {
+		appLog := log.New("name", app.Name)
+
+		if app.RedisAppliance() {
+			appLog.Info("starting deploy of Redis app")
+			if err := deployApp(client, app, redisImage, nil, appLog); err != nil {
+				if e, ok := err.(errDeploySkipped); ok {
+					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
+					continue
+				}
+				return err
+			}
+			appLog.Info("finished deploy of Redis app")
+			continue
+		}
+
+		if app.System() {
+			continue
+		}
+
+		appLog.Info("starting deploy of app to update slugrunner")
+		if err := deployApp(client, app, slugRunner, nil, appLog); err != nil {
+			if e, ok := err.(errDeploySkipped); ok {
+				appLog.Info("skipped deploy of app", "reason", e.reason)
+				continue
+			}
+			return err
+		}
+		appLog.Info("finished deploy of app")
+	}
+
+	fmt.Println("System apps and container images updated successfully")
+	return nil
+}
+
+type errDeploySkipped struct {
+	reason string
+}
+
+func (e errDeploySkipped) Error() string {
+	return e.reason
+}
+
+func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, log log15.Logger) error {
+	release, err := client.GetAppRelease(app.ID)
+	if err != nil {
+		log.Error("error getting release", "err", err)
+		return err
+	}
+	if len(release.ArtifactIDs) == 0 {
+		return errDeploySkipped{"release has no artifacts"}
+	}
+	artifact, err := client.GetArtifact(release.ArtifactIDs[0])
+	if err != nil {
+		log.Error("error getting release artifact", "err", err)
+		return err
+	}
+	if !app.System() && release.IsGitDeploy() {
+		if artifact.Meta["flynn.component"] != "slugrunner" {
+			return errDeploySkipped{"app not using slugrunner image"}
+		}
+	}
+	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
+	if skipDeploy {
+		return errDeploySkipped{"app is already using latest images"}
+	}
+	if err := client.CreateArtifact(image); err != nil {
+		log.Error("error creating artifact", "err", err)
+		return err
+	}
+	release.ID = ""
+	release.ArtifactIDs[0] = image.ID
+	if updateFn != nil {
+		updateFn(release)
+	}
+	if err := client.CreateRelease(app.ID, release); err != nil {
+		log.Error("error creating new release", "err", err)
+		return err
+	}
+	timeoutCh := make(chan struct{})
+	time.AfterFunc(deployTimeout, func() { close(timeoutCh) })
+	if err := client.DeployAppRelease(app.ID, release.ID, timeoutCh); err != nil {
+		log.Error("error deploying app", "err", err)
+		return err
+	}
+	return nil
+}
+
+func decodeJSON(r io.Reader, v interface{}) error {
+	return jsonDecoder(r).Decode(v)
+}
+
+func jsonDecoder(r io.Reader) *jsonDecoderWrapper {
+	return &jsonDecoderWrapper{dec: json.NewDecoder(r)}
+}
+
+type jsonDecoderWrapper struct {
+	dec *json.Decoder
+}
+
+func (d *jsonDecoderWrapper) Decode(v interface{}) error {
+	return d.dec.Decode(v)
 }

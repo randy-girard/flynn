@@ -214,6 +214,39 @@ func symlink(target, link string) error {
 	return os.Symlink(target, link)
 }
 
+// DownloadImagesManifest downloads the images manifest and returns the images map
+// without downloading layers. This is useful for updating system apps.
+func (d *Downloader) DownloadImagesManifest(configDir string) (map[string]*ct.Artifact, error) {
+	// Download images manifest
+	manifestURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/images.json.gz"
+	manifestPath := filepath.Join(configDir, "images.json.gz.tmp")
+	if err := d.downloadWithRetry(manifestURL, manifestPath); err != nil {
+		return nil, fmt.Errorf("error downloading images manifest: %s", err)
+	}
+	defer os.Remove(manifestPath)
+
+	// Decompress manifest
+	gzFile, err := os.Open(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	defer gzFile.Close()
+
+	gz, err := gzip.NewReader(gzFile)
+	if err != nil {
+		return nil, fmt.Errorf("error creating gzip reader for images manifest: %s", err)
+	}
+	defer gz.Close()
+
+	// Parse manifest
+	var images map[string]*ct.Artifact
+	if err := json.NewDecoder(gz).Decode(&images); err != nil {
+		return nil, fmt.Errorf("error parsing images manifest: %s", err)
+	}
+
+	return images, nil
+}
+
 // DownloadImages downloads container images from GitHub releases.
 // It downloads the images manifest and then downloads each layer.
 func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo) error {

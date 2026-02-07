@@ -20,12 +20,18 @@ Options:
   --version=<ver>          update to a specific version
   --force                  force update even if already on the latest version
   --no-restart             only download binaries, don't restart the daemon
+  --skip-images            skip updating container images and system apps
+  --images-only            only update container images and system apps (skip binaries)
 
 Update Flynn components using GitHub releases.
 
 After downloading new binaries, the running flynn-host daemon is automatically
 restarted using a zero-downtime handoff. Use --no-restart to skip the restart
-and handle it manually (e.g. via systemctl restart flynn-host).`)
+and handle it manually (e.g. via systemctl restart flynn-host).
+
+By default, both binaries and container images are updated. Use --skip-images
+to update only binaries, or --images-only to update only container images and
+system apps without touching binaries.`)
 }
 
 // minVersion is the minimum version that can be updated from.
