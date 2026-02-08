@@ -374,18 +374,36 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 
 	log.Info("downloaded images manifest", "num_images", len(images))
 
-	// Check cluster status before updating
-	log.Info("checking cluster status")
-	req, err := http.NewRequest("GET", "http://status-web.discoverd", nil)
-	if err != nil {
-		log.Error("error creating status request", "err", err)
-		return fmt.Errorf("error creating status request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Error("error getting cluster status", "err", err)
-		return fmt.Errorf("error getting cluster status (is the cluster running?): %w", err)
+	// Wait for discoverd DNS to be ready after daemon restart
+	// This can take a few seconds as the daemon needs to fully start and
+	// discoverd needs to reconnect and register services
+	log.Info("waiting for cluster to be ready after daemon restart")
+	const maxRetries = 30
+	const retryDelay = 2 * time.Second
+	var res *http.Response
+	for i := 0; i < maxRetries; i++ {
+		req, err := http.NewRequest("GET", "http://status-web.discoverd", nil)
+		if err != nil {
+			log.Error("error creating status request", "err", err)
+			return fmt.Errorf("error creating status request: %w", err)
+		}
+		req.Header.Set("Accept", "application/json")
+		res, err = http.DefaultClient.Do(req)
+		if err == nil {
+			// Successfully connected
+			if i > 0 {
+				log.Info("cluster is now ready", "attempts", i+1)
+			}
+			break
+		}
+		// DNS or connection not ready yet, retry
+		if i < maxRetries-1 {
+			log.Debug("cluster not ready, retrying", "attempt", i+1, "max", maxRetries, "err", err)
+			time.Sleep(retryDelay)
+		} else {
+			log.Error("cluster still not ready after max retries", "err", err)
+			return fmt.Errorf("cluster not ready after %d attempts (is the cluster running?): %w", maxRetries, err)
+		}
 	}
 	defer res.Body.Close()
 
