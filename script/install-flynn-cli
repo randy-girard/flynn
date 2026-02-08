@@ -15,7 +15,14 @@
 set -eo pipefail
 
 GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
-VERSION="${FLYNN_VERSION:-latest}"
+# EMBEDDED_VERSION is replaced at release time by github-release script
+EMBEDDED_VERSION="__FLYNN_VERSION__"
+# Use FLYNN_VERSION env var if set, otherwise use embedded version (or "latest" if placeholder)
+if [[ "${EMBEDDED_VERSION}" == "__FLYNN_VERSION__" ]]; then
+  VERSION="${FLYNN_VERSION:-latest}"
+else
+  VERSION="${FLYNN_VERSION:-${EMBEDDED_VERSION}}"
+fi
 INSTALL_DIR="${FLYNN_INSTALL_DIR:-/usr/local/bin}"
 
 # Colors for output

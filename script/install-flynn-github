@@ -6,7 +6,9 @@
 set -eo pipefail
 
 GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
-VERSION="${FLYNN_VERSION:-latest}"
+# EMBEDDED_VERSION is replaced at release time by github-release script
+EMBEDDED_VERSION="__FLYNN_VERSION__"
+VERSION="${FLYNN_VERSION:-${EMBEDDED_VERSION}}"
 CONFIG_DIR="/etc/flynn"
 BIN_DIR="/usr/local/bin"
 
@@ -149,7 +151,8 @@ main() {
   fi
 
   # Determine version
-  if [[ "${VERSION}" == "latest" ]]; then
+  # If VERSION still has the placeholder or is "latest", fetch from GitHub
+  if [[ "${VERSION}" == "latest" ]] || [[ "${VERSION}" == "__FLYNN_VERSION__" ]]; then
     info "fetching latest release version from GitHub..."
     # Use grep/sed instead of jq since jq isn't installed yet
     VERSION=$(curl -fsSL "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" | \
@@ -158,6 +161,8 @@ main() {
     if [[ -z "${VERSION}" || "${VERSION}" == "null" ]]; then
       fail "failed to determine latest version from GitHub"
     fi
+  else
+    info "using embedded version: ${VERSION}"
   fi
 
   info "installing Flynn ${VERSION} from GitHub (${GITHUB_REPO})"

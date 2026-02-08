@@ -210,9 +210,11 @@ else
   echo "  (no layers found in ${LAYER_CACHE})"
 fi
 
-# Copy install scripts
-cp "${ROOT}/script/install-flynn-github" "${RELEASE_DIR}/install-flynn-github"
-cp "${ROOT}/script/install-flynn-cli" "${RELEASE_DIR}/install-flynn-cli"
+# Copy install scripts (with version embedded)
+sed "s/__FLYNN_VERSION__/${VERSION}/g" "${ROOT}/script/install-flynn-github" > "${RELEASE_DIR}/install-flynn-github"
+chmod +x "${RELEASE_DIR}/install-flynn-github"
+sed "s/__FLYNN_VERSION__/${VERSION}/g" "${ROOT}/script/install-flynn-cli" > "${RELEASE_DIR}/install-flynn-cli"
+chmod +x "${RELEASE_DIR}/install-flynn-cli"
 
 # Generate checksums (including layer files)
 info "Generating checksums..."
