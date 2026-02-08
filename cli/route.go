@@ -170,6 +170,17 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 		return errors.New("--auto-tls cannot be used with --tls-cert or --tls-key")
 	}
 
+	// Check if ACME is enabled when auto-TLS is requested
+	if autoTLS {
+		acmeConfig, err := client.GetACMEConfig()
+		if err != nil {
+			return fmt.Errorf("error checking ACME configuration: %s", err)
+		}
+		if !acmeConfig.Enabled {
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' and 'flynn-host acme enable' first.")
+		}
+	}
+
 	port := 0
 	if args.String["--port"] != "" {
 		p, err := strconv.Atoi(args.String["--port"])
@@ -263,6 +274,14 @@ func runRouteUpdateHTTP(args *docopt.Args, client controller.Client) error {
 		// Validate that --auto-tls and manual TLS cert are mutually exclusive
 		if route.LegacyTLSCert != "" || route.LegacyTLSKey != "" {
 			return errors.New("--auto-tls cannot be used with --tls-cert or --tls-key")
+		}
+		// Check if ACME is enabled
+		acmeConfig, err := client.GetACMEConfig()
+		if err != nil {
+			return fmt.Errorf("error checking ACME configuration: %s", err)
+		}
+		if !acmeConfig.Enabled {
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' and 'flynn-host acme enable' first.")
 		}
 		route.ManagedCertificateDomain = &route.Domain
 	} else if args.Bool["--no-auto-tls"] {
