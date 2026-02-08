@@ -374,36 +374,56 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 
 	log.Info("downloaded images manifest", "num_images", len(images))
 
-	// Wait for discoverd DNS to be ready after daemon restart
+	// Wait for cluster to be ready after daemon restart
 	// This can take a few seconds as the daemon needs to fully start and
 	// discoverd needs to reconnect and register services
+	// We use discoverd client directly instead of DNS-based HTTP requests
+	// because the host may not have discoverd DNS configured in /etc/resolv.conf
 	log.Info("waiting for cluster to be ready after daemon restart")
 	const maxRetries = 30
 	const retryDelay = 2 * time.Second
-	var res *http.Response
+
+	// First, wait for status-web service to be available via discoverd
+	var statusInstances []*discoverd.Instance
 	for i := 0; i < maxRetries; i++ {
-		req, err := http.NewRequest("GET", "http://status-web.discoverd", nil)
-		if err != nil {
-			log.Error("error creating status request", "err", err)
-			return fmt.Errorf("error creating status request: %w", err)
-		}
-		req.Header.Set("Accept", "application/json")
-		res, err = http.DefaultClient.Do(req)
-		if err == nil {
-			// Successfully connected
+		var err error
+		statusInstances, err = discoverd.GetInstances("status-web", 5*time.Second)
+		if err == nil && len(statusInstances) > 0 {
 			if i > 0 {
-				log.Info("cluster is now ready", "attempts", i+1)
+				log.Info("status-web service is now available", "attempts", i+1, "instances", len(statusInstances))
 			}
 			break
 		}
-		// DNS or connection not ready yet, retry
 		if i < maxRetries-1 {
-			log.Debug("cluster not ready, retrying", "attempt", i+1, "max", maxRetries, "err", err)
+			if err != nil {
+				log.Debug("status-web not ready, retrying", "attempt", i+1, "max", maxRetries, "err", err)
+			} else {
+				log.Debug("status-web not ready, no instances yet", "attempt", i+1, "max", maxRetries)
+			}
 			time.Sleep(retryDelay)
 		} else {
-			log.Error("cluster still not ready after max retries", "err", err)
-			return fmt.Errorf("cluster not ready after %d attempts (is the cluster running?): %w", maxRetries, err)
+			if err != nil {
+				log.Error("status-web still not ready after max retries", "err", err)
+				return fmt.Errorf("status-web not ready after %d attempts: %w", maxRetries, err)
+			}
+			log.Error("no status-web instances found after max retries")
+			return fmt.Errorf("no status-web instances found after %d attempts", maxRetries)
 		}
+	}
+
+	// Now check cluster status using the discovered instance address
+	statusAddr := statusInstances[0].Addr
+	log.Info("checking cluster status", "addr", statusAddr)
+	req, err := http.NewRequest("GET", "http://"+statusAddr, nil)
+	if err != nil {
+		log.Error("error creating status request", "err", err)
+		return fmt.Errorf("error creating status request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Error("error getting cluster status", "err", err)
+		return fmt.Errorf("error getting cluster status: %w", err)
 	}
 	defer res.Body.Close()
 
