@@ -10,6 +10,8 @@
   "gitreceive":     $image_artifact[gitreceive],
   "slugbuilder-24": $image_artifact[slugbuilder-24],
   "slugrunner-24":  $image_artifact[slugrunner-24],
+  "slugbuilder":    $image_artifact[slugbuilder-24],
+  "slugrunner":     $image_artifact[slugrunner-24],
   "taffy":          $image_artifact[taffy],
   "updater":        $image_artifact[updater],
   "logaggregator":  $image_artifact[logaggregator],
