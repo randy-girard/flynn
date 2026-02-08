@@ -42,6 +42,9 @@ done
 if [[ -z "${VERSION}" ]]; then
   # Format: vYYYYMMDD.N where N is incremented if multiple releases on same day
   DATE_PREFIX="v$(date +%Y%m%d)"
+  # Fetch latest tags from remote to ensure we have the most up-to-date tag list
+  echo "===> Fetching latest tags from remote..."
+  git fetch --tags --force 2>/dev/null || echo "Warning: Could not fetch tags from remote"
   # Check for existing tags with today's date
   LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" 2>/dev/null | sort -V | tail -n1)
   if [[ -n "${LATEST_TODAY}" ]]; then
