@@ -159,13 +159,14 @@ fi
 # Package manifests (gzipped) if they exist
 info "Packaging manifests..."
 
-# images.json - check build/images.json first (builder output), then build/manifests/images.json
-if [[ -f "${ROOT}/build/images.json" ]]; then
-  gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
-  echo "  - images.json.gz (from build/images.json)"
-elif [[ -f "${ROOT}/build/manifests/images.json" ]]; then
+# images.json - prefer build/manifests/images.json (has slugbuilder/slugrunner aliases),
+# fall back to build/images.json (raw builder output without aliases)
+if [[ -f "${ROOT}/build/manifests/images.json" ]]; then
   gzip -c "${ROOT}/build/manifests/images.json" > "${RELEASE_DIR}/images.json.gz"
   echo "  - images.json.gz (from build/manifests/images.json)"
+elif [[ -f "${ROOT}/build/images.json" ]]; then
+  gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
+  echo "  - images.json.gz (from build/images.json)"
 else
   echo "  (no images.json found)"
 fi
