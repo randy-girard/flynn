@@ -448,6 +448,17 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 		}
 	}
 
+	// Check if we need to remove the certificate (when Certificate is nil and no legacy cert)
+	hasCert := route.Certificate != nil && (route.Certificate.Cert != "" || route.Certificate.Key != "")
+	hasLegacyCert := route.LegacyTLSCert != "" || route.LegacyTLSKey != ""
+	if !hasCert && !hasLegacyCert {
+		// Remove any existing route-certificate mapping
+		if err := tx.Exec("route_certificate_delete_by_route_id", route.ID); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	return r.addRouteCertWithTx(tx, route)
 }
 

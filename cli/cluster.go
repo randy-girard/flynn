@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,6 +32,7 @@ usage: flynn cluster
        flynn cluster remove <cluster-name>
        flynn cluster default [<cluster-name>]
        flynn cluster migrate-domain <domain>
+       flynn cluster update-pin [--clear]
        flynn cluster backup [--file <file>]
        flynn cluster log-sink
        flynn cluster log-sink add syslog [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
@@ -66,6 +70,18 @@ Commands:
         New certificates will be generated for the controller and new
         routes will be added with the pattern <app-name>.<domain> for each app.
 
+    update-pin
+        Updates the TLS certificate pin for the current cluster by fetching
+        the current certificate from the controller.
+
+        This is useful after adding a Let's Encrypt certificate to the controller,
+        which changes the certificate and invalidates the original pin.
+
+        options:
+            --clear  Remove the TLS pin entirely instead of updating it.
+                     This is recommended for Let's Encrypt certificates since
+                     they are signed by a trusted CA and don't need pinning.
+
     backup
         Takes a backup of the cluster.
 
@@ -102,6 +118,12 @@ Examples:
 	Migrate cluster domain from "example.com" to "new.example.com"? (yes/no): yes
 	Migrating cluster domain (this can take up to 2m0s)...
 	Changed cluster domain from "example.com" to "new.example.com"
+
+	$ flynn cluster update-pin
+	Updated TLS pin for cluster "default".
+
+	$ flynn cluster update-pin --clear
+	Cleared TLS pin for cluster "default". Standard TLS verification will be used.
 `)
 }
 
@@ -120,6 +142,8 @@ func runCluster(args *docopt.Args) error {
 		return runClusterDefault(args)
 	} else if args.Bool["migrate-domain"] {
 		return runClusterMigrateDomain(args)
+	} else if args.Bool["update-pin"] {
+		return runClusterUpdatePin(args)
 	} else if args.Bool["backup"] {
 		return runClusterBackup(args)
 	}
@@ -402,6 +426,82 @@ func runClusterMigrateDomain(args *docopt.Args) error {
 			return errors.New("timed out waiting for domain migration to complete")
 		}
 	}
+}
+
+func runClusterUpdatePin(args *docopt.Args) error {
+	cluster, err := getCluster()
+	if err != nil {
+		return err
+	}
+
+	if args.Bool["--clear"] {
+		// Clear the TLS pin
+		if cluster.TLSPin == "" {
+			log.Printf("Cluster %q already has no TLS pin configured.", cluster.Name)
+			return nil
+		}
+		cluster.TLSPin = ""
+		if err := config.SaveTo(configPath()); err != nil {
+			return fmt.Errorf("Error saving config: %s", err)
+		}
+		log.Printf("Cleared TLS pin for cluster %q. Standard TLS verification will be used.", cluster.Name)
+		return nil
+	}
+
+	// Fetch the current certificate from the controller
+	u, err := url.Parse(cluster.ControllerURL)
+	if err != nil {
+		return fmt.Errorf("Error parsing controller URL: %s", err)
+	}
+
+	host := u.Host
+	if !strings.Contains(host, ":") {
+		host = host + ":443"
+	}
+
+	// Connect without certificate verification to get the current cert
+	conn, err := tls.Dial("tcp", host, &tls.Config{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		return fmt.Errorf("Error connecting to controller: %s", err)
+	}
+	defer conn.Close()
+
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return errors.New("No certificates returned by controller")
+	}
+
+	// Calculate the pin (SHA256 of the leaf certificate's DER bytes, base64 encoded)
+	leafCert := state.PeerCertificates[0]
+	h := sha256.Sum256(leafCert.Raw)
+	newPin := base64.StdEncoding.EncodeToString(h[:])
+
+	if cluster.TLSPin == newPin {
+		log.Printf("TLS pin for cluster %q is already up to date.", cluster.Name)
+		return nil
+	}
+
+	oldPin := cluster.TLSPin
+	cluster.TLSPin = newPin
+	if err := config.SaveTo(configPath()); err != nil {
+		return fmt.Errorf("Error saving config: %s", err)
+	}
+
+	if oldPin == "" {
+		log.Printf("Set TLS pin for cluster %q.", cluster.Name)
+	} else {
+		log.Printf("Updated TLS pin for cluster %q.", cluster.Name)
+	}
+
+	// Show certificate info for verification
+	fmt.Printf("Certificate Subject: %s\n", leafCert.Subject.CommonName)
+	fmt.Printf("Certificate Issuer: %s\n", leafCert.Issuer.CommonName)
+	fmt.Printf("Valid Until: %s\n", leafCert.NotAfter.Format(time.RFC3339))
+	fmt.Printf("New Pin: %s\n", newPin)
+
+	return nil
 }
 
 func runClusterBackup(args *docopt.Args) error {

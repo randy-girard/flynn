@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
+	cfg "github.com/flynn/flynn/cli/config"
 	controller "github.com/flynn/flynn/controller/client"
 	"github.com/flynn/go-docopt"
 )
@@ -61,7 +63,8 @@ func runLetsEncryptEnable(args *docopt.Args, client controller.Client) error {
 	}
 
 	// Get the route
-	route, err := client.GetRoute(mustApp(), routeID)
+	appName := mustApp()
+	route, err := client.GetRoute(appName, routeID)
 	if err != nil {
 		return fmt.Errorf("error getting route: %s", err)
 	}
@@ -77,13 +80,49 @@ func runLetsEncryptEnable(args *docopt.Args, client controller.Client) error {
 	route.Certificate = nil
 	route.LegacyTLSCert = ""
 	route.LegacyTLSKey = ""
-
-	if err := client.UpdateRoute(mustApp(), routeID, route); err != nil {
+	if err := client.UpdateRoute(appName, routeID, route); err != nil {
 		return fmt.Errorf("error updating route: %s", err)
 	}
 
 	fmt.Printf("Let's Encrypt enabled for route %s\n", routeID)
 	fmt.Printf("A TLS certificate will be automatically provisioned for %s\n", httpRoute.Domain)
+
+	// If this is the controller app, automatically clear the TLS pin
+	// since the certificate will change to a Let's Encrypt certificate
+	if appName == "controller" {
+		if err := clearTLSPinForController(); err != nil {
+			// Log warning but don't fail the command
+			log.Printf("Warning: Could not automatically clear TLS pin: %s", err)
+			fmt.Println("\nIMPORTANT: The controller's TLS certificate will change.")
+			fmt.Println("You may need to run 'flynn cluster update-pin --clear' to avoid TLS pin mismatch errors.")
+		} else {
+			fmt.Println("\nThe TLS pin has been automatically cleared from your ~/.flynnrc")
+			fmt.Println("since Let's Encrypt certificates are CA-signed and don't require pinning.")
+		}
+	}
+
+	return nil
+}
+
+// clearTLSPinForController clears the TLS pin for the current cluster
+// This is called when Let's Encrypt is enabled on the controller to avoid
+// TLS pin mismatch errors after the certificate changes.
+func clearTLSPinForController() error {
+	cluster, err := getCluster()
+	if err != nil {
+		return err
+	}
+
+	if cluster.TLSPin == "" {
+		// Already no pin, nothing to do
+		return nil
+	}
+
+	cluster.TLSPin = ""
+	if err := config.SaveTo(cfg.DefaultPath()); err != nil {
+		return fmt.Errorf("error saving config: %s", err)
+	}
+
 	return nil
 }
 
@@ -109,8 +148,11 @@ func runLetsEncryptDisable(args *docopt.Args, client controller.Client) error {
 		return fmt.Errorf("route is not an HTTP route")
 	}
 
-	// Disable managed certificate
+	// Disable managed certificate and remove the certificate from the route
 	route.ManagedCertificateDomain = nil
+	route.Certificate = nil
+	route.LegacyTLSCert = ""
+	route.LegacyTLSKey = ""
 
 	if err := client.UpdateRoute(mustApp(), routeID, route); err != nil {
 		return fmt.Errorf("error updating route: %s", err)
@@ -118,5 +160,6 @@ func runLetsEncryptDisable(args *docopt.Args, client controller.Client) error {
 
 	fmt.Printf("Let's Encrypt disabled for route %s\n", routeID)
 	fmt.Println("The route will no longer have automatic TLS certificate provisioning.")
+	fmt.Println("The TLS certificate has been removed from the route.")
 	return nil
 }
