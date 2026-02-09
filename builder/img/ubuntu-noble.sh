@@ -13,9 +13,27 @@ curl -fSL \
 
 chmod +x "${BSDTAR}"
 
-URL="https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64-root.tar.xz"
-SHA="397fcb08daf4e3a8ac787460294f262d56943be14e3b970ad8de233d206c63ab"
+BASE_URL="https://cloud-images.ubuntu.com/releases/noble/release"
+FILENAME="ubuntu-24.04-server-cloudimg-amd64-root.tar.xz"
+URL="${BASE_URL}/${FILENAME}"
 TAR="${TMP}/ubuntu.tar.xz"
+SHASUMS="${TMP}/SHA256SUMS"
+
+echo "Downloading SHA256SUMS..."
+curl -fSL \
+  --retry 5 \
+  --retry-delay 5 \
+  --retry-connrefused \
+  --retry-all-errors \
+  -o "${SHASUMS}" \
+  "${BASE_URL}/SHA256SUMS"
+
+SHA=$(grep "${FILENAME}" "${SHASUMS}" | awk '{print $1}')
+if [ -z "${SHA}" ]; then
+  echo "Error: Could not find checksum for ${FILENAME} in SHA256SUMS"
+  exit 1
+fi
+echo "Found checksum: ${SHA}"
 
 echo "Downloading Ubuntu Noble rootfs..."
 curl -fSL \
