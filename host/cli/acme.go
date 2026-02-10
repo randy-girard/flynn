@@ -14,6 +14,7 @@ import (
 
 	acmelib "github.com/eggsampler/acme/v3"
 	controller "github.com/flynn/flynn/controller/client"
+	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/go-docopt"
 )
@@ -155,7 +156,129 @@ func runACMEConfigure(args *docopt.Args, client controller.Client) error {
 	}
 
 	fmt.Println("ACME account registered and enabled successfully.")
-	fmt.Println("You can now use --auto-tls when adding routes to automatically provision TLS certificates.")
+
+	// Automatically enable Let's Encrypt on all system app routes
+	// This ensures all system apps use CA-signed certificates instead of self-signed ones
+	fmt.Println("\nEnabling Let's Encrypt for all system app routes...")
+	if err := enableLetsEncryptOnSystemRoutes(client); err != nil {
+		fmt.Printf("Warning: Could not enable Let's Encrypt on all system routes: %s\n", err)
+		fmt.Println("You can manually enable it with: flynn -a <app> letsencrypt enable <route-id>")
+	} else {
+		fmt.Println("\nLet's Encrypt has been enabled for all system app routes.")
+		fmt.Println("TLS certificates will be automatically provisioned.")
+		fmt.Println("\nThe TLS pin in ~/.flynnrc is no longer needed since all system routes")
+		fmt.Println("will use CA-signed Let's Encrypt certificates.")
+		fmt.Println("Run 'flynn cluster update-pin --clear' to remove it.")
+	}
+
+	fmt.Println("\nYou can now use --auto-tls when adding routes to automatically provision TLS certificates.")
+	return nil
+}
+
+// enableLetsEncryptOnSystemRoutes enables Let's Encrypt on all system app HTTP routes
+func enableLetsEncryptOnSystemRoutes(client controller.Client) error {
+	// Get the cluster domain from the controller release
+	release, err := client.GetAppRelease("controller")
+	if err != nil {
+		return fmt.Errorf("error getting controller release: %s", err)
+	}
+	clusterDomain := release.Env["DEFAULT_ROUTE_DOMAIN"]
+	if clusterDomain == "" {
+		return fmt.Errorf("could not determine cluster domain from controller")
+	}
+	fmt.Printf("Cluster domain: %s\n", clusterDomain)
+
+	// Get all routes in the cluster
+	allRoutes, err := client.RouteList()
+	if err != nil {
+		return fmt.Errorf("error listing routes: %s", err)
+	}
+
+	// Get all apps to check which are system apps
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing apps: %s", err)
+	}
+
+	// Build maps for quick lookup
+	appByID := make(map[string]*ct.App)
+	appByName := make(map[string]*ct.App)
+	for _, app := range apps {
+		appByID[app.ID] = app
+		appByName[app.Name] = app
+	}
+
+	var enabledCount, alreadyEnabledCount, errorCount int
+
+	for _, route := range allRoutes {
+		// Only process HTTP routes
+		if route.Type != "http" {
+			continue
+		}
+
+		// Extract app ID from ParentRef (format: "controller/apps/<app_id>")
+		if !strings.HasPrefix(route.ParentRef, ct.RouteParentRefPrefix) {
+			continue
+		}
+		appID := strings.TrimPrefix(route.ParentRef, ct.RouteParentRefPrefix)
+
+		// Get the app
+		app, ok := appByID[appID]
+		if !ok {
+			continue
+		}
+
+		// Check if this is a system app OR if this is the base cluster domain
+		isSystemApp := app.System()
+		isBaseClusterDomain := route.Domain == clusterDomain
+
+		if !isSystemApp && !isBaseClusterDomain {
+			continue
+		}
+
+		// Check if Let's Encrypt is already enabled
+		if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+			label := app.Name
+			if isBaseClusterDomain {
+				label = app.Name + " (base domain)"
+			}
+			fmt.Printf("  [skip] %s: %s already enabled\n", label, route.Domain)
+			alreadyEnabledCount++
+			continue
+		}
+
+		// Enable managed certificate for this route
+		domain := route.Domain
+		route.ManagedCertificateDomain = &domain
+		route.Certificate = nil
+		route.LegacyTLSCert = ""
+		route.LegacyTLSKey = ""
+
+		routeID := fmt.Sprintf("%s/%s", route.Type, route.ID)
+		if err := client.UpdateRoute(app.Name, routeID, route); err != nil {
+			fmt.Printf("  [error] %s: %s - %s\n", app.Name, route.Domain, err)
+			errorCount++
+			continue
+		}
+
+		label := app.Name
+		if isBaseClusterDomain {
+			label = app.Name + " (base domain)"
+		}
+		fmt.Printf("  [enabled] %s: %s\n", label, domain)
+		enabledCount++
+	}
+
+	if enabledCount == 0 && alreadyEnabledCount == 0 && errorCount == 0 {
+		return fmt.Errorf("no system app HTTP routes found")
+	}
+
+	fmt.Printf("\nSummary: %d enabled, %d already configured, %d errors\n", enabledCount, alreadyEnabledCount, errorCount)
+
+	if errorCount > 0 {
+		return fmt.Errorf("%d routes failed to enable", errorCount)
+	}
+
 	return nil
 }
 
