@@ -374,6 +374,16 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 
 	log.Info("downloaded images manifest", "num_images", len(images))
 
+	// Download image layers from GitHub releases
+	// The images.json contains file:// URIs that reference local paths,
+	// so we need to download the actual layer files before deploying
+	log.Info("downloading image layers from GitHub")
+	if err := d.DownloadImageLayers(images, log); err != nil {
+		log.Error("error downloading image layers", "err", err)
+		return err
+	}
+	log.Info("finished downloading image layers")
+
 	// Wait for cluster to be ready after daemon restart
 	// This can take a few seconds as the daemon needs to fully start and
 	// discoverd needs to reconnect and register services

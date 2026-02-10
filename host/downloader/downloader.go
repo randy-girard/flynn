@@ -331,9 +331,53 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 
 // downloadLayer downloads a single layer from GitHub releases
 func (d *Downloader) downloadLayer(layer *ct.ImageLayer, cacheDir string) error {
-	layerURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/layers/" + layer.ID + ".squashfs"
+	// Layers are uploaded directly to the release root (not in a /layers/ subdirectory)
+	layerURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + layer.ID + ".squashfs"
 	destPath := filepath.Join(cacheDir, layer.ID+".squashfs")
 	return d.downloadWithRetry(layerURL, destPath)
+}
+
+// DownloadImageLayers downloads layers for a set of images from GitHub releases.
+// This is used during updates to ensure layers are available before deploying.
+func (d *Downloader) DownloadImageLayers(images map[string]*ct.Artifact, log log15.Logger) error {
+	layerCacheDir := "/var/lib/flynn/layer-cache"
+	if err := os.MkdirAll(layerCacheDir, 0755); err != nil {
+		return fmt.Errorf("error creating layer cache dir: %s", err)
+	}
+
+	// Track unique layers to avoid downloading duplicates
+	downloadedLayers := make(map[string]bool)
+
+	for name, artifact := range images {
+		manifest := artifact.Manifest()
+		if manifest == nil {
+			continue
+		}
+
+		for _, rootfs := range manifest.Rootfs {
+			for _, layer := range rootfs.Layers {
+				// Skip if already downloaded in this session
+				if downloadedLayers[layer.ID] {
+					continue
+				}
+
+				// Check if layer already exists on disk
+				layerPath := filepath.Join(layerCacheDir, layer.ID+".squashfs")
+				if _, err := os.Stat(layerPath); err == nil {
+					downloadedLayers[layer.ID] = true
+					continue // Layer already cached
+				}
+
+				log.Info("downloading layer", "image", name, "layer", layer.ID)
+				if err := d.downloadLayer(layer, layerCacheDir); err != nil {
+					return fmt.Errorf("error downloading layer %s for image %s: %s", layer.ID, name, err)
+				}
+				downloadedLayers[layer.ID] = true
+			}
+		}
+	}
+
+	return nil
 }
 
 // importLayer imports a downloaded layer into the volume manager
