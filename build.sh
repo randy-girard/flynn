@@ -164,5 +164,5 @@ cp ./script/install-flynn /usr/bin/install-flynn
 
 echo "===> Build complete!"
 echo ""
-echo "To create a GitHub release, commit your changes and run:"
-echo "  ./script/github-release"
+echo "To create a release, commit your changes and run:"
+echo "  ./script/release"
