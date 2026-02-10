@@ -16,6 +16,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   #config.vm.box = "ubuntu/xenial64"
   config.vm.box = "bento/ubuntu-24.04"
 
+  config.ssh.forward_agent = true
+
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
 
