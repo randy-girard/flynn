@@ -1,0 +1,579 @@
+#!/bin/bash
+#
+# Create a Flynn Release
+#
+# This script should be run AFTER building Flynn with script/build-flynn.
+# It packages the built binaries and creates either a GitHub release or a
+# local tarball for testing.
+#
+# Usage:
+#   ./script/release                                    # Create tarball (default)
+#   ./script/release --target tarball                   # Create tarball for testing
+#   ./script/release --target github                    # Create GitHub release
+#   ./script/release --version v20240127.0              # Specific version
+#   ./script/release --dry-run                          # Show what would be packaged
+#   ./script/release --output /path/to/output           # Custom output directory
+#
+# Prerequisites:
+#   - Flynn must be built (run script/build-flynn first)
+#   - For GitHub releases: GitHub CLI (gh) must be installed and authenticated
+#   - Changes should be committed (for accurate release notes)
+#
+
+set -eo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "${ROOT}/script/lib/ui.sh"
+
+# Defaults
+VERSION=""
+TARGET="tarball"  # Default to tarball for safe testing
+GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
+DRY_RUN=false
+BUILD_DIR="${ROOT}/build/bin"
+OUTPUT_DIR=""
+
+usage() {
+  cat <<USAGE >&2
+usage: $0 [OPTIONS]
+
+Create a Flynn Release (tarball or GitHub).
+
+OPTIONS:
+  -h, --help                  Show this message
+  --target TARGET             Release target: 'tarball' or 'github' [default: tarball]
+  --version VERSION           Version for release (e.g., v20240127.0)
+  --output DIR                Output directory for tarball [default: ./build/release]
+  --github-repo OWNER/REPO    GitHub repository [default: randy-girard/flynn]
+  --dry-run                   Show what would be packaged without creating release
+
+TARGETS:
+  tarball   Create a compressed tarball for manual testing/deployment
+            Output: flynn-<version>.tar.gz with install script
+  github    Create a GitHub release with all artifacts uploaded
+
+EXAMPLES:
+  # Build and create a tarball for testing
+  ./script/build-flynn
+  ./script/release --target tarball --version v20240210.0
+
+  # Upload tarball to server and install
+  scp build/release/flynn-v20240210.0.tar.gz root@server:/tmp/
+  ssh root@server 'cd /tmp && tar xzf flynn-v20240210.0.tar.gz && ./install-flynn-local'
+
+  # After testing, create GitHub release
+  ./script/release --target github --version v20240210.0
+USAGE
+}
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --target)
+      TARGET="$2"
+      if [[ "${TARGET}" != "tarball" && "${TARGET}" != "github" ]]; then
+        fail "Invalid target: ${TARGET}. Must be 'tarball' or 'github'"
+      fi
+      shift 2
+      ;;
+    --version)
+      VERSION="$2"
+      shift 2
+      ;;
+    --output)
+      OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --github-repo)
+      GITHUB_REPO="$2"
+      shift 2
+      ;;
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    *)
+      echo "Unknown option: $1"
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+# Set default output directory
+if [[ -z "${OUTPUT_DIR}" ]]; then
+  OUTPUT_DIR="${ROOT}/build/release"
+fi
+
+# Get version from flynn-host if not provided
+if [[ -z "${VERSION}" ]]; then
+  FLYNN_HOST="${BUILD_DIR}/flynn-host"
+  if [[ -x "${FLYNN_HOST}" ]]; then
+    VERSION=$("${FLYNN_HOST}" version 2>/dev/null | head -n1)
+    # Strip any commit suffix (e.g., v20260129.0-abc1234 -> v20260129.0)
+    VERSION="${VERSION%%-*}"
+    if [[ -n "${VERSION}" && "${VERSION}" != "dev" ]]; then
+      info "Using version from flynn-host: ${VERSION}"
+    else
+      VERSION=""
+    fi
+  fi
+fi
+
+# Fall back to auto-generating version if still not set
+if [[ -z "${VERSION}" ]]; then
+  DATE_PREFIX="v$(date +%Y%m%d)"
+  LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" 2>/dev/null | sort -V | tail -n1)
+  if [[ -n "${LATEST_TODAY}" ]]; then
+    ITERATION="${LATEST_TODAY##*.}"
+    VERSION="${DATE_PREFIX}.$((ITERATION + 1))"
+  else
+    VERSION="${DATE_PREFIX}.0"
+  fi
+  info "Auto-generated version: ${VERSION}"
+fi
+
+# Verify build artifacts exist
+if [[ ! -d "${BUILD_DIR}" ]]; then
+  fail "Build directory not found: ${BUILD_DIR}\nRun 'script/build-flynn --version ${VERSION}' first!"
+fi
+
+if [[ ! -f "${BUILD_DIR}/flynn-host" ]]; then
+  fail "flynn-host binary not found in ${BUILD_DIR}\nRun 'script/build-flynn --version ${VERSION}' first!"
+fi
+
+# Create release artifacts directory
+RELEASE_DIR="/tmp/flynn-release-${VERSION}"
+rm -rf "${RELEASE_DIR}"
+mkdir -p "${RELEASE_DIR}"
+
+info "Creating Flynn ${VERSION} release (target: ${TARGET})"
+
+# Package binaries
+package_binaries() {
+  info "Packaging binaries..."
+
+  # CLI binaries (already have OS/arch in name)
+  CLI_BINARIES=(
+    "flynn-linux-amd64"
+    "flynn-linux-386"
+    "flynn-darwin-amd64"
+    "flynn-darwin-arm64"
+    "flynn-windows-amd64.exe"
+  )
+
+  for bin in "${CLI_BINARIES[@]}"; do
+    if [[ -f "${BUILD_DIR}/${bin}" ]]; then
+      gzip -c "${BUILD_DIR}/${bin}" > "${RELEASE_DIR}/${bin}.gz"
+      echo "  - ${bin}.gz"
+    fi
+  done
+
+  # Host binaries - rename to include OS/arch for update command compatibility
+  if [[ -f "${BUILD_DIR}/flynn-host" ]]; then
+    gzip -c "${BUILD_DIR}/flynn-host" > "${RELEASE_DIR}/flynn-host-linux-amd64.gz"
+    echo "  - flynn-host-linux-amd64.gz"
+  fi
+
+  if [[ -f "${BUILD_DIR}/flynn-init" ]]; then
+    gzip -c "${BUILD_DIR}/flynn-init" > "${RELEASE_DIR}/flynn-init-linux-amd64.gz"
+    echo "  - flynn-init-linux-amd64.gz"
+  fi
+}
+
+# Package manifests
+package_manifests() {
+  info "Packaging manifests..."
+
+  # images.json - prefer build/manifests/images.json
+  if [[ -f "${ROOT}/build/manifests/images.json" ]]; then
+    gzip -c "${ROOT}/build/manifests/images.json" > "${RELEASE_DIR}/images.json.gz"
+    echo "  - images.json.gz (from build/manifests/images.json)"
+  elif [[ -f "${ROOT}/build/images.json" ]]; then
+    gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
+    echo "  - images.json.gz (from build/images.json)"
+  else
+    echo "  (no images.json found)"
+  fi
+
+  # bootstrap-manifest.json
+  if [[ -f "${ROOT}/build/manifests/bootstrap-manifest.json" ]]; then
+    gzip -c "${ROOT}/build/manifests/bootstrap-manifest.json" > "${RELEASE_DIR}/bootstrap-manifest.json.gz"
+    echo "  - bootstrap-manifest.json.gz"
+  else
+    echo "  (no bootstrap-manifest.json found)"
+  fi
+}
+
+# Package image manifests
+package_image_manifests() {
+  info "Packaging image manifests..."
+  IMAGE_DIR="${ROOT}/build/image"
+  if [[ -d "${IMAGE_DIR}" ]] && [[ -n "$(ls -A ${IMAGE_DIR}/*.json 2>/dev/null)" ]]; then
+    mkdir -p "${RELEASE_DIR}/images"
+    cp "${IMAGE_DIR}/"*.json "${RELEASE_DIR}/images/" 2>/dev/null || true
+    (cd "${RELEASE_DIR}" && tar czf "images.tar.gz" images/)
+    echo "  - images.tar.gz ($(ls ${RELEASE_DIR}/images/*.json 2>/dev/null | wc -l) manifests)"
+    rm -rf "${RELEASE_DIR}/images"
+  else
+    echo "  (no image manifests found in ${IMAGE_DIR})"
+  fi
+}
+
+# Package squashfs layers
+package_layers() {
+  info "Packaging layers..."
+  LAYER_CACHE="/var/lib/flynn/layer-cache"
+  LAYER_COUNT=0
+
+  if [[ -d "${LAYER_CACHE}" ]] && [[ -n "$(ls -A ${LAYER_CACHE}/*.squashfs 2>/dev/null)" ]]; then
+    for layer_file in "${LAYER_CACHE}"/*.squashfs "${LAYER_CACHE}"/*.json; do
+      if [[ -f "$layer_file" ]]; then
+        layer_name=$(basename "$layer_file")
+        cp "$layer_file" "${RELEASE_DIR}/${layer_name}"
+        LAYER_COUNT=$((LAYER_COUNT + 1))
+      fi
+    done
+    echo "  - ${LAYER_COUNT} layer files"
+  else
+    echo "  (no layers found in ${LAYER_CACHE})"
+  fi
+}
+
+# Generate checksums
+generate_checksums() {
+  info "Generating checksums..."
+  (cd "${RELEASE_DIR}" && find . -type f \( -name "*.gz" -o -name "*.squashfs" -o -name "*.json" -o -name "install-flynn-*" \) | xargs sha512sum > checksums.sha512 2>/dev/null || true)
+}
+
+# Generate release notes from git commits
+generate_release_notes() {
+  info "Generating release notes from commits..."
+
+  # Fetch all tags from remote
+  echo "  Syncing tags with remote..."
+  git fetch origin --tags --force 2>/dev/null || true
+
+  # Get the previous release tag
+  PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo "")
+
+  if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
+    PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${VERSION}^" 2>/dev/null || echo "")
+  fi
+
+  if [[ -n "${PREVIOUS_TAG}" ]]; then
+    echo "  Previous release: ${PREVIOUS_TAG}"
+    COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
+    COMMIT_COUNT=$(git rev-list --count "${COMMIT_RANGE}" 2>/dev/null || echo "0")
+    echo "  Found ${COMMIT_COUNT} commits since ${PREVIOUS_TAG}"
+  else
+    echo "  No previous tag found, using recent commits"
+    COMMIT_RANGE="HEAD~20..HEAD"
+  fi
+
+  # Categorize commits by conventional commit type
+  FEAT_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  FIX_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  CHORE_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^chore" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  DOCS_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^docs" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  REFACTOR_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^refactor" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  PERF_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^perf" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  TEST_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^test" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  BUILD_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^build" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  CI_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^ci" "${COMMIT_RANGE}" 2>/dev/null || echo "")
+  OTHER_COMMITS=$(git log --pretty=format:"- %s (%h)" "${COMMIT_RANGE}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" || echo "")
+
+  # Build categorized release notes
+  RELEASE_NOTES=""
+  if [[ -n "${FEAT_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ✨ Features
+
+${FEAT_COMMITS}
+
+"
+  fi
+  if [[ -n "${FIX_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🐛 Bug Fixes
+
+${FIX_COMMITS}
+
+"
+  fi
+  if [[ -n "${PERF_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ⚡ Performance
+
+${PERF_COMMITS}
+
+"
+  fi
+  if [[ -n "${REFACTOR_COMMITS}" ]]; then
+    RELEASE_NOTES+="### ♻️ Refactoring
+
+${REFACTOR_COMMITS}
+
+"
+  fi
+  if [[ -n "${DOCS_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 📚 Documentation
+
+${DOCS_COMMITS}
+
+"
+  fi
+  if [[ -n "${TEST_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🧪 Tests
+
+${TEST_COMMITS}
+
+"
+  fi
+  if [[ -n "${BUILD_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🏗️ Build
+
+${BUILD_COMMITS}
+
+"
+  fi
+  if [[ -n "${CI_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 👷 CI
+
+${CI_COMMITS}
+
+"
+  fi
+  if [[ -n "${CHORE_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 🔧 Chores
+
+${CHORE_COMMITS}
+
+"
+  fi
+  if [[ -n "${OTHER_COMMITS}" ]]; then
+    RELEASE_NOTES+="### 📦 Other Changes
+
+${OTHER_COMMITS}
+
+"
+  fi
+
+  if [[ -z "${RELEASE_NOTES}" ]]; then
+    RELEASE_NOTES="No changes recorded."
+  fi
+}
+
+
+
+# Create install-flynn script from template
+# Args: $1 = install source ("tarball" or "github")
+create_install_script() {
+  local install_source="$1"
+  info "Creating install-flynn script (source: ${install_source})..."
+
+  # Copy template and replace placeholders
+  sed -e "s/__INSTALL_SOURCE__/${install_source}/g" \
+      -e "s/__FLYNN_VERSION__/${VERSION}/g" \
+      -e "s/__GITHUB_REPO__/${GITHUB_REPO}/g" \
+      "${ROOT}/script/install-flynn-release" > "${RELEASE_DIR}/install-flynn"
+
+  chmod +x "${RELEASE_DIR}/install-flynn"
+  echo "  - install-flynn"
+}
+
+# Create tarball for local testing
+create_tarball() {
+  info "Creating tarball for local testing..."
+
+  package_binaries
+  package_manifests
+  package_image_manifests
+  package_layers
+  create_install_script "tarball"
+  generate_checksums
+
+  # Create output directory
+  mkdir -p "${OUTPUT_DIR}"
+
+  # Create the tarball
+  TARBALL_NAME="flynn-${VERSION}.tar.gz"
+  info "Creating ${TARBALL_NAME}..."
+  (cd "${RELEASE_DIR}" && tar czf "${OUTPUT_DIR}/${TARBALL_NAME}" .)
+
+  info "Release artifacts:"
+  ls -lah "${RELEASE_DIR}"
+
+  info "Tarball created: ${OUTPUT_DIR}/${TARBALL_NAME}"
+  echo ""
+  echo "To install on a server:"
+  echo "  1. Upload the tarball:  scp ${OUTPUT_DIR}/${TARBALL_NAME} root@server:/tmp/"
+  echo "  2. Extract and install: ssh root@server 'cd /tmp && tar xzf ${TARBALL_NAME} && ./install-flynn'"
+  echo ""
+  echo "After testing, create GitHub release with:"
+  echo "  ./script/release --target github --version ${VERSION}"
+}
+
+# Create GitHub release
+create_github_release() {
+  # Check for GitHub CLI
+  if ! command -v gh &> /dev/null; then
+    fail "GitHub CLI (gh) is not installed. Install it with: apt install gh"
+  fi
+
+  # Check if authenticated
+  if ! gh auth status &> /dev/null; then
+    fail "Not authenticated with GitHub. Run: gh auth login"
+  fi
+
+  info "Creating GitHub Release ${VERSION} for ${GITHUB_REPO}..."
+
+  package_binaries
+  package_manifests
+  package_image_manifests
+  package_layers
+
+  # Create install scripts
+  create_install_script "github"
+
+  # Also copy CLI installer
+  info "Copying CLI installer..."
+  sed "s/__FLYNN_VERSION__/${VERSION}/g" "${ROOT}/script/install-flynn-cli" > "${RELEASE_DIR}/install-flynn-cli"
+  chmod +x "${RELEASE_DIR}/install-flynn-cli"
+  echo "  - install-flynn-cli"
+
+  generate_checksums
+  generate_release_notes
+
+  info "Release artifacts:"
+  ls -lah "${RELEASE_DIR}"
+
+  # Check if release already exists
+  if gh release view "${VERSION}" --repo "${GITHUB_REPO}" &> /dev/null; then
+    echo "  Release ${VERSION} exists, updating..."
+    gh release delete "${VERSION}" --repo "${GITHUB_REPO}" --yes || true
+  fi
+
+  # Build list of files to upload
+  UPLOAD_FILES=()
+  for f in "${RELEASE_DIR}"/*.gz "${RELEASE_DIR}"/*.sha512 "${RELEASE_DIR}"/install-flynn*; do
+    [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
+  done
+
+  # Add layer files (squashfs and json)
+  for f in "${RELEASE_DIR}"/*.squashfs "${RELEASE_DIR}"/*.json; do
+    [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
+  done
+
+  # Create the release
+  info "Pushing to GitHub Release ${VERSION}..."
+  gh release create "${VERSION}" \
+    --repo "${GITHUB_REPO}" \
+    --title "Flynn ${VERSION}" \
+    --notes "## Flynn ${VERSION}
+
+**Full Changelog**: ${PREVIOUS_TAG:-initial}...${VERSION}
+
+${RELEASE_NOTES}
+---
+
+## Install Flynn CLI
+
+Install the Flynn command-line interface on your local machine (Linux or macOS):
+
+\`\`\`bash
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash
+\`\`\`
+
+## Install Flynn Host (Server)
+
+Install Flynn on an Ubuntu server (24.04):
+
+\`\`\`bash
+curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn | sudo bash
+\`\`\`
+
+## Artifacts
+
+### CLI Binaries
+| Binary | Platform |
+|--------|----------|
+| flynn-linux-amd64.gz | Linux (x86_64) |
+| flynn-linux-386.gz | Linux (x86) |
+| flynn-darwin-amd64.gz | macOS (Intel) |
+| flynn-darwin-arm64.gz | macOS (Apple Silicon) |
+| flynn-windows-amd64.exe.gz | Windows (x86_64) |
+
+### Server Binaries
+| Binary | Description |
+|--------|-------------|
+| flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
+| flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
+
+### Other
+| File | Description |
+|------|-------------|
+| install-flynn-cli | CLI installer script |
+| install-flynn | Server installer script |
+| checksums.sha512 | SHA512 checksums for all artifacts |
+" \
+    "${UPLOAD_FILES[@]}"
+
+  info "GitHub Release ${VERSION} created successfully!"
+  echo "     https://github.com/${GITHUB_REPO}/releases/tag/${VERSION}"
+}
+
+# Dry run - show what would be packaged
+do_dry_run() {
+  info "DRY RUN - Would create ${TARGET} release ${VERSION}..."
+
+  package_binaries
+  package_manifests
+  package_image_manifests
+  package_layers
+
+  create_install_script "${TARGET}"
+
+  if [[ "${TARGET}" == "github" ]]; then
+    info "Copying CLI installer..."
+    echo "  - install-flynn-cli (would be copied)"
+  fi
+
+  generate_checksums
+
+  if [[ "${TARGET}" == "github" ]]; then
+    generate_release_notes
+    echo ""
+    echo "Release notes:"
+    echo "---"
+    echo "${RELEASE_NOTES}"
+    echo "---"
+  fi
+
+  echo ""
+  info "Release artifacts that would be created:"
+  ls -lah "${RELEASE_DIR}"
+
+  if [[ "${TARGET}" == "tarball" ]]; then
+    echo ""
+    echo "Would create: ${OUTPUT_DIR}/flynn-${VERSION}.tar.gz"
+  else
+    echo ""
+    echo "Would upload to: https://github.com/${GITHUB_REPO}/releases/tag/${VERSION}"
+  fi
+}
+
+# Main execution
+if $DRY_RUN; then
+  do_dry_run
+else
+  if [[ "${TARGET}" == "tarball" ]]; then
+    create_tarball
+  else
+    create_github_release
+  fi
+fi
+
+# Cleanup
+rm -rf "${RELEASE_DIR}"
