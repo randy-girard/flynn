@@ -59,7 +59,7 @@ EXAMPLES:
 
   # Upload tarball to server and install
   scp build/release/flynn-v20240210.0.tar.gz root@server:/tmp/
-  ssh root@server 'cd /tmp && tar xzf flynn-v20240210.0.tar.gz && ./install-flynn-local'
+  ssh root@server 'cd /tmp && tar xzf flynn-v20240210.0.tar.gz && ./install-flynn'
 
   # After testing, create GitHub release
   ./script/release --target github --version v20240210.0
@@ -374,9 +374,10 @@ create_install_script() {
   info "Creating install-flynn script (source: ${install_source})..."
 
   # Copy template and replace placeholders
-  sed -e "s/__INSTALL_SOURCE__/${install_source}/g" \
-      -e "s/__FLYNN_VERSION__/${VERSION}/g" \
-      -e "s/__GITHUB_REPO__/${GITHUB_REPO}/g" \
+  # Use | as delimiter since GITHUB_REPO contains /
+  sed -e "s|__INSTALL_SOURCE__|${install_source}|g" \
+      -e "s|__FLYNN_VERSION__|${VERSION}|g" \
+      -e "s|__GITHUB_REPO__|${GITHUB_REPO}|g" \
       "${ROOT}/script/install-flynn-release" > "${RELEASE_DIR}/install-flynn"
 
   chmod +x "${RELEASE_DIR}/install-flynn"
