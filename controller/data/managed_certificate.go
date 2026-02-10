@@ -241,13 +241,21 @@ func (r *ManagedCertificateRepo) Delete(id string) error {
 func scanManagedCertificate(s postgres.Scanner) (*ct.ManagedCertificate, error) {
 	var cert ct.ManagedCertificate
 	var certSHA256 []byte
+	// Use pointers for nullable string columns
+	var certPEM, keyPEM *string
 	err := s.Scan(
 		&cert.ID, &cert.Domain, &cert.RouteID, &cert.Status,
-		&cert.Cert, &cert.Key, &certSHA256, &cert.ExpiresAt,
+		&certPEM, &keyPEM, &certSHA256, &cert.ExpiresAt,
 		&cert.LastError, &cert.LastErrorAt, &cert.CreatedAt, &cert.UpdatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if certPEM != nil {
+		cert.Cert = *certPEM
+	}
+	if keyPEM != nil {
+		cert.Key = *keyPEM
 	}
 	return &cert, nil
 }
