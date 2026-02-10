@@ -74,12 +74,15 @@ func (c *controllerAPI) streamManagedCertificates(ctx context.Context, w http.Re
 
 	certs, err := c.managedCertificateRepo.ListSince(since)
 	if err != nil {
+		l.Error("error listing managed certificates", "err", err)
 		return err
 	}
+	l.Info("streaming managed certificates", "count", len(certs), "since", since)
 	currentUpdatedAt := since
 	for _, cert := range certs {
 		select {
 		case <-stream.Done:
+			l.Info("stream done while sending initial certificates")
 			return nil
 		case ch <- cert:
 			if cert.UpdatedAt != nil && cert.UpdatedAt.After(currentUpdatedAt) {
@@ -91,16 +94,20 @@ func (c *controllerAPI) streamManagedCertificates(ctx context.Context, w http.Re
 	// Send an empty marker to indicate initial list is complete
 	select {
 	case <-stream.Done:
+		l.Info("stream done while sending marker")
 		return nil
 	case ch <- &ct.ManagedCertificate{}:
 	}
+	l.Info("sent initial certificate list and marker, waiting for events")
 
 	for {
 		select {
 		case <-stream.Done:
+			l.Info("stream done while waiting for events")
 			return
 		case event, ok := <-sub.Events:
 			if !ok {
+				l.Error("event subscription closed", "err", sub.Err)
 				return sub.Err
 			}
 			var cert ct.ManagedCertificate

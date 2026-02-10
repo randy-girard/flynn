@@ -341,7 +341,7 @@ func (s *Service) Run() {
 		select {
 		case cert, ok := <-certs:
 			if !ok {
-				s.log.Error("certificate stream closed unexpectedly")
+				s.log.Error("certificate stream closed unexpectedly", "stream_err", stream.Err())
 				return
 			}
 			if cert == nil {
