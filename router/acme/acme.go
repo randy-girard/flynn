@@ -259,8 +259,15 @@ func runServiceLoop(ctx context.Context, client controller.Client, responder *Re
 		// Check if configuration changed (different account key)
 		keyID := account.KeyID()
 		if service != nil && keyID == currentKeyID {
-			// No change
-			return
+			// Check if the service has stopped unexpectedly
+			if service.Stopped() {
+				log.Warn("ACME service stopped unexpectedly, will restart")
+				service = nil
+				currentKeyID = ""
+			} else {
+				// No change and service is running
+				return
+			}
 		}
 
 		// Configuration changed - restart service
@@ -332,7 +339,11 @@ func (s *Service) Run() {
 
 	for {
 		select {
-		case cert := <-certs:
+		case cert, ok := <-certs:
+			if !ok {
+				s.log.Error("certificate stream closed unexpectedly")
+				return
+			}
 			if cert == nil {
 				s.log.Debug("received nil certificate from stream")
 				continue
@@ -363,6 +374,16 @@ func (s *Service) Run() {
 func (s *Service) Stop() {
 	close(s.stop)
 	<-s.done
+}
+
+// Stopped returns true if the service has stopped
+func (s *Service) Stopped() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // handleCertificate handles a pending managed certificate
