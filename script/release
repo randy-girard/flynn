@@ -398,10 +398,16 @@ create_tarball() {
   # Create output directory
   mkdir -p "${OUTPUT_DIR}"
 
-  # Create the tarball
+  # Create the tarball with files in a versioned folder
   TARBALL_NAME="flynn-${VERSION}.tar.gz"
-  info "Creating ${TARBALL_NAME}..."
-  (cd "${RELEASE_DIR}" && tar czf "${OUTPUT_DIR}/${TARBALL_NAME}" .)
+  FOLDER_NAME="flynn-${VERSION}"
+  info "Creating ${TARBALL_NAME} (contents in ${FOLDER_NAME}/)..."
+
+  # Rename the release directory to the versioned folder name, create tarball, then rename back
+  RELEASE_PARENT="$(dirname "${RELEASE_DIR}")"
+  mv "${RELEASE_DIR}" "${RELEASE_PARENT}/${FOLDER_NAME}"
+  (cd "${RELEASE_PARENT}" && tar czf "${OUTPUT_DIR}/${TARBALL_NAME}" "${FOLDER_NAME}")
+  mv "${RELEASE_PARENT}/${FOLDER_NAME}" "${RELEASE_DIR}"
 
   info "Release artifacts:"
   ls -lah "${RELEASE_DIR}"
@@ -410,7 +416,7 @@ create_tarball() {
   echo ""
   echo "To install on a server:"
   echo "  1. Upload the tarball:  scp ${OUTPUT_DIR}/${TARBALL_NAME} root@server:/tmp/"
-  echo "  2. Extract and install: ssh root@server 'cd /tmp && tar xzf ${TARBALL_NAME} && ./install-flynn'"
+  echo "  2. Extract and install: ssh root@server 'cd /tmp && tar xzf ${TARBALL_NAME} && cd ${FOLDER_NAME} && ./install-flynn'"
   echo ""
   echo "After testing, create GitHub release with:"
   echo "  ./script/release --target github --version ${VERSION}"
