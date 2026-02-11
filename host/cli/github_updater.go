@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
@@ -374,15 +375,74 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 
 	log.Info("downloaded images manifest", "num_images", len(images))
 
-	// Download image layers from GitHub releases
+	// Download image layers on ALL nodes in the cluster
 	// The images.json contains file:// URIs that reference local paths,
-	// so we need to download the actual layer files before deploying
-	log.Info("downloading image layers from GitHub")
-	if err := d.DownloadImageLayers(images, log); err != nil {
-		log.Error("error downloading image layers", "err", err)
-		return err
+	// so we need to download the actual layer files on every node before deploying
+	log.Info("triggering image layer downloads on all cluster nodes")
+
+	// Get all hosts in the cluster
+	clusterClient := cluster.NewClient()
+	hosts, err := clusterClient.Hosts()
+	if err != nil {
+		log.Error("error discovering cluster hosts", "err", err)
+		return fmt.Errorf("error discovering cluster hosts: %w", err)
 	}
-	log.Info("finished downloading image layers")
+
+	log.Info("found cluster hosts", "num_hosts", len(hosts))
+
+	// Trigger image pull on all hosts in parallel
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(hosts))
+
+	for _, host := range hosts {
+		wg.Add(1)
+		go func(h *cluster.Host) {
+			defer wg.Done()
+
+			hostLog := log.New("host", h.ID())
+			hostLog.Info("starting image pull on host")
+
+			// Create a channel to consume ImagePullInfo events
+			ch := make(chan *ct.ImagePullInfo)
+			go func() {
+				for info := range ch {
+					if info.Type == ct.ImagePullTypeLayer {
+						hostLog.Debug("downloading layer", "layer", info.Layer.ID)
+					}
+				}
+			}()
+
+			// Trigger the pull on this host
+			stream, err := h.PullImages(repo, configDir, targetVersion, nil, ch)
+			if err != nil {
+				hostLog.Error("error starting image pull", "err", err)
+				errChan <- fmt.Errorf("error pulling images on host %s: %w", h.ID(), err)
+				return
+			}
+
+			// Wait for the stream to complete
+			if err := stream.Err(); err != nil {
+				hostLog.Error("image pull failed", "err", err)
+				errChan <- fmt.Errorf("image pull failed on host %s: %w", h.ID(), err)
+				return
+			}
+
+			hostLog.Info("finished image pull on host")
+		}(host)
+	}
+
+	// Wait for all hosts to finish
+	wg.Wait()
+	close(errChan)
+
+	// Check for any errors
+	for err := range errChan {
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Info("finished downloading image layers on all nodes")
 
 	// Wait for cluster to be ready after daemon restart
 	// This can take a few seconds as the daemon needs to fully start and
