@@ -40,7 +40,7 @@ update-initramfs -u
 # install jq for reading container config files
 JQ_URL="https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64"
 JQ_SHA="af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"
-curl -fsSLo --retry 5 --retry-delay 3 -o /tmp/jq "${JQ_URL}"
+curl -fsSL --retry 5 --retry-delay 3 -o /tmp/jq "${JQ_URL}"
 echo "${JQ_SHA}  /tmp/jq" | sha256sum -c -
 mv /tmp/jq /usr/local/bin/jq
 chmod +x /usr/local/bin/jq

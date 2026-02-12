@@ -123,34 +123,115 @@ func (r *RouteRepo) createManagedCertificate(tx *postgres.DBTx, route *router.Ro
 	}, cert)
 }
 
-// ensureManagedCertificate creates a managed certificate if one doesn't already exist for the route
+// ensureManagedCertificate creates a managed certificate if one doesn't already exist for the route.
+// If a managed certificate already exists and has a valid (non-expired) certificate, it re-links
+// the certificate to the route. If the certificate is expired or failed, it resets the status
+// to pending to trigger re-provisioning.
 func (r *RouteRepo) ensureManagedCertificate(tx *postgres.DBTx, route *router.Route) error {
 	// Check if a managed certificate already exists for this route
-	var existingID string
+	var existingCert ct.ManagedCertificate
+	var certSHA256 []byte
+	var certPEM, keyPEM *string
 	err := tx.QueryRow("managed_certificate_select_by_route_id", route.ID).Scan(
-		&existingID,
-		new(string),     // domain
-		new(*string),    // route_id
-		new(string),     // status
-		new(*string),    // cert
-		new(*string),    // key
-		new([]byte),     // cert_sha256
-		new(*time.Time), // expires_at
-		new(*string),    // last_error
-		new(*time.Time), // last_error_at
-		new(time.Time),  // created_at
-		new(time.Time),  // updated_at
+		&existingCert.ID,
+		&existingCert.Domain,
+		&existingCert.RouteID,
+		&existingCert.Status,
+		&certPEM,
+		&keyPEM,
+		&certSHA256,
+		&existingCert.ExpiresAt,
+		&existingCert.LastError,
+		&existingCert.LastErrorAt,
+		&existingCert.CreatedAt,
+		&existingCert.UpdatedAt,
 	)
-	if err == nil {
-		// Certificate already exists
-		return nil
+	if err == pgx.ErrNoRows {
+		// No certificate exists, create one
+		return r.createManagedCertificate(tx, route)
 	}
-	if err != pgx.ErrNoRows {
+	if err != nil {
 		return err
 	}
 
-	// No certificate exists, create one
-	return r.createManagedCertificate(tx, route)
+	// Copy nullable fields
+	if certPEM != nil {
+		existingCert.Cert = *certPEM
+	}
+	if keyPEM != nil {
+		existingCert.Key = *keyPEM
+	}
+
+	// Certificate record exists - check if we can re-use it
+	if existingCert.Status == ct.ManagedCertificateStatusIssued &&
+		existingCert.Cert != "" && existingCert.Key != "" &&
+		existingCert.ExpiresAt != nil && existingCert.ExpiresAt.After(time.Now()) {
+		// Certificate is valid and not expired - re-link it to the route
+		return r.relinkManagedCertificate(tx, &existingCert)
+	}
+
+	// Certificate is expired, failed, or doesn't have valid cert/key - reset to pending
+	if existingCert.Status != ct.ManagedCertificateStatusPending {
+		return r.resetManagedCertificateToPending(tx, &existingCert)
+	}
+
+	// Already pending, nothing to do
+	return nil
+}
+
+// relinkManagedCertificate re-links an existing valid managed certificate to its route
+func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, cert *ct.ManagedCertificate) error {
+	// Validate the certificate
+	if _, err := tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key)); err != nil {
+		return err
+	}
+
+	// Insert the certificate into the certificates table
+	tlsCertSHA256 := sha256.Sum256([]byte(cert.Cert))
+	var certID string
+	var createdAt, updatedAt time.Time
+	if err := tx.QueryRow(
+		"certificate_insert",
+		cert.Cert,
+		cert.Key,
+		tlsCertSHA256[:],
+	).Scan(&certID, &createdAt, &updatedAt); err != nil {
+		return err
+	}
+
+	// Delete any existing route certificate mapping
+	if err := tx.Exec("route_certificate_delete_by_route_id", cert.RouteID); err != nil {
+		return err
+	}
+
+	// Link the certificate to the route
+	if err := tx.Exec("route_certificate_insert", cert.RouteID, certID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// resetManagedCertificateToPending resets a managed certificate to pending status
+func (r *RouteRepo) resetManagedCertificateToPending(tx *postgres.DBTx, cert *ct.ManagedCertificate) error {
+	// Reset status to pending
+	cert.Status = ct.ManagedCertificateStatusPending
+	cert.LastError = nil
+	cert.LastErrorAt = nil
+
+	if err := tx.QueryRow("managed_certificate_update",
+		cert.ID, cert.Status, cert.Cert, cert.Key, nil, // keep existing cert/key for reference
+		cert.ExpiresAt, cert.LastError, cert.LastErrorAt,
+	).Scan(&cert.UpdatedAt); err != nil {
+		return err
+	}
+
+	// Create event to notify ACME service
+	return CreateEvent(tx.Exec, &ct.Event{
+		ObjectID:   cert.ID,
+		ObjectType: ct.EventTypeManagedCertificate,
+		Op:         ct.EventOpUpdate,
+	}, cert)
 }
 
 func (r *RouteRepo) addTCP(tx *postgres.DBTx, route *router.Route) error {

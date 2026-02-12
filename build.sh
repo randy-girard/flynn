@@ -60,8 +60,6 @@ fi
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
 
-# Flynn discovery directory (subdirectory of flynn repo by default, can be overridden)
-export FLYNN_DISCOVERY_DIR="${FLYNN_DISCOVERY_DIR:-${FLYNN_ROOT}/flynn-discovery}"
 
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
@@ -112,11 +110,6 @@ jq --arg url "file://$SQUASHFS" \
     .base_layer.hashes.sha512_256 = $hash' \
   "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
 
-# Start flynn-discovery service
-cd "${FLYNN_DISCOVERY_DIR}" && \
-docker compose down && \
-docker compose up -d --build
-
 # Return to Flynn root and continue build
 cd "${FLYNN_ROOT}" && \
 mkdir -p /etc/flynn && \
@@ -129,7 +122,6 @@ make clean && \
 rm -f build/bin/flynn-builder && \
 rm -f build/bin/flannel-wrapper && \
 go build -o build/bin/flannel-wrapper ./flannel/wrapper && \
-export DISCOVERY_URL=`./build/bin/flynn-host init --init-discovery` && \
 ./script/start-all && \
 zfs set sync=disabled flynn-default && \
 zfs set reservation=512M flynn-default && \

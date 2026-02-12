@@ -475,12 +475,14 @@ create_github_release() {
 
   # Create the release
   info "Pushing to GitHub Release ${VERSION}..."
+  COMPARE_RANGE="${PREVIOUS_TAG:-initial}...${VERSION}"
+  CHANGELOG_URL="https://github.com/${GITHUB_REPO}/compare/${COMPARE_RANGE}"
   gh release create "${VERSION}" \
     --repo "${GITHUB_REPO}" \
     --title "Flynn ${VERSION}" \
     --notes "## Flynn ${VERSION}
 
-**Full Changelog**: ${PREVIOUS_TAG:-initial}...${VERSION}
+**Full Changelog**: [${COMPARE_RANGE}](${CHANGELOG_URL})
 
 ${RELEASE_NOTES}
 ---

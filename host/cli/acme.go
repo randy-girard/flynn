@@ -19,12 +19,15 @@ import (
 	"github.com/flynn/go-docopt"
 )
 
-const defaultACMEDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
+const (
+	defaultACMEDirectoryURL = "https://acme-v02.api.letsencrypt.org/directory"
+	stagingACMEDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+)
 
 func init() {
 	Register("acme", runACME, `
 usage: flynn-host acme
-       flynn-host acme configure --email=<email> [--agree-tos] [--directory-url=<url>]
+       flynn-host acme configure --email=<email> [--agree-tos] [--staging] [--directory-url=<url>]
        flynn-host acme enable
        flynn-host acme disable
        flynn-host acme status
@@ -45,10 +48,12 @@ Commands:
 Options:
     --email=<email>          Contact email for Let's Encrypt account (required for configure)
     --agree-tos              Agree to the Let's Encrypt Terms of Service
+    --staging                Use Let's Encrypt staging server (for testing, issues untrusted certs)
     --directory-url=<url>    ACME directory URL (defaults to Let's Encrypt production)
 
 Examples:
     $ flynn-host acme configure --email=admin@example.com --agree-tos
+    $ flynn-host acme configure --email=admin@example.com --agree-tos --staging
     $ flynn-host acme enable
     $ flynn-host acme status
 `)
@@ -100,12 +105,25 @@ func runACMEConfigure(args *docopt.Args, client controller.Client) error {
 	}
 
 	// Determine directory URL
+	// Priority: --directory-url > --staging > existing config > default (production)
+	useStaging := args.Bool["--staging"]
 	directoryURL := args.String["--directory-url"]
 	if directoryURL == "" {
-		directoryURL = config.DirectoryURL
+		if useStaging {
+			directoryURL = stagingACMEDirectoryURL
+		} else if config.DirectoryURL != "" {
+			directoryURL = config.DirectoryURL
+		} else {
+			directoryURL = defaultACMEDirectoryURL
+		}
 	}
-	if directoryURL == "" {
-		directoryURL = defaultACMEDirectoryURL
+
+	// Warn if using staging
+	if directoryURL == stagingACMEDirectoryURL {
+		fmt.Println("WARNING: Using Let's Encrypt STAGING server.")
+		fmt.Println("         Certificates will NOT be trusted by browsers.")
+		fmt.Println("         Use this only for testing.")
+		fmt.Println()
 	}
 
 	// Generate a new ECDSA key for the ACME account
@@ -340,7 +358,19 @@ func runACMEStatus(client controller.Client) error {
 	fmt.Fprintf(w, "Enabled:\t%t\n", config.Enabled)
 	fmt.Fprintf(w, "Contact Email:\t%s\n", valueOrNone(config.ContactEmail))
 	fmt.Fprintf(w, "Terms of Service Agreed:\t%t\n", config.TermsOfServiceAgreed)
-	fmt.Fprintf(w, "Directory URL:\t%s\n", valueOrDefault(config.DirectoryURL, "https://acme-v02.api.letsencrypt.org/directory (default)"))
+
+	// Show directory URL with staging indicator
+	dirURL := config.DirectoryURL
+	if dirURL == "" {
+		fmt.Fprintf(w, "Directory URL:\t%s (default)\n", defaultACMEDirectoryURL)
+	} else if dirURL == stagingACMEDirectoryURL {
+		fmt.Fprintf(w, "Directory URL:\t%s (STAGING - certs not trusted!)\n", dirURL)
+	} else if dirURL == defaultACMEDirectoryURL {
+		fmt.Fprintf(w, "Directory URL:\t%s (production)\n", dirURL)
+	} else {
+		fmt.Fprintf(w, "Directory URL:\t%s (custom)\n", dirURL)
+	}
+
 	if config.UpdatedAt != nil {
 		fmt.Fprintf(w, "Last Updated:\t%s\n", config.UpdatedAt.Format(time.RFC3339))
 	}
