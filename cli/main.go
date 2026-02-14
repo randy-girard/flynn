@@ -67,7 +67,6 @@ Commands:
 	volume      manage volumes
 	export      export app data
 	import      create app from exported data
-	letsencrypt manage Let's Encrypt TLS certificates for routes
 	version     show flynn version
 
 See 'flynn help <command>' for more information on a specific command.

@@ -169,7 +169,7 @@ to a trusted root.
 Flynn can automatically provision and renew TLS certificates using Let's Encrypt
 (ACME). This feature must be enabled at the cluster level before it can be used.
 
-#### Enabling Let's Encrypt
+#### Enabling Let's Encrypt at the Cluster Level
 
 First, configure ACME with your contact email and agree to the Let's Encrypt
 Terms of Service:
@@ -178,19 +178,29 @@ Terms of Service:
 flynn-host acme configure --email=admin@example.com --agree-tos
 ```
 
-Then enable ACME for the cluster:
-
-```text
-flynn-host acme enable
-```
-
+This command registers your ACME account and enables ACME for the cluster.
 You can check the current ACME configuration status with:
 
 ```text
 flynn-host acme status
 ```
 
-#### Using Automatic TLS for Routes
+#### Enabling Let's Encrypt on System Routes
+
+To enable Let's Encrypt on all system app routes (controller, dashboard, etc.),
+run the following command:
+
+```text
+flynn-host acme enable-system-routes
+```
+
+To disable Let's Encrypt on all system app routes:
+
+```text
+flynn-host acme disable-system-routes
+```
+
+#### Using Automatic TLS for Application Routes
 
 Once ACME is enabled, you can create routes with automatic TLS:
 
@@ -201,13 +211,13 @@ flynn route add http --auto-tls www.example.com
 Or enable automatic TLS for an existing route:
 
 ```text
-flynn letsencrypt enable http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1
+flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --auto-tls
 ```
 
 To disable automatic TLS for a route:
 
 ```text
-flynn letsencrypt disable http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1
+flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --no-auto-tls
 ```
 
 **Note:** The domain must be publicly accessible and DNS must be properly
