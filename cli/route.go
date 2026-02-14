@@ -93,10 +93,11 @@ func runRoute(args *docopt.Args, client controller.Client) error {
 	w := tabWriter()
 	defer w.Flush()
 
-	var route, port, protocol, service, sticky, path string
-	listRec(w, "ROUTE", "SERVICE", "ID", "STICKY", "LEADER", "PATH")
+	var route, port, protocol, service, sticky, path, tlsStatus string
+	listRec(w, "ROUTE", "SERVICE", "ID", "STICKY", "LEADER", "TLS", "PATH")
 	for _, k := range routes {
 		port = strconv.Itoa(int(k.Port))
+		tlsStatus = ""
 		switch k.Type {
 		case "tcp":
 			route = port
@@ -109,15 +110,20 @@ func runRoute(args *docopt.Args, client controller.Client) error {
 			}
 			service = k.TCPRoute().Service
 			httpRoute := k.HTTPRoute()
-			if httpRoute.Certificate == nil && httpRoute.LegacyTLSCert == "" {
-				protocol = "http"
-			} else {
+			if k.ManagedCertificateDomain != nil && *k.ManagedCertificateDomain != "" {
 				protocol = "https"
+				tlsStatus = "auto"
+			} else if httpRoute.Certificate != nil || httpRoute.LegacyTLSCert != "" {
+				protocol = "https"
+				tlsStatus = "manual"
+			} else {
+				protocol = "http"
+				tlsStatus = "none"
 			}
 			sticky = fmt.Sprintf("%t", k.Sticky)
 			path = k.HTTPRoute().Path
 		}
-		listRec(w, protocol+":"+route, service, k.FormattedID(), sticky, k.Leader, path)
+		listRec(w, protocol+":"+route, service, k.FormattedID(), sticky, k.Leader, tlsStatus, path)
 	}
 	return nil
 }
