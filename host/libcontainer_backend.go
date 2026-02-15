@@ -1071,9 +1071,7 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 
 	notifyOOM, err := c.container.NotifyOOM()
 	if err != nil {
-		// OOM notifications may not be available on cgroups v2 with older libcontainer
-		// Log a warning but continue - the container will still function
-		log.Warn("unable to subscribe to OOM notifications (may not be supported on cgroups v2)", "err", err)
+		log.Warn("unable to subscribe to OOM notifications", "err", err)
 	} else {
 		go func() {
 			logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
