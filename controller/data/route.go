@@ -167,7 +167,7 @@ func (r *RouteRepo) ensureManagedCertificate(tx *postgres.DBTx, route *router.Ro
 		existingCert.Cert != "" && existingCert.Key != "" &&
 		existingCert.ExpiresAt != nil && existingCert.ExpiresAt.After(time.Now()) {
 		// Certificate is valid and not expired - re-link it to the route
-		return r.relinkManagedCertificate(tx, &existingCert)
+		return r.relinkManagedCertificate(tx, route, &existingCert)
 	}
 
 	// Certificate is expired, failed, or doesn't have valid cert/key - reset to pending
@@ -180,7 +180,8 @@ func (r *RouteRepo) ensureManagedCertificate(tx *postgres.DBTx, route *router.Ro
 }
 
 // relinkManagedCertificate re-links an existing valid managed certificate to its route
-func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, cert *ct.ManagedCertificate) error {
+// and populates the route's Certificate field so that the route event contains the certificate data
+func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, route *router.Route, cert *ct.ManagedCertificate) error {
 	// Validate the certificate
 	if _, err := tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key)); err != nil {
 		return err
@@ -207,6 +208,15 @@ func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, cert *ct.Managed
 	// Link the certificate to the route
 	if err := tx.Exec("route_certificate_insert", cert.RouteID, certID); err != nil {
 		return err
+	}
+
+	// Populate the route's Certificate field so the event contains the certificate data
+	route.Certificate = &router.Certificate{
+		ID:        certID,
+		Cert:      cert.Cert,
+		Key:       cert.Key,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
 	}
 
 	return nil
@@ -523,10 +533,14 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 	}
 
 	// Create managed certificate if ManagedCertificateDomain is set and doesn't already exist
-	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
+	hasManagedCert := route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != ""
+	if hasManagedCert {
 		if err := r.ensureManagedCertificate(tx, route); err != nil {
 			return err
 		}
+		// When using managed certificates, don't process manual certs - just return
+		// The managed cert has been linked by ensureManagedCertificate
+		return nil
 	}
 
 	// Check if we need to remove the certificate (when Certificate is nil and no legacy cert)

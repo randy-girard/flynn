@@ -31,6 +31,8 @@ usage: flynn-host acme
        flynn-host acme enable
        flynn-host acme disable
        flynn-host acme status
+       flynn-host acme enable-system-routes
+       flynn-host acme disable-system-routes
 
 Manage ACME/Let's Encrypt configuration for the cluster.
 
@@ -40,10 +42,12 @@ provisioned for routes using the --auto-tls flag.
 Commands:
     With no arguments, shows the current ACME configuration status.
 
-    configure  Configure ACME with a contact email address
-    enable     Enable ACME/Let's Encrypt for the cluster
-    disable    Disable ACME/Let's Encrypt for the cluster
-    status     Show current ACME configuration status
+    configure              Configure ACME with a contact email address
+    enable                 Enable ACME/Let's Encrypt for the cluster
+    disable                Disable ACME/Let's Encrypt for the cluster
+    status                 Show current ACME configuration status
+    enable-system-routes   Enable Let's Encrypt on all system app routes
+    disable-system-routes  Disable Let's Encrypt on all system app routes
 
 Options:
     --email=<email>          Contact email for Let's Encrypt account (required for configure)
@@ -56,6 +60,8 @@ Examples:
     $ flynn-host acme configure --email=admin@example.com --agree-tos --staging
     $ flynn-host acme enable
     $ flynn-host acme status
+    $ flynn-host acme enable-system-routes
+    $ flynn-host acme disable-system-routes
 `)
 }
 
@@ -71,6 +77,10 @@ func runACME(args *docopt.Args) error {
 		return runACMEEnable(client)
 	} else if args.Bool["disable"] {
 		return runACMEDisable(client)
+	} else if args.Bool["enable-system-routes"] {
+		return runACMEEnableSystemRoutes(client)
+	} else if args.Bool["disable-system-routes"] {
+		return runACMEDisableSystemRoutes(client)
 	}
 	// Default: show status
 	return runACMEStatus(client)
@@ -174,22 +184,9 @@ func runACMEConfigure(args *docopt.Args, client controller.Client) error {
 	}
 
 	fmt.Println("ACME account registered and enabled successfully.")
-
-	// Automatically enable Let's Encrypt on all system app routes
-	// This ensures all system apps use CA-signed certificates instead of self-signed ones
-	fmt.Println("\nEnabling Let's Encrypt for all system app routes...")
-	if err := enableLetsEncryptOnSystemRoutes(client); err != nil {
-		fmt.Printf("Warning: Could not enable Let's Encrypt on all system routes: %s\n", err)
-		fmt.Println("You can manually enable it with: flynn -a <app> letsencrypt enable <route-id>")
-	} else {
-		fmt.Println("\nLet's Encrypt has been enabled for all system app routes.")
-		fmt.Println("TLS certificates will be automatically provisioned.")
-		fmt.Println("\nThe TLS pin in ~/.flynnrc is no longer needed since all system routes")
-		fmt.Println("will use CA-signed Let's Encrypt certificates.")
-		fmt.Println("Run 'flynn cluster update-pin --clear' to remove it.")
-	}
-
 	fmt.Println("\nYou can now use --auto-tls when adding routes to automatically provision TLS certificates.")
+	fmt.Println("\nTo enable Let's Encrypt on all system app routes, run:")
+	fmt.Println("  flynn-host acme enable-system-routes")
 	return nil
 }
 
@@ -373,6 +370,144 @@ func runACMEStatus(client controller.Client) error {
 
 	if config.UpdatedAt != nil {
 		fmt.Fprintf(w, "Last Updated:\t%s\n", config.UpdatedAt.Format(time.RFC3339))
+	}
+
+	return nil
+}
+
+func runACMEEnableSystemRoutes(client controller.Client) error {
+	// Check if ACME is enabled
+	config, err := client.GetACMEConfig()
+	if err != nil {
+		return fmt.Errorf("error getting ACME config: %s", err)
+	}
+	if !config.Enabled {
+		return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first.")
+	}
+
+	fmt.Println("Enabling Let's Encrypt for all system app routes...")
+	if err := enableLetsEncryptOnSystemRoutes(client); err != nil {
+		return err
+	}
+
+	fmt.Println("\nLet's Encrypt has been enabled for all system app routes.")
+	fmt.Println("TLS certificates will be automatically provisioned.")
+	fmt.Println("\nThe TLS pin in ~/.flynnrc is no longer needed since all system routes")
+	fmt.Println("will use CA-signed Let's Encrypt certificates.")
+	fmt.Println("Run 'flynn cluster update-pin --clear' to remove it.")
+	return nil
+}
+
+func runACMEDisableSystemRoutes(client controller.Client) error {
+	fmt.Println("Disabling Let's Encrypt for all system app routes...")
+	if err := disableLetsEncryptOnSystemRoutes(client); err != nil {
+		return err
+	}
+
+	fmt.Println("\nLet's Encrypt has been disabled for all system app routes.")
+	fmt.Println("Routes will no longer have automatic TLS certificate provisioning.")
+	return nil
+}
+
+// disableLetsEncryptOnSystemRoutes disables Let's Encrypt on all system app HTTP routes
+func disableLetsEncryptOnSystemRoutes(client controller.Client) error {
+	// Get the cluster domain from the controller release
+	release, err := client.GetAppRelease("controller")
+	if err != nil {
+		return fmt.Errorf("error getting controller release: %s", err)
+	}
+	clusterDomain := release.Env["DEFAULT_ROUTE_DOMAIN"]
+	if clusterDomain == "" {
+		return fmt.Errorf("could not determine cluster domain from controller")
+	}
+	fmt.Printf("Cluster domain: %s\n", clusterDomain)
+
+	// Get all routes in the cluster
+	allRoutes, err := client.RouteList()
+	if err != nil {
+		return fmt.Errorf("error listing routes: %s", err)
+	}
+
+	// Get all apps to check which are system apps
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing apps: %s", err)
+	}
+
+	// Build maps for quick lookup
+	appByID := make(map[string]*ct.App)
+	for _, app := range apps {
+		appByID[app.ID] = app
+	}
+
+	var disabledCount, alreadyDisabledCount, errorCount int
+
+	for _, route := range allRoutes {
+		// Only process HTTP routes
+		if route.Type != "http" {
+			continue
+		}
+
+		// Extract app ID from ParentRef (format: "controller/apps/<app_id>")
+		if !strings.HasPrefix(route.ParentRef, ct.RouteParentRefPrefix) {
+			continue
+		}
+		appID := strings.TrimPrefix(route.ParentRef, ct.RouteParentRefPrefix)
+
+		// Get the app
+		app, ok := appByID[appID]
+		if !ok {
+			continue
+		}
+
+		// Check if this is a system app OR if this is the base cluster domain
+		isSystemApp := app.System()
+		isBaseClusterDomain := route.Domain == clusterDomain
+
+		if !isSystemApp && !isBaseClusterDomain {
+			continue
+		}
+
+		// Check if Let's Encrypt is already disabled
+		if route.ManagedCertificateDomain == nil || *route.ManagedCertificateDomain == "" {
+			label := app.Name
+			if isBaseClusterDomain {
+				label = app.Name + " (base domain)"
+			}
+			fmt.Printf("  [skip] %s: %s already disabled\n", label, route.Domain)
+			alreadyDisabledCount++
+			continue
+		}
+
+		// Disable managed certificate for this route
+		route.ManagedCertificateDomain = nil
+		route.Certificate = nil
+		route.LegacyTLSCert = ""
+		route.LegacyTLSKey = ""
+
+		routeID := fmt.Sprintf("%s/%s", route.Type, route.ID)
+		if err := client.UpdateRoute(app.Name, routeID, route); err != nil {
+			fmt.Printf("  [error] %s: %s - %s\n", app.Name, route.Domain, err)
+			errorCount++
+			continue
+		}
+
+		label := app.Name
+		if isBaseClusterDomain {
+			label = app.Name + " (base domain)"
+		}
+		fmt.Printf("  [disabled] %s: %s\n", label, route.Domain)
+		disabledCount++
+	}
+
+	if disabledCount == 0 && alreadyDisabledCount == 0 && errorCount == 0 {
+		return fmt.Errorf("no system app HTTP routes found")
+	}
+
+	fmt.Printf("\nSummary: %d disabled, %d already disabled, %d errors\n", disabledCount, alreadyDisabledCount, errorCount)
+
+	if errorCount > 0 {
+		return fmt.Errorf("%d routes failed to disable", errorCount)
 	}
 
 	return nil
