@@ -47,7 +47,6 @@ import (
 	dhcp "github.com/krolaw/dhcp4"
 	"github.com/miekg/dns"
 	"github.com/opencontainers/runc/libcontainer"
-	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/rancher/sparse-tools/sparse"
 	"github.com/vishvananda/netlink"
@@ -172,6 +171,10 @@ type Container struct {
 	job       *host.Job
 	l         *LibcontainerBackend
 	done      chan struct{}
+
+	// Memory limit tracking
+	softLimitBytes    uint64 // Soft memory limit (memory.high)
+	softLimitLogged  bool   // Whether we've already logged soft limit breach
 
 	*containerinit.Client
 }
@@ -531,7 +534,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			Path: filepath.Join("/flynn", job.Partition, job.ID),
 			Resources: &configs.Resources{
 				AllowedDevices: host.ConfigDevices(*job.Config.AllowedDevices),
-				Memory:         defaultMemory,
+				// Default memory limits - will be overwritten if specific limit is set below
+				// or cleared for build jobs. No memory.high (soft limit) - that would trigger
+				// aggressive kernel reclaim and make the container very slow when over limit.
+				Memory:     defaultMemory * 2, // Hard limit = 2x default
+				MemorySwap: defaultMemory,     // Swap limit = default, so total = 2x default
 			},
 		},
 		MaskPaths: []string{
@@ -764,27 +771,40 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			},
 		}
 	}
+	var softLimitBytes uint64
 	if spec, ok := job.Resources[resource.TypeMemory]; ok && spec.Limit != nil {
-		config.Cgroups.Resources.Memory = *spec.Limit
+		limit := *spec.Limit
+		softLimitBytes = uint64(limit)
+		// Two-tier memory limits (no kernel soft limit - that would throttle and make the app very slow):
+		// - Hard limit (memory.max): 2x the configured limit - kills container when exceeded
+		// - Swap limit (memory.swap.max): Equal to configured limit, so total = limit + swap = 2x limit
+		// We do NOT set memory.high (MemoryReservation) - it triggers aggressive reclaim and causes
+		// extreme slowness. We only log when usage exceeds the configured limit via monitorMemoryUsage.
+		config.Cgroups.Resources.Memory = limit * 2  // Hard limit (memory.max) = 2x configured limit
+		config.Cgroups.Resources.MemorySwap = limit // Swap limit, so total = 2x limit
+	} else {
+		softLimitBytes = uint64(defaultMemory)
+	}
+	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
+	// Skip memory limits so they inherit the parent cgroup (effectively unlimited).
+	if isBuildJob(job) {
+		config.Cgroups.Resources.Memory = 0
+		config.Cgroups.Resources.MemorySwap = 0
 	}
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
+		// cpu.shares is replaced by cpu.weight in cgroups v2
+		// cpu.shares range: 2-262144, default 1024
+		// cpu.weight range: 1-10000, default 100
+		// Conversion: weight ≈ shares * 100 / 1024
 		cpuShares := milliCPUToShares(uint64(*spec.Limit))
-		if cgroups.IsCgroup2UnifiedMode() {
-			// In cgroups v2, cpu.shares is replaced by cpu.weight
-			// cpu.shares range: 2-262144, default 1024
-			// cpu.weight range: 1-10000, default 100
-			// Conversion: weight ≈ shares * 100 / 1024
-			cpuWeight := (cpuShares * 100) / 1024
-			if cpuWeight < 1 {
-				cpuWeight = 1
-			}
-			if cpuWeight > 10000 {
-				cpuWeight = 10000
-			}
-			config.Cgroups.Resources.CpuWeight = cpuWeight
-		} else {
-			config.Cgroups.Resources.CpuShares = cpuShares
+		cpuWeight := (cpuShares * 100) / 1024
+		if cpuWeight < 1 {
+			cpuWeight = 1
 		}
+		if cpuWeight > 10000 {
+			cpuWeight = 10000
+		}
+		config.Cgroups.Resources.CpuWeight = cpuWeight
 	}
 
 	c, err := l.factory.Create(job.ID, config)
@@ -811,6 +831,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	l.State.SetContainerPID(job.ID, pid)
 
 	container.container = c
+	container.softLimitBytes = softLimitBytes
 
 	go container.watch(nil, nil)
 
@@ -1077,9 +1098,14 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 			logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
 			defer logger.Close()
 			for range notifyOOM {
-				logger.Crit("FATAL: a container process was killed due to lack of available memory")
+				logger.Crit("FATAL: Container hard memory limit (2x configured limit) exceeded - container killed due to vastly exceeding memory limits")
 			}
 		}()
+	}
+
+	// Monitor memory usage to detect soft limit breaches
+	if c.softLimitBytes > 0 {
+		go c.monitorMemoryUsage(log)
 	}
 
 	log.Info("watching for changes")
@@ -1635,6 +1661,62 @@ func bindMount(src, dest string, writeable bool) *configs.Mount {
 
 // Taken from Kubernetes:
 // https://github.com/kubernetes/kubernetes/blob/d66ae29587e746c40390d61a1253a1bfa7aebd8a/pkg/kubelet/dockertools/docker.go#L323-L336
+// isBuildJob returns true for image builder jobs (flynn-builder building layers like ubuntu-noble)
+// and slugbuilder jobs (git push builds). These jobs need more memory for mksquashfs etc.
+func isBuildJob(job *host.Job) bool {
+	if job.Metadata == nil {
+		return false
+	}
+	return job.Metadata["flynn-controller.app_name"] == "builder" ||
+		job.Metadata["flynn-controller.type"] == "slugbuilder"
+}
+
+// monitorMemoryUsage periodically checks memory usage and logs when soft limit is exceeded
+func (c *Container) monitorMemoryUsage(log log15.Logger) {
+	if c.softLimitBytes == 0 {
+		return
+	}
+
+	ticker := time.NewTicker(5 * time.Second) // Check every 5 seconds
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			if c.container == nil {
+				continue
+			}
+
+			stats, err := c.container.Stats()
+			if err != nil {
+				// Container may have exited, stop monitoring
+				return
+			}
+
+			if stats.CgroupStats == nil {
+				continue
+			}
+
+			memUsage := stats.CgroupStats.MemoryStats.Usage.Usage
+			if memUsage > c.softLimitBytes && !c.softLimitLogged {
+				// Soft limit exceeded - log event
+				logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
+				logger.Warn("Container soft memory limit exceeded - exceeding memory limit",
+					"usage_bytes", memUsage,
+					"soft_limit_bytes", c.softLimitBytes,
+					"usage_percent", float64(memUsage)*100.0/float64(c.softLimitBytes))
+				logger.Close()
+				c.softLimitLogged = true
+			} else if memUsage <= c.softLimitBytes && c.softLimitLogged {
+				// Memory usage dropped below soft limit, reset flag
+				c.softLimitLogged = false
+			}
+		}
+	}
+}
+
 func milliCPUToShares(milliCPU uint64) uint64 {
 	// Taken from lmctfy https://github.com/google/lmctfy/blob/master/lmctfy/controllers/cpu_controller.cc
 	const (
@@ -1658,44 +1740,7 @@ func milliCPUToShares(milliCPU uint64) uint64 {
 const cgroupRoot = "/sys/fs/cgroup"
 
 func setupCGroups(partitions map[string]int64) error {
-	if cgroups.IsCgroup2UnifiedMode() {
-		return setupCGroupsV2(partitions)
-	}
-	return setupCGroupsV1(partitions)
-}
-
-func setupCGroupsV1(partitions map[string]int64) error {
-	subsystems, err := cgroups.GetAllSubsystems()
-	if err != nil {
-		return fmt.Errorf("error getting cgroup subsystems: %s", err)
-	} else if len(subsystems) == 0 {
-		return fmt.Errorf("failed to detect any cgroup subsystems")
-	}
-
-	for _, subsystem := range subsystems {
-		if _, err := cgroups.FindCgroupMountpoint("", subsystem); err == nil {
-			// subsystem already mounted
-			continue
-		}
-		path := filepath.Join(cgroupRoot, subsystem)
-		if err := os.Mkdir(path, 0755); err != nil && !os.IsExist(err) {
-			return fmt.Errorf("error creating %s cgroup directory: %s", subsystem, err)
-		}
-		if err := syscall.Mount("cgroup", path, "cgroup", 0, subsystem); err != nil {
-			return fmt.Errorf("error mounting %s cgroup: %s", subsystem, err)
-		}
-	}
-
-	for name, shares := range partitions {
-		if err := createCGroupPartitionV1(name, shares); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func setupCGroupsV2(partitions map[string]int64) error {
-	// In cgroups v2, the hierarchy is unified - all controllers are under /sys/fs/cgroup
+	// cgroups v2 uses a unified hierarchy - all controllers are under /sys/fs/cgroup
 	// We need to enable the controllers we want for our subtree
 
 	// Create the flynn parent cgroup
@@ -1718,52 +1763,21 @@ func setupCGroupsV2(partitions map[string]int64) error {
 	}
 
 	for name, shares := range partitions {
-		if err := createCGroupPartitionV2(name, shares); err != nil {
+		if err := createCGroupPartition(name, shares); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func createCGroupPartitionV1(name string, cpuShares int64) error {
-	for _, group := range []string{"blkio", "cpu", "cpuacct", "cpuset", "devices", "freezer", "memory", "net_cls", "perf_event"} {
-		if err := os.MkdirAll(filepath.Join(cgroupRoot, group, "flynn", name), 0755); err != nil {
-			return fmt.Errorf("error creating partition cgroup: %s", err)
-		}
-	}
-	for _, param := range []string{"cpuset.cpus", "cpuset.mems"} {
-		data, err := ioutil.ReadFile(filepath.Join(cgroupRoot, "cpuset", "flynn", param))
-		if err != nil {
-			return fmt.Errorf("error reading cgroup param: %s", err)
-		}
-		if len(bytes.TrimSpace(data)) == 0 {
-			// Populate our parent cgroup to avoid ENOSPC when creating containers
-			data, err = ioutil.ReadFile(filepath.Join(cgroupRoot, "cpuset", param))
-			if err != nil {
-				return fmt.Errorf("error reading cgroup param: %s", err)
-			}
-			if err := ioutil.WriteFile(filepath.Join(cgroupRoot, "cpuset", "flynn", param), data, 0644); err != nil {
-				return fmt.Errorf("error writing cgroup param: %s", err)
-			}
-		}
-		if err := ioutil.WriteFile(filepath.Join(cgroupRoot, "cpuset", "flynn", name, param), data, 0644); err != nil {
-			return fmt.Errorf("error writing cgroup param: %s", err)
-		}
-	}
-	if err := ioutil.WriteFile(filepath.Join(cgroupRoot, "cpu", "flynn", name, "cpu.shares"), strconv.AppendInt(nil, cpuShares, 10), 0644); err != nil {
-		return fmt.Errorf("error writing cgroup param: %s", err)
-	}
-	return nil
-}
-
-func createCGroupPartitionV2(name string, cpuShares int64) error {
-	// In cgroups v2, we have a unified hierarchy
+func createCGroupPartition(name string, cpuShares int64) error {
+	// cgroups v2 uses a unified hierarchy
 	partitionPath := filepath.Join(cgroupRoot, "flynn", name)
 	if err := os.MkdirAll(partitionPath, 0755); err != nil {
 		return fmt.Errorf("error creating partition cgroup: %s", err)
 	}
 
-	// Set up cpuset - in v2, we read from cpuset.cpus.effective and cpuset.mems.effective
+	// Set up cpuset - read from cpuset.cpus.effective and cpuset.mems.effective
 	flynnPath := filepath.Join(cgroupRoot, "flynn")
 	for _, param := range []string{"cpuset.cpus", "cpuset.mems"} {
 		effectiveParam := param + ".effective"
@@ -1790,7 +1804,7 @@ func createCGroupPartitionV2(name string, cpuShares int64) error {
 		}
 	}
 
-	// In cgroups v2, cpu.shares is replaced by cpu.weight
+	// cpu.shares is replaced by cpu.weight in cgroups v2
 	// cpu.shares range: 2-262144, default 1024
 	// cpu.weight range: 1-10000, default 100
 	// Conversion: weight = 1 + ((shares - 2) * 9999) / 262142

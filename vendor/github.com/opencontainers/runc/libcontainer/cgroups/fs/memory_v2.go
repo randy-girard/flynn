@@ -58,13 +58,34 @@ func (s *MemoryGroupV2) Apply(d *cgroupData) (err error) {
 }
 
 func setMemoryAndSwapCgroups(path string, cgroup *configs.Cgroup) error {
-	if cgroup.Resources.MemorySwap != 0 {
-		if err := writeFile(path, "memory.swap.max", strconv.FormatInt(cgroup.Resources.MemorySwap, 10)); err != nil {
+	// In cgroups v2, memory.swap.max is the swap limit (separate from memory.max).
+	// To prevent swap usage when a memory limit is set, we need to explicitly set
+	// memory.swap.max to 0. If MemorySwap is 0 and Memory is set, set swap to 0.
+	// If MemorySwap is explicitly set (non-zero), use that value.
+	if cgroup.Resources.Memory != 0 {
+		// If memory limit is set, we should also set swap limit
+		swapLimit := cgroup.Resources.MemorySwap
+		// If MemorySwap is 0 (default/unset) but Memory is set, disable swap by setting it to 0
+		// If MemorySwap is explicitly set to a non-zero value, use that
+		// If MemorySwap is -1, it means unlimited swap (don't set memory.swap.max)
+		if swapLimit == 0 && cgroup.Resources.Memory > 0 {
+			// Memory is set but MemorySwap is 0 (default), disable swap
+			if err := writeFile(path, "memory.swap.max", "0"); err != nil {
+				return err
+			}
+		} else if swapLimit != 0 && swapLimit != -1 {
+			// MemorySwap is explicitly set to a non-zero, non-unlimited value
+			if err := writeFile(path, "memory.swap.max", strconv.FormatInt(swapLimit, 10)); err != nil {
+				return err
+			}
+		}
+		// Set memory limit
+		if err := writeFile(path, "memory.max", strconv.FormatInt(cgroup.Resources.Memory, 10)); err != nil {
 			return err
 		}
-	}
-	if cgroup.Resources.Memory != 0 {
-		if err := writeFile(path, "memory.max", strconv.FormatInt(cgroup.Resources.Memory, 10)); err != nil {
+	} else if cgroup.Resources.MemorySwap != 0 && cgroup.Resources.MemorySwap != -1 {
+		// Memory is not set but MemorySwap is explicitly set
+		if err := writeFile(path, "memory.swap.max", strconv.FormatInt(cgroup.Resources.MemorySwap, 10)); err != nil {
 			return err
 		}
 	}
