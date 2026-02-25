@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +20,7 @@ import (
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/installsource"
 	"github.com/flynn/flynn/pkg/status"
@@ -402,32 +404,56 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 			hostLog := log.New("host", h.ID())
 			hostLog.Info("starting image pull on host")
 
-			// Create a channel to consume ImagePullInfo events
-			ch := make(chan *ct.ImagePullInfo)
-			go func() {
+			// Retry image pulls up to 3 times to handle transient
+			// connection errors (e.g. "unexpected EOF" from network
+			// hiccups or host daemon instability after binary update).
+			// Layer downloads are idempotent — already-cached layers
+			// are skipped on retry.
+			const maxPullAttempts = 3
+			var lastErr error
+			for attempt := 1; attempt <= maxPullAttempts; attempt++ {
+				if attempt > 1 {
+					hostLog.Warn("retrying image pull", "attempt", attempt, "previous_err", lastErr)
+					time.Sleep(5 * time.Second)
+				}
+
+				// Create a channel to consume ImagePullInfo events
+				ch := make(chan *ct.ImagePullInfo)
+
+				// Trigger the pull on this host
+				stream, err := h.PullImages(repo, configDir, targetVersion, nil, ch)
+				if err != nil {
+					hostLog.Error("error starting image pull", "err", err)
+					lastErr = fmt.Errorf("error pulling images on host %s: %w", h.ID(), err)
+					continue
+				}
+
+				// Consume all events from the channel, blocking until the
+				// stream is fully drained and the channel is closed.
+				// This must happen BEFORE calling stream.Err() because the
+				// stream's error is only set after the SSE decoder goroutine
+				// finishes and closes the channel.
 				for info := range ch {
 					if info.Type == ct.ImagePullTypeLayer {
 						hostLog.Debug("downloading layer", "layer", info.Layer.ID)
 					}
 				}
-			}()
 
-			// Trigger the pull on this host
-			stream, err := h.PullImages(repo, configDir, targetVersion, nil, ch)
-			if err != nil {
-				hostLog.Error("error starting image pull", "err", err)
-				errChan <- fmt.Errorf("error pulling images on host %s: %w", h.ID(), err)
-				return
+				// Now it's safe to check for errors
+				if err := stream.Err(); err != nil {
+					hostLog.Error("image pull failed", "err", err)
+					lastErr = fmt.Errorf("image pull failed on host %s: %w", h.ID(), err)
+					continue
+				}
+
+				lastErr = nil
+				hostLog.Info("finished image pull on host")
+				break
 			}
 
-			// Wait for the stream to complete
-			if err := stream.Err(); err != nil {
-				hostLog.Error("image pull failed", "err", err)
-				errChan <- fmt.Errorf("image pull failed on host %s: %w", h.ID(), err)
-				return
+			if lastErr != nil {
+				errChan <- lastErr
 			}
-
-			hostLog.Info("finished image pull on host")
 		}(host)
 	}
 
@@ -524,7 +550,32 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 		return fmt.Errorf("no controller instances found")
 	}
 
-	client, err := controller.NewClient("http://"+instances[0].Addr, instances[0].Meta["AUTH_KEY"])
+	// Create an HTTP client with a custom dialer that resolves .discoverd
+	// hostnames through the discoverd HTTP API, since the host's system DNS
+	// resolver (systemd-resolved) doesn't know about the .discoverd zone.
+	// This also ensures that when the controller deploys itself (one-by-one
+	// strategy), ResumingStream reconnections resolve to whichever controller
+	// instance is currently alive, rather than retrying a dead pinned IP.
+	discoverdDial := func(network, addr string) (net.Conn, error) {
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		if strings.HasSuffix(host, ".discoverd") {
+			service := strings.TrimSuffix(host, ".discoverd")
+			addrs, err := discoverd.NewService(service).Addrs()
+			if err != nil {
+				return nil, err
+			}
+			if len(addrs) == 0 {
+				return nil, fmt.Errorf("lookup %s: no such host", host)
+			}
+			addr = addrs[0]
+		}
+		return dialer.Default.Dial(network, addr)
+	}
+	httpClient := &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
+	client, err := controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
 	if err != nil {
 		log.Error("error creating controller client", "err", err)
 		return fmt.Errorf("error creating controller client: %w", err)
