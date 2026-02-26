@@ -518,7 +518,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	cgroupMountFlags := defaultMountFlags
 	// SEC-011: only allow writeable cgroups for system jobs to prevent
 	// user containers from manipulating their own resource limits.
-	if !job.Config.WriteableCgroups || job.Metadata["flynn-controller.type"] != "system" {
+	if !job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system") {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
