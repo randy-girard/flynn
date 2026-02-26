@@ -663,9 +663,13 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	}
 
 	// SEC-007: set AppArmor profile for additional mandatory access control,
-	// but only if AppArmor is available on this system.
+	// but only if AppArmor is fully available. IsEnabled() checks the host,
+	// but we also need /proc/self/attr/exec to exist (which requires AppArmor
+	// LSM to be active in the kernel) for profile application inside containers.
 	if apparmor.IsEnabled() {
-		config.AppArmorProfile = "docker-default"
+		if _, err := os.Stat("/proc/self/attr/exec"); err == nil {
+			config.AppArmorProfile = "docker-default"
+		}
 	}
 
 	if !job.Config.HostPIDNamespace {
