@@ -16,7 +16,8 @@ apt-get install -y linux-gcp \
     iproute2 \
     qemu-kvm \
     apparmor \
-    apparmor-utils
+    apparmor-utils \
+    libseccomp-dev
 
 apt-get clean
 

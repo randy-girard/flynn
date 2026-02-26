@@ -49,6 +49,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/apparmor"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/seccomp"
 	"github.com/rancher/sparse-tools/sparse"
 	"github.com/vishvananda/netlink"
 )
@@ -617,45 +618,48 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 
 	// SEC-006: default Seccomp profile blocking dangerous syscalls
 	// Based on Docker's default profile — deny-list approach with Allow default.
-	config.Seccomp = &configs.Seccomp{
-		DefaultAction: configs.Allow,
-		Syscalls: []*configs.Syscall{
-			{Name: "acct", Action: configs.Errno},
-			{Name: "add_key", Action: configs.Errno},
-			{Name: "bpf", Action: configs.Errno},
-			{Name: "clock_adjtime", Action: configs.Errno},
-			{Name: "clock_settime", Action: configs.Errno},
-			{Name: "create_module", Action: configs.Errno},
-			{Name: "delete_module", Action: configs.Errno},
-			{Name: "finit_module", Action: configs.Errno},
-			{Name: "get_kernel_syms", Action: configs.Errno},
-			{Name: "init_module", Action: configs.Errno},
-			{Name: "ioperm", Action: configs.Errno},
-			{Name: "iopl", Action: configs.Errno},
-			{Name: "kcmp", Action: configs.Errno},
-			{Name: "kexec_file_load", Action: configs.Errno},
-			{Name: "kexec_load", Action: configs.Errno},
-			{Name: "keyctl", Action: configs.Errno},
-			{Name: "lookup_dcookie", Action: configs.Errno},
-			{Name: "mount", Action: configs.Errno},
-			{Name: "move_mount", Action: configs.Errno},
-			{Name: "nfsservctl", Action: configs.Errno},
-			{Name: "open_tree", Action: configs.Errno},
-			{Name: "perf_event_open", Action: configs.Errno},
-			{Name: "pivot_root", Action: configs.Errno},
-			{Name: "query_module", Action: configs.Errno},
-			{Name: "reboot", Action: configs.Errno},
-			{Name: "request_key", Action: configs.Errno},
-			{Name: "setns", Action: configs.Errno},
-			{Name: "settimeofday", Action: configs.Errno},
-			{Name: "stime", Action: configs.Errno},
-			{Name: "swapoff", Action: configs.Errno},
-			{Name: "swapon", Action: configs.Errno},
-			{Name: "umount2", Action: configs.Errno},
-			{Name: "unshare", Action: configs.Errno},
-			{Name: "userfaultfd", Action: configs.Errno},
-			{Name: "_sysctl", Action: configs.Errno},
-		},
+	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
+	if seccomp.IsEnabled() {
+		config.Seccomp = &configs.Seccomp{
+			DefaultAction: configs.Allow,
+			Syscalls: []*configs.Syscall{
+				{Name: "acct", Action: configs.Errno},
+				{Name: "add_key", Action: configs.Errno},
+				{Name: "bpf", Action: configs.Errno},
+				{Name: "clock_adjtime", Action: configs.Errno},
+				{Name: "clock_settime", Action: configs.Errno},
+				{Name: "create_module", Action: configs.Errno},
+				{Name: "delete_module", Action: configs.Errno},
+				{Name: "finit_module", Action: configs.Errno},
+				{Name: "get_kernel_syms", Action: configs.Errno},
+				{Name: "init_module", Action: configs.Errno},
+				{Name: "ioperm", Action: configs.Errno},
+				{Name: "iopl", Action: configs.Errno},
+				{Name: "kcmp", Action: configs.Errno},
+				{Name: "kexec_file_load", Action: configs.Errno},
+				{Name: "kexec_load", Action: configs.Errno},
+				{Name: "keyctl", Action: configs.Errno},
+				{Name: "lookup_dcookie", Action: configs.Errno},
+				{Name: "mount", Action: configs.Errno},
+				{Name: "move_mount", Action: configs.Errno},
+				{Name: "nfsservctl", Action: configs.Errno},
+				{Name: "open_tree", Action: configs.Errno},
+				{Name: "perf_event_open", Action: configs.Errno},
+				{Name: "pivot_root", Action: configs.Errno},
+				{Name: "query_module", Action: configs.Errno},
+				{Name: "reboot", Action: configs.Errno},
+				{Name: "request_key", Action: configs.Errno},
+				{Name: "setns", Action: configs.Errno},
+				{Name: "settimeofday", Action: configs.Errno},
+				{Name: "stime", Action: configs.Errno},
+				{Name: "swapoff", Action: configs.Errno},
+				{Name: "swapon", Action: configs.Errno},
+				{Name: "umount2", Action: configs.Errno},
+				{Name: "unshare", Action: configs.Errno},
+				{Name: "userfaultfd", Action: configs.Errno},
+				{Name: "_sysctl", Action: configs.Errno},
+			},
+		}
 	}
 
 	// SEC-007: set AppArmor profile for additional mandatory access control,

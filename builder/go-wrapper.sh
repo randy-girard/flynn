@@ -30,7 +30,7 @@ fi
 GO_LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${FLYNN_VERSION}"
 
 if [[ "$1" = "build" ]]; then
-	${BIN} $1 -tags apparmor -ldflags "${GO_LDFLAGS}" ${@:2}
+	${BIN} $1 -tags "apparmor seccomp" -ldflags "${GO_LDFLAGS}" ${@:2}
 else
 	${BIN} "$@"
 fi
