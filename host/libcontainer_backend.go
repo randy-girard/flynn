@@ -640,6 +640,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		},
 	}
 
+	// SEC-007: set AppArmor profile for additional mandatory access control
+	config.AppArmorProfile = "docker-default"
+
 	if !job.Config.HostPIDNamespace {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWPID})
 	}
