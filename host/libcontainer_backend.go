@@ -868,6 +868,16 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	if isBuildJob(job) {
 		config.Cgroups.Resources.Memory = 8 * units.GiB * 2   // Hard limit (memory.max) = 16 GiB
 		config.Cgroups.Resources.MemorySwap = 8 * units.GiB   // Swap limit, so total = 16 GiB
+		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
+		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
+		// SEC-015 removed these from defaults but builders require them.
+		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT"} {
+			config.Capabilities.Bounding = append(config.Capabilities.Bounding, cap)
+			config.Capabilities.Inheritable = append(config.Capabilities.Inheritable, cap)
+			config.Capabilities.Effective = append(config.Capabilities.Effective, cap)
+			config.Capabilities.Permitted = append(config.Capabilities.Permitted, cap)
+			config.Capabilities.Ambient = append(config.Capabilities.Ambient, cap)
+		}
 	}
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
 		// cpu.shares is replaced by cpu.weight in cgroups v2

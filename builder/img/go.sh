@@ -8,7 +8,7 @@ gobin_commit="ef6664e41f0bfe3007869844d318bb2bfa2627f9"
 dir="/usr/local"
 
 apt-get update
-apt-get install --yes git build-essential libseccomp-dev
+apt-get install --yes git build-essential pkg-config libseccomp-dev
 apt-get clean
 
 curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
