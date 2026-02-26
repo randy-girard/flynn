@@ -529,7 +529,14 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Type: configs.NEWNS},
 			{Type: configs.NEWUTS},
 			{Type: configs.NEWIPC},
+			{Type: configs.NEWUSER},
 		}),
+		UidMappings: []configs.IDMap{
+			{ContainerID: 0, HostID: 100000, Size: 65536},
+		},
+		GidMappings: []configs.IDMap{
+			{ContainerID: 0, HostID: 100000, Size: 65536},
+		},
 		Cgroups: &configs.Cgroup{
 			Path: filepath.Join("/flynn", job.Partition, job.ID),
 			Resources: &configs.Resources{
@@ -1647,7 +1654,7 @@ func (l *LibcontainerBackend) CloseLogs() (host.LogBuffers, error) {
 }
 
 func bindMount(src, dest string, writeable bool) *configs.Mount {
-	flags := syscall.MS_BIND | syscall.MS_REC
+	flags := syscall.MS_BIND | syscall.MS_REC | syscall.MS_NOSUID | syscall.MS_NODEV
 	if !writeable {
 		flags |= syscall.MS_RDONLY
 	}
