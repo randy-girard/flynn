@@ -88,6 +88,62 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// SEC-017: perIPRateLimiter tracks request counts per client IP to prevent
+// API abuse and denial-of-service attacks.
+type perIPRateLimiter struct {
+	mu       sync.Mutex
+	requests map[string]int
+	limit    int
+	window   time.Duration
+}
+
+func newPerIPRateLimiter(limit int, window time.Duration) *perIPRateLimiter {
+	rl := &perIPRateLimiter{
+		requests: make(map[string]int),
+		limit:    limit,
+		window:   window,
+	}
+	go func() {
+		for range time.Tick(window) {
+			rl.mu.Lock()
+			rl.requests = make(map[string]int)
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+func (rl *perIPRateLimiter) Allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.requests[ip]++
+	return rl.requests[ip] <= rl.limit
+}
+
+func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
+	limiter := newPerIPRateLimiter(100, time.Minute) // 100 requests per minute per IP
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Exempt health checks from rate limiting
+		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+		if !limiter.Allow(ip) {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.RatelimitedErrorCode,
+				Message: "too many requests, try again later",
+				Retry:   true,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 var ErrNotFound = errors.New("host: unknown job")
 
 func (h *Host) StopJob(id string) error {
@@ -653,7 +709,8 @@ func (h *Host) ServeHTTP() {
 
 	h.sman.RegisterRoutes(r)
 
-	go http.Serve(h.listener, h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r))))
+	// SEC-017: apply rate limiting before auth to prevent brute-force attacks
+	go http.Serve(h.listener, h.rateLimitMiddleware(h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))))
 }
 
 func (h *Host) OpenDBs() error {
