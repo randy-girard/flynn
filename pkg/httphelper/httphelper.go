@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"reflect"
 	"strings"
 	"syscall"
@@ -91,13 +92,25 @@ func IsRetryableError(err error) bool {
 	return ok && e.Retry
 }
 
-var CORSAllowAll = &cors.Options{
-	AllowAllOrigins:  true,
-	AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"},
-	AllowHeaders:     []string{"Auth-Key", "Authorization", "Accept", "Content-Type", "If-Match", "If-None-Match", "X-GRPC-Web"},
-	ExposeHeaders:    []string{"ETag", "Content-Disposition"},
-	AllowCredentials: true,
-	MaxAge:           time.Hour,
+// SEC-016: CORSAllowAll defaults to permissive CORS for backwards compatibility.
+// Set CORS_ALLOWED_ORIGINS environment variable to a comma-separated list of
+// allowed origins to restrict cross-origin requests.
+var CORSAllowAll = newCORSOptions()
+
+func newCORSOptions() *cors.Options {
+	opts := &cors.Options{
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"},
+		AllowHeaders:     []string{"Auth-Key", "Authorization", "Accept", "Content-Type", "If-Match", "If-None-Match", "X-GRPC-Web"},
+		ExposeHeaders:    []string{"ETag", "Content-Disposition"},
+		AllowCredentials: true,
+		MaxAge:           time.Hour,
+	}
+	if origins := os.Getenv("CORS_ALLOWED_ORIGINS"); origins != "" {
+		opts.AllowOrigins = strings.Split(origins, ",")
+	} else {
+		opts.AllowAllOrigins = true
+	}
+	return opts
 }
 
 // Handler is an extended version of http.Handler that also takes a context
