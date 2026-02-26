@@ -442,14 +442,16 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
-	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system job
-	if job.Config.HostNetwork && job.Metadata["flynn-controller.type"] != "system" {
+	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system or builder job
+	isSystemJob := job.Metadata["flynn-controller.type"] == "system"
+	isBuilderJob := job.Metadata["flynn-controller.app_name"] == "builder"
+	if job.Config.HostNetwork && !isSystemJob && !isBuilderJob {
 		log.Warn("rejecting non-system job requesting host network")
 		httphelper.ValidationError(w, "host_network", "only allowed for system jobs")
 		h.addJobRateLimitBucket.Put()
 		return
 	}
-	if job.Config.HostPIDNamespace && job.Metadata["flynn-controller.type"] != "system" {
+	if job.Config.HostPIDNamespace && !isSystemJob && !isBuilderJob {
 		log.Warn("rejecting non-system job requesting host PID namespace")
 		httphelper.ValidationError(w, "host_pid_namespace", "only allowed for system jobs")
 		h.addJobRateLimitBucket.Put()
