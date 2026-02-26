@@ -512,7 +512,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	container.TmpPath = tmpPath
 
 	cgroupMountFlags := defaultMountFlags
-	if !job.Config.WriteableCgroups {
+	// SEC-011: only allow writeable cgroups for system jobs to prevent
+	// user containers from manipulating their own resource limits.
+	if !job.Config.WriteableCgroups || job.Metadata["flynn-controller.type"] != "system" {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
