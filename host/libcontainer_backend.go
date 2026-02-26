@@ -1195,6 +1195,11 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 			defer logger.Close()
 			for range notifyOOM {
 				logger.Crit("FATAL: Container hard memory limit (2x configured limit) exceeded - container killed due to vastly exceeding memory limits")
+				if wd := c.l.host.webhookDispatcher; wd != nil {
+					wd.Send(host.CodeMemoryHard, "Hard memory limit exceeded (OOM kill)", host.SeverityCritical, c.job.ID, nil, map[string]string{
+						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
+					})
+				}
 			}
 		}()
 	}
@@ -1805,6 +1810,13 @@ func (c *Container) monitorMemoryUsage(log log15.Logger) {
 					"usage_percent", float64(memUsage)*100.0/float64(c.softLimitBytes))
 				logger.Close()
 				c.softLimitLogged = true
+				if wd := c.l.host.webhookDispatcher; wd != nil {
+					wd.Send(host.CodeMemorySoft, "Soft memory limit exceeded", host.SeverityWarning, c.job.ID, nil, map[string]string{
+						"usage_bytes":      fmt.Sprintf("%d", memUsage),
+						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
+						"usage_percent":    fmt.Sprintf("%.1f", float64(memUsage)*100.0/float64(c.softLimitBytes)),
+					})
+				}
 			} else if memUsage <= c.softLimitBytes && c.softLimitLogged {
 				// Memory usage dropped below soft limit, reset flag
 				c.softLimitLogged = false

@@ -289,3 +289,25 @@ func (c *Host) RemoveSink(id string) error {
 	}
 	return c.c.Delete("/sinks/" + id)
 }
+
+// AddWebhook registers a webhook endpoint on the host.
+// If id is empty, the server generates one.
+func (c *Host) AddWebhook(id, url string) (*host.WebhookConfig, error) {
+	input := struct {
+		ID  string `json:"id,omitempty"`
+		URL string `json:"url"`
+	}{ID: id, URL: url}
+	var wh host.WebhookConfig
+	return &wh, c.c.Post("/host/webhooks", &input, &wh)
+}
+
+// ListWebhooks returns all configured webhooks on the host.
+func (c *Host) ListWebhooks() ([]*host.WebhookConfig, error) {
+	var webhooks []*host.WebhookConfig
+	return webhooks, c.c.Get("/host/webhooks", &webhooks)
+}
+
+// RemoveWebhook removes a webhook by ID.
+func (c *Host) RemoveWebhook(id string) error {
+	return c.c.Delete(fmt.Sprintf("/host/webhooks/%s", id))
+}

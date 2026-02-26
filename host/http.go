@@ -21,6 +21,7 @@ import (
 	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/keepalive"
+	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sse"
 	"github.com/inconshreveable/log15"
@@ -48,6 +49,8 @@ type Host struct {
 	maxJobConcurrency uint64
 
 	authKey string
+	
+	webhookDispatcher *WebhookDispatcher
 
 	log log15.Logger
 }
@@ -694,7 +697,53 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.POST("/host/resource-check", h.ResourceCheck)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/tags", h.UpdateTags)
+	r.POST("/host/webhooks", h.AddWebhook)
+	r.GET("/host/webhooks", h.ListWebhooks)
+	r.DELETE("/host/webhooks/:id", h.RemoveWebhook)
 	return nil
+}
+
+func (h *jobAPI) AddWebhook(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var input struct {
+		ID  string `json:"id"`
+		URL string `json:"url"`
+	}
+	if err := httphelper.DecodeJSON(r, &input); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	if input.URL == "" {
+		httphelper.ValidationError(w, "url", "url is required")
+		return
+	}
+	id := input.ID
+	if id == "" {
+		id = random.UUID()
+	}
+	wh := &host.WebhookConfig{
+		ID:        id,
+		URL:       input.URL,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := h.host.state.AddWebhook(wh); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, wh)
+}
+
+func (h *jobAPI) ListWebhooks(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	webhooks := h.host.state.ListWebhooks()
+	httphelper.JSON(w, http.StatusOK, webhooks)
+}
+
+func (h *jobAPI) RemoveWebhook(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id := ps.ByName("id")
+	if err := h.host.state.RemoveWebhook(id); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Host) ServeHTTP() {

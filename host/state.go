@@ -53,6 +53,8 @@ type State struct {
 	dbCond        *sync.Cond
 
 	backend Backend
+
+	webhookDispatcher *WebhookDispatcher
 }
 
 func NewState(id string, stateFilePath string) *State {
@@ -187,6 +189,7 @@ func (s *State) OpenDB() error {
 		tx.CreateBucketIfNotExists([]byte("backend-jobs"))
 		tx.CreateBucketIfNotExists([]byte("backend-global"))
 		tx.CreateBucketIfNotExists([]byte("persistent-jobs"))
+		tx.CreateBucketIfNotExists([]byte("webhooks"))
 		return nil
 	}); err != nil {
 		return fmt.Errorf("could not initialize host persistence db: %s", err)
@@ -617,6 +620,31 @@ func (s *State) sendEvent(job *host.ActiveJob, event host.JobEventType) {
 			ch <- e
 		}
 	}()
+
+	// Dispatch webhook events for job lifecycle changes
+	if s.webhookDispatcher != nil {
+		var code, desc, severity string
+		switch event {
+		case host.JobEventCreate:
+			code, desc, severity = host.CodeJobCreate, "Job created", host.SeverityInfo
+		case host.JobEventStart:
+			code, desc, severity = host.CodeJobStart, "Job started", host.SeverityInfo
+		case host.JobEventStop:
+			if job.Status == host.StatusCrashed {
+				code, desc, severity = host.CodeJobCrash, "Job crashed (non-zero exit)", host.SeverityError
+			} else {
+				code, desc, severity = host.CodeJobStop, "Job stopped", host.SeverityInfo
+			}
+		case host.JobEventCleanup:
+			code, desc, severity = host.CodeJobCleanup, "Job cleaned up", host.SeverityInfo
+		case host.JobEventError:
+			code, desc, severity = host.CodeJobFailed, "Job failed to start", host.SeverityError
+		default:
+			return
+		}
+		j := job.Dup()
+		s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, j, nil)
+	}
 }
 
 func (s *State) SetPersistentSlot(slot string, jobID string) error {
@@ -632,4 +660,54 @@ func (s *State) SetPersistentSlot(slot string, jobID string) error {
 
 func statusDown(s host.JobStatus) bool {
 	return s == host.StatusDone || s == host.StatusCrashed || s == host.StatusFailed
+}
+
+// AddWebhook persists a webhook configuration to the database.
+func (s *State) AddWebhook(wh *host.WebhookConfig) error {
+	if err := s.Acquire(); err != nil {
+		return err
+	}
+	defer s.Release()
+	return s.stateDB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("webhooks"))
+		data, err := json.Marshal(wh)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(wh.ID), data)
+	})
+}
+
+// RemoveWebhook removes a webhook by ID.
+func (s *State) RemoveWebhook(id string) error {
+	if err := s.Acquire(); err != nil {
+		return err
+	}
+	defer s.Release()
+	return s.stateDB.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket([]byte("webhooks")).Delete([]byte(id))
+	})
+}
+
+// ListWebhooks returns all configured webhooks.
+func (s *State) ListWebhooks() []*host.WebhookConfig {
+	var webhooks []*host.WebhookConfig
+	if s.stateDB == nil {
+		return webhooks
+	}
+	s.stateDB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte("webhooks"))
+		if b == nil {
+			return nil
+		}
+		return b.ForEach(func(k, v []byte) error {
+			wh := &host.WebhookConfig{}
+			if err := json.Unmarshal(v, wh); err != nil {
+				return nil // skip corrupt entries
+			}
+			webhooks = append(webhooks, wh)
+			return nil
+		})
+	})
+	return webhooks
 }
