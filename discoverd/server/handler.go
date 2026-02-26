@@ -1,6 +1,7 @@
 package server
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -45,6 +46,9 @@ func NewHandler(proxy bool, peers []string) *Handler {
 	h.Peers = peers
 	h.Proxy.Store(proxy)
 
+	// SEC-009: read auth key from environment
+	h.AuthKey = os.Getenv("DISCOVERD_AUTH_KEY")
+
 	if os.Getenv("DEBUG") != "" {
 		h.Handler = hh.ContextInjector("discoverd", hh.NewRequestLoggerCustom(h.Handler, loggerFn))
 	}
@@ -81,6 +85,7 @@ func NewHandler(proxy bool, peers []string) *Handler {
 // Handler represents an HTTP handler for the Store.
 type Handler struct {
 	http.Handler
+	AuthKey  string       // SEC-009: auth key for discoverd API
 	Shutdown atomic.Value // bool
 	Proxy    atomic.Value // bool
 	Main     interface {
@@ -122,6 +127,23 @@ func proxyWhitelisted(r *http.Request) bool {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// SEC-009: authenticate requests if an auth key is configured
+	if h.AuthKey != "" && r.URL.Path != status.Path && r.URL.Path != "/ping" {
+		var token string
+		if v := r.Header.Get("Auth-Key"); v != "" {
+			token = v
+		} else if _, password, ok := r.BasicAuth(); ok {
+			token = password
+		}
+		if subtle.ConstantTimeCompare([]byte(token), []byte(h.AuthKey)) != 1 {
+			hh.Error(w, hh.JSONError{
+				Code:    hh.UnauthorizedErrorCode,
+				Message: "valid Auth-Key header or Basic auth password required",
+			})
+			return
+		}
+	}
+
 	if h.Shutdown.Load().(bool) {
 		hh.ServiceUnavailableError(w, "discoverd: shutting down")
 		return
