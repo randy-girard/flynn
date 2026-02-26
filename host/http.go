@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +47,45 @@ type Host struct {
 
 	maxJobConcurrency uint64
 
+	authKey string
+
 	log log15.Logger
+}
+
+// authMiddleware wraps an http.Handler and requires a valid Auth-Key header
+// or Basic auth password matching the host's authKey. If no authKey is
+// configured, all requests are allowed (backwards compatibility).
+func (h *Host) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.authKey == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Allow unauthenticated health checks
+		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		key := r.Header.Get("Auth-Key")
+		if key == "" {
+			// Fall back to Basic auth password
+			_, key, _ = r.BasicAuth()
+		}
+
+		if key == "" || len(key) != len(h.authKey) ||
+			subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.UnauthorizedErrorCode,
+				Message: "authentication required",
+			})
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 var ErrNotFound = errors.New("host: unknown job")
@@ -600,7 +639,7 @@ func (h *Host) ServeHTTP() {
 
 	h.sman.RegisterRoutes(r)
 
-	go http.Serve(h.listener, httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))
+	go http.Serve(h.listener, h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r))))
 }
 
 func (h *Host) OpenDBs() error {
