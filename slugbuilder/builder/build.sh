@@ -102,6 +102,17 @@ chown -R "${USER}:${USER}" \
   "${build_dir}" \
   "${cache_root}"
 
+## Protect CONTROLLER_KEY from buildpack code
+# Save the controller key to a root-only file so that /bin/create-artifact
+# (which runs as root) can still read it, but buildpack code (which runs as
+# the unprivileged "flynn" user) cannot access it.
+if [[ -n "${CONTROLLER_KEY}" ]]; then
+  mkdir -p /run/secrets
+  echo "${CONTROLLER_KEY}" > /run/secrets/controller_key
+  chmod 600 /run/secrets/controller_key
+  unset CONTROLLER_KEY
+fi
+
 ## Buildpack fixes
 
 export APP_DIR="${app_dir}"

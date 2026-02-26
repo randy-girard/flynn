@@ -48,7 +48,16 @@ func main() {
 }
 
 func run(dir string, uid, gid int) error {
-	client, err := controller.NewClient("", os.Getenv("CONTROLLER_KEY"))
+	controllerKey := os.Getenv("CONTROLLER_KEY")
+	if controllerKey == "" {
+		// Fall back to reading from a root-only secrets file (SEC-003:
+		// the key is no longer exposed as an environment variable to
+		// prevent buildpack code from accessing it).
+		if data, err := ioutil.ReadFile("/run/secrets/controller_key"); err == nil {
+			controllerKey = strings.TrimSpace(string(data))
+		}
+	}
+	client, err := controller.NewClient("", controllerKey)
 	if err != nil {
 		return err
 	}
