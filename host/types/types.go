@@ -476,3 +476,57 @@ type AllJobsStats struct {
 	Timestamp time.Time         `json:"timestamp"`
 	Jobs      []*ContainerStats `json:"jobs"`
 }
+
+// WebhookConfig represents a configured webhook endpoint
+type WebhookConfig struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// WebhookEvent is the payload sent to webhook endpoints
+type WebhookEvent struct {
+	EventID     string            `json:"event_id"`
+	Timestamp   time.Time         `json:"timestamp"`
+	HostID      string            `json:"host_id"`
+	Code        string            `json:"code"`
+	Description string            `json:"description"`
+	Severity    string            `json:"severity"`     // "info", "warning", "error", "critical"
+	JobID       string            `json:"job_id,omitempty"`
+	Job         *ActiveJob        `json:"job,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// Webhook event severity levels
+const (
+	SeverityInfo     = "info"
+	SeverityWarning  = "warning"
+	SeverityError    = "error"
+	SeverityCritical = "critical"
+)
+
+// Webhook event codes
+
+// H-codes: Job/Container lifecycle events
+const (
+	CodeJobCreate      = "H10" // Job created
+	CodeJobStart       = "H11" // Job started (running)
+	CodeJobStop        = "H12" // Job stopped (exit 0)
+	CodeJobCrash       = "H13" // Job crashed (non-zero exit)
+	CodeJobFailed      = "H14" // Job failed to start
+	CodeJobCleanup     = "H15" // Job cleaned up
+	CodeMemorySoft     = "H20" // Soft memory limit exceeded
+	CodeMemoryHard     = "H21" // Hard memory limit exceeded (OOM kill)
+)
+
+// R-codes: Runtime events
+const (
+	CodeMountFailure   = "R10" // Squashfs mount/verification failure
+)
+
+// D-codes: Daemon lifecycle events
+const (
+	CodeDaemonStart    = "D10" // Daemon started
+	CodeDaemonShutdown = "D11" // Daemon shutting down
+	CodeDaemonUpdate   = "D12" // Daemon zero-downtime update initiated
+)
