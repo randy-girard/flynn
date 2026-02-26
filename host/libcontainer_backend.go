@@ -819,10 +819,12 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		return err
 	}
 
+	noNewPriv := true
 	process := &libcontainer.Process{
-		Init: true,
-		Args: []string{"/.containerinit", job.ID},
-		User: "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
+		Init:            true,
+		Args:            []string{"/.containerinit", job.ID},
+		User:            "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
+		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
 		c.Destroy()
