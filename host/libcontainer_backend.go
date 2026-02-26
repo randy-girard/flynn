@@ -550,11 +550,27 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				MemorySwap: defaultMemory,     // Swap limit = default, so total = 2x default
 			},
 		},
+		// SEC-012: expanded masked paths matching Docker defaults to prevent
+		// information leakage and attacks via /proc and /sys pseudofiles.
 		MaskPaths: []string{
+			"/proc/acpi",
+			"/proc/asound",
 			"/proc/kcore",
+			"/proc/keys",
+			"/proc/latency_stats",
+			"/proc/timer_list",
+			"/proc/timer_stats",
+			"/proc/sched_debug",
+			"/proc/scsi",
+			"/sys/firmware",
+			"/sys/devices/virtual/powercap",
 		},
 		ReadonlyPaths: []string{
-			"/proc/sys", "/proc/sysrq-trigger", "/proc/irq", "/proc/bus",
+			"/proc/bus",
+			"/proc/fs",
+			"/proc/irq",
+			"/proc/sys",
+			"/proc/sysrq-trigger",
 		},
 		Devices: host.ConfigDevices(*job.Config.AutoCreatedDevices),
 		Mounts: append([]*configs.Mount{rootMount}, []*configs.Mount{
