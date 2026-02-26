@@ -46,6 +46,10 @@ apt-get install -y \
   gcc \
   gnupg \
   libdigest-sha-perl \
+  pkg-config \
+  libseccomp-dev \
+  apparmor \
+  apparmor-utils \
   linux-modules-extra-$(uname -r)
 
 

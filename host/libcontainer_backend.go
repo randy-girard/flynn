@@ -663,12 +663,14 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	}
 
 	// SEC-007: set AppArmor profile for additional mandatory access control,
-	// but only if AppArmor is fully available. IsEnabled() checks the host,
-	// but we also need /proc/self/attr/exec to exist (which requires AppArmor
-	// LSM to be active in the kernel) for profile application inside containers.
-	if apparmor.IsEnabled() {
-		if _, err := os.Stat("/proc/self/attr/exec"); err == nil {
-			config.AppArmorProfile = "docker-default"
+	// but only if AppArmor is fully available AND the flynn-default profile
+	// is actually loaded in the kernel. Build jobs are excluded because they
+	// need broad filesystem access (e.g., installing kernel packages to /lib/modules).
+	if !isBuildJob(job) && apparmor.IsEnabled() {
+		if profileData, err := ioutil.ReadFile("/sys/kernel/security/apparmor/profiles"); err == nil {
+			if strings.Contains(string(profileData), "flynn-default") {
+				config.AppArmorProfile = "flynn-default"
+			}
 		}
 	}
 

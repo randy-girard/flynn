@@ -127,6 +127,80 @@ do_remove() {
   info "Flynn successfully removed"
 }
 
+setup_apparmor() {
+  if [[ ! -d /sys/kernel/security/apparmor ]]; then
+    warn "AppArmor is not supported by this kernel. Skipping AppArmor setup."
+    return 0
+  fi
+
+  local enabled
+  enabled=$(cat /sys/module/apparmor/parameters/enabled 2>/dev/null || echo "N")
+  if [[ "${enabled}" != "Y" ]]; then
+    warn "AppArmor is not enabled in the kernel. Skipping AppArmor setup."
+    return 0
+  fi
+
+  if ! command -v apparmor_parser &>/dev/null; then
+    warn "apparmor_parser not found. Skipping AppArmor profile setup."
+    return 0
+  fi
+
+  local profile_name="flynn-default"
+  local profile_dst="/etc/apparmor.d/${profile_name}"
+
+  info "installing ${profile_name} AppArmor profile"
+  cat > "${profile_dst}" <<'APPARMOR_PROFILE'
+#include <tunables/global>
+
+profile flynn-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  network,
+  capability,
+  file,
+  umount,
+
+  deny @{PROC}/sys/fs/** wklx,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/mem rwklx,
+  deny @{PROC}/kmem rwklx,
+  deny @{PROC}/kcore rwklx,
+  deny @{PROC}/sys/kernel/[^s][^h][^m]* wklx,
+  deny @{PROC}/sys/kernel/*/** wklx,
+
+  deny mount,
+
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/efi/efivars/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+  deny /sys/kernel/debug/** rwklx,
+
+  deny ptrace (trace) peer=*,
+  ptrace (read,readby,tracedby) peer=flynn-default,
+
+  deny /dev/mem rwklx,
+  deny /dev/kmem rwklx,
+  deny /dev/port rwklx,
+
+  deny /lib/modules/** wklx,
+  deny /usr/lib/modules/** wklx,
+
+  signal (send,receive) peer=flynn-default,
+  signal (send,receive) peer=unconfined,
+}
+APPARMOR_PROFILE
+
+  info "loading ${profile_name} AppArmor profile"
+  if apparmor_parser -r -W "${profile_dst}" 2>/dev/null || apparmor_parser -a -W "${profile_dst}" 2>/dev/null; then
+    info "${profile_name} AppArmor profile loaded successfully"
+  else
+    warn "failed to load ${profile_name} AppArmor profile. Containers will run without AppArmor confinement."
+  fi
+}
+
 install_systemd_unit() {
   info "installing systemd unit"
   cat > /lib/systemd/system/flynn-host.service <<EOF
@@ -409,7 +483,7 @@ main() {
   info "installing Flynn ${VERSION} from ${INSTALL_SOURCE}"
 
   # Install runtime dependencies
-  local packages=("iptables" "zfsutils-linux" "jq")
+  local packages=("iptables" "zfsutils-linux" "jq" "apparmor" "apparmor-utils")
   if $install_ntp; then
     packages+=("ntp")
   fi
@@ -418,6 +492,9 @@ main() {
   run apt-get install --yes ${packages[@]}
   info "loading zfs kernel module"
   run modprobe zfs
+
+  # Setup AppArmor profile for container confinement (SEC-007)
+  setup_apparmor
 
   # Create directories
   mkdir -p "${CONFIG_DIR}" "/var/lib/flynn/layer-cache"
