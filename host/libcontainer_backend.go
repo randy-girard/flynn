@@ -180,7 +180,9 @@ type Container struct {
 }
 
 func writeContainerConfig(path string, c *containerinit.Config, envs ...map[string]string) error {
-	f, err := os.Create(path)
+	// SEC-014: create config file with restrictive permissions (0600) to
+	// prevent other processes from reading sensitive environment variables.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
