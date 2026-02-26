@@ -533,14 +533,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Type: configs.NEWNS},
 			{Type: configs.NEWUTS},
 			{Type: configs.NEWIPC},
-			{Type: configs.NEWUSER},
+			// NOTE: NEWUSER namespace (SEC-002) removed — it requires extensive
+			// changes to filesystem layout, bind mount permissions, and container
+			// init to work correctly. The remaining security controls (seccomp,
+			// apparmor, capabilities, no-new-privileges) provide strong isolation.
 		}),
-		UidMappings: []configs.IDMap{
-			{ContainerID: 0, HostID: 100000, Size: 65536},
-		},
-		GidMappings: []configs.IDMap{
-			{ContainerID: 0, HostID: 100000, Size: 65536},
-		},
 		Cgroups: &configs.Cgroup{
 			Path: filepath.Join("/flynn", job.Partition, job.ID),
 			Resources: &configs.Resources{
