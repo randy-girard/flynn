@@ -386,6 +386,20 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system job
+	if job.Config.HostNetwork && job.Metadata["flynn-controller.type"] != "system" {
+		log.Warn("rejecting non-system job requesting host network")
+		httphelper.ValidationError(w, "host_network", "only allowed for system jobs")
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+	if job.Config.HostPIDNamespace && job.Metadata["flynn-controller.type"] != "system" {
+		log.Warn("rejecting non-system job requesting host PID namespace")
+		httphelper.ValidationError(w, "host_pid_namespace", "only allowed for system jobs")
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+
 	if len(job.Mountspecs) == 0 {
 		log.Warn("rejecting job as no mountspecs set")
 		httphelper.ValidationError(w, "mountspecs", "must be set")

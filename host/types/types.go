@@ -184,8 +184,17 @@ func (x ContainerConfig) Merge(y ContainerConfig) ContainerConfig {
 	if y.Gid != nil {
 		x.Gid = y.Gid
 	}
-	x.HostNetwork = x.HostNetwork || y.HostNetwork
-	x.HostPIDNamespace = x.HostPIDNamespace || y.HostPIDNamespace
+	// SEC-008: HostNetwork and HostPIDNamespace are security-sensitive flags
+	// that should only be set explicitly, not escalated via OR merge.
+	// The merged config uses y's values if set, otherwise keeps x's values.
+	// This prevents a lower-privilege config from gaining host namespace access
+	// by merging with any config that happens to have them enabled.
+	if y.HostNetwork {
+		x.HostNetwork = y.HostNetwork
+	}
+	if y.HostPIDNamespace {
+		x.HostPIDNamespace = y.HostPIDNamespace
+	}
 	return x
 }
 
