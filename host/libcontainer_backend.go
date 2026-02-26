@@ -47,6 +47,7 @@ import (
 	dhcp "github.com/krolaw/dhcp4"
 	"github.com/miekg/dns"
 	"github.com/opencontainers/runc/libcontainer"
+	"github.com/opencontainers/runc/libcontainer/apparmor"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/rancher/sparse-tools/sparse"
 	"github.com/vishvananda/netlink"
@@ -657,8 +658,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		},
 	}
 
-	// SEC-007: set AppArmor profile for additional mandatory access control
-	config.AppArmorProfile = "docker-default"
+	// SEC-007: set AppArmor profile for additional mandatory access control,
+	// but only if AppArmor is available on this system.
+	if apparmor.IsEnabled() {
+		config.AppArmorProfile = "docker-default"
+	}
 
 	if !job.Config.HostPIDNamespace {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWPID})
