@@ -793,10 +793,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		softLimitBytes = uint64(defaultMemory)
 	}
 	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
-	// Skip memory limits so they inherit the parent cgroup (effectively unlimited).
+	// Set an 8 GiB hard limit instead of leaving them unlimited (SEC-004).
 	if isBuildJob(job) {
-		config.Cgroups.Resources.Memory = 0
-		config.Cgroups.Resources.MemorySwap = 0
+		config.Cgroups.Resources.Memory = 8 * units.GiB * 2   // Hard limit (memory.max) = 16 GiB
+		config.Cgroups.Resources.MemorySwap = 8 * units.GiB   // Swap limit, so total = 16 GiB
 	}
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
 		// cpu.shares is replaced by cpu.weight in cgroups v2
