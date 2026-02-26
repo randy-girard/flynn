@@ -125,6 +125,9 @@ Options:
 	} else if buildpackURL, ok := prevRelease.Env["BUILDPACK_URL"]; ok {
 		jobEnv["BUILDPACK_URL"] = buildpackURL
 	}
+	// SEC-010: SSH keys are passed via environment but build.sh saves them
+	// to root-only files and unsets them from the environment before any
+	// buildpack code executes.
 	for _, k := range []string{"SSH_CLIENT_KEY", "SSH_CLIENT_HOSTS"} {
 		if v := os.Getenv(k); v != "" {
 			jobEnv[k] = v
