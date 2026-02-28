@@ -14,7 +14,10 @@ apt-get install -y linux-gcp \
     iptables \
     net-tools \
     iproute2 \
-    qemu-kvm
+    qemu-kvm \
+    apparmor \
+    apparmor-utils \
+    libseccomp-dev
 
 apt-get clean
 

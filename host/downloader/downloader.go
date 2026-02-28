@@ -13,12 +13,15 @@ import (
 	"github.com/flynn/flynn/host/volume"
 	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/pkg/ghrelease"
+	"github.com/flynn/flynn/pkg/verify"
 	"github.com/inconshreveable/log15"
 )
 
 const (
-	maxDownloadRetries = 3
-	retryDelay         = 2 * time.Second
+	maxDownloadRetries  = 5
+	initialRetryDelay   = 2 * time.Second
+	maxRetryDelay       = 30 * time.Second
+	retryBackoffFactor  = 2
 )
 
 // binaries maps the asset name in the release to the local binary name
@@ -95,9 +98,12 @@ func (d *Downloader) DownloadConfig(dir string) (map[string]string, error) {
 	return paths, nil
 }
 
-// downloadWithRetry wraps the download with retry logic
+// downloadWithRetry wraps the download with exponential backoff retry logic.
+// This helps handle transient GitHub 500 errors, especially when multiple
+// cluster nodes are downloading layers simultaneously.
 func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 	var lastErr error
+	delay := initialRetryDelay
 	for attempt := 1; attempt <= maxDownloadRetries; attempt++ {
 		err := d.client.DownloadFile(assetURL, destPath)
 		if err == nil {
@@ -105,8 +111,12 @@ func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 		}
 		lastErr = err
 		if attempt < maxDownloadRetries {
-			d.log.Warn("download failed, retrying", "attempt", attempt, "err", err)
-			time.Sleep(retryDelay)
+			d.log.Warn("download failed, retrying", "attempt", attempt, "delay", delay, "err", err)
+			time.Sleep(delay)
+			delay *= retryBackoffFactor
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
 		}
 	}
 	return fmt.Errorf("download failed after %d attempts: %s", maxDownloadRetries, lastErr)
@@ -299,10 +309,18 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 
 		for _, rootfs := range manifest.Rootfs {
 			for _, layer := range rootfs.Layers {
-				// Check if layer already exists
+				// Check if layer already exists and has the expected size.
+				// A truncated file (from a previous interrupted download)
+				// must be re-downloaded to avoid "verify: data too short"
+				// errors when the layer is later mounted.
 				layerPath := filepath.Join(layerCacheDir, layer.ID+".squashfs")
-				if _, err := os.Stat(layerPath); err == nil {
-					continue // Layer already cached
+				if fi, err := os.Stat(layerPath); err == nil {
+					if layer.Length > 0 && fi.Size() != layer.Length {
+						d.log.Warn("cached layer has wrong size, re-downloading", "layer", layer.ID, "expected", layer.Length, "actual", fi.Size())
+						os.Remove(layerPath)
+					} else {
+						continue // Layer already cached
+					}
 				}
 
 				ch <- &ct.ImagePullInfo{
@@ -316,10 +334,19 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 					return fmt.Errorf("error downloading layer %s: %s", layer.ID, err)
 				}
 
-				// Import layer into volume manager
+				// Import layer into volume manager (best-effort).
+				// During a zero-downtime daemon restart, the volume
+				// manager's DB may be temporarily closed. Since the
+				// layer file is already on disk, the import can safely
+				// be skipped — the volume manager will discover it on
+				// the next restart or when the layer is first used.
 				if d.vman != nil {
 					if err := d.importLayer(layer, layerPath); err != nil {
-						return fmt.Errorf("error importing layer %s: %s", layer.ID, err)
+						if err == volumemanager.ErrDBClosed || err == volumemanager.ErrVolumeExists {
+							d.log.Warn("skipping layer import", "layer", layer.ID, "reason", err)
+						} else {
+							return fmt.Errorf("error importing layer %s: %s", layer.ID, err)
+						}
 					}
 				}
 			}
@@ -329,12 +356,64 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 	return nil
 }
 
-// downloadLayer downloads a single layer from GitHub releases
+// downloadLayer downloads a single layer from GitHub releases and verifies
+// its integrity using the expected size and cryptographic hashes from the
+// image manifest. If verification fails, the file is deleted and the
+// download is retried with exponential backoff.
 func (d *Downloader) downloadLayer(layer *ct.ImageLayer, cacheDir string) error {
-	// Layers are uploaded directly to the release root (not in a /layers/ subdirectory)
 	layerURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + layer.ID + ".squashfs"
 	destPath := filepath.Join(cacheDir, layer.ID+".squashfs")
-	return d.downloadWithRetry(layerURL, destPath)
+
+	var lastErr error
+	delay := initialRetryDelay
+	for attempt := 1; attempt <= maxDownloadRetries; attempt++ {
+		if attempt > 1 {
+			d.log.Warn("retrying layer download", "layer", layer.ID, "attempt", attempt, "delay", delay, "err", lastErr)
+			time.Sleep(delay)
+			delay *= retryBackoffFactor
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+		}
+
+		if err := d.client.DownloadFile(layerURL, destPath); err != nil {
+			lastErr = err
+			continue
+		}
+
+		// Verify the downloaded file against expected size and hashes
+		if err := verifyLayerFile(destPath, layer.Length, layer.Hashes); err != nil {
+			d.log.Warn("layer verification failed, deleting and retrying", "layer", layer.ID, "err", err)
+			os.Remove(destPath)
+			lastErr = err
+			continue
+		}
+
+		return nil
+	}
+	return fmt.Errorf("download failed after %d attempts: %s", maxDownloadRetries, lastErr)
+}
+
+// verifyLayerFile opens a downloaded layer file and verifies its size and
+// cryptographic hashes match the expected values from the image manifest.
+// Returns nil if no verification data is available (size <= 0 or no hashes).
+func verifyLayerFile(path string, expectedSize int64, hashes map[string]string) error {
+	if expectedSize <= 0 || len(hashes) == 0 {
+		return nil // no verification data available
+	}
+	v, err := verify.NewVerifier(hashes, expectedSize)
+	if err != nil {
+		return err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := io.Copy(io.Discard, v.Reader(f)); err != nil {
+		return err
+	}
+	return v.Verify()
 }
 
 // DownloadImageLayers downloads layers for a set of images from GitHub releases.
@@ -361,11 +440,17 @@ func (d *Downloader) DownloadImageLayers(images map[string]*ct.Artifact, log log
 					continue
 				}
 
-				// Check if layer already exists on disk
+				// Check if layer already exists on disk and has the expected size.
+				// A truncated file must be re-downloaded.
 				layerPath := filepath.Join(layerCacheDir, layer.ID+".squashfs")
-				if _, err := os.Stat(layerPath); err == nil {
-					downloadedLayers[layer.ID] = true
-					continue // Layer already cached
+				if fi, err := os.Stat(layerPath); err == nil {
+					if layer.Length > 0 && fi.Size() != layer.Length {
+						log.Warn("cached layer has wrong size, re-downloading", "layer", layer.ID, "expected", layer.Length, "actual", fi.Size())
+						os.Remove(layerPath)
+					} else {
+						downloadedLayers[layer.ID] = true
+						continue // Layer already cached
+					}
 				}
 
 				log.Info("downloading layer", "image", name, "layer", layer.ID)

@@ -118,6 +118,7 @@ mkdir -p /tmp/discoverd-data
 rm -rf /tmp/flynn-* && \
 rm -rf /var/log/flynn/* && \
 make clean && \
+bash ./host/apparmor/setup-apparmor.sh && \
 ./script/build-flynn --version "${VERSION}" && \
 rm -f build/bin/flynn-builder && \
 rm -f build/bin/flannel-wrapper && \
@@ -139,6 +140,7 @@ while [ $ATTEMPT -le $MAX_RETRIES ]; do
   else
     echo ""
     echo "===> flynn-builder build FAILED (attempt $ATTEMPT of $MAX_RETRIES)!"
+    flynn-host ps -a
     if [ $ATTEMPT -eq $MAX_RETRIES ]; then
       echo "===> Maximum retry attempts reached. Exiting."
       exit 1

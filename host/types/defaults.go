@@ -5,10 +5,10 @@ package host
 import "github.com/opencontainers/runc/libcontainer/configs"
 
 // DefaultCapabilities is the default list of capabilities which are set inside
-// a container, taken from:
-// https://github.com/opencontainers/runc/blob/v1.0.0-rc8/libcontainer/SPEC.md#security
+// a container. SEC-015: removed CAP_NET_RAW (ARP spoofing, raw packet
+// injection), CAP_MKNOD (device node creation), and CAP_SYS_CHROOT
+// (chroot-based escapes) to reduce the attack surface.
 var DefaultCapabilities = []string{
-	"CAP_NET_RAW",
 	"CAP_NET_BIND_SERVICE",
 	"CAP_AUDIT_READ",
 	"CAP_AUDIT_WRITE",
@@ -17,12 +17,10 @@ var DefaultCapabilities = []string{
 	"CAP_SETPCAP",
 	"CAP_SETGID",
 	"CAP_SETUID",
-	"CAP_MKNOD",
 	"CAP_CHOWN",
 	"CAP_FOWNER",
 	"CAP_FSETID",
 	"CAP_KILL",
-	"CAP_SYS_CHROOT",
 }
 
 // DefaultAllowedDevices is the default list of devices containers are allowed

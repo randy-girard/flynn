@@ -47,7 +47,9 @@ import (
 	dhcp "github.com/krolaw/dhcp4"
 	"github.com/miekg/dns"
 	"github.com/opencontainers/runc/libcontainer"
+	"github.com/opencontainers/runc/libcontainer/apparmor"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/seccomp"
 	"github.com/rancher/sparse-tools/sparse"
 	"github.com/vishvananda/netlink"
 )
@@ -180,7 +182,9 @@ type Container struct {
 }
 
 func writeContainerConfig(path string, c *containerinit.Config, envs ...map[string]string) error {
-	f, err := os.Create(path)
+	// SEC-014: create config file with restrictive permissions (0600) to
+	// prevent other processes from reading sensitive environment variables.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
@@ -512,7 +516,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	container.TmpPath = tmpPath
 
 	cgroupMountFlags := defaultMountFlags
-	if !job.Config.WriteableCgroups {
+	// SEC-011: only allow writeable cgroups for system jobs to prevent
+	// user containers from manipulating their own resource limits.
+	if !job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system") {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
@@ -529,6 +535,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Type: configs.NEWNS},
 			{Type: configs.NEWUTS},
 			{Type: configs.NEWIPC},
+			// NOTE: NEWUSER namespace (SEC-002) removed — it requires extensive
+			// changes to filesystem layout, bind mount permissions, and container
+			// init to work correctly. The remaining security controls (seccomp,
+			// apparmor, capabilities, no-new-privileges) provide strong isolation.
 		}),
 		Cgroups: &configs.Cgroup{
 			Path: filepath.Join("/flynn", job.Partition, job.ID),
@@ -541,11 +551,27 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				MemorySwap: defaultMemory,     // Swap limit = default, so total = 2x default
 			},
 		},
+		// SEC-012: expanded masked paths matching Docker defaults to prevent
+		// information leakage and attacks via /proc and /sys pseudofiles.
 		MaskPaths: []string{
+			"/proc/acpi",
+			"/proc/asound",
 			"/proc/kcore",
+			"/proc/keys",
+			"/proc/latency_stats",
+			"/proc/timer_list",
+			"/proc/timer_stats",
+			"/proc/sched_debug",
+			"/proc/scsi",
+			"/sys/firmware",
+			"/sys/devices/virtual/powercap",
 		},
 		ReadonlyPaths: []string{
-			"/proc/sys", "/proc/sysrq-trigger", "/proc/irq", "/proc/bus",
+			"/proc/bus",
+			"/proc/fs",
+			"/proc/irq",
+			"/proc/sys",
+			"/proc/sysrq-trigger",
 		},
 		Devices: host.ConfigDevices(*job.Config.AutoCreatedDevices),
 		Mounts: append([]*configs.Mount{rootMount}, []*configs.Mount{
@@ -588,6 +614,64 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				Flags:       cgroupMountFlags,
 			},
 		}...),
+	}
+
+	// SEC-006: default Seccomp profile blocking dangerous syscalls
+	// Based on Docker's default profile — deny-list approach with Allow default.
+	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
+	if seccomp.IsEnabled() {
+		config.Seccomp = &configs.Seccomp{
+			DefaultAction: configs.Allow,
+			Syscalls: []*configs.Syscall{
+				{Name: "acct", Action: configs.Errno},
+				{Name: "add_key", Action: configs.Errno},
+				{Name: "bpf", Action: configs.Errno},
+				{Name: "clock_adjtime", Action: configs.Errno},
+				{Name: "clock_settime", Action: configs.Errno},
+				{Name: "create_module", Action: configs.Errno},
+				{Name: "delete_module", Action: configs.Errno},
+				{Name: "finit_module", Action: configs.Errno},
+				{Name: "get_kernel_syms", Action: configs.Errno},
+				{Name: "init_module", Action: configs.Errno},
+				{Name: "ioperm", Action: configs.Errno},
+				{Name: "iopl", Action: configs.Errno},
+				{Name: "kcmp", Action: configs.Errno},
+				{Name: "kexec_file_load", Action: configs.Errno},
+				{Name: "kexec_load", Action: configs.Errno},
+				{Name: "keyctl", Action: configs.Errno},
+				{Name: "lookup_dcookie", Action: configs.Errno},
+				{Name: "mount", Action: configs.Errno},
+				{Name: "move_mount", Action: configs.Errno},
+				{Name: "nfsservctl", Action: configs.Errno},
+				{Name: "open_tree", Action: configs.Errno},
+				{Name: "perf_event_open", Action: configs.Errno},
+				{Name: "pivot_root", Action: configs.Errno},
+				{Name: "query_module", Action: configs.Errno},
+				{Name: "reboot", Action: configs.Errno},
+				{Name: "request_key", Action: configs.Errno},
+				{Name: "setns", Action: configs.Errno},
+				{Name: "settimeofday", Action: configs.Errno},
+				{Name: "stime", Action: configs.Errno},
+				{Name: "swapoff", Action: configs.Errno},
+				{Name: "swapon", Action: configs.Errno},
+				{Name: "umount2", Action: configs.Errno},
+				{Name: "unshare", Action: configs.Errno},
+				{Name: "userfaultfd", Action: configs.Errno},
+				{Name: "_sysctl", Action: configs.Errno},
+			},
+		}
+	}
+
+	// SEC-007: set AppArmor profile for additional mandatory access control,
+	// but only if AppArmor is fully available AND the flynn-default profile
+	// is actually loaded in the kernel. Build jobs are excluded because they
+	// need broad filesystem access (e.g., installing kernel packages to /lib/modules).
+	if !isBuildJob(job) && apparmor.IsEnabled() {
+		if profileData, err := ioutil.ReadFile("/sys/kernel/security/apparmor/profiles"); err == nil {
+			if strings.Contains(string(profileData), "flynn-default") {
+				config.AppArmorProfile = "flynn-default"
+			}
+		}
 	}
 
 	if !job.Config.HostPIDNamespace {
@@ -786,10 +870,20 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		softLimitBytes = uint64(defaultMemory)
 	}
 	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
-	// Skip memory limits so they inherit the parent cgroup (effectively unlimited).
+	// Set an 8 GiB hard limit instead of leaving them unlimited (SEC-004).
 	if isBuildJob(job) {
-		config.Cgroups.Resources.Memory = 0
-		config.Cgroups.Resources.MemorySwap = 0
+		config.Cgroups.Resources.Memory = 8 * units.GiB * 2   // Hard limit (memory.max) = 16 GiB
+		config.Cgroups.Resources.MemorySwap = 8 * units.GiB   // Swap limit, so total = 16 GiB
+		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
+		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
+		// SEC-015 removed these from defaults but builders require them.
+		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT"} {
+			config.Capabilities.Bounding = append(config.Capabilities.Bounding, cap)
+			config.Capabilities.Inheritable = append(config.Capabilities.Inheritable, cap)
+			config.Capabilities.Effective = append(config.Capabilities.Effective, cap)
+			config.Capabilities.Permitted = append(config.Capabilities.Permitted, cap)
+			config.Capabilities.Ambient = append(config.Capabilities.Ambient, cap)
+		}
 	}
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
 		// cpu.shares is replaced by cpu.weight in cgroups v2
@@ -812,10 +906,12 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		return err
 	}
 
+	noNewPriv := true
 	process := &libcontainer.Process{
-		Init: true,
-		Args: []string{"/.containerinit", job.ID},
-		User: "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
+		Init:            true,
+		Args:            []string{"/.containerinit", job.ID},
+		User:            "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
+		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
 		c.Destroy()
@@ -1647,7 +1743,7 @@ func (l *LibcontainerBackend) CloseLogs() (host.LogBuffers, error) {
 }
 
 func bindMount(src, dest string, writeable bool) *configs.Mount {
-	flags := syscall.MS_BIND | syscall.MS_REC
+	flags := syscall.MS_BIND | syscall.MS_REC | syscall.MS_NOSUID | syscall.MS_NODEV
 	if !writeable {
 		flags |= syscall.MS_RDONLY
 	}

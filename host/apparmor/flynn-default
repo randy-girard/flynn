@@ -1,0 +1,60 @@
+#include <tunables/global>
+
+# Flynn default AppArmor profile for containers.
+# Based on Docker's default profile and the OCI/runc reference profile.
+# This profile restricts dangerous operations while allowing normal
+# application behavior inside Flynn containers.
+
+profile flynn-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Allow general networking, capabilities (kernel caps are separately restricted),
+  # file access, and unmounting.
+  network,
+  capability,
+  file,
+  umount,
+
+  # Deny write access to sensitive /proc paths
+  deny @{PROC}/sys/fs/** wklx,
+  deny @{PROC}/sysrq-trigger rwklx,
+  deny @{PROC}/mem rwklx,
+  deny @{PROC}/kmem rwklx,
+  deny @{PROC}/kcore rwklx,
+  deny @{PROC}/sys/kernel/[^s][^h][^m]* wklx,
+  deny @{PROC}/sys/kernel/*/** wklx,
+
+  # Deny mounting filesystems (containers should not mount)
+  deny mount,
+
+  # Deny write access to /sys except for cgroups (needed by Flynn system jobs)
+  deny /sys/[^f]*/** wklx,
+  deny /sys/f[^s]*/** wklx,
+  deny /sys/fs/[^c]*/** wklx,
+  deny /sys/fs/c[^g]*/** wklx,
+  deny /sys/fs/cg[^r]*/** wklx,
+  deny /sys/firmware/efi/efivars/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+
+  # Deny access to kernel debugfs
+  deny /sys/kernel/debug/** rwklx,
+
+  # Deny ptrace to prevent container escape via process injection
+  deny ptrace (trace) peer=*,
+  # Allow ptrace read for debugging tools (strace, gdb) within same profile
+  ptrace (read,readby,tracedby) peer=flynn-default,
+
+  # Deny raw hardware access
+  deny /dev/mem rwklx,
+  deny /dev/kmem rwklx,
+  deny /dev/port rwklx,
+
+  # Deny access to kernel module loading paths
+  deny /lib/modules/** wklx,
+  deny /usr/lib/modules/** wklx,
+
+  # Allow signals within the container
+  signal (send,receive) peer=flynn-default,
+  signal (send,receive) peer=unconfined,
+}
+

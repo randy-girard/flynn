@@ -102,13 +102,27 @@ chown -R "${USER}:${USER}" \
   "${build_dir}" \
   "${cache_root}"
 
+## Protect CONTROLLER_KEY from buildpack code
+# Save the controller key to a root-only file so that /bin/create-artifact
+# (which runs as root) can still read it, but buildpack code (which runs as
+# the unprivileged "flynn" user) cannot access it.
+if [[ -n "${CONTROLLER_KEY}" ]]; then
+  mkdir -p /run/secrets
+  echo "${CONTROLLER_KEY}" > /run/secrets/controller_key
+  chmod 600 /run/secrets/controller_key
+  unset CONTROLLER_KEY
+fi
+
 ## Buildpack fixes
 
 export APP_DIR="${app_dir}"
 export HOME="${app_dir}"
 export REQUEST_ID="flynn-build"
 
-# If there is a SSH private key available in the environment, save it so that it can be used
+# SEC-010: Save SSH credentials to files and unset from environment.
+# The key is accessible during build for git operations, then removed
+# after compilation to limit the exposure window.
+ssh_cleanup_needed=false
 if [[ -n "${SSH_CLIENT_KEY}" ]]; then
   mkdir -p ${HOME}/.ssh
   file="${HOME}/.ssh/id_rsa"
@@ -116,9 +130,9 @@ if [[ -n "${SSH_CLIENT_KEY}" ]]; then
   chown -R "${USER}:${USER}" ${HOME}/.ssh
   chmod 600 ${file}
   unset SSH_CLIENT_KEY
+  ssh_cleanup_needed=true
 fi
 
-# If there is a list of known SSH hosts available in the environment, save it so that it can be used
 if [[ -n "${SSH_CLIENT_HOSTS}" ]]; then
   mkdir -p ${HOME}/.ssh
   file="${HOME}/.ssh/known_hosts"
@@ -193,6 +207,14 @@ run_unprivileged ${selected_buildpack}/bin/release \
   "${build_dir}" \
   "${cache_root}" \
   > ${build_dir}/.release
+
+# SEC-010: Remove SSH key material after buildpack compilation is complete.
+# This limits the window during which the key is accessible on disk.
+if [[ "${ssh_cleanup_needed}" == "true" ]]; then
+  rm -f ${HOME}/.ssh/id_rsa
+  rm -f ${HOME}/.ssh/known_hosts
+  ssh_cleanup_needed=false
+fi
 
 ## Display process types
 

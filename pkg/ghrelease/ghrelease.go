@@ -196,7 +196,9 @@ func (c *Client) getRelease(url string) (*Release, error) {
 	return &release, nil
 }
 
-// DownloadFile downloads a file from a URL to the specified path
+// DownloadFile downloads a file from a URL to the specified path.
+// It writes to a temporary file and atomically renames on success,
+// so a partial download never appears at the final path.
 func (c *Client) DownloadFile(url, destPath string) error {
 	c.log.Info("downloading file", "url", url, "dest", destPath)
 
@@ -215,16 +217,29 @@ func (c *Client) DownloadFile(url, destPath string) error {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 
-	out, err := os.Create(destPath)
+	// Write to a temp file in the same directory so os.Rename is atomic
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".download-*")
 	if err != nil {
-		return fmt.Errorf("failed to create file: %w", err)
+		return fmt.Errorf("failed to create temp file: %w", err)
 	}
-	defer out.Close()
+	tmpPath := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpPath) // no-op if rename succeeded
+	}()
 
-	_, err = io.Copy(out, resp.Body)
+	_, err = io.Copy(tmp, resp.Body)
 	if err != nil {
-		os.Remove(destPath)
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	// Ensure data is flushed to disk before renaming
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		return fmt.Errorf("failed to rename temp file: %w", err)
 	}
 
 	return nil

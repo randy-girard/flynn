@@ -3,6 +3,9 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +31,16 @@ func init() {
 }
 
 const blobstoreURL = "http://blobstore.discoverd"
+
+// SEC-013: signedBuildCacheURL generates a build cache URL with an HMAC
+// token scoped to the app ID, preventing one app's build from accessing
+// another app's cache.
+func signedBuildCacheURL(appID, key string) string {
+	mac := hmac.New(sha256.New, []byte(key))
+	mac.Write([]byte(appID))
+	token := hex.EncodeToString(mac.Sum(nil))
+	return fmt.Sprintf("%s/%s-cache.tgz?token=%s", blobstoreURL, appID, token)
+}
 
 func parsePairs(args *docopt.Args, str string) (map[string]string, error) {
 	pairs := args.All[str].([]string)
@@ -113,7 +126,7 @@ Options:
 
 	slugImageID := random.UUID()
 	jobEnv := map[string]string{
-		"BUILD_CACHE_URL": fmt.Sprintf("%s/%s-cache.tgz", blobstoreURL, app.ID),
+		"BUILD_CACHE_URL": signedBuildCacheURL(app.ID, os.Getenv("CONTROLLER_KEY")),
 		"CONTROLLER_KEY":  os.Getenv("CONTROLLER_KEY"),
 		"SLUG_IMAGE_ID":   slugImageID,
 		"SOURCE_VERSION":  args.String["<rev>"],
@@ -125,6 +138,9 @@ Options:
 	} else if buildpackURL, ok := prevRelease.Env["BUILDPACK_URL"]; ok {
 		jobEnv["BUILDPACK_URL"] = buildpackURL
 	}
+	// SEC-010: SSH keys are passed via environment but build.sh saves them
+	// to root-only files and unsets them from the environment before any
+	// buildpack code executes.
 	for _, k := range []string{"SSH_CLIENT_KEY", "SSH_CLIENT_HOSTS"} {
 		if v := os.Getenv(k); v != "" {
 			jobEnv[k] = v

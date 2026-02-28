@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,7 +47,101 @@ type Host struct {
 
 	maxJobConcurrency uint64
 
+	authKey string
+
 	log log15.Logger
+}
+
+// authMiddleware wraps an http.Handler and requires a valid Auth-Key header
+// or Basic auth password matching the host's authKey. If no authKey is
+// configured, all requests are allowed (backwards compatibility).
+func (h *Host) authMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.authKey == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Allow unauthenticated health checks
+		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		key := r.Header.Get("Auth-Key")
+		if key == "" {
+			// Fall back to Basic auth password
+			_, key, _ = r.BasicAuth()
+		}
+
+		if key == "" || len(key) != len(h.authKey) ||
+			subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.UnauthorizedErrorCode,
+				Message: "authentication required",
+			})
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// SEC-017: perIPRateLimiter tracks request counts per client IP to prevent
+// API abuse and denial-of-service attacks.
+type perIPRateLimiter struct {
+	mu       sync.Mutex
+	requests map[string]int
+	limit    int
+	window   time.Duration
+}
+
+func newPerIPRateLimiter(limit int, window time.Duration) *perIPRateLimiter {
+	rl := &perIPRateLimiter{
+		requests: make(map[string]int),
+		limit:    limit,
+		window:   window,
+	}
+	go func() {
+		for range time.Tick(window) {
+			rl.mu.Lock()
+			rl.requests = make(map[string]int)
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+func (rl *perIPRateLimiter) Allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.requests[ip]++
+	return rl.requests[ip] <= rl.limit
+}
+
+func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
+	limiter := newPerIPRateLimiter(100, time.Minute) // 100 requests per minute per IP
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Exempt health checks from rate limiting
+		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+		if !limiter.Allow(ip) {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.RatelimitedErrorCode,
+				Message: "too many requests, try again later",
+				Retry:   true,
+			})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 var ErrNotFound = errors.New("host: unknown job")
@@ -347,6 +442,23 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system or builder job.
+	// System apps set "flynn-system-app" metadata and use the "system" partition.
+	isSystemJob := job.Metadata["flynn-system-app"] == "true" || job.Partition == "system"
+	isBuilderJob := job.Metadata["flynn-controller.app_name"] == "builder"
+	if job.Config.HostNetwork && !isSystemJob && !isBuilderJob {
+		log.Warn("rejecting non-system job requesting host network")
+		httphelper.ValidationError(w, "host_network", "only allowed for system jobs")
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+	if job.Config.HostPIDNamespace && !isSystemJob && !isBuilderJob {
+		log.Warn("rejecting non-system job requesting host PID namespace")
+		httphelper.ValidationError(w, "host_pid_namespace", "only allowed for system jobs")
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+
 	if len(job.Mountspecs) == 0 {
 		log.Warn("rejecting job as no mountspecs set")
 		httphelper.ValidationError(w, "mountspecs", "must be set")
@@ -600,7 +712,8 @@ func (h *Host) ServeHTTP() {
 
 	h.sman.RegisterRoutes(r)
 
-	go http.Serve(h.listener, httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))
+	// SEC-017: apply rate limiting before auth to prevent brute-force attacks
+	go http.Serve(h.listener, h.rateLimitMiddleware(h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))))
 }
 
 func (h *Host) OpenDBs() error {

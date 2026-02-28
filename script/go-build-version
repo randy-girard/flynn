@@ -18,5 +18,5 @@ shift
 
 LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${VERSION}"
 
-exec go build -ldflags "${LDFLAGS}" "$@"
+exec go build -tags "apparmor seccomp" -ldflags "${LDFLAGS}" "$@"
 

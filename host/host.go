@@ -64,6 +64,7 @@ options:
   --init-log-level=LEVEL     containerinit log level [default: info]
   --zpool-name=NAME          zpool name
   --enable-dhcp              enable DHCP server (useful to provide container IPs to VMs running in Flynn jobs)
+  --auth-key=KEY             authentication key for host HTTP API (or set FLYNN_HOST_AUTH_KEY env)
 	`)
 }
 
@@ -332,6 +333,17 @@ func runDaemon(args *docopt.Args) {
 	backend.SetDefaultEnv("LISTEN_IP", listenIP)
 
 	var buffers host.LogBuffers
+	// Read auth key from flag or environment
+	authKey := args.String["--auth-key"]
+	if authKey == "" {
+		authKey = os.Getenv("FLYNN_HOST_AUTH_KEY")
+	}
+	if authKey != "" {
+		log.Info("host HTTP API authentication enabled")
+	} else {
+		log.Warn("host HTTP API authentication disabled (set --auth-key or FLYNN_HOST_AUTH_KEY)")
+	}
+
 	discoverdManager := NewDiscoverdManager(backend, sman, hostID, publishAddr, tags)
 	publishURL := "http://" + publishAddr
 	host := &Host{
@@ -349,6 +361,7 @@ func runDaemon(args *docopt.Args) {
 		volAPI:  volumeapi.NewHTTPAPI(vman),
 		discMan: discoverdManager,
 		log:     logger.New("host.id", hostID),
+		authKey: authKey,
 
 		maxJobConcurrency: maxJobConcurrency,
 	}
