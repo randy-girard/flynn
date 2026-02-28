@@ -83,29 +83,49 @@ func (a *API) createDatabase(w http.ResponseWriter, req *http.Request, _ httprou
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	uri := mongoURI(serviceHost, "27017", "flynn", os.Getenv("MONGO_PWD"), "admin")
-	client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
-	if err != nil {
-		httphelper.Error(w, err)
-		return
-	}
-	defer client.Disconnect(ctx)
-
 	username, password, database := random.Hex(16), random.Hex(16), random.Hex(16)
 
-	// Create a user
-	err = client.Database(database).RunCommand(ctx, bson.D{
-		{Key: "createUser", Value: username},
-		{Key: "pwd", Value: password},
-		{Key: "roles", Value: []bson.M{
-			{"role": "dbOwner", "db": database},
-		}},
-	}).Err()
-	if err != nil {
-		httphelper.Error(w, err)
+	// Retry the createUser command to handle transient NotWritablePrimary errors
+	// that occur when the replica set is being reconfigured after ScaleUp adds
+	// new members (the primary may briefly step down during reconfiguration).
+	var lastErr error
+	for i := 0; i < 30; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+
+		uri := mongoURI(serviceHost, "27017", "flynn", os.Getenv("MONGO_PWD"), "admin")
+		client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+		if err != nil {
+			cancel()
+			lastErr = err
+			time.Sleep(1 * time.Second)
+			continue
+		}
+
+		err = client.Database(database).RunCommand(ctx, bson.D{
+			{Key: "createUser", Value: username},
+			{Key: "pwd", Value: password},
+			{Key: "roles", Value: []bson.M{
+				{"role": "dbOwner", "db": database},
+			}},
+		}).Err()
+		client.Disconnect(ctx)
+		cancel()
+
+		if err == nil {
+			lastErr = nil
+			break
+		}
+
+		lastErr = err
+		// Retry on NotWritablePrimary or other transient errors
+		if !isRetryableMongoError(err) {
+			break
+		}
+		a.logger().Info("retrying createUser after transient error", "err", err, "attempt", i+1)
+		time.Sleep(1 * time.Second)
+	}
+	if lastErr != nil {
+		httphelper.Error(w, lastErr)
 		return
 	}
 
@@ -215,4 +235,22 @@ func (a *API) scaleUp() error {
 	// Mark as successfully scaled up.
 	a.scaledUp = true
 	return nil
+}
+
+
+// isRetryableMongoError returns true for transient MongoDB errors that may
+// occur during replica set reconfiguration (e.g. when adding new members
+// causes the primary to briefly step down).
+func isRetryableMongoError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "NotWritablePrimary") ||
+		strings.Contains(msg, "not primary") ||
+		strings.Contains(msg, "not master") ||
+		strings.Contains(msg, "NotPrimaryOrSecondary") ||
+		strings.Contains(msg, "node is recovering") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset")
 }
