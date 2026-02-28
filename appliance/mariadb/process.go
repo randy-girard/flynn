@@ -569,6 +569,15 @@ func (p *Process) initPrimaryDB() error {
 		return err
 	}
 
+	// Remove default grants for test databases. mysql_install_db may create
+	// entries in mysql.db that allow any user to access databases matching
+	// 'test' or 'test\_%'. Also drop the test database itself if it exists.
+	if _, err := db.Exec(`DELETE FROM mysql.db WHERE Db IN ('test', 'test\_%')`); err != nil {
+		logger.Error("error removing test database grants", "err", err)
+		return err
+	}
+	db.Exec(`DROP DATABASE IF EXISTS test`)
+
 	if _, err := db.Exec(fmt.Sprintf(`CREATE USER 'flynn'@'%%' IDENTIFIED BY '%s'`, p.Password)); err != nil && MySQLErrorNumber(err) != 1396 {
 		logger.Error("error creating database user", "err", err)
 		return err
