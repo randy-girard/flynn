@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/tar"
 	"compress/gzip"
 	"crypto/sha512"
 	"encoding/hex"
@@ -137,7 +138,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	// Update container images and system apps unless --skip-images was specified
 	if !skipImages {
-		if err := updateImages(repo, configDir, release.TagName, log); err != nil {
+		if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
 			return err
 		}
 	}
@@ -361,12 +362,18 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 
 const deployTimeout = 30 * time.Minute
 
-// updateImages downloads the images manifest from GitHub and updates system apps
-func updateImages(repo, configDir, targetVersion string, log log15.Logger) error {
-	log.Info("downloading images manifest from GitHub", "repo", repo, "version", targetVersion)
-
+// updateImages downloads the images manifest and updates system apps.
+// If baseURL is non-empty, images are fetched from that URL instead of GitHub.
+func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
-	d := downloader.New(repo, nil, targetVersion, log)
+	var d *downloader.Downloader
+	if baseURL != "" {
+		log.Info("downloading images manifest from base URL", "base_url", baseURL, "version", targetVersion)
+		d = downloader.NewWithBaseURL(baseURL, nil, targetVersion, log)
+	} else {
+		log.Info("downloading images manifest from GitHub", "repo", repo, "version", targetVersion)
+		d = downloader.New(repo, nil, targetVersion, log)
+	}
 
 	// Download images manifest
 	images, err := d.DownloadImagesManifest(configDir)
@@ -421,7 +428,7 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 				ch := make(chan *ct.ImagePullInfo)
 
 				// Trigger the pull on this host
-				stream, err := h.PullImages(repo, configDir, targetVersion, nil, ch)
+				stream, err := h.PullImages(repo, configDir, targetVersion, baseURL, nil, ch)
 				if err != nil {
 					hostLog.Error("error starting image pull", "err", err)
 					lastErr = fmt.Errorf("error pulling images on host %s: %w", h.ID(), err)
@@ -751,4 +758,248 @@ type jsonDecoderWrapper struct {
 
 func (d *jsonDecoderWrapper) Decode(v interface{}) error {
 	return d.dec.Decode(v)
+}
+
+// runTarballUpdate performs an update from a local tarball file.
+// It extracts the tarball, installs binaries locally, restarts the daemon,
+// starts a temporary HTTP server to serve the extracted contents to all
+// cluster nodes, and then deploys system apps.
+func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log15.Logger) error {
+	binDir := args.String["--bin-dir"]
+	skipImages := args.Bool["--skip-images"]
+	imagesOnly := args.Bool["--images-only"]
+
+	log.Info("starting tarball-based update", "tarball", tarballPath)
+
+	// Verify tarball exists
+	if _, err := os.Stat(tarballPath); err != nil {
+		return fmt.Errorf("tarball not found: %s", tarballPath)
+	}
+
+	// Extract tarball to a temp directory
+	extractDir, err := os.MkdirTemp("", "flynn-tarball-update-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(extractDir)
+
+	log.Info("extracting tarball", "dest", extractDir)
+	tarballVersion, contentDir, err := extractTarball(tarballPath, extractDir)
+	if err != nil {
+		return fmt.Errorf("failed to extract tarball: %w", err)
+	}
+	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
+
+	// Update binaries unless --images-only was specified
+	if !imagesOnly {
+		// Parse checksums from the tarball contents
+		checksumPath := filepath.Join(contentDir, "checksums.sha512")
+		checksums, err := parseChecksums(checksumPath)
+		if err != nil {
+			log.Warn("no checksums file in tarball, skipping verification", "err", err)
+			checksums = nil
+		}
+
+		// Install binaries from extracted files
+		binaries := []struct {
+			gzName   string
+			destName string
+		}{
+			{"flynn-host-linux-amd64.gz", "flynn-host"},
+			{"flynn-init-linux-amd64.gz", "flynn-init"},
+		}
+
+		for _, bin := range binaries {
+			gzPath := filepath.Join(contentDir, bin.gzName)
+			if _, err := os.Stat(gzPath); err != nil {
+				return fmt.Errorf("binary %s not found in tarball: %w", bin.gzName, err)
+			}
+
+			// Verify checksum if available
+			if checksums != nil {
+				if expected, ok := checksums[bin.gzName]; ok {
+					if err := verifyChecksum(gzPath, expected); err != nil {
+						return fmt.Errorf("checksum verification failed for %s: %w", bin.gzName, err)
+					}
+					log.Info("checksum verified", "name", bin.gzName)
+				}
+			}
+
+			destPath := filepath.Join(binDir, bin.destName)
+			if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+				return fmt.Errorf("failed to install %s: %w", bin.destName, err)
+			}
+		}
+
+		log.Info("binaries installed", "version", tarballVersion)
+		fmt.Printf("Flynn binaries installed from tarball (%s)\n", tarballVersion)
+
+		// Trigger zero-downtime daemon restart unless --no-restart was specified
+		if !args.Bool["--no-restart"] {
+			if err := restartDaemon(binDir, log); err != nil {
+				return err
+			}
+			fmt.Printf("Flynn daemon restarted with version %s\n", tarballVersion)
+		} else {
+			log.Info("skipping daemon restart (--no-restart specified)")
+			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
+		}
+	}
+
+	// Update container images and system apps unless --skip-images was specified
+	if !skipImages {
+		// Start a temporary HTTP server to serve the extracted tarball contents
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			return fmt.Errorf("failed to start HTTP server: %w", err)
+		}
+		defer listener.Close()
+
+		// Determine the coordinator's cluster-facing IP
+		coordinatorIP, err := getCoordinatorIP(log)
+		if err != nil {
+			return fmt.Errorf("failed to determine coordinator IP: %w", err)
+		}
+
+		_, port, _ := net.SplitHostPort(listener.Addr().String())
+		baseURL := fmt.Sprintf("http://%s:%s", coordinatorIP, port)
+		log.Info("starting temporary HTTP file server", "base_url", baseURL, "serving", contentDir)
+
+		// Start serving files in a goroutine
+		srv := &http.Server{Handler: http.FileServer(http.Dir(contentDir))}
+		go srv.Serve(listener)
+		defer srv.Close()
+
+		fmt.Printf("Temporary file server started at %s\n", baseURL)
+
+		if err := updateImages("", configDir, tarballVersion, baseURL, log); err != nil {
+			return err
+		}
+	}
+
+	log.Info("tarball update complete", "version", tarballVersion)
+	fmt.Printf("Flynn updated to %s from tarball\n", tarballVersion)
+	return nil
+}
+
+// extractTarball extracts a .tar.gz tarball to the given directory.
+// Returns the version string (from the top-level directory name) and
+// the path to the content directory.
+func extractTarball(tarballPath, destDir string) (version, contentDir string, err error) {
+	f, err := os.Open(tarballPath)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("error reading tarball: %w", err)
+		}
+
+		// Detect version from the top-level directory name (e.g., "flynn-v20260228.0/")
+		if version == "" {
+			parts := strings.SplitN(hdr.Name, "/", 2)
+			if len(parts) > 0 {
+				dirName := parts[0]
+				if strings.HasPrefix(dirName, "flynn-") {
+					version = strings.TrimPrefix(dirName, "flynn-")
+				} else {
+					version = dirName
+				}
+				contentDir = filepath.Join(destDir, dirName)
+			}
+		}
+
+		// Security: prevent path traversal
+		target := filepath.Join(destDir, hdr.Name)
+		if !strings.HasPrefix(target, destDir+string(os.PathSeparator)) && target != destDir {
+			return "", "", fmt.Errorf("tarball contains path outside target: %s", hdr.Name)
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return "", "", err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return "", "", err
+			}
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return "", "", err
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return "", "", err
+			}
+			outFile.Close()
+		}
+	}
+
+	if version == "" {
+		return "", "", fmt.Errorf("could not determine version from tarball")
+	}
+	if contentDir == "" {
+		return "", "", fmt.Errorf("tarball appears to be empty")
+	}
+
+	return version, contentDir, nil
+}
+
+// getCoordinatorIP determines the cluster-facing IP of this node by
+// finding the local host in the cluster and extracting its IP address.
+func getCoordinatorIP(log log15.Logger) (string, error) {
+	clusterClient := cluster.NewClient()
+	hosts, err := clusterClient.Hosts()
+	if err != nil {
+		return "", fmt.Errorf("error discovering cluster hosts: %w", err)
+	}
+
+	localHostname, err := os.Hostname()
+	if err != nil {
+		return "", fmt.Errorf("error getting hostname: %w", err)
+	}
+
+	normalizedHostname := normalizeHostname(localHostname)
+
+	for _, h := range hosts {
+		hostID := h.ID()
+		normalizedHostID := normalizeHostname(hostID)
+
+		if hostID == localHostname ||
+			strings.EqualFold(hostID, localHostname) ||
+			normalizedHostID == normalizedHostname {
+			ip, _, err := net.SplitHostPort(h.Addr())
+			if err != nil {
+				return "", fmt.Errorf("error parsing host address %s: %w", h.Addr(), err)
+			}
+			log.Info("found coordinator IP", "ip", ip, "host_id", hostID)
+			return ip, nil
+		}
+	}
+
+	// Single-node fallback
+	if len(hosts) == 1 {
+		ip, _, err := net.SplitHostPort(hosts[0].Addr())
+		if err != nil {
+			return "", fmt.Errorf("error parsing host address: %w", err)
+		}
+		log.Info("single host cluster, using the only available host", "ip", ip)
+		return ip, nil
+	}
+
+	return "", fmt.Errorf("could not identify local host '%s' in cluster", localHostname)
 }

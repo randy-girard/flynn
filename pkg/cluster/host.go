@@ -221,13 +221,17 @@ func (c *Host) SendSnapshot(snapID string, assumeHaves []json.RawMessage) (io.Re
 	return res.Body, nil
 }
 
-// PullImages pulls images from a GitHub release
-func (c *Host) PullImages(repository, configDir, version string, body io.Reader, ch chan *ct.ImagePullInfo) (stream.Stream, error) {
+// PullImages pulls images from a GitHub release or a custom base URL.
+// If baseURL is non-empty, images are downloaded from that URL instead of GitHub.
+func (c *Host) PullImages(repository, configDir, version, baseURL string, body io.Reader, ch chan *ct.ImagePullInfo) (stream.Stream, error) {
 	header := http.Header{"Content-Type": {"application/octet-stream"}}
 	query := make(url.Values)
 	query.Set("repository", repository)
 	query.Set("config-dir", configDir)
 	query.Set("version", version)
+	if baseURL != "" {
+		query.Set("base-url", baseURL)
+	}
 	path := "/host/pull/images?" + query.Encode()
 	return c.c.StreamWithHeader("POST", path, header, body, ch)
 }

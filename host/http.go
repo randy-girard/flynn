@@ -365,9 +365,15 @@ func (h *jobAPI) PullImages(w http.ResponseWriter, r *http.Request, ps httproute
 	stream := sse.NewStream(w, info, nil)
 	go stream.Serve()
 
-	d := downloader.New(repo, h.host.vman, query.Get("version"), log)
-
-	log.Info("pulling images from GitHub", "repo", repo, "version", query.Get("version"))
+	var d *downloader.Downloader
+	baseURL := query.Get("base-url")
+	if baseURL != "" {
+		d = downloader.NewWithBaseURL(baseURL, h.host.vman, query.Get("version"), log)
+		log.Info("pulling images from base URL", "base_url", baseURL, "version", query.Get("version"))
+	} else {
+		d = downloader.New(repo, h.host.vman, query.Get("version"), log)
+		log.Info("pulling images from GitHub", "repo", repo, "version", query.Get("version"))
+	}
 	if err := d.DownloadImages(query.Get("config-dir"), info); err != nil {
 		log.Error("error pulling images", "err", err)
 		stream.CloseWithError(err)
