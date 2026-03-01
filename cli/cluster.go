@@ -227,6 +227,7 @@ func runClusterAdd(args *docopt.Args) error {
 		if err := cfg.WriteGlobalGitConfig(s.GitURL, caPath); err != nil {
 			return err
 		}
+		cfg.ClearSystemCredentials(s.GitURL)
 	}
 
 	if s.DockerPushURL != "" {
@@ -289,6 +290,7 @@ func runClusterRemove(args *docopt.Args) error {
 		}
 
 		cfg.RemoveGlobalGitConfig(c.GitURL)
+		cfg.ClearSystemCredentials(c.GitURL)
 
 		if host, err := c.DockerPushHost(); err == nil {
 			dockerLogout(host)
@@ -408,7 +410,9 @@ func runClusterMigrateDomain(args *docopt.Args) error {
 				if err := cfg.WriteGlobalGitConfig(cluster.GitURL, caFile.Name()); err != nil {
 					return err
 				}
+				cfg.ClearSystemCredentials(cluster.GitURL)
 				cfg.RemoveGlobalGitConfig(fmt.Sprintf("https://git.%s", dm.OldDomain))
+				cfg.ClearSystemCredentials(fmt.Sprintf("https://git.%s", dm.OldDomain))
 
 				// try to run "docker login" for the new domain, but just print a warning
 				// if it fails so the user can fix it later
