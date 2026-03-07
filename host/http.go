@@ -8,9 +8,11 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -393,9 +395,16 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 		repo = "randy-girard/flynn"
 	}
 
-	d := downloader.New(repo, h.host.vman, query.Get("version"), log)
+	var d *downloader.Downloader
+	baseURL := query.Get("base-url")
+	if baseURL != "" {
+		d = downloader.NewWithBaseURL(baseURL, h.host.vman, query.Get("version"), log)
+		log.Info("downloading binaries from base URL", "base_url", baseURL, "version", query.Get("version"))
+	} else {
+		d = downloader.New(repo, h.host.vman, query.Get("version"), log)
+		log.Info("downloading binaries from GitHub", "repo", repo, "version", query.Get("version"))
+	}
 
-	log.Info("downloading binaries from GitHub", "repo", repo, "version", query.Get("version"))
 	paths, err := d.DownloadBinaries(query.Get("bin-dir"))
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
@@ -403,7 +412,7 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 
-	log.Info("downloading config from GitHub")
+	log.Info("downloading config")
 	configs, err := d.DownloadConfig(query.Get("config-dir"))
 	if err != nil {
 		log.Error("error downloading config", "err", err)
@@ -682,6 +691,29 @@ func (h *jobAPI) Update(w http.ResponseWriter, req *http.Request, _ httprouter.P
 	})
 }
 
+// SystemctlRestart handles POST /host/systemctl-restart by sending an OK
+// response and then spawning a detached "systemctl restart flynn-host"
+// subprocess. Because KillMode=process in the systemd unit, the detached
+// systemctl process survives when systemd terminates the daemon. This
+// provides a clean restart that systemd can track properly.
+func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "SystemctlRestart")
+	log.Info("systemctl restart requested")
+
+	// Spawn a detached process that waits briefly then restarts the service.
+	// The sleep gives time for the HTTP response to reach the client.
+	cmd := exec.Command("bash", "-c", "sleep 2 && systemctl restart flynn-host")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		log.Error("failed to spawn systemctl restart", "err", err)
+		httphelper.Error(w, fmt.Errorf("failed to initiate restart: %s", err))
+		return
+	}
+
+	log.Info("systemctl restart scheduled", "pid", cmd.Process.Pid)
+	httphelper.JSON(w, http.StatusOK, map[string]string{"status": "restarting"})
+}
+
 func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/jobs", h.ListJobs)
 	r.GET("/host/jobs/:id", h.GetJob)
@@ -699,6 +731,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/jobs-stats", h.GetAllJobsStats)
 	r.POST("/host/resource-check", h.ResourceCheck)
 	r.POST("/host/update", h.Update)
+	r.POST("/host/systemctl-restart", h.SystemctlRestart)
 	r.POST("/host/tags", h.UpdateTags)
 	return nil
 }

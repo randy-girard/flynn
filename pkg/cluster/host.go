@@ -236,13 +236,18 @@ func (c *Host) PullImages(repository, configDir, version, baseURL string, body i
 	return c.c.StreamWithHeader("POST", path, header, body, ch)
 }
 
-// PullBinariesAndConfig pulls binaries and config from a GitHub release
-func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version string, body io.Reader) (map[string]string, error) {
+// PullBinariesAndConfig pulls binaries and config from a GitHub release or
+// a custom base URL. If baseURL is non-empty, binaries are downloaded from
+// that URL instead of GitHub.
+func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version, baseURL string, body io.Reader) (map[string]string, error) {
 	query := make(url.Values)
 	query.Set("repository", repository)
 	query.Set("bin-dir", binDir)
 	query.Set("config-dir", configDir)
 	query.Set("version", version)
+	if baseURL != "" {
+		query.Set("base-url", baseURL)
+	}
 	path := "/host/pull/binaries?" + query.Encode()
 	var paths map[string]string
 	return paths, c.c.Post(path, body, &paths)
@@ -269,6 +274,15 @@ func (c *Host) UpdateWithShutdownDelay(name string, delay time.Duration, args ..
 
 func (c *Host) update(cmd *host.Command) (pid int, err error) {
 	return cmd.PID, c.c.Post("/host/update", cmd, cmd)
+}
+
+// SystemctlRestart asks the remote daemon to restart itself via
+// "systemctl restart flynn-host". The daemon spawns a detached
+// subprocess and returns immediately; the actual restart happens
+// ~2 seconds later so that the HTTP response reaches the caller.
+func (c *Host) SystemctlRestart() error {
+	var res map[string]string
+	return c.c.Post("/host/systemctl-restart", nil, &res)
 }
 
 func (c *Host) UpdateTags(tags map[string]string) error {
