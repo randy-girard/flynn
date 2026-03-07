@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -36,10 +37,11 @@ var config = []string{
 	"bootstrap-manifest.json",
 }
 
-// Downloader downloads versioned files from GitHub releases
+// Downloader downloads versioned files from GitHub releases or a custom base URL
 type Downloader struct {
 	client  *ghrelease.Client
 	repo    string
+	baseURL string // if set, use this instead of GitHub release URLs
 	vman    *volumemanager.Manager
 	version string
 	log     log15.Logger
@@ -54,6 +56,27 @@ func New(repo string, vman *volumemanager.Manager, version string, log log15.Log
 		version: version,
 		log:     log,
 	}
+}
+
+// NewWithBaseURL creates a new Downloader that fetches files from a custom
+// base URL instead of GitHub releases. This is used for tarball-based updates
+// where a temporary HTTP server serves the extracted tarball contents.
+func NewWithBaseURL(baseURL string, vman *volumemanager.Manager, version string, log log15.Logger) *Downloader {
+	return &Downloader{
+		baseURL: baseURL,
+		vman:    vman,
+		version: version,
+		log:     log,
+	}
+}
+
+// assetURL returns the download URL for a given filename.
+// If a base URL is configured, it uses that; otherwise it constructs a GitHub release URL.
+func (d *Downloader) assetURL(filename string) string {
+	if d.baseURL != "" {
+		return d.baseURL + "/" + filename
+	}
+	return ghrelease.GetReleaseURL(d.repo, d.version) + "/" + filename
 }
 
 // DownloadBinaries downloads the Flynn binaries from GitHub releases to the
@@ -105,7 +128,12 @@ func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 	var lastErr error
 	delay := initialRetryDelay
 	for attempt := 1; attempt <= maxDownloadRetries; attempt++ {
-		err := d.client.DownloadFile(assetURL, destPath)
+		var err error
+		if d.client != nil {
+			err = d.client.DownloadFile(assetURL, destPath)
+		} else {
+			err = downloadFileHTTP(assetURL, destPath)
+		}
 		if err == nil {
 			return nil
 		}
@@ -122,13 +150,51 @@ func (d *Downloader) downloadWithRetry(assetURL, destPath string) error {
 	return fmt.Errorf("download failed after %d attempts: %s", maxDownloadRetries, lastErr)
 }
 
+// downloadFileHTTP downloads a file from a URL to the specified path using
+// a plain HTTP client. Used when no ghrelease.Client is available (e.g.,
+// when downloading from a local tarball HTTP server).
+func downloadFileHTTP(url, destPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to download: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(destPath), ".download-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		tmp.Close()
+		os.Remove(tmpPath)
+	}()
+
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+
+	return os.Rename(tmpPath, destPath)
+}
+
 // downloadGzippedBinary downloads a gzipped binary from GitHub releases, decompresses it,
 // and creates a versioned file with a symlink. The assetName is the name in the release
 // (e.g., flynn-host-linux-amd64) and localName is the local binary name (e.g., flynn-host).
 func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (string, error) {
 	// Construct the asset URL
 	gzName := assetName + ".gz"
-	assetURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + gzName
+	assetURL := d.assetURL(gzName)
 
 	// Download to temp file
 	tmpPath := filepath.Join(dir, gzName+".tmp")
@@ -178,7 +244,7 @@ func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (st
 func (d *Downloader) downloadGzippedFile(name, dir string) (string, error) {
 	// Construct the asset URL
 	assetName := name + ".gz"
-	assetURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + assetName
+	assetURL := d.assetURL(assetName)
 
 	// Download to temp file
 	tmpPath := filepath.Join(dir, assetName+".tmp")
@@ -228,7 +294,7 @@ func symlink(target, link string) error {
 // without downloading layers. This is useful for updating system apps.
 func (d *Downloader) DownloadImagesManifest(configDir string) (map[string]*ct.Artifact, error) {
 	// Download images manifest
-	manifestURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/images.json.gz"
+	manifestURL := d.assetURL("images.json.gz")
 	manifestPath := filepath.Join(configDir, "images.json.gz.tmp")
 	if err := d.downloadWithRetry(manifestURL, manifestPath); err != nil {
 		return nil, fmt.Errorf("error downloading images manifest: %s", err)
@@ -263,7 +329,7 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 	defer close(ch)
 
 	// Download images manifest
-	manifestURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/images.json.gz"
+	manifestURL := d.assetURL("images.json.gz")
 	manifestPath := filepath.Join(configDir, "images.json.gz.tmp")
 	if err := d.downloadWithRetry(manifestURL, manifestPath); err != nil {
 		return fmt.Errorf("error downloading images manifest: %s", err)
@@ -361,7 +427,7 @@ func (d *Downloader) DownloadImages(configDir string, ch chan *ct.ImagePullInfo)
 // image manifest. If verification fails, the file is deleted and the
 // download is retried with exponential backoff.
 func (d *Downloader) downloadLayer(layer *ct.ImageLayer, cacheDir string) error {
-	layerURL := ghrelease.GetReleaseURL(d.repo, d.version) + "/" + layer.ID + ".squashfs"
+	layerURL := d.assetURL(layer.ID + ".squashfs")
 	destPath := filepath.Join(cacheDir, layer.ID+".squashfs")
 
 	var lastErr error

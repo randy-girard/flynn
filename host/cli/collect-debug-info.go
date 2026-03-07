@@ -39,17 +39,54 @@ var debugCmds = [][]string{
 	{"iptables", "-L", "-v", "-n", "--line-numbers"},
 }
 
+const githubTokenFile = ".flynn/github_token"
+
 func init() {
 	Register("collect-debug-info", runCollectDebugInfo, `
 usage: flynn-host collect-debug-info [options]
 
 Options:
-  --tarball          Create a tarball instead of uploading to a gist
-  --include-env      Include sensitive environment variables
-  --log-dir=DIR      Path to the log directory [default: /var/log/flynn]
-  --filename=PATH    Path to write tarball, only valid if --tarball is specified
+  --tarball              Create a tarball instead of uploading to a gist
+  --include-env          Include sensitive environment variables
+  --log-dir=DIR          Path to the log directory [default: /var/log/flynn]
+  --filename=PATH        Path to write tarball, only valid if --tarball is specified
+  --github-token=TOKEN   GitHub personal access token for gist creation (stored for future use)
 
-Collect debug information into an anonymous gist or tarball`)
+Collect debug information into a gist or tarball. GitHub requires authentication
+to create gists. Use --github-token to provide a personal access token on first
+use; the token will be saved to ~/.flynn/github_token for subsequent invocations.`)
+}
+
+func githubTokenPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, githubTokenFile)
+}
+
+func saveGitHubToken(token string) error {
+	path := githubTokenPath()
+	if path == "" {
+		return fmt.Errorf("unable to determine home directory")
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	return ioutil.WriteFile(path, []byte(token), 0600)
+}
+
+func loadGitHubToken() string {
+	path := githubTokenPath()
+	if path == "" {
+		return ""
+	}
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 func runCollectDebugInfo(args *docopt.Args) error {
@@ -57,9 +94,24 @@ func runCollectDebugInfo(args *docopt.Args) error {
 	if args.Bool["--tarball"] {
 		log.Info("creating a tarball containing logs and debug information")
 	} else {
-		log.Info("uploading logs and debug information to a private, anonymous gist")
+		log.Info("uploading logs and debug information to a gist")
 	}
 	log.Info("this may take a while depending on the size of your logs")
+
+	// Resolve GitHub token: flag takes precedence, then stored token
+	token := args.String["--github-token"]
+	if token != "" {
+		if err := saveGitHubToken(token); err != nil {
+			log.Error("failed to save GitHub token", "err", err)
+		} else {
+			log.Info(fmt.Sprintf("GitHub token saved to %s", githubTokenPath()))
+		}
+	} else {
+		token = loadGitHubToken()
+		if token != "" {
+			log.Info("using stored GitHub token")
+		}
+	}
 
 	gist := &Gist{
 		Description: "Flynn debug information",
@@ -104,6 +156,12 @@ func runCollectDebugInfo(args *docopt.Args) error {
 	}
 	gist.AddFile("0-debug-output.log", debugOutput)
 
+	// Redact the GitHub token from all collected content to prevent leaking
+	// it via ps output or other sources captured in the debug info.
+	if token != "" {
+		gist.RedactToken(token)
+	}
+
 	if gist.Size > GistMaxSize {
 		log.Info(fmt.Sprintf("Total size of %d bytes exceeds gist limit, falling back to tarball.", gist.Size))
 	}
@@ -126,7 +184,7 @@ func runCollectDebugInfo(args *docopt.Args) error {
 		return nil
 	}
 
-	if err := gist.Upload(log); err != nil {
+	if err := gist.Upload(log, token); err != nil {
 		return err
 	}
 

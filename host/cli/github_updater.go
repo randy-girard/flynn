@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"archive/tar"
 	"compress/gzip"
 	"crypto/sha512"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -125,19 +127,27 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 		// Trigger zero-downtime daemon restart unless --no-restart was specified
 		if !args.Bool["--no-restart"] {
-			if err := restartDaemon(binDir, log); err != nil {
+			restarted, err := restartDaemon(binDir, log)
+			if err != nil {
 				return err
 			}
-			fmt.Printf("Flynn daemon restarted with version %s\n", release.TagName)
+			if restarted {
+				fmt.Printf("Flynn daemon restarted with version %s\n", release.TagName)
+			}
 		} else {
 			log.Info("skipping daemon restart (--no-restart specified)")
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
+		}
+
+		// Propagate binaries to all other cluster nodes and restart their daemons
+		if err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log); err != nil {
+			return err
 		}
 	}
 
 	// Update container images and system apps unless --skip-images was specified
 	if !skipImages {
-		if err := updateImages(repo, configDir, release.TagName, log); err != nil {
+		if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
 			return err
 		}
 	}
@@ -146,91 +156,131 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	return nil
 }
 
-// restartDaemon connects to the running flynn-host daemon and triggers a
-// zero-downtime restart by calling the /host/update API. The running daemon
-// spawns the new binary as a child process, hands off the HTTP listener and
-// state, then shuts down gracefully.
-func restartDaemon(binDir string, log log15.Logger) error {
-	log.Info("connecting to running daemon for zero-downtime restart")
+// restartDaemon restarts the local flynn-host daemon using systemctl.
+// This ensures systemd properly tracks the new daemon process.
+// restartDaemon returns true if the daemon was actually restarted, false if
+// it was skipped (e.g. daemon not running locally).
+func restartDaemon(binDir string, log log15.Logger) (bool, error) {
+	log.Info("restarting local daemon via systemctl")
 
-	clusterClient := cluster.NewClient()
-	hosts, err := clusterClient.Hosts()
-	if err != nil {
-		log.Error("error discovering hosts, cannot restart daemon automatically", "err", err)
-		return fmt.Errorf("failed to connect to cluster (is discoverd running?): %s\nRestart manually with: systemctl restart flynn-host", err)
+	// Check if the daemon is running before attempting restart
+	statusCmd := exec.Command("systemctl", "is-active", "--quiet", "flynn-host")
+	if err := statusCmd.Run(); err != nil {
+		log.Warn("local flynn-host daemon is not active, skipping restart")
+		fmt.Println("Local flynn-host daemon is not active. Start it with: systemctl start flynn-host")
+		return false, nil
 	}
-	if len(hosts) == 0 {
-		log.Warn("no hosts found, skipping daemon restart")
-		fmt.Println("No running hosts found. Restart manually with: systemctl restart flynn-host")
+
+	fmt.Println("Restarting local flynn-host daemon via systemctl...")
+	cmd := exec.Command("systemctl", "restart", "flynn-host")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Error("systemctl restart failed", "err", err)
+		return false, fmt.Errorf("failed to restart daemon via systemctl: %s", err)
+	}
+
+	// Wait for the daemon to be responsive after restart
+	log.Info("waiting for daemon to become responsive after restart")
+	localIPs := getLocalIPs()
+	for i := 0; i < 15; i++ {
+		time.Sleep(2 * time.Second)
+		if id := getDaemonID(localIPs, log); id != "" {
+			log.Info("daemon is responsive after restart", "daemon_id", id)
+			return true, nil
+		}
+	}
+
+	log.Warn("daemon may still be starting up after systemctl restart")
+	return true, nil
+}
+
+// updateRemoteBinaries pushes binary and config updates to all other cluster
+// nodes and optionally restarts their daemons. Updates are performed one host
+// at a time (rolling) to maintain cluster availability.
+// For GitHub updates, repo should be set and baseURL empty.
+// For tarball updates, baseURL should point to the temp HTTP server.
+func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRestart bool, log log15.Logger) error {
+	// Retry discoverd lookup — after a systemctl restart the local daemon
+	// may not have re-registered with discoverd yet.
+	clusterClient := cluster.NewClient()
+	var hosts []*cluster.Host
+	var err error
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			time.Sleep(3 * time.Second)
+		}
+		hosts, err = clusterClient.Hosts()
+		if err == nil && len(hosts) > 0 {
+			break
+		}
+		if err != nil {
+			log.Debug("discoverd not ready for remote binary update, retrying", "attempt", i+1, "err", err)
+		} else {
+			log.Debug("no hosts found via discoverd yet, retrying", "attempt", i+1)
+		}
+	}
+	if err != nil {
+		log.Warn("could not discover cluster hosts for remote binary update", "err", err)
+		fmt.Println("Could not discover cluster hosts. Remote nodes were NOT updated.")
+		return nil // non-fatal: local update succeeded
+	}
+	if len(hosts) <= 1 {
+		log.Info("single-node cluster, no remote hosts to update")
 		return nil
 	}
 
-	// Find the local host by matching the hostname
-	localHostname, err := os.Hostname()
-	if err != nil {
-		log.Error("error getting local hostname", "err", err)
-		return fmt.Errorf("failed to get local hostname: %s\nRestart manually with: systemctl restart flynn-host", err)
+	// Determine local host to skip
+	localHostname, _ := os.Hostname()
+	localIPs := getLocalIPs()
+	daemonID := getDaemonID(localIPs, log)
+	localHost := findLocalHost(hosts, localHostname, daemonID, localIPs, log)
+
+	var localHostID string
+	if localHost != nil {
+		localHostID = localHost.ID()
 	}
-	log.Info("looking for local host", "hostname", localHostname, "num_hosts", len(hosts))
 
-	// Normalize hostname for comparison (remove dashes, lowercase)
-	normalizedHostname := normalizeHostname(localHostname)
+	log.Info("updating remote hosts", "total_hosts", len(hosts), "local_host", localHostID)
 
-	var localHost *cluster.Host
 	for _, h := range hosts {
-		hostID := h.ID()
-		normalizedHostID := normalizeHostname(hostID)
-		log.Debug("checking host", "host_id", hostID, "normalized_id", normalizedHostID, "normalized_hostname", normalizedHostname)
-
-		// Exact match
-		if hostID == localHostname {
-			localHost = h
-			break
+		if h.ID() == localHostID {
+			continue
 		}
-		// Case-insensitive match
-		if strings.EqualFold(hostID, localHostname) {
-			localHost = h
-			break
+
+		hostLog := log.New("remote_host", h.ID())
+		hostLog.Info("pulling binaries on remote host")
+		fmt.Printf("Updating binaries on %s...\n", h.ID())
+
+		_, err := h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, nil)
+		if err != nil {
+			hostLog.Error("failed to pull binaries on remote host", "err", err)
+			return fmt.Errorf("failed to update binaries on host %s: %w", h.ID(), err)
 		}
-		// Normalized match (handles dashes, underscores, case differences)
-		// e.g., "flynn-test-node-3" matches "flynntestnode3"
-		if normalizedHostID == normalizedHostname {
-			localHost = h
-			break
+		hostLog.Info("binaries updated on remote host")
+		fmt.Printf("Binaries updated on %s\n", h.ID())
+
+		if !noRestart {
+			hostLog.Info("restarting daemon on remote host via systemctl")
+			fmt.Printf("Restarting flynn-host daemon on %s via systemctl...\n", h.ID())
+
+			if err := h.SystemctlRestart(); err != nil {
+				hostLog.Error("error requesting systemctl restart on remote host", "err", err)
+				return fmt.Errorf("failed to restart daemon on host %s: %w", h.ID(), err)
+			}
+
+			hostLog.Info("systemctl restart requested on remote host")
+			fmt.Printf("Flynn daemon restart initiated on %s\n", h.ID())
+
+			// Wait for the remote daemon to come back up before
+			// proceeding to the next host (rolling restart).
+			// The systemctl restart has a 2s delay before it runs,
+			// plus time for the daemon to start up.
+			time.Sleep(15 * time.Second)
 		}
 	}
 
-	// If no match by hostname, try single-node fallback
-	if localHost == nil && len(hosts) == 1 {
-		log.Info("single host cluster, using the only available host")
-		localHost = hosts[0]
-	}
-
-	if localHost == nil {
-		log.Error("could not identify local host in cluster", "hostname", localHostname, "available_hosts", hostIDs(hosts))
-		return fmt.Errorf("could not identify local host '%s' in cluster. Available hosts: %v\nRestart manually with: systemctl restart flynn-host", localHostname, hostIDs(hosts))
-	}
-
-	log.Info("triggering zero-downtime daemon restart", "host", localHost.ID())
-	fmt.Printf("Restarting flynn-host daemon on %s...\n", localHost.ID())
-
-	status, err := localHost.GetStatus()
-	if err != nil {
-		log.Error("error getting host status", "err", err)
-		return fmt.Errorf("failed to get host status: %s\nRestart manually with: systemctl restart flynn-host", err)
-	}
-
-	binaryPath := filepath.Join(binDir, "flynn-host")
-	_, err = localHost.UpdateWithShutdownDelay(
-		binaryPath,
-		30*time.Second,
-		append([]string{"daemon"}, status.Flags...)...,
-	)
-	if err != nil {
-		log.Error("error triggering daemon restart", "err", err)
-		return fmt.Errorf("failed to restart daemon: %s\nRestart manually with: systemctl restart flynn-host", err)
-	}
-
+	log.Info("all remote hosts updated")
 	return nil
 }
 
@@ -251,6 +301,111 @@ func normalizeHostname(name string) string {
 	name = strings.ReplaceAll(name, "-", "")
 	name = strings.ReplaceAll(name, "_", "")
 	return name
+}
+
+// findLocalHost identifies the local host in a list of cluster hosts using
+// multiple matching strategies in priority order:
+//  1. Daemon ID match (if daemonID is non-empty)
+//  2. IP address match (if localIPs is non-empty)
+//  3. Hostname match (exact, case-insensitive, then normalized)
+//  4. Single-node fallback (if only one host in cluster)
+func findLocalHost(hosts []*cluster.Host, hostname, daemonID string, localIPs map[string]struct{}, log log15.Logger) *cluster.Host {
+	// 1. Match by daemon ID (highest priority)
+	if daemonID != "" {
+		for _, h := range hosts {
+			if h.ID() == daemonID {
+				log.Info("matched host by daemon ID", "daemon_id", daemonID)
+				return h
+			}
+		}
+	}
+
+	// 2. Match by IP address
+	if len(localIPs) > 0 {
+		for _, h := range hosts {
+			hostIP, _, err := net.SplitHostPort(h.Addr())
+			if err != nil {
+				continue
+			}
+			if _, ok := localIPs[hostIP]; ok {
+				log.Info("matched host by IP address", "host_id", h.ID(), "ip", hostIP)
+				return h
+			}
+		}
+	}
+
+	// 3. Match by hostname (exact, case-insensitive, normalized)
+	normalizedHostname := normalizeHostname(hostname)
+	for _, h := range hosts {
+		hostID := h.ID()
+		if hostID == hostname {
+			log.Info("matched host by exact hostname", "host_id", hostID)
+			return h
+		}
+		if strings.EqualFold(hostID, hostname) {
+			log.Info("matched host by case-insensitive hostname", "host_id", hostID)
+			return h
+		}
+		if normalizeHostname(hostID) == normalizedHostname {
+			log.Info("matched host by normalized hostname", "host_id", hostID, "normalized", normalizedHostname)
+			return h
+		}
+	}
+
+	// 4. Single-node fallback
+	if len(hosts) == 1 {
+		log.Info("single host cluster, using the only available host", "host_id", hosts[0].ID())
+		return hosts[0]
+	}
+
+	return nil
+}
+
+// getLocalIPs returns a set of all unicast IP addresses on the local machine.
+func getLocalIPs() map[string]struct{} {
+	ips := make(map[string]struct{})
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ips
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		}
+		if ip != nil && !ip.IsLoopback() {
+			ips[ip.String()] = struct{}{}
+		}
+	}
+	return ips
+}
+
+// getDaemonID tries to get the running daemon's host ID by querying
+// the local flynn-host API on each local IP address. The daemon binds
+// to the external IP (not 127.0.0.1), so we try all local IPs.
+func getDaemonID(localIPs map[string]struct{}, log log15.Logger) string {
+	// Try each local IP on the default flynn-host port
+	for ip := range localIPs {
+		// Skip IPv6 link-local addresses (fe80::) as the daemon
+		// typically listens on a routable address
+		if strings.HasPrefix(ip, "fe80:") {
+			continue
+		}
+		addr := net.JoinHostPort(ip, "1113")
+		h := cluster.NewHost("", "http://"+addr, nil, nil)
+		status, err := h.GetStatus()
+		if err != nil {
+			log.Debug("could not reach daemon", "addr", addr, "err", err)
+			continue
+		}
+		log.Info("got daemon ID from local API", "id", status.ID, "addr", addr)
+		return status.ID
+	}
+	log.Debug("could not get daemon ID from any local IP")
+	return ""
 }
 
 // parseChecksums reads a SHA512 checksum file and returns a map of filename -> checksum
@@ -361,12 +516,18 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 
 const deployTimeout = 30 * time.Minute
 
-// updateImages downloads the images manifest from GitHub and updates system apps
-func updateImages(repo, configDir, targetVersion string, log log15.Logger) error {
-	log.Info("downloading images manifest from GitHub", "repo", repo, "version", targetVersion)
-
+// updateImages downloads the images manifest and updates system apps.
+// If baseURL is non-empty, images are fetched from that URL instead of GitHub.
+func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
-	d := downloader.New(repo, nil, targetVersion, log)
+	var d *downloader.Downloader
+	if baseURL != "" {
+		log.Info("downloading images manifest from base URL", "base_url", baseURL, "version", targetVersion)
+		d = downloader.NewWithBaseURL(baseURL, nil, targetVersion, log)
+	} else {
+		log.Info("downloading images manifest from GitHub", "repo", repo, "version", targetVersion)
+		d = downloader.New(repo, nil, targetVersion, log)
+	}
 
 	// Download images manifest
 	images, err := d.DownloadImagesManifest(configDir)
@@ -421,7 +582,7 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 				ch := make(chan *ct.ImagePullInfo)
 
 				// Trigger the pull on this host
-				stream, err := h.PullImages(repo, configDir, targetVersion, nil, ch)
+				stream, err := h.PullImages(repo, configDir, targetVersion, baseURL, nil, ch)
 				if err != nil {
 					hostLog.Error("error starting image pull", "err", err)
 					lastErr = fmt.Errorf("error pulling images on host %s: %w", h.ID(), err)
@@ -470,74 +631,91 @@ func updateImages(repo, configDir, targetVersion string, log log15.Logger) error
 
 	log.Info("finished downloading image layers on all nodes")
 
-	// Wait for cluster to be ready after daemon restart
-	// This can take a few seconds as the daemon needs to fully start and
-	// discoverd needs to reconnect and register services
-	// We use discoverd client directly instead of DNS-based HTTP requests
-	// because the host may not have discoverd DNS configured in /etc/resolv.conf
+	// Wait for cluster to be ready after daemon restart.
+	// We re-discover the status-web instance on each attempt because
+	// container IPs change after daemon restarts (flannel reassigns them).
 	log.Info("waiting for cluster to be ready after daemon restart")
-	const maxRetries = 30
-	const retryDelay = 2 * time.Second
+	const healthCheckMaxRetries = 30
+	const healthCheckRetryDelay = 5 * time.Second
 
-	// First, wait for status-web service to be available via discoverd
-	var statusInstances []*discoverd.Instance
-	for i := 0; i < maxRetries; i++ {
-		var err error
-		statusInstances, err = discoverd.GetInstances("status-web", 5*time.Second)
-		if err == nil && len(statusInstances) > 0 {
-			if i > 0 {
-				log.Info("status-web service is now available", "attempts", i+1, "instances", len(statusInstances))
+	var statuses map[string]status.Status
+	clusterHealthy := false
+	for i := 0; i < healthCheckMaxRetries; i++ {
+		if i > 0 {
+			time.Sleep(healthCheckRetryDelay)
+		}
+
+		// Re-discover status-web on each attempt — instances may change
+		// after daemon restarts as containers get new overlay IPs.
+		statusInstances, err := discoverd.GetInstances("status-web", 5*time.Second)
+		if err != nil || len(statusInstances) == 0 {
+			if err != nil {
+				log.Debug("status-web not discoverable yet", "attempt", i+1, "err", err)
+			} else {
+				log.Debug("no status-web instances yet", "attempt", i+1)
 			}
+			continue
+		}
+
+		statusAddr := statusInstances[0].Addr
+		log.Info("checking cluster status", "addr", statusAddr, "attempt", i+1)
+		req, err := http.NewRequest("GET", "http://"+statusAddr, nil)
+		if err != nil {
+			log.Debug("error creating status request", "attempt", i+1, "err", err)
+			continue
+		}
+		req.Header.Set("Accept", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Debug("error reaching status endpoint", "attempt", i+1, "addr", statusAddr, "err", err)
+			continue
+		}
+
+		var statusWrapper struct {
+			Data struct {
+				Status status.Code              `json:"status"`
+				Detail map[string]status.Status `json:"detail"`
+			}
+		}
+		decodeErr := decodeJSON(res.Body, &statusWrapper)
+		res.Body.Close()
+
+		if decodeErr != nil {
+			log.Debug("error decoding status response", "attempt", i+1, "err", decodeErr)
+			continue
+		}
+
+		if res.StatusCode == 200 {
+			if i > 0 {
+				log.Info("cluster is now healthy", "attempts", i+1)
+			}
+			statuses = statusWrapper.Data.Detail
+			clusterHealthy = true
 			break
 		}
-		if i < maxRetries-1 {
-			if err != nil {
-				log.Debug("status-web not ready, retrying", "attempt", i+1, "max", maxRetries, "err", err)
-			} else {
-				log.Debug("status-web not ready, no instances yet", "attempt", i+1, "max", maxRetries)
+
+		// Log which services are unhealthy for debugging
+		var unhealthyServices []string
+		for name, svc := range statusWrapper.Data.Detail {
+			if svc.Status != status.CodeHealthy {
+				unhealthyServices = append(unhealthyServices, name)
 			}
-			time.Sleep(retryDelay)
-		} else {
-			if err != nil {
-				log.Error("status-web still not ready after max retries", "err", err)
-				return fmt.Errorf("status-web not ready after %d attempts: %w", maxRetries, err)
+		}
+		log.Debug("cluster not yet healthy", "attempt", i+1, "code", res.StatusCode, "unhealthy", unhealthyServices)
+		statuses = statusWrapper.Data.Detail
+	}
+
+	if !clusterHealthy {
+		// Log which services are still unhealthy
+		var unhealthyServices []string
+		for name, svc := range statuses {
+			if svc.Status != status.CodeHealthy {
+				unhealthyServices = append(unhealthyServices, name)
 			}
-			log.Error("no status-web instances found after max retries")
-			return fmt.Errorf("no status-web instances found after %d attempts", maxRetries)
 		}
+		log.Warn("cluster health check did not pass after retries, continuing with update", "unhealthy_services", unhealthyServices)
+		fmt.Printf("Warning: cluster health check did not pass (unhealthy services: %v). The update will continue.\n", unhealthyServices)
 	}
-
-	// Now check cluster status using the discovered instance address
-	statusAddr := statusInstances[0].Addr
-	log.Info("checking cluster status", "addr", statusAddr)
-	req, err := http.NewRequest("GET", "http://"+statusAddr, nil)
-	if err != nil {
-		log.Error("error creating status request", "err", err)
-		return fmt.Errorf("error creating status request: %w", err)
-	}
-	req.Header.Set("Accept", "application/json")
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		log.Error("error getting cluster status", "err", err)
-		return fmt.Errorf("error getting cluster status: %w", err)
-	}
-	defer res.Body.Close()
-
-	if res.StatusCode != 200 {
-		log.Error("cluster status is unhealthy", "code", res.StatusCode)
-		return fmt.Errorf("cluster is unhealthy (status code %d)", res.StatusCode)
-	}
-
-	var statusWrapper struct {
-		Data struct {
-			Detail map[string]status.Status
-		}
-	}
-	if err := decodeJSON(res.Body, &statusWrapper); err != nil {
-		log.Error("error decoding cluster status", "err", err)
-		return fmt.Errorf("error decoding cluster status: %w", err)
-	}
-	statuses := statusWrapper.Data.Detail
 
 	// Connect to controller
 	log.Info("connecting to controller")
@@ -751,4 +929,317 @@ type jsonDecoderWrapper struct {
 
 func (d *jsonDecoderWrapper) Decode(v interface{}) error {
 	return d.dec.Decode(v)
+}
+
+// runTarballUpdate performs an update from a local tarball file.
+// It extracts the tarball, installs binaries locally, restarts the daemon,
+// starts a temporary HTTP server to serve the extracted contents to all
+// cluster nodes, and then deploys system apps.
+func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log15.Logger) error {
+	binDir := args.String["--bin-dir"]
+	skipImages := args.Bool["--skip-images"]
+	imagesOnly := args.Bool["--images-only"]
+
+	log.Info("starting tarball-based update", "tarball", tarballPath)
+
+	// Verify tarball exists
+	if _, err := os.Stat(tarballPath); err != nil {
+		return fmt.Errorf("tarball not found: %s", tarballPath)
+	}
+
+	// Extract tarball to a temp directory
+	extractDir, err := os.MkdirTemp("", "flynn-tarball-update-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	defer os.RemoveAll(extractDir)
+
+	log.Info("extracting tarball", "dest", extractDir)
+	tarballVersion, contentDir, err := extractTarball(tarballPath, extractDir)
+	if err != nil {
+		return fmt.Errorf("failed to extract tarball: %w", err)
+	}
+	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
+
+	// Update binaries unless --images-only was specified
+	if !imagesOnly {
+		// Parse checksums from the tarball contents
+		checksumPath := filepath.Join(contentDir, "checksums.sha512")
+		checksums, err := parseChecksums(checksumPath)
+		if err != nil {
+			log.Warn("no checksums file in tarball, skipping verification", "err", err)
+			checksums = nil
+		}
+
+		// Install binaries from extracted files
+		binaries := []struct {
+			gzName   string
+			destName string
+		}{
+			{"flynn-host-linux-amd64.gz", "flynn-host"},
+			{"flynn-init-linux-amd64.gz", "flynn-init"},
+		}
+
+		for _, bin := range binaries {
+			gzPath := filepath.Join(contentDir, bin.gzName)
+			if _, err := os.Stat(gzPath); err != nil {
+				return fmt.Errorf("binary %s not found in tarball: %w", bin.gzName, err)
+			}
+
+			// Verify checksum if available
+			if checksums != nil {
+				if expected, ok := checksums[bin.gzName]; ok {
+					if err := verifyChecksum(gzPath, expected); err != nil {
+						return fmt.Errorf("checksum verification failed for %s: %w", bin.gzName, err)
+					}
+					log.Info("checksum verified", "name", bin.gzName)
+				}
+			}
+
+			destPath := filepath.Join(binDir, bin.destName)
+			if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+				return fmt.Errorf("failed to install %s: %w", bin.destName, err)
+			}
+		}
+
+		log.Info("binaries installed", "version", tarballVersion)
+		fmt.Printf("Flynn binaries installed from tarball (%s)\n", tarballVersion)
+
+		// Trigger zero-downtime daemon restart unless --no-restart was specified
+		if !args.Bool["--no-restart"] {
+			restarted, err := restartDaemon(binDir, log)
+			if err != nil {
+				return err
+			}
+			if restarted {
+				fmt.Printf("Flynn daemon restarted with version %s\n", tarballVersion)
+			}
+		} else {
+			log.Info("skipping daemon restart (--no-restart specified)")
+			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
+		}
+	}
+
+	// Start a temporary HTTP server to serve the extracted tarball contents.
+	// This is needed for both remote binary propagation and image updates.
+	needRemoteBinaries := !imagesOnly
+	needImages := !skipImages
+	if needRemoteBinaries || needImages {
+		listener, err := net.Listen("tcp", ":0")
+		if err != nil {
+			return fmt.Errorf("failed to start HTTP server: %w", err)
+		}
+		defer listener.Close()
+
+		// Determine the coordinator's cluster-facing IP
+		coordinatorIP, err := getCoordinatorIP(log)
+		if err != nil {
+			return fmt.Errorf("failed to determine coordinator IP: %w", err)
+		}
+
+		_, port, _ := net.SplitHostPort(listener.Addr().String())
+		baseURL := fmt.Sprintf("http://%s:%s", coordinatorIP, port)
+		log.Info("starting temporary HTTP file server", "base_url", baseURL, "serving", contentDir)
+
+		// Start serving files in a goroutine
+		srv := &http.Server{Handler: http.FileServer(http.Dir(contentDir))}
+		go srv.Serve(listener)
+		defer srv.Close()
+
+		fmt.Printf("Temporary file server started at %s\n", baseURL)
+
+		// Propagate binaries to all other cluster nodes
+		if needRemoteBinaries {
+			if err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, args.Bool["--no-restart"], log); err != nil {
+				return err
+			}
+		}
+
+		// Update container images and system apps
+		if needImages {
+			if err := updateImages("", configDir, tarballVersion, baseURL, log); err != nil {
+				return err
+			}
+		}
+	}
+
+	log.Info("tarball update complete", "version", tarballVersion)
+	fmt.Printf("Flynn updated to %s from tarball\n", tarballVersion)
+	return nil
+}
+
+// extractTarball extracts a .tar.gz tarball to the given directory.
+// Returns the version string (from the top-level directory name) and
+// the path to the content directory.
+func extractTarball(tarballPath, destDir string) (version, contentDir string, err error) {
+	f, err := os.Open(tarballPath)
+	if err != nil {
+		return "", "", err
+	}
+	defer f.Close()
+
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create gzip reader: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("error reading tarball: %w", err)
+		}
+
+		// Detect version from the top-level directory name (e.g., "flynn-v20260228.0/")
+		if version == "" {
+			parts := strings.SplitN(hdr.Name, "/", 2)
+			if len(parts) > 0 {
+				dirName := parts[0]
+				if strings.HasPrefix(dirName, "flynn-") {
+					version = strings.TrimPrefix(dirName, "flynn-")
+				} else {
+					version = dirName
+				}
+				contentDir = filepath.Join(destDir, dirName)
+			}
+		}
+
+		// Security: prevent path traversal
+		target := filepath.Join(destDir, hdr.Name)
+		if !strings.HasPrefix(target, destDir+string(os.PathSeparator)) && target != destDir {
+			return "", "", fmt.Errorf("tarball contains path outside target: %s", hdr.Name)
+		}
+
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return "", "", err
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return "", "", err
+			}
+			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			if err != nil {
+				return "", "", err
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return "", "", err
+			}
+			outFile.Close()
+		}
+	}
+
+	if version == "" {
+		return "", "", fmt.Errorf("could not determine version from tarball")
+	}
+	if contentDir == "" {
+		return "", "", fmt.Errorf("tarball appears to be empty")
+	}
+
+	return version, contentDir, nil
+}
+
+// getCoordinatorIP determines the cluster-facing IP of this node by
+// finding the local host in the cluster and extracting its IP address.
+// If discoverd is not ready yet (e.g. after a daemon restart), it retries
+// a few times, then falls back to detecting a suitable external IP from
+// local network interfaces.
+func getCoordinatorIP(log log15.Logger) (string, error) {
+	localIPs := getLocalIPs()
+	daemonID := getDaemonID(localIPs, log)
+
+	localHostname, _ := os.Hostname()
+
+	// Try discoverd a few times — after a systemctl restart the daemon
+	// may not have re-registered with discoverd yet.
+	clusterClient := cluster.NewClient()
+	for i := 0; i < 10; i++ {
+		if i > 0 {
+			time.Sleep(3 * time.Second)
+		}
+		hosts, err := clusterClient.Hosts()
+		if err != nil {
+			log.Debug("discoverd not ready for host lookup, retrying", "attempt", i+1, "err", err)
+			continue
+		}
+		h := findLocalHost(hosts, localHostname, daemonID, localIPs, log)
+		if h != nil {
+			ip, _, err := net.SplitHostPort(h.Addr())
+			if err != nil {
+				return "", fmt.Errorf("error parsing host address %s: %w", h.Addr(), err)
+			}
+			log.Info("found coordinator IP from cluster", "ip", ip, "host_id", h.ID())
+			return ip, nil
+		}
+		log.Debug("local host not found in cluster yet, retrying", "attempt", i+1)
+	}
+
+	// Fallback: find a suitable external IP from local interfaces
+	log.Warn("could not find local host via discoverd, falling back to interface IP detection")
+	ip := getExternalIP(localIPs)
+	if ip == "" {
+		return "", fmt.Errorf("could not determine coordinator IP: no suitable external IP found on local interfaces")
+	}
+	log.Info("found coordinator IP from local interfaces", "ip", ip)
+	return ip, nil
+}
+
+// getExternalIP picks a non-loopback, non-link-local IPv4 address from
+// the provided set of local IPs. It prefers public IPs over private ones.
+func getExternalIP(localIPs map[string]struct{}) string {
+	var privateIP string
+	for ipStr := range localIPs {
+		ip := net.ParseIP(ipStr)
+		if ip == nil || ip.To4() == nil {
+			continue // skip IPv6 and unparseable
+		}
+		if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		// Prefer public IPs
+		if !isPrivateIP(ip) {
+			return ipStr
+		}
+		if privateIP == "" {
+			privateIP = ipStr
+		}
+	}
+	return privateIP
+}
+
+// isPrivateIP returns true if the IP is in a private range (RFC 1918).
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []struct {
+		start net.IP
+		end   net.IP
+	}{
+		{net.ParseIP("10.0.0.0"), net.ParseIP("10.255.255.255")},
+		{net.ParseIP("172.16.0.0"), net.ParseIP("172.31.255.255")},
+		{net.ParseIP("192.168.0.0"), net.ParseIP("192.168.255.255")},
+		{net.ParseIP("100.64.0.0"), net.ParseIP("100.127.255.255")}, // CGNAT
+	}
+	for _, r := range privateRanges {
+		if bytesInRange(ip.To4(), r.start.To4(), r.end.To4()) {
+			return true
+		}
+	}
+	return false
+}
+
+func bytesInRange(ip, start, end net.IP) bool {
+	for i := 0; i < len(ip); i++ {
+		if ip[i] < start[i] {
+			return false
+		}
+		if ip[i] > end[i] {
+			return false
+		}
+	}
+	return true
 }

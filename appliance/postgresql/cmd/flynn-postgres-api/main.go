@@ -46,6 +46,13 @@ func main() {
 	}, nil)
 	api := &pgAPI{db}
 
+	// Revoke default PUBLIC connect on shared databases so that provisioned
+	// users can only connect to their own database.  The "flynn" superuser
+	// bypasses all privilege checks, so admin access is unaffected.
+	for _, sysDB := range []string{"postgres", "template1"} {
+		_ = db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, sysDB))
+	}
+
 	router := httprouter.New()
 	router.POST("/databases", httphelper.WrapHandler(api.createDatabase))
 	router.DELETE("/databases", httphelper.WrapHandler(api.dropDatabase))
@@ -85,6 +92,23 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 		httphelper.Error(w, err)
 		return
 	}
+
+	// Isolate the new database: revoke the default PUBLIC connect privilege
+	// so that only the owning user (and the "flynn" superuser) can connect.
+	if err := p.db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, database)); err != nil {
+		// best-effort cleanup
+		p.db.Exec(fmt.Sprintf(`DROP DATABASE "%s"`, database))
+		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
+		httphelper.Error(w, err)
+		return
+	}
+	// Explicitly grant connect to the owner (redundant for owner, but
+	// makes the intent clear and survives ownership changes).
+	p.db.Exec(fmt.Sprintf(`GRANT CONNECT ON DATABASE "%s" TO "%s"`, database, username))
+
+	// Revoke the user's ability to connect to the shared postgres database
+	// (they should only need their own database).
+	p.db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "postgres" FROM "%s"`, username))
 
 	url := fmt.Sprintf("postgres://%s:%s@%s:5432/%s", username, password, serviceHost, database)
 	httphelper.JSON(w, 200, resource.Resource{

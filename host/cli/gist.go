@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cheggaaa/pb"
@@ -43,7 +44,19 @@ func (g *Gist) AddFile(name, content string) {
 	g.Size = g.Size + len(content)
 }
 
-func (g *Gist) Upload(log log15.Logger) error {
+// RedactToken replaces all occurrences of the given token in every file's
+// content with "[REDACTED]" so that sensitive credentials are not leaked
+// (e.g. via `ps faux` output captured in the debug info).
+func (g *Gist) RedactToken(token string) {
+	g.Size = 0
+	for name, file := range g.Files {
+		file.Content = strings.ReplaceAll(file.Content, token, "[REDACTED]")
+		g.Files[name] = file
+		g.Size += len(file.Content)
+	}
+}
+
+func (g *Gist) Upload(log log15.Logger, token string) error {
 	if len(g.Files) == 0 {
 		return errors.New("cannot create empty gist")
 	}
@@ -69,8 +82,13 @@ func (g *Gist) Upload(log log15.Logger) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "token "+token)
+		log.Info("creating authenticated gist")
+	} else {
+		log.Info("creating anonymous gist")
+	}
 
-	log.Info("creating anonymous gist")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Error("error uploading gist content", "err", err)

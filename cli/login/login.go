@@ -254,6 +254,7 @@ func Run(args *docopt.Args) error {
 		if err := config.WriteGlobalGitConfig(clusterConfig.GitURL, ""); err != nil {
 			return fmt.Errorf("error writing git config: %s", err)
 		}
+		config.ClearSystemCredentials(clusterConfig.GitURL)
 	}
 
 	return nil
