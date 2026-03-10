@@ -161,7 +161,11 @@ const configPollInterval = 10 * time.Second
 func RunService(ctx context.Context) error {
 	log := log15.New("component", "acme")
 
-	// Initialize controller client first - we need it to fetch configuration
+	// Initialize controller client.
+	// We discover a controller instance to obtain the AUTH_KEY, then create
+	// the client using the discoverd DNS name (controller.discoverd) so that
+	// requests are automatically routed to the current controller even if its
+	// overlay IP changes after a daemon restart.
 	log.Info("initializing controller client")
 	var client controller.Client
 	err := attempt.Strategy{
@@ -176,7 +180,7 @@ func RunService(ctx context.Context) error {
 			return fmt.Errorf("no controller instances available")
 		}
 		inst := instances[0]
-		client, err = controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+		client, err = controller.NewClient("", inst.Meta["AUTH_KEY"])
 		return err
 	})
 	if err != nil {
