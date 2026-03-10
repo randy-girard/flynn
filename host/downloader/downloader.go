@@ -219,17 +219,27 @@ func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (st
 	// Destination path with version suffix
 	destPath := filepath.Join(dir, localName+"."+d.version)
 
-	// Write decompressed content
-	destFile, err := os.Create(destPath)
+	// Write decompressed content to a temp file, then atomically rename.
+	// This avoids "text file busy" when the versioned binary is currently
+	// being executed by a running process (e.g. flynn-init in containers).
+	destTmp, err := os.CreateTemp(dir, localName+"."+d.version+".tmp.*")
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error creating temp file for %s: %s", assetName, err)
 	}
-	if _, err := io.Copy(destFile, gz); err != nil {
-		destFile.Close()
-		os.Remove(destPath)
+	destTmpPath := destTmp.Name()
+	if _, err := io.Copy(destTmp, gz); err != nil {
+		destTmp.Close()
+		os.Remove(destTmpPath)
 		return "", fmt.Errorf("error decompressing %s: %s", assetName, err)
 	}
-	destFile.Close()
+	destTmp.Close()
+
+	// Atomic rename replaces the directory entry without disturbing the
+	// old inode, so running processes keep their file handles.
+	if err := os.Rename(destTmpPath, destPath); err != nil {
+		os.Remove(destTmpPath)
+		return "", fmt.Errorf("error renaming temp file to %s: %s", destPath, err)
+	}
 
 	// Create symlink from localName to versioned file
 	if err := symlink(filepath.Base(destPath), filepath.Join(dir, localName)); err != nil {
@@ -442,8 +452,14 @@ func (d *Downloader) downloadLayer(layer *ct.ImageLayer, cacheDir string) error 
 			}
 		}
 
-		if err := d.client.DownloadFile(layerURL, destPath); err != nil {
-			lastErr = err
+		var dlErr error
+		if d.client != nil {
+			dlErr = d.client.DownloadFile(layerURL, destPath)
+		} else {
+			dlErr = downloadFileHTTP(layerURL, destPath)
+		}
+		if dlErr != nil {
+			lastErr = dlErr
 			continue
 		}
 

@@ -914,8 +914,34 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
-		c.Destroy()
-		return err
+		// If the error is AppArmor-related ("apply apparmor profile" or
+		// "apparmor failed"), retry without the profile so the container
+		// can still start. This handles kernels (e.g. 6.8.0-100-generic)
+		// that have AppArmor loaded but refuse profile transitions via
+		// /proc/self/attr/exec with EPERM.
+		errMsg := err.Error()
+		if config.AppArmorProfile != "" && (strings.Contains(errMsg, "apparmor") || strings.Contains(errMsg, "apply apparmor")) {
+			log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
+			c.Destroy()
+			config.AppArmorProfile = ""
+			c, err = l.factory.Create(job.ID, config)
+			if err != nil {
+				return err
+			}
+			process = &libcontainer.Process{
+				Init:            true,
+				Args:            []string{"/.containerinit", job.ID},
+				User:            "0:0",
+				NoNewPrivileges: &noNewPriv,
+			}
+			if err := c.Run(process); err != nil {
+				c.Destroy()
+				return err
+			}
+		} else {
+			c.Destroy()
+			return err
+		}
 	}
 	go process.Wait()
 

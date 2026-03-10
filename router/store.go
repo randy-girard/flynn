@@ -16,12 +16,15 @@ type Store interface {
 }
 
 func NewControllerStore() (*ControllerStore, error) {
+	// Discover a controller instance to obtain the AUTH_KEY, but create the
+	// client using the discoverd DNS name so it automatically follows the
+	// controller if its overlay IP changes (e.g. after a daemon restart).
 	instances, err := discoverd.NewService("controller").Instances()
 	if err != nil {
 		return nil, err
 	}
 	inst := instances[0]
-	client, err := controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+	client, err := controller.NewClient("", inst.Meta["AUTH_KEY"])
 	if err != nil {
 		return nil, err
 	}
