@@ -54,8 +54,9 @@ if [[ -z "${VERSION}" ]]; then
   else
     VERSION="${DATE_PREFIX}.0"
   fi
-  echo "===> Auto-generated version: ${VERSION}"
 fi
+
+echo "===> Buidling version: ${VERSION}"
 
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
