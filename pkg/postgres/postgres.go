@@ -51,8 +51,22 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 	if conf.Discoverd == nil {
 		conf.Discoverd = discoverd.DefaultClient
 	}
-	events := make(chan *discoverd.Event)
-	stream, err := conf.Discoverd.Service(conf.Service).Watch(events)
+
+	// Retry watching the discoverd service to handle transient unavailability
+	// during updates (e.g. when discoverd containers are being replaced and
+	// DNS resolution temporarily fails).
+	var watchAttempts = attempt.Strategy{
+		Total: 2 * time.Minute,
+		Delay: time.Second,
+	}
+	var watchStream interface{ Close() error }
+	var events chan *discoverd.Event
+	err := watchAttempts.Run(func() error {
+		events = make(chan *discoverd.Event)
+		var err error
+		watchStream, err = conf.Discoverd.Service(conf.Service).Watch(events)
+		return err
+	})
 	if err != nil {
 		shutdown.Fatal(err)
 	}
@@ -67,7 +81,7 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 			break
 		}
 	}
-	stream.Close()
+	watchStream.Close()
 	// TODO(titanous): handle discoverd disconnection
 
 	// retry here as authentication may fail if DB is still
