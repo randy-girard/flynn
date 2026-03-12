@@ -342,7 +342,7 @@ func (s *GitDeploySuite) TestNonMasterPush(t *c.C) {
 	t.Assert(r.flynn("create"), Succeeds)
 	push := r.git("push", "flynn", "master:foo")
 	t.Assert(push, c.Not(Succeeds))
-	t.Assert(push, OutputContains, "push must include a change to the master branch")
+	t.Assert(push, OutputContains, "push must include a change to the master or main branch")
 }
 
 func (s *GitDeploySuite) TestProcfileChange(t *c.C) {
