@@ -2,10 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
+	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/attempt"
 	"github.com/flynn/flynn/pkg/stream"
 	router "github.com/flynn/flynn/router/types"
 )
@@ -15,13 +18,30 @@ type Store interface {
 	Watch(ch chan *router.Event) (stream.Stream, error)
 }
 
+var controllerAttempts = attempt.Strategy{
+	Total: 2 * time.Minute,
+	Delay: time.Second,
+}
+
 func NewControllerStore() (*ControllerStore, error) {
-	instances, err := discoverd.NewService("controller").Instances()
-	if err != nil {
-		return nil, err
-	}
-	inst := instances[0]
-	client, err := controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+	// Discover a controller instance to obtain the AUTH_KEY, but create the
+	// client using the discoverd DNS name so it automatically follows the
+	// controller if its overlay IP changes (e.g. after a daemon restart).
+	// Retry for up to 2 minutes to handle startup ordering during updates,
+	// where the controller service may not yet be registered in discoverd.
+	var client controller.Client
+	err := controllerAttempts.Run(func() error {
+		instances, err := discoverd.NewService("controller").Instances()
+		if err != nil {
+			return err
+		}
+		if len(instances) == 0 {
+			return fmt.Errorf("no controller instances available")
+		}
+		inst := instances[0]
+		client, err = controller.NewClient("", inst.Meta["AUTH_KEY"])
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

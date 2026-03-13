@@ -318,15 +318,15 @@ git-archive-all() {
 }
 
 while read oldrev newrev refname; do
-	if [[ $refname = "refs/heads/master" ]]; then
+	if [[ $refname = "refs/heads/master" ]] || [[ $refname = "refs/heads/main" ]]; then
 		git-archive-all $newrev | /bin/flynn-receiver "$RECEIVE_APP" "$newrev" --meta git=true --meta "git.commit=$newrev"| sed -u "s/^/"$'\e[1G\e[K'"/"
-		master_pushed=1
+		deploy_pushed=1
 		break
 	fi
 done
 
-if [[ -z "${master_pushed}" ]]; then
-  echo "The push must include a change to the master branch to be deployed."
+if [[ -z "${deploy_pushed}" ]]; then
+  echo "The push must include a change to the master or main branch to be deployed."
   exit 1
 fi
 `)

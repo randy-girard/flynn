@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/discoverd/client"
+	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/flynn/updater/types"
@@ -100,20 +102,37 @@ func run() error {
 		}
 	}
 
+	// Repair any sirenia clusters with deposed peers BEFORE creating
+	// image artifacts.  CreateArtifact depends on blobstore which
+	// depends on postgres being healthy (with asyncs).
+	repairSireniaClusters(log)
+
 	log.Info("creating new image artifacts")
+	createArtifactWithRetry := func(name string, img *ct.Artifact) error {
+		for attempt := 1; attempt <= 6; attempt++ {
+			if err := client.CreateArtifact(img); err != nil {
+				log.Warn("error creating image artifact, retrying",
+					"name", name, "attempt", attempt, "err", err)
+				time.Sleep(10 * time.Second)
+				continue
+			}
+			return nil
+		}
+		return fmt.Errorf("failed to create %s image artifact after retries", name)
+	}
 	redisImage = images["redis"]
-	if err := client.CreateArtifact(redisImage); err != nil {
-		log.Error("error creating redis image artifact", "err", err)
+	if err := createArtifactWithRetry("redis", redisImage); err != nil {
+		log.Error(err.Error())
 		return err
 	}
 	slugRunner = images["slugrunner"]
-	if err := client.CreateArtifact(slugRunner); err != nil {
-		log.Error("error creating slugrunner image artifact", "err", err)
+	if err := createArtifactWithRetry("slugrunner", slugRunner); err != nil {
+		log.Error(err.Error())
 		return err
 	}
 	slugBuilder = images["slugbuilder"]
-	if err := client.CreateArtifact(slugBuilder); err != nil {
-		log.Error("error creating slugbuilder image artifact", "err", err)
+	if err := createArtifactWithRetry("slugbuilder", slugBuilder); err != nil {
+		log.Error(err.Error())
 		return err
 	}
 
@@ -121,6 +140,15 @@ func run() error {
 	for _, appInfo := range updater.SystemApps {
 		if appInfo.ImageOnly {
 			continue // skip ImageOnly updates
+		}
+		// Skip discoverd and flannel — their lifecycle is managed by the
+		// host daemon's resurrection logic.  Redeploying them through the
+		// controller uses an all-at-once strategy that kills every instance
+		// simultaneously, which takes down DNS and overlay networking
+		// cluster-wide and causes cascading failures in all other services.
+		if appInfo.Name == "discoverd" || appInfo.Name == "flannel" {
+			log.Info("skipping deploy of infrastructure app (managed by host daemon)", "name", appInfo.Name)
+			continue
 		}
 		log := log.New("name", appInfo.Name)
 		log.Info("starting deploy of system app")
@@ -137,16 +165,34 @@ func run() error {
 			log.Error("error getting app", "err", err)
 			return err
 		}
-		if err := deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, log); err != nil {
-			if e, ok := err.(errDeploySkipped); ok {
+		var deployErr error
+		for attempt := 1; ; attempt++ {
+			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, log)
+			if deployErr == nil {
+				break
+			}
+			if e, ok := deployErr.(errDeploySkipped); ok {
 				log.Info(
 					"skipped deploy of system app",
 					"reason", e.reason,
 					"app", appInfo.Name,
 				)
+				deployErr = nil
+				break
+			}
+			// Sirenia-based apps (postgres, mariadb, mongodb) may not have
+			// fully reformed their cluster yet after a daemon restart.
+			// Retry for up to 2 minutes to give asyncs time to rejoin.
+			if strings.Contains(deployErr.Error(), "sirenia") && attempt < 12 {
+				log.Warn("sirenia cluster not ready, retrying deploy",
+					"app", appInfo.Name, "err", deployErr, "attempt", attempt)
+				time.Sleep(10 * time.Second)
 				continue
 			}
-			return err
+			return deployErr
+		}
+		if deployErr != nil {
+			continue
 		}
 		log.Info("finished deploy of system app")
 	}
@@ -271,4 +317,51 @@ func updateImageIDs(env map[string]string) bool {
 		}
 	}
 	return updated
+}
+
+
+// repairSireniaClusters clears deposed peers from sirenia-managed services.
+// After a daemon restart the old primary may have been deposed by a sync
+// takeover; the deposed peer never automatically rejoins, leaving the cluster
+// without asyncs.  Clearing the Deposed list lets the primary re-add them.
+func repairSireniaClusters(log log15.Logger) {
+	appliances := []string{"postgres", "mariadb", "mongodb"}
+	for _, svc := range appliances {
+		svcLog := log.New("service", svc)
+		service := discoverd.NewService(svc)
+
+		meta, err := service.GetMeta()
+		if err != nil {
+			continue
+		}
+
+		var state sirenia.State
+		if err := json.Unmarshal(meta.Data, &state); err != nil {
+			svcLog.Warn("failed to decode sirenia state", "err", err)
+			continue
+		}
+
+		if len(state.Deposed) == 0 {
+			continue
+		}
+
+		svcLog.Info("clearing deposed peers from sirenia cluster",
+			"deposed_count", len(state.Deposed))
+
+		state.Deposed = nil
+
+		data, err := json.Marshal(&state)
+		if err != nil {
+			svcLog.Error("failed to encode repaired sirenia state", "err", err)
+			continue
+		}
+		meta.Data = data
+		if err := service.SetMeta(meta); err != nil {
+			svcLog.Error("failed to write repaired sirenia state", "err", err)
+			continue
+		}
+
+		svcLog.Info("cleared deposed peers, waiting for cluster to reform")
+		time.Sleep(10 * time.Second)
+	}
 }
