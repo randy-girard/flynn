@@ -9,12 +9,12 @@ curl -fSL \
   --retry-connrefused \
   --retry-all-errors \
   -o "${BSDTAR}" \
-  https://github.com/aspect-build/bsdtar-prebuilt/releases/download/v3.8.1-fix.1/tar_linux_amd64
+  https://github.com/aspect-build/bsdtar-prebuilt/releases/download/v3.8.1-fix.1/tar_linux_$(dpkg --print-architecture)
 
 chmod +x "${BSDTAR}"
 
 BASE_URL="https://cloud-images.ubuntu.com/releases/noble/release"
-FILENAME="ubuntu-24.04-server-cloudimg-amd64-root.tar.xz"
+FILENAME="ubuntu-24.04-server-cloudimg-$(dpkg --print-architecture)-root.tar.xz"
 URL="${BASE_URL}/${FILENAME}"
 TAR="${TMP}/ubuntu.tar.xz"
 SHASUMS="${TMP}/SHA256SUMS"

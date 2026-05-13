@@ -93,7 +93,7 @@ debootstrap \
   --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
   $UBUNTU_CODENAME \
   /var/lib/flynn/base-root \
-  http://mirror.math.princeton.edu/pub/ubuntu
+  http://ports.ubuntu.com/ubuntu-ports
 mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
 
 export SIZE=$(stat -c%s "$SQUASHFS")

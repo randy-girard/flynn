@@ -35,9 +35,25 @@ for name in $(busybox --list); do
   fi
 done
 
-# Required shared libraries (glibc-based system)
-cp /lib/x86_64-linux-gnu/lib{c,dl,nsl,nss_*,pthread,resolv}.so.* lib
-cp /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 lib
+ARCH="$(dpkg --print-architecture)"
+
+case "$ARCH" in
+  amd64)
+    ARCH_LIB_DIR="x86_64-linux-gnu"
+    LOADER="ld-linux-x86-64.so.2"
+    ;;
+  arm64)
+    ARCH_LIB_DIR="aarch64-linux-gnu"
+    LOADER="ld-linux-aarch64.so.1"
+    ;;
+  *)
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
+
+cp /lib/${ARCH_LIB_DIR}/lib{c,dl,nsl,nss_*,pthread,resolv}.so.* lib
+cp /lib/${ARCH_LIB_DIR}/${LOADER} lib
 
 # Build squashfs
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

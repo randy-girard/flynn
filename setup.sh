@@ -52,24 +52,16 @@ apt-get install -y \
   apparmor-utils \
   linux-modules-extra-$(uname -r)
 
-
-#cd /tmp
-#wget https://launchpad.net/~canonical-kernel-team/+archive/ubuntu/ppa/+build/14960883/+files/linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb
-#dpkg -i linux-image-4.13.0-1019-gcp_4.13.0-1019.23_amd64.deb
-
 cd /usr/local
 # adjust version as you like; 1.20+ is fine for Flynn
-wget https://go.dev/dl/go1.24.12.linux-amd64.tar.gz
+wget "https://go.dev/dl/go1.24.12.linux-$(dpkg --print-architecture).tar.gz"
 rm -rf go
-tar -xzf go1.24.12.linux-amd64.tar.gz
+tar -xzf "go1.24.12.linux-$(dpkg --print-architecture).tar.gz"
 
 export PATH=/usr/local/go/bin:$PATH
 go version
 go env CGO_ENABLED
 CGO_ENABLED=1 go env CGO_ENABLED
 
-mkdir -p /root/.ssh
-cp /root/go/src/github.com/flynn/flynn/sshkeys/id_rsa /root/.ssh/id_rsa
-
 cd /root/go/src/github.com/flynn/flynn
-GOOS=linux GOARCH=amd64 go build -o sha512_256_binary sha512_256.go
+go build -o sha512_256_binary sha512_256.go

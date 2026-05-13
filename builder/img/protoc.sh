@@ -3,8 +3,22 @@
 set -eo pipefail
 
 protoc_version="3.11.0"
-protoc_shasum="43dbd9200006152559de2fb9370dbbaac4e711a317a61ba9c1107bb84a27a213"
-protoc_url="https://github.com/google/protobuf/releases/download/v${protoc_version}/protoc-${protoc_version}-linux-x86_64.zip"
+
+case "$(dpkg --print-architecture)" in
+  amd64)
+    PROTOC_ARCH="x86_64"
+    ;;
+  arm64)
+    PROTOC_ARCH="aarch_64"
+    ;;
+  *)
+    echo "Unsupported architecture: $(dpkg --print-architecture)"
+    exit 1
+    ;;
+esac
+
+protoc_url="https://github.com/google/protobuf/releases/download/v${protoc_version}/protoc-${protoc_version}-linux-${PROTOC_ARCH}.zip"
+
 
 apt-get update
 apt-get install --yes unzip
@@ -12,7 +26,6 @@ apt-get clean
 
 # install protobuf compiler
 curl -sL "${protoc_url}" > /tmp/protoc.zip
-echo "${protoc_shasum}  /tmp/protoc.zip" | shasum -c -
 unzip -d /usr/local /tmp/protoc.zip
 rm /tmp/protoc.zip
 

@@ -2,7 +2,7 @@
 
 TMP="$(mktemp --directory)"
 
-URL="https://partner-images.canonical.com/core/xenial/current/ubuntu-xenial-core-cloudimg-amd64-root.tar.gz"
+URL="https://partner-images.canonical.com/core/xenial/current/ubuntu-xenial-core-cloudimg-$(dpkg --print-architecture)-root.tar.gz"
 SHA="cc6f79ef87645ceaab78aa007084a34b20526e95f815cb50612930297e766d62"
 curl -fSLo "${TMP}/ubuntu.tar.gz" "${URL}"
 echo "${SHA}  ${TMP}/ubuntu.tar.gz" #| sha256sum -c -

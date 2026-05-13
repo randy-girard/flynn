@@ -3,9 +3,9 @@
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
-    "size": 81035264,
+    "size": 78528512,
     "hashes": {
-      "sha512_256": "6c7f97dd6dd9e8bf2b56878aea0bfcdcc0e4974b695887ebba3b22bf7f9bd36b"
+      "sha512_256": "0645963a9639deca971e04b0ecd379b3cd28136449b365f8e191483faccb15ca"
     }
   },
   "images": [
@@ -585,6 +585,15 @@
       "template": "cli"
     },
     {
+      "id": "cli-linux-arm64",
+      "base": "busybox",
+      "env": {
+        "GOOS": "linux",
+        "GOARCH": "arm64"
+      },
+      "template": "cli"
+    },
+    {
       "id": "cli-linux-386",
       "base": "busybox",
       "env": {
@@ -599,6 +608,15 @@
       "env": {
         "GOOS": "darwin",
         "GOARCH": "amd64"
+      },
+      "template": "cli"
+    },
+    {
+      "id": "cli-darwin-arm64",
+      "base": "busybox",
+      "env": {
+        "GOOS": "darwin",
+        "GOARCH": "arm64"
       },
       "template": "cli"
     },
