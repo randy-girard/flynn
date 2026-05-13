@@ -4,13 +4,43 @@
 # Builds Flynn components
 #
 # Usage:
-#   ./build.sh                              # Build
-#   ./build.sh --version v20240127.0        # Build with specific version
+#   ./build.sh [OPTIONS] [PHASE]
+#
+# PHASE (default: all):
+#   base     Build the debootstrap base root, squashfs, and update builder/manifest.json.
+#            Slow; only re-run when changing Ubuntu series or base packages.
+#   cluster  Stop Flynn, clean install, compile, start services, run flynn-builder,
+#            then stop all local Flynn services again.
+#   all      Run base then cluster (same as the historical single-shot build).
+#
+# Examples:
+#   ./build.sh --version v20240127.0 base
+#   ./build.sh cluster
+#   ./build.sh                              # all phases, auto version
 #
 # For GitHub Releases, run ./script/github-release after committing your changes.
 #
 
 set -eo pipefail
+
+usage() {
+  cat <<USAGE >&2
+Usage: $0 [OPTIONS] [PHASE]
+
+OPTIONS:
+  --version VERSION   Version for build (e.g., v20240127.0)
+  -h, --help          Show this message
+
+PHASE (default: all):
+  base      Debootstrap + base squashfs + manifest (run rarely)
+  cluster   Teardown, build, flynn-builder, then stop all local Flynn services
+  all       base then cluster
+
+Examples:
+  $0 base
+  $0 --version v20240127.0 cluster
+USAGE
+}
 
 # Get the root directory of the Flynn project
 FLYNN_ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -18,21 +48,30 @@ export FLYNN_ROOT
 
 # Parse command line arguments
 VERSION=""
+PHASE="all"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version)
+      if [[ -z "${2:-}" ]]; then
+        echo "ERROR: --version requires an argument" >&2
+        usage
+        exit 1
+      fi
       VERSION="$2"
       shift 2
       ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    base|cluster|all)
+      PHASE="$1"
+      shift
+      ;;
     *)
-      echo "Unknown option: $1"
-      echo "Usage: $0 [OPTIONS]"
-      echo ""
-      echo "OPTIONS:"
-      echo "  --version VERSION          Version for build (e.g., v20240127)"
-      echo ""
-      echo "For GitHub Releases, run ./script/github-release after committing."
+      echo "Unknown argument: $1" >&2
+      usage
       exit 1
       ;;
   esac
@@ -56,11 +95,10 @@ if [[ -z "${VERSION}" ]]; then
   fi
 fi
 
-echo "===> Buidling version: ${VERSION}"
+echo "===> Building version: ${VERSION} (phase: ${PHASE})"
 
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
-
 
 export PATH=/usr/local/go/bin:$PATH
 export HOST_UBUNTU=$(lsb_release -cs)
@@ -77,85 +115,140 @@ export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
 export JSON_FILE="${FLYNN_ROOT}/builder/manifest.json"
-export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+export UBUNTU_CODENAME
+UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
 echo "GO VERSION"
 echo "$(go version)"
 
-./script/stop-all
-./script/install-flynn --remove --clean --yes
+teardown_flynn() {
+  echo "===> Stopping Flynn and removing install..."
+  ./script/stop-all
+  ./script/install-flynn --remove --clean --yes
+}
 
-echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+# --- Phase: base (debootstrap + squashfs + manifest) ---
+run_phase_base() {
+  echo "===> [base] Stopping Flynn and cleaning install (before base image)..."
+  teardown_flynn
 
-mkdir -p /var/lib/flynn/base-root
-debootstrap \
-  --variant=minbase \
-  --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
-  $UBUNTU_CODENAME \
-  /var/lib/flynn/base-root \
-  http://ports.ubuntu.com/ubuntu-ports
-mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
+  echo "===> [base] Preparing apt (IPv4) and base root image..."
 
-export SIZE=$(stat -c%s "$SQUASHFS")
-export HASH=$(./sha512_256_binary "$SQUASHFS")
+  echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
 
-echo "SIZE=$SIZE"
-echo "HASH=$HASH"
+  mkdir -p /var/lib/flynn/base-root
+  debootstrap \
+    --variant=minbase \
+    --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
+    "${UBUNTU_CODENAME}" \
+    /var/lib/flynn/base-root \
+    http://ports.ubuntu.com/ubuntu-ports
+  mksquashfs /var/lib/flynn/base-root "${SQUASHFS}" -noappend
 
-# Update JSON file using jq
-jq --arg url "file://$SQUASHFS" \
-  --arg size "$SIZE" \
-  --arg hash "$HASH" \
-  '.base_layer.url = $url |
-    .base_layer.size = ($size | tonumber) |
-    .base_layer.hashes.sha512_256 = $hash' \
-  "$JSON_FILE" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "$JSON_FILE"
+  cd "${FLYNN_ROOT}"
+  export SIZE
+  SIZE=$(stat -c%s "${SQUASHFS}")
+  export HASH
+  HASH=$(./sha512_256_binary "${SQUASHFS}")
 
-# Return to Flynn root and continue build
-cd "${FLYNN_ROOT}" && \
-mkdir -p /etc/flynn && \
-mkdir -p /tmp/discoverd-data
+  echo "SIZE=${SIZE}"
+  echo "HASH=${HASH}"
 
-rm -rf /tmp/flynn-* && \
-rm -rf /var/log/flynn/* && \
-make clean && \
-bash ./host/apparmor/setup-apparmor.sh && \
-./script/build-flynn --version "${VERSION}" && \
-rm -f build/bin/flynn-builder && \
-rm -f build/bin/flannel-wrapper && \
-go build -o build/bin/flannel-wrapper ./flannel/wrapper && \
-./script/start-all && \
-zfs set sync=disabled flynn-default && \
-zfs set reservation=512M flynn-default && \
-zfs set refreservation=512M flynn-default
+  jq --arg url "file://${SQUASHFS}" \
+    --arg size "${SIZE}" \
+    --arg hash "${HASH}" \
+    '.base_layer.url = $url |
+      .base_layer.size = ($size | tonumber) |
+      .base_layer.hashes.sha512_256 = $hash' \
+    "${JSON_FILE}" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "${JSON_FILE}"
 
-# Flynn builder step with automatic retry (up to 10 times)
-MAX_RETRIES=10
-ATTEMPT=1
+  echo "===> [base] Complete."
+}
 
-while [ $ATTEMPT -le $MAX_RETRIES ]; do
-  echo "===> Running flynn-builder build (attempt $ATTEMPT of $MAX_RETRIES) with version: ${VERSION}"
-  if ./script/flynn-builder build --version="${VERSION}" --verbose; then
-    echo "===> flynn-builder build succeeded!"
-    break
-  else
-    echo ""
-    echo "===> flynn-builder build FAILED (attempt $ATTEMPT of $MAX_RETRIES)!"
-    flynn-host ps -a
-    if [ $ATTEMPT -eq $MAX_RETRIES ]; then
-      echo "===> Maximum retry attempts reached. Exiting."
-      exit 1
-    fi
-    echo "===> Retrying in 5 seconds..."
-    sleep 5
-    ATTEMPT=$((ATTEMPT + 1))
+# --- Phase: cluster (Flynn teardown, build, start, flynn-builder) ---
+# Set FLYNN_BUILD_SKIP_TEARDOWN=1 when chaining after teardown_flynn + run_phase_base (./build.sh all).
+run_phase_cluster() {
+  if [[ ! -f "${SQUASHFS}" ]]; then
+    echo "ERROR: Missing base squashfs at ${SQUASHFS}" >&2
+    echo "Run:  $0 base" >&2
+    exit 1
   fi
-done
 
-flynn-host ps -a
+  if [[ -z "${FLYNN_BUILD_SKIP_TEARDOWN:-}" ]]; then
+    echo "===> [cluster] Stopping Flynn and cleaning install..."
+    teardown_flynn
+  else
+    echo "===> [cluster] Skipping teardown (already done for this run)."
+  fi
 
-cd "${FLYNN_ROOT}"
-cp ./script/install-flynn /usr/bin/install-flynn
+  echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+
+  cd "${FLYNN_ROOT}" && \
+    mkdir -p /etc/flynn && \
+    mkdir -p /tmp/discoverd-data
+
+  rm -rf /tmp/flynn-* && \
+    rm -rf /var/log/flynn/* && \
+    make clean && \
+    bash ./host/apparmor/setup-apparmor.sh && \
+    ./script/build-flynn --version "${VERSION}" && \
+    rm -f build/bin/flynn-builder && \
+    rm -f build/bin/flannel-wrapper && \
+    go build -o build/bin/flannel-wrapper ./flannel/wrapper && \
+    ./script/start-all && \
+    zfs set sync=disabled flynn-default && \
+    zfs set reservation=512M flynn-default && \
+    zfs set refreservation=512M flynn-default
+
+  MAX_RETRIES=10
+  ATTEMPT=1
+
+  while [[ ${ATTEMPT} -le ${MAX_RETRIES} ]]; do
+    echo "===> Running flynn-builder build (attempt ${ATTEMPT} of ${MAX_RETRIES}) with version: ${VERSION}"
+    if ./script/flynn-builder build --version="${VERSION}" --verbose; then
+      echo "===> flynn-builder build succeeded!"
+      break
+    else
+      echo ""
+      echo "===> flynn-builder build FAILED (attempt ${ATTEMPT} of ${MAX_RETRIES})!"
+      flynn-host ps -a
+      if [[ ${ATTEMPT} -eq ${MAX_RETRIES} ]]; then
+        echo "===> Maximum retry attempts reached. Exiting."
+        exit 1
+      fi
+      echo "===> Retrying in 5 seconds..."
+      sleep 5
+      ATTEMPT=$((ATTEMPT + 1))
+    fi
+  done
+
+  flynn-host ps -a
+
+  cd "${FLYNN_ROOT}"
+  cp ./script/install-flynn /usr/bin/install-flynn
+
+  echo "===> [cluster] Stopping local Flynn stack after successful build..."
+  ./script/stop-all
+
+  echo "===> [cluster] Complete."
+}
+
+case "${PHASE}" in
+  base)
+    run_phase_base
+    ;;
+  cluster)
+    run_phase_cluster
+    ;;
+  all)
+    run_phase_base
+    FLYNN_BUILD_SKIP_TEARDOWN=1 run_phase_cluster
+    ;;
+  *)
+    echo "Internal error: unknown phase ${PHASE}" >&2
+    exit 1
+    ;;
+esac
 
 echo "===> Build complete!"
 echo ""
