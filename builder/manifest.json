@@ -5,7 +5,7 @@
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 78528512,
     "hashes": {
-      "sha512_256": "0645963a9639deca971e04b0ecd379b3cd28136449b365f8e191483faccb15ca"
+      "sha512_256": "382b21ad655ffe7bac0d19e6a28855ed82f7a75dd136083163d6cf1dff4ddd03"
     }
   },
   "images": [
@@ -494,7 +494,10 @@
           "script": "slugbuilder/img/packages.sh",
           "inputs": [
             "slugbuilder/builder/buildpacks.txt",
-            "slugbuilder/builder/install-buildpack"
+            "slugbuilder/builder/install-buildpack",
+            "slugbuilder/builder/common_tools.flynn.sh",
+            "slugbuilder/builder/flynn-heroku-go-common-overrides.sh",
+            "slugbuilder/builder/patch-heroku-go-multiarch.sh"
           ]
         },
         {

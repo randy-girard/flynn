@@ -17,7 +17,8 @@ apt-get install -y linux-gcp \
     qemu-kvm \
     apparmor \
     apparmor-utils \
-    libseccomp-dev
+    libseccomp-dev \
+    jq
 
 apt-get clean
 
@@ -40,13 +41,8 @@ apt-get clean
 printf '%s\n' 9p 9pnet 9pnet_virtio >> /etc/initramfs-tools/modules
 update-initramfs -u
 
-# install jq for reading container config files
-JQ_URL="https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64"
-JQ_SHA="af986793a515d500ab2d35f8d2aecd656e764504b789b66d7e1a0b727a124c44"
-curl -fsSL --retry 5 --retry-delay 3 -o /tmp/jq "${JQ_URL}"
-echo "${JQ_SHA}  /tmp/jq" | sha256sum -c -
-mv /tmp/jq /usr/local/bin/jq
-chmod +x /usr/local/bin/jq
+# Compatibility: older scripts referenced /usr/local/bin/jq; apt installs /usr/bin/jq
+ln -sf /usr/bin/jq /usr/local/bin/jq
 
 # add a systemd service to start flynn-host in a VM
 cat > /etc/systemd/system/flynn-host.service <<EOF

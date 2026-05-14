@@ -143,10 +143,9 @@ systemctl disable redis-server
 echo AcceptEnv TEST_RUNNER_AUTH_KEY BLOBSTORE_S3_CONFIG BLOBSTORE_GCS_CONFIG BLOBSTORE_AZURE_CONFIG >> /etc/ssh/sshd_config
 
 # install Bats and jq for running script unit tests
+apt-get install -y jq
 git clone https://github.com/sstephenson/bats.git "${tmpdir}/bats"
 "${tmpdir}/bats/install.sh" "/usr/local"
-curl -fsLo "/usr/local/bin/jq" "https://github.com/stedolan/jq/releases/download/jq-1.5/jq-linux64"
-chmod +x "/usr/local/bin/jq"
 
 # cleanup
 apt-get autoremove -y
