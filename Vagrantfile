@@ -31,10 +31,14 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   ENV['LANG']="en_US.UTF-8"
   ENV['LANGUAGE']="en_US.UTF-8"
 
-  # Network configuration for services
-  # Flynn Discovery
-  config.vm.network "forwarded_port", guest: 8080, host: 80, host_ip: "127.0.0.1"
-  config.vm.network "forwarded_port", guest: 8443, host: 443, host_ip: "127.0.0.1"
+  # HTTP/HTTPS: bind on all host interfaces so another machine (e.g. a Caddy
+  # reverse proxy) on the LAN can reach the VM. If you only browse from the host,
+  # set host_ip back to "127.0.0.1" for stricter binding.
+  #
+  # Flynn router HTTP is guest:80 → host:8080 (not host:80). Point your proxy at
+  # http://<flynn-host-lan-ip>:8080 for plain HTTP to the router.
+  config.vm.network "forwarded_port", guest: 80, host: 8080
+  config.vm.network "forwarded_port", guest: 443, host: 8443
 
   # PostgreSQL
   config.vm.network "forwarded_port", guest: 5432, host: 15432, host_ip: "127.0.0.1"

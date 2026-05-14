@@ -417,6 +417,8 @@ create_tarball() {
   echo "To install on a server:"
   echo "  1. Upload the tarball:  scp ${OUTPUT_DIR}/${TARBALL_NAME} root@server:/tmp/"
   echo "  2. Extract and install: ssh root@server 'cd /tmp && tar xzf ${TARBALL_NAME} && cd ${FOLDER_NAME} && ./install-flynn'"
+  echo "  3. Or install from the tarball without extracting first (GitHub or tarball install script):"
+  echo "       sudo bash install-flynn --tarball /tmp/${TARBALL_NAME}"
   echo ""
   echo "After testing, create GitHub release with:"
   echo "  ./script/release --target github --version ${VERSION}"
