@@ -32,7 +32,22 @@ const (
 	oobRedirectURI = "urn:ietf:wg:oauth:2.0:oob"
 )
 
-func Run(args *docopt.Args) error {
+func looksLikeIssuerURL(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return false
+	}
+	return strings.Contains(s, "://") || strings.HasPrefix(s, "http:") || strings.HasPrefix(s, "https:")
+}
+
+func issuerFromCluster(c *config.Cluster) string {
+	if c.OAuthURL != "" {
+		return c.OAuthURL
+	}
+	return strings.TrimSpace(c.DashboardURL)
+}
+
+func Run(args *docopt.Args, globalCluster string) error {
 	flynnrc, err := config.ReadFile(config.DefaultPath())
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("error reading flynnrc: %s", err)
@@ -41,34 +56,102 @@ func Run(args *docopt.Args) error {
 	existingIssuers := make(map[string][]string)
 	existingClusters := make(map[string]*config.Cluster)
 	for _, c := range flynnrc.Clusters {
-		if c.OAuthURL != "" {
-			existingIssuers[c.OAuthURL] = append(existingIssuers[c.OAuthURL], c.Name)
+		if iss := issuerFromCluster(c); iss != "" {
+			existingIssuers[iss] = append(existingIssuers[iss], c.Name)
 		}
 		existingClusters[c.Name] = c
 	}
 
 	oob := useOOB(args)
-	issuer := args.String["<issuer>"]
+	positional := strings.TrimSpace(args.String["<issuer-or-cluster>"])
 	prompt := args.Bool["--prompt"]
 	force := args.Bool["--force"]
-	clusterName := args.String["--cluster-name"]
-	controllerURL := args.String["--controller-url"]
+	clusterNameArg := strings.TrimSpace(args.String["--cluster-name"])
+	controllerURL := strings.TrimSpace(args.String["--controller-url"])
+	var issuer string
+
+	clusterName := clusterNameArg
+	if globalCluster != "" {
+		if clusterName != "" && clusterName != globalCluster {
+			return fmt.Errorf("conflicting cluster selection: -n %q vs global -c %q", clusterName, globalCluster)
+		}
+		clusterName = globalCluster
+	}
+
+	if positional != "" {
+		if looksLikeIssuerURL(positional) {
+			issuer = positional
+		} else {
+			if clusterName != "" && clusterName != positional {
+				return fmt.Errorf("conflicting cluster names %q and %q", clusterName, positional)
+			}
+			clusterName = positional
+		}
+	}
+
+	var selected *config.Cluster
+	if clusterName != "" {
+		selected = existingClusters[clusterName]
+		if selected == nil {
+			return fmt.Errorf("unknown cluster %q in %s", clusterName, config.DefaultPath())
+		}
+		if issuer == "" {
+			if iss := issuerFromCluster(selected); iss != "" {
+				issuer = iss
+			}
+		}
+		if controllerURL == "" {
+			controllerURL = selected.ControllerURL
+		}
+	}
+
+	if issuer == "" {
+		def := strings.TrimSpace(flynnrc.Default)
+		if def != "" {
+			selected = existingClusters[def]
+		}
+		if selected == nil && len(flynnrc.Clusters) == 1 {
+			selected = flynnrc.Clusters[0]
+		}
+		if selected != nil {
+			if iss := issuerFromCluster(selected); iss != "" {
+				issuer = iss
+			}
+			if controllerURL == "" {
+				controllerURL = selected.ControllerURL
+			}
+			if clusterName == "" {
+				clusterName = selected.Name
+			}
+		}
+	}
 
 	if issuer == "" && len(existingIssuers) == 1 {
 		for k := range existingIssuers {
 			issuer = k
 		}
 	}
+
 	reauth := false
-	if !prompt && clusterName == "" && controllerURL == "" && len(existingIssuers[issuer]) > 0 {
+	if !prompt && clusterName != "" && existingClusters[clusterName] != nil {
+		reauth = true
+	} else if !prompt && clusterName == "" && controllerURL == "" && issuer != "" && len(existingIssuers[issuer]) > 0 {
 		reauth = true
 		if len(existingIssuers[issuer]) == 1 {
 			clusterName = existingIssuers[issuer][0]
 			controllerURL = existingClusters[clusterName].ControllerURL
 		}
 	}
+
+	if reauth && clusterName == "" && len(existingIssuers[issuer]) > 1 {
+		return fmt.Errorf("multiple clusters use this issuer; pick one with: flynn -c <name> login or flynn login <name>")
+	}
+	if reauth && controllerURL == "" && clusterName != "" {
+		controllerURL = existingClusters[clusterName].ControllerURL
+	}
+
 	if issuer == "" {
-		return fmt.Errorf("issuer URL must be specified")
+		return fmt.Errorf("no OAuth issuer: pass the dashboard URL, run `flynn cluster add` (stores dashboard URL), or set a default cluster in %s", config.DefaultPath())
 	}
 	if !reauth && !prompt && controllerURL == "" {
 		return fmt.Errorf("--prompt or --controller-url must be specified to add a new cluster")
@@ -130,6 +213,24 @@ func Run(args *docopt.Args) error {
 	}
 
 	if reauth {
+		if clusterName != "" {
+			if c := existingClusters[clusterName]; c != nil {
+				updated := false
+				if c.OAuthURL == "" && issuer != "" {
+					c.OAuthURL = issuer
+					updated = true
+				}
+				if c.DashboardURL == "" && issuer != "" {
+					c.DashboardURL = issuer
+					updated = true
+				}
+				if updated {
+					if err := flynnrc.SaveTo(config.DefaultPath()); err != nil {
+						return fmt.Errorf("error writing flynnrc: %s", err)
+					}
+				}
+			}
+		}
 		return nil
 	}
 
@@ -227,13 +328,31 @@ func Run(args *docopt.Args) error {
 
 	domain := strings.TrimPrefix(controllerURL, "https://controller.")
 	clusterConfig := &config.Cluster{
-		Name:          clusterName,
-		OAuthURL:      issuer,
+		Name:           clusterName,
+		OAuthURL:       issuer,
+		DashboardURL:   issuer,
 		ControllerURL: controllerURL,
-		GitURL:        "https://git." + domain,
-		ImageURL:      "https://images." + domain,
+		GitURL:         "https://git." + domain,
+		ImageURL:       "https://images." + domain,
 	}
-	if err := flynnrc.Add(clusterConfig, force); err != nil {
+	if prev := existingClusters[clusterName]; prev != nil {
+		clusterConfig.Key = prev.Key
+		clusterConfig.TLSPin = prev.TLSPin
+		if prev.GitURL != "" {
+			clusterConfig.GitURL = prev.GitURL
+		}
+		if prev.ImageURL != "" {
+			clusterConfig.ImageURL = prev.ImageURL
+		}
+		if prev.DockerPushURL != "" {
+			clusterConfig.DockerPushURL = prev.DockerPushURL
+		}
+		if prev.DashboardURL != "" {
+			clusterConfig.DashboardURL = prev.DashboardURL
+		}
+	}
+	mergeForce := force || existingClusters[clusterName] != nil
+	if err := flynnrc.Add(clusterConfig, mergeForce); err != nil {
 		return fmt.Errorf("error saving config: %s", err)
 	}
 	if flynnrc.Default == "" {

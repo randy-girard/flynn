@@ -28,7 +28,7 @@ import (
 func init() {
 	register("cluster", runCluster, `
 usage: flynn cluster
-       flynn cluster add [-f] [-d] [--git-url <giturl>] [--no-git] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] <cluster-name> <domain> <key>
+       flynn cluster add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] <cluster-name> <domain> <key>
        flynn cluster remove <cluster-name>
        flynn cluster default [<cluster-name>]
        flynn cluster migrate-domain <domain>
@@ -52,6 +52,7 @@ Commands:
             -d, --default             set as default cluster
             --git-url=<giturl>        git URL
             --no-git                  skip git configuration
+            --dashboard-url=<url>     public dashboard URL (defaults to https://dashboard.<domain>)
             --image-url=<url>         image URL
             --docker-push-url=<url>   [DEPRECATED] Docker push URL
             --docker                  [DEPRECATED] configure Docker to push to the cluster
@@ -151,7 +152,7 @@ func runCluster(args *docopt.Args) error {
 	w := tabWriter()
 	defer w.Flush()
 
-	listRec(w, "NAME", "CONTROLLER URL", "GIT URL", "IMAGE URL")
+	listRec(w, "NAME", "CONTROLLER URL", "DASHBOARD URL", "GIT URL", "IMAGE URL")
 	for _, s := range config.Clusters {
 		gitURL := s.GitURL
 		if gitURL == "" {
@@ -161,7 +162,14 @@ func runCluster(args *docopt.Args) error {
 		if imageURL == "" {
 			imageURL = "(none)"
 		}
-		data := []interface{}{s.Name, s.ControllerURL, gitURL, imageURL}
+		dash := s.DashboardURL
+		if dash == "" {
+			dash = s.OAuthURL
+		}
+		if dash == "" {
+			dash = "(none)"
+		}
+		data := []interface{}{s.Name, s.ControllerURL, dash, gitURL, imageURL}
 		if s.Name == config.Default {
 			data = append(data, "(default)")
 		}
@@ -179,12 +187,19 @@ func runClusterAdd(args *docopt.Args) error {
 		DockerPushURL: args.String["--docker-push-url"],
 		TLSPin:        args.String["--tls-pin"],
 	}
+	dash := strings.TrimSpace(args.String["--dashboard-url"])
+	if dash != "" {
+		s.DashboardURL = dash
+	}
 	domain := args.String["<domain>"]
 
 	// handle legacy use where <domain> is the controller URL
 	domain = strings.TrimPrefix(domain, "https://controller.")
 
 	s.ControllerURL = "https://controller." + domain
+	if s.DashboardURL == "" {
+		s.DashboardURL = "https://dashboard." + domain
+	}
 	if s.GitURL == "" && !args.Bool["--no-git"] {
 		s.GitURL = "https://git." + domain
 	}
@@ -394,6 +409,12 @@ func runClusterMigrateDomain(args *docopt.Args) error {
 				cluster.GitURL = fmt.Sprintf("https://git.%s", dm.Domain)
 				cluster.ImageURL = fmt.Sprintf("https://images.%s", dm.Domain)
 				cluster.DockerPushURL = fmt.Sprintf("https://docker.%s", dm.Domain)
+				if cluster.DashboardURL == fmt.Sprintf("https://dashboard.%s", dm.OldDomain) {
+					cluster.DashboardURL = fmt.Sprintf("https://dashboard.%s", dm.Domain)
+				}
+				if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", dm.OldDomain) {
+					cluster.OAuthURL = fmt.Sprintf("https://dashboard.%s", dm.Domain)
+				}
 				if err := config.SaveTo(configPath()); err != nil {
 					return fmt.Errorf("Error saving config: %s", err)
 				}
