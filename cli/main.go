@@ -127,12 +127,49 @@ See 'flynn help <command>' for more information on a specific command.
 
 	if err := runCommand(cmd, cmdArgs); err != nil {
 		log.Println(err)
-		if strings.Contains(err.Error(), "invalid_grant") {
+		if needsFlynnLoginHint(err) {
 			log.Println("Reauthentication required. Run `flynn login` to get new credentials.")
 		}
 		shutdown.ExitWithCode(1)
 		return
 	}
+}
+
+// needsFlynnLoginHint reports whether err likely means dashboard OAuth tokens are
+// missing, revoked, or expired — user should run `flynn login` again.
+func needsFlynnLoginHint(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "invalid_grant") {
+		return true
+	}
+	if strings.Contains(msg, "invalid_token") {
+		return true
+	}
+	if strings.Contains(msg, "token_expired") {
+		return true
+	}
+	if strings.Contains(msg, "expired token") {
+		return true
+	}
+	if strings.Contains(msg, "id_token expired") {
+		return true
+	}
+	if strings.Contains(msg, "refresh token") && strings.Contains(msg, "invalid") {
+		return true
+	}
+	if strings.Contains(msg, "unauthorized_client") {
+		return true
+	}
+	if strings.Contains(msg, "access_denied") {
+		return true
+	}
+	if strings.Contains(msg, "not_before_claim") {
+		return true
+	}
+	return false
 }
 
 type command struct {

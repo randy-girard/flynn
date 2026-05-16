@@ -43,9 +43,29 @@ func (d *DeployJob) deploySirenia() (err error) {
 		return errors.New("sirenia process type not present in new release")
 	}
 
+	singletonRelease := func() bool {
+		if d.oldRelease != nil && d.oldRelease.Env["SINGLETON"] == "true" {
+			return true
+		}
+		return d.newRelease.Env["SINGLETON"] == "true"
+	}()
+
 	// if sirenia process type is scaled to 0, skip and deploy non-sirenia processes
 	if d.Processes[processType] == 0 {
 		log.Info("sirenia process type scale = 0, skipping")
+		return d.deployOneByOne()
+	}
+	// A single database peer runs in sirenia "singleton" mode. The HA rolling
+	// strategy below requires primary, sync, and async peers; use the standard
+	// one-by-one job replacement (same as scale=0 sirenia skip) for one node.
+	if d.Processes[processType] == 1 {
+		log.Info("sirenia process type scale = 1, using one-by-one deployment")
+		return d.deployOneByOne()
+	}
+	// Bootstrap or legacy clusters can have SINGLETON=true while formation
+	// counts still reflect HA; never use the HA rolling path in that case.
+	if singletonRelease {
+		log.Info("sirenia SINGLETON=true in release env, using one-by-one deployment")
 		return d.deployOneByOne()
 	}
 
@@ -96,7 +116,8 @@ loop:
 
 	// abort if in singleton mode or not deploying from a clean state
 	if state.Singleton {
-		return loggedErr("sirenia cluster in singleton mode")
+		log.Info("sirenia discoverd state is singleton, using one-by-one deployment")
+		return d.deployOneByOne()
 	}
 	if len(state.Async) == 0 {
 		return loggedErr("sirenia cluster in unhealthy state (has no asyncs)")

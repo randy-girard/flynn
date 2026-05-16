@@ -59,3 +59,12 @@ web: myserver
 
 The `web` process type has an HTTP route by default and a corresponding `PORT`
 environment variable that the server should listen on.
+
+## Building a frontend before `go install`
+
+The Go buildpack only compiles Go; it does not run webpack, Vite, etc. If you
+serve a generated `dist/` directory from the same repository (for example
+`//go:embed` in a Go package), use the buildpack’s supported hook: an executable
+`bin/go-pre-compile` script in the app root runs **before** `go install` (see the
+[Heroku Go buildpack README — hooks](https://github.com/heroku/heroku-buildpack-go/blob/main/README.md#prepost-compile-hooks)). install or invoke Node in that script, run
+`npm ci` / `npm run build` in your UI directory, then let the buildpack compile Go as usual.
