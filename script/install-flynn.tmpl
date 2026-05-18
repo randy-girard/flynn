@@ -146,7 +146,8 @@ main() {
 
   repo_url="${repo_url:="flynn/flynn"}"
 
-  local packages=("iptables" "zfsutils-linux")
+  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip (modern fallback / minimal images)
+  local packages=("iptables" "zfsutils-linux" "net-tools" "iproute2")
 
   info "installing runtime dependencies"
   run apt-get update

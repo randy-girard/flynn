@@ -5,7 +5,7 @@
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 78528512,
     "hashes": {
-      "sha512_256": "382b21ad655ffe7bac0d19e6a28855ed82f7a75dd136083163d6cf1dff4ddd03"
+      "sha512_256": "f9f587b2a24530e654249774462fb1836e7d911639bc0546789479661d06a6d2"
     }
   },
   "images": [
@@ -654,6 +654,11 @@
         },
         {
           "name": "test-binaries",
+          "inputs": [
+            "pkg/sirenia/xlog/*.go",
+            "pkg/sirenia/client/*.go",
+            "pkg/sirenia/state/*.go"
+          ],
           "cgobuild": {
             "test": "/bin/flynn-test",
             "test/runner": "/bin/flynn-test-runner"

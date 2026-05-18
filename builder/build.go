@@ -473,7 +473,11 @@ func (b *Builder) BuildImage(image *Image) error {
 				outDir := filepath.Join("/mnt/out/proto", dir)
 				run = append(run,
 					fmt.Sprintf("mkdir -p %s", outDir),
-					fmt.Sprintf("protoc -I /usr/local/include -I %s --go_out=plugins=grpc:%s %s", dir, outDir, strings.Join(paths, " ")),
+					// PATH: prefer /bin so we invoke protoc-gen-go(go install) before any other PATH binary.
+					// protoc 3.11's well-known types still declare legacy go_package paths; map them to
+					// google.golang.org/protobuf/types/known/* so -mod=vendor builds do not require genproto/ptypes.
+					fmt.Sprintf("PATH=/bin:/usr/local/bin:/usr/bin protoc -I /usr/local/include -I %s --go_out=%s --go_opt=module=github.com/flynn/flynn/controller/api --go_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb --go-grpc_out=%s --go-grpc_opt=module=github.com/flynn/flynn/controller/api --go-grpc_opt=require_unimplemented_servers=false --go-grpc_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go-grpc_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go-grpc_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go-grpc_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb %s",
+						dir, outDir, outDir, strings.Join(paths, " ")),
 				)
 			}
 		}
@@ -906,6 +910,10 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 			if err != nil {
 				return err
 			}
+			dstPath = normalizeGeneratedProtoRel(dstPath)
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+				return err
+			}
 			dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
 			if err != nil {
 				return err
@@ -1255,4 +1263,19 @@ func (g *GoInputs) load(pkg string) ([]string, error) {
 	g.inputs[pkg] = inputs.([]string)
 	g.mtx.Unlock()
 	return inputs.([]string), nil
+}
+
+// normalizeGeneratedProtoRel maps nested protoc-gen-go output (paths derived from
+// option go_package) back to the tree Flynn expects next to each .proto file.
+// See controller/api: outputs land under .../controller/api/github.com/flynn/.../api/
+func normalizeGeneratedProtoRel(rel string) string {
+	nested := filepath.Join("controller", "api", "github.com", "flynn", "flynn", "controller", "api")
+	if rel == nested {
+		return rel
+	}
+	sep := string(filepath.Separator)
+	if strings.HasPrefix(rel, nested+sep) {
+		return filepath.Join("controller", "api", filepath.Base(rel))
+	}
+	return rel
 }

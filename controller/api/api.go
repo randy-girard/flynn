@@ -13,11 +13,10 @@ import (
 	"github.com/flynn/flynn/host/resource"
 	host "github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/pkg/version"
-	"github.com/golang/protobuf/ptypes"
-	durpb "github.com/golang/protobuf/ptypes/duration"
-	tspb "github.com/golang/protobuf/ptypes/timestamp"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
+	durationpb "google.golang.org/protobuf/types/known/durationpb"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func NewStatusResponse(healthy bool, detail []byte) *StatusResponse {
@@ -190,34 +189,33 @@ func NewError(err error, message string, args ...interface{}) error {
 	return grpc.Errorf(errCode, "%s", msg)
 }
 
-func NewTimestamp(t *time.Time) *tspb.Timestamp {
+func NewTimestamp(t *time.Time) *timestamppb.Timestamp {
 	if t == nil {
 		return nil
 	}
-	tp, _ := ptypes.TimestampProto(*t)
-	return tp
+	return timestamppb.New(*t)
 }
 
-func NewGoTimestamp(t *tspb.Timestamp) *time.Time {
+func NewGoTimestamp(t *timestamppb.Timestamp) *time.Time {
 	if t == nil {
 		return nil
 	}
-	ts, _ := ptypes.Timestamp(t)
+	ts := t.AsTime()
 	return &ts
 }
 
-func NewDuration(d *time.Duration) *durpb.Duration {
+func NewDuration(d *time.Duration) *durationpb.Duration {
 	if d == nil {
 		return nil
 	}
-	return ptypes.DurationProto(*d)
+	return durationpb.New(*d)
 }
 
-func NewGoDuration(d *durpb.Duration) *time.Duration {
+func NewGoDuration(d *durationpb.Duration) *time.Duration {
 	if d == nil {
 		return nil
 	}
-	dur, _ := ptypes.Duration(d)
+	dur := d.AsDuration()
 	return &dur
 }
 

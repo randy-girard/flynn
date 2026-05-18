@@ -23,6 +23,10 @@ Options:
   --skip-images            skip updating container images and system apps
   --images-only            only update container images and system apps (skip binaries)
   --tarball=<path>         update from a local tarball instead of GitHub
+  --all-nodes              update the entire cluster: push binaries to other
+                           hosts, pull images on every node, deploy system apps.
+                           Without this flag, only this host is updated (binaries
+                           locally; no cluster-wide image rollout).
 
 Update Flynn components using GitHub releases or a local tarball.
 
@@ -30,14 +34,19 @@ After downloading new binaries, the running flynn-host daemon is automatically
 restarted using a zero-downtime handoff. Use --no-restart to skip the restart
 and handle it manually (e.g. via systemctl restart flynn-host).
 
-By default, both binaries and container images are updated. Use --skip-images
-to update only binaries, or --images-only to update only container images and
-system apps without touching binaries.
+By default this command updates flynn-host/flynn-init on this machine only.
+Use --all-nodes to roll the same binaries out to every cluster host, pull new
+container layers everywhere, and deploy updated system apps. Until then, image
+and system-app updates are skipped so you can update hosts manually in any order.
+
+Use --skip-images with --all-nodes to update binaries on every node without
+touching container images. --images-only requires --all-nodes (image rollout is
+always cluster-wide).
 
 When --tarball is specified, the update is performed from a local .tar.gz file
-(the same tarball produced by the release scripts) instead of GitHub. A temporary
-HTTP server is started on this node to serve the tarball contents to all cluster
-nodes.`)
+(the same tarball produced by the release scripts) instead of GitHub. With
+--all-nodes, a temporary HTTP server is started on this node to serve the
+tarball contents to other cluster nodes.`)
 }
 
 // minVersion is the minimum version that can be updated from.

@@ -33,6 +33,16 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
+// clusterHostCount returns how many flynn-host peers are registered. If
+// discoverd cannot be queried, it returns a non-nil error.
+func clusterHostCount() (int, error) {
+	hosts, err := cluster.NewClient().Hosts()
+	if err != nil {
+		return 0, err
+	}
+	return len(hosts), nil
+}
+
 // runGitHubUpdate performs an update using GitHub Releases
 func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger) error {
 	client := ghrelease.NewClient(repo, log)
@@ -42,6 +52,17 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	force := args.Bool["--force"]
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
+	allNodes := args.Bool["--all-nodes"]
+
+	if imagesOnly && !allNodes {
+		n, err := clusterHostCount()
+		if err != nil {
+			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
+		}
+		if n > 1 {
+			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		}
+	}
 
 	currentVersion := version.String()
 	log.Info("checking for updates", "repo", repo, "current_version", currentVersion)
@@ -77,6 +98,16 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	}
 
 	log.Info("updating to version", "version", release.TagName)
+
+	// Image rollout touches the whole cluster; require --all-nodes for multi-host,
+	// but a single registered host is always "all" peers.
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
+		}
+	}
 
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
@@ -140,15 +171,22 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
 		}
 
-		// Propagate binaries to all other cluster nodes and restart their daemons
-		if err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log); err != nil {
-			return err
+		if allNodes {
+			if err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log); err != nil {
+				return err
+			}
+		} else {
+			log.Info("skipping remote host binary updates (--all-nodes not set)")
+			fmt.Println("Other cluster hosts were not updated. Run flynn-host update on each node with the same version, then run flynn-host update --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
 		}
 	}
 
 	// Update container images and system apps unless --skip-images was specified
 	if !skipImages {
-		if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
+		if !rolloutCluster {
+			log.Info("skipping container images and system app rollout (local-only update)")
+			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
+		} else if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
 			return err
 		}
 	}
@@ -990,6 +1028,17 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	binDir := args.String["--bin-dir"]
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
+	allNodes := args.Bool["--all-nodes"]
+
+	if imagesOnly && !allNodes {
+		n, err := clusterHostCount()
+		if err != nil {
+			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
+		}
+		if n > 1 {
+			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		}
+	}
 
 	log.Info("starting tarball-based update", "tarball", tarballPath)
 
@@ -1011,6 +1060,14 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		return fmt.Errorf("failed to extract tarball: %w", err)
 	}
 	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
+
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
+		}
+	}
 
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
@@ -1069,12 +1126,16 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 			log.Info("skipping daemon restart (--no-restart specified)")
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
 		}
+
+		if !allNodes {
+			log.Info("skipping remote host binary updates (--all-nodes not set)")
+			fmt.Println("Other cluster hosts were not updated. Run the same tarball update on each node, then run it again with --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
+		}
 	}
 
-	// Start a temporary HTTP server to serve the extracted tarball contents.
-	// This is needed for both remote binary propagation and image updates.
-	needRemoteBinaries := !imagesOnly
-	needImages := !skipImages
+	// Temporary HTTP server: only when pushing to other nodes or rolling out images cluster-wide.
+	needRemoteBinaries := !imagesOnly && allNodes
+	needImages := !skipImages && rolloutCluster
 	if needRemoteBinaries || needImages {
 		listener, err := net.Listen("tcp", ":0")
 		if err != nil {
@@ -1112,6 +1173,9 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 				return err
 			}
 		}
+	} else if !skipImages && !rolloutCluster {
+		log.Info("skipping container images and system app rollout (local-only tarball update)")
+		fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run the same tarball command with --all-nodes.")
 	}
 
 	log.Info("tarball update complete", "version", tarballVersion)

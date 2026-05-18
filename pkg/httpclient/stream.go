@@ -80,8 +80,11 @@ func Stream(res *http.Response, outputCh interface{}) stream.Stream {
 	return stream
 }
 
+// Reconnection budget for SSE streams (e.g. controller /events) after a read
+// error or disconnect. Longer than the legacy 20s windows so updates survive
+// controller/postgres load spikes during system app rolls.
 var connectAttempts = attempt.Strategy{
-	Total: 20 * time.Second,
+	Total: 15 * time.Minute,
 	Delay: 100 * time.Millisecond,
 }
 

@@ -546,7 +546,7 @@ main() {
 
   # Install runtime dependencies (ntp is separate: on Ubuntu 24.04+ it often conflicts with
   # systemd-timesyncd / ntpsec via time-daemon; core packages must still install.)
-  local packages=("iptables" "zfsutils-linux" "jq" "apparmor" "apparmor-utils")
+  local packages=("iptables" "zfsutils-linux" "jq" "apparmor" "apparmor-utils" "net-tools" "iproute2")
   info "installing runtime dependencies"
   run apt-get update
   run apt-get install --yes "${packages[@]}"

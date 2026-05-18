@@ -29,7 +29,15 @@ curl -sL "${protoc_url}" > /tmp/protoc.zip
 unzip -d /usr/local /tmp/protoc.zip
 rm /tmp/protoc.zip
 
-# Build protoc-gen-go from the vendored source
+# protoc-gen-go: do not build from ./vendor — `go mod vendor` only keeps imported
+# packages, so cmd/protoc-gen-go has no main package in vendor ("no Go files").
+# Install pinned versions (same as repo stubs / gRPC-Go toolchain).
 cd /mnt/src
 mkdir -p /bin
-go build -o /bin/protoc-gen-go ./vendor/github.com/golang/protobuf/protoc-gen-go
+export GOPROXY="${GOPROXY:-https://proxy.golang.org,direct}"
+export GOSUMDB="${GOSUMDB:-sum.golang.org}"
+# Install pinned tools. The Flynn Go image wraps `go` with go-wrapper.sh, which sets
+# GOFLAGS=-mod=vendor when GOFLAGS is empty; that blocks `go install` from fetching
+# toolchain modules. Force module mode for these two installs only.
+GOFLAGS=-mod=mod GOBIN=/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+GOFLAGS=-mod=mod GOBIN=/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0

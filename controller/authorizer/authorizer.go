@@ -15,7 +15,6 @@ import (
 	"time"
 
 	api "github.com/flynn/flynn/controller/api"
-	"github.com/golang/protobuf/ptypes"
 	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/cryptobyte/asn1"
 	"google.golang.org/protobuf/proto"
@@ -123,8 +122,11 @@ func (a *Authorizer) AuthorizeToken(token string) (*Token, error) {
 		return nil, err
 	}
 
-	iss, _ := ptypes.Timestamp(t.IssueTime)
-	exp, _ := ptypes.Timestamp(t.ExpireTime)
+	if t.IssueTime == nil || t.ExpireTime == nil {
+		return nil, fmt.Errorf("invalid token timestamp")
+	}
+	iss := t.IssueTime.AsTime()
+	exp := t.ExpireTime.AsTime()
 	if iss.IsZero() || exp.IsZero() {
 		return nil, fmt.Errorf("invalid token timestamp")
 	}

@@ -14,7 +14,6 @@ import (
 	"github.com/flynn/flynn/pkg/ctxhelper"
 	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/flynn/pkg/random"
-	"github.com/golang/protobuf/ptypes/empty"
 	middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	log "github.com/inconshreveable/log15"
 	"golang.org/x/net/context"
@@ -24,6 +23,7 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 type grpcAPI struct {
@@ -182,7 +182,7 @@ func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *g
 	return handler(ctx, req)
 }
 
-func (g *grpcAPI) Status(context.Context, *empty.Empty) (*api.StatusResponse, error) {
+func (g *grpcAPI) Status(context.Context, *emptypb.Empty) (*api.StatusResponse, error) {
 	healthy := true
 	if err := g.db.Exec("ping"); err != nil {
 		healthy = false

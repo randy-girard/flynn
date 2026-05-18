@@ -88,7 +88,7 @@ timeout --signal=QUIT --kill-after=10 10m bash -ex <<-SCRIPT
 cd ~/go/src/github.com/flynn/flynn
 echo stable | sudo tee /etc/flynn/channel.txt
 export DISCOVERD="{{ .Discoverd }}"
-build/bin/flynn-host update --github-repo flynn/flynn
+build/bin/flynn-host update --github-repo flynn/flynn --all-nodes
 SCRIPT
 `))
 

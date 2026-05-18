@@ -597,7 +597,16 @@ outer:
 		select {
 		case e, ok := <-events:
 			if !ok {
-				return fmt.Errorf("unexpected close of deployment event stream: %s", stream.Err())
+				// The event stream can end while the deploy still runs (transient HTTP/SSE
+				// errors, reconnect limits, or controller load). Fall back to polling
+				// deployment status until the deploy finishes.
+				if err := c.waitDeploymentTerminal(d, stopWait); err != nil {
+					if se := stream.Err(); se != nil {
+						return fmt.Errorf("%w (event stream ended: %s)", err, se)
+					}
+					return err
+				}
+				break outer
 			}
 			switch e.Status {
 			case "complete":
@@ -611,6 +620,60 @@ outer:
 		}
 	}
 	return nil
+}
+
+// waitDeploymentTerminal blocks until the deployment reaches a terminal state.
+func (c *Client) waitDeploymentTerminal(d *ct.Deployment, stopWait <-chan struct{}) error {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-stopWait:
+			return errors.New("deploy wait cancelled")
+		case <-tick.C:
+			dep, err := c.GetDeployment(d.ID)
+			if err != nil {
+				continue
+			}
+			switch dep.Status {
+			case "complete":
+				return nil
+			case "failed":
+				return c.deploymentFailedMessage(d)
+			}
+			if dep.FinishedAt != nil {
+				switch dep.Status {
+				case "complete":
+					return nil
+				case "failed":
+					return c.deploymentFailedMessage(d)
+				}
+			}
+		}
+	}
+}
+
+// deploymentFailedMessage returns a detailed error when possible by reading recent deployment events.
+func (c *Client) deploymentFailedMessage(d *ct.Deployment) error {
+	events, err := c.ListEvents(ct.ListEventsOptions{
+		AppID:       d.AppID,
+		ObjectTypes: []ct.EventType{ct.EventTypeDeployment},
+		ObjectID:    d.ID,
+		Count:       30,
+	})
+	if err != nil {
+		return errors.New("deployment failed")
+	}
+	for _, ev := range events {
+		var de ct.DeploymentEvent
+		if json.Unmarshal(ev.Data, &de) != nil {
+			continue
+		}
+		if de.Status == "failed" && de.Error != "" {
+			return errors.New(de.Error)
+		}
+	}
+	return errors.New("deployment failed")
 }
 
 // StreamJobEvents streams job events to the output channel.
