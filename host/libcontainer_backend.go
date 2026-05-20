@@ -620,45 +620,53 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// Based on Docker's default profile — deny-list approach with Allow default.
 	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
 	if seccomp.IsEnabled() {
+		syscallDenyList := []*configs.Syscall{
+			{Name: "acct", Action: configs.Errno},
+			{Name: "add_key", Action: configs.Errno},
+			{Name: "bpf", Action: configs.Errno},
+			{Name: "clock_adjtime", Action: configs.Errno},
+			{Name: "clock_settime", Action: configs.Errno},
+			{Name: "create_module", Action: configs.Errno},
+			{Name: "delete_module", Action: configs.Errno},
+			{Name: "finit_module", Action: configs.Errno},
+			{Name: "get_kernel_syms", Action: configs.Errno},
+			{Name: "init_module", Action: configs.Errno},
+			{Name: "ioperm", Action: configs.Errno},
+			{Name: "iopl", Action: configs.Errno},
+			{Name: "kcmp", Action: configs.Errno},
+			{Name: "kexec_file_load", Action: configs.Errno},
+			{Name: "kexec_load", Action: configs.Errno},
+			{Name: "keyctl", Action: configs.Errno},
+			{Name: "lookup_dcookie", Action: configs.Errno},
+			{Name: "nfsservctl", Action: configs.Errno},
+			{Name: "perf_event_open", Action: configs.Errno},
+			{Name: "pivot_root", Action: configs.Errno},
+			{Name: "query_module", Action: configs.Errno},
+			{Name: "reboot", Action: configs.Errno},
+			{Name: "request_key", Action: configs.Errno},
+			{Name: "setns", Action: configs.Errno},
+			{Name: "settimeofday", Action: configs.Errno},
+			{Name: "stime", Action: configs.Errno},
+			{Name: "swapoff", Action: configs.Errno},
+			{Name: "swapon", Action: configs.Errno},
+			{Name: "unshare", Action: configs.Errno},
+			{Name: "userfaultfd", Action: configs.Errno},
+			{Name: "_sysctl", Action: configs.Errno},
+		}
+		// Block mount/unmount for normal apps. Flynn image-layer builds (ubuntu-noble.sh et al.)
+		// need bind-mount to propagate /var/cache/apt/archives into an extracted rootfs before chroot.
+		// That job is labeled flynn-controller.app_name=="builder"; user slugbuilder jobs use app_name=user app.
+		if job.Metadata == nil || job.Metadata["flynn-controller.app_name"] != "builder" {
+			syscallDenyList = append(syscallDenyList,
+				&configs.Syscall{Name: "mount", Action: configs.Errno},
+				&configs.Syscall{Name: "move_mount", Action: configs.Errno},
+				&configs.Syscall{Name: "open_tree", Action: configs.Errno},
+				&configs.Syscall{Name: "umount2", Action: configs.Errno},
+			)
+		}
 		config.Seccomp = &configs.Seccomp{
 			DefaultAction: configs.Allow,
-			Syscalls: []*configs.Syscall{
-				{Name: "acct", Action: configs.Errno},
-				{Name: "add_key", Action: configs.Errno},
-				{Name: "bpf", Action: configs.Errno},
-				{Name: "clock_adjtime", Action: configs.Errno},
-				{Name: "clock_settime", Action: configs.Errno},
-				{Name: "create_module", Action: configs.Errno},
-				{Name: "delete_module", Action: configs.Errno},
-				{Name: "finit_module", Action: configs.Errno},
-				{Name: "get_kernel_syms", Action: configs.Errno},
-				{Name: "init_module", Action: configs.Errno},
-				{Name: "ioperm", Action: configs.Errno},
-				{Name: "iopl", Action: configs.Errno},
-				{Name: "kcmp", Action: configs.Errno},
-				{Name: "kexec_file_load", Action: configs.Errno},
-				{Name: "kexec_load", Action: configs.Errno},
-				{Name: "keyctl", Action: configs.Errno},
-				{Name: "lookup_dcookie", Action: configs.Errno},
-				{Name: "mount", Action: configs.Errno},
-				{Name: "move_mount", Action: configs.Errno},
-				{Name: "nfsservctl", Action: configs.Errno},
-				{Name: "open_tree", Action: configs.Errno},
-				{Name: "perf_event_open", Action: configs.Errno},
-				{Name: "pivot_root", Action: configs.Errno},
-				{Name: "query_module", Action: configs.Errno},
-				{Name: "reboot", Action: configs.Errno},
-				{Name: "request_key", Action: configs.Errno},
-				{Name: "setns", Action: configs.Errno},
-				{Name: "settimeofday", Action: configs.Errno},
-				{Name: "stime", Action: configs.Errno},
-				{Name: "swapoff", Action: configs.Errno},
-				{Name: "swapon", Action: configs.Errno},
-				{Name: "umount2", Action: configs.Errno},
-				{Name: "unshare", Action: configs.Errno},
-				{Name: "userfaultfd", Action: configs.Errno},
-				{Name: "_sysctl", Action: configs.Errno},
-			},
+			Syscalls:      syscallDenyList,
 		}
 	}
 
@@ -870,10 +878,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		softLimitBytes = uint64(defaultMemory)
 	}
 	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
-	// Set an 8 GiB hard limit instead of leaving them unlimited (SEC-004).
+	// Set a 12 GiB hard limit instead of leaving them unlimited (SEC-004).
 	if isBuildJob(job) {
-		config.Cgroups.Resources.Memory = 8 * units.GiB * 2   // Hard limit (memory.max) = 16 GiB
-		config.Cgroups.Resources.MemorySwap = 8 * units.GiB   // Swap limit, so total = 16 GiB
+		config.Cgroups.Resources.Memory = 12 * units.GiB * 2  // Hard limit (memory.max) = 24 GiB
+		config.Cgroups.Resources.MemorySwap = 12 * units.GiB  // Swap limit, so total = 24 GiB
 		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
 		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
 		// SEC-015 removed these from defaults but builders require them.
@@ -1695,6 +1703,11 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 				go l.host.ConfigureNetworking(state.NetworkConfig)
 			} else {
 				log.Info("got stored network config, but associated job isn't running", "job.id", state.NetworkConfig.JobID)
+				// Publish the previous NetworkConfig on HostStatus without
+				// applying it so flannel-wrapper can pick up the prior subnet
+				// and pass it to flanneld via -preferred-subnet, keeping the
+				// bridge IP stable across reboots.
+				l.host.SetStatusNetwork(state.NetworkConfig)
 			}
 		}
 

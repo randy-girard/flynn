@@ -13,5 +13,7 @@ apt-get install -y \
 mkdir -p /data
 
 # ---- Cleanup ----
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 rm -rf /var/lib/apt/lists/*

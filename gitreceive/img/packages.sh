@@ -2,4 +2,6 @@
 
 apt-get update
 apt-get -qy install git
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi

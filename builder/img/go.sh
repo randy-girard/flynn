@@ -8,7 +8,9 @@ dir="/usr/local"
 
 apt-get update
 apt-get install --yes git build-essential pkg-config libseccomp-dev
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 
 curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-$(dpkg --print-architecture).tar.gz"
 rm -rf "${dir}/go"

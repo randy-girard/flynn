@@ -30,9 +30,39 @@ type Authorizer struct {
 	tokenMaxValidity time.Duration
 }
 
+type AppGrant struct {
+	AppID       string
+	Permissions []string
+}
+
 type Token struct {
-	ID   string
-	User string
+	ID         string
+	User       string
+	ClusterKey bool
+	Scopes     []string
+	AppGrants  []AppGrant
+}
+
+// HasClusterAdmin reports full cluster access (cluster install key, legacy unsigned
+// dashboard tokens with no scopes/grants, or explicit cluster:admin / * scope).
+func (t *Token) HasClusterAdmin() bool {
+	if t == nil || t.ClusterKey {
+		return true
+	}
+	for _, s := range t.Scopes {
+		if s == "cluster:admin" || s == "*" {
+			return true
+		}
+	}
+	return len(t.Scopes) == 0 && len(t.AppGrants) == 0
+}
+
+// BearerScopedToApps is true for JWTs that are not cluster-wide.
+func (t *Token) BearerScopedToApps() bool {
+	if t == nil || t.ClusterKey {
+		return false
+	}
+	return !t.HasClusterAdmin() && len(t.AppGrants) > 0
 }
 
 func ParseTokenKey(tk string) (*ecdsa.PublicKey, error) {
@@ -82,7 +112,7 @@ func (a *Authorizer) AuthorizeKey(key string) (*Token, error) {
 	}
 	for i, k := range a.authKeys {
 		if len(key) == len(k) && subtle.ConstantTimeCompare([]byte(key), []byte(k)) == 1 {
-			token := &Token{}
+			token := &Token{ClusterKey: true}
 			if len(a.authIDs) == len(a.authKeys) {
 				token.ID = a.authIDs[i]
 			}
@@ -138,9 +168,19 @@ func (a *Authorizer) AuthorizeToken(token string) (*Token, error) {
 	}
 
 	idBytes := sha256.Sum256(b)
+	grants := make([]AppGrant, 0, len(t.GetAppGrants()))
+	for _, g := range t.GetAppGrants() {
+		perms := append([]string(nil), g.GetPermissions()...)
+		grants = append(grants, AppGrant{AppID: g.GetAppId(), Permissions: perms})
+	}
+	scopes := append([]string(nil), t.GetScopes()...)
+
 	return &Token{
-		ID:   strings.TrimRight(base64.URLEncoding.EncodeToString(idBytes[:]), "="),
-		User: t.UserEmail,
+		ID:         strings.TrimRight(base64.URLEncoding.EncodeToString(idBytes[:]), "="),
+		User:       t.UserEmail,
+		ClusterKey: false,
+		Scopes:     scopes,
+		AppGrants:  grants,
 	}, nil
 }
 

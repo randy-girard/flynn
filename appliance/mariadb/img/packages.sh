@@ -32,5 +32,7 @@ apt-get install -y \
   mariadb-backup
 
 # ---- Cleanup ----
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 rm -rf /var/lib/apt/lists/*

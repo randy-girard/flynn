@@ -27,6 +27,7 @@ import (
 	"github.com/flynn/flynn/pkg/installsource"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
+	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
 	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
@@ -892,13 +893,14 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 				deployErr = nil
 				break
 			}
-			// Sirenia-based apps (postgres, mariadb, mongodb) may not have
-			// fully reformed their cluster yet after a daemon restart.
-			// Retry for up to 2 minutes to give asyncs time to rejoin.
-			if strings.Contains(deployErr.Error(), "sirenia") && attempt < 12 {
-				appLog.Warn("sirenia cluster not ready, retrying deploy",
-					"err", deployErr, "attempt", attempt)
-				time.Sleep(10 * time.Second)
+			// Sirenia-based apps plus transient discoverd failures (e.g.
+			// leader.postgres.discoverd NXDOMAIN immediately after postgres
+			// rollout) settle within a few retries.
+			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
+			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
+				appLog.Warn("discovery or sirenia cluster not settled, retrying deploy",
+					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
+				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
 				continue
 			}
 			return deployErr
@@ -907,6 +909,9 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 			continue
 		}
 		appLog.Info("finished deploy of system app")
+		if appInfo.Name == "postgres" {
+			updaterdeploy.WaitPostgresDiscoverdLeaderStable(log.New("after_system_app_deploy", "postgres"))
+		}
 	}
 
 	// Deploy all other apps (Redis appliances and slugrunner apps)

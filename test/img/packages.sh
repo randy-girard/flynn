@@ -10,7 +10,9 @@ apt-get --yes install \
   iptables \
   iproute2 \
   jq
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 
 curl -fsSLo "/usr/local/bin/docker" "https://get.docker.com/builds/Linux/x86_64/docker-1.9.1"
 chmod +x "/usr/local/bin/docker"

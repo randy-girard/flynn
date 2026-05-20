@@ -34,6 +34,64 @@ import (
 	cjson "github.com/tent/canonical-json-go"
 )
 
+// apt archives from the host bind-mounted here persist .deb downloads across flynn-builder
+// jobs when ./ubuntu_ports_cache (or $FLYNN_APT_ARCHIVE_CACHE) is configured.
+const aptArchiveCacheMountPoint = "/var/cache/apt/archives"
+
+// flynnHTTPDownloadMountPoint holds cached plain HTTP GET bodies (curl) alongside the APT tree.
+const flynnHTTPDownloadMountPoint = "/var/cache/flynn-http-cache"
+
+// flynnHTTPDownloadSubdir stores curl cache blobs under ubuntu_ports_cache.
+const flynnHTTPDownloadSubdir = "_flynn_http"
+
+// flynnAptLayerPrelude runs before layers that invoke apt. Ubuntu runs downloads as _apt; minimal
+// base layers and host bind mounts often leave /var/cache/apt/archives/partial root-only, which
+// breaks pkgAcquire (Permission denied). chmod fixes the cache; APT::Sandbox::User mirrors common
+// container guidance so downloads are not forced through the _apt sandbox.
+const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial && ` +
+	`chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true && ` +
+	`chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true && ` +
+	`install -d /etc/apt/apt.conf.d && ` +
+	`printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf`
+
+// Delimiter for heredoc wrapping apt layer commands (must not appear in layer scripts).
+const flynnAptArchiveFlockHeredoc = "FLYNN_BUILDER_APT_FLOCK_SCRIPT_EOF_7c4a8319"
+
+// wrapAptCommandsWithExclusiveLock runs the layer script under flock on the shared APT
+// archive directory. Several build jobs mount the same host cache at
+// /var/cache/apt/archives; concurrent apt-get then fights over archives/lock.
+func wrapAptCommandsWithExclusiveLock(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	lock := filepath.Join(aptArchiveCacheMountPoint, ".flynn-builder-exclusive-apt.lock")
+	inner := strings.Join(lines, "\n")
+	// Same line-oriented execution as the outer bash -exs driver; inner bash is one job
+	// holding the shared lock until all apt (and related) commands finish.
+	s := fmt.Sprintf("flock -w 86400 %q bash -exo pipefail <<'%s'\n%s\n%s",
+		lock, flynnAptArchiveFlockHeredoc, inner, flynnAptArchiveFlockHeredoc)
+	return []string{s}
+}
+
+func layerUsesAPT(l *Layer) bool {
+	if strings.TrimSpace(l.Script) != "" {
+		return true
+	}
+	for _, r := range l.Run {
+		s := strings.TrimSpace(r)
+		if strings.HasPrefix(s, "apt ") ||
+			strings.HasPrefix(s, "apt-get ") ||
+			strings.Contains(s, " apt-get ") ||
+			strings.Contains(s, "apt install") ||
+			strings.Contains(s, "; apt ") ||
+			strings.Contains(s, "&& apt ") ||
+			strings.Contains(s, "|| apt ") {
+			return true
+		}
+	}
+	return false
+}
+
 var cmdBuild = Command{
 	Run: runBuild,
 	Usage: `
@@ -44,7 +102,124 @@ options:
   -v, --verbose             be verbose
 
 Build Flynn images using builder/manifest.json.
+
+ APT package cache:
+
+   By default bind-mounts "$(pwd)/ubuntu_ports_cache" at /var/cache/apt/archives
+   inside each build job (flynn-host must run on this machine). APT writes go to that
+   host directory, not into the layer diff (SquashFS is built from /.container-diff).
+
+   Set FLYNN_APT_ARCHIVE_CACHE to an absolute directory to override, or
+   FLYNN_NO_APT_ARCHIVE_CACHE=1 to disable.
+
+   The cache directory is chmodded 0777 on the flynn-builder host because APT downloads
+   as user _apt and needs write access to partial/ beneath the bind mount.
+
+   When this cache is enabled, apt-get is serialized with flock(1) on a lock under
+   /var/cache/apt/archives so parallel image builds do not share one archives/lock (which
+   fails with "Unable to lock directory" or bogus PIDs).
+
+   The same directory also contains ./_flynn_http (mounted at /var/cache/flynn-http-cache)
+   where trivial curl GETs from layer scripts are cached (PATH supplies a small shim).
+
 `[1:],
+}
+
+func aptArchiveCacheDir(log log15.Logger) (string, bool) {
+	if strings.TrimSpace(os.Getenv("FLYNN_NO_APT_ARCHIVE_CACHE")) == "1" {
+		return "", false
+	}
+	if p := strings.TrimSpace(os.Getenv("FLYNN_APT_ARCHIVE_CACHE")); p != "" {
+		low := strings.ToLower(p)
+		if p == "-" || low == "disable" || low == "off" {
+			return "", false
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			log.Warn("invalid FLYNN_APT_ARCHIVE_CACHE", "path", p, "err", err)
+			return "", false
+		}
+		return abs, true
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Warn("apt archive cache skipped: cannot get cwd", "err", err)
+		return "", false
+	}
+	dir := filepath.Join(wd, "ubuntu_ports_cache")
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		log.Warn("apt archive cache skipped: cannot resolve path", "path", dir, "err", err)
+		return "", false
+	}
+	return abs, true
+}
+
+func prependMntBinToPath(env map[string]string) {
+	if env == nil {
+		return
+	}
+	const prefix = "/mnt/bin"
+	p := strings.TrimSpace(env["PATH"])
+	if p == "" {
+		env["PATH"] = prefix + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		return
+	}
+	if strings.HasPrefix(p, prefix+":") {
+		return
+	}
+	env["PATH"] = prefix + ":" + p
+}
+
+func (b *Builder) appendBuildCacheMounts(job *host.Job) bool {
+	dir, want := aptArchiveCacheDir(b.log)
+	if !want || dir == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot create dir, skipping",
+			"path", dir, "err", err)
+		return false
+	}
+	// APT's pkg Acquire runs downloads as user _apt; a root-owned 0755 bind mount denies
+	// writes under partial/, producing "Couldn't be accessed by user '_apt'".
+	if err := os.Chmod(dir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot chmod dir", "path", dir, "err", err)
+		return false
+	}
+	partialDir := filepath.Join(dir, "partial")
+	if err := os.MkdirAll(partialDir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot create partial/", "path", partialDir, "err", err)
+		return false
+	}
+	if err := os.Chmod(partialDir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot chmod partial/", "path", partialDir, "err", err)
+		return false
+	}
+	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+		Target:    dir,
+		Location:  aptArchiveCacheMountPoint,
+		Writeable: true,
+	})
+	b.log.Info("apt archive cache mounted", "host_path", dir, "mount", aptArchiveCacheMountPoint)
+
+	httpDir := filepath.Join(dir, flynnHTTPDownloadSubdir)
+	if err := os.MkdirAll(httpDir, 0777); err != nil {
+		b.log.Warn("http download cache: cannot create dir, skipping curl blob cache",
+			"path", httpDir, "err", err)
+		return true
+	}
+	if err := os.Chmod(httpDir, 0777); err != nil {
+		b.log.Warn("http download cache: cannot chmod dir", "path", httpDir, "err", err)
+		return true
+	}
+	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+		Target:    httpDir,
+		Location:  flynnHTTPDownloadMountPoint,
+		Writeable: true,
+	})
+	b.log.Info("http download cache mounted", "host_path", httpDir, "mount", flynnHTTPDownloadMountPoint)
+	return true
 }
 
 type Builder struct {
@@ -141,6 +316,12 @@ type Layer struct {
 
 	// Limits is a set of limits to set on the build job
 	Limits map[string]string `json:"limits,omitempty"`
+
+	// GoBuildP, if positive, is passed as 'go build -p <GoBuildP>' to cap compiler
+	// parallelism. Without this, 'go build' defaults to compiling as many packages
+	// concurrently as CPUs, which overflows the default build job cgroup (memory)
+	// on smaller hosts especially when multiple cross-compile images run in parallel.
+	GoBuildP int `json:"go_build_p,omitempty"`
 
 	// LinuxCapabilities is a list of extra capabilities to set
 	LinuxCapabilities []string `json:"linux_capabilities,omitempty"`
@@ -494,6 +675,10 @@ func (b *Builder) BuildImage(image *Image) error {
 				dirs = append(dirs, dir)
 			}
 			sort.Strings(dirs)
+			goParallel := ""
+			if l.GoBuildP > 0 {
+				goParallel = fmt.Sprintf("-p %d ", l.GoBuildP)
+			}
 			for _, dir := range dirs {
 				i, err := goInputs.Load(dir)
 				if err != nil {
@@ -501,7 +686,7 @@ func (b *Builder) BuildImage(image *Image) error {
 				}
 				inputs = append(inputs, i...)
 				// Create target directory in overlay upper dir first to prevent symlink following
-				run = append(run, fmt.Sprintf("mkdir -p %q && go build -o %s %s", filepath.Dir(l.GoBuild[dir]), l.GoBuild[dir], "./"+dir))
+				run = append(run, fmt.Sprintf("mkdir -p %q && go build %s-o %s %s", filepath.Dir(l.GoBuild[dir]), goParallel, l.GoBuild[dir], "./"+dir))
 			}
 			dirs = make([]string, 0, len(l.CGoBuild))
 			for dir := range l.CGoBuild {
@@ -515,7 +700,7 @@ func (b *Builder) BuildImage(image *Image) error {
 				}
 				inputs = append(inputs, i...)
 				// Create target directory in overlay upper dir first to prevent symlink following
-				run = append(run, fmt.Sprintf("mkdir -p %q && cgo build -o %s %s", filepath.Dir(l.CGoBuild[dir]), l.CGoBuild[dir], "./"+dir))
+				run = append(run, fmt.Sprintf("mkdir -p %q && cgo build %s-o %s %s", filepath.Dir(l.CGoBuild[dir]), goParallel, l.CGoBuild[dir], "./"+dir))
 			}
 		}
 
@@ -555,6 +740,13 @@ func (b *Builder) BuildImage(image *Image) error {
 				return fmt.Errorf("error parsing env template %q: %s", v, err)
 			}
 			env[k] = buf.String()
+		}
+
+		if layerUsesAPT(l) && len(run) > 0 {
+			run = append([]string{flynnAptLayerPrelude}, run...)
+			if _, want := aptArchiveCacheDir(b.log); want {
+				run = wrapAptCommandsWithExclusiveLock(run)
+			}
 		}
 
 		// generate the layer ID from the layer config, artifact and
@@ -734,7 +926,20 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	keepDir := os.Getenv("FLYNN_BUILDER_KEEP_TEMP") != ""
+	// keepOnFail is set to true on failure so the temp dir survives for inspection.
+	keepOnFail := false
+	if !keepDir {
+		defer func() {
+			if keepOnFail {
+				b.log.Info("flynn-builder: preserving build temp dir after failure", "layer", name, "dir", dir)
+				return
+			}
+			os.RemoveAll(dir)
+		}()
+	} else {
+		b.log.Info("flynn-builder: preserving build temp dir", "layer", name, "dir", dir)
+	}
 	if err := os.Chmod(dir, 0755); err != nil {
 		return nil, err
 	}
@@ -772,11 +977,36 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		}
 	}
 
+	// Write a sidecar listing of every input copied so the failed build can be
+	// diagnosed when the temp dir is preserved on error.
+	if f, ferr := os.Create(filepath.Join(dir, ".flynn-builder-inputs.txt")); ferr == nil {
+		for _, in := range inputs {
+			fmt.Fprintln(f, in)
+		}
+		f.Close()
+	}
+
 	// copy the flynn-builder binary into the shared directory so we can
 	// run it inside the job
 	if err := copyFile(os.Args[0], "bin/flynn-builder"); err != nil {
 		b.log.Error("error copying flynn-builder binary", "err", err)
 		return nil, err
+	}
+
+	curlShim := filepath.Join("builder", "img", "flynn-curl.sh")
+	if _, err := os.Stat(curlShim); err != nil {
+		b.log.Warn("flynn-curl shim missing, image builds will use system curl only", "path", curlShim, "err", err)
+	} else {
+		if err := copyFile(curlShim, filepath.Join("bin", "curl")); err != nil {
+			return nil, fmt.Errorf("copy flynn-curl shim: %w", err)
+		}
+		if err := os.Chmod(filepath.Join(dir, "bin", "curl"), 0755); err != nil {
+			return nil, fmt.Errorf("chmod flynn-curl shim: %w", err)
+		}
+	}
+
+	if env == nil {
+		env = make(map[string]string)
 	}
 
 	job := &host.Job{
@@ -789,6 +1019,11 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 			"flynn-controller.app_name": "builder",
 			"flynn-controller.type":     name,
 		},
+	}
+	cacheOK := b.appendBuildCacheMounts(job)
+	prependMntBinToPath(job.Config.Env)
+	if cacheOK {
+		job.Config.Env["FLYNN_HTTP_CACHE_ROOT"] = flynnHTTPDownloadMountPoint
 	}
 	cmd := exec.Cmd{Job: job}
 
@@ -886,7 +1121,8 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 	// run the job
 	b.log.Info("building layer", "layer.name", name, "layer.id", id)
 	if err := cmd.Run(); err != nil {
-		b.log.Error("error running the build job", "name", name, "err", err)
+		keepOnFail = true
+		b.log.Error("error running the build job", "name", name, "err", err, "temp_dir", dir)
 		return nil, err
 	}
 

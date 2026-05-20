@@ -2,8 +2,12 @@ package postgres
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/flynn/flynn/discoverd/client"
@@ -19,6 +23,11 @@ const (
 	UniqueViolation           = "23505"
 	RaiseException            = "P0001"
 	ForeignKeyViolation       = "23503"
+
+	// postgresReconnectBudget caps how long we retry transient discoverd/DNS
+	// failures before failing hard. Restarts normally settle sooner; callers
+	// (process restart or clients) should retry rather than wedging minutes.
+	postgresReconnectBudget = 90 * time.Second
 )
 
 type Conf struct {
@@ -27,16 +36,116 @@ type Conf struct {
 	User      string
 	Password  string
 	Database  string
+
+	// SingletonCluster is set by Wait from discoverd service meta when the
+	// cluster runs in Sirenia singleton mode (typical single-host Flynn). Only
+	// in that case may Open dial the discoverd Leader IP when leader.* DNS lags;
+	// multi-host clusters must keep using the leader FQDN so failover changes
+	// the resolved address without pinning a stale IP in the pool.
+	SingletonCluster bool
 }
 
 var connectAttempts = attempt.Strategy{
 	Min:   5,
-	Total: 5 * time.Minute,
-	Delay: 200 * time.Millisecond,
+	Total: postgresReconnectBudget,
+	Delay: 300 * time.Millisecond,
+}
+
+// listenAttempts retries acquiring a dedicated connection for LISTEN after the
+// pool was opened (e.g. controller EventListener). Unlike postgres.Wait at
+// startup, a plain ConnPool.Acquire fails immediately when discoverd DNS for
+// leader.<service>.discoverd returns NXDOMAIN during sirenia/postgres restarts.
+var listenAttempts = attempt.Strategy{
+	Min:   5,
+	Total: postgresReconnectBudget,
+	Delay: 300 * time.Millisecond,
+}
+
+func isTransientLeaderDialErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	if err == pgx.ErrDeadConn {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if dnerr, ok := err.(*net.DNSError); ok && dnerr.IsTemporary {
+		return true
+	}
+	if dnerr, ok := err.(*net.DNSError); ok && dnerr.IsNotFound {
+		return true
+	}
+	return strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "temporary failure") ||
+		strings.Contains(msg, "server misbehaving") ||
+		strings.Contains(msg, "context deadline exceeded")
+}
+
+// IsTransientLeaderDialErr reports whether err is retryable connectivity while
+// discoverd DNS or sirenia-managed postgres is restarting (dead connections,
+// NXDOMAIN, abrupt EOF from the remote, etc.).
+func IsTransientLeaderDialErr(err error) bool {
+	return isTransientLeaderDialErr(err)
+}
+
+var leaderDNSWait = attempt.Strategy{
+	Min:   5,
+	Total: postgresReconnectBudget,
+	Delay: 400 * time.Millisecond,
+}
+
+// waitUntilPostgresResolvable blocks until connections can be established using
+// postgresLeaderHost: either leader.<service>.discoverd resolves, or (singleton
+// cluster only) discoverd reports a TCP leader instance with a literal IP so
+// we are not stuck on NXDOMAIN on single-node setups where DNS trails HTTP state.
+func waitUntilPostgresResolvable(conf *Conf) {
+	fqdn := fmt.Sprintf("leader.%s.discoverd", conf.Service)
+	_ = leaderDNSWait.Run(func() error {
+		if _, err := net.LookupHost(fqdn); err == nil {
+			return nil
+		}
+		if conf.SingletonCluster && discoverdLeaderIPKnown(conf) {
+			return nil
+		}
+		return fmt.Errorf("postgres leader not yet resolvable (DNS or discoverd)")
+	})
+}
+
+func discoverdLeaderIPKnown(conf *Conf) bool {
+	inst, err := conf.Discoverd.Service(conf.Service).Leader()
+	if err != nil || inst == nil || inst.Addr == "" {
+		return false
+	}
+	return net.ParseIP(inst.Host()) != nil
+}
+
+// postgresLeaderHost chooses the TCP host for pgx. Prefer the leader FQDN so
+// DNS tracks Sirenia leadership on multi-host clusters; for singleton clusters,
+// fall back to the discoverd-reported primary IP while leader.* is still NXDOMAIN.
+func postgresLeaderHost(conf *Conf) string {
+	fqdn := fmt.Sprintf("leader.%s.discoverd", conf.Service)
+	if _, err := net.LookupHost(fqdn); err == nil {
+		return fqdn
+	}
+	if conf.SingletonCluster {
+		if inst, err := conf.Discoverd.Service(conf.Service).Leader(); err == nil && inst != nil {
+			if h := inst.Host(); net.ParseIP(h) != nil {
+				return h
+			}
+		}
+	}
+	return fqdn
 }
 
 func New(connPool *pgx.ConnPool, conf *Conf) *DB {
-	return &DB{connPool, conf}
+	return &DB{connPool, conf, ""}
 }
 
 func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
@@ -78,11 +187,14 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 		state := &state.State{}
 		json.Unmarshal(e.ServiceMeta.Data, state)
 		if state.Singleton || state.Sync != nil {
+			conf.SingletonCluster = state.Singleton
 			break
 		}
 	}
 	watchStream.Close()
 	// TODO(titanous): handle discoverd disconnection
+
+	waitUntilPostgresResolvable(conf)
 
 	// retry here as authentication may fail if DB is still
 	// starting up.
@@ -109,8 +221,9 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 }
 
 func Open(conf *Conf, afterConn func(*pgx.Conn) error) (*DB, error) {
+	host := postgresLeaderHost(conf)
 	connConfig := pgx.ConnConfig{
-		Host:     fmt.Sprintf("leader.%s.discoverd", conf.Service),
+		Host:     host,
 		User:     conf.User,
 		Database: conf.Database,
 		Password: conf.Password,
@@ -121,13 +234,22 @@ func Open(conf *Conf, afterConn func(*pgx.Conn) error) (*DB, error) {
 		MaxConnections: 20,
 		AcquireTimeout: 30 * time.Second,
 	})
-	db := &DB{connPool, conf}
+	db := &DB{connPool, conf, host}
 	return db, err
 }
 
 type DB struct {
 	*pgx.ConnPool
-	conf *Conf
+	conf     *Conf
+	dialHost string // TCP host baked into ConnPool ConnConfig.Host at Open()
+}
+
+// DialHost returns the pg host this pool opens connections to (set at Open).
+func (db *DB) DialHost() string {
+	if db == nil {
+		return ""
+	}
+	return db.dialHost
 }
 
 func (db *DB) Exec(query string, args ...interface{}) error {

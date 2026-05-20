@@ -73,17 +73,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := syscall.Exec(
+	args := []string{
 		flanneld,
-		[]string{
-			flanneld,
-			"-discoverd-url=" + status.Discoverd.URL,
-			"-iface=" + os.Getenv("EXTERNAL_IP"),
-			"-http-port=" + os.Getenv("PORT"),
-			fmt.Sprintf("-notify-url=http://%s:1113/host/network", os.Getenv("EXTERNAL_IP")),
-		},
-		os.Environ(),
-	); err != nil {
+		"-discoverd-url=" + status.Discoverd.URL,
+		"-iface=" + os.Getenv("EXTERNAL_IP"),
+		"-http-port=" + os.Getenv("PORT"),
+		fmt.Sprintf("-notify-url=http://%s:1113/host/network", os.Getenv("EXTERNAL_IP")),
+	}
+	// If flynn-host already knows our previous subnet (persisted across
+	// flynn-host restarts and reboots), ask flanneld to reuse it so the
+	// bridge IP stays stable; otherwise long-running containers' cached DNS
+	// resolvers keep dialing the old bridge after a subnet rotation.
+	if status.Network != nil && status.Network.Subnet != "" {
+		args = append(args, "-preferred-subnet="+status.Network.Subnet)
+	}
+
+	if err := syscall.Exec(flanneld, args, os.Environ()); err != nil {
 		log.Fatal(err)
 	}
 }

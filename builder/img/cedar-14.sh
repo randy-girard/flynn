@@ -70,7 +70,9 @@ apt-cache search language-pack \
 # Workaround for CVE-2016–3714 until new ImageMagick packages come out.
 echo '<policymap> <policy domain="coder" rights="none" pattern="EPHEMERAL" /> <policy domain="coder" rights="none" pattern="URL" /> <policy domain="coder" rights="none" pattern="HTTPS" /> <policy domain="coder" rights="none" pattern="MVG" /> <policy domain="coder" rights="none" pattern="MSL" /> <policy domain="coder" rights="none" pattern="TEXT" /> <policy domain="coder" rights="none" pattern="SHOW" /> <policy domain="coder" rights="none" pattern="WIN" /> <policy domain="coder" rights="none" pattern="PLT" /> </policymap>' > /etc/ImageMagick/policy.xml
 
-rm -rf /var/cache/apt/archives/*.deb
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
 rm -rf /root/*
 rm -rf /tmp/*
 rm /etc/ssh/ssh_host_*

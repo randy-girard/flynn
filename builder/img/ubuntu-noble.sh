@@ -54,11 +54,35 @@ mkdir -p "${TMP}/root"
 
 rm -f "${TMP}/root/etc/resolv.conf"
 cp "/etc/resolv.conf" "${TMP}/root/etc/resolv.conf"
+
+chroot_archive_bind=
 cleanup() {
-  >"${TMP}/root/etc/resolv.conf"
+  if [[ "${chroot_archive_bind}" == 1 ]] && [[ -n "${TMP:-}" ]]; then
+    umount "${TMP}/root/var/cache/apt/archives" 2>/dev/null || true
+  fi
+  if [[ -n "${TMP:-}" ]] && [[ -d "${TMP}/root" ]]; then
+    >"${TMP}/root/etc/resolv.conf"
+  fi
 }
 trap cleanup EXIT
 
+# When flynn-builder bind-mounts a host APT cache at /var/cache/apt/archives, propagate
+# that mount into this image's temporary chroot (CAP_SYS_ADMIN is set for this layer).
+if mountpoint -q /var/cache/apt/archives; then
+  mkdir -p "${TMP}/root/var/cache/apt/archives"
+  mount --bind /var/cache/apt/archives "${TMP}/root/var/cache/apt/archives"
+  chroot_archive_bind=1
+fi
+
 chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
+
+if [[ "${chroot_archive_bind}" == 1 ]]; then
+  umount "${TMP}/root/var/cache/apt/archives" || exit 1
+  chroot_archive_bind=
+fi
+
+# Drop any unpacked .deb left in the staging rootfs (normally empty once the APT cache bind is detached).
+# Never rm while the bind is mounted: that would purge the shared host cache directory.
+rm -rf "${TMP}/root/var/cache/apt/archives"/* "${TMP}/root/var/cache/apt/archives"/partial/* 2>/dev/null || true
 
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

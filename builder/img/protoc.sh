@@ -22,7 +22,9 @@ protoc_url="https://github.com/google/protobuf/releases/download/v${protoc_versi
 
 apt-get update
 apt-get install --yes unzip
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 
 # install protobuf compiler
 curl -sL "${protoc_url}" > /tmp/protoc.zip

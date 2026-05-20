@@ -3,9 +3,9 @@
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
-    "size": 78528512,
+    "size": 78524416,
     "hashes": {
-      "sha512_256": "f9f587b2a24530e654249774462fb1836e7d911639bc0546789479661d06a6d2"
+      "sha512_256": "946ed1199ac1a4d5328d27e567d352e08eae56265c3abf3c780e01ca75afe93d"
     }
   },
   "images": [
@@ -123,6 +123,11 @@
           "env": {
             "FLYNN_VERSION": "{{ .Version }}"
           },
+          "limits": {
+            "memory": "8G",
+            "temp_disk": "2G"
+          },
+          "go_build_p": 2,
           "cgobuild": {
             "host": "/usr/local/bin/flynn-host"
           },
@@ -159,6 +164,7 @@
             "controller/scheduler": "/bin/flynn-scheduler",
             "controller/worker": "/bin/flynn-worker"
           },
+          "go_build_p": 2,
           "copy": {
             "controller/start.sh": "/bin/start-flynn-controller",
             "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
@@ -173,6 +179,7 @@
             "cp -r schema /etc/flynn-controller/jsonschema"
           ],
           "limits": {
+            "memory": "4G",
             "temp_disk": "1G"
           }
         }
@@ -654,6 +661,10 @@
         },
         {
           "name": "test-binaries",
+          "limits": {
+            "memory": "6G"
+          },
+          "go_build_p": 2,
           "inputs": [
             "pkg/sirenia/xlog/*.go",
             "pkg/sirenia/client/*.go",
@@ -698,6 +709,10 @@
         },
         {
           "name": "test-apps-binaries",
+          "limits": {
+            "memory": "3G"
+          },
+          "go_build_p": 2,
           "gobuild": {
             "test/apps/echoer": "/bin/echoer",
             "test/apps/ping": "/bin/pingserv",
@@ -719,6 +734,10 @@
           "env": {
             "FLYNN_VERSION": "{{ .Version }}"
           },
+          "limits": {
+            "memory": "4G"
+          },
+          "go_build_p": 2,
           "gobuild": {
             "cli": "/bin/flynn-${GOOS}-${GOARCH}"
           }

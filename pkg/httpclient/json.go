@@ -118,6 +118,12 @@ func (c *Client) rawReq(method, rawurl string, header http.Header, in, out inter
 		if strings.Contains(res.Header.Get("Content-Type"), "application/json") {
 			var jsonErr httphelper.JSONError
 			if err := json.NewDecoder(res.Body).Decode(&jsonErr); err == nil {
+				if res.StatusCode == http.StatusForbidden && jsonErr.Code == httphelper.ForbiddenErrorCode {
+					if jsonErr.Message != "" {
+						jsonErr.Message += " "
+					}
+					jsonErr.Message += "If you signed in via the Flynn dashboard, your token may be limited to specific apps; ask for broader collaborator permissions or use cluster credentials (see `flynn help login`)."
+				}
 				return res, jsonErr
 			}
 		}

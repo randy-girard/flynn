@@ -164,5 +164,8 @@ rm /usr/lib/ssl/cert.pem
 
 rm -rf /root/*
 rm -rf /tmp/*
-rm -rf /var/cache/apt/archives/*.deb
+# Keep shared flynn-builder APT archive bind mount populated (./ubuntu_ports_cache).
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
 rm -rf /var/lib/apt/lists/*

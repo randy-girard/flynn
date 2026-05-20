@@ -136,15 +136,21 @@ run_phase_base() {
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
 
-  mkdir -p /var/lib/flynn/base-root
-  debootstrap \
-    --variant=minbase \
-    --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
-    "${UBUNTU_CODENAME}" \
-    /var/lib/flynn/base-root \
-    http://ports.ubuntu.com/ubuntu-ports
-  mksquashfs /var/lib/flynn/base-root "${SQUASHFS}" -noappend
+  CACHE_DIR=/var/cache/flynn/debootstrap
+  ROOTFS=/var/lib/flynn/base-root
 
+  if [ ! -f "${SQUASHFS}" ]; then
+    mkdir -p "$ROOTFS"
+    debootstrap \
+      --variant=minbase \
+      --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
+      --cache-dir="$CACHE_DIR" \
+      "${UBUNTU_CODENAME}" \
+      "$ROOTFS" \
+      https://mirror.yuki.net.uk/ubuntu-ports/
+    mksquashfs "$ROOTFS" "${SQUASHFS}" -noappend
+  fi
+  
   cd "${FLYNN_ROOT}"
   export SIZE
   SIZE=$(stat -c%s "${SQUASHFS}")

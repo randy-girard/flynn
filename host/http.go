@@ -243,6 +243,18 @@ func (h *Host) ConfigureNetworking(config *host.NetworkConfig) {
 	h.statusMtx.Unlock()
 }
 
+// SetStatusNetwork publishes a previously-persisted NetworkConfig on HostStatus
+// without (re)configuring the bridge. This lets clients (notably flannel's
+// wrapper) learn the host's last-known subnet at startup and request the same
+// subnet via -preferred-subnet so the bridge IP stays stable across reboots.
+func (h *Host) SetStatusNetwork(config *host.NetworkConfig) {
+	h.statusMtx.Lock()
+	defer h.statusMtx.Unlock()
+	if h.status.Network == nil {
+		h.status.Network = config
+	}
+}
+
 func (h *Host) ConfigureDiscoverd(config *host.DiscoverdConfig) {
 	log := h.log.New("fn", "ConfigureDiscoverd")
 

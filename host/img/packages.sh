@@ -20,7 +20,9 @@ apt-get install -y linux-gcp \
     libseccomp-dev \
     jq
 
-apt-get clean
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  apt-get clean
+fi
 
 #apt-get install -y kmod
 

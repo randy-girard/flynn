@@ -20,6 +20,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
+  config.vm.synced_folder "./ubuntu_ports_cache", "/var/cache/flynn/debootstrap", create: true, group: "vagrant", owner: "vagrant"
 
   if Vagrant.has_plugin?("vagrant-vbguest")
     # vagrant-vbguest can cause the VM to not start: https://github.com/flynn/flynn/issues/2874
@@ -42,7 +43,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
     builder.disksize.size = "80GB"  
     builder.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 24000  # Increased for running multiple services
+      v.memory = ENV["VAGRANT_MEMORY"] || 30000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8
 
       # Enable nested virtualization if needed for containers
@@ -65,7 +66,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
     runner.disksize.size = "80GB"  
     runner.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 24000  # Increased for running multiple services
+      v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8
 
       # Enable nested virtualization if needed for containers

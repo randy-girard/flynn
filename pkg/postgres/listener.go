@@ -4,27 +4,46 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx"
 	"github.com/inconshreveable/log15"
+	"github.com/jackc/pgx"
 )
 
 // Listen creates a listener for the given channel, returning the listener
 // and the first connection error (nil on successful connection).
 func (db *DB) Listen(channel string, log log15.Logger) (*Listener, error) {
-	conn, err := db.Acquire()
+	var l *Listener
+	var attempt int
+	var lastWaitLog time.Time
+	err := listenAttempts.RunWithValidator(func() error {
+		attempt++
+		conn, err := db.Acquire()
+		if err != nil {
+			if log != nil && (attempt == 1 || time.Since(lastWaitLog) > 15*time.Second) {
+				lastWaitLog = time.Now()
+				log.Info("waiting for postgres leader connectivity (LISTEN)", "channel", channel, "attempt", attempt, "err", err)
+			}
+			return err
+		}
+		listener := &Listener{
+			Notify:  make(chan *pgx.Notification),
+			channel: channel,
+			log:     log,
+			db:      db,
+			conn:    conn,
+		}
+		if err := listener.conn.Listen(channel); err != nil {
+			listener.Close()
+			db.Release(listener.conn)
+			if log != nil && (attempt == 1 || time.Since(lastWaitLog) > 15*time.Second) {
+				lastWaitLog = time.Now()
+				log.Info("waiting for postgres leader connectivity (LISTEN register)", "channel", channel, "attempt", attempt, "err", err)
+			}
+			return err
+		}
+		l = listener
+		return nil
+	}, isTransientLeaderDialErr)
 	if err != nil {
-		return nil, err
-	}
-	l := &Listener{
-		Notify:  make(chan *pgx.Notification),
-		channel: channel,
-		log:     log,
-		db:      db,
-		conn:    conn,
-	}
-	if err := l.conn.Listen(channel); err != nil {
-		l.Close()
-		l.db.Release(l.conn)
 		return nil, err
 	}
 	go l.listen()

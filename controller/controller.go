@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flynn/flynn/controller/authz"
 	"github.com/flynn/flynn/controller/authorizer"
 	"github.com/flynn/flynn/controller/data"
 	"github.com/flynn/flynn/controller/name"
@@ -349,6 +350,10 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 		auth, err := authorizer.AuthorizeRequest(r)
 		if err != nil {
 			w.WriteHeader(401)
+			return
+		}
+		if !authz.HTTPAllowed(auth, r.Method, r.URL.Path) {
+			httphelper.Forbidden(w, "this credential is not allowed to perform this operation on the controller")
 			return
 		}
 		if auth.ID != "" {
