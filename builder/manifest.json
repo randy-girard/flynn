@@ -5,7 +5,7 @@
     "url": "file:///var/lib/flynn/base-layer.squashfs",
     "size": 78524416,
     "hashes": {
-      "sha512_256": "6fe214772c9f37c1b070e61a169925270891eb82f2a5091f8c407d48215030d1"
+      "sha512_256": "c9c44be1ae4a659f034db05b75916f1f1d5a6e27cc56f96ff73e36eea1f0d89e"
     }
   },
   "images": [

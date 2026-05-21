@@ -56,9 +56,13 @@ rm -f "${TMP}/root/etc/resolv.conf"
 cp "/etc/resolv.conf" "${TMP}/root/etc/resolv.conf"
 
 chroot_archive_bind=
+chroot_lists_bind=
 cleanup() {
   if [[ "${chroot_archive_bind}" == 1 ]] && [[ -n "${TMP:-}" ]]; then
     umount "${TMP}/root/var/cache/apt/archives" 2>/dev/null || true
+  fi
+  if [[ "${chroot_lists_bind}" == 1 ]] && [[ -n "${TMP:-}" ]]; then
+    umount "${TMP}/root/var/lib/apt/lists" 2>/dev/null || true
   fi
   if [[ -n "${TMP:-}" ]] && [[ -d "${TMP}/root" ]]; then
     >"${TMP}/root/etc/resolv.conf"
@@ -74,15 +78,29 @@ if mountpoint -q /var/cache/apt/archives; then
   chroot_archive_bind=1
 fi
 
+# Same for the apt lists bind mount: lets apt-get update do conditional/incremental
+# refreshes against the shared host index cache instead of redownloading every build.
+if mountpoint -q /var/lib/apt/lists; then
+  mkdir -p "${TMP}/root/var/lib/apt/lists"
+  mount --bind /var/lib/apt/lists "${TMP}/root/var/lib/apt/lists"
+  chroot_lists_bind=1
+fi
+
 chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
 
 if [[ "${chroot_archive_bind}" == 1 ]]; then
   umount "${TMP}/root/var/cache/apt/archives" || exit 1
   chroot_archive_bind=
 fi
+if [[ "${chroot_lists_bind}" == 1 ]]; then
+  umount "${TMP}/root/var/lib/apt/lists" || exit 1
+  chroot_lists_bind=
+fi
 
-# Drop any unpacked .deb left in the staging rootfs (normally empty once the APT cache bind is detached).
-# Never rm while the bind is mounted: that would purge the shared host cache directory.
+# Drop any unpacked .deb or lingering apt-list files in the staging rootfs (normally empty
+# once the bind mounts are detached). Never rm while the binds are mounted: that would purge
+# the shared host cache directories.
 rm -rf "${TMP}/root/var/cache/apt/archives"/* "${TMP}/root/var/cache/apt/archives"/partial/* 2>/dev/null || true
+rm -rf "${TMP}/root/var/lib/apt/lists"/* 2>/dev/null || true
 
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

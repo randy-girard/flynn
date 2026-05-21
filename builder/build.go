@@ -38,19 +38,34 @@ import (
 // jobs when ./ubuntu_ports_cache (or $FLYNN_APT_ARCHIVE_CACHE) is configured.
 const aptArchiveCacheMountPoint = "/var/cache/apt/archives"
 
+// aptListsCacheMountPoint holds the apt index files (~40-60 MB per build) so apt-get update
+// does conditional/incremental refreshes instead of re-downloading every list each build.
+const aptListsCacheMountPoint = "/var/lib/apt/lists"
+
+// aptListsCacheSubdir stores apt list indices under ubuntu_ports_cache.
+const aptListsCacheSubdir = "_apt_lists"
+
 // flynnHTTPDownloadMountPoint holds cached plain HTTP GET bodies (curl) alongside the APT tree.
 const flynnHTTPDownloadMountPoint = "/var/cache/flynn-http-cache"
 
 // flynnHTTPDownloadSubdir stores curl cache blobs under ubuntu_ports_cache.
 const flynnHTTPDownloadSubdir = "_flynn_http"
 
+// flynnGitCacheMountPoint exposes bare-mirror git repos for the flynn-git shim.
+const flynnGitCacheMountPoint = "/var/cache/flynn-git-cache"
+
+// flynnGitCacheSubdir stores the git mirrors under ubuntu_ports_cache.
+const flynnGitCacheSubdir = "_git_mirrors"
+
 // flynnAptLayerPrelude runs before layers that invoke apt. Ubuntu runs downloads as _apt; minimal
 // base layers and host bind mounts often leave /var/cache/apt/archives/partial root-only, which
 // breaks pkgAcquire (Permission denied). chmod fixes the cache; APT::Sandbox::User mirrors common
 // container guidance so downloads are not forced through the _apt sandbox.
-const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial && ` +
+const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial && ` +
 	`chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true && ` +
 	`chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true && ` +
+	`chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true && ` +
+	`chmod -R a+rwX /var/lib/apt/lists/partial 2>/dev/null || true && ` +
 	`install -d /etc/apt/apt.conf.d && ` +
 	`printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf`
 
@@ -119,6 +134,10 @@ Build Flynn images using builder/manifest.json.
    /var/cache/apt/archives so parallel image builds do not share one archives/lock (which
    fails with "Unable to lock directory" or bogus PIDs).
 
+   Alongside the .deb archives, ./_apt_lists is mounted at /var/lib/apt/lists so
+   apt-get update does conditional/incremental refreshes (HTTP If-Modified-Since)
+   instead of re-downloading ~40-60 MB of indices on every build.
+
    The same directory also contains ./_flynn_http (mounted at /var/cache/flynn-http-cache)
    where trivial curl GETs from layer scripts are cached (PATH supplies a small shim).
 
@@ -126,6 +145,12 @@ Build Flynn images using builder/manifest.json.
    (rolling paths whose body changes under a stable URL). Extend this with
    FLYNN_HTTP_CACHE_SKIP_PATTERNS (a colon-separated list of substrings to match
    against the URL), or set FLYNN_NO_HTTP_CACHE=1 to bypass the shim entirely.
+
+   Finally, ./_git_mirrors is mounted at /var/cache/flynn-git-cache where the
+   flynn-git shim (PATH-installed as "git") maintains a bare mirror of each cloned
+   repository. "git clone <url> <dir>" then becomes a local clone of the mirror;
+   subsequent builds reuse it. FLYNN_GIT_CACHE_TTL (seconds; default 3600) controls
+   how often the mirror is refreshed. Set FLYNN_NO_GIT_CACHE=1 to bypass.
 
 `[1:],
 }
@@ -208,23 +233,75 @@ func (b *Builder) appendBuildCacheMounts(job *host.Job) bool {
 	})
 	b.log.Info("apt archive cache mounted", "host_path", dir, "mount", aptArchiveCacheMountPoint)
 
+	// apt lists cache: a second sibling directory that holds the per-mirror Packages index
+	// files. Without this, apt-get update re-downloads ~40-60 MB on every build.
+	listsDir := filepath.Join(dir, aptListsCacheSubdir)
+	if listsOK := setupSharedCacheDir(b.log, "apt lists cache", listsDir); listsOK {
+		// partial/ has to exist and be writable by _apt; create it before the first apt-get update
+		// in case the layer prelude has not run yet.
+		_ = os.MkdirAll(filepath.Join(listsDir, "partial"), 0777)
+		_ = os.Chmod(filepath.Join(listsDir, "partial"), 0777)
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    listsDir,
+			Location:  aptListsCacheMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("apt lists cache mounted", "host_path", listsDir, "mount", aptListsCacheMountPoint)
+	}
+
 	httpDir := filepath.Join(dir, flynnHTTPDownloadSubdir)
-	if err := os.MkdirAll(httpDir, 0777); err != nil {
-		b.log.Warn("http download cache: cannot create dir, skipping curl blob cache",
-			"path", httpDir, "err", err)
-		return true
+	if setupSharedCacheDir(b.log, "http download cache", httpDir) {
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    httpDir,
+			Location:  flynnHTTPDownloadMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("http download cache mounted", "host_path", httpDir, "mount", flynnHTTPDownloadMountPoint)
 	}
-	if err := os.Chmod(httpDir, 0777); err != nil {
-		b.log.Warn("http download cache: cannot chmod dir", "path", httpDir, "err", err)
-		return true
+
+	gitDir := filepath.Join(dir, flynnGitCacheSubdir)
+	if setupSharedCacheDir(b.log, "git mirror cache", gitDir) {
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    gitDir,
+			Location:  flynnGitCacheMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("git mirror cache mounted", "host_path", gitDir, "mount", flynnGitCacheMountPoint)
 	}
-	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
-		Target:    httpDir,
-		Location:  flynnHTTPDownloadMountPoint,
-		Writeable: true,
-	})
-	b.log.Info("http download cache mounted", "host_path", httpDir, "mount", flynnHTTPDownloadMountPoint)
+
 	return true
+}
+
+// setupSharedCacheDir creates and 0777s a host cache directory used by a build-job bind mount.
+// Returns false (and logs) if creation/chmod fails, so callers can skip the mount.
+func setupSharedCacheDir(log log15.Logger, label, path string) bool {
+	if err := os.MkdirAll(path, 0777); err != nil {
+		log.Warn(label+": cannot create dir, skipping", "path", path, "err", err)
+		return false
+	}
+	if err := os.Chmod(path, 0777); err != nil {
+		log.Warn(label+": cannot chmod dir", "path", path, "err", err)
+		return false
+	}
+	return true
+}
+
+// installShim copies a build-time PATH shim (e.g. flynn-curl, flynn-git) into the
+// shared bin/ directory used by build jobs. Missing source files are logged but not
+// fatal — layers fall back to the system binary. copyFile is the per-run closure
+// that knows the shared dir prefix.
+func installShim(log log15.Logger, dir, label, src, dst string, copyFile func(string, string) error) error {
+	if _, err := os.Stat(src); err != nil {
+		log.Warn(label+" shim missing, image builds will use the system binary", "path", src, "err", err)
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("copy %s shim: %w", label, err)
+	}
+	if err := os.Chmod(filepath.Join(dir, dst), 0755); err != nil {
+		return fmt.Errorf("chmod %s shim: %w", label, err)
+	}
+	return nil
 }
 
 type Builder struct {
@@ -998,16 +1075,11 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		return nil, err
 	}
 
-	curlShim := filepath.Join("builder", "img", "flynn-curl.sh")
-	if _, err := os.Stat(curlShim); err != nil {
-		b.log.Warn("flynn-curl shim missing, image builds will use system curl only", "path", curlShim, "err", err)
-	} else {
-		if err := copyFile(curlShim, filepath.Join("bin", "curl")); err != nil {
-			return nil, fmt.Errorf("copy flynn-curl shim: %w", err)
-		}
-		if err := os.Chmod(filepath.Join(dir, "bin", "curl"), 0755); err != nil {
-			return nil, fmt.Errorf("chmod flynn-curl shim: %w", err)
-		}
+	if err := installShim(b.log, dir, "flynn-curl", "builder/img/flynn-curl.sh", "bin/curl", copyFile); err != nil {
+		return nil, err
+	}
+	if err := installShim(b.log, dir, "flynn-git", "builder/img/flynn-git.sh", "bin/git", copyFile); err != nil {
+		return nil, err
 	}
 
 	if env == nil {
@@ -1029,6 +1101,7 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 	prependMntBinToPath(job.Config.Env)
 	if cacheOK {
 		job.Config.Env["FLYNN_HTTP_CACHE_ROOT"] = flynnHTTPDownloadMountPoint
+		job.Config.Env["FLYNN_GIT_CACHE_ROOT"] = flynnGitCacheMountPoint
 	}
 	cmd := exec.Cmd{Job: job}
 

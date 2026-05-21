@@ -20,6 +20,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
   config.vm.synced_folder "./ubuntu_ports_cache", "/var/cache/flynn/debootstrap", create: true, group: "vagrant", owner: "vagrant"
+  config.vm.synced_folder "./flynn-logs", "/var/logs/flynn"
 
   if Vagrant.has_plugin?("vagrant-vbguest")
     # vagrant-vbguest can cause the VM to not start: https://github.com/flynn/flynn/issues/2874

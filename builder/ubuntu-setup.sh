@@ -38,11 +38,14 @@ EOF
 export DEBIAN_FRONTEND=noninteractive
 
 # flynn-builder flynnAptLayerPrelude only prepares the outer build root; Noble uses chroot +
-# ubuntu-setup.sh. Match that prelude here so _apt can use a bind-mounted
-# /var/cache/apt/archives and sandboxing does not hit root-owned partial/ files (pkgAcquire Permission denied).
-mkdir -p /var/cache/apt/archives/partial
+# ubuntu-setup.sh. Match that prelude here so _apt can use the bind-mounted
+# /var/cache/apt/archives and /var/lib/apt/lists, and sandboxing does not hit
+# root-owned partial/ files (pkgAcquire Permission denied).
+mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial
 chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true
 chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true
+chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true
+chmod -R a+rwX /var/lib/apt/lists/partial 2>/dev/null || true
 install -d /etc/apt/apt.conf.d
 printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf
 
@@ -60,8 +63,12 @@ sed -i \
   /etc/apt/sources.list
 
 # Cloud tarball list slices reference pool versions from image build day; ubuntu-ports can 404 old
-# .deb URLs once the pool rotates. Drop lists before update so APT matches current Packages indexes.
-rm -rf /var/lib/apt/lists/*
+# .deb URLs once the pool rotates. Drop the stale, image-shipped indexes so APT re-fetches against
+# current Packages files — but only when the lists dir is not a shared host cache (which already
+# holds current indexes maintained across builds).
+if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
+  rm -rf /var/lib/apt/lists/*
+fi
 
 # update packages
 apt-get update
@@ -76,9 +83,12 @@ if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
   rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
 fi
 
-# delete all the apt list files since they're big and get stale quickly
-rm -rf /var/lib/apt/lists/*
-# this forces "apt-get update" in dependent images, which is also good
+# delete the apt list files baked into this rootfs (big, stale fast). Skip when a host
+# lists cache is bind-mounted — that cache is shared across builds and never goes in the layer.
+if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
+  rm -rf /var/lib/apt/lists/*
+fi
+# this forces "apt-get update" in dependent images (incremental against the host cache), which is also good
 
 # enable the universe
 sed -i 's/^#\s*\(deb.*universe\)$/\1/g' /etc/apt/sources.list

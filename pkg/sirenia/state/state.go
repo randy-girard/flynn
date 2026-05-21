@@ -863,6 +863,15 @@ func (p *Peer) evalInitClusterState() {
 		return
 	}
 	if p.Info().State.Singleton {
+		// A singleton peer joining a cluster whose recorded primary is a
+		// different (no longer present) instance must claim the cluster
+		// itself; otherwise it would sit unassigned forever, because no
+		// later event would fire to re-trigger evaluation (the previous
+		// primary was already gone when we initialised).
+		if p.canSingletonTakeover() {
+			p.startSingletonTakeover()
+			return
+		}
 		p.assumeUnassigned()
 		return
 	}
