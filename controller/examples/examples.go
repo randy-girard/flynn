@@ -179,8 +179,8 @@ func (e *generator) getInitialAppRelease() {
 	if err != nil {
 		return
 	}
-	if artifact, err := e.client.GetArtifact(appRelease.Env["SLUGRUNNER_18_IMAGE_ID"]); err == nil {
-		e.resourceIds["SLUGRUNNER_18_IMAGE_URI"] = artifact.URI
+	if artifact, err := e.client.GetArtifact(appRelease.Env["SLUGRUNNER_24_IMAGE_ID"]); err == nil {
+		e.resourceIds["SLUGRUNNER_24_IMAGE_URI"] = artifact.URI
 	}
 }
 
@@ -325,7 +325,7 @@ func (e *generator) createArtifact() {
 	}
 	artifact := &ct.Artifact{
 		Type:             ct.ArtifactTypeFlynn,
-		URI:              e.resourceIds["SLUGRUNNER_18_IMAGE_URI"],
+		URI:              e.resourceIds["SLUGRUNNER_24_IMAGE_URI"],
 		RawManifest:      manifest.RawManifest(),
 		Hashes:           manifest.Hashes(),
 		Size:             int64(len(manifest.RawManifest())),

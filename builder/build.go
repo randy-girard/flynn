@@ -224,7 +224,7 @@ func (b *Builder) appendBuildCacheMounts(job *host.Job) bool {
 
 type Builder struct {
 	// baseLayer is used when building an image which has no
-	// dependencies (e.g. the ubuntu-bionic image)
+	// dependencies (e.g. the ubuntu-noble image)
 	baseLayer *host.Mountspec
 
 	// artifacts is a map of built artifacts and is written to

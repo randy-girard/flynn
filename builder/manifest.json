@@ -510,8 +510,7 @@
         {
           "name": "slugbuilder-binaries",
           "gobuild": {
-            "slugbuilder/artifact": "/bin/create-artifact",
-            "slugbuilder/migrator": "/bin/slug-migrator"
+            "slugbuilder/artifact": "/bin/create-artifact"
           },
           "copy": {
             "slugbuilder/convert-legacy-slug.sh": "/bin/convert-legacy-slug.sh",

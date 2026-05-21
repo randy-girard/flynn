@@ -2,8 +2,7 @@
 #
 # A script to setup an Ubuntu cloud image to be container image friendly.
 #
-# Adapted from Docker:
-# https://github.com/tianon/docker-brew-ubuntu-core/blob/cf9d7a2ee20c8a4706a05d1d7f1a1e25ae32ed39/trusty/Dockerfile
+# Adapted from the upstream docker-brew-ubuntu-core image recipes.
 
 ln -s -f /bin/true /usr/bin/chfn
 

@@ -64,7 +64,7 @@ cd "${ROOT}"
   # create a slug for testing slug based app updates
   build/bin/flynn-host run \
     --volume /tmp \
-    build/image/slugbuilder-18.json \
+    build/image/slugbuilder-24.json \
     /usr/bin/env \
     CONTROLLER_KEY="{{ .ControllerKey }}" \
     SLUG_IMAGE_ID="{{ .SlugImageID }}" \
