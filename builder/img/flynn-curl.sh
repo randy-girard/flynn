@@ -6,6 +6,8 @@ set -euo pipefail
 REAL_CURL="${REAL_CURL:-/usr/bin/curl}"
 exec_real() { exec "$REAL_CURL" "$@"; }
 
+[[ "${FLYNN_NO_HTTP_CACHE:-}" == "1" ]] && exec_real "$@"
+
 ROOT="${FLYNN_HTTP_CACHE_ROOT:-}"
 [[ -z "${ROOT}" || ! -d "${ROOT}" ]] && exec_real "$@"
 mkdir -p "${ROOT}"
@@ -152,6 +154,21 @@ fi
 partial="${ROOT}/partial"
 mkdir -p "${partial}"
 
+
+# Rolling-URL bypass: any URL whose body changes under a stable path must not be
+# served from cache. Built-in patterns cover the Ubuntu cloud-image SHA256SUMS file
+# and any URL component named "current" (e.g. cloud-images "/current/" releases).
+# Additional substrings can be supplied via FLYNN_HTTP_CACHE_SKIP_PATTERNS as a
+# colon-separated list.
+case "${THEURL}" in
+  */current/*|*/SHA256SUMS|*/SHA256SUMS.gpg) exec_real "$@" ;;
+esac
+if [[ -n "${FLYNN_HTTP_CACHE_SKIP_PATTERNS:-}" ]]; then
+  IFS=':' read -r -a _skip_pats <<<"${FLYNN_HTTP_CACHE_SKIP_PATTERNS}"
+  for _pat in "${_skip_pats[@]}"; do
+    [[ -n "${_pat}" && "${THEURL}" == *"${_pat}"* ]] && exec_real "$@"
+  done
+fi
 
 key="$({ printf '%s' "${THEURL}" | sha256sum | awk '{print $1}'; })"
 blob="${ROOT}/${key}.blob"

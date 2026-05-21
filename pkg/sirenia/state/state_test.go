@@ -813,6 +813,18 @@ func TestSingletonSecond(t *testing.T) {
 		Freeze:     state.NewFreezeDetails("singleton"),
 		Singleton:  true,
 	}
+	gen2 := &state.State{
+		Generation: 2,
+		Primary:    node(1, 2),
+		InitWAL:    xlog.Zero(),
+		Singleton:  true,
+		Freeze:     state.NewFreezeDetails("singleton primary replaced"),
+	}
+	gen2pg := &simulator.DbInfo{
+		Online:  true,
+		Config:  &state.Config{Role: state.RolePrimary},
+		CurXLog: "0/0000000A",
+	}
 
 	runSteps(t, true, []step{
 		// Test that we don't do anything if we start up in singleton mode when
@@ -834,19 +846,23 @@ func TestSingletonSecond(t *testing.T) {
 			},
 		},
 
-		// Check that we don't do anything even if the primary fails
-		{Cmd: "echo test: do nothing even if primary fails"},
+		// Check that we take over the singleton cluster when the recorded
+		// primary disappears from discoverd. Without this path a singleton
+		// sirenia deploy hangs indefinitely once the old primary stops: the
+		// freeze short-circuits the state machine, and unassigned peers
+		// otherwise have no promotion route.
+		{Cmd: "echo test: take over the singleton if the primary disappears"},
 		{Cmd: "rmpeer node2"},
 		{
 			Cmd: "peer",
 			Check: &simulator.PeerSimInfo{
 				Peer: &state.PeerInfo{
 					ID:    node1ID,
-					Role:  state.RoleUnassigned,
-					State: gen1,
+					Role:  state.RolePrimary,
+					State: gen2,
 					Peers: []*discoverd.Instance{node(1, 2)},
 				},
-				Db: pgOffline,
+				Db: gen2pg,
 			},
 		},
 	})

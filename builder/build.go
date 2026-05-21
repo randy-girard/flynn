@@ -122,6 +122,11 @@ Build Flynn images using builder/manifest.json.
    The same directory also contains ./_flynn_http (mounted at /var/cache/flynn-http-cache)
    where trivial curl GETs from layer scripts are cached (PATH supplies a small shim).
 
+   The shim never caches URLs containing "/current/" or ending in SHA256SUMS[.gpg]
+   (rolling paths whose body changes under a stable URL). Extend this with
+   FLYNN_HTTP_CACHE_SKIP_PATTERNS (a colon-separated list of substrings to match
+   against the URL), or set FLYNN_NO_HTTP_CACHE=1 to bypass the shim entirely.
+
 `[1:],
 }
 

@@ -8,9 +8,6 @@ dir="/usr/local"
 
 apt-get update
 apt-get install --yes git build-essential pkg-config libseccomp-dev
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
 
 curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-$(dpkg --print-architecture).tar.gz"
 rm -rf "${dir}/go"
@@ -31,3 +28,8 @@ trap "rm -rf /tmp/gobin" EXIT
 cd "/tmp/gobin"
 git reset --hard ${gobin_commit}
 /usr/local/bin/go build -o /usr/local/bin/gobin-noenv
+
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
+rm -rf /var/lib/apt/lists/*

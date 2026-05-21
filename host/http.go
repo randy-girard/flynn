@@ -54,6 +54,23 @@ type Host struct {
 	log log15.Logger
 }
 
+// hostAuthKeyFromRequest returns the credential sent as Auth-Key or Basic password.
+func hostAuthKeyFromRequest(r *http.Request) string {
+	key := r.Header.Get("Auth-Key")
+	if key == "" {
+		_, key, _ = r.BasicAuth()
+	}
+	return key
+}
+
+// authKeyValid reports whether key matches the configured host API secret.
+func (h *Host) authKeyValid(key string) bool {
+	if h.authKey == "" || key == "" || len(key) != len(h.authKey) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) == 1
+}
+
 // authMiddleware wraps an http.Handler and requires a valid Auth-Key header
 // or Basic auth password matching the host's authKey. If no authKey is
 // configured, all requests are allowed (backwards compatibility).
@@ -70,14 +87,7 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		key := r.Header.Get("Auth-Key")
-		if key == "" {
-			// Fall back to Basic auth password
-			_, key, _ = r.BasicAuth()
-		}
-
-		if key == "" || len(key) != len(h.authKey) ||
-			subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) != 1 {
+		if !h.authKeyValid(hostAuthKeyFromRequest(r)) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
 			httphelper.Error(w, httphelper.JSONError{
 				Code:    httphelper.UnauthorizedErrorCode,
@@ -123,10 +133,25 @@ func (rl *perIPRateLimiter) Allow(ip string) bool {
 }
 
 func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
+	// Without host HTTP authentication, every client looks the same to us and the
+	// controller issues many requests from one address — a global limit breaks
+	// flynn run, pg psql, deploys, etc. Enable FLYNN_HOST_AUTH_KEY on flynn-host
+	// (and the same value on the controller) to apply limits only to clients that
+	// do not present the key.
+	if h.authKey == "" {
+		return next
+	}
 	limiter := newPerIPRateLimiter(100, time.Minute) // 100 requests per minute per IP
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Exempt health checks from rate limiting
 		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Requests authenticated with the host API key are trusted (controller,
+		// CLI via controller, internal tooling). Per-IP limits still apply to
+		// missing or wrong credentials so brute-force attempts remain throttled.
+		if h.authKey != "" && h.authKeyValid(hostAuthKeyFromRequest(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -763,7 +788,8 @@ func (h *Host) ServeHTTP() {
 
 	h.sman.RegisterRoutes(r)
 
-	// SEC-017: apply rate limiting before auth to prevent brute-force attacks
+	// SEC-017: when host auth is enabled, per-IP limit applies only to clients
+	// without a valid Auth-Key / Basic password (controller path is exempt).
 	go http.Serve(h.listener, h.rateLimitMiddleware(h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))))
 }
 

@@ -22,9 +22,6 @@ protoc_url="https://github.com/google/protobuf/releases/download/v${protoc_versi
 
 apt-get update
 apt-get install --yes unzip
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
 
 # install protobuf compiler
 curl -sL "${protoc_url}" > /tmp/protoc.zip
@@ -43,3 +40,8 @@ export GOSUMDB="${GOSUMDB:-sum.golang.org}"
 # toolchain modules. Force module mode for these two installs only.
 GOFLAGS=-mod=mod GOBIN=/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
 GOFLAGS=-mod=mod GOBIN=/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.3.0
+
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
+rm -rf /var/lib/apt/lists/*

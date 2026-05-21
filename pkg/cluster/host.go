@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -41,6 +42,7 @@ func NewHost(id string, addr string, h *http.Client, tags map[string]string) *Ho
 			ErrNotFound: ErrNotFound,
 			URL:         addr,
 			HTTP:        h,
+			Key:         os.Getenv("FLYNN_HOST_AUTH_KEY"),
 		},
 	}
 }

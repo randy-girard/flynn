@@ -558,6 +558,17 @@ func (p *Peer) evalClusterState() {
 	if p.Info().Role == RoleUnassigned {
 		if i := p.whichAsync(); i != -1 {
 			p.assumeAsync(i)
+			return
+		}
+		// A frozen singleton cluster cannot self-heal when the recorded
+		// primary disappears: the freeze short-circuits state changes below,
+		// and unassigned peers otherwise have no takeover path. When we are
+		// configured as a singleton peer, the cluster is in singleton-frozen
+		// mode, and the recorded primary is no longer present in discoverd,
+		// promote ourselves so that singleton-deploy job replacement and
+		// crash recovery can complete instead of hanging indefinitely.
+		if p.canSingletonTakeover() {
+			p.startSingletonTakeover()
 		}
 		return
 	}
@@ -714,6 +725,62 @@ func (p *Peer) startInitialSetup() {
 		info.State = p.updatingState
 		p.setInfo(info)
 	}
+	p.updatingState = nil
+
+	p.triggerEval()
+}
+
+// canSingletonTakeover reports whether this peer should claim the singleton
+// cluster from an absent primary. It is only true for a singleton-configured
+// peer that is currently unassigned and observes that the recorded primary
+// in a singleton-frozen cluster is no longer present in the peer list.
+func (p *Peer) canSingletonTakeover() bool {
+	if !p.singleton {
+		return false
+	}
+	state := p.Info().State
+	if state == nil || !state.Singleton || state.Freeze == nil || state.Primary == nil {
+		return false
+	}
+	if state.Primary.Meta[p.idKey] == p.id {
+		return false
+	}
+	return !p.peerIsPresent(state.Primary)
+}
+
+// startSingletonTakeover replaces the recorded primary of a frozen singleton
+// cluster with ourselves. It mirrors startInitialSetup but bumps the existing
+// generation rather than starting from zero, and re-freezes the cluster to
+// preserve singleton invariants. Callers must guarantee canSingletonTakeover
+// is true at invocation time.
+func (p *Peer) startSingletonTakeover() {
+	if p.updatingState != nil {
+		panic("already have updating state")
+	}
+
+	prev := p.Info().State
+	p.updatingState = &State{
+		Generation: prev.Generation + 1,
+		Primary:    p.self,
+		InitWAL:    p.db.XLog().Zero(),
+		Singleton:  true,
+		Freeze:     NewFreezeDetails("singleton primary replaced"),
+	}
+
+	log := p.log.New("fn", "startSingletonTakeover")
+	log.Info("taking over singleton cluster from absent primary",
+		"generation", p.updatingState.Generation)
+
+	if err := p.putClusterState(); err != nil {
+		log.Error("failed to write singleton takeover state", "err", err)
+		p.updatingState = nil
+		p.evalLater(1 * time.Second)
+		return
+	}
+
+	info := *p.Info()
+	info.State = p.updatingState
+	p.setInfo(info)
 	p.updatingState = nil
 
 	p.triggerEval()

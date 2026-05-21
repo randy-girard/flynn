@@ -2,7 +2,8 @@
 
 TMP="$(mktemp --directory)"
 
-apt install busybox-static
+apt-get update
+apt-get install -y --no-install-recommends busybox-static
 
 mkdir "${TMP}/root"
 cd "${TMP}/root"
@@ -54,6 +55,11 @@ esac
 
 cp /lib/${ARCH_LIB_DIR}/lib{c,dl,nsl,nss_*,pthread,resolv}.so.* lib
 cp /lib/${ARCH_LIB_DIR}/${LOADER} lib
+
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
+rm -rf /var/lib/apt/lists/*
 
 # Build squashfs
 mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend

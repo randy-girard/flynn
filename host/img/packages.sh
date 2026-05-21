@@ -20,10 +20,6 @@ apt-get install -y linux-gcp \
     libseccomp-dev \
     jq
 
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
-
 # support 9p rootfs when starting in a VM
 printf '%s\n' 9p 9pnet 9pnet_virtio >> /etc/initramfs-tools/modules
 update-initramfs -u
@@ -66,3 +62,8 @@ Name=en*
 DHCP=ipv4
 EOF
 systemctl enable systemd-networkd.service
+
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
+rm -rf /var/lib/apt/lists/*

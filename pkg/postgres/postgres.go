@@ -28,6 +28,11 @@ const (
 	// failures before failing hard. Restarts normally settle sooner; callers
 	// (process restart or clients) should retry rather than wedging minutes.
 	postgresReconnectBudget = 90 * time.Second
+
+	// leaderDialBudget allows longer waits inside each TCP dial than the initial
+	// Open() retry loop: sirenia postgres updates can leave leader.* NXDOMAIN
+	// for minutes while roles move.
+	leaderDialBudget = 4 * time.Minute
 )
 
 type Conf struct {
@@ -38,10 +43,10 @@ type Conf struct {
 	Database  string
 
 	// SingletonCluster is set by Wait from discoverd service meta when the
-	// cluster runs in Sirenia singleton mode (typical single-host Flynn). Only
-	// in that case may Open dial the discoverd Leader IP when leader.* DNS lags;
-	// multi-host clusters must keep using the leader FQDN so failover changes
-	// the resolved address without pinning a stale IP in the pool.
+	// cluster runs in Sirenia singleton mode (typical single-host Flynn). It is
+	// informational; leader host selection uses discoverd whenever leader.* DNS
+	// is unavailable (not only for singleton clusters) so the controller can
+	// reach Postgres while discoverd DNS catches up.
 	SingletonCluster bool
 }
 
@@ -59,6 +64,14 @@ var listenAttempts = attempt.Strategy{
 	Min:   5,
 	Total: postgresReconnectBudget,
 	Delay: 300 * time.Millisecond,
+}
+
+// leaderDialAttempts retries a single net.Dial while leader DNS or the primary
+// socket is unsettled (common during postgres appliance updates).
+var leaderDialAttempts = attempt.Strategy{
+	Min:   10,
+	Total: leaderDialBudget,
+	Delay: 400 * time.Millisecond,
 }
 
 func isTransientLeaderDialErr(err error) bool {
@@ -111,7 +124,7 @@ func waitUntilPostgresResolvable(conf *Conf) {
 		if _, err := net.LookupHost(fqdn); err == nil {
 			return nil
 		}
-		if conf.SingletonCluster && discoverdLeaderIPKnown(conf) {
+		if discoverdLeaderIPKnown(conf) {
 			return nil
 		}
 		return fmt.Errorf("postgres leader not yet resolvable (DNS or discoverd)")
@@ -126,22 +139,50 @@ func discoverdLeaderIPKnown(conf *Conf) bool {
 	return net.ParseIP(inst.Host()) != nil
 }
 
-// postgresLeaderHost chooses the TCP host for pgx. Prefer the leader FQDN so
-// DNS tracks Sirenia leadership on multi-host clusters; for singleton clusters,
-// fall back to the discoverd-reported primary IP while leader.* is still NXDOMAIN.
+// postgresLeaderHost chooses the TCP host for pgx. Prefer the leader FQDN
+// when discoverd DNS resolves it; otherwise use the discoverd-reported primary
+// address (IP) so we can connect while leader.* DNS is missing or stale.
+// retryingLeaderDial calls this on every dial attempt, so failover updates
+// from discoverd are picked up without pinning an old address in the pool.
 func postgresLeaderHost(conf *Conf) string {
 	fqdn := fmt.Sprintf("leader.%s.discoverd", conf.Service)
 	if _, err := net.LookupHost(fqdn); err == nil {
 		return fqdn
 	}
-	if conf.SingletonCluster {
-		if inst, err := conf.Discoverd.Service(conf.Service).Leader(); err == nil && inst != nil {
-			if h := inst.Host(); net.ParseIP(h) != nil {
-				return h
-			}
+	if inst, err := conf.Discoverd.Service(conf.Service).Leader(); err == nil && inst != nil {
+		if h := inst.Host(); net.ParseIP(h) != nil {
+			return h
 		}
 	}
 	return fqdn
+}
+
+// retryingLeaderDial returns a pgx.DialFunc that re-resolves the sirenia leader
+// on every attempt (FQDN or singleton discoverd IP) and retries transient DNS /
+// TCP failures. The address pgx passes through is only used for the port.
+func retryingLeaderDial(conf *Conf) pgx.DialFunc {
+	d := &net.Dialer{KeepAlive: 5 * time.Minute}
+	return func(network, addr string) (net.Conn, error) {
+		_, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		var conn net.Conn
+		dialErr := leaderDialAttempts.RunWithValidator(func() error {
+			host := postgresLeaderHost(conf)
+			tcpAddr := net.JoinHostPort(host, port)
+			c, err := d.Dial(network, tcpAddr)
+			if err != nil {
+				return err
+			}
+			conn = c
+			return nil
+		}, isTransientLeaderDialErr)
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		return conn, nil
+	}
 }
 
 func New(connPool *pgx.ConnPool, conf *Conf) *DB {
@@ -227,6 +268,7 @@ func Open(conf *Conf, afterConn func(*pgx.Conn) error) (*DB, error) {
 		User:     conf.User,
 		Database: conf.Database,
 		Password: conf.Password,
+		Dial:     retryingLeaderDial(conf),
 	}
 	connPool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig:     connConfig,
