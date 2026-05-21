@@ -187,7 +187,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 		if !rolloutCluster {
 			log.Info("skipping container images and system app rollout (local-only update)")
 			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
-		} else if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
+		} else if err := updateImages(repo, configDir, release.TagName, "", force, log); err != nil {
 			return err
 		}
 	}
@@ -558,7 +558,9 @@ const deployTimeout = 30 * time.Minute
 
 // updateImages downloads the images manifest and updates system apps.
 // If baseURL is non-empty, images are fetched from that URL instead of GitHub.
-func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logger) error {
+// When force is true, system apps are redeployed even if the image manifest
+// matches the currently deployed artifact.
+func updateImages(repo, configDir, targetVersion, baseURL string, force bool, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
 	var d *downloader.Downloader
 	if baseURL != "" {
@@ -884,7 +886,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 
 		var deployErr error
 		for attempt := 1; ; attempt++ {
-			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, appLog)
+			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, force, appLog)
 			if deployErr == nil {
 				break
 			}
@@ -926,7 +928,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
-			if err := deployApp(client, app, redisImage, nil, appLog); err != nil {
+			if err := deployApp(client, app, redisImage, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
 					continue
@@ -942,7 +944,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 		}
 
 		appLog.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, nil, appLog); err != nil {
+		if err := deployApp(client, app, slugRunner, nil, force, appLog); err != nil {
 			if e, ok := err.(errDeploySkipped); ok {
 				appLog.Info("skipped deploy of app", "reason", e.reason)
 				continue
@@ -964,7 +966,7 @@ func (e errDeploySkipped) Error() string {
 	return e.reason
 }
 
-func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, log log15.Logger) error {
+func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		log.Error("error getting release", "err", err)
@@ -984,8 +986,11 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
-	if skipDeploy {
+	if skipDeploy && !force {
 		return errDeploySkipped{"app is already using latest images"}
+	}
+	if skipDeploy {
+		log.Info("forcing redeploy with matching image manifest", "manifest.id", image.Manifest().ID())
 	}
 	if err := client.CreateArtifact(image); err != nil {
 		log.Error("error creating artifact", "err", err)
@@ -1034,6 +1039,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
 	allNodes := args.Bool["--all-nodes"]
+	force := args.Bool["--force"]
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
@@ -1174,7 +1180,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 		// Update container images and system apps
 		if needImages {
-			if err := updateImages("", configDir, tarballVersion, baseURL, log); err != nil {
+			if err := updateImages("", configDir, tarballVersion, baseURL, force, log); err != nil {
 				return err
 			}
 		}
