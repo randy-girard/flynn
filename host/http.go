@@ -445,7 +445,15 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 	paths, err := d.DownloadBinaries(query.Get("bin-dir"))
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
-		httphelper.Error(w, err)
+		// Surface the underlying download error verbatim so the
+		// orchestrator (flynn-host update) doesn't have to ssh into
+		// each remote node to discover why the pull failed. Without
+		// this, httphelper collapses the raw error to "unknown_error:
+		// Something went wrong".
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("failed to download binaries from %q: %s", baseURL, err),
+		})
 		return
 	}
 
@@ -453,7 +461,10 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 	configs, err := d.DownloadConfig(query.Get("config-dir"))
 	if err != nil {
 		log.Error("error downloading config", "err", err)
-		httphelper.Error(w, err)
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("failed to download config from %q: %s", baseURL, err),
+		})
 		return
 	}
 	for k, v := range configs {

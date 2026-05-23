@@ -234,7 +234,7 @@ func (p *Process) Stop() error {
 	defer p.mtx.Unlock()
 
 	if !p.running() {
-		return errors.New("postgres is already stopped")
+		return nil
 	}
 	return p.stop()
 }

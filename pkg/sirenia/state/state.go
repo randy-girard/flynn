@@ -146,8 +146,14 @@ func peersEqual(a, b *discoverd.Instance) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.ID == b.ID
-
+	// Instance.Equal compares Addr, Proto and Meta. Comparing Meta is required
+	// because discoverd.Instance.ID is derived solely from Proto+Addr, so a
+	// peer that has been replaced at the same flannel IP keeps the same ID
+	// even though its appliance-level identity (POSTGRES_ID / MARIADB_ID /
+	// MONGODB_ID, stored in Meta) is different. Without the Meta check,
+	// Config.Equal short-circuits a reconfigure after a rolling restart and
+	// the primary keeps targeting a stale synchronous standby name.
+	return a.Equal(b)
 }
 
 func (x *Config) Equal(y *Config) bool {

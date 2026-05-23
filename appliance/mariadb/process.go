@@ -173,7 +173,7 @@ func (p *Process) Stop() error {
 	defer p.mtx.Unlock()
 
 	if !p.running() {
-		return errors.New("process already stopped")
+		return nil
 	}
 	return p.stop()
 }

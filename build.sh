@@ -150,7 +150,7 @@ run_phase_base() {
       https://mirror.yuki.net.uk/ubuntu-ports/
     mksquashfs "$ROOTFS" "${SQUASHFS}" -noappend
   fi
-  
+
   cd "${FLYNN_ROOT}"
   export SIZE
   SIZE=$(stat -c%s "${SQUASHFS}")
@@ -193,8 +193,8 @@ run_phase_cluster() {
     mkdir -p /etc/flynn && \
     mkdir -p /tmp/discoverd-data
 
+  rm -rf /var/log/flynn/* || true
   rm -rf /tmp/flynn-* && \
-    rm -rf /var/log/flynn/* && \
     make clean && \
     bash ./host/apparmor/setup-apparmor.sh && \
     ./script/build-flynn --version "${VERSION}" && \

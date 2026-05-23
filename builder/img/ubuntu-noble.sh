@@ -35,17 +35,43 @@ if [ -z "${SHA}" ]; then
 fi
 echo "Found checksum: ${SHA}"
 
-echo "Downloading Ubuntu Noble rootfs..."
-curl -fSL \
-  --retry 5 \
-  --retry-delay 10 \
-  --retry-connrefused \
-  --retry-all-errors \
-  -o "${TAR}" \
-  "${URL}"
+# Content-addressed cache for the rootfs tarball. The upstream URL lives under
+# cloud-images.ubuntu.com/releases/noble/release/, which is a rolling pointer to the
+# current point release: the same URL can serve a new tarball with a new checksum at
+# any time. The flynn-curl shim is keyed by URL alone and would happily replay a
+# stale blob, so route this download around the shim and dedup by the resolved SHA
+# instead. Verification below still runs unconditionally.
+ROOTFS_CACHE_FILE=""
+if [[ -n "${FLYNN_HTTP_CACHE_ROOT:-}" ]] && [[ -d "${FLYNN_HTTP_CACHE_ROOT}" ]]; then
+  ROOTFS_CACHE_DIR="${FLYNN_HTTP_CACHE_ROOT}/ubuntu-rootfs"
+  mkdir -p "${ROOTFS_CACHE_DIR}"
+  ROOTFS_CACHE_FILE="${ROOTFS_CACHE_DIR}/${SHA}.tar.xz"
+fi
+
+if [[ -n "${ROOTFS_CACHE_FILE}" ]] && [[ -f "${ROOTFS_CACHE_FILE}" ]]; then
+  echo "Using cached Ubuntu Noble rootfs (sha256=${SHA})..."
+  cp -p -- "${ROOTFS_CACHE_FILE}" "${TAR}"
+else
+  echo "Downloading Ubuntu Noble rootfs..."
+  FLYNN_NO_HTTP_CACHE=1 curl -fSL \
+    --retry 5 \
+    --retry-delay 10 \
+    --retry-connrefused \
+    --retry-all-errors \
+    -o "${TAR}" \
+    "${URL}"
+fi
 
 echo "Verifying checksum..."
 echo "${SHA}  ${TAR}" | sha256sum -c -
+
+# Promote a freshly verified rootfs into the content-addressed cache atomically so
+# concurrent builds racing on the same SHA see either the old blob or the new one.
+if [[ -n "${ROOTFS_CACHE_FILE}" ]] && [[ ! -f "${ROOTFS_CACHE_FILE}" ]]; then
+  tmp_cache="${ROOTFS_CACHE_FILE}.$$.tmp"
+  cp -p -- "${TAR}" "${tmp_cache}"
+  mv -f "${tmp_cache}" "${ROOTFS_CACHE_FILE}"
+fi
 
 echo "Extracting root filesystem..."
 
