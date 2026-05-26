@@ -103,6 +103,17 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		return nil, err
 	}
 
+	// SEC-004's build-job memory limit only works when the memory cgroup
+	// controller is delegated to where libcontainer creates container cgroups.
+	// In production flynn-host runs under a systemd unit with Delegate=yes, so
+	// the probe succeeds. In ad-hoc environments (e.g. GitHub Actions runners
+	// where flynn-host's parent scope has no memory delegation), the probe
+	// fails and the limit is skipped to keep build jobs runnable.
+	buildJobMemoryLimits := probeBuildJobMemoryLimit()
+	if !buildJobMemoryLimits {
+		config.Logger.Warn("memory cgroup controller not usable for build-job container cgroups; skipping SEC-004 build-job memory limit")
+	}
+
 	defaultTmpfs, err := createTmpfs(resource.DefaultTempDiskSize)
 	if err != nil {
 		return nil, err
@@ -110,17 +121,18 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 	shutdown.BeforeExit(func() { defaultTmpfs.Delete() })
 
 	l := &LibcontainerBackend{
-		LibcontainerConfig:  config,
-		factory:             factory,
-		logStreams:          make(map[string]map[string]*logmux.LogStream),
-		containers:          make(map[string]*Container),
-		defaultEnv:          make(map[string]string),
-		resolvConf:          "/etc/resolv.conf",
-		ipalloc:             ipallocator.New(),
-		discoverdConfigured: make(chan struct{}),
-		networkConfigured:   make(chan struct{}),
-		globalState:         &libcontainerGlobalState{},
-		defaultTmpfs:        defaultTmpfs,
+		LibcontainerConfig:   config,
+		factory:              factory,
+		logStreams:           make(map[string]map[string]*logmux.LogStream),
+		containers:           make(map[string]*Container),
+		defaultEnv:           make(map[string]string),
+		resolvConf:           "/etc/resolv.conf",
+		ipalloc:              ipallocator.New(),
+		discoverdConfigured:  make(chan struct{}),
+		networkConfigured:    make(chan struct{}),
+		globalState:          &libcontainerGlobalState{},
+		defaultTmpfs:         defaultTmpfs,
+		buildJobMemoryLimits: buildJobMemoryLimits,
 	}
 	l.httpClient = &http.Client{Transport: &http.Transport{
 		Dial: dialer.RetryDial(l.discoverdDial),
@@ -158,6 +170,12 @@ type LibcontainerBackend struct {
 	layerLoader     singleflight.Group
 	httpClient      *http.Client
 	discoverdClient *discoverd.Client
+
+	// buildJobMemoryLimits is false when the memory cgroup controller cannot
+	// be applied to build-job container cgroups (e.g. cgroup v2 environments
+	// where the controller is not delegated to flynn-host's parent slice).
+	// When false, SEC-004's build-job memory limit is skipped.
+	buildJobMemoryLimits bool
 }
 
 type Container struct {
@@ -879,9 +897,17 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	}
 	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
 	// Set a 12 GiB hard limit instead of leaving them unlimited (SEC-004).
+	// Only when the memory controller is usable for our container cgroups;
+	// otherwise leave unlimited (pre-SEC-004 behavior) so build jobs can run
+	// at all in environments without memory cgroup delegation.
 	if isBuildJob(job) {
-		config.Cgroups.Resources.Memory = 12 * units.GiB * 2  // Hard limit (memory.max) = 24 GiB
-		config.Cgroups.Resources.MemorySwap = 12 * units.GiB  // Swap limit, so total = 24 GiB
+		if l.buildJobMemoryLimits {
+			config.Cgroups.Resources.Memory = 12 * units.GiB * 2 // Hard limit (memory.max) = 24 GiB
+			config.Cgroups.Resources.MemorySwap = 12 * units.GiB // Swap limit, so total = 24 GiB
+		} else {
+			config.Cgroups.Resources.Memory = 0
+			config.Cgroups.Resources.MemorySwap = 0
+		}
 		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
 		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
 		// SEC-015 removed these from defaults but builders require them.
@@ -1873,6 +1899,28 @@ func milliCPUToShares(milliCPU uint64) uint64 {
 }
 
 const cgroupRoot = "/sys/fs/cgroup"
+
+// probeBuildJobMemoryLimit reports whether memory.max can be written for a
+// cgroup at the location libcontainer creates build-job container cgroups.
+// On cgroup v2, libcontainer joins absolute configs.Cgroup.Path values under
+// filepath.Base(mnt) of the cgroup mountpoint, which on the unified hierarchy
+// resolves to /sys/fs/cgroup/cgroup/<inner>. The "user" partition is the
+// default home for build jobs.
+//
+// Returns false when the memory controller is not enabled in the parent
+// cgroup's subtree_control (the typical situation on GitHub Actions runners
+// where flynn-host's parent slice has no memory delegation).
+func probeBuildJobMemoryLimit() bool {
+	probeDir := filepath.Join(cgroupRoot, "cgroup", "flynn", "user", ".probe-mem-limit")
+	if err := os.MkdirAll(probeDir, 0755); err != nil {
+		return false
+	}
+	defer os.Remove(probeDir)
+	if err := ioutil.WriteFile(filepath.Join(probeDir, "memory.max"), []byte("max"), 0644); err != nil {
+		return false
+	}
+	return true
+}
 
 func setupCGroups(partitions map[string]int64) error {
 	// cgroups v2 uses a unified hierarchy - all controllers are under /sys/fs/cgroup

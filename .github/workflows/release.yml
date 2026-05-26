@@ -1,12 +1,23 @@
 name: Build and Release
 
 on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v20240127.0)'
-        required: true
+        description: 'Version tag (e.g., v20240127.0). Leave empty to auto-generate.'
+        required: false
         type: string
+      draft:
+        description: 'Create the release as a draft prerelease (instead of publishing)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,44 +35,73 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Flynn environment
-        id: setup
         run: |
-          # Set FLYNN_ROOT to the workspace directory
           echo "FLYNN_ROOT=${{ github.workspace }}" >> $GITHUB_ENV
-          # flynn-discovery is included in the repository
           echo "FLYNN_DISCOVERY_DIR=${{ github.workspace }}/flynn-discovery" >> $GITHUB_ENV
+          # Allow git operations as root (build.sh runs under sudo) on the workspace
+          git config --global --add safe.directory "${{ github.workspace }}"
+          sudo git config --system --add safe.directory "${{ github.workspace }}"
+
+      - name: Determine release mode
+        id: mode
+        run: |
+          set -eo pipefail
+          DRAFT=false
+          PRERELEASE=false
+          BRANCH_SUFFIX=""
+
+          case "${{ github.event_name }}" in
+            pull_request)
+              DRAFT=true
+              PRERELEASE=true
+              # Sanitize branch name for use in a version tag suffix
+              BRANCH_SUFFIX=$(echo "${{ github.head_ref }}" | tr '/' '-' | tr -cd '[:alnum:]-')
+              ;;
+            workflow_dispatch)
+              if [[ "${{ inputs.draft }}" == "true" ]]; then
+                DRAFT=true
+                PRERELEASE=true
+              fi
+              ;;
+          esac
+
+          echo "DRAFT=${DRAFT}" >> $GITHUB_OUTPUT
+          echo "PRERELEASE=${PRERELEASE}" >> $GITHUB_OUTPUT
+          echo "BRANCH_SUFFIX=${BRANCH_SUFFIX}" >> $GITHUB_OUTPUT
+          echo "Release mode: draft=${DRAFT} prerelease=${PRERELEASE} branch_suffix='${BRANCH_SUFFIX}'"
 
       - name: Determine version
         id: version
         run: |
-          VERSION="${{ inputs.version }}"
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-
-          # Fetch all tags from remote to ensure we have the latest
+          set -eo pipefail
           git fetch --tags --force
 
-          # Get the previous release tag (most recent tag before this one)
-          # First, get all tags sorted by version, then find the one before the current version
-          # If the current version tag doesn't exist yet, get the most recent tag
-          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
-            # Tag exists, get the previous one
-            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | grep -B1 "^${VERSION}$" | head -n1)
-            # If grep returned the same tag (no previous), clear it
-            if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
-              PREVIOUS_TAG=""
+          VERSION="${{ inputs.version }}"
+          if [[ -z "${VERSION}" ]]; then
+            DATE_PREFIX="v$(date +%Y%m%d)"
+            # Only consider numeric iterations (ignore branch-suffixed tags from PR builds)
+            LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" | grep -E "^${DATE_PREFIX}\.[0-9]+$" | sort -V | tail -n1 || true)
+            if [[ -n "${LATEST_TODAY}" ]]; then
+              ITERATION="${LATEST_TODAY##*.}"
+              VERSION="${DATE_PREFIX}.$((ITERATION + 1))"
+            else
+              VERSION="${DATE_PREFIX}.0"
             fi
-          else
-            # Tag doesn't exist yet, get the most recent tag
-            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1)
           fi
 
-          echo "PREVIOUS_TAG=${PREVIOUS_TAG}" >> $GITHUB_OUTPUT
-          echo "Previous tag: ${PREVIOUS_TAG:-none}"
+          BRANCH_SUFFIX="${{ steps.mode.outputs.BRANCH_SUFFIX }}"
+          if [[ -n "${BRANCH_SUFFIX}" ]]; then
+            # For PR builds, always use .0 with branch suffix so re-pushes reuse the same draft
+            VERSION="v$(date +%Y%m%d).0-${BRANCH_SUFFIX}"
+          fi
+
+          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Note: Docker is pre-installed on GitHub Actions runners, so we don't install docker.io
+          # Docker is pre-installed on GitHub Actions runners
           sudo apt-get install -y \
             build-essential \
             debootstrap \
@@ -70,6 +110,7 @@ jobs:
             jq \
             curl \
             git \
+            gh \
             iptables \
             iproute2 \
             net-tools \
@@ -77,8 +118,6 @@ jobs:
             libdevmapper-dev \
             libseccomp-dev \
             pigz
-
-          # Verify Docker is available
           docker --version
 
       - name: Set up Go
@@ -86,487 +125,90 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Set up ZFS
+      - name: Set up ZFS pool
         run: |
-          # Create a file-backed ZFS pool for the build
           sudo truncate -s 20G /zfs-pool.img
           sudo zpool create -f flynn-default /zfs-pool.img
           sudo zfs set compression=lz4 flynn-default
           sudo zfs set sync=disabled flynn-default
+          # Cap ZFS ARC to 2 GiB so it doesn't compete with parallel `go build`
+          # processes for the runner's 16 GiB of RAM. Default ARC max is ~half
+          # of system RAM, which on GH Actions runners leaves the build
+          # containers short on memory and triggers ENOMEM during compilation.
+          echo 2147483648 | sudo tee /sys/module/zfs/parameters/zfs_arc_max
+
+      - name: Add swap (GH Actions runners ship with none)
+        run: |
+          # 8 GiB swapfile on /mnt (GH-hosted runners' large ephemeral disk).
+          # Acts as a safety net for transient memory spikes during the
+          # flynn-builder fan-out; FLYNN_BUILD_CONCURRENCY=1 keeps peak usage
+          # bounded, but swap absorbs any remaining headroom shortfall.
+          sudo fallocate -l 8G /mnt/swapfile
+          sudo chmod 600 /mnt/swapfile
+          sudo mkswap /mnt/swapfile
+          sudo swapon /mnt/swapfile
+          free -h
 
       - name: Set up Flynn directory structure
         run: |
-          # Create required directories
-          sudo mkdir -p /var/lib/flynn
-          sudo mkdir -p /var/log/flynn
-          sudo mkdir -p /etc/flynn
-          sudo mkdir -p /tmp/discoverd-data
-          sudo mkdir -p /var/run/flynn-local
+          sudo mkdir -p /var/lib/flynn /var/log/flynn /etc/flynn /tmp/discoverd-data /var/run/flynn-local
 
       - name: Build sha512_256_binary tool
         run: |
           cd ${{ env.FLYNN_ROOT }}
-          # Build the sha512_256 tool if it exists, otherwise create a simple one
-          if [ -f sha512_256_binary.go ]; then
+          if [ -f sha512_256.go ]; then
+            go build -o sha512_256_binary sha512_256.go
+          elif [ -f sha512_256_binary.go ]; then
             go build -o sha512_256_binary sha512_256_binary.go
-          else
-            # Create a simple sha512_256 hash tool
-            cat > /tmp/sha512_256.go << 'EOF'
-          package main
-          import (
-            "crypto/sha512"
-            "fmt"
-            "io"
-            "os"
-          )
-          func main() {
-            f, _ := os.Open(os.Args[1])
-            defer f.Close()
-            h := sha512.New512_256()
-            io.Copy(h, f)
-            fmt.Printf("%x\n", h.Sum(nil))
-          }
-          EOF
-            go build -o ${{ env.FLYNN_ROOT }}/sha512_256_binary /tmp/sha512_256.go
           fi
 
-      - name: Create base squashfs layer
-        run: |
-          cd ${{ env.FLYNN_ROOT }}
-          export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-          export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
-
-          echo "==> Creating base root filesystem with debootstrap..."
-          sudo mkdir -p /var/lib/flynn/base-root
-          sudo debootstrap \
-            --variant=minbase \
-            --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
-            $UBUNTU_CODENAME \
-            /var/lib/flynn/base-root \
-            http://archive.ubuntu.com/ubuntu
-
-          echo "==> Creating squashfs layer..."
-          sudo mksquashfs /var/lib/flynn/base-root "$SQUASHFS" -noappend
-
-          # Get size and hash
-          SIZE=$(sudo stat -c%s "$SQUASHFS")
-          HASH=$(sudo ${{ env.FLYNN_ROOT }}/sha512_256_binary "$SQUASHFS")
-
-          echo "SIZE=$SIZE"
-          echo "HASH=$HASH"
-
-          # Update manifest.json with base layer info
-          sudo jq --arg url "file://$SQUASHFS" \
-            --arg size "$SIZE" \
-            --arg hash "$HASH" \
-            '.base_layer.url = $url |
-              .base_layer.size = ($size | tonumber) |
-              .base_layer.hashes.sha512_256 = $hash' \
-            "${{ env.FLYNN_ROOT }}/builder/manifest.json" > /tmp/manifest.json.tmp
-          sudo mv /tmp/manifest.json.tmp "${{ env.FLYNN_ROOT }}/builder/manifest.json"
-
       - name: Start flynn-discovery
+        if: hashFiles('flynn-discovery/docker-compose.yml', 'flynn-discovery/docker-compose.yaml') != ''
         run: |
-          # flynn-discovery is included in the repository
           cd ${{ env.FLYNN_DISCOVERY_DIR }}
           docker compose up -d --build
-
-          # Wait for discovery service to be ready
           echo "Waiting for discovery service..."
           sleep 10
 
-      - name: Build Flynn binaries
-        run: |
-          cd ${{ env.FLYNN_ROOT }}
-          export VERSION="${{ steps.version.outputs.VERSION }}"
-          export FLYNN_VERSION="${VERSION}"
-          export GO111MODULE=on
-          export GOFLAGS="-mod=vendor"
-          export CGO_ENABLED=1
-          export PATH="/usr/local/go/bin:$PATH"
-
-          echo "==> Building Flynn with version: ${VERSION}"
-          sudo make clean || true
-          sudo ./script/build-flynn --version "${VERSION}"
-
-          # Build flannel-wrapper
-          sudo rm -f build/bin/flynn-builder
-          sudo rm -f build/bin/flannel-wrapper
-          sudo go build -o build/bin/flannel-wrapper ./flannel/wrapper
-
-      - name: Start Flynn services
-        run: |
-          cd ${{ env.FLYNN_ROOT }}
-          export PATH="${{ env.FLYNN_ROOT }}/build/bin:/usr/local/go/bin:$PATH"
-          export FLYNN_ROOT="${{ env.FLYNN_ROOT }}"
-          export CLUSTER_DOMAIN=flynn.local
-          export DISCOVERD=192.0.2.200:1111
-          export DISCOVERY_SERVER=http://localhost:8180
-          export EXTERNAL_IP=192.0.2.200
-          export LISTEN_IP=192.0.2.200
-          export PORT_0=1111
-          export DISCOVERD_PEERS=192.0.2.200:1111
-          export FLYNN_REPOSITORY=http://localhost:8080
-          export UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
-
-
-          # Initialize discovery
-          echo "==> Initializing Flynn host..."
-          export DISCOVERY_URL=$(sudo ./build/bin/flynn-host init --init-discovery)
-          echo "DISCOVERY_URL=${DISCOVERY_URL}"
-
-          # Start all Flynn services
-          echo "==> Starting Flynn services..."
-          sudo mkdir -p /var/lib/flynn/layer-cache
-          sudo mkdir -p /var/run/flynn-local
-
-          sudo -E ./script/start-flynn-host 0 &
-          sudo sleep 3
-          sudo -E  ./script/start-discoverd.sh &
-          sudo sleep 3
-          sudo -E  ./script/start-flanneld.sh &
-          sudo sleep 3
-          less /var/log/flynn/host-0/flynn-host.log | grep -E 'ConfigureNetworking|configure networking progress'
-
-          # Configure ZFS for performance
-          sudo zfs set sync=disabled flynn-default || true
-          sudo zfs set reservation=512M flynn-default || true
-          sudo zfs set refreservation=512M flynn-default || true
-
-          # Wait for services to stabilize
-          echo "Waiting for services to start..."
-          sleep 30
-
-          # Show running processes
-          sudo -E  ./build/bin/flynn-host ps -a || true
-
-          cd ${{ env.FLYNN_ROOT }}
-          export VERSION="${{ steps.version.outputs.VERSION }}"
-          export FLYNN_VERSION="${VERSION}"
-          export PATH="${{ env.FLYNN_ROOT }}/build/bin:/usr/local/go/bin:$PATH"
-          export FLYNN_ROOT="${{ env.FLYNN_ROOT }}"
-
-          echo "==> Running flynn-builder build with version: ${VERSION}"
-
-          # Run the builder with retries
-          MAX_RETRIES=3
-          RETRY_COUNT=0
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            if sudo -E  ./script/flynn-builder build --version="${VERSION}" --verbose; then
-              echo "==> flynn-builder build succeeded!"
-              break
-            else
-              RETRY_COUNT=$((RETRY_COUNT + 1))
-              echo "==> flynn-builder build failed (attempt ${RETRY_COUNT}/${MAX_RETRIES})"
-              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-                echo "Retrying in 30 seconds..."
-                sleep 30
-              else
-                echo "==> All retries exhausted, failing build"
-                exit 1
-              fi
-            fi
-          done
-
-          # Show what was built
-          echo "==> Built images:"
-          ls -la build/image/ || true
-          echo ""
-          echo "==> Layer cache:"
-          ls -la /var/lib/flynn/layer-cache/ || true
-
-      - name: Package release artifacts
-        run: |
-          cd ${{ env.FLYNN_ROOT }}
-          VERSION="${{ steps.version.outputs.VERSION }}"
-
-          mkdir -p release-artifacts
-
-          echo "==> Packaging binaries..."
-          cd build/bin
-
-          # CLI binaries (already have OS/arch in name)
-          for binary in flynn-linux-amd64 flynn-linux-386 flynn-darwin-amd64 flynn-darwin-arm64 flynn-windows-amd64.exe; do
-            if [ -f "${binary}" ]; then
-              echo "  - ${binary}.gz"
-              gzip -c "${binary}" > "${{ env.FLYNN_ROOT }}/release-artifacts/${binary}.gz"
-            fi
-          done
-
-          # Host binaries - rename to include OS/arch for update command compatibility
-          if [ -f "flynn-host" ]; then
-            echo "  - flynn-host-linux-amd64.gz"
-            gzip -c "flynn-host" > "${{ env.FLYNN_ROOT }}/release-artifacts/flynn-host-linux-amd64.gz"
-          fi
-
-          if [ -f "flynn-init" ]; then
-            echo "  - flynn-init-linux-amd64.gz"
-            gzip -c "flynn-init" > "${{ env.FLYNN_ROOT }}/release-artifacts/flynn-init-linux-amd64.gz"
-          fi
-
-          cd ${{ env.FLYNN_ROOT }}
-
-          echo "==> Packaging manifests..."
-          if [ -f "build/images.json" ]; then
-            gzip -c build/images.json > release-artifacts/images.json.gz
-            echo "  - images.json.gz"
-          fi
-          if [ -f "build/manifests/bootstrap-manifest.json" ]; then
-            gzip -c build/manifests/bootstrap-manifest.json > release-artifacts/bootstrap-manifest.json.gz
-            echo "  - bootstrap-manifest.json.gz"
-          fi
-
-          echo "==> Packaging image manifests..."
-          if [ -d "build/image" ] && [ -n "$(ls -A build/image/*.json 2>/dev/null)" ]; then
-            tar czf release-artifacts/images.tar.gz -C build/image .
-            echo "  - images.tar.gz"
-          fi
-
-          echo "==> Packaging layers..."
-          LAYER_COUNT=0
-          if [ -d "/var/lib/flynn/layer-cache" ]; then
-            for layer in /var/lib/flynn/layer-cache/*.squashfs; do
-              if [ -f "$layer" ]; then
-                layer_name=$(basename "$layer")
-                sudo cp "$layer" "release-artifacts/${layer_name}"
-                LAYER_COUNT=$((LAYER_COUNT + 1))
-              fi
-            done
-            # Also copy layer metadata JSON files
-            for meta in /var/lib/flynn/layer-cache/*.json; do
-              if [ -f "$meta" ]; then
-                meta_name=$(basename "$meta")
-                sudo cp "$meta" "release-artifacts/${meta_name}"
-              fi
-            done
-            echo "  - ${LAYER_COUNT} layer files"
-          fi
-
-          echo "==> Copying install scripts..."
-          cp script/install-flynn-github release-artifacts/
-          cp script/install-flynn-cli release-artifacts/
-
-          echo "==> Generating checksums..."
-          cd release-artifacts
-          sha512sum *.gz *.squashfs *.json install-flynn-* 2>/dev/null > checksums.sha512 || \
-            sha512sum *.gz install-flynn-* > checksums.sha512
-
-          echo "==> Release artifacts:"
-          ls -lah
-
-      - name: Create and push tag
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-
-          # Check if tag already exists
-          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
-            echo "Tag ${VERSION} already exists, skipping tag creation"
-          else
-            echo "Creating tag ${VERSION}..."
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -a "${VERSION}" -m "Release ${VERSION}"
-            git push origin "${VERSION}"
-            echo "Tag ${VERSION} created and pushed"
-          fi
-
-      - name: Generate release notes
-        run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          PREVIOUS_TAG="${{ steps.version.outputs.PREVIOUS_TAG }}"
-
-          cd ${{ github.workspace }}
-
-          if [ -n "${PREVIOUS_TAG}" ]; then
-            COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
-            CHANGELOG_LINK="**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREVIOUS_TAG}...${VERSION}"
-          else
-            COMMIT_RANGE="HEAD~20..HEAD"
-            CHANGELOG_LINK="**Initial Release**"
-          fi
-
-          cat > /tmp/release_notes.md << EOF
-          ## Flynn ${VERSION}
-
-          ${CHANGELOG_LINK}
-
-          EOF
-
-          # Add commit categories
-          FEAT=$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${COMMIT_RANGE}" 2>/dev/null || true)
-          FIX=$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${COMMIT_RANGE}" 2>/dev/null || true)
-          CHORE=$(git log --pretty=format:"- %s (%h)" --grep="^chore" "${COMMIT_RANGE}" 2>/dev/null || true)
-          DOCS=$(git log --pretty=format:"- %s (%h)" --grep="^docs" "${COMMIT_RANGE}" 2>/dev/null || true)
-          REFACTOR=$(git log --pretty=format:"- %s (%h)" --grep="^refactor" "${COMMIT_RANGE}" 2>/dev/null || true)
-          PERF=$(git log --pretty=format:"- %s (%h)" --grep="^perf" "${COMMIT_RANGE}" 2>/dev/null || true)
-          TEST=$(git log --pretty=format:"- %s (%h)" --grep="^test" "${COMMIT_RANGE}" 2>/dev/null || true)
-          BUILD=$(git log --pretty=format:"- %s (%h)" --grep="^build" "${COMMIT_RANGE}" 2>/dev/null || true)
-          CI=$(git log --pretty=format:"- %s (%h)" --grep="^ci" "${COMMIT_RANGE}" 2>/dev/null || true)
-          # Other commits (don't match any conventional prefix)
-          OTHER=$(git log --pretty=format:"- %s (%h)" "${COMMIT_RANGE}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" || true)
-
-          if [ -n "${FEAT}" ]; then
-            echo "### ✨ Features" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${FEAT}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${FIX}" ]; then
-            echo "### 🐛 Bug Fixes" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${FIX}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${PERF}" ]; then
-            echo "### ⚡ Performance" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${PERF}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${REFACTOR}" ]; then
-            echo "### ♻️ Refactoring" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${REFACTOR}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${DOCS}" ]; then
-            echo "### 📚 Documentation" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${DOCS}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${TEST}" ]; then
-            echo "### 🧪 Tests" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${TEST}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${BUILD}" ]; then
-            echo "### 🏗️ Build" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${BUILD}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${CI}" ]; then
-            echo "### 👷 CI" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${CI}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${CHORE}" ]; then
-            echo "### 🔧 Chores" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${CHORE}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          if [ -n "${OTHER}" ]; then
-            echo "### 📦 Other Changes" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-            echo "${OTHER}" >> /tmp/release_notes.md
-            echo "" >> /tmp/release_notes.md
-          fi
-
-          cat >> /tmp/release_notes.md << EOF
-          ---
-
-          ## Installation
-
-          ### Install Flynn CLI
-
-          Install the Flynn command-line interface on your local machine:
-
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/script/install-flynn-cli | sudo bash
-          \`\`\`
-
-          Or install a specific version:
-
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/script/install-flynn-cli | sudo bash -s -- --version ${VERSION}
-          \`\`\`
-
-          ### Install Flynn Host (Server)
-
-          Install Flynn on an Ubuntu 24.04 server:
-
-          \`\`\`bash
-          curl -fsSL https://github.com/${{ github.repository }}/releases/download/${VERSION}/install-flynn-github | sudo bash
-          \`\`\`
-
-          ## Artifacts
-
-          ### CLI Binaries
-          | Binary | Platform |
-          |--------|----------|
-          | flynn-linux-amd64.gz | Linux (x86_64) |
-          | flynn-linux-386.gz | Linux (x86) |
-          | flynn-darwin-amd64.gz | macOS (Intel) |
-          | flynn-darwin-arm64.gz | macOS (Apple Silicon) |
-          | flynn-windows-amd64.exe.gz | Windows (x86_64) |
-
-          ### Server Binaries
-          | Binary | Description |
-          |--------|-------------|
-          | flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
-          | flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
-
-          ### Manifests & Images
-          | File | Description |
-          |------|-------------|
-          | images.json.gz | Images manifest |
-          | bootstrap-manifest.json.gz | Bootstrap manifest |
-          | images.tar.gz | Container image manifests |
-          | *.squashfs | Container image layers |
-
-          ### Other
-          | File | Description |
-          |------|-------------|
-          | install-flynn-cli | CLI installer script |
-          | install-flynn-github | Server installer script |
-          | checksums.sha512 | SHA512 checksums |
-          EOF
-
-          cat /tmp/release_notes.md
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: flynn-release-${{ steps.version.outputs.VERSION }}
-          path: ${{ env.FLYNN_ROOT }}/release-artifacts/
-          retention-days: 7
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ steps.version.outputs.VERSION }}
-          name: Flynn ${{ steps.version.outputs.VERSION }}
-          draft: true
-          prerelease: false
-          files: ${{ env.FLYNN_ROOT }}/release-artifacts/*
-          body_path: /tmp/release_notes.md
+      - name: Run build.sh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Skip teardown_flynn (which would destroy the zpool we just created
+          # and try to systemctl-stop a non-existent flynn-host service).
+          FLYNN_BUILD_SKIP_TEARDOWN: "1"
+          # Serialize flynn-builder image builds on this runner. The default
+          # (NumCPU) fans out ~10 concurrent `go build` jobs and exhausts the
+          # runner's 16 GiB of RAM, surfacing as `readdirent: cannot allocate
+          # memory` mid-compile. Unset on Vagrant/production.
+          FLYNN_BUILD_CONCURRENCY: "1"
+        run: |
+          cd ${{ env.FLYNN_ROOT }}
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}"
+
+      - name: Create GitHub Release (via script/release)
+        env:
+          # gh CLI picks up GH_TOKEN automatically. sudo -E preserves it.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FLYNN_GITHUB_REPO: ${{ github.repository }}
+        run: |
+          cd ${{ env.FLYNN_ROOT }}
+          ARGS=(--target github
+                --version "${{ steps.version.outputs.VERSION }}"
+                --github-repo "${{ github.repository }}")
+          if [[ "${{ steps.mode.outputs.DRAFT }}" == "true" ]]; then
+            ARGS+=(--draft)
+          fi
+          if [[ "${{ steps.mode.outputs.PRERELEASE }}" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          sudo -E ./script/release "${ARGS[@]}"
 
       - name: Cleanup
         if: always()
         run: |
-          # Stop Flynn services
           cd ${{ env.FLYNN_ROOT }}
           sudo ./script/stop-all || true
-
-          # Stop discovery
-          cd ${{ env.FLYNN_DISCOVERY_DIR }}
-          docker compose down || true
-
-          # Destroy ZFS pool
+          if [ -d "${{ env.FLYNN_DISCOVERY_DIR }}" ]; then
+            cd ${{ env.FLYNN_DISCOVERY_DIR }}
+            docker compose down || true
+          fi
           sudo zpool destroy flynn-default || true

@@ -122,6 +122,10 @@ echo "GO VERSION"
 echo "$(go version)"
 
 teardown_flynn() {
+  if [[ -n "${FLYNN_BUILD_SKIP_TEARDOWN:-}" ]]; then
+    echo "===> Skipping Flynn teardown (FLYNN_BUILD_SKIP_TEARDOWN set)"
+    return 0
+  fi
   echo "===> Stopping Flynn and removing install..."
   ./script/stop-all
   ./script/install-flynn --remove --clean --yes
@@ -139,15 +143,25 @@ run_phase_base() {
   CACHE_DIR=/var/cache/flynn/debootstrap
   ROOTFS=/var/lib/flynn/base-root
 
+  # ubuntu-ports carries only non-amd64 arches (arm64, ppc64el, riscv64, s390x);
+  # amd64 lives on the main archive. Pick the mirror to match the host arch so
+  # debootstrap can find binary-${arch}/Packages.
+  DEB_ARCH=$(dpkg --print-architecture)
+  if [ "${DEB_ARCH}" = "amd64" ]; then
+    DEB_MIRROR=http://archive.ubuntu.com/ubuntu/
+  else
+    DEB_MIRROR=https://mirror.yuki.net.uk/ubuntu-ports/
+  fi
+
   if [ ! -f "${SQUASHFS}" ]; then
-    mkdir -p "$ROOTFS"
+    mkdir -p "$ROOTFS" "$CACHE_DIR"
     debootstrap \
       --variant=minbase \
       --include=squashfs-tools,curl,gnupg,ca-certificates,bash \
       --cache-dir="$CACHE_DIR" \
       "${UBUNTU_CODENAME}" \
       "$ROOTFS" \
-      https://mirror.yuki.net.uk/ubuntu-ports/
+      "${DEB_MIRROR}"
     mksquashfs "$ROOTFS" "${SQUASHFS}" -noappend
   fi
 

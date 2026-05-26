@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -586,6 +588,23 @@ func (b *Builder) Build(images []*Image) error {
 		}
 	}
 
+	// cap the number of images that build concurrently. Defaults to NumCPU
+	// to preserve historical behavior on capable hosts (Vagrant, production);
+	// can be lowered via FLYNN_BUILD_CONCURRENCY for memory-constrained
+	// environments (e.g. GitHub Actions runners) where unbounded fan-out of
+	// `go build` jobs exhausts host RAM and triggers ENOMEM in readdirent.
+	concurrency := runtime.NumCPU()
+	if s := os.Getenv("FLYNN_BUILD_CONCURRENCY"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			concurrency = n
+		}
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	b.log.Info("build concurrency", "limit", concurrency)
+	sem := make(chan struct{}, concurrency)
+
 	// build images until there are no pending builds left
 	done := make(chan *Build, len(builds))
 	failures := make(map[string]error)
@@ -604,6 +623,8 @@ func (b *Builder) Build(images []*Image) error {
 
 					b.log.Debug(fmt.Sprintf("%s build start", build.Image.ID))
 					go func(build *Build) {
+						sem <- struct{}{}
+						defer func() { <-sem }()
 						build.StartedAt = time.Now()
 						build.Err = b.BuildImage(build.Image)
 						done <- build
