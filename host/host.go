@@ -461,14 +461,16 @@ func runDaemon(args *docopt.Args) {
 		log.Error("error restoring state", "err", err)
 		shutdown.Fatal(err)
 	}
-	shutdown.BeforeExit(func() {
-		// close discoverd before stopping jobs so we can unregister first
-		log.Info("unregistering with service discovery")
-		if err := discoverdManager.Close(); err != nil {
-			log.Error("error unregistering with service discovery", "err", err)
-		}
-		stopJobs()
-	})
+	// Intentionally do NOT stop jobs or unregister from discoverd on exit.
+	// Job containers are independent processes (no Pdeathsig) and the systemd
+	// unit uses KillMode=process, so they survive the daemon exiting. Leaving
+	// them running makes `systemctl restart flynn-host` (used by the updater)
+	// non-destructive: the freshly started daemon's state.Restore reconnects
+	// to the still-running containers instead of resurrecting them, and the
+	// host stays registered in discoverd so the scheduler doesn't churn. The
+	// previous BeforeExit handler called discoverdManager.Close()+stopJobs(),
+	// which tore down every container on each restart and forced a full
+	// resurrection (postgres re-clone, sirenia re-election, etc.).
 
 	log.Info("serving HTTP requests")
 	host.ServeHTTP()

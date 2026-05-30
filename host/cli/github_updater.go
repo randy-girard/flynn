@@ -35,6 +35,36 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
+// Rolling-restart resilience knobs. Tunable via flags on `flynn-host update`
+// (see applyUpdateTimingFlags). Defaults reflect what is safe for a typical
+// 3-node cluster running postgres+mariadb+mongodb sirenia appliances:
+//
+//   - updateHealthTimeout bounds the per-host wait inside the rolling restart
+//     loop in updateRemoteBinaries. 10 minutes accommodates clusters where
+//     sirenia replication or postgres leader propagation through discoverd
+//     can take several minutes after a daemon restart; the previous 5-minute
+//     ceiling was too tight and caused rolling updates to abort with
+//     "cluster did not recover after restarting <host>" while the cluster
+//     was actually still settling.
+//
+//   - updateInterHostDelay is an additional fixed settle delay applied AFTER
+//     waitForClusterHealthy/waitForJobsPlacedOnHost succeed for one host, and
+//     BEFORE the next host's restart begins. The cluster status endpoint can
+//     return healthy a few seconds before the scheduler has fully processed
+//     the host-up event and started pushing AddJob requests; restarting the
+//     next host inside that window can collapse postgres quorum.
+//
+//   - updateWaitJobsTimeout caps the wait for the scheduler to actually
+//     re-place an app job onto the freshly restarted host. This catches the
+//     failure mode where the host is healthy and discoverable but the
+//     scheduler hasn't observed it yet, so no jobs are scheduled back. The
+//     wait is non-fatal: on timeout we log a warning and continue.
+var (
+	updateHealthTimeout   = 10 * time.Minute
+	updateInterHostDelay  = 30 * time.Second
+	updateWaitJobsTimeout = 3 * time.Minute
+)
+
 // clusterHostCount returns how many flynn-host peers are registered. If
 // discoverd cannot be queried, it returns a non-nil error.
 func clusterHostCount() (int, error) {
@@ -185,8 +215,8 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			// the local daemon's sirenia peer is still recovering can
 			// collapse postgres quorum (see waitForClusterHealthy).
 			if !args.Bool["--no-restart"] {
-				log.Info("waiting for cluster to be healthy before remote restarts")
-				if _, err := waitForClusterHealthy(5*time.Minute, log); err != nil {
+				log.Info("waiting for cluster to be healthy before remote restarts", "timeout", updateHealthTimeout)
+				if _, err := waitForClusterHealthy(updateHealthTimeout, log); err != nil {
 					return fmt.Errorf("cluster did not recover after local restart: %w", err)
 				}
 			}
@@ -390,9 +420,29 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 			// kill the postgres primary while the new standbys are
 			// still catching up via pg_basebackup, collapsing quorum
 			// and leaving the controller unable to schedule jobs.
-			hostLog.Info("waiting for cluster to be healthy before next restart")
-			if _, err := waitForClusterHealthy(5*time.Minute, hostLog); err != nil {
+			hostLog.Info("waiting for cluster to be healthy before next restart", "timeout", updateHealthTimeout)
+			if _, err := waitForClusterHealthy(updateHealthTimeout, hostLog); err != nil {
 				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w", h.ID(), err)
+			}
+
+			// Status-web reporting healthy does not guarantee:
+			//  (a) the postgres discoverd leader is reachable from
+			//      every controller pod (DNS propagation is async), or
+			//  (b) any sirenia peer that was deposed during the
+			//      restart will rejoin without manual clearing, or
+			//  (c) the controller-scheduler has observed the restarted
+			//      host coming back up and started placing jobs on it.
+			// Each of the next three helpers addresses one of those
+			// gaps. They are individually no-ops when their target
+			// state is already settled, so the total added latency in
+			// the common case is only updateInterHostDelay.
+			updaterdeploy.WaitPostgresDiscoverdLeaderStable(hostLog)
+			repairSireniaClusters(hostLog)
+			waitForJobsPlacedOnHost(h, updateWaitJobsTimeout, hostLog)
+
+			if updateInterHostDelay > 0 {
+				hostLog.Info("inter-host settle delay before next restart", "delay", updateInterHostDelay)
+				time.Sleep(updateInterHostDelay)
 			}
 		}
 	}
@@ -448,6 +498,71 @@ func waitForClusterSize(client *cluster.Client, expected int, timeout time.Durat
 		time.Sleep(3 * time.Second)
 	}
 	return fmt.Errorf("only %d/%d hosts registered after %s", lastCount, expected, timeout)
+}
+
+// waitForJobsPlacedOnHost polls the freshly-restarted host's job list until
+// the scheduler has placed at least one app job onto it (i.e. a job with a
+// FLYNN_APP_ID set in its metadata). This catches the failure mode where
+// status-web reports the cluster healthy and the host is up in discoverd,
+// but the controller-scheduler has not yet observed the host coming back up
+// (we have seen ~4 minute gaps in production), so no jobs are scheduled
+// back onto it before the next host's restart begins.
+//
+// The wait is intentionally non-fatal: the scheduler may legitimately have
+// nothing to place on a particular host (e.g. a single-replica formation
+// pinned elsewhere via tags), and we'd rather emit a warning than abort an
+// otherwise-successful rolling update. The inter-host settle delay that
+// follows still gives the scheduler a final chance to catch up.
+//
+// "Bootstrap" jobs started directly by the host daemon (flannel, discoverd)
+// don't carry the controller's FLYNN_APP_ID metadata key, so they don't
+// satisfy this check by themselves.
+func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.Logger) {
+	if timeout <= 0 {
+		return
+	}
+	log.Info("waiting for scheduler to place jobs back on restarted host", "timeout", timeout)
+	deadline := time.Now().Add(timeout)
+	var lastJobCount, lastAppJobCount int
+	var lastErr error
+	for time.Now().Before(deadline) {
+		jobs, err := h.ListActiveJobs()
+		if err == nil {
+			lastErr = nil
+			lastJobCount = len(jobs)
+			lastAppJobCount = 0
+			for _, job := range jobs {
+				if job.Job == nil || job.Job.Metadata == nil {
+					continue
+				}
+				// FLYNN_APP_ID is set by the controller for every
+				// app/system-app job it places; bootstrap jobs
+				// (flannel, discoverd) started by the host
+				// daemon's resurrection logic don't have it.
+				if job.Job.Metadata["FLYNN_APP_ID"] != "" {
+					lastAppJobCount++
+				}
+			}
+			if lastAppJobCount > 0 {
+				log.Info("scheduler placed jobs back on host",
+					"app_jobs", lastAppJobCount, "total_jobs", lastJobCount)
+				return
+			}
+			log.Debug("host has no app jobs yet, waiting",
+				"total_jobs", lastJobCount)
+		} else {
+			lastErr = err
+			log.Debug("error listing jobs on host, retrying", "err", err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if lastErr != nil {
+		log.Warn("scheduler did not place jobs on restarted host within timeout (last ListActiveJobs failed)",
+			"timeout", timeout, "err", lastErr)
+		return
+	}
+	log.Warn("scheduler did not place any app jobs on restarted host within timeout; continuing anyway",
+		"timeout", timeout, "total_jobs", lastJobCount)
 }
 
 // waitForClusterHealthy polls the status-web endpoint until it reports
