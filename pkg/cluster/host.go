@@ -311,12 +311,14 @@ func (c *Host) RemoveSink(id string) error {
 }
 
 // AddWebhook registers a webhook endpoint on the host.
-// If id is empty, the server generates one.
-func (c *Host) AddWebhook(id, url string) (*host.WebhookConfig, error) {
+// If id is empty, the server generates one. Headers, if non-nil, are sent
+// on every webhook delivery (e.g. an auth token).
+func (c *Host) AddWebhook(id, url string, headers map[string]string) (*host.WebhookConfig, error) {
 	input := struct {
-		ID  string `json:"id,omitempty"`
-		URL string `json:"url"`
-	}{ID: id, URL: url}
+		ID      string            `json:"id,omitempty"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
+	}{ID: id, URL: url, Headers: headers}
 	var wh host.WebhookConfig
 	return &wh, c.c.Post("/host/webhooks", &input, &wh)
 }

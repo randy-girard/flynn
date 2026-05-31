@@ -792,8 +792,9 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 
 func (h *jobAPI) AddWebhook(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	var input struct {
-		ID  string `json:"id"`
-		URL string `json:"url"`
+		ID      string            `json:"id"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
 	}
 	if err := httphelper.DecodeJSON(r, &input); err != nil {
 		httphelper.Error(w, err)
@@ -810,6 +811,7 @@ func (h *jobAPI) AddWebhook(w http.ResponseWriter, r *http.Request, ps httproute
 	wh := &host.WebhookConfig{
 		ID:        id,
 		URL:       input.URL,
+		Headers:   input.Headers,
 		CreatedAt: time.Now().UTC(),
 	}
 	if err := h.host.state.AddWebhook(wh); err != nil {

@@ -479,9 +479,10 @@ type AllJobsStats struct {
 
 // WebhookConfig represents a configured webhook endpoint
 type WebhookConfig struct {
-	ID        string    `json:"id"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string            `json:"id"`
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 // WebhookEvent is the payload sent to webhook endpoints

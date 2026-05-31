@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/flynn/flynn/pkg/cluster"
@@ -13,7 +14,7 @@ import (
 func init() {
 	Register("webhooks", runWebhooks, `
 usage: flynn-host webhooks
-       flynn-host webhooks add <url>
+       flynn-host webhooks add [-H <header>]... <url>
        flynn-host webhooks remove <id>
 
 Manage webhook notification endpoints across all hosts.
@@ -24,10 +25,16 @@ Commands:
     add       Add a webhook endpoint URL to all hosts
     remove    Remove a webhook by ID from all hosts
 
+Options:
+    -H, --header <header>  Header to send on every delivery, "Name: value".
+                           May be repeated. Useful for shared-secret auth
+                           (e.g. -H "X-Flynn-Webhook-Secret: ...").
+
 Examples:
 
     $ flynn-host webhooks
     $ flynn-host webhooks add https://example.com/webhook
+    $ flynn-host webhooks add -H "X-Flynn-Webhook-Secret: s3cret" https://example.com/webhook
     $ flynn-host webhooks remove abc-123
 `)
 }
@@ -76,10 +83,14 @@ func runWebhooksAdd(args *docopt.Args, client *cluster.Client) error {
 		return err
 	}
 	url := args.String["<url>"]
+	headers, err := parseHeaderFlags(args.All["--header"])
+	if err != nil {
+		return err
+	}
 	id := random.UUID()
 	var firstErr error
 	for _, h := range hosts {
-		if _, err := h.AddWebhook(id, url); err != nil {
+		if _, err := h.AddWebhook(id, url, headers); err != nil {
 			fmt.Fprintf(os.Stderr, "error adding webhook on %s: %s\n", h.ID(), err)
 			if firstErr == nil {
 				firstErr = err
@@ -92,6 +103,29 @@ func runWebhooksAdd(args *docopt.Args, client *cluster.Client) error {
 	}
 	fmt.Printf("Webhook added: %s\n", id)
 	return nil
+}
+
+// parseHeaderFlags converts repeated --header flag values of the form
+// "Name: value" or "Name=value" into a map suitable for WebhookConfig.Headers.
+func parseHeaderFlags(raw interface{}) (map[string]string, error) {
+	values, _ := raw.([]string)
+	if len(values) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(values))
+	for _, h := range values {
+		sep := strings.IndexAny(h, ":=")
+		if sep <= 0 {
+			return nil, fmt.Errorf("invalid header %q: expected \"Name: value\"", h)
+		}
+		name := strings.TrimSpace(h[:sep])
+		val := strings.TrimSpace(h[sep+1:])
+		if name == "" {
+			return nil, fmt.Errorf("invalid header %q: empty name", h)
+		}
+		out[name] = val
+	}
+	return out, nil
 }
 
 func runWebhooksRemove(args *docopt.Args, client *cluster.Client) error {

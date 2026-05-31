@@ -98,37 +98,48 @@ func (d *WebhookDispatcher) dispatch(event *host.WebhookEvent) {
 	}
 
 	for _, wh := range webhooks {
-		go d.deliver(wh.URL, payload, event.EventID)
+		go d.deliver(wh, payload, event.EventID)
 	}
 }
 
-// deliver sends the payload to a single URL with retry logic.
-func (d *WebhookDispatcher) deliver(url string, payload []byte, eventID string) {
+// deliver sends the payload to a single webhook endpoint with retry logic.
+// Any headers configured on the webhook are applied to each request; the
+// Content-Type header is always set to application/json.
+func (d *WebhookDispatcher) deliver(wh *host.WebhookConfig, payload []byte, eventID string) {
 	var lastErr error
 	for attempt := 0; attempt <= webhookMaxRetries; attempt++ {
 		if attempt > 0 {
 			time.Sleep(webhookRetryDelay)
 		}
-		resp, err := d.client.Post(url, "application/json", bytes.NewReader(payload))
+		req, err := http.NewRequest("POST", wh.URL, bytes.NewReader(payload))
+		if err != nil {
+			d.log.Error("webhook request build failed", "url", wh.URL, "event_id", eventID, "err", err)
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range wh.Headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := d.client.Do(req)
 		if err != nil {
 			lastErr = err
-			d.log.Warn("webhook delivery failed", "url", url, "event_id", eventID, "attempt", attempt+1, "err", err)
+			d.log.Warn("webhook delivery failed", "url", wh.URL, "event_id", eventID, "attempt", attempt+1, "err", err)
 			continue
 		}
 		resp.Body.Close()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return // success
 		}
-		d.log.Warn("webhook delivery non-2xx response", "url", url, "event_id", eventID, "attempt", attempt+1, "status", resp.StatusCode)
+		d.log.Warn("webhook delivery non-2xx response", "url", wh.URL, "event_id", eventID, "attempt", attempt+1, "status", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return // client error, don't retry
 		}
 		lastErr = nil // server error, will retry
 	}
 	if lastErr != nil {
-		d.log.Error("webhook delivery exhausted retries", "url", url, "event_id", eventID, "err", lastErr)
+		d.log.Error("webhook delivery exhausted retries", "url", wh.URL, "event_id", eventID, "err", lastErr)
 	} else {
-		d.log.Error("webhook delivery exhausted retries", "url", url, "event_id", eventID)
+		d.log.Error("webhook delivery exhausted retries", "url", wh.URL, "event_id", eventID)
 	}
 }
 
