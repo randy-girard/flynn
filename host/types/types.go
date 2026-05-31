@@ -485,7 +485,11 @@ type WebhookConfig struct {
 	CreatedAt time.Time         `json:"created_at"`
 }
 
-// WebhookEvent is the payload sent to webhook endpoints
+// WebhookEvent is the payload sent to webhook endpoints. The embedded Job is
+// intentionally a sanitized subset of ActiveJob (see WebhookJob) so the
+// outbound payload never carries container env vars, mounts, volumes or
+// argv — receivers get the operational fields they need without secrets or
+// host filesystem layout.
 type WebhookEvent struct {
 	EventID     string            `json:"event_id"`
 	Timestamp   time.Time         `json:"timestamp"`
@@ -494,8 +498,27 @@ type WebhookEvent struct {
 	Description string            `json:"description"`
 	Severity    string            `json:"severity"`     // "info", "warning", "error", "critical"
 	JobID       string            `json:"job_id,omitempty"`
-	Job         *ActiveJob        `json:"job,omitempty"`
+	AppID       string            `json:"app_id,omitempty"`
+	ProcessType string            `json:"process_type,omitempty"`
+	ReleaseID   string            `json:"release_id,omitempty"`
+	Job         *WebhookJob       `json:"job,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// WebhookJob is the safe subset of ActiveJob included in WebhookEvent. It
+// deliberately omits ContainerConfig (Env, Mounts, Volumes, Args, working
+// dir, capabilities, uid/gid, …) and Mountspecs so secrets and host paths
+// never leave the cluster.
+type WebhookJob struct {
+	ID         string    `json:"id,omitempty"`
+	HostID     string    `json:"host_id,omitempty"`
+	InternalIP string    `json:"internal_ip,omitempty"`
+	Status     JobStatus `json:"status,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	EndedAt    time.Time `json:"ended_at,omitempty"`
+	ExitStatus *int      `json:"exit_status,omitempty"`
+	Error      *string   `json:"error,omitempty"`
 }
 
 // Webhook event severity levels

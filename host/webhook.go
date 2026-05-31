@@ -64,7 +64,10 @@ func (d *WebhookDispatcher) Shutdown() {
 	close(d.done)
 }
 
-// Send enqueues a webhook event for delivery. It is non-blocking; if the buffer is full the event is dropped.
+// Send enqueues a webhook event for delivery. It is non-blocking; if the
+// buffer is full the event is dropped. The full ActiveJob is reduced to a
+// WebhookJob and the flynn-* env vars are surfaced as top-level fields so
+// the outbound payload never carries container env, mounts, volumes or argv.
 func (d *WebhookDispatcher) Send(code, description, severity string, jobID string, job *host.ActiveJob, metadata map[string]string) {
 	event := &host.WebhookEvent{
 		EventID:     random.UUID(),
@@ -74,14 +77,54 @@ func (d *WebhookDispatcher) Send(code, description, severity string, jobID strin
 		Description: description,
 		Severity:    severity,
 		JobID:       jobID,
-		Job:         job,
 		Metadata:    metadata,
+	}
+	if job != nil {
+		event.Job = sanitizeJobForWebhook(job)
+		if job.Job != nil {
+			env := job.Job.Config.Env
+			event.AppID = env["FLYNN_APP_ID"]
+			event.ProcessType = env["FLYNN_PROCESS_TYPE"]
+			event.ReleaseID = env["FLYNN_RELEASE_ID"]
+			if event.JobID == "" {
+				event.JobID = job.Job.ID
+			}
+		}
 	}
 	select {
 	case d.events <- event:
 	default:
 		d.log.Warn("webhook event buffer full, dropping event", "code", code, "event_id", event.EventID)
 	}
+}
+
+// sanitizeJobForWebhook reduces an ActiveJob to the safe fields included in
+// outbound webhooks. ContainerConfig, Mountspecs, PID and force-stop flags
+// are intentionally omitted.
+func sanitizeJobForWebhook(j *host.ActiveJob) *host.WebhookJob {
+	if j == nil {
+		return nil
+	}
+	wj := &host.WebhookJob{
+		HostID:     j.HostID,
+		InternalIP: j.InternalIP,
+		Status:     j.Status,
+		CreatedAt:  j.CreatedAt,
+		StartedAt:  j.StartedAt,
+		EndedAt:    j.EndedAt,
+	}
+	if j.Job != nil {
+		wj.ID = j.Job.ID
+	}
+	if j.ExitStatus != nil {
+		v := *j.ExitStatus
+		wj.ExitStatus = &v
+	}
+	if j.Error != nil {
+		v := *j.Error
+		wj.Error = &v
+	}
+	return wj
 }
 
 // dispatch sends an event to all configured webhooks.
