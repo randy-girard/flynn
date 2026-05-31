@@ -114,6 +114,7 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		factory:             factory,
 		logStreams:          make(map[string]map[string]*logmux.LogStream),
 		containers:          make(map[string]*Container),
+		cpuSamples:          make(map[string]cpuSample),
 		defaultEnv:          make(map[string]string),
 		resolvConf:          "/etc/resolv.conf",
 		ipalloc:             ipallocator.New(),
@@ -144,6 +145,12 @@ type LibcontainerBackend struct {
 
 	containersMtx sync.RWMutex
 	containers    map[string]*Container
+
+	// Per-container CPU sample state used to derive cpu_usage_percent from
+	// the cumulative cpu_usage_nanoseconds counter. First GetJobStats call
+	// for a container yields 0%; subsequent calls return the delta-based %.
+	cpuSampleMtx sync.Mutex
+	cpuSamples   map[string]cpuSample
 
 	envMtx     sync.RWMutex
 	defaultEnv map[string]string
@@ -1174,6 +1181,9 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 		c.l.containersMtx.Lock()
 		delete(c.l.containers, c.job.ID)
 		c.l.containersMtx.Unlock()
+		c.l.cpuSampleMtx.Lock()
+		delete(c.l.cpuSamples, c.job.ID)
+		c.l.cpuSampleMtx.Unlock()
 		c.cleanup()
 		close(c.done)
 	}()
@@ -2020,6 +2030,33 @@ func forceMemoryOvercommit() error {
 	return nil
 }
 
+// cpuSample is the previous cumulative CPU reading for one container, used to
+// derive cpu_usage_percent from cgroup cpuacct's monotonic total counter.
+type cpuSample struct {
+	ns uint64
+	t  time.Time
+}
+
+// cpuPercentDelta returns CPU usage as a percentage of one core between the
+// previously recorded sample for `id` and the current reading. Values can
+// exceed 100% on multi-core hosts (one container saturating two cores reports
+// 200%). The first call for a container records the baseline and returns 0.
+// A non-monotonic counter (e.g. cgroup reset) also resets the baseline.
+func (l *LibcontainerBackend) cpuPercentDelta(id string, ns uint64, now time.Time) float64 {
+	l.cpuSampleMtx.Lock()
+	defer l.cpuSampleMtx.Unlock()
+	prev, ok := l.cpuSamples[id]
+	l.cpuSamples[id] = cpuSample{ns: ns, t: now}
+	if !ok || ns < prev.ns {
+		return 0
+	}
+	elapsed := now.Sub(prev.t).Nanoseconds()
+	if elapsed <= 0 {
+		return 0
+	}
+	return float64(ns-prev.ns) / float64(elapsed) * 100
+}
+
 // GetJobStats returns runtime resource usage stats for a specific job/container.
 func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, error) {
 	l.containersMtx.RLock()
@@ -2050,6 +2087,7 @@ func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, erro
 		result.CPUUsageNanoseconds = cpuStats.CpuUsage.TotalUsage
 		result.CPUThrottledPeriods = cpuStats.ThrottlingData.ThrottledPeriods
 		result.CPUThrottledTimeNs = cpuStats.ThrottlingData.ThrottledTime
+		result.CPUUsagePercent = l.cpuPercentDelta(id, result.CPUUsageNanoseconds, result.Timestamp)
 
 		// Memory stats
 		memStats := stats.CgroupStats.MemoryStats
