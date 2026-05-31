@@ -13,6 +13,9 @@ func New(issuer, controllerURL string, cache Cache) (oauth2.TokenSource, error) 
 	if err != nil {
 		return nil, err
 	}
+	if clientID == "" {
+		clientID = "flynn-cli"
+	}
 
 	t, err := cache.GetToken(issuer, clientID, controllerURL)
 	if err != nil {
