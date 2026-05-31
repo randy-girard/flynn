@@ -162,7 +162,8 @@ func Run(args *docopt.Args, globalCluster string) error {
 		return err
 	}
 	if clientID == "" {
-		return fmt.Errorf("issuer URL is missing client_id parameter")
+		clientID = "flynn-cli"
+		fmt.Printf("Issuer URL has no client_id; using %q.\n", clientID)
 	}
 	metadata, err := oauth.GetMetadata(metadataURL)
 	if err != nil {

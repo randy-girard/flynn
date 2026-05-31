@@ -476,3 +476,81 @@ type AllJobsStats struct {
 	Timestamp time.Time         `json:"timestamp"`
 	Jobs      []*ContainerStats `json:"jobs"`
 }
+
+// WebhookConfig represents a configured webhook endpoint
+type WebhookConfig struct {
+	ID        string            `json:"id"`
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// WebhookEvent is the payload sent to webhook endpoints. The embedded Job is
+// intentionally a sanitized subset of ActiveJob (see WebhookJob) so the
+// outbound payload never carries container env vars, mounts, volumes or
+// argv — receivers get the operational fields they need without secrets or
+// host filesystem layout.
+type WebhookEvent struct {
+	EventID     string            `json:"event_id"`
+	Timestamp   time.Time         `json:"timestamp"`
+	HostID      string            `json:"host_id"`
+	Code        string            `json:"code"`
+	Description string            `json:"description"`
+	Severity    string            `json:"severity"`     // "info", "warning", "error", "critical"
+	JobID       string            `json:"job_id,omitempty"`
+	AppID       string            `json:"app_id,omitempty"`
+	ProcessType string            `json:"process_type,omitempty"`
+	ReleaseID   string            `json:"release_id,omitempty"`
+	Job         *WebhookJob       `json:"job,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+}
+
+// WebhookJob is the safe subset of ActiveJob included in WebhookEvent. It
+// deliberately omits ContainerConfig (Env, Mounts, Volumes, Args, working
+// dir, capabilities, uid/gid, …) and Mountspecs so secrets and host paths
+// never leave the cluster.
+type WebhookJob struct {
+	ID         string    `json:"id,omitempty"`
+	HostID     string    `json:"host_id,omitempty"`
+	InternalIP string    `json:"internal_ip,omitempty"`
+	Status     JobStatus `json:"status,omitempty"`
+	CreatedAt  time.Time `json:"created_at,omitempty"`
+	StartedAt  time.Time `json:"started_at,omitempty"`
+	EndedAt    time.Time `json:"ended_at,omitempty"`
+	ExitStatus *int      `json:"exit_status,omitempty"`
+	Error      *string   `json:"error,omitempty"`
+}
+
+// Webhook event severity levels
+const (
+	SeverityInfo     = "info"
+	SeverityWarning  = "warning"
+	SeverityError    = "error"
+	SeverityCritical = "critical"
+)
+
+// Webhook event codes
+
+// H-codes: Job/Container lifecycle events
+const (
+	CodeJobCreate      = "H10" // Job created
+	CodeJobStart       = "H11" // Job started (running)
+	CodeJobStop        = "H12" // Job stopped (exit 0)
+	CodeJobCrash       = "H13" // Job crashed (non-zero exit)
+	CodeJobFailed      = "H14" // Job failed to start
+	CodeJobCleanup     = "H15" // Job cleaned up
+	CodeMemorySoft     = "H20" // Soft memory limit exceeded
+	CodeMemoryHard     = "H21" // Hard memory limit exceeded (OOM kill)
+)
+
+// R-codes: Runtime events
+const (
+	CodeMountFailure   = "R10" // Squashfs mount/verification failure
+)
+
+// D-codes: Daemon lifecycle events
+const (
+	CodeDaemonStart    = "D10" // Daemon started
+	CodeDaemonShutdown = "D11" // Daemon shutting down
+	CodeDaemonUpdate   = "D12" // Daemon zero-downtime update initiated
+)
