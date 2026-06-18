@@ -228,7 +228,7 @@
         "flynn-system-critical": "true"
       },
       "strategy": "sirenia",
-      "deploy_timeout": 120
+      "deploy_timeout": 300
     }
   },
   {
