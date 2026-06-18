@@ -605,8 +605,17 @@ func (p *Peer) evalClusterState() {
 		return
 	}
 
-	// Deposed peers should remain deposed and do nothing
+	// Deposed peers remain idle while listed in cluster state Deposed. Once the
+	// primary clears them (typically after they re-register in discoverd), pick
+	// up the new role instead of staying deposed forever.
 	if p.Info().Role == RoleDeposed {
+		for _, d := range p.Info().State.Deposed {
+			if d.Meta[p.idKey] == p.id {
+				return
+			}
+		}
+		log.Info("no longer deposed, re-evaluating role", "fn", "evalClusterState")
+		p.evalInitClusterState()
 		return
 	}
 
@@ -668,6 +677,7 @@ func (p *Peer) evalClusterState() {
 	presentPeers[p.Info().State.Sync.Meta[p.idKey]] = struct{}{}
 
 	newAsync := make([]*discoverd.Instance, 0, len(p.Info().Peers))
+	newDeposed := make([]*discoverd.Instance, 0, len(p.Info().State.Deposed))
 	changes := false
 
 	for _, a := range p.Info().State.Async {
@@ -680,9 +690,16 @@ func (p *Peer) evalClusterState() {
 		}
 	}
 
-	// Deposed peers should not be assigned as asyncs
 	for _, d := range p.Info().State.Deposed {
-		presentPeers[d.Meta[p.idKey]] = struct{}{}
+		if p.peerIsPresent(d) {
+			log.Info("deposed peer rejoined, re-adding as async",
+				"peer.id", d.Meta[p.idKey], "peer.addr", d.Addr)
+			presentPeers[d.Meta[p.idKey]] = struct{}{}
+			newAsync = append(newAsync, d)
+			changes = true
+		} else {
+			newDeposed = append(newDeposed, d)
+		}
 	}
 
 	for _, peer := range p.Info().Peers {
@@ -694,11 +711,11 @@ func (p *Peer) evalClusterState() {
 		changes = true
 	}
 
-	if !changes {
+	if !changes && len(newDeposed) == len(p.Info().State.Deposed) {
 		return
 	}
 
-	p.startUpdateAsyncs(newAsync)
+	p.startUpdateAsyncs(newAsync, newDeposed)
 }
 
 func (p *Peer) startInitialSetup() {
@@ -1062,19 +1079,22 @@ func (p *Peer) startTransitionToNormalMode() {
 	})
 }
 
-func (p *Peer) startUpdateAsyncs(newAsync []*discoverd.Instance) {
+func (p *Peer) startUpdateAsyncs(newAsync, newDeposed []*discoverd.Instance) {
 	if p.updatingState != nil {
 		panic("startUpdateAsyncs with existing update state")
 	}
 	log := p.log.New("fn", "startUpdateAsyncs")
 
 	state := p.Info().State
+	if newDeposed == nil {
+		newDeposed = state.Deposed
+	}
 	p.updatingState = &State{
 		Generation: state.Generation,
 		Primary:    state.Primary,
 		Sync:       state.Sync,
 		Async:      newAsync,
-		Deposed:    state.Deposed,
+		Deposed:    newDeposed,
 		InitWAL:    state.InitWAL,
 	}
 	log.Info("updating list of asyncs")

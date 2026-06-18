@@ -2239,3 +2239,71 @@ func TestConfigEqualPeerIdentity(t *testing.T) {
 		t.Errorf("Config.Equal returned false for singleton-style configs with nil downstream; expected true")
 	}
 }
+
+// TestDeposedPeerAutoRejoin verifies that when a deposed peer re-registers in
+// discoverd the primary removes it from Deposed and adds it as an async, so
+// clusters recover after rolling restarts without updater-side repair.
+func TestDeposedPeerAutoRejoin(t *testing.T) {
+	gen1 := &state.State{
+		Generation: 2,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Deposed:    []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Rejoined := &state.State{
+		Generation: 2,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	peersBefore := []*discoverd.Instance{node(1, 1), node(2, 2)}
+	peersAfter := []*discoverd.Instance{node(1, 1), node(2, 2), node(3, 3)}
+
+	pgPrimaryDeposed := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: node(2, 2),
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgPrimaryRejoined := pgPrimaryDeposed
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap"},
+		{Cmd: "rmpeer node3"},
+		{Cmd: "setClusterState", JSON: gen1},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: peersBefore,
+				},
+				Db: pgPrimaryDeposed,
+			},
+		},
+		{Cmd: "echo test: deposed peer rejoins discoverd"},
+		{Cmd: "addpeer node3"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1Rejoined,
+					Peers: peersAfter,
+				},
+				Db: pgPrimaryRejoined,
+			},
+		},
+	})
+}
