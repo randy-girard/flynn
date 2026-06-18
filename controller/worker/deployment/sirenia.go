@@ -121,12 +121,11 @@ loop:
 		log.Info("sirenia discoverd state is singleton, using singleton deployment")
 		return d.deploySireniaSingleton(processType, log)
 	}
-	if len(state.Async) == 0 {
-		return loggedErr("sirenia cluster in unhealthy state (has no asyncs)")
+	readyState, err := d.waitForSireniaClusterReady(proc.Service, processType, &state, events, stream, log)
+	if err != nil {
+		return loggedErr("%s", err.Error())
 	}
-	if 2+len(state.Async) != d.Processes[processType] {
-		return loggedErr("sirenia cluster in unhealthy state (too few asyncs)")
-	}
+	state = *readyState
 
 	stopInstance := func(inst *discoverd.Instance) error {
 		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"])
