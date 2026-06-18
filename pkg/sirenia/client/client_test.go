@@ -3,7 +3,13 @@ package client
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
+	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
 )
@@ -75,5 +81,32 @@ func TestSyncedWithIgnoresEmptyMeta(t *testing.T) {
 	check := SyncedWith(expected, "POSTGRES_ID")
 	if check(&Status{Database: &DatabaseInfo{SyncedDownstream: synced}}) {
 		t.Fatal("expected false when expected Meta id is empty")
+	}
+}
+
+func TestWaitForReadWriteEventually(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		rw := calls >= 2
+		_ = json.NewEncoder(w).Encode(Status{
+			Database: &DatabaseInfo{ReadWrite: rw},
+		})
+	}))
+	defer srv.Close()
+
+	host, portStr, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	// Client maps postgres port N to HTTP N+1; use postgres port one below listener.
+	pgPort := port - 1
+	c := NewClient(net.JoinHostPort(host, strconv.Itoa(pgPort)))
+	if err := c.WaitForReadWrite(5 * time.Second); err != nil {
+		t.Fatalf("WaitForReadWrite: %v (calls=%d)", err, calls)
+	}
+	if calls < 2 {
+		t.Fatalf("expected multiple status polls before read-write, got %d", calls)
 	}
 }

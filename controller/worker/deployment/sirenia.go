@@ -408,6 +408,10 @@ waitCurrent:
 					JobState:  ct.JobStateUp,
 					JobType:   processType,
 				}
+				log.Info("waiting for new sirenia peer to accept writes", "addr", event.Instance.Addr)
+				if err := sireniaclient.NewClient(event.Instance.Addr).WaitForReadWrite(3 * time.Minute); err != nil {
+					return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
+				}
 				// proceed with non-sirenia process types now that
 				// postgres is back up and the controller can again
 				// persist scale state
