@@ -436,7 +436,7 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 			// gaps. They are individually no-ops when their target
 			// state is already settled, so the total added latency in
 			// the common case is only updateInterHostDelay.
-			updaterdeploy.WaitPostgresDiscoverdLeaderStable(hostLog)
+			updaterdeploy.WaitSireniaApplianceLeadersStable(hostLog)
 			repairSireniaClusters(hostLog)
 			waitForJobsPlacedOnHost(h, updateWaitJobsTimeout, hostLog)
 
@@ -1195,8 +1195,8 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 			continue
 		}
 		appLog.Info("finished deploy of system app")
-		if appInfo.Name == "postgres" {
-			updaterdeploy.WaitPostgresDiscoverdLeaderStable(log.New("after_system_app_deploy", "postgres"))
+		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, appLog.New("after_system_app_deploy", appInfo.Name))
 		}
 	}
 

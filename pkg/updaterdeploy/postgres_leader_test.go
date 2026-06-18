@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestSireniaApplianceServices(t *testing.T) {
+	want := []string{"postgres", "mariadb", "mongodb"}
+	if len(SireniaApplianceServices) != len(want) {
+		t.Fatalf("got %v want %v", SireniaApplianceServices, want)
+	}
+	for i, svc := range want {
+		if SireniaApplianceServices[i] != svc {
+			t.Fatalf("SireniaApplianceServices[%d] = %q want %q", i, SireniaApplianceServices[i], svc)
+		}
+	}
+}
+
 func TestShouldRetryAfterUnsettledDiscoverdLeader(t *testing.T) {
 	cases := []struct {
 		err  error

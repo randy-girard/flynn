@@ -194,8 +194,8 @@ func run() error {
 			continue
 		}
 		log.Info("finished deploy of system app")
-		if appInfo.Name == "postgres" {
-			updaterdeploy.WaitPostgresDiscoverdLeaderStable(log.New("after_system_app_deploy", "postgres"))
+		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, log.New("after_system_app_deploy", appInfo.Name))
 		}
 	}
 

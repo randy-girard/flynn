@@ -9,42 +9,62 @@ import (
 )
 
 const (
-	// Poll discoverd until the Postgres service leader appears after redeploy.
-	postgresDiscoverdLeaderMaxAttempts = 60
-	postgresDiscoverdLeaderPollDelay   = 5 * time.Second
+	// Poll discoverd until a sirenia service leader appears after redeploy.
+	sireniaDiscoverdLeaderMaxAttempts = 60
+	sireniaDiscoverdLeaderPollDelay   = 5 * time.Second
 
 	maxTransientDeployUnsettledAttempts = 24
 	transientDeployRetryDelay           = 10 * time.Second
 )
 
-// WaitPostgresDiscoverdLeaderStable blocks until discoverd reports a Postgres
-// service leader, or retries are exhausted with a warning.  After deploying the
-// postgres appliance there is typically a gap where DNS for
-// leader.postgres.discoverd returns NXDOMAIN; controller jobs configured with
-// PGHOST rely on it, so follow-on deployments must wait for the leader slot
-// to repopulate before continuing.
-func WaitPostgresDiscoverdLeaderStable(log log15.Logger) {
-	svc := discoverd.NewService("postgres")
+// SireniaApplianceServices lists discoverd service names for sirenia-managed
+// database appliances updated during cluster upgrades.
+var SireniaApplianceServices = []string{"postgres", "mariadb", "mongodb"}
 
-	for attempt := 1; attempt <= postgresDiscoverdLeaderMaxAttempts; attempt++ {
+// WaitSireniaLeaderStable blocks until discoverd reports a leader for service,
+// or retries are exhausted with a warning. After redeploying a sirenia appliance
+// there is typically a gap where leader.<service>.discoverd returns NXDOMAIN;
+// controller jobs and follow-on deploys rely on it, so callers should wait for
+// the leader slot to repopulate before continuing.
+func WaitSireniaLeaderStable(service string, log log15.Logger) {
+	svc := discoverd.NewService(service)
+
+	for attempt := 1; attempt <= sireniaDiscoverdLeaderMaxAttempts; attempt++ {
 		inst, err := svc.Leader()
 		if err == nil && inst != nil && inst.Addr != "" {
 			if attempt > 1 {
-				log.Info("postgres discoverd leader is available again",
-					"addr", inst.Addr, "attempt", attempt)
+				log.Info("sirenia discoverd leader is available again",
+					"service", service, "addr", inst.Addr, "attempt", attempt)
 			}
 			return
 		}
 		if err != nil {
-			log.Debug("postgres discoverd leader not ready yet", "attempt", attempt, "err", err)
+			log.Debug("sirenia discoverd leader not ready yet",
+				"service", service, "attempt", attempt, "err", err)
 		} else {
-			log.Debug("postgres discoverd leader not ready yet", "attempt", attempt)
+			log.Debug("sirenia discoverd leader not ready yet",
+				"service", service, "attempt", attempt)
 		}
-		if attempt < postgresDiscoverdLeaderMaxAttempts {
-			time.Sleep(postgresDiscoverdLeaderPollDelay)
+		if attempt < sireniaDiscoverdLeaderMaxAttempts {
+			time.Sleep(sireniaDiscoverdLeaderPollDelay)
 		}
 	}
-	log.Warn("postgres discoverd leader did not stabilize within timeout; downstream deploy may see transient Postgres/DNS failures")
+	log.Warn("sirenia discoverd leader did not stabilize within timeout; downstream deploy may see transient DNS failures",
+		"service", service)
+}
+
+// WaitPostgresDiscoverdLeaderStable is equivalent to WaitSireniaLeaderStable("postgres").
+func WaitPostgresDiscoverdLeaderStable(log log15.Logger) {
+	WaitSireniaLeaderStable("postgres", log)
+}
+
+// WaitSireniaApplianceLeadersStable waits for every sirenia appliance service
+// leader slot to repopulate. Used between rolling host restarts when multiple
+// database peers may have been disrupted on the previous host.
+func WaitSireniaApplianceLeadersStable(log log15.Logger) {
+	for _, service := range SireniaApplianceServices {
+		WaitSireniaLeaderStable(service, log.New("service", service))
+	}
 }
 
 // ShouldRetryAfterUnsettledDiscoverdLeader returns whether a failed system-app
