@@ -33,7 +33,13 @@ const (
 	// Open() retry loop: sirenia postgres updates can leave leader.* NXDOMAIN
 	// for minutes while roles move.
 	leaderDialBudget = 4 * time.Minute
+
+	// postgresReadWriteBudget caps how long Wait blocks for the sirenia primary
+	// to accept write transactions after a restart or failover.
+	postgresReadWriteBudget = 5 * time.Minute
 )
+
+var readWritePollInterval = 100 * time.Millisecond
 
 type Conf struct {
 	Discoverd *discoverd.Client
@@ -249,16 +255,15 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 	if err != nil {
 		panic(err)
 	}
-	for {
+	for deadline := time.Now().Add(postgresReadWriteBudget); time.Now().Before(deadline); {
 		var readonly string
 		// wait until read-write transactions are allowed
-		if err := db.QueryRow("SHOW default_transaction_read_only").Scan(&readonly); err != nil || readonly == "on" {
-			time.Sleep(100 * time.Millisecond)
-			// TODO(titanous): add max wait here
-			continue
+		if err := db.QueryRow("SHOW default_transaction_read_only").Scan(&readonly); err == nil && readonly == "off" {
+			return db
 		}
-		return db
+		time.Sleep(readWritePollInterval)
 	}
+	panic(fmt.Errorf("timed out after %s waiting for postgres to accept write transactions", postgresReadWriteBudget))
 }
 
 func Open(conf *Conf, afterConn func(*pgx.Conn) error) (*DB, error) {
