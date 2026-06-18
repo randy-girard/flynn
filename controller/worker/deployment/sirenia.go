@@ -8,8 +8,8 @@ import (
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/controller/worker/types"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
+	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
 )
@@ -136,7 +136,7 @@ loop:
 			JobState:  ct.JobStateStopping,
 			JobType:   processType,
 		}
-		peer := client.NewClient(inst.Addr)
+		peer := sireniaclient.NewClient(inst.Addr)
 		log.Info("stopping peer")
 		if err := peer.Stop(); err != nil {
 			log.Error("error stopping peer", "err", err)
@@ -215,8 +215,8 @@ loop:
 	}
 	waitForSync := func(upstream, downstream *discoverd.Instance) error {
 		log.Info("waiting for replication sync", "upstream", upstream.Addr, "downstream", downstream.Addr)
-		client := client.NewClient(upstream.Addr)
-		if err := client.WaitForReplSync(downstream, 3*time.Minute); err != nil {
+		sc := sireniaclient.NewClient(upstream.Addr)
+		if err := sc.WaitForReplSync(downstream, sireniaclient.ProcessIDKey(processType), 3*time.Minute); err != nil {
 			log.Error("error waiting for replication sync", "err", err)
 			return err
 		}
@@ -224,8 +224,8 @@ loop:
 	}
 	waitForReadWrite := func(inst *discoverd.Instance) error {
 		log.Info("waiting for read-write", "inst", inst.Addr)
-		client := client.NewClient(inst.Addr)
-		if err := client.WaitForReadWrite(3 * time.Minute); err != nil {
+		sc := sireniaclient.NewClient(inst.Addr)
+		if err := sc.WaitForReadWrite(3 * time.Minute); err != nil {
 			log.Error("error waiting for read-write", "err", err)
 			return err
 		}
