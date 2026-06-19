@@ -210,13 +210,19 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 		}
 
 		if allNodes {
-			// Wait for the cluster to be healthy before starting the
-			// remote rolling restart — restarting the next host while
-			// the local daemon's sirenia peer is still recovering can
-			// collapse postgres quorum (see waitForClusterHealthy).
+			// Wait for the cluster to settle after the local restart before
+			// touching remote hosts — same gates as the per-remote-host loop
+			// (health, discoverd host count, sirenia leaders, scheduler jobs).
 			if !args.Bool["--no-restart"] {
-				log.Info("waiting for cluster to be healthy before remote restarts", "timeout", updateHealthTimeout)
-				if _, err := waitForClusterHealthy(updateHealthTimeout, log); err != nil {
+				clusterClient := cluster.NewClient()
+				expectedHosts := expectedClusterHostCount(log)
+				if err := settleAfterHostRestart(hostRestartSettleOptions{
+					Log:               log,
+					ClusterClient:     clusterClient,
+					RestartedHost:     localClusterHost(log),
+					ExpectedHostCount: expectedHosts,
+					FatalClusterSize:  expectedHosts > 1,
+				}); err != nil {
 					return fmt.Errorf("cluster did not recover after local restart: %w", err)
 				}
 			}
@@ -304,16 +310,9 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 
 	// Try to get the expected cluster size from the cluster-monitor metadata
 	// so we can wait for all nodes to be visible before proceeding.
-	var expectedClusterSize int
-	if monitorMeta, err := discoverd.NewService("cluster-monitor").GetMeta(); err == nil {
-		var meta struct {
-			Enabled bool `json:"enabled"`
-			Hosts   int  `json:"hosts"`
-		}
-		if err := json.Unmarshal(monitorMeta.Data, &meta); err == nil && meta.Hosts > 0 {
-			expectedClusterSize = meta.Hosts
-			log.Info("determined expected cluster size from cluster-monitor metadata", "expected_hosts", expectedClusterSize)
-		}
+	expectedClusterSize := expectedClusterHostCount(log)
+	if expectedClusterSize > 0 {
+		log.Info("determined expected cluster size", "expected_hosts", expectedClusterSize)
 	}
 
 	for i := 0; i < 10; i++ {
@@ -410,40 +409,29 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 			if err := waitForRemoteDaemon(h, 3*time.Minute, hostLog); err != nil {
 				return expectedHostCount, fmt.Errorf("daemon on host %s did not become responsive after restart: %w", h.ID(), err)
 			}
-			if err := waitForClusterSize(clusterClient, expectedHostCount, 3*time.Minute, hostLog); err != nil {
-				hostLog.Warn("cluster did not fully repopulate after restart, continuing anyway", "err", err)
-			}
 
-			// Wait for the cluster (and especially the sirenia-managed
-			// databases) to be fully healthy again before restarting
-			// the next host. Without this, a fast rolling restart can
-			// kill the postgres primary while the new standbys are
-			// still catching up via pg_basebackup, collapsing quorum
-			// and leaving the controller unable to schedule jobs.
-			hostLog.Info("waiting for cluster to be healthy before next restart", "timeout", updateHealthTimeout)
-			if _, err := waitForClusterHealthy(updateHealthTimeout, hostLog); err != nil {
+			if err := settleAfterHostRestart(hostRestartSettleOptions{
+				Log:               hostLog,
+				ClusterClient:     clusterClient,
+				RestartedHost:     h,
+				ExpectedHostCount: expectedHostCount,
+				FatalClusterSize:  true,
+				InterHostDelay:    true,
+			}); err != nil {
 				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w", h.ID(), err)
 			}
+		}
+	}
 
-			// Status-web reporting healthy does not guarantee:
-			//  (a) the postgres discoverd leader is reachable from
-			//      every controller pod (DNS propagation is async), or
-			//  (b) any sirenia peer that was deposed during the
-			//      restart will rejoin without manual clearing, or
-			//  (c) the controller-scheduler has observed the restarted
-			//      host coming back up and started placing jobs on it.
-			// Each of the next three helpers addresses one of those
-			// gaps. They are individually no-ops when their target
-			// state is already settled, so the total added latency in
-			// the common case is only updateInterHostDelay.
-			updaterdeploy.WaitSireniaApplianceLeadersStable(hostLog)
-			repairSireniaClusters(hostLog)
-			waitForJobsPlacedOnHost(h, updateWaitJobsTimeout, hostLog)
-
-			if updateInterHostDelay > 0 {
-				hostLog.Info("inter-host settle delay before next restart", "delay", updateInterHostDelay)
-				time.Sleep(updateInterHostDelay)
-			}
+	if !noRestart && expectedHostCount > 1 {
+		log.Info("final cluster settle after all host restarts")
+		if err := settleAfterHostRestart(hostRestartSettleOptions{
+			Log:               log,
+			ClusterClient:     clusterClient,
+			ExpectedHostCount: expectedHostCount,
+			FatalClusterSize:  false,
+		}); err != nil {
+			return expectedHostCount, err
 		}
 	}
 
@@ -568,14 +556,12 @@ func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.L
 // waitForClusterHealthy polls the status-web endpoint until it reports
 // the whole cluster as healthy (HTTP 200), or the timeout elapses.
 //
-// This is critical between rolling daemon restarts: a restart kills every
-// job on a host, including its sirenia-managed database peer (postgres,
-// mariadb, mongodb). Each peer takes a few seconds to rejoin and catch up
-// to the cluster's primary; if we restart the next host before the
-// previous peer has fully recovered, we collapse quorum and leave the
-// database without a writable primary. That deadlocks the controller
-// (which needs to write to postgres to schedule any new jobs), which then
-// can't reschedule a replacement peer on the restarted host either.
+// This is critical between rolling daemon restarts. App job containers
+// normally survive flynn-host exiting (systemd KillMode=process), but
+// discoverd registration, sirenia failover, and controller scheduling
+// still need time to settle. Restarting the next host before postgres
+// and the scheduler have recovered can leave the cluster unable to
+// schedule replacement peers on the restarted host.
 //
 // On success returns the latest service status map. On timeout returns
 // an error describing which services are still unhealthy.

@@ -1721,7 +1721,8 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 			continue
 		}
 		if err := <-readySignals[j.Job.ID]; err != nil {
-			// log error
+			log.Error("failed to reconnect to container after restore", "job.id", j.Job.ID, "err", err)
+			l.State.SetStatusFailed(j.Job.ID, err)
 			delete(readySignals, j.Job.ID)
 			continue
 		}
