@@ -1,7 +1,6 @@
 package updaterdeploy
 
 import (
-	"strings"
 	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
@@ -12,22 +11,48 @@ const (
 	// Poll discoverd until a sirenia service leader appears after redeploy.
 	sireniaDiscoverdLeaderMaxAttempts = 60
 	sireniaDiscoverdLeaderPollDelay   = 5 * time.Second
-
-	maxTransientDeployUnsettledAttempts = 24
-	transientDeployRetryDelay           = 10 * time.Second
 )
 
 // SireniaApplianceServices lists discoverd service names for sirenia-managed
 // database appliances updated during cluster upgrades.
 var SireniaApplianceServices = []string{"postgres", "mariadb", "mongodb"}
 
+// optionalSireniaAppliances are database appliances that bootstrap with zero
+// database peers (API-only) and may never register discoverd instances until
+// an operator scales the formation up.
+var optionalSireniaAppliances = map[string]bool{
+	"mariadb": true,
+	"mongodb": true,
+}
+
+// skipOptionalSireniaLeaderWait reports whether waiting for leader.<service>.discoverd
+// can be skipped because the optional appliance has no database peers registered.
+// Postgres is never skipped: a transient empty instance set during failover or
+// rolling restart must still be waited out.
+func skipOptionalSireniaLeaderWait(service string, instanceCount int, instancesErr error) bool {
+	if !optionalSireniaAppliances[service] {
+		return false
+	}
+	return instancesErr != nil || instanceCount == 0
+}
+
 // WaitSireniaLeaderStable blocks until discoverd reports a leader for service,
 // or retries are exhausted with a warning. After redeploying a sirenia appliance
 // there is typically a gap where leader.<service>.discoverd returns NXDOMAIN;
 // controller jobs and follow-on deploys rely on it, so callers should wait for
 // the leader slot to repopulate before continuing.
+//
+// Optional appliances (mariadb, mongodb) deployed with zero database processes
+// never register peers in discoverd; waiting would always time out (~5 minutes).
 func WaitSireniaLeaderStable(service string, log log15.Logger) {
 	svc := discoverd.NewService(service)
+
+	instances, err := svc.Instances()
+	if skipOptionalSireniaLeaderWait(service, len(instances), err) {
+		log.Info("skipping sirenia discoverd leader wait (optional appliance has no database peers)",
+			"service", service)
+		return
+	}
 
 	for attempt := 1; attempt <= sireniaDiscoverdLeaderMaxAttempts; attempt++ {
 		inst, err := svc.Leader()
@@ -66,37 +91,3 @@ func WaitSireniaApplianceLeadersStable(log log15.Logger) {
 		WaitSireniaLeaderStable(service, log.New("service", service))
 	}
 }
-
-// ShouldRetryAfterUnsettledDiscoverdLeader returns whether a failed system-app
-// deploy looks like transient service-discovery / sirenia fallout (for
-// example leader.postgres.discoverd not yet propagated) rather than a
-// permanent scheduler error.
-func ShouldRetryAfterUnsettledDiscoverdLeader(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	if strings.Contains(msg, "sirenia") {
-		return true
-	}
-	// Postgres / other sirenia appliance leader DNS propagation
-	if strings.Contains(msg, "leader.postgres.discoverd") ||
-		strings.Contains(msg, "postgres.discoverd") ||
-		strings.Contains(msg, "leader.mariadb.discoverd") ||
-		strings.Contains(msg, "leader.mongodb.discoverd") ||
-		strings.Contains(msg, "leader.maria.discoverd") {
-		return true
-	}
-	// e.g. "lookup leader.postgres.discoverd: no such host"
-	if strings.Contains(msg, "no such host") && strings.Contains(msg, "postgres") {
-		return true
-	}
-	return false
-}
-
-// MaxTransientDeployUnsettledAttempts is the retry budget for DeployAppRelease
-// when ShouldRetryAfterUnsettledDiscoverdLeader matches.
-func MaxTransientDeployUnsettledAttempts() int { return maxTransientDeployUnsettledAttempts }
-
-// TransientDeployRetryDelay is the sleep between those retries.
-func TransientDeployRetryDelay() time.Duration { return transientDeployRetryDelay }

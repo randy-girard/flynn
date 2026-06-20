@@ -6,10 +6,27 @@ import (
 	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/inconshreveable/log15"
 )
+
+// isControllerPlacedJob reports whether a job was placed by the controller
+// (directly or via the scheduler). Controller jobs carry flynn-controller.*
+// metadata keys; FLYNN_APP_ID lives in Config.Env, not Metadata.
+func isControllerPlacedJob(job *host.Job) bool {
+	if job == nil {
+		return false
+	}
+	if job.Metadata != nil && job.Metadata["flynn-controller.app"] != "" {
+		return true
+	}
+	if job.Config.Env != nil && job.Config.Env["FLYNN_APP_ID"] != "" {
+		return true
+	}
+	return false
+}
 
 // hostRestartSettleOptions controls post-restart waiting between rolling
 // flynn-host daemon restarts on a multi-node cluster.

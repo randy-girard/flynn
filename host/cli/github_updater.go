@@ -489,22 +489,18 @@ func waitForClusterSize(client *cluster.Client, expected int, timeout time.Durat
 }
 
 // waitForJobsPlacedOnHost polls the freshly-restarted host's job list until
-// the scheduler has placed at least one app job onto it (i.e. a job with a
-// FLYNN_APP_ID set in its metadata). This catches the failure mode where
-// status-web reports the cluster healthy and the host is up in discoverd,
-// but the controller-scheduler has not yet observed the host coming back up
-// (we have seen ~4 minute gaps in production), so no jobs are scheduled
-// back onto it before the next host's restart begins.
+// the scheduler has placed at least one controller-managed job onto it (i.e.
+// a job with flynn-controller.app in its metadata). This catches the failure
+// mode where status-web reports the cluster healthy and the host is up in
+// discoverd, but the controller-scheduler has not yet observed the host
+// coming back up (we have seen ~4 minute gaps in production), so no jobs are
+// scheduled back onto it before the next host's restart begins.
 //
 // The wait is intentionally non-fatal: the scheduler may legitimately have
 // nothing to place on a particular host (e.g. a single-replica formation
 // pinned elsewhere via tags), and we'd rather emit a warning than abort an
 // otherwise-successful rolling update. The inter-host settle delay that
 // follows still gives the scheduler a final chance to catch up.
-//
-// "Bootstrap" jobs started directly by the host daemon (flannel, discoverd)
-// don't carry the controller's FLYNN_APP_ID metadata key, so they don't
-// satisfy this check by themselves.
 func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.Logger) {
 	if timeout <= 0 {
 		return
@@ -520,14 +516,7 @@ func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.L
 			lastJobCount = len(jobs)
 			lastAppJobCount = 0
 			for _, job := range jobs {
-				if job.Job == nil || job.Job.Metadata == nil {
-					continue
-				}
-				// FLYNN_APP_ID is set by the controller for every
-				// app/system-app job it places; bootstrap jobs
-				// (flannel, discoverd) started by the host
-				// daemon's resurrection logic don't have it.
-				if job.Job.Metadata["FLYNN_APP_ID"] != "" {
+				if isControllerPlacedJob(job.Job) {
 					lastAppJobCount++
 				}
 			}
@@ -1256,12 +1245,16 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
-	if skipDeploy && !force {
+	skip, forceConfigMigration := shouldSkipUnchangedDeploy(skipDeploy, force, release, updateFn)
+	if skip {
 		return errDeploySkipped{"app is already using latest images"}
 	}
-	if skipDeploy {
+	if skipDeploy && forceConfigMigration {
+		log.Info("forcing redeploy with matching image manifest for release config migration", "manifest.id", image.Manifest().ID())
+	} else if skipDeploy && force {
 		log.Info("forcing redeploy with matching image manifest", "manifest.id", image.Manifest().ID())
 	}
+	log.Info("creating artifact for deploy", "artifact.id", image.ID)
 	if err := client.CreateArtifact(image); err != nil {
 		log.Error("error creating artifact", "err", err)
 		return err
@@ -1271,10 +1264,12 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	if updateFn != nil {
 		updateFn(release)
 	}
+	log.Info("creating release for deploy")
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		log.Error("error creating new release", "err", err)
 		return err
 	}
+	log.Info("waiting for deployment to complete", "release.id", release.ID, "timeout", deployTimeout)
 	timeoutCh := make(chan struct{})
 	time.AfterFunc(deployTimeout, func() { close(timeoutCh) })
 	if err := client.DeployAppRelease(app.ID, release.ID, timeoutCh); err != nil {
