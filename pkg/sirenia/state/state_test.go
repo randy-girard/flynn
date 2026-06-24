@@ -813,6 +813,18 @@ func TestSingletonSecond(t *testing.T) {
 		Freeze:     state.NewFreezeDetails("singleton"),
 		Singleton:  true,
 	}
+	gen2 := &state.State{
+		Generation: 2,
+		Primary:    node(1, 2),
+		InitWAL:    xlog.Zero(),
+		Singleton:  true,
+		Freeze:     state.NewFreezeDetails("singleton primary replaced"),
+	}
+	gen2pg := &simulator.DbInfo{
+		Online:  true,
+		Config:  &state.Config{Role: state.RolePrimary},
+		CurXLog: "0/0000000A",
+	}
 
 	runSteps(t, true, []step{
 		// Test that we don't do anything if we start up in singleton mode when
@@ -834,19 +846,23 @@ func TestSingletonSecond(t *testing.T) {
 			},
 		},
 
-		// Check that we don't do anything even if the primary fails
-		{Cmd: "echo test: do nothing even if primary fails"},
+		// Check that we take over the singleton cluster when the recorded
+		// primary disappears from discoverd. Without this path a singleton
+		// sirenia deploy hangs indefinitely once the old primary stops: the
+		// freeze short-circuits the state machine, and unassigned peers
+		// otherwise have no promotion route.
+		{Cmd: "echo test: take over the singleton if the primary disappears"},
 		{Cmd: "rmpeer node2"},
 		{
 			Cmd: "peer",
 			Check: &simulator.PeerSimInfo{
 				Peer: &state.PeerInfo{
 					ID:    node1ID,
-					Role:  state.RoleUnassigned,
-					State: gen1,
+					Role:  state.RolePrimary,
+					State: gen2,
 					Peers: []*discoverd.Instance{node(1, 2)},
 				},
-				Db: pgOffline,
+				Db: gen2pg,
 			},
 		},
 	})
@@ -2160,6 +2176,133 @@ func TestRemovedSync(t *testing.T) {
 					},
 					CurXLog: xlog.Zero(),
 				},
+			},
+		},
+	})
+}
+
+
+// TestConfigEqualPeerIdentity verifies that Config.Equal and
+// Config.IsNewDownstream distinguish two peers that share an address (and
+// therefore share the address-derived discoverd.Instance.ID) but have
+// different appliance-level identities in Meta. This is the case after a
+// rolling restart that reuses the same flannel IP for the replacement
+// appliance job, and the previous implementation of peersEqual treated the
+// new peer as the old one, causing the primary to keep targeting a stale
+// synchronous standby name.
+func TestConfigEqualPeerIdentity(t *testing.T) {
+	mkPeer := func(addr, id string) *discoverd.Instance {
+		inst := &discoverd.Instance{
+			Addr:  addr,
+			Proto: "tcp",
+			Meta:  map[string]string{simIdKey: id},
+		}
+		inst.ID = md5sum(inst.Proto + "-" + inst.Addr)
+		return inst
+	}
+
+	primary := mkPeer("10.0.0.1:5432", "primary-id")
+	oldSync := mkPeer("10.0.0.2:5432", "old-sync-id")
+	newSync := mkPeer("10.0.0.2:5432", "new-sync-id") // same addr, new identity
+
+	if oldSync.ID != newSync.ID {
+		t.Fatalf("test precondition broken: old and new sync should share discoverd ID; got %q vs %q", oldSync.ID, newSync.ID)
+	}
+
+	oldCfg := &state.Config{Role: state.RolePrimary, Downstream: oldSync}
+	newCfg := &state.Config{Role: state.RolePrimary, Downstream: newSync}
+
+	if oldCfg.Equal(newCfg) {
+		t.Errorf("Config.Equal returned true for peers with same addr but different Meta[%s]; expected false", simIdKey)
+	}
+	if !oldCfg.IsNewDownstream(newCfg) {
+		t.Errorf("Config.IsNewDownstream returned false for downstream replacement at the same address; expected true")
+	}
+
+	// Upstream replacement at the same address should also compare unequal.
+	oldUp := &state.Config{Role: state.RoleSync, Upstream: oldSync}
+	newUp := &state.Config{Role: state.RoleSync, Upstream: newSync}
+	if oldUp.Equal(newUp) {
+		t.Errorf("Config.Equal returned true for upstream peers with same addr but different Meta[%s]; expected false", simIdKey)
+	}
+
+	// Sanity: identical peers must still compare equal.
+	samePrimary := &state.Config{Role: state.RolePrimary, Downstream: oldSync}
+	if !oldCfg.Equal(samePrimary) {
+		t.Errorf("Config.Equal returned false for identical configs; expected true")
+	}
+
+	// Sanity: nil-downstream (singleton) case must still short-circuit equal.
+	sng1 := &state.Config{Role: state.RolePrimary, Upstream: primary}
+	sng2 := &state.Config{Role: state.RolePrimary, Upstream: primary}
+	if !sng1.Equal(sng2) {
+		t.Errorf("Config.Equal returned false for singleton-style configs with nil downstream; expected true")
+	}
+}
+
+// TestDeposedPeerAutoRejoin verifies that when a deposed peer re-registers in
+// discoverd the primary removes it from Deposed and adds it as an async, so
+// clusters recover after rolling restarts without updater-side repair.
+func TestDeposedPeerAutoRejoin(t *testing.T) {
+	gen1 := &state.State{
+		Generation: 2,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Deposed:    []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Rejoined := &state.State{
+		Generation: 2,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	peersBefore := []*discoverd.Instance{node(1, 1), node(2, 2)}
+	peersAfter := []*discoverd.Instance{node(1, 1), node(2, 2), node(3, 3)}
+
+	pgPrimaryDeposed := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: node(2, 2),
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgPrimaryRejoined := pgPrimaryDeposed
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap"},
+		{Cmd: "rmpeer node3"},
+		{Cmd: "setClusterState", JSON: gen1},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: peersBefore,
+				},
+				Db: pgPrimaryDeposed,
+			},
+		},
+		{Cmd: "echo test: deposed peer rejoins discoverd"},
+		{Cmd: "addpeer node3"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1Rejoined,
+					Peers: peersAfter,
+				},
+				Db: pgPrimaryRejoined,
 			},
 		},
 	})

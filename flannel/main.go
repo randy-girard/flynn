@@ -32,14 +32,15 @@ import (
 )
 
 type CmdLineOpts struct {
-	help         bool
-	version      bool
-	ipMasq       bool
-	subnetFile   string
-	iface        string
-	notifyURL    string
-	discoverdURL string
-	httpPort     string
+	help            bool
+	version         bool
+	ipMasq          bool
+	subnetFile      string
+	iface           string
+	notifyURL       string
+	discoverdURL    string
+	httpPort        string
+	preferredSubnet string
 }
 
 var opts CmdLineOpts
@@ -53,6 +54,7 @@ func init() {
 	flag.BoolVar(&opts.ipMasq, "ip-masq", false, "setup IP masquerade rule for traffic destined outside of overlay network")
 	flag.BoolVar(&opts.help, "help", false, "print this message")
 	flag.BoolVar(&opts.version, "version", false, "print version and exit")
+	flag.StringVar(&opts.preferredSubnet, "preferred-subnet", "", "preferred subnet (CIDR) to reuse if available; keeps bridge IP stable across reboots")
 }
 
 // flagsFromEnv parses all registered flags in the given flagset,
@@ -353,6 +355,16 @@ func main() {
 	if err != nil {
 		log.Info(err)
 		os.Exit(1)
+	}
+
+	// If a preferred subnet is configured (typically supplied by
+	// flannel-wrapper from the host's persisted NetworkConfig), ask the
+	// subnet manager to prefer it when acquiring a lease so the bridge IP
+	// stays stable across reboots.
+	if opts.preferredSubnet != "" {
+		if err := sm.SetPreferredSubnet(opts.preferredSubnet); err != nil {
+			log.Errorf("invalid -preferred-subnet %q: %v (ignoring)", opts.preferredSubnet, err)
+		}
 	}
 
 	// Register for SIGINT and SIGTERM and wait for one of them to arrive

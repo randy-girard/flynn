@@ -90,13 +90,15 @@ func (vb *VXLANBackend) Init(extIface *net.Interface, extIP net.IP, httpPort str
 		}
 	}
 
-	// vxlan's subnet is that of the whole overlay network (e.g. /16)
-	// and not that of the individual host (e.g. /24)
+	// Assign only a /32 on flannel.1. Using the full overlay prefix (e.g. /16)
+	// makes every container IP appear local on flannel.1, so VXLAN-decapsulated
+	// packets destined for flynnbr0 containers are delivered on flannel.1 and
+	// dropped instead of being forwarded to the bridge.
 	vxlanNet := ip.IP4Net{
 		IP:        sn.IP,
-		PrefixLen: vb.sm.GetConfig().Network.PrefixLen,
+		PrefixLen: 32,
 	}
-	if err = vb.dev.Configure(vxlanNet); err != nil {
+	if err = vb.dev.Configure(vxlanNet, vb.sm.GetConfig().Network); err != nil {
 		return nil, err
 	}
 

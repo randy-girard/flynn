@@ -16,6 +16,21 @@ import (
 	"github.com/flynn/flynn/pkg/sirenia/state"
 )
 
+// ProcessIDKey returns the discoverd Meta key holding appliance-level peer
+// identity for a sirenia process type.
+func ProcessIDKey(processType string) string {
+	switch processType {
+	case "postgres":
+		return "POSTGRES_ID"
+	case "mariadb":
+		return "MARIADB_ID"
+	case "mongodb":
+		return "MONGODB_ID"
+	default:
+		return ""
+	}
+}
+
 type DatabaseInfo struct {
 	Config           *state.Config       `json:"config"`
 	Running          bool                `json:"running"`
@@ -65,10 +80,26 @@ func (c *Client) Stop() error {
 	return c.c.Post("/stop", nil, nil)
 }
 
-func (c *Client) WaitForReplSync(downstream *discoverd.Instance, timeout time.Duration) error {
-	return c.waitFor(func(status *Status) bool {
-		return status.Database != nil && status.Database.SyncedDownstream != nil && status.Database.SyncedDownstream.ID == downstream.ID
-	}, timeout)
+func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, timeout time.Duration) error {
+	return c.waitFor(SyncedWith(downstream, idKey), timeout)
+}
+
+// SyncedWith returns a predicate that reports whether replication has caught up
+// with expected. When idKey is set, appliance Meta identity is compared instead
+// of discoverd Instance.ID so replacements at the same address are detected
+// correctly.
+func SyncedWith(expected *discoverd.Instance, idKey string) func(*Status) bool {
+	return func(status *Status) bool {
+		if status.Database == nil || status.Database.SyncedDownstream == nil {
+			return false
+		}
+		synced := status.Database.SyncedDownstream
+		if idKey != "" && expected != nil && expected.Meta != nil && synced.Meta != nil {
+			id := expected.Meta[idKey]
+			return id != "" && id == synced.Meta[idKey]
+		}
+		return synced.ID == expected.ID
+	}
 }
 
 func (c *Client) WaitForReadWrite(timeout time.Duration) error {

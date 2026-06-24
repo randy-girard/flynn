@@ -194,7 +194,7 @@ func testSireniaDeploy(client controller.Client, disc *discoverd.Client, t *c.C,
 	// wait for the primary to indicate downstream replication sync
 	debug(t, "waiting for primary to indicate downstream replication sync")
 	sireniaClient := sc.NewClient(sireniaState.Primary.Addr)
-	t.Assert(sireniaClient.WaitForReplSync(sireniaState.Sync, 1*time.Minute), c.IsNil)
+	t.Assert(sireniaClient.WaitForReplSync(sireniaState.Sync, sc.ProcessIDKey(d.db.appName), 1*time.Minute), c.IsNil)
 
 	// connect to the db and run any initialisation required to later test writes
 	debug(t, "initialising db")

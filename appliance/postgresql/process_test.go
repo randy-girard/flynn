@@ -22,6 +22,10 @@ type PostgresSuite struct{}
 
 var _ = Suite(&PostgresSuite{})
 
+func (PostgresSuite) TestUpstreamTimeoutBudget(c *C) {
+	c.Assert(upstreamTimeout >= 60*time.Second, Equals, true)
+}
+
 func (PostgresSuite) TestSingletonPrimary(c *C) {
 	cfg := Config{
 		ID:        "node1",

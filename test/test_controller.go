@@ -25,7 +25,7 @@ import (
 	"github.com/flynn/flynn/pkg/random"
 	c "github.com/flynn/go-check"
 	"github.com/golang/protobuf/proto"
-	"github.com/golang/protobuf/ptypes/empty"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 type ControllerSuite struct {
@@ -672,7 +672,7 @@ func (s *ControllerSuite) TestGRPCWeb(t *c.C) {
 
 	// check we can invoke the Status method
 	var (
-		req empty.Empty
+		req emptypb.Empty
 		res api.StatusResponse
 	)
 	t.Assert(client.Invoke("flynn.api.v1.Controller/Status", &req, &res), c.IsNil)

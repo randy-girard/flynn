@@ -226,6 +226,9 @@ func runGitCredentials(args *docopt.Args) error {
 			return fmt.Errorf("error getting access token: %s", err)
 		}
 		user = t.TokenType
+		if user == "" || strings.EqualFold(user, "bearer") {
+			user = "Bearer"
+		}
 		password = t.AccessToken
 	}
 

@@ -90,7 +90,7 @@ func ResetOnMigration(db *DB, log log15.Logger, doneCh chan struct{}) {
 	for {
 		listener, err := db.Listen("schema_migrations", log)
 		if err != nil {
-			time.Sleep(5 * time.Second)
+			time.Sleep(3 * time.Second)
 			continue
 		}
 	outer:
@@ -98,8 +98,8 @@ func ResetOnMigration(db *DB, log log15.Logger, doneCh chan struct{}) {
 			select {
 			case n, ok := <-listener.Notify:
 				if !ok {
-					log.Warn("migration listener disconnected, reconnecting in 5 seconds")
-					time.Sleep(5 * time.Second)
+					log.Warn("migration listener disconnected, reconnecting in 3 seconds")
+					time.Sleep(3 * time.Second)
 					listener.Close()
 					break outer
 				}

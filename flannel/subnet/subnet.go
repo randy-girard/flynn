@@ -49,9 +49,10 @@ type SubnetManager struct {
 	leaseExp  time.Time
 	lastIndex uint64
 
-	mtx     sync.RWMutex
-	myLease SubnetLease
-	leases  []SubnetLease
+	mtx             sync.RWMutex
+	myLease         SubnetLease
+	leases          []SubnetLease
+	preferredSubnet *ip.IP4Net
 }
 
 type EventType int
@@ -94,6 +95,24 @@ func (sm *SubnetManager) Leases() []SubnetLease {
 	res := make([]SubnetLease, len(sm.leases))
 	copy(res, sm.leases)
 	return res
+}
+
+// SetPreferredSubnet records a CIDR the manager should attempt to claim before
+// falling back to random allocation. The input is normalised to the network
+// address so callers can pass either "100.100.28.0/24" or "100.100.28.1/24".
+// When set, tryAcquireLease will prefer this subnet over findLeaseByIP and
+// allocateSubnet, unless the subnet is already held by a different PublicIP.
+func (sm *SubnetManager) SetPreferredSubnet(cidr string) error {
+	_, n, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return err
+	}
+	net4 := ip.FromIPNet(n).Network()
+	sm.mtx.Lock()
+	sm.preferredSubnet = &net4
+	sm.mtx.Unlock()
+	log.Infof("Preferred subnet set to %s", net4)
+	return nil
 }
 
 func (sm *SubnetManager) AcquireLease(attrs *LeaseAttrs, cancel chan bool) (ip.IP4Net, error) {
@@ -144,6 +163,34 @@ func (sm *SubnetManager) tryAcquireLease(extIP ip.IP4, attrs *LeaseAttrs) (ip.IP
 	if err != nil {
 		log.Errorf("marshal failed: %#v, %v", attrs, err)
 		return ip.IP4Net{}, err
+	}
+
+	// If a preferred subnet was configured, try to claim it before any
+	// other path so the bridge IP remains stable across reboots. Only
+	// step aside if the subnet is currently leased to a different host.
+	if sm.preferredSubnet != nil {
+		pref := *sm.preferredSubnet
+		var conflict *SubnetLease
+		for i := range sm.leases {
+			if sm.leases[i].Network.Equal(pref) {
+				if sm.leases[i].Attrs.PublicIP != extIP {
+					conflict = &sm.leases[i]
+				}
+				break
+			}
+		}
+		if conflict != nil {
+			log.Warningf("preferred subnet %s already leased to %s; falling back", pref, conflict.Attrs.PublicIP)
+		} else {
+			resp, err := sm.registry.UpdateSubnet(pref.StringSep(".", "-"), string(attrBytes), subnetTTL)
+			if err != nil {
+				return ip.IP4Net{}, err
+			}
+			sm.myLease.Network = pref
+			sm.myLease.Attrs = *attrs
+			sm.leaseExp = *resp.Expiration
+			return pref, nil
+		}
 	}
 
 	// try to reuse a subnet if there's one that matches our IP

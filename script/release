@@ -30,6 +30,8 @@ VERSION=""
 TARGET="tarball"  # Default to tarball for safe testing
 GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 DRY_RUN=false
+DRAFT=false
+PRERELEASE=false
 BUILD_DIR="${ROOT}/build/bin"
 OUTPUT_DIR=""
 
@@ -45,6 +47,8 @@ OPTIONS:
   --version VERSION           Version for release (e.g., v20240127.0)
   --output DIR                Output directory for tarball [default: ./build/release]
   --github-repo OWNER/REPO    GitHub repository [default: randy-girard/flynn]
+  --draft                     Create the GitHub release as a draft (github target only)
+  --prerelease                Mark the GitHub release as a prerelease (github target only)
   --dry-run                   Show what would be packaged without creating release
 
 TARGETS:
@@ -91,6 +95,14 @@ while [[ $# -gt 0 ]]; do
     --github-repo)
       GITHUB_REPO="$2"
       shift 2
+      ;;
+    --draft)
+      DRAFT=true
+      shift
+      ;;
+    --prerelease)
+      PRERELEASE=true
+      shift
       ;;
     --dry-run)
       DRY_RUN=true
@@ -417,6 +429,8 @@ create_tarball() {
   echo "To install on a server:"
   echo "  1. Upload the tarball:  scp ${OUTPUT_DIR}/${TARBALL_NAME} root@server:/tmp/"
   echo "  2. Extract and install: ssh root@server 'cd /tmp && tar xzf ${TARBALL_NAME} && cd ${FOLDER_NAME} && ./install-flynn'"
+  echo "  3. Or install from the tarball without extracting first (GitHub or tarball install script):"
+  echo "       sudo bash install-flynn --tarball /tmp/${TARBALL_NAME}"
   echo ""
   echo "After testing, create GitHub release with:"
   echo "  ./script/release --target github --version ${VERSION}"
@@ -477,8 +491,18 @@ create_github_release() {
   info "Pushing to GitHub Release ${VERSION}..."
   COMPARE_RANGE="${PREVIOUS_TAG:-initial}...${VERSION}"
   CHANGELOG_URL="https://github.com/${GITHUB_REPO}/compare/${COMPARE_RANGE}"
+
+  GH_RELEASE_FLAGS=()
+  if $DRAFT; then
+    GH_RELEASE_FLAGS+=(--draft)
+  fi
+  if $PRERELEASE; then
+    GH_RELEASE_FLAGS+=(--prerelease)
+  fi
+
   gh release create "${VERSION}" \
     --repo "${GITHUB_REPO}" \
+    "${GH_RELEASE_FLAGS[@]}" \
     --title "Flynn ${VERSION}" \
     --notes "## Flynn ${VERSION}
 

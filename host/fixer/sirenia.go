@@ -66,6 +66,20 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 		return fmt.Errorf("no primary in sirenia state")
 	}
 
+	if len(state.Deposed) > 0 {
+		log.Info("clearing deposed peers from sirenia state so they can rejoin as asyncs",
+			"deposed_count", len(state.Deposed))
+		state.Deposed = nil
+		data, err := json.Marshal(&state)
+		if err != nil {
+			return fmt.Errorf("error encoding repaired sirenia state: %s", err)
+		}
+		meta.Data = data
+		if err := service.SetMeta(meta); err != nil {
+			return fmt.Errorf("error writing repaired sirenia state: %s", err)
+		}
+	}
+
 	log.Info("getting primary job info", "job.id", state.Primary.Meta["FLYNN_JOB_ID"])
 	primaryJob, primaryHost, err := f.GetJob(state.Primary.Meta["FLYNN_JOB_ID"])
 	if err != nil {

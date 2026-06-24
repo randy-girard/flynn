@@ -16,13 +16,13 @@ import (
 	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/flynn/pkg/random"
 	. "github.com/flynn/go-check"
-	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/jackc/pgx"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 const bufSize = 1024 * 1024
@@ -94,8 +94,7 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 	s.grpcNoAuth = grpcClient()
 
 	// Wait for the server to start
-	var req empty.Empty
-	if _, err := s.grpc.Status(context.Background(), &req); err != nil {
+	if _, err := s.grpc.Status(context.Background(), &emptypb.Empty{}); err != nil {
 		c.Fatal(err)
 	}
 }

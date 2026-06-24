@@ -146,16 +146,22 @@ main() {
 
   repo_url="${repo_url:="flynn/flynn"}"
 
-  local packages=("iptables" "zfsutils-linux")
-
-  if $install_ntp; then
-    packages+=(
-      "ntp"
-    )
-  fi
+  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip (modern fallback / minimal images)
+  local packages=("iptables" "zfsutils-linux" "net-tools" "iproute2")
 
   info "installing runtime dependencies"
-  run apt-get install --yes ${packages[@]}
+  run apt-get update
+  run apt-get install --yes "${packages[@]}"
+
+  if $install_ntp; then
+    info "installing ntp (optional)..."
+    if DEBIAN_FRONTEND=noninteractive apt-get install --yes ntp; then
+      info "ntp package installed"
+    else
+      warn "could not install ntp (common on Ubuntu 24.04+ when systemd-timesyncd or ntpsec is present); continuing without ntp — ensure the host keeps accurate time"
+    fi
+  fi
+
   info "loading zfs kernel module"
   run modprobe zfs
 

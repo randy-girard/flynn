@@ -118,6 +118,7 @@ var preparedStatements = map[string]string{
 	"managed_certificate_select_by_route_id": managedCertificateSelectByRouteIDQuery,
 	"managed_certificate_insert":             managedCertificateInsertQuery,
 	"managed_certificate_update":             managedCertificateUpdateQuery,
+	"managed_certificate_update_route_id":    managedCertificateUpdateRouteIDQuery,
 	"managed_certificate_delete":             managedCertificateDeleteQuery,
 	"managed_certificate_list_expiring":      managedCertificateListExpiringQuery,
 	"acme_config_select":                     acmeConfigSelectQuery,
@@ -733,6 +734,10 @@ UPDATE managed_certificates SET
 	expires_at = $6,
 	last_error = $7,
 	last_error_at = $8
+WHERE id = $1 AND deleted_at IS NULL
+RETURNING updated_at`
+	managedCertificateUpdateRouteIDQuery = `
+UPDATE managed_certificates SET route_id = $2
 WHERE id = $1 AND deleted_at IS NULL
 RETURNING updated_at`
 	managedCertificateDeleteQuery = `

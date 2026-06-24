@@ -8,9 +8,10 @@ import (
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/controller/worker/types"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/client"
+	discoverd "github.com/flynn/flynn/discoverd/client"
+	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
+	"github.com/inconshreveable/log15"
 )
 
 func (d *DeployJob) deploySirenia() (err error) {
@@ -43,10 +44,31 @@ func (d *DeployJob) deploySirenia() (err error) {
 		return errors.New("sirenia process type not present in new release")
 	}
 
+	singletonRelease := func() bool {
+		if d.oldRelease != nil && d.oldRelease.Env["SINGLETON"] == "true" {
+			return true
+		}
+		return d.newRelease.Env["SINGLETON"] == "true"
+	}()
+
 	// if sirenia process type is scaled to 0, skip and deploy non-sirenia processes
 	if d.Processes[processType] == 0 {
 		log.Info("sirenia process type scale = 0, skipping")
 		return d.deployOneByOne()
+	}
+	// A single database peer runs in sirenia "singleton" mode. The HA rolling
+	// strategy below requires primary, sync, and async peers; for a single
+	// node we have to stop the old peer before starting the new one so the
+	// data volume is released and can be adopted by the new release.
+	if d.Processes[processType] == 1 {
+		log.Info("sirenia process type scale = 1, using singleton deployment")
+		return d.deploySireniaSingleton(processType, log)
+	}
+	// Bootstrap or legacy clusters can have SINGLETON=true while formation
+	// counts still reflect HA; never use the HA rolling path in that case.
+	if singletonRelease {
+		log.Info("sirenia SINGLETON=true in release env, using singleton deployment")
+		return d.deploySireniaSingleton(processType, log)
 	}
 
 	events := make(chan *discoverd.Event)
@@ -96,14 +118,14 @@ loop:
 
 	// abort if in singleton mode or not deploying from a clean state
 	if state.Singleton {
-		return loggedErr("sirenia cluster in singleton mode")
+		log.Info("sirenia discoverd state is singleton, using singleton deployment")
+		return d.deploySireniaSingleton(processType, log)
 	}
-	if len(state.Async) == 0 {
-		return loggedErr("sirenia cluster in unhealthy state (has no asyncs)")
+	readyState, err := d.waitForSireniaClusterReady(proc.Service, processType, &state, events, stream, log)
+	if err != nil {
+		return loggedErr("%s", err.Error())
 	}
-	if 2+len(state.Async) != d.Processes[processType] {
-		return loggedErr("sirenia cluster in unhealthy state (too few asyncs)")
-	}
+	state = *readyState
 
 	stopInstance := func(inst *discoverd.Instance) error {
 		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"])
@@ -113,7 +135,7 @@ loop:
 			JobState:  ct.JobStateStopping,
 			JobType:   processType,
 		}
-		peer := client.NewClient(inst.Addr)
+		peer := sireniaclient.NewClient(inst.Addr)
 		log.Info("stopping peer")
 		if err := peer.Stop(); err != nil {
 			log.Error("error stopping peer", "err", err)
@@ -192,8 +214,8 @@ loop:
 	}
 	waitForSync := func(upstream, downstream *discoverd.Instance) error {
 		log.Info("waiting for replication sync", "upstream", upstream.Addr, "downstream", downstream.Addr)
-		client := client.NewClient(upstream.Addr)
-		if err := client.WaitForReplSync(downstream, 3*time.Minute); err != nil {
+		sc := sireniaclient.NewClient(upstream.Addr)
+		if err := sc.WaitForReplSync(downstream, sireniaclient.ProcessIDKey(processType), 3*time.Minute); err != nil {
 			log.Error("error waiting for replication sync", "err", err)
 			return err
 		}
@@ -201,8 +223,8 @@ loop:
 	}
 	waitForReadWrite := func(inst *discoverd.Instance) error {
 		log.Info("waiting for read-write", "inst", inst.Addr)
-		client := client.NewClient(inst.Addr)
-		if err := client.WaitForReadWrite(3 * time.Minute); err != nil {
+		sc := sireniaclient.NewClient(inst.Addr)
+		if err := sc.WaitForReadWrite(3 * time.Minute); err != nil {
 			log.Error("error waiting for read-write", "err", err)
 			return err
 		}
@@ -271,4 +293,131 @@ loop:
 
 	// do a one-by-one deploy for the other process types
 	return d.deployOneByOne()
+}
+
+// deploySireniaSingleton replaces a single sirenia peer by submitting both
+// formation changes (old release -> 0, new release -> target) while the
+// database is still up, then waiting for the new peer to register in
+// discoverd.
+//
+// The serial scaleOneDownOneUp path cannot be used here because the singleton
+// sirenia process is typically the controller's own datastore: once the
+// scheduler stops the old job, the controller can no longer persist scale
+// request or job state transitions, so waiting on the controller event stream
+// for confirmation of the scale-down hangs until the deploy times out. Both
+// PutFormation calls write to the formations table; the scheduler reads the
+// two events from its in-process stream in order and performs the swap (stop
+// old job -> release volume -> start new job which adopts the volume), and
+// discoverd is independent of the controller database.
+func (d *DeployJob) deploySireniaSingleton(processType string, log log15.Logger) error {
+	proc, ok := d.newRelease.Processes[processType]
+	if !ok {
+		return fmt.Errorf("sirenia process type %q not present in new release", processType)
+	}
+	if proc.Service == "" {
+		return fmt.Errorf("sirenia process type %q has no discoverd service", processType)
+	}
+
+	events := make(chan *discoverd.Event)
+	stream, err := discoverd.NewService(proc.Service).Watch(events)
+	if err != nil {
+		log.Error("error creating service discovery watcher", "service", proc.Service, "err", err)
+		return err
+	}
+	defer stream.Close()
+
+	// drain initial events until current so any pre-existing Up events for
+	// the old peer are absorbed before we start tracking the swap
+	timeout := time.After(d.timeout)
+waitCurrent:
+	for {
+		select {
+		case <-d.stop:
+			return worker.ErrStopped
+		case event, ok := <-events:
+			if !ok {
+				return fmt.Errorf("service event stream closed unexpectedly: %s", stream.Err())
+			}
+			if event.Kind == discoverd.EventKindCurrent {
+				break waitCurrent
+			}
+		case <-timeout:
+			return errors.New("timed out waiting for sirenia discoverd current event")
+		}
+	}
+
+	// submit both formation changes back-to-back while the database is
+	// still up so both writes are accepted by the controller before the
+	// scheduler kills the old peer
+	d.oldFormation.Processes[processType] = 0
+	log.Info("scaling old formation down", "release.id", d.OldReleaseID, "job.type", processType)
+	if err := d.client.PutFormation(d.oldFormation); err != nil {
+		log.Error("error scaling old formation down", "release.id", d.OldReleaseID, "err", err)
+		return err
+	}
+	d.deployEvents <- ct.DeploymentEvent{
+		ReleaseID: d.OldReleaseID,
+		JobState:  ct.JobStateStopping,
+		JobType:   processType,
+	}
+
+	d.newFormation.Processes[processType] = d.Processes[processType]
+	log.Info("scaling new formation up", "release.id", d.NewReleaseID, "job.type", processType, "count", d.Processes[processType])
+	if err := d.client.PutFormation(d.newFormation); err != nil {
+		log.Error("error scaling new formation up", "release.id", d.NewReleaseID, "err", err)
+		return err
+	}
+	d.deployEvents <- ct.DeploymentEvent{
+		ReleaseID: d.NewReleaseID,
+		JobState:  ct.JobStateStarting,
+		JobType:   processType,
+	}
+
+	// wait for the new peer to register in discoverd, which happens once
+	// the new job is started by the scheduler and the sirenia process
+	// reaches its running state on the adopted volume
+	timeout = time.After(d.timeout)
+	for {
+		select {
+		case <-d.stop:
+			return worker.ErrStopped
+		case event, ok := <-events:
+			if !ok {
+				return fmt.Errorf("service event stream closed unexpectedly: %s", stream.Err())
+			}
+			if event.Instance == nil || event.Instance.Meta == nil {
+				continue
+			}
+			if event.Kind == discoverd.EventKindDown &&
+				event.Instance.Meta["FLYNN_RELEASE_ID"] == d.OldReleaseID &&
+				event.Instance.Meta["FLYNN_PROCESS_TYPE"] == processType {
+				d.deployEvents <- ct.DeploymentEvent{
+					ReleaseID: d.OldReleaseID,
+					JobState:  ct.JobStateDown,
+					JobType:   processType,
+				}
+				continue
+			}
+			if event.Kind == discoverd.EventKindUp &&
+				event.Instance.Meta["FLYNN_RELEASE_ID"] == d.NewReleaseID &&
+				event.Instance.Meta["FLYNN_PROCESS_TYPE"] == processType {
+				log.Info("new sirenia peer registered", "addr", event.Instance.Addr)
+				d.deployEvents <- ct.DeploymentEvent{
+					ReleaseID: d.NewReleaseID,
+					JobState:  ct.JobStateUp,
+					JobType:   processType,
+				}
+				log.Info("waiting for new sirenia peer to accept writes", "addr", event.Instance.Addr)
+				if err := sireniaclient.NewClient(event.Instance.Addr).WaitForReadWrite(3 * time.Minute); err != nil {
+					return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
+				}
+				// proceed with non-sirenia process types now that
+				// postgres is back up and the controller can again
+				// persist scale state
+				return d.deployOneByOne()
+			}
+		case <-timeout:
+			return errors.New("timed out waiting for new sirenia peer to come up")
+		}
+	}
 }

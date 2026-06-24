@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,11 +28,52 @@ import (
 	"github.com/flynn/flynn/pkg/installsource"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
+	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
 	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
 )
+
+// Rolling-restart resilience knobs. Tunable via flags on `flynn-host update`
+// (see applyUpdateTimingFlags). Defaults reflect what is safe for a typical
+// 3-node cluster running postgres+mariadb+mongodb sirenia appliances:
+//
+//   - updateHealthTimeout bounds the per-host wait inside the rolling restart
+//     loop in updateRemoteBinaries. 10 minutes accommodates clusters where
+//     sirenia replication or postgres leader propagation through discoverd
+//     can take several minutes after a daemon restart; the previous 5-minute
+//     ceiling was too tight and caused rolling updates to abort with
+//     "cluster did not recover after restarting <host>" while the cluster
+//     was actually still settling.
+//
+//   - updateInterHostDelay is an additional fixed settle delay applied AFTER
+//     waitForClusterHealthy/waitForJobsPlacedOnHost succeed for one host, and
+//     BEFORE the next host's restart begins. The cluster status endpoint can
+//     return healthy a few seconds before the scheduler has fully processed
+//     the host-up event and started pushing AddJob requests; restarting the
+//     next host inside that window can collapse postgres quorum.
+//
+//   - updateWaitJobsTimeout caps the wait for the scheduler to actually
+//     re-place an app job onto the freshly restarted host. This catches the
+//     failure mode where the host is healthy and discoverable but the
+//     scheduler hasn't observed it yet, so no jobs are scheduled back. The
+//     wait is non-fatal: on timeout we log a warning and continue.
+var (
+	updateHealthTimeout   = 10 * time.Minute
+	updateInterHostDelay  = 30 * time.Second
+	updateWaitJobsTimeout = 3 * time.Minute
+)
+
+// clusterHostCount returns how many flynn-host peers are registered. If
+// discoverd cannot be queried, it returns a non-nil error.
+func clusterHostCount() (int, error) {
+	hosts, err := cluster.NewClient().Hosts()
+	if err != nil {
+		return 0, err
+	}
+	return len(hosts), nil
+}
 
 // runGitHubUpdate performs an update using GitHub Releases
 func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger) error {
@@ -42,6 +84,17 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	force := args.Bool["--force"]
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
+	allNodes := args.Bool["--all-nodes"]
+
+	if imagesOnly && !allNodes {
+		n, err := clusterHostCount()
+		if err != nil {
+			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
+		}
+		if n > 1 {
+			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		}
+	}
 
 	currentVersion := version.String()
 	log.Info("checking for updates", "repo", repo, "current_version", currentVersion)
@@ -77,6 +130,22 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	}
 
 	log.Info("updating to version", "version", release.TagName)
+
+	// Image rollout touches the whole cluster; require --all-nodes for multi-host,
+	// but a single registered host is always "all" peers.
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
+		}
+	}
+
+	// expectedHostCount is captured during the rolling binary update and
+	// passed to updateImages so the image-pull step can wait for the
+	// cluster to repopulate discoverd before fanning out, rather than
+	// silently targeting whichever subset of hosts has rejoined raft.
+	var expectedHostCount int
 
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
@@ -140,15 +209,41 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
 		}
 
-		// Propagate binaries to all other cluster nodes and restart their daemons
-		if err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log); err != nil {
-			return err
+		if allNodes {
+			// Wait for the cluster to settle after the local restart before
+			// touching remote hosts — same gates as the per-remote-host loop
+			// (health, discoverd host count, sirenia leaders, scheduler jobs).
+			if !args.Bool["--no-restart"] {
+				clusterClient := cluster.NewClient()
+				expectedHosts := expectedClusterHostCount(log)
+				if err := settleAfterHostRestart(hostRestartSettleOptions{
+					Log:               log,
+					ClusterClient:     clusterClient,
+					RestartedHost:     localClusterHost(log),
+					ExpectedHostCount: expectedHosts,
+					FatalClusterSize:  expectedHosts > 1,
+				}); err != nil {
+					return fmt.Errorf("cluster did not recover after local restart: %w", err)
+				}
+			}
+
+			n, err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log)
+			if err != nil {
+				return err
+			}
+			expectedHostCount = n
+		} else {
+			log.Info("skipping remote host binary updates (--all-nodes not set)")
+			fmt.Println("Other cluster hosts were not updated. Run flynn-host update on each node with the same version, then run flynn-host update --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
 		}
 	}
 
 	// Update container images and system apps unless --skip-images was specified
 	if !skipImages {
-		if err := updateImages(repo, configDir, release.TagName, "", log); err != nil {
+		if !rolloutCluster {
+			log.Info("skipping container images and system app rollout (local-only update)")
+			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
+		} else if err := updateImages(repo, configDir, release.TagName, "", force, expectedHostCount, log); err != nil {
 			return err
 		}
 	}
@@ -186,7 +281,7 @@ func restartDaemon(binDir string, log log15.Logger) (bool, error) {
 	localIPs := getLocalIPs()
 	for i := 0; i < 15; i++ {
 		time.Sleep(2 * time.Second)
-		if id := getDaemonID(localIPs, log); id != "" {
+		if id, _ := getDaemonID(localIPs, log); id != "" {
 			log.Info("daemon is responsive after restart", "daemon_id", id)
 			return true, nil
 		}
@@ -201,21 +296,40 @@ func restartDaemon(binDir string, log log15.Logger) (bool, error) {
 // at a time (rolling) to maintain cluster availability.
 // For GitHub updates, repo should be set and baseURL empty.
 // For tarball updates, baseURL should point to the temp HTTP server.
-func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRestart bool, log log15.Logger) error {
+//
+// It returns the expected cluster host count observed before the rolling
+// restart so the caller can gate later steps (e.g. image pulls) on the
+// cluster repopulating discoverd, rather than racing a partially-rejoined
+// raft state.
+func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRestart bool, log log15.Logger) (int, error) {
 	// Retry discoverd lookup — after a systemctl restart the local daemon
 	// may not have re-registered with discoverd yet.
 	clusterClient := cluster.NewClient()
 	var hosts []*cluster.Host
 	var err error
+
+	// Try to get the expected cluster size from the cluster-monitor metadata
+	// so we can wait for all nodes to be visible before proceeding.
+	expectedClusterSize := expectedClusterHostCount(log)
+	if expectedClusterSize > 0 {
+		log.Info("determined expected cluster size", "expected_hosts", expectedClusterSize)
+	}
+
 	for i := 0; i < 10; i++ {
 		if i > 0 {
 			time.Sleep(3 * time.Second)
 		}
 		hosts, err = clusterClient.Hosts()
 		if err == nil && len(hosts) > 0 {
-			break
-		}
-		if err != nil {
+			// If we know the expected cluster size, only break if we have all hosts.
+			// Otherwise, break as soon as we have any hosts.
+			if expectedClusterSize == 0 || len(hosts) >= expectedClusterSize {
+				break
+			} else {
+				log.Debug("waiting for all hosts to be visible in discoverd", "attempt", i+1, "found", len(hosts), "expected", expectedClusterSize)
+				err = fmt.Errorf("only found %d of %d expected hosts", len(hosts), expectedClusterSize)
+			}
+		} else if err != nil {
 			log.Debug("discoverd not ready for remote binary update, retrying", "attempt", i+1, "err", err)
 		} else {
 			log.Debug("no hosts found via discoverd yet, retrying", "attempt", i+1)
@@ -224,22 +338,29 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 	if err != nil {
 		log.Warn("could not discover cluster hosts for remote binary update", "err", err)
 		fmt.Println("Could not discover cluster hosts. Remote nodes were NOT updated.")
-		return nil // non-fatal: local update succeeded
+		return 0, nil // non-fatal: local update succeeded
 	}
+	expectedHostCount := len(hosts)
 	if len(hosts) <= 1 {
 		log.Info("single-node cluster, no remote hosts to update")
-		return nil
+		return expectedHostCount, nil
 	}
 
 	// Determine local host to skip
 	localHostname, _ := os.Hostname()
 	localIPs := getLocalIPs()
-	daemonID := getDaemonID(localIPs, log)
+	daemonID, _ := getDaemonID(localIPs, log)
 	localHost := findLocalHost(hosts, localHostname, daemonID, localIPs, log)
 
 	var localHostID string
 	if localHost != nil {
 		localHostID = localHost.ID()
+	} else if daemonID != "" {
+		// findLocalHost didn't match — discoverd may not yet show
+		// the local daemon after a recent restart. Skip by daemon ID
+		// directly to avoid pushing binaries back to ourselves.
+		localHostID = daemonID
+		log.Info("local host not yet in discoverd, skipping by daemon ID", "daemon_id", daemonID)
 	}
 
 	log.Info("updating remote hosts", "total_hosts", len(hosts), "local_host", localHostID)
@@ -256,7 +377,7 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 		_, err := h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, nil)
 		if err != nil {
 			hostLog.Error("failed to pull binaries on remote host", "err", err)
-			return fmt.Errorf("failed to update binaries on host %s: %w", h.ID(), err)
+			return expectedHostCount, fmt.Errorf("failed to update binaries on host %s: %w", h.ID(), err)
 		}
 		hostLog.Info("binaries updated on remote host")
 		fmt.Printf("Binaries updated on %s\n", h.ID())
@@ -267,22 +388,245 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 
 			if err := h.SystemctlRestart(); err != nil {
 				hostLog.Error("error requesting systemctl restart on remote host", "err", err)
-				return fmt.Errorf("failed to restart daemon on host %s: %w", h.ID(), err)
+				return expectedHostCount, fmt.Errorf("failed to restart daemon on host %s: %w", h.ID(), err)
 			}
 
 			hostLog.Info("systemctl restart requested on remote host")
 			fmt.Printf("Flynn daemon restart initiated on %s\n", h.ID())
 
-			// Wait for the remote daemon to come back up before
-			// proceeding to the next host (rolling restart).
-			// The systemctl restart has a 2s delay before it runs,
-			// plus time for the daemon to start up.
-			time.Sleep(15 * time.Second)
+			// Wait for the remote daemon to actually come back up
+			// and re-register with discoverd before moving to the
+			// next host. A blind sleep here is unsafe: a restarted
+			// daemon can take ~1–3 minutes to find its peers and
+			// rejoin the raft cluster, and starting the next
+			// restart inside that window collapses quorum and
+			// leaves the cluster unable to schedule jobs.
+			//
+			// The remote systemctl-restart endpoint sleeps ~2s
+			// before exec'ing systemctl, so wait briefly for the
+			// old process to actually die before polling.
+			time.Sleep(5 * time.Second)
+			if err := waitForRemoteDaemon(h, 3*time.Minute, hostLog); err != nil {
+				return expectedHostCount, fmt.Errorf("daemon on host %s did not become responsive after restart: %w", h.ID(), err)
+			}
+
+			if err := settleAfterHostRestart(hostRestartSettleOptions{
+				Log:               hostLog,
+				ClusterClient:     clusterClient,
+				RestartedHost:     h,
+				ExpectedHostCount: expectedHostCount,
+				FatalClusterSize:  true,
+				InterHostDelay:    true,
+			}); err != nil {
+				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w", h.ID(), err)
+			}
+		}
+	}
+
+	if !noRestart && expectedHostCount > 1 {
+		log.Info("final cluster settle after all host restarts")
+		if err := settleAfterHostRestart(hostRestartSettleOptions{
+			Log:               log,
+			ClusterClient:     clusterClient,
+			ExpectedHostCount: expectedHostCount,
+			FatalClusterSize:  false,
+		}); err != nil {
+			return expectedHostCount, err
 		}
 	}
 
 	log.Info("all remote hosts updated")
-	return nil
+	return expectedHostCount, nil
+}
+
+// waitForRemoteDaemon polls a remote flynn-host daemon's status endpoint
+// until it responds successfully or the timeout elapses. This is the
+// remote analogue of restartDaemon's local responsiveness check and
+// replaces the previous blind sleep in the rolling-restart loop.
+func waitForRemoteDaemon(h *cluster.Host, timeout time.Duration, log log15.Logger) error {
+	log.Info("waiting for remote daemon to become responsive after restart")
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		if _, err := h.GetStatus(); err == nil {
+			log.Info("remote daemon is responsive after restart")
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(2 * time.Second)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("timed out after %s", timeout)
+	}
+	return lastErr
+}
+
+// waitForClusterSize polls discoverd until at least the expected number
+// of hosts are registered, or the timeout elapses. Used between rolling
+// restarts and before fan-out operations (e.g. image pulls) to ensure we
+// don't silently target a subset of the cluster while restarted daemons
+// are still rejoining.
+func waitForClusterSize(client *cluster.Client, expected int, timeout time.Duration, log log15.Logger) error {
+	if expected <= 1 {
+		return nil
+	}
+	log.Info("waiting for cluster to repopulate in discoverd", "expected_hosts", expected)
+	deadline := time.Now().Add(timeout)
+	var lastCount int
+	for time.Now().Before(deadline) {
+		hosts, err := client.Hosts()
+		if err == nil {
+			lastCount = len(hosts)
+			if lastCount >= expected {
+				log.Info("cluster repopulated in discoverd", "hosts", lastCount)
+				return nil
+			}
+		}
+		time.Sleep(3 * time.Second)
+	}
+	return fmt.Errorf("only %d/%d hosts registered after %s", lastCount, expected, timeout)
+}
+
+// waitForJobsPlacedOnHost polls the freshly-restarted host's job list until
+// the scheduler has placed at least one controller-managed job onto it (i.e.
+// a job with flynn-controller.app in its metadata). This catches the failure
+// mode where status-web reports the cluster healthy and the host is up in
+// discoverd, but the controller-scheduler has not yet observed the host
+// coming back up (we have seen ~4 minute gaps in production), so no jobs are
+// scheduled back onto it before the next host's restart begins.
+//
+// The wait is intentionally non-fatal: the scheduler may legitimately have
+// nothing to place on a particular host (e.g. a single-replica formation
+// pinned elsewhere via tags), and we'd rather emit a warning than abort an
+// otherwise-successful rolling update. The inter-host settle delay that
+// follows still gives the scheduler a final chance to catch up.
+func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.Logger) {
+	if timeout <= 0 {
+		return
+	}
+	log.Info("waiting for scheduler to place jobs back on restarted host", "timeout", timeout)
+	deadline := time.Now().Add(timeout)
+	var lastJobCount, lastAppJobCount int
+	var lastErr error
+	for time.Now().Before(deadline) {
+		jobs, err := h.ListActiveJobs()
+		if err == nil {
+			lastErr = nil
+			lastJobCount = len(jobs)
+			lastAppJobCount = 0
+			for _, job := range jobs {
+				if isControllerPlacedJob(job.Job) {
+					lastAppJobCount++
+				}
+			}
+			if lastAppJobCount > 0 {
+				log.Info("scheduler placed jobs back on host",
+					"app_jobs", lastAppJobCount, "total_jobs", lastJobCount)
+				return
+			}
+			log.Debug("host has no app jobs yet, waiting",
+				"total_jobs", lastJobCount)
+		} else {
+			lastErr = err
+			log.Debug("error listing jobs on host, retrying", "err", err)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	if lastErr != nil {
+		log.Warn("scheduler did not place jobs on restarted host within timeout (last ListActiveJobs failed)",
+			"timeout", timeout, "err", lastErr)
+		return
+	}
+	log.Warn("scheduler did not place any app jobs on restarted host within timeout; continuing anyway",
+		"timeout", timeout, "total_jobs", lastJobCount)
+}
+
+// waitForClusterHealthy polls the status-web endpoint until it reports
+// the whole cluster as healthy (HTTP 200), or the timeout elapses.
+//
+// This is critical between rolling daemon restarts. App job containers
+// normally survive flynn-host exiting (systemd KillMode=process), but
+// discoverd registration, sirenia failover, and controller scheduling
+// still need time to settle. Restarting the next host before postgres
+// and the scheduler have recovered can leave the cluster unable to
+// schedule replacement peers on the restarted host.
+//
+// On success returns the latest service status map. On timeout returns
+// an error describing which services are still unhealthy.
+func waitForClusterHealthy(timeout time.Duration, log log15.Logger) (map[string]status.Status, error) {
+	const retryDelay = 5 * time.Second
+	deadline := time.Now().Add(timeout)
+	var statuses map[string]status.Status
+	attempt := 0
+	for time.Now().Before(deadline) {
+		attempt++
+		if attempt > 1 {
+			time.Sleep(retryDelay)
+		}
+
+		// Re-discover status-web on each attempt — instances may
+		// change after daemon restarts as containers get new overlay
+		// IPs from flannel.
+		statusInstances, err := discoverd.GetInstances("status-web", 5*time.Second)
+		if err != nil || len(statusInstances) == 0 {
+			if err != nil {
+				log.Debug("status-web not discoverable yet", "attempt", attempt, "err", err)
+			} else {
+				log.Debug("no status-web instances yet", "attempt", attempt)
+			}
+			continue
+		}
+
+		statusAddr := statusInstances[0].Addr
+		log.Debug("checking cluster status", "addr", statusAddr, "attempt", attempt)
+		req, err := http.NewRequest("GET", "http://"+statusAddr, nil)
+		if err != nil {
+			log.Debug("error creating status request", "attempt", attempt, "err", err)
+			continue
+		}
+		req.Header.Set("Accept", "application/json")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			log.Debug("error reaching status endpoint", "attempt", attempt, "addr", statusAddr, "err", err)
+			continue
+		}
+
+		var statusWrapper struct {
+			Data struct {
+				Status status.Code              `json:"status"`
+				Detail map[string]status.Status `json:"detail"`
+			}
+		}
+		decodeErr := decodeJSON(res.Body, &statusWrapper)
+		res.Body.Close()
+		if decodeErr != nil {
+			log.Debug("error decoding status response", "attempt", attempt, "err", decodeErr)
+			continue
+		}
+
+		statuses = statusWrapper.Data.Detail
+		if res.StatusCode == 200 {
+			log.Info("cluster is healthy", "attempts", attempt)
+			return statuses, nil
+		}
+
+		var unhealthyServices []string
+		for name, svc := range statuses {
+			if svc.Status != status.CodeHealthy {
+				unhealthyServices = append(unhealthyServices, name)
+			}
+		}
+		log.Debug("cluster not yet healthy", "attempt", attempt, "code", res.StatusCode, "unhealthy", unhealthyServices)
+	}
+
+	var unhealthyServices []string
+	for name, svc := range statuses {
+		if svc.Status != status.CodeHealthy {
+			unhealthyServices = append(unhealthyServices, name)
+		}
+	}
+	return statuses, fmt.Errorf("cluster did not become healthy within %s (unhealthy services: %v)", timeout, unhealthyServices)
 }
 
 // hostIDs returns a slice of host IDs for logging
@@ -384,11 +728,14 @@ func getLocalIPs() map[string]struct{} {
 	return ips
 }
 
-// getDaemonID tries to get the running daemon's host ID by querying
-// the local flynn-host API on each local IP address. The daemon binds
-// to the external IP (not 127.0.0.1), so we try all local IPs.
-func getDaemonID(localIPs map[string]struct{}, log log15.Logger) string {
-	// Try each local IP on the default flynn-host port
+// getDaemonID tries to get the running daemon's host ID and publish IP
+// by querying the local flynn-host API on each local IP address. The
+// daemon binds to the external IP (not 127.0.0.1), so we try all local
+// IPs. publishIP is parsed from status.URL — the daemon's own configured
+// publish address — and is the authoritative cluster-routable IP regardless
+// of which local NIC happened to respond to the probe (e.g. a VirtualBox
+// NAT or flannel bridge IP can answer 1113 but is not reachable from peers).
+func getDaemonID(localIPs map[string]struct{}, log log15.Logger) (id, publishIP string) {
 	for ip := range localIPs {
 		// Skip IPv6 link-local addresses (fe80::) as the daemon
 		// typically listens on a routable address
@@ -402,11 +749,25 @@ func getDaemonID(localIPs map[string]struct{}, log log15.Logger) string {
 			log.Debug("could not reach daemon", "addr", addr, "err", err)
 			continue
 		}
-		log.Info("got daemon ID from local API", "id", status.ID, "addr", addr)
-		return status.ID
+		publishIP = parseHostFromURL(status.URL)
+		log.Info("got daemon ID from local API", "id", status.ID, "addr", addr, "publish_ip", publishIP)
+		return status.ID, publishIP
 	}
 	log.Debug("could not get daemon ID from any local IP")
-	return ""
+	return "", ""
+}
+
+// parseHostFromURL extracts the host (without port) from a URL like
+// "http://192.168.56.20:1113". Returns "" on parse failure.
+func parseHostFromURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if h, _, err := net.SplitHostPort(u.Host); err == nil {
+		return h
+	}
+	return u.Host
 }
 
 // parseChecksums reads a SHA512 checksum file and returns a map of filename -> checksum
@@ -517,9 +878,16 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 
 const deployTimeout = 30 * time.Minute
 
-// updateImages downloads the images manifest and updates system apps.
-// If baseURL is non-empty, images are fetched from that URL instead of GitHub.
-func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logger) error {
+// updateImages downloads the images manifest, triggers image-layer pulls
+// on every cluster host in parallel, then deploys system apps via the
+// controller. If baseURL is non-empty, images are fetched from that URL
+// instead of GitHub. When force is true, system apps are redeployed even
+// if the image manifest matches the currently deployed artifact.
+// expectedHosts is the cluster size observed before any rolling restart;
+// when > 1, we wait for that many hosts to be visible in discoverd
+// before fanning out, so a partially-rejoined cluster doesn't silently
+// skip nodes.
+func updateImages(repo, configDir, targetVersion, baseURL string, force bool, expectedHosts int, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
 	var d *downloader.Downloader
 	if baseURL != "" {
@@ -544,14 +912,24 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 	// so we need to download the actual layer files on every node before deploying
 	log.Info("triggering image layer downloads on all cluster nodes")
 
-	// Get all hosts in the cluster
+	// Get all hosts in the cluster. If a rolling restart just ran,
+	// wait for discoverd to repopulate so we don't fan out to only the
+	// subset of hosts that has finished rejoining raft.
 	clusterClient := cluster.NewClient()
+	if expectedHosts > 1 {
+		if err := waitForClusterSize(clusterClient, expectedHosts, 3*time.Minute, log); err != nil {
+			log.Warn("cluster did not fully repopulate before image pull, continuing with subset", "err", err)
+		}
+	}
 	hosts, err := clusterClient.Hosts()
 	if err != nil {
 		log.Error("error discovering cluster hosts", "err", err)
 		return fmt.Errorf("error discovering cluster hosts: %w", err)
 	}
 
+	if expectedHosts > 0 && len(hosts) < expectedHosts {
+		log.Warn("found fewer hosts than expected for image pull", "num_hosts", len(hosts), "expected", expectedHosts)
+	}
 	log.Info("found cluster hosts", "num_hosts", len(hosts))
 
 	// Trigger image pull on all hosts in parallel
@@ -633,89 +1011,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 	log.Info("finished downloading image layers on all nodes")
 
 	// Wait for cluster to be ready after daemon restart.
-	// We re-discover the status-web instance on each attempt because
-	// container IPs change after daemon restarts (flannel reassigns them).
 	log.Info("waiting for cluster to be ready after daemon restart")
-	const healthCheckMaxRetries = 60
-	const healthCheckRetryDelay = 10 * time.Second
-
-	var statuses map[string]status.Status
-	clusterHealthy := false
-	for i := 0; i < healthCheckMaxRetries; i++ {
-		if i > 0 {
-			time.Sleep(healthCheckRetryDelay)
-		}
-
-		// Re-discover status-web on each attempt — instances may change
-		// after daemon restarts as containers get new overlay IPs.
-		statusInstances, err := discoverd.GetInstances("status-web", 5*time.Second)
-		if err != nil || len(statusInstances) == 0 {
-			if err != nil {
-				log.Debug("status-web not discoverable yet", "attempt", i+1, "err", err)
-			} else {
-				log.Debug("no status-web instances yet", "attempt", i+1)
-			}
-			continue
-		}
-
-		statusAddr := statusInstances[0].Addr
-		log.Info("checking cluster status", "addr", statusAddr, "attempt", i+1)
-		req, err := http.NewRequest("GET", "http://"+statusAddr, nil)
-		if err != nil {
-			log.Debug("error creating status request", "attempt", i+1, "err", err)
-			continue
-		}
-		req.Header.Set("Accept", "application/json")
-		res, err := http.DefaultClient.Do(req)
-		if err != nil {
-			log.Debug("error reaching status endpoint", "attempt", i+1, "addr", statusAddr, "err", err)
-			continue
-		}
-
-		var statusWrapper struct {
-			Data struct {
-				Status status.Code              `json:"status"`
-				Detail map[string]status.Status `json:"detail"`
-			}
-		}
-		decodeErr := decodeJSON(res.Body, &statusWrapper)
-		res.Body.Close()
-
-		if decodeErr != nil {
-			log.Debug("error decoding status response", "attempt", i+1, "err", decodeErr)
-			continue
-		}
-
-		if res.StatusCode == 200 {
-			if i > 0 {
-				log.Info("cluster is now healthy", "attempts", i+1)
-			}
-			statuses = statusWrapper.Data.Detail
-			clusterHealthy = true
-			break
-		}
-
-		// Log which services are unhealthy for debugging
-		var unhealthyServices []string
-		for name, svc := range statusWrapper.Data.Detail {
-			if svc.Status != status.CodeHealthy {
-				unhealthyServices = append(unhealthyServices, name)
-			}
-		}
-		log.Debug("cluster not yet healthy", "attempt", i+1, "code", res.StatusCode, "unhealthy", unhealthyServices)
-		statuses = statusWrapper.Data.Detail
-	}
-
-	if !clusterHealthy {
-		// Log which services are still unhealthy
-		var unhealthyServices []string
-		for name, svc := range statuses {
-			if svc.Status != status.CodeHealthy {
-				unhealthyServices = append(unhealthyServices, name)
-			}
-		}
-		log.Warn("cluster health check did not pass after retries, continuing with update", "unhealthy_services", unhealthyServices)
-		fmt.Printf("Warning: cluster health check did not pass (unhealthy services: %v). The update will continue.\n", unhealthyServices)
+	statuses, err := waitForClusterHealthy(10*time.Minute, log)
+	if err != nil {
+		log.Warn("cluster health check did not pass after retries, continuing with update", "err", err)
+		fmt.Printf("Warning: %s. The update will continue.\n", err)
 	}
 
 	// Connect to controller
@@ -845,7 +1145,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 
 		var deployErr error
 		for attempt := 1; ; attempt++ {
-			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, appLog)
+			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, force, appLog)
 			if deployErr == nil {
 				break
 			}
@@ -854,13 +1154,14 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 				deployErr = nil
 				break
 			}
-			// Sirenia-based apps (postgres, mariadb, mongodb) may not have
-			// fully reformed their cluster yet after a daemon restart.
-			// Retry for up to 2 minutes to give asyncs time to rejoin.
-			if strings.Contains(deployErr.Error(), "sirenia") && attempt < 12 {
-				appLog.Warn("sirenia cluster not ready, retrying deploy",
-					"err", deployErr, "attempt", attempt)
-				time.Sleep(10 * time.Second)
+			// Sirenia-based apps plus transient discoverd failures (e.g.
+			// leader.postgres.discoverd NXDOMAIN immediately after postgres
+			// rollout) settle within a few retries.
+			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
+			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
+				appLog.Warn("discovery or sirenia cluster not settled, retrying deploy",
+					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
+				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
 				continue
 			}
 			return deployErr
@@ -869,6 +1170,9 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 			continue
 		}
 		appLog.Info("finished deploy of system app")
+		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, appLog.New("after_system_app_deploy", appInfo.Name))
+		}
 	}
 
 	// Deploy all other apps (Redis appliances and slugrunner apps)
@@ -883,7 +1187,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
-			if err := deployApp(client, app, redisImage, nil, appLog); err != nil {
+			if err := deployApp(client, app, redisImage, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
 					continue
@@ -899,7 +1203,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, log log15.Logg
 		}
 
 		appLog.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, nil, appLog); err != nil {
+		if err := deployApp(client, app, slugRunner, nil, force, appLog); err != nil {
 			if e, ok := err.(errDeploySkipped); ok {
 				appLog.Info("skipped deploy of app", "reason", e.reason)
 				continue
@@ -921,7 +1225,7 @@ func (e errDeploySkipped) Error() string {
 	return e.reason
 }
 
-func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, log log15.Logger) error {
+func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		log.Error("error getting release", "err", err)
@@ -941,9 +1245,16 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
-	if skipDeploy {
+	skip, forceConfigMigration := shouldSkipUnchangedDeploy(skipDeploy, force, release, updateFn)
+	if skip {
 		return errDeploySkipped{"app is already using latest images"}
 	}
+	if skipDeploy && forceConfigMigration {
+		log.Info("forcing redeploy with matching image manifest for release config migration", "manifest.id", image.Manifest().ID())
+	} else if skipDeploy && force {
+		log.Info("forcing redeploy with matching image manifest", "manifest.id", image.Manifest().ID())
+	}
+	log.Info("creating artifact for deploy", "artifact.id", image.ID)
 	if err := client.CreateArtifact(image); err != nil {
 		log.Error("error creating artifact", "err", err)
 		return err
@@ -953,10 +1264,12 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	if updateFn != nil {
 		updateFn(release)
 	}
+	log.Info("creating release for deploy")
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		log.Error("error creating new release", "err", err)
 		return err
 	}
+	log.Info("waiting for deployment to complete", "release.id", release.ID, "timeout", deployTimeout)
 	timeoutCh := make(chan struct{})
 	time.AfterFunc(deployTimeout, func() { close(timeoutCh) })
 	if err := client.DeployAppRelease(app.ID, release.ID, timeoutCh); err != nil {
@@ -990,6 +1303,18 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	binDir := args.String["--bin-dir"]
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
+	allNodes := args.Bool["--all-nodes"]
+	force := args.Bool["--force"]
+
+	if imagesOnly && !allNodes {
+		n, err := clusterHostCount()
+		if err != nil {
+			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
+		}
+		if n > 1 {
+			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		}
+	}
 
 	log.Info("starting tarball-based update", "tarball", tarballPath)
 
@@ -1011,6 +1336,14 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		return fmt.Errorf("failed to extract tarball: %w", err)
 	}
 	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
+
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
+		}
+	}
 
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
@@ -1069,12 +1402,16 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 			log.Info("skipping daemon restart (--no-restart specified)")
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
 		}
+
+		if !allNodes {
+			log.Info("skipping remote host binary updates (--all-nodes not set)")
+			fmt.Println("Other cluster hosts were not updated. Run the same tarball update on each node, then run it again with --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
+		}
 	}
 
-	// Start a temporary HTTP server to serve the extracted tarball contents.
-	// This is needed for both remote binary propagation and image updates.
-	needRemoteBinaries := !imagesOnly
-	needImages := !skipImages
+	// Temporary HTTP server: only when pushing to other nodes or rolling out images cluster-wide.
+	needRemoteBinaries := !imagesOnly && allNodes
+	needImages := !skipImages && rolloutCluster
 	if needRemoteBinaries || needImages {
 		listener, err := net.Listen("tcp", ":0")
 		if err != nil {
@@ -1100,18 +1437,24 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		fmt.Printf("Temporary file server started at %s\n", baseURL)
 
 		// Propagate binaries to all other cluster nodes
+		var expectedHostCount int
 		if needRemoteBinaries {
-			if err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, args.Bool["--no-restart"], log); err != nil {
+			n, err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, args.Bool["--no-restart"], log)
+			if err != nil {
 				return err
 			}
+			expectedHostCount = n
 		}
 
 		// Update container images and system apps
 		if needImages {
-			if err := updateImages("", configDir, tarballVersion, baseURL, log); err != nil {
+			if err := updateImages("", configDir, tarballVersion, baseURL, force, expectedHostCount, log); err != nil {
 				return err
 			}
 		}
+	} else if !skipImages && !rolloutCluster {
+		log.Info("skipping container images and system app rollout (local-only tarball update)")
+		fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run the same tarball command with --all-nodes.")
 	}
 
 	log.Info("tarball update complete", "version", tarballVersion)
@@ -1198,12 +1541,14 @@ func extractTarball(tarballPath, destDir string) (version, contentDir string, er
 
 // getCoordinatorIP determines the cluster-facing IP of this node by
 // finding the local host in the cluster and extracting its IP address.
-// If discoverd is not ready yet (e.g. after a daemon restart), it retries
-// a few times, then falls back to detecting a suitable external IP from
-// local network interfaces.
+// If discoverd is not ready yet (e.g. after a daemon restart, when the
+// daemon has unregistered but not yet re-registered), it retries a few
+// times, then falls back to the daemon's own publish IP (authoritative
+// for the cluster-routable address), and finally to detecting a suitable
+// external IP from local network interfaces.
 func getCoordinatorIP(log log15.Logger) (string, error) {
 	localIPs := getLocalIPs()
-	daemonID := getDaemonID(localIPs, log)
+	daemonID, daemonPublishIP := getDaemonID(localIPs, log)
 
 	localHostname, _ := os.Hostname()
 
@@ -1231,8 +1576,18 @@ func getCoordinatorIP(log log15.Logger) (string, error) {
 		log.Debug("local host not found in cluster yet, retrying", "attempt", i+1)
 	}
 
-	// Fallback: find a suitable external IP from local interfaces
-	log.Warn("could not find local host via discoverd, falling back to interface IP detection")
+	// Fallback 1: use the daemon's own publish IP. This is the address
+	// the daemon advertises to peers, so it is reachable from other
+	// cluster nodes by construction and doesn't depend on discoverd
+	// re-registration timing.
+	if daemonPublishIP != "" {
+		log.Info("using daemon publish IP as coordinator IP", "ip", daemonPublishIP)
+		return daemonPublishIP, nil
+	}
+
+	// Fallback 2: heuristic interface scan. Last resort — may pick an
+	// IP that isn't routable from peers (e.g. a hypervisor NAT address).
+	log.Warn("could not find local host via discoverd or daemon API, falling back to interface IP detection")
 	ip := getExternalIP(localIPs)
 	if ip == "" {
 		return "", fmt.Errorf("could not determine coordinator IP: no suitable external IP found on local interfaces")

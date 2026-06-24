@@ -86,7 +86,7 @@ func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 	return vxlan, nil
 }
 
-func (dev *vxlanDevice) Configure(ipn ip.IP4Net) error {
+func (dev *vxlanDevice) Configure(ipn ip.IP4Net, overlay ip.IP4Net) error {
 	if err := setAddr4(dev.link, ipn.ToIPNet()); err != nil {
 		return err
 	}
@@ -95,15 +95,32 @@ func (dev *vxlanDevice) Configure(ipn ip.IP4Net) error {
 		return fmt.Errorf("failed to set interface %s to UP state: %s", dev.link.Attrs().Name, err)
 	}
 
-	// explicitly add a route since there might be a route for a subnet already
-	// installed by Docker and then it won't get auto added
-	route := netlink.Route{
-		LinkIndex: dev.link.Attrs().Index,
-		Scope:     netlink.SCOPE_UNIVERSE,
-		Dst:       ipn.Network().ToIPNet(),
+	if ipn.PrefixLen < 32 {
+		// When configured with the full overlay prefix, explicitly add a route
+		// since there might be a route for a subnet already installed by Docker
+		// and then it won't get auto added.
+		route := netlink.Route{
+			LinkIndex: dev.link.Attrs().Index,
+			Scope:     netlink.SCOPE_UNIVERSE,
+			Dst:       ipn.Network().ToIPNet(),
+		}
+		if err := netlink.RouteAdd(&route); err != nil && err != syscall.EEXIST {
+			return fmt.Errorf("failed to add route (%s -> %s): %v", ipn.Network().String(), dev.link.Attrs().Name, err)
+		}
+		return nil
 	}
-	if err := netlink.RouteAdd(&route); err != nil && err != syscall.EEXIST {
-		return fmt.Errorf("failed to add route (%s -> %s): %v", ipn.Network().String(), dev.link.Attrs().Name, err)
+
+	// With a /32 address, add a link-scoped route for the overlay so remote
+	// subnet routes can be installed via handleSubnetEvents. Use scope link
+	// rather than assigning the overlay prefix to the interface address, which
+	// would cause decapsulated packets to be delivered locally on flannel.1.
+	linkRoute := netlink.Route{
+		LinkIndex: dev.link.Attrs().Index,
+		Scope:     netlink.SCOPE_LINK,
+		Dst:       overlay.ToIPNet(),
+	}
+	if err := netlink.RouteAdd(&linkRoute); err != nil && err != syscall.EEXIST {
+		return fmt.Errorf("failed to add overlay link route (%s -> %s): %v", overlay.String(), dev.link.Attrs().Name, err)
 	}
 
 	return nil
@@ -173,9 +190,10 @@ func (dev *vxlanDevice) DelL3(n neigh) error {
 
 func (dev *vxlanDevice) AddRoute(subnet ip.IP4Net) error {
 	route := &netlink.Route{
-		Scope: netlink.SCOPE_UNIVERSE,
-		Dst:   subnet.ToIPNet(),
-		Gw:    subnet.IP.ToIP(),
+		LinkIndex: dev.link.Index,
+		Scope:     netlink.SCOPE_UNIVERSE,
+		Dst:       subnet.ToIPNet(),
+		Gw:        subnet.IP.ToIP(),
 	}
 
 	log.Infof("calling RouteAdd: %s", subnet)
@@ -184,9 +202,10 @@ func (dev *vxlanDevice) AddRoute(subnet ip.IP4Net) error {
 
 func (dev *vxlanDevice) DelRoute(subnet ip.IP4Net) error {
 	route := &netlink.Route{
-		Scope: netlink.SCOPE_UNIVERSE,
-		Dst:   subnet.ToIPNet(),
-		Gw:    subnet.IP.ToIP(),
+		LinkIndex: dev.link.Index,
+		Scope:     netlink.SCOPE_UNIVERSE,
+		Dst:       subnet.ToIPNet(),
+		Gw:        subnet.IP.ToIP(),
 	}
 	log.Infof("calling RouteDel: %s", subnet)
 	return netlink.RouteDel(route)

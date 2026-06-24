@@ -2,7 +2,6 @@ package cli
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -691,44 +690,6 @@ UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s',
 );`, artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), step.ID))
 	}
 
-	// create the slugbuilder/slugrunner-18 artifacts if they don't exist
-	for _, name := range []string{"slugbuilder", "slugrunner"} {
-		artifact := artifacts[name+"-18-image"]
-		sqlBuf.WriteString(fmt.Sprintf(`
-DO $$
-  BEGIN
-    IF (SELECT env->>'%s_18_IMAGE_ID' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'gitreceive' AND deleted_at IS NULL)) IS NULL THEN
-      INSERT INTO artifacts (artifact_id, type, uri, manifest, hashes, size, layer_url_template, meta) VALUES ('%s', 'flynn', '%s', '%s', '%s', %d, '%s', '%s');
-    END IF;
-  END;
-$$;`, strings.ToUpper(name), random.UUID(), artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta)))
-
-		// update pre-slugrunner/slugbuilder-18 artifacts currently being referenced by gitreceive
-		// (which will also update all current user releases to use slugrunner-14)
-		artifact = artifacts[name+"-14-image"]
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE artifacts SET uri = '%[1]s', type = 'flynn', manifest = '%[2]s', hashes = '%[3]s', size = %[4]d, layer_url_template = '%[5]s', meta = '%[6]s'
-WHERE artifact_id = (SELECT (env->>'%[7]s_IMAGE_ID')::uuid FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'gitreceive' AND deleted_at IS NULL))
-OR uri = (SELECT env->>'%[7]s_IMAGE_URI' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'gitreceive' AND deleted_at IS NULL));`,
-			artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), strings.ToUpper(name)))
-	}
-
-	// update pre-slugbuilder-18 releases with a stack tag
-	sqlBuf.WriteString(`UPDATE releases SET meta = jsonb_set(meta, '{slugrunner.stack}', '"cedar-14"') WHERE meta->>'slugrunner.stack' IS NULL and meta->>'git' = 'true';`)
-
-	// update slug artifacts currently being referenced by gitreceive
-	// (which will also update all current user releases to use the
-	// latest slugrunner images)
-	for _, name := range []string{"slugbuilder", "slugrunner"} {
-		for _, version := range []string{"14", "18"} {
-			artifact := artifacts[fmt.Sprintf("%s-%s-image", name, version)]
-			sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s', size = %d, layer_url_template = '%s', meta = '%s'
-WHERE artifact_id = (SELECT (env->>'%s_%s_IMAGE_ID')::uuid FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'gitreceive' AND deleted_at IS NULL));`,
-				artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), strings.ToUpper(name), version))
-		}
-	}
-
 	// update the URI of redis artifacts currently being referenced by
 	// the redis app (which will also update all current redis resources
 	// to use the latest redis image)
@@ -745,21 +706,6 @@ OR uri = (SELECT env->>'REDIS_IMAGE_URI' FROM releases WHERE release_id = (SELEC
 UPDATE releases SET env = jsonb_set(env, '{REDIS_IMAGE_ID}', ('"' || (SELECT artifact_id::text FROM artifacts WHERE uri = '%s') || '"')::jsonb, true)
 WHERE env->>'REDIS_IMAGE_URI' IS NOT NULL;`,
 		artifacts["redis-image"].URI))
-
-	// ensure recent SLUGBUILDER/SLUGRUNNER_18/14_IMAGE_ID variables are set on the appropriate releases
-	for _, name := range []string{"slugbuilder", "slugrunner"} {
-		for _, version := range []string{"18", "14"} {
-			artifact := artifacts[fmt.Sprintf("%s-%s-image", name, version)]
-			sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = jsonb_set(env, '{%[1]s_%[2]s_IMAGE_ID}', ('"' || (SELECT artifact_id::text FROM artifacts WHERE uri = '%[3]s') || '"')::jsonb, true)
-WHERE env->>'%[1]s_IMAGE_ID' IS NOT NULL OR env->>'%[1]s_IMAGE_URI' IS NOT NULL;`,
-				strings.ToUpper(name), version, artifact.URI))
-		}
-		sqlBuf.WriteString(fmt.Sprintf(`
-		UPDATE releases SET env = env - '{%[1]s_IMAGE_ID,%[1]s_IMAGE_URI}'::text[]
-WHERE env->>'%[1]s_IMAGE_ID' IS NOT NULL OR env->>'%[1]s_IMAGE_URI' IS NOT NULL;`,
-			strings.ToUpper(name)))
-	}
 
 	// remove job and volume records created by previous clusters
 	sqlBuf.WriteString(fmt.Sprintf(`
@@ -803,86 +749,6 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 			Timestamp: time.Now().UTC(),
 		}
 		return err
-	}
-
-	// determine if there are any slugs or docker images which need to be
-	// converted to Flynn images
-	migrateSlugs := false
-	migrateDocker := false
-	artifactList, err := client.ArtifactList()
-	if err != nil {
-		return fmt.Errorf("error listing artifacts: %s", err)
-	}
-	for _, artifact := range artifactList {
-		if artifact.Type == ct.DeprecatedArtifactTypeFile {
-			migrateSlugs = true
-		}
-		if artifact.Type == ct.DeprecatedArtifactTypeDocker && artifact.Meta["docker-receive.repository"] != "" {
-			migrateDocker = true
-		}
-		if migrateSlugs && migrateDocker {
-			break
-		}
-	}
-
-	if migrateDocker {
-		fmt.Fprint(os.Stderr, `
-WARN:
-WARN: There are some legacy Docker images in the backup that can no longer
-WARN: be imported to new clusters. You will need to boot a cluster with version
-WARN: less than v20190425.0, import the backup into that, then create a backup
-WARN: of that cluster which can then be imported into newer clusters.
-WARN:
-`)
-	}
-
-	runMigrator := func(cmd *exec.Cmd) error {
-		out, err := cmd.StdoutPipe()
-		if err != nil {
-			return err
-		}
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			s := bufio.NewScanner(out)
-			for s.Scan() {
-				ch <- &bootstrap.StepInfo{
-					StepMeta:  meta,
-					State:     "info",
-					StepData:  s.Text(),
-					Timestamp: time.Now().UTC(),
-				}
-			}
-		}()
-		err = cmd.Run()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-		}
-		return err
-	}
-
-	if migrateSlugs {
-		cmd = exec.JobUsingHost(state.Hosts[0], artifacts["slugbuilder-14-image"], nil)
-		cmd.Args = []string{"/bin/slug-migrator"}
-		cmd.Env = map[string]string{
-			"CONTROLLER_KEY": data.Controller.Release.Env["AUTH_KEY"],
-			"FLYNN_POSTGRES": data.Controller.Release.Env["FLYNN_POSTGRES"],
-			"PGHOST":         "leader.postgres.discoverd",
-			"PGUSER":         data.Controller.Release.Env["PGUSER"],
-			"PGDATABASE":     data.Controller.Release.Env["PGDATABASE"],
-			"PGPASSWORD":     data.Controller.Release.Env["PGPASSWORD"],
-		}
-		if err := runMigrator(cmd); err != nil {
-			ch <- &bootstrap.StepInfo{
-				StepMeta:  meta,
-				State:     "error",
-				Error:     fmt.Sprintf("error migrating slugs: %s", err),
-				Err:       err,
-				Timestamp: time.Now().UTC(),
-			}
-			return err
-		}
 	}
 
 	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}

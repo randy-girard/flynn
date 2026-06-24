@@ -10,7 +10,7 @@ mkfs.ext4 -FqL rootfs ${build_dir}/rootfs.img
 dir=$(mktemp -d)
 mount -o loop ${build_dir}/rootfs.img ${dir}
 
-image="http://cdimage.ubuntu.com/ubuntu-base/releases/16.04/release/ubuntu-base-16.04.4-base-amd64.tar.gz"
+image="http://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04-base-amd64.tar.gz"
 curl -L ${image} | tar -xzC ${dir}
 
 mount -t proc proc "${dir}/proc"

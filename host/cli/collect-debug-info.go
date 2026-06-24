@@ -28,15 +28,22 @@ var flynnHostLogs = map[string]string{
 
 var debugCmds = [][]string{
 	{"ps", "faux"},
-	{"ifconfig"},
 	{"uname", "-a"},
 	{"lsb_release", "-a"},
 	{"date"},
 	{"free", "-m"},
 	{"df", "-h"},
 	{os.Args[0], "version"},
-	{"route", "-n"},
 	{"iptables", "-L", "-v", "-n", "--line-numbers"},
+}
+
+// networkDebugAlternatives prefers iproute2 (common on minimal cloud images) over net-tools.
+var networkDebugAlternatives = []struct {
+	desc string
+	cmds [][]string
+}{
+	{"network interfaces", [][]string{{"ip", "addr"}, {"ifconfig"}}},
+	{"routing table", [][]string{{"ip", "route"}, {"route", "-n"}}},
 }
 
 const githubTokenFile = ".flynn/github_token"
@@ -154,6 +161,9 @@ func runCollectDebugInfo(args *docopt.Args) error {
 		}
 		debugOutput += fmt.Sprintln("===>", strings.Replace(strings.Join(cmd, " "), "\n", `\n`, -1), "\n", output)
 	}
+	for _, alt := range networkDebugAlternatives {
+		debugOutput += captureDebugCmdFirstSuccess(log, alt.desc, alt.cmds)
+	}
 	gist.AddFile("0-debug-output.log", debugOutput)
 
 	// Redact the GitHub token from all collected content to prevent leaking
@@ -200,6 +210,28 @@ func captureCmd(name string, arg ...string) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// captureDebugCmdFirstSuccess runs alternatives in order until one succeeds (e.g. ip vs ifconfig).
+func captureDebugCmdFirstSuccess(log log15.Logger, desc string, alternatives [][]string) string {
+	var lastErr error
+	for _, cmd := range alternatives {
+		output, err := captureCmd(cmd[0], cmd[1:]...)
+		if err == nil {
+			return fmt.Sprintln("===>", strings.Replace(strings.Join(cmd, " "), "\n", `\n`, -1), "\n", output)
+		}
+		lastErr = err
+	}
+	log.Error(fmt.Sprintf("error capturing %s (tried: %s)", desc, joinAltCmds(alternatives)), "err", lastErr)
+	return ""
+}
+
+func joinAltCmds(alternatives [][]string) string {
+	parts := make([]string, len(alternatives))
+	for i, cmd := range alternatives {
+		parts[i] = strings.Join(cmd, " ")
+	}
+	return strings.Join(parts, ", ")
 }
 
 func captureJobs(gist *Gist, env bool) error {

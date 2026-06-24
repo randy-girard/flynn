@@ -15,7 +15,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"text/template"
@@ -34,6 +36,79 @@ import (
 	cjson "github.com/tent/canonical-json-go"
 )
 
+// apt archives from the host bind-mounted here persist .deb downloads across flynn-builder
+// jobs when ./ubuntu_ports_cache (or $FLYNN_APT_ARCHIVE_CACHE) is configured.
+const aptArchiveCacheMountPoint = "/var/cache/apt/archives"
+
+// aptListsCacheMountPoint holds the apt index files (~40-60 MB per build) so apt-get update
+// does conditional/incremental refreshes instead of re-downloading every list each build.
+const aptListsCacheMountPoint = "/var/lib/apt/lists"
+
+// aptListsCacheSubdir stores apt list indices under ubuntu_ports_cache.
+const aptListsCacheSubdir = "_apt_lists"
+
+// flynnHTTPDownloadMountPoint holds cached plain HTTP GET bodies (curl) alongside the APT tree.
+const flynnHTTPDownloadMountPoint = "/var/cache/flynn-http-cache"
+
+// flynnHTTPDownloadSubdir stores curl cache blobs under ubuntu_ports_cache.
+const flynnHTTPDownloadSubdir = "_flynn_http"
+
+// flynnGitCacheMountPoint exposes bare-mirror git repos for the flynn-git shim.
+const flynnGitCacheMountPoint = "/var/cache/flynn-git-cache"
+
+// flynnGitCacheSubdir stores the git mirrors under ubuntu_ports_cache.
+const flynnGitCacheSubdir = "_git_mirrors"
+
+// flynnAptLayerPrelude runs before layers that invoke apt. Ubuntu runs downloads as _apt; minimal
+// base layers and host bind mounts often leave /var/cache/apt/archives/partial root-only, which
+// breaks pkgAcquire (Permission denied). chmod fixes the cache; APT::Sandbox::User mirrors common
+// container guidance so downloads are not forced through the _apt sandbox.
+const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial && ` +
+	`chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true && ` +
+	`chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true && ` +
+	`chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true && ` +
+	`chmod -R a+rwX /var/lib/apt/lists/partial 2>/dev/null || true && ` +
+	`install -d /etc/apt/apt.conf.d && ` +
+	`printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf`
+
+// Delimiter for heredoc wrapping apt layer commands (must not appear in layer scripts).
+const flynnAptArchiveFlockHeredoc = "FLYNN_BUILDER_APT_FLOCK_SCRIPT_EOF_7c4a8319"
+
+// wrapAptCommandsWithExclusiveLock runs the layer script under flock on the shared APT
+// archive directory. Several build jobs mount the same host cache at
+// /var/cache/apt/archives; concurrent apt-get then fights over archives/lock.
+func wrapAptCommandsWithExclusiveLock(lines []string) []string {
+	if len(lines) == 0 {
+		return lines
+	}
+	lock := filepath.Join(aptArchiveCacheMountPoint, ".flynn-builder-exclusive-apt.lock")
+	inner := strings.Join(lines, "\n")
+	// Same line-oriented execution as the outer bash -exs driver; inner bash is one job
+	// holding the shared lock until all apt (and related) commands finish.
+	s := fmt.Sprintf("flock -w 86400 %q bash -exo pipefail <<'%s'\n%s\n%s",
+		lock, flynnAptArchiveFlockHeredoc, inner, flynnAptArchiveFlockHeredoc)
+	return []string{s}
+}
+
+func layerUsesAPT(l *Layer) bool {
+	if strings.TrimSpace(l.Script) != "" {
+		return true
+	}
+	for _, r := range l.Run {
+		s := strings.TrimSpace(r)
+		if strings.HasPrefix(s, "apt ") ||
+			strings.HasPrefix(s, "apt-get ") ||
+			strings.Contains(s, " apt-get ") ||
+			strings.Contains(s, "apt install") ||
+			strings.Contains(s, "; apt ") ||
+			strings.Contains(s, "&& apt ") ||
+			strings.Contains(s, "|| apt ") {
+			return true
+		}
+	}
+	return false
+}
+
 var cmdBuild = Command{
 	Run: runBuild,
 	Usage: `
@@ -44,12 +119,196 @@ options:
   -v, --verbose             be verbose
 
 Build Flynn images using builder/manifest.json.
+
+ APT package cache:
+
+   By default bind-mounts "$(pwd)/ubuntu_ports_cache" at /var/cache/apt/archives
+   inside each build job (flynn-host must run on this machine). APT writes go to that
+   host directory, not into the layer diff (SquashFS is built from /.container-diff).
+
+   Set FLYNN_APT_ARCHIVE_CACHE to an absolute directory to override, or
+   FLYNN_NO_APT_ARCHIVE_CACHE=1 to disable.
+
+   The cache directory is chmodded 0777 on the flynn-builder host because APT downloads
+   as user _apt and needs write access to partial/ beneath the bind mount.
+
+   When this cache is enabled, apt-get is serialized with flock(1) on a lock under
+   /var/cache/apt/archives so parallel image builds do not share one archives/lock (which
+   fails with "Unable to lock directory" or bogus PIDs).
+
+   Alongside the .deb archives, ./_apt_lists is mounted at /var/lib/apt/lists so
+   apt-get update does conditional/incremental refreshes (HTTP If-Modified-Since)
+   instead of re-downloading ~40-60 MB of indices on every build.
+
+   The same directory also contains ./_flynn_http (mounted at /var/cache/flynn-http-cache)
+   where trivial curl GETs from layer scripts are cached (PATH supplies a small shim).
+
+   The shim never caches URLs containing "/current/" or ending in SHA256SUMS[.gpg]
+   (rolling paths whose body changes under a stable URL). Extend this with
+   FLYNN_HTTP_CACHE_SKIP_PATTERNS (a colon-separated list of substrings to match
+   against the URL), or set FLYNN_NO_HTTP_CACHE=1 to bypass the shim entirely.
+
+   Finally, ./_git_mirrors is mounted at /var/cache/flynn-git-cache where the
+   flynn-git shim (PATH-installed as "git") maintains a bare mirror of each cloned
+   repository. "git clone <url> <dir>" then becomes a local clone of the mirror;
+   subsequent builds reuse it. FLYNN_GIT_CACHE_TTL (seconds; default 3600) controls
+   how often the mirror is refreshed. Set FLYNN_NO_GIT_CACHE=1 to bypass.
+
 `[1:],
+}
+
+func aptArchiveCacheDir(log log15.Logger) (string, bool) {
+	if strings.TrimSpace(os.Getenv("FLYNN_NO_APT_ARCHIVE_CACHE")) == "1" {
+		return "", false
+	}
+	if p := strings.TrimSpace(os.Getenv("FLYNN_APT_ARCHIVE_CACHE")); p != "" {
+		low := strings.ToLower(p)
+		if p == "-" || low == "disable" || low == "off" {
+			return "", false
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			log.Warn("invalid FLYNN_APT_ARCHIVE_CACHE", "path", p, "err", err)
+			return "", false
+		}
+		return abs, true
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Warn("apt archive cache skipped: cannot get cwd", "err", err)
+		return "", false
+	}
+	dir := filepath.Join(wd, "ubuntu_ports_cache")
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		log.Warn("apt archive cache skipped: cannot resolve path", "path", dir, "err", err)
+		return "", false
+	}
+	return abs, true
+}
+
+func prependMntBinToPath(env map[string]string) {
+	if env == nil {
+		return
+	}
+	const prefix = "/mnt/bin"
+	p := strings.TrimSpace(env["PATH"])
+	if p == "" {
+		env["PATH"] = prefix + ":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+		return
+	}
+	if strings.HasPrefix(p, prefix+":") {
+		return
+	}
+	env["PATH"] = prefix + ":" + p
+}
+
+func (b *Builder) appendBuildCacheMounts(job *host.Job) bool {
+	dir, want := aptArchiveCacheDir(b.log)
+	if !want || dir == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot create dir, skipping",
+			"path", dir, "err", err)
+		return false
+	}
+	// APT's pkg Acquire runs downloads as user _apt; a root-owned 0755 bind mount denies
+	// writes under partial/, producing "Couldn't be accessed by user '_apt'".
+	if err := os.Chmod(dir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot chmod dir", "path", dir, "err", err)
+		return false
+	}
+	partialDir := filepath.Join(dir, "partial")
+	if err := os.MkdirAll(partialDir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot create partial/", "path", partialDir, "err", err)
+		return false
+	}
+	if err := os.Chmod(partialDir, 0777); err != nil {
+		b.log.Warn("apt archive cache: cannot chmod partial/", "path", partialDir, "err", err)
+		return false
+	}
+	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+		Target:    dir,
+		Location:  aptArchiveCacheMountPoint,
+		Writeable: true,
+	})
+	b.log.Info("apt archive cache mounted", "host_path", dir, "mount", aptArchiveCacheMountPoint)
+
+	// apt lists cache: a second sibling directory that holds the per-mirror Packages index
+	// files. Without this, apt-get update re-downloads ~40-60 MB on every build.
+	listsDir := filepath.Join(dir, aptListsCacheSubdir)
+	if listsOK := setupSharedCacheDir(b.log, "apt lists cache", listsDir); listsOK {
+		// partial/ has to exist and be writable by _apt; create it before the first apt-get update
+		// in case the layer prelude has not run yet.
+		_ = os.MkdirAll(filepath.Join(listsDir, "partial"), 0777)
+		_ = os.Chmod(filepath.Join(listsDir, "partial"), 0777)
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    listsDir,
+			Location:  aptListsCacheMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("apt lists cache mounted", "host_path", listsDir, "mount", aptListsCacheMountPoint)
+	}
+
+	httpDir := filepath.Join(dir, flynnHTTPDownloadSubdir)
+	if setupSharedCacheDir(b.log, "http download cache", httpDir) {
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    httpDir,
+			Location:  flynnHTTPDownloadMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("http download cache mounted", "host_path", httpDir, "mount", flynnHTTPDownloadMountPoint)
+	}
+
+	gitDir := filepath.Join(dir, flynnGitCacheSubdir)
+	if setupSharedCacheDir(b.log, "git mirror cache", gitDir) {
+		job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+			Target:    gitDir,
+			Location:  flynnGitCacheMountPoint,
+			Writeable: true,
+		})
+		b.log.Info("git mirror cache mounted", "host_path", gitDir, "mount", flynnGitCacheMountPoint)
+	}
+
+	return true
+}
+
+// setupSharedCacheDir creates and 0777s a host cache directory used by a build-job bind mount.
+// Returns false (and logs) if creation/chmod fails, so callers can skip the mount.
+func setupSharedCacheDir(log log15.Logger, label, path string) bool {
+	if err := os.MkdirAll(path, 0777); err != nil {
+		log.Warn(label+": cannot create dir, skipping", "path", path, "err", err)
+		return false
+	}
+	if err := os.Chmod(path, 0777); err != nil {
+		log.Warn(label+": cannot chmod dir", "path", path, "err", err)
+		return false
+	}
+	return true
+}
+
+// installShim copies a build-time PATH shim (e.g. flynn-curl, flynn-git) into the
+// shared bin/ directory used by build jobs. Missing source files are logged but not
+// fatal — layers fall back to the system binary. copyFile is the per-run closure
+// that knows the shared dir prefix.
+func installShim(log log15.Logger, dir, label, src, dst string, copyFile func(string, string) error) error {
+	if _, err := os.Stat(src); err != nil {
+		log.Warn(label+" shim missing, image builds will use the system binary", "path", src, "err", err)
+		return nil
+	}
+	if err := copyFile(src, dst); err != nil {
+		return fmt.Errorf("copy %s shim: %w", label, err)
+	}
+	if err := os.Chmod(filepath.Join(dir, dst), 0755); err != nil {
+		return fmt.Errorf("chmod %s shim: %w", label, err)
+	}
+	return nil
 }
 
 type Builder struct {
 	// baseLayer is used when building an image which has no
-	// dependencies (e.g. the ubuntu-bionic image)
+	// dependencies (e.g. the ubuntu-noble image)
 	baseLayer *host.Mountspec
 
 	// artifacts is a map of built artifacts and is written to
@@ -141,6 +400,12 @@ type Layer struct {
 
 	// Limits is a set of limits to set on the build job
 	Limits map[string]string `json:"limits,omitempty"`
+
+	// GoBuildP, if positive, is passed as 'go build -p <GoBuildP>' to cap compiler
+	// parallelism. Without this, 'go build' defaults to compiling as many packages
+	// concurrently as CPUs, which overflows the default build job cgroup (memory)
+	// on smaller hosts especially when multiple cross-compile images run in parallel.
+	GoBuildP int `json:"go_build_p,omitempty"`
 
 	// LinuxCapabilities is a list of extra capabilities to set
 	LinuxCapabilities []string `json:"linux_capabilities,omitempty"`
@@ -323,6 +588,23 @@ func (b *Builder) Build(images []*Image) error {
 		}
 	}
 
+	// cap the number of images that build concurrently. Defaults to NumCPU
+	// to preserve historical behavior on capable hosts (Vagrant, production);
+	// can be lowered via FLYNN_BUILD_CONCURRENCY for memory-constrained
+	// environments (e.g. GitHub Actions runners) where unbounded fan-out of
+	// `go build` jobs exhausts host RAM and triggers ENOMEM in readdirent.
+	concurrency := runtime.NumCPU()
+	if s := os.Getenv("FLYNN_BUILD_CONCURRENCY"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			concurrency = n
+		}
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	b.log.Info("build concurrency", "limit", concurrency)
+	sem := make(chan struct{}, concurrency)
+
 	// build images until there are no pending builds left
 	done := make(chan *Build, len(builds))
 	failures := make(map[string]error)
@@ -341,6 +623,8 @@ func (b *Builder) Build(images []*Image) error {
 
 					b.log.Debug(fmt.Sprintf("%s build start", build.Image.ID))
 					go func(build *Build) {
+						sem <- struct{}{}
+						defer func() { <-sem }()
 						build.StartedAt = time.Now()
 						build.Err = b.BuildImage(build.Image)
 						done <- build
@@ -473,7 +757,11 @@ func (b *Builder) BuildImage(image *Image) error {
 				outDir := filepath.Join("/mnt/out/proto", dir)
 				run = append(run,
 					fmt.Sprintf("mkdir -p %s", outDir),
-					fmt.Sprintf("protoc -I /usr/local/include -I %s --go_out=plugins=grpc:%s %s", dir, outDir, strings.Join(paths, " ")),
+					// PATH: prefer /bin so we invoke protoc-gen-go(go install) before any other PATH binary.
+					// protoc 3.11's well-known types still declare legacy go_package paths; map them to
+					// google.golang.org/protobuf/types/known/* so -mod=vendor builds do not require genproto/ptypes.
+					fmt.Sprintf("PATH=/bin:/usr/local/bin:/usr/bin protoc -I /usr/local/include -I %s --go_out=%s --go_opt=module=github.com/flynn/flynn/controller/api --go_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb --go-grpc_out=%s --go-grpc_opt=module=github.com/flynn/flynn/controller/api --go-grpc_opt=require_unimplemented_servers=false --go-grpc_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go-grpc_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go-grpc_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go-grpc_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb %s",
+						dir, outDir, outDir, strings.Join(paths, " ")),
 				)
 			}
 		}
@@ -490,6 +778,10 @@ func (b *Builder) BuildImage(image *Image) error {
 				dirs = append(dirs, dir)
 			}
 			sort.Strings(dirs)
+			goParallel := ""
+			if l.GoBuildP > 0 {
+				goParallel = fmt.Sprintf("-p %d ", l.GoBuildP)
+			}
 			for _, dir := range dirs {
 				i, err := goInputs.Load(dir)
 				if err != nil {
@@ -497,7 +789,7 @@ func (b *Builder) BuildImage(image *Image) error {
 				}
 				inputs = append(inputs, i...)
 				// Create target directory in overlay upper dir first to prevent symlink following
-				run = append(run, fmt.Sprintf("mkdir -p %q && go build -o %s %s", filepath.Dir(l.GoBuild[dir]), l.GoBuild[dir], "./"+dir))
+				run = append(run, fmt.Sprintf("mkdir -p %q && go build %s-o %s %s", filepath.Dir(l.GoBuild[dir]), goParallel, l.GoBuild[dir], "./"+dir))
 			}
 			dirs = make([]string, 0, len(l.CGoBuild))
 			for dir := range l.CGoBuild {
@@ -511,7 +803,7 @@ func (b *Builder) BuildImage(image *Image) error {
 				}
 				inputs = append(inputs, i...)
 				// Create target directory in overlay upper dir first to prevent symlink following
-				run = append(run, fmt.Sprintf("mkdir -p %q && cgo build -o %s %s", filepath.Dir(l.CGoBuild[dir]), l.CGoBuild[dir], "./"+dir))
+				run = append(run, fmt.Sprintf("mkdir -p %q && cgo build %s-o %s %s", filepath.Dir(l.CGoBuild[dir]), goParallel, l.CGoBuild[dir], "./"+dir))
 			}
 		}
 
@@ -551,6 +843,13 @@ func (b *Builder) BuildImage(image *Image) error {
 				return fmt.Errorf("error parsing env template %q: %s", v, err)
 			}
 			env[k] = buf.String()
+		}
+
+		if layerUsesAPT(l) && len(run) > 0 {
+			run = append([]string{flynnAptLayerPrelude}, run...)
+			if _, want := aptArchiveCacheDir(b.log); want {
+				run = wrapAptCommandsWithExclusiveLock(run)
+			}
 		}
 
 		// generate the layer ID from the layer config, artifact and
@@ -730,7 +1029,20 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(dir)
+	keepDir := os.Getenv("FLYNN_BUILDER_KEEP_TEMP") != ""
+	// keepOnFail is set to true on failure so the temp dir survives for inspection.
+	keepOnFail := false
+	if !keepDir {
+		defer func() {
+			if keepOnFail {
+				b.log.Info("flynn-builder: preserving build temp dir after failure", "layer", name, "dir", dir)
+				return
+			}
+			os.RemoveAll(dir)
+		}()
+	} else {
+		b.log.Info("flynn-builder: preserving build temp dir", "layer", name, "dir", dir)
+	}
 	if err := os.Chmod(dir, 0755); err != nil {
 		return nil, err
 	}
@@ -768,11 +1080,31 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		}
 	}
 
+	// Write a sidecar listing of every input copied so the failed build can be
+	// diagnosed when the temp dir is preserved on error.
+	if f, ferr := os.Create(filepath.Join(dir, ".flynn-builder-inputs.txt")); ferr == nil {
+		for _, in := range inputs {
+			fmt.Fprintln(f, in)
+		}
+		f.Close()
+	}
+
 	// copy the flynn-builder binary into the shared directory so we can
 	// run it inside the job
 	if err := copyFile(os.Args[0], "bin/flynn-builder"); err != nil {
 		b.log.Error("error copying flynn-builder binary", "err", err)
 		return nil, err
+	}
+
+	if err := installShim(b.log, dir, "flynn-curl", "builder/img/flynn-curl.sh", "bin/curl", copyFile); err != nil {
+		return nil, err
+	}
+	if err := installShim(b.log, dir, "flynn-git", "builder/img/flynn-git.sh", "bin/git", copyFile); err != nil {
+		return nil, err
+	}
+
+	if env == nil {
+		env = make(map[string]string)
 	}
 
 	job := &host.Job{
@@ -785,6 +1117,12 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 			"flynn-controller.app_name": "builder",
 			"flynn-controller.type":     name,
 		},
+	}
+	cacheOK := b.appendBuildCacheMounts(job)
+	prependMntBinToPath(job.Config.Env)
+	if cacheOK {
+		job.Config.Env["FLYNN_HTTP_CACHE_ROOT"] = flynnHTTPDownloadMountPoint
+		job.Config.Env["FLYNN_GIT_CACHE_ROOT"] = flynnGitCacheMountPoint
 	}
 	cmd := exec.Cmd{Job: job}
 
@@ -882,7 +1220,8 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 	// run the job
 	b.log.Info("building layer", "layer.name", name, "layer.id", id)
 	if err := cmd.Run(); err != nil {
-		b.log.Error("error running the build job", "name", name, "err", err)
+		keepOnFail = true
+		b.log.Error("error running the build job", "name", name, "err", err, "temp_dir", dir)
 		return nil, err
 	}
 
@@ -904,6 +1243,10 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 			defer src.Close()
 			dstPath, err := filepath.Rel(protoDir, path)
 			if err != nil {
+				return err
+			}
+			dstPath = normalizeGeneratedProtoRel(dstPath)
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
 				return err
 			}
 			dst, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
@@ -1255,4 +1598,19 @@ func (g *GoInputs) load(pkg string) ([]string, error) {
 	g.inputs[pkg] = inputs.([]string)
 	g.mtx.Unlock()
 	return inputs.([]string), nil
+}
+
+// normalizeGeneratedProtoRel maps nested protoc-gen-go output (paths derived from
+// option go_package) back to the tree Flynn expects next to each .proto file.
+// See controller/api: outputs land under .../controller/api/github.com/flynn/.../api/
+func normalizeGeneratedProtoRel(rel string) string {
+	nested := filepath.Join("controller", "api", "github.com", "flynn", "flynn", "controller", "api")
+	if rel == nested {
+		return rel
+	}
+	sep := string(filepath.Separator)
+	if strings.HasPrefix(rel, nested+sep) {
+		return filepath.Join("controller", "api", filepath.Base(rel))
+	}
+	return rel
 }

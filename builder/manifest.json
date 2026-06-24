@@ -3,9 +3,9 @@
     "type": "squashfs",
     "id": "local-base",
     "url": "file:///var/lib/flynn/base-layer.squashfs",
-    "size": 81035264,
+    "size": 78524416,
     "hashes": {
-      "sha512_256": "6c7f97dd6dd9e8bf2b56878aea0bfcdcc0e4974b695887ebba3b22bf7f9bd36b"
+      "sha512_256": "e7a9a0c74f26153c53dbc740b6f1fc8a02c040ff190b053b295145f5446931f5"
     }
   },
   "images": [
@@ -123,6 +123,11 @@
           "env": {
             "FLYNN_VERSION": "{{ .Version }}"
           },
+          "limits": {
+            "memory": "8G",
+            "temp_disk": "2G"
+          },
+          "go_build_p": 2,
           "cgobuild": {
             "host": "/usr/local/bin/flynn-host"
           },
@@ -159,6 +164,7 @@
             "controller/scheduler": "/bin/flynn-scheduler",
             "controller/worker": "/bin/flynn-worker"
           },
+          "go_build_p": 2,
           "copy": {
             "controller/start.sh": "/bin/start-flynn-controller",
             "util/ca-certs/ca-certs.pem": "/etc/ssl/certs/ca-certs.pem"
@@ -173,6 +179,7 @@
             "cp -r schema /etc/flynn-controller/jsonschema"
           ],
           "limits": {
+            "memory": "4G",
             "temp_disk": "1G"
           }
         }
@@ -494,14 +501,16 @@
           "script": "slugbuilder/img/packages.sh",
           "inputs": [
             "slugbuilder/builder/buildpacks.txt",
-            "slugbuilder/builder/install-buildpack"
+            "slugbuilder/builder/install-buildpack",
+            "slugbuilder/builder/common_tools.flynn.sh",
+            "slugbuilder/builder/flynn-heroku-go-common-overrides.sh",
+            "slugbuilder/builder/patch-heroku-go-multiarch.sh"
           ]
         },
         {
           "name": "slugbuilder-binaries",
           "gobuild": {
-            "slugbuilder/artifact": "/bin/create-artifact",
-            "slugbuilder/migrator": "/bin/slug-migrator"
+            "slugbuilder/artifact": "/bin/create-artifact"
           },
           "copy": {
             "slugbuilder/convert-legacy-slug.sh": "/bin/convert-legacy-slug.sh",
@@ -585,6 +594,15 @@
       "template": "cli"
     },
     {
+      "id": "cli-linux-arm64",
+      "base": "busybox",
+      "env": {
+        "GOOS": "linux",
+        "GOARCH": "arm64"
+      },
+      "template": "cli"
+    },
+    {
       "id": "cli-linux-386",
       "base": "busybox",
       "env": {
@@ -599,6 +617,15 @@
       "env": {
         "GOOS": "darwin",
         "GOARCH": "amd64"
+      },
+      "template": "cli"
+    },
+    {
+      "id": "cli-darwin-arm64",
+      "base": "busybox",
+      "env": {
+        "GOOS": "darwin",
+        "GOARCH": "arm64"
       },
       "template": "cli"
     },
@@ -633,6 +660,15 @@
         },
         {
           "name": "test-binaries",
+          "limits": {
+            "memory": "6G"
+          },
+          "go_build_p": 2,
+          "inputs": [
+            "pkg/sirenia/xlog/*.go",
+            "pkg/sirenia/client/*.go",
+            "pkg/sirenia/state/*.go"
+          ],
           "cgobuild": {
             "test": "/bin/flynn-test",
             "test/runner": "/bin/flynn-test-runner"
@@ -672,6 +708,10 @@
         },
         {
           "name": "test-apps-binaries",
+          "limits": {
+            "memory": "3G"
+          },
+          "go_build_p": 2,
           "gobuild": {
             "test/apps/echoer": "/bin/echoer",
             "test/apps/ping": "/bin/pingserv",
@@ -693,6 +733,10 @@
           "env": {
             "FLYNN_VERSION": "{{ .Version }}"
           },
+          "limits": {
+            "memory": "4G"
+          },
+          "go_build_p": 2,
           "gobuild": {
             "cli": "/bin/flynn-${GOOS}-${GOARCH}"
           }

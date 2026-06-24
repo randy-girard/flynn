@@ -112,6 +112,7 @@ Commands:
   promote                    Promotes a Flynn node to a member of the consensus cluster
   demote                     Demotes a Flynn node, removing it from the consensus cluster
   log-sink                   Manage host log sinks
+  webhooks                   Manage webhook notification endpoints
   cli-add-command            Get the 'flynn cluster add' command to manage this cluster
   volume                     Manage volumes on the Flynn node
   acme                       Manage ACME/Let's Encrypt configuration
@@ -346,6 +347,14 @@ func runDaemon(args *docopt.Args) {
 
 	discoverdManager := NewDiscoverdManager(backend, sman, hostID, publishAddr, tags)
 	publishURL := "http://" + publishAddr
+	webhookDisp := NewWebhookDispatcher(hostID, state, logger)
+	go webhookDisp.Run()
+	shutdown.BeforeExit(func() {
+		webhookDisp.Send("D11", "Daemon shutting down", "info", "", nil, nil)
+		webhookDisp.Shutdown()
+	})
+	state.webhookDispatcher = webhookDisp
+
 	host := &Host{
 		id:  hostID,
 		url: publishURL,
@@ -354,15 +363,15 @@ func runDaemon(args *docopt.Args) {
 			URL:  publishURL,
 			Tags: tags,
 		},
-		state:   state,
-		backend: backend,
-		vman:    vman,
-		sman:    sman,
-		volAPI:  volumeapi.NewHTTPAPI(vman),
-		discMan: discoverdManager,
-		log:     logger.New("host.id", hostID),
-		authKey: authKey,
-
+		state:   					 state,
+		backend: 					 backend,
+		vman:    					 vman,
+		sman:   					 sman,
+		volAPI: 					 volumeapi.NewHTTPAPI(vman),
+		discMan:					 discoverdManager,
+		log:    					 logger.New("host.id", hostID),
+		authKey:					 authKey,
+		webhookDispatcher: webhookDisp,
 		maxJobConcurrency: maxJobConcurrency,
 	}
 	backend.SetHost(host)
@@ -461,17 +470,20 @@ func runDaemon(args *docopt.Args) {
 		log.Error("error restoring state", "err", err)
 		shutdown.Fatal(err)
 	}
-	shutdown.BeforeExit(func() {
-		// close discoverd before stopping jobs so we can unregister first
-		log.Info("unregistering with service discovery")
-		if err := discoverdManager.Close(); err != nil {
-			log.Error("error unregistering with service discovery", "err", err)
-		}
-		stopJobs()
-	})
+	// Intentionally do NOT stop jobs or unregister from discoverd on exit.
+	// Job containers are independent processes (no Pdeathsig) and the systemd
+	// unit uses KillMode=process, so they survive the daemon exiting. Leaving
+	// them running makes `systemctl restart flynn-host` (used by the updater)
+	// non-destructive: the freshly started daemon's state.Restore reconnects
+	// to the still-running containers instead of resurrecting them, and the
+	// host stays registered in discoverd so the scheduler doesn't churn. The
+	// previous BeforeExit handler called discoverdManager.Close()+stopJobs(),
+	// which tore down every container on each restart and forced a full
+	// resurrection (postgres re-clone, sirenia re-election, etc.).
 
 	log.Info("serving HTTP requests")
 	host.ServeHTTP()
+	webhookDisp.Send("D10", "Daemon started", "info", "", nil, nil)
 
 	if controlFD > 0 {
 		// now that we are serving requests, send an "ok" message to the parent

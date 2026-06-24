@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/flynn/flynn/controller/api"
+	"github.com/flynn/flynn/controller/authz"
+	"github.com/flynn/flynn/controller/authorizer"
 	"github.com/flynn/flynn/controller/data"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/ctxhelper"
 	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/flynn/pkg/random"
-	"github.com/golang/protobuf/ptypes/empty"
 	middleware "github.com/grpc-ecosystem/go-grpc-middleware"
 	log "github.com/inconshreveable/log15"
 	"golang.org/x/net/context"
@@ -24,6 +25,7 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/stats"
 	"google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 type grpcAPI struct {
@@ -32,24 +34,24 @@ type grpcAPI struct {
 	db *postgres.DB
 }
 
-func (g *grpcAPI) authorize(ctx context.Context) (context.Context, error) {
+func (g *grpcAPI) authorizeWithToken(ctx context.Context) (context.Context, *authorizer.Token, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
-		return ctx, grpc.Errorf(codes.Unauthenticated, "metadata missing")
+		return ctx, nil, grpc.Errorf(codes.Unauthenticated, "metadata missing")
 	}
 
 	auth := md["authorization"]
 	if len(auth) == 0 || auth[0] == "" {
-		return ctx, grpc.Errorf(codes.Unauthenticated, "no Authorization provided")
+		return ctx, nil, grpc.Errorf(codes.Unauthenticated, "no Authorization provided")
 	}
 
 	token, err := g.authorizer.AuthorizeToken(auth[0])
 	if err != nil {
-		return ctx, grpc.Errorf(codes.Unauthenticated, "%s", err.Error())
+		return ctx, nil, grpc.Errorf(codes.Unauthenticated, "%s", err.Error())
 	}
 	ctx = ctxhelper.NewContextLogger(ctx, g.logger(ctx).New("auth_token_id", token.ID, "auth_user", token.User))
 
-	return ctx, nil
+	return ctx, token, nil
 }
 
 func (g *grpcAPI) logger(ctx context.Context) log.Logger {
@@ -158,9 +160,12 @@ func (g *grpcAPI) streamInterceptor(srv interface{}, stream grpc.ServerStream, i
 		logRequestEnd(ctx, err)
 	}()
 
-	ctx, err = g.authorize(stream.Context())
+	ctx, tok, err := g.authorizeWithToken(stream.Context())
 	if err != nil {
 		return err
+	}
+	if !authz.GRPCAllowed(tok, info.FullMethod) {
+		return status.Error(codes.PermissionDenied, "insufficient scopes for this gRPC method (dashboard app-scoped tokens use controller HTTP)")
 	}
 
 	wrappedStream := middleware.WrapServerStream(stream)
@@ -174,15 +179,18 @@ func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *g
 		logRequestEnd(ctx, err)
 	}()
 
-	ctx, err = g.authorize(ctx)
+	ctx, tok, err := g.authorizeWithToken(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if !authz.GRPCAllowed(tok, info.FullMethod) {
+		return nil, status.Error(codes.PermissionDenied, "insufficient scopes for this gRPC method (dashboard app-scoped tokens use controller HTTP)")
 	}
 
 	return handler(ctx, req)
 }
 
-func (g *grpcAPI) Status(context.Context, *empty.Empty) (*api.StatusResponse, error) {
+func (g *grpcAPI) Status(context.Context, *emptypb.Empty) (*api.StatusResponse, error) {
 	healthy := true
 	if err := g.db.Exec("ping"); err != nil {
 		healthy = false

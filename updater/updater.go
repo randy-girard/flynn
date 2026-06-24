@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/flynn/flynn/controller/client"
@@ -14,6 +13,7 @@ import (
 	"github.com/flynn/flynn/discoverd/client"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
+	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/flynn/updater/types"
 	"github.com/mattn/go-colorable"
@@ -180,13 +180,12 @@ func run() error {
 				deployErr = nil
 				break
 			}
-			// Sirenia-based apps (postgres, mariadb, mongodb) may not have
-			// fully reformed their cluster yet after a daemon restart.
-			// Retry for up to 2 minutes to give asyncs time to rejoin.
-			if strings.Contains(deployErr.Error(), "sirenia") && attempt < 12 {
-				log.Warn("sirenia cluster not ready, retrying deploy",
-					"app", appInfo.Name, "err", deployErr, "attempt", attempt)
-				time.Sleep(10 * time.Second)
+			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
+			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
+				log.Warn("discovery or sirenia cluster not settled, retrying deploy",
+					"app", appInfo.Name, "err", deployErr, "attempt", attempt,
+					"max_attempts", maxUnsettled)
+				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
 				continue
 			}
 			return deployErr
@@ -195,6 +194,9 @@ func run() error {
 			continue
 		}
 		log.Info("finished deploy of system app")
+		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, log.New("after_system_app_deploy", appInfo.Name))
+		}
 	}
 
 	// deploy all other apps (including provisioned Redis apps)

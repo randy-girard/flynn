@@ -3,26 +3,26 @@
 set -e
 
 apt-get update
-apt-get install -y wget rpm # for shasum
+apt-get install -y curl
 
-#URL="https://dl.minio.io/server/minio/release/linux-amd64/archive/minio.RELEASE.2019-05-23T00-29-34Z"
-#SHA="6d791cba42ef3e9b8c807715b5b4d3bc8cecf40bcec93be5b50f89429fedc457"
+ARCH="$(dpkg --print-architecture)"
 
-#TMP="$(mktemp --directory)"
-#trap "rm -rf ${TMP}" EXIT
+case "$ARCH" in
+  amd64)  MINIO_ARCH="amd64" ;;
+  arm64)  MINIO_ARCH="arm64" ;;
+  armhf)  MINIO_ARCH="arm" ;;
+  ppc64el) MINIO_ARCH="ppc64le" ;;
+  s390x) MINIO_ARCH="s390x" ;;
+  *)
+    echo "Unsupported architecture: $ARCH"
+    exit 1
+    ;;
+esac
 
-#curl -fsSLo "${TMP}/minio" "${URL}"
-#echo "${SHA}  ${TMP}/minio" | shasum -a 256 -c
+URL="https://dl.min.io/server/minio/release/linux-${MINIO_ARCH}/minio"
 
-#mv "${TMP}/minio" "/bin/minio"
-#chmod +x "/bin/minio"
+curl -fsSL --retry 5 --retry-delay 3 \
+  -o /usr/local/bin/minio \
+  "${URL}"
 
-wget \
-  --tries=5 \
-  --retry-connrefused \
-  --waitretry=5 \
-  --timeout=30 \
-  -O /tmp/minio-0.0.20210116021944.x86_64.rpm \
-  https://dl.min.io/server/minio/release/linux-amd64/archive/minio-0.0.20210116021944.x86_64.rpm
-rpm -ivh /tmp/minio-0.0.20210116021944.x86_64.rpm
-rm -rf /tmp/minio-0.0.20210116021944.x86_64.rpm
+chmod +x /usr/local/bin/minio

@@ -987,3 +987,138 @@ func (TestSuite) TestActiveJobSync(c *C) {
 	assertJob("job1", JobStateRunning)
 	assertJob("job2", JobStateStopped)
 }
+
+
+// TestFindVolumeCrossRelease covers the singleton-sirenia volume-reuse
+// path: by default the scheduler must adopt an existing /data volume
+// belonging to a different release of the same app, but only if that
+// release is still recorded as a known formation (to avoid picking up a
+// stale volume left behind for an unrelated app).
+func (TestSuite) TestFindVolumeCrossRelease(c *C) {
+	const (
+		oldReleaseID = "release-old"
+		newReleaseID = "release-new"
+		otherAppID   = "app-other"
+	)
+
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+
+	releaseFor := func(id string) *ct.Release {
+		return &ct.Release{ID: id, ArtifactIDs: []string{testArtifactId}}
+	}
+	addFormation := func(appID, releaseID string) {
+		ef := &ct.ExpandedFormation{
+			App:     &ct.App{ID: appID},
+			Release: releaseFor(releaseID),
+		}
+		s.formations.Add(NewFormation(ef))
+	}
+	addFormation(testAppID, oldReleaseID)
+	addFormation(testAppID, newReleaseID)
+	addFormation(otherAppID, "release-other")
+
+	addVolume := func(id, appID, releaseID, jobType, path string) *Volume {
+		vol := &Volume{
+			Volume: ct.Volume{
+				VolumeReq: ct.VolumeReq{Path: path},
+				ID:        id,
+				AppID:     appID,
+				ReleaseID: releaseID,
+				JobType:   jobType,
+				State:     ct.VolumeStateCreated,
+			},
+		}
+		s.volumes[id] = vol
+		return vol
+	}
+
+	jobFor := func(appID, releaseID, jobType string) *Job {
+		return &Job{AppID: appID, ReleaseID: releaseID, Type: jobType}
+	}
+
+	// baseline: same release matches
+	addVolume("vol-same", testAppID, newReleaseID, "postgres", "/data")
+	got := s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-same")
+	delete(s.volumes, "vol-same")
+
+	// a volume from a different release of the same app is adopted by default
+	addVolume("vol-old", testAppID, oldReleaseID, "postgres", "/data")
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-old")
+
+	// the volume's release is no longer known to the scheduler: fall
+	// through and create a new one (findVolume returns nil)
+	delete(s.formations, utils.FormationKey{AppID: testAppID, ReleaseID: oldReleaseID})
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+	addFormation(testAppID, oldReleaseID) // restore for following assertions
+
+	// app mismatch is rejected
+	addVolume("vol-foreign", otherAppID, "release-other", "postgres", "/data")
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-old") // still picks the same-app volume, never the foreign one
+
+	// remove the same-app candidate; the foreign volume must not be adopted
+	delete(s.volumes, "vol-old")
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+
+	// path mismatch is still respected
+	addVolume("vol-other-path", testAppID, oldReleaseID, "postgres", "/other")
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+
+	// job type mismatch is still respected
+	addVolume("vol-other-type", testAppID, oldReleaseID, "worker", "/data")
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+
+	// volume held by a still-running job of a different release is not
+	// adopted (no concurrent stop is in progress, so the holder still
+	// owns the data)
+	delete(s.volumes, "vol-other-path")
+	delete(s.volumes, "vol-other-type")
+	holdRunning := addVolume("vol-held-running", testAppID, oldReleaseID, "postgres", "/data")
+	holderRunningID := "holder-running"
+	s.jobs[holderRunningID] = &Job{ID: holderRunningID, State: JobStateRunning}
+	holdRunning.JobID = &holderRunningID
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+
+	// volume held by a stopping job (singleton-sirenia swap) is
+	// adopted: the holder will not be (re)started, so the new job can
+	// take the volume even before the host has reported the exit
+	holderStoppingID := "holder-stopping"
+	s.jobs[holderStoppingID] = &Job{ID: holderStoppingID, State: JobStateStopping}
+	holdRunning.JobID = &holderStoppingID
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-held-running")
+
+	// volume held by a stopped job is also adopted
+	holderStoppedID := "holder-stopped"
+	s.jobs[holderStoppedID] = &Job{ID: holderStoppedID, State: JobStateStopped}
+	holdRunning.JobID = &holderStoppedID
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-held-running")
+
+	// ephemeral (DeleteOnStop) volumes are never adopted: the host
+	// destroys the underlying dataset when the holder exits, so reusing
+	// the scheduler's in-memory entry would cause AddJob to fail with
+	// "required volume ... does not exist"
+	delete(s.volumes, "vol-held-running")
+	ephemeral := addVolume("vol-ephemeral", testAppID, newReleaseID, "postgres", "/data")
+	ephemeral.DeleteOnStop = true
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
+}

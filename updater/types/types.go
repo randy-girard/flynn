@@ -36,7 +36,13 @@ var SystemApps = []SystemApp{
 	{Name: "status"},
 	{Name: "slugbuilder", ImageOnly: true},
 	{Name: "slugrunner", ImageOnly: true},
-	{Name: "mariadb", Optional: true},
-	{Name: "mongodb", Optional: true},
+	{
+		Name:     "mariadb",
+		Optional: true,
+	},
+	{
+		Name:     "mongodb",
+		Optional: true,
+	},
 	{Name: "redis"},
 }

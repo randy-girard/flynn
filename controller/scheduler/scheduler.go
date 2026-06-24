@@ -1036,7 +1036,10 @@ func (s *Scheduler) HandleSinkChange(sink *ct.Sink) {
 }
 
 // findVolume looks for an existing, unassigned volume which matches the given
-// job's app, release and type, and the volume request's path
+// job's app and type, and the volume request's path. Volumes from a different
+// release of the same app are adopted as long as the scheduler still knows
+// about that release, so that a `flynn-host update` (which mints a new
+// release ID) reuses the existing data instead of allocating a fresh dataset.
 func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 	for _, vol := range s.volumes {
 		// skip destroyed or decommissioned volumes
@@ -1044,12 +1047,26 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
-		// skip if the app, release, type or path do not match
+		// skip ephemeral volumes: they are destroyed on the host when
+		// the job that owned them exits, and the scheduler's in-memory
+		// entry may outlive the underlying dataset, so adopting one
+		// would result in the host rejecting the placement with
+		// "required volume ... does not exist"
+		if vol.DeleteOnStop {
+			continue
+		}
+
+		// skip if the app, type or path do not match
 		if vol.AppID != job.AppID {
 			continue
 		}
 		if vol.ReleaseID != job.ReleaseID {
-			continue
+			// only adopt volumes from a release that the scheduler still
+			// knows belongs to this app, to avoid picking up a stale
+			// volume left behind for an unrelated app
+			if !s.releaseKnownForApp(vol.AppID, vol.ReleaseID) {
+				continue
+			}
 		}
 		if vol.JobType != job.Type {
 			continue
@@ -1058,9 +1075,21 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
-		// skip if the volume is assigned to another job
+		// skip if the volume is assigned to a job that is still
+		// running; if the holder is already stopping/stopped/blocked
+		// the scheduler will not (re)start it, so the volume is
+		// conceptually free for adoption by the replacement job. This
+		// is required for singleton sirenia updates where the old job
+		// is stopped and the new job is placed in rapid succession,
+		// before the host has reported the old job as exited.
 		if vol.JobID != nil && *vol.JobID != job.ID {
-			continue
+			holder, ok := s.jobs[*vol.JobID]
+			if !ok {
+				continue
+			}
+			if holder.State != JobStateStopping && holder.State != JobStateStopped && holder.State != JobStateBlocked {
+				continue
+			}
 		}
 
 		// skip if we have already assigned the job to a host
@@ -1073,6 +1102,13 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 		return vol
 	}
 	return nil
+}
+
+// releaseKnownForApp reports whether the scheduler currently has a formation
+// recorded for the given (appID, releaseID) pair, which it does for every
+// release with a (possibly zero) formation that the controller has loaded.
+func (s *Scheduler) releaseKnownForApp(appID, releaseID string) bool {
+	return s.formations.Get(appID, releaseID) != nil
 }
 
 func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
@@ -2082,14 +2118,14 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 			}
 
 			// either assign or unassign the job from the volume based on
-			// the job's status
+			// the job's status; only clear the assignment if it still
+			// points to this job, so we don't clobber a fresh claim
+			// made by HandlePlacementRequest for a replacement job
+			// while the host event for the exiting job is in flight.
 			previousJobID := vol.JobID
 			if activeJob.Status == host.StatusStarting || activeJob.Status == host.StatusRunning {
 				vol.JobID = &job.ID
-			} else if !vol.DeleteOnStop {
-				// only unassign if DeleteOnStop isn't set
-				// (we don't want to try assigning it to other
-				// jobs if it's about to be destroyed)
+			} else if !vol.DeleteOnStop && vol.JobID != nil && *vol.JobID == job.ID {
 				vol.JobID = nil
 			}
 
@@ -2310,8 +2346,14 @@ func (s *Scheduler) handleFormation(ef *ct.ExpandedFormation) (formation *Format
 		}
 
 		// do not completely scale down critical apps for which this is the only active formation
-		// (this prevents for example scaling down discoverd which breaks the cluster)
-		if diff.IsScaleDownOf(formation.OriginalProcesses) && formation.App.Critical() && s.activeFormationCount(formation.App.ID) < 2 {
+		// (this prevents for example scaling down discoverd which breaks the cluster).
+		//
+		// sirenia-managed databases (postgres, mariadb, mongodb) are exempt: a
+		// singleton sirenia deploy must scale the old release to zero so the
+		// data volume is released and adopted by the new release, and that
+		// scale-down is coordinated by the sirenia deployment strategy rather
+		// than this gate.
+		if diff.IsScaleDownOf(formation.OriginalProcesses) && formation.App.Critical() && s.activeFormationCount(formation.App.ID) < 2 && !formation.Release.IsSirenia() {
 			log.Info("refusing to scale down critical app")
 			return
 		}

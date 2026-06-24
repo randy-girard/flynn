@@ -146,8 +146,14 @@ func peersEqual(a, b *discoverd.Instance) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
-	return a.ID == b.ID
-
+	// Instance.Equal compares Addr, Proto and Meta. Comparing Meta is required
+	// because discoverd.Instance.ID is derived solely from Proto+Addr, so a
+	// peer that has been replaced at the same flannel IP keeps the same ID
+	// even though its appliance-level identity (POSTGRES_ID / MARIADB_ID /
+	// MONGODB_ID, stored in Meta) is different. Without the Meta check,
+	// Config.Equal short-circuits a reconfigure after a rolling restart and
+	// the primary keeps targeting a stale synchronous standby name.
+	return a.Equal(b)
 }
 
 func (x *Config) Equal(y *Config) bool {
@@ -558,6 +564,17 @@ func (p *Peer) evalClusterState() {
 	if p.Info().Role == RoleUnassigned {
 		if i := p.whichAsync(); i != -1 {
 			p.assumeAsync(i)
+			return
+		}
+		// A frozen singleton cluster cannot self-heal when the recorded
+		// primary disappears: the freeze short-circuits state changes below,
+		// and unassigned peers otherwise have no takeover path. When we are
+		// configured as a singleton peer, the cluster is in singleton-frozen
+		// mode, and the recorded primary is no longer present in discoverd,
+		// promote ourselves so that singleton-deploy job replacement and
+		// crash recovery can complete instead of hanging indefinitely.
+		if p.canSingletonTakeover() {
+			p.startSingletonTakeover()
 		}
 		return
 	}
@@ -588,8 +605,17 @@ func (p *Peer) evalClusterState() {
 		return
 	}
 
-	// Deposed peers should remain deposed and do nothing
+	// Deposed peers remain idle while listed in cluster state Deposed. Once the
+	// primary clears them (typically after they re-register in discoverd), pick
+	// up the new role instead of staying deposed forever.
 	if p.Info().Role == RoleDeposed {
+		for _, d := range p.Info().State.Deposed {
+			if d.Meta[p.idKey] == p.id {
+				return
+			}
+		}
+		log.Info("no longer deposed, re-evaluating role", "fn", "evalClusterState")
+		p.evalInitClusterState()
 		return
 	}
 
@@ -651,6 +677,7 @@ func (p *Peer) evalClusterState() {
 	presentPeers[p.Info().State.Sync.Meta[p.idKey]] = struct{}{}
 
 	newAsync := make([]*discoverd.Instance, 0, len(p.Info().Peers))
+	newDeposed := make([]*discoverd.Instance, 0, len(p.Info().State.Deposed))
 	changes := false
 
 	for _, a := range p.Info().State.Async {
@@ -663,9 +690,16 @@ func (p *Peer) evalClusterState() {
 		}
 	}
 
-	// Deposed peers should not be assigned as asyncs
 	for _, d := range p.Info().State.Deposed {
-		presentPeers[d.Meta[p.idKey]] = struct{}{}
+		if p.peerIsPresent(d) {
+			log.Info("deposed peer rejoined, re-adding as async",
+				"peer.id", d.Meta[p.idKey], "peer.addr", d.Addr)
+			presentPeers[d.Meta[p.idKey]] = struct{}{}
+			newAsync = append(newAsync, d)
+			changes = true
+		} else {
+			newDeposed = append(newDeposed, d)
+		}
 	}
 
 	for _, peer := range p.Info().Peers {
@@ -677,11 +711,11 @@ func (p *Peer) evalClusterState() {
 		changes = true
 	}
 
-	if !changes {
+	if !changes && len(newDeposed) == len(p.Info().State.Deposed) {
 		return
 	}
 
-	p.startUpdateAsyncs(newAsync)
+	p.startUpdateAsyncs(newAsync, newDeposed)
 }
 
 func (p *Peer) startInitialSetup() {
@@ -714,6 +748,62 @@ func (p *Peer) startInitialSetup() {
 		info.State = p.updatingState
 		p.setInfo(info)
 	}
+	p.updatingState = nil
+
+	p.triggerEval()
+}
+
+// canSingletonTakeover reports whether this peer should claim the singleton
+// cluster from an absent primary. It is only true for a singleton-configured
+// peer that is currently unassigned and observes that the recorded primary
+// in a singleton-frozen cluster is no longer present in the peer list.
+func (p *Peer) canSingletonTakeover() bool {
+	if !p.singleton {
+		return false
+	}
+	state := p.Info().State
+	if state == nil || !state.Singleton || state.Freeze == nil || state.Primary == nil {
+		return false
+	}
+	if state.Primary.Meta[p.idKey] == p.id {
+		return false
+	}
+	return !p.peerIsPresent(state.Primary)
+}
+
+// startSingletonTakeover replaces the recorded primary of a frozen singleton
+// cluster with ourselves. It mirrors startInitialSetup but bumps the existing
+// generation rather than starting from zero, and re-freezes the cluster to
+// preserve singleton invariants. Callers must guarantee canSingletonTakeover
+// is true at invocation time.
+func (p *Peer) startSingletonTakeover() {
+	if p.updatingState != nil {
+		panic("already have updating state")
+	}
+
+	prev := p.Info().State
+	p.updatingState = &State{
+		Generation: prev.Generation + 1,
+		Primary:    p.self,
+		InitWAL:    p.db.XLog().Zero(),
+		Singleton:  true,
+		Freeze:     NewFreezeDetails("singleton primary replaced"),
+	}
+
+	log := p.log.New("fn", "startSingletonTakeover")
+	log.Info("taking over singleton cluster from absent primary",
+		"generation", p.updatingState.Generation)
+
+	if err := p.putClusterState(); err != nil {
+		log.Error("failed to write singleton takeover state", "err", err)
+		p.updatingState = nil
+		p.evalLater(1 * time.Second)
+		return
+	}
+
+	info := *p.Info()
+	info.State = p.updatingState
+	p.setInfo(info)
 	p.updatingState = nil
 
 	p.triggerEval()
@@ -796,6 +886,15 @@ func (p *Peer) evalInitClusterState() {
 		return
 	}
 	if p.Info().State.Singleton {
+		// A singleton peer joining a cluster whose recorded primary is a
+		// different (no longer present) instance must claim the cluster
+		// itself; otherwise it would sit unassigned forever, because no
+		// later event would fire to re-trigger evaluation (the previous
+		// primary was already gone when we initialised).
+		if p.canSingletonTakeover() {
+			p.startSingletonTakeover()
+			return
+		}
 		p.assumeUnassigned()
 		return
 	}
@@ -980,19 +1079,22 @@ func (p *Peer) startTransitionToNormalMode() {
 	})
 }
 
-func (p *Peer) startUpdateAsyncs(newAsync []*discoverd.Instance) {
+func (p *Peer) startUpdateAsyncs(newAsync, newDeposed []*discoverd.Instance) {
 	if p.updatingState != nil {
 		panic("startUpdateAsyncs with existing update state")
 	}
 	log := p.log.New("fn", "startUpdateAsyncs")
 
 	state := p.Info().State
+	if newDeposed == nil {
+		newDeposed = state.Deposed
+	}
 	p.updatingState = &State{
 		Generation: state.Generation,
 		Primary:    state.Primary,
 		Sync:       state.Sync,
 		Async:      newAsync,
-		Deposed:    state.Deposed,
+		Deposed:    newDeposed,
 		InitWAL:    state.InitWAL,
 	}
 	log.Info("updating list of asyncs")

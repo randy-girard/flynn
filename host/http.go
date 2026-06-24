@@ -23,6 +23,7 @@ import (
 	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/keepalive"
+	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sse"
 	"github.com/inconshreveable/log15"
@@ -50,8 +51,27 @@ type Host struct {
 	maxJobConcurrency uint64
 
 	authKey string
+	
+	webhookDispatcher *WebhookDispatcher
 
 	log log15.Logger
+}
+
+// hostAuthKeyFromRequest returns the credential sent as Auth-Key or Basic password.
+func hostAuthKeyFromRequest(r *http.Request) string {
+	key := r.Header.Get("Auth-Key")
+	if key == "" {
+		_, key, _ = r.BasicAuth()
+	}
+	return key
+}
+
+// authKeyValid reports whether key matches the configured host API secret.
+func (h *Host) authKeyValid(key string) bool {
+	if h.authKey == "" || key == "" || len(key) != len(h.authKey) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) == 1
 }
 
 // authMiddleware wraps an http.Handler and requires a valid Auth-Key header
@@ -70,14 +90,7 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		key := r.Header.Get("Auth-Key")
-		if key == "" {
-			// Fall back to Basic auth password
-			_, key, _ = r.BasicAuth()
-		}
-
-		if key == "" || len(key) != len(h.authKey) ||
-			subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) != 1 {
+		if !h.authKeyValid(hostAuthKeyFromRequest(r)) {
 			w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
 			httphelper.Error(w, httphelper.JSONError{
 				Code:    httphelper.UnauthorizedErrorCode,
@@ -123,10 +136,25 @@ func (rl *perIPRateLimiter) Allow(ip string) bool {
 }
 
 func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
+	// Without host HTTP authentication, every client looks the same to us and the
+	// controller issues many requests from one address — a global limit breaks
+	// flynn run, pg psql, deploys, etc. Enable FLYNN_HOST_AUTH_KEY on flynn-host
+	// (and the same value on the controller) to apply limits only to clients that
+	// do not present the key.
+	if h.authKey == "" {
+		return next
+	}
 	limiter := newPerIPRateLimiter(100, time.Minute) // 100 requests per minute per IP
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Exempt health checks from rate limiting
 		if r.URL.Path == "/host/status" && r.Method == "GET" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Requests authenticated with the host API key are trusted (controller,
+		// CLI via controller, internal tooling). Per-IP limits still apply to
+		// missing or wrong credentials so brute-force attempts remain throttled.
+		if h.authKey != "" && h.authKeyValid(hostAuthKeyFromRequest(r)) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -241,6 +269,18 @@ func (h *Host) ConfigureNetworking(config *host.NetworkConfig) {
 		h.backend.SetNetworkConfig(h.status.Network)
 	}
 	h.statusMtx.Unlock()
+}
+
+// SetStatusNetwork publishes a previously-persisted NetworkConfig on HostStatus
+// without (re)configuring the bridge. This lets clients (notably flannel's
+// wrapper) learn the host's last-known subnet at startup and request the same
+// subnet via -preferred-subnet so the bridge IP stays stable across reboots.
+func (h *Host) SetStatusNetwork(config *host.NetworkConfig) {
+	h.statusMtx.Lock()
+	defer h.statusMtx.Unlock()
+	if h.status.Network == nil {
+		h.status.Network = config
+	}
 }
 
 func (h *Host) ConfigureDiscoverd(config *host.DiscoverdConfig) {
@@ -408,7 +448,15 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 	paths, err := d.DownloadBinaries(query.Get("bin-dir"))
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
-		httphelper.Error(w, err)
+		// Surface the underlying download error verbatim so the
+		// orchestrator (flynn-host update) doesn't have to ssh into
+		// each remote node to discover why the pull failed. Without
+		// this, httphelper collapses the raw error to "unknown_error:
+		// Something went wrong".
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("failed to download binaries from %q: %s", baseURL, err),
+		})
 		return
 	}
 
@@ -416,7 +464,10 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 	configs, err := d.DownloadConfig(query.Get("config-dir"))
 	if err != nil {
 		log.Error("error downloading config", "err", err)
-		httphelper.Error(w, err)
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("failed to download config from %q: %s", baseURL, err),
+		})
 		return
 	}
 	for k, v := range configs {
@@ -733,7 +784,55 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.POST("/host/update", h.Update)
 	r.POST("/host/systemctl-restart", h.SystemctlRestart)
 	r.POST("/host/tags", h.UpdateTags)
+	r.POST("/host/webhooks", h.AddWebhook)
+	r.GET("/host/webhooks", h.ListWebhooks)
+	r.DELETE("/host/webhooks/:id", h.RemoveWebhook)
 	return nil
+}
+
+func (h *jobAPI) AddWebhook(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	var input struct {
+		ID      string            `json:"id"`
+		URL     string            `json:"url"`
+		Headers map[string]string `json:"headers,omitempty"`
+	}
+	if err := httphelper.DecodeJSON(r, &input); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	if input.URL == "" {
+		httphelper.ValidationError(w, "url", "url is required")
+		return
+	}
+	id := input.ID
+	if id == "" {
+		id = random.UUID()
+	}
+	wh := &host.WebhookConfig{
+		ID:        id,
+		URL:       input.URL,
+		Headers:   input.Headers,
+		CreatedAt: time.Now().UTC(),
+	}
+	if err := h.host.state.AddWebhook(wh); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, wh)
+}
+
+func (h *jobAPI) ListWebhooks(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	webhooks := h.host.state.ListWebhooks()
+	httphelper.JSON(w, http.StatusOK, webhooks)
+}
+
+func (h *jobAPI) RemoveWebhook(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	id := ps.ByName("id")
+	if err := h.host.state.RemoveWebhook(id); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *Host) ServeHTTP() {
@@ -751,7 +850,8 @@ func (h *Host) ServeHTTP() {
 
 	h.sman.RegisterRoutes(r)
 
-	// SEC-017: apply rate limiting before auth to prevent brute-force attacks
+	// SEC-017: when host auth is enabled, per-IP limit applies only to clients
+	// without a valid Auth-Key / Basic password (controller path is exempt).
 	go http.Serve(h.listener, h.rateLimitMiddleware(h.authMiddleware(httphelper.ContextInjector("host", httphelper.NewRequestLogger(r)))))
 }
 

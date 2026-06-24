@@ -4,8 +4,23 @@
 
 set -eo pipefail
 
-URL="https://get.docker.com/builds/Linux/x86_64/docker-1.9.1"
-SHA="52286a92999f003e1129422e78be3e1049f963be1888afc3c9a99d5a9af04666"
+case "$(dpkg --print-architecture)" in
+  amd64)
+    DOCKER_ARCH="x86_64"
+    ;;
+  arm64)
+    DOCKER_ARCH="aarch64"
+    ;;
+  *)
+    echo "Unsupported architecture: $(dpkg --print-architecture)"
+    exit 1
+    ;;
+esac
+
+DOCKER_VERSION="28.1.1"
+
+URL="https://download.docker.com/linux/static/stable/${DOCKER_ARCH}/docker-${DOCKER_VERSION}.tgz"
+
 DOCKER="/usr/local/bin/docker"
 
 main() {
@@ -19,11 +34,10 @@ main() {
 }
 
 download_docker() {
-  echo "Downloading Docker 1.9.1 to ${DOCKER}..."
+  echo "Downloading Docker to ${DOCKER}..."
   local tmp="$(mktemp --directory)"
   trap "rm -rf ${tmp}" EXIT
   curl -fSLo "${tmp}/docker" "${URL}"
-  echo "${SHA}  ${tmp}/docker" | sha256sum -c -
   sudo mv "${tmp}/docker" "${DOCKER}"
   sudo chmod +x "${DOCKER}"
 }

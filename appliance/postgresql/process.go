@@ -17,7 +17,6 @@ import (
 
 	"github.com/flynn/flynn/appliance/postgresql/pgxlog"
 	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/sirenia/xlog"
@@ -234,7 +233,7 @@ func (p *Process) Stop() error {
 	defer p.mtx.Unlock()
 
 	if !p.running() {
-		return errors.New("postgres is already stopped")
+		return nil
 	}
 	return p.stop()
 }
@@ -514,9 +513,10 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	return nil
 }
 
-// upstreamTimeout is of the order of the discoverd heartbeat to prevent
-// waiting for an upstream which has gone down.
-var upstreamTimeout = 10 * time.Second
+// upstreamTimeout bounds how long a standby waits for its upstream to accept
+// connections before failing pg_basebackup. Host restarts and sirenia failovers
+// can leave the primary read-only for longer than one discoverd heartbeat.
+var upstreamTimeout = 90 * time.Second
 
 func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 	log := p.log.New("fn", "waitForUpstream", "upstream", upstream.Addr)
@@ -588,8 +588,14 @@ func (p *Process) start() error {
 	go func() {
 		err := cmd.Wait()
 		if !p.expectExit.Load().(bool) {
-			p.log.Error("postgres unexpectedly exit", "err", err)
-			shutdown.ExitWithCode(1)
+			log.Error("postgres exited unexpectedly", "err", err)
+			p.setRunning(false)
+			p.dbMtx.Lock()
+			if p.db != nil {
+				p.db.Close()
+				p.db = nil
+			}
+			p.dbMtx.Unlock()
 		}
 		close(p.daemonExit)
 	}()

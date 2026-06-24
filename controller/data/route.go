@@ -85,11 +85,15 @@ func (r *RouteRepo) addHTTP(tx *postgres.DBTx, route *router.Route) error {
 		return err
 	}
 
-	// Create managed certificate if ManagedCertificateDomain is set
-	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
-		if err := r.createManagedCertificate(tx, route); err != nil {
+	// Create or relink the managed certificate if ManagedCertificateDomain is set.
+	hasManagedCert := route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != ""
+	if hasManagedCert {
+		if err := r.ensureManagedCertificateByDomain(tx, route); err != nil {
 			return err
 		}
+		// When using managed certificates, don't process manual certs - just return.
+		// The managed cert has been created or relinked by ensureManagedCertificateByDomain.
+		return nil
 	}
 
 	return r.addRouteCertWithTx(tx, route)
@@ -179,6 +183,73 @@ func (r *RouteRepo) ensureManagedCertificate(tx *postgres.DBTx, route *router.Ro
 	return nil
 }
 
+// ensureManagedCertificateByDomain creates a managed certificate for the route's
+// domain if none exists, or re-points an existing managed certificate (created for
+// a previously-deleted route) at the new route. Reusing a previously-issued
+// certificate avoids re-requesting one from ACME when a route is deleted and a
+// new route is added for the same domain.
+func (r *RouteRepo) ensureManagedCertificateByDomain(tx *postgres.DBTx, route *router.Route) error {
+	var existingCert ct.ManagedCertificate
+	var certSHA256 []byte
+	var certPEM, keyPEM *string
+	err := tx.QueryRow("managed_certificate_select_by_domain", *route.ManagedCertificateDomain).Scan(
+		&existingCert.ID,
+		&existingCert.Domain,
+		&existingCert.RouteID,
+		&existingCert.Status,
+		&certPEM,
+		&keyPEM,
+		&certSHA256,
+		&existingCert.ExpiresAt,
+		&existingCert.LastError,
+		&existingCert.LastErrorAt,
+		&existingCert.CreatedAt,
+		&existingCert.UpdatedAt,
+	)
+	if err == pgx.ErrNoRows {
+		// No certificate exists for this domain, create one.
+		return r.createManagedCertificate(tx, route)
+	}
+	if err != nil {
+		return err
+	}
+
+	if certPEM != nil {
+		existingCert.Cert = *certPEM
+	}
+	if keyPEM != nil {
+		existingCert.Key = *keyPEM
+	}
+
+	// Re-point the managed certificate at the new route.
+	if existingCert.RouteID != route.ID {
+		if err := tx.QueryRow("managed_certificate_update_route_id", existingCert.ID, route.ID).Scan(&existingCert.UpdatedAt); err != nil {
+			return err
+		}
+		existingCert.RouteID = route.ID
+	}
+
+	// Certificate record exists - check if we can re-use it
+	if existingCert.Status == ct.ManagedCertificateStatusIssued &&
+		existingCert.Cert != "" && existingCert.Key != "" &&
+		existingCert.ExpiresAt != nil && existingCert.ExpiresAt.After(time.Now()) {
+		// Certificate is valid and not expired - re-link it to the new route.
+		return r.relinkManagedCertificate(tx, route, &existingCert)
+	}
+
+	// Certificate is expired, failed, or doesn't have valid cert/key - reset to pending.
+	if existingCert.Status != ct.ManagedCertificateStatusPending {
+		return r.resetManagedCertificateToPending(tx, &existingCert)
+	}
+
+	// Already pending; emit an event so ACME picks up the relinked route.
+	return CreateEvent(tx.Exec, &ct.Event{
+		ObjectID:   existingCert.ID,
+		ObjectType: ct.EventTypeManagedCertificate,
+		Op:         ct.EventOpUpdate,
+	}, &existingCert)
+}
+
 // relinkManagedCertificate re-links an existing valid managed certificate to its route
 // and populates the route's Certificate field so that the route event contains the certificate data
 func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, route *router.Route, cert *ct.ManagedCertificate) error {
@@ -200,13 +271,13 @@ func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, route *router.Ro
 		return err
 	}
 
-	// Delete any existing route certificate mapping
-	if err := tx.Exec("route_certificate_delete_by_route_id", cert.RouteID); err != nil {
+	// Delete any existing route certificate mapping for the new route
+	if err := tx.Exec("route_certificate_delete_by_route_id", route.ID); err != nil {
 		return err
 	}
 
 	// Link the certificate to the route
-	if err := tx.Exec("route_certificate_insert", cert.RouteID, certID); err != nil {
+	if err := tx.Exec("route_certificate_insert", route.ID, certID); err != nil {
 		return err
 	}
 

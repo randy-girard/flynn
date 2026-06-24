@@ -103,6 +103,17 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		return nil, err
 	}
 
+	// SEC-004's build-job memory limit only works when the memory cgroup
+	// controller is delegated to where libcontainer creates container cgroups.
+	// In production flynn-host runs under a systemd unit with Delegate=yes, so
+	// the probe succeeds. In ad-hoc environments (e.g. GitHub Actions runners
+	// where flynn-host's parent scope has no memory delegation), the probe
+	// fails and the limit is skipped to keep build jobs runnable.
+	buildJobMemoryLimits := probeBuildJobMemoryLimit()
+	if !buildJobMemoryLimits {
+		config.Logger.Warn("memory cgroup controller not usable for build-job container cgroups; skipping SEC-004 build-job memory limit")
+	}
+
 	defaultTmpfs, err := createTmpfs(resource.DefaultTempDiskSize)
 	if err != nil {
 		return nil, err
@@ -114,6 +125,7 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		factory:             factory,
 		logStreams:          make(map[string]map[string]*logmux.LogStream),
 		containers:          make(map[string]*Container),
+		cpuSamples:          make(map[string]cpuSample),
 		defaultEnv:          make(map[string]string),
 		resolvConf:          "/etc/resolv.conf",
 		ipalloc:             ipallocator.New(),
@@ -121,6 +133,7 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		networkConfigured:   make(chan struct{}),
 		globalState:         &libcontainerGlobalState{},
 		defaultTmpfs:        defaultTmpfs,
+		buildJobMemoryLimits: buildJobMemoryLimits,
 	}
 	l.httpClient = &http.Client{Transport: &http.Transport{
 		Dial: dialer.RetryDial(l.discoverdDial),
@@ -145,6 +158,12 @@ type LibcontainerBackend struct {
 	containersMtx sync.RWMutex
 	containers    map[string]*Container
 
+	// Per-container CPU sample state used to derive cpu_usage_percent from
+	// the cumulative cpu_usage_nanoseconds counter. First GetJobStats call
+	// for a container yields 0%; subsequent calls return the delta-based %.
+	cpuSampleMtx sync.Mutex
+	cpuSamples   map[string]cpuSample
+
 	envMtx     sync.RWMutex
 	defaultEnv map[string]string
 
@@ -158,6 +177,12 @@ type LibcontainerBackend struct {
 	layerLoader     singleflight.Group
 	httpClient      *http.Client
 	discoverdClient *discoverd.Client
+
+	// buildJobMemoryLimits is false when the memory cgroup controller cannot
+	// be applied to build-job container cgroups (e.g. cgroup v2 environments
+	// where the controller is not delegated to flynn-host's parent slice).
+	// When false, SEC-004's build-job memory limit is skipped.
+	buildJobMemoryLimits bool
 }
 
 type Container struct {
@@ -620,45 +645,53 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// Based on Docker's default profile — deny-list approach with Allow default.
 	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
 	if seccomp.IsEnabled() {
+		syscallDenyList := []*configs.Syscall{
+			{Name: "acct", Action: configs.Errno},
+			{Name: "add_key", Action: configs.Errno},
+			{Name: "bpf", Action: configs.Errno},
+			{Name: "clock_adjtime", Action: configs.Errno},
+			{Name: "clock_settime", Action: configs.Errno},
+			{Name: "create_module", Action: configs.Errno},
+			{Name: "delete_module", Action: configs.Errno},
+			{Name: "finit_module", Action: configs.Errno},
+			{Name: "get_kernel_syms", Action: configs.Errno},
+			{Name: "init_module", Action: configs.Errno},
+			{Name: "ioperm", Action: configs.Errno},
+			{Name: "iopl", Action: configs.Errno},
+			{Name: "kcmp", Action: configs.Errno},
+			{Name: "kexec_file_load", Action: configs.Errno},
+			{Name: "kexec_load", Action: configs.Errno},
+			{Name: "keyctl", Action: configs.Errno},
+			{Name: "lookup_dcookie", Action: configs.Errno},
+			{Name: "nfsservctl", Action: configs.Errno},
+			{Name: "perf_event_open", Action: configs.Errno},
+			{Name: "pivot_root", Action: configs.Errno},
+			{Name: "query_module", Action: configs.Errno},
+			{Name: "reboot", Action: configs.Errno},
+			{Name: "request_key", Action: configs.Errno},
+			{Name: "setns", Action: configs.Errno},
+			{Name: "settimeofday", Action: configs.Errno},
+			{Name: "stime", Action: configs.Errno},
+			{Name: "swapoff", Action: configs.Errno},
+			{Name: "swapon", Action: configs.Errno},
+			{Name: "unshare", Action: configs.Errno},
+			{Name: "userfaultfd", Action: configs.Errno},
+			{Name: "_sysctl", Action: configs.Errno},
+		}
+		// Block mount/unmount for normal apps. Flynn image-layer builds (ubuntu-noble.sh et al.)
+		// need bind-mount to propagate /var/cache/apt/archives into an extracted rootfs before chroot.
+		// That job is labeled flynn-controller.app_name=="builder"; user slugbuilder jobs use app_name=user app.
+		if job.Metadata == nil || job.Metadata["flynn-controller.app_name"] != "builder" {
+			syscallDenyList = append(syscallDenyList,
+				&configs.Syscall{Name: "mount", Action: configs.Errno},
+				&configs.Syscall{Name: "move_mount", Action: configs.Errno},
+				&configs.Syscall{Name: "open_tree", Action: configs.Errno},
+				&configs.Syscall{Name: "umount2", Action: configs.Errno},
+			)
+		}
 		config.Seccomp = &configs.Seccomp{
 			DefaultAction: configs.Allow,
-			Syscalls: []*configs.Syscall{
-				{Name: "acct", Action: configs.Errno},
-				{Name: "add_key", Action: configs.Errno},
-				{Name: "bpf", Action: configs.Errno},
-				{Name: "clock_adjtime", Action: configs.Errno},
-				{Name: "clock_settime", Action: configs.Errno},
-				{Name: "create_module", Action: configs.Errno},
-				{Name: "delete_module", Action: configs.Errno},
-				{Name: "finit_module", Action: configs.Errno},
-				{Name: "get_kernel_syms", Action: configs.Errno},
-				{Name: "init_module", Action: configs.Errno},
-				{Name: "ioperm", Action: configs.Errno},
-				{Name: "iopl", Action: configs.Errno},
-				{Name: "kcmp", Action: configs.Errno},
-				{Name: "kexec_file_load", Action: configs.Errno},
-				{Name: "kexec_load", Action: configs.Errno},
-				{Name: "keyctl", Action: configs.Errno},
-				{Name: "lookup_dcookie", Action: configs.Errno},
-				{Name: "mount", Action: configs.Errno},
-				{Name: "move_mount", Action: configs.Errno},
-				{Name: "nfsservctl", Action: configs.Errno},
-				{Name: "open_tree", Action: configs.Errno},
-				{Name: "perf_event_open", Action: configs.Errno},
-				{Name: "pivot_root", Action: configs.Errno},
-				{Name: "query_module", Action: configs.Errno},
-				{Name: "reboot", Action: configs.Errno},
-				{Name: "request_key", Action: configs.Errno},
-				{Name: "setns", Action: configs.Errno},
-				{Name: "settimeofday", Action: configs.Errno},
-				{Name: "stime", Action: configs.Errno},
-				{Name: "swapoff", Action: configs.Errno},
-				{Name: "swapon", Action: configs.Errno},
-				{Name: "umount2", Action: configs.Errno},
-				{Name: "unshare", Action: configs.Errno},
-				{Name: "userfaultfd", Action: configs.Errno},
-				{Name: "_sysctl", Action: configs.Errno},
-			},
+			Syscalls:      syscallDenyList,
 		}
 	}
 
@@ -870,10 +903,18 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		softLimitBytes = uint64(defaultMemory)
 	}
 	// Build jobs (image builder and slugbuilder) need more memory for mksquashfs etc.
-	// Set an 8 GiB hard limit instead of leaving them unlimited (SEC-004).
+	// Set a 12 GiB hard limit instead of leaving them unlimited (SEC-004).
+	// Only when the memory controller is usable for our container cgroups;
+	// otherwise leave unlimited (pre-SEC-004 behavior) so build jobs can run
+	// at all in environments without memory cgroup delegation.
 	if isBuildJob(job) {
-		config.Cgroups.Resources.Memory = 8 * units.GiB * 2   // Hard limit (memory.max) = 16 GiB
-		config.Cgroups.Resources.MemorySwap = 8 * units.GiB   // Swap limit, so total = 16 GiB
+		if l.buildJobMemoryLimits {
+			config.Cgroups.Resources.Memory = 12 * units.GiB * 2 // Hard limit (memory.max) = 24 GiB
+			config.Cgroups.Resources.MemorySwap = 12 * units.GiB // Swap limit, so total = 24 GiB
+		} else {
+			config.Cgroups.Resources.Memory = 0
+			config.Cgroups.Resources.MemorySwap = 0
+		}
 		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
 		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
 		// SEC-015 removed these from defaults but builders require them.
@@ -1166,6 +1207,9 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 		c.l.containersMtx.Lock()
 		delete(c.l.containers, c.job.ID)
 		c.l.containersMtx.Unlock()
+		c.l.cpuSampleMtx.Lock()
+		delete(c.l.cpuSamples, c.job.ID)
+		c.l.cpuSampleMtx.Unlock()
 		c.cleanup()
 		close(c.done)
 	}()
@@ -1221,6 +1265,11 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 			defer logger.Close()
 			for range notifyOOM {
 				logger.Crit("FATAL: Container hard memory limit (2x configured limit) exceeded - container killed due to vastly exceeding memory limits")
+				if wd := c.l.host.webhookDispatcher; wd != nil {
+					wd.Send(host.CodeMemoryHard, "Hard memory limit exceeded (OOM kill)", host.SeverityCritical, c.job.ID, nil, map[string]string{
+						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
+					})
+				}
 			}
 		}()
 	}
@@ -1672,7 +1721,8 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 			continue
 		}
 		if err := <-readySignals[j.Job.ID]; err != nil {
-			// log error
+			log.Error("failed to reconnect to container after restore", "job.id", j.Job.ID, "err", err)
+			l.State.SetStatusFailed(j.Job.ID, err)
 			delete(readySignals, j.Job.ID)
 			continue
 		}
@@ -1695,6 +1745,11 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 				go l.host.ConfigureNetworking(state.NetworkConfig)
 			} else {
 				log.Info("got stored network config, but associated job isn't running", "job.id", state.NetworkConfig.JobID)
+				// Publish the previous NetworkConfig on HostStatus without
+				// applying it so flannel-wrapper can pick up the prior subnet
+				// and pass it to flanneld via -preferred-subnet, keeping the
+				// bridge IP stable across reboots.
+				l.host.SetStatusNetwork(state.NetworkConfig)
 			}
 		}
 
@@ -1831,6 +1886,13 @@ func (c *Container) monitorMemoryUsage(log log15.Logger) {
 					"usage_percent", float64(memUsage)*100.0/float64(c.softLimitBytes))
 				logger.Close()
 				c.softLimitLogged = true
+				if wd := c.l.host.webhookDispatcher; wd != nil {
+					wd.Send(host.CodeMemorySoft, "Soft memory limit exceeded", host.SeverityWarning, c.job.ID, nil, map[string]string{
+						"usage_bytes":      fmt.Sprintf("%d", memUsage),
+						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
+						"usage_percent":    fmt.Sprintf("%.1f", float64(memUsage)*100.0/float64(c.softLimitBytes)),
+					})
+				}
 			} else if memUsage <= c.softLimitBytes && c.softLimitLogged {
 				// Memory usage dropped below soft limit, reset flag
 				c.softLimitLogged = false
@@ -1860,6 +1922,28 @@ func milliCPUToShares(milliCPU uint64) uint64 {
 }
 
 const cgroupRoot = "/sys/fs/cgroup"
+
+// probeBuildJobMemoryLimit reports whether memory.max can be written for a
+// cgroup at the location libcontainer creates build-job container cgroups.
+// On cgroup v2, libcontainer joins absolute configs.Cgroup.Path values under
+// filepath.Base(mnt) of the cgroup mountpoint, which on the unified hierarchy
+// resolves to /sys/fs/cgroup/cgroup/<inner>. The "user" partition is the
+// default home for build jobs.
+//
+// Returns false when the memory controller is not enabled in the parent
+// cgroup's subtree_control (the typical situation on GitHub Actions runners
+// where flynn-host's parent slice has no memory delegation).
+func probeBuildJobMemoryLimit() bool {
+	probeDir := filepath.Join(cgroupRoot, "cgroup", "flynn", "user", ".probe-mem-limit")
+	if err := os.MkdirAll(probeDir, 0755); err != nil {
+		return false
+	}
+	defer os.Remove(probeDir)
+	if err := ioutil.WriteFile(filepath.Join(probeDir, "memory.max"), []byte("max"), 0644); err != nil {
+		return false
+	}
+	return true
+}
 
 func setupCGroups(partitions map[string]int64) error {
 	// cgroups v2 uses a unified hierarchy - all controllers are under /sys/fs/cgroup
@@ -1995,6 +2079,33 @@ func forceMemoryOvercommit() error {
 	return nil
 }
 
+// cpuSample is the previous cumulative CPU reading for one container, used to
+// derive cpu_usage_percent from cgroup cpuacct's monotonic total counter.
+type cpuSample struct {
+	ns uint64
+	t  time.Time
+}
+
+// cpuPercentDelta returns CPU usage as a percentage of one core between the
+// previously recorded sample for `id` and the current reading. Values can
+// exceed 100% on multi-core hosts (one container saturating two cores reports
+// 200%). The first call for a container records the baseline and returns 0.
+// A non-monotonic counter (e.g. cgroup reset) also resets the baseline.
+func (l *LibcontainerBackend) cpuPercentDelta(id string, ns uint64, now time.Time) float64 {
+	l.cpuSampleMtx.Lock()
+	defer l.cpuSampleMtx.Unlock()
+	prev, ok := l.cpuSamples[id]
+	l.cpuSamples[id] = cpuSample{ns: ns, t: now}
+	if !ok || ns < prev.ns {
+		return 0
+	}
+	elapsed := now.Sub(prev.t).Nanoseconds()
+	if elapsed <= 0 {
+		return 0
+	}
+	return float64(ns-prev.ns) / float64(elapsed) * 100
+}
+
 // GetJobStats returns runtime resource usage stats for a specific job/container.
 func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, error) {
 	l.containersMtx.RLock()
@@ -2025,6 +2136,7 @@ func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, erro
 		result.CPUUsageNanoseconds = cpuStats.CpuUsage.TotalUsage
 		result.CPUThrottledPeriods = cpuStats.ThrottlingData.ThrottledPeriods
 		result.CPUThrottledTimeNs = cpuStats.ThrottlingData.ThrottledTime
+		result.CPUUsagePercent = l.cpuPercentDelta(id, result.CPUUsageNanoseconds, result.Timestamp)
 
 		// Memory stats
 		memStats := stats.CgroupStats.MemoryStats

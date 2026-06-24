@@ -597,17 +597,11 @@ func runImport(args *docopt.Args, client controller.Client) error {
 				return nil
 			}
 
-			slugBuilderID, ok := gitreceiveRelease.Env["SLUGBUILDER_14_IMAGE_ID"]
-			if !ok {
-				slugBuilderID, ok = gitreceiveRelease.Env["SLUGBUILDER_IMAGE_ID"]
-			}
+			slugBuilderID, ok := gitreceiveRelease.Env["SLUGBUILDER_24_IMAGE_ID"]
 			if !ok {
 				return fmt.Errorf("gitreceive env missing slugbuilder image")
 			}
-			slugRunnerID, ok := gitreceiveRelease.Env["SLUGRUNNER_14_IMAGE_ID"]
-			if !ok {
-				slugRunnerID, ok = gitreceiveRelease.Env["SLUGRUNNER_IMAGE_ID"]
-			}
+			slugRunnerID, ok := gitreceiveRelease.Env["SLUGRUNNER_24_IMAGE_ID"]
 			if !ok {
 				return fmt.Errorf("gitreceive env missing slugrunner image")
 			}

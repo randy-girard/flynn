@@ -35,6 +35,7 @@ const (
 	ValidationErrorCode         ErrorCode = "validation_error"
 	PreconditionFailedErrorCode ErrorCode = "precondition_failed"
 	UnauthorizedErrorCode       ErrorCode = "unauthorized"
+	ForbiddenErrorCode          ErrorCode = "forbidden"
 	UnknownErrorCode            ErrorCode = "unknown_error"
 	RatelimitedErrorCode        ErrorCode = "ratelimited"
 	ServiceUnavailableErrorCode ErrorCode = "service_unavailable"
@@ -53,6 +54,7 @@ var errorResponseCodes = map[ErrorCode]int{
 	ValidationErrorCode:         400,
 	RequestBodyTooBigErrorCode:  400,
 	UnauthorizedErrorCode:       401,
+	ForbiddenErrorCode:          403,
 	UnknownErrorCode:            500,
 	RatelimitedErrorCode:        429,
 	ServiceUnavailableErrorCode: 503,
@@ -84,6 +86,11 @@ func IsPreconditionFailedError(err error) bool {
 
 func IsValidationError(err error) bool {
 	return isJSONErrorWithCode(err, ValidationErrorCode)
+}
+
+// IsForbidden reports whether err is a JSONError carrying ForbiddenErrorCode (HTTP 403).
+func IsForbidden(err error) bool {
+	return isJSONErrorWithCode(err, ForbiddenErrorCode)
 }
 
 // IsRetryableError indicates whether a HTTP request can be safely retried.
@@ -263,6 +270,11 @@ func ValidationError(w http.ResponseWriter, field, message string) {
 		err.Detail, _ = json.Marshal(map[string]string{"field": field})
 	}
 	Error(w, err)
+}
+
+// Forbidden responds with HTTP 403 and a JSON error body.
+func Forbidden(w http.ResponseWriter, message string) {
+	JSON(w, errorResponseCodes[ForbiddenErrorCode], JSONError{Code: ForbiddenErrorCode, Message: message})
 }
 
 func JSON(w http.ResponseWriter, status int, v interface{}) {

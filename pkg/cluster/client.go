@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/types"
@@ -36,6 +37,11 @@ func NewClientWithHTTP(services ServiceFunc, hc *http.Client) *Client {
 // ErrNotFound is returned when a resource is not found (HTTP status 404).
 var ErrNotFound = errors.New("cluster: resource not found")
 
+const (
+	hostsDiscoverdRetryAttempts = 45
+	hostsDiscoverdRetryInterval = time.Second
+)
+
 func newClient(services ServiceFunc, hc *http.Client) *Client {
 	if services == nil {
 		services = discoverd.NewService
@@ -65,21 +71,39 @@ func (c *Client) Host(id string) (*Host, error) {
 }
 
 // Hosts returns a list of hosts in the cluster.
+// It retries transient discoverd errors where the flynn-host service exists
+// but has not been created yet or returns object_not_found (common right
+// after discoverd restarts before each host daemon re-registers).
 func (c *Client) Hosts() ([]*Host, error) {
-	insts, err := c.s.Instances()
-	if err != nil {
-		return nil, err
+	var (
+		insts   []*discoverd.Instance
+		lastErr error
+	)
+
+	for attempt := 0; attempt < hostsDiscoverdRetryAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(hostsDiscoverdRetryInterval)
+		}
+		var err error
+		insts, err = c.s.Instances()
+		if err == nil {
+			hosts := make([]*Host, len(insts))
+			for i, inst := range insts {
+				hosts[i] = NewHost(
+					inst.Meta["id"],
+					inst.Addr,
+					c.h,
+					HostTagsFromMeta(inst.Meta),
+				)
+			}
+			return hosts, nil
+		}
+		lastErr = err
+		if !httphelper.IsObjectNotFoundError(err) {
+			return nil, err
+		}
 	}
-	hosts := make([]*Host, len(insts))
-	for i, inst := range insts {
-		hosts[i] = NewHost(
-			inst.Meta["id"],
-			inst.Addr,
-			c.h,
-			HostTagsFromMeta(inst.Meta),
-		)
-	}
-	return hosts, nil
+	return nil, fmt.Errorf("timed out waiting for flynn-host service in discoverd: %w", lastErr)
 }
 
 func HostTagsFromMeta(meta map[string]string) map[string]string {

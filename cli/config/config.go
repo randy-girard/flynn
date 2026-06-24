@@ -24,6 +24,7 @@ var ErrNoDockerPushURL = errors.New("ERROR: Docker push URL not configured, set 
 type Cluster struct {
 	Name          string `json:"name"`
 	OAuthURL      string `json:"oauth_url,omitempty" toml:"OAuthURL,omitempty"`
+	DashboardURL  string `json:"dashboard_url,omitempty" toml:"DashboardURL,omitempty"`
 	Key           string `json:"key,omitempty" toml:"Key,omitempty"`
 	TLSPin        string `json:"tls_pin" toml:"TLSPin,omitempty"`
 	ControllerURL string `json:"controller_url"`

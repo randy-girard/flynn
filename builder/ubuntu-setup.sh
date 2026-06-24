@@ -2,8 +2,7 @@
 #
 # A script to setup an Ubuntu cloud image to be container image friendly.
 #
-# Adapted from Docker:
-# https://github.com/tianon/docker-brew-ubuntu-core/blob/cf9d7a2ee20c8a4706a05d1d7f1a1e25ae32ed39/trusty/Dockerfile
+# Adapted from the upstream docker-brew-ubuntu-core image recipes.
 
 ln -s -f /bin/true /usr/bin/chfn
 
@@ -16,10 +15,12 @@ cp -a /usr/sbin/policy-rc.d /sbin/initctl
 sed -i 's/^exit.*/exit 0/' /sbin/initctl
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L71-L78
 echo 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/docker-apt-speedup
+# Docker's debootstrap recipe also installs Post-Invoke hooks that delete *.deb archives
+# after every apt operation. Omit those so "$(pwd)/ubuntu_ports_cache" bind-mounted at
+# /var/cache/apt/archives can reuse downloads across flynn-builder jobs; layers remove
+# archives explicitly (apt-get clean / rm) where image size matters.
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L85-L105
-echo 'DPkg::Post-Invoke { "rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*.deb /var/cache/apt/*.bin || true"; };' > /etc/apt/apt.conf.d/docker-clean
-echo 'APT::Update::Post-Invoke { "rm -f /var/cache/apt/archives/*.deb /var/cache/apt/archives/partial/*.deb /var/cache/apt/*.bin || true"; };' >> /etc/apt/apt.conf.d/docker-clean
-echo 'Dir::Cache::pkgcache ""; Dir::Cache::srcpkgcache "";' >> /etc/apt/apt.conf.d/docker-clean
+echo 'Dir::Cache::pkgcache ""; Dir::Cache::srcpkgcache "";' > /etc/apt/apt.conf.d/docker-apt-mini
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L109-L115
 echo 'Acquire::Languages "none";' > /etc/apt/apt.conf.d/docker-no-languages
 # https://github.com/docker/docker/blob/9a9fc01af8fb5d98b8eec0740716226fadb3735c/contrib/mkimage/debootstrap#L118-L130
@@ -36,6 +37,18 @@ EOF
 
 export DEBIAN_FRONTEND=noninteractive
 
+# flynn-builder flynnAptLayerPrelude only prepares the outer build root; Noble uses chroot +
+# ubuntu-setup.sh. Match that prelude here so _apt can use the bind-mounted
+# /var/cache/apt/archives and /var/lib/apt/lists, and sandboxing does not hit
+# root-owned partial/ files (pkgAcquire Permission denied).
+mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial
+chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true
+chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true
+chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true
+chmod -R a+rwX /var/lib/apt/lists/partial 2>/dev/null || true
+install -d /etc/apt/apt.conf.d
+printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf
+
 # ---- Configure APT mirrors early ----
 
 # Force IPv4 (prevents archive.ubuntu.com IPv6 blackholes)
@@ -49,16 +62,33 @@ sed -i \
   -e 's|http://security.ubuntu.com/ubuntu|http://security.ubuntu.com/ubuntu|g' \
   /etc/apt/sources.list
 
+# Cloud tarball list slices reference pool versions from image build day; ubuntu-ports can 404 old
+# .deb URLs once the pool rotates. Drop the stale, image-shipped indexes so APT re-fetches against
+# current Packages files — but only when the lists dir is not a shared host cache (which already
+# holds current indexes maintained across builds).
+if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
+  rm -rf /var/lib/apt/lists/*
+fi
+
 # update packages
 apt-get update
 apt-get dist-upgrade --yes
 
-# install common Flynn image tools
-apt-get install --yes squashfs-tools curl gnupg coreutils
+# install common Flynn image tools (net-tools / iproute2: diagnostics matching flynn-host collect-debug-info)
+apt-get install --yes squashfs-tools curl gnupg coreutils net-tools iproute2
 
-# delete all the apt list files since they're big and get stale quickly
-rm -rf /var/lib/apt/lists/*
-# this forces "apt-get update" in dependent images, which is also good
+# Strip downloaded packages from this rootfs unless a flynn-builder host APT cache bind is mounted
+# (see builder/build.go). Keeps Noble/SquashFS layers slim without wiping the shared ./ubuntu_ports_cache.
+if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
+  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
+fi
+
+# delete the apt list files baked into this rootfs (big, stale fast). Skip when a host
+# lists cache is bind-mounted — that cache is shared across builds and never goes in the layer.
+if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
+  rm -rf /var/lib/apt/lists/*
+fi
+# this forces "apt-get update" in dependent images (incremental against the host cache), which is also good
 
 # enable the universe
 sed -i 's/^#\s*\(deb.*universe\)$/\1/g' /etc/apt/sources.list

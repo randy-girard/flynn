@@ -5,7 +5,7 @@ mkdir -p /var/lib/flynn/layer-cache
 mkdir -p /var/run/flynn-local
 
 rm -f /tmp/discoverd.log /tmp/flanneld.log /tmp/flanneld-wrapper.log
-rm -rf /var/log/flynn
+rm -rf /var/log/flynn || true
 
 # Start flynn-host
 ./script/start-flynn-host 0 &
