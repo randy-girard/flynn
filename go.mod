@@ -53,7 +53,7 @@ require (
 	github.com/stevvooe/resumable v0.0.0-20150521211217-51ad44105773
 	github.com/tent/canonical-json-go v0.0.0-20130607151641-96e4ba3a7613
 	github.com/vishvananda/netlink v0.0.0-20170502164845-1e045880fbc2
-	go.mongodb.org/mongo-driver v1.17.6
+	go.mongodb.org/mongo-driver v1.17.7
 	golang.org/x/crypto v0.46.0
 	golang.org/x/net v0.48.0
 	golang.org/x/oauth2 v0.7.0
