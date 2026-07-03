@@ -118,7 +118,7 @@ options:
   -x, --version=<version>   version to use [default: dev]
   -v, --verbose             be verbose
 
-Build Flynn images using builder/manifest.json.
+Build Flynn images using builder/manifest.json (generated from builder/manifest.json.template).
 
  APT package cache:
 

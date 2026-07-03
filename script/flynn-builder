@@ -12,4 +12,6 @@ fi
 export GO111MODULE=on
 export GOFLAGS=-mod=vendor
 
+"$(dirname "$0")/prepare-builder-manifest"
+
 build/bin/flynn-builder "$@"
