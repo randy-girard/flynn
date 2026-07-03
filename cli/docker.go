@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -409,6 +410,46 @@ type DockerManifest struct {
 	Layers []string `json:"Layers"`
 }
 
+// openDockerLayer opens a layer from 'docker save' output, transparently
+// decompressing gzip-compressed layers (as produced by newer Docker versions
+// using the OCI image layout).
+func openDockerLayer(path string) (io.ReadCloser, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	var header [2]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if header[0] != 0x1f || header[1] != 0x8b {
+		return f, nil
+	}
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	return &gzipReadCloser{gz: gz, f: f}, nil
+}
+
+type gzipReadCloser struct {
+	gz *gzip.Reader
+	f  *os.File
+}
+
+func (r *gzipReadCloser) Read(p []byte) (int, error) { return r.gz.Read(p) }
+
+func (r *gzipReadCloser) Close() error {
+	r.gz.Close()
+	return r.f.Close()
+}
+
 // DockerConfig is used to read image config from the output of 'docker save'.
 type DockerConfig struct {
 	Config struct {
@@ -521,7 +562,7 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 		layer, err := tarClient.GetLayer(id)
 		if err == tarclient.ErrNotFound {
 			if err := func() (err error) {
-				f, err := os.Open(filepath.Join(tmpDir, path))
+				f, err := openDockerLayer(filepath.Join(tmpDir, path))
 				if err != nil {
 					return err
 				}
