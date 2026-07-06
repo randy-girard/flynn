@@ -572,6 +572,10 @@
             "CAP_SYS_CHROOT",
             "CAP_SYS_ADMIN"
           ],
+          "resources": {
+            "memory": {"request": 3221225472, "limit": 3221225472},
+            "temp_disk": {"request": 1073741824, "limit": 1073741824}
+          },
           "volumes": [{"path": "/tmp", "delete_on_stop": true}]
         }
       }
