@@ -361,6 +361,9 @@ func getCmdPath(c *Config) (string, error) {
 	// Find the cmd
 	cmdPath, err := exec.LookPath(c.Args[0])
 	if err != nil {
+		if p := lookupStandardPath(c.Args[0]); p != "" {
+			return p, nil
+		}
 		if c.WorkDir == "" {
 			return "", err
 		}
@@ -370,6 +373,16 @@ func getCmdPath(c *Config) (string, error) {
 	}
 
 	return cmdPath, nil
+}
+
+func lookupStandardPath(name string) string {
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		p := filepath.Join(dir, name)
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 func monitor(port host.Port, container *ContainerInit, env map[string]string, log log15.Logger) (discoverd.Heartbeater, error) {

@@ -531,9 +531,25 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			return err
 		}
 	}
-	rootMount, diffDir, err := l.rootOverlayMount(job)
+	diffDir, err := l.setupRootOverlay(rootPath, tmpPath, job)
 	if err != nil {
 		log.Error("error setting up rootfs", "err", err)
+		return err
+	}
+
+	// Ensure the rootfs /tmp is world-writable (1777) before libcontainer
+	// mounts a tmpfs over it. libcontainer chmods the freshly-mounted tmpfs
+	// back to the mountpoint's original mode (see rootfs_linux.go), so the
+	// tmpfs mode= option alone is ignored; some system images ship /tmp as
+	// 0755, which prevents non-root processes (e.g. mariadb's mysql user)
+	// from creating temp files. Setting it here makes the tmpfs inherit 1777.
+	tmpInRoot := filepath.Join(rootPath, "tmp")
+	if err := os.MkdirAll(tmpInRoot, 0777); err != nil {
+		log.Error("error creating rootfs /tmp", "err", err)
+		return err
+	}
+	if err := os.Chmod(tmpInRoot, os.ModeSticky|0777); err != nil {
+		log.Error("error setting rootfs /tmp permissions", "err", err)
 		return err
 	}
 
@@ -599,7 +615,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			"/proc/sysrq-trigger",
 		},
 		Devices: host.ConfigDevices(*job.Config.AutoCreatedDevices),
-		Mounts: append([]*configs.Mount{rootMount}, []*configs.Mount{
+		Mounts: []*configs.Mount{
 			{
 				Source:      "proc",
 				Destination: "/proc",
@@ -627,18 +643,26 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				Data:        "newinstance,ptmxmode=0666,mode=0620,gid=5",
 			},
 			{
-				Device:      "tmpfs",
 				Source:      "shm",
 				Destination: "/dev/shm",
+				Device:      "tmpfs",
 				Data:        "mode=1777,size=65536k",
 				Flags:       defaultMountFlags,
+			},
+			{
+				Device:      "tmpfs",
+				Source:      "tmpfs",
+				Destination: "/tmp",
+				Data:        "mode=1777",
+				// Allow execution from /tmp (e.g. flynn-builder gobin cache); omit MS_NOEXEC.
+				Flags: syscall.MS_NOSUID | syscall.MS_NODEV,
 			},
 			{
 				Destination: "/sys/fs/cgroup",
 				Device:      "cgroup",
 				Flags:       cgroupMountFlags,
 			},
-		}...),
+		},
 	}
 
 	// SEC-006: default Seccomp profile blocking dangerous syscalls
@@ -815,7 +839,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	l.State.mtx.Unlock()
 
 	initConfig := &containerinit.Config{
-		Args:      job.Config.Args,
+		Args:      resolveContainerArgs(rootPath, job.Config.Args),
 		TTY:       job.Config.TTY,
 		OpenStdin: job.Config.Stdin,
 		WorkDir:   job.Config.WorkingDir,
@@ -1002,24 +1026,24 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	return nil
 }
 
-func (l *LibcontainerBackend) rootOverlayMount(job *host.Job) (*configs.Mount, string, error) {
-	log := l.Logger.New("fn", "rootOverlayMount", "job.id", job.ID)
+func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job *host.Job) (string, error) {
+	log := l.Logger.New("fn", "setupRootOverlay", "job.id", job.ID)
 	layers := make([]string, 0, len(job.Mountspecs)+1)
 	for _, spec := range job.Mountspecs {
 		if spec.Type != host.MountspecTypeSquashfs {
-			return nil, "", fmt.Errorf("unknown mountspec type: %q", spec.Type)
+			return "", fmt.Errorf("unknown mountspec type: %q", spec.Type)
 		}
 		log.Info("mounting squashfs layer", "id", spec.ID)
 		path, err := l.mountSquashfs(spec)
 		if err != nil {
-			return nil, "", err
+			return "", err
 		}
 		layers = append(layers, path)
 	}
 	log.Info("mounting ext2 layer")
 	tmpfs, err := l.mountTmpfs(job)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	layers = append(layers, tmpfs)
 	dirs := make([]string, len(layers))
@@ -1032,15 +1056,39 @@ func (l *LibcontainerBackend) rootOverlayMount(job *host.Job) (*configs.Mount, s
 	workDir := filepath.Join(tmpfs, "overlay-workdir")
 	for _, dir := range []string{upperDir, workDir} {
 		if err := os.Mkdir(dir, 0755); err != nil {
-			return nil, "", err
+			return "", err
 		}
 	}
-	return &configs.Mount{
-		Source:      "overlay",
-		Destination: "/",
-		Device:      "overlay",
-		Data:        fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", strings.Join(dirs[1:], ":"), upperDir, workDir),
-	}, upperDir, nil
+	layerCount := len(dirs) - 1
+	if layerCount > 1 {
+		log.Info("materializing image layers", "count", layerCount)
+	}
+	lowerdir, err := buildOverlayLowerdir(dirs[1:], scratchPath)
+	if err != nil {
+		return "", err
+	}
+	log.Info("mounting root overlay", "lowerdir", lowerdir)
+	if err := mountOverlay(lowerdir, upperDir, workDir, rootPath); err != nil {
+		return "", fmt.Errorf("mounting root overlay: %s", err)
+	}
+	return upperDir, nil
+}
+
+// resolveContainerArgs resolves the first command argument to an absolute path
+// when it exists under rootfs in a standard binary directory.
+func resolveContainerArgs(rootfs string, args []string) []string {
+	if len(args) == 0 || strings.Contains(args[0], "/") {
+		return args
+	}
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		p := filepath.Join(rootfs, dir, args[0])
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			out := append([]string{}, args...)
+			out[0] = filepath.Join(dir, args[0])
+			return out
+		}
+	}
+	return args
 }
 
 func (l *LibcontainerBackend) mountSquashfs(m *host.Mountspec) (string, error) {
@@ -1391,6 +1439,12 @@ func (c *Container) cleanup() error {
 		}
 		if err := c.l.VolManager.DestroyVolume(v.VolumeID); err != nil {
 			log.Error("error destroying volume", "vol.id", v.VolumeID, "err", err)
+		}
+	}
+
+	if c.RootPath != "" {
+		if err := syscall.Unmount(c.RootPath, 0); err != nil && err != syscall.EINVAL && err != syscall.ENOENT {
+			log.Error("error unmounting root overlay", "err", err)
 		}
 	}
 
