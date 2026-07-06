@@ -270,12 +270,23 @@ func (c *Client) StreamWithHeader(method, path string, header http.Header, in, o
 }
 
 func (c *Client) Send(method, path string, in, out interface{}) error {
+	return c.SendWithHeader(method, path, nil, in, out)
+}
+
+func (c *Client) SendWithHeader(method, path string, header http.Header, in, out interface{}) error {
 	h := http.Header{"Accept": []string{"application/json"}}
+	for k, vs := range header {
+		h[k] = vs
+	}
 	res, err := c.RawReq(method, path, h, in, out)
 	if err == nil && out == nil {
 		res.Body.Close()
 	}
 	return err
+}
+
+func (c *Client) PostWithHeader(path string, header http.Header, in, out interface{}) error {
+	return c.SendWithHeader("POST", path, header, in, out)
 }
 
 func (c *Client) Put(path string, in, out interface{}) error {

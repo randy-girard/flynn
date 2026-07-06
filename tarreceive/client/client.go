@@ -62,8 +62,22 @@ func (c *Client) GetLayer(id string) (*ct.ImageLayer, error) {
 }
 
 func (c *Client) CreateLayer(id string, src io.Reader) (*ct.ImageLayer, error) {
+	return c.createLayer(id, src, false)
+}
+
+// CreateFlatLayer uploads a flattened Docker rootfs tar (as produced by
+// flynn docker push) for conversion to squashfs on the server.
+func (c *Client) CreateFlatLayer(id string, src io.Reader) (*ct.ImageLayer, error) {
+	return c.createLayer(id, src, true)
+}
+
+func (c *Client) createLayer(id string, src io.Reader, flat bool) (*ct.ImageLayer, error) {
 	var layer ct.ImageLayer
-	return &layer, c.Post("/layer/"+id, src, &layer)
+	header := http.Header{}
+	if flat {
+		header.Set("X-Flynn-Flattened-Layer", "1")
+	}
+	return &layer, c.PostWithHeader("/layer/"+id, header, src, &layer)
 }
 
 func (c *Client) CreateArtifact(manifest *ct.ImageManifest) (*ct.Artifact, error) {
