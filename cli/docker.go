@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -243,9 +246,10 @@ func runDockerPushLegacy(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	var config struct {
-		Cmd        []string `json:"Cmd"`
-		Entrypoint []string `json:"Entrypoint"`
-		Env        []string `json:"Env"`
+		Cmd          []string               `json:"Cmd"`
+		Entrypoint   []string               `json:"Entrypoint"`
+		Env          []string               `json:"Env"`
+		ExposedPorts map[string]interface{} `json:"ExposedPorts"`
 	}
 	if err := json.NewDecoder(stdout).Decode(&config); err != nil {
 		return err
@@ -286,7 +290,7 @@ func runDockerPushLegacy(args *docopt.Args, client controller.Client) error {
 	if len(proc.Ports) == 0 {
 		proc.Service = app.Name + "-web"
 		proc.Ports = []ct.Port{{
-			Port:  8080,
+			Port:  dockerListenPort(config.ExposedPorts),
 			Proto: "tcp",
 			Service: &host.Service{
 				Name:   app.Name + "-web",
@@ -453,14 +457,56 @@ func (r *gzipReadCloser) Close() error {
 // DockerConfig is used to read image config from the output of 'docker save'.
 type DockerConfig struct {
 	Config struct {
-		Env        []string
-		Cmd        []string
-		WorkingDir string
-		Entrypoint []string
+		Env          []string
+		Cmd          []string
+		WorkingDir   string
+		Entrypoint   []string
+		ExposedPorts map[string]interface{} `json:"ExposedPorts"`
 	} `json:"config"`
 	Rootfs struct {
 		Diffs []string `json:"diff_ids"`
 	} `json:"rootfs"`
+}
+
+// dockerListenPort returns the TCP port the container listens on. It prefers
+// EXPOSE from the image config, falling back to 8080 (Flynn's conventional
+// platform port).
+func dockerListenPort(exposed map[string]interface{}) int {
+	if len(exposed) == 0 {
+		return 8080
+	}
+	ports := make([]int, 0, len(exposed))
+	for spec := range exposed {
+		parts := strings.SplitN(spec, "/", 2)
+		if len(parts) != 2 || parts[1] != "tcp" {
+			continue
+		}
+		p, err := strconv.Atoi(parts[0])
+		if err != nil || p <= 0 {
+			continue
+		}
+		ports = append(ports, p)
+	}
+	if len(ports) == 0 {
+		return 8080
+	}
+	for _, p := range ports {
+		if p == 80 {
+			return 80
+		}
+	}
+	for _, p := range ports {
+		if p == 8080 {
+			return 8080
+		}
+	}
+	min := ports[0]
+	for _, p := range ports[1:] {
+		if p < min {
+			min = p
+		}
+	}
+	return min
 }
 
 func runDockerPushTar(args *docopt.Args, client controller.Client) error {
@@ -549,51 +595,80 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 		return fmt.Errorf("error loading docker image config: %s", err)
 	}
 
-	// upload each layer
-	layers := make([]*ct.ImageLayer, len(manifest.Layers))
-	for i, path := range manifest.Layers {
-		diffID := config.Rootfs.Diffs[i]
-		p := strings.SplitN(diffID, ":", 2)
-		if len(p) != 2 {
-			return fmt.Errorf("invalid diff ID: %s", diffID)
+	// merge docker layers into a single rootfs and upload one squashfs layer
+	mergedDir := filepath.Join(tmpDir, "merged")
+	if err := os.MkdirAll(mergedDir, 0755); err != nil {
+		return fmt.Errorf("error creating merged rootfs directory: %s", err)
+	}
+	for _, path := range manifest.Layers {
+		f, err := openDockerLayer(filepath.Join(tmpDir, path))
+		if err != nil {
+			return fmt.Errorf("error opening docker layer %s: %s", path, err)
 		}
-		id := p[1]
-		log.Printf("uploading layer %s", id)
-		layer, err := tarClient.GetLayer(id)
-		if err == tarclient.ErrNotFound {
-			if err := func() (err error) {
-				f, err := openDockerLayer(filepath.Join(tmpDir, path))
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				var src io.Reader = f
-				if term.IsTerminal(os.Stderr.Fd()) {
-					bar := pb.New(0)
-					bar.SetUnits(pb.U_BYTES)
-					bar.ShowBar = true
-					bar.ShowSpeed = true
-					bar.Output = os.Stderr
-					bar.Start()
-					defer bar.Finish()
-					src = io.TeeReader(src, bar)
-				}
-				layer, err = tarClient.CreateLayer(id, src)
-				return
-			}(); err != nil {
-				return err
-			}
-		} else if err != nil {
+		if err := archive.UnpackFlat(f, mergedDir, false); err != nil {
+			f.Close()
+			return fmt.Errorf("error applying docker layer %s: %s", path, err)
+		}
+		f.Close()
+	}
+
+	mergedTarPath := filepath.Join(tmpDir, "merged.tar")
+	if err := func() error {
+		cmd := exec.Command("tar", "-cf", mergedTarPath, "-C", mergedDir, ".")
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
+	}(); err != nil {
+		return fmt.Errorf("error creating merged layer tar: %s", err)
+	}
+
+	mergedTar, err := os.Open(mergedTarPath)
+	if err != nil {
+		return err
+	}
+	defer mergedTar.Close()
+
+	tarHash := sha256.New()
+	if _, err := io.Copy(tarHash, mergedTar); err != nil {
+		return fmt.Errorf("error hashing merged layer tar: %s", err)
+	}
+	layerID := hex.EncodeToString(tarHash.Sum(nil))
+	if _, err := mergedTar.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("error seeking merged layer tar: %s", err)
+	}
+
+	log.Printf("uploading flattened layer %s", layerID)
+	layer, err := tarClient.GetLayer(layerID)
+	if err == tarclient.ErrNotFound {
+		var src io.Reader = mergedTar
+		if term.IsTerminal(os.Stderr.Fd()) {
+			bar := pb.New(0)
+			bar.SetUnits(pb.U_BYTES)
+			bar.ShowBar = true
+			bar.ShowSpeed = true
+			bar.Output = os.Stderr
+			bar.Start()
+			defer bar.Finish()
+			src = io.TeeReader(src, bar)
+		}
+		layer, err = tarClient.CreateFlatLayer(layerID, src)
+		if err != nil {
 			return err
 		}
-		layers[i] = layer
+	} else if err != nil {
+		return err
 	}
+	layers := []*ct.ImageLayer{layer}
 
 	// generate the image manifest
 	entrypoint := &ct.ImageEntrypoint{
 		WorkingDir: config.Config.WorkingDir,
 		Env:        make(map[string]string, len(config.Config.Env)),
-		Args:       append(config.Config.Entrypoint, config.Config.Cmd...),
+		Args:       resolveDockerArgs(mergedDir, config.Config.Entrypoint, config.Config.Cmd),
+	}
+	if len(entrypoint.Args) > 0 && !strings.Contains(entrypoint.Args[0], "/") {
+		if findExecutableInRoot(mergedDir, entrypoint.Args[0]) == "" {
+			return fmt.Errorf("image entrypoint %q not found in merged rootfs; verify the Docker image includes its runtime", entrypoint.Args[0])
+		}
 	}
 	for _, env := range config.Config.Env {
 		keyVal := strings.SplitN(env, "=", 2)
@@ -633,7 +708,7 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 	if len(proc.Ports) == 0 {
 		proc.Service = app.Name + "-web"
 		proc.Ports = []ct.Port{{
-			Port:  8080,
+			Port:  dockerListenPort(config.Config.ExposedPorts),
 			Proto: "tcp",
 			Service: &host.Service{
 				Name:   app.Name + "-web",
@@ -669,4 +744,28 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 	}
 	log.Printf("Docker image deployed, scale it with 'flynn scale app=N'")
 	return nil
+}
+
+// resolveDockerArgs builds container command args from a Docker image config
+// and resolves the entrypoint binary to an absolute path when it exists in the
+// merged rootfs.
+func resolveDockerArgs(root string, entrypoint, cmd []string) []string {
+	args := append(append([]string{}, entrypoint...), cmd...)
+	if len(args) == 0 || strings.Contains(args[0], "/") {
+		return args
+	}
+	if p := findExecutableInRoot(root, args[0]); p != "" {
+		args[0] = p
+	}
+	return args
+}
+
+func findExecutableInRoot(root, name string) string {
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		path := filepath.Join(root, dir[1:], name)
+		if st, err := os.Stat(path); err == nil && !st.IsDir() {
+			return filepath.Join(dir, name)
+		}
+	}
+	return ""
 }
