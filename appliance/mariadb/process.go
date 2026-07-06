@@ -999,6 +999,11 @@ func (p *Process) writeConfig(d configData) error {
 	d.Port = p.Port
 	d.DataDir = p.DataDir
 	d.ServerID = p.ServerID
+	d.TmpDir = filepath.Join(p.DataDir, "tmp")
+
+	if err := os.MkdirAll(d.TmpDir, 0700); err != nil {
+		return err
+	}
 
 	f, err := os.Create(p.ConfigPath())
 	if err != nil {
@@ -1013,6 +1018,7 @@ type configData struct {
 	ID       string
 	Port     string
 	DataDir  string
+	TmpDir   string
 	ServerID uint32
 	ReadOnly bool
 }
@@ -1031,6 +1037,7 @@ pid_file     = {{.DataDir}}/mysql.pid
 report_host  = {{.ID}}
 
 datadir             = {{.DataDir}}
+tmpdir              = {{.TmpDir}}
 log_bin             = {{.DataDir}}/mariadb-bin
 log_bin_index       = {{.DataDir}}/mariadb-bin.index
 log_slave_updates   = 1

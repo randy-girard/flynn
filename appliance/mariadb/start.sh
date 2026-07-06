@@ -2,8 +2,10 @@
 
 case $1 in
   mariadb)
+    mkdir -p /data/tmp
     chown -R mysql:mysql /data
     chmod 0700 /data
+    chmod 0700 /data/tmp
     shift
     exec sudo \
       -u mysql \
