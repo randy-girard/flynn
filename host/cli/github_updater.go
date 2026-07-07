@@ -30,6 +30,7 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/imageenv"
 	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
@@ -1115,6 +1116,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		log.Error(err.Error())
 		return err
 	}
+	dockerBuilder := images["dockerbuilder"]
+	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
+		log.Error(err.Error())
+		return err
+	}
 
 	// Deploy system apps in order
 	log.Info("deploying system apps")
@@ -1145,7 +1151,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		var deployErr error
 		for attempt := 1; ; attempt++ {
-			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, force, appLog)
+			deployErr = deployApp(client, app, images[appInfo.Name], images, appInfo.UpdateRelease, force, appLog)
 			if deployErr == nil {
 				break
 			}
@@ -1187,7 +1193,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
-			if err := deployApp(client, app, redisImage, nil, force, appLog); err != nil {
+			if err := deployApp(client, app, redisImage, images, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
 					continue
@@ -1203,7 +1209,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		}
 
 		appLog.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, nil, force, appLog); err != nil {
+		if err := deployApp(client, app, slugRunner, images, nil, force, appLog); err != nil {
 			if e, ok := err.(errDeploySkipped); ok {
 				appLog.Info("skipped deploy of app", "reason", e.reason)
 				continue
@@ -1225,7 +1231,7 @@ func (e errDeploySkipped) Error() string {
 	return e.reason
 }
 
-func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
+func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images map[string]*ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		log.Error("error getting release", "err", err)
@@ -1245,6 +1251,9 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
+	if imageenv.Update(release.Env, imageenvIDs(images)) {
+		skipDeploy = false
+	}
 	skip, forceConfigMigration := shouldSkipUnchangedDeploy(skipDeploy, force, release, updateFn)
 	if skip {
 		return errDeploySkipped{"app is already using latest images"}
@@ -1281,6 +1290,26 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 
 func decodeJSON(r io.Reader, v interface{}) error {
 	return jsonDecoder(r).Decode(v)
+}
+
+func imageenvIDs(images map[string]*ct.Artifact) imageenv.IDs {
+	ids := imageenv.IDs{}
+	if images == nil {
+		return ids
+	}
+	if a := images["redis"]; a != nil {
+		ids.Redis = a.ID
+	}
+	if a := images["slugbuilder"]; a != nil {
+		ids.SlugBuilder = a.ID
+	}
+	if a := images["slugrunner"]; a != nil {
+		ids.SlugRunner = a.ID
+	}
+	if a := images["dockerbuilder"]; a != nil {
+		ids.DockerBuilder = a.ID
+	}
+	return ids
 }
 
 func jsonDecoder(r io.Reader) *jsonDecoderWrapper {
