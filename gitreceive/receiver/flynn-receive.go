@@ -264,17 +264,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	fmt.Printf("-----> Building %s from Dockerfile...\n", app.Name)
 
 	imageArtifactID := random.UUID()
-	jobEnv := map[string]string{
-		"CONTROLLER_KEY":    os.Getenv("CONTROLLER_KEY"),
-		"IMAGE_ARTIFACT_ID": imageArtifactID,
-		"SOURCE_VERSION":    args.String["<rev>"],
-		"BUILDKITD_FLAGS":   "--root=/tmp/buildkitd --oci-worker-snapshotter=native",
-		"CI":                "true",
-		"BUILDKIT_PROGRESS": "plain",
-	}
-	if dockerfile, ok := releaseEnv["DOCKERFILE"]; ok {
-		jobEnv["DOCKERFILE"] = dockerfile
-	}
+	jobEnv := dockerBuildJobEnv(os.Getenv("CONTROLLER_KEY"), imageArtifactID, args.String["<rev>"], releaseEnv)
 
 	// Build-job capabilities (CAP_SYS_ADMIN/NET_ADMIN/NET_RAW etc.) are applied
 	// centrally by flynn-host for dockerbuilder jobs; see isBuildJob in
@@ -353,6 +343,23 @@ func localHostID() string {
 		return jobID[:i]
 	}
 	return ""
+}
+
+// dockerBuildJobEnv builds the environment for a dockerbuilder job. The
+// DOCKERFILE override is copied from the release env when present.
+func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, releaseEnv map[string]string) map[string]string {
+	jobEnv := map[string]string{
+		"CONTROLLER_KEY":    controllerKey,
+		"IMAGE_ARTIFACT_ID": imageArtifactID,
+		"SOURCE_VERSION":    sourceVersion,
+		"BUILDKITD_FLAGS":   "--root=/tmp/buildkitd --oci-worker-snapshotter=native",
+		"CI":                "true",
+		"BUILDKIT_PROGRESS": "plain",
+	}
+	if dockerfile, ok := releaseEnv["DOCKERFILE"]; ok {
+		jobEnv["DOCKERFILE"] = dockerfile
+	}
+	return jobEnv
 }
 
 func buildJob(artifact *ct.Artifact, app *ct.App, prevRelease *ct.Release, jobEnv map[string]string, jobType, script string) *host.Job {
