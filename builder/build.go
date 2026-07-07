@@ -288,6 +288,17 @@ func setupSharedCacheDir(log log15.Logger, label, path string) bool {
 	return true
 }
 
+func shouldChmodCopyDest(dst string) bool {
+	switch {
+	case strings.HasSuffix(dst, ".sh"):
+		return true
+	case strings.HasPrefix(dst, "/bin/"), strings.HasPrefix(dst, "/builder/"), strings.HasPrefix(dst, "/runner/"):
+		return true
+	default:
+		return false
+	}
+}
+
 // installShim copies a build-time PATH shim (e.g. flynn-curl, flynn-git) into the
 // shared bin/ directory used by build jobs. Missing source files are logged but not
 // fatal — layers fall back to the system binary. copyFile is the per-run closure
@@ -818,6 +829,9 @@ func (b *Builder) BuildImage(image *Image) error {
 			inputs = append(inputs, path)
 			dst := l.Copy[path]
 			run = append(run, fmt.Sprintf("mkdir -p %q && cp %q %q", filepath.Dir(dst), path, dst))
+			if shouldChmodCopyDest(dst) {
+				run = append(run, fmt.Sprintf("chmod +x %q", dst))
+			}
 		}
 
 		// run the build job with either l.BuildWith or image.Base

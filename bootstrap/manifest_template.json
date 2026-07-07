@@ -284,6 +284,11 @@
     "artifact": $image_artifact[slugrunner-24]
   },
   {
+    "id": "dockerbuilder-24-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[dockerbuilder-24]
+  },
+  {
     "id": "redis-image",
     "action": "create-artifact",
     "artifact": $image_artifact[redis]
@@ -507,7 +512,8 @@
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
-        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}"
+        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
+        "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
       },
       "processes": {
         "app": {
@@ -662,7 +668,8 @@
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
-        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}"
+        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
+        "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
       }
     }
   },

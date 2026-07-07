@@ -542,6 +542,34 @@
       }
     },
     {
+      "id": "dockerbuilder-24",
+      "base": "heroku-24-build",
+      "layers": [
+        {
+          "name": "dockerbuilder-packages",
+          "script": "dockerbuilder/img/packages.sh",
+          "inputs": [
+            "dockerbuilder/img/buildctl-daemonless.sh"
+          ]
+        },
+        {
+          "name": "dockerbuilder-binaries",
+          "gobuild": {
+            "dockerbuilder/artifact": "/bin/create-artifact"
+          },
+          "copy": {
+            "dockerbuilder/builder/build.sh": "/builder/build.sh",
+            "dockerbuilder/img/buildctl-daemonless.sh": "/builder/buildctl-daemonless.sh"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/builder/build.sh"
+        ]
+      }
+    },
+    {
       "id": "status",
       "base": "busybox",
       "layers": [
