@@ -563,7 +563,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// must create its own cgroup subtree (e.g. /sys/fs/cgroup/buildkit) for
 	// each build step. Combined with a cgroup namespace (added below) this is
 	// contained to the job's own cgroup and does not touch the host tree.
-	if !isBuildJob(job) && (!job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system")) {
+	if cgroupsReadonly(isBuildJob(job), job.Config.WriteableCgroups, job.Metadata["flynn-system-app"] == "true", job.Partition == "system") {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
@@ -963,7 +963,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		// CAP_NET_RAW is part of BuildKit's default RUN-step capability set; the
 		// outer container's bounding set must be a superset of what the nested build
 		// steps request, otherwise runc fails with "can't apply capabilities".
-		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT", "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_NET_RAW"} {
+		for _, cap := range buildJobExtraCapabilities() {
 			config.Capabilities.Bounding = append(config.Capabilities.Bounding, cap)
 			config.Capabilities.Inheritable = append(config.Capabilities.Inheritable, cap)
 			config.Capabilities.Effective = append(config.Capabilities.Effective, cap)
@@ -1922,6 +1922,27 @@ func isBuildJob(job *host.Job) bool {
 	return job.Metadata["flynn-controller.app_name"] == "builder" ||
 		job.Metadata["flynn-controller.type"] == "slugbuilder" ||
 		job.Metadata["flynn-controller.type"] == "dockerbuilder"
+}
+
+// buildJobExtraCapabilities lists the Linux capabilities granted to build jobs
+// (dockerbuilder/slugbuilder) on top of the defaults. CAP_MKNOD/CAP_SYS_CHROOT
+// are needed to extract and chroot into rootfs tarballs; CAP_SYS_ADMIN,
+// CAP_NET_ADMIN and CAP_NET_RAW are needed by BuildKit's nested runc (bind
+// mounts, cgroup v2 eBPF device filter, and the default RUN-step cap set).
+func buildJobExtraCapabilities() []string {
+	return []string{"CAP_MKNOD", "CAP_SYS_CHROOT", "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_NET_RAW"}
+}
+
+// cgroupsReadonly reports whether /sys/fs/cgroup should be mounted read-only for
+// a job. Build jobs (BuildKit's nested runc manages its own cgroup subtree) and
+// system jobs that opt into WriteableCgroups get a writable mount; every other
+// job gets read-only cgroups so it cannot manipulate its own resource limits
+// (SEC-011).
+func cgroupsReadonly(isBuild, writeableCgroups, systemApp, systemPartition bool) bool {
+	if isBuild {
+		return false
+	}
+	return !writeableCgroups || (!systemApp && !systemPartition)
 }
 
 // monitorMemoryUsage periodically checks memory usage and logs when soft limit is exceeded
