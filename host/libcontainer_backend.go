@@ -559,7 +559,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	cgroupMountFlags := defaultMountFlags
 	// SEC-011: only allow writeable cgroups for system jobs to prevent
 	// user containers from manipulating their own resource limits.
-	if !job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system") {
+	// Build jobs (dockerbuilder) run BuildKit, whose nested runc executor
+	// must create its own cgroup subtree (e.g. /sys/fs/cgroup/buildkit) for
+	// each build step. Combined with a cgroup namespace (added below) this is
+	// contained to the job's own cgroup and does not touch the host tree.
+	if !isBuildJob(job) && (!job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system")) {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
@@ -668,7 +672,13 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// SEC-006: default Seccomp profile blocking dangerous syscalls
 	// Based on Docker's default profile — deny-list approach with Allow default.
 	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
-	if seccomp.IsEnabled() {
+	//
+	// Build jobs (dockerbuilder/slugbuilder) run BuildKit, which spawns its own
+	// nested runc for each build step. That nested runc needs unshare/setns/
+	// pivot_root/mount to create build-step containers, so build jobs run
+	// seccomp-unconfined (like a typical CI/build sandbox). They are already
+	// privileged (CAP_SYS_ADMIN, writeable cgroups, private cgroup namespace).
+	if seccomp.IsEnabled() && !isBuildJob(job) {
 		syscallDenyList := []*configs.Syscall{
 			{Name: "acct", Action: configs.Errno},
 			{Name: "add_key", Action: configs.Errno},
@@ -701,17 +711,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Name: "unshare", Action: configs.Errno},
 			{Name: "userfaultfd", Action: configs.Errno},
 			{Name: "_sysctl", Action: configs.Errno},
-		}
-		// Block mount/unmount for normal apps. Flynn image-layer builds (ubuntu-noble.sh et al.)
-		// need bind-mount to propagate /var/cache/apt/archives into an extracted rootfs before chroot.
-		// That job is labeled flynn-controller.app_name=="builder"; user slugbuilder jobs use app_name=user app.
-		if job.Metadata == nil || job.Metadata["flynn-controller.app_name"] != "builder" {
-			syscallDenyList = append(syscallDenyList,
-				&configs.Syscall{Name: "mount", Action: configs.Errno},
-				&configs.Syscall{Name: "move_mount", Action: configs.Errno},
-				&configs.Syscall{Name: "open_tree", Action: configs.Errno},
-				&configs.Syscall{Name: "umount2", Action: configs.Errno},
-			)
+			// Block mount/unmount for normal apps (build jobs are unconfined above).
+			{Name: "mount", Action: configs.Errno},
+			{Name: "move_mount", Action: configs.Errno},
+			{Name: "open_tree", Action: configs.Errno},
+			{Name: "umount2", Action: configs.Errno},
 		}
 		config.Seccomp = &configs.Seccomp{
 			DefaultAction: configs.Allow,
@@ -733,6 +737,15 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 
 	if !job.Config.HostPIDNamespace {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWPID})
+	}
+
+	// Build jobs run BuildKit, whose nested runc executor manages its own
+	// cgroup subtree. Give them a private cgroup namespace so the container
+	// sees its own cgroup (/flynn/<partition>/<id>) as the cgroup root; this
+	// keeps BuildKit's cgroup creation contained and lets it succeed against
+	// the writeable /sys/fs/cgroup mount configured above.
+	if isBuildJob(job) {
+		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWCGROUP})
 	}
 
 	if spec, ok := job.Resources[resource.TypeMaxFD]; ok && spec.Limit != nil && spec.Request != nil {
@@ -942,7 +955,15 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
 		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
 		// SEC-015 removed these from defaults but builders require them.
-		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT"} {
+		// dockerbuilder additionally runs BuildKit, whose snapshotter and nested
+		// runc perform bind mounts / mount namespaces, which require CAP_SYS_ADMIN.
+		// The nested runc also sets up a cgroup v2 device filter via eBPF; querying
+		// and attaching BPF_CGROUP_DEVICE programs requires CAP_NET_ADMIN (prog load
+		// is already covered by CAP_SYS_ADMIN via bpf_capable()).
+		// CAP_NET_RAW is part of BuildKit's default RUN-step capability set; the
+		// outer container's bounding set must be a superset of what the nested build
+		// steps request, otherwise runc fails with "can't apply capabilities".
+		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT", "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_NET_RAW"} {
 			config.Capabilities.Bounding = append(config.Capabilities.Bounding, cap)
 			config.Capabilities.Inheritable = append(config.Capabilities.Inheritable, cap)
 			config.Capabilities.Effective = append(config.Capabilities.Effective, cap)
@@ -1899,7 +1920,8 @@ func isBuildJob(job *host.Job) bool {
 		return false
 	}
 	return job.Metadata["flynn-controller.app_name"] == "builder" ||
-		job.Metadata["flynn-controller.type"] == "slugbuilder"
+		job.Metadata["flynn-controller.type"] == "slugbuilder" ||
+		job.Metadata["flynn-controller.type"] == "dockerbuilder"
 }
 
 // monitorMemoryUsage periodically checks memory usage and logs when soft limit is exceeded
