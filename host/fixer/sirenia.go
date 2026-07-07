@@ -50,6 +50,24 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 
 	service := discoverd.NewService(svc)
 	instances, _ := service.Instances()
+
+	if ctrl, err := f.getControllerClient(); err == nil {
+		meta, metaErr := service.GetMeta()
+		var clusterState state.State
+		if metaErr == nil && len(meta.Data) > 0 {
+			if err := json.Unmarshal(meta.Data, &clusterState); err != nil {
+				log.Error("error decoding state", "err", err)
+			}
+		}
+		if metaErr != nil && discoverd.IsNotFound(metaErr) {
+			clusterState = state.State{}
+		}
+		if f.sireniaNeedsRebuild(svc, ctrl, &clusterState, instances) {
+			log.Info("rebuilding sirenia database cluster")
+			return f.RebuildSireniaCluster(ctrl, svc)
+		}
+	}
+
 	leader, _ := service.Leader()
 
 	log.Info("getting service metadata")

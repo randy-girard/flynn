@@ -79,6 +79,9 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	if err := f.FixFlannel(); err != nil {
 		return err
 	}
+	if err := f.FixLocalDisk(); err != nil {
+		return err
+	}
 
 	f.l.Info("waiting for discoverd to be available")
 	timeout := time.After(time.Minute)
@@ -100,6 +103,11 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	controllerInstances, _ := controllerService.Instances()
 	if len(controllerInstances) > 0 {
 		f.l.Info("found running controller API instances", "n", len(controllerInstances))
+		if ctrl, err := f.getControllerClient(); err == nil {
+			if err := f.FixStaleControllerVolumes(ctrl); err != nil {
+				f.l.Error("error reconciling stale controller volumes", "err", err)
+			}
+		}
 		if err := f.FixController(controllerInstances, false); err != nil {
 			f.l.Error("error fixing controller", "err", err)
 			// if unable to write correct formations, we need to kill the scheduler so that the rest of this works
@@ -112,13 +120,25 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	f.l.Info("checking status of sirenia databases")
 	for _, db := range []string{"postgres", "mariadb", "mongodb"} {
 		f.l.Info("checking for database state", "db", db)
-		if _, err := discoverd.NewService(db).GetMeta(); err != nil {
-			if discoverd.IsNotFound(err) {
-				f.l.Info("skipping recovery of db, no state in discoverd", "db", db)
+		ctrl, ctrlErr := f.getControllerClient()
+		_, metaErr := discoverd.NewService(db).GetMeta()
+		if metaErr != nil && discoverd.IsNotFound(metaErr) {
+			if ctrlErr == nil && f.sireniaClusterUnderProvisioned(ctrl, db) {
+				f.l.Info("rebuilding sirenia database with no discoverd state", "db", db)
+				if err := f.KillSchedulers(); err != nil {
+					return err
+				}
+				if err := f.RebuildSireniaCluster(ctrl, db); err != nil {
+					return err
+				}
 				continue
 			}
+			f.l.Info("skipping recovery of db, no state in discoverd", "db", db)
+			continue
+		}
+		if metaErr != nil {
 			f.l.Error("error checking database state", "db", db)
-			return err
+			return metaErr
 		}
 		if err := f.CheckSirenia(db); err != nil {
 			if err := f.KillSchedulers(); err != nil {
@@ -127,6 +147,21 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 			if err := f.FixSirenia(db); err != nil {
 				return err
 			}
+		} else if ctrlErr == nil && f.sireniaClusterUnderProvisioned(ctrl, db) {
+			f.l.Info("rebuilding under-provisioned sirenia database", "db", db)
+			if err := f.KillSchedulers(); err != nil {
+				return err
+			}
+			if err := f.RebuildSireniaCluster(ctrl, db); err != nil {
+				return err
+			}
+		}
+	}
+
+	if ctrl, err := f.getControllerClient(); err == nil {
+		f.l.Info("ensuring sirenia resource APIs are available")
+		if err := f.EnsureSireniaResourceAPIs(ctrl); err != nil {
+			f.l.Error("error ensuring sirenia resource APIs", "err", err)
 		}
 	}
 
