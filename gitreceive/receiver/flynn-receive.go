@@ -117,14 +117,9 @@ Options:
 		releaseEnv[k] = v
 	}
 
-	stack := stackHeroku24
-	if s := releaseEnv["FLYNN_STACK"]; s != "" {
-		stack = s
-	}
-	switch stack {
-	case stackHeroku24, stackContainer:
-	default:
-		return fmt.Errorf("Unknown FLYNN_STACK: %q", stack)
+	stack, err := resolveStack(releaseEnv)
+	if err != nil {
+		return err
 	}
 
 	switch stack {
@@ -132,6 +127,21 @@ Options:
 		return deployContainer(client, app, prevRelease, args, releaseEnv, meta)
 	default:
 		return deployBuildpack(client, app, prevRelease, args, releaseEnv, meta, stack)
+	}
+}
+
+// resolveStack returns the build stack for a release, defaulting to heroku-24
+// when FLYNN_STACK is unset. It errors on unknown stack values.
+func resolveStack(releaseEnv map[string]string) (string, error) {
+	stack := stackHeroku24
+	if s := releaseEnv["FLYNN_STACK"]; s != "" {
+		stack = s
+	}
+	switch stack {
+	case stackHeroku24, stackContainer:
+		return stack, nil
+	default:
+		return "", fmt.Errorf("Unknown FLYNN_STACK: %q", stack)
 	}
 }
 

@@ -3,9 +3,25 @@ package cli
 import (
 	"testing"
 
+	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/inconshreveable/log15"
 )
+
+func TestImageenvIDs(t *testing.T) {
+	ids := imageenvIDs(map[string]*ct.Artifact{
+		"redis":         {ID: "redis-id"},
+		"slugbuilder":   {ID: "sb-id"},
+		"slugrunner":    {ID: "sr-id"},
+		"dockerbuilder": {ID: "db-id"},
+	})
+	if ids.Redis != "redis-id" || ids.SlugBuilder != "sb-id" || ids.SlugRunner != "sr-id" || ids.DockerBuilder != "db-id" {
+		t.Fatalf("unexpected ids: %#v", ids)
+	}
+	if got := imageenvIDs(nil); got.DockerBuilder != "" {
+		t.Fatalf("expected empty ids for nil map, got %#v", got)
+	}
+}
 
 func TestNormalizeHostname(t *testing.T) {
 	if got, want := normalizeHostname("Flynn-Test_Node-1"), "flynntestnode1"; got != want {
