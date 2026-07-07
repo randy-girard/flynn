@@ -729,7 +729,7 @@ func runImport(args *docopt.Args, client controller.Client) error {
 		}
 
 		// use the current slugrunner image for slug releases
-		if release.IsGitDeploy() {
+		if release.IsGitDeploy() && release.Meta["slugrunner.stack"] != "container" {
 			gitreceiveRelease, err := client.GetAppRelease("gitreceive")
 			if err != nil {
 				return fmt.Errorf("unable to retrieve gitreceive release: %s", err)
@@ -737,7 +737,7 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			var slugRunnerID string
 			stack := release.Meta["slugrunner.stack"]
 			switch stack {
-			case "heroku-24":
+			case "heroku-24", "":
 				slugRunnerID = gitreceiveRelease.Env["SLUGRUNNER_24_IMAGE_ID"]
 			default:
 				return fmt.Errorf("unknown slugrunner stack %q", stack)

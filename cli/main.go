@@ -52,6 +52,7 @@ Commands:
 	run         run a job
 	env         manage env variables
 	limit       manage resource limits
+	stack       manage deployment stack for git push
 	meta        manage app metadata
 	route       manage routes
 	pg          manage postgres database
