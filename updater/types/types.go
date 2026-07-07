@@ -36,6 +36,7 @@ var SystemApps = []SystemApp{
 	{Name: "status"},
 	{Name: "slugbuilder", ImageOnly: true},
 	{Name: "slugrunner", ImageOnly: true},
+	{Name: "dockerbuilder", ImageOnly: true},
 	{
 		Name:     "mariadb",
 		Optional: true,

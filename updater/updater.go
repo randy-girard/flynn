@@ -15,12 +15,13 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/imageenv"
 	"github.com/flynn/flynn/updater/types"
 	"github.com/mattn/go-colorable"
 	"github.com/inconshreveable/log15"
 )
 
-var redisImage, slugBuilder, slugRunner *ct.Artifact
+var redisImage, slugBuilder, slugRunner, dockerBuilder *ct.Artifact
 
 // use a flag to determine whether to use a TTY log formatter because actually
 // assigning a TTY to the job causes reading images via stdin to fail.
@@ -132,6 +133,11 @@ func run() error {
 	}
 	slugBuilder = images["slugbuilder"]
 	if err := createArtifactWithRetry("slugbuilder", slugBuilder); err != nil {
+		log.Error(err.Error())
+		return err
+	}
+	dockerBuilder = images["dockerbuilder"]
+	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
 		log.Error(err.Error())
 		return err
 	}
@@ -294,33 +300,14 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	return nil
 }
 
-// updateImageIDs updates REDIS_IMAGE_ID, SLUGBUILDER_IMAGE_ID and
-// SLUGRUNNER_IMAGE_ID if they are set and have an old ID, and also
-// replaces the legacy REDIS_IMAGE_URI, SLUGBUILDER_IMAGE_URI and
-// SLUGRUNNER_IMAGE_URI
 func updateImageIDs(env map[string]string) bool {
-	updated := false
-	for prefix, newID := range map[string]string{
-		"REDIS":       redisImage.ID,
-		"SLUGBUILDER": slugBuilder.ID,
-		"SLUGRUNNER":  slugRunner.ID,
-	} {
-		idKey := prefix + "_IMAGE_ID"
-		if id, ok := env[idKey]; ok && id != newID {
-			env[idKey] = newID
-			updated = true
-		}
-
-		uriKey := prefix + "_IMAGE_URI"
-		if _, ok := env[uriKey]; ok {
-			delete(env, uriKey)
-			env[idKey] = newID
-			updated = true
-		}
-	}
-	return updated
+	return imageenv.Update(env, imageenv.IDs{
+		Redis:         redisImage.ID,
+		SlugBuilder:   slugBuilder.ID,
+		SlugRunner:    slugRunner.ID,
+		DockerBuilder: dockerBuilder.ID,
+	})
 }
-
 
 // repairSireniaClusters clears deposed peers from sirenia-managed services.
 // After a daemon restart the old primary may have been deposed by a sync
