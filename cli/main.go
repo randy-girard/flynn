@@ -59,6 +59,7 @@ Commands:
 	mysql       manage mysql database
 	mongodb     manage mongodb database
 	redis       manage redis database
+	kafka       manage kafka topics and consumer groups
 	provider    manage resource providers
 	docker      deploy Docker images to a Flynn cluster
 	remote      manage git remotes

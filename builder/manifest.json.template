@@ -323,6 +323,34 @@
       }
     },
     {
+      "id": "kafka",
+      "base": "ubuntu-noble",
+      "layers": [
+        {
+          "name": "kafka-packages",
+          "script": "appliance/kafka/img/packages.sh",
+          "limits": {
+            "temp_disk": "4G"
+          }
+        },
+        {
+          "name": "kafka-binaries",
+          "gobuild": {
+            "appliance/kafka/cmd/flynn-kafka": "/bin/flynn-kafka",
+            "appliance/kafka/cmd/flynn-kafka-api": "/bin/flynn-kafka-api"
+          },
+          "copy": {
+            "appliance/kafka/start.sh": "/bin/start-flynn-kafka"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/bin/start-flynn-kafka"
+        ]
+      }
+    },
+    {
       "id": "blobstore",
       "base": "ubuntu-noble",
       "layers": [

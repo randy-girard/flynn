@@ -294,6 +294,11 @@
     "artifact": $image_artifact[redis]
   },
   {
+    "id": "kafka-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[kafka]
+  },
+  {
     "id": "acme-image",
     "action": "create-artifact",
     "artifact": $image_artifact[acme]
@@ -328,6 +333,39 @@
     "action": "add-provider",
     "name":"redis",
     "url":"http://redis-api.discoverd/clusters"
+  },
+  {
+    "id": "kafka",
+    "app": {
+      "name": "kafka",
+      "meta": {"flynn-system-app": "true"}
+    },
+    "action": "deploy-app",
+    "release": {
+      "env": {
+        "FLYNN_KAFKA": "kafka",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "KAFKA_IMAGE_ID": "{{ (index .StepData \"kafka-image\").ID }}",
+        "KAFKA_TLS_ENABLED": "true",
+        "SINGLETON": "{{ .Singleton }}"
+      },
+      "processes": {
+        "web": {
+          "ports": [{"port": 80, "proto": "tcp"}],
+          "args": ["/bin/start-flynn-kafka", "api"]
+        }
+      }
+    },
+    "artifacts": [$image_artifact[kafka]],
+    "processes": {
+      "web": 2
+    }
+  },
+  {
+    "id": "add-kafka-provider",
+    "action": "add-provider",
+    "name":"kafka",
+    "url":"http://kafka-api.discoverd/clusters"
   },
   {
     "id": "mariadb-password",
@@ -721,6 +759,11 @@
     "id": "redis-wait",
     "action": "wait",
     "url": "http://redis-api.discoverd/ping"
+  },
+  {
+    "id": "kafka-wait",
+    "action": "wait",
+    "url": "http://kafka-api.discoverd/ping"
   },
   {
     "id": "mariadb-wait",
