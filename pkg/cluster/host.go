@@ -143,6 +143,16 @@ func (c *Host) StopJob(id string) error {
 	return c.c.Delete(fmt.Sprintf("/host/jobs/%s", id))
 }
 
+// ConfigureNetworking tells the host daemon to set up container networking.
+func (c *Host) ConfigureNetworking(config *host.NetworkConfig) error {
+	return c.c.Post("/host/network", config, nil)
+}
+
+// ConfigureDiscoverd tells the host daemon to connect to service discovery.
+func (c *Host) ConfigureDiscoverd(config *host.DiscoverdConfig) error {
+	return c.c.Post("/host/discoverd", config, nil)
+}
+
 // SignalJob sends a signal to a running job.
 func (c *Host) SignalJob(id string, sig int) error {
 	return c.c.Put(fmt.Sprintf("/host/jobs/%s/signal/%d", id, sig), nil, nil)
@@ -179,6 +189,27 @@ func (c *Host) GetVolume(volumeID string) (*volume.Info, error) {
 func (c *Host) ListVolumes() ([]*volume.Info, error) {
 	var volumes []*volume.Info
 	return volumes, c.c.Get("/storage/volumes", &volumes)
+}
+
+// CleanupImageData removes orphaned image tmp/mnt dirs and unreferenced
+// layer-cache files on the target host's local filesystem.
+func (c *Host) CleanupImageData() error {
+	hc := c.c.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 5 * time.Minute}
+	} else if hc.Timeout == 0 {
+		client := *hc
+		client.Timeout = 5 * time.Minute
+		hc = &client
+	}
+	client := *c.c
+	client.HTTP = hc
+	return client.Post("/host/cleanup-image-data", nil, nil)
+}
+
+// CheckOverlay reports whether the host can reach addr over the overlay network.
+func (c *Host) CheckOverlay(addr string) error {
+	return c.c.Get("/host/overlay-check?addr="+url.QueryEscape(addr), nil)
 }
 
 // StreamVolumes streams volume events to the given channel

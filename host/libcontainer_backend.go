@@ -423,7 +423,11 @@ func (l *LibcontainerBackend) SetDefaultEnv(k, v string) {
 	l.envMtx.Unlock()
 	if k == "DISCOVERD" {
 		l.discoverdClient = discoverd.NewClientWithURL(v)
-		close(l.discoverdConfigured)
+		select {
+		case <-l.discoverdConfigured:
+		default:
+			close(l.discoverdConfigured)
+		}
 	}
 }
 
@@ -1810,41 +1814,57 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 		}
 		log.Info("using stored global backend config")
 
-		if state.NetworkConfig != nil && state.NetworkConfig.JobID != "" {
-			if _, ok := readySignals[state.NetworkConfig.JobID]; ok {
-				log.Info("using stored network config", "job.id", state.NetworkConfig.JobID)
-
-				// run ConfigureNetworking in a goroutine to avoid deadlock
-				// between state.Restore and PersistGlobalState which both
-				// access the state database
-				go l.host.ConfigureNetworking(state.NetworkConfig)
+		if state.NetworkConfig != nil && state.NetworkConfig.Subnet != "" {
+			cfg := *state.NetworkConfig
+			if cfg.JobID == "" {
+				cfg.JobID = runningSystemJobID(jobs, "flannel", "app")
+			}
+			if cfg.JobID != "" {
+				if _, ok := readySignals[cfg.JobID]; ok {
+					log.Info("using stored network config", "job.id", cfg.JobID)
+					go l.host.ConfigureNetworking(&cfg)
+				} else {
+					log.Info("got stored network config, but associated job isn't running", "job.id", cfg.JobID)
+					l.host.SetStatusNetwork(&cfg)
+				}
 			} else {
-				log.Info("got stored network config, but associated job isn't running", "job.id", state.NetworkConfig.JobID)
-				// Publish the previous NetworkConfig on HostStatus without
-				// applying it so flannel-wrapper can pick up the prior subnet
-				// and pass it to flanneld via -preferred-subnet, keeping the
-				// bridge IP stable across reboots.
-				l.host.SetStatusNetwork(state.NetworkConfig)
+				// Subnet is persisted but the flannel job id was not (common after
+				// notify races). Re-apply networking so jobs blocked on
+				// networkConfigured can start after a daemon restart.
+				log.Info("re-applying stored network config without flannel job", "subnet", cfg.Subnet)
+				go l.host.ConfigureNetworking(&cfg)
 			}
 		}
 
-		if state.DiscoverdConfig != nil && state.DiscoverdConfig.JobID != "" {
-			if _, ok := readySignals[state.DiscoverdConfig.JobID]; ok {
-				log.Info("using stored discoverd config", "job.id", state.DiscoverdConfig.JobID)
-
-				// run ConfigureDiscoverd in a goroutine to avoid deadlock
-				// between state.Restore and PersistGlobalState which both
-				// access the state database
-				go l.host.ConfigureDiscoverd(state.DiscoverdConfig)
-			} else {
-				log.Info("got stored discoverd config, but associated job isn't running", "job.id", state.DiscoverdConfig.JobID)
+		if state.DiscoverdConfig != nil && state.DiscoverdConfig.URL != "" {
+			cfg := *state.DiscoverdConfig
+			if cfg.JobID == "" {
+				cfg.JobID = runningSystemJobID(jobs, "discoverd", "app")
 			}
+			log.Info("using stored discoverd config", "job.id", cfg.JobID)
+			// run ConfigureDiscoverd in a goroutine to avoid deadlock
+			// between state.Restore and PersistGlobalState which both
+			// access the state database
+			go l.host.ConfigureDiscoverd(&cfg)
 		}
 	} else {
 		log.Info("no stored global backend config")
 
 	}
 	return nil
+}
+
+// runningSystemJobID returns a running system job ID for the given app/type.
+func runningSystemJobID(jobs map[string]*host.ActiveJob, app, typ string) string {
+	for _, j := range jobs {
+		if j.Status != host.StatusRunning && j.Status != host.StatusStarting {
+			continue
+		}
+		if j.Job.Metadata["flynn-controller.app_name"] == app && j.Job.Metadata["flynn-controller.type"] == typ {
+			return j.Job.ID
+		}
+	}
+	return ""
 }
 
 func (l *LibcontainerBackend) SetDiscoverdConfig(config *host.DiscoverdConfig) {

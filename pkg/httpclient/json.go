@@ -114,6 +114,10 @@ func (c *Client) rawReq(method, rawurl string, header http.Header, in, out inter
 		return nil, err
 	}
 	if res.StatusCode != 200 {
+		if res.StatusCode == http.StatusNoContent && out == nil {
+			res.Body.Close()
+			return res, nil
+		}
 		defer res.Body.Close()
 		if strings.Contains(res.Header.Get("Content-Type"), "application/json") {
 			var jsonErr httphelper.JSONError

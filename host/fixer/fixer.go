@@ -2,6 +2,7 @@ package fixer
 
 import (
 	"fmt"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -98,16 +99,15 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 		}
 	}
 
+	if err := f.FixHostBackend(); err != nil {
+		f.l.Error("error ensuring host backends", "err", err)
+	}
+
 	f.l.Info("checking for running controller API")
 	controllerService := discoverd.NewService("controller")
 	controllerInstances, _ := controllerService.Instances()
 	if len(controllerInstances) > 0 {
 		f.l.Info("found running controller API instances", "n", len(controllerInstances))
-		if ctrl, err := f.getControllerClient(); err == nil {
-			if err := f.FixStaleControllerVolumes(ctrl); err != nil {
-				f.l.Error("error reconciling stale controller volumes", "err", err)
-			}
-		}
 		if err := f.FixController(controllerInstances, false); err != nil {
 			f.l.Error("error fixing controller", "err", err)
 			// if unable to write correct formations, we need to kill the scheduler so that the rest of this works
@@ -120,48 +120,21 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	f.l.Info("checking status of sirenia databases")
 	for _, db := range []string{"postgres", "mariadb", "mongodb"} {
 		f.l.Info("checking for database state", "db", db)
-		ctrl, ctrlErr := f.getControllerClient()
-		_, metaErr := discoverd.NewService(db).GetMeta()
-		if metaErr != nil && discoverd.IsNotFound(metaErr) {
-			if ctrlErr == nil && f.sireniaClusterUnderProvisioned(ctrl, db) {
-				f.l.Info("rebuilding sirenia database with no discoverd state", "db", db)
-				if err := f.KillSchedulers(); err != nil {
-					return err
-				}
-				if err := f.RebuildSireniaCluster(ctrl, db); err != nil {
-					return err
-				}
+		if _, err := discoverd.NewService(db).GetMeta(); err != nil {
+			if discoverd.IsNotFound(err) {
+				f.l.Info("skipping recovery of db, no state in discoverd", "db", db)
 				continue
 			}
-			f.l.Info("skipping recovery of db, no state in discoverd", "db", db)
-			continue
-		}
-		if metaErr != nil {
 			f.l.Error("error checking database state", "db", db)
-			return metaErr
+			return err
 		}
 		if err := f.CheckSirenia(db); err != nil {
 			if err := f.KillSchedulers(); err != nil {
 				return err
 			}
 			if err := f.FixSirenia(db); err != nil {
-				return err
+				f.l.Error("error fixing sirenia database", "db", db, "err", err)
 			}
-		} else if ctrlErr == nil && f.sireniaClusterUnderProvisioned(ctrl, db) {
-			f.l.Info("rebuilding under-provisioned sirenia database", "db", db)
-			if err := f.KillSchedulers(); err != nil {
-				return err
-			}
-			if err := f.RebuildSireniaCluster(ctrl, db); err != nil {
-				return err
-			}
-		}
-	}
-
-	if ctrl, err := f.getControllerClient(); err == nil {
-		f.l.Info("ensuring sirenia resource APIs are available")
-		if err := f.EnsureSireniaResourceAPIs(ctrl); err != nil {
-			f.l.Error("error ensuring sirenia resource APIs", "err", err)
 		}
 	}
 
@@ -182,7 +155,8 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 
 	if err := f.FixController(controllerInstances, true); err != nil {
 		f.l.Error("error fixing controller", "err", err)
-		return err
+	} else if err := f.ensureSingleScheduler(); err != nil {
+		f.l.Error("error enforcing scheduler singleton", "err", err)
 	}
 
 	f.l.Info("cluster fix complete")
@@ -250,6 +224,89 @@ func (f *ClusterFixer) GetJob(jobID string) (*host.Job, *cluster.Host, error) {
 	return job.Job, host, nil
 }
 
+// lookupSireniaJob returns a job template for a sirenia process. It prefers
+// the job ID recorded in discoverd state, but falls back to any known job for
+// the app on the expected host so volume bindings are preserved.
+func (f *ClusterFixer) lookupSireniaJob(jobID, app, typ, hostID string) (*host.Job, *cluster.Host, error) {
+	if jobID != "" {
+		if job, host, err := f.GetJob(jobID); err == nil {
+			return job, host, nil
+		}
+		if hostID == "" {
+			hostID, _ = cluster.ExtractHostID(jobID)
+		}
+	}
+	if hostID != "" {
+		if h := f.Host(hostID); h != nil {
+			for _, release := range f.FindAppReleaseJobs(app, typ) {
+				if job, ok := release[hostID]; ok {
+					return job, h, nil
+				}
+			}
+		}
+	}
+	for _, release := range f.FindAppReleaseJobs(app, typ) {
+		for id, job := range release {
+			if h := f.Host(id); h != nil {
+				return job, h, nil
+			}
+		}
+	}
+	return nil, nil, fmt.Errorf("no %s %s job template found", app, typ)
+}
+
+// isSireniaJobUp reports whether a sirenia job is registered in discoverd or
+// actively running on its host. Addr-based checks go stale when containers are
+// restarted on new overlay addresses.
+func (f *ClusterFixer) isSireniaJobUp(jobID string, instances []*discoverd.Instance) bool {
+	if jobID == "" {
+		return false
+	}
+	for _, i := range instances {
+		if i.Meta["FLYNN_JOB_ID"] == jobID {
+			return true
+		}
+	}
+	hostID, err := cluster.ExtractHostID(jobID)
+	if err != nil {
+		return false
+	}
+	h := f.Host(hostID)
+	if h == nil {
+		return false
+	}
+	aj, err := h.GetJob(jobID)
+	if err != nil {
+		return false
+	}
+	if aj.Status != host.StatusRunning && aj.Status != host.StatusStarting {
+		return false
+	}
+	// A container can remain "running" on the host with a stale overlay IP
+	// after a flannel subnet change while discoverd registration is gone.
+	// Treat it as down so recovery restarts it on the current subnet.
+	if aj.InternalIP != "" {
+		if cfg, err := f.inferHostNetworkConfig(h); err == nil {
+			if !jobIPOnSubnet(aj.InternalIP, cfg.Subnet) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func jobIPOnSubnet(ipAddr, subnet string) bool {
+	ip := net.ParseIP(ipAddr)
+	if ip == nil {
+		return true
+	}
+	_, ipnet, err := net.ParseCIDR(subnet)
+	if err != nil {
+		return true
+	}
+	return ipnet.Contains(ip)
+}
+
 // FindAppReleaseJobs returns a slice with one map of host id to job for each
 // known release of the given app and type, most recent first
 func (f *ClusterFixer) FindAppReleaseJobs(app, typ string) []map[string]*host.Job {
@@ -296,6 +353,12 @@ func (f *ClusterFixer) FindAppReleaseJobs(app, typ string) []map[string]*host.Jo
 
 func (f *ClusterFixer) FixJobEnv(job *host.Job) {
 	job.Config.Env["FLYNN_JOB_ID"] = job.ID
+}
+
+// sireniaDataProcessType returns the controller process type for a sirenia
+// database's data node (distinct from its API "web" process).
+func sireniaDataProcessType(svc string) string {
+	return svc
 }
 
 type SortableRelease struct {
