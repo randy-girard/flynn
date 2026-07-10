@@ -464,6 +464,12 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 				upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
 			),
 			"--wal-method=stream",
+			// Force an immediate checkpoint on the upstream instead of
+			// waiting (up to checkpoint_timeout) for the next spread
+			// checkpoint. On a busy primary the default can add over a
+			// minute of idle waiting, which pushes the initial sync past
+			// the deploy's replication-sync timeout.
+			"--checkpoint=fast",
 			"--progress",
 			"--verbose",
 		))
@@ -948,7 +954,7 @@ fsync = on
 max_wal_senders = 15
 wal_keep_size = 1024MB
 synchronous_commit = remote_write
-synchronous_standby_names = '{{.Sync}}'
+{{if .Sync}}synchronous_standby_names = '"{{.Sync}}"'{{else}}synchronous_standby_names = ''{{end}}
 {{if .ReadOnly}}
 default_transaction_read_only = on
 {{end}}

@@ -208,38 +208,48 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 		conf.Discoverd = discoverd.DefaultClient
 	}
 
-	// Retry watching the discoverd service to handle transient unavailability
-	// during updates (e.g. when discoverd containers are being replaced and
-	// DNS resolution temporarily fails).
-	var watchAttempts = attempt.Strategy{
-		Total: 2 * time.Minute,
-		Delay: time.Second,
-	}
-	var watchStream interface{ Close() error }
-	var events chan *discoverd.Event
-	err := watchAttempts.Run(func() error {
-		events = make(chan *discoverd.Event)
-		var err error
-		watchStream, err = conf.Discoverd.Service(conf.Service).Watch(events)
-		return err
-	})
-	if err != nil {
-		shutdown.Fatal(err)
-	}
-	// wait for service meta that has sync or singleton primary
-	for e := range events {
-		if e.Kind&discoverd.EventKindServiceMeta == 0 || e.ServiceMeta == nil || len(e.ServiceMeta.Data) == 0 {
-			continue
-		}
-		state := &state.State{}
-		json.Unmarshal(e.ServiceMeta.Data, state)
-		if state.Singleton || state.Sync != nil {
-			conf.SingletonCluster = state.Singleton
-			break
+	metaReady := false
+	if meta, err := conf.Discoverd.Service(conf.Service).GetMeta(); err == nil && meta != nil {
+		if singleton, ok := sireniaMetaReady(meta.Data); ok {
+			conf.SingletonCluster = singleton
+			metaReady = true
 		}
 	}
-	watchStream.Close()
-	// TODO(titanous): handle discoverd disconnection
+
+	if !metaReady {
+		// Retry watching the discoverd service to handle transient unavailability
+		// during updates (e.g. when discoverd containers are being replaced and
+		// DNS resolution temporarily fails).
+		var watchAttempts = attempt.Strategy{
+			Total: 2 * time.Minute,
+			Delay: time.Second,
+		}
+		var watchStream interface{ Close() error }
+		var events chan *discoverd.Event
+		err := watchAttempts.Run(func() error {
+			events = make(chan *discoverd.Event)
+			var err error
+			watchStream, err = conf.Discoverd.Service(conf.Service).Watch(events)
+			return err
+		})
+		if err != nil {
+			shutdown.Fatal(err)
+		}
+		// wait for service meta that has sync or singleton primary
+		for e := range events {
+			if e.Kind&discoverd.EventKindServiceMeta == 0 || e.ServiceMeta == nil || len(e.ServiceMeta.Data) == 0 {
+				continue
+			}
+			state := &state.State{}
+			json.Unmarshal(e.ServiceMeta.Data, state)
+			if state.Singleton || state.Sync != nil {
+				conf.SingletonCluster = state.Singleton
+				break
+			}
+		}
+		watchStream.Close()
+		// TODO(titanous): handle discoverd disconnection
+	}
 
 	waitUntilPostgresResolvable(conf)
 
@@ -248,6 +258,7 @@ func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 	// TODO(jpg): switch this to use pgmanager to check if user
 	// exists, we can also check for r/w with pgmanager
 	var db *DB
+	var err error
 	err = connectAttempts.Run(func() error {
 		db, err = Open(conf, afterConn)
 		return err
@@ -367,4 +378,20 @@ func IsPostgresCode(err error, code string) bool {
 		return true
 	}
 	return false
+}
+
+// sireniaMetaReady reports whether discoverd postgres service metadata indicates
+// the sirenia cluster has a primary ready for connections.
+func sireniaMetaReady(data []byte) (singleton bool, ok bool) {
+	if len(data) == 0 {
+		return false, false
+	}
+	st := &state.State{}
+	if err := json.Unmarshal(data, st); err != nil {
+		return false, false
+	}
+	if st.Singleton || st.Sync != nil {
+		return st.Singleton, true
+	}
+	return false, false
 }
