@@ -2307,3 +2307,87 @@ func TestDeposedPeerAutoRejoin(t *testing.T) {
 		},
 	})
 }
+
+// TestPrimaryRefreshDownstreamOnSyncReplacement verifies that when the sync
+// peer is replaced at the same discoverd address (new appliance identity in
+// Meta) the primary refreshes its downstream target instead of keeping the
+// stale synchronous standby name.
+func TestPrimaryRefreshDownstreamOnSyncReplacement(t *testing.T) {
+	oldSync := node(2, 2)
+	newSync := &discoverd.Instance{
+		Addr:  oldSync.Addr,
+		Proto: oldSync.Proto,
+		Meta:  map[string]string{simIdKey: "node2-replacement"},
+		Index: 3,
+	}
+	newSync.ID = oldSync.ID
+
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		Sync:       oldSync,
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen2 := &state.State{
+		Generation: 2,
+		Primary:    node(1, 1),
+		Sync:       newSync,
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	peersGen1 := []*discoverd.Instance{node(1, 1), oldSync, node(3, 3)}
+	peersGen2 := []*discoverd.Instance{node(1, 1), newSync, node(3, 3)}
+
+	pgPrimary := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: oldSync,
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgPrimaryUpdated := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: newSync,
+		},
+		CurXLog: "0/0000000A",
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap"},
+		{Cmd: "setClusterState", JSON: gen1},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: peersGen1,
+				},
+				Db: pgPrimary,
+			},
+		},
+		{Cmd: "echo test: sync peer replaced at same address"},
+		{Cmd: "setClusterState", JSON: gen2},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen2,
+					Peers: peersGen2,
+				},
+				Db: pgPrimaryUpdated,
+			},
+		},
+	})
+}

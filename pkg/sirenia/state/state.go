@@ -551,6 +551,8 @@ func (p *Peer) evalClusterState() {
 		if p.Info().Role == RolePrimary {
 			if p.Info().State.Primary.Meta[p.idKey] != p.id {
 				p.assumeDeposed()
+			} else {
+				p.refreshPrimaryDownstream(log)
 			}
 		} else {
 			p.evalInitClusterState()
@@ -565,6 +567,20 @@ func (p *Peer) evalClusterState() {
 		if i := p.whichAsync(); i != -1 {
 			p.assumeAsync(i)
 			return
+		}
+		// Meta may already record this peer as primary or sync (for example
+		// after manual recovery updated discoverd state) while we are still
+		// unassigned locally. evalInitClusterState only runs on generation
+		// changes, so re-check recorded roles here instead of waiting forever.
+		if p.Info().State != nil {
+			if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] == p.id {
+				p.assumePrimary()
+				return
+			}
+			if !p.singleton && p.Info().State.Sync != nil && p.Info().State.Sync.Meta[p.idKey] == p.id {
+				p.assumeSync()
+				return
+			}
 		}
 		// A frozen singleton cluster cannot self-heal when the recorded
 		// primary disappears: the freeze short-circuits state changes below,
@@ -711,11 +727,52 @@ func (p *Peer) evalClusterState() {
 		changes = true
 	}
 
+	if p.refreshPrimaryDownstream(log) {
+		return
+	}
+
 	if !changes && len(newDeposed) == len(p.Info().State.Deposed) {
 		return
 	}
 
 	p.startUpdateAsyncs(newAsync, newDeposed)
+}
+
+// refreshPrimaryDownstream updates the primary's downstream replication target
+// when cluster state names a different sync peer (for example after a rolling
+// restart reuses the same flannel IP but the replacement job has a new
+// appliance-level identity in Meta). Returns true if a reconfigure was
+// triggered.
+func (p *Peer) refreshPrimaryDownstream(log log15.Logger) bool {
+	if p.Info().Role != RolePrimary || p.Info().State.Sync == nil {
+		return false
+	}
+	if peersEqual(p.downstream, p.Info().State.Sync) {
+		return false
+	}
+	log.Info("sync peer changed, refreshing downstream",
+		"fn", "refreshPrimaryDownstream",
+		"old_addr", peerAddr(p.downstream),
+		"new_addr", p.Info().State.Sync.Addr,
+		"old_id", p.peerMetaID(p.downstream),
+		"new_id", p.peerMetaID(p.Info().State.Sync))
+	p.downstream = p.Info().State.Sync
+	p.triggerApplyConfig()
+	return true
+}
+
+func (p *Peer) peerMetaID(inst *discoverd.Instance) string {
+	if inst == nil || inst.Meta == nil {
+		return ""
+	}
+	return inst.Meta[p.idKey]
+}
+
+func peerAddr(inst *discoverd.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	return inst.Addr
 }
 
 func (p *Peer) startInitialSetup() {
