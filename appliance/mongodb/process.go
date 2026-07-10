@@ -281,6 +281,16 @@ func (p *Process) replSetConfigFromState(current *replSetConfig, s *state.State)
 			}
 		}
 	}
+	// After an overlay address change the primary host string changes but the
+	// member _id must be preserved for replSetReconfig to succeed.
+	if _, ok := curIds[s.Primary.Addr]; !ok {
+		for _, m := range current.Members {
+			if m.Priority == 1 || m.ID == 0 {
+				curIds[s.Primary.Addr] = m.ID
+				break
+			}
+		}
+	}
 	members := make([]replSetMember, 0, clusterSize(s))
 	members = append(members, newMember(s.Primary.Addr, s, curIds, 1))
 	// If we aren't running in singleton mode add the other members.
@@ -464,22 +474,36 @@ func isMongoError(err error, code int) bool {
 	return strings.Contains(err.Error(), fmt.Sprintf("code %d", code))
 }
 
+func replSetConfiguredFromStatusError(err error) (bool, error) {
+	if err == nil {
+		return true, nil
+	}
+	// Error code 93: replica set exists but is invalid/we aren't a member
+	if isMongoError(err, 93) {
+		return true, nil
+	}
+	// Error code 13436: configured but not yet primary/secondary (e.g. during recovery)
+	if isMongoError(err, 13436) {
+		return true, nil
+	}
+	// Error code 94: replica set not yet configured
+	if isMongoError(err, 94) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (p *Process) isReplInitialised() (bool, error) {
 	_, err := p.replSetGetStatus()
 	if err != nil {
-		// Error code 93: replica set exists but is invalid/we aren't a member
-		if isMongoError(err, 93) {
-			return true, nil
+		configured, checkErr := replSetConfiguredFromStatusError(err)
+		if checkErr != nil {
+			var cmdErr mongo.CommandError
+			if errors.As(err, &cmdErr) {
+				p.Logger.Error("failed to check if replset initialized", "err", err, "code", cmdErr.Code)
+			}
 		}
-		// Error code 94: replica set not yet configured
-		if isMongoError(err, 94) {
-			return false, nil
-		}
-		var cmdErr mongo.CommandError
-		if errors.As(err, &cmdErr) {
-			p.Logger.Error("failed to check if replset initialized", "err", err, "code", cmdErr.Code)
-		}
-		return false, err
+		return configured, checkErr
 	}
 	return true, nil
 }
@@ -538,6 +562,92 @@ func (p *Process) createUser() error {
 	return nil
 }
 
+// repairStaleReplSetHosts updates local.system.replset when the overlay IP
+// changed but the data volume still references the old address. This must run
+// with replication disabled so mongod does not enforce replica set membership.
+func (p *Process) repairStaleReplSetHosts(clusterState *state.State) error {
+	if clusterState == nil || clusterState.Primary == nil {
+		return nil
+	}
+	logger := p.Logger.New("fn", "repairStaleReplSetHosts")
+
+	securityEnabled := p.securityEnabled()
+	if err := p.writeConfig(configData{SecurityEnabled: securityEnabled}); err != nil {
+		return err
+	}
+	if err := p.start(); err != nil {
+		return err
+	}
+	defer func() {
+		if err := p.stop(); err != nil {
+			logger.Debug("ignoring error stopping process after replset repair", "err", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	client, err := p.connectLocal(ctx)
+	if err != nil {
+		return err
+	}
+	defer client.Disconnect(ctx)
+
+	coll := client.Database("local").Collection("system.replset")
+	var doc bson.M
+	err = coll.FindOne(ctx, bson.M{}).Decode(&doc)
+	if err != nil {
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			return nil
+		}
+		return err
+	}
+
+	members, ok := doc["members"].(bson.A)
+	if !ok || len(members) == 0 {
+		return nil
+	}
+
+	wantAddrs := []string{clusterState.Primary.Addr}
+	if !clusterState.Singleton && clusterState.Sync != nil {
+		wantAddrs = append(wantAddrs, clusterState.Sync.Addr)
+	}
+
+	changed := false
+	for i, m := range members {
+		if i >= len(wantAddrs) {
+			break
+		}
+		member, ok := m.(bson.M)
+		if !ok {
+			continue
+		}
+		host, _ := member["host"].(string)
+		want := wantAddrs[i]
+		if host != want {
+			logger.Info("repairing stale replset member host", "old", host, "new", want)
+			member["host"] = want
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
+	if v, ok := doc["version"].(int32); ok {
+		doc["version"] = v + 1
+	} else if v, ok := doc["version"].(int64); ok {
+		doc["version"] = v + 1
+	}
+
+	_, err = coll.DeleteMany(ctx, bson.M{})
+	if err != nil {
+		return err
+	}
+	_, err = coll.InsertOne(ctx, doc)
+	return err
+}
+
 // initPrimaryDB initializes the local database with the correct users and plugins.
 func (p *Process) initPrimaryDB(clusterState *state.State) error {
 	logger := p.Logger.New("fn", "initPrimaryDB")
@@ -574,6 +684,10 @@ func (p *Process) initPrimaryDB(clusterState *state.State) error {
 	}
 	logger.Info("stopping database to enable security/replication")
 	if err := p.stop(); err != nil {
+		return err
+	}
+	if err := p.repairStaleReplSetHosts(clusterState); err != nil {
+		logger.Error("error repairing stale replset hosts", "err", err)
 		return err
 	}
 	p.securityEnabledValue.Store(true)
@@ -640,6 +754,10 @@ func (p *Process) replSetInitiate() error {
 		},
 	}).Err()
 	if err != nil {
+		// Error code 23: replica set already initialized on disk from a prior run
+		if isMongoError(err, 23) {
+			return nil
+		}
 		logger.Error("failed to initialise replica set", "err", err)
 		return err
 	}
