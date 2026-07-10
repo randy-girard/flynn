@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
@@ -74,6 +76,23 @@ func clusterHostCount() (int, error) {
 		return 0, err
 	}
 	return len(hosts), nil
+}
+
+// linuxHostBinaryFiles returns tarball/GitHub asset names for flynn-host,
+// flynn-init, and the arch-specific flynn CLI.
+func linuxHostBinaryFiles() []struct {
+	name     string
+	destName string
+} {
+	arch := runtime.GOARCH
+	return []struct {
+		name     string
+		destName string
+	}{
+		{"flynn-host-linux-" + arch + ".gz", "flynn-host"},
+		{"flynn-init-linux-" + arch + ".gz", "flynn-init"},
+		{"flynn-linux-" + arch + ".gz", "flynn-linux-" + arch},
+	}
 }
 
 // runGitHubUpdate performs an update using GitHub Releases
@@ -171,19 +190,22 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			return err
 		}
 
-		// Download and install binaries
-		binaries := []struct {
-			name     string
-			destName string
-		}{
-			{"flynn-host-linux-amd64.gz", "flynn-host"},
-			{"flynn-init-linux-amd64.gz", "flynn-init"},
-		}
+		// Download and install binaries. Install flynn-host first so a
+		// re-exec can pick up the new updater before touching other binaries.
+		binaries := linuxHostBinaryFiles()
 
 		for _, bin := range binaries {
 			if err := downloadAndInstallBinary(client, repo, release.TagName, bin.name, bin.destName, tmpDir, binDir, checksums, log); err != nil {
 				return err
 			}
+			if bin.destName == "flynn-host" {
+				if err := reexecUpdateBinary(binDir, release.TagName, os.Args, log); err != nil {
+					return err
+				}
+			}
+		}
+		if err := linkFlynnCLI(binDir, release.TagName, log); err != nil {
+			return err
 		}
 
 		// Update install-source.json
@@ -815,9 +837,8 @@ func downloadAndInstallBinary(client *ghrelease.Client, repo, version, assetName
 	}
 	log.Info("checksum verified", "name", assetName)
 
-	// Decompress and install
-	destPath := filepath.Join(binDir, destName)
-	if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+	// Decompress and install to a versioned file with a symlink
+	if _, err := installVersionedBinary(gzPath, binDir, destName, version, log); err != nil {
 		return err
 	}
 
@@ -844,7 +865,132 @@ func verifyChecksum(path, expected string) error {
 	return nil
 }
 
-// decompressAndInstall decompresses a gzipped file and installs it atomically
+// installVersionedBinary decompresses a gzipped binary into dir/localName.version
+// and updates the symlink at dir/localName. Versioned files avoid "text file
+// busy" when replacing binaries that are currently executing.
+func installVersionedBinary(gzPath, dir, localName, version string, log log15.Logger) (string, error) {
+	destPath := filepath.Join(dir, localName+"."+version)
+	log.Info("installing binary", "dest", destPath)
+
+	src, err := os.Open(gzPath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	gz, err := gzip.NewReader(src)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+
+	destTmp, err := os.CreateTemp(dir, localName+"."+version+".tmp.*")
+	if err != nil {
+		return "", err
+	}
+	destTmpPath := destTmp.Name()
+
+	if _, err := io.Copy(destTmp, gz); err != nil {
+		destTmp.Close()
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := destTmp.Close(); err != nil {
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := os.Chmod(destTmpPath, 0755); err != nil {
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := os.Rename(destTmpPath, destPath); err != nil {
+		os.Remove(destTmpPath)
+		return "", fmt.Errorf("error renaming temp file to %s: %w", destPath, err)
+	}
+	if err := updateBinarySymlink(dir, localName, filepath.Base(destPath)); err != nil {
+		return "", err
+	}
+	return destPath, nil
+}
+
+// linkFlynnCLI points the flynn symlink at the versioned arch-specific CLI binary.
+func linkFlynnCLI(dir, version string, log log15.Logger) error {
+	flynnCLI := "flynn-linux-" + runtime.GOARCH
+	target := flynnCLI + "." + version
+	if _, err := os.Stat(filepath.Join(dir, target)); err != nil {
+		return fmt.Errorf("cli binary %s not installed: %w", target, err)
+	}
+	log.Info("linking flynn CLI", "target", target)
+	return updateBinarySymlink(dir, "flynn", target)
+}
+
+func updateBinarySymlink(dir, linkName, target string) error {
+	link := filepath.Join(dir, linkName)
+	os.Remove(link)
+	return os.Symlink(target, link)
+}
+
+// bootstrapUpdateBinary installs flynn-host from an extracted tarball and
+// re-execs the update with the new binary when the running process is still
+// the old flynn-host. Remote nodes receive binaries via PullBinaries, but the
+// coordinator must bootstrap itself before local install logic runs.
+func bootstrapUpdateBinary(contentDir, version, binDir string, args []string, log log15.Logger) error {
+	if os.Getenv(updateReexecEnv) == version {
+		return nil
+	}
+	gzPath := filepath.Join(contentDir, "flynn-host-linux-"+runtime.GOARCH+".gz")
+	if _, err := os.Stat(gzPath); err != nil {
+		return fmt.Errorf("flynn-host binary missing from update: %w", err)
+	}
+	if _, err := installVersionedBinary(gzPath, binDir, "flynn-host", version, log); err != nil {
+		return err
+	}
+	return reexecUpdateBinary(binDir, version, args, log)
+}
+
+func reexecUpdateBinary(binDir, version string, args []string, log log15.Logger) error {
+	if os.Getenv(updateReexecEnv) == version {
+		return nil
+	}
+	newBin := filepath.Join(binDir, "flynn-host")
+	current, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	current, err = filepath.EvalSymlinks(current)
+	if err != nil {
+		return nil
+	}
+	newPath, err := filepath.EvalSymlinks(newBin)
+	if err != nil {
+		newPath = newBin
+	}
+	if current == newPath {
+		return nil
+	}
+	log.Info("re-executing update with new flynn-host binary", "version", version)
+	env := append(os.Environ(), updateReexecEnv+"="+version)
+	return syscall.Exec(newBin, args, env)
+}
+
+func ensureSystemDeployTimeout(client controller.Client, app *ct.App, log log15.Logger) {
+	if !app.System() {
+		return
+	}
+	minSec := int32(minSystemDeployTimeout / time.Second)
+	if app.DeployTimeout >= minSec {
+		return
+	}
+	app.DeployTimeout = minSec
+	if err := client.UpdateApp(app); err != nil {
+		log.Warn("failed to raise deploy timeout for system app", "err", err)
+		return
+	}
+	log.Info("raised deploy timeout for system app", "timeout_sec", app.DeployTimeout)
+}
+
+// decompressAndInstall decompresses a gzipped file and installs it atomically.
+// Prefer installVersionedBinary for executables that may be running.
 func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 	log.Info("installing binary", "dest", destPath)
 
@@ -878,6 +1024,13 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 }
 
 const deployTimeout = 30 * time.Minute
+
+// minSystemDeployTimeout is the minimum scale/deploy window for system apps
+// during cluster updates. The default app deploy timeout (120s) is too short
+// after a rolling host restart while the scheduler is still placing jobs.
+const minSystemDeployTimeout = 10 * time.Minute
+
+const updateReexecEnv = "FLYNN_UPDATE_REEXEC"
 
 // updateImages downloads the images manifest, triggers image-layer pulls
 // on every cluster host in parallel, then deploys system apps via the
@@ -1162,10 +1315,12 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 			}
 			// Sirenia-based apps plus transient discoverd failures (e.g.
 			// leader.postgres.discoverd NXDOMAIN immediately after postgres
-			// rollout) settle within a few retries.
+			// rollout) settle within a few retries. Scale timeouts after a
+			// rolling host restart are retried for the same reason.
 			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
-			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
-				appLog.Warn("discovery or sirenia cluster not settled, retrying deploy",
+			if (updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) ||
+				updaterdeploy.ShouldRetryAfterScaleTimeout(deployErr)) && attempt < maxUnsettled {
+				appLog.Warn("deploy not settled, retrying",
 					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
 				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
 				continue
@@ -1232,6 +1387,8 @@ func (e errDeploySkipped) Error() string {
 }
 
 func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images map[string]*ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
+	ensureSystemDeployTimeout(client, app, log)
+
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		log.Error("error getting release", "err", err)
@@ -1366,16 +1523,12 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	}
 	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
 
-	rolloutCluster := allNodes
-	if !rolloutCluster && !skipImages {
-		if n, err := clusterHostCount(); err == nil && n <= 1 {
-			rolloutCluster = true
-			log.Info("single-node cluster: rolling out images without --all-nodes")
-		}
-	}
-
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
+		if err := bootstrapUpdateBinary(contentDir, tarballVersion, binDir, os.Args, log); err != nil {
+			return err
+		}
+
 		// Parse checksums from the tarball contents
 		checksumPath := filepath.Join(contentDir, "checksums.sha512")
 		checksums, err := parseChecksums(checksumPath)
@@ -1385,34 +1538,30 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		}
 
 		// Install binaries from extracted files
-		binaries := []struct {
-			gzName   string
-			destName string
-		}{
-			{"flynn-host-linux-amd64.gz", "flynn-host"},
-			{"flynn-init-linux-amd64.gz", "flynn-init"},
-		}
+		binaries := linuxHostBinaryFiles()
 
 		for _, bin := range binaries {
-			gzPath := filepath.Join(contentDir, bin.gzName)
+			gzPath := filepath.Join(contentDir, bin.name)
 			if _, err := os.Stat(gzPath); err != nil {
-				return fmt.Errorf("binary %s not found in tarball: %w", bin.gzName, err)
+				return fmt.Errorf("binary %s not found in tarball: %w", bin.name, err)
 			}
 
 			// Verify checksum if available
 			if checksums != nil {
-				if expected, ok := checksums[bin.gzName]; ok {
+				if expected, ok := checksums[bin.name]; ok {
 					if err := verifyChecksum(gzPath, expected); err != nil {
-						return fmt.Errorf("checksum verification failed for %s: %w", bin.gzName, err)
+						return fmt.Errorf("checksum verification failed for %s: %w", bin.name, err)
 					}
-					log.Info("checksum verified", "name", bin.gzName)
+					log.Info("checksum verified", "name", bin.name)
 				}
 			}
 
-			destPath := filepath.Join(binDir, bin.destName)
-			if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+			if _, err := installVersionedBinary(gzPath, binDir, bin.destName, tarballVersion, log); err != nil {
 				return fmt.Errorf("failed to install %s: %w", bin.destName, err)
 			}
+		}
+		if err := linkFlynnCLI(binDir, tarballVersion, log); err != nil {
+			return err
 		}
 
 		log.Info("binaries installed", "version", tarballVersion)
@@ -1435,6 +1584,14 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		if !allNodes {
 			log.Info("skipping remote host binary updates (--all-nodes not set)")
 			fmt.Println("Other cluster hosts were not updated. Run the same tarball update on each node, then run it again with --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
+		}
+	}
+
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
 		}
 	}
 

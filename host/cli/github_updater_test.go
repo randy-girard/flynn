@@ -1,6 +1,10 @@
 package cli
 
 import (
+	"bytes"
+	"compress/gzip"
+	"os"
+	"path/filepath"
 	"testing"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -92,6 +96,56 @@ func TestFindLocalHostNoMatch(t *testing.T) {
 // daemon's own status.URL (e.g. "http://192.168.56.20:1113") to determine
 // the cluster-routable IP rather than scanning local interfaces (which
 // can return a hypervisor NAT address that peers can't reach).
+func TestInstallVersionedBinary(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a minimal gzipped payload
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte("test-binary")); err != nil {
+		t.Fatal(err)
+	}
+	gz.Close()
+	gzPath := filepath.Join(dir, "test.gz")
+	if err := os.WriteFile(gzPath, buf.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	log := log15.New()
+	path, err := installVersionedBinary(gzPath, dir, "flynn-host", "vTEST", log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path) != "flynn-host.vTEST" {
+		t.Fatalf("unexpected versioned path: %s", path)
+	}
+
+	linkPath := filepath.Join(dir, "flynn-host")
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatalf("symlink missing: %v", err)
+	}
+	if target != "flynn-host.vTEST" {
+		t.Fatalf("symlink target: got %q, want flynn-host.vTEST", target)
+	}
+
+	// Second install to a new version should update the symlink without error.
+	path2, err := installVersionedBinary(gzPath, dir, "flynn-host", "vTEST2", log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(path2) != "flynn-host.vTEST2" {
+		t.Fatalf("unexpected second path: %s", path2)
+	}
+	target, err = os.Readlink(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "flynn-host.vTEST2" {
+		t.Fatalf("symlink not updated: got %q", target)
+	}
+}
+
 func TestParseHostFromURL(t *testing.T) {
 	cases := []struct {
 		in, want string
