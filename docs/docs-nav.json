@@ -11,7 +11,8 @@
           { "title": "MySQL", "path": "/docs/databases/mysql" },
           { "title": "MongoDB", "path": "/docs/databases/mongodb" },
           { "title": "Redis", "path": "/docs/databases/redis" },
-          { "title": "Kafka", "path": "/docs/databases/kafka" }
+          { "title": "Kafka", "path": "/docs/databases/kafka" },
+          { "title": "ClickHouse", "path": "/docs/databases/clickhouse" }
     ] },
     { "title": "Languages", "children": [
       { "title": "Go", "path": "/docs/languages/go" },

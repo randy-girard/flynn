@@ -351,6 +351,34 @@
       }
     },
     {
+      "id": "clickhouse",
+      "base": "ubuntu-noble",
+      "layers": [
+        {
+          "name": "clickhouse-packages",
+          "script": "appliance/clickhouse/img/packages.sh",
+          "limits": {
+            "temp_disk": "4G"
+          }
+        },
+        {
+          "name": "clickhouse-binaries",
+          "gobuild": {
+            "appliance/clickhouse/cmd/flynn-clickhouse": "/bin/flynn-clickhouse",
+            "appliance/clickhouse/cmd/flynn-clickhouse-api": "/bin/flynn-clickhouse-api"
+          },
+          "copy": {
+            "appliance/clickhouse/start.sh": "/bin/start-flynn-clickhouse"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/bin/start-flynn-clickhouse"
+        ]
+      }
+    },
+    {
       "id": "blobstore",
       "base": "ubuntu-noble",
       "layers": [
