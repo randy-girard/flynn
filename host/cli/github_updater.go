@@ -1223,6 +1223,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 			continue
 		}
 		if _, ok := images[app.Name]; !ok {
+			if app.Optional && updaterdeploy.IsOptionalResourceApp(app.Name) {
+				log.Info("skipping optional resource app without image", "name", app.Name)
+				continue
+			}
 			err := fmt.Errorf("missing image: %s", app.Name)
 			log.Error(err.Error())
 			return err
@@ -1295,8 +1299,20 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		app, err := client.GetApp(appInfo.Name)
 		if err == controller.ErrNotFound && appInfo.Optional {
-			appLog.Info("skipped deploy of system app (optional app not present)")
-			continue
+			if updaterdeploy.IsOptionalResourceApp(appInfo.Name) {
+				if err := updaterdeploy.EnsureOptionalResourceApp(client, appInfo.Name, images[appInfo.Name], appLog); err != nil {
+					appLog.Error("error deploying missing optional resource app", "err", err)
+					return err
+				}
+				app, err = client.GetApp(appInfo.Name)
+				if err != nil {
+					appLog.Error("error getting app after optional resource deploy", "err", err)
+					return err
+				}
+			} else {
+				appLog.Info("skipped deploy of system app (optional app not present)")
+				continue
+			}
 		} else if err != nil {
 			appLog.Error("error getting app", "err", err)
 			return err
@@ -1465,6 +1481,12 @@ func imageenvIDs(images map[string]*ct.Artifact) imageenv.IDs {
 	}
 	if a := images["dockerbuilder"]; a != nil {
 		ids.DockerBuilder = a.ID
+	}
+	if a := images["kafka"]; a != nil {
+		ids.Kafka = a.ID
+	}
+	if a := images["clickhouse"]; a != nil {
+		ids.ClickHouse = a.ID
 	}
 	return ids
 }

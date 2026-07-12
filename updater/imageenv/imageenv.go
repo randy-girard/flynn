@@ -6,6 +6,8 @@ type IDs struct {
 	SlugBuilder   string
 	SlugRunner    string
 	DockerBuilder string
+	Kafka         string
+	ClickHouse    string
 }
 
 // Update sets builder image ID env vars on a release. Missing keys are added
@@ -23,6 +25,8 @@ func Update(env map[string]string, ids IDs) bool {
 		"SLUGRUNNER_IMAGE_ID":       ids.SlugRunner,
 		"SLUGRUNNER_24_IMAGE_ID":    ids.SlugRunner,
 		"DOCKERBUILDER_24_IMAGE_ID": ids.DockerBuilder,
+		"KAFKA_IMAGE_ID":            ids.Kafka,
+		"CLICKHOUSE_IMAGE_ID":       ids.ClickHouse,
 	} {
 		if newID == "" {
 			continue
