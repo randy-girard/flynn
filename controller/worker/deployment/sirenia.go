@@ -144,6 +144,22 @@ loop:
 	}
 	state = *readyState
 
+	// Peers left over from aborted rolling deploys (new-release formations
+	// still scaled up) pollute discoverd and cause replication sync waits to
+	// target the wrong downstream instance.
+	instances, err := discoverd.NewService(proc.Service).Instances()
+	if err != nil {
+		return loggedErr("error listing sirenia service instances: %s", err)
+	}
+	for _, inst := range instances {
+		if inst == nil || inst.Meta == nil {
+			continue
+		}
+		if rid := inst.Meta["FLYNN_RELEASE_ID"]; rid != "" && rid != d.OldReleaseID {
+			return loggedErr("sirenia cluster has peer from unexpected release %s (expected only %s); retry update after orphan formation cleanup", rid, d.OldReleaseID)
+		}
+	}
+
 	stopInstance := func(inst *discoverd.Instance) error {
 		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"])
 
@@ -155,8 +171,12 @@ loop:
 		peer := sireniaclient.NewClient(inst.Addr)
 		log.Info("stopping peer")
 		if err := peer.Stop(); err != nil {
-			log.Error("error stopping peer", "err", err)
-			return err
+			if sireniaclient.IsRecoverableStopError(err) {
+				log.Warn("stop request timed out, waiting for peer to leave discoverd", "err", err)
+			} else {
+				log.Error("error stopping peer", "err", err)
+				return err
+			}
 		}
 		log.Info("waiting for peer to stop")
 		timeout := time.After(d.timeout)

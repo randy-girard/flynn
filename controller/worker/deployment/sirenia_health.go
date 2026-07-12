@@ -28,7 +28,7 @@ func (d *DeployJob) waitForSireniaClusterReady(service, processType string, init
 	if sireniaClusterDeployReady(&cluster, d.Processes[processType]) {
 		return &cluster, nil
 	}
-	if len(cluster.Deposed) == 0 && len(cluster.Async) == 0 {
+	if len(cluster.Deposed) == 0 && len(cluster.Async) == 0 && d.Processes[processType] <= 2 {
 		return nil, errors.New("sirenia cluster in unhealthy state (has no asyncs)")
 	}
 	if len(cluster.Deposed) == 0 && 2+len(cluster.Async) != d.Processes[processType] {
