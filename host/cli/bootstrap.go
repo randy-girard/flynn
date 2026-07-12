@@ -22,6 +22,7 @@ import (
 	controllerdata "github.com/flynn/flynn/controller/data"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	hostconfig "github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/pkg/exec"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/tlscert"
@@ -56,6 +57,11 @@ var manifest []byte
 
 func runBootstrap(args *docopt.Args) error {
 	log.SetFlags(log.Lmicroseconds)
+	if key, err := hostconfig.LoadAuthKey(hostconfig.DefaultPath); err != nil {
+		return fmt.Errorf("error loading host auth key: %s", err)
+	} else if key != "" {
+		os.Setenv("FLYNN_HOST_AUTH_KEY", key)
+	}
 	logf := textLogger
 	if args.Bool["--json"] {
 		logf = jsonLogger

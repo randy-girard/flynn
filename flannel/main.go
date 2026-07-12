@@ -23,6 +23,7 @@ import (
 	"github.com/flynn/flynn/flannel/backend/vxlan"
 	"github.com/flynn/flynn/flannel/discoverd"
 	"github.com/flynn/flynn/flannel/pkg/ip"
+	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/flannel/pkg/task"
 	"github.com/flynn/flynn/flannel/subnet"
 	"github.com/flynn/flynn/pkg/keepalive"
@@ -118,7 +119,7 @@ func notifyWebhook(sn *backend.SubnetDef) error {
 		MTU    int    `json:"mtu"`
 	}{os.Getenv("FLYNN_JOB_ID"), net.String(), sn.MTU}
 	payload, _ := json.Marshal(data)
-	res, err := http.Post(opts.notifyURL, "application/json", bytes.NewReader(payload))
+	res, err := httpclient.PostWithHostAuth(opts.notifyURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}

@@ -21,6 +21,7 @@ import (
 	dt "github.com/flynn/flynn/discoverd/types"
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/pkg/keepalive"
 	"github.com/flynn/flynn/pkg/mux"
 	"github.com/flynn/flynn/pkg/shutdown"
@@ -519,7 +520,7 @@ func (m *Main) Notify(notifyURL, dnsAddr string) {
 	payload, _ := json.Marshal(m.status)
 	m.mu.Unlock()
 
-	res, err := http.Post(notifyURL, "application/json", bytes.NewReader(payload))
+	res, err := httpclient.PostWithHostAuth(notifyURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		m.logger.Printf("failed to notify: %s", err)
 	} else {

@@ -227,8 +227,32 @@ is_ubuntu_xenial() {
   grep -qF "Ubuntu 16.04" /etc/os-release &>/dev/null
 }
 
+write_host_auth_config() {
+  if [[ -f /etc/flynn/host.json ]] && grep -qF 'FLYNN_HOST_AUTH_KEY' /etc/flynn/host.json; then
+    info "host HTTP API auth key already configured in /etc/flynn/host.json"
+    return
+  fi
+
+  local key="${FLYNN_HOST_AUTH_KEY:-}"
+  if [[ -z "${key}" ]]; then
+    key="$(openssl rand -hex 16)"
+  fi
+
+  info "configuring host HTTP API authentication"
+  cat > /etc/flynn/host.json <<EOF
+{
+	"env": {
+		"FLYNN_HOST_AUTH_KEY": "${key}"
+	}
+}
+EOF
+  chmod 600 /etc/flynn/host.json
+}
+
 install_systemd_unit() {
   info "installing systemd unit"
+
+  write_host_auth_config
 
   cat > /lib/systemd/system/flynn-host.service <<EOF
 [Unit]

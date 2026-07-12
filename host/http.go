@@ -17,6 +17,7 @@ import (
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/downloader"
+	"github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/host/logmux"
 	host "github.com/flynn/flynn/host/types"
 	volumeapi "github.com/flynn/flynn/host/volume/api"
@@ -750,9 +751,44 @@ func (h *jobAPI) Update(w http.ResponseWriter, req *http.Request, _ httprouter.P
 func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "SystemctlRestart")
 	log.Info("systemctl restart requested")
+	h.scheduleDaemonRestart(log, w)
+}
 
-	// Spawn a detached process that waits briefly then restarts the service.
-	// The sleep gives time for the HTTP response to reach the client.
+func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "ConfigureAuthKey")
+
+	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnauthorizedErrorCode,
+			Message: "authentication required",
+		})
+		return
+	}
+
+	var input struct {
+		Key string `json:"key"`
+	}
+	if err := httphelper.DecodeJSON(req, &input); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	if input.Key == "" {
+		httphelper.Error(w, fmt.Errorf("missing auth key"))
+		return
+	}
+
+	if err := config.SetAuthKey(config.DefaultPath, input.Key); err != nil {
+		log.Error("error writing host auth key", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+
+	log.Info("host auth key configured, scheduling restart")
+	h.scheduleDaemonRestart(log, w)
+}
+
+func (h *jobAPI) scheduleDaemonRestart(log log15.Logger, w http.ResponseWriter) {
 	cmd := exec.Command("bash", "-c", "sleep 2 && systemctl restart flynn-host")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -794,6 +830,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.POST("/host/cleanup-image-data", h.CleanupImageData)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/systemctl-restart", h.SystemctlRestart)
+	r.POST("/host/auth-key", h.ConfigureAuthKey)
 	r.POST("/host/tags", h.UpdateTags)
 	r.POST("/host/webhooks", h.AddWebhook)
 	r.GET("/host/webhooks", h.ListWebhooks)

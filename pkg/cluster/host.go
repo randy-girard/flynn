@@ -29,6 +29,12 @@ type Host struct {
 // NewHost creates a new Host that uses client to communicate with it.
 // addr is used by Attach.
 func NewHost(id string, addr string, h *http.Client, tags map[string]string) *Host {
+	return NewHostWithKey(id, addr, h, tags, os.Getenv("FLYNN_HOST_AUTH_KEY"))
+}
+
+// NewHostWithKey is like NewHost but uses the given auth key instead of the
+// environment variable.
+func NewHostWithKey(id string, addr string, h *http.Client, tags map[string]string, key string) *Host {
 	if h == nil {
 		h = http.DefaultClient
 	}
@@ -42,7 +48,7 @@ func NewHost(id string, addr string, h *http.Client, tags map[string]string) *Ho
 			ErrNotFound: ErrNotFound,
 			URL:         addr,
 			HTTP:        h,
-			Key:         os.Getenv("FLYNN_HOST_AUTH_KEY"),
+			Key:         key,
 		},
 	}
 }
@@ -189,6 +195,12 @@ func (c *Host) GetVolume(volumeID string) (*volume.Info, error) {
 func (c *Host) ListVolumes() ([]*volume.Info, error) {
 	var volumes []*volume.Info
 	return volumes, c.c.Get("/storage/volumes", &volumes)
+}
+
+// ConfigureAuthKey persists an auth key in the target host's config and
+// restarts the daemon so it takes effect.
+func (c *Host) ConfigureAuthKey(key string) error {
+	return c.c.Post("/host/auth-key", map[string]string{"key": key}, nil)
 }
 
 // CleanupImageData removes orphaned image tmp/mnt dirs and unreferenced

@@ -36,6 +36,30 @@ type State struct {
 	discoverd     *discoverd.Client
 	controller    controller.Client
 	controllerKey string
+	hostAuthKey   string
+}
+
+func (s *State) SetHostAuthKey(key string) {
+	s.hostAuthKey = key
+}
+
+// HostAuthKey returns the cluster host API auth key, falling back to the
+// process environment when bootstrap has not set one yet.
+func (s *State) HostAuthKey() string {
+	if s.hostAuthKey != "" {
+		return s.hostAuthKey
+	}
+	return os.Getenv("FLYNN_HOST_AUTH_KEY")
+}
+
+func (s *State) HostClient(id, addr string, tags map[string]string) *cluster.Host {
+	return cluster.NewHostWithKey(id, addr, nil, tags, s.HostAuthKey())
+}
+
+func (s *State) refreshHostClients() {
+	for i, h := range s.Hosts {
+		s.Hosts[i] = s.HostClient(h.ID(), h.Addr(), h.Tags())
+	}
 }
 
 func (s *State) ControllerClient() (controller.Client, error) {
@@ -265,14 +289,14 @@ func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Du
 			}
 			state.Hosts = make([]*cluster.Host, 0, known)
 			for _, url := range urls {
-				h := cluster.NewHost("", url, nil, nil)
+				h := cluster.NewHostWithKey("", url, nil, nil, state.HostAuthKey())
 				status, err := h.GetStatus()
 				if err != nil {
 					continue
 				}
 				delete(remaining, url)
 				online++
-				state.Hosts = append(state.Hosts, cluster.NewHost(status.ID, status.URL, nil, nil))
+				state.Hosts = append(state.Hosts, state.HostClient(status.ID, status.URL, nil))
 			}
 			if online >= expected {
 				break

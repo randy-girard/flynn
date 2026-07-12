@@ -14,6 +14,7 @@ type GenRandomAction struct {
 	Encoding string `json:"encoding"`
 
 	ControllerKey bool `json:"controller_key"`
+	HostAuthKey   bool `json:"host_auth_key"`
 }
 
 func init() {
@@ -50,6 +51,9 @@ func (a *GenRandomAction) Run(s *State) error {
 	s.StepData[a.ID] = &RandomData{Data: data}
 	if a.ControllerKey {
 		s.SetControllerKey(data)
+	}
+	if a.HostAuthKey {
+		s.SetHostAuthKey(data)
 	}
 	return nil
 }

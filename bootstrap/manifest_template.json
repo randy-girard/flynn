@@ -5,6 +5,16 @@
     "vars": ["CLUSTER_DOMAIN"]
   },
   {
+    "id": "host-key",
+    "action": "gen-random",
+    "host_auth_key": true,
+    "data": "{{ getenv \"FLYNN_HOST_AUTH_KEY\" }}"
+  },
+  {
+    "id": "configure-host-auth",
+    "action": "configure-host-auth"
+  },
+  {
     "id": "resource-check",
     "action": "resource-check",
     "ports": [
@@ -28,7 +38,8 @@
       "env": {
         "DISCOVERD_PEERS": "{{ range $ip := .SortedHostIPs }}{{ $ip }}:1111,{{ end }}",
         "DISCOVERD": "none",
-        "DEBUG": "{{ getenv \"DEBUG\" }}"
+        "DEBUG": "{{ getenv \"DEBUG\" }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -56,7 +67,8 @@
       "env": {
         "DISCOVERD": "none",
         "BACKEND": "{{ getenv \"FLANNEL_BACKEND\" }}",
-        "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}"
+        "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -170,7 +182,8 @@
         "NAME_SEED": "{{ (index .StepData \"name-seed\").Data }}",
         "CA_CERT": "{{ (index .StepData \"controller-cert\").CACert }}",
         "TELEMETRY_BOOTSTRAP_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
-        "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}"
+        "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
       },
       "processes": {
         "web": {
