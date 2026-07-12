@@ -22,6 +22,8 @@ func TestRenderConfig(t *testing.T) {
 	mustContain(t, out, "<replica>replica-1</replica>")
 	mustContain(t, out, "<internal_replication>true</internal_replication>")
 	mustContain(t, out, "<password>secret</password>")
+	mustContain(t, out, "<profiles>")
+	mustContain(t, out, "<quotas>")
 	mustContain(t, out, "<host>10.0.0.1</host>")
 }
 

@@ -337,6 +337,14 @@ var serverConfigTemplate = template.Must(template.New("flynn.xml").Parse(`
     <interserver_http_host>{{.AdvertisedHost}}</interserver_http_host>
     <listen_host>0.0.0.0</listen_host>
 
+    <profiles>
+        <default/>
+    </profiles>
+
+    <quotas>
+        <default/>
+    </quotas>
+
     <users>
         <default>
             <password>{{.Password}}</password>
