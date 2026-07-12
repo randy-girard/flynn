@@ -1247,6 +1247,12 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		log.Warn("error repairing stale volumes", "err", err)
 	}
 	repairSireniaClusters(log)
+	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
+		log.Warn("error repairing orphan sirenia formations", "err", err)
+	}
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+		log.Warn("error repairing sirenia cluster quorum", "err", err)
+	}
 
 	// Create image artifacts for common images, with retries since
 	// blobstore may still be stabilizing after the sirenia repair.

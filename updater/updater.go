@@ -107,6 +107,12 @@ func run() error {
 	// image artifacts.  CreateArtifact depends on blobstore which
 	// depends on postgres being healthy (with asyncs).
 	repairSireniaClusters(log)
+	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
+		log.Warn("error repairing orphan sirenia formations", "err", err)
+	}
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+		log.Warn("error repairing sirenia cluster quorum", "err", err)
+	}
 
 	log.Info("creating new image artifacts")
 	createArtifactWithRetry := func(name string, img *ct.Artifact) error {
