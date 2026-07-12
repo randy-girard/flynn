@@ -146,6 +146,29 @@ func TestInstallVersionedBinary(t *testing.T) {
 	}
 }
 
+func TestCleanupSourceTarball(t *testing.T) {
+	log := log15.New()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flynn-vTEST.0.tar.gz")
+	if err := os.WriteFile(path, []byte("tarball"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupSourceTarball(path, log); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("expected tarball to be removed, stat err=%v", err)
+	}
+}
+
+func TestCleanupSourceTarballRefusesDirectory(t *testing.T) {
+	log := log15.New()
+	dir := t.TempDir()
+	if err := cleanupSourceTarball(dir, log); err == nil {
+		t.Fatal("expected error when path is a directory")
+	}
+}
+
 func TestParseHostFromURL(t *testing.T) {
 	cases := []struct {
 		in, want string

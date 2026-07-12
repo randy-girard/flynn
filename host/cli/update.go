@@ -24,6 +24,11 @@ Options:
   --skip-images                  skip updating container images and system apps
   --images-only                  only update container images and system apps (skip binaries)
   --tarball=<path>               update from a local tarball instead of GitHub
+  --cleanup-tarball              remove the source tarball after a successful
+                                 update once binaries are installed and any
+                                 cluster-wide rollout from the extracted contents
+                                 has finished (the tarball itself is not needed
+                                 after extraction)
   --all-nodes                    update the entire cluster: push binaries to other
                                  hosts, pull images on every node, deploy system apps.
                                  Without this flag, only this host is updated (binaries

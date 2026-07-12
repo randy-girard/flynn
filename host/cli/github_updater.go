@@ -1678,6 +1678,34 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 	log.Info("tarball update complete", "version", tarballVersion)
 	fmt.Printf("Flynn updated to %s from tarball\n", tarballVersion)
+	if args.Bool["--cleanup-tarball"] {
+		if err := cleanupSourceTarball(tarballPath, log); err != nil {
+			log.Warn("failed to remove source tarball", "path", tarballPath, "err", err)
+		}
+	}
+	return nil
+}
+
+// cleanupSourceTarball deletes the local .tar.gz passed to --tarball after a
+// successful update. Extraction and any cluster rollout are served from a
+// temporary directory; the archive is not read again once those steps finish.
+func cleanupSourceTarball(path string, log log15.Logger) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing to remove non-regular file: %s", abs)
+	}
+	if err := os.Remove(abs); err != nil {
+		return err
+	}
+	log.Info("removed source tarball", "path", abs)
+	fmt.Printf("Removed source tarball %s\n", abs)
 	return nil
 }
 
