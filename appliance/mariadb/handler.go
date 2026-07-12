@@ -86,6 +86,8 @@ func (h *Handler) handleGetStatus(w http.ResponseWriter, req *http.Request, _ ht
 
 // handleGetBackup handles request to GET /backup.
 func (h *Handler) handleGetBackup(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
+	killOrphanedBackupProcesses(h.Logger)
+
 	r, err := h.Process.Backup()
 	if err != nil {
 		h.Logger.Error("error creating backup", "err", err)

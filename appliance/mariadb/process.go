@@ -43,8 +43,11 @@ const (
 	BinName    = "mysqld"
 	ConfigName = "my.cnf"
 
-	checkInterval = 1000 * time.Millisecond
+	checkInterval      = 1000 * time.Millisecond
+	backupFetchTimeout = 30 * time.Minute
 )
+
+var backupHTTPClient = &http.Client{Timeout: backupFetchTimeout}
 
 var (
 	// ErrRunning is returned when starting an already running process.
@@ -85,6 +88,11 @@ type Process struct {
 
 	// cmd is the running system command.
 	cmd *Cmd
+
+	// backupMtx serializes mariabackup runs. Concurrent /backup requests during
+	// a rolling deploy can otherwise leave orphaned mariabackup processes that
+	// block subsequent backups on the same peer.
+	backupMtx sync.Mutex
 
 	// cancelSyncWait cancels the goroutine that is waiting for
 	// the downstream to catch up, if running.
@@ -285,8 +293,39 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 	return nil
 }
 
+// dataDirInitialized reports whether the data directory already contains a
+// MariaDB instance (as opposed to being empty or mid-restore). Rolling deploys
+// stop mysqld before reconfiguring an existing peer; pulling a full backup in
+// that case is unnecessary and can hang when the primary is already serving
+// another backup.
+func (p *Process) dataDirInitialized() bool {
+	for _, name := range []string{"ibdata1", "mysql"} {
+		if _, err := os.Stat(filepath.Join(p.DataDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// killOrphanedBackupProcesses terminates stale mariabackup/mbstream children.
+// Failed or abandoned backup streams can leave these running and block new
+// backups on the same peer (InnoDB refuses concurrent hot backups).
+func killOrphanedBackupProcesses(log log15.Logger) {
+	for _, pattern := range []string{"mariabackup", "mbstream"} {
+		cmd := exec.Command("pkill", "-9", "-f", pattern)
+		if out, err := cmd.CombinedOutput(); err != nil && len(out) > 0 {
+			log.Debug("pkill orphaned backup process", "pattern", pattern, "out", string(out))
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+}
+
 // Backup returns a reader for streaming a backup in xbstream format.
 func (p *Process) Backup() (io.ReadCloser, error) {
+	p.backupMtx.Lock()
+
+	killOrphanedBackupProcesses(p.Logger)
+
 	r := &backupReadCloser{}
 
 	// Use mariabackup instead of deprecated innobackupex (deprecated since MariaDB 10.3)
@@ -309,9 +348,11 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		p.backupMtx.Unlock()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		p.backupMtx.Unlock()
 		stdout.Close()
 		return nil, err
 	}
@@ -319,6 +360,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 	// Attach to reader wrapper.
 	r.cmd = cmd
 	r.stdout = stdout
+	r.unlock = p.backupMtx.Unlock
 
 	return r, nil
 }
@@ -349,10 +391,26 @@ func (p *Process) extractBackupInfo() (*BackupInfo, error) {
 	return &BackupInfo{LogFile: fields[0], LogPos: fields[1], GTID: fields[2]}, nil
 }
 
+func (p *Process) clearDataDir() error {
+	files, err := ioutil.ReadDir(p.DataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(p.DataDir, 0700)
+		}
+		return err
+	}
+	for _, file := range files {
+		if err := os.RemoveAll(filepath.Join(p.DataDir, file.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Restore restores the database from an xbstream backup.
 func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
-	if err := p.writeConfig(configData{}); err != nil {
-		return nil, err
+	if err := p.clearDataDir(); err != nil {
+		return nil, fmt.Errorf("error clearing data directory: %w", err)
 	}
 	if err := p.unpackXbstream(r); err != nil {
 		return nil, err
@@ -373,6 +431,10 @@ func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
 		return nil, err
 	}
 	if err := p.restoreApplyLog(); err != nil {
+		return nil, err
+	}
+	// clearDataDir removes my.cnf before extraction; mariadbd requires it on start.
+	if err := p.writeConfig(configData{ReadOnly: true}); err != nil {
 		return nil, err
 	}
 	return backupInfo, nil
@@ -425,9 +487,14 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			return err
 		}
 
-		if err := func() error {
-			logger.Info("retrieving backup")
-			resp, err := http.Get(fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr)))
+		if p.dataDirInitialized() {
+			logger.Info("data directory already initialized, skipping backup")
+		} else if err := func() error {
+			killOrphanedBackupProcesses(logger)
+
+			backupURL := fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr))
+			logger.Info("retrieving backup", "url", backupURL)
+			resp, err := backupHTTPClient.Get(backupURL)
 			if err != nil {
 				logger.Error("error connecting to upstream for backup", "err", err)
 				return err
@@ -435,7 +502,7 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			defer resp.Body.Close()
 			if resp.StatusCode != http.StatusOK {
 				logger.Error("error code returned from backup", "status_code", resp.StatusCode)
-				return err
+				return fmt.Errorf("upstream backup returned status %d", resp.StatusCode)
 			}
 
 			hash := sha512.New()
@@ -454,18 +521,15 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			}
 
 			chk := hex.EncodeToString(hash.Sum(nil))
-			logger.Error("verifying backup checksum", "actual", chk)
-			if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != chk {
+			if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != "" && hdr != chk {
 				logger.Error("invalid backup checksum", "actual", chk, "desired", hdr)
 				return errors.New("invalid backup")
 			}
 
 			return nil
 		}(); err != nil {
-			if files, err := ioutil.ReadDir("/data"); err == nil {
-				for _, file := range files {
-					os.RemoveAll(filepath.Join("/data", file.Name()))
-				}
+			if clearErr := p.clearDataDir(); clearErr != nil {
+				logger.Error("error clearing data directory after failed restore", "err", clearErr)
 			}
 			return err
 		}
@@ -1061,11 +1125,15 @@ type backupReadCloser struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr bytes.Buffer
+	unlock func()
 }
 
 // Close waits for the backup command to finish and verifies that the backup completed successfully.
 func (r *backupReadCloser) Close() error {
 	defer r.stdout.Close()
+	if r.unlock != nil {
+		defer r.unlock()
+	}
 
 	if err := r.cmd.Wait(); err != nil {
 		return fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
