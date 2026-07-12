@@ -765,6 +765,16 @@ func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ ht
 	httphelper.JSON(w, http.StatusOK, map[string]string{"status": "restarting"})
 }
 
+func (h *jobAPI) CleanupImageData(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "CleanupImageData")
+	if err := h.host.CleanupImageData(); err != nil {
+		log.Error("error cleaning image data", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/jobs", h.ListJobs)
 	r.GET("/host/jobs/:id", h.GetJob)
@@ -781,6 +791,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/stats", h.GetHostStats)
 	r.GET("/host/jobs-stats", h.GetAllJobsStats)
 	r.POST("/host/resource-check", h.ResourceCheck)
+	r.POST("/host/cleanup-image-data", h.CleanupImageData)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/systemctl-restart", h.SystemctlRestart)
 	r.POST("/host/tags", h.UpdateTags)

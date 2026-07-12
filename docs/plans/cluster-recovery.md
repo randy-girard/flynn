@@ -108,7 +108,5 @@ curl -u "$AUTH_KEY:" http://127.0.0.1:1113/host/status | jq .discoverd
 
 ## Known limitations
 
-- `POST /host/cleanup-image-data` is not yet on deployed binaries; disk cleanup
-  via fix returns 404 until a new `flynn-host` release is deployed.
 - `flynn-host v20260709.3` must not be deployed; it breaks new container starts
   (`getting pipe fds for pid 0`).

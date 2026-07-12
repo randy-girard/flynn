@@ -24,6 +24,7 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/downloader"
+	"github.com/flynn/flynn/host/cleanup"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
@@ -1025,6 +1026,56 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 
 const deployTimeout = 30 * time.Minute
 
+const imagePullCleanupTimeout = 5 * time.Minute
+
+// prepareHostsForImagePull frees orphaned image material and verifies each host
+// has enough disk space before downloading update layers.
+func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
+	log.Info("cleaning orphaned image data before image pull")
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(hosts))
+	for _, host := range hosts {
+		wg.Add(1)
+		go func(h *cluster.Host) {
+			defer wg.Done()
+			hostLog := log.New("host", h.ID())
+			done := make(chan error, 1)
+			go func() { done <- h.CleanupImageData() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					hostLog.Warn("image data cleanup failed", "err", err)
+					errChan <- fmt.Errorf("cleanup on host %s: %w", h.ID(), err)
+				}
+			case <-time.After(imagePullCleanupTimeout):
+				hostLog.Warn("image data cleanup timed out")
+				errChan <- fmt.Errorf("cleanup timed out on host %s", h.ID())
+			}
+		}(host)
+	}
+	wg.Wait()
+	close(errChan)
+	for err := range errChan {
+		log.Warn("continuing after cleanup issue", "err", err)
+	}
+
+	for _, h := range hosts {
+		stats, err := h.GetStats()
+		if err != nil {
+			log.Warn("could not check disk space", "host", h.ID(), "err", err)
+			continue
+		}
+		free := stats.DiskFreeBytes
+		hostLog := log.New("host", h.ID())
+		hostLog.Info("filesystem free space", "free_gb", free>>30)
+		if free < cleanup.MinFreeBeforeImagePull {
+			return fmt.Errorf("host %s has insufficient disk space for image pull (%d GiB free, need at least %d GiB): free space under %s or run `flynn-host fix`",
+				h.ID(), free>>30, cleanup.MinFreeBeforeImagePull>>30, cleanup.LayerCacheDir)
+		}
+	}
+	return nil
+}
+
 // minSystemDeployTimeout is the minimum scale/deploy window for system apps
 // during cluster updates. The default app deploy timeout (120s) is too short
 // after a rolling host restart while the scheduler is still placing jobs.
@@ -1086,9 +1137,14 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 	}
 	log.Info("found cluster hosts", "num_hosts", len(hosts))
 
+	if err := prepareHostsForImagePull(hosts, log); err != nil {
+		return err
+	}
+
 	// Trigger image pull on all hosts in parallel
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(hosts))
+	doneHosts := make(chan string, len(hosts))
 
 	for _, host := range hosts {
 		wg.Add(1)
@@ -1142,6 +1198,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 				lastErr = nil
 				hostLog.Info("finished image pull on host")
+				doneHosts <- h.ID()
 				break
 			}
 
@@ -1151,9 +1208,46 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		}(host)
 	}
 
+	// Log progress while waiting for slow hosts (large layer imports can take
+	// many minutes with no per-layer output when layers are cached).
+	pullDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(pullDone)
+	}()
+	go func() {
+		pending := make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			pending[h.ID()] = struct{}{}
+		}
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case id, ok := <-doneHosts:
+				if !ok {
+					return
+				}
+				delete(pending, id)
+			case <-pullDone:
+				return
+			case <-ticker.C:
+				if len(pending) == 0 {
+					continue
+				}
+				ids := make([]string, 0, len(pending))
+				for id := range pending {
+					ids = append(ids, id)
+				}
+				log.Info("waiting for image pull to finish", "pending_hosts", ids)
+			}
+		}
+	}()
+
 	// Wait for all hosts to finish
 	wg.Wait()
 	close(errChan)
+	close(doneHosts)
 
 	// Check for any errors
 	for err := range errChan {
@@ -1546,6 +1640,9 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	extractDir, err := os.MkdirTemp("", "flynn-tarball-update-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
+	}
+	if err := cleanup.RemoveStaleTarballExtractDirs(extractDir); err != nil {
+		log.Warn("failed to remove stale tarball extract dirs", "err", err)
 	}
 	defer os.RemoveAll(extractDir)
 

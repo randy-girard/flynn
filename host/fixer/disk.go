@@ -10,7 +10,7 @@ import (
 // cleanup on that host's flynn-host daemon. Disk paths are always local to the
 // host that owns them; never delete image data from the machine running fix.
 func (f *ClusterFixer) FixLocalDisk() error {
-	const cleanupTimeout = 2 * time.Minute
+	const cleanupTimeout = 5 * time.Minute
 	for _, h := range f.hosts {
 		log := f.l.New("fn", "FixLocalDisk", "host", h.ID())
 		log.Info("cleaning orphaned image data")
