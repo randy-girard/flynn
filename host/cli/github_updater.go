@@ -1241,6 +1241,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 	// This must happen BEFORE creating image artifacts because the
 	// controller's CreateArtifact depends on blobstore, which depends
 	// on postgres being fully healthy (with asyncs).
+	if hosts, err := clusterClient.Hosts(); err != nil {
+		log.Warn("could not list hosts for volume repair", "err", err)
+	} else if err := updaterdeploy.RepairStaleVolumes(client, hosts, log); err != nil {
+		log.Warn("error repairing stale volumes", "err", err)
+	}
 	repairSireniaClusters(log)
 
 	// Create image artifacts for common images, with retries since
