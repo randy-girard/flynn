@@ -3,6 +3,8 @@ package kafka
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -69,6 +71,70 @@ func TestBuildQuorumVoters(t *testing.T) {
 	want := "10@a:9093,20@b:9093,30@c:9093"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestAssignNodeIDFromBootstrapIDs(t *testing.T) {
+	ids := []string{"b", "a", "c"}
+	if got := AssignNodeIDFromBootstrapIDs("a", ids); got != 1 {
+		t.Fatalf("got %d, want 1", got)
+	}
+	if got := AssignNodeIDFromBootstrapIDs("b", ids); got != 2 {
+		t.Fatalf("got %d, want 2", got)
+	}
+	if got := AssignNodeIDFromBootstrapIDs("c", ids); got != 3 {
+		t.Fatalf("got %d, want 3", got)
+	}
+}
+
+func TestResolveNodeIDFromMeta(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "kraft-logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "meta.properties"), []byte("node.id=42\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	id, err := ResolveNodeID(dir, "bootstrap-a", []string{"bootstrap-a", "bootstrap-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 42 {
+		t.Fatalf("got %d, want 42", id)
+	}
+	stored, ok := ReadStoredNodeID(dir)
+	if !ok || stored != 42 {
+		t.Fatalf("stored node id = %d, ok = %v", stored, ok)
+	}
+}
+
+func TestResolveNodeIDFromBootstrapIDs(t *testing.T) {
+	dir := t.TempDir()
+	id, err := ResolveNodeID(dir, "bootstrap-b", []string{"bootstrap-a", "bootstrap-b", "bootstrap-c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != 2 {
+		t.Fatalf("got %d, want 2", id)
+	}
+}
+
+func TestValidateNodeID(t *testing.T) {
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "kraft-logs")
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logDir, "meta.properties"), []byte("node.id=7\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateNodeID(dir, 7); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateNodeID(dir, 8); err == nil {
+		t.Fatal("expected mismatch error")
 	}
 }
 

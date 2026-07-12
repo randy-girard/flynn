@@ -172,6 +172,11 @@ func (p *Process) start() error {
 		return err
 	}
 
+	if err := ValidateNodeID(p.DataDir, p.NodeID); err != nil {
+		logger.Error("node id mismatch", "err", err)
+		return err
+	}
+
 	if err := p.formatStorage(); err != nil {
 		logger.Error("error formatting storage", "err", err)
 		return err

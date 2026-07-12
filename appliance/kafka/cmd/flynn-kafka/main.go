@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -23,6 +21,10 @@ import (
 const (
 	// nodeIDKey is the discoverd metadata key advertising a broker's KRaft node id.
 	nodeIDKey = "KAFKA_NODE_ID"
+
+	// bootstrapIDKey is the discoverd metadata key advertising a broker's stable
+	// bootstrap identity used to assign node ids on first cluster formation.
+	bootstrapIDKey = "KAFKA_BOOTSTRAP_ID"
 
 	// controllerAddrKey is the discoverd metadata key advertising a broker's
 	// controller quorum endpoint.
@@ -73,17 +75,20 @@ func runBroker() {
 	minISR := envInt("KAFKA_MIN_ISR", max(replication-1, 1))
 	numPartitions := envInt("KAFKA_NUM_PARTITIONS", 3)
 
-	nodeID := ipToNodeID(net.ParseIP(ip))
+	bootstrapID, err := kafka.LoadOrCreateBootstrapID(kafka.DefaultDataDir)
+	if err != nil {
+		shutdown.Fatal(err)
+	}
 	controllerAddr := fmt.Sprintf("%s:%s", ip, kafka.DefaultControllerPort)
 
-	logger.Info("registering with discoverd", "service", serviceName, "node.id", nodeID)
+	logger.Info("registering with discoverd", "service", serviceName, "bootstrap.id", bootstrapID)
 	if err := discoverd.DefaultClient.AddService(serviceName, nil); err != nil && !httphelper.IsObjectExistsError(err) {
 		shutdown.Fatal(err)
 	}
 	inst := &discoverd.Instance{
 		Addr: fmt.Sprintf("%s:%s", ip, kafka.DefaultPort),
 		Meta: map[string]string{
-			nodeIDKey:         strconv.Itoa(nodeID),
+			bootstrapIDKey:    bootstrapID,
 			controllerAddrKey: controllerAddr,
 		},
 	}
@@ -92,6 +97,25 @@ func runBroker() {
 		shutdown.Fatal(err)
 	}
 	shutdown.BeforeExit(func() { hb.Close() })
+
+	logger.Info("waiting for bootstrap peers", "expected", brokerCount)
+	bootstrapIDs, err := waitForBootstrapIDs(serviceName, brokerCount, 10*time.Minute)
+	if err != nil {
+		shutdown.Fatal(err)
+	}
+
+	nodeID, err := kafka.ResolveNodeID(kafka.DefaultDataDir, bootstrapID, bootstrapIDs)
+	if err != nil {
+		shutdown.Fatal(err)
+	}
+	if err := hb.SetMeta(map[string]string{
+		bootstrapIDKey:    bootstrapID,
+		nodeIDKey:         strconv.Itoa(nodeID),
+		controllerAddrKey: controllerAddr,
+	}); err != nil {
+		shutdown.Fatal(err)
+	}
+	logger.Info("resolved node id", "node.id", nodeID, "bootstrap.id", bootstrapID)
 
 	// Wait for the whole quorum to register so every broker computes an
 	// identical controller.quorum.voters value.
@@ -218,8 +242,30 @@ func runAdmin(args []string) {
 	}
 }
 
+// waitForBootstrapIDs polls discoverd until at least count brokers have
+// registered a bootstrap id.
+func waitForBootstrapIDs(service string, count int, timeout time.Duration) ([]string, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		insts, err := discoverd.GetInstances(service, 30*time.Second)
+		if err != nil && time.Now().After(deadline) {
+			return nil, err
+		}
+
+		ids := uniqueBootstrapIDs(insts)
+		if len(ids) >= count {
+			return ids, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("timed out waiting for %d bootstrap peers, found %d", count, len(ids))
+		}
+		time.Sleep(time.Second)
+	}
+}
+
 // waitForVoters polls discoverd until at least count brokers have registered,
-// returning a map of node id -> controller address.
+// returning a map of node id -> controller address. When multiple instances
+// advertise the same node id, the newest registration wins.
 func waitForVoters(service string, count int, timeout time.Duration) (map[int]string, error) {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -228,20 +274,7 @@ func waitForVoters(service string, count int, timeout time.Duration) (map[int]st
 			return nil, err
 		}
 
-		voters := make(map[int]string)
-		for _, inst := range insts {
-			idStr := inst.Meta[nodeIDKey]
-			addr := inst.Meta[controllerAddrKey]
-			if idStr == "" || addr == "" {
-				continue
-			}
-			id, err := strconv.Atoi(idStr)
-			if err != nil {
-				continue
-			}
-			voters[id] = addr
-		}
-
+		voters := votersFromInstances(insts)
 		if len(voters) >= count {
 			return voters, nil
 		}
@@ -252,14 +285,42 @@ func waitForVoters(service string, count int, timeout time.Duration) (map[int]st
 	}
 }
 
-// ipToNodeID derives a stable, non-negative KRaft node id from an IPv4 address.
-func ipToNodeID(ip net.IP) int {
-	ip = ip.To4()
-	if ip == nil {
-		return 1
+func uniqueBootstrapIDs(insts []*discoverd.Instance) []string {
+	seen := make(map[string]struct{})
+	for _, inst := range insts {
+		if id := inst.Meta[bootstrapIDKey]; id != "" {
+			seen[id] = struct{}{}
+		}
 	}
-	// Mask off the sign bit so the id fits in a positive int32.
-	return int(binary.BigEndian.Uint32([]byte(ip)) & 0x7fffffff)
+	ids := make([]string, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func votersFromInstances(insts []*discoverd.Instance) map[int]string {
+	best := make(map[int]*discoverd.Instance)
+	for _, inst := range insts {
+		idStr := inst.Meta[nodeIDKey]
+		addr := inst.Meta[controllerAddrKey]
+		if idStr == "" || addr == "" {
+			continue
+		}
+		id, err := strconv.Atoi(idStr)
+		if err != nil {
+			continue
+		}
+		if cur, ok := best[id]; !ok || inst.Index > cur.Index {
+			best[id] = inst
+		}
+	}
+
+	voters := make(map[int]string, len(best))
+	for id, inst := range best {
+		voters[id] = inst.Meta[controllerAddrKey]
+	}
+	return voters
 }
 
 func envInt(key string, def int) int {
