@@ -96,7 +96,10 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log l
 	}
 
 	if len(state.Async) > 0 && 2+len(state.Async) == expected {
-		return nil
+		if sireniaMetaPeersHealthy(&state) {
+			return nil
+		}
+		log.Warn("sirenia meta reports quorum but peers are unhealthy, repairing")
 	}
 
 	instances, err := service.Instances()
@@ -156,6 +159,24 @@ func sireniaInstanceForJob(instances []*discoverd.Instance, jobID string) *disco
 		}
 	}
 	return nil
+}
+
+func sireniaMetaPeersHealthy(state *sirenia.State) bool {
+	if state == nil || state.Primary == nil {
+		return false
+	}
+	if !sireniaInstanceHealthy(state.Primary) {
+		return false
+	}
+	if !state.Singleton && state.Sync != nil && !sireniaInstanceHealthy(state.Sync) {
+		return false
+	}
+	for _, async := range state.Async {
+		if !sireniaInstanceHealthy(async) {
+			return false
+		}
+	}
+	return true
 }
 
 func sireniaInstanceHealthy(inst *discoverd.Instance) bool {

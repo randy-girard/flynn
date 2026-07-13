@@ -130,11 +130,13 @@ func (d *Discoverd) receiveEvents() {
 				}
 				dstate = &state.DiscoverdState{
 					Index: e.ServiceMeta.Index,
-					State: &state.State{},
 				}
 				if len(e.ServiceMeta.Data) > 0 {
-					if err := json.Unmarshal(e.ServiceMeta.Data, dstate.State); err != nil {
+					var s *state.State
+					if err := json.Unmarshal(e.ServiceMeta.Data, &s); err != nil {
 						log.Error("error unmarshalling service meta into state", "at", "unmarshal_state", "err", err)
+					} else {
+						dstate.State = s
 					}
 				}
 				maybeEvent(current)

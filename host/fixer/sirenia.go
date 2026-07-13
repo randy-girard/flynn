@@ -77,7 +77,12 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 		return fmt.Errorf("error decoding state: %s", err)
 	}
 	if state.Primary == nil {
-		return fmt.Errorf("no primary in sirenia state")
+		log.Info("clearing sirenia state with no primary so cluster can re-form")
+		meta.Data = nil
+		if err := service.SetMeta(meta); err != nil {
+			return fmt.Errorf("error clearing invalid sirenia state: %s", err)
+		}
+		return nil
 	}
 
 	if len(state.Deposed) > 0 {

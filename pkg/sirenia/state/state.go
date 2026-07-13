@@ -501,6 +501,10 @@ func (p *Peer) atRest() bool {
 	return p.workDoneCh == nil
 }
 
+func clusterStateReady(s *State) bool {
+	return s != nil && s.Primary != nil
+}
+
 // Examine the current cluster state and determine if new actions need to be
 // taken. For example, if we're the primary, and there's no sync present, then
 // we need to declare a new generation.
@@ -511,7 +515,7 @@ func (p *Peer) evalClusterState() {
 
 	// If there's no cluster state, check whether we should set up the cluster.
 	// If not, wait for something else to happen.
-	if info := p.Info(); info.State == nil {
+	if info := p.Info(); !clusterStateReady(info.State) {
 		log.Debug("no cluster state",
 			"peers", len(info.Peers),
 			"self", p.id,
@@ -549,10 +553,12 @@ func (p *Peer) evalClusterState() {
 		p.generation = p.Info().State.Generation
 
 		if p.Info().Role == RolePrimary {
-			if p.Info().State.Primary.Meta[p.idKey] != p.id {
+			if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] != p.id {
 				p.assumeDeposed()
-			} else {
+			} else if p.Info().State.Primary != nil {
 				p.refreshPrimaryDownstream(log)
+			} else {
+				p.evalInitClusterState()
 			}
 		} else {
 			p.evalInitClusterState()
@@ -591,6 +597,13 @@ func (p *Peer) evalClusterState() {
 		// crash recovery can complete instead of hanging indefinitely.
 		if p.canSingletonTakeover() {
 			p.startSingletonTakeover()
+			return
+		}
+		if !clusterStateReady(p.Info().State) && !p.singleton {
+			info := p.Info()
+			if !p.setup && len(info.Peers) > 1 && info.Peers[0].Meta[p.idKey] == p.id {
+				p.startInitialSetup()
+			}
 		}
 		return
 	}
@@ -636,6 +649,10 @@ func (p *Peer) evalClusterState() {
 	}
 
 	if p.Info().Role != RolePrimary {
+		if p.Info().Role == RoleUnknown {
+			p.evalInitClusterState()
+			return
+		}
 		panic(fmt.Sprintf("unexpected role %v", p.Info().Role))
 	}
 
@@ -938,7 +955,7 @@ func (p *Peer) assumeAsync(i int) {
 }
 
 func (p *Peer) evalInitClusterState() {
-	if p.Info().State.Primary.Meta[p.idKey] == p.id {
+	if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] == p.id {
 		p.assumePrimary()
 		return
 	}
@@ -955,7 +972,7 @@ func (p *Peer) evalInitClusterState() {
 		p.assumeUnassigned()
 		return
 	}
-	if p.Info().State.Sync.Meta[p.idKey] == p.id {
+	if p.Info().State.Sync != nil && p.Info().State.Sync.Meta[p.idKey] == p.id {
 		p.assumeSync()
 		return
 	}
