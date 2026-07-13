@@ -143,9 +143,19 @@ type neigh struct {
 	IP  ip.IP4
 }
 
+// fdbSet installs (or replaces) an FDB entry. It is a variable so tests can
+// assert the replace semantics AddL2 relies on. It must use replace semantics
+// (netlink.NeighSet / NLM_F_REPLACE), not exclusive-add.
+var fdbSet = netlink.NeighSet
+
 func (dev *vxlanDevice) AddL2(n neigh) error {
-	log.Infof("calling NeighAdd: %v, %v", n.IP, n.MAC)
-	return netlink.NeighAdd(&netlink.Neigh{
+	// Use NeighSet (NLM_F_REPLACE) rather than NeighAdd (NLM_F_EXCL) so a peer
+	// whose flannel.1 device was recreated with a new VTEP MAC (e.g. after a
+	// flanneld restart) overwrites the stale FDB entry. NeighAdd would fail with
+	// EEXIST and leave the old MAC in place, causing decapsulated frames to carry
+	// an inner destination MAC the peer no longer owns, which the kernel drops.
+	log.Infof("calling NeighSet (fdb): %v, %v", n.IP, n.MAC)
+	return fdbSet(&netlink.Neigh{
 		LinkIndex:    dev.link.Index,
 		State:        netlink.NUD_PERMANENT,
 		Family:       syscall.AF_BRIDGE,
