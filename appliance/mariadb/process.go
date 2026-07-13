@@ -1249,27 +1249,39 @@ type backupReadCloser struct {
 	stdout io.ReadCloser
 	stderr bytes.Buffer
 	unlock func()
+
+	// closeOnce ensures the close side effects (waiting on the command,
+	// releasing backupMtx, closing stdout) run exactly once. handleGetBackup
+	// calls Close more than once, and calling unlock twice would unlock an
+	// already-unlocked sync.Mutex, which fatally crashes the process.
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// Close waits for the backup command to finish and verifies that the backup completed successfully.
+// Close waits for the backup command to finish and verifies that the backup
+// completed successfully. It is safe to call multiple times; subsequent calls
+// return the result of the first.
 func (r *backupReadCloser) Close() error {
-	defer r.stdout.Close()
-	if r.unlock != nil {
-		defer r.unlock()
-	}
+	r.closeOnce.Do(func() {
+		defer r.stdout.Close()
+		if r.unlock != nil {
+			defer r.unlock()
+		}
 
-	if err := r.cmd.Wait(); err != nil {
-		return fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
-	}
+		if err := r.cmd.Wait(); err != nil {
+			r.closeErr = fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
+			return
+		}
 
-	// Verify that mariabackup prints "completed OK!" at the end of STDERR.
-	stderrStr := strings.TrimSpace(r.stderr.String())
-	if !strings.HasSuffix(stderrStr, "completed OK!") {
-		r.stderr.WriteTo(os.Stderr)
-		return fmt.Errorf("mariabackup did not complete ok, stderr: %s", stderrStr)
-	}
-
-	return nil
+		// Verify that mariabackup prints "completed OK!" at the end of STDERR.
+		stderrStr := strings.TrimSpace(r.stderr.String())
+		if !strings.HasSuffix(stderrStr, "completed OK!") {
+			r.stderr.WriteTo(os.Stderr)
+			r.closeErr = fmt.Errorf("mariabackup did not complete ok, stderr: %s", stderrStr)
+			return
+		}
+	})
+	return r.closeErr
 }
 
 // Read reads n bytes of backup data into p.

@@ -2,8 +2,10 @@ package mariadb
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -101,5 +103,65 @@ func TestDataDirInitializedMySQLDir(t *testing.T) {
 	}
 	if !p.dataDirInitialized() {
 		t.Fatal("expected mysql system dir to mark data dir initialized")
+	}
+}
+
+// newTestBackupReadCloser builds a backupReadCloser wired exactly like
+// Process.Backup: backupMtx is held and unlock is backupMtx.Unlock. The wrapped
+// command exits 0 and writes the expected "completed OK!" trailer to stderr.
+func newTestBackupReadCloser(t *testing.T, mtx *sync.Mutex) *backupReadCloser {
+	t.Helper()
+	cmd := exec.Command("sh", "-c", "echo 'completed OK!' 1>&2")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &backupReadCloser{cmd: cmd, stdout: stdout, unlock: mtx.Unlock}
+	cmd.Stderr = &r.stderr
+	mtx.Lock()
+	if err := cmd.Start(); err != nil {
+		mtx.Unlock()
+		t.Fatal(err)
+	}
+	return r
+}
+
+// TestBackupReadCloserCloseIdempotent guards against a fatal
+// "sync: unlock of unlocked mutex" crash: handleGetBackup calls Close more than
+// once, so Close must release backupMtx exactly once and be safe to call again.
+func TestBackupReadCloserCloseIdempotent(t *testing.T) {
+	var mtx sync.Mutex
+	r := newTestBackupReadCloser(t, &mtx)
+
+	// Calling Close repeatedly (as the HTTP handler does) must not panic and
+	// must return the same nil result each time.
+	for i := 0; i < 3; i++ {
+		if err := r.Close(); err != nil {
+			t.Fatalf("Close call %d returned error: %v", i, err)
+		}
+	}
+
+	// The mutex must have been unlocked exactly once. A second unlock would
+	// have already crashed the process; TryLock confirms it is currently
+	// unlocked (i.e. released precisely one time).
+	if !mtx.TryLock() {
+		t.Fatal("backupMtx still locked after Close; unlock did not run")
+	}
+	mtx.Unlock()
+}
+
+// TestBackupReadCloserCloseRunsSideEffectsOnce ensures the wrapped command is
+// waited on only once even when Close is invoked multiple times.
+func TestBackupReadCloserCloseRunsSideEffectsOnce(t *testing.T) {
+	var mtx sync.Mutex
+	r := newTestBackupReadCloser(t, &mtx)
+
+	if err := r.Close(); err != nil {
+		t.Fatalf("first Close returned error: %v", err)
+	}
+	// A second Wait on the same Cmd would return an error; a guarded Close must
+	// not re-run it and must keep returning the cached (nil) result.
+	if err := r.Close(); err != nil {
+		t.Fatalf("second Close returned error: %v", err)
 	}
 }
