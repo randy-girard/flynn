@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -60,7 +61,11 @@ func TestRestoreFinalizeWritesReadOnlyMyCnf(t *testing.T) {
 	if !strings.Contains(cfg, "read_only = 1") {
 		t.Fatalf("standby my.cnf missing read_only:\n%s", cfg)
 	}
-	if !strings.Contains(cfg, "datadir = "+p.DataDir) {
+	// The template aligns keys with padding (e.g. "datadir             = ..."),
+	// so match the directive with flexible whitespace rather than a fixed
+	// single space.
+	datadirRe := regexp.MustCompile(`(?m)^datadir\s*=\s*` + regexp.QuoteMeta(p.DataDir) + `$`)
+	if !datadirRe.MatchString(cfg) {
 		t.Fatalf("standby my.cnf missing datadir:\n%s", cfg)
 	}
 }
