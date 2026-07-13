@@ -235,6 +235,14 @@ var keeperConfigTemplate = template.Must(template.New("keeper_config.xml").Parse
         <server_id>{{.ServerID}}</server_id>
         <log_storage_path>{{.DataDir}}/coordination/log</log_storage_path>
         <snapshot_storage_path>{{.DataDir}}/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <!-- The new request/response dispatcher busy-polls an empty queue
+                 (dispatch_busy_wait_sleep_us, ~100us) and burns ~10% CPU per
+                 thread even on a fully idle keeper. The old dispatcher blocks
+                 on the queue instead, dropping idle CPU to ~0%.
+                 See ClickHouse/ClickHouse#107944. -->
+            <use_new_dispatcher>false</use_new_dispatcher>
+        </coordination_settings>
         <raft_configuration>
 {{- range .Servers }}
             <server>
