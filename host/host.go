@@ -390,6 +390,7 @@ func runDaemon(args *docopt.Args) {
 	log.Info("setting host status PID", "pid", pid)
 	host.status.PID = pid
 	host.status.Version = version.String()
+	host.status.Auth = authKey != ""
 	if len(os.Args) > 2 {
 		host.status.Flags = os.Args[2:]
 	}

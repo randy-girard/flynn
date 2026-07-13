@@ -367,6 +367,7 @@ type HostStatus struct {
 	Network   *NetworkConfig    `json:"network,omitempty"`
 	Version   string            `json:"version"`
 	Flags     []string          `json:"flags"`
+	Auth      bool              `json:"auth"`
 }
 
 type JobEventType string
