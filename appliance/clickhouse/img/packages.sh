@@ -28,6 +28,16 @@ apt-get update -o Acquire::Retries=5
 # same image, so we only install the server and client packages here.
 apt-get install -y clickhouse-server clickhouse-client
 
+# ---- Strip file capabilities from the clickhouse binary ----
+# The deb sets cap_net_admin,cap_ipc_lock,cap_sys_nice,cap_net_bind_service=ep
+# on /usr/bin/clickhouse. Those "ep" file capabilities must be present in the
+# process bounding set at exec time, but Flynn's container bounding set omits
+# net_admin/ipc_lock/sys_nice, so execve() fails with EPERM ("operation not
+# permitted"). ClickHouse runs without them (it only skips the corresponding
+# optimizations), so clear them so the server and keeper jobs can start.
+apt-get install -y libcap2-bin
+setcap -r /usr/bin/clickhouse || true
+
 # ---- Data directory ----
 mkdir -p /data
 
