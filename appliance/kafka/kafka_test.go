@@ -15,7 +15,7 @@ import (
 func TestRenderConfig_Plaintext(t *testing.T) {
 	p := NewProcess()
 	p.NodeID = 7
-	p.QuorumVoters = "7@10.0.0.1:9093"
+	p.BootstrapServers = "10.0.0.1:9093"
 	p.AdvertisedHost = "10.0.0.1"
 
 	out, err := p.RenderConfig()
@@ -24,10 +24,14 @@ func TestRenderConfig_Plaintext(t *testing.T) {
 	}
 
 	mustContain(t, out, "node.id=7")
-	mustContain(t, out, "controller.quorum.voters=7@10.0.0.1:9093")
+	mustContain(t, out, "controller.quorum.bootstrap.servers=10.0.0.1:9093")
+	if strings.Contains(out, "controller.quorum.voters=") {
+		t.Fatalf("dynamic quorum must not set controller.quorum.voters:\n%s", out)
+	}
 	mustContain(t, out, "auto.create.topics.enable=false")
 	mustContain(t, out, "inter.broker.listener.name=INTERNAL")
 	mustContain(t, out, "listener.security.protocol.map=CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,CLIENT:PLAINTEXT")
+	mustContain(t, out, "listeners=CLIENT://:9092,INTERNAL://:9094,CONTROLLER://10.0.0.1:9093")
 	mustContain(t, out, "advertised.listeners=CLIENT://10.0.0.1:9092,INTERNAL://10.0.0.1:9094")
 
 	if strings.Contains(out, "ssl.keystore.location") {
@@ -40,7 +44,7 @@ func TestRenderConfig_Plaintext(t *testing.T) {
 func TestRenderConfig_TLS(t *testing.T) {
 	p := NewProcess()
 	p.NodeID = 1
-	p.QuorumVoters = "1@10.0.0.1:9093"
+	p.BootstrapServers = "10.0.0.1:9093"
 	p.AdvertisedHost = "10.0.0.1"
 	p.TLSEnabled = true
 	p.KeystorePath = "/data/tls/keystore.p12"
@@ -60,17 +64,57 @@ func TestRenderConfig_TLS(t *testing.T) {
 	mustContain(t, out, "ssl.endpoint.identification.algorithm=")
 }
 
-func TestBuildQuorumVoters(t *testing.T) {
-	// Ordering must be deterministic (sorted by node id) so every broker
-	// computes an identical value regardless of discovery order.
-	got := BuildQuorumVoters(map[int]string{
-		30: "c:9093",
-		10: "a:9093",
-		20: "b:9093",
+func TestBuildInitialControllers(t *testing.T) {
+	// Ordering must be deterministic (sorted by node id) so every broker seeds
+	// an identical voter set regardless of discovery order.
+	got := BuildInitialControllers(map[int]ControllerInfo{
+		30: {Addr: "c:9093", DirectoryID: "d3"},
+		10: {Addr: "a:9093", DirectoryID: "d1"},
+		20: {Addr: "b:9093", DirectoryID: "d2"},
 	})
-	want := "10@a:9093,20@b:9093,30@c:9093"
+	want := "10@a:9093:d1,20@b:9093:d2,30@c:9093:d3"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestBuildBootstrapServers(t *testing.T) {
+	got := BuildBootstrapServers(map[int]ControllerInfo{
+		30: {Addr: "c:9093", DirectoryID: "d3"},
+		10: {Addr: "a:9093", DirectoryID: "d1"},
+		20: {Addr: "b:9093", DirectoryID: "d2"},
+	})
+	want := "a:9093,b:9093,c:9093"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestLoadOrCreateDirectoryID(t *testing.T) {
+	dir := t.TempDir()
+	calls := 0
+	gen := func() (string, error) {
+		calls++
+		return "AAAAAAAAAAAAAAAAAAAAAA", nil
+	}
+
+	first, err := LoadOrCreateDirectoryID(dir, gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != "AAAAAAAAAAAAAAAAAAAAAA" {
+		t.Fatalf("got %q", first)
+	}
+
+	second, err := LoadOrCreateDirectoryID(dir, gen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second != first {
+		t.Fatalf("directory id changed across calls: %q != %q", second, first)
+	}
+	if calls != 1 {
+		t.Fatalf("expected gen to be called once, got %d", calls)
 	}
 }
 

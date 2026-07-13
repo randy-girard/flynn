@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +20,12 @@ const (
 	// BootstrapIDFileName identifies a broker on first cluster formation before
 	// node.id is assigned. It is written once and never changed.
 	BootstrapIDFileName = "bootstrap.id"
+
+	// DirectoryIDFileName is persisted on the broker data volume so the KRaft
+	// directory.id (the voter's replica identity) survives overlay IP changes.
+	// A stable directory.id lets a rescheduled broker rejoin the dynamic quorum
+	// under the same voter identity instead of being rejected as a new replica.
+	DirectoryIDFileName = "directory.id"
 )
 
 // LoadOrCreateBootstrapID returns the stable bootstrap identifier for this
@@ -39,6 +46,51 @@ func LoadOrCreateBootstrapID(dataDir string) (string, error) {
 	id := random.UUID()
 	if err := os.WriteFile(path, []byte(id), 0644); err != nil {
 		return "", err
+	}
+	return id, nil
+}
+
+// LoadOrCreateDirectoryID returns the stable KRaft directory.id for this data
+// volume, creating one via gen on first boot. The value must be a Kafka Uuid
+// (22-char URL-safe base64), so gen must produce one (see GenerateUUID); the
+// generic random.UUID format is not accepted by KRaft.
+func LoadOrCreateDirectoryID(dataDir string, gen func() (string, error)) (string, error) {
+	path := filepath.Join(dataDir, DirectoryIDFileName)
+	if data, err := os.ReadFile(path); err == nil {
+		if id := strings.TrimSpace(string(data)); id != "" {
+			return id, nil
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return "", err
+	}
+	id, err := gen()
+	if err != nil {
+		return "", err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return "", fmt.Errorf("generated empty directory id")
+	}
+	if err := os.WriteFile(path, []byte(id), 0644); err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+// GenerateUUID runs kafka-storage.sh random-uuid and returns a Kafka Uuid
+// string suitable for use as a KRaft directory.id.
+func GenerateUUID(binDir string) (string, error) {
+	out, err := exec.Command(filepath.Join(binDir, "kafka-storage.sh"), "random-uuid").Output()
+	if err != nil {
+		return "", fmt.Errorf("generate uuid: %s", err)
+	}
+	id := strings.TrimSpace(string(out))
+	if id == "" {
+		return "", fmt.Errorf("kafka-storage.sh random-uuid returned empty output")
 	}
 	return id, nil
 }

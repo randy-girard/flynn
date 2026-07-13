@@ -73,9 +73,22 @@ type Process struct {
 	// same cluster must be formatted with the same value.
 	ClusterID string
 
-	// QuorumVoters is the controller.quorum.voters value, e.g.
-	// "1@host-a:9093,2@host-b:9093".
-	QuorumVoters string
+	// BootstrapServers is the controller.quorum.bootstrap.servers value used by
+	// the KRaft dynamic quorum to locate the current controller leader, e.g.
+	// "host-a:9093,host-b:9093". Unlike the static controller.quorum.voters, it
+	// only needs to reach a live controller; voter membership and endpoints live
+	// in cluster metadata and update dynamically as brokers move.
+	BootstrapServers string
+
+	// InitialControllers is the value passed to kafka-storage.sh format via
+	// --initial-controllers when formatting a non-singleton dynamic quorum, e.g.
+	// "1@host-a:9093:<dir-a>,2@host-b:9093:<dir-b>". It is only used at format
+	// time to seed an identical VotersRecord snapshot on every broker.
+	InitialControllers string
+
+	// DirectoryID is this broker's stable KRaft directory.id (its voter replica
+	// identity), persisted on the data volume so it survives IP changes.
+	DirectoryID string
 
 	// AdvertisedHost is the address other clients/brokers use to reach us.
 	AdvertisedHost string
@@ -220,13 +233,24 @@ func (p *Process) formatStorage() error {
 		return err
 	}
 
-	logger.Info("formatting storage", "cluster.id", p.ClusterID)
-	out, err := exec.Command(
-		filepath.Join(p.BinDir, "kafka-storage.sh"), "format",
+	logger.Info("formatting storage", "cluster.id", p.ClusterID, "singleton", p.Singleton)
+	args := []string{
+		"format",
 		"--cluster-id", p.ClusterID,
 		"--config", p.ConfigPath(),
-		"--ignore-formatted",
-	).CombinedOutput()
+	}
+	// The quorum is formatted as dynamic (KIP-853) because the config omits
+	// controller.quorum.voters. A singleton seeds itself as the sole voter; a
+	// multi-node cluster seeds an identical voter set on every broker via the
+	// shared --initial-controllers value so no sequential add-controller step
+	// is required. The matching entry's directory.id becomes this node's
+	// persisted meta.properties directory.id.
+	if p.Singleton {
+		args = append(args, "--standalone")
+	} else {
+		args = append(args, "--initial-controllers", p.InitialControllers)
+	}
+	out, err := exec.Command(filepath.Join(p.BinDir, "kafka-storage.sh"), args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("format storage: %s: %s", err, out)
 	}
@@ -299,6 +323,27 @@ func (p *Process) RenderConfig() (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
+}
+
+// SetBootstrapServers updates the controller.quorum.bootstrap.servers value and
+// rewrites server.properties on disk. It returns true when the value changed.
+//
+// The running broker learns peer controller endpoint changes from KRaft cluster
+// metadata at runtime, so this does not signal the live process; it only keeps
+// the on-disk bootstrap.servers list current so a subsequent cold start can
+// still locate the quorum after peers have moved to new overlay IPs.
+func (p *Process) SetBootstrapServers(servers string) (bool, error) {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+
+	if servers == "" || servers == p.BootstrapServers {
+		return false, nil
+	}
+	p.BootstrapServers = servers
+	if err := p.writeConfig(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Info returns runtime information about the process.
@@ -381,19 +426,48 @@ func (p *Process) run(timeout time.Duration, name string, args ...string) ([]byt
 	}
 }
 
-// BuildQuorumVoters constructs a controller.quorum.voters value from a set of
-// (nodeID -> controllerAddr) pairs. The output is deterministically ordered by
-// node id so every broker generates an identical value.
-func BuildQuorumVoters(voters map[int]string) string {
-	ids := make([]int, 0, len(voters))
-	for id := range voters {
+// ControllerInfo describes a single KRaft controller voter as advertised in
+// discoverd: its controller endpoint (host:port) and its stable directory.id.
+type ControllerInfo struct {
+	// Addr is the controller endpoint, e.g. "10.0.0.1:9093".
+	Addr string
+	// DirectoryID is the controller's stable KRaft directory.id.
+	DirectoryID string
+}
+
+// sortedControllerIDs returns the node ids of controllers in ascending order so
+// every broker derives identical, deterministic configuration values.
+func sortedControllerIDs(controllers map[int]ControllerInfo) []int {
+	ids := make([]int, 0, len(controllers))
+	for id := range controllers {
 		ids = append(ids, id)
 	}
 	sort.Ints(ids)
+	return ids
+}
 
+// BuildInitialControllers constructs the value passed to kafka-storage.sh via
+// --initial-controllers from a set of (nodeID -> ControllerInfo) pairs, e.g.
+// "1@10.0.0.1:9093:<dir1>,2@10.0.0.2:9093:<dir2>". The output is ordered by
+// node id so every broker seeds an identical voter set snapshot.
+func BuildInitialControllers(controllers map[int]ControllerInfo) string {
+	ids := sortedControllerIDs(controllers)
 	parts := make([]string, 0, len(ids))
 	for _, id := range ids {
-		parts = append(parts, fmt.Sprintf("%d@%s", id, voters[id]))
+		c := controllers[id]
+		parts = append(parts, fmt.Sprintf("%d@%s:%s", id, c.Addr, c.DirectoryID))
+	}
+	return strings.Join(parts, ",")
+}
+
+// BuildBootstrapServers constructs a controller.quorum.bootstrap.servers value
+// (a comma-separated list of controller endpoints) from a set of
+// (nodeID -> ControllerInfo) pairs, ordered by node id.
+func BuildBootstrapServers(controllers map[int]ControllerInfo) string {
+	ids := sortedControllerIDs(controllers)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, controllers[id].Addr)
 	}
 	return strings.Join(parts, ",")
 }
@@ -403,12 +477,18 @@ func itoa(i int) string { return strconv.Itoa(i) }
 var configTemplate = template.Must(template.New("server.properties").Parse(`
 process.roles=broker,controller
 node.id={{.NodeID}}
-controller.quorum.voters={{.QuorumVoters}}
+# Dynamic KRaft quorum (KIP-853): membership and controller endpoints live in
+# cluster metadata, so a broker that reschedules onto a new overlay IP rejoins
+# under its stable node.id/directory.id without any peer reconfiguration. The
+# static controller.quorum.voters is intentionally omitted so formatting selects
+# the dynamic quorum.
+controller.quorum.bootstrap.servers={{.BootstrapServers}}
 
 # Three listeners: CLIENT is what apps/external clients connect to (SSL when TLS
 # is enabled); INTERNAL (inter-broker) and CONTROLLER stay PLAINTEXT on the
-# private cluster network.
-listeners=CLIENT://:{{.Port}},INTERNAL://:{{.InternalPort}},CONTROLLER://:{{.ControllerPort}}
+# private cluster network. CONTROLLER binds the overlay IP so its advertised
+# endpoint (used by the dynamic quorum) tracks the current address.
+listeners=CLIENT://:{{.Port}},INTERNAL://:{{.InternalPort}},CONTROLLER://{{.AdvertisedHost}}:{{.ControllerPort}}
 advertised.listeners=CLIENT://{{.AdvertisedHost}}:{{.Port}},INTERNAL://{{.AdvertisedHost}}:{{.InternalPort}}
 inter.broker.listener.name=INTERNAL
 controller.listener.names=CONTROLLER

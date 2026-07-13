@@ -30,6 +30,10 @@ const (
 	// controller quorum endpoint.
 	controllerAddrKey = "KAFKA_CONTROLLER_ADDR"
 
+	// directoryIDKey is the discoverd metadata key advertising a broker's stable
+	// KRaft directory.id (its voter replica identity).
+	directoryIDKey = "KAFKA_DIRECTORY_ID"
+
 	// DefaultHTTPPort is the admin API port.
 	DefaultHTTPPort = "9095"
 )
@@ -79,6 +83,11 @@ func runBroker() {
 	if err != nil {
 		shutdown.Fatal(err)
 	}
+	directoryID, err := kafka.LoadOrCreateDirectoryID(kafka.DefaultDataDir,
+		func() (string, error) { return kafka.GenerateUUID(kafka.DefaultBinDir) })
+	if err != nil {
+		shutdown.Fatal(err)
+	}
 	controllerAddr := fmt.Sprintf("%s:%s", ip, kafka.DefaultControllerPort)
 
 	logger.Info("registering with discoverd", "service", serviceName, "bootstrap.id", bootstrapID)
@@ -90,6 +99,7 @@ func runBroker() {
 		Meta: map[string]string{
 			bootstrapIDKey:    bootstrapID,
 			controllerAddrKey: controllerAddr,
+			directoryIDKey:    directoryID,
 		},
 	}
 	hb, err := discoverd.DefaultClient.RegisterInstance(serviceName, inst)
@@ -112,25 +122,29 @@ func runBroker() {
 		bootstrapIDKey:    bootstrapID,
 		nodeIDKey:         strconv.Itoa(nodeID),
 		controllerAddrKey: controllerAddr,
+		directoryIDKey:    directoryID,
 	}); err != nil {
 		shutdown.Fatal(err)
 	}
 	logger.Info("resolved node id", "node.id", nodeID, "bootstrap.id", bootstrapID)
 
-	// Wait for the whole quorum to register so every broker computes an
-	// identical controller.quorum.voters value.
+	// Wait for the whole quorum to register so every broker seeds an identical
+	// dynamic voter set (--initial-controllers) and bootstrap.servers list.
 	logger.Info("waiting for peers", "expected", brokerCount)
-	voters, err := waitForVoters(serviceName, brokerCount, 10*time.Minute)
+	controllers, err := waitForControllers(serviceName, brokerCount, 10*time.Minute)
 	if err != nil {
 		shutdown.Fatal(err)
 	}
-	quorumVoters := kafka.BuildQuorumVoters(voters)
-	logger.Info("quorum discovered", "voters", quorumVoters)
+	initialControllers := kafka.BuildInitialControllers(controllers)
+	bootstrapServers := kafka.BuildBootstrapServers(controllers)
+	logger.Info("quorum discovered", "initial.controllers", initialControllers, "bootstrap.servers", bootstrapServers)
 
 	process := kafka.NewProcess()
 	process.NodeID = nodeID
 	process.ClusterID = clusterID
-	process.QuorumVoters = quorumVoters
+	process.BootstrapServers = bootstrapServers
+	process.InitialControllers = initialControllers
+	process.DirectoryID = directoryID
 	process.AdvertisedHost = ip
 	process.Singleton = singleton
 	process.ReplicationFactor = replication
@@ -150,6 +164,14 @@ func runBroker() {
 		shutdown.Fatal(err)
 	}
 	shutdown.BeforeExit(func() { process.Stop() })
+
+	// Keep the on-disk controller.quorum.bootstrap.servers list current as peers
+	// move to new overlay IPs. The running broker learns endpoint changes from
+	// KRaft metadata at runtime; this only ensures a subsequent cold start can
+	// still locate the quorum. A singleton has no peers to track.
+	if !singleton {
+		go watchControllers(serviceName, process, logger.New("component", "watch"))
+	}
 
 	handler := kafka.NewHandler()
 	handler.Process = process
@@ -263,10 +285,11 @@ func waitForBootstrapIDs(service string, count int, timeout time.Duration) ([]st
 	}
 }
 
-// waitForVoters polls discoverd until at least count brokers have registered,
-// returning a map of node id -> controller address. When multiple instances
-// advertise the same node id, the newest registration wins.
-func waitForVoters(service string, count int, timeout time.Duration) (map[int]string, error) {
+// waitForControllers polls discoverd until at least count brokers have
+// registered a node id, controller address and directory id, returning a map of
+// node id -> ControllerInfo. When multiple instances advertise the same node id,
+// the newest registration wins.
+func waitForControllers(service string, count int, timeout time.Duration) (map[int]kafka.ControllerInfo, error) {
 	deadline := time.Now().Add(timeout)
 	for {
 		insts, err := discoverd.GetInstances(service, 30*time.Second)
@@ -274,13 +297,61 @@ func waitForVoters(service string, count int, timeout time.Duration) (map[int]st
 			return nil, err
 		}
 
-		voters := votersFromInstances(insts)
-		if len(voters) >= count {
-			return voters, nil
+		controllers := controllersFromInstances(insts)
+		if len(controllers) >= count {
+			return controllers, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("timed out waiting for %d brokers, found %d", count, len(voters))
+			return nil, fmt.Errorf("timed out waiting for %d brokers, found %d", count, len(controllers))
 		}
+		time.Sleep(time.Second)
+	}
+}
+
+// watchControllers keeps the on-disk controller.quorum.bootstrap.servers list in
+// sync with discoverd as peers move to new overlay IPs. It reconnects on error.
+func watchControllers(service string, process *kafka.Process, logger log15.Logger) {
+	for {
+		events := make(chan *discoverd.Event)
+		stream, err := discoverd.DefaultClient.Service(service).Watch(events)
+		if err != nil {
+			logger.Error("error watching discoverd", "err", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		current := make(map[string]*discoverd.Instance)
+		isCurrent := false
+		for event := range events {
+			switch event.Kind {
+			case discoverd.EventKindCurrent:
+				isCurrent = true
+			case discoverd.EventKindUp, discoverd.EventKindUpdate:
+				current[event.Instance.ID] = event.Instance
+			case discoverd.EventKindDown:
+				delete(current, event.Instance.ID)
+			default:
+				continue
+			}
+			if !isCurrent {
+				continue
+			}
+
+			insts := make([]*discoverd.Instance, 0, len(current))
+			for _, inst := range current {
+				insts = append(insts, inst)
+			}
+			bootstrapServers := kafka.BuildBootstrapServers(controllersFromInstances(insts))
+			changed, err := process.SetBootstrapServers(bootstrapServers)
+			if err != nil {
+				logger.Error("error updating bootstrap.servers", "err", err)
+			} else if changed {
+				logger.Info("updated bootstrap.servers", "bootstrap.servers", bootstrapServers)
+			}
+		}
+
+		stream.Close()
+		logger.Error("discoverd watch closed, reconnecting")
 		time.Sleep(time.Second)
 	}
 }
@@ -299,12 +370,13 @@ func uniqueBootstrapIDs(insts []*discoverd.Instance) []string {
 	return ids
 }
 
-func votersFromInstances(insts []*discoverd.Instance) map[int]string {
+func controllersFromInstances(insts []*discoverd.Instance) map[int]kafka.ControllerInfo {
 	best := make(map[int]*discoverd.Instance)
 	for _, inst := range insts {
 		idStr := inst.Meta[nodeIDKey]
 		addr := inst.Meta[controllerAddrKey]
-		if idStr == "" || addr == "" {
+		dirID := inst.Meta[directoryIDKey]
+		if idStr == "" || addr == "" || dirID == "" {
 			continue
 		}
 		id, err := strconv.Atoi(idStr)
@@ -316,11 +388,14 @@ func votersFromInstances(insts []*discoverd.Instance) map[int]string {
 		}
 	}
 
-	voters := make(map[int]string, len(best))
+	controllers := make(map[int]kafka.ControllerInfo, len(best))
 	for id, inst := range best {
-		voters[id] = inst.Meta[controllerAddrKey]
+		controllers[id] = kafka.ControllerInfo{
+			Addr:        inst.Meta[controllerAddrKey],
+			DirectoryID: inst.Meta[directoryIDKey],
+		}
 	}
-	return voters
+	return controllers
 }
 
 func envInt(key string, def int) int {
