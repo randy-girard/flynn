@@ -16,7 +16,10 @@ import (
 	"sync"
 	"time"
 
+	api "github.com/flynn/flynn/controller/api"
+	"github.com/flynn/flynn/controller/authz"
 	controller "github.com/flynn/flynn/controller/client"
+	"github.com/flynn/flynn/controller/tokensigner"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/resource"
 	host "github.com/flynn/flynn/host/types"
@@ -27,6 +30,7 @@ import (
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func init() {
@@ -38,7 +42,103 @@ const (
 	stackContainer = "container"
 
 	blobstoreURL = "http://blobstore.discoverd"
+
+	// buildTokenPath is where the minted, app-scoped build token is mounted
+	// (root-only, read-only) inside slug/dockerbuilder jobs. create-artifact
+	// reads it and authenticates to the controller/tarreceive with a bearer
+	// token instead of the cluster-wide CONTROLLER_KEY.
+	buildTokenPath = "/run/secrets/controller_token"
+
+	// defaultBuildTimeout is the build timeout used when no override is
+	// configured. It bounds how long a single build may run and also the
+	// lifetime of the minted build token (a token only needs to outlive the
+	// build that uses it).
+	defaultBuildTimeout = 15 * time.Minute
+
+	// maxBuildTimeout is the cluster-wide ceiling for a build. An operator
+	// override (FLYNN_BUILD_TIMEOUT) is clamped to this. Because the token TTL
+	// is derived from the same value, the authorizer's ACCESS_TOKEN_MAX_VALIDITY
+	// applies independently on top, so a misconfigured or malicious override can
+	// never produce a longer-lived token than policy allows.
+	maxBuildTimeout = 30 * time.Minute
+
+	// buildTimeoutEnv lets an operator adjust the build timeout per app
+	// (e.g. `flynn -a gitreceive env set FLYNN_BUILD_TIMEOUT=25m` for a
+	// cluster-wide default, or on the app being built). The value is a Go
+	// duration string; it is clamped to maxBuildTimeout. This single knob drives
+	// both the build kill-timeout and the minted build-token TTL.
+	buildTimeoutEnv = "FLYNN_BUILD_TIMEOUT"
 )
+
+// resolveBuildTimeout determines the build timeout, preferring the
+// FLYNN_BUILD_TIMEOUT override from the app's release env, then the receiver's
+// own process env (a gitreceive app-level default), then the built-in default.
+// The result is always clamped to (0, maxBuildTimeout]. The same value bounds
+// build execution and the minted token's TTL.
+func resolveBuildTimeout(releaseEnv map[string]string) time.Duration {
+	raw := releaseEnv[buildTimeoutEnv]
+	if raw == "" {
+		raw = os.Getenv(buildTimeoutEnv)
+	}
+	timeout := defaultBuildTimeout
+	if raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			timeout = d
+		} else {
+			fmt.Printf("-----> WARN: ignoring invalid %s=%q, using default %s\n", buildTimeoutEnv, raw, defaultBuildTimeout)
+		}
+	}
+	if timeout > maxBuildTimeout {
+		timeout = maxBuildTimeout
+	}
+	return timeout
+}
+
+// buildSigner returns the token signer configured via ACCESS_TOKEN_SIGNING_KEY,
+// or nil (no error) when no signing key is set, in which case the receiver
+// falls back to the legacy CONTROLLER_KEY behavior so existing clusters keep
+// working until re-bootstrapped.
+func buildSigner() (*tokensigner.Signer, error) {
+	return tokensigner.ParseSigningKey(os.Getenv("ACCESS_TOKEN_SIGNING_KEY"))
+}
+
+// mintBuildToken signs a short-lived AccessToken scoped to a single app and the
+// build:artifacts action. The token can create this build's artifact and write
+// only to this app; it is worthless for anything else and expires quickly, so a
+// buildpack/Dockerfile step that exfiltrates it cannot escalate to the cluster.
+func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, error) {
+	now := time.Now()
+	return signer.Sign(&api.AccessToken{
+		UserEmail:  "build:" + app.Name,
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(ttl)),
+		Scopes:     []string{authz.ScopeBuildArtifacts},
+		AppGrants: []*api.AppGrant{
+			{AppId: app.ID, Permissions: []string{"app:write"}},
+		},
+	})
+}
+
+// applyBuildCredential delivers the build credential to a job. When a signing
+// key is configured it mints an app-scoped token, delivers it via a root-only
+// secret mount (never the env), and removes CONTROLLER_KEY from jobEnv so
+// attacker-controlled build steps can no longer read the cluster key. Otherwise
+// it leaves the legacy CONTROLLER_KEY env in place.
+func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App, releaseEnv map[string]string) error {
+	if signer == nil {
+		return nil
+	}
+	token, err := mintBuildToken(signer, app, resolveBuildTimeout(releaseEnv))
+	if err != nil {
+		return err
+	}
+	delete(job.Config.Env, "CONTROLLER_KEY")
+	job.Config.Secrets = append(job.Config.Secrets, host.ContainerSecret{
+		Path: buildTokenPath,
+		Data: []byte(token),
+	})
+	return nil
+}
 
 // SEC-013: signedBuildCacheURL generates a build cache URL with an HMAC
 // token scoped to the app ID, preventing one app's build from accessing
@@ -189,6 +289,14 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 		}
 	}
 
+	signer, err := buildSigner()
+	if err != nil {
+		return fmt.Errorf("error loading build signing key: %s", err)
+	}
+	if err := applyBuildCredential(signer, job, app, releaseEnv); err != nil {
+		return fmt.Errorf("error minting build token: %s", err)
+	}
+
 	cmd := buildJobCmd(slugBuilder, job)
 	cmd.Volumes = []*ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
 	var output bytes.Buffer
@@ -279,6 +387,14 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 		if limit, err := resource.ParseLimit(resource.TypeMemory, rawLimit); err == nil {
 			job.Resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
 		}
+	}
+
+	signer, err := buildSigner()
+	if err != nil {
+		return fmt.Errorf("error loading build signing key: %s", err)
+	}
+	if err := applyBuildCredential(signer, job, app, releaseEnv); err != nil {
+		return fmt.Errorf("error minting build token: %s", err)
 	}
 
 	cmd := buildJobCmd(dockerBuilder, job)
@@ -397,7 +513,25 @@ func runBuildCmd(cmd *exec.Cmd, releaseEnv map[string]string) error {
 	}
 
 	shutdown.BeforeExit(func() { cmd.Kill() })
-	return cmd.Run()
+
+	timeout := resolveBuildTimeout(releaseEnv)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		cmd.Kill()
+		<-done
+		return fmt.Errorf("build exceeded timeout of %s (set %s to change, cluster max %s)", timeout, buildTimeoutEnv, maxBuildTimeout)
+	}
 }
 
 func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType) error {

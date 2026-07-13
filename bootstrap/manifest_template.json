@@ -137,6 +137,10 @@
     "data": "{{ getenv \"CONTROLLER_KEY\" }}"
   },
   {
+    "id": "access-token-key",
+    "action": "gen-access-token-key"
+  },
+  {
     "id": "bootstrap-id",
     "action": "gen-random",
     "encoding": "uuid"
@@ -183,7 +187,8 @@
         "CA_CERT": "{{ (index .StepData \"controller-cert\").CACert }}",
         "TELEMETRY_BOOTSTRAP_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
         "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
-        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
         "web": {
@@ -599,6 +604,8 @@
     "release": {
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
+        "ACCESS_TOKEN_SIGNING_KEY": "{{ (index .StepData \"access-token-key\").PrivateKey }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
         "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
         "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
@@ -635,7 +642,8 @@
     "release": {
       "env": {
         "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}"
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
         "app": {

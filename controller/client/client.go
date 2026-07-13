@@ -148,6 +148,23 @@ func NewClientWithHTTP(uri, key string, httpClient *http.Client) (Client, error)
 	return newClient(key, u.String(), httpClient), nil
 }
 
+// NewClientWithToken creates a new Client that authenticates with a signed
+// AccessToken JWT (Authorization: Bearer) rather than the cluster-wide
+// controller key. It is used by build jobs, which receive a short-lived,
+// app-scoped token instead of the god-key.
+func NewClientWithToken(uri, token string) (Client, error) {
+	if uri == "" {
+		uri = "http://controller.discoverd"
+	}
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
+	}
+	c := newClient("", u.String(), httphelper.RetryClient)
+	c.Token = token
+	return c, nil
+}
+
 // NewClientWithConfig acts like NewClient, but supports custom configuration.
 func NewClientWithConfig(uri, key string, config Config) (Client, error) {
 	if config.Pin == nil {

@@ -2,9 +2,19 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/base64"
 	"testing"
+	"time"
 
+	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/flynn/flynn/controller/authz"
+	"github.com/flynn/flynn/controller/tokensigner"
 	ct "github.com/flynn/flynn/controller/types"
+	host "github.com/flynn/flynn/host/types"
 )
 
 func TestBuildJob(t *testing.T) {
@@ -113,6 +123,156 @@ func TestLocalHostID(t *testing.T) {
 		if got := localHostID(); got != want {
 			t.Fatalf("localHostID(%q) = %q, want %q", jobID, got, want)
 		}
+	}
+}
+
+// newBuildKeyPair returns a signer and the base64url PKIX public key that the
+// authorizer expects, so tests can mint then verify a build token.
+func newBuildKeyPair(t *testing.T) (*tokensigner.Signer, string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %s", err)
+	}
+	pub, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		t.Fatalf("marshal public key: %s", err)
+	}
+	return tokensigner.New(priv), base64.URLEncoding.EncodeToString(pub)
+}
+
+// TestMintBuildToken verifies a minted token is scoped to build:artifacts + the
+// target app, and round-trips through the authorizer.
+func TestMintBuildToken(t *testing.T) {
+	signer, pubKey := newBuildKeyPair(t)
+	app := &ct.App{ID: "app-1", Name: "myapp"}
+
+	tokenStr, err := mintBuildToken(signer, app, defaultBuildTimeout)
+	if err != nil {
+		t.Fatalf("mint: %s", err)
+	}
+
+	pk, err := authorizer.ParseTokenKey(pubKey)
+	if err != nil {
+		t.Fatalf("parse token key: %s", err)
+	}
+	tok, err := authorizer.New(nil, nil, pk, time.Hour).AuthorizeToken(tokenStr)
+	if err != nil {
+		t.Fatalf("authorize minted token: %s", err)
+	}
+	if tok.HasClusterAdmin() {
+		t.Fatal("minted build token must not have cluster admin")
+	}
+	if len(tok.Scopes) != 1 || tok.Scopes[0] != authz.ScopeBuildArtifacts {
+		t.Fatalf("scopes = %v, want [%s]", tok.Scopes, authz.ScopeBuildArtifacts)
+	}
+	if len(tok.AppGrants) != 1 || tok.AppGrants[0].AppID != "app-1" {
+		t.Fatalf("app grants = %v, want app-1", tok.AppGrants)
+	}
+	// The token must satisfy both build routes for its own app only.
+	if !authz.HTTPAllowed(tok, "POST", "/artifacts") {
+		t.Fatal("minted token should be allowed to POST /artifacts")
+	}
+	if !authz.TarreceiveAllowed(tok) {
+		t.Fatal("minted token should be allowed to push to tarreceive")
+	}
+	if authz.HTTPAllowed(tok, "POST", "/apps/other/releases") {
+		t.Fatal("minted token must not write to other apps")
+	}
+}
+
+// TestApplyBuildCredentialWithSigner verifies that when a signer is configured
+// the cluster key is removed from the job env and the token is delivered via a
+// root-only secret mount instead.
+func TestApplyBuildCredentialWithSigner(t *testing.T) {
+	signer, _ := newBuildKeyPair(t)
+	app := &ct.App{ID: "app-1", Name: "myapp"}
+	job := &host.Job{Config: host.ContainerConfig{Env: map[string]string{
+		"CONTROLLER_KEY": "cluster-god-key",
+		"SLUG_IMAGE_ID":  "x",
+	}}}
+
+	if err := applyBuildCredential(signer, job, app, nil); err != nil {
+		t.Fatalf("applyBuildCredential: %s", err)
+	}
+	if _, ok := job.Config.Env["CONTROLLER_KEY"]; ok {
+		t.Fatal("CONTROLLER_KEY must be removed from build job env when minting")
+	}
+	if job.Config.Env["SLUG_IMAGE_ID"] != "x" {
+		t.Fatal("unrelated env should be preserved")
+	}
+	if len(job.Config.Secrets) != 1 || job.Config.Secrets[0].Path != buildTokenPath {
+		t.Fatalf("expected token secret at %s, got %v", buildTokenPath, job.Config.Secrets)
+	}
+	if len(job.Config.Secrets[0].Data) == 0 {
+		t.Fatal("secret token data must not be empty")
+	}
+}
+
+// TestApplyBuildCredentialNoSigner verifies back-compat: with no signing key the
+// job is left untouched (legacy CONTROLLER_KEY env behavior).
+func TestApplyBuildCredentialNoSigner(t *testing.T) {
+	app := &ct.App{ID: "app-1", Name: "myapp"}
+	job := &host.Job{Config: host.ContainerConfig{Env: map[string]string{
+		"CONTROLLER_KEY": "cluster-god-key",
+	}}}
+
+	if err := applyBuildCredential(nil, job, app, nil); err != nil {
+		t.Fatalf("applyBuildCredential(nil): %s", err)
+	}
+	if job.Config.Env["CONTROLLER_KEY"] != "cluster-god-key" {
+		t.Fatal("legacy CONTROLLER_KEY must be preserved when no signer configured")
+	}
+	if len(job.Config.Secrets) != 0 {
+		t.Fatal("no secret should be added when no signer configured")
+	}
+}
+
+// TestResolveBuildTimeout verifies the operator override is honored, clamped to
+// the 30m cluster cap, and falls back safely on invalid or missing values.
+func TestResolveBuildTimeout(t *testing.T) {
+	// Ensure no ambient process-env override leaks into the table cases.
+	t.Setenv(buildTimeoutEnv, "")
+
+	cases := []struct {
+		name       string
+		releaseEnv map[string]string
+		want       time.Duration
+	}{
+		{"default_when_unset", nil, defaultBuildTimeout},
+		{"empty_value", map[string]string{buildTimeoutEnv: ""}, defaultBuildTimeout},
+		{"valid_override", map[string]string{buildTimeoutEnv: "25m"}, 25 * time.Minute},
+		{"clamped_to_max", map[string]string{buildTimeoutEnv: "2h"}, maxBuildTimeout},
+		{"exactly_max", map[string]string{buildTimeoutEnv: "30m"}, maxBuildTimeout},
+		{"invalid_falls_back", map[string]string{buildTimeoutEnv: "notaduration"}, defaultBuildTimeout},
+		{"zero_falls_back", map[string]string{buildTimeoutEnv: "0s"}, defaultBuildTimeout},
+		{"negative_falls_back", map[string]string{buildTimeoutEnv: "-5m"}, defaultBuildTimeout},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := resolveBuildTimeout(tc.releaseEnv); got != tc.want {
+				t.Fatalf("resolveBuildTimeout(%v) = %s, want %s", tc.releaseEnv, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestResolveBuildTimeoutProcessEnvFallback verifies a gitreceive app-level
+// default (process env) is used when the built app's release env has no
+// override, and is still capped at the cluster max.
+func TestResolveBuildTimeoutProcessEnvFallback(t *testing.T) {
+	t.Setenv(buildTimeoutEnv, "20m")
+	if got := resolveBuildTimeout(nil); got != 20*time.Minute {
+		t.Fatalf("process-env fallback = %s, want 20m", got)
+	}
+	// Release env takes precedence over process env.
+	if got := resolveBuildTimeout(map[string]string{buildTimeoutEnv: "10m"}); got != 10*time.Minute {
+		t.Fatalf("release env precedence = %s, want 10m", got)
+	}
+	// Process-env override is still clamped to the cap.
+	t.Setenv(buildTimeoutEnv, "45m")
+	if got := resolveBuildTimeout(nil); got != maxBuildTimeout {
+		t.Fatalf("process-env clamp = %s, want %s", got, maxBuildTimeout)
 	}
 }
 

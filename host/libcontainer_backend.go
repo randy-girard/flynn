@@ -798,6 +798,29 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		bindMount(sharedDir, "/.container-shared", true),
 		bindMount(diffDir, host.DiffPath, false),
 	)
+
+	// Write secret credential files (mode 0600, root-owned) and bind-mount them
+	// read-only into the container. Secret content deliberately never enters the
+	// job env or /.containerconfig, so attacker-controlled build steps cannot
+	// read it via `env` or /proc/self/environ.
+	if len(job.Config.Secrets) > 0 {
+		secretsDir := filepath.Join(tmpPath, ".container-secrets")
+		if err := os.MkdirAll(secretsDir, 0700); err != nil {
+			log.Error("error creating .container-secrets", "err", err)
+			return err
+		}
+		for i, secret := range job.Config.Secrets {
+			if secret.Path == "" {
+				return errors.New("host: invalid empty secret path")
+			}
+			hostPath := filepath.Join(secretsDir, strconv.Itoa(i))
+			if err := ioutil.WriteFile(hostPath, secret.Data, 0600); err != nil {
+				log.Error("error writing secret file", "err", err)
+				return err
+			}
+			config.Mounts = append(config.Mounts, bindMount(hostPath, secret.Path, false))
+		}
+	}
 	for _, m := range job.Config.Mounts {
 		if m.Target == "" {
 			return errors.New("host: invalid empty mount target")

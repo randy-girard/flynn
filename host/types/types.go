@@ -145,6 +145,24 @@ type ContainerConfig struct {
 	AllowedDevices     *[]*Device        `json:"allowed_devices,omitempty"`
 	AutoCreatedDevices *[]*Device        `json:"auto_created_devices,omitempty"`
 	WriteableCgroups   bool              `json:"writeable_cgroups,omitempty"`
+
+	// Secrets are credential files delivered to the job. The host writes each
+	// one to a root-owned file (mode 0600) and bind-mounts it read-only at the
+	// requested path. Unlike Env, secret content never enters the container
+	// environment, so it cannot be read via `env`, /proc/self/environ, or the
+	// /.containerconfig file. This is used to hand a build job a short-lived,
+	// app-scoped access token without exposing it to attacker-controlled build
+	// steps the way a cluster-wide key in Env would be.
+	Secrets []ContainerSecret `json:"secrets,omitempty"`
+}
+
+// ContainerSecret is a single credential file mounted into a job.
+type ContainerSecret struct {
+	// Path is the absolute path at which the secret file is mounted inside the
+	// container, e.g. /run/secrets/controller_token.
+	Path string `json:"path,omitempty"`
+	// Data is the raw file content.
+	Data []byte `json:"data,omitempty"`
 }
 
 // Apply 'y' to 'x', returning a new structure.  'y' trumps.
@@ -175,6 +193,10 @@ func (x ContainerConfig) Merge(y ContainerConfig) ContainerConfig {
 	ports = append(ports, x.Ports...)
 	ports = append(ports, y.Ports...)
 	x.Ports = ports
+	secrets := make([]ContainerSecret, 0, len(x.Secrets)+len(y.Secrets))
+	secrets = append(secrets, x.Secrets...)
+	secrets = append(secrets, y.Secrets...)
+	x.Secrets = secrets
 	if y.WorkingDir != "" {
 		x.WorkingDir = y.WorkingDir
 	}

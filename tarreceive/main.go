@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/flynn/flynn/controller/authz"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/archive"
@@ -83,8 +84,17 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status.HealthyHandler.ServeHTTP(w, r)
 		return
 	}
-	if _, err := s.auth.AuthorizeRequest(r); err != nil {
+	tok, err := s.auth.AuthorizeRequest(r)
+	if err != nil {
 		w.WriteHeader(401)
+		return
+	}
+	// tarreceive proxies layer/artifact uploads to the controller/blobstore
+	// using its own cluster key, so a non-admin caller must be an authorized
+	// builder: it must carry the build:artifacts scope plus an app grant.
+	// Otherwise a leaked app-scoped token could push arbitrary image layers.
+	if !authz.TarreceiveAllowed(tok) {
+		w.WriteHeader(403)
 		return
 	}
 	s.router.ServeHTTP(w, r)

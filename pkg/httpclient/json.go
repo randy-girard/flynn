@@ -39,9 +39,14 @@ type Client struct {
 	ErrNotFound error
 	URL         string
 	Key         string
-	Host        string
-	HTTP        *http.Client
-	HijackDial  DialFunc
+	// Token, when set, authenticates requests with an Authorization: Bearer
+	// header (a signed AccessToken JWT) instead of HTTP basic auth. It takes
+	// precedence over Key, letting a caller present a short-lived, app-scoped
+	// build token rather than the cluster-wide controller key.
+	Token      string
+	Host       string
+	HTTP       *http.Client
+	HijackDial DialFunc
 }
 
 func ToJSON(v interface{}) (io.Reader, error) {
@@ -74,7 +79,9 @@ func (c *Client) prepareReq(method, rawurl string, header http.Header, in interf
 		header.Set("Content-Type", "application/json")
 	}
 	req.Header = header
-	if c.Key != "" {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else if c.Key != "" {
 		req.SetBasicAuth("", c.Key)
 	}
 	if c.Host != "" {
