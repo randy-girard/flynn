@@ -679,16 +679,43 @@ func checkPort(port host.Port) bool {
 	return true
 }
 
+// ownJobPorts returns the set of "proto:port" pairs that are declared by the
+// host's own currently running (or starting) Flynn jobs. It is used to avoid
+// reporting Flynn's own services as resource conflicts, which makes bootstrap
+// re-runnable after a partial/failed bootstrap left services listening.
+func (h *Host) ownJobPorts() map[string]struct{} {
+	owned := make(map[string]struct{})
+	for _, job := range h.state.GetActive() {
+		if job.Job == nil {
+			continue
+		}
+		for _, p := range job.Job.Config.Ports {
+			proto := p.Proto
+			if proto == "" {
+				proto = "tcp"
+			}
+			owned[fmt.Sprintf("%s:%d", proto, p.Port)] = struct{}{}
+		}
+	}
+	return owned
+}
+
 func (h *jobAPI) ResourceCheck(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var req host.ResourceCheck
 	if err := httphelper.DecodeJSON(r, &req); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
+	owned := h.host.ownJobPorts()
 	var conflicts []host.Port
 	for _, p := range req.Ports {
 		if p.Proto == "" {
 			p.Proto = "tcp"
+		}
+		// A port already bound by one of the host's own running Flynn jobs is
+		// not a conflict: this is the expected state on a bootstrap re-run.
+		if _, ok := owned[fmt.Sprintf("%s:%d", p.Proto, p.Port)]; ok {
+			continue
 		}
 		if !checkPort(p) {
 			conflicts = append(conflicts, p)

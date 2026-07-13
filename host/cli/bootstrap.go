@@ -41,7 +41,7 @@ Options:
   --discovery=TOKEN    use discovery token to connect to cluster
   --peer-ips=IPLIST    use IP address list to connect to cluster
   --steps=STEPS        only run the given STEPS (comma separated)
-  --job-timeout=SECS   seconds to wait for jobs to start [default: 30]
+  --job-timeout=SECS   seconds to wait for jobs to start [default: 120]
 
 Bootstrap layer 1 using the provided manifest`)
 }
