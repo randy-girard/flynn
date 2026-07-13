@@ -157,6 +157,17 @@ See 'flynn-host help <command>' for more information on a specific command.
 		for k, v := range c.Env {
 			os.Setenv(k, v)
 		}
+	} else if os.Getenv("FLYNN_HOST_AUTH_KEY") == "" {
+		// CLI subcommands (ps, inspect, log, stop, ...) build a cluster client
+		// that authenticates to the daemon with FLYNN_HOST_AUTH_KEY from the
+		// environment. When the daemon has auth enabled, load the key from the
+		// host config file so the CLI can authenticate without the operator
+		// exporting it manually.
+		if key, err := config.LoadAuthKey(configFile); err != nil {
+			shutdown.Fatalf("error loading host auth key: %s", err)
+		} else if key != "" {
+			os.Setenv("FLYNN_HOST_AUTH_KEY", key)
+		}
 	}
 
 	if err := cli.Run(cmd, cmdArgs); err != nil {
