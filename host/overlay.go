@@ -4,10 +4,36 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/mrunalp/fileutils"
 )
+
+// maxDirectOverlayLayers is the largest number of squashfs layers that we stack
+// directly via a native overlayfs lowerdir (a single colon-separated mount).
+// overlayfs handles a modest number of stacked lowerdirs without issue; only
+// very deep stacks risk ELOOP, at which point we fall back to materializing the
+// layers into a single directory (see buildOverlayLowerdir). Direct stacking is
+// effectively instant, whereas materialization performs a full recursive copy
+// per layer, so we prefer direct stacking whenever it is safe.
+const maxDirectOverlayLayers = 16
+
+// overlayLowerdir returns a lowerdir string suitable for a single overlayfs
+// mount from the given ordered layer paths (leftmost entry is the topmost
+// layer). When the number of distinct layers is small enough to stack directly
+// it joins them with ":" (no copying). Otherwise it falls back to materializing
+// the layers into a single plain directory to avoid ELOOP on deep stacks.
+func overlayLowerdir(lowers []string, scratch string) (string, error) {
+	lowers = dedupeLowerDirPaths(collapseConsecutiveLowerDirs(lowers))
+	if len(lowers) == 0 {
+		return "", fmt.Errorf("no overlay layers")
+	}
+	if len(lowers) <= maxDirectOverlayLayers {
+		return strings.Join(lowers, ":"), nil
+	}
+	return buildOverlayLowerdir(lowers, scratch)
+}
 
 // collapseConsecutiveLowerDirs removes adjacent duplicate paths from a
 // lowerdir list. Docker images sometimes reference the same layer blob more

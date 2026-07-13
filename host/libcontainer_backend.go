@@ -877,6 +877,16 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 
 	log.Info("writing config")
 	configPath := filepath.Join(tmpPath, ".containerconfig")
+	// Only trusted system jobs receive the host API auth key, so they can
+	// talk to the cluster (e.g. the gitreceive receiver launching build jobs
+	// via the host API). User-pushed app jobs AND user-facing build jobs
+	// (slug/dockerbuilder, which run attacker-controlled build steps) are
+	// deliberately excluded so they cannot authenticate to the host API. See
+	// isSystemJob for the full rationale.
+	systemEnv := map[string]string{}
+	if l.host != nil && l.host.authKey != "" && isSystemJob(job) {
+		systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
+	}
 	l.envMtx.RLock()
 	err = writeContainerConfig(configPath, initConfig,
 		map[string]string{
@@ -886,6 +896,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		},
 		l.defaultEnv,
 		job.Config.Env,
+		systemEnv,
 		map[string]string{
 			"HOSTNAME": hostname,
 		},
@@ -1085,10 +1096,10 @@ func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job
 		}
 	}
 	layerCount := len(dirs) - 1
-	if layerCount > 1 {
+	if layerCount > maxDirectOverlayLayers {
 		log.Info("materializing image layers", "count", layerCount)
 	}
-	lowerdir, err := buildOverlayLowerdir(dirs[1:], scratchPath)
+	lowerdir, err := overlayLowerdir(dirs[1:], scratchPath)
 	if err != nil {
 		return "", err
 	}
@@ -1942,6 +1953,31 @@ func isBuildJob(job *host.Job) bool {
 	return job.Metadata["flynn-controller.app_name"] == "builder" ||
 		job.Metadata["flynn-controller.type"] == "slugbuilder" ||
 		job.Metadata["flynn-controller.type"] == "dockerbuilder"
+}
+
+// isSystemJob reports whether a job is a trusted internal/system Flynn job (as
+// opposed to a user-pushed application job). Only these jobs receive the host
+// API auth key so they can interact with the cluster.
+//
+// A job is trusted if it is a system app ("flynn-system-app" metadata or the
+// "system" partition), or the maintainer-run image builder ("builder" app,
+// which builds base OS layers and launches host jobs via pkg/exec).
+//
+// User-facing build jobs (slugbuilder/dockerbuilder) are deliberately EXCLUDED:
+// they execute attacker-controlled code (arbitrary buildpacks and Dockerfile
+// RUN steps from a `git push`), so any container env var — including the host
+// key — is readable by that code. Those builders never call the host API (they
+// talk to the controller/tarreceive/blobstore with CONTROLLER_KEY); the host
+// API call that launches them is made by the gitreceive receiver, which is a
+// system app and gets the key that way. Giving the key to a slug/dockerbuilder
+// would let any user who can push escalate to the (privileged) host API.
+func isSystemJob(job *host.Job) bool {
+	if job.Metadata == nil {
+		return false
+	}
+	return job.Metadata["flynn-system-app"] == "true" ||
+		job.Partition == "system" ||
+		job.Metadata["flynn-controller.app_name"] == "builder"
 }
 
 // buildJobExtraCapabilities lists the Linux capabilities granted to build jobs

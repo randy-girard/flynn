@@ -80,3 +80,69 @@ func (s ResourceCheckSuite) TestOwnJobPortsEmpty(c *C) {
 		c.Fatalf("expected no owned ports, got %v", owned)
 	}
 }
+
+type SystemJobSuite struct{}
+
+var _ = Suite(&SystemJobSuite{})
+
+// TestIsSystemJob verifies that the host API auth key is scoped to internal
+// jobs only: system apps (flynn-system-app metadata), the system partition, and
+// build jobs are treated as system jobs, while user-pushed app jobs are not.
+func (SystemJobSuite) TestIsSystemJob(c *C) {
+	cases := []struct {
+		name string
+		job  *host.Job
+		want bool
+	}{
+		{
+			name: "system app metadata",
+			job:  &host.Job{Metadata: map[string]string{"flynn-system-app": "true"}},
+			want: true,
+		},
+		{
+			name: "system partition",
+			job:  &host.Job{Partition: "system"},
+			want: true,
+		},
+		{
+			// User-facing build jobs run attacker-controlled code (buildpacks,
+			// Dockerfile RUN steps) and must NOT receive the host key.
+			name: "slugbuilder build job (user code)",
+			job:  &host.Job{Partition: "background", Metadata: map[string]string{"flynn-controller.type": "slugbuilder"}},
+			want: false,
+		},
+		{
+			name: "dockerbuilder build job (user code)",
+			job:  &host.Job{Partition: "background", Metadata: map[string]string{"flynn-controller.type": "dockerbuilder"}},
+			want: false,
+		},
+		{
+			// The maintainer-run image builder launches host jobs via pkg/exec
+			// and is trusted infrastructure tooling, so it keeps the key.
+			name: "image builder app (trusted)",
+			job:  &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}},
+			want: true,
+		},
+		{
+			name: "user app job",
+			job: &host.Job{
+				Partition: "user",
+				Metadata: map[string]string{
+					"flynn-controller.app_name": "resource-demo",
+					"flynn-controller.type":     "web",
+				},
+			},
+			want: false,
+		},
+		{
+			name: "job with no metadata",
+			job:  &host.Job{},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		if got := isSystemJob(tc.job); got != tc.want {
+			c.Errorf("isSystemJob(%s) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
