@@ -468,6 +468,189 @@ func (p *Process) restoreApplyLog() error {
 	return nil
 }
 
+func (p *Process) restoreBackupFromUpstream(logger log15.Logger, upstream *discoverd.Instance) (*BackupInfo, error) {
+	killOrphanedBackupProcesses(logger)
+
+	backupURL := fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr))
+	logger.Info("retrieving backup", "url", backupURL)
+	resp, err := backupHTTPClient.Get(backupURL)
+	if err != nil {
+		logger.Error("error connecting to upstream for backup", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("error code returned from backup", "status_code", resp.StatusCode)
+		return nil, fmt.Errorf("upstream backup returned status %d", resp.StatusCode)
+	}
+
+	hash := sha512.New()
+	logger.Info("restoring backup")
+	backupInfo, err := p.Restore(io.TeeReader(resp.Body, hash))
+	if err != nil {
+		logger.Error("error restoring backup", "err", err)
+		return nil, err
+	}
+
+	if err := resp.Body.Close(); err != nil {
+		logger.Error("error closing backup body", "err", err)
+		return nil, err
+	}
+
+	chk := hex.EncodeToString(hash.Sum(nil))
+	if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != "" && hdr != chk {
+		logger.Error("invalid backup checksum", "actual", chk, "desired", hdr)
+		return nil, errors.New("invalid backup")
+	}
+	return backupInfo, nil
+}
+
+func (p *Process) configureStandbyReplication(logger log15.Logger, upstream *discoverd.Instance, backupInfo *BackupInfo) error {
+	db, err := p.connectLocal()
+	if err != nil {
+		logger.Error("error acquiring connection", "err", err)
+		return err
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`STOP SLAVE`); err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
+		logger.Error("error installing rpl_semi_sync_slave", "err", err)
+		return err
+	}
+
+	if _, err := db.Exec(`SET GLOBAL rpl_semi_sync_slave_enabled = 1`); err != nil {
+		return err
+	}
+
+	if backupInfo != nil {
+		logger.Info("updating gtid_slave_pos", "gtid", backupInfo.GTID)
+		if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL gtid_slave_pos = "%s";`, backupInfo.GTID)); err != nil {
+			logger.Error("error updating slave gtid")
+			return err
+		}
+	}
+
+	host, port, _ := net.SplitHostPort(upstream.Addr)
+	logger.Info("changing master", "host", host, "port", port)
+	if _, err := db.Exec(fmt.Sprintf("CHANGE MASTER TO MASTER_HOST='%s', MASTER_PORT=%s, MASTER_USER='flynn', MASTER_PASSWORD='%s', MASTER_CONNECT_RETRY=10, MASTER_USE_GTID=current_pos;", host, port, p.Password)); err != nil {
+		logger.Error("error changing master", "host", host, "port", port, "err", err)
+		return err
+	}
+	if _, err := db.Exec(`STOP SLAVE IO_THREAD`); err != nil {
+		logger.Error("error stopping slave io thread", "err", err)
+		return err
+	}
+	if _, err := db.Exec(`START SLAVE IO_THREAD`); err != nil {
+		logger.Error("error starting slave io thread", "err", err)
+		return err
+	}
+
+	logger.Info("starting slave")
+	if _, err := db.Exec(`START SLAVE`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// standbyReplicationHealthy polls SHOW SLAVE STATUS until the IO thread is
+// running or a fatal replication error (e.g. GTID mismatch 1236) is seen.
+func (p *Process) standbyReplicationHealthy() (bool, error) {
+	db, err := p.connectLocal()
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		healthy, fatal, err := checkSlaveStatus(db)
+		if err != nil {
+			return false, err
+		}
+		if healthy {
+			return true, nil
+		}
+		if fatal {
+			return false, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false, nil
+}
+
+func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
+	rows, err := db.Query(`SHOW SLAVE STATUS`)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, false, nil
+	}
+	cols, err := rows.Columns()
+	if err != nil {
+		return false, false, err
+	}
+	vals := make([]interface{}, len(cols))
+	ptrs := make([]interface{}, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return false, false, err
+	}
+	var ioRunning string
+	var lastIOErrno int64
+	for i, col := range cols {
+		switch col {
+		case "Slave_IO_Running":
+			ioRunning = mysqlStatusString(vals[i])
+		case "Last_IO_Errno":
+			lastIOErrno = mysqlStatusInt64(vals[i])
+		}
+	}
+	if lastIOErrno == 1236 {
+		return false, true, nil
+	}
+	return ioRunning == "Yes", false, nil
+}
+
+func mysqlStatusString(v interface{}) string {
+	switch x := v.(type) {
+	case []byte:
+		return string(x)
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func mysqlStatusInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case []byte:
+		n, _ := strconv.ParseInt(string(x), 10, 64)
+		return n
+	case int64:
+		return x
+	case int32:
+		return int64(x)
+	case int:
+		return int64(x)
+	case nil:
+		return 0
+	default:
+		n, _ := strconv.ParseInt(fmt.Sprint(x), 10, 64)
+		return n
+	}
+}
+
 func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error {
 	logger := p.Logger.New("fn", "assumeStandby", "upstream", upstream.Addr)
 	logger.Info("starting up as standby")
@@ -478,6 +661,7 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	}
 
 	var backupInfo *BackupInfo
+	skippedBackup := false
 	if p.running() {
 		if err := p.stop(); err != nil {
 			return err
@@ -489,49 +673,16 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 
 		if p.dataDirInitialized() {
 			logger.Info("data directory already initialized, skipping backup")
-		} else if err := func() error {
-			killOrphanedBackupProcesses(logger)
-
-			backupURL := fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr))
-			logger.Info("retrieving backup", "url", backupURL)
-			resp, err := backupHTTPClient.Get(backupURL)
+			skippedBackup = true
+		} else {
+			var err error
+			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
 			if err != nil {
-				logger.Error("error connecting to upstream for backup", "err", err)
+				if clearErr := p.clearDataDir(); clearErr != nil {
+					logger.Error("error clearing data directory after failed restore", "err", clearErr)
+				}
 				return err
 			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				logger.Error("error code returned from backup", "status_code", resp.StatusCode)
-				return fmt.Errorf("upstream backup returned status %d", resp.StatusCode)
-			}
-
-			hash := sha512.New()
-
-			logger.Info("restoring backup")
-			backupInfo, err = p.Restore(io.TeeReader(resp.Body, hash))
-			if err != nil {
-				logger.Error("error restoring backup", "err", err)
-				return err
-			}
-
-			// Close response and confirm backup from trailer.
-			if err := resp.Body.Close(); err != nil {
-				logger.Error("error closing backup body", "err", err)
-				return err
-			}
-
-			chk := hex.EncodeToString(hash.Sum(nil))
-			if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != "" && hdr != chk {
-				logger.Error("invalid backup checksum", "actual", chk, "desired", hdr)
-				return errors.New("invalid backup")
-			}
-
-			return nil
-		}(); err != nil {
-			if clearErr := p.clearDataDir(); clearErr != nil {
-				logger.Error("error clearing data directory after failed restore", "err", clearErr)
-			}
-			return err
 		}
 	}
 
@@ -539,65 +690,37 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		return err
 	}
 
-	if err := func() error {
-		// Connect to local server and set up slave replication.
-		db, err := p.connectLocal()
+	if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
+		return err
+	}
+
+	// A reused data directory from an aborted deploy can contain GTID state
+	// incompatible with the current upstream. Re-seed from upstream when reuse fails.
+	if skippedBackup {
+		healthy, err := p.standbyReplicationHealthy()
 		if err != nil {
-			logger.Error("error acquiring connection", "err", err)
 			return err
 		}
-		defer db.Close()
-
-		// Stop the slave first before changing GTID & MASTER settings.
-		if _, err := db.Exec(`STOP SLAVE`); err != nil {
-			return err
-		}
-
-		// Install semi-sync slave plugin. Ignore error if already installed (1968) or
-		// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
-		if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
-			logger.Error("error installing rpl_semi_sync_slave", "err", err)
-			return err
-		}
-
-		// Enable semi-synchronous on slave.
-		if _, err := db.Exec(`SET GLOBAL rpl_semi_sync_slave_enabled = 1`); err != nil {
-			return err
-		}
-
-		// Only update the GTID if we read from a backup.
-		if backupInfo != nil {
-			logger.Info("updating gtid_slave_pos", "gtid", backupInfo.GTID)
-			if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL gtid_slave_pos = "%s";`, backupInfo.GTID)); err != nil {
-				logger.Error("error updating slave gtid")
+		if !healthy {
+			logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+			if err := p.stop(); err != nil {
+				return err
+			}
+			var err error
+			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+			if err != nil {
+				if clearErr := p.clearDataDir(); clearErr != nil {
+					logger.Error("error clearing data directory after failed restore", "err", clearErr)
+				}
+				return err
+			}
+			if err := p.start(); err != nil {
+				return err
+			}
+			if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
 				return err
 			}
 		}
-
-		host, port, _ := net.SplitHostPort(upstream.Addr)
-		logger.Info("changing master", "host", host, "port", port)
-		if _, err := db.Exec(fmt.Sprintf("CHANGE MASTER TO MASTER_HOST='%s', MASTER_PORT=%s, MASTER_USER='flynn', MASTER_PASSWORD='%s', MASTER_CONNECT_RETRY=10, MASTER_USE_GTID=current_pos;", host, port, p.Password)); err != nil {
-			logger.Error("error changing master", "host", host, "port", port, "err", err)
-			return err
-		}
-		if _, err := db.Exec(`STOP SLAVE IO_THREAD`); err != nil {
-			logger.Error("error stopping slave io thread", "err", err)
-			return err
-		}
-		if _, err := db.Exec(`START SLAVE IO_THREAD`); err != nil {
-			logger.Error("error starting slave io thread", "err", err)
-			return err
-		}
-
-		// Start slave.
-		logger.Info("starting slave")
-		if _, err := db.Exec(`START SLAVE`); err != nil {
-			return err
-		}
-
-		return nil
-	}(); err != nil {
-		return err
 	}
 
 	if downstream != nil {
