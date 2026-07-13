@@ -17,3 +17,4 @@ go-flynn-example
 ubuntu_ports_cache
 *.tar.gz
 builder/manifest.json
+docs/local/
