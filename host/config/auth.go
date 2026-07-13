@@ -13,7 +13,12 @@ func LoadAuthKey(file string) (string, error) {
 	}
 	c, err := Open(file)
 	if err != nil {
-		if os.IsNotExist(err) {
+		// A missing config file is normal. A permission-denied error is also
+		// expected when a non-root user runs a flynn-host CLI subcommand (the
+		// config is root-only 0600); in that case fall through unauthenticated
+		// and let the daemon return a clear 401 if auth is required, rather
+		// than making the CLI fatal.
+		if os.IsNotExist(err) || os.IsPermission(err) {
 			return "", nil
 		}
 		return "", err
