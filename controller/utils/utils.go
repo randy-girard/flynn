@@ -53,7 +53,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		ID:       id,
 		Metadata: metadata,
 		Config: host.ContainerConfig{
-			Args:             entrypoint.Args,
+			Args:             processArgs(t.Args, entrypoint.Args),
 			Env:              env,
 			WorkingDir:       entrypoint.WorkingDir,
 			Uid:              entrypoint.Uid,
@@ -66,9 +66,6 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		Resurrect: t.Resurrect,
 		Resources: t.Resources,
 		Profiles:  t.Profiles,
-	}
-	if len(t.Args) > 0 {
-		job.Config.Args = t.Args
 	}
 	if len(t.LinuxCapabilities) > 0 {
 		job.Config.LinuxCapabilities = &t.LinuxCapabilities
@@ -94,6 +91,38 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		job.Config.Ports[i].Service = p.Service
 	}
 	return job
+}
+
+// processArgs returns command args for a job. Explicit process type args take
+// precedence, except when they only specify the command portion of a Docker
+// image entrypoint (for example ["bin/start-web"] when the image entrypoint is
+// ["docker-php-entrypoint", "bin/start-web"]).
+func processArgs(processArgs, imageArgs []string) []string {
+	if len(processArgs) == 0 {
+		return imageArgs
+	}
+	if len(imageArgs) == 0 {
+		return processArgs
+	}
+	if len(processArgs) < len(imageArgs) {
+		suffix := imageArgs[len(imageArgs)-len(processArgs):]
+		if stringSliceEqual(suffix, processArgs) {
+			return imageArgs
+		}
+	}
+	return processArgs
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // GetEntrypoint returns an image entrypoint for a process type from a list of

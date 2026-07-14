@@ -423,7 +423,11 @@ func (l *LibcontainerBackend) SetDefaultEnv(k, v string) {
 	l.envMtx.Unlock()
 	if k == "DISCOVERD" {
 		l.discoverdClient = discoverd.NewClientWithURL(v)
-		close(l.discoverdConfigured)
+		select {
+		case <-l.discoverdConfigured:
+		default:
+			close(l.discoverdConfigured)
+		}
 	}
 }
 
@@ -531,9 +535,25 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			return err
 		}
 	}
-	rootMount, diffDir, err := l.rootOverlayMount(job)
+	diffDir, err := l.setupRootOverlay(rootPath, tmpPath, job)
 	if err != nil {
 		log.Error("error setting up rootfs", "err", err)
+		return err
+	}
+
+	// Ensure the rootfs /tmp is world-writable (1777) before libcontainer
+	// mounts a tmpfs over it. libcontainer chmods the freshly-mounted tmpfs
+	// back to the mountpoint's original mode (see rootfs_linux.go), so the
+	// tmpfs mode= option alone is ignored; some system images ship /tmp as
+	// 0755, which prevents non-root processes (e.g. mariadb's mysql user)
+	// from creating temp files. Setting it here makes the tmpfs inherit 1777.
+	tmpInRoot := filepath.Join(rootPath, "tmp")
+	if err := os.MkdirAll(tmpInRoot, 0777); err != nil {
+		log.Error("error creating rootfs /tmp", "err", err)
+		return err
+	}
+	if err := os.Chmod(tmpInRoot, os.ModeSticky|0777); err != nil {
+		log.Error("error setting rootfs /tmp permissions", "err", err)
 		return err
 	}
 
@@ -543,7 +563,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	cgroupMountFlags := defaultMountFlags
 	// SEC-011: only allow writeable cgroups for system jobs to prevent
 	// user containers from manipulating their own resource limits.
-	if !job.Config.WriteableCgroups || (job.Metadata["flynn-system-app"] != "true" && job.Partition != "system") {
+	// Build jobs (dockerbuilder) run BuildKit, whose nested runc executor
+	// must create its own cgroup subtree (e.g. /sys/fs/cgroup/buildkit) for
+	// each build step. Combined with a cgroup namespace (added below) this is
+	// contained to the job's own cgroup and does not touch the host tree.
+	if cgroupsReadonly(isBuildJob(job), job.Config.WriteableCgroups, job.Metadata["flynn-system-app"] == "true", job.Partition == "system") {
 		cgroupMountFlags |= syscall.MS_RDONLY
 	}
 
@@ -599,7 +623,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			"/proc/sysrq-trigger",
 		},
 		Devices: host.ConfigDevices(*job.Config.AutoCreatedDevices),
-		Mounts: append([]*configs.Mount{rootMount}, []*configs.Mount{
+		Mounts: []*configs.Mount{
 			{
 				Source:      "proc",
 				Destination: "/proc",
@@ -627,24 +651,38 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				Data:        "newinstance,ptmxmode=0666,mode=0620,gid=5",
 			},
 			{
-				Device:      "tmpfs",
 				Source:      "shm",
 				Destination: "/dev/shm",
+				Device:      "tmpfs",
 				Data:        "mode=1777,size=65536k",
 				Flags:       defaultMountFlags,
+			},
+			{
+				Device:      "tmpfs",
+				Source:      "tmpfs",
+				Destination: "/tmp",
+				Data:        "mode=1777",
+				// Allow execution from /tmp (e.g. flynn-builder gobin cache); omit MS_NOEXEC.
+				Flags: syscall.MS_NOSUID | syscall.MS_NODEV,
 			},
 			{
 				Destination: "/sys/fs/cgroup",
 				Device:      "cgroup",
 				Flags:       cgroupMountFlags,
 			},
-		}...),
+		},
 	}
 
 	// SEC-006: default Seccomp profile blocking dangerous syscalls
 	// Based on Docker's default profile — deny-list approach with Allow default.
 	// Only apply if seccomp is supported (requires seccomp build tag + libseccomp).
-	if seccomp.IsEnabled() {
+	//
+	// Build jobs (dockerbuilder/slugbuilder) run BuildKit, which spawns its own
+	// nested runc for each build step. That nested runc needs unshare/setns/
+	// pivot_root/mount to create build-step containers, so build jobs run
+	// seccomp-unconfined (like a typical CI/build sandbox). They are already
+	// privileged (CAP_SYS_ADMIN, writeable cgroups, private cgroup namespace).
+	if seccomp.IsEnabled() && !isBuildJob(job) {
 		syscallDenyList := []*configs.Syscall{
 			{Name: "acct", Action: configs.Errno},
 			{Name: "add_key", Action: configs.Errno},
@@ -677,17 +715,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Name: "unshare", Action: configs.Errno},
 			{Name: "userfaultfd", Action: configs.Errno},
 			{Name: "_sysctl", Action: configs.Errno},
-		}
-		// Block mount/unmount for normal apps. Flynn image-layer builds (ubuntu-noble.sh et al.)
-		// need bind-mount to propagate /var/cache/apt/archives into an extracted rootfs before chroot.
-		// That job is labeled flynn-controller.app_name=="builder"; user slugbuilder jobs use app_name=user app.
-		if job.Metadata == nil || job.Metadata["flynn-controller.app_name"] != "builder" {
-			syscallDenyList = append(syscallDenyList,
-				&configs.Syscall{Name: "mount", Action: configs.Errno},
-				&configs.Syscall{Name: "move_mount", Action: configs.Errno},
-				&configs.Syscall{Name: "open_tree", Action: configs.Errno},
-				&configs.Syscall{Name: "umount2", Action: configs.Errno},
-			)
+			// Block mount/unmount for normal apps (build jobs are unconfined above).
+			{Name: "mount", Action: configs.Errno},
+			{Name: "move_mount", Action: configs.Errno},
+			{Name: "open_tree", Action: configs.Errno},
+			{Name: "umount2", Action: configs.Errno},
 		}
 		config.Seccomp = &configs.Seccomp{
 			DefaultAction: configs.Allow,
@@ -709,6 +741,15 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 
 	if !job.Config.HostPIDNamespace {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWPID})
+	}
+
+	// Build jobs run BuildKit, whose nested runc executor manages its own
+	// cgroup subtree. Give them a private cgroup namespace so the container
+	// sees its own cgroup (/flynn/<partition>/<id>) as the cgroup root; this
+	// keeps BuildKit's cgroup creation contained and lets it succeed against
+	// the writeable /sys/fs/cgroup mount configured above.
+	if isBuildJob(job) {
+		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWCGROUP})
 	}
 
 	if spec, ok := job.Resources[resource.TypeMaxFD]; ok && spec.Limit != nil && spec.Request != nil {
@@ -757,6 +798,29 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		bindMount(sharedDir, "/.container-shared", true),
 		bindMount(diffDir, host.DiffPath, false),
 	)
+
+	// Write secret credential files (mode 0600, root-owned) and bind-mount them
+	// read-only into the container. Secret content deliberately never enters the
+	// job env or /.containerconfig, so attacker-controlled build steps cannot
+	// read it via `env` or /proc/self/environ.
+	if len(job.Config.Secrets) > 0 {
+		secretsDir := filepath.Join(tmpPath, ".container-secrets")
+		if err := os.MkdirAll(secretsDir, 0700); err != nil {
+			log.Error("error creating .container-secrets", "err", err)
+			return err
+		}
+		for i, secret := range job.Config.Secrets {
+			if secret.Path == "" {
+				return errors.New("host: invalid empty secret path")
+			}
+			hostPath := filepath.Join(secretsDir, strconv.Itoa(i))
+			if err := ioutil.WriteFile(hostPath, secret.Data, 0600); err != nil {
+				log.Error("error writing secret file", "err", err)
+				return err
+			}
+			config.Mounts = append(config.Mounts, bindMount(hostPath, secret.Path, false))
+		}
+	}
 	for _, m := range job.Config.Mounts {
 		if m.Target == "" {
 			return errors.New("host: invalid empty mount target")
@@ -815,7 +879,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	l.State.mtx.Unlock()
 
 	initConfig := &containerinit.Config{
-		Args:      job.Config.Args,
+		Args:      resolveContainerArgs(rootPath, job.Config.Args),
 		TTY:       job.Config.TTY,
 		OpenStdin: job.Config.Stdin,
 		WorkDir:   job.Config.WorkingDir,
@@ -836,6 +900,16 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 
 	log.Info("writing config")
 	configPath := filepath.Join(tmpPath, ".containerconfig")
+	// Only trusted system jobs receive the host API auth key, so they can
+	// talk to the cluster (e.g. the gitreceive receiver launching build jobs
+	// via the host API). User-pushed app jobs AND user-facing build jobs
+	// (slug/dockerbuilder, which run attacker-controlled build steps) are
+	// deliberately excluded so they cannot authenticate to the host API. See
+	// isSystemJob for the full rationale.
+	systemEnv := map[string]string{}
+	if l.host != nil && l.host.authKey != "" && isSystemJob(job) {
+		systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
+	}
 	l.envMtx.RLock()
 	err = writeContainerConfig(configPath, initConfig,
 		map[string]string{
@@ -845,6 +919,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		},
 		l.defaultEnv,
 		job.Config.Env,
+		systemEnv,
 		map[string]string{
 			"HOSTNAME": hostname,
 		},
@@ -918,7 +993,15 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		// Build jobs need CAP_MKNOD (extract rootfs tarballs with device nodes like
 		// /dev/console) and CAP_SYS_CHROOT (chroot into extracted rootfs for setup).
 		// SEC-015 removed these from defaults but builders require them.
-		for _, cap := range []string{"CAP_MKNOD", "CAP_SYS_CHROOT"} {
+		// dockerbuilder additionally runs BuildKit, whose snapshotter and nested
+		// runc perform bind mounts / mount namespaces, which require CAP_SYS_ADMIN.
+		// The nested runc also sets up a cgroup v2 device filter via eBPF; querying
+		// and attaching BPF_CGROUP_DEVICE programs requires CAP_NET_ADMIN (prog load
+		// is already covered by CAP_SYS_ADMIN via bpf_capable()).
+		// CAP_NET_RAW is part of BuildKit's default RUN-step capability set; the
+		// outer container's bounding set must be a superset of what the nested build
+		// steps request, otherwise runc fails with "can't apply capabilities".
+		for _, cap := range buildJobExtraCapabilities() {
 			config.Capabilities.Bounding = append(config.Capabilities.Bounding, cap)
 			config.Capabilities.Inheritable = append(config.Capabilities.Inheritable, cap)
 			config.Capabilities.Effective = append(config.Capabilities.Effective, cap)
@@ -1002,24 +1085,24 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	return nil
 }
 
-func (l *LibcontainerBackend) rootOverlayMount(job *host.Job) (*configs.Mount, string, error) {
-	log := l.Logger.New("fn", "rootOverlayMount", "job.id", job.ID)
+func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job *host.Job) (string, error) {
+	log := l.Logger.New("fn", "setupRootOverlay", "job.id", job.ID)
 	layers := make([]string, 0, len(job.Mountspecs)+1)
 	for _, spec := range job.Mountspecs {
 		if spec.Type != host.MountspecTypeSquashfs {
-			return nil, "", fmt.Errorf("unknown mountspec type: %q", spec.Type)
+			return "", fmt.Errorf("unknown mountspec type: %q", spec.Type)
 		}
 		log.Info("mounting squashfs layer", "id", spec.ID)
 		path, err := l.mountSquashfs(spec)
 		if err != nil {
-			return nil, "", err
+			return "", err
 		}
 		layers = append(layers, path)
 	}
 	log.Info("mounting ext2 layer")
 	tmpfs, err := l.mountTmpfs(job)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 	layers = append(layers, tmpfs)
 	dirs := make([]string, len(layers))
@@ -1032,15 +1115,39 @@ func (l *LibcontainerBackend) rootOverlayMount(job *host.Job) (*configs.Mount, s
 	workDir := filepath.Join(tmpfs, "overlay-workdir")
 	for _, dir := range []string{upperDir, workDir} {
 		if err := os.Mkdir(dir, 0755); err != nil {
-			return nil, "", err
+			return "", err
 		}
 	}
-	return &configs.Mount{
-		Source:      "overlay",
-		Destination: "/",
-		Device:      "overlay",
-		Data:        fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", strings.Join(dirs[1:], ":"), upperDir, workDir),
-	}, upperDir, nil
+	layerCount := len(dirs) - 1
+	if layerCount > maxDirectOverlayLayers {
+		log.Info("materializing image layers", "count", layerCount)
+	}
+	lowerdir, err := overlayLowerdir(dirs[1:], scratchPath)
+	if err != nil {
+		return "", err
+	}
+	log.Info("mounting root overlay", "lowerdir", lowerdir)
+	if err := mountOverlay(lowerdir, upperDir, workDir, rootPath); err != nil {
+		return "", fmt.Errorf("mounting root overlay: %s", err)
+	}
+	return upperDir, nil
+}
+
+// resolveContainerArgs resolves the first command argument to an absolute path
+// when it exists under rootfs in a standard binary directory.
+func resolveContainerArgs(rootfs string, args []string) []string {
+	if len(args) == 0 || strings.Contains(args[0], "/") {
+		return args
+	}
+	for _, dir := range []string{"/usr/local/sbin", "/usr/local/bin", "/usr/sbin", "/usr/bin", "/sbin", "/bin"} {
+		p := filepath.Join(rootfs, dir, args[0])
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			out := append([]string{}, args...)
+			out[0] = filepath.Join(dir, args[0])
+			return out
+		}
+	}
+	return args
 }
 
 func (l *LibcontainerBackend) mountSquashfs(m *host.Mountspec) (string, error) {
@@ -1394,6 +1501,12 @@ func (c *Container) cleanup() error {
 		}
 	}
 
+	if c.RootPath != "" {
+		if err := syscall.Unmount(c.RootPath, 0); err != nil && err != syscall.EINVAL && err != syscall.ENOENT {
+			log.Error("error unmounting root overlay", "err", err)
+		}
+	}
+
 	// remove the tmpfs volume (which has the same ID as the job)
 	if err := c.l.VolManager.DestroyVolume(c.job.ID); err != nil {
 		log.Error("error removing tmpfs volume", "err", err)
@@ -1735,41 +1848,57 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 		}
 		log.Info("using stored global backend config")
 
-		if state.NetworkConfig != nil && state.NetworkConfig.JobID != "" {
-			if _, ok := readySignals[state.NetworkConfig.JobID]; ok {
-				log.Info("using stored network config", "job.id", state.NetworkConfig.JobID)
-
-				// run ConfigureNetworking in a goroutine to avoid deadlock
-				// between state.Restore and PersistGlobalState which both
-				// access the state database
-				go l.host.ConfigureNetworking(state.NetworkConfig)
+		if state.NetworkConfig != nil && state.NetworkConfig.Subnet != "" {
+			cfg := *state.NetworkConfig
+			if cfg.JobID == "" {
+				cfg.JobID = runningSystemJobID(jobs, "flannel", "app")
+			}
+			if cfg.JobID != "" {
+				if _, ok := readySignals[cfg.JobID]; ok {
+					log.Info("using stored network config", "job.id", cfg.JobID)
+					go l.host.ConfigureNetworking(&cfg)
+				} else {
+					log.Info("got stored network config, but associated job isn't running", "job.id", cfg.JobID)
+					l.host.SetStatusNetwork(&cfg)
+				}
 			} else {
-				log.Info("got stored network config, but associated job isn't running", "job.id", state.NetworkConfig.JobID)
-				// Publish the previous NetworkConfig on HostStatus without
-				// applying it so flannel-wrapper can pick up the prior subnet
-				// and pass it to flanneld via -preferred-subnet, keeping the
-				// bridge IP stable across reboots.
-				l.host.SetStatusNetwork(state.NetworkConfig)
+				// Subnet is persisted but the flannel job id was not (common after
+				// notify races). Re-apply networking so jobs blocked on
+				// networkConfigured can start after a daemon restart.
+				log.Info("re-applying stored network config without flannel job", "subnet", cfg.Subnet)
+				go l.host.ConfigureNetworking(&cfg)
 			}
 		}
 
-		if state.DiscoverdConfig != nil && state.DiscoverdConfig.JobID != "" {
-			if _, ok := readySignals[state.DiscoverdConfig.JobID]; ok {
-				log.Info("using stored discoverd config", "job.id", state.DiscoverdConfig.JobID)
-
-				// run ConfigureDiscoverd in a goroutine to avoid deadlock
-				// between state.Restore and PersistGlobalState which both
-				// access the state database
-				go l.host.ConfigureDiscoverd(state.DiscoverdConfig)
-			} else {
-				log.Info("got stored discoverd config, but associated job isn't running", "job.id", state.DiscoverdConfig.JobID)
+		if state.DiscoverdConfig != nil && state.DiscoverdConfig.URL != "" {
+			cfg := *state.DiscoverdConfig
+			if cfg.JobID == "" {
+				cfg.JobID = runningSystemJobID(jobs, "discoverd", "app")
 			}
+			log.Info("using stored discoverd config", "job.id", cfg.JobID)
+			// run ConfigureDiscoverd in a goroutine to avoid deadlock
+			// between state.Restore and PersistGlobalState which both
+			// access the state database
+			go l.host.ConfigureDiscoverd(&cfg)
 		}
 	} else {
 		log.Info("no stored global backend config")
 
 	}
 	return nil
+}
+
+// runningSystemJobID returns a running system job ID for the given app/type.
+func runningSystemJobID(jobs map[string]*host.ActiveJob, app, typ string) string {
+	for _, j := range jobs {
+		if j.Status != host.StatusRunning && j.Status != host.StatusStarting {
+			continue
+		}
+		if j.Job.Metadata["flynn-controller.app_name"] == app && j.Job.Metadata["flynn-controller.type"] == typ {
+			return j.Job.ID
+		}
+	}
+	return ""
 }
 
 func (l *LibcontainerBackend) SetDiscoverdConfig(config *host.DiscoverdConfig) {
@@ -1845,7 +1974,54 @@ func isBuildJob(job *host.Job) bool {
 		return false
 	}
 	return job.Metadata["flynn-controller.app_name"] == "builder" ||
-		job.Metadata["flynn-controller.type"] == "slugbuilder"
+		job.Metadata["flynn-controller.type"] == "slugbuilder" ||
+		job.Metadata["flynn-controller.type"] == "dockerbuilder"
+}
+
+// isSystemJob reports whether a job is a trusted internal/system Flynn job (as
+// opposed to a user-pushed application job). Only these jobs receive the host
+// API auth key so they can interact with the cluster.
+//
+// A job is trusted if it is a system app ("flynn-system-app" metadata or the
+// "system" partition), or the maintainer-run image builder ("builder" app,
+// which builds base OS layers and launches host jobs via pkg/exec).
+//
+// User-facing build jobs (slugbuilder/dockerbuilder) are deliberately EXCLUDED:
+// they execute attacker-controlled code (arbitrary buildpacks and Dockerfile
+// RUN steps from a `git push`), so any container env var — including the host
+// key — is readable by that code. Those builders never call the host API (they
+// talk to the controller/tarreceive/blobstore with CONTROLLER_KEY); the host
+// API call that launches them is made by the gitreceive receiver, which is a
+// system app and gets the key that way. Giving the key to a slug/dockerbuilder
+// would let any user who can push escalate to the (privileged) host API.
+func isSystemJob(job *host.Job) bool {
+	if job.Metadata == nil {
+		return false
+	}
+	return job.Metadata["flynn-system-app"] == "true" ||
+		job.Partition == "system" ||
+		job.Metadata["flynn-controller.app_name"] == "builder"
+}
+
+// buildJobExtraCapabilities lists the Linux capabilities granted to build jobs
+// (dockerbuilder/slugbuilder) on top of the defaults. CAP_MKNOD/CAP_SYS_CHROOT
+// are needed to extract and chroot into rootfs tarballs; CAP_SYS_ADMIN,
+// CAP_NET_ADMIN and CAP_NET_RAW are needed by BuildKit's nested runc (bind
+// mounts, cgroup v2 eBPF device filter, and the default RUN-step cap set).
+func buildJobExtraCapabilities() []string {
+	return []string{"CAP_MKNOD", "CAP_SYS_CHROOT", "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_NET_RAW"}
+}
+
+// cgroupsReadonly reports whether /sys/fs/cgroup should be mounted read-only for
+// a job. Build jobs (BuildKit's nested runc manages its own cgroup subtree) and
+// system jobs that opt into WriteableCgroups get a writable mount; every other
+// job gets read-only cgroups so it cannot manipulate its own resource limits
+// (SEC-011).
+func cgroupsReadonly(isBuild, writeableCgroups, systemApp, systemPartition bool) bool {
+	if isBuild {
+		return false
+	}
+	return !writeableCgroups || (!systemApp && !systemPartition)
 }
 
 // monitorMemoryUsage periodically checks memory usage and logs when soft limit is exceeded

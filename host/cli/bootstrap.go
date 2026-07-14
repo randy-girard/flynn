@@ -22,6 +22,7 @@ import (
 	controllerdata "github.com/flynn/flynn/controller/data"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	hostconfig "github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/pkg/exec"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/tlscert"
@@ -40,7 +41,7 @@ Options:
   --discovery=TOKEN    use discovery token to connect to cluster
   --peer-ips=IPLIST    use IP address list to connect to cluster
   --steps=STEPS        only run the given STEPS (comma separated)
-  --job-timeout=SECS   seconds to wait for jobs to start [default: 30]
+  --job-timeout=SECS   seconds to wait for jobs to start [default: 120]
 
 Bootstrap layer 1 using the provided manifest`)
 }
@@ -56,6 +57,11 @@ var manifest []byte
 
 func runBootstrap(args *docopt.Args) error {
 	log.SetFlags(log.Lmicroseconds)
+	if key, err := hostconfig.LoadAuthKey(hostconfig.DefaultPath); err != nil {
+		return fmt.Errorf("error loading host auth key: %s", err)
+	} else if key != "" {
+		os.Setenv("FLYNN_HOST_AUTH_KEY", key)
+	}
 	logf := textLogger
 	if args.Bool["--json"] {
 		logf = jsonLogger
@@ -398,6 +404,8 @@ $$;`)
 			"mongodb":       {"web": 1},
 			"controller":    {"web": 1, "worker": 1},
 			"redis":         {"web": 1},
+			"kafka":         {"web": 1},
+			"clickhouse":    {"web": 1},
 			"blobstore":     {"web": 1},
 			"gitreceive":    {"app": 1},
 			"tarreceive":    {"app": 1},
@@ -421,6 +429,8 @@ $$;`)
 			"mongodb":       {"web": 2},
 			"controller":    {"web": 2, "worker": 2},
 			"redis":         {"web": 2},
+			"kafka":         {"web": 2},
+			"clickhouse":    {"web": 2},
 			"blobstore":     {"web": 2},
 			"gitreceive":    {"app": 2},
 			"tarreceive":    {"app": 2},

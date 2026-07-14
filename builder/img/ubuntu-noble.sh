@@ -83,7 +83,13 @@ cp "/etc/resolv.conf" "${TMP}/root/etc/resolv.conf"
 
 chroot_archive_bind=
 chroot_lists_bind=
+chroot_dev_binds=()
 cleanup() {
+  if [[ ${#chroot_dev_binds[@]} -gt 0 ]]; then
+    for dev_mount in "${chroot_dev_binds[@]}"; do
+      umount "${dev_mount}" 2>/dev/null || true
+    done
+  fi
   if [[ "${chroot_archive_bind}" == 1 ]] && [[ -n "${TMP:-}" ]]; then
     umount "${TMP}/root/var/cache/apt/archives" 2>/dev/null || true
   fi
@@ -111,6 +117,26 @@ if mountpoint -q /var/lib/apt/lists; then
   mount --bind /var/lib/apt/lists "${TMP}/root/var/lib/apt/lists"
   chroot_lists_bind=1
 fi
+
+# Cloud image rootfs has no populated /dev; bind the build container's device nodes
+# into the chroot (mknod fails without CAP_MKNOD in build jobs).
+mkdir -p "${TMP}/root/dev"
+bind_chroot_dev() {
+  local name=$1
+  local src="/dev/${name}"
+  local dest="${TMP}/root/dev/${name}"
+  if [[ ! -e "${src}" ]]; then
+    echo "error: ${src} missing in build container" >&2
+    exit 1
+  fi
+  rm -rf "${dest}"
+  touch "${dest}"
+  mount --bind "${src}" "${dest}"
+  chroot_dev_binds+=("${dest}")
+}
+for dev in null zero random urandom tty; do
+  bind_chroot_dev "${dev}"
+done
 
 chroot "${TMP}/root" bash -e < "builder/ubuntu-setup.sh"
 

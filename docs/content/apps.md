@@ -33,8 +33,13 @@ external database in as an environment variable with `flynn env`.
 ## Buildpacks
 
 Flynn uses [buildpacks](https://devcenter.heroku.com/articles/buildpack-api) to
-prepare and build apps deployed with `git push`. Flynn will automatically select
-a standard buildpack for most supported languages.
+prepare and build apps deployed with `git push` when the app is on the
+`heroku-24` stack (the default). Flynn will automatically select a standard
+buildpack for most supported languages.
+
+To deploy from a `Dockerfile` instead, switch to the container stack with
+`flynn stack set container`. See the [Docker](/docs/docker) documentation for
+details.
 
 The buildpack can be manually specified in cases where auto-detection is not
 possible, or overridden when the standard buildpacks are not suitable.
@@ -270,4 +275,19 @@ You can also specify a default `slugbuilder` memory limit globally, set the
 limit=SLUGBUILDER_DEFAULT_MEMORY_LIMIT=2GB
 flynn -a gitreceive env set $limit
 flynn -a taffy env set $limit
+```
+
+### Dockerbuilder Limits
+
+Apps on the `container` stack build images on the server during `git push`. If
+builds fail or are killed for memory, raise the `dockerbuilder` process limit:
+
+```text
+flynn limit set dockerbuilder memory=4GB
+```
+
+You can also set a default limit on gitreceive:
+
+```text
+flynn -a gitreceive env set DOCKERBUILDER_DEFAULT_MEMORY_LIMIT=4GB
 ```

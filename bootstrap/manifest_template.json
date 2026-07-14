@@ -5,6 +5,16 @@
     "vars": ["CLUSTER_DOMAIN"]
   },
   {
+    "id": "host-key",
+    "action": "gen-random",
+    "host_auth_key": true,
+    "data": "{{ getenv \"FLYNN_HOST_AUTH_KEY\" }}"
+  },
+  {
+    "id": "configure-host-auth",
+    "action": "configure-host-auth"
+  },
+  {
     "id": "resource-check",
     "action": "resource-check",
     "ports": [
@@ -28,7 +38,8 @@
       "env": {
         "DISCOVERD_PEERS": "{{ range $ip := .SortedHostIPs }}{{ $ip }}:1111,{{ end }}",
         "DISCOVERD": "none",
-        "DEBUG": "{{ getenv \"DEBUG\" }}"
+        "DEBUG": "{{ getenv \"DEBUG\" }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -56,7 +67,8 @@
       "env": {
         "DISCOVERD": "none",
         "BACKEND": "{{ getenv \"FLANNEL_BACKEND\" }}",
-        "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}"
+        "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -125,6 +137,10 @@
     "data": "{{ getenv \"CONTROLLER_KEY\" }}"
   },
   {
+    "id": "access-token-key",
+    "action": "gen-access-token-key"
+  },
+  {
     "id": "bootstrap-id",
     "action": "gen-random",
     "encoding": "uuid"
@@ -170,7 +186,9 @@
         "NAME_SEED": "{{ (index .StepData \"name-seed\").Data }}",
         "CA_CERT": "{{ (index .StepData \"controller-cert\").CACert }}",
         "TELEMETRY_BOOTSTRAP_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
-        "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}"
+        "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
         "web": {
@@ -284,9 +302,24 @@
     "artifact": $image_artifact[slugrunner-24]
   },
   {
+    "id": "dockerbuilder-24-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[dockerbuilder-24]
+  },
+  {
     "id": "redis-image",
     "action": "create-artifact",
     "artifact": $image_artifact[redis]
+  },
+  {
+    "id": "kafka-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[kafka]
+  },
+  {
+    "id": "clickhouse-image",
+    "action": "create-artifact",
+    "artifact": $image_artifact[clickhouse]
   },
   {
     "id": "acme-image",
@@ -323,6 +356,71 @@
     "action": "add-provider",
     "name":"redis",
     "url":"http://redis-api.discoverd/clusters"
+  },
+  {
+    "id": "kafka",
+    "app": {
+      "name": "kafka",
+      "meta": {"flynn-system-app": "true"}
+    },
+    "action": "deploy-app",
+    "release": {
+      "env": {
+        "FLYNN_KAFKA": "kafka",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "KAFKA_IMAGE_ID": "{{ (index .StepData \"kafka-image\").ID }}",
+        "KAFKA_TLS_ENABLED": "true",
+        "SINGLETON": "{{ .Singleton }}"
+      },
+      "processes": {
+        "web": {
+          "ports": [{"port": 80, "proto": "tcp"}],
+          "args": ["/bin/start-flynn-kafka", "api"]
+        }
+      }
+    },
+    "artifacts": [$image_artifact[kafka]],
+    "processes": {
+      "web": 2
+    }
+  },
+  {
+    "id": "add-kafka-provider",
+    "action": "add-provider",
+    "name":"kafka",
+    "url":"http://kafka-api.discoverd/clusters"
+  },
+  {
+    "id": "clickhouse",
+    "app": {
+      "name": "clickhouse",
+      "meta": {"flynn-system-app": "true"}
+    },
+    "action": "deploy-app",
+    "release": {
+      "env": {
+        "FLYNN_CLICKHOUSE": "clickhouse",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "CLICKHOUSE_IMAGE_ID": "{{ (index .StepData \"clickhouse-image\").ID }}",
+        "SINGLETON": "{{ .Singleton }}"
+      },
+      "processes": {
+        "web": {
+          "ports": [{"port": 80, "proto": "tcp"}],
+          "args": ["/bin/start-flynn-clickhouse", "api"]
+        }
+      }
+    },
+    "artifacts": [$image_artifact[clickhouse]],
+    "processes": {
+      "web": 2
+    }
+  },
+  {
+    "id": "add-clickhouse-provider",
+    "action": "add-provider",
+    "name":"clickhouse",
+    "url":"http://clickhouse-api.discoverd/clusters"
   },
   {
     "id": "mariadb-password",
@@ -506,8 +604,11 @@
     "release": {
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
+        "ACCESS_TOKEN_SIGNING_KEY": "{{ (index .StepData \"access-token-key\").PrivateKey }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
-        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}"
+        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
+        "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
       },
       "processes": {
         "app": {
@@ -541,7 +642,8 @@
     "release": {
       "env": {
         "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}"
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
         "app": {
@@ -572,6 +674,10 @@
             "CAP_SYS_CHROOT",
             "CAP_SYS_ADMIN"
           ],
+          "resources": {
+            "memory": {"request": 3221225472, "limit": 3221225472},
+            "temp_disk": {"request": 1073741824, "limit": 1073741824}
+          },
           "volumes": [{"path": "/tmp", "delete_on_stop": true}]
         }
       }
@@ -658,7 +764,8 @@
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
-        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}"
+        "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
+        "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
       }
     }
   },
@@ -710,6 +817,11 @@
     "id": "redis-wait",
     "action": "wait",
     "url": "http://redis-api.discoverd/ping"
+  },
+  {
+    "id": "kafka-wait",
+    "action": "wait",
+    "url": "http://kafka-api.discoverd/ping"
   },
   {
     "id": "mariadb-wait",

@@ -17,6 +17,7 @@ import (
 
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/downloader"
+	"github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/host/logmux"
 	host "github.com/flynn/flynn/host/types"
 	volumeapi "github.com/flynn/flynn/host/volume/api"
@@ -678,16 +679,43 @@ func checkPort(port host.Port) bool {
 	return true
 }
 
+// ownJobPorts returns the set of "proto:port" pairs that are declared by the
+// host's own currently running (or starting) Flynn jobs. It is used to avoid
+// reporting Flynn's own services as resource conflicts, which makes bootstrap
+// re-runnable after a partial/failed bootstrap left services listening.
+func (h *Host) ownJobPorts() map[string]struct{} {
+	owned := make(map[string]struct{})
+	for _, job := range h.state.GetActive() {
+		if job.Job == nil {
+			continue
+		}
+		for _, p := range job.Job.Config.Ports {
+			proto := p.Proto
+			if proto == "" {
+				proto = "tcp"
+			}
+			owned[fmt.Sprintf("%s:%d", proto, p.Port)] = struct{}{}
+		}
+	}
+	return owned
+}
+
 func (h *jobAPI) ResourceCheck(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	var req host.ResourceCheck
 	if err := httphelper.DecodeJSON(r, &req); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
+	owned := h.host.ownJobPorts()
 	var conflicts []host.Port
 	for _, p := range req.Ports {
 		if p.Proto == "" {
 			p.Proto = "tcp"
+		}
+		// A port already bound by one of the host's own running Flynn jobs is
+		// not a conflict: this is the expected state on a bootstrap re-run.
+		if _, ok := owned[fmt.Sprintf("%s:%d", p.Proto, p.Port)]; ok {
+			continue
 		}
 		if !checkPort(p) {
 			conflicts = append(conflicts, p)
@@ -750,9 +778,44 @@ func (h *jobAPI) Update(w http.ResponseWriter, req *http.Request, _ httprouter.P
 func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "SystemctlRestart")
 	log.Info("systemctl restart requested")
+	h.scheduleDaemonRestart(log, w)
+}
 
-	// Spawn a detached process that waits briefly then restarts the service.
-	// The sleep gives time for the HTTP response to reach the client.
+func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "ConfigureAuthKey")
+
+	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnauthorizedErrorCode,
+			Message: "authentication required",
+		})
+		return
+	}
+
+	var input struct {
+		Key string `json:"key"`
+	}
+	if err := httphelper.DecodeJSON(req, &input); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	if input.Key == "" {
+		httphelper.Error(w, fmt.Errorf("missing auth key"))
+		return
+	}
+
+	if err := config.SetAuthKey(config.DefaultPath, input.Key); err != nil {
+		log.Error("error writing host auth key", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+
+	log.Info("host auth key configured, scheduling restart")
+	h.scheduleDaemonRestart(log, w)
+}
+
+func (h *jobAPI) scheduleDaemonRestart(log log15.Logger, w http.ResponseWriter) {
 	cmd := exec.Command("bash", "-c", "sleep 2 && systemctl restart flynn-host")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
@@ -763,6 +826,16 @@ func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ ht
 
 	log.Info("systemctl restart scheduled", "pid", cmd.Process.Pid)
 	httphelper.JSON(w, http.StatusOK, map[string]string{"status": "restarting"})
+}
+
+func (h *jobAPI) CleanupImageData(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "CleanupImageData")
+	if err := h.host.CleanupImageData(); err != nil {
+		log.Error("error cleaning image data", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
 }
 
 func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
@@ -781,8 +854,10 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/stats", h.GetHostStats)
 	r.GET("/host/jobs-stats", h.GetAllJobsStats)
 	r.POST("/host/resource-check", h.ResourceCheck)
+	r.POST("/host/cleanup-image-data", h.CleanupImageData)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/systemctl-restart", h.SystemctlRestart)
+	r.POST("/host/auth-key", h.ConfigureAuthKey)
 	r.POST("/host/tags", h.UpdateTags)
 	r.POST("/host/webhooks", h.AddWebhook)
 	r.GET("/host/webhooks", h.ListWebhooks)

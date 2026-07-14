@@ -52,12 +52,15 @@ Commands:
 	run         run a job
 	env         manage env variables
 	limit       manage resource limits
+	stack       manage deployment stack for git push
 	meta        manage app metadata
 	route       manage routes
 	pg          manage postgres database
 	mysql       manage mysql database
 	mongodb     manage mongodb database
 	redis       manage redis database
+	kafka       manage kafka topics and consumer groups
+	clickhouse  manage clickhouse databases
 	provider    manage resource providers
 	docker      deploy Docker images to a Flynn cluster
 	remote      manage git remotes

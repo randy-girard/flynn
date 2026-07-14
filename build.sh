@@ -7,7 +7,7 @@
 #   ./build.sh [OPTIONS] [PHASE]
 #
 # PHASE (default: all):
-#   base     Build the debootstrap base root, squashfs, and update builder/manifest.json.
+#   base     Build the debootstrap base root, squashfs, and refresh builder/manifest.json.
 #            Slow; only re-run when changing Ubuntu series or base packages.
 #   cluster  Stop Flynn, clean install, compile, start services, run flynn-builder,
 #            then stop all local Flynn services again.
@@ -97,6 +97,9 @@ fi
 
 echo "===> Building version: ${VERSION} (phase: ${PHASE})"
 
+# Generate builder/manifest.json from the committed template
+"${FLYNN_ROOT}/script/prepare-builder-manifest"
+
 # Export FLYNN_VERSION so it's available to all subprocesses
 export FLYNN_VERSION="${VERSION}"
 
@@ -114,7 +117,6 @@ export DISCOVERD_PEERS=192.0.2.200:1111
 export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
-export JSON_FILE="${FLYNN_ROOT}/builder/manifest.json"
 export UBUNTU_CODENAME
 UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
@@ -174,13 +176,7 @@ run_phase_base() {
   echo "SIZE=${SIZE}"
   echo "HASH=${HASH}"
 
-  jq --arg url "file://${SQUASHFS}" \
-    --arg size "${SIZE}" \
-    --arg hash "${HASH}" \
-    '.base_layer.url = $url |
-      .base_layer.size = ($size | tonumber) |
-      .base_layer.hashes.sha512_256 = $hash' \
-    "${JSON_FILE}" > "${JSON_FILE}.tmp" && mv "${JSON_FILE}.tmp" "${JSON_FILE}"
+  "${FLYNN_ROOT}/script/prepare-builder-manifest"
 
   echo "===> [base] Complete."
 }

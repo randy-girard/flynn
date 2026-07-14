@@ -17,7 +17,10 @@ import (
 type Params struct {
 	Hosts []string
 	IsCA  bool
-	CA    *Certificate
+	// Client, when set on a leaf certificate, marks the certificate for TLS
+	// client authentication (mutual TLS) instead of server authentication.
+	Client bool
+	CA     *Certificate
 }
 
 type Certificate struct {
@@ -61,7 +64,11 @@ func Generate(p Params) (*Certificate, error) {
 	} else {
 		template.Subject.CommonName = p.Hosts[0]
 		template.KeyUsage = x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature
-		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		if p.Client {
+			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+		} else {
+			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
+		}
 	}
 
 	for _, host := range p.Hosts {

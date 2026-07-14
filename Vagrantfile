@@ -41,7 +41,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     builder.vm.hostname = "builder"
     builder.vm.synced_folder "./flynn-logs/builder", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-    builder.disksize.size = "80GB"  
+    builder.disksize.size = "100GB"  
     builder.vm.provider "virtualbox" do |v, override|
       v.memory = ENV["VAGRANT_MEMORY"] || 30000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8
@@ -61,33 +61,33 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     builder.vm.network "private_network", ip: "192.168.56.10"
   end
 
-  config.vm.define "runner" do |runner|
-    runner.vm.hostname = "runner"
-    runner.vm.synced_folder "./flynn-logs/runner", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+  # config.vm.define "runner" do |runner|
+  #   runner.vm.hostname = "runner"
+  #   runner.vm.synced_folder "./flynn-logs/runner", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-    runner.disksize.size = "80GB"  
-    runner.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
-      v.cpus = ENV["VAGRANT_CPUS"] || 8
+  #   runner.disksize.size = "100GB"  
+  #   runner.vm.provider "virtualbox" do |v, override|
+  #     v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
+  #     v.cpus = ENV["VAGRANT_CPUS"] || 8
 
-      # Enable nested virtualization if needed for containers
-      v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
-    end
+  #     # Enable nested virtualization if needed for containers
+  #     v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+  #   end
 
-    runner.vm.network "private_network", ip: "192.168.56.11"
-    runner.vm.network "forwarded_port", guest: 80, host: 8080
-    runner.vm.network "forwarded_port", guest: 443, host: 8443
+  #   runner.vm.network "private_network", ip: "192.168.56.11"
+  #   runner.vm.network "forwarded_port", guest: 80, host: 8080
+  #   runner.vm.network "forwarded_port", guest: 443, host: 8443
 
-    runner.vm.provision "shell", privileged: true, inline: <<-SHELL
-      sudo su -l
-      apt-get update
-      #apt-get install -y lvm2
+  #   runner.vm.provision "shell", privileged: true, inline: <<-SHELL
+  #     sudo su -l
+  #     apt-get update
+  #     #apt-get install -y lvm2
 
-      growpart /dev/sda 3
-      pvresize /dev/sda3
-      lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
-    SHELL
-  end
+  #     growpart /dev/sda 3
+  #     pvresize /dev/sda3
+  #     lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
+  #   SHELL
+  # end
 
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
@@ -96,7 +96,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     runner.vm.hostname = "node1"
     runner.vm.synced_folder "./flynn-logs/node1", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-    runner.disksize.size = "80GB"  
+    runner.disksize.size = "100GB"  
     runner.vm.provider "virtualbox" do |v, override|
       v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8
@@ -124,7 +124,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     runner.vm.hostname = "node2"
     runner.vm.synced_folder "./flynn-logs/node2", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-    runner.disksize.size = "80GB"  
+    runner.disksize.size = "100GB"  
     runner.vm.provider "virtualbox" do |v, override|
       v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8
@@ -152,7 +152,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
     runner.vm.hostname = "node3"
     runner.vm.synced_folder "./flynn-logs/node3", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-    runner.disksize.size = "80GB"  
+    runner.disksize.size = "100GB"  
     runner.vm.provider "virtualbox" do |v, override|
       v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
       v.cpus = ENV["VAGRANT_CPUS"] || 8

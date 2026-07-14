@@ -1,0 +1,31 @@
+#!/bin/bash
+#
+# Generate builder/manifest.json from builder/manifest.json.template.
+# Updates base_layer url/size/hash when the squashfs exists (or SIZE/HASH are set).
+#
+set -eo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TEMPLATE="${ROOT}/builder/manifest.json.template"
+MANIFEST="${ROOT}/builder/manifest.json"
+SQUASHFS="${SQUASHFS:-/var/lib/flynn/base-layer.squashfs}"
+
+if [[ ! -f "${TEMPLATE}" ]]; then
+  echo "ERROR: missing ${TEMPLATE}" >&2
+  exit 1
+fi
+
+cp "${TEMPLATE}" "${MANIFEST}"
+
+if [[ -f "${SQUASHFS}" ]]; then
+  SIZE="${SIZE:-$(stat -c%s "${SQUASHFS}")}"
+  HASH="${HASH:-$("${ROOT}/sha512_256_binary" "${SQUASHFS}")}"
+  URL="file://${SQUASHFS}"
+  jq --arg url "${URL}" \
+    --arg size "${SIZE}" \
+    --arg hash "${HASH}" \
+    '.base_layer.url = $url |
+      .base_layer.size = ($size | tonumber) |
+      .base_layer.hashes.sha512_256 = $hash' \
+    "${MANIFEST}" > "${MANIFEST}.tmp" && mv "${MANIFEST}.tmp" "${MANIFEST}"
+fi

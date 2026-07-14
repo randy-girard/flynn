@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -108,5 +109,60 @@ func TestWaitForReadWriteEventually(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Fatalf("expected multiple status polls before read-write, got %d", calls)
+	}
+}
+
+func TestIsRecoverableStopError(t *testing.T) {
+	if IsRecoverableStopError(nil) {
+		t.Fatal("nil should not be recoverable")
+	}
+	if !IsRecoverableStopError(fmt.Errorf(`Post "http://10.0.0.1:3307/stop": context deadline exceeded`)) {
+		t.Fatal("expected context deadline exceeded to be recoverable")
+	}
+	if !IsRecoverableStopError(fmt.Errorf("Client.Timeout exceeded while awaiting headers")) {
+		t.Fatal("expected client timeout to be recoverable")
+	}
+	if IsRecoverableStopError(fmt.Errorf("connection refused")) {
+		t.Fatal("connection refused should not be recoverable")
+	}
+}
+
+func TestStopReturnsWithoutWaitingForSlowShutdown(t *testing.T) {
+	stopped := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/stop" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.WriteHeader(200)
+		close(stopped)
+		go func() {
+			time.Sleep(2 * time.Second)
+		}()
+	}))
+	defer srv.Close()
+
+	host, portStr, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	c := NewClient(net.JoinHostPort(host, strconv.Itoa(port-1)))
+
+	done := make(chan error, 1)
+	go func() { done <- c.Stop() }()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("Stop should return promptly after HTTP response")
+	}
+
+	select {
+	case <-stopped:
+	case <-time.After(time.Second):
+		t.Fatal("stop handler was not invoked")
 	}
 }

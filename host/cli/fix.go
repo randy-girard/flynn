@@ -8,7 +8,8 @@ func init() {
 	Register("fix", (&fixer.ClusterFixer{}).Run, `
 usage: flynn-host fix [options]
 
-Attempts to fix a broken cluster by starting missing jobs.
+Attempts to fix a broken cluster by starting missing jobs and cleaning orphaned
+image data on each host's local disk.
 
 Options:
     -n, --min-hosts=<n>  minimum expected number of hosts (required)

@@ -323,6 +323,62 @@
       }
     },
     {
+      "id": "kafka",
+      "base": "ubuntu-noble",
+      "layers": [
+        {
+          "name": "kafka-packages",
+          "script": "appliance/kafka/img/packages.sh",
+          "limits": {
+            "temp_disk": "4G"
+          }
+        },
+        {
+          "name": "kafka-binaries",
+          "gobuild": {
+            "appliance/kafka/cmd/flynn-kafka": "/bin/flynn-kafka",
+            "appliance/kafka/cmd/flynn-kafka-api": "/bin/flynn-kafka-api"
+          },
+          "copy": {
+            "appliance/kafka/start.sh": "/bin/start-flynn-kafka"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/bin/start-flynn-kafka"
+        ]
+      }
+    },
+    {
+      "id": "clickhouse",
+      "base": "ubuntu-noble",
+      "layers": [
+        {
+          "name": "clickhouse-packages",
+          "script": "appliance/clickhouse/img/packages.sh",
+          "limits": {
+            "temp_disk": "4G"
+          }
+        },
+        {
+          "name": "clickhouse-binaries",
+          "gobuild": {
+            "appliance/clickhouse/cmd/flynn-clickhouse": "/bin/flynn-clickhouse",
+            "appliance/clickhouse/cmd/flynn-clickhouse-api": "/bin/flynn-clickhouse-api"
+          },
+          "copy": {
+            "appliance/clickhouse/start.sh": "/bin/start-flynn-clickhouse"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/bin/start-flynn-clickhouse"
+        ]
+      }
+    },
+    {
       "id": "blobstore",
       "base": "ubuntu-noble",
       "layers": [
@@ -538,6 +594,34 @@
       "entrypoint": {
         "args": [
           "/runner/init"
+        ]
+      }
+    },
+    {
+      "id": "dockerbuilder-24",
+      "base": "heroku-24-build",
+      "layers": [
+        {
+          "name": "dockerbuilder-packages",
+          "script": "dockerbuilder/img/packages.sh",
+          "inputs": [
+            "dockerbuilder/img/buildctl-daemonless.sh"
+          ]
+        },
+        {
+          "name": "dockerbuilder-binaries",
+          "gobuild": {
+            "dockerbuilder/artifact": "/bin/create-artifact"
+          },
+          "copy": {
+            "dockerbuilder/builder/build.sh": "/builder/build.sh",
+            "dockerbuilder/img/buildctl-daemonless.sh": "/builder/buildctl-daemonless.sh"
+          }
+        }
+      ],
+      "entrypoint": {
+        "args": [
+          "/builder/build.sh"
         ]
       }
     },

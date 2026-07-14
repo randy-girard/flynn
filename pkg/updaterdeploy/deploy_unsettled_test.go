@@ -2,8 +2,18 @@ package updaterdeploy
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 )
+
+func TestShouldRetryAfterScaleTimeout(t *testing.T) {
+	if !ShouldRetryAfterScaleTimeout(fmt.Errorf("timed out waiting for scale to complete (waited 120 seconds)")) {
+		t.Fatal("expected scale timeout to be retryable")
+	}
+	if ShouldRetryAfterScaleTimeout(nil) {
+		t.Fatal("nil should not retry")
+	}
+}
 
 func TestShouldRetryAfterUnsettledDiscoverdLeader(t *testing.T) {
 	cases := []struct {

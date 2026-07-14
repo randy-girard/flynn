@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -13,6 +14,22 @@ import (
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
 )
+
+// syncTimeout bounds how long the sirenia deploy waits for a freshly started
+// peer to catch up with its upstream (or for a new primary to become
+// read-write). Large databases can take far longer than the historical
+// 3-minute value to complete their initial base backup, so the default is
+// generous and can be overridden via SIRENIA_DEPLOY_SYNC_TIMEOUT (a Go
+// duration string, e.g. "30m").
+var syncTimeout = func() time.Duration {
+	const def = 15 * time.Minute
+	if v := os.Getenv("SIRENIA_DEPLOY_SYNC_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return def
+}()
 
 func (d *DeployJob) deploySirenia() (err error) {
 	log := d.logger.New("fn", "deploySirenia")
@@ -127,6 +144,22 @@ loop:
 	}
 	state = *readyState
 
+	// Peers left over from aborted rolling deploys (new-release formations
+	// still scaled up) pollute discoverd and cause replication sync waits to
+	// target the wrong downstream instance.
+	instances, err := discoverd.NewService(proc.Service).Instances()
+	if err != nil {
+		return loggedErr("error listing sirenia service instances: %s", err)
+	}
+	for _, inst := range instances {
+		if inst == nil || inst.Meta == nil {
+			continue
+		}
+		if rid := inst.Meta["FLYNN_RELEASE_ID"]; rid != "" && rid != d.OldReleaseID {
+			return loggedErr("sirenia cluster has peer from unexpected release %s (expected only %s); retry update after orphan formation cleanup", rid, d.OldReleaseID)
+		}
+	}
+
 	stopInstance := func(inst *discoverd.Instance) error {
 		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"])
 
@@ -138,8 +171,12 @@ loop:
 		peer := sireniaclient.NewClient(inst.Addr)
 		log.Info("stopping peer")
 		if err := peer.Stop(); err != nil {
-			log.Error("error stopping peer", "err", err)
-			return err
+			if sireniaclient.IsRecoverableStopError(err) {
+				log.Warn("stop request timed out, waiting for peer to leave discoverd", "err", err)
+			} else {
+				log.Error("error stopping peer", "err", err)
+				return err
+			}
 		}
 		log.Info("waiting for peer to stop")
 		timeout := time.After(d.timeout)
@@ -215,7 +252,7 @@ loop:
 	waitForSync := func(upstream, downstream *discoverd.Instance) error {
 		log.Info("waiting for replication sync", "upstream", upstream.Addr, "downstream", downstream.Addr)
 		sc := sireniaclient.NewClient(upstream.Addr)
-		if err := sc.WaitForReplSync(downstream, sireniaclient.ProcessIDKey(processType), 3*time.Minute); err != nil {
+		if err := sc.WaitForReplSync(downstream, sireniaclient.ProcessIDKey(processType), syncTimeout); err != nil {
 			log.Error("error waiting for replication sync", "err", err)
 			return err
 		}
@@ -224,7 +261,7 @@ loop:
 	waitForReadWrite := func(inst *discoverd.Instance) error {
 		log.Info("waiting for read-write", "inst", inst.Addr)
 		sc := sireniaclient.NewClient(inst.Addr)
-		if err := sc.WaitForReadWrite(3 * time.Minute); err != nil {
+		if err := sc.WaitForReadWrite(syncTimeout); err != nil {
 			log.Error("error waiting for read-write", "err", err)
 			return err
 		}
@@ -408,7 +445,7 @@ waitCurrent:
 					JobType:   processType,
 				}
 				log.Info("waiting for new sirenia peer to accept writes", "addr", event.Instance.Addr)
-				if err := sireniaclient.NewClient(event.Instance.Addr).WaitForReadWrite(3 * time.Minute); err != nil {
+				if err := sireniaclient.NewClient(event.Instance.Addr).WaitForReadWrite(syncTimeout); err != nil {
 					return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
 				}
 				// proceed with non-sirenia process types now that

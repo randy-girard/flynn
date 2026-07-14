@@ -86,13 +86,13 @@ func (a *API) createDatabase(ctx context.Context, w http.ResponseWriter, req *ht
 		return
 	}
 	if _, err := db.Exec(fmt.Sprintf("CREATE DATABASE `%s`", database)); err != nil {
-		db.Exec(fmt.Sprintf("DROP USER '%s'", username))
+		db.Exec(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", username))
 		httphelper.Error(w, err)
 		return
 	}
 	if _, err := db.Exec(fmt.Sprintf("GRANT ALL ON `%s`.* TO '%s'@'%%'", database, username)); err != nil {
-		db.Exec(fmt.Sprintf("DROP DATABASE `%s`", database))
-		db.Exec(fmt.Sprintf("DROP USER '%s'", username))
+		db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", database))
+		db.Exec(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", username))
 		httphelper.Error(w, err)
 		return
 	}
@@ -125,12 +125,12 @@ func (a *API) dropDatabase(ctx context.Context, w http.ResponseWriter, req *http
 	}
 	defer db.Close()
 
-	if _, err := db.Exec(fmt.Sprintf("DROP DATABASE `%s`", id[1])); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("DROP DATABASE IF EXISTS `%s`", id[1])); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
 
-	if _, err := db.Exec(fmt.Sprintf("DROP USER '%s'", id[0])); err != nil {
+	if _, err := db.Exec(fmt.Sprintf("DROP USER IF EXISTS '%s'@'%%'", id[0])); err != nil {
 		httphelper.Error(w, err)
 		return
 	}

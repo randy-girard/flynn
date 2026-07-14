@@ -9,6 +9,7 @@ import (
 	"os"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +90,11 @@ type Scheduler struct {
 	placementRequests     chan *PlacementRequest
 	internalStateRequests chan *InternalStateRequest
 
+	// hostVolumeIDs maps host ID to app volume IDs present on that host.
+	// Rebuilt during SyncVolumes and used to avoid adopting volumes that
+	// were garbage-collected on the host but still exist in the scheduler.
+	hostVolumeIDs map[string]map[string]struct{}
+
 	rectifyBatch map[utils.FormationKey]struct{}
 
 	// formationlessJobs is a map of formation keys to a list of jobs
@@ -120,6 +126,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		routers:               make(map[string]*Router),
 		jobs:                  make(map[string]*Job),
 		volumes:               make(map[string]*Volume),
+		hostVolumeIDs:         make(map[string]map[string]struct{}),
 		services:              make(map[string]*Service),
 		routes:                make(map[string]map[string]struct{}),
 		formations:            make(Formations),
@@ -792,6 +799,8 @@ func (s *Scheduler) SyncVolumes() {
 	log := s.logger.New("fn", "SyncVolumes")
 	log.Info("syncing volumes")
 
+	hostVolumeIDs := make(map[string]map[string]struct{})
+
 	// ensure we know about all existing app volumes
 	for _, host := range s.hosts {
 		volumes, err := host.client.ListVolumes()
@@ -799,16 +808,44 @@ func (s *Scheduler) SyncVolumes() {
 			log.Error("error getting host volumes", "host.id", host.ID, "err", err)
 			return
 		}
+		set := make(map[string]struct{})
 		for _, info := range volumes {
 			if !isAppVolume(info) {
 				continue
 			}
+			set[info.ID] = struct{}{}
 			if _, ok := s.volumes[info.ID]; !ok {
 				vol := NewVolume(info, ct.VolumeStateCreated, host.ID)
 				s.volumes[info.ID] = vol
 				s.persistVolume(vol)
 			}
 		}
+		hostVolumeIDs[host.ID] = set
+	}
+	s.hostVolumeIDs = hostVolumeIDs
+
+	// volumes tracked by the scheduler but missing from the host were likely
+	// garbage-collected out of band; mark them destroyed so placement will
+	// allocate a fresh dataset instead of failing with "required volume ...
+	// does not exist".
+	for id, vol := range s.volumes {
+		if vol.GetState() == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+			continue
+		}
+		if vol.HostID == "" {
+			continue
+		}
+		set, ok := hostVolumeIDs[vol.HostID]
+		if !ok {
+			continue
+		}
+		if _, exists := set[id]; exists {
+			continue
+		}
+		log.Warn("volume missing on host, marking destroyed", "vol.id", id, "host.id", vol.HostID)
+		vol.SetState(ct.VolumeStateDestroyed)
+		vol.JobID = nil
+		s.persistVolume(vol)
 	}
 
 	// ensure we know about all decommissioned volumes
@@ -1098,6 +1135,12 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
+		// skip volumes that were garbage-collected on the host but are
+		// still present in the scheduler's in-memory state
+		if vol.HostID != "" && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
+			continue
+		}
+
 		// return the matching volume
 		return vol
 	}
@@ -1109,6 +1152,35 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 // release with a (possibly zero) formation that the controller has loaded.
 func (s *Scheduler) releaseKnownForApp(appID, releaseID string) bool {
 	return s.formations.Get(appID, releaseID) != nil
+}
+
+func (s *Scheduler) volumeExistsOnHost(hostID, volumeID string) bool {
+	if set, ok := s.hostVolumeIDs[hostID]; ok {
+		_, exists := set[volumeID]
+		return exists
+	}
+	host, ok := s.hosts[hostID]
+	if !ok {
+		return false
+	}
+	volumes, err := host.client.ListVolumes()
+	if err != nil {
+		return false
+	}
+	for _, info := range volumes {
+		if info.ID == volumeID {
+			return true
+		}
+	}
+	return false
+}
+
+func isMissingHostVolumeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "required volume") && strings.Contains(msg, "does not exist")
 }
 
 func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
@@ -1146,6 +1218,13 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		for i, volReq := range reqs {
 			// look for an existing, unassigned volume
 			vol := s.findVolume(req.Job, &volReq)
+			if vol != nil && vol.HostID != "" && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
+				log.Warn("stale volume missing on host, marking destroyed", "vol.id", vol.ID, "host.id", vol.HostID)
+				vol.SetState(ct.VolumeStateDestroyed)
+				vol.JobID = nil
+				s.persistVolume(vol)
+				vol = nil
+			}
 
 			if vol == nil {
 				// did not assign an existing volume so initialize a new one
@@ -1632,6 +1711,22 @@ outer:
 		err = req.Host.client.AddJob(req.Config)
 		if err == nil {
 			return
+		}
+		if isMissingHostVolumeError(err) {
+			log.Warn("host rejected job due to missing volume, marking volumes destroyed and retrying", "err", err)
+			for _, vol := range job.Volumes {
+				if vol.GetState() != ct.VolumeStateDestroyed {
+					vol.SetState(ct.VolumeStateDestroyed)
+					vol.JobID = nil
+					s.persistVolume(vol)
+				}
+			}
+			job.Volumes = nil
+			job.State = JobStatePending
+			job.HostID = ""
+			job.JobID = ""
+			s.persistJob(job)
+			continue outer
 		}
 		log.Error("error adding job to the cluster", "attempts", attempt+1, "err", err)
 	}

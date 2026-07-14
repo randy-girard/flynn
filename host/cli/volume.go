@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
+	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/cluster"
@@ -99,6 +100,29 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 
 	// iterate over list of all volumes, deleting any not found in the keep list
 	success := true
+
+	// Keep volumes the controller scheduler still tracks. Without this,
+	// garbage collection can delete datasets that sirenia rolling deploys
+	// still reference, causing updates to hang until timeout.
+	if ctrl, err := controllerClient(); err == nil {
+		volumes, err := ctrl.VolumeList()
+		if err != nil {
+			fmt.Printf("warning: could not list controller volumes for gc: %s\n", err)
+		} else {
+			for _, vol := range volumes {
+				if vol == nil || vol.ID == "" {
+					continue
+				}
+				if vol.State == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+					continue
+				}
+				keep[vol.ID] = struct{}{}
+			}
+		}
+	} else {
+		fmt.Printf("warning: could not connect to controller for volume gc: %s\n", err)
+	}
+
 outer:
 	for _, v := range volumes {
 		if _, ok := keep[v.Volume.ID]; ok {

@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -415,6 +417,40 @@ func (MariaDBSuite) TestIntegration_FourNode(c *C) {
 	c.Log("assert primary (node4) lists sync (node4) as downstream")
 	assertDownstream(c, db3, 4)
 	insertRow(c, db3, 3)
+}
+
+// TestIntegration_RestoreWritesMyCnf ensures Restore recreates my.cnf after
+// clearDataDir removes it during backup extraction. Without this, new mariadb
+// peers exit immediately with "Could not open required defaults file: /data/my.cnf".
+func (MariaDBSuite) TestIntegration_RestoreWritesMyCnf(c *C) {
+	primary := NewTestProcess(c, 100)
+	primary.Singleton = true
+	c.Assert(primary.Reconfigure(&state.Config{Role: state.RolePrimary}), IsNil)
+	c.Assert(primary.Start(), IsNil)
+	defer primary.Stop()
+
+	db := connect(c, primary, "")
+	_, err := db.Exec("CREATE DATABASE restore_cfg_test")
+	db.Close()
+	c.Assert(err, IsNil)
+
+	backup, err := primary.Backup()
+	c.Assert(err, IsNil)
+	defer backup.Close()
+
+	standby := NewTestProcess(c, 101)
+	_, err = standby.Restore(backup)
+	c.Assert(err, IsNil)
+
+	_, err = os.Stat(standby.ConfigPath())
+	c.Assert(err, IsNil, Commentf("Restore must recreate %s after clearDataDir", standby.ConfigPath()))
+
+	cfg, err := ioutil.ReadFile(standby.ConfigPath())
+	c.Assert(err, IsNil)
+	c.Assert(string(cfg), Matches, "(?m)read_only = 1")
+
+	c.Assert(standby.Start(), IsNil)
+	defer standby.Stop()
 }
 
 func (MariaDBSuite) TestRemoveNodes(c *C) {

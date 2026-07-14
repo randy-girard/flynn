@@ -15,12 +15,13 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/imageenv"
 	"github.com/flynn/flynn/updater/types"
 	"github.com/mattn/go-colorable"
 	"github.com/inconshreveable/log15"
 )
 
-var redisImage, slugBuilder, slugRunner *ct.Artifact
+var redisImage, slugBuilder, slugRunner, dockerBuilder, kafkaImage, clickHouseImage *ct.Artifact
 
 // use a flag to determine whether to use a TTY log formatter because actually
 // assigning a TTY to the job causes reading images via stdin to fail.
@@ -106,6 +107,12 @@ func run() error {
 	// image artifacts.  CreateArtifact depends on blobstore which
 	// depends on postgres being healthy (with asyncs).
 	repairSireniaClusters(log)
+	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
+		log.Warn("error repairing orphan sirenia formations", "err", err)
+	}
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+		log.Warn("error repairing sirenia cluster quorum", "err", err)
+	}
 
 	log.Info("creating new image artifacts")
 	createArtifactWithRetry := func(name string, img *ct.Artifact) error {
@@ -135,6 +142,25 @@ func run() error {
 		log.Error(err.Error())
 		return err
 	}
+	dockerBuilder = images["dockerbuilder"]
+	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
+		log.Error(err.Error())
+		return err
+	}
+	if img, ok := images["kafka"]; ok {
+		kafkaImage = img
+		if err := createArtifactWithRetry("kafka", kafkaImage); err != nil {
+			log.Error(err.Error())
+			return err
+		}
+	}
+	if img, ok := images["clickhouse"]; ok {
+		clickHouseImage = img
+		if err := createArtifactWithRetry("clickhouse", clickHouseImage); err != nil {
+			log.Error(err.Error())
+			return err
+		}
+	}
 
 	// deploy system apps in order first
 	for _, appInfo := range updater.SystemApps {
@@ -155,12 +181,24 @@ func run() error {
 
 		app, err := client.GetApp(appInfo.Name)
 		if err == controller.ErrNotFound && appInfo.Optional {
-			log.Info(
-				"skipped deploy of system app",
-				"reason", "optional app not present",
-				"app", appInfo.Name,
-			)
-			continue
+			if updaterdeploy.IsOptionalResourceApp(appInfo.Name) {
+				if err := updaterdeploy.EnsureOptionalResourceApp(client, appInfo.Name, images[appInfo.Name], log); err != nil {
+					log.Error("error deploying missing optional resource app", "err", err)
+					return err
+				}
+				app, err = client.GetApp(appInfo.Name)
+				if err != nil {
+					log.Error("error getting app after optional resource deploy", "err", err)
+					return err
+				}
+			} else {
+				log.Info(
+					"skipped deploy of system app",
+					"reason", "optional app not present",
+					"app", appInfo.Name,
+				)
+				continue
+			}
 		} else if err != nil {
 			log.Error("error getting app", "err", err)
 			return err
@@ -294,33 +332,30 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	return nil
 }
 
-// updateImageIDs updates REDIS_IMAGE_ID, SLUGBUILDER_IMAGE_ID and
-// SLUGRUNNER_IMAGE_ID if they are set and have an old ID, and also
-// replaces the legacy REDIS_IMAGE_URI, SLUGBUILDER_IMAGE_URI and
-// SLUGRUNNER_IMAGE_URI
 func updateImageIDs(env map[string]string) bool {
-	updated := false
-	for prefix, newID := range map[string]string{
-		"REDIS":       redisImage.ID,
-		"SLUGBUILDER": slugBuilder.ID,
-		"SLUGRUNNER":  slugRunner.ID,
-	} {
-		idKey := prefix + "_IMAGE_ID"
-		if id, ok := env[idKey]; ok && id != newID {
-			env[idKey] = newID
-			updated = true
-		}
-
-		uriKey := prefix + "_IMAGE_URI"
-		if _, ok := env[uriKey]; ok {
-			delete(env, uriKey)
-			env[idKey] = newID
-			updated = true
-		}
-	}
-	return updated
+	return imageenv.Update(env, imageenv.IDs{
+		Redis:         redisImage.ID,
+		SlugBuilder:   slugBuilder.ID,
+		SlugRunner:    slugRunner.ID,
+		DockerBuilder: dockerBuilder.ID,
+		Kafka:         kafkaImageID(),
+		ClickHouse:    clickHouseImageID(),
+	})
 }
 
+func kafkaImageID() string {
+	if kafkaImage != nil {
+		return kafkaImage.ID
+	}
+	return ""
+}
+
+func clickHouseImageID() string {
+	if clickHouseImage != nil {
+		return clickHouseImage.ID
+	}
+	return ""
+}
 
 // repairSireniaClusters clears deposed peers from sirenia-managed services.
 // After a daemon restart the old primary may have been deposed by a sync

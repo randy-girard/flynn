@@ -501,6 +501,10 @@ func (p *Peer) atRest() bool {
 	return p.workDoneCh == nil
 }
 
+func clusterStateReady(s *State) bool {
+	return s != nil && s.Primary != nil
+}
+
 // Examine the current cluster state and determine if new actions need to be
 // taken. For example, if we're the primary, and there's no sync present, then
 // we need to declare a new generation.
@@ -511,7 +515,7 @@ func (p *Peer) evalClusterState() {
 
 	// If there's no cluster state, check whether we should set up the cluster.
 	// If not, wait for something else to happen.
-	if info := p.Info(); info.State == nil {
+	if info := p.Info(); !clusterStateReady(info.State) {
 		log.Debug("no cluster state",
 			"peers", len(info.Peers),
 			"self", p.id,
@@ -549,8 +553,12 @@ func (p *Peer) evalClusterState() {
 		p.generation = p.Info().State.Generation
 
 		if p.Info().Role == RolePrimary {
-			if p.Info().State.Primary.Meta[p.idKey] != p.id {
+			if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] != p.id {
 				p.assumeDeposed()
+			} else if p.Info().State.Primary != nil {
+				p.refreshPrimaryDownstream(log)
+			} else {
+				p.evalInitClusterState()
 			}
 		} else {
 			p.evalInitClusterState()
@@ -566,6 +574,20 @@ func (p *Peer) evalClusterState() {
 			p.assumeAsync(i)
 			return
 		}
+		// Meta may already record this peer as primary or sync (for example
+		// after manual recovery updated discoverd state) while we are still
+		// unassigned locally. evalInitClusterState only runs on generation
+		// changes, so re-check recorded roles here instead of waiting forever.
+		if p.Info().State != nil {
+			if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] == p.id {
+				p.assumePrimary()
+				return
+			}
+			if !p.singleton && p.Info().State.Sync != nil && p.Info().State.Sync.Meta[p.idKey] == p.id {
+				p.assumeSync()
+				return
+			}
+		}
 		// A frozen singleton cluster cannot self-heal when the recorded
 		// primary disappears: the freeze short-circuits state changes below,
 		// and unassigned peers otherwise have no takeover path. When we are
@@ -575,6 +597,13 @@ func (p *Peer) evalClusterState() {
 		// crash recovery can complete instead of hanging indefinitely.
 		if p.canSingletonTakeover() {
 			p.startSingletonTakeover()
+			return
+		}
+		if !clusterStateReady(p.Info().State) && !p.singleton {
+			info := p.Info()
+			if !p.setup && len(info.Peers) > 1 && info.Peers[0].Meta[p.idKey] == p.id {
+				p.startInitialSetup()
+			}
 		}
 		return
 	}
@@ -620,6 +649,10 @@ func (p *Peer) evalClusterState() {
 	}
 
 	if p.Info().Role != RolePrimary {
+		if p.Info().Role == RoleUnknown {
+			p.evalInitClusterState()
+			return
+		}
 		panic(fmt.Sprintf("unexpected role %v", p.Info().Role))
 	}
 
@@ -711,11 +744,52 @@ func (p *Peer) evalClusterState() {
 		changes = true
 	}
 
+	if p.refreshPrimaryDownstream(log) {
+		return
+	}
+
 	if !changes && len(newDeposed) == len(p.Info().State.Deposed) {
 		return
 	}
 
 	p.startUpdateAsyncs(newAsync, newDeposed)
+}
+
+// refreshPrimaryDownstream updates the primary's downstream replication target
+// when cluster state names a different sync peer (for example after a rolling
+// restart reuses the same flannel IP but the replacement job has a new
+// appliance-level identity in Meta). Returns true if a reconfigure was
+// triggered.
+func (p *Peer) refreshPrimaryDownstream(log log15.Logger) bool {
+	if p.Info().Role != RolePrimary || p.Info().State.Sync == nil {
+		return false
+	}
+	if peersEqual(p.downstream, p.Info().State.Sync) {
+		return false
+	}
+	log.Info("sync peer changed, refreshing downstream",
+		"fn", "refreshPrimaryDownstream",
+		"old_addr", peerAddr(p.downstream),
+		"new_addr", p.Info().State.Sync.Addr,
+		"old_id", p.peerMetaID(p.downstream),
+		"new_id", p.peerMetaID(p.Info().State.Sync))
+	p.downstream = p.Info().State.Sync
+	p.triggerApplyConfig()
+	return true
+}
+
+func (p *Peer) peerMetaID(inst *discoverd.Instance) string {
+	if inst == nil || inst.Meta == nil {
+		return ""
+	}
+	return inst.Meta[p.idKey]
+}
+
+func peerAddr(inst *discoverd.Instance) string {
+	if inst == nil {
+		return ""
+	}
+	return inst.Addr
 }
 
 func (p *Peer) startInitialSetup() {
@@ -881,7 +955,7 @@ func (p *Peer) assumeAsync(i int) {
 }
 
 func (p *Peer) evalInitClusterState() {
-	if p.Info().State.Primary.Meta[p.idKey] == p.id {
+	if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] == p.id {
 		p.assumePrimary()
 		return
 	}
@@ -898,7 +972,7 @@ func (p *Peer) evalInitClusterState() {
 		p.assumeUnassigned()
 		return
 	}
-	if p.Info().State.Sync.Meta[p.idKey] == p.id {
+	if p.Info().State.Sync != nil && p.Info().State.Sync.Meta[p.idKey] == p.id {
 		p.assumeSync()
 		return
 	}

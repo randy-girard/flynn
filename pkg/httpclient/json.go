@@ -39,9 +39,14 @@ type Client struct {
 	ErrNotFound error
 	URL         string
 	Key         string
-	Host        string
-	HTTP        *http.Client
-	HijackDial  DialFunc
+	// Token, when set, authenticates requests with an Authorization: Bearer
+	// header (a signed AccessToken JWT) instead of HTTP basic auth. It takes
+	// precedence over Key, letting a caller present a short-lived, app-scoped
+	// build token rather than the cluster-wide controller key.
+	Token      string
+	Host       string
+	HTTP       *http.Client
+	HijackDial DialFunc
 }
 
 func ToJSON(v interface{}) (io.Reader, error) {
@@ -74,7 +79,9 @@ func (c *Client) prepareReq(method, rawurl string, header http.Header, in interf
 		header.Set("Content-Type", "application/json")
 	}
 	req.Header = header
-	if c.Key != "" {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	} else if c.Key != "" {
 		req.SetBasicAuth("", c.Key)
 	}
 	if c.Host != "" {
@@ -114,6 +121,10 @@ func (c *Client) rawReq(method, rawurl string, header http.Header, in, out inter
 		return nil, err
 	}
 	if res.StatusCode != 200 {
+		if res.StatusCode == http.StatusNoContent && out == nil {
+			res.Body.Close()
+			return res, nil
+		}
 		defer res.Body.Close()
 		if strings.Contains(res.Header.Get("Content-Type"), "application/json") {
 			var jsonErr httphelper.JSONError
@@ -270,12 +281,23 @@ func (c *Client) StreamWithHeader(method, path string, header http.Header, in, o
 }
 
 func (c *Client) Send(method, path string, in, out interface{}) error {
+	return c.SendWithHeader(method, path, nil, in, out)
+}
+
+func (c *Client) SendWithHeader(method, path string, header http.Header, in, out interface{}) error {
 	h := http.Header{"Accept": []string{"application/json"}}
+	for k, vs := range header {
+		h[k] = vs
+	}
 	res, err := c.RawReq(method, path, h, in, out)
 	if err == nil && out == nil {
 		res.Body.Close()
 	}
 	return err
+}
+
+func (c *Client) PostWithHeader(path string, header http.Header, in, out interface{}) error {
+	return c.SendWithHeader("POST", path, header, in, out)
 }
 
 func (c *Client) Put(path string, in, out interface{}) error {

@@ -10,7 +10,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,12 +17,10 @@ import (
 	cfg "github.com/flynn/flynn/cli/config"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/archive"
 	"github.com/flynn/flynn/pkg/backup"
+	"github.com/flynn/flynn/pkg/dockerimage"
 	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/flynn/pkg/version"
-	tarclient "github.com/flynn/flynn/tarreceive/client"
 	"github.com/flynn/go-docopt"
 )
 
@@ -242,9 +239,10 @@ func runDockerPushLegacy(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	var config struct {
-		Cmd        []string `json:"Cmd"`
-		Entrypoint []string `json:"Entrypoint"`
-		Env        []string `json:"Env"`
+		Cmd          []string               `json:"Cmd"`
+		Entrypoint   []string               `json:"Entrypoint"`
+		Env          []string               `json:"Env"`
+		ExposedPorts map[string]interface{} `json:"ExposedPorts"`
 	}
 	if err := json.NewDecoder(stdout).Decode(&config); err != nil {
 		return err
@@ -270,49 +268,12 @@ func runDockerPushLegacy(args *docopt.Args, client controller.Client) error {
 
 	// create and deploy a release with the image config and created artifact
 	log.Printf("flynn: deploying release using artifact URI %s", artifact.URI)
-	release := &ct.Release{
-		ArtifactIDs: []string{artifact.ID},
-		Processes:   prevRelease.Processes,
-		Env:         prevRelease.Env,
-		Meta:        prevRelease.Meta,
-	}
-
-	proc, ok := release.Processes["app"]
-	if !ok {
-		proc = ct.ProcessType{}
-	}
-	proc.Args = append(config.Entrypoint, config.Cmd...)
-	if len(proc.Ports) == 0 {
-		proc.Service = app.Name + "-web"
-		proc.Ports = []ct.Port{{
-			Port:  8080,
-			Proto: "tcp",
-			Service: &host.Service{
-				Name:   app.Name + "-web",
-				Create: true,
-			},
-		}}
-	}
-	if release.Processes == nil {
-		release.Processes = make(map[string]ct.ProcessType, 1)
-	}
-	release.Processes["app"] = proc
-
-	if len(config.Env) > 0 && release.Env == nil {
-		release.Env = make(map[string]string, len(config.Env))
-	}
-	for _, v := range config.Env {
-		keyVal := strings.SplitN(v, "=", 2)
-		if len(keyVal) != 2 {
-			continue
-		}
-		// only set the key if it doesn't exist so variables set with
-		// `flynn env set` are not overwritten
-		if _, ok := release.Env[keyVal[0]]; !ok {
-			release.Env[keyVal[0]] = keyVal[1]
-		}
-	}
-
+	release := dockerimage.NewAppRelease(app.Name, prevRelease, artifact.ID, dockerimage.BuildResultFromInspect(
+		config.Entrypoint, config.Cmd, config.Env, config.ExposedPorts,
+	), dockerimage.ReleaseOptions{
+		Env:  prevRelease.Env,
+		Meta: prevRelease.Meta,
+	})
 	if release.Meta == nil {
 		release.Meta = make(map[string]string, 1)
 	}
@@ -402,26 +363,6 @@ func dockerSave(tag string, tw *backup.TarWriter, progress backup.ProgressBar) e
 	return err
 }
 
-// DockerManifest is used to read manifest.json from the output of
-// 'docker save'.
-type DockerManifest struct {
-	Config string   `json:"Config"`
-	Layers []string `json:"Layers"`
-}
-
-// DockerConfig is used to read image config from the output of 'docker save'.
-type DockerConfig struct {
-	Config struct {
-		Env        []string
-		Cmd        []string
-		WorkingDir string
-		Entrypoint []string
-	} `json:"config"`
-	Rootfs struct {
-		Diffs []string `json:"diff_ids"`
-	} `json:"rootfs"`
-}
-
 func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 	tag := args.String["<image>"]
 	log.Printf("deploying Docker image: %s", tag)
@@ -469,156 +410,23 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 			defer bar.Finish()
 			src = io.TeeReader(src, bar)
 		}
-		return archive.Unpack(src, tmpDir, false)
+		return dockerimage.UnpackSave(src, tmpDir)
 	}(); err != nil {
 		return fmt.Errorf("error extracting docker save output: %s", err)
 	}
-
-	// read the manifest
-	manifest, err := func() (*DockerManifest, error) {
-		f, err := os.Open(filepath.Join(tmpDir, "manifest.json"))
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		var manifests []*DockerManifest
-		if err := json.NewDecoder(f).Decode(&manifests); err != nil {
-			return nil, err
-		}
-		if len(manifests) != 1 {
-			return nil, fmt.Errorf("expected 1 docker manifest, got %d", len(manifests))
-		}
-		return manifests[0], nil
-	}()
-	if err != nil {
-		return fmt.Errorf("error loading docker manifest: %s", err)
+	if err := cmd.Wait(); err != nil {
+		return err
 	}
 
-	// read the config
-	config, err := func() (*DockerConfig, error) {
-		f, err := os.Open(filepath.Join(tmpDir, manifest.Config))
-		if err != nil {
-			return nil, err
-		}
-		defer f.Close()
-		var config DockerConfig
-		return &config, json.NewDecoder(f).Decode(&config)
-	}()
-	if err != nil {
-		return fmt.Errorf("error loading docker image config: %s", err)
-	}
-
-	// upload each layer
-	layers := make([]*ct.ImageLayer, len(manifest.Layers))
-	for i, path := range manifest.Layers {
-		diffID := config.Rootfs.Diffs[i]
-		p := strings.SplitN(diffID, ":", 2)
-		if len(p) != 2 {
-			return fmt.Errorf("invalid diff ID: %s", diffID)
-		}
-		id := p[1]
-		log.Printf("uploading layer %s", id)
-		layer, err := tarClient.GetLayer(id)
-		if err == tarclient.ErrNotFound {
-			if err := func() (err error) {
-				f, err := os.Open(filepath.Join(tmpDir, path))
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				var src io.Reader = f
-				if term.IsTerminal(os.Stderr.Fd()) {
-					bar := pb.New(0)
-					bar.SetUnits(pb.U_BYTES)
-					bar.ShowBar = true
-					bar.ShowSpeed = true
-					bar.Output = os.Stderr
-					bar.Start()
-					defer bar.Finish()
-					src = io.TeeReader(src, bar)
-				}
-				layer, err = tarClient.CreateLayer(id, src)
-				return
-			}(); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-		layers[i] = layer
-	}
-
-	// generate the image manifest
-	entrypoint := &ct.ImageEntrypoint{
-		WorkingDir: config.Config.WorkingDir,
-		Env:        make(map[string]string, len(config.Config.Env)),
-		Args:       append(config.Config.Entrypoint, config.Config.Cmd...),
-	}
-	for _, env := range config.Config.Env {
-		keyVal := strings.SplitN(env, "=", 2)
-		if len(keyVal) != 2 {
-			continue
-		}
-		val := strings.Replace(keyVal[1], "\t", "\\t", -1)
-		entrypoint.Env[keyVal[0]] = val
-	}
-	image := &ct.ImageManifest{
-		Type:        ct.ImageManifestTypeV1,
-		Entrypoints: map[string]*ct.ImageEntrypoint{"_default": entrypoint},
-		Rootfs: []*ct.ImageRootfs{{
-			Platform: ct.DefaultImagePlatform,
-			Layers:   layers,
-		}},
-	}
-
-	// create the artifact
-	artifact, err := tarClient.CreateArtifact(image)
+	artifact, build, err := dockerimage.PushFromSaveDir(tarClient, tmpDir)
 	if err != nil {
 		return err
 	}
 
-	// create and deploy a release with the image config and created artifact
-	release := &ct.Release{
-		ArtifactIDs: []string{artifact.ID},
-		Processes:   prevRelease.Processes,
-		Env:         prevRelease.Env,
-		Meta:        prevRelease.Meta,
-	}
-	proc, ok := release.Processes["app"]
-	if !ok {
-		proc = ct.ProcessType{}
-	}
-	proc.Args = entrypoint.Args
-	if len(proc.Ports) == 0 {
-		proc.Service = app.Name + "-web"
-		proc.Ports = []ct.Port{{
-			Port:  8080,
-			Proto: "tcp",
-			Service: &host.Service{
-				Name:   app.Name + "-web",
-				Create: true,
-			},
-		}}
-	}
-	if release.Processes == nil {
-		release.Processes = make(map[string]ct.ProcessType, 1)
-	}
-	release.Processes["app"] = proc
-
-	if len(config.Config.Env) > 0 && release.Env == nil {
-		release.Env = make(map[string]string, len(config.Config.Env))
-	}
-	for _, v := range config.Config.Env {
-		keyVal := strings.SplitN(v, "=", 2)
-		if len(keyVal) != 2 {
-			continue
-		}
-		// only set the key if it doesn't exist so variables set with
-		// `flynn env set` are not overwritten
-		if _, ok := release.Env[keyVal[0]]; !ok {
-			release.Env[keyVal[0]] = keyVal[1]
-		}
-	}
+	release := dockerimage.NewAppRelease(app.Name, prevRelease, artifact.ID, build, dockerimage.ReleaseOptions{
+		Env:  prevRelease.Env,
+		Meta: prevRelease.Meta,
+	})
 
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return err

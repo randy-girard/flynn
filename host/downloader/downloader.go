@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -25,12 +26,15 @@ const (
 	retryBackoffFactor  = 2
 )
 
-// binaries maps the asset name in the release to the local binary name
-// The release uses OS/arch suffixed names for host binaries
-var binaries = map[string]string{
-	"flynn-host-linux-amd64": "flynn-host",
-	"flynn-linux-amd64":      "flynn-linux-amd64",
-	"flynn-init-linux-amd64": "flynn-init",
+// linuxBinaries maps release asset names to local binary names for the
+// current GOARCH. Releases must include flynn-host-linux-$GOARCH.gz etc.
+func linuxBinaries() map[string]string {
+	arch := runtime.GOARCH
+	return map[string]string{
+		"flynn-host-linux-" + arch: "flynn-host",
+		"flynn-linux-" + arch:      "flynn-linux-" + arch,
+		"flynn-init-linux-" + arch: "flynn-init",
+	}
 }
 
 var config = []string{
@@ -86,6 +90,7 @@ func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating bin dir: %s", err)
 	}
+	binaries := linuxBinaries()
 	paths := make(map[string]string, len(binaries))
 	for assetName, localName := range binaries {
 		path, err := d.downloadGzippedBinary(assetName, localName, dir)
@@ -97,8 +102,9 @@ func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
 		}
 		paths[localName] = path
 	}
-	// symlink flynn to flynn-linux-amd64
-	if err := symlink("flynn-linux-amd64."+d.version, filepath.Join(dir, "flynn")); err != nil {
+	// symlink flynn to the arch-specific CLI binary
+	flynnCLI := "flynn-linux-" + runtime.GOARCH
+	if err := symlink(flynnCLI+"."+d.version, filepath.Join(dir, "flynn")); err != nil {
 		return nil, err
 	}
 	return paths, nil

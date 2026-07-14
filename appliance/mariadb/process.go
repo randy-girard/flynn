@@ -43,8 +43,11 @@ const (
 	BinName    = "mysqld"
 	ConfigName = "my.cnf"
 
-	checkInterval = 1000 * time.Millisecond
+	checkInterval      = 1000 * time.Millisecond
+	backupFetchTimeout = 30 * time.Minute
 )
+
+var backupHTTPClient = &http.Client{Timeout: backupFetchTimeout}
 
 var (
 	// ErrRunning is returned when starting an already running process.
@@ -85,6 +88,11 @@ type Process struct {
 
 	// cmd is the running system command.
 	cmd *Cmd
+
+	// backupMtx serializes mariabackup runs. Concurrent /backup requests during
+	// a rolling deploy can otherwise leave orphaned mariabackup processes that
+	// block subsequent backups on the same peer.
+	backupMtx sync.Mutex
 
 	// cancelSyncWait cancels the goroutine that is waiting for
 	// the downstream to catch up, if running.
@@ -285,8 +293,39 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 	return nil
 }
 
+// dataDirInitialized reports whether the data directory already contains a
+// MariaDB instance (as opposed to being empty or mid-restore). Rolling deploys
+// stop mysqld before reconfiguring an existing peer; pulling a full backup in
+// that case is unnecessary and can hang when the primary is already serving
+// another backup.
+func (p *Process) dataDirInitialized() bool {
+	for _, name := range []string{"ibdata1", "mysql"} {
+		if _, err := os.Stat(filepath.Join(p.DataDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// killOrphanedBackupProcesses terminates stale mariabackup/mbstream children.
+// Failed or abandoned backup streams can leave these running and block new
+// backups on the same peer (InnoDB refuses concurrent hot backups).
+func killOrphanedBackupProcesses(log log15.Logger) {
+	for _, pattern := range []string{"mariabackup", "mbstream"} {
+		cmd := exec.Command("pkill", "-9", "-f", pattern)
+		if out, err := cmd.CombinedOutput(); err != nil && len(out) > 0 {
+			log.Debug("pkill orphaned backup process", "pattern", pattern, "out", string(out))
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
+}
+
 // Backup returns a reader for streaming a backup in xbstream format.
 func (p *Process) Backup() (io.ReadCloser, error) {
+	p.backupMtx.Lock()
+
+	killOrphanedBackupProcesses(p.Logger)
+
 	r := &backupReadCloser{}
 
 	// Use mariabackup instead of deprecated innobackupex (deprecated since MariaDB 10.3)
@@ -309,9 +348,11 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		p.backupMtx.Unlock()
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		p.backupMtx.Unlock()
 		stdout.Close()
 		return nil, err
 	}
@@ -319,6 +360,7 @@ func (p *Process) Backup() (io.ReadCloser, error) {
 	// Attach to reader wrapper.
 	r.cmd = cmd
 	r.stdout = stdout
+	r.unlock = p.backupMtx.Unlock
 
 	return r, nil
 }
@@ -349,10 +391,26 @@ func (p *Process) extractBackupInfo() (*BackupInfo, error) {
 	return &BackupInfo{LogFile: fields[0], LogPos: fields[1], GTID: fields[2]}, nil
 }
 
+func (p *Process) clearDataDir() error {
+	files, err := ioutil.ReadDir(p.DataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.MkdirAll(p.DataDir, 0700)
+		}
+		return err
+	}
+	for _, file := range files {
+		if err := os.RemoveAll(filepath.Join(p.DataDir, file.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Restore restores the database from an xbstream backup.
 func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
-	if err := p.writeConfig(configData{}); err != nil {
-		return nil, err
+	if err := p.clearDataDir(); err != nil {
+		return nil, fmt.Errorf("error clearing data directory: %w", err)
 	}
 	if err := p.unpackXbstream(r); err != nil {
 		return nil, err
@@ -373,6 +431,10 @@ func (p *Process) Restore(r io.Reader) (*BackupInfo, error) {
 		return nil, err
 	}
 	if err := p.restoreApplyLog(); err != nil {
+		return nil, err
+	}
+	// clearDataDir removes my.cnf before extraction; mariadbd requires it on start.
+	if err := p.writeConfig(configData{ReadOnly: true}); err != nil {
 		return nil, err
 	}
 	return backupInfo, nil
@@ -406,6 +468,189 @@ func (p *Process) restoreApplyLog() error {
 	return nil
 }
 
+func (p *Process) restoreBackupFromUpstream(logger log15.Logger, upstream *discoverd.Instance) (*BackupInfo, error) {
+	killOrphanedBackupProcesses(logger)
+
+	backupURL := fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr))
+	logger.Info("retrieving backup", "url", backupURL)
+	resp, err := backupHTTPClient.Get(backupURL)
+	if err != nil {
+		logger.Error("error connecting to upstream for backup", "err", err)
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Error("error code returned from backup", "status_code", resp.StatusCode)
+		return nil, fmt.Errorf("upstream backup returned status %d", resp.StatusCode)
+	}
+
+	hash := sha512.New()
+	logger.Info("restoring backup")
+	backupInfo, err := p.Restore(io.TeeReader(resp.Body, hash))
+	if err != nil {
+		logger.Error("error restoring backup", "err", err)
+		return nil, err
+	}
+
+	if err := resp.Body.Close(); err != nil {
+		logger.Error("error closing backup body", "err", err)
+		return nil, err
+	}
+
+	chk := hex.EncodeToString(hash.Sum(nil))
+	if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != "" && hdr != chk {
+		logger.Error("invalid backup checksum", "actual", chk, "desired", hdr)
+		return nil, errors.New("invalid backup")
+	}
+	return backupInfo, nil
+}
+
+func (p *Process) configureStandbyReplication(logger log15.Logger, upstream *discoverd.Instance, backupInfo *BackupInfo) error {
+	db, err := p.connectLocal()
+	if err != nil {
+		logger.Error("error acquiring connection", "err", err)
+		return err
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`STOP SLAVE`); err != nil {
+		return err
+	}
+
+	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
+		logger.Error("error installing rpl_semi_sync_slave", "err", err)
+		return err
+	}
+
+	if _, err := db.Exec(`SET GLOBAL rpl_semi_sync_slave_enabled = 1`); err != nil {
+		return err
+	}
+
+	if backupInfo != nil {
+		logger.Info("updating gtid_slave_pos", "gtid", backupInfo.GTID)
+		if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL gtid_slave_pos = "%s";`, backupInfo.GTID)); err != nil {
+			logger.Error("error updating slave gtid")
+			return err
+		}
+	}
+
+	host, port, _ := net.SplitHostPort(upstream.Addr)
+	logger.Info("changing master", "host", host, "port", port)
+	if _, err := db.Exec(fmt.Sprintf("CHANGE MASTER TO MASTER_HOST='%s', MASTER_PORT=%s, MASTER_USER='flynn', MASTER_PASSWORD='%s', MASTER_CONNECT_RETRY=10, MASTER_USE_GTID=current_pos;", host, port, p.Password)); err != nil {
+		logger.Error("error changing master", "host", host, "port", port, "err", err)
+		return err
+	}
+	if _, err := db.Exec(`STOP SLAVE IO_THREAD`); err != nil {
+		logger.Error("error stopping slave io thread", "err", err)
+		return err
+	}
+	if _, err := db.Exec(`START SLAVE IO_THREAD`); err != nil {
+		logger.Error("error starting slave io thread", "err", err)
+		return err
+	}
+
+	logger.Info("starting slave")
+	if _, err := db.Exec(`START SLAVE`); err != nil {
+		return err
+	}
+	return nil
+}
+
+// standbyReplicationHealthy polls SHOW SLAVE STATUS until the IO thread is
+// running or a fatal replication error (e.g. GTID mismatch 1236) is seen.
+func (p *Process) standbyReplicationHealthy() (bool, error) {
+	db, err := p.connectLocal()
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		healthy, fatal, err := checkSlaveStatus(db)
+		if err != nil {
+			return false, err
+		}
+		if healthy {
+			return true, nil
+		}
+		if fatal {
+			return false, nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false, nil
+}
+
+func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
+	rows, err := db.Query(`SHOW SLAVE STATUS`)
+	if err != nil {
+		return false, false, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return false, false, nil
+	}
+	cols, err := rows.Columns()
+	if err != nil {
+		return false, false, err
+	}
+	vals := make([]interface{}, len(cols))
+	ptrs := make([]interface{}, len(cols))
+	for i := range vals {
+		ptrs[i] = &vals[i]
+	}
+	if err := rows.Scan(ptrs...); err != nil {
+		return false, false, err
+	}
+	var ioRunning string
+	var lastIOErrno int64
+	for i, col := range cols {
+		switch col {
+		case "Slave_IO_Running":
+			ioRunning = mysqlStatusString(vals[i])
+		case "Last_IO_Errno":
+			lastIOErrno = mysqlStatusInt64(vals[i])
+		}
+	}
+	if lastIOErrno == 1236 {
+		return false, true, nil
+	}
+	return ioRunning == "Yes", false, nil
+}
+
+func mysqlStatusString(v interface{}) string {
+	switch x := v.(type) {
+	case []byte:
+		return string(x)
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprint(x)
+	}
+}
+
+func mysqlStatusInt64(v interface{}) int64 {
+	switch x := v.(type) {
+	case []byte:
+		n, _ := strconv.ParseInt(string(x), 10, 64)
+		return n
+	case int64:
+		return x
+	case int32:
+		return int64(x)
+	case int:
+		return int64(x)
+	case nil:
+		return 0
+	default:
+		n, _ := strconv.ParseInt(fmt.Sprint(x), 10, 64)
+		return n
+	}
+}
+
 func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error {
 	logger := p.Logger.New("fn", "assumeStandby", "upstream", upstream.Addr)
 	logger.Info("starting up as standby")
@@ -416,6 +661,7 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	}
 
 	var backupInfo *BackupInfo
+	skippedBackup := false
 	if p.running() {
 		if err := p.stop(); err != nil {
 			return err
@@ -425,49 +671,18 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 			return err
 		}
 
-		if err := func() error {
-			logger.Info("retrieving backup")
-			resp, err := http.Get(fmt.Sprintf("http://%s/backup", httpAddr(upstream.Addr)))
+		if p.dataDirInitialized() {
+			logger.Info("data directory already initialized, skipping backup")
+			skippedBackup = true
+		} else {
+			var err error
+			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
 			if err != nil {
-				logger.Error("error connecting to upstream for backup", "err", err)
-				return err
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				logger.Error("error code returned from backup", "status_code", resp.StatusCode)
-				return err
-			}
-
-			hash := sha512.New()
-
-			logger.Info("restoring backup")
-			backupInfo, err = p.Restore(io.TeeReader(resp.Body, hash))
-			if err != nil {
-				logger.Error("error restoring backup", "err", err)
-				return err
-			}
-
-			// Close response and confirm backup from trailer.
-			if err := resp.Body.Close(); err != nil {
-				logger.Error("error closing backup body", "err", err)
-				return err
-			}
-
-			chk := hex.EncodeToString(hash.Sum(nil))
-			logger.Error("verifying backup checksum", "actual", chk)
-			if hdr := resp.Trailer.Get(backupChecksumTrailer); hdr != chk {
-				logger.Error("invalid backup checksum", "actual", chk, "desired", hdr)
-				return errors.New("invalid backup")
-			}
-
-			return nil
-		}(); err != nil {
-			if files, err := ioutil.ReadDir("/data"); err == nil {
-				for _, file := range files {
-					os.RemoveAll(filepath.Join("/data", file.Name()))
+				if clearErr := p.clearDataDir(); clearErr != nil {
+					logger.Error("error clearing data directory after failed restore", "err", clearErr)
 				}
+				return err
 			}
-			return err
 		}
 	}
 
@@ -475,65 +690,37 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		return err
 	}
 
-	if err := func() error {
-		// Connect to local server and set up slave replication.
-		db, err := p.connectLocal()
+	if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
+		return err
+	}
+
+	// A reused data directory from an aborted deploy can contain GTID state
+	// incompatible with the current upstream. Re-seed from upstream when reuse fails.
+	if skippedBackup {
+		healthy, err := p.standbyReplicationHealthy()
 		if err != nil {
-			logger.Error("error acquiring connection", "err", err)
 			return err
 		}
-		defer db.Close()
-
-		// Stop the slave first before changing GTID & MASTER settings.
-		if _, err := db.Exec(`STOP SLAVE`); err != nil {
-			return err
-		}
-
-		// Install semi-sync slave plugin. Ignore error if already installed (1968) or
-		// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
-		if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_slave SONAME 'semisync_slave.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
-			logger.Error("error installing rpl_semi_sync_slave", "err", err)
-			return err
-		}
-
-		// Enable semi-synchronous on slave.
-		if _, err := db.Exec(`SET GLOBAL rpl_semi_sync_slave_enabled = 1`); err != nil {
-			return err
-		}
-
-		// Only update the GTID if we read from a backup.
-		if backupInfo != nil {
-			logger.Info("updating gtid_slave_pos", "gtid", backupInfo.GTID)
-			if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL gtid_slave_pos = "%s";`, backupInfo.GTID)); err != nil {
-				logger.Error("error updating slave gtid")
+		if !healthy {
+			logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+			if err := p.stop(); err != nil {
+				return err
+			}
+			var err error
+			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+			if err != nil {
+				if clearErr := p.clearDataDir(); clearErr != nil {
+					logger.Error("error clearing data directory after failed restore", "err", clearErr)
+				}
+				return err
+			}
+			if err := p.start(); err != nil {
+				return err
+			}
+			if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
 				return err
 			}
 		}
-
-		host, port, _ := net.SplitHostPort(upstream.Addr)
-		logger.Info("changing master", "host", host, "port", port)
-		if _, err := db.Exec(fmt.Sprintf("CHANGE MASTER TO MASTER_HOST='%s', MASTER_PORT=%s, MASTER_USER='flynn', MASTER_PASSWORD='%s', MASTER_CONNECT_RETRY=10, MASTER_USE_GTID=current_pos;", host, port, p.Password)); err != nil {
-			logger.Error("error changing master", "host", host, "port", port, "err", err)
-			return err
-		}
-		if _, err := db.Exec(`STOP SLAVE IO_THREAD`); err != nil {
-			logger.Error("error stopping slave io thread", "err", err)
-			return err
-		}
-		if _, err := db.Exec(`START SLAVE IO_THREAD`); err != nil {
-			logger.Error("error starting slave io thread", "err", err)
-			return err
-		}
-
-		// Start slave.
-		logger.Info("starting slave")
-		if _, err := db.Exec(`START SLAVE`); err != nil {
-			return err
-		}
-
-		return nil
-	}(); err != nil {
-		return err
 	}
 
 	if downstream != nil {
@@ -999,6 +1186,11 @@ func (p *Process) writeConfig(d configData) error {
 	d.Port = p.Port
 	d.DataDir = p.DataDir
 	d.ServerID = p.ServerID
+	d.TmpDir = filepath.Join(p.DataDir, "tmp")
+
+	if err := os.MkdirAll(d.TmpDir, 0700); err != nil {
+		return err
+	}
 
 	f, err := os.Create(p.ConfigPath())
 	if err != nil {
@@ -1013,6 +1205,7 @@ type configData struct {
 	ID       string
 	Port     string
 	DataDir  string
+	TmpDir   string
 	ServerID uint32
 	ReadOnly bool
 }
@@ -1031,6 +1224,7 @@ pid_file     = {{.DataDir}}/mysql.pid
 report_host  = {{.ID}}
 
 datadir             = {{.DataDir}}
+tmpdir              = {{.TmpDir}}
 log_bin             = {{.DataDir}}/mariadb-bin
 log_bin_index       = {{.DataDir}}/mariadb-bin.index
 log_slave_updates   = 1
@@ -1054,24 +1248,40 @@ type backupReadCloser struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr bytes.Buffer
+	unlock func()
+
+	// closeOnce ensures the close side effects (waiting on the command,
+	// releasing backupMtx, closing stdout) run exactly once. handleGetBackup
+	// calls Close more than once, and calling unlock twice would unlock an
+	// already-unlocked sync.Mutex, which fatally crashes the process.
+	closeOnce sync.Once
+	closeErr  error
 }
 
-// Close waits for the backup command to finish and verifies that the backup completed successfully.
+// Close waits for the backup command to finish and verifies that the backup
+// completed successfully. It is safe to call multiple times; subsequent calls
+// return the result of the first.
 func (r *backupReadCloser) Close() error {
-	defer r.stdout.Close()
+	r.closeOnce.Do(func() {
+		defer r.stdout.Close()
+		if r.unlock != nil {
+			defer r.unlock()
+		}
 
-	if err := r.cmd.Wait(); err != nil {
-		return fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
-	}
+		if err := r.cmd.Wait(); err != nil {
+			r.closeErr = fmt.Errorf("mariabackup command failed: %w, stderr: %s", err, r.stderr.String())
+			return
+		}
 
-	// Verify that mariabackup prints "completed OK!" at the end of STDERR.
-	stderrStr := strings.TrimSpace(r.stderr.String())
-	if !strings.HasSuffix(stderrStr, "completed OK!") {
-		r.stderr.WriteTo(os.Stderr)
-		return fmt.Errorf("mariabackup did not complete ok, stderr: %s", stderrStr)
-	}
-
-	return nil
+		// Verify that mariabackup prints "completed OK!" at the end of STDERR.
+		stderrStr := strings.TrimSpace(r.stderr.String())
+		if !strings.HasSuffix(stderrStr, "completed OK!") {
+			r.stderr.WriteTo(os.Stderr)
+			r.closeErr = fmt.Errorf("mariabackup did not complete ok, stderr: %s", stderrStr)
+			return
+		}
+	})
+	return r.closeErr
 }
 
 // Read reads n bytes of backup data into p.

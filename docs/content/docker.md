@@ -6,10 +6,16 @@ toc_min_level: 2
 
 # Docker
 
-Flynn has a built-in `tarreceive` app which imports pushed Docker images into a
-Flynn cluster.
+Flynn can run applications from Docker images in two ways:
 
-## Push an image
+- **`flynn docker push`** — push a pre-built image from your machine
+- **`git push` with the container stack** — build from a `Dockerfile` on the
+  cluster (see [Container stack](#container-stack))
+
+Both paths import images through the built-in `tarreceive` service and share the
+same image import and release logic in the cluster.
+
+## Push a pre-built image
 
 Run the following to push a Docker image to `tarreceive` and deploy it:
 
@@ -21,13 +27,37 @@ where `APPNAME` is the name of an existing Flynn app and `IMAGE` is a reference
 to a Docker image which is available to the local `docker` CLI (in other words,
 an image which appears in the output of `docker images`).
 
+## Container stack
+
+To build from a `Dockerfile` on the server instead of using buildpacks, switch
+the app to the container stack and deploy with `git push`:
+
+```
+$ flynn stack set container
+$ git push flynn master
+```
+
+The cluster builds the image with [BuildKit](https://github.com/moby/buildkit)
+and imports it using the same pipeline as `flynn docker push`.
+
+Switch back to buildpack deploys at any time:
+
+```
+$ flynn stack set heroku-24
+```
+
+Optional configuration:
+
+- `flynn env set DOCKERFILE=path/to/Dockerfile` — use a non-default Dockerfile
+- `flynn limit set dockerbuilder memory=4GB` — raise build memory for large images
+
 ## Routing
 
 Flynn automatically registers the HTTP route `http://APPNAME.$CLUSTER_DOMAIN`
 for the app. In order to receive HTTP traffic for this route, the app needs to
 listen on the port which is set in the `PORT` environment variable.
 
-## Example
+## Example (pre-built image)
 
 Here is an example of deploying the [Flynn Node.js example app](https://github.com/flynn-examples/nodejs-flynn-example)
 using `flynn docker push`.
@@ -121,4 +151,19 @@ The app can be reached externally via the automatically registered route
 ```
 $ curl http://nodejs.1.localflynn.com
 Hello from Flynn on port 8080 from container 4a7319af-af2c-4fe1-9a9a-2dd4d5bd3765
+```
+
+## Example (container stack)
+
+With a `Dockerfile` committed in your repository:
+
+```
+$ flynn create myapp
+$ flynn stack set container
+$ git push flynn master
+-----> Building myapp from Dockerfile...
+-----> Uploading image...
+-----> Creating release...
+=====> Application deployed
+$ flynn scale app=1
 ```

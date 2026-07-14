@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
@@ -54,6 +55,13 @@ var httpClient = &http.Client{
 	Transport: httphelper.RetryClient.Transport,
 }
 
+// stopHTTPClient uses a longer timeout than status polling because graceful
+// database shutdown (mysqld/postgres) can take several minutes.
+var stopHTTPClient = &http.Client{
+	Timeout:   10 * time.Minute,
+	Transport: httphelper.RetryClient.Transport,
+}
+
 func NewClient(addr string) *Client {
 	return NewClientWithHTTP(addr, httpClient)
 }
@@ -77,7 +85,25 @@ func (c *Client) Status() (*Status, error) {
 }
 
 func (c *Client) Stop() error {
-	return c.c.Post("/stop", nil, nil)
+	stopClient := &httpclient.Client{
+		URL:  c.c.URL,
+		Key:  c.c.Key,
+		HTTP: stopHTTPClient,
+	}
+	return stopClient.Post("/stop", nil, nil)
+}
+
+// IsRecoverableStopError reports whether a failed Stop request may still have
+// started peer shutdown and the caller should wait for discoverd to report the
+// instance as down rather than failing the deploy immediately.
+func IsRecoverableStopError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "Client.Timeout exceeded") ||
+		strings.Contains(msg, "timeout awaiting headers")
 }
 
 func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, timeout time.Duration) error {

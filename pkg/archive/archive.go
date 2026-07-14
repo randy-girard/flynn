@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -28,7 +29,12 @@ func createTarFile(path, extractDir string, hdr *tar.Header, reader io.Reader, l
 		// In that case we just want to merge the two
 		if fi, err := os.Lstat(path); !(err == nil && fi.IsDir()) {
 			if err := os.Mkdir(path, hdrInfo.Mode()); err != nil {
-				return err
+				if os.IsPermission(err) {
+					err = os.Mkdir(path, 0755)
+				}
+				if err != nil {
+					return err
+				}
 			}
 		}
 
@@ -48,10 +54,22 @@ func createTarFile(path, extractDir string, hdr *tar.Header, reader io.Reader, l
 		if err := handleTarTypeBlockCharFifo(hdr, path); err != nil {
 			return err
 		}
+		if _, err := os.Lstat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
 
 	case tar.TypeFifo:
 		// Handle this is an OS-specific way
 		if err := handleTarTypeBlockCharFifo(hdr, path); err != nil {
+			return err
+		}
+		if _, err := os.Lstat(path); err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
 			return err
 		}
 
@@ -86,9 +104,10 @@ func createTarFile(path, extractDir string, hdr *tar.Header, reader io.Reader, l
 		return fmt.Errorf("unhandled tar header type %d", hdr.Typeflag)
 	}
 
-	// lchown is not supported on Windows.
+	// lchown is not supported on Windows. On macOS and in user namespaces,
+	// changing ownership to the values in the layer tar may not be permitted.
 	if lchown && runtime.GOOS != "windows" {
-		if err := os.Lchown(path, hdr.Uid, hdr.Gid); err != nil {
+		if err := os.Lchown(path, hdr.Uid, hdr.Gid); err != nil && !os.IsPermission(err) {
 			return err
 		}
 	}
@@ -126,12 +145,12 @@ func createTarFile(path, extractDir string, hdr *tar.Header, reader io.Reader, l
 	// Chtimes doesn't support a NOFOLLOW flag atm
 	if hdr.Typeflag == tar.TypeLink {
 		if fi, err := os.Lstat(hdr.Linkname); err == nil && (fi.Mode()&os.ModeSymlink == 0) {
-			if err := os.Chtimes(path, aTime, hdr.ModTime); err != nil {
+			if err := chtimesIgnorePerm(path, aTime, hdr.ModTime); err != nil {
 				return err
 			}
 		}
 	} else if hdr.Typeflag != tar.TypeSymlink {
-		if err := os.Chtimes(path, aTime, hdr.ModTime); err != nil {
+		if err := chtimesIgnorePerm(path, aTime, hdr.ModTime); err != nil {
 			return err
 		}
 	} else {
@@ -144,11 +163,26 @@ func createTarFile(path, extractDir string, hdr *tar.Header, reader io.Reader, l
 }
 
 func Unpack(decompressedArchive io.Reader, dest string, lchown bool) error {
+	return unpack(decompressedArchive, dest, lchown, overlayWhiteoutConverter{})
+}
+
+// UnpackFlat extracts a Docker layer tar into dest, merging it with any
+// existing files. Whiteout entries delete files from dest instead of creating
+// overlay character devices (which requires privileges unavailable on macOS).
+func UnpackFlat(decompressedArchive io.Reader, dest string, lchown bool) error {
+	return unpack(decompressedArchive, dest, lchown, flatWhiteoutConverter{})
+}
+
+func unpack(decompressedArchive io.Reader, dest string, lchown bool, whiteoutConverter whiteoutConverter) error {
+	dest = filepath.Clean(dest)
+	if resolved, err := filepath.EvalSymlinks(dest); err == nil {
+		dest = resolved
+	}
+
 	tr := tar.NewReader(decompressedArchive)
 	trBuf := bufio.NewReaderSize(nil, 32*1024)
 
 	var dirs []*tar.Header
-	whiteoutConverter := overlayWhiteoutConverter{}
 
 	// Iterate through the files in the archive.
 	for {
@@ -229,9 +263,16 @@ func Unpack(decompressedArchive io.Reader, dest string, lchown bool) error {
 	for _, hdr := range dirs {
 		path := filepath.Join(dest, hdr.Name)
 
-		if err := os.Chtimes(path, hdr.AccessTime, hdr.ModTime); err != nil {
+		if err := chtimesIgnorePerm(path, hdr.AccessTime, hdr.ModTime); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func chtimesIgnorePerm(path string, atime, mtime time.Time) error {
+	if err := os.Chtimes(path, atime, mtime); err != nil && !os.IsPermission(err) {
+		return err
 	}
 	return nil
 }

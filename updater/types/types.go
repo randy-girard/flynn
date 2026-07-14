@@ -36,6 +36,7 @@ var SystemApps = []SystemApp{
 	{Name: "status"},
 	{Name: "slugbuilder", ImageOnly: true},
 	{Name: "slugrunner", ImageOnly: true},
+	{Name: "dockerbuilder", ImageOnly: true},
 	{
 		Name:     "mariadb",
 		Optional: true,
@@ -45,4 +46,6 @@ var SystemApps = []SystemApp{
 		Optional: true,
 	},
 	{Name: "redis"},
+	{Name: "kafka", Optional: true},
+	{Name: "clickhouse", Optional: true},
 }

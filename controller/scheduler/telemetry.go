@@ -57,7 +57,7 @@ func (s *Scheduler) SendTelemetry() {
 	var formations int
 	apps := make(map[string]struct{})
 	dbs := make(map[string]map[string]struct{})
-	providers := []string{"postgres", "mongodb", "mysql", "redis"}
+	providers := []string{"postgres", "mongodb", "mysql", "redis", "kafka", "clickhouse"}
 	for _, p := range providers {
 		dbs[p] = make(map[string]struct{})
 	}
@@ -93,6 +93,17 @@ func (s *Scheduler) SendTelemetry() {
 				}
 			case "redis":
 				if db := f.Release.Env["FLYNN_REDIS"]; db != "" {
+					dbs[p][db] = struct{}{}
+				}
+			case "kafka":
+				if db := f.Release.Env["FLYNN_KAFKA"]; db != "" {
+					dbs[p][db] = struct{}{}
+				}
+			case "clickhouse":
+				if _, ok := f.Release.Env["FLYNN_CLICKHOUSE"]; !ok {
+					continue
+				}
+				if db := f.Release.Env["CLICKHOUSE_DATABASE"]; db != "" {
 					dbs[p][db] = struct{}{}
 				}
 			}

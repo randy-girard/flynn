@@ -31,6 +31,7 @@ type Cmd struct {
 
 	Volumes    []*ct.VolumeReq
 	Mounts     []host.Mount
+	Secrets    []host.ContainerSecret
 	Resources  resource.Resources
 	WorkingDir string
 
@@ -207,6 +208,7 @@ func (c *Cmd) Start() error {
 				HostNetwork:      c.HostNetwork,
 				HostPIDNamespace: c.HostPIDNamespace,
 				Mounts:           c.Mounts,
+				Secrets:          c.Secrets,
 				WorkingDir:       c.WorkingDir,
 			},
 			Resources: c.Resources,

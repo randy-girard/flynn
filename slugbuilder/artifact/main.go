@@ -47,17 +47,35 @@ func main() {
 	}
 }
 
-func run(dir string, uid, gid int) error {
+// newControllerClient builds a controller client for create-artifact. It
+// prefers a minted, app-scoped build token delivered via a root-only secret
+// mount (authenticated with a bearer token), and falls back to the legacy
+// cluster-wide CONTROLLER_KEY for clusters not yet re-bootstrapped with a
+// signing key. Neither credential is exposed as an environment variable to
+// buildpack code (SEC-003).
+func newControllerClient() (controller.Client, error) {
+	if token := readSecret("/run/secrets/controller_token"); token != "" {
+		return controller.NewClientWithToken("", token)
+	}
 	controllerKey := os.Getenv("CONTROLLER_KEY")
 	if controllerKey == "" {
-		// Fall back to reading from a root-only secrets file (SEC-003:
-		// the key is no longer exposed as an environment variable to
-		// prevent buildpack code from accessing it).
-		if data, err := ioutil.ReadFile("/run/secrets/controller_key"); err == nil {
-			controllerKey = strings.TrimSpace(string(data))
-		}
+		controllerKey = readSecret("/run/secrets/controller_key")
 	}
-	client, err := controller.NewClient("", controllerKey)
+	return controller.NewClient("", controllerKey)
+}
+
+// readSecret returns the trimmed contents of a secret file, or "" if it is
+// missing or unreadable.
+func readSecret(path string) string {
+	data, err := ioutil.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func run(dir string, uid, gid int) error {
+	client, err := newControllerClient()
 	if err != nil {
 		return err
 	}

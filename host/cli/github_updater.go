@@ -14,14 +14,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/downloader"
+	"github.com/flynn/flynn/host/cleanup"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
@@ -30,6 +33,7 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/imageenv"
 	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
@@ -73,6 +77,23 @@ func clusterHostCount() (int, error) {
 		return 0, err
 	}
 	return len(hosts), nil
+}
+
+// linuxHostBinaryFiles returns tarball/GitHub asset names for flynn-host,
+// flynn-init, and the arch-specific flynn CLI.
+func linuxHostBinaryFiles() []struct {
+	name     string
+	destName string
+} {
+	arch := runtime.GOARCH
+	return []struct {
+		name     string
+		destName string
+	}{
+		{"flynn-host-linux-" + arch + ".gz", "flynn-host"},
+		{"flynn-init-linux-" + arch + ".gz", "flynn-init"},
+		{"flynn-linux-" + arch + ".gz", "flynn-linux-" + arch},
+	}
 }
 
 // runGitHubUpdate performs an update using GitHub Releases
@@ -170,19 +191,22 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			return err
 		}
 
-		// Download and install binaries
-		binaries := []struct {
-			name     string
-			destName string
-		}{
-			{"flynn-host-linux-amd64.gz", "flynn-host"},
-			{"flynn-init-linux-amd64.gz", "flynn-init"},
-		}
+		// Download and install binaries. Install flynn-host first so a
+		// re-exec can pick up the new updater before touching other binaries.
+		binaries := linuxHostBinaryFiles()
 
 		for _, bin := range binaries {
 			if err := downloadAndInstallBinary(client, repo, release.TagName, bin.name, bin.destName, tmpDir, binDir, checksums, log); err != nil {
 				return err
 			}
+			if bin.destName == "flynn-host" {
+				if err := reexecUpdateBinary(binDir, release.TagName, os.Args, log); err != nil {
+					return err
+				}
+			}
+		}
+		if err := linkFlynnCLI(binDir, release.TagName, log); err != nil {
+			return err
 		}
 
 		// Update install-source.json
@@ -814,9 +838,8 @@ func downloadAndInstallBinary(client *ghrelease.Client, repo, version, assetName
 	}
 	log.Info("checksum verified", "name", assetName)
 
-	// Decompress and install
-	destPath := filepath.Join(binDir, destName)
-	if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+	// Decompress and install to a versioned file with a symlink
+	if _, err := installVersionedBinary(gzPath, binDir, destName, version, log); err != nil {
 		return err
 	}
 
@@ -843,7 +866,132 @@ func verifyChecksum(path, expected string) error {
 	return nil
 }
 
-// decompressAndInstall decompresses a gzipped file and installs it atomically
+// installVersionedBinary decompresses a gzipped binary into dir/localName.version
+// and updates the symlink at dir/localName. Versioned files avoid "text file
+// busy" when replacing binaries that are currently executing.
+func installVersionedBinary(gzPath, dir, localName, version string, log log15.Logger) (string, error) {
+	destPath := filepath.Join(dir, localName+"."+version)
+	log.Info("installing binary", "dest", destPath)
+
+	src, err := os.Open(gzPath)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+
+	gz, err := gzip.NewReader(src)
+	if err != nil {
+		return "", err
+	}
+	defer gz.Close()
+
+	destTmp, err := os.CreateTemp(dir, localName+"."+version+".tmp.*")
+	if err != nil {
+		return "", err
+	}
+	destTmpPath := destTmp.Name()
+
+	if _, err := io.Copy(destTmp, gz); err != nil {
+		destTmp.Close()
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := destTmp.Close(); err != nil {
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := os.Chmod(destTmpPath, 0755); err != nil {
+		os.Remove(destTmpPath)
+		return "", err
+	}
+	if err := os.Rename(destTmpPath, destPath); err != nil {
+		os.Remove(destTmpPath)
+		return "", fmt.Errorf("error renaming temp file to %s: %w", destPath, err)
+	}
+	if err := updateBinarySymlink(dir, localName, filepath.Base(destPath)); err != nil {
+		return "", err
+	}
+	return destPath, nil
+}
+
+// linkFlynnCLI points the flynn symlink at the versioned arch-specific CLI binary.
+func linkFlynnCLI(dir, version string, log log15.Logger) error {
+	flynnCLI := "flynn-linux-" + runtime.GOARCH
+	target := flynnCLI + "." + version
+	if _, err := os.Stat(filepath.Join(dir, target)); err != nil {
+		return fmt.Errorf("cli binary %s not installed: %w", target, err)
+	}
+	log.Info("linking flynn CLI", "target", target)
+	return updateBinarySymlink(dir, "flynn", target)
+}
+
+func updateBinarySymlink(dir, linkName, target string) error {
+	link := filepath.Join(dir, linkName)
+	os.Remove(link)
+	return os.Symlink(target, link)
+}
+
+// bootstrapUpdateBinary installs flynn-host from an extracted tarball and
+// re-execs the update with the new binary when the running process is still
+// the old flynn-host. Remote nodes receive binaries via PullBinaries, but the
+// coordinator must bootstrap itself before local install logic runs.
+func bootstrapUpdateBinary(contentDir, version, binDir string, args []string, log log15.Logger) error {
+	if os.Getenv(updateReexecEnv) == version {
+		return nil
+	}
+	gzPath := filepath.Join(contentDir, "flynn-host-linux-"+runtime.GOARCH+".gz")
+	if _, err := os.Stat(gzPath); err != nil {
+		return fmt.Errorf("flynn-host binary missing from update: %w", err)
+	}
+	if _, err := installVersionedBinary(gzPath, binDir, "flynn-host", version, log); err != nil {
+		return err
+	}
+	return reexecUpdateBinary(binDir, version, args, log)
+}
+
+func reexecUpdateBinary(binDir, version string, args []string, log log15.Logger) error {
+	if os.Getenv(updateReexecEnv) == version {
+		return nil
+	}
+	newBin := filepath.Join(binDir, "flynn-host")
+	current, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	current, err = filepath.EvalSymlinks(current)
+	if err != nil {
+		return nil
+	}
+	newPath, err := filepath.EvalSymlinks(newBin)
+	if err != nil {
+		newPath = newBin
+	}
+	if current == newPath {
+		return nil
+	}
+	log.Info("re-executing update with new flynn-host binary", "version", version)
+	env := append(os.Environ(), updateReexecEnv+"="+version)
+	return syscall.Exec(newBin, args, env)
+}
+
+func ensureSystemDeployTimeout(client controller.Client, app *ct.App, log log15.Logger) {
+	if !app.System() {
+		return
+	}
+	minSec := int32(minSystemDeployTimeout / time.Second)
+	if app.DeployTimeout >= minSec {
+		return
+	}
+	app.DeployTimeout = minSec
+	if err := client.UpdateApp(app); err != nil {
+		log.Warn("failed to raise deploy timeout for system app", "err", err)
+		return
+	}
+	log.Info("raised deploy timeout for system app", "timeout_sec", app.DeployTimeout)
+}
+
+// decompressAndInstall decompresses a gzipped file and installs it atomically.
+// Prefer installVersionedBinary for executables that may be running.
 func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 	log.Info("installing binary", "dest", destPath)
 
@@ -877,6 +1025,63 @@ func decompressAndInstall(gzPath, destPath string, log log15.Logger) error {
 }
 
 const deployTimeout = 30 * time.Minute
+
+const imagePullCleanupTimeout = 5 * time.Minute
+
+// prepareHostsForImagePull frees orphaned image material and verifies each host
+// has enough disk space before downloading update layers.
+func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
+	log.Info("cleaning orphaned image data before image pull")
+	var wg sync.WaitGroup
+	errChan := make(chan error, len(hosts))
+	for _, host := range hosts {
+		wg.Add(1)
+		go func(h *cluster.Host) {
+			defer wg.Done()
+			hostLog := log.New("host", h.ID())
+			done := make(chan error, 1)
+			go func() { done <- h.CleanupImageData() }()
+			select {
+			case err := <-done:
+				if err != nil {
+					hostLog.Warn("image data cleanup failed", "err", err)
+					errChan <- fmt.Errorf("cleanup on host %s: %w", h.ID(), err)
+				}
+			case <-time.After(imagePullCleanupTimeout):
+				hostLog.Warn("image data cleanup timed out")
+				errChan <- fmt.Errorf("cleanup timed out on host %s", h.ID())
+			}
+		}(host)
+	}
+	wg.Wait()
+	close(errChan)
+	for err := range errChan {
+		log.Warn("continuing after cleanup issue", "err", err)
+	}
+
+	for _, h := range hosts {
+		stats, err := h.GetStats()
+		if err != nil {
+			log.Warn("could not check disk space", "host", h.ID(), "err", err)
+			continue
+		}
+		free := stats.DiskFreeBytes
+		hostLog := log.New("host", h.ID())
+		hostLog.Info("filesystem free space", "free_gb", free>>30)
+		if free < cleanup.MinFreeBeforeImagePull {
+			return fmt.Errorf("host %s has insufficient disk space for image pull (%d GiB free, need at least %d GiB): free space under %s or run `flynn-host fix`",
+				h.ID(), free>>30, cleanup.MinFreeBeforeImagePull>>30, cleanup.LayerCacheDir)
+		}
+	}
+	return nil
+}
+
+// minSystemDeployTimeout is the minimum scale/deploy window for system apps
+// during cluster updates. The default app deploy timeout (120s) is too short
+// after a rolling host restart while the scheduler is still placing jobs.
+const minSystemDeployTimeout = 10 * time.Minute
+
+const updateReexecEnv = "FLYNN_UPDATE_REEXEC"
 
 // updateImages downloads the images manifest, triggers image-layer pulls
 // on every cluster host in parallel, then deploys system apps via the
@@ -932,9 +1137,14 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 	}
 	log.Info("found cluster hosts", "num_hosts", len(hosts))
 
+	if err := prepareHostsForImagePull(hosts, log); err != nil {
+		return err
+	}
+
 	// Trigger image pull on all hosts in parallel
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(hosts))
+	doneHosts := make(chan string, len(hosts))
 
 	for _, host := range hosts {
 		wg.Add(1)
@@ -988,6 +1198,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 				lastErr = nil
 				hostLog.Info("finished image pull on host")
+				doneHosts <- h.ID()
 				break
 			}
 
@@ -997,9 +1208,46 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		}(host)
 	}
 
+	// Log progress while waiting for slow hosts (large layer imports can take
+	// many minutes with no per-layer output when layers are cached).
+	pullDone := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(pullDone)
+	}()
+	go func() {
+		pending := make(map[string]struct{}, len(hosts))
+		for _, h := range hosts {
+			pending[h.ID()] = struct{}{}
+		}
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case id, ok := <-doneHosts:
+				if !ok {
+					return
+				}
+				delete(pending, id)
+			case <-pullDone:
+				return
+			case <-ticker.C:
+				if len(pending) == 0 {
+					continue
+				}
+				ids := make([]string, 0, len(pending))
+				for id := range pending {
+					ids = append(ids, id)
+				}
+				log.Info("waiting for image pull to finish", "pending_hosts", ids)
+			}
+		}
+	}()
+
 	// Wait for all hosts to finish
 	wg.Wait()
 	close(errChan)
+	close(doneHosts)
 
 	// Check for any errors
 	for err := range errChan {
@@ -1069,6 +1317,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 			continue
 		}
 		if _, ok := images[app.Name]; !ok {
+			if app.Optional && updaterdeploy.IsOptionalResourceApp(app.Name) {
+				log.Info("skipping optional resource app without image", "name", app.Name)
+				continue
+			}
 			err := fmt.Errorf("missing image: %s", app.Name)
 			log.Error(err.Error())
 			return err
@@ -1083,7 +1335,18 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 	// This must happen BEFORE creating image artifacts because the
 	// controller's CreateArtifact depends on blobstore, which depends
 	// on postgres being fully healthy (with asyncs).
+	if hosts, err := clusterClient.Hosts(); err != nil {
+		log.Warn("could not list hosts for volume repair", "err", err)
+	} else if err := updaterdeploy.RepairStaleVolumes(client, hosts, log); err != nil {
+		log.Warn("error repairing stale volumes", "err", err)
+	}
 	repairSireniaClusters(log)
+	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
+		log.Warn("error repairing orphan sirenia formations", "err", err)
+	}
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+		log.Warn("error repairing sirenia cluster quorum", "err", err)
+	}
 
 	// Create image artifacts for common images, with retries since
 	// blobstore may still be stabilizing after the sirenia repair.
@@ -1115,6 +1378,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		log.Error(err.Error())
 		return err
 	}
+	dockerBuilder := images["dockerbuilder"]
+	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
+		log.Error(err.Error())
+		return err
+	}
 
 	// Deploy system apps in order
 	log.Info("deploying system apps")
@@ -1136,8 +1404,20 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		app, err := client.GetApp(appInfo.Name)
 		if err == controller.ErrNotFound && appInfo.Optional {
-			appLog.Info("skipped deploy of system app (optional app not present)")
-			continue
+			if updaterdeploy.IsOptionalResourceApp(appInfo.Name) {
+				if err := updaterdeploy.EnsureOptionalResourceApp(client, appInfo.Name, images[appInfo.Name], appLog); err != nil {
+					appLog.Error("error deploying missing optional resource app", "err", err)
+					return err
+				}
+				app, err = client.GetApp(appInfo.Name)
+				if err != nil {
+					appLog.Error("error getting app after optional resource deploy", "err", err)
+					return err
+				}
+			} else {
+				appLog.Info("skipped deploy of system app (optional app not present)")
+				continue
+			}
 		} else if err != nil {
 			appLog.Error("error getting app", "err", err)
 			return err
@@ -1145,7 +1425,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		var deployErr error
 		for attempt := 1; ; attempt++ {
-			deployErr = deployApp(client, app, images[appInfo.Name], appInfo.UpdateRelease, force, appLog)
+			deployErr = deployApp(client, app, images[appInfo.Name], images, appInfo.UpdateRelease, force, appLog)
 			if deployErr == nil {
 				break
 			}
@@ -1156,10 +1436,12 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 			}
 			// Sirenia-based apps plus transient discoverd failures (e.g.
 			// leader.postgres.discoverd NXDOMAIN immediately after postgres
-			// rollout) settle within a few retries.
+			// rollout) settle within a few retries. Scale timeouts after a
+			// rolling host restart are retried for the same reason.
 			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
-			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
-				appLog.Warn("discovery or sirenia cluster not settled, retrying deploy",
+			if (updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) ||
+				updaterdeploy.ShouldRetryAfterScaleTimeout(deployErr)) && attempt < maxUnsettled {
+				appLog.Warn("deploy not settled, retrying",
 					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
 				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
 				continue
@@ -1187,7 +1469,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
-			if err := deployApp(client, app, redisImage, nil, force, appLog); err != nil {
+			if err := deployApp(client, app, redisImage, images, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
 					continue
@@ -1203,7 +1485,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 		}
 
 		appLog.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, nil, force, appLog); err != nil {
+		if err := deployApp(client, app, slugRunner, images, nil, force, appLog); err != nil {
 			if e, ok := err.(errDeploySkipped); ok {
 				appLog.Info("skipped deploy of app", "reason", e.reason)
 				continue
@@ -1225,7 +1507,9 @@ func (e errDeploySkipped) Error() string {
 	return e.reason
 }
 
-func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
+func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images map[string]*ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
+	ensureSystemDeployTimeout(client, app, log)
+
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		log.Error("error getting release", "err", err)
@@ -1245,6 +1529,9 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
+	if imageenv.Update(release.Env, imageenvIDs(images)) {
+		skipDeploy = false
+	}
 	skip, forceConfigMigration := shouldSkipUnchangedDeploy(skipDeploy, force, release, updateFn)
 	if skip {
 		return errDeploySkipped{"app is already using latest images"}
@@ -1281,6 +1568,32 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 
 func decodeJSON(r io.Reader, v interface{}) error {
 	return jsonDecoder(r).Decode(v)
+}
+
+func imageenvIDs(images map[string]*ct.Artifact) imageenv.IDs {
+	ids := imageenv.IDs{}
+	if images == nil {
+		return ids
+	}
+	if a := images["redis"]; a != nil {
+		ids.Redis = a.ID
+	}
+	if a := images["slugbuilder"]; a != nil {
+		ids.SlugBuilder = a.ID
+	}
+	if a := images["slugrunner"]; a != nil {
+		ids.SlugRunner = a.ID
+	}
+	if a := images["dockerbuilder"]; a != nil {
+		ids.DockerBuilder = a.ID
+	}
+	if a := images["kafka"]; a != nil {
+		ids.Kafka = a.ID
+	}
+	if a := images["clickhouse"]; a != nil {
+		ids.ClickHouse = a.ID
+	}
+	return ids
 }
 
 func jsonDecoder(r io.Reader) *jsonDecoderWrapper {
@@ -1328,6 +1641,9 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	if err != nil {
 		return fmt.Errorf("failed to create temp directory: %w", err)
 	}
+	if err := cleanup.RemoveStaleTarballExtractDirs(extractDir); err != nil {
+		log.Warn("failed to remove stale tarball extract dirs", "err", err)
+	}
 	defer os.RemoveAll(extractDir)
 
 	log.Info("extracting tarball", "dest", extractDir)
@@ -1337,16 +1653,12 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	}
 	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
 
-	rolloutCluster := allNodes
-	if !rolloutCluster && !skipImages {
-		if n, err := clusterHostCount(); err == nil && n <= 1 {
-			rolloutCluster = true
-			log.Info("single-node cluster: rolling out images without --all-nodes")
-		}
-	}
-
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
+		if err := bootstrapUpdateBinary(contentDir, tarballVersion, binDir, os.Args, log); err != nil {
+			return err
+		}
+
 		// Parse checksums from the tarball contents
 		checksumPath := filepath.Join(contentDir, "checksums.sha512")
 		checksums, err := parseChecksums(checksumPath)
@@ -1356,34 +1668,30 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		}
 
 		// Install binaries from extracted files
-		binaries := []struct {
-			gzName   string
-			destName string
-		}{
-			{"flynn-host-linux-amd64.gz", "flynn-host"},
-			{"flynn-init-linux-amd64.gz", "flynn-init"},
-		}
+		binaries := linuxHostBinaryFiles()
 
 		for _, bin := range binaries {
-			gzPath := filepath.Join(contentDir, bin.gzName)
+			gzPath := filepath.Join(contentDir, bin.name)
 			if _, err := os.Stat(gzPath); err != nil {
-				return fmt.Errorf("binary %s not found in tarball: %w", bin.gzName, err)
+				return fmt.Errorf("binary %s not found in tarball: %w", bin.name, err)
 			}
 
 			// Verify checksum if available
 			if checksums != nil {
-				if expected, ok := checksums[bin.gzName]; ok {
+				if expected, ok := checksums[bin.name]; ok {
 					if err := verifyChecksum(gzPath, expected); err != nil {
-						return fmt.Errorf("checksum verification failed for %s: %w", bin.gzName, err)
+						return fmt.Errorf("checksum verification failed for %s: %w", bin.name, err)
 					}
-					log.Info("checksum verified", "name", bin.gzName)
+					log.Info("checksum verified", "name", bin.name)
 				}
 			}
 
-			destPath := filepath.Join(binDir, bin.destName)
-			if err := decompressAndInstall(gzPath, destPath, log); err != nil {
+			if _, err := installVersionedBinary(gzPath, binDir, bin.destName, tarballVersion, log); err != nil {
 				return fmt.Errorf("failed to install %s: %w", bin.destName, err)
 			}
+		}
+		if err := linkFlynnCLI(binDir, tarballVersion, log); err != nil {
+			return err
 		}
 
 		log.Info("binaries installed", "version", tarballVersion)
@@ -1406,6 +1714,14 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		if !allNodes {
 			log.Info("skipping remote host binary updates (--all-nodes not set)")
 			fmt.Println("Other cluster hosts were not updated. Run the same tarball update on each node, then run it again with --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
+		}
+	}
+
+	rolloutCluster := allNodes
+	if !rolloutCluster && !skipImages {
+		if n, err := clusterHostCount(); err == nil && n <= 1 {
+			rolloutCluster = true
+			log.Info("single-node cluster: rolling out images without --all-nodes")
 		}
 	}
 
@@ -1459,6 +1775,34 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 	log.Info("tarball update complete", "version", tarballVersion)
 	fmt.Printf("Flynn updated to %s from tarball\n", tarballVersion)
+	if args.Bool["--cleanup-tarball"] {
+		if err := cleanupSourceTarball(tarballPath, log); err != nil {
+			log.Warn("failed to remove source tarball", "path", tarballPath, "err", err)
+		}
+	}
+	return nil
+}
+
+// cleanupSourceTarball deletes the local .tar.gz passed to --tarball after a
+// successful update. Extraction and any cluster rollout are served from a
+// temporary directory; the archive is not read again once those steps finish.
+func cleanupSourceTarball(path string, log log15.Logger) error {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("refusing to remove non-regular file: %s", abs)
+	}
+	if err := os.Remove(abs); err != nil {
+		return err
+	}
+	log.Info("removed source tarball", "path", abs)
+	fmt.Printf("Removed source tarball %s\n", abs)
 	return nil
 }
 

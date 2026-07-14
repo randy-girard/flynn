@@ -120,6 +120,8 @@ done
 if [[ -z "${OUTPUT_DIR}" ]]; then
   OUTPUT_DIR="${ROOT}/build/release"
 fi
+# Always use an absolute path so tarball creation works after cd elsewhere.
+OUTPUT_DIR="$(cd "$(dirname "${OUTPUT_DIR}")" && pwd)/$(basename "${OUTPUT_DIR}")"
 
 # Get version from flynn-host if not provided
 if [[ -z "${VERSION}" ]]; then
@@ -172,6 +174,7 @@ package_binaries() {
   # CLI binaries (already have OS/arch in name)
   CLI_BINARIES=(
     "flynn-linux-amd64"
+    "flynn-linux-arm64"
     "flynn-linux-386"
     "flynn-darwin-amd64"
     "flynn-darwin-arm64"
@@ -186,14 +189,23 @@ package_binaries() {
   done
 
   # Host binaries - rename to include OS/arch for update command compatibility
+  HOST_ARCH="$(go env GOARCH 2>/dev/null || true)"
+  if [[ -z "${HOST_ARCH}" ]]; then
+    case "$(uname -m)" in
+      aarch64|arm64) HOST_ARCH=arm64 ;;
+      x86_64|amd64) HOST_ARCH=amd64 ;;
+      *) HOST_ARCH=amd64 ;;
+    esac
+  fi
+
   if [[ -f "${BUILD_DIR}/flynn-host" ]]; then
-    gzip -c "${BUILD_DIR}/flynn-host" > "${RELEASE_DIR}/flynn-host-linux-amd64.gz"
-    echo "  - flynn-host-linux-amd64.gz"
+    gzip -c "${BUILD_DIR}/flynn-host" > "${RELEASE_DIR}/flynn-host-linux-${HOST_ARCH}.gz"
+    echo "  - flynn-host-linux-${HOST_ARCH}.gz"
   fi
 
   if [[ -f "${BUILD_DIR}/flynn-init" ]]; then
-    gzip -c "${BUILD_DIR}/flynn-init" > "${RELEASE_DIR}/flynn-init-linux-amd64.gz"
-    echo "  - flynn-init-linux-amd64.gz"
+    gzip -c "${BUILD_DIR}/flynn-init" > "${RELEASE_DIR}/flynn-init-linux-${HOST_ARCH}.gz"
+    echo "  - flynn-init-linux-${HOST_ARCH}.gz"
   fi
 }
 

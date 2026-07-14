@@ -86,6 +86,8 @@ func (h *Handler) handleGetStatus(w http.ResponseWriter, req *http.Request, _ ht
 
 // handleGetBackup handles request to GET /backup.
 func (h *Handler) handleGetBackup(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
+	killOrphanedBackupProcesses(h.Logger)
+
 	r, err := h.Process.Backup()
 	if err != nil {
 		h.Logger.Error("error creating backup", "err", err)
@@ -122,14 +124,17 @@ func (h *Handler) handleGetBackup(w http.ResponseWriter, req *http.Request, _ ht
 
 // handlePostStop handles request to POST /stop.
 func (h *Handler) handlePostStop(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
-	if err := h.Peer.Stop(); err != nil {
-		httphelper.Error(w, err)
-		return
-	}
-	if err := h.Heartbeater.Close(); err != nil {
-		httphelper.Error(w, err)
-		return
-	}
+	// Respond immediately: sirenia deploy waits for discoverd EventKindDown, not
+	// for graceful database shutdown to finish. Blocking here can exceed the
+	// deployer's HTTP client timeout while mysqld is still flushing buffers.
+	go func() {
+		if err := h.Peer.Stop(); err != nil {
+			h.Logger.Error("error stopping peer", "err", err)
+		}
+		if err := h.Heartbeater.Close(); err != nil {
+			h.Logger.Error("error closing heartbeater", "err", err)
+		}
+	}()
 	w.WriteHeader(200)
 }
 

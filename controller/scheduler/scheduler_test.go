@@ -1121,4 +1121,14 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	ephemeral.DeleteOnStop = true
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
 	c.Assert(got, IsNil)
+
+	// volumes tracked by the scheduler but absent from the host (for
+	// example after out-of-band volume gc) must not be adopted
+	stale := addVolume("vol-stale", testAppID, oldReleaseID, "postgres", "/data")
+	stale.HostID = testHostID
+	s.hostVolumeIDs = map[string]map[string]struct{}{
+		testHostID: {},
+	}
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, IsNil)
 }

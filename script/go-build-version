@@ -5,6 +5,10 @@
 #
 # Example: go-build-version v20260129.0 -o ./build/bin/flynn-host ./host
 #
+# Uses the real Go toolchain directly. The Flynn builder installs
+# /usr/local/bin/go as a wrapper that forces CGO_ENABLED=0 and rewrites
+# "go build" flags; routing through it breaks CGO binaries like flynn-host
+# (runtime segfault) and can mangle -ldflags when combined with this script.
 
 set -eo pipefail
 
@@ -18,5 +22,16 @@ shift
 
 LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${VERSION}"
 
-exec go build -tags "apparmor seccomp" -ldflags "${LDFLAGS}" "$@"
+GO_BIN="${GOROOT:-/usr/local/go}/bin/go"
+if ! [[ -x "${GO_BIN}" ]]; then
+  GO_BIN="$(command -v go)"
+fi
 
+TAGS=()
+# flynn-host needs CGO + seccomp; flynn-init and other tools set CGO_ENABLED=0.
+if [[ "${CGO_ENABLED:-1}" == "1" ]]; then
+  TAGS=(-tags "apparmor,seccomp")
+fi
+
+exec env CGO_ENABLED="${CGO_ENABLED:-1}" GOFLAGS="-mod=vendor" \
+  "${GO_BIN}" build "${TAGS[@]}" -ldflags "${LDFLAGS}" "$@"

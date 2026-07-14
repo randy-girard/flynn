@@ -15,7 +15,20 @@ const (
 	rkAppRead
 	rkAppWrite
 	rkAppDeploy
+	// rkBuildArtifact is the cluster-level artifact-creation route
+	// (POST /artifacts). Artifacts are global (not app-scoped in the URL),
+	// so this cannot be a per-app grant; it is instead gated on the
+	// build:artifacts scope, which the gitreceive receiver mints only
+	// alongside an app grant for the app being built.
+	rkBuildArtifact
 )
+
+// ScopeBuildArtifacts is the scope that lets a non-admin token create image
+// artifacts during a build. It is deliberately narrow: on its own it grants
+// nothing (see hasScopedBuildArtifact), and is only useful together with an
+// app grant, so a leaked build token cannot create artifacts for other apps or
+// touch anything else.
+const ScopeBuildArtifacts = "build:artifacts"
 
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
@@ -26,10 +39,43 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 		return true
 	}
 	kind, appID := httpRequirement(method, rawPath)
+	if kind == rkBuildArtifact {
+		return hasScopedBuildArtifact(tok)
+	}
 	if kind == rkCluster {
 		return false
 	}
 	return grantCovers(tok, appID, kind)
+}
+
+// TarreceiveAllowed reports whether a token may push layers/artifacts to
+// tarreceive. tarreceive proxies uploads using its own cluster key, so callers
+// must be either a cluster admin or an authorized builder (build:artifacts
+// scope plus an app grant).
+func TarreceiveAllowed(tok *authorizer.Token) bool {
+	if tok == nil {
+		return false
+	}
+	if tok.HasClusterAdmin() {
+		return true
+	}
+	return hasScopedBuildArtifact(tok)
+}
+
+// hasScopedBuildArtifact reports whether the token may create a build artifact:
+// it must carry the build:artifacts scope AND at least one app grant, so the
+// credential is always tied to a specific app being built and is worthless on
+// its own.
+func hasScopedBuildArtifact(tok *authorizer.Token) bool {
+	if len(tok.AppGrants) == 0 {
+		return false
+	}
+	for _, s := range tok.Scopes {
+		if s == ScopeBuildArtifacts {
+			return true
+		}
+	}
+	return false
 }
 
 func httpRequirement(method, rawPath string) (routeKind, string) {
@@ -45,6 +91,14 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 	}
 
 	switch parts[0] {
+	case "artifacts":
+		// POST /artifacts is the build artifact-creation route. Only the
+		// method matters; the artifact is not app-scoped in the URL.
+		if m == http.MethodPost {
+			return rkBuildArtifact, ""
+		}
+		return rkCluster, ""
+
 	case "apps":
 		if len(parts) == 1 {
 			return rkCluster, ""

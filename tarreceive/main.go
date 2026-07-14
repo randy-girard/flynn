@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 
 	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/flynn/flynn/controller/authz"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/archive"
@@ -83,8 +84,17 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status.HealthyHandler.ServeHTTP(w, r)
 		return
 	}
-	if _, err := s.auth.AuthorizeRequest(r); err != nil {
+	tok, err := s.auth.AuthorizeRequest(r)
+	if err != nil {
 		w.WriteHeader(401)
+		return
+	}
+	// tarreceive proxies layer/artifact uploads to the controller/blobstore
+	// using its own cluster key, so a non-admin caller must be an authorized
+	// builder: it must carry the build:artifacts scope plus an app grant.
+	// Otherwise a leaked app-scoped token could push arbitrary image layers.
+	if !authz.TarreceiveAllowed(tok) {
+		w.WriteHeader(403)
 		return
 	}
 	s.router.ServeHTTP(w, r)
@@ -116,6 +126,7 @@ func (s *server) handleGetLayer(w http.ResponseWriter, r *http.Request, p httpro
 
 func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	id := p.ByName("id")
+	flat := r.Header.Get("X-Flynn-Flattened-Layer") == "1"
 
 	layer, err := func() (*ct.ImageLayer, error) {
 		// copy the tar to a temp file and generate its SHA256 hash
@@ -124,13 +135,17 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 			return nil, err
 		}
 		defer os.RemoveAll(tmpDir)
-		tarFile, err := os.Create(filepath.Join(tmpDir, "layer.tar"))
+		tarPath := filepath.Join(tmpDir, "layer.tar")
+		tarFile, err := os.Create(tarPath)
 		if err != nil {
 			return nil, err
 		}
-		defer tarFile.Close()
 		tarHash := sha256.New()
 		if _, err := io.Copy(io.MultiWriter(tarFile, tarHash), r.Body); err != nil {
+			tarFile.Close()
+			return nil, err
+		}
+		if err := tarFile.Close(); err != nil {
 			return nil, err
 		}
 
@@ -140,20 +155,31 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 		}
 
 		// extract the tar
-		if _, err := tarFile.Seek(0, os.SEEK_SET); err != nil {
+		tarFile, err = os.Open(tarPath)
+		if err != nil {
 			return nil, err
 		}
 		extractDir := filepath.Join(tmpDir, "extract")
 		if err := os.MkdirAll(extractDir, 0755); err != nil {
+			tarFile.Close()
 			return nil, err
 		}
-		if err := archive.Unpack(tarFile, extractDir, true); err != nil {
+		if flat {
+			err = archive.UnpackFlat(tarFile, extractDir, true)
+		} else {
+			err = archive.Unpack(tarFile, extractDir, true)
+		}
+		tarFile.Close()
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Remove(tarPath); err != nil {
 			return nil, err
 		}
 
 		// create squashfs layer
 		layerPath := filepath.Join(tmpDir, "layer.squashfs")
-		if out, err := exec.Command("mksquashfs", extractDir, layerPath, "-noappend").CombinedOutput(); err != nil {
+		if out, err := exec.Command("mksquashfs", extractDir, layerPath, "-noappend", "-processors", "1").CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("mksquashfs error: %s: %s", err, out)
 		}
 

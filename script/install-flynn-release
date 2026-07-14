@@ -205,8 +205,38 @@ APPARMOR_PROFILE
   fi
 }
 
+write_host_auth_config() {
+  if [[ -f "${CONFIG_DIR}/host.json" ]] && grep -qF 'FLYNN_HOST_AUTH_KEY' "${CONFIG_DIR}/host.json"; then
+    info "host HTTP API auth key already configured in ${CONFIG_DIR}/host.json"
+    return
+  fi
+
+  # Only pre-seed a key when the operator explicitly provides one shared value.
+  # Generating a per-node key here would give each host a different key, which
+  # breaks the multi-node bootstrap: configure-host-auth authenticates to every
+  # host with a single key and would get 401s on the others. When no key is
+  # provided, hosts start unauthenticated and bootstrap's configure-host-auth
+  # generates and distributes one shared key across the cluster automatically.
+  local key="${FLYNN_HOST_AUTH_KEY:-}"
+  if [[ -z "${key}" ]]; then
+    info "no FLYNN_HOST_AUTH_KEY set; bootstrap will generate and distribute the host auth key"
+    return
+  fi
+
+  info "configuring host HTTP API authentication"
+  cat > "${CONFIG_DIR}/host.json" <<EOF
+{
+	"env": {
+		"FLYNN_HOST_AUTH_KEY": "${key}"
+	}
+}
+EOF
+  chmod 600 "${CONFIG_DIR}/host.json"
+}
+
 install_systemd_unit() {
   info "installing systemd unit"
+  write_host_auth_config
   cat > /lib/systemd/system/flynn-host.service <<EOF
 [Unit]
 Description=Flynn host daemon

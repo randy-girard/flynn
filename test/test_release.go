@@ -50,6 +50,7 @@ cd "${ROOT}"
 
   # update the builder manifest to create new image manifests for each
   # released image by updating entrypoints
+  script/prepare-builder-manifest
   jq \
     --argjson released_images "$(jq --compact-output 'keys | reduce .[] as $name ({}; .[$name] = true)' build/manifests/images.json)" \
     '.images |= map(if (.id | in($released_images)) then .entrypoint.env = {"FOO":"BAR"} else . end)' \

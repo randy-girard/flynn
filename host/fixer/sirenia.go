@@ -39,6 +39,20 @@ func (f *ClusterFixer) CheckSirenia(svc string) error {
 		}
 	}
 	if status != nil && status.Database != nil && status.Database.ReadWrite {
+		meta, err := service.GetMeta()
+		if err != nil {
+			return fmt.Errorf("error getting sirenia state: %s", err)
+		}
+		var clusterState state.State
+		if err := json.Unmarshal(meta.Data, &clusterState); err != nil {
+			return fmt.Errorf("error decoding sirenia state: %s", err)
+		}
+		if !clusterState.Singleton && clusterState.Sync != nil {
+			syncJobID := clusterState.Sync.Meta["FLYNN_JOB_ID"]
+			if !f.isSireniaJobUp(syncJobID, instances) {
+				return fmt.Errorf("sync peer %s is not running", syncJobID)
+			}
+		}
 		log.Info("cluster claims to be read-write")
 		return nil
 	}
@@ -63,7 +77,12 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 		return fmt.Errorf("error decoding state: %s", err)
 	}
 	if state.Primary == nil {
-		return fmt.Errorf("no primary in sirenia state")
+		log.Info("clearing sirenia state with no primary so cluster can re-form")
+		meta.Data = nil
+		if err := service.SetMeta(meta); err != nil {
+			return fmt.Errorf("error clearing invalid sirenia state: %s", err)
+		}
+		return nil
 	}
 
 	if len(state.Deposed) > 0 {
@@ -81,17 +100,19 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 	}
 
 	log.Info("getting primary job info", "job.id", state.Primary.Meta["FLYNN_JOB_ID"])
-	primaryJob, primaryHost, err := f.GetJob(state.Primary.Meta["FLYNN_JOB_ID"])
+	primaryHostID, _ := cluster.ExtractHostID(state.Primary.Meta["FLYNN_JOB_ID"])
+	primaryJob, primaryHost, err := f.lookupSireniaJob(state.Primary.Meta["FLYNN_JOB_ID"], svc, sireniaDataProcessType(svc), primaryHostID)
 	if err != nil {
-		log.Error("unable to get primary job info")
+		log.Error("unable to get primary job info", "err", err)
 	}
 	var syncJob *host.Job
 	var syncHost *cluster.Host
 	if state.Sync != nil {
 		log.Info("getting sync job info", "job.id", state.Sync.Meta["FLYNN_JOB_ID"])
-		syncJob, syncHost, err = f.GetJob(state.Sync.Meta["FLYNN_JOB_ID"])
+		syncHostID, _ := cluster.ExtractHostID(state.Sync.Meta["FLYNN_JOB_ID"])
+		syncJob, syncHost, err = f.lookupSireniaJob(state.Sync.Meta["FLYNN_JOB_ID"], svc, sireniaDataProcessType(svc), syncHostID)
 		if err != nil {
-			log.Error("unable to get sync job info")
+			log.Error("unable to get sync job info", "err", err)
 		}
 	}
 
@@ -132,11 +153,14 @@ func (f *ClusterFixer) FixSirenia(svc string) error {
 	log.Info("terminating unassigned sirenia instances")
 outer:
 	for _, i := range instances {
-		if i.Addr == state.Primary.Addr || (state.Sync != nil && i.Addr == state.Sync.Addr) {
+		if i.Meta["FLYNN_JOB_ID"] == state.Primary.Meta["FLYNN_JOB_ID"] {
+			continue
+		}
+		if state.Sync != nil && i.Meta["FLYNN_JOB_ID"] == state.Sync.Meta["FLYNN_JOB_ID"] {
 			continue
 		}
 		for _, a := range state.Async {
-			if i.Addr == a.Addr {
+			if i.Meta["FLYNN_JOB_ID"] == a.Meta["FLYNN_JOB_ID"] {
 				continue outer
 			}
 		}
@@ -157,18 +181,13 @@ outer:
 		}
 	}
 
-	isRunning := func(addr string) bool {
-		for _, i := range instances {
-			if i.Addr == addr {
-				return true
-			}
-		}
-		return false
+	isRunning := func(jobID string) bool {
+		return f.isSireniaJobUp(jobID, instances)
 	}
 
 	// if the leader isn't currently running then start it using primaryJob/primaryHost
 	var wait func() (string, error)
-	if !isRunning(state.Primary.Addr) {
+	if !isRunning(state.Primary.Meta["FLYNN_JOB_ID"]) {
 		// if we don't have info about the primary job attempt to promote the sync
 		if primaryJob == nil {
 			if syncJob != nil {
@@ -195,7 +214,7 @@ outer:
 			return fmt.Errorf("error starting primary job on %s: %s", primaryHost.ID(), err)
 		}
 	}
-	if !state.Singleton && !isRunning(state.Sync.Addr) {
+	if !state.Singleton && !isRunning(state.Sync.Meta["FLYNN_JOB_ID"]) {
 		if syncHost == nil {
 			for _, h := range f.hosts {
 				if h.ID() != primaryHost.ID() {
@@ -209,13 +228,16 @@ outer:
 			}
 		}
 		// if we don't have a sync job then copy the primary job
-		// and provision a new volume
 		if syncJob == nil {
 			syncJob = primaryJob
-			vol := &ct.VolumeReq{Path: "/data"}
-			if _, err := utils.ProvisionVolume(vol, syncHost, syncJob); err != nil {
-				return fmt.Errorf("error creating volume on %s: %s", syncHost.ID(), err)
-			}
+		}
+		// Starting a new sync instance always needs a fresh data volume; reusing
+		// a template job's volume often leaves a partial pg_basebackup in /data/db.
+		syncJob = cloneJob(syncJob)
+		syncJob.Config.Volumes = nil
+		vol := &ct.VolumeReq{Path: "/data"}
+		if _, err := utils.ProvisionVolume(vol, syncHost, syncJob); err != nil {
+			return fmt.Errorf("error creating volume on %s: %s", syncHost.ID(), err)
 		}
 		syncJob.ID = cluster.GenerateJobID(syncHost.ID(), "")
 		f.FixJobEnv(syncJob)
@@ -243,4 +265,19 @@ outer:
 		return sirenia.NewClient(addr).WaitForReadWrite(5 * time.Minute)
 	}
 	return nil
+}
+
+func cloneJob(job *host.Job) *host.Job {
+	if job == nil {
+		return nil
+	}
+	data, err := json.Marshal(job)
+	if err != nil {
+		return job
+	}
+	var copy host.Job
+	if err := json.Unmarshal(data, &copy); err != nil {
+		return job
+	}
+	return &copy
 }

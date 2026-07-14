@@ -1,9 +1,11 @@
 package postgresql
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,6 +26,14 @@ var _ = Suite(&PostgresSuite{})
 
 func (PostgresSuite) TestUpstreamTimeoutBudget(c *C) {
 	c.Assert(upstreamTimeout >= 60*time.Second, Equals, true)
+}
+
+func (PostgresSuite) TestSyncStandbyNamesConfigQuoting(c *C) {
+	var buf bytes.Buffer
+	syncID := "0ed77f6c-a2d1-461e-8f7d-09fd96fbeb3a"
+	err := configTemplate.Execute(&buf, configData{Sync: syncID, Port: "5432", ID: "primary"})
+	c.Assert(err, IsNil)
+	c.Assert(strings.Contains(buf.String(), `synchronous_standby_names = '"`+syncID+`"'`), Equals, true)
 }
 
 func (PostgresSuite) TestSingletonPrimary(c *C) {
