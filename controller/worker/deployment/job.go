@@ -81,8 +81,12 @@ func (d *DeployJob) Perform() error {
 	}
 
 	if processesEqual(d.newFormation.Processes, d.Processes) {
-		log.Info("deployment already completed, nothing to do")
-		return nil
+		if d.Strategy == "sirenia" && d.sireniaOldReleaseActive() {
+			log.Info("sirenia new formation matches target but old release still active, continuing deploy")
+		} else {
+			log.Info("deployment already completed, nothing to do")
+			return nil
+		}
 	}
 
 	d.timeout = time.Duration(d.DeployTimeout) * time.Second
@@ -246,4 +250,25 @@ func processesEqual(a map[string]int, b map[string]int) bool {
 		}
 	}
 	return true
+}
+
+func (d *DeployJob) sireniaProcessType() string {
+	if d.newRelease != nil && d.newRelease.Env["SIRENIA_PROCESS"] != "" {
+		return d.newRelease.Env["SIRENIA_PROCESS"]
+	}
+	if d.oldRelease != nil && d.oldRelease.Env["SIRENIA_PROCESS"] != "" {
+		return d.oldRelease.Env["SIRENIA_PROCESS"]
+	}
+	return ""
+}
+
+func (d *DeployJob) sireniaOldReleaseActive() bool {
+	if d.oldFormation == nil {
+		return false
+	}
+	processType := d.sireniaProcessType()
+	if processType == "" {
+		return false
+	}
+	return d.oldFormation.Processes[processType] > 0
 }

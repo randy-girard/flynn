@@ -27,8 +27,8 @@ func TestSireniaClusterDeployReady(t *testing.T) {
 		Sync:    &discoverd.Instance{},
 		Deposed: []*discoverd.Instance{{}},
 	}
-	if !sireniaClusterDeployReady(noAsync, 3) {
-		t.Fatal("expected cluster without asyncs to be not ready")
+	if sireniaClusterDeployReady(noAsync, 3) {
+		t.Fatal("expected cluster without asyncs to be not deploy-ready")
 	}
 
 	haMissingAsync := &state.State{
