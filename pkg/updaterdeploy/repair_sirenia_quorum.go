@@ -102,7 +102,7 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log l
 		log.Warn("sirenia meta reports quorum but peers are unhealthy, repairing")
 	}
 
-	instances, err := service.Instances()
+	instances, err := discoverd.InstancesOrEmpty(service)
 	if err != nil {
 		return fmt.Errorf("list %s discoverd instances: %w", app.Name, err)
 	}
