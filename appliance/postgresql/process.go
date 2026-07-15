@@ -283,6 +283,10 @@ func (p *Process) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *Process) Running() bool {
+	return p.running()
+}
+
 func (p *Process) reconfigure(config *state.Config) (err error) {
 	log := p.log.New("fn", "reconfigure")
 

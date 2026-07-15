@@ -180,6 +180,10 @@ func (p *Process) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *Process) Running() bool {
+	return p.running()
+}
+
 func (p *Process) XLog() xlog.XLog {
 	return mongodbxlog.XLog{}
 }

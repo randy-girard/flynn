@@ -773,6 +773,10 @@ func (p *databaseSimulatorClient) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *databaseSimulatorClient) Running() bool {
+	return p.Online
+}
+
 // Given the current state, figure out our current role and update our xlog
 // position accordingly. This is used when we assume a new role or when database
 // comes online in order to simulate client writes to the primary, synchronous

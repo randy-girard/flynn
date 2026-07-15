@@ -190,6 +190,10 @@ func (p *Process) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *Process) Running() bool {
+	return p.running()
+}
+
 func (p *Process) XLog() xlog.XLog {
 	return mdbxlog.MDBXLog{}
 }
@@ -556,30 +560,92 @@ func (p *Process) configureStandbyReplication(logger log15.Logger, upstream *dis
 	return nil
 }
 
-// standbyReplicationHealthy polls SHOW SLAVE STATUS until the IO thread is
-// running or a fatal replication error (e.g. GTID mismatch 1236) is seen.
-func (p *Process) standbyReplicationHealthy() (bool, error) {
+func (p *Process) reseedStandbyFromUpstream(logger log15.Logger, upstream *discoverd.Instance) (*BackupInfo, error) {
+	if err := p.stop(); err != nil {
+		return nil, err
+	}
+	backupInfo, err := p.restoreBackupFromUpstream(logger, upstream)
+	if err != nil {
+		if clearErr := p.clearDataDir(); clearErr != nil {
+			logger.Error("error clearing data directory after failed restore", "err", clearErr)
+		}
+		return nil, err
+	}
+	if err := p.start(); err != nil {
+		return nil, err
+	}
+	if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
+		return nil, err
+	}
+	return backupInfo, nil
+}
+
+// standbyReplicationHealthy polls replication status until the standby has
+// caught up with upstream or a fatal replication error is seen. IO thread
+// alone is not sufficient: volumes left by aborted deploys can connect while
+// still at an empty or stale GTID.
+func (p *Process) standbyReplicationHealthy(upstream *discoverd.Instance) (bool, error) {
+	upstreamXLog, err := p.upstreamXLog(upstream)
+	if err != nil {
+		return false, err
+	}
+
 	db, err := p.connectLocal()
 	if err != nil {
 		return false, err
 	}
 	defer db.Close()
 
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		healthy, fatal, err := checkSlaveStatus(db)
 		if err != nil {
 			return false, err
 		}
-		if healthy {
-			return true, nil
-		}
 		if fatal {
 			return false, nil
+		}
+		if !healthy {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		localXLog, err := p.XLogPosition()
+		if err != nil {
+			return false, err
+		}
+		if caughtUp, err := p.replicationCaughtUpWithUpstream(localXLog, upstreamXLog); err != nil {
+			return false, err
+		} else if caughtUp {
+			return true, nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return false, nil
+}
+
+func (p *Process) upstreamXLog(upstream *discoverd.Instance) (xlog.Position, error) {
+	status, err := client.NewClient(upstream.Addr).Status()
+	if err != nil {
+		return p.XLog().Zero(), err
+	}
+	if status.Database == nil || status.Database.XLog == "" {
+		return p.XLog().Zero(), errors.New("upstream has no xlog position")
+	}
+	return xlog.Position(status.Database.XLog), nil
+}
+
+func (p *Process) replicationCaughtUpWithUpstream(local, upstream xlog.Position) (bool, error) {
+	if local == "" || local == p.XLog().Zero() {
+		return false, nil
+	}
+	if upstream == "" || upstream == p.XLog().Zero() {
+		return false, nil
+	}
+	cmp, err := p.XLog().Compare(local, upstream)
+	if err != nil {
+		return false, err
+	}
+	return cmp >= 0, nil
 }
 
 func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
@@ -666,23 +732,30 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		if err := p.stop(); err != nil {
 			return err
 		}
+		skippedBackup = p.dataDirInitialized()
+	} else if p.dataDirInitialized() {
+		// The data directory already holds a caught-up copy of the database,
+		// so we can start locally in read-only standby mode without the
+		// upstream being reachable. This is essential when the upstream
+		// primary has died: waiting for a dead upstream here would block the
+		// database from ever starting, which in turn prevents a sync peer
+		// from starting its takeover (startTakeoverWithPeer requires the
+		// database to be running to read its xlog position). The replication
+		// I/O thread configured below simply retries connecting to the
+		// upstream until it (or its replacement) is available.
+		logger.Info("data directory already initialized, skipping backup and upstream wait")
+		skippedBackup = true
 	} else {
 		if err := p.waitForUpstream(upstream); err != nil {
 			return err
 		}
-
-		if p.dataDirInitialized() {
-			logger.Info("data directory already initialized, skipping backup")
-			skippedBackup = true
-		} else {
-			var err error
-			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
-			if err != nil {
-				if clearErr := p.clearDataDir(); clearErr != nil {
-					logger.Error("error clearing data directory after failed restore", "err", clearErr)
-				}
-				return err
+		var err error
+		backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+		if err != nil {
+			if clearErr := p.clearDataDir(); clearErr != nil {
+				logger.Error("error clearing data directory after failed restore", "err", clearErr)
 			}
+			return err
 		}
 	}
 
@@ -696,29 +769,25 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 
 	// A reused data directory from an aborted deploy can contain GTID state
 	// incompatible with the current upstream. Re-seed from upstream when reuse fails.
+	// This check requires the upstream to be reachable. When it is not (for
+	// example the primary has died and this sync peer is about to take over),
+	// skip the check: the database is already running locally, which is what a
+	// takeover needs, and the replication I/O thread will resync once an
+	// upstream is available again.
 	if skippedBackup {
-		healthy, err := p.standbyReplicationHealthy()
-		if err != nil {
-			return err
-		}
-		if !healthy {
-			logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
-			if err := p.stop(); err != nil {
-				return err
-			}
-			var err error
-			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+		if _, err := p.upstreamXLog(upstream); err != nil {
+			logger.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+		} else {
+			healthy, err := p.standbyReplicationHealthy(upstream)
 			if err != nil {
-				if clearErr := p.clearDataDir(); clearErr != nil {
-					logger.Error("error clearing data directory after failed restore", "err", clearErr)
+				return err
+			}
+			if !healthy {
+				logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+				backupInfo, err = p.reseedStandbyFromUpstream(logger, upstream)
+				if err != nil {
+					return err
 				}
-				return err
-			}
-			if err := p.start(); err != nil {
-				return err
-			}
-			if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
-				return err
 			}
 		}
 	}
