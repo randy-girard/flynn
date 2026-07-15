@@ -110,7 +110,7 @@ func run() error {
 	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
 		log.Warn("error repairing orphan sirenia formations", "err", err)
 	}
-	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, false, log); err != nil {
 		log.Warn("error repairing sirenia cluster quorum", "err", err)
 	}
 

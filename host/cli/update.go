@@ -45,6 +45,11 @@ Options:
                                  one app job back on the freshly restarted host before
                                  continuing. Non-fatal: logs a warning and continues
                                  on timeout (e.g. 3m).
+  --restart-down-jobs            during sirenia cluster quorum repair, also restart
+                                 database peer jobs that are in the down state by
+                                 re-asserting the formation so the scheduler replaces
+                                 them. Without this flag only unregistered or unhealthy
+                                 up/starting jobs are restarted.
 
 Update Flynn components using GitHub releases or a local tarball.
 

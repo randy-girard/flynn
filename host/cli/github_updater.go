@@ -106,6 +106,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	skipImages := args.Bool["--skip-images"]
 	imagesOnly := args.Bool["--images-only"]
 	allNodes := args.Bool["--all-nodes"]
+	restartDownJobs := args.Bool["--restart-down-jobs"]
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
@@ -267,7 +268,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 		if !rolloutCluster {
 			log.Info("skipping container images and system app rollout (local-only update)")
 			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
-		} else if err := updateImages(repo, configDir, release.TagName, "", force, expectedHostCount, log); err != nil {
+		} else if err := updateImages(repo, configDir, release.TagName, "", force, restartDownJobs, expectedHostCount, log); err != nil {
 			return err
 		}
 	}
@@ -1092,7 +1093,7 @@ const updateReexecEnv = "FLYNN_UPDATE_REEXEC"
 // when > 1, we wait for that many hosts to be visible in discoverd
 // before fanning out, so a partially-rejoined cluster doesn't silently
 // skip nodes.
-func updateImages(repo, configDir, targetVersion, baseURL string, force bool, expectedHosts int, log log15.Logger) error {
+func updateImages(repo, configDir, targetVersion, baseURL string, force, restartDownJobs bool, expectedHosts int, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
 	var d *downloader.Downloader
 	if baseURL != "" {
@@ -1344,7 +1345,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force bool, ex
 	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
 		log.Warn("error repairing orphan sirenia formations", "err", err)
 	}
-	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, restartDownJobs, log); err != nil {
 		log.Warn("error repairing sirenia cluster quorum", "err", err)
 	}
 
@@ -1618,6 +1619,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	imagesOnly := args.Bool["--images-only"]
 	allNodes := args.Bool["--all-nodes"]
 	force := args.Bool["--force"]
+	restartDownJobs := args.Bool["--restart-down-jobs"]
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
@@ -1764,7 +1766,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 		// Update container images and system apps
 		if needImages {
-			if err := updateImages("", configDir, tarballVersion, baseURL, force, expectedHostCount, log); err != nil {
+			if err := updateImages("", configDir, tarballVersion, baseURL, force, restartDownJobs, expectedHostCount, log); err != nil {
 				return err
 			}
 		}

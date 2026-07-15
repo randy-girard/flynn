@@ -21,7 +21,7 @@ const sireniaQuorumRepairTimeout = 2 * time.Minute
 // reconfiguration but the process never comes back online, or after orphan
 // formation cleanup removes missing asyncs from cluster state while a zombie
 // job remains.
-func RepairSireniaClusterQuorum(ctrl controller.Client, log log15.Logger) error {
+func RepairSireniaClusterQuorum(ctrl controller.Client, restartDownJobs bool, log log15.Logger) error {
 	if log == nil {
 		log = log15.New()
 	}
@@ -42,14 +42,14 @@ func RepairSireniaClusterQuorum(ctrl controller.Client, log log15.Logger) error 
 		if !ok {
 			continue
 		}
-		if err := repairSireniaClusterQuorumForApp(ctrl, app, log); err != nil {
+		if err := repairSireniaClusterQuorumForApp(ctrl, app, restartDownJobs, log); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log log15.Logger) error {
+func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, restartDownJobs bool, log log15.Logger) error {
 	log = log.New("app", app.Name)
 
 	service := discoverd.NewService(app.Name)
@@ -85,8 +85,10 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log l
 		return fmt.Errorf("list %s formations: %w", app.Name, err)
 	}
 	expected := 0
+	var activeFormation *ct.Formation
 	for _, formation := range formations {
 		if formation != nil && formation.ReleaseID == activeRelease {
+			activeFormation = formation
 			expected = formation.Processes[processType]
 			break
 		}
@@ -114,8 +116,13 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log l
 	}
 
 	var restarted int
+	var downJobs int
 	for _, job := range jobs {
 		if job == nil || job.ReleaseID != activeRelease || job.Type != processType {
+			continue
+		}
+		if job.State == ct.JobStateDown {
+			downJobs++
 			continue
 		}
 		if job.State != ct.JobStateUp && job.State != ct.JobStateStarting {
@@ -136,7 +143,39 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, log l
 		log.Info("restarted sirenia jobs to restore quorum", "count", restarted)
 	}
 
+	// A down job is no longer running and is invisible to the scheduler's
+	// formation reconciliation, so killing it does nothing. When
+	// --restart-down-jobs is set, re-assert the formation via a scale
+	// request so the scheduler observes the shortfall and starts
+	// replacements for the down peers.
+	if restartDownJobs && downJobs > 0 && activeFormation != nil {
+		if err := restartDownSireniaJobs(ctrl, app, activeFormation, downJobs, log); err != nil {
+			return err
+		}
+	}
+
 	return waitForSireniaAsyncQuorum(service, app.Name, expected, log)
+}
+
+// restartDownSireniaJobs re-asserts the active formation's process counts so
+// the scheduler reconciles the difference between the expected count and the
+// currently-running peers, starting replacements for any down jobs.
+func restartDownSireniaJobs(ctrl controller.Client, app *ct.App, formation *ct.Formation, downJobs int, log log15.Logger) error {
+	if len(formation.Processes) == 0 {
+		return nil
+	}
+	processes := make(map[string]int, len(formation.Processes))
+	for typ, n := range formation.Processes {
+		processes[typ] = n
+	}
+	log.Warn("re-asserting sirenia formation to restart down jobs",
+		"down_jobs", downJobs, "processes", processes)
+	if err := ctrl.ScaleAppRelease(app.ID, formation.ReleaseID, ct.ScaleOptions{
+		Processes: processes,
+	}); err != nil {
+		return fmt.Errorf("restart down %s jobs: %w", app.Name, err)
+	}
+	return nil
 }
 
 func registeredSireniaJobs(instances []*discoverd.Instance) map[string]bool {
