@@ -15,6 +15,7 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/accesstoken"
 	"github.com/flynn/flynn/updater/imageenv"
 	"github.com/flynn/flynn/updater/types"
 	"github.com/mattn/go-colorable"
@@ -305,6 +306,12 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
 	if updateImageIDs(release.Env) {
+		skipDeploy = false
+	}
+	if updated, err := accesstoken.Update(app.Name, release.Env); err != nil {
+		log.Error("error updating access token keys", "err", err)
+		return err
+	} else if updated {
 		skipDeploy = false
 	}
 	if skipDeploy {
