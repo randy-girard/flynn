@@ -79,7 +79,7 @@ func instance(p *Process) *discoverd.Instance {
 		ID:   p.ID,
 		Addr: fmt.Sprintf("127.0.0.1:%d", MustAtoi(p.Port)),
 		Meta: map[string]string{
-			"MYSQL_ID": p.ID,
+			IDKey: p.ID,
 		},
 	}
 }

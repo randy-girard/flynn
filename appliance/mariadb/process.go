@@ -32,6 +32,8 @@ import (
 )
 
 const (
+	IDKey = "MARIADB_ID"
+
 	DefaultPort        = "3306"
 	DefaultBinDir      = "/usr/bin"
 	DefaultSbinDir     = "/usr/sbin"
@@ -213,11 +215,13 @@ func (p *Process) reconfigure(config *state.Config) error {
 			return nil
 		}
 
-		// If we're already running and it's just a change from async to sync with the same node, we don't need to restart
+		// Promoting async to sync with the same upstream does not require a
+		// restart, but the peer becomes the replication master for downstream
+		// asyncs and must enable semi-sync master and track downstream sync
+		// for sirenia rolling deploys.
 		if p.configApplied && p.running() && p.config() != nil && config != nil &&
-			p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta["MYSQL_ID"] == p.config().Upstream.Meta["MYSQL_ID"] {
-			logger.Info("nothing to do", "reason", "becoming sync with same upstream")
-			return nil
+			p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta[IDKey] == p.config().Upstream.Meta[IDKey] {
+			return p.promoteAsyncToSync(config, logger)
 		}
 
 		// Make sure that we don't keep waiting for replication sync while reconfiguring
@@ -669,12 +673,14 @@ func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
 	if err := rows.Scan(ptrs...); err != nil {
 		return false, false, err
 	}
-	var ioRunning string
+	var ioRunning, sqlRunning string
 	var lastIOErrno int64
 	for i, col := range cols {
 		switch col {
 		case "Slave_IO_Running":
 			ioRunning = mysqlStatusString(vals[i])
+		case "Slave_SQL_Running":
+			sqlRunning = mysqlStatusString(vals[i])
 		case "Last_IO_Errno":
 			lastIOErrno = mysqlStatusInt64(vals[i])
 		}
@@ -682,7 +688,7 @@ func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
 	if lastIOErrno == 1236 {
 		return false, true, nil
 	}
-	return ioRunning == "Yes", false, nil
+	return ioRunning == "Yes" && sqlRunning == "Yes", false, nil
 }
 
 func mysqlStatusString(v interface{}) string {
@@ -842,12 +848,6 @@ func (p *Process) initPrimaryDB() error {
 		logger.Error("error granting privileges", "err", err)
 		return err
 	}
-	// Install semi-sync master plugin. Ignore error if already installed (1968) or
-	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
-	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
-		logger.Error("error installing rpl_semi_sync_master", "err", err)
-		return err
-	}
 	if _, err := db.Exec(`FLUSH PRIVILEGES`); err != nil {
 		logger.Error("error flushing privileges", "err", err)
 		return err
@@ -857,21 +857,52 @@ func (p *Process) initPrimaryDB() error {
 	if p.Singleton {
 		return nil
 	}
-	// Enable semi-sync replication on the master.
-	master_variables := map[string]string{
+	return p.enableSemiSyncMasterDB(db, logger)
+}
+
+func (p *Process) promoteAsyncToSync(config *state.Config, logger log15.Logger) error {
+	logger.Info("promoting async to sync with same upstream")
+	p.cancelSyncWait()
+	p.syncedDownstreamValue.Store((*discoverd.Instance)(nil))
+
+	if err := p.enableSemiSyncMaster(); err != nil {
+		return err
+	}
+	if config.Downstream != nil {
+		logger.Info("waiting for downstream after sync promotion", "downstream", config.Downstream.Addr)
+		p.waitForSync(config.Downstream, false)
+	}
+	return nil
+}
+
+func (p *Process) enableSemiSyncMaster() error {
+	db, err := p.connectLocal()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return p.enableSemiSyncMasterDB(db, p.Logger.New("fn", "enableSemiSyncMaster"))
+}
+
+func (p *Process) enableSemiSyncMasterDB(db *sql.DB, logger log15.Logger) error {
+	// Install semi-sync master plugin. Ignore error if already installed (1968) or
+	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
+	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
+		logger.Error("error installing rpl_semi_sync_master", "err", err)
+		return err
+	}
+	masterVariables := map[string]string{
 		"rpl_semi_sync_master_wait_point":    "AFTER_SYNC",
 		"rpl_semi_sync_master_timeout":       "18446744073709551615",
 		"rpl_semi_sync_master_enabled":       "1",
 		"rpl_semi_sync_master_wait_no_slave": "1",
 	}
-
-	for v, val := range master_variables {
+	for v, val := range masterVariables {
 		if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL %s = %s`, v, val)); err != nil {
 			logger.Error("error setting system variable", "var", v, "val", val, "err", err)
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -1084,7 +1115,7 @@ func (p *Process) waitForSync(downstream *discoverd.Instance, enableWrites bool)
 		startTime := time.Now().UTC()
 		logger := p.Logger.New(
 			"fn", "waitForSync",
-			"sync_name", downstream.Meta["MYSQL_ID"],
+			"sync_name", downstream.Meta[IDKey],
 			"start_time", log15.Lazy{func() time.Time { return startTime }},
 		)
 
@@ -1115,6 +1146,39 @@ func (p *Process) waitForSync(downstream *discoverd.Instance, enableWrites bool)
 				continue
 			}
 			logger.Info("master xlog", "gtid", masterXLog)
+
+			// Do not report downstream as synced while this peer is still behind
+			// its upstream. Otherwise a sync/async that has not caught the primary
+			// can falsely match a downstream at the same stale GTID.
+			if cfg := p.config(); cfg != nil && cfg.Role != state.RolePrimary && cfg.Upstream != nil {
+				upstreamXLog, upstreamErr := p.nodeXLogPosition(&DSN{
+					Host:     cfg.Upstream.Addr,
+					User:     "flynn",
+					Password: p.Password,
+					Timeout:  p.OpTimeout,
+				})
+				if upstreamErr != nil {
+					logger.Error("error reading upstream xlog", "err", upstreamErr)
+					startTime = time.Now().UTC()
+					select {
+					case <-stopCh:
+						logger.Debug("canceled, stopping")
+						return
+					case <-time.After(checkInterval):
+					}
+					continue
+				}
+				if cmp, cmpErr := p.XLog().Compare(masterXLog, upstreamXLog); cmpErr != nil || cmp < 0 {
+					logger.Debug("local replication behind upstream, waiting", "upstream_gtid", upstreamXLog)
+					select {
+					case <-stopCh:
+						logger.Debug("canceled, stopping")
+						return
+					case <-time.After(checkInterval):
+					}
+					continue
+				}
+			}
 
 			// Read downstream slave status.
 			slaveXLog, err := p.nodeXLogPosition(&DSN{

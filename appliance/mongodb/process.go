@@ -326,10 +326,17 @@ func (p *Process) reconfigure(config *state.Config) error {
 			return nil
 		}
 
-		// If we're already running and it's just a change from async to sync with the same node, we don't need to restart
+		// Promoting async to sync with the same upstream does not require a
+		// restart, but downstream sync tracking must be started for sirenia deploys.
 		if p.configApplied() && p.running() && p.config() != nil && config != nil &&
 			p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta["MONGODB_ID"] == p.config().Upstream.Meta["MONGODB_ID"] {
-			logger.Info("nothing to do", "reason", "becoming sync with same upstream")
+			logger.Info("promoting async to sync with same upstream")
+			p.cancelSyncWait()
+			p.syncedDownstreamValue.Store((*discoverd.Instance)(nil))
+			if config.Downstream != nil {
+				logger.Info("waiting for downstream after sync promotion", "downstream", config.Downstream.Addr)
+				p.waitForSync(config.Downstream)
+			}
 			return nil
 		}
 		// Make sure that we don't keep waiting for replication sync while reconfiguring
