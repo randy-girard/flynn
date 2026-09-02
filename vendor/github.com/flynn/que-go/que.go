@@ -5,8 +5,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	fpg "github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
 )
 
@@ -248,30 +246,6 @@ type queryable interface {
 // avoid looping forever in case something is wrong.
 const maxLockJobAttempts = 10
 
-// lockJobAcquireRetry keeps que workers from spamming Acquire during transient
-// discoverd / postgres sirenia rollover (leader.* NXDOMAIN or dead connections).
-var lockJobAcquireRetry = attempt.Strategy{
-	Min:   5,
-	Total: 90 * time.Second,
-	Delay: 300 * time.Millisecond,
-}
-
-func acquireConnForJobLock(pool *pgx.ConnPool) (*pgx.Conn, error) {
-	var conn *pgx.Conn
-	err := lockJobAcquireRetry.RunWithValidator(func() error {
-		c, e := pool.Acquire()
-		if e != nil {
-			return e
-		}
-		conn = c
-		return nil
-	}, fpg.IsTransientLeaderDialErr)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
-}
-
 // Returned by LockJob if a job could not be retrieved from the queue after
 // several attempts because of concurrently running transactions.  This error
 // should not be returned unless the queue is under extremely heavy
@@ -293,7 +267,7 @@ var ErrAgain = errors.New("maximum number of LockJob attempts reached")
 // After the Job has been worked, you must call either Done() or Error() on it
 // in order to return the database connection to the pool and remove the lock.
 func (c *Client) LockJob(queue string) (*Job, error) {
-	conn, err := acquireConnForJobLock(c.pool)
+	conn, err := c.pool.Acquire()
 	if err != nil {
 		return nil, err
 	}
