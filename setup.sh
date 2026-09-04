@@ -56,6 +56,7 @@ apt-get install -y \
   apparmor-utils \
   linux-modules-extra-$(uname -r) \
   mariadb-server \
+  mariadb-backup \
   redis \
   postgresql \
   postgresql-contrib \
