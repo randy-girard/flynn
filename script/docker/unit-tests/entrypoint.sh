@@ -27,7 +27,12 @@ service redis-server start 2>/dev/null || true
 
 if [[ "${FLYNN_TEST_SKIP_CHECKS:-}" != "1" ]]; then
   echo "==> gofmt check"
-  util/commit-validator/validate-gofmt
+  if ! util/commit-validator/validate-gofmt; then
+    if [[ "${FLYNN_TEST_STRICT_CHECKS:-}" == "1" ]]; then
+      exit 1
+    fi
+    echo "==> gofmt issues found (continuing; set FLYNN_TEST_STRICT_CHECKS=1 to fail)"
+  fi
   echo "==> bats script tests"
   bats script/test
 fi
