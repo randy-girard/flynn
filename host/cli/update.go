@@ -53,9 +53,10 @@ Options:
 
 Update Flynn components using GitHub releases or a local tarball.
 
-After downloading new binaries, the running flynn-host daemon is automatically
-restarted using a zero-downtime handoff. Use --no-restart to skip the restart
-and handle it manually (e.g. via systemctl restart flynn-host).
+After downloading new binaries, the running flynn-host daemon is restarted via
+systemctl. Job containers normally survive (KillMode=process); discoverd
+registration and sirenia leaders still need time to settle between hosts.
+Use --no-restart to skip the restart and handle it manually.
 
 By default this command updates flynn-host/flynn-init on this machine only.
 Use --all-nodes to roll the same binaries out to every cluster host, pull new

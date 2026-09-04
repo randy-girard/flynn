@@ -23,8 +23,8 @@ import (
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/host/cleanup"
+	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
@@ -110,11 +110,8 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
-		if err != nil {
-			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
-		}
-		if n > 1 {
-			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		if err := validateImagesOnlyFlags(imagesOnly, allNodes, n, err); err != nil {
+			return err
 		}
 	}
 
@@ -153,14 +150,10 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	log.Info("updating to version", "version", release.TagName)
 
-	// Image rollout touches the whole cluster; require --all-nodes for multi-host,
-	// but a single registered host is always "all" peers.
-	rolloutCluster := allNodes
-	if !rolloutCluster && !skipImages {
-		if n, err := clusterHostCount(); err == nil && n <= 1 {
-			rolloutCluster = true
-			log.Info("single-node cluster: rolling out images without --all-nodes")
-		}
+	hostCount, hostCountErr := clusterHostCount()
+	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
+	if plan.RolloutImages && !allNodes {
+		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
 
 	// expectedHostCount is captured during the rolling binary update and
@@ -234,22 +227,12 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 			fmt.Println("Daemon restart skipped. Restart manually to activate the new version.")
 		}
 
-		if allNodes {
+		if plan.UpdateRemotes {
 			// Wait for the cluster to settle after the local restart before
 			// touching remote hosts — same gates as the per-remote-host loop
 			// (health, discoverd host count, sirenia leaders, scheduler jobs).
-			if !args.Bool["--no-restart"] {
-				clusterClient := cluster.NewClient()
-				expectedHosts := expectedClusterHostCount(log)
-				if err := settleAfterHostRestart(hostRestartSettleOptions{
-					Log:               log,
-					ClusterClient:     clusterClient,
-					RestartedHost:     localClusterHost(log),
-					ExpectedHostCount: expectedHosts,
-					FatalClusterSize:  expectedHosts > 1,
-				}); err != nil {
-					return fmt.Errorf("cluster did not recover after local restart: %w", err)
-				}
+			if err := settleLocalRestartBeforeRemotes(args.Bool["--no-restart"], log); err != nil {
+				return err
 			}
 
 			n, err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log)
@@ -265,7 +248,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	// Update container images and system apps unless --skip-images was specified
 	if !skipImages {
-		if !rolloutCluster {
+		if !plan.RolloutImages {
 			log.Info("skipping container images and system app rollout (local-only update)")
 			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
 		} else if err := updateImages(repo, configDir, release.TagName, "", force, restartDownJobs, expectedHostCount, log); err != nil {
@@ -363,7 +346,12 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 	if err != nil {
 		log.Warn("could not discover cluster hosts for remote binary update", "err", err)
 		fmt.Println("Could not discover cluster hosts. Remote nodes were NOT updated.")
-		return 0, nil // non-fatal: local update succeeded
+		// Multi-host clusters must not silently skip remotes — that leaves mixed
+		// binary versions while later image rollout may still proceed.
+		if expectedClusterSize > 1 {
+			return 0, fmt.Errorf("could not discover cluster hosts for remote binary update (expected %d): %w", expectedClusterSize, err)
+		}
+		return 0, nil // single-host / unknown size: local update already succeeded
 	}
 	expectedHostCount := len(hosts)
 	if len(hosts) <= 1 {
@@ -1623,11 +1611,8 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
-		if err != nil {
-			return fmt.Errorf("--all-nodes is required with --images-only when cluster hosts cannot be discovered: %w", err)
-		}
-		if n > 1 {
-			return fmt.Errorf("--images-only requires --all-nodes when the cluster has more than one host")
+		if err := validateImagesOnlyFlags(imagesOnly, allNodes, n, err); err != nil {
+			return err
 		}
 	}
 
@@ -1719,17 +1704,15 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		}
 	}
 
-	rolloutCluster := allNodes
-	if !rolloutCluster && !skipImages {
-		if n, err := clusterHostCount(); err == nil && n <= 1 {
-			rolloutCluster = true
-			log.Info("single-node cluster: rolling out images without --all-nodes")
-		}
+	hostCount, hostCountErr := clusterHostCount()
+	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
+	if plan.RolloutImages && !allNodes {
+		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
 
 	// Temporary HTTP server: only when pushing to other nodes or rolling out images cluster-wide.
-	needRemoteBinaries := !imagesOnly && allNodes
-	needImages := !skipImages && rolloutCluster
+	needRemoteBinaries := plan.UpdateRemotes
+	needImages := plan.RolloutImages
 	if needRemoteBinaries || needImages {
 		listener, err := net.Listen("tcp", ":0")
 		if err != nil {
@@ -1757,6 +1740,10 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 		// Propagate binaries to all other cluster nodes
 		var expectedHostCount int
 		if needRemoteBinaries {
+			// Match GitHub path: settle after local restart before rolling remotes.
+			if err := settleLocalRestartBeforeRemotes(args.Bool["--no-restart"], log); err != nil {
+				return err
+			}
 			n, err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, args.Bool["--no-restart"], log)
 			if err != nil {
 				return err
@@ -1770,7 +1757,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 				return err
 			}
 		}
-	} else if !skipImages && !rolloutCluster {
+	} else if !skipImages && !plan.RolloutImages {
 		log.Info("skipping container images and system app rollout (local-only tarball update)")
 		fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run the same tarball command with --all-nodes.")
 	}
@@ -1995,7 +1982,6 @@ func bytesInRange(ip, start, end net.IP) bool {
 	}
 	return true
 }
-
 
 // repairSireniaClusters clears deposed peers from sirenia-managed services
 // (postgres, mariadb, mongodb).  After a daemon restart the old primary may
