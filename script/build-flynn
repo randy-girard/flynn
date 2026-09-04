@@ -73,9 +73,18 @@ main() {
   local flynn_host="${ROOT}/build/bin/flynn-host"
   local builder_image="${ROOT}/build/image/builder.json"
 
+  local need_bin_build=false
+  if ! [[ -e "${flynn_host}" ]] || $force_bootstrap; then
+    need_bin_build=true
+  elif [[ -f "${ROOT}/build/manifests/bootstrap-manifest.json" ]] && [[ "${ROOT}/build/manifests/bootstrap-manifest.json" -nt "${flynn_host}" ]]; then
+    need_bin_build=true
+  elif find "${ROOT}/bootstrap" \( -name '*.go' -o -name '*.json' \) -newer "${flynn_host}" 2>/dev/null | grep -q .; then
+    need_bin_build=true
+  fi
+
   # Build binaries locally using Go instead of downloading from flynn.io
   # Note: flynn-host download functionality is preserved for future use
-  if ! [[ -e "${flynn_host}" ]] || $force_bootstrap; then
+  if $need_bin_build; then
     info "building Flynn binaries from source using Go"
 
     # Ensure Go is available
@@ -130,7 +139,17 @@ main() {
       CGO_ENABLED=0 GOOS="${GOOS}" GOARCH="${GOARCH}" "${go_build}" "${version}" -o "${output}" ./cli
       chmod +x "${output}" 2>/dev/null || true
     done
-    ln -nfs "flynn-linux-amd64" "${ROOT}/build/bin/flynn"
+    native_goos="$(go env GOOS)"
+    native_goarch="$(go env GOARCH)"
+    flynn_native="flynn-${native_goos}-${native_goarch}"
+    if [[ "${native_goos}" == "windows" ]]; then
+      flynn_native="${flynn_native}.exe"
+    fi
+    if [[ -f "${ROOT}/build/bin/${flynn_native}" ]]; then
+      ln -nfs "${flynn_native}" "${ROOT}/build/bin/flynn"
+    else
+      ln -nfs "flynn-linux-amd64" "${ROOT}/build/bin/flynn"
+    fi
 
     info "building other Flynn components"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-controller" ./controller
@@ -141,7 +160,8 @@ main() {
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flanneld" ./flannel
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-release" ./util/release
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test-file-server" ./test
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test" ./test
+    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test-file-server" ./test/util/file-server
 
     info "building database appliance binaries"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres" ./appliance/postgresql/cmd/flynn-postgres
@@ -181,6 +201,27 @@ EOF
     #     --bin-dir    "${ROOT}/build/bin" \
     #     --config-dir "${ROOT}/build/manifests" \
     #     --volpath    "/var/lib/flynn/volumes-0"
+  else
+    # Full binary rebuild was skipped; still refresh integration binaries when ./test changes.
+    local flynn_test="${ROOT}/build/bin/flynn-test"
+    local fts="${ROOT}/build/bin/flynn-test-file-server"
+    if ! [[ -x "${flynn_test}" ]] \
+      || find "${ROOT}/test" -name '*.go' -newer "${flynn_test}" 2>/dev/null | grep -q . \
+      || ! [[ -x "${fts}" ]] \
+      || find "${ROOT}/test/util/file-server" -name '*.go' -newer "${fts}" 2>/dev/null | grep -q .; then
+      if ! command -v go &> /dev/null; then
+        fail "Go is not installed. Please install Go 1.13 or later."
+      fi
+      export GO111MODULE=on
+      export GOFLAGS="-mod=vendor"
+      export FLYNN_VERSION="${version}"
+      local go_build="${ROOT}/script/go-build-version"
+      mkdir -p "${ROOT}/build/bin"
+      info "building flynn-test binaries (test sources newer than build artifacts)"
+      cd "${ROOT}"
+      CGO_ENABLED=0 "${go_build}" "${version}" -o "${flynn_test}" ./test
+      CGO_ENABLED=0 "${go_build}" "${version}" -o "${fts}" ./test/util/file-server
+    fi
   fi
 
   # Set up GOROOT symlinks for unit tests

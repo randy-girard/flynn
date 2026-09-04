@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"io"
 	"io/ioutil"
+	"net"
 	"os"
 	"reflect"
+	"strconv"
 	"testing"
 
 	main "github.com/flynn/flynn/appliance/redis/cmd/flynn-redis"
@@ -22,6 +24,15 @@ func TestMain_Discoverd(t *testing.T) {
 	hb := NewHeartbeater("127.0.0.1:0")
 	hb.CloseFn = func() error { hbClosed = true; return nil }
 
+	lnPick, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	redisPort := strconv.Itoa(lnPick.Addr().(*net.TCPAddr).Port)
+	if err := lnPick.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	// Validate arguments passed to discoverd.
 	m.DiscoverdClient.AddServiceFn = func(name string, config *discoverd.ServiceConfig) error {
 		if name != "redis" {
@@ -33,7 +44,7 @@ func TestMain_Discoverd(t *testing.T) {
 		if service != "redis" {
 			t.Fatalf("unexpected service: %s", service)
 		} else if !reflect.DeepEqual(inst, &discoverd.Instance{
-			Addr: ":6379",
+			Addr: ":" + redisPort,
 			Meta: map[string]string{"REDIS_ID": m.Process.ID},
 		}) {
 			t.Fatalf("unexpected inst: %#v", inst)
@@ -41,8 +52,9 @@ func TestMain_Discoverd(t *testing.T) {
 		return hb, nil
 	}
 
-	// set a password
+	// set a password and bind Redis server to an ephemeral port (avoid clashes with a host redis on 6379)
 	m.Process.Password = "test"
+	m.Process.Port = redisPort
 
 	// Execute program.
 	if err := m.Run(); err != nil {

@@ -243,6 +243,13 @@ func pingLeases(leases []subnet.SubnetLease) error {
 		return nil
 	}
 
+	// Single-node clusters only register our own lease; mesh ping targets the overlay
+	// subnet IP or EXTERNAL_IP, neither of which is reliably reachable from the
+	// flannel job's network namespace. With no peers, there is nothing to verify.
+	if len(leases) == 1 {
+		return nil
+	}
+
 	work := make(chan subnet.SubnetLease)
 	results := make(chan bool, workers)
 	client := http.Client{Timeout: timeout}

@@ -51,7 +51,7 @@ type Client struct {
 }
 
 var httpClient = &http.Client{
-	Timeout:   3 * time.Minute, // client operation timeout
+	Timeout:   15 * time.Minute,
 	Transport: httphelper.RetryClient.Transport,
 }
 

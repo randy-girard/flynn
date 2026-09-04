@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -181,6 +182,60 @@ func debugLogWriter(t *c.C) io.Writer {
 	return w
 }
 
+func normalizeHWArch(s string) string {
+	switch s {
+	case "aarch64":
+		return "arm64"
+	case "x86_64":
+		return "amd64"
+	default:
+		return s
+	}
+}
+
+func readHostImageArch(imagesPath string) (string, error) {
+	f, err := os.Open(imagesPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	var artifacts map[string]struct {
+		Manifest struct {
+			Rootfs []struct {
+				Platform struct {
+					Architecture string `json:"architecture"`
+				} `json:"platform"`
+			} `json:"rootfs"`
+		} `json:"manifest"`
+	}
+	if err := json.NewDecoder(f).Decode(&artifacts); err != nil {
+		return "", err
+	}
+	a, ok := artifacts["host"]
+	if !ok || len(a.Manifest.Rootfs) == 0 {
+		return "", fmt.Errorf("images.json: missing host image platform")
+	}
+	return a.Manifest.Rootfs[0].Platform.Architecture, nil
+}
+
+func nestedClusterArchMismatch(imagesPath string) (bool, string) {
+	hostHW := os.Getenv("HOST_MACHINE")
+	if hostHW == "" {
+		hostHW = runtime.GOARCH
+	}
+	imgArch, err := readHostImageArch(imagesPath)
+	if err != nil {
+		return false, ""
+	}
+	if normalizeHWArch(hostHW) == normalizeHWArch(imgArch) {
+		return false, ""
+	}
+	return true, fmt.Sprintf(
+		"nested cluster requires host images built for %s (images.json host image is %s); skipping",
+		normalizeHWArch(hostHW), normalizeHWArch(imgArch),
+	)
+}
+
 func (h *Helper) bootClusterWithConfig(t *c.C, conf *cluster2.BootConfig) *Cluster {
 	conf.ImagesPath = "../build/images.json"
 	conf.ManifestPath = "../build/manifests/bootstrap-manifest.json"
@@ -189,7 +244,21 @@ func (h *Helper) bootClusterWithConfig(t *c.C, conf *cluster2.BootConfig) *Clust
 	conf.Logger = log15.New()
 	conf.Logger.SetHandler(log15.StreamHandler(debugLogWriter(t), log15.LogfmtFormat()))
 
+	if skip, msg := nestedClusterArchMismatch(conf.ImagesPath); skip {
+		t.Skip(msg)
+	}
+
 	conf.UseKVM = os.Getenv("USE_KVM") == "true"
+	if ts := os.Getenv("TEST_CLUSTER_HOST_TIMEOUT"); ts != "" {
+		if d, err := time.ParseDuration(ts); err == nil {
+			conf.HostTimeout = &d
+		}
+	} else {
+		// AddHosts defaults to 60s without HostTimeout. Nested VMs are often slow (TCG), and
+		// USE_KVM is set from the outer host's /dev/kvm — it does not mean nested jobs boot quickly.
+		d := 15 * time.Minute
+		conf.HostTimeout = &d
+	}
 
 	s, err := cluster2.Boot(conf)
 	t.Assert(err, c.IsNil)

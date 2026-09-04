@@ -28,8 +28,13 @@ if ! [[ -x "${GO_BIN}" ]]; then
 fi
 
 TAGS=()
-# flynn-host needs CGO + seccomp; flynn-init and other tools set CGO_ENABLED=0.
-if [[ "${CGO_ENABLED:-1}" == "1" ]]; then
+# Allow CI/local overrides (e.g. GO_BUILD_TAGS=apparmor when libseccomp is unavailable).
+# flynn-host needs CGO + seccomp by default; flynn-init and other tools set CGO_ENABLED=0.
+if [[ -n "${GO_BUILD_TAGS+x}" ]]; then
+  if [[ -n "${GO_BUILD_TAGS}" ]]; then
+    TAGS=(-tags "${GO_BUILD_TAGS}")
+  fi
+elif [[ "${CGO_ENABLED:-1}" == "1" ]]; then
   TAGS=(-tags "apparmor,seccomp")
 fi
 

@@ -1,20 +1,16 @@
 name: Build and Release
 
+# Manual release only. Unit tests run first; the Flynn build is split into
+# separate jobs so each step gets a fresh GitHub Actions timeout budget.
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v20240127.0). Leave empty to auto-generate.'
-        required: false
+        description: 'Version tag for the release (e.g., v20260904.0)'
+        required: true
         type: string
       draft:
-        description: 'Create the release as a draft prerelease (instead of publishing)'
+        description: 'Create the release as a draft prerelease'
         required: false
         type: boolean
         default: false
@@ -24,84 +20,121 @@ permissions:
 
 env:
   GO_VERSION: '1.24'
+  GOFLAGS: '-mod=vendor'
 
 jobs:
-  build:
+  test:
+    name: Unit tests
+    uses: ./.github/workflows/unit-tests.yml
+    permissions:
+      contents: read
+
+  build-base:
+    name: Build base image
+    needs: test
     runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Set up Flynn environment
-        run: |
-          echo "FLYNN_ROOT=${{ github.workspace }}" >> $GITHUB_ENV
-          echo "FLYNN_DISCOVERY_DIR=${{ github.workspace }}/flynn-discovery" >> $GITHUB_ENV
-          # Allow git operations as root (build.sh runs under sudo) on the workspace
-          git config --global --add safe.directory "${{ github.workspace }}"
-          sudo git config --system --add safe.directory "${{ github.workspace }}"
-
-      - name: Determine release mode
-        id: mode
-        run: |
-          set -eo pipefail
-          DRAFT=false
-          PRERELEASE=false
-          BRANCH_SUFFIX=""
-
-          case "${{ github.event_name }}" in
-            pull_request)
-              DRAFT=true
-              PRERELEASE=true
-              # Sanitize branch name for use in a version tag suffix
-              BRANCH_SUFFIX=$(echo "${{ github.head_ref }}" | tr '/' '-' | tr -cd '[:alnum:]-')
-              ;;
-            workflow_dispatch)
-              if [[ "${{ inputs.draft }}" == "true" ]]; then
-                DRAFT=true
-                PRERELEASE=true
-              fi
-              ;;
-          esac
-
-          echo "DRAFT=${DRAFT}" >> $GITHUB_OUTPUT
-          echo "PRERELEASE=${PRERELEASE}" >> $GITHUB_OUTPUT
-          echo "BRANCH_SUFFIX=${BRANCH_SUFFIX}" >> $GITHUB_OUTPUT
-          echo "Release mode: draft=${DRAFT} prerelease=${PRERELEASE} branch_suffix='${BRANCH_SUFFIX}'"
-
-      - name: Determine version
+      - name: Validate version
         id: version
         run: |
           set -eo pipefail
-          git fetch --tags --force
-
           VERSION="${{ inputs.version }}"
-          if [[ -z "${VERSION}" ]]; then
-            DATE_PREFIX="v$(date +%Y%m%d)"
-            # Only consider numeric iterations (ignore branch-suffixed tags from PR builds)
-            LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" | grep -E "^${DATE_PREFIX}\.[0-9]+$" | sort -V | tail -n1 || true)
-            if [[ -n "${LATEST_TODAY}" ]]; then
-              ITERATION="${LATEST_TODAY##*.}"
-              VERSION="${DATE_PREFIX}.$((ITERATION + 1))"
-            else
-              VERSION="${DATE_PREFIX}.0"
-            fi
+          if [[ ! "${VERSION}" =~ ^v[0-9]{8}\.[0-9]+$ ]]; then
+            echo "ERROR: version must look like vYYYYMMDD.N (got '${VERSION}')" >&2
+            exit 1
           fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building base for ${VERSION}"
 
-          BRANCH_SUFFIX="${{ steps.mode.outputs.BRANCH_SUFFIX }}"
-          if [[ -n "${BRANCH_SUFFIX}" ]]; then
-            # For PR builds, always use .0 with branch suffix so re-pushes reuse the same draft
-            VERSION="v$(date +%Y%m%d).0-${BRANCH_SUFFIX}"
-          fi
-
-          echo "VERSION=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Building version: ${VERSION}"
+      - name: Set up Flynn environment
+        run: |
+          echo "FLYNN_ROOT=${{ github.workspace }}" >> "$GITHUB_ENV"
+          git config --global --add safe.directory "${{ github.workspace }}"
+          sudo git config --system --add safe.directory "${{ github.workspace }}"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          # Docker is pre-installed on GitHub Actions runners
+          sudo apt-get install -y \
+            build-essential \
+            debootstrap \
+            squashfs-tools \
+            zfsutils-linux \
+            jq \
+            curl \
+            git \
+            pigz
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build sha512_256_binary tool
+        run: |
+          cd "${{ env.FLYNN_ROOT }}"
+          go build -o sha512_256_binary sha512_256.go
+
+      - name: Set up Flynn directories
+        run: |
+          sudo mkdir -p /var/lib/flynn /var/log/flynn /etc/flynn /tmp/discoverd-data /var/run/flynn-local
+
+      - name: Run build.sh base
+        env:
+          FLYNN_BUILD_SKIP_TEARDOWN: "1"
+        run: |
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" base
+
+      - name: Stage base artifacts
+        run: |
+          mkdir -p "${{ github.workspace }}/ci-artifacts/base"
+          sudo cp -a /var/lib/flynn/base-layer.squashfs \
+            "${{ github.workspace }}/ci-artifacts/base/base-layer.squashfs"
+          sudo cp -a "${{ github.workspace }}/builder/manifest.json" \
+            "${{ github.workspace }}/ci-artifacts/base/manifest.json"
+          sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/ci-artifacts"
+
+      - name: Upload base artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flynn-base-${{ steps.version.outputs.VERSION }}
+          path: ci-artifacts/base/
+          if-no-files-found: error
+          retention-days: 7
+
+  build-cluster:
+    name: Build cluster images
+    needs: build-base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version
+        id: version
+        run: |
+          VERSION="${{ inputs.version }}"
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Flynn environment
+        run: |
+          echo "FLYNN_ROOT=${{ github.workspace }}" >> "$GITHUB_ENV"
+          git config --global --add safe.directory "${{ github.workspace }}"
+          sudo git config --system --add safe.directory "${{ github.workspace }}"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             debootstrap \
@@ -117,8 +150,8 @@ jobs:
             bridge-utils \
             libdevmapper-dev \
             libseccomp-dev \
+            pkg-config \
             pigz
-          docker --version
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -131,84 +164,145 @@ jobs:
           sudo zpool create -f flynn-default /zfs-pool.img
           sudo zfs set compression=lz4 flynn-default
           sudo zfs set sync=disabled flynn-default
-          # Cap ZFS ARC to 2 GiB so it doesn't compete with parallel `go build`
-          # processes for the runner's 16 GiB of RAM. Default ARC max is ~half
-          # of system RAM, which on GH Actions runners leaves the build
-          # containers short on memory and triggers ENOMEM during compilation.
           echo 2147483648 | sudo tee /sys/module/zfs/parameters/zfs_arc_max
 
-      - name: Add swap (GH Actions runners ship with none)
+      - name: Add swap
         run: |
-          # 8 GiB swapfile on /mnt (GH-hosted runners' large ephemeral disk).
-          # Acts as a safety net for transient memory spikes during the
-          # flynn-builder fan-out; FLYNN_BUILD_CONCURRENCY=1 keeps peak usage
-          # bounded, but swap absorbs any remaining headroom shortfall.
           sudo fallocate -l 8G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
           free -h
 
-      - name: Set up Flynn directory structure
+      - name: Set up Flynn directories
         run: |
-          sudo mkdir -p /var/lib/flynn /var/log/flynn /etc/flynn /tmp/discoverd-data /var/run/flynn-local
+          sudo mkdir -p /var/lib/flynn /var/log/flynn /etc/flynn /tmp/discoverd-data /var/run/flynn-local /var/lib/flynn/layer-cache
 
       - name: Build sha512_256_binary tool
         run: |
-          cd ${{ env.FLYNN_ROOT }}
-          if [ -f sha512_256.go ]; then
-            go build -o sha512_256_binary sha512_256.go
-          elif [ -f sha512_256_binary.go ]; then
-            go build -o sha512_256_binary sha512_256_binary.go
-          fi
+          cd "${{ env.FLYNN_ROOT }}"
+          go build -o sha512_256_binary sha512_256.go
 
-      - name: Start flynn-discovery
-        if: hashFiles('flynn-discovery/docker-compose.yml', 'flynn-discovery/docker-compose.yaml') != ''
+      - name: Download base artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flynn-base-${{ steps.version.outputs.VERSION }}
+          path: ci-artifacts/base
+
+      - name: Restore base squashfs and manifest
         run: |
-          cd ${{ env.FLYNN_DISCOVERY_DIR }}
-          docker compose up -d --build
-          echo "Waiting for discovery service..."
-          sleep 10
+          sudo cp -a ci-artifacts/base/base-layer.squashfs /var/lib/flynn/base-layer.squashfs
+          cp -a ci-artifacts/base/manifest.json builder/manifest.json
+          ls -lh /var/lib/flynn/base-layer.squashfs builder/manifest.json
 
-      - name: Run build.sh
+      - name: Run build.sh cluster
         env:
-          # Skip teardown_flynn (which would destroy the zpool we just created
-          # and try to systemctl-stop a non-existent flynn-host service).
           FLYNN_BUILD_SKIP_TEARDOWN: "1"
-          # Serialize flynn-builder image builds on this runner. The default
-          # (NumCPU) fans out ~10 concurrent `go build` jobs and exhausts the
-          # runner's 16 GiB of RAM, surfacing as `readdirent: cannot allocate
-          # memory` mid-compile. Unset on Vagrant/production.
           FLYNN_BUILD_CONCURRENCY: "1"
         run: |
-          cd ${{ env.FLYNN_ROOT }}
-          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}"
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" cluster
 
-      - name: Create GitHub Release (via script/release)
-        env:
-          # gh CLI picks up GH_TOKEN automatically. sudo -E preserves it.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          FLYNN_GITHUB_REPO: ${{ github.repository }}
+      - name: Package release tarball
         run: |
-          cd ${{ env.FLYNN_ROOT }}
-          ARGS=(--target github
-                --version "${{ steps.version.outputs.VERSION }}"
-                --github-repo "${{ github.repository }}")
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./script/release \
+            --target tarball \
+            --version "${{ steps.version.outputs.VERSION }}"
+          sudo chown -R "$(id -u):$(id -g)" build/release
+          ls -lh build/release/
+
+      - name: Upload release tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: flynn-release-${{ steps.version.outputs.VERSION }}
+          path: build/release/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Cleanup
+        if: always()
+        run: |
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo ./script/stop-all || true
+          sudo zpool destroy flynn-default || true
+
+  publish:
+    name: Publish GitHub release
+    needs: build-cluster
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine release mode
+        id: mode
+        run: |
+          DRAFT=false
+          PRERELEASE=false
+          if [[ "${{ inputs.draft }}" == "true" ]]; then
+            DRAFT=true
+            PRERELEASE=true
+          fi
+          echo "DRAFT=${DRAFT}" >> "$GITHUB_OUTPUT"
+          echo "PRERELEASE=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate version
+        id: version
+        run: |
+          set -eo pipefail
+          VERSION="${{ inputs.version }}"
+          git fetch --tags --force
+          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+            echo "ERROR: tag ${VERSION} already exists" >&2
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flynn-release-${{ steps.version.outputs.VERSION }}
+          path: build/release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          NOTES_FILE="$(mktemp)"
+          {
+            echo "## Flynn ${VERSION}"
+            echo
+            echo "Built from \`${GITHUB_SHA}\` via workflow_dispatch."
+            echo
+            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1 || true)
+            if [[ -n "${PREVIOUS_TAG}" ]]; then
+              echo "### Changes since ${PREVIOUS_TAG}"
+              echo
+              git log --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..HEAD" | head -n 100 || true
+            fi
+          } > "${NOTES_FILE}"
+
+          ARGS=(--title "Flynn ${VERSION}" --notes-file "${NOTES_FILE}")
           if [[ "${{ steps.mode.outputs.DRAFT }}" == "true" ]]; then
             ARGS+=(--draft)
           fi
           if [[ "${{ steps.mode.outputs.PRERELEASE }}" == "true" ]]; then
             ARGS+=(--prerelease)
           fi
-          sudo -E ./script/release "${ARGS[@]}"
 
-      - name: Cleanup
-        if: always()
-        run: |
-          cd ${{ env.FLYNN_ROOT }}
-          sudo ./script/stop-all || true
-          if [ -d "${{ env.FLYNN_DISCOVERY_DIR }}" ]; then
-            cd ${{ env.FLYNN_DISCOVERY_DIR }}
-            docker compose down || true
+          shopt -s nullglob
+          FILES=(build/release/*)
+          if [[ ${#FILES[@]} -eq 0 ]]; then
+            echo "ERROR: no release files found in build/release" >&2
+            exit 1
           fi
-          sudo zpool destroy flynn-default || true
+
+          gh release create "${VERSION}" "${ARGS[@]}" "${FILES[@]}"
+          echo "Created release ${VERSION}"
+          gh release view "${VERSION}"
