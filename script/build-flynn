@@ -76,6 +76,9 @@ main() {
   local need_bin_build=false
   if ! [[ -e "${flynn_host}" ]] || $force_bootstrap; then
     need_bin_build=true
+  elif command -v file >/dev/null 2>&1 && file "${flynn_host}" 2>/dev/null | grep -q 'Mach-O'; then
+    # Host-mounted macOS binaries must be rebuilt inside Linux containers/CI.
+    need_bin_build=true
   elif [[ -f "${ROOT}/build/manifests/bootstrap-manifest.json" ]] && [[ "${ROOT}/build/manifests/bootstrap-manifest.json" -nt "${flynn_host}" ]]; then
     need_bin_build=true
   elif find "${ROOT}/bootstrap" \( -name '*.go' -o -name '*.json' \) -newer "${flynn_host}" 2>/dev/null | grep -q .; then

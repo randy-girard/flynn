@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -493,8 +494,11 @@ func (MariaDBSuite) TestIntegration_RestoreWritesMyCnf(c *C) {
 
 	cfg, err := ioutil.ReadFile(standby.ConfigPath())
 	c.Assert(err, IsNil)
-	c.Assert(string(cfg), Matches, "(?m)read_only = 1")
+	c.Assert(strings.Contains(string(cfg), "read_only = 1"), Equals, true,
+		Commentf("standby my.cnf missing read_only:\n%s", cfg))
 
+	// Restore alone does not set a sirenia role; configure as sync before Start.
+	c.Assert(standby.Reconfigure(Config(state.RoleSync, primary, nil)), IsNil)
 	c.Assert(standby.Start(), IsNil)
 	defer standby.Stop()
 }

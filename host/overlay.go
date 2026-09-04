@@ -58,10 +58,11 @@ func dedupeLowerDirPaths(paths []string) []string {
 	if len(paths) == 0 {
 		return paths
 	}
+	// Keep the topmost (leftmost) occurrence of each path.
 	first := make(map[string]int, len(paths))
-	for i := len(paths) - 1; i >= 0; i-- {
-		if _, ok := first[paths[i]]; !ok {
-			first[paths[i]] = i
+	for i, p := range paths {
+		if _, ok := first[p]; !ok {
+			first[p] = i
 		}
 	}
 	out := make([]string, 0, len(first))

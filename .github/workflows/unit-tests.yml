@@ -92,4 +92,4 @@ jobs:
         run: bats script/test
 
       - name: Run unit tests
-        run: make test-unit-root
+        run: make test-unit-root-native

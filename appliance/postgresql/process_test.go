@@ -349,7 +349,9 @@ func (PostgresSuite) TestIntegration(c *C) {
 	var res string
 	err = node1Conn.QueryRow("SHOW synchronous_standby_names").Scan(&res)
 	c.Assert(err, IsNil)
-	c.Assert(res, Equals, "node2")
+	// Postgres 16+ quotes standby names in SHOW output ("node2"); older
+	// versions returned the bare identifier.
+	c.Assert(strings.Trim(res, `"`), Equals, "node2")
 	err = node1Conn.QueryRow("SHOW synchronous_commit").Scan(&res)
 	c.Assert(err, IsNil)
 	c.Assert(res, Equals, "remote_write")

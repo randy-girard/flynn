@@ -1995,11 +1995,18 @@ func isBuildJob(job *host.Job) bool {
 // system app and gets the key that way. Giving the key to a slug/dockerbuilder
 // would let any user who can push escalate to the (privileged) host API.
 func isSystemJob(job *host.Job) bool {
+	if job == nil {
+		return false
+	}
+	// Partition is authoritative even when Metadata is unset (common for
+	// synthesized host jobs in tests and some bootstrap paths).
+	if job.Partition == "system" {
+		return true
+	}
 	if job.Metadata == nil {
 		return false
 	}
 	return job.Metadata["flynn-system-app"] == "true" ||
-		job.Partition == "system" ||
 		job.Metadata["flynn-controller.app_name"] == "builder"
 }
 
