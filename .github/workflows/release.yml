@@ -15,7 +15,12 @@ on:
         type: boolean
         default: true
       concurrency:
-        description: 'Parallel flynn-builder image builds (1 safest on small runners; 2-4 much faster)'
+        description: 'Parallel flynn-builder app image builds (phase 2; default 4)'
+        required: false
+        type: string
+        default: '4'
+      toolchain_concurrency:
+        description: 'Parallel flynn-builder toolchain image builds (phase 1; default 2)'
         required: false
         type: string
         default: '2'
@@ -203,13 +208,13 @@ jobs:
       - name: Run build.sh cluster
         env:
           FLYNN_BUILD_SKIP_TEARDOWN: "1"
-          # Serial (1) is too slow for ~40 images on GHA's 6h wall clock.
-          # Default 2 is a balance; raise via workflow input on larger runners.
-          FLYNN_BUILD_CONCURRENCY: ${{ inputs.concurrency }}
+          # Phase 1 (toolchain) stays conservative; phase 2 (apps) can run hotter.
+          TOOLCHAIN_CONCURRENCY: ${{ inputs.toolchain_concurrency }}
+          APPS_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
-          echo "Building cluster images with FLYNN_BUILD_CONCURRENCY=${FLYNN_BUILD_CONCURRENCY}"
+          echo "Building cluster images: toolchain concurrency=${TOOLCHAIN_CONCURRENCY}, apps concurrency=${APPS_CONCURRENCY}"
           # Heartbeat so the step does not look hung during long image builds.
           (
             while true; do

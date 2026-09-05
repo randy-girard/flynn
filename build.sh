@@ -218,15 +218,35 @@ run_phase_cluster() {
 
   MAX_RETRIES=10
   ATTEMPT=1
+  TOOLCHAIN_CONCURRENCY="${TOOLCHAIN_CONCURRENCY:-2}"
+  APPS_CONCURRENCY="${APPS_CONCURRENCY:-${FLYNN_BUILD_CONCURRENCY:-4}}"
 
   while [[ ${ATTEMPT} -le ${MAX_RETRIES} ]]; do
     echo "===> Running flynn-builder build (attempt ${ATTEMPT} of ${MAX_RETRIES}) with version: ${VERSION}"
-    if ./script/flynn-builder build --version="${VERSION}" --verbose; then
+    echo "===> Phase 1/2: toolchain (FLYNN_BUILD_CONCURRENCY=${TOOLCHAIN_CONCURRENCY})"
+    if ! FLYNN_BUILD_CONCURRENCY="${TOOLCHAIN_CONCURRENCY}" \
+      ./script/flynn-builder build --version="${VERSION}" --verbose --only=toolchain; then
+      echo ""
+      echo "===> flynn-builder toolchain build FAILED (attempt ${ATTEMPT} of ${MAX_RETRIES})!"
+      flynn-host ps -a
+      if [[ ${ATTEMPT} -eq ${MAX_RETRIES} ]]; then
+        echo "===> Maximum retry attempts reached. Exiting."
+        exit 1
+      fi
+      echo "===> Retrying in 5 seconds..."
+      sleep 5
+      ATTEMPT=$((ATTEMPT + 1))
+      continue
+    fi
+
+    echo "===> Phase 2/2: apps (FLYNN_BUILD_CONCURRENCY=${APPS_CONCURRENCY})"
+    if FLYNN_BUILD_CONCURRENCY="${APPS_CONCURRENCY}" \
+      ./script/flynn-builder build --version="${VERSION}" --verbose --only=apps; then
       echo "===> flynn-builder build succeeded!"
       break
     else
       echo ""
-      echo "===> flynn-builder build FAILED (attempt ${ATTEMPT} of ${MAX_RETRIES})!"
+      echo "===> flynn-builder apps build FAILED (attempt ${ATTEMPT} of ${MAX_RETRIES})!"
       flynn-host ps -a
       if [[ ${ATTEMPT} -eq ${MAX_RETRIES} ]]; then
         echo "===> Maximum retry attempts reached. Exiting."
