@@ -182,8 +182,8 @@ func TestMintBuildToken(t *testing.T) {
 }
 
 // TestApplyBuildCredentialWithSigner verifies that when a signer is configured
-// the cluster key is removed from the job env and the token is delivered via a
-// root-only secret mount instead.
+// the token is delivered via a root-only secret mount while CONTROLLER_KEY is
+// preserved for build.sh to relocate as a legacy fallback.
 func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	signer, _ := newBuildKeyPair(t)
 	app := &ct.App{ID: "app-1", Name: "myapp"}
@@ -195,8 +195,8 @@ func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	if err := applyBuildCredential(signer, job, app, nil); err != nil {
 		t.Fatalf("applyBuildCredential: %s", err)
 	}
-	if _, ok := job.Config.Env["CONTROLLER_KEY"]; ok {
-		t.Fatal("CONTROLLER_KEY must be removed from build job env when minting")
+	if job.Config.Env["CONTROLLER_KEY"] != "cluster-god-key" {
+		t.Fatal("CONTROLLER_KEY must be preserved for build.sh SEC-003 fallback")
 	}
 	if job.Config.Env["SLUG_IMAGE_ID"] != "x" {
 		t.Fatal("unrelated env should be preserved")
@@ -254,6 +254,43 @@ func TestResolveBuildTimeout(t *testing.T) {
 				t.Fatalf("resolveBuildTimeout(%v) = %s, want %s", tc.releaseEnv, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestBuildSignerRequiresVerifyKey verifies scoped build tokens are only minted
+// when both the signing key and the matching public verify key are configured.
+func TestBuildSignerRequiresVerifyKey(t *testing.T) {
+	pubKey, privKey, err := tokensigner.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ACCESS_TOKEN_SIGNING_KEY", privKey)
+
+	t.Setenv("ACCESS_TOKEN_KEY", "")
+	signer, err := buildSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signer != nil {
+		t.Fatal("expected nil signer without ACCESS_TOKEN_KEY")
+	}
+
+	t.Setenv("ACCESS_TOKEN_KEY", pubKey)
+	signer, err = buildSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signer == nil {
+		t.Fatal("expected signer when keypair is valid")
+	}
+
+	t.Setenv("ACCESS_TOKEN_KEY", pubKey+"x")
+	signer, err = buildSigner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signer != nil {
+		t.Fatal("expected nil signer when public key does not match signing key")
 	}
 }
 

@@ -27,6 +27,10 @@ Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
+
+
 apt update
 apt-get install -y \
   docker-ce \
@@ -50,7 +54,13 @@ apt-get install -y \
   libseccomp-dev \
   apparmor \
   apparmor-utils \
-  linux-modules-extra-$(uname -r)
+  linux-modules-extra-$(uname -r) \
+  mariadb-server \
+  mariadb-backup \
+  redis \
+  postgresql \
+  postgresql-contrib \
+  mongodb-org
 
 cd /usr/local
 # adjust version as you like; 1.20+ is fine for Flynn

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"fmt"
 	"io"
 	"net"
@@ -12,17 +16,20 @@ import (
 	"github.com/flynn/flynn/controller/api"
 	"github.com/flynn/flynn/controller/data"
 	tu "github.com/flynn/flynn/controller/testutils"
+	"github.com/flynn/flynn/controller/tokensigner"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/flynn/pkg/random"
+	pgtestutils "github.com/flynn/flynn/pkg/testutils/postgres"
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const bufSize = 1024 * 1024
@@ -47,11 +54,10 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 	}
 
 	// reconnect with que statements prepared now that schema is migrated
+	cfg, err := pgtestutils.ConnConfigForDatabase(dbname)
+	c.Assert(err, IsNil)
 	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
-		ConnConfig: pgx.ConnConfig{
-			Host:     "/var/run/postgresql",
-			Database: dbname,
-		},
+		ConnConfig:   cfg,
 		AfterConnect: data.PrepareStatements,
 	})
 	if err != nil {
@@ -60,12 +66,18 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 	s.db = postgres.New(pgxpool, nil)
 
 	authKeys := []string{"test-3bebef7a2bed81017fb2bfa411a6a0a2"}
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	c.Assert(err, IsNil)
+	bearer := mintGRPCBearerToken(c, priv)
+
 	handler, grpcServer, ctrlAPI := appHandler(handlerConfig{
-		db:     s.db,
-		cc:     tu.NewFakeCluster(),
-		lc:     newFakeLogAggregatorClient(),
-		keys:   authKeys,
-		keyIDs: []string{"test-auth-key"},
+		db:               s.db,
+		cc:               tu.NewFakeCluster(),
+		lc:               newFakeLogAggregatorClient(),
+		keys:             authKeys,
+		keyIDs:           []string{"test-auth-key"},
+		tokenKey:         &priv.PublicKey,
+		tokenMaxValidity: time.Hour,
 	})
 	s.api = ctrlAPI
 	s.httpSrv = httptest.NewServer(handler)
@@ -88,7 +100,7 @@ func (s *GRPCSuite) SetUpSuite(c *C) {
 	}
 
 	// Set up an authenticated connection to the server
-	s.grpc = grpcClient(api.WithAuthKey(authKeys[0]))
+	s.grpc = grpcClient(grpc.WithPerRPCCredentials(&grpcBearerCreds{token: bearer}))
 
 	// Set up an unauthenticated connection to the server
 	s.grpcNoAuth = grpcClient()
@@ -293,22 +305,22 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res, receivedEOF := unaryReceiveApps(s, c, &api.StreamAppsRequest{PageSize: 1})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, testApp3)
+	c.Assert(proto.Equal(res.Apps[0], testApp3), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching a sinple app by name
 	res, receivedEOF = unaryReceiveApps(s, c, &api.StreamAppsRequest{NameFilters: []string{testApp2.Name}})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, testApp2)
+	c.Assert(proto.Equal(res.Apps[0], testApp2), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching multiple apps by name
 	res, receivedEOF = unaryReceiveApps(s, c, &api.StreamAppsRequest{NameFilters: []string{testApp1.Name, testApp2.Name}})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 2)
-	c.Assert(res.Apps[0], DeepEquals, testApp2)
-	c.Assert(res.Apps[1], DeepEquals, testApp1)
+	c.Assert(proto.Equal(res.Apps[0], testApp2), Equals, true)
+	c.Assert(proto.Equal(res.Apps[1], testApp1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_NOT_IN]
@@ -326,8 +338,8 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 2)
 	// testApp3 has test.labels-filter: exclude
-	c.Assert(res.Apps[0], DeepEquals, testApp2) // has test.labels-filter: include
-	c.Assert(res.Apps[1], DeepEquals, testApp1) // has no labels
+	c.Assert(proto.Equal(res.Apps[0], testApp2), Equals, true) // has test.labels-filter: include
+	c.Assert(proto.Equal(res.Apps[1], testApp1), Equals, true) // has no labels
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_IN]
@@ -345,7 +357,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
 	// testApp3 has test.labels-filter: exclude
-	c.Assert(res.Apps[0], DeepEquals, testApp2) // has test.labels-filter: include
+	c.Assert(proto.Equal(res.Apps[0], testApp2), Equals, true) // has test.labels-filter: include
 	// testApp1 has no labels
 	c.Assert(receivedEOF, Equals, true)
 
@@ -362,8 +374,8 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	}})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 2)
-	c.Assert(res.Apps[0], DeepEquals, testApp3) // has test.labels-filter
-	c.Assert(res.Apps[1], DeepEquals, testApp2) // has test.labels-filter
+	c.Assert(proto.Equal(res.Apps[0], testApp3), Equals, true) // has test.labels-filter
+	c.Assert(proto.Equal(res.Apps[1], testApp2), Equals, true) // has test.labels-filter
 	// testApp1 has no labels
 	c.Assert(receivedEOF, Equals, true)
 
@@ -381,7 +393,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
 	// testApp3 and testApp2 both have test.labels-filter
-	c.Assert(res.Apps[0], DeepEquals, testApp1) // has no labels
+	c.Assert(proto.Equal(res.Apps[0], testApp1), Equals, true) // has no labels
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels with pagination [OP_NOT_EXISTS]
@@ -398,14 +410,14 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
 	// testApp3 and testApp2 both have test.labels-filter
-	c.Assert(res.Apps[0], DeepEquals, testApp1) // has no labels
+	c.Assert(proto.Equal(res.Apps[0], testApp1), Equals, true) // has no labels
 	c.Assert(receivedEOF, Equals, true)
 
 	// test streaming updates
 	stream, cancel := streamAppsWithCancel(&api.StreamAppsRequest{NameFilters: []string{testApp1.Name}, StreamUpdates: true})
 	res = receiveAppsStream(stream)
 	c.Assert(res, Not(IsNil))
-	c.Assert(res.Apps[0], DeepEquals, testApp1)
+	c.Assert(proto.Equal(res.Apps[0], testApp1), Equals, true)
 	testApp4 := s.createTestApp(c, &api.App{DisplayName: "test4"}) // through in a create to test that the we get the update and not the create
 	testApp1.Labels = map[string]string{"test.one": "1"}
 	updatedTestApp1 := s.updateTestApp(c, testApp1)
@@ -413,7 +425,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res = receiveAppsStream(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, updatedTestApp1)
+	c.Assert(proto.Equal(res.Apps[0], updatedTestApp1), Equals, true)
 	cancel()
 
 	// test streaming updates that don't match the LabelFilters [OP_EXISTS]
@@ -445,7 +457,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res = receiveAppsStream(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, updatedTestApp1)
+	c.Assert(proto.Equal(res.Apps[0], updatedTestApp1), Equals, true)
 	cancel()
 
 	// test streaming updates (new release)
@@ -457,7 +469,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res = receiveAppsStream(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, testApp5)
+	c.Assert(proto.Equal(res.Apps[0], testApp5), Equals, true)
 	c.Assert(res.Apps[0].Release, Equals, testRelease1.Name)
 	cancel()
 
@@ -470,7 +482,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res = receiveAppsStream(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 1)
-	c.Assert(res.Apps[0], DeepEquals, testApp6)
+	c.Assert(proto.Equal(res.Apps[0], testApp6), Equals, true)
 	cancel()
 
 	// test streaming creates that don't match the NameFilters
@@ -523,7 +535,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	res, receivedEOF = unaryReceiveApps(s, c, &api.StreamAppsRequest{PageSize: 2, PageToken: res.NextPageToken})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Apps), Equals, 2)
-	c.Assert(res.Apps[0], DeepEquals, testApp2)
+	c.Assert(proto.Equal(res.Apps[0], testApp2), Equals, true)
 	c.Assert(res.Apps[1].DisplayName, DeepEquals, testApp1.DisplayName)
 	c.Assert(receivedEOF, Equals, true)
 	c.Assert(res.NextPageToken, Equals, "")
@@ -632,7 +644,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp3.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease4)
+	c.Assert(proto.Equal(res.Releases[0], testRelease4), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching a single release by name
@@ -640,7 +652,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching a single release by name with page size set to 1
@@ -648,7 +660,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching a single release by app name
@@ -656,7 +668,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp2.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[0], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching multiple releases by name
@@ -664,9 +676,9 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 2)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
 	c.Assert(strings.HasPrefix(res.Releases[1].Name, testApp2.Name), Equals, true)
-	c.Assert(res.Releases[1], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[1], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching multiple releases by app name
@@ -674,9 +686,9 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 2)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease3)
+	c.Assert(proto.Equal(res.Releases[0], testRelease3), Equals, true)
 	c.Assert(strings.HasPrefix(res.Releases[1].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[1], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[1], testRelease2), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test fetching multiple releases by a mixture of app name and release name
@@ -684,7 +696,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_IN]
@@ -702,9 +714,9 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 2)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
 	c.Assert(strings.HasPrefix(res.Releases[1].Name, testApp2.Name), Equals, true)
-	c.Assert(res.Releases[1], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[1], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_NOT_IN]
@@ -727,7 +739,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp2.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[0], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_EXISTS]
@@ -748,7 +760,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp3.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease4)
+	c.Assert(proto.Equal(res.Releases[0], testRelease4), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test filtering by labels [OP_NOT_EXISTS]
@@ -773,11 +785,11 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 3)
 	c.Assert(strings.HasPrefix(res.Releases[0].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease3)
+	c.Assert(proto.Equal(res.Releases[0], testRelease3), Equals, true)
 	c.Assert(strings.HasPrefix(res.Releases[1].Name, testApp1.Name), Equals, true)
-	c.Assert(res.Releases[1], DeepEquals, testRelease2)
+	c.Assert(proto.Equal(res.Releases[1], testRelease2), Equals, true)
 	c.Assert(strings.HasPrefix(res.Releases[2].Name, testApp2.Name), Equals, true)
-	c.Assert(res.Releases[2], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[2], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 
 	// test streaming creates for specific app
@@ -788,7 +800,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	res = receiveReleasesStream(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
-	c.Assert(res.Releases[0], DeepEquals, testRelease6)
+	c.Assert(proto.Equal(res.Releases[0], testRelease6), Equals, true)
 	cancel()
 
 	// test creates are not streamed when flag not set
@@ -828,7 +840,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	res, receivedEOF = unaryReceiveReleases(s, c, &api.StreamReleasesRequest{PageSize: 1})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 1)
-	c.Assert(res.Releases[0], DeepEquals, testRelease9)
+	c.Assert(proto.Equal(res.Releases[0], testRelease9), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
@@ -837,7 +849,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 		res, receivedEOF = unaryReceiveReleases(s, c, &api.StreamReleasesRequest{PageSize: 1, PageToken: res.NextPageToken})
 		c.Assert(res, Not(IsNil), comment)
 		c.Assert(len(res.Releases), Equals, 1, comment)
-		c.Assert(res.Releases[0], DeepEquals, testRelease, comment)
+		c.Assert(proto.Equal(res.Releases[0], testRelease), Equals, true, comment)
 		c.Assert(receivedEOF, Equals, true, comment)
 		c.Assert(res.NextPageToken, Not(Equals), "", comment)
 		c.Assert(res.PageComplete, Equals, true, comment)
@@ -845,8 +857,8 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	res, receivedEOF = unaryReceiveReleases(s, c, &api.StreamReleasesRequest{PageSize: 2, PageToken: res.NextPageToken})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 2)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
-	c.Assert(res.Releases[1], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
+	c.Assert(proto.Equal(res.Releases[1], testRelease1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 	c.Assert(res.NextPageToken, Equals, "")
 	c.Assert(res.PageComplete, Equals, true)
@@ -868,9 +880,9 @@ func (s *GRPCSuite) TestStreamReleasesUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 3)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease8)
-	c.Assert(res.Releases[1], DeepEquals, testRelease7)
-	c.Assert(res.Releases[2], DeepEquals, testRelease6)
+	c.Assert(proto.Equal(res.Releases[0], testRelease8), Equals, true)
+	c.Assert(proto.Equal(res.Releases[1], testRelease7), Equals, true)
+	c.Assert(proto.Equal(res.Releases[2], testRelease6), Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
 
@@ -879,9 +891,9 @@ func (s *GRPCSuite) TestStreamReleasesUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 3)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease5)
-	c.Assert(res.Releases[1], DeepEquals, testRelease4)
-	c.Assert(res.Releases[2], DeepEquals, testRelease3)
+	c.Assert(proto.Equal(res.Releases[0], testRelease5), Equals, true)
+	c.Assert(proto.Equal(res.Releases[1], testRelease4), Equals, true)
+	c.Assert(proto.Equal(res.Releases[2], testRelease3), Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
 
@@ -890,8 +902,8 @@ func (s *GRPCSuite) TestStreamReleasesUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Releases), Equals, 2)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Releases[0], DeepEquals, testRelease2)
-	c.Assert(res.Releases[1], DeepEquals, testRelease1)
+	c.Assert(proto.Equal(res.Releases[0], testRelease2), Equals, true)
+	c.Assert(proto.Equal(res.Releases[1], testRelease1), Equals, true)
 	c.Assert(res.NextPageToken, Equals, "")
 	c.Assert(res.PageComplete, Equals, true)
 }
@@ -1304,17 +1316,17 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 			comment = Commentf("Obtained %T{NewRelease: %#v ...}", a, a.NewRelease)
 		}
 		c.Assert(a.Name, DeepEquals, b.Name, comment)
-		c.Assert(a.OldRelease, DeepEquals, b.OldRelease, comment)
-		c.Assert(a.NewRelease, DeepEquals, b.NewRelease, comment)
+		c.Assert(proto.Equal(a.OldRelease, b.OldRelease), Equals, true, comment)
+		c.Assert(proto.Equal(a.NewRelease, b.NewRelease), Equals, true, comment)
 		c.Assert(a.Type, DeepEquals, b.Type, comment)
 		c.Assert(a.Strategy, DeepEquals, b.Strategy, comment)
 		c.Assert(a.Status, DeepEquals, b.Status, comment)
 		c.Assert(a.Processes, DeepEquals, b.Processes, comment)
 		c.Assert(a.Tags, DeepEquals, b.Tags, comment)
 		c.Assert(a.DeployTimeout, DeepEquals, b.DeployTimeout, comment)
-		c.Assert(a.CreateTime, DeepEquals, b.CreateTime, comment)
-		c.Assert(a.ExpireTime, DeepEquals, b.ExpireTime, comment)
-		c.Assert(a.EndTime, DeepEquals, b.EndTime, comment)
+		c.Assert(proto.Equal(a.CreateTime, b.CreateTime), Equals, true, comment)
+		c.Assert(proto.Equal(a.ExpireTime, b.ExpireTime), Equals, true, comment)
+		c.Assert(proto.Equal(a.EndTime, b.EndTime), Equals, true, comment)
 	}
 
 	// test fetching the latest deployment
@@ -1508,7 +1520,7 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 	res, receivedEOF = unaryReceiveDeployments(s, c, &api.StreamDeploymentsRequest{PageSize: 1})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
-	c.Assert(res.Deployments[0], DeepEquals, testDeployment11)
+	c.Assert(proto.Equal(res.Deployments[0], testDeployment11), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
@@ -1517,7 +1529,7 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 		res, receivedEOF = unaryReceiveDeployments(s, c, &api.StreamDeploymentsRequest{PageSize: 1, PageToken: res.NextPageToken})
 		c.Assert(res, Not(IsNil), comment)
 		c.Assert(len(res.Deployments), Equals, 1, comment)
-		c.Assert(res.Deployments[0], DeepEquals, testDeployment, comment)
+		c.Assert(proto.Equal(res.Deployments[0], testDeployment), Equals, true, comment)
 		c.Assert(receivedEOF, Equals, true, comment)
 		c.Assert(res.NextPageToken, Not(Equals), "", comment)
 		c.Assert(res.PageComplete, Equals, true, comment)
@@ -1525,8 +1537,8 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 	res, receivedEOF = unaryReceiveDeployments(s, c, &api.StreamDeploymentsRequest{PageSize: 2, PageToken: res.NextPageToken})
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 2)
-	c.Assert(res.Deployments[0], DeepEquals, testDeployment2)
-	c.Assert(res.Deployments[1], DeepEquals, testDeployment1)
+	c.Assert(proto.Equal(res.Deployments[0], testDeployment2), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[1], testDeployment1), Equals, true)
 	c.Assert(receivedEOF, Equals, true)
 	c.Assert(res.NextPageToken, Equals, "")
 	c.Assert(res.PageComplete, Equals, true)
@@ -1557,9 +1569,9 @@ func (s *GRPCSuite) TestStreamDeploymentsUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 3)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Deployments[0], DeepEquals, testDeployment8)
-	c.Assert(res.Deployments[1], DeepEquals, testDeployment7)
-	c.Assert(res.Deployments[2], DeepEquals, testDeployment6)
+	c.Assert(proto.Equal(res.Deployments[0], testDeployment8), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[1], testDeployment7), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[2], testDeployment6), Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
 
@@ -1568,9 +1580,9 @@ func (s *GRPCSuite) TestStreamDeploymentsUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 3)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Deployments[0], DeepEquals, testDeployment5)
-	c.Assert(res.Deployments[1], DeepEquals, testDeployment4)
-	c.Assert(res.Deployments[2], DeepEquals, testDeployment3)
+	c.Assert(proto.Equal(res.Deployments[0], testDeployment5), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[1], testDeployment4), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[2], testDeployment3), Equals, true)
 	c.Assert(res.NextPageToken, Not(Equals), "")
 	c.Assert(res.PageComplete, Equals, true)
 
@@ -1579,8 +1591,29 @@ func (s *GRPCSuite) TestStreamDeploymentsUnaryPagination(c *C) {
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 2)
 	c.Assert(receivedEOF, Equals, true)
-	c.Assert(res.Deployments[0], DeepEquals, testDeployment2)
-	c.Assert(res.Deployments[1], DeepEquals, testDeployment1)
+	c.Assert(proto.Equal(res.Deployments[0], testDeployment2), Equals, true)
+	c.Assert(proto.Equal(res.Deployments[1], testDeployment1), Equals, true)
 	c.Assert(res.NextPageToken, Equals, "")
 	c.Assert(res.PageComplete, Equals, true)
+}
+
+type grpcBearerCreds struct {
+	token string
+}
+
+func (g *grpcBearerCreds) GetRequestMetadata(ctx context.Context, _ ...string) (map[string]string, error) {
+	return map[string]string{"authorization": "Bearer " + g.token}, nil
+}
+
+func (g *grpcBearerCreds) RequireTransportSecurity() bool { return false }
+
+func mintGRPCBearerToken(c *C, priv *ecdsa.PrivateKey) string {
+	now := time.Now()
+	tok, err := tokensigner.New(priv).Sign(&api.AccessToken{
+		UserEmail:  "grpc-test@flynn.local",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(30 * time.Minute)),
+	})
+	c.Assert(err, IsNil)
+	return "flynn." + tok
 }

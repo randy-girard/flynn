@@ -23,9 +23,9 @@ import (
 	"github.com/flynn/flynn/flannel/backend/vxlan"
 	"github.com/flynn/flynn/flannel/discoverd"
 	"github.com/flynn/flynn/flannel/pkg/ip"
-	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/flannel/pkg/task"
 	"github.com/flynn/flynn/flannel/subnet"
+	"github.com/flynn/flynn/pkg/httpclient"
 	"github.com/flynn/flynn/pkg/keepalive"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/version"
@@ -240,6 +240,13 @@ func pingLeases(leases []subnet.SubnetLease) error {
 	const timeout = 1 * time.Second
 
 	if len(leases) == 0 {
+		return nil
+	}
+
+	// Single-node clusters only register our own lease; mesh ping targets the overlay
+	// subnet IP or EXTERNAL_IP, neither of which is reliably reachable from the
+	// flannel job's network namespace. With no peers, there is nothing to verify.
+	if len(leases) == 1 {
 		return nil
 	}
 

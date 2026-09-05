@@ -854,7 +854,8 @@
   {
     "id": "status-check",
     "action": "status-check",
-    "url": "http://status-web.discoverd"
+    "url": "http://status-web.discoverd",
+    "timeout": 600
   },
   {
     "id": "cluster-monitor",

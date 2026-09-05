@@ -12,10 +12,41 @@ if [ -z "$VALIDATE_UPSTREAM" ]; then
     VALIDATE_BRANCH="${TRAVIS_BRANCH}"
   fi
 
+  # GitHub Actions: compare against this repository's PR base (or develop/main
+  # on push/workflow_dispatch). Forks must not validate the entire historical
+  # divergence from upstream flynn/flynn master — that falsely fails gofmt on
+  # unrelated files that were never touched in the PR.
+  if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
+    VALIDATE_REPO="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
+    if [ -n "${GITHUB_BASE_REF:-}" ]; then
+      VALIDATE_BRANCH="${GITHUB_BASE_REF}"
+    elif git ls-remote --exit-code --heads "$VALIDATE_REPO" develop >/dev/null 2>&1; then
+      VALIDATE_BRANCH='develop'
+    elif git ls-remote --exit-code --heads "$VALIDATE_REPO" main >/dev/null 2>&1; then
+      VALIDATE_BRANCH='main'
+    else
+      VALIDATE_BRANCH='master'
+    fi
+  fi
+
   VALIDATE_HEAD="$(git rev-parse --verify HEAD)"
 
   git fetch -q "$VALIDATE_REPO" "refs/heads/$VALIDATE_BRANCH"
   VALIDATE_UPSTREAM="$(git rev-parse --verify FETCH_HEAD)"
+
+  # On a push to develop/main, FETCH_HEAD is the same commit as HEAD, so the
+  # three-dot diff is empty. Fall back to the pre-push SHA when available so
+  # the commits in this push are still checked.
+  if [ "$VALIDATE_UPSTREAM" = "$VALIDATE_HEAD" ] \
+    && [ -n "${GITHUB_EVENT_PATH:-}" ] \
+    && command -v jq >/dev/null 2>&1; then
+    BEFORE="$(jq -r '.before // empty' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+    if [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
+      && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+      && git rev-parse --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
+      VALIDATE_UPSTREAM="$BEFORE"
+    fi
+  fi
 
   VALIDATE_COMMIT_LOG="$VALIDATE_UPSTREAM..$VALIDATE_HEAD"
   VALIDATE_COMMIT_DIFF="$VALIDATE_UPSTREAM...$VALIDATE_HEAD"

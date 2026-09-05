@@ -18,3 +18,4 @@ ubuntu_ports_cache
 *.tar.gz
 builder/manifest.json
 docs/local/
+script/docker/unit-tests/.image-built

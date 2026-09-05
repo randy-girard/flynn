@@ -6,6 +6,7 @@ package tokensigner
 
 import (
 	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
@@ -15,6 +16,28 @@ import (
 	api "github.com/flynn/flynn/controller/api"
 	"google.golang.org/protobuf/proto"
 )
+
+// GenerateKeyPair creates a new ECDSA P-256 keypair for signing and verifying
+// build access tokens. The returned strings are base64url-encoded PKIX public
+// and PKCS#8 private keys matching authorizer.ParseTokenKey and
+// ParseSigningKey respectively.
+func GenerateKeyPair() (publicKey, privateKey string, err error) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return "", "", err
+	}
+	pub, err := x509.MarshalPKIXPublicKey(&priv.PublicKey)
+	if err != nil {
+		return "", "", err
+	}
+	privDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return "", "", err
+	}
+	return base64.URLEncoding.EncodeToString(pub),
+		base64.URLEncoding.EncodeToString(privDER),
+		nil
+}
 
 // Signer mints signed AccessTokens using an ECDSA private key. The produced
 // tokens are verifiable by controller/authorizer using the corresponding

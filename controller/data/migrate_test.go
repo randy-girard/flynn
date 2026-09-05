@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -44,12 +43,9 @@ func setupTestDB(c *C, dbname string) *postgres.DB {
 	if err := pgtestutils.SetupPostgres(dbname); err != nil {
 		c.Fatal(err)
 	}
-	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
-		ConnConfig: pgx.ConnConfig{
-			Host:     os.Getenv("PGHOST"),
-			Database: dbname,
-		},
-	})
+	cfg, err := pgtestutils.ConnConfigForDatabase(dbname)
+	c.Assert(err, IsNil)
+	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{ConnConfig: cfg})
 	if err != nil {
 		c.Fatal(err)
 	}

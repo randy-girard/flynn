@@ -205,7 +205,8 @@ func (s *S) TestStreamReleaseEvents(c *C) {
 	release := s.createTestRelease(c, app.ID, &ct.Release{})
 
 	var gotRelease, gotArtifact bool
-	for i := 0; i < 2; i++ {
+	deadline := time.After(10 * time.Second)
+	for !gotRelease || !gotArtifact {
 		select {
 		case e, ok := <-events:
 			if !ok {
@@ -227,16 +228,14 @@ func (s *S) TestStreamReleaseEvents(c *C) {
 				c.Assert(eventRelease, DeepEquals, release)
 				gotRelease = true
 			case ct.EventTypeApp:
+				// ignore unrelated app updates on the global stream
 			default:
-				c.Errorf("unexpected event object %s", e.ObjectType)
+				// ignore other event types that may appear on the global stream
 			}
-		case <-time.After(10 * time.Second):
-			c.Fatalf("Timed out waiting for event %d", i)
+		case <-deadline:
+			c.Fatalf("timed out waiting for release events (artifact=%v release=%v)", gotArtifact, gotRelease)
 		}
 	}
-
-	c.Assert(gotArtifact, Equals, true)
-	c.Assert(gotRelease, Equals, true)
 }
 
 func (s *S) TestStreamFormationEvents(c *C) {

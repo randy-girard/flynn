@@ -8,7 +8,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,12 +25,56 @@ import (
 // Hook gocheck up to the "go test" runner
 func Test(t *testing.T) { TestingT(t) }
 
+// testMysqldSbinDir holds a directory containing a mysqld wrapper script.
+// Upstream my.cnf uses user="", which MariaDB 10.11+ rejects; the wrapper adds
+// --user=$(id -un) so tests run on the host without changing appliance code.
+var testMysqldSbinDir string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "flynn-mysqld-test-sbin-*")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "mariadb tests: mkdir wrapper sbin: %v\n", err)
+		os.Exit(1)
+	}
+	wrapper := filepath.Join(dir, "mysqld")
+	// Use --defaults-file (derived from flynn's single --defaults-extra-file=ARG) so host
+	// /etc/mysql is not merged. Replace empty user="" in the appliance cnf — MariaDB 10.11+
+	// rejects it, and adding --user on the CLI conflicts with option-order/datadir quirks.
+	script := `#!/bin/sh
+set -eu
+cnf=""
+for arg in "$@"; do
+  case "$arg" in
+    --defaults-extra-file=*) cnf="${arg#--defaults-extra-file=}" ;;
+  esac
+done
+if [ -z "$cnf" ]; then
+  echo "flynn mysqld test wrapper: missing --defaults-extra-file=" >&2
+  exit 1
+fi
+u="$(id -un)"
+tmp="$(mktemp "$(dirname "$cnf")/flynn-test-my.cnf.XXXXXX")"
+sed -E "s/^user[[:space:]]*=[[:space:]]*\"\"[[:space:]]*$/user = $u/" "$cnf" > "$tmp"
+exec /usr/sbin/mysqld --defaults-file="$tmp"
+`
+	if err := os.WriteFile(wrapper, []byte(script), 0755); err != nil {
+		os.RemoveAll(dir)
+		fmt.Fprintf(os.Stderr, "mariadb tests: write mysqld wrapper: %v\n", err)
+		os.Exit(1)
+	}
+	testMysqldSbinDir = dir
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 type MariaDBSuite struct{}
 
 var _ = Suite(&MariaDBSuite{})
 
 func (MariaDBSuite) TestSingletonPrimary(c *C) {
 	p := NewProcess()
+	p.SbinDir = testMysqldSbinDir
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
@@ -53,6 +99,7 @@ func (MariaDBSuite) TestSingletonPrimary(c *C) {
 
 	// ensure that we can start a new instance from the same directory
 	p = NewProcess()
+	p.SbinDir = testMysqldSbinDir
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
@@ -79,7 +126,7 @@ func instance(p *Process) *discoverd.Instance {
 		ID:   p.ID,
 		Addr: fmt.Sprintf("127.0.0.1:%d", MustAtoi(p.Port)),
 		Meta: map[string]string{
-			"MYSQL_ID": p.ID,
+			IDKey: p.ID,
 		},
 	}
 }
@@ -447,8 +494,11 @@ func (MariaDBSuite) TestIntegration_RestoreWritesMyCnf(c *C) {
 
 	cfg, err := ioutil.ReadFile(standby.ConfigPath())
 	c.Assert(err, IsNil)
-	c.Assert(string(cfg), Matches, "(?m)read_only = 1")
+	c.Assert(strings.Contains(string(cfg), "read_only = 1"), Equals, true,
+		Commentf("standby my.cnf missing read_only:\n%s", cfg))
 
+	// Restore alone does not set a sirenia role; configure as sync before Start.
+	c.Assert(standby.Reconfigure(Config(state.RoleSync, primary, nil)), IsNil)
 	c.Assert(standby.Start(), IsNil)
 	defer standby.Stop()
 }
@@ -532,6 +582,7 @@ var newPort uint32 = 7500
 
 func NewTestProcess(c *C, n uint32) *Process {
 	p := NewProcess()
+	p.SbinDir = testMysqldSbinDir
 	p.ID = fmt.Sprintf("node%d", n)
 	p.DataDir = c.MkDir()
 	p.Port = strconv.Itoa(int(atomic.AddUint32(&newPort, 2)))

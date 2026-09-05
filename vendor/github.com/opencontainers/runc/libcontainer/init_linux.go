@@ -1,8 +1,10 @@
+//go:build linux
 // +build linux
 
 package libcontainer
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -75,30 +77,57 @@ type initer interface {
 }
 
 func newContainerInit(t initType, pipe *os.File, consoleSocket *os.File, fifoFd int) (initer, error) {
-	var config *initConfig
-	if err := json.NewDecoder(pipe).Decode(&config); err != nil {
-		return nil, err
+	// SOCK_STREAM init sockets occasionally inject NUL padding or a few stray bytes
+	// before the JSON config from the parent. Scan byte-by-byte (no bufio.Reader on
+	// this fd — later sync reads the same *os.File) until '{', then decode one value.
+	const maxInitPipeJunk = 4096
+	junk := 0
+	for {
+		var b [1]byte
+		n, err := pipe.Read(b[:])
+		if n == 0 && err == nil {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		c := b[0]
+		switch {
+		case c == 0 || c == ' ' || c == '\t' || c == '\n' || c == '\r':
+			continue
+		case c == '{':
+			dec := json.NewDecoder(io.MultiReader(bytes.NewReader([]byte{'{'}), pipe))
+			var config *initConfig
+			if err := dec.Decode(&config); err != nil {
+				return nil, err
+			}
+			if err := populateProcessEnvironment(config.Env); err != nil {
+				return nil, err
+			}
+			switch t {
+			case initSetns:
+				return &linuxSetnsInit{
+					pipe:          pipe,
+					consoleSocket: consoleSocket,
+					config:        config,
+				}, nil
+			case initStandard:
+				return &linuxStandardInit{
+					pipe:          pipe,
+					consoleSocket: consoleSocket,
+					parentPid:     unix.Getppid(),
+					config:        config,
+					fifoFd:        fifoFd,
+				}, nil
+			}
+			return nil, fmt.Errorf("unknown init type %q", t)
+		default:
+			junk++
+			if junk > maxInitPipeJunk {
+				return nil, fmt.Errorf("init pipe: more than %d non-JSON prefix bytes before config JSON", maxInitPipeJunk)
+			}
+		}
 	}
-	if err := populateProcessEnvironment(config.Env); err != nil {
-		return nil, err
-	}
-	switch t {
-	case initSetns:
-		return &linuxSetnsInit{
-			pipe:          pipe,
-			consoleSocket: consoleSocket,
-			config:        config,
-		}, nil
-	case initStandard:
-		return &linuxStandardInit{
-			pipe:          pipe,
-			consoleSocket: consoleSocket,
-			parentPid:     unix.Getppid(),
-			config:        config,
-			fifoFd:        fifoFd,
-		}, nil
-	}
-	return nil, fmt.Errorf("unknown init type %q", t)
 }
 
 // populateProcessEnvironment loads the provided environment variables into the

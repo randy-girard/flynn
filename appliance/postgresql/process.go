@@ -283,6 +283,10 @@ func (p *Process) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *Process) Running() bool {
+	return p.running()
+}
+
 func (p *Process) reconfigure(config *state.Config) (err error) {
 	log := p.log.New("fn", "reconfigure")
 
@@ -304,10 +308,17 @@ func (p *Process) reconfigure(config *state.Config) (err error) {
 		return nil
 	}
 
-	// If we're already running and it's just a change from async to sync with the same node, we don't need to restart
+	// Promoting async to sync with the same upstream does not require a
+	// restart, but downstream sync tracking must be started for sirenia deploys.
 	if p.configApplied && p.running() && p.config() != nil && config != nil &&
 		p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta[IDKey] == p.config().Upstream.Meta[IDKey] {
-		log.Info("nothing to do", "reason", "becoming sync with same upstream")
+		log.Info("promoting async to sync with same upstream")
+		p.cancelSyncWait()
+		p.setSyncedDownstream(nil)
+		if config.Downstream != nil {
+			log.Info("waiting for downstream after sync promotion", "downstream", config.Downstream.Addr)
+			p.waitForSync(config.Downstream, false)
+		}
 		return nil
 	}
 

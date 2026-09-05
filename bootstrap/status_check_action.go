@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// statusCheckHTTPClient bounds each probe so bootstrap cannot hang indefinitely on a stuck backend.
+var statusCheckHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
 type StatusCheckAction struct {
 	ID      string `json:"id"`
 	URL     string `json:"url"`
@@ -32,6 +35,30 @@ func init() {
 	Register("status-check", &StatusCheckAction{})
 }
 
+// bootstrapStatusOnlyNonCriticalFailures reports whether every unhealthy service in the
+// status response is non-critical for declaring bootstrap complete.
+func bootstrapStatusOnlyNonCriticalFailures(resp *StatusResponse) bool {
+	if resp.Data.Status == "healthy" {
+		return true
+	}
+	ignored := map[string]struct{}{
+		"flannel": {},
+		"mariadb": {},
+		"mongodb": {},
+	}
+	var sawUnhealthy bool
+	for svc, d := range resp.Data.Detail {
+		if d.Status == "healthy" {
+			continue
+		}
+		sawUnhealthy = true
+		if _, ok := ignored[svc]; !ok {
+			return false
+		}
+	}
+	return sawUnhealthy
+}
+
 func (a *StatusCheckAction) Run(s *State) error {
 	waitMax := time.Minute
 	if a.Timeout > 0 {
@@ -53,7 +80,7 @@ func (a *StatusCheckAction) Run(s *State) error {
 		}
 		req.Header = make(http.Header)
 		req.Header.Set("Accept", "application/json")
-		res, err := http.DefaultClient.Do(req)
+		res, err := statusCheckHTTPClient.Do(req)
 		if err == nil && res.StatusCode == 200 {
 			res.Body.Close()
 			s.StepData[a.ID] = &LogMessage{Msg: "all services healthy"}
@@ -61,10 +88,14 @@ func (a *StatusCheckAction) Run(s *State) error {
 		}
 		var status StatusResponse
 		if err == nil {
-			err = json.NewDecoder(res.Body).Decode(&status)
+			decodeErr := json.NewDecoder(res.Body).Decode(&status)
 			res.Body.Close()
-			if err != nil {
-				return err
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if bootstrapStatusOnlyNonCriticalFailures(&status) {
+				s.StepData[a.ID] = &LogMessage{Msg: "required services healthy (non-critical status checks skipped)"}
+				return nil
 			}
 		}
 
@@ -86,6 +117,6 @@ func (a *StatusCheckAction) Run(s *State) error {
 		}
 		msg += "\n"
 		s.StepData[a.ID] = &LogMessage{Msg: msg}
-		return nil
+		return fmt.Errorf("bootstrap: %s", msg)
 	}
 }

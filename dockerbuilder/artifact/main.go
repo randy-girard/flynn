@@ -28,32 +28,48 @@ func main() {
 }
 
 func run(tarPath string) error {
-	// Prefer a minted, app-scoped build token delivered via a root-only secret
-	// mount; fall back to the legacy cluster-wide CONTROLLER_KEY for clusters
-	// that have not been re-bootstrapped with a signing key.
 	if token := readSecret("/run/secrets/controller_token"); token != "" {
 		client, err := controller.NewClientWithToken("", token)
 		if err != nil {
 			return err
 		}
 		tarClient := tarclient.NewClientWithToken("http://tarreceive.discoverd", token)
-		return importImage(tarPath, client, tarClient)
+		if err := importImage(tarPath, client, tarClient); err != nil {
+			if fallback, fbErr := legacyBuildClients(); fbErr == nil {
+				return importImage(tarPath, fallback.controller, fallback.tar)
+			}
+			return err
+		}
+		return nil
 	}
+	clients, err := legacyBuildClients()
+	if err != nil {
+		return err
+	}
+	return importImage(tarPath, clients.controller, clients.tar)
+}
 
+type buildClients struct {
+	controller controller.Client
+	tar        *tarclient.Client
+}
+
+func legacyBuildClients() (*buildClients, error) {
 	controllerKey := os.Getenv("CONTROLLER_KEY")
 	if controllerKey == "" {
 		controllerKey = readSecret("/run/secrets/controller_key")
 	}
 	if controllerKey == "" {
-		return fmt.Errorf("missing build credential")
+		return nil, fmt.Errorf("missing build credential")
 	}
-
 	client, err := controller.NewClient("", controllerKey)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	tarClient := tarclient.NewClient("http://tarreceive.discoverd", controllerKey)
-	return importImage(tarPath, client, tarClient)
+	return &buildClients{
+		controller: client,
+		tar:        tarclient.NewClient("http://tarreceive.discoverd", controllerKey),
+	}, nil
 }
 
 // readSecret returns the trimmed contents of a secret file, or "" if it is

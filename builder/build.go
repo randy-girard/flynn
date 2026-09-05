@@ -117,6 +117,7 @@ usage: flynn-builder build [options]
 options:
   -x, --version=<version>   version to use [default: dev]
   -v, --verbose             be verbose
+  -o, --only=<ids>          only build these images (comma-separated IDs, or toolchain/apps)
 
 Build Flynn images using builder/manifest.json (generated from builder/manifest.json.template).
 
@@ -476,13 +477,6 @@ func runBuild(args *docopt.Args) error {
 		return errors.New("no images to build")
 	}
 
-	bar, err := NewProgressBar(len(manifest.Images), tty)
-	if err != nil {
-		return err
-	}
-	bar.Start()
-	defer bar.Finish()
-
 	debugLog := fmt.Sprintf("build/log/build-%d.log", time.Now().UnixNano())
 	if err := os.MkdirAll(filepath.Dir(debugLog), 0755); err != nil {
 		return err
@@ -501,9 +495,40 @@ func runBuild(args *docopt.Args) error {
 		}
 	}
 
+	images, err := expandImageSelection(manifest.Images, args.String["--only"])
+	if err != nil {
+		return err
+	} else if len(images) == 0 {
+		return errors.New("no images to build after --only filter")
+	}
+	if only := args.String["--only"]; only != "" {
+		ids := make([]string, len(images))
+		for i, img := range images {
+			ids[i] = img.ID
+		}
+		log.Info("filtered images", "only", only, "count", len(images), "ids", strings.Join(ids, ","))
+	}
+
+	bar, err := NewProgressBar(len(images), tty)
+	if err != nil {
+		return err
+	}
+	bar.Start()
+	defer bar.Finish()
+
+	artifacts, err := loadArtifacts(imagesJSONPath)
+	if err != nil {
+		return err
+	}
+	if artifacts == nil {
+		artifacts = make(map[string]*ct.Artifact)
+	} else if n := len(artifacts); n > 0 {
+		log.Info("loaded existing images.json", "count", n)
+	}
+
 	builder := &Builder{
 		baseLayer: manifest.BaseLayer,
-		artifacts: make(map[string]*ct.Artifact),
+		artifacts: artifacts,
 		envTemplateData: map[string]string{
 			"Version": args.String["--version"],
 		},
@@ -515,17 +540,216 @@ func runBuild(args *docopt.Args) error {
 	}
 
 	log.Info("building images")
-	if err := builder.Build(manifest.Images); err != nil {
+	if err := builder.Build(images); err != nil {
 		return err
 	}
 
-	log.Info("writing manifests")
-	if err := builder.WriteManifests(manifest.Manifests); err != nil {
-		return err
+	if builder.hasAllImageArtifacts(manifest.Images) {
+		log.Info("writing manifests")
+		if err := builder.WriteManifests(manifest.Manifests); err != nil {
+			return err
+		}
+	} else {
+		log.Info("skipping manifests; not all image artifacts available yet")
 	}
 
 	log.Info("writing images")
 	return builder.WriteImages()
+}
+
+// toolchainImageIDs are the base/tool images that must build before app images.
+// App images depend on these via base/build_with but not on each other.
+var toolchainImageIDs = map[string]struct{}{
+	"ubuntu-noble":    {},
+	"busybox":         {},
+	"go":              {},
+	"protoc":          {},
+	"heroku-24":       {},
+	"heroku-24-build": {},
+	"slugrunner-24":   {},
+}
+
+// expandImageSelection filters images by --only (comma-separated IDs or the
+// named groups "toolchain" / "apps"), then includes transitive base/build_with
+// dependencies so the dependency graph stays complete.
+func expandImageSelection(all []*Image, only string) ([]*Image, error) {
+	if strings.TrimSpace(only) == "" {
+		return all, nil
+	}
+
+	byID := make(map[string]*Image, len(all))
+	for _, img := range all {
+		byID[img.ID] = img
+	}
+
+	requested := make(map[string]struct{})
+	for _, tok := range strings.Split(only, ",") {
+		tok = strings.TrimSpace(tok)
+		if tok == "" {
+			continue
+		}
+		switch tok {
+		case "toolchain":
+			for id := range toolchainImageIDs {
+				if _, ok := byID[id]; !ok {
+					return nil, fmt.Errorf("toolchain image %q missing from manifest", id)
+				}
+				requested[id] = struct{}{}
+			}
+		case "apps":
+			for id := range byID {
+				if _, ok := toolchainImageIDs[id]; !ok {
+					requested[id] = struct{}{}
+				}
+			}
+		default:
+			if _, ok := byID[tok]; !ok {
+				return nil, fmt.Errorf("unknown image %q", tok)
+			}
+			requested[tok] = struct{}{}
+		}
+	}
+	if len(requested) == 0 {
+		return nil, errors.New("empty --only selection")
+	}
+
+	needed := make(map[string]struct{})
+	var add func(string) error
+	add = func(id string) error {
+		if _, ok := needed[id]; ok {
+			return nil
+		}
+		img, ok := byID[id]
+		if !ok {
+			return fmt.Errorf("unknown image dependency %q", id)
+		}
+		needed[id] = struct{}{}
+		if img.Base != "" {
+			if err := add(img.Base); err != nil {
+				return err
+			}
+		}
+		for _, l := range img.Layers {
+			if bw := layerBuildWith(l); bw != "" {
+				if err := add(bw); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	for id := range requested {
+		if err := add(id); err != nil {
+			return nil, err
+		}
+	}
+
+	out := make([]*Image, 0, len(needed))
+	for _, img := range all {
+		if _, ok := needed[img.ID]; ok {
+			out = append(out, img)
+		}
+	}
+	return out, nil
+}
+
+// layerBuildWith returns the effective build_with image ID for a layer, matching
+// the implicit go/protoc defaults applied in Builder.Build.
+func layerBuildWith(l *Layer) string {
+	if l == nil {
+		return ""
+	}
+	if l.BuildWith != "" {
+		return l.BuildWith
+	}
+	if len(l.ProtoBuild) > 0 {
+		return "protoc"
+	}
+	if len(l.GoBuild) > 0 || len(l.CGoBuild) > 0 || len(l.GoBin) > 0 {
+		return "go"
+	}
+	return ""
+}
+
+const imagesJSONPath = "build/images.json"
+
+func loadArtifacts(path string) (map[string]*ct.Artifact, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	artifacts := make(map[string]*ct.Artifact)
+	if err := json.NewDecoder(f).Decode(&artifacts); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", path, err)
+	}
+	return artifacts, nil
+}
+
+func mergeArtifacts(dst, src map[string]*ct.Artifact) map[string]*ct.Artifact {
+	if dst == nil {
+		dst = make(map[string]*ct.Artifact)
+	}
+	for id, artifact := range src {
+		dst[id] = artifact
+	}
+	return dst
+}
+
+func writeArtifacts(path string, artifacts map[string]*ct.Artifact) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	tmp, err := os.Create(path + ".tmp")
+	if err != nil {
+		return err
+	}
+	defer tmp.Close()
+	if err := json.NewEncoder(tmp).Encode(artifacts); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
+func (b *Builder) hasAllImageArtifacts(images []*Image) bool {
+	b.artifactsMtx.RLock()
+	defer b.artifactsMtx.RUnlock()
+	for _, img := range images {
+		if _, ok := b.artifacts[img.ID]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// artifactLayersCached reports whether every layer referenced by the artifact
+// exists in the local layer cache (config + squashfs).
+func (b *Builder) artifactLayersCached(artifact *ct.Artifact) bool {
+	if artifact == nil {
+		return false
+	}
+	manifest := artifact.Manifest()
+	if manifest == nil {
+		return false
+	}
+	for _, rootfs := range manifest.Rootfs {
+		for _, layer := range rootfs.Layers {
+			if layer == nil || layer.ID == "" {
+				return false
+			}
+			if _, err := os.Stat(b.layerConfigPath(layer.ID)); err != nil {
+				return false
+			}
+			if _, err := os.Stat(b.layerPath(layer.ID)); err != nil {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // newLogger returns a log15.Logger which writes to stdout and a log file
@@ -686,6 +910,14 @@ func (b *Builder) Build(images []*Image) error {
 // BuildImage builds the image's layers and adds the resulting artifact to
 // b.artifacts
 func (b *Builder) BuildImage(image *Image) error {
+	b.artifactsMtx.RLock()
+	existing, ok := b.artifacts[image.ID]
+	b.artifactsMtx.RUnlock()
+	if ok && b.artifactLayersCached(existing) {
+		b.log.Debug(fmt.Sprintf("%s build skip (cached)", image.ID))
+		return nil
+	}
+
 	var layers []*ct.ImageLayer
 	for _, l := range image.Layers {
 		name := l.Name
@@ -984,19 +1216,17 @@ func (b *Builder) WriteManifests(manifests map[string]string) error {
 	return nil
 }
 
-// WriteImages writes the built images to build/images.json
+// WriteImages merges built images into build/images.json (preserving any
+// artifacts already on disk that were not rebuilt in this run).
 func (b *Builder) WriteImages() error {
-	path := "build/images.json"
-	tmp, err := os.Create(path + ".tmp")
+	existing, err := loadArtifacts(imagesJSONPath)
 	if err != nil {
 		return err
 	}
-	defer tmp.Close()
-	if err := json.NewEncoder(tmp).Encode(b.artifacts); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	b.artifactsMtx.RLock()
+	merged := mergeArtifacts(existing, b.artifacts)
+	b.artifactsMtx.RUnlock()
+	return writeArtifacts(imagesJSONPath, merged)
 }
 
 func (b *Builder) Artifact(name string) (*ct.Artifact, error) {
