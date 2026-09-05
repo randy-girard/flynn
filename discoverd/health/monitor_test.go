@@ -2,6 +2,7 @@ package health
 
 import (
 	"errors"
+	"sync"
 	"time"
 
 	. "github.com/flynn/go-check"
@@ -19,59 +20,6 @@ func (MonitorSuite) TestMonitor(c *C) {
 	type step struct {
 		up    bool
 		event MonitorStatus
-	}
-
-	checker := func(steps []step, threshold int) (chan MonitorEvent, chan MonitorEvent) {
-		var i int
-		var finished bool
-		done := make(chan struct{})
-		expectedEvents := make(chan MonitorEvent, 1)
-		actualEvents := make(chan MonitorEvent)
-
-		check := CheckFunc(func() error {
-			if finished {
-				return errors.New("finished")
-			}
-			defer func() {
-				if i >= len(steps) {
-					done <- struct{}{}
-					// ensure the stream has been closed before returning
-					<-done
-					finished = true
-				}
-			}()
-
-			step := steps[i]
-			i++
-
-			if !step.up {
-				err := errors.New("check failure")
-				if step.event > 0 {
-					expectedEvents <- MonitorEvent{
-						Status: step.event,
-						Err:    err,
-					}
-				}
-				return err
-			}
-			if step.event > 0 {
-				expectedEvents <- MonitorEvent{Status: step.event}
-			}
-			return nil
-		})
-
-		stream := Monitor{
-			Threshold:     threshold,
-			StartInterval: time.Nanosecond,
-			Interval:      time.Nanosecond,
-		}.Run(check, actualEvents)
-		go func() {
-			<-done
-			stream.Close()
-			done <- struct{}{}
-		}()
-
-		return expectedEvents, actualEvents
 	}
 
 	for _, t := range []struct {
@@ -162,17 +110,89 @@ func (MonitorSuite) TestMonitor(c *C) {
 	} {
 		c.Log(t.name)
 
-		expectedEvents, actualEvents := checker(t.steps, t.threshold)
-		for actual := range actualEvents {
+		var expected []MonitorEvent
+		for _, s := range t.steps {
+			if s.event == 0 {
+				continue
+			}
+			ev := MonitorEvent{Status: s.event}
+			if !s.up {
+				ev.Err = errors.New("check failure")
+			}
+			expected = append(expected, ev)
+		}
+
+		var mu sync.Mutex
+		i := 0
+		check := CheckFunc(func() error {
+			mu.Lock()
+			defer mu.Unlock()
+			if i >= len(t.steps) {
+				// Hold the final step's result so we do not emit a spurious
+				// Down after the script ends (e.g. Up then "finished" errors).
+				if len(t.steps) > 0 && t.steps[len(t.steps)-1].up {
+					return nil
+				}
+				return errors.New("check failure")
+			}
+			step := t.steps[i]
+			i++
+			if !step.up {
+				return errors.New("check failure")
+			}
+			return nil
+		})
+
+		actualEvents := make(chan MonitorEvent, 16)
+		// Millisecond intervals are fast enough for tests but avoid the
+		// nanosecond scheduling races that dropped Up events when the stream
+		// was closed from inside Check before Monitor.up() could send.
+		stream := Monitor{
+			Threshold:     t.threshold,
+			StartInterval: time.Millisecond,
+			Interval:      time.Millisecond,
+		}.Run(check, actualEvents)
+
+		for ei, want := range expected {
 			select {
-			case expected := <-expectedEvents:
-				// functions are not comparable, so we check it and then nil it
+			case actual := <-actualEvents:
 				c.Assert(actual.Check, FitsTypeOf, CheckFunc(nil))
 				actual.Check = nil
-				c.Assert(actual, DeepEquals, expected)
-			default:
-				c.Fatalf("unexpected event %#v", actual)
+				c.Assert(actual.Status, Equals, want.Status)
+				if want.Err != nil {
+					c.Assert(actual.Err, NotNil)
+					c.Assert(actual.Err.Error(), Equals, want.Err.Error())
+				} else {
+					c.Assert(actual.Err, IsNil)
+				}
+			case <-time.After(2 * time.Second):
+				c.Fatalf("%s: timeout waiting for event %d (status %s)", t.name, ei, want.Status)
 			}
+		}
+
+		// Wait until the scripted checks have all run (important when no
+		// events are expected), then ensure nothing else is emitted.
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			mu.Lock()
+			done := i >= len(t.steps)
+			mu.Unlock()
+			if done {
+				break
+			}
+			if time.Now().After(deadline) {
+				c.Fatalf("%s: timeout waiting for check script to finish", t.name)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		select {
+		case actual := <-actualEvents:
+			stream.Close()
+			c.Fatalf("%s: unexpected extra event %#v", t.name, actual)
+		case <-time.After(25 * time.Millisecond):
+		}
+		stream.Close()
+		for range actualEvents {
 		}
 	}
 }
