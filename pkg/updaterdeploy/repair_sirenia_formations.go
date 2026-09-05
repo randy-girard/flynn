@@ -15,10 +15,19 @@ var sireniaApps = []string{"postgres", "mariadb", "mongodb"}
 
 type discoverdService interface {
 	GetMeta() (*discoverd.ServiceMeta, error)
+	Instances() ([]*discoverd.Instance, error)
 }
 
 var discoverdNewService = func(name string) discoverdService {
 	return discoverd.NewService(name)
+}
+
+func discoverdInstancesOrEmpty(s discoverdService) ([]*discoverd.Instance, error) {
+	instances, err := s.Instances()
+	if err != nil && discoverd.IsNotFound(err) {
+		return []*discoverd.Instance{}, nil
+	}
+	return instances, err
 }
 
 // RepairOrphanSireniaFormations scales down database processes on formations

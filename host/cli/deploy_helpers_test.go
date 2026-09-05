@@ -62,4 +62,40 @@ func TestShouldSkipUnchangedDeploy(t *testing.T) {
 	if skip || migration {
 		t.Fatalf("force redeploy without updateFn should proceed, got skip=%v migration=%v", skip, migration)
 	}
+
+	skip, migration = shouldSkipUnchangedDeploy(true, false, release, nil)
+	if !skip || migration {
+		t.Fatalf("non-force without updateFn should skip, got skip=%v migration=%v", skip, migration)
+	}
+
+	skip, migration = shouldSkipUnchangedDeploy(false, true, release, postgresUpdate)
+	if skip || migration {
+		t.Fatalf("skipDeploy=false must never skip, got skip=%v migration=%v", skip, migration)
+	}
+}
+
+func TestReleaseConfigChangedProcesses(t *testing.T) {
+	before := &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": {Args: []string{"/bin/web"}}},
+	}
+	after := cloneReleaseForUpdate(before)
+	if releaseConfigChanged(before, after) {
+		t.Fatal("cloned release should match")
+	}
+	after.Processes["web"] = ct.ProcessType{Args: []string{"/bin/web", "--flag"}}
+	if !releaseConfigChanged(before, after) {
+		t.Fatal("process args change should be detected")
+	}
+	if releaseConfigChanged(nil, nil) {
+		t.Fatal("nil==nil should be unchanged")
+	}
+	if !releaseConfigChanged(nil, before) {
+		t.Fatal("nil vs non-nil should change")
+	}
+}
+
+func TestCloneReleaseForUpdateNil(t *testing.T) {
+	if cloneReleaseForUpdate(nil) != nil {
+		t.Fatal("expected nil clone")
+	}
 }

@@ -52,7 +52,7 @@ func RepairSireniaClusterQuorum(ctrl controller.Client, restartDownJobs bool, lo
 func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, restartDownJobs bool, log log15.Logger) error {
 	log = log.New("app", app.Name)
 
-	service := discoverd.NewService(app.Name)
+	service := discoverdNewService(app.Name)
 	meta, err := service.GetMeta()
 	if err != nil || meta == nil || len(meta.Data) == 0 {
 		return nil
@@ -97,14 +97,14 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 		return nil
 	}
 
-	if len(state.Async) > 0 && 2+len(state.Async) == expected {
-		if sireniaMetaPeersHealthy(&state) {
-			return nil
-		}
+	if sireniaAsyncQuorumSatisfied(&state, expected) && sireniaMetaPeersHealthy(&state) {
+		return nil
+	}
+	if sireniaAsyncQuorumSatisfied(&state, expected) {
 		log.Warn("sirenia meta reports quorum but peers are unhealthy, repairing")
 	}
 
-	instances, err := discoverd.InstancesOrEmpty(service)
+	instances, err := discoverdInstancesOrEmpty(service)
 	if err != nil {
 		return fmt.Errorf("list %s discoverd instances: %w", app.Name, err)
 	}
@@ -115,27 +115,13 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 		return fmt.Errorf("list %s jobs: %w", app.Name, err)
 	}
 
+	restartIDs, downJobs := jobsToRestartForSireniaQuorum(jobs, activeRelease, processType, instances, checkSireniaInstanceHealthy)
 	var restarted int
-	var downJobs int
-	for _, job := range jobs {
-		if job == nil || job.ReleaseID != activeRelease || job.Type != processType {
-			continue
-		}
-		if job.State == ct.JobStateDown {
-			downJobs++
-			continue
-		}
-		if job.State != ct.JobStateUp && job.State != ct.JobStateStarting {
-			continue
-		}
-		inst := sireniaInstanceForJob(instances, job.ID)
-		if inst != nil && sireniaInstanceHealthy(inst) {
-			continue
-		}
+	for _, jobID := range restartIDs {
 		log.Warn("restarting unregistered or unhealthy sirenia job",
-			"job.id", job.ID, "state", job.State, "registered", registered[job.ID])
-		if err := ctrl.DeleteJob(app.ID, job.ID); err != nil {
-			return fmt.Errorf("restart %s job %s: %w", app.Name, job.ID, err)
+			"job.id", jobID, "registered", registered[jobID])
+		if err := ctrl.DeleteJob(app.ID, jobID); err != nil {
+			return fmt.Errorf("restart %s job %s: %w", app.Name, jobID, err)
 		}
 		restarted++
 	}
@@ -204,19 +190,23 @@ func sireniaMetaPeersHealthy(state *sirenia.State) bool {
 	if state == nil || state.Primary == nil {
 		return false
 	}
-	if !sireniaInstanceHealthy(state.Primary) {
+	if !checkSireniaInstanceHealthy(state.Primary) {
 		return false
 	}
-	if !state.Singleton && state.Sync != nil && !sireniaInstanceHealthy(state.Sync) {
+	if !state.Singleton && state.Sync != nil && !checkSireniaInstanceHealthy(state.Sync) {
 		return false
 	}
 	for _, async := range state.Async {
-		if !sireniaInstanceHealthy(async) {
+		if !checkSireniaInstanceHealthy(async) {
 			return false
 		}
 	}
 	return true
 }
+
+// checkSireniaInstanceHealthy is the live Status() probe; tests may override
+// it to avoid dialing unreachable fake addresses.
+var checkSireniaInstanceHealthy = sireniaInstanceHealthy
 
 func sireniaInstanceHealthy(inst *discoverd.Instance) bool {
 	if inst == nil || inst.Addr == "" {
@@ -229,7 +219,7 @@ func sireniaInstanceHealthy(inst *discoverd.Instance) bool {
 	return status.Database != nil && status.Database.Running
 }
 
-func waitForSireniaAsyncQuorum(service discoverd.Service, appName string, expected int, log log15.Logger) error {
+func waitForSireniaAsyncQuorum(service discoverdService, appName string, expected int, log log15.Logger) error {
 	if expected <= 2 {
 		return nil
 	}
@@ -239,7 +229,7 @@ func waitForSireniaAsyncQuorum(service discoverd.Service, appName string, expect
 		if err == nil && meta != nil && len(meta.Data) > 0 {
 			var state sirenia.State
 			if err := json.Unmarshal(meta.Data, &state); err == nil {
-				if len(state.Async) > 0 && 2+len(state.Async) == expected {
+				if sireniaAsyncQuorumSatisfied(&state, expected) {
 					log.Info("sirenia cluster regained async quorum", "asyncs", len(state.Async))
 					return nil
 				}
@@ -248,4 +238,41 @@ func waitForSireniaAsyncQuorum(service discoverd.Service, appName string, expect
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("timed out waiting for %s sirenia cluster to regain async peers", appName)
+}
+
+// sireniaAsyncQuorumSatisfied reports whether discoverd meta shows a primary,
+// sync, and enough async peers to match the formation process count.
+// expected is the formation process count (primary+sync+asyncs).
+func sireniaAsyncQuorumSatisfied(state *sirenia.State, expected int) bool {
+	if state == nil || expected <= 2 {
+		return false
+	}
+	return len(state.Async) > 0 && 2+len(state.Async) == expected
+}
+
+// jobsToRestartForSireniaQuorum returns up/starting job IDs that should be
+// restarted because they are missing from discoverd or fail the health probe,
+// plus a count of down jobs for optional formation re-assert.
+func jobsToRestartForSireniaQuorum(jobs []*ct.Job, activeRelease, processType string, instances []*discoverd.Instance, healthy func(*discoverd.Instance) bool) (restart []string, down int) {
+	if healthy == nil {
+		healthy = func(*discoverd.Instance) bool { return false }
+	}
+	for _, job := range jobs {
+		if job == nil || job.ReleaseID != activeRelease || job.Type != processType {
+			continue
+		}
+		if job.State == ct.JobStateDown {
+			down++
+			continue
+		}
+		if job.State != ct.JobStateUp && job.State != ct.JobStateStarting {
+			continue
+		}
+		inst := sireniaInstanceForJob(instances, job.ID)
+		if inst != nil && healthy(inst) {
+			continue
+		}
+		restart = append(restart, job.ID)
+	}
+	return restart, down
 }
