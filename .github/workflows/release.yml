@@ -1,7 +1,8 @@
 name: Build and Release
 
 # Manual release only. Unit tests run via the separate Unit tests workflow;
-# this workflow splits the Flynn build across jobs for fresh timeout budgets.
+# this workflow splits the Flynn build across jobs/steps for fresh timeout budgets
+# (base → host binaries → toolchain images → app images).
 on:
   workflow_dispatch:
     inputs:
@@ -205,26 +206,66 @@ jobs:
           cp -a ci-artifacts/base/manifest.json builder/manifest.json
           ls -lh /var/lib/flynn/base-layer.squashfs builder/manifest.json
 
-      - name: Run build.sh cluster
+      - name: Prepare cluster environment
         env:
           FLYNN_BUILD_SKIP_TEARDOWN: "1"
-          # Phase 1 (toolchain) stays conservative; phase 2 (apps) can run hotter.
-          TOOLCHAIN_CONCURRENCY: ${{ inputs.toolchain_concurrency }}
-          APPS_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
-          echo "Building cluster images: toolchain concurrency=${TOOLCHAIN_CONCURRENCY}, apps concurrency=${APPS_CONCURRENCY}"
-          # Heartbeat so the step does not look hung during long image builds.
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" prep
+
+      - name: Build host binaries
+        run: |
+          set -eo pipefail
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" binaries
+
+      - name: Start Flynn cluster
+        run: |
+          set -eo pipefail
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" start
+
+      - name: Build toolchain images
+        env:
+          TOOLCHAIN_CONCURRENCY: ${{ inputs.toolchain_concurrency }}
+        run: |
+          set -eo pipefail
+          cd "${{ env.FLYNN_ROOT }}"
+          echo "Building toolchain images with concurrency=${TOOLCHAIN_CONCURRENCY}"
           (
             while true; do
               sleep 300
-              echo "[heartbeat] still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
+              echo "[heartbeat] toolchain still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
             done
           ) &
           HB_PID=$!
           trap 'kill "${HB_PID}" 2>/dev/null || true' EXIT
-          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" cluster
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" toolchain
+
+      - name: Build app images
+        env:
+          APPS_CONCURRENCY: ${{ inputs.concurrency }}
+        run: |
+          set -eo pipefail
+          cd "${{ env.FLYNN_ROOT }}"
+          echo "Building app images with concurrency=${APPS_CONCURRENCY}"
+          (
+            while true; do
+              sleep 300
+              echo "[heartbeat] apps still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
+            done
+          ) &
+          HB_PID=$!
+          trap 'kill "${HB_PID}" 2>/dev/null || true' EXIT
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" apps
+
+      - name: Stop Flynn cluster
+        if: success()
+        run: |
+          set -eo pipefail
+          cd "${{ env.FLYNN_ROOT }}"
+          sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" stop
 
       - name: Package release tarball
         run: |
