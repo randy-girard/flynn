@@ -67,7 +67,7 @@ else
 fi
 
 echo "==> Running unit tests (${#packages[@]} packages)"
-env GOROOT="${GOROOT}" GOFLAGS=-gcflags=all=-d=checkptr=0 \
-  go test "${TEST_FLAGS[@]}" "${packages[@]}"
+env GOROOT="${GOROOT}" GOFLAGS=-mod=vendor \
+  go test -gcflags=all=-d=checkptr=0 "${TEST_FLAGS[@]}" "${packages[@]}"
 
 echo "==> Unit tests passed"
