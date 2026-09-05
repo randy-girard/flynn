@@ -10,9 +10,9 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/controller/worker/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/updaterdeploy"
 	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
+	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/inconshreveable/log15"
 )
 

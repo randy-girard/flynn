@@ -4,8 +4,8 @@ import (
 	"time"
 
 	api "github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authz"
 	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/flynn/flynn/controller/authz"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

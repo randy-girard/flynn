@@ -18,8 +18,8 @@ import (
 	"github.com/flynn/flynn/updater/accesstoken"
 	"github.com/flynn/flynn/updater/imageenv"
 	"github.com/flynn/flynn/updater/types"
-	"github.com/mattn/go-colorable"
 	"github.com/inconshreveable/log15"
+	"github.com/mattn/go-colorable"
 )
 
 var redisImage, slugBuilder, slugRunner, dockerBuilder, kafkaImage, clickHouseImage *ct.Artifact

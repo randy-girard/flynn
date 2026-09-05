@@ -34,7 +34,7 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
-//TODO(jpg) There isn't really a reason for the simulator to use the postgres xlog
+// TODO(jpg) There isn't really a reason for the simulator to use the postgres xlog
 // However all the initial wal harness data is specified using the pg format so
 // there is no harm it leaving it for now.
 var dxlog = pgxlog.PgXLog{}
