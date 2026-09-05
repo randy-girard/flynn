@@ -10,10 +10,10 @@ on:
         required: true
         type: string
       draft:
-        description: 'Create the release as a draft prerelease'
+        description: 'Create as a draft (unpublished until you publish it in GitHub)'
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
