@@ -291,15 +291,11 @@ jobs:
           cd "${{ env.FLYNN_ROOT }}"
           echo "===> Stopping local Flynn processes (best-effort)..."
           sudo ./script/stop-all || true
-          # Hosted runners are discarded after the job; do not block forever if ZFS
-          # datasets are still busy from leftover container mounts.
-          echo "===> Destroying flynn-default zpool (60s timeout)..."
-          if timeout 60 sudo zpool destroy -f flynn-default; then
-            echo "===> zpool destroy succeeded"
-          else
-            echo "===> zpool destroy timed out or failed (exit=$?); skipping — runner is ephemeral"
-            sudo zpool status flynn-default 2>/dev/null || true
-          fi
+          # Do not call zpool destroy here. After Flynn image builds, datasets are
+          # often still busy; destroy can sit in uninterruptible kernel sleep where
+          # even `timeout`/`SIGKILL` cannot unblock the step. Hosted runners are
+          # discarded after the job, so leaving the pool is fine.
+          echo "===> Skipping zpool destroy on ephemeral runner"
           echo "===> Cleanup finished"
 
   publish:
