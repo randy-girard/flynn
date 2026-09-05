@@ -1,7 +1,7 @@
 name: Build and Release
 
-# Manual release only. Unit tests run first; the Flynn build is split into
-# separate jobs so each step gets a fresh GitHub Actions timeout budget.
+# Manual release only. Unit tests run via the separate Unit tests workflow;
+# this workflow splits the Flynn build across jobs for fresh timeout budgets.
 on:
   workflow_dispatch:
     inputs:
@@ -23,15 +23,8 @@ env:
   GOFLAGS: '-mod=vendor'
 
 jobs:
-  test:
-    name: Unit tests
-    uses: ./.github/workflows/unit-tests.yml
-    permissions:
-      contents: read
-
   build-base:
     name: Build base image
-    needs: test
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     steps:
