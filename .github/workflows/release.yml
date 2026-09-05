@@ -287,9 +287,20 @@ jobs:
       - name: Cleanup
         if: always()
         run: |
+          set +e
           cd "${{ env.FLYNN_ROOT }}"
+          echo "===> Stopping local Flynn processes (best-effort)..."
           sudo ./script/stop-all || true
-          sudo zpool destroy flynn-default || true
+          # Hosted runners are discarded after the job; do not block forever if ZFS
+          # datasets are still busy from leftover container mounts.
+          echo "===> Destroying flynn-default zpool (60s timeout)..."
+          if timeout 60 sudo zpool destroy -f flynn-default; then
+            echo "===> zpool destroy succeeded"
+          else
+            echo "===> zpool destroy timed out or failed (exit=$?); skipping — runner is ephemeral"
+            sudo zpool status flynn-default 2>/dev/null || true
+          fi
+          echo "===> Cleanup finished"
 
   publish:
     name: Publish GitHub release
