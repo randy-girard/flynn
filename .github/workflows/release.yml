@@ -267,16 +267,21 @@ jobs:
           cd "${{ env.FLYNN_ROOT }}"
           sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" stop
 
-      - name: Package release tarball
+      - name: Package release assets
         run: |
           cd "${{ env.FLYNN_ROOT }}"
+          # Individual assets (binaries, layers, install scripts) — not a mega-tarball.
+          # GitHub Releases reject any single asset >= 2GiB.
           sudo -E ./script/release \
-            --target tarball \
+            --target package \
             --version "${{ steps.version.outputs.VERSION }}"
           sudo chown -R "$(id -u):$(id -g)" build/release
-          ls -lh build/release/
+          ls -lah build/release/ | head -n 50
+          echo "..."
+          echo "Total files: $(find build/release -type f | wc -l)"
+          du -sh build/release
 
-      - name: Upload release tarball
+      - name: Upload release artifacts
         uses: actions/upload-artifact@v4
         with:
           name: flynn-release-${{ steps.version.outputs.VERSION }}
@@ -368,12 +373,29 @@ jobs:
           fi
 
           shopt -s nullglob
-          FILES=(build/release/*)
+          FILES=()
+          LIMIT=2147483648
+          for f in build/release/*; do
+            [[ -f "${f}" ]] || continue
+            base="$(basename "${f}")"
+            # Never upload a mega release tarball; install-flynn expects per-file assets.
+            if [[ "${base}" == flynn-*.tar.gz ]]; then
+              echo "Skipping ${base} (mega-tarball; use individual assets)"
+              continue
+            fi
+            size="$(stat -c%s "${f}")"
+            if [[ "${size}" -ge "${LIMIT}" ]]; then
+              echo "ERROR: ${base} is ${size} bytes (>= 2GiB GitHub release asset limit)" >&2
+              exit 1
+            fi
+            FILES+=("${f}")
+          done
           if [[ ${#FILES[@]} -eq 0 ]]; then
             echo "ERROR: no release files found in build/release" >&2
             exit 1
           fi
 
+          echo "Uploading ${#FILES[@]} assets to GitHub Release ${VERSION}..."
           gh release create "${VERSION}" "${ARGS[@]}" "${FILES[@]}"
           echo "Created release ${VERSION}"
           gh release view "${VERSION}"
