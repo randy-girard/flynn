@@ -14,6 +14,16 @@ on:
         required: false
         type: boolean
         default: true
+      concurrency:
+        description: 'Parallel flynn-builder image builds (1 safest on small runners; 2-4 much faster)'
+        required: false
+        type: string
+        default: '2'
+      runner:
+        description: 'GitHub Actions runner label (use a larger runner if your org has one)'
+        required: false
+        type: string
+        default: 'ubuntu-24.04'
 
 permissions:
   contents: write
@@ -25,7 +35,7 @@ env:
 jobs:
   build-base:
     name: Build base image
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 180
     steps:
       - name: Checkout code
@@ -105,7 +115,7 @@ jobs:
   build-cluster:
     name: Build cluster images
     needs: build-base
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
     steps:
       - name: Checkout code
@@ -153,7 +163,8 @@ jobs:
 
       - name: Set up ZFS pool
         run: |
-          sudo truncate -s 20G /zfs-pool.img
+          # Larger pool + disabled sync: cluster image builds are I/O heavy.
+          sudo truncate -s 40G /zfs-pool.img
           sudo zpool create -f flynn-default /zfs-pool.img
           sudo zfs set compression=lz4 flynn-default
           sudo zfs set sync=disabled flynn-default
@@ -161,7 +172,8 @@ jobs:
 
       - name: Add swap
         run: |
-          sudo fallocate -l 8G /mnt/swapfile
+          # Extra swap absorbs concurrent go builds when runner RAM is tight.
+          sudo fallocate -l 16G /mnt/swapfile
           sudo chmod 600 /mnt/swapfile
           sudo mkswap /mnt/swapfile
           sudo swapon /mnt/swapfile
@@ -191,9 +203,22 @@ jobs:
       - name: Run build.sh cluster
         env:
           FLYNN_BUILD_SKIP_TEARDOWN: "1"
-          FLYNN_BUILD_CONCURRENCY: "1"
+          # Serial (1) is too slow for ~40 images on GHA's 6h wall clock.
+          # Default 2 is a balance; raise via workflow input on larger runners.
+          FLYNN_BUILD_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
+          set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
+          echo "Building cluster images with FLYNN_BUILD_CONCURRENCY=${FLYNN_BUILD_CONCURRENCY}"
+          # Heartbeat so the step does not look hung during long image builds.
+          (
+            while true; do
+              sleep 300
+              echo "[heartbeat] still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
+            done
+          ) &
+          HB_PID=$!
+          trap 'kill "${HB_PID}" 2>/dev/null || true' EXIT
           sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" cluster
 
       - name: Package release tarball
@@ -223,7 +248,7 @@ jobs:
   publish:
     name: Publish GitHub release
     needs: build-cluster
-    runs-on: ubuntu-24.04
+    runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
     steps:
       - name: Checkout code
