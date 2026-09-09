@@ -1,6 +1,12 @@
 # Upgrade / DB recovery hardening — implementation plan
 
-Status: **IN PROGRESS** on branch `upgrade-db-recovery-hardening` (item 1 landed in working tree).
+Status: **IN PROGRESS** on branch `upgrade-db-recovery-hardening`.
+
+Completed:
+- Item 1 — quorum repair stuck heuristics (committed)
+- Item 2 — postgres assumeStandby data-dir reuse (this commit)
+- Item 3 — MariaDB lagging-replica classification (this commit)
+- Item 4 — role-aware skip + deferred async repl check (this commit)
 
 Branch reviewed: `ci-tests-and-release` (commits `32c39ba9` … `164267a5`), merged to `main`.
 
