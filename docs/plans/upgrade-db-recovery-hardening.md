@@ -1,6 +1,6 @@
 # Upgrade / DB recovery hardening — implementation plan
 
-Status: **IN PROGRESS** on branch `upgrade-db-recovery-hardening`.
+Status: **items 1–7 done; integration tests added** on branch `upgrade-db-recovery-hardening`.
 
 Completed:
 - Item 1 — quorum repair stuck heuristics (committed)
@@ -11,7 +11,13 @@ Completed:
 - Item 6 — align inter-host settle timeouts (committed)
 - Item 7 — harden RepairStaleVolumes (two consecutive misses + live-job guard; VolumesReady host field deferred — OpenDBs finishes before ServeHTTP)
 
-Remaining: integration / cluster tests from the plan.
+Remaining: chaos/flannel IP-rotate variant (opt-in); real `flynn-host update --all-nodes` on cluster2 blocked until hosts gain remote exec (ReleaseSuite covers GitHub updates).
+
+Integration tests added:
+- `TestRollingSystemctlRestartThreeNode_WithRestartingAsync` (`test/test_cluster_update.go`)
+- `TestPostgresSyncTakeoverAfterProcessRestart` (`test/test_sirenia_recovery.go`)
+- `TestMariaDBLaggingReplicaNotReseeded` (`test/test_sirenia_recovery.go`)
+- `TestFlynnHostUpdateAllNodesThreeNode` skipped with pointer to ReleaseSuite
 
 Branch reviewed: `ci-tests-and-release` (commits `32c39ba9` … `164267a5`), merged to `main`.
 
