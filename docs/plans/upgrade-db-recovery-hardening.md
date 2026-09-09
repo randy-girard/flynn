@@ -7,10 +7,11 @@ Completed:
 - Item 2 — postgres assumeStandby data-dir reuse (committed)
 - Item 3 — MariaDB lagging-replica classification (committed)
 - Item 4 — role-aware skip + deferred async repl check (committed)
-- Item 5 — narrow deposed-peer clearing (this commit)
+- Item 5 — narrow deposed-peer clearing (committed)
 - Item 6 — align inter-host settle timeouts (committed)
+- Item 7 — harden RepairStaleVolumes (two consecutive misses + live-job guard; VolumesReady host field deferred — OpenDBs finishes before ServeHTTP)
 
-Remaining: item 7 (stale volumes), integration tests.
+Remaining: integration / cluster tests from the plan.
 
 Branch reviewed: `ci-tests-and-release` (commits `32c39ba9` … `164267a5`), merged to `main`.
 
