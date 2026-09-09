@@ -17,6 +17,12 @@ func TestRollingRestartTimingDefaults(t *testing.T) {
 	if updateWaitJobsTimeout <= 0 {
 		t.Fatalf("updateWaitJobsTimeout must be positive")
 	}
+	if updateClusterSizeTimeout < 2*updateInterHostDelay {
+		t.Fatalf("updateClusterSizeTimeout=%s should be at least 2x inter-host delay (%s)", updateClusterSizeTimeout, updateInterHostDelay)
+	}
+	if updateRemoteDaemonTimeout < 3*time.Minute {
+		t.Fatalf("updateRemoteDaemonTimeout=%s is too short for raft rejoin", updateRemoteDaemonTimeout)
+	}
 }
 
 func TestIsControllerPlacedJob(t *testing.T) {

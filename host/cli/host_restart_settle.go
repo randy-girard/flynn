@@ -60,12 +60,25 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 	}
 
 	if opts.ExpectedHostCount > 1 && opts.ClusterClient != nil {
-		err := waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, 3*time.Minute, log)
+		err := waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, updateClusterSizeTimeout, log)
 		if err != nil {
 			if opts.FatalClusterSize {
-				return err
+				// One more health pass before aborting — discoverd can lag
+				// status-web briefly after a host rejoins raft.
+				if _, healthErr := waitForClusterHealthy(updateHealthTimeout, log); healthErr == nil {
+					if retryErr := waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, updateClusterSizeTimeout/4, log); retryErr == nil {
+						err = nil
+					} else {
+						err = retryErr
+					}
+				}
 			}
-			log.Warn("cluster did not fully repopulate after restart, continuing anyway", "err", err)
+			if err != nil {
+				if opts.FatalClusterSize {
+					return err
+				}
+				log.Warn("cluster did not fully repopulate after restart, continuing anyway", "err", err)
+			}
 		}
 	}
 
