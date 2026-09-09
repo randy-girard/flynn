@@ -3,6 +3,7 @@ package updaterdeploy
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
@@ -13,14 +14,26 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
-const sireniaQuorumRepairTimeout = 2 * time.Minute
+const (
+	defaultSireniaQuorumRepairTimeout = 2 * time.Minute
+	sireniaRepairRetryPendingGrace    = 5 * time.Minute
+	defaultSireniaRepairSeedGrace     = 30 * time.Minute
+	sireniaRepairSeedGraceEnv         = "SIRENIA_REPAIR_SEED_GRACE"
+)
 
-// RepairSireniaClusterQuorum restarts sirenia database jobs that are running on
-// the host but no longer registered in discoverd, and waits for HA clusters to
-// regain async peers. This can happen when a rolling deploy stops a peer for
-// reconfiguration but the process never comes back online, or after orphan
-// formation cleanup removes missing asyncs from cluster state while a zombie
-// job remains.
+// Overridable for tests so wait loops finish quickly.
+var (
+	sireniaQuorumRepairTimeout = defaultSireniaQuorumRepairTimeout
+	sireniaQuorumPollInterval  = 2 * time.Second
+	sireniaRepairClock         = time.Now
+)
+
+// RepairSireniaClusterQuorum restarts sirenia database jobs that are stuck
+// (unreachable, retry-pending past grace, role mismatch, or not running past
+// the seed grace window) or no longer registered in discoverd, and waits for
+// HA clusters to regain healthy async peers. Peers that are still seeding
+// within the grace window are left alone so a large basebackup is not killed
+// mid-flight during upgrades.
 func RepairSireniaClusterQuorum(ctrl controller.Client, restartDownJobs bool, log log15.Logger) error {
 	if log == nil {
 		log = log15.New()
@@ -115,11 +128,11 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 		return fmt.Errorf("list %s jobs: %w", app.Name, err)
 	}
 
-	restartIDs, downJobs := jobsToRestartForSireniaQuorum(jobs, activeRelease, processType, instances, checkSireniaInstanceHealthy)
+	restartIDs, reasons, downJobs := jobsToRestartForSireniaQuorum(jobs, activeRelease, processType, instances, sireniaRepairClock())
 	var restarted int
 	for _, jobID := range restartIDs {
-		log.Warn("restarting unregistered or unhealthy sirenia job",
-			"job.id", jobID, "registered", registered[jobID])
+		log.Warn("restarting unregistered or stuck sirenia job",
+			"job.id", jobID, "registered", registered[jobID], "reason", reasons[jobID])
 		if err := ctrl.DeleteJob(app.ID, jobID); err != nil {
 			return fmt.Errorf("restart %s job %s: %w", app.Name, jobID, err)
 		}
@@ -204,38 +217,128 @@ func sireniaMetaPeersHealthy(state *sirenia.State) bool {
 	return true
 }
 
-// checkSireniaInstanceHealthy is the live Status() probe; tests may override
-// it to avoid dialing unreachable fake addresses.
+// sireniaPeerProbe fetches Status for a discoverd instance. Tests may override
+// probeSireniaInstance to avoid dialing unreachable fake addresses.
+type sireniaPeerProbe func(inst *discoverd.Instance) (*sireniaclient.Status, error)
+
+var probeSireniaInstance sireniaPeerProbe = defaultProbeSireniaInstance
+
+func defaultProbeSireniaInstance(inst *discoverd.Instance) (*sireniaclient.Status, error) {
+	if inst == nil || inst.Addr == "" {
+		return nil, fmt.Errorf("missing instance address")
+	}
+	return sireniaclient.NewClient(inst.Addr).Status()
+}
+
+// checkSireniaInstanceHealthy is a thin wrapper around the stuck probe with
+// unknown job age (age=0). Seeding peers within the seed grace are treated as
+// healthy; unreachable / retry-pending / role-mismatch peers are not.
+// Tests may override it to avoid dialing.
 var checkSireniaInstanceHealthy = sireniaInstanceHealthy
 
 func sireniaInstanceHealthy(inst *discoverd.Instance) bool {
-	if inst == nil || inst.Addr == "" {
+	status, err := probeSireniaInstance(inst)
+	return !sireniaInstanceStuck(status, err, 0, sireniaRepairClock())
+}
+
+// sireniaInstanceStuck reports whether a peer should be restarted. A peer is
+// stuck when Status() fails, RetryPending is older than the retry grace, its
+// local role never converged while meta lists it in the cluster, or the
+// database has not been Running for longer than the seed grace.
+func sireniaInstanceStuck(status *sireniaclient.Status, err error, jobAge time.Duration, now time.Time) bool {
+	return sireniaStuckReason(status, err, jobAge, now, sireniaRepairSeedGrace(), sireniaRepairRetryPendingGrace) != ""
+}
+
+func sireniaStuckReason(status *sireniaclient.Status, probeErr error, jobAge time.Duration, now time.Time, seedGrace, retryGrace time.Duration) string {
+	if probeErr != nil || status == nil {
+		return "unreachable"
+	}
+	if status.Peer != nil && status.Peer.RetryPending != nil {
+		if now.Sub(*status.Peer.RetryPending) >= retryGrace {
+			return "retry_pending"
+		}
+	}
+	if status.Peer != nil {
+		role := status.Peer.Role
+		if (role == sirenia.RoleUnassigned || role == sirenia.RoleUnknown) &&
+			peerIDListedInClusterState(status.Peer.ID, status.Peer.State) {
+			return "role_mismatch"
+		}
+	}
+	running := status.Database != nil && status.Database.Running
+	if !running && jobAge >= seedGrace {
+		return "not_running_past_grace"
+	}
+	return ""
+}
+
+func peerIDListedInClusterState(peerID string, state *sirenia.State) bool {
+	if state == nil || peerID == "" {
 		return false
 	}
-	status, err := sireniaclient.NewClient(inst.Addr).Status()
-	if err != nil {
+	match := func(inst *discoverd.Instance) bool {
+		if inst == nil || inst.Meta == nil {
+			return false
+		}
+		for _, v := range inst.Meta {
+			if v == peerID {
+				return true
+			}
+		}
 		return false
 	}
-	return status.Database != nil && status.Database.Running
+	if match(state.Primary) || match(state.Sync) {
+		return true
+	}
+	for _, async := range state.Async {
+		if match(async) {
+			return true
+		}
+	}
+	return false
+}
+
+func sireniaRepairSeedGrace() time.Duration {
+	if v := os.Getenv(sireniaRepairSeedGraceEnv); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultSireniaRepairSeedGrace
+}
+
+func sireniaJobAge(job *ct.Job, now time.Time) time.Duration {
+	if job == nil {
+		return 0
+	}
+	if job.CreatedAt != nil {
+		return now.Sub(*job.CreatedAt)
+	}
+	if job.UpdatedAt != nil {
+		return now.Sub(*job.UpdatedAt)
+	}
+	// Unknown age: treat as within seed grace so we do not kill on
+	// Running=false alone.
+	return 0
 }
 
 func waitForSireniaAsyncQuorum(service discoverdService, appName string, expected int, log log15.Logger) error {
 	if expected <= 2 {
 		return nil
 	}
-	deadline := time.Now().Add(sireniaQuorumRepairTimeout)
-	for time.Now().Before(deadline) {
+	deadline := sireniaRepairClock().Add(sireniaQuorumRepairTimeout)
+	for sireniaRepairClock().Before(deadline) {
 		meta, err := service.GetMeta()
 		if err == nil && meta != nil && len(meta.Data) > 0 {
 			var state sirenia.State
 			if err := json.Unmarshal(meta.Data, &state); err == nil {
-				if sireniaAsyncQuorumSatisfied(&state, expected) {
+				if sireniaAsyncQuorumSatisfied(&state, expected) && sireniaMetaPeersHealthy(&state) {
 					log.Info("sirenia cluster regained async quorum", "asyncs", len(state.Async))
 					return nil
 				}
 			}
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(sireniaQuorumPollInterval)
 	}
 	return fmt.Errorf("timed out waiting for %s sirenia cluster to regain async peers", appName)
 }
@@ -251,12 +354,13 @@ func sireniaAsyncQuorumSatisfied(state *sirenia.State, expected int) bool {
 }
 
 // jobsToRestartForSireniaQuorum returns up/starting job IDs that should be
-// restarted because they are missing from discoverd or fail the health probe,
-// plus a count of down jobs for optional formation re-assert.
-func jobsToRestartForSireniaQuorum(jobs []*ct.Job, activeRelease, processType string, instances []*discoverd.Instance, healthy func(*discoverd.Instance) bool) (restart []string, down int) {
-	if healthy == nil {
-		healthy = func(*discoverd.Instance) bool { return false }
-	}
+// restarted because they are missing from discoverd or are stuck, a map of
+// job ID → stuck reason for logging, plus a count of down jobs for optional
+// formation re-assert.
+func jobsToRestartForSireniaQuorum(jobs []*ct.Job, activeRelease, processType string, instances []*discoverd.Instance, now time.Time) (restart []string, reasons map[string]string, down int) {
+	reasons = make(map[string]string)
+	seedGrace := sireniaRepairSeedGrace()
+	retryGrace := sireniaRepairRetryPendingGrace
 	for _, job := range jobs {
 		if job == nil || job.ReleaseID != activeRelease || job.Type != processType {
 			continue
@@ -269,10 +373,18 @@ func jobsToRestartForSireniaQuorum(jobs []*ct.Job, activeRelease, processType st
 			continue
 		}
 		inst := sireniaInstanceForJob(instances, job.ID)
-		if inst != nil && healthy(inst) {
+		if inst == nil {
+			restart = append(restart, job.ID)
+			reasons[job.ID] = "unregistered"
+			continue
+		}
+		status, err := probeSireniaInstance(inst)
+		reason := sireniaStuckReason(status, err, sireniaJobAge(job, now), now, seedGrace, retryGrace)
+		if reason == "" {
 			continue
 		}
 		restart = append(restart, job.ID)
+		reasons[job.ID] = reason
 	}
-	return restart, down
+	return restart, reasons, down
 }
