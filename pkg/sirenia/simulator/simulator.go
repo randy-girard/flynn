@@ -34,7 +34,7 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
-//TODO(jpg) There isn't really a reason for the simulator to use the postgres xlog
+// TODO(jpg) There isn't really a reason for the simulator to use the postgres xlog
 // However all the initial wal harness data is specified using the pg format so
 // there is no harm it leaving it for now.
 var dxlog = pgxlog.PgXLog{}
@@ -771,6 +771,10 @@ func (p *databaseSimulatorClient) Stop() error {
 
 func (p *databaseSimulatorClient) Ready() <-chan state.DatabaseEvent {
 	return p.events
+}
+
+func (p *databaseSimulatorClient) Running() bool {
+	return p.Online
 }
 
 // Given the current state, figure out our current role and update our xlog

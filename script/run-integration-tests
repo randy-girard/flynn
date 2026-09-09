@@ -17,6 +17,16 @@ OPTIONS:
   -f, --filter=FILTER      Regular expression selecting which tests and/or suites to run
   -s, --stream             Stream debug output
   -v, --version=VERSION    Boot using the released VERSION (e.g. v20151104.1)
+
+Single-test example:
+  $0 -f 'RouterSuite\\.TestAdditionalHttpPorts'
+
+Or use script/run-single-integration-test.sh for the same effect.
+
+ENVIRONMENT:
+  CLUSTER_DOMAIN               DNS zone for controller routes [default: \${size}.localflynn.com]
+  TEST_CLUSTER_HOST_TIMEOUT    Host boot timeout for nested clusters (e.g. 15m; TCG VMs are slow)
+  HOST_MACHINE                 Machine hardware arch from uname -m [default: outer host; nested skips use this]
 USAGE
 }
 
@@ -81,16 +91,34 @@ main() {
   if [[ -n "${version}" ]]; then
     boot_flags+=("--version" "${version}")
   fi
-  cluster_add=$("${ROOT}/script/bootstrap-flynn" ${boot_flags[@]} &> >(tee /dev/stderr) | tail -1 | head -1)
+  cluster_add=$("${ROOT}/script/bootstrap-flynn" ${boot_flags[@]} 2>&1 | tee >(cat >&2) | tail -1 | head -1)
 
   if [[ "${cluster_add:0:17}" != "flynn cluster add" ]]; then
     echo Bootstrap failed >&2
     exit 1
   fi
 
-  local args=(
-    "--concurrency 1"
+  # discoverd is bound to TEST-NET IPs (see script/bootstrap-flynn), not loopback.
+  local ips=()
+  local index
+  for index in $(seq 0 $((size - 1))); do
+    ips+=("192.0.2.20$((${index}))")
+  done
+  local discoverd_csv
+  discoverd_csv="$(join "," ${ips[@]/%/:1111})"
+  # flynn-host run → pkg/exec creates cluster.NewClient() on this machine using DISCOVERD
+  # from the environment (defaults to 127.0.0.1:1111 if unset). Passing DISCOVERD only
+  # via /usr/bin/env configures the test container, not the CLI parent process.
+  export DISCOVERD="${discoverd_csv}"
+
+  local cluster_domain="${CLUSTER_DOMAIN:-${size}.localflynn.com}"
+  local host_machine="${HOST_MACHINE:-$(uname -m)}"
+
+  # flynn-test uses Go's flag package; each flag and value must be a separate argv element.
+  local flynn_test_args=(
+    "--concurrency" "1"
     "--debug"
+    "--router-ip" "${ips[0]}"
   )
 
   local mounts=(
@@ -100,19 +128,18 @@ main() {
   )
 
   if [[ -d "${ROOT}/backups" ]]; then
-    args+=("--backups-dir" "${ROOT}/backups")
+    flynn_test_args+=("--backups-dir" "${ROOT}/backups")
     mounts+=("${ROOT}/backups:${ROOT}/backups")
   fi
   if [[ -n "${filter}" ]]; then
-    args+=("--run ${filter}")
+    flynn_test_args+=("--run" "${filter}")
   fi
   if $stream; then
-    args+=("--stream")
+    flynn_test_args+=("--stream")
   fi
   if [[ -t 0 ]]; then
-    args+=("--interactive")
+    flynn_test_args+=("--interactive")
   fi
-  args+=("--router-ip=192.0.2.200")
 
   "${flynn_host}" run \
     --bind "$(join "," ${mounts[@]})" \
@@ -120,10 +147,14 @@ main() {
     "${ROOT}/build/image/test.json" \
     /usr/bin/env \
     ROOT="/go/src/github.com/flynn/flynn" \
+    DISCOVERD="${discoverd_csv}" \
+    ROUTER_IP="${ips[0]}" \
+    DOMAIN="${cluster_domain}" \
+    HOST_MACHINE="${host_machine}" \
     CLUSTER_ADD_ARGS="${cluster_add:18}" \
     USE_KVM="$([[ -e /dev/kvm ]] && echo true)" \
-    /bin/run-flynn-test.sh \
-    ${args[@]}
+    /bin/bash "/go/src/github.com/flynn/flynn/test/run.sh" \
+    "${flynn_test_args[@]}"
 }
 
 main $@

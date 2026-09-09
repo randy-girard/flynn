@@ -51,7 +51,7 @@ type Client struct {
 }
 
 var httpClient = &http.Client{
-	Timeout:   3 * time.Minute, // client operation timeout
+	Timeout:   15 * time.Minute,
 	Transport: httphelper.RetryClient.Transport,
 }
 
@@ -104,6 +104,28 @@ func IsRecoverableStopError(err error) bool {
 	return strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "Client.Timeout exceeded") ||
 		strings.Contains(msg, "timeout awaiting headers")
+}
+
+// IsPeerUnreachableError reports whether a request to a sirenia peer's HTTP API
+// failed because the peer could not be contacted at all: its job is down or the
+// host is unreachable, so the TCP connection was never established. Such a peer
+// is effectively already stopped, so callers should wait for discoverd to
+// report it down rather than aborting the deploy.
+func IsPeerUnreachableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "network is unreachable") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "connection reset by peer") {
+		return true
+	}
+	// A dial timeout (as opposed to a mid-request read timeout) means the TCP
+	// connection could not be established within the dialer's retry budget.
+	return strings.Contains(msg, "dial ") && strings.Contains(msg, "i/o timeout")
 }
 
 func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, timeout time.Duration) error {

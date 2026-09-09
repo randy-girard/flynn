@@ -83,7 +83,7 @@ func testDeploySingleAsync(oldRelease, newRelease string) []expectedSireniaState
 
 func testSireniaDeploy(client controller.Client, disc *discoverd.Client, t *c.C, d *sireniaDeploy) {
 	// create app
-	app := &ct.App{Name: d.name, Strategy: "sirenia"}
+	app := &ct.App{Name: d.name, Strategy: "sirenia", DeployTimeout: 900}
 	t.Assert(client.CreateApp(app), c.IsNil)
 	defer client.DeleteApp(app.ID)
 

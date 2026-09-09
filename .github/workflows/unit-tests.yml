@@ -1,0 +1,106 @@
+name: Unit tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.24'
+  GOFLAGS: '-mod=vendor'
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install system dependencies
+        run: |
+          set -eo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libseccomp-dev \
+            libdevmapper-dev \
+            postgresql \
+            postgresql-contrib \
+            mariadb-server \
+            mariadb-backup \
+            redis-server \
+            zfsutils-linux \
+            bats \
+            jq \
+            curl \
+            git \
+            gnupg
+
+          # MongoDB appliance unit tests need mongod (not in Ubuntu main).
+          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
+            | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
+          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
+            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
+          sudo apt-get update
+          sudo apt-get install -y mongodb-org
+
+      - name: Start PostgreSQL
+        run: |
+          sudo service postgresql start
+          # Peer auth as the runner user (and root for sudo tests) needs matching roles.
+          RUNNER_USER="$(id -un)"
+          sudo -u postgres createuser -s "${RUNNER_USER}" 2>/dev/null || true
+          sudo -u postgres createuser -s root 2>/dev/null || true
+          echo "PGHOST=/var/run/postgresql" >> "$GITHUB_ENV"
+          echo "PGSSLMODE=disable" >> "$GITHUB_ENV"
+
+      - name: Start MariaDB and Redis
+        run: |
+          sudo service mariadb start || sudo service mysql start || true
+          sudo service redis-server start || true
+
+      - name: Build Flynn binaries
+        run: |
+          git config --global --add safe.directory "${{ github.workspace }}"
+          export CGO_ENABLED=1
+          ./script/build-flynn
+
+      - name: Run gofmt check
+        run: util/commit-validator/validate-gofmt
+
+      - name: Run bats script tests
+        run: bats script/test
+
+      - name: Run unit tests
+        run: |
+          set -eo pipefail
+          make test-unit-root-native 2>&1 | tee unit-test-output.log
+
+      - name: Upload unit test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-output
+          path: unit-test-output.log
+          if-no-files-found: ignore
+          retention-days: 7

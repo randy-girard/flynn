@@ -230,8 +230,18 @@ func bootCluster(c *BootConfig, cluster *Cluster, manifest io.Reader, log log15.
 	bootstrapArgs := []string{
 		"--min-hosts", strconv.Itoa(c.Size),
 		"--peer-ips", strings.Join(peerIPs, ","),
-		"--job-timeout", "120",
 	}
+	jobTimeout := 120
+	if !c.UseKVM {
+		// Software emulation of nested hosts makes Flynn bootstrap much slower.
+		jobTimeout = 600
+	}
+	if c.HostTimeout != nil {
+		if ht := int(c.HostTimeout.Seconds()) + 120; ht > jobTimeout {
+			jobTimeout = ht
+		}
+	}
+	bootstrapArgs = append(bootstrapArgs, "--job-timeout", strconv.Itoa(jobTimeout))
 	if c.Backup != "" {
 		bootstrapArgs = append(bootstrapArgs, "--from-backup", c.Backup)
 	}
@@ -323,9 +333,9 @@ func (c *Cluster) AddHosts(count int) ([]*cluster.Host, error) {
 	if c.config.HostTimeout != nil {
 		timeout = *c.config.HostTimeout
 	}
-	timeoutCh := time.After(timeout)
 
 	// wait for the current hosts before scaling up
+	timeoutCh := time.After(timeout)
 loop:
 	for {
 		select {
@@ -358,6 +368,8 @@ loop:
 	if c.Hosts == nil {
 		c.Hosts = make(map[string]*Host, count)
 	}
+	// Fresh timeout: scaling plus nested VM boot must not consume the budget used above.
+	timeoutCh = time.After(timeout)
 	for {
 		select {
 		case event, ok := <-events:

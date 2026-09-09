@@ -143,4 +143,3 @@ func runWebhooksRemove(args *docopt.Args, client *cluster.Client) error {
 	}
 	return nil
 }
-

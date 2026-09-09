@@ -43,9 +43,9 @@ Create a Flynn Release (tarball or GitHub).
 
 OPTIONS:
   -h, --help                  Show this message
-  --target TARGET             Release target: 'tarball' or 'github' [default: tarball]
+  --target TARGET             Release target: 'tarball', 'package', or 'github' [default: tarball]
   --version VERSION           Version for release (e.g., v20240127.0)
-  --output DIR                Output directory for tarball [default: ./build/release]
+  --output DIR                Output directory for tarball/package [default: ./build/release]
   --github-repo OWNER/REPO    GitHub repository [default: randy-girard/flynn]
   --draft                     Create the GitHub release as a draft (github target only)
   --prerelease                Mark the GitHub release as a prerelease (github target only)
@@ -54,6 +54,7 @@ OPTIONS:
 TARGETS:
   tarball   Create a compressed tarball for manual testing/deployment
             Output: flynn-<version>.tar.gz with install script
+  package   Write individual GitHub Release assets into --output (no upload, no mega-tarball)
   github    Create a GitHub release with all artifacts uploaded
 
 EXAMPLES:
@@ -64,6 +65,9 @@ EXAMPLES:
   # Upload tarball to server and install
   scp build/release/flynn-v20240210.0.tar.gz root@server:/tmp/
   ssh root@server 'cd /tmp && tar xzf flynn-v20240210.0.tar.gz && ./install-flynn'
+
+  # Package individual assets for CI / GitHub Releases (each asset must be < 2GiB)
+  ./script/release --target package --version v20240210.0
 
   # After testing, create GitHub release
   ./script/release --target github --version v20240210.0
@@ -79,8 +83,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target)
       TARGET="$2"
-      if [[ "${TARGET}" != "tarball" && "${TARGET}" != "github" ]]; then
-        fail "Invalid target: ${TARGET}. Must be 'tarball' or 'github'"
+      if [[ "${TARGET}" != "tarball" && "${TARGET}" != "package" && "${TARGET}" != "github" ]]; then
+        fail "Invalid target: ${TARGET}. Must be 'tarball', 'package', or 'github'"
       fi
       shift 2
       ;;
@@ -408,6 +412,65 @@ create_install_script() {
   echo "  - install-flynn"
 }
 
+# Package the individual assets used by GitHub Releases / install-flynn-release
+# (binaries, manifests, layers, install scripts, checksums). No mega-tarball.
+package_github_assets() {
+  package_binaries
+  package_manifests
+  package_image_manifests
+  package_layers
+  create_install_script "github"
+
+  info "Copying CLI installer..."
+  sed "s/__FLYNN_VERSION__/${VERSION}/g" "${ROOT}/script/install-flynn-cli" > "${RELEASE_DIR}/install-flynn-cli"
+  chmod +x "${RELEASE_DIR}/install-flynn-cli"
+  echo "  - install-flynn-cli"
+
+  generate_checksums
+}
+
+# Warn if any staged asset would exceed GitHub's 2GiB release asset limit.
+check_github_asset_sizes() {
+  local dir="$1"
+  local limit=2147483648
+  local bad=0
+  local f size
+  while IFS= read -r -d '' f; do
+    size=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f")
+    if [[ "${size}" -ge "${limit}" ]]; then
+      echo "ERROR: $(basename "$f") is ${size} bytes (>= 2GiB GitHub release asset limit)" >&2
+      bad=1
+    fi
+  done < <(find "${dir}" -type f -print0)
+  if [[ "${bad}" -ne 0 ]]; then
+    fail "one or more release assets exceed GitHub's 2GiB limit"
+  fi
+}
+
+# Write individual GitHub-style assets into OUTPUT_DIR (for CI artifact handoff).
+create_package() {
+  info "Packaging individual release assets into ${OUTPUT_DIR}..."
+
+  package_github_assets
+
+  info "Release artifacts:"
+  ls -lah "${RELEASE_DIR}"
+
+  check_github_asset_sizes "${RELEASE_DIR}"
+
+  mkdir -p "${OUTPUT_DIR}"
+  # Replace prior package contents so CI uploads only this version's assets.
+  find "${OUTPUT_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  cp -a "${RELEASE_DIR}/." "${OUTPUT_DIR}/"
+
+  info "Packaged $(find "${OUTPUT_DIR}" -type f | wc -l) files into ${OUTPUT_DIR} ($(du -sh "${OUTPUT_DIR}" | awk '{print $1}'))"
+  echo ""
+  echo "Upload these files as individual GitHub Release assets (not a single mega-tarball)."
+  echo "Create the release with:"
+  echo "  ./script/release --target github --version ${VERSION}"
+  echo "or from CI: gh release create ${VERSION} ${OUTPUT_DIR}/*"
+}
+
 # Create tarball for local testing
 create_tarball() {
   info "Creating tarball for local testing..."
@@ -444,6 +507,7 @@ create_tarball() {
   echo "  3. Or install from the tarball without extracting first (GitHub or tarball install script):"
   echo "       sudo bash install-flynn --tarball /tmp/${TARBALL_NAME}"
   echo ""
+  echo "Note: GitHub Releases reject assets >= 2GiB. Prefer --target package/github for publishing."
   echo "After testing, create GitHub release with:"
   echo "  ./script/release --target github --version ${VERSION}"
 }
@@ -462,25 +526,13 @@ create_github_release() {
 
   info "Creating GitHub Release ${VERSION} for ${GITHUB_REPO}..."
 
-  package_binaries
-  package_manifests
-  package_image_manifests
-  package_layers
-
-  # Create install scripts
-  create_install_script "github"
-
-  # Also copy CLI installer
-  info "Copying CLI installer..."
-  sed "s/__FLYNN_VERSION__/${VERSION}/g" "${ROOT}/script/install-flynn-cli" > "${RELEASE_DIR}/install-flynn-cli"
-  chmod +x "${RELEASE_DIR}/install-flynn-cli"
-  echo "  - install-flynn-cli"
-
-  generate_checksums
+  package_github_assets
   generate_release_notes
 
   info "Release artifacts:"
   ls -lah "${RELEASE_DIR}"
+
+  check_github_asset_sizes "${RELEASE_DIR}"
 
   # Check if release already exists
   if gh release view "${VERSION}" --repo "${GITHUB_REPO}" &> /dev/null; then
@@ -573,19 +625,16 @@ curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/instal
 do_dry_run() {
   info "DRY RUN - Would create ${TARGET} release ${VERSION}..."
 
-  package_binaries
-  package_manifests
-  package_image_manifests
-  package_layers
-
-  create_install_script "${TARGET}"
-
-  if [[ "${TARGET}" == "github" ]]; then
-    info "Copying CLI installer..."
-    echo "  - install-flynn-cli (would be copied)"
+  if [[ "${TARGET}" == "package" || "${TARGET}" == "github" ]]; then
+    package_github_assets
+  else
+    package_binaries
+    package_manifests
+    package_image_manifests
+    package_layers
+    create_install_script "tarball"
+    generate_checksums
   fi
-
-  generate_checksums
 
   if [[ "${TARGET}" == "github" ]]; then
     generate_release_notes
@@ -603,6 +652,9 @@ do_dry_run() {
   if [[ "${TARGET}" == "tarball" ]]; then
     echo ""
     echo "Would create: ${OUTPUT_DIR}/flynn-${VERSION}.tar.gz"
+  elif [[ "${TARGET}" == "package" ]]; then
+    echo ""
+    echo "Would write individual assets to: ${OUTPUT_DIR}/"
   else
     echo ""
     echo "Would upload to: https://github.com/${GITHUB_REPO}/releases/tag/${VERSION}"
@@ -613,11 +665,20 @@ do_dry_run() {
 if $DRY_RUN; then
   do_dry_run
 else
-  if [[ "${TARGET}" == "tarball" ]]; then
-    create_tarball
-  else
-    create_github_release
-  fi
+  case "${TARGET}" in
+    tarball)
+      create_tarball
+      ;;
+    package)
+      create_package
+      ;;
+    github)
+      create_github_release
+      ;;
+    *)
+      fail "Invalid target: ${TARGET}"
+      ;;
+  esac
 fi
 
 # Cleanup

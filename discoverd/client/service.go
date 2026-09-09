@@ -123,6 +123,17 @@ func (s *service) Instances() ([]*Instance, error) {
 	return res, s.client.Get(fmt.Sprintf("/services/%s/instances", s.name), &res)
 }
 
+// InstancesOrEmpty returns registered instances for a service. discoverd returns
+// object_not_found when the service has no live instances, even if cluster meta
+// still exists (for example after heartbeat expiry during a failed deploy).
+func InstancesOrEmpty(s Service) ([]*Instance, error) {
+	instances, err := s.Instances()
+	if err != nil && IsNotFound(err) {
+		return []*Instance{}, nil
+	}
+	return instances, err
+}
+
 func (s *service) Addrs() ([]string, error) {
 	instances, err := s.Instances()
 	if err != nil {

@@ -187,4 +187,3 @@ func TestParseHostFromURL(t *testing.T) {
 		}
 	}
 }
-

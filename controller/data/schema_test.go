@@ -3,6 +3,7 @@ package data
 import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/postgres"
+	pgtestutils "github.com/flynn/flynn/pkg/testutils/postgres"
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
 )
@@ -23,11 +24,10 @@ func (s *S) SetUpSuite(c *C) {
 	}
 
 	// reconnect with que statements prepared now that schema is migrated
+	cfg, err := pgtestutils.ConnConfigForDatabase(dbname)
+	c.Assert(err, IsNil)
 	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
-		ConnConfig: pgx.ConnConfig{
-			Host:     "/var/run/postgresql",
-			Database: dbname,
-		},
+		ConnConfig:   cfg,
 		AfterConnect: PrepareStatements,
 	})
 	if err != nil {

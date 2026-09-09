@@ -53,13 +53,22 @@ func main() {
 // cluster-wide CONTROLLER_KEY for clusters not yet re-bootstrapped with a
 // signing key. Neither credential is exposed as an environment variable to
 // buildpack code (SEC-003).
-func newControllerClient() (controller.Client, error) {
+func newControllerClient() (client controller.Client, usedToken bool, err error) {
 	if token := readSecret("/run/secrets/controller_token"); token != "" {
-		return controller.NewClientWithToken("", token)
+		c, err := controller.NewClientWithToken("", token)
+		return c, true, err
 	}
+	c, err := legacyControllerClient()
+	return c, false, err
+}
+
+func legacyControllerClient() (controller.Client, error) {
 	controllerKey := os.Getenv("CONTROLLER_KEY")
 	if controllerKey == "" {
 		controllerKey = readSecret("/run/secrets/controller_key")
+	}
+	if controllerKey == "" {
+		return nil, fmt.Errorf("missing build credential")
 	}
 	return controller.NewClient("", controllerKey)
 }
@@ -75,7 +84,7 @@ func readSecret(path string) string {
 }
 
 func run(dir string, uid, gid int) error {
-	client, err := newControllerClient()
+	client, usedToken, err := newControllerClient()
 	if err != nil {
 		return err
 	}
@@ -157,7 +166,16 @@ func run(dir string, uid, gid int) error {
 	}
 
 	// create artifact
-	if err := client.CreateArtifact(artifact); err != nil {
+	if err := client.CreateArtifact(artifact); err != nil && usedToken {
+		// A mismatched ACCESS_TOKEN_SIGNING_KEY / ACCESS_TOKEN_KEY pair (for
+		// example after a partial cluster update) mints bearer tokens the
+		// controller rejects with 401. Fall back to the cluster key written
+		// to /run/secrets/controller_key by build.sh.
+		if fallback, fbErr := legacyControllerClient(); fbErr == nil {
+			err = fallback.CreateArtifact(artifact)
+		}
+	}
+	if err != nil {
 		return err
 	}
 

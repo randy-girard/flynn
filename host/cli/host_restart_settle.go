@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"time"
 
@@ -112,4 +113,25 @@ func localClusterHost(log log15.Logger) *cluster.Host {
 	localIPs := getLocalIPs()
 	daemonID, _ := getDaemonID(localIPs, log)
 	return findLocalHost(hosts, localHostname, daemonID, localIPs, log)
+}
+
+// settleLocalRestartBeforeRemotes runs the shared post-restart settle gates
+// before rolling binaries onto remote hosts. Used by both GitHub and tarball
+// --all-nodes paths so local restart recoverability is identical.
+func settleLocalRestartBeforeRemotes(noRestart bool, log log15.Logger) error {
+	if noRestart {
+		return nil
+	}
+	clusterClient := cluster.NewClient()
+	expectedHosts := expectedClusterHostCount(log)
+	if err := settleAfterHostRestart(hostRestartSettleOptions{
+		Log:               log,
+		ClusterClient:     clusterClient,
+		RestartedHost:     localClusterHost(log),
+		ExpectedHostCount: expectedHosts,
+		FatalClusterSize:  expectedHosts > 1,
+	}); err != nil {
+		return fmt.Errorf("cluster did not recover after local restart: %w", err)
+	}
+	return nil
 }

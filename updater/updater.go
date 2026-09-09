@@ -15,10 +15,11 @@ import (
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/flynn/updater/accesstoken"
 	"github.com/flynn/flynn/updater/imageenv"
 	"github.com/flynn/flynn/updater/types"
-	"github.com/mattn/go-colorable"
 	"github.com/inconshreveable/log15"
+	"github.com/mattn/go-colorable"
 )
 
 var redisImage, slugBuilder, slugRunner, dockerBuilder, kafkaImage, clickHouseImage *ct.Artifact
@@ -110,7 +111,7 @@ func run() error {
 	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
 		log.Warn("error repairing orphan sirenia formations", "err", err)
 	}
-	if err := updaterdeploy.RepairSireniaClusterQuorum(client, log); err != nil {
+	if err := updaterdeploy.RepairSireniaClusterQuorum(client, false, log); err != nil {
 		log.Warn("error repairing sirenia cluster quorum", "err", err)
 	}
 
@@ -305,6 +306,12 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
 	if updateImageIDs(release.Env) {
+		skipDeploy = false
+	}
+	if updated, err := accesstoken.Update(app.Name, release.Env); err != nil {
+		log.Error("error updating access token keys", "err", err)
+		return err
+	} else if updated {
 		skipDeploy = false
 	}
 	if skipDeploy {

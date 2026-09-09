@@ -95,11 +95,26 @@ func resolveBuildTimeout(releaseEnv map[string]string) time.Duration {
 }
 
 // buildSigner returns the token signer configured via ACCESS_TOKEN_SIGNING_KEY,
-// or nil (no error) when no signing key is set, in which case the receiver
-// falls back to the legacy CONTROLLER_KEY behavior so existing clusters keep
-// working until re-bootstrapped.
+// or nil (no error) when scoped build tokens are not fully configured, in which
+// case the receiver falls back to the legacy CONTROLLER_KEY behavior so
+// existing clusters keep working until re-bootstrapped. Both the signing key
+// and the matching public verify key (ACCESS_TOKEN_KEY, which controller and
+// tarreceive need) must be present and form a valid keypair before minting
+// tokens; a mismatched pair (e.g. after a partial cluster update) would
+// otherwise produce bearer tokens the controller rejects with 401.
 func buildSigner() (*tokensigner.Signer, error) {
-	return tokensigner.ParseSigningKey(os.Getenv("ACCESS_TOKEN_SIGNING_KEY"))
+	publicKey := os.Getenv("ACCESS_TOKEN_KEY")
+	if publicKey == "" {
+		return nil, nil
+	}
+	signer, err := tokensigner.ParseSigningKey(os.Getenv("ACCESS_TOKEN_SIGNING_KEY"))
+	if err != nil || signer == nil {
+		return nil, err
+	}
+	if !tokensigner.KeyPairValid(publicKey, os.Getenv("ACCESS_TOKEN_SIGNING_KEY")) {
+		return nil, nil
+	}
+	return signer, nil
 }
 
 // mintBuildToken signs a short-lived AccessToken scoped to a single app and the
@@ -120,10 +135,13 @@ func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) 
 }
 
 // applyBuildCredential delivers the build credential to a job. When a signing
-// key is configured it mints an app-scoped token, delivers it via a root-only
-// secret mount (never the env), and removes CONTROLLER_KEY from jobEnv so
-// attacker-controlled build steps can no longer read the cluster key. Otherwise
-// it leaves the legacy CONTROLLER_KEY env in place.
+// key is configured it mints an app-scoped token and delivers it via a root-only
+// secret mount. CONTROLLER_KEY is left in the job env so build.sh can relocate
+// it to /run/secrets/controller_key (SEC-003) as a fallback when the host has
+// not yet been updated to mount ContainerSecrets; create-artifact prefers the
+// mounted bearer token when present. build.sh unsets CONTROLLER_KEY before any
+// buildpack/Dockerfile step runs, so attacker-controlled build code still
+// cannot read the cluster key from the environment.
 func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App, releaseEnv map[string]string) error {
 	if signer == nil {
 		return nil
@@ -132,7 +150,6 @@ func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App
 	if err != nil {
 		return err
 	}
-	delete(job.Config.Env, "CONTROLLER_KEY")
 	job.Config.Secrets = append(job.Config.Secrets, host.ContainerSecret{
 		Path: buildTokenPath,
 		Data: []byte(token),

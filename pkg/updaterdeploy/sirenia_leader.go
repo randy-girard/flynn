@@ -47,7 +47,7 @@ func skipOptionalSireniaLeaderWait(service string, instanceCount int, instancesE
 func WaitSireniaLeaderStable(service string, log log15.Logger) {
 	svc := discoverd.NewService(service)
 
-	instances, err := svc.Instances()
+	instances, err := discoverd.InstancesOrEmpty(svc)
 	if skipOptionalSireniaLeaderWait(service, len(instances), err) {
 		log.Info("skipping sirenia discoverd leader wait (optional appliance has no database peers)",
 			"service", service)

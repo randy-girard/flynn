@@ -289,11 +289,12 @@ build/bin/flynn-host run \
   CLUSTER_ADD_ARGS="-p {{ .Config.TLSPin }} --image-url {{ .Config.ImageURL }} default {{ .Cluster.ClusterDomain }} {{ .Config.Key }}" \
   ROUTER_IP="{{ .Cluster.RouterIP }}" \
   DOMAIN="{{ .Cluster.ClusterDomain }}" \
+  HOST_MACHINE="$(uname -m)" \
   TEST_RUNNER_AUTH_KEY="\${TEST_RUNNER_AUTH_KEY}" \
   BLOBSTORE_S3_CONFIG="\${BLOBSTORE_S3_CONFIG}" \
   BLOBSTORE_GCS_CONFIG="\${BLOBSTORE_GCS_CONFIG}" \
   BLOBSTORE_AZURE_CONFIG="\${BLOBSTORE_AZURE_CONFIG}" \
-  /bin/run-flynn-test.sh \
+  /bin/bash "/go/src/github.com/flynn/flynn/test/run.sh" \
   --cluster-api "http://{{ .RunnerIP }}/cluster/{{ .Cluster.ID }}" \
   --router-ip "{{ .Cluster.RouterIP }}" \
   --backups-dir "/mnt/backups" \

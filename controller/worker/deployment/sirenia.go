@@ -12,6 +12,7 @@ import (
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
+	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/inconshreveable/log15"
 )
 
@@ -35,11 +36,14 @@ func (d *DeployJob) deploySirenia() (err error) {
 	log := d.logger.New("fn", "deploySirenia")
 	log.Info("starting sirenia deployment")
 
-	defer func() {
-		if err != nil {
-			err = ErrSkipRollback{err.Error()}
+	if repairErr := updaterdeploy.RepairOrphanSireniaFormations(d.client, log); repairErr != nil {
+		log.Warn("error repairing orphan sirenia formations", "err", repairErr)
+	} else if f, ferr := d.client.GetFormation(d.AppID, d.NewReleaseID); ferr == nil {
+		d.newFormation = f
+		if d.newFormation.Processes == nil {
+			d.newFormation.Processes = make(map[string]int)
 		}
-	}()
+	}
 
 	loggedErr := func(format string, v ...interface{}) error {
 		e := fmt.Sprintf(format, v...)
@@ -144,10 +148,12 @@ loop:
 	}
 	state = *readyState
 
-	// Peers left over from aborted rolling deploys (new-release formations
-	// still scaled up) pollute discoverd and cause replication sync waits to
-	// target the wrong downstream instance.
-	instances, err := discoverd.NewService(proc.Service).Instances()
+	// Peers from aborted rolling deploys can linger briefly in discoverd even
+	// after orphan formation repair; try repair again before failing the deploy.
+	if repairErr := updaterdeploy.RepairOrphanSireniaFormations(d.client, log); repairErr != nil {
+		log.Warn("error repairing orphan sirenia formations before deploy", "err", repairErr)
+	}
+	instances, err := discoverd.InstancesOrEmpty(discoverd.NewService(proc.Service))
 	if err != nil {
 		return loggedErr("error listing sirenia service instances: %s", err)
 	}
@@ -156,42 +162,90 @@ loop:
 			continue
 		}
 		if rid := inst.Meta["FLYNN_RELEASE_ID"]; rid != "" && rid != d.OldReleaseID {
-			return loggedErr("sirenia cluster has peer from unexpected release %s (expected only %s); retry update after orphan formation cleanup", rid, d.OldReleaseID)
+			log.Warn("sirenia peer from non-active release still in discoverd after repair",
+				"release.id", rid, "active.release.id", d.OldReleaseID, "addr", inst.Addr)
 		}
 	}
 
+	svc := discoverd.NewService(proc.Service)
+	// instanceRegistered reports whether an instance is still present in
+	// discoverd. On a discoverd error it assumes the instance is still present
+	// so callers fall back to the event stream / timeout rather than declaring
+	// a live peer gone.
+	instanceRegistered := func(id string) bool {
+		insts, err := discoverd.InstancesOrEmpty(svc)
+		if err != nil {
+			return true
+		}
+		for _, i := range insts {
+			if i != nil && i.ID == id {
+				return true
+			}
+		}
+		return false
+	}
+
 	stopInstance := func(inst *discoverd.Instance) error {
-		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"])
+		log := log.New("job_id", inst.Meta["FLYNN_JOB_ID"], "addr", inst.Addr)
+
+		sendDown := func() {
+			d.deployEvents <- ct.DeploymentEvent{
+				ReleaseID: d.OldReleaseID,
+				JobState:  ct.JobStateDown,
+				JobType:   processType,
+			}
+		}
 
 		d.deployEvents <- ct.DeploymentEvent{
 			ReleaseID: d.OldReleaseID,
 			JobState:  ct.JobStateStopping,
 			JobType:   processType,
 		}
+
+		// A peer left over from a previous aborted deploy may already be gone
+		// from discoverd (its job is dead and its heartbeat lease expired).
+		// There is nothing to stop, and trying to reach it would block on dial
+		// retries for ~30s and then fail the whole deploy.
+		if !instanceRegistered(inst.ID) {
+			log.Info("peer already gone from discoverd, treating as stopped")
+			sendDown()
+			return nil
+		}
+
 		peer := sireniaclient.NewClient(inst.Addr)
 		log.Info("stopping peer")
 		if err := peer.Stop(); err != nil {
-			if sireniaclient.IsRecoverableStopError(err) {
+			switch {
+			case sireniaclient.IsRecoverableStopError(err):
 				log.Warn("stop request timed out, waiting for peer to leave discoverd", "err", err)
-			} else {
+			case sireniaclient.IsPeerUnreachableError(err):
+				log.Warn("peer unreachable, treating as already stopping and waiting for it to leave discoverd", "err", err)
+			default:
 				log.Error("error stopping peer", "err", err)
 				return err
 			}
 		}
 		log.Info("waiting for peer to stop")
 		timeout := time.After(d.timeout)
+		poll := time.NewTicker(2 * time.Second)
+		defer poll.Stop()
 		for {
 			select {
 			case event, ok := <-events:
 				if !ok {
 					return loggedErr("service event stream closed unexpectedly: %s", stream.Err())
 				}
-				if event.Kind == discoverd.EventKindDown && event.Instance.ID == inst.ID {
-					d.deployEvents <- ct.DeploymentEvent{
-						ReleaseID: d.OldReleaseID,
-						JobState:  ct.JobStateDown,
-						JobType:   processType,
-					}
+				if event.Kind == discoverd.EventKindDown && event.Instance != nil && event.Instance.ID == inst.ID {
+					sendDown()
+					return nil
+				}
+			case <-poll.C:
+				// The instance's Down event may have been consumed while
+				// waiting for another instance to come up, so also detect
+				// departure by polling discoverd directly.
+				if !instanceRegistered(inst.ID) {
+					log.Info("peer no longer registered in discoverd, treating as stopped")
+					sendDown()
 					return nil
 				}
 			case <-timeout:
@@ -267,6 +321,41 @@ loop:
 		}
 		return nil
 	}
+	// waitForSyncPeer blocks until the cluster (as reported by upstream) names
+	// successor as its synchronous peer. Stopping the primary before its
+	// designated successor is the recorded sync leaves the cluster unable to
+	// elect a new primary: only the sync can take over, so if a different peer
+	// is still the sync when the primary dies, that peer must take over instead
+	// of the new peer we started, and the new primary never becomes read-write.
+	idKey := sireniaclient.ProcessIDKey(processType)
+	samePeer := func(a, b *discoverd.Instance) bool {
+		if a == nil || b == nil {
+			return false
+		}
+		if idKey != "" && a.Meta != nil && b.Meta != nil && a.Meta[idKey] != "" {
+			return a.Meta[idKey] == b.Meta[idKey]
+		}
+		return a.ID == b.ID
+	}
+	waitForSyncPeer := func(upstream, successor *discoverd.Instance) error {
+		log.Info("waiting for successor to become the synchronous peer", "upstream", upstream.Addr, "successor", successor.Addr)
+		sc := sireniaclient.NewClient(upstream.Addr)
+		deadline := time.After(syncTimeout)
+		poll := time.NewTicker(time.Second)
+		defer poll.Stop()
+		for {
+			status, err := sc.Status()
+			if err == nil && status.Peer != nil && status.Peer.State != nil &&
+				samePeer(status.Peer.State.Sync, successor) {
+				return nil
+			}
+			select {
+			case <-deadline:
+				return loggedErr("timed out waiting for successor %s to become the synchronous peer", successor.Addr)
+			case <-poll.C:
+			}
+		}
+	}
 
 	// asyncUpstream is the instance we will query for replication status
 	// of the new async, which will be the sync if there is only one
@@ -312,6 +401,12 @@ loop:
 	log.Info("replacing the Primary node")
 	_, err = startInstance()
 	if err != nil {
+		return err
+	}
+	// Ensure newPrimary is the recorded synchronous peer before stopping the
+	// old primary so the takeover elects it (and not some other peer) as the
+	// new primary.
+	if err := waitForSyncPeer(state.Primary, newPrimary); err != nil {
 		return err
 	}
 	if err := stopInstance(state.Primary); err != nil {

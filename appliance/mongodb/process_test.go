@@ -7,6 +7,8 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync/atomic"
@@ -26,17 +28,26 @@ import (
 // Hook gocheck up to the "go test" runner
 func Test(t *testing.T) { TestingT(t) }
 
+func init() {
+	// Spread TCP ports and /tmp/mongodb-<port>.sock paths so interrupted runs
+	// do not collide with leftover mongod processes from prior test failures.
+	base := uint32(10000 + (os.Getpid()%14000)*2)
+	atomic.StoreUint32(&newPort, base)
+}
+
 type MongoDBSuite struct{}
 
 var _ = Suite(&MongoDBSuite{})
 
 func (MongoDBSuite) TestSingletonPrimary(c *C) {
+	port := strconv.Itoa(6000 + os.Getpid()%3000)
 	p := NewProcess()
+	p.BinDir = testMongodBinDir()
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
 	p.DataDir = c.MkDir()
-	p.Port = "8500"
+	p.Port = port
 	p.OpTimeout = 30 * time.Second
 	keyFile := filepath.Join(p.DataDir, "Keyfile")
 	err := ioutil.WriteFile(keyFile, []byte("password"), 0600)
@@ -58,11 +69,12 @@ func (MongoDBSuite) TestSingletonPrimary(c *C) {
 
 	// ensure that we can start a new instance from the same directory
 	p = NewProcess()
+	p.BinDir = testMongodBinDir()
 	p.ID = "node1"
 	p.Singleton = true
 	p.Password = "password"
 	p.DataDir = c.MkDir()
-	p.Port = "8500"
+	p.Port = port
 	p.OpTimeout = 30 * time.Second
 	keyFile = filepath.Join(p.DataDir, "Keyfile")
 	err = ioutil.WriteFile(keyFile, []byte("password"), 0600)
@@ -134,6 +146,13 @@ var queryAttempts = attempt.Strategy{
 	Delay: 200 * time.Millisecond,
 }
 
+// Longer window for writes during replica set elections / role changes.
+var insertDocAttempts = attempt.Strategy{
+	Min:   5,
+	Total: 90 * time.Second,
+	Delay: 300 * time.Millisecond,
+}
+
 func assertDownstream(c *C, client *testClient, upstream, downstream *Process) {
 	status, err := replSetGetStatusQueryClient(client)
 	c.Assert(err, IsNil)
@@ -169,8 +188,27 @@ func waitRow(c *C, client *testClient, n int) {
 }
 
 func insertDoc(c *C, client *testClient, n int) {
-	_, err := client.Database("db0").Collection("test").InsertOne(client.ctx, &Doc{N: n})
+	err := insertDocAttempts.RunWithValidator(func() error {
+		_, err := client.Database("db0").Collection("test").InsertOne(client.ctx, &Doc{N: n})
+		return err
+	}, shouldRetryPrimaryWrite)
 	c.Assert(err, IsNil)
+}
+
+func shouldRetryPrimaryWrite(err error) bool {
+	var ce mongo.CommandError
+	if !errors.As(err, &ce) {
+		return false
+	}
+	if ce.Code == 10107 || ce.Name == "NotWritablePrimary" {
+		return true
+	}
+	for _, l := range ce.Labels {
+		if l == "RetryableWriteError" {
+			return true
+		}
+	}
+	return false
 }
 
 func waitReadWrite(c *C, client *testClient) {
@@ -463,7 +501,7 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 
 	// wait for cluster to come up
 	db1 := connect(c, node1)
-	defer db1.Close()
+	defer func() { db1.Close() }()
 	db4 := connectSecondary(c, node4)
 	defer db4.Close()
 	waitReadWrite(c, db1)
@@ -473,22 +511,42 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 
 	// remove first async
 	c.Assert(node3.Stop(), IsNil)
-	// reconfigure second async
+	topology = &state.State{
+		Primary: instance(node1),
+		Sync:    instance(node2),
+		Async:   []*discoverd.Instance{instance(node4)},
+	}
+	err = node1.Reconfigure(Config(state.RolePrimary, nil, node2, topology))
+	c.Assert(err, IsNil)
+	err = node2.Reconfigure(Config(state.RoleSync, node1, node4, topology))
+	c.Assert(err, IsNil)
 	err = node4.Reconfigure(Config(state.RoleAsync, node2, nil, topology))
 	c.Assert(err, IsNil)
+
+	waitReadWrite(c, db1)
 
 	// run query
 	db4 = connectSecondary(c, node4)
 	defer db4.Close()
+	db1.Close()
+	db1 = connect(c, node1)
+	waitReadWrite(c, db1)
 	insertDoc(c, db1, 2)
 	waitRow(c, db4, 2)
 	db4.Close()
 
 	// remove sync and promote node4 to sync
+	topology = &state.State{
+		Primary: instance(node1),
+		Sync:    instance(node4),
+	}
 	c.Assert(node2.Stop(), IsNil)
 	c.Assert(node1.Reconfigure(Config(state.RolePrimary, nil, node4, topology)), IsNil)
 	c.Assert(node4.Reconfigure(Config(state.RoleSync, node1, nil, topology)), IsNil)
 
+	waitReadWrite(c, db1)
+	db1.Close()
+	db1 = connect(c, node1)
 	waitReadWrite(c, db1)
 	insertDoc(c, db1, 3)
 	db4 = connectSecondary(c, node4)
@@ -496,11 +554,24 @@ func (MongoDBSuite) TestRemoveNodes(c *C) {
 	waitRow(c, db4, 3)
 }
 
-// newPort represents the starting port when allocating new ports.
-var newPort uint32 = 8500
+// newPort is the last allocated port for multi-node tests (see init).
+var newPort uint32
+
+// testMongodBinDir prefers the appliance image path (/bin/mongod) and falls
+// back to mongod on PATH so host/CI unit tests work with distro packages.
+func testMongodBinDir() string {
+	if _, err := os.Stat(filepath.Join(DefaultBinDir, BinName)); err == nil {
+		return DefaultBinDir
+	}
+	if p, err := exec.LookPath(BinName); err == nil {
+		return filepath.Dir(p)
+	}
+	return DefaultBinDir
+}
 
 func NewTestProcess(c *C, n uint32) *Process {
 	p := NewProcess()
+	p.BinDir = testMongodBinDir()
 	p.ID = fmt.Sprintf("node%d", n)
 	p.DataDir = c.MkDir()
 	p.Port = strconv.Itoa(int(atomic.AddUint32(&newPort, 2)))

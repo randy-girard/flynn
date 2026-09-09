@@ -82,7 +82,7 @@ func (s *GitreceiveSuite) TestDeployWithEnv(t *c.C) {
 
 	env := map[string]string{
 		"FOO":           "BAR",
-		"BUILDPACK_URL": "git@github.com:kr/heroku-buildpack-inline.git",
+		"BUILDPACK_URL": "https://github.com/kr/heroku-buildpack-inline",
 	}
 	args := []string{"-a", "gitreceive", "run", "/bin/flynn-receiver", app.Name, "test-rev"}
 	for k, v := range env {

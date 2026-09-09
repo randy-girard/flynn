@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package libcontainer
@@ -161,20 +162,20 @@ func (p *setnsProcess) execSetns() error {
 		p.cmd.Wait()
 		return newSystemError(&exec.ExitError{ProcessState: status})
 	}
-	var pid *pid
-	if err := json.NewDecoder(p.messageSockPair.parent).Decode(&pid); err != nil {
+	pmsg, err := readPidJSON(p.messageSockPair.parent)
+	if err != nil {
 		p.cmd.Wait()
 		return newSystemErrorWithCause(err, "reading pid from init pipe")
 	}
 
 	// Clean up the zombie parent process
 	// On Unix systems FindProcess always succeeds.
-	firstChildProcess, _ := os.FindProcess(pid.PidFirstChild)
+	firstChildProcess, _ := os.FindProcess(pmsg.PidFirstChild)
 
 	// Ignore the error in case the child has already been reaped for any reason
 	_, _ = firstChildProcess.Wait()
 
-	process, err := os.FindProcess(pid.Pid)
+	process, err := os.FindProcess(pmsg.Pid)
 	if err != nil {
 		return err
 	}
@@ -241,10 +242,40 @@ func (p *initProcess) externalDescriptors() []string {
 	return p.fds
 }
 
+// readPidJSON reads the nsexec pid payload from the init pipe. If init fails early,
+// StartInitialization sends procError followed by genericError — decode that instead
+// of treating it as pid 0 (readlink /proc/0/fd/0).
+func readPidJSON(r io.Reader) (pid, error) {
+	dec := json.NewDecoder(r)
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
+		return pid{}, err
+	}
+	var hdr syncT
+	if json.Unmarshal(raw, &hdr) == nil && hdr.Type == procError {
+		var ierr *genericError
+		if err := dec.Decode(&ierr); err != nil {
+			return pid{}, newSystemErrorWithCause(err, "decoding proc error from init")
+		}
+		if ierr != nil {
+			return pid{}, ierr
+		}
+		return pid{}, newSystemError(errors.New("procError without detail payload"))
+	}
+	var p pid
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return pid{}, err
+	}
+	if p.Pid <= 0 {
+		return p, fmt.Errorf("invalid container pid %d (init pipe payload: %s)", p.Pid, string(raw))
+	}
+	return p, nil
+}
+
 // getChildPid receives the final child's pid over the provided pipe.
 func (p *initProcess) getChildPid() (int, error) {
-	var pid pid
-	if err := json.NewDecoder(p.messageSockPair.parent).Decode(&pid); err != nil {
+	pid, err := readPidJSON(p.messageSockPair.parent)
+	if err != nil {
 		p.cmd.Wait()
 		return -1, err
 	}

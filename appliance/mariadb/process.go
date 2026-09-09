@@ -32,6 +32,8 @@ import (
 )
 
 const (
+	IDKey = "MARIADB_ID"
+
 	DefaultPort        = "3306"
 	DefaultBinDir      = "/usr/bin"
 	DefaultSbinDir     = "/usr/sbin"
@@ -190,6 +192,10 @@ func (p *Process) Ready() <-chan state.DatabaseEvent {
 	return p.events
 }
 
+func (p *Process) Running() bool {
+	return p.running()
+}
+
 func (p *Process) XLog() xlog.XLog {
 	return mdbxlog.MDBXLog{}
 }
@@ -209,11 +215,13 @@ func (p *Process) reconfigure(config *state.Config) error {
 			return nil
 		}
 
-		// If we're already running and it's just a change from async to sync with the same node, we don't need to restart
+		// Promoting async to sync with the same upstream does not require a
+		// restart, but the peer becomes the replication master for downstream
+		// asyncs and must enable semi-sync master and track downstream sync
+		// for sirenia rolling deploys.
 		if p.configApplied && p.running() && p.config() != nil && config != nil &&
-			p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta["MYSQL_ID"] == p.config().Upstream.Meta["MYSQL_ID"] {
-			logger.Info("nothing to do", "reason", "becoming sync with same upstream")
-			return nil
+			p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta[IDKey] == p.config().Upstream.Meta[IDKey] {
+			return p.promoteAsyncToSync(config, logger)
 		}
 
 		// Make sure that we don't keep waiting for replication sync while reconfiguring
@@ -556,30 +564,92 @@ func (p *Process) configureStandbyReplication(logger log15.Logger, upstream *dis
 	return nil
 }
 
-// standbyReplicationHealthy polls SHOW SLAVE STATUS until the IO thread is
-// running or a fatal replication error (e.g. GTID mismatch 1236) is seen.
-func (p *Process) standbyReplicationHealthy() (bool, error) {
+func (p *Process) reseedStandbyFromUpstream(logger log15.Logger, upstream *discoverd.Instance) (*BackupInfo, error) {
+	if err := p.stop(); err != nil {
+		return nil, err
+	}
+	backupInfo, err := p.restoreBackupFromUpstream(logger, upstream)
+	if err != nil {
+		if clearErr := p.clearDataDir(); clearErr != nil {
+			logger.Error("error clearing data directory after failed restore", "err", clearErr)
+		}
+		return nil, err
+	}
+	if err := p.start(); err != nil {
+		return nil, err
+	}
+	if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
+		return nil, err
+	}
+	return backupInfo, nil
+}
+
+// standbyReplicationHealthy polls replication status until the standby has
+// caught up with upstream or a fatal replication error is seen. IO thread
+// alone is not sufficient: volumes left by aborted deploys can connect while
+// still at an empty or stale GTID.
+func (p *Process) standbyReplicationHealthy(upstream *discoverd.Instance) (bool, error) {
+	upstreamXLog, err := p.upstreamXLog(upstream)
+	if err != nil {
+		return false, err
+	}
+
 	db, err := p.connectLocal()
 	if err != nil {
 		return false, err
 	}
 	defer db.Close()
 
-	deadline := time.Now().Add(20 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		healthy, fatal, err := checkSlaveStatus(db)
 		if err != nil {
 			return false, err
 		}
-		if healthy {
-			return true, nil
-		}
 		if fatal {
 			return false, nil
+		}
+		if !healthy {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
+		localXLog, err := p.XLogPosition()
+		if err != nil {
+			return false, err
+		}
+		if caughtUp, err := p.replicationCaughtUpWithUpstream(localXLog, upstreamXLog); err != nil {
+			return false, err
+		} else if caughtUp {
+			return true, nil
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	return false, nil
+}
+
+func (p *Process) upstreamXLog(upstream *discoverd.Instance) (xlog.Position, error) {
+	status, err := client.NewClient(upstream.Addr).Status()
+	if err != nil {
+		return p.XLog().Zero(), err
+	}
+	if status.Database == nil || status.Database.XLog == "" {
+		return p.XLog().Zero(), errors.New("upstream has no xlog position")
+	}
+	return xlog.Position(status.Database.XLog), nil
+}
+
+func (p *Process) replicationCaughtUpWithUpstream(local, upstream xlog.Position) (bool, error) {
+	if local == "" || local == p.XLog().Zero() {
+		return false, nil
+	}
+	if upstream == "" || upstream == p.XLog().Zero() {
+		return false, nil
+	}
+	cmp, err := p.XLog().Compare(local, upstream)
+	if err != nil {
+		return false, err
+	}
+	return cmp >= 0, nil
 }
 
 func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
@@ -603,12 +673,14 @@ func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
 	if err := rows.Scan(ptrs...); err != nil {
 		return false, false, err
 	}
-	var ioRunning string
+	var ioRunning, sqlRunning string
 	var lastIOErrno int64
 	for i, col := range cols {
 		switch col {
 		case "Slave_IO_Running":
 			ioRunning = mysqlStatusString(vals[i])
+		case "Slave_SQL_Running":
+			sqlRunning = mysqlStatusString(vals[i])
 		case "Last_IO_Errno":
 			lastIOErrno = mysqlStatusInt64(vals[i])
 		}
@@ -616,7 +688,7 @@ func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
 	if lastIOErrno == 1236 {
 		return false, true, nil
 	}
-	return ioRunning == "Yes", false, nil
+	return ioRunning == "Yes" && sqlRunning == "Yes", false, nil
 }
 
 func mysqlStatusString(v interface{}) string {
@@ -666,23 +738,30 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		if err := p.stop(); err != nil {
 			return err
 		}
+		skippedBackup = p.dataDirInitialized()
+	} else if p.dataDirInitialized() {
+		// The data directory already holds a caught-up copy of the database,
+		// so we can start locally in read-only standby mode without the
+		// upstream being reachable. This is essential when the upstream
+		// primary has died: waiting for a dead upstream here would block the
+		// database from ever starting, which in turn prevents a sync peer
+		// from starting its takeover (startTakeoverWithPeer requires the
+		// database to be running to read its xlog position). The replication
+		// I/O thread configured below simply retries connecting to the
+		// upstream until it (or its replacement) is available.
+		logger.Info("data directory already initialized, skipping backup and upstream wait")
+		skippedBackup = true
 	} else {
 		if err := p.waitForUpstream(upstream); err != nil {
 			return err
 		}
-
-		if p.dataDirInitialized() {
-			logger.Info("data directory already initialized, skipping backup")
-			skippedBackup = true
-		} else {
-			var err error
-			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
-			if err != nil {
-				if clearErr := p.clearDataDir(); clearErr != nil {
-					logger.Error("error clearing data directory after failed restore", "err", clearErr)
-				}
-				return err
+		var err error
+		backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+		if err != nil {
+			if clearErr := p.clearDataDir(); clearErr != nil {
+				logger.Error("error clearing data directory after failed restore", "err", clearErr)
 			}
+			return err
 		}
 	}
 
@@ -696,29 +775,25 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 
 	// A reused data directory from an aborted deploy can contain GTID state
 	// incompatible with the current upstream. Re-seed from upstream when reuse fails.
+	// This check requires the upstream to be reachable. When it is not (for
+	// example the primary has died and this sync peer is about to take over),
+	// skip the check: the database is already running locally, which is what a
+	// takeover needs, and the replication I/O thread will resync once an
+	// upstream is available again.
 	if skippedBackup {
-		healthy, err := p.standbyReplicationHealthy()
-		if err != nil {
-			return err
-		}
-		if !healthy {
-			logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
-			if err := p.stop(); err != nil {
-				return err
-			}
-			var err error
-			backupInfo, err = p.restoreBackupFromUpstream(logger, upstream)
+		if _, err := p.upstreamXLog(upstream); err != nil {
+			logger.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+		} else {
+			healthy, err := p.standbyReplicationHealthy(upstream)
 			if err != nil {
-				if clearErr := p.clearDataDir(); clearErr != nil {
-					logger.Error("error clearing data directory after failed restore", "err", clearErr)
+				return err
+			}
+			if !healthy {
+				logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+				backupInfo, err = p.reseedStandbyFromUpstream(logger, upstream)
+				if err != nil {
+					return err
 				}
-				return err
-			}
-			if err := p.start(); err != nil {
-				return err
-			}
-			if err := p.configureStandbyReplication(logger, upstream, backupInfo); err != nil {
-				return err
 			}
 		}
 	}
@@ -773,12 +848,6 @@ func (p *Process) initPrimaryDB() error {
 		logger.Error("error granting privileges", "err", err)
 		return err
 	}
-	// Install semi-sync master plugin. Ignore error if already installed (1968) or
-	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
-	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
-		logger.Error("error installing rpl_semi_sync_master", "err", err)
-		return err
-	}
 	if _, err := db.Exec(`FLUSH PRIVILEGES`); err != nil {
 		logger.Error("error flushing privileges", "err", err)
 		return err
@@ -788,21 +857,52 @@ func (p *Process) initPrimaryDB() error {
 	if p.Singleton {
 		return nil
 	}
-	// Enable semi-sync replication on the master.
-	master_variables := map[string]string{
+	return p.enableSemiSyncMasterDB(db, logger)
+}
+
+func (p *Process) promoteAsyncToSync(config *state.Config, logger log15.Logger) error {
+	logger.Info("promoting async to sync with same upstream")
+	p.cancelSyncWait()
+	p.syncedDownstreamValue.Store((*discoverd.Instance)(nil))
+
+	if err := p.enableSemiSyncMaster(); err != nil {
+		return err
+	}
+	if config.Downstream != nil {
+		logger.Info("waiting for downstream after sync promotion", "downstream", config.Downstream.Addr)
+		p.waitForSync(config.Downstream, false)
+	}
+	return nil
+}
+
+func (p *Process) enableSemiSyncMaster() error {
+	db, err := p.connectLocal()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return p.enableSemiSyncMasterDB(db, p.Logger.New("fn", "enableSemiSyncMaster"))
+}
+
+func (p *Process) enableSemiSyncMasterDB(db *sql.DB, logger log15.Logger) error {
+	// Install semi-sync master plugin. Ignore error if already installed (1968) or
+	// if the plugin file doesn't exist (1126) - in MariaDB 10.3+ semi-sync is built-in.
+	if _, err := db.Exec(`INSTALL PLUGIN rpl_semi_sync_master SONAME 'semisync_master.so'`); err != nil && MySQLErrorNumber(err) != 1968 && MySQLErrorNumber(err) != 1126 {
+		logger.Error("error installing rpl_semi_sync_master", "err", err)
+		return err
+	}
+	masterVariables := map[string]string{
 		"rpl_semi_sync_master_wait_point":    "AFTER_SYNC",
 		"rpl_semi_sync_master_timeout":       "18446744073709551615",
 		"rpl_semi_sync_master_enabled":       "1",
 		"rpl_semi_sync_master_wait_no_slave": "1",
 	}
-
-	for v, val := range master_variables {
+	for v, val := range masterVariables {
 		if _, err := db.Exec(fmt.Sprintf(`SET GLOBAL %s = %s`, v, val)); err != nil {
 			logger.Error("error setting system variable", "var", v, "val", val, "err", err)
 			return err
 		}
 	}
-
 	return nil
 }
 
@@ -1015,7 +1115,7 @@ func (p *Process) waitForSync(downstream *discoverd.Instance, enableWrites bool)
 		startTime := time.Now().UTC()
 		logger := p.Logger.New(
 			"fn", "waitForSync",
-			"sync_name", downstream.Meta["MYSQL_ID"],
+			"sync_name", downstream.Meta[IDKey],
 			"start_time", log15.Lazy{func() time.Time { return startTime }},
 		)
 
@@ -1046,6 +1146,39 @@ func (p *Process) waitForSync(downstream *discoverd.Instance, enableWrites bool)
 				continue
 			}
 			logger.Info("master xlog", "gtid", masterXLog)
+
+			// Do not report downstream as synced while this peer is still behind
+			// its upstream. Otherwise a sync/async that has not caught the primary
+			// can falsely match a downstream at the same stale GTID.
+			if cfg := p.config(); cfg != nil && cfg.Role != state.RolePrimary && cfg.Upstream != nil {
+				upstreamXLog, upstreamErr := p.nodeXLogPosition(&DSN{
+					Host:     cfg.Upstream.Addr,
+					User:     "flynn",
+					Password: p.Password,
+					Timeout:  p.OpTimeout,
+				})
+				if upstreamErr != nil {
+					logger.Error("error reading upstream xlog", "err", upstreamErr)
+					startTime = time.Now().UTC()
+					select {
+					case <-stopCh:
+						logger.Debug("canceled, stopping")
+						return
+					case <-time.After(checkInterval):
+					}
+					continue
+				}
+				if cmp, cmpErr := p.XLog().Compare(masterXLog, upstreamXLog); cmpErr != nil || cmp < 0 {
+					logger.Debug("local replication behind upstream, waiting", "upstream_gtid", upstreamXLog)
+					select {
+					case <-stopCh:
+						logger.Debug("canceled, stopping")
+						return
+					case <-time.After(checkInterval):
+					}
+					continue
+				}
+			}
 
 			// Read downstream slave status.
 			slaveXLog, err := p.nodeXLogPosition(&DSN{

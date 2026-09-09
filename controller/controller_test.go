@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -50,12 +49,9 @@ func setupTestDB(c *C, dbname string) *postgres.DB {
 	if err := pgtestutils.SetupPostgres(dbname); err != nil {
 		c.Fatal(err)
 	}
-	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
-		ConnConfig: pgx.ConnConfig{
-			Host:     os.Getenv("PGHOST"),
-			Database: dbname,
-		},
-	})
+	cfg, err := pgtestutils.ConnConfigForDatabase(dbname)
+	c.Assert(err, IsNil)
+	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{ConnConfig: cfg})
 	if err != nil {
 		c.Fatal(err)
 	}
@@ -71,11 +67,10 @@ func (s *S) SetUpSuite(c *C) {
 
 	// reconnect with que statements prepared now that schema is migrated
 
+	cfg, err := pgtestutils.ConnConfigForDatabase(dbname)
+	c.Assert(err, IsNil)
 	pgxpool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
-		ConnConfig: pgx.ConnConfig{
-			Host:     "/var/run/postgresql",
-			Database: dbname,
-		},
+		ConnConfig:   cfg,
 		AfterConnect: data.PrepareStatements,
 	})
 	if err != nil {

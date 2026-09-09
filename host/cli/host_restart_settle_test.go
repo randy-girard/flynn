@@ -49,3 +49,22 @@ func TestHostRestartSettleOptionsDefaults(t *testing.T) {
 		t.Fatal("InterHostDelay should default to false")
 	}
 }
+
+func TestDecideUpdateRolloutImagesOnlyWithAllNodes(t *testing.T) {
+	// --images-only + --all-nodes must not push binaries but must roll images.
+	plan := decideUpdateRollout(true, false, true, 3, true)
+	if plan.UpdateRemotes {
+		t.Fatal("images-only must not update remotes")
+	}
+	if !plan.RolloutImages {
+		t.Fatal("images-only with all-nodes must roll out images")
+	}
+}
+
+func TestValidateImagesOnlyFlagsSingleHostUnknownCount(t *testing.T) {
+	// hostCount 0 with no error is treated as single-host by validateImagesOnlyFlags
+	// (only hostCount > 1 is rejected).
+	if err := validateImagesOnlyFlags(true, false, 0, nil); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

@@ -1,0 +1,147 @@
+#!/bin/bash
+#
+# Run Flynn unit tests.
+#
+# On Linux (unless FLYNN_TEST_DOCKER=1), runs natively.
+# On macOS/Windows (or when FLYNN_TEST_DOCKER=1), builds/runs the
+# script/docker/unit-tests image so the full Linux suite can run locally.
+#
+# Usage:
+#   script/run-unit-tests
+#   make test-unit
+#
+# Environment:
+#   FLYNN_TEST_DOCKER=1       Force Docker even on Linux
+#   FLYNN_TEST_DOCKER=0       Force native (fails on non-Linux without deps)
+#   FLYNN_TEST_SKIP_CHECKS=1  Skip gofmt/bats inside the container
+#   FLYNN_SKIP_VOLUME_TESTS=1 Skip host/volume ZFS tests
+#   FLYNN_GO_TEST_FLAGS       Extra/override flags for go test
+#   FLYNN_UNIT_IMAGE          Image tag [default: flynn-unit-tests:24.04]
+#   FLYNN_VERSION             Version passed to build-flynn [default: dev]
+#
+set -eo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT}"
+
+IMAGE="${FLYNN_UNIT_IMAGE:-flynn-unit-tests:24.04}"
+DOCKERFILE_DIR="${ROOT}/script/docker/unit-tests"
+
+host_os="$(uname -s | tr '[:upper:]' '[:lower:]')"
+
+use_docker=false
+case "${FLYNN_TEST_DOCKER:-}" in
+  1|true|TRUE|yes|YES)
+    use_docker=true
+    ;;
+  0|false|FALSE|no|NO)
+    use_docker=false
+    ;;
+  *)
+    if [[ "${host_os}" != "linux" ]]; then
+      use_docker=true
+    fi
+    ;;
+esac
+
+run_native() {
+  echo "==> Running unit tests natively on ${host_os}"
+
+  if [[ -z "${FLYNN_SKIP_PG_SERVICE:-}" ]] \
+    && { [[ -z "${PGHOST:-}" ]] || [[ "${PGHOST}" == /var/run/postgresql ]]; } \
+    && command -v service >/dev/null 2>&1; then
+    sudo service postgresql start || true
+    if [[ -z "${PGHOST:-}" && -d /var/run/postgresql ]]; then
+      export PGHOST=/var/run/postgresql
+    fi
+  fi
+
+  if [[ "${FLYNN_TEST_SKIP_CHECKS:-}" != "1" ]]; then
+    util/commit-validator/validate-gofmt
+    if command -v bats >/dev/null 2>&1; then
+      bats script/test
+    fi
+  fi
+
+  if [[ "${FLYNN_SKIP_VOLUME_TESTS:-}" == "1" ]]; then
+    make test-unit-native
+  else
+    make test-unit-root-native
+  fi
+}
+
+ensure_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo >&2 "Docker is required to run unit tests on ${host_os}."
+    echo >&2 "Install Docker Desktop, or set FLYNN_TEST_DOCKER=0 to force a native run."
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    echo >&2 "Docker daemon is not running. Start Docker Desktop and retry."
+    exit 1
+  fi
+}
+
+image_stale() {
+  # Rebuild when the Dockerfile or entrypoint is newer than the image.
+  if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
+    return 0
+  fi
+  local created
+  created="$(docker image inspect -f '{{.Created}}' "${IMAGE}")"
+  # Best-effort: if sources are newer than a marker file we touch after build.
+  local marker="${DOCKERFILE_DIR}/.image-built"
+  if [[ ! -f "${marker}" ]]; then
+    return 0
+  fi
+  if [[ "${DOCKERFILE_DIR}/Dockerfile" -nt "${marker}" ]] \
+    || [[ "${DOCKERFILE_DIR}/entrypoint.sh" -nt "${marker}" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+run_docker() {
+  ensure_docker
+
+  if image_stale; then
+    echo "==> Building Docker unit-test image ${IMAGE}"
+    docker build \
+      -t "${IMAGE}" \
+      -f "${DOCKERFILE_DIR}/Dockerfile" \
+      "${DOCKERFILE_DIR}"
+    touch "${DOCKERFILE_DIR}/.image-built"
+  else
+    echo "==> Using existing Docker image ${IMAGE}"
+  fi
+
+  echo "==> Running unit tests in Docker (${IMAGE})"
+  # privileged: needed if the Docker VM exposes ZFS; harmless otherwise.
+  # Mount the repo so edits are tested without rebuilding the image.
+  local docker_args=(
+    --rm
+    --privileged
+    -v "${ROOT}:/src:rw"
+    -w /src
+    -e FLYNN_TEST_IN_CONTAINER=1
+    -e FLYNN_TEST_SKIP_CHECKS
+    -e FLYNN_SKIP_VOLUME_TESTS
+    -e FLYNN_GO_TEST_FLAGS
+    -e FLYNN_VERSION
+    -e GOFLAGS=-mod=vendor
+  )
+
+  # Always allocate a TTY so pkg/term and similar tests can open /dev/tty.
+  docker_args+=(-t)
+  if [[ -t 0 ]]; then
+    docker_args+=(-i)
+  fi
+
+  docker run "${docker_args[@]}" "${IMAGE}" "$@"
+}
+
+if $use_docker; then
+  run_docker "$@"
+else
+  run_native "$@"
+fi

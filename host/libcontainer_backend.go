@@ -121,18 +121,18 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 	shutdown.BeforeExit(func() { defaultTmpfs.Delete() })
 
 	l := &LibcontainerBackend{
-		LibcontainerConfig:  config,
-		factory:             factory,
-		logStreams:          make(map[string]map[string]*logmux.LogStream),
-		containers:          make(map[string]*Container),
-		cpuSamples:          make(map[string]cpuSample),
-		defaultEnv:          make(map[string]string),
-		resolvConf:          "/etc/resolv.conf",
-		ipalloc:             ipallocator.New(),
-		discoverdConfigured: make(chan struct{}),
-		networkConfigured:   make(chan struct{}),
-		globalState:         &libcontainerGlobalState{},
-		defaultTmpfs:        defaultTmpfs,
+		LibcontainerConfig:   config,
+		factory:              factory,
+		logStreams:           make(map[string]map[string]*logmux.LogStream),
+		containers:           make(map[string]*Container),
+		cpuSamples:           make(map[string]cpuSample),
+		defaultEnv:           make(map[string]string),
+		resolvConf:           "/etc/resolv.conf",
+		ipalloc:              ipallocator.New(),
+		discoverdConfigured:  make(chan struct{}),
+		networkConfigured:    make(chan struct{}),
+		globalState:          &libcontainerGlobalState{},
+		defaultTmpfs:         defaultTmpfs,
 		buildJobMemoryLimits: buildJobMemoryLimits,
 	}
 	l.httpClient = &http.Client{Transport: &http.Transport{
@@ -200,8 +200,8 @@ type Container struct {
 	done      chan struct{}
 
 	// Memory limit tracking
-	softLimitBytes    uint64 // Soft memory limit (memory.high)
-	softLimitLogged  bool   // Whether we've already logged soft limit breach
+	softLimitBytes  uint64 // Soft memory limit (memory.high)
+	softLimitLogged bool   // Whether we've already logged soft limit breach
 
 	*containerinit.Client
 }
@@ -972,7 +972,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		// - Swap limit (memory.swap.max): Equal to configured limit, so total = limit + swap = 2x limit
 		// We do NOT set memory.high (MemoryReservation) - it triggers aggressive reclaim and causes
 		// extreme slowness. We only log when usage exceeds the configured limit via monitorMemoryUsage.
-		config.Cgroups.Resources.Memory = limit * 2  // Hard limit (memory.max) = 2x configured limit
+		config.Cgroups.Resources.Memory = limit * 2 // Hard limit (memory.max) = 2x configured limit
 		config.Cgroups.Resources.MemorySwap = limit // Swap limit, so total = 2x limit
 	} else {
 		softLimitBytes = uint64(defaultMemory)
@@ -1034,7 +1034,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	process := &libcontainer.Process{
 		Init:            true,
 		Args:            []string{"/.containerinit", job.ID},
-		User:            "0:0", // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
+		User:            "0:0",      // Use numeric UID:GID to avoid /etc/passwd lookup in minimal base images
 		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
@@ -1995,11 +1995,18 @@ func isBuildJob(job *host.Job) bool {
 // system app and gets the key that way. Giving the key to a slug/dockerbuilder
 // would let any user who can push escalate to the (privileged) host API.
 func isSystemJob(job *host.Job) bool {
+	if job == nil {
+		return false
+	}
+	// Partition is authoritative even when Metadata is unset (common for
+	// synthesized host jobs in tests and some bootstrap paths).
+	if job.Partition == "system" {
+		return true
+	}
 	if job.Metadata == nil {
 		return false
 	}
 	return job.Metadata["flynn-system-app"] == "true" ||
-		job.Partition == "system" ||
 		job.Metadata["flynn-controller.app_name"] == "builder"
 }
 

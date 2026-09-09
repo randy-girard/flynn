@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"os/user"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +22,82 @@ import (
 
 // Hook gocheck up to the "go test" runner
 func Test(t *testing.T) { TestingT(t) }
+
+// testPgSudoBinDir, when non-empty, points at initdb/postgres/pg_ctl/pg_basebackup
+// wrappers that run the real binaries as the postgres OS user (initdb refuses root).
+var testPgSudoBinDir string
+
+func TestMain(m *testing.M) {
+	if os.Geteuid() == 0 {
+		dir, err := mkPostgresSudoWrappers()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "postgresql tests: %v\n", err)
+			os.Exit(1)
+		}
+		testPgSudoBinDir = dir
+		defer os.RemoveAll(dir)
+	}
+	os.Exit(m.Run())
+}
+
+func pickPostgreSQLBinDir() (string, error) {
+	matches, err := filepath.Glob("/usr/lib/postgresql/*/bin")
+	if err != nil {
+		return "", err
+	}
+	best := ""
+	bestMajor := -1
+	for _, m := range matches {
+		verDir := filepath.Base(filepath.Dir(m))
+		var mj int
+		_, _ = fmt.Sscanf(verDir, "%d", &mj)
+		if mj > bestMajor {
+			bestMajor = mj
+			best = m
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("no PostgreSQL installation under /usr/lib/postgresql")
+	}
+	return best + string(filepath.Separator), nil
+}
+
+func mkPostgresSudoWrappers() (string, error) {
+	realBin, err := pickPostgreSQLBinDir()
+	if err != nil {
+		return "", err
+	}
+	dir, err := os.MkdirTemp("", "flynn-postgresql-test-bin-*")
+	if err != nil {
+		return "", err
+	}
+	for _, name := range []string{"initdb", "postgres", "pg_ctl", "pg_basebackup"} {
+		p := filepath.Join(dir, name)
+		script := fmt.Sprintf("#!/bin/sh\nexec sudo -n -u postgres -- %s%s \"$@\"\n", realBin, name)
+		if err := os.WriteFile(p, []byte(script), 0755); err != nil {
+			os.RemoveAll(dir)
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+func chownPostgres(c *C, dir string) {
+	if testPgSudoBinDir == "" {
+		return
+	}
+	for path := filepath.Dir(dir); path != "/" && path != "."; path = filepath.Dir(path) {
+		_ = os.Chmod(path, 0755)
+	}
+	u, err := user.Lookup("postgres")
+	c.Assert(err, IsNil)
+	uid, err := strconv.Atoi(u.Uid)
+	c.Assert(err, IsNil)
+	gid, err := strconv.Atoi(u.Gid)
+	c.Assert(err, IsNil)
+	c.Assert(os.Chown(dir, uid, gid), IsNil)
+	c.Assert(os.Chmod(dir, 0700), IsNil)
+}
 
 type PostgresSuite struct{}
 
@@ -37,12 +116,17 @@ func (PostgresSuite) TestSyncStandbyNamesConfigQuoting(c *C) {
 }
 
 func (PostgresSuite) TestSingletonPrimary(c *C) {
+	dir := c.MkDir()
+	chownPostgres(c, dir)
 	cfg := Config{
 		ID:        "node1",
 		Singleton: true,
-		DataDir:   c.MkDir(),
+		DataDir:   dir,
 		Port:      "6500",
 		OpTimeout: 30 * time.Second,
+	}
+	if testPgSudoBinDir != "" {
+		cfg.BinDir = testPgSudoBinDir
 	}
 
 	p := NewProcess(cfg)
@@ -62,6 +146,9 @@ func (PostgresSuite) TestSingletonPrimary(c *C) {
 	c.Assert(err, IsNil)
 
 	// ensure that we can start a new instance from the same directory
+	if testPgSudoBinDir != "" {
+		cfg.BinDir = testPgSudoBinDir
+	}
 	p = NewProcess(cfg)
 	err = p.Reconfigure(&state.Config{Role: state.RolePrimary})
 	c.Assert(err, IsNil)
@@ -85,15 +172,26 @@ func instance(p *Process) *discoverd.Instance {
 	}
 }
 
-var newPort uint32 = 6510
+var newPort uint32
+
+func init() {
+	// Avoid clashes with stale postgres instances from interrupted test runs.
+	newPort = uint32(40000 + os.Getpid()%12000)
+}
 
 func NewTestProcess(c *C, n int) *Process {
-	return NewProcess(Config{
+	dir := c.MkDir()
+	chownPostgres(c, dir)
+	cfg := Config{
 		ID:        fmt.Sprintf("node%d", n),
-		DataDir:   c.MkDir(),
+		DataDir:   dir,
 		Port:      strconv.Itoa(int(atomic.AddUint32(&newPort, 1))),
 		OpTimeout: 30 * time.Second,
-	})
+	}
+	if testPgSudoBinDir != "" {
+		cfg.BinDir = testPgSudoBinDir
+	}
+	return NewProcess(cfg)
 }
 
 func connect(c *C, p *Process, db string) *pgx.Conn {
@@ -251,7 +349,9 @@ func (PostgresSuite) TestIntegration(c *C) {
 	var res string
 	err = node1Conn.QueryRow("SHOW synchronous_standby_names").Scan(&res)
 	c.Assert(err, IsNil)
-	c.Assert(res, Equals, "node2")
+	// Postgres 16+ quotes standby names in SHOW output ("node2"); older
+	// versions returned the bare identifier.
+	c.Assert(strings.Trim(res, `"`), Equals, "node2")
 	err = node1Conn.QueryRow("SHOW synchronous_commit").Scan(&res)
 	c.Assert(err, IsNil)
 	c.Assert(res, Equals, "remote_write")

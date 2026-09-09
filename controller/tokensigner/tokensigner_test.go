@@ -29,7 +29,21 @@ func newKeyPair(t *testing.T) (*Signer, string) {
 	return New(priv), base64.URLEncoding.EncodeToString(pub)
 }
 
-// TestSignRoundTrip verifies that a token minted by Sign is accepted by the
+// TestGenerateKeyPair verifies GenerateKeyPair returns keys compatible with
+// ParseSigningKey and authorizer.ParseTokenKey.
+func TestGenerateKeyPair(t *testing.T) {
+	publicKey, privateKey, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseSigningKey(privateKey); err != nil {
+		t.Fatalf("parse private key: %s", err)
+	}
+	if _, err := authorizer.ParseTokenKey(publicKey); err != nil {
+		t.Fatalf("parse public key: %s", err)
+	}
+}
+
 // authorizer and that its scopes and app grants survive verification.
 func TestSignRoundTrip(t *testing.T) {
 	signer, pubKey := newKeyPair(t)

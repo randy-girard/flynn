@@ -52,8 +52,8 @@ func TestRepairOrphanSireniaFormationsScalesStaleRelease(t *testing.T) {
 		},
 	}
 	meta, err := json.Marshal(struct {
-		Primary *discoverd.Instance `json:"Primary"`
-		Sync    *discoverd.Instance `json:"Sync"`
+		Primary *discoverd.Instance   `json:"Primary"`
+		Sync    *discoverd.Instance   `json:"Sync"`
 		Async   []*discoverd.Instance `json:"Async"`
 	}{
 		Primary: primary,
@@ -98,9 +98,29 @@ func TestRepairOrphanSireniaFormationsScalesStaleRelease(t *testing.T) {
 }
 
 type fakeDiscoverdService struct {
-	meta *discoverd.ServiceMeta
+	meta         *discoverd.ServiceMeta
+	metas        []*discoverd.ServiceMeta
+	metaCalls    int
+	metaErr      error
+	instances    []*discoverd.Instance
+	instancesErr error
 }
 
 func (f *fakeDiscoverdService) GetMeta() (*discoverd.ServiceMeta, error) {
+	if f.metaErr != nil {
+		return nil, f.metaErr
+	}
+	if len(f.metas) > 0 {
+		i := f.metaCalls
+		if i >= len(f.metas) {
+			i = len(f.metas) - 1
+		}
+		f.metaCalls++
+		return f.metas[i], nil
+	}
 	return f.meta, nil
+}
+
+func (f *fakeDiscoverdService) Instances() ([]*discoverd.Instance, error) {
+	return f.instances, f.instancesErr
 }

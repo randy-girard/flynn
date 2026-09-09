@@ -180,6 +180,7 @@ type Database interface {
 	Reconfigure(*Config) error
 	Start() error
 	Stop() error
+	Running() bool
 
 	// Ready returns a channel that returns a single event when the interface
 	// is ready.
@@ -1085,8 +1086,10 @@ func (p *Peer) startTakeoverWithPeer(reason string, minWAL xlog.Position, newSta
 	// simultaneously that we're the primary or sync AND that the other is gone,
 	// so we may attempt to declare a new generation before we've started
 	// the database. In this case, this step will fail, but we'll just skip the
-	// takeover attempt until the database is running.
-	if !*p.online {
+	// takeover attempt until the database is running. Use the process running
+	// state rather than p.online: Reconfigure may start the database before
+	// applyConfig updates p.online.
+	if !p.db.Running() {
 		return ErrDatabaseOffline
 	}
 	wal, err := p.db.XLogPosition()
@@ -1224,29 +1227,27 @@ func (p *Peer) applyConfig() (err error) {
 	}
 
 	if config.Role != RoleNone {
-		if *p.online {
-			log.Debug("skipping start, already online")
+		if p.db.Running() {
+			log.Debug("skipping start, already running")
 		} else {
 			log.Debug("starting database")
 			if err := p.db.Start(); err != nil {
 				return err
 			}
 		}
-	} else {
-		if *p.online {
-			log.Debug("stopping database")
-			if err := p.db.Stop(); err != nil {
-				return err
-			}
-		} else {
-			log.Debug("skipping stop, already offline")
+	} else if p.db.Running() {
+		log.Debug("stopping database")
+		if err := p.db.Stop(); err != nil {
+			return err
 		}
+	} else {
+		log.Debug("skipping stop, already stopped")
 	}
 
 	log.Info("applied database config")
 	p.setRetryPending(nil)
 	p.applied = config
-	online := config.Role != RoleNone
+	online := p.db.Running()
 	p.online = &online
 
 	// Try applying the configuration again in case anything's

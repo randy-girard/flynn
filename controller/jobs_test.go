@@ -215,7 +215,7 @@ func (s *S) TestRunJobDetached(c *C) {
 			"flynn-controller.app":      app.ID,
 			"flynn-controller.app_name": app.Name,
 			"flynn-controller.release":  release.ID,
-			"foo": "baz",
+			"foo":                       "baz",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
@@ -251,16 +251,26 @@ func (s *S) TestRunJobAttached(c *C) {
 		jobID = req.JobID
 		inPipeR, inPipeW := io.Pipe()
 		go func() {
-			buf := make([]byte, 10)
-			n, _ := inPipeR.Read(buf)
-			input <- string(buf[:n])
+			// jobs.go copies via Conn() as raw bytes; read the full stdin
+			// payload (a single Read can return short under -race).
+			buf := make([]byte, len("test in"))
+			_, err := io.ReadFull(inPipeR, buf)
+			if err != nil {
+				input <- err.Error()
+				return
+			}
+			input <- string(buf)
 		}()
 		outPipeR, outPipeW := io.Pipe()
-		go outPipeW.Write([]byte("test out"))
-		return cluster.NewAttachClient(struct {
+		go func() {
+			// Do not Close the writer here: jobs.go treats EOF on either
+			// attach direction as "done" and tears down the session.
+			outPipeW.Write([]byte("test out"))
+		}()
+		return &rawAttachClient{rwc: struct {
 			io.Reader
 			io.WriteCloser
-		}{outPipeR, inPipeW}), nil
+		}{outPipeR, inPipeW}}, nil
 	})
 
 	artifact := s.createTestArtifact(c, &ct.Artifact{})
@@ -281,15 +291,15 @@ func (s *S) TestRunJobAttached(c *C) {
 	}
 	rwc, err := s.c.RunJobAttached(app.ID, data)
 	c.Assert(err, IsNil)
+	defer rwc.Close()
 
 	_, err = rwc.Write([]byte("test in"))
 	c.Assert(err, IsNil)
 	c.Assert(<-input, Equals, "test in")
 	buf := make([]byte, 10)
-	n, _ := rwc.Read(buf)
+	n, err := rwc.Read(buf)
 	c.Assert(err, IsNil)
 	c.Assert(string(buf[:n]), Equals, "test out")
-	rwc.Close()
 
 	jobs, err := hc.ListJobs()
 	c.Assert(err, IsNil)
@@ -300,7 +310,7 @@ func (s *S) TestRunJobAttached(c *C) {
 			"flynn-controller.app":      app.ID,
 			"flynn-controller.app_name": app.Name,
 			"flynn-controller.release":  release.ID,
-			"foo": "baz",
+			"foo":                       "baz",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
@@ -315,3 +325,20 @@ func (s *S) TestRunJobAttached(c *C) {
 		c.Assert(job.Config.Stdin, Equals, true)
 	}
 }
+
+// rawAttachClient is a minimal AttachClient for tests that use jobs.go's raw
+// Conn() copy path (not framed AttachClient.Write).
+type rawAttachClient struct {
+	rwc io.ReadWriteCloser
+}
+
+func (a *rawAttachClient) Conn() io.ReadWriteCloser { return a.rwc }
+func (a *rawAttachClient) Wait() error              { return nil }
+func (a *rawAttachClient) Receive(io.Writer, io.Writer) (int, error) {
+	return -1, nil
+}
+func (a *rawAttachClient) Signal(int) error               { return nil }
+func (a *rawAttachClient) ResizeTTY(uint16, uint16) error { return nil }
+func (a *rawAttachClient) CloseWrite() error              { return nil }
+func (a *rawAttachClient) Write(p []byte) (int, error)    { return a.rwc.Write(p) }
+func (a *rawAttachClient) Close() error                   { return a.rwc.Close() }

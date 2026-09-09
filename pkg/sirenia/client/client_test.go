@@ -127,6 +127,27 @@ func TestIsRecoverableStopError(t *testing.T) {
 	}
 }
 
+func TestIsPeerUnreachableError(t *testing.T) {
+	if IsPeerUnreachableError(nil) {
+		t.Fatal("nil should not be unreachable")
+	}
+	unreachable := []string{
+		`Post "http://100.100.65.11:3307/stop": dial tcp 100.100.65.11:3307: i/o timeout`,
+		`Get "http://10.0.0.1:3307/status": dial tcp 10.0.0.1:3307: connect: connection refused`,
+		`dial tcp 10.0.0.1:3307: connect: no route to host`,
+		`dial tcp 10.0.0.1:3307: connect: network is unreachable`,
+		`read tcp 10.0.0.1:3307: connection reset by peer`,
+	}
+	for _, msg := range unreachable {
+		if !IsPeerUnreachableError(fmt.Errorf("%s", msg)) {
+			t.Fatalf("expected %q to be unreachable", msg)
+		}
+	}
+	if IsPeerUnreachableError(fmt.Errorf("context deadline exceeded")) {
+		t.Fatal("mid-request timeout should not be treated as unreachable")
+	}
+}
+
 func TestStopReturnsWithoutWaitingForSlowShutdown(t *testing.T) {
 	stopped := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
