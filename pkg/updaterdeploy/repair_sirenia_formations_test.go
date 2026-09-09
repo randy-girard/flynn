@@ -102,6 +102,8 @@ type fakeDiscoverdService struct {
 	metas        []*discoverd.ServiceMeta
 	metaCalls    int
 	metaErr      error
+	setMetaErr   error
+	setMetas     []*discoverd.ServiceMeta
 	instances    []*discoverd.Instance
 	instancesErr error
 }
@@ -119,6 +121,19 @@ func (f *fakeDiscoverdService) GetMeta() (*discoverd.ServiceMeta, error) {
 		return f.metas[i], nil
 	}
 	return f.meta, nil
+}
+
+func (f *fakeDiscoverdService) SetMeta(m *discoverd.ServiceMeta) error {
+	if f.setMetaErr != nil {
+		return f.setMetaErr
+	}
+	cp := *m
+	if m.Data != nil {
+		cp.Data = append([]byte(nil), m.Data...)
+	}
+	f.setMetas = append(f.setMetas, &cp)
+	f.meta = &cp
+	return nil
 }
 
 func (f *fakeDiscoverdService) Instances() ([]*discoverd.Instance, error) {

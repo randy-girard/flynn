@@ -29,7 +29,6 @@ import (
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/installsource"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
@@ -1985,53 +1984,9 @@ func bytesInRange(ip, start, end net.IP) bool {
 	return true
 }
 
-// repairSireniaClusters clears deposed peers from sirenia-managed services
-// (postgres, mariadb, mongodb).  After a daemon restart the old primary may
-// have been deposed by a sync takeover; the deposed peer never automatically
-// rejoins, leaving the cluster without asyncs.  By removing them from the
-// Deposed list the primary's evalClusterState will see them as new peers
-// and add them as asyncs.
+// repairSireniaClusters clears present deposed peers so they can rejoin as
+// asyncs. Delegates to updaterdeploy so host and system-app updater share one
+// implementation.
 func repairSireniaClusters(log log15.Logger) {
-	appliances := []string{"postgres", "mariadb", "mongodb"}
-	for _, svc := range appliances {
-		svcLog := log.New("service", svc)
-		service := discoverd.NewService(svc)
-
-		meta, err := service.GetMeta()
-		if err != nil {
-			// Service may not exist (e.g. mariadb/mongodb not provisioned)
-			continue
-		}
-
-		var state sirenia.State
-		if err := json.Unmarshal(meta.Data, &state); err != nil {
-			svcLog.Warn("failed to decode sirenia state", "err", err)
-			continue
-		}
-
-		if len(state.Deposed) == 0 {
-			continue
-		}
-
-		svcLog.Info("clearing deposed peers from sirenia cluster",
-			"deposed_count", len(state.Deposed))
-
-		state.Deposed = nil
-
-		data, err := json.Marshal(&state)
-		if err != nil {
-			svcLog.Error("failed to encode repaired sirenia state", "err", err)
-			continue
-		}
-		meta.Data = data
-		if err := service.SetMeta(meta); err != nil {
-			svcLog.Error("failed to write repaired sirenia state", "err", err)
-			continue
-		}
-
-		svcLog.Info("cleared deposed peers, waiting for cluster to reform")
-		// Give the primary time to re-evaluate state and add the
-		// formerly-deposed peers as asyncs.
-		time.Sleep(10 * time.Second)
-	}
+	updaterdeploy.RepairDeposedSireniaPeers(log)
 }

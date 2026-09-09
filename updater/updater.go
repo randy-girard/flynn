@@ -11,7 +11,6 @@ import (
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/discoverd/client"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
@@ -364,48 +363,8 @@ func clickHouseImageID() string {
 	return ""
 }
 
-// repairSireniaClusters clears deposed peers from sirenia-managed services.
-// After a daemon restart the old primary may have been deposed by a sync
-// takeover; the deposed peer never automatically rejoins, leaving the cluster
-// without asyncs.  Clearing the Deposed list lets the primary re-add them.
+// repairSireniaClusters clears present deposed peers so they can rejoin as
+// asyncs. Shared implementation lives in updaterdeploy.
 func repairSireniaClusters(log log15.Logger) {
-	appliances := []string{"postgres", "mariadb", "mongodb"}
-	for _, svc := range appliances {
-		svcLog := log.New("service", svc)
-		service := discoverd.NewService(svc)
-
-		meta, err := service.GetMeta()
-		if err != nil {
-			continue
-		}
-
-		var state sirenia.State
-		if err := json.Unmarshal(meta.Data, &state); err != nil {
-			svcLog.Warn("failed to decode sirenia state", "err", err)
-			continue
-		}
-
-		if len(state.Deposed) == 0 {
-			continue
-		}
-
-		svcLog.Info("clearing deposed peers from sirenia cluster",
-			"deposed_count", len(state.Deposed))
-
-		state.Deposed = nil
-
-		data, err := json.Marshal(&state)
-		if err != nil {
-			svcLog.Error("failed to encode repaired sirenia state", "err", err)
-			continue
-		}
-		meta.Data = data
-		if err := service.SetMeta(meta); err != nil {
-			svcLog.Error("failed to write repaired sirenia state", "err", err)
-			continue
-		}
-
-		svcLog.Info("cleared deposed peers, waiting for cluster to reform")
-		time.Sleep(10 * time.Second)
-	}
+	updaterdeploy.RepairDeposedSireniaPeers(log)
 }

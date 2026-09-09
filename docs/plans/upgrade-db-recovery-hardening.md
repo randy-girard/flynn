@@ -4,9 +4,13 @@ Status: **IN PROGRESS** on branch `upgrade-db-recovery-hardening`.
 
 Completed:
 - Item 1 — quorum repair stuck heuristics (committed)
-- Item 2 — postgres assumeStandby data-dir reuse (this commit)
-- Item 3 — MariaDB lagging-replica classification (this commit)
-- Item 4 — role-aware skip + deferred async repl check (this commit)
+- Item 2 — postgres assumeStandby data-dir reuse (committed)
+- Item 3 — MariaDB lagging-replica classification (committed)
+- Item 4 — role-aware skip + deferred async repl check (committed)
+- Item 5 — narrow deposed-peer clearing (this commit)
+- Item 6 — align inter-host settle timeouts (committed)
+
+Remaining: item 7 (stale volumes), integration tests.
 
 Branch reviewed: `ci-tests-and-release` (commits `32c39ba9` … `164267a5`), merged to `main`.
 

@@ -83,7 +83,8 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 	}
 
 	updaterdeploy.WaitSireniaApplianceLeadersStable(log)
-	repairSireniaClusters(log)
+	// Deposed clearing runs once after the full rolling restart / image
+	// rollout, not between every host restart.
 
 	if opts.RestartedHost != nil {
 		waitForJobsPlacedOnHost(opts.RestartedHost, updateWaitJobsTimeout, log)
