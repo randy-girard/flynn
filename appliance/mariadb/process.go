@@ -890,7 +890,7 @@ func (p *Process) assumeStandby(role state.Role, upstream, downstream *discoverd
 	// reseed once the upstream is reachable if replication is fatal/stuck.
 	if skippedBackup {
 		if _, err := p.upstreamXLog(upstream); err != nil {
-			if role == state.RoleSync {
+			if reusedStandbyUnreachablePolicy(role) == reusedStandbySkipCheck {
 				logger.Warn("upstream unreachable, skipping standby replication health check", "err", err)
 			} else {
 				logger.Warn("upstream unreachable for async peer, deferring replication health check", "err", err)
@@ -1155,6 +1155,23 @@ func (p *Process) stop() error {
 		p.runningValue.Store(false)
 		return nil
 	}
+}
+
+// reusedStandbyUnreachableAction is what a reused standby does when the
+// upstream is unreachable after start. Sync skips so takeover can proceed;
+// async defers a reseed until the upstream returns.
+type reusedStandbyUnreachableAction int
+
+const (
+	reusedStandbySkipCheck reusedStandbyUnreachableAction = iota
+	reusedStandbyDeferCheck
+)
+
+func reusedStandbyUnreachablePolicy(role state.Role) reusedStandbyUnreachableAction {
+	if role == state.RoleSync {
+		return reusedStandbySkipCheck
+	}
+	return reusedStandbyDeferCheck
 }
 
 // scheduleDeferredReplCheck polls until the upstream is reachable, then

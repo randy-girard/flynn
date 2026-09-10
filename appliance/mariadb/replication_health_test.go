@@ -3,6 +3,7 @@ package mariadb
 import (
 	"testing"
 
+	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/sirenia/xlog"
 )
 
@@ -110,5 +111,17 @@ func TestClassifyStandbyReplication(t *testing.T) {
 				t.Fatalf("got %v want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReusedStandbyUnreachablePolicy(t *testing.T) {
+	if got := reusedStandbyUnreachablePolicy(state.RoleSync); got != reusedStandbySkipCheck {
+		t.Fatalf("sync unreachable must skip health check for takeover, got %v", got)
+	}
+	if got := reusedStandbyUnreachablePolicy(state.RoleAsync); got != reusedStandbyDeferCheck {
+		t.Fatalf("async unreachable must defer reseed, got %v", got)
+	}
+	if got := reusedStandbyUnreachablePolicy(state.RolePrimary); got != reusedStandbyDeferCheck {
+		t.Fatalf("non-sync roles defer, got %v", got)
 	}
 }
