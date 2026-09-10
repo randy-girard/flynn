@@ -4,12 +4,19 @@
 set -eo pipefail
 
 export PATH="/usr/local/go/bin:${PATH}"
-export GOFLAGS="${GOFLAGS:--mod=vendor}"
+export GOFLAGS="${GOFLAGS:--mod=vendor -buildvcs=false}"
+case " ${GOFLAGS} " in
+  *" -buildvcs="*) ;;
+  *) export GOFLAGS="${GOFLAGS} -buildvcs=false" ;;
+esac
 export PGHOST="${PGHOST:-/var/run/postgresql}"
 export PGSSLMODE="${PGSSLMODE:-disable}"
 export FLYNN_TEST_IN_CONTAINER=1
 
 cd /src
+# shellcheck source=/dev/null
+source /src/script/lib/git-safe-dir.sh
+flynn_git_safe_directory /src
 
 echo "==> Go $(go version)"
 
@@ -67,7 +74,7 @@ else
 fi
 
 echo "==> Running unit tests (${#packages[@]} packages)"
-env GOROOT="${GOROOT}" GOFLAGS=-mod=vendor \
+env GOROOT="${GOROOT}" GOFLAGS="${GOFLAGS}" \
   go test -gcflags=all=-d=checkptr=0 "${TEST_FLAGS[@]}" "${packages[@]}"
 
 echo "==> Unit tests passed"

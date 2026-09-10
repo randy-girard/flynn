@@ -147,6 +147,51 @@ func TestSyncTakesOverWhenPrimaryGoneAfterDatabaseStarts(t *testing.T) {
 	}
 }
 
+func TestPostgresSyncTakesOverWhenPrimaryGoneAfterDatabaseStarts(t *testing.T) {
+	db := &reconfigureStartsDB{}
+	dsd := &fakeDiscoverd{}
+
+	self := &discoverd.Instance{Addr: ":5432", Meta: map[string]string{"POSTGRES_ID": "node1"}}
+	primary := &discoverd.Instance{Addr: ":5433", Meta: map[string]string{"POSTGRES_ID": "primary"}}
+	async := &discoverd.Instance{Addr: ":5434", Meta: map[string]string{"POSTGRES_ID": "async"}}
+
+	peer := NewPeer(self, "node1", "POSTGRES_ID", false, dsd, db, log15.New())
+	online := false
+	peer.online = &online
+
+	peer.setPeers([]*discoverd.Instance{self, async})
+	peer.setState(&State{
+		Generation: 1,
+		Primary:    primary,
+		Sync:       self,
+		Async:      []*discoverd.Instance{async},
+		InitWAL:    "0-1-1",
+	})
+	peer.generation = 1
+	peer.setRole(RoleSync)
+	peer.upstream = primary
+	peer.downstream = async
+
+	if err := peer.applyConfig(); err != nil {
+		t.Fatalf("applyConfig: %v", err)
+	}
+	if !db.Running() {
+		t.Fatal("expected database running after applyConfig")
+	}
+
+	peer.evalClusterState()
+
+	if peer.Info().Role != RolePrimary {
+		t.Fatalf("expected role primary after takeover, got %v", peer.Info().Role)
+	}
+	if dsd.state == nil || dsd.state.State == nil || dsd.state.State.Generation != 2 {
+		t.Fatalf("expected generation 2 after takeover, got %+v", dsd.state)
+	}
+	if dsd.state.State.Primary == nil || dsd.state.State.Primary.Meta["POSTGRES_ID"] != "node1" {
+		t.Fatalf("expected self to be recorded as new primary, got %+v", dsd.state.State.Primary)
+	}
+}
+
 func TestApplyConfigMarksOnlineWhenReconfigureStartsDatabase(t *testing.T) {
 	db := &reconfigureStartsDB{}
 	inst := &discoverd.Instance{

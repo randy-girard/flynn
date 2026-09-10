@@ -73,6 +73,34 @@ func (a *App) RedisAppliance() bool {
 	return a.System() && strings.HasPrefix(a.Name, "redis-")
 }
 
+// RedisApplianceStrategy stops the old singleton redis job before starting the
+// replacement. The default all-at-once strategy starts the new job while the
+// old one still holds /data, so findVolume allocates a fresh empty volume and
+// the RDB is lost (seen 2026-09-09: GET smoke_probe empty after flynn-host update).
+const RedisApplianceStrategy = "one-down-one-up"
+
+// NewRedisApplianceApp is the app record used when provisioning a redis
+// resource: a system app named redis-<uuid> that deploys one-down-one-up so
+// the data volume is reused across updates.
+func NewRedisApplianceApp(name string) *App {
+	return &App{
+		Name:     name,
+		Meta:     map[string]string{"flynn-system-app": "true"},
+		Strategy: RedisApplianceStrategy,
+	}
+}
+
+// EnsureRedisApplianceStrategy sets Strategy to RedisApplianceStrategy when
+// this is a redis appliance still on another strategy. Returns true if the
+// in-memory app was changed (caller should persist via UpdateApp).
+func (a *App) EnsureRedisApplianceStrategy() bool {
+	if a == nil || !a.RedisAppliance() || a.Strategy == RedisApplianceStrategy {
+		return false
+	}
+	a.Strategy = RedisApplianceStrategy
+	return true
+}
+
 // Critical apps cannot be completely scaled down by the scheduler
 func (a *App) Critical() bool {
 	v, ok := a.Meta["flynn-system-critical"]

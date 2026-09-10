@@ -18,7 +18,7 @@ import (
 
 // Ensure process can start and stop successfully.
 func TestProcess_Start(t *testing.T) {
-	p := NewProcess()
+	p := NewProcess(t)
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestProcess_Start(t *testing.T) {
 
 // Ensure process returns an error if already running.
 func TestProcess_Start_ErrRunning(t *testing.T) {
-	p := NewProcess()
+	p := NewProcess(t)
 	defer p.Stop()
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestProcess_Start_ErrRunning(t *testing.T) {
 
 // Ensure process returns an error if already stopped.
 func TestProcess_Stop_ErrStopped(t *testing.T) {
-	p := NewProcess()
+	p := NewProcess(t)
 	if err := p.Stop(); err != redis.ErrStopped {
 		t.Fatalf("unexpected error: %s", err)
 	}
@@ -48,7 +48,7 @@ func TestProcess_Stop_ErrStopped(t *testing.T) {
 
 // Ensure process can retrieve server status.
 func TestProcess_Info(t *testing.T) {
-	p := MustStartProcess()
+	p := MustStartProcess(t)
 	defer p.Stop()
 	if info, err := p.Info(); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ func TestProcess_Info(t *testing.T) {
 
 // Ensure process can retrieve internal Redis info.
 func TestProcess_RedisInfo(t *testing.T) {
-	p := MustStartProcess()
+	p := MustStartProcess(t)
 	defer p.Stop()
 	if info, err := p.RedisInfo("", 30*time.Second); err != nil {
 		t.Fatal(err)
@@ -108,25 +108,27 @@ type Process struct {
 }
 
 // NewProcess creates a new Process on a random port.
-func NewProcess() *Process {
+func NewProcess(t *testing.T) *Process {
+	t.Helper()
+	skipWithoutRedisServer(t)
+
 	// Create temporary directory for data.
 	path, err := ioutil.TempDir("", "flynn-redis-")
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	// Create random port.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	// Find parent directory for redis.
 	binPath, err := exec.LookPath("redis-server")
 	if err != nil {
-		panic("redis-server not found in path: " + err.Error())
+		t.Skip("redis-server not found in PATH")
 	}
 
 	// Create process
@@ -139,11 +141,12 @@ func NewProcess() *Process {
 	return p
 }
 
-// MustStartProcess returns a new, started Process. Panic on error.
-func MustStartProcess() *Process {
-	p := NewProcess()
+// MustStartProcess returns a new, started Process.
+func MustStartProcess(t *testing.T) *Process {
+	t.Helper()
+	p := NewProcess(t)
 	if err := p.Start(); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	return p
 }

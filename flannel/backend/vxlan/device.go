@@ -1,6 +1,7 @@
 package vxlan
 
 import (
+	"crypto/rand"
 	"fmt"
 	"net"
 	"syscall"
@@ -23,19 +24,57 @@ type vxlanDevice struct {
 	link *netlink.Vxlan
 }
 
-func newVXLANDevice(devAttrs *vxlanDeviceAttrs) (*vxlanDevice, error) {
-	link := &netlink.Vxlan{
+// Indirections for tests (no root / netlink needed).
+var (
+	linkByIndex         = netlink.LinkByIndex
+	linkSetHardwareAddr = netlink.LinkSetHardwareAddr
+)
+
+// newHardwareAddr returns a random locally-administered unicast MAC.
+func newHardwareAddr() (net.HardwareAddr, error) {
+	hw := make(net.HardwareAddr, 6)
+	if _, err := rand.Read(hw); err != nil {
+		return nil, fmt.Errorf("failed to generate VTEP MAC: %v", err)
+	}
+	hw[0] = (hw[0] | 0x02) & 0xfe // locally administered, unicast
+	return hw, nil
+}
+
+// newVxlanLink builds the netlink description of the VTEP device.
+//
+// The MAC is assigned explicitly rather than left to the kernel. A kernel-random
+// MAC has addr_assign_type=NET_ADDR_RANDOM, and systemd-udevd (>= v242, e.g.
+// Ubuntu 24.04's 99-default.link MACAddressPolicy=persistent) rewrites such
+// MACs shortly after the device appears. flanneld publishes the VTEP MAC in
+// its subnet lease, so if udev changes it afterwards every peer installs
+// FDB/neigh entries for a MAC this host no longer owns and cross-node overlay
+// traffic is silently dropped. An explicitly set MAC (NET_ADDR_SET) is left
+// alone by udev.
+func newVxlanLink(devAttrs *vxlanDeviceAttrs) (*netlink.Vxlan, error) {
+	hw, err := newHardwareAddr()
+	if err != nil {
+		return nil, err
+	}
+	return &netlink.Vxlan{
 		LinkAttrs: netlink.LinkAttrs{
-			Name: devAttrs.name,
+			Name:         devAttrs.name,
+			HardwareAddr: hw,
 		},
 		VxlanId:      int(devAttrs.vni),
 		VtepDevIndex: devAttrs.vtepIndex,
 		SrcAddr:      devAttrs.vtepAddr,
 		Port:         devAttrs.vtepPort,
 		Learning:     false,
+	}, nil
+}
+
+func newVXLANDevice(devAttrs *vxlanDeviceAttrs) (*vxlanDevice, error) {
+	link, err := newVxlanLink(devAttrs)
+	if err != nil {
+		return nil, err
 	}
 
-	link, err := ensureLink(link)
+	link, err = ensureLink(link)
 	if err != nil {
 		return nil, err
 	}
@@ -43,6 +82,43 @@ func newVXLANDevice(devAttrs *vxlanDeviceAttrs) (*vxlanDevice, error) {
 	return &vxlanDevice{
 		link: link,
 	}, nil
+}
+
+// EnsureMAC re-reads the device and, if its MAC no longer matches expected
+// (the MAC advertised in our subnet lease), sets it back. This is a backstop
+// against anything (udev MACAddressPolicy, NetworkManager, an operator) that
+// changes the VTEP MAC after the lease was published. Returns true if a repair
+// was made.
+func (dev *vxlanDevice) EnsureMAC(expected net.HardwareAddr) (bool, error) {
+	if len(expected) == 0 {
+		return false, nil
+	}
+	current, err := linkByIndex(dev.link.Index)
+	if err != nil {
+		return false, fmt.Errorf("failed to read %s: %v", dev.link.Attrs().Name, err)
+	}
+	got := current.Attrs().HardwareAddr
+	if bytesEqualMAC(got, expected) {
+		return false, nil
+	}
+	log.Warningf("%s MAC changed from advertised %s to %s (udev MACAddressPolicy?); restoring", dev.link.Attrs().Name, expected, got)
+	if err := linkSetHardwareAddr(dev.link, expected); err != nil {
+		return false, fmt.Errorf("failed to restore MAC %s on %s: %v", expected, dev.link.Attrs().Name, err)
+	}
+	dev.link.HardwareAddr = expected
+	return true, nil
+}
+
+func bytesEqualMAC(a, b net.HardwareAddr) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
@@ -73,6 +149,15 @@ func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 		return nil, err
 	}
 
+	// The vendored netlink LinkAdd does not send IFLA_ADDRESS ("TODO: set mtu
+	// and hardware address"), so the kernel still picks a random MAC
+	// (NET_ADDR_RANDOM) that udev's MACAddressPolicy=persistent will rewrite.
+	// Set it explicitly now; RTM_SETLINK with IFLA_ADDRESS marks the address
+	// NET_ADDR_SET, which udev leaves alone. See newVxlanLink.
+	if err := applyHardwareAddr(vxlan); err != nil {
+		return nil, err
+	}
+
 	ifindex := vxlan.Index
 	link, err := netlink.LinkByIndex(vxlan.Index)
 	if err != nil {
@@ -84,6 +169,18 @@ func ensureLink(vxlan *netlink.Vxlan) (*netlink.Vxlan, error) {
 	}
 
 	return vxlan, nil
+}
+
+// applyHardwareAddr sets the MAC chosen in newVxlanLink on a freshly created
+// device. It is a no-op when no MAC was chosen.
+func applyHardwareAddr(vxlan *netlink.Vxlan) error {
+	if len(vxlan.HardwareAddr) == 0 {
+		return nil
+	}
+	if err := linkSetHardwareAddr(vxlan, vxlan.HardwareAddr); err != nil {
+		return fmt.Errorf("failed to set VTEP MAC %s on %s: %v", vxlan.HardwareAddr, vxlan.Name, err)
+	}
+	return nil
 }
 
 func (dev *vxlanDevice) Configure(ipn ip.IP4Net, overlay ip.IP4Net) error {

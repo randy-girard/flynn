@@ -87,11 +87,9 @@ func TestOverlayLowerdirDirectStackAfterDedupe(t *testing.T) {
 
 // TestOverlayLowerdirMaterializesDeepStack verifies that once the distinct layer
 // count exceeds the direct-stack threshold, overlayLowerdir takes the
-// materialization fallback instead of returning a plain colon-joined string.
-// The materialize path first copies the base layer, then attempts an overlay
-// mount; the mount is expected to fail under the unit-test environment, which
-// confirms the fallback branch was taken (a direct join would have returned a
-// ":"-joined string with no error).
+// materialization fallback instead of returning a colon-joined lowerdir.
+// Unprivileged environments fail the overlay mount (that's still the fallback
+// branch). Linux-as-root (the builder unit-test gate) can complete the copy.
 func TestOverlayLowerdirMaterializesDeepStack(t *testing.T) {
 	scratch := t.TempDir()
 	lowers := make([]string, maxDirectOverlayLayers+1)
@@ -103,11 +101,17 @@ func TestOverlayLowerdirMaterializesDeepStack(t *testing.T) {
 		lowers[i] = dir
 	}
 	got, err := overlayLowerdir(lowers, filepath.Join(scratch, "work"))
-	if err == nil {
-		t.Fatalf("expected materialization to be attempted (and mount to fail) for %d layers, got lowerdir %q", len(lowers), got)
+	if err != nil {
+		if strings.Contains(err.Error(), "no overlay layers") {
+			t.Fatalf("unexpected dedupe error: %v", err)
+		}
+		return
 	}
-	if strings.Contains(err.Error(), "no overlay layers") {
-		t.Fatalf("unexpected dedupe error: %v", err)
+	if strings.Contains(got, ":") {
+		t.Fatalf("deep stack should not be a colon-joined lowerdir, got %q", got)
+	}
+	if !strings.Contains(got, ".materialized") {
+		t.Fatalf("expected materialized path for %d layers, got %q", len(lowers), got)
 	}
 }
 

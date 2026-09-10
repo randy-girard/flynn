@@ -60,7 +60,17 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 	}
 
 	if opts.ExpectedHostCount > 1 && opts.ClusterClient != nil {
-		err := waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, 3*time.Minute, log)
+		err := waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, updateClusterSizeTimeout, log)
+		if err != nil && opts.FatalClusterSize {
+			// One more health pass before aborting — discoverd can lag
+			// status-web briefly after a host rejoins raft.
+			_, healthErr := waitForClusterHealthy(updateHealthTimeout, log)
+			var retryErr error
+			if healthErr == nil {
+				retryErr = waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, updateClusterSizeTimeout/4, log)
+			}
+			err = settleClusterSizeError(err, true, healthErr, retryErr)
+		}
 		if err != nil {
 			if opts.FatalClusterSize {
 				return err
@@ -70,7 +80,8 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 	}
 
 	updaterdeploy.WaitSireniaApplianceLeadersStable(log)
-	repairSireniaClusters(log)
+	// Deposed clearing runs once after the full rolling restart / image
+	// rollout, not between every host restart.
 
 	if opts.RestartedHost != nil {
 		waitForJobsPlacedOnHost(opts.RestartedHost, updateWaitJobsTimeout, log)
@@ -81,6 +92,26 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 		time.Sleep(updateInterHostDelay)
 	}
 	return nil
+}
+
+// settleClusterSizeError decides whether a failed first cluster-size wait
+// should abort a rolling restart. When fatal, a successful health probe plus
+// a successful size retry clears the error so a brief discoverd lag does not
+// leave mixed binaries. Non-fatal waits always continue.
+func settleClusterSizeError(firstErr error, fatal bool, healthErr, retryErr error) error {
+	if firstErr == nil {
+		return nil
+	}
+	if !fatal {
+		return nil
+	}
+	if healthErr == nil && retryErr == nil {
+		return nil
+	}
+	if healthErr == nil {
+		return retryErr
+	}
+	return firstErr
 }
 
 // expectedClusterHostCount returns the configured cluster size when

@@ -144,7 +144,11 @@ func (m *Main) Run() error {
 		return err
 	}
 	m.hb = hb
-	shutdown.BeforeExit(func() { hb.Close() })
+	// Host StopJob sends SIGTERM to this process (not redis-server). pkg/shutdown
+	// intercepts it and os.Exit unless Close runs first; without that, redis-server
+	// is SIGKILL'd with the cgroup and never writes dump.rdb/AOF (seen 2026-09-09:
+	// flynn-host update reused /data but GET smoke_probe was empty).
+	shutdown.BeforeExit(func() { m.Close() })
 
 	m.Logger.Info("opening port", "addr", m.Addr)
 

@@ -29,7 +29,6 @@ import (
 	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/installsource"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/flynn/flynn/pkg/version"
@@ -64,9 +63,11 @@ import (
 //     scheduler hasn't observed it yet, so no jobs are scheduled back. The
 //     wait is non-fatal: on timeout we log a warning and continue.
 var (
-	updateHealthTimeout   = 10 * time.Minute
-	updateInterHostDelay  = 30 * time.Second
-	updateWaitJobsTimeout = 3 * time.Minute
+	updateHealthTimeout       = 10 * time.Minute
+	updateInterHostDelay      = 30 * time.Second
+	updateWaitJobsTimeout     = 3 * time.Minute
+	updateClusterSizeTimeout  = 8 * time.Minute
+	updateRemoteDaemonTimeout = 5 * time.Minute
 )
 
 // clusterHostCount returns how many flynn-host peers are registered. If
@@ -419,8 +420,8 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 			// before exec'ing systemctl, so wait briefly for the
 			// old process to actually die before polling.
 			time.Sleep(5 * time.Second)
-			if err := waitForRemoteDaemon(h, 3*time.Minute, hostLog); err != nil {
-				return expectedHostCount, fmt.Errorf("daemon on host %s did not become responsive after restart: %w", h.ID(), err)
+			if err := waitForRemoteDaemon(h, updateRemoteDaemonTimeout, hostLog); err != nil {
+				return expectedHostCount, fmt.Errorf("daemon on host %s did not become responsive after restart: %w\nResume after the host recovers with: flynn-host update --all-nodes --images-only --version %s", h.ID(), err, version)
 			}
 
 			if err := settleAfterHostRestart(hostRestartSettleOptions{
@@ -431,7 +432,7 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 				FatalClusterSize:  true,
 				InterHostDelay:    true,
 			}); err != nil {
-				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w", h.ID(), err)
+				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w\nResume after the cluster settles with: flynn-host update --all-nodes --images-only --version %s", h.ID(), err, version)
 			}
 		}
 	}
@@ -1111,7 +1112,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	// subset of hosts that has finished rejoining raft.
 	clusterClient := cluster.NewClient()
 	if expectedHosts > 1 {
-		if err := waitForClusterSize(clusterClient, expectedHosts, 3*time.Minute, log); err != nil {
+		if err := waitForClusterSize(clusterClient, expectedHosts, updateClusterSizeTimeout, log); err != nil {
 			log.Warn("cluster did not fully repopulate before image pull, continuing with subset", "err", err)
 		}
 	}
@@ -1458,6 +1459,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
+			if err := updaterdeploy.EnsureRedisApplianceStrategy(client, app, appLog); err != nil {
+				appLog.Error("error setting redis appliance strategy", "err", err)
+				return err
+			}
 			if err := deployApp(client, app, redisImage, images, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)
@@ -1983,53 +1988,9 @@ func bytesInRange(ip, start, end net.IP) bool {
 	return true
 }
 
-// repairSireniaClusters clears deposed peers from sirenia-managed services
-// (postgres, mariadb, mongodb).  After a daemon restart the old primary may
-// have been deposed by a sync takeover; the deposed peer never automatically
-// rejoins, leaving the cluster without asyncs.  By removing them from the
-// Deposed list the primary's evalClusterState will see them as new peers
-// and add them as asyncs.
+// repairSireniaClusters clears present deposed peers so they can rejoin as
+// asyncs. Delegates to updaterdeploy so host and system-app updater share one
+// implementation.
 func repairSireniaClusters(log log15.Logger) {
-	appliances := []string{"postgres", "mariadb", "mongodb"}
-	for _, svc := range appliances {
-		svcLog := log.New("service", svc)
-		service := discoverd.NewService(svc)
-
-		meta, err := service.GetMeta()
-		if err != nil {
-			// Service may not exist (e.g. mariadb/mongodb not provisioned)
-			continue
-		}
-
-		var state sirenia.State
-		if err := json.Unmarshal(meta.Data, &state); err != nil {
-			svcLog.Warn("failed to decode sirenia state", "err", err)
-			continue
-		}
-
-		if len(state.Deposed) == 0 {
-			continue
-		}
-
-		svcLog.Info("clearing deposed peers from sirenia cluster",
-			"deposed_count", len(state.Deposed))
-
-		state.Deposed = nil
-
-		data, err := json.Marshal(&state)
-		if err != nil {
-			svcLog.Error("failed to encode repaired sirenia state", "err", err)
-			continue
-		}
-		meta.Data = data
-		if err := service.SetMeta(meta); err != nil {
-			svcLog.Error("failed to write repaired sirenia state", "err", err)
-			continue
-		}
-
-		svcLog.Info("cleared deposed peers, waiting for cluster to reform")
-		// Give the primary time to re-evaluate state and add the
-		// formerly-deposed peers as asyncs.
-		time.Sleep(10 * time.Second)
-	}
+	updaterdeploy.RepairDeposedSireniaPeers(log)
 }

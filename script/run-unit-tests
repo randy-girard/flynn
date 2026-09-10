@@ -64,8 +64,10 @@ run_native() {
   fi
 
   if [[ "${FLYNN_SKIP_VOLUME_TESTS:-}" == "1" ]]; then
+    echo "==> Skipping host/volume tests (FLYNN_SKIP_VOLUME_TESTS=1)"
     make test-unit-native
   else
+    echo "==> make test-unit-root-native: all packages, then sudo ./host/volume (ZFS)"
     make test-unit-root-native
   fi
 }

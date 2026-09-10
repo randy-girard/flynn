@@ -38,5 +38,8 @@ elif [[ "${CGO_ENABLED:-1}" == "1" ]]; then
   TAGS=(-tags "apparmor,seccomp")
 fi
 
-exec env CGO_ENABLED="${CGO_ENABLED:-1}" GOFLAGS="-mod=vendor" \
+# -buildvcs=false: Go 1.18+ runs `git status` to stamp VCS info. On Vagrant/
+# Docker mounts git often exits 128 (dubious ownership), which aborts the build.
+# Version is already injected via -ldflags above.
+exec env CGO_ENABLED="${CGO_ENABLED:-1}" GOFLAGS="-mod=vendor -buildvcs=false" \
   "${GO_BIN}" build "${TAGS[@]}" -ldflags "${LDFLAGS}" "$@"

@@ -104,8 +104,12 @@ main() {
 
     # Set up Go build environment
     export GO111MODULE=on
-    export GOFLAGS="-mod=vendor"
+    export GOFLAGS="-mod=vendor -buildvcs=false"
     export CGO_ENABLED=1
+    # Synced/bind-mounted .git is often a different UID than this process.
+    # shellcheck source=script/lib/git-safe-dir.sh
+    source "${ROOT}/script/lib/git-safe-dir.sh"
+    flynn_git_safe_directory "${ROOT}"
 
     # Export FLYNN_VERSION so it's available to all subprocesses
     export FLYNN_VERSION="${version}"

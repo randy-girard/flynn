@@ -2181,7 +2181,6 @@ func TestRemovedSync(t *testing.T) {
 	})
 }
 
-
 // TestConfigEqualPeerIdentity verifies that Config.Equal and
 // Config.IsNewDownstream distinguish two peers that share an address (and
 // therefore share the address-derived discoverd.Instance.ID) but have
@@ -2238,6 +2237,237 @@ func TestConfigEqualPeerIdentity(t *testing.T) {
 	if !sng1.Equal(sng2) {
 		t.Errorf("Config.Equal returned false for singleton-style configs with nil downstream; expected true")
 	}
+}
+
+// movedNode is a peer that kept its identity (name) but re-registered at a
+// new address: the simulator assigns 10.0.0.<n> to the n-th ident created.
+func movedNode(n int, name string, index uint64) *discoverd.Instance {
+	inst := &discoverd.Instance{
+		Addr:  fmt.Sprintf("10.0.0.%d:5432", n),
+		Proto: "tcp",
+		Meta:  map[string]string{simIdKey: name},
+		Index: index,
+	}
+	inst.ID = md5sum(inst.Proto + "-" + inst.Addr)
+	return inst
+}
+
+// TestPrimaryReconcilesAsyncMovedToNewAddress reproduces the 2026-09-09
+// mariadb rolling-deploy hang: the async's job is replaced, the replacement
+// reuses the data volume (same MARIADB_ID / Meta[idKey]) but gets a new
+// flannel IP. Membership by identity is unchanged, so the primary previously
+// saw nothing to do and cluster state kept the dead address; the sync then
+// waited forever for replication to a peer that no longer existed. The
+// primary must rewrite State.Async with the current discoverd instance.
+func TestPrimaryReconcilesAsyncMovedToNewAddress(t *testing.T) {
+	node3Moved := movedNode(4, "node3", 4)
+
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Moved := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Async:      []*discoverd.Instance{node3Moved},
+		InitWAL:    xlog.Zero(),
+	}
+	pgPrimary := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: node(2, 2),
+		},
+		CurXLog: "0/0000000A",
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap"},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: []*discoverd.Instance{node(1, 1), node(2, 2), node(3, 3)},
+				},
+				Db: pgPrimary,
+			},
+		},
+		{Cmd: "echo test: async job replaced at a new address, same identity"},
+		{Cmd: "movepeer node3"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1Moved,
+					Peers: []*discoverd.Instance{node(1, 1), node(2, 2), node3Moved},
+				},
+				Db: pgPrimary,
+			},
+		},
+	})
+}
+
+// TestPrimaryReconcilesSyncMovedToNewAddress is the sync-peer variant: the
+// primary must record the sync's new instance in state (same generation) and
+// re-point its own synchronous replication downstream at the new address.
+func TestPrimaryReconcilesSyncMovedToNewAddress(t *testing.T) {
+	node2Moved := movedNode(4, "node2", 4)
+
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		Sync:       node(2, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Moved := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		Sync:       node2Moved,
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	pgPrimary := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: node(2, 2),
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgPrimaryMoved := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RolePrimary,
+			Downstream: node2Moved,
+		},
+		// The simulated database advances xlog on the reconfigure that
+		// re-points synchronous replication at the new address.
+		CurXLog: "0/00000014",
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap"},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: []*discoverd.Instance{node(1, 1), node(2, 2), node(3, 3)},
+				},
+				Db: pgPrimary,
+			},
+		},
+		{Cmd: "echo test: sync job replaced at a new address, same identity"},
+		{Cmd: "movepeer node2"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1Moved,
+					Peers: []*discoverd.Instance{node(1, 1), node2Moved, node(3, 3)},
+				},
+				Db: pgPrimaryMoved,
+			},
+		},
+	})
+}
+
+// TestSyncRepointsDownstreamWhenAsyncMoves verifies the sync side: once the
+// primary publishes the async's new instance, the sync must reconfigure its
+// downstream to the new address even though the async's identity is unchanged.
+func TestSyncRepointsDownstreamWhenAsyncMoves(t *testing.T) {
+	node3Moved := movedNode(4, "node3", 4)
+
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(2, 1),
+		Sync:       node(1, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Moved := &state.State{
+		Generation: 1,
+		Primary:    node(2, 1),
+		Sync:       node(1, 2),
+		Async:      []*discoverd.Instance{node3Moved},
+		InitWAL:    xlog.Zero(),
+	}
+	pgSync := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RoleSync,
+			Upstream:   node(2, 1),
+			Downstream: node(3, 3),
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgSyncMoved := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RoleSync,
+			Upstream:   node(2, 1),
+			Downstream: node3Moved,
+		},
+		CurXLog: "0/0000000A",
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap node2 node1"},
+		{Cmd: "startPeer"},
+		{Cmd: "catchUp"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RoleSync,
+					State: gen1,
+					Peers: []*discoverd.Instance{node(2, 1), node(1, 2), node(3, 3)},
+				},
+				Db: pgSync,
+			},
+		},
+		{Cmd: "echo test: primary publishes the async at its new address"},
+		{Cmd: "movepeer node3"},
+		{Cmd: "setClusterState", JSON: gen1Moved},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RoleSync,
+					State: gen1Moved,
+					Peers: []*discoverd.Instance{node(2, 1), node(1, 2), node3Moved},
+				},
+				Db: pgSyncMoved,
+			},
+		},
+	})
 }
 
 // TestDeposedPeerAutoRejoin verifies that when a deposed peer re-registers in

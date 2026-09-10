@@ -26,6 +26,16 @@ import (
 
 const (
 	IDKey = "POSTGRES_ID"
+
+	// sireniaIDMarker is written beside PG_VERSION so a peer only reuses a
+	// data directory that it previously initialized for this appliance id.
+	sireniaIDMarker = "flynn-sirenia-id"
+)
+
+// Overridable for tests so standby replication health checks finish quickly.
+var (
+	standbyReplicationHealthTimeout = 30 * time.Second
+	standbyReplicationCheckInterval = 500 * time.Millisecond
 )
 
 type Config struct {
@@ -388,6 +398,10 @@ func (p *Process) assumePrimary(downstream *discoverd.Instance) (err error) {
 		log.Error("error writing postgres.conf", "path", p.configPath(), "err", err)
 		return err
 	}
+	if err := p.writeSireniaIDMarker(); err != nil {
+		log.Error("error writing sirenia id marker", "err", err)
+		return err
+	}
 
 	if err := p.start(); err != nil {
 		return err
@@ -453,50 +467,35 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	// restarting:
 	// http://www.databasesoup.com/2014/05/remastering-without-restarting.html
 
+	reused := false
 	if p.running() {
 		// if we are running, we can just restart with new replication settings,
 		// postgres supports streaming remastering.
 		if err := p.stop(); err != nil {
 			return err
 		}
+		reused = p.dataDirInitialized()
+	} else if p.dataDirInitialized() {
+		// The data directory already holds a copy of the database for this
+		// peer id, so we can start locally in standby mode without the
+		// upstream being reachable. This is essential when the upstream
+		// primary has died: waiting for a dead upstream here would block the
+		// database from ever starting, which in turn prevents a sync peer
+		// from starting its takeover (startTakeoverWithPeer requires the
+		// database to be running to read its xlog position). Postgres will
+		// retry primary_conninfo until the upstream (or its replacement) is
+		// available.
+		log.Info("data directory already initialized, skipping basebackup and upstream wait")
+		reused = true
 	} else {
 		if p.waitUpstream {
 			if err := p.waitForUpstream(upstream); err != nil {
 				return err
 			}
 		}
-		log.Info("pulling basebackup")
-		// TODO(titanous): make this pluggable
-		err := p.runCmd(exec.Command(
-			p.binPath("pg_basebackup"),
-			"--pgdata", p.dataDir,
-			"--dbname", fmt.Sprintf(
-				"host=%s port=%s user=flynn password=%s application_name=%s",
-				upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
-			),
-			"--wal-method=stream",
-			// Force an immediate checkpoint on the upstream instead of
-			// waiting (up to checkpoint_timeout) for the next spread
-			// checkpoint. On a busy primary the default can add over a
-			// minute of idle waiting, which pushes the initial sync past
-			// the deploy's replication-sync timeout.
-			"--checkpoint=fast",
-			"--progress",
-			"--verbose",
-		))
-		if err != nil {
-			log.Error("error pulling basebackup", "err", err)
-			if files, err := ioutil.ReadDir("/data"); err == nil {
-				for _, file := range files {
-					os.RemoveAll(filepath.Join("/data", file.Name()))
-				}
-			}
+		if err := p.pullBasebackup(log, upstream); err != nil {
 			return err
 		}
-		// the upstream could be performing a takeover, so we need to
-		// remove the trigger file if we have synced it across so we
-		// don't also start a takeover.
-		os.Remove(p.triggerPath())
 	}
 
 	// Write postgresql.conf with replication settings (PostgreSQL 12+ style)
@@ -518,9 +517,19 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		log.Error("error creating standby.signal", "path", p.standbySignalPath(), "err", err)
 		return err
 	}
+	if err := p.writeSireniaIDMarker(); err != nil {
+		log.Error("error writing sirenia id marker", "err", err)
+		return err
+	}
 
 	if err := p.start(); err != nil {
 		return err
+	}
+
+	if reused {
+		if err := p.verifyOrReseedStandby(log, upstream); err != nil {
+			return err
+		}
 	}
 
 	if downstream != nil {
@@ -528,6 +537,179 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	}
 
 	return nil
+}
+
+func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance) error {
+	if entries, err := ioutil.ReadDir(p.dataDir); err == nil && len(entries) > 0 {
+		log.Info("clearing non-empty data directory before basebackup")
+		if err := p.clearDataDir(); err != nil {
+			log.Error("error clearing data directory before basebackup", "err", err)
+			return err
+		}
+	}
+
+	log.Info("pulling basebackup")
+	err := p.runCmd(exec.Command(
+		p.binPath("pg_basebackup"),
+		"--pgdata", p.dataDir,
+		"--dbname", fmt.Sprintf(
+			"host=%s port=%s user=flynn password=%s application_name=%s",
+			upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
+		),
+		"--wal-method=stream",
+		// Force an immediate checkpoint on the upstream instead of
+		// waiting (up to checkpoint_timeout) for the next spread
+		// checkpoint. On a busy primary the default can add over a
+		// minute of idle waiting, which pushes the initial sync past
+		// the deploy's replication-sync timeout.
+		"--checkpoint=fast",
+		"--progress",
+		"--verbose",
+	))
+	if err != nil {
+		log.Error("error pulling basebackup", "err", err)
+		if clearErr := p.clearDataDir(); clearErr != nil {
+			log.Error("error clearing data directory after failed basebackup", "err", clearErr)
+		}
+		return err
+	}
+	// the upstream could be performing a takeover, so we need to
+	// remove the trigger file if we have synced it across so we
+	// don't also start a takeover.
+	os.Remove(p.triggerPath())
+	return nil
+}
+
+func (p *Process) verifyOrReseedStandby(log log15.Logger, upstream *discoverd.Instance) error {
+	status, err := client.NewClient(upstream.Addr).Status()
+	if skipStandbyHealthWhenUpstreamDown(status, err) {
+		log.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+		return nil
+	}
+	ok, err := p.standbyReplicationHealthy()
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	log.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+	return p.reseedStandbyFromUpstream(log, upstream)
+}
+
+func (p *Process) reseedStandbyFromUpstream(log log15.Logger, upstream *discoverd.Instance) error {
+	if err := p.stop(); err != nil {
+		return err
+	}
+	if err := p.pullBasebackup(log, upstream); err != nil {
+		return err
+	}
+	cfg := configData{
+		ReadOnly: true,
+		PrimaryConnInfo: fmt.Sprintf(
+			"host=%s port=%s user=flynn password=%s application_name=%s",
+			upstream.Host(), upstream.Port(), p.password, p.id,
+		),
+		RecoveryTargetTimeline: "latest",
+	}
+	if err := p.writeConfig(cfg); err != nil {
+		return err
+	}
+	if err := p.createStandbySignal(); err != nil {
+		return err
+	}
+	if err := p.writeSireniaIDMarker(); err != nil {
+		return err
+	}
+	return p.start()
+}
+
+// standbyReplicationHealthy reports whether the local standby is streaming or
+// advancing WAL replay. Being behind the upstream is fine; a timeline mismatch
+// or dead receiver that never progresses is not and triggers a reseed.
+func (p *Process) standbyReplicationHealthy() (bool, error) {
+	p.dbMtx.RLock()
+	defer p.dbMtx.RUnlock()
+	if !p.running() || p.db == nil {
+		return false, errors.New("postgres is not running")
+	}
+
+	var startLSN string
+	_ = p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&startLSN)
+
+	deadline := time.Now().Add(standbyReplicationHealthTimeout)
+	for time.Now().Before(deadline) {
+		var status *string
+		err := p.db.QueryRow("SELECT status FROM pg_stat_wal_receiver").Scan(&status)
+		receiver := ""
+		if err == nil && status != nil {
+			receiver = *status
+		}
+		var lsn string
+		if err := p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&lsn); err != nil {
+			lsn = ""
+		}
+		if postgresStandbyLooksHealthy(receiver, startLSN, lsn) {
+			return true, nil
+		}
+		if startLSN == "" && lsn != "" {
+			startLSN = lsn
+		}
+		time.Sleep(standbyReplicationCheckInterval)
+	}
+	return false, nil
+}
+
+// skipStandbyHealthWhenUpstreamDown is true when verifyOrReseedStandby cannot
+// compare against a live primary. Unlike MariaDB async peers, postgres skips
+// rather than scheduling a deferred reseed — takeover still needs the local
+// database running.
+func skipStandbyHealthWhenUpstreamDown(status *client.Status, err error) bool {
+	return err != nil || status == nil || status.Database == nil || !status.Database.Running
+}
+
+// postgresStandbyLooksHealthy reports streaming or advancing WAL replay.
+// Being behind the upstream is fine; a dead receiver that never progresses is not.
+func postgresStandbyLooksHealthy(receiverStatus, startLSN, currentLSN string) bool {
+	if receiverStatus == "streaming" {
+		return true
+	}
+	return startLSN != "" && currentLSN != "" && currentLSN != startLSN
+}
+
+func (p *Process) dataDirInitialized() bool {
+	if _, err := os.Stat(p.dataPath("PG_VERSION")); err != nil {
+		return false
+	}
+	data, err := ioutil.ReadFile(p.sireniaIDMarkerPath())
+	if err != nil {
+		return false
+	}
+	return string(data) == p.id
+}
+
+func (p *Process) writeSireniaIDMarker() error {
+	return ioutil.WriteFile(p.sireniaIDMarkerPath(), []byte(p.id), 0644)
+}
+
+func (p *Process) clearDataDir() error {
+	entries, err := ioutil.ReadDir(p.dataDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, e := range entries {
+		if err := os.RemoveAll(filepath.Join(p.dataDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Process) sireniaIDMarkerPath() string {
+	return p.dataPath(sireniaIDMarker)
 }
 
 // upstreamTimeout bounds how long a standby waits for its upstream to accept

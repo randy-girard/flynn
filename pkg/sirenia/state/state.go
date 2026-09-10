@@ -613,10 +613,13 @@ func (p *Peer) evalClusterState() {
 		if whichAsync := p.whichAsync(); whichAsync == -1 {
 			p.assumeUnassigned()
 		} else {
+			// Compare whole instances (peersEqual), not just identities: a
+			// neighbour replaced at a new address keeps its identity but
+			// replication must be re-pointed at the new address.
 			upstream := p.lookupUpstream(whichAsync)
 			downstream := p.lookupDownstream(whichAsync)
-			if upstream.Meta[p.idKey] != p.upstream.Meta[p.idKey] ||
-				downstream != nil && (p.downstream == nil || downstream.Meta[p.idKey] != p.downstream.Meta[p.idKey]) {
+			if !peersEqual(upstream, p.upstream) ||
+				downstream != nil && !peersEqual(downstream, p.downstream) {
 				p.assumeAsync(whichAsync)
 			}
 		}
@@ -629,7 +632,10 @@ func (p *Peer) evalClusterState() {
 	if p.Info().Role == RoleSync {
 		if !p.peerIsPresent(p.Info().State.Primary) {
 			p.startTakeover("primary gone", p.Info().State.InitWAL)
-		} else if len(p.Info().State.Async) > 0 && (p.downstream == nil || p.downstream.Meta[p.idKey] != p.Info().State.Async[0].Meta[p.idKey]) {
+		} else if len(p.Info().State.Async) > 0 && !peersEqual(p.downstream, p.Info().State.Async[0]) {
+			// peersEqual (not identity-only) so an async replaced at a new
+			// address gets replication re-pointed; see evalClusterState's
+			// primary reconciliation.
 			p.assumeSync()
 		}
 		return
@@ -714,22 +720,43 @@ func (p *Peer) evalClusterState() {
 	newDeposed := make([]*discoverd.Instance, 0, len(p.Info().State.Deposed))
 	changes := false
 
+	// Peers are identified by their appliance ID (Meta[idKey]), which lives in
+	// the data volume and therefore survives job replacement. A replacement
+	// job at a new flannel IP is the *same* peer at a *different* address, so
+	// membership must be reconciled by ID but the state must always carry the
+	// current discoverd instance. Otherwise the sync keeps replicating to a
+	// dead address recorded in State.Async and a rolling deploy hangs in
+	// waitForSync (observed with mariadb on 2026-09-09).
+	var newSync *discoverd.Instance
+	if cur := p.presentPeer(p.Info().State.Sync); cur != nil && !peersEqual(cur, p.Info().State.Sync) {
+		log.Info("sync peer re-registered with a new instance, updating state",
+			"peer.id", cur.Meta[p.idKey], "old_addr", p.Info().State.Sync.Addr, "new_addr", cur.Addr)
+		newSync = cur
+		changes = true
+	}
+
 	for _, a := range p.Info().State.Async {
-		if p.peerIsPresent(a) {
-			presentPeers[a.Meta[p.idKey]] = struct{}{}
-			newAsync = append(newAsync, a)
-		} else {
+		cur := p.presentPeer(a)
+		if cur == nil {
 			log.Debug("peer missing", "async.id", a.Meta[p.idKey], "async.addr", a.Addr)
 			changes = true
+			continue
 		}
+		presentPeers[a.Meta[p.idKey]] = struct{}{}
+		if !peersEqual(cur, a) {
+			log.Info("async peer re-registered with a new instance, updating state",
+				"peer.id", cur.Meta[p.idKey], "old_addr", a.Addr, "new_addr", cur.Addr)
+			changes = true
+		}
+		newAsync = append(newAsync, cur)
 	}
 
 	for _, d := range p.Info().State.Deposed {
-		if p.peerIsPresent(d) {
+		if cur := p.presentPeer(d); cur != nil {
 			log.Info("deposed peer rejoined, re-adding as async",
-				"peer.id", d.Meta[p.idKey], "peer.addr", d.Addr)
-			presentPeers[d.Meta[p.idKey]] = struct{}{}
-			newAsync = append(newAsync, d)
+				"peer.id", cur.Meta[p.idKey], "peer.addr", cur.Addr)
+			presentPeers[cur.Meta[p.idKey]] = struct{}{}
+			newAsync = append(newAsync, cur)
 			changes = true
 		} else {
 			newDeposed = append(newDeposed, d)
@@ -753,7 +780,7 @@ func (p *Peer) evalClusterState() {
 		return
 	}
 
-	p.startUpdateAsyncs(newAsync, newDeposed)
+	p.startUpdateMembers(newSync, newAsync, newDeposed)
 }
 
 // refreshPrimaryDownstream updates the primary's downstream replication target
@@ -997,11 +1024,13 @@ func (p *Peer) evalInitClusterState() {
 func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 	log := p.log.New("fn", "startTakeover", "reason", reason, "min_wal", minWAL)
 
-	// Select the first present async peer to be the next sync
+	// Select the first present async peer to be the next sync. Use the
+	// instance currently registered in discoverd, not the (possibly stale)
+	// one recorded in state: see presentPeer.
 	var newSync *discoverd.Instance
 	for _, a := range p.Info().State.Async {
-		if p.peerIsPresent(a) {
-			newSync = a
+		if cur := p.presentPeer(a); cur != nil {
+			newSync = cur
 			break
 		}
 	}
@@ -1013,8 +1042,11 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 	log.Debug("preparing for new generation")
 	newAsync := make([]*discoverd.Instance, 0, len(p.Info().State.Async))
 	for _, a := range p.Info().State.Async {
-		if a.Meta[p.idKey] != newSync.Meta[p.idKey] && p.peerIsPresent(a) {
-			newAsync = append(newAsync, a)
+		if a.Meta[p.idKey] == newSync.Meta[p.idKey] {
+			continue
+		}
+		if cur := p.presentPeer(a); cur != nil {
+			newAsync = append(newAsync, cur)
 		}
 	}
 
@@ -1157,6 +1189,13 @@ func (p *Peer) startTransitionToNormalMode() {
 }
 
 func (p *Peer) startUpdateAsyncs(newAsync, newDeposed []*discoverd.Instance) {
+	p.startUpdateMembers(nil, newAsync, newDeposed)
+}
+
+// startUpdateMembers rewrites the async/deposed lists (and, when newSync is
+// non-nil, the sync's discoverd instance) without changing generation. It is
+// only valid for the primary.
+func (p *Peer) startUpdateMembers(newSync *discoverd.Instance, newAsync, newDeposed []*discoverd.Instance) {
 	if p.updatingState != nil {
 		panic("startUpdateAsyncs with existing update state")
 	}
@@ -1166,10 +1205,17 @@ func (p *Peer) startUpdateAsyncs(newAsync, newDeposed []*discoverd.Instance) {
 	if newDeposed == nil {
 		newDeposed = state.Deposed
 	}
+	sync := state.Sync
+	if newSync != nil {
+		if sync == nil || newSync.Meta[p.idKey] != sync.Meta[p.idKey] {
+			panic("startUpdateMembers may only refresh the sync instance, not change the sync peer")
+		}
+		sync = newSync
+	}
 	p.updatingState = &State{
 		Generation: state.Generation,
 		Primary:    state.Primary,
-		Sync:       state.Sync,
+		Sync:       sync,
 		Async:      newAsync,
 		Deposed:    newDeposed,
 		InitWAL:    state.InitWAL,
@@ -1298,6 +1344,14 @@ func (p *Peer) lookupDownstream(whichAsync int) *discoverd.Instance {
 // Returns true if the given other peer appears to be present in the most
 // recently received list of present peers.
 func (p *Peer) peerIsPresent(other *discoverd.Instance) bool {
+	return p.presentPeer(other) != nil
+}
+
+// presentPeer returns the discoverd instance currently registered for the
+// same peer identity (Meta[idKey]) as other, or nil if that peer is absent.
+// The returned instance may differ from other in Addr/ID when the peer's job
+// was replaced (data volume, and thus identity, reused at a new address).
+func (p *Peer) presentPeer(other *discoverd.Instance) *discoverd.Instance {
 	// We should never even be asking whether we're present. If we need to do
 	// this at some point in the future, we need to consider we should always
 	// consider ourselves present or whether we should check the list.
@@ -1306,11 +1360,11 @@ func (p *Peer) peerIsPresent(other *discoverd.Instance) bool {
 	}
 	for _, peer := range p.Info().Peers {
 		if peer.Meta[p.idKey] == other.Meta[p.idKey] {
-			return true
+			return peer
 		}
 	}
 
-	return false
+	return nil
 }
 
 func (p *Peer) putClusterState() error {

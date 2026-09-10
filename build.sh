@@ -73,6 +73,8 @@ USAGE
 # Get the root directory of the Flynn project
 FLYNN_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export FLYNN_ROOT
+# shellcheck source=script/lib/apt-retry.sh
+source "${FLYNN_ROOT}/script/lib/apt-retry.sh"
 
 # Parse command line arguments
 VERSION=""
@@ -158,7 +160,21 @@ teardown_flynn() {
   fi
   echo "===> Stopping Flynn and removing install..."
   ./script/stop-all
+  # install-flynn --remove does rm -rf /var/lib/flynn, which is also where the
+  # base squashfs lives. Preserve it so `build.sh cluster` (documented as the
+  # "base squashfs exists" path) does not delete its own prerequisite. Same
+  # filesystem, so these are renames.
+  local saved=""
+  if [[ -f "${SQUASHFS}" ]]; then
+    saved="/var/lib/flynn-base-layer.squashfs.keep"
+    sudo mv -f "${SQUASHFS}" "${saved}"
+  fi
   ./script/install-flynn --remove --clean --yes
+  if [[ -n "${saved}" ]]; then
+    sudo mkdir -p "$(dirname "${SQUASHFS}")"
+    sudo mv -f "${saved}" "${SQUASHFS}"
+    echo "===> Preserved base squashfs at ${SQUASHFS}"
+  fi
 }
 
 require_base_squashfs() {
@@ -177,6 +193,7 @@ run_phase_base() {
   echo "===> [base] Preparing apt (IPv4) and base root image..."
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+  flynn_apt_install_conf
 
   CACHE_DIR=/var/cache/flynn/debootstrap
   ROOTFS=/var/lib/flynn/base-root
@@ -230,6 +247,7 @@ run_phase_prep() {
   fi
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+  flynn_apt_install_conf
 
   cd "${FLYNN_ROOT}"
   mkdir -p /etc/flynn
@@ -302,7 +320,12 @@ run_flynn_builder_only() {
   cd "${FLYNN_ROOT}"
   while [[ ${attempt} -le ${max_retries} ]]; do
     echo "===> Running flynn-builder --only=${only} (attempt ${attempt} of ${max_retries}) version=${VERSION} concurrency=${concurrency}"
+    # flynn-builder has been observed at >20 GB RSS during --only=apps (9p
+    # copies of layer diffs). Without a limit, concurrent mksquashfs then dies
+    # with "Cannot allocate memory" even with -mem 1G per squash. Soft-cap the
+    # Go heap so GC runs before the builder VM is exhausted.
     if FLYNN_BUILD_CONCURRENCY="${concurrency}" \
+      GOMEMLIMIT="${GOMEMLIMIT:-12GiB}" \
       ./script/flynn-builder build --version="${VERSION}" --verbose --only="${only}"; then
       echo "===> flynn-builder --only=${only} succeeded!"
       return 0
@@ -399,6 +422,7 @@ case "${PHASE}" in
 esac
 
 echo "===> Build complete!"
+exit 0
 echo ""
 echo "To create a release, commit your changes and run:"
 echo "  ./script/release"

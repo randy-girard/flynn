@@ -99,6 +99,14 @@ type Process struct {
 	// cancelSyncWait cancels the goroutine that is waiting for
 	// the downstream to catch up, if running.
 	cancelSyncWait func()
+
+	// cancelDeferredReplCheck cancels an async peer's deferred replication
+	// health check started when upstream was unreachable at assumeStandby time.
+	cancelDeferredReplCheck func()
+
+	// Optional overrides for standby replication health polling (tests).
+	replHealthTimeoutVal time.Duration
+	replCheckIntervalVal time.Duration
 }
 
 // NewProcess returns a new instance of Process.
@@ -113,8 +121,9 @@ func NewProcess() *Process {
 		ReplTimeout: DefaultReplTimeout,
 		Logger:      log15.New("app", "mariadb"),
 
-		events:         make(chan state.DatabaseEvent, 1),
-		cancelSyncWait: func() {},
+		events:                  make(chan state.DatabaseEvent, 1),
+		cancelSyncWait:          func() {},
+		cancelDeferredReplCheck: func() {},
 	}
 	p.runningValue.Store(false)
 	p.configValue.Store((*state.Config)(nil))
@@ -226,6 +235,7 @@ func (p *Process) reconfigure(config *state.Config) error {
 
 		// Make sure that we don't keep waiting for replication sync while reconfiguring
 		p.cancelSyncWait()
+		p.cancelDeferredReplCheck()
 		p.syncedDownstreamValue.Store((*discoverd.Instance)(nil))
 
 		// If we're already running and this is only a downstream change, just wait for the new downstream to catch up
@@ -243,7 +253,7 @@ func (p *Process) reconfigure(config *state.Config) error {
 			return p.assumePrimary(config.Downstream)
 		}
 
-		return p.assumeStandby(config.Upstream, config.Downstream)
+		return p.assumeStandby(config.Role, config.Upstream, config.Downstream)
 	}(); err != nil {
 		return err
 	}
@@ -584,47 +594,134 @@ func (p *Process) reseedStandbyFromUpstream(logger log15.Logger, upstream *disco
 	return backupInfo, nil
 }
 
-// standbyReplicationHealthy polls replication status until the standby has
-// caught up with upstream or a fatal replication error is seen. IO thread
-// alone is not sufficient: volumes left by aborted deploys can connect while
-// still at an empty or stale GTID.
+type standbyReplState int
+
+const (
+	standbyReplHealthy standbyReplState = iota
+	standbyReplStuck
+	standbyReplFatal
+)
+
+func (s standbyReplState) String() string {
+	switch s {
+	case standbyReplHealthy:
+		return "healthy"
+	case standbyReplStuck:
+		return "stuck"
+	case standbyReplFatal:
+		return "fatal"
+	default:
+		return fmt.Sprintf("standbyReplState(%d)", int(s))
+	}
+}
+
+// Overridable for tests so replication health polls finish quickly.
+var (
+	defaultReplHealthTimeout = 30 * time.Second
+	defaultReplCheckInterval = 500 * time.Millisecond
+)
+
+func (p *Process) replHealthTimeout() time.Duration {
+	if p.replHealthTimeoutVal > 0 {
+		return p.replHealthTimeoutVal
+	}
+	return defaultReplHealthTimeout
+}
+
+func (p *Process) replCheckInterval() time.Duration {
+	if p.replCheckIntervalVal > 0 {
+		return p.replCheckIntervalVal
+	}
+	return defaultReplCheckInterval
+}
+
+// classifyStandbyReplication decides whether a standby is healthy, stuck, or
+// fatally diverged. Being behind the upstream is fine when threads are running
+// and the GTID is advancing; only a non-advancing or broken replica is stuck.
+func classifyStandbyReplication(startPos, endPos, upstreamPos xlog.Position, ioRunning, sqlRunning bool, lastIOErrno, lastSQLErrno int64, cmp func(a, b xlog.Position) (int, error)) standbyReplState {
+	if lastIOErrno == 1236 {
+		return standbyReplFatal
+	}
+	// SQL errors that will not self-heal without a reseed.
+	if lastSQLErrno == 1062 || lastSQLErrno == 1032 {
+		return standbyReplStuck
+	}
+	if !ioRunning || !sqlRunning {
+		return standbyReplStuck
+	}
+	if endPos != "" && upstreamPos != "" && cmp != nil {
+		if n, err := cmp(endPos, upstreamPos); err == nil && n >= 0 {
+			return standbyReplHealthy
+		}
+	}
+	if startPos != "" && endPos != "" && startPos != endPos {
+		return standbyReplHealthy
+	}
+	return standbyReplStuck
+}
+
+// standbyReplicationHealthy reports whether the standby is caught up or still
+// advancing toward the upstream. A lagging-but-progressing replica is healthy;
+// only fatal GTID errors or a non-advancing replica trigger a reseed.
 func (p *Process) standbyReplicationHealthy(upstream *discoverd.Instance) (bool, error) {
-	upstreamXLog, err := p.upstreamXLog(upstream)
+	state, err := p.standbyReplicationState(upstream)
 	if err != nil {
 		return false, err
+	}
+	return state == standbyReplHealthy, nil
+}
+
+func (p *Process) standbyReplicationState(upstream *discoverd.Instance) (standbyReplState, error) {
+	upstreamXLog, err := p.upstreamXLog(upstream)
+	if err != nil {
+		return standbyReplStuck, err
 	}
 
 	db, err := p.connectLocal()
 	if err != nil {
-		return false, err
+		return standbyReplStuck, err
 	}
 	defer db.Close()
 
-	deadline := time.Now().Add(30 * time.Second)
-	for time.Now().Before(deadline) {
-		healthy, fatal, err := checkSlaveStatus(db)
-		if err != nil {
-			return false, err
-		}
-		if fatal {
-			return false, nil
-		}
-		if !healthy {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
-		localXLog, err := p.XLogPosition()
-		if err != nil {
-			return false, err
-		}
-		if caughtUp, err := p.replicationCaughtUpWithUpstream(localXLog, upstreamXLog); err != nil {
-			return false, err
-		} else if caughtUp {
-			return true, nil
-		}
-		time.Sleep(500 * time.Millisecond)
+	startPos, err := p.XLogPosition()
+	if err != nil {
+		startPos = p.XLog().Zero()
 	}
-	return false, nil
+
+	deadline := time.Now().Add(p.replHealthTimeout())
+	var (
+		ioOK, sqlOK               bool
+		lastIOErrno, lastSQLErrno int64
+		endPos                    xlog.Position
+	)
+	for time.Now().Before(deadline) {
+		ioOK, sqlOK, lastIOErrno, lastSQLErrno, err = readSlaveStatus(db)
+		if err != nil {
+			return standbyReplStuck, err
+		}
+		if lastIOErrno == 1236 {
+			return standbyReplFatal, nil
+		}
+		if lastSQLErrno == 1062 || lastSQLErrno == 1032 {
+			return standbyReplStuck, nil
+		}
+		endPos, err = p.XLogPosition()
+		if err != nil {
+			return standbyReplStuck, err
+		}
+		if ioOK && sqlOK {
+			if caughtUp, err := p.replicationCaughtUpWithUpstream(endPos, upstreamXLog); err != nil {
+				return standbyReplStuck, err
+			} else if caughtUp {
+				return standbyReplHealthy, nil
+			}
+			if startPos != "" && endPos != "" && endPos != startPos {
+				return standbyReplHealthy, nil
+			}
+		}
+		time.Sleep(p.replCheckInterval())
+	}
+	return classifyStandbyReplication(startPos, endPos, upstreamXLog, ioOK, sqlOK, lastIOErrno, lastSQLErrno, p.XLog().Compare), nil
 }
 
 func (p *Process) upstreamXLog(upstream *discoverd.Instance) (xlog.Position, error) {
@@ -652,18 +749,18 @@ func (p *Process) replicationCaughtUpWithUpstream(local, upstream xlog.Position)
 	return cmp >= 0, nil
 }
 
-func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
+func readSlaveStatus(db *sql.DB) (ioRunning, sqlRunning bool, lastIOErrno, lastSQLErrno int64, err error) {
 	rows, err := db.Query(`SHOW SLAVE STATUS`)
 	if err != nil {
-		return false, false, err
+		return false, false, 0, 0, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
-		return false, false, nil
+		return false, false, 0, 0, nil
 	}
 	cols, err := rows.Columns()
 	if err != nil {
-		return false, false, err
+		return false, false, 0, 0, err
 	}
 	vals := make([]interface{}, len(cols))
 	ptrs := make([]interface{}, len(cols))
@@ -671,24 +768,35 @@ func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
 		ptrs[i] = &vals[i]
 	}
 	if err := rows.Scan(ptrs...); err != nil {
-		return false, false, err
+		return false, false, 0, 0, err
 	}
-	var ioRunning, sqlRunning string
-	var lastIOErrno int64
+	var ioStr, sqlStr string
 	for i, col := range cols {
 		switch col {
 		case "Slave_IO_Running":
-			ioRunning = mysqlStatusString(vals[i])
+			ioStr = mysqlStatusString(vals[i])
 		case "Slave_SQL_Running":
-			sqlRunning = mysqlStatusString(vals[i])
+			sqlStr = mysqlStatusString(vals[i])
 		case "Last_IO_Errno":
 			lastIOErrno = mysqlStatusInt64(vals[i])
+		case "Last_SQL_Errno":
+			lastSQLErrno = mysqlStatusInt64(vals[i])
 		}
 	}
-	if lastIOErrno == 1236 {
+	return ioStr == "Yes", sqlStr == "Yes", lastIOErrno, lastSQLErrno, nil
+}
+
+// checkSlaveStatus is retained for callers that only need the coarse healthy/fatal
+// boolean pair. Prefer readSlaveStatus + classifyStandbyReplication for new code.
+func checkSlaveStatus(db *sql.DB) (healthy, fatal bool, err error) {
+	ioOK, sqlOK, lastIO, _, err := readSlaveStatus(db)
+	if err != nil {
+		return false, false, err
+	}
+	if lastIO == 1236 {
 		return false, true, nil
 	}
-	return ioRunning == "Yes" && sqlRunning == "Yes", false, nil
+	return ioOK && sqlOK, false, nil
 }
 
 func mysqlStatusString(v interface{}) string {
@@ -723,8 +831,8 @@ func mysqlStatusInt64(v interface{}) int64 {
 	}
 }
 
-func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error {
-	logger := p.Logger.New("fn", "assumeStandby", "upstream", upstream.Addr)
+func (p *Process) assumeStandby(role state.Role, upstream, downstream *discoverd.Instance) error {
+	logger := p.Logger.New("fn", "assumeStandby", "upstream", upstream.Addr, "role", role)
 	logger.Info("starting up as standby")
 
 	if err := p.writeConfig(configData{ReadOnly: true}); err != nil {
@@ -777,19 +885,25 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	// incompatible with the current upstream. Re-seed from upstream when reuse fails.
 	// This check requires the upstream to be reachable. When it is not (for
 	// example the primary has died and this sync peer is about to take over),
-	// skip the check: the database is already running locally, which is what a
-	// takeover needs, and the replication I/O thread will resync once an
-	// upstream is available again.
+	// skip the check for sync peers: the database is already running locally,
+	// which is what a takeover needs. Async peers still start locally but will
+	// reseed once the upstream is reachable if replication is fatal/stuck.
 	if skippedBackup {
 		if _, err := p.upstreamXLog(upstream); err != nil {
-			logger.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+			if reusedStandbyUnreachablePolicy(role) == reusedStandbySkipCheck {
+				logger.Warn("upstream unreachable, skipping standby replication health check", "err", err)
+			} else {
+				logger.Warn("upstream unreachable for async peer, deferring replication health check", "err", err)
+				p.scheduleDeferredReplCheck(upstream)
+			}
 		} else {
-			healthy, err := p.standbyReplicationHealthy(upstream)
+			state, err := p.standbyReplicationState(upstream)
 			if err != nil {
 				return err
 			}
-			if !healthy {
-				logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
+			if state != standbyReplHealthy {
+				logger.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream",
+					"state", state)
 				backupInfo, err = p.reseedStandbyFromUpstream(logger, upstream)
 				if err != nil {
 					return err
@@ -1025,6 +1139,7 @@ func (p *Process) stop() error {
 	logger.Info("stopping mysql")
 
 	p.cancelSyncWait()
+	p.cancelDeferredReplCheck()
 
 	// Attempt to kill.
 	logger.Debug("stopping daemon")
@@ -1040,6 +1155,85 @@ func (p *Process) stop() error {
 		p.runningValue.Store(false)
 		return nil
 	}
+}
+
+// reusedStandbyUnreachableAction is what a reused standby does when the
+// upstream is unreachable after start. Sync skips so takeover can proceed;
+// async defers a reseed until the upstream returns.
+type reusedStandbyUnreachableAction int
+
+const (
+	reusedStandbySkipCheck reusedStandbyUnreachableAction = iota
+	reusedStandbyDeferCheck
+)
+
+func reusedStandbyUnreachablePolicy(role state.Role) reusedStandbyUnreachableAction {
+	if role == state.RoleSync {
+		return reusedStandbySkipCheck
+	}
+	return reusedStandbyDeferCheck
+}
+
+// scheduleDeferredReplCheck polls until the upstream is reachable, then
+// reseeds if replication is fatal or stuck. Used for async peers that started
+// from a reused data directory while the upstream was down. The first poll
+// happens after deferredReplCheckInterval so Reconfigure can release p.mtx.
+func (p *Process) scheduleDeferredReplCheck(upstream *discoverd.Instance) {
+	p.cancelDeferredReplCheck()
+	stopCh := make(chan struct{})
+	var once sync.Once
+	p.cancelDeferredReplCheck = func() {
+		once.Do(func() { close(stopCh) })
+	}
+
+	timeout := 15 * time.Minute
+	if p.ReplTimeout > 0 {
+		timeout = p.ReplTimeout
+	}
+	interval := 10 * time.Second
+
+	go func() {
+		logger := p.Logger.New("fn", "deferredReplCheck", "upstream", upstream.Addr)
+		deadline := time.After(timeout)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-deadline:
+				logger.Warn("deferred replication health check timed out")
+				return
+			case <-ticker.C:
+				if _, err := p.upstreamXLog(upstream); err != nil {
+					continue
+				}
+				p.mtx.Lock()
+				if !p.running() {
+					p.mtx.Unlock()
+					return
+				}
+				state, err := p.standbyReplicationState(upstream)
+				if err != nil {
+					p.mtx.Unlock()
+					logger.Warn("deferred replication health check failed", "err", err)
+					return
+				}
+				if state == standbyReplHealthy {
+					p.mtx.Unlock()
+					logger.Info("deferred replication health check passed")
+					return
+				}
+				logger.Warn("deferred replication unhealthy, re-seeding from upstream", "state", state)
+				_, err = p.reseedStandbyFromUpstream(logger, upstream)
+				p.mtx.Unlock()
+				if err != nil {
+					logger.Error("deferred reseed failed", "err", err)
+				}
+				return
+			}
+		}
+	}()
 }
 
 func (p *Process) Info() (*client.DatabaseInfo, error) {

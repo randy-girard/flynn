@@ -988,7 +988,6 @@ func (TestSuite) TestActiveJobSync(c *C) {
 	assertJob("job2", JobStateStopped)
 }
 
-
 // TestFindVolumeCrossRelease covers the singleton-sirenia volume-reuse
 // path: by default the scheduler must adopt an existing /data volume
 // belonging to a different release of the same app, but only if that
@@ -1131,4 +1130,80 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	}
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
 	c.Assert(got, IsNil)
+}
+
+// TestFindVolumeRedisHeldByRunningJob is the redis all-at-once data-loss
+// path: the replacement job is placed while the old redis still holds /data,
+// so findVolume must not adopt it (a fresh empty volume would be allocated).
+// one-down-one-up marks the holder Stopping/Stopped first so the same volume
+// is reused.
+func (TestSuite) TestFindVolumeRedisHeldByRunningJob(c *C) {
+	const (
+		oldReleaseID = "release-old"
+		newReleaseID = "release-new"
+	)
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+	for _, rid := range []string{oldReleaseID, newReleaseID} {
+		s.formations.Add(NewFormation(&ct.ExpandedFormation{
+			App:     &ct.App{ID: testAppID},
+			Release: &ct.Release{ID: rid, ArtifactIDs: []string{testArtifactId}},
+		}))
+	}
+
+	holderID := "redis-old"
+	vol := &Volume{
+		Volume: ct.Volume{
+			VolumeReq: ct.VolumeReq{Path: "/data"},
+			ID:        "redis-data",
+			AppID:     testAppID,
+			ReleaseID: oldReleaseID,
+			JobType:   "redis",
+			State:     ct.VolumeStateCreated,
+			JobID:     &holderID,
+		},
+	}
+	s.volumes[vol.ID] = vol
+	newJob := &Job{AppID: testAppID, ReleaseID: newReleaseID, Type: "redis"}
+
+	s.jobs[holderID] = &Job{ID: holderID, State: JobStateRunning}
+	c.Assert(s.findVolume(newJob, &ct.VolumeReq{Path: "/data"}), IsNil)
+
+	s.jobs[holderID].State = JobStateStarting
+	c.Assert(s.findVolume(newJob, &ct.VolumeReq{Path: "/data"}), IsNil)
+
+	s.jobs[holderID].State = JobStateStopping
+	got := s.findVolume(newJob, &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "redis-data")
+
+	s.jobs[holderID].State = JobStateStopped
+	got = s.findVolume(newJob, &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "redis-data")
+}
+
+func (TestSuite) TestInternalStateCopiesJobs(c *C) {
+	orig := &Job{ID: "job1", State: JobStateStarting}
+	s := &Scheduler{
+		logger:     log15.New(),
+		hosts:      map[string]*Host{},
+		jobs:       Jobs{"job1": orig},
+		formations: Formations{},
+		volumes:    map[string]*Volume{},
+	}
+	req := NewInternalStateRequest()
+	s.HandleInternalStateRequest(req)
+	<-req.Done
+	got := req.State.Jobs["job1"]
+	c.Assert(got, NotNil)
+	if got == orig {
+		c.Fatal("InternalState must copy jobs; &(*job) aliases the live scheduler job")
+	}
+	orig.State = JobStateStopped
+	c.Assert(got.State, Equals, JobStateStarting)
 }

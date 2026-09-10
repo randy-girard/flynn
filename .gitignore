@@ -1,5 +1,8 @@
 bin
 .vagrant
+.vagrant-upgrade-smoke-tmp/
+.vagrant-upgrade-smoke-last-failure.log
+.vagrant-upgrade-smoke-last-results.txt
 script/custom-vagrant
 demo/*.log
 *.swp

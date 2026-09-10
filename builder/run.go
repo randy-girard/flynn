@@ -46,12 +46,30 @@ func runRun(args *docopt.Args) error {
 			"src",
 			"out",
 		}
-		cmd = exec.Command("mksquashfs", host.DiffPath, path, "-noappend", "-ef", "/dev/stdin")
-		cmd.Stdin = strings.NewReader(strings.Join(excludes, "\n"))
+		cmd = mksquashfsCommand(host.DiffPath, path, excludes)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Fprintln(os.Stderr, string(out))
 			return fmt.Errorf("error running mksquashfs: %s", err)
 		}
 	}
 	return nil
+}
+
+// mksquashfsMem caps the cache memory of each mksquashfs invocation. The
+// default is 25% of physical RAM *per process*; with APPS_CONCURRENCY layer
+// builds running at once (default nproc, 8 on the Vagrant builder) that is
+// 2x total RAM and mksquashfs dies with "Write failed because Cannot allocate
+// memory" (seen 2026-09-09 building cli-linux-amd64). 1G is ample for a cache.
+const mksquashfsMem = "1G"
+
+// mksquashfsCommand builds the mksquashfs command that squashes the container
+// diff at diffPath into out, excluding the given top-level paths via stdin.
+func mksquashfsCommand(diffPath, out string, excludes []string) *exec.Cmd {
+	cmd := exec.Command("mksquashfs", diffPath, out,
+		"-noappend",
+		"-mem", mksquashfsMem,
+		"-ef", "/dev/stdin",
+	)
+	cmd.Stdin = strings.NewReader(strings.Join(excludes, "\n"))
+	return cmd
 }

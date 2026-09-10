@@ -437,6 +437,127 @@ func (PostgresSuite) TestIntegration(c *C) {
 	insertRow(c, node3Conn, 3)
 }
 
+func chownPostgresPath(c *C, path string) {
+	if testPgSudoBinDir == "" {
+		return
+	}
+	u, err := user.Lookup("postgres")
+	c.Assert(err, IsNil)
+	uid, err := strconv.Atoi(u.Uid)
+	c.Assert(err, IsNil)
+	gid, err := strconv.Atoi(u.Gid)
+	c.Assert(err, IsNil)
+	c.Assert(os.Chown(path, uid, gid), IsNil)
+}
+
+func (PostgresSuite) TestDataDirInitializedRequiresMatchingMarker(c *C) {
+	p := NewTestProcess(c, 9)
+	c.Assert(p.dataDirInitialized(), Equals, false)
+
+	c.Assert(os.WriteFile(filepath.Join(p.dataDir, "PG_VERSION"), []byte("16\n"), 0644), IsNil)
+	c.Assert(p.dataDirInitialized(), Equals, false)
+
+	c.Assert(os.WriteFile(p.sireniaIDMarkerPath(), []byte("other-id"), 0644), IsNil)
+	c.Assert(p.dataDirInitialized(), Equals, false)
+
+	c.Assert(p.writeSireniaIDMarker(), IsNil)
+	c.Assert(p.dataDirInitialized(), Equals, true)
+}
+
+func (PostgresSuite) TestAssumeStandbyReusesInitializedDataDir(c *C) {
+	primary := NewTestProcess(c, 11)
+	standby := NewTestProcess(c, 12)
+	// Do not set waitUpstream: that polls the sirenia HTTP API on postgres
+	// port+1, which NewTestProcess does not serve. The first Start() uses
+	// pg_basebackup. The second Start() (primary down) is the reuse path.
+
+	c.Assert(primary.Reconfigure(pgConfig(state.RolePrimary, nil, standby)), IsNil)
+	c.Assert(primary.Start(), IsNil)
+	defer primary.Stop()
+
+	c.Assert(standby.Reconfigure(pgConfig(state.RoleSync, primary, nil)), IsNil)
+	c.Assert(standby.Start(), IsNil)
+
+	sentinel := filepath.Join(standby.dataDir, "reuse-sentinel")
+	c.Assert(os.WriteFile(sentinel, []byte("keep"), 0644), IsNil)
+	chownPostgresPath(c, sentinel)
+	c.Assert(standby.dataDirInitialized(), Equals, true)
+
+	c.Assert(standby.Stop(), IsNil)
+	c.Assert(primary.Stop(), IsNil)
+
+	// Primary is down; WaitUpstream would hang/fail without data-dir reuse.
+	c.Assert(standby.Reconfigure(pgConfig(state.RoleSync, primary, nil)), IsNil)
+	c.Assert(standby.Start(), IsNil)
+	defer standby.Stop()
+
+	c.Assert(standby.Running(), Equals, true)
+	pos, err := standby.XLogPosition()
+	c.Assert(err, IsNil)
+	c.Assert(pos == "", Equals, false)
+
+	_, err = os.Stat(sentinel)
+	c.Assert(err, IsNil, Commentf("reused data dir should not wipe existing files"))
+}
+
+func (PostgresSuite) TestAssumeStandbyRejectsForeignDataDir(c *C) {
+	primary := NewTestProcess(c, 13)
+	standby := NewTestProcess(c, 14)
+
+	c.Assert(primary.Reconfigure(pgConfig(state.RolePrimary, nil, standby)), IsNil)
+	c.Assert(primary.Start(), IsNil)
+	defer primary.Stop()
+
+	// Foreign volume: PG_VERSION present but marker for a different peer.
+	c.Assert(os.WriteFile(filepath.Join(standby.dataDir, "PG_VERSION"), []byte("16\n"), 0644), IsNil)
+	c.Assert(os.WriteFile(standby.sireniaIDMarkerPath(), []byte("foreign-peer"), 0644), IsNil)
+	c.Assert(os.WriteFile(filepath.Join(standby.dataDir, "foreign-sentinel"), []byte("wipe-me"), 0644), IsNil)
+	c.Assert(standby.dataDirInitialized(), Equals, false)
+
+	c.Assert(standby.Reconfigure(pgConfig(state.RoleSync, primary, nil)), IsNil)
+	c.Assert(standby.Start(), IsNil)
+	defer standby.Stop()
+
+	_, err := os.Stat(filepath.Join(standby.dataDir, "foreign-sentinel"))
+	c.Assert(os.IsNotExist(err), Equals, true, Commentf("foreign data dir should be wiped before basebackup"))
+	c.Assert(standby.dataDirInitialized(), Equals, true)
+}
+
+func (PostgresSuite) TestAssumeStandbyResumesStreamingOnReuse(c *C) {
+	primary := NewTestProcess(c, 15)
+	standby := NewTestProcess(c, 16)
+
+	c.Assert(primary.Reconfigure(pgConfig(state.RolePrimary, nil, standby)), IsNil)
+	c.Assert(primary.Start(), IsNil)
+	defer primary.Stop()
+
+	c.Assert(standby.Reconfigure(pgConfig(state.RoleSync, primary, nil)), IsNil)
+	c.Assert(standby.Start(), IsNil)
+
+	sentinel := filepath.Join(standby.dataDir, "stream-sentinel")
+	c.Assert(os.WriteFile(sentinel, []byte("keep"), 0644), IsNil)
+	chownPostgresPath(c, sentinel)
+
+	c.Assert(standby.Stop(), IsNil)
+	c.Assert(standby.Reconfigure(pgConfig(state.RoleSync, primary, nil)), IsNil)
+	c.Assert(standby.Start(), IsNil)
+	defer standby.Stop()
+
+	_, err := os.Stat(sentinel)
+	c.Assert(err, IsNil, Commentf("reuse with live upstream should not re-basebackup"))
+
+	conn := connect(c, standby, "postgres")
+	defer conn.Close()
+	assertRecovery(c, conn)
+
+	var status string
+	err = queryAttempts.Run(func() error {
+		return conn.QueryRow("SELECT status FROM pg_stat_wal_receiver").Scan(&status)
+	})
+	c.Assert(err, IsNil)
+	c.Assert(status, Equals, "streaming")
+}
+
 func (PostgresSuite) TestRemoveNodes(c *C) {
 	// start a chain of four nodes
 	node1 := NewTestProcess(c, 1)

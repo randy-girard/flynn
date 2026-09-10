@@ -7,6 +7,7 @@ package iptables
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 )
@@ -29,9 +30,42 @@ func init() {
 	supportsXlock = exec.Command("iptables", "--wait", "-L", "-n").Run() == nil
 }
 
+// EnableOutboundNAT sets up MASQUERADE for container traffic leaving the
+// bridge toward the underlay, while leaving overlay→overlay traffic alone.
+//
+// Without excluding the overlay destination range, cross-node VXLAN traffic is
+// SNAT'd to the local flannel VTEP (.0) address and peers never see the real
+// container source IP — the same failure mode hostgw avoids with
+// `! -d <overlay>`.
+// OutboundMasqueradeArgs is the POSTROUTING MASQUERADE rule for underlay
+// egress. Overlay destinations are excluded (! -d overlay) so cross-node
+// VXLAN traffic keeps the real container source IP.
+func OutboundMasqueradeArgs(bridge, network string) []string {
+	return []string{"POSTROUTING", "-t", "nat", "-s", network, "!", "-o", bridge, "!", "-d", OverlayNetworkFor(network), "-j", "MASQUERADE"}
+}
+
+// LegacyOutboundMasqueradeArgs is the pre-fix rule that SNAT'd overlay
+// destinations to the local VTEP and blackholed VXLAN.
+func LegacyOutboundMasqueradeArgs(bridge, network string) []string {
+	return []string{"POSTROUTING", "-t", "nat", "-s", network, "!", "-o", bridge, "-j", "MASQUERADE"}
+}
+
+// OverlayIncomingForwardArgs accepts NEW overlay connections to local
+// containers. ESTABLISHED-only is not enough for peers initiating to this host.
+func OverlayIncomingForwardArgs(network, bridge string) []string {
+	return []string{"FORWARD", "-d", network, "-o", bridge, "-j", "ACCEPT"}
+}
+
+// EnableOutboundNAT installs overlay-safe NAT and FORWARD rules.
 func EnableOutboundNAT(bridge, network string) error {
-	natArgs := []string{"POSTROUTING", "-t", "nat", "-s", network, "!", "-o", bridge, "-j", "MASQUERADE"}
+	natArgs := OutboundMasqueradeArgs(bridge, network)
 	if !Exists(natArgs...) {
+		// Drop the legacy rule that MASQUERADE'd all non-bridge egress,
+		// including overlay destinations (breaks flannel VXLAN).
+		legacy := LegacyOutboundMasqueradeArgs(bridge, network)
+		if Exists(legacy...) {
+			_, _ = Raw(append([]string{"-D"}, legacy...)...)
+		}
 		if output, err := Raw(append([]string{"-I"}, natArgs...)...); err != nil {
 			return fmt.Errorf("Unable to enable network bridge NAT: %s", err)
 		} else if len(output) != 0 {
@@ -49,17 +83,46 @@ func EnableOutboundNAT(bridge, network string) error {
 		}
 	}
 
-	// Accept incoming packets for existing connections
-	existingArgs := []string{"FORWARD", "-o", bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"}
-	if !Exists(existingArgs...) {
-		if output, err := Raw(append([]string{"-I"}, existingArgs...)...); err != nil {
+	incomingArgs := OverlayIncomingForwardArgs(network, bridge)
+	if !Exists(incomingArgs...) {
+		if output, err := Raw(append([]string{"-I"}, incomingArgs...)...); err != nil {
 			return fmt.Errorf("Unable to allow incoming packets: %s", err)
 		} else if len(output) != 0 {
 			return &ChainError{Chain: "FORWARD incoming", Output: output}
 		}
 	}
 
+	// Keep ESTABLISHED for backwards compatibility with older rule sets / policy DROP.
+	existingArgs := []string{"FORWARD", "-o", bridge, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"}
+	if !Exists(existingArgs...) {
+		if output, err := Raw(append([]string{"-I"}, existingArgs...)...); err != nil {
+			return fmt.Errorf("Unable to allow established incoming packets: %s", err)
+		} else if len(output) != 0 {
+			return &ChainError{Chain: "FORWARD established", Output: output}
+		}
+	}
+
 	return nil
+}
+
+// OverlayNetworkFor returns the flannel overlay CIDR that contains network.
+// Flynn defaults to a /16 overlay with /24 host subnets (e.g. 100.64.57.1/24 →
+// 100.64.0.0/16). When the local subnet is already as wide as /16 or wider,
+// network itself is returned.
+func OverlayNetworkFor(network string) string {
+	ip, ipnet, err := net.ParseCIDR(network)
+	if err != nil {
+		return network
+	}
+	v4 := ip.To4()
+	if v4 == nil {
+		return ipnet.String()
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits != 32 || ones <= 16 {
+		return ipnet.String()
+	}
+	return fmt.Sprintf("%d.%d.0.0/16", v4[0], v4[1])
 }
 
 // Check if an existing rule exists

@@ -2,12 +2,15 @@ package updaterdeploy
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
 )
@@ -77,6 +80,81 @@ func TestSireniaInstanceHealthyEmpty(t *testing.T) {
 	}
 }
 
+func TestSireniaInstanceStuck_SeedingPeerWithinGraceIsHealthy(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	status := &sireniaclient.Status{
+		Peer:     &sirenia.PeerInfo{Role: sirenia.RoleAsync},
+		Database: &sireniaclient.DatabaseInfo{Running: false},
+	}
+	if sireniaInstanceStuck(status, nil, 2*time.Minute, now) {
+		t.Fatal("seeding peer within seed grace should not be stuck")
+	}
+}
+
+func TestSireniaInstanceStuck_NotRunningPastGraceIsStuck(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	status := &sireniaclient.Status{
+		Peer:     &sirenia.PeerInfo{Role: sirenia.RoleAsync},
+		Database: &sireniaclient.DatabaseInfo{Running: false},
+	}
+	if !sireniaInstanceStuck(status, nil, 45*time.Minute, now) {
+		t.Fatal("not-running peer past seed grace should be stuck")
+	}
+	if reason := sireniaStuckReason(status, nil, 45*time.Minute, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "not_running_past_grace" {
+		t.Fatalf("reason=%q want not_running_past_grace", reason)
+	}
+}
+
+func TestSireniaInstanceStuck_RetryPendingOld(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	pending := now.Add(-10 * time.Minute)
+	status := &sireniaclient.Status{
+		Peer: &sirenia.PeerInfo{
+			Role:         sirenia.RoleAsync,
+			RetryPending: &pending,
+		},
+		Database: &sireniaclient.DatabaseInfo{Running: true},
+	}
+	if !sireniaInstanceStuck(status, nil, time.Minute, now) {
+		t.Fatal("old RetryPending should be stuck regardless of job age")
+	}
+	if reason := sireniaStuckReason(status, nil, time.Minute, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "retry_pending" {
+		t.Fatalf("reason=%q want retry_pending", reason)
+	}
+}
+
+func TestSireniaInstanceStuck_UnreachableIsStuck(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	if !sireniaInstanceStuck(nil, errors.New("connection refused"), time.Minute, now) {
+		t.Fatal("unreachable peer should be stuck")
+	}
+	if reason := sireniaStuckReason(nil, errors.New("connection refused"), time.Minute, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "unreachable" {
+		t.Fatalf("reason=%q want unreachable", reason)
+	}
+}
+
+func TestSireniaInstanceStuck_RoleMismatch(t *testing.T) {
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	status := &sireniaclient.Status{
+		Peer: &sirenia.PeerInfo{
+			ID:   "peer-1",
+			Role: sirenia.RoleUnassigned,
+			State: &sirenia.State{
+				Async: []*discoverd.Instance{{
+					Meta: map[string]string{"POSTGRES_ID": "peer-1"},
+				}},
+			},
+		},
+		Database: &sireniaclient.DatabaseInfo{Running: true},
+	}
+	if !sireniaInstanceStuck(status, nil, time.Minute, now) {
+		t.Fatal("unassigned role while listed in cluster state should be stuck")
+	}
+	if reason := sireniaStuckReason(status, nil, time.Minute, now, defaultSireniaRepairSeedGrace, sireniaRepairRetryPendingGrace); reason != "role_mismatch" {
+		t.Fatalf("reason=%q want role_mismatch", reason)
+	}
+}
+
 func TestSireniaMetaPeersHealthyRequiresAddrs(t *testing.T) {
 	if sireniaMetaPeersHealthy(nil) {
 		t.Fatal("nil state should be unhealthy")
@@ -113,12 +191,18 @@ func TestSireniaMetaPeersHealthyRequiresAddrs(t *testing.T) {
 func TestJobsToRestartForSireniaQuorum(t *testing.T) {
 	active := "rel-active"
 	proc := "postgres"
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
 	instances := []*discoverd.Instance{
 		{Addr: "10.0.0.1:5432", Meta: map[string]string{"FLYNN_JOB_ID": "job-healthy"}},
 		{Addr: "10.0.0.2:5432", Meta: map[string]string{"FLYNN_JOB_ID": "job-unhealthy"}},
 	}
-	healthy := func(inst *discoverd.Instance) bool {
-		return inst != nil && inst.Meta["FLYNN_JOB_ID"] == "job-healthy"
+	origProbe := probeSireniaInstance
+	defer func() { probeSireniaInstance = origProbe }()
+	probeSireniaInstance = func(inst *discoverd.Instance) (*sireniaclient.Status, error) {
+		if inst != nil && inst.Meta["FLYNN_JOB_ID"] == "job-healthy" {
+			return &sireniaclient.Status{Database: &sireniaclient.DatabaseInfo{Running: true}}, nil
+		}
+		return nil, errors.New("connection refused")
 	}
 	jobs := []*ct.Job{
 		nil,
@@ -130,17 +214,64 @@ func TestJobsToRestartForSireniaQuorum(t *testing.T) {
 		{ID: "job-missing", ReleaseID: active, Type: proc, State: ct.JobStateStarting},
 		{ID: "job-crashed", ReleaseID: active, Type: proc, State: ct.JobStateCrashed},
 	}
-	restart, down := jobsToRestartForSireniaQuorum(jobs, active, proc, instances, healthy)
+	restart, reasons, down := jobsToRestartForSireniaQuorum(jobs, active, proc, instances, now)
 	if down != 1 {
 		t.Fatalf("down=%d want 1", down)
 	}
-	wantRestart := map[string]bool{"job-unhealthy": true, "job-missing": true}
+	wantRestart := map[string]string{
+		"job-unhealthy": "unreachable",
+		"job-missing":   "unregistered",
+	}
 	if len(restart) != len(wantRestart) {
-		t.Fatalf("restart=%v want %v", restart, wantRestart)
+		t.Fatalf("restart=%v reasons=%v want %v", restart, reasons, wantRestart)
 	}
 	for _, id := range restart {
-		if !wantRestart[id] {
+		if wantRestart[id] == "" {
 			t.Fatalf("unexpected restart id %q in %v", id, restart)
+		}
+		if reasons[id] != wantRestart[id] {
+			t.Fatalf("reason[%s]=%q want %q", id, reasons[id], wantRestart[id])
+		}
+	}
+}
+
+func TestJobsToRestartForSireniaQuorum_SkipsYoungSeedingJobs(t *testing.T) {
+	active := "rel-active"
+	proc := "postgres"
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	young := now.Add(-2 * time.Minute)
+	old := now.Add(-45 * time.Minute)
+	instances := []*discoverd.Instance{
+		{Addr: "10.0.0.1:5432", Meta: map[string]string{"FLYNN_JOB_ID": "job-young-seed"}},
+		{Addr: "10.0.0.2:5432", Meta: map[string]string{"FLYNN_JOB_ID": "job-old-seed"}},
+	}
+	origProbe := probeSireniaInstance
+	defer func() { probeSireniaInstance = origProbe }()
+	probeSireniaInstance = func(inst *discoverd.Instance) (*sireniaclient.Status, error) {
+		return &sireniaclient.Status{
+			Peer:     &sirenia.PeerInfo{Role: sirenia.RoleAsync},
+			Database: &sireniaclient.DatabaseInfo{Running: false},
+		}, nil
+	}
+	jobs := []*ct.Job{
+		{ID: "job-young-seed", ReleaseID: active, Type: proc, State: ct.JobStateUp, CreatedAt: &young},
+		{ID: "job-old-seed", ReleaseID: active, Type: proc, State: ct.JobStateUp, CreatedAt: &old},
+		{ID: "job-missing", ReleaseID: active, Type: proc, State: ct.JobStateStarting, CreatedAt: &young},
+	}
+	restart, reasons, down := jobsToRestartForSireniaQuorum(jobs, active, proc, instances, now)
+	if down != 0 {
+		t.Fatalf("down=%d want 0", down)
+	}
+	want := map[string]string{
+		"job-old-seed": "not_running_past_grace",
+		"job-missing":  "unregistered",
+	}
+	if len(restart) != len(want) {
+		t.Fatalf("restart=%v reasons=%v want %v", restart, reasons, want)
+	}
+	for _, id := range restart {
+		if reasons[id] != want[id] {
+			t.Fatalf("reason[%s]=%q want %q (restart=%v)", id, reasons[id], want[id], restart)
 		}
 	}
 }
@@ -154,14 +285,61 @@ func TestWaitForSireniaAsyncQuorumSkipsSmallClusters(t *testing.T) {
 
 func TestWaitForSireniaAsyncQuorumSucceedsWhenMetaReady(t *testing.T) {
 	meta, err := json.Marshal(sirenia.State{
-		Async: []*discoverd.Instance{{Addr: "10.0.0.3:5432"}},
+		Primary: &discoverd.Instance{Addr: "10.0.0.1:5432"},
+		Sync:    &discoverd.Instance{Addr: "10.0.0.2:5432"},
+		Async:   []*discoverd.Instance{{Addr: "10.0.0.3:5432"}},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	origHealth := checkSireniaInstanceHealthy
+	defer func() { checkSireniaInstanceHealthy = origHealth }()
+	checkSireniaInstanceHealthy = func(inst *discoverd.Instance) bool {
+		return inst != nil && inst.Addr != ""
+	}
 	svc := &fakeDiscoverdService{meta: &discoverd.ServiceMeta{Data: meta}}
 	if err := waitForSireniaAsyncQuorum(svc, "postgres", 3, log15.New()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWaitForSireniaAsyncQuorum_RequiresHealthyPeers(t *testing.T) {
+	meta, err := json.Marshal(sirenia.State{
+		Primary: &discoverd.Instance{Addr: "10.0.0.1:5432"},
+		Sync:    &discoverd.Instance{Addr: "10.0.0.2:5432"},
+		Async:   []*discoverd.Instance{{Addr: "10.0.0.3:5432"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	origTimeout := sireniaQuorumRepairTimeout
+	origPoll := sireniaQuorumPollInterval
+	origHealth := checkSireniaInstanceHealthy
+	defer func() {
+		sireniaQuorumRepairTimeout = origTimeout
+		sireniaQuorumPollInterval = origPoll
+		checkSireniaInstanceHealthy = origHealth
+	}()
+
+	sireniaQuorumRepairTimeout = 2 * time.Second
+	sireniaQuorumPollInterval = 20 * time.Millisecond
+
+	healthyCalls := 0
+	checkSireniaInstanceHealthy = func(inst *discoverd.Instance) bool {
+		healthyCalls++
+		// Primary+Sync+Async = up to 3 checks per meta evaluation. Fail health
+		// until a few polls have happened so the wait cannot succeed on the
+		// first meta-only check.
+		return healthyCalls > 9
+	}
+
+	svc := &fakeDiscoverdService{meta: &discoverd.ServiceMeta{Data: meta}}
+	if err := waitForSireniaAsyncQuorum(svc, "postgres", 3, log15.New()); err != nil {
+		t.Fatalf("expected wait to succeed once peers become healthy: %v (calls=%d)", err, healthyCalls)
+	}
+	if healthyCalls <= 9 {
+		t.Fatalf("expected health to fail initially, calls=%d", healthyCalls)
 	}
 }
 
@@ -234,6 +412,11 @@ func TestRepairSireniaClusterQuorumRestartsUnregisteredAndDownJobs(t *testing.T)
 		// tests do not dial fake Status() endpoints.
 		return inst != nil && inst.Addr != ""
 	}
+	origProbe := probeSireniaInstance
+	defer func() { probeSireniaInstance = origProbe }()
+	probeSireniaInstance = func(inst *discoverd.Instance) (*sireniaclient.Status, error) {
+		return &sireniaclient.Status{Database: &sireniaclient.DatabaseInfo{Running: true}}, nil
+	}
 	discoverdNewService = func(name string) discoverdService {
 		return &fakeDiscoverdService{
 			metas: []*discoverd.ServiceMeta{
@@ -290,9 +473,7 @@ func TestRepairSireniaClusterQuorumRestartsUnregisteredAndDownJobs(t *testing.T)
 }
 
 func TestRepairSireniaClusterQuorumNoopWhenSatisfiedAndHealthy(t *testing.T) {
-	// Use empty addrs so MetaPeersHealthy is false... actually we need BOTH
-	// quorum satisfied AND healthy to early-return. Healthy requires live Status.
-	// Instead verify early return for expected <= 2.
+	// Early return for expected <= 2 (singleton / small formation).
 	const (
 		appID   = "pg-app"
 		release = "rel-active"

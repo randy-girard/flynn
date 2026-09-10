@@ -63,13 +63,19 @@ const flynnGitCacheSubdir = "_git_mirrors"
 // base layers and host bind mounts often leave /var/cache/apt/archives/partial root-only, which
 // breaks pkgAcquire (Permission denied). chmod fixes the cache; APT::Sandbox::User mirrors common
 // container guidance so downloads are not forced through the _apt sandbox.
+//
+// Also: retries + IPv4, and drop leaked docker.com/mongodb sources. The builder VM adds those
+// repos for host Docker; a leaked docker.sources plus --error-on=any fails the whole image build
+// when download.docker.com blips.
 const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial && ` +
 	`chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true && ` +
 	`chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true && ` +
 	`chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true && ` +
 	`chmod -R a+rwX /var/lib/apt/lists/partial 2>/dev/null || true && ` +
 	`install -d /etc/apt/apt.conf.d && ` +
-	`printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf`
+	`printf '%s\n' 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/50flynn-apt-sandbox.conf && ` +
+	`printf '%s\n' 'Acquire::Retries "5";' 'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::ForceIPv4 "true";' > /etc/apt/apt.conf.d/80-flynn-retries && ` +
+	`rm -f /etc/apt/sources.list.d/docker.sources /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/mongodb-org-8.0.list /etc/apt/sources.list.d/mongodb-org-*.list 2>/dev/null || true`
 
 // Delimiter for heredoc wrapping apt layer commands (must not appear in layer scripts).
 const flynnAptArchiveFlockHeredoc = "FLYNN_BUILDER_APT_FLOCK_SCRIPT_EOF_7c4a8319"
@@ -1344,6 +1350,9 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		return nil, err
 	}
 	if err := installShim(b.log, dir, "flynn-git", "builder/img/flynn-git.sh", "bin/git", copyFile); err != nil {
+		return nil, err
+	}
+	if err := installShim(b.log, dir, "flynn-apt-get", "builder/img/flynn-apt-get.sh", "bin/apt-get", copyFile); err != nil {
 		return nil, err
 	}
 

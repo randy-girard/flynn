@@ -91,89 +91,42 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
   # VAGRANT_MEMORY          - instance memory, in MB
   # VAGRANT_CPUS            - instance virtual CPUs
+  #
+  # Cluster nodes node1..N. Smoke and `vagrant up nodeN` set FLYNN_MAX_NODES
+  # (default 3 so node1/node2/node3 still exist for a plain vagrant up).
+  # nodeN is 192.168.56.(19+N). Flannel VXLAN needs NIC2 promiscuous.
+  max_nodes = Integer(ENV.fetch("FLYNN_MAX_NODES", ENV.fetch("SMOKE_MAX_NODES", "3")))
+  raise "FLYNN_MAX_NODES must be >= 1 (got #{max_nodes})" if max_nodes < 1
+  (1..max_nodes).each do |i|
+    config.vm.define "node#{i}" do |runner|
+      runner.vm.hostname = "node#{i}"
+      runner.vm.synced_folder "./flynn-logs/node#{i}", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
-  config.vm.define "node1" do |runner|
-    runner.vm.hostname = "node1"
-    runner.vm.synced_folder "./flynn-logs/node1", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+      runner.disksize.size = "100GB"
+      runner.vm.provider "virtualbox" do |v, override|
+        v.memory = ENV["VAGRANT_MEMORY"] || 10000
+        v.cpus = ENV["VAGRANT_CPUS"] || 8
 
-    runner.disksize.size = "100GB"  
-    runner.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
-      v.cpus = ENV["VAGRANT_CPUS"] || 8
+        v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+        # Flannel VXLAN needs promiscuous mode on the host-only NIC (NIC2).
+        # Without this, overlay pings fail and postgres sync never reaches primary :5433.
+        v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+      end
 
-      # Enable nested virtualization if needed for containers
-      v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+      runner.vm.network "private_network", ip: "192.168.56.#{19 + i}"
+      runner.vm.network "forwarded_port", guest: 80, host: 9079 + i
+      runner.vm.network "forwarded_port", guest: 443, host: 9442 + i
+
+      runner.vm.provision "shell", privileged: true, inline: <<-SHELL
+        sudo su -l
+        apt-get update
+        #apt-get install -y lvm2
+
+        growpart /dev/sda 3
+        pvresize /dev/sda3
+        lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
+      SHELL
     end
-
-    runner.vm.network "private_network", ip: "192.168.56.20"
-    runner.vm.network "forwarded_port", guest: 80, host: 9080
-    runner.vm.network "forwarded_port", guest: 443, host: 9443
-
-    runner.vm.provision "shell", privileged: true, inline: <<-SHELL
-      sudo su -l
-      apt-get update
-      #apt-get install -y lvm2
-
-      growpart /dev/sda 3
-      pvresize /dev/sda3
-      lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
-    SHELL
-  end
-
-  config.vm.define "node2" do |runner|
-    runner.vm.hostname = "node2"
-    runner.vm.synced_folder "./flynn-logs/node2", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
-
-    runner.disksize.size = "100GB"  
-    runner.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
-      v.cpus = ENV["VAGRANT_CPUS"] || 8
-
-      # Enable nested virtualization if needed for containers
-      v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
-    end
-
-    runner.vm.network "private_network", ip: "192.168.56.21"
-    runner.vm.network "forwarded_port", guest: 80, host: 9081
-    runner.vm.network "forwarded_port", guest: 443, host: 9444
-
-    runner.vm.provision "shell", privileged: true, inline: <<-SHELL
-      sudo su -l
-      apt-get update
-      #apt-get install -y lvm2
-
-      growpart /dev/sda 3
-      pvresize /dev/sda3
-      lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
-    SHELL
-  end
-
-  config.vm.define "node3" do |runner|
-    runner.vm.hostname = "node3"
-    runner.vm.synced_folder "./flynn-logs/node3", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
-
-    runner.disksize.size = "100GB"  
-    runner.vm.provider "virtualbox" do |v, override|
-      v.memory = ENV["VAGRANT_MEMORY"] || 10000  # Increased for running multiple services
-      v.cpus = ENV["VAGRANT_CPUS"] || 8
-
-      # Enable nested virtualization if needed for containers
-      v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
-    end
-
-    runner.vm.network "private_network", ip: "192.168.56.22"
-    runner.vm.network "forwarded_port", guest: 80, host: 9082
-    runner.vm.network "forwarded_port", guest: 443, host: 9445
-
-    runner.vm.provision "shell", privileged: true, inline: <<-SHELL
-      sudo su -l
-      apt-get update
-      #apt-get install -y lvm2
-
-      growpart /dev/sda 3
-      pvresize /dev/sda3
-      lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
-    SHELL
   end
 
 end

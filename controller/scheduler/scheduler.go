@@ -1378,7 +1378,11 @@ func (s *Scheduler) HandleInternalStateRequest(req *InternalStateRequest) {
 	}
 
 	for id, job := range s.jobs {
-		req.State.Jobs[id] = &(*job)
+		// &(*job) is not a copy in Go: *job is addressable, so this aliases
+		// the live scheduler job. Tests and the debug dump then race with
+		// handleActiveJob writing StartedAt/State (go test -race).
+		j := *job
+		req.State.Jobs[id] = &j
 	}
 
 	for key, formation := range s.formations {
@@ -1422,7 +1426,11 @@ func (s *Scheduler) HandleInternalStateRequest(req *InternalStateRequest) {
 	}
 
 	for id, vol := range s.volumes {
-		req.State.Volumes[id] = &(*vol)
+		// Do not copy Volume by value: it embeds a mutex. Snapshot exported
+		// fields onto a new Volume with a fresh lock.
+		snap := &Volume{Volume: vol.Volume}
+		snap.State = vol.GetState()
+		req.State.Volumes[id] = snap
 	}
 
 	close(req.Done)

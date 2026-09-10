@@ -107,6 +107,7 @@ func (s *Simulator) initCommands() {
 		{"lspeers", "list simulated peers", "", s.LsPeers, false},
 		{"peer", "dump peer's current state", "", s.Peer, false},
 		{"rmpeer", "simulate a peer being removed from the discoverd cluster", "ID", s.RmPeer, true},
+		{"movepeer", "simulate a peer's job being replaced at a new address (same identity, data volume reused)", "NAME", s.MovePeer, true},
 		{"setClusterState", "simulate a write to the cluster state stored in discoverd", "STATE", s.SetClusterState, true},
 		{"startPeer", "start the peer state machine", "", s.StartPeer, true},
 		{"unfreeze", "unfreeze the cluster", "", s.Unfreeze, true},
@@ -271,6 +272,30 @@ func (s *Simulator) AddPeer(args []string) {
 		s.discoverd.SetClusterState(cs, false)
 	}
 
+	s.jsonDump(s.discoverd.Peers())
+}
+
+// MovePeer re-registers an existing peer identity at a fresh address, as
+// happens when a rolling deploy replaces an appliance job: the data volume
+// (and so Meta[idKey]) is reused but the new container gets a new flannel IP.
+// Cluster state is deliberately left untouched so the peer under test (the
+// primary) must reconcile it.
+func (s *Simulator) MovePeer(args []string) {
+	if len(args) != 1 || args[0] == "" {
+		s.log.Error("missing peer name")
+		return
+	}
+	name := args[0]
+	if s.allIdents[name] == nil {
+		s.log.Error("unknown peer", "name", name)
+		return
+	}
+	if name == s.peer.Self.Meta[simIdKey] {
+		s.log.Error("cannot move the peer under test", "name", name)
+		return
+	}
+	moved := s.newPeerIdent(name)
+	s.discoverd.PeerReplaced(name, moved)
 	s.jsonDump(s.discoverd.Peers())
 }
 
@@ -525,6 +550,35 @@ func (d *discoverdSimulator) PeerJoined(inst *discoverd.Instance) {
 	}
 	inst = inst.Clone()
 	d.peers = append(d.peers, inst)
+	for _, c := range d.clients {
+		c.notifyPeersChanged()
+	}
+}
+
+// PeerReplaced swaps the instance registered under name for inst in a single
+// peers-changed notification, so peers observe the identity at its new
+// address without an intermediate "peer missing" state (as in the real world
+// when the replacement registers before the old registration expires).
+func (d *discoverdSimulator) PeerReplaced(name string, inst *discoverd.Instance) {
+	d.Lock()
+	defer d.Unlock()
+
+	inst = inst.Clone()
+	inst.Index = 1
+	if len(d.peers) > 0 {
+		inst.Index = d.peers[len(d.peers)-1].Index + 1
+	}
+	replaced := false
+	for i, p := range d.peers {
+		if p.Meta[simIdKey] == name {
+			d.peers[i] = inst
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		d.peers = append(d.peers, inst)
+	}
 	for _, c := range d.clients {
 		c.notifyPeersChanged()
 	}

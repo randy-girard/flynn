@@ -15,6 +15,7 @@ var sireniaApps = []string{"postgres", "mariadb", "mongodb"}
 
 type discoverdService interface {
 	GetMeta() (*discoverd.ServiceMeta, error)
+	SetMeta(*discoverd.ServiceMeta) error
 	Instances() ([]*discoverd.Instance, error)
 }
 
