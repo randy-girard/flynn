@@ -81,4 +81,7 @@ go env CGO_ENABLED
 CGO_ENABLED=1 go env CGO_ENABLED
 
 cd /root/go/src/github.com/flynn/flynn
+# shellcheck source=script/lib/git-safe-dir.sh
+source /root/go/src/github.com/flynn/flynn/script/lib/git-safe-dir.sh
+flynn_git_safe_directory /root/go/src/github.com/flynn/flynn
 go build -o sha512_256_binary sha512_256.go

@@ -119,6 +119,18 @@ need 'FLYNN_TEST_DOCKER=0' \
   "builder unit tests must run natively (ZFS is unavailable in Docker Desktop)"
 need 'not starting cluster nodes' \
   "builder unit-test failures must abort before booting node1/2/3"
+need 'flynn_git_safe_directory' \
+  "builder must mark the synced repo safe.directory so Go VCS stamping does not fail as root"
+if ! grep -Fq -- '-buildvcs=false' "${smoke}"; then
+  echo "builder unit tests must disable Go VCS stamping (git status exit 128 on vboxsf)" >&2
+  exit 1
+fi
+need_file "${ROOT}/script/lib/git-safe-dir.sh" \
+  "git safe.directory helper must exist for Vagrant/Docker root builds"
+if ! grep -Fq -- '-buildvcs=false' "${ROOT}/script/go-build-version"; then
+  echo "go-build-version must pass -buildvcs=false (Makefile build → flynn-host)" >&2
+  exit 1
+fi
 need_file "${ROOT}/script/run-unit-tests" \
   "script/run-unit-tests must exist for the builder Linux gate"
 need_file "${ROOT}/script/lib/ui.sh" \

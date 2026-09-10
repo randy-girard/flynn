@@ -1222,12 +1222,17 @@ step_builder_unit_tests() {
   if NODE_SSH_FORCE_TTY=1 node_root_script builder <<EOF
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
-export GOFLAGS=-mod=vendor
+export GOFLAGS="-mod=vendor -buildvcs=false"
 export FLYNN_TEST_DOCKER=0
 export FLYNN_TEST_SKIP_CHECKS="${FLYNN_TEST_SKIP_CHECKS:-1}"
 export PGHOST="\${PGHOST:-/var/run/postgresql}"
 export PGSSLMODE="\${PGSSLMODE:-disable}"
 cd "${REPO_IN_VM}"
+# VirtualBox synced .git is owned by the host UID; git 2.35+ exits 128
+# ("dubious ownership") and Go fails with "error obtaining VCS status".
+# shellcheck disable=SC1091
+source "${REPO_IN_VM}/script/lib/git-safe-dir.sh"
+flynn_git_safe_directory "${REPO_IN_VM}"
 
 if [[ ! -x /usr/local/go/bin/go ]]; then
   echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
@@ -1320,6 +1325,9 @@ step_build_on_builder() {
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
 cd "${REPO_IN_VM}"
+# shellcheck disable=SC1091
+source "${REPO_IN_VM}/script/lib/git-safe-dir.sh"
+flynn_git_safe_directory "${REPO_IN_VM}"
 if [[ ! -x /usr/local/go/bin/go ]]; then
   echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
   exit 1

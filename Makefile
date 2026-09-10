@@ -28,13 +28,13 @@ GO_TEST_CHECKPTR=-gcflags=all=-d=checkptr=0
 test-unit-native: build
 	@test -x /usr/bin/mariabackup || command -v mariabackup >/dev/null || { echo >&2 "MariaDB integration tests require mariabackup (Debian/Ubuntu: apt-get install -y mariadb-backup)"; exit 1; }
 	# Exclude host/volume: those need root/ZFS and are run by test-unit-root-native.
-	env $(GO_ENV) GOFLAGS=-mod=vendor PATH=${PWD}/build/bin:${PATH} \
+	env $(GO_ENV) GOFLAGS="-mod=vendor -buildvcs=false" PATH=${PWD}/build/bin:${PATH} \
 		go test $(FLYNN_GO_TEST_FLAGS) $(GO_TEST_CHECKPTR) -race -cover \
 		$$(go list ./... | grep -v '/host/volume')
 
 test-unit-root-native: test-unit-native
 	@echo "==> host/volume tests as root (ZFS)"
-	sudo -E env $(GO_ENV) GOFLAGS=-mod=vendor PATH=${PWD}/build/bin:${PATH} \
+	sudo -E env $(GO_ENV) GOFLAGS="-mod=vendor -buildvcs=false" PATH=${PWD}/build/bin:${PATH} \
 		go test $(FLYNN_GO_TEST_FLAGS) $(GO_TEST_CHECKPTR) -race -cover ./host/volume/...
 
 # Requires Docker, ZFS/volumes, and a functional Flynn host (nested containers).
