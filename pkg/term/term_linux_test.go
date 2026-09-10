@@ -1,4 +1,5 @@
-//+build linux
+//go:build linux
+// +build linux
 
 package term
 
@@ -20,9 +21,17 @@ func RequiresRoot(t *testing.T) {
 	}
 }
 
-func newTtyForTest(t *testing.T) (*os.File, error) {
+// newTtyForTest opens the process controlling TTY. CI runs these tests as a
+// non-root user so RequiresRoot skips. Headless root (ssh without a pty)
+// cannot open /dev/tty — skip instead of failing.
+func newTtyForTest(t *testing.T) *os.File {
+	t.Helper()
 	RequiresRoot(t)
-	return os.OpenFile("/dev/tty", os.O_RDWR, os.ModeDevice)
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, os.ModeDevice)
+	if err != nil {
+		t.Skipf("controlling TTY required: %v", err)
+	}
+	return tty
 }
 
 func newTempFile() (*os.File, error) {
@@ -30,9 +39,8 @@ func newTempFile() (*os.File, error) {
 }
 
 func TestGetWinsize(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	winSize, err := GetWinsize(tty.Fd())
 	assert.NilError(t, err)
 	assert.Assert(t, winSize != nil)
@@ -48,9 +56,8 @@ func TestGetWinsize(t *testing.T) {
 var cmpWinsize = cmp.AllowUnexported(Winsize{})
 
 func TestSetWinsize(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	winSize, err := GetWinsize(tty.Fd())
 	assert.NilError(t, err)
 	assert.Assert(t, winSize != nil)
@@ -63,9 +70,8 @@ func TestSetWinsize(t *testing.T) {
 }
 
 func TestGetFdInfo(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	inFd, isTerminal := GetFdInfo(tty)
 	assert.Equal(t, inFd, tty.Fd())
 	assert.Equal(t, isTerminal, true)
@@ -78,9 +84,8 @@ func TestGetFdInfo(t *testing.T) {
 }
 
 func TestIsTerminal(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	isTerminal := IsTerminal(tty.Fd())
 	assert.Equal(t, isTerminal, true)
 	tmpFile, err := newTempFile()
@@ -91,23 +96,20 @@ func TestIsTerminal(t *testing.T) {
 }
 
 func TestSaveState(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	state, err := SaveState(tty.Fd())
 	assert.NilError(t, err)
 	assert.Assert(t, state != nil)
-	tty, err = newTtyForTest(t)
-	assert.NilError(t, err)
-	defer tty.Close()
-	err = RestoreTerminal(tty.Fd(), state)
+	tty2 := newTtyForTest(t)
+	defer tty2.Close()
+	err = RestoreTerminal(tty2.Fd(), state)
 	assert.NilError(t, err)
 }
 
 func TestDisableEcho(t *testing.T) {
-	tty, err := newTtyForTest(t)
+	tty := newTtyForTest(t)
 	defer tty.Close()
-	assert.NilError(t, err)
 	state, err := SetRawTerminal(tty.Fd())
 	defer RestoreTerminal(tty.Fd(), state)
 	assert.NilError(t, err)

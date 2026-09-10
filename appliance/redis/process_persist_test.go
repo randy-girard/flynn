@@ -71,7 +71,7 @@ func waitForAOF(t *testing.T, dataDir string) {
 // then Start on the same DataDir must return the key written before stop.
 func TestProcess_RestartKeepsSET(t *testing.T) {
 	skipWithoutRedisServer(t)
-	p := NewProcess()
+	p := NewProcess(t)
 	defer os.RemoveAll(p.DataDir)
 	if err := p.Start(); err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestProcess_RestartKeepsSET(t *testing.T) {
 // if SHUTDOWN SAVE never runs.
 func TestProcess_AOFWrittenWithoutShutdown(t *testing.T) {
 	skipWithoutRedisServer(t)
-	p := NewProcess()
+	p := NewProcess(t)
 	defer os.RemoveAll(p.DataDir)
 	if err := p.Start(); err != nil {
 		t.Fatal(err)

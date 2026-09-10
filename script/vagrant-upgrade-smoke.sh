@@ -3,18 +3,24 @@
 # Vagrant 3-node Flynn upgrade smoke test (local builder only).
 #
 # Flow:
-#   1. Boot builder + node1/2/3
-#   2. Build Flynn on the builder and package a release tarball into the
+#   1. Run host unit tests (CLI clickhouse stdin policy, datastore/overlay
+#      regressions, Darwin-safe Go packages). Fail before Vagrant if any fail.
+#   2. Boot the builder VM only, then run the full Linux unit suite there
+#      (redis, postgres, mariadb, mongodb, zfs/netlink). Fail before booting
+#      node1/2/3 if that suite fails. Docker Desktop cannot load ZFS, so the
+#      builder is the Linux gate — not script/run-unit-tests in Docker.
+#   3. Boot node1/2/3
+#   4. Build Flynn on the builder and package a release tarball into the
 #      repo's build/release/ (shared with nodes via Vagrant synced folder)
-#   3. Install that tarball on node1/2/3 from the mounted path
-#   4. Bootstrap, deploy test/apps/upgrade-smoke with every datastore
+#   5. Install that tarball on node1/2/3 from the mounted path
+#   6. Bootstrap, deploy test/apps/upgrade-smoke with every datastore
 #      provider (postgres/mysql/mongodb/redis/kafka/clickhouse), embed
 #      dummy slug blobs, and seed dummy rows/keys/topics
-#   5. Verify HTTP + /status resource env + per-engine row/key/topic counts
-#   6. Run flynn-host update --all-nodes --tarball <same build> --force
+#   7. Verify HTTP + /status resource env + per-engine row/key/topic counts
+#   8. Run flynn-host update --all-nodes --tarball <same build> --force
 #      twice (sirenia/redis volume bugs have shown up on the second pass)
-#   7. Verify after each pass, tear down cluster nodes, print a step table
-#      plus a per-engine app/datastore persistence report
+#   9. Verify after each pass, tear down cluster nodes, print a step table,
+#      unit-test results, and a per-engine persistence report
 #
 # Local-only: layer-0 uses --peer-ips (no discovery service). Init waits for
 # flynn-host HTTP (:1113); discoverd (:1111) starts during bootstrap. Layer-1
@@ -40,6 +46,9 @@
 #   KEEP_VMS_ON_FAIL=1   On failure, keep VMs for debugging (default: destroy all)
 #   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node1,node2,node3}
 #                        at start (default: clear so each run has fresh logs)
+#   SKIP_UNIT_TESTS=1            Skip host + builder Linux pre-cluster unit gates
+#   SKIP_BUILDER_UNIT_TESTS=1    Skip only the builder Linux suite (host tests
+#                                still run). SKIP_DOCKER_UNIT_TESTS=1 is an alias.
 #   SKIP_VAGRANT_UP=1    Assume VMs are already running
 #   SKIP_BUILD=1         Skip builder build; use existing
 #                        build/release/flynn-${BUILD_VERSION}.tar.gz
@@ -47,10 +56,15 @@
 #                        (skips install+init+bootstrap)
 #   RESUME_AT=bootstrap  Skip vagrant/build/install/init; run bootstrap onward
 #                        (nodes must already have flynn-host inited and :1113 up)
+#   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
+#                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
 #   SMOKE_SEED_ROWS=N    Dummy rows/keys seeded per datastore [default: 200]
 #   SMOKE_BLOB_COUNT=N   Extra slug files embedded in the test app [default: 100]
+#   SMOKE_DETAIL=1       Stream command output live (default: hide it; STEP/
+#                        STEP OK/WARN stay visible; Ctrl+R expands the log
+#                        without echoing ^R)
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #
 
@@ -80,16 +94,33 @@ KEEP_VMS="${KEEP_VMS:-${SKIP_TEARDOWN:-0}}"
 KEEP_BUILDER="${KEEP_BUILDER:-1}"
 KEEP_VMS_ON_FAIL="${KEEP_VMS_ON_FAIL:-0}"
 KEEP_LOGS="${KEEP_LOGS:-0}"
+SKIP_UNIT_TESTS="${SKIP_UNIT_TESTS:-0}"
+SKIP_BUILDER_UNIT_TESTS="${SKIP_BUILDER_UNIT_TESTS:-${SKIP_DOCKER_UNIT_TESTS:-0}}"
 SKIP_VAGRANT_UP="${SKIP_VAGRANT_UP:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
+SKIP_DEPLOY="${SKIP_DEPLOY:-0}"
+SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
 UPGRADE_PASSES="${UPGRADE_PASSES:-2}"
 SMOKE_SEED_ROWS="${SMOKE_SEED_ROWS:-200}"
 SMOKE_BLOB_COUNT="${SMOKE_BLOB_COUNT:-100}"
+SMOKE_DETAIL="${SMOKE_DETAIL:-0}"
 RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder node1 node2 node3)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
+# Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
+# so a broken CLI/datastore change cannot burn a 3-node cluster boot.
+SMOKE_UNIT_PACKAGES=(
+  ./cli/
+  ./controller/types/
+  ./pkg/updaterdeploy/
+  ./pkg/sirenia/state/
+  ./pkg/iptables/
+  ./appliance/clickhouse/
+  ./appliance/redis/
+  ./updater/
+)
 
 RESULT_NAMES=()
 RESULT_STATUS=()
@@ -100,12 +131,26 @@ BUILT_TARBALL=""
 STARTED_AT="$(date +%s)"
 WORK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/flynn-upgrade-smoke.XXXXXX")"
 LAST_STEP_LOG="${WORK_DIR}/last-step.log"
+SMOKE_RUN_LOG="${WORK_DIR}/smoke.log"
 CHECK_FILE="${WORK_DIR}/checks.tsv"
+UNIT_CHECK_FILE="${WORK_DIR}/unit-checks.tsv"
 : > "${CHECK_FILE}"
+: > "${UNIT_CHECK_FILE}"
+: > "${SMOKE_RUN_LOG}"
 CLEANUP_DONE=0
 ABORTING=0
+BUILDER_STARTED=0
+CLUSTER_STARTED=0
+SMOKE_DETAIL_LIVE=0
+SMOKE_DETAIL_TAIL_PID=""
+SMOKE_STTY_SAVED=""
+STEP_PID=""
+STEP_RC_FILE="${WORK_DIR}/step.rc"
 
 cleanup() {
+  smoke_stop_detail_tail
+  smoke_restore_tty
+  ui_session_end 2>/dev/null || true
   rm -rf "${WORK_DIR}"
 }
 trap cleanup EXIT
@@ -127,7 +172,7 @@ on_err() {
 trap 'on_err $? $LINENO' ERR
 
 usage() {
-  sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
+  awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
 }
 
 require_bin() {
@@ -162,6 +207,18 @@ record_check() {
   fi
 }
 
+# Host unit-test gate. Same file-backed pattern as record_check (run_step is a
+# subshell). Failures here abort before Vagrant up.
+record_unit_check() {
+  local kind=$1 name=$2 status=$3 detail=${4:-}
+  detail="${detail//$'\t'/ }"
+  detail="${detail//$'\n'/ }"
+  printf '%s\t%s\t%s\t%s\n' "${kind}" "${name}" "${status}" "${detail}" >> "${UNIT_CHECK_FILE}"
+  if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
+    OVERALL_FAILED=1
+  fi
+}
+
 step_log_summary() {
   if [[ ! -s "${LAST_STEP_LOG}" ]]; then
     echo ""
@@ -170,13 +227,44 @@ step_log_summary() {
   awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" | tr '\n' ' ' | cut -c1-160
 }
 
+print_unit_report() {
+  echo
+  ui_banner "================================================================================"
+  ui_banner " Unit tests (host + builder Linux gate)"
+  ui_banner "================================================================================"
+  if [[ ! -s "${UNIT_CHECK_FILE}" ]]; then
+    echo " (no host unit tests recorded)"
+    echo "================================================================================"
+    return
+  fi
+  printf "| %-8s | %-48s | %-6s | %s\n" "Kind" "Check" "Status" "Detail"
+  printf "|----------|--------------------------------------------------|--------|%s\n" "----------------------------------------"
+  local kind name status detail failed=0 total=0
+  while IFS=$'\t' read -r kind name status detail; do
+    [[ -z "${kind}" ]] && continue
+    total=$((total + 1))
+    if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
+      failed=$((failed + 1))
+      OVERALL_FAILED=1
+    fi
+    printf "| %-8s | %-48s | %s | %s\n" "${kind}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+  done < "${UNIT_CHECK_FILE}"
+  local tot_status="PASS" tot_detail="all host unit tests passed"
+  if [[ ${failed} -ne 0 ]]; then
+    tot_status="FAIL"
+    tot_detail="${failed} failed"
+  fi
+  printf "| %-8s | %-48s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  ui_banner "================================================================================"
+}
+
 print_datastore_report() {
   echo
-  echo "================================================================================"
-  echo " App & datastore persistence"
+  ui_banner "================================================================================"
+  ui_banner " App & datastore persistence"
   echo " app=${APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " providers=${DATASTORE_PROVIDERS[*]}"
-  echo "================================================================================"
+  ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
     echo " (no app/datastore checks recorded — verify steps did not run)"
     echo "================================================================================"
@@ -192,15 +280,15 @@ print_datastore_report() {
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-16s | %-14s | %-6s | %s\n" "${phase}" "${name}" "${status}" "${detail}"
+    printf "| %-16s | %-14s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
   done < "${CHECK_FILE}"
   local tot_status="PASS" tot_detail="all app/DB checks passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-16s | %-14s | %-6s | %s\n" "TOTAL" "${total} checks" "${tot_status}" "${tot_detail}"
-  echo "================================================================================"
+  printf "| %-16s | %-14s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  ui_banner "================================================================================"
 }
 
 print_results_table() {
@@ -211,26 +299,27 @@ print_results_table() {
   fi
 
   echo
-  echo "================================================================================"
-  echo " Flynn Vagrant upgrade smoke results (local build)"
+  ui_banner "================================================================================"
+  ui_banner " Flynn Vagrant upgrade smoke results (local build)"
   echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}"
   echo " seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
   fi
-  echo "================================================================================"
+  ui_banner "================================================================================"
   printf "| %-42s | %-6s | %8s | %s\n" "Step" "Status" "Duration" "Detail"
   printf "|--------------------------------------------|--------|----------|%s\n" "----------------------------------------"
   local i
   for i in "${!RESULT_NAMES[@]}"; do
-    printf "| %-42s | %-6s | %7ss | %s\n" \
+    printf "| %-42s | %s | %7ss | %s\n" \
       "${RESULT_NAMES[$i]}" \
-      "${RESULT_STATUS[$i]}" \
+      "$(ui_status_text "${RESULT_STATUS[$i]}")" \
       "${RESULT_SECONDS[$i]}" \
       "${RESULT_DETAIL[$i]}"
   done
-  printf "| %-42s | %-6s | %7ss | %s\n" "OVERALL" "${overall}" "${total}" ""
-  echo "================================================================================"
+  printf "| %-42s | %s | %7ss | %s\n" "OVERALL" "$(ui_status_text "${overall}")" "${total}" ""
+  ui_banner "================================================================================"
+  print_unit_report
   print_datastore_report
 
   local preserved="${ROOT}/.vagrant-upgrade-smoke-last-results.txt"
@@ -240,6 +329,12 @@ print_results_table() {
     for i in "${!RESULT_NAMES[@]}"; do
       echo "step ${RESULT_STATUS[$i]} ${RESULT_SECONDS[$i]}s ${RESULT_NAMES[$i]} :: ${RESULT_DETAIL[$i]}"
     done
+    echo "--- host unit tests ---"
+    if [[ ! -s "${UNIT_CHECK_FILE}" ]]; then
+      echo "(none recorded)"
+    else
+      cat "${UNIT_CHECK_FILE}"
+    fi
     echo "--- app/datastore ---"
     if [[ ! -s "${CHECK_FILE}" ]]; then
       echo "(none recorded)"
@@ -256,9 +351,9 @@ print_failure_banner() {
   local name=$1
   local detail=$2
   echo >&2
-  echo "################################################################################" >&2
-  echo "# FAILURE: ${name}" >&2
-  echo "################################################################################" >&2
+  say "################################################################################" "red" >&2
+  say "# FAILURE: ${name}" "red" >&2
+  say "################################################################################" "red" >&2
   if [[ -n "${detail}" ]]; then
     echo "${detail}" >&2
   fi
@@ -284,12 +379,96 @@ destroy_all_vms() {
   vagrant destroy -f builder node1 node2 node3 || true
 }
 
+smoke_stop_detail_tail() {
+  local pid="${SMOKE_DETAIL_TAIL_PID:-}"
+  SMOKE_DETAIL_TAIL_PID=""
+  if [[ -n "${pid}" ]]; then
+    kill "${pid}" 2>/dev/null || true
+    wait "${pid}" 2>/dev/null || true
+  fi
+}
+
+smoke_restore_tty() {
+  if [[ -n "${SMOKE_STTY_SAVED:-}" ]] && [[ -e /dev/tty ]]; then
+    stty "${SMOKE_STTY_SAVED}" < /dev/tty 2>/dev/null || true
+  fi
+  SMOKE_STTY_SAVED=""
+}
+
+# Consume Ctrl+R ourselves. The default tty "rprnt" character is also Ctrl+R
+# and reprints as a literal ^R; a SIGINFO rebind does not work in Cursor's
+# terminal, so we disable rprnt/echo and read the byte from /dev/tty.
+smoke_prepare_tty() {
+  [[ "${SMOKE_DETAIL}" == "1" ]] && return 0
+  [[ -e /dev/tty ]] || return 0
+  SMOKE_STTY_SAVED="$(stty -g < /dev/tty 2>/dev/null || true)"
+  [[ -n "${SMOKE_STTY_SAVED}" ]] || return 0
+  stty -echo -echoctl < /dev/tty 2>/dev/null || true
+  stty rprnt undef < /dev/tty 2>/dev/null \
+    || stty rprnt ^- < /dev/tty 2>/dev/null \
+    || true
+  trap 'smoke_on_int' INT
+}
+
+smoke_on_int() {
+  trap - INT
+  smoke_stop_detail_tail
+  if [[ -n "${STEP_PID:-}" ]]; then
+    kill "${STEP_PID}" 2>/dev/null || true
+    wait "${STEP_PID}" 2>/dev/null || true
+  fi
+  exit 130
+}
+
+smoke_toggle_detail() {
+  if [[ "${SMOKE_DETAIL_LIVE}" == "1" ]]; then
+    SMOKE_DETAIL_LIVE=0
+    _UI_COLLAPSE_BODY=1
+    smoke_stop_detail_tail
+    info "command output hidden — Ctrl+R to show"
+    return 0
+  fi
+  SMOKE_DETAIL_LIVE=1
+  _UI_COLLAPSE_BODY=0
+  info "command output shown — Ctrl+R to hide"
+  if [[ -e /dev/tty ]] && [[ -f "${LAST_STEP_LOG}" ]]; then
+    tail -n 80 -f "${LAST_STEP_LOG}" >/dev/tty 2>/dev/null &
+    SMOKE_DETAIL_TAIL_PID=$!
+  fi
+}
+
+# Non-blocking-enough poll: bash 3.2 read -t is whole seconds. Timeout must
+# not trip the ERR trap. Swallow the key so it never echoes as ^R.
+smoke_poll_detail_key() {
+  local key=""
+  [[ -e /dev/tty ]] || return 0
+  read -t 1 -n 1 -s key < /dev/tty || true
+  if [[ "${key}" == $'\x12' ]]; then
+    smoke_toggle_detail
+  fi
+}
+
+smoke_wait_collapsed_step() {
+  local wrapper=$1
+  if [[ ! -e /dev/tty ]]; then
+    wait "${wrapper}" || true
+    return 0
+  fi
+  while [[ ! -f "${STEP_RC_FILE}" ]]; do
+    smoke_poll_detail_key
+  done
+  wait "${wrapper}" 2>/dev/null || true
+}
+
 # Always stop the run, print the error, tear down VMs (unless opted out), and exit.
 fail_shutdown() {
   local name=$1
   local elapsed=$2
   local detail=$3
 
+  smoke_stop_detail_tail
+  smoke_restore_tty
+  _UI_COLLAPSE_BODY=0
   # Prevent ERR trap recursion while we are already shutting down.
   trap - ERR
   ABORTING=1
@@ -305,8 +484,12 @@ fail_shutdown() {
 
   if [[ "${KEEP_VMS}" == "1" || "${KEEP_VMS_ON_FAIL}" == "1" ]]; then
     warn "keeping VMs for debugging (KEEP_VMS/KEEP_VMS_ON_FAIL=1)"
-  else
+  elif [[ "${CLUSTER_STARTED}" == "1" ]]; then
     destroy_all_vms
+  elif [[ "${BUILDER_STARTED}" == "1" ]]; then
+    info "builder unit-test/pre-cluster failure: keeping builder, not destroying cluster nodes (none started)"
+  else
+    info "pre-cluster failure: not destroying VMs"
   fi
   exit 1
 }
@@ -319,14 +502,33 @@ run_step() {
   start="$(date +%s)"
   : > "${LAST_STEP_LOG}"
 
-  # Subshell keeps errexit on for the step. Pipe through tee for live logs, but
-  # take PIPESTATUS[0] so a failing step is not masked by tee's exit code.
+  # Subshell keeps errexit on for the step. Command output goes to the step
+  # log (and the run log). Default is collapsed: the terminal only shows
+  # STEP/STEP OK/WARN; the final report tables are printed after all steps.
+  # SMOKE_DETAIL=1 streams chatter live. Ctrl+R toggles a tail of the step log.
   set +e
-  (
-    set -euo pipefail
-    "$@"
-  ) 2>&1 | tee -a "${LAST_STEP_LOG}"
-  rc=${PIPESTATUS[0]}
+  if [[ "${SMOKE_DETAIL}" == "1" ]]; then
+    (
+      set -euo pipefail
+      "$@"
+    ) 2>&1 | tee -a "${LAST_STEP_LOG}" "${SMOKE_RUN_LOG}"
+    rc=${PIPESTATUS[0]}
+  else
+    rm -f "${STEP_RC_FILE}"
+    (
+      set +e
+      (
+        set -euo pipefail
+        "$@"
+      ) </dev/null 2>&1 | tee -a "${LAST_STEP_LOG}" "${SMOKE_RUN_LOG}" >/dev/null
+      echo "${PIPESTATUS[0]}" > "${STEP_RC_FILE}.tmp"
+      mv "${STEP_RC_FILE}.tmp" "${STEP_RC_FILE}"
+    ) &
+    STEP_PID=$!
+    smoke_wait_collapsed_step "${STEP_PID}"
+    STEP_PID=""
+    rc="$(cat "${STEP_RC_FILE}" 2>/dev/null || echo 1)"
+  fi
   set -e
 
   end="$(date +%s)"
@@ -338,7 +540,7 @@ run_step() {
   fi
   # Never advance to the next step without an explicit PASS record.
   record "${name}" "PASS" "${elapsed}" "$(step_log_summary)"
-  info "STEP OK: ${name} (${elapsed}s) — continuing"
+  ok "STEP OK: ${name} (${elapsed}s) — continuing"
 }
 
 node_ssh() {
@@ -389,7 +591,11 @@ node_ssh_exec() {
     cache_node_ssh_config "${node}"
     cfg="$(node_ssh_config_path "${node}")"
   fi
-  ssh -F "${cfg}" -o BatchMode=yes "${node}" -- "$@"
+  if [[ "${NODE_SSH_FORCE_TTY:-0}" == "1" ]]; then
+    ssh -F "${cfg}" -o BatchMode=yes -tt "${node}" -- "$@"
+  else
+    ssh -F "${cfg}" -o BatchMode=yes "${node}" -- "$@"
+  fi
 }
 
 # Run a bash script as root on a node. Writes stdin to a synced-folder temp
@@ -853,26 +1059,158 @@ EOF
 flynn1() {
   local args_q
   args_q="$(printf '%q ' "$@")"
-  node_ssh node1 "sudo -H flynn ${args_q}"
+  # Close stdin. `flynn run` attaches it to the job, and clickhouse-client
+  # INSERT VALUES (and mongo shells without --eval) wait forever on a TTY.
+  node_ssh node1 "sudo -H flynn ${args_q}" </dev/null
 }
 
-step_vagrant_up() {
+step_host_unit_tests() {
+  local failed=0 start elapsed rc
+  local script pkg name
+  local packages=( "${SMOKE_UNIT_PACKAGES[@]}" )
+
+  echo "host unit-test gate: smoke regressions + Darwin-safe Go packages"
+  echo "failures abort before Vagrant up / cluster build"
+
+  local smoke_scripts=( "${ROOT}"/script/test-vagrant-smoke-*.sh )
+  if [[ ${#smoke_scripts[@]} -eq 0 ]]; then
+    echo "no script/test-vagrant-smoke-*.sh found" >&2
+    record_unit_check "script" "test-vagrant-smoke-*.sh" "FAIL" "none found"
+    return 1
+  fi
+  for script in "${smoke_scripts[@]}"; do
+    name="$(basename "${script}")"
+    echo "==> bash script/${name}"
+    start="$(date +%s)"
+    if bash "${script}"; then
+      elapsed=$(( $(date +%s) - start ))
+      record_unit_check "script" "${name}" "PASS" "${elapsed}s"
+    else
+      rc=$?
+      elapsed=$(( $(date +%s) - start ))
+      record_unit_check "script" "${name}" "FAIL" "exit ${rc} ${elapsed}s"
+      failed=1
+    fi
+  done
+
+  if [[ "$(uname -s)" == "Linux" ]]; then
+    packages+=( ./flannel/backend/vxlan/ )
+  fi
+
+  for pkg in "${packages[@]}"; do
+    echo "==> go test ${pkg}"
+    start="$(date +%s)"
+    # shellcheck disable=SC2086
+    if go test -mod=vendor -count=1 ${FLYNN_GO_TEST_FLAGS:-} "${pkg}"; then
+      elapsed=$(( $(date +%s) - start ))
+      record_unit_check "go" "${pkg}" "PASS" "${elapsed}s"
+    else
+      rc=$?
+      elapsed=$(( $(date +%s) - start ))
+      record_unit_check "go" "${pkg}" "FAIL" "exit ${rc} ${elapsed}s"
+      failed=1
+    fi
+  done
+
+  echo "==> go test test/apps/upgrade-smoke"
+  start="$(date +%s)"
+  if ( cd "${ROOT}/test/apps/upgrade-smoke" && go test -count=1 ${FLYNN_GO_TEST_FLAGS:-} . ); then
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "go" "test/apps/upgrade-smoke" "PASS" "${elapsed}s"
+  else
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "go" "test/apps/upgrade-smoke" "FAIL" "exit ${rc} ${elapsed}s"
+    failed=1
+  fi
+
+  if [[ "${failed}" -ne 0 ]]; then
+    echo "host unit tests failed; not starting Vagrant cluster" >&2
+    return 1
+  fi
+  echo "host unit tests passed"
+}
+
+# Full Linux suite on the builder VM (real kernel: zfs, netlink, redis-server,
+# postgres, mariadb, mongodb). Docker Desktop cannot load ZFS, so this is the
+# smoke Linux gate — not script/run-unit-tests in Docker.
+step_builder_unit_tests() {
+  local start elapsed rc
+  echo "builder unit-test gate: native Linux suite via script/run-unit-tests"
+  echo "builder provides redis, postgresql, mariadb, mongodb, zfsutils, netlink"
+  echo "failures abort before booting node1/2/3"
+
+  start="$(date +%s)"
+  # Force a remote PTY so pkg/term can open /dev/tty (same reason Docker uses -t).
+  if NODE_SSH_FORCE_TTY=1 node_root_script builder <<EOF
+set -euo pipefail
+export PATH=/usr/local/go/bin:\$PATH
+export GOFLAGS=-mod=vendor
+export FLYNN_TEST_DOCKER=0
+export FLYNN_TEST_SKIP_CHECKS="${FLYNN_TEST_SKIP_CHECKS:-1}"
+export PGHOST="\${PGHOST:-/var/run/postgresql}"
+export PGSSLMODE="\${PGSSLMODE:-disable}"
+cd "${REPO_IN_VM}"
+
+if [[ ! -x /usr/local/go/bin/go ]]; then
+  echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
+  exit 1
+fi
+
+echo "==> Starting PostgreSQL"
+pg_version="\$(ls /usr/lib/postgresql 2>/dev/null | sort -V | tail -n1 || true)"
+if [[ -n "\${pg_version}" ]]; then
+  pg_ctlcluster "\${pg_version}" main start || service postgresql start || true
+else
+  service postgresql start || true
+fi
+sudo -u postgres createuser -s root 2>/dev/null || true
+
+echo "==> Starting MariaDB"
+service mariadb start 2>/dev/null || service mysql start 2>/dev/null || true
+
+echo "==> Starting Redis"
+service redis-server start 2>/dev/null || service redis start 2>/dev/null || true
+
+echo "==> ZFS"
+if modprobe zfs 2>/dev/null && [[ -e /dev/zfs ]] && command -v zpool >/dev/null 2>&1; then
+  echo "ZFS kernel module loaded; host/volume tests enabled"
+else
+  echo "ZFS unavailable; skipping host/volume tests"
+  export FLYNN_SKIP_VOLUME_TESTS=1
+fi
+
+script/run-unit-tests
+EOF
+  then
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "builder" "script/run-unit-tests" "PASS" "${elapsed}s"
+  else
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "builder" "script/run-unit-tests" "FAIL" "exit ${rc} ${elapsed}s"
+    echo "builder unit tests failed; not starting cluster nodes" >&2
+    return 1
+  fi
+  echo "builder unit tests passed"
+}
+
+step_vagrant_up_builder() {
   local builder_mem="${BUILDER_MEMORY:-30000}"
   local builder_cpus="${BUILDER_CPUS:-8}"
-  # kafka + clickhouse + three sirenia appliances need more than the old 4GiB
-  # default or the second --force update OOMs a node.
-  local node_mem="${VAGRANT_MEMORY:-6144}"
-  local node_cpus="${VAGRANT_CPUS:-2}"
-
   info "starting builder (memory=${builder_mem} cpus=${builder_cpus})"
   VAGRANT_MEMORY="${builder_mem}" VAGRANT_CPUS="${builder_cpus}" vagrant up builder
+  echo "builder up"
+}
 
+step_vagrant_up_nodes() {
+  local node_mem="${VAGRANT_MEMORY:-6144}"
+  local node_cpus="${VAGRANT_CPUS:-2}"
   info "starting cluster nodes (memory=${node_mem} cpus=${node_cpus})"
   VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up node1 node2 node3
-
   info "verifying VirtualBox NIC2 promiscuous mode (required for flannel VXLAN)"
   verify_nic_promisc
-  echo "VMs up"
+  echo "cluster nodes up"
 }
 
 builder_has_base_squashfs() {
@@ -1388,6 +1726,7 @@ assert_databases() {
   local failed=0
   local out count payload
 
+  echo "db-check ${label}: postgres"
   out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
   payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
@@ -1399,6 +1738,7 @@ assert_databases() {
     failed=1
   fi
 
+  echo "db-check ${label}: mysql"
   out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
   payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
@@ -1410,6 +1750,7 @@ assert_databases() {
     failed=1
   fi
 
+  echo "db-check ${label}: mongodb"
   out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
@@ -1420,6 +1761,7 @@ assert_databases() {
     failed=1
   fi
 
+  echo "db-check ${label}: redis"
   out="$(flynn1 -a "${APP_NAME}" redis redis-cli GET smoke_probe)"
   local aof
   aof="$(flynn1 -a "${APP_NAME}" redis redis-cli INFO persistence)"
@@ -1432,6 +1774,7 @@ assert_databases() {
     failed=1
   fi
 
+  echo "db-check ${label}: kafka"
   out="$(flynn1 -a "${APP_NAME}" kafka topics)"
   if echo "${out}" | grep -q smoke_probe; then
     record_check "${label}" "kafka" "PASS" "topic=smoke_probe"
@@ -1441,6 +1784,7 @@ assert_databases() {
     failed=1
   fi
 
+  echo "db-check ${label}: clickhouse"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "${label}" "clickhouse" "PASS" "rows=${count}"
@@ -1475,11 +1819,14 @@ assert_databases() {
     return 1
   fi
 
+  echo "db-check ${label}: writing persistence markers"
   flynn1 -a "${APP_NAME}" pg psql -- -c "INSERT INTO smoke_probe (data) VALUES ('${label}');" >/dev/null
   flynn1 -a "${APP_NAME}" mysql console -- -e "INSERT INTO smoke_probe (id, data) VALUES ($((RANDOM % 100000 + 2)), '${label}');" >/dev/null
   flynn1 -a "${APP_NAME}" mongodb mongo -- --eval "db.smoke_probe.insertOne({data:'${label}'});" >/dev/null
   flynn1 -a "${APP_NAME}" redis redis-cli SET "smoke_probe_${label}" 1 >/dev/null
-  flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO smoke_db.rows VALUES (100000 + ${RANDOM}, '${label}')" >/dev/null || true
+  # INSERT SELECT, not VALUES: clickhouse-client treats VALUES as "read more
+  # rows from stdin" and never exits while flynn run keeps stdin open.
+  flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT toUInt32(100000 + ${RANDOM}), '${label}'" >/dev/null || true
 
   echo "databases ${label}: postgres/mysql/mongodb/redis/kafka/clickhouse PASS (rows>=${rows})"
 }
@@ -1542,12 +1889,27 @@ main() {
   fi
 
   require_bin vagrant curl python3 git
+  if [[ "${SKIP_UNIT_TESTS}" != "1" ]]; then
+    require_bin go
+  fi
 
   if [[ -z "${BUILD_VERSION}" ]]; then
     BUILD_VERSION="$(default_build_version)"
   fi
 
+  ui_session_begin
+  if [[ "${SMOKE_DETAIL}" == "1" ]]; then
+    _UI_COLLAPSE_BODY=0
+  else
+    _UI_COLLAPSE_BODY=1
+    smoke_prepare_tty
+  fi
   info "local build smoke: version=${BUILD_VERSION}"
+  if [[ "${SMOKE_DETAIL}" == "1" ]]; then
+    info "command output live (SMOKE_DETAIL=1)"
+  else
+    info "command output collapsed — Ctrl+R expands the current step (SMOKE_DETAIL=1 for always on)"
+  fi
 
   # RESUME_AT=bootstrap: pick up after a failed/aborted run when layer-0 is already up.
   if [[ "${RESUME_AT}" == "bootstrap" ]]; then
@@ -1557,15 +1919,50 @@ main() {
     # Re-enable bootstrap despite SKIP_INSTALL's usual "skip all cluster setup".
     RESUME_BOOTSTRAP=1
   fi
+  if [[ "${RESUME_AT}" == "upgrade" ]]; then
+    SKIP_VAGRANT_UP=1
+    SKIP_BUILD=1
+    SKIP_INSTALL=1
+    SKIP_DEPLOY=1
+    SKIP_VERIFY_BEFORE=1
+  fi
+
+  # Fail before touching VMs or wiping flynn-logs if the host-side tree is broken.
+  if [[ "${SKIP_UNIT_TESTS}" == "1" ]]; then
+    record "Host unit tests (pre-cluster)" "SKIP" 0 "SKIP_UNIT_TESTS=1"
+    record_unit_check "gate" "host" "SKIP" "SKIP_UNIT_TESTS=1"
+  else
+    run_step "Host unit tests (pre-cluster)" step_host_unit_tests
+  fi
 
   clear_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" ]]; then
-    record "Vagrant up (builder+nodes)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
+    record "Vagrant up (builder)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
+    cache_node_ssh_config builder
+    BUILDER_STARTED=1
   else
-    run_step "Vagrant up (builder+nodes)" step_vagrant_up
+    run_step "Vagrant up (builder)" step_vagrant_up_builder
+    BUILDER_STARTED=1
+    cache_node_ssh_config builder
   fi
-  cache_all_node_ssh_configs
+
+  if [[ "${SKIP_UNIT_TESTS}" == "1" || "${SKIP_BUILDER_UNIT_TESTS}" == "1" ]]; then
+    record "Builder unit tests (pre-cluster)" "SKIP" 0 "SKIP_UNIT_TESTS/SKIP_BUILDER_UNIT_TESTS=1"
+    record_unit_check "builder" "script/run-unit-tests" "SKIP" "skipped"
+  else
+    run_step "Builder unit tests (pre-cluster)" step_builder_unit_tests
+  fi
+
+  if [[ "${SKIP_VAGRANT_UP}" == "1" ]]; then
+    record "Vagrant up (cluster nodes)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
+    CLUSTER_STARTED=1
+    cache_all_node_ssh_configs
+  else
+    run_step "Vagrant up (cluster nodes)" step_vagrant_up_nodes
+    CLUSTER_STARTED=1
+    cache_all_node_ssh_configs
+  fi
 
   if [[ "${SKIP_BUILD}" == "1" ]]; then
     record "Build Flynn on builder (${BUILD_VERSION})" "SKIP" 0 "SKIP_BUILD=1"
@@ -1599,8 +1996,16 @@ main() {
     run_step "Bootstrap cluster" step_bootstrap
   fi
 
-  run_step "Deploy app + DB resources" step_deploy_app
-  run_step "Verify app/DBs before upgrade" step_verify_before
+  if [[ "${SKIP_DEPLOY}" == "1" ]]; then
+    record "Deploy app + DB resources" "SKIP" 0 "SKIP_DEPLOY=1"
+  else
+    run_step "Deploy app + DB resources" step_deploy_app
+  fi
+  if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+    record "Verify app/DBs before upgrade" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"
+  else
+    run_step "Verify app/DBs before upgrade" step_verify_before
+  fi
 
   if [[ "${SKIP_UPGRADE}" == "1" ]]; then
     record "Upgrade --all-nodes (local tarball)" "SKIP" 0 "SKIP_UPGRADE=1"
@@ -1619,6 +2024,9 @@ main() {
     run_step "Teardown VMs" teardown_vms
   fi
 
+  smoke_stop_detail_tail
+  smoke_restore_tty
+  _UI_COLLAPSE_BODY=0
   print_results_table
   exit "${OVERALL_FAILED}"
 }

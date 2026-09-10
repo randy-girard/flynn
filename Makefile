@@ -33,6 +33,7 @@ test-unit-native: build
 		$$(go list ./... | grep -v '/host/volume')
 
 test-unit-root-native: test-unit-native
+	@echo "==> host/volume tests as root (ZFS)"
 	sudo -E env $(GO_ENV) GOFLAGS=-mod=vendor PATH=${PWD}/build/bin:${PATH} \
 		go test $(FLYNN_GO_TEST_FLAGS) $(GO_TEST_CHECKPTR) -race -cover ./host/volume/...
 
