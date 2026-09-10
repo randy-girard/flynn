@@ -2,9 +2,12 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
 )
 
@@ -130,6 +133,7 @@ func getClickhouseRunConfig(client controller.Client, app string, appRelease *ct
 
 func runClickhouseClient(args *docopt.Args, client controller.Client, config *runConfig) error {
 	config.Args = clickhouseAdmin(args.All["<argument>"].([]string)...)
+	closeClickhouseStdinIfQueryOnTTY(config)
 	return runJob(client, *config)
 }
 
@@ -153,7 +157,40 @@ func runClickhouseDatabases(args *docopt.Args, client controller.Client, config 
 			"SELECT name FROM system.databases WHERE name NOT IN ('system', 'INFORMATION_SCHEMA', 'information_schema', 'default') ORDER BY name FORMAT PrettyCompact",
 		)
 	}
+	closeClickhouseStdinIfQueryOnTTY(config)
 	return runJob(client, *config)
+}
+
+// clickhouse-client INSERT VALUES reads extra rows from stdin. flynn run keeps a
+// TTY attached until EOF, so `--query "INSERT ... VALUES (...)"` never exits.
+// Close stdin for --query when the CLI is a terminal; leave pipes attached so
+// `INSERT ... FORMAT CSV` from stdin still works, and leave interactive
+// `flynn clickhouse client` (no --query) on a TTY.
+func clickhouseArgsHaveQuery(args []string) bool {
+	for _, a := range args {
+		if a == "--query" || strings.HasPrefix(a, "--query=") {
+			return true
+		}
+	}
+	return false
+}
+
+func shouldCloseClickhouseStdin(args []string, stdinAlreadySet, stdinIsTTY bool) bool {
+	if stdinAlreadySet || !stdinIsTTY {
+		return false
+	}
+	return clickhouseArgsHaveQuery(args)
+}
+
+func applyClickhouseStdinPolicy(config *runConfig, stdinIsTTY bool) {
+	if !shouldCloseClickhouseStdin(config.Args, config.Stdin != nil, stdinIsTTY) {
+		return
+	}
+	config.Stdin = strings.NewReader("")
+}
+
+func closeClickhouseStdinIfQueryOnTTY(config *runConfig) {
+	applyClickhouseStdinPolicy(config, term.IsTerminal(os.Stdin.Fd()))
 }
 
 func escapeClickhouseString(s string) string {
