@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -153,18 +154,33 @@ func (p *Process) stop() error {
 	logger := p.Logger.New("fn", "stop")
 	logger.Info("stopping")
 
-	// Mark process as expecting a shutdown.
+	// Mark process as expecting a shutdown so monitorCmd does not treat the
+	// exit as a crash (which calls shutdown.ExitWithCode).
 	p.stopping.Store(true)
 
-	// Attempt to kill via escalating signals.
-	for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGSEGV} {
+	// Prefer SHUTDOWN SAVE so the RDB/AOF is flushed before the daemon exits.
+	// flynn-host only waits 30s after SIGTERM before SIGKILL of the container.
+	stopWait := 10 * time.Second
+	if err := p.shutdownSave(); err != nil {
+		logger.Info("SHUTDOWN SAVE not accepted, signalling", "err", err)
+	} else {
+		select {
+		case <-p.stopped:
+			p.running = false
+			return nil
+		case <-time.After(stopWait):
+			logger.Info("SHUTDOWN SAVE timed out")
+		}
+	}
+
+	for _, sig := range []os.Signal{syscall.SIGTERM, syscall.SIGKILL} {
 		logger.Debug("signalling daemon", "sig", sig)
 		if err := p.cmd.Process.Signal(sig); err != nil {
 			logger.Error("error signalling daemon", "sig", sig, "err", err)
 		}
 
 		select {
-		case <-time.After(p.OpTimeout):
+		case <-time.After(stopWait):
 			continue
 		case <-p.stopped:
 			p.running = false
@@ -172,6 +188,36 @@ func (p *Process) stop() error {
 		}
 	}
 	return errors.New("unable to kill redis")
+}
+
+func (p *Process) shutdownSave() error {
+	addr := net.JoinHostPort("127.0.0.1", p.Port)
+	conn, err := redis.Dial("tcp", addr,
+		redis.DialPassword(p.Password),
+		redis.DialConnectTimeout(2*time.Second),
+		redis.DialReadTimeout(10*time.Second),
+		redis.DialWriteTimeout(2*time.Second),
+	)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_, err = conn.Do("SHUTDOWN", "SAVE")
+	if shutdownSaveAccepted(err) {
+		return nil
+	}
+	return err
+}
+
+// shutdownSaveAccepted reports whether err from SHUTDOWN SAVE is success.
+// Redis closes the connection as it exits, so EOF / "connection" errors are
+// the normal completion path — not a failed persist.
+func shutdownSaveAccepted(err error) bool {
+	if err == nil || err == io.EOF {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection") || strings.Contains(msg, "EOF") || strings.Contains(msg, "broken pipe")
 }
 
 // monitorCmd waits for cmd to finish and reports an error if it was unexpected.
@@ -477,6 +523,11 @@ var configTemplate = template.Must(template.New("redis.conf").Parse(`
 port {{.Port}}
 dbfilename dump.rdb
 dir {{.DataDir}}
+
+# AOF so SETs survive a non-graceful kill (default RDB save 900 1 is too slow
+# for flynn-host update). appendfsync everysec loses at most ~1s of writes.
+appendonly yes
+appendfsync everysec
 
 # slaveof <masterip> <masterport>
 # masterauth <master-password>

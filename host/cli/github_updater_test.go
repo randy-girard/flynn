@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -24,6 +25,22 @@ func TestImageenvIDs(t *testing.T) {
 	}
 	if got := imageenvIDs(nil); got.DockerBuilder != "" {
 		t.Fatalf("expected empty ids for nil map, got %#v", got)
+	}
+}
+
+func TestTarballUpdaterSetsRedisApplianceStrategyBeforeDeploy(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	ensure := strings.Index(body, "EnsureRedisApplianceStrategy")
+	deploy := strings.Index(body, "deployApp(client, app, redisImage")
+	if ensure < 0 || deploy < 0 {
+		t.Fatal("tarball updater must call EnsureRedisApplianceStrategy and deploy redis appliances")
+	}
+	if ensure > deploy {
+		t.Fatal("strategy must be persisted before the redis appliance deploy")
 	}
 }
 

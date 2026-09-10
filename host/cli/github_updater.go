@@ -1459,6 +1459,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 
 		if app.RedisAppliance() {
 			appLog.Info("starting deploy of Redis app")
+			if err := updaterdeploy.EnsureRedisApplianceStrategy(client, app, appLog); err != nil {
+				appLog.Error("error setting redis appliance strategy", "err", err)
+				return err
+			}
 			if err := deployApp(client, app, redisImage, images, nil, force, appLog); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					appLog.Info("skipped deploy of Redis app", "reason", e.reason)

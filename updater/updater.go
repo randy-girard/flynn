@@ -248,6 +248,10 @@ func run() error {
 
 		if app.RedisAppliance() {
 			log.Info("starting deploy of Redis app")
+			if err := updaterdeploy.EnsureRedisApplianceStrategy(client, app, log); err != nil {
+				log.Error("error setting redis appliance strategy", "err", err)
+				return err
+			}
 			if err := deployApp(client, app, redisImage, nil, log); err != nil {
 				if e, ok := err.(errDeploySkipped); ok {
 					log.Info("skipped deploy of Redis app", "reason", e.reason)

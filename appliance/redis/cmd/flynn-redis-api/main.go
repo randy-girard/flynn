@@ -18,8 +18,8 @@ import (
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/resource"
 	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 )
 
 const (
@@ -207,11 +207,8 @@ func (h *Handler) servePostCluster(w http.ResponseWriter, req *http.Request, _ h
 		},
 	}
 
-	// Create an app for this redis cluster.
-	app := &ct.App{
-		Name: serviceName,
-		Meta: map[string]string{"flynn-system-app": "true"},
-	}
+	// Create an app for this redis cluster. one-down-one-up so updates reuse /data.
+	app := ct.NewRedisApplianceApp(serviceName)
 	if err := h.ControllerClient.CreateApp(app); err != nil {
 		h.Logger.Error("error creating app", "err", err)
 		httphelper.Error(w, err)
