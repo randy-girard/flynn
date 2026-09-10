@@ -30,11 +30,12 @@ need "${ROOT}/script/install-flynn-release" 'OriginalName=flannel\.\*' \
   "install-flynn-release udev .link must match flannel.*"
 
 vagrant="${ROOT}/Vagrantfile"
-count="$(grep -c 'nicpromisc2", "allow-all"' "${vagrant}" || true)"
-if [[ "${count}" -lt 3 ]]; then
-  echo "Vagrantfile must set --nicpromisc2 allow-all on builder/node VMs (got ${count})" >&2
-  exit 1
-fi
+need "${vagrant}" 'FLYNN_MAX_NODES' \
+  "Vagrantfile must generate node1..N from FLYNN_MAX_NODES (not a hard-coded count)"
+need "${vagrant}" 'nicpromisc2", "allow-all"' \
+  "Vagrantfile must set --nicpromisc2 allow-all on cluster node NICs (flannel VXLAN)"
+need "${vagrant}" '192\.168\.56\.\#\{19 \+ i\}' \
+  "cluster node N must be 192.168.56.(19+N) (node1=.20)"
 
 smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
 need "${smoke}" 'VTEP MAC' "smoke script must diagnose device vs lease VTEP MAC"

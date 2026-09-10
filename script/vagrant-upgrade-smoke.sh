@@ -1,28 +1,26 @@
 #!/bin/bash
 #
-# Vagrant 3-node Flynn upgrade smoke test (local builder only).
+# Vagrant Flynn upgrade smoke test (local builder only).
 #
 # Flow:
 #   1. Run host unit tests (CLI clickhouse stdin policy, datastore/overlay
 #      regressions, Darwin-safe Go packages). Fail before Vagrant if any fail.
 #   2. Boot the builder VM only, then run the full Linux unit suite there
 #      (redis, postgres, mariadb, mongodb, zfs/netlink). Fail before booting
-#      node1/2/3 if that suite fails. Docker Desktop cannot load ZFS, so the
-#      builder is the Linux gate — not script/run-unit-tests in Docker.
-#   3. Boot node1/2/3
-#   4. Build Flynn on the builder and package a release tarball into the
+#      cluster nodes if that suite fails. Docker Desktop cannot load ZFS, so
+#      the builder is the Linux gate — not script/run-unit-tests in Docker.
+#   3. Build Flynn on the builder and package a release tarball into the
 #      repo's build/release/ (shared with nodes via Vagrant synced folder)
-#   5. Install that tarball on node1/2/3 from the mounted path
-#   6. Bootstrap, deploy test/apps/upgrade-smoke with every datastore
-#      provider (postgres/mysql/mongodb/redis/kafka/clickhouse), embed
-#      dummy slug blobs, and seed dummy rows/keys/topics
-#   7. Verify HTTP + /status resource env + per-engine row/key/topic counts
-#   8. Exercise flynn / flynn-host CLI (apps, ps, scale, env, resource, route,
-#      release, log, run, meta, host list/ps) against the live cluster
-#   9. Run flynn-host update --all-nodes --tarball <same build> --force
-#      twice (sirenia/redis volume bugs have shown up on the second pass)
-#  10. Verify app/DBs + CLI after each pass, tear down cluster nodes, print a
-#      step table, unit-test results, and a per-engine persistence report
+#   4. For each topology in SMOKE_TOPOLOGIES (default: 1-node singleton, then
+#      3-node HA): boot those VMs, install the tarball, bootstrap
+#      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
+#      datastore provider, verify HTTP/status/rows, exercise flynn /
+#      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
+#      re-verify, then destroy the cluster nodes (builder is kept) before the
+#      next topology. Sizes are 1 (singleton) or >=3 (HA); 2 is invalid.
+#      Vagrant nodes are generated as node1..max(N) — e.g. 1,3,5 or 1,3,7.
+#   5. Print a step table, unit-test results, and a per-engine persistence
+#      report (phases are prefixed N-node/).
 #
 # Local-only: layer-0 uses --peer-ips (no discovery service). Init waits for
 # flynn-host HTTP (:1113); discoverd (:1111) starts during bootstrap. Layer-1
@@ -46,7 +44,7 @@
 #   KEEP_VMS=1           Do not destroy any VMs at the end (success or failure)
 #   KEEP_BUILDER=1       On success, keep builder when tearing down nodes [default: 1]
 #   KEEP_VMS_ON_FAIL=1   On failure, keep VMs for debugging (default: destroy all)
-#   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node1,node2,node3}
+#   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node*}
 #                        at start (default: clear so each run has fresh logs)
 #   SKIP_UNIT_TESTS=1            Skip host + builder Linux pre-cluster unit gates
 #   SKIP_BUILDER_UNIT_TESTS=1    Skip only the builder Linux suite (host tests
@@ -64,6 +62,15 @@
 #                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
+#   SMOKE_TOPOLOGIES     Comma-separated cluster sizes to run, each getting
+#                        the full install/bootstrap/deploy/verify/upgrade/CLI
+#                        path. 1 = singleton (--min-hosts 1, node1 only);
+#                        N>=3 = HA (--min-hosts N, node1..nodeN). 2 is
+#                        invalid (Flynn). [default: 1,3]
+#                        CLUSTER_SIZE=N is a shortcut for one topology.
+#                        Example: SMOKE_TOPOLOGIES=1,3,5
+#   SMOKE_MAX_NODES      Optional ceiling on N (host-only /24 already caps
+#                        node IPs at 192.168.56.254). Unset = no extra cap.
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
 #   SMOKE_SEED_ROWS=N    Dummy rows/keys seeded per datastore [default: 200]
 #   SMOKE_BLOB_COUNT=N   Extra slug files embedded in the test app [default: 100]
@@ -87,12 +94,24 @@ APP_NAME="${APP_NAME:-upgrade-smoke}"
 REPO_IN_VM="/root/go/src/github.com/flynn/flynn"
 CLI_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 
-NODE1_IP="192.168.56.20"
-NODE2_IP="192.168.56.21"
-NODE3_IP="192.168.56.22"
-NODES=(node1 node2 node3)
-NODE_IPS=("${NODE1_IP}" "${NODE2_IP}" "${NODE3_IP}")
-PEER_IPS="${NODE1_IP},${NODE2_IP},${NODE3_IP}"
+# nodeN is 192.168.56.(19+N): node1=.20, node2=.21, … last octet <= 254.
+# Size 2 is invalid (Flynn HA minimum is 3). apply_topology / Vagrantfile
+# generate the first N names and IPs; FLYNN_MAX_NODES is exported so
+# Vagrantfile defines enough machines for the largest topology this run.
+CLUSTER_NET_PREFIX="192.168.56"
+CLUSTER_IP_OFFSET=19
+NODE1_IP="${CLUSTER_NET_PREFIX}.$((CLUSTER_IP_OFFSET + 1))"
+ALL_CLUSTER_NODES=()
+ALL_CLUSTER_IPS=()
+# apply_topology sets NODES / NODE_IPS / PEER_IPS / MIN_HOSTS per run.
+NODES=(node1)
+NODE_IPS=("${NODE1_IP}")
+PEER_IPS="${NODE1_IP}"
+MIN_HOSTS=1
+TOPOLOGY_SIZE=1
+TOPOLOGY_LABEL="1-node"
+CHECK_PHASE_PREFIX=""
+TOPOLOGIES=()
 BOOTSTRAP_JOB_TIMEOUT="${BOOTSTRAP_JOB_TIMEOUT:-600}"
 
 KEEP_VMS="${KEEP_VMS:-${SKIP_TEARDOWN:-0}}"
@@ -109,12 +128,19 @@ SKIP_DEPLOY="${SKIP_DEPLOY:-0}"
 SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
 SKIP_CLI="${SKIP_CLI:-0}"
+if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
+  :
+elif [[ -n "${CLUSTER_SIZE:-}" ]]; then
+  SMOKE_TOPOLOGIES="${CLUSTER_SIZE}"
+else
+  SMOKE_TOPOLOGIES="1,3"
+fi
 UPGRADE_PASSES="${UPGRADE_PASSES:-2}"
 SMOKE_SEED_ROWS="${SMOKE_SEED_ROWS:-200}"
 SMOKE_BLOB_COUNT="${SMOKE_BLOB_COUNT:-100}"
 SMOKE_DETAIL="${SMOKE_DETAIL:-0}"
 RESUME_AT="${RESUME_AT:-}"
-SHARED_LOG_DIRS=(builder node1 node2 node3)
+SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -206,6 +232,9 @@ record() {
 # step in a subshell (tee), so bash arrays would be lost before the report.
 record_check() {
   local phase=$1 name=$2 status=$3 detail=${4:-}
+  if [[ -n "${CHECK_PHASE_PREFIX:-}" ]]; then
+    phase="${CHECK_PHASE_PREFIX}${phase}"
+  fi
   detail="${detail//$'\t'/ }"
   detail="${detail//$'\n'/ }"
   printf '%s\t%s\t%s\t%s\n' "${phase}" "${name}" "${status}" "${detail}" >> "${CHECK_FILE}"
@@ -289,15 +318,15 @@ print_datastore_report() {
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
   echo " app=${APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
-  echo " providers=${DATASTORE_PROVIDERS[*]}"
+  echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
     echo " (no app/datastore checks recorded — verify steps did not run)"
     echo "================================================================================"
     return
   fi
-  printf "| %-16s | %-16s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
-  printf "|------------------|------------------|--------|%s\n" "----------------------------------------"
+  printf "| %-24s | %-16s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
+  printf "|--------------------------|------------------|--------|%s\n" "----------------------------------------"
   local phase name status detail failed=0 total=0
   while IFS=$'\t' read -r phase name status detail; do
     [[ -z "${phase}" ]] && continue
@@ -306,14 +335,14 @@ print_datastore_report() {
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-16s | %-16s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf "| %-24s | %-16s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
   done < "${CHECK_FILE}"
   local tot_status="PASS" tot_detail="all app/CLI/DB checks passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-16s | %-16s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf "| %-24s | %-16s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
   ui_banner "================================================================================"
 }
 
@@ -328,22 +357,22 @@ print_results_table() {
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
   echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}"
-  echo " seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
+  echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
   fi
   ui_banner "================================================================================"
-  printf "| %-42s | %-6s | %8s | %s\n" "Step" "Status" "Duration" "Detail"
-  printf "|--------------------------------------------|--------|----------|%s\n" "----------------------------------------"
+  printf "| %-48s | %-6s | %8s | %s\n" "Step" "Status" "Duration" "Detail"
+  printf "|--------------------------------------------------|--------|----------|%s\n" "----------------------------------------"
   local i
   for i in "${!RESULT_NAMES[@]}"; do
-    printf "| %-42s | %s | %7ss | %s\n" \
+    printf "| %-48s | %s | %7ss | %s\n" \
       "${RESULT_NAMES[$i]}" \
       "$(ui_status_text "${RESULT_STATUS[$i]}")" \
       "${RESULT_SECONDS[$i]}" \
       "${RESULT_DETAIL[$i]}"
   done
-  printf "| %-42s | %s | %7ss | %s\n" "OVERALL" "$(ui_status_text "${overall}")" "${total}" ""
+  printf "| %-48s | %s | %7ss | %s\n" "OVERALL" "$(ui_status_text "${overall}")" "${total}" ""
   ui_banner "================================================================================"
   print_unit_report
   print_datastore_report
@@ -351,7 +380,7 @@ print_results_table() {
   local preserved="${ROOT}/.vagrant-upgrade-smoke-last-results.txt"
   {
     echo "overall=${overall} duration=${total}s build=${BUILD_VERSION:-n/a} app=${APP_NAME}"
-    echo "seed_rows=${SMOKE_SEED_ROWS} blobs=${SMOKE_BLOB_COUNT} upgrade_passes=${UPGRADE_PASSES}"
+    echo "topologies=${SMOKE_TOPOLOGIES} seed_rows=${SMOKE_SEED_ROWS} blobs=${SMOKE_BLOB_COUNT} upgrade_passes=${UPGRADE_PASSES}"
     for i in "${!RESULT_NAMES[@]}"; do
       echo "step ${RESULT_STATUS[$i]} ${RESULT_SECONDS[$i]}s ${RESULT_NAMES[$i]} :: ${RESULT_DETAIL[$i]}"
     done
@@ -401,8 +430,9 @@ print_failure_banner() {
 }
 
 destroy_all_vms() {
-  info "destroying Vagrant VMs: builder node1 node2 node3"
-  vagrant destroy -f builder node1 node2 node3 || true
+  expand_cluster_inventory
+  info "destroying Vagrant VMs: builder ${ALL_CLUSTER_NODES[*]}"
+  vagrant destroy -f builder "${ALL_CLUSTER_NODES[@]}" || true
 }
 
 smoke_stop_detail_tail() {
@@ -735,15 +765,22 @@ resolve_built_tarball() {
 configure_node_dns() {
   local node=$1
   local marker="# flynn-upgrade-smoke ${CLUSTER_DOMAIN}"
+  local hosts_body=""
+  local i ip
+  for i in "${!NODE_IPS[@]}"; do
+    ip="${NODE_IPS[$i]}"
+    if [[ "${i}" -eq 0 ]]; then
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+    else
+      hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
+    fi
+  done
   node_root_script "${node}" <<EOF
 set -euo pipefail
 if ! grep -qF "${marker}" /etc/hosts; then
   cat >> /etc/hosts <<'HOSTS'
 ${marker}
-${NODE1_IP} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN}
-${NODE2_IP} ${CLUSTER_DOMAIN}
-${NODE3_IP} ${CLUSTER_DOMAIN}
-HOSTS
+${hosts_body}HOSTS
 fi
 EOF
 }
@@ -797,6 +834,20 @@ clear_shared_logs() {
     find "${dir}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
   done
   echo "shared logs cleared under ${ROOT}/flynn-logs/"
+}
+
+# Between topologies, drop cluster-node logs so 1-node and 3-node output do
+# not mix. Builder logs stay (same VM / same build).
+clear_cluster_shared_logs() {
+  local name dir
+  if [[ "${KEEP_LOGS}" == "1" ]]; then
+    return 0
+  fi
+  for name in "${NODES[@]}"; do
+    dir="${ROOT}/flynn-logs/${name}"
+    mkdir -p "${dir}"
+    find "${dir}" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+  done
 }
 
 # Collect current flynnbr0 gateway IPs (…1 on each host subnet) from all nodes.
@@ -1232,11 +1283,11 @@ step_vagrant_up_builder() {
 step_vagrant_up_nodes() {
   local node_mem="${VAGRANT_MEMORY:-6144}"
   local node_cpus="${VAGRANT_CPUS:-2}"
-  info "starting cluster nodes (memory=${node_mem} cpus=${node_cpus})"
-  VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up node1 node2 node3
+  info "starting ${TOPOLOGY_LABEL} nodes (${NODES[*]}) memory=${node_mem} cpus=${node_cpus}"
+  VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${NODES[@]}"
   info "verifying VirtualBox NIC2 promiscuous mode (required for flannel VXLAN)"
   verify_nic_promisc
-  echo "cluster nodes up"
+  echo "${TOPOLOGY_LABEL} nodes up"
 }
 
 builder_has_base_squashfs() {
@@ -1410,9 +1461,10 @@ step_bootstrap() {
   rm -f "${overlay_fail}"
 
   # Cache ssh-config before the overlay watcher and bootstrap race on node1.
-  cache_node_ssh_config node1
-  cache_node_ssh_config node2
-  cache_node_ssh_config node3
+  local n
+  for n in "${NODES[@]}"; do
+    cache_node_ssh_config "${n}"
+  done
 
   # Fail fast if flannel comes up but cross-node overlay is broken, instead of
   # waiting ~5 minutes for postgres-wait to time out.
@@ -1429,7 +1481,7 @@ export CLUSTER_DOMAIN="${CLUSTER_DOMAIN}"
 export FLANNEL_NETWORK="${FLANNEL_NETWORK:-100.64.0.0/16}"
 export DISCOVERD="http://${NODE1_IP}:1111"
 flynn-host bootstrap \
-  --min-hosts 3 \
+  --min-hosts "${MIN_HOSTS}" \
   --peer-ips "${PEER_IPS}" \
   --timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
   --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}"
@@ -1467,7 +1519,7 @@ EOF
     dump_overlay_diagnostics
     return 1
   fi
-  echo "bootstrapped ${CLUSTER_DOMAIN}"
+  echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
 step_deploy_app() {
@@ -2032,20 +2084,253 @@ step_verify_after() {
   node_ssh node1 'sudo flynn-host version' || true
 }
 
+teardown_cluster_nodes() {
+  info "destroying cluster nodes: ${NODES[*]}"
+  vagrant destroy -f "${NODES[@]}"
+  CLUSTER_STARTED=0
+  echo "cluster nodes destroyed (${TOPOLOGY_LABEL})"
+}
+
+teardown_builder() {
+  info "destroying builder"
+  vagrant destroy -f builder
+  BUILDER_STARTED=0
+  echo "builder destroyed"
+}
+
 teardown_vms() {
   if [[ "${KEEP_VMS}" == "1" ]]; then
     echo "keeping VMs (KEEP_VMS=1)"
     return 0
   fi
-  info "destroying node1 node2 node3"
-  vagrant destroy -f node1 node2 node3
+  teardown_cluster_nodes
   if [[ "${KEEP_BUILDER}" != "1" ]]; then
-    info "destroying builder"
-    vagrant destroy -f builder
+    teardown_builder
   else
     echo "keeping builder (KEEP_BUILDER=1)"
   fi
   echo "teardown done"
+}
+
+# nodeN → 192.168.56.(19+N). Host-only /24 last octet must stay <= 254.
+cluster_node_ip() {
+  echo "${CLUSTER_NET_PREFIX}.$((CLUSTER_IP_OFFSET + $1))"
+}
+
+cluster_ip_octet() {
+  echo $((CLUSTER_IP_OFFSET + $1))
+}
+
+# 1 = singleton; >=3 = HA. 2 is Flynn-invalid. Optional SMOKE_MAX_NODES ceiling.
+valid_topology_size() {
+  local size=$1 octet
+  [[ "${size}" =~ ^[0-9]+$ ]] || return 1
+  if [[ "${size}" -lt 1 || "${size}" -eq 2 ]]; then
+    return 1
+  fi
+  octet="$(cluster_ip_octet "${size}")"
+  if [[ "${octet}" -gt 254 ]]; then
+    return 1
+  fi
+  if [[ -n "${SMOKE_MAX_NODES:-}" && "${size}" -gt "${SMOKE_MAX_NODES}" ]]; then
+    return 1
+  fi
+  if [[ "${size}" -eq 1 || "${size}" -ge 3 ]]; then
+    return 0
+  fi
+  return 1
+}
+
+# Highest nodeN already present under .vagrant/machines (leftover VMs).
+discover_vagrant_node_count() {
+  local d n max=0
+  for d in "${ROOT}/.vagrant/machines"/node*; do
+    [[ -d "${d}" ]] || continue
+    n="${d##*/node}"
+    [[ "${n}" =~ ^[0-9]+$ ]] || continue
+    if [[ "${n}" -gt "${max}" ]]; then
+      max="${n}"
+    fi
+  done
+  echo "${max}"
+}
+
+# Build node1..N names/IPs and export FLYNN_MAX_NODES for the Vagrantfile loop.
+expand_cluster_inventory() {
+  local need=0 t discovered
+  if [[ ${#TOPOLOGIES[@]} -gt 0 ]]; then
+    for t in "${TOPOLOGIES[@]}"; do
+      if [[ "${t}" -gt "${need}" ]]; then
+        need="${t}"
+      fi
+    done
+  fi
+  discovered="$(discover_vagrant_node_count)"
+  if [[ "${discovered}" -gt "${need}" ]]; then
+    need="${discovered}"
+  fi
+  if [[ "${need}" -lt 1 ]]; then
+    need=1
+  fi
+  FLYNN_MAX_NODES="${need}"
+  export FLYNN_MAX_NODES
+  ALL_CLUSTER_NODES=()
+  ALL_CLUSTER_IPS=()
+  local i
+  for i in $(seq 1 "${need}"); do
+    ALL_CLUSTER_NODES+=("node${i}")
+    ALL_CLUSTER_IPS+=("$(cluster_node_ip "${i}")")
+  done
+  NODE1_IP="$(cluster_node_ip 1)"
+  SHARED_LOG_DIRS=(builder "${ALL_CLUSTER_NODES[@]}")
+}
+
+parse_smoke_topologies() {
+  local raw item parts
+  raw="${SMOKE_TOPOLOGIES// /}"
+  if [[ "${raw}" == "both" ]]; then
+    raw="1,3"
+  fi
+  TOPOLOGIES=()
+  IFS=',' read -r -a parts <<< "${raw}"
+  for item in "${parts[@]}"; do
+    [[ -z "${item}" ]] && continue
+    if ! valid_topology_size "${item}"; then
+      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2); got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
+      return 1
+    fi
+    # bash 3.2 + set -u treats ${arr[*]} on an empty array as unbound.
+    if [[ ${#TOPOLOGIES[@]} -gt 0 && " ${TOPOLOGIES[*]} " == *" ${item} "* ]]; then
+      continue
+    fi
+    TOPOLOGIES+=("${item}")
+  done
+  if [[ ${#TOPOLOGIES[@]} -eq 0 ]]; then
+    echo "SMOKE_TOPOLOGIES is empty (got '${SMOKE_TOPOLOGIES}')" >&2
+    return 1
+  fi
+  if [[ ${#TOPOLOGIES[@]} -gt 1 ]]; then
+    if [[ -n "${RESUME_AT}" ]]; then
+      echo "RESUME_AT requires a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
+      return 1
+    fi
+    if [[ "${SKIP_INSTALL}" == "1" ]]; then
+      echo "SKIP_INSTALL requires a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
+      return 1
+    fi
+    if [[ "${SKIP_DEPLOY}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+      echo "SKIP_DEPLOY/SKIP_VERIFY_BEFORE require a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
+      return 1
+    fi
+  fi
+  expand_cluster_inventory
+}
+
+apply_topology() {
+  local size=$1 i
+  if ! valid_topology_size "${size}"; then
+    echo "unsupported topology size ${size} (want 1 or >=3, not 2)" >&2
+    return 1
+  fi
+  TOPOLOGY_SIZE="${size}"
+  NODES=()
+  NODE_IPS=()
+  for i in $(seq 1 "${size}"); do
+    NODES+=("node${i}")
+    NODE_IPS+=("$(cluster_node_ip "${i}")")
+  done
+  TOPOLOGY_LABEL="${size}-node"
+  local saved_ifs="${IFS}"
+  IFS=,
+  PEER_IPS="${NODE_IPS[*]}"
+  IFS="${saved_ifs}"
+  MIN_HOSTS="${size}"
+  CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+}
+
+# One full install → bootstrap → deploy → verify → CLI → --force upgrades.
+# idx is 0-based; is_last=1 means KEEP_VMS can retain these cluster nodes.
+run_one_topology() {
+  local size=$1
+  local idx=$2
+  local is_last=$3
+  local pass
+  apply_topology "${size}"
+  info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS}"
+  clear_cluster_shared_logs
+
+  if [[ "${SKIP_VAGRANT_UP}" == "1" && "${idx}" -eq 0 ]]; then
+    record "Vagrant up (cluster nodes) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VAGRANT_UP=1"
+    CLUSTER_STARTED=1
+    cache_all_node_ssh_configs
+  else
+    run_step "Vagrant up (cluster nodes) (${TOPOLOGY_LABEL})" step_vagrant_up_nodes
+    CLUSTER_STARTED=1
+    cache_all_node_ssh_configs
+  fi
+
+  if [[ "${SKIP_INSTALL}" == "1" && "${RESUME_BOOTSTRAP:-0}" != "1" ]]; then
+    record "Install local tarball on nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_INSTALL=1"
+    record "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_INSTALL=1"
+    record "Bootstrap cluster (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_INSTALL=1"
+    ensure_flynn_cli_on_node1
+    configure_node_dns node1
+    register_cli_cluster || fail_shutdown "Bootstrap cluster (${TOPOLOGY_LABEL})" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
+  elif [[ "${RESUME_BOOTSTRAP:-0}" == "1" ]]; then
+    record "Install local tarball on nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
+    record "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
+    info "resume: verifying layer-0 host APIs before bootstrap"
+    if ! wait_for "flynn-host HTTP API on ${PEER_IPS}" 120 hosts_api_ready; then
+      dump_layer0_diagnostics
+      fail_shutdown "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" 0 "RESUME_AT=bootstrap but host APIs not ready"
+    fi
+    run_step "Bootstrap cluster (${TOPOLOGY_LABEL})" step_bootstrap
+  else
+    run_step "Install local tarball on nodes (${TOPOLOGY_LABEL})" step_install_flynn
+    run_step "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" step_init_cluster
+    run_step "Bootstrap cluster (${TOPOLOGY_LABEL})" step_bootstrap
+  fi
+
+  if [[ "${SKIP_DEPLOY}" == "1" ]]; then
+    record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+  else
+    run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
+  fi
+  if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+    record "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"
+  else
+    run_step "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" step_verify_before
+  fi
+  if [[ "${SKIP_CLI}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+    record "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
+  else
+    run_step "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" step_cli_functions pre-upgrade
+  fi
+
+  if [[ "${SKIP_UPGRADE}" == "1" ]]; then
+    record "Upgrade --all-nodes (local tarball) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_UPGRADE=1"
+    record "Verify app/DBs after upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_UPGRADE=1"
+  else
+    for pass in $(seq 1 "${UPGRADE_PASSES}"); do
+      run_step "Upgrade pass ${pass}/${UPGRADE_PASSES} --all-nodes (${TOPOLOGY_LABEL})" step_upgrade "${pass}"
+      run_step "Verify app/DBs after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" step_verify_after "${pass}"
+      if [[ "${SKIP_CLI}" == "1" ]]; then
+        record "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+      else
+        run_step "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+          step_cli_functions "post-upgrade-${pass}"
+      fi
+    done
+  fi
+
+  if [[ "${KEEP_VMS}" == "1" && "${is_last}" -eq 1 ]]; then
+    record "Teardown cluster nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "KEEP_VMS=1"
+  else
+    if [[ "${KEEP_VMS}" == "1" && "${is_last}" -ne 1 ]]; then
+      info "KEEP_VMS=1: destroying ${NODES[*]} before next topology; last topology VMs will be kept"
+    fi
+    run_step "Teardown cluster nodes (${TOPOLOGY_LABEL})" teardown_cluster_nodes
+  fi
 }
 
 main() {
@@ -2063,6 +2348,8 @@ main() {
     BUILD_VERSION="$(default_build_version)"
   fi
 
+  parse_smoke_topologies || fail_shutdown "Parse SMOKE_TOPOLOGIES" 0 "invalid SMOKE_TOPOLOGIES=${SMOKE_TOPOLOGIES}"
+
   ui_session_begin
   if [[ "${SMOKE_DETAIL}" == "1" ]]; then
     _UI_COLLAPSE_BODY=0
@@ -2070,7 +2357,7 @@ main() {
     _UI_COLLAPSE_BODY=1
     smoke_prepare_tty
   fi
-  info "local build smoke: version=${BUILD_VERSION}"
+  info "local build smoke: version=${BUILD_VERSION} topologies=${SMOKE_TOPOLOGIES}"
   if [[ "${SMOKE_DETAIL}" == "1" ]]; then
     info "command output live (SMOKE_DETAIL=1)"
   else
@@ -2120,16 +2407,6 @@ main() {
     run_step "Builder unit tests (pre-cluster)" step_builder_unit_tests
   fi
 
-  if [[ "${SKIP_VAGRANT_UP}" == "1" ]]; then
-    record "Vagrant up (cluster nodes)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
-    CLUSTER_STARTED=1
-    cache_all_node_ssh_configs
-  else
-    run_step "Vagrant up (cluster nodes)" step_vagrant_up_nodes
-    CLUSTER_STARTED=1
-    cache_all_node_ssh_configs
-  fi
-
   if [[ "${SKIP_BUILD}" == "1" ]]; then
     record "Build Flynn on builder (${BUILD_VERSION})" "SKIP" 0 "SKIP_BUILD=1"
     if ! resolve_built_tarball >/dev/null; then
@@ -2140,65 +2417,22 @@ main() {
     run_step "Build Flynn on builder (${BUILD_VERSION})" step_build_on_builder
   fi
 
-  if [[ "${SKIP_INSTALL}" == "1" && "${RESUME_BOOTSTRAP:-0}" != "1" ]]; then
-    record "Install local tarball on nodes" "SKIP" 0 "SKIP_INSTALL=1"
-    record "Init layer-0 (peer-ips)" "SKIP" 0 "SKIP_INSTALL=1"
-    record "Bootstrap cluster" "SKIP" 0 "SKIP_INSTALL=1"
-    ensure_flynn_cli_on_node1
-    configure_node_dns node1
-    register_cli_cluster || fail_shutdown "Bootstrap cluster" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
-  elif [[ "${RESUME_BOOTSTRAP:-0}" == "1" ]]; then
-    record "Install local tarball on nodes" "SKIP" 0 "RESUME_AT=bootstrap"
-    record "Init layer-0 (peer-ips)" "SKIP" 0 "RESUME_AT=bootstrap"
-    info "resume: verifying layer-0 host APIs before bootstrap"
-    if ! wait_for "flynn-host HTTP API on ${PEER_IPS}" 120 hosts_api_ready; then
-      dump_layer0_diagnostics
-      fail_shutdown "Init layer-0 (peer-ips)" 0 "RESUME_AT=bootstrap but host APIs not ready"
+  local idx topo is_last
+  for idx in "${!TOPOLOGIES[@]}"; do
+    topo="${TOPOLOGIES[$idx]}"
+    is_last=0
+    if [[ $((idx + 1)) -eq ${#TOPOLOGIES[@]} ]]; then
+      is_last=1
     fi
-    run_step "Bootstrap cluster" step_bootstrap
-  else
-    run_step "Install local tarball on nodes" step_install_flynn
-    run_step "Init layer-0 (peer-ips)" step_init_cluster
-    run_step "Bootstrap cluster" step_bootstrap
-  fi
-
-  if [[ "${SKIP_DEPLOY}" == "1" ]]; then
-    record "Deploy app + DB resources" "SKIP" 0 "SKIP_DEPLOY=1"
-  else
-    run_step "Deploy app + DB resources" step_deploy_app
-  fi
-  if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
-    record "Verify app/DBs before upgrade" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"
-  else
-    run_step "Verify app/DBs before upgrade" step_verify_before
-  fi
-  if [[ "${SKIP_CLI}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
-    record "CLI functions (pre-upgrade)" "SKIP" 0 "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
-  else
-    run_step "CLI functions (pre-upgrade)" step_cli_functions pre-upgrade
-  fi
-
-  if [[ "${SKIP_UPGRADE}" == "1" ]]; then
-    record "Upgrade --all-nodes (local tarball)" "SKIP" 0 "SKIP_UPGRADE=1"
-    record "Verify app/DBs after upgrade" "SKIP" 0 "SKIP_UPGRADE=1"
-  else
-    local pass
-    for pass in $(seq 1 "${UPGRADE_PASSES}"); do
-      run_step "Upgrade pass ${pass}/${UPGRADE_PASSES} --all-nodes" step_upgrade "${pass}"
-      run_step "Verify app/DBs after upgrade ${pass}/${UPGRADE_PASSES}" step_verify_after "${pass}"
-      if [[ "${SKIP_CLI}" == "1" ]]; then
-        record "CLI functions after upgrade ${pass}/${UPGRADE_PASSES}" "SKIP" 0 "SKIP_CLI=1"
-      else
-        run_step "CLI functions after upgrade ${pass}/${UPGRADE_PASSES}" \
-          step_cli_functions "post-upgrade-${pass}"
-      fi
-    done
-  fi
+    run_one_topology "${topo}" "${idx}" "${is_last}"
+  done
 
   if [[ "${KEEP_VMS}" == "1" ]]; then
-    record "Teardown VMs" "SKIP" 0 "KEEP_VMS=1"
+    record "Teardown builder" "SKIP" 0 "KEEP_VMS=1"
+  elif [[ "${KEEP_BUILDER}" == "1" ]]; then
+    record "Teardown builder" "SKIP" 0 "KEEP_BUILDER=1"
   else
-    run_step "Teardown VMs" teardown_vms
+    run_step "Teardown builder" teardown_builder
   fi
 
   smoke_stop_detail_tail
