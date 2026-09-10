@@ -115,6 +115,90 @@ func TestRepairDeposedSireniaPeers_ClearsPresentPeers(t *testing.T) {
 	}
 }
 
+func TestWaitForClearedDeposedInAsync_TimesOutWithoutError(t *testing.T) {
+	origWait := deposedRejoinWait
+	origPoll := deposedRejoinPollInterval
+	defer func() {
+		deposedRejoinWait = origWait
+		deposedRejoinPollInterval = origPoll
+	}()
+	deposedRejoinWait = 40 * time.Millisecond
+	deposedRejoinPollInterval = 10 * time.Millisecond
+
+	meta, err := json.Marshal(sirenia.State{
+		Primary: &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "p"}},
+		Sync:    &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "s"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &fakeDiscoverdService{meta: &discoverd.ServiceMeta{Data: meta}}
+	if err := waitForClearedDeposedInAsync(svc, []string{"async1"}, log15.New()); err != nil {
+		t.Fatalf("timeout must not fail the repair: %v", err)
+	}
+}
+
+func TestWaitForClearedDeposedInAsync_PartialRejoinKeepsWaiting(t *testing.T) {
+	origWait := deposedRejoinWait
+	origPoll := deposedRejoinPollInterval
+	defer func() {
+		deposedRejoinWait = origWait
+		deposedRejoinPollInterval = origPoll
+	}()
+	deposedRejoinWait = 50 * time.Millisecond
+	deposedRejoinPollInterval = 10 * time.Millisecond
+
+	partial, err := json.Marshal(sirenia.State{
+		Async: []*discoverd.Instance{
+			{Meta: map[string]string{"POSTGRES_ID": "async1"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &fakeDiscoverdService{metas: []*discoverd.ServiceMeta{{Data: partial}}}
+	if err := waitForClearedDeposedInAsync(svc, []string{"async1", "async2"}, log15.New()); err != nil {
+		t.Fatalf("partial rejoin must time out with nil: %v", err)
+	}
+	if svc.metaCalls < 2 {
+		t.Fatalf("expected repeated GetMeta while waiting, got %d", svc.metaCalls)
+	}
+}
+
+func TestWaitForClearedDeposedInAsync_SucceedsWhenAllRejoin(t *testing.T) {
+	origWait := deposedRejoinWait
+	origPoll := deposedRejoinPollInterval
+	defer func() {
+		deposedRejoinWait = origWait
+		deposedRejoinPollInterval = origPoll
+	}()
+	deposedRejoinWait = time.Second
+	deposedRejoinPollInterval = 5 * time.Millisecond
+
+	empty, err := json.Marshal(sirenia.State{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejoined, err := json.Marshal(sirenia.State{
+		Async: []*discoverd.Instance{
+			{Meta: map[string]string{"POSTGRES_ID": "async1"}},
+			{Meta: map[string]string{"POSTGRES_ID": "async2"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := &fakeDiscoverdService{
+		metas: []*discoverd.ServiceMeta{
+			{Data: empty},
+			{Data: rejoined},
+		},
+	}
+	if err := waitForClearedDeposedInAsync(svc, []string{"async1", "async2"}, log15.New()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPeerApplianceID(t *testing.T) {
 	if got := peerApplianceID(nil); got != "" {
 		t.Fatalf("nil -> %q", got)
