@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 
 	"github.com/flynn/go-docopt"
@@ -21,7 +23,24 @@ type Command struct {
 	Usage string
 }
 
+// startPprof exposes net/http/pprof when FLYNN_BUILDER_PPROF_ADDR is set (e.g.
+// "127.0.0.1:6060"). flynn-builder has been observed at >20 GB RSS during
+// `build --only=apps` on the Vagrant builder, starving mksquashfs/9p of memory;
+// this lets a heap profile be taken from a running build without a rebuild.
+func startPprof() {
+	addr := os.Getenv("FLYNN_BUILDER_PPROF_ADDR")
+	if addr == "" {
+		return
+	}
+	go func() {
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			log.Printf("pprof listener on %s failed: %v", addr, err)
+		}
+	}()
+}
+
 func main() {
+	startPprof()
 	args, _ := docopt.Parse(usage, nil, true, "", true)
 
 	name := args.String["<command>"]
