@@ -116,7 +116,70 @@ status API (`:5433`) fails during initial replication setup.
 **Fix:** remove `SetDefaultEnv` from `ConfigureDiscoverd`; keep it in
 `ConnectLocal` only.
 
-### Other local changes — not implicated in fresh install
+## Other recurring Vagrant overlay failures
+
+These look identical to the ConfigureDiscoverd hang (postgres-wait timeout,
+`waitForUpstream` dial `:5433` i/o timeout) but have different one-line fixes:
+
+### 1. VirtualBox host-only NIC promiscuous mode
+
+Flannel VXLAN needs NIC2 (private_network) in promiscuous **allow-all**.
+Without it, UDP 8472 frames are dropped and overlay pings fail.
+
+```bash
+# One-shot on running VMs:
+for n in node1 node2 node3; do
+  id=$(cat .vagrant/machines/$n/virtualbox/id)
+  VBoxManage controlvm "$id" nicpromisc2 allow-all
+done
+```
+
+`Vagrantfile` already sets `--nicpromisc2 allow-all` for node1/2/3. Recreate
+VMs after changing it (`vagrant destroy -f node1 node2 node3 && vagrant up …`).
+
+### 2. MASQUERADE SNATing overlay→overlay
+
+`EnableOutboundNAT` used to MASQUERADE all egress from the bridge subnet except
+traffic staying on `flynnbr0`. Cross-node container traffic leaving via
+`flannel.1` was SNAT'd to the VTEP `.0` address. Fix (same idea as flannel
+hostgw): exclude the overlay `/16` from MASQUERADE and ACCEPT NEW forwards
+to the local bridge subnet (`pkg/iptables/iptables.go`).
+
+### 3. udev rewrites the flannel VTEP MAC (systemd >= 242, Ubuntu 24.04)
+
+Symptom (2026-09-09): VXLAN frames arrive on the peer's `flannel.1` (visible in
+`tcpdump -e`) but are never answered; `nstat` shows no INPUT/FORWARD hits. The
+inner destination MAC in the frame is not the peer's `flannel.1` MAC.
+
+Cause: `99-default.link` has `MACAddressPolicy=persistent`. The kernel gives a
+new vxlan device a random MAC (`addr_assign_type=1`), flanneld reads it and
+publishes it in the discoverd lease, then systemd-udevd replaces it with a
+"persistent" one (`addr_assign_type=3`). Every peer's FDB/neigh now targets a
+MAC nobody owns. It is a race, so it is intermittent across installs.
+
+```bash
+# On each node: device MAC vs advertised lease MAC
+cat /sys/class/net/flannel.1/address /sys/class/net/flannel.1/addr_assign_type
+curl -s localhost:1111/services/flannel/meta | python3 -m json.tool | grep -A1 VtepMAC
+
+# Live repair (until flanneld restarts): set device MAC back to the lease MAC
+ip link set flannel.1 address <lease VtepMAC>
+```
+
+Fixes: `flannel/backend/vxlan/device.go` sets an explicit MAC at creation
+(`NET_ADDR_SET`, which udev leaves alone) and `EnsureMAC` restores the
+advertised MAC every 10s if anything rewrites it; `script/install-flynn*`
+installs `/etc/systemd/network/10-flynn-flannel.link` (`MACAddressPolicy=none`
+for `flannel.*`). `dump_overlay_diagnostics` in the smoke script prints
+device-vs-lease MACs.
+
+### Misleading diagnostics
+
+Do not hardcode old overlay bridge IPs when debugging. Each bootstrap gets
+fresh `/24` leases (e.g. `100.64.36.1`, `100.64.57.1`, `100.64.88.1`). Discover
+them with `ip -4 addr show flynnbr0` on each node.
+
+## Other local changes — not implicated in fresh install
 
 | Change | Verdict |
 |--------|---------|
