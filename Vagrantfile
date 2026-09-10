@@ -103,6 +103,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
       # Enable nested virtualization if needed for containers
       v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+      # Flannel VXLAN needs promiscuous mode on the host-only NIC (NIC2).
+      # Without this, overlay pings fail and postgres sync never reaches primary :5433.
+      v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
     end
 
     runner.vm.network "private_network", ip: "192.168.56.20"
@@ -131,6 +134,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
       # Enable nested virtualization if needed for containers
       v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+      # Flannel VXLAN needs promiscuous mode on the host-only NIC (NIC2).
+      v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
     end
 
     runner.vm.network "private_network", ip: "192.168.56.21"
@@ -159,6 +164,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
 
       # Enable nested virtualization if needed for containers
       v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+      # Flannel VXLAN needs promiscuous mode on the host-only NIC (NIC2).
+      v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
     end
 
     runner.vm.network "private_network", ip: "192.168.56.22"

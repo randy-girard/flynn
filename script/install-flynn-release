@@ -234,6 +234,30 @@ EOF
   chmod 600 "${CONFIG_DIR}/host.json"
 }
 
+# systemd-udevd (>= v242; Ubuntu 24.04 ships MACAddressPolicy=persistent) rewrites
+# the kernel-random MAC of new virtual devices. flannel publishes its VXLAN VTEP
+# MAC in the subnet lease at creation, so a later rewrite blackholes the overlay.
+# flanneld sets its MAC explicitly; pin the policy too so udev can never undo it.
+install_flannel_link_file() {
+  local dir="/etc/systemd/network"
+  local file="${dir}/10-flynn-flannel.link"
+  if ! command -v udevadm &>/dev/null; then
+    return 0
+  fi
+  info "pinning udev MACAddressPolicy=none for flannel.* (${file})"
+  mkdir -p "${dir}"
+  cat > "${file}" <<EOF
+# Installed by Flynn. Do not let udev rewrite the flannel VXLAN VTEP MAC after
+# flanneld has advertised it to peers.
+[Match]
+OriginalName=flannel.*
+
+[Link]
+MACAddressPolicy=none
+EOF
+  udevadm control --reload 2>/dev/null || true
+}
+
 install_systemd_unit() {
   info "installing systemd unit"
   write_host_auth_config
@@ -582,11 +606,17 @@ main() {
   run apt-get install --yes "${packages[@]}"
 
   if $install_ntp; then
-    info "installing ntp (optional)..."
-    if DEBIAN_FRONTEND=noninteractive apt-get install --yes ntp; then
-      info "ntp package installed"
+    # Ubuntu 24.04+ ships systemd-timesyncd, which Conflicts: time-daemon with ntp/ntpsec.
+    if systemctl is-active --quiet systemd-timesyncd 2>/dev/null \
+      || dpkg -l systemd-timesyncd 2>/dev/null | grep -q '^ii'; then
+      info "systemd-timesyncd already present; skipping ntp package"
     else
-      warn "could not install ntp (common on Ubuntu 24.04+ when systemd-timesyncd or ntpsec is present); continuing without ntp — ensure the host keeps accurate time"
+      info "installing ntp (optional)..."
+      if DEBIAN_FRONTEND=noninteractive apt-get install --yes ntp; then
+        info "ntp package installed"
+      else
+        warn "could not install ntp (common on Ubuntu 24.04+ when systemd-timesyncd or ntpsec is present); continuing without ntp — ensure the host keeps accurate time"
+      fi
     fi
   fi
 
@@ -664,6 +694,7 @@ main() {
 }
 EOF
 
+  install_flannel_link_file
   install_systemd_unit
 
   info "installation complete!"

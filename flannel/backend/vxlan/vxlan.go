@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/flynn/flynn/flannel/backend"
 	"github.com/flynn/flynn/flannel/pkg/ip"
@@ -27,7 +28,13 @@ type VXLANBackend struct {
 	dev  *vxlanDevice
 	stop chan bool
 	wg   sync.WaitGroup
+	// vtepMAC is the MAC published in our lease; the device must keep it.
+	vtepMAC net.HardwareAddr
 }
+
+// macCheckInterval bounds how long a udev-rewritten VTEP MAC can blackhole the
+// overlay before EnsureMAC restores it.
+const macCheckInterval = 10 * time.Second
 
 func New(sm *subnet.SubnetManager, config json.RawMessage) backend.Backend {
 	vb := &VXLANBackend{
@@ -76,7 +83,8 @@ func (vb *VXLANBackend) Init(extIface *net.Interface, extIP net.IP, httpPort str
 		return nil, err
 	}
 
-	sa, err := newSubnetAttrs(extIP, httpPort, vb.dev.MACAddr())
+	vb.vtepMAC = append(net.HardwareAddr(nil), vb.dev.MACAddr()...)
+	sa, err := newSubnetAttrs(extIP, httpPort, vb.vtepMAC)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +110,12 @@ func (vb *VXLANBackend) Init(extIface *net.Interface, extIP net.IP, httpPort str
 		return nil, err
 	}
 
-	return &backend.SubnetDef{sn, vb.dev.MTU()}, nil
+	// udev may have already rewritten the MAC between device creation and now.
+	if _, err := vb.dev.EnsureMAC(vb.vtepMAC); err != nil {
+		log.Error("Error verifying VTEP MAC: ", err)
+	}
+
+	return &backend.SubnetDef{Net: sn, MTU: vb.dev.MTU()}, nil
 }
 
 func (vb *VXLANBackend) Run() {
@@ -122,10 +135,17 @@ func (vb *VXLANBackend) Run() {
 
 	defer vb.wg.Wait()
 
+	macCheck := time.NewTicker(macCheckInterval)
+	defer macCheck.Stop()
+
 	for {
 		select {
 		case evtBatch := <-evts:
 			vb.handleSubnetEvents(evtBatch)
+		case <-macCheck.C:
+			if _, err := vb.dev.EnsureMAC(vb.vtepMAC); err != nil {
+				log.Error("Error verifying VTEP MAC: ", err)
+			}
 		case <-vb.stop:
 			return
 		}
