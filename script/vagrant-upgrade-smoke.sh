@@ -17,10 +17,12 @@
 #      provider (postgres/mysql/mongodb/redis/kafka/clickhouse), embed
 #      dummy slug blobs, and seed dummy rows/keys/topics
 #   7. Verify HTTP + /status resource env + per-engine row/key/topic counts
-#   8. Run flynn-host update --all-nodes --tarball <same build> --force
+#   8. Exercise flynn / flynn-host CLI (apps, ps, scale, env, resource, route,
+#      release, log, run, meta, host list/ps) against the live cluster
+#   9. Run flynn-host update --all-nodes --tarball <same build> --force
 #      twice (sirenia/redis volume bugs have shown up on the second pass)
-#   9. Verify after each pass, tear down cluster nodes, print a step table,
-#      unit-test results, and a per-engine persistence report
+#  10. Verify app/DBs + CLI after each pass, tear down cluster nodes, print a
+#      step table, unit-test results, and a per-engine persistence report
 #
 # Local-only: layer-0 uses --peer-ips (no discovery service). Init waits for
 # flynn-host HTTP (:1113); discoverd (:1111) starts during bootstrap. Layer-1
@@ -52,6 +54,8 @@
 #   SKIP_VAGRANT_UP=1    Assume VMs are already running
 #   SKIP_BUILD=1         Skip builder build; use existing
 #                        build/release/flynn-${BUILD_VERSION}.tar.gz
+#   FLYNN_BUILD_ATTEMPTS How many times to retry a transient builder apt/network
+#                        failure [default: 3]
 #   SKIP_INSTALL=1       Assume Flynn is already installed/bootstrapped
 #                        (skips install+init+bootstrap)
 #   RESUME_AT=bootstrap  Skip vagrant/build/install/init; run bootstrap onward
@@ -59,6 +63,7 @@
 #   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
 #                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
+#   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
 #   SMOKE_SEED_ROWS=N    Dummy rows/keys seeded per datastore [default: 200]
 #   SMOKE_BLOB_COUNT=N   Extra slug files embedded in the test app [default: 100]
@@ -98,10 +103,12 @@ SKIP_UNIT_TESTS="${SKIP_UNIT_TESTS:-0}"
 SKIP_BUILDER_UNIT_TESTS="${SKIP_BUILDER_UNIT_TESTS:-${SKIP_DOCKER_UNIT_TESTS:-0}}"
 SKIP_VAGRANT_UP="${SKIP_VAGRANT_UP:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
+FLYNN_BUILD_ATTEMPTS="${FLYNN_BUILD_ATTEMPTS:-3}"
 SKIP_INSTALL="${SKIP_INSTALL:-0}"
 SKIP_DEPLOY="${SKIP_DEPLOY:-0}"
 SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
+SKIP_CLI="${SKIP_CLI:-0}"
 UPGRADE_PASSES="${UPGRADE_PASSES:-2}"
 SMOKE_SEED_ROWS="${SMOKE_SEED_ROWS:-200}"
 SMOKE_BLOB_COUNT="${SMOKE_BLOB_COUNT:-100}"
@@ -227,6 +234,25 @@ step_log_summary() {
   awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" | tr '\n' ' ' | cut -c1-160
 }
 
+# Prefer the actual failure over go-test coverage noise / apt Get:1 lines.
+# Search LAST_STEP_LOG first: fail_shutdown only passes the last 40 lines, which
+# for `go test ./...` is often "coverage: 0.0%" for packages without tests.
+step_fail_summary() {
+  local detail=$1
+  local err=""
+  if [[ -n "${LAST_STEP_LOG:-}" && -s "${LAST_STEP_LOG}" ]]; then
+    err="$(grep -E 'WARNING: DATA RACE|^--- FAIL:|^FAIL	|race detected|panic:|^E: |Failed to fetch|make: \*\*\*' "${LAST_STEP_LOG}" | tail -n 4 | tr '\n' ' ')"
+  fi
+  if [[ -z "${err}" ]]; then
+    err="$(printf '%s\n' "${detail}" | grep -E 'WARNING: DATA RACE|^--- FAIL:|^FAIL	|race detected|panic:|^E: |Err:|Failed to fetch|apt-get .* failed|make: \*\*\*' | tail -n 3 | tr '\n' ' ')"
+  fi
+  if [[ -n "${err}" ]]; then
+    echo "${err}" | cut -c1-200
+    return
+  fi
+  echo "${detail}" | tr '\n' ' ' | cut -c1-160
+}
+
 print_unit_report() {
   echo
   ui_banner "================================================================================"
@@ -261,7 +287,7 @@ print_unit_report() {
 print_datastore_report() {
   echo
   ui_banner "================================================================================"
-  ui_banner " App & datastore persistence"
+  ui_banner " App, CLI & datastore persistence"
   echo " app=${APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
@@ -270,8 +296,8 @@ print_datastore_report() {
     echo "================================================================================"
     return
   fi
-  printf "| %-16s | %-14s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
-  printf "|------------------|----------------|--------|%s\n" "----------------------------------------"
+  printf "| %-16s | %-16s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
+  printf "|------------------|------------------|--------|%s\n" "----------------------------------------"
   local phase name status detail failed=0 total=0
   while IFS=$'\t' read -r phase name status detail; do
     [[ -z "${phase}" ]] && continue
@@ -280,14 +306,14 @@ print_datastore_report() {
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-16s | %-14s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf "| %-16s | %-16s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
   done < "${CHECK_FILE}"
-  local tot_status="PASS" tot_detail="all app/DB checks passed"
+  local tot_status="PASS" tot_detail="all app/CLI/DB checks passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-16s | %-14s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf "| %-16s | %-16s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
   ui_banner "================================================================================"
 }
 
@@ -473,7 +499,7 @@ fail_shutdown() {
   trap - ERR
   ABORTING=1
 
-  record "${name}" "FAIL" "${elapsed}" "$(echo "${detail}" | tr '\n' ' ' | cut -c1-80)"
+  record "${name}" "FAIL" "${elapsed}" "$(step_fail_summary "${detail}")"
   print_failure_banner "${name}" "${detail}"
   print_results_table
 
@@ -1238,7 +1264,7 @@ step_build_on_builder() {
     fi
   fi
 
-  info "building Flynn ${BUILD_VERSION} on builder (phase=${phase})"
+  info "building Flynn ${BUILD_VERSION} on builder (phase=${phase}, attempts=${FLYNN_BUILD_ATTEMPTS})"
   node_root_script builder <<EOF
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
@@ -1247,8 +1273,34 @@ if [[ ! -x /usr/local/go/bin/go ]]; then
   echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
   exit 1
 fi
-./build.sh --version "${BUILD_VERSION}" "${phase}"
-./script/release --target tarball --version "${BUILD_VERSION}" --output "${REPO_IN_VM}/build/release"
+
+transient_build_failure() {
+  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 ' "\$1"
+}
+
+attempt=1
+max="${FLYNN_BUILD_ATTEMPTS}"
+log="/tmp/flynn-build-attempt.log"
+while true; do
+  echo "===> build attempt \${attempt}/\${max} version=${BUILD_VERSION} phase=${phase}"
+  rc=0
+  ./build.sh --version "${BUILD_VERSION}" "${phase}" 2>&1 | tee "\${log}" || rc=\$?
+  if [[ "\${rc}" -eq 0 ]]; then
+    ./script/release --target tarball --version "${BUILD_VERSION}" --output "${REPO_IN_VM}/build/release"
+    break
+  fi
+  if [[ "\${attempt}" -ge "\${max}" ]]; then
+    echo "build failed after \${max} attempts" >&2
+    exit "\${rc}"
+  fi
+  if ! transient_build_failure "\${log}"; then
+    echo "build failure does not look like apt/network; not retrying" >&2
+    exit "\${rc}"
+  fi
+  echo "===> transient apt/network failure (attempt \${attempt}/\${max}); retrying in 20s..."
+  sleep 20
+  attempt=\$((attempt + 1))
+done
 test -f "$(tarball_vm_path)"
 ls -lh "$(tarball_vm_path)"
 EOF
@@ -1831,6 +1883,120 @@ assert_databases() {
   echo "databases ${label}: postgres/mysql/mongodb/redis/kafka/clickhouse PASS (rows>=${rows})"
 }
 
+# Record one live CLI / flynn-host probe. Empty pattern means exit 0 is enough.
+cli_probe() {
+  local label=$1 name=$2 pattern=$3
+  shift 3
+  local out rc=0 snippet
+  out="$("$@" 2>&1)" || rc=$?
+  snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+  if [[ "${rc}" -eq 0 ]]; then
+    if [[ -z "${pattern}" ]] || printf '%s' "${out}" | grep -qE "${pattern}"; then
+      record_check "${label}" "${name}" "PASS" "${snippet}"
+      echo "cli ${label} ${name}: PASS"
+      return 0
+    fi
+  fi
+  record_check "${label}" "${name}" "FAIL" "rc=${rc} ${snippet}"
+  echo "cli ${label} ${name}: FAIL rc=${rc} ${snippet}" >&2
+  return 1
+}
+
+# Live flynn + flynn-host commands against the cluster. Unit tests cover CLI
+# packages (./cli on the host gate, ./cli + ./host/cli on the builder); this
+# catches controller/scheduler/logaggregator drift after an upgrade. Does not
+# scale or env-set (those create releases and restart web).
+step_cli_functions() {
+  local label=$1
+  local failed=0
+  local out rc hosts
+
+  ensure_flynn_cli_on_node1
+  echo "cli ${label}: flynn + flynn-host against ${APP_NAME}"
+
+  cli_probe "${label}" "cli-apps" "${APP_NAME}" \
+    flynn1 apps || failed=1
+  cli_probe "${label}" "cli-info" "${APP_NAME}|Git URL|Web URL" \
+    flynn1 -a "${APP_NAME}" info || failed=1
+  cli_probe "${label}" "cli-ps" "web" \
+    flynn1 -a "${APP_NAME}" ps || failed=1
+  cli_probe "${label}" "cli-scale" "web=" \
+    flynn1 -a "${APP_NAME}" scale || failed=1
+  cli_probe "${label}" "cli-env" "FLYNN_POSTGRES" \
+    flynn1 -a "${APP_NAME}" env || failed=1
+  cli_probe "${label}" "cli-env-get" "." \
+    flynn1 -a "${APP_NAME}" env get FLYNN_POSTGRES || failed=1
+  rc=0
+  out="$(flynn1 -a "${APP_NAME}" resource 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then
+    local missing=()
+    local provider
+    for provider in "${DATASTORE_PROVIDERS[@]}"; do
+      if ! printf '%s' "${out}" | grep -qi "${provider}"; then
+        missing+=("${provider}")
+      fi
+    done
+    if [[ ${#missing[@]} -eq 0 ]]; then
+      record_check "${label}" "cli-resource" "PASS" "providers=${DATASTORE_PROVIDERS[*]}"
+      echo "cli ${label} cli-resource: PASS"
+    else
+      record_check "${label}" "cli-resource" "FAIL" "missing ${missing[*]}"
+      echo "cli ${label} resource: missing ${missing[*]}" >&2
+      failed=1
+    fi
+  else
+    record_check "${label}" "cli-resource" "FAIL" "rc=${rc} $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} resource: FAIL rc=${rc}" >&2
+    failed=1
+  fi
+  cli_probe "${label}" "cli-provider" "postgres" \
+    flynn1 provider || failed=1
+  cli_probe "${label}" "cli-route" "http|${APP_NAME}" \
+    flynn1 -a "${APP_NAME}" route || failed=1
+  cli_probe "${label}" "cli-release" "." \
+    flynn1 -a "${APP_NAME}" release || failed=1
+  cli_probe "${label}" "cli-limit" "memory=|web" \
+    flynn1 -a "${APP_NAME}" limit || failed=1
+  cli_probe "${label}" "cli-log" "" \
+    flynn1 -a "${APP_NAME}" log -n 20 || failed=1
+
+  rc=0
+  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${APP_NAME}") run -- echo smoke-cli" </dev/null)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q 'smoke-cli'; then
+    record_check "${label}" "cli-run" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-run: PASS"
+  else
+    record_check "${label}" "cli-run" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-run: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
+
+  flynn1 -a "${APP_NAME}" meta set "smoke_cli=${label}" >/dev/null || true
+  cli_probe "${label}" "cli-meta" "smoke_cli" \
+    flynn1 -a "${APP_NAME}" meta || failed=1
+  flynn1 -a "${APP_NAME}" meta unset smoke_cli >/dev/null || true
+
+  rc=0
+  out="$(node_ssh node1 'sudo flynn-host list' </dev/null)" || rc=$?
+  hosts="$(printf '%s\n' "${out}" | awk 'NR>1 && NF>=2 {c++} END{print c+0}')"
+  if [[ "${rc}" -eq 0 && "${hosts}" -ge "${#NODES[@]}" ]]; then
+    record_check "${label}" "cli-host-list" "PASS" "hosts=${hosts}"
+    echo "cli ${label} host-list: PASS hosts=${hosts}"
+  else
+    record_check "${label}" "cli-host-list" "FAIL" "rc=${rc} hosts=${hosts:-?} want>=${#NODES[@]}"
+    echo "cli ${label} host-list: FAIL rc=${rc} hosts=${hosts} ${out}" >&2
+    failed=1
+  fi
+  cli_probe "${label}" "cli-host-ps" "." \
+    node_ssh node1 'sudo flynn-host ps' || failed=1
+
+  if [[ "${failed}" -ne 0 ]]; then
+    echo "CLI function checks failed for ${label}" >&2
+    return 1
+  fi
+  echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/meta/host PASS"
+}
+
 step_verify_before() {
   wait_for "app HTTP pre-upgrade" 180 probe_app_http
   assert_app_http pre-upgrade
@@ -2006,6 +2172,11 @@ main() {
   else
     run_step "Verify app/DBs before upgrade" step_verify_before
   fi
+  if [[ "${SKIP_CLI}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+    record "CLI functions (pre-upgrade)" "SKIP" 0 "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
+  else
+    run_step "CLI functions (pre-upgrade)" step_cli_functions pre-upgrade
+  fi
 
   if [[ "${SKIP_UPGRADE}" == "1" ]]; then
     record "Upgrade --all-nodes (local tarball)" "SKIP" 0 "SKIP_UPGRADE=1"
@@ -2015,6 +2186,12 @@ main() {
     for pass in $(seq 1 "${UPGRADE_PASSES}"); do
       run_step "Upgrade pass ${pass}/${UPGRADE_PASSES} --all-nodes" step_upgrade "${pass}"
       run_step "Verify app/DBs after upgrade ${pass}/${UPGRADE_PASSES}" step_verify_after "${pass}"
+      if [[ "${SKIP_CLI}" == "1" ]]; then
+        record "CLI functions after upgrade ${pass}/${UPGRADE_PASSES}" "SKIP" 0 "SKIP_CLI=1"
+      else
+        run_step "CLI functions after upgrade ${pass}/${UPGRADE_PASSES}" \
+          step_cli_functions "post-upgrade-${pass}"
+      fi
     done
   fi
 
