@@ -151,7 +151,7 @@ main() {
   local packages=("iptables" "zfsutils-linux" "apparmor" "apparmor-utils")
 
   info "installing runtime dependencies"
-  run apt-get update
+  apt_get_update_resilient
   run apt-get install --yes "${packages[@]}"
 
   if $install_ntp; then
@@ -465,6 +465,51 @@ check_installed() {
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     fail "this script requires: ${missing[@]}"
+  fi
+}
+
+apt_get_update_resilient() {
+  local n=1 max=5 delay=5 rc=0
+  mkdir -p /etc/apt/apt.conf.d
+  cat >/etc/apt/apt.conf.d/80-flynn-retries <<'EOF'
+Acquire::Retries "5";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
+Acquire::ForceIPv4 "true";
+EOF
+  info "running apt-get update (retries; docker.com must not block Ubuntu packages)"
+  while true; do
+    if apt-get update; then
+      return 0
+    fi
+    rc=$?
+    if [[ "${n}" -ge "${max}" ]]; then
+      break
+    fi
+    echo "apt-get update failed (attempt ${n}/${max}); retrying in ${delay}s..." >&2
+    rm -rf /var/lib/apt/lists/partial/* 2>/dev/null || true
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+    if [[ "${delay}" -gt 45 ]]; then
+      delay=45
+    fi
+  done
+  info "apt-get update still failing; retrying without docker.com/mongodb sources"
+  local f restored=()
+  for f in /etc/apt/sources.list.d/docker.sources /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/mongodb-org-8.0.list; do
+    if [[ -e "${f}" ]]; then
+      mv "${f}" "${f}.flynn-apt-bak"
+      restored+=("${f}")
+    fi
+  done
+  rc=0
+  apt-get update || rc=$?
+  for f in "${restored[@]}"; do
+    mv "${f}.flynn-apt-bak" "${f}" || true
+  done
+  if [[ "${rc}" -ne 0 ]]; then
+    fail "failed to run apt-get update, exit status ${rc}"
   fi
 }
 

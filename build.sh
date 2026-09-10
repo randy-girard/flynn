@@ -73,6 +73,8 @@ USAGE
 # Get the root directory of the Flynn project
 FLYNN_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export FLYNN_ROOT
+# shellcheck source=script/lib/apt-retry.sh
+source "${FLYNN_ROOT}/script/lib/apt-retry.sh"
 
 # Parse command line arguments
 VERSION=""
@@ -191,6 +193,7 @@ run_phase_base() {
   echo "===> [base] Preparing apt (IPv4) and base root image..."
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+  flynn_apt_install_conf
 
   CACHE_DIR=/var/cache/flynn/debootstrap
   ROOTFS=/var/lib/flynn/base-root
@@ -244,6 +247,7 @@ run_phase_prep() {
   fi
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
+  flynn_apt_install_conf
 
   cd "${FLYNN_ROOT}"
   mkdir -p /etc/flynn

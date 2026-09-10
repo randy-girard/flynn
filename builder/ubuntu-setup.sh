@@ -29,9 +29,9 @@ echo 'Acquire::GzipIndexes "true"; Acquire::CompressionTypes::Order:: "gz";' > /
 echo 'Apt::AutoRemove::SuggestsImportant "false";' > /etc/apt/apt.conf.d/docker-autoremove-suggests
 
 cat > /etc/apt/apt.conf.d/80-retries <<'EOF'
-Acquire::Retries "3";
-Acquire::http::Timeout "15";
-Acquire::https::Timeout "15";
+Acquire::Retries "5";
+Acquire::http::Timeout "30";
+Acquire::https::Timeout "30";
 Acquire::Queue-Mode "access";
 EOF
 
@@ -70,12 +70,42 @@ if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
   rm -rf /var/lib/apt/lists/*
 fi
 
+# Builder host apt sources (docker.com / mongodb) must not leak into this chroot.
+rm -f /etc/apt/sources.list.d/docker.sources \
+  /etc/apt/sources.list.d/docker.list \
+  /etc/apt/sources.list.d/mongodb-org-8.0.list \
+  /etc/apt/sources.list.d/mongodb-org-*.list 2>/dev/null || true
+
+flynn_chroot_apt() {
+  local n=1 max=5 delay=5 rc=0
+  while true; do
+    if apt-get "$@"; then
+      return 0
+    fi
+    rc=$?
+    if [[ "${n}" -ge "${max}" ]]; then
+      return "${rc}"
+    fi
+    echo "chroot apt-get $* failed (attempt ${n}/${max}, rc=${rc}); retrying in ${delay}s..." >&2
+    rm -rf /var/lib/apt/lists/partial/* /var/cache/apt/archives/partial/* 2>/dev/null || true
+    if [[ "${n}" -ge 2 ]]; then
+      rm -f /var/lib/apt/lists/*InRelease /var/lib/apt/lists/*_InRelease 2>/dev/null || true
+    fi
+    sleep "${delay}"
+    n=$((n + 1))
+    delay=$((delay * 2))
+    if [[ "${delay}" -gt 45 ]]; then
+      delay=45
+    fi
+  done
+}
+
 # update packages
-apt-get update
-apt-get dist-upgrade --yes
+flynn_chroot_apt update
+flynn_chroot_apt dist-upgrade --yes
 
 # install common Flynn image tools (net-tools / iproute2: diagnostics matching flynn-host collect-debug-info)
-apt-get install --yes squashfs-tools curl gnupg coreutils net-tools iproute2
+flynn_chroot_apt install --yes squashfs-tools curl gnupg coreutils net-tools iproute2
 
 # Strip downloaded packages from this rootfs unless a flynn-builder host APT cache bind is mounted
 # (see builder/build.go). Keeps Noble/SquashFS layers slim without wiping the shared ./ubuntu_ports_cache.

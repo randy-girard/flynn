@@ -43,8 +43,16 @@ install_packages() {
 
   info "installing apparmor packages"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq apparmor apparmor-utils
+  ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+  if [[ -f "${ROOT}/script/lib/apt-retry.sh" ]]; then
+    # shellcheck source=script/lib/apt-retry.sh
+    source "${ROOT}/script/lib/apt-retry.sh"
+    flynn_apt_update_host
+    flynn_apt_cmd install -y -qq apparmor apparmor-utils
+  else
+    apt-get update -qq
+    apt-get install -y -qq apparmor apparmor-utils
+  fi
 }
 
 # Install the flynn-default profile

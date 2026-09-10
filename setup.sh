@@ -1,6 +1,14 @@
-apt-get update
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=script/lib/apt-retry.sh
+source "${SCRIPT_DIR}/script/lib/apt-retry.sh"
+
+flynn_apt_install_conf
+flynn_apt_update_host || exit 1
+
 add-apt-repository ppa:longsleep/golang-backports -y
-apt-get install -y ca-certificates curl gcc cloud-guest-utils lvm2 gh
+flynn_apt_cmd install -y ca-certificates curl gcc cloud-guest-utils lvm2 gh || exit 1
 
 growpart /dev/sda 3
 pvresize /dev/sda3
@@ -30,9 +38,8 @@ EOF
 echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
 curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
 
-
-apt update
-apt-get install -y \
+flynn_apt_cmd update || exit 1
+flynn_apt_cmd install -y \
   docker-ce \
   docker-ce-cli \
   containerd.io \
@@ -60,7 +67,7 @@ apt-get install -y \
   redis \
   postgresql \
   postgresql-contrib \
-  mongodb-org
+  mongodb-org || exit 1
 
 cd /usr/local
 # adjust version as you like; 1.20+ is fine for Flynn
