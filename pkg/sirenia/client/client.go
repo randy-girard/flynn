@@ -32,6 +32,20 @@ func ProcessIDKey(processType string) string {
 	}
 }
 
+// SamePeer reports whether a and b are the same sirenia appliance peer.
+// When idKey is set (POSTGRES_ID / MARIADB_ID / MONGODB_ID), identity is the
+// appliance meta value so a replacement at a new address still matches. An
+// empty idKey or missing meta falls back to discoverd Instance.ID.
+func SamePeer(idKey string, a, b *discoverd.Instance) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if idKey != "" && a.Meta != nil && b.Meta != nil && a.Meta[idKey] != "" {
+		return a.Meta[idKey] == b.Meta[idKey]
+	}
+	return a.ID == b.ID
+}
+
 type DatabaseInfo struct {
 	Config           *state.Config       `json:"config"`
 	Running          bool                `json:"running"`
@@ -142,11 +156,7 @@ func SyncedWith(expected *discoverd.Instance, idKey string) func(*Status) bool {
 			return false
 		}
 		synced := status.Database.SyncedDownstream
-		if idKey != "" && expected != nil && expected.Meta != nil && synced.Meta != nil {
-			id := expected.Meta[idKey]
-			return id != "" && id == synced.Meta[idKey]
-		}
-		return synced.ID == expected.ID
+		return SamePeer(idKey, expected, synced)
 	}
 }
 

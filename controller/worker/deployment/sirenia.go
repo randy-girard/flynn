@@ -328,15 +328,6 @@ loop:
 	// is still the sync when the primary dies, that peer must take over instead
 	// of the new peer we started, and the new primary never becomes read-write.
 	idKey := sireniaclient.ProcessIDKey(processType)
-	samePeer := func(a, b *discoverd.Instance) bool {
-		if a == nil || b == nil {
-			return false
-		}
-		if idKey != "" && a.Meta != nil && b.Meta != nil && a.Meta[idKey] != "" {
-			return a.Meta[idKey] == b.Meta[idKey]
-		}
-		return a.ID == b.ID
-	}
 	waitForSyncPeer := func(upstream, successor *discoverd.Instance) error {
 		log.Info("waiting for successor to become the synchronous peer", "upstream", upstream.Addr, "successor", successor.Addr)
 		sc := sireniaclient.NewClient(upstream.Addr)
@@ -346,7 +337,7 @@ loop:
 		for {
 			status, err := sc.Status()
 			if err == nil && status.Peer != nil && status.Peer.State != nil &&
-				samePeer(status.Peer.State.Sync, successor) {
+				sireniaclient.SamePeer(idKey, status.Peer.State.Sync, successor) {
 				return nil
 			}
 			select {

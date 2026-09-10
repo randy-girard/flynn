@@ -112,6 +112,35 @@ func TestWaitForReadWriteEventually(t *testing.T) {
 	}
 }
 
+func TestSamePeer(t *testing.T) {
+	a := mkInst("10.0.0.1:5432", "peer-a")
+	bMoved := mkInst("10.0.0.9:5432", "peer-a")
+	bOther := mkInst("10.0.0.1:5432", "peer-b")
+	noMeta := &discoverd.Instance{ID: a.ID, Addr: "10.0.0.1:5432"}
+
+	tests := []struct {
+		name  string
+		key   string
+		left  *discoverd.Instance
+		right *discoverd.Instance
+		want  bool
+	}{
+		{"nil left", "POSTGRES_ID", nil, a, false},
+		{"nil right", "POSTGRES_ID", a, nil, false},
+		{"same appliance id new address", "POSTGRES_ID", a, bMoved, true},
+		{"same address different appliance id", "POSTGRES_ID", a, bOther, false},
+		{"empty key falls back to discoverd ID", "", a, noMeta, true},
+		{"empty key different discoverd ID", "", a, bMoved, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SamePeer(tc.key, tc.left, tc.right); got != tc.want {
+				t.Fatalf("SamePeer() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsRecoverableStopError(t *testing.T) {
 	if IsRecoverableStopError(nil) {
 		t.Fatal("nil should not be recoverable")
