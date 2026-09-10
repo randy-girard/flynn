@@ -1186,3 +1186,24 @@ func (TestSuite) TestFindVolumeRedisHeldByRunningJob(c *C) {
 	c.Assert(got, NotNil)
 	c.Assert(got.ID, Equals, "redis-data")
 }
+
+func (TestSuite) TestInternalStateCopiesJobs(c *C) {
+	orig := &Job{ID: "job1", State: JobStateStarting}
+	s := &Scheduler{
+		logger:     log15.New(),
+		hosts:      map[string]*Host{},
+		jobs:       Jobs{"job1": orig},
+		formations: Formations{},
+		volumes:    map[string]*Volume{},
+	}
+	req := NewInternalStateRequest()
+	s.HandleInternalStateRequest(req)
+	<-req.Done
+	got := req.State.Jobs["job1"]
+	c.Assert(got, NotNil)
+	if got == orig {
+		c.Fatal("InternalState must copy jobs; &(*job) aliases the live scheduler job")
+	}
+	orig.State = JobStateStopped
+	c.Assert(got.State, Equals, JobStateStarting)
+}
