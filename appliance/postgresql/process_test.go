@@ -467,7 +467,9 @@ func (PostgresSuite) TestDataDirInitializedRequiresMatchingMarker(c *C) {
 func (PostgresSuite) TestAssumeStandbyReusesInitializedDataDir(c *C) {
 	primary := NewTestProcess(c, 11)
 	standby := NewTestProcess(c, 12)
-	standby.waitUpstream = true
+	// Do not set waitUpstream: that polls the sirenia HTTP API on postgres
+	// port+1, which NewTestProcess does not serve. The first Start() uses
+	// pg_basebackup. The second Start() (primary down) is the reuse path.
 
 	c.Assert(primary.Reconfigure(pgConfig(state.RolePrimary, nil, standby)), IsNil)
 	c.Assert(primary.Start(), IsNil)
