@@ -1,6 +1,7 @@
 package updaterdeploy
 
 import (
+	"errors"
 	"testing"
 
 	controller "github.com/flynn/flynn/controller/client"
@@ -74,16 +75,53 @@ func TestRepairStaleVolumes_RequiresTwoConsecutiveMisses(t *testing.T) {
 	}
 }
 
+func TestShouldDestroyStaleVolume(t *testing.T) {
+	jobID := "job-1"
+	vol := &ct.Volume{ID: "vol-1", HostID: "host-1", JobID: &jobID, State: ct.VolumeStateCreated}
+	present := map[string]map[string]struct{}{"host-1": {"vol-1": {}}}
+	missing := map[string]map[string]struct{}{"host-1": {}}
+	noHost := map[string]map[string]struct{}{}
+	live := map[string]bool{jobID: true}
+	none := map[string]bool{}
+
+	tests := []struct {
+		name     string
+		vol      *ct.Volume
+		first    map[string]map[string]struct{}
+		second   map[string]map[string]struct{}
+		liveJobs map[string]bool
+		want     bool
+	}{
+		{"nil volume", nil, missing, missing, none, false},
+		{"already destroyed", &ct.Volume{ID: "vol-1", HostID: "host-1", State: ct.VolumeStateDestroyed}, missing, missing, none, false},
+		{"host missing first poll", vol, noHost, missing, none, false},
+		{"host missing second poll", vol, missing, noHost, none, false},
+		{"present on first poll", vol, present, missing, none, false},
+		{"present on second poll", vol, missing, present, none, false},
+		{"missing twice with live job", vol, missing, missing, live, false},
+		{"missing twice JobList failed", vol, missing, missing, nil, false},
+		{"missing twice down job", vol, missing, missing, none, true},
+		{"missing twice no job id", &ct.Volume{ID: "vol-1", HostID: "host-1", State: ct.VolumeStateCreated}, missing, missing, none, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shouldDestroyStaleVolume(tc.vol, tc.first, tc.second, tc.liveJobs)
+			if got != tc.want {
+				t.Fatalf("shouldDestroyStaleVolume() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRepairStaleVolumes_NeverDestroysVolumeWithLiveJob(t *testing.T) {
 	origDelay := staleVolumeRecheckDelay
 	staleVolumeRecheckDelay = 0
 	defer func() { staleVolumeRecheckDelay = origDelay }()
 
 	jobID := "job-live"
-	volID := "vol-1"
 	ctrl := &fakeVolumeController{
 		volumes: []*ct.Volume{{
-			ID:     volID,
+			ID:     "vol-1",
 			HostID: "host-1",
 			AppID:  "app-1",
 			JobID:  &jobID,
@@ -94,34 +132,42 @@ func TestRepairStaleVolumes_NeverDestroysVolumeWithLiveJob(t *testing.T) {
 		},
 	}
 
-	// Inject host indexes via a test hook by calling the destroy decision
-	// helpers indirectly: use RepairStaleVolumes with empty hosts so host
-	// index is empty — that path skips. Instead unit-test the live-job
-	// guard via liveJobIDs + explicit scenario using a stub host index
-	// through repairing with a custom path.
-
 	live, err := liveJobIDs(ctrl, ctrl.volumes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !live[jobID] {
-		t.Fatal("expected live job id")
+	missing := map[string]map[string]struct{}{"host-1": {}}
+	if shouldDestroyStaleVolume(ctrl.volumes[0], missing, missing, live) {
+		t.Fatal("must not destroy a volume referenced by an up job")
 	}
+}
 
-	// Simulate two empty host indexes (volume missing both times) but live job.
-	first := map[string]map[string]struct{}{"host-1": {}}
-	second := map[string]map[string]struct{}{"host-1": {}}
-	vol := ctrl.volumes[0]
-	_, inFirst := first[vol.HostID][vol.ID]
-	_, inSecond := second[vol.HostID][vol.ID]
-	if inFirst || inSecond {
-		t.Fatal("expected missing from both")
+func TestRepairStaleVolumes_JobListErrorDoesNotDestroy(t *testing.T) {
+	origDelay := staleVolumeRecheckDelay
+	staleVolumeRecheckDelay = 0
+	defer func() { staleVolumeRecheckDelay = origDelay }()
+
+	jobID := "job-live"
+	ctrl := &fakeVolumeController{
+		volumes: []*ct.Volume{{
+			ID:     "vol-1",
+			HostID: "host-1",
+			AppID:  "app-1",
+			JobID:  &jobID,
+			State:  ct.VolumeStateCreated,
+		}},
+		jobListErr: errors.New("controller unavailable"),
 	}
-	if vol.JobID != nil && live[*vol.JobID] {
-		// would skip destroy — assert that branch
-		return
+	if err := RepairStaleVolumes(ctrl, nil, log15.New()); err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("expected live-job guard to trigger")
+	if len(ctrl.put) != 0 {
+		t.Fatal("JobList failure must not mark volumes destroyed")
+	}
+	missing := map[string]map[string]struct{}{"host-1": {}}
+	if shouldDestroyStaleVolume(ctrl.volumes[0], missing, missing, nil) {
+		t.Fatal("nil liveJobs (JobList failed) must not destroy")
+	}
 }
 
 func TestLiveJobIDs(t *testing.T) {
