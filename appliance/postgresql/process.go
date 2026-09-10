@@ -582,7 +582,7 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 
 func (p *Process) verifyOrReseedStandby(log log15.Logger, upstream *discoverd.Instance) error {
 	status, err := client.NewClient(upstream.Addr).Status()
-	if err != nil || status.Database == nil || !status.Database.Running {
+	if skipStandbyHealthWhenUpstreamDown(status, err) {
 		log.Warn("upstream unreachable, skipping standby replication health check", "err", err)
 		return nil
 	}
@@ -641,21 +641,40 @@ func (p *Process) standbyReplicationHealthy() (bool, error) {
 	for time.Now().Before(deadline) {
 		var status *string
 		err := p.db.QueryRow("SELECT status FROM pg_stat_wal_receiver").Scan(&status)
-		if err == nil && status != nil && *status == "streaming" {
-			return true, nil
+		receiver := ""
+		if err == nil && status != nil {
+			receiver = *status
 		}
 		var lsn string
-		if err := p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&lsn); err == nil {
-			if startLSN != "" && lsn != "" && lsn != startLSN {
-				return true, nil
-			}
-			if startLSN == "" && lsn != "" {
-				startLSN = lsn
-			}
+		if err := p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&lsn); err != nil {
+			lsn = ""
+		}
+		if postgresStandbyLooksHealthy(receiver, startLSN, lsn) {
+			return true, nil
+		}
+		if startLSN == "" && lsn != "" {
+			startLSN = lsn
 		}
 		time.Sleep(standbyReplicationCheckInterval)
 	}
 	return false, nil
+}
+
+// skipStandbyHealthWhenUpstreamDown is true when verifyOrReseedStandby cannot
+// compare against a live primary. Unlike MariaDB async peers, postgres skips
+// rather than scheduling a deferred reseed — takeover still needs the local
+// database running.
+func skipStandbyHealthWhenUpstreamDown(status *client.Status, err error) bool {
+	return err != nil || status == nil || status.Database == nil || !status.Database.Running
+}
+
+// postgresStandbyLooksHealthy reports streaming or advancing WAL replay.
+// Being behind the upstream is fine; a dead receiver that never progresses is not.
+func postgresStandbyLooksHealthy(receiverStatus, startLSN, currentLSN string) bool {
+	if receiverStatus == "streaming" {
+		return true
+	}
+	return startLSN != "" && currentLSN != "" && currentLSN != startLSN
 }
 
 func (p *Process) dataDirInitialized() bool {
