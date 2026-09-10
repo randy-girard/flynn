@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -41,6 +42,40 @@ func TestIsControllerPlacedJob(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isControllerPlacedJob(tt.job); got != tt.want {
 				t.Fatalf("isControllerPlacedJob() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSettleClusterSizeError(t *testing.T) {
+	first := errors.New("size timeout")
+	retry := errors.New("retry size timeout")
+	health := errors.New("unhealthy")
+
+	tests := []struct {
+		name                 string
+		first, health, retry error
+		fatal                bool
+		wantNil              bool
+		want                 error
+	}{
+		{"first wait ok", nil, nil, nil, true, true, nil},
+		{"fatal health ok retry ok", first, nil, nil, true, true, nil},
+		{"fatal health ok retry fail", first, nil, retry, true, false, retry},
+		{"fatal health fail keeps first error", first, health, retry, true, false, first},
+		{"non-fatal continues", first, health, retry, false, true, nil},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := settleClusterSizeError(tc.first, tc.fatal, tc.health, tc.retry)
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("got %v, want nil", got)
+				}
+				return
+			}
+			if got != tc.want {
+				t.Fatalf("got %v, want %v", got, tc.want)
 			}
 		})
 	}
