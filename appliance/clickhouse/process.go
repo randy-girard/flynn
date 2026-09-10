@@ -91,16 +91,16 @@ type Process struct {
 // NewProcess returns a new Process with defaults.
 func NewProcess() *Process {
 	p := &Process{
-		ShardName:       "01",
-		ClusterName:     DefaultClusterName,
-		HTTPPort:        DefaultHTTPPort,
-		NativePort:      DefaultNativePort,
-		InterserverPort: DefaultInterserverPort,
-		BinDir:          DefaultBinDir,
-		DataDir:         DefaultDataDir,
+		ShardName:        "01",
+		ClusterName:      DefaultClusterName,
+		HTTPPort:         DefaultHTTPPort,
+		NativePort:       DefaultNativePort,
+		InterserverPort:  DefaultInterserverPort,
+		BinDir:           DefaultBinDir,
+		DataDir:          DefaultDataDir,
 		KeeperClientPort: DefaultKeeperClientPort,
-		OpTimeout:       DefaultOpTimeout,
-		Logger:          log15.New("app", "clickhouse"),
+		OpTimeout:        DefaultOpTimeout,
+		Logger:           log15.New("app", "clickhouse"),
 	}
 	p.stopping.Store(false)
 	return p
@@ -378,6 +378,10 @@ var serverConfigTemplate = template.Must(template.New("flynn.xml").Parse(`
             </shard>
         </{{.ClusterName}}>
     </remote_servers>
+
+    <distributed_ddl>
+        <path>/clickhouse/task_queue/ddl</path>
+    </distributed_ddl>
 
     <macros>
         <cluster>{{.ClusterName}}</cluster>
