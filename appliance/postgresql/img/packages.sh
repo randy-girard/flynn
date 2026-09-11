@@ -2,16 +2,15 @@
 
 export DEBIAN_FRONTEND=noninteractive
 
-# ---- Base system deps ----
+# ---- Base system deps (repo keys only; purged after install) ----
 apt-get update
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
   gnupg \
-  lsb-release \
   sudo \
-  software-properties-common \
-  locales
+  locales \
+  less
 
 # ---- Locale ----
 locale-gen en_US.UTF-8
@@ -37,23 +36,22 @@ https://packagecloud.io/timescale/timescaledb/ubuntu/ noble main" \
 
 # ---- Install PostgreSQL + extensions ----
 apt-get update -o Acquire::Retries=5
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   postgresql-16 \
   postgresql-contrib-16 \
   postgresql-16-pgextwlist \
   postgresql-16-postgis-3 \
   postgresql-16-pgrouting \
   timescaledb-2-postgresql-16 \
+  timescaledb-tools \
   less
 
 # ---- Enable TimescaleDB ----
 timescaledb-tune --yes
 
-# ---- Cleanup ----
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
-rm -rf /var/lib/apt/lists/*
+apt-get purge -y --auto-remove curl gnupg || true
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh
 
 # ---- Disable psql history for root ----
 echo "\set HISTFILE /dev/null" > /root/.psqlrc

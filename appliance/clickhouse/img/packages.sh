@@ -5,8 +5,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 # ---- Update base system ----
 apt-get update -o Acquire::Retries=5
-apt-get install -y \
-  apt-transport-https \
+apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
   gnupg
@@ -26,7 +25,7 @@ apt-get update -o Acquire::Retries=5
 # but the keeper binary is included via clickhouse-common-static (a dependency
 # of clickhouse-server). Flynn runs keeper and server in separate jobs from the
 # same image, so we only install the server and client packages here.
-apt-get install -y clickhouse-server clickhouse-client
+apt-get install -y --no-install-recommends clickhouse-server clickhouse-client
 
 # ---- Strip file capabilities from the clickhouse binary ----
 # The deb sets cap_net_admin,cap_ipc_lock,cap_sys_nice,cap_net_bind_service=ep
@@ -35,14 +34,12 @@ apt-get install -y clickhouse-server clickhouse-client
 # net_admin/ipc_lock/sys_nice, so execve() fails with EPERM ("operation not
 # permitted"). ClickHouse runs without them (it only skips the corresponding
 # optimizations), so clear them so the server and keeper jobs can start.
-apt-get install -y libcap2-bin
+apt-get install -y --no-install-recommends libcap2-bin
 setcap -r /usr/bin/clickhouse || true
 
 # ---- Data directory ----
 mkdir -p /data
 
-# ---- Cleanup ----
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
-rm -rf /var/lib/apt/lists/*
+apt-get purge -y --auto-remove libcap2-bin curl gnupg || true
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh

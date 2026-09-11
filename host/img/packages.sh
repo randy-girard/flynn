@@ -6,18 +6,17 @@ export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
 
-apt-get install -y linux-gcp \
+apt-get install -y --no-install-recommends linux-gcp \
     initramfs-tools \
     systemd \
     udev \
     zfsutils-linux \
     iptables \
-    net-tools \
     iproute2 \
     qemu-kvm \
     apparmor \
     apparmor-utils \
-    libseccomp-dev \
+    libseccomp2 \
     jq
 
 # support 9p rootfs when starting in a VM
@@ -63,9 +62,5 @@ DHCP=ipv4
 EOF
 systemctl enable systemd-networkd.service
 
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
-fi
-if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
-  rm -rf /var/lib/apt/lists/*
-fi
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh

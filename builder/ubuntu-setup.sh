@@ -104,8 +104,29 @@ flynn_chroot_apt() {
 flynn_chroot_apt update
 flynn_chroot_apt dist-upgrade --yes
 
-# install common Flynn image tools (net-tools / iproute2: diagnostics matching flynn-host collect-debug-info)
-flynn_chroot_apt install --yes squashfs-tools curl gnupg coreutils net-tools iproute2
+# install common Flynn image tools (iproute2: diagnostics matching flynn-host collect-debug-info)
+flynn_chroot_apt install --yes --no-install-recommends squashfs-tools curl gnupg coreutils iproute2 ca-certificates
+
+# Cloud images ship snapd/cloud-init/landscape/etc. Flynn containers never use them.
+flynn_chroot_apt purge --yes --auto-remove \
+  snapd \
+  cloud-init \
+  cloud-initramfs-copymods \
+  cloud-initramfs-dyn-netconf \
+  landscape-common \
+  pollinate \
+  ubuntu-pro-client \
+  ubuntu-pro-client-l10n \
+  command-not-found \
+  python3-commandnotfound \
+  fwupd \
+  unattended-upgrades \
+  open-vm-tools \
+  plymouth \
+  popularity-contest \
+  lxd-installer \
+  || true
+rm -rf /root/snap /var/lib/snapd /var/cache/snapd /usr/lib/snapd || true
 
 # Strip downloaded packages from this rootfs unless a flynn-builder host APT cache bind is mounted
 # (see builder/build.go). Keeps Noble/SquashFS layers slim without wiping the shared ./ubuntu_ports_cache.

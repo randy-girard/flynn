@@ -9,7 +9,7 @@ KAFKA_DIST="kafka_${SCALA_VERSION}-${KAFKA_VERSION}"
 
 # ---- Update base system & install a JRE ----
 apt-get update -o Acquire::Retries=5
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   openjdk-17-jre-headless \
   openssl \
   curl \
@@ -22,12 +22,12 @@ mkdir -p /opt
 tar -xzf /tmp/kafka.tgz -C /opt
 mv "/opt/${KAFKA_DIST}" /opt/kafka
 rm -f /tmp/kafka.tgz
+rm -rf /opt/kafka/site-docs /opt/kafka/bin/windows
+find /opt/kafka -name '*.bat' -delete || true
 
 # ---- Data directory ----
 mkdir -p /data
 
-# ---- Cleanup ----
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
-rm -rf /var/lib/apt/lists/*
+apt-get purge -y --auto-remove curl || true
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh

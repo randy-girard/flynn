@@ -41,7 +41,8 @@
         {
           "script": "builder/img/go.sh",
           "inputs": [
-            "builder/go-wrapper.sh"
+            "builder/go-wrapper.sh",
+            "builder/img/apt-slim-finish.sh"
           ]
         }
       ]
@@ -55,14 +56,15 @@
           "inputs": [
             "go.mod",
             "go.sum",
-            "vendor/**"
+            "vendor/**",
+            "builder/img/apt-slim-finish.sh"
           ]
         }
       ]
     },
     {
       "id": "builder",
-      "base": "go",
+      "base": "busybox",
       "layers": [
         {
           "gobuild": {
@@ -114,6 +116,9 @@
         {
           "name": "host-packages",
           "script": "host/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -156,9 +161,7 @@
         {
           "protobuild": [
             "controller/api"
-          ]
-        },
-        {
+          ],
           "gobuild": {
             "controller": "/bin/flynn-controller",
             "controller/scheduler": "/bin/flynn-scheduler",
@@ -213,6 +216,9 @@
         {
           "name": "postgres-packages",
           "script": "appliance/postgresql/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -241,6 +247,9 @@
         {
           "name": "mariadb-packages",
           "script": "appliance/mariadb/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -269,6 +278,9 @@
         {
           "name": "mongodb-packages",
           "script": "appliance/mongodb/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -299,6 +311,9 @@
         {
           "name": "redis-packages",
           "script": "appliance/redis/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -329,6 +344,9 @@
         {
           "name": "kafka-packages",
           "script": "appliance/kafka/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -357,6 +375,9 @@
         {
           "name": "clickhouse-packages",
           "script": "appliance/clickhouse/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -380,7 +401,7 @@
     },
     {
       "id": "blobstore",
-      "base": "ubuntu-noble",
+      "base": "busybox",
       "layers": [
         {
           "gobuild": {
@@ -446,6 +467,9 @@
         {
           "name": "gitreceive-packages",
           "script": "gitreceive/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -506,6 +530,9 @@
         {
           "name": "taffy-packages",
           "script": "gitreceive/img/packages.sh",
+          "inputs": [
+            "builder/img/apt-slim-finish.sh"
+          ],
           "limits": {
             "temp_disk": "4G"
           }
@@ -599,13 +626,14 @@
     },
     {
       "id": "dockerbuilder-24",
-      "base": "heroku-24-build",
+      "base": "ubuntu-noble",
       "layers": [
         {
           "name": "dockerbuilder-packages",
           "script": "dockerbuilder/img/packages.sh",
           "inputs": [
-            "dockerbuilder/img/buildctl-daemonless.sh"
+            "dockerbuilder/img/buildctl-daemonless.sh",
+            "builder/img/apt-slim-finish.sh"
           ]
         },
         {
