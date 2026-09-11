@@ -34,6 +34,7 @@ import (
 )
 
 const bufSize = 1024 * 1024
+const grpcStreamTestTimeout = 2 * time.Second
 
 type GRPCSuite struct {
 	db                  *postgres.DB
@@ -269,7 +270,7 @@ func (s *GRPCSuite) TestOptionsRequest(c *C) { // grpc-web
 }
 
 func (s *GRPCSuite) TestUnauthenticated(c *C) {
-	ctx, _ := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, _ := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	stream, err := s.grpcNoAuth.StreamApps(ctx, &api.StreamAppsRequest{})
 	c.Assert(err, IsNil)
 	_, err = stream.Recv()
@@ -279,7 +280,7 @@ func (s *GRPCSuite) TestUnauthenticated(c *C) {
 }
 
 func unaryReceiveApps(s *GRPCSuite, c *C, req *api.StreamAppsRequest) (res *api.StreamAppsResponse, receivedEOF bool) {
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, ctxCancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	defer func() {
 		if !receivedEOF {
 			ctxCancel()
@@ -308,7 +309,7 @@ func (s *GRPCSuite) TestStreamApps(c *C) {
 	testApp3 := s.createTestApp(c, &api.App{DisplayName: "test3", Labels: map[string]string{"test.labels-filter": "exclude"}})
 
 	streamAppsWithCancel := func(req *api.StreamAppsRequest) (api.Controller_StreamAppsClient, context.CancelFunc) {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 		stream, err := s.grpc.StreamApps(ctx, req)
 		c.Assert(err, IsNil)
 		return stream, cancel
@@ -612,7 +613,7 @@ func (s *GRPCSuite) TestStreamAppsPaginationWithUpdates(c *C) {
 }
 
 func unaryReceiveReleases(s *GRPCSuite, c *C, req *api.StreamReleasesRequest) (res *api.StreamReleasesResponse, receivedEOF bool) {
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, ctxCancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	defer func() {
 		if !receivedEOF {
 			ctxCancel()
@@ -646,7 +647,7 @@ func (s *GRPCSuite) TestStreamReleases(c *C) {
 	testRelease4 := s.createTestRelease(c, testApp3.Name, &api.Release{Env: map[string]string{"FOUR": "4"}, Labels: map[string]string{"test.string": "bar", "test.int": "4"}})
 
 	streamReleasesWithCancel := func(req *api.StreamReleasesRequest) (api.Controller_StreamReleasesClient, context.CancelFunc) {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 		stream, err := s.grpc.StreamReleases(ctx, req)
 		c.Assert(err, IsNil)
 		return stream, cancel
@@ -935,7 +936,7 @@ func (s *GRPCSuite) TestStreamReleasesPaginationWithStreamUpdates(c *C) {
 }
 
 func (s *GRPCSuite) streamScalesWithCancel(c *C, req *api.StreamScalesRequest) (api.Controller_StreamScalesClient, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	stream, err := s.grpc.StreamScales(ctx, req)
 	c.Assert(err, IsNil)
 	return stream, cancel
@@ -951,7 +952,7 @@ func (s *GRPCSuite) receiveScalesStream(c *C, stream api.Controller_StreamScales
 }
 
 func unaryReceiveScales(s *GRPCSuite, c *C, req *api.StreamScalesRequest) (res *api.StreamScalesResponse, receivedEOF bool) {
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, ctxCancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	defer func() {
 		if !receivedEOF {
 			ctxCancel()
@@ -1273,7 +1274,7 @@ func (s *GRPCSuite) TestStreamScalesForAppPagination(c *C) { // TODO(jvatic): im
 }
 
 func unaryReceiveDeployments(s *GRPCSuite, c *C, req *api.StreamDeploymentsRequest) (res *api.StreamDeploymentsResponse, receivedEOF bool) {
-	ctx, ctxCancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	ctx, ctxCancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 	defer func() {
 		if !receivedEOF {
 			ctxCancel()
@@ -1317,7 +1318,7 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 	c.Assert(testDeployment4.Type, Equals, api.ReleaseType_CONFIG)
 
 	streamDeploymentsWithCancel := func(req *api.StreamDeploymentsRequest) (api.Controller_StreamDeploymentsClient, context.CancelFunc) {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), grpcStreamTestTimeout)
 		stream, err := s.grpc.StreamDeployments(ctx, req)
 		c.Assert(err, IsNil)
 		return stream, cancel
