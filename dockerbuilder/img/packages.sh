@@ -7,6 +7,9 @@ export DEBIAN_FRONTEND=noninteractive
 packages=(
   ca-certificates
   curl
+  # BuildKit's OCI worker shells out to runc. heroku-24-build used to provide
+  # it; ubuntu-noble does not.
+  runc
 )
 
 apt-get update --error-on=any
@@ -37,7 +40,7 @@ ln -sf /usr/local/buildkit/bin/buildctl-daemonless.sh /usr/local/bin/buildctl-da
 ln -sf /usr/local/buildkit/bin/buildctl /usr/local/bin/buildctl
 ln -sf /usr/local/buildkit/bin/buildkitd /usr/local/bin/buildkitd
 
-rm -rf /root/*
-rm -rf /tmp/*
+# Do not rm -rf /tmp: image jobs often share the host tmpdir; wiping it
+# breaks later apt-key (GetTempFile permission denied).
 # shellcheck source=builder/img/apt-slim-finish.sh
 source builder/img/apt-slim-finish.sh
