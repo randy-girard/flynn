@@ -14,7 +14,8 @@
 #   4. For each topology in SMOKE_TOPOLOGIES (default: 1-node singleton, then
 #      3-node HA): boot those VMs, install the tarball, bootstrap
 #      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
-#      datastore provider, verify HTTP/status/rows, exercise flynn /
+#      datastore provider, git-push test/apps/upgrade-smoke-docker on the
+#      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
 #      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then destroy the cluster nodes (builder is kept) before the
 #      next topology. Sizes are 1 (singleton) or >=3 (HA); 2 is invalid.
@@ -36,7 +37,9 @@
 #                        [default: vYYYYMMDD.N-smoke]
 #   BUILD_PHASE          build.sh phase: cluster|all|auto [default: auto]
 #   CLUSTER_DOMAIN       Bootstrap domain [default: upgrade-smoke.localflynn.com]
-#   APP_NAME             Test app name [default: upgrade-smoke]
+#   APP_NAME             Slug/buildpack test app [default: upgrade-smoke]
+#   DOCKER_APP_NAME      Dockerfile/container-stack app
+#                        [default: upgrade-smoke-docker]
 #   VAGRANT_MEMORY       Cluster node RAM MB [default: 6144]
 #   VAGRANT_CPUS         Cluster node CPUs [default: 2]
 #   BUILDER_MEMORY       Builder RAM MB [default: 30000]
@@ -91,6 +94,7 @@ BUILD_VERSION="${BUILD_VERSION:-}"
 BUILD_PHASE="${BUILD_PHASE:-auto}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-upgrade-smoke.localflynn.com}"
 APP_NAME="${APP_NAME:-upgrade-smoke}"
+DOCKER_APP_NAME="${DOCKER_APP_NAME:-upgrade-smoke-docker}"
 REPO_IN_VM="/root/go/src/github.com/flynn/flynn"
 CLI_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 
@@ -151,6 +155,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/sirenia/state/
   ./pkg/iptables/
   ./pkg/squashfs/
+  ./pkg/dockerimage/
   ./appliance/clickhouse/
   ./appliance/redis/
   ./updater/
@@ -318,7 +323,7 @@ print_datastore_report() {
   echo
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
-  echo " app=${APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
+  echo " app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
@@ -357,7 +362,7 @@ print_results_table() {
   echo
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
-  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}"
+  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}"
   echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
@@ -771,7 +776,7 @@ configure_node_dns() {
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
@@ -1586,6 +1591,42 @@ EOF
   echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with ${DATASTORE_PROVIDERS[*]} (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
 
+# git-push a Dockerfile on the container stack. This is the only live coverage
+# of slimmed dockerbuilder-24 (ubuntu-noble + BuildKit + runc) and of tarreceive
+# converting the resulting image to squashfs.
+step_deploy_docker_app() {
+  ensure_flynn_cli_on_node1
+  configure_node_dns node1
+
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -f "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/Dockerfile"
+rm -rf "/tmp/${DOCKER_APP_NAME}"
+mkdir -p "/tmp/${DOCKER_APP_NAME}"
+cp -a "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/." "/tmp/${DOCKER_APP_NAME}/"
+cd "/tmp/${DOCKER_APP_NAME}"
+chmod +x start.sh
+test -f Dockerfile
+git init
+git config user.email "smoke@flynn.test"
+git config user.name "smoke"
+git add -A
+git commit -m init
+if flynn apps | grep -qE "(^|\\s)${DOCKER_APP_NAME}(\\s|\$)"; then
+  flynn -a "${DOCKER_APP_NAME}" delete --yes || true
+fi
+flynn create --remote flynn "${DOCKER_APP_NAME}"
+flynn -a "${DOCKER_APP_NAME}" stack set container
+timeout 600 git push flynn master
+# Container-stack releases use process type "app", not "web". gitreceive's
+# default scale only sets web=1, and stack set already created a release, so
+# the Dockerfile app would stay at 0 processes without this.
+flynn -a "${DOCKER_APP_NAME}" scale app=1
+flynn -a "${DOCKER_APP_NAME}" ps
+EOF
+  echo "docker app ${DOCKER_APP_NAME} deployed from test/apps/upgrade-smoke-docker (container stack)"
+}
+
 # Build a comma-separated SQL VALUES list  (1,'dummy-1'),(2,'dummy-2'),...
 smoke_sql_values() {
   local n=$1
@@ -1690,6 +1731,43 @@ flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELEC
 echo "seed complete"
 EOF
   record_seed_counts
+}
+
+probe_docker_http() {
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || return 1
+  echo "${body}" | grep -q 'docker-smoke ok'
+}
+
+assert_docker_http() {
+  local label=$1
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
+    record_check "${label}" "docker-http" "FAIL" "GET / curl failed"
+    echo "docker HTTP check (${label}) failed: curl error" >&2
+    return 1
+  }
+  if ! echo "${body}" | grep -q 'docker-smoke ok'; then
+    record_check "${label}" "docker-http" "FAIL" "body=${body}"
+    echo "docker HTTP check (${label}) failed: body=${body}" >&2
+    return 1
+  fi
+  record_check "${label}" "docker-http" "PASS" "GET / => docker-smoke ok"
+  echo "docker-http ${label}: ok"
+}
+
+assert_docker_ps() {
+  local label=$1
+  local out rc=0
+  out="$(flynn1 -a "${DOCKER_APP_NAME}" ps 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qiE 'app' && echo "${out}" | grep -qiE 'up|running'; then
+    record_check "${label}" "docker-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "docker-ps ${label}: ok"
+    return 0
+  fi
+  record_check "${label}" "docker-ps" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "docker-ps ${label}: FAIL rc=${rc} ${out}" >&2
+  return 1
 }
 
 probe_app_http() {
@@ -1973,6 +2051,26 @@ cli_probe() {
   return 1
 }
 
+# One-off flynn run (new job from the app release image). Args after needle
+# are passed after -- so they replace the image CMD.
+cli_run_job() {
+  local label=$1 name=$2 app=$3 needle=$4
+  shift 4
+  local cmd_q="" a rc=0 out
+  for a in "$@"; do
+    cmd_q+=" $(printf '%q' "${a}")"
+  done
+  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
+    record_check "${label}" "${name}" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} ${name}: PASS"
+    return 0
+  fi
+  record_check "${label}" "${name}" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "cli ${label} ${name}: FAIL rc=${rc} ${out}" >&2
+  return 1
+}
+
 # Live flynn + flynn-host commands against the cluster. Unit tests cover CLI
 # packages (./cli on the host gate, ./cli + ./host/cli on the builder); this
 # catches controller/scheduler/logaggregator drift after an upgrade. Does not
@@ -2031,14 +2129,44 @@ step_cli_functions() {
   cli_probe "${label}" "cli-log" "" \
     flynn1 -a "${APP_NAME}" log -n 20 || failed=1
 
+  cli_run_job "${label}" "cli-run" "${APP_NAME}" "smoke-cli" echo smoke-cli || failed=1
+
+  # Container-stack app: same image as the running app process, no /runner/init.
+  cli_probe "${label}" "docker-cli-info" "${DOCKER_APP_NAME}|Git URL|Web URL" \
+    flynn1 -a "${DOCKER_APP_NAME}" info || failed=1
+  cli_probe "${label}" "docker-cli-ps" "app" \
+    flynn1 -a "${DOCKER_APP_NAME}" ps || failed=1
+  cli_probe "${label}" "docker-cli-scale" "app=" \
+    flynn1 -a "${DOCKER_APP_NAME}" scale || failed=1
+  cli_probe "${label}" "docker-cli-route" "http|${DOCKER_APP_NAME}" \
+    flynn1 -a "${DOCKER_APP_NAME}" route || failed=1
+  cli_probe "${label}" "docker-cli-release" "." \
+    flynn1 -a "${DOCKER_APP_NAME}" release || failed=1
+  cli_probe "${label}" "docker-cli-log" "" \
+    flynn1 -a "${DOCKER_APP_NAME}" log -n 20 || failed=1
+  cli_run_job "${label}" "docker-cli-run" "${DOCKER_APP_NAME}" "docker-cli" \
+    echo docker-cli || failed=1
+  cli_run_job "${label}" "docker-cli-run-image" "${DOCKER_APP_NAME}" "httpd|PORT" \
+    cat /start.sh || failed=1
+  local docker_http_ok=0
+  out=""
   rc=0
-  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${APP_NAME}") run -- echo smoke-cli" </dev/null)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q 'smoke-cli'; then
-    record_check "${label}" "cli-run" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} cli-run: PASS"
+  for attempt in $(seq 1 8); do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${DOCKER_APP_NAME}") run -- wget -q -O - http://${DOCKER_APP_NAME}-web.discoverd:8080/" </dev/null)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q 'docker-smoke ok'; then
+      docker_http_ok=1
+      break
+    fi
+    echo "cli ${label} docker-cli-run-http: retry ${attempt}/8 rc=${rc}"
+    sleep 5
+  done
+  if [[ "${docker_http_ok}" -eq 1 ]]; then
+    record_check "${label}" "docker-cli-run-http" "PASS" "GET ${DOCKER_APP_NAME}-web.discoverd:8080 => docker-smoke ok"
+    echo "cli ${label} docker-cli-run-http: PASS"
   else
-    record_check "${label}" "cli-run" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} cli-run: FAIL rc=${rc} ${out}" >&2
+    record_check "${label}" "docker-cli-run-http" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} docker-cli-run-http: FAIL rc=${rc} ${out}" >&2
     failed=1
   fi
 
@@ -2106,7 +2234,7 @@ step_cli_functions() {
     echo "CLI function checks failed for ${label}" >&2
     return 1
   fi
-  echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/meta/host PASS"
+  echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/docker-run/meta/host PASS"
 }
 
 step_verify_before() {
@@ -2114,6 +2242,9 @@ step_verify_before() {
   assert_app_http pre-upgrade
   wait_for "app /status pre-upgrade" 120 probe_app_status
   assert_app_status pre-upgrade
+  wait_for "docker app HTTP pre-upgrade" 180 probe_docker_http
+  assert_docker_http pre-upgrade
+  assert_docker_ps pre-upgrade
   assert_databases pre-upgrade
 }
 
@@ -2140,6 +2271,9 @@ step_verify_after() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
   assert_databases "${label}"
   node_ssh node1 'sudo flynn-host version' || true
 }
@@ -2353,8 +2487,10 @@ run_one_topology() {
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
     record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Deploy Dockerfile app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
+    run_step "Deploy Dockerfile app (${TOPOLOGY_LABEL})" step_deploy_docker_app
   fi
   if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
     record "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"

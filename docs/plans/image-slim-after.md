@@ -90,6 +90,7 @@ Release tarball: `flynn-v20260911.0-smoke.tar.gz` **2.8G**.
 ## Tests added so this cannot regress silently
 - `script/test-vagrant-smoke-image-slim.sh` (host unit gate) locks bases, zstd, strip, apt flags, mongodb packages, postgres extensions including `timescaledb-tools`, host libseccomp2.
 - Live smoke: `pg_available_extensions`, `flynn mongodb dump`, `curl blobstore.discoverd/.well-known/status` (retried after upgrade), `flynn-host version`.
+- Dockerfile/container-stack git-push of `test/apps/upgrade-smoke-docker` (dockerbuilder-24 + tarreceive), HTTP + `flynn ps` + `flynn run` (echo, `cat /start.sh`, wget the running `*-web.discoverd` process) before and after upgrade.
 - `go test ./pkg/squashfs/` on the Darwin host gate; `go test ./builder/` on the Linux builder gate.
 
 ## Smoke

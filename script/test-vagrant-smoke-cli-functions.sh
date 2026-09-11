@@ -39,8 +39,22 @@ need 'cli-release' \
   "CLI step must list releases"
 need 'log -n 20' \
   "CLI step must read logaggregator output without --follow"
-need 'run -- echo smoke-cli' \
+need 'cli_run_job' \
+  "CLI step must share a time-bounded flynn run helper"
+need 'echo smoke-cli' \
   "CLI step must run a one-off job (scheduler + slugrunner)"
+need 'docker-cli-run' \
+  "CLI step must flynn run against the Dockerfile/container-stack app"
+need 'echo docker-cli' \
+  "container flynn run must execute a command without /runner/init"
+need 'cat /start.sh' \
+  "container flynn run must read a file from the Docker image"
+need 'web.discoverd:8080' \
+  "container flynn run must HTTP-get the running app process via discoverd"
+need 'docker-cli-ps' \
+  "CLI step must list the Dockerfile app jobs"
+need 'docker-cli-log' \
+  "CLI step must read Dockerfile app logs"
 need 'mongodb dump' \
   "CLI step must dump mongodb (slimmed mongodump tools)"
 need 'blobstore.discoverd/.well-known/status' \

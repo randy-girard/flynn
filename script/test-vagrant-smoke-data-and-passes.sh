@@ -41,6 +41,10 @@ grep -q 'tty INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
 grep -q 'pipe INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
   || { echo "cli/clickhouse_test.go must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
 
+need 'test/apps/upgrade-smoke-docker' \
+  "smoke must git-push a Dockerfile app (dockerbuilder-24), not only the slug app"
+need 'docker-cli-run' \
+  "smoke must flynn run against the Dockerfile app after upgrade, not only HTTP"
 need 'test/apps/upgrade-smoke' \
   "smoke must deploy test/apps/upgrade-smoke (not mutate test/apps/http)"
 need 'postgres mysql mongodb redis kafka clickhouse' \

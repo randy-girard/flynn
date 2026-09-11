@@ -160,6 +160,16 @@ need "${smoke}" 'mongodb dump' \
   "smoke must run flynn mongodb dump against the slimmed mongodump tools"
 need "${smoke}" 'blobstore.discoverd/.well-known/status' \
   "smoke must hit blobstore status after moving it to busybox"
+need "${ROOT}/dockerbuilder/img/packages.sh" 'runc' \
+  "dockerbuilder on ubuntu-noble must install runc for BuildKit's OCI worker"
+need "${smoke}" 'step_deploy_docker_app' \
+  "smoke must git-push a Dockerfile app through slimmed dockerbuilder-24"
+need "${smoke}" 'docker-http' \
+  "smoke must HTTP-probe the Dockerfile app after moving dockerbuilder off heroku-24-build"
+need "${smoke}" 'docker-cli-run' \
+  "smoke must flynn run against the Dockerfile app (container image, not slugrunner)"
+need "${smoke}" './pkg/dockerimage/' \
+  "host unit gate must compile dockerimage container-stack release tests"
 need "${smoke}" 'flynn-host version' \
   "smoke must run flynn-host version (stripped cgo binary + libseccomp2)"
 need "${smoke}" 'report-image-sizes.sh' \
