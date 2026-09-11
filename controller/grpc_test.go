@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -132,8 +133,18 @@ func (s *GRPCSuite) SetUpTest(c *C) {
 }
 
 func isErrCanceled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
 	if s, ok := status.FromError(err); ok {
 		if s.Code() == codes.Canceled {
+			return true
+		}
+		// Stream handlers historically wrapped ctx.Err() as codes.Unknown.
+		if s.Code() == codes.Unknown && strings.Contains(s.Message(), context.Canceled.Error()) {
 			return true
 		}
 	}
@@ -141,8 +152,19 @@ func isErrCanceled(err error) bool {
 }
 
 func isErrDeadlineExceeded(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	if s, ok := status.FromError(err); ok {
 		if s.Code() == codes.DeadlineExceeded {
+			return true
+		}
+		// Stream handlers historically wrapped ctx.Err() as codes.Unknown
+		// ("rpc error: code = Unknown desc = context deadline exceeded").
+		if s.Code() == codes.Unknown && strings.Contains(s.Message(), context.DeadlineExceeded.Error()) {
 			return true
 		}
 	}

@@ -2,6 +2,7 @@ package api
 
 import (
 	context "context"
+	"errors"
 	fmt "fmt"
 	"os"
 	"path"
@@ -184,6 +185,12 @@ func NewError(err error, message string, args ...interface{}) error {
 	switch err.(type) {
 	case ct.ValidationError, *ct.ValidationError:
 		errCode = codes.InvalidArgument
+	}
+	switch {
+	case errors.Is(err, context.Canceled):
+		errCode = codes.Canceled
+	case errors.Is(err, context.DeadlineExceeded):
+		errCode = codes.DeadlineExceeded
 	}
 	msg := fmt.Sprintf(message, args...)
 	return grpc.Errorf(errCode, "%s", msg)
