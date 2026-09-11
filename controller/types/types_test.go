@@ -90,3 +90,47 @@ func TestEnsureRedisApplianceStrategyEmptyAndOneByOne(t *testing.T) {
 		t.Fatal("one-down-one-up must be a no-op when already set")
 	}
 }
+
+func TestReleaseDeployKind(t *testing.T) {
+	cases := []struct {
+		name   string
+		rel    *Release
+		git    bool
+		slug   bool
+		docker bool
+	}{
+		{name: "nil", rel: nil},
+		{name: "empty", rel: &Release{}},
+		{
+			name: "slug heroku-24",
+			rel:  &Release{Meta: map[string]string{"git": "true", "slugrunner.stack": "heroku-24"}},
+			git:  true, slug: true,
+		},
+		{
+			name: "slug default stack",
+			rel:  &Release{Meta: map[string]string{"git": "true"}},
+			git:  true, slug: true,
+		},
+		{
+			name: "container stack",
+			rel:  &Release{Meta: map[string]string{"git": "true", "slugrunner.stack": "container"}},
+			git:  true, slug: false,
+		},
+		{
+			name: "docker receive",
+			rel:  &Release{Meta: map[string]string{"docker-receive": "true"}},
+			docker: true,
+		},
+	}
+	for _, tc := range cases {
+		if got := tc.rel.IsGitDeploy(); got != tc.git {
+			t.Errorf("%s IsGitDeploy=%v want %v", tc.name, got, tc.git)
+		}
+		if got := tc.rel.IsSlugDeploy(); got != tc.slug {
+			t.Errorf("%s IsSlugDeploy=%v want %v", tc.name, got, tc.slug)
+		}
+		if got := tc.rel.IsDockerReceiveDeploy(); got != tc.docker {
+			t.Errorf("%s IsDockerReceiveDeploy=%v want %v", tc.name, got, tc.docker)
+		}
+	}
+}

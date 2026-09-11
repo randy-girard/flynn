@@ -152,11 +152,20 @@ type Release struct {
 }
 
 func (r *Release) IsGitDeploy() bool {
-	return r.Meta["git"] == "true"
+	return r != nil && r.Meta["git"] == "true"
 }
 
 func (r *Release) IsDockerReceiveDeploy() bool {
-	return r.Meta["docker-receive"] == "true"
+	return r != nil && r.Meta["docker-receive"] == "true"
+}
+
+// IsSlugDeploy reports whether a git release uses slugrunner (/runner/init).
+// Container-stack Dockerfile deploys are git deploys but run the image as-is.
+func (r *Release) IsSlugDeploy() bool {
+	if !r.IsGitDeploy() {
+		return false
+	}
+	return r.Meta["slugrunner.stack"] != "container"
 }
 
 // IsSirenia reports whether the release is for a sirenia-managed database
