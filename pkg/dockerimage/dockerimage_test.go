@@ -71,7 +71,7 @@ func TestNewAppRelease(t *testing.T) {
 	build := &BuildResult{
 		Args:       []string{"/bin/sh", "-c", "app"},
 		ListenPort: 3000,
-		Config: &Config{},
+		Config:     &Config{},
 	}
 	build.Config.Config.Env = []string{"IMAGE_ENV=1", "KEEP=overwrite"}
 

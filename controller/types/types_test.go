@@ -117,8 +117,8 @@ func TestReleaseDeployKind(t *testing.T) {
 			git:  true, slug: false,
 		},
 		{
-			name: "docker receive",
-			rel:  &Release{Meta: map[string]string{"docker-receive": "true"}},
+			name:   "docker receive",
+			rel:    &Release{Meta: map[string]string{"docker-receive": "true"}},
 			docker: true,
 		},
 	}
