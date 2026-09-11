@@ -63,5 +63,6 @@ if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
   rm -rf /var/lib/apt/lists/*
 fi
 
-# Build squashfs
-mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend
+# Keep -comp/-Xcompression-level in sync with pkg/squashfs.
+mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend \
+  -comp zstd -Xcompression-level 15

@@ -19,6 +19,7 @@ import (
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	hh "github.com/flynn/flynn/pkg/httphelper"
+	"github.com/flynn/flynn/pkg/squashfs"
 	"github.com/flynn/flynn/pkg/typeconv"
 	"gopkg.in/yaml.v2"
 )
@@ -97,7 +98,7 @@ func run(dir string, uid, gid int) error {
 	defer os.Remove(layer.Name())
 	defer layer.Close()
 
-	if out, err := exec.Command("mksquashfs", dir, layer.Name(), "-noappend").CombinedOutput(); err != nil {
+	if out, err := exec.Command("mksquashfs", squashfs.Args(dir, layer.Name())...).CombinedOutput(); err != nil {
 		return fmt.Errorf("mksquashfs error: %s: %s", err, out)
 	}
 

@@ -217,7 +217,9 @@ run_phase_base() {
       "${UBUNTU_CODENAME}" \
       "$ROOTFS" \
       "${DEB_MIRROR}"
-    mksquashfs "$ROOTFS" "${SQUASHFS}" -noappend
+    # Keep -comp/-Xcompression-level in sync with pkg/squashfs.
+    mksquashfs "$ROOTFS" "${SQUASHFS}" -noappend \
+      -comp zstd -Xcompression-level 15
   fi
 
   cd "${FLYNN_ROOT}"
@@ -273,7 +275,8 @@ run_phase_binaries() {
   # and rebuild flannel-wrapper for start-all.
   rm -f build/bin/flynn-builder
   rm -f build/bin/flannel-wrapper
-  go build -o build/bin/flannel-wrapper ./flannel/wrapper
+  # Same VCS stamp skip as script/go-build-version: vboxsf git status is 128.
+  GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flannel-wrapper ./flannel/wrapper
 
   echo "===> [binaries] Complete."
 }

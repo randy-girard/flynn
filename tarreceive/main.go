@@ -22,6 +22,7 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/pkg/archive"
 	"github.com/flynn/flynn/pkg/httphelper"
+	"github.com/flynn/flynn/pkg/squashfs"
 	"github.com/flynn/flynn/pkg/status"
 	"github.com/flynn/flynn/tarreceive/utils"
 	"github.com/julienschmidt/httprouter"
@@ -179,7 +180,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 
 		// create squashfs layer
 		layerPath := filepath.Join(tmpDir, "layer.squashfs")
-		if out, err := exec.Command("mksquashfs", extractDir, layerPath, "-noappend", "-processors", "1").CombinedOutput(); err != nil {
+		if out, err := exec.Command("mksquashfs", squashfs.Args(extractDir, layerPath, "-processors", "1")...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("mksquashfs error: %s: %s", err, out)
 		}
 
