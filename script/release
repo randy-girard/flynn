@@ -32,6 +32,7 @@ GITHUB_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 DRY_RUN=false
 DRAFT=false
 PRERELEASE=false
+OUTPUT_SET=false
 BUILD_DIR="${ROOT}/build/bin"
 OUTPUT_DIR=""
 
@@ -43,9 +44,10 @@ Create a Flynn Release (tarball or GitHub).
 
 OPTIONS:
   -h, --help                  Show this message
-  --target TARGET             Release target: 'tarball', 'package', or 'github' [default: tarball]
+  --target TARGET             Release target: 'tarball', 'package', 'github', or 'notes' [default: tarball]
   --version VERSION           Version for release (e.g., v20240127.0)
   --output DIR                Output directory for tarball/package [default: ./build/release]
+                              For --target notes, a file path to write the GitHub body
   --github-repo OWNER/REPO    GitHub repository [default: randy-girard/flynn]
   --draft                     Create the GitHub release as a draft (github target only)
   --prerelease                Mark the GitHub release as a prerelease (github target only)
@@ -56,6 +58,7 @@ TARGETS:
             Output: flynn-<version>.tar.gz with install script
   package   Write individual GitHub Release assets into --output (no upload, no mega-tarball)
   github    Create a GitHub release with all artifacts uploaded
+  notes     Print (or --output) the grouped GitHub release body; no binaries needed
 
 EXAMPLES:
   # Build and create a tarball for testing
@@ -71,6 +74,9 @@ EXAMPLES:
 
   # After testing, create GitHub release
   ./script/release --target github --version v20240210.0
+
+  # Preview grouped GitHub release notes (no build required)
+  ./script/release --target notes --version v20240210.0
 USAGE
 }
 
@@ -83,8 +89,8 @@ while [[ $# -gt 0 ]]; do
       ;;
     --target)
       TARGET="$2"
-      if [[ "${TARGET}" != "tarball" && "${TARGET}" != "package" && "${TARGET}" != "github" ]]; then
-        fail "Invalid target: ${TARGET}. Must be 'tarball', 'package', or 'github'"
+      if [[ "${TARGET}" != "tarball" && "${TARGET}" != "package" && "${TARGET}" != "github" && "${TARGET}" != "notes" ]]; then
+        fail "Invalid target: ${TARGET}. Must be 'tarball', 'package', 'github', or 'notes'"
       fi
       shift 2
       ;;
@@ -94,6 +100,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --output)
       OUTPUT_DIR="$2"
+      OUTPUT_SET=true
       shift 2
       ;;
     --github-repo)
@@ -125,7 +132,10 @@ if [[ -z "${OUTPUT_DIR}" ]]; then
   OUTPUT_DIR="${ROOT}/build/release"
 fi
 # Always use an absolute path so tarball creation works after cd elsewhere.
-OUTPUT_DIR="$(cd "$(dirname "${OUTPUT_DIR}")" && pwd)/$(basename "${OUTPUT_DIR}")"
+# --target notes with no --output prints to stdout; skip rewriting.
+if [[ "${TARGET}" != "notes" ]] || $OUTPUT_SET; then
+  OUTPUT_DIR="$(cd "$(dirname "${OUTPUT_DIR}")" && pwd)/$(basename "${OUTPUT_DIR}")"
+fi
 
 # Get version from flynn-host if not provided
 if [[ -z "${VERSION}" ]]; then
@@ -153,6 +163,19 @@ if [[ -z "${VERSION}" ]]; then
     VERSION="${DATE_PREFIX}.0"
   fi
   info "Auto-generated version: ${VERSION}"
+fi
+
+# shellcheck source=script/lib/release-notes.sh
+source "${ROOT}/script/lib/release-notes.sh"
+
+if [[ "${TARGET}" == "notes" ]]; then
+  if $OUTPUT_SET; then
+    flynn_github_release_notes "${VERSION}" "${GITHUB_REPO}" > "${OUTPUT_DIR}"
+    info "Wrote GitHub release notes to ${OUTPUT_DIR}"
+  else
+    flynn_github_release_notes "${VERSION}" "${GITHUB_REPO}"
+  fi
+  exit 0
 fi
 
 # Verify build artifacts exist
@@ -278,119 +301,21 @@ generate_checksums() {
   (cd "${RELEASE_DIR}" && find . -type f \( -name "*.gz" -o -name "*.squashfs" -o -name "*.json" -o -name "install-flynn-*" \) | xargs sha512sum > checksums.sha512 2>/dev/null || true)
 }
 
-# Generate release notes from git commits
+# Generate release notes from git commits (grouped by conventional type).
 generate_release_notes() {
   info "Generating release notes from commits..."
-
-  # Fetch all tags from remote
-  echo "  Syncing tags with remote..."
   git fetch origin --tags --force 2>/dev/null || true
 
-  # Get the previous release tag
-  PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || echo "")
-
-  if [[ "${PREVIOUS_TAG}" == "${VERSION}" ]]; then
-    PREVIOUS_TAG=$(git describe --tags --abbrev=0 --match 'v*' "${VERSION}^" 2>/dev/null || echo "")
-  fi
-
+  PREVIOUS_TAG="$(flynn_previous_release_tag "${VERSION}")"
+  local range
+  range="$(flynn_commit_range_since_previous "${VERSION}")"
   if [[ -n "${PREVIOUS_TAG}" ]]; then
     echo "  Previous release: ${PREVIOUS_TAG}"
-    COMMIT_RANGE="${PREVIOUS_TAG}..HEAD"
-    COMMIT_COUNT=$(git rev-list --count "${COMMIT_RANGE}" 2>/dev/null || echo "0")
-    echo "  Found ${COMMIT_COUNT} commits since ${PREVIOUS_TAG}"
+    echo "  Found $(git rev-list --count "${range}" 2>/dev/null || echo 0) commits since ${PREVIOUS_TAG}"
   else
     echo "  No previous tag found, using recent commits"
-    COMMIT_RANGE="HEAD~20..HEAD"
   fi
-
-  # Categorize commits by conventional commit type
-  FEAT_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  FIX_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  CHORE_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^chore" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  DOCS_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^docs" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  REFACTOR_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^refactor" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  PERF_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^perf" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  TEST_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^test" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  BUILD_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^build" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  CI_COMMITS=$(git log --pretty=format:"- %s (%h)" --grep="^ci" "${COMMIT_RANGE}" 2>/dev/null || echo "")
-  OTHER_COMMITS=$(git log --pretty=format:"- %s (%h)" "${COMMIT_RANGE}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" || echo "")
-
-  # Build categorized release notes
-  RELEASE_NOTES=""
-  if [[ -n "${FEAT_COMMITS}" ]]; then
-    RELEASE_NOTES+="### ✨ Features
-
-${FEAT_COMMITS}
-
-"
-  fi
-  if [[ -n "${FIX_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 🐛 Bug Fixes
-
-${FIX_COMMITS}
-
-"
-  fi
-  if [[ -n "${PERF_COMMITS}" ]]; then
-    RELEASE_NOTES+="### ⚡ Performance
-
-${PERF_COMMITS}
-
-"
-  fi
-  if [[ -n "${REFACTOR_COMMITS}" ]]; then
-    RELEASE_NOTES+="### ♻️ Refactoring
-
-${REFACTOR_COMMITS}
-
-"
-  fi
-  if [[ -n "${DOCS_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 📚 Documentation
-
-${DOCS_COMMITS}
-
-"
-  fi
-  if [[ -n "${TEST_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 🧪 Tests
-
-${TEST_COMMITS}
-
-"
-  fi
-  if [[ -n "${BUILD_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 🏗️ Build
-
-${BUILD_COMMITS}
-
-"
-  fi
-  if [[ -n "${CI_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 👷 CI
-
-${CI_COMMITS}
-
-"
-  fi
-  if [[ -n "${CHORE_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 🔧 Chores
-
-${CHORE_COMMITS}
-
-"
-  fi
-  if [[ -n "${OTHER_COMMITS}" ]]; then
-    RELEASE_NOTES+="### 📦 Other Changes
-
-${OTHER_COMMITS}
-
-"
-  fi
-
-  if [[ -z "${RELEASE_NOTES}" ]]; then
-    RELEASE_NOTES="No changes recorded."
-  fi
+  RELEASE_NOTES="$(flynn_categorized_release_notes "${range}")"
 }
 
 
@@ -553,8 +478,8 @@ create_github_release() {
 
   # Create the release
   info "Pushing to GitHub Release ${VERSION}..."
-  COMPARE_RANGE="${PREVIOUS_TAG:-initial}...${VERSION}"
-  CHANGELOG_URL="https://github.com/${GITHUB_REPO}/compare/${COMPARE_RANGE}"
+  NOTES_FILE="$(mktemp)"
+  flynn_github_release_notes "${VERSION}" "${GITHUB_REPO}" > "${NOTES_FILE}"
 
   GH_RELEASE_FLAGS=()
   if $DRAFT; then
@@ -568,54 +493,10 @@ create_github_release() {
     --repo "${GITHUB_REPO}" \
     "${GH_RELEASE_FLAGS[@]}" \
     --title "Flynn ${VERSION}" \
-    --notes "## Flynn ${VERSION}
-
-**Full Changelog**: [${COMPARE_RANGE}](${CHANGELOG_URL})
-
-${RELEASE_NOTES}
----
-
-## Install Flynn CLI
-
-Install the Flynn command-line interface on your local machine (Linux or macOS):
-
-\`\`\`bash
-curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn-cli | sudo bash
-\`\`\`
-
-## Install Flynn Host (Server)
-
-Install Flynn on an Ubuntu server (24.04):
-
-\`\`\`bash
-curl -fsSL https://github.com/${GITHUB_REPO}/releases/download/${VERSION}/install-flynn | sudo bash
-\`\`\`
-
-## Artifacts
-
-### CLI Binaries
-| Binary | Platform |
-|--------|----------|
-| flynn-linux-amd64.gz | Linux (x86_64) |
-| flynn-linux-386.gz | Linux (x86) |
-| flynn-darwin-amd64.gz | macOS (Intel) |
-| flynn-darwin-arm64.gz | macOS (Apple Silicon) |
-| flynn-windows-amd64.exe.gz | Windows (x86_64) |
-
-### Server Binaries
-| Binary | Description |
-|--------|-------------|
-| flynn-host-linux-amd64.gz | Flynn host daemon (Linux x86_64) |
-| flynn-init-linux-amd64.gz | Flynn init binary (Linux x86_64) |
-
-### Other
-| File | Description |
-|------|-------------|
-| install-flynn-cli | CLI installer script |
-| install-flynn | Server installer script |
-| checksums.sha512 | SHA512 checksums for all artifacts |
-" \
+    --notes-file "${NOTES_FILE}" \
     "${UPLOAD_FILES[@]}"
+
+  rm -f "${NOTES_FILE}"
 
   info "GitHub Release ${VERSION} created successfully!"
   echo "     https://github.com/${GITHUB_REPO}/releases/tag/${VERSION}"

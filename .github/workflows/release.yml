@@ -351,18 +351,14 @@ jobs:
           set -eo pipefail
           VERSION="${{ steps.version.outputs.VERSION }}"
           NOTES_FILE="$(mktemp)"
-          {
-            echo "## Flynn ${VERSION}"
-            echo
-            echo "Built from \`${GITHUB_SHA}\` via workflow_dispatch."
-            echo
-            PREVIOUS_TAG=$(git tag -l 'v*' | sort -V | tail -n1 || true)
-            if [[ -n "${PREVIOUS_TAG}" ]]; then
-              echo "### Changes since ${PREVIOUS_TAG}"
-              echo
-              git log --pretty=format:'- %s (%h)' "${PREVIOUS_TAG}..HEAD" | head -n 100 || true
-            fi
-          } > "${NOTES_FILE}"
+          ./script/release \
+            --target notes \
+            --version "${VERSION}" \
+            --github-repo "${GITHUB_REPOSITORY}" \
+            --output "${NOTES_FILE}"
+          echo "----- release notes (grouped) -----"
+          cat "${NOTES_FILE}"
+          echo "-----------------------------------"
 
           ARGS=(--title "Flynn ${VERSION}" --notes-file "${NOTES_FILE}")
           if [[ "${{ steps.mode.outputs.DRAFT }}" == "true" ]]; then
