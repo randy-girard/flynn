@@ -41,6 +41,14 @@ need 'log -n 20' \
   "CLI step must read logaggregator output without --follow"
 need 'run -- echo smoke-cli' \
   "CLI step must run a one-off job (scheduler + slugrunner)"
+need 'mongodb dump' \
+  "CLI step must dump mongodb (slimmed mongodump tools)"
+need 'blobstore.discoverd/.well-known/status' \
+  "CLI step must reach blobstore health from a slugrunner job"
+need 'flynn-host version' \
+  "CLI step must run flynn-host version (stripped host binary)"
+need 'pg_available_extensions' \
+  "CLI/seed must verify postgres PostGIS/pgRouting/Timescale still ship"
 need 'timeout 90 flynn' \
   "flynn run must be time-bounded so a hung scheduler cannot stall smoke"
 need 'meta set' \

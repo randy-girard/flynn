@@ -150,6 +150,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
   ./pkg/iptables/
+  ./pkg/squashfs/
   ./appliance/clickhouse/
   ./appliance/redis/
   ./updater/
@@ -1171,7 +1172,7 @@ step_host_unit_tests() {
   done
 
   if [[ "$(uname -s)" == "Linux" ]]; then
-    packages+=( ./flannel/backend/vxlan/ )
+    packages+=( ./flannel/backend/vxlan/ ./builder/ )
   fi
 
   for pkg in "${packages[@]}"; do
@@ -1362,6 +1363,11 @@ while true; do
 done
 test -f "$(tarball_vm_path)"
 ls -lh "$(tarball_vm_path)"
+if [[ -f "${REPO_IN_VM}/build/images.json" ]]; then
+  echo "===> unique squashfs layer sizes"
+  bash "${REPO_IN_VM}/script/report-image-sizes.sh" "${REPO_IN_VM}/build/images.json" \
+    | tee "${REPO_IN_VM}/build/image-size-report.txt"
+fi
 EOF
 
   # Synced folder: builder write is visible on the host and on cluster nodes.
@@ -1616,6 +1622,11 @@ CREATE TABLE IF NOT EXISTS smoke_payload (id int PRIMARY KEY, payload text);
 DELETE FROM smoke_payload;
 INSERT INTO smoke_payload (id, payload) SELECT g, repeat('A', 1024) FROM generate_series(1, \${ROWS}) g;
 "
+exts="\$(flynn -a "\${APP}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")"
+echo "\${exts}" | grep -qx postgis
+echo "\${exts}" | grep -qx pgrouting
+echo "\${exts}" | grep -qx timescaledb
+echo "postgres extensions available: \${exts}"
 
 flynn -a "\${APP}" mysql console -- -e "
 CREATE TABLE IF NOT EXISTS smoke_probe (id INT PRIMARY KEY, data TEXT);
@@ -1969,7 +1980,7 @@ cli_probe() {
 step_cli_functions() {
   local label=$1
   local failed=0
-  local out rc hosts
+  local out rc hosts blob_ok attempt
 
   ensure_flynn_cli_on_node1
   echo "cli ${label}: flynn + flynn-host against ${APP_NAME}"
@@ -2049,6 +2060,47 @@ step_cli_functions() {
   fi
   cli_probe "${label}" "cli-host-ps" "." \
     node_ssh node1 'sudo flynn-host ps' || failed=1
+  cli_probe "${label}" "cli-host-version" "." \
+    node_ssh node1 'sudo flynn-host version' || failed=1
+
+  rc=0
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q postgis && echo "${out}" | grep -q pgrouting && echo "${out}" | grep -q timescaledb; then
+    record_check "${label}" "cli-pg-extensions" "PASS" "$(echo "${out}" | tr '\n' ' ')"
+    echo "cli ${label} pg-extensions: PASS"
+  else
+    record_check "${label}" "cli-pg-extensions" "FAIL" "rc=${rc} ${out}"
+    echo "cli ${label} pg-extensions: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
+
+  cli_probe "${label}" "cli-mongo-dump" "" \
+    flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
+
+  # GET / lists every blob and 500s if postgres is briefly unavailable after
+  # an update. /.well-known/status is the health check (SELECT 1). Retry:
+  # discoverd can return 500 while blobstore is re-registering.
+  blob_ok=0
+  out=""
+  rc=0
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${APP_NAME}") run -- curl -fsS --connect-timeout 10 http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q healthy; then
+      blob_ok=1
+      break
+    fi
+    echo "cli ${label} blobstore: retry ${attempt}/12 rc=${rc}"
+    sleep 5
+  done
+  if [[ "${blob_ok}" -eq 1 ]]; then
+    record_check "${label}" "cli-blobstore" "PASS" "blobstore.discoverd healthy"
+    echo "cli ${label} blobstore: PASS"
+  else
+    record_check "${label}" "cli-blobstore" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} blobstore: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
 
   if [[ "${failed}" -ne 0 ]]; then
     echo "CLI function checks failed for ${label}" >&2

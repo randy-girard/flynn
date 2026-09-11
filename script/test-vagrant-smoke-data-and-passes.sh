@@ -53,6 +53,8 @@ need 'SMOKE_BLOB_COUNT' \
   "smoke must embed a configurable number of slug blobs"
 need 'generate_series' \
   "smoke must bulk-insert postgres dummy rows"
+need 'pg_available_extensions' \
+  "smoke must verify postgis/pgrouting/timescaledb survived image slimming"
 need 'smoke_payload' \
   "smoke must seed a 1KB payload table (postgres/mysql) so restarts copy real data"
 need 'payload TEXT' \
@@ -129,6 +131,14 @@ need_file "${ROOT}/script/lib/git-safe-dir.sh" \
   "git safe.directory helper must exist for Vagrant/Docker root builds"
 if ! grep -Fq -- '-buildvcs=false' "${ROOT}/script/go-build-version"; then
   echo "go-build-version must pass -buildvcs=false (Makefile build → flynn-host)" >&2
+  exit 1
+fi
+if ! grep -Fq -- '-buildvcs=false' "${ROOT}/build.sh"; then
+  echo "build.sh flannel-wrapper rebuild must pass -buildvcs=false (vboxsf git status 128)" >&2
+  exit 1
+fi
+if ! grep -Fq -- '-buildvcs=false' "${ROOT}/script/flynn-builder"; then
+  echo "script/flynn-builder bootstrap go build must pass -buildvcs=false" >&2
   exit 1
 fi
 need_file "${ROOT}/script/run-unit-tests" \
