@@ -96,4 +96,44 @@ Release tarball: `flynn-v20260911.0-smoke.tar.gz` **2.8G**.
 
 `script/vagrant-upgrade-smoke.sh` (topologies `1,3`, two `--force` tarball updates each): **PASS**
 (OVERALL 1861s on the reuse-tarball run; 196 app/CLI/DB checks; host + builder unit gates).
-Unique squashfs layers after the cluster build: **2.8 GiB**.
+
+## Measured comparison vs `develop`
+
+Same builder VM, `develop` at `ece2f0fd` built as `v20260911.0-develop` (`./build.sh all`).
+Unique squashfs bytes (shared layers counted once):
+
+| tree | unique layers | unique bytes |
+|---|---:|---:|
+| `develop` | 54 | 3 953 811 456 (**3.7 GiB**) |
+| `slim-cluster-images` | 53 | 2 954 657 792 (**2.8 GiB**) |
+| **saved** | | **998 153 664 (951.9 MiB, 25%)** |
+
+Per-image `layer_sum` (includes shared bases, so Ubuntu shrink shows up in every appliance row):
+
+| image | develop | slim | delta |
+|---|---:|---:|---:|
+| ubuntu-noble | 298.2 MiB | 199.6 MiB | −98.6 MiB |
+| blobstore | 349.9 MiB | 41.2 MiB | −308.7 MiB |
+| builder | 497.3 MiB | 19.2 MiB | −478.1 MiB |
+| dockerbuilder-24 | 641.5 MiB | 288.5 MiB | −353.0 MiB |
+| host | 911.0 MiB | 514.7 MiB | −396.3 MiB |
+| postgres | 709.0 MiB | 537.3 MiB | −171.7 MiB |
+| mongodb | 576.3 MiB | 412.5 MiB | −163.8 MiB |
+| clickhouse | 539.3 MiB | 398.7 MiB | −140.6 MiB |
+| kafka | 513.7 MiB | 390.9 MiB | −122.8 MiB |
+| mariadb | 381.5 MiB | 263.4 MiB | −118.1 MiB |
+| gitreceive | 345.1 MiB | 231.4 MiB | −113.7 MiB |
+| taffy | 337.7 MiB | 228.1 MiB | −109.6 MiB |
+| redis | 330.0 MiB | 221.2 MiB | −108.8 MiB |
+| tarreceive | 331.5 MiB | 224.7 MiB | −106.8 MiB |
+| go | 473.7 MiB | 341.6 MiB | −132.1 MiB |
+| heroku-24-build | 541.3 MiB | 405.4 MiB | −135.9 MiB |
+| heroku-24 | 379.3 MiB | 271.8 MiB | −107.5 MiB |
+| slugbuilder-24 | 601.3 MiB | 459.1 MiB | −142.2 MiB |
+| slugrunner-24 | 379.3 MiB | 271.8 MiB | −107.5 MiB |
+| protoc | 507.2 MiB | 369.9 MiB | −137.3 MiB |
+| controller | 52.0 MiB | 35.6 MiB | −16.4 MiB |
+| discoverd | 26.6 MiB | 20.6 MiB | −6.0 MiB |
+| busybox | 1.9 MiB | 1.8 MiB | −0.1 MiB |
+
+Largest unique wins: ubuntu-noble purge + zstd (shared), blobstore/builder off Ubuntu/Go, dockerbuilder off heroku-24-build, host `libseccomp2`, stripped Go binaries. GIS/Timescale still dominate postgres.

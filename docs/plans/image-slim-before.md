@@ -1,15 +1,50 @@
 # Image size before report
 
 Snapshot of Flynn cluster/toolchain images **before** the slim-cluster-images
-changes. Taken from `builder/manifest.json.template` and `**/img/packages.sh`
-on branch `develop` (static analysis). No `build/images.json` was present, so
-this report does not include measured squashfs byte sizes.
+changes, from `develop` at `ece2f0fd`.
 
-To measure a built tree later:
+Measured 2026-09-11 by checking out `develop` and running
+`./build.sh --version v20260911.0-develop all` on the builder VM:
 
 ```text
 script/report-image-sizes.sh build/images.json
 ```
+
+## Measured squashfs sizes (`develop`)
+
+Unique layers (shared bases counted once): **54 layers, 3 953 811 456 bytes (3.7 GiB)**.
+
+`layer_sum` is the sum of that image's layers (shared bases appear in many rows).
+
+| image | layers | layer_sum |
+|---|---:|---:|
+| ubuntu-noble | 1 | 298.2 MiB |
+| busybox | 1 | 1.9 MiB |
+| blobstore | 2 | 349.9 MiB |
+| builder | 3 | 497.3 MiB |
+| dockerbuilder-24 | 5 | 641.5 MiB |
+| controller | 3 | 52.0 MiB |
+| postgres | 3 | 709.0 MiB |
+| mongodb | 3 | 576.3 MiB |
+| mariadb | 3 | 381.5 MiB |
+| redis | 3 | 330.0 MiB |
+| kafka | 3 | 513.7 MiB |
+| clickhouse | 3 | 539.3 MiB |
+| host | 3 | 911.0 MiB |
+| gitreceive | 3 | 345.1 MiB |
+| taffy | 3 | 337.7 MiB |
+| tarreceive | 2 | 331.5 MiB |
+| go | 2 | 473.7 MiB |
+| heroku-24 | 2 | 379.3 MiB |
+| heroku-24-build | 3 | 541.3 MiB |
+| slugbuilder-24 | 5 | 601.3 MiB |
+| slugrunner-24 | 3 | 379.3 MiB |
+| protoc | 3 | 507.2 MiB |
+| discoverd | 2 | 26.6 MiB |
+| flannel | 2 | 26.8 MiB |
+| router | 2 | 23.4 MiB |
+| acme | 2 | 20.8 MiB |
+| logaggregator | 2 | 19.2 MiB |
 
 ## Shared bases
 
