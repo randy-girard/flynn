@@ -46,9 +46,15 @@ configuration string to prevent man-in-the-middle attacks.
 
 ## Applications
 
-Applications run within Flynn are not fully sandboxed and have access to
-internal Flynn APIs that can be used to gain root access on the server. Do not
-run untrusted code in Flynn.
+Applications run in their own network namespace on the overlay. User jobs
+cannot open connections to other user jobs or to internal Flynn services
+(`controller`, `blobstore`, `postgres-api`, …). They may reach provisioned
+datastores only at the leader host Flynn put in `DATABASE_URL` /
+`REDIS_URL` / etc. Cross-app HTTP still works through routes you add (the
+router). System appliances keep a full overlay mesh.
+
+Applications are not a full kernel sandbox. Do not run untrusted code in
+Flynn. HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not
 recommend running Flynn in environments where there is access to sensitive data

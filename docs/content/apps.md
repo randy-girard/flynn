@@ -231,12 +231,19 @@ ownership using HTTP-01 challenges.
 
 ### Service Discovery
 
-Flynn automatically registers each web process type in service discovery for
-internal requests that do not go through the router. The service discovery
-entries are available via DNS. The pattern `$APPNAME-$PROCTYPE.discoverd` is
-used for the DNS name, for example `myapp-web.discoverd` and
-`myapp-admin-web.discoverd`. This feature can be used to communicate internally
-between apps and processes.
+Flynn registers each web process type in service discovery so the **router**
+and **system apps** can find backends. User-deployed jobs cannot reach other
+jobs on the overlay — including other apps and other process types of the
+same app — unless they go through a route you have added (`flynn route`).
+
+Provisioned datastore URLs use `leader.<service>.discoverd` (for example
+`leader.postgres.discoverd` in `DATABASE_URL`). User jobs may resolve those
+leader names only. Internal names such as `postgres.discoverd`,
+`postgres-api.discoverd`, `blobstore.discoverd`, and `$APP-$TYPE.discoverd`
+do not resolve for user jobs.
+
+System apps keep a full overlay mesh so appliances, the controller, and the
+router can operate.
 
 ## Limits
 

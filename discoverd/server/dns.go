@@ -11,6 +11,7 @@ import (
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/keepalive"
+	"github.com/flynn/flynn/pkg/netpolicy"
 	"github.com/flynn/flynn/pkg/random"
 	reuseport "github.com/kavu/go_reuseport"
 	"github.com/miekg/dns"
@@ -213,6 +214,11 @@ func (d dnsAPI) ServiceLookup(w dns.ResponseWriter, req *dns.Msg) {
 		leader = true
 		service = labels[1]
 	default:
+		nxdomain()
+		return
+	}
+
+	if d.clientIsUser(w.RemoteAddr()) && !netpolicy.UserMayResolveDiscoverd(leader, service) {
 		nxdomain()
 		return
 	}
@@ -427,4 +433,43 @@ func shuffle(s []*addrData) []*addrData {
 func isTCP(addr net.Addr) bool {
 	_, ok := addr.(*net.TCPAddr)
 	return ok
+}
+
+func remoteIP(addr net.Addr) net.IP {
+	switch a := addr.(type) {
+	case *net.UDPAddr:
+		return a.IP
+	case *net.TCPAddr:
+		return a.IP
+	default:
+		if addr == nil {
+			return nil
+		}
+		host, _, err := net.SplitHostPort(addr.String())
+		if err != nil {
+			return net.ParseIP(addr.String())
+		}
+		return net.ParseIP(host)
+	}
+}
+
+func (d dnsAPI) clientIsUser(addr net.Addr) bool {
+	ip := remoteIP(addr)
+	if ip == nil {
+		return false
+	}
+	insts, err := d.GetStore().Instances(netpolicy.ServiceUser)
+	if err != nil || len(insts) == 0 {
+		return false
+	}
+	for _, inst := range insts {
+		host, _, err := net.SplitHostPort(inst.Addr)
+		if err != nil {
+			host = inst.Addr
+		}
+		if parsed := net.ParseIP(host); parsed != nil && parsed.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }

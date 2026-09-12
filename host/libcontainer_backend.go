@@ -135,6 +135,7 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		defaultTmpfs:         defaultTmpfs,
 		buildJobMemoryLimits: buildJobMemoryLimits,
 	}
+	l.netpol = newNetPolicy(config.Logger)
 	l.httpClient = &http.Client{Transport: &http.Transport{
 		Dial: dialer.RetryDial(l.discoverdDial),
 	}}
@@ -183,6 +184,8 @@ type LibcontainerBackend struct {
 	// where the controller is not delegated to flynn-host's parent slice).
 	// When false, SEC-004's build-job memory limit is skipped.
 	buildJobMemoryLimits bool
+
+	netpol *netPolicy
 }
 
 type Container struct {
@@ -309,6 +312,15 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	if err := iptables.EnableOutboundNAT(l.BridgeName, l.bridgeNet.String()); err != nil {
 		return err
 	}
+	if err := enableBridgeNetfilter(); err != nil {
+		log.Error("error enabling br_netfilter", "err", err)
+		return err
+	}
+	overlay := iptables.OverlayNetworkFor(l.bridgeNet.String())
+	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String()); err != nil {
+		log.Error("error enabling job isolation", "err", err)
+		return err
+	}
 
 	// Read DNS config, discoverd uses the nameservers
 	dnsConf, err := safeClientConfigFromFile("/etc/resolv.conf")
@@ -340,6 +352,9 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 			container.MAC = fmt.Sprintf("fe:%02x:%02x:%02x:%02x:%02x", b[0], b[1], b[2], b[3], b[4])
 			if _, err := l.ipalloc.RequestIP(l.bridgeNet, container.IP); err != nil {
 				log.Error("error requesting ip", "job.id", container.job.ID, "err", err)
+			}
+			if l.netpol != nil {
+				l.netpol.Track(container.job, container.IP)
 			}
 		}
 	}
@@ -423,6 +438,9 @@ func (l *LibcontainerBackend) SetDefaultEnv(k, v string) {
 	l.envMtx.Unlock()
 	if k == "DISCOVERD" {
 		l.discoverdClient = discoverd.NewClientWithURL(v)
+		if l.netpol != nil {
+			l.netpol.Start(l.discoverdClient)
+		}
 		select {
 		case <-l.discoverdConfigured:
 		default:
@@ -519,6 +537,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		}
 		log.Info("obtained ip", "network", l.bridgeNet.String(), "ip", container.IP.String(), "mac", container.MAC)
 		l.State.SetContainerIP(job.ID, container.IP)
+		if l.netpol != nil {
+			l.netpol.Track(job, container.IP)
+		}
 	}
 	defer func() {
 		if err != nil {
@@ -1490,6 +1511,9 @@ func (c *Container) cleanup() error {
 	c.l.logStreamMtx.Unlock()
 
 	if c.IP != nil && c.l.bridgeNet != nil {
+		if c.l.netpol != nil {
+			c.l.netpol.Untrack(c.job, c.IP)
+		}
 		c.l.ipalloc.ReleaseIP(c.l.bridgeNet, c.IP)
 	}
 	for _, v := range c.job.Config.Volumes {
