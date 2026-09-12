@@ -68,7 +68,11 @@ need 'dummy:' \
 need 'kafka topics create smoke_probe' \
   "smoke must create a kafka topic whose metadata lives on /data"
 need 'CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic' \
-  "clickhouse seed must create the DB without ON CLUSTER (DistributedDDL may be absent)"
+  "clickhouse seed must create the DB (local MergeTree; Keeper ON CLUSTER is often down)"
+need 'clickhouse replica' \
+  "clickhouse seed must fan-out schema/rows to every replica so a node drain keeps smoke_db"
+need 'clickhouse_row_count' \
+  "clickhouse counts must tolerate transient unknown_error after membership changes (set -e)"
 need 'CHECK_FILE' \
   "per-engine checks must be written to a file (run_step is a subshell)"
 need 'smoke_db.rows' \

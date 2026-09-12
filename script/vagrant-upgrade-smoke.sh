@@ -19,7 +19,10 @@
 #      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then destroy the cluster nodes (builder is kept) before the
 #      next topology. Sizes are 1 (singleton) or >=3 (HA); 2 is invalid.
-#      Vagrant nodes are generated as node1..max(N) — e.g. 1,3,5 or 1,3,7.
+#      Named topologies: add (stable 3-node, then join node4 and upgrade)
+#      and remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
+#      keep working). Vagrant nodes are generated as node1..max(N) —
+#      e.g. 1,3,5 or 1,3,7; add reserves node4.
 #   5. Print a step table, unit-test results, and a per-engine persistence
 #      report (phases are prefixed N-node/).
 #
@@ -65,13 +68,18 @@
 #                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
-#   SMOKE_TOPOLOGIES     Comma-separated cluster sizes to run, each getting
-#                        the full install/bootstrap/deploy/verify/upgrade/CLI
-#                        path. 1 = singleton (--min-hosts 1, node1 only);
-#                        N>=3 = HA (--min-hosts N, node1..nodeN). 2 is
-#                        invalid (Flynn). [default: 1,3]
+#   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
+#                        install/bootstrap/deploy/verify/upgrade/CLI.
+#                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
+#                        add (aliases: add-node, 3+1) = boot 3-node HA,
+#                        wait until stable, join node4, re-verify, then
+#                        upgrade --all-nodes (must include the new host).
+#                        remove (aliases: remove-node, 3-1) = boot 3-node
+#                        HA, drain node3, re-verify HTTP/DBs/deploys on
+#                        the remaining hosts, then upgrade.
+#                        [default: 1,3]
 #                        CLUSTER_SIZE=N is a shortcut for one topology.
-#                        Example: SMOKE_TOPOLOGIES=1,3,5
+#                        Example: SMOKE_TOPOLOGIES=1,3,5,add,remove
 #   SMOKE_MAX_NODES      Optional ceiling on N (host-only /24 already caps
 #                        node IPs at 192.168.56.254). Unset = no extra cap.
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
@@ -108,12 +116,16 @@ NODE1_IP="${CLUSTER_NET_PREFIX}.$((CLUSTER_IP_OFFSET + 1))"
 ALL_CLUSTER_NODES=()
 ALL_CLUSTER_IPS=()
 # apply_topology sets NODES / NODE_IPS / PEER_IPS / MIN_HOSTS per run.
+# NODES is the live Flynn cluster. TEARDOWN_NODES is every VM this topology
+# created (includes a drained host after remove).
 NODES=(node1)
 NODE_IPS=("${NODE1_IP}")
 PEER_IPS="${NODE1_IP}"
+TEARDOWN_NODES=(node1)
 MIN_HOSTS=1
 TOPOLOGY_SIZE=1
 TOPOLOGY_LABEL="1-node"
+TOPOLOGY_ACTION=""
 CHECK_PHASE_PREFIX=""
 TOPOLOGIES=()
 BOOTSTRAP_JOB_TIMEOUT="${BOOTSTRAP_JOB_TIMEOUT:-600}"
@@ -159,6 +171,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/dockerimage/
   ./appliance/clickhouse/
   ./appliance/redis/
+  ./appliance/kafka/
   ./updater/
 )
 
@@ -1102,6 +1115,21 @@ redis_is_ready() {
   flynn1 -a "${APP_NAME}" redis redis-cli PING | grep -qi PONG
 }
 
+# ClickHouse seed uses local MergeTree plus HTTP replica fan-out. After a node
+# join/drain the CLI can briefly return CH "unknown_error" instead of a count;
+# do not let that abort the step under set -e.
+clickhouse_row_count() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows" 2>/dev/null || true)"
+  numeric_count "${out}"
+}
+
+clickhouse_seed_ready() {
+  local count
+  count="$(clickhouse_row_count)"
+  [[ -n "${count}" && "${count}" -ge "${SMOKE_SEED_ROWS}" ]]
+}
+
 # Sirenia appliances that exist as discoverd services. postgres is scaled during
 # bootstrap; mariadb/mongodb stay at 0 processes until the first resource add.
 # Redis is not sirenia — PING via the app's REDIS_URL after it is provisioned.
@@ -1127,6 +1155,9 @@ wait_datastores_ready() {
         ;;
       redis)
         wait_for "redis PING ${suffix}" 180 redis_is_ready || return 1
+        ;;
+      clickhouse)
+        wait_for "clickhouse smoke_db.rows ${suffix}" 300 clickhouse_seed_ready || return 1
         ;;
     esac
   done
@@ -1209,6 +1240,255 @@ flynn1() {
   # Close stdin. `flynn run` attaches it to the job, and clickhouse-client
   # INSERT VALUES (and mongo shells without --eval) wait forever on a TTY.
   node_ssh node1 "sudo -H flynn ${args_q}" </dev/null
+}
+
+cluster_host_count() {
+  node_ssh node1 'sudo flynn-host list' </dev/null | awk 'NR>1 && NF>=2 {c++} END{print c+0}'
+}
+
+hosts_listed_at_least() {
+  local want=$1
+  local n
+  n="$(cluster_host_count)"
+  [[ "${n}" -ge "${want}" ]]
+}
+
+hosts_listed_exactly() {
+  local want=$1
+  local n
+  n="$(cluster_host_count)"
+  [[ "${n}" -eq "${want}" ]]
+}
+
+node_addr_listed() {
+  local ip=$1
+  node_ssh node1 'sudo flynn-host list' </dev/null | grep -F "${ip}"
+}
+
+host_addr_gone() {
+  local ip=$1
+  ! node_addr_listed "${ip}" >/dev/null 2>&1
+}
+
+# flynn-host systemd uses KillMode=process so `systemctl stop` leaves containers
+# running (needed for non-destructive updater restarts). A real node drain must
+# DELETE jobs via the local host API while the daemon is still up.
+drain_host_jobs() {
+  local node=$1
+  info "draining jobs on ${node} via local host API"
+  node_root_script "${node}" <<'EOF'
+set -euo pipefail
+python3 - <<'PY'
+import json, sys, urllib.error, urllib.parse, urllib.request
+
+def load_key():
+    try:
+        with open("/etc/flynn/host.json") as f:
+            env = (json.load(f) or {}).get("env") or {}
+        return env.get("FLYNN_HOST_AUTH_KEY") or ""
+    except FileNotFoundError:
+        return ""
+
+def req(method, path, key):
+    url = "http://127.0.0.1:1113" + path
+    r = urllib.request.Request(url, method=method)
+    if key:
+        r.add_header("Auth-Key", key)
+    try:
+        with urllib.request.urlopen(r, timeout=60) as resp:
+            body = resp.read()
+            return resp.status, body
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+def list_active(key):
+    code, body = req("GET", "/host/jobs?active=true", key)
+    if code != 200:
+        sys.exit("list jobs failed HTTP %s: %s" % (code, body[:300]))
+    data = json.loads(body.decode() or "{}")
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        out = {}
+        for job in data:
+            jid = ((job.get("job") or {}).get("id")) or job.get("id")
+            if jid:
+                out[jid] = job
+        return out
+    sys.exit("unexpected /host/jobs payload: %s" % type(data).__name__)
+
+def is_discoverd(job):
+    j = job.get("job") or {}
+    md = j.get("metadata") or {}
+    name = (md.get("flynn-controller.app_name") or "").lower()
+    args = " ".join((j.get("config") or {}).get("args") or [])
+    blob = " ".join([name, args, j.get("id") or ""])
+    return "discoverd" in blob
+
+def stop_one(jid, key):
+    path = "/host/jobs/" + urllib.parse.quote(jid, safe="")
+    code, body = req("DELETE", path, key)
+    if code in (200, 404):
+        print("stopped %s (HTTP %s)" % (jid, code))
+        return
+    print("stop %s failed HTTP %s: %s" % (jid, code, body[:200]), file=sys.stderr)
+
+import time
+key = load_key()
+stopped = 0
+left = {}
+for _pass in range(5):
+    jobs = list_active(key)
+    if not jobs:
+        left = {}
+        break
+    first = [(jid, job) for jid, job in jobs.items() if not is_discoverd(job)]
+    last = [(jid, job) for jid, job in jobs.items() if is_discoverd(job)]
+    for jid, _job in first + last:
+        stop_one(jid, key)
+        stopped += 1
+    time.sleep(1)
+    left = list_active(key)
+if left:
+    print("jobs still active after drain (scheduler may have replaced them; daemon stop + kill leftovers next): %s" % ",".join(sorted(left)))
+else:
+    print("drained %d jobs" % stopped)
+PY
+EOF
+}
+
+# systemd KillMode=process leaves containers running after flynn-host exits.
+kill_leftover_containers() {
+  local node=$1
+  info "killing leftover containers on ${node}"
+  node_root_script "${node}" <<'EOF'
+set -euo pipefail
+pkill -KILL -f '/.containerinit' || true
+pkill -KILL -f '^/bin/discoverd' || true
+pkill -KILL -f '^/usr/bin/flanneld' || true
+sleep 1
+leftover="$(pgrep -af '/.containerinit' || true)"
+if [[ -n "${leftover}" ]]; then
+  echo "containerinit still running:" >&2
+  echo "${leftover}" >&2
+  exit 1
+fi
+echo "no leftover containerinit on $(hostname)"
+EOF
+}
+
+# True when no discoverd instance advertises a job that ran on prefix (e.g. node3).
+discoverd_host_jobs_gone() {
+  local prefix=$1
+  node_root_script node1 <<EOF
+set -euo pipefail
+export DRAIN_PREFIX="${prefix}"
+python3 - <<'PY'
+import json, os, sys, urllib.request
+
+prefix = os.environ["DRAIN_PREFIX"] + "-"
+services = ("postgres", "mariadb", "mongodb", "redis", "flynn-host")
+
+def get(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.load(r)
+
+leftover = []
+for svc in services:
+    try:
+        insts = get("http://127.0.0.1:1111/services/%s/instances" % svc)
+    except Exception as e:
+        # Service may not exist yet (or already gone).
+        continue
+    if not isinstance(insts, list):
+        continue
+    for inst in insts:
+        meta = inst.get("meta") or {}
+        jid = meta.get("FLYNN_JOB_ID") or ""
+        hid = meta.get("id") or inst.get("id") or ""
+        if jid.startswith(prefix) or hid == os.environ["DRAIN_PREFIX"] or str(hid).startswith(prefix):
+            leftover.append("%s:%s" % (svc, jid or hid))
+if leftover:
+    sys.exit("discoverd still has %s jobs: %s" % (os.environ["DRAIN_PREFIX"], ",".join(leftover)))
+print("discoverd has no %s jobs" % os.environ["DRAIN_PREFIX"])
+PY
+EOF
+}
+
+sirenia_primary_not_on_host() {
+  local service=$1
+  local prefix=$2
+  node_root_script node1 <<EOF
+set -euo pipefail
+export SIRENIA_SERVICE="${service}"
+export DRAIN_PREFIX="${prefix}"
+python3 - <<'PY'
+import json, os, sys, urllib.request
+
+def get(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.load(r)
+
+service = os.environ["SIRENIA_SERVICE"]
+prefix = os.environ["DRAIN_PREFIX"] + "-"
+meta = get("http://127.0.0.1:1111/services/%s/meta" % service)
+data = meta.get("data", meta)
+state = json.loads(data) if isinstance(data, str) else data
+primary = state.get("primary") or {}
+job_id = (primary.get("meta") or {}).get("FLYNN_JOB_ID") or ""
+if not job_id:
+    sys.exit("no %s primary job id in meta" % service)
+if job_id.startswith(prefix):
+    sys.exit("%s primary still on %s: %s" % (service, os.environ["DRAIN_PREFIX"], job_id))
+print("%s primary %s" % (service, job_id))
+PY
+EOF
+}
+
+sync_peer_ips_from_nodes() {
+  local saved_ifs="${IFS}"
+  IFS=,
+  PEER_IPS="${NODE_IPS[*]}"
+  IFS="${saved_ifs}"
+}
+
+append_live_node() {
+  local node=$1
+  local n="${node#node}"
+  local ip i
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" == "${node}" ]]; then
+      return 0
+    fi
+  done
+  ip="$(cluster_node_ip "${n}")"
+  NODES+=("${node}")
+  NODE_IPS+=("${ip}")
+  sync_peer_ips_from_nodes
+}
+
+remember_teardown_node() {
+  local node=$1 i
+  for i in "${!TEARDOWN_NODES[@]}"; do
+    if [[ "${TEARDOWN_NODES[$i]}" == "${node}" ]]; then
+      return 0
+    fi
+  done
+  TEARDOWN_NODES+=("${node}")
+}
+
+drop_live_node() {
+  local drop=$1
+  local new_nodes=() new_ips=() i
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" != "${drop}" ]]; then
+      new_nodes+=("${NODES[$i]}")
+      new_ips+=("${NODE_IPS[$i]}")
+    fi
+  done
+  NODES=("${new_nodes[@]}")
+  NODE_IPS=("${new_ips[@]}")
+  sync_peer_ips_from_nodes
 }
 
 step_host_unit_tests() {
@@ -1466,15 +1746,12 @@ EOF
   echo "built $(basename "${BUILT_TARBALL}") ($(du -h "${BUILT_TARBALL}" | awk '{print $1}'))"
 }
 
-step_install_flynn() {
-  resolve_built_tarball
+install_flynn_on_node() {
+  local node=$1
   local tarball_in_vm
   tarball_in_vm="$(tarball_vm_path)"
-
-  local node
-  for node in "${NODES[@]}"; do
-    info "installing local build ${BUILD_VERSION} on ${node} from synced tarball"
-    node_root_script "${node}" <<EOF
+  info "installing local build ${BUILD_VERSION} on ${node} from synced tarball"
+  node_root_script "${node}" <<EOF
 set -euo pipefail
 tarball="${tarball_in_vm}"
 # Wait briefly for VirtualBox synced-folder visibility after builder write.
@@ -1514,14 +1791,20 @@ for link in flannel.1 flynnbr0; do
   fi
 done
 EOF
-    configure_node_dns "${node}"
-    # Verify install actually produced a working flynn-host before continuing.
-    node_root_script "${node}" <<'EOF'
+  configure_node_dns "${node}"
+  node_root_script "${node}" <<'EOF'
 set -euo pipefail
 command -v flynn-host >/dev/null
 flynn-host version
 test -x /usr/bin/flynn-host || test -x /usr/local/bin/flynn-host
 EOF
+}
+
+step_install_flynn() {
+  resolve_built_tarball
+  local node
+  for node in "${NODES[@]}"; do
+    install_flynn_on_node "${node}"
   done
   echo "installed and verified ${BUILD_VERSION} on ${NODES[*]} from $(tarball_vm_path)"
 }
@@ -1800,10 +2083,9 @@ flynn -a "\${APP}" kafka topics | grep -q smoke_probe
 
 ok=0
 for i in \$(seq 1 30); do
-  # ON CLUSTER DDL needs distributed_ddl in the server config (added in this
-  # branch). The current tarball may not have it, so create the database on
-  # the replica we talk to. MergeTree data still lives on /data and is what
-  # the upgrade restart has to keep.
+  # Local MergeTree on the leader (Keeper is often unreachable for ON CLUSTER
+  # DDL). Fan-out the same schema/rows to every replica over HTTP :8123 so a
+  # later node drain still has smoke_db on the remaining hosts.
   flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
   if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
     ok=1
@@ -1814,6 +2096,48 @@ done
 test "\$ok" = 1
 flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS smoke_db.rows"
 flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
+CH_APP="\$(flynn -a "\${APP}" env get FLYNN_CLICKHOUSE)"
+CH_USER="\$(flynn -a "\${APP}" env get CLICKHOUSE_USER)"
+CH_PWD="\$(flynn -a "\${APP}" env get CLICKHOUSE_PASSWORD)"
+export CH_APP CH_USER CH_PWD
+CH_ROWS="\${ROWS}" python3 - <<'PY'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+app = os.environ["CH_APP"]
+user = os.environ.get("CH_USER") or "default"
+pwd = os.environ.get("CH_PWD") or ""
+rows = os.environ["CH_ROWS"]
+insts = json.load(urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % app, timeout=10))
+if not insts:
+    sys.exit("no clickhouse replicas in discoverd")
+queries = [
+    "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic",
+    "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id",
+    "TRUNCATE TABLE IF EXISTS smoke_db.rows",
+    "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % rows,
+]
+failed = 0
+for inst in insts:
+    host = inst.get("addr", "").rsplit(":", 1)[0]
+    if not host:
+        continue
+    print("clickhouse replica %s" % host)
+    for q in queries:
+        url = "http://%s:8123/?user=%s&password=%s" % (
+            host, urllib.parse.quote(user), urllib.parse.quote(pwd),
+        )
+        req = urllib.request.Request(url, data=q.encode(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp.read()
+        except Exception as e:
+            print("clickhouse replica %s failed: %s" % (host, e), file=sys.stderr)
+            failed = 1
+            break
+if failed:
+    sys.exit(1)
+print("clickhouse seeded on %d replicas" % len(insts))
+PY
 echo "seed complete"
 EOF
   record_seed_counts
@@ -1988,7 +2312,7 @@ record_seed_counts() {
     failed=1
   fi
 
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows")")"
+  count="$(clickhouse_row_count)"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "seed" "clickhouse" "PASS" "rows=${count}"
   else
@@ -2072,10 +2396,11 @@ assert_databases() {
   fi
 
   echo "db-check ${label}: clickhouse"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows")")"
-  if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
+  if wait_for "clickhouse rows ${label}" 180 clickhouse_seed_ready; then
+    count="$(clickhouse_row_count)"
     record_check "${label}" "clickhouse" "PASS" "rows=${count}"
   else
+    count="$(clickhouse_row_count)"
     record_check "${label}" "clickhouse" "FAIL" "rows=${count:-?} want>=${rows}"
     echo "clickhouse row count (${label}) = ${count}, want >= ${rows}" >&2
     failed=1
@@ -2376,9 +2701,288 @@ step_verify_after() {
   node_ssh node1 'sudo flynn-host version' || true
 }
 
+# Git-push a new docker release and run a one-off so membership changes prove
+# deploys still work (not only HTTP to the existing formation).
+step_membership_deploy() {
+  local label=$1
+  ensure_flynn_cli_on_node1
+  info "membership deploy (${label}): git-push ${DOCKER_APP_NAME} + flynn run"
+  node_root_script node1 <<EOF
+set -euo pipefail
+dir="/tmp/${DOCKER_APP_NAME}"
+test -d "\${dir}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
+cd "\${dir}"
+git commit --allow-empty -m "membership ${label}"
+ok=0
+for i in \$(seq 1 5); do
+  if timeout 600 git push flynn master; then
+    ok=1
+    break
+  fi
+  echo "git push attempt \$i failed; waiting for scheduler after membership change" >&2
+  sleep 30
+done
+test "\$ok" = 1
+flynn -a "${DOCKER_APP_NAME}" ps
+EOF
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  cli_run_job "${label}" "membership-run" "${APP_NAME}" "membership-ok" echo membership-ok
+  echo "membership deploy ${label}: docker git-push + slug flynn run ok"
+}
+
+step_verify_membership() {
+  local label=$1
+  wait_datastores_ready "${label}" postgres mariadb mongodb redis clickhouse || return 1
+  wait_for "app HTTP ${label}" 180 probe_app_http
+  assert_app_http "${label}"
+  wait_for "app /status ${label}" 120 probe_app_status
+  assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  assert_databases "${label}"
+  step_membership_deploy "${label}"
+}
+
+# Join node4 to a running 3-node cluster (documented flynn-host init --peer-ips).
+step_add_cluster_node() {
+  local extra="node4"
+  local extra_n=4
+  local extra_ip join_ips
+  extra_ip="$(cluster_node_ip "${extra_n}")"
+  join_ips="${PEER_IPS}"
+  if [[ "${#NODES[@]}" -lt 3 ]]; then
+    echo "add-node requires a running HA cluster (got ${#NODES[@]} hosts)" >&2
+    return 1
+  fi
+  remember_teardown_node "${extra}"
+  info "adding ${extra} (${extra_ip}) to stable cluster peer-ips=${join_ips}"
+  local node_mem="${VAGRANT_MEMORY:-6144}"
+  local node_cpus="${VAGRANT_CPUS:-2}"
+  VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${extra}"
+  cache_node_ssh_config "${extra}"
+  local saved_nodes=("${NODES[@]}")
+  NODES=("${extra}")
+  verify_nic_promisc
+  NODES=("${saved_nodes[@]}")
+  resolve_built_tarball
+  install_flynn_on_node "${extra}"
+  info "joining ${extra} with flynn-host init --peer-ips ${join_ips}"
+  node_root_script "${extra}" <<EOF
+set -euo pipefail
+flynn-host init --peer-ips "${join_ips}" --external-ip "${extra_ip}"
+systemctl enable flynn-host.service
+systemctl restart flynn-host.service
+EOF
+  if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
+    dump_layer0_diagnostics
+    return 1
+  fi
+  append_live_node "${extra}"
+  local n
+  for n in "${NODES[@]}"; do
+    configure_node_dns "${n}"
+  done
+  if ! wait_for "flynn-host list includes ${extra_ip}" 180 node_addr_listed "${extra_ip}"; then
+    echo "new host ${extra} (${extra_ip}) did not appear in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "overlay after adding ${extra}" 180 overlay_peers_reachable; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  echo "joined ${extra} (${extra_ip}); cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+  sync_cluster_monitor_hosts
+}
+
+# Flynn redis is a singleton with a host-local /data volume. Draining that
+# host cannot reattach the AOF, so pick a different HA node when redis lives
+# on the default drain target.
+redis_job_host() {
+  local app out
+  app="$(flynn1 -a "${APP_NAME}" env get FLYNN_REDIS)" || return 1
+  out="$(flynn1 -a "${app}" ps)" || return 1
+  echo "${out}" | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+    split($1, a, "-")
+    print a[1]
+    exit
+  }'
+}
+
+pick_remove_node() {
+  local drop redis_host
+  drop="${NODES[$((${#NODES[@]} - 1))]}"
+  redis_host="$(redis_job_host || true)"
+  if [[ -n "${redis_host}" && "${redis_host}" == "${drop}" && "${#NODES[@]}" -ge 3 ]]; then
+    echo "redis singleton is on ${drop}; draining ${NODES[$((${#NODES[@]} - 2))]} instead (host-local AOF)" >&2
+    drop="${NODES[$((${#NODES[@]} - 2))]}"
+  fi
+  echo "${drop}"
+}
+
+controller_scheduler_up() {
+  flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {found=1} END { exit !found }'
+}
+
+controller_scheduler_replaced() {
+  local old=$1 id
+  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {print $1; exit}')"
+  [[ -n "${id}" && "${id}" != "${old}" ]]
+}
+
+# Host drain can panic the leader scheduler (nil volume on persistJob). The
+# process may stay "up" with its loop dead, so new deploys sit pending until
+# we replace it.
+bounce_controller_scheduler() {
+  local id
+  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) !~ /pending|down/ {print $1; exit}')"
+  if [[ -z "${id}" ]]; then
+    echo "no running controller scheduler found after drain" >&2
+    wait_for "controller scheduler running" 180 controller_scheduler_up
+    return
+  fi
+  echo "bouncing controller scheduler ${id} after host drain" >&2
+  flynn1 -a controller kill "${id}" || true
+  wait_for "new controller scheduler after ${id}" 180 controller_scheduler_replaced "${id}"
+  # Give the replacement time to elect and recover host/job state before deploys.
+  sleep 15
+}
+
+# flynn-host update waits for cluster-monitor's bootstrap host count. After
+# add/remove that metadata is stale (3 vs 4, or 3 vs 2) and a drain then
+# upgrade hangs waiting for the missing peer.
+sync_cluster_monitor_hosts() {
+  local want=${#NODES[@]}
+  info "setting cluster-monitor hosts=${want} (live membership)"
+  node_root_script node1 <<EOF
+set -euo pipefail
+export WANT_HOSTS="${want}"
+python3 - <<'PY'
+import json, os, urllib.request
+
+want = int(os.environ["WANT_HOSTS"])
+url = "http://127.0.0.1:1111/services/cluster-monitor/meta"
+
+class PutRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if code not in (301, 302, 303, 307, 308):
+            return None
+        return urllib.request.Request(
+            newurl,
+            data=req.data,
+            method=req.get_method(),
+            headers={k: v for k, v in req.header_items() if k.lower() not in ("host", "content-length")},
+        )
+
+opener = urllib.request.build_opener(PutRedirect)
+with opener.open(url, timeout=10) as resp:
+    meta = json.load(resp)
+data = meta.get("data") or {}
+if isinstance(data, str):
+    data = json.loads(data)
+data["hosts"] = want
+data["enabled"] = True
+body = json.dumps({"index": meta["index"], "data": data}).encode()
+req = urllib.request.Request(
+    url, data=body, method="PUT", headers={"Content-Type": "application/json"}
+)
+with opener.open(req, timeout=10) as resp:
+    out = json.load(resp)
+print("cluster-monitor hosts=%s index=%s" % (want, out.get("index")))
+PY
+EOF
+}
+
+# Drain an HA node (not node1). Demote if it is a Raft peer, stop its
+# jobs while flynn-host is still up (systemd stop does not kill containers),
+# then stop the daemon so the scheduler reschedules. The VM stays until
+# topology teardown.
+step_remove_cluster_node() {
+  local drop ip i
+  if [[ "${#NODES[@]}" -lt 3 ]]; then
+    echo "remove-node requires a running HA cluster (got ${#NODES[@]} hosts)" >&2
+    return 1
+  fi
+  drop="$(pick_remove_node)"
+  ip=""
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" == "${drop}" ]]; then
+      ip="${NODE_IPS[$i]}"
+      break
+    fi
+  done
+  if [[ -z "${ip}" ]]; then
+    echo "could not resolve IP for drain target ${drop}" >&2
+    return 1
+  fi
+  if [[ "${drop}" == "node1" ]]; then
+    echo "refusing to remove node1 (CLI/bootstrap host)" >&2
+    return 1
+  fi
+  printf '%s\n' "${drop}" > "${WORK_DIR}/drained-node"
+  info "removing ${drop} (${ip}) from stable cluster"
+  # Graceful Raft demote while the peer is still reachable; --force if it is not.
+  if ! node_root_script node1 <<EOF
+set -euo pipefail
+flynn-host demote "${ip}"
+EOF
+  then
+    info "graceful demote failed; retrying flynn-host demote --force ${ip}"
+    node_root_script node1 <<EOF
+set -euo pipefail
+flynn-host demote --force "${ip}"
+EOF
+  fi
+  drain_host_jobs "${drop}"
+  node_root_script "${drop}" <<'EOF'
+set -euo pipefail
+systemctl stop flynn-host.service || true
+systemctl disable flynn-host.service || true
+EOF
+  kill_leftover_containers "${drop}"
+  drop_live_node "${drop}"
+  if ! wait_for "flynn-host list without ${ip}" 180 host_addr_gone "${ip}"; then
+    echo "removed host ${drop} (${ip}) still listed in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "remaining hosts listed (${#NODES[@]})" 120 hosts_listed_exactly "${#NODES[@]}"; then
+    echo "expected ${#NODES[@]} live hosts after removing ${drop}" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "discoverd jobs gone from ${drop}" 180 discoverd_host_jobs_gone "${drop}"; then
+    echo "discoverd still advertises jobs from ${drop}" >&2
+    return 1
+  fi
+  local svc
+  for svc in postgres mariadb mongodb; do
+    if ! wait_for "${svc} primary not on ${drop}" 300 sirenia_primary_not_on_host "${svc}" "${drop}"; then
+      echo "${svc} primary still on drained host ${drop}" >&2
+      return 1
+    fi
+  done
+  if ! wait_for "overlay after removing ${drop}" 180 overlay_peers_reachable; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  bounce_controller_scheduler
+  sync_cluster_monitor_hosts
+  echo "removed ${drop} (${ip}); cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+}
+
 teardown_cluster_nodes() {
-  info "destroying cluster nodes: ${NODES[*]}"
-  vagrant destroy -f "${NODES[@]}"
+  local victims=()
+  if [[ ${#TEARDOWN_NODES[@]} -gt 0 ]]; then
+    victims=("${TEARDOWN_NODES[@]}")
+  else
+    victims=("${NODES[@]}")
+  fi
+  info "destroying cluster nodes: ${victims[*]}"
+  vagrant destroy -f "${victims[@]}"
   CLUSTER_STARTED=0
   echo "cluster nodes destroyed (${TOPOLOGY_LABEL})"
 }
@@ -2433,6 +3037,46 @@ valid_topology_size() {
   return 1
 }
 
+# add = 3-node then join node4; remove = 3-node then drain node3.
+normalize_topology_spec() {
+  case "$1" in
+    add|add-node|3+1) echo add ;;
+    remove|remove-node|3-1) echo remove ;;
+    *) echo "$1" ;;
+  esac
+}
+
+valid_topology_spec() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  case "${spec}" in
+    add)
+      if [[ -n "${SMOKE_MAX_NODES:-}" && 4 -gt "${SMOKE_MAX_NODES}" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    remove)
+      if [[ -n "${SMOKE_MAX_NODES:-}" && 3 -gt "${SMOKE_MAX_NODES}" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    *) valid_topology_size "${spec}" ;;
+  esac
+}
+
+# How many Vagrant nodeN machines this spec needs (add reserves node4).
+topology_inventory_size() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  case "${spec}" in
+    add) echo 4 ;;
+    remove) echo 3 ;;
+    *) echo "${spec}" ;;
+  esac
+}
+
 # Highest nodeN already present under .vagrant/machines (leftover VMs).
 discover_vagrant_node_count() {
   local d n max=0
@@ -2449,11 +3093,12 @@ discover_vagrant_node_count() {
 
 # Build node1..N names/IPs and export FLYNN_MAX_NODES for the Vagrantfile loop.
 expand_cluster_inventory() {
-  local need=0 t discovered
+  local need=0 t discovered n
   if [[ ${#TOPOLOGIES[@]} -gt 0 ]]; then
     for t in "${TOPOLOGIES[@]}"; do
-      if [[ "${t}" -gt "${need}" ]]; then
-        need="${t}"
+      n="$(topology_inventory_size "${t}")"
+      if [[ "${n}" -gt "${need}" ]]; then
+        need="${n}"
       fi
     done
   fi
@@ -2487,10 +3132,11 @@ parse_smoke_topologies() {
   IFS=',' read -r -a parts <<< "${raw}"
   for item in "${parts[@]}"; do
     [[ -z "${item}" ]] && continue
-    if ! valid_topology_size "${item}"; then
-      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2); got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
+    if ! valid_topology_spec "${item}"; then
+      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2), or add/remove; got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
       return 1
     fi
+    item="$(normalize_topology_spec "${item}")"
     # bash 3.2 + set -u treats ${arr[*]} on an empty array as unbound.
     if [[ ${#TOPOLOGIES[@]} -gt 0 && " ${TOPOLOGIES[*]} " == *" ${item} "* ]]; then
       continue
@@ -2538,6 +3184,33 @@ apply_topology() {
   IFS="${saved_ifs}"
   MIN_HOSTS="${size}"
   CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+  TEARDOWN_NODES=("${NODES[@]}")
+  TOPOLOGY_ACTION=""
+}
+
+apply_topology_spec() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  TOPOLOGY_ACTION=""
+  case "${spec}" in
+    add)
+      apply_topology 3
+      TOPOLOGY_ACTION=add
+      TOPOLOGY_LABEL="3-node-add"
+      CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      # run_step is a subshell; record node4 here so teardown still destroys it.
+      remember_teardown_node node4
+      ;;
+    remove)
+      apply_topology 3
+      TOPOLOGY_ACTION=remove
+      TOPOLOGY_LABEL="3-node-remove"
+      CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      ;;
+    *)
+      apply_topology "${spec}"
+      ;;
+  esac
 }
 
 # One full install → bootstrap → deploy → verify → CLI → --force upgrades.
@@ -2547,8 +3220,8 @@ run_one_topology() {
   local idx=$2
   local is_last=$3
   local pass
-  apply_topology "${size}"
-  info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS}"
+  apply_topology_spec "${size}"
+  info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS} action=${TOPOLOGY_ACTION:-none}"
   clear_cluster_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" && "${idx}" -eq 0 ]]; then
@@ -2605,6 +3278,27 @@ run_one_topology() {
     run_step "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" step_cli_functions pre-upgrade
   fi
 
+  if [[ "${TOPOLOGY_ACTION}" == "add" ]]; then
+    run_step "Add node to running cluster (${TOPOLOGY_LABEL})" step_add_cluster_node
+    # run_step is a subshell; re-apply live membership in this shell for CLI/overlay.
+    append_live_node node4
+    run_step "Verify app/DBs after add-node (${TOPOLOGY_LABEL})" step_verify_membership after-add
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after add-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after add-node (${TOPOLOGY_LABEL})" step_cli_functions after-add
+    fi
+  elif [[ "${TOPOLOGY_ACTION}" == "remove" ]]; then
+    run_step "Remove node from running cluster (${TOPOLOGY_LABEL})" step_remove_cluster_node
+    drop_live_node "$(cat "${WORK_DIR}/drained-node")"
+    run_step "Verify app/DBs after remove-node (${TOPOLOGY_LABEL})" step_verify_membership after-remove
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after remove-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after remove-node (${TOPOLOGY_LABEL})" step_cli_functions after-remove
+    fi
+  fi
+
   if [[ "${SKIP_UPGRADE}" == "1" ]]; then
     record "Upgrade --all-nodes (local tarball) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_UPGRADE=1"
     record "Verify app/DBs after upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_UPGRADE=1"
@@ -2625,7 +3319,7 @@ run_one_topology() {
     record "Teardown cluster nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "KEEP_VMS=1"
   else
     if [[ "${KEEP_VMS}" == "1" && "${is_last}" -ne 1 ]]; then
-      info "KEEP_VMS=1: destroying ${NODES[*]} before next topology; last topology VMs will be kept"
+      info "KEEP_VMS=1: destroying ${TEARDOWN_NODES[*]} before next topology; last topology VMs will be kept"
     fi
     run_step "Teardown cluster nodes (${TOPOLOGY_LABEL})" teardown_cluster_nodes
   fi
