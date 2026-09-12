@@ -231,6 +231,35 @@ func (s *S) TestRunJobDetached(c *C) {
 	}
 }
 
+func (s *S) TestRunJobSystemAppPartition(c *C) {
+	app := s.createTestApp(c, &ct.App{
+		Name: "blobstore",
+		Meta: map[string]string{"flynn-system-app": "true"},
+	})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	host := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(host)
+
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		ArtifactIDs: []string{artifact.ID},
+	})
+	res, err := s.c.RunJobDetached(app.ID, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"wget", "-qO-", "http://blobstore.discoverd/.well-known/status"},
+	})
+	c.Assert(err, IsNil)
+	jobs, err := host.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.ID, Equals, res.ID)
+		c.Assert(job.Partition, Equals, "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
+	}
+}
+
 func (s *S) TestRunJobAttached(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "run-attached"})
 	hostID := fakeHostID()
