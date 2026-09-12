@@ -90,6 +90,31 @@ func TestBuildBootstrapServers(t *testing.T) {
 	}
 }
 
+func TestStorageFormatArgs_ClusterIDStartingWithDash(t *testing.T) {
+	// URL-safe Base64 cluster ids can start with '-'; argparse then reports
+	// "argument --cluster-id/-t: expected one argument".
+	id := "-uiRD6OBzyAm0WywYAxiVQ"
+	got := storageFormatArgs(id, "/data/server.properties", "1@10.0.0.1:9093:abc", false)
+	if len(got) < 2 || got[1] != "--cluster-id="+id {
+		t.Fatalf("cluster-id flag=%q, want a single --cluster-id=%s argument", got, id)
+	}
+	found := false
+	for i, a := range got {
+		if a == "--initial-controllers" && i+1 < len(got) && got[i+1] == "1@10.0.0.1:9093:abc" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("missing initial-controllers in %q", got)
+	}
+	standalone := storageFormatArgs(id, "/data/server.properties", "", true)
+	last := standalone[len(standalone)-1]
+	if last != "--standalone" {
+		t.Fatalf("singleton format args last=%q, want --standalone: %q", last, standalone)
+	}
+}
+
 func TestLoadOrCreateDirectoryID(t *testing.T) {
 	dir := t.TempDir()
 	calls := 0

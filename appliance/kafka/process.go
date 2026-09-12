@@ -234,10 +234,22 @@ func (p *Process) formatStorage() error {
 	}
 
 	logger.Info("formatting storage", "cluster.id", p.ClusterID, "singleton", p.Singleton)
+	args := storageFormatArgs(p.ClusterID, p.ConfigPath(), p.InitialControllers, p.Singleton)
+	out, err := exec.Command(filepath.Join(p.BinDir, "kafka-storage.sh"), args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("format storage: %s: %s", err, out)
+	}
+	return nil
+}
+
+// storageFormatArgs builds kafka-storage.sh format flags. Cluster IDs are
+// URL-safe Base64 and can start with '-', which argparse treats as a new
+// option if passed as a separate --cluster-id value.
+func storageFormatArgs(clusterID, configPath, initialControllers string, singleton bool) []string {
 	args := []string{
 		"format",
-		"--cluster-id", p.ClusterID,
-		"--config", p.ConfigPath(),
+		"--cluster-id=" + clusterID,
+		"--config", configPath,
 	}
 	// The quorum is formatted as dynamic (KIP-853) because the config omits
 	// controller.quorum.voters. A singleton seeds itself as the sole voter; a
@@ -245,16 +257,12 @@ func (p *Process) formatStorage() error {
 	// shared --initial-controllers value so no sequential add-controller step
 	// is required. The matching entry's directory.id becomes this node's
 	// persisted meta.properties directory.id.
-	if p.Singleton {
+	if singleton {
 		args = append(args, "--standalone")
 	} else {
-		args = append(args, "--initial-controllers", p.InitialControllers)
+		args = append(args, "--initial-controllers", initialControllers)
 	}
-	out, err := exec.Command(filepath.Join(p.BinDir, "kafka-storage.sh"), args...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("format storage: %s: %s", err, out)
-	}
-	return nil
+	return args
 }
 
 // Stop attempts a graceful shutdown, escalating to SIGKILL on timeout.
