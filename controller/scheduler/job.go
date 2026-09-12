@@ -188,9 +188,12 @@ func (j *Job) ControllerJob() *ct.Job {
 		job.State = ct.JobStateDown
 	}
 
-	job.VolumeIDs = make([]string, len(j.Volumes))
-	for i, vol := range j.Volumes {
-		job.VolumeIDs[i] = vol.ID
+	job.VolumeIDs = make([]string, 0, len(j.Volumes))
+	for _, vol := range j.Volumes {
+		if vol == nil {
+			continue
+		}
+		job.VolumeIDs = append(job.VolumeIDs, vol.ID)
 	}
 
 	if j.exitStatus != nil {
