@@ -88,6 +88,15 @@ func TestFindLocalHostSingleHostFallback(t *testing.T) {
 	}
 }
 
+func TestFindLocalHostDoesNotFallbackToPeerAfterRestart(t *testing.T) {
+	log := log15.New()
+	peer := cluster.NewHost("node2", "192.168.56.21:1113", nil, nil)
+	h := findLocalHost([]*cluster.Host{peer}, "node1", "node1", map[string]struct{}{"192.168.56.20": {}}, log)
+	if h != nil {
+		t.Fatalf("restarting node1 must not treat the only remaining peer as local, got %#v", h)
+	}
+}
+
 func TestFindLocalHostMultipleIPMatchesPicksFirst(t *testing.T) {
 	log := log15.New()
 	h1 := cluster.NewHost("h1", "10.0.0.1:1113", nil, nil)

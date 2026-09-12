@@ -711,10 +711,16 @@ func findLocalHost(hosts []*cluster.Host, hostname, daemonID string, localIPs ma
 		}
 	}
 
-	// 4. Single-node fallback
+	// 4. Single-node fallback — only when this process is that host.
+	// After a drain, a restarting daemon can briefly see only the remaining
+	// peer in discoverd; treating that peer as local advertises the update
+	// file server on the wrong IP (connection refused on the peer).
 	if len(hosts) == 1 {
-		log.Info("single host cluster, using the only available host", "host_id", hosts[0].ID())
-		return hosts[0]
+		if daemonID == "" || hosts[0].ID() == daemonID {
+			log.Info("single host cluster, using the only available host", "host_id", hosts[0].ID())
+			return hosts[0]
+		}
+		log.Debug("single discoverd host is not this daemon", "host_id", hosts[0].ID(), "daemon_id", daemonID)
 	}
 
 	return nil
@@ -1904,6 +1910,10 @@ func getCoordinatorIP(log log15.Logger) (string, error) {
 		}
 		h := findLocalHost(hosts, localHostname, daemonID, localIPs, log)
 		if h != nil {
+			if daemonID != "" && h.ID() != daemonID {
+				log.Debug("discoverd host is not this daemon, retrying", "host_id", h.ID(), "daemon_id", daemonID, "attempt", i+1)
+				continue
+			}
 			ip, _, err := net.SplitHostPort(h.Addr())
 			if err != nil {
 				return "", fmt.Errorf("error parsing host address %s: %w", h.Addr(), err)

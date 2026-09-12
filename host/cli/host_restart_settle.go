@@ -116,22 +116,35 @@ func settleClusterSizeError(firstErr error, fatal bool, healthErr, retryErr erro
 
 // expectedClusterHostCount returns the configured cluster size when
 // cluster-monitor metadata is available, otherwise the current discoverd
-// host count.
+// host count. If a host was permanently drained, monitor metadata can still
+// list the bootstrap size; prefer the live count so flynn-host update does
+// not wait forever for the missing peer.
 func expectedClusterHostCount(log log15.Logger) int {
+	monitorHosts := 0
 	if monitorMeta, err := discoverd.NewService("cluster-monitor").GetMeta(); err == nil {
 		var meta struct {
 			Hosts int `json:"hosts"`
 		}
 		if err := json.Unmarshal(monitorMeta.Data, &meta); err == nil && meta.Hosts > 0 {
+			monitorHosts = meta.Hosts
 			log.Debug("using cluster-monitor host count", "expected_hosts", meta.Hosts)
-			return meta.Hosts
 		}
 	}
-	n, err := clusterHostCount()
+	liveHosts, err := clusterHostCount()
 	if err != nil {
-		return 0
+		liveHosts = 0
 	}
-	return n
+	return pickExpectedHostCount(monitorHosts, liveHosts)
+}
+
+func pickExpectedHostCount(monitorHosts, liveHosts int) int {
+	if liveHosts > 0 && monitorHosts > liveHosts {
+		return liveHosts
+	}
+	if monitorHosts > 0 {
+		return monitorHosts
+	}
+	return liveHosts
 }
 
 func localClusterHost(log log15.Logger) *cluster.Host {

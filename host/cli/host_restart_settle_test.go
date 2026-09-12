@@ -109,3 +109,24 @@ func TestValidateImagesOnlyFlagsSingleHostUnknownCount(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestPickExpectedHostCount(t *testing.T) {
+	tests := []struct {
+		name          string
+		monitor, live int
+		want          int
+	}{
+		{"monitor matches live", 3, 3, 3},
+		{"drained host leaves stale monitor size", 3, 2, 2},
+		{"added host keeps bootstrap monitor size", 3, 4, 3},
+		{"monitor missing uses live", 0, 2, 2},
+		{"live missing uses monitor", 3, 0, 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := pickExpectedHostCount(tt.monitor, tt.live); got != tt.want {
+				t.Fatalf("pickExpectedHostCount(%d, %d)=%d, want %d", tt.monitor, tt.live, got, tt.want)
+			}
+		})
+	}
+}
