@@ -236,6 +236,24 @@ run_phase_base() {
   echo "===> [base] Complete."
 }
 
+# flynn-host EnableJobIsolation needs the ipset binary on this machine (builder
+# VM or CI host). Cluster nodes get it from host/img/packages.sh; existing
+# Vagrant builders may have been provisioned before setup.sh installed it.
+ensure_builder_isolation_tools() {
+  mkdir -p /tmp
+  chmod 1777 /tmp 2>/dev/null || true
+  if command -v ipset >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "===> installing ipset (required for flynn-host job isolation)"
+  export DEBIAN_FRONTEND=noninteractive
+  flynn_apt_install_conf
+  if ! flynn_apt_cmd install -y ipset; then
+    echo "ipset is required on the builder host (ConfigureNetworking/EnableJobIsolation)" >&2
+    exit 1
+  fi
+}
+
 # --- Phase: prep (teardown/clean before host binary build) ---
 # Set FLYNN_BUILD_SKIP_TEARDOWN=1 when chaining after teardown_flynn + run_phase_base.
 run_phase_prep() {
@@ -250,13 +268,16 @@ run_phase_prep() {
 
   echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
   flynn_apt_install_conf
+  ensure_builder_isolation_tools
 
   cd "${FLYNN_ROOT}"
   mkdir -p /etc/flynn
   mkdir -p /tmp/discoverd-data
 
   rm -rf /var/log/flynn/* || true
-  rm -rf /tmp/flynn-*
+  # Leftover flynn-builder job mounts only. Do not glob /tmp/flynn-* — that
+  # deletes /tmp/flynn-build-attempt.log when smoke tees the full build there.
+  rm -rf /tmp/flynn-build-mnt* || true
   make clean
   bash ./host/apparmor/setup-apparmor.sh
 
@@ -271,12 +292,15 @@ run_phase_binaries() {
   echo "===> [binaries] Building host binaries (script/build-flynn)..."
   ./script/build-flynn --version "${VERSION}"
 
-  # script/flynn-builder rebuilds flynn-builder if missing; force a fresh binary
-  # and rebuild flannel-wrapper for start-all.
+  # Force a fresh flynn-builder / flannel-wrapper for start-all. Rebuild here
+  # with the host Go toolchain — do not delete flynn-builder and let
+  # script/flynn-builder run builder/img/go.sh (host apt-get + a second Go
+  # install) during toolchain.
   rm -f build/bin/flynn-builder
   rm -f build/bin/flannel-wrapper
   # Same VCS stamp skip as script/go-build-version: vboxsf git status is 128.
   GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flannel-wrapper ./flannel/wrapper
+  GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flynn-builder ./builder
 
   echo "===> [binaries] Complete."
 }
@@ -285,6 +309,7 @@ run_phase_binaries() {
 run_phase_start() {
   require_base_squashfs
   cd "${FLYNN_ROOT}"
+  ensure_builder_isolation_tools
 
   echo "===> [start] Starting Flynn stack..."
   ./script/start-all

@@ -67,7 +67,8 @@ const flynnGitCacheSubdir = "_git_mirrors"
 // Also: retries + IPv4, and drop leaked docker.com/mongodb sources. The builder VM adds those
 // repos for host Docker; a leaked docker.sources plus --error-on=any fails the whole image build
 // when download.docker.com blips.
-const flynnAptLayerPrelude = `mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial && ` +
+const flynnAptLayerPrelude = `mkdir -p /tmp; chmod 1777 /tmp 2>/dev/null || true; ` +
+	`mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial && ` +
 	`chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true && ` +
 	`chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true && ` +
 	`chmod a+rwx /var/lib/apt/lists /var/lib/apt/lists/partial 2>/dev/null || true && ` +

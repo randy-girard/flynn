@@ -3,10 +3,18 @@
 set -eo pipefail
 
 if [ ! -f build/bin/flynn-builder ]; then
-  echo "Bootstrapping Go/flynn-builder..."
-  builder/img/go.sh
   mkdir -p build/bin
-  GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flynn-builder ./builder
+  # Prefer the host Go toolchain (setup.sh / binaries phase). builder/img/go.sh
+  # is an image layer that also apt-get installs Go — running it on the builder
+  # host races apt-key on /tmp and is unnecessary when Go is already there.
+  if command -v go >/dev/null 2>&1; then
+    echo "Building flynn-builder..."
+    GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flynn-builder ./builder
+  else
+    echo "Bootstrapping Go/flynn-builder..."
+    builder/img/go.sh
+    GOFLAGS="-mod=vendor -buildvcs=false" go build -o build/bin/flynn-builder ./builder
+  fi
 fi
 
 export GO111MODULE=on

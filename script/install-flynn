@@ -148,7 +148,7 @@ main() {
 
   repo_url="${repo_url:="https://dl.flynn.cloud.randygirard.com"}"
 
-  local packages=("iptables" "zfsutils-linux" "apparmor" "apparmor-utils")
+  local packages=("iptables" "ipset" "zfsutils-linux" "apparmor" "apparmor-utils")
 
   info "installing runtime dependencies"
   apt_get_update_resilient

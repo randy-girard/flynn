@@ -12,6 +12,7 @@ apt-get install -y --no-install-recommends linux-gcp \
     udev \
     zfsutils-linux \
     iptables \
+    ipset \
     iproute2 \
     qemu-kvm \
     apparmor \

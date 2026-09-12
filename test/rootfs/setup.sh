@@ -96,7 +96,9 @@ apt-get install -y \
   libsasl2-dev \
   libseccomp-dev \
   squashfs-tools \
-  pkg-config
+  pkg-config \
+  iptables \
+  ipset
 
 # install flynn test dependencies: postgres, redis, mariadb
 # (normally these are used via appliances; install locally for unit tests)

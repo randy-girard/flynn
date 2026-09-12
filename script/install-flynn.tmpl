@@ -146,8 +146,9 @@ main() {
 
   repo_url="${repo_url:="flynn/flynn"}"
 
-  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip (modern fallback / minimal images)
-  local packages=("iptables" "zfsutils-linux" "net-tools" "iproute2")
+  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip
+  # (modern fallback / minimal images). ipset: flynn-host EnableJobIsolation.
+  local packages=("iptables" "ipset" "zfsutils-linux" "net-tools" "iproute2")
 
   info "installing runtime dependencies"
   apt_get_update_resilient

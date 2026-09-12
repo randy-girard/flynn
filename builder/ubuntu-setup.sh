@@ -41,6 +41,8 @@ export DEBIAN_FRONTEND=noninteractive
 # ubuntu-setup.sh. Match that prelude here so _apt can use the bind-mounted
 # /var/cache/apt/archives and /var/lib/apt/lists, and sandboxing does not hit
 # root-owned partial/ files (pkgAcquire Permission denied).
+mkdir -p /tmp
+chmod 1777 /tmp 2>/dev/null || true
 mkdir -p /var/cache/apt/archives/partial /var/lib/apt/lists/partial
 chmod a+rwx /var/cache/apt/archives /var/cache/apt/archives/partial 2>/dev/null || true
 chmod -R a+rwX /var/cache/apt/archives/partial 2>/dev/null || true

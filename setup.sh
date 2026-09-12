@@ -48,6 +48,8 @@ flynn_apt_cmd install -y \
   jq \
   net-tools \
   ifupdown \
+  iptables \
+  ipset \
   zfsutils-linux \
   debootstrap \
   squashfs-tools \

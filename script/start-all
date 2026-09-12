@@ -25,5 +25,21 @@ echo $! > /var/run/flynn-local/flanneld.pid
 
 sleep 3
 
-# Show networking logs
-less /var/log/flynn/host-0/flynn-host.log | grep -E 'ConfigureNetworking|configure networking progress'
+# Show networking logs. ConfigureNetworking must succeed: without it flynn-host
+# never registers in discoverd and flynn-builder times out on "service not found".
+host_log=/var/log/flynn/host-0/flynn-host.log
+for _ in 1 2 3 4 5 6 7 8; do
+  if [[ -f "${host_log}" ]] && grep -qE 'error configuring network|configuring network' "${host_log}"; then
+    break
+  fi
+  sleep 1
+done
+if [[ -f "${host_log}" ]]; then
+  grep -E 'ConfigureNetworking|configure networking progress|error enabling job isolation|error enabling br_netfilter|error configuring network' "${host_log}" || true
+  if grep -q 'error configuring network' "${host_log}"; then
+    echo "===> flynn-host ConfigureNetworking failed; not starting image builds" >&2
+    grep -E 'error configuring network|error enabling job isolation|error enabling br_netfilter' "${host_log}" >&2 || true
+    echo "hint: the builder host needs the ipset package (setup.sh / build.sh install it)" >&2
+    exit 1
+  fi
+fi
