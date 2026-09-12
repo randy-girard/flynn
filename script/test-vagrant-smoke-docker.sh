@@ -60,8 +60,8 @@ need 'echo docker-cli' \
   "container flynn run must execute echo in the image"
 need 'cat /start.sh' \
   "container flynn run must read /start.sh from the image"
-need 'web.discoverd:8080' \
-  "container flynn run must hit the running app HTTP via discoverd"
+need 'net-isolate-peer' \
+  "smoke must prove Dockerfile jobs cannot reach other apps via discoverd"
 
 need_file "${ROOT}/dockerbuilder/img/packages.sh" "dockerbuilder packages.sh must exist"
 grep -q 'runc' "${ROOT}/dockerbuilder/img/packages.sh" \

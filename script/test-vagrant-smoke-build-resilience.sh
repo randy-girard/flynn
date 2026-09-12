@@ -21,6 +21,8 @@ need 'transient_build_failure' \
   "build retries must be gated on apt/network errors, not compile failures"
 need 'download.docker.com' \
   "transient detector must include docker.com mirror blips"
+need 'build/flynn-build-attempt.log' \
+  "build attempt log must live in the synced repo (not /tmp/flynn-* which prep deletes)"
 need 'build attempt' \
   "builder must log each build attempt"
 need 'step_fail_summary' \

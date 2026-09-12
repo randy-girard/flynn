@@ -154,6 +154,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
   ./pkg/iptables/
+  ./pkg/netpolicy/
   ./pkg/squashfs/
   ./pkg/dockerimage/
   ./appliance/clickhouse/
@@ -450,8 +451,16 @@ smoke_stop_detail_tail() {
   fi
 }
 
+# macOS still has /dev/tty with no controlling terminal; opening it then
+# fails with "Device not configured" and trips set -e (agent / no-TTY runs).
+smoke_tty_usable() {
+  { exec 3<>/dev/tty; } 2>/dev/null || return 1
+  exec 3>&-
+  return 0
+}
+
 smoke_restore_tty() {
-  if [[ -n "${SMOKE_STTY_SAVED:-}" ]] && [[ -e /dev/tty ]]; then
+  if [[ -n "${SMOKE_STTY_SAVED:-}" ]] && smoke_tty_usable; then
     stty "${SMOKE_STTY_SAVED}" < /dev/tty 2>/dev/null || true
   fi
   SMOKE_STTY_SAVED=""
@@ -462,7 +471,7 @@ smoke_restore_tty() {
 # terminal, so we disable rprnt/echo and read the byte from /dev/tty.
 smoke_prepare_tty() {
   [[ "${SMOKE_DETAIL}" == "1" ]] && return 0
-  [[ -e /dev/tty ]] || return 0
+  smoke_tty_usable || return 0
   SMOKE_STTY_SAVED="$(stty -g < /dev/tty 2>/dev/null || true)"
   [[ -n "${SMOKE_STTY_SAVED}" ]] || return 0
   stty -echo -echoctl < /dev/tty 2>/dev/null || true
@@ -493,7 +502,7 @@ smoke_toggle_detail() {
   SMOKE_DETAIL_LIVE=1
   _UI_COLLAPSE_BODY=0
   info "command output shown — Ctrl+R to hide"
-  if [[ -e /dev/tty ]] && [[ -f "${LAST_STEP_LOG}" ]]; then
+  if smoke_tty_usable && [[ -f "${LAST_STEP_LOG}" ]]; then
     tail -n 80 -f "${LAST_STEP_LOG}" >/dev/tty 2>/dev/null &
     SMOKE_DETAIL_TAIL_PID=$!
   fi
@@ -503,7 +512,7 @@ smoke_toggle_detail() {
 # not trip the ERR trap. Swallow the key so it never echoes as ^R.
 smoke_poll_detail_key() {
   local key=""
-  [[ -e /dev/tty ]] || return 0
+  smoke_tty_usable || return 0
   read -t 1 -n 1 -s key < /dev/tty || true
   if [[ "${key}" == $'\x12' ]]; then
     smoke_toggle_detail
@@ -512,7 +521,7 @@ smoke_poll_detail_key() {
 
 smoke_wait_collapsed_step() {
   local wrapper=$1
-  if [[ ! -e /dev/tty ]]; then
+  if ! smoke_tty_usable; then
     wait "${wrapper}" || true
     return 0
   fi
@@ -619,6 +628,24 @@ node_ssh_config_path() {
   echo "${ROOT}/.vagrant-upgrade-smoke-tmp/ssh-${1}.config"
 }
 
+vagrant_vm_running() {
+  local node=$1
+  vagrant status "${node}" 2>/dev/null | grep -qE "^${node}[[:space:]]+running"
+}
+
+# SKIP_VAGRANT_UP=1 only works when that VM is already up. A failed smoke
+# destroys VMs unless KEEP_VMS_ON_FAIL=1 (KEEP_BUILDER only applies on success).
+require_vm_running_for_skip() {
+  local node=$1
+  if vagrant_vm_running "${node}"; then
+    return 0
+  fi
+  echo "SKIP_VAGRANT_UP=1 but ${node} is not running." >&2
+  echo "The previous smoke likely destroyed VMs (KEEP_VMS_ON_FAIL default is destroy; KEEP_BUILDER only keeps the builder on success)." >&2
+  echo "Re-run without SKIP_VAGRANT_UP=1. SKIP_BUILD=1 is fine if build/release/flynn-\${BUILD_VERSION}.tar.gz exists." >&2
+  return 1
+}
+
 cache_node_ssh_config() {
   local node=$1
   local cfg tmp i
@@ -634,6 +661,9 @@ cache_node_ssh_config() {
   done
   rm -f "${tmp}"
   echo "failed to read vagrant ssh-config for ${node}" >&2
+  if ! vagrant_vm_running "${node}"; then
+    echo "hint: ${node} is not running; omit SKIP_VAGRANT_UP=1 or run: vagrant up ${node}" >&2
+  fi
   return 1
 }
 
@@ -905,6 +935,11 @@ for ip in ${bridges}; do
 done
 echo "-- postgres meta --"
 curl -fsS --max-time 3 http://127.0.0.1:1111/services/postgres/meta 2>&1 | head -c 500; echo
+echo "-- flynn-host --"
+systemctl is-active flynn-host.service 2>/dev/null || true
+command -v ipset >/dev/null && echo "ipset=\$(command -v ipset)" || echo "ipset=MISSING"
+journalctl -u flynn-host.service -n 40 --no-pager 2>/dev/null || true
+grep -E 'error configuring network|error enabling job isolation|ipset not found' /var/log/flynn/flynn-host.log 2>/dev/null | tail -n 20 || true
 EOF
   done
 }
@@ -960,8 +995,39 @@ watch_overlay_during_bootstrap() {
     echo "overlay watch: flannel/flynnbr0 not up within 240s" > "${fail_file}"
     return 1
   fi
+  # ConfigureNetworking creates flynnbr0 then EnableJobIsolation; missing ipset
+  # fatals flynn-host while the bridge is already up (wait-hosts then burns 10m).
+  local node
+  for node in "${NODES[@]}"; do
+    if ! node_root_script "${node}" <<'EOF' >/dev/null 2>&1
+set -euo pipefail
+systemctl is-active --quiet flynn-host.service
+EOF
+    then
+      echo "overlay watch: flynn-host died on ${node} after flynnbr0 came up (often missing ipset)" > "${fail_file}"
+      dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
+      node_root_script node1 <<'EOF' >/dev/null 2>&1 || true
+pkill -f 'flynn-host bootstrap' || true
+EOF
+      return 1
+    fi
+  done
   # Allow remote subnet routes / FDB entries to settle, then require reachability.
   sleep 20
+  for node in "${NODES[@]}"; do
+    if ! node_root_script "${node}" <<'EOF' >/dev/null 2>&1
+set -euo pipefail
+systemctl is-active --quiet flynn-host.service
+EOF
+    then
+      echo "overlay watch: flynn-host died on ${node} after overlay settle (often missing ipset)" > "${fail_file}"
+      dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
+      node_root_script node1 <<'EOF' >/dev/null 2>&1 || true
+pkill -f 'flynn-host bootstrap' || true
+EOF
+      return 1
+    fi
+  done
   if ! overlay_peers_reachable >>"${LAST_STEP_LOG}" 2>&1; then
     dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
     echo "overlay peer bridges unreachable after flannel up" > "${fail_file}"
@@ -1067,14 +1133,10 @@ wait_datastores_ready() {
 }
 
 ensure_flynn_cli_on_node1() {
-  # A present-but-wrong-arch binary (e.g. amd64 on an arm64 VM) exists yet
-  # fails with "Exec format error", so test execution, not just presence.
-  if node_ssh node1 'flynn version >/dev/null 2>&1'; then
-    return 0
-  fi
+  # Prefer the synced local CLI even when /usr/local/bin/flynn already works.
+  # SKIP_BUILD leaves the tarball CLI in place; overlaying build/bin picks up
+  # CLI fixes (e.g. redis-cli leader DNS) without rebuilding images.
   info "installing Flynn CLI on node1"
-  # Prefer a CLI binary from the local build (synced folder), matching the
-  # node's architecture; fall back to the published installer.
   node_root_script node1 <<EOF
 set -euo pipefail
 case "\$(uname -m)" in
@@ -1087,6 +1149,8 @@ src="${REPO_IN_VM}/build/bin/flynn-linux-\${cli_arch}"
 if [[ -x "\${src}" ]]; then
   echo "installing \${src} (node arch \$(uname -m))"
   install -m 0755 "\${src}" /usr/local/bin/flynn
+elif flynn version >/dev/null 2>&1; then
+  echo "keeping existing flynn CLI (\${src} missing)"
 else
   echo "no local CLI for \${cli_arch}; using installer from ${CLI_REPO}"
   curl -fsSL "https://raw.githubusercontent.com/${CLI_REPO}/main/script/install-flynn-cli" \
@@ -1339,13 +1403,26 @@ if [[ ! -x /usr/local/go/bin/go ]]; then
   exit 1
 fi
 
+# Job isolation (EnableJobIsolation) needs ipset on this VM, not only in the
+# cluster host squashfs. Existing builders skipped the setup.sh package add.
+# shellcheck disable=SC1091
+source "${REPO_IN_VM}/script/lib/apt-retry.sh"
+flynn_apt_install_conf
+if ! command -v ipset >/dev/null 2>&1; then
+  echo "===> installing ipset on builder (required for flynn-host job isolation)"
+  export DEBIAN_FRONTEND=noninteractive
+  flynn_apt_cmd install -y ipset
+fi
+
 transient_build_failure() {
-  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 ' "\$1"
+  [[ -f "\$1" ]] || return 1
+  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 |Couldn.t create temporary file /tmp/apt.conf' "\$1"
 }
 
 attempt=1
 max="${FLYNN_BUILD_ATTEMPTS}"
-log="/tmp/flynn-build-attempt.log"
+mkdir -p "${REPO_IN_VM}/build"
+log="${REPO_IN_VM}/build/flynn-build-attempt.log"
 while true; do
   echo "===> build attempt \${attempt}/\${max} version=${BUILD_VERSION} phase=${phase}"
   rc=0
@@ -1422,6 +1499,14 @@ if [[ -e /usr/local/bin/flynn-host || -d /var/lib/flynn ]]; then
   extra_args+=(--clean)
 fi
 bash "\${install_script}" --yes --no-ntp "\${extra_args[@]}" --tarball "\${tarball}"
+# EnableJobIsolation runs in the node flynn-host process (not the host squashfs).
+# Older tarballs' install-flynn omit ipset; install it here so SKIP_BUILD still works.
+if ! command -v ipset >/dev/null 2>&1; then
+  echo "===> installing ipset on ${node} (required for flynn-host job isolation)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y ipset
+fi
+command -v ipset >/dev/null
 for link in flannel.1 flynnbr0; do
   if ip link show "\${link}" &>/dev/null; then
     echo "removing stale \${link}"
@@ -1517,6 +1602,7 @@ EOF
     return 1
   fi
   if [[ ${boot_rc} -ne 0 ]]; then
+    dump_layer0_diagnostics
     dump_overlay_diagnostics
     return 1
   fi
@@ -2071,6 +2157,31 @@ cli_run_job() {
   return 1
 }
 
+# Expect a one-off to fail (NXDOMAIN or timeout). Used to prove user jobs
+# cannot reach other apps or internal discoverd names.
+cli_run_must_fail() {
+  local label=$1 name=$2 app=$3
+  shift 3
+  local cmd_q="" a rc=0 out
+  for a in "$@"; do
+    cmd_q+=" $(printf '%q' "${a}")"
+  done
+  out="$(node_ssh node1 "sudo -H timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+  if [[ "${rc}" -ne 0 ]]; then
+    if echo "${out}" | grep -qiE 'No app release|stat /runner/init|unknown app'; then
+      record_check "${label}" "${name}" "FAIL" "run failed to start $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "cli ${label} ${name}: FAIL job did not start: ${out}" >&2
+      return 1
+    fi
+    record_check "${label}" "${name}" "PASS" "isolated rc=${rc}"
+    echo "cli ${label} ${name}: PASS (blocked)"
+    return 0
+  fi
+  record_check "${label}" "${name}" "FAIL" "unexpected success $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "cli ${label} ${name}: FAIL unexpectedly succeeded: ${out}" >&2
+  return 1
+}
+
 # Live flynn + flynn-host commands against the cluster. Unit tests cover CLI
 # packages (./cli on the host gate, ./cli + ./host/cli on the builder); this
 # catches controller/scheduler/logaggregator drift after an upgrade. Does not
@@ -2148,27 +2259,14 @@ step_cli_functions() {
     echo docker-cli || failed=1
   cli_run_job "${label}" "docker-cli-run-image" "${DOCKER_APP_NAME}" "httpd|PORT" \
     cat /start.sh || failed=1
-  local docker_http_ok=0
-  out=""
-  rc=0
-  for attempt in $(seq 1 8); do
-    rc=0
-    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${DOCKER_APP_NAME}") run -- wget -q -O - http://${DOCKER_APP_NAME}-web.discoverd:8080/" </dev/null)" || rc=$?
-    if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q 'docker-smoke ok'; then
-      docker_http_ok=1
-      break
-    fi
-    echo "cli ${label} docker-cli-run-http: retry ${attempt}/8 rc=${rc}"
-    sleep 5
-  done
-  if [[ "${docker_http_ok}" -eq 1 ]]; then
-    record_check "${label}" "docker-cli-run-http" "PASS" "GET ${DOCKER_APP_NAME}-web.discoverd:8080 => docker-smoke ok"
-    echo "cli ${label} docker-cli-run-http: PASS"
-  else
-    record_check "${label}" "docker-cli-run-http" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} docker-cli-run-http: FAIL rc=${rc} ${out}" >&2
-    failed=1
-  fi
+  cli_run_must_fail "${label}" "net-isolate-peer" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://${APP_NAME}-web.discoverd:8080/" || failed=1
+  cli_run_must_fail "${label}" "net-isolate-internal" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://postgres.discoverd:5432/" || failed=1
+  cli_run_must_fail "${label}" "net-isolate-api" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://postgres-api.discoverd/" || failed=1
+  cli_run_job "${label}" "net-db-leader" "${APP_NAME}" "db-leader-ok" \
+    bash -c 'echo >/dev/tcp/leader.postgres.discoverd/5432 && echo db-leader-ok' || failed=1
 
   flynn1 -a "${APP_NAME}" meta set "smoke_cli=${label}" >/dev/null || true
   cli_probe "${label}" "cli-meta" "smoke_cli" \
@@ -2213,7 +2311,7 @@ step_cli_functions() {
   rc=0
   for attempt in $(seq 1 12); do
     rc=0
-    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${APP_NAME}") run -- curl -fsS --connect-timeout 10 http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
+    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a blobstore run -- wget -qO- http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
     if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q healthy; then
       blob_ok=1
       break
@@ -2454,6 +2552,10 @@ run_one_topology() {
   clear_cluster_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" && "${idx}" -eq 0 ]]; then
+    local n
+    for n in "${NODES[@]}"; do
+      require_vm_running_for_skip "${n}"
+    done
     record "Vagrant up (cluster nodes) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VAGRANT_UP=1"
     CLUSTER_STARTED=1
     cache_all_node_ssh_configs
@@ -2587,6 +2689,7 @@ main() {
   clear_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" ]]; then
+    require_vm_running_for_skip builder
     record "Vagrant up (builder)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
     cache_node_ssh_config builder
     BUILDER_STARTED=1

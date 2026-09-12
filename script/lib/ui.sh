@@ -25,8 +25,12 @@ say() {
   # Collapsed smoke steps redirect stdout to a log. Still show STEP/WARN/OK on
   # the terminal; command chatter stays in the log until the user expands it.
   if [[ "${_UI_SESSION:-0}" == "1" && "${_UI_COLLAPSE_BODY:-0}" == "1" ]] \
-    && [[ ! -t 1 ]] && [[ -w /dev/tty ]]; then
-    { ui_wrap "${color}" "${msg}"; printf '\n'; } >/dev/tty
+    && [[ ! -t 1 ]]; then
+    # Open /dev/tty in a subshell first: macOS has the node with no controlling
+    # terminal, and a direct >/dev/tty prints "Device not configured".
+    if (exec >/dev/tty) 2>/dev/null; then
+      { ui_wrap "${color}" "${msg}"; printf '\n'; } >/dev/tty 2>/dev/null || true
+    fi
   fi
 }
 

@@ -183,6 +183,8 @@ if grep -q 'stty status' "${smoke}"; then
   echo "smoke must not use stty status ^R (does not work in Cursor; prints ^R)" >&2
   exit 1
 fi
+grep -q 'smoke_tty_usable' "${smoke}" \
+  || { echo "smoke must skip /dev/tty when there is no controlling terminal" >&2; exit 1; }
 grep -q 'smoke_poll_detail_key' "${smoke}" \
   || { echo "smoke must poll /dev/tty for Ctrl+R while a step is running" >&2; exit 1; }
 grep -q 'smoke_toggle_detail' "${smoke}" \

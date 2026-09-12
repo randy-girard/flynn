@@ -170,6 +170,8 @@ need "${smoke}" 'docker-cli-run' \
   "smoke must flynn run against the Dockerfile app (container image, not slugrunner)"
 need "${smoke}" './pkg/dockerimage/' \
   "host unit gate must compile dockerimage container-stack release tests"
+need "${smoke}" './pkg/netpolicy/' \
+  "host unit gate must compile netpolicy isolation tests"
 need "${smoke}" 'flynn-host version' \
   "smoke must run flynn-host version (stripped cgo binary + libseccomp2)"
 need "${smoke}" 'report-image-sizes.sh' \
