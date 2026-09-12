@@ -76,12 +76,24 @@ func getRedisRunConfig(client controller.Client, app string, appRelease *ct.Rele
 		App:        app,
 		Release:    redisRelease.ID,
 		Env:        make(map[string]string),
-		Args:       []string{"redis-cli", "-h", redisApp + ".discoverd", "-a", appRelease.Env["REDIS_PASSWORD"]},
+		Args:       []string{"redis-cli", "-h", redisDialHost(appRelease, redisApp), "-a", appRelease.Env["REDIS_PASSWORD"]},
 		DisableLog: true,
 		Exit:       true,
 	}
 
 	return config, nil
+}
+
+// redisDialHost is the provisioned REDIS_HOST (leader.<redis-app>.discoverd).
+// redis-cli runs as a user job, so it must not use <redis-app>.discoverd —
+// user discoverd DNS returns NXDOMAIN for non-leader names.
+func redisDialHost(appRelease *ct.Release, redisApp string) string {
+	if appRelease != nil {
+		if host := appRelease.Env["REDIS_HOST"]; host != "" {
+			return host
+		}
+	}
+	return "leader." + redisApp + ".discoverd"
 }
 
 func runRedisCLI(args *docopt.Args, client controller.Client, config *runConfig) error {

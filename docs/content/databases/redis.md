@@ -36,7 +36,8 @@ by some libraries to configure connections.
 
 To connect to a console for the database, run `flynn redis redis-cli`. This does
 not require the Redis client to be installed locally or firewall/security
-changes, as it runs in a container on the Flynn cluster.
+changes, as it runs in a container on the Flynn cluster. The console uses
+`REDIS_HOST` (`leader.<redis-app>.discoverd`), the same host as `REDIS_URL`.
 
 ### External access
 
