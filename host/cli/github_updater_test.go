@@ -88,12 +88,48 @@ func TestFindLocalHostSingleHostFallback(t *testing.T) {
 	}
 }
 
+func TestCoordinatorHostIsLocal(t *testing.T) {
+	if !coordinatorHostIsLocal("node1", "") {
+		t.Fatal("empty daemonID must accept any host")
+	}
+	if !coordinatorHostIsLocal("node1", "node1") {
+		t.Fatal("matching daemonID must be local")
+	}
+	if coordinatorHostIsLocal("node2", "node1") {
+		t.Fatal("a different daemon must not be treated as local")
+	}
+}
+
 func TestFindLocalHostDoesNotFallbackToPeerAfterRestart(t *testing.T) {
 	log := log15.New()
 	peer := cluster.NewHost("node2", "192.168.56.21:1113", nil, nil)
 	h := findLocalHost([]*cluster.Host{peer}, "node1", "node1", map[string]struct{}{"192.168.56.20": {}}, log)
 	if h != nil {
 		t.Fatalf("restarting node1 must not treat the only remaining peer as local, got %#v", h)
+	}
+}
+
+func TestFindLocalHostDoesNotMatchPeerNATIPWhenDaemonIDKnown(t *testing.T) {
+	log := log15.New()
+	// VirtualBox NAT is 10.0.2.15 on every VM. After a drain the remaining
+	// peer can advertise that address while this daemon is still missing
+	// from discoverd.
+	peer := cluster.NewHost("node2", "10.0.2.15:1113", nil, nil)
+	h := findLocalHost([]*cluster.Host{peer}, "node1", "node1", map[string]struct{}{
+		"10.0.2.15":     {},
+		"192.168.56.20": {},
+	}, log)
+	if h != nil {
+		t.Fatalf("must not treat a peer sharing the NAT IP as local, got %#v", h)
+	}
+}
+
+func TestFindLocalHostDoesNotMatchPeerHostnameWhenDaemonIDKnown(t *testing.T) {
+	log := log15.New()
+	peer := cluster.NewHost("node2", "192.168.56.21:1113", nil, nil)
+	h := findLocalHost([]*cluster.Host{peer}, "node2", "node1", nil, log)
+	if h != nil {
+		t.Fatalf("must not match a peer hostname when daemonID is a different host, got %#v", h)
 	}
 }
 
