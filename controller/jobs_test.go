@@ -212,10 +212,11 @@ func (s *S) TestRunJobDetached(c *C) {
 		job := j.Job
 		c.Assert(res.ID, Equals, job.ID)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":      app.ID,
-			"flynn-controller.app_name": app.Name,
-			"flynn-controller.release":  release.ID,
-			"foo":                       "baz",
+			"flynn-controller.app":          app.ID,
+			"flynn-controller.app_name":     app.Name,
+			"flynn-controller.release":      release.ID,
+			"foo":                           "baz",
+			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
@@ -336,10 +337,11 @@ func (s *S) TestRunJobAttached(c *C) {
 		job := j.Job
 		c.Assert(job.ID, Equals, jobID)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":      app.ID,
-			"flynn-controller.app_name": app.Name,
-			"flynn-controller.release":  release.ID,
-			"foo":                       "baz",
+			"flynn-controller.app":          app.ID,
+			"flynn-controller.app_name":     app.Name,
+			"flynn-controller.release":      release.ID,
+			"foo":                           "baz",
+			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
