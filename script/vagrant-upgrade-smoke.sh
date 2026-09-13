@@ -1981,10 +1981,13 @@ mkdir -p "$(dirname "${vm_path}")"
 rm -f "${vm_path}" "${restore_path}"
 flynn cluster backup --file "${vm_path}"
 test -s "${vm_path}"
-tar -tf "${vm_path}" | grep -q 'flynn.json'
-tar -tf "${vm_path}" | grep -q 'postgres.sql.gz'
-tar -tf "${vm_path}" | grep -q 'mysql.sql.gz'
-tar -tf "${vm_path}" | grep -q 'mongodb.archive.gz'
+# List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
+# match and tar gets SIGPIPE (exit 141) under pipefail. Seen 2026-09-13.
+members="\$(tar -tf "${vm_path}")"
+printf '%s\n' "\${members}" | grep -F 'flynn.json' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'postgres.sql.gz' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'mysql.sql.gz' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'mongodb.archive.gz' >/dev/null
 cp -f "${vm_path}" "${restore_path}"
 test -s "${restore_path}"
 ls -lh "${vm_path}" "${restore_path}"

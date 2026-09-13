@@ -66,4 +66,14 @@ if grep -q 'assert_databases post-restore' "${smoke}"; then
   exit 1
 fi
 
+if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'tar -tf' | grep -qF '| grep -q'; then
+  echo "backup member check must not use tar -tf | grep -q (SIGPIPE exit 141 under pipefail)" >&2
+  exit 1
+fi
+if ! grep -qF 'members="\$(tar -tf' "${smoke}"; then
+  echo "backup members must be listed once, then grepped (avoid SIGPIPE)" >&2
+  echo "  missing members=\$(tar -tf ...) in ${smoke}" >&2
+  exit 1
+fi
+
 echo "ok smoke takes a cluster backup and restores with --from-backup"
