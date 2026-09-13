@@ -6,10 +6,10 @@
 # Flynn CLI binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/randy-girard/flynn/main/script/install-flynn-cli | sudo bash
+#   curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash
 #
 # Or with a specific version:
-#   curl -fsSL https://raw.githubusercontent.com/randy-girard/flynn/main/script/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
+#   curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
 #
 
 set -eo pipefail
