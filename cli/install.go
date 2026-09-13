@@ -11,6 +11,6 @@ func init() {
 }
 
 func runInstaller(args *docopt.Args) error {
-	fmt.Printf("DEPRECATED: `flynn install` has been deprecated.\nRefer to https://flynn.io/docs/installation for current installation instructions.\nAn unsupported and unmaintained snapshot of the installer binaries at the time of deprecation is available at https://dl.flynn.io/flynn-install-deprecated.tar.gz\n")
+	fmt.Printf("DEPRECATED: `flynn install` has been deprecated.\nRefer to https://github.com/randy-girard/flynn#install-a-cluster for current installation instructions.\n")
 	return nil
 }

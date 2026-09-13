@@ -41,6 +41,7 @@ Options:
 Commands:
 	help        show usage for a specific command
 	cluster     manage clusters
+	login       authenticate with the dashboard (OAuth)
 	create      create an app
 	delete      delete an app
 	apps        list apps
