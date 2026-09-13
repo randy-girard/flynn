@@ -1,0 +1,10 @@
+---
+description: Keep documentation and tests aligned with code changes
+alwaysApply: true
+---
+
+# Docs and tests stay current
+
+Follow [AGENTS.md](../../AGENTS.md).
+
+When behavior changes, update the matching docs (README, `docs/content/`, component READMEs) and tests in the same work. Use GitHub-relative markdown links, not `/docs/...` website paths. Do not leave guides describing replaced stacks, versions, install URLs, or commands.

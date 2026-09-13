@@ -6,319 +6,306 @@ toc_min_level: 2
 
 # Development
 
-This guide will explain how to:
+This guide covers how this fork is built, tested, and released.
 
-* Make changes to the Flynn source code
-* Build and run Flynn
-* Run the tests
-* Create a release of Flynn
+* Edit and build Flynn
+* Run unit, integration, and Vagrant smoke tests
+* Cut a GitHub release
 
 ## Development environment
 
-Development work is typically done inside a [VirtualBox](https://www.virtualbox.org/) VM managed
-by [Vagrant](https://www.vagrantup.com/), and Flynn includes a Vagrantfile which fully automates
-the creation of the VM.
+The supported loop is an **Ubuntu 24.04** Vagrant VM named **builder**, plus
+optional cluster VMs (`node1` … `nodeN`). The box is `bento/ubuntu-24.04`.
+Install [Vagrant](https://www.vagrantup.com/) (≥ 1.9), [VirtualBox](https://www.virtualbox.org/),
+and the `vagrant-disksize` plugin.
 
-### Running the development VM
+Do **not** run a bare `vagrant up`. That boots the builder and every cluster
+node (heavy). See [Vagrant](installation/vagrant.md).
 
-If you don't already have VirtualBox and Vagrant installed, you should
-install them by following the directions on their respective web sites.
-
-Clone this Flynn fork locally:
+Clone this fork, then start only the builder:
 
 ```
 $ git clone https://github.com/randy-girard/flynn.git
+$ cd flynn
+$ vagrant up builder
+$ vagrant ssh builder
 ```
 
-Then, inside the `flynn` directory, bring up the VM:
+Inside the VM:
 
 ```
-$ vagrant up
+$ cd /root/go/src/github.com/flynn/flynn
 ```
 
-If this is the first time you are creating the VM, Vagrant will need to download the
-underlying VirtualBox files which are ~1GB in size, so this could take a while depending on
-your internet connection.
+The host repo is synced there. `setup.sh` (first provision) installs Go **1.24**,
+Docker, ZFS, `ipset`, and the datastore packages unit tests need (PostgreSQL,
+MariaDB/`mariabackup`, MongoDB, Redis).
 
-Once that command has finished, you will have a VM running which you can SSH to:
+You can also work on a native Ubuntu 24.04 machine with the same packages.
+macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
+ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
-```
-$ vagrant ssh
-```
+Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 
-From now on, it is assumed that commands will be run inside the VM, unless otherwise stated.
+## Building
 
-## Making code changes
+### Host binaries
 
-The development VM is configured to share the Flynn source code from your machine and mount
-it inside the VM, meaning you can edit files locally on your machine and those changes
-will be visible inside the VM.
-
-The builder VM is Ubuntu 24.04. Source is synced to
-`$GOPATH/src/github.com/flynn/flynn` (`/root/go/src/github.com/flynn/flynn`).
-`setup.sh` installs Go 1.24, Docker, ZFS, and appliance test dependencies.
-
-The default `vagrant up` also defines cluster members `node1` … `node3`. See
-[Vagrant](/docs/installation/vagrant).
-
-If you don't have a specific issue you are trying to fix, but are interested in contributing
-to the project, start with GitHub issues on
-[randy-girard/flynn](https://github.com/randy-girard/flynn/issues) or ask on
-[Discord](https://discord.gg/VU2ZqrPUay).
-
-## Building Flynn
-
-From the builder VM (or any Ubuntu 24.04 host with the `setup.sh` packages), run
-`make`. That invokes `script/build-flynn`, which compiles Go binaries and builds
-cluster container images.
+For day-to-day Go work on the builder (or Linux):
 
 ```
 $ make
 ```
 
-`make clean` removes build outputs. `make test-unit` runs the unit suite (`go
-test`); on macOS and Windows it boots a Linux Docker container so appliance
-dependencies are available.
+That runs `script/build-flynn`. Binaries land in `build/bin`, image manifests in
+`build/image`. `make clean` wipes them. `make release` stamps a git-derived
+version.
 
-If a build command fails, fix the issue and re-run `make`.
+### Cluster images
 
-Successful builds produce Go binaries under `build/bin` and cluster images under
-`build/image`.
+A full platform build (squashfs layers for every system app) is `build.sh` on
+the builder. First time, or after Ubuntu/base-package changes:
 
-## Running Flynn
+```
+$ ./build.sh --version vYYYYMMDD.N
+```
 
-Once you have built all the Flynn components, you can boot a single node Flynn cluster by running
-the following script:
+That runs **base** (debootstrap + base squashfs) then **cluster**. If the base
+layer already exists:
+
+```
+$ ./build.sh cluster
+$ ./build.sh --version vYYYYMMDD.N cluster
+```
+
+Phases, in order: `prep` → `binaries` → `start` → `toolchain` → `apps` → `stop`.
+CI splits those across jobs; locally they must stay on the same machine so
+`/var/lib/flynn/layer-cache` and `build/images.json` carry forward.
+
+`script/build-flynn` is the host-binary step inside that pipeline. It is not a
+substitute for `build.sh` when you need installable cluster images or a smoke
+tarball.
+
+## Running a local cluster
+
+After a binary (and, for a real cluster, image) build:
 
 ```
 $ script/bootstrap-flynn
 ```
 
-This will do the following:
+That stops any previous `flynn-host`, starts it again, and bootstraps Layer 1.
+`--size N` creates extra virtual interfaces on one machine for a multi-node
+layout. See `script/bootstrap-flynn -h`.
 
-* stop the `flynn-host` daemon and any running Flynn services
-* start the `flynn-host` daemon
-* run the Flynn bootstrapper, which will start all of the Flynn services
-
-If you want to boot Flynn using a different job backend, or an external IP other
-than that of the `eth0` device, the script provides some options for doing so.
-See `script/bootstrap-flynn -h` for a full list of supported options.
-
-Once Flynn is running, you can add the cluster to the `flynn` CLI tool using the
-bootstrap output, and then try out your changes.
+The last bootstrap lines include `flynn cluster add …`. On Vagrant, host daemon
+logs are `/var/log/flynn/flynn-host.log`, synced to `./flynn-logs/builder` on
+the laptop.
 
 ## Debugging
 
-If things don't seem to be running as expected, here are some useful commands to help
-diagnose the issue:
-
-### check the flynn-host daemon log
-
 ```
-$ less /tmp/flynn-host.log
-```
-
-### view running jobs
-
-```
+$ less /var/log/flynn/flynn-host.log
+$ journalctl -u flynn-host
 $ flynn-host ps
-ID                                                      STATE    STARTED             CONTROLLER APP  CONTROLLER TYPE
-flynn-66f3ca0c60374a1abb172e3a73b50e21                  running  About a minute ago  example         web
-flynn-9d716860f69f4f63bfb4074bcc7f4419                  running  4 minutes ago       gitreceive      app
-flynn-7eff6d37af3c4d909565ca0ab3b077ad                  running  4 minutes ago       router          app
-flynn-b8f3ecd48bb343dab96744a17c96b95d                  running  4 minutes ago       blobstore       web
-...
-```
-
-### view all jobs (i.e. running + stopped)
-
-```
 $ flynn-host ps -a
-ID                                                      STATE    STARTED             CONTROLLER APP  CONTROLLER TYPE
-flynn-7fd8c48542e442349c0217e7cb52dec9                  running  15 seconds ago      example         web
-flynn-66f3ca0c60374a1abb172e3a73b50e21                  running  About a minute ago  example         web
-flynn-9868a539703145a1886bc2557f6f6441                  done     2 minutes ago       example         web
-flynn-100f36e9d18849658e11188a8b85e79f                  done     3 minutes ago       example         web
-flynn-f737b5ece2694f81b3d5efdc2cb8dc56                  done     4 minutes ago
-flynn-9d716860f69f4f63bfb4074bcc7f4419                  running  5 minutes ago       gitreceive      app
-flynn-7eff6d37af3c4d909565ca0ab3b077ad                  running  5 minutes ago       router          app
-flynn-b8f3ecd48bb343dab96744a17c96b95d                  running  5 minutes ago       blobstore       web
-...
-```
-
-### view the output of a job
-
-```
 $ flynn-host log $JOBID
-Listening on 55006
-```
-
-### inspect a job
-
-```
 $ flynn-host inspect $JOBID
-ID                           flynn-075c21e8b79a41d89713352f04f94a71
-Status                       running
-StartedAt                    2014-10-14 14:34:11.726864147 +0000 UTC
-EndedAt                      0001-01-01 00:00:00 +0000 UTC
-ExitStatus                   0
-IP Address                   192.168.200.24
-flynn-controller.release     954b7ee40ef24a1798807499d5eb8297
-flynn-controller.type        web
-flynn-controller.app         e568286366d443c49dc18e7a99f40fc1
-flynn-controller.app_name    example
-```
-
-### stop a job
-
-```
 $ flynn-host stop $JOBID
 ```
 
-### stop all jobs
+Stopping jobs while the scheduler is up will respawn formations. Stop the
+scheduler first if you need a quiet cluster.
 
-```
-$ flynn-host ps -a | xargs flynn-host stop
-```
-
-*(NOTE: as jobs are stopped, the scheduler may start new jobs. To avoid this, stop the scheduler first)*
-
-### stop all jobs for a particular app
-
-Assuming the app has name `example`:
-
-```
-$ flynn-host ps | awk -F " {2,}" '$4=="example" {print $1}' | xargs flynn-host stop
-```
-
-### upload logs and system information to a GitHub gist
-
-If you want to get help diagnosing issues on your system, run the following to upload some
-useful information to an anonymous GitHub gist:
-
-```
-$ flynn-host collect-debug-info
-INFO[03-11|19:25:29] uploading logs and debug information to a private, anonymous gist
-INFO[03-11|19:25:29] this may take a while depending on the size of your logs
-INFO[03-11|19:25:29] getting flynn-host logs
-INFO[03-11|19:25:29] getting job logs
-INFO[03-11|19:25:29] getting system information
-INFO[03-11|19:25:30] creating anonymous gist
-789.50 KB / 789.50 KB [=======================================================] 100.00 % 93.39 KB/s 8s
-INFO[03-11|19:25:38] debug information uploaded to: https://gist.github.com/47379bd4604442cac820
-```
-
-You can then post the gist in [Discord](https://discord.gg/VU2ZqrPUay) when asking for assistance.
-
-If you would rather not use the GitHub gist service, or your logs are too big to fit into a single gist,
-you can create a tarball of the information by specifying the `--tarball` flag:
+For help on Discord, collect logs:
 
 ```
 $ flynn-host collect-debug-info --tarball
-INFO[03-11|19:28:58] creating a tarball containing logs and debug information
-INFO[03-11|19:28:58] this may take a while depending on the size of your logs
-INFO[03-11|19:28:58] getting flynn-host logs
-INFO[03-11|19:28:58] getting job logs
-INFO[03-11|19:28:58] getting system information
-INFO[03-11|19:28:59] created tarball containing debug information at /tmp/flynn-host-debug407848418/flynn-host-debug.tar.gz
 ```
 
-You can then send this to a Flynn developer after speaking to them on Discord.
+`--tarball` writes a local archive. The default gist upload is optional.
 
-## Running tests
+## Tests
 
-Flynn has two types of tests:
+There are several layers. CI on pull requests to `develop` / `main` runs
+**gofmt**, **bats**, and the **Linux unit suite**. Integration tests and Vagrant
+smoke are local (or a dedicated machine). They are the right gate for scheduler,
+network, datastore, upgrade, and CLI behavior.
 
-* "unit" tests which are run using `go test`
-* "integration" tests which run against a booted Flynn cluster
+### gofmt
 
-### Run the unit tests
+```
+$ util/commit-validator/validate-gofmt
+```
 
-On Linux with appliance packages installed (the builder VM):
+CI compares against the PR base so you do not fail on unrelated historical
+drift.
+
+### bats (shell)
+
+```
+$ bats script/test
+```
+
+Covers installer/git/curl/release helper scripts. CI installs `bats` and runs
+this before `go test`.
+
+### Unit tests (Go)
 
 ```
 $ make test-unit
 ```
 
-That runs `go test` with race detection. On macOS or Windows, `script/run-unit-tests` uses Docker.
+`script/run-unit-tests` chooses the runner:
 
-To run tests for an individual package:
+| Host | What runs |
+| --- | --- |
+| Linux (builder, CI) | Native `make test-unit-root-native`: all packages with `-race`, then `sudo go test ./host/volume/...` (ZFS) |
+| macOS / Windows | Docker image `flynn-unit-tests:24.04` with the Linux appliance deps |
+
+Force Docker on Linux with `FLYNN_TEST_DOCKER=1`. Skip ZFS volume tests with
+`FLYNN_SKIP_VOLUME_TESTS=1`. Extra `go test` flags: `FLYNN_GO_TEST_FLAGS`.
+
+On the builder you need `mariabackup` (the Makefile checks). Package-level:
 
 ```
-$ go test ./router
-$ go test ./controller/...
+$ go test -mod=vendor ./router
+$ go test -mod=vendor ./controller/...
 ```
 
-### Run the integration tests
+Do not use Docker Desktop as the Linux ZFS gate. Nested Docker cannot load ZFS;
+the builder VM (or CI’s Ubuntu runner) can.
 
-The integration tests live in the `tests` directory, and require a running Flynn
-cluster before they can run.
+`make test` is `test-unit` plus `test-integration`. Skip the second with
+`SKIP_INTEGRATION_TESTS=1`.
 
-To run all the integration tests:
+### Smoke script regressions
+
+These are fast host checks. They do **not** boot VMs. They assert that
+`script/vagrant-upgrade-smoke.sh` still contains the behaviors we care about
+(datastores, overlay isolation, dockerbuilder, membership, image-slim, …):
+
+```
+$ bash script/test-vagrant-smoke-cli-functions.sh
+# or all of them:
+$ for s in script/test-vagrant-smoke-*.sh; do bash "$s" || exit 1; done
+```
+
+Related one-off script tests: `script/test-apt-retry.sh`,
+`script/test-release-notes.sh`. The Vagrant smoke driver runs every
+`script/test-vagrant-smoke-*.sh` before it starts VirtualBox.
+
+### Integration tests
+
+Full-stack Go tests live in `test/` (not `tests/`). They need a cluster.
 
 ```
 $ script/run-integration-tests
 ```
 
-This will:
-
-* Run `make` to build Flynn
-* Boot a single node Flynn cluster by running `script/bootstrap-flynn`
-* Run the integration test binary (i.e. `bin/flynn-test`)
-
-To run an individual integration test (e.g. `TestEnvDir`):
+That builds Flynn, bootstraps a cluster (`script/bootstrap-flynn`), and runs
+`bin/flynn-test`. Filter:
 
 ```
-$ script/run-integration-tests -f TestEnvDir
+$ script/run-integration-tests -f 'RouterSuite\\.TestAdditionalHttpPorts'
+$ script/run-single-integration-test.sh …
 ```
 
-## Pull request
+`--size` / `-n` boots more than one nested host. This path expects Linux with
+nested containers/KVM and is much slower than `make test-unit`. Details:
+[test/README.md](../../test/README.md).
 
-Once you have made changes and tested them, open a pull request against
-`develop` on [randy-girard/flynn](https://github.com/randy-girard/flynn).
+### Vagrant upgrade smoke
 
-Please see the [contribution guide](/docs/contributing) for more information.
-
-## Releasing Flynn
-
-Once you have built and tested Flynn inside the development VM, you can create a release
-and install the components on other hosts (e.g. in EC2).
-
-A Flynn release is a set of components consisting of binaries, configuration files and
-filesystem images, all of which must be installed in order to run Flynn.
-
-### GitHub Releases
-
-Flynn uses GitHub Releases to distribute all of the Flynn components.
-
-### Build Flynn
-
-Run `script/build-flynn --version XXX` to set an explicit version:
+This is the cluster acceptance suite used for upgrades, datastores, Docker
+deploys, overlay isolation, and node join/drain. Run it from the **repo root on
+the laptop** (it drives Vagrant):
 
 ```
-$ script/build-flynn --version v20171206.0
+$ script/vagrant-upgrade-smoke.sh
 ```
 
-### Create a GitHub Release
+Default flow:
 
-After building Flynn, you can create a GitHub release to distribute the components:
+1. **Host gate** — all `script/test-vagrant-smoke-*.sh`, then a set of
+   Darwin-safe `go test` packages (`./cli/`, `./pkg/netpolicy/`, sirenia,
+   updater, …) plus `test/apps/upgrade-smoke`. Failures stop before VMs.
+2. **Builder gate** — `vagrant up builder`, then the full native Linux unit
+   suite via `script/run-unit-tests` on the VM (Redis, Postgres, MariaDB,
+   MongoDB, ZFS). Failures stop before cluster nodes.
+3. **Build** — cluster images on the builder, tarball in `build/release/`.
+4. **Topologies** — default `SMOKE_TOPOLOGIES=1,3` (singleton, then 3-node HA).
+   Size `2` is invalid. Named topologies: `add` (join `node4` then upgrade) and
+   `remove` (drain `node3` while HTTP and DBs keep working).
+5. On each topology: install the tarball with `--peer-ips` (no discovery
+   service), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
+   `test/apps/upgrade-smoke` against every datastore provider, `git push`
+   `test/apps/upgrade-smoke-docker` on the **container** stack, probe HTTP and
+   rows, exercise `flynn` / `flynn-host`, then `flynn-host update --all-nodes
+   --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
+   wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
+   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Redis,
+   Kafka, and ClickHouse volume data is not in the cluster backup; those
+   engines must come back empty.
+
+Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
+
+Useful environment:
+
+| Variable | Meaning |
+| --- | --- |
+| `SMOKE_TOPOLOGIES=1,3,5,add,remove` | Which layouts to run |
+| `SKIP_UNIT_TESTS=1` | Skip host + builder unit gates |
+| `SKIP_BUILD=1` | Reuse `build/release/flynn-${BUILD_VERSION}.tar.gz` |
+| `SKIP_UPGRADE=1` | Install and verify only |
+| `SKIP_BACKUP=1` | Skip cluster backup + `--from-backup` restore |
+| `SKIP_CLI=1` | Skip live CLI probes |
+| `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
+| `SMOKE_DETAIL=1` | Stream command output |
+| `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run |
+| `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
+
+The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
+
+## CI
+
+* **[Unit tests](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)**
+  — `push` and `pull_request` to `develop` and `main`, on `ubuntu-24.04`.
+  Builds host binaries, `validate-gofmt`, `bats script/test`,
+  `make test-unit-root-native`.
+* **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
+  — manual `workflow_dispatch` only. Builds base + cluster images in phases and
+  publishes GitHub Release assets. Version tags look like `vYYYYMMDD.N`.
+
+## Pull requests
+
+Target **`develop`**. Sign off commits (`git commit -s`). Include tests, or
+explain why not.
+
+* Pure Go / CLI: `make test-unit` (and gofmt) is the minimum
+* Scripts under `script/`: bats and/or the matching `script/test-*.sh`
+* Cluster, overlay, datastores, dockerbuilder, upgrades, membership, backup/restore: run
+  `script/vagrant-upgrade-smoke.sh` (narrow with `SMOKE_TOPOLOGIES` if needed)
+
+See [Contributing](contributing.md).
+
+## Releasing
+
+Build images on the builder (or via the release workflow), then package:
 
 ```
-$ script/github-release
+$ ./build.sh --version vYYYYMMDD.N cluster
+$ ./script/release --version vYYYYMMDD.N --target tarball
+$ ./script/release --version vYYYYMMDD.N --target github
 ```
 
-This will create a new release on GitHub with the built binaries and images.
+`script/release` defaults to a local tarball. GitHub needs `gh` authenticated
+against `randy-girard/flynn`. Prefer the Actions workflow for production
+assets; it already splits toolchain vs app image builds.
 
-### Install Flynn
-
-You can install Flynn using the install script with an explicit GitHub repository:
-
-```
-install-flynn -r randy-girard/flynn
-```
-
-Or to install a specific version:
+Install a built release with
+[manual installation](installation/manual.md) or:
 
 ```
-FLYNN_VERSION=v20240127.0 install-flynn -r randy-girard/flynn
+$ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn | sudo bash
 ```

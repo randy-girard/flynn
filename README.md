@@ -195,6 +195,7 @@ Longer write-up: [Architecture](docs/content/architecture.html.md).
 | Operate | [Production](docs/content/production.html.md) · [Security](docs/content/security.md) · [Stability](docs/content/stability.md) |
 | Develop | [Development](docs/content/development.html.md) · [Contributing](CONTRIBUTING.md) |
 | CLI | [CLI](docs/content/cli.md) · [`cli/README.md`](cli/README.md) |
+| Docs index | [docs/README.md](docs/README.md) |
 
 ## Develop
 
@@ -203,12 +204,13 @@ Needs Ubuntu 24.04 with Docker, ZFS, and the packages in `setup.sh` (the Vagrant
 ```bash
 git clone https://github.com/randy-girard/flynn.git
 cd flynn
-make                          # script/build-flynn
+vagrant up builder            # Ubuntu 24.04 build VM
+make                          # script/build-flynn (host binaries)
 script/bootstrap-flynn        # single-node cluster from local images
 make test-unit                # go test; uses Docker on macOS/Windows
 ```
 
-`make test-integration` boots a cluster and runs the full-stack suite. See [Development](docs/content/development.html.md).
+`make test-integration` boots a nested cluster. Cluster, datastore, overlay, and upgrade changes should also run `script/vagrant-upgrade-smoke.sh`. See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 
