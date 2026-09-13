@@ -173,6 +173,54 @@ grep -q '^ok()' "${ROOT}/script/lib/ui.sh" \
   || { echo "ui.sh must have ok() for green STEP OK / PASS" >&2; exit 1; }
 grep -q 'ui_status_text' "${smoke}" \
   || { echo "smoke report tables must color PASS green and FAIL red" >&2; exit 1; }
+grep -q 'ui_table_cell' "${smoke}" \
+  || { echo "smoke report tables must pad/truncate cells so columns stay aligned" >&2; exit 1; }
+grep -q 'ui_trunc' "${ROOT}/script/lib/ui.sh" \
+  || { echo "ui.sh must truncate over-wide table cells with ellipsis" >&2; exit 1; }
+grep -q 'ui_strip_ansi' "${ROOT}/script/lib/ui.sh" \
+  || { echo "ui.sh must strip ANSI before measuring table cell width" >&2; exit 1; }
+if grep -E 'printf "\| %-16s' "${smoke}"; then
+  echo "Check column must not be hard-coded to 16 chars (docker-cli-run-image is 20)" >&2
+  exit 1
+fi
+if grep -E 'printf "\| %-24s' "${smoke}"; then
+  echo "Phase column must not be hard-coded to 24 chars (3-node-remove/post-upgrade-2 is 28)" >&2
+  exit 1
+fi
+# Truncate/pad must keep every row the same width even when names overflow.
+ui_align="$(env -u NO_COLOR -u FORCE_COLOR -u CLICOLOR_FORCE TERM=dumb bash -c '
+  source "$1"
+  NO_COLOR=1
+  w=16
+  a=$(printf "| %s | %s |\n" "$(ui_table_cell "docker-cli-run-image" "$w")" "$(ui_table_cell "ID                                          TYPE" 20)")
+  b=$(printf "| %s | %s |\n" "$(ui_table_cell "postgres" "$w")" "$(ui_table_cell "rows=200" 20)")
+  echo "$a"
+  echo "$b"
+' _ "${ROOT}/script/lib/ui.sh")"
+cell="$(env -u NO_COLOR TERM=dumb bash -c 'source "$1"; ui_table_cell "docker-cli-run-image" 16' _ "${ROOT}/script/lib/ui.sh")"
+if [[ ${#cell} -ne 16 ]]; then
+  echo "ui_table_cell must print exactly the requested width (got ${#cell} for 16)" >&2
+  exit 1
+fi
+case "${cell}" in
+  *...*) ;;
+  *)
+    echo "ui_table_cell must ellipsize docker-cli-run-image in a 16-col cell (got '${cell}')" >&2
+    exit 1
+    ;;
+esac
+align_a="$(printf '%s\n' "${ui_align}" | sed -n '1p')"
+align_b="$(printf '%s\n' "${ui_align}" | sed -n '2p')"
+if [[ ${#align_a} -ne ${#align_b} ]]; then
+  echo "aligned table rows must be the same length (${#align_a} vs ${#align_b})" >&2
+  echo "${ui_align}" >&2
+  exit 1
+fi
+plain="$(printf '\033[1;36mBackup complete.\033[0m' | env TERM=dumb bash -c 'source "$1"; ui_strip_ansi' _ "${ROOT}/script/lib/ui.sh")"
+if [[ "${plain}" != "Backup complete." ]]; then
+  echo "ui_strip_ansi must drop CSI sequences (got '${plain}')" >&2
+  exit 1
+fi
 grep -q '22;97' "${ROOT}/script/lib/ui.sh" \
   || { echo "smoke session body text must be normal-weight bright white" >&2; exit 1; }
 grep -q '_UI_COLLAPSE_BODY' "${ROOT}/script/lib/ui.sh" \

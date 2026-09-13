@@ -73,6 +73,42 @@ ui_status_text() {
   esac
 }
 
+# Drop ECMA-48 CSI sequences so ${#text} / printf widths match the terminal.
+ui_strip_ansi() {
+  if [[ $# -gt 0 ]]; then
+    printf '%s' "$1"
+  else
+    cat
+  fi | sed $'s/\033\\[[0-9;]*[[:alpha:]]//g'
+}
+
+# Truncate to width, appending ... when the text is longer. Strips ANSI first.
+ui_trunc() {
+  local text=$1
+  local width=$2
+  text="$(ui_strip_ansi "${text}")"
+  text="${text//$'\n'/ }"
+  if [[ -z "${width}" || "${width}" -le 0 ]]; then
+    return 0
+  fi
+  if [[ ${#text} -le ${width} ]]; then
+    printf '%s' "${text}"
+    return 0
+  fi
+  if [[ "${width}" -le 3 ]]; then
+    printf '%s' "${text:0:width}"
+    return 0
+  fi
+  printf '%s' "${text:0:$((width - 3))}..."
+}
+
+# Left-align text in a fixed-width cell. Always prints exactly `width` columns.
+ui_table_cell() {
+  local text=$1
+  local width=$2
+  printf '%-*s' "${width}" "$(ui_trunc "${text}" "${width}")"
+}
+
 # Color only if this function's fd 1 is a terminal (after redirects, so
 # `say ... >&2` checks stderr). Same rule on macOS, Linux, and BSD.
 ui_use_color() {

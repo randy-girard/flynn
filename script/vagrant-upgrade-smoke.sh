@@ -244,8 +244,18 @@ require_bin() {
   done
 }
 
+# Collapse a detail string to one line of visible text (no ANSI, no tabs).
+smoke_plain_detail() {
+  local detail=$1
+  detail="$(ui_strip_ansi "${detail}")"
+  detail="${detail//$'\t'/ }"
+  detail="${detail//$'\n'/ }"
+  printf '%s' "${detail}" | tr -s ' '
+}
+
 record() {
   local name=$1 status=$2 seconds=$3 detail=${4:-}
+  detail="$(smoke_plain_detail "${detail}")"
   RESULT_NAMES+=("${name}")
   RESULT_STATUS+=("${status}")
   RESULT_SECONDS+=("${seconds}")
@@ -262,8 +272,7 @@ record_check() {
   if [[ -n "${CHECK_PHASE_PREFIX:-}" ]]; then
     phase="${CHECK_PHASE_PREFIX}${phase}"
   fi
-  detail="${detail//$'\t'/ }"
-  detail="${detail//$'\n'/ }"
+  detail="$(smoke_plain_detail "${detail}")"
   printf '%s\t%s\t%s\t%s\n' "${phase}" "${name}" "${status}" "${detail}" >> "${CHECK_FILE}"
   if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
     OVERALL_FAILED=1
@@ -274,8 +283,7 @@ record_check() {
 # subshell). Failures here abort before Vagrant up.
 record_unit_check() {
   local kind=$1 name=$2 status=$3 detail=${4:-}
-  detail="${detail//$'\t'/ }"
-  detail="${detail//$'\n'/ }"
+  detail="$(smoke_plain_detail "${detail}")"
   printf '%s\t%s\t%s\t%s\n' "${kind}" "${name}" "${status}" "${detail}" >> "${UNIT_CHECK_FILE}"
   if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
     OVERALL_FAILED=1
@@ -287,7 +295,11 @@ step_log_summary() {
     echo ""
     return
   fi
-  awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" | tr '\n' ' ' | cut -c1-160
+  awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" \
+    | tr '\n' ' ' \
+    | ui_strip_ansi \
+    | tr -s ' ' \
+    | cut -c1-160
 }
 
 # Prefer the actual failure over go-test coverage noise / apt Get:1 lines.
@@ -303,10 +315,62 @@ step_fail_summary() {
     err="$(printf '%s\n' "${detail}" | grep -E 'WARNING: DATA RACE|^--- FAIL:|^FAIL	|race detected|panic:|^E: |Err:|Failed to fetch|apt-get .* failed|make: \*\*\*' | tail -n 3 | tr '\n' ' ')"
   fi
   if [[ -n "${err}" ]]; then
-    echo "${err}" | cut -c1-200
+    echo "${err}" | ui_strip_ansi | tr -s ' ' | cut -c1-200
     return
   fi
-  echo "${detail}" | tr '\n' ' ' | cut -c1-160
+  echo "${detail}" | tr '\n' ' ' | ui_strip_ansi | tr -s ' ' | cut -c1-160
+}
+
+# Terminal width for report tables. Prefer COLUMNS (Cursor/ssh often set it);
+# fall back to tput, then 120 so a typical laptop window does not wrap.
+smoke_term_cols() {
+  local cols="${COLUMNS:-}"
+  if [[ -z "${cols}" || "${cols}" -lt 40 ]]; then
+    if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+      cols="$(tput cols 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "${cols}" || "${cols}" -lt 80 ]]; then
+    cols=120
+  fi
+  printf '%s' "${cols}"
+}
+
+# Grow a column to fit `n`, then cap so one long cell cannot blow the table.
+smoke_col_cap() {
+  local n=$1
+  local cap=$2
+  if [[ "${n}" -gt "${cap}" ]]; then
+    printf '%s' "${cap}"
+  else
+    printf '%s' "${n}"
+  fi
+}
+
+# Remaining columns for Detail. `used` is everything before the last cell
+# (`| ` cells ` | ` ... ` | `). Min 24 so FAIL snippets stay readable; max 60
+# so a huge terminal does not dump whole CLI tables.
+smoke_detail_width() {
+  local used=$1
+  local remaining
+  remaining=$(( $(smoke_term_cols) - used ))
+  if [[ "${remaining}" -lt 24 ]]; then
+    remaining=24
+  fi
+  if [[ "${remaining}" -gt 60 ]]; then
+    remaining=60
+  fi
+  printf '%s' "${remaining}"
+}
+
+# `|----+----|` matching ui_table_cell widths (two padding spaces per cell).
+smoke_table_rule() {
+  local w
+  printf '|'
+  for w in "$@"; do
+    printf '%s|' "$(printf '%*s' $((w + 2)) '' | tr ' ' '-')"
+  done
+  printf '\n'
 }
 
 print_unit_report() {
@@ -319,24 +383,54 @@ print_unit_report() {
     echo "================================================================================"
     return
   fi
-  printf "| %-8s | %-48s | %-6s | %s\n" "Kind" "Check" "Status" "Detail"
-  printf "|----------|--------------------------------------------------|--------|%s\n" "----------------------------------------"
+  local kind_w=4 check_w=5
   local kind name status detail failed=0 total=0
   while IFS=$'\t' read -r kind name status detail; do
     [[ -z "${kind}" ]] && continue
     total=$((total + 1))
+    if [[ ${#kind} -gt ${kind_w} ]]; then
+      kind_w=${#kind}
+    fi
+    if [[ ${#name} -gt ${check_w} ]]; then
+      check_w=${#name}
+    fi
+  done < "${UNIT_CHECK_FILE}"
+  local tot_label="${total} checks"
+  if [[ ${#tot_label} -gt ${check_w} ]]; then
+    check_w=${#tot_label}
+  fi
+  kind_w="$(smoke_col_cap "${kind_w}" 10)"
+  check_w="$(smoke_col_cap "${check_w}" 48)"
+  local detail_w
+  detail_w="$(smoke_detail_width $((19 + kind_w + check_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Kind" "${kind_w}")" \
+    "$(ui_table_cell "Check" "${check_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${kind_w}" "${check_w}" 6 "${detail_w}"
+  while IFS=$'\t' read -r kind name status detail; do
+    [[ -z "${kind}" ]] && continue
     if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-8s | %-48s | %s | %s\n" "${kind}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${kind}" "${kind_w}")" \
+      "$(ui_table_cell "${name}" "${check_w}")" \
+      "$(ui_status_text "${status}")" \
+      "$(ui_table_cell "${detail}" "${detail_w}")"
   done < "${UNIT_CHECK_FILE}"
   local tot_status="PASS" tot_detail="all host unit tests passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-8s | %-48s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "TOTAL" "${kind_w}")" \
+    "$(ui_table_cell "${tot_label}" "${check_w}")" \
+    "$(ui_status_text "${tot_status}")" \
+    "$(ui_table_cell "${tot_detail}" "${detail_w}")"
   ui_banner "================================================================================"
 }
 
@@ -352,24 +446,55 @@ print_datastore_report() {
     echo "================================================================================"
     return
   fi
-  printf "| %-24s | %-16s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
-  printf "|--------------------------|------------------|--------|%s\n" "----------------------------------------"
+  local phase_w=5 check_w=5
   local phase name status detail failed=0 total=0
   while IFS=$'\t' read -r phase name status detail; do
     [[ -z "${phase}" ]] && continue
     total=$((total + 1))
+    if [[ ${#phase} -gt ${phase_w} ]]; then
+      phase_w=${#phase}
+    fi
+    if [[ ${#name} -gt ${check_w} ]]; then
+      check_w=${#name}
+    fi
+  done < "${CHECK_FILE}"
+  local tot_label="${total} checks"
+  if [[ ${#tot_label} -gt ${check_w} ]]; then
+    check_w=${#tot_label}
+  fi
+  # 3-node-remove/post-upgrade-2 is 28; docker-cli-run-image is 20.
+  phase_w="$(smoke_col_cap "${phase_w}" 32)"
+  check_w="$(smoke_col_cap "${check_w}" 24)"
+  local detail_w
+  detail_w="$(smoke_detail_width $((19 + phase_w + check_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Phase" "${phase_w}")" \
+    "$(ui_table_cell "Check" "${check_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${phase_w}" "${check_w}" 6 "${detail_w}"
+  while IFS=$'\t' read -r phase name status detail; do
+    [[ -z "${phase}" ]] && continue
     if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-24s | %-16s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${phase}" "${phase_w}")" \
+      "$(ui_table_cell "${name}" "${check_w}")" \
+      "$(ui_status_text "${status}")" \
+      "$(ui_table_cell "${detail}" "${detail_w}")"
   done < "${CHECK_FILE}"
   local tot_status="PASS" tot_detail="all app/CLI/DB checks passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-24s | %-16s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "TOTAL" "${phase_w}")" \
+    "$(ui_table_cell "${tot_label}" "${check_w}")" \
+    "$(ui_status_text "${tot_status}")" \
+    "$(ui_table_cell "${tot_detail}" "${detail_w}")"
   ui_banner "================================================================================"
 }
 
@@ -389,17 +514,39 @@ print_results_table() {
     echo " tarball=${BUILT_TARBALL}"
   fi
   ui_banner "================================================================================"
-  printf "| %-48s | %-6s | %8s | %s\n" "Step" "Status" "Duration" "Detail"
-  printf "|--------------------------------------------------|--------|----------|%s\n" "----------------------------------------"
+  local step_w=4
   local i
   for i in "${!RESULT_NAMES[@]}"; do
-    printf "| %-48s | %s | %7ss | %s\n" \
-      "${RESULT_NAMES[$i]}" \
-      "$(ui_status_text "${RESULT_STATUS[$i]}")" \
-      "${RESULT_SECONDS[$i]}" \
-      "${RESULT_DETAIL[$i]}"
+    if [[ ${#RESULT_NAMES[$i]} -gt ${step_w} ]]; then
+      step_w=${#RESULT_NAMES[$i]}
+    fi
   done
-  printf "| %-48s | %s | %7ss | %s\n" "OVERALL" "$(ui_status_text "${overall}")" "${total}" ""
+  if [[ ${step_w} -lt 8 ]]; then
+    step_w=8
+  fi
+  # Verify app/DBs after upgrade 2/2 (3-node-remove) is 49.
+  step_w="$(smoke_col_cap "${step_w}" 56)"
+  local detail_w
+  # `| ` step ` | ` status ` | ` duration ` | ` detail ` |`  => 27 + step + detail
+  detail_w="$(smoke_detail_width $((27 + step_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Step" "${step_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Duration" 8)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${step_w}" 6 8 "${detail_w}"
+  for i in "${!RESULT_NAMES[@]}"; do
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${RESULT_NAMES[$i]}" "${step_w}")" \
+      "$(ui_status_text "${RESULT_STATUS[$i]}")" \
+      "$(printf '%8s' "${RESULT_SECONDS[$i]}s")" \
+      "$(ui_table_cell "${RESULT_DETAIL[$i]}" "${detail_w}")"
+  done
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "OVERALL" "${step_w}")" \
+    "$(ui_status_text "${overall}")" \
+    "$(printf '%8s' "${total}s")" \
+    "$(ui_table_cell "" "${detail_w}")"
   ui_banner "================================================================================"
   print_unit_report
   print_datastore_report
