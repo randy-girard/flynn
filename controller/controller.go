@@ -356,6 +356,9 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			httphelper.Forbidden(w, "this credential is not allowed to perform this operation on the controller")
 			return
 		}
+		if rw, ok := w.(*httphelper.ResponseWriter); ok {
+			rw.SetContext(context.WithValue(rw.Context(), authz.TokenContextKey, auth))
+		}
 		if auth.ID != "" {
 			r.Header.Set("Flynn-Auth-ID", auth.ID)
 			r.Header.Set("Flynn-Auth-User", auth.User)
@@ -422,7 +425,12 @@ func (c *controllerAPI) appLookup(handler httphelper.HandlerFunc) httphelper.Han
 			respondWithError(w, err)
 			return
 		}
-		ctx = context.WithValue(ctx, "app", data.(*ct.App))
+		app := data.(*ct.App)
+		if !authz.SystemAppAllowed(authz.TokenFromContext(ctx), app.System()) {
+			httphelper.Forbidden(w, "system apps require the cluster controller credential")
+			return
+		}
+		ctx = context.WithValue(ctx, "app", app)
 		handler(ctx, w, req)
 	}
 }

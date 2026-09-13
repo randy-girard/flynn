@@ -358,9 +358,30 @@ tarball with the `--tarball` flag.
 
 ### Internal Databases
 
-The `controller`, `router`, and `blobstore` components store data in
-a PostgreSQL cluster managed by Flynn. Their databases may be accessed by
-running `flynn -a $APP_NAME pg psql`.
+The `controller`, `router`, and `blobstore` components store data in a
+PostgreSQL cluster managed by Flynn.
+
+`flynn -a $APP_NAME pg psql` is **not** a public console. It is a controller
+API call (`flynn run` of `psql`) and is authorized like every other `flynn`
+command:
+
+* **Cluster operators** who registered with `flynn cluster add` / `flynn-host
+  cli-add-command` have the controller key. That key is cluster-admin (treat it
+  like root). They can open a console on `controller`, `blobstore`, and other
+  system apps. Do not put that key in application config or share it with
+  dashboard-only users.
+* **Dashboard users** (`flynn login`) only act on apps they were granted. They
+  can `flynn pg psql` their own app's database. They cannot open a console on
+  `controller`, `blobstore`, `postgres`, or other system apps, even if a grant
+  names those apps.
+* **Application jobs** cannot reach `postgres-api`, `controller`, or
+  `blobstore` on the overlay. They may TCP to `leader.postgres.discoverd` only
+  to use the `DATABASE_URL` Flynn provisioned. Each Postgres role can CONNECT
+  only to its own database; `PUBLIC` CONNECT is revoked, so one app's user
+  cannot open another app's (or the controller's) database.
+
+User-app consoles: `flynn -a myapp pg psql`. Platform databases: cluster key
+only, `flynn -a controller pg psql` / `flynn -a blobstore pg psql`.
 
 ## Updating
 

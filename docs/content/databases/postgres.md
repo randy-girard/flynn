@@ -37,9 +37,12 @@ by some frameworks to configure database connections.
 
 ### Connecting to a console
 
-To connect to a `psql` console for the database, run `flynn pg psql`. This does not
-require the Postgres client to be installed locally or firewall/security
-changes, as it runs in a container on the Flynn cluster.
+To connect to a `psql` console for **your app's** database, run `flynn pg psql`.
+This does not require the Postgres client locally; it runs in a container on
+the cluster. It uses the same controller credential as other `flynn` commands:
+the cluster key from `flynn cluster add`, or a dashboard login that was granted
+that app. Platform databases (`controller`, `blobstore`, …) require the cluster
+key; see [Production — Internal Databases](../production.html.md#internal-databases).
 
 ### Dumping and restoring
 

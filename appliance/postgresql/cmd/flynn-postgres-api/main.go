@@ -46,12 +46,10 @@ func main() {
 	}, nil)
 	api := &pgAPI{db}
 
-	// Revoke default PUBLIC connect on shared databases so that provisioned
-	// users can only connect to their own database.  The "flynn" superuser
-	// bypasses all privilege checks, so admin access is unaffected.
-	for _, sysDB := range []string{"postgres", "template1"} {
-		_ = db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, sysDB))
-	}
+	// Provisioned roles can CONNECT only to their own database. PUBLIC
+	// CONNECT is revoked on every database, including controller/blobstore
+	// DBs created at bootstrap, so another app's PGUSER cannot open them.
+	revokePublicConnect(db)
 
 	router := httprouter.New()
 	router.POST("/databases", httphelper.WrapHandler(api.createDatabase))
@@ -95,7 +93,7 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 
 	// Isolate the new database: revoke the default PUBLIC connect privilege
 	// so that only the owning user (and the "flynn" superuser) can connect.
-	if err := p.db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "%s" FROM PUBLIC`, database)); err != nil {
+	if err := p.db.Exec("REVOKE CONNECT ON DATABASE " + quoteIdent(database) + " FROM PUBLIC"); err != nil {
 		// best-effort cleanup
 		p.db.Exec(fmt.Sprintf(`DROP DATABASE "%s"`, database))
 		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
@@ -162,4 +160,29 @@ func (p *pgAPI) ping(ctx context.Context, w http.ResponseWriter, req *http.Reque
 		return
 	}
 	w.WriteHeader(200)
+}
+
+func quoteIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// revokePublicConnect drops the default PUBLIC CONNECT privilege on every
+// database the flynn superuser can see. The superuser still connects; each
+// provisioned role keeps an explicit GRANT CONNECT on its own database.
+func revokePublicConnect(db *postgres.DB) {
+	for _, sysDB := range []string{"postgres", "template1"} {
+		_ = db.Exec("REVOKE CONNECT ON DATABASE " + quoteIdent(sysDB) + " FROM PUBLIC")
+	}
+	rows, err := db.Query(`SELECT datname FROM pg_database WHERE datallowconn`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			continue
+		}
+		_ = db.Exec("REVOKE CONNECT ON DATABASE " + quoteIdent(name) + " FROM PUBLIC")
+	}
 }

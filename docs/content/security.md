@@ -45,8 +45,15 @@ Applications run in their own network namespace on the overlay. User jobs
 cannot open connections to other user jobs or to internal Flynn services
 (`controller`, `blobstore`, `postgres-api`, …). They may reach provisioned
 datastores only at the leader host Flynn put in `DATABASE_URL` /
-`REDIS_URL` / etc. Cross-app HTTP still works through routes you add (the
-router). System appliances keep a full overlay mesh.
+`REDIS_URL` / etc. Each Postgres role can CONNECT only to its own database
+(`PUBLIC` CONNECT is revoked), so a user job cannot open the controller,
+router, or blobstore databases. Cross-app HTTP still works through routes you
+add (the router). System appliances keep a full overlay mesh.
+
+`flynn -a controller pg psql` (and the same for `blobstore` / other system
+apps) requires the cluster controller key. Dashboard tokens scoped to user
+apps cannot open those consoles. Treat the key from `flynn cluster add` as
+root.
 
 Applications are not a full kernel sandbox. Do not run untrusted code in
 Flynn. HostNetwork remains restricted to system/builder jobs.
