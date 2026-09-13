@@ -39,6 +39,10 @@ need "${ROOT}/pkg/iptables/ipset.go" 'UnionIPs' \
   "ipset Current sync must union local overlay IPs with the discoverd snapshot"
 need "${ROOT}/host/libcontainer_backend.go" 'EnableJobIsolation' \
   "ConfigureNetworking must enable job isolation"
+need "${ROOT}/host/libcontainer_backend.go" 'error enabling job isolation' \
+  "ConfigureNetworking must fail closed if EnableJobIsolation cannot start"
+need "${ROOT}/pkg/iptables/iptables.go" 'if err := EnsureSets' \
+  "EnableJobIsolation must create ipsets before installing overlay rules"
 need "${ROOT}/host/libcontainer_backend.go" 'enableBridgeNetfilter' \
   "same-host L2 isolation requires br_netfilter"
 need "${ROOT}/host/img/packages.sh" 'ipset' \

@@ -73,6 +73,60 @@ func TestClassifyJob(t *testing.T) {
 			want: ClassDatastore,
 		},
 		{
+			name: "redis appliance",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "redis-11111111-2222-3333-4444-555555555555",
+				"flynn-controller.type":     "redis",
+			}},
+			want: ClassDatastore,
+		},
+		{
+			name: "mariadb data plane",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "mariadb",
+				"flynn-controller.type":     "mariadb",
+			}},
+			want: ClassDatastore,
+		},
+		{
+			name: "mongodb data plane",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "mongodb",
+				"flynn-controller.type":     "mongodb",
+			}},
+			want: ClassDatastore,
+		},
+		{
+			name: "redis-api is system not datastore",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "redis",
+				"flynn-controller.type":     "web",
+			}},
+			want: ClassSystem,
+		},
+		{
+			name: "redis-api app name is not a uuid appliance",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "redis-api",
+				"flynn-controller.type":     "web",
+			}},
+			want: ClassSystem,
+		},
+		{
+			name: "mariadb-api is system not datastore",
+			job: &host.Job{Metadata: map[string]string{
+				"flynn-system-app":          "true",
+				"flynn-controller.app_name": "mariadb",
+				"flynn-controller.type":     "web",
+			}},
+			want: ClassSystem,
+		},
+		{
 			name: "kafka-api is system not datastore",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
@@ -124,6 +178,18 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	if !UserMayResolveDiscoverd(true, "clickhouse-11111111-2222-3333-4444-555555555555") {
 		t.Fatal("user jobs may resolve leader.clickhouse-<uuid>.discoverd")
 	}
+	if !UserMayResolveDiscoverd(true, "mariadb") {
+		t.Fatal("user jobs may resolve leader.mariadb.discoverd")
+	}
+	if !UserMayResolveDiscoverd(true, "mongodb") {
+		t.Fatal("user jobs may resolve leader.mongodb.discoverd")
+	}
+	if !UserMayResolveDiscoverd(true, "redis") {
+		t.Fatal("user jobs may resolve leader.redis.discoverd")
+	}
+	if UserMayResolveDiscoverd(false, "mariadb") {
+		t.Fatal("user jobs must not resolve mariadb.discoverd (non-leader)")
+	}
 	if UserMayResolveDiscoverd(true, "kafka-api") {
 		t.Fatal("user jobs must not resolve leader.kafka-api.discoverd")
 	}
@@ -132,6 +198,12 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	}
 	if UserMayResolveDiscoverd(true, "postgres-api") {
 		t.Fatal("user jobs must not resolve leader.postgres-api.discoverd")
+	}
+	if UserMayResolveDiscoverd(true, "redis-api") {
+		t.Fatal("user jobs must not resolve leader.redis-api.discoverd")
+	}
+	if UserMayResolveDiscoverd(true, "mongodb-api") {
+		t.Fatal("user jobs must not resolve leader.mongodb-api.discoverd")
 	}
 }
 
