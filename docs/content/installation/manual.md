@@ -57,7 +57,7 @@ sparse file:
 $ sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
 ```
 
-See [Production](/docs/production) for moving an existing pool off the sparse
+See [Production](../production.html.md) for moving an existing pool off the sparse
 file.
 
 ## Repeat on every host
@@ -157,12 +157,12 @@ $ sudo \
     --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
 ```
 
-The last bootstrap log line is the `flynn cluster add` command for the [CLI](/docs/cli). You can also run `sudo flynn-host cli-add-command` on a host.
+The last bootstrap log line is the `flynn cluster add` command for the [CLI](../cli.md). You can also run `sudo flynn-host cli-add-command` on a host.
 
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
 `veth*` interfaces, then open a GitHub issue.
 
-Next: [Flynn Basics](/docs/basics).
+Next: [Flynn Basics](../basics.md).
 
 ## CLI
 
@@ -172,4 +172,4 @@ On your laptop (Linux, macOS, or Windows):
 $ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash
 ```
 
-See [CLI](/docs/cli).
+See [CLI](../cli.md).

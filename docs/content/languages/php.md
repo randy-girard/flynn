@@ -143,5 +143,4 @@ web: vendor/bin/heroku-php-nginx
 #### Default
 
 If your application does not have a `Procfile`, a default `web` process will be used
-to start Apache with the runtime defined in `composer.json` (i.e. either
-`vendor/bin/heroku-php-apache2` or `vendor/bin/heroku-hhvm-apache2`).
+to start Apache with PHP-FPM (`vendor/bin/heroku-php-apache2`).

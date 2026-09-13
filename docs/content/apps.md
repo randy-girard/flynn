@@ -7,7 +7,7 @@ toc_min_level: 2
 # Apps
 
 Applications can be deployed to Flynn using [Buildpacks](#buildpacks) or
-[Docker](/docs/docker). This page provides information about the management and
+[Docker](docker.md). This page provides information about the management and
 configuration of apps on Flynn.
 
 ## Configuration
@@ -26,7 +26,7 @@ all of the app's processes with the new configuration.
 
 ### External Databases
 
-Flynn apps can communicate with the [built-in databases](/docs/databases) as
+Flynn apps can communicate with the [built-in databases](databases.html.md) as
 well as databases hosted outside of Flynn. Pass the configuration for the
 external database in as an environment variable with `flynn env`.
 
@@ -38,7 +38,7 @@ prepare and build apps deployed with `git push` when the app is on the
 buildpack for most supported languages.
 
 To deploy from a `Dockerfile` instead, switch to the container stack with
-`flynn stack set container`. See the [Docker](/docs/docker) documentation for
+`flynn stack set container`. See the [Docker](docker.md) documentation for
 details.
 
 The buildpack can be manually specified in cases where auto-detection is not

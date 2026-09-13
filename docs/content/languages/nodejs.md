@@ -52,5 +52,5 @@ Besides the usual utilities, `npm` and `node` are in `PATH` and are available di
 
 ```
 $ flynn run node -v
-v0.10.32
+v22.x
 ```

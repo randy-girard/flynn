@@ -6,7 +6,7 @@ toc_min_level: 2
 
 # Command Line Interface
 
-The `flynn` CLI is the client for the [controller](/docs/architecture#controller). It deploys and manages applications, routes, and datastores.
+The `flynn` CLI is the client for the [controller](architecture.html.md#controller). It deploys and manages applications, routes, and datastores.
 
 Host-level commands (`bootstrap`, `acme`, rolling update, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI.
 
@@ -30,7 +30,7 @@ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/instal
 
 Environment variables: `FLYNN_VERSION`, `FLYNN_GITHUB_REPO` (default `randy-girard/flynn`), `FLYNN_INSTALL_DIR` (default `/usr/local/bin`).
 
-`flynn install` (the old cluster installer) is deprecated. Install hosts with the [manual installation](/docs/installation/manual) script.
+`flynn install` (the old cluster installer) is deprecated. Install hosts with the [manual installation](installation/manual.md) script.
 
 ## Adding a cluster
 

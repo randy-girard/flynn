@@ -20,7 +20,7 @@ ability to update, monitor, debug, backup, and restore without having a negative
 impact on uptime. We promise this is the only way we'll ever use the term._
 
 This repository is a community fork of Flynn. Treat it as a work in progress:
-try it, read [Security](/docs/security) and [Production](/docs/production), and
+try it, read [Security](security.md) and [Production](production.html.md), and
 decide what is acceptable for your workload.
 
 ## Releases
@@ -32,7 +32,7 @@ is no longer a Flynn-operated `releases.flynn.io` channel for these builds.
 The original project distinguished nightly and monthly stable channels. This
 fork tags releases as they are cut; read the release notes for what changed.
 
-Flynn currently has [security considerations](/docs/security) you should take
+Flynn currently has [security considerations](security.md) you should take
 into account.
 
 The built-in database appliances are intended for staging, development, and

@@ -8,12 +8,12 @@ toc_min_level: 2
 
 This guide assumes you already have a running Flynn cluster and have configured
 the `flynn` command-line tool. If this is not the case, follow the [Installation
-Guide](/docs/installation) first to get things set up.
+Guide](installation.html.md) first to get things set up.
 
-It also assumes you are using the `demo.localflynn.com` default domain (which is
-the case if you installed the Vagrant demo environment). If you are using your
-own domain, substitute `demo.localflynn.com` with whatever you set
-`CLUSTER_DOMAIN` to during the bootstrap process.
+Examples below use `CLUSTER_DOMAIN=demo.localflynn.com`. Substitute whatever you
+set `CLUSTER_DOMAIN` to at bootstrap (Vagrant smoke uses a name like
+`upgrade-smoke.localflynn.com`; `script/bootstrap-flynn` defaults to
+`${size}.localflynn.com`).
 
 ## Deploy
 
@@ -40,8 +40,8 @@ The above command should have added a `flynn` Git remote:
 $ git remote -v
 flynn   https://git.demo.localflynn.com/example.git (push)
 flynn   https://git.demo.localflynn.com/example.git (fetch)
-origin  https://github.com/flynn/nodejs-flynn-example.git (fetch)
-origin  https://github.com/flynn/nodejs-flynn-example.git (push)
+origin  https://github.com/flynn-examples/go-flynn-example.git (fetch)
+origin  https://github.com/flynn-examples/go-flynn-example.git (push)
 ```
 
 It should also have added a default route of `example.demo.localflynn.com` pointing
@@ -76,25 +76,15 @@ Push to the `flynn` Git remote to deploy the application:
 
 ```
 $ git push flynn master
-Counting objects: 728, done.
-Delta compression using up to 8 threads.
-Compressing objects: 100% (451/451), done.
-Writing objects: 100% (728/728), 933.29 KiB | 0 bytes/s, done.
-Total 728 (delta 215), reused 728 (delta 215)
 -----> Building example...
 -----> Go app detected
------> Checking Godeps/Godeps.json file.
------> Installing go1.6.3... done
------> Running: go install -v -tags heroku .
+-----> Installing go1.24...
+-----> Running: go install -v .
 -----> Discovering process types
        Procfile declares types -> web
------> Compiled slug size is 3.6M
 -----> Creating release...
-=====> Scaling initial release to web=1
------> Waiting for initial web job to start...
-=====> Initial web job started
 =====> Application deployed
-To https://git.1.localflynn.com/example.git
+To https://git.demo.localflynn.com/example.git
  * [new branch]      master -> master
 ```
 
@@ -186,7 +176,7 @@ $ flynn log
 2016-07-26T13:33:52.402620Z app[web.flynn-ccd3aff7-80b3-46b4-a95f-006bfceb80c6]: hitcounter listening on port 8080
 ```
 
-*See [here](/docs/cli#log) for more information on the `flynn log` command.*
+*See [the CLI docs](cli.md) for more information on the `flynn log` command.*
 
 ## Release
 
@@ -332,4 +322,4 @@ An interactive one-off process may be spawned in a new container:
 $ flynn run bash
 ```
 
-*See [here](/docs/cli#run) for more information on the `flynn run` command.*
+*See [the CLI docs](cli.md) for more information on the `flynn run` command.*

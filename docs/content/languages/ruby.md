@@ -5,11 +5,9 @@ layout: docs
 
 # Ruby
 
-Flynn supports deploying Ruby, Rack, and Rails applications using a variety of Ruby
-interpreters, namely MRI, [JRuby](http://www.jruby.org), and [Rubinius](http://rubini.us).
-
-Flynn uses the [Ruby buildpack](https://github.com/heroku/heroku-buildpack-ruby)
-to detect, compile, and release Ruby applications.
+Flynn supports deploying Ruby, Rack, and Rails applications using MRI or
+[JRuby](https://www.jruby.org) via the [Ruby
+buildpack](https://github.com/heroku/heroku-buildpack-ruby) on heroku-24.
 
 ## Detection
 
@@ -78,26 +76,21 @@ bundle install \
 
 ### Ruby Interpreter
 
-If your application requires a particular Ruby interpreter and version, you can specify
-that using `ruby` in the `Gemfile`.
-
-To use MRI v2.1.2:
+Pin the interpreter with `ruby` in the `Gemfile`. Use a version the heroku-24
+Ruby buildpack still ships (current MRI 3.x is typical):
 
 ```
-ruby "2.1.2"
+ruby "3.3.6"
 ```
 
-To use JRuby 1.7.16 with Ruby 2.0 support:
+JRuby:
 
 ```
-ruby "2.0.0", engine: "jruby", engine_version: "1.7.16"
+ruby "3.1.4", engine: "jruby", engine_version: "9.4.8.0"
 ```
 
-To use Rubinius 2.2.10 with Ruby 2.1 support:
-
-```
-ruby "2.1.0", engine: "rbx", engine_version: "2.2.10"
-```
+See the [Ruby buildpack](https://github.com/heroku/heroku-buildpack-ruby) for
+the current list. Rubinius is not available on heroku-24.
 
 ### Native Libraries
 
@@ -135,7 +128,7 @@ web: bundle exec thin start -p $PORT -e $RACK_ENV
 #### [Unicorn](http://unicorn.bogomips.org/)
 
 ```
-web: bundle exec -p $PORT -c config/unicorn.rb
+web: bundle exec unicorn -p $PORT -c config/unicorn.rb
 ```
 
 #### [Puma](http://puma.io/)
@@ -298,4 +291,4 @@ $ flynn run rake db:migrate
 $ flynn run rails console
 ```
 
-*See [our command line docs](/docs/cli#run) for more information on the `flynn run` command*
+*See [the CLI docs](../cli.md) for more information on the `flynn run` command*

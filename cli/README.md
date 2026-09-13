@@ -1,6 +1,6 @@
 # Flynn Command-Line Interface
 
-`flynn` is the command-line client for the [controller](/controller). It deploys and manages applications, routes, and datastores.
+`flynn` is the command-line client for the [controller](../controller). It deploys and manages applications, routes, and datastores.
 
 ## Installation
 
@@ -16,7 +16,7 @@ A specific version:
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
 ```
 
-See [CLI documentation](/docs/content/cli.md) for cluster add, `flynn login`, and the command list.
+See [CLI documentation](../docs/content/cli.md) for cluster add, `flynn login`, and the command list.
 
 ## Usage
 

@@ -249,15 +249,23 @@ individual applications (including their databases).
 ### Cluster Backup
 
 To take a full-cluster backup, run `flynn cluster backup --file backup.tar`.
-A file name `backup.tar` will be created with a complete copy of all data and
-configuration for the cluster. This includes full exports of all data in each
-database managed by Flynn along with configuration necessary to start a new
-cluster and restore the data.
+A file named `backup.tar` is created with the data needed to stand up a new
+cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
+MongoDB if they were running), a full `pg_dumpall` of Postgres (controller,
+blobstore files, and every app Postgres database), and MariaDB/MongoDB dumps
+when those appliances are scaled above zero. Redis, Kafka, and ClickHouse keep
+data on volumes that are **not** included; after restore those engines come
+back empty. App slugs and container images stored in the blobstore (Postgres)
+are restored.
+
+The Vagrant upgrade smoke (`script/vagrant-upgrade-smoke.sh`) exercises this
+path after the in-place `--force` updates: backup, `install --clean`, then
+`flynn-host bootstrap --from-backup`.
 
 ### Cluster Restore
 
 To restore from a full-cluster backup, follow [the manual installation
-instructions](/docs/installation/manual) and modify the `flynn-host bootstrap`
+instructions](installation/manual.md) and modify the `flynn-host bootstrap`
 command to include an extra flag: `--from-backup backup.tar`. The cluster size
 does not need to be the same, but the `--min-hosts` flag and cluster discovery
 flag should be specified. The `CLUSTER_DOMAIN` variable is ignored, the domain
@@ -367,7 +375,7 @@ and restoring it to a new cluster with the new version of Flynn.
 
 1. Take a backup of the cluster with `flynn cluster backup --file backup.tar`.
 2. Install the new version of Flynn on a new cluster by following [the manual
-   installation instructions](/docs/installation/manual) up to but not including
+   installation instructions](installation/manual.md) up to but not including
    the bootstrap step.
 3. Run the `flynn-host bootstrap` command from the installation guide with an
    added flag pointing at the cluster backup file: `flynn-host bootstrap

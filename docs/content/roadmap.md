@@ -13,5 +13,5 @@ and to harden operations (upgrades, recovery, isolation, TLS).
 Track work on [GitHub issues](https://github.com/randy-girard/flynn/issues).
 Search before filing a duplicate.
 
-If you would like to contribute, see [contributing](/docs/contributing) and
-[development](/docs/development).
+If you would like to contribute, see [contributing](contributing.md) and
+[development](development.html.md).

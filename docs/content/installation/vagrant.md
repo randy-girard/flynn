@@ -29,7 +29,7 @@ make
 script/bootstrap-flynn
 ```
 
-See [Development](/docs/development) for build, test, and release details.
+See [Development](../development.html.md) for build, test, and release details.
 
 The builder is sized for compiling cluster images (default 30 GB RAM / 8 CPUs, overridable with `VAGRANT_MEMORY` and `VAGRANT_CPUS`). Shrink those if you are only iterating on a single component.
 
@@ -44,7 +44,7 @@ vagrant up node1 node2 node3
 
 Set `FLYNN_MAX_NODES` if you need a larger (or singleton) topology. HTTP/HTTPS on each node is forwarded to the host (`9079+i` / `9442+i`).
 
-Provisioning a cluster from these VMs is the same as [manual installation](/docs/installation/manual): install `flynn-host` on each node, `flynn-host init` with `--peer-ips` or a discovery token, then `flynn-host bootstrap`.
+Provisioning a cluster from these VMs is the same as [manual installation](manual.md): install `flynn-host` on each node, `flynn-host init` with `--peer-ips` or a discovery token, then `flynn-host bootstrap`.
 
 ## Demo directory
 

@@ -29,12 +29,12 @@ resolve from user jobs.
 
 | Provider | Engine | Topology |
 | --- | --- | --- |
-| [`postgres`](/docs/databases/postgres) | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain |
-| [`mysql`](/docs/databases/mysql) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
-| [`mongodb`](/docs/databases/mongodb) | MongoDB 7.0 | Replica set; scaled up on first provision |
-| [`redis`](/docs/databases/redis) | Redis (Ubuntu 24.04 package) | Single process, ephemeral |
-| [`kafka`](/docs/databases/kafka) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
-| [`clickhouse`](/docs/databases/clickhouse) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
+| [`postgres`](databases/postgres.md) | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain |
+| [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
+| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
+| [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process, ephemeral |
+| [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
+| [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
 
 Redis, Kafka, and ClickHouse do not use the sirenia state machine described
 below. See each page for safety notes.
