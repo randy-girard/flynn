@@ -62,11 +62,16 @@ func TestHTTPAllowed(t *testing.T) {
 		// a plain app-write token cannot create artifacts.
 		{"app_write_cannot_post_artifacts", appWrite, http.MethodPost, "/artifacts", false},
 
+		{"app_write_can_psql_own_app", appWrite, http.MethodPost, "/apps/app-1/jobs", true},
+
 		// Platform DBs: even an explicit grant on the app name is not enough.
 		{"app_write_cannot_psql_controller", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "controller", Permissions: []string{"app:write"}}}}, http.MethodPost, "/apps/controller/jobs", false},
 		{"app_read_cannot_get_controller_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "controller", Permissions: []string{"app:read"}}}}, http.MethodGet, "/apps/controller/release", false},
 		{"app_write_cannot_psql_blobstore", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "blobstore", Permissions: []string{"app:write"}}}}, http.MethodPost, "/apps/blobstore/jobs", false},
+		{"app_write_cannot_psql_router", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "router", Permissions: []string{"app:write"}}}}, http.MethodPost, "/apps/router/jobs", false},
+		{"app_write_cannot_psql_postgres", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "postgres", Permissions: []string{"app:write"}}}}, http.MethodPost, "/apps/postgres/jobs", false},
 		{"cluster_key_can_psql_controller", clusterKey, http.MethodPost, "/apps/controller/jobs", true},
+		{"admin_scope_can_psql_blobstore", adminBearer, http.MethodPost, "/apps/blobstore/jobs", true},
 	}
 
 	for _, tc := range cases {
@@ -139,7 +144,41 @@ func TestSystemAppAllowed(t *testing.T) {
 	if !IsPlatformAppName("controller") || !IsPlatformAppName("blobstore") {
 		t.Fatal("controller and blobstore must be platform app names")
 	}
+	if !IsPlatformAppName("router") || !IsPlatformAppName("postgres") {
+		t.Fatal("router and postgres must be platform app names")
+	}
 	if IsPlatformAppName("myapp") || IsPlatformAppName("redis-11111111-2222-3333-4444-555555555555") {
 		t.Fatal("user apps and redis appliances must not match platform names")
+	}
+	if IsPlatformAppName("") || IsPlatformAppName("Controller") {
+		t.Fatal("empty and mixed-case names must not match platform apps")
+	}
+}
+
+type ctxValuer struct {
+	key, val interface{}
+}
+
+func (c *ctxValuer) Value(key interface{}) interface{} {
+	if c != nil && key == c.key {
+		return c.val
+	}
+	return nil
+}
+
+func TestTokenFromContext(t *testing.T) {
+	if TokenFromContext(nil) != nil {
+		t.Fatal("nil context must yield a nil token")
+	}
+	if TokenFromContext(&ctxValuer{}) != nil {
+		t.Fatal("missing key must yield a nil token")
+	}
+	tok := &authorizer.Token{ClusterKey: true}
+	got := TokenFromContext(&ctxValuer{key: TokenContextKey, val: tok})
+	if got != tok {
+		t.Fatalf("TokenFromContext = %v, want the stored token", got)
+	}
+	if TokenFromContext(&ctxValuer{key: TokenContextKey, val: "nope"}) != nil {
+		t.Fatal("wrong value type must yield a nil token")
 	}
 }
