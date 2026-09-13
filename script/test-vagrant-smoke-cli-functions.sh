@@ -69,6 +69,12 @@ need 'flynn-host version' \
   "CLI step must run flynn-host version (stripped host binary)"
 need 'pg_available_extensions' \
   "CLI/seed must verify postgres PostGIS/pgRouting/Timescale still ship"
+need 'cli-pg-connect' \
+  "CLI step must prove the user-app role cannot CONNECT to postgres/template1"
+need 'cli-pg-controller' \
+  "CLI step must open controller psql with the cluster key"
+need 'cli-pg-blobstore' \
+  "CLI step must open blobstore psql with the cluster key"
 need 'timeout 90 flynn' \
   "flynn run must be time-bounded so a hung scheduler cannot stall smoke"
 need 'meta set' \

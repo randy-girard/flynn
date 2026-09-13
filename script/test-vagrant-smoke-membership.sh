@@ -21,6 +21,8 @@ need 'flynn-host init --peer-ips' \
   "joining a host must use flynn-host init --peer-ips of the running cluster"
 need 'step_remove_cluster_node' \
   "smoke must remove a host from a running cluster"
+need 'restore_drained_inventory' \
+  "backup restore after drain must reinstall the original VMs so min-hosts can come online"
 need 'flynn-host demote' \
   "removing a Raft peer must demote it before flynn-host is stopped"
 need 'drain_host_jobs' \

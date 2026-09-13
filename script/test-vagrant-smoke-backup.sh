@@ -26,6 +26,8 @@ need 'backup_restore_path' \
   "smoke must keep a helper for the on-node restore path"
 need 'step_cluster_backup' \
   "smoke must have a dedicated cluster backup step"
+need 'restore_drained_inventory' \
+  "restore after drain must reinstall the original VMs (backup still lists them)"
 need 'step_bootstrap_from_backup' \
   "smoke must bootstrap with --from-backup after wiping Flynn"
 need '--from-backup' \

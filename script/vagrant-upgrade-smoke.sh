@@ -170,6 +170,8 @@ DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 SMOKE_UNIT_PACKAGES=(
   ./cli/
   ./controller/types/
+  ./controller/authz/
+  ./pkg/httphelper/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
   ./pkg/iptables/
@@ -179,6 +181,7 @@ SMOKE_UNIT_PACKAGES=(
   ./appliance/clickhouse/
   ./appliance/redis/
   ./appliance/kafka/
+  ./appliance/postgresql/cmd/flynn-postgres-api/
   ./updater/
 )
 
@@ -242,6 +245,16 @@ require_bin() {
       fail "required binary not found: ${bin}"
     fi
   done
+}
+
+# Map Postgres boolean text to t/f. A bare boolean column is t/f; concatenating
+# booleans with || prints true/false (seen 2026-09-13 cli-pg-connect).
+smoke_pg_tf() {
+  local s
+  s="$(printf '%s' "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  s="${s//true/t}"
+  s="${s//false/f}"
+  printf '%s' "${s}"
 }
 
 # Collapse a detail string to one line of visible text (no ANSI, no tabs).
@@ -1681,6 +1694,25 @@ drop_live_node() {
   sync_peer_ips_from_nodes
 }
 
+# Backup still lists every original host. After drain, NODES is the live
+# subset; --clean + bootstrap --from-backup on that subset waits forever
+# (3-node-remove 2026-09-13: min-hosts=3, 0 online, no flynnbr0).
+restore_drained_inventory() {
+  if [[ ${#TEARDOWN_NODES[@]} -le ${#NODES[@]} ]]; then
+    return 0
+  fi
+  info "restore inventory ${NODES[*]} -> ${TEARDOWN_NODES[*]} (backup lists drained hosts)"
+  NODES=("${TEARDOWN_NODES[@]}")
+  NODE_IPS=()
+  local node num
+  for node in "${NODES[@]}"; do
+    num="${node#node}"
+    NODE_IPS+=("$(cluster_node_ip "${num}")")
+  done
+  sync_peer_ips_from_nodes
+  MIN_HOSTS="${#NODES[@]}"
+}
+
 step_host_unit_tests() {
   local failed=0 start elapsed rc
   local script pkg name
@@ -2422,13 +2454,21 @@ assert_docker_http() {
 
 assert_docker_ps() {
   local label=$1
-  local out rc=0
-  out="$(flynn1 -a "${DOCKER_APP_NAME}" ps 2>&1)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qiE 'app' && echo "${out}" | grep -qiE 'up|running'; then
-    record_check "${label}" "docker-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "docker-ps ${label}: ok"
-    return 0
-  fi
+  local out rc=0 attempt
+  # After restore on 4-host add, HTTP can pass before controller lists the
+  # app job (header-only `flynn ps`). Do not grep "up" in the whole buffer:
+  # CREATED matches -iE 'up'. Require a data row with type app.
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t app 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="app" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
+      record_check "${label}" "docker-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "docker-ps ${label}: ok"
+      return 0
+    fi
+    echo "docker-ps ${label}: retry ${attempt}/12 rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 5
+  done
   record_check "${label}" "docker-ps" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
   echo "docker-ps ${label}: FAIL rc=${rc} ${out}" >&2
   return 1
@@ -2831,26 +2871,34 @@ cli_run_job() {
   return 1
 }
 
-# Expect a one-off to fail (NXDOMAIN or timeout). Used to prove user jobs
-# cannot reach other apps or internal discoverd names.
+# Expect a one-off to fail (NXDOMAIN, iptables DROP, or timeout). Used to
+# prove user jobs cannot reach other apps or internal discoverd names.
+# Retry unexpected success: after bootstrap --from-backup, flynn-net-user
+# can still be empty so discoverd DNS treats the client as non-user and
+# answers upgrade-smoke-web.discoverd (seen 2026-09-13 3-node-add restore).
 cli_run_must_fail() {
   local label=$1 name=$2 app=$3
   shift 3
-  local cmd_q="" a rc=0 out
+  local cmd_q="" a rc=0 out attempt
   for a in "$@"; do
     cmd_q+=" $(printf '%q' "${a}")"
   done
-  out="$(node_ssh node1 "sudo -H timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
-  if [[ "${rc}" -ne 0 ]]; then
-    if echo "${out}" | grep -qiE 'No app release|stat /runner/init|unknown app'; then
-      record_check "${label}" "${name}" "FAIL" "run failed to start $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-      echo "cli ${label} ${name}: FAIL job did not start: ${out}" >&2
-      return 1
+  for attempt in $(seq 1 8); do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    if [[ "${rc}" -ne 0 ]]; then
+      if echo "${out}" | grep -qiE 'No app release|stat /runner/init|unknown app'; then
+        record_check "${label}" "${name}" "FAIL" "run failed to start $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+        echo "cli ${label} ${name}: FAIL job did not start: ${out}" >&2
+        return 1
+      fi
+      record_check "${label}" "${name}" "PASS" "isolated rc=${rc}"
+      echo "cli ${label} ${name}: PASS (blocked)"
+      return 0
     fi
-    record_check "${label}" "${name}" "PASS" "isolated rc=${rc}"
-    echo "cli ${label} ${name}: PASS (blocked)"
-    return 0
-  fi
+    echo "cli ${label} ${name}: retry ${attempt}/8 still reachable: $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 3
+  done
   record_check "${label}" "${name}" "FAIL" "unexpected success $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
   echo "cli ${label} ${name}: FAIL unexpectedly succeeded: ${out}" >&2
   return 1
@@ -2973,6 +3021,52 @@ step_cli_functions() {
     echo "cli ${label} pg-extensions: FAIL rc=${rc} ${out}" >&2
     failed=1
   fi
+
+  # User-app role: CONNECT to its own DB, not postgres/template1, not the
+  # controller database. Cluster key can still open platform consoles.
+  # Emit t/f in SQL: boolean||boolean prints true/false, which failed 2026-09-13.
+  rc=0
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, current_database(), 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'postgres', 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'template1', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+  out="$(smoke_pg_tf "${out}")"
+  if [[ "${rc}" -eq 0 && "${out}" == "t,f,f" ]]; then
+    record_check "${label}" "cli-pg-connect" "PASS" "own=t postgres=f template1=f"
+    echo "cli ${label} pg-connect: PASS"
+  else
+    record_check "${label}" "cli-pg-connect" "FAIL" "rc=${rc} ${out} want t,f,f"
+    echo "cli ${label} pg-connect: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
+  local ctl_db=""
+  ctl_db="$(flynn1 -a controller env get PGDATABASE 2>/dev/null || true)"
+  ctl_db="$(printf '%s' "${ctl_db}" | tr -d '[:space:]')"
+  if [[ -z "${ctl_db}" ]]; then
+    local ctl_url=""
+    ctl_url="$(flynn1 -a controller env get DATABASE_URL 2>/dev/null || true)"
+    ctl_url="$(printf '%s' "${ctl_url}" | tr -d '[:space:]')"
+    ctl_db="${ctl_url##*/}"
+    ctl_db="${ctl_db%%\?*}"
+  fi
+  if [[ -n "${ctl_db}" && "${ctl_db}" =~ ^[A-Za-z0-9_]+$ ]]; then
+    rc=0
+    out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+    out="$(smoke_pg_tf "${out}")"
+    if [[ "${rc}" -eq 0 && "${out}" == "f" ]]; then
+      record_check "${label}" "cli-pg-no-controller" "PASS" "no CONNECT on ${ctl_db}"
+      echo "cli ${label} pg-no-controller: PASS"
+    else
+      record_check "${label}" "cli-pg-no-controller" "FAIL" "rc=${rc} ${out} db=${ctl_db} want f"
+      echo "cli ${label} pg-no-controller: FAIL rc=${rc} ${out} db=${ctl_db}" >&2
+      failed=1
+    fi
+  else
+    record_check "${label}" "cli-pg-no-controller" "FAIL" "controller PGDATABASE missing or unsafe: ${ctl_db:-empty}"
+    echo "cli ${label} pg-no-controller: FAIL missing controller PGDATABASE" >&2
+    failed=1
+  fi
+  cli_probe "${label}" "cli-pg-controller" "." \
+    flynn1 -a controller pg psql -- -tAc "SELECT 1" || failed=1
+  cli_probe "${label}" "cli-pg-blobstore" "." \
+    flynn1 -a blobstore pg psql -- -tAc "SELECT 1" || failed=1
 
   cli_probe "${label}" "cli-mongo-dump" "" \
     flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
@@ -3694,6 +3788,7 @@ run_one_topology() {
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    restore_drained_inventory
     run_step "Reinstall for restore (${TOPOLOGY_LABEL})" step_install_flynn
     run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
     run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup

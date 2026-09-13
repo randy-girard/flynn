@@ -63,6 +63,8 @@ need "${ROOT}/discoverd/server/dns.go" 'clientIsUser' \
   "discoverd DNS must hide internal names from user jobs"
 need "${smoke}" 'net-isolate-peer' \
   "smoke must try (and fail) user→user overlay discoverd"
+need "${smoke}" 'still reachable' \
+  "peer isolation must retry: after restore flynn-net-user can lag and DNS fail-open"
 need "${smoke}" 'net-isolate-internal' \
   "smoke must try (and fail) postgres.discoverd from a user job"
 need "${smoke}" 'leader.postgres.discoverd' \

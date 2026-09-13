@@ -52,6 +52,10 @@ need 'docker-http' \
   "smoke must HTTP-probe the Dockerfile app before and after upgrade"
 need 'docker-ps' \
   "smoke must show the Dockerfile app process up (not slugrunner /runner/init)"
+need 'ps -t app' \
+  "docker-ps must list type app (header-only flynn ps after restore is not enough)"
+need '\$2=="app"' \
+  "docker-ps must match a data row, not CREATED matching -iE up"
 need 'scale app=1' \
   "Dockerfile apps use process type app; smoke must scale app=1 after git push"
 need 'docker-cli-run' \
