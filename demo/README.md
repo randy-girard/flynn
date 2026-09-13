@@ -1,12 +1,11 @@
 # Flynn Demo Environment
 
-This repo contains a Vagrantfile and Makefile that boots up Flynn layer 0 and then bootstraps
-Flynn layer 1.
+The historical `demo/` Vagrant box (`flynn-base` from `dl.flynn.io`) is no longer published and should not be used.
 
-## Usage
+For a local cluster or a build VM, use the **repository-root** `Vagrantfile` (Ubuntu 24.04):
 
-To run this demo environment on your machine, follow the [Demo Installation Instructions]
-(https://flynn.io/docs/installation#vagrant).
+- [Vagrant installation](/docs/content/installation/vagrant.md)
+- [Development](/docs/content/development.html.md)
+- [Manual cluster install](/docs/content/installation/manual.md)
 
-Once up and running, check out the [Using Flynn](https://flynn.io/docs) guide
-for instructions on deploying and scaling applications in the demo environment.
+Once a cluster is up, [Flynn Basics](/docs/content/basics.md) covers deploying and scaling an app.

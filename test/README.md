@@ -8,11 +8,11 @@ flynn-test contains full-stack acceptance tests for Flynn.
 
 The tests need a running Flynn cluster, so you will need to boot one first.
 
-To run Flynn locally, first boot and SSH to the Flynn dev box:
+To run Flynn locally, boot the builder VM:
 
 ```text
-vagrant up
-vagrant ssh
+vagrant up builder
+vagrant ssh builder
 ```
 
 then build and bootstrap Flynn (this may take a few minutes):

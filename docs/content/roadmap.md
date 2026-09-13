@@ -6,20 +6,12 @@ toc_min_level: 2
 
 # Roadmap
 
-We use [GitHub
-issues](https://github.com/flynn/flynn/issues?q=is%3Aissue+is%3Aopen+label%3Akind%2Fenhancement)
-to track feature requests. If you see something that you'd like, add a "thumbs
-up" reaction to the issue to show your support. Please do a quick search before
-filing a new feature request.
+This is a community fork of Flynn. The working goal is to keep the platform
+running on modern Ubuntu, with current language stacks and datastore versions,
+and to harden operations (upgrades, recovery, isolation, TLS).
 
-The [`roadmap/current`
-label](https://github.com/flynn/flynn/labels/roadmap%2Fcurrent) on GitHub provides
-a list of larger projects that we are currently working on.
+Track work on [GitHub issues](https://github.com/randy-girard/flynn/issues).
+Search before filing a duplicate.
 
-The [`roadmap/upcoming`
-label](https://github.com/flynn/flynn/labels/roadmap%2Fupcoming) on GitHub
-provides a list of larger projects that we expect to work on next.
-
-If you'd like to contribute to Flynn, take a look at our documentation on
-[contributing](https://flynn.io/docs/contributing) and
-[development](https://flynn.io/docs/development).
+If you would like to contribute, see [contributing](/docs/contributing) and
+[development](/docs/development).

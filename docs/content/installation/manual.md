@@ -5,155 +5,171 @@ layout: docs
 
 # Manual Installation
 
-Flynn can be installed using our install script on **Ubuntu 18.04** and **16.04** amd64.
+Flynn is installed with the install script on **Ubuntu 24.04 LTS** amd64. The
+script still accepts Ubuntu 16.04 and 18.04, but this fork is built and tested
+on 24.04.
 
-We recommend starting with a clean Ubuntu installation on machines with at least
-2GB of RAM, 40GB of storage, and two CPU cores each. It's possible to run Flynn
-on servers with lower specs, but we don't recommend it.
+Start from a clean Ubuntu install. Each host should have at least 2 GB of RAM,
+40 GB of storage, and two CPU cores. Lower specs can work for experiments; they
+are not recommended.
 
-Before we get going with the installation, please note that if you plan on
-running a multi-node cluster, you should boot at least 3 nodes to provide high
-availability.
+For a highly available cluster, use **at least three nodes**. A single node is
+fine for trying Flynn.
 
 *Note: If you are installing on a provider that uses a customized kernel by
-default, you may need to use the Ubuntu-supplied distribution kernel instead of
-the custom kernel for ZFS filesystem support. On Linode, [use this
+default, you may need the Ubuntu distribution kernel for ZFS. On Linode, [use
+this
 guide](https://www.linode.com/docs/tools-reference/custom-kernels-distros/run-a-distribution-supplied-kernel-with-kvm)
-for instructions on how to switch.*
+to switch.*
 
 ## Installation
 
-Download and run the Flynn install script:
+Download and run the Flynn install script from this fork's GitHub Releases:
 
 ```
-$ sudo bash < <(curl -fsSL https://dl.flynn.io/install-flynn)
+$ sudo bash < <(curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn)
 ```
 
-If you would rather take a look at the contents of the script before running it as root, download and
-run it in two separate steps:
+To inspect the script before running it as root:
 
 ```
-$ curl -fsSL -o /tmp/install-flynn https://dl.flynn.io/install-flynn
+$ curl -fsSL -o /tmp/install-flynn https://github.com/randy-girard/flynn/releases/latest/download/install-flynn
 ... take a look at the contents of /tmp/install-flynn ...
 $ sudo bash /tmp/install-flynn
 ```
 
-_To install a [specific channel or version](https://releases.flynn.io), you can
-use the `--channel` and `--version` flags._
+Install a specific version with `--version`. The default GitHub repository is
+`randy-girard/flynn`; override it with `--repo` or `FLYNN_GITHUB_REPO`.
 
-Running the installer script will:
+The installer:
 
-1. Install Flynn's runtime dependencies
-2. Download, verify and install the `flynn-host` binary
-3. Download and verify filesystem images for each of the Flynn components
-4. Install a systemd unit for controlling the `flynn-host` daemon
+1. Installs Flynn's runtime dependencies (including ZFS)
+2. Downloads, verifies, and installs the `flynn-host` binary
+3. Downloads and verifies filesystem images for each Flynn component
+4. Installs a systemd unit for `flynn-host`
 
-Some of the filesystem images are quite large (several hundred megabytes) so step 3 could take a while depending on
-your Internet connection.
+Images are large (hundreds of megabytes), so step 3 can take a while.
 
-## Rinse and Repeat
+For production, create the ZFS pool on a dedicated disk instead of the default
+sparse file:
 
-You should install Flynn as above on every host that you want to be in the Flynn cluster.
+```
+$ sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
+```
 
-## Set Up Nodes
+See [Production](/docs/production) for moving an existing pool off the sparse
+file.
 
-First, ensure that all network traffic is allowed between all nodes in the cluster (specifically
-all UDP and TCP packets). The following ports should also be open externally on the firewalls
-for all nodes in the cluster:
+## Repeat on every host
+
+Install Flynn as above on every host that should join the cluster.
+
+## Set up nodes
+
+Allow all network traffic between cluster members (UDP and TCP). Open these
+ports externally on every node:
 
 * 80 (HTTP)
 * 443 (HTTPS)
 * 3000 to 3500 (user-defined TCP services, optional)
 
-**Note:** A firewall with this configuration is _required_ to prevent external
-access to internal management APIs.
+**A firewall with this configuration is required.** Internal Flynn APIs must not
+be reachable from the internet; access to them is equivalent to root on the
+cluster.
 
-The next step is to configure a Layer 0 cluster by starting the flynn-host
-daemon on all nodes. The daemon uses Raft for leader election, and it needs to
-be aware of all of the other nodes for it to function correctly.
+Next, start a Layer 0 cluster: run `flynn-host` on every node. The daemon uses
+Raft for leader election and must know its peers.
 
-If you are starting more than one node, the cluster should be configured using
-a discovery token.  `flynn-host init` is a tool that handles generating and
-configuring the token.
+### Discovery token
 
-On the first node, create a new token with the `--init-discovery` flag. The
-minimum multi-node cluster size is three, and this command does not need to be
-run if you are only starting a single node.
+For more than one node, create a discovery token with `flynn-host init`. Skip
+this on a single-node install.
+
+On the first node:
 
 ```
 $ sudo flynn-host init --init-discovery
-https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
 ```
 
-On the rest of the nodes, configure the generated discovery token:
+On the other nodes:
 
 ```
-$ sudo flynn-host init --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+$ sudo flynn-host init --discovery https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
 ```
+
+You can set `DISCOVERY_SERVER` if you run your own discovery API. The default
+server for this fork is `https://discovery.flynn.cloud.randygirard.com`.
+
+### Peer IPs (no discovery service)
+
+If you already know the node addresses, skip discovery:
+
+```
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --external-ip 192.168.56.20
+```
+
+Use each node's own address as `--external-ip`. After the cluster is running,
+`--peer-ips` is also how you join an additional host.
 
 ## Start Flynn
-
-Now, start the daemon and check that it has started:
 
 ```
 $ sudo systemctl start flynn-host
 $ sudo systemctl status flynn-host
 ```
 
-If the status is `stop/waiting`, the daemon has failed to start. Check the log
-file (`/var/log/flynn/flynn-host.log`) for any errors and try starting the
-daemon again.
+If the unit is not running, check `/var/log/flynn/flynn-host.log` and try
+again.
 
 ## Bootstrap Flynn
 
-After you have running `flynn-host` instances, you can now bootstrap the cluster
-with `flynn-host bootstrap`. You'll need a domain name with DNS A records
-pointing to every node IP address and a second, wildcard domain CNAME to the
-cluster domain.
+With `flynn-host` running, bootstrap Layer 1. You need a domain with DNS A
+records for every node IP, plus a wildcard CNAME to that domain.
 
 **Example**
 
 ```
-demo.localflynn.com.    A      192.168.84.42
-demo.localflynn.com.    A      192.168.84.43
-demo.localflynn.com.    A      192.168.84.44
-*.demo.localflynn.com.  CNAME  demo.localflynn.com.
+demo.example.com.    A      192.168.56.20
+demo.example.com.    A      192.168.56.21
+demo.example.com.    A      192.168.56.22
+*.demo.example.com.  CNAME  demo.example.com.
 ```
 
-Set `CLUSTER_DOMAIN` to the main domain name and start the bootstrap process,
-specifying the number of hosts that are expected to be present and the discovery
-token if you created one.
+Set `CLUSTER_DOMAIN` and run bootstrap **once** (it schedules jobs across the
+cluster):
 
 ```
 $ sudo \
-    CLUSTER_DOMAIN=demo.localflynn.com \
+    CLUSTER_DOMAIN=demo.example.com \
     flynn-host bootstrap \
     --min-hosts 3 \
-    --discovery https://discovery.flynn.io/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+    --discovery https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
 ```
 
-*Note: You only need to run this on a single node in the cluster. It will
-schedule jobs on nodes across the cluster as required.*
+With peer IPs instead of discovery:
 
-The bootstrapper will get all of necessary services running within Flynn. The
-final log line will contain configuration that may be used with the
-[command-line interface](/docs/cli).
+```
+$ sudo \
+    CLUSTER_DOMAIN=demo.example.com \
+    flynn-host bootstrap \
+    --min-hosts 3 \
+    --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
+```
 
-If run into a problem while following these instructions, ensure that network
-traffic is flowing unimpeded through the `flannel.1`, `flynnbr0`, and `veth*`
-network interfaces and then open a GitHub issue describing the problem.
+The last bootstrap log line is the `flynn cluster add` command for the [CLI](/docs/cli). You can also run `sudo flynn-host cli-add-command` on a host.
 
-Now that you have Flynn installed and running, head over to the [Flynn
-Basics](/docs/basics) page for a tutorial on deploying an application to Flynn.
+If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
+`veth*` interfaces, then open a GitHub issue.
 
-## Release Mailing List
+Next: [Flynn Basics](/docs/basics).
 
-If you'd like to receive email about each month's stable release and security
-updates, subscribe here:
+## CLI
 
-<form action="https://flynn.us7.list-manage.com/subscribe/post?u=9600741fc187618e1baa39a58&id=8aadb709f3" method="post" target="_blank" novalidate class="mailing-list-form">
-  <label>Email Address&nbsp;
-    <input type="email" name="EMAIL" placeholder="you@example.com">
-  </label>
-  <button type="submit" name="subscribe">Subscribe</button>
-</form>
+On your laptop (Linux, macOS, or Windows):
+
+```
+$ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash
+```
+
+See [CLI](/docs/cli).

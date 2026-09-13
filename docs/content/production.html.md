@@ -339,8 +339,8 @@ tagged with the same app ID will go into a file named
 rotated and a new file is created. One previous rotated log is kept, for a total
 of a maximum 200MB of logs per app per host.
 
-Upstart manages the `flynn-host` daemon and stores the log at
-`/var/log/upstart/flynn-host.log`.
+systemd manages the `flynn-host` daemon. Logs are in `/var/log/flynn/flynn-host.log`
+(also `journalctl -u flynn-host`).
 
 The `flynn-host collect-debug-info` command will collect information about the
 system it is run on along with recent logs from all apps and the `flynn-host`
@@ -455,6 +455,8 @@ To rotate an authentication key:
     flynn -a redis env set CONTROLLER_KEY=$NEW_KEY
     flynn -a mariadb env set CONTROLLER_KEY=$NEW_KEY
     flynn -a mongodb env set CONTROLLER_KEY=$NEW_KEY
+    flynn -a kafka env set CONTROLLER_KEY=$NEW_KEY
+    flynn -a clickhouse env set CONTROLLER_KEY=$NEW_KEY
 
     # Set the global key to be the new key
     flynn -a controller env set AUTH_KEY=$NEW_KEY

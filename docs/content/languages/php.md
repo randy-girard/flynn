@@ -5,12 +5,12 @@ layout: docs
 
 # PHP
 
-Flynn supports deploying PHP applications using either the PHP or [HHVM](http://hhvm.com/)
-runtime, with a choice of either [Apache2](http://httpd.apache.org/) or
-[Nginx](http://wiki.nginx.org/Main) web server.
+Flynn supports deploying PHP applications using the PHP runtime, with a choice
+of either [Apache2](http://httpd.apache.org/) or
+[Nginx](http://nginx.org/) as the web server.
 
-Flynn uses the [PHP buildpack](https://github.com/heroku/heroku-buildpack-php) to detect,
-compile, and release PHP applications.
+Flynn uses the [PHP buildpack](https://github.com/heroku/heroku-buildpack-php) on
+the `heroku-24` stack to detect, compile, and release PHP applications.
 
 ## Detection
 
@@ -95,33 +95,22 @@ composer install \
 
 ### PHP Runtime
 
-By default, applications will run on the latest stable PHP runtime, A specific version
-of either the PHP or HHVM runtime can be used by specifying an appropriate dependency on
-either the `php` or `hhvm` package respectively.
-
-To enable PHP 5.6.x:
+By default, applications run on a current PHP 8.x from the heroku-24 buildpack.
+Pin a version with a Composer `php` requirement:
 
 ```json
 {
   "require": {
-    "php": "~5.6.0"
+    "php": "^8.3"
   }
 }
 ```
 
-To enable HHVM 3.2.x:
+HHVM is not available on heroku-24.
 
-```json
-{
-  "require": {
-    "hhvm": "~3.2.0"
-  }
-}
-```
-
-*It is advisable to use the `~` operator when specifying versions so your application is
-always running on the latest stable minor release. For more information on the `~` operator,
-see [this Composer guide](https://getcomposer.org/doc/01-basic-usage.md#next-significant-release-tilde-operator-).*
+*It is advisable to use Composer's version operators so your application stays
+on a supported minor release. See the [Composer version
+guide](https://getcomposer.org/doc/articles/versions.md).*
 
 ## Process Types
 
@@ -143,24 +132,12 @@ To start Apache2 (and PHP-FPM), use the `heroku-php-apache2` script:
 web: vendor/bin/heroku-php-apache2
 ```
 
-If you are using the HHVM runtime, use the `heroku-hhvm-apache2` script:
-
-```
-web: vendor/bin/heroku-hhvm-apache2
-```
-
 #### Nginx
 
 To start Nginx (and PHP-FPM), use the `heroku-php-nginx` script:
 
 ```
 web: vendor/bin/heroku-php-nginx
-```
-
-If you are using the HHVM runtime, use the `heroku-hhvm-nginx` script:
-
-```
-web: vendor/bin/heroku-hhvm-nginx
 ```
 
 #### Default

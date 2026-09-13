@@ -5,7 +5,7 @@ layout: docs
 
 # MySQL
 
-The Flynn MySQL appliance provides MariaDB 10.1 in a highly-available
+The Flynn MySQL appliance provides MariaDB 10.11 LTS in a highly-available
 configuration with automatic provisioning. It automatically fails over to
 a synchronous replica with no loss of data if the primary server goes down.
 

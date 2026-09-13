@@ -1,7 +1,8 @@
 [
   { "title": "Installation", "path": "/docs/installation", "children": [
     { "title": "Instructions", "path": "/docs/installation/manual" },
-    { "title": "Releases", "path": "https://releases.flynn.io" }
+    { "title": "Vagrant", "path": "/docs/installation/vagrant" },
+    { "title": "Releases", "path": "https://github.com/randy-girard/flynn/releases" }
   ] },
   { "title": "Using", "children": [
     { "title": "Basics", "path": "/docs/basics" },

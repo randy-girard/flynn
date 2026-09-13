@@ -5,9 +5,9 @@ layout: docs
 
 # Redis
 
-The Flynn Redis appliance provides Redis 3.0 in a single process configuration.
-The data stored in this process is ephemeral and is intended for caching and
-development use.
+The Flynn Redis appliance provides Redis from the Ubuntu 24.04 package set in a
+single process configuration. The data stored in this process is ephemeral and
+is intended for caching and development use.
 
 ## Usage
 

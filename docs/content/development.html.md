@@ -24,10 +24,10 @@ the creation of the VM.
 If you don't already have VirtualBox and Vagrant installed, you should
 install them by following the directions on their respective web sites.
 
-Clone the Flynn source code locally:
+Clone this Flynn fork locally:
 
 ```
-$ git clone https://github.com/flynn/flynn.git
+$ git clone https://github.com/randy-girard/flynn.git
 ```
 
 Then, inside the `flynn` directory, bring up the VM:
@@ -54,35 +54,36 @@ The development VM is configured to share the Flynn source code from your machin
 it inside the VM, meaning you can edit files locally on your machine and those changes
 will be visible inside the VM.
 
-Since Flynn is primarily written in Go, the source code needs to be inside a valid Go workspace.
-The development VM has a `GOPATH` of `$HOME/go` and the Flynn source code is synchronized into
-`$GOPATH/src/github.com/flynn/flynn`.
+The builder VM is Ubuntu 24.04. Source is synced to
+`$GOPATH/src/github.com/flynn/flynn` (`/root/go/src/github.com/flynn/flynn`).
+`setup.sh` installs Go 1.24, Docker, ZFS, and appliance test dependencies.
+
+The default `vagrant up` also defines cluster members `node1` … `node3`. See
+[Vagrant](/docs/installation/vagrant).
 
 If you don't have a specific issue you are trying to fix, but are interested in contributing
-to the project, you should start by looking at GitHub issues labelled
-[complexity/easy](https://github.com/flynn/flynn/labels/complexity/easy).
+to the project, start with GitHub issues on
+[randy-girard/flynn](https://github.com/randy-girard/flynn/issues) or ask on
+[Discord](https://discord.gg/VU2ZqrPUay).
 
 ## Building Flynn
 
-We use the [tup](http://gittup.org/tup/) build system to run the commands which build the various
-components of Flynn.
-
-To kickoff the build process, just run `make`:
+From the builder VM (or any Ubuntu 24.04 host with the `setup.sh` packages), run
+`make`. That invokes `script/build-flynn`, which compiles Go binaries and builds
+cluster container images.
 
 ```
 $ make
 ```
 
-This will do things like build Go binaries and create Docker images. If you're interested in
-exactly what will be built, take a look at the `Tupfiles` in various subdirectories.
+`make clean` removes build outputs. `make test-unit` runs the unit suite (`go
+test`); on macOS and Windows it boots a Linux Docker container so appliance
+dependencies are available.
 
-If any build command fails, `tup` will output an error and abort the entire build. You can then
-fix the issue and then re-run `make`.
+If a build command fails, fix the issue and re-run `make`.
 
-If you want to rebuild all Go binaries, run `make clean`.
-
-Once tup runs successfully, you will have a number of built Go binaries and Docker images which
-can be used to run Flynn.
+Successful builds produce Go binaries under `build/bin` and cluster images under
+`build/image`.
 
 ## Running Flynn
 
@@ -207,8 +208,7 @@ INFO[03-11|19:25:30] creating anonymous gist
 INFO[03-11|19:25:38] debug information uploaded to: https://gist.github.com/47379bd4604442cac820
 ```
 
-You can then post the gist in the `#flynn` IRC room when asking for assistance to make it easier for
-someone to help you.
+You can then post the gist in [Discord](https://discord.gg/VU2ZqrPUay) when asking for assistance.
 
 If you would rather not use the GitHub gist service, or your logs are too big to fit into a single gist,
 you can create a tarball of the information by specifying the `--tarball` flag:
@@ -223,7 +223,7 @@ INFO[03-11|19:28:58] getting system information
 INFO[03-11|19:28:59] created tarball containing debug information at /tmp/flynn-host-debug407848418/flynn-host-debug.tar.gz
 ```
 
-You can then send this to a Flynn developer after speaking to them in IRC.
+You can then send this to a Flynn developer after speaking to them on Discord.
 
 ## Running tests
 
@@ -234,22 +234,18 @@ Flynn has two types of tests:
 
 ### Run the unit tests
 
-To run all the unit tests:
-
+On Linux with appliance packages installed (the builder VM):
 
 ```
-$ go test ./...
+$ make test-unit
 ```
 
-To run tests for an individual component (e.g. the router):
+That runs `go test` with race detection. On macOS or Windows, `script/run-unit-tests` uses Docker.
+
+To run tests for an individual package:
 
 ```
 $ go test ./router
-```
-
-To run tests for a component and all sub-components (e.g. the controller):
-
-```
 $ go test ./controller/...
 ```
 
@@ -278,9 +274,8 @@ $ script/run-integration-tests -f TestEnvDir
 
 ## Pull request
 
-Once you have made changes to the Flynn source code and tested your changes, you
-should open a pull request on GitHub so we can review your changes and merge
-them into the Flynn repository.
+Once you have made changes and tested them, open a pull request against
+`develop` on [randy-girard/flynn](https://github.com/randy-girard/flynn).
 
 Please see the [contribution guide](/docs/contributing) for more information.
 

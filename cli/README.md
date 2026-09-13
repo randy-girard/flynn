@@ -1,36 +1,30 @@
 # Flynn Command-Line Interface
 
-flynn-cli is the command-line client for the [controller](/controller). It provides
-access to many functions related to deploying and managing applications.
+`flynn` is the command-line client for the [controller](/controller). It deploys and manages applications, routes, and datastores.
 
 ## Installation
 
-Pre-built binaries are available for Mac OS X, Linux, and Windows. Once
-installed, these binaries will automatically update themselves when new releases
-are available.
-
-To install the latest release on OS X or Linux, run this command in a terminal:
+Pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows are published on [GitHub Releases](https://github.com/randy-girard/flynn/releases).
 
 ```text
-L=/usr/local/bin/flynn && curl -sSL -A "`uname -sp`" https://dl.flynn.io/cli | zcat >$L && chmod +x $L
+curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash
 ```
 
-To install the latest release on Windows, run this command in PowerShell:
+A specific version:
 
 ```text
-(New-Object Net.WebClient).DownloadString('https://dl.flynn.io/cli.ps1') | iex
+curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
 ```
 
+See [CLI documentation](/docs/content/cli.md) for cluster add, `flynn login`, and the command list.
 
 ## Usage
 
-The basic usage is:
-
 ```text
-flynn [-a app] <command> [options] [arguments]
+flynn [-a app] [-c cluster] <command> [options] [arguments]
 ```
 
-For a list of commands and usage instructions, run `flynn help`.
+Run `flynn help` for commands. Host-level operations (`bootstrap`, ACME, updates) use `flynn-host` on cluster nodes.
 
 ## Credits
 

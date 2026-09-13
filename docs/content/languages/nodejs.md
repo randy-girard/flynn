@@ -17,7 +17,7 @@ Dependencies are managed using `npm`. `npm` expects dependencies specified under
 
 ### Specifying a Node.js Version
 
-Node.js version can be specified using the [`engines` section](https://www.npmjs.org/doc/files/package.json.html#engines) of the `package.json` file. It uses [semver.io](http://semver.io/) to resolve the node version, so queries in the format of `0.8.x`, `>0.4`, `>=0.8.5 <=0.8.14` are supported. This buildpack can run any Node.js version past 0.8.5, including development versions.
+Node.js version can be specified using the [`engines` section](https://docs.npmjs.com/cli/v10/configuring-npm/package-json#engines) of the `package.json` file. The heroku-24 Node.js buildpack resolves modern Node and npm releases; pin versions there rather than shipping ancient `0.10` engines.
 
 ### Example package.json
 
@@ -33,8 +33,7 @@ Node.js version can be specified using the [`engines` section](https://www.npmjs
     "grunt": "0.4.5"
   },
   "engines": {
-    "node": "0.10.x",
-    "npm": "1.2.x"
+    "node": "22.x"
   }
 }
 ```

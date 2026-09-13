@@ -30,10 +30,11 @@ over HTTP. Since most developers are already familiar with HTTP and almost every
 language already has great HTTP support, taking advantage of Flynn's APIs is
 easier than yet another RPC protocol.
 
-We target the Ubuntu 16.04 LTS amd64 as our base operating system. Flynn has no
-hard dependencies on a specific Linux distribution, but experience shows that
-the differences between distros are time-consuming to support and irrelevant to
-our goals, so we have chosen a single common configuration to support.
+This fork targets **Ubuntu 24.04 LTS amd64** as the host operating system.
+Flynn has no hard kernel dependency on a specific distribution, but supporting
+several distros is time-consuming and irrelevant to the platform, so a single
+common configuration is supported. Container images are built from Ubuntu
+Noble and Heroku-24 roots.
 
 ## flynn-host
 
@@ -149,22 +150,30 @@ A route uses discoverd to find the instances of the named service and matches
 incoming requests against a pattern: a domain and optional path for HTTP, and
 a specific port for TCP.
 
-TLS is also terminated to provide HTTPS with minimal configuration, all that is
-required is a TLS certificate chain for the route.
+TLS is terminated at the router. You can attach a certificate chain to a route,
+or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route add http
+--auto-tls`). HTTPS also enables HTTP/2.
 
-An instance of the router runs on every host to avoid having to think about
-where to send client traffic.
+An instance of the router runs on every host so client traffic can land on any
+node.
 
-## Buildpacks
+User-deployed jobs are isolated on the overlay: they cannot open connections to
+other user jobs or to internal Flynn services. They reach HTTP through routes
+you add, and datastores only at the leader host injected in `DATABASE_URL` /
+`REDIS_URL` / similar. System apps keep a full overlay mesh.
 
-Flynn uses [Heroku Buildpacks](https://devcenter.heroku.com/articles/buildpacks)
-to convert application source code into a runnable artifact called a *slug*.
-This slug is a tarball of the app and all of it's dependencies, which can be run
-by the *slugrunner* component.
+## Buildpacks and container images
 
-Flynn is designed to support a variety of deployment pipelines, so the buildpack
-support is not special or hard-coded, it just uses controller APIs to do the
-deploy.
+`git push` defaults to the **heroku-24** stack: [Heroku
+Buildpacks](https://devcenter.heroku.com/articles/buildpacks) turn source into a
+*slug* (a tarball of the app and its dependencies) that *slugrunner* executes.
+
+Apps can instead use the **container** stack (`flynn stack set container`). The
+cluster builds a `Dockerfile` with BuildKit (*dockerbuilder*) and imports the
+image the same way as `flynn docker push` (*tarreceive*).
+
+Neither path is special-cased in the scheduler; both register artifacts and
+releases through the controller and roll out with the same deploy logic.
 
 ### gitreceive
 
@@ -182,6 +191,9 @@ that contains the compiled application code and all of its dependencies.
 The slug is uploaded to the blobstore, the receiver registers the new artifact
 and release in the controller, and then tells the controller to do a rolling
 deploy of the new release.
+
+On the **container** stack, gitreceive starts a *dockerbuilder* job instead.
+BuildKit produces an image that *tarreceive* imports.
 
 ### blobstore
 
