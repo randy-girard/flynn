@@ -17,8 +17,12 @@
 #      datastore provider, git-push test/apps/upgrade-smoke-docker on the
 #      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
 #      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
-#      re-verify, then destroy the cluster nodes (builder is kept) before the
-#      next topology. Sizes are 1 (singleton) or >=3 (HA); 2 is invalid.
+#      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
+#      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Redis,
+#      Kafka, and ClickHouse volumes are not in the cluster backup; those
+#      engines must come back empty. Then destroy the cluster nodes (builder
+#      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
+#      2 is invalid.
 #      Named topologies: add (stable 3-node, then join node4 and upgrade)
 #      and remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
 #      keep working). Vagrant nodes are generated as node1..max(N) —
@@ -67,9 +71,11 @@
 #   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
 #                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
+#   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
+#                        and post-restore verify
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
-#                        install/bootstrap/deploy/verify/upgrade/CLI.
+#                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
 #                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
 #                        add (aliases: add-node, 3+1) = boot 3-node HA,
 #                        wait until stable, join node4, re-verify, then
@@ -143,6 +149,7 @@ SKIP_INSTALL="${SKIP_INSTALL:-0}"
 SKIP_DEPLOY="${SKIP_DEPLOY:-0}"
 SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
+SKIP_BACKUP="${SKIP_BACKUP:-0}"
 SKIP_CLI="${SKIP_CLI:-0}"
 if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
   :
@@ -800,6 +807,20 @@ tarball_vm_path() {
   echo "${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 }
 
+# Cluster backup lives on the synced folder (survives --clean) and a copy in
+# /tmp on node1 (fast local read during bootstrap --from-backup).
+backup_host_path() {
+  echo "${ROOT}/build/release/smoke-backup-${TOPOLOGY_LABEL}.tar"
+}
+
+backup_vm_path() {
+  echo "${REPO_IN_VM}/build/release/smoke-backup-${TOPOLOGY_LABEL}.tar"
+}
+
+backup_restore_path() {
+  echo "/tmp/flynn-smoke-backup.tar"
+}
+
 resolve_built_tarball() {
   local path
   path="$(tarball_host_path)"
@@ -1115,6 +1136,18 @@ redis_is_ready() {
   flynn1 -a "${APP_NAME}" redis redis-cli PING | grep -qi PONG
 }
 
+# Kafka/ClickHouse volume data is not in flynn cluster backup. After restore
+# the brokers come back empty; these only prove the CLI/engine is up.
+kafka_is_ready() {
+  flynn1 -a "${APP_NAME}" kafka topics >/dev/null 2>&1
+}
+
+clickhouse_ping() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
+  [[ "$(echo "${out}" | tr -d '[:space:]')" == "1" ]]
+}
+
 # ClickHouse seed uses local MergeTree plus HTTP replica fan-out. After a node
 # join/drain the CLI can briefly return CH "unknown_error" instead of a count;
 # do not let that abort the step under set -e.
@@ -1156,8 +1189,18 @@ wait_datastores_ready() {
       redis)
         wait_for "redis PING ${suffix}" 180 redis_is_ready || return 1
         ;;
+      kafka)
+        wait_for "kafka topics ${suffix}" 180 kafka_is_ready || return 1
+        ;;
       clickhouse)
         wait_for "clickhouse smoke_db.rows ${suffix}" 300 clickhouse_seed_ready || return 1
+        ;;
+      clickhouse-ping)
+        wait_for "clickhouse SELECT 1 ${suffix}" 180 clickhouse_ping || return 1
+        ;;
+      *)
+        echo "wait_datastores_ready: unknown service ${svc}" >&2
+        return 1
         ;;
     esac
   done
@@ -1842,9 +1885,14 @@ EOF
   echo "layer-0 host APIs up (peer-ips=${PEER_IPS})"
 }
 
-step_bootstrap() {
+# Extra args are appended to flynn-host bootstrap (e.g. --from-backup FILE).
+run_layer1_bootstrap() {
   local overlay_fail="${WORK_DIR}/overlay-fail.txt"
   local watch_pid=""
+  local extra_args=""
+  if [[ $# -gt 0 ]]; then
+    extra_args="$(printf '%q ' "$@")"
+  fi
   rm -f "${overlay_fail}"
 
   # Cache ssh-config before the overlay watcher and bootstrap race on node1.
@@ -1871,7 +1919,8 @@ flynn-host bootstrap \
   --min-hosts "${MIN_HOSTS}" \
   --peer-ips "${PEER_IPS}" \
   --timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
-  --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}"
+  --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
+  ${extra_args}
 EOF
   local boot_rc=$?
   set -e
@@ -1899,7 +1948,10 @@ EOF
   ensure_flynn_cli_on_node1
   configure_node_dns node1
   register_cli_cluster
+}
 
+step_bootstrap() {
+  run_layer1_bootstrap
   info "waiting for postgres primary read-write"
   # mariadb/mongodb are bootstrapped at scale 0; they have no primary until
   # the first `resource add mysql|mongodb`.
@@ -1908,6 +1960,58 @@ EOF
     return 1
   fi
   echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
+}
+
+# Write the backup to the synced folder (host can inspect it) and copy to /tmp
+# on node1 so bootstrap --from-backup still works after install --clean wipes
+# /var/lib/flynn and /usr/local/bin/flynn*.
+step_cluster_backup() {
+  ensure_flynn_cli_on_node1
+  local vm_path restore_path host_path
+  vm_path="$(backup_vm_path)"
+  restore_path="$(backup_restore_path)"
+  host_path="$(backup_host_path)"
+  mkdir -p "$(dirname "${host_path}")"
+  rm -f "${host_path}"
+
+  info "creating cluster backup ${vm_path}"
+  node_root_script node1 <<EOF
+set -euo pipefail
+mkdir -p "$(dirname "${vm_path}")"
+rm -f "${vm_path}" "${restore_path}"
+flynn cluster backup --file "${vm_path}"
+test -s "${vm_path}"
+tar -tf "${vm_path}" | grep -q 'flynn.json'
+tar -tf "${vm_path}" | grep -q 'postgres.sql.gz'
+tar -tf "${vm_path}" | grep -q 'mysql.sql.gz'
+tar -tf "${vm_path}" | grep -q 'mongodb.archive.gz'
+cp -f "${vm_path}" "${restore_path}"
+test -s "${restore_path}"
+ls -lh "${vm_path}" "${restore_path}"
+EOF
+  if [[ ! -s "${host_path}" ]]; then
+    echo "cluster backup missing on host synced folder: ${host_path}" >&2
+    return 1
+  fi
+  echo "cluster backup $(ls -lh "${host_path}" | awk '{print $5}') at ${host_path}"
+}
+
+step_bootstrap_from_backup() {
+  local restore_path
+  restore_path="$(backup_restore_path)"
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -s "${restore_path}"
+EOF
+  # CLUSTER_DOMAIN is ignored for --from-backup; the domain from the backup
+  # is reused (same upgrade-smoke.localflynn.com /etc/hosts entries).
+  run_layer1_bootstrap --from-backup "${restore_path}"
+  info "waiting for restored postgres/mariadb/mongodb/redis"
+  if ! wait_datastores_ready "after restore" postgres mariadb mongodb redis kafka clickhouse-ping; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  echo "restored ${CLUSTER_DOMAIN} from ${restore_path} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
 step_deploy_app() {
@@ -2443,6 +2547,101 @@ assert_databases() {
   echo "databases ${label}: postgres/mysql/mongodb/redis/kafka/clickhouse PASS (rows>=${rows})"
 }
 
+# Cluster backup dumps postgres (incl. blobstore + app DBs), MariaDB, and
+# MongoDB. Redis/Kafka/ClickHouse keep data on volumes that --clean destroys,
+# so after restore those engines must come up empty while SQL data survives.
+assert_restored_datastores() {
+  local label="post-restore"
+  local rows="${SMOKE_SEED_ROWS}"
+  local failed=0
+  local out count payload marker
+
+  echo "db-check ${label}: postgres"
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
+    record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
+  else
+    record_check "${label}" "postgres" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    echo "postgres (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: mysql"
+  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
+    record_check "${label}" "mysql" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
+  else
+    record_check "${label}" "mysql" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    echo "mysql (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: mongodb"
+  out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
+    record_check "${label}" "mongodb" "PASS" "probe=pre-upgrade docs=${count}"
+  else
+    record_check "${label}" "mongodb" "FAIL" "probe=${out} docs=${count:-?} want>=${rows}"
+    echo "mongodb (${label}) failed: probe=${out} docs=${count}" >&2
+    failed=1
+  fi
+
+  if [[ "${SKIP_UPGRADE}" != "1" ]]; then
+    local pass
+    for pass in $(seq 1 "${UPGRADE_PASSES}"); do
+      marker="post-upgrade-${pass}"
+      echo "db-check ${label}: ${marker} markers"
+      out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
+      if echo "${out}" | grep -q "${marker}"; then
+        record_check "${label}" "pg-${marker}" "PASS" "still present"
+      else
+        record_check "${label}" "pg-${marker}" "FAIL" "lost ${marker}: ${out}"
+        echo "postgres (${label}) lost ${marker}: ${out}" >&2
+        failed=1
+      fi
+    done
+  fi
+
+  echo "db-check ${label}: redis (volume data not in cluster backup)"
+  out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
+  if echo "${out}" | grep -qi PONG; then
+    record_check "${label}" "redis" "PASS" "PING (keys not in cluster backup)"
+  else
+    record_check "${label}" "redis" "FAIL" "PING failed: ${out}"
+    echo "redis (${label}) PING failed: ${out}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: kafka (volume data not in cluster backup)"
+  if kafka_is_ready; then
+    record_check "${label}" "kafka" "PASS" "topics CLI (topic data not in cluster backup)"
+  else
+    record_check "${label}" "kafka" "FAIL" "kafka topics failed"
+    echo "kafka (${label}) topics CLI failed" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: clickhouse (volume data not in cluster backup)"
+  if clickhouse_ping; then
+    record_check "${label}" "clickhouse" "PASS" "SELECT 1 (rows not in cluster backup)"
+  else
+    record_check "${label}" "clickhouse" "FAIL" "SELECT 1 failed"
+    echo "clickhouse (${label}) SELECT 1 failed" >&2
+    failed=1
+  fi
+
+  if [[ "${failed}" -ne 0 ]]; then
+    echo "datastore checks failed for ${label}" >&2
+    return 1
+  fi
+  echo "databases ${label}: postgres/mysql/mongodb restored; redis/kafka/clickhouse up empty"
+}
+
 # Record one live CLI / flynn-host probe. Empty pattern means exit 0 is enough.
 cli_probe() {
   local label=$1 name=$2 pattern=$3
@@ -2698,6 +2897,19 @@ step_verify_after() {
   assert_docker_http "${label}"
   assert_docker_ps "${label}"
   assert_databases "${label}"
+  node_ssh node1 'sudo flynn-host version' || true
+}
+
+step_verify_after_restore() {
+  local label="post-restore"
+  wait_for "app HTTP ${label}" 300 probe_app_http
+  assert_app_http "${label}"
+  wait_for "app /status ${label}" 180 probe_app_status
+  assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  assert_restored_datastores
   node_ssh node1 'sudo flynn-host version' || true
 }
 
@@ -3213,7 +3425,8 @@ apply_topology_spec() {
   esac
 }
 
-# One full install → bootstrap → deploy → verify → CLI → --force upgrades.
+# One full install → bootstrap → deploy → verify → CLI → --force upgrades →
+# cluster backup → --clean reinstall → bootstrap --from-backup → re-verify.
 # idx is 0-based; is_last=1 means KEEP_VMS can retain these cluster nodes.
 run_one_topology() {
   local size=$1
@@ -3313,6 +3526,33 @@ run_one_topology() {
           step_cli_functions "post-upgrade-${pass}"
       fi
     done
+  fi
+
+  if [[ "${SKIP_BACKUP}" == "1" ]]; then
+    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+  elif [[ "${SKIP_DEPLOY}" == "1" ]]; then
+    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+  else
+    run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    run_step "Reinstall for restore (${TOPOLOGY_LABEL})" step_install_flynn
+    run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
+    run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup
+    run_step "Verify app/DBs after restore (${TOPOLOGY_LABEL})" step_verify_after_restore
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after restore (${TOPOLOGY_LABEL})" step_cli_functions post-restore
+    fi
   fi
 
   if [[ "${KEEP_VMS}" == "1" && "${is_last}" -eq 1 ]]; then
