@@ -61,7 +61,11 @@ func getAppRedisRunConfig(client controller.Client) (*runConfig, error) {
 	return getRedisRunConfig(client, mustApp(), appRelease)
 }
 
-func getRedisRunConfig(client controller.Client, app string, appRelease *ct.Release) (*runConfig, error) {
+type appReleaseGetter interface {
+	GetAppRelease(appID string) (*ct.Release, error)
+}
+
+func getRedisRunConfig(client appReleaseGetter, app string, appRelease *ct.Release) (*runConfig, error) {
 	redisApp := appRelease.Env["FLYNN_REDIS"]
 	if redisApp == "" {
 		return nil, fmt.Errorf("No redis server found. Provision one with `flynn resource add redis`")
