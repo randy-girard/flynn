@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/controller/authz"
 	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/flynn/flynn/controller/authz"
 	"github.com/flynn/flynn/controller/data"
 	"github.com/flynn/flynn/controller/name"
 	"github.com/flynn/flynn/controller/schema"

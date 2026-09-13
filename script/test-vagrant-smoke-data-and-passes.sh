@@ -107,6 +107,18 @@ need 'db-check' \
   "assert_databases must log per-engine progress so a hang is obvious"
 need 'step_host_unit_tests' \
   "smoke must run host unit tests before Vagrant up"
+need 'validate-gofmt' \
+  "smoke host unit-test gate must run gofmt (same check as GitHub Actions)"
+need_file "${ROOT}/util/commit-validator/validate-gofmt" \
+  "gofmt check used by CI, smoke, and unit tests must exist"
+if ! grep -q 'validate-gofmt' "${ROOT}/script/run-unit-tests"; then
+  echo "script/run-unit-tests must run validate-gofmt" >&2
+  exit 1
+fi
+if grep -q 'gofmt issues found (continuing' "${ROOT}/script/docker/unit-tests/entrypoint.sh"; then
+  echo "Docker unit tests must fail on gofmt, not continue" >&2
+  exit 1
+fi
 need 'SKIP_UNIT_TESTS' \
   "smoke must allow skipping the pre-cluster unit-test gate"
 need 'print_unit_report' \

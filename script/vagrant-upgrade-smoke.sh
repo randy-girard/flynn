@@ -57,6 +57,7 @@
 #   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node*}
 #                        at start (default: clear so each run has fresh logs)
 #   SKIP_UNIT_TESTS=1            Skip host + builder Linux pre-cluster unit gates
+#                                (host gate includes gofmt -s / validate-gofmt)
 #   SKIP_BUILDER_UNIT_TESTS=1    Skip only the builder Linux suite (host tests
 #                                still run). SKIP_DOCKER_UNIT_TESTS=1 is an alias.
 #   SKIP_VAGRANT_UP=1    Assume VMs are already running
@@ -1718,8 +1719,20 @@ step_host_unit_tests() {
   local script pkg name
   local packages=( "${SMOKE_UNIT_PACKAGES[@]}" )
 
-  echo "host unit-test gate: smoke regressions + Darwin-safe Go packages"
+  echo "host unit-test gate: gofmt -s, smoke regressions, Darwin-safe Go packages"
   echo "failures abort before Vagrant up / cluster build"
+
+  echo "==> gofmt (util/commit-validator/validate-gofmt, same as GitHub Actions)"
+  start="$(date +%s)"
+  if ( cd "${ROOT}" && util/commit-validator/validate-gofmt ); then
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "gofmt" "validate-gofmt" "PASS" "${elapsed}s"
+  else
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "gofmt" "validate-gofmt" "FAIL" "exit ${rc} ${elapsed}s"
+    failed=1
+  fi
 
   local smoke_scripts=( "${ROOT}"/script/test-vagrant-smoke-*.sh )
   if [[ ${#smoke_scripts[@]} -eq 0 ]]; then

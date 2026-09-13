@@ -61,7 +61,9 @@ type tokenContextKey struct{}
 var TokenContextKey = tokenContextKey{}
 
 // TokenFromContext returns the principal muxHandler stored, or nil.
-func TokenFromContext(ctx interface{ Value(key interface{}) interface{} }) *authorizer.Token {
+func TokenFromContext(ctx interface {
+	Value(key interface{}) interface{}
+}) *authorizer.Token {
 	if ctx == nil {
 		return nil
 	}

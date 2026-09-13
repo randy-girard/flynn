@@ -13,7 +13,7 @@
 # Environment:
 #   FLYNN_TEST_DOCKER=1       Force Docker even on Linux
 #   FLYNN_TEST_DOCKER=0       Force native (fails on non-Linux without deps)
-#   FLYNN_TEST_SKIP_CHECKS=1  Skip gofmt/bats inside the container
+#   FLYNN_TEST_SKIP_CHECKS=1  Skip bats (gofmt still runs; same as GitHub Actions)
 #   FLYNN_SKIP_VOLUME_TESTS=1 Skip host/volume ZFS tests
 #   FLYNN_GO_TEST_FLAGS       Extra/override flags for go test
 #   FLYNN_UNIT_IMAGE          Image tag [default: flynn-unit-tests:24.04]
@@ -56,8 +56,10 @@ run_native() {
     fi
   fi
 
+  echo "==> gofmt check (gofmt -s)"
+  util/commit-validator/validate-gofmt
+
   if [[ "${FLYNN_TEST_SKIP_CHECKS:-}" != "1" ]]; then
-    util/commit-validator/validate-gofmt
     if command -v bats >/dev/null 2>&1; then
       bats script/test
     fi

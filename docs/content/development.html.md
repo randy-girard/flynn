@@ -46,6 +46,8 @@ macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
+GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
+`util/commit-validator/validate-gofmt` and fail if changed Go is not formatted.
 
 ## Building
 
@@ -138,8 +140,10 @@ network, datastore, upgrade, and CLI behavior.
 $ util/commit-validator/validate-gofmt
 ```
 
-CI compares against the PR base so you do not fail on unrelated historical
-drift.
+CI, `make test-unit` / `script/run-unit-tests`, and
+`script/vagrant-upgrade-smoke.sh` all run this check. It compares against the
+PR base (or `origin/develop` locally) so you do not fail on unrelated
+historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
 
 ### bats (shell)
 
