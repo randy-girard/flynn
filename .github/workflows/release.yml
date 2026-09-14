@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -81,7 +81,7 @@ jobs:
             pigz
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -111,7 +111,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" "${{ github.workspace }}/ci-artifacts"
 
       - name: Upload base artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flynn-base-${{ steps.version.outputs.VERSION }}
           path: ci-artifacts/base/
@@ -125,7 +125,7 @@ jobs:
     timeout-minutes: 360
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -163,7 +163,7 @@ jobs:
             pigz
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
 
@@ -195,7 +195,7 @@ jobs:
           go build -o sha512_256_binary sha512_256.go
 
       - name: Download base artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: flynn-base-${{ steps.version.outputs.VERSION }}
           path: ci-artifacts/base
@@ -282,7 +282,7 @@ jobs:
           du -sh build/release
 
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: flynn-release-${{ steps.version.outputs.VERSION }}
           path: build/release/
@@ -310,7 +310,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -339,7 +339,7 @@ jobs:
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Download release artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: flynn-release-${{ steps.version.outputs.VERSION }}
           path: build/release
