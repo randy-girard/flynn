@@ -8,11 +8,11 @@ flynn-test contains full-stack acceptance tests for Flynn.
 
 The tests need a running Flynn cluster, so you will need to boot one first.
 
-To run Flynn locally, first boot and SSH to the Flynn dev box:
+To run Flynn locally, boot the builder VM:
 
 ```text
-vagrant up
-vagrant ssh
+vagrant up builder
+vagrant ssh builder
 ```
 
 then build and bootstrap Flynn (this may take a few minutes):
@@ -62,7 +62,8 @@ The tests interact with the VM cluster using the Flynn CLI, so you will need it 
 Download it into the current directory:
 
 ```text
-curl -sL -A "`uname -sp`" https://dl.flynn.io/cli | zcat >flynn
+curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --dir .
+# or copy build/bin/flynn from a local build
 chmod +x flynn
 ```
 
@@ -78,17 +79,26 @@ sudo ./flynn-test \
 
 ## CI
 
+Pull requests against `develop` run the [Unit tests](../.github/workflows/unit-tests.yml)
+GitHub Actions workflow (`gofmt`, `bats script/test`, `make test-unit-root-native`).
+Cluster acceptance is local: [Development — tests](../docs/content/development.html.md#tests)
+and `script/vagrant-upgrade-smoke.sh`.
+
+The rest of this section describes the historical in-cluster CI app (KVM nested
+clusters). Prefer GitHub Actions plus Vagrant smoke unless you are maintaining
+that runner.
+
 ### Bootstrap a Flynn cluster
 
-Follow the [installation docs](https://flynn.io/docs/installation/manual) to install and
-bootstrap a Flynn cluster with `CLUSTER_DOMAIN=ci.flynn.io` on the CI box:
+Follow [manual installation](../docs/content/installation/manual.md) to install and
+bootstrap a Flynn cluster. Example:
 
 ```
-curl -fsSL -o install-flynn https://dl.flynn.io/install-flynn
+curl -fsSL -o install-flynn https://github.com/randy-girard/flynn/releases/latest/download/install-flynn
 sudo bash install-flynn
 sudo systemctl start flynn-host
-CLUSTER_DOMAIN=ci.flynn.io flynn-host bootstrap
-flynn cluster add -p <tls-pin> default ci.flynn.io <controller-key>
+CLUSTER_DOMAIN=ci.example.com flynn-host bootstrap
+flynn cluster add -p <tls-pin> default ci.example.com <controller-key>
 ```
 
 Create a directory to store CI build images (this should be on a fast disk to
@@ -134,10 +144,10 @@ flynn -c flynn-ci -a ci scale runner=1
 add a route with the CI TLS key and certificate:
 
 ```
-flynn -c flynn-ci -a ci route add http -s ci-web -c <ci.crt> -k <ci.key> ci.flynn.io
+flynn -c flynn-ci -a ci route add http -s ci-web -c <ci.crt> -k <ci.key> ci.example.com
 ```
 
-CI should now be up and running at `https://ci.flynn.io`.
+CI should now be up and running at `https://ci.example.com`.
 
 ### Deploy the CI app
 

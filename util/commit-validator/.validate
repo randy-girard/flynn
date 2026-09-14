@@ -1,21 +1,13 @@
 #!/bin/bash
 
-if [ -z "$VALIDATE_UPSTREAM" ]; then
-  # this is kind of an expensive check, so let's not do this twice if we
-  # are running more than one validate bundlescript
+# Compare changed files against a base commit. GitHub Actions uses this
+# repository's PR base (or develop/main on push). Locally we use origin/develop
+# or origin/main — not upstream flynn/flynn master, which falsely fails gofmt
+# on historical files never touched in this work.
 
-  VALIDATE_REPO='https://github.com/flynn/flynn.git'
-  VALIDATE_BRANCH='master'
+VALIDATE_HEAD="${VALIDATE_HEAD:-$(git rev-parse --verify HEAD)}"
 
-  if [ "$TRAVIS" = 'true' -a "$TRAVIS_PULL_REQUEST" != 'false' ]; then
-    VALIDATE_REPO="https://github.com/${TRAVIS_REPO_SLUG}.git"
-    VALIDATE_BRANCH="${TRAVIS_BRANCH}"
-  fi
-
-  # GitHub Actions: compare against this repository's PR base (or develop/main
-  # on push/workflow_dispatch). Forks must not validate the entire historical
-  # divergence from upstream flynn/flynn master — that falsely fails gofmt on
-  # unrelated files that were never touched in the PR.
+if [ -z "${VALIDATE_UPSTREAM:-}" ]; then
   if [ -n "${GITHUB_ACTIONS:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ]; then
     VALIDATE_REPO="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}.git"
     if [ -n "${GITHUB_BASE_REF:-}" ]; then
@@ -27,38 +19,56 @@ if [ -z "$VALIDATE_UPSTREAM" ]; then
     else
       VALIDATE_BRANCH='master'
     fi
+
+    git fetch -q "$VALIDATE_REPO" "refs/heads/$VALIDATE_BRANCH"
+    VALIDATE_UPSTREAM="$(git rev-parse --verify FETCH_HEAD)"
+
+    # On a push to develop/main, FETCH_HEAD is the same commit as HEAD, so the
+    # three-dot diff is empty. Fall back to the pre-push SHA when available so
+    # the commits in this push are still checked.
+    if [ "$VALIDATE_UPSTREAM" = "$VALIDATE_HEAD" ] \
+      && [ -n "${GITHUB_EVENT_PATH:-}" ] \
+      && command -v jq >/dev/null 2>&1; then
+      BEFORE="$(jq -r '.before // empty' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
+      if [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
+        && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
+        && git rev-parse --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
+        VALIDATE_UPSTREAM="$BEFORE"
+      fi
+    fi
+  elif git rev-parse --verify -q origin/develop >/dev/null; then
+    VALIDATE_UPSTREAM="$(git rev-parse --verify origin/develop)"
+  elif git rev-parse --verify -q origin/main >/dev/null; then
+    VALIDATE_UPSTREAM="$(git rev-parse --verify origin/main)"
+  elif git rev-parse --verify -q origin/master >/dev/null; then
+    VALIDATE_UPSTREAM="$(git rev-parse --verify origin/master)"
   fi
 
-  VALIDATE_HEAD="$(git rev-parse --verify HEAD)"
-
-  git fetch -q "$VALIDATE_REPO" "refs/heads/$VALIDATE_BRANCH"
-  VALIDATE_UPSTREAM="$(git rev-parse --verify FETCH_HEAD)"
-
-  # On a push to develop/main, FETCH_HEAD is the same commit as HEAD, so the
-  # three-dot diff is empty. Fall back to the pre-push SHA when available so
-  # the commits in this push are still checked.
-  if [ "$VALIDATE_UPSTREAM" = "$VALIDATE_HEAD" ] \
-    && [ -n "${GITHUB_EVENT_PATH:-}" ] \
-    && command -v jq >/dev/null 2>&1; then
-    BEFORE="$(jq -r '.before // empty' "${GITHUB_EVENT_PATH}" 2>/dev/null || true)"
-    if [ -n "$BEFORE" ] && [ "$BEFORE" != "null" ] \
-      && [ "$BEFORE" != "0000000000000000000000000000000000000000" ] \
-      && git rev-parse --verify "${BEFORE}^{commit}" >/dev/null 2>&1; then
-      VALIDATE_UPSTREAM="$BEFORE"
-    fi
+  # Local / missing .before analog: HEAD is the branch tip, so the three-dot
+  # diff is empty. Check the last commit so unformatted files in that commit
+  # still fail (same class of miss as a push to develop).
+  if [ -n "${VALIDATE_UPSTREAM:-}" ] \
+    && [ "$VALIDATE_UPSTREAM" = "$VALIDATE_HEAD" ] \
+    && git rev-parse --verify -q "${VALIDATE_HEAD}^" >/dev/null; then
+    VALIDATE_UPSTREAM="$(git rev-parse --verify "${VALIDATE_HEAD}^")"
   fi
-
-  VALIDATE_COMMIT_LOG="$VALIDATE_UPSTREAM..$VALIDATE_HEAD"
-  VALIDATE_COMMIT_DIFF="$VALIDATE_UPSTREAM...$VALIDATE_HEAD"
-
-  validate_diff() {
-    if [ "$VALIDATE_UPSTREAM" != "$VALIDATE_HEAD" ]; then
-      git diff "$VALIDATE_COMMIT_DIFF" "$@"
-    fi
-  }
-  validate_log() {
-    if [ "$VALIDATE_UPSTREAM" != "$VALIDATE_HEAD" ]; then
-      git log "$VALIDATE_COMMIT_LOG" "$@"
-    fi
-  }
 fi
+
+if [ -z "${VALIDATE_UPSTREAM:-}" ]; then
+  VALIDATE_UPSTREAM="$VALIDATE_HEAD"
+fi
+
+VALIDATE_COMMIT_LOG="$VALIDATE_UPSTREAM..$VALIDATE_HEAD"
+VALIDATE_COMMIT_DIFF="$VALIDATE_UPSTREAM...$VALIDATE_HEAD"
+
+validate_diff() {
+  if [ "$VALIDATE_UPSTREAM" != "$VALIDATE_HEAD" ]; then
+    git diff "$VALIDATE_COMMIT_DIFF" "$@"
+  fi
+}
+
+validate_log() {
+  if [ "$VALIDATE_UPSTREAM" != "$VALIDATE_HEAD" ]; then
+    git log "$VALIDATE_COMMIT_LOG" "$@"
+  fi
+}

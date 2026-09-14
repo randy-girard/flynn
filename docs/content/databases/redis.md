@@ -5,9 +5,9 @@ layout: docs
 
 # Redis
 
-The Flynn Redis appliance provides Redis 3.0 in a single process configuration.
-The data stored in this process is ephemeral and is intended for caching and
-development use.
+The Flynn Redis appliance provides Redis from the Ubuntu 24.04 package set in a
+single process configuration. The data stored in this process is ephemeral and
+is intended for caching and development use.
 
 ## Usage
 
@@ -36,7 +36,8 @@ by some libraries to configure connections.
 
 To connect to a console for the database, run `flynn redis redis-cli`. This does
 not require the Redis client to be installed locally or firewall/security
-changes, as it runs in a container on the Flynn cluster.
+changes, as it runs in a container on the Flynn cluster. The console uses
+`REDIS_HOST` (`leader.<redis-app>.discoverd`), the same host as `REDIS_URL`.
 
 ### External access
 

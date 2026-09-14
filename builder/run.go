@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/squashfs"
 	"github.com/flynn/go-docopt"
 )
 
@@ -37,16 +38,7 @@ func runRun(args *docopt.Args) error {
 	path := "/mnt/out/layer.squashfs"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		// create a squashfs layer of the diff in /out/layer.squashfs
-		excludes := []string{
-			".container-diff",
-			".container-shared",
-			".containerconfig",
-			".containerinit",
-			"etc/hosts",
-			"src",
-			"out",
-		}
-		cmd = mksquashfsCommand(host.DiffPath, path, excludes)
+		cmd = mksquashfsCommand(host.DiffPath, path, squashfs.DefaultExcludes())
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Fprintln(os.Stderr, string(out))
 			return fmt.Errorf("error running mksquashfs: %s", err)
@@ -60,16 +52,15 @@ func runRun(args *docopt.Args) error {
 // builds running at once (default nproc, 8 on the Vagrant builder) that is
 // 2x total RAM and mksquashfs dies with "Write failed because Cannot allocate
 // memory" (seen 2026-09-09 building cli-linux-amd64). 1G is ample for a cache.
-const mksquashfsMem = "1G"
+const mksquashfsMem = squashfs.MemLimit
 
 // mksquashfsCommand builds the mksquashfs command that squashes the container
 // diff at diffPath into out, excluding the given top-level paths via stdin.
 func mksquashfsCommand(diffPath, out string, excludes []string) *exec.Cmd {
-	cmd := exec.Command("mksquashfs", diffPath, out,
-		"-noappend",
+	cmd := exec.Command("mksquashfs", squashfs.Args(diffPath, out,
 		"-mem", mksquashfsMem,
 		"-ef", "/dev/stdin",
-	)
+	)...)
 	cmd.Stdin = strings.NewReader(strings.Join(excludes, "\n"))
 	return cmd
 }

@@ -10,6 +10,8 @@ import (
 	"net"
 	"os/exec"
 	"strings"
+
+	"github.com/flynn/flynn/pkg/netpolicy"
 )
 
 var (
@@ -102,6 +104,73 @@ func EnableOutboundNAT(bridge, network string) error {
 		}
 	}
 
+	return nil
+}
+
+// UserOverlayDropArgs drops NEW overlay packets from user jobs. ESTABLISHED
+// replies (router → user HTTP/TCP) must still pass; without --ctstate NEW this
+// rule blackholes backends whenever the web job is not on the same host as the
+// router. Datastore and local-bridge exceptions must be inserted before this
+// rule.
+func UserOverlayDropArgs(overlay string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", overlay, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// LegacyUserOverlayDropArgs is the pre-fix DROP that matched every state,
+// including ESTABLISHED replies to the router (5-node HTTP 503).
+func LegacyUserOverlayDropArgs(overlay string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", overlay, "-j", "DROP"}
+}
+
+// UserToDatastoreArgs allows user jobs to reach appliance data-plane IPs
+// (the hosts embedded in provisioned DATABASE_URL / REDIS_URL / …).
+func UserToDatastoreArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-m", "set", "--match-set", netpolicy.ServiceData, "dst", "-j", "ACCEPT"}
+}
+
+// UserToBridgeArgs allows user jobs to reach the local gateway (discoverd DNS).
+func UserToBridgeArgs(bridgeAddr string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", bridgeAddr, "-j", "ACCEPT"}
+}
+
+// BuildToUserDropArgs stops slug/docker builders from dialing user jobs.
+func BuildToUserDropArgs() []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceBuild, "src", "-m", "set", "--match-set", netpolicy.ServiceUser, "dst", "-j", "DROP"}
+}
+
+// IsolationSets are the ipsets mirrored from discoverd netpolicy services.
+func IsolationSets() []string {
+	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild, netpolicy.ServiceData, netpolicy.ServiceSys}
+}
+
+// EnableJobIsolation installs default-deny overlay rules for user jobs.
+// Call after EnableOutboundNAT. Requires the ipset kernel module and the
+// ipset binary. Same-host L2 isolation also needs br_netfilter (caller).
+func EnableJobIsolation(overlay, bridgeAddr string) error {
+	if err := EnsureSets(IsolationSets()...); err != nil {
+		return err
+	}
+	legacyDrop := LegacyUserOverlayDropArgs(overlay)
+	if Exists(legacyDrop...) {
+		_, _ = Raw(append([]string{"-D"}, legacyDrop...)...)
+	}
+	// Insert last-to-first so the chain order is: data ACCEPT, bridge ACCEPT,
+	// build→user DROP, user overlay DROP (before the broad incoming ACCEPT).
+	for _, args := range [][]string{
+		UserOverlayDropArgs(overlay),
+		BuildToUserDropArgs(),
+		UserToBridgeArgs(bridgeAddr),
+		UserToDatastoreArgs(),
+	} {
+		if Exists(args...) {
+			continue
+		}
+		if output, err := Raw(append([]string{"-I"}, args...)...); err != nil {
+			return fmt.Errorf("unable to install job isolation: %s", err)
+		} else if len(output) != 0 {
+			return &ChainError{Chain: "FORWARD isolation", Output: output}
+		}
+	}
 	return nil
 }
 

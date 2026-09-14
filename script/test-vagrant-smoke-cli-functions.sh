@@ -39,8 +39,42 @@ need 'cli-release' \
   "CLI step must list releases"
 need 'log -n 20' \
   "CLI step must read logaggregator output without --follow"
-need 'run -- echo smoke-cli' \
+need 'cli_run_job' \
+  "CLI step must share a time-bounded flynn run helper"
+need 'echo smoke-cli' \
   "CLI step must run a one-off job (scheduler + slugrunner)"
+need 'docker-cli-run' \
+  "CLI step must flynn run against the Dockerfile/container-stack app"
+need 'echo docker-cli' \
+  "container flynn run must execute a command without /runner/init"
+need 'cat /start.sh' \
+  "container flynn run must read a file from the Docker image"
+need 'net-isolate-peer' \
+  "CLI step must prove user jobs cannot reach other apps on the overlay"
+need 'net-isolate-internal' \
+  "CLI step must prove user jobs cannot resolve postgres.discoverd (internal name)"
+need 'net-isolate-api' \
+  "CLI step must prove user jobs cannot reach postgres-api"
+need 'leader.postgres.discoverd' \
+  "CLI step must prove user jobs can still reach the provisioned DATABASE_URL host"
+need 'docker-cli-ps' \
+  "CLI step must list the Dockerfile app jobs"
+need 'docker-cli-log' \
+  "CLI step must read Dockerfile app logs"
+need 'mongodb dump' \
+  "CLI step must dump mongodb (slimmed mongodump tools)"
+need 'blobstore.discoverd/.well-known/status' \
+  "CLI step must reach blobstore health from a system job (not a user slug)"
+need 'flynn-host version' \
+  "CLI step must run flynn-host version (stripped host binary)"
+need 'pg_available_extensions' \
+  "CLI/seed must verify postgres PostGIS/pgRouting/Timescale still ship"
+need 'cli-pg-connect' \
+  "CLI step must prove the user-app role cannot CONNECT to postgres/template1"
+need 'cli-pg-controller' \
+  "CLI step must open controller psql with the cluster key"
+need 'cli-pg-blobstore' \
+  "CLI step must open blobstore psql with the cluster key"
 need 'timeout 90 flynn' \
   "flynn run must be time-bounded so a hung scheduler cannot stall smoke"
 need 'meta set' \
@@ -49,6 +83,8 @@ need 'flynn-host list' \
   "CLI step must list cluster hosts"
 need 'cli-host-ps' \
   "CLI step must list host jobs"
+need 'installing Flynn CLI on node1' \
+  "smoke must (re)install the synced CLI so SKIP_BUILD still picks up CLI fixes"
 need 'CLI functions \(pre-upgrade\)' \
   "smoke must run CLI probes before the first --force update"
 need 'CLI functions after upgrade' \

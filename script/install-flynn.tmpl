@@ -6,8 +6,8 @@ usage() {
   cat <<USAGE >&2
 usage: $0 [options]
 
-A script to install Flynn on Ubuntu 16.04 and 18.04.
-See https://flynn.io/docs/installation/manual for further information.
+A script to install Flynn on Ubuntu 24.04 (also accepts 16.04 and 18.04).
+See https://github.com/randy-girard/flynn#install-a-cluster for further information.
 
 OPTIONS:
   -h, --help                       Show this message
@@ -146,8 +146,9 @@ main() {
 
   repo_url="${repo_url:="flynn/flynn"}"
 
-  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip (modern fallback / minimal images)
-  local packages=("iptables" "zfsutils-linux" "net-tools" "iproute2")
+  # net-tools: ifconfig, route (flynn-host collect-debug-info); iproute2: ip
+  # (modern fallback / minimal images). ipset: flynn-host EnableJobIsolation.
+  local packages=("iptables" "ipset" "zfsutils-linux" "net-tools" "iproute2")
 
   info "installing runtime dependencies"
   apt_get_update_resilient

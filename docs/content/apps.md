@@ -7,7 +7,7 @@ toc_min_level: 2
 # Apps
 
 Applications can be deployed to Flynn using [Buildpacks](#buildpacks) or
-[Docker](/docs/docker). This page provides information about the management and
+[Docker](docker.md). This page provides information about the management and
 configuration of apps on Flynn.
 
 ## Configuration
@@ -26,7 +26,7 @@ all of the app's processes with the new configuration.
 
 ### External Databases
 
-Flynn apps can communicate with the [built-in databases](/docs/databases) as
+Flynn apps can communicate with the [built-in databases](databases.html.md) as
 well as databases hosted outside of Flynn. Pass the configuration for the
 external database in as an environment variable with `flynn env`.
 
@@ -38,7 +38,7 @@ prepare and build apps deployed with `git push` when the app is on the
 buildpack for most supported languages.
 
 To deploy from a `Dockerfile` instead, switch to the container stack with
-`flynn stack set container`. See the [Docker](/docs/docker) documentation for
+`flynn stack set container`. See the [Docker](docker.md) documentation for
 details.
 
 The buildpack can be manually specified in cases where auto-detection is not
@@ -231,12 +231,19 @@ ownership using HTTP-01 challenges.
 
 ### Service Discovery
 
-Flynn automatically registers each web process type in service discovery for
-internal requests that do not go through the router. The service discovery
-entries are available via DNS. The pattern `$APPNAME-$PROCTYPE.discoverd` is
-used for the DNS name, for example `myapp-web.discoverd` and
-`myapp-admin-web.discoverd`. This feature can be used to communicate internally
-between apps and processes.
+Flynn registers each web process type in service discovery so the **router**
+and **system apps** can find backends. User-deployed jobs cannot reach other
+jobs on the overlay — including other apps and other process types of the
+same app — unless they go through a route you have added (`flynn route`).
+
+Provisioned datastore URLs use `leader.<service>.discoverd` (for example
+`leader.postgres.discoverd` in `DATABASE_URL`). User jobs may resolve those
+leader names only. Internal names such as `postgres.discoverd`,
+`postgres-api.discoverd`, `blobstore.discoverd`, and `$APP-$TYPE.discoverd`
+do not resolve for user jobs.
+
+System apps keep a full overlay mesh so appliances, the controller, and the
+router can operate.
 
 ## Limits
 

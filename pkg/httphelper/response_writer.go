@@ -23,6 +23,12 @@ func (r *ResponseWriter) Context() context.Context {
 	return r.ctx
 }
 
+// SetContext replaces the request context stored on this writer (used to
+// attach the authorized principal after mux-level auth).
+func (r *ResponseWriter) SetContext(ctx context.Context) {
+	r.ctx = ctx
+}
+
 func (r *ResponseWriter) Status() int {
 	return r.status
 }

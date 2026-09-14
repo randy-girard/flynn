@@ -20,6 +20,25 @@ small-scale production workloads in mind. They are not currently suitable for
 storing large amounts of data. We are in the process of making them usable for
 all use cases, including high volume, large dataset workloads.
 
+## Appliances
+
+Provision from an app with `flynn resource add <provider>`. Connection details
+are injected as environment variables. User jobs may resolve the **leader**
+hostname Flynn puts in those URLs; other internal `*.discoverd` names do not
+resolve from user jobs.
+
+| Provider | Engine | Topology |
+| --- | --- | --- |
+| [`postgres`](databases/postgres.md) | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain |
+| [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
+| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
+| [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process, ephemeral |
+| [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
+| [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
+
+Redis, Kafka, and ClickHouse do not use the sirenia state machine described
+below. See each page for safety notes.
+
 ## State Machine Design
 
 The Flynn database appliances are designed with a few goals in mind:

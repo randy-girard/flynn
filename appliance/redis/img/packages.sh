@@ -5,15 +5,13 @@ export DEBIAN_FRONTEND=noninteractive
 
 # ---- Update base system ----
 apt-get update -o Acquire::Retries=5
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   redis-server \
   curl
 
 # ---- Data directory ----
 mkdir -p /data
 
-# ---- Cleanup ----
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  apt-get clean
-fi
-rm -rf /var/lib/apt/lists/*
+# curl is required at runtime (appliance/redis/restore.sh).
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh

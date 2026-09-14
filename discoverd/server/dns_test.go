@@ -636,6 +636,78 @@ func (s *DNSSuite) TestServiceLookup(c *C) {
 	}
 }
 
+func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
+	leader, _ := fakeStaticInstance("tcp", "10.0.0.5", 5432)
+	redisLeader, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
+	appWeb, _ := fakeStaticInstance("tcp", "10.0.0.9", 8080)
+	userInst, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+	redisApp := "redis-11111111-2222-3333-4444-555555555555"
+
+	srv := s.newServer(c, nil)
+	defer srv.Close()
+	srv.SetStore(&DNSServerStore{
+		InstancesFn: func(service string) ([]*discoverd.Instance, error) {
+			switch service {
+			case "flynn-net-user":
+				return []*discoverd.Instance{userInst}, nil
+			case "shop-web":
+				return []*discoverd.Instance{appWeb}, nil
+			case "postgres":
+				return []*discoverd.Instance{leader}, nil
+			case redisApp:
+				return []*discoverd.Instance{redisLeader}, nil
+			default:
+				return nil, nil
+			}
+		},
+		ServiceLeaderFn: func(service string) (*discoverd.Instance, error) {
+			switch service {
+			case "postgres":
+				return leader, nil
+			case redisApp:
+				return redisLeader, nil
+			case "mariadb":
+				return leader, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+
+	client := &dns.Client{Net: "udp"}
+	lookup := func(name string) *dns.Msg {
+		req := &dns.Msg{}
+		req.SetQuestion(name, dns.TypeA)
+		res, _, err := client.Exchange(req, srv.UDPAddr)
+		c.Assert(err, IsNil)
+		return res
+	}
+
+	blocked := lookup("shop-web.discoverd.")
+	c.Assert(blocked.Rcode, Equals, dns.RcodeNameError)
+
+	internal := lookup("postgres.discoverd.")
+	c.Assert(internal.Rcode, Equals, dns.RcodeNameError)
+
+	api := lookup("postgres-api.discoverd.")
+	c.Assert(api.Rcode, Equals, dns.RcodeNameError)
+
+	ok := lookup("leader.postgres.discoverd.")
+	c.Assert(ok.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(ok.Answer, Not(HasLen), 0)
+
+	redisInternal := lookup(redisApp + ".discoverd.")
+	c.Assert(redisInternal.Rcode, Equals, dns.RcodeNameError)
+
+	redisOK := lookup("leader." + redisApp + ".discoverd.")
+	c.Assert(redisOK.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(redisOK.Answer, Not(HasLen), 0)
+
+	mariadbOK := lookup("leader.mariadb.discoverd.")
+	c.Assert(mariadbOK.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(mariadbOK.Answer, Not(HasLen), 0)
+}
+
 func assertSOA(c *C, rrs []dns.RR) {
 	c.Assert(rrs, HasLen, 1)
 	c.Assert(rrs[0], FitsTypeOf, &dns.SOA{})

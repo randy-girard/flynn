@@ -52,9 +52,9 @@ curl http://blobstore.discoverd/?dir=/dir2
 ["/dir2/foo.txt"]
 ```
 
-Right now, the files are stored as large objects in PostgreSQL or on the local
-filesystem, but it's intended to provide a simple, pre-authenticated gateway to
-S3 and maybe other file storage systems in the near future.
+Right now, files are stored as large objects in PostgreSQL (the default) or on
+the local filesystem. Production clusters can use S3, GCS, or Azure backends;
+see [Production — Blobstore Backend](../docs/content/production.html.md#blobstore-backend).
 
 Flynn uses blobstore to store and retrieve Heroku-style slugs built with
-[slugbuilder](/slugbuilder).
+[slugbuilder](../slugbuilder).

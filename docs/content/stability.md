@@ -19,45 +19,28 @@ Production-grade software also has stable lifecycle tooling including the
 ability to update, monitor, debug, backup, and restore without having a negative
 impact on uptime. We promise this is the only way we'll ever use the term._
 
-Developers and organizations around the world are using Flynn in production
-today. They're using Flynn in different ways based on their own needs and
-assessments. The best way to know if Flynn is right for you is to try it.
+This repository is a community fork of Flynn. Treat it as a work in progress:
+try it, read [Security](security.md) and [Production](production.html.md), and
+decide what is acceptable for your workload.
 
-We believe users should be able to choose the balance of stability and features
-that is right for them. We are committed to transparency so you can decide which
-features of Flynn to use at different times in different ways based on your own
-specific needs.
+## Releases
 
-## Release Channels
+Binaries and cluster images are published as [GitHub
+Releases](https://github.com/randy-girard/flynn/releases) for this fork. There
+is no longer a Flynn-operated `releases.flynn.io` channel for these builds.
 
-We currently have two release channels: nightly and stable.
+The original project distinguished nightly and monthly stable channels. This
+fork tags releases as they are cut; read the release notes for what changed.
 
-For details on current releases visit the [Flynn releases
-site](https://releases.flynn.io).
+Flynn currently has [security considerations](security.md) you should take
+into account.
 
-Nightly updates will include all the bleeding edge changes that have just been
-merged into Flynn. These changes have all passed code review and our CI system,
-but may not be fully tested in "the real world".
+The built-in database appliances are intended for staging, development, and
+small-scale production. They are not yet optimized for high write volume or
+very large datasets.
 
-Stable updates are released on the third Tuesday of each month with changes that
-have had more time to stabilize. [Security updates](/docs/security) are provided
-for the current and previous stable channel release.
+## Announcements
 
-Flynn currently has some [security considerations](/docs/security) that you
-should take into account when evaluating it.
-
-Currently we do not recommend using the built-in database appliances for
-databases with high write volume or a large amount of data as they are not yet
-optimized for demanding use cases.
-
-## Release Mailing List
-
-If you'd like to receive email about each month's stable release and security
-updates, subscribe here:
-
-<form action="https://flynn.us7.list-manage.com/subscribe/post?u=9600741fc187618e1baa39a58&id=8aadb709f3" method="post" target="_blank" novalidate class="mailing-list-form">
-  <label>Email Address&nbsp;
-    <input type="email" name="EMAIL" placeholder="you@example.com">
-  </label>
-  <button type="submit" name="subscribe">Subscribe</button>
-</form>
+Watch the GitHub repository and join [Discord](https://discord.gg/VU2ZqrPUay)
+for discussion. The historical Mailchimp release list was for the original
+project and is not used by this fork.

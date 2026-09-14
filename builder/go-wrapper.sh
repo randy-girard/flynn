@@ -27,7 +27,7 @@ if [[ $(basename $0) == "gobin" ]]; then
   BIN=/usr/local/bin/gobin-noenv
 fi
 
-GO_LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${FLYNN_VERSION}"
+GO_LDFLAGS="-s -w -X github.com/flynn/flynn/pkg/version.version=${FLYNN_VERSION}"
 
 if [[ "$1" = "build" ]]; then
 	${BIN} $1 -tags "apparmor seccomp" -ldflags "${GO_LDFLAGS}" ${@:2}

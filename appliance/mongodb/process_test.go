@@ -28,11 +28,35 @@ import (
 // Hook gocheck up to the "go test" runner
 func Test(t *testing.T) { TestingT(t) }
 
+func TestMongodTestPortBaseBelowEphemeral(t *testing.T) {
+	const ephemeralStart = 32768
+	// Four-node tests call NewTestProcess four times; each adds 2 to the base.
+	const fourNodeSpan = 8
+	for _, pid := range []int{1, 100, 11830, 32768, 99999} {
+		base := mongodTestPortBase(pid)
+		if base < 11000 {
+			t.Fatalf("pid %d: base %d is below the intended range", pid, base)
+		}
+		if base+fourNodeSpan >= ephemeralStart {
+			t.Fatalf("pid %d: base %d puts four-node ports in the ephemeral range", pid, base)
+		}
+	}
+}
+
 func init() {
-	// Spread TCP ports and /tmp/mongodb-<port>.sock paths so interrupted runs
-	// do not collide with leftover mongod processes from prior test failures.
-	base := uint32(10000 + (os.Getpid()%14000)*2)
-	atomic.StoreUint32(&newPort, base)
+	atomic.StoreUint32(&newPort, mongodTestPortBase(os.Getpid()))
+}
+
+// mongodTestPortBase picks a TCP port below Linux's default ephemeral range
+// (32768–60999). A previous formula, 10000+(pid%14000)*2, landed in that
+// range on GitHub Actions (typical runner PIDs). mongod then exited 48
+// (EADDRINUSE) when an outbound connection's source port claimed the next
+// node address — seen as TestIntegration_FourNode dying on node4.
+func mongodTestPortBase(pid int) uint32 {
+	if pid < 0 {
+		pid = -pid
+	}
+	return uint32(11000 + (pid%9000)*2)
 }
 
 type MongoDBSuite struct{}

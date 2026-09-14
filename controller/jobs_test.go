@@ -212,10 +212,11 @@ func (s *S) TestRunJobDetached(c *C) {
 		job := j.Job
 		c.Assert(res.ID, Equals, job.ID)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":      app.ID,
-			"flynn-controller.app_name": app.Name,
-			"flynn-controller.release":  release.ID,
-			"foo":                       "baz",
+			"flynn-controller.app":          app.ID,
+			"flynn-controller.app_name":     app.Name,
+			"flynn-controller.release":      release.ID,
+			"foo":                           "baz",
+			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
@@ -228,6 +229,35 @@ func (s *S) TestRunJobDetached(c *C) {
 			"RELEASE":            "true",
 		})
 		c.Assert(job.Config.Stdin, Equals, false)
+	}
+}
+
+func (s *S) TestRunJobSystemAppPartition(c *C) {
+	app := s.createTestApp(c, &ct.App{
+		Name: "blobstore",
+		Meta: map[string]string{"flynn-system-app": "true"},
+	})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	host := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(host)
+
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		ArtifactIDs: []string{artifact.ID},
+	})
+	res, err := s.c.RunJobDetached(app.ID, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"wget", "-qO-", "http://blobstore.discoverd/.well-known/status"},
+	})
+	c.Assert(err, IsNil)
+	jobs, err := host.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.ID, Equals, res.ID)
+		c.Assert(job.Partition, Equals, "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
 	}
 }
 
@@ -307,10 +337,11 @@ func (s *S) TestRunJobAttached(c *C) {
 		job := j.Job
 		c.Assert(job.ID, Equals, jobID)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
-			"flynn-controller.app":      app.ID,
-			"flynn-controller.app_name": app.Name,
-			"flynn-controller.release":  release.ID,
-			"foo":                       "baz",
+			"flynn-controller.app":          app.ID,
+			"flynn-controller.app_name":     app.Name,
+			"flynn-controller.release":      release.ID,
+			"foo":                           "baz",
+			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{

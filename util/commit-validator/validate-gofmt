@@ -7,10 +7,43 @@ files=( $(validate_diff --diff-filter=ACMR --name-only -- '*.go' \
           | grep -v '^vendor/' || true) )
 unset IFS
 
+# Uncommitted Go files: catch gofmt drift before it is committed (CI checks
+# committed content via git show below).
+while IFS= read -r file; do
+  [ -z "${file}" ] && continue
+  case "${file}" in
+    vendor/*) continue ;;
+  esac
+  files+=( "${file}" )
+done < <(git diff --name-only -- '*.go'; git diff --cached --name-only -- '*.go')
+
+# Dedupe (bash 3.2 — no associative arrays on macOS /bin/bash).
+unique=()
+for file in "${files[@]}"; do
+  [ -z "${file}" ] && continue
+  already=0
+  for existing in "${unique[@]}"; do
+    if [ "${existing}" = "${file}" ]; then
+      already=1
+      break
+    fi
+  done
+  [ "${already}" -eq 1 ] && continue
+  unique+=( "${file}" )
+done
+files=( "${unique[@]}" )
+
 badFiles=()
 for file in "${files[@]}"; do
-  # we use "git show" here to validate that what's committed is formatted
-  if [ "$(git show "${VALIDATE_HEAD}:${file}" | gofmt -s -l)" ]; then
+  # Committed content must match gofmt -s (what GitHub Actions checks).
+  if git cat-file -e "${VALIDATE_HEAD}:${file}" 2>/dev/null; then
+    if [ "$(git show "${VALIDATE_HEAD}:${file}" | gofmt -s -l)" ]; then
+      badFiles+=( "${file}" )
+      continue
+    fi
+  fi
+  # Working tree must also be formatted.
+  if [ -f "${file}" ] && [ "$(gofmt -s -l "${file}")" ]; then
     badFiles+=( "${file}" )
   fi
 done

@@ -155,4 +155,9 @@ fi
 rm -rf "${TMP}/root/var/cache/apt/archives"/* "${TMP}/root/var/cache/apt/archives"/partial/* 2>/dev/null || true
 rm -rf "${TMP}/root/var/lib/apt/lists"/* 2>/dev/null || true
 
-mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend
+# Keep -comp/-Xcompression-level in sync with pkg/squashfs.
+# Do not exclude usr/share/{man,doc,info}: dpkg/update-alternatives need those
+# directories during later appliance apt-get installs.
+mksquashfs "${TMP}/root" "/mnt/out/layer.squashfs" -noappend \
+  -comp zstd -Xcompression-level 15 \
+  -e var/cache/apt var/lib/apt/lists

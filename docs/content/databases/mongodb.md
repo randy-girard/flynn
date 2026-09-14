@@ -5,9 +5,10 @@ layout: docs
 
 # MongoDB
 
-The Flynn MongoDB appliance provides MongoDB 3.2 in a highly-available
+The Flynn MongoDB appliance provides MongoDB 7.0 in a highly-available
 configuration with automatic provisioning. Replication is implemented using
-MongoDB's replica set feature.
+MongoDB's replica set feature. The image includes `mongod`, database tools, and
+`mongosh` (not the legacy `mongo` shell).
 
 ## Usage
 
@@ -38,7 +39,7 @@ by some frameworks to configure database connections.
 
 ### Connecting to a console
 
-To connect to a `mongo` console for the database, run `flynn mongodb mongo`.
+To connect to a `mongosh` console for the database, run `flynn mongodb mongo`.
 This does not require the MongoDB client to be installed locally or
 firewall/security changes, as it runs in a container on the Flynn cluster.
 

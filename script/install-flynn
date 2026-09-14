@@ -8,8 +8,8 @@ usage() {
   cat <<USAGE >&2
 usage: $0 [options]
 
-A script to install Flynn on Ubuntu 16.04 and 18.04.
-See https://flynn.io/docs/installation/manual for further information.
+A script to install Flynn on Ubuntu 24.04 (also accepts 16.04 and 18.04).
+See https://github.com/randy-girard/flynn#install-a-cluster for further information.
 
 OPTIONS:
   -h, --help                       Show this message
@@ -148,7 +148,7 @@ main() {
 
   repo_url="${repo_url:="https://dl.flynn.cloud.randygirard.com"}"
 
-  local packages=("iptables" "zfsutils-linux" "apparmor" "apparmor-utils")
+  local packages=("iptables" "ipset" "zfsutils-linux" "apparmor" "apparmor-utils")
 
   info "installing runtime dependencies"
   apt_get_update_resilient

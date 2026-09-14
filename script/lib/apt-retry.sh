@@ -4,6 +4,10 @@
 # flynn-apt-get PATH shim plus flynnAptLayerPrelude.
 
 flynn_apt_install_conf() {
+  # apt-key / _apt mkstemp under /tmp; 0755 (or a wiped tmpdir) yields
+  # "Couldn't create temporary file /tmp/apt.conf.*".
+  mkdir -p /tmp
+  chmod 1777 /tmp 2>/dev/null || true
   mkdir -p /etc/apt/apt.conf.d
   cat >/etc/apt/apt.conf.d/80-flynn-retries <<'EOF'
 Acquire::Retries "5";

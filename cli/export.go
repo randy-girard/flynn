@@ -729,7 +729,7 @@ func runImport(args *docopt.Args, client controller.Client) error {
 		}
 
 		// use the current slugrunner image for slug releases
-		if release.IsGitDeploy() && release.Meta["slugrunner.stack"] != "container" {
+		if release.IsSlugDeploy() {
 			gitreceiveRelease, err := client.GetAppRelease("gitreceive")
 			if err != nil {
 				return fmt.Errorf("unable to retrieve gitreceive release: %s", err)
@@ -753,7 +753,7 @@ func runImport(args *docopt.Args, client controller.Client) error {
 		for t, proc := range release.Processes {
 			// update legacy slug releases to use Args rather than the
 			// deprecated Entrypoint and Cmd fields
-			if release.IsGitDeploy() && len(proc.Args) == 0 {
+			if release.IsSlugDeploy() && len(proc.Args) == 0 {
 				proc.Args = append([]string{"/runner/init"}, proc.DeprecatedCmd...)
 				proc.DeprecatedCmd = nil
 			}

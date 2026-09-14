@@ -71,7 +71,7 @@ func TestNewAppRelease(t *testing.T) {
 	build := &BuildResult{
 		Args:       []string{"/bin/sh", "-c", "app"},
 		ListenPort: 3000,
-		Config: &Config{},
+		Config:     &Config{},
 	}
 	build.Config.Config.Env = []string{"IMAGE_ENV=1", "KEEP=overwrite"}
 
@@ -104,6 +104,43 @@ func TestNewAppRelease(t *testing.T) {
 	}
 	if release.Meta["git"] != "true" {
 		t.Fatalf("Meta = %#v", release.Meta)
+	}
+	if proc.Service != "myapp-web" {
+		t.Fatalf("Service = %q, want myapp-web", proc.Service)
+	}
+	if proc.Ports[0].Service == nil || proc.Ports[0].Service.Name != "myapp-web" {
+		t.Fatalf("port service = %#v", proc.Ports[0].Service)
+	}
+}
+
+func TestNewAppReleaseContainerStack(t *testing.T) {
+	release := NewAppRelease("upgrade-smoke-docker", nil, "artifact-id", &BuildResult{
+		Args:       []string{"/bin/sh", "/start.sh"},
+		ListenPort: 8080,
+	}, ReleaseOptions{
+		Meta: map[string]string{
+			"git":              "true",
+			"slugrunner.stack": "container",
+		},
+	})
+	if !release.IsGitDeploy() {
+		t.Fatal("container-stack git push must be a git deploy")
+	}
+	if release.IsSlugDeploy() {
+		t.Fatal("container-stack git push must not use slugrunner")
+	}
+	proc, ok := release.Processes["app"]
+	if !ok {
+		t.Fatalf("Processes = %#v, want app", release.Processes)
+	}
+	if len(proc.Args) < 1 || proc.Args[0] == "/runner/init" {
+		t.Fatalf("Args = %#v, must run the image as-is", proc.Args)
+	}
+	if proc.Service != "upgrade-smoke-docker-web" {
+		t.Fatalf("Service = %q", proc.Service)
+	}
+	if proc.Ports[0].Port != 8080 {
+		t.Fatalf("Port = %d", proc.Ports[0].Port)
 	}
 }
 

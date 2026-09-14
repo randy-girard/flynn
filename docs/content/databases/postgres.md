@@ -5,9 +5,12 @@ layout: docs
 
 # PostgreSQL
 
-The Flynn Postgres appliance provides PostgreSQL 11 in a highly-available
+The Flynn Postgres appliance provides PostgreSQL 16 in a highly-available
 configuration with automatic provisioning. It automatically fails over to
 a synchronous replica with no loss of data if the primary server goes down.
+
+The image includes **PostGIS 3**, **pgRouting**, and **TimescaleDB 2** in
+addition to `postgresql-contrib`.
 
 ## Usage
 
@@ -34,9 +37,12 @@ by some frameworks to configure database connections.
 
 ### Connecting to a console
 
-To connect to a `psql` console for the database, run `flynn pg psql`. This does not
-require the Postgres client to be installed locally or firewall/security
-changes, as it runs in a container on the Flynn cluster.
+To connect to a `psql` console for **your app's** database, run `flynn pg psql`.
+This does not require the Postgres client locally; it runs in a container on
+the cluster. It uses the same controller credential as other `flynn` commands:
+the cluster key from `flynn cluster add`, or a dashboard login that was granted
+that app. Platform databases (`controller`, `blobstore`, …) require the cluster
+key; see [Production — Internal Databases](../production.html.md#internal-databases).
 
 ### Dumping and restoring
 
@@ -92,27 +98,26 @@ accessed over the local network, VPN, or SSH tunnel.
 
 ### Extensions
 
-The Flynn Postgres appliance comes configured with many extensions available
-including hstore, PostGIS, and PLV8. To enable an extension, use `CREATE
-EXTENSION`:
+The Flynn Postgres appliance ships `postgresql-contrib-16` plus PostGIS,
+pgRouting, and TimescaleDB. Enable an extension with `CREATE EXTENSION`:
 
 ```text
 $ flynn pg psql
-psql (9.5.1)
+psql (16)
 Type "help" for help.
 
 bbabc090024fcdd118b04c50a0fb0d8c=> CREATE EXTENSION hstore;
 CREATE EXTENSION
-bbabc090024fcdd118b04c50a0fb0d8c=>
+bbabc090024fcdd118b04c50a0fb0d8c=> CREATE EXTENSION timescaledb;
+CREATE EXTENSION
 ```
 
-This is a complete list of the extensions that are available:
+Notable packaged extensions:
 
 |        Name          |                             Description                             |
 |----------------------|---------------------------------------------------------------------|
 | btree\_gin           | support for indexing common datatypes in GIN                        |
 | btree\_gist          | support for indexing common datatypes in GiST                       |
-| chkpass              | data type for auto-encrypted passwords                              |
 | citext               | data type for case-insensitive character strings                    |
 | cube                 | data type for multidimensional cubes                                |
 | dblink               | connect to other PostgreSQL databases from within a database        |
@@ -131,13 +136,16 @@ This is a complete list of the extensions that are available:
 | pgrowlocks           | show row-level locking information                                  |
 | pgstattuple          | show tuple-level statistics                                         |
 | plpgsql              | PL/pgSQL procedural language                                        |
-| plv8                 | PL/JavaScript (v8) trusted procedural language                      |
 | postgis              | PostGIS geometry, geography, and raster spatial types and functions |
 | postgis\_topology    | PostGIS topology spatial types and functions                        |
 | postgres\_fdw        | foreign-data wrapper for remote PostgreSQL servers                  |
 | tablefunc            | functions that manipulate whole tables, including crosstab          |
+| timescaledb          | time-series hypertables and compression (TimescaleDB 2)             |
 | unaccent             | text search dictionary that removes accents                         |
 | uuid-ossp            | generate universally unique identifiers (UUIDs)                     |
+
+`postgresql-contrib` also provides the usual additional contrib modules. List
+them with `\dx` in `psql`. PLV8 is not installed.
 
 Additionally, the following full text search dictionaries are installed:
 

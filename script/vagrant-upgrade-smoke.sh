@@ -14,11 +14,19 @@
 #   4. For each topology in SMOKE_TOPOLOGIES (default: 1-node singleton, then
 #      3-node HA): boot those VMs, install the tarball, bootstrap
 #      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
-#      datastore provider, verify HTTP/status/rows, exercise flynn /
+#      datastore provider, git-push test/apps/upgrade-smoke-docker on the
+#      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
 #      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
-#      re-verify, then destroy the cluster nodes (builder is kept) before the
-#      next topology. Sizes are 1 (singleton) or >=3 (HA); 2 is invalid.
-#      Vagrant nodes are generated as node1..max(N) — e.g. 1,3,5 or 1,3,7.
+#      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
+#      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Redis,
+#      Kafka, and ClickHouse volumes are not in the cluster backup; those
+#      engines must come back empty. Then destroy the cluster nodes (builder
+#      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
+#      2 is invalid.
+#      Named topologies: add (stable 3-node, then join node4 and upgrade)
+#      and remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
+#      keep working). Vagrant nodes are generated as node1..max(N) —
+#      e.g. 1,3,5 or 1,3,7; add reserves node4.
 #   5. Print a step table, unit-test results, and a per-engine persistence
 #      report (phases are prefixed N-node/).
 #
@@ -36,7 +44,9 @@
 #                        [default: vYYYYMMDD.N-smoke]
 #   BUILD_PHASE          build.sh phase: cluster|all|auto [default: auto]
 #   CLUSTER_DOMAIN       Bootstrap domain [default: upgrade-smoke.localflynn.com]
-#   APP_NAME             Test app name [default: upgrade-smoke]
+#   APP_NAME             Slug/buildpack test app [default: upgrade-smoke]
+#   DOCKER_APP_NAME      Dockerfile/container-stack app
+#                        [default: upgrade-smoke-docker]
 #   VAGRANT_MEMORY       Cluster node RAM MB [default: 6144]
 #   VAGRANT_CPUS         Cluster node CPUs [default: 2]
 #   BUILDER_MEMORY       Builder RAM MB [default: 30000]
@@ -47,6 +57,7 @@
 #   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node*}
 #                        at start (default: clear so each run has fresh logs)
 #   SKIP_UNIT_TESTS=1            Skip host + builder Linux pre-cluster unit gates
+#                                (host gate includes gofmt -s / validate-gofmt)
 #   SKIP_BUILDER_UNIT_TESTS=1    Skip only the builder Linux suite (host tests
 #                                still run). SKIP_DOCKER_UNIT_TESTS=1 is an alias.
 #   SKIP_VAGRANT_UP=1    Assume VMs are already running
@@ -61,14 +72,21 @@
 #   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
 #                        updates (app + datastores must already be deployed)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
+#   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
+#                        and post-restore verify
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
-#   SMOKE_TOPOLOGIES     Comma-separated cluster sizes to run, each getting
-#                        the full install/bootstrap/deploy/verify/upgrade/CLI
-#                        path. 1 = singleton (--min-hosts 1, node1 only);
-#                        N>=3 = HA (--min-hosts N, node1..nodeN). 2 is
-#                        invalid (Flynn). [default: 1,3]
+#   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
+#                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
+#                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
+#                        add (aliases: add-node, 3+1) = boot 3-node HA,
+#                        wait until stable, join node4, re-verify, then
+#                        upgrade --all-nodes (must include the new host).
+#                        remove (aliases: remove-node, 3-1) = boot 3-node
+#                        HA, drain node3, re-verify HTTP/DBs/deploys on
+#                        the remaining hosts, then upgrade.
+#                        [default: 1,3]
 #                        CLUSTER_SIZE=N is a shortcut for one topology.
-#                        Example: SMOKE_TOPOLOGIES=1,3,5
+#                        Example: SMOKE_TOPOLOGIES=1,3,5,add,remove
 #   SMOKE_MAX_NODES      Optional ceiling on N (host-only /24 already caps
 #                        node IPs at 192.168.56.254). Unset = no extra cap.
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
@@ -91,6 +109,7 @@ BUILD_VERSION="${BUILD_VERSION:-}"
 BUILD_PHASE="${BUILD_PHASE:-auto}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-upgrade-smoke.localflynn.com}"
 APP_NAME="${APP_NAME:-upgrade-smoke}"
+DOCKER_APP_NAME="${DOCKER_APP_NAME:-upgrade-smoke-docker}"
 REPO_IN_VM="/root/go/src/github.com/flynn/flynn"
 CLI_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 
@@ -104,12 +123,16 @@ NODE1_IP="${CLUSTER_NET_PREFIX}.$((CLUSTER_IP_OFFSET + 1))"
 ALL_CLUSTER_NODES=()
 ALL_CLUSTER_IPS=()
 # apply_topology sets NODES / NODE_IPS / PEER_IPS / MIN_HOSTS per run.
+# NODES is the live Flynn cluster. TEARDOWN_NODES is every VM this topology
+# created (includes a drained host after remove).
 NODES=(node1)
 NODE_IPS=("${NODE1_IP}")
 PEER_IPS="${NODE1_IP}"
+TEARDOWN_NODES=(node1)
 MIN_HOSTS=1
 TOPOLOGY_SIZE=1
 TOPOLOGY_LABEL="1-node"
+TOPOLOGY_ACTION=""
 CHECK_PHASE_PREFIX=""
 TOPOLOGIES=()
 BOOTSTRAP_JOB_TIMEOUT="${BOOTSTRAP_JOB_TIMEOUT:-600}"
@@ -127,6 +150,7 @@ SKIP_INSTALL="${SKIP_INSTALL:-0}"
 SKIP_DEPLOY="${SKIP_DEPLOY:-0}"
 SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
+SKIP_BACKUP="${SKIP_BACKUP:-0}"
 SKIP_CLI="${SKIP_CLI:-0}"
 if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
   :
@@ -147,11 +171,18 @@ DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 SMOKE_UNIT_PACKAGES=(
   ./cli/
   ./controller/types/
+  ./controller/authz/
+  ./pkg/httphelper/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
   ./pkg/iptables/
+  ./pkg/netpolicy/
+  ./pkg/squashfs/
+  ./pkg/dockerimage/
   ./appliance/clickhouse/
   ./appliance/redis/
+  ./appliance/kafka/
+  ./appliance/postgresql/cmd/flynn-postgres-api/
   ./updater/
 )
 
@@ -217,8 +248,28 @@ require_bin() {
   done
 }
 
+# Map Postgres boolean text to t/f. A bare boolean column is t/f; concatenating
+# booleans with || prints true/false (seen 2026-09-13 cli-pg-connect).
+smoke_pg_tf() {
+  local s
+  s="$(printf '%s' "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  s="${s//true/t}"
+  s="${s//false/f}"
+  printf '%s' "${s}"
+}
+
+# Collapse a detail string to one line of visible text (no ANSI, no tabs).
+smoke_plain_detail() {
+  local detail=$1
+  detail="$(ui_strip_ansi "${detail}")"
+  detail="${detail//$'\t'/ }"
+  detail="${detail//$'\n'/ }"
+  printf '%s' "${detail}" | tr -s ' '
+}
+
 record() {
   local name=$1 status=$2 seconds=$3 detail=${4:-}
+  detail="$(smoke_plain_detail "${detail}")"
   RESULT_NAMES+=("${name}")
   RESULT_STATUS+=("${status}")
   RESULT_SECONDS+=("${seconds}")
@@ -235,8 +286,7 @@ record_check() {
   if [[ -n "${CHECK_PHASE_PREFIX:-}" ]]; then
     phase="${CHECK_PHASE_PREFIX}${phase}"
   fi
-  detail="${detail//$'\t'/ }"
-  detail="${detail//$'\n'/ }"
+  detail="$(smoke_plain_detail "${detail}")"
   printf '%s\t%s\t%s\t%s\n' "${phase}" "${name}" "${status}" "${detail}" >> "${CHECK_FILE}"
   if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
     OVERALL_FAILED=1
@@ -247,8 +297,7 @@ record_check() {
 # subshell). Failures here abort before Vagrant up.
 record_unit_check() {
   local kind=$1 name=$2 status=$3 detail=${4:-}
-  detail="${detail//$'\t'/ }"
-  detail="${detail//$'\n'/ }"
+  detail="$(smoke_plain_detail "${detail}")"
   printf '%s\t%s\t%s\t%s\n' "${kind}" "${name}" "${status}" "${detail}" >> "${UNIT_CHECK_FILE}"
   if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
     OVERALL_FAILED=1
@@ -260,7 +309,11 @@ step_log_summary() {
     echo ""
     return
   fi
-  awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" | tr '\n' ' ' | cut -c1-160
+  awk 'NF { p=$0 } END { print p }' "${LAST_STEP_LOG}" \
+    | tr '\n' ' ' \
+    | ui_strip_ansi \
+    | tr -s ' ' \
+    | cut -c1-160
 }
 
 # Prefer the actual failure over go-test coverage noise / apt Get:1 lines.
@@ -276,10 +329,62 @@ step_fail_summary() {
     err="$(printf '%s\n' "${detail}" | grep -E 'WARNING: DATA RACE|^--- FAIL:|^FAIL	|race detected|panic:|^E: |Err:|Failed to fetch|apt-get .* failed|make: \*\*\*' | tail -n 3 | tr '\n' ' ')"
   fi
   if [[ -n "${err}" ]]; then
-    echo "${err}" | cut -c1-200
+    echo "${err}" | ui_strip_ansi | tr -s ' ' | cut -c1-200
     return
   fi
-  echo "${detail}" | tr '\n' ' ' | cut -c1-160
+  echo "${detail}" | tr '\n' ' ' | ui_strip_ansi | tr -s ' ' | cut -c1-160
+}
+
+# Terminal width for report tables. Prefer COLUMNS (Cursor/ssh often set it);
+# fall back to tput, then 120 so a typical laptop window does not wrap.
+smoke_term_cols() {
+  local cols="${COLUMNS:-}"
+  if [[ -z "${cols}" || "${cols}" -lt 40 ]]; then
+    if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+      cols="$(tput cols 2>/dev/null || true)"
+    fi
+  fi
+  if [[ -z "${cols}" || "${cols}" -lt 80 ]]; then
+    cols=120
+  fi
+  printf '%s' "${cols}"
+}
+
+# Grow a column to fit `n`, then cap so one long cell cannot blow the table.
+smoke_col_cap() {
+  local n=$1
+  local cap=$2
+  if [[ "${n}" -gt "${cap}" ]]; then
+    printf '%s' "${cap}"
+  else
+    printf '%s' "${n}"
+  fi
+}
+
+# Remaining columns for Detail. `used` is everything before the last cell
+# (`| ` cells ` | ` ... ` | `). Min 24 so FAIL snippets stay readable; max 60
+# so a huge terminal does not dump whole CLI tables.
+smoke_detail_width() {
+  local used=$1
+  local remaining
+  remaining=$(( $(smoke_term_cols) - used ))
+  if [[ "${remaining}" -lt 24 ]]; then
+    remaining=24
+  fi
+  if [[ "${remaining}" -gt 60 ]]; then
+    remaining=60
+  fi
+  printf '%s' "${remaining}"
+}
+
+# `|----+----|` matching ui_table_cell widths (two padding spaces per cell).
+smoke_table_rule() {
+  local w
+  printf '|'
+  for w in "$@"; do
+    printf '%s|' "$(printf '%*s' $((w + 2)) '' | tr ' ' '-')"
+  done
+  printf '\n'
 }
 
 print_unit_report() {
@@ -292,24 +397,54 @@ print_unit_report() {
     echo "================================================================================"
     return
   fi
-  printf "| %-8s | %-48s | %-6s | %s\n" "Kind" "Check" "Status" "Detail"
-  printf "|----------|--------------------------------------------------|--------|%s\n" "----------------------------------------"
+  local kind_w=4 check_w=5
   local kind name status detail failed=0 total=0
   while IFS=$'\t' read -r kind name status detail; do
     [[ -z "${kind}" ]] && continue
     total=$((total + 1))
+    if [[ ${#kind} -gt ${kind_w} ]]; then
+      kind_w=${#kind}
+    fi
+    if [[ ${#name} -gt ${check_w} ]]; then
+      check_w=${#name}
+    fi
+  done < "${UNIT_CHECK_FILE}"
+  local tot_label="${total} checks"
+  if [[ ${#tot_label} -gt ${check_w} ]]; then
+    check_w=${#tot_label}
+  fi
+  kind_w="$(smoke_col_cap "${kind_w}" 10)"
+  check_w="$(smoke_col_cap "${check_w}" 48)"
+  local detail_w
+  detail_w="$(smoke_detail_width $((19 + kind_w + check_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Kind" "${kind_w}")" \
+    "$(ui_table_cell "Check" "${check_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${kind_w}" "${check_w}" 6 "${detail_w}"
+  while IFS=$'\t' read -r kind name status detail; do
+    [[ -z "${kind}" ]] && continue
     if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-8s | %-48s | %s | %s\n" "${kind}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${kind}" "${kind_w}")" \
+      "$(ui_table_cell "${name}" "${check_w}")" \
+      "$(ui_status_text "${status}")" \
+      "$(ui_table_cell "${detail}" "${detail_w}")"
   done < "${UNIT_CHECK_FILE}"
   local tot_status="PASS" tot_detail="all host unit tests passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-8s | %-48s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "TOTAL" "${kind_w}")" \
+    "$(ui_table_cell "${tot_label}" "${check_w}")" \
+    "$(ui_status_text "${tot_status}")" \
+    "$(ui_table_cell "${tot_detail}" "${detail_w}")"
   ui_banner "================================================================================"
 }
 
@@ -317,7 +452,7 @@ print_datastore_report() {
   echo
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
-  echo " app=${APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
+  echo " app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
@@ -325,24 +460,55 @@ print_datastore_report() {
     echo "================================================================================"
     return
   fi
-  printf "| %-24s | %-16s | %-6s | %s\n" "Phase" "Check" "Status" "Detail"
-  printf "|--------------------------|------------------|--------|%s\n" "----------------------------------------"
+  local phase_w=5 check_w=5
   local phase name status detail failed=0 total=0
   while IFS=$'\t' read -r phase name status detail; do
     [[ -z "${phase}" ]] && continue
     total=$((total + 1))
+    if [[ ${#phase} -gt ${phase_w} ]]; then
+      phase_w=${#phase}
+    fi
+    if [[ ${#name} -gt ${check_w} ]]; then
+      check_w=${#name}
+    fi
+  done < "${CHECK_FILE}"
+  local tot_label="${total} checks"
+  if [[ ${#tot_label} -gt ${check_w} ]]; then
+    check_w=${#tot_label}
+  fi
+  # 3-node-remove/post-upgrade-2 is 28; docker-cli-run-image is 20.
+  phase_w="$(smoke_col_cap "${phase_w}" 32)"
+  check_w="$(smoke_col_cap "${check_w}" 24)"
+  local detail_w
+  detail_w="$(smoke_detail_width $((19 + phase_w + check_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Phase" "${phase_w}")" \
+    "$(ui_table_cell "Check" "${check_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${phase_w}" "${check_w}" 6 "${detail_w}"
+  while IFS=$'\t' read -r phase name status detail; do
+    [[ -z "${phase}" ]] && continue
     if [[ "${status}" != "PASS" && "${status}" != "SKIP" ]]; then
       failed=$((failed + 1))
       OVERALL_FAILED=1
     fi
-    printf "| %-24s | %-16s | %s | %s\n" "${phase}" "${name}" "$(ui_status_text "${status}")" "${detail}"
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${phase}" "${phase_w}")" \
+      "$(ui_table_cell "${name}" "${check_w}")" \
+      "$(ui_status_text "${status}")" \
+      "$(ui_table_cell "${detail}" "${detail_w}")"
   done < "${CHECK_FILE}"
   local tot_status="PASS" tot_detail="all app/CLI/DB checks passed"
   if [[ ${failed} -ne 0 ]]; then
     tot_status="FAIL"
     tot_detail="${failed} failed"
   fi
-  printf "| %-24s | %-16s | %s | %s\n" "TOTAL" "${total} checks" "$(ui_status_text "${tot_status}")" "${tot_detail}"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "TOTAL" "${phase_w}")" \
+    "$(ui_table_cell "${tot_label}" "${check_w}")" \
+    "$(ui_status_text "${tot_status}")" \
+    "$(ui_table_cell "${tot_detail}" "${detail_w}")"
   ui_banner "================================================================================"
 }
 
@@ -356,23 +522,45 @@ print_results_table() {
   echo
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
-  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}"
+  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}"
   echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
   fi
   ui_banner "================================================================================"
-  printf "| %-48s | %-6s | %8s | %s\n" "Step" "Status" "Duration" "Detail"
-  printf "|--------------------------------------------------|--------|----------|%s\n" "----------------------------------------"
+  local step_w=4
   local i
   for i in "${!RESULT_NAMES[@]}"; do
-    printf "| %-48s | %s | %7ss | %s\n" \
-      "${RESULT_NAMES[$i]}" \
-      "$(ui_status_text "${RESULT_STATUS[$i]}")" \
-      "${RESULT_SECONDS[$i]}" \
-      "${RESULT_DETAIL[$i]}"
+    if [[ ${#RESULT_NAMES[$i]} -gt ${step_w} ]]; then
+      step_w=${#RESULT_NAMES[$i]}
+    fi
   done
-  printf "| %-48s | %s | %7ss | %s\n" "OVERALL" "$(ui_status_text "${overall}")" "${total}" ""
+  if [[ ${step_w} -lt 8 ]]; then
+    step_w=8
+  fi
+  # Verify app/DBs after upgrade 2/2 (3-node-remove) is 49.
+  step_w="$(smoke_col_cap "${step_w}" 56)"
+  local detail_w
+  # `| ` step ` | ` status ` | ` duration ` | ` detail ` |`  => 27 + step + detail
+  detail_w="$(smoke_detail_width $((27 + step_w)))"
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "Step" "${step_w}")" \
+    "$(ui_table_cell "Status" 6)" \
+    "$(ui_table_cell "Duration" 8)" \
+    "$(ui_table_cell "Detail" "${detail_w}")"
+  smoke_table_rule "${step_w}" 6 8 "${detail_w}"
+  for i in "${!RESULT_NAMES[@]}"; do
+    printf '| %s | %s | %s | %s |\n' \
+      "$(ui_table_cell "${RESULT_NAMES[$i]}" "${step_w}")" \
+      "$(ui_status_text "${RESULT_STATUS[$i]}")" \
+      "$(printf '%8s' "${RESULT_SECONDS[$i]}s")" \
+      "$(ui_table_cell "${RESULT_DETAIL[$i]}" "${detail_w}")"
+  done
+  printf '| %s | %s | %s | %s |\n' \
+    "$(ui_table_cell "OVERALL" "${step_w}")" \
+    "$(ui_status_text "${overall}")" \
+    "$(printf '%8s' "${total}s")" \
+    "$(ui_table_cell "" "${detail_w}")"
   ui_banner "================================================================================"
   print_unit_report
   print_datastore_report
@@ -444,8 +632,16 @@ smoke_stop_detail_tail() {
   fi
 }
 
+# macOS still has /dev/tty with no controlling terminal; opening it then
+# fails with "Device not configured" and trips set -e (agent / no-TTY runs).
+smoke_tty_usable() {
+  { exec 3<>/dev/tty; } 2>/dev/null || return 1
+  exec 3>&-
+  return 0
+}
+
 smoke_restore_tty() {
-  if [[ -n "${SMOKE_STTY_SAVED:-}" ]] && [[ -e /dev/tty ]]; then
+  if [[ -n "${SMOKE_STTY_SAVED:-}" ]] && smoke_tty_usable; then
     stty "${SMOKE_STTY_SAVED}" < /dev/tty 2>/dev/null || true
   fi
   SMOKE_STTY_SAVED=""
@@ -456,7 +652,7 @@ smoke_restore_tty() {
 # terminal, so we disable rprnt/echo and read the byte from /dev/tty.
 smoke_prepare_tty() {
   [[ "${SMOKE_DETAIL}" == "1" ]] && return 0
-  [[ -e /dev/tty ]] || return 0
+  smoke_tty_usable || return 0
   SMOKE_STTY_SAVED="$(stty -g < /dev/tty 2>/dev/null || true)"
   [[ -n "${SMOKE_STTY_SAVED}" ]] || return 0
   stty -echo -echoctl < /dev/tty 2>/dev/null || true
@@ -487,7 +683,7 @@ smoke_toggle_detail() {
   SMOKE_DETAIL_LIVE=1
   _UI_COLLAPSE_BODY=0
   info "command output shown — Ctrl+R to hide"
-  if [[ -e /dev/tty ]] && [[ -f "${LAST_STEP_LOG}" ]]; then
+  if smoke_tty_usable && [[ -f "${LAST_STEP_LOG}" ]]; then
     tail -n 80 -f "${LAST_STEP_LOG}" >/dev/tty 2>/dev/null &
     SMOKE_DETAIL_TAIL_PID=$!
   fi
@@ -497,7 +693,7 @@ smoke_toggle_detail() {
 # not trip the ERR trap. Swallow the key so it never echoes as ^R.
 smoke_poll_detail_key() {
   local key=""
-  [[ -e /dev/tty ]] || return 0
+  smoke_tty_usable || return 0
   read -t 1 -n 1 -s key < /dev/tty || true
   if [[ "${key}" == $'\x12' ]]; then
     smoke_toggle_detail
@@ -506,7 +702,7 @@ smoke_poll_detail_key() {
 
 smoke_wait_collapsed_step() {
   local wrapper=$1
-  if [[ ! -e /dev/tty ]]; then
+  if ! smoke_tty_usable; then
     wait "${wrapper}" || true
     return 0
   fi
@@ -613,6 +809,24 @@ node_ssh_config_path() {
   echo "${ROOT}/.vagrant-upgrade-smoke-tmp/ssh-${1}.config"
 }
 
+vagrant_vm_running() {
+  local node=$1
+  vagrant status "${node}" 2>/dev/null | grep -qE "^${node}[[:space:]]+running"
+}
+
+# SKIP_VAGRANT_UP=1 only works when that VM is already up. A failed smoke
+# destroys VMs unless KEEP_VMS_ON_FAIL=1 (KEEP_BUILDER only applies on success).
+require_vm_running_for_skip() {
+  local node=$1
+  if vagrant_vm_running "${node}"; then
+    return 0
+  fi
+  echo "SKIP_VAGRANT_UP=1 but ${node} is not running." >&2
+  echo "The previous smoke likely destroyed VMs (KEEP_VMS_ON_FAIL default is destroy; KEEP_BUILDER only keeps the builder on success)." >&2
+  echo "Re-run without SKIP_VAGRANT_UP=1. SKIP_BUILD=1 is fine if build/release/flynn-\${BUILD_VERSION}.tar.gz exists." >&2
+  return 1
+}
+
 cache_node_ssh_config() {
   local node=$1
   local cfg tmp i
@@ -628,6 +842,9 @@ cache_node_ssh_config() {
   done
   rm -f "${tmp}"
   echo "failed to read vagrant ssh-config for ${node}" >&2
+  if ! vagrant_vm_running "${node}"; then
+    echo "hint: ${node} is not running; omit SKIP_VAGRANT_UP=1 or run: vagrant up ${node}" >&2
+  fi
   return 1
 }
 
@@ -751,6 +968,20 @@ tarball_vm_path() {
   echo "${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 }
 
+# Cluster backup lives on the synced folder (survives --clean) and a copy in
+# /tmp on node1 (fast local read during bootstrap --from-backup).
+backup_host_path() {
+  echo "${ROOT}/build/release/smoke-backup-${TOPOLOGY_LABEL}.tar"
+}
+
+backup_vm_path() {
+  echo "${REPO_IN_VM}/build/release/smoke-backup-${TOPOLOGY_LABEL}.tar"
+}
+
+backup_restore_path() {
+  echo "/tmp/flynn-smoke-backup.tar"
+}
+
 resolve_built_tarball() {
   local path
   path="$(tarball_host_path)"
@@ -770,7 +1001,7 @@ configure_node_dns() {
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
@@ -899,6 +1130,11 @@ for ip in ${bridges}; do
 done
 echo "-- postgres meta --"
 curl -fsS --max-time 3 http://127.0.0.1:1111/services/postgres/meta 2>&1 | head -c 500; echo
+echo "-- flynn-host --"
+systemctl is-active flynn-host.service 2>/dev/null || true
+command -v ipset >/dev/null && echo "ipset=\$(command -v ipset)" || echo "ipset=MISSING"
+journalctl -u flynn-host.service -n 40 --no-pager 2>/dev/null || true
+grep -E 'error configuring network|error enabling job isolation|ipset not found' /var/log/flynn/flynn-host.log 2>/dev/null | tail -n 20 || true
 EOF
   done
 }
@@ -954,8 +1190,39 @@ watch_overlay_during_bootstrap() {
     echo "overlay watch: flannel/flynnbr0 not up within 240s" > "${fail_file}"
     return 1
   fi
+  # ConfigureNetworking creates flynnbr0 then EnableJobIsolation; missing ipset
+  # fatals flynn-host while the bridge is already up (wait-hosts then burns 10m).
+  local node
+  for node in "${NODES[@]}"; do
+    if ! node_root_script "${node}" <<'EOF' >/dev/null 2>&1
+set -euo pipefail
+systemctl is-active --quiet flynn-host.service
+EOF
+    then
+      echo "overlay watch: flynn-host died on ${node} after flynnbr0 came up (often missing ipset)" > "${fail_file}"
+      dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
+      node_root_script node1 <<'EOF' >/dev/null 2>&1 || true
+pkill -f 'flynn-host bootstrap' || true
+EOF
+      return 1
+    fi
+  done
   # Allow remote subnet routes / FDB entries to settle, then require reachability.
   sleep 20
+  for node in "${NODES[@]}"; do
+    if ! node_root_script "${node}" <<'EOF' >/dev/null 2>&1
+set -euo pipefail
+systemctl is-active --quiet flynn-host.service
+EOF
+    then
+      echo "overlay watch: flynn-host died on ${node} after overlay settle (often missing ipset)" > "${fail_file}"
+      dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
+      node_root_script node1 <<'EOF' >/dev/null 2>&1 || true
+pkill -f 'flynn-host bootstrap' || true
+EOF
+      return 1
+    fi
+  done
   if ! overlay_peers_reachable >>"${LAST_STEP_LOG}" 2>&1; then
     dump_overlay_diagnostics >>"${LAST_STEP_LOG}" 2>&1 || true
     echo "overlay peer bridges unreachable after flannel up" > "${fail_file}"
@@ -1030,6 +1297,33 @@ redis_is_ready() {
   flynn1 -a "${APP_NAME}" redis redis-cli PING | grep -qi PONG
 }
 
+# Kafka/ClickHouse volume data is not in flynn cluster backup. After restore
+# the brokers come back empty; these only prove the CLI/engine is up.
+kafka_is_ready() {
+  flynn1 -a "${APP_NAME}" kafka topics >/dev/null 2>&1
+}
+
+clickhouse_ping() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
+  [[ "$(echo "${out}" | tr -d '[:space:]')" == "1" ]]
+}
+
+# ClickHouse seed uses local MergeTree plus HTTP replica fan-out. After a node
+# join/drain the CLI can briefly return CH "unknown_error" instead of a count;
+# do not let that abort the step under set -e.
+clickhouse_row_count() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows" 2>/dev/null || true)"
+  numeric_count "${out}"
+}
+
+clickhouse_seed_ready() {
+  local count
+  count="$(clickhouse_row_count)"
+  [[ -n "${count}" && "${count}" -ge "${SMOKE_SEED_ROWS}" ]]
+}
+
 # Sirenia appliances that exist as discoverd services. postgres is scaled during
 # bootstrap; mariadb/mongodb stay at 0 processes until the first resource add.
 # Redis is not sirenia — PING via the app's REDIS_URL after it is provisioned.
@@ -1056,19 +1350,28 @@ wait_datastores_ready() {
       redis)
         wait_for "redis PING ${suffix}" 180 redis_is_ready || return 1
         ;;
+      kafka)
+        wait_for "kafka topics ${suffix}" 180 kafka_is_ready || return 1
+        ;;
+      clickhouse)
+        wait_for "clickhouse smoke_db.rows ${suffix}" 300 clickhouse_seed_ready || return 1
+        ;;
+      clickhouse-ping)
+        wait_for "clickhouse SELECT 1 ${suffix}" 180 clickhouse_ping || return 1
+        ;;
+      *)
+        echo "wait_datastores_ready: unknown service ${svc}" >&2
+        return 1
+        ;;
     esac
   done
 }
 
 ensure_flynn_cli_on_node1() {
-  # A present-but-wrong-arch binary (e.g. amd64 on an arm64 VM) exists yet
-  # fails with "Exec format error", so test execution, not just presence.
-  if node_ssh node1 'flynn version >/dev/null 2>&1'; then
-    return 0
-  fi
+  # Prefer the synced local CLI even when /usr/local/bin/flynn already works.
+  # SKIP_BUILD leaves the tarball CLI in place; overlaying build/bin picks up
+  # CLI fixes (e.g. redis-cli leader DNS) without rebuilding images.
   info "installing Flynn CLI on node1"
-  # Prefer a CLI binary from the local build (synced folder), matching the
-  # node's architecture; fall back to the published installer.
   node_root_script node1 <<EOF
 set -euo pipefail
 case "\$(uname -m)" in
@@ -1081,6 +1384,8 @@ src="${REPO_IN_VM}/build/bin/flynn-linux-\${cli_arch}"
 if [[ -x "\${src}" ]]; then
   echo "installing \${src} (node arch \$(uname -m))"
   install -m 0755 "\${src}" /usr/local/bin/flynn
+elif flynn version >/dev/null 2>&1; then
+  echo "keeping existing flynn CLI (\${src} missing)"
 else
   echo "no local CLI for \${cli_arch}; using installer from ${CLI_REPO}"
   curl -fsSL "https://raw.githubusercontent.com/${CLI_REPO}/main/script/install-flynn-cli" \
@@ -1141,13 +1446,293 @@ flynn1() {
   node_ssh node1 "sudo -H flynn ${args_q}" </dev/null
 }
 
+cluster_host_count() {
+  node_ssh node1 'sudo flynn-host list' </dev/null | awk 'NR>1 && NF>=2 {c++} END{print c+0}'
+}
+
+hosts_listed_at_least() {
+  local want=$1
+  local n
+  n="$(cluster_host_count)"
+  [[ "${n}" -ge "${want}" ]]
+}
+
+hosts_listed_exactly() {
+  local want=$1
+  local n
+  n="$(cluster_host_count)"
+  [[ "${n}" -eq "${want}" ]]
+}
+
+node_addr_listed() {
+  local ip=$1
+  node_ssh node1 'sudo flynn-host list' </dev/null | grep -F "${ip}"
+}
+
+host_addr_gone() {
+  local ip=$1
+  ! node_addr_listed "${ip}" >/dev/null 2>&1
+}
+
+# flynn-host systemd uses KillMode=process so `systemctl stop` leaves containers
+# running (needed for non-destructive updater restarts). A real node drain must
+# DELETE jobs via the local host API while the daemon is still up.
+drain_host_jobs() {
+  local node=$1
+  info "draining jobs on ${node} via local host API"
+  node_root_script "${node}" <<'EOF'
+set -euo pipefail
+python3 - <<'PY'
+import json, sys, urllib.error, urllib.parse, urllib.request
+
+def load_key():
+    try:
+        with open("/etc/flynn/host.json") as f:
+            env = (json.load(f) or {}).get("env") or {}
+        return env.get("FLYNN_HOST_AUTH_KEY") or ""
+    except FileNotFoundError:
+        return ""
+
+def req(method, path, key):
+    url = "http://127.0.0.1:1113" + path
+    r = urllib.request.Request(url, method=method)
+    if key:
+        r.add_header("Auth-Key", key)
+    try:
+        with urllib.request.urlopen(r, timeout=60) as resp:
+            body = resp.read()
+            return resp.status, body
+    except urllib.error.HTTPError as e:
+        return e.code, e.read()
+
+def list_active(key):
+    code, body = req("GET", "/host/jobs?active=true", key)
+    if code != 200:
+        sys.exit("list jobs failed HTTP %s: %s" % (code, body[:300]))
+    data = json.loads(body.decode() or "{}")
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list):
+        out = {}
+        for job in data:
+            jid = ((job.get("job") or {}).get("id")) or job.get("id")
+            if jid:
+                out[jid] = job
+        return out
+    sys.exit("unexpected /host/jobs payload: %s" % type(data).__name__)
+
+def is_discoverd(job):
+    j = job.get("job") or {}
+    md = j.get("metadata") or {}
+    name = (md.get("flynn-controller.app_name") or "").lower()
+    args = " ".join((j.get("config") or {}).get("args") or [])
+    blob = " ".join([name, args, j.get("id") or ""])
+    return "discoverd" in blob
+
+def stop_one(jid, key):
+    path = "/host/jobs/" + urllib.parse.quote(jid, safe="")
+    code, body = req("DELETE", path, key)
+    if code in (200, 404):
+        print("stopped %s (HTTP %s)" % (jid, code))
+        return
+    print("stop %s failed HTTP %s: %s" % (jid, code, body[:200]), file=sys.stderr)
+
+import time
+key = load_key()
+stopped = 0
+left = {}
+for _pass in range(5):
+    jobs = list_active(key)
+    if not jobs:
+        left = {}
+        break
+    first = [(jid, job) for jid, job in jobs.items() if not is_discoverd(job)]
+    last = [(jid, job) for jid, job in jobs.items() if is_discoverd(job)]
+    for jid, _job in first + last:
+        stop_one(jid, key)
+        stopped += 1
+    time.sleep(1)
+    left = list_active(key)
+if left:
+    print("jobs still active after drain (scheduler may have replaced them; daemon stop + kill leftovers next): %s" % ",".join(sorted(left)))
+else:
+    print("drained %d jobs" % stopped)
+PY
+EOF
+}
+
+# systemd KillMode=process leaves containers running after flynn-host exits.
+kill_leftover_containers() {
+  local node=$1
+  info "killing leftover containers on ${node}"
+  node_root_script "${node}" <<'EOF'
+set -euo pipefail
+pkill -KILL -f '/.containerinit' || true
+pkill -KILL -f '^/bin/discoverd' || true
+pkill -KILL -f '^/usr/bin/flanneld' || true
+sleep 1
+leftover="$(pgrep -af '/.containerinit' || true)"
+if [[ -n "${leftover}" ]]; then
+  echo "containerinit still running:" >&2
+  echo "${leftover}" >&2
+  exit 1
+fi
+echo "no leftover containerinit on $(hostname)"
+EOF
+}
+
+# True when no discoverd instance advertises a job that ran on prefix (e.g. node3).
+discoverd_host_jobs_gone() {
+  local prefix=$1
+  node_root_script node1 <<EOF
+set -euo pipefail
+export DRAIN_PREFIX="${prefix}"
+python3 - <<'PY'
+import json, os, sys, urllib.request
+
+prefix = os.environ["DRAIN_PREFIX"] + "-"
+services = ("postgres", "mariadb", "mongodb", "redis", "flynn-host")
+
+def get(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.load(r)
+
+leftover = []
+for svc in services:
+    try:
+        insts = get("http://127.0.0.1:1111/services/%s/instances" % svc)
+    except Exception as e:
+        # Service may not exist yet (or already gone).
+        continue
+    if not isinstance(insts, list):
+        continue
+    for inst in insts:
+        meta = inst.get("meta") or {}
+        jid = meta.get("FLYNN_JOB_ID") or ""
+        hid = meta.get("id") or inst.get("id") or ""
+        if jid.startswith(prefix) or hid == os.environ["DRAIN_PREFIX"] or str(hid).startswith(prefix):
+            leftover.append("%s:%s" % (svc, jid or hid))
+if leftover:
+    sys.exit("discoverd still has %s jobs: %s" % (os.environ["DRAIN_PREFIX"], ",".join(leftover)))
+print("discoverd has no %s jobs" % os.environ["DRAIN_PREFIX"])
+PY
+EOF
+}
+
+sirenia_primary_not_on_host() {
+  local service=$1
+  local prefix=$2
+  node_root_script node1 <<EOF
+set -euo pipefail
+export SIRENIA_SERVICE="${service}"
+export DRAIN_PREFIX="${prefix}"
+python3 - <<'PY'
+import json, os, sys, urllib.request
+
+def get(url):
+    with urllib.request.urlopen(url, timeout=5) as r:
+        return json.load(r)
+
+service = os.environ["SIRENIA_SERVICE"]
+prefix = os.environ["DRAIN_PREFIX"] + "-"
+meta = get("http://127.0.0.1:1111/services/%s/meta" % service)
+data = meta.get("data", meta)
+state = json.loads(data) if isinstance(data, str) else data
+primary = state.get("primary") or {}
+job_id = (primary.get("meta") or {}).get("FLYNN_JOB_ID") or ""
+if not job_id:
+    sys.exit("no %s primary job id in meta" % service)
+if job_id.startswith(prefix):
+    sys.exit("%s primary still on %s: %s" % (service, os.environ["DRAIN_PREFIX"], job_id))
+print("%s primary %s" % (service, job_id))
+PY
+EOF
+}
+
+sync_peer_ips_from_nodes() {
+  local saved_ifs="${IFS}"
+  IFS=,
+  PEER_IPS="${NODE_IPS[*]}"
+  IFS="${saved_ifs}"
+}
+
+append_live_node() {
+  local node=$1
+  local n="${node#node}"
+  local ip i
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" == "${node}" ]]; then
+      return 0
+    fi
+  done
+  ip="$(cluster_node_ip "${n}")"
+  NODES+=("${node}")
+  NODE_IPS+=("${ip}")
+  sync_peer_ips_from_nodes
+}
+
+remember_teardown_node() {
+  local node=$1 i
+  for i in "${!TEARDOWN_NODES[@]}"; do
+    if [[ "${TEARDOWN_NODES[$i]}" == "${node}" ]]; then
+      return 0
+    fi
+  done
+  TEARDOWN_NODES+=("${node}")
+}
+
+drop_live_node() {
+  local drop=$1
+  local new_nodes=() new_ips=() i
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" != "${drop}" ]]; then
+      new_nodes+=("${NODES[$i]}")
+      new_ips+=("${NODE_IPS[$i]}")
+    fi
+  done
+  NODES=("${new_nodes[@]}")
+  NODE_IPS=("${new_ips[@]}")
+  sync_peer_ips_from_nodes
+}
+
+# Backup still lists every original host. After drain, NODES is the live
+# subset; --clean + bootstrap --from-backup on that subset waits forever
+# (3-node-remove 2026-09-13: min-hosts=3, 0 online, no flynnbr0).
+restore_drained_inventory() {
+  if [[ ${#TEARDOWN_NODES[@]} -le ${#NODES[@]} ]]; then
+    return 0
+  fi
+  info "restore inventory ${NODES[*]} -> ${TEARDOWN_NODES[*]} (backup lists drained hosts)"
+  NODES=("${TEARDOWN_NODES[@]}")
+  NODE_IPS=()
+  local node num
+  for node in "${NODES[@]}"; do
+    num="${node#node}"
+    NODE_IPS+=("$(cluster_node_ip "${num}")")
+  done
+  sync_peer_ips_from_nodes
+  MIN_HOSTS="${#NODES[@]}"
+}
+
 step_host_unit_tests() {
   local failed=0 start elapsed rc
   local script pkg name
   local packages=( "${SMOKE_UNIT_PACKAGES[@]}" )
 
-  echo "host unit-test gate: smoke regressions + Darwin-safe Go packages"
+  echo "host unit-test gate: gofmt -s, smoke regressions, Darwin-safe Go packages"
   echo "failures abort before Vagrant up / cluster build"
+
+  echo "==> gofmt (util/commit-validator/validate-gofmt, same as GitHub Actions)"
+  start="$(date +%s)"
+  if ( cd "${ROOT}" && util/commit-validator/validate-gofmt ); then
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "gofmt" "validate-gofmt" "PASS" "${elapsed}s"
+  else
+    rc=$?
+    elapsed=$(( $(date +%s) - start ))
+    record_unit_check "gofmt" "validate-gofmt" "FAIL" "exit ${rc} ${elapsed}s"
+    failed=1
+  fi
 
   local smoke_scripts=( "${ROOT}"/script/test-vagrant-smoke-*.sh )
   if [[ ${#smoke_scripts[@]} -eq 0 ]]; then
@@ -1171,7 +1756,7 @@ step_host_unit_tests() {
   done
 
   if [[ "$(uname -s)" == "Linux" ]]; then
-    packages+=( ./flannel/backend/vxlan/ )
+    packages+=( ./flannel/backend/vxlan/ ./builder/ )
   fi
 
   for pkg in "${packages[@]}"; do
@@ -1333,13 +1918,26 @@ if [[ ! -x /usr/local/go/bin/go ]]; then
   exit 1
 fi
 
+# Job isolation (EnableJobIsolation) needs ipset on this VM, not only in the
+# cluster host squashfs. Existing builders skipped the setup.sh package add.
+# shellcheck disable=SC1091
+source "${REPO_IN_VM}/script/lib/apt-retry.sh"
+flynn_apt_install_conf
+if ! command -v ipset >/dev/null 2>&1; then
+  echo "===> installing ipset on builder (required for flynn-host job isolation)"
+  export DEBIAN_FRONTEND=noninteractive
+  flynn_apt_cmd install -y ipset
+fi
+
 transient_build_failure() {
-  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 ' "\$1"
+  [[ -f "\$1" ]] || return 1
+  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 |Couldn.t create temporary file /tmp/apt.conf' "\$1"
 }
 
 attempt=1
 max="${FLYNN_BUILD_ATTEMPTS}"
-log="/tmp/flynn-build-attempt.log"
+mkdir -p "${REPO_IN_VM}/build"
+log="${REPO_IN_VM}/build/flynn-build-attempt.log"
 while true; do
   echo "===> build attempt \${attempt}/\${max} version=${BUILD_VERSION} phase=${phase}"
   rc=0
@@ -1362,6 +1960,11 @@ while true; do
 done
 test -f "$(tarball_vm_path)"
 ls -lh "$(tarball_vm_path)"
+if [[ -f "${REPO_IN_VM}/build/images.json" ]]; then
+  echo "===> unique squashfs layer sizes"
+  bash "${REPO_IN_VM}/script/report-image-sizes.sh" "${REPO_IN_VM}/build/images.json" \
+    | tee "${REPO_IN_VM}/build/image-size-report.txt"
+fi
 EOF
 
   # Synced folder: builder write is visible on the host and on cluster nodes.
@@ -1378,15 +1981,12 @@ EOF
   echo "built $(basename "${BUILT_TARBALL}") ($(du -h "${BUILT_TARBALL}" | awk '{print $1}'))"
 }
 
-step_install_flynn() {
-  resolve_built_tarball
+install_flynn_on_node() {
+  local node=$1
   local tarball_in_vm
   tarball_in_vm="$(tarball_vm_path)"
-
-  local node
-  for node in "${NODES[@]}"; do
-    info "installing local build ${BUILD_VERSION} on ${node} from synced tarball"
-    node_root_script "${node}" <<EOF
+  info "installing local build ${BUILD_VERSION} on ${node} from synced tarball"
+  node_root_script "${node}" <<EOF
 set -euo pipefail
 tarball="${tarball_in_vm}"
 # Wait briefly for VirtualBox synced-folder visibility after builder write.
@@ -1411,6 +2011,14 @@ if [[ -e /usr/local/bin/flynn-host || -d /var/lib/flynn ]]; then
   extra_args+=(--clean)
 fi
 bash "\${install_script}" --yes --no-ntp "\${extra_args[@]}" --tarball "\${tarball}"
+# EnableJobIsolation runs in the node flynn-host process (not the host squashfs).
+# Older tarballs' install-flynn omit ipset; install it here so SKIP_BUILD still works.
+if ! command -v ipset >/dev/null 2>&1; then
+  echo "===> installing ipset on ${node} (required for flynn-host job isolation)"
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get install -y ipset
+fi
+command -v ipset >/dev/null
 for link in flannel.1 flynnbr0; do
   if ip link show "\${link}" &>/dev/null; then
     echo "removing stale \${link}"
@@ -1418,14 +2026,20 @@ for link in flannel.1 flynnbr0; do
   fi
 done
 EOF
-    configure_node_dns "${node}"
-    # Verify install actually produced a working flynn-host before continuing.
-    node_root_script "${node}" <<'EOF'
+  configure_node_dns "${node}"
+  node_root_script "${node}" <<'EOF'
 set -euo pipefail
 command -v flynn-host >/dev/null
 flynn-host version
 test -x /usr/bin/flynn-host || test -x /usr/local/bin/flynn-host
 EOF
+}
+
+step_install_flynn() {
+  resolve_built_tarball
+  local node
+  for node in "${NODES[@]}"; do
+    install_flynn_on_node "${node}"
   done
   echo "installed and verified ${BUILD_VERSION} on ${NODES[*]} from $(tarball_vm_path)"
 }
@@ -1463,9 +2077,14 @@ EOF
   echo "layer-0 host APIs up (peer-ips=${PEER_IPS})"
 }
 
-step_bootstrap() {
+# Extra args are appended to flynn-host bootstrap (e.g. --from-backup FILE).
+run_layer1_bootstrap() {
   local overlay_fail="${WORK_DIR}/overlay-fail.txt"
   local watch_pid=""
+  local extra_args=""
+  if [[ $# -gt 0 ]]; then
+    extra_args="$(printf '%q ' "$@")"
+  fi
   rm -f "${overlay_fail}"
 
   # Cache ssh-config before the overlay watcher and bootstrap race on node1.
@@ -1492,7 +2111,8 @@ flynn-host bootstrap \
   --min-hosts "${MIN_HOSTS}" \
   --peer-ips "${PEER_IPS}" \
   --timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
-  --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}"
+  --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
+  ${extra_args}
 EOF
   local boot_rc=$?
   set -e
@@ -1506,6 +2126,7 @@ EOF
     return 1
   fi
   if [[ ${boot_rc} -ne 0 ]]; then
+    dump_layer0_diagnostics
     dump_overlay_diagnostics
     return 1
   fi
@@ -1519,7 +2140,10 @@ EOF
   ensure_flynn_cli_on_node1
   configure_node_dns node1
   register_cli_cluster
+}
 
+step_bootstrap() {
+  run_layer1_bootstrap
   info "waiting for postgres primary read-write"
   # mariadb/mongodb are bootstrapped at scale 0; they have no primary until
   # the first `resource add mysql|mongodb`.
@@ -1528,6 +2152,61 @@ EOF
     return 1
   fi
   echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
+}
+
+# Write the backup to the synced folder (host can inspect it) and copy to /tmp
+# on node1 so bootstrap --from-backup still works after install --clean wipes
+# /var/lib/flynn and /usr/local/bin/flynn*.
+step_cluster_backup() {
+  ensure_flynn_cli_on_node1
+  local vm_path restore_path host_path
+  vm_path="$(backup_vm_path)"
+  restore_path="$(backup_restore_path)"
+  host_path="$(backup_host_path)"
+  mkdir -p "$(dirname "${host_path}")"
+  rm -f "${host_path}"
+
+  info "creating cluster backup ${vm_path}"
+  node_root_script node1 <<EOF
+set -euo pipefail
+mkdir -p "$(dirname "${vm_path}")"
+rm -f "${vm_path}" "${restore_path}"
+flynn cluster backup --file "${vm_path}"
+test -s "${vm_path}"
+# List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
+# match and tar gets SIGPIPE (exit 141) under pipefail. Seen 2026-09-13.
+members="\$(tar -tf "${vm_path}")"
+printf '%s\n' "\${members}" | grep -F 'flynn.json' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'postgres.sql.gz' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'mysql.sql.gz' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'mongodb.archive.gz' >/dev/null
+cp -f "${vm_path}" "${restore_path}"
+test -s "${restore_path}"
+ls -lh "${vm_path}" "${restore_path}"
+EOF
+  if [[ ! -s "${host_path}" ]]; then
+    echo "cluster backup missing on host synced folder: ${host_path}" >&2
+    return 1
+  fi
+  echo "cluster backup $(ls -lh "${host_path}" | awk '{print $5}') at ${host_path}"
+}
+
+step_bootstrap_from_backup() {
+  local restore_path
+  restore_path="$(backup_restore_path)"
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -s "${restore_path}"
+EOF
+  # CLUSTER_DOMAIN is ignored for --from-backup; the domain from the backup
+  # is reused (same upgrade-smoke.localflynn.com /etc/hosts entries).
+  run_layer1_bootstrap --from-backup "${restore_path}"
+  info "waiting for restored postgres/mariadb/mongodb/redis"
+  if ! wait_datastores_ready "after restore" postgres mariadb mongodb redis kafka clickhouse-ping; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  echo "restored ${CLUSTER_DOMAIN} from ${restore_path} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
 step_deploy_app() {
@@ -1580,6 +2259,42 @@ EOF
   echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with ${DATASTORE_PROVIDERS[*]} (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
 
+# git-push a Dockerfile on the container stack. This is the only live coverage
+# of slimmed dockerbuilder-24 (ubuntu-noble + BuildKit + runc) and of tarreceive
+# converting the resulting image to squashfs.
+step_deploy_docker_app() {
+  ensure_flynn_cli_on_node1
+  configure_node_dns node1
+
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -f "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/Dockerfile"
+rm -rf "/tmp/${DOCKER_APP_NAME}"
+mkdir -p "/tmp/${DOCKER_APP_NAME}"
+cp -a "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/." "/tmp/${DOCKER_APP_NAME}/"
+cd "/tmp/${DOCKER_APP_NAME}"
+chmod +x start.sh
+test -f Dockerfile
+git init
+git config user.email "smoke@flynn.test"
+git config user.name "smoke"
+git add -A
+git commit -m init
+if flynn apps | grep -qE "(^|\\s)${DOCKER_APP_NAME}(\\s|\$)"; then
+  flynn -a "${DOCKER_APP_NAME}" delete --yes || true
+fi
+flynn create --remote flynn "${DOCKER_APP_NAME}"
+flynn -a "${DOCKER_APP_NAME}" stack set container
+timeout 600 git push flynn master
+# Container-stack releases use process type "app", not "web". gitreceive's
+# default scale only sets web=1, and stack set already created a release, so
+# the Dockerfile app would stay at 0 processes without this.
+flynn -a "${DOCKER_APP_NAME}" scale app=1
+flynn -a "${DOCKER_APP_NAME}" ps
+EOF
+  echo "docker app ${DOCKER_APP_NAME} deployed from test/apps/upgrade-smoke-docker (container stack)"
+}
+
 # Build a comma-separated SQL VALUES list  (1,'dummy-1'),(2,'dummy-2'),...
 smoke_sql_values() {
   local n=$1
@@ -1616,6 +2331,11 @@ CREATE TABLE IF NOT EXISTS smoke_payload (id int PRIMARY KEY, payload text);
 DELETE FROM smoke_payload;
 INSERT INTO smoke_payload (id, payload) SELECT g, repeat('A', 1024) FROM generate_series(1, \${ROWS}) g;
 "
+exts="\$(flynn -a "\${APP}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")"
+echo "\${exts}" | grep -qx postgis
+echo "\${exts}" | grep -qx pgrouting
+echo "\${exts}" | grep -qx timescaledb
+echo "postgres extensions available: \${exts}"
 
 flynn -a "\${APP}" mysql console -- -e "
 CREATE TABLE IF NOT EXISTS smoke_probe (id INT PRIMARY KEY, data TEXT);
@@ -1662,10 +2382,9 @@ flynn -a "\${APP}" kafka topics | grep -q smoke_probe
 
 ok=0
 for i in \$(seq 1 30); do
-  # ON CLUSTER DDL needs distributed_ddl in the server config (added in this
-  # branch). The current tarball may not have it, so create the database on
-  # the replica we talk to. MergeTree data still lives on /data and is what
-  # the upgrade restart has to keep.
+  # Local MergeTree on the leader (Keeper is often unreachable for ON CLUSTER
+  # DDL). Fan-out the same schema/rows to every replica over HTTP :8123 so a
+  # later node drain still has smoke_db on the remaining hosts.
   flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
   if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
     ok=1
@@ -1676,9 +2395,96 @@ done
 test "\$ok" = 1
 flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS smoke_db.rows"
 flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
+CH_APP="\$(flynn -a "\${APP}" env get FLYNN_CLICKHOUSE)"
+CH_USER="\$(flynn -a "\${APP}" env get CLICKHOUSE_USER)"
+CH_PWD="\$(flynn -a "\${APP}" env get CLICKHOUSE_PASSWORD)"
+export CH_APP CH_USER CH_PWD
+CH_ROWS="\${ROWS}" python3 - <<'PY'
+import json, os, sys, urllib.error, urllib.parse, urllib.request
+
+app = os.environ["CH_APP"]
+user = os.environ.get("CH_USER") or "default"
+pwd = os.environ.get("CH_PWD") or ""
+rows = os.environ["CH_ROWS"]
+insts = json.load(urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % app, timeout=10))
+if not insts:
+    sys.exit("no clickhouse replicas in discoverd")
+queries = [
+    "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic",
+    "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id",
+    "TRUNCATE TABLE IF EXISTS smoke_db.rows",
+    "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % rows,
+]
+failed = 0
+for inst in insts:
+    host = inst.get("addr", "").rsplit(":", 1)[0]
+    if not host:
+        continue
+    print("clickhouse replica %s" % host)
+    for q in queries:
+        url = "http://%s:8123/?user=%s&password=%s" % (
+            host, urllib.parse.quote(user), urllib.parse.quote(pwd),
+        )
+        req = urllib.request.Request(url, data=q.encode(), method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                resp.read()
+        except Exception as e:
+            print("clickhouse replica %s failed: %s" % (host, e), file=sys.stderr)
+            failed = 1
+            break
+if failed:
+    sys.exit(1)
+print("clickhouse seeded on %d replicas" % len(insts))
+PY
 echo "seed complete"
 EOF
   record_seed_counts
+}
+
+probe_docker_http() {
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || return 1
+  echo "${body}" | grep -q 'docker-smoke ok'
+}
+
+assert_docker_http() {
+  local label=$1
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
+    record_check "${label}" "docker-http" "FAIL" "GET / curl failed"
+    echo "docker HTTP check (${label}) failed: curl error" >&2
+    return 1
+  }
+  if ! echo "${body}" | grep -q 'docker-smoke ok'; then
+    record_check "${label}" "docker-http" "FAIL" "body=${body}"
+    echo "docker HTTP check (${label}) failed: body=${body}" >&2
+    return 1
+  fi
+  record_check "${label}" "docker-http" "PASS" "GET / => docker-smoke ok"
+  echo "docker-http ${label}: ok"
+}
+
+assert_docker_ps() {
+  local label=$1
+  local out rc=0 attempt
+  # After restore on 4-host add, HTTP can pass before controller lists the
+  # app job (header-only `flynn ps`). Do not grep "up" in the whole buffer:
+  # CREATED matches -iE 'up'. Require a data row with type app.
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t app 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="app" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
+      record_check "${label}" "docker-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "docker-ps ${label}: ok"
+      return 0
+    fi
+    echo "docker-ps ${label}: retry ${attempt}/12 rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 5
+  done
+  record_check "${label}" "docker-ps" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "docker-ps ${label}: FAIL rc=${rc} ${out}" >&2
+  return 1
 }
 
 probe_app_http() {
@@ -1813,7 +2619,7 @@ record_seed_counts() {
     failed=1
   fi
 
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows")")"
+  count="$(clickhouse_row_count)"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "seed" "clickhouse" "PASS" "rows=${count}"
   else
@@ -1897,10 +2703,11 @@ assert_databases() {
   fi
 
   echo "db-check ${label}: clickhouse"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows")")"
-  if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
+  if wait_for "clickhouse rows ${label}" 180 clickhouse_seed_ready; then
+    count="$(clickhouse_row_count)"
     record_check "${label}" "clickhouse" "PASS" "rows=${count}"
   else
+    count="$(clickhouse_row_count)"
     record_check "${label}" "clickhouse" "FAIL" "rows=${count:-?} want>=${rows}"
     echo "clickhouse row count (${label}) = ${count}, want >= ${rows}" >&2
     failed=1
@@ -1943,6 +2750,101 @@ assert_databases() {
   echo "databases ${label}: postgres/mysql/mongodb/redis/kafka/clickhouse PASS (rows>=${rows})"
 }
 
+# Cluster backup dumps postgres (incl. blobstore + app DBs), MariaDB, and
+# MongoDB. Redis/Kafka/ClickHouse keep data on volumes that --clean destroys,
+# so after restore those engines must come up empty while SQL data survives.
+assert_restored_datastores() {
+  local label="post-restore"
+  local rows="${SMOKE_SEED_ROWS}"
+  local failed=0
+  local out count payload marker
+
+  echo "db-check ${label}: postgres"
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
+    record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
+  else
+    record_check "${label}" "postgres" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    echo "postgres (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: mysql"
+  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
+    record_check "${label}" "mysql" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
+  else
+    record_check "${label}" "mysql" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    echo "mysql (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: mongodb"
+  out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
+    record_check "${label}" "mongodb" "PASS" "probe=pre-upgrade docs=${count}"
+  else
+    record_check "${label}" "mongodb" "FAIL" "probe=${out} docs=${count:-?} want>=${rows}"
+    echo "mongodb (${label}) failed: probe=${out} docs=${count}" >&2
+    failed=1
+  fi
+
+  if [[ "${SKIP_UPGRADE}" != "1" ]]; then
+    local pass
+    for pass in $(seq 1 "${UPGRADE_PASSES}"); do
+      marker="post-upgrade-${pass}"
+      echo "db-check ${label}: ${marker} markers"
+      out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
+      if echo "${out}" | grep -q "${marker}"; then
+        record_check "${label}" "pg-${marker}" "PASS" "still present"
+      else
+        record_check "${label}" "pg-${marker}" "FAIL" "lost ${marker}: ${out}"
+        echo "postgres (${label}) lost ${marker}: ${out}" >&2
+        failed=1
+      fi
+    done
+  fi
+
+  echo "db-check ${label}: redis (volume data not in cluster backup)"
+  out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
+  if echo "${out}" | grep -qi PONG; then
+    record_check "${label}" "redis" "PASS" "PING (keys not in cluster backup)"
+  else
+    record_check "${label}" "redis" "FAIL" "PING failed: ${out}"
+    echo "redis (${label}) PING failed: ${out}" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: kafka (volume data not in cluster backup)"
+  if kafka_is_ready; then
+    record_check "${label}" "kafka" "PASS" "topics CLI (topic data not in cluster backup)"
+  else
+    record_check "${label}" "kafka" "FAIL" "kafka topics failed"
+    echo "kafka (${label}) topics CLI failed" >&2
+    failed=1
+  fi
+
+  echo "db-check ${label}: clickhouse (volume data not in cluster backup)"
+  if clickhouse_ping; then
+    record_check "${label}" "clickhouse" "PASS" "SELECT 1 (rows not in cluster backup)"
+  else
+    record_check "${label}" "clickhouse" "FAIL" "SELECT 1 failed"
+    echo "clickhouse (${label}) SELECT 1 failed" >&2
+    failed=1
+  fi
+
+  if [[ "${failed}" -ne 0 ]]; then
+    echo "datastore checks failed for ${label}" >&2
+    return 1
+  fi
+  echo "databases ${label}: postgres/mysql/mongodb restored; redis/kafka/clickhouse up empty"
+}
+
 # Record one live CLI / flynn-host probe. Empty pattern means exit 0 is enough.
 cli_probe() {
   local label=$1 name=$2 pattern=$3
@@ -1962,6 +2864,59 @@ cli_probe() {
   return 1
 }
 
+# One-off flynn run (new job from the app release image). Args after needle
+# are passed after -- so they replace the image CMD.
+cli_run_job() {
+  local label=$1 name=$2 app=$3 needle=$4
+  shift 4
+  local cmd_q="" a rc=0 out
+  for a in "$@"; do
+    cmd_q+=" $(printf '%q' "${a}")"
+  done
+  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
+    record_check "${label}" "${name}" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} ${name}: PASS"
+    return 0
+  fi
+  record_check "${label}" "${name}" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "cli ${label} ${name}: FAIL rc=${rc} ${out}" >&2
+  return 1
+}
+
+# Expect a one-off to fail (NXDOMAIN, iptables DROP, or timeout). Used to
+# prove user jobs cannot reach other apps or internal discoverd names.
+# Retry unexpected success: after bootstrap --from-backup, flynn-net-user
+# can still be empty so discoverd DNS treats the client as non-user and
+# answers upgrade-smoke-web.discoverd (seen 2026-09-13 3-node-add restore).
+cli_run_must_fail() {
+  local label=$1 name=$2 app=$3
+  shift 3
+  local cmd_q="" a rc=0 out attempt
+  for a in "$@"; do
+    cmd_q+=" $(printf '%q' "${a}")"
+  done
+  for attempt in $(seq 1 8); do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    if [[ "${rc}" -ne 0 ]]; then
+      if echo "${out}" | grep -qiE 'No app release|stat /runner/init|unknown app'; then
+        record_check "${label}" "${name}" "FAIL" "run failed to start $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+        echo "cli ${label} ${name}: FAIL job did not start: ${out}" >&2
+        return 1
+      fi
+      record_check "${label}" "${name}" "PASS" "isolated rc=${rc}"
+      echo "cli ${label} ${name}: PASS (blocked)"
+      return 0
+    fi
+    echo "cli ${label} ${name}: retry ${attempt}/8 still reachable: $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 3
+  done
+  record_check "${label}" "${name}" "FAIL" "unexpected success $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "cli ${label} ${name}: FAIL unexpectedly succeeded: ${out}" >&2
+  return 1
+}
+
 # Live flynn + flynn-host commands against the cluster. Unit tests cover CLI
 # packages (./cli on the host gate, ./cli + ./host/cli on the builder); this
 # catches controller/scheduler/logaggregator drift after an upgrade. Does not
@@ -1969,7 +2924,7 @@ cli_probe() {
 step_cli_functions() {
   local label=$1
   local failed=0
-  local out rc hosts
+  local out rc hosts blob_ok attempt
 
   ensure_flynn_cli_on_node1
   echo "cli ${label}: flynn + flynn-host against ${APP_NAME}"
@@ -2020,16 +2975,33 @@ step_cli_functions() {
   cli_probe "${label}" "cli-log" "" \
     flynn1 -a "${APP_NAME}" log -n 20 || failed=1
 
-  rc=0
-  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${APP_NAME}") run -- echo smoke-cli" </dev/null)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q 'smoke-cli'; then
-    record_check "${label}" "cli-run" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} cli-run: PASS"
-  else
-    record_check "${label}" "cli-run" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} cli-run: FAIL rc=${rc} ${out}" >&2
-    failed=1
-  fi
+  cli_run_job "${label}" "cli-run" "${APP_NAME}" "smoke-cli" echo smoke-cli || failed=1
+
+  # Container-stack app: same image as the running app process, no /runner/init.
+  cli_probe "${label}" "docker-cli-info" "${DOCKER_APP_NAME}|Git URL|Web URL" \
+    flynn1 -a "${DOCKER_APP_NAME}" info || failed=1
+  cli_probe "${label}" "docker-cli-ps" "app" \
+    flynn1 -a "${DOCKER_APP_NAME}" ps || failed=1
+  cli_probe "${label}" "docker-cli-scale" "app=" \
+    flynn1 -a "${DOCKER_APP_NAME}" scale || failed=1
+  cli_probe "${label}" "docker-cli-route" "http|${DOCKER_APP_NAME}" \
+    flynn1 -a "${DOCKER_APP_NAME}" route || failed=1
+  cli_probe "${label}" "docker-cli-release" "." \
+    flynn1 -a "${DOCKER_APP_NAME}" release || failed=1
+  cli_probe "${label}" "docker-cli-log" "" \
+    flynn1 -a "${DOCKER_APP_NAME}" log -n 20 || failed=1
+  cli_run_job "${label}" "docker-cli-run" "${DOCKER_APP_NAME}" "docker-cli" \
+    echo docker-cli || failed=1
+  cli_run_job "${label}" "docker-cli-run-image" "${DOCKER_APP_NAME}" "httpd|PORT" \
+    cat /start.sh || failed=1
+  cli_run_must_fail "${label}" "net-isolate-peer" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://${APP_NAME}-web.discoverd:8080/" || failed=1
+  cli_run_must_fail "${label}" "net-isolate-internal" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://postgres.discoverd:5432/" || failed=1
+  cli_run_must_fail "${label}" "net-isolate-api" "${DOCKER_APP_NAME}" \
+    wget -q -T 5 -O - "http://postgres-api.discoverd/" || failed=1
+  cli_run_job "${label}" "net-db-leader" "${APP_NAME}" "db-leader-ok" \
+    bash -c 'echo >/dev/tcp/leader.postgres.discoverd/5432 && echo db-leader-ok' || failed=1
 
   flynn1 -a "${APP_NAME}" meta set "smoke_cli=${label}" >/dev/null || true
   cli_probe "${label}" "cli-meta" "smoke_cli" \
@@ -2049,12 +3021,99 @@ step_cli_functions() {
   fi
   cli_probe "${label}" "cli-host-ps" "." \
     node_ssh node1 'sudo flynn-host ps' || failed=1
+  cli_probe "${label}" "cli-host-version" "." \
+    node_ssh node1 'sudo flynn-host version' || failed=1
+
+  rc=0
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q postgis && echo "${out}" | grep -q pgrouting && echo "${out}" | grep -q timescaledb; then
+    record_check "${label}" "cli-pg-extensions" "PASS" "$(echo "${out}" | tr '\n' ' ')"
+    echo "cli ${label} pg-extensions: PASS"
+  else
+    record_check "${label}" "cli-pg-extensions" "FAIL" "rc=${rc} ${out}"
+    echo "cli ${label} pg-extensions: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
+
+  # User-app role: CONNECT to its own DB, not postgres/template1, not the
+  # controller database. Cluster key can still open platform consoles.
+  # Emit t/f in SQL: boolean||boolean prints true/false, which failed 2026-09-13.
+  rc=0
+  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, current_database(), 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'postgres', 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'template1', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+  out="$(smoke_pg_tf "${out}")"
+  if [[ "${rc}" -eq 0 && "${out}" == "t,f,f" ]]; then
+    record_check "${label}" "cli-pg-connect" "PASS" "own=t postgres=f template1=f"
+    echo "cli ${label} pg-connect: PASS"
+  else
+    record_check "${label}" "cli-pg-connect" "FAIL" "rc=${rc} ${out} want t,f,f"
+    echo "cli ${label} pg-connect: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
+  local ctl_db=""
+  ctl_db="$(flynn1 -a controller env get PGDATABASE 2>/dev/null || true)"
+  ctl_db="$(printf '%s' "${ctl_db}" | tr -d '[:space:]')"
+  if [[ -z "${ctl_db}" ]]; then
+    local ctl_url=""
+    ctl_url="$(flynn1 -a controller env get DATABASE_URL 2>/dev/null || true)"
+    ctl_url="$(printf '%s' "${ctl_url}" | tr -d '[:space:]')"
+    ctl_db="${ctl_url##*/}"
+    ctl_db="${ctl_db%%\?*}"
+  fi
+  if [[ -n "${ctl_db}" && "${ctl_db}" =~ ^[A-Za-z0-9_]+$ ]]; then
+    rc=0
+    out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+    out="$(smoke_pg_tf "${out}")"
+    if [[ "${rc}" -eq 0 && "${out}" == "f" ]]; then
+      record_check "${label}" "cli-pg-no-controller" "PASS" "no CONNECT on ${ctl_db}"
+      echo "cli ${label} pg-no-controller: PASS"
+    else
+      record_check "${label}" "cli-pg-no-controller" "FAIL" "rc=${rc} ${out} db=${ctl_db} want f"
+      echo "cli ${label} pg-no-controller: FAIL rc=${rc} ${out} db=${ctl_db}" >&2
+      failed=1
+    fi
+  else
+    record_check "${label}" "cli-pg-no-controller" "FAIL" "controller PGDATABASE missing or unsafe: ${ctl_db:-empty}"
+    echo "cli ${label} pg-no-controller: FAIL missing controller PGDATABASE" >&2
+    failed=1
+  fi
+  cli_probe "${label}" "cli-pg-controller" "." \
+    flynn1 -a controller pg psql -- -tAc "SELECT 1" || failed=1
+  cli_probe "${label}" "cli-pg-blobstore" "." \
+    flynn1 -a blobstore pg psql -- -tAc "SELECT 1" || failed=1
+
+  cli_probe "${label}" "cli-mongo-dump" "" \
+    flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
+
+  # GET / lists every blob and 500s if postgres is briefly unavailable after
+  # an update. /.well-known/status is the health check (SELECT 1). Retry:
+  # discoverd can return 500 while blobstore is re-registering.
+  blob_ok=0
+  out=""
+  rc=0
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a blobstore run -- wget -qO- http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q healthy; then
+      blob_ok=1
+      break
+    fi
+    echo "cli ${label} blobstore: retry ${attempt}/12 rc=${rc}"
+    sleep 5
+  done
+  if [[ "${blob_ok}" -eq 1 ]]; then
+    record_check "${label}" "cli-blobstore" "PASS" "blobstore.discoverd healthy"
+    echo "cli ${label} blobstore: PASS"
+  else
+    record_check "${label}" "cli-blobstore" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} blobstore: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
 
   if [[ "${failed}" -ne 0 ]]; then
     echo "CLI function checks failed for ${label}" >&2
     return 1
   fi
-  echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/meta/host PASS"
+  echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/docker-run/meta/host PASS"
 }
 
 step_verify_before() {
@@ -2062,6 +3121,9 @@ step_verify_before() {
   assert_app_http pre-upgrade
   wait_for "app /status pre-upgrade" 120 probe_app_status
   assert_app_status pre-upgrade
+  wait_for "docker app HTTP pre-upgrade" 180 probe_docker_http
+  assert_docker_http pre-upgrade
+  assert_docker_ps pre-upgrade
   assert_databases pre-upgrade
 }
 
@@ -2088,13 +3150,308 @@ step_verify_after() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
   assert_databases "${label}"
   node_ssh node1 'sudo flynn-host version' || true
 }
 
+step_verify_after_restore() {
+  local label="post-restore"
+  wait_for "app HTTP ${label}" 300 probe_app_http
+  assert_app_http "${label}"
+  wait_for "app /status ${label}" 180 probe_app_status
+  assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  assert_restored_datastores
+  node_ssh node1 'sudo flynn-host version' || true
+}
+
+# Git-push a new docker release and run a one-off so membership changes prove
+# deploys still work (not only HTTP to the existing formation).
+step_membership_deploy() {
+  local label=$1
+  ensure_flynn_cli_on_node1
+  info "membership deploy (${label}): git-push ${DOCKER_APP_NAME} + flynn run"
+  node_root_script node1 <<EOF
+set -euo pipefail
+dir="/tmp/${DOCKER_APP_NAME}"
+test -d "\${dir}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
+cd "\${dir}"
+git commit --allow-empty -m "membership ${label}"
+ok=0
+for i in \$(seq 1 5); do
+  if timeout 600 git push flynn master; then
+    ok=1
+    break
+  fi
+  echo "git push attempt \$i failed; waiting for scheduler after membership change" >&2
+  sleep 30
+done
+test "\$ok" = 1
+flynn -a "${DOCKER_APP_NAME}" ps
+EOF
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  cli_run_job "${label}" "membership-run" "${APP_NAME}" "membership-ok" echo membership-ok
+  echo "membership deploy ${label}: docker git-push + slug flynn run ok"
+}
+
+step_verify_membership() {
+  local label=$1
+  wait_datastores_ready "${label}" postgres mariadb mongodb redis clickhouse || return 1
+  wait_for "app HTTP ${label}" 180 probe_app_http
+  assert_app_http "${label}"
+  wait_for "app /status ${label}" 120 probe_app_status
+  assert_app_status "${label}"
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  assert_databases "${label}"
+  step_membership_deploy "${label}"
+}
+
+# Join node4 to a running 3-node cluster (documented flynn-host init --peer-ips).
+step_add_cluster_node() {
+  local extra="node4"
+  local extra_n=4
+  local extra_ip join_ips
+  extra_ip="$(cluster_node_ip "${extra_n}")"
+  join_ips="${PEER_IPS}"
+  if [[ "${#NODES[@]}" -lt 3 ]]; then
+    echo "add-node requires a running HA cluster (got ${#NODES[@]} hosts)" >&2
+    return 1
+  fi
+  remember_teardown_node "${extra}"
+  info "adding ${extra} (${extra_ip}) to stable cluster peer-ips=${join_ips}"
+  local node_mem="${VAGRANT_MEMORY:-6144}"
+  local node_cpus="${VAGRANT_CPUS:-2}"
+  VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${extra}"
+  cache_node_ssh_config "${extra}"
+  local saved_nodes=("${NODES[@]}")
+  NODES=("${extra}")
+  verify_nic_promisc
+  NODES=("${saved_nodes[@]}")
+  resolve_built_tarball
+  install_flynn_on_node "${extra}"
+  info "joining ${extra} with flynn-host init --peer-ips ${join_ips}"
+  node_root_script "${extra}" <<EOF
+set -euo pipefail
+flynn-host init --peer-ips "${join_ips}" --external-ip "${extra_ip}"
+systemctl enable flynn-host.service
+systemctl restart flynn-host.service
+EOF
+  if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
+    dump_layer0_diagnostics
+    return 1
+  fi
+  append_live_node "${extra}"
+  local n
+  for n in "${NODES[@]}"; do
+    configure_node_dns "${n}"
+  done
+  if ! wait_for "flynn-host list includes ${extra_ip}" 180 node_addr_listed "${extra_ip}"; then
+    echo "new host ${extra} (${extra_ip}) did not appear in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "overlay after adding ${extra}" 180 overlay_peers_reachable; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  echo "joined ${extra} (${extra_ip}); cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+  sync_cluster_monitor_hosts
+}
+
+# Flynn redis is a singleton with a host-local /data volume. Draining that
+# host cannot reattach the AOF, so pick a different HA node when redis lives
+# on the default drain target.
+redis_job_host() {
+  local app out
+  app="$(flynn1 -a "${APP_NAME}" env get FLYNN_REDIS)" || return 1
+  out="$(flynn1 -a "${app}" ps)" || return 1
+  echo "${out}" | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+    split($1, a, "-")
+    print a[1]
+    exit
+  }'
+}
+
+pick_remove_node() {
+  local drop redis_host
+  drop="${NODES[$((${#NODES[@]} - 1))]}"
+  redis_host="$(redis_job_host || true)"
+  if [[ -n "${redis_host}" && "${redis_host}" == "${drop}" && "${#NODES[@]}" -ge 3 ]]; then
+    echo "redis singleton is on ${drop}; draining ${NODES[$((${#NODES[@]} - 2))]} instead (host-local AOF)" >&2
+    drop="${NODES[$((${#NODES[@]} - 2))]}"
+  fi
+  echo "${drop}"
+}
+
+controller_scheduler_up() {
+  flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {found=1} END { exit !found }'
+}
+
+controller_scheduler_replaced() {
+  local old=$1 id
+  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {print $1; exit}')"
+  [[ -n "${id}" && "${id}" != "${old}" ]]
+}
+
+# Host drain can panic the leader scheduler (nil volume on persistJob). The
+# process may stay "up" with its loop dead, so new deploys sit pending until
+# we replace it.
+bounce_controller_scheduler() {
+  local id
+  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) !~ /pending|down/ {print $1; exit}')"
+  if [[ -z "${id}" ]]; then
+    echo "no running controller scheduler found after drain" >&2
+    wait_for "controller scheduler running" 180 controller_scheduler_up
+    return
+  fi
+  echo "bouncing controller scheduler ${id} after host drain" >&2
+  flynn1 -a controller kill "${id}" || true
+  wait_for "new controller scheduler after ${id}" 180 controller_scheduler_replaced "${id}"
+  # Give the replacement time to elect and recover host/job state before deploys.
+  sleep 15
+}
+
+# flynn-host update waits for cluster-monitor's bootstrap host count. After
+# add/remove that metadata is stale (3 vs 4, or 3 vs 2) and a drain then
+# upgrade hangs waiting for the missing peer.
+sync_cluster_monitor_hosts() {
+  local want=${#NODES[@]}
+  info "setting cluster-monitor hosts=${want} (live membership)"
+  node_root_script node1 <<EOF
+set -euo pipefail
+export WANT_HOSTS="${want}"
+python3 - <<'PY'
+import json, os, urllib.request
+
+want = int(os.environ["WANT_HOSTS"])
+url = "http://127.0.0.1:1111/services/cluster-monitor/meta"
+
+class PutRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if code not in (301, 302, 303, 307, 308):
+            return None
+        return urllib.request.Request(
+            newurl,
+            data=req.data,
+            method=req.get_method(),
+            headers={k: v for k, v in req.header_items() if k.lower() not in ("host", "content-length")},
+        )
+
+opener = urllib.request.build_opener(PutRedirect)
+with opener.open(url, timeout=10) as resp:
+    meta = json.load(resp)
+data = meta.get("data") or {}
+if isinstance(data, str):
+    data = json.loads(data)
+data["hosts"] = want
+data["enabled"] = True
+body = json.dumps({"index": meta["index"], "data": data}).encode()
+req = urllib.request.Request(
+    url, data=body, method="PUT", headers={"Content-Type": "application/json"}
+)
+with opener.open(req, timeout=10) as resp:
+    out = json.load(resp)
+print("cluster-monitor hosts=%s index=%s" % (want, out.get("index")))
+PY
+EOF
+}
+
+# Drain an HA node (not node1). Demote if it is a Raft peer, stop its
+# jobs while flynn-host is still up (systemd stop does not kill containers),
+# then stop the daemon so the scheduler reschedules. The VM stays until
+# topology teardown.
+step_remove_cluster_node() {
+  local drop ip i
+  if [[ "${#NODES[@]}" -lt 3 ]]; then
+    echo "remove-node requires a running HA cluster (got ${#NODES[@]} hosts)" >&2
+    return 1
+  fi
+  drop="$(pick_remove_node)"
+  ip=""
+  for i in "${!NODES[@]}"; do
+    if [[ "${NODES[$i]}" == "${drop}" ]]; then
+      ip="${NODE_IPS[$i]}"
+      break
+    fi
+  done
+  if [[ -z "${ip}" ]]; then
+    echo "could not resolve IP for drain target ${drop}" >&2
+    return 1
+  fi
+  if [[ "${drop}" == "node1" ]]; then
+    echo "refusing to remove node1 (CLI/bootstrap host)" >&2
+    return 1
+  fi
+  printf '%s\n' "${drop}" > "${WORK_DIR}/drained-node"
+  info "removing ${drop} (${ip}) from stable cluster"
+  # Graceful Raft demote while the peer is still reachable; --force if it is not.
+  if ! node_root_script node1 <<EOF
+set -euo pipefail
+flynn-host demote "${ip}"
+EOF
+  then
+    info "graceful demote failed; retrying flynn-host demote --force ${ip}"
+    node_root_script node1 <<EOF
+set -euo pipefail
+flynn-host demote --force "${ip}"
+EOF
+  fi
+  drain_host_jobs "${drop}"
+  node_root_script "${drop}" <<'EOF'
+set -euo pipefail
+systemctl stop flynn-host.service || true
+systemctl disable flynn-host.service || true
+EOF
+  kill_leftover_containers "${drop}"
+  drop_live_node "${drop}"
+  if ! wait_for "flynn-host list without ${ip}" 180 host_addr_gone "${ip}"; then
+    echo "removed host ${drop} (${ip}) still listed in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "remaining hosts listed (${#NODES[@]})" 120 hosts_listed_exactly "${#NODES[@]}"; then
+    echo "expected ${#NODES[@]} live hosts after removing ${drop}" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  if ! wait_for "discoverd jobs gone from ${drop}" 180 discoverd_host_jobs_gone "${drop}"; then
+    echo "discoverd still advertises jobs from ${drop}" >&2
+    return 1
+  fi
+  local svc
+  for svc in postgres mariadb mongodb; do
+    if ! wait_for "${svc} primary not on ${drop}" 300 sirenia_primary_not_on_host "${svc}" "${drop}"; then
+      echo "${svc} primary still on drained host ${drop}" >&2
+      return 1
+    fi
+  done
+  if ! wait_for "overlay after removing ${drop}" 180 overlay_peers_reachable; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  bounce_controller_scheduler
+  sync_cluster_monitor_hosts
+  echo "removed ${drop} (${ip}); cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+}
+
 teardown_cluster_nodes() {
-  info "destroying cluster nodes: ${NODES[*]}"
-  vagrant destroy -f "${NODES[@]}"
+  local victims=()
+  if [[ ${#TEARDOWN_NODES[@]} -gt 0 ]]; then
+    victims=("${TEARDOWN_NODES[@]}")
+  else
+    victims=("${NODES[@]}")
+  fi
+  info "destroying cluster nodes: ${victims[*]}"
+  vagrant destroy -f "${victims[@]}"
   CLUSTER_STARTED=0
   echo "cluster nodes destroyed (${TOPOLOGY_LABEL})"
 }
@@ -2149,6 +3506,46 @@ valid_topology_size() {
   return 1
 }
 
+# add = 3-node then join node4; remove = 3-node then drain node3.
+normalize_topology_spec() {
+  case "$1" in
+    add|add-node|3+1) echo add ;;
+    remove|remove-node|3-1) echo remove ;;
+    *) echo "$1" ;;
+  esac
+}
+
+valid_topology_spec() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  case "${spec}" in
+    add)
+      if [[ -n "${SMOKE_MAX_NODES:-}" && 4 -gt "${SMOKE_MAX_NODES}" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    remove)
+      if [[ -n "${SMOKE_MAX_NODES:-}" && 3 -gt "${SMOKE_MAX_NODES}" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
+    *) valid_topology_size "${spec}" ;;
+  esac
+}
+
+# How many Vagrant nodeN machines this spec needs (add reserves node4).
+topology_inventory_size() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  case "${spec}" in
+    add) echo 4 ;;
+    remove) echo 3 ;;
+    *) echo "${spec}" ;;
+  esac
+}
+
 # Highest nodeN already present under .vagrant/machines (leftover VMs).
 discover_vagrant_node_count() {
   local d n max=0
@@ -2165,11 +3562,12 @@ discover_vagrant_node_count() {
 
 # Build node1..N names/IPs and export FLYNN_MAX_NODES for the Vagrantfile loop.
 expand_cluster_inventory() {
-  local need=0 t discovered
+  local need=0 t discovered n
   if [[ ${#TOPOLOGIES[@]} -gt 0 ]]; then
     for t in "${TOPOLOGIES[@]}"; do
-      if [[ "${t}" -gt "${need}" ]]; then
-        need="${t}"
+      n="$(topology_inventory_size "${t}")"
+      if [[ "${n}" -gt "${need}" ]]; then
+        need="${n}"
       fi
     done
   fi
@@ -2203,10 +3601,11 @@ parse_smoke_topologies() {
   IFS=',' read -r -a parts <<< "${raw}"
   for item in "${parts[@]}"; do
     [[ -z "${item}" ]] && continue
-    if ! valid_topology_size "${item}"; then
-      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2); got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
+    if ! valid_topology_spec "${item}"; then
+      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2), or add/remove; got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
       return 1
     fi
+    item="$(normalize_topology_spec "${item}")"
     # bash 3.2 + set -u treats ${arr[*]} on an empty array as unbound.
     if [[ ${#TOPOLOGIES[@]} -gt 0 && " ${TOPOLOGIES[*]} " == *" ${item} "* ]]; then
       continue
@@ -2254,20 +3653,52 @@ apply_topology() {
   IFS="${saved_ifs}"
   MIN_HOSTS="${size}"
   CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+  TEARDOWN_NODES=("${NODES[@]}")
+  TOPOLOGY_ACTION=""
 }
 
-# One full install → bootstrap → deploy → verify → CLI → --force upgrades.
+apply_topology_spec() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  TOPOLOGY_ACTION=""
+  case "${spec}" in
+    add)
+      apply_topology 3
+      TOPOLOGY_ACTION=add
+      TOPOLOGY_LABEL="3-node-add"
+      CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      # run_step is a subshell; record node4 here so teardown still destroys it.
+      remember_teardown_node node4
+      ;;
+    remove)
+      apply_topology 3
+      TOPOLOGY_ACTION=remove
+      TOPOLOGY_LABEL="3-node-remove"
+      CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      ;;
+    *)
+      apply_topology "${spec}"
+      ;;
+  esac
+}
+
+# One full install → bootstrap → deploy → verify → CLI → --force upgrades →
+# cluster backup → --clean reinstall → bootstrap --from-backup → re-verify.
 # idx is 0-based; is_last=1 means KEEP_VMS can retain these cluster nodes.
 run_one_topology() {
   local size=$1
   local idx=$2
   local is_last=$3
   local pass
-  apply_topology "${size}"
-  info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS}"
+  apply_topology_spec "${size}"
+  info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS} action=${TOPOLOGY_ACTION:-none}"
   clear_cluster_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" && "${idx}" -eq 0 ]]; then
+    local n
+    for n in "${NODES[@]}"; do
+      require_vm_running_for_skip "${n}"
+    done
     record "Vagrant up (cluster nodes) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VAGRANT_UP=1"
     CLUSTER_STARTED=1
     cache_all_node_ssh_configs
@@ -2301,8 +3732,10 @@ run_one_topology() {
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
     record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Deploy Dockerfile app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
+    run_step "Deploy Dockerfile app (${TOPOLOGY_LABEL})" step_deploy_docker_app
   fi
   if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
     record "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"
@@ -2313,6 +3746,27 @@ run_one_topology() {
     record "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
   else
     run_step "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" step_cli_functions pre-upgrade
+  fi
+
+  if [[ "${TOPOLOGY_ACTION}" == "add" ]]; then
+    run_step "Add node to running cluster (${TOPOLOGY_LABEL})" step_add_cluster_node
+    # run_step is a subshell; re-apply live membership in this shell for CLI/overlay.
+    append_live_node node4
+    run_step "Verify app/DBs after add-node (${TOPOLOGY_LABEL})" step_verify_membership after-add
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after add-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after add-node (${TOPOLOGY_LABEL})" step_cli_functions after-add
+    fi
+  elif [[ "${TOPOLOGY_ACTION}" == "remove" ]]; then
+    run_step "Remove node from running cluster (${TOPOLOGY_LABEL})" step_remove_cluster_node
+    drop_live_node "$(cat "${WORK_DIR}/drained-node")"
+    run_step "Verify app/DBs after remove-node (${TOPOLOGY_LABEL})" step_verify_membership after-remove
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after remove-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after remove-node (${TOPOLOGY_LABEL})" step_cli_functions after-remove
+    fi
   fi
 
   if [[ "${SKIP_UPGRADE}" == "1" ]]; then
@@ -2331,11 +3785,39 @@ run_one_topology() {
     done
   fi
 
+  if [[ "${SKIP_BACKUP}" == "1" ]]; then
+    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+  elif [[ "${SKIP_DEPLOY}" == "1" ]]; then
+    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+  else
+    run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    restore_drained_inventory
+    run_step "Reinstall for restore (${TOPOLOGY_LABEL})" step_install_flynn
+    run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
+    run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup
+    run_step "Verify app/DBs after restore (${TOPOLOGY_LABEL})" step_verify_after_restore
+    if [[ "${SKIP_CLI}" == "1" ]]; then
+      record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+    else
+      run_step "CLI functions after restore (${TOPOLOGY_LABEL})" step_cli_functions post-restore
+    fi
+  fi
+
   if [[ "${KEEP_VMS}" == "1" && "${is_last}" -eq 1 ]]; then
     record "Teardown cluster nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "KEEP_VMS=1"
   else
     if [[ "${KEEP_VMS}" == "1" && "${is_last}" -ne 1 ]]; then
-      info "KEEP_VMS=1: destroying ${NODES[*]} before next topology; last topology VMs will be kept"
+      info "KEEP_VMS=1: destroying ${TEARDOWN_NODES[*]} before next topology; last topology VMs will be kept"
     fi
     run_step "Teardown cluster nodes (${TOPOLOGY_LABEL})" teardown_cluster_nodes
   fi
@@ -2399,6 +3881,7 @@ main() {
   clear_shared_logs
 
   if [[ "${SKIP_VAGRANT_UP}" == "1" ]]; then
+    require_vm_running_for_skip builder
     record "Vagrant up (builder)" "SKIP" 0 "SKIP_VAGRANT_UP=1"
     cache_node_ssh_config builder
     BUILDER_STARTED=1

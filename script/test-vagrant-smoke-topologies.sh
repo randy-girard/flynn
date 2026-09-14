@@ -29,8 +29,20 @@ need 'FLYNN_MAX_NODES' \
   "smoke must export FLYNN_MAX_NODES so Vagrantfile defines node1..max(N)"
 need 'expand_cluster_inventory' \
   "fail/teardown must expand node1..N from the run's largest topology"
-need 'apply_topology' \
-  "cluster size must be applied (NODES/PEER_IPS/MIN_HOSTS) per topology"
+need 'apply_topology_spec' \
+  "named topologies (add/remove) must share apply_topology_spec with numeric sizes"
+need 'normalize_topology_spec' \
+  "add-node/3+1 and remove-node/3-1 must normalize to add/remove"
+need 'topology_inventory_size' \
+  "add must reserve Vagrant node4 (inventory 4) so FLYNN_MAX_NODES covers it"
+need 'step_add_cluster_node' \
+  "smoke must join a node after the cluster is already running"
+need 'step_remove_cluster_node' \
+  "smoke must drain a node from a running cluster"
+need 'step_verify_membership' \
+  "membership changes must re-check HTTP/DBs/deploys"
+need 'TEARDOWN_NODES' \
+  "teardown must destroy a drained host VM even after it leaves NODES"
 need 'run_one_topology' \
   "each topology must get the full install/bootstrap/deploy/upgrade/CLI path"
 need 'valid_topology_size' \
@@ -61,8 +73,8 @@ if ! grep -Fq 'vagrant up "${NODES[@]}"' "${smoke}"; then
   echo "vagrant up must boot only the current topology's nodes" >&2
   exit 1
 fi
-if ! grep -Fq 'vagrant destroy -f "${NODES[@]}"' "${smoke}"; then
-  echo "teardown must destroy only the current topology's nodes" >&2
+if ! grep -Fq 'vagrant destroy -f "${victims[@]}"' "${smoke}"; then
+  echo "teardown must destroy TEARDOWN_NODES (drained hosts still need vagrant destroy)" >&2
   exit 1
 fi
 need 'CHECK_PHASE_PREFIX' \
@@ -100,6 +112,23 @@ valid_topology_size() {
   return 1
 }
 
+normalize_topology_spec() {
+  case "$1" in
+    add|add-node|3+1) echo add ;;
+    remove|remove-node|3-1) echo remove ;;
+    *) echo "$1" ;;
+  esac
+}
+
+valid_topology_spec() {
+  local spec
+  spec="$(normalize_topology_spec "$1")"
+  case "${spec}" in
+    add|remove) return 0 ;;
+    *) valid_topology_size "${spec}" ;;
+  esac
+}
+
 eval_topologies() {
   local SMOKE_TOPOLOGIES="${1:-}"
   local CLUSTER_SIZE="${2:-}"
@@ -119,11 +148,12 @@ eval_topologies() {
   IFS=',' read -r -a parts <<< "${raw}"
   for item in "${parts[@]}"; do
     [[ -z "${item}" ]] && continue
-    if ! valid_topology_size "${item}"; then
+    if ! valid_topology_spec "${item}"; then
       echo "reject:${item}"
       return 1
     fi
-    if [[ " ${TOPOLOGIES[*]} " == *" ${item} "* ]]; then
+    item="$(normalize_topology_spec "${item}")"
+    if [[ ${#TOPOLOGIES[@]} -gt 0 && " ${TOPOLOGIES[*]} " == *" ${item} "* ]]; then
       continue
     fi
     TOPOLOGIES+=("${item}")
@@ -165,6 +195,21 @@ if eval_topologies "2" "" >/dev/null 2>&1; then
   echo "topology size 2 must be rejected (Flynn HA minimum is 3)" >&2
   exit 1
 fi
+got="$(eval_topologies "add,remove" "")"
+if [[ "${got}" != "add remove" ]]; then
+  echo "SMOKE_TOPOLOGIES=add,remove must run add then remove, got '${got}'" >&2
+  exit 1
+fi
+got="$(eval_topologies "3+1,3-1" "")"
+if [[ "${got}" != "add remove" ]]; then
+  echo "3+1/3-1 aliases must normalize to add remove, got '${got}'" >&2
+  exit 1
+fi
+got="$(eval_topologies "1,3,add" "")"
+if [[ "${got}" != "1 3 add" ]]; then
+  echo "numeric and add topologies must compose, got '${got}'" >&2
+  exit 1
+fi
 if eval_topologies "236" "" >/dev/null 2>&1; then
   echo "topology size 236 must be rejected (192.168.56.(19+N) last octet > 254)" >&2
   exit 1
@@ -191,4 +236,4 @@ empty_dup_check() {
 }
 empty_dup_check
 
-echo "ok smoke topologies are 1 or >=3 (SMOKE_TOPOLOGIES=1,3,5 and 1,3,7)"
+echo "ok smoke topologies are 1 or >=3 (SMOKE_TOPOLOGIES=1,3,5 and 1,3,7) plus add/remove"

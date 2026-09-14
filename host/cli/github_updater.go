@@ -662,6 +662,13 @@ func normalizeHostname(name string) string {
 	return name
 }
 
+// coordinatorHostIsLocal reports whether a discoverd host is this daemon.
+// When daemonID is known, IP and hostname matches must not override it:
+// VirtualBox NAT puts 10.0.2.15 on every node, so a peer can look "local".
+func coordinatorHostIsLocal(hostID, daemonID string) bool {
+	return daemonID == "" || hostID == daemonID
+}
+
 // findLocalHost identifies the local host in a list of cluster hosts using
 // multiple matching strategies in priority order:
 //  1. Daemon ID match (if daemonID is non-empty)
@@ -682,6 +689,9 @@ func findLocalHost(hosts []*cluster.Host, hostname, daemonID string, localIPs ma
 	// 2. Match by IP address
 	if len(localIPs) > 0 {
 		for _, h := range hosts {
+			if !coordinatorHostIsLocal(h.ID(), daemonID) {
+				continue
+			}
 			hostIP, _, err := net.SplitHostPort(h.Addr())
 			if err != nil {
 				continue
@@ -696,6 +706,9 @@ func findLocalHost(hosts []*cluster.Host, hostname, daemonID string, localIPs ma
 	// 3. Match by hostname (exact, case-insensitive, normalized)
 	normalizedHostname := normalizeHostname(hostname)
 	for _, h := range hosts {
+		if !coordinatorHostIsLocal(h.ID(), daemonID) {
+			continue
+		}
 		hostID := h.ID()
 		if hostID == hostname {
 			log.Info("matched host by exact hostname", "host_id", hostID)
@@ -711,10 +724,16 @@ func findLocalHost(hosts []*cluster.Host, hostname, daemonID string, localIPs ma
 		}
 	}
 
-	// 4. Single-node fallback
+	// 4. Single-node fallback — only when this process is that host.
+	// After a drain, a restarting daemon can briefly see only the remaining
+	// peer in discoverd; treating that peer as local advertises the update
+	// file server on the wrong IP (connection refused on the peer).
 	if len(hosts) == 1 {
-		log.Info("single host cluster, using the only available host", "host_id", hosts[0].ID())
-		return hosts[0]
+		if coordinatorHostIsLocal(hosts[0].ID(), daemonID) {
+			log.Info("single host cluster, using the only available host", "host_id", hosts[0].ID())
+			return hosts[0]
+		}
+		log.Debug("single discoverd host is not this daemon", "host_id", hosts[0].ID(), "daemon_id", daemonID)
 	}
 
 	return nil
@@ -1904,6 +1923,10 @@ func getCoordinatorIP(log log15.Logger) (string, error) {
 		}
 		h := findLocalHost(hosts, localHostname, daemonID, localIPs, log)
 		if h != nil {
+			if !coordinatorHostIsLocal(h.ID(), daemonID) {
+				log.Debug("discoverd host is not this daemon, retrying", "host_id", h.ID(), "daemon_id", daemonID, "attempt", i+1)
+				continue
+			}
 			ip, _, err := net.SplitHostPort(h.Addr())
 			if err != nil {
 				return "", fmt.Errorf("error parsing host address %s: %w", h.Addr(), err)

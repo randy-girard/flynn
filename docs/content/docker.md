@@ -136,22 +136,23 @@ scaling app: 0=>1
 scale completed in 140.63784ms
 ```
 
-The `app` process will be configured with a service name like `APPNAME-web` so
-your Flynn apps can communicate with the deployed service internally using
-`APPNAME-web.discoverd:PORT` (e.g. `nodejs-web.discoverd:8080`):
-
-```
-$ flynn -a nodejs run curl http://nodejs-web.discoverd:8080
-Hello from Flynn on port 8080 from container 4a7319af-af2c-4fe1-9a9a-2dd4d5bd3765
-```
-
-The app can be reached externally via the automatically registered route
-`http://APPNAME.$CLUSTER_DOMAIN`:
+The `app` process is registered in service discovery for the **router**. User
+jobs cannot reach each other on the overlay (including
+`APPNAME-web.discoverd`). Reach the app through a route you have added, or the
+HTTP URL Flynn prints after deploy:
 
 ```
 $ curl http://nodejs.1.localflynn.com
 Hello from Flynn on port 8080 from container 4a7319af-af2c-4fe1-9a9a-2dd4d5bd3765
 ```
+
+Datastore connections from the app still use the URLs Flynn injected
+(`DATABASE_URL` → `leader.postgres.discoverd`, and so on). Internal names such
+as `postgres.discoverd` or `postgres-api.discoverd` are not resolvable from
+user jobs.
+
+The app can also be reached externally via the automatically registered route
+`http://APPNAME.$CLUSTER_DOMAIN`.
 
 ## Example (container stack)
 

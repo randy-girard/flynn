@@ -25,8 +25,12 @@ say() {
   # Collapsed smoke steps redirect stdout to a log. Still show STEP/WARN/OK on
   # the terminal; command chatter stays in the log until the user expands it.
   if [[ "${_UI_SESSION:-0}" == "1" && "${_UI_COLLAPSE_BODY:-0}" == "1" ]] \
-    && [[ ! -t 1 ]] && [[ -w /dev/tty ]]; then
-    { ui_wrap "${color}" "${msg}"; printf '\n'; } >/dev/tty
+    && [[ ! -t 1 ]]; then
+    # Open /dev/tty in a subshell first: macOS has the node with no controlling
+    # terminal, and a direct >/dev/tty prints "Device not configured".
+    if (exec >/dev/tty) 2>/dev/null; then
+      { ui_wrap "${color}" "${msg}"; printf '\n'; } >/dev/tty 2>/dev/null || true
+    fi
   fi
 }
 
@@ -67,6 +71,42 @@ ui_status_text() {
     SKIP) ui_wrap yellow "${padded}" ;;
     *) printf '%s' "${padded}" ;;
   esac
+}
+
+# Drop ECMA-48 CSI sequences so ${#text} / printf widths match the terminal.
+ui_strip_ansi() {
+  if [[ $# -gt 0 ]]; then
+    printf '%s' "$1"
+  else
+    cat
+  fi | sed $'s/\033\\[[0-9;]*[[:alpha:]]//g'
+}
+
+# Truncate to width, appending ... when the text is longer. Strips ANSI first.
+ui_trunc() {
+  local text=$1
+  local width=$2
+  text="$(ui_strip_ansi "${text}")"
+  text="${text//$'\n'/ }"
+  if [[ -z "${width}" || "${width}" -le 0 ]]; then
+    return 0
+  fi
+  if [[ ${#text} -le ${width} ]]; then
+    printf '%s' "${text}"
+    return 0
+  fi
+  if [[ "${width}" -le 3 ]]; then
+    printf '%s' "${text:0:width}"
+    return 0
+  fi
+  printf '%s' "${text:0:$((width - 3))}..."
+}
+
+# Left-align text in a fixed-width cell. Always prints exactly `width` columns.
+ui_table_cell() {
+  local text=$1
+  local width=$2
+  printf '%-*s' "${width}" "$(ui_trunc "${text}" "${width}")"
 }
 
 # Color only if this function's fd 1 is a terminal (after redirects, so

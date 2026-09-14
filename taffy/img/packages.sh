@@ -1,11 +1,10 @@
 #!/bin/bash
 
-apt-get update
-apt-get -qy install git
+# Unused: taffy builds from gitreceive/img/packages.sh (same git layer).
+export DEBIAN_FRONTEND=noninteractive
 
-if ! mountpoint -q /var/cache/apt/archives 2>/dev/null; then
-  rm -rf /var/cache/apt/archives/* "/var/cache/apt/archives/partial"/*
-fi
-if ! mountpoint -q /var/lib/apt/lists 2>/dev/null; then
-  rm -rf /var/lib/apt/lists/*
-fi
+apt-get update
+apt-get -qy install --no-install-recommends git
+
+# shellcheck source=builder/img/apt-slim-finish.sh
+source builder/img/apt-slim-finish.sh

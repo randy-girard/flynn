@@ -33,11 +33,15 @@ func TestDefaultStackFromRelease(t *testing.T) {
 }
 
 func TestReleaseMetaForContainerStack(t *testing.T) {
-	meta := map[string]string{"git.commit": "abc"}
-	meta["git"] = "true"
-	meta["slugrunner.stack"] = stackContainer
-	if meta["slugrunner.stack"] != "container" {
-		t.Fatalf("meta = %#v", meta)
+	rel := &ct.Release{Meta: map[string]string{
+		"git.commit":       "abc",
+		"git":              "true",
+		"slugrunner.stack": stackContainer,
+	}}
+	if !rel.IsGitDeploy() {
+		t.Fatal("container-stack git push must still be a git deploy")
 	}
-	_ = ct.Release{}
+	if rel.IsSlugDeploy() {
+		t.Fatal("container-stack git push must not use slugrunner")
+	}
 }

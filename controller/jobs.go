@@ -176,7 +176,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	for k, v := range newJob.Env {
 		env[k] = v
 	}
-	metadata := make(map[string]string, len(newJob.Meta)+3)
+	metadata := make(map[string]string, len(app.Meta)+len(newJob.Meta)+3)
+	for k, v := range app.Meta {
+		metadata[k] = v
+	}
 	for k, v := range newJob.Meta {
 		metadata[k] = v
 	}
@@ -199,6 +202,9 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		Resources: newJob.Resources,
 		Partition: string(newJob.Partition),
 		Profiles:  newJob.Profiles,
+	}
+	if app.Meta["flynn-system-app"] == "true" {
+		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
 	if len(newJob.Args) > 0 {

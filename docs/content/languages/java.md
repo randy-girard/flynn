@@ -129,17 +129,11 @@ This downloads the necessary dependencies and compiles the application into the
 
 ### Java Runtime
 
-By default, Flynn uses OpenJDK 8 to run Java applications. OpenJDK 6 and 7 are
-also available, and can be used by setting `java.runtime.version` in a
-`system.properties` file in the root directory:
-
-```
-! OpenJDK 6
-java.runtime.version=1.6
-
-! OpenJDK 7
-java.runtime.version=1.7
-```
+By default, Flynn uses a current OpenJDK from the heroku-24 Java buildpack.
+Pin a version with `java.runtime.version` in a `system.properties` file in the
+app root (for example `21`). See the [Java
+buildpack](https://github.com/heroku/heroku-buildpack-java) for versions the
+stack still provides. OpenJDK 6, 7, and 8 are not available on heroku-24.
 
 ## Process Types
 

@@ -4,6 +4,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/flynn/flynn/pkg/squashfs"
 )
 
 // TestMksquashfsCommandCapsMemory guards against mksquashfs reverting to its
@@ -40,6 +42,12 @@ func TestMksquashfsCommandCapsMemory(t *testing.T) {
 	if _, ok := flag("-noappend"); !ok {
 		t.Errorf("-noappend missing: %v", args)
 	}
+	if v, ok := flag("-comp"); !ok || v != squashfs.Compression {
+		t.Errorf("-comp = %q (present=%v), want %q", v, ok, squashfs.Compression)
+	}
+	if v, ok := flag("-Xcompression-level"); !ok || v != squashfs.CompressionLevel {
+		t.Errorf("-Xcompression-level = %q (present=%v), want %q", v, ok, squashfs.CompressionLevel)
+	}
 	if v, ok := flag("-ef"); !ok || v != "/dev/stdin" {
 		t.Errorf("-ef = %q (present=%v), want /dev/stdin", v, ok)
 	}
@@ -53,5 +61,14 @@ func TestMksquashfsCommandCapsMemory(t *testing.T) {
 	}
 	if want := strings.Join(excludes, "\n"); string(got) != want {
 		t.Errorf("stdin excludes = %q, want %q", got, want)
+	}
+}
+
+func TestMksquashfsDefaultExcludesDropDocs(t *testing.T) {
+	joined := strings.Join(squashfs.DefaultExcludes(), "\n")
+	for _, p := range []string{"usr/share/doc", "var/cache/apt", "tmp"} {
+		if !strings.Contains(joined, p) {
+			t.Errorf("DefaultExcludes missing %q", p)
+		}
 	}
 }

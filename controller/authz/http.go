@@ -45,7 +45,69 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if kind == rkCluster {
 		return false
 	}
+	// Platform apps hold cluster state (controller/blobstore/postgres, …).
+	// App-scoped dashboard tokens must not open their consoles or read env
+	// even if someone granted the token that app id/name.
+	if IsPlatformAppName(appID) {
+		return false
+	}
 	return grantCovers(tok, appID, kind)
+}
+
+// TokenContextKey stores the request principal on the handler context.
+type tokenContextKey struct{}
+
+// TokenContextKey is the context key for *authorizer.Token.
+var TokenContextKey = tokenContextKey{}
+
+// TokenFromContext returns the principal muxHandler stored, or nil.
+func TokenFromContext(ctx interface {
+	Value(key interface{}) interface{}
+}) *authorizer.Token {
+	if ctx == nil {
+		return nil
+	}
+	tok, _ := ctx.Value(TokenContextKey).(*authorizer.Token)
+	return tok
+}
+
+// SystemAppAllowed reports whether tok may operate on a flynn-system-app.
+// User apps are always allowed at this layer (HTTPAllowed already scoped them).
+// A nil token cannot touch system apps.
+func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
+	if !systemApp {
+		return true
+	}
+	return tok != nil && tok.HasClusterAdmin()
+}
+
+// platformAppNames are bootstrap/system apps addressed by name in the URL.
+// UUID lookups are enforced in appLookup via App.System().
+var platformAppNames = map[string]struct{}{
+	"blobstore":     {},
+	"clickhouse":    {},
+	"controller":    {},
+	"dashboard":     {},
+	"discoverd":     {},
+	"flannel":       {},
+	"gitreceive":    {},
+	"kafka":         {},
+	"logaggregator": {},
+	"mariadb":       {},
+	"mongodb":       {},
+	"postgres":      {},
+	"redis":         {},
+	"router":        {},
+	"status":        {},
+	"tarreceive":    {},
+}
+
+// IsPlatformAppName is true for well-known system app names (not redis-<uuid>
+// appliances). Those appliances are still flynn-system-app and are gated in
+// appLookup with SystemAppAllowed.
+func IsPlatformAppName(name string) bool {
+	_, ok := platformAppNames[name]
+	return ok
 }
 
 // TarreceiveAllowed reports whether a token may push layers/artifacts to
