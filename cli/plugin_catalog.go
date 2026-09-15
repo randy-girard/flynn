@@ -32,7 +32,15 @@ func missingPluginCommand(name string, cat *plugin.Catalog, catErr error) error 
 
 func hideUnavailablePluginCommands(usage string) string {
 	cat, err := clusterPluginCatalog()
-	return filterPluginUsage(usage, cat, err)
+	return mergePluginUsage(usage, cat, err)
+}
+
+func pluginAwareUsage(usage string) string {
+	return hideUnavailablePluginCommands(usage)
+}
+
+func mergePluginUsage(usage string, cat *plugin.Catalog, catErr error) string {
+	return appendCatalogCommands(filterPluginUsage(usage, cat, catErr), cat, catErr)
 }
 
 func filterPluginUsage(usage string, cat *plugin.Catalog, catErr error) string {
@@ -46,6 +54,54 @@ func filterPluginUsage(usage string, cat *plugin.Catalog, catErr error) string {
 			}
 		}
 		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
+
+func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) string {
+	if catErr != nil || cat == nil {
+		return usage
+	}
+	present := map[string]struct{}{}
+	for _, line := range strings.Split(usage, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			present[fields[0]] = struct{}{}
+		}
+	}
+	var extra []string
+	for _, cmd := range cat.Commands {
+		if cmd.Command == "" {
+			continue
+		}
+		if !cmd.Runnable() {
+			continue
+		}
+		if _, ok := present[cmd.Command]; ok {
+			continue
+		}
+		desc := cmd.Usage
+		if desc == "" {
+			desc = "plugin command"
+		}
+		extra = append(extra, fmt.Sprintf("\t%-11s %s", cmd.Command, desc))
+		present[cmd.Command] = struct{}{}
+	}
+	if len(extra) == 0 {
+		return usage
+	}
+	lines := strings.Split(usage, "\n")
+	out := make([]string, 0, len(lines)+len(extra))
+	inserted := false
+	for _, line := range lines {
+		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "See 'flynn help") {
+			out = append(out, extra...)
+			inserted = true
+		}
+		out = append(out, line)
+	}
+	if !inserted {
+		out = append(out, extra...)
 	}
 	return strings.Join(out, "\n")
 }
