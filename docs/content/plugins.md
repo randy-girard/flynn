@@ -118,6 +118,20 @@ The release must include `flynn-plugin.json`, `image.json`, and `{id}.squashfs`
 uploads the layers into the cluster blobstore so other hosts never talk to
 GitHub.
 
+When a Flynn GitHub Release is **published** (not a draft), Flynn can queue
+those plugin workflows automatically. Configure the Flynn repo (or org) with:
+
+* **Variable** `PLUGIN_RELEASE_REPOS` — one `owner/repo` per line (commas and
+  `#` comments are allowed). Do not put appliance names in Flynn source.
+* **Secret** `PLUGIN_RELEASE_TOKEN` — PAT or GitHub App token with **Actions:
+  write** and **Contents: read** on those plugin repos (`GITHUB_TOKEN` cannot
+  start workflows in another repository).
+
+Each plugin is built with `version` and `flynn_version` set to the Flynn tag
+so the overlay uses that ubuntu-noble layer. Re-run **Dispatch plugin
+releases** from Actions if a plugin job was skipped or failed. A plugin tag
+that already exists is skipped.
+
 Private repos and **draft** releases need a token (Contents: Read):
 
 ```text

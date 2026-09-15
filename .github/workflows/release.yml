@@ -3,6 +3,8 @@ name: Build and Release
 # Manual release only. Unit tests run via the separate Unit tests workflow;
 # this workflow splits the Flynn build across jobs/steps for fresh timeout budgets
 # (base → host binaries → toolchain images → app images).
+# Plugin rebuilds run from plugin-releases.yml when this GitHub Release is
+# published (drafts wait until you publish them).
 on:
   workflow_dispatch:
     inputs:

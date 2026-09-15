@@ -1,0 +1,61 @@
+name: Dispatch plugin releases
+
+# Runs after a Flynn GitHub Release is published (not drafts). Plugin repos
+# are listed in the PLUGIN_RELEASE_REPOS Actions variable so Flynn source
+# never hardcodes appliance names. GITHUB_TOKEN cannot start workflows in
+# other repos; PLUGIN_RELEASE_TOKEN must be a PAT or GitHub App token with
+# Actions: write (and Contents: read, to skip tags that already exist).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Flynn release tag to rebuild plugins against (e.g. v20260915.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark plugin GitHub Releases as prereleases"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: plugin-releases-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    name: Dispatch plugin Build and Release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve version
+        id: meta
+        run: |
+          set -eo pipefail
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            echo "version=${{ github.event.release.tag_name }}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=${{ github.event.release.prerelease }}" >> "${GITHUB_OUTPUT}"
+          else
+            echo "version=${{ inputs.version }}" >> "${GITHUB_OUTPUT}"
+            echo "prerelease=${{ inputs.prerelease }}" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Dispatch plugin releases
+        env:
+          PLUGIN_RELEASE_REPOS: ${{ vars.PLUGIN_RELEASE_REPOS }}
+          PLUGIN_RELEASE_TOKEN: ${{ secrets.PLUGIN_RELEASE_TOKEN }}
+        run: |
+          set -eo pipefail
+          ARGS=(--version "${{ steps.meta.outputs.version }}")
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+            ARGS+=(--prerelease)
+          fi
+          ./script/dispatch-plugin-releases "${ARGS[@]}"
