@@ -97,6 +97,10 @@ fi
 
 need "${ROOT}/host/img/packages.sh" 'libseccomp2' \
   "host runtime image must install libseccomp2, not the -dev headers"
+need "${ROOT}/host/img/packages.sh" 'CRYPTSETUP=n' \
+  "host image must skip cryptsetup initramfs probes on overlay builder roots"
+need "${ROOT}/host/img/packages.sh" 'FSTYPE=9p' \
+  "host image must tell the fsck hook the VM root is 9p, not overlay"
 if grep -q 'libseccomp-dev' "${ROOT}/host/img/packages.sh"; then
   echo "host image must not install libseccomp-dev" >&2
   exit 1
@@ -119,6 +123,12 @@ need "${ROOT}/appliance/postgresql/img/packages.sh" 'timescaledb-2-postgresql-16
   "postgres slim-down must keep TimescaleDB"
 need "${ROOT}/appliance/postgresql/img/packages.sh" 'timescaledb-tools' \
   "postgres must install timescaledb-tools (timescaledb-tune; not a Recommends)"
+if grep -qE 'timescaledb-tune --yes' "${ROOT}/appliance/postgresql/img/packages.sh"; then
+  echo "postgres image must not run timescaledb-tune (Flynn writes postgresql.conf)" >&2
+  exit 1
+fi
+need "${ROOT}/appliance/postgresql/process.go" 'timescaledb.max_background_workers' \
+  "Flynn postgresql.conf must set timescaledb.max_background_workers"
 need "${ROOT}/appliance/postgresql/img/packages.sh" 'postgresql-16-pgrouting' \
   "postgres slim-down must keep pgRouting"
 if grep -q 'software-properties-common' "${ROOT}/appliance/postgresql/img/packages.sh"; then

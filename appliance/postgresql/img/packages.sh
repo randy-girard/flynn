@@ -46,8 +46,9 @@ apt-get install -y --no-install-recommends \
   timescaledb-tools \
   less
 
-# ---- Enable TimescaleDB ----
-timescaledb-tune --yes
+# Flynn appliances write postgresql.conf from appliance/postgresql/process.go.
+# timescaledb-tune targets Debian's unused cluster conf and prints
+# "missing: timescaledb.max_background_workers" in overlay image builds.
 
 apt-get purge -y --auto-remove curl gnupg || true
 # shellcheck source=builder/img/apt-slim-finish.sh

@@ -115,6 +115,22 @@ func (PostgresSuite) TestSyncStandbyNamesConfigQuoting(c *C) {
 	c.Assert(strings.Contains(buf.String(), `synchronous_standby_names = '"`+syncID+`"'`), Equals, true)
 }
 
+func (PostgresSuite) TestTimescaleDBConfigSetsBackgroundWorkers(c *C) {
+	var buf bytes.Buffer
+	err := configTemplate.Execute(&buf, configData{TimescaleDB: true, Port: "5432", ID: "primary"})
+	c.Assert(err, IsNil)
+	out := buf.String()
+	c.Assert(strings.Contains(out, "shared_preload_libraries = 'timescaledb'"), Equals, true)
+	c.Assert(strings.Contains(out, "timescaledb.max_background_workers = 8"), Equals, true)
+	c.Assert(strings.Contains(out, "max_worker_processes = 16"), Equals, true)
+	c.Assert(strings.Contains(out, "max_parallel_workers = 4"), Equals, true)
+
+	buf.Reset()
+	err = configTemplate.Execute(&buf, configData{Port: "5432", ID: "primary"})
+	c.Assert(err, IsNil)
+	c.Assert(strings.Contains(buf.String(), "timescaledb.max_background_workers"), Equals, false)
+}
+
 func (PostgresSuite) TestSingletonPrimary(c *C) {
 	dir := c.MkDir()
 	chownPostgres(c, dir)
