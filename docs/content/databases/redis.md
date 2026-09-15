@@ -5,7 +5,17 @@ layout: docs
 
 # Redis
 
-The Flynn Redis appliance provides Redis from the Ubuntu 24.04 package set in a
+Redis is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
+cluster host, then provision from an app. See [Plugins](plugins.md).
+
+```text
+sudo flynn-host plugin install redis --ref v20260914.0
+sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+sudo flynn-host plugin install ../flynn-plugin-redis
+flynn resource add redis
+```
+
+The plugin provides Redis from the Ubuntu 24.04 package set in a
 single process configuration. The data stored in this process is ephemeral and
 is intended for caching and development use.
 

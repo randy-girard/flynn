@@ -8,7 +8,7 @@ toc_min_level: 2
 
 The `flynn` CLI is the client for the [controller](architecture.html.md#controller). It deploys and manages applications, routes, and datastores.
 
-Host-level commands (`bootstrap`, `acme`, rolling update, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI.
+Host-level commands (`bootstrap`, `acme`, rolling update, plugin install, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI.
 
 ## Installation
 

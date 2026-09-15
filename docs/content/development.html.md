@@ -45,6 +45,10 @@ You can also work on a native Ubuntu 24.04 machine with the same packages.
 macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
+Optional appliances live in sibling repos next to this checkout (`../flynn-plugin-redis`,
+…). Install them on a cluster host with `flynn-host plugin install` after
+bootstrap. See [Plugins](plugins.md).
+
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
 `util/commit-validator/validate-gofmt` and fail if changed Go is not formatted.
@@ -248,9 +252,10 @@ Default flow:
    rows, exercise `flynn` / `flynn-host`, then `flynn-host update --all-nodes
    --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
-   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Redis,
-   Kafka, and ClickHouse volume data is not in the cluster backup; those
-   engines must come back empty.
+   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Installed
+   plugins restore with postgres (`plugins.json` is the inventory; do not
+   `plugin install` again). Redis, Kafka, and ClickHouse volume data is not
+   in the cluster backup; those engines must come back empty.
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
 

@@ -46,6 +46,8 @@ need 'postgres.sql.gz' \
   "cluster backup must include postgres.sql.gz"
 need 'flynn.json' \
   "cluster backup must contain flynn.json"
+need 'plugins.json' \
+  "cluster backup must contain plugins.json so restore knows which plugins were installed"
 need 'keys not in cluster backup' \
   "redis after restore must PING only; keys are not in the cluster backup"
 need 'topic data not in cluster backup' \
@@ -62,6 +64,11 @@ need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
+
+if grep -q 'Reinstall plugins after restore' "${smoke}"; then
+  echo "restore must not flynn-host plugin install; postgres backup already has plugin apps and artifacts" >&2
+  exit 1
+fi
 
 if grep -q 'assert_databases post-restore' "${smoke}"; then
   echo "post-restore must not call assert_databases (redis/kafka/clickhouse would FAIL)" >&2

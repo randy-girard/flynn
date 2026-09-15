@@ -352,6 +352,18 @@ func (h *Helper) controllerClient(t *c.C) controller.Client {
 	return h.controller
 }
 
+func (h *Helper) skipUnlessProvider(t *c.C, name string) {
+	client := h.controllerClient(t)
+	providers, err := client.ProviderList()
+	t.Assert(err, c.IsNil)
+	for _, p := range providers {
+		if p.Name == name {
+			return
+		}
+	}
+	t.Skip(fmt.Sprintf("%s plugin is not installed on this cluster", name))
+}
+
 func (h *Helper) discoverdClient(t *c.C) *discoverd.Client {
 	h.discMtx.Lock()
 	defer h.discMtx.Unlock()

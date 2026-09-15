@@ -85,6 +85,26 @@ need 'sirenia_primary_read_write' \
   "smoke must wait for postgres/mariadb/mongodb after each upgrade pass"
 need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
+need 'step_install_plugins' \
+  "after bootstrap, smoke must flynn-host plugin install from sibling repos before resource add"
+if grep -q 'Reinstall plugins after restore' "${smoke}"; then
+  echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
+  exit 1
+fi
+need 'PLUGIN_SMOKE_APPS' \
+  "plugin install list must be data-driven (not hardcoded to one appliance)"
+need 'flynn-host plugin install' \
+  "plugins must be installed with flynn-host, not the user flynn CLI"
+need 'plugin_dist_ready' \
+  "smoke must rebuild plugin dist when image.json is overlay-only (no ubuntu-noble)"
+need 'flynn.plugin.files' \
+  "smoke must rebuild plugin dist when binaries were not installed into the overlay (ENOENT /bin/start-*)"
+need 'flynn.plugin.arch' \
+  "smoke must rebuild plugin dist when Go binaries do not match the Flynn host architecture (exit 126)"
+need 'FLYNN_LAYERS_DIR' \
+  "plugin-build must overlay the local Flynn ubuntu-noble layer, not GitHub's same-ID other-arch squashfs"
+need 'dump_plugin_install_diagnostics' \
+  "plugin install failure must dump flynn-host job/squashfs logs, not only the scale timeout"
 need 'wait_datastores_ready "after resource add" postgres mariadb mongodb redis' \
   "after provisioning, smoke must wait for every scaled sirenia appliance plus redis"
 need 'wait_datastores_ready "after upgrade' \
