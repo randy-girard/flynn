@@ -12,7 +12,7 @@ on:
   workflow_call:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   GO_VERSION: '1.24'
@@ -96,6 +96,15 @@ jobs:
           set -eo pipefail
           make test-unit-root-native 2>&1 | tee unit-test-output.log
 
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Upload unit test log
         if: failure()
         uses: actions/upload-artifact@v7
@@ -104,3 +113,25 @@ jobs:
           path: unit-test-output.log
           if-no-files-found: ignore
           retention-days: 7
+
+  coverage-badge:
+    name: Coverage badge
+    needs: unit
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && needs.unit.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download coverage
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage
+
+      - name: Publish coverage badge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./script/ci-push-coverage-badge

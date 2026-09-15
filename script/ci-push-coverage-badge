@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Publish coverage/badge.svg and coverage/shields.json to the coverage-badge
+# branch so READMEs can embed a live badge without committing reports to main.
+#
+# Requires GITHUB_TOKEN and GITHUB_REPOSITORY (set in GitHub Actions).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+DIR="${COVERAGE_DIR:-${ROOT}/coverage}"
+BRANCH="${COVERAGE_BADGE_BRANCH:-coverage-badge}"
+
+if [[ ! -f "${DIR}/badge.svg" || ! -f "${DIR}/shields.json" ]]; then
+  echo "coverage badge files missing under ${DIR}" >&2
+  exit 1
+fi
+
+TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN is required}"
+REPO="${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+cd "${tmp}"
+git init -q
+git checkout -b "${BRANCH}"
+cp "${DIR}/badge.svg" "${DIR}/shields.json" .
+cat >README.md <<EOF
+Generated coverage badge. Updated by CI; do not edit.
+EOF
+git add badge.svg shields.json README.md
+git -c user.name="github-actions[bot]" \
+  -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+  commit -qm "chore: update coverage badge"
+git push --force "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "HEAD:${BRANCH}"
+echo "==> Pushed coverage badge to ${REPO}@${BRANCH}"

@@ -33,6 +33,10 @@ EOF
   grep -q "pkg/plugin/manifest.go" "${COVER_TMP}/coverage.out"
   grep -q "pkg/plugin/catalog.go" "${COVER_TMP}/coverage.out"
   grep -q "total:" "${COVER_TMP}/summary.txt"
+  [[ -f "${COVER_TMP}/badge.svg" ]]
+  [[ -f "${COVER_TMP}/shields.json" ]]
+  grep -q "coverage" "${COVER_TMP}/badge.svg"
+  grep -q "schemaVersion" "${COVER_TMP}/shields.json"
   grep -q "Overall by package area" "${COVER_TMP}/index.html"
   grep -q 'id="pkg"' "${COVER_TMP}/index.html"
   grep -q "files/pkg/plugin/manifest.go.html" "${COVER_TMP}/index.html"

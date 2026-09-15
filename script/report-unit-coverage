@@ -11,6 +11,8 @@
 #   coverage/files/**      one HTML page per source file
 #   coverage/func.txt      per-function counts
 #   coverage/summary.txt   total coverage line
+#   coverage/badge.svg     README badge (CI also publishes coverage-badge branch)
+#   coverage/shields.json  shields.io endpoint payload
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -59,3 +61,4 @@ tail -n1 "${DIR}/func.txt" | tee "${DIR}/summary.txt"
 rm -f "${DIR}/index.html"
 rm -rf "${DIR}/files"
 go run -mod=vendor -buildvcs=false ./util/coverage -profile "${merged}" -out "${DIR}" -root "${ROOT}"
+"${ROOT}/script/write-coverage-badge" "${DIR}"
