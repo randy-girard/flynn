@@ -205,6 +205,9 @@ func TestCatalogFromPluginApps(t *testing.T) {
 	if !cat.HasCommand("cache") || !cat.HasProvider("cache") {
 		t.Fatalf("plugin CLI must be listed: %+v", cat.Commands)
 	}
+	if got := cat.Lookup("cache"); got == nil || got.App != "cache" {
+		t.Fatalf("catalog must record plugin app name: %+v", got)
+	}
 	if !cat.HasCommand("redis") || !cat.HasProvider("redis") {
 		t.Fatalf("provider without CLI must unlock flynn redis: %+v", cat.Commands)
 	}
@@ -239,7 +242,7 @@ func TestCLIFromAppAndCoreCommands(t *testing.T) {
 	if got == nil || got.Command != "redis" || got.Usage != "manage redis" {
 		t.Fatalf("%+v", got)
 	}
-	if !IsCorePluginCommand("redis") || !IsCorePluginCommand("mysql") || IsCorePluginCommand("ps") {
+	if IsCorePluginCommand("redis") || !IsCorePluginCommand("mysql") || IsCorePluginCommand("ps") {
 		t.Fatal("core plugin command set")
 	}
 }

@@ -14,12 +14,19 @@ type Catalog struct {
 }
 
 func (c *Catalog) HasCommand(name string) bool {
-	for _, cmd := range c.Commands {
-		if cmd.Command == name {
-			return true
+	return c.Lookup(name) != nil
+}
+
+func (c *Catalog) Lookup(name string) *CLI {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Commands {
+		if c.Commands[i].Command == name {
+			return &c.Commands[i]
 		}
 	}
-	return false
+	return nil
 }
 
 func (c *Catalog) HasProvider(name string) bool {
@@ -64,6 +71,7 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 			continue
 		}
 		seen[cli.Command] = struct{}{}
+		cli.App = app.Name
 		cat.Commands = append(cat.Commands, cli)
 	}
 
@@ -75,18 +83,19 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 			continue
 		}
 		// Providers without a cli block still unlock a same-named flynn command
-		// (resource-provider plugins whose handlers still live in core).
+		// for compiled-in handlers (mysql, …). Fully extracted plugins must
+		// stamp a runnable CLI spec (doc + actions) at install.
 		seen[p.Name] = struct{}{}
 		cat.Commands = append(cat.Commands, CLI{Command: p.Name})
 	}
 	return cat
 }
 
-// CorePluginCommands are flynn CLI handlers that belong to plugins, not core.
-// Help and dispatch hide them unless the cluster catalog lists the command.
-// Add a name here when extracting that plugin; do not special-case behavior.
+// CorePluginCommands are compiled-in flynn handlers for plugins that are not
+// yet fully extracted (no CLI actions in the cluster catalog). Help and
+// dispatch hide them unless the catalog lists the command. Redis is not listed:
+// its syntax lives on the plugin and the CLI delegates jobs after install.
 var CorePluginCommands = []string{
-	"redis",
 	"mysql",
 	"mongodb",
 	"kafka",

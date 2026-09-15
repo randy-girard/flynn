@@ -60,10 +60,56 @@ type AppSpec struct {
 	Processes map[string]ct.ProcessType `json:"processes,omitempty"`
 }
 
+// CLI is the user-facing flynn command published by a plugin. The flynn binary
+// does not compile plugin handlers; after install it reads this block from the
+// cluster (app meta flynn-plugin-cli) and runs matching actions as controller
+// jobs against the plugin/resource release image.
 type CLI struct {
 	Command     string   `json:"command"`
 	Usage       string   `json:"usage,omitempty"`
 	Subcommands []string `json:"subcommands,omitempty"`
+
+	// App is the plugin system app name. catalogFrom fills this from the
+	// controller app; it is not required in flynn-plugin.json.
+	App string `json:"app,omitempty"`
+
+	// Doc is the full docopt usage string (including "usage:" lines).
+	Doc string `json:"doc,omitempty"`
+
+	// ResourceEnv, when set, is an env key on the current app release whose
+	// value is the provisioned appliance app (e.g. FLYNN_REDIS).
+	ResourceEnv     string `json:"resource_env,omitempty"`
+	ResourceMissing string `json:"resource_missing,omitempty"`
+
+	Actions []CLIAction `json:"actions,omitempty"`
+}
+
+// CLIAction is one docopt command delegated to a cluster job.
+type CLIAction struct {
+	Name       string            `json:"name"`
+	Args       []string          `json:"args"`
+	Append     string            `json:"append,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	StdoutFile string            `json:"stdout_file,omitempty"`
+	StdinFile  string            `json:"stdin_file,omitempty"`
+	Progress   bool              `json:"progress,omitempty"`
+	Quiet      string            `json:"quiet,omitempty"`
+}
+
+func (c *CLI) Runnable() bool {
+	return c != nil && c.Command != "" && strings.TrimSpace(c.Doc) != "" && len(c.Actions) > 0
+}
+
+func (c *CLI) Action(name string) *CLIAction {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Actions {
+		if c.Actions[i].Name == name {
+			return &c.Actions[i]
+		}
+	}
+	return nil
 }
 
 type Hooks struct {
