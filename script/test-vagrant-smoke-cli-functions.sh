@@ -61,8 +61,10 @@ need 'docker-cli-ps' \
   "CLI step must list the Dockerfile app jobs"
 need 'docker-cli-log' \
   "CLI step must read Dockerfile app logs"
-need 'mongodb dump' \
-  "CLI step must dump mongodb (slimmed mongodump tools)"
+need 'cli-help-mongodb' \
+  "CLI step must show mongodb in flynn help after plugin install"
+need 'cli-mongo-dump' \
+  "CLI step must dump mongodb via the delegated plugin job"
 need 'cli-help-redis' \
   "CLI step must show redis in flynn help after plugin install"
 need 'cli-help-mysql' \

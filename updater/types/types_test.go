@@ -31,7 +31,7 @@ func TestSystemAppsUpgradeOrder(t *testing.T) {
 			t.Fatalf("missing required system app %q", required)
 		}
 	}
-	for _, optional := range []string{"mongodb", "kafka", "clickhouse"} {
+	for _, optional := range []string{"kafka", "clickhouse"} {
 		app, ok := byName[optional]
 		if !ok {
 			t.Fatalf("missing optional system app %q", optional)

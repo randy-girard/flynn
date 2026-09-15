@@ -387,57 +387,6 @@
     "url":"http://clickhouse-api.discoverd/clusters"
   },
   {
-    "id": "mongodb-password",
-    "action": "gen-random"
-  },
-  {
-    "id": "mongodb",
-    "app": {
-      "name": "mongodb",
-      "strategy": "sirenia",
-      "meta": {"flynn-system-app": "true"},
-      "deploy_timeout": 240
-    },
-    "action": "deploy-app",
-    "release": {
-      "env": {
-        "FLYNN_MONGO": "mongodb",
-        "MONGO_DATABASE": "admin",
-        "MONGO_HOST": "leader.mongodb.discoverd",
-        "MONGO_USER": "flynn",
-        "MONGO_PWD": "{{ (index .StepData \"mongodb-password\").Data }}",
-        "SIRENIA_PROCESS": "mongodb",
-        "SINGLETON": "{{ .Singleton }}"
-      },
-      "processes": {
-        "mongodb": {
-          "ports": [{"port": 27017, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-mongodb", "mongodb"],
-          "service": "mongodb",
-          "volumes": [{"path": "/data"}]
-        },
-        "web": {
-          "ports": [{"port": 80, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-mongodb", "api"],
-          "env": {
-            "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}"
-          }
-        }
-      }
-    },
-    "artifacts": [$image_artifact[mongodb]],
-    "processes": {
-      "mongodb": 0,
-      "web": 2
-    }
-  },
-  {
-    "id": "add-mongodb-provider",
-    "action": "add-provider",
-    "name": "mongodb",
-    "url": "http://mongodb-api.discoverd/databases"
-  },
-  {
     "id": "blobstore",
     "action": "deploy-app",
     "app": {
@@ -731,12 +680,6 @@
     "id": "kafka-wait",
     "action": "wait",
     "url": "http://kafka-api.discoverd/ping"
-  },
-  {
-    "id": "mongodb-wait",
-    "action": "wait",
-    "url": "http://mongodb-api.discoverd",
-    "status": 404
   },
   {
     "id": "blobstore-wait",

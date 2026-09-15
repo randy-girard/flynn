@@ -277,11 +277,6 @@ $function$;
 			updateVolumes(data.Postgres, step)
 		case "controller":
 			updateProcArgs(data.Controller, step)
-		case "mongodb":
-			if data.MongoDB != nil {
-				updateProcArgs(data.MongoDB, step)
-				updateVolumes(data.MongoDB, step)
-			}
 		}
 		if step.Artifact != nil {
 			artifacts[step.ID] = step.Artifact
@@ -301,7 +296,9 @@ $function$;
 		}
 	}
 	if data.MongoDB != nil {
-		data.MongoDB.Artifacts = []*ct.Artifact{artifacts["mongodb"]}
+		if art := artifacts["mongodb"]; art != nil {
+			data.MongoDB.Artifacts = []*ct.Artifact{art}
+		}
 	}
 
 	// set TELEMETRY_CLUSTER_ID
@@ -630,7 +627,11 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 			return fmt.Errorf("error updating mongodb formation: %s", err)
 		}
 
-		cmd = exec.JobUsingHost(state.Hosts[0], artifacts["mongodb"], nil)
+		img := plugin.RestoreImage(artifacts["mongodb"], data.MongoDB)
+		if img == nil {
+			return fmt.Errorf("mongodb backup present but no mongodb image in the tarball or backup")
+		}
+		cmd = exec.JobUsingHost(state.Hosts[0], img, nil)
 		cmd.Args = []string{"mongorestore", "-h", "leader.mongodb.discoverd", "-u", "flynn", "-p", data.MongoDB.Release.Env["MONGO_PWD"], "--archive"}
 		cmd.Stdin = mongodb
 		meta = bootstrap.StepMeta{ID: "restore", Action: "restore-mongodb"}
@@ -785,21 +786,7 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 		return err
 	}
 
-	// mongodb steps require the controller key
 	state.StepData["controller-key"] = &bootstrap.RandomData{controllerKey}
-
-	// deploy mongodb if it wasn't restored from the backup
-	if data.MongoDB == nil {
-		steps := bootstrap.Manifest{
-			manifestStepMap["mongodb-password"],
-			manifestStepMap["mongodb"],
-			manifestStepMap["add-mongodb-provider"],
-			manifestStepMap["mongodb-wait"],
-		}
-		if _, err := steps.RunWithState(ch, state); err != nil {
-			return fmt.Errorf("error deploying mongodb: %s", err)
-		}
-	}
 
 	// deploy tarreceive if it wasn't in the backup
 	if _, err := client.GetApp("tarreceive"); err == controller.ErrNotFound {

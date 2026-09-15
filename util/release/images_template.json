@@ -21,6 +21,5 @@
   "kafka":          $image_artifact[kafka],
   "clickhouse":     $image_artifact[clickhouse],
   "tarreceive":     $image_artifact[tarreceive],
-  "mongodb":        $image_artifact[mongodb],
   "builder":        $image_artifact[builder]
 }

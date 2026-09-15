@@ -241,39 +241,6 @@
       }
     },
     {
-      "id": "mongodb",
-      "base": "ubuntu-noble",
-      "layers": [
-        {
-          "name": "mongodb-packages",
-          "script": "appliance/mongodb/img/packages.sh",
-          "inputs": [
-            "builder/img/apt-slim-finish.sh"
-          ],
-          "limits": {
-            "temp_disk": "4G"
-          }
-        },
-        {
-          "name": "mongodb-binaries",
-          "gobuild": {
-            "appliance/mongodb/cmd/flynn-mongodb": "/bin/flynn-mongodb",
-            "appliance/mongodb/cmd/flynn-mongodb-api": "/bin/flynn-mongodb-api"
-          },
-          "copy": {
-            "appliance/mongodb/start.sh": "/bin/start-flynn-mongodb",
-            "appliance/mongodb/dump.sh": "/bin/dump-flynn-mongodb",
-            "appliance/mongodb/restore.sh": "/bin/restore-flynn-mongodb"
-          }
-        }
-      ],
-      "entrypoint": {
-        "args": [
-          "/bin/start-flynn-mongodb"
-        ]
-      }
-    },
-    {
       "id": "kafka",
       "base": "ubuntu-noble",
       "layers": [

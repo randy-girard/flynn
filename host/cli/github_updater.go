@@ -1463,7 +1463,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 			continue
 		}
 		appLog.Info("finished deploy of system app")
-		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+		if appInfo.Name == "postgres" {
 			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, appLog.New("after_system_app_deploy", appInfo.Name))
 		}
 	}

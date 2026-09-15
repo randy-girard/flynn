@@ -102,14 +102,14 @@ if grep -q 'libseccomp-dev' "${ROOT}/host/img/packages.sh"; then
   exit 1
 fi
 
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-org-server' \
-  "mongodb image must install mongod, not the full mongodb-org metapackage"
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-database-tools' \
-  "mongodb image must keep mongodump/mongorestore"
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-mongosh' \
-  "mongodb image must keep mongosh"
-if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/appliance/mongodb/img/packages.sh"; then
-  echo "mongodb image must not install the mongodb-org metapackage" >&2
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-org-server' \
+  "mongodb plugin must install mongod, not the full mongodb-org metapackage"
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-database-tools' \
+  "mongodb plugin must keep mongodump/mongorestore"
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-mongosh' \
+  "mongodb plugin must keep mongosh"
+if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/../flynn-plugin-mongodb/img/packages.sh"; then
+  echo "mongodb plugin must not install the mongodb-org metapackage" >&2
   exit 1
 fi
 
@@ -131,7 +131,6 @@ need "${ROOT}/appliance/kafka/img/packages.sh" 'site-docs' \
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
-  "${ROOT}/appliance/mongodb/img/packages.sh" \
   "${ROOT}/appliance/kafka/img/packages.sh" \
   "${ROOT}/appliance/clickhouse/img/packages.sh" \
   "${ROOT}/host/img/packages.sh" \
@@ -162,6 +161,17 @@ if [[ -f "${mariadb_pkg}" ]]; then
     "mariadb plugin packages must run the shared apt/docs cleanup helper"
 elif [[ -f "${ROOT}/appliance/mariadb/img/packages.sh" ]]; then
   echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mariadb" >&2
+  exit 1
+fi
+
+mongodb_pkg="${ROOT}/../flynn-plugin-mongodb/img/packages.sh"
+if [[ -f "${mongodb_pkg}" ]]; then
+  need "${mongodb_pkg}" '--no-install-recommends' \
+    "mongodb plugin packages must pass --no-install-recommends"
+  need "${mongodb_pkg}" 'apt-slim-finish.sh' \
+    "mongodb plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/mongodb/img/packages.sh" ]]; then
+  echo "mongodb still lives in Flynn; extract it or point this check at ../flynn-plugin-mongodb" >&2
   exit 1
 fi
 

@@ -173,8 +173,6 @@ main() {
     info "building database appliance binaries"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres" ./appliance/postgresql/cmd/flynn-postgres
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres-api" ./appliance/postgresql/cmd/flynn-postgres-api
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb" ./appliance/mongodb/cmd/flynn-mongodb
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb-api" ./appliance/mongodb/cmd/flynn-mongodb-api
 
     info "building additional Flynn services"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-blobstore" ./blobstore

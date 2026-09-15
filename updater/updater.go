@@ -234,7 +234,7 @@ func run() error {
 			continue
 		}
 		log.Info("finished deploy of system app")
-		if appInfo.Name == "postgres" || appInfo.Name == "mariadb" || appInfo.Name == "mongodb" {
+		if appInfo.Name == "postgres" {
 			updaterdeploy.WaitSireniaLeaderStable(appInfo.Name, log.New("after_system_app_deploy", appInfo.Name))
 		}
 	}

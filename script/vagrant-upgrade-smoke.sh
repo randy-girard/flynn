@@ -174,7 +174,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -3290,9 +3290,6 @@ step_cli_functions() {
   cli_probe "${label}" "cli-pg-blobstore" "." \
     flynn1 -a blobstore pg psql -- -tAc "SELECT 1" || failed=1
 
-  cli_probe "${label}" "cli-mongo-dump" "" \
-    flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
-
   # Plugin CLI: usage from the cluster catalog, job on the redis image.
   if plugin_has_delegated_cli redis; then
     cli_probe "${label}" "cli-help-redis" "redis" \
@@ -3320,6 +3317,15 @@ step_cli_functions() {
       flynn1 help mysql || failed=1
     cli_probe "${label}" "cli-mysql-dump" "" \
       flynn1 -a "${APP_NAME}" mysql dump -q -f /tmp/smoke-mysql.dump || failed=1
+  fi
+
+  if plugin_has_delegated_cli mongodb; then
+    cli_probe "${label}" "cli-help-mongodb" "mongodb" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-mongodb-doc" "mongo" \
+      flynn1 help mongodb || failed=1
+    cli_probe "${label}" "cli-mongo-dump" "" \
+      flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
   fi
 
   # GET / lists every blob and 500s if postgres is briefly unavailable after
