@@ -13,7 +13,7 @@ func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
 		"usage: flynn [--version] [--help] <command> [<args>]",
 		"",
 		"Commands:",
-		"   kafka       manage kafka resources",
+		"   clickhouse  manage clickhouse resources",
 		"   ps          list jobs",
 		"   help        show help",
 		"",
@@ -21,16 +21,16 @@ func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
 	}, "\n")
 
 	hidden := mergePluginUsage(usage, nil, errors.New("no cluster"))
-	if strings.Contains(hidden, "kafka") {
+	if strings.Contains(hidden, "clickhouse") {
 		t.Fatalf("catalog error must hide compiled plugin commands:\n%s", hidden)
 	}
 	if !strings.Contains(hidden, "ps") || !strings.Contains(hidden, "help") {
 		t.Fatalf("core commands must remain:\n%s", hidden)
 	}
 
-	installed := mergePluginUsage(usage, &plugin.Catalog{Commands: []plugin.CLI{{Command: "kafka"}}}, nil)
-	if !strings.Contains(installed, "kafka") {
-		t.Fatalf("installed kafka must stay:\n%s", installed)
+	installed := mergePluginUsage(usage, &plugin.Catalog{Commands: []plugin.CLI{{Command: "clickhouse"}}}, nil)
+	if !strings.Contains(installed, "clickhouse") {
+		t.Fatalf("installed clickhouse must stay:\n%s", installed)
 	}
 }
 

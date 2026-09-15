@@ -307,11 +307,6 @@
     "artifact": $image_artifact[dockerbuilder-24]
   },
   {
-    "id": "kafka-image",
-    "action": "create-artifact",
-    "artifact": $image_artifact[kafka]
-  },
-  {
     "id": "clickhouse-image",
     "action": "create-artifact",
     "artifact": $image_artifact[clickhouse]
@@ -320,39 +315,6 @@
     "id": "acme-image",
     "action": "create-artifact",
     "artifact": $image_artifact[acme]
-  },
-  {
-    "id": "kafka",
-    "app": {
-      "name": "kafka",
-      "meta": {"flynn-system-app": "true"}
-    },
-    "action": "deploy-app",
-    "release": {
-      "env": {
-        "FLYNN_KAFKA": "kafka",
-        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "KAFKA_IMAGE_ID": "{{ (index .StepData \"kafka-image\").ID }}",
-        "KAFKA_TLS_ENABLED": "true",
-        "SINGLETON": "{{ .Singleton }}"
-      },
-      "processes": {
-        "web": {
-          "ports": [{"port": 80, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-kafka", "api"]
-        }
-      }
-    },
-    "artifacts": [$image_artifact[kafka]],
-    "processes": {
-      "web": 2
-    }
-  },
-  {
-    "id": "add-kafka-provider",
-    "action": "add-provider",
-    "name":"kafka",
-    "url":"http://kafka-api.discoverd/clusters"
   },
   {
     "id": "clickhouse",
@@ -675,11 +637,6 @@
     "service": "status-web",
     "domain": "status.{{ getenv \"CLUSTER_DOMAIN\" }}",
     "drain_backends": true
-  },
-  {
-    "id": "kafka-wait",
-    "action": "wait",
-    "url": "http://kafka-api.discoverd/ping"
   },
   {
     "id": "blobstore-wait",

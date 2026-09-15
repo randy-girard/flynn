@@ -93,11 +93,10 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 
 // CorePluginCommands are compiled-in flynn handlers for plugins that are not
 // yet fully extracted (no CLI actions in the cluster catalog). Help and
-// dispatch hide them unless the catalog lists the command. Redis, mysql, and
-// mongodb are not listed: their syntax lives on the plugin and the CLI
-// delegates jobs after install.
+// dispatch hide them unless the catalog lists the command. Redis, mysql,
+// mongodb, and kafka are not listed: their syntax lives on the plugin and the
+// CLI delegates jobs after install.
 var CorePluginCommands = []string{
-	"kafka",
 	"clickhouse",
 }
 

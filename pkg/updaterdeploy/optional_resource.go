@@ -14,15 +14,6 @@ const optionalResourceDeployTimeout = 5 * time.Minute
 // OptionalResourceApps are system apps that provision user-facing resources and
 // may be absent on clusters bootstrapped before the appliance was added.
 var OptionalResourceApps = map[string]optionalResourceApp{
-	"kafka": {
-		ServiceEnv:  "FLYNN_KAFKA",
-		ImageEnv:    "KAFKA_IMAGE_ID",
-		ProviderURL: "http://kafka-api.discoverd/clusters",
-		ExtraEnv: map[string]string{
-			"KAFKA_TLS_ENABLED": "true",
-		},
-		StartArgs: []string{"/bin/start-flynn-kafka", "api"},
-	},
 	"clickhouse": {
 		ServiceEnv:  "FLYNN_CLICKHOUSE",
 		ImageEnv:    "CLICKHOUSE_IMAGE_ID",

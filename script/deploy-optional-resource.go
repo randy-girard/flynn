@@ -1,6 +1,6 @@
 //go:build ignore
 
-// Deploy a missing optional resource system app (kafka, clickhouse) on an
+// Deploy a missing optional resource system app (clickhouse) on an
 // existing cluster using /etc/flynn/images.json.
 //
 // Usage: KEY=<controller-key> NAME=clickhouse go run script/deploy-optional-resource.go

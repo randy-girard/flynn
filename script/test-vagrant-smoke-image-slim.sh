@@ -126,12 +126,11 @@ if grep -q 'software-properties-common' "${ROOT}/appliance/postgresql/img/packag
   exit 1
 fi
 
-need "${ROOT}/appliance/kafka/img/packages.sh" 'site-docs' \
-  "kafka image must delete site-docs from the upstream tarball"
+need "${ROOT}/../flynn-plugin-kafka/img/packages.sh" 'site-docs' \
+  "kafka plugin must delete site-docs from the upstream tarball"
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
-  "${ROOT}/appliance/kafka/img/packages.sh" \
   "${ROOT}/appliance/clickhouse/img/packages.sh" \
   "${ROOT}/host/img/packages.sh" \
   "${ROOT}/gitreceive/img/packages.sh"
@@ -172,6 +171,17 @@ if [[ -f "${mongodb_pkg}" ]]; then
     "mongodb plugin packages must run the shared apt/docs cleanup helper"
 elif [[ -f "${ROOT}/appliance/mongodb/img/packages.sh" ]]; then
   echo "mongodb still lives in Flynn; extract it or point this check at ../flynn-plugin-mongodb" >&2
+  exit 1
+fi
+
+kafka_pkg="${ROOT}/../flynn-plugin-kafka/img/packages.sh"
+if [[ -f "${kafka_pkg}" ]]; then
+  need "${kafka_pkg}" '--no-install-recommends' \
+    "kafka plugin packages must pass --no-install-recommends"
+  need "${kafka_pkg}" 'apt-slim-finish.sh' \
+    "kafka plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/kafka/img/packages.sh" ]]; then
+  echo "kafka still lives in Flynn; extract it or point this check at ../flynn-plugin-kafka" >&2
   exit 1
 fi
 

@@ -18,7 +18,6 @@
   "updater":        $image_artifact[updater],
   "logaggregator":  $image_artifact[logaggregator],
   "status":         $image_artifact[status],
-  "kafka":          $image_artifact[kafka],
   "clickhouse":     $image_artifact[clickhouse],
   "tarreceive":     $image_artifact[tarreceive],
   "builder":        $image_artifact[builder]

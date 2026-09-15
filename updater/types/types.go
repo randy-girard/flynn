@@ -37,6 +37,5 @@ var SystemApps = []SystemApp{
 	{Name: "slugbuilder", ImageOnly: true},
 	{Name: "slugrunner", ImageOnly: true},
 	{Name: "dockerbuilder", ImageOnly: true},
-	{Name: "kafka", Optional: true},
 	{Name: "clickhouse", Optional: true},
 }
