@@ -26,12 +26,6 @@ pg_ctlcluster "${pg_version}" main start || service postgresql start
 # Peer auth: create roles matching OS users used by tests.
 sudo -u postgres createuser -s root 2>/dev/null || true
 
-echo "==> Starting MariaDB"
-service mariadb start 2>/dev/null || service mysql start 2>/dev/null || true
-
-echo "==> Starting Redis"
-service redis-server start 2>/dev/null || true
-
 echo "==> gofmt check (gofmt -s, same as GitHub Actions)"
 util/commit-validator/validate-gofmt
 

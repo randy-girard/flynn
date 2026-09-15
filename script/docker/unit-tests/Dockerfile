@@ -8,7 +8,6 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
-    gnupg \
     wget \
     build-essential \
     pkg-config \
@@ -16,9 +15,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libdevmapper-dev \
     postgresql \
     postgresql-contrib \
-    mariadb-server \
-    mariadb-backup \
-    redis-server \
     zfsutils-linux \
     bats \
     jq \
@@ -32,15 +28,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 ENV LANG=en_US.UTF-8
 ENV LC_ALL=en_US.UTF-8
 ENV LANGUAGE=en_US:en
-
-# MongoDB appliance unit tests need mongod (not in Ubuntu main).
-RUN curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
-      | gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor \
-    && echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
-      > /etc/apt/sources.list.d/mongodb-org-8.0.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends mongodb-org \
-    && rm -rf /var/lib/apt/lists/*
 
 RUN arch="$(dpkg --print-architecture)" \
     && wget -q "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" \

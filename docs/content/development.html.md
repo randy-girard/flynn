@@ -38,8 +38,9 @@ $ cd /root/go/src/github.com/flynn/flynn
 ```
 
 The host repo is synced there. `setup.sh` (first provision) installs Go **1.24**,
-Docker, ZFS, `ipset`, and the datastore packages unit tests need (PostgreSQL,
-MariaDB/`mariabackup`, MongoDB, Redis).
+Docker, ZFS, `ipset`, PostgreSQL for Flynn unit tests, and MariaDB/MongoDB/Redis
+so Vagrant smoke can install those engines as plugins. GitHub Actions unit tests
+only start PostgreSQL.
 
 You can also work on a native Ubuntu 24.04 machine with the same packages.
 macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
@@ -190,7 +191,8 @@ an overview at `coverage/index.html` grouped by package area, and one HTML
 page per source file under `coverage/files/`. Open `coverage/index.html` in a
 browser. Set `FLYNN_SKIP_COVERAGE=1` to skip the report.
 
-On the builder you need `mariabackup` (the Makefile checks). Package-level:
+On the builder, MariaDB/MongoDB/Redis stay installed for plugin smoke, not for
+Flynn `go test`. Package-level:
 
 ```
 $ go test -mod=vendor ./router

@@ -46,23 +46,11 @@ jobs:
             libdevmapper-dev \
             postgresql \
             postgresql-contrib \
-            mariadb-server \
-            mariadb-backup \
-            redis-server \
             zfsutils-linux \
             bats \
             jq \
             curl \
-            git \
-            gnupg
-
-          # MongoDB appliance unit tests need mongod (not in Ubuntu main).
-          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
-            | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
-          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
-            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-          sudo apt-get update
-          sudo apt-get install -y mongodb-org
+            git
 
       - name: Start PostgreSQL
         run: |
@@ -73,11 +61,6 @@ jobs:
           sudo -u postgres createuser -s root 2>/dev/null || true
           echo "PGHOST=/var/run/postgresql" >> "$GITHUB_ENV"
           echo "PGSSLMODE=disable" >> "$GITHUB_ENV"
-
-      - name: Start MariaDB and Redis
-        run: |
-          sudo service mariadb start || sudo service mysql start || true
-          sudo service redis-server start || true
 
       - name: Build Flynn binaries
         run: |
