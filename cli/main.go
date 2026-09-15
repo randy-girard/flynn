@@ -82,7 +82,7 @@ See 'flynn help <command>' for more information on a specific command.
 
 	if cmd == "help" {
 		if len(cmdArgs) == 0 { // `flynn help`
-			fmt.Println(usage)
+			fmt.Println(hideUnavailablePluginCommands(usage))
 			return
 		} else if cmdArgs[0] == "--json" {
 			cmds := make(map[string]string)
@@ -203,6 +203,9 @@ func runCommand(name string, args []string) (err error) {
 	cmd, ok := commands[name]
 	if !ok {
 		return fmt.Errorf("%s is not a flynn command. See 'flynn help'", name)
+	}
+	if err := requirePluginCommand(name); err != nil {
+		return err
 	}
 	parsedArgs, err := docopt.Parse(cmd.usage, argv, true, "", cmd.optsFirst)
 	if err != nil {

@@ -69,6 +69,12 @@ func (a *App) System() bool {
 	return ok && v == "true"
 }
 
+// Plugin reports whether this app was installed by flynn-host plugin install.
+func (a *App) Plugin() bool {
+	v, ok := a.Meta["flynn-plugin"]
+	return ok && v == "true"
+}
+
 func (a *App) RedisAppliance() bool {
 	return a.System() && strings.HasPrefix(a.Name, "redis-")
 }

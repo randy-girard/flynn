@@ -7,6 +7,7 @@ import (
 
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
@@ -20,6 +21,14 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	}
 	if err := tw.WriteJSON("flynn.json", data); err != nil {
 		return err
+	}
+
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing apps for plugin inventory: %s", err)
+	}
+	if err := tw.WriteJSON("plugins.json", plugin.ListInstalled(apps)); err != nil {
+		return fmt.Errorf("error writing plugin inventory: %s", err)
 	}
 
 	pgRelease := data["postgres"].Release

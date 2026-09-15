@@ -116,6 +116,7 @@ Commands:
   cli-add-command            Get the 'flynn cluster add' command to manage this cluster
   volume                     Manage volumes on the Flynn node
   acme                       Manage ACME/Let's Encrypt configuration
+  plugin                     Install and list cluster plugins
 
 See 'flynn-host help <command>' for more information on a specific command.
 `
@@ -374,14 +375,14 @@ func runDaemon(args *docopt.Args) {
 			URL:  publishURL,
 			Tags: tags,
 		},
-		state:   					 state,
-		backend: 					 backend,
-		vman:    					 vman,
-		sman:   					 sman,
-		volAPI: 					 volumeapi.NewHTTPAPI(vman),
-		discMan:					 discoverdManager,
-		log:    					 logger.New("host.id", hostID),
-		authKey:					 authKey,
+		state:             state,
+		backend:           backend,
+		vman:              vman,
+		sman:              sman,
+		volAPI:            volumeapi.NewHTTPAPI(vman),
+		discMan:           discoverdManager,
+		log:               logger.New("host.id", hostID),
+		authKey:           authKey,
 		webhookDispatcher: webhookDisp,
 		maxJobConcurrency: maxJobConcurrency,
 	}

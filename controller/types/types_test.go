@@ -58,6 +58,16 @@ func TestRedisApplianceClassification(t *testing.T) {
 	}
 }
 
+func TestPluginMeta(t *testing.T) {
+	app := &App{Name: "widget", Meta: map[string]string{"flynn-plugin": "true", "flynn-system-app": "true"}}
+	if !app.Plugin() || !app.System() {
+		t.Fatal("plugin apps are system apps with flynn-plugin=true")
+	}
+	if (&App{Name: "widget"}).Plugin() {
+		t.Fatal("missing meta is not a plugin")
+	}
+}
+
 func TestNewRedisApplianceAppMetaAndStrategy(t *testing.T) {
 	app := NewRedisApplianceApp("redis-deadbeef-0000-0000-0000-000000000000")
 	if app.Meta["flynn-system-app"] != "true" {
