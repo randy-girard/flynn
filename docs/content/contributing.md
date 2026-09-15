@@ -37,7 +37,7 @@ Anonymous or pseudonymous contributions are not accepted.
 1. Branch from `develop` (not a long-lived personal copy of `master`).
 1. Rebase onto current `develop`.
 1. Run the tests you can (`make test-unit`; integration or `script/vagrant-upgrade-smoke.sh` if the change needs a cluster).
-1. Run `gofmt -s`.
+1. Run `gofmt -s` (or `make install-git-hooks` so pre-commit / pre-push run `validate-gofmt`).
 1. Sign off every commit.
 1. Use a Conventional Commit subject on every commit (`<type>(<scope>): <summary>`).
 1. Include tests, or explain in the commit message why the change is hard to test.

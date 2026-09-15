@@ -79,7 +79,7 @@ You need a GitHub account. See GitHub's docs on [forking](https://docs.github.co
 1. Create a feature branch off `develop`.
 1. [Rebase](https://git-scm.com/book/en/v2/Git-Branching-Rebasing) onto current `develop`.
 1. Run `make test-unit` (and integration or `script/vagrant-upgrade-smoke.sh` when the change needs a cluster).
-1. Run `gofmt -s`.
+1. Run `gofmt -s` (or `make install-git-hooks` so pre-commit / pre-push run `validate-gofmt`).
 1. Sign off every commit (see above).
 1. Use a Conventional Commit subject on every commit (`<type>(<scope>): <summary>`).
 

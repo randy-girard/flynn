@@ -154,6 +154,14 @@ need 'validate-gofmt' \
   "smoke host unit-test gate must run gofmt (same check as GitHub Actions)"
 need_file "${ROOT}/util/commit-validator/validate-gofmt" \
   "gofmt check used by CI, smoke, and unit tests must exist"
+need_file "${ROOT}/script/githooks/gofmt-check" \
+  "pre-commit/pre-push gofmt hook must exist"
+need_file "${ROOT}/script/install-git-hooks" \
+  "clones must be able to install gofmt git hooks without git config"
+if ! grep -q 'validate-gofmt' "${ROOT}/script/githooks/gofmt-check"; then
+  echo "gofmt git hook must run util/commit-validator/validate-gofmt" >&2
+  exit 1
+fi
 if ! grep -q 'validate-gofmt' "${ROOT}/script/run-unit-tests"; then
   echo "script/run-unit-tests must run validate-gofmt" >&2
   exit 1

@@ -67,4 +67,7 @@ else
 	@echo >&2 "Skipping integration tests (SKIP_INTEGRATION_TESTS=1)."
 endif
 
-.PHONY: build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration
+install-git-hooks:
+	script/install-git-hooks
+
+.PHONY: build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration install-git-hooks

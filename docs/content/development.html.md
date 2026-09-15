@@ -149,6 +149,17 @@ CI, `make test-unit` / `script/run-unit-tests`, and
 PR base (or `origin/develop` locally) so you do not fail on unrelated
 historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
 
+Install the same check as **pre-commit** and **pre-push** hooks so unformatted
+Go never leaves the clone:
+
+```
+$ make install-git-hooks
+```
+
+That copies `script/githooks/gofmt-check` into `.git/hooks/` (no `git config`
+changes). Git does not enable committed hooks automatically; run the installer
+once per clone.
+
 ### bats (shell)
 
 ```

@@ -1,0 +1,32 @@
+#!/bin/bash
+#
+# Install Flynn gofmt git hooks into this clone (.git/hooks).
+# Does not change git config. Safe for worktrees (uses git-path).
+#
+# usage: ./script/install-git-hooks
+#
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT}"
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "install-git-hooks must run inside the Flynn git checkout" >&2
+  exit 1
+fi
+
+src="${ROOT}/script/githooks/gofmt-check"
+if [[ ! -f "${src}" ]]; then
+  echo "missing ${src}" >&2
+  exit 1
+fi
+
+hooks_dir="$(git rev-parse --git-path hooks)"
+mkdir -p "${hooks_dir}"
+for hook in pre-commit pre-push; do
+  dest="${hooks_dir}/${hook}"
+  cp "${src}" "${dest}"
+  chmod +x "${dest}"
+  echo "installed ${dest}"
+done
