@@ -96,6 +96,8 @@ need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse' \
   "default plugin install list must include redis, mysql, mongodb, kafka, and clickhouse"
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
+need 'ensure_plugin_vm_mounts' \
+  "plugin install must reload VMs when sibling plugin folders are not synced"
 if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
   echo "plugin_checkout must not hardcode mysql→mariadb" >&2
   exit 1

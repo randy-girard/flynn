@@ -2211,6 +2211,64 @@ plugin_checkout() {
   echo "${direct}"
 }
 
+# Long-lived builders (KEEP_BUILDER=1) may predate sibling plugin folders.
+# Vagrantfile globs flynn-plugin-* at `vagrant up`; reload to attach new mounts.
+ensure_plugin_vm_mounts() {
+  local name dir vm_path vm n
+  local vms="builder"
+  local reload_list=" "
+  for n in "${NODES[@]}"; do
+    if vagrant_vm_running "${n}"; then
+      vms="${vms} ${n}"
+    fi
+  done
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    if [[ ! -d "${dir}" ]]; then
+      echo "plugin checkout missing for ${name}: ${dir}" >&2
+      return 1
+    fi
+    vm_path="/opt/flynn-plugins/$(basename "${dir}")"
+    for vm in ${vms}; do
+      if node_root_script "${vm}" <<EOF
+test -f "${vm_path}/flynn-plugin.json"
+EOF
+      then
+        continue
+      fi
+      info "plugin ${name} not synced on ${vm} (${vm_path})"
+      if [[ "${reload_list}" != *" ${vm} "* ]]; then
+        reload_list="${reload_list}${vm} "
+      fi
+    done
+  done
+  if [[ "${reload_list}" == " " ]]; then
+    echo "plugin mounts present on ${vms}"
+    return 0
+  fi
+  for vm in ${reload_list}; do
+    info "vagrant reload ${vm} so Vagrantfile flynn-plugin-* synced_folder takes effect"
+    vagrant reload "${vm}" --no-provision
+    rm -f "$(node_ssh_config_path "${vm}")"
+    cache_node_ssh_config "${vm}" || return 1
+  done
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    vm_path="/opt/flynn-plugins/$(basename "${dir}")"
+    for vm in ${reload_list}; do
+      if ! node_root_script "${vm}" <<EOF
+test -f "${vm_path}/flynn-plugin.json"
+EOF
+      then
+        echo "plugin still not synced after reload: ${vm}:${vm_path}" >&2
+        return 1
+      fi
+    done
+  done
+}
+
 ensure_plugin_image() {
   local dir=$1
   if [[ ! -d "${dir}" ]]; then
@@ -2370,6 +2428,7 @@ step_install_plugins() {
   fi
   local name dir vm_path
   ensure_flynn_cli_on_node1
+  ensure_plugin_vm_mounts || return 1
   # shellcheck disable=SC2086
   for name in ${PLUGIN_SMOKE_APPS}; do
     if plugin_has_delegated_cli "${name}"; then
