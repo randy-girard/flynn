@@ -185,6 +185,20 @@ func TestShouldDumpPlugin(t *testing.T) {
 	if !shouldDumpPlugin(namedJobs, p, unnamed, mariadbDumpFormation(0)) {
 		t.Fatal("empty Process must fall back to plugin name")
 	}
+
+	starting := dumpJobLister{jobs: map[string][]*ct.Job{
+		"mariadb": {{Type: "mariadb", State: ct.JobStateStarting}},
+	}}
+	if !shouldDumpPlugin(starting, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("Starting dump process must still dump")
+	}
+
+	withNil := dumpJobLister{jobs: map[string][]*ct.Job{
+		"mariadb": {nil, {Type: "mariadb", State: ct.JobStateDown}},
+	}}
+	if shouldDumpPlugin(withNil, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("nil/down jobs must skip")
+	}
 }
 
 func TestIncludePluginFormationsCopiesArtifacts(t *testing.T) {
@@ -210,6 +224,34 @@ func TestIncludePluginFormationsCopiesArtifacts(t *testing.T) {
 	}
 	if got.DeprecatedImageArtifact == nil || got.DeprecatedImageArtifact.URI != art.URI {
 		t.Fatal("plugin backup must set deprecated artifact for restore compatibility")
+	}
+}
+
+func TestIncludePluginFormationsSkipsMissingAndErrorsOnRelease(t *testing.T) {
+	stub := requiredBackupApps()
+	data := map[string]*ct.ExpandedFormation{}
+	if err := includePluginFormations(stub, data, []plugin.Installed{{Name: "nope"}}); err != nil {
+		t.Fatal(err)
+	}
+	if data["nope"] != nil {
+		t.Fatal("missing plugin app must be skipped")
+	}
+
+	stub.apps["mongodb"] = &ct.App{ID: "mongodb-id", Name: "mongodb"}
+	if err := includePluginFormations(stub, data, []plugin.Installed{{Name: "mongodb"}}); err == nil {
+		t.Fatal("missing release must fail closed")
+	}
+
+	data["mongodb"] = &ct.ExpandedFormation{App: &ct.App{Name: "keep"}}
+	stub.releases["mongodb-id"] = &ct.Release{ID: "mongodb-rel"}
+	stub.expanded = map[string]*ct.ExpandedFormation{
+		"mongodb-id/mongodb-rel": {App: stub.apps["mongodb"], Release: stub.releases["mongodb-id"]},
+	}
+	if err := includePluginFormations(stub, data, []plugin.Installed{{Name: "mongodb"}}); err != nil {
+		t.Fatal(err)
+	}
+	if data["mongodb"].App.Name != "keep" {
+		t.Fatal("must not overwrite an existing formation")
 	}
 }
 

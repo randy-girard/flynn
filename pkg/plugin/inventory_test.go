@@ -125,3 +125,56 @@ func TestSireniaServiceNamesFromInventory(t *testing.T) {
 		t.Fatal("user app")
 	}
 }
+
+func TestDatastoreServiceAndOptionalSirenia(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "installed-plugins.json")
+	t.Setenv(EnvInstalledFile, path)
+	if err := WriteInstalled(path, []Installed{
+		{Name: "mariadb", Aliases: []string{"mysql"}, Datastore: true, Sirenia: true, SireniaOptional: true},
+		{Name: "cache", Sirenia: true, SireniaOptional: false},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !DatastoreService("postgres") || !DatastoreService("mariadb") || !DatastoreService("mysql") {
+		t.Fatal("datastore allow")
+	}
+	if DatastoreService("shop") || DatastoreService("mariadb-api") || DatastoreService("cache") {
+		t.Fatal("datastore deny")
+	}
+	if !OptionalSirenia("mariadb") || OptionalSirenia("cache") || OptionalSirenia("postgres") {
+		t.Fatal("optional sirenia")
+	}
+	if !OptionalSirenia("unknown-plugin") {
+		t.Fatal("unknown services must not block upgrades")
+	}
+}
+
+func TestReadInstalledWrappedAndCorrupt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "installed.json")
+	writeJSON(t, path, map[string]interface{}{
+		"plugins": []map[string]interface{}{{"name": "widget", "datastore": true}},
+	})
+	got := ReadInstalled(path)
+	if len(got) != 1 || got[0].Name != "widget" || !got[0].Datastore {
+		t.Fatalf("%+v", got)
+	}
+	if err := os.WriteFile(path, []byte("not-json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if len(ReadInstalled(path)) != 0 {
+		t.Fatal("corrupt inventory must yield empty, not panic")
+	}
+}
+
+func TestExpandReleaseArgsAndJobEnvFromSpec(t *testing.T) {
+	got, err := ExpandReleaseArgs([]string{"-p", "${app.MONGO_PWD}"}, map[string]string{"MONGO_PWD": "s3cret"})
+	if err != nil || got[1] != "s3cret" {
+		t.Fatalf("%v %v", got, err)
+	}
+	env := JobEnvFromSpec([]string{"MONGO_PWD", "MISSING", "EMPTY"}, map[string]string{
+		"MONGO_PWD": "x", "EMPTY": "",
+	})
+	if env["MONGO_PWD"] != "x" || len(env) != 1 {
+		t.Fatalf("empty and missing keys must be omitted: %v", env)
+	}
+}

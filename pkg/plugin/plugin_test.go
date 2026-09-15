@@ -152,6 +152,37 @@ func TestResolveSourceAliasAndPath(t *testing.T) {
 	}
 }
 
+func TestResolveSourceEmptyAndGitHubOnly(t *testing.T) {
+	if _, err := ResolveSource("", t.TempDir(), ""); err == nil {
+		t.Fatal("empty source must fail")
+	}
+	_, err := ResolveSource("https://github.com/acme/flynn-plugin-x.git", t.TempDir(), "")
+	if err == nil {
+		t.Fatal("GitHub-only source must not return a local dir")
+	}
+	if _, ok := err.(*NotFoundError); !ok {
+		t.Fatalf("want NotFoundError, got %T %v", err, err)
+	}
+}
+
+func TestDiscoverLocalPluginsSkipsInvalidManifest(t *testing.T) {
+	root := t.TempDir()
+	bad := filepath.Join(root, "flynn-plugin-bad")
+	if err := os.Mkdir(bad, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bad, ManifestName), []byte(`{"name":"x","kind":"nope"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := DiscoverLocalPlugins(root)
+	if len(got) != 0 {
+		t.Fatalf("invalid kind must be skipped: %v", got)
+	}
+	if len(DiscoverLocalPlugins("")) != 0 {
+		t.Fatal("empty root")
+	}
+}
+
 func TestListInstalled(t *testing.T) {
 	apps := []*ct.App{
 		{Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}},

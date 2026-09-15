@@ -45,3 +45,14 @@ func TestRestoreProcessesScalesDumpJob(t *testing.T) {
 		t.Fatal("nil formation must still start the dump process")
 	}
 }
+
+func TestRestoreProcessesUsesBackupProcessHint(t *testing.T) {
+	p := Installed{Name: "mysql", Backup: &BackupSpec{Process: "mariadb"}}
+	got := RestoreProcesses(p, &ct.ExpandedFormation{Processes: map[string]int{"mariadb": 0, "web": 2}})
+	if got["mariadb"] != 1 || got["web"] != 2 {
+		t.Fatalf("hinted dump process must scale to 1: %v", got)
+	}
+	if len(RestoreProcesses(Installed{}, nil)) != 0 {
+		t.Fatal("empty plugin with nil formation must not invent processes")
+	}
+}

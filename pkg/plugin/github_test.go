@@ -234,6 +234,24 @@ func TestCredentialsFile(t *testing.T) {
 	}
 }
 
+func TestLoadCredentialsRejectsInvalidJSONAndEmptyToken(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "creds.json")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCredentials(path); err == nil {
+		t.Fatal("invalid json must fail")
+	}
+	if err := SetGitHubCredentials(path, "github.com", "   ", ""); err == nil {
+		t.Fatal("empty token must fail")
+	}
+	missing := filepath.Join(t.TempDir(), "missing.json")
+	creds, err := LoadCredentials(missing)
+	if err != nil || len(creds) != 0 {
+		t.Fatalf("missing file must be empty creds, got %v %v", creds, err)
+	}
+}
+
 func TestParseGitHubURLErrorsAndEnterprise(t *testing.T) {
 	if _, err := ParseGitHubURL(""); err == nil {
 		t.Fatal("empty")
@@ -308,6 +326,49 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 	}
 	if cfg.alias("redis").Path != "" {
 		t.Fatalf("missing checkouts must not invent aliases: %+v", cfg.alias("redis"))
+	}
+}
+
+func TestLoadConfigMergesDiscoveredAliasAndRejectsBadJSON(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "flynn-plugin-widget")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "widget", "kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{"web": map[string]interface{}{"args": []string{"/bin/x"}}},
+		},
+	})
+	t.Setenv(EnvPluginRepoRoot, root)
+	t.Setenv(EnvInstalledFile, filepath.Join(t.TempDir(), "none.json"))
+
+	cfgPath := filepath.Join(t.TempDir(), "plugins.json")
+	writeJSON(t, cfgPath, map[string]interface{}{
+		"widget": map[string]string{
+			"ref": "v9",
+			"url": "https://github.com/evil/widget.git",
+		},
+	})
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := cfg.alias("widget")
+	if a.Ref != "v9" || a.URL != "https://github.com/evil/widget.git" {
+		t.Fatalf("file overrides must win URL/ref: %+v", a)
+	}
+	if a.Path != dir {
+		t.Fatalf("local discovery path must remain unless overridden: %+v", a)
+	}
+
+	bad := filepath.Join(t.TempDir(), "bad.json")
+	if err := os.WriteFile(bad, []byte(`{"widget": 123}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(bad); err == nil {
+		t.Fatal("non-string/object alias must fail")
 	}
 }
 
