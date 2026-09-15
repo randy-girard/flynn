@@ -11,18 +11,58 @@ const (
 	EnvPluginRepoRoot  = "PLUGIN_REPO_ROOT"
 )
 
-// DefaultAliases map short names to sibling checkouts relative to PLUGIN_REPO_ROOT
-// (default "..", i.e. next to the Flynn repo). This is a catalog, not installer
-// logic: adding a plugin is an entry here plus a flynn-plugin.json in that repo.
-// When the checkout is missing, Resolve falls back to GitHub
-// github.com/<org>/<alias-repo>.
-var DefaultAliases = map[string]string{
-	"redis":      "flynn-plugin-redis",
-	"mariadb":    "flynn-plugin-mariadb",
-	"mysql":      "flynn-plugin-mariadb",
-	"mongodb":    "flynn-plugin-mongodb",
-	"kafka":      "flynn-plugin-kafka",
-	"clickhouse": "flynn-plugin-clickhouse",
+// DiscoverLocalPlugins scans root for checkouts that contain flynn-plugin.json
+// and returns install aliases from each manifest (name, provider, CLI command,
+// and aliases). Flynn core has no builtin plugin name list; mysql resolves to
+// MariaDB only because that plugin's manifest says so.
+func DiscoverLocalPlugins(root string) map[string]Alias {
+	out := map[string]Alias{}
+	if root == "" {
+		return out
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return out
+	}
+	entries, err := os.ReadDir(abs)
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(abs, e.Name())
+		m, err := LoadManifest(dir)
+		if err != nil {
+			continue
+		}
+		repo := e.Name()
+		if r := strings.TrimSpace(m.GitHubRepo); r != "" {
+			repo = r
+		}
+		a := Alias{Path: dir, Repo: repo}
+		for _, name := range m.aliasNames() {
+			out[name] = a
+		}
+	}
+	return out
+}
+
+func mergeInstalledAliases(aliases map[string]Alias, installed []Installed) {
+	for _, p := range installed {
+		repo := strings.TrimSpace(p.GitHubRepo)
+		if repo == "" && p.Name != "" {
+			repo = "flynn-plugin-" + p.Name
+		}
+		for _, name := range p.ResolveNames() {
+			existing := aliases[name]
+			if existing.Repo == "" {
+				existing.Repo = repo
+			}
+			aliases[name] = existing
+		}
+	}
 }
 
 // ResolveSource turns a CLI argument into a local plugin directory.

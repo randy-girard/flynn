@@ -157,8 +157,23 @@ func (in *Installer) Install(opts InstallOptions) error {
 	}
 
 	_ = app
+	in.persistInventory()
 	in.logf("plugin %s installed", m.Name)
 	return nil
+}
+
+func (in *Installer) persistInventory() {
+	if in.Client == nil {
+		return
+	}
+	apps, err := in.Client.AppList()
+	if err != nil {
+		in.logf("warning: could not list apps for plugin inventory: %s", err)
+		return
+	}
+	if err := WriteInstalled("", ListInstalled(apps)); err != nil {
+		in.logf("warning: could not write %s: %s", InstalledFile(), err)
+	}
 }
 
 func (m *Manifest) installHook() string {

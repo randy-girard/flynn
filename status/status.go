@@ -138,8 +138,6 @@ var services = []Service{
 	{Name: "tarreceive", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("tarreceive") }), Optional: true},
 	{Name: "logaggregator", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("logaggregator", "80") })},
 	{Name: "postgres", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("postgres", "5433") })},
-	{Name: "mariadb", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("mariadb", "3307") }), Optional: true},
-	{Name: "mongodb", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("mongodb", "27018") }), Optional: true},
 	{Name: "router", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("router-api") })},
 }
 

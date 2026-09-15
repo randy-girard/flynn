@@ -1,9 +1,11 @@
 package netpolicy
 
 import (
+	"path/filepath"
 	"testing"
 
 	host "github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 func TestClassifyJob(t *testing.T) {
@@ -85,6 +87,7 @@ func TestClassifyJob(t *testing.T) {
 			name: "mariadb data plane",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
+				"flynn-datastore":           "true",
 				"flynn-controller.app_name": "mariadb",
 				"flynn-controller.type":     "mariadb",
 			}},
@@ -94,6 +97,7 @@ func TestClassifyJob(t *testing.T) {
 			name: "mongodb data plane",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
+				"flynn-datastore":           "true",
 				"flynn-controller.app_name": "mongodb",
 				"flynn-controller.type":     "mongodb",
 			}},
@@ -163,6 +167,15 @@ func TestClassifyJob(t *testing.T) {
 }
 
 func TestUserMayResolveDiscoverd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "installed-plugins.json")
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "mariadb", Datastore: true},
+		{Name: "mongodb", Datastore: true},
+		{Name: "redis", Datastore: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if UserMayResolveDiscoverd(false, "postgres") {
 		t.Fatal("user jobs must not resolve internal discoverd names")
 	}

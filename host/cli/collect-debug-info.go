@@ -14,6 +14,7 @@ import (
 
 	"github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
@@ -292,7 +293,7 @@ func captureSchedulerState(gist *Gist) error {
 }
 
 func captureSireniaMetadata(gist *Gist) error {
-	appliances := []string{"postgres", "mariadb", "mongodb"}
+	appliances := plugin.SireniaServiceNames()
 	for _, appliance := range appliances {
 		meta, err := discoverd.NewService(appliance).GetMeta()
 		if err != nil {

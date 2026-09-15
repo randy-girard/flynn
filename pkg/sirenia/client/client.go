@@ -20,16 +20,10 @@ import (
 // ProcessIDKey returns the discoverd Meta key holding appliance-level peer
 // identity for a sirenia process type.
 func ProcessIDKey(processType string) string {
-	switch processType {
-	case "postgres":
-		return "POSTGRES_ID"
-	case "mariadb":
-		return "MARIADB_ID"
-	case "mongodb":
-		return "MONGODB_ID"
-	default:
+	if processType == "" {
 		return ""
 	}
+	return strings.ToUpper(processType) + "_ID"
 }
 
 // SamePeer reports whether a and b are the same sirenia appliance peer.

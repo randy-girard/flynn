@@ -57,8 +57,6 @@ func requiredBackupApps() backupStub {
 
 func TestGetAppsRequiresCoreAndSkipsOptional(t *testing.T) {
 	stub := requiredBackupApps()
-	stub.err["mariadb"] = errors.New("missing")
-	stub.err["mongodb"] = errors.New("missing")
 	data, err := getApps(stub)
 	if err != nil {
 		t.Fatal(err)
@@ -69,7 +67,7 @@ func TestGetAppsRequiresCoreAndSkipsOptional(t *testing.T) {
 		}
 	}
 	if _, ok := data["mariadb"]; ok {
-		t.Fatal("optional mariadb must be omitted")
+		t.Fatal("plugin apps must not be in the required backup set")
 	}
 }
 

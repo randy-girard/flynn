@@ -175,7 +175,7 @@ func (r *Release) IsSlugDeploy() bool {
 }
 
 // IsSirenia reports whether the release is for a sirenia-managed database
-// (postgres, mariadb, mongodb) by checking for the SIRENIA_PROCESS env var
+// (postgres and sirenia plugins) by checking for the SIRENIA_PROCESS env var
 // that the sirenia deployment strategy uses to identify the database process
 // type.
 func (r *Release) IsSirenia() bool {

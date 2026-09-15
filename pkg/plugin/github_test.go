@@ -34,6 +34,8 @@ func TestParseGitHubURL(t *testing.T) {
 }
 
 func TestLoadConfigGitHubSettings(t *testing.T) {
+	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	t.Setenv(EnvInstalledFile, filepath.Join(t.TempDir(), "none.json"))
 	path := filepath.Join(t.TempDir(), "plugins.json")
 	writeJSON(t, path, map[string]interface{}{
 		"github_org": "acme",
@@ -291,6 +293,8 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 		t.Fatalf("org from FLYNN_GITHUB_REPO: %s", DefaultGitHubOrg())
 	}
 	t.Setenv(EnvFlynnRepo, "")
+	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	t.Setenv(EnvInstalledFile, filepath.Join(t.TempDir(), "none.json"))
 	if DefaultGitHubOrg() != "randy-girard" {
 		t.Fatalf("builtin org: %s", DefaultGitHubOrg())
 	}
@@ -299,15 +303,17 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.alias("redis").Path == "" {
-		t.Fatal("missing file must still apply builtin aliases")
+	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mysql.git" {
+		t.Fatalf("unknown alias uses flynn-plugin-<name>: %s", cfg.GitHubURL("mysql"))
 	}
-	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mariadb.git" {
-		t.Fatalf("mysql alias repo: %s", cfg.GitHubURL("mysql"))
+	if cfg.alias("redis").Path != "" {
+		t.Fatalf("missing checkouts must not invent aliases: %+v", cfg.alias("redis"))
 	}
 }
 
 func TestLoadConfigDottedKeysAndRepoOverride(t *testing.T) {
+	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	t.Setenv(EnvInstalledFile, filepath.Join(t.TempDir(), "none.json"))
 	path := filepath.Join(t.TempDir(), "plugins.json")
 	writeJSON(t, path, map[string]interface{}{
 		"github.org": "dotted-org",
@@ -335,8 +341,8 @@ func TestLoadConfigDottedKeysAndRepoOverride(t *testing.T) {
 	if cfg.GitHubURL("cache") != "https://github.com/dotted-org/flynn-plugin-cache.git" {
 		t.Fatalf("short repo: %s", cfg.GitHubURL("cache"))
 	}
-	if cfg.alias("redis").Path == "" || cfg.alias("redis").Ref != "v9" {
-		t.Fatalf("merge must keep default path: %+v", cfg.alias("redis"))
+	if cfg.alias("redis").Ref != "v9" || cfg.alias("redis").Repo != "acme/flynn-plugin-redis" {
+		t.Fatalf("plugins.json must apply repo/ref: %+v", cfg.alias("redis"))
 	}
 }
 
@@ -344,6 +350,15 @@ func TestResolveEmptySourceAndOverrides(t *testing.T) {
 	t.Setenv(EnvGitHubToken, "")
 	t.Setenv(EnvGitHubTokenAlt, "")
 	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	inst := filepath.Join(t.TempDir(), "installed.json")
+	t.Setenv(EnvInstalledFile, inst)
+	if err := WriteInstalled(inst, []Installed{{
+		Name:       "mariadb",
+		Aliases:    []string{"mysql"},
+		GitHubRepo: "flynn-plugin-mariadb",
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := Resolve(InstallOptions{}); err == nil {
 		t.Fatal("empty source")
 	}

@@ -54,12 +54,12 @@ func pluginRepoRoot() string {
 func defaultConfig() *Config {
 	cfg := &Config{
 		GitHubOrg: DefaultGitHubOrg(),
-		Aliases:   make(map[string]Alias, len(DefaultAliases)),
+		Aliases:   DiscoverLocalPlugins(pluginRepoRoot()),
 	}
-	root := pluginRepoRoot()
-	for name, repo := range DefaultAliases {
-		cfg.Aliases[name] = Alias{Path: filepath.Join(root, repo)}
+	if cfg.Aliases == nil {
+		cfg.Aliases = map[string]Alias{}
 	}
+	mergeInstalledAliases(cfg.Aliases, ReadInstalled(""))
 	return cfg
 }
 
@@ -169,9 +169,6 @@ func (c *Config) GitHubURL(name string) string {
 		}
 		return fmt.Sprintf("https://github.com/%s/%s.git", c.gitHubOrg(), a.Repo)
 	}
-	repo := DefaultAliases[name]
-	if repo == "" {
-		repo = "flynn-plugin-" + name
-	}
+	repo := "flynn-plugin-" + name
 	return fmt.Sprintf("https://github.com/%s/%s.git", c.gitHubOrg(), filepath.Base(repo))
 }

@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flynn/flynn/pkg/version"
@@ -57,9 +58,12 @@ func (s *Scheduler) SendTelemetry() {
 	var formations int
 	apps := make(map[string]struct{})
 	dbs := make(map[string]map[string]struct{})
-	providers := []string{"postgres", "mongodb", "mysql", "redis", "kafka", "clickhouse"}
-	for _, p := range providers {
-		dbs[p] = make(map[string]struct{})
+	skipFlynn := map[string]bool{
+		"FLYNN_APP_ID":       true,
+		"FLYNN_APP_NAME":     true,
+		"FLYNN_RELEASE_ID":   true,
+		"FLYNN_PROCESS_TYPE": true,
+		"FLYNN_JOB_ID":       true,
 	}
 	for _, f := range s.formations {
 		if f.App.Meta["flynn-system-app"] == "true" || f.GetProcesses().IsEmpty() {
@@ -68,51 +72,32 @@ func (s *Scheduler) SendTelemetry() {
 		formations++
 		apps[f.App.ID] = struct{}{}
 
-		for _, p := range providers {
-			switch p {
-			case "postgres":
-				if _, ok := f.Release.Env["FLYNN_POSTGRES"]; !ok {
-					continue
+		if f.Release.Env["FLYNN_POSTGRES"] != "" {
+			if db := f.Release.Env["PGDATABASE"]; db != "" {
+				if dbs["postgres"] == nil {
+					dbs["postgres"] = map[string]struct{}{}
 				}
-				if db := f.Release.Env["PGDATABASE"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
-			case "mongodb":
-				if _, ok := f.Release.Env["FLYNN_MONGO"]; !ok {
-					continue
-				}
-				if db := f.Release.Env["MONGO_DATABASE"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
-			case "mysql":
-				if _, ok := f.Release.Env["FLYNN_MYSQL"]; !ok {
-					continue
-				}
-				if db := f.Release.Env["MYSQL_DATABASE"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
-			case "redis":
-				if db := f.Release.Env["FLYNN_REDIS"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
-			case "kafka":
-				if db := f.Release.Env["FLYNN_KAFKA"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
-			case "clickhouse":
-				if _, ok := f.Release.Env["FLYNN_CLICKHOUSE"]; !ok {
-					continue
-				}
-				if db := f.Release.Env["CLICKHOUSE_DATABASE"]; db != "" {
-					dbs[p][db] = struct{}{}
-				}
+				dbs["postgres"][db] = struct{}{}
 			}
+		}
+		for k, v := range f.Release.Env {
+			if !strings.HasPrefix(k, "FLYNN_") || v == "" || skipFlynn[k] || k == "FLYNN_POSTGRES" {
+				continue
+			}
+			p := strings.ToLower(strings.TrimPrefix(k, "FLYNN_"))
+			if p == "" {
+				continue
+			}
+			if dbs[p] == nil {
+				dbs[p] = map[string]struct{}{}
+			}
+			dbs[p][v] = struct{}{}
 		}
 	}
 	params.Add("ct_running_apps", strconv.Itoa(len(apps)))
 	params.Add("ct_running_formations", strconv.Itoa(formations))
-	for _, p := range providers {
-		params.Add(fmt.Sprintf("ct_%s_dbs", p), strconv.Itoa(len(dbs[p])))
+	for p, set := range dbs {
+		params.Add(fmt.Sprintf("ct_%s_dbs", p), strconv.Itoa(len(set)))
 	}
 
 	go func() {

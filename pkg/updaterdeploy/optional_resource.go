@@ -130,7 +130,7 @@ func ensureProvider(client controller.Client, name, url string) error {
 }
 
 func controllerKeyFromCluster(client controller.Client) (string, error) {
-	for _, appName := range []string{"redis", "kafka", "clickhouse", "controller"} {
+	for _, appName := range []string{"controller", "postgres"} {
 		release, err := client.GetAppRelease(appName)
 		if err != nil {
 			continue

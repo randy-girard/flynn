@@ -28,7 +28,7 @@ func RepairDeposedSireniaPeers(log log15.Logger) {
 	if log == nil {
 		log = log15.New()
 	}
-	for _, svc := range SireniaApplianceServices {
+	for _, svc := range SireniaApplianceServices() {
 		if err := repairDeposedSireniaPeersForService(svc, log.New("service", svc)); err != nil {
 			log.Warn("error repairing deposed sirenia peers", "service", svc, "err", err)
 		}

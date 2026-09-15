@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/plugin"
 	. "github.com/flynn/go-check"
 	"github.com/miekg/dns"
 )
@@ -637,6 +640,13 @@ func (s *DNSSuite) TestServiceLookup(c *C) {
 }
 
 func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
+	path := filepath.Join(c.MkDir(), "installed-plugins.json")
+	c.Assert(os.Setenv("FLYNN_INSTALLED_PLUGINS", path), IsNil)
+	c.Assert(plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "mariadb", Datastore: true},
+	}), IsNil)
+	defer os.Unsetenv("FLYNN_INSTALLED_PLUGINS")
+
 	leader, _ := fakeStaticInstance("tcp", "10.0.0.5", 5432)
 	redisLeader, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
 	appWeb, _ := fakeStaticInstance("tcp", "10.0.0.9", 8080)

@@ -22,15 +22,15 @@ func ShouldRetryAfterUnsettledDiscoverdLeader(err error) bool {
 	if strings.Contains(msg, "sirenia") {
 		return true
 	}
-	// Sirenia appliance leader DNS propagation
-	if strings.Contains(msg, "leader.postgres.discoverd") ||
-		strings.Contains(msg, "postgres.discoverd") ||
-		strings.Contains(msg, "leader.mariadb.discoverd") ||
-		strings.Contains(msg, "leader.mongodb.discoverd") ||
-		strings.Contains(msg, "leader.maria.discoverd") {
+	if strings.Contains(msg, "leader.") && strings.Contains(msg, ".discoverd") {
 		return true
 	}
-	// e.g. "lookup leader.postgres.discoverd: no such host"
+	if strings.Contains(msg, "no such host") && strings.Contains(msg, ".discoverd") {
+		return true
+	}
+	if strings.Contains(msg, "postgres.discoverd") {
+		return true
+	}
 	if strings.Contains(msg, "no such host") && strings.Contains(msg, "postgres") {
 		return true
 	}

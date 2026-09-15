@@ -28,6 +28,7 @@ const (
 	MetaPluginSource = "flynn-plugin-source"
 	MetaPluginRef    = "flynn-plugin-ref"
 	MetaPluginWait   = "flynn-plugin-wait"
+	MetaPluginRecord = "flynn-plugin-record"
 
 	// ImageSelf in image_env means "the artifact ID of this plugin's image".
 	ImageSelf = "self"
@@ -35,19 +36,24 @@ const (
 
 // Manifest is flynn-plugin.json at the root of a plugin repo.
 type Manifest struct {
-	Name        string            `json:"name"`
-	Kind        string            `json:"kind"`
-	Provider    *Provider         `json:"provider,omitempty"`
-	App         AppSpec           `json:"app"`
-	InjectEnv   []string          `json:"inject_env,omitempty"`
-	ImageEnv    map[string]string `json:"image_env,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	GenerateEnv []string          `json:"generate_env,omitempty"`
-	CLI         *CLI              `json:"cli,omitempty"`
-	Hooks       *Hooks            `json:"hooks,omitempty"`
-	Wait        string            `json:"wait,omitempty"`
-	Build       json.RawMessage   `json:"build,omitempty"`
-	Artifacts   *Artifacts        `json:"artifacts,omitempty"`
+	Name           string            `json:"name"`
+	Kind           string            `json:"kind"`
+	Provider       *Provider         `json:"provider,omitempty"`
+	App            AppSpec           `json:"app"`
+	InjectEnv      []string          `json:"inject_env,omitempty"`
+	ImageEnv       map[string]string `json:"image_env,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	GenerateEnv    []string          `json:"generate_env,omitempty"`
+	CLI            *CLI              `json:"cli,omitempty"`
+	Hooks          *Hooks            `json:"hooks,omitempty"`
+	Wait           string            `json:"wait,omitempty"`
+	Aliases        []string          `json:"aliases,omitempty"`
+	GitHubRepo     string            `json:"github_repo,omitempty"`
+	ClusterBackup  *BackupSpec       `json:"cluster_backup,omitempty"`
+	ClusterRestore *RestoreSpec      `json:"cluster_restore,omitempty"`
+	Status         *StatusSpec       `json:"status,omitempty"`
+	Build          json.RawMessage   `json:"build,omitempty"`
+	Artifacts      *Artifacts        `json:"artifacts,omitempty"`
 }
 
 type Provider struct {
@@ -222,7 +228,91 @@ func (m *Manifest) AppMeta() map[string]string {
 			meta[MetaPluginCLI] = string(raw)
 		}
 	}
+	if rec, err := json.Marshal(m.Record()); err == nil {
+		meta[MetaPluginRecord] = string(rec)
+	}
 	return meta
+}
+
+// Record is the install inventory entry derived from this manifest.
+func (m *Manifest) Record() Installed {
+	if m == nil {
+		return Installed{}
+	}
+	rec := Installed{
+		Name:            m.App.Name,
+		Kind:            m.Kind,
+		Aliases:         m.aliasNames(),
+		GitHubRepo:      m.githubRepo(),
+		Backup:          m.ClusterBackup,
+		Restore:         m.ClusterRestore,
+		Status:          m.Status,
+		Datastore:       m.App.Meta[MetaDatastore] == "true",
+		Sirenia:         m.App.Strategy == "sirenia" || m.Env["SIRENIA_PROCESS"] != "",
+		SireniaOptional: m.sireniaOptional(),
+		Wait:            m.PingURL(),
+		CLI:             m.CLI,
+	}
+	if rec.Name == "" {
+		rec.Name = m.Name
+	}
+	if m.Provider != nil {
+		rec.Provider = m.Provider.Name
+	}
+	return rec
+}
+
+func (m *Manifest) githubRepo() string {
+	if r := strings.TrimSpace(m.GitHubRepo); r != "" {
+		return r
+	}
+	if m.Name != "" {
+		return "flynn-plugin-" + m.Name
+	}
+	return ""
+}
+
+func (m *Manifest) aliasNames() []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	add(m.Name)
+	add(m.App.Name)
+	if m.Provider != nil {
+		add(m.Provider.Name)
+	}
+	if m.CLI != nil {
+		add(m.CLI.Command)
+	}
+	for _, a := range m.Aliases {
+		add(a)
+	}
+	return out
+}
+
+func (m *Manifest) sireniaOptional() bool {
+	if m.App.Strategy != "sirenia" && m.Env["SIRENIA_PROCESS"] == "" {
+		return false
+	}
+	proc := m.Env["SIRENIA_PROCESS"]
+	if proc == "" {
+		proc = m.App.Name
+	}
+	if proc == "" {
+		proc = m.Name
+	}
+	n, ok := m.App.Scale[proc]
+	return ok && n == 0
 }
 
 // AnnotateInstall records how this plugin was installed so cluster backup can

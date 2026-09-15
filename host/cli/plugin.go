@@ -34,10 +34,13 @@ Options:
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, and registers a provider only when
 kind is resource-provider. Local checkouts are used when present. Otherwise
-aliases (redis, …) pull a published GitHub Release. GitHub installs never
+short names pull a published GitHub Release named flynn-plugin-<name> (or the
+repo declared by a sibling checkout / installed plugin). GitHub installs never
 build on the cluster.
 
-Configure aliases and org in /etc/flynn/plugins.json. Private repos use
+Configure extra aliases and org in /etc/flynn/plugins.json. Installed plugins
+are recorded in /etc/flynn/installed-plugins.json so cluster backup, restore,
+and sirenia repair do not hardcode appliance names. Private repos use
 flynn-host plugin credentials, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
 
 Examples:
@@ -96,6 +99,7 @@ func runPluginList() error {
 	if err != nil {
 		return err
 	}
+	_ = plugin.WriteInstalled("", plugin.ListInstalled(apps))
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
 	defer w.Flush()
 	fmt.Fprintln(w, "NAME\tKIND\tCLI\tSOURCE\tREF")

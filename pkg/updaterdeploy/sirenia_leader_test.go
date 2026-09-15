@@ -2,22 +2,33 @@ package updaterdeploy
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
+
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 func TestSireniaApplianceServices(t *testing.T) {
-	want := []string{"postgres", "mariadb", "mongodb"}
-	if len(SireniaApplianceServices) != len(want) {
-		t.Fatalf("got %v want %v", SireniaApplianceServices, want)
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", filepath.Join(t.TempDir(), "none.json"))
+	got := SireniaApplianceServices()
+	if len(got) != 1 || got[0] != "postgres" {
+		t.Fatalf("core-only inventory: %v", got)
 	}
-	for i, svc := range want {
-		if SireniaApplianceServices[i] != svc {
-			t.Fatalf("SireniaApplianceServices[%d] = %q want %q", i, SireniaApplianceServices[i], svc)
-		}
+	path := filepath.Join(t.TempDir(), "installed.json")
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "widget", Sirenia: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got = SireniaApplianceServices()
+	if len(got) != 2 || got[0] != "postgres" || got[1] != "widget" {
+		t.Fatalf("got %v", got)
 	}
 }
 
 func TestSkipOptionalSireniaLeaderWait(t *testing.T) {
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", filepath.Join(t.TempDir(), "none.json"))
 	cases := []struct {
 		service       string
 		instanceCount int
@@ -31,7 +42,7 @@ func TestSkipOptionalSireniaLeaderWait(t *testing.T) {
 		{"mariadb", 1, nil, false},
 		{"mongodb", 0, nil, true},
 		{"mongodb", 2, nil, false},
-		{"redis", 0, nil, false},
+		{"redis", 0, nil, true},
 	}
 	for _, tc := range cases {
 		got := skipOptionalSireniaLeaderWait(tc.service, tc.instanceCount, tc.instancesErr)

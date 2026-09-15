@@ -98,7 +98,9 @@
 #                        without echoing ^R)
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
-#                        after bootstrap, before resource add (default: redis).
+#                        after bootstrap, before resource add (default: redis
+#                        mysql mongodb kafka clickhouse). mysql resolves to the
+#                        mariadb checkout via flynn-plugin.json aliases.
 #                        Restore does not install again; plugins.json + postgres
 #                        already list and restore them.
 #   PLUGIN_REPO_ROOT     Parent of flynn-plugin-* checkouts (default: ..)
@@ -2162,12 +2164,51 @@ step_bootstrap() {
   echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
+# True when flynn-plugin.json name, aliases, provider, or CLI command is $2.
+plugin_manifest_matches() {
+  local json=$1 want=$2
+  python3 - "$json" "$want" <<'PY'
+import json, sys
+
+path, want = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    m = json.load(f)
+if m.get("name") == want:
+    raise SystemExit(0)
+aliases = m.get("aliases") or []
+if isinstance(aliases, str):
+    aliases = [aliases]
+if want in aliases:
+    raise SystemExit(0)
+prov = m.get("provider") or {}
+if isinstance(prov, dict) and prov.get("name") == want:
+    raise SystemExit(0)
+cli = m.get("cli") or {}
+if isinstance(cli, dict) and cli.get("command") == want:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 plugin_checkout() {
   local name=$1
-  case "${name}" in
-    mysql) echo "${PLUGIN_REPO_ROOT}/flynn-plugin-mariadb" ;;
-    *) echo "${PLUGIN_REPO_ROOT}/flynn-plugin-${name}" ;;
-  esac
+  local root="${PLUGIN_REPO_ROOT}"
+  local direct="${root}/flynn-plugin-${name}"
+  if [[ -d "${direct}" ]]; then
+    echo "${direct}"
+    return 0
+  fi
+  local dir json
+  for dir in "${root}"/flynn-plugin-*; do
+    [[ -d "${dir}" ]] || continue
+    json="${dir}/flynn-plugin.json"
+    [[ -f "${json}" ]] || continue
+    if plugin_manifest_matches "${json}" "${name}"; then
+      echo "${dir}"
+      return 0
+    fi
+  done
+  echo "${direct}"
 }
 
 ensure_plugin_image() {
