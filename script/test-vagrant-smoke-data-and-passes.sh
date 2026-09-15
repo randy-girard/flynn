@@ -33,13 +33,14 @@ need_file "${app}/Procfile" "upgrade-smoke must have a Procfile"
 need_file "${app}/data/seed.txt" "upgrade-smoke must embed at least one data file"
 grep -q 'go:embed data' "${app}/main.go" || { echo "upgrade-smoke must embed data/ blobs" >&2; exit 1; }
 grep -q '/status' "${app}/main.go" || { echo "upgrade-smoke must serve GET /status" >&2; exit 1; }
-need_file "${ROOT}/cli/clickhouse_test.go" "clickhouse CLI stdin hang must have unit tests"
-grep -q 'TestApplyClickhouseStdinPolicy' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
-grep -q 'tty INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
-grep -q 'pipe INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
+clickhouse_cli_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-cli/main_test.go"
+need_file "${clickhouse_cli_test}" "clickhouse plugin CLI stdin hang must have unit tests"
+grep -q 'TestApplyClickhouseStdinPolicy' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
+grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
+grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
 
 need 'test/apps/upgrade-smoke-docker' \
   "smoke must git-push a Dockerfile app (dockerbuilder-24), not only the slug app"
@@ -91,8 +92,8 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka' \
-  "default plugin install list must include redis, mysql, mongodb, and kafka"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse' \
+  "default plugin install list must include redis, mysql, mongodb, kafka, and clickhouse"
 need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'probe_delegated_plugin_cli_hidden' \

@@ -8,12 +8,11 @@ import (
 	"github.com/flynn/flynn/pkg/plugin"
 )
 
-func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
+func TestFilterPluginUsageKeepsCoreCommands(t *testing.T) {
 	usage := strings.Join([]string{
 		"usage: flynn [--version] [--help] <command> [<args>]",
 		"",
 		"Commands:",
-		"   clickhouse  manage clickhouse resources",
 		"   ps          list jobs",
 		"   help        show help",
 		"",
@@ -21,16 +20,13 @@ func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
 	}, "\n")
 
 	hidden := mergePluginUsage(usage, nil, errors.New("no cluster"))
-	if strings.Contains(hidden, "clickhouse") {
-		t.Fatalf("catalog error must hide compiled plugin commands:\n%s", hidden)
-	}
 	if !strings.Contains(hidden, "ps") || !strings.Contains(hidden, "help") {
 		t.Fatalf("core commands must remain:\n%s", hidden)
 	}
-
-	installed := mergePluginUsage(usage, &plugin.Catalog{Commands: []plugin.CLI{{Command: "clickhouse"}}}, nil)
-	if !strings.Contains(installed, "clickhouse") {
-		t.Fatalf("installed clickhouse must stay:\n%s", installed)
+	for _, cmd := range []string{"redis", "mysql", "mongodb", "kafka", "clickhouse"} {
+		if plugin.IsCorePluginCommand(cmd) {
+			t.Fatalf("%s must not be a compiled plugin command", cmd)
+		}
 	}
 }
 

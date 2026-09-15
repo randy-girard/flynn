@@ -307,46 +307,9 @@
     "artifact": $image_artifact[dockerbuilder-24]
   },
   {
-    "id": "clickhouse-image",
-    "action": "create-artifact",
-    "artifact": $image_artifact[clickhouse]
-  },
-  {
     "id": "acme-image",
     "action": "create-artifact",
     "artifact": $image_artifact[acme]
-  },
-  {
-    "id": "clickhouse",
-    "app": {
-      "name": "clickhouse",
-      "meta": {"flynn-system-app": "true"}
-    },
-    "action": "deploy-app",
-    "release": {
-      "env": {
-        "FLYNN_CLICKHOUSE": "clickhouse",
-        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "CLICKHOUSE_IMAGE_ID": "{{ (index .StepData \"clickhouse-image\").ID }}",
-        "SINGLETON": "{{ .Singleton }}"
-      },
-      "processes": {
-        "web": {
-          "ports": [{"port": 80, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-clickhouse", "api"]
-        }
-      }
-    },
-    "artifacts": [$image_artifact[clickhouse]],
-    "processes": {
-      "web": 2
-    }
-  },
-  {
-    "id": "add-clickhouse-provider",
-    "action": "add-provider",
-    "name":"clickhouse",
-    "url":"http://clickhouse-api.discoverd/clusters"
   },
   {
     "id": "blobstore",

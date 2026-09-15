@@ -131,7 +131,6 @@ need "${ROOT}/../flynn-plugin-kafka/img/packages.sh" 'site-docs' \
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
-  "${ROOT}/appliance/clickhouse/img/packages.sh" \
   "${ROOT}/host/img/packages.sh" \
   "${ROOT}/gitreceive/img/packages.sh"
 do
@@ -185,10 +184,21 @@ elif [[ -f "${ROOT}/appliance/kafka/img/packages.sh" ]]; then
   exit 1
 fi
 
-need "${ROOT}/appliance/clickhouse/img/packages.sh" 'libcap2-bin' \
-  "clickhouse must still install libcap2-bin long enough to clear file caps"
-need "${ROOT}/appliance/clickhouse/img/packages.sh" 'purge' \
-  "clickhouse must purge libcap2-bin after setcap"
+clickhouse_pkg="${ROOT}/../flynn-plugin-clickhouse/img/packages.sh"
+if [[ -f "${clickhouse_pkg}" ]]; then
+  need "${clickhouse_pkg}" '--no-install-recommends' \
+    "clickhouse plugin packages must pass --no-install-recommends"
+  need "${clickhouse_pkg}" 'apt-slim-finish.sh' \
+    "clickhouse plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/clickhouse/img/packages.sh" ]]; then
+  echo "clickhouse still lives in Flynn; extract it or point this check at ../flynn-plugin-clickhouse" >&2
+  exit 1
+fi
+
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'libcap2-bin' \
+  "clickhouse plugin must still install libcap2-bin long enough to clear file caps"
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'purge' \
+  "clickhouse plugin must purge libcap2-bin after setcap"
 
 need "${ROOT}/builder/img/go.sh" 'go/test' \
   "Go toolchain image must drop GOROOT test/doc trees"

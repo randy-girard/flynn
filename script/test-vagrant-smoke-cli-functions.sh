@@ -69,6 +69,10 @@ need 'cli-help-kafka' \
   "CLI step must show kafka in flynn help after plugin install"
 need 'cli-kafka-topics' \
   "CLI step must list kafka topics via the delegated plugin job"
+need 'cli-help-clickhouse' \
+  "CLI step must show clickhouse in flynn help after plugin install"
+need 'cli-clickhouse-databases' \
+  "CLI step must list clickhouse databases via the delegated plugin job"
 need 'cli-help-redis' \
   "CLI step must show redis in flynn help after plugin install"
 need 'cli-help-mysql' \

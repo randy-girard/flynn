@@ -12,6 +12,10 @@ type ClickhouseSuite struct {
 
 var _ = c.ConcurrentSuite(&ClickhouseSuite{})
 
+func (s *ClickhouseSuite) SetUpSuite(t *c.C) {
+	s.skipUnlessProvider(t, "clickhouse")
+}
+
 func (s *ClickhouseSuite) TestClickhouseEnv(t *c.C) {
 	a := s.newCliTestApp(t)
 

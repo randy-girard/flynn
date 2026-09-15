@@ -242,7 +242,7 @@ func TestCLIFromAppAndCoreCommands(t *testing.T) {
 	if got == nil || got.Command != "redis" || got.Usage != "manage redis" {
 		t.Fatalf("%+v", got)
 	}
-	if IsCorePluginCommand("redis") || IsCorePluginCommand("mysql") || IsCorePluginCommand("mongodb") || IsCorePluginCommand("kafka") || !IsCorePluginCommand("clickhouse") || IsCorePluginCommand("ps") {
+	if IsCorePluginCommand("redis") || IsCorePluginCommand("mysql") || IsCorePluginCommand("mongodb") || IsCorePluginCommand("kafka") || IsCorePluginCommand("clickhouse") || IsCorePluginCommand("ps") {
 		t.Fatal("core plugin command set")
 	}
 }

@@ -147,7 +147,7 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin install mongodb` |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin install redis`. Ephemeral; caching and development |
 | `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin install kafka` |
-| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | Still in bootstrap for now |
+| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin install clickhouse` |
 
 Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Redis does not. Details: [Databases](docs/content/databases.html.md).
 

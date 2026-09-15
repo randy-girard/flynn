@@ -57,7 +57,6 @@ Commands:
 	meta        manage app metadata
 	route       manage routes
 	pg          manage postgres database
-	clickhouse  manage clickhouse databases
 	provider    manage resource providers
 	docker      deploy Docker images to a Flynn cluster
 	remote      manage git remotes

@@ -174,7 +174,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -189,7 +189,6 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/netpolicy/
   ./pkg/squashfs/
   ./pkg/dockerimage/
-  ./appliance/clickhouse/
   ./pkg/plugin/
   ./appliance/postgresql/cmd/flynn-postgres-api/
   ./updater/
@@ -3334,6 +3333,15 @@ step_cli_functions() {
       flynn1 help kafka || failed=1
     cli_probe "${label}" "cli-kafka-topics" "" \
       flynn1 -a "${APP_NAME}" kafka topics || failed=1
+  fi
+
+  if plugin_has_delegated_cli clickhouse; then
+    cli_probe "${label}" "cli-help-clickhouse" "clickhouse" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-clickhouse-doc" "client" \
+      flynn1 help clickhouse || failed=1
+    cli_probe "${label}" "cli-clickhouse-databases" "" \
+      flynn1 -a "${APP_NAME}" clickhouse databases || failed=1
   fi
 
   # GET / lists every blob and 500s if postgres is briefly unavailable after
