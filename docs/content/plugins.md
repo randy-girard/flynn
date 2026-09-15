@@ -66,6 +66,12 @@ Those commands appear only after `flynn-host plugin install` stamps
 - `command` / `usage` — name and one-liner for `flynn help`
 - `doc` — full docopt usage for `flynn help <command>` and argv parsing
 - `actions` — how each subcommand runs **on the cluster**
+- `passthrough` — append the user argv after the plugin command (nested CLIs)
+- `release_env` — copy the appliance release env into the job (TLS material)
+
+Sirenia appliances may set `app.strategy`, `app.scale` (use `0` for the data
+process until first provision), and `generate_env` (random secrets such as
+`MYSQL_PWD`, preserved across plugin upgrades).
 
 The laptop never executes plugin binaries. With the user’s existing controller
 credentials, `flynn redis …` asks the controller to run a job using the
