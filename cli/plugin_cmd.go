@@ -41,22 +41,15 @@ func runPluginCommand(name string, args []string) error {
 	if err != nil {
 		return err
 	}
-	return executePluginCLI(client, spec, parsed)
+	return executePluginCLI(client, spec, parsed, args)
 }
 
 type appReleaseGetter interface {
 	GetAppRelease(appID string) (*ct.Release, error)
 }
 
-func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.Args) error {
-	var action *plugin.CLIAction
-	for i := range spec.Actions {
-		a := &spec.Actions[i]
-		if args.Bool[a.Name] {
-			action = a
-			break
-		}
-	}
+func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.Args, extra []string) error {
+	action := spec.MatchAction(args.Bool)
 	if action == nil {
 		return fmt.Errorf("%s: no matching plugin CLI action", spec.Command)
 	}
@@ -65,6 +58,11 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 	if err != nil {
 		return err
 	}
+	if action.Passthrough {
+		config.Args = append(config.Args, extra...)
+	}
+	config.ReleaseEnv = action.ReleaseEnv
+	config.Data = action.Data
 	cleanup, err := pluginJobIO(config, action, args)
 	if err != nil {
 		return err

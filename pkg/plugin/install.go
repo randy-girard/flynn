@@ -249,8 +249,10 @@ func (in *Installer) createAndDeployApp(m *Manifest, image *ct.Artifact, cluster
 		ref = resolved.Ref
 	}
 	app := &ct.App{
-		Name: m.App.Name,
-		Meta: m.AnnotateInstall(m.AppMeta(), source, ref),
+		Name:          m.App.Name,
+		Strategy:      m.App.Strategy,
+		DeployTimeout: m.App.DeployTimeout,
+		Meta:          m.AnnotateInstall(m.AppMeta(), source, ref),
 	}
 	if err := in.Client.CreateApp(app); err != nil {
 		return nil, fmt.Errorf("create app %s: %w", m.App.Name, err)
@@ -262,21 +264,24 @@ func (in *Installer) createAndDeployApp(m *Manifest, image *ct.Artifact, cluster
 }
 
 func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact, cluster map[string]string) error {
+	env := ReleaseEnv(m, image.ID, cluster)
+	if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
+		PreserveGeneratedEnv(m, env, prev.Env)
+	}
 	release := &ct.Release{
 		ArtifactIDs: []string{image.ID},
-		Env:         ReleaseEnv(m, image.ID, cluster),
+		Env:         env,
 		Processes:   m.App.Processes,
 	}
 	if err := in.Client.CreateRelease(app.ID, release); err != nil {
 		return fmt.Errorf("create release: %w", err)
 	}
 
-	procs := map[string]int{}
-	n := SingletonWebCount(cluster)
-	for name := range m.App.Processes {
-		procs[name] = n
-	}
+	procs := FormationScale(m, cluster)
 	timeout := deployTimeout
+	if m.App.DeployTimeout > 0 {
+		timeout = time.Duration(m.App.DeployTimeout) * time.Second
+	}
 	if err := in.Client.ScaleAppRelease(app.ID, release.ID, ct.ScaleOptions{
 		Processes: procs,
 		Timeout:   &timeout,

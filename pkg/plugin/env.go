@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/random"
 )
 
 // appReleaseGetter is the ClusterEnv subset of the controller client.
@@ -31,7 +32,49 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 		}
 		env[k] = v
 	}
+	for _, key := range m.GenerateEnv {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if env[key] == "" {
+			env[key] = random.Hex(16)
+		}
+	}
 	return env
+}
+
+// PreserveGeneratedEnv copies previously generated secrets onto env so a
+// plugin upgrade does not rotate MYSQL_PWD / MONGO_PWD out from under a
+// running cluster.
+func PreserveGeneratedEnv(m *Manifest, env, previous map[string]string) {
+	if m == nil || previous == nil {
+		return
+	}
+	for _, key := range m.GenerateEnv {
+		if v := previous[key]; v != "" {
+			env[key] = v
+		}
+	}
+}
+
+// FormationScale is the install formation. Manifest app.scale wins per
+// process; other processes use SingletonWebCount.
+func FormationScale(m *Manifest, cluster map[string]string) map[string]int {
+	n := SingletonWebCount(cluster)
+	procs := map[string]int{}
+	if m == nil {
+		return procs
+	}
+	for name := range m.App.Processes {
+		if m.App.Scale != nil {
+			if s, ok := m.App.Scale[name]; ok {
+				procs[name] = s
+				continue
+			}
+		}
+		procs[name] = n
+	}
+	return procs
 }
 
 // ClusterEnv reads well-known secrets from already-running core apps

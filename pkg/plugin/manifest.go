@@ -35,18 +35,19 @@ const (
 
 // Manifest is flynn-plugin.json at the root of a plugin repo.
 type Manifest struct {
-	Name      string            `json:"name"`
-	Kind      string            `json:"kind"`
-	Provider  *Provider         `json:"provider,omitempty"`
-	App       AppSpec           `json:"app"`
-	InjectEnv []string          `json:"inject_env,omitempty"`
-	ImageEnv  map[string]string `json:"image_env,omitempty"`
-	Env       map[string]string `json:"env,omitempty"`
-	CLI       *CLI              `json:"cli,omitempty"`
-	Hooks     *Hooks            `json:"hooks,omitempty"`
-	Wait      string            `json:"wait,omitempty"`
-	Build     json.RawMessage   `json:"build,omitempty"`
-	Artifacts *Artifacts        `json:"artifacts,omitempty"`
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Provider    *Provider         `json:"provider,omitempty"`
+	App         AppSpec           `json:"app"`
+	InjectEnv   []string          `json:"inject_env,omitempty"`
+	ImageEnv    map[string]string `json:"image_env,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	GenerateEnv []string          `json:"generate_env,omitempty"`
+	CLI         *CLI              `json:"cli,omitempty"`
+	Hooks       *Hooks            `json:"hooks,omitempty"`
+	Wait        string            `json:"wait,omitempty"`
+	Build       json.RawMessage   `json:"build,omitempty"`
+	Artifacts   *Artifacts        `json:"artifacts,omitempty"`
 }
 
 type Provider struct {
@@ -55,9 +56,15 @@ type Provider struct {
 }
 
 type AppSpec struct {
-	Name      string                    `json:"name"`
-	Meta      map[string]string         `json:"meta,omitempty"`
-	Processes map[string]ct.ProcessType `json:"processes,omitempty"`
+	Name          string                    `json:"name"`
+	Strategy      string                    `json:"strategy,omitempty"`
+	DeployTimeout int32                     `json:"deploy_timeout,omitempty"`
+	Meta          map[string]string         `json:"meta,omitempty"`
+	Processes     map[string]ct.ProcessType `json:"processes,omitempty"`
+	// Scale is the formation for each process. Missing keys use the cluster
+	// singleton web count (1 or 2). Use 0 for sirenia data processes that
+	// stay down until the first resource provision.
+	Scale map[string]int `json:"scale,omitempty"`
 }
 
 // CLI is the user-facing flynn command published by a plugin. The flynn binary
@@ -94,6 +101,42 @@ type CLIAction struct {
 	StdinFile  string            `json:"stdin_file,omitempty"`
 	Progress   bool              `json:"progress,omitempty"`
 	Quiet      string            `json:"quiet,omitempty"`
+	// Passthrough appends the user argv after the plugin command (so
+	// `flynn kafka topics create x` becomes job args + "topics create x").
+	Passthrough bool `json:"passthrough,omitempty"`
+	// ReleaseEnv copies the appliance release env into the job (TLS material).
+	ReleaseEnv bool `json:"release_env,omitempty"`
+	// Data requests a data volume on the job (mongodb restore).
+	Data bool `json:"data,omitempty"`
+}
+
+// MatchAction returns the action whose Name tokens are all true in docopt
+// bools, preferring the longest match (`topics create` over `topics`).
+func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
+	if c == nil {
+		return nil
+	}
+	var best *CLIAction
+	bestN := -1
+	for i := range c.Actions {
+		a := &c.Actions[i]
+		parts := strings.Fields(a.Name)
+		if len(parts) == 0 {
+			continue
+		}
+		ok := true
+		for _, p := range parts {
+			if !bools[p] {
+				ok = false
+				break
+			}
+		}
+		if ok && len(parts) > bestN {
+			best = a
+			bestN = len(parts)
+		}
+	}
+	return best
 }
 
 func (c *CLI) Runnable() bool {

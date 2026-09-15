@@ -199,7 +199,7 @@ func TestPluginJobConfigAndIO(t *testing.T) {
 }
 
 func TestExecutePluginCLINoMatchingAction(t *testing.T) {
-	err := executePluginCLI(nil, redisPluginCLI(), &docopt.Args{Bool: map[string]bool{}})
+	err := executePluginCLI(nil, redisPluginCLI(), &docopt.Args{Bool: map[string]bool{}}, nil)
 	if err == nil || !strings.Contains(err.Error(), "no matching plugin CLI action") {
 		t.Fatalf("got %v", err)
 	}
@@ -225,6 +225,26 @@ func TestPluginInterpPasswordNotRescanned(t *testing.T) {
 	}
 	if !containsArgPair(args, "-a", "x${resource}y") {
 		t.Fatalf("password re-expanded: %q", args)
+	}
+}
+
+func TestPluginMatchActionPrefersLongestName(t *testing.T) {
+	spec := &plugin.CLI{Actions: []plugin.CLIAction{
+		{Name: "topics", Args: []string{"list"}},
+		{Name: "topics create", Args: []string{"create"}},
+		{Name: "consumer-groups create", Args: []string{"cg-create"}},
+	}}
+	got := spec.MatchAction(map[string]bool{"topics": true, "create": true})
+	if got == nil || got.Name != "topics create" {
+		t.Fatalf("got %+v", got)
+	}
+	got = spec.MatchAction(map[string]bool{"consumer-groups": true, "create": true})
+	if got == nil || got.Name != "consumer-groups create" {
+		t.Fatalf("got %+v", got)
+	}
+	got = spec.MatchAction(map[string]bool{"topics": true})
+	if got == nil || got.Name != "topics" {
+		t.Fatalf("got %+v", got)
 	}
 }
 
