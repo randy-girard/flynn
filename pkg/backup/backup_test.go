@@ -16,6 +16,7 @@ type backupStub struct {
 	apps       map[string]*ct.App
 	releases   map[string]*ct.Release
 	formations map[string]*ct.Formation
+	expanded   map[string]*ct.ExpandedFormation
 	err        map[string]error
 }
 
@@ -42,6 +43,34 @@ func (s backupStub) GetFormation(appID, releaseID string) (*ct.Formation, error)
 		return nil, errors.New("no formation")
 	}
 	return f, nil
+}
+
+func (s backupStub) GetExpandedFormation(appID, releaseID string) (*ct.ExpandedFormation, error) {
+	if s.expanded != nil {
+		if ef, ok := s.expanded[appID+"/"+releaseID]; ok {
+			return ef, nil
+		}
+		if ef, ok := s.expanded[appID]; ok {
+			return ef, nil
+		}
+	}
+	app, err := s.GetApp(appID)
+	if err != nil {
+		return nil, err
+	}
+	release, err := s.GetAppRelease(app.ID)
+	if err != nil {
+		return nil, err
+	}
+	formation, err := s.GetFormation(app.ID, release.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &ct.ExpandedFormation{
+		App:       app,
+		Release:   release,
+		Processes: formation.Processes,
+	}, nil
 }
 
 func requiredBackupApps() backupStub {
@@ -155,6 +184,32 @@ func TestShouldDumpPlugin(t *testing.T) {
 	}}
 	if !shouldDumpPlugin(namedJobs, p, unnamed, mariadbDumpFormation(0)) {
 		t.Fatal("empty Process must fall back to plugin name")
+	}
+}
+
+func TestIncludePluginFormationsCopiesArtifacts(t *testing.T) {
+	stub := requiredBackupApps()
+	art := &ct.Artifact{ID: "img-1", URI: "http://blobstore.discoverd/mongodb.squashfs"}
+	stub.apps["mongodb"] = &ct.App{ID: "mongodb-id", Name: "mongodb"}
+	stub.releases["mongodb-id"] = &ct.Release{ID: "mongodb-rel"}
+	stub.expanded = map[string]*ct.ExpandedFormation{
+		"mongodb-id/mongodb-rel": {
+			App:       stub.apps["mongodb"],
+			Release:   stub.releases["mongodb-id"],
+			Artifacts: []*ct.Artifact{art},
+			Processes: map[string]int{"mongodb": 1},
+		},
+	}
+	data := map[string]*ct.ExpandedFormation{}
+	if err := includePluginFormations(stub, data, []plugin.Installed{{Name: "mongodb"}}); err != nil {
+		t.Fatal(err)
+	}
+	got := data["mongodb"]
+	if got == nil || len(got.Artifacts) != 1 || got.Artifacts[0].URI != art.URI {
+		t.Fatalf("plugin backup must include blobstore artifacts, got %+v", got)
+	}
+	if got.DeprecatedImageArtifact == nil || got.DeprecatedImageArtifact.URI != art.URI {
+		t.Fatal("plugin backup must set deprecated artifact for restore compatibility")
 	}
 }
 

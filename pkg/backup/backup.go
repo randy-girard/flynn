@@ -14,6 +14,7 @@ type backupAppClient interface {
 	GetApp(string) (*ct.App, error)
 	GetAppRelease(string) (*ct.Release, error)
 	GetFormation(string, string) (*ct.Formation, error)
+	GetExpandedFormation(string, string) (*ct.ExpandedFormation, error)
 }
 
 func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
@@ -126,16 +127,14 @@ func includePluginFormations(client backupAppClient, data map[string]*ct.Expande
 		if err != nil {
 			return fmt.Errorf("error getting %s app release: %s", p.Name, err)
 		}
-		formation, err := client.GetFormation(app.ID, release.ID)
+		ef, err := client.GetExpandedFormation(app.ID, release.ID)
 		if err != nil {
-			return fmt.Errorf("error getting %s app formation: %s", p.Name, err)
+			return fmt.Errorf("error getting %s expanded formation: %s", p.Name, err)
 		}
-		data[p.Name] = &ct.ExpandedFormation{
-			App:                     app,
-			Release:                 release,
-			Processes:               formation.Processes,
-			DeprecatedImageArtifact: &ct.Artifact{Type: ct.DeprecatedArtifactTypeDocker},
+		if ef.DeprecatedImageArtifact == nil && len(ef.Artifacts) > 0 {
+			ef.DeprecatedImageArtifact = ef.Artifacts[0]
 		}
+		data[p.Name] = ef
 	}
 	return nil
 }

@@ -559,6 +559,32 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	if err != nil {
 		return err
 	}
+	state.SetControllerKey(controllerKey)
+	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
+
+	// Plugin appliance images live in blobstore, not the Flynn tarball.
+	// Start blobstore before restoring mysql/mongodb dumps so run-app can pull layers.
+	blobstoreRelease, err := client.GetAppRelease("blobstore")
+	if err != nil {
+		return fmt.Errorf("error getting blobstore release: %s", err)
+	}
+	blobstoreFormation, err := client.GetExpandedFormation("blobstore", blobstoreRelease.ID)
+	if err != nil {
+		return fmt.Errorf("error getting blobstore expanded formation: %s", err)
+	}
+	blobstoreFormation.Artifacts = []*ct.Artifact{artifacts["blobstore"]}
+	_, err = bootstrap.Manifest{
+		step("blobstore", "run-app", &bootstrap.RunAppAction{
+			ExpandedFormation: blobstoreFormation,
+		}),
+		step("blobstore-wait", "wait", &bootstrap.WaitAction{
+			URL:    "http://blobstore.discoverd",
+			Status: 200,
+		}),
+	}.RunWithState(ch, state)
+	if err != nil {
+		return err
+	}
 
 	for _, p := range installed {
 		f := data[p.Name]
@@ -572,6 +598,17 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 		dump, err := getFile(spec.File)
 		if err != nil {
 			continue
+		}
+		if rel, err := client.GetAppRelease(p.Name); err == nil {
+			if ef, err := client.GetExpandedFormation(p.Name, rel.ID); err == nil && ef != nil && len(ef.Artifacts) > 0 {
+				f = ef
+			}
+		}
+		if art := artifacts[p.Name]; art != nil {
+			f.Artifacts = []*ct.Artifact{art}
+		}
+		if len(f.Artifacts) == 0 {
+			return fmt.Errorf("%s backup present but no image in the tarball or restored formation", p.Name)
 		}
 		steps := bootstrap.Manifest{
 			step(p.Name, "run-app", &bootstrap.RunAppAction{
@@ -618,33 +655,6 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 			return err
 		}
 		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
-	}
-
-	// get blobstore config
-	blobstoreRelease, err := client.GetAppRelease("blobstore")
-	if err != nil {
-		return fmt.Errorf("error getting blobstore release: %s", err)
-	}
-	blobstoreFormation, err := client.GetExpandedFormation("blobstore", blobstoreRelease.ID)
-	if err != nil {
-		return fmt.Errorf("error getting blobstore expanded formation: %s", err)
-	}
-	state.SetControllerKey(controllerKey)
-	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
-
-	// start the blobstore
-	blobstoreFormation.Artifacts = []*ct.Artifact{artifacts["blobstore"]}
-	_, err = bootstrap.Manifest{
-		step("blobstore", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: blobstoreFormation,
-		}),
-		step("blobstore-wait", "wait", &bootstrap.WaitAction{
-			URL:    "http://blobstore.discoverd",
-			Status: 200,
-		}),
-	}.RunWithState(ch, state)
-	if err != nil {
-		return err
 	}
 
 	// now that the controller and blobstore are up and controller
