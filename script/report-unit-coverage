@@ -7,7 +7,8 @@
 # If no profiles are given, every coverage/*.out except coverage/coverage.out
 # is merged. Reports:
 #   coverage/coverage.out  merged profile
-#   coverage/index.html    go tool cover HTML
+#   coverage/index.html    overview by package area, with per-file links
+#   coverage/files/**      one HTML page per source file
 #   coverage/func.txt      per-function counts
 #   coverage/summary.txt   total coverage line
 set -euo pipefail
@@ -52,7 +53,9 @@ merged="${DIR}/coverage.out"
 } >"${merged}.tmp"
 mv "${merged}.tmp" "${merged}"
 
-go tool cover -html="${merged}" -o "${DIR}/index.html"
 go tool cover -func="${merged}" >"${DIR}/func.txt"
 tail -n1 "${DIR}/func.txt" | tee "${DIR}/summary.txt"
-echo "==> Coverage HTML: ${DIR}/index.html"
+# Replace the single go-tool-cover page with a per-file report.
+rm -f "${DIR}/index.html"
+rm -rf "${DIR}/files"
+go run -mod=vendor -buildvcs=false ./util/coverage -profile "${merged}" -out "${DIR}" -root "${ROOT}"

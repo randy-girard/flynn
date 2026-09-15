@@ -25,9 +25,16 @@ EOF
 
   [[ -f "${COVER_TMP}/coverage.out" ]]
   [[ -f "${COVER_TMP}/index.html" ]]
+  [[ -f "${COVER_TMP}/style.css" ]]
+  [[ -f "${COVER_TMP}/files/pkg/plugin/manifest.go.html" ]]
+  [[ -f "${COVER_TMP}/files/pkg/plugin/catalog.go.html" ]]
   [[ -f "${COVER_TMP}/func.txt" ]]
   [[ -f "${COVER_TMP}/summary.txt" ]]
   grep -q "pkg/plugin/manifest.go" "${COVER_TMP}/coverage.out"
   grep -q "pkg/plugin/catalog.go" "${COVER_TMP}/coverage.out"
   grep -q "total:" "${COVER_TMP}/summary.txt"
+  grep -q "Overall by package area" "${COVER_TMP}/index.html"
+  grep -q 'id="pkg"' "${COVER_TMP}/index.html"
+  grep -q "files/pkg/plugin/manifest.go.html" "${COVER_TMP}/index.html"
+  grep -q "func (m \*Manifest) Validate()" "${COVER_TMP}/files/pkg/plugin/manifest.go.html"
 }

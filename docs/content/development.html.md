@@ -175,8 +175,9 @@ Force Docker on Linux with `FLYNN_TEST_DOCKER=1`. Skip ZFS volume tests with
 `FLYNN_SKIP_VOLUME_TESTS=1`. Extra `go test` flags: `FLYNN_GO_TEST_FLAGS`.
 
 Unit tests write Go coverage under **`coverage/`** (gitignored): `coverage.out`,
-an HTML report at `coverage/index.html`, and `coverage/func.txt`. Open the HTML
-file in a browser. Set `FLYNN_SKIP_COVERAGE=1` to skip the report.
+an overview at `coverage/index.html` grouped by package area, and one HTML
+page per source file under `coverage/files/`. Open `coverage/index.html` in a
+browser. Set `FLYNN_SKIP_COVERAGE=1` to skip the report.
 
 On the builder you need `mariabackup` (the Makefile checks). Package-level:
 

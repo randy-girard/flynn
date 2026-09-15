@@ -22,4 +22,4 @@ ubuntu_ports_cache
 builder/manifest.json
 docs/local/
 script/docker/unit-tests/.image-built
-coverage/
+/coverage/
