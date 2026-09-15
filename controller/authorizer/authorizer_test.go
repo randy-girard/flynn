@@ -135,6 +135,16 @@ func TestAuthorizeRequestClusterKeyAndMissing(t *testing.T) {
 	}
 }
 
+func TestVerifyASN1RejectsGarbage(t *testing.T) {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verifyASN1(&priv.PublicKey, make([]byte, 32), []byte("not-asn1")) {
+		t.Fatal("garbage signature")
+	}
+}
+
 func TestAuthorizeTokenRejectsMissingKeyAndEncoding(t *testing.T) {
 	a := New(nil, nil, nil, time.Hour)
 	if _, err := a.AuthorizeToken("anything"); err != ErrInvalid {

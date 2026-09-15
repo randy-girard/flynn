@@ -4,8 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	controller "github.com/flynn/flynn/controller/client"
+	ct "github.com/flynn/flynn/controller/types"
 )
+
+// appReleaseGetter is the ClusterEnv subset of the controller client.
+type appReleaseGetter interface {
+	GetAppRelease(appID string) (*ct.Release, error)
+}
 
 // ReleaseEnv builds the system-app release environment from the manifest and
 // the cluster. image_env values equal to "self" become artifactID.
@@ -31,7 +36,7 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 
 // ClusterEnv reads well-known secrets from already-running core apps
 // (controller/postgres). It does not assume any plugin is installed.
-func ClusterEnv(client controller.Client) (map[string]string, error) {
+func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 	out := map[string]string{}
 	for _, app := range []string{"controller", "postgres"} {
 		release, err := client.GetAppRelease(app)

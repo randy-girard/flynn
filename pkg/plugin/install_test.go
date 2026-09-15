@@ -146,6 +146,45 @@ func TestDisplaySourceAndLogf(t *testing.T) {
 	}
 }
 
+func TestWaitHTTPRetriesThenOK(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	if err := waitHTTP(srv.Client(), srv.URL, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if n < 2 {
+		t.Fatalf("retries=%d", n)
+	}
+}
+
+func TestPutFileMissingAndRunHookSecrets(t *testing.T) {
+	if err := putFile(http.DefaultClient, "http://127.0.0.1/x", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("missing file must fail")
+	}
+
+	root := t.TempDir()
+	script := filepath.Join(root, "install.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nset -e\ntest \"$CONTROLLER_KEY\" = secret\ntest -n \"$FLYNN_PLUGIN_NAME\"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	in := &Installer{Stdout: io.Discard, Stderr: io.Discard}
+	m := &Manifest{Name: "widget", Kind: KindApp}
+	if err := in.runHook(root, m, "install.sh", map[string]string{"CONTROLLER_KEY": "secret", "CLUSTER_DOMAIN": "example.local"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := in.runHook(root, m, "install.sh", map[string]string{"CONTROLLER_KEY": "wrong"}); err == nil {
+		t.Fatal("hook must see injected CONTROLLER_KEY")
+	}
+}
+
 func TestInstallHookAndRunHook(t *testing.T) {
 	m := &Manifest{Name: "widget", Kind: KindApp}
 	if m.installHook() != "" {
