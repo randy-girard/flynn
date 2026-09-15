@@ -327,6 +327,22 @@ func TestManifestValidateErrorsAndWait(t *testing.T) {
 	if m.PingURL() != "" {
 		t.Fatal("invalid provider URL must not invent a ping")
 	}
+	m.Wait = "file:///etc/passwd"
+	if m.PingURL() != "" {
+		t.Fatal("file wait URLs must not be used as install ping")
+	}
+	m.Wait = "javascript:alert(1)"
+	if m.PingURL() != "" {
+		t.Fatal("non-http wait URLs must not be used as install ping")
+	}
+	m.Wait = ""
+	m.Provider.URL = "ftp://cache-api.discoverd/clusters"
+	if m.PingURL() != "" {
+		t.Fatal("non-http provider URLs must not invent a ping")
+	}
+	if (*Manifest)(nil).PingURL() != "" {
+		t.Fatal("nil manifest ping")
+	}
 
 	meta := m.AnnotateInstall(nil, "../flynn-plugin-cache", "v1")
 	if meta[MetaPluginSource] != "../flynn-plugin-cache" || meta[MetaPluginRef] != "v1" {
@@ -394,6 +410,17 @@ func TestAnnotateInstallRefreshesCLI(t *testing.T) {
 	cli := CLIFromApp(&ct.App{Meta: got})
 	if cli == nil || len(cli.Actions) != 1 || cli.Actions[0].Env["KAFKA_BOOTSTRAP_SERVERS"] == "" {
 		t.Fatalf("reinstall must refresh CLI catalog, got %+v", cli)
+	}
+}
+
+func TestCatalogNilSafe(t *testing.T) {
+	var cat *Catalog
+	if cat.HasCommand("redis") || cat.HasProvider("redis") || cat.Lookup("redis") != nil {
+		t.Fatal("nil catalog must not panic or report plugins")
+	}
+	empty := &Catalog{}
+	if empty.HasCommand("redis") || empty.HasProvider("redis") {
+		t.Fatal("empty catalog")
 	}
 }
 

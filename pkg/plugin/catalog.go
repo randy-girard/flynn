@@ -30,6 +30,9 @@ func (c *Catalog) Lookup(name string) *CLI {
 }
 
 func (c *Catalog) HasProvider(name string) bool {
+	if c == nil {
+		return false
+	}
 	for _, cmd := range c.Commands {
 		if cmd.Command == name {
 			return true

@@ -9,9 +9,11 @@ import (
 )
 
 func TestWaitActionUnknownProtocol(t *testing.T) {
-	err := (&WaitAction{URL: "ftp://example.invalid"}).Run(&State{})
-	if err == nil || !strings.Contains(err.Error(), "unknown protocol") {
-		t.Fatalf("got %v", err)
+	for _, raw := range []string{"ftp://example.invalid", "file:///etc/passwd", "javascript:alert(1)"} {
+		err := (&WaitAction{URL: raw}).Run(&State{})
+		if err == nil || !strings.Contains(err.Error(), "unknown protocol") {
+			t.Fatalf("%s: got %v", raw, err)
+		}
 	}
 }
 

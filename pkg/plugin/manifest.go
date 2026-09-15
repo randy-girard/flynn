@@ -340,18 +340,36 @@ func (m *Manifest) AnnotateInstall(meta map[string]string, source, ref string) m
 // PingURL is the HTTP URL flynn-host waits on after deploy. Manifest wait
 // wins; otherwise resource-providers use http://<provider-host>/ping.
 func (m *Manifest) PingURL() string {
+	if m == nil {
+		return ""
+	}
 	if m.Wait != "" {
-		return m.Wait
+		if pingURLAllowed(m.Wait) {
+			return m.Wait
+		}
+		return ""
 	}
 	if m.Provider == nil || m.Provider.URL == "" {
 		return ""
 	}
 	u, err := url.Parse(m.Provider.URL)
-	if err != nil || u.Host == "" {
+	if err != nil || u.Host == "" || !httpOrHTTPS(u.Scheme) {
 		return ""
 	}
 	u.Path = "/ping"
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String()
+}
+
+func pingURLAllowed(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return httpOrHTTPS(u.Scheme)
+}
+
+func httpOrHTTPS(scheme string) bool {
+	return scheme == "http" || scheme == "https"
 }

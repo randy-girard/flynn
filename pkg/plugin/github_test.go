@@ -541,6 +541,9 @@ func TestSanitizeURLAndRefOrLatest(t *testing.T) {
 	if got := sanitizeURL("https://github.com/acme/plug"); got != "https://github.com/acme/plug" {
 		t.Fatalf("plain=%s", got)
 	}
+	if got := sanitizeURL("user:pass@host/path"); got != "user:pass@host/path" {
+		t.Fatalf("no scheme must stay literal: %s", got)
+	}
 	if refOrLatest("") != "latest" || refOrLatest("v1") != "v1" {
 		t.Fatal("refOrLatest")
 	}
@@ -552,6 +555,11 @@ func TestSanitizeURLAndRefOrLatest(t *testing.T) {
 	}
 	if req.Header.Get("Accept") != "application/octet-stream" {
 		t.Fatal("accept")
+	}
+	req, _ = http.NewRequest("GET", "https://example.invalid", nil)
+	(&Installer{}).githubHeaders(req, "", "")
+	if req.Header.Get("Authorization") != "" {
+		t.Fatalf("empty token must not send Authorization: %v", req.Header)
 	}
 	rel := githubRelease{Assets: []githubAsset{{Name: "image.json"}}}
 	if rel.asset("image.json") == nil || rel.asset("missing") != nil {
