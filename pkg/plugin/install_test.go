@@ -245,3 +245,14 @@ func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
 		t.Fatal("create error")
 	}
 }
+
+func TestInstallerHTTPAndRunBuildMissing(t *testing.T) {
+	in := &Installer{}
+	if in.http() != http.DefaultClient {
+		t.Fatal("default HTTP client")
+	}
+	in.persistInventory() // nil Client must be a no-op
+	if err := in.runBuild(t.TempDir()); err == nil || !strings.Contains(err.Error(), "plugin-build") {
+		t.Fatalf("missing plugin-build script: %v", err)
+	}
+}
