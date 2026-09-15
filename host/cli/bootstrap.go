@@ -24,6 +24,7 @@ import (
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	hostconfig "github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/pkg/exec"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/tlscert"
 	"github.com/flynn/go-docopt"
@@ -700,22 +701,20 @@ UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s',
 );`, artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), step.ID))
 	}
 
-	// update the URI of redis artifacts currently being referenced by
-	// the redis app (which will also update all current redis resources
-	// to use the latest redis image)
-	redisImage := artifacts["redis-image"]
-	sqlBuf.WriteString(fmt.Sprintf(`
+	// update redis artifacts from a restored backup only when this tarball
+	// still ships a redis image (plugin-managed redis uses blobstore layers).
+	if redisImage := artifacts["redis-image"]; redisImage != nil {
+		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s', size = %d, layer_url_template = '%s', meta = '%s'
 WHERE artifact_id = (SELECT (env->>'REDIS_IMAGE_ID')::uuid FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL))
 OR uri = (SELECT env->>'REDIS_IMAGE_URI' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL));`,
-		redisImage.URI, jsonb(&redisImage.RawManifest), jsonb(redisImage.Hashes), redisImage.Size, redisImage.LayerURLTemplate, jsonb(redisImage.Meta)))
+			redisImage.URI, jsonb(&redisImage.RawManifest), jsonb(redisImage.Hashes), redisImage.Size, redisImage.LayerURLTemplate, jsonb(redisImage.Meta)))
 
-	// ensure the image ID environment variables are set for legacy redis app
-	// with image URI variable
-	sqlBuf.WriteString(fmt.Sprintf(`
+		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = jsonb_set(env, '{REDIS_IMAGE_ID}', ('"' || (SELECT artifact_id::text FROM artifacts WHERE uri = '%s') || '"')::jsonb, true)
 WHERE env->>'REDIS_IMAGE_URI' IS NOT NULL;`,
-		artifacts["redis-image"].URI))
+			redisImage.URI))
+	}
 
 	// remove job and volume records created by previous clusters
 	sqlBuf.WriteString(fmt.Sprintf(`
@@ -879,6 +878,39 @@ WARN:
 		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "end", Timestamp: time.Now().UTC()}
 	}
 
+	if err := waitRestoredPlugins(client, ch, state); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func waitRestoredPlugins(client controller.Client, ch chan *bootstrap.StepInfo, state *bootstrap.State) error {
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing restored plugins: %s", err)
+	}
+	installed := plugin.ListInstalled(apps)
+	if len(installed) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(installed))
+	for _, p := range installed {
+		names = append(names, p.Name)
+	}
+	log.Printf("restored plugins from backup: %s", strings.Join(names, ", "))
+	for _, p := range installed {
+		if p.Wait == "" {
+			continue
+		}
+		st := bootstrap.Step{
+			StepMeta: bootstrap.StepMeta{ID: "plugin-wait-" + p.Name, Action: "wait"},
+			Action:   &bootstrap.WaitAction{URL: p.Wait},
+		}
+		if _, err := (bootstrap.Manifest{st}).RunWithState(ch, state); err != nil {
+			return fmt.Errorf("plugin %s did not become ready after restore: %s", p.Name, err)
+		}
+	}
 	return nil
 }
 

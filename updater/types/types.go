@@ -45,7 +45,6 @@ var SystemApps = []SystemApp{
 		Name:     "mongodb",
 		Optional: true,
 	},
-	{Name: "redis"},
 	{Name: "kafka", Optional: true},
 	{Name: "clickhouse", Optional: true},
 }

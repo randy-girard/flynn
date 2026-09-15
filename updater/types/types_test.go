@@ -26,7 +26,7 @@ func TestSystemAppsUpgradeOrder(t *testing.T) {
 		}
 		byName[app.Name] = app
 	}
-	for _, required := range []string{"postgres", "redis", "status", "logaggregator"} {
+	for _, required := range []string{"postgres", "status", "logaggregator"} {
 		if _, ok := byName[required]; !ok {
 			t.Fatalf("missing required system app %q", required)
 		}

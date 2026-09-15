@@ -177,8 +177,6 @@ main() {
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mariadb-api" ./appliance/mariadb/cmd/flynn-mariadb-api
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb" ./appliance/mongodb/cmd/flynn-mongodb
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-mongodb-api" ./appliance/mongodb/cmd/flynn-mongodb-api
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-redis" ./appliance/redis/cmd/flynn-redis
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-redis-api" ./appliance/redis/cmd/flynn-redis-api
 
     info "building additional Flynn services"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-blobstore" ./blobstore

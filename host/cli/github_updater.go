@@ -1373,9 +1373,11 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		return fmt.Errorf("failed to create %s image artifact after retries", name)
 	}
 	redisImage := images["redis"]
-	if err := createArtifactWithRetry("redis", redisImage); err != nil {
-		log.Error(err.Error())
-		return err
+	if redisImage != nil {
+		if err := createArtifactWithRetry("redis", redisImage); err != nil {
+			log.Error(err.Error())
+			return err
+		}
 	}
 	slugRunner := images["slugrunner"]
 	if err := createArtifactWithRetry("slugrunner", slugRunner); err != nil {
@@ -1476,7 +1478,16 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	for _, app := range apps {
 		appLog := log.New("name", app.Name)
 
+		if app.Plugin() {
+			appLog.Info("skipped deploy of plugin app (use flynn-host plugin update)")
+			continue
+		}
+
 		if app.RedisAppliance() {
+			if redisImage == nil {
+				appLog.Info("skipped deploy of Redis app (no redis image in tarball)")
+				continue
+			}
 			appLog.Info("starting deploy of Redis app")
 			if err := updaterdeploy.EnsureRedisApplianceStrategy(client, app, appLog); err != nil {
 				appLog.Error("error setting redis appliance strategy", "err", err)

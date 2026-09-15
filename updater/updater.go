@@ -127,10 +127,12 @@ func run() error {
 		}
 		return fmt.Errorf("failed to create %s image artifact after retries", name)
 	}
-	redisImage = images["redis"]
-	if err := createArtifactWithRetry("redis", redisImage); err != nil {
-		log.Error(err.Error())
-		return err
+	if img, ok := images["redis"]; ok {
+		redisImage = img
+		if err := createArtifactWithRetry("redis", redisImage); err != nil {
+			log.Error(err.Error())
+			return err
+		}
 	}
 	slugRunner = images["slugrunner"]
 	if err := createArtifactWithRetry("slugrunner", slugRunner); err != nil {
@@ -246,7 +248,16 @@ func run() error {
 	for _, app := range apps {
 		log := log.New("name", app.Name)
 
+		if app.Plugin() {
+			log.Info("skipped deploy of plugin app (use flynn-host plugin update)")
+			continue
+		}
+
 		if app.RedisAppliance() {
+			if redisImage == nil {
+				log.Info("skipped deploy of Redis app (no redis image in tarball)")
+				continue
+			}
 			log.Info("starting deploy of Redis app")
 			if err := updaterdeploy.EnsureRedisApplianceStrategy(client, app, log); err != nil {
 				log.Error("error setting redis appliance strategy", "err", err)
@@ -344,13 +355,20 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 
 func updateImageIDs(env map[string]string) bool {
 	return imageenv.Update(env, imageenv.IDs{
-		Redis:         redisImage.ID,
-		SlugBuilder:   slugBuilder.ID,
-		SlugRunner:    slugRunner.ID,
-		DockerBuilder: dockerBuilder.ID,
+		Redis:         artifactID(redisImage),
+		SlugBuilder:   artifactID(slugBuilder),
+		SlugRunner:    artifactID(slugRunner),
+		DockerBuilder: artifactID(dockerBuilder),
 		Kafka:         kafkaImageID(),
 		ClickHouse:    clickHouseImageID(),
 	})
+}
+
+func artifactID(a *ct.Artifact) string {
+	if a == nil {
+		return ""
+	}
+	return a.ID
 }
 
 func kafkaImageID() string {

@@ -18,7 +18,6 @@
   "updater":        $image_artifact[updater],
   "logaggregator":  $image_artifact[logaggregator],
   "status":         $image_artifact[status],
-  "redis":          $image_artifact[redis],
   "kafka":          $image_artifact[kafka],
   "clickhouse":     $image_artifact[clickhouse],
   "mariadb":        $image_artifact[mariadb],

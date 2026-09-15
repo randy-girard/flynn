@@ -305,39 +305,6 @@
       }
     },
     {
-      "id": "redis",
-      "base": "ubuntu-noble",
-      "layers": [
-        {
-          "name": "redis-packages",
-          "script": "appliance/redis/img/packages.sh",
-          "inputs": [
-            "builder/img/apt-slim-finish.sh"
-          ],
-          "limits": {
-            "temp_disk": "4G"
-          }
-        },
-        {
-          "name": "redis-binaries",
-          "gobuild": {
-            "appliance/redis/cmd/flynn-redis": "/bin/flynn-redis",
-            "appliance/redis/cmd/flynn-redis-api": "/bin/flynn-redis-api"
-          },
-          "copy": {
-            "appliance/redis/start.sh": "/bin/start-flynn-redis",
-            "appliance/redis/dump.sh": "/bin/dump-flynn-redis",
-            "appliance/redis/restore.sh": "/bin/restore-flynn-redis"
-          }
-        }
-      ],
-      "entrypoint": {
-        "args": [
-          "/bin/start-flynn-redis"
-        ]
-      }
-    },
-    {
       "id": "kafka",
       "base": "ubuntu-noble",
       "layers": [
