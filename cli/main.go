@@ -57,7 +57,6 @@ Commands:
 	meta        manage app metadata
 	route       manage routes
 	pg          manage postgres database
-	mysql       manage mysql database
 	mongodb     manage mongodb database
 	kafka       manage kafka topics and consumer groups
 	clickhouse  manage clickhouse databases

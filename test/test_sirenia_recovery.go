@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flynn/flynn/appliance/mariadb"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/mysqlurl"
 	sc "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	c "github.com/flynn/go-check"
@@ -82,6 +82,7 @@ func (s *SireniaRecoverySuite) TestPostgresSyncTakeoverAfterProcessRestart(t *c.
 // async catches up without leaving Running=false (a full reseed) or changing
 // peer identity. Lagging-but-advancing must be treated as healthy.
 func (s *SireniaRecoverySuite) TestMariaDBLaggingReplicaNotReseeded(t *c.C) {
+	s.skipUnlessProvider(t, "mysql")
 	client := s.controllerClient(t)
 	disc := s.discoverdClient(t)
 
@@ -118,7 +119,7 @@ func (s *SireniaRecoverySuite) TestMariaDBLaggingReplicaNotReseeded(t *c.C) {
 	debugf(t, "mariadb primary=%s async=%s job=%s peer=%s", primaryAddr, asyncAddr, asyncJobID, asyncPeerID)
 
 	password := release.Env["MYSQL_PWD"]
-	primaryDSN := &mariadb.DSN{
+	primaryDSN := &mysqlurl.DSN{
 		Host:     primaryAddr,
 		User:     "flynn",
 		Password: password,
@@ -167,7 +168,7 @@ func (s *SireniaRecoverySuite) TestMariaDBLaggingReplicaNotReseeded(t *c.C) {
 		t.Assert(found, c.Equals, true)
 	}
 
-	asyncDSN := &mariadb.DSN{
+	asyncDSN := &mysqlurl.DSN{
 		Host:     asyncAddr,
 		User:     "flynn",
 		Password: password,

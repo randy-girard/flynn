@@ -353,15 +353,21 @@ func (h *Helper) controllerClient(t *c.C) controller.Client {
 }
 
 func (h *Helper) skipUnlessProvider(t *c.C, name string) {
+	if !h.hasProvider(t, name) {
+		t.Skip(fmt.Sprintf("%s plugin is not installed on this cluster", name))
+	}
+}
+
+func (h *Helper) hasProvider(t *c.C, name string) bool {
 	client := h.controllerClient(t)
 	providers, err := client.ProviderList()
 	t.Assert(err, c.IsNil)
 	for _, p := range providers {
 		if p.Name == name {
-			return
+			return true
 		}
 	}
-	t.Skip(fmt.Sprintf("%s plugin is not installed on this cluster", name))
+	return false
 }
 
 func (h *Helper) discoverdClient(t *c.C) *discoverd.Client {

@@ -1,4 +1,4 @@
-package mariadb
+package mysqlurl
 
 import (
 	"fmt"
@@ -7,7 +7,8 @@ import (
 	"time"
 )
 
-// DSN returns a URL-formatted data source name.
+// DSN is a URL-formatted MySQL/MariaDB data source name. Integration tests use
+// this instead of importing the MariaDB plugin.
 type DSN struct {
 	Host     string
 	User     string
@@ -16,7 +17,7 @@ type DSN struct {
 	Timeout  time.Duration
 }
 
-// String encodes dsn to a URL string format.
+// String encodes dsn to the go-sql-driver/mysql URL format.
 func (dsn *DSN) String() string {
 	u := url.URL{
 		Host: fmt.Sprintf("tcp(%s)", dsn.Host),
@@ -25,14 +26,10 @@ func (dsn *DSN) String() string {
 			"timeout": {dsn.Timeout.String()},
 		}.Encode(),
 	}
-
-	// Set password, if available.
 	if dsn.Password == "" {
 		u.User = url.User(dsn.User)
 	} else {
 		u.User = url.UserPassword(dsn.User, dsn.Password)
 	}
-
-	// Remove leading double-slash.
 	return strings.TrimPrefix(u.String(), "//")
 }

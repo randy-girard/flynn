@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flynn/flynn/appliance/mariadb"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/mysqlurl"
 	c "github.com/flynn/go-check"
 	_ "github.com/go-sql-driver/mysql"
 )
@@ -18,13 +18,17 @@ type MariaDBSuite struct {
 
 var _ = c.ConcurrentSuite(&MariaDBSuite{})
 
+func (s *MariaDBSuite) SetUpSuite(t *c.C) {
+	s.skipUnlessProvider(t, "mysql")
+}
+
 // Sirenia integration tests
 var sireniaMariaDB = sireniaDatabase{
 	appName:    "mariadb",
 	serviceKey: "FLYNN_MYSQL",
 	hostKey:    "MYSQL_HOST",
 	initDb: func(t *c.C, r *ct.Release, d *sireniaDeploy) {
-		dsn := &mariadb.DSN{
+		dsn := &mysqlurl.DSN{
 			Host:     fmt.Sprintf("leader.%s.discoverd", d.name) + ":3306",
 			User:     "flynn",
 			Password: r.Env["MYSQL_PWD"],
@@ -43,7 +47,7 @@ var sireniaMariaDB = sireniaDatabase{
 	},
 	assertWriteable: func(t *c.C, r *ct.Release, d *sireniaDeploy) {
 		dbname := "deploy_test"
-		dsn := &mariadb.DSN{
+		dsn := &mysqlurl.DSN{
 			Host:     fmt.Sprintf("leader.%s.discoverd", d.name) + ":3306",
 			User:     "flynn",
 			Password: r.Env["MYSQL_PWD"],

@@ -13,7 +13,7 @@ func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
 		"usage: flynn [--version] [--help] <command> [<args>]",
 		"",
 		"Commands:",
-		"   mysql       manage mysql resources",
+		"   mongodb     manage mongodb resources",
 		"   ps          list jobs",
 		"   help        show help",
 		"",
@@ -21,16 +21,16 @@ func TestFilterPluginUsageHidesUninstalledCommands(t *testing.T) {
 	}, "\n")
 
 	hidden := mergePluginUsage(usage, nil, errors.New("no cluster"))
-	if strings.Contains(hidden, "mysql") {
+	if strings.Contains(hidden, "mongodb") {
 		t.Fatalf("catalog error must hide compiled plugin commands:\n%s", hidden)
 	}
 	if !strings.Contains(hidden, "ps") || !strings.Contains(hidden, "help") {
 		t.Fatalf("core commands must remain:\n%s", hidden)
 	}
 
-	installed := mergePluginUsage(usage, &plugin.Catalog{Commands: []plugin.CLI{{Command: "mysql"}}}, nil)
-	if !strings.Contains(installed, "mysql") {
-		t.Fatalf("installed mysql must stay:\n%s", installed)
+	installed := mergePluginUsage(usage, &plugin.Catalog{Commands: []plugin.CLI{{Command: "mongodb"}}}, nil)
+	if !strings.Contains(installed, "mongodb") {
+		t.Fatalf("installed mongodb must stay:\n%s", installed)
 	}
 }
 
@@ -71,11 +71,11 @@ func TestMissingPluginCommand(t *testing.T) {
 	if err := requirePluginCommand("ps"); err != nil {
 		t.Fatalf("core CLI must not require a plugin: %v", err)
 	}
-	err := missingPluginCommand("mysql", nil, errors.New("offline"))
-	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin install mysql") {
+	err := missingPluginCommand("mongodb", nil, errors.New("offline"))
+	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin install mongodb") {
 		t.Fatalf("got %v", err)
 	}
-	err = missingPluginCommand("mysql", &plugin.Catalog{}, nil)
+	err = missingPluginCommand("mongodb", &plugin.Catalog{}, nil)
 	if err == nil {
 		t.Fatal("empty catalog")
 	}

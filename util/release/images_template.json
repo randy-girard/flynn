@@ -20,7 +20,6 @@
   "status":         $image_artifact[status],
   "kafka":          $image_artifact[kafka],
   "clickhouse":     $image_artifact[clickhouse],
-  "mariadb":        $image_artifact[mariadb],
   "tarreceive":     $image_artifact[tarreceive],
   "mongodb":        $image_artifact[mongodb],
   "builder":        $image_artifact[builder]

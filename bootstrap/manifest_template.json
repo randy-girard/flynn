@@ -387,56 +387,6 @@
     "url":"http://clickhouse-api.discoverd/clusters"
   },
   {
-    "id": "mariadb-password",
-    "action": "gen-random"
-  },
-  {
-    "id": "mariadb",
-    "app": {
-      "name": "mariadb",
-      "strategy": "sirenia",
-      "meta": {"flynn-system-app": "true"}
-    },
-    "action": "deploy-app",
-    "release": {
-      "env": {
-        "FLYNN_MYSQL": "mariadb",
-        "MYSQL_HOST": "leader.mariadb.discoverd",
-        "MYSQL_DATABASE": "mysql",
-        "MYSQL_USER": "flynn",
-        "MYSQL_PWD": "{{ (index .StepData \"mariadb-password\").Data }}",
-        "SIRENIA_PROCESS": "mariadb",
-        "SINGLETON": "{{ .Singleton }}"
-      },
-      "processes": {
-        "mariadb": {
-          "ports": [{"port": 3306, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-mariadb", "mariadb"],
-          "service": "mariadb",
-          "volumes": [{"path": "/data"}]
-        },
-        "web": {
-          "ports": [{"port": 80, "proto": "tcp"}],
-          "args": ["/bin/start-flynn-mariadb", "api"],
-          "env": {
-            "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}"
-          }
-        }
-      }
-    },
-    "artifacts": [$image_artifact[mariadb]],
-    "processes": {
-      "mariadb": 0,
-      "web": 2
-    }
-  },
-  {
-    "id": "add-mysql-provider",
-    "action": "add-provider",
-    "name": "mysql",
-    "url": "http://mariadb-api.discoverd/databases"
-  },
-  {
     "id": "mongodb-password",
     "action": "gen-random"
   },
@@ -781,12 +731,6 @@
     "id": "kafka-wait",
     "action": "wait",
     "url": "http://kafka-api.discoverd/ping"
-  },
-  {
-    "id": "mariadb-wait",
-    "action": "wait",
-    "url": "http://mariadb-api.discoverd",
-    "status": 404
   },
   {
     "id": "mongodb-wait",

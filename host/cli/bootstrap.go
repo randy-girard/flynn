@@ -277,11 +277,6 @@ $function$;
 			updateVolumes(data.Postgres, step)
 		case "controller":
 			updateProcArgs(data.Controller, step)
-		case "mariadb":
-			if data.MariaDB != nil {
-				updateProcArgs(data.MariaDB, step)
-				updateVolumes(data.MariaDB, step)
-			}
 		case "mongodb":
 			if data.MongoDB != nil {
 				updateProcArgs(data.MongoDB, step)
@@ -301,7 +296,9 @@ $function$;
 	data.Flannel.Artifacts = []*ct.Artifact{artifacts["flannel"]}
 	data.Controller.Artifacts = []*ct.Artifact{artifacts["controller"]}
 	if data.MariaDB != nil {
-		data.MariaDB.Artifacts = []*ct.Artifact{artifacts["mariadb"]}
+		if art := artifacts["mariadb"]; art != nil {
+			data.MariaDB.Artifacts = []*ct.Artifact{art}
+		}
 	}
 	if data.MongoDB != nil {
 		data.MongoDB.Artifacts = []*ct.Artifact{artifacts["mongodb"]}
@@ -584,7 +581,11 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 			return fmt.Errorf("error updating mariadb formation: %s", err)
 		}
 
-		cmd = exec.JobUsingHost(state.Hosts[0], artifacts["mariadb"], nil)
+		img := plugin.RestoreImage(artifacts["mariadb"], data.MariaDB)
+		if img == nil {
+			return fmt.Errorf("mysql backup present but no mariadb image in the tarball or backup")
+		}
+		cmd = exec.JobUsingHost(state.Hosts[0], img, nil)
 		cmd.Args = []string{"mysql", "-u", "flynn", "-h", "leader.mariadb.discoverd"}
 		cmd.Env = map[string]string{
 			"MYSQL_PWD": data.MariaDB.Release.Env["MYSQL_PWD"],
@@ -784,21 +785,8 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 		return err
 	}
 
-	// mariadb and mongodb steps require the controller key
+	// mongodb steps require the controller key
 	state.StepData["controller-key"] = &bootstrap.RandomData{controllerKey}
-
-	// deploy mariadb if it wasn't restored from the backup
-	if data.MariaDB == nil {
-		steps := bootstrap.Manifest{
-			manifestStepMap["mariadb-password"],
-			manifestStepMap["mariadb"],
-			manifestStepMap["add-mysql-provider"],
-			manifestStepMap["mariadb-wait"],
-		}
-		if _, err := steps.RunWithState(ch, state); err != nil {
-			return fmt.Errorf("error deploying mariadb: %s", err)
-		}
-	}
 
 	// deploy mongodb if it wasn't restored from the backup
 	if data.MongoDB == nil {

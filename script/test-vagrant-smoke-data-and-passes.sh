@@ -91,8 +91,8 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS' \
-  "plugin install list must be data-driven (not hardcoded to one appliance)"
+need 'PLUGIN_SMOKE_APPS:-redis mysql' \
+  "default plugin install list must include redis and mysql"
 need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'probe_delegated_plugin_cli_hidden' \

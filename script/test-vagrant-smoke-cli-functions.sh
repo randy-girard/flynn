@@ -65,6 +65,10 @@ need 'mongodb dump' \
   "CLI step must dump mongodb (slimmed mongodump tools)"
 need 'cli-help-redis' \
   "CLI step must show redis in flynn help after plugin install"
+need 'cli-help-mysql' \
+  "CLI step must show mysql in flynn help after plugin install"
+need 'cli-mysql-dump' \
+  "CLI step must dump mysql via the delegated plugin job"
 need 'cli-help-redis-doc' \
   "CLI step must fetch redis usage (redis-cli) from the plugin catalog"
 need 'cli-redis-dump' \

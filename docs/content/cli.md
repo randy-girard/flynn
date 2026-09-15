@@ -81,7 +81,7 @@ Run `flynn help` or `flynn help <command>` for flags.
 | --- | --- |
 | `route` | HTTP and TCP routes, `--auto-tls` |
 | `resource add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
-| `pg` / `mysql` / `mongodb` / `redis` | Consoles, dump, restore |
+| `pg` / `mysql` / `mongodb` / `redis` | Consoles, dump, restore (`mysql`/`redis` after plugin install) |
 | `kafka` | Topics and consumer groups |
 | `clickhouse` | Databases and client |
 | `volume` | Persistent volumes |

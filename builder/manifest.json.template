@@ -241,37 +241,6 @@
       }
     },
     {
-      "id": "mariadb",
-      "base": "ubuntu-noble",
-      "layers": [
-        {
-          "name": "mariadb-packages",
-          "script": "appliance/mariadb/img/packages.sh",
-          "inputs": [
-            "builder/img/apt-slim-finish.sh"
-          ],
-          "limits": {
-            "temp_disk": "4G"
-          }
-        },
-        {
-          "name": "mariadb-binaries",
-          "gobuild": {
-            "appliance/mariadb/cmd/flynn-mariadb": "/bin/flynn-mariadb",
-            "appliance/mariadb/cmd/flynn-mariadb-api": "/bin/flynn-mariadb-api"
-          },
-          "copy": {
-            "appliance/mariadb/start.sh": "/bin/start-flynn-mariadb"
-          }
-        }
-      ],
-      "entrypoint": {
-        "args": [
-          "/bin/start-flynn-mariadb"
-        ]
-      }
-    },
-    {
       "id": "mongodb",
       "base": "ubuntu-noble",
       "layers": [

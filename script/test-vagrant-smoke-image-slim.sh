@@ -131,7 +131,6 @@ need "${ROOT}/appliance/kafka/img/packages.sh" 'site-docs' \
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
-  "${ROOT}/appliance/mariadb/img/packages.sh" \
   "${ROOT}/appliance/mongodb/img/packages.sh" \
   "${ROOT}/appliance/kafka/img/packages.sh" \
   "${ROOT}/appliance/clickhouse/img/packages.sh" \
@@ -152,6 +151,17 @@ if [[ -f "${redis_pkg}" ]]; then
     "redis plugin packages must run the shared apt/docs cleanup helper"
 elif [[ -f "${ROOT}/appliance/redis/img/packages.sh" ]]; then
   echo "redis still lives in Flynn; extract it or point this check at ../flynn-plugin-redis" >&2
+  exit 1
+fi
+
+mariadb_pkg="${ROOT}/../flynn-plugin-mariadb/img/packages.sh"
+if [[ -f "${mariadb_pkg}" ]]; then
+  need "${mariadb_pkg}" '--no-install-recommends' \
+    "mariadb plugin packages must pass --no-install-recommends"
+  need "${mariadb_pkg}" 'apt-slim-finish.sh' \
+    "mariadb plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/mariadb/img/packages.sh" ]]; then
+  echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mariadb" >&2
   exit 1
 fi
 

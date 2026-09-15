@@ -83,8 +83,8 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 			continue
 		}
 		// Providers without a cli block still unlock a same-named flynn command
-		// for compiled-in handlers (mysql, …). Fully extracted plugins must
-		// stamp a runnable CLI spec (doc + actions) at install.
+		// for compiled-in handlers. Fully extracted plugins must stamp a
+		// runnable CLI spec (doc + actions) at install.
 		seen[p.Name] = struct{}{}
 		cat.Commands = append(cat.Commands, CLI{Command: p.Name})
 	}
@@ -93,10 +93,10 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 
 // CorePluginCommands are compiled-in flynn handlers for plugins that are not
 // yet fully extracted (no CLI actions in the cluster catalog). Help and
-// dispatch hide them unless the catalog lists the command. Redis is not listed:
-// its syntax lives on the plugin and the CLI delegates jobs after install.
+// dispatch hide them unless the catalog lists the command. Redis and mysql are
+// not listed: their syntax lives on the plugin and the CLI delegates jobs
+// after install.
 var CorePluginCommands = []string{
-	"mysql",
 	"mongodb",
 	"kafka",
 	"clickhouse",

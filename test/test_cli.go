@@ -982,9 +982,12 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	t.Assert(r.flynn("resource", "add", "postgres"), Succeeds)
 	t.Assert(r.flynn("pg", "psql", "--", "-c",
 		"CREATE table foos (data text); INSERT INTO foos (data) VALUES ('foobar')"), Succeeds)
-	t.Assert(r.flynn("resource", "add", "mysql"), Succeeds)
-	t.Assert(r.flynn("mysql", "console", "--", "-e",
-		"CREATE TABLE foos (data TEXT); INSERT INTO foos (data) VALUES ('foobar')"), Succeeds)
+	hasMysql := s.hasProvider(t, "mysql")
+	if hasMysql {
+		t.Assert(r.flynn("resource", "add", "mysql"), Succeeds)
+		t.Assert(r.flynn("mysql", "console", "--", "-e",
+			"CREATE TABLE foos (data TEXT); INSERT INTO foos (data) VALUES ('foobar')"), Succeeds)
+	}
 
 	// grab the slug details
 	client := s.controllerClient(t)
@@ -995,16 +998,22 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	slugLayer := artifact.Manifest().Rootfs[0].Layers[0]
 
 	// export app
-	t.Assert(r.flynn("export", "-f", file), Succeeds)
-	assertExportContains(t, file,
+	exportFiles := []string{
 		"app.json", "routes.json", "release.json", "artifacts.json",
-		slugLayer.ID+".layer", "formation.json",
-		"postgres.dump", "mysql.dump",
-	)
+		slugLayer.ID + ".layer", "formation.json",
+		"postgres.dump",
+	}
+	if hasMysql {
+		exportFiles = append(exportFiles, "mysql.dump")
+	}
+	t.Assert(r.flynn("export", "-f", file), Succeeds)
+	assertExportContains(t, file, exportFiles...)
 
 	// remove db tables from source app
 	t.Assert(r.flynn("pg", "psql", "--", "-c", "DROP TABLE foos"), Succeeds)
-	t.Assert(r.flynn("mysql", "console", "--", "-e", "DROP TABLE foos"), Succeeds)
+	if hasMysql {
+		t.Assert(r.flynn("mysql", "console", "--", "-e", "DROP TABLE foos"), Succeeds)
+	}
 
 	// remove the git remote
 	t.Assert(r.git("remote", "remove", "flynn"), Succeeds)
@@ -1015,8 +1024,10 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	// test dbs were imported
 	query := r.flynn("-a", dstApp, "pg", "psql", "--", "-c", "SELECT * FROM foos")
 	t.Assert(query, SuccessfulOutputContains, "foobar")
-	query = r.flynn("-a", dstApp, "mysql", "console", "--", "-e", "SELECT * FROM foos")
-	t.Assert(query, SuccessfulOutputContains, "foobar")
+	if hasMysql {
+		query = r.flynn("-a", dstApp, "mysql", "console", "--", "-e", "SELECT * FROM foos")
+		t.Assert(query, SuccessfulOutputContains, "foobar")
+	}
 
 	// wait for it to start
 	_, err = s.discoverdClient(t).Instances(dstApp+"-web", 10*time.Second)

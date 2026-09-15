@@ -143,7 +143,7 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
 | `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg psql` / `dump` / `restore` |
-| `mysql` | MariaDB **10.11** | HA, started on first provision | Still in bootstrap for now |
+| `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | Still in bootstrap for now |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin install redis`. Ephemeral; caching and development |
 | `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | Still in bootstrap for now |
