@@ -13,3 +13,22 @@ func RestoreImage(tarball *ct.Artifact, formation *ct.ExpandedFormation) *ct.Art
 	}
 	return nil
 }
+
+// RestoreProcesses returns a formation that runs the dump process even when
+// the backup recorded desired scale 0 (optional sirenia after upgrade).
+func RestoreProcesses(p Installed, formation *ct.ExpandedFormation) map[string]int {
+	procs := map[string]int{}
+	if formation != nil {
+		for k, v := range formation.Processes {
+			procs[k] = v
+		}
+	}
+	name := p.BackupProcessHint()
+	if name == "" {
+		name = p.Name
+	}
+	if name != "" && procs[name] < 1 {
+		procs[name] = 1
+	}
+	return procs
+}

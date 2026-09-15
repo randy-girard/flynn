@@ -610,6 +610,7 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 		if len(f.Artifacts) == 0 {
 			return fmt.Errorf("%s backup present but no image in the tarball or restored formation", p.Name)
 		}
+		f.Processes = plugin.RestoreProcesses(p, f)
 		steps := bootstrap.Manifest{
 			step(p.Name, "run-app", &bootstrap.RunAppAction{
 				ExpandedFormation: f,

@@ -31,3 +31,17 @@ func TestRestoreImageNilWhenNeitherPresent(t *testing.T) {
 		t.Fatal("empty formation must not invent an image")
 	}
 }
+
+func TestRestoreProcessesScalesDumpJob(t *testing.T) {
+	p := Installed{Name: "mongodb", Backup: &BackupSpec{Process: "mongodb"}}
+	got := RestoreProcesses(p, &ct.ExpandedFormation{Processes: map[string]int{"mongodb": 0, "web": 1}})
+	if got["mongodb"] != 1 {
+		t.Fatalf("dump process must be scaled to 1, got %v", got)
+	}
+	if got["web"] != 1 {
+		t.Fatalf("other processes must be kept, got %v", got)
+	}
+	if RestoreProcesses(p, nil)["mongodb"] != 1 {
+		t.Fatal("nil formation must still start the dump process")
+	}
+}
