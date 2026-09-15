@@ -318,8 +318,12 @@ func (m *Manifest) sireniaOptional() bool {
 // AnnotateInstall records how this plugin was installed so cluster backup can
 // list it. source is the operator argument (path, alias, or git URL).
 func (m *Manifest) AnnotateInstall(meta map[string]string, source, ref string) map[string]string {
+	fresh := m.AppMeta()
 	if meta == nil {
-		meta = m.AppMeta()
+		meta = map[string]string{}
+	}
+	for k, v := range fresh {
+		meta[k] = v
 	}
 	if source != "" {
 		meta[MetaPluginSource] = source

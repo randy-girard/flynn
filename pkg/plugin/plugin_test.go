@@ -336,6 +336,36 @@ func TestListInstalledSkipsNilAndNonPlugins(t *testing.T) {
 	}
 }
 
+func TestAnnotateInstallRefreshesCLI(t *testing.T) {
+	m := &Manifest{
+		Name: "kafka",
+		Kind: KindResourceProvider,
+		App: AppSpec{
+			Name: "kafka",
+			Processes: map[string]ct.ProcessType{
+				"web": {Args: []string{"/bin/x"}},
+			},
+		},
+		Provider: &Provider{Name: "kafka", URL: "http://kafka-api.discoverd/clusters"},
+		CLI: &CLI{
+			Command: "kafka",
+			Actions: []CLIAction{{
+				Name: "topics",
+				Env:  map[string]string{"KAFKA_BOOTSTRAP_SERVERS": "${app.KAFKA_BOOTSTRAP_SERVERS|leader.${resource}.discoverd:9092}"},
+			}},
+		},
+	}
+	stale := map[string]string{
+		MetaPlugin:    "true",
+		MetaPluginCLI: `{"command":"kafka","actions":[{"name":"topics"}]}`,
+	}
+	got := m.AnnotateInstall(stale, "/opt/flynn-plugins/flynn-plugin-kafka", "")
+	cli := CLIFromApp(&ct.App{Meta: got})
+	if cli == nil || len(cli.Actions) != 1 || cli.Actions[0].Env["KAFKA_BOOTSTRAP_SERVERS"] == "" {
+		t.Fatalf("reinstall must refresh CLI catalog, got %+v", cli)
+	}
+}
+
 func writeJSON(t *testing.T, path string, v interface{}) {
 	t.Helper()
 	data, err := json.MarshalIndent(v, "", "  ")
