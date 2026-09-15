@@ -23,8 +23,8 @@ is intended for caching and development use.
 
 ### Adding a server to an app
 
-Redis comes ready to go as soon as you've installed Flynn. After you create
-an app, you can provision a server for your app by running:
+Redis is available after the operator installs the plugin. After you create
+an app, provision a server with:
 
 ```text
 flynn resource add redis

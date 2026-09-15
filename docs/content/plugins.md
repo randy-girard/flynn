@@ -47,12 +47,36 @@ cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs `flynn-plugin-*` into `/opt/flynn-plugins/`, then runs `flynn-host plugin
 install` on node1.
 
-After install, `flynn help` against that cluster lists the plugin’s CLI command.
-`flynn resource add <provider>` works for `kind: resource-provider`.
+After install, `flynn help` against that cluster lists the plugin’s CLI command
+from the manifest stored on the plugin app (not from a compiled-in `flynn`
+handler). `flynn resource add <provider>` works for `kind: resource-provider`.
 
 ```text
 sudo flynn-host plugin list
 ```
+
+## User CLI
+
+The `flynn` binary does not ship Redis (or other extracted plugin) commands.
+Those commands appear only after `flynn-host plugin install` stamps
+`flynn-plugin-cli` metadata on the plugin app.
+
+`flynn-plugin.json` `cli` holds:
+
+- `command` / `usage` — name and one-liner for `flynn help`
+- `doc` — full docopt usage for `flynn help <command>` and argv parsing
+- `actions` — how each subcommand runs **on the cluster**
+
+The laptop never executes plugin binaries. With the user’s existing controller
+credentials, `flynn redis …` asks the controller to run a job using the
+provisioned resource’s release image and argv from the stored spec. Templates
+allow `${app.ENV}`, `${resource}`, `${resource.ENV}`, and
+`${app.ENV|leader.${resource}.discoverd}`; env values are inserted once and not
+re-expanded.
+
+MariaDB, MongoDB, Kafka, and ClickHouse still have compiled `flynn` handlers
+until those plugins publish the same `doc`/`actions` contract; they stay hidden
+until the matching plugin is installed.
 
 ## Production
 
