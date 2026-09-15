@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 type backupStub struct {
@@ -84,6 +85,76 @@ func TestGetAppsFailsOnMissingRelease(t *testing.T) {
 	stub.releases = map[string]*ct.Release{}
 	if _, err := getApps(stub); err == nil || !strings.Contains(err.Error(), "release") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+type dumpJobLister struct {
+	jobs map[string][]*ct.Job
+	err  error
+}
+
+func (s dumpJobLister) JobList(appID string) ([]*ct.Job, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.jobs[appID], nil
+}
+
+func mariadbDumpFormation(scale int) *ct.ExpandedFormation {
+	return &ct.ExpandedFormation{
+		Release:   &ct.Release{ID: "rel", Env: map[string]string{"MYSQL_PWD": "x"}},
+		Processes: map[string]int{"mariadb": scale},
+	}
+}
+
+func TestShouldDumpPlugin(t *testing.T) {
+	p := plugin.Installed{Name: "mariadb"}
+	spec := &plugin.BackupSpec{File: "mysql.sql.gz", Process: "mariadb", RequireScale: true}
+	lister := dumpJobLister{jobs: map[string][]*ct.Job{}}
+
+	if shouldDumpPlugin(lister, p, nil, mariadbDumpFormation(1)) {
+		t.Fatal("nil spec must skip")
+	}
+	if shouldDumpPlugin(lister, p, spec, nil) {
+		t.Fatal("nil formation must skip")
+	}
+
+	always := &plugin.BackupSpec{File: "dump", RequireScale: false}
+	if !shouldDumpPlugin(lister, p, always, mariadbDumpFormation(0)) {
+		t.Fatal("RequireScale=false must dump even at scale 0")
+	}
+	if !shouldDumpPlugin(lister, p, spec, mariadbDumpFormation(1)) {
+		t.Fatal("desired scale > 0 must dump")
+	}
+	if shouldDumpPlugin(lister, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("scale 0 with no jobs must skip")
+	}
+
+	up := dumpJobLister{jobs: map[string][]*ct.Job{
+		"mariadb": {{Type: "mariadb", State: ct.JobStateUp}},
+	}}
+	if !shouldDumpPlugin(up, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("running dump process must dump even when desired scale is 0")
+	}
+
+	webOnly := dumpJobLister{jobs: map[string][]*ct.Job{
+		"mariadb": {{Type: "web", State: ct.JobStateUp}},
+	}}
+	if shouldDumpPlugin(webOnly, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("web-only jobs must not dump the appliance process")
+	}
+
+	fail := dumpJobLister{err: errors.New("controller down")}
+	if shouldDumpPlugin(fail, p, spec, mariadbDumpFormation(0)) {
+		t.Fatal("JobList error must skip rather than dump")
+	}
+
+	unnamed := &plugin.BackupSpec{File: "mysql.sql.gz", RequireScale: true}
+	namedJobs := dumpJobLister{jobs: map[string][]*ct.Job{
+		"mariadb": {{Type: "mariadb", State: ct.JobStateUp}},
+	}}
+	if !shouldDumpPlugin(namedJobs, p, unnamed, mariadbDumpFormation(0)) {
+		t.Fatal("empty Process must fall back to plugin name")
 	}
 }
 

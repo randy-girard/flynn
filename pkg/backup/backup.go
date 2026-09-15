@@ -59,14 +59,7 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	for _, p := range installed {
 		formation := data[p.Name]
 		spec := plugin.BackupSpecFor(p, formation)
-		if spec == nil || formation == nil || formation.Release == nil {
-			continue
-		}
-		proc := spec.Process
-		if proc == "" {
-			proc = p.Name
-		}
-		if spec.RequireScale && formation.Processes[proc] <= 0 {
+		if !shouldDumpPlugin(client, p, spec, formation) {
 			continue
 		}
 		job := &ct.NewJob{
@@ -81,6 +74,43 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 		}
 	}
 	return nil
+}
+
+type jobLister interface {
+	JobList(appID string) ([]*ct.Job, error)
+}
+
+// shouldDumpPlugin reports whether a plugin appliance should be dumped into the
+// cluster backup. RequireScale skips idle appliances, but after an upgrade the
+// desired formation can be 0 while a dump process is still up. In that case
+// dump from the running job so restore still gets mysql/mongodb data.
+func shouldDumpPlugin(client jobLister, p plugin.Installed, spec *plugin.BackupSpec, formation *ct.ExpandedFormation) bool {
+	if spec == nil || formation == nil || formation.Release == nil {
+		return false
+	}
+	if !spec.RequireScale {
+		return true
+	}
+	proc := spec.Process
+	if proc == "" {
+		proc = p.Name
+	}
+	if formation.Processes[proc] > 0 {
+		return true
+	}
+	jobs, err := client.JobList(p.Name)
+	if err != nil {
+		return false
+	}
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		if j.Type == proc && (j.State == ct.JobStateUp || j.State == ct.JobStateStarting) {
+			return true
+		}
+	}
+	return false
 }
 
 func includePluginFormations(client backupAppClient, data map[string]*ct.ExpandedFormation, installed []plugin.Installed) error {
