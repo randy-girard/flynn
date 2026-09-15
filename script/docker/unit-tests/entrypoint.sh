@@ -51,6 +51,12 @@ export PATH="${PWD}/build/bin:${PATH}"
 # Lower default parallelism inside Docker Desktop's smaller VM.
 # shellcheck disable=SC2206
 TEST_FLAGS=(${FLYNN_GO_TEST_FLAGS:--race -cover -p 2})
+COVER_DIR="${COVERAGE_DIR:-coverage}"
+COVER_ARGS=()
+if [[ "${FLYNN_SKIP_COVERAGE:-}" != "1" && "${FLYNN_GO_TEST_FLAGS:-}" != *coverprofile* ]]; then
+  mkdir -p "${COVER_DIR}"
+  COVER_ARGS=(-covermode=atomic -coverprofile="${COVER_DIR}/coverage.out")
+fi
 
 packages=()
 if [[ $# -gt 0 ]]; then
@@ -70,7 +76,17 @@ else
 fi
 
 echo "==> Running unit tests (${#packages[@]} packages)"
+set +e
 env GOROOT="${GOROOT}" GOFLAGS="${GOFLAGS}" \
-  go test -gcflags=all=-d=checkptr=0 "${TEST_FLAGS[@]}" "${packages[@]}"
+  go test -gcflags=all=-d=checkptr=0 "${TEST_FLAGS[@]}" "${COVER_ARGS[@]}" "${packages[@]}"
+status=$?
+set -e
+if [[ "${FLYNN_SKIP_COVERAGE:-}" != "1" && -s "${COVER_DIR}/coverage.out" ]]; then
+  echo "==> Writing coverage report under ${COVER_DIR}/"
+  /src/script/report-unit-coverage "${COVER_DIR}/coverage.out"
+fi
+if [[ "${status}" -ne 0 ]]; then
+  exit "${status}"
+fi
 
 echo "==> Unit tests passed"

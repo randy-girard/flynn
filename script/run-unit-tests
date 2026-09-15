@@ -16,6 +16,7 @@
 #   FLYNN_TEST_SKIP_CHECKS=1  Skip bats (gofmt still runs; same as GitHub Actions)
 #   FLYNN_SKIP_VOLUME_TESTS=1 Skip host/volume ZFS tests
 #   FLYNN_GO_TEST_FLAGS       Extra/override flags for go test
+#   FLYNN_SKIP_COVERAGE=1     Skip writing coverage/ HTML and profiles
 #   FLYNN_UNIT_IMAGE          Image tag [default: flynn-unit-tests:24.04]
 #   FLYNN_VERSION             Version passed to build-flynn [default: dev]
 #
@@ -131,6 +132,8 @@ run_docker() {
     -e FLYNN_TEST_SKIP_CHECKS
     -e FLYNN_SKIP_VOLUME_TESTS
     -e FLYNN_GO_TEST_FLAGS
+    -e FLYNN_SKIP_COVERAGE
+    -e COVERAGE_DIR
     -e FLYNN_VERSION
     -e GOFLAGS=-mod=vendor
   )

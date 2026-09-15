@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# Merge go coverprofiles and write HTML/text reports under coverage/.
+#
+# Usage:
+#   script/report-unit-coverage [profile.out ...]
+#
+# If no profiles are given, every coverage/*.out except coverage/coverage.out
+# is merged. Reports:
+#   coverage/coverage.out  merged profile
+#   coverage/index.html    go tool cover HTML
+#   coverage/func.txt      per-function counts
+#   coverage/summary.txt   total coverage line
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "${ROOT}"
+
+DIR="${COVERAGE_DIR:-${ROOT}/coverage}"
+mkdir -p "${DIR}"
+
+profiles=()
+if [[ $# -gt 0 ]]; then
+  profiles=("$@")
+else
+  shopt -s nullglob
+  for f in "${DIR}"/*.out; do
+    if [[ "$(basename "${f}")" == "coverage.out" ]]; then
+      continue
+    fi
+    profiles+=("${f}")
+  done
+fi
+
+usable=()
+for f in "${profiles[@]}"; do
+  if [[ -s "${f}" ]]; then
+    usable+=("${f}")
+  fi
+done
+
+if [[ ${#usable[@]} -eq 0 ]]; then
+  echo "==> No coverprofiles found; skipping coverage report"
+  exit 0
+fi
+
+merged="${DIR}/coverage.out"
+{
+  grep -m1 '^mode:' "${usable[0]}" || echo "mode: atomic"
+  for f in "${usable[@]}"; do
+    grep -v '^mode:' "${f}" || true
+  done
+} >"${merged}.tmp"
+mv "${merged}.tmp" "${merged}"
+
+go tool cover -html="${merged}" -o "${DIR}/index.html"
+go tool cover -func="${merged}" >"${DIR}/func.txt"
+tail -n1 "${DIR}/func.txt" | tee "${DIR}/summary.txt"
+echo "==> Coverage HTML: ${DIR}/index.html"
