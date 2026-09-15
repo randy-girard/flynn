@@ -144,6 +144,8 @@ need 'RESUME_AT=upgrade' \
   "smoke must be able to resume at the --force update after a hung pre-upgrade verify"
 need 'RESUME_AT=backup' \
   "smoke must be able to resume at cluster backup after a failed dump/restore"
+need 'RESUME_AT=restore' \
+  "smoke must be able to resume at bootstrap --from-backup after a failed restore"
 need 'db-check' \
   "assert_databases must log per-engine progress so a hang is obvious"
 need 'step_host_unit_tests' \

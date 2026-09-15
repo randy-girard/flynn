@@ -22,6 +22,14 @@ need 'RESUME_AT=backup' \
   "smoke must resume at backup without requiring a fresh deploy"
 need 'RESUME_AT}" == "backup"' \
   "RESUME_AT=backup must set skip flags in main, not only in the usage comment"
+need 'RESUME_AT=restore' \
+  "smoke must resume at --from-backup using an existing smoke-backup tar"
+need 'overlaying' \
+  "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
+if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go"; then
+  echo "bootstrap --from-backup must start blobstore before plugin dump restore" >&2
+  exit 1
+fi
 if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup' | grep -qF 'SKIP_DEPLOY=1'; then
   echo "SKIP_DEPLOY must not skip cluster backup (RESUME_AT=upgrade/backup still need restore)" >&2
   exit 1

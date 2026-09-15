@@ -75,6 +75,8 @@
 #   RESUME_AT=backup     Skip through upgrades; run cluster backup, wipe,
 #                        bootstrap --from-backup, and post-restore verify
 #                        (cluster must already be upgraded with plugins/apps)
+#   RESUME_AT=restore    Skip backup; reinstall --clean and bootstrap
+#                        --from-backup using the existing smoke-backup tar
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
 #                        and post-restore verify
@@ -2032,6 +2034,14 @@ if ! command -v ipset >/dev/null 2>&1; then
   apt-get install -y ipset
 fi
 command -v ipset >/dev/null
+src="${REPO_IN_VM}/build/bin/flynn-host"
+if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
+  echo "overlaying \${src} onto flynn-host (host-side restore/CLI fixes)"
+  install -m 0755 "\${src}" /usr/local/bin/flynn-host
+  if [[ -e /usr/bin/flynn-host ]]; then
+    install -m 0755 "\${src}" /usr/bin/flynn-host
+  fi
+fi
 for link in flannel.1 flynnbr0; do
   if ip link show "\${link}" &>/dev/null; then
     echo "removing stale \${link}"
@@ -2506,10 +2516,14 @@ EOF
 }
 
 step_bootstrap_from_backup() {
-  local restore_path
+  local restore_path vm_path
   restore_path="$(backup_restore_path)"
+  vm_path="$(backup_vm_path)"
   node_root_script node1 <<EOF
 set -euo pipefail
+if [[ ! -s "${restore_path}" && -s "${vm_path}" ]]; then
+  cp -f "${vm_path}" "${restore_path}"
+fi
 test -s "${restore_path}"
 EOF
   # CLUSTER_DOMAIN is ignored for --from-backup; the domain from the backup
@@ -4082,7 +4096,11 @@ run_one_topology() {
     record "Bootstrap cluster (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_INSTALL=1"
     ensure_flynn_cli_on_node1
     configure_node_dns node1
-    register_cli_cluster || fail_shutdown "Bootstrap cluster (${TOPOLOGY_LABEL})" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
+    if [[ "${RESUME_AT}" == "restore" ]]; then
+      echo "RESUME_AT=restore: skipping CLI cluster add (cluster will be --clean reinstalled)"
+    else
+      register_cli_cluster || fail_shutdown "Bootstrap cluster (${TOPOLOGY_LABEL})" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
+    fi
   elif [[ "${RESUME_BOOTSTRAP:-0}" == "1" ]]; then
     record "Install local tarball on nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
     record "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
@@ -4167,7 +4185,11 @@ run_one_topology() {
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
   else
-    run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    if [[ "${RESUME_AT}" == "restore" ]]; then
+      record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=restore"
+    else
+      run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    fi
     restore_drained_inventory
     run_step "Reinstall for restore (${TOPOLOGY_LABEL})" step_install_flynn
     run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
@@ -4237,6 +4259,15 @@ main() {
     SKIP_VERIFY_BEFORE=1
   fi
   if [[ "${RESUME_AT}" == "backup" ]]; then
+    SKIP_VAGRANT_UP=1
+    SKIP_BUILD=1
+    SKIP_INSTALL=1
+    SKIP_PLUGIN_INSTALL=1
+    SKIP_DEPLOY=1
+    SKIP_VERIFY_BEFORE=1
+    SKIP_UPGRADE=1
+  fi
+  if [[ "${RESUME_AT}" == "restore" ]]; then
     SKIP_VAGRANT_UP=1
     SKIP_BUILD=1
     SKIP_INSTALL=1
