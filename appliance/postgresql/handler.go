@@ -8,8 +8,8 @@ import (
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 )
 
 // Handler represents an HTTP API handler for the process.
