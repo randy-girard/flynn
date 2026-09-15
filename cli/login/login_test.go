@@ -16,6 +16,9 @@ func TestLooksLikeIssuerURL(t *testing.T) {
 	if !looksLikeIssuerURL("https://id.example") || !looksLikeIssuerURL("http://id.example") {
 		t.Fatal("scheme URLs")
 	}
+	if !looksLikeIssuerURL("http:legacy") {
+		t.Fatal("http: prefix without slashes")
+	}
 }
 
 func TestIssuerFromCluster(t *testing.T) {

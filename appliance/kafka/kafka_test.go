@@ -268,6 +268,15 @@ func TestGenerateTLSBundle(t *testing.T) {
 	}
 }
 
+func TestClientPropertiesDisablesHostnameChecks(t *testing.T) {
+	got := clientProperties("/ks.p12", "/ts.p12", "s3cret")
+	mustContain(t, got, "security.protocol=SSL")
+	mustContain(t, got, "ssl.keystore.location=/ks.p12")
+	mustContain(t, got, "ssl.truststore.location=/ts.p12")
+	mustContain(t, got, "ssl.truststore.password=s3cret")
+	mustContain(t, got, "ssl.endpoint.identification.algorithm=")
+}
+
 func parseCert(t *testing.T, pemData string) *x509.Certificate {
 	t.Helper()
 	block, _ := pem.Decode([]byte(pemData))
