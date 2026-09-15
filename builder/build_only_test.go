@@ -30,6 +30,13 @@ func testManifestImages() []*Image {
 		{ID: "builder", Layers: []*Layer{
 			{BuildWith: "go", Inputs: []string{"builder/**"}},
 		}},
+		{ID: "controller-examples"},
+		{ID: "test", Layers: []*Layer{
+			{CGoBuild: map[string]string{"test": "/bin/flynn-test"}},
+		}},
+		{ID: "test-apps", Layers: []*Layer{
+			{GoBuild: map[string]string{"test/apps/echoer": "/bin/echoer"}},
+		}},
 	}
 }
 
@@ -79,6 +86,36 @@ func TestExpandImageSelectionAppsIncludesTransitiveDeps(t *testing.T) {
 			t.Fatalf("apps selection unexpectedly includes %q: %v", id, ids)
 		}
 	}
+	for _, id := range []string{"test", "test-apps", "controller-examples"} {
+		if containsString(ids, id) {
+			t.Fatalf("apps selection must omit test image %q: %v", id, ids)
+		}
+	}
+}
+
+func TestExpandImageSelectionTestGroup(t *testing.T) {
+	got, err := expandImageSelection(testManifestImages(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := imageIDs(got)
+	for _, id := range []string{"test", "test-apps", "controller-examples"} {
+		if !containsString(ids, id) {
+			t.Fatalf("test selection missing %q: %v", id, ids)
+		}
+	}
+	for _, id := range []string{"controller", "host", "heroku-24"} {
+		if containsString(ids, id) {
+			t.Fatalf("test selection unexpectedly includes %q: %v", id, ids)
+		}
+	}
+}
+
+func TestExpandImageSelectionTestMissingFromManifest(t *testing.T) {
+	_, err := expandImageSelection([]*Image{{ID: "controller"}}, "test")
+	if err == nil {
+		t.Fatal("expected error when test images are missing from the manifest")
+	}
 }
 
 func TestExpandImageSelectionExplicitIDsWithDeps(t *testing.T) {
@@ -109,6 +146,27 @@ func TestExpandImageSelectionEmptyOnly(t *testing.T) {
 	}
 	if len(got) != len(all) {
 		t.Fatalf("got %d images, want %d", len(got), len(all))
+	}
+}
+
+func TestHasAllImageArtifactsIgnoresTestImages(t *testing.T) {
+	images := []*Image{
+		{ID: "controller"},
+		{ID: "test"},
+		{ID: "test-apps"},
+		{ID: "controller-examples"},
+	}
+	b := &Builder{
+		artifacts: map[string]*ct.Artifact{
+			"controller": {URI: "file:///controller"},
+		},
+	}
+	if !b.hasAllImageArtifacts(images) {
+		t.Fatal("production artifacts should be enough without test images")
+	}
+	delete(b.artifacts, "controller")
+	if b.hasAllImageArtifacts(images) {
+		t.Fatal("missing production image must fail completeness check")
 	}
 }
 

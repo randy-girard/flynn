@@ -70,8 +70,11 @@ version.
 
 ### Cluster images
 
-A full platform build (squashfs layers for every system app) is `build.sh` on
-the builder. First time, or after Ubuntu/base-package changes:
+A full production platform build (squashfs layers for system apps and the CLI)
+is `build.sh` on the builder. It does **not** build cluster-test images
+(`test`, `test-apps` including MinIO, `controller-examples`). Those are only
+for the `test/` integration suite; add `./build.sh test` if you need them.
+First time, or after Ubuntu/base-package changes:
 
 ```
 $ ./build.sh --version vYYYYMMDD.N
@@ -301,8 +304,9 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   Builds host binaries, `validate-gofmt`, `bats script/test`,
   `make test-unit-root-native`.
 * **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
-  — manual `workflow_dispatch` only. Builds base + cluster images in phases and
-  publishes GitHub Release assets. Version tags look like `vYYYYMMDD.N`.
+  — manual `workflow_dispatch` only. Builds base + production cluster images in
+  phases and publishes GitHub Release assets. Version tags look like
+  `vYYYYMMDD.N`. Omits `test`, `test-apps`, and `controller-examples`.
   Drafts do not fan out plugin builds.
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
   — runs when a Flynn GitHub Release is **published** (or via `workflow_dispatch`).
@@ -332,6 +336,12 @@ Build images on the builder (or via the release workflow), then package:
 $ ./build.sh --version vYYYYMMDD.N cluster
 $ ./script/release --version vYYYYMMDD.N --target tarball
 $ ./script/release --version vYYYYMMDD.N --target github
+```
+
+Cluster-test images are not in that pipeline. Build them only when running `test/`:
+
+```
+$ ./build.sh --version vYYYYMMDD.N test
 ```
 
 `script/release` defaults to a local tarball. GitHub needs `gh` authenticated
