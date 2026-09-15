@@ -72,6 +72,9 @@
 #                        (nodes must already have flynn-host inited and :1113 up)
 #   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
 #                        updates (app + datastores must already be deployed)
+#   RESUME_AT=backup     Skip through upgrades; run cluster backup, wipe,
+#                        bootstrap --from-backup, and post-restore verify
+#                        (cluster must already be upgraded with plugins/apps)
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
 #                        and post-restore verify
@@ -4163,13 +4166,6 @@ run_one_topology() {
     record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
-  elif [[ "${SKIP_DEPLOY}" == "1" ]]; then
-    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
     restore_drained_inventory
@@ -4239,6 +4235,15 @@ main() {
     SKIP_INSTALL=1
     SKIP_DEPLOY=1
     SKIP_VERIFY_BEFORE=1
+  fi
+  if [[ "${RESUME_AT}" == "backup" ]]; then
+    SKIP_VAGRANT_UP=1
+    SKIP_BUILD=1
+    SKIP_INSTALL=1
+    SKIP_PLUGIN_INSTALL=1
+    SKIP_DEPLOY=1
+    SKIP_VERIFY_BEFORE=1
+    SKIP_UPGRADE=1
   fi
 
   # Fail before touching VMs or wiping flynn-logs if the host-side tree is broken.
