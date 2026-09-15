@@ -98,6 +98,8 @@ need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
 need 'ensure_plugin_vm_mounts' \
   "plugin install must reload VMs when sibling plugin folders are not synced"
+need 'already in CLI catalog; skipping hidden-CLI probe' \
+  "plugin install must skip the hidden-CLI probe when resuming with plugins already installed"
 if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
   echo "plugin_checkout must not hardcode mysql→mariadb" >&2
   exit 1

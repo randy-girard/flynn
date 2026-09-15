@@ -2432,6 +2432,10 @@ step_install_plugins() {
   # shellcheck disable=SC2086
   for name in ${PLUGIN_SMOKE_APPS}; do
     if plugin_has_delegated_cli "${name}"; then
+      if help_lists_plugin_command "${name}"; then
+        echo "plugin ${name} already in CLI catalog; skipping hidden-CLI probe"
+        continue
+      fi
       probe_delegated_plugin_cli_hidden "${name}" || return 1
     fi
   done
