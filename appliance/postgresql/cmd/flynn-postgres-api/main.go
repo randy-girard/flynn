@@ -123,30 +123,30 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 }
 
 func (p *pgAPI) dropDatabase(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	id := strings.SplitN(strings.TrimPrefix(req.FormValue("id"), "/databases/"), ":", 2)
-	if len(id) != 2 || id[1] == "" {
+	user, database, ok := parseDatabaseResourceID(req.FormValue("id"))
+	if !ok {
 		httphelper.ValidationError(w, "id", "is invalid")
 		return
 	}
 
 	// disable new connections to the target database
-	if err := p.db.Exec(disallowConns, id[1]); err != nil {
+	if err := p.db.Exec(disallowConns, database); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
 
 	// terminate current connections
-	if err := p.db.Exec(disconnectConns, id[1]); err != nil {
+	if err := p.db.Exec(disconnectConns, database); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
 
-	if err := p.db.Exec(fmt.Sprintf(`DROP DATABASE "%s"`, id[1])); err != nil {
+	if err := p.db.Exec("DROP DATABASE " + quoteIdent(database)); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
 
-	if err := p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, id[0])); err != nil {
+	if err := p.db.Exec("DROP USER " + quoteIdent(user)); err != nil {
 		httphelper.Error(w, err)
 		return
 	}
@@ -164,6 +164,29 @@ func (p *pgAPI) ping(ctx context.Context, w http.ResponseWriter, req *http.Reque
 
 func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+func parseDatabaseResourceID(id string) (user, database string, ok bool) {
+	id = strings.TrimSpace(strings.TrimPrefix(id, "/databases/"))
+	parts := strings.SplitN(id, ":", 2)
+	if len(parts) != 2 || !isHexID(parts[0]) || !isHexID(parts[1]) {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func isHexID(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func revokeConnectSQL(name string) string {
