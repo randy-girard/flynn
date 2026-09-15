@@ -6,7 +6,7 @@ This repository is a **community fork** of [flynn/flynn](https://github.com/flyn
 
 [Discord](https://discord.gg/VU2ZqrPUay) · [GitHub](https://github.com/randy-girard/flynn) · [Releases](https://github.com/randy-girard/flynn/releases)
 
-[![coverage](https://raw.githubusercontent.com/randy-girard/flynn/coverage-badge/badge.svg)](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)
+[![coverage](.github/badges/coverage.svg)](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)
 
 ## What Flynn does
 

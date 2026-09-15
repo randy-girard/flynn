@@ -11,7 +11,7 @@
 #   coverage/files/**      one HTML page per source file
 #   coverage/func.txt      per-function counts
 #   coverage/summary.txt   total coverage line
-#   coverage/badge.svg     README badge (CI also publishes coverage-badge branch)
+#   coverage/badge.svg     local badge; CI copies it to .github/badges/coverage.svg
 #   coverage/shields.json  shields.io endpoint payload
 set -euo pipefail
 
