@@ -31,3 +31,31 @@ load "helper"
     return 1
   fi
 }
+
+@test "production host builds omit flynn-test binaries" {
+  build_flynn="${ROOT}/script/build-flynn"
+  build_sh="${ROOT}/build.sh"
+  unit_wf="${ROOT}/.github/workflows/unit-tests.yml"
+  release_wf="${ROOT}/.github/workflows/release.yml"
+  integ="${ROOT}/script/run-integration-tests"
+
+  grep -q -- '--test-binaries' "${build_flynn}"
+  grep -q 'FLYNN_BUILD_TEST_BINARIES' "${build_flynn}"
+  grep -q 'skipping flynn-test binaries' "${build_flynn}"
+
+  # Default production path must not pass --test-binaries.
+  if grep 'script/build-flynn' "${build_sh}" | grep -q -- '--test-binaries'; then
+    echo "build.sh must not compile flynn-test host binaries" >&2
+    return 1
+  fi
+  if grep 'script/build-flynn' "${unit_wf}" "${release_wf}" | grep -q -- '--test-binaries'; then
+    echo "CI must not compile flynn-test host binaries" >&2
+    return 1
+  fi
+  if grep 'FLYNN_BUILD_TEST_BINARIES' "${unit_wf}" "${release_wf}" "${build_sh}"; then
+    echo "CI/build.sh must not set FLYNN_BUILD_TEST_BINARIES" >&2
+    return 1
+  fi
+
+  grep -q 'FLYNN_BUILD_TEST_BINARIES=1 make' "${integ}"
+}

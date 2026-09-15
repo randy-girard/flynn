@@ -23,7 +23,7 @@ main() {
   # Binary is built on the host (script/build-flynn); the job image does not ship a working Go toolchain.
   ft="${ROOT}/build/bin/flynn-test"
   if [[ ! -x "${ft}" ]]; then
-    echo >&2 "error: missing ${ft}; run make build (or script/build-flynn) on the host."
+    echo >&2 "error: missing ${ft}; run script/build-flynn --test-binaries (or FLYNN_BUILD_TEST_BINARIES=1 make) on the host."
     exit 127
   fi
   exec "${ft}" "$@"

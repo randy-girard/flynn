@@ -292,7 +292,7 @@ run_phase_binaries() {
   require_base_squashfs
   cd "${FLYNN_ROOT}"
 
-  echo "===> [binaries] Building host binaries (script/build-flynn)..."
+  echo "===> [binaries] Building host binaries (script/build-flynn, omitting flynn-test)..."
   ./script/build-flynn --version "${VERSION}"
 
   # Force a fresh flynn-builder / flannel-wrapper for start-all. Rebuild here

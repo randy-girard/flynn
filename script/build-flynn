@@ -18,6 +18,10 @@ OPTIONS:
   -f, --force-bootstrap   Force bootstrap
   --host=HOST             Host to run the build on
   --git-version           Generate the version using git status
+  --test-binaries         Also build flynn-test and flynn-test-file-server
+                          (or set FLYNN_BUILD_TEST_BINARIES=1). Skipped by
+                          default; production releases and unit tests do not
+                          need them.
 USAGE
 }
 
@@ -26,6 +30,10 @@ main() {
   local version="dev"
   local verbose=false
   local force_bootstrap=false
+  local include_test_binaries=false
+  if [[ "${FLYNN_BUILD_TEST_BINARIES:-}" == "1" ]]; then
+    include_test_binaries=true
+  fi
 
   while true; do
     case "$1" in
@@ -57,6 +65,10 @@ main() {
         ;;
       --git-version)
         version="$(git_version)"
+        shift
+        ;;
+      --test-binaries)
+        include_test_binaries=true
         shift
         ;;
       *)
@@ -167,8 +179,13 @@ main() {
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flanneld" ./flannel
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-logaggregator" ./logaggregator
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-release" ./util/release
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test" ./test
-    CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test-file-server" ./test/util/file-server
+    if $include_test_binaries; then
+      info "building flynn-test binaries"
+      CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test" ./test
+      CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-test-file-server" ./test/util/file-server
+    else
+      info "skipping flynn-test binaries (set FLYNN_BUILD_TEST_BINARIES=1 or pass --test-binaries)"
+    fi
 
     info "building database appliance binaries"
     CGO_ENABLED=0 "${go_build}" "${version}" -o "${ROOT}/build/bin/flynn-postgres" ./appliance/postgresql/cmd/flynn-postgres
@@ -202,7 +219,7 @@ EOF
     #     --bin-dir    "${ROOT}/build/bin" \
     #     --config-dir "${ROOT}/build/manifests" \
     #     --volpath    "/var/lib/flynn/volumes-0"
-  else
+  elif $include_test_binaries; then
     # Full binary rebuild was skipped; still refresh integration binaries when ./test changes.
     local flynn_test="${ROOT}/build/bin/flynn-test"
     local fts="${ROOT}/build/bin/flynn-test-file-server"

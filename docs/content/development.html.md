@@ -66,7 +66,8 @@ $ make
 
 That runs `script/build-flynn`. Binaries land in `build/bin`, image manifests in
 `build/image`. `make clean` wipes them. `make release` stamps a git-derived
-version.
+version. `flynn-test` / `flynn-test-file-server` are omitted unless you pass
+`--test-binaries` or set `FLYNN_BUILD_TEST_BINARIES=1`.
 
 ### Cluster images
 
@@ -232,8 +233,8 @@ Full-stack Go tests live in `test/` (not `tests/`). They need a cluster.
 $ script/run-integration-tests
 ```
 
-That builds Flynn, bootstraps a cluster (`script/bootstrap-flynn`), and runs
-`bin/flynn-test`. Filter:
+That builds Flynn (including `flynn-test` host binaries), bootstraps a cluster
+(`script/bootstrap-flynn`), and runs `bin/flynn-test`. Filter:
 
 ```
 $ script/run-integration-tests -f 'RouterSuite\\.TestAdditionalHttpPorts'

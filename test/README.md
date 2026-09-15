@@ -15,10 +15,11 @@ vagrant up builder
 vagrant ssh builder
 ```
 
-then build and bootstrap Flynn (this may take a few minutes):
+then build and bootstrap Flynn (this may take a few minutes). Integration
+tests need the host `flynn-test` binary:
 
 ```text
-make
+FLYNN_BUILD_TEST_BINARIES=1 make
 script/bootstrap-flynn
 ```
 
