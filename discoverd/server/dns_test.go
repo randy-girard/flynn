@@ -718,6 +718,59 @@ func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
 	c.Assert(mariadbOK.Answer, Not(HasLen), 0)
 }
 
+func (s *DNSSuite) TestUserDiscoverdDNSDatastoreInstanceMeta(c *C) {
+	c.Assert(os.Setenv("FLYNN_INSTALLED_PLUGINS", filepath.Join(c.MkDir(), "missing.json")), IsNil)
+	defer os.Unsetenv("FLYNN_INSTALLED_PLUGINS")
+
+	leader, _ := fakeStaticInstance("tcp", "10.0.0.5", 3306)
+	leader.Meta = map[string]string{"flynn-datastore": "true"}
+	bare, _ := fakeStaticInstance("tcp", "10.0.0.7", 3306)
+	userInst, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+
+	srv := s.newServer(c, nil)
+	defer srv.Close()
+	srv.SetStore(&DNSServerStore{
+		InstancesFn: func(service string) ([]*discoverd.Instance, error) {
+			switch service {
+			case "flynn-net-user":
+				return []*discoverd.Instance{userInst}, nil
+			case "mariadb":
+				return []*discoverd.Instance{leader}, nil
+			case "mongodb":
+				return []*discoverd.Instance{bare}, nil
+			default:
+				return nil, nil
+			}
+		},
+		ServiceLeaderFn: func(service string) (*discoverd.Instance, error) {
+			switch service {
+			case "mariadb":
+				return leader, nil
+			case "mongodb":
+				return bare, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+
+	client := &dns.Client{Net: "udp"}
+	lookup := func(name string) *dns.Msg {
+		req := &dns.Msg{}
+		req.SetQuestion(name, dns.TypeA)
+		res, _, err := client.Exchange(req, srv.UDPAddr)
+		c.Assert(err, IsNil)
+		return res
+	}
+
+	ok := lookup("leader.mariadb.discoverd.")
+	c.Assert(ok.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(ok.Answer, Not(HasLen), 0)
+
+	blocked := lookup("leader.mongodb.discoverd.")
+	c.Assert(blocked.Rcode, Equals, dns.RcodeNameError)
+}
+
 func assertSOA(c *C, rrs []dns.RR) {
 	c.Assert(rrs, HasLen, 1)
 	c.Assert(rrs[0], FitsTypeOf, &dns.SOA{})
