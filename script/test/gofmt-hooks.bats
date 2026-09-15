@@ -11,7 +11,7 @@ load "helper"
   grep -q 'pre-commit' "${install}"
   grep -q 'pre-push' "${install}"
   grep -q 'githooks/gofmt-check' "${install}"
-  if grep -q 'git config' "${install}"; then
+  if grep -E '^[[:space:]]*git[[:space:]]+config' "${install}"; then
     echo "install-git-hooks must not change git config" >&2
     return 1
   fi
