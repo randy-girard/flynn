@@ -468,6 +468,15 @@ func TestSanitizeURLAndRefOrLatest(t *testing.T) {
 	if refOrLatest("") != "latest" || refOrLatest("v1") != "v1" {
 		t.Fatal("refOrLatest")
 	}
+
+	req, _ := http.NewRequest("GET", "https://example.invalid", nil)
+	(&Installer{}).githubHeaders(req, "tok", "application/octet-stream")
+	if req.Header.Get("User-Agent") == "" || req.Header.Get("Authorization") != "Bearer tok" {
+		t.Fatalf("headers=%v", req.Header)
+	}
+	if req.Header.Get("Accept") != "application/octet-stream" {
+		t.Fatal("accept")
+	}
 	rel := githubRelease{Assets: []githubAsset{{Name: "image.json"}}}
 	if rel.asset("image.json") == nil || rel.asset("missing") != nil {
 		t.Fatal("asset lookup")

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	ct "github.com/flynn/flynn/controller/types"
 )
 
 func writeAppPlugin(t *testing.T, dir, name string) {
@@ -200,5 +202,46 @@ func TestInstallHookAndRunHook(t *testing.T) {
 	}
 	if err := in.runHook(t.TempDir(), m, "hooks/missing.sh", map[string]string{}); err == nil {
 		t.Fatal("missing hook must fail")
+	}
+}
+
+type providerStub struct {
+	list      []*ct.Provider
+	listErr   error
+	created   *ct.Provider
+	createErr error
+}
+
+func (s *providerStub) ProviderList() ([]*ct.Provider, error) {
+	return s.list, s.listErr
+}
+
+func (s *providerStub) CreateProvider(p *ct.Provider) error {
+	s.created = p
+	return s.createErr
+}
+
+func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
+	existing := &providerStub{list: []*ct.Provider{{Name: "redis", URL: "http://redis-api.discoverd"}}}
+	if err := ensureProvider(existing, "redis", "http://other"); err != nil {
+		t.Fatal(err)
+	}
+	if existing.created != nil {
+		t.Fatal("must not recreate an existing provider")
+	}
+
+	created := &providerStub{}
+	if err := ensureProvider(created, "redis", "http://redis-api.discoverd/clusters"); err != nil {
+		t.Fatal(err)
+	}
+	if created.created == nil || created.created.Name != "redis" || created.created.URL != "http://redis-api.discoverd/clusters" {
+		t.Fatalf("%+v", created.created)
+	}
+
+	if err := ensureProvider(&providerStub{listErr: fmt.Errorf("down")}, "redis", "http://x"); err == nil {
+		t.Fatal("list error")
+	}
+	if err := ensureProvider(&providerStub{createErr: fmt.Errorf("denied")}, "redis", "http://x"); err == nil {
+		t.Fatal("create error")
 	}
 }

@@ -47,6 +47,11 @@ type InstallOptions struct {
 	CredsFile   string
 }
 
+type providerClient interface {
+	ProviderList() ([]*ct.Provider, error)
+	CreateProvider(*ct.Provider) error
+}
+
 func (in *Installer) logf(format string, args ...interface{}) {
 	if in.Stdout == nil {
 		return
@@ -317,7 +322,7 @@ func (in *Installer) http() *http.Client {
 	return http.DefaultClient
 }
 
-func ensureProvider(client controller.Client, name, url string) error {
+func ensureProvider(client providerClient, name, url string) error {
 	providers, err := client.ProviderList()
 	if err != nil {
 		return fmt.Errorf("list providers: %w", err)

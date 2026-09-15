@@ -10,6 +10,12 @@ import (
 	"github.com/flynn/flynn/pkg/plugin"
 )
 
+type backupAppClient interface {
+	GetApp(string) (*ct.App, error)
+	GetAppRelease(string) (*ct.Release, error)
+	GetFormation(string, string) (*ct.Formation, error)
+}
+
 func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	tw := NewTarWriter("flynn-backup-"+time.Now().UTC().Format("2006-01-02_150405"), out, progress)
 	defer tw.Close()
@@ -91,7 +97,7 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	return nil
 }
 
-func getApps(client controller.Client) (map[string]*ct.ExpandedFormation, error) {
+func getApps(client backupAppClient) (map[string]*ct.ExpandedFormation, error) {
 	// app -> required for backup
 	apps := map[string]bool{
 		"postgres":   true,
