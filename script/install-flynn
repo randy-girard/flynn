@@ -397,7 +397,9 @@ do_remove() {
     run sudo umount "${path}"
   done
   if which flynn-host &>/dev/null; then
-    run flynn-host destroy-volumes --include-data
+    # A leftover flynn-host from a previous builder install can segfault
+    # (seen on stale binaries). Cleanup still rm -rf /var/lib/flynn below.
+    flynn-host destroy-volumes --include-data || true
   fi
   if zpool list | grep -q "flynn-default"; then
     run zpool destroy flynn-default

@@ -63,6 +63,18 @@ need 'docker-cli-log' \
   "CLI step must read Dockerfile app logs"
 need 'mongodb dump' \
   "CLI step must dump mongodb (slimmed mongodump tools)"
+need 'cli-help-redis' \
+  "CLI step must show redis in flynn help after plugin install"
+need 'cli-help-redis-doc' \
+  "CLI step must fetch redis usage (redis-cli) from the plugin catalog"
+need 'cli-redis-dump' \
+  "CLI step must dump redis via the delegated plugin job"
+need 'cli-redis-restore' \
+  "CLI step must restore a redis dump via the delegated plugin job"
+need 'probe_delegated_plugin_cli_hidden' \
+  "plugin install must prove flynn help hides redis until the plugin is installed"
+need 'plugin_has_delegated_cli' \
+  "smoke must detect plugin CLI doc+actions from flynn-plugin.json"
 need 'blobstore.discoverd/.well-known/status' \
   "CLI step must reach blobstore health from a system job (not a user slug)"
 need 'flynn-host version' \

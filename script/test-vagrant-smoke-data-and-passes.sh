@@ -95,6 +95,12 @@ need 'PLUGIN_SMOKE_APPS' \
   "plugin install list must be data-driven (not hardcoded to one appliance)"
 need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
+need 'probe_delegated_plugin_cli_hidden' \
+  "before plugin install, flynn help must hide redis and flynn redis must fail"
+need 'probe_delegated_plugin_cli_visible' \
+  "after plugin install, flynn help must list redis from the cluster catalog"
+need 'cli-redis-dump' \
+  "live CLI must dump redis through the plugin job, not a compiled handler"
 need 'plugin_dist_ready' \
   "smoke must rebuild plugin dist when image.json is overlay-only (no ubuntu-noble)"
 need 'flynn.plugin.files' \

@@ -2278,12 +2278,65 @@ journalctl -u flynn-host.service -n 60 --no-pager 2>/dev/null
 EOF
 }
 
+# True when flynn-plugin.json publishes doc+actions so the user CLI fetches
+# usage from the cluster instead of a compiled handler.
+plugin_has_delegated_cli() {
+  local dir
+  dir="$(plugin_checkout "$1")"
+  python3 - "$dir" <<'PY'
+import json, os, sys
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+if not os.path.isfile(path):
+    sys.exit(1)
+cli = (json.load(open(path)).get("cli") or {})
+sys.exit(0 if cli.get("doc") and cli.get("actions") else 1)
+PY
+}
+
+# flynn help command list: a line whose first field is the plugin command.
+help_lists_plugin_command() {
+  local name=$1
+  local out
+  out="$(flynn1 help 2>&1)" || true
+  printf '%s\n' "${out}" | awk -v cmd="${name}" '$1==cmd {found=1; exit} END {exit found?0:1}'
+}
+
+probe_delegated_plugin_cli_hidden() {
+  local name=$1
+  local out rc=0
+  if help_lists_plugin_command "${name}"; then
+    echo "flynn help listed ${name} before flynn-host plugin install" >&2
+    return 1
+  fi
+  out="$(flynn1 "${name}" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then
+    echo "flynn ${name} succeeded before plugin install: ${out}" >&2
+    return 1
+  fi
+  echo "flynn help hides ${name}; flynn ${name} fails until plugin install (rc=${rc})"
+}
+
+probe_delegated_plugin_cli_visible() {
+  local name=$1
+  cli_probe "plugin-install" "cli-help-${name}" "${name}" \
+    flynn1 help || return 1
+  cli_probe "plugin-install" "cli-help-${name}-doc" "${name}" \
+    flynn1 help "${name}" || return 1
+}
+
 step_install_plugins() {
   if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
     echo "SKIP_PLUGIN_INSTALL=1"
     return 0
   fi
   local name dir vm_path
+  ensure_flynn_cli_on_node1
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    if plugin_has_delegated_cli "${name}"; then
+      probe_delegated_plugin_cli_hidden "${name}" || return 1
+    fi
+  done
   # shellcheck disable=SC2086
   for name in ${PLUGIN_SMOKE_APPS}; do
     dir="$(plugin_checkout "${name}")"
@@ -2301,6 +2354,9 @@ EOF
     then
       dump_plugin_install_diagnostics "${name}"
       return 1
+    fi
+    if plugin_has_delegated_cli "${name}"; then
+      probe_delegated_plugin_cli_visible "${name}" || return 1
     fi
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
@@ -3236,6 +3292,26 @@ step_cli_functions() {
 
   cli_probe "${label}" "cli-mongo-dump" "" \
     flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
+
+  # Plugin CLI: usage from the cluster catalog, job on the redis image.
+  if plugin_has_delegated_cli redis; then
+    cli_probe "${label}" "cli-help-redis" "redis" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-redis-doc" "redis-cli" \
+      flynn1 help redis || failed=1
+    rc=0
+    out="$(flynn1 -a "${APP_NAME}" redis dump -q -f /tmp/smoke-redis.dump 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && node_ssh node1 'test -s /tmp/smoke-redis.dump' </dev/null; then
+      record_check "${label}" "cli-redis-dump" "PASS" "rdb=$(node_ssh node1 'wc -c </tmp/smoke-redis.dump' </dev/null | tr -d ' ')"
+      echo "cli ${label} cli-redis-dump: PASS"
+    else
+      record_check "${label}" "cli-redis-dump" "FAIL" "rc=${rc} $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "cli ${label} cli-redis-dump: FAIL rc=${rc} ${out}" >&2
+      failed=1
+    fi
+    cli_probe "${label}" "cli-redis-restore" "" \
+      flynn1 -a "${APP_NAME}" redis restore -q -f /tmp/smoke-redis.dump || failed=1
+  fi
 
   # GET / lists every blob and 500s if postgres is briefly unavailable after
   # an update. /.well-known/status is the health check (SELECT 1). Retry:

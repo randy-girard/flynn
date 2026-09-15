@@ -71,7 +71,7 @@ need "${smoke}" 'leader.postgres.discoverd' \
   "smoke must still reach the provisioned postgres URL host"
 need "${ROOT}/pkg/netpolicy/policy.go" 'applianceUUIDName' \
   "per-app kafka/clickhouse/redis appliances must be datastore names, not only redis-"
-need "${ROOT}/cli/redis.go" 'leader\.' \
+need "${ROOT}/cli/plugin_cmd_test.go" 'leader\.' \
   "flynn redis redis-cli must dial leader.<redis-app>.discoverd (user DNS)"
 need "${ROOT}/controller/jobs.go" 'flynn-system-app' \
   "one-off flynn run on system apps must inherit flynn-system-app (blobstore DNS)"
