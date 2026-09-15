@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"net/http"
 	"testing"
 	"time"
 
@@ -156,5 +157,77 @@ func TestParseSigningKey(t *testing.T) {
 	}
 	if nilSigner != nil {
 		t.Fatalf("empty key should return nil signer")
+	}
+}
+
+func TestAuthorizeRequestBearerAndBasic(t *testing.T) {
+	signer, pubKey := newKeyPair(t)
+	pk, err := authorizer.ParseTokenKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := authorizer.New([]string{"cluster-secret"}, []string{"cid"}, pk, time.Hour)
+	now := time.Now()
+	tokenStr, err := signer.Sign(&api.AccessToken{
+		UserEmail:  "ops@example.com",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(10 * time.Minute)),
+		Scopes:     []string{"cluster:admin"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	tok, err := auth.AuthorizeRequest(req)
+	if err != nil || tok.User != "ops@example.com" || !tok.HasClusterAdmin() {
+		t.Fatalf("bearer header: %+v %v", tok, err)
+	}
+
+	req, _ = http.NewRequest("GET", "/", nil)
+	req.SetBasicAuth("Bearer", tokenStr)
+	tok, err = auth.AuthorizeRequest(req)
+	if err != nil || tok.User != "ops@example.com" {
+		t.Fatalf("basic bearer: %+v %v", tok, err)
+	}
+}
+
+func TestAuthorizeTokenTamperJWTWrapAndTimestamps(t *testing.T) {
+	signer, pubKey := newKeyPair(t)
+	pk, err := authorizer.ParseTokenKey(pubKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := authorizer.New(nil, nil, pk, time.Hour)
+	now := time.Now()
+	good, err := signer.Sign(&api.AccessToken{
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(5 * time.Minute)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := base64.URLEncoding.DecodeString(good)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw[0] ^= 0xff
+	tampered := base64.URLEncoding.EncodeToString(raw)
+	if _, err := auth.AuthorizeToken("Bearer " + tampered); err == nil {
+		t.Fatal("tampered signature must fail")
+	}
+
+	if _, err := auth.AuthorizeToken("eyJhbGciOiJub25lIn0." + good); err != nil {
+		t.Fatalf("jwt wrap: %v", err)
+	}
+
+	missingTS, err := signer.Sign(&api.AccessToken{UserEmail: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := auth.AuthorizeToken(missingTS); err == nil {
+		t.Fatal("missing timestamps")
 	}
 }
