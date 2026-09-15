@@ -47,6 +47,7 @@ require (
 	github.com/minio/minio-go v0.0.0-20170324230031-29b05151452a
 	github.com/mistifyio/go-zfs v0.0.0-20141209150540-dda1f4cd04dc
 	github.com/mitchellh/go-homedir v0.0.0-20140913165950-7d2d8c8a4e07
+	github.com/mrunalp/fileutils v0.0.0-20171103030105-7d4729fb3618
 	github.com/opencontainers/runc v1.0.0-rc8
 	github.com/pkg/errors v0.8.1
 	github.com/rancher/sparse-tools v0.0.0-20190307223929-666f9b3bde21
@@ -95,7 +96,6 @@ require (
 	github.com/kr/binarydist v0.0.0-20120828065244-9955b0ab8708 // indirect
 	github.com/mattn/go-isatty v0.0.0-20151211000621-56b76bdf51f7 // indirect
 	github.com/montanaflynn/stats v0.7.1 // indirect
-	github.com/mrunalp/fileutils v0.0.0-20171103030105-7d4729fb3618 // indirect
 	github.com/mwitkow/go-conntrack v0.0.0-20190716064945-2f068394615f // indirect
 	github.com/natefinch/lumberjack v2.0.0+incompatible // indirect
 	github.com/olekukonko/ts v0.0.0-20140412220145-ecf753e7c962 // indirect
