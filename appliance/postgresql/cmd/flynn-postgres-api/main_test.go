@@ -48,6 +48,8 @@ func TestParseDatabaseResourceID(t *testing.T) {
 		`/databases/` + user + `:"evil"`,
 		"/databases/" + user + ":postgres;drop",
 		"/databases/" + user + ":template1",
+		"/databases/" + user + ":bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg",
+		" /databases/" + user + ":" + db + " ",
 	} {
 		if _, _, ok := parseDatabaseResourceID(bad); ok {
 			t.Fatalf("must reject %q", bad)
