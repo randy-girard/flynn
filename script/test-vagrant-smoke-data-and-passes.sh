@@ -100,6 +100,8 @@ need 'ensure_plugin_vm_mounts' \
   "plugin install must reload VMs when sibling plugin folders are not synced"
 need 'already in CLI catalog; skipping hidden-CLI probe' \
   "plugin install must skip the hidden-CLI probe when resuming with plugins already installed"
+need 'flynn-plugin-layers-${BUILD_VERSION}' \
+  "plugin-build must overlay ubuntu-noble from this smoke tarball, not a KEEP_BUILDER layer cache"
 if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
   echo "plugin_checkout must not hardcode mysql→mariadb" >&2
   exit 1

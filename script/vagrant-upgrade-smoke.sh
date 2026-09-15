@@ -2290,15 +2290,15 @@ ensure_plugin_image() {
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
 export FLYNN_IMAGES_JSON="${REPO_IN_VM}/build/images.json"
-export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers
+export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers-${BUILD_VERSION}
 export PLUGIN_BUILD_DOCKER=0
 mkdir -p "\$FLYNN_LAYERS_DIR"
 id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
 tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
-if [[ ! -s "\$dest" ]]; then
-  tar -xOf "\$tarball" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\$dest"
-fi
+# Layer IDs hash recipe inputs, not bytes. Always extract from this smoke
+# tarball so a KEEP_BUILDER cache cannot feed plugin-build the previous build.
+tar -xOf "\$tarball" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\$dest"
 cd "/opt/flynn-plugins/$(basename "${dir}")"
 test -f flynn-plugin.json
 ./script/plugin-build
