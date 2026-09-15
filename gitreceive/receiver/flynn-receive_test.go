@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,6 +19,7 @@ import (
 	"github.com/flynn/flynn/controller/tokensigner"
 	ct "github.com/flynn/flynn/controller/types"
 	host "github.com/flynn/flynn/host/types"
+	"github.com/flynn/go-docopt"
 )
 
 func TestBuildJob(t *testing.T) {
@@ -319,5 +324,32 @@ func TestSyncStdoutPassthrough(t *testing.T) {
 	var buf bytes.Buffer
 	if got := syncStdout(&buf); got != &buf {
 		t.Fatal("syncStdout should return non-file writers unchanged")
+	}
+}
+
+func TestSignedBuildCacheURLHMAC(t *testing.T) {
+	mac := hmac.New(sha256.New, []byte("cluster-key"))
+	mac.Write([]byte("app-1"))
+	wantTok := hex.EncodeToString(mac.Sum(nil))
+	got := signedBuildCacheURL("app-1", "cluster-key")
+	if !strings.HasPrefix(got, blobstoreURL+"/app-1-cache.tgz?token=") {
+		t.Fatalf("%s", got)
+	}
+	if !strings.HasSuffix(got, wantTok) {
+		t.Fatalf("token %s", got)
+	}
+	other := signedBuildCacheURL("app-1", "other-key")
+	if other == got {
+		t.Fatal("different keys must produce different tokens")
+	}
+}
+
+func TestParsePairs(t *testing.T) {
+	got, err := parsePairs(&docopt.Args{All: map[string]interface{}{"<var>": []string{"A=1", "B=x=y"}}}, "<var>")
+	if err != nil || got["A"] != "1" || got["B"] != "x=y" {
+		t.Fatalf("%v %v", got, err)
+	}
+	if _, err := parsePairs(&docopt.Args{All: map[string]interface{}{"<var>": []string{"novalue"}}}, "<var>"); err == nil {
+		t.Fatal("malformed pair")
 	}
 }

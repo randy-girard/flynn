@@ -85,6 +85,15 @@ func TestOverlayLowerdirDirectStackAfterDedupe(t *testing.T) {
 	}
 }
 
+func TestOverlayLowerdirEmpty(t *testing.T) {
+	if _, err := overlayLowerdir(nil, t.TempDir()); err == nil {
+		t.Fatal("empty layers")
+	}
+	if _, err := overlayLowerdir([]string{"/a", "/a"}, t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestOverlayLowerdirMaterializesDeepStack verifies that once the distinct layer
 // count exceeds the direct-stack threshold, overlayLowerdir takes the
 // materialization fallback instead of returning a colon-joined lowerdir.
