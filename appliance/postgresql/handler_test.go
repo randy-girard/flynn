@@ -3,6 +3,7 @@ package postgresql
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,11 +13,11 @@ import (
 )
 
 type hbStub struct {
-	closed bool
+	closed atomic.Bool
 }
 
 func (h *hbStub) SetMeta(map[string]string) error { return nil }
-func (h *hbStub) Close() error                    { h.closed = true; return nil }
+func (h *hbStub) Close() error                    { h.closed.Store(true); return nil }
 func (h *hbStub) Addr() string                    { return "127.0.0.1:1" }
 func (h *hbStub) SetClient(*discoverd.Client)     {}
 
@@ -43,10 +44,10 @@ func TestHandlerStatusAndStopWithoutPeer(t *testing.T) {
 		t.Fatalf("stop status=%d", stopRec.Code)
 	}
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && !hb.closed {
+	for time.Now().Before(deadline) && !hb.closed.Load() {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if !hb.closed {
+	if !hb.closed.Load() {
 		t.Fatal("stop must close the heartbeater")
 	}
 }
