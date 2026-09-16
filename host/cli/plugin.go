@@ -56,7 +56,8 @@ flynn route (list / add http / update / remove) scoped to that plugin app.
 Uninstall reverses that: optional hooks.uninstall, plugin webhooks, then
 DeleteApp (routes and exclusive resources). Resource-provider plugins with
 provisioned resources still in use refuse unless --force. Flynn does not
-special-case plugin names.
+special-case plugin names. Re-running install deploys a new release and
+scales the previous release to zero so old jobs leave discoverd.
 Local
 checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the

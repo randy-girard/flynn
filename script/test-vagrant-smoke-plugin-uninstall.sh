@@ -64,6 +64,8 @@ need_in "${uninstall_test}" 'TestUninstallRemovesPluginWebhooks' \
   "unit tests must remove plugin webhooks by ID prefix"
 need_in "${install}" 'uninstallHook' \
   "manifest must expose hooks.uninstall"
+need_in "${install}" 'previousReleaseScaleDown' \
+  "plugin reinstall must scale the previous release to zero"
 need_in "${docs}" 'plugin uninstall' \
   "plugin docs must describe flynn-host plugin uninstall"
 

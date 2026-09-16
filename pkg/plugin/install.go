@@ -346,7 +346,9 @@ func (in *Installer) createApp(m *Manifest, resolved *Resolved) (*ct.App, error)
 
 func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact, cluster map[string]string) error {
 	env := ReleaseEnv(m, image.ID, cluster)
-	if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
+	var prev *ct.Release
+	if p, err := in.Client.GetAppRelease(app.ID); err == nil && p != nil {
+		prev = p
 		PreserveGeneratedEnv(m, env, prev.Env)
 		PreservePreviousEnv(env, prev.Env)
 	}
@@ -369,6 +371,21 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 		Timeout:   &timeout,
 	}); err != nil {
 		return fmt.Errorf("scale %s: %w", m.App.Name, err)
+	}
+	if prev != nil && prev.ID != release.ID {
+		var form *ct.Formation
+		if f, err := in.Client.GetFormation(app.ID, prev.ID); err == nil {
+			form = f
+		}
+		if zeros := previousReleaseScaleDown(prev, form); len(zeros) > 0 {
+			in.logf("stopping previous %s release %s", m.App.Name, prev.ID)
+			if err := in.Client.ScaleAppRelease(app.ID, prev.ID, ct.ScaleOptions{
+				Processes: zeros,
+				Timeout:   &timeout,
+			}); err != nil {
+				return fmt.Errorf("scale down previous %s release: %w", m.App.Name, err)
+			}
+		}
 	}
 	if err := in.Client.SetAppRelease(app.ID, release.ID); err != nil {
 		return fmt.Errorf("set release: %w", err)

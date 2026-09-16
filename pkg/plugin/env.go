@@ -114,6 +114,25 @@ func FormationScale(m *Manifest, cluster map[string]string) map[string]int {
 	return procs
 }
 
+// previousReleaseScaleDown is the formation used to stop jobs from the
+// release that plugin install just replaced. ScaleAppRelease only updates
+// the new release; without this, the old formation stays at web=1 and
+// discoverd keeps both backends (HTML from vN, JS from vN-1 → 404s).
+func previousReleaseScaleDown(prev *ct.Release, formation *ct.Formation) map[string]int {
+	zeros := map[string]int{}
+	if formation != nil {
+		for name := range formation.Processes {
+			zeros[name] = 0
+		}
+	}
+	if prev != nil {
+		for name := range prev.Processes {
+			zeros[name] = 0
+		}
+	}
+	return zeros
+}
+
 // ClusterEnv reads well-known secrets from already-running core apps
 // (controller/postgres). It does not assume any plugin is installed.
 func ClusterEnv(client appReleaseGetter) (map[string]string, error) {

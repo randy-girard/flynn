@@ -131,6 +131,17 @@ func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 		t.Fatalf("ha web=%v", scale)
 	}
 
+	zeros := previousReleaseScaleDown(
+		&ct.Release{Processes: map[string]ct.ProcessType{"web": {}, "worker": {}}},
+		&ct.Formation{Processes: map[string]int{"web": 1}},
+	)
+	if zeros["web"] != 0 || zeros["worker"] != 0 || len(zeros) != 2 {
+		t.Fatalf("scale-down: %v", zeros)
+	}
+	if got := previousReleaseScaleDown(nil, nil); len(got) != 0 {
+		t.Fatalf("nil previous must not invent processes: %v", got)
+	}
+
 	env := ReleaseEnv(m, "art", map[string]string{})
 	if env["FLYNN_MYSQL"] != "mariadb" || len(env["MYSQL_PWD"]) != 32 {
 		t.Fatalf("%v", env)
