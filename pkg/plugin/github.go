@@ -49,8 +49,11 @@ func (in *Installer) githubHTTP() *http.Client {
 	return &http.Client{Timeout: githubTimeout}
 }
 
-// fetchGitHub writes flynn-plugin.json and dist/ (image.json + layers) from a
-// GitHub Release into a temp directory. It never runs plugin-build.
+// fetchGitHub writes flynn-plugin.json, declared hook scripts, and dist/
+// (image.json + layers) from a GitHub Release into a temp directory. It never
+// runs plugin-build. GitHub assets are a flat list, so hooks.install
+// script/install.sh is published as script-install.sh (basename install.sh is
+// also accepted).
 func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, error) {
 	if src == nil {
 		return "", fmt.Errorf("missing GitHub source")
@@ -95,6 +98,10 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 		}
 	} else {
 		return "", fmt.Errorf("GitHub release %s/%s@%s has no %s asset (include it in Build and Release)", src.Owner, src.Repo, rel.TagName, ManifestName)
+	}
+
+	if err := in.fetchGitHubHooks(root, src, token, rel); err != nil {
+		return "", err
 	}
 
 	imagePath := filepath.Join(root, DistDir, ImageJSON)
@@ -143,6 +150,94 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 	in.logf("pulled plugin image from GitHub %s/%s@%s", src.Owner, src.Repo, rel.TagName)
 	ok = true
 	return root, nil
+}
+
+func (m *Manifest) hookRels() []string {
+	if m == nil || m.Hooks == nil {
+		return nil
+	}
+	var out []string
+	for _, rel := range []string{m.Hooks.Install, m.Hooks.Upgrade, m.Hooks.Uninstall} {
+		rel = strings.TrimSpace(rel)
+		if rel != "" {
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
+// HookAssetNames are GitHub Release asset names for a repo-relative hook path.
+// Assets cannot contain slashes, so script/install.sh is published as
+// script-install.sh; install.sh is also accepted.
+func HookAssetNames(rel string) []string {
+	rel = filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))
+	rel = strings.TrimPrefix(rel, "./")
+	if rel == "" || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "../") {
+		return nil
+	}
+	flat := strings.ReplaceAll(rel, "/", "-")
+	base := filepath.Base(rel)
+	names := []string{flat}
+	if base != "" && base != flat {
+		names = append(names, base)
+	}
+	return names
+}
+
+func pluginRelPath(root, rel string) (string, error) {
+	rel = filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))
+	rel = strings.TrimPrefix(rel, "./")
+	if rel == "" || rel == "." || filepath.IsAbs(rel) || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("invalid hook path %q", rel)
+	}
+	dest := filepath.Join(root, filepath.FromSlash(rel))
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	absDest, err := filepath.Abs(dest)
+	if err != nil {
+		return "", err
+	}
+	sep := string(os.PathSeparator)
+	if absDest != absRoot && !strings.HasPrefix(absDest, absRoot+sep) {
+		return "", fmt.Errorf("hook path %q escapes plugin unpack", rel)
+	}
+	return dest, nil
+}
+
+func (in *Installer) fetchGitHubHooks(root string, src *GitHubSource, token string, rel *githubRelease) error {
+	m, err := LoadManifest(root)
+	if err != nil {
+		return err
+	}
+	for _, hookRel := range m.hookRels() {
+		dest, err := pluginRelPath(root, hookRel)
+		if err != nil {
+			return fmt.Errorf("hooks %s: %w", hookRel, err)
+		}
+		names := HookAssetNames(hookRel)
+		if len(names) == 0 {
+			return fmt.Errorf("hooks %s: invalid path", hookRel)
+		}
+		var a *githubAsset
+		for _, name := range names {
+			if a = rel.asset(name); a != nil {
+				break
+			}
+		}
+		if a == nil {
+			return fmt.Errorf("GitHub release %s/%s@%s has no hooks asset for %s (publish %s in Build and Release)", src.Owner, src.Repo, rel.TagName, hookRel, strings.Join(names, " or "))
+		}
+		if err := in.downloadAsset(src, token, a, dest); err != nil {
+			return fmt.Errorf("hooks %s: %w", hookRel, err)
+		}
+		if err := os.Chmod(dest, 0755); err != nil {
+			return fmt.Errorf("hooks %s: %w", hookRel, err)
+		}
+		in.logf("pulled hook %s from GitHub release assets", hookRel)
+	}
+	return nil
 }
 
 func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease, error) {

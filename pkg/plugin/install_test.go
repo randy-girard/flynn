@@ -201,8 +201,9 @@ func TestInstallHookAndRunHook(t *testing.T) {
 	if err := in.runHook(t.TempDir(), m, "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := in.runHook(t.TempDir(), m, "hooks/missing.sh", map[string]string{}); err == nil {
-		t.Fatal("missing hook must fail")
+	err := in.runHook(t.TempDir(), m, "hooks/missing.sh", map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "hooks.install") {
+		t.Fatalf("missing hook must fail, got %v", err)
 	}
 }
 

@@ -206,6 +206,156 @@ func TestFetchGitHubRelease(t *testing.T) {
 	}
 }
 
+func TestHookAssetNames(t *testing.T) {
+	got := HookAssetNames("script/install.sh")
+	if len(got) != 2 || got[0] != "script-install.sh" || got[1] != "install.sh" {
+		t.Fatalf("%v", got)
+	}
+	if got := HookAssetNames("install.sh"); len(got) != 1 || got[0] != "install.sh" {
+		t.Fatalf("basename=%v", got)
+	}
+	if HookAssetNames("../etc/passwd") != nil || HookAssetNames("/tmp/x") != nil || HookAssetNames("") != nil {
+		t.Fatal("escaped or empty paths must not produce asset names")
+	}
+}
+
+func TestFetchGitHubReleaseHooks(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGitHubTokenAlt, "")
+
+	osID := "ubuntu-noble-os"
+	deltaID := "plugin-delta"
+	manifest := &ct.ImageManifest{
+		Type: ct.ImageManifestTypeV1,
+		Rootfs: []*ct.ImageRootfs{{
+			Layers: []*ct.ImageLayer{
+				{
+					ID:     osID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 199 << 20,
+					Hashes: map[string]string{"sha512_256": osID},
+				},
+				{
+					ID:     deltaID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 34 << 20,
+					Hashes: map[string]string{"sha512_256": deltaID},
+				},
+			},
+		}},
+	}
+	raw := manifest.RawManifest()
+	imageJSON, _ := json.Marshal(&ct.Artifact{
+		Type:        ct.ArtifactTypeFlynn,
+		RawManifest: raw,
+		Hashes:      map[string]string{"sha512_256": "deadbeef"},
+		Size:        int64(len(raw)),
+	})
+	pluginJSON := []byte(`{
+  "name": "widget",
+  "kind": "app",
+  "app": {"name": "widget", "processes": {"web": {"args": ["/bin/x"]}}},
+  "hooks": {"install": "script/install.sh"}
+}`)
+	hookBody := []byte("#!/bin/sh\nexit 0\n")
+	layerBytes := []byte("squashfs-bytes")
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/flynn-plugin-widget/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v1",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+				{Name: ImageJSON, BrowserDownloadURL: srv.URL + "/files/image.json"},
+				{Name: osID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + osID + ".squashfs"},
+				{Name: deltaID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + deltaID + ".squashfs"},
+				{Name: "script-install.sh", BrowserDownloadURL: srv.URL + "/files/script-install.sh"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	mux.HandleFunc("/files/image.json", func(w http.ResponseWriter, r *http.Request) { w.Write(imageJSON) })
+	mux.HandleFunc("/files/"+osID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(layerBytes) })
+	mux.HandleFunc("/files/"+deltaID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(layerBytes) })
+	mux.HandleFunc("/files/script-install.sh", func(w http.ResponseWriter, r *http.Request) { w.Write(hookBody) })
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	in := &Installer{GitHubHTTP: srv.Client()}
+	dir, err := in.fetchGitHub(&GitHubSource{
+		Host:  "github.com",
+		Owner: "acme",
+		Repo:  "flynn-plugin-widget",
+		Ref:   "v1",
+		API:   srv.URL,
+	}, filepath.Join(t.TempDir(), "missing-creds.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	script := filepath.Join(dir, "script", "install.sh")
+	got, err := os.ReadFile(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(hookBody) {
+		t.Fatalf("hook body=%q", got)
+	}
+	st, err := os.Stat(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode()&0111 == 0 {
+		t.Fatalf("hook must be executable, mode=%s", st.Mode())
+	}
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := in.runHook(dir, m, m.installHook(), map[string]string{"CONTROLLER_KEY": "k", "CLUSTER_DOMAIN": "example.local"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFetchGitHubReleaseMissingHookAsset(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGitHubTokenAlt, "")
+
+	pluginJSON := []byte(`{
+  "name": "widget",
+  "kind": "app",
+  "app": {"name": "widget", "processes": {"web": {"args": ["/bin/x"]}}},
+  "hooks": {"install": "script/install.sh"}
+}`)
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/plug/releases/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v1",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	in := &Installer{GitHubHTTP: srv.Client()}
+	_, err := in.fetchGitHub(&GitHubSource{
+		Host:  "github.com",
+		Owner: "acme",
+		Repo:  "plug",
+		Ref:   "v1",
+		API:   srv.URL,
+	}, "")
+	if err == nil || !strings.Contains(err.Error(), "script/install.sh") || !strings.Contains(err.Error(), "script-install.sh") {
+		t.Fatalf("missing hook asset must fail with the published name, got %v", err)
+	}
+}
+
 func TestCredentialsFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "plugin-credentials.json")
 	if err := SetGitHubCredentials(path, "github.com", "ghp_test", ""); err != nil {

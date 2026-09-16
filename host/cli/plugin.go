@@ -37,7 +37,8 @@ kind is resource-provider, and registers flynn-host webhooks declared in
 the manifest. Local checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the
 repo declared by a sibling checkout / installed plugin). GitHub installs never
-build on the cluster.
+build on the cluster; they unpack release assets (image layers plus any
+hooks.install scripts) rather than a git checkout.
 
 Configure extra aliases and org in /etc/flynn/plugins.json. Installed plugins
 are recorded in /etc/flynn/installed-plugins.json so cluster backup, restore,

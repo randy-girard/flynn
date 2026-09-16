@@ -46,7 +46,12 @@ stdin is not a TTY). **`resources`** attaches existing providers (for example
 is expanded). **`webhooks`** registers the same host endpoints as
 `flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
-still runs on the host for anything the manifest cannot express.
+still runs on the host for anything the manifest cannot express. GitHub installs
+unpack **release assets only** (not a git checkout), so a declared hook must be
+published next to `image.json`. GitHub asset names cannot contain slashes:
+`script/install.sh` is uploaded as `script-install.sh` (basename `install.sh`
+is also accepted). Install fails if the hook is declared but missing; it is
+not skipped.
 
 If `dist/image.json` (and layers) are missing, install runs that repo’s
 `script/plugin-build` first. Already-built `dist/` is reused unless `--rebuild`.
@@ -126,10 +131,13 @@ A string value still works (`"redis": "/opt/flynn-plugins/flynn-plugin-redis"`
 or a git URL). `repo` may be `owner/name` when the GitHub repo does not match
 `flynn-plugin-<alias>`.
 
-The release must include `flynn-plugin.json`, `image.json`, and `{id}.squashfs`
-(the plugin **Build and Release** workflow already publishes those). Flynn
-uploads the layers into the cluster blobstore so other hosts never talk to
-GitHub.
+The release must include `flynn-plugin.json`, `image.json`, `{id}.squashfs`,
+and any **`hooks.install` / `hooks.upgrade` / `hooks.uninstall`** scripts
+declared in the manifest (flat names such as `script-install.sh`). plugin-build
+copies those scripts into `dist/` so **Build and Release** uploads them. Flynn
+reconstructs the repo-relative path (`script/install.sh`) when it unpacks the
+release, then runs the hook. Uploads of the squashfs layers go into the cluster
+blobstore so other hosts never talk to GitHub.
 
 When a Flynn GitHub Release is **published** (not a draft), Flynn can queue
 those plugin workflows automatically. Configure the Flynn repo (or org) with:
