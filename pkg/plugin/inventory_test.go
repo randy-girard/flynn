@@ -149,6 +149,69 @@ func TestDatastoreServiceAndOptionalSirenia(t *testing.T) {
 	}
 }
 
+func TestSireniaServiceNamesAndRecordFallbacks(t *testing.T) {
+	t.Setenv(EnvInstalledFile, filepath.Join(t.TempDir(), "missing.json"))
+	got := SireniaServiceNames()
+	if len(got) != 1 || got[0] != "postgres" {
+		t.Fatalf("%v", got)
+	}
+	if IsSireniaManaged(nil) {
+		t.Fatal("nil app")
+	}
+	if !IsSireniaManaged(&ct.App{Name: "redis", Strategy: "sirenia", Meta: map[string]string{MetaPlugin: "true"}}) {
+		t.Fatal("plugin strategy")
+	}
+	if IsSireniaManaged(&ct.App{Name: "redis", Meta: map[string]string{MetaPlugin: "true"}}) {
+		t.Fatal("plugin without sirenia")
+	}
+
+	rec := RecordFromApp(&ct.App{
+		ID:       "a1",
+		Name:     "widget",
+		Strategy: "sirenia",
+		Meta: map[string]string{
+			MetaPlugin:       "true",
+			MetaPluginKind:   KindApp,
+			MetaPluginSource: "src",
+			MetaPluginRef:    "v1",
+			MetaPluginWait:   "http://widget/ping",
+			MetaDatastore:    "true",
+			MetaPluginRecord: `{"name":"old"}`,
+			MetaPluginCLI:    `{"command":"widget"}`,
+		},
+	})
+	if rec.Name != "widget" || rec.AppID != "a1" || rec.Source != "src" || rec.Ref != "v1" || rec.Wait != "http://widget/ping" {
+		t.Fatalf("meta fill-in: %+v", rec)
+	}
+	if rec.Kind != KindApp || rec.CLI == nil || rec.CLI.Command != "widget" || !rec.Datastore || !rec.Sirenia {
+		t.Fatalf("record fallbacks: %+v", rec)
+	}
+}
+
+func TestBackupRestoreSpecExistingAndNil(t *testing.T) {
+	existing := Installed{Name: "db", Backup: &BackupSpec{File: "custom.dump", Args: []string{"dump"}, Process: "db"}, Restore: &RestoreSpec{File: "custom.dump", Args: []string{"restore"}}}
+	if BackupSpecFor(existing, nil).File != "custom.dump" {
+		t.Fatal("existing backup")
+	}
+	if existing.BackupProcessHint() != "db" {
+		t.Fatal("process hint")
+	}
+	if RestoreSpecFor(existing, nil).File != "custom.dump" {
+		t.Fatal("existing restore")
+	}
+	if BackupSpecFor(Installed{Name: "db"}, nil) != nil || RestoreSpecFor(Installed{Name: "db"}, nil) != nil {
+		t.Fatal("nil formation")
+	}
+	if BackupSpecFor(Installed{Name: "db"}, &ct.ExpandedFormation{Release: &ct.Release{Env: map[string]string{}}}) != nil {
+		t.Fatal("unknown engine")
+	}
+	mongo := &ct.ExpandedFormation{Release: &ct.Release{Env: map[string]string{"MONGO_PWD": "y"}}}
+	r := RestoreSpecFor(Installed{Name: "mongodb"}, mongo)
+	if r == nil || r.File != "mongodb.archive.gz" || !r.Sirenia {
+		t.Fatalf("mongo restore: %+v", r)
+	}
+}
+
 func TestReadInstalledWrappedAndCorrupt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installed.json")
 	writeJSON(t, path, map[string]interface{}{

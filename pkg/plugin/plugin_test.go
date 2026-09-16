@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -276,6 +277,51 @@ func TestCLIFromAppAndCoreCommands(t *testing.T) {
 	if IsCorePluginCommand("redis") || IsCorePluginCommand("mysql") || IsCorePluginCommand("mongodb") || IsCorePluginCommand("kafka") || IsCorePluginCommand("clickhouse") || IsCorePluginCommand("ps") {
 		t.Fatal("core plugin command set")
 	}
+	old := CorePluginCommands
+	t.Cleanup(func() { CorePluginCommands = old })
+	CorePluginCommands = []string{"legacy"}
+	if !IsCorePluginCommand("legacy") || IsCorePluginCommand("other") {
+		t.Fatal("temporary core plugin command")
+	}
+}
+
+type stubCatalogClient struct {
+	apps      []*ct.App
+	providers []*ct.Provider
+	appsErr   error
+	provErr   error
+}
+
+func (s stubCatalogClient) AppList() ([]*ct.App, error) { return s.apps, s.appsErr }
+func (s stubCatalogClient) ProviderList() ([]*ct.Provider, error) {
+	return s.providers, s.provErr
+}
+
+func TestLoadCatalog(t *testing.T) {
+	if _, err := LoadCatalog(stubCatalogClient{appsErr: errors.New("offline")}); err == nil {
+		t.Fatal("AppList error must fail")
+	}
+
+	raw := `{"command":"redis","usage":"manage redis databases"}`
+	apps := []*ct.App{{
+		Name: "redis",
+		Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: raw},
+	}}
+	cat, err := LoadCatalog(stubCatalogClient{apps: apps, provErr: errors.New("no providers")})
+	if err != nil || !cat.HasCommand("redis") {
+		t.Fatalf("ProviderList error must still return app CLI: %+v %v", cat, err)
+	}
+
+	cat, err = LoadCatalog(stubCatalogClient{
+		apps:      apps,
+		providers: []*ct.Provider{{Name: "postgres"}},
+	})
+	if err != nil || !cat.HasCommand("redis") || !cat.HasProvider("postgres") {
+		t.Fatalf("full catalog: %+v %v", cat, err)
+	}
+	if (*Catalog)(nil).HasProvider("redis") || (*Catalog)(nil).Lookup("redis") != nil {
+		t.Fatal("nil catalog")
+	}
 }
 
 func TestManifestValidateErrorsAndWait(t *testing.T) {
@@ -342,6 +388,19 @@ func TestManifestValidateErrorsAndWait(t *testing.T) {
 	}
 	if (*Manifest)(nil).PingURL() != "" {
 		t.Fatal("nil manifest ping")
+	}
+
+	if (&Manifest{GitHubRepo: " acme/plug "}).githubRepo() != "acme/plug" {
+		t.Fatal("explicit github_repo")
+	}
+	if (&Manifest{Name: "redis"}).githubRepo() != "flynn-plugin-redis" {
+		t.Fatal("default github repo")
+	}
+	if (&Manifest{}).githubRepo() != "" {
+		t.Fatal("empty github repo")
+	}
+	if (&Manifest{Name: "x", Kind: KindApp, App: AppSpec{Processes: map[string]ct.ProcessType{"web": {}}}}).sireniaOptional() {
+		t.Fatal("non-sirenia is not optional")
 	}
 
 	meta := m.AnnotateInstall(nil, "../flynn-plugin-cache", "v1")

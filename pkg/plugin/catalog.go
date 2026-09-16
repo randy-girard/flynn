@@ -3,9 +3,15 @@ package plugin
 import (
 	"encoding/json"
 
-	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 )
+
+// catalogSource is the controller surface LoadCatalog needs. The full
+// controller.Client satisfies it; tests can stub just these two calls.
+type catalogSource interface {
+	AppList() ([]*ct.App, error)
+	ProviderList() ([]*ct.Provider, error)
+}
 
 // Catalog is the cluster's installed plugin CLI commands. Built from plugin
 // app metadata (any kind) plus resource providers. Not a hardcoded appliance list.
@@ -42,7 +48,7 @@ func (c *Catalog) HasProvider(name string) bool {
 }
 
 // LoadCatalog lists plugin apps and providers on the cluster.
-func LoadCatalog(client controller.Client) (*Catalog, error) {
+func LoadCatalog(client catalogSource) (*Catalog, error) {
 	apps, err := client.AppList()
 	if err != nil {
 		return nil, err
