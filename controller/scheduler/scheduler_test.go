@@ -1187,6 +1187,75 @@ func (TestSuite) TestFindVolumeRedisHeldByRunningJob(c *C) {
 	c.Assert(got.ID, Equals, "redis-data")
 }
 
+func (TestSuite) TestShouldDeferVolumeAllocationSingletonSirenia(c *C) {
+	const (
+		oldReleaseID = "release-old"
+		newReleaseID = "release-new"
+	)
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+	oldFormation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: testAppID},
+		Release: &ct.Release{
+			ID:          oldReleaseID,
+			ArtifactIDs: []string{testArtifactId},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres"},
+		},
+		Processes: map[string]int{"postgres": 1},
+	})
+	newFormation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: testAppID},
+		Release: &ct.Release{
+			ID:          newReleaseID,
+			ArtifactIDs: []string{testArtifactId},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres"},
+		},
+		Processes: map[string]int{"postgres": 1},
+	})
+	s.formations.Add(oldFormation)
+	s.formations.Add(newFormation)
+
+	holderID := "pg-old"
+	vol := &Volume{
+		Volume: ct.Volume{
+			VolumeReq: ct.VolumeReq{Path: "/data"},
+			ID:        "pg-data",
+			AppID:     testAppID,
+			ReleaseID: oldReleaseID,
+			JobType:   "postgres",
+			State:     ct.VolumeStateCreated,
+			JobID:     &holderID,
+		},
+	}
+	s.volumes[vol.ID] = vol
+	s.jobs[holderID] = &Job{ID: holderID, State: JobStateRunning}
+
+	job := &Job{
+		AppID:     testAppID,
+		ReleaseID: newReleaseID,
+		Type:      "postgres",
+		Formation: newFormation,
+	}
+	req := &ct.VolumeReq{Path: "/data"}
+
+	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, true)
+
+	s.jobs[holderID].State = JobStateStopping
+	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, false)
+
+	s.jobs[holderID].State = JobStateRunning
+	newFormation.OriginalProcesses["postgres"] = 3
+	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, false)
+	newFormation.OriginalProcesses["postgres"] = 1
+
+	newFormation.Release.Env = map[string]string{}
+	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, false)
+}
+
 func (TestSuite) TestInternalStateCopiesJobs(c *C) {
 	orig := &Job{ID: "job1", State: JobStateStarting}
 	s := &Scheduler{

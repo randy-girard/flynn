@@ -44,6 +44,11 @@ var (
 	ErrJobNotPending    = errors.New("job is no longer pending")
 	ErrNoHostsMatchTags = errors.New("no hosts found matching job tags")
 	ErrHostIsDown       = errors.New("host is down")
+	// ErrVolumeInUse is returned when a singleton sirenia job must adopt an
+	// existing data volume that is still held by a running peer. StartJob
+	// retries until the old job is stopping so we never allocate a second
+	// empty dataset (which would look like a successful deploy of a blank DB).
+	ErrVolumeInUse = errors.New("matching persistent volume is still in use")
 )
 
 type Scheduler struct {
@@ -1147,6 +1152,57 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 	return nil
 }
 
+// shouldDeferVolumeAllocation reports whether placing this job would create a
+// second persistent volume while a singleton sirenia peer still holds the
+// existing dataset. HA formations (count > 1) still get new volumes for extra
+// replicas; non-sirenia jobs keep the historical allocate-new behavior.
+func (s *Scheduler) shouldDeferVolumeAllocation(job *Job, volReq *ct.VolumeReq) bool {
+	if volReq.DeleteOnStop {
+		return false
+	}
+	if s.findVolume(job, volReq) != nil {
+		return false
+	}
+	if job.Formation == nil || job.Formation.Release == nil || !job.Formation.Release.IsSirenia() {
+		return false
+	}
+	if job.Formation.OriginalProcesses[job.Type] > 1 {
+		return false
+	}
+	return s.busyMatchingPersistentVolume(job, volReq) != nil
+}
+
+// busyMatchingPersistentVolume returns a same-app/type/path data volume whose
+// holder is still running or starting (not yet stopping).
+func (s *Scheduler) busyMatchingPersistentVolume(job *Job, req *ct.VolumeReq) *Volume {
+	for _, vol := range s.volumes {
+		if vol.GetState() == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+			continue
+		}
+		if vol.DeleteOnStop {
+			continue
+		}
+		if vol.AppID != job.AppID || vol.JobType != job.Type || vol.Path != req.Path {
+			continue
+		}
+		if vol.ReleaseID != job.ReleaseID && !s.releaseKnownForApp(vol.AppID, vol.ReleaseID) {
+			continue
+		}
+		if vol.JobID == nil || *vol.JobID == job.ID {
+			continue
+		}
+		holder, ok := s.jobs[*vol.JobID]
+		if !ok {
+			continue
+		}
+		if holder.State == JobStateStopping || holder.State == JobStateStopped || holder.State == JobStateBlocked {
+			continue
+		}
+		return vol
+	}
+	return nil
+}
+
 // releaseKnownForApp reports whether the scheduler currently has a formation
 // recorded for the given (appID, releaseID) pair, which it does for every
 // release with a (possibly zero) formation that the controller has loaded.
@@ -1213,6 +1269,14 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	// possible (which will lead to the job being scheduled on the
 	// same host as the volumes) or initialize new ones
 	if reqs := req.Job.VolumeRequests(); len(reqs) > 0 {
+		for _, volReq := range reqs {
+			if s.shouldDeferVolumeAllocation(req.Job, &volReq) {
+				log.Info("waiting to adopt in-use persistent volume rather than creating a new one")
+				req.Error(ErrVolumeInUse)
+				return
+			}
+		}
+
 		req.Job.Volumes = make([]*Volume, len(reqs))
 
 		for i, volReq := range reqs {
@@ -1698,6 +1762,9 @@ outer:
 		} else if err == ErrHostIsDown {
 			log.Warn("unable to place job as the host is down")
 			return
+		} else if err == ErrVolumeInUse {
+			log.Info("matching persistent volume still in use, retrying")
+			continue
 		} else if err != nil {
 			log.Error("error placing job in the cluster", "err", err)
 			continue
