@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flynn/flynn/pkg/plugin"
@@ -84,18 +85,24 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	if len(extra) == 0 {
 		return usage
 	}
+	sort.Strings(extra)
+	section := make([]string, 0, 2+len(extra))
+	section = append(section, "", "Plugins:")
+	section = append(section, extra...)
+	section = append(section, "")
+
 	lines := strings.Split(usage, "\n")
-	out := make([]string, 0, len(lines)+len(extra))
+	out := make([]string, 0, len(lines)+len(section))
 	inserted := false
 	for _, line := range lines {
 		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "See 'flynn help") {
-			out = append(out, extra...)
+			out = append(out, section...)
 			inserted = true
 		}
 		out = append(out, line)
 	}
 	if !inserted {
-		out = append(out, extra...)
+		out = append(out, section...)
 	}
 	return strings.Join(out, "\n")
 }

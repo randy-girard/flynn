@@ -58,7 +58,7 @@ flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands (for example `redis`) appear in that list. `flynn plugins` shows what the current cluster credential can see.
+Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands appear under **Plugins:**. `flynn plugins` shows what the current cluster credential can see.
 
 ### Apps and deploys
 

@@ -48,9 +48,9 @@ syncs `flynn-plugin-*` into `/opt/flynn-plugins/`, then runs `flynn-host plugin
 install` on node1.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
-list the plugin’s CLI command from the manifest stored on the plugin app (not
-from a compiled-in `flynn` handler). `flynn plugins` lists installed plugins.
-`flynn resource add <provider>` works for `kind: resource-provider`.
+list the plugin’s CLI command under a **Plugins:** section (from the manifest
+stored on the plugin app, not a compiled-in `flynn` handler). `flynn plugins`
+lists installed plugins. `flynn resource add <provider>` works for `kind: resource-provider`.
 
 ```text
 flynn plugins

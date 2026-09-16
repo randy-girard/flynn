@@ -29,11 +29,15 @@ func runPlugins(_ *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	n := writePluginTable(os.Stdout, apps)
-	if n == 0 {
-		fmt.Fprintln(os.Stderr, "no plugins installed")
-	}
+	printPluginList(os.Stdout, os.Stderr, apps)
 	return nil
+}
+
+func printPluginList(stdout, stderr io.Writer, apps []*ct.App) {
+	n := writePluginTable(stdout, apps)
+	if n == 0 {
+		fmt.Fprintln(stderr, "no plugins installed")
+	}
 }
 
 func writePluginTable(w io.Writer, apps []*ct.App) int {
