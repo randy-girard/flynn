@@ -1,21 +1,26 @@
 package main
 
 import (
+	"bytes"
 	"compress/gzip"
+	"crypto/sha512"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	cfg "github.com/flynn/flynn/cli/config"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/version"
+	"github.com/flynn/go-docopt"
 	"github.com/kardianos/osext"
 	"gopkg.in/inconshreveable/go-update.v0"
 )
@@ -23,19 +28,76 @@ import (
 const (
 	upcktimePath      = "cktime"
 	defaultGitHubRepo = "randy-girard/flynn"
+	updateTimeout     = 5 * time.Minute
 )
 
 var updateDir = filepath.Join(cfg.Dir(), "update")
 var updater = &Updater{}
 
-func runUpdate() error {
-	if version.Dev() {
-		return errors.New("Dev builds don't support auto-updates")
-	}
-	return updater.update()
+func init() {
+	const body = `
+Download the latest Flynn CLI from GitHub Releases and replace this binary.
+Alias: flynn upgrade.
+
+Options:
+	--check           Show whether an update is available without installing
+	--version=<tag>   Install this release tag instead of latest
+`
+	register("update", runUpdate, "usage: flynn update [--check] [--version=<tag>]\n"+body)
+	register("upgrade", runUpdate, "usage: flynn upgrade [--check] [--version=<tag>]\n"+body)
 }
 
-type Updater struct{}
+func runUpdate(args *docopt.Args) error {
+	return updater.run(updateOptions{
+		Check:   args.Bool["--check"],
+		Version: strings.TrimSpace(args.String["--version"]),
+	})
+}
+
+type updateOptions struct {
+	Check   bool
+	Version string
+}
+
+type Updater struct {
+	HTTP *http.Client
+	Repo string
+	API  string
+	DL   string
+	// Apply, if set, replaces the default self-replace step (tests inject a stub).
+	Apply func(io.Reader) error
+}
+
+func (u *Updater) httpClient() *http.Client {
+	if u != nil && u.HTTP != nil {
+		return u.HTTP
+	}
+	return &http.Client{Timeout: updateTimeout}
+}
+
+func (u *Updater) repo() string {
+	if u != nil && strings.TrimSpace(u.Repo) != "" {
+		return strings.TrimSpace(u.Repo)
+	}
+	if r := strings.TrimSpace(os.Getenv("FLYNN_GITHUB_REPO")); r != "" {
+		return r
+	}
+	return defaultGitHubRepo
+}
+
+func (u *Updater) apiBase() string {
+	if u != nil && strings.TrimSpace(u.API) != "" {
+		return strings.TrimRight(u.API, "/")
+	}
+	return "https://api.github.com"
+}
+
+func (u *Updater) dlBase() string {
+	if u != nil && strings.TrimSpace(u.DL) != "" {
+		return strings.TrimRight(u.DL, "/")
+	}
+	return "https://github.com"
+}
 
 func (u *Updater) backgroundRun() {
 	if u == nil {
@@ -46,17 +108,15 @@ func (u *Updater) backgroundRun() {
 	}
 	self, err := osext.Executable()
 	if err != nil {
-		// fail update, couldn't figure out path to self
 		return
 	}
-	// TODO(titanous): logger isn't on Windows. Replace with proper error reports.
 	l := exec.Command("logger", "-tflynn")
 	c := exec.Command(self, "update")
 	if w, err := l.StdinPipe(); err == nil && l.Start() == nil {
 		c.Stdout = w
 		c.Stderr = w
 	}
-	c.Start()
+	_ = c.Start()
 }
 
 func (u *Updater) wantUpdate() bool {
@@ -68,112 +128,206 @@ func (u *Updater) wantUpdate() bool {
 	return writeTime(path, time.Now().Add(wait))
 }
 
-func (u *Updater) update() error {
-	up := update.New()
-	if err := up.CanUpdate(); err != nil {
-		return err
+func (u *Updater) run(opts updateOptions) error {
+	tag := opts.Version
+	if tag == "" {
+		var err error
+		tag, err = u.latestTag()
+		if err != nil {
+			return err
+		}
 	}
-
-	if err := os.MkdirAll(updateDir, 0755); err != nil {
-		return err
+	current := version.Release()
+	if !cliNeedsUpdate(current, tag) {
+		fmt.Printf("already up to date (%s)\n", tag)
+		return nil
 	}
-
-	// Get latest version from GitHub
-	latestVersion, err := u.getLatestVersion()
-	if err != nil {
-		return fmt.Errorf("failed to check for updates: %w", err)
-	}
-
-	if latestVersion == version.Release() {
+	if opts.Check {
+		fmt.Printf("update available: %s -> %s\n", current, tag)
 		return nil
 	}
 
-	// Download and apply update
-	plat := fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
-	assetName := fmt.Sprintf("flynn-%s.gz", plat)
-	assetURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/%s",
-		defaultGitHubRepo, latestVersion, assetName)
-
-	resp, err := http.Get(assetURL)
-	if err != nil {
-		return fmt.Errorf("failed to download update: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to download update: status %d", resp.StatusCode)
+	apply := u.Apply
+	if apply == nil {
+		up := update.New()
+		if err := up.CanUpdate(); err != nil {
+			return fmt.Errorf("cannot replace this binary (%s); try sudo flynn update: %w", selfPath(), err)
+		}
+		apply = applyCLIUpdate
 	}
 
-	gr, err := gzip.NewReader(resp.Body)
+	asset := cliAssetName(runtime.GOOS, runtime.GOARCH)
+	gz, err := u.downloadAsset(tag, asset)
 	if err != nil {
 		return err
+	}
+	sums, err := u.downloadChecksums(tag)
+	if err != nil {
+		return err
+	}
+	want, ok := sums[asset]
+	if !ok {
+		return fmt.Errorf("checksums.sha512 has no entry for %s", asset)
+	}
+	if err := verifySHA512(gz, want); err != nil {
+		return err
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		return fmt.Errorf("decompress %s: %w", asset, err)
 	}
 	defer gr.Close()
 
-	err, errRecover := up.FromStream(gr)
-	if errRecover != nil {
-		return fmt.Errorf("update and recovery errors: %q %q", err, errRecover)
-	}
-	if err != nil {
+	if err := apply(gr); err != nil {
 		return err
 	}
-	log.Printf("Updated %s -> %s.", version.Release(), latestVersion)
+	fmt.Printf("Updated %s -> %s.\n", current, tag)
 	return nil
 }
 
-// getLatestVersion fetches the latest release version from GitHub
-func (u *Updater) getLatestVersion() (string, error) {
-	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", defaultGitHubRepo)
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return "", err
+func cliNeedsUpdate(current, latest string) bool {
+	current = strings.TrimSpace(current)
+	latest = strings.TrimSpace(latest)
+	if latest == "" {
+		return false
 	}
-	req.Header.Set("User-Agent", "flynn-cli")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
-	}
-
-	// Simple JSON parsing for tag_name
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	// Extract tag_name from JSON response
-	// Format: "tag_name": "v1.2.3"
-	var tagName string
-	for i := 0; i < len(body)-12; i++ {
-		if string(body[i:i+11]) == `"tag_name":` {
-			// Find the opening quote
-			j := i + 11
-			for j < len(body) && body[j] != '"' {
-				j++
-			}
-			j++ // skip opening quote
-			// Find closing quote
-			k := j
-			for k < len(body) && body[k] != '"' {
-				k++
-			}
-			tagName = string(body[j:k])
-			break
-		}
-	}
-
-	if tagName == "" {
-		return "", errors.New("failed to parse release version from GitHub")
-	}
-	return tagName, nil
+	return current != latest
 }
 
-// returns a random duration in [0,n).
+func cliAssetName(goos, goarch string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("flynn-%s-%s.exe.gz", goos, goarch)
+	}
+	return fmt.Sprintf("flynn-%s-%s.gz", goos, goarch)
+}
+
+type githubLatest struct {
+	TagName string `json:"tag_name"`
+}
+
+func (u *Updater) latestTag() (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", u.apiBase(), u.repo())
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	u.setGitHubHeaders(req)
+	res, err := u.httpClient().Do(req)
+	if err != nil {
+		return "", fmt.Errorf("check GitHub releases: %w", err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode != http.StatusOK {
+		hint := "check your network"
+		if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
+			hint = "published releases only; set GITHUB_TOKEN if you are rate-limited"
+		}
+		return "", fmt.Errorf("GitHub latest release: %s (%s)", res.Status, hint)
+	}
+	var rel githubLatest
+	if err := json.Unmarshal(body, &rel); err != nil || strings.TrimSpace(rel.TagName) == "" {
+		return "", errors.New("failed to parse release version from GitHub")
+	}
+	return strings.TrimSpace(rel.TagName), nil
+}
+
+func (u *Updater) downloadChecksums(tag string) (map[string]string, error) {
+	url := fmt.Sprintf("%s/%s/releases/download/%s/checksums.sha512", u.dlBase(), u.repo(), tag)
+	data, err := u.getBytes(url)
+	if err != nil {
+		return nil, fmt.Errorf("download checksums.sha512: %w", err)
+	}
+	sums := parseSHA512Sums(data)
+	if len(sums) == 0 {
+		return nil, errors.New("checksums.sha512 is empty")
+	}
+	return sums, nil
+}
+
+func (u *Updater) downloadAsset(tag, name string) ([]byte, error) {
+	url := fmt.Sprintf("%s/%s/releases/download/%s/%s", u.dlBase(), u.repo(), tag, name)
+	data, err := u.getBytes(url)
+	if err != nil {
+		return nil, fmt.Errorf("download %s: %w", name, err)
+	}
+	return data, nil
+}
+
+func (u *Updater) getBytes(rawURL string) ([]byte, error) {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	u.setGitHubHeaders(req)
+	res, err := u.httpClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%s", res.Status)
+	}
+	return io.ReadAll(io.LimitReader(res.Body, 1<<30))
+}
+
+func (u *Updater) setGitHubHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", "flynn-cli")
+	if tok := githubUpdateToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+func githubUpdateToken() string {
+	for _, k := range []string{"FLYNN_GITHUB_TOKEN", "FLYNN_PLUGIN_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+		if t := strings.TrimSpace(os.Getenv(k)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func parseSHA512Sums(data []byte) map[string]string {
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 {
+			continue
+		}
+		name := strings.TrimPrefix(parts[1], "*")
+		name = strings.TrimPrefix(name, "./")
+		out[name] = parts[0]
+	}
+	return out
+}
+
+func verifySHA512(data []byte, want string) error {
+	sum := sha512.Sum512(data)
+	got := hex.EncodeToString(sum[:])
+	if !strings.EqualFold(got, strings.TrimSpace(want)) {
+		return fmt.Errorf("checksum mismatch: got %s", got)
+	}
+	return nil
+}
+
+func applyCLIUpdate(r io.Reader) error {
+	up := update.New()
+	err, errRecover := up.FromStream(r)
+	if errRecover != nil {
+		return fmt.Errorf("update and recovery errors: %q %q", err, errRecover)
+	}
+	return err
+}
+
+func selfPath() string {
+	p, err := osext.Executable()
+	if err != nil {
+		return "this flynn binary"
+	}
+	return p
+}
+
 func randDuration(n time.Duration) time.Duration {
 	return time.Duration(random.Math.Int63n(int64(n)))
 }
@@ -194,5 +348,8 @@ func readTime(path string) time.Time {
 }
 
 func writeTime(path string, t time.Time) bool {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return false
+	}
 	return os.WriteFile(path, []byte(t.Format(time.RFC3339)), 0644) == nil
 }

@@ -125,6 +125,9 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 	if _, ok := names["plugins"]; !ok {
 		t.Fatal("plugins")
 	}
+	if _, ok := names["update"]; !ok {
+		t.Fatal("update")
+	}
 	if _, ok := names["redis"]; ok {
 		t.Fatal("redis must not be compiled into root usage")
 	}

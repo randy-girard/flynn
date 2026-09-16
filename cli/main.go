@@ -65,6 +65,7 @@ Commands:
 	volume      manage volumes
 	export      export app data
 	import      create app from exported data
+	update      update the Flynn CLI from GitHub Releases
 	version     show flynn version
 
 See 'flynn help <command>' for more information on a specific command.
@@ -118,14 +119,7 @@ func main() {
 	} else if help {
 		cmdArgs = []string{"--help"}
 	}
-	// Run the update command as early as possible to avoid the possibility of
-	// installations being stranded without updates due to errors in other code
-	if cmd == "update" {
-		if err := runUpdate(); err != nil {
-			shutdown.Fatal(err)
-		}
-		return
-	} else {
+	if cmd != "update" && cmd != "upgrade" {
 		defer updater.backgroundRun() // doesn't run if os.Exit is called
 	}
 

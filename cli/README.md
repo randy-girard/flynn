@@ -24,7 +24,7 @@ See [CLI documentation](../docs/content/cli.md) for cluster add, `flynn login`, 
 flynn [-a app] [-c cluster] <command> [options] [arguments]
 ```
 
-Run `flynn help` for commands. Host-level operations (`bootstrap`, ACME, updates) use `flynn-host` on cluster nodes.
+Run `flynn help` for commands. `flynn update` (alias `upgrade`) replaces this binary from GitHub Releases. Host-level operations (`bootstrap`, ACME, cluster updates) use `flynn-host` on cluster nodes.
 
 ## Credits
 
