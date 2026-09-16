@@ -2482,6 +2482,7 @@ EOF
       probe_delegated_plugin_cli_visible "${name}" || return 1
     fi
     probe_plugin_wait_url "${name}" || return 1
+    probe_plugin_webhooks "${name}" || return 1
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
 }
@@ -2554,6 +2555,46 @@ while (( SECONDS < deadline )); do
 done
 echo "plugin ${name} not ready at \${url} (curl rc=\${last})" >&2
 exit 1
+EOF
+}
+
+probe_plugin_webhooks() {
+  local name=$1 dir urls
+  dir="$(plugin_checkout "${name}")"
+  urls="$(python3 - "${dir}" "${CLUSTER_DOMAIN}" <<'PY'
+import json, os, sys
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+domain = sys.argv[2] if len(sys.argv) > 2 else ""
+m = json.load(open(path))
+for w in m.get("webhooks") or []:
+    url = (w.get("url") or "").strip()
+    if not url:
+        continue
+    # secret_env is applied by flynn-host plugin install (X-Flynn-Webhook-Secret).
+    if domain:
+        url = url.replace("${CLUSTER_DOMAIN}", domain)
+    print(url)
+PY
+)"
+  if [[ -z "${urls}" ]]; then
+    return 0
+  fi
+  info "checking plugin ${name} flynn-host webhooks"
+  node_root_script node1 <<EOF
+set -euo pipefail
+listed=\$(flynn-host webhooks)
+echo "\$listed"
+while IFS= read -r url; do
+  [[ -z "\$url" ]] && continue
+  if ! grep -F "\$url" <<<"\$listed" >/dev/null; then
+    echo "plugin ${name} webhook not registered: \$url" >&2
+    echo "\$listed" >&2
+    exit 1
+  fi
+  echo "plugin ${name} webhook registered (\$url)"
+done <<'URLS'
+${urls}
+URLS
 EOF
 }
 
