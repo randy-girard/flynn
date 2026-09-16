@@ -189,6 +189,8 @@ SMOKE_UNIT_PACKAGES=(
   ./cli/
   ./controller/types/
   ./controller/authz/
+  ./controller/scheduler/
+  ./controller/worker/deployment/
   ./pkg/httphelper/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
@@ -950,12 +952,17 @@ wait_for() {
   local desc=$1
   local timeout=$2
   shift 2
-  local deadline=$(( $(date +%s) + timeout ))
+  local start now elapsed
+  start=$(date +%s)
+  local deadline=$(( start + timeout ))
   while true; do
     if "$@" >/dev/null 2>&1; then
+      elapsed=$(( $(date +%s) - start ))
+      echo "ready: ${desc} (${elapsed}s)"
       return 0
     fi
-    if (( $(date +%s) >= deadline )); then
+    now=$(date +%s)
+    if (( now >= deadline )); then
       echo "timed out waiting for ${desc} after ${timeout}s" >&2
       return 1
     fi
