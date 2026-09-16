@@ -86,22 +86,50 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		return usage
 	}
 	sort.Strings(extra)
-	section := make([]string, 0, 2+len(extra))
-	section = append(section, "", "Plugins:")
+	section := []string{"", "Plugins:"}
 	section = append(section, extra...)
 	section = append(section, "")
+	return insertPluginHelpSection(usage, section)
+}
 
+// insertPluginHelpSection puts Plugins: after the Commands list with a blank
+// line between them, then restores the footer (See 'flynn help …').
+func insertPluginHelpSection(usage string, section []string) string {
 	lines := strings.Split(usage, "\n")
 	out := make([]string, 0, len(lines)+len(section))
+	inCommands := false
 	inserted := false
-	for _, line := range lines {
-		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "See 'flynn help") {
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Commands:" {
+			inCommands = true
+			out = append(out, line)
+			i++
+			continue
+		}
+		if inCommands && !inserted {
+			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+				out = append(out, line)
+				i++
+				continue
+			}
+			if trimmed == "" {
+				i++
+				continue
+			}
 			out = append(out, section...)
 			inserted = true
+			inCommands = false
+			continue
 		}
 		out = append(out, line)
+		i++
 	}
 	if !inserted {
+		for len(out) > 0 && out[len(out)-1] == "" {
+			out = out[:len(out)-1]
+		}
 		out = append(out, section...)
 	}
 	return strings.Join(out, "\n")

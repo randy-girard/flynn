@@ -163,6 +163,9 @@ func assertPluginHelpSection(t *testing.T, got, cmd string) {
 	if !(idxCommands < idxPlugins && idxPlugins < idxCmd && idxCmd < idxSee) {
 		t.Fatalf("%s must be under Plugins, after Commands and before the footer:\n%s", cmd, got)
 	}
+	if !strings.Contains(got, "\n\nPlugins:\n") {
+		t.Fatalf("blank line required between Commands and Plugins:\n%s", got)
+	}
 }
 
 func TestWritePluginTable(t *testing.T) {
@@ -229,6 +232,9 @@ func TestAppendCatalogCommandsBranches(t *testing.T) {
 	got := mergePluginUsage(usage, cat, nil)
 	if !strings.Contains(got, "Plugins:") || !strings.Contains(got, "redis") || !strings.Contains(got, "plugin command") {
 		t.Fatalf("default usage and Plugins section:\n%s", got)
+	}
+	if !strings.Contains(got, "list jobs\n\nPlugins:") {
+		t.Fatalf("blank line between Commands and Plugins:\n%s", got)
 	}
 	if strings.Count(got, "\tps") != 1 {
 		t.Fatalf("compiled command must not be duplicated:\n%s", got)
