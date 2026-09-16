@@ -27,10 +27,10 @@ on:
         type: boolean
         default: false
       concurrency:
-        description: 'Parallel flynn-builder app image builds (phase 2; default 4)'
+        description: 'Parallel flynn-builder app image builds (phase 2; default 2 on hosted runners)'
         required: false
         type: string
-        default: '4'
+        default: '2'
       toolchain_concurrency:
         description: 'Parallel flynn-builder toolchain image builds (phase 1; default 2)'
         required: false
@@ -135,6 +135,11 @@ jobs:
     needs: build-base
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 360
+    env:
+      # Cap compiler fan-out inside each overlay job. Hosted runners OOM when
+      # several images each compile with GOMAXPROCS.
+      FLYNN_GO_BUILD_P: "2"
+      FLYNN_IMAGE_BUILD_TIMEOUT: "30m"
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -239,16 +244,19 @@ jobs:
           sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" start
 
       - name: Build toolchain images
+        timeout-minutes: 45
         env:
           TOOLCHAIN_CONCURRENCY: ${{ inputs.toolchain_concurrency }}
         run: |
           set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
+          echo "::remove-matcher owner=go::"
           echo "Building toolchain images with concurrency=${TOOLCHAIN_CONCURRENCY}"
           (
             while true; do
-              sleep 300
+              sleep 60
               echo "[heartbeat] toolchain still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
+              sudo flynn-host ps -a 2>/dev/null | head -n 20 || true
             done
           ) &
           HB_PID=$!
@@ -256,16 +264,19 @@ jobs:
           sudo -E ./build.sh --version "${{ steps.version.outputs.VERSION }}" toolchain
 
       - name: Build app images
+        timeout-minutes: 90
         env:
           APPS_CONCURRENCY: ${{ inputs.concurrency }}
         run: |
           set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
+          echo "::remove-matcher owner=go::"
           echo "Building production app images with concurrency=${APPS_CONCURRENCY} (omitting test, test-apps, controller-examples)"
           (
             while true; do
-              sleep 300
+              sleep 60
               echo "[heartbeat] apps still building at $(date -u +%H:%M:%SZ); load=$(cut -d' ' -f1-3 /proc/loadavg); mem=$(awk '/MemAvailable/{printf "%dMB", $2/1024}' /proc/meminfo)"
+              sudo flynn-host ps -a 2>/dev/null | head -n 20 || true
             done
           ) &
           HB_PID=$!

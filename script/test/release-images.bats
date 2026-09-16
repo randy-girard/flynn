@@ -59,3 +59,27 @@ load "helper"
 
   grep -q 'FLYNN_BUILD_TEST_BINARIES=1 make' "${integ}"
 }
+
+@test "GitHub image builds cap concurrency and hide retried Go compiler annotations" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  build_sh="${ROOT}/build.sh"
+  builder="${ROOT}/builder/build.go"
+
+  grep -q "app image builds (phase 2; default 2" "${wf}"
+  grep -q '::remove-matcher owner=go::' "${wf}"
+  grep -q 'FLYNN_GO_BUILD_P' "${wf}"
+  grep -q 'FLYNN_IMAGE_BUILD_TIMEOUT' "${wf}"
+  grep -q 'timeout-minutes: 90' "${wf}"
+  grep -q 'sleep 60' "${wf}"
+  grep -q 'flynn-host ps' "${wf}"
+
+  grep -q 'goBuildParallelFlag' "${builder}"
+  grep -q 'loadImageDirArtifacts' "${builder}"
+  grep -q 'persisted successful image artifacts for retry' "${builder}"
+  grep -q 'image builds still running' "${builder}"
+  grep -q 'buildImageWithTimeout' "${builder}"
+
+  grep -q 'default_gomemlimit' "${build_sh}"
+  grep -q 'default_builder_max_retries' "${build_sh}"
+  grep -q 'Reducing concurrency' "${build_sh}"
+}

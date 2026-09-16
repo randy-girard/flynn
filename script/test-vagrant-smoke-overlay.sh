@@ -50,12 +50,14 @@ fi
 need "${smoke}" 'postgres_is_read_write' "smoke must verify postgres on a cluster node (overlay :5433 is not reachable from the host)"
 
 build="${ROOT}/build.sh"
-need "${build}" '12GiB' \
+need "${build}" 'default_gomemlimit' \
   "build.sh must set GOMEMLIMIT so concurrent mksquashfs does not OOM the builder"
-if ! grep -F 'GOMEMLIMIT="${GOMEMLIMIT:-12GiB}"' "${build}" >/dev/null; then
-  echo "build.sh must default GOMEMLIMIT to 12GiB" >&2
-  exit 1
-fi
+need "${build}" '12GiB' \
+  "build.sh must default GOMEMLIMIT to 12GiB locally"
+need "${build}" '4GiB' \
+  "build.sh must default GOMEMLIMIT to 4GiB on GitHub Actions"
+need "${build}" 'GITHUB_ACTIONS' \
+  "build.sh must detect GitHub Actions for lower memory/concurrency defaults"
 need "${build}" '^exit 0$' \
   "build.sh must exit 0 after success (a later phase_start not-found used to fail a completed build)"
 

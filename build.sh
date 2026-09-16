@@ -31,8 +31,11 @@
 #
 # Concurrency (optional):
 #   TOOLCHAIN_CONCURRENCY  default 2 (conservative; toolchain images are heavy)
-#   APPS_CONCURRENCY       default nproc locally, or FLYNN_BUILD_CONCURRENCY, or 4
-#   CI sets these explicitly via the release workflow inputs.
+#   APPS_CONCURRENCY       default nproc locally, 2 on GitHub Actions, or FLYNN_BUILD_CONCURRENCY
+#   GOMEMLIMIT             default 12GiB locally, 4GiB on GitHub Actions
+#   FLYNN_BUILDER_MAX_RETRIES  default 10 locally, 4 on GitHub Actions
+#   FLYNN_GO_BUILD_P       cap `go build -p` inside image jobs (default 2 on GHA)
+#   CI sets APPS_CONCURRENCY via the release workflow input (default 2).
 #
 # Examples:
 #   ./build.sh --version v20240127.0 base
@@ -334,6 +337,10 @@ default_apps_concurrency() {
     echo "${FLYNN_BUILD_CONCURRENCY}"
     return
   fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo 2
+    return
+  fi
   if command -v nproc >/dev/null 2>&1; then
     nproc
     return
@@ -341,22 +348,50 @@ default_apps_concurrency() {
   echo 4
 }
 
+default_gomemlimit() {
+  if [[ -n "${GOMEMLIMIT:-}" ]]; then
+    echo "${GOMEMLIMIT}"
+    return
+  fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo "4GiB"
+    return
+  fi
+  echo "12GiB"
+}
+
+default_builder_max_retries() {
+  if [[ -n "${FLYNN_BUILDER_MAX_RETRIES:-}" ]]; then
+    echo "${FLYNN_BUILDER_MAX_RETRIES}"
+    return
+  fi
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    echo 4
+    return
+  fi
+  echo 10
+}
+
 # Run flynn-builder with retries for a single --only group.
 run_flynn_builder_only() {
   local only="$1"
   local concurrency="$2"
-  local max_retries="${FLYNN_BUILDER_MAX_RETRIES:-10}"
+  local max_retries
+  max_retries="$(default_builder_max_retries)"
+  local gomemlimit
+  gomemlimit="$(default_gomemlimit)"
   local attempt=1
 
   cd "${FLYNN_ROOT}"
   while [[ ${attempt} -le ${max_retries} ]]; do
-    echo "===> Running flynn-builder --only=${only} (attempt ${attempt} of ${max_retries}) version=${VERSION} concurrency=${concurrency}"
+    echo "===> Running flynn-builder --only=${only} (attempt ${attempt} of ${max_retries}) version=${VERSION} concurrency=${concurrency} GOMEMLIMIT=${gomemlimit}"
     # flynn-builder has been observed at >20 GB RSS during --only=apps (9p
     # copies of layer diffs). Without a limit, concurrent mksquashfs then dies
     # with "Cannot allocate memory" even with -mem 1G per squash. Soft-cap the
-    # Go heap so GC runs before the builder VM is exhausted.
+    # Go heap so GC runs before the builder VM is exhausted. Hosted GitHub
+    # runners (~16 GiB) need a lower cap so overlay go builds still have RAM.
     if FLYNN_BUILD_CONCURRENCY="${concurrency}" \
-      GOMEMLIMIT="${GOMEMLIMIT:-12GiB}" \
+      GOMEMLIMIT="${gomemlimit}" \
       ./script/flynn-builder build --version="${VERSION}" --verbose --only="${only}"; then
       echo "===> flynn-builder --only=${only} succeeded!"
       return 0
@@ -367,6 +402,10 @@ run_flynn_builder_only() {
     if [[ ${attempt} -eq ${max_retries} ]]; then
       echo "===> Maximum retry attempts reached. Exiting."
       return 1
+    fi
+    if [[ "${concurrency}" =~ ^[0-9]+$ ]] && [[ "${concurrency}" -gt 1 ]]; then
+      concurrency=$(( (concurrency + 1) / 2 ))
+      echo "===> Reducing concurrency to ${concurrency} after failed attempt (memory/IO pressure)"
     fi
     echo "===> Retrying in 5 seconds..."
     sleep 5

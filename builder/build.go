@@ -539,6 +539,14 @@ func runBuild(args *docopt.Args) error {
 	} else if n := len(artifacts); n > 0 {
 		log.Info("loaded existing images.json", "count", n)
 	}
+	fromDir, err := loadImageDirArtifacts(imageDirPath)
+	if err != nil {
+		return err
+	}
+	if n := len(fromDir); n > 0 {
+		artifacts = mergeArtifacts(artifacts, fromDir)
+		log.Info("loaded per-image artifacts", "dir", imageDirPath, "count", n)
+	}
 
 	builder := &Builder{
 		baseLayer: manifest.BaseLayer,
@@ -554,8 +562,20 @@ func runBuild(args *docopt.Args) error {
 	}
 
 	log.Info("building images")
-	if err := builder.Build(images); err != nil {
-		return err
+	buildErr := builder.Build(images)
+	// Persist whatever succeeded so a retry can skip cached images. Previously
+	// a single ENOMEM failure discarded all in-memory artifacts and the next
+	// flynn-builder process rebuilt every image from scratch (looks like a hang).
+	if err := builder.WriteImages(); err != nil {
+		if buildErr == nil {
+			return err
+		}
+		log.Error("writing images.json after build failure", "err", err)
+	} else if buildErr != nil {
+		log.Info("persisted successful image artifacts for retry", "path", imagesJSONPath)
+	}
+	if buildErr != nil {
+		return buildErr
 	}
 
 	if builder.hasAllImageArtifacts(manifest.Images) {
@@ -567,8 +587,7 @@ func runBuild(args *docopt.Args) error {
 		log.Info("skipping manifests; not all image artifacts available yet")
 	}
 
-	log.Info("writing images")
-	return builder.WriteImages()
+	return nil
 }
 
 // toolchainImageIDs are the base/tool images that must build before app images.
@@ -711,6 +730,65 @@ func layerBuildWith(l *Layer) string {
 }
 
 const imagesJSONPath = "build/images.json"
+const imageDirPath = "build/image"
+
+// goBuildParallelFlag returns `go build -p N ` when compiler fan-out should be
+// capped. Layer GoBuildP wins; otherwise FLYNN_GO_BUILD_P; on GitHub Actions
+// default to 2 so concurrent image jobs do not each compile with GOMAXPROCS
+// and OOM the hosted runner (`readdirent: cannot allocate memory`).
+func goBuildParallelFlag(layerP int) string {
+	p := layerP
+	if p <= 0 {
+		if s := os.Getenv("FLYNN_GO_BUILD_P"); s != "" {
+			if n, err := strconv.Atoi(s); err == nil && n > 0 {
+				p = n
+			}
+		}
+	}
+	if p <= 0 && os.Getenv("GITHUB_ACTIONS") != "" {
+		p = 2
+	}
+	if p <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("-p %d ", p)
+}
+
+// imageBuildTimeout is 0 for no deadline. GitHub Actions defaults to 30m so a
+// swapping/stuck overlay job fails the image instead of sitting until a human
+// cancels the workflow.
+func imageBuildTimeout() time.Duration {
+	if s := os.Getenv("FLYNN_IMAGE_BUILD_TIMEOUT"); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil || d < 0 {
+			return 0
+		}
+		return d
+	}
+	if os.Getenv("GITHUB_ACTIONS") != "" {
+		return 30 * time.Minute
+	}
+	return 0
+}
+
+func (b *Builder) buildImageWithTimeout(image *Image) error {
+	timeout := imageBuildTimeout()
+	if timeout <= 0 {
+		return b.BuildImage(image)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- b.BuildImage(image)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("%s image build timed out after %s", image.ID, timeout)
+	}
+}
 
 func loadArtifacts(path string) (map[string]*ct.Artifact, error) {
 	f, err := os.Open(path)
@@ -726,6 +804,39 @@ func loadArtifacts(path string) (map[string]*ct.Artifact, error) {
 		return nil, fmt.Errorf("decode %s: %w", path, err)
 	}
 	return artifacts, nil
+}
+
+// loadImageDirArtifacts reads build/image/<id>.json written as each image
+// finishes. Used when the previous flynn-builder process died before it could
+// merge those artifacts into images.json.
+func loadImageDirArtifacts(dir string) (map[string]*ct.Artifact, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make(map[string]*ct.Artifact)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, e.Name())
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		var artifact ct.Artifact
+		decErr := json.NewDecoder(f).Decode(&artifact)
+		f.Close()
+		if decErr != nil {
+			return nil, fmt.Errorf("decode %s: %w", path, decErr)
+		}
+		id := strings.TrimSuffix(e.Name(), ".json")
+		out[id] = &artifact
+	}
+	return out, nil
 }
 
 func mergeArtifacts(dst, src map[string]*ct.Artifact) map[string]*ct.Artifact {
@@ -880,11 +991,38 @@ func (b *Builder) Build(images []*Image) error {
 		concurrency = 1
 	}
 	b.log.Info("build concurrency", "limit", concurrency)
+	if p := goBuildParallelFlag(0); p != "" {
+		b.log.Info("go build parallelism", "flag", strings.TrimSpace(p))
+	}
+	if d := imageBuildTimeout(); d > 0 {
+		b.log.Info("image build timeout", "timeout", d.String())
+	}
 	sem := make(chan struct{}, concurrency)
 
 	// build images until there are no pending builds left
 	done := make(chan *Build, len(builds))
 	failures := make(map[string]error)
+	inFlight := make(map[string]time.Time)
+	var inFlightMu sync.Mutex
+	progress := time.NewTicker(60 * time.Second)
+	defer progress.Stop()
+	waitDone := func() *Build {
+		for {
+			select {
+			case build := <-done:
+				return build
+			case <-progress.C:
+				inFlightMu.Lock()
+				ids := make([]string, 0, len(inFlight))
+				for id, started := range inFlight {
+					ids = append(ids, fmt.Sprintf("%s=%s", id, time.Since(started).Round(time.Second)))
+				}
+				inFlightMu.Unlock()
+				sort.Strings(ids)
+				b.log.Info("image builds still running", "in_flight", strings.Join(ids, ","), "remaining", len(builds))
+			}
+		}
+	}
 	for len(builds) > 0 {
 		for _, build := range builds {
 			// if the build has no more pending dependencies, build it
@@ -893,17 +1031,25 @@ func (b *Builder) Build(images []*Image) error {
 					// if the build is aborted due to a dependency
 					// failure, just send it to the done channel
 					if build.Abort {
-						b.log.Debug(fmt.Sprintf("%s build abort", build.Image.ID))
+						b.log.Info(fmt.Sprintf("%s build abort", build.Image.ID))
 						done <- build
 						return
 					}
 
-					b.log.Debug(fmt.Sprintf("%s build start", build.Image.ID))
 					go func(build *Build) {
 						sem <- struct{}{}
 						defer func() { <-sem }()
+						inFlightMu.Lock()
+						inFlight[build.Image.ID] = time.Now()
+						inFlightMu.Unlock()
+						defer func() {
+							inFlightMu.Lock()
+							delete(inFlight, build.Image.ID)
+							inFlightMu.Unlock()
+						}()
 						build.StartedAt = time.Now()
-						build.Err = b.BuildImage(build.Image)
+						b.log.Info(fmt.Sprintf("%s build start", build.Image.ID))
+						build.Err = b.buildImageWithTimeout(build.Image)
 						done <- build
 					}(build)
 				})
@@ -911,10 +1057,10 @@ func (b *Builder) Build(images []*Image) error {
 		}
 
 		// wait for a build to finish
-		build := <-done
+		build := waitDone()
 		b.bar.Increment()
 		if build.Err == nil {
-			b.log.Debug(fmt.Sprintf("%s build done", build.Image.ID), "duration", time.Since(build.StartedAt))
+			b.log.Info(fmt.Sprintf("%s build done", build.Image.ID), "duration", time.Since(build.StartedAt))
 		} else {
 			b.log.Error(fmt.Sprintf("%s build error", build.Image.ID), "duration", time.Since(build.StartedAt), "err", build.Err)
 		}
@@ -956,7 +1102,7 @@ func (b *Builder) BuildImage(image *Image) error {
 	existing, ok := b.artifacts[image.ID]
 	b.artifactsMtx.RUnlock()
 	if ok && b.artifactLayersCached(existing) {
-		b.log.Debug(fmt.Sprintf("%s build skip (cached)", image.ID))
+		b.log.Info(fmt.Sprintf("%s build skip (cached)", image.ID))
 		return nil
 	}
 
@@ -1063,10 +1209,7 @@ func (b *Builder) BuildImage(image *Image) error {
 				dirs = append(dirs, dir)
 			}
 			sort.Strings(dirs)
-			goParallel := ""
-			if l.GoBuildP > 0 {
-				goParallel = fmt.Sprintf("-p %d ", l.GoBuildP)
-			}
+			goParallel := goBuildParallelFlag(l.GoBuildP)
 			for _, dir := range dirs {
 				i, err := goInputs.Load(dir)
 				if err != nil {

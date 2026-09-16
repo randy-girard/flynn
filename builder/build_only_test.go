@@ -272,6 +272,83 @@ func TestWriteImagesMergesExistingFile(t *testing.T) {
 	}
 }
 
+func TestLoadImageDirArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	missing, err := loadImageDirArtifacts(filepath.Join(dir, "nope"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missing != nil {
+		t.Fatalf("missing dir should return nil, got %v", missing)
+	}
+
+	imageDir := filepath.Join(dir, "image")
+	if err := os.MkdirAll(imageDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	blobstore := &ct.Artifact{URI: "file:///blobstore", Type: ct.ArtifactTypeFlynn}
+	raw, err := json.Marshal(blobstore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imageDir, "blobstore.json"), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(imageDir, "notes.txt"), []byte("skip"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := loadImageDirArtifacts(imageDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("loaded %d artifacts, want 1", len(loaded))
+	}
+	if loaded["blobstore"].URI != "file:///blobstore" {
+		t.Fatalf("blobstore URI = %q", loaded["blobstore"].URI)
+	}
+
+	existing := map[string]*ct.Artifact{
+		"go": {URI: "file:///go", Type: ct.ArtifactTypeFlynn},
+	}
+	merged := mergeArtifacts(existing, loaded)
+	if len(merged) != 2 {
+		t.Fatalf("merged count = %d, want 2", len(merged))
+	}
+}
+
+func TestWriteImagesAfterPartialBuild(t *testing.T) {
+	dir := t.TempDir()
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	if err := os.MkdirAll("build", 0755); err != nil {
+		t.Fatal(err)
+	}
+	b := &Builder{
+		artifacts: map[string]*ct.Artifact{
+			"controller": {URI: "file:///controller", Type: ct.ArtifactTypeFlynn},
+		},
+	}
+	if err := b.WriteImages(); err != nil {
+		t.Fatal(err)
+	}
+	final, err := loadArtifacts(imagesJSONPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := final["controller"]; !ok {
+		t.Fatal("partial success must still persist images.json for retry")
+	}
+}
+
 func containsString(ss []string, want string) bool {
 	for _, s := range ss {
 		if s == want {
