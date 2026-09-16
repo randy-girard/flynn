@@ -46,9 +46,9 @@ You can also work on a native Ubuntu 24.04 machine with the same packages.
 macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
-Optional appliances live in sibling repos next to this checkout (`../flynn-plugin-redis`,
-…). Install them on a cluster host with `flynn-host plugin install` after
-bootstrap. See [Plugins](plugins.md).
+Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
+`../flynn-plugin-dashboard`, …). Install them on a cluster host with
+`flynn-host plugin install` after bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run

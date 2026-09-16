@@ -24,6 +24,7 @@ Development layout (relative to the Flynn repo):
 | `mongodb` | `../flynn-plugin-mongodb` | `mongodb` |
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
+| `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
@@ -35,7 +36,15 @@ From the Flynn checkout, on a cluster host:
 ```text
 sudo flynn-host plugin install ../flynn-plugin-redis
 sudo flynn-host plugin install redis
+sudo flynn-host plugin install ../flynn-plugin-dashboard
 ```
+
+Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
+(or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
+stdin is not a TTY). **`resources`** attaches existing providers (for example
+`postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
+is expanded). Optional **`hooks.install`** still runs on the host for anything
+the manifest cannot express.
 
 If `dist/image.json` (and layers) are missing, install runs that repo’s
 `script/plugin-build` first. Already-built `dist/` is reused unless `--rebuild`.

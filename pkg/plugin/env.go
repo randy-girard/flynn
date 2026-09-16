@@ -18,7 +18,7 @@ type appReleaseGetter interface {
 func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[string]string {
 	env := map[string]string{}
 	for k, v := range m.Env {
-		env[k] = v
+		env[k] = ExpandClusterVars(v, cluster)
 	}
 	for _, key := range m.InjectEnv {
 		if v, ok := cluster[key]; ok {
@@ -30,29 +30,66 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 			env[k] = artifactID
 			continue
 		}
-		env[k] = v
+		env[k] = ExpandClusterVars(v, cluster)
 	}
 	for _, key := range m.GenerateEnv {
 		if strings.TrimSpace(key) == "" {
 			continue
 		}
 		if env[key] == "" {
-			env[key] = random.Hex(16)
+			if v := cluster[key]; v != "" {
+				env[key] = v
+			} else {
+				env[key] = random.Hex(16)
+			}
+		}
+	}
+	if m != nil {
+		for _, p := range m.Setup {
+			if v := cluster[p.Env]; v != "" {
+				env[p.Env] = v
+			}
+		}
+	}
+	for _, k := range []string{"DATABASE_URL", "PGHOST", "PGUSER", "PGPASSWORD", "PGDATABASE"} {
+		if env[k] == "" && cluster[k] != "" {
+			env[k] = cluster[k]
 		}
 	}
 	return env
+}
+
+// PreservePreviousEnv copies env keys from a previous release that the new
+// release did not set (for example DATABASE_URL from a provisioned resource).
+func PreservePreviousEnv(env, previous map[string]string) {
+	if env == nil || previous == nil {
+		return
+	}
+	for k, v := range previous {
+		if v != "" && env[k] == "" {
+			env[k] = v
+		}
+	}
 }
 
 // PreserveGeneratedEnv copies previously generated secrets onto env so a
 // plugin upgrade does not rotate MYSQL_PWD / MONGO_PWD out from under a
 // running cluster.
 func PreserveGeneratedEnv(m *Manifest, env, previous map[string]string) {
-	if m == nil || previous == nil {
+	if m == nil || env == nil || previous == nil {
 		return
 	}
 	for _, key := range m.GenerateEnv {
 		if v := previous[key]; v != "" {
 			env[key] = v
+		}
+	}
+	for _, p := range m.Setup {
+		if !p.Generate {
+			continue
+		}
+		if v := previous[p.Env]; v != "" {
+			env[p.Env] = v
 		}
 	}
 }
@@ -81,7 +118,7 @@ func FormationScale(m *Manifest, cluster map[string]string) map[string]int {
 // (controller/postgres). It does not assume any plugin is installed.
 func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 	out := map[string]string{}
-	for _, app := range []string{"controller", "postgres"} {
+	for _, app := range []string{"controller", "postgres", "gitreceive"} {
 		release, err := client.GetAppRelease(app)
 		if err != nil {
 			continue
@@ -94,6 +131,18 @@ func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 		}
 		if v := release.Env["SINGLETON"]; v != "" {
 			out["SINGLETON"] = v
+		}
+		for _, k := range []string{
+			"CLUSTER_DOMAIN", "DEFAULT_ROUTE_DOMAIN",
+			"ACCESS_TOKEN_KEY", "ACCESS_TOKEN_SIGNING_KEY",
+			"GIT_URL", "IMAGE_URL",
+		} {
+			if v := release.Env[k]; v != "" {
+				out[k] = v
+			}
+		}
+		if v := release.Env["ACCESS_TOKEN_SIGNING_KEY"]; v != "" {
+			out["ACCESS_TOKEN_PRIVATE_KEY"] = v
 		}
 		for _, k := range []string{"CLUSTER_DOMAIN", "DEFAULT_ROUTE_DOMAIN"} {
 			if v := release.Env[k]; v != "" {

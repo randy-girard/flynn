@@ -8,10 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	router "github.com/flynn/flynn/router/types"
 )
 
 const (
@@ -30,7 +32,10 @@ type Installer struct {
 	// timeout client that does not use discoverd.
 	GitHubHTTP *http.Client
 	Stdout     io.Writer
+	Stdin      io.Reader
 	Stderr     io.Writer
+	// Interactive, if set, overrides TTY detection for setup prompts.
+	Interactive func() bool
 	// Build, if set, is invoked as (pluginRoot) when dist/ is missing.
 	// Tests replace this; the default runs script/plugin-build.
 	Build func(pluginRoot string) error
@@ -116,10 +121,6 @@ func (in *Installer) Install(opts InstallOptions) error {
 		return fmt.Errorf("cluster credentials: %w", err)
 	}
 
-	if err := in.runHook(root, m, m.installHook(), cluster); err != nil {
-		return err
-	}
-
 	app, err := in.Client.GetApp(m.App.Name)
 	switch {
 	case err == nil:
@@ -131,11 +132,11 @@ func (in *Installer) Install(opts InstallOptions) error {
 		if err := in.Client.UpdateAppMeta(app); err != nil {
 			return fmt.Errorf("update plugin meta on %s: %w", m.App.Name, err)
 		}
-		if err := in.deployRelease(app, m, artifact, cluster); err != nil {
-			return err
+		if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
+			PreservePreviousEnv(cluster, prev.Env)
 		}
 	case err == controller.ErrNotFound:
-		app, err = in.createAndDeployApp(m, artifact, cluster, resolved)
+		app, err = in.createApp(m, resolved)
 		if err != nil {
 			return err
 		}
@@ -143,10 +144,30 @@ func (in *Installer) Install(opts InstallOptions) error {
 		return fmt.Errorf("get app %s: %w", m.App.Name, err)
 	}
 
+	if err := in.applySetup(m, cluster); err != nil {
+		return err
+	}
+
+	if err := in.provisionResources(app, m, cluster); err != nil {
+		return err
+	}
+
+	if err := in.runHook(root, m, m.installHook(), cluster); err != nil {
+		return err
+	}
+
+	if err := in.deployRelease(app, m, artifact, cluster); err != nil {
+		return err
+	}
+
 	if m.Kind == KindResourceProvider {
 		if err := ensureProvider(in.Client, m.Provider.Name, m.Provider.URL); err != nil {
 			return err
 		}
+	}
+
+	if err := in.ensureRoutes(app, m, cluster); err != nil {
+		return err
 	}
 
 	if ping := m.PingURL(); ping != "" {
@@ -257,7 +278,7 @@ func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.
 	return art, nil
 }
 
-func (in *Installer) createAndDeployApp(m *Manifest, image *ct.Artifact, cluster map[string]string, resolved *Resolved) (*ct.App, error) {
+func (in *Installer) createApp(m *Manifest, resolved *Resolved) (*ct.App, error) {
 	source, ref := "", ""
 	if resolved != nil {
 		source = resolved.Input
@@ -272,9 +293,6 @@ func (in *Installer) createAndDeployApp(m *Manifest, image *ct.Artifact, cluster
 	if err := in.Client.CreateApp(app); err != nil {
 		return nil, fmt.Errorf("create app %s: %w", m.App.Name, err)
 	}
-	if err := in.deployRelease(app, m, image, cluster); err != nil {
-		return nil, err
-	}
 	return app, nil
 }
 
@@ -282,6 +300,7 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 	env := ReleaseEnv(m, image.ID, cluster)
 	if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
 		PreserveGeneratedEnv(m, env, prev.Env)
+		PreservePreviousEnv(env, prev.Env)
 	}
 	release := &ct.Release{
 		ArtifactIDs: []string{image.ID},
@@ -326,11 +345,109 @@ func (in *Installer) runHook(root string, m *Manifest, rel string, cluster map[s
 		"CLUSTER_DOMAIN="+cluster["CLUSTER_DOMAIN"],
 		"FLYNN_PLUGIN_NAME="+m.Name,
 		"FLYNN_PLUGIN_KIND="+m.Kind,
+		"FLYNN_PLUGIN_APP="+m.App.Name,
 		"FLYNN_PLUGIN_ROOT="+root,
 	)
+	for k, v := range cluster {
+		if k == "" || v == "" {
+			continue
+		}
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
 	in.logf("running hook %s", rel)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("hooks.install: %w", err)
+	}
+	return nil
+}
+
+func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[string]string) error {
+	if m == nil || len(m.Resources) == 0 || in.Client == nil || app == nil {
+		return nil
+	}
+	existing, err := in.Client.AppResourceList(app.ID)
+	if err != nil && err != controller.ErrNotFound {
+		return fmt.Errorf("list resources for %s: %w", app.Name, err)
+	}
+	have := map[string]bool{}
+	for _, res := range existing {
+		if res.ProviderID != "" {
+			have[res.ProviderID] = true
+		}
+		for k, v := range res.Env {
+			if v != "" && cluster[k] == "" {
+				cluster[k] = v
+			}
+		}
+	}
+	if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
+		for k, v := range prev.Env {
+			if v != "" && cluster[k] == "" {
+				cluster[k] = v
+			}
+		}
+	}
+	for _, name := range m.Resources {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if have[name] || cluster["DATABASE_URL"] != "" && strings.EqualFold(name, "postgres") {
+			in.logf("resource %s already attached to %s", name, app.Name)
+			continue
+		}
+		in.logf("provisioning %s resource for %s", name, app.Name)
+		res, err := in.Client.ProvisionResource(&ct.ResourceReq{
+			ProviderID: name,
+			Apps:       []string{app.ID},
+		})
+		if err != nil {
+			return fmt.Errorf("provision %s: %w", name, err)
+		}
+		have[name] = true
+		for k, v := range res.Env {
+			if v != "" {
+				cluster[k] = v
+			}
+		}
+	}
+	return nil
+}
+
+func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]string) error {
+	if m == nil || len(m.Routes) == 0 || in.Client == nil || app == nil {
+		return nil
+	}
+	existing, err := in.Client.AppRouteList(app.ID)
+	if err != nil && err != controller.ErrNotFound {
+		return fmt.Errorf("list routes for %s: %w", app.Name, err)
+	}
+	have := map[string]bool{}
+	for _, r := range existing {
+		have[r.Type+"/"+r.Domain+"/"+r.Service] = true
+	}
+	for _, spec := range m.Routes {
+		typ := spec.Type
+		if typ == "" {
+			typ = "http"
+		}
+		domain := ExpandClusterVars(spec.Domain, cluster)
+		key := typ + "/" + domain + "/" + spec.Service
+		if have[key] {
+			in.logf("route %s %s already exists", typ, domain)
+			continue
+		}
+		in.logf("adding %s route %s -> %s", typ, domain, spec.Service)
+		route := &router.Route{
+			Type:          typ,
+			Domain:        domain,
+			Service:       spec.Service,
+			Leader:        spec.Leader,
+			DrainBackends: true,
+		}
+		if err := in.Client.CreateRoute(app.ID, route); err != nil {
+			return fmt.Errorf("create route %s: %w", domain, err)
+		}
 	}
 	return nil
 }

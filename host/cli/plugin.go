@@ -79,6 +79,7 @@ func runPluginInstall(args *docopt.Args) error {
 		HTTP:   discoverdHTTPClient(),
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
 	}
 	return in.Install(plugin.InstallOptions{
 		Source:    args.String["<source>"],

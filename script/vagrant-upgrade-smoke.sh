@@ -181,7 +181,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -2471,6 +2471,7 @@ if [[ ! -f "${vm_path}/flynn-plugin.json" ]]; then
   echo "plugin not synced into VM: ${vm_path}" >&2
   exit 1
 fi
+export FLYNN_PLUGIN_NONINTERACTIVE=1
 flynn-host plugin install --no-build "${vm_path}"
 EOF
     then
@@ -2480,8 +2481,38 @@ EOF
     if plugin_has_delegated_cli "${name}"; then
       probe_delegated_plugin_cli_visible "${name}" || return 1
     fi
+    probe_plugin_wait_url "${name}" || return 1
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
+}
+
+probe_plugin_wait_url() {
+  local name=$1 dir wait_url
+  dir="$(plugin_checkout "${name}")"
+  wait_url="$(python3 - "${dir}" <<'PY'
+import json, os, sys
+from urllib.parse import urlparse
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+m = json.load(open(path))
+wait = (m.get("wait") or "").strip()
+if not wait:
+    prov = (m.get("provider") or {}).get("url") or ""
+    if prov:
+        u = urlparse(prov)
+        if u.scheme and u.netloc:
+            wait = f"{u.scheme}://{u.netloc}/ping"
+if wait:
+    print(wait)
+PY
+)"
+  if [[ -z "${wait_url}" ]]; then
+    return 0
+  fi
+  info "checking plugin ${name} wait URL ${wait_url}"
+  node_root_script node1 <<EOF
+set -euo pipefail
+curl -fsS --max-time 15 "${wait_url}" >/dev/null
+EOF
 }
 
 # Write the backup to the synced folder (host can inspect it) and copy to /tmp

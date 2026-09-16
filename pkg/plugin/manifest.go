@@ -36,24 +36,34 @@ const (
 
 // Manifest is flynn-plugin.json at the root of a plugin repo.
 type Manifest struct {
-	Name           string            `json:"name"`
-	Kind           string            `json:"kind"`
-	Provider       *Provider         `json:"provider,omitempty"`
-	App            AppSpec           `json:"app"`
-	InjectEnv      []string          `json:"inject_env,omitempty"`
-	ImageEnv       map[string]string `json:"image_env,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	GenerateEnv    []string          `json:"generate_env,omitempty"`
-	CLI            *CLI              `json:"cli,omitempty"`
-	Hooks          *Hooks            `json:"hooks,omitempty"`
-	Wait           string            `json:"wait,omitempty"`
-	Aliases        []string          `json:"aliases,omitempty"`
-	GitHubRepo     string            `json:"github_repo,omitempty"`
-	ClusterBackup  *BackupSpec       `json:"cluster_backup,omitempty"`
-	ClusterRestore *RestoreSpec      `json:"cluster_restore,omitempty"`
-	Status         *StatusSpec       `json:"status,omitempty"`
-	Build          json.RawMessage   `json:"build,omitempty"`
-	Artifacts      *Artifacts        `json:"artifacts,omitempty"`
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Provider    *Provider         `json:"provider,omitempty"`
+	App         AppSpec           `json:"app"`
+	InjectEnv   []string          `json:"inject_env,omitempty"`
+	ImageEnv    map[string]string `json:"image_env,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	GenerateEnv []string          `json:"generate_env,omitempty"`
+	CLI         *CLI              `json:"cli,omitempty"`
+	Hooks       *Hooks            `json:"hooks,omitempty"`
+	Wait        string            `json:"wait,omitempty"`
+	// Setup is operator questions asked during flynn-host plugin install
+	// when stdin is a TTY. Non-interactive installs use Default, Generate,
+	// existing env, or FLYNN_PLUGIN_SETUP_<ENV>.
+	Setup []SetupPrompt `json:"setup,omitempty"`
+	// Resources are provider names (e.g. "postgres") attached on first
+	// install. Their env (DATABASE_URL, …) is merged into the plugin release.
+	Resources []string `json:"resources,omitempty"`
+	// Routes are HTTP/TCP routes created after deploy. Domain may use
+	// ${CLUSTER_DOMAIN}.
+	Routes         []RouteSpec     `json:"routes,omitempty"`
+	Aliases        []string        `json:"aliases,omitempty"`
+	GitHubRepo     string          `json:"github_repo,omitempty"`
+	ClusterBackup  *BackupSpec     `json:"cluster_backup,omitempty"`
+	ClusterRestore *RestoreSpec    `json:"cluster_restore,omitempty"`
+	Status         *StatusSpec     `json:"status,omitempty"`
+	Build          json.RawMessage `json:"build,omitempty"`
+	Artifacts      *Artifacts      `json:"artifacts,omitempty"`
 }
 
 type Provider struct {
@@ -167,6 +177,24 @@ type Hooks struct {
 	Uninstall string `json:"uninstall,omitempty"`
 }
 
+// SetupPrompt is one install-time question whose answer becomes release env.
+type SetupPrompt struct {
+	Env      string `json:"env"`
+	Prompt   string `json:"prompt"`
+	Default  string `json:"default,omitempty"`
+	Secret   bool   `json:"secret,omitempty"`
+	Optional bool   `json:"optional,omitempty"`
+	Generate bool   `json:"generate,omitempty"`
+}
+
+// RouteSpec is a cluster route created from the plugin manifest.
+type RouteSpec struct {
+	Type    string `json:"type"`
+	Domain  string `json:"domain,omitempty"`
+	Service string `json:"service"`
+	Leader  bool   `json:"leader,omitempty"`
+}
+
 type Artifacts struct {
 	Image string `json:"image,omitempty"`
 }
@@ -206,6 +234,30 @@ func (m *Manifest) Validate() error {
 	if m.Kind == KindResourceProvider {
 		if m.Provider == nil || m.Provider.Name == "" || m.Provider.URL == "" {
 			return fmt.Errorf("%s: kind %q requires provider.name and provider.url", ManifestName, KindResourceProvider)
+		}
+	}
+	for i, p := range m.Setup {
+		if strings.TrimSpace(p.Env) == "" {
+			return fmt.Errorf("%s: setup[%d].env is required", ManifestName, i)
+		}
+		if strings.TrimSpace(p.Prompt) == "" {
+			return fmt.Errorf("%s: setup[%d].prompt is required", ManifestName, i)
+		}
+	}
+	for i, r := range m.Routes {
+		if strings.TrimSpace(r.Service) == "" {
+			return fmt.Errorf("%s: routes[%d].service is required", ManifestName, i)
+		}
+		typ := strings.TrimSpace(r.Type)
+		if typ == "" {
+			typ = "http"
+			m.Routes[i].Type = typ
+		}
+		if typ != "http" && typ != "tcp" {
+			return fmt.Errorf("%s: routes[%d].type must be http or tcp", ManifestName, i)
+		}
+		if typ == "http" && strings.TrimSpace(r.Domain) == "" {
+			return fmt.Errorf("%s: routes[%d].domain is required for http routes", ManifestName, i)
 		}
 	}
 	return nil

@@ -92,8 +92,8 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse' \
-  "default plugin install list must include redis, mysql, mongodb, kafka, and clickhouse"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard' \
+  "default plugin install list must include redis, mysql, mongodb, kafka, clickhouse, and dashboard"
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
 need 'ensure_plugin_vm_mounts' \
@@ -108,6 +108,8 @@ if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
 fi
 need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
+need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
+  "plugin install in smoke must not block on TTY setup prompts"
 need 'probe_delegated_plugin_cli_hidden' \
   "before plugin install, flynn help must hide redis and flynn redis must fail"
 need 'probe_delegated_plugin_cli_visible' \

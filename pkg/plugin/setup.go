@@ -1,0 +1,121 @@
+package plugin
+
+import (
+	"bufio"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+
+	"github.com/flynn/flynn/pkg/random"
+)
+
+const nonInteractiveEnv = "FLYNN_PLUGIN_NONINTERACTIVE"
+
+// ExpandClusterVars replaces ${KEY} with cluster[KEY] (no nested expansion).
+func ExpandClusterVars(s string, cluster map[string]string) string {
+	if s == "" || cluster == nil {
+		return s
+	}
+	out := s
+	for k, v := range cluster {
+		out = strings.ReplaceAll(out, "${"+k+"}", v)
+	}
+	return out
+}
+
+func setupEnvOverride(envKey string) string {
+	if v := strings.TrimSpace(os.Getenv("FLYNN_PLUGIN_SETUP_" + envKey)); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv(envKey))
+}
+
+func (in *Installer) interactive() bool {
+	if in.Interactive != nil {
+		return in.Interactive()
+	}
+	if strings.EqualFold(os.Getenv(nonInteractiveEnv), "1") ||
+		strings.EqualFold(os.Getenv(nonInteractiveEnv), "true") {
+		return false
+	}
+	f, ok := in.reader().(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return st.Mode()&os.ModeCharDevice != 0
+}
+
+func (in *Installer) reader() io.Reader {
+	if in.Stdin != nil {
+		return in.Stdin
+	}
+	return os.Stdin
+}
+
+func (in *Installer) writer() io.Writer {
+	if in.Stdout != nil {
+		return in.Stdout
+	}
+	return os.Stdout
+}
+
+// applySetup fills cluster with answers from setup prompts. Interactive
+// installs ask on a TTY; otherwise Default/Generate/env overrides are used.
+func (in *Installer) applySetup(m *Manifest, cluster map[string]string) error {
+	if m == nil || len(m.Setup) == 0 {
+		return nil
+	}
+	ask := in.interactive()
+	inr := bufio.NewReader(in.reader())
+	for _, p := range m.Setup {
+		key := strings.TrimSpace(p.Env)
+		if cluster[key] != "" {
+			continue
+		}
+		def := ExpandClusterVars(p.Default, cluster)
+		val := setupEnvOverride(key)
+		if val == "" && ask {
+			label := p.Prompt
+			if label == "" {
+				label = key
+			}
+			hint := def
+			if p.Generate && hint == "" {
+				hint = "generated"
+			}
+			if hint != "" {
+				fmt.Fprintf(in.writer(), "%s [%s]: ", label, hint)
+			} else {
+				fmt.Fprintf(in.writer(), "%s: ", label)
+			}
+			line, err := inr.ReadString('\n')
+			if err != nil && err != io.EOF {
+				return fmt.Errorf("setup %s: %w", key, err)
+			}
+			val = strings.TrimSpace(line)
+		}
+		if val == "" {
+			val = def
+		}
+		if val == "" && p.Generate {
+			val = random.Hex(16)
+			if !p.Secret {
+				in.logf("generated %s=%s", key, val)
+			} else {
+				in.logf("generated %s (hidden)", key)
+			}
+		}
+		if val == "" && !p.Optional {
+			return fmt.Errorf("setup %s: required (set FLYNN_PLUGIN_SETUP_%s, pass a TTY, or give setup.default)", key, key)
+		}
+		if val != "" {
+			cluster[key] = val
+		}
+	}
+	return nil
+}
