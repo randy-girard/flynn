@@ -566,3 +566,59 @@ func TestSanitizeURLAndRefOrLatest(t *testing.T) {
 		t.Fatal("asset lookup")
 	}
 }
+
+func TestDownloadAssetPaths(t *testing.T) {
+	in := &Installer{}
+	if in.githubHTTP() == nil || in.githubHTTP().Timeout != githubTimeout {
+		t.Fatal("default GitHub HTTP client")
+	}
+	if err := in.downloadAsset(nil, "", nil, "x"); err == nil {
+		t.Fatal("nil asset")
+	}
+	if err := in.downloadAsset(nil, "", &githubAsset{Name: "x"}, "x"); err == nil {
+		t.Fatal("no download URL")
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/auth":
+			if r.Header.Get("Authorization") != "Bearer tok" {
+				t.Errorf("Authorization=%q", r.Header.Get("Authorization"))
+			}
+			if r.Header.Get("Accept") != "application/octet-stream" {
+				t.Errorf("Accept=%q", r.Header.Get("Accept"))
+			}
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	in.GitHubHTTP = srv.Client()
+
+	dest := filepath.Join(t.TempDir(), "api.bin")
+	if err := in.downloadAsset(nil, "tok", &githubAsset{Name: "x", URL: srv.URL + "/auth"}, dest); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "ok" {
+		t.Fatalf("api asset %q", got)
+	}
+
+	dest = filepath.Join(t.TempDir(), "browser.bin")
+	if err := in.downloadAsset(nil, "", &githubAsset{Name: "x", BrowserDownloadURL: srv.URL + "/public"}, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	dest = filepath.Join(t.TempDir(), "url-only.bin")
+	if err := in.downloadAsset(nil, "", &githubAsset{Name: "x", URL: srv.URL + "/public"}, dest); err != nil {
+		t.Fatal(err)
+	}
+
+	fail := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "nope", http.StatusTeapot)
+	}))
+	defer fail.Close()
+	in.GitHubHTTP = fail.Client()
+	if err := in.downloadURLAuth("tok", fail.URL, filepath.Join(t.TempDir(), "x"), "application/octet-stream"); err == nil {
+		t.Fatal("non-200 download")
+	}
+}

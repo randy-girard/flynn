@@ -205,6 +205,67 @@ func TestExecutePluginCLINoMatchingAction(t *testing.T) {
 	}
 }
 
+func TestPluginJobConfigErrors(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "demo"
+	spec := redisPluginCLI()
+	args := &docopt.Args{Bool: map[string]bool{"redis-cli": true}, All: map[string]interface{}{}}
+
+	if _, err := pluginJobConfig(fakeRedisReleaseClient{}, spec, spec.Action("redis-cli"), args); err == nil || !strings.Contains(err.Error(), "error getting app release") {
+		t.Fatalf("missing app release: %v", err)
+	}
+
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"demo":      {Env: map[string]string{"FLYNN_REDIS": "redis-abc"}},
+		"redis-abc": {ID: ""},
+	}}
+	if _, err := pluginJobConfig(client, spec, spec.Action("redis-cli"), args); err == nil || !strings.Contains(err.Error(), "error getting redis release") {
+		t.Fatalf("empty resource release: %v", err)
+	}
+
+	client = fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"demo":      {Env: map[string]string{"FLYNN_REDIS": "redis-abc"}},
+		"redis-abc": {ID: "rel"},
+	}}
+	bad := spec.Action("redis-cli")
+	bad.Env = map[string]string{"X": "${nope}"}
+	if _, err := pluginJobConfig(client, spec, bad, args); err == nil {
+		t.Fatal("bad interpolate")
+	}
+}
+
+func TestPluginInterpDefaultMissingAndReleaseError(t *testing.T) {
+	spec := &plugin.CLI{Command: "cache", ResourceEnv: "FLYNN_CACHE"}
+	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}})
+	if err == nil || !strings.Contains(err.Error(), "flynn resource add cache") {
+		t.Fatalf("default missing: %v", err)
+	}
+
+	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "cache", App: "cache"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "error getting cache release") {
+		t.Fatalf("release lookup: %v", err)
+	}
+}
+
+func TestPluginJobIOStdoutDefaultAndMissingStdin(t *testing.T) {
+	cfg := &runConfig{}
+	cleanup, err := pluginJobIO(cfg, &plugin.CLIAction{StdoutFile: "--file"}, &docopt.Args{String: map[string]string{"--file": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Stdout == nil {
+		t.Fatal("stdout")
+	}
+	cleanup()
+
+	if _, err := pluginJobIO(&runConfig{}, &plugin.CLIAction{StdinFile: "--file"}, &docopt.Args{
+		String: map[string]string{"--file": filepath.Join(t.TempDir(), "missing")},
+	}); err == nil {
+		t.Fatal("missing stdin file")
+	}
+}
+
 func TestPluginInterpPasswordNotRescanned(t *testing.T) {
 	redisApp := "redis-abc"
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{

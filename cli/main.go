@@ -25,13 +25,11 @@ var (
 	flagApp     string
 )
 
-func main() {
-	defer shutdown.Exit()
-
-	log.SetFlags(0)
-
-	usage := `
-usage: flynn [-a <app>] [-c <cluster>] <command> [<args>...]
+// cliUsage is the root flynn help text. Command is optional so `flynn`,
+// `flynn -h`, and `flynn --help` reach pluginAwareUsage instead of docopt
+// printing this string and exiting (which omitted installed plugin CLIs).
+var cliUsage = `
+usage: flynn [-h] [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
 Options:
 	-a <app>
@@ -58,6 +56,7 @@ Commands:
 	route       manage routes
 	pg          manage postgres database
 	provider    manage resource providers
+	plugins     list plugins installed on this cluster
 	docker      deploy Docker images to a Flynn cluster
 	remote      manage git remotes
 	resource    provision a new resource
@@ -66,71 +65,62 @@ Commands:
 	volume      manage volumes
 	export      export app data
 	import      create app from exported data
+	update      update the Flynn CLI from GitHub Releases
 	version     show flynn version
 
 See 'flynn help <command>' for more information on a specific command.
 `[1:]
-	args, _ := docopt.Parse(usage, nil, true, version.String(), true)
 
-	cmd := args.String["<command>"]
-	cmdArgs := args.All["<args>"].([]string)
+func main() {
+	defer shutdown.Exit()
 
-	if cmd == "help" {
-		if len(cmdArgs) == 0 { // `flynn help`
-			fmt.Println(pluginAwareUsage(usage))
-			return
-		} else if cmdArgs[0] == "--json" {
-			cmds := make(map[string]string)
-			for name, cmd := range commands {
-				cmds[name] = cmd.usage
-			}
-			if cat, err := clusterPluginCatalog(); err == nil {
-				for _, p := range cat.Commands {
-					if p.Doc != "" {
-						cmds[p.Command] = p.Doc
-					} else if _, ok := cmds[p.Command]; !ok && p.Usage != "" {
-						cmds[p.Command] = p.Usage
-					}
+	log.SetFlags(0)
+
+	// help=false: docopt must not print cliUsage on -h/--help. Installed
+	// plugin commands (redis, …) are merged from the cluster catalog.
+	args, _ := docopt.Parse(cliUsage, nil, false, version.String(), true)
+	if err := applyGlobalFlags(args); err != nil {
+		shutdown.Fatal(err)
+	}
+
+	cmd, cmdArgs := positionalArgs(args)
+	help := helpFlag(args)
+
+	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
+		fmt.Println(pluginAwareUsage(cliUsage))
+		return
+	}
+
+	if cmd == "help" && cmdArgs[0] == "--json" {
+		cmds := make(map[string]string)
+		for name, c := range commands {
+			cmds[name] = c.usage
+		}
+		if cat, err := clusterPluginCatalog(); err == nil {
+			for _, p := range cat.Commands {
+				if p.Doc != "" {
+					cmds[p.Command] = p.Doc
+				} else if _, ok := cmds[p.Command]; !ok && p.Usage != "" {
+					cmds[p.Command] = p.Usage
 				}
 			}
-			out, err := json.MarshalIndent(cmds, "", "\t")
-			if err != nil {
-				shutdown.Fatal(err)
-			}
-			fmt.Println(string(out))
-			return
-		} else { // `flynn help <command>`
-			cmd = cmdArgs[0]
-			cmdArgs = make([]string, 1)
-			cmdArgs[0] = "--help"
 		}
-	}
-	// Run the update command as early as possible to avoid the possibility of
-	// installations being stranded without updates due to errors in other code
-	if cmd == "update" {
-		if err := runUpdate(); err != nil {
+		out, err := json.MarshalIndent(cmds, "", "\t")
+		if err != nil {
 			shutdown.Fatal(err)
 		}
+		fmt.Println(string(out))
 		return
-	} else {
+	}
+
+	if cmd == "help" {
+		cmd = cmdArgs[0]
+		cmdArgs = []string{"--help"}
+	} else if help {
+		cmdArgs = []string{"--help"}
+	}
+	if cmd != "update" && cmd != "upgrade" {
 		defer updater.backgroundRun() // doesn't run if os.Exit is called
-	}
-
-	// Set the cluster config name
-	if args.String["-c"] != "" {
-		flagCluster = args.String["-c"]
-	}
-
-	flagApp = args.String["-a"]
-	if flagApp != "" {
-		if err := readConfig(); err != nil {
-			shutdown.Fatal(err)
-		}
-
-		if ra, err := appFromGitRemote(flagApp); err == nil {
-			clusterConf = ra.Cluster
-			flagApp = ra.Name
-		}
 	}
 
 	if err := runCommand(cmd, cmdArgs); err != nil {
@@ -141,6 +131,40 @@ See 'flynn help <command>' for more information on a specific command.
 		shutdown.ExitWithCode(1)
 		return
 	}
+}
+
+func applyGlobalFlags(args *docopt.Args) error {
+	if args == nil {
+		return nil
+	}
+	if args.String["-c"] != "" {
+		flagCluster = args.String["-c"]
+	}
+	flagApp = args.String["-a"]
+	if flagApp == "" {
+		return nil
+	}
+	if err := readConfig(); err != nil {
+		return err
+	}
+	if ra, err := appFromGitRemote(flagApp); err == nil {
+		clusterConf = ra.Cluster
+		flagApp = ra.Name
+	}
+	return nil
+}
+
+func positionalArgs(args *docopt.Args) (string, []string) {
+	if args == nil {
+		return "", nil
+	}
+	cmd := args.String["<command>"]
+	cmdArgs, _ := args.All["<args>"].([]string)
+	return cmd, cmdArgs
+}
+
+func helpFlag(args *docopt.Args) bool {
+	return args != nil && (args.Bool["--help"] || args.Bool["-h"])
 }
 
 // needsFlynnLoginHint reports whether err likely means dashboard OAuth tokens are

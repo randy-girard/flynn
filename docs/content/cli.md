@@ -32,6 +32,20 @@ Environment variables: `FLYNN_VERSION`, `FLYNN_GITHUB_REPO` (default `randy-gira
 
 `flynn install` (the old cluster installer) is deprecated. Install hosts with the [manual installation](installation/manual.md) script.
 
+## Updating the CLI
+
+`flynn update` (alias `flynn upgrade`) downloads the latest published CLI from [GitHub Releases](https://github.com/randy-girard/flynn/releases), verifies `checksums.sha512`, and replaces the running binary.
+
+```text
+flynn update
+flynn update --check
+flynn update --version v2026.09.15.0
+```
+
+If the CLI is installed in a directory you cannot write (often `/usr/local/bin`), run `sudo flynn update`. Private or rate-limited GitHub access can use `FLYNN_GITHUB_TOKEN` or `GITHUB_TOKEN`. Override the repo with `FLYNN_GITHUB_REPO`.
+
+This updates the user CLI only. Cluster hosts still use `flynn-host update`.
+
 ## Adding a cluster
 
 After bootstrap, the last log line includes a `flynn cluster add` command. You can also generate it on a host:
@@ -53,12 +67,12 @@ List and switch clusters with `flynn cluster`. Use `-c <cluster>` or `FLYNN_CLUS
 ## Usage
 
 ```text
-flynn [-a <app>] [-c <cluster>] <command> [<args>...]
+flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 ```
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn help` or `flynn help <command>` for flags.
+Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands appear under **Plugins:**. `flynn plugins` shows what the current cluster credential can see.
 
 ### Apps and deploys
 
@@ -92,7 +106,9 @@ Run `flynn help` or `flynn help <command>` for flags.
 | Command | Purpose |
 | --- | --- |
 | `cluster` | Registered clusters |
+| `plugins` | Plugins installed on this cluster |
 | `login` | Dashboard OAuth |
+| `update` / `upgrade` | Replace this CLI from GitHub Releases |
 | `version` | CLI version |
 
 The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).

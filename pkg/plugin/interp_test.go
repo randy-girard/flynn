@@ -92,3 +92,28 @@ func TestInterpolateRejectsInvalidIdentAndInterpolateAll(t *testing.T) {
 		t.Fatal("must propagate unknown placeholder")
 	}
 }
+
+func TestInterpolateResourceEnvNilAppAndUnclosed(t *testing.T) {
+	in := Interp{Resource: "redis-abc", ResourceEnv: map[string]string{"PASS": "s3cret"}}
+	got, err := Interpolate("${resource} ${resource.PASS}", in)
+	if err != nil || got != "redis-abc s3cret" {
+		t.Fatalf("got %q err=%v", got, err)
+	}
+	got, err = Interpolate("${app.MISSING}", Interp{})
+	if err != nil || got != "" {
+		t.Fatalf("empty app env: %q %v", got, err)
+	}
+	got, err = Interpolate("${resource.PASS}", Interp{})
+	if err != nil || got != "" {
+		t.Fatalf("nil resource env: %q %v", got, err)
+	}
+	if _, err := Interpolate("${unterminated", in); err == nil {
+		t.Fatal("unclosed placeholder")
+	}
+	if _, err := Interpolate("${resource.BAD-KEY}", in); err == nil {
+		t.Fatal("invalid resource ident")
+	}
+	if _, err := Interpolate("${app.HOST|leader.${unterminated}", in); err == nil {
+		t.Fatal("unclosed fallback")
+	}
+}

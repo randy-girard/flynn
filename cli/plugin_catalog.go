@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flynn/flynn/pkg/plugin"
@@ -62,13 +63,7 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	if catErr != nil || cat == nil {
 		return usage
 	}
-	present := map[string]struct{}{}
-	for _, line := range strings.Split(usage, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			present[fields[0]] = struct{}{}
-		}
-	}
+	present := usageCommandNames(usage)
 	var extra []string
 	for _, cmd := range cat.Commands {
 		if cmd.Command == "" {
@@ -90,18 +85,80 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	if len(extra) == 0 {
 		return usage
 	}
+	sort.Strings(extra)
+	section := []string{"", "Plugins:"}
+	section = append(section, extra...)
+	section = append(section, "")
+	return insertPluginHelpSection(usage, section)
+}
+
+// insertPluginHelpSection puts Plugins: after the Commands list with a blank
+// line between them, then restores the footer (See 'flynn help …').
+func insertPluginHelpSection(usage string, section []string) string {
 	lines := strings.Split(usage, "\n")
-	out := make([]string, 0, len(lines)+len(extra))
+	out := make([]string, 0, len(lines)+len(section))
+	inCommands := false
 	inserted := false
-	for _, line := range lines {
-		if !inserted && strings.HasPrefix(strings.TrimSpace(line), "See 'flynn help") {
-			out = append(out, extra...)
+	for i := 0; i < len(lines); {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Commands:" {
+			inCommands = true
+			out = append(out, line)
+			i++
+			continue
+		}
+		if inCommands && !inserted {
+			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
+				out = append(out, line)
+				i++
+				continue
+			}
+			if trimmed == "" {
+				i++
+				continue
+			}
+			out = append(out, section...)
 			inserted = true
+			inCommands = false
+			continue
 		}
 		out = append(out, line)
+		i++
 	}
 	if !inserted {
-		out = append(out, extra...)
+		for len(out) > 0 && out[len(out)-1] == "" {
+			out = out[:len(out)-1]
+		}
+		out = append(out, section...)
 	}
 	return strings.Join(out, "\n")
+}
+
+// usageCommandNames is the Commands: list only. Scanning every line treated
+// "See" from the footer as a command and could hide a plugin of that name.
+func usageCommandNames(usage string) map[string]struct{} {
+	present := map[string]struct{}{}
+	inCommands := false
+	for _, line := range strings.Split(usage, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Commands:" {
+			inCommands = true
+			continue
+		}
+		if !inCommands {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			present[fields[0]] = struct{}{}
+		}
+	}
+	return present
 }
