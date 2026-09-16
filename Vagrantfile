@@ -21,9 +21,11 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
   config.vm.synced_folder "./ubuntu_ports_cache", "/var/cache/flynn/debootstrap", create: true, group: "vagrant", owner: "vagrant"
 
-  # Sibling plugin checkouts (FlynnWorkspace/flynn-plugin-*) for flynn-host plugin install.
-  Dir.glob(File.expand_path("../flynn-plugin-*", __dir__)).each do |dir|
+  # Sibling plugin checkouts that contain flynn-plugin.json (flynn-plugin-* and
+  # names like flynn-discovery) for flynn-host plugin install.
+  Dir.glob(File.expand_path("../*", __dir__)).sort.each do |dir|
     next unless File.directory?(dir)
+    next unless File.file?(File.join(dir, "flynn-plugin.json"))
     name = File.basename(dir)
     config.vm.synced_folder dir, "/opt/flynn-plugins/#{name}", create: true, group: "root", owner: "root"
   end

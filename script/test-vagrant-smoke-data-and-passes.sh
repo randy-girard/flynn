@@ -100,6 +100,11 @@ need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard' \
   "default plugin install list must include redis, mysql, mongodb, kafka, clickhouse, and dashboard"
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
+if ! grep -Fq 'for dir in "${root}"/*' "${smoke}"; then
+  echo "plugin_checkout must scan every sibling flynn-plugin.json (discovery is flynn-discovery)" >&2
+  echo '  missing for dir in "${root}"/*' >&2
+  exit 1
+fi
 need 'ensure_plugin_vm_mounts' \
   "plugin install must reload VMs when sibling plugin folders are not synced"
 need 'already in CLI catalog; skipping hidden-CLI probe' \

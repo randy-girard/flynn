@@ -24,16 +24,21 @@
 #      engines must come back empty. Then destroy the cluster nodes (builder
 #      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
 #      2 is invalid.
-#      Named topologies: add (stable 3-node, then join node4 and upgrade)
-#      and remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
-#      keep working). Vagrant nodes are generated as node1..max(N) —
-#      e.g. 1,3,5 or 1,3,7; add reserves node4.
+#      Named topologies: add (stable 3-node, then join node4 and upgrade),
+#      remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
+#      keep working), and discovery (singleton, install the discovery
+#      plugin, switch node1 to that token, join node2+node3 via the local
+#      discovery HTTP API, then deploy). Vagrant nodes are generated as
+#      node1..max(N) — e.g. 1,3,5 or 1,3,7; add reserves node4;
+#      discovery reserves node2 and node3.
 #   5. Print a step table, unit-test results, and a per-engine persistence
 #      report (phases are prefixed N-node/).
 #
-# Local-only: layer-0 uses --peer-ips (no discovery service). Init waits for
-# flynn-host HTTP (:1113); discoverd (:1111) starts during bootstrap. Layer-1
-# uses CLUSTER_DOMAIN entries in /etc/hosts on each VM — no real DNS records.
+# Local-only: layer-0 uses --peer-ips except the discovery topology, which
+# grows with flynn-host init --discovery against the in-cluster plugin.
+# Init waits for flynn-host HTTP (:1113); discoverd (:1111) starts during
+# bootstrap. Layer-1 uses CLUSTER_DOMAIN entries in /etc/hosts on each VM
+# — no real DNS records.
 # Shared VM logs live in ./flynn-logs/{builder,node*} and are cleared at start
 # unless KEEP_LOGS=1.
 #
@@ -90,9 +95,13 @@
 #                        remove (aliases: remove-node, 3-1) = boot 3-node
 #                        HA, drain node3, re-verify HTTP/DBs/deploys on
 #                        the remaining hosts, then upgrade.
+#                        discovery (aliases: discovery-join, 1+2) = boot
+#                        1-node, install the discovery plugin, point
+#                        node1 at the local token, join node2 and node3
+#                        with flynn-host init --discovery, then deploy.
 #                        [default: 1,3]
 #                        CLUSTER_SIZE=N is a shortcut for one topology.
-#                        Example: SMOKE_TOPOLOGIES=1,3,5,add,remove
+#                        Example: SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery
 #   SMOKE_MAX_NODES      Optional ceiling on N (host-only /24 already caps
 #                        node IPs at 192.168.56.254). Unset = no extra cap.
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
@@ -108,7 +117,8 @@
 #                        resolves to the mariadb checkout via flynn-plugin.json.
 #                        Restore does not install again; plugins.json + postgres
 #                        already list and restore them.
-#   PLUGIN_REPO_ROOT     Parent of flynn-plugin-* checkouts (default: ..)
+#   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
+#                        (default: ..; includes flynn-plugin-* and flynn-discovery)
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #
 
@@ -182,6 +192,7 @@ SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
 PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard}"
+PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -1017,24 +1028,59 @@ resolve_built_tarball() {
 
 configure_node_dns() {
   local node=$1
-  local marker="# flynn-upgrade-smoke ${CLUSTER_DOMAIN}"
+  local begin="# flynn-upgrade-smoke-begin"
+  local end="# flynn-upgrade-smoke-end"
+  local old_marker="# flynn-upgrade-smoke ${CLUSTER_DOMAIN}"
   local hosts_body=""
   local i ip
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
   done
   node_root_script "${node}" <<EOF
 set -euo pipefail
-if ! grep -qF "${marker}" /etc/hosts; then
-  cat >> /etc/hosts <<'HOSTS'
-${marker}
-${hosts_body}HOSTS
-fi
+export SMOKE_HOSTS_BEGIN="${begin}"
+export SMOKE_HOSTS_END="${end}"
+export SMOKE_HOSTS_OLD="${old_marker}"
+export SMOKE_HOSTS_BODY="${hosts_body}"
+python3 - <<'PY'
+from pathlib import Path
+import os
+p = Path("/etc/hosts")
+text = p.read_text()
+begin = os.environ["SMOKE_HOSTS_BEGIN"]
+end = os.environ["SMOKE_HOSTS_END"]
+old = os.environ["SMOKE_HOSTS_OLD"]
+body = os.environ["SMOKE_HOSTS_BODY"]
+lines = text.splitlines(True)
+out = []
+i = 0
+while i < len(lines):
+    s = lines[i].strip()
+    if s == begin:
+        i += 1
+        while i < len(lines) and lines[i].strip() != end:
+            i += 1
+        if i < len(lines):
+            i += 1
+        continue
+    if s.startswith(old):
+        i += 1
+        while i < len(lines) and lines[i].lstrip().startswith("192.168.56."):
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+block = begin + "\n" + body
+if not block.endswith("\n"):
+    block += "\n"
+block += end + "\n"
+p.write_text("".join(out) + block)
+PY
 EOF
 }
 
@@ -2214,12 +2260,13 @@ plugin_checkout() {
   local name=$1
   local root="${PLUGIN_REPO_ROOT}"
   local direct="${root}/flynn-plugin-${name}"
-  if [[ -d "${direct}" ]]; then
+  if [[ -d "${direct}" && -f "${direct}/flynn-plugin.json" ]]; then
     echo "${direct}"
     return 0
   fi
   local dir json
-  for dir in "${root}"/flynn-plugin-*; do
+  # Every sibling with flynn-plugin.json (flynn-plugin-* and flynn-discovery).
+  for dir in "${root}"/*; do
     [[ -d "${dir}" ]] || continue
     json="${dir}/flynn-plugin.json"
     [[ -f "${json}" ]] || continue
@@ -2232,7 +2279,8 @@ plugin_checkout() {
 }
 
 # Long-lived builders (KEEP_BUILDER=1) may predate sibling plugin folders.
-# Vagrantfile globs flynn-plugin-* at `vagrant up`; reload to attach new mounts.
+# Vagrantfile mounts every sibling with flynn-plugin.json at `vagrant up`;
+# reload to attach new mounts.
 ensure_plugin_vm_mounts() {
   local name dir vm_path vm n
   local vms="builder"
@@ -2268,7 +2316,7 @@ EOF
     return 0
   fi
   for vm in ${reload_list}; do
-    info "vagrant reload ${vm} so Vagrantfile flynn-plugin-* synced_folder takes effect"
+    info "vagrant reload ${vm} so Vagrantfile plugin synced_folder takes effect"
     vagrant reload "${vm}" --no-provision
     rm -f "$(node_ssh_config_path "${vm}")"
     cache_node_ssh_config "${vm}" || return 1
@@ -3796,6 +3844,190 @@ step_verify_membership() {
   step_membership_deploy "${label}"
 }
 
+# Vagrant has no ACME; joiners use http://discovery.${CLUSTER_DOMAIN} via /etc/hosts.
+smoke_http_discovery_token() {
+  local token=$1
+  token="${token#"${token%%[![:space:]]*}"}"
+  token="${token%"${token##*[![:space:]]}"}"
+  token="${token/#https:/http:}"
+  printf '%s' "${token}"
+}
+
+discovery_route_up() {
+  curl -fsS --connect-timeout 2 --max-time 5 \
+    -H "Host: discovery.${CLUSTER_DOMAIN}" \
+    "http://${NODE1_IP}/.well-known/status" >/dev/null
+}
+
+# Token from hooks.ready or GET /.well-known/cluster on the discovery job.
+read_discovery_join_token() {
+  node_root_script node1 <<'EOF'
+set -euo pipefail
+if [[ -s /etc/flynn/discovery-token ]]; then
+  tr -d '[:space:]' </etc/flynn/discovery-token
+  exit 0
+fi
+python3 - <<'PY'
+import json, urllib.request
+with urllib.request.urlopen("http://127.0.0.1:1111/services/discovery/instances", timeout=5) as resp:
+    inst = json.load(resp)
+if not inst:
+    raise SystemExit("no discovery instances")
+addr = (inst[0] or {}).get("addr") or ""
+if ":" not in addr:
+    raise SystemExit("bad discovery addr %r" % (addr,))
+url = "http://%s/.well-known/cluster" % addr
+with urllib.request.urlopen(url, timeout=10) as resp:
+    data = json.load(resp)
+token = (data.get("data") or {}).get("url") or ""
+if not token:
+    raise SystemExit("empty well-known cluster url")
+print(token)
+PY
+EOF
+}
+
+# Write --discovery TOKEN into /etc/flynn/host.json without restarting
+# flynn-host (a singleton restart would bounce every Layer 1 job).
+host_json_set_discovery() {
+  local node=$1 token=$2
+  node_root_script "${node}" <<EOF
+set -euo pipefail
+export DISCOVERY_TOKEN="${token}"
+python3 - <<'PY'
+import json, os
+path = "/etc/flynn/host.json"
+token = os.environ["DISCOVERY_TOKEN"]
+with open(path) as f:
+    cfg = json.load(f)
+args = list(cfg.get("args") or [])
+out = []
+i = 0
+while i < len(args):
+    if args[i] == "--discovery":
+        i += 2
+        continue
+    out.append(args[i])
+    i += 1
+out.extend(["--discovery", token])
+cfg["args"] = out
+with open(path, "w") as f:
+    json.dump(cfg, f, indent="\t")
+    f.write("\n")
+print("host.json discovery=%s" % token)
+PY
+EOF
+}
+
+# Singleton → 3-node using the in-cluster discovery plugin (not peer-ips).
+step_discovery_join_nodes() {
+  local extra extra_n extra_ip token http_token
+  if [[ "${#NODES[@]}" -ne 1 ]]; then
+    echo "discovery join requires a singleton cluster (got ${#NODES[@]} hosts)" >&2
+    return 1
+  fi
+  configure_node_dns node1
+  if ! wait_for "discovery HTTP route on ${NODE1_IP}" 180 discovery_route_up; then
+    echo "discovery.${CLUSTER_DOMAIN} is not serving on ${NODE1_IP}:80" >&2
+    return 1
+  fi
+  token="$(read_discovery_join_token)" || return 1
+  http_token="$(smoke_http_discovery_token "${token}")"
+  if [[ -z "${http_token}" || "${http_token}" != *"/clusters/"* ]]; then
+    echo "invalid discovery token: ${http_token}" >&2
+    return 1
+  fi
+  info "local discovery token ${http_token}"
+  host_json_set_discovery node1 "${http_token}" || return 1
+  node_root_script node1 <<EOF
+set -euo pipefail
+mkdir -p /etc/flynn
+printf '%s\n' "${http_token}" > /etc/flynn/discovery-token
+curl -fsS --max-time 15 "${http_token}/instances" >/dev/null
+echo "node1 can GET ${http_token}/instances"
+EOF
+
+  local node_mem="${VAGRANT_MEMORY:-6144}"
+  local node_cpus="${VAGRANT_CPUS:-2}"
+  for extra_n in 2 3; do
+    extra="node${extra_n}"
+    extra_ip="$(cluster_node_ip "${extra_n}")"
+    remember_teardown_node "${extra}"
+    info "adding ${extra} (${extra_ip}) via local discovery"
+    VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${extra}"
+    cache_node_ssh_config "${extra}"
+    local saved_nodes=("${NODES[@]}")
+    local saved_ips=("${NODE_IPS[@]}")
+    NODES=("${extra}")
+    NODE_IPS=("${extra_ip}")
+    verify_nic_promisc
+    NODES=("${saved_nodes[@]}")
+    NODE_IPS=("${saved_ips[@]}")
+    resolve_built_tarball
+    install_flynn_on_node "${extra}"
+    configure_node_dns "${extra}"
+    info "joining ${extra} with flynn-host init --discovery ${http_token}"
+    node_root_script "${extra}" <<EOF
+set -euo pipefail
+curl -fsS --max-time 15 "${http_token}/instances" >/dev/null
+flynn-host init --discovery "${http_token}" --external-ip "${extra_ip}"
+systemctl enable flynn-host.service
+systemctl restart flynn-host.service
+EOF
+    if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
+      dump_layer0_diagnostics
+      return 1
+    fi
+    append_live_node "${extra}"
+    if ! wait_for "flynn-host list includes ${extra_ip}" 180 node_addr_listed "${extra_ip}"; then
+      echo "new host ${extra} (${extra_ip}) did not appear in flynn-host list" >&2
+      node_ssh node1 'sudo flynn-host list' || true
+      return 1
+    fi
+  done
+  local n
+  for n in "${NODES[@]}"; do
+    configure_node_dns "${n}"
+  done
+  if ! wait_for "overlay after discovery join" 180 overlay_peers_reachable; then
+    dump_overlay_diagnostics
+    return 1
+  fi
+  sync_cluster_monitor_hosts
+  echo "joined node2 and node3 via ${http_token}; cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+}
+
+step_verify_discovery_join() {
+  local ip listed
+  if [[ "${#NODES[@]}" -ne 3 ]]; then
+    echo "discovery join must leave 3 live hosts (got ${#NODES[@]})" >&2
+    return 1
+  fi
+  listed="$(node_ssh node1 'sudo flynn-host list')" || return 1
+  for ip in "${NODE_IPS[@]}"; do
+    if ! printf '%s\n' "${listed}" | grep -q "${ip}"; then
+      echo "flynn-host list missing ${ip}:"$'\n'"${listed}" >&2
+      return 1
+    fi
+  done
+  node_root_script node1 <<EOF
+set -euo pipefail
+token="\$(tr -d '[:space:]' </etc/flynn/discovery-token)"
+token="\${token/#https:/http:}"
+python3 - "\${token}" <<'PY'
+import json, sys, urllib.request
+url = sys.argv[1].rstrip("/") + "/instances"
+with urllib.request.urlopen(url, timeout=15) as resp:
+    data = json.load(resp)
+inst = data.get("data") or []
+if len(inst) < 3:
+    raise SystemExit("discovery instances=%d want >=3" % len(inst))
+print("discovery instances=%d" % len(inst))
+PY
+EOF
+  echo "discovery join verified: 3 hosts in flynn-host list and discovery API"
+}
+
 # Join node4 to a running 3-node cluster (documented flynn-host init --peer-ips).
 step_add_cluster_node() {
   local extra="node4"
@@ -4087,11 +4319,13 @@ valid_topology_size() {
   return 1
 }
 
-# add = 3-node then join node4; remove = 3-node then drain node3.
+# add = 3-node then join node4; remove = 3-node then drain node3;
+# discovery = 1-node then join node2+node3 via the in-cluster plugin.
 normalize_topology_spec() {
   case "$1" in
     add|add-node|3+1) echo add ;;
     remove|remove-node|3-1) echo remove ;;
+    discovery|discovery-join|1+2) echo discovery ;;
     *) echo "$1" ;;
   esac
 }
@@ -4112,17 +4346,25 @@ valid_topology_spec() {
       fi
       return 0
       ;;
+    discovery)
+      if [[ -n "${SMOKE_MAX_NODES:-}" && 3 -gt "${SMOKE_MAX_NODES}" ]]; then
+        return 1
+      fi
+      return 0
+      ;;
     *) valid_topology_size "${spec}" ;;
   esac
 }
 
-# How many Vagrant nodeN machines this spec needs (add reserves node4).
+# How many Vagrant nodeN machines this spec needs (add reserves node4;
+# discovery reserves node2 and node3).
 topology_inventory_size() {
   local spec
   spec="$(normalize_topology_spec "$1")"
   case "${spec}" in
     add) echo 4 ;;
     remove) echo 3 ;;
+    discovery) echo 3 ;;
     *) echo "${spec}" ;;
   esac
 }
@@ -4183,7 +4425,7 @@ parse_smoke_topologies() {
   for item in "${parts[@]}"; do
     [[ -z "${item}" ]] && continue
     if ! valid_topology_spec "${item}"; then
-      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2), or add/remove; got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
+      echo "SMOKE_TOPOLOGIES sizes must be 1 or >=3 (not 2), or add/remove/discovery; got '${item}' in '${SMOKE_TOPOLOGIES}'" >&2
       return 1
     fi
     item="$(normalize_topology_spec "${item}")"
@@ -4242,6 +4484,7 @@ apply_topology_spec() {
   local spec
   spec="$(normalize_topology_spec "$1")"
   TOPOLOGY_ACTION=""
+  PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS_REQUESTED}"
   case "${spec}" in
     add)
       apply_topology 3
@@ -4256,6 +4499,17 @@ apply_topology_spec() {
       TOPOLOGY_ACTION=remove
       TOPOLOGY_LABEL="3-node-remove"
       CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      ;;
+    discovery)
+      apply_topology 1
+      TOPOLOGY_ACTION=discovery
+      TOPOLOGY_LABEL="1-node-discovery"
+      CHECK_PHASE_PREFIX="${TOPOLOGY_LABEL}/"
+      remember_teardown_node node2
+      remember_teardown_node node3
+      if [[ " ${PLUGIN_SMOKE_APPS} " != *" discovery "* ]]; then
+        PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS} discovery"
+      fi
       ;;
     *)
       apply_topology "${spec}"
@@ -4320,6 +4574,14 @@ run_one_topology() {
     record "Install plugins (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_PLUGIN_INSTALL=1"
   else
     run_step "Install plugins (${TOPOLOGY_LABEL})" step_install_plugins
+  fi
+
+  if [[ "${TOPOLOGY_ACTION}" == "discovery" ]]; then
+    run_step "Join nodes via local discovery (${TOPOLOGY_LABEL})" step_discovery_join_nodes
+    append_live_node node2
+    append_live_node node3
+    MIN_HOSTS="${#NODES[@]}"
+    run_step "Verify hosts after discovery join (${TOPOLOGY_LABEL})" step_verify_discovery_join
   fi
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then

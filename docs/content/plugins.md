@@ -29,8 +29,9 @@ Development layout (relative to the Flynn repo):
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
-local `flynn-plugin-*` checkouts. A local checkout with `flynn-plugin.json`
-wins; if it is missing, the alias falls back to GitHub.
+plugin checkouts that contain `flynn-plugin.json` (`flynn-plugin-*` and
+`flynn-discovery`). A local checkout with `flynn-plugin.json` wins; if it is
+missing, the alias falls back to GitHub.
 
 From the Flynn checkout, on a cluster host:
 
@@ -106,7 +107,8 @@ cluster.
 
 On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
-syncs `flynn-plugin-*` into `/opt/flynn-plugins/`, then runs `flynn-host plugin
+syncs plugin checkouts (`flynn-plugin-*`, `flynn-discovery`) into
+`/opt/flynn-plugins/`, then runs `flynn-host plugin
 install` on node1.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster

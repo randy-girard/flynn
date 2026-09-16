@@ -266,10 +266,12 @@ Default flow:
    MongoDB, ZFS). Failures stop before cluster nodes.
 3. **Build** — cluster images on the builder, tarball in `build/release/`.
 4. **Topologies** — default `SMOKE_TOPOLOGIES=1,3` (singleton, then 3-node HA).
-   Size `2` is invalid. Named topologies: `add` (join `node4` then upgrade) and
-   `remove` (drain `node3` while HTTP and DBs keep working).
-5. On each topology: install the tarball with `--peer-ips` (no discovery
-   service), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
+   Size `2` is invalid. Named topologies: `add` (join `node4` then upgrade),
+   `remove` (drain `node3` while HTTP and DBs keep working), and `discovery`
+   (singleton, install the discovery plugin, join `node2`+`node3` via the
+   in-cluster discovery API).
+5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
+   on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
    `test/apps/upgrade-smoke-docker` on the **container** stack, probe HTTP and
    rows, exercise `flynn` / `flynn-host`, then `flynn-host update --all-nodes
@@ -286,7 +288,7 @@ Useful environment:
 
 | Variable | Meaning |
 | --- | --- |
-| `SMOKE_TOPOLOGIES=1,3,5,add,remove` | Which layouts to run |
+| `SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery` | Which layouts to run |
 | `SKIP_UNIT_TESTS=1` | Skip host + builder unit gates |
 | `SKIP_BUILD=1` | Reuse `build/release/flynn-${BUILD_VERSION}.tar.gz` |
 | `SKIP_UPGRADE=1` | Install and verify only |

@@ -30,11 +30,13 @@ need 'FLYNN_MAX_NODES' \
 need 'expand_cluster_inventory' \
   "fail/teardown must expand node1..N from the run's largest topology"
 need 'apply_topology_spec' \
-  "named topologies (add/remove) must share apply_topology_spec with numeric sizes"
+  "named topologies (add/remove/discovery) must share apply_topology_spec with numeric sizes"
 need 'normalize_topology_spec' \
-  "add-node/3+1 and remove-node/3-1 must normalize to add/remove"
+  "add-node/3+1, remove-node/3-1, and discovery-join/1+2 must normalize"
 need 'topology_inventory_size' \
   "add must reserve Vagrant node4 (inventory 4) so FLYNN_MAX_NODES covers it"
+need 'discovery\) echo 3' \
+  "discovery topology must reserve node2 and node3 (inventory 3)"
 need 'step_add_cluster_node' \
   "smoke must join a node after the cluster is already running"
 need 'step_remove_cluster_node' \
@@ -116,6 +118,7 @@ normalize_topology_spec() {
   case "$1" in
     add|add-node|3+1) echo add ;;
     remove|remove-node|3-1) echo remove ;;
+    discovery|discovery-join|1+2) echo discovery ;;
     *) echo "$1" ;;
   esac
 }
@@ -124,7 +127,7 @@ valid_topology_spec() {
   local spec
   spec="$(normalize_topology_spec "$1")"
   case "${spec}" in
-    add|remove) return 0 ;;
+    add|remove|discovery) return 0 ;;
     *) valid_topology_size "${spec}" ;;
   esac
 }
@@ -210,6 +213,21 @@ if [[ "${got}" != "1 3 add" ]]; then
   echo "numeric and add topologies must compose, got '${got}'" >&2
   exit 1
 fi
+got="$(eval_topologies "discovery" "")"
+if [[ "${got}" != "discovery" ]]; then
+  echo "SMOKE_TOPOLOGIES=discovery must select the local-discovery join topology, got '${got}'" >&2
+  exit 1
+fi
+got="$(eval_topologies "1+2" "")"
+if [[ "${got}" != "discovery" ]]; then
+  echo "1+2 alias must normalize to discovery, got '${got}'" >&2
+  exit 1
+fi
+got="$(eval_topologies "1,3,discovery" "")"
+if [[ "${got}" != "1 3 discovery" ]]; then
+  echo "numeric and discovery topologies must compose, got '${got}'" >&2
+  exit 1
+fi
 if eval_topologies "236" "" >/dev/null 2>&1; then
   echo "topology size 236 must be rejected (192.168.56.(19+N) last octet > 254)" >&2
   exit 1
@@ -236,4 +254,4 @@ empty_dup_check() {
 }
 empty_dup_check
 
-echo "ok smoke topologies are 1 or >=3 (SMOKE_TOPOLOGIES=1,3,5 and 1,3,7) plus add/remove"
+echo "ok smoke topologies are 1 or >=3 (SMOKE_TOPOLOGIES=1,3,5 and 1,3,7) plus add/remove/discovery"
