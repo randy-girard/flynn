@@ -428,7 +428,7 @@ a full backup of the cluster first with `flynn cluster backup`.  There is almost
 zero downtime during the cluster update, however database clusters may be
 unavailable for a few seconds while they are updated.
 
-To perform an in-place update of **binaries on one host** (no other nodes, no container image rollout), run `flynn-host update`.
+To perform an in-place update of **binaries on one host** (no other nodes, no container image rollout), run `flynn-host update`. A newer GitHub release always continues past the flynn-host re-exec (init, CLI, daemon restart, and—on a single-node cluster—image rollout) without `--force`. `--force` repeats an update when the host is already on that version.
 
 To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images.
 

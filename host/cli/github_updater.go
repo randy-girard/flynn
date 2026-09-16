@@ -135,8 +135,15 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	log.Info("found release", "version", release.TagName, "published", release.PublishedAt)
 
-	// Check if update is needed
-	if !force && !ghrelease.CompareVersions(currentVersion, release.TagName) {
+	// After installing flynn-host, update re-execs the new binary so the rest
+	// of the rollout uses the new updater. That binary's compiled version
+	// already matches the target tag; treat FLYNN_UPDATE_REEXEC as "still in
+	// progress" so we do not abort before init/CLI, daemon restart, and images.
+	continuing := continueAfterHostReexec(release.TagName)
+	if continuing {
+		log.Info("continuing update after flynn-host re-exec", "version", release.TagName)
+	}
+	if shouldAbortGitHubUpdate(force, continuing, currentVersion, release.TagName) {
 		log.Info("already on latest version", "version", currentVersion)
 		if checkOnly {
 			fmt.Printf("Already on latest version: %s\n", currentVersion)
@@ -1091,6 +1098,23 @@ func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
 const minSystemDeployTimeout = 10 * time.Minute
 
 const updateReexecEnv = "FLYNN_UPDATE_REEXEC"
+
+// continueAfterHostReexec is true when this process is the new flynn-host
+// binary continuing an in-flight GitHub update (syscall.Exec after installing
+// flynn-host, with FLYNN_UPDATE_REEXEC=<tag>).
+func continueAfterHostReexec(targetVersion string) bool {
+	return targetVersion != "" && os.Getenv(updateReexecEnv) == targetVersion
+}
+
+// shouldAbortGitHubUpdate is the "already on latest version" gate. --force
+// re-runs a completed update. continuingReexec is a mid-update re-exec and
+// must not require --force, even when currentVersion == targetVersion.
+func shouldAbortGitHubUpdate(force, continuingReexec bool, currentVersion, targetVersion string) bool {
+	if force || continuingReexec {
+		return false
+	}
+	return !ghrelease.CompareVersions(currentVersion, targetVersion)
+}
 
 // updateImages downloads the images manifest, triggers image-layer pulls
 // on every cluster host in parallel, then deploys system apps via the

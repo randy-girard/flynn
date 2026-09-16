@@ -231,6 +231,59 @@ func TestCleanupSourceTarballRefusesDirectory(t *testing.T) {
 	}
 }
 
+func TestShouldAbortGitHubUpdate(t *testing.T) {
+	const current = "v20260916.2"
+	const next = "v20260916.3"
+	if !shouldAbortGitHubUpdate(false, false, current, current) {
+		t.Fatal("same version without force should abort")
+	}
+	if shouldAbortGitHubUpdate(true, false, current, current) {
+		t.Fatal("--force must continue even when versions match")
+	}
+	if shouldAbortGitHubUpdate(false, true, current, current) {
+		t.Fatal("re-exec mid-update must continue without --force")
+	}
+	if shouldAbortGitHubUpdate(false, false, current, next) {
+		t.Fatal("newer release must update")
+	}
+}
+
+func TestContinueAfterHostReexec(t *testing.T) {
+	t.Setenv(updateReexecEnv, "")
+	if continueAfterHostReexec("v20260916.2") {
+		t.Fatal("empty env is not a re-exec")
+	}
+	t.Setenv(updateReexecEnv, "v20260916.2")
+	if !continueAfterHostReexec("v20260916.2") {
+		t.Fatal("matching FLYNN_UPDATE_REEXEC must continue")
+	}
+	if continueAfterHostReexec("v20260916.3") {
+		t.Fatal("stale re-exec env for a different tag must not skip the version check")
+	}
+	if continueAfterHostReexec("") {
+		t.Fatal("empty target is not a re-exec")
+	}
+}
+
+func TestGitHubUpdateContinuesAfterReexecBeforeVersionAbort(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	cont := strings.Index(body, "continueAfterHostReexec")
+	abort := strings.Index(body, "already on latest version")
+	if cont < 0 || abort < 0 {
+		t.Fatal("github updater must continue after flynn-host re-exec and still have an already-on-latest abort")
+	}
+	if cont > abort {
+		t.Fatal("re-exec continuation must gate the already-on-latest abort")
+	}
+	if !strings.Contains(body, "shouldAbortGitHubUpdate(force, continuing, currentVersion, release.TagName)") {
+		t.Fatal("runGitHubUpdate must use shouldAbortGitHubUpdate with the re-exec flag")
+	}
+}
+
 func TestParseHostFromURL(t *testing.T) {
 	cases := []struct {
 		in, want string

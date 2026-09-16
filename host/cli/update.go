@@ -19,7 +19,7 @@ Options:
   --github-repo=<repo>           GitHub repository for updates [default: randy-girard/flynn]
   --check                        only check for updates, don't install
   --version=<ver>                update to a specific version
-  --force                        force update even if already on the latest version
+  --force                        re-run an update even if flynn-host is already the latest version
   --no-restart                   only download binaries, don't restart the daemon
   --skip-images                  skip updating container images and system apps
   --images-only                  only update container images and system apps (skip binaries)
@@ -52,6 +52,11 @@ Options:
                                  up/starting jobs are restarted.
 
 Update Flynn components using GitHub releases or a local tarball.
+
+A GitHub version bump installs the new flynn-host binary first, then re-execs
+it so flynn-init, the CLI, daemon restart, and image rollout run with the new
+updater. That continuation does not need --force. Use --force only to repeat
+an update when this host is already on the target version.
 
 After downloading new binaries, the running flynn-host daemon is restarted via
 systemctl. Job containers normally survive (KillMode=process); discoverd
