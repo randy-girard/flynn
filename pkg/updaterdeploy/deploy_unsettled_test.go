@@ -48,6 +48,33 @@ func TestShouldRetryAfterUnsettledDiscoverdLeader(t *testing.T) {
 	}
 }
 
+func TestShouldRetryAfterControllerUnavailable(t *testing.T) {
+	cases := []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{errors.New("unknown_error: Something went wrong"), true},
+		{errors.New("dial tcp 127.0.0.1:443: connection refused"), true},
+		{errors.New("read: connection reset by peer"), true},
+		{errors.New("i/o timeout"), true},
+		{errors.New("release not found"), false},
+		{errors.New("validation error"), false},
+	}
+	for _, tc := range cases {
+		if got := ShouldRetryAfterControllerUnavailable(tc.err); got != tc.want {
+			t.Fatalf("ShouldRetryAfterControllerUnavailable(%v)=%v want %v", tc.err, got, tc.want)
+		}
+	}
+	sirenia := errors.New("timed out waiting for new sirenia peer to come up")
+	if !ShouldRetryTransientSystemDeploy(sirenia) {
+		t.Fatal("sirenia timeout must still retry")
+	}
+	if !ShouldRetryTransientSystemDeploy(errors.New("unknown_error: Something went wrong")) {
+		t.Fatal("controller unknown_error after a postgres outage must retry")
+	}
+}
+
 func TestTransientDeployRetryBudget(t *testing.T) {
 	if MaxTransientDeployUnsettledAttempts() < 10 {
 		t.Fatalf("retry budget %d is too low for post-upgrade settle", MaxTransientDeployUnsettledAttempts())

@@ -1450,8 +1450,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 			// rollout) settle within a few retries. Scale timeouts after a
 			// rolling host restart are retried for the same reason.
 			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
-			if (updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) ||
-				updaterdeploy.ShouldRetryAfterScaleTimeout(deployErr)) && attempt < maxUnsettled {
+			if updaterdeploy.ShouldRetryTransientSystemDeploy(deployErr) && attempt < maxUnsettled {
 				appLog.Warn("deploy not settled, retrying",
 					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
 				time.Sleep(updaterdeploy.TransientDeployRetryDelay())
