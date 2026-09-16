@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,8 @@ import (
 
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/cluster"
 	router "github.com/flynn/flynn/router/types"
 )
 
@@ -39,6 +42,17 @@ type Installer struct {
 	// Build, if set, is invoked as (pluginRoot) when dist/ is missing.
 	// Tests replace this; the default runs script/plugin-build.
 	Build func(pluginRoot string) error
+	// Hosts, if set, lists flynn-host members for webhook registration.
+	// Tests replace this; the default is cluster.NewClient().Hosts.
+	Hosts func() ([]WebhookHost, error)
+}
+
+// WebhookHost is the subset of pkg/cluster.Host used to register webhooks
+// (the same API as `flynn-host webhooks add`).
+type WebhookHost interface {
+	ID() string
+	ListWebhooks() ([]*host.WebhookConfig, error)
+	AddWebhook(id, url string, headers map[string]string) (*host.WebhookConfig, error)
 }
 
 type InstallOptions struct {
@@ -177,7 +191,10 @@ func (in *Installer) Install(opts InstallOptions) error {
 		}
 	}
 
-	_ = app
+	if err := in.ensureWebhooks(m, cluster); err != nil {
+		return err
+	}
+
 	in.persistInventory()
 	in.logf("plugin %s installed", m.Name)
 	return nil
@@ -325,6 +342,11 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 	if err := in.Client.SetAppRelease(app.ID, release.ID); err != nil {
 		return fmt.Errorf("set release: %w", err)
 	}
+	for k, v := range env {
+		if v != "" {
+			cluster[k] = v
+		}
+	}
 	return nil
 }
 
@@ -450,6 +472,114 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 		}
 	}
 	return nil
+}
+
+func (in *Installer) ensureWebhooks(m *Manifest, cluster map[string]string) error {
+	if m == nil || len(m.Webhooks) == 0 {
+		return nil
+	}
+	hosts, err := in.webhookHosts()
+	if err != nil {
+		return fmt.Errorf("list hosts for plugin webhooks: %w", err)
+	}
+	if len(hosts) == 0 {
+		return fmt.Errorf("no flynn-host members to register plugin webhooks")
+	}
+	for i, spec := range m.Webhooks {
+		url, headers, err := expandWebhookSpec(spec, cluster)
+		if err != nil {
+			return fmt.Errorf("webhooks[%d]: %w", i, err)
+		}
+		id := pluginWebhookID(m.Name, url)
+		in.logf("registering host webhook %s", url)
+		for _, h := range hosts {
+			if skip, err := webhookAlreadyRegistered(h, id, url); err != nil {
+				return fmt.Errorf("list webhooks on %s: %w", h.ID(), err)
+			} else if skip {
+				in.logf("webhook %s already on %s", url, h.ID())
+				continue
+			}
+			if _, err := h.AddWebhook(id, url, headers); err != nil {
+				return fmt.Errorf("webhook on %s: %w", h.ID(), err)
+			}
+		}
+	}
+	return nil
+}
+
+func expandWebhookSpec(spec WebhookSpec, cluster map[string]string) (string, map[string]string, error) {
+	url := ExpandClusterVars(strings.TrimSpace(spec.URL), cluster)
+	if url == "" {
+		return "", nil, fmt.Errorf("url expanded empty")
+	}
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		return "", nil, fmt.Errorf("url %q must be http(s)", url)
+	}
+	headers := map[string]string{}
+	for k, v := range spec.Headers {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		headers[k] = ExpandClusterVars(v, cluster)
+	}
+	if key := strings.TrimSpace(spec.SecretEnv); key != "" {
+		secret := cluster[key]
+		if secret == "" {
+			return "", nil, fmt.Errorf("secret_env %s is empty", key)
+		}
+		if _, ok := headers["X-Flynn-Webhook-Secret"]; !ok {
+			headers["X-Flynn-Webhook-Secret"] = secret
+		}
+	}
+	if len(headers) == 0 {
+		headers = nil
+	}
+	return url, headers, nil
+}
+
+func pluginWebhookID(pluginName, url string) string {
+	name := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
+			return r
+		default:
+			return '-'
+		}
+	}, pluginName)
+	sum := sha256.Sum256([]byte(pluginName + "\n" + url))
+	return fmt.Sprintf("plugin-%s-%x", name, sum[:8])
+}
+
+func webhookAlreadyRegistered(h WebhookHost, id, url string) (bool, error) {
+	existing, err := h.ListWebhooks()
+	if err != nil {
+		return false, err
+	}
+	for _, wh := range existing {
+		if wh == nil {
+			continue
+		}
+		if wh.URL == url && wh.ID != id {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (in *Installer) webhookHosts() ([]WebhookHost, error) {
+	if in.Hosts != nil {
+		return in.Hosts()
+	}
+	hs, err := cluster.NewClient().Hosts()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]WebhookHost, len(hs))
+	for i, h := range hs {
+		out[i] = h
+	}
+	return out, nil
 }
 
 func (in *Installer) http() *http.Client {

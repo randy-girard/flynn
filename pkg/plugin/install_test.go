@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
+	host "github.com/flynn/flynn/host/types"
 )
 
 func writeAppPlugin(t *testing.T, dir, name string) {
@@ -254,5 +255,186 @@ func TestInstallerHTTPAndRunBuildMissing(t *testing.T) {
 	in.persistInventory() // nil Client must be a no-op
 	if err := in.runBuild(t.TempDir()); err == nil || !strings.Contains(err.Error(), "plugin-build") {
 		t.Fatalf("missing plugin-build script: %v", err)
+	}
+}
+
+type webhookHostStub struct {
+	id      string
+	listed  []*host.WebhookConfig
+	listErr error
+	added   []webhookAdd
+	addErr  error
+}
+
+type webhookAdd struct {
+	id      string
+	url     string
+	headers map[string]string
+}
+
+func (s *webhookHostStub) ID() string { return s.id }
+
+func (s *webhookHostStub) ListWebhooks() ([]*host.WebhookConfig, error) {
+	return s.listed, s.listErr
+}
+
+func (s *webhookHostStub) AddWebhook(id, url string, headers map[string]string) (*host.WebhookConfig, error) {
+	s.added = append(s.added, webhookAdd{id: id, url: url, headers: headers})
+	if s.addErr != nil {
+		return nil, s.addErr
+	}
+	return &host.WebhookConfig{ID: id, URL: url, Headers: headers}, nil
+}
+
+func TestExpandWebhookSpecSecretEnv(t *testing.T) {
+	url, headers, err := expandWebhookSpec(WebhookSpec{
+		URL:       "http://${APP}.discoverd/webhooks/flynn",
+		SecretEnv: "WEBHOOK_INGEST_SECRET",
+		Headers:   map[string]string{"X-Extra": "v-${CLUSTER_DOMAIN}"},
+	}, map[string]string{
+		"APP":                   "dashboard",
+		"WEBHOOK_INGEST_SECRET": "s3cret",
+		"CLUSTER_DOMAIN":        "ex.local",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != "http://dashboard.discoverd/webhooks/flynn" {
+		t.Fatalf("url=%q", url)
+	}
+	if headers["X-Flynn-Webhook-Secret"] != "s3cret" || headers["X-Extra"] != "v-ex.local" {
+		t.Fatalf("headers=%v", headers)
+	}
+	_, _, err = expandWebhookSpec(WebhookSpec{URL: "http://x", SecretEnv: "WEBHOOK_INGEST_SECRET"}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "WEBHOOK_INGEST_SECRET") {
+		t.Fatalf("empty secret: %v", err)
+	}
+
+	url, headers, err = expandWebhookSpec(WebhookSpec{
+		URL:       "http://widget.discoverd/hook",
+		SecretEnv: "WEBHOOK_INGEST_SECRET",
+		Headers:   map[string]string{"X-Flynn-Webhook-Secret": "explicit"},
+	}, map[string]string{"WEBHOOK_INGEST_SECRET": "ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if headers["X-Flynn-Webhook-Secret"] != "explicit" {
+		t.Fatalf("explicit secret header must win, got %v", headers)
+	}
+
+	url, headers, err = expandWebhookSpec(WebhookSpec{URL: "http://widget.discoverd/hook"}, nil)
+	if err != nil || url != "http://widget.discoverd/hook" || headers != nil {
+		t.Fatalf("no headers: url=%q headers=%v err=%v", url, headers, err)
+	}
+
+	_, _, err = expandWebhookSpec(WebhookSpec{URL: "ftp://widget.discoverd/hook"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "http(s)") {
+		t.Fatalf("ftp: %v", err)
+	}
+	_, _, err = expandWebhookSpec(WebhookSpec{URL: "${MISSING}"}, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "http(s)") {
+		t.Fatalf("unexpanded: %v", err)
+	}
+	_, _, err = expandWebhookSpec(WebhookSpec{URL: "${EMPTY}"}, map[string]string{"EMPTY": ""})
+	if err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("empty expand: %v", err)
+	}
+}
+
+func TestEnsureWebhooksRegistersAndIsIdempotent(t *testing.T) {
+	stub := &webhookHostStub{id: "node1"}
+	in := &Installer{
+		Stdout: io.Discard,
+		Hosts:  func() ([]WebhookHost, error) { return []WebhookHost{stub}, nil },
+	}
+	m := &Manifest{
+		Name: "dashboard",
+		Webhooks: []WebhookSpec{{
+			URL:       "http://dashboard.discoverd/webhooks/flynn",
+			SecretEnv: "WEBHOOK_INGEST_SECRET",
+		}},
+	}
+	cluster := map[string]string{"WEBHOOK_INGEST_SECRET": "s3cret"}
+	if err := in.ensureWebhooks(m, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.added) != 1 || stub.added[0].url != "http://dashboard.discoverd/webhooks/flynn" {
+		t.Fatalf("added=%+v", stub.added)
+	}
+	if stub.added[0].headers["X-Flynn-Webhook-Secret"] != "s3cret" {
+		t.Fatalf("headers=%v", stub.added[0].headers)
+	}
+	wantID := pluginWebhookID("dashboard", "http://dashboard.discoverd/webhooks/flynn")
+	if stub.added[0].id != wantID {
+		t.Fatalf("id=%s want %s", stub.added[0].id, wantID)
+	}
+
+	stub.listed = []*host.WebhookConfig{{ID: "manual", URL: "http://dashboard.discoverd/webhooks/flynn"}}
+	stub.added = nil
+	if err := in.ensureWebhooks(m, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.added) != 0 {
+		t.Fatalf("must not duplicate an existing URL, added=%+v", stub.added)
+	}
+
+	if err := in.ensureWebhooks(&Manifest{Name: "x"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	in.Hosts = func() ([]WebhookHost, error) { return nil, nil }
+	if err := in.ensureWebhooks(m, cluster); err == nil {
+		t.Fatal("no hosts must fail")
+	}
+
+	stub2 := &webhookHostStub{id: "node1"}
+	in.Hosts = func() ([]WebhookHost, error) { return []WebhookHost{stub2}, fmt.Errorf("discoverd down") }
+	if err := in.ensureWebhooks(m, cluster); err == nil || !strings.Contains(err.Error(), "discoverd down") {
+		t.Fatalf("hosts error: %v", err)
+	}
+
+	failAdd := &webhookHostStub{id: "node1", addErr: fmt.Errorf("denied")}
+	in.Hosts = func() ([]WebhookHost, error) { return []WebhookHost{failAdd}, nil }
+	if err := in.ensureWebhooks(m, cluster); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("add error: %v", err)
+	}
+
+	failList := &webhookHostStub{id: "node1", listErr: fmt.Errorf("list failed")}
+	in.Hosts = func() ([]WebhookHost, error) { return []WebhookHost{failList}, nil }
+	if err := in.ensureWebhooks(m, cluster); err == nil || !strings.Contains(err.Error(), "list failed") {
+		t.Fatalf("list error: %v", err)
+	}
+
+	n1 := &webhookHostStub{id: "n1"}
+	n2 := &webhookHostStub{id: "n2"}
+	in.Hosts = func() ([]WebhookHost, error) { return []WebhookHost{n1, n2}, nil }
+	if err := in.ensureWebhooks(m, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if len(n1.added) != 1 || len(n2.added) != 1 {
+		t.Fatalf("must register on every host n1=%d n2=%d", len(n1.added), len(n2.added))
+	}
+
+	sameID := &webhookHostStub{
+		id:     "node1",
+		listed: []*host.WebhookConfig{{ID: wantID, URL: "http://dashboard.discoverd/webhooks/flynn"}},
+	}
+	in.Hosts = func() ([]WebhookHost, error) { return []WebhookHost{sameID}, nil }
+	if err := in.ensureWebhooks(m, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if len(sameID.added) != 1 {
+		t.Fatalf("same plugin id must upsert headers, added=%d", len(sameID.added))
+	}
+}
+
+func TestPluginWebhookIDStable(t *testing.T) {
+	a := pluginWebhookID("dashboard", "http://dashboard.discoverd/webhooks/flynn")
+	b := pluginWebhookID("dashboard", "http://dashboard.discoverd/webhooks/flynn")
+	c := pluginWebhookID("other", "http://dashboard.discoverd/webhooks/flynn")
+	if a != b || !strings.HasPrefix(a, "plugin-dashboard-") {
+		t.Fatalf("id=%s", a)
+	}
+	if a == c {
+		t.Fatal("plugin name must be part of the id")
 	}
 }

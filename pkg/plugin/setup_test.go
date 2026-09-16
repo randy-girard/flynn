@@ -80,6 +80,9 @@ func TestManifestValidateSetupAndRoutes(t *testing.T) {
 		Routes: []RouteSpec{
 			{Type: "http", Domain: "dashboard.${CLUSTER_DOMAIN}", Service: "dashboard"},
 		},
+		Webhooks: []WebhookSpec{
+			{URL: "http://dashboard.discoverd/webhooks/flynn", SecretEnv: "WEBHOOK_INGEST_SECRET"},
+		},
 	}
 	if err := ok.Validate(); err != nil {
 		t.Fatal(err)
@@ -105,6 +108,17 @@ func TestManifestValidateSetupAndRoutes(t *testing.T) {
 	}
 	if err := badRoute.Validate(); err == nil {
 		t.Fatal("expected http route domain")
+	}
+	badHook := &Manifest{
+		Name: "dash",
+		Kind: KindApp,
+		App:  AppSpec{Processes: map[string]ct.ProcessType{"web": {}}},
+		Webhooks: []WebhookSpec{
+			{URL: "ftp://example.com/hook"},
+		},
+	}
+	if err := badHook.Validate(); err == nil {
+		t.Fatal("expected http(s) webhook url")
 	}
 }
 

@@ -88,6 +88,47 @@ func TestManifestValidateKinds(t *testing.T) {
 	}
 }
 
+func TestLoadManifestWebhooks(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "widget",
+		"kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{
+				"web": map[string]interface{}{"args": []string{"/bin/widget"}},
+			},
+		},
+		"webhooks": []map[string]interface{}{
+			{
+				"url":        "http://widget.discoverd/webhooks/flynn",
+				"secret_env": "WEBHOOK_INGEST_SECRET",
+			},
+		},
+	})
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Webhooks) != 1 || m.Webhooks[0].URL != "http://widget.discoverd/webhooks/flynn" || m.Webhooks[0].SecretEnv != "WEBHOOK_INGEST_SECRET" {
+		t.Fatalf("%+v", m.Webhooks)
+	}
+
+	dir = t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "widget",
+		"kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{
+				"web": map[string]interface{}{"args": []string{"/bin/widget"}},
+			},
+		},
+		"webhooks": []map[string]interface{}{{"url": "not-a-url"}},
+	})
+	if _, err := LoadManifest(dir); err == nil {
+		t.Fatal("non-http webhook url must fail")
+	}
+}
+
 func TestReleaseEnvSelf(t *testing.T) {
 	m := &Manifest{
 		InjectEnv: []string{"CONTROLLER_KEY", "SINGLETON", "MISSING"},

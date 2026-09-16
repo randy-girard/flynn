@@ -43,8 +43,10 @@ Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TT
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
 stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
-is expanded). Optional **`hooks.install`** still runs on the host for anything
-the manifest cannot express.
+is expanded). **`webhooks`** registers the same host endpoints as
+`flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
+`X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
+still runs on the host for anything the manifest cannot express.
 
 If `dist/image.json` (and layers) are missing, install runs that repo’s
 `script/plugin-build` first. Already-built `dist/` is reused unless `--rebuild`.

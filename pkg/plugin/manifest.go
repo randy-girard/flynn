@@ -56,7 +56,11 @@ type Manifest struct {
 	Resources []string `json:"resources,omitempty"`
 	// Routes are HTTP/TCP routes created after deploy. Domain may use
 	// ${CLUSTER_DOMAIN}.
-	Routes         []RouteSpec     `json:"routes,omitempty"`
+	Routes []RouteSpec `json:"routes,omitempty"`
+	// Webhooks are registered on every flynn-host after deploy (same API as
+	// `flynn-host webhooks add`). URL and header values expand ${KEY} from
+	// cluster + release env. Flynn does not special-case plugin names.
+	Webhooks       []WebhookSpec   `json:"webhooks,omitempty"`
 	Aliases        []string        `json:"aliases,omitempty"`
 	GitHubRepo     string          `json:"github_repo,omitempty"`
 	ClusterBackup  *BackupSpec     `json:"cluster_backup,omitempty"`
@@ -195,6 +199,14 @@ type RouteSpec struct {
 	Leader  bool   `json:"leader,omitempty"`
 }
 
+// WebhookSpec is a host webhook created from the plugin manifest. SecretEnv,
+// if set, sends X-Flynn-Webhook-Secret from that release/cluster env key.
+type WebhookSpec struct {
+	URL       string            `json:"url"`
+	Headers   map[string]string `json:"headers,omitempty"`
+	SecretEnv string            `json:"secret_env,omitempty"`
+}
+
 type Artifacts struct {
 	Image string `json:"image,omitempty"`
 }
@@ -259,6 +271,17 @@ func (m *Manifest) Validate() error {
 		if typ == "http" && strings.TrimSpace(r.Domain) == "" {
 			return fmt.Errorf("%s: routes[%d].domain is required for http routes", ManifestName, i)
 		}
+	}
+	for i, w := range m.Webhooks {
+		url := strings.TrimSpace(w.URL)
+		if url == "" {
+			return fmt.Errorf("%s: webhooks[%d].url is required", ManifestName, i)
+		}
+		if !strings.Contains(url, "${") && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			return fmt.Errorf("%s: webhooks[%d].url must be http(s)", ManifestName, i)
+		}
+		m.Webhooks[i].URL = url
+		m.Webhooks[i].SecretEnv = strings.TrimSpace(w.SecretEnv)
 	}
 	return nil
 }
