@@ -74,6 +74,8 @@ need_in "${install}" 'deployHook' \
   "plugin update must run hooks.upgrade instead of hooks.install"
 need_in "${docs}" 'plugin uninstall' \
   "plugin docs must describe flynn-host plugin uninstall"
+need_in "${docs}" 'dashboard lists them for cluster administrators' \
+  "plugin docs must say the dashboard lists plugin system apps for cluster admins only"
 
 if grep -nE 'Name[[:space:]]*==[[:space:]]*"dashboard"|name[[:space:]]*==[[:space:]]*"dashboard"' "${uninstall}" "${install}"; then
   echo "plugin uninstall must not special-case dashboard by name" >&2

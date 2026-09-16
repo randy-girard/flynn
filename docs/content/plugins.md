@@ -71,7 +71,9 @@ exactly one HTTP route (typical after install). `kind: app` system plugins
 are not published on the user `flynn` CLI (no `flynn dashboard …`); operators
 use `flynn-host plugin`. A `kind: app` plugin that should be a user command
 sets `"cli": { "user": true }`. Resource-provider plugins stay on `flynn`
-the same way as Redis.
+the same way as Redis. Installed plugin apps stay `flynn-system-app`; the
+dashboard lists them for cluster administrators and keeps them hidden from
+scoped collaborator tokens.
 **`webhooks`** registers the same host endpoints as
 `flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
