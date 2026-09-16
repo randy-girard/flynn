@@ -106,3 +106,17 @@ EOF
     return 1
   fi
 }
+
+@test "Build and Release can dispatch plugin-releases.yml" {
+  wf="${ROOT}/.github/workflows/release.yml"
+  grep -q 'dispatch_plugins:' "${wf}"
+  grep -q 'inputs.dispatch_plugins' "${wf}"
+  grep -q 'workflow run plugin-releases.yml' "${wf}"
+  grep -q 'actions: write' "${wf}"
+  grep -q 'version=${VERSION}' "${wf}"
+  grep -q 'prerelease=${PRERELEASE}' "${wf}"
+  if grep -E 'flynn-plugin-(redis|mariadb|mongodb|kafka|clickhouse|dashboard|template)' "${wf}"; then
+    echo "Build and Release must not hardcode plugin appliance repos" >&2
+    return 1
+  fi
+}

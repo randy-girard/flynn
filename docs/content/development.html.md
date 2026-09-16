@@ -308,14 +308,17 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   — manual `workflow_dispatch` only. Builds base + production cluster images in
   phases and publishes GitHub Release assets. Version tags look like
   `vYYYYMMDD.N`. Omits `test`, `test-apps`, and `controller-examples`.
-  Drafts do not fan out plugin builds.
+  Check **dispatch_plugins** to queue plugin builds after the Flynn release
+  exists (`GITHUB_TOKEN` cannot start other workflows from `release` events).
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
-  — runs when a Flynn GitHub Release is **published** (or via `workflow_dispatch`).
-  It queues each plugin repo’s `Build and Release` workflow with the same tag
-  and `flynn_version` so ubuntu-noble matches Flynn. Plugin names are not in
-  Flynn source: set Actions variable `PLUGIN_RELEASE_REPOS` (`owner/repo` per
-  line) and secret `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on
-  those repos). Empty variable skips dispatch.
+  — runs from Build and Release when **dispatch_plugins** is checked, when a
+  Flynn GitHub Release is **published** from the GitHub UI, or via its own
+  `workflow_dispatch`. It queues each plugin repo’s `Build and Release`
+  workflow with the same tag and `flynn_version` so ubuntu-noble matches Flynn.
+  Plugin names are not in Flynn source: set Actions variable
+  `PLUGIN_RELEASE_REPOS` (`owner/repo` per line) and secret
+  `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on those repos).
+  Empty variable skips dispatch.
 
 ## Pull requests
 
