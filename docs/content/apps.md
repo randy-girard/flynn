@@ -190,6 +190,9 @@ You can check the current ACME configuration status with:
 flynn-host acme status
 ```
 
+Use `--staging` while testing (untrusted certificates) or `--directory-url` for
+another ACME CA.
+
 #### Enabling Let's Encrypt on System Routes
 
 To enable Let's Encrypt on all system app routes (controller, dashboard, etc.),
@@ -198,6 +201,9 @@ run the following command:
 ```text
 flynn-host acme enable-system-routes
 ```
+
+After this, public certificates replace the bootstrap self-signed cert. Clear
+the CLI TLS pin with `flynn cluster update-pin --clear`.
 
 To disable Let's Encrypt on all system app routes:
 

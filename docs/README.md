@@ -33,6 +33,7 @@ Start at the [root README](../README.md) or pick a page. Agent notes (keep docs 
 - [Production](content/production.html.md)
 - [Security](content/security.md)
 - [Stability](content/stability.md)
+- [HTTPS / Let's Encrypt](content/apps.md#https)
 
 ## Reference
 
