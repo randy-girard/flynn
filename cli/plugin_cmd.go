@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/cheggaaa/pb"
 	controller "github.com/flynn/flynn/controller/client"
@@ -14,9 +15,9 @@ import (
 )
 
 // runPluginCommand handles flynn <name> when <name> is not compiled into the
-// CLI. Syntax comes from the cluster catalog (plugin app meta). Execution is a
-// controller job using the plugin/resource release image — the laptop never
-// runs plugin code.
+// CLI. Syntax comes from the cluster catalog (plugin app meta). Cluster-job
+// actions run in the plugin image. Flynn-delegated actions run a built-in
+// laptop command against the plugin app (flynn -a dashboard route …).
 func runPluginCommand(name string, args []string) error {
 	client, err := getClusterClient()
 	if err != nil {
@@ -34,6 +35,10 @@ func runPluginCommand(name string, args []string) error {
 		return fmt.Errorf("%s is installed but does not define CLI actions; upgrade the plugin with flynn-host plugin install %s", name, name)
 	}
 
+	if action, rest, ok := spec.MatchFlynnDelegate(args); ok {
+		return runPluginFlynnCommand(client, spec, action, rest)
+	}
+
 	argv := make([]string, 1, 1+len(args))
 	argv[0] = name
 	argv = append(argv, args...)
@@ -44,6 +49,65 @@ func runPluginCommand(name string, args []string) error {
 	return executePluginCLI(client, spec, parsed, args)
 }
 
+func runPluginFlynnCommand(client controller.Client, spec *plugin.CLI, action *plugin.CLIAction, extra []string) error {
+	if spec == nil || action == nil {
+		return fmt.Errorf("missing plugin CLI action")
+	}
+	flynnCmd := strings.TrimSpace(action.Flynn)
+	if flynnCmd == "" {
+		return fmt.Errorf("%s: missing flynn command", spec.Command)
+	}
+	cmd, ok := commands[flynnCmd]
+	if !ok {
+		return fmt.Errorf("%s: flynn %s is not a built-in CLI command", spec.Command, flynnCmd)
+	}
+	appName := strings.TrimSpace(spec.App)
+	if appName == "" {
+		return fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
+	}
+	rest := extra
+	name := strings.TrimSpace(action.Name)
+	if name == "" {
+		name = flynnCmd
+	}
+	parts := strings.Fields(name)
+	if len(parts) > 0 && len(rest) >= len(parts) {
+		match := true
+		for i, p := range parts {
+			if rest[i] != p {
+				match = false
+				break
+			}
+		}
+		if match {
+			rest = rest[len(parts):]
+		}
+	}
+	argv := make([]string, 1, 1+len(rest))
+	argv[0] = flynnCmd
+	argv = append(argv, rest...)
+	parsed, err := docopt.Parse(cmd.usage, argv, true, "", cmd.optsFirst)
+	if err != nil {
+		return err
+	}
+	prev := flagApp
+	flagApp = appName
+	defer func() { flagApp = prev }()
+	switch f := cmd.f.(type) {
+	case func(*docopt.Args, controller.Client) error:
+		return f(parsed, client)
+	case func(*docopt.Args) error:
+		return f(parsed)
+	case func() error:
+		return f()
+	case func():
+		f()
+		return nil
+	default:
+		return fmt.Errorf("unexpected command type %T", cmd.f)
+	}
+}
+
 type appReleaseGetter interface {
 	GetAppRelease(appID string) (*ct.Release, error)
 }
@@ -52,6 +116,9 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 	action := spec.MatchAction(args.Bool)
 	if action == nil {
 		return fmt.Errorf("%s: no matching plugin CLI action", spec.Command)
+	}
+	if strings.TrimSpace(action.Flynn) != "" {
+		return runPluginFlynnCommand(client, spec, action, extra)
 	}
 
 	config, err := pluginJobConfig(client, spec, action, args)

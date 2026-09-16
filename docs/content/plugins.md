@@ -43,7 +43,31 @@ Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TT
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
 stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
-is expanded). **`webhooks`** registers the same host endpoints as
+is expanded). If cluster ACME is already enabled (`flynn-host acme configure`
+and `flynn-host acme enable`), HTTP plugin routes get Let's Encrypt at install
+automatically (same as `flynn route add http --auto-tls`). That covers the
+dashboard plugin and any other HTTP plugin; Flynn does not special-case a
+name. Set **`auto_tls`** on an HTTP route to request TLS even when you are
+not passing `--auto-tls`: without ACME, install logs a warning and leaves
+the route HTTP. Pass **`flynn-host plugin install --auto-tls`** to fail if
+ACME is not enabled.
+
+After install, operators manage those routes with the same shape as
+`flynn route`, scoped to the plugin:
+
+```text
+sudo flynn-host plugin dashboard route
+sudo flynn-host plugin dashboard route add http --auto-tls
+sudo flynn-host plugin dashboard route add http --auto-tls dashboard.example.com
+sudo flynn-host plugin dashboard route update http/<id> --auto-tls
+```
+
+`<plugin>` is the installed app name (or its `cli.command`). Flynn does not
+special-case dashboard. Omit `<domain>` on `add http` when the plugin has
+exactly one HTTP route (typical after install). Users with cluster
+credentials can do the same from the laptop when the plugin publishes
+`"flynn": "route"` (`flynn dashboard route add http --auto-tls …`).
+**`webhooks`** registers the same host endpoints as
 `flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
 still runs on the host for anything the manifest cannot express. GitHub installs
@@ -83,9 +107,19 @@ Those commands appear only after `flynn-host plugin install` stamps
 
 - `command` / `usage` — name and one-liner for `flynn help`
 - `doc` — full docopt usage for `flynn help <command>` and argv parsing
-- `actions` — how each subcommand runs **on the cluster**
+- `actions` — how each subcommand runs
+- `actions[].args` — cluster job argv in the plugin/resource image
+- `actions[].flynn` — built-in laptop command scoped to the plugin app
+  (`flynn dashboard route add http --auto-tls` is `flynn -a dashboard route …`).
+  Operators have the same route CLI on the host:
+  `flynn-host plugin dashboard route add http --auto-tls`.
 - `passthrough` — append the user argv after the plugin command (nested CLIs)
 - `release_env` — copy the appliance release env into the job (TLS material)
+
+`flynn` and `args` are mutually exclusive on one action. Web plugins that
+need Flynn’s HTTP/TCP route CLI should set `"flynn": "route"` instead of
+shipping a container binary. Route/TLS changes from a cluster host use
+`flynn-host plugin <name> route`, not a plugin-name switch in Flynn core.
 
 Sirenia appliances may set `app.strategy`, `app.scale` (use `0` for the data
 process until first provision), and `generate_env` (random secrets such as
@@ -109,6 +143,7 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 
 ```text
 sudo flynn-host plugin install redis --ref v20260914.0
+sudo flynn-host plugin install dashboard --auto-tls
 sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
 ```
 
@@ -139,8 +174,10 @@ reconstructs the repo-relative path (`script/install.sh`) when it unpacks the
 release, then runs the hook. Uploads of the squashfs layers go into the cluster
 blobstore so other hosts never talk to GitHub.
 
-When a Flynn GitHub Release is **published** (not a draft), Flynn can queue
-those plugin workflows automatically. Configure the Flynn repo (or org) with:
+When a Flynn GitHub Release is created, check **dispatch_plugins** on
+**Build and Release** to queue those plugin workflows from the same run
+(`gh workflow run` on Dispatch plugin releases). Publishing a draft from the
+GitHub UI also starts that workflow. Configure the Flynn repo (or org) with:
 
 * **Variable** `PLUGIN_RELEASE_REPOS` — one `owner/repo` per line (commas and
   `#` comments are allowed). Do not put appliance names in Flynn source.
@@ -150,7 +187,8 @@ those plugin workflows automatically. Configure the Flynn repo (or org) with:
 
 Each plugin is built with `version` and `flynn_version` set to the Flynn tag
 so the overlay uses that ubuntu-noble layer. Re-run **Dispatch plugin
-releases** from Actions if a plugin job was skipped or failed. A plugin tag
+releases** from Actions if a plugin job was skipped or failed, or leave
+**dispatch_plugins** unchecked and run that workflow later. A plugin tag
 that already exists is skipped.
 
 Private repos and **draft** releases need a token (Contents: Read):

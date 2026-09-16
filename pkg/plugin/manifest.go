@@ -89,8 +89,9 @@ type AppSpec struct {
 
 // CLI is the user-facing flynn command published by a plugin. The flynn binary
 // does not compile plugin handlers; after install it reads this block from the
-// cluster (app meta flynn-plugin-cli) and runs matching actions as controller
-// jobs against the plugin/resource release image.
+// cluster (app meta flynn-plugin-cli). Actions with Args run as controller
+// jobs against the plugin/resource image. Actions with Flynn run a built-in
+// laptop command against the plugin app (flynn -a <app> route …).
 type CLI struct {
 	Command     string   `json:"command"`
 	Usage       string   `json:"usage,omitempty"`
@@ -111,7 +112,9 @@ type CLI struct {
 	Actions []CLIAction `json:"actions,omitempty"`
 }
 
-// CLIAction is one docopt command delegated to a cluster job.
+// CLIAction is one docopt command. Cluster jobs set Args (and run in the
+// plugin/resource image). Flynn names a compiled-in laptop command
+// (`route`, `env`, …) run as `flynn -a <plugin-app> <flynn> …`.
 type CLIAction struct {
 	Name       string            `json:"name"`
 	Args       []string          `json:"args"`
@@ -128,6 +131,9 @@ type CLIAction struct {
 	ReleaseEnv bool `json:"release_env,omitempty"`
 	// Data requests a data volume on the job (mongodb restore).
 	Data bool `json:"data,omitempty"`
+	// Flynn, if set, runs that built-in flynn command against the plugin
+	// app instead of starting a cluster job. Mutually exclusive with Args.
+	Flynn string `json:"flynn,omitempty"`
 }
 
 // MatchAction returns the action whose Name tokens are all true in docopt
@@ -157,6 +163,44 @@ func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
 		}
 	}
 	return best
+}
+
+// MatchFlynnDelegate reports a compiled-in flynn command the user invoked as
+// `flynn <plugin> <action> …` (for example `flynn dashboard route add http`).
+func (c *CLI) MatchFlynnDelegate(args []string) (*CLIAction, []string, bool) {
+	if c == nil || len(args) == 0 {
+		return nil, nil, false
+	}
+	var best *CLIAction
+	bestN := -1
+	for i := range c.Actions {
+		a := &c.Actions[i]
+		if strings.TrimSpace(a.Flynn) == "" {
+			continue
+		}
+		parts := strings.Fields(a.Name)
+		if len(parts) == 0 {
+			parts = strings.Fields(a.Flynn)
+		}
+		if len(parts) == 0 || len(args) < len(parts) {
+			continue
+		}
+		ok := true
+		for j, p := range parts {
+			if args[j] != p {
+				ok = false
+				break
+			}
+		}
+		if ok && len(parts) > bestN {
+			best = a
+			bestN = len(parts)
+		}
+	}
+	if best == nil {
+		return nil, nil, false
+	}
+	return best, args[bestN:], true
 }
 
 func (c *CLI) Runnable() bool {
@@ -197,6 +241,11 @@ type RouteSpec struct {
 	Domain  string `json:"domain,omitempty"`
 	Service string `json:"service"`
 	Leader  bool   `json:"leader,omitempty"`
+	// AutoTLS requests Let's Encrypt on this HTTP route (same as
+	// `flynn route add http --auto-tls`). Cluster ACME must already be
+	// configured; otherwise install logs a warning and leaves the route
+	// HTTP-only unless the operator passed --auto-tls.
+	AutoTLS bool `json:"auto_tls,omitempty"`
 }
 
 // WebhookSpec is a host webhook created from the plugin manifest. SecretEnv,
@@ -271,6 +320,9 @@ func (m *Manifest) Validate() error {
 		if typ == "http" && strings.TrimSpace(r.Domain) == "" {
 			return fmt.Errorf("%s: routes[%d].domain is required for http routes", ManifestName, i)
 		}
+		if r.AutoTLS && typ != "http" {
+			return fmt.Errorf("%s: routes[%d].auto_tls is only valid for http routes", ManifestName, i)
+		}
 	}
 	for i, w := range m.Webhooks {
 		url := strings.TrimSpace(w.URL)
@@ -282,6 +334,24 @@ func (m *Manifest) Validate() error {
 		}
 		m.Webhooks[i].URL = url
 		m.Webhooks[i].SecretEnv = strings.TrimSpace(w.SecretEnv)
+	}
+	if m.CLI != nil {
+		for i, a := range m.CLI.Actions {
+			flynnCmd := strings.TrimSpace(a.Flynn)
+			if flynnCmd == "" {
+				continue
+			}
+			if strings.ContainsAny(flynnCmd, " \t") {
+				return fmt.Errorf("%s: cli.actions[%d].flynn must be a single command", ManifestName, i)
+			}
+			if len(a.Args) > 0 {
+				return fmt.Errorf("%s: cli.actions[%d]: flynn and args are mutually exclusive", ManifestName, i)
+			}
+			m.CLI.Actions[i].Flynn = flynnCmd
+			if strings.TrimSpace(a.Name) == "" {
+				m.CLI.Actions[i].Name = flynnCmd
+			}
+		}
 	}
 	return nil
 }

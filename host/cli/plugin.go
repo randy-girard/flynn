@@ -10,31 +10,48 @@ import (
 	"github.com/flynn/go-docopt"
 )
 
-func init() {
-	Register("plugin", runPlugin, `
-usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] <source>
+const pluginUsage = `
+usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
        flynn-host plugin list
        flynn-host plugin credentials set github [--token-file=FILE] [--api=URL]
        flynn-host plugin credentials unset github
        flynn-host plugin credentials show github
+       flynn-host plugin <plugin> route
+       flynn-host plugin <plugin> route add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-drain-backends] [--disable-keep-alives] [<domain>]
+       flynn-host plugin <plugin> route add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
+       flynn-host plugin <plugin> route update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
+       flynn-host plugin <plugin> route remove <id>
 
 Commands:
 	install       Install a plugin from a local path, alias, or GitHub URL
 	list          List plugins installed on this cluster
 	credentials   Store a GitHub token for private or draft release assets
+	route         List, add, update, or remove routes for an installed plugin
 
 Options:
 	--no-build         Fail if dist/ is missing instead of running script/plugin-build
 	--rebuild          Run script/plugin-build even if dist/ already exists (local only)
 	--ref=REF          GitHub release tag (default: latest published, or plugins.json ref)
 	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
+	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
+	--no-auto-tls      Disable Let's Encrypt on an existing HTTP route
 	--token-file=FILE  Read the GitHub token from a file (otherwise stdin)
 	--api=URL          GitHub API base (GitHub Enterprise)
+	-s, --service=<service>    service name to route to (defaults to the plugin name)
+	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS (http only)
+	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS (http only)
+	-p, --port=<port>          port to accept traffic on
 
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, registers a provider only when
 kind is resource-provider, and registers flynn-host webhooks declared in
-the manifest. Local checkouts are used when present. Otherwise
+the manifest. If cluster ACME is already enabled, HTTP plugin routes get
+Let's Encrypt automatically. Manifest auto_tls still requests TLS when you
+are not passing --auto-tls (warns if ACME is off). --auto-tls fails if ACME
+is off. After install, flynn-host plugin <name> route is the same shape as
+flynn route (list / add http / update / remove) scoped to that plugin app.
+Local
+checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the
 repo declared by a sibling checkout / installed plugin). GitHub installs never
 build on the cluster; they unpack release assets (image layers plus any
@@ -49,10 +66,17 @@ Examples:
 
     $ flynn-host plugin install ../flynn-plugin-redis
     $ flynn-host plugin install redis --ref v20260914.0
+    $ flynn-host plugin install dashboard --auto-tls
+    $ flynn-host plugin dashboard route
+    $ flynn-host plugin dashboard route add http --auto-tls
+    $ flynn-host plugin dashboard route update http/<id> --auto-tls
     $ flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
     $ flynn-host plugin credentials set github --token-file /root/github.token
     $ flynn-host plugin list
-`)
+`
+
+func init() {
+	Register("plugin", runPlugin, pluginUsage)
 }
 
 func runPlugin(args *docopt.Args) error {
@@ -63,6 +87,8 @@ func runPlugin(args *docopt.Args) error {
 		return runPluginList()
 	case args.Bool["credentials"]:
 		return runPluginCredentials(args)
+	case args.Bool["route"]:
+		return runPluginRoute(args)
 	}
 	return nil
 }
@@ -90,6 +116,7 @@ func runPluginInstall(args *docopt.Args) error {
 		Cwd:       cwd,
 		NoBuild:   args.Bool["--no-build"],
 		Rebuild:   args.Bool["--rebuild"],
+		AutoTLS:   args.Bool["--auto-tls"],
 	})
 }
 

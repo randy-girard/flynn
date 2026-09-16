@@ -14,6 +14,7 @@ import (
 
 	ct "github.com/flynn/flynn/controller/types"
 	host "github.com/flynn/flynn/host/types"
+	router "github.com/flynn/flynn/router/types"
 )
 
 func writeAppPlugin(t *testing.T, dir, name string) {
@@ -437,5 +438,230 @@ func TestPluginWebhookIDStable(t *testing.T) {
 	}
 	if a == c {
 		t.Fatal("plugin name must be part of the id")
+	}
+}
+
+type routeStub struct {
+	routes    []*router.Route
+	created   []*router.Route
+	updated   []*router.Route
+	deleted   []string
+	acme      *ct.ACMEConfig
+	acmeErr   error
+	listErr   error
+	createErr error
+	updateErr error
+	deleteErr error
+}
+
+func (s *routeStub) AppRouteList(string) ([]*router.Route, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	return s.routes, nil
+}
+
+func (s *routeStub) CreateRoute(_ string, route *router.Route) error {
+	if s.createErr != nil {
+		return s.createErr
+	}
+	cp := *route
+	if cp.ID == "" {
+		cp.ID = fmt.Sprintf("r%d", len(s.created)+1)
+	}
+	s.created = append(s.created, &cp)
+	s.routes = append(s.routes, &cp)
+	return nil
+}
+
+func (s *routeStub) UpdateRoute(_ string, routeID string, route *router.Route) error {
+	if s.updateErr != nil {
+		return s.updateErr
+	}
+	cp := *route
+	s.updated = append(s.updated, &cp)
+	for i, r := range s.routes {
+		if r == nil {
+			continue
+		}
+		if r.FormattedID() == routeID || r.ID == routeID || (route.ID != "" && r.ID == route.ID) {
+			s.routes[i] = &cp
+			break
+		}
+	}
+	return nil
+}
+
+func (s *routeStub) DeleteRoute(_ string, routeID string) error {
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	found := false
+	out := s.routes[:0]
+	for _, r := range s.routes {
+		if r != nil && (r.FormattedID() == routeID || r.ID == routeID) {
+			found = true
+			continue
+		}
+		out = append(out, r)
+	}
+	if !found {
+		return fmt.Errorf("route %s not found", routeID)
+	}
+	s.routes = out
+	s.deleted = append(s.deleted, routeID)
+	return nil
+}
+
+func (s *routeStub) GetACMEConfig() (*ct.ACMEConfig, error) {
+	if s.acmeErr != nil {
+		return nil, s.acmeErr
+	}
+	if s.acme == nil {
+		return &ct.ACMEConfig{Enabled: false}, nil
+	}
+	return s.acme, nil
+}
+
+func TestHasHTTPRoute(t *testing.T) {
+	if hasHTTPRoute(nil) || hasHTTPRoute(&Manifest{}) {
+		t.Fatal("empty")
+	}
+	if hasHTTPRoute(&Manifest{Routes: []RouteSpec{{Type: "tcp", Service: "db"}}}) {
+		t.Fatal("tcp only")
+	}
+	if !hasHTTPRoute(&Manifest{Routes: []RouteSpec{{Service: "web", Domain: "x.example"}}}) {
+		t.Fatal("default type is http")
+	}
+}
+
+func TestEnsureRoutesAutoTLS(t *testing.T) {
+	app := &ct.App{ID: "app1", Name: "widget"}
+	cluster := map[string]string{"CLUSTER_DOMAIN": "ex.local"}
+	m := &Manifest{
+		Name: "widget",
+		Kind: KindApp,
+		App:  AppSpec{Name: "widget"},
+		Routes: []RouteSpec{
+			{Type: "http", Domain: "widget.${CLUSTER_DOMAIN}", Service: "widget", AutoTLS: true},
+		},
+	}
+
+	stub := &routeStub{acme: &ct.ACMEConfig{Enabled: true}}
+	in := &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.created) != 1 {
+		t.Fatalf("created=%d", len(stub.created))
+	}
+	if !routeHasAutoTLS(stub.created[0]) || *stub.created[0].ManagedCertificateDomain != "widget.ex.local" {
+		t.Fatalf("route %+v", stub.created[0])
+	}
+
+	warn := &bytes.Buffer{}
+	noACME := &routeStub{}
+	in = &Installer{Stdout: warn, RouteClient: noACME}
+	if err := in.ensureRoutes(app, m, cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(noACME.created) != 1 || routeHasAutoTLS(noACME.created[0]) {
+		t.Fatalf("manifest auto_tls without ACME must still create HTTP: %+v", noACME.created)
+	}
+	if !strings.Contains(warn.String(), "skipping auto TLS") {
+		t.Fatalf("warn=%q", warn.String())
+	}
+
+	fail := &routeStub{}
+	in = &Installer{Stdout: io.Discard, RouteClient: fail}
+	err := in.ensureRoutes(app, m, cluster, true)
+	if err == nil || !strings.Contains(err.Error(), "ACME") {
+		t.Fatalf("--auto-tls without ACME must fail, got %v", err)
+	}
+	if len(fail.created) != 0 {
+		t.Fatal("must not create routes when --auto-tls cannot run")
+	}
+}
+
+func TestEnsureRoutesAutoTLSUpdatesExisting(t *testing.T) {
+	app := &ct.App{ID: "app1", Name: "widget"}
+	cluster := map[string]string{"CLUSTER_DOMAIN": "ex.local"}
+	m := &Manifest{
+		Routes: []RouteSpec{
+			{Type: "http", Domain: "widget.${CLUSTER_DOMAIN}", Service: "widget", AutoTLS: true},
+		},
+	}
+	existing := &router.Route{Type: "http", ID: "abc", Domain: "widget.ex.local", Service: "widget"}
+	stub := &routeStub{
+		routes: []*router.Route{existing},
+		acme:   &ct.ACMEConfig{Enabled: true},
+	}
+	in := &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.created) != 0 || len(stub.updated) != 1 {
+		t.Fatalf("created=%d updated=%d", len(stub.created), len(stub.updated))
+	}
+	if !routeHasAutoTLS(stub.updated[0]) {
+		t.Fatalf("updated %+v", stub.updated[0])
+	}
+
+	already := &router.Route{Type: "http", ID: "abc", Domain: "widget.ex.local", Service: "widget"}
+	d := already.Domain
+	already.ManagedCertificateDomain = &d
+	stub = &routeStub{
+		routes: []*router.Route{already},
+		acme:   &ct.ACMEConfig{Enabled: true},
+	}
+	in = &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, cluster, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.updated) != 0 {
+		t.Fatal("already-managed cert must not be updated again")
+	}
+}
+
+func TestEnsureRoutesFlagAutoTLSWithoutManifest(t *testing.T) {
+	app := &ct.App{ID: "app1", Name: "widget"}
+	m := &Manifest{
+		Routes: []RouteSpec{
+			{Type: "http", Domain: "widget.ex.local", Service: "widget"},
+		},
+	}
+	stub := &routeStub{acme: &ct.ACMEConfig{Enabled: true}}
+	in := &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, nil, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.created) != 1 || !routeHasAutoTLS(stub.created[0]) {
+		t.Fatalf("CLI --auto-tls must attach ACME even when the manifest omits auto_tls: %+v", stub.created)
+	}
+}
+
+func TestEnsureRoutesAutoTLSWhenClusterACMEEnabled(t *testing.T) {
+	app := &ct.App{ID: "app1", Name: "widget"}
+	m := &Manifest{
+		Routes: []RouteSpec{
+			{Type: "http", Domain: "widget.ex.local", Service: "widget"},
+		},
+	}
+	stub := &routeStub{acme: &ct.ACMEConfig{Enabled: true}}
+	in := &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.created) != 1 || !routeHasAutoTLS(stub.created[0]) {
+		t.Fatalf("enabled cluster ACME must attach TLS on HTTP plugin routes without --auto-tls: %+v", stub.created)
+	}
+
+	off := &routeStub{}
+	in = &Installer{Stdout: io.Discard, RouteClient: off}
+	if err := in.ensureRoutes(app, m, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(off.created) != 1 || routeHasAutoTLS(off.created[0]) {
+		t.Fatalf("ACME off and no auto_tls must stay HTTP: %+v", off.created)
 	}
 }

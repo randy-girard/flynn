@@ -45,6 +45,9 @@ type Installer struct {
 	// Hosts, if set, lists flynn-host members for webhook registration.
 	// Tests replace this; the default is cluster.NewClient().Hosts.
 	Hosts func() ([]WebhookHost, error)
+	// RouteClient, if set, is used for HTTP routes and ACME. Tests
+	// replace this; the default is Client.
+	RouteClient RouteClient
 }
 
 // WebhookHost is the subset of pkg/cluster.Host used to register webhooks
@@ -64,6 +67,19 @@ type InstallOptions struct {
 	Rebuild     bool
 	PluginsFile string
 	CredsFile   string
+	// AutoTLS enables Let's Encrypt on this plugin's HTTP routes (the
+	// same as `flynn route add http --auto-tls`). Requires cluster ACME.
+	AutoTLS bool
+}
+
+// RouteClient is the controller subset used to create HTTP/TCP routes and
+// attach ACME. Tests replace Installer.RouteClient / PluginRouter.Client.
+type RouteClient interface {
+	AppRouteList(appID string) ([]*router.Route, error)
+	CreateRoute(appID string, route *router.Route) error
+	UpdateRoute(appID, routeID string, route *router.Route) error
+	DeleteRoute(appID, routeID string) error
+	GetACMEConfig() (*ct.ACMEConfig, error)
 }
 
 type providerClient interface {
@@ -105,6 +121,10 @@ func (in *Installer) Install(opts InstallOptions) error {
 		return err
 	}
 	in.logf("installing plugin %s (kind %s) from %s", m.Name, m.Kind, displaySource(resolved, root))
+
+	if opts.AutoTLS && !hasHTTPRoute(m) {
+		return fmt.Errorf("--auto-tls requires an HTTP route; plugin %s has none", m.Name)
+	}
 
 	if resolved.GitHub != nil {
 		if !DistReady(root) {
@@ -180,7 +200,7 @@ func (in *Installer) Install(opts InstallOptions) error {
 		}
 	}
 
-	if err := in.ensureRoutes(app, m, cluster); err != nil {
+	if err := in.ensureRoutes(app, m, cluster, opts.AutoTLS); err != nil {
 		return err
 	}
 
@@ -436,17 +456,112 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 	return nil
 }
 
-func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]string) error {
-	if m == nil || len(m.Routes) == 0 || in.Client == nil || app == nil {
+func (in *Installer) routeAPI() RouteClient {
+	if in.RouteClient != nil {
+		return in.RouteClient
+	}
+	if in.Client != nil {
+		return in.Client
+	}
+	return nil
+}
+
+func hasHTTPRoute(m *Manifest) bool {
+	if m == nil {
+		return false
+	}
+	for _, spec := range m.Routes {
+		typ := spec.Type
+		if typ == "" {
+			typ = "http"
+		}
+		if typ == "http" {
+			return true
+		}
+	}
+	return false
+}
+
+func routeKey(typ, domain, service string) string {
+	return typ + "/" + domain + "/" + service
+}
+
+func routeHasAutoTLS(r *router.Route) bool {
+	return r != nil && r.ManagedCertificateDomain != nil && strings.TrimSpace(*r.ManagedCertificateDomain) != ""
+}
+
+func (in *Installer) acmeEnabled() (bool, error) {
+	api := in.routeAPI()
+	if api == nil {
+		return false, fmt.Errorf("missing controller client")
+	}
+	cfg, err := api.GetACMEConfig()
+	if err != nil {
+		return false, err
+	}
+	return cfg != nil && cfg.Enabled, nil
+}
+
+func (in *Installer) attachAutoTLS(route *router.Route, require bool) error {
+	if route == nil || route.Type != "http" || route.Domain == "" {
 		return nil
 	}
-	existing, err := in.Client.AppRouteList(app.ID)
+	if routeHasAutoTLS(route) {
+		return nil
+	}
+	enabled, err := in.acmeEnabled()
+	if err != nil {
+		return fmt.Errorf("check ACME: %w", err)
+	}
+	if !enabled {
+		if require {
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first")
+		}
+		in.logf("skipping auto TLS for %s (ACME is not enabled; run flynn-host acme configure --email=<email> --agree-tos)", route.Domain)
+		return nil
+	}
+	domain := route.Domain
+	route.ManagedCertificateDomain = &domain
+	route.Certificate = nil
+	route.LegacyTLSCert = ""
+	route.LegacyTLSKey = ""
+	in.logf("enabling auto TLS for %s", domain)
+	return nil
+}
+
+func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]string, installAutoTLS bool) error {
+	if m == nil || len(m.Routes) == 0 || app == nil {
+		return nil
+	}
+	api := in.routeAPI()
+	if api == nil {
+		return nil
+	}
+	acmeOn := false
+	if hasHTTPRoute(m) || installAutoTLS {
+		on, err := in.acmeEnabled()
+		if installAutoTLS {
+			if err != nil {
+				return fmt.Errorf("check ACME: %w", err)
+			}
+			if !on {
+				return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first")
+			}
+		}
+		if err == nil {
+			acmeOn = on
+		}
+	}
+	existing, err := api.AppRouteList(app.ID)
 	if err != nil && err != controller.ErrNotFound {
 		return fmt.Errorf("list routes for %s: %w", app.Name, err)
 	}
-	have := map[string]bool{}
+	have := map[string]*router.Route{}
 	for _, r := range existing {
-		have[r.Type+"/"+r.Domain+"/"+r.Service] = true
+		if r == nil {
+			continue
+		}
+		have[routeKey(r.Type, r.Domain, r.Service)] = r
 	}
 	for _, spec := range m.Routes {
 		typ := spec.Type
@@ -454,9 +569,23 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 			typ = "http"
 		}
 		domain := ExpandClusterVars(spec.Domain, cluster)
-		key := typ + "/" + domain + "/" + spec.Service
-		if have[key] {
-			in.logf("route %s %s already exists", typ, domain)
+		wantTLS := typ == "http" && (spec.AutoTLS || installAutoTLS || acmeOn)
+		key := routeKey(typ, domain, spec.Service)
+		if prev := have[key]; prev != nil {
+			if !wantTLS || routeHasAutoTLS(prev) {
+				in.logf("route %s %s already exists", typ, domain)
+				continue
+			}
+			if err := in.attachAutoTLS(prev, installAutoTLS); err != nil {
+				return err
+			}
+			if !routeHasAutoTLS(prev) {
+				continue
+			}
+			in.logf("updating %s route %s with auto TLS", typ, domain)
+			if err := api.UpdateRoute(app.ID, prev.FormattedID(), prev); err != nil {
+				return fmt.Errorf("update route %s: %w", domain, err)
+			}
 			continue
 		}
 		in.logf("adding %s route %s -> %s", typ, domain, spec.Service)
@@ -467,7 +596,12 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 			Leader:        spec.Leader,
 			DrainBackends: true,
 		}
-		if err := in.Client.CreateRoute(app.ID, route); err != nil {
+		if wantTLS {
+			if err := in.attachAutoTLS(route, installAutoTLS); err != nil {
+				return err
+			}
+		}
+		if err := api.CreateRoute(app.ID, route); err != nil {
 			return fmt.Errorf("create route %s: %w", domain, err)
 		}
 	}

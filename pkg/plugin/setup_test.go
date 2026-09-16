@@ -109,6 +109,17 @@ func TestManifestValidateSetupAndRoutes(t *testing.T) {
 	if err := badRoute.Validate(); err == nil {
 		t.Fatal("expected http route domain")
 	}
+	tcpTLS := &Manifest{
+		Name: "dash",
+		Kind: KindApp,
+		App:  AppSpec{Processes: map[string]ct.ProcessType{"web": {}}},
+		Routes: []RouteSpec{
+			{Type: "tcp", Service: "db", AutoTLS: true},
+		},
+	}
+	if err := tcpTLS.Validate(); err == nil || !strings.Contains(err.Error(), "auto_tls") {
+		t.Fatalf("tcp auto_tls: %v", err)
+	}
 	badHook := &Manifest{
 		Name: "dash",
 		Kind: KindApp,

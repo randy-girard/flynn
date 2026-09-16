@@ -205,6 +205,34 @@ func TestExecutePluginCLINoMatchingAction(t *testing.T) {
 	}
 }
 
+func TestRunPluginFlynnCommand(t *testing.T) {
+	spec := &plugin.CLI{Command: "widget", App: "widget"}
+	err := runPluginFlynnCommand(nil, spec, &plugin.CLIAction{Name: "route", Flynn: "not-a-flynn-cmd"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "not a built-in CLI command") {
+		t.Fatalf("unknown flynn cmd: %v", err)
+	}
+	err = runPluginFlynnCommand(nil, &plugin.CLI{Command: "widget"}, &plugin.CLIAction{Name: "route", Flynn: "route"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "plugin app name") {
+		t.Fatalf("missing app: %v", err)
+	}
+	err = runPluginFlynnCommand(nil, spec, &plugin.CLIAction{Flynn: ""}, nil)
+	if err == nil || !strings.Contains(err.Error(), "missing flynn command") {
+		t.Fatalf("empty flynn: %v", err)
+	}
+}
+
+func TestExecutePluginCLIFlynnDelegate(t *testing.T) {
+	spec := &plugin.CLI{
+		Command: "widget",
+		App:     "widget",
+		Actions: []plugin.CLIAction{{Name: "route", Flynn: "not-a-flynn-cmd"}},
+	}
+	err := executePluginCLI(nil, spec, &docopt.Args{Bool: map[string]bool{"route": true}}, []string{"route"})
+	if err == nil || !strings.Contains(err.Error(), "not a built-in CLI command") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestPluginJobConfigErrors(t *testing.T) {
 	old := flagApp
 	t.Cleanup(func() { flagApp = old })
