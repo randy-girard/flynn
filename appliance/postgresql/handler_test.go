@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/status"
@@ -43,11 +42,7 @@ func TestHandlerStatusAndStopWithoutPeer(t *testing.T) {
 	if stopRec.Code != 200 {
 		t.Fatalf("stop status=%d", stopRec.Code)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && !hb.closed.Load() {
-		time.Sleep(10 * time.Millisecond)
-	}
 	if !hb.closed.Load() {
-		t.Fatal("stop must close the heartbeater")
+		t.Fatal("stop must close the heartbeater before returning")
 	}
 }

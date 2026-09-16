@@ -107,6 +107,40 @@ func (PostgresSuite) TestUpstreamTimeoutBudget(c *C) {
 	c.Assert(upstreamTimeout >= 60*time.Second, Equals, true)
 }
 
+func (PostgresSuite) TestStopTimeoutFitsContainerWaitStop(c *C) {
+	p := NewProcess(Config{ID: "n1"})
+	// host/libcontainer_backend Container.WaitStop is 30s then SIGKILL.
+	c.Assert(p.stopTimeout > 0, Equals, true)
+	c.Assert(p.stopTimeout <= 15*time.Second, Equals, true)
+	c.Assert(3*p.stopTimeout <= 30*time.Second, Equals, true)
+}
+
+func (PostgresSuite) TestCheckpointConfigKeepsRecoveryShort(c *C) {
+	var buf bytes.Buffer
+	c.Assert(configTemplate.Execute(&buf, configData{Port: "5432", ID: "primary"}), IsNil)
+	out := buf.String()
+	c.Assert(strings.Contains(out, "checkpoint_timeout = 30s"), Equals, true)
+	c.Assert(strings.Contains(out, "max_wal_size = 256MB"), Equals, true)
+}
+
+func (PostgresSuite) TestInitDBSkipsWhenPGVersionExists(c *C) {
+	dir := c.MkDir()
+	bin := c.MkDir()
+	called := filepath.Join(dir, "initdb-called")
+	script := "#!/bin/sh\ntouch " + called + "\nexit 1\n"
+	c.Assert(os.WriteFile(filepath.Join(bin, "initdb"), []byte(script), 0755), IsNil)
+	c.Assert(os.WriteFile(filepath.Join(dir, "PG_VERSION"), []byte("16\n"), 0600), IsNil)
+
+	p := NewProcess(Config{ID: "n1", DataDir: dir, BinDir: bin})
+	c.Assert(p.clusterAlreadyInitialized(), Equals, true)
+	c.Assert(p.initDB(), IsNil)
+	if _, err := os.Stat(called); err == nil {
+		c.Fatal("initdb must not run when PG_VERSION already exists")
+	}
+	_, err := os.Stat(filepath.Join(dir, "pg_hba.conf"))
+	c.Assert(err, IsNil)
+}
+
 func (PostgresSuite) TestSyncStandbyNamesConfigQuoting(c *C) {
 	var buf bytes.Buffer
 	syncID := "0ed77f6c-a2d1-461e-8f7d-09fd96fbeb3a"
