@@ -104,8 +104,8 @@
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before resource add (default: redis
-#                        mysql mongodb kafka clickhouse). mysql resolves to the
-#                        mariadb checkout via flynn-plugin.json aliases.
+#                        mysql mongodb kafka clickhouse dashboard). mysql
+#                        resolves to the mariadb checkout via flynn-plugin.json.
 #                        Restore does not install again; plugins.json + postgres
 #                        already list and restore them.
 #   PLUGIN_REPO_ROOT     Parent of flynn-plugin-* checkouts (default: ..)
@@ -2509,9 +2509,51 @@ PY
     return 0
   fi
   info "checking plugin ${name} wait URL ${wait_url}"
+  # flynn-host plugin install already waited with a discoverd-aware client.
+  # Host systemd-resolved does not serve *.discoverd (that DNS is on flynnbr0),
+  # so pin the original hostname to the overlay addr from GET /services/<svc>/instances.
+  # Sirenia API /ping can take ~30s while it looks up leader.<app>.discoverd, so
+  # the per-request timeout must exceed that (the installer HTTP client has none).
   node_root_script node1 <<EOF
 set -euo pipefail
-curl -fsS --max-time 15 "${wait_url}" >/dev/null
+eval "\$(python3 - "${wait_url}" <<'PY'
+import json, shlex, sys, urllib.parse, urllib.request
+raw = sys.argv[1]
+u = urllib.parse.urlparse(raw)
+host = u.hostname or ""
+resolve = ""
+if host.endswith(".discoverd"):
+    svc = host[: -len(".discoverd")]
+    with urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % svc, timeout=5) as resp:
+        inst = json.load(resp)
+    if not inst:
+        raise SystemExit("no discoverd instances for %s" % svc)
+    addr = (inst[0] or {}).get("addr") or ""
+    if ":" not in addr:
+        raise SystemExit("bad discoverd addr for %s: %r" % (svc, addr))
+    ip, port = addr.rsplit(":", 1)
+    resolve = "%s:%s:%s" % (host, port, ip)
+print("url=%s" % shlex.quote(raw))
+print("resolve=%s" % shlex.quote(resolve))
+PY
+)"
+args=(-fsS --max-time 60)
+if [[ -n "\${resolve}" ]]; then
+  args+=(--resolve "\${resolve}")
+fi
+deadline=\$((SECONDS + 180))
+last=1
+while (( SECONDS < deadline )); do
+  if curl "\${args[@]}" "\${url}" >/dev/null; then
+    echo "plugin ${name} ready (\${url} via \${resolve:-direct})"
+    exit 0
+  else
+    last=\$?
+  fi
+  sleep 2
+done
+echo "plugin ${name} not ready at \${url} (curl rc=\${last})" >&2
+exit 1
 EOF
 }
 

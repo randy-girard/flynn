@@ -110,6 +110,12 @@ need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
   "plugin install in smoke must not block on TTY setup prompts"
+need '127.0.0.1:1111/services' \
+  "plugin wait probes must resolve *.discoverd via the discoverd HTTP API, not host systemd-resolved"
+need 'args[+]=\(--resolve' \
+  "plugin wait probes must curl the discoverd hostname pinned to the overlay addr (sirenia /ping uses Host)"
+need 'max-time 60' \
+  "plugin wait probes must outlast sirenia API /ping (~30s waiting on leader.<app>.discoverd)"
 need 'probe_delegated_plugin_cli_hidden' \
   "before plugin install, flynn help must hide redis and flynn redis must fail"
 need 'probe_delegated_plugin_cli_visible' \
