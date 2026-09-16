@@ -358,20 +358,33 @@ func TestLoadCatalog(t *testing.T) {
 	}
 
 	raw := `{"command":"redis","usage":"manage redis databases"}`
-	apps := []*ct.App{{
-		Name: "redis",
-		Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: raw},
-	}}
+	apps := []*ct.App{
+		{
+			Name: "redis",
+			Meta: map[string]string{MetaPlugin: "true", MetaPluginKind: KindResourceProvider, MetaPluginCLI: raw},
+		},
+		{
+			Name: "legacy-cache",
+			Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: `{"command":"legacy-cache","usage":"old plugin"}`},
+		},
+		{
+			Name: "control-ui",
+			Meta: map[string]string{MetaPlugin: "true", MetaPluginKind: KindApp, MetaPluginCLI: `{"command":"control-ui","usage":"cluster UI"}`},
+		},
+	}
 	cat, err := LoadCatalog(stubCatalogClient{apps: apps, provErr: errors.New("no providers")})
-	if err != nil || !cat.HasCommand("redis") {
+	if err != nil || !cat.HasCommand("redis") || !cat.HasCommand("legacy-cache") {
 		t.Fatalf("ProviderList error must still return app CLI: %+v %v", cat, err)
+	}
+	if cat.HasCommand("control-ui") {
+		t.Fatalf("kind: app must stay off the user CLI: %+v", cat.Commands)
 	}
 
 	cat, err = LoadCatalog(stubCatalogClient{
 		apps:      apps,
 		providers: []*ct.Provider{{Name: "postgres"}},
 	})
-	if err != nil || !cat.HasCommand("redis") || !cat.HasProvider("postgres") {
+	if err != nil || !cat.HasCommand("redis") || !cat.HasProvider("postgres") || !cat.HasCommand("legacy-cache") {
 		t.Fatalf("full catalog: %+v %v", cat, err)
 	}
 	if (*Catalog)(nil).HasProvider("redis") || (*Catalog)(nil).Lookup("redis") != nil {

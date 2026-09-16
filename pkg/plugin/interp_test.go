@@ -52,6 +52,9 @@ func TestCLIUserVisible(t *testing.T) {
 	if !c.UserVisible(KindResourceProvider) {
 		t.Fatal("resource-provider CLI is user-visible")
 	}
+	if !c.UserVisible("") {
+		t.Fatal("legacy plugins without kind stay on the user flynn CLI")
+	}
 	if c.UserVisible(KindApp) {
 		t.Fatal("kind: app CLI is not user-visible by default")
 	}

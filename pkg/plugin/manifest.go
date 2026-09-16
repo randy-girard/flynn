@@ -215,7 +215,9 @@ func (c *CLI) Runnable() bool {
 
 // UserVisible is whether the laptop `flynn` CLI should list and run this
 // command. Resource providers are user tools (flynn redis …). kind: app
-// system plugins stay off the user CLI unless cli.user is true.
+// system plugins stay off the user CLI unless cli.user is true. Plugins
+// installed before flynn-plugin-kind existed have an empty kind and stay
+// visible so `flynn redis` keeps working after upgrade.
 func (c *CLI) UserVisible(kind string) bool {
 	if c == nil || strings.TrimSpace(c.Command) == "" {
 		return false
@@ -223,7 +225,7 @@ func (c *CLI) UserVisible(kind string) bool {
 	if c.User {
 		return true
 	}
-	return kind == KindResourceProvider
+	return kind != KindApp
 }
 
 func (c *CLI) Action(name string) *CLIAction {
