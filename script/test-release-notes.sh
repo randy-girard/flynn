@@ -70,5 +70,23 @@ if grep -q 'Built from' "${sample}"; then
   echo "CI notes must not replace grouped changes with a Built from SHA blurb" >&2
   exit 1
 fi
+if ! grep -q 'flynn_omit_coverage_badge_notes' "${notes_lib}"; then
+  echo "release-notes lib must filter coverage-badge commits" >&2
+  exit 1
+fi
+filtered="$(printf '%s\n' '- ci: add dispatch_plugins (abc123)' '- ci: update coverage badge [skip ci] (def456)' | flynn_omit_coverage_badge_notes)"
+if ! printf '%s\n' "${filtered}" | grep -q 'dispatch_plugins'; then
+  echo "coverage-badge filter must keep other ci commits" >&2
+  exit 1
+fi
+if printf '%s\n' "${filtered}" | grep -qi 'ci: update coverage badge'; then
+  echo "coverage-badge filter must drop update coverage badge commits" >&2
+  exit 1
+fi
+if grep -qi 'ci: update coverage badge' "${sample}"; then
+  echo "generated notes must omit coverage badge commits" >&2
+  grep -i 'ci: update coverage badge' "${sample}" >&2
+  exit 1
+fi
 
 echo "ok GitHub release notes are grouped like script/release"
