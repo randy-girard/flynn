@@ -52,7 +52,7 @@ need_in "${cli}" 'plugin <plugin> route update' \
 need_in "${docs}" 'auto_tls' \
   "plugin docs must describe route auto_tls and --auto-tls"
 need_in "${docs}" 'flynn-host plugin dashboard route add http' \
-  "plugin docs must show flynn-host plugin <name> route (user CLI flynn dashboard route is separate)"
+  "plugin docs must show flynn-host plugin <name> route (kind: app is not a user flynn command)"
 
 if grep -qE -- 'plugin install.*--auto-tls' "${smoke}"; then
   echo "smoke must not pass --auto-tls (Vagrant clusters do not run Let's Encrypt)" >&2

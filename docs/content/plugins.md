@@ -64,9 +64,11 @@ sudo flynn-host plugin dashboard route update http/<id> --auto-tls
 
 `<plugin>` is the installed app name (or its `cli.command`). Flynn does not
 special-case dashboard. Omit `<domain>` on `add http` when the plugin has
-exactly one HTTP route (typical after install). Users with cluster
-credentials can do the same from the laptop when the plugin publishes
-`"flynn": "route"` (`flynn dashboard route add http --auto-tls …`).
+exactly one HTTP route (typical after install). `kind: app` system plugins
+are not published on the user `flynn` CLI (no `flynn dashboard …`); operators
+use `flynn-host plugin`. A `kind: app` plugin that should be a user command
+sets `"cli": { "user": true }`. Resource-provider plugins stay on `flynn`
+the same way as Redis.
 **`webhooks`** registers the same host endpoints as
 `flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
@@ -104,9 +106,11 @@ syncs `flynn-plugin-*` into `/opt/flynn-plugins/`, then runs `flynn-host plugin
 install` on node1.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
-list the plugin’s CLI command under a **Plugins:** section (from the manifest
-stored on the plugin app, not a compiled-in `flynn` handler). `flynn plugins`
-lists installed plugins. `flynn resource add <provider>` works for `kind: resource-provider`.
+list **resource-provider** plugin commands under a **Plugins:** section (from
+the manifest stored on the plugin app, not a compiled-in `flynn` handler).
+`kind: app` system plugins are installed and listed by `flynn plugins` but
+do not add a user `flynn` command unless they set `cli.user`. `flynn resource
+add <provider>` works for `kind: resource-provider`.
 
 ```text
 flynn plugins
@@ -126,16 +130,17 @@ Those commands appear only after `flynn-host plugin install` stamps
 - `actions` — how each subcommand runs
 - `actions[].args` — cluster job argv in the plugin/resource image
 - `actions[].flynn` — built-in laptop command scoped to the plugin app
-  (`flynn dashboard route add http --auto-tls` is `flynn -a dashboard route …`).
-  Operators have the same route CLI on the host:
-  `flynn-host plugin dashboard route add http --auto-tls`.
+  (`flynn redis` job CLIs stay on the user CLI; HTTP plugins that need
+  Flynn’s route CLI on a cluster host use
+  `flynn-host plugin <name> route add http --auto-tls`).
+  A `kind: app` plugin only appears on `flynn help` when `"user": true`.
 - `passthrough` — append the user argv after the plugin command (nested CLIs)
 - `release_env` — copy the appliance release env into the job (TLS material)
 
-`flynn` and `args` are mutually exclusive on one action. Web plugins that
-need Flynn’s HTTP/TCP route CLI should set `"flynn": "route"` instead of
-shipping a container binary. Route/TLS changes from a cluster host use
-`flynn-host plugin <name> route`, not a plugin-name switch in Flynn core.
+`flynn` and `args` are mutually exclusive on one action. Web system plugins
+should not ship a user `flynn` command; operators manage HTTP/TCP routes with
+`flynn-host plugin <name> route`. Set `"user": true` only for a `kind: app`
+plugin that is meant for app developers the same way as a resource provider.
 
 Sirenia appliances may set `app.strategy`, `app.scale` (use `0` for the data
 process until first provision), and `generate_env` (random secrets such as

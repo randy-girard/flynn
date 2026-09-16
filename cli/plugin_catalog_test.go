@@ -190,15 +190,26 @@ func TestWritePluginTable(t *testing.T) {
 				"flynn-plugin-cli":  `{"command":"redis","usage":"manage redis databases"}`,
 			},
 		},
+		{
+			Name: "control-ui",
+			Meta: map[string]string{
+				"flynn-plugin":      "true",
+				"flynn-plugin-kind": "app",
+				"flynn-plugin-cli":  `{"command":"control-ui","usage":"cluster UI"}`,
+			},
+		},
 	})
-	if n != 1 {
+	if n != 2 {
 		t.Fatalf("n=%d", n)
 	}
 	got := buf.String()
-	for _, want := range []string{"redis", "resource-provider", "manage redis databases", "v20260915.0"} {
+	for _, want := range []string{"redis", "resource-provider", "manage redis databases", "v20260915.0", "control-ui", "app"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+	if strings.Contains(got, "cluster UI") {
+		t.Fatalf("kind: app system plugins must not show a user flynn command:\n%s", got)
 	}
 	if strings.Contains(got, "router") {
 		t.Fatalf("system apps that are not plugins:\n%s", got)

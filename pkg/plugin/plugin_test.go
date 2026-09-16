@@ -265,8 +265,16 @@ func TestCatalogFromPluginApps(t *testing.T) {
 		{Name: "silent", Meta: map[string]string{MetaPlugin: "true"}},
 		{Name: "bad-cli", Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: "{"}},
 		{Name: "empty-cmd", Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: `{"command":""}`}},
-		{Name: "cache", Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: string(raw)}},
-		{Name: "cache-dup", Meta: map[string]string{MetaPlugin: "true", MetaPluginCLI: string(dupRaw)}},
+		{Name: "cache", Meta: map[string]string{MetaPlugin: "true", MetaPluginKind: KindResourceProvider, MetaPluginCLI: string(raw)}},
+		{Name: "cache-dup", Meta: map[string]string{MetaPlugin: "true", MetaPluginKind: KindResourceProvider, MetaPluginCLI: string(dupRaw)}},
+		{Name: "control-ui", Meta: map[string]string{
+			MetaPlugin: "true", MetaPluginKind: KindApp,
+			MetaPluginCLI: `{"command":"control-ui","usage":"cluster UI","doc":"usage: flynn control-ui","actions":[{"name":"route","flynn":"route"}]}`,
+		}},
+		{Name: "opt-in-app", Meta: map[string]string{
+			MetaPlugin: "true", MetaPluginKind: KindApp,
+			MetaPluginCLI: `{"command":"opt-in","usage":"opt-in app","user":true,"doc":"usage: flynn opt-in","actions":[{"name":"ping","args":["/bin/ping"]}]}`,
+		}},
 	}
 	providers := []*ct.Provider{
 		nil,
@@ -286,6 +294,12 @@ func TestCatalogFromPluginApps(t *testing.T) {
 	}
 	if cat.HasCommand("silent") || cat.HasCommand("postgres") {
 		t.Fatalf("non-CLI apps must not leak into catalog: %+v", cat.Commands)
+	}
+	if cat.HasCommand("control-ui") {
+		t.Fatalf("kind: app system plugins must not appear on the user flynn CLI: %+v", cat.Commands)
+	}
+	if !cat.HasCommand("opt-in") {
+		t.Fatalf("kind: app with cli.user must appear: %+v", cat.Commands)
 	}
 	n := 0
 	for _, cmd := range cat.Commands {

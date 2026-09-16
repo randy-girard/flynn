@@ -17,7 +17,7 @@ import (
 // runPluginCommand handles flynn <name> when <name> is not compiled into the
 // CLI. Syntax comes from the cluster catalog (plugin app meta). Cluster-job
 // actions run in the plugin image. Flynn-delegated actions run a built-in
-// laptop command against the plugin app (flynn -a dashboard route …).
+// laptop command against the plugin app (flynn -a <app> route …).
 func runPluginCommand(name string, args []string) error {
 	client, err := getClusterClient()
 	if err != nil {

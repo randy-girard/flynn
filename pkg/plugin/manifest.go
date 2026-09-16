@@ -101,6 +101,11 @@ type CLI struct {
 	// controller app; it is not required in flynn-plugin.json.
 	App string `json:"app,omitempty"`
 
+	// User publishes this command on the laptop `flynn` CLI. Resource-provider
+	// plugins are user-visible by default. kind: app system plugins are not
+	// (operators use flynn-host plugin) unless User is true.
+	User bool `json:"user,omitempty"`
+
 	// Doc is the full docopt usage string (including "usage:" lines).
 	Doc string `json:"doc,omitempty"`
 
@@ -166,7 +171,8 @@ func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
 }
 
 // MatchFlynnDelegate reports a compiled-in flynn command the user invoked as
-// `flynn <plugin> <action> …` (for example `flynn dashboard route add http`).
+// `flynn <plugin> <action> …` (for example `flynn redis` job CLIs, or a
+// kind: app plugin that set cli.user and `"flynn": "route"`).
 func (c *CLI) MatchFlynnDelegate(args []string) (*CLIAction, []string, bool) {
 	if c == nil || len(args) == 0 {
 		return nil, nil, false
@@ -205,6 +211,19 @@ func (c *CLI) MatchFlynnDelegate(args []string) (*CLIAction, []string, bool) {
 
 func (c *CLI) Runnable() bool {
 	return c != nil && c.Command != "" && strings.TrimSpace(c.Doc) != "" && len(c.Actions) > 0
+}
+
+// UserVisible is whether the laptop `flynn` CLI should list and run this
+// command. Resource providers are user tools (flynn redis …). kind: app
+// system plugins stay off the user CLI unless cli.user is true.
+func (c *CLI) UserVisible(kind string) bool {
+	if c == nil || strings.TrimSpace(c.Command) == "" {
+		return false
+	}
+	if c.User {
+		return true
+	}
+	return kind == KindResourceProvider
 }
 
 func (c *CLI) Action(name string) *CLIAction {

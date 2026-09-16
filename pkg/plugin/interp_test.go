@@ -47,6 +47,23 @@ func TestCLIRunnableAndAction(t *testing.T) {
 	}
 }
 
+func TestCLIUserVisible(t *testing.T) {
+	c := &CLI{Command: "redis"}
+	if !c.UserVisible(KindResourceProvider) {
+		t.Fatal("resource-provider CLI is user-visible")
+	}
+	if c.UserVisible(KindApp) {
+		t.Fatal("kind: app CLI is not user-visible by default")
+	}
+	c.User = true
+	if !c.UserVisible(KindApp) {
+		t.Fatal("cli.user opts a kind: app plugin into the user flynn CLI")
+	}
+	if (*CLI)(nil).UserVisible(KindResourceProvider) {
+		t.Fatal("nil")
+	}
+}
+
 func TestCLIMatchActionLongestWins(t *testing.T) {
 	cli := &CLI{Actions: []CLIAction{
 		{Name: "topics"},

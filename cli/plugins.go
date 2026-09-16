@@ -20,7 +20,9 @@ List plugins installed on the current cluster.
 
 The list comes from the controller (plugin apps the credential can see), not
 from a local checkout. Operators install with flynn-host plugin install.
-After install, plugin CLI commands also appear in flynn help.
+After install, plugin CLI commands also appear in flynn help when the
+plugin is a resource provider (or sets cli.user). kind: app system plugins
+are listed here but are not user flynn commands.
 `)
 }
 
@@ -47,7 +49,7 @@ func writePluginTable(w io.Writer, apps []*ct.App) int {
 	n := 0
 	for _, p := range plugin.ListInstalled(apps) {
 		cmd, usage := "", ""
-		if p.CLI != nil {
+		if p.CLI != nil && p.CLI.UserVisible(p.Kind) {
 			cmd = p.CLI.Command
 			usage = p.CLI.Usage
 		}

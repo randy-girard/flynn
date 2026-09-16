@@ -13,8 +13,9 @@ type catalogSource interface {
 	ProviderList() ([]*ct.Provider, error)
 }
 
-// Catalog is the cluster's installed plugin CLI commands. Built from plugin
-// app metadata (any kind) plus resource providers. Not a hardcoded appliance list.
+// Catalog is the cluster's installed plugin CLI commands published on the
+// user flynn CLI. Resource-provider plugins are included; kind: app system
+// plugins are not unless cli.user is true.
 type Catalog struct {
 	Commands []CLI `json:"commands"`
 }
@@ -74,6 +75,13 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 		}
 		var cli CLI
 		if err := json.Unmarshal([]byte(raw), &cli); err != nil || cli.Command == "" {
+			continue
+		}
+		kind := app.Meta[MetaPluginKind]
+		if kind == "" {
+			kind = RecordFromApp(app).Kind
+		}
+		if !cli.UserVisible(kind) {
 			continue
 		}
 		if _, ok := seen[cli.Command]; ok {
