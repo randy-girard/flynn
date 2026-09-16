@@ -88,6 +88,10 @@ need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
 need 'step_install_plugins' \
   "after bootstrap, smoke must flynn-host plugin install from sibling repos before resource add"
+need 'assemble_plugin_github_unpack' \
+  "plugin install in smoke must unpack GitHub release assets, not the git checkout"
+need 'dist/github-unpack' \
+  "GitHub-style plugin unpack must not be the sibling flynn-plugin-* checkout"
 if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1

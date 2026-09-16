@@ -2357,6 +2357,18 @@ if os.path.isfile(plugin_path):
         rel = entry.lstrip("/")
         if rel not in files.replace("\\", "/"):
             sys.exit(1)
+    # GitHub installs unpack release assets only. Declared hooks must be
+    # copied into dist/ as flat names (script/install.sh → script-install.sh).
+    for rel in (plugin.get("hooks") or {}).values():
+        if not rel or not isinstance(rel, str):
+            continue
+        rel = rel.strip().replace("\\", "/").lstrip("./")
+        if not rel:
+            continue
+        flat = rel.replace("/", "-")
+        base = rel.rsplit("/", 1)[-1]
+        if not os.path.isfile(os.path.join(dist, flat)) and not os.path.isfile(os.path.join(dist, base)):
+            sys.exit(1)
 if not files:
     sys.exit(1)
 arch = (art.get("meta") or {}).get("flynn.plugin.arch") or ""
@@ -2446,7 +2458,7 @@ step_install_plugins() {
     echo "SKIP_PLUGIN_INSTALL=1"
     return 0
   fi
-  local name dir vm_path
+  local name dir vm_path unpack vm_unpack
   ensure_flynn_cli_on_node1
   ensure_plugin_vm_mounts || return 1
   # shellcheck disable=SC2086
@@ -2463,16 +2475,23 @@ step_install_plugins() {
   for name in ${PLUGIN_SMOKE_APPS}; do
     dir="$(plugin_checkout "${name}")"
     ensure_plugin_image "${dir}" || return 1
+    unpack="${dir}/dist/github-unpack"
+    assemble_plugin_github_unpack "${dir}" "${unpack}" || return 1
     vm_path="/opt/flynn-plugins/$(basename "${dir}")"
-    info "flynn-host plugin install ${name} (${vm_path})"
+    vm_unpack="${vm_path}/dist/github-unpack"
+    info "flynn-host plugin install ${name} (${vm_unpack})"
     if ! node_root_script node1 <<EOF
 set -euo pipefail
-if [[ ! -f "${vm_path}/flynn-plugin.json" ]]; then
-  echo "plugin not synced into VM: ${vm_path}" >&2
+if [[ ! -f "${vm_unpack}/flynn-plugin.json" ]]; then
+  echo "plugin GitHub unpack missing: ${vm_unpack}" >&2
+  exit 1
+fi
+if [[ -e "${vm_unpack}/cmd" ]] || [[ -e "${vm_unpack}/.git" ]]; then
+  echo "GitHub unpack must not include the plugin git checkout: ${vm_unpack}" >&2
   exit 1
 fi
 export FLYNN_PLUGIN_NONINTERACTIVE=1
-flynn-host plugin install --no-build "${vm_path}"
+flynn-host plugin install --no-build "${vm_unpack}"
 EOF
     then
       dump_plugin_install_diagnostics "${name}"
@@ -2485,6 +2504,66 @@ EOF
     probe_plugin_webhooks "${name}" || return 1
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
+}
+
+# Build the same tree GitHub fetchGitHub unpacks: flynn-plugin.json, dist/
+# layers, and declared hook scripts from flat dist/ asset names. Do not copy
+# the git checkout (that is why GitHub plugin install used to miss hooks).
+assemble_plugin_github_unpack() {
+  local src=$1 dest=$2
+  python3 - "$src" "$dest" <<'PY'
+import json, os, shutil, sys
+
+src, dest = sys.argv[1], sys.argv[2]
+if os.path.isdir(dest):
+    shutil.rmtree(dest)
+os.makedirs(os.path.join(dest, "dist"), exist_ok=True)
+
+manifest_src = os.path.join(src, "dist", "flynn-plugin.json")
+if not os.path.isfile(manifest_src):
+    manifest_src = os.path.join(src, "flynn-plugin.json")
+shutil.copy2(manifest_src, os.path.join(dest, "flynn-plugin.json"))
+
+src_dist = os.path.join(src, "dist")
+dest_dist = os.path.join(dest, "dist")
+for name in os.listdir(src_dist):
+    path = os.path.join(src_dist, name)
+    if name == "github-unpack" or not os.path.isfile(path):
+        continue
+    if name.endswith(".json") or name.endswith(".squashfs") or name.endswith(".sh"):
+        shutil.copy2(path, os.path.join(dest_dist, name))
+layers = os.path.join(src_dist, "layers")
+if os.path.isdir(layers):
+    for name in os.listdir(layers):
+        path = os.path.join(layers, name)
+        if os.path.isfile(path) and name.endswith(".squashfs"):
+            shutil.copy2(path, os.path.join(dest_dist, name))
+
+plugin = json.load(open(os.path.join(dest, "flynn-plugin.json")))
+for rel in (plugin.get("hooks") or {}).values():
+    if not rel or not isinstance(rel, str):
+        continue
+    rel = rel.strip().replace("\\", "/").lstrip("./")
+    if not rel:
+        continue
+    names = [rel.replace("/", "-")]
+    base = rel.rsplit("/", 1)[-1]
+    if base and base not in names:
+        names.append(base)
+    src_hook = None
+    for name in names:
+        candidate = os.path.join(src_dist, name)
+        if os.path.isfile(candidate):
+            src_hook = candidate
+            break
+    if src_hook is None:
+        print(f"GitHub unpack missing hook asset for {rel} (wanted {', '.join(names)} under dist/)", file=sys.stderr)
+        sys.exit(1)
+    dest_hook = os.path.join(dest, *rel.split("/"))
+    os.makedirs(os.path.dirname(dest_hook), exist_ok=True)
+    shutil.copy2(src_hook, dest_hook)
+    os.chmod(dest_hook, 0o755)
+PY
 }
 
 probe_plugin_wait_url() {
