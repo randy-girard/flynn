@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync"
 
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/pkg/cluster"
@@ -15,20 +16,31 @@ import (
 
 func init() {
 	Register("log", runLog, `
-usage: flynn-host log [--init] [-f|--follow] [--lines=<number>] [--split-stderr] ID
+usage: flynn-host log [--init] [-f|--follow] [--lines=<number>] [--split-stderr] [-a|--all] ID
 
-Get the logs of a job`)
+Get logs of a job, or of every job for an app.
+
+ID is a job ID (from flynn-host ps) or a controller app name (for example
+dashboard or postgres). When more than one job matches, each line is prefixed
+with app.type.job.
+
+Options:
+  -f, --follow         stream new lines
+  --lines=<number>     show only the last n lines
+  --split-stderr       send stderr to stderr
+  --init               include containerinit logs
+  -a, --all            include jobs that are not running (app name only)
+`)
 }
 
 func runLog(args *docopt.Args, client *cluster.Client) error {
-	jobID := args.String["ID"]
-	hostID, err := cluster.ExtractHostID(jobID)
-	if err != nil {
-		return err
-	}
+	name := args.String["ID"]
+	follow := args.Bool["-f"] || args.Bool["--follow"]
+	all := args.Bool["-a"] || args.Bool["--all"]
 
 	lines := 0
 	if args.String["--lines"] != "" {
+		var err error
 		lines, err = strconv.Atoi(args.String["--lines"])
 		if err != nil {
 			return err
@@ -40,27 +52,194 @@ func runLog(args *docopt.Args, client *cluster.Client) error {
 		stderr = os.Stderr
 	}
 
-	if lines > 0 {
-		stdoutR, stdoutW := io.Pipe()
-		stderrR, stderrW := io.Pipe()
-
-		go func() {
-			getLog(hostID, jobID, client, false, args.Bool["--init"], stdoutW, stderrW)
-			stdoutW.Close()
-			stderrW.Close()
-		}()
-		tailLogs(stdoutR, stderrR, lines, os.Stdout, stderr)
-		return nil
+	jobs, err := lookupLogJobs(client, name, all)
+	if err != nil {
+		return err
 	}
-	return getLog(
-		hostID,
-		jobID,
-		client,
-		args.Bool["-f"] || args.Bool["--follow"],
-		args.Bool["--init"],
-		os.Stdout,
-		stderr,
-	)
+	if follow {
+		jobs = runningLogJobs(jobs)
+		if len(jobs) == 0 {
+			return fmt.Errorf("no running jobs for %q", name)
+		}
+	}
+
+	prefix := len(jobs) > 1
+	var mu sync.Mutex
+	streamOne := func(job host.ActiveJob) error {
+		stdoutW, stderrW := io.Writer(os.Stdout), io.Writer(stderr)
+		if prefix {
+			p := logLinePrefix(job)
+			stdoutW = &prefixWriter{w: os.Stdout, prefix: p, atBOL: true, mu: &mu}
+			stderrW = &prefixWriter{w: stderr, prefix: p, atBOL: true, mu: &mu}
+		}
+		if lines > 0 {
+			stdoutR, stdoutPW := io.Pipe()
+			stderrR, stderrPW := io.Pipe()
+			go func() {
+				_ = getLog(jobHostID(job), job.Job.ID, client, false, args.Bool["--init"], stdoutPW, stderrPW)
+				stdoutPW.Close()
+				stderrPW.Close()
+			}()
+			tailLogs(stdoutR, stderrR, lines, stdoutW, stderrW)
+			return nil
+		}
+		return getLog(
+			jobHostID(job),
+			job.Job.ID,
+			client,
+			follow,
+			args.Bool["--init"],
+			stdoutW,
+			stderrW,
+		)
+	}
+
+	if !follow || len(jobs) == 1 {
+		var first error
+		for _, job := range jobs {
+			if err := streamOne(job); err != nil && first == nil {
+				first = err
+			}
+		}
+		return first
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(jobs))
+	for _, job := range jobs {
+		job := job
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := streamOne(job); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func jobHostID(job host.ActiveJob) string {
+	if job.Job == nil {
+		return ""
+	}
+	hostID, err := cluster.ExtractHostID(job.Job.ID)
+	if err != nil {
+		return ""
+	}
+	return hostID
+}
+
+func lookupLogJobs(client *cluster.Client, name string, all bool) (sortJobs, error) {
+	if hostID, err := cluster.ExtractHostID(name); err == nil {
+		if hc, err := client.Host(hostID); err == nil {
+			if job, err := hc.GetJob(name); err == nil && job != nil && job.Job != nil {
+				return sortJobs{*job}, nil
+			}
+		}
+	}
+	jobs, err := jobList(client, all)
+	if err != nil {
+		return nil, err
+	}
+	matched := jobsMatchingApp(jobs, name)
+	if len(matched) == 0 {
+		if all {
+			return nil, fmt.Errorf("no jobs found for %q (not a job ID or app name)", name)
+		}
+		return nil, fmt.Errorf("no running jobs for %q (try flynn-host log --all %s)", name, name)
+	}
+	return matched, nil
+}
+
+func runningLogJobs(jobs sortJobs) sortJobs {
+	var out sortJobs
+	for _, job := range jobs {
+		if job.Status == host.StatusStarting || job.Status == host.StatusRunning {
+			out = append(out, job)
+		}
+	}
+	return out
+}
+
+func jobsMatchingApp(jobs []host.ActiveJob, name string) sortJobs {
+	var out sortJobs
+	for _, job := range jobs {
+		if jobMatchesApp(job, name) {
+			out = append(out, job)
+		}
+	}
+	return out
+}
+
+func jobMatchesApp(job host.ActiveJob, name string) bool {
+	if name == "" || job.Job == nil {
+		return false
+	}
+	meta := job.Job.Metadata
+	return meta["flynn-controller.app_name"] == name || meta["flynn-controller.app"] == name
+}
+
+func logLinePrefix(job host.ActiveJob) string {
+	id := ""
+	app, ptype := "", ""
+	if job.Job != nil {
+		id = job.Job.ID
+		if job.Job.Metadata != nil {
+			app = job.Job.Metadata["flynn-controller.app_name"]
+			ptype = job.Job.Metadata["flynn-controller.type"]
+		}
+		if u, err := cluster.ExtractUUID(id); err == nil && len(u) >= 8 {
+			id = u[:8]
+		}
+	}
+	switch {
+	case app != "" && ptype != "":
+		return app + "." + ptype + "." + id + " | "
+	case app != "":
+		return app + "." + id + " | "
+	default:
+		return id + " | "
+	}
+}
+
+type prefixWriter struct {
+	w      io.Writer
+	prefix string
+	atBOL  bool
+	mu     *sync.Mutex
+}
+
+func (p *prefixWriter) Write(b []byte) (int, error) {
+	if p.mu != nil {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+	}
+	if len(b) == 0 {
+		return 0, nil
+	}
+	out := make([]byte, 0, len(b)+len(p.prefix))
+	for _, c := range b {
+		if p.atBOL {
+			out = append(out, p.prefix...)
+			p.atBOL = false
+		}
+		out = append(out, c)
+		if c == '\n' {
+			p.atBOL = true
+		}
+	}
+	if _, err := p.w.Write(out); err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 func getLog(hostID, jobID string, client *cluster.Client, follow, init bool, stdout, stderr io.Writer) error {

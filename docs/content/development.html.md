@@ -121,6 +121,7 @@ $ journalctl -u flynn-host
 $ flynn-host ps
 $ flynn-host ps -a
 $ flynn-host log $JOBID
+$ flynn-host log dashboard
 $ flynn-host inspect $JOBID
 $ flynn-host stop $JOBID
 ```

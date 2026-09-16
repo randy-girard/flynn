@@ -353,7 +353,9 @@ logged by all app processes and can also follow the stream as new log lines are
 emitted.
 
 The `flynn-host log $JOB_ID` command on a server will retrieve the logs for
-a specific job and can also follow the stream for that job. A list of all jobs,
+a specific job. Pass an app name instead (`flynn-host log dashboard`) to get
+logs from every job of that app; `-a` includes jobs that are no longer
+running. `--follow` streams new lines from running jobs. A list of all jobs,
 including those that are no longer running can be retrieved with the `flynn-host
 ps -a` command.
 
