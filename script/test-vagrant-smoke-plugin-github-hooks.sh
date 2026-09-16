@@ -60,6 +60,10 @@ need_in "${smoke}" 'script/install.sh → script-install.sh' \
   "plugin_dist_ready must require declared hooks as flat dist assets"
 need_in "${docs}" 'script-install.sh' \
   "plugin docs must tell authors to publish hook scripts as release assets"
+need_in "${install}" 'readyHook' \
+  "plugin install must run optional hooks.ready after wait"
+need_in "${docs}" 'hooks.ready' \
+  "plugin docs must describe hooks.ready"
 
 if grep -nE 'skipping hooks\.install|skipMissing' "${github}" "${install}"; then
   echo "GitHub plugin install must run declared hooks, not skip a missing script" >&2

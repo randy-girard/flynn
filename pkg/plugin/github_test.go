@@ -215,11 +215,23 @@ func TestHookAssetNames(t *testing.T) {
 	if len(got) != 2 || got[0] != "script-uninstall.sh" || got[1] != "uninstall.sh" {
 		t.Fatalf("uninstall=%v", got)
 	}
+	got = HookAssetNames("script/ready.sh")
+	if len(got) != 2 || got[0] != "script-ready.sh" || got[1] != "ready.sh" {
+		t.Fatalf("ready=%v", got)
+	}
 	if got := HookAssetNames("install.sh"); len(got) != 1 || got[0] != "install.sh" {
 		t.Fatalf("basename=%v", got)
 	}
 	if HookAssetNames("../etc/passwd") != nil || HookAssetNames("/tmp/x") != nil || HookAssetNames("") != nil {
 		t.Fatal("escaped or empty paths must not produce asset names")
+	}
+}
+
+func TestHookRelsIncludesReady(t *testing.T) {
+	m := &Manifest{Hooks: &Hooks{Install: "script/install.sh", Ready: "script/ready.sh"}}
+	got := m.hookRels()
+	if len(got) != 2 || got[0] != "script/install.sh" || got[1] != "script/ready.sh" {
+		t.Fatalf("%v", got)
 	}
 }
 

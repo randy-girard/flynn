@@ -244,6 +244,10 @@ type Hooks struct {
 	Install   string `json:"install,omitempty"`
 	Upgrade   string `json:"upgrade,omitempty"`
 	Uninstall string `json:"uninstall,omitempty"`
+	// Ready runs on the host after the wait URL succeeds (or immediately
+	// after routes when wait is empty). Use it for work that needs the
+	// plugin app to already be serving.
+	Ready string `json:"ready,omitempty"`
 }
 
 // SetupPrompt is one install-time question whose answer becomes release env.

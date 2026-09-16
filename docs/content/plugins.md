@@ -25,6 +25,7 @@ Development layout (relative to the Flynn repo):
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
 | `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
+| `discovery` | `../flynn-discovery` | (none; `kind: app`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
@@ -37,6 +38,7 @@ From the Flynn checkout, on a cluster host:
 sudo flynn-host plugin install ../flynn-plugin-redis
 sudo flynn-host plugin install redis
 sudo flynn-host plugin install ../flynn-plugin-dashboard
+sudo flynn-host plugin install ../flynn-discovery
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
@@ -72,7 +74,9 @@ the same way as Redis.
 **`webhooks`** registers the same host endpoints as
 `flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
-still runs on the host for anything the manifest cannot express. GitHub installs
+still runs on the host for anything the manifest cannot express. Optional
+**`hooks.ready`** runs after the wait URL succeeds (or after routes when there
+is no wait) so the plugin app can already be serving. GitHub installs
 unpack **release assets only** (not a git checkout), so a declared hook must be
 published next to `image.json`. GitHub asset names cannot contain slashes:
 `script/install.sh` is uploaded as `script-install.sh` (basename `install.sh`
@@ -165,6 +169,7 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 ```text
 sudo flynn-host plugin install redis --ref v20260914.0
 sudo flynn-host plugin install dashboard --auto-tls
+sudo flynn-host plugin install discovery
 sudo flynn-host plugin update dashboard --ref v20260916.3
 sudo flynn-host plugin uninstall dashboard
 sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
@@ -191,7 +196,7 @@ The default org is `randy-girard`; override with `--github-org`,
 
 A string value still works (`"redis": "/opt/flynn-plugins/flynn-plugin-redis"`
 or a git URL). `repo` may be `owner/name` when the GitHub repo does not match
-`flynn-plugin-<alias>`.
+`flynn-plugin-<alias>` (the discovery plugin uses `randy-girard/flynn-discovery`).
 
 The release must include `flynn-plugin.json`, `image.json`, `{id}.squashfs`,
 and any **`hooks.install` / `hooks.upgrade` / `hooks.uninstall`** scripts

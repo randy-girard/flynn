@@ -240,6 +240,10 @@ func (in *Installer) apply(opts InstallOptions) error {
 		}
 	}
 
+	if err := in.runHook(root, m, m.readyHook(), cluster); err != nil {
+		return err
+	}
+
 	if err := in.ensureWebhooks(m, cluster); err != nil {
 		return err
 	}
@@ -300,6 +304,13 @@ func (m *Manifest) deployHook(updating bool) string {
 func (m *Manifest) uninstallHook() string {
 	if m.Hooks != nil {
 		return strings.TrimSpace(m.Hooks.Uninstall)
+	}
+	return ""
+}
+
+func (m *Manifest) readyHook() string {
+	if m.Hooks != nil {
+		return strings.TrimSpace(m.Hooks.Ready)
 	}
 	return ""
 }

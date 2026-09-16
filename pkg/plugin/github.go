@@ -53,7 +53,7 @@ func (in *Installer) githubHTTP() *http.Client {
 // (image.json + layers) from a GitHub Release into a temp directory. It never
 // runs plugin-build. GitHub assets are a flat list, so a declared hook path
 // such as script/install.sh or script/uninstall.sh is published as
-// script-install.sh / script-uninstall.sh (basename is also accepted).
+// script-install.sh / script-uninstall.sh / script-ready.sh (basename is also accepted).
 func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, error) {
 	if src == nil {
 		return "", fmt.Errorf("missing GitHub source")
@@ -157,7 +157,7 @@ func (m *Manifest) hookRels() []string {
 		return nil
 	}
 	var out []string
-	for _, rel := range []string{m.Hooks.Install, m.Hooks.Upgrade, m.Hooks.Uninstall} {
+	for _, rel := range []string{m.Hooks.Install, m.Hooks.Upgrade, m.Hooks.Uninstall, m.Hooks.Ready} {
 		rel = strings.TrimSpace(rel)
 		if rel != "" {
 			out = append(out, rel)

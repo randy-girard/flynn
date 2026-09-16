@@ -99,6 +99,18 @@ $ sudo flynn-host init --discovery https://discovery.flynn.cloud.randygirard.com
 You can set `DISCOVERY_SERVER` if you run your own discovery API. The default
 server for this fork is `https://discovery.flynn.cloud.randygirard.com`.
 
+To run discovery **on the cluster** instead of the hosted service, bootstrap a
+single node with `--peer-ips`, then install the discovery plugin
+(`sudo flynn-host plugin install discovery`). The installer prints a join
+token (also `/etc/flynn/discovery-token`). Additional nodes use that token:
+
+```
+$ sudo flynn-host init --discovery https://discovery.demo.example.com/clusters/<id>
+```
+
+Point `discovery.${CLUSTER_DOMAIN}` at the first node (wildcard DNS is enough)
+before other hosts try to join.
+
 ### Peer IPs (no discovery service)
 
 If you already know the node addresses, skip discovery:
