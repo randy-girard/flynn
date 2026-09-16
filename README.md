@@ -31,7 +31,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 
 ## Requirements
 
-- **OS:** Ubuntu 24.04 LTS amd64 (the install script still accepts 16.04 and 18.04, but 24.04 is what this fork builds and tests against)
+- **OS:** Ubuntu 24.04 LTS amd64
 - **Hosts:** 2 GB RAM, 40 GB disk, and 2 CPU cores per node as a minimum; more for appliances and builds
 - **HA:** three or more nodes. A single node (`SINGLETON`) is fine for trying Flynn; do not use it as production
 - **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet

@@ -6,7 +6,7 @@ usage() {
   cat <<USAGE >&2
 usage: $0 [options]
 
-A script to install Flynn on Ubuntu 24.04 (also accepts 16.04 and 18.04).
+A script to install Flynn on Ubuntu 24.04 LTS.
 See https://github.com/randy-girard/flynn#install-a-cluster for further information.
 
 OPTIONS:
@@ -42,12 +42,12 @@ main() {
     fail "this script must be executed as the root user"
   fi
 
-  if ! is_ubuntu_xenial && ! is_ubuntu_bionic && ! is_ubuntu_noble; then
-    fail "this script is only compatible with Ubuntu 16.04, 18.04, and 24.04"
+  if ! is_ubuntu_noble; then
+    fail "this script is only compatible with Ubuntu 24.04 LTS"
   fi
 
   if ! check_overlayfs; then
-    fail "OverlayFS is either missing or does not support multiple lower directories, consider upgrading your kernel to at least 3.19"
+    fail "OverlayFS is missing or does not support multiple lower directories"
   fi
 
   check_installed "curl" "sha512sum"
@@ -218,14 +218,6 @@ is_root() {
 
 is_ubuntu_noble() {
   grep -qF "Ubuntu 24.04" /etc/os-release &>/dev/null
-}
-
-is_ubuntu_bionic() {
-  grep -qF "Ubuntu 18.04" /etc/os-release &>/dev/null
-}
-
-is_ubuntu_xenial() {
-  grep -qF "Ubuntu 16.04" /etc/os-release &>/dev/null
 }
 
 write_host_auth_config() {

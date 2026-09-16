@@ -21,10 +21,7 @@ import (
 )
 
 var flynnHostLogs = map[string]string{
-	// the following two entries are legacy paths from when flynn-host used
-	// to log to stdout (which would be redirected to these files)
-	"upstart-flynn-host.log": "/var/log/upstart/flynn-host.log",
-	"tmp-flynn-host.log":     "/tmp/flynn-host.log",
+	"tmp-flynn-host.log": "/tmp/flynn-host.log",
 }
 
 var debugCmds = [][]string{

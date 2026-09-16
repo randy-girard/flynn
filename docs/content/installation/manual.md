@@ -5,9 +5,7 @@ layout: docs
 
 # Manual Installation
 
-Flynn is installed with the install script on **Ubuntu 24.04 LTS** amd64. The
-script still accepts Ubuntu 16.04 and 18.04, but this fork is built and tested
-on 24.04.
+Flynn is installed with the install script on **Ubuntu 24.04 LTS** amd64.
 
 Start from a clean Ubuntu install. Each host should have at least 2 GB of RAM,
 40 GB of storage, and two CPU cores. Lower specs can work for experiments; they

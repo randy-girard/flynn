@@ -6,7 +6,7 @@
 #
 # - Install VirtualBox
 #   wget -q https://www.virtualbox.org/download/oracle_vbox.asc -O- | sudo apt-key add -
-#   echo deb http://download.virtualbox.org/virtualbox/debian trusty contrib | sudo tee /etc/apt/sources.list.d/virtualbox.list
+#   echo deb http://download.virtualbox.org/virtualbox/debian noble contrib | sudo tee /etc/apt/sources.list.d/virtualbox.list
 #   sudo apt-get update
 #   sudo apt-get install dkms virtualbox-4.3
 #
@@ -91,33 +91,7 @@ main() {
 
   local box=$(ls "${dir}"/*_virtualbox.box 2>/dev/null)
   if [[ -z "${box}" ]]; then
-    info "building VirtualBox image"
-    pushd "${ROOT}/util/packer" >/dev/null
-    local output=$(packer build \
-      -machine-readable \
-      -only="virtualbox-iso" \
-      -var "headless=true" \
-      -var "output_dir=${dir}" \
-      -var "flynn_repository=https://${domain}" \
-      -var "version=${version}" \
-      -var-file "ubuntu-xenial.json" \
-      ubuntu.json | parse_packer)
-    popd >/dev/null
-
-    info "parsing build output"
-    while read line; do
-      IFS="|" read builder artifacts <<< "${line}"
-
-      case "${builder}" in
-        virtualbox-iso)
-          box="${artifacts}"
-          ;;
-      esac
-    done <<< "${output}"
-
-    if [[ -z "${box}" ]]; then
-      fail "failed to parse build output"
-    fi
+    fail "Ubuntu 16.04 packer VM images were removed; this fork publishes GitHub Releases for Ubuntu 24.04 (see script/release)"
   fi
 
   local box_name="$(basename "${box}")"
@@ -162,33 +136,6 @@ main() {
     info "removing locally built images"
     rm -rf "${dir}"
   fi
-}
-
-# parse_packer reads machine readable packer output, prints the
-# ui messages to stderr and prints the artifacts to stdout.
-#
-# example artifact output:
-#
-#   virtualbox-iso|/tmp/tmp.FhRkEcY9YJ/flynn-base_20141021.1_virtualbox.box
-#   amazon-ebs|eu-west-1:ami-4c832d3b,us-east-1:ami-fea92d96
-#
-parse_packer() {
-  sed "s/%!(PACKER_COMMA)/,/g" | while read -r line; do
-    IFS="," read -r _ target type data <<< "${line}"
-
-    case "${type}" in
-      ui) echo -e "$(cut -d "," -f 2 <<< "${data}")" >&2 ;;
-      artifact)
-        if [[ "${target}" == "virtualbox-iso" ]] \
-          && [[ "${data:0:9}" == "0,file,0," ]]; then
-          echo "virtualbox-iso|${data:9}"
-        elif [[ "${target}" == "amazon-ebs" ]] \
-          && [[ "${data:0:5}" == "0,id," ]]; then
-          echo "amazon-ebs|${data:5}"
-        fi
-        ;;
-    esac
-  done
 }
 
 main $@

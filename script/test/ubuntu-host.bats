@@ -1,0 +1,22 @@
+#!/usr/bin/env bats
+
+load "helper"
+
+@test "install scripts require Ubuntu 24.04 only" {
+  for f in \
+    "${ROOT}/script/install-flynn" \
+    "${ROOT}/script/install-flynn.tmpl" \
+    "${ROOT}/script/install-flynn-release"
+  do
+    grep -q 'Ubuntu 24.04' "${f}"
+    if grep -E '16\.04|18\.04|is_ubuntu_xenial|is_ubuntu_bionic' "${f}"; then
+      echo "${f} must not accept Ubuntu 16.04 or 18.04" >&2
+      return 1
+    fi
+  done
+  if grep -q xenial "${ROOT}/script/configure-docker"; then
+    echo "configure-docker must not special-case xenial/upstart" >&2
+    return 1
+  fi
+  grep -q 'systemctl restart docker' "${ROOT}/script/configure-docker"
+}
