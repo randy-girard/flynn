@@ -53,12 +53,12 @@ List and switch clusters with `flynn cluster`. Use `-c <cluster>` or `FLYNN_CLUS
 ## Usage
 
 ```text
-flynn [-a <app>] [-c <cluster>] <command> [<args>...]
+flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 ```
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn help` or `flynn help <command>` for flags.
+Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands (for example `redis`) appear in that list. `flynn plugins` shows what the current cluster credential can see.
 
 ### Apps and deploys
 
@@ -92,6 +92,7 @@ Run `flynn help` or `flynn help <command>` for flags.
 | Command | Purpose |
 | --- | --- |
 | `cluster` | Registered clusters |
+| `plugins` | Plugins installed on this cluster |
 | `login` | Dashboard OAuth |
 | `version` | CLI version |
 

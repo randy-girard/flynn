@@ -62,13 +62,7 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	if catErr != nil || cat == nil {
 		return usage
 	}
-	present := map[string]struct{}{}
-	for _, line := range strings.Split(usage, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) > 0 {
-			present[fields[0]] = struct{}{}
-		}
-	}
+	present := usageCommandNames(usage)
 	var extra []string
 	for _, cmd := range cat.Commands {
 		if cmd.Command == "" {
@@ -104,4 +98,32 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		out = append(out, extra...)
 	}
 	return strings.Join(out, "\n")
+}
+
+// usageCommandNames is the Commands: list only. Scanning every line treated
+// "See" from the footer as a command and could hide a plugin of that name.
+func usageCommandNames(usage string) map[string]struct{} {
+	present := map[string]struct{}{}
+	inCommands := false
+	for _, line := range strings.Split(usage, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Commands:" {
+			inCommands = true
+			continue
+		}
+		if !inCommands {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+			break
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			present[fields[0]] = struct{}{}
+		}
+	}
+	return present
 }
