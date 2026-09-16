@@ -74,6 +74,9 @@ type InstallOptions struct {
 	// AutoTLS enables Let's Encrypt on this plugin's HTTP routes (the
 	// same as `flynn route add http --auto-tls`). Requires cluster ACME.
 	AutoTLS bool
+	// Update is flynn-host plugin update: the plugin app must already exist.
+	// Install still upgrades an existing app, but update refuses a missing one.
+	Update bool
 }
 
 // RouteClient is the controller subset used to create HTTP/TCP routes and
@@ -99,6 +102,18 @@ func (in *Installer) logf(format string, args ...interface{}) {
 }
 
 func (in *Installer) Install(opts InstallOptions) error {
+	opts.Update = false
+	return in.apply(opts)
+}
+
+// Update deploys a new release of an already-installed plugin (same layers and
+// scale-down as a reinstall, without first-install setup prompts).
+func (in *Installer) Update(opts InstallOptions) error {
+	opts.Update = true
+	return in.apply(opts)
+}
+
+func (in *Installer) apply(opts InstallOptions) error {
 	resolved, err := Resolve(opts)
 	if err != nil {
 		return err
@@ -107,7 +122,7 @@ func (in *Installer) Install(opts InstallOptions) error {
 	root := resolved.Dir
 	if resolved.GitHub != nil {
 		if opts.Rebuild {
-			return fmt.Errorf("GitHub install cannot --rebuild; install from a local checkout to build")
+			return fmt.Errorf("GitHub plugin fetch cannot --rebuild; use a local checkout to build")
 		}
 		dir, err := in.fetchGitHub(resolved.GitHub, opts.CredsFile)
 		if err != nil {
@@ -124,7 +139,7 @@ func (in *Installer) Install(opts InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	in.logf("installing plugin %s (kind %s) from %s", m.Name, m.Kind, displaySource(resolved, root))
+	in.logf("%s plugin %s (kind %s) from %s", applyVerb(opts.Update), m.Name, m.Kind, displaySource(resolved, root))
 
 	if opts.AutoTLS && !hasHTTPRoute(m) {
 		return fmt.Errorf("--auto-tls requires an HTTP route; plugin %s has none", m.Name)
@@ -160,8 +175,13 @@ func (in *Installer) Install(opts InstallOptions) error {
 	}
 
 	app, err := in.Client.GetApp(m.App.Name)
+	updating := opts.Update
 	switch {
 	case err == nil:
+		if !opts.Update {
+			in.logf("plugin %s already installed; updating in place", m.Name)
+			updating = true
+		}
 		in.logf("app %s already exists; deploying a new release from uploaded layers", m.App.Name)
 		if app.Meta == nil {
 			app.Meta = map[string]string{}
@@ -174,6 +194,9 @@ func (in *Installer) Install(opts InstallOptions) error {
 			PreservePreviousEnv(cluster, prev.Env)
 		}
 	case err == controller.ErrNotFound:
+		if opts.Update {
+			return fmt.Errorf("plugin %s is not installed; flynn-host plugin install %s", m.Name, m.Name)
+		}
 		app, err = in.createApp(m, resolved)
 		if err != nil {
 			return err
@@ -182,15 +205,17 @@ func (in *Installer) Install(opts InstallOptions) error {
 		return fmt.Errorf("get app %s: %w", m.App.Name, err)
 	}
 
-	if err := in.applySetup(m, cluster); err != nil {
-		return err
+	if !updating {
+		if err := in.applySetup(m, cluster); err != nil {
+			return err
+		}
 	}
 
 	if err := in.provisionResources(app, m, cluster); err != nil {
 		return err
 	}
 
-	if err := in.runHook(root, m, m.installHook(), cluster); err != nil {
+	if err := in.runHook(root, m, m.deployHook(updating), cluster); err != nil {
 		return err
 	}
 
@@ -220,7 +245,11 @@ func (in *Installer) Install(opts InstallOptions) error {
 	}
 
 	in.persistInventory()
-	in.logf("plugin %s installed", m.Name)
+	if updating {
+		in.logf("plugin %s updated", m.Name)
+	} else {
+		in.logf("plugin %s installed", m.Name)
+	}
 	return nil
 }
 
@@ -238,11 +267,34 @@ func (in *Installer) persistInventory() {
 	}
 }
 
+func applyVerb(update bool) string {
+	if update {
+		return "updating"
+	}
+	return "installing"
+}
+
 func (m *Manifest) installHook() string {
 	if m.Hooks != nil {
 		return m.Hooks.Install
 	}
 	return ""
+}
+
+func (m *Manifest) upgradeHook() string {
+	if m.Hooks != nil {
+		return strings.TrimSpace(m.Hooks.Upgrade)
+	}
+	return ""
+}
+
+// deployHook is hooks.install on first install. On update it is hooks.upgrade
+// when declared; the install hook is not re-run (it may not be idempotent).
+func (m *Manifest) deployHook(updating bool) string {
+	if updating {
+		return m.upgradeHook()
+	}
+	return m.installHook()
 }
 
 func (m *Manifest) uninstallHook() string {

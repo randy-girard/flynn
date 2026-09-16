@@ -165,14 +165,19 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 ```text
 sudo flynn-host plugin install redis --ref v20260914.0
 sudo flynn-host plugin install dashboard --auto-tls
+sudo flynn-host plugin update dashboard --ref v20260916.3
 sudo flynn-host plugin uninstall dashboard
 sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
 ```
 
 `--ref` is the GitHub release tag. Omit it to use the latest **published**
-release (drafts and prereleases are skipped). The default org is
-`randy-girard`; override with `--github-org`, `FLYNN_PLUGIN_GITHUB_ORG`, or
-`/etc/flynn/plugins.json`:
+release (drafts and prereleases are skipped). **`plugin update`** is the
+operator command once the plugin app exists: it deploys a new release,
+scales the previous release to zero, runs **`hooks.upgrade`** when declared
+(not **`hooks.install`**), and does not re-ask setup prompts. Re-running
+**`plugin install`** on an existing app does the same in-place update.
+The default org is `randy-girard`; override with `--github-org`,
+`FLYNN_PLUGIN_GITHUB_ORG`, or `/etc/flynn/plugins.json`:
 
 ```json
 {

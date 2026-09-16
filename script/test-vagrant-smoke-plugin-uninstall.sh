@@ -38,10 +38,14 @@ need_file "${docs}" "plugin docs must exist"
 
 need_in "${cli}" 'plugin uninstall' \
   "flynn-host plugin must expose uninstall"
+need_in "${cli}" 'plugin update' \
+  "flynn-host plugin must expose update"
 need_in "${cli}" '--force' \
   "uninstall must expose --force for resource providers still in use"
 need_in "${cli_test}" 'TestPluginUninstallUsage' \
   "docopt tests must cover flynn-host plugin uninstall"
+need_in "${cli_test}" 'TestPluginUpdateUsage' \
+  "docopt tests must cover flynn-host plugin update"
 need_in "${uninstall}" 'func \(in \*Installer\) Uninstall' \
   "Installer.Uninstall must exist"
 need_in "${uninstall}" 'ensureProviderUnused' \
@@ -66,6 +70,8 @@ need_in "${install}" 'uninstallHook' \
   "manifest must expose hooks.uninstall"
 need_in "${install}" 'previousReleaseScaleDown' \
   "plugin reinstall must scale the previous release to zero"
+need_in "${install}" 'deployHook' \
+  "plugin update must run hooks.upgrade instead of hooks.install"
 need_in "${docs}" 'plugin uninstall' \
   "plugin docs must describe flynn-host plugin uninstall"
 

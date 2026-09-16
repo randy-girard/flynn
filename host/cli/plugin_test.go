@@ -93,3 +93,23 @@ func TestPluginUninstallUsage(t *testing.T) {
 		t.Fatalf("dashboard uninstall must not parse as route: %+v", args)
 	}
 }
+
+func TestPluginUpdateUsage(t *testing.T) {
+	args := parsePluginUsage(t, "plugin", "update", "dashboard")
+	if !args.Bool["update"] || args.Bool["install"] || args.Bool["route"] || args.Bool["uninstall"] {
+		t.Fatalf("update: %+v", args)
+	}
+	if args.String["<plugin>"] != "dashboard" {
+		t.Fatalf("plugin=%q", args.String["<plugin>"])
+	}
+
+	args = parsePluginUsage(t, "plugin", "update", "dashboard", "--ref", "v20260916.3")
+	if !args.Bool["update"] || args.String["--ref"] != "v20260916.3" || args.String["<plugin>"] != "dashboard" {
+		t.Fatalf("update ref: %+v", args)
+	}
+
+	args = parsePluginUsage(t, "plugin", "dashboard", "route", "update", "http/abc")
+	if !args.Bool["route"] || !args.Bool["update"] || args.String["<id>"] != "http/abc" {
+		t.Fatalf("route update must still parse: %+v", args)
+	}
+}

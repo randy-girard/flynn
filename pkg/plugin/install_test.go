@@ -194,9 +194,22 @@ func TestInstallHookAndRunHook(t *testing.T) {
 	if m.installHook() != "" {
 		t.Fatal("empty hooks")
 	}
-	m.Hooks = &Hooks{Install: "hooks/install.sh", Uninstall: "hooks/uninstall.sh"}
+	m.Hooks = &Hooks{Install: "hooks/install.sh", Upgrade: "hooks/upgrade.sh", Uninstall: "hooks/uninstall.sh"}
 	if m.installHook() != "hooks/install.sh" {
 		t.Fatal(m.installHook())
+	}
+	if m.upgradeHook() != "hooks/upgrade.sh" {
+		t.Fatal(m.upgradeHook())
+	}
+	if m.deployHook(false) != "hooks/install.sh" {
+		t.Fatal("first install must run hooks.install")
+	}
+	if m.deployHook(true) != "hooks/upgrade.sh" {
+		t.Fatal("update must run hooks.upgrade")
+	}
+	m.Hooks.Upgrade = ""
+	if m.deployHook(true) != "" {
+		t.Fatal("update must not re-run hooks.install when upgrade is unset")
 	}
 	if m.uninstallHook() != "hooks/uninstall.sh" {
 		t.Fatal(m.uninstallHook())

@@ -12,6 +12,7 @@ import (
 
 const pluginUsage = `
 usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
+       flynn-host plugin update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <plugin>
        flynn-host plugin uninstall [--force] [--github-org=ORG] <plugin>
        flynn-host plugin list
        flynn-host plugin credentials set github [--token-file=FILE] [--api=URL]
@@ -25,6 +26,7 @@ usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-
 
 Commands:
 	install       Install a plugin from a local path, alias, or GitHub URL
+	update        Deploy a new release of an already-installed plugin
 	uninstall     Remove an installed plugin app, webhooks, and optional uninstall hook
 	list          List plugins installed on this cluster
 	credentials   Store a GitHub token for private or draft release assets
@@ -56,8 +58,11 @@ flynn route (list / add http / update / remove) scoped to that plugin app.
 Uninstall reverses that: optional hooks.uninstall, plugin webhooks, then
 DeleteApp (routes and exclusive resources). Resource-provider plugins with
 provisioned resources still in use refuse unless --force. Flynn does not
-special-case plugin names. Re-running install deploys a new release and
-scales the previous release to zero so old jobs leave discoverd.
+special-case plugin names. Re-running install on an existing plugin, or
+flynn-host plugin update, deploys a new release and scales the previous
+release to zero so old jobs leave discoverd. update requires the plugin
+app to already exist; install creates it. Update runs hooks.upgrade when
+declared (not hooks.install) and does not re-ask setup prompts.
 Local
 checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the
@@ -75,6 +80,7 @@ Examples:
     $ flynn-host plugin install ../flynn-plugin-redis
     $ flynn-host plugin install redis --ref v20260914.0
     $ flynn-host plugin install dashboard --auto-tls
+    $ flynn-host plugin update dashboard --ref v20260916.3
     $ flynn-host plugin dashboard route
     $ flynn-host plugin dashboard route add http --auto-tls
     $ flynn-host plugin dashboard route update http/<id> --auto-tls
@@ -101,6 +107,8 @@ func runPlugin(args *docopt.Args) error {
 		return runPluginCredentials(args)
 	case args.Bool["route"]:
 		return runPluginRoute(args)
+	case args.Bool["update"]:
+		return runPluginUpdate(args)
 	}
 	return nil
 }
@@ -123,6 +131,33 @@ func runPluginInstall(args *docopt.Args) error {
 	}
 	return in.Install(plugin.InstallOptions{
 		Source:    args.String["<source>"],
+		Ref:       args.String["--ref"],
+		GitHubOrg: args.String["--github-org"],
+		Cwd:       cwd,
+		NoBuild:   args.Bool["--no-build"],
+		Rebuild:   args.Bool["--rebuild"],
+		AutoTLS:   args.Bool["--auto-tls"],
+	})
+}
+
+func runPluginUpdate(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	in := &plugin.Installer{
+		Client: client,
+		HTTP:   discoverdHTTPClient(),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
+	}
+	return in.Update(plugin.InstallOptions{
+		Source:    args.String["<plugin>"],
 		Ref:       args.String["--ref"],
 		GitHubOrg: args.String["--github-org"],
 		Cwd:       cwd,
