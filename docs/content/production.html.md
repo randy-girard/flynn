@@ -27,6 +27,21 @@ should have a latency of less than 2ms. Deploying a single Flynn cluster across
 higher latency WAN links is not recommended, as it can have a significant impact
 on the stability of cluster consensus.
 
+## TLS / Let's Encrypt
+
+Bootstrap uses a self-signed certificate. For production, configure ACME on a
+cluster host so the dashboard, controller, and `--auto-tls` app routes get
+trusted certificates:
+
+```text
+$ sudo flynn-host acme configure --email=admin@example.com --agree-tos
+$ sudo flynn-host acme enable-system-routes
+$ flynn cluster update-pin --clear
+```
+
+`CLUSTER_DOMAIN` and a wildcard must resolve to the cluster (HTTP-01 on ports
+80 and 443). See [Apps — HTTPS](apps.md#https).
+
 ## Storage
 
 Flynn uses ZFS to store data. By default, a ZFS pool is created in a sparse file

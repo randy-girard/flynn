@@ -53,7 +53,10 @@ drift.
 vagrant ssh nodeN -c 'ip addr show flynnbr0 | grep inet; ss -ulnp | grep :53'
 
 # 2. Run fix (do not run concurrently with manual sirenia surgery)
-flynn-host fix -n 3
+#    If discoverd is down, singleton clusters probe this host's :1113 API.
+#    Multi-host still needs --peer-ips when discoverd cannot list members.
+flynn-host fix -n 1
+flynn-host fix -n 3 --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
 
 # 3. For a broken sirenia database (postgres/mariadb/mongodb):
 #    - GET instances + meta from discoverd
@@ -70,7 +73,7 @@ curl -u "$AUTH_KEY:" http://<router-ip>/status
 |------|------|
 | Primary downstream refresh after sync replacement | `TestPrimaryRefreshDownstreamOnSyncReplacement` in `pkg/sirenia/state` |
 | Discoverd DNS derivation from subnet | `TestDNSFromSubnet` in `host/fixer` |
-| Discoverd URL scheme normalization | `TestNormalizeDiscoverdURL` in `host/fixer` |
+| Discoverd down uses local :1113 | `TestHostsWhenDiscoverdDownUsesLocalAPI` in `host/fixer` |
 | Stale overlay IP detection | `TestJobIPOnSubnet` in `host/fixer` |
 | Unassigned peer assumes recorded sync | `evalClusterState` change in `pkg/sirenia/state/state.go` |
 

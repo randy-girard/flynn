@@ -39,13 +39,18 @@ var (
 )
 
 type Config struct {
-	ID           string
-	Singleton    bool
-	Port         string
-	BinDir       string
-	DataDir      string
-	Password     string
-	OpTimeout    time.Duration
+	ID        string
+	Singleton bool
+	Port      string
+	BinDir    string
+	DataDir   string
+	Password  string
+	OpTimeout time.Duration
+	// StopTimeout bounds each shutdown signal (SIGINT then SIGQUIT then
+	// SIGKILL). Keep this under the host container WaitStop (30s) so a
+	// job stop finishes a fast checkpoint instead of being SIGKILL'd and
+	// forcing crash recovery on the next start.
+	StopTimeout  time.Duration
 	ReplTimeout  time.Duration
 	Logger       log15.Logger
 	TimescaleDB  bool
@@ -75,6 +80,7 @@ type Process struct {
 	dataDir      string
 	password     string
 	opTimeout    time.Duration
+	stopTimeout  time.Duration
 	replTimeout  time.Duration
 	timescaleDB  bool
 	extWhitelist bool
@@ -108,6 +114,7 @@ func NewProcess(c Config) *Process {
 		dataDir:        c.DataDir,
 		password:       c.Password,
 		opTimeout:      c.OpTimeout,
+		stopTimeout:    c.StopTimeout,
 		replTimeout:    c.ReplTimeout,
 		timescaleDB:    c.TimescaleDB,
 		extWhitelist:   c.ExtWhitelist,
@@ -136,6 +143,9 @@ func NewProcess(c Config) *Process {
 	}
 	if p.opTimeout == 0 {
 		p.opTimeout = 5 * time.Minute
+	}
+	if p.stopTimeout == 0 {
+		p.stopTimeout = 10 * time.Second
 	}
 	if p.replTimeout == 0 {
 		p.replTimeout = 1 * time.Minute
@@ -810,6 +820,7 @@ func (p *Process) start() error {
 				User: "postgres",
 				Port: uint16(port),
 			},
+			MaxConnections: 1,
 		}
 		p.dbMtx.Lock()
 		p.db, err = pgx.NewConnPool(c)
@@ -840,16 +851,24 @@ func (p *Process) stop() error {
 	log.Info("stopping postgres")
 
 	p.cancelSyncWait()
-	p.db.Close()
+	p.dbMtx.Lock()
+	if p.db != nil {
+		p.db.Close()
+		p.db = nil
+	}
+	p.dbMtx.Unlock()
 	p.expectExit.Store(true)
 
 	tryExit := func(sig os.Signal) bool {
 		log.Debug("signalling daemon", "sig", sig)
+		if p.daemon == nil || p.daemon.Process == nil {
+			return true
+		}
 		if err := p.daemon.Process.Signal(sig); err != nil {
 			log.Error("error signalling daemon", "sig", sig, "err", err)
 		}
 		select {
-		case <-time.After(p.opTimeout):
+		case <-time.After(p.stopTimeout):
 			return false
 		case <-p.daemonExit:
 			p.setRunning(false)
@@ -1018,8 +1037,9 @@ WHERE application_name = $1`, name).Scan(&s, &f)
 	return
 }
 
-// initDB initializes the postgres data directory for a new dDB. This can fail
-// if the db has already been initialized, which is not a fatal error.
+// initDB initializes the postgres data directory for a new primary.
+// If PG_VERSION already exists (volume reuse after an upgrade or restart),
+// initdb is skipped so we do not spend seconds failing against a live cluster.
 //
 // This method should only be called by the primary of a shard. Standbys will
 // not need to initialize, as they will restore from an already running primary.
@@ -1027,17 +1047,28 @@ func (p *Process) initDB() error {
 	log := p.log.New("fn", "initDB", "dir", p.dataDir)
 	log.Debug("starting initDB")
 
-	// ignore errors, since the db could be already initialized
-	// TODO(titanous): check errors when this is not the case
-	_ = p.runCmd(exec.Command(
+	if p.clusterAlreadyInitialized() {
+		log.Info("data directory already initialized, skipping initdb")
+		return p.writeHBAConf()
+	}
+
+	if err := p.runCmd(exec.Command(
 		p.binPath("initdb"),
 		"--pgdata", p.dataDir,
 		"--username=postgres",
 		"--encoding=UTF-8",
 		"--locale=en_US.UTF-8",
-	))
+	)); err != nil {
+		log.Error("error initializing data directory", "err", err)
+		return err
+	}
 
 	return p.writeHBAConf()
+}
+
+func (p *Process) clusterAlreadyInitialized() bool {
+	_, err := os.Stat(p.dataPath("PG_VERSION"))
+	return err == nil
 }
 func (p *Process) runCmd(cmd *exec.Cmd) error {
 	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
@@ -1146,6 +1177,9 @@ wal_level = logical
 fsync = on
 max_wal_senders = 15
 wal_keep_size = 1024MB
+max_wal_size = 256MB
+checkpoint_timeout = 30s
+checkpoint_completion_target = 0.5
 synchronous_commit = remote_write
 {{if .Sync}}synchronous_standby_names = '"{{.Sync}}"'{{else}}synchronous_standby_names = ''{{end}}
 {{if .ReadOnly}}

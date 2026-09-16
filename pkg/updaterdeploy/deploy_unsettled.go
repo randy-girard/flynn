@@ -37,6 +37,43 @@ func ShouldRetryAfterUnsettledDiscoverdLeader(err error) bool {
 	return false
 }
 
+// ShouldRetryAfterControllerUnavailable returns whether a system-app deploy
+// failed because the controller could not reach postgres (or the HTTP helper
+// collapsed that into unknown_error). After a singleton postgres swap the
+// next GetAppRelease often fails this way until the replacement peer is up.
+func ShouldRetryAfterControllerUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "unknown_error"):
+		return true
+	case strings.Contains(msg, "something went wrong"):
+		return true
+	case strings.Contains(msg, "connection refused"):
+		return true
+	case strings.Contains(msg, "connection reset"):
+		return true
+	case strings.Contains(msg, "broken pipe"):
+		return true
+	case strings.Contains(msg, "i/o timeout"):
+		return true
+	case strings.Contains(msg, "unexpected eof"):
+		return true
+	default:
+		return false
+	}
+}
+
+// ShouldRetryTransientSystemDeploy is the combined matcher used by flynn-host
+// update and the in-cluster updater.
+func ShouldRetryTransientSystemDeploy(err error) bool {
+	return ShouldRetryAfterUnsettledDiscoverdLeader(err) ||
+		ShouldRetryAfterScaleTimeout(err) ||
+		ShouldRetryAfterControllerUnavailable(err)
+}
+
 // ShouldRetryAfterScaleTimeout returns whether a deploy failed because the
 // controller's scale step did not finish before the app's deploy timeout.
 // This is common after a cluster-wide host restart when the scheduler is

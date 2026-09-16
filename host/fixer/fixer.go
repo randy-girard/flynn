@@ -5,7 +5,6 @@ import (
 	"net"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/flynn/flynn/discoverd/client"
@@ -21,6 +20,12 @@ type ClusterFixer struct {
 	hosts []*cluster.Host
 	c     *cluster.Client
 	l     log15.Logger
+	// ConnectPeerIP, if set, replaces HTTP GetStatus against ip:1113 (tests).
+	ConnectPeerIP func(ip string) (*cluster.Host, error)
+	// LocalPeerIPs, if set, replaces interface enumeration (tests).
+	LocalPeerIPs func() []string
+	// HostStatus, if set, replaces h.GetStatus (tests).
+	HostStatus func(*cluster.Host) (*host.HostStatus, error)
 }
 
 func NewClusterFixer(hosts []*cluster.Host, c *cluster.Client, l log15.Logger) *ClusterFixer {
@@ -43,29 +48,10 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 
 	f.hosts, err = c.Hosts()
 	if err != nil {
-		f.l.Error("unable to list hosts from discoverd, falling back to peer IP list", "error", err)
-		var ips []string
-		if ipList := args.String["--peer-ips"]; ipList != "" {
-			ips = strings.Split(ipList, ",")
-			if minHosts == 0 {
-				minHosts = len(ips)
-			}
-		}
-		if len(ips) == 0 {
-			return fmt.Errorf("error connecting to discoverd, use --peer-ips: %s", err)
-		}
-		if len(ips) < minHosts {
-			return fmt.Errorf("number of peer IPs provided (%d) is less than --min-hosts (%d)", len(ips), minHosts)
-		}
-
-		f.hosts = make([]*cluster.Host, len(ips))
-		for i, ip := range ips {
-			url := fmt.Sprintf("http://%s:1113", ip)
-			status, err := cluster.NewHost("", url, nil, nil).GetStatus()
-			if err != nil {
-				return fmt.Errorf("error connecting to %s: %s", ip, err)
-			}
-			f.hosts[i] = cluster.NewHost(status.ID, url, nil, nil)
+		f.l.Error("unable to list hosts from discoverd, falling back to host HTTP API", "error", err)
+		f.hosts, err = f.hostsWhenDiscoverdDown(minHosts, args.String["--peer-ips"])
+		if err != nil {
+			return err
 		}
 	}
 	// check expected number of hosts

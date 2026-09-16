@@ -92,8 +92,8 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse' \
-  "default plugin install list must include redis, mysql, mongodb, kafka, and clickhouse"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard' \
+  "default plugin install list must include redis, mysql, mongodb, kafka, clickhouse, and dashboard"
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
 need 'ensure_plugin_vm_mounts' \
@@ -108,6 +108,20 @@ if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
 fi
 need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
+need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
+  "plugin install in smoke must not block on TTY setup prompts"
+need 'probe_plugin_webhooks' \
+  "after plugin install, smoke must confirm declared webhooks are registered on flynn-host"
+need 'secret_env' \
+  "plugin webhooks must send X-Flynn-Webhook-Secret from generate_env"
+need 'flynn-host webhooks' \
+  "smoke must inspect flynn-host webhooks, the same API plugin install registers"
+need '127.0.0.1:1111/services' \
+  "plugin wait probes must resolve *.discoverd via the discoverd HTTP API, not host systemd-resolved"
+need 'args[+]=\(--resolve' \
+  "plugin wait probes must curl the discoverd hostname pinned to the overlay addr (sirenia /ping uses Host)"
+need 'max-time 60' \
+  "plugin wait probes must outlast sirenia API /ping (~30s waiting on leader.<app>.discoverd)"
 need 'probe_delegated_plugin_cli_hidden' \
   "before plugin install, flynn help must hide redis and flynn redis must fail"
 need 'probe_delegated_plugin_cli_visible' \

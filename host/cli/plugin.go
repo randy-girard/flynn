@@ -32,8 +32,9 @@ Options:
 	--api=URL          GitHub API base (GitHub Enterprise)
 
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
-cluster blobstore, deploys the system app, and registers a provider only when
-kind is resource-provider. Local checkouts are used when present. Otherwise
+cluster blobstore, deploys the system app, registers a provider only when
+kind is resource-provider, and registers flynn-host webhooks declared in
+the manifest. Local checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the
 repo declared by a sibling checkout / installed plugin). GitHub installs never
 build on the cluster.
@@ -79,6 +80,7 @@ func runPluginInstall(args *docopt.Args) error {
 		HTTP:   discoverdHTTPClient(),
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
 	}
 	return in.Install(plugin.InstallOptions{
 		Source:    args.String["<source>"],

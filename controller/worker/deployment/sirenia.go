@@ -419,7 +419,7 @@ loop:
 }
 
 // deploySireniaSingleton replaces a single sirenia peer by submitting both
-// formation changes (old release -> 0, new release -> target) while the
+// formation changes (new release -> target, then old release -> 0) while the
 // database is still up, then waiting for the new peer to register in
 // discoverd.
 //
@@ -427,11 +427,18 @@ loop:
 // sirenia process is typically the controller's own datastore: once the
 // scheduler stops the old job, the controller can no longer persist scale
 // request or job state transitions, so waiting on the controller event stream
-// for confirmation of the scale-down hangs until the deploy times out. Both
-// PutFormation calls write to the formations table; the scheduler reads the
-// two events from its in-process stream in order and performs the swap (stop
-// old job -> release volume -> start new job which adopts the volume), and
-// discoverd is independent of the controller database.
+// for confirmation of the scale-down hangs until the deploy times out.
+//
+// The new formation is written first so the scale-up is committed and the
+// scheduler has seen it before SIGTERM reaches postgres. Scaling the old
+// release down first races a fast postgres shutdown: the second PutFormation
+// (or the controller GetExpanded that turns it into a scheduler event) is
+// aborted, the new job is never started, and the cluster is left without a
+// datastore. The scheduler will not allocate a second empty volume while the
+// old singleton still holds /data; it retries until that job is stopping and
+// then adopts the existing dataset. Discoverd is independent of the
+// controller database, so waiting for the new peer's Up event still works
+// after postgres has restarted.
 func (d *DeployJob) deploySireniaSingleton(processType string, log log15.Logger) error {
 	proc, ok := d.newRelease.Processes[processType]
 	if !ok {
@@ -469,21 +476,9 @@ waitCurrent:
 		}
 	}
 
-	// submit both formation changes back-to-back while the database is
-	// still up so both writes are accepted by the controller before the
-	// scheduler kills the old peer
-	d.oldFormation.Processes[processType] = 0
-	log.Info("scaling old formation down", "release.id", d.OldReleaseID, "job.type", processType)
-	if err := d.client.PutFormation(d.oldFormation); err != nil {
-		log.Error("error scaling old formation down", "release.id", d.OldReleaseID, "err", err)
-		return err
-	}
-	d.deployEvents <- ct.DeploymentEvent{
-		ReleaseID: d.OldReleaseID,
-		JobState:  ct.JobStateStopping,
-		JobType:   processType,
-	}
-
+	// write the new formation first while postgres can still commit, then
+	// scale the old peer to zero. the scheduler places the new job against
+	// the in-use volume (retrying) and only then stops the old job.
 	d.newFormation.Processes[processType] = d.Processes[processType]
 	log.Info("scaling new formation up", "release.id", d.NewReleaseID, "job.type", processType, "count", d.Processes[processType])
 	if err := d.client.PutFormation(d.newFormation); err != nil {
@@ -493,6 +488,18 @@ waitCurrent:
 	d.deployEvents <- ct.DeploymentEvent{
 		ReleaseID: d.NewReleaseID,
 		JobState:  ct.JobStateStarting,
+		JobType:   processType,
+	}
+
+	d.oldFormation.Processes[processType] = 0
+	log.Info("scaling old formation down", "release.id", d.OldReleaseID, "job.type", processType)
+	if err := d.client.PutFormation(d.oldFormation); err != nil {
+		log.Error("error scaling old formation down", "release.id", d.OldReleaseID, "err", err)
+		return err
+	}
+	d.deployEvents <- ct.DeploymentEvent{
+		ReleaseID: d.OldReleaseID,
+		JobState:  ct.JobStateStopping,
 		JobType:   processType,
 	}
 

@@ -3,19 +3,23 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"net"
 	"net/http"
 	"time"
 
+	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/dialer"
+	"github.com/flynn/flynn/pkg/httphelper"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/inconshreveable/log15"
 )
 
 const (
-	webhookBufferSize  = 256
-	webhookTimeout     = 5 * time.Second
-	webhookMaxRetries  = 2
-	webhookRetryDelay  = 1 * time.Second
+	webhookBufferSize = 256
+	webhookTimeout    = 5 * time.Second
+	webhookMaxRetries = 2
+	webhookRetryDelay = 1 * time.Second
 )
 
 // WebhookDispatcher dispatches webhook events to configured endpoints.
@@ -37,7 +41,12 @@ func NewWebhookDispatcher(hostID string, state *State, log log15.Logger) *Webhoo
 		events: make(chan *host.WebhookEvent, webhookBufferSize),
 		done:   make(chan struct{}),
 		log:    log.New("component", "webhook-dispatcher"),
-		client: &http.Client{Timeout: webhookTimeout},
+		client: &http.Client{
+			Timeout: webhookTimeout,
+			Transport: &http.Transport{
+				Dial: webhookDial,
+			},
+		},
 	}
 }
 
@@ -186,3 +195,14 @@ func (d *WebhookDispatcher) deliver(wh *host.WebhookConfig, payload []byte, even
 	}
 }
 
+// webhookDial resolves *.discoverd via the discoverd HTTP API. flynn-host is
+// not using overlay DNS (systemd-resolved does not serve *.discoverd).
+func webhookDial(network, addr string) (net.Conn, error) {
+	resolved, err := httphelper.ResolveDiscoverdAddr(addr, func(service string) ([]string, error) {
+		return discoverd.NewService(service).Addrs()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return dialer.Default.Dial(network, resolved)
+}

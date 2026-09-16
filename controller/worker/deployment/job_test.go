@@ -82,6 +82,27 @@ func TestScaleOneDownOneUpStopsOldBeforeStartingNew(t *testing.T) {
 	}
 }
 
+func TestSireniaSingletonScalesNewBeforeOld(t *testing.T) {
+	src, err := os.ReadFile("sirenia.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "func (d *DeployJob) deploySireniaSingleton"
+	start := strings.Index(string(src), marker)
+	if start < 0 {
+		t.Fatal("deploySireniaSingleton missing")
+	}
+	fn := string(src[start:])
+	if end := strings.Index(fn, "\nfunc "); end > 0 {
+		fn = fn[:end]
+	}
+	up := strings.Index(fn, "scaling new formation up")
+	down := strings.Index(fn, "scaling old formation down")
+	if up < 0 || down < 0 || up > down {
+		t.Fatal("singleton sirenia deploy must PutFormation the new release before scaling the old peer to zero")
+	}
+}
+
 func TestAllAtOnceStartsNewBeforeStoppingOld(t *testing.T) {
 	src, err := os.ReadFile("all_at_once.go")
 	if err != nil {

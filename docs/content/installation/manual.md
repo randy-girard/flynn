@@ -160,6 +160,29 @@ The last bootstrap log line is the `flynn cluster add` command for the [CLI](../
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
 `veth*` interfaces, then open a GitHub issue.
 
+## HTTPS / Let's Encrypt
+
+Bootstrap issues a self-signed certificate. For trusted TLS, on any cluster
+host, register ACME and enable it on system routes (controller, dashboard, …):
+
+```
+$ sudo flynn-host acme configure --email=admin@example.com --agree-tos
+$ sudo flynn-host acme enable-system-routes
+```
+
+`configure` also enables ACME for the cluster. Use `--staging` while testing
+(Let's Encrypt issues untrusted certs) or `--directory-url` for another ACME
+CA. Check status with `sudo flynn-host acme status`.
+
+App routes opt in with `flynn route add http --auto-tls <domain>`. The name
+must resolve to the cluster so Let's Encrypt can complete HTTP-01 on ports 80
+and 443. You can still attach your own cert with `--tls-cert` / `--tls-key`.
+After system routes have a public certificate, run
+`flynn cluster update-pin --clear` so the CLI uses normal TLS verification
+instead of the bootstrap pin.
+
+See [Apps — HTTPS](../apps.md#https).
+
 Next: [Flynn Basics](../basics.md).
 
 ## CLI

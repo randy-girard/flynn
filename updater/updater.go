@@ -221,7 +221,7 @@ func run() error {
 				break
 			}
 			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
-			if updaterdeploy.ShouldRetryAfterUnsettledDiscoverdLeader(deployErr) && attempt < maxUnsettled {
+			if updaterdeploy.ShouldRetryTransientSystemDeploy(deployErr) && attempt < maxUnsettled {
 				log.Warn("discovery or sirenia cluster not settled, retrying deploy",
 					"app", appInfo.Name, "err", deployErr, "attempt", attempt,
 					"max_attempts", maxUnsettled)

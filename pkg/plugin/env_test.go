@@ -80,6 +80,36 @@ func TestClusterEnvFallsBackToAuthKeyAndRouteDomain(t *testing.T) {
 	}
 }
 
+func TestClusterEnvCopiesGitreceiveAccessTokens(t *testing.T) {
+	env, err := ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{
+			"CONTROLLER_KEY": "ck",
+			"CLUSTER_DOMAIN": "ex.local",
+		}},
+		"gitreceive": {Env: map[string]string{
+			"ACCESS_TOKEN_KEY":         "pub",
+			"ACCESS_TOKEN_SIGNING_KEY": "priv",
+			"GIT_URL":                  "https://git.ex.local",
+			"IMAGE_URL":                "https://images.ex.local",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["ACCESS_TOKEN_KEY"] != "pub" {
+		t.Fatalf("ACCESS_TOKEN_KEY=%q", env["ACCESS_TOKEN_KEY"])
+	}
+	if env["ACCESS_TOKEN_SIGNING_KEY"] != "priv" {
+		t.Fatalf("ACCESS_TOKEN_SIGNING_KEY=%q", env["ACCESS_TOKEN_SIGNING_KEY"])
+	}
+	if env["ACCESS_TOKEN_PRIVATE_KEY"] != "priv" {
+		t.Fatalf("ACCESS_TOKEN_PRIVATE_KEY=%q", env["ACCESS_TOKEN_PRIVATE_KEY"])
+	}
+	if env["GIT_URL"] != "https://git.ex.local" || env["IMAGE_URL"] != "https://images.ex.local" {
+		t.Fatalf("urls %+v", env)
+	}
+}
+
 func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 	m := &Manifest{
 		GenerateEnv: []string{"MYSQL_PWD"},

@@ -92,6 +92,15 @@ sudo \
 
 You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead. Step-by-step instructions are in [Manual installation](docs/content/installation/manual.md). Production notes (dedicated ZFS, blobstore backends, backups) are in [Production](docs/content/production.html.md).
 
+Bootstrap uses a self-signed certificate. Configure ACME/Let's Encrypt next so the dashboard, controller, and app routes can get trusted TLS:
+
+```bash
+sudo flynn-host acme configure --email=admin@example.com --agree-tos
+sudo flynn-host acme enable-system-routes
+```
+
+`CLUSTER_DOMAIN` and `*.CLUSTER_DOMAIN` must resolve to the cluster (HTTP-01). Use `--staging` while testing (untrusted certs). More detail is in [HTTPS and Let's Encrypt](#https-and-lets-encrypt).
+
 ### Local development cluster
 
 The root `Vagrantfile` uses the `bento/ubuntu-24.04` box.
@@ -155,15 +164,18 @@ Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a p
 
 ## HTTPS and Let's Encrypt
 
-Enable ACME on the cluster, then request certificates per route:
+`flynn-host acme configure` registers a Let's Encrypt account, agrees to the ToS, and enables ACME on the cluster. Then enable it on system routes and on app routes you want auto-renewed:
 
 ```bash
 sudo flynn-host acme configure --email=admin@example.com --agree-tos
+sudo flynn-host acme status
 sudo flynn-host acme enable-system-routes   # controller, dashboard, …
 flynn route add http --auto-tls www.example.com
 ```
 
-The domain must resolve to the cluster and pass HTTP-01. You can still attach your own cert with `--tls-cert` / `--tls-key`. See [Apps — HTTPS](docs/content/apps.md#https).
+Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host acme status` anytime.
+
+The name on the certificate must resolve to the cluster and pass HTTP-01 (ports 80/443 open). You can still attach your own cert with `--tls-cert` / `--tls-key`. After system routes have a public cert, clear the bootstrap TLS pin: `flynn cluster update-pin --clear`. See [Apps — HTTPS](docs/content/apps.md#https).
 
 ## Architecture (short)
 
@@ -199,7 +211,7 @@ Longer write-up: [Architecture](docs/content/architecture.html.md).
 | Install a cluster | [Installation](docs/content/installation.html.md) · [Manual](docs/content/installation/manual.md) · [Vagrant](docs/content/installation/vagrant.md) |
 | First deploy | [Basics](docs/content/basics.md) · [Apps](docs/content/apps.md) · [Docker](docs/content/docker.md) |
 | Datastores | [PostgreSQL](docs/content/databases/postgres.md) · [MariaDB](docs/content/databases/mysql.md) · [MongoDB](docs/content/databases/mongodb.md) · [Redis](docs/content/databases/redis.md) · [Kafka](docs/content/databases/kafka.md) · [ClickHouse](docs/content/databases/clickhouse.md) |
-| Operate | [Production](docs/content/production.html.md) · [Security](docs/content/security.md) · [Stability](docs/content/stability.md) |
+| Operate | [Production](docs/content/production.html.md) · [Security](docs/content/security.md) · [Stability](docs/content/stability.md) · [HTTPS / ACME](docs/content/apps.md#https) |
 | Develop | [Development](docs/content/development.html.md) · [Contributing](CONTRIBUTING.md) |
 | CLI | [CLI](docs/content/cli.md) · [`cli/README.md`](cli/README.md) |
 | Docs index | [docs/README.md](docs/README.md) |

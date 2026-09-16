@@ -104,8 +104,8 @@
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before resource add (default: redis
-#                        mysql mongodb kafka clickhouse). mysql resolves to the
-#                        mariadb checkout via flynn-plugin.json aliases.
+#                        mysql mongodb kafka clickhouse dashboard). mysql
+#                        resolves to the mariadb checkout via flynn-plugin.json.
 #                        Restore does not install again; plugins.json + postgres
 #                        already list and restore them.
 #   PLUGIN_REPO_ROOT     Parent of flynn-plugin-* checkouts (default: ..)
@@ -181,7 +181,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
@@ -189,6 +189,8 @@ SMOKE_UNIT_PACKAGES=(
   ./cli/
   ./controller/types/
   ./controller/authz/
+  ./controller/scheduler/
+  ./controller/worker/deployment/
   ./pkg/httphelper/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
@@ -950,12 +952,17 @@ wait_for() {
   local desc=$1
   local timeout=$2
   shift 2
-  local deadline=$(( $(date +%s) + timeout ))
+  local start now elapsed
+  start=$(date +%s)
+  local deadline=$(( start + timeout ))
   while true; do
     if "$@" >/dev/null 2>&1; then
+      elapsed=$(( $(date +%s) - start ))
+      echo "ready: ${desc} (${elapsed}s)"
       return 0
     fi
-    if (( $(date +%s) >= deadline )); then
+    now=$(date +%s)
+    if (( now >= deadline )); then
       echo "timed out waiting for ${desc} after ${timeout}s" >&2
       return 1
     fi
@@ -2464,6 +2471,7 @@ if [[ ! -f "${vm_path}/flynn-plugin.json" ]]; then
   echo "plugin not synced into VM: ${vm_path}" >&2
   exit 1
 fi
+export FLYNN_PLUGIN_NONINTERACTIVE=1
 flynn-host plugin install --no-build "${vm_path}"
 EOF
     then
@@ -2473,8 +2481,121 @@ EOF
     if plugin_has_delegated_cli "${name}"; then
       probe_delegated_plugin_cli_visible "${name}" || return 1
     fi
+    probe_plugin_wait_url "${name}" || return 1
+    probe_plugin_webhooks "${name}" || return 1
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
+}
+
+probe_plugin_wait_url() {
+  local name=$1 dir wait_url
+  dir="$(plugin_checkout "${name}")"
+  wait_url="$(python3 - "${dir}" <<'PY'
+import json, os, sys
+from urllib.parse import urlparse
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+m = json.load(open(path))
+wait = (m.get("wait") or "").strip()
+if not wait:
+    prov = (m.get("provider") or {}).get("url") or ""
+    if prov:
+        u = urlparse(prov)
+        if u.scheme and u.netloc:
+            wait = f"{u.scheme}://{u.netloc}/ping"
+if wait:
+    print(wait)
+PY
+)"
+  if [[ -z "${wait_url}" ]]; then
+    return 0
+  fi
+  info "checking plugin ${name} wait URL ${wait_url}"
+  # flynn-host plugin install already waited with a discoverd-aware client.
+  # Host systemd-resolved does not serve *.discoverd (that DNS is on flynnbr0),
+  # so pin the original hostname to the overlay addr from GET /services/<svc>/instances.
+  # Sirenia API /ping can take ~30s while it looks up leader.<app>.discoverd, so
+  # the per-request timeout must exceed that (the installer HTTP client has none).
+  node_root_script node1 <<EOF
+set -euo pipefail
+eval "\$(python3 - "${wait_url}" <<'PY'
+import json, shlex, sys, urllib.parse, urllib.request
+raw = sys.argv[1]
+u = urllib.parse.urlparse(raw)
+host = u.hostname or ""
+resolve = ""
+if host.endswith(".discoverd"):
+    svc = host[: -len(".discoverd")]
+    with urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % svc, timeout=5) as resp:
+        inst = json.load(resp)
+    if not inst:
+        raise SystemExit("no discoverd instances for %s" % svc)
+    addr = (inst[0] or {}).get("addr") or ""
+    if ":" not in addr:
+        raise SystemExit("bad discoverd addr for %s: %r" % (svc, addr))
+    ip, port = addr.rsplit(":", 1)
+    resolve = "%s:%s:%s" % (host, port, ip)
+print("url=%s" % shlex.quote(raw))
+print("resolve=%s" % shlex.quote(resolve))
+PY
+)"
+args=(-fsS --max-time 60)
+if [[ -n "\${resolve}" ]]; then
+  args+=(--resolve "\${resolve}")
+fi
+deadline=\$((SECONDS + 180))
+last=1
+while (( SECONDS < deadline )); do
+  if curl "\${args[@]}" "\${url}" >/dev/null; then
+    echo "plugin ${name} ready (\${url} via \${resolve:-direct})"
+    exit 0
+  else
+    last=\$?
+  fi
+  sleep 2
+done
+echo "plugin ${name} not ready at \${url} (curl rc=\${last})" >&2
+exit 1
+EOF
+}
+
+probe_plugin_webhooks() {
+  local name=$1 dir urls
+  dir="$(plugin_checkout "${name}")"
+  urls="$(python3 - "${dir}" "${CLUSTER_DOMAIN}" <<'PY'
+import json, os, sys
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+domain = sys.argv[2] if len(sys.argv) > 2 else ""
+m = json.load(open(path))
+for w in m.get("webhooks") or []:
+    url = (w.get("url") or "").strip()
+    if not url:
+        continue
+    # secret_env is applied by flynn-host plugin install (X-Flynn-Webhook-Secret).
+    if domain:
+        url = url.replace("${CLUSTER_DOMAIN}", domain)
+    print(url)
+PY
+)"
+  if [[ -z "${urls}" ]]; then
+    return 0
+  fi
+  info "checking plugin ${name} flynn-host webhooks"
+  node_root_script node1 <<EOF
+set -euo pipefail
+listed=\$(flynn-host webhooks)
+echo "\$listed"
+while IFS= read -r url; do
+  [[ -z "\$url" ]] && continue
+  if ! grep -F "\$url" <<<"\$listed" >/dev/null; then
+    echo "plugin ${name} webhook not registered: \$url" >&2
+    echo "\$listed" >&2
+    exit 1
+  fi
+  echo "plugin ${name} webhook registered (\$url)"
+done <<'URLS'
+${urls}
+URLS
+EOF
 }
 
 # Write the backup to the synced folder (host can inspect it) and copy to /tmp

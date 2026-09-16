@@ -75,6 +75,7 @@ func main() {
 	dd := sd.NewDiscoverd(discoverd.DefaultClient.Service(serviceName), log.New("component", "discoverd"))
 
 	peer := state.NewPeer(inst, id, postgresql.IDKey, singleton, dd, process, log.New("component", "peer"))
+	shutdown.BeforeExit(func() { _ = process.Stop() })
 	shutdown.BeforeExit(func() { peer.Close() })
 
 	go peer.Run()
@@ -86,5 +87,4 @@ func main() {
 	handler.Logger = log.New("component", "http")
 
 	shutdown.Fatal(http.ListenAndServe(":"+httpPort, handler))
-	// TODO(titanous): clean shutdown of postgres
 }
