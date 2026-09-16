@@ -51,9 +51,9 @@ func (in *Installer) githubHTTP() *http.Client {
 
 // fetchGitHub writes flynn-plugin.json, declared hook scripts, and dist/
 // (image.json + layers) from a GitHub Release into a temp directory. It never
-// runs plugin-build. GitHub assets are a flat list, so hooks.install
-// script/install.sh is published as script-install.sh (basename install.sh is
-// also accepted).
+// runs plugin-build. GitHub assets are a flat list, so a declared hook path
+// such as script/install.sh or script/uninstall.sh is published as
+// script-install.sh / script-uninstall.sh (basename is also accepted).
 func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, error) {
 	if src == nil {
 		return "", fmt.Errorf("missing GitHub source")
@@ -168,7 +168,8 @@ func (m *Manifest) hookRels() []string {
 
 // HookAssetNames are GitHub Release asset names for a repo-relative hook path.
 // Assets cannot contain slashes, so script/install.sh is published as
-// script-install.sh; install.sh is also accepted.
+// script-install.sh (script/uninstall.sh as script-uninstall.sh); the
+// basename is also accepted.
 func HookAssetNames(rel string) []string {
 	rel = filepath.ToSlash(filepath.Clean(strings.TrimSpace(rel)))
 	rel = strings.TrimPrefix(rel, "./")

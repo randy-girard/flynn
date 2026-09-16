@@ -12,6 +12,7 @@ import (
 
 const pluginUsage = `
 usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
+       flynn-host plugin uninstall [--force] [--github-org=ORG] <plugin>
        flynn-host plugin list
        flynn-host plugin credentials set github [--token-file=FILE] [--api=URL]
        flynn-host plugin credentials unset github
@@ -24,6 +25,7 @@ usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-
 
 Commands:
 	install       Install a plugin from a local path, alias, or GitHub URL
+	uninstall     Remove an installed plugin app, webhooks, and optional uninstall hook
 	list          List plugins installed on this cluster
 	credentials   Store a GitHub token for private or draft release assets
 	route         List, add, update, or remove routes for an installed plugin
@@ -33,6 +35,7 @@ Options:
 	--rebuild          Run script/plugin-build even if dist/ already exists (local only)
 	--ref=REF          GitHub release tag (default: latest published, or plugins.json ref)
 	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
+	--force            Uninstall a resource-provider even if other apps still use it
 	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
 	--no-auto-tls      Disable Let's Encrypt on an existing HTTP route
 	--token-file=FILE  Read the GitHub token from a file (otherwise stdin)
@@ -50,6 +53,10 @@ Let's Encrypt automatically. Manifest auto_tls still requests TLS when you
 are not passing --auto-tls (warns if ACME is off). --auto-tls fails if ACME
 is off. After install, flynn-host plugin <name> route is the same shape as
 flynn route (list / add http / update / remove) scoped to that plugin app.
+Uninstall reverses that: optional hooks.uninstall, plugin webhooks, then
+DeleteApp (routes and exclusive resources). Resource-provider plugins with
+provisioned resources still in use refuse unless --force. Flynn does not
+special-case plugin names.
 Local
 checkouts are used when present. Otherwise
 short names pull a published GitHub Release named flynn-plugin-<name> (or the
@@ -71,6 +78,8 @@ Examples:
     $ flynn-host plugin dashboard route add http --auto-tls
     $ flynn-host plugin dashboard route update http/<id> --auto-tls
     $ flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+    $ flynn-host plugin uninstall dashboard
+    $ flynn-host plugin uninstall redis --force
     $ flynn-host plugin credentials set github --token-file /root/github.token
     $ flynn-host plugin list
 `
@@ -83,6 +92,8 @@ func runPlugin(args *docopt.Args) error {
 	switch {
 	case args.Bool["install"]:
 		return runPluginInstall(args)
+	case args.Bool["uninstall"]:
+		return runPluginUninstall(args)
 	case args.Bool["list"]:
 		return runPluginList()
 	case args.Bool["credentials"]:
@@ -117,6 +128,30 @@ func runPluginInstall(args *docopt.Args) error {
 		NoBuild:   args.Bool["--no-build"],
 		Rebuild:   args.Bool["--rebuild"],
 		AutoTLS:   args.Bool["--auto-tls"],
+	})
+}
+
+func runPluginUninstall(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	in := &plugin.Installer{
+		Client: client,
+		HTTP:   discoverdHTTPClient(),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
+	}
+	return in.Uninstall(plugin.UninstallOptions{
+		Name:      args.String["<plugin>"],
+		Force:     args.Bool["--force"],
+		Cwd:       cwd,
+		GitHubOrg: args.String["--github-org"],
 	})
 }
 

@@ -40,11 +40,13 @@ need_in "${github}" 'HookAssetNames' \
   "hook release assets must use flat names (script/install.sh → script-install.sh)"
 need_in "${github}" 'script-install.sh' \
   "GitHub asset naming must document script-install.sh"
+need_in "${github}" 'script-uninstall.sh' \
+  "GitHub asset naming must document script-uninstall.sh"
 need_in "${github_test}" 'TestFetchGitHubReleaseHooks' \
   "unit tests must fetch hooks.install from GitHub release assets"
 need_in "${github_test}" 'TestFetchGitHubReleaseMissingHookAsset' \
   "unit tests must fail GitHub install when a declared hook asset is missing"
-need_in "${install}" 'hooks.install' \
+need_in "${install}" 'hook %s' \
   "runHook must still fail when the hook file is missing (do not skip)"
 need_in "${smoke}" 'assemble_plugin_github_unpack' \
   "smoke must install plugins from a GitHub-style unpack, not the git checkout"

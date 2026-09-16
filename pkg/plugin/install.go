@@ -48,6 +48,9 @@ type Installer struct {
 	// RouteClient, if set, is used for HTTP routes and ACME. Tests
 	// replace this; the default is Client.
 	RouteClient RouteClient
+	// UninstallClient is the controller subset used by Uninstall. Tests
+	// replace this; the default is Client.
+	UninstallClient uninstallAPI
 }
 
 // WebhookHost is the subset of pkg/cluster.Host used to register webhooks
@@ -56,6 +59,7 @@ type WebhookHost interface {
 	ID() string
 	ListWebhooks() ([]*host.WebhookConfig, error)
 	AddWebhook(id, url string, headers map[string]string) (*host.WebhookConfig, error)
+	RemoveWebhook(id string) error
 }
 
 type InstallOptions struct {
@@ -241,6 +245,13 @@ func (m *Manifest) installHook() string {
 	return ""
 }
 
+func (m *Manifest) uninstallHook() string {
+	if m.Hooks != nil {
+		return strings.TrimSpace(m.Hooks.Uninstall)
+	}
+	return ""
+}
+
 func (in *Installer) runBuild(root string) error {
 	if in.Build != nil {
 		return in.Build(root)
@@ -376,7 +387,7 @@ func (in *Installer) runHook(root string, m *Manifest, rel string, cluster map[s
 	}
 	script := filepath.Join(root, rel)
 	if _, err := os.Stat(script); err != nil {
-		return fmt.Errorf("hooks.install %s: %w", rel, err)
+		return fmt.Errorf("hook %s: %w", rel, err)
 	}
 	cmd := exec.Command(script)
 	cmd.Dir = root
@@ -398,7 +409,7 @@ func (in *Installer) runHook(root string, m *Manifest, rel string, cluster map[s
 	}
 	in.logf("running hook %s", rel)
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("hooks.install: %w", err)
+		return fmt.Errorf("hook %s: %w", rel, err)
 	}
 	return nil
 }
@@ -672,8 +683,8 @@ func expandWebhookSpec(spec WebhookSpec, cluster map[string]string) (string, map
 	return url, headers, nil
 }
 
-func pluginWebhookID(pluginName, url string) string {
-	name := strings.Map(func(r rune) rune {
+func pluginWebhookName(pluginName string) string {
+	return strings.Map(func(r rune) rune {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-':
 			return r
@@ -681,8 +692,16 @@ func pluginWebhookID(pluginName, url string) string {
 			return '-'
 		}
 	}, pluginName)
+}
+
+func pluginWebhookID(pluginName, url string) string {
+	name := pluginWebhookName(pluginName)
 	sum := sha256.Sum256([]byte(pluginName + "\n" + url))
 	return fmt.Sprintf("plugin-%s-%x", name, sum[:8])
+}
+
+func pluginWebhookIDPrefix(pluginName string) string {
+	return "plugin-" + pluginWebhookName(pluginName) + "-"
 }
 
 func webhookAlreadyRegistered(h WebhookHost, id, url string) (bool, error) {

@@ -211,6 +211,10 @@ func TestHookAssetNames(t *testing.T) {
 	if len(got) != 2 || got[0] != "script-install.sh" || got[1] != "install.sh" {
 		t.Fatalf("%v", got)
 	}
+	got = HookAssetNames("script/uninstall.sh")
+	if len(got) != 2 || got[0] != "script-uninstall.sh" || got[1] != "uninstall.sh" {
+		t.Fatalf("uninstall=%v", got)
+	}
 	if got := HookAssetNames("install.sh"); len(got) != 1 || got[0] != "install.sh" {
 		t.Fatalf("basename=%v", got)
 	}
@@ -255,9 +259,10 @@ func TestFetchGitHubReleaseHooks(t *testing.T) {
   "name": "widget",
   "kind": "app",
   "app": {"name": "widget", "processes": {"web": {"args": ["/bin/x"]}}},
-  "hooks": {"install": "script/install.sh"}
+  "hooks": {"install": "script/install.sh", "uninstall": "script/uninstall.sh"}
 }`)
 	hookBody := []byte("#!/bin/sh\nexit 0\n")
+	uninstallBody := []byte("#!/bin/sh\necho uninstall\n")
 	layerBytes := []byte("squashfs-bytes")
 
 	var srv *httptest.Server
@@ -271,6 +276,7 @@ func TestFetchGitHubReleaseHooks(t *testing.T) {
 				{Name: osID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + osID + ".squashfs"},
 				{Name: deltaID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + deltaID + ".squashfs"},
 				{Name: "script-install.sh", BrowserDownloadURL: srv.URL + "/files/script-install.sh"},
+				{Name: "script-uninstall.sh", BrowserDownloadURL: srv.URL + "/files/script-uninstall.sh"},
 			},
 		})
 	})
@@ -279,6 +285,7 @@ func TestFetchGitHubReleaseHooks(t *testing.T) {
 	mux.HandleFunc("/files/"+osID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(layerBytes) })
 	mux.HandleFunc("/files/"+deltaID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(layerBytes) })
 	mux.HandleFunc("/files/script-install.sh", func(w http.ResponseWriter, r *http.Request) { w.Write(hookBody) })
+	mux.HandleFunc("/files/script-uninstall.sh", func(w http.ResponseWriter, r *http.Request) { w.Write(uninstallBody) })
 	srv = httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -316,6 +323,25 @@ func TestFetchGitHubReleaseHooks(t *testing.T) {
 	}
 	if err := in.runHook(dir, m, m.installHook(), map[string]string{"CONTROLLER_KEY": "k", "CLUSTER_DOMAIN": "example.local"}); err != nil {
 		t.Fatal(err)
+	}
+	uninst := filepath.Join(dir, "script", "uninstall.sh")
+	gotUn, err := os.ReadFile(uninst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotUn) != string(uninstallBody) {
+		t.Fatalf("uninstall hook body=%q", gotUn)
+	}
+	if err := in.runHook(dir, m, m.uninstallHook(), map[string]string{"CONTROLLER_KEY": "k"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHookRelsIncludesUninstall(t *testing.T) {
+	m := &Manifest{Hooks: &Hooks{Install: "script/install.sh", Uninstall: "script/uninstall.sh"}}
+	got := m.hookRels()
+	if len(got) != 2 || got[0] != "script/install.sh" || got[1] != "script/uninstall.sh" {
+		t.Fatalf("%v", got)
 	}
 }
 

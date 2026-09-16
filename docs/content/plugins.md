@@ -77,6 +77,22 @@ published next to `image.json`. GitHub asset names cannot contain slashes:
 is also accepted). Install fails if the hook is declared but missing; it is
 not skipped.
 
+Uninstall reverses install without special-casing a plugin name:
+
+```text
+sudo flynn-host plugin uninstall dashboard
+sudo flynn-host plugin uninstall redis
+sudo flynn-host plugin uninstall redis --force
+```
+
+It runs optional **`hooks.uninstall`**, removes host webhooks whose IDs were
+created for that plugin, then deletes the plugin app. `DeleteApp` already
+drops HTTP/TCP routes and exclusive resources. Resource-provider plugins
+with provisioned resources still attached to other apps refuse unless
+`--force`. The controller has no delete-provider API, so the provider row
+may remain. A declared uninstall hook that is missing fails; if the original
+source cannot be resolved, uninstall logs a warning and continues.
+
 If `dist/image.json` (and layers) are missing, install runs that repo’s
 `script/plugin-build` first. Already-built `dist/` is reused unless `--rebuild`.
 `--no-build` fails instead of compiling. GitHub URL installs never build on the
@@ -144,6 +160,7 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 ```text
 sudo flynn-host plugin install redis --ref v20260914.0
 sudo flynn-host plugin install dashboard --auto-tls
+sudo flynn-host plugin uninstall dashboard
 sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
 ```
 

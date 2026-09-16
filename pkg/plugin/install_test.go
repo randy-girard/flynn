@@ -194,16 +194,19 @@ func TestInstallHookAndRunHook(t *testing.T) {
 	if m.installHook() != "" {
 		t.Fatal("empty hooks")
 	}
-	m.Hooks = &Hooks{Install: "hooks/install.sh"}
+	m.Hooks = &Hooks{Install: "hooks/install.sh", Uninstall: "hooks/uninstall.sh"}
 	if m.installHook() != "hooks/install.sh" {
 		t.Fatal(m.installHook())
+	}
+	if m.uninstallHook() != "hooks/uninstall.sh" {
+		t.Fatal(m.uninstallHook())
 	}
 	in := &Installer{}
 	if err := in.runHook(t.TempDir(), m, "", nil); err != nil {
 		t.Fatal(err)
 	}
 	err := in.runHook(t.TempDir(), m, "hooks/missing.sh", map[string]string{})
-	if err == nil || !strings.Contains(err.Error(), "hooks.install") {
+	if err == nil || !strings.Contains(err.Error(), "hook") {
 		t.Fatalf("missing hook must fail, got %v", err)
 	}
 }
@@ -261,11 +264,13 @@ func TestInstallerHTTPAndRunBuildMissing(t *testing.T) {
 }
 
 type webhookHostStub struct {
-	id      string
-	listed  []*host.WebhookConfig
-	listErr error
-	added   []webhookAdd
-	addErr  error
+	id        string
+	listed    []*host.WebhookConfig
+	listErr   error
+	added     []webhookAdd
+	addErr    error
+	removed   []string
+	removeErr error
 }
 
 type webhookAdd struct {
@@ -286,6 +291,14 @@ func (s *webhookHostStub) AddWebhook(id, url string, headers map[string]string) 
 		return nil, s.addErr
 	}
 	return &host.WebhookConfig{ID: id, URL: url, Headers: headers}, nil
+}
+
+func (s *webhookHostStub) RemoveWebhook(id string) error {
+	s.removed = append(s.removed, id)
+	if s.removeErr != nil {
+		return s.removeErr
+	}
+	return nil
 }
 
 func TestExpandWebhookSpecSecretEnv(t *testing.T) {
