@@ -13,7 +13,9 @@
 #   binaries     Build host binaries via script/build-flynn (+ flannel-wrapper).
 #   start        Start the local Flynn stack (required before flynn-builder).
 #   toolchain    Build toolchain/base images (flynn-builder --only=toolchain).
-#   apps         Build remaining app images (flynn-builder --only=apps).
+#   apps         Build production app/CLI images (flynn-builder --only=apps).
+#                Omits cluster-test images (test, test-apps, controller-examples).
+#   test         Build cluster-test images (flynn-builder --only=test).
 #   stop         Copy install-flynn and stop the local Flynn stack.
 #   cluster      prep → binaries → start → toolchain → apps → stop.
 #   all          Run base then cluster (same as the historical single-shot build).
@@ -56,7 +58,8 @@ PHASE (default: all):
   binaries   Build host binaries (script/build-flynn)
   start      Start local Flynn stack
   toolchain  Build toolchain images (flynn-builder --only=toolchain)
-  apps       Build app images (flynn-builder --only=apps)
+  apps       Build production app/CLI images (omits test, test-apps, controller-examples)
+  test       Build cluster-test images (test, test-apps, controller-examples)
   stop       Stop local Flynn stack after image builds
   cluster    prep → binaries → start → toolchain → apps → stop
   all        base then cluster
@@ -95,7 +98,7 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
-    base|prep|binaries|start|toolchain|apps|stop|cluster|all)
+    base|prep|binaries|start|toolchain|apps|test|stop|cluster|all)
       PHASE="$1"
       shift
       ;;
@@ -289,7 +292,7 @@ run_phase_binaries() {
   require_base_squashfs
   cd "${FLYNN_ROOT}"
 
-  echo "===> [binaries] Building host binaries (script/build-flynn)..."
+  echo "===> [binaries] Building host binaries (script/build-flynn, omitting flynn-test)..."
   ./script/build-flynn --version "${VERSION}"
 
   # Force a fresh flynn-builder / flannel-wrapper for start-all. Rebuild here
@@ -381,15 +384,26 @@ run_phase_toolchain() {
   echo "===> [toolchain] Complete."
 }
 
-# --- Phase: apps (remaining images) ---
+# --- Phase: apps (production images; omits cluster-test images) ---
 run_phase_apps() {
   require_base_squashfs
   local concurrency
   concurrency="$(default_apps_concurrency)"
-  echo "===> [apps] Building app images (concurrency=${concurrency})..."
+  echo "===> [apps] Building production app images (concurrency=${concurrency})..."
   run_flynn_builder_only apps "${concurrency}"
   flynn-host ps -a || true
   echo "===> [apps] Complete."
+}
+
+# --- Phase: test (cluster-integration images used by test/) ---
+run_phase_test() {
+  require_base_squashfs
+  local concurrency
+  concurrency="$(default_apps_concurrency)"
+  echo "===> [test] Building cluster-test images (concurrency=${concurrency})..."
+  run_flynn_builder_only test "${concurrency}"
+  flynn-host ps -a || true
+  echo "===> [test] Complete."
 }
 
 # --- Phase: stop (tear down local stack after successful image builds) ---
@@ -432,6 +446,9 @@ case "${PHASE}" in
     ;;
   apps)
     run_phase_apps
+    ;;
+  test)
+    run_phase_test
     ;;
   stop)
     run_phase_stop

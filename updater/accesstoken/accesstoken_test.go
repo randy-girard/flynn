@@ -2,6 +2,29 @@ package accesstoken
 
 import "testing"
 
+func TestUpdateNilEnvAndUnknownApp(t *testing.T) {
+	updated, err := Update("gitreceive", nil)
+	if err != nil || updated {
+		t.Fatalf("nil env: %v %v", updated, err)
+	}
+	updated, err = Update("postgres", map[string]string{"ACCESS_TOKEN_KEY": "x"})
+	if err != nil || updated {
+		t.Fatalf("unknown app: %v %v", updated, err)
+	}
+}
+
+func TestUpdateTarreceiveUsesVerifierPair(t *testing.T) {
+	pair.ok = false
+	if _, err := Update("gitreceive", map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	updated, err := Update("tarreceive", env)
+	if err != nil || !updated || env["ACCESS_TOKEN_KEY"] == "" {
+		t.Fatalf("tarreceive: updated=%v env=%v err=%v", updated, env, err)
+	}
+}
+
 func TestUpdateGitreceiveAddsKeys(t *testing.T) {
 	env := map[string]string{"CONTROLLER_KEY": "k"}
 	updated, err := Update("gitreceive", env)

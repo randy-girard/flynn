@@ -21,6 +21,13 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
   config.vm.synced_folder "./ubuntu_ports_cache", "/var/cache/flynn/debootstrap", create: true, group: "vagrant", owner: "vagrant"
 
+  # Sibling plugin checkouts (FlynnWorkspace/flynn-plugin-*) for flynn-host plugin install.
+  Dir.glob(File.expand_path("../flynn-plugin-*", __dir__)).each do |dir|
+    next unless File.directory?(dir)
+    name = File.basename(dir)
+    config.vm.synced_folder dir, "/opt/flynn-plugins/#{name}", create: true, group: "root", owner: "root"
+  end
+
   if Vagrant.has_plugin?("vagrant-vbguest")
     # vagrant-vbguest can cause the VM to not start: https://github.com/flynn/flynn/issues/2874
     config.vbguest.auto_update = false

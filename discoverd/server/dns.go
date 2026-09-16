@@ -12,6 +12,7 @@ import (
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/pkg/keepalive"
 	"github.com/flynn/flynn/pkg/netpolicy"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/flynn/pkg/random"
 	reuseport "github.com/kavu/go_reuseport"
 	"github.com/miekg/dns"
@@ -218,7 +219,7 @@ func (d dnsAPI) ServiceLookup(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	if d.clientIsUser(w.RemoteAddr()) && !netpolicy.UserMayResolveDiscoverd(leader, service) {
+	if d.clientIsUser(w.RemoteAddr()) && !d.userMayResolveDiscoverd(leader, service) {
 		nxdomain()
 		return
 	}
@@ -451,6 +452,34 @@ func remoteIP(addr net.Addr) net.IP {
 		}
 		return net.ParseIP(host)
 	}
+}
+
+func (d dnsAPI) userMayResolveDiscoverd(leader bool, service string) bool {
+	if netpolicy.UserMayResolveDiscoverd(leader, service) {
+		return true
+	}
+	if !leader {
+		return false
+	}
+	// Discoverd jobs cannot read host /etc/flynn/installed-plugins.json.
+	// Shared plugin appliances (mariadb, mongodb) advertise flynn-datastore
+	// on their instances so user jobs can resolve leader.<service>.discoverd.
+	store := d.GetStore()
+	if store == nil {
+		return false
+	}
+	insts, err := store.Instances(service)
+	if err == nil {
+		for _, inst := range insts {
+			if inst != nil && inst.Meta[plugin.MetaDatastore] == "true" {
+				return true
+			}
+		}
+	}
+	if sl, err := store.ServiceLeader(service); err == nil && sl != nil && sl.Meta[plugin.MetaDatastore] == "true" {
+		return true
+	}
+	return false
 }
 
 func (d dnsAPI) clientIsUser(addr net.Addr) bool {

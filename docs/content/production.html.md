@@ -251,12 +251,14 @@ individual applications (including their databases).
 To take a full-cluster backup, run `flynn cluster backup --file backup.tar`.
 A file named `backup.tar` is created with the data needed to stand up a new
 cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
-MongoDB if they were running), a full `pg_dumpall` of Postgres (controller,
-blobstore files, and every app Postgres database), and MariaDB/MongoDB dumps
-when those appliances are scaled above zero. Redis, Kafka, and ClickHouse keep
-data on volumes that are **not** included; after restore those engines come
-back empty. App slugs and container images stored in the blobstore (Postgres)
-are restored.
+MongoDB if they were running), `plugins.json` (which plugins were installed),
+a full `pg_dumpall` of Postgres (controller, blobstore files including plugin
+image layers, and every app Postgres database), and MariaDB/MongoDB dumps
+when those appliances are scaled above zero. Restore does **not** re-run
+`flynn-host plugin install`; plugin apps come back with postgres. Redis, Kafka,
+and ClickHouse keep data on volumes that are **not** included; after restore
+those engines come back empty. App slugs and container images stored in the
+blobstore (Postgres) are restored.
 
 The Vagrant upgrade smoke (`script/vagrant-upgrade-smoke.sh`) exercises this
 path after the in-place `--force` updates: backup, `install --clean`, then

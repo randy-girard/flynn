@@ -4,6 +4,12 @@
 # either in a container or in a VM
 export DEBIAN_FRONTEND=noninteractive
 
+# flynn-builder jobs have overlay /; linux-gcp/initramfs postinst otherwise
+# probes that overlay and prints cryptsetup/fsck errors. The VM root is 9p.
+mkdir -p /etc/initramfs-tools/conf.d /etc/cryptsetup-initramfs
+printf '%s\n' 'CRYPTSETUP=n' > /etc/cryptsetup-initramfs/conf-hook
+printf '%s\n' 'FSTYPE=9p' 'RESUME=none' > /etc/initramfs-tools/conf.d/flynn-rootfs
+
 apt-get update
 
 apt-get install -y --no-install-recommends linux-gcp \

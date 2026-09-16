@@ -33,13 +33,14 @@ need_file "${app}/Procfile" "upgrade-smoke must have a Procfile"
 need_file "${app}/data/seed.txt" "upgrade-smoke must embed at least one data file"
 grep -q 'go:embed data' "${app}/main.go" || { echo "upgrade-smoke must embed data/ blobs" >&2; exit 1; }
 grep -q '/status' "${app}/main.go" || { echo "upgrade-smoke must serve GET /status" >&2; exit 1; }
-need_file "${ROOT}/cli/clickhouse_test.go" "clickhouse CLI stdin hang must have unit tests"
-grep -q 'TestApplyClickhouseStdinPolicy' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
-grep -q 'tty INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
-grep -q 'pipe INSERT VALUES' "${ROOT}/cli/clickhouse_test.go" \
-  || { echo "cli/clickhouse_test.go must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
+clickhouse_cli_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-cli/main_test.go"
+need_file "${clickhouse_cli_test}" "clickhouse plugin CLI stdin hang must have unit tests"
+grep -q 'TestApplyClickhouseStdinPolicy' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must test applyClickhouseStdinPolicy (INSERT VALUES TTY hang)" >&2; exit 1; }
+grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
+grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
+  || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
 
 need 'test/apps/upgrade-smoke-docker' \
   "smoke must git-push a Dockerfile app (dockerbuilder-24), not only the slug app"
@@ -85,6 +86,44 @@ need 'sirenia_primary_read_write' \
   "smoke must wait for postgres/mariadb/mongodb after each upgrade pass"
 need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
+need 'step_install_plugins' \
+  "after bootstrap, smoke must flynn-host plugin install from sibling repos before resource add"
+if grep -q 'Reinstall plugins after restore' "${smoke}"; then
+  echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
+  exit 1
+fi
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse' \
+  "default plugin install list must include redis, mysql, mongodb, kafka, and clickhouse"
+need 'plugin_manifest_matches' \
+  "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
+need 'ensure_plugin_vm_mounts' \
+  "plugin install must reload VMs when sibling plugin folders are not synced"
+need 'already in CLI catalog; skipping hidden-CLI probe' \
+  "plugin install must skip the hidden-CLI probe when resuming with plugins already installed"
+need 'flynn-plugin-layers-' \
+  "plugin-build must overlay ubuntu-noble from this smoke tarball, not a KEEP_BUILDER layer cache"
+if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
+  echo "plugin_checkout must not hardcode mysql→mariadb" >&2
+  exit 1
+fi
+need 'flynn-host plugin install' \
+  "plugins must be installed with flynn-host, not the user flynn CLI"
+need 'probe_delegated_plugin_cli_hidden' \
+  "before plugin install, flynn help must hide redis and flynn redis must fail"
+need 'probe_delegated_plugin_cli_visible' \
+  "after plugin install, flynn help must list redis from the cluster catalog"
+need 'cli-redis-dump' \
+  "live CLI must dump redis through the plugin job, not a compiled handler"
+need 'plugin_dist_ready' \
+  "smoke must rebuild plugin dist when image.json is overlay-only (no ubuntu-noble)"
+need 'flynn.plugin.files' \
+  "smoke must rebuild plugin dist when binaries were not installed into the overlay (ENOENT /bin/start-*)"
+need 'flynn.plugin.arch' \
+  "smoke must rebuild plugin dist when Go binaries do not match the Flynn host architecture (exit 126)"
+need 'FLYNN_LAYERS_DIR' \
+  "plugin-build must overlay the local Flynn ubuntu-noble layer, not GitHub's same-ID other-arch squashfs"
+need 'dump_plugin_install_diagnostics' \
+  "plugin install failure must dump flynn-host job/squashfs logs, not only the scale timeout"
 need 'wait_datastores_ready "after resource add" postgres mariadb mongodb redis' \
   "after provisioning, smoke must wait for every scaled sirenia appliance plus redis"
 need 'wait_datastores_ready "after upgrade' \
@@ -103,6 +142,10 @@ need 'INSERT INTO smoke_db.rows SELECT' \
   "clickhouse marker rows must use INSERT SELECT (INSERT VALUES waits on stdin)"
 need 'RESUME_AT=upgrade' \
   "smoke must be able to resume at the --force update after a hung pre-upgrade verify"
+need 'RESUME_AT=backup' \
+  "smoke must be able to resume at cluster backup after a failed dump/restore"
+need 'RESUME_AT=restore' \
+  "smoke must be able to resume at bootstrap --from-backup after a failed restore"
 need 'db-check' \
   "assert_databases must log per-engine progress so a hang is obvious"
 need 'step_host_unit_tests' \
@@ -111,6 +154,14 @@ need 'validate-gofmt' \
   "smoke host unit-test gate must run gofmt (same check as GitHub Actions)"
 need_file "${ROOT}/util/commit-validator/validate-gofmt" \
   "gofmt check used by CI, smoke, and unit tests must exist"
+need_file "${ROOT}/script/githooks/gofmt-check" \
+  "pre-commit/pre-push gofmt hook must exist"
+need_file "${ROOT}/script/install-git-hooks" \
+  "clones must be able to install gofmt git hooks without git config"
+if ! grep -q 'validate-gofmt' "${ROOT}/script/githooks/gofmt-check"; then
+  echo "gofmt git hook must run util/commit-validator/validate-gofmt" >&2
+  exit 1
+fi
 if ! grep -q 'validate-gofmt' "${ROOT}/script/run-unit-tests"; then
   echo "script/run-unit-tests must run validate-gofmt" >&2
   exit 1

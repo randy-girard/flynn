@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# A script to install Docker 1.9.1 on Ubuntu 16.04.
+# A script to install a static Docker CLI/daemon for Flynn test VMs.
 
 set -eo pipefail
 

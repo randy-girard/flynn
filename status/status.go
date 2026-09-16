@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -128,36 +129,43 @@ func (s Service) Status() status.Status {
 
 var services = []Service{
 	{Name: "blobstore"},
-	{
-		Name: "controller",
-		ReqFn: func() ReqFn {
-			instances, err := discoverd.GetInstances("controller", 1*time.Second)
-			if err != nil {
-				log.Fatalf("error discovering controller: %s", err)
-			}
-			key := instances[0].Meta["AUTH_KEY"]
-			fn := RandomReqFn("controller")
-			return func() (*http.Request, error) {
-				req, err := fn()
-				if err != nil {
-					return nil, err
-				}
-				req.SetBasicAuth("", key)
-				return req, nil
-			}
-		}(),
-	},
-	{Name: "controller-scheduler", ReqFn: LeaderReqFn("controller-scheduler", "")},
+	{Name: "controller", ReqFn: controllerReqFn},
+	{Name: "controller-scheduler", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("controller-scheduler", "") })},
 	{Name: "controller-worker"},
 	{Name: "discoverd"},
 	{Name: "flannel"},
-	{Name: "gitreceive", ReqFn: RandomReqFn("gitreceive")},
-	{Name: "tarreceive", ReqFn: RandomReqFn("tarreceive"), Optional: true},
-	{Name: "logaggregator", ReqFn: LeaderReqFn("logaggregator", "80")},
-	{Name: "postgres", ReqFn: LeaderReqFn("postgres", "5433")},
-	{Name: "mariadb", ReqFn: LeaderReqFn("mariadb", "3307"), Optional: true},
-	{Name: "mongodb", ReqFn: LeaderReqFn("mongodb", "27018"), Optional: true},
-	{Name: "router", ReqFn: RandomReqFn("router-api")},
+	{Name: "gitreceive", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("gitreceive") })},
+	{Name: "tarreceive", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("tarreceive") }), Optional: true},
+	{Name: "logaggregator", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("logaggregator", "80") })},
+	{Name: "postgres", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("postgres", "5433") })},
+	{Name: "router", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("router-api") })},
+}
+
+func controllerReqFn() (*http.Request, error) {
+	instances, err := discoverd.GetInstances("controller", 1*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if len(instances) == 0 {
+		return nil, errors.New("no controller instances")
+	}
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s%s", instances[0].Addr, status.Path), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.SetBasicAuth("", instances[0].Meta["AUTH_KEY"])
+	return req, nil
+}
+
+func lazyReqFn(makeFn func() ReqFn) ReqFn {
+	var (
+		once sync.Once
+		fn   ReqFn
+	)
+	return func() (*http.Request, error) {
+		once.Do(func() { fn = makeFn() })
+		return fn()
+	}
 }
 
 func RandomReqFn(name string) ReqFn {
@@ -202,13 +210,18 @@ func LeaderReqFn(name, port string) ReqFn {
 	}
 }
 
-func init() {
-	for i, s := range services {
-		if s.ReqFn != nil {
-			continue
+var serviceReqOnce sync.Once
+
+func ensureServiceReqFns() {
+	serviceReqOnce.Do(func() {
+		for i, s := range services {
+			if s.ReqFn != nil {
+				continue
+			}
+			name := s.Name
+			services[i].ReqFn = lazyReqFn(func() ReqFn { return RandomReqFn(name) })
 		}
-		services[i].ReqFn = RandomReqFn(s.Name)
-	}
+	})
 }
 
 type ServiceStatus struct {
@@ -218,6 +231,7 @@ type ServiceStatus struct {
 }
 
 func GetStatus() status.Status {
+	ensureServiceReqFns()
 	results := make(chan ServiceStatus)
 	for _, s := range services {
 		go func(s Service) {

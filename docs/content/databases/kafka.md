@@ -5,9 +5,19 @@ layout: docs
 
 # Kafka
 
-The Flynn Kafka appliance provisions an [Apache Kafka](https://kafka.apache.org)
-cluster that runs in [KRaft mode](https://kafka.apache.org/documentation/#kraft)
-(no ZooKeeper). A cluster is spread across the nodes of your Flynn install, with
+Kafka is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
+cluster host, then provision from an app. See [Plugins](plugins.md).
+
+```text
+sudo flynn-host plugin install kafka --ref vX
+sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-kafka.git --ref vX
+sudo flynn-host plugin install ../flynn-plugin-kafka
+flynn resource add kafka
+```
+
+The plugin provisions an [Apache Kafka](https://kafka.apache.org) cluster that
+runs in [KRaft mode](https://kafka.apache.org/documentation/#kraft) (no
+ZooKeeper). A cluster is spread across the nodes of your Flynn install, with
 each broker acting as both a broker and a KRaft controller so the quorum forms
 automatically.
 
@@ -19,8 +29,8 @@ producer or consumer can use it.
 
 ### Adding a cluster to an app
 
-Kafka comes ready to go as soon as you've installed Flynn. After you create an
-app, provision a cluster for it by running:
+Kafka is available after the operator installs the plugin. After you create an
+app, provision a cluster with:
 
 ```text
 flynn resource add kafka

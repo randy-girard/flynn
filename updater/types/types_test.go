@@ -26,18 +26,14 @@ func TestSystemAppsUpgradeOrder(t *testing.T) {
 		}
 		byName[app.Name] = app
 	}
-	for _, required := range []string{"postgres", "redis", "status", "logaggregator"} {
+	for _, required := range []string{"postgres", "status", "logaggregator"} {
 		if _, ok := byName[required]; !ok {
 			t.Fatalf("missing required system app %q", required)
 		}
 	}
-	for _, optional := range []string{"mariadb", "mongodb", "kafka", "clickhouse"} {
-		app, ok := byName[optional]
-		if !ok {
-			t.Fatalf("missing optional system app %q", optional)
-		}
-		if !app.Optional {
-			t.Fatalf("%s should be Optional", optional)
+	for _, extracted := range []string{"mariadb", "mongodb", "kafka", "clickhouse", "redis"} {
+		if _, ok := byName[extracted]; ok {
+			t.Fatalf("%s is a plugin and must not be a system app", extracted)
 		}
 	}
 	for _, imageOnly := range []string{"slugbuilder", "slugrunner", "dockerbuilder"} {

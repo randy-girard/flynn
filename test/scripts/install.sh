@@ -2,8 +2,8 @@
 
 # Start an instance with:
 #
-# gcloud compute --project flynn-sandbox images create ubuntu-1604-vmx \
-#   --source-image-family ubuntu-1604-lts --source-image-project ubuntu-os-cloud \
+# gcloud compute --project flynn-sandbox images create ubuntu-2404-vmx \
+#   --source-image-family ubuntu-2404-lts-amd64 --source-image-project ubuntu-os-cloud \
 #   --licenses "https://www.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx"
 #
 # gcloud beta compute --project flynn-sandbox instances create flynn-ci-0 \
@@ -23,7 +23,7 @@
 #   --local-ssd interface=NVME \
 #   --local-ssd interface=NVME \
 #   --local-ssd interface=NVME \
-#   --image ubuntu-1604-vmx \
+#   --image ubuntu-2404-vmx \
 #   --boot-disk-size 1000 \
 #   --boot-disk-type pd-ssd \
 #   --boot-disk-device-name flynn-ci-0

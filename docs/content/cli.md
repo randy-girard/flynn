@@ -8,7 +8,7 @@ toc_min_level: 2
 
 The `flynn` CLI is the client for the [controller](architecture.html.md#controller). It deploys and manages applications, routes, and datastores.
 
-Host-level commands (`bootstrap`, `acme`, rolling update, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI.
+Host-level commands (`bootstrap`, `acme`, rolling update, plugin install, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI.
 
 ## Installation
 
@@ -81,9 +81,9 @@ Run `flynn help` or `flynn help <command>` for flags.
 | --- | --- |
 | `route` | HTTP and TCP routes, `--auto-tls` |
 | `resource add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
-| `pg` / `mysql` / `mongodb` / `redis` | Consoles, dump, restore |
-| `kafka` | Topics and consumer groups |
-| `clickhouse` | Databases and client |
+| `pg` / `mysql` / `mongodb` / `redis` | Consoles, dump, restore (plugin commands after install) |
+| `kafka` | Topics and consumer groups (after plugin install) |
+| `clickhouse` | Databases and client (after plugin install) |
 | `volume` | Persistent volumes |
 | `provider` | Resource providers |
 

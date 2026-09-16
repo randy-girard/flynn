@@ -18,6 +18,22 @@ need() {
 
 need 'SKIP_BACKUP' \
   "smoke must allow skipping cluster backup/restore"
+need 'RESUME_AT=backup' \
+  "smoke must resume at backup without requiring a fresh deploy"
+need 'RESUME_AT}" == "backup"' \
+  "RESUME_AT=backup must set skip flags in main, not only in the usage comment"
+need 'RESUME_AT=restore' \
+  "smoke must resume at --from-backup using an existing smoke-backup tar"
+need 'overlaying' \
+  "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
+if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go"; then
+  echo "bootstrap --from-backup must start blobstore before plugin dump restore" >&2
+  exit 1
+fi
+if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup' | grep -qF 'SKIP_DEPLOY=1'; then
+  echo "SKIP_DEPLOY must not skip cluster backup (RESUME_AT=upgrade/backup still need restore)" >&2
+  exit 1
+fi
 need 'flynn cluster backup --file' \
   "smoke must take a full-cluster backup via the CLI"
 need '/tmp/flynn-smoke-backup.tar' \
@@ -46,6 +62,8 @@ need 'postgres.sql.gz' \
   "cluster backup must include postgres.sql.gz"
 need 'flynn.json' \
   "cluster backup must contain flynn.json"
+need 'plugins.json' \
+  "cluster backup must contain plugins.json so restore knows which plugins were installed"
 need 'keys not in cluster backup' \
   "redis after restore must PING only; keys are not in the cluster backup"
 need 'topic data not in cluster backup' \
@@ -62,6 +80,11 @@ need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
+
+if grep -q 'Reinstall plugins after restore' "${smoke}"; then
+  echo "restore must not flynn-host plugin install; postgres backup already has plugin apps and artifacts" >&2
+  exit 1
+fi
 
 if grep -q 'assert_databases post-restore' "${smoke}"; then
   echo "post-restore must not call assert_databases (redis/kafka/clickhouse would FAIL)" >&2

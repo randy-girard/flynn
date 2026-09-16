@@ -5,8 +5,18 @@ layout: docs
 
 # ClickHouse
 
-The Flynn ClickHouse appliance provisions a [ClickHouse](https://clickhouse.com)
-cluster with [ClickHouse Keeper](https://clickhouse.com/docs/en/guides/sre/keeper/clickhouse-keeper)
+ClickHouse is a Flynn **plugin** (not part of the bootstrap tarball). Install it
+on a cluster host, then provision from an app. See [Plugins](plugins.md).
+
+```text
+sudo flynn-host plugin install clickhouse --ref vX
+sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-clickhouse.git --ref vX
+sudo flynn-host plugin install ../flynn-plugin-clickhouse
+flynn resource add clickhouse
+```
+
+The plugin provisions a [ClickHouse](https://clickhouse.com) cluster with
+[ClickHouse Keeper](https://clickhouse.com/docs/en/guides/sre/keeper/clickhouse-keeper)
 for replication coordination. A cluster is spread across the nodes of your Flynn
 install with three replicas on multi-node installs (or a single replica on
 single-node/`SINGLETON` installs).
@@ -18,8 +28,8 @@ provisioned with `ON CLUSTER` DDL and replicated to every replica.
 
 ### Adding a cluster to an app
 
-ClickHouse comes ready to go as soon as you've installed Flynn. After you create
-an app, provision a cluster for it by running:
+ClickHouse is available after the operator installs the plugin. After you create
+an app, provision a cluster with:
 
 ```text
 flynn resource add clickhouse

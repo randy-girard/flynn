@@ -43,8 +43,6 @@ func bootstrapStatusOnlyNonCriticalFailures(resp *StatusResponse) bool {
 	}
 	ignored := map[string]struct{}{
 		"flannel": {},
-		"mariadb": {},
-		"mongodb": {},
 	}
 	var sawUnhealthy bool
 	for svc, d := range resp.Data.Detail {

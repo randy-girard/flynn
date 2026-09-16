@@ -82,7 +82,7 @@ main() {
   local flynn_host="${ROOT}/build/bin/flynn-host"
 
   pushd "${ROOT}" >/dev/null
-  make
+  FLYNN_BUILD_TEST_BINARIES=1 make
   popd >/dev/null
 
   local boot_flags=(

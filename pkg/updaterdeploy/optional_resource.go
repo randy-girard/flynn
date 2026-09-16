@@ -13,23 +13,9 @@ const optionalResourceDeployTimeout = 5 * time.Minute
 
 // OptionalResourceApps are system apps that provision user-facing resources and
 // may be absent on clusters bootstrapped before the appliance was added.
-var OptionalResourceApps = map[string]optionalResourceApp{
-	"kafka": {
-		ServiceEnv:  "FLYNN_KAFKA",
-		ImageEnv:    "KAFKA_IMAGE_ID",
-		ProviderURL: "http://kafka-api.discoverd/clusters",
-		ExtraEnv: map[string]string{
-			"KAFKA_TLS_ENABLED": "true",
-		},
-		StartArgs: []string{"/bin/start-flynn-kafka", "api"},
-	},
-	"clickhouse": {
-		ServiceEnv:  "FLYNN_CLICKHOUSE",
-		ImageEnv:    "CLICKHOUSE_IMAGE_ID",
-		ProviderURL: "http://clickhouse-api.discoverd/clusters",
-		StartArgs:   []string{"/bin/start-flynn-clickhouse", "api"},
-	},
-}
+// OptionalResourceApps used to auto-deploy kafka/clickhouse from the tarball on
+// clusters that predated those appliances. Those engines are plugins now.
+var OptionalResourceApps = map[string]optionalResourceApp{}
 
 type optionalResourceApp struct {
 	ServiceEnv  string
@@ -144,7 +130,7 @@ func ensureProvider(client controller.Client, name, url string) error {
 }
 
 func controllerKeyFromCluster(client controller.Client) (string, error) {
-	for _, appName := range []string{"redis", "kafka", "clickhouse", "controller"} {
+	for _, appName := range []string{"controller", "postgres"} {
 		release, err := client.GetAppRelease(appName)
 		if err != nil {
 			continue

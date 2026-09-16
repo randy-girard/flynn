@@ -57,11 +57,6 @@ Commands:
 	meta        manage app metadata
 	route       manage routes
 	pg          manage postgres database
-	mysql       manage mysql database
-	mongodb     manage mongodb database
-	redis       manage redis database
-	kafka       manage kafka topics and consumer groups
-	clickhouse  manage clickhouse databases
 	provider    manage resource providers
 	docker      deploy Docker images to a Flynn cluster
 	remote      manage git remotes
@@ -82,12 +77,21 @@ See 'flynn help <command>' for more information on a specific command.
 
 	if cmd == "help" {
 		if len(cmdArgs) == 0 { // `flynn help`
-			fmt.Println(usage)
+			fmt.Println(pluginAwareUsage(usage))
 			return
 		} else if cmdArgs[0] == "--json" {
 			cmds := make(map[string]string)
 			for name, cmd := range commands {
 				cmds[name] = cmd.usage
+			}
+			if cat, err := clusterPluginCatalog(); err == nil {
+				for _, p := range cat.Commands {
+					if p.Doc != "" {
+						cmds[p.Command] = p.Doc
+					} else if _, ok := cmds[p.Command]; !ok && p.Usage != "" {
+						cmds[p.Command] = p.Usage
+					}
+				}
 			}
 			out, err := json.MarshalIndent(cmds, "", "\t")
 			if err != nil {
@@ -202,7 +206,10 @@ func runCommand(name string, args []string) (err error) {
 
 	cmd, ok := commands[name]
 	if !ok {
-		return fmt.Errorf("%s is not a flynn command. See 'flynn help'", name)
+		return runPluginCommand(name, args)
+	}
+	if err := requirePluginCommand(name); err != nil {
+		return err
 	}
 	parsedArgs, err := docopt.Parse(cmd.usage, argv, true, "", cmd.optsFirst)
 	if err != nil {

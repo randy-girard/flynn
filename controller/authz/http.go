@@ -85,18 +85,13 @@ func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
 // UUID lookups are enforced in appLookup via App.System().
 var platformAppNames = map[string]struct{}{
 	"blobstore":     {},
-	"clickhouse":    {},
 	"controller":    {},
 	"dashboard":     {},
 	"discoverd":     {},
 	"flannel":       {},
 	"gitreceive":    {},
-	"kafka":         {},
 	"logaggregator": {},
-	"mariadb":       {},
-	"mongodb":       {},
 	"postgres":      {},
-	"redis":         {},
 	"router":        {},
 	"status":        {},
 	"tarreceive":    {},

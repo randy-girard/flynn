@@ -1,0 +1,7 @@
+#!/bin/bash
+# Shared by pre-commit and pre-push. Same check as GitHub Actions.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+exec util/commit-validator/validate-gofmt

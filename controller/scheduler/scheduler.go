@@ -2451,7 +2451,7 @@ func (s *Scheduler) handleFormation(ef *ct.ExpandedFormation) (formation *Format
 		// do not completely scale down critical apps for which this is the only active formation
 		// (this prevents for example scaling down discoverd which breaks the cluster).
 		//
-		// sirenia-managed databases (postgres, mariadb, mongodb) are exempt: a
+		// sirenia-managed databases (postgres and any sirenia plugin) are exempt: a
 		// singleton sirenia deploy must scale the old release to zero so the
 		// data volume is released and adopted by the new release, and that
 		// scale-down is coordinated by the sirenia deployment strategy rather

@@ -1,6 +1,7 @@
 package iptables
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,28 @@ func TestIPSetBinMissingFromPATH(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ipset not found") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestUnionIPsDedupesAndSkipsNil(t *testing.T) {
+	a := net.ParseIP("100.64.0.1")
+	b := net.ParseIP("100.64.0.2")
+	got := UnionIPs([]net.IP{a, a, nil}, []net.IP{b, a})
+	if len(got) != 2 {
+		t.Fatalf("%v", got)
+	}
+	if AddSetIP("flynn-net-user", nil) != nil {
+		t.Fatal("nil IP add is a no-op")
+	}
+	if DelSetIP("flynn-net-user", nil) != nil {
+		t.Fatal("nil IP del is a no-op")
+	}
+	if bytesPreview(nil) != "" {
+		t.Fatal("empty preview")
+	}
+	long := strings.Repeat("x", 250)
+	if got := bytesPreview([]byte("  " + long)); len(got) != 200 {
+		t.Fatalf("preview len=%d", len(got))
 	}
 }
 

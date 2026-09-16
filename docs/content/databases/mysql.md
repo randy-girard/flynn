@@ -5,16 +5,26 @@ layout: docs
 
 # MySQL
 
-The Flynn MySQL appliance provides MariaDB 10.11 LTS in a highly-available
-configuration with automatic provisioning. It automatically fails over to
-a synchronous replica with no loss of data if the primary server goes down.
+MariaDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
+cluster host, then provision from an app. See [Plugins](plugins.md).
+
+```text
+sudo flynn-host plugin install mysql --ref vX
+sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-mariadb.git --ref vX
+sudo flynn-host plugin install ../flynn-plugin-mariadb
+flynn resource add mysql
+```
+
+The plugin provides MariaDB 10.11 LTS in a highly-available configuration with
+automatic provisioning. It automatically fails over to a synchronous replica
+with no loss of data if the primary server goes down.
 
 ## Usage
 
 ### Adding a database to an app
 
-MariaDB comes ready to go as soon as you've installed Flynn. After you create an
-app, you can provision a database for your app by running:
+MariaDB is available after the operator installs the plugin. After you create
+an app, provision a database with:
 
 ```text
 flynn resource add mysql

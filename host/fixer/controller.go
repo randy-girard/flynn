@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startScheduler bool) error {
@@ -65,42 +66,51 @@ func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startSched
 		}
 	}
 
-	// Restore sirenia appliance formations when optional DBs are present.
-	for _, app := range []string{"mariadb", "mongodb"} {
-		release, err := client.GetAppRelease(app)
-		if err != nil {
-			if err == controller.ErrNotFound {
+	// Restore sirenia plugin formations when those apps are present.
+	pluginApps, listErr := client.AppList()
+	if listErr != nil {
+		f.l.Error("error listing apps for plugin formations", "err", listErr)
+	} else {
+		_ = plugin.WriteInstalled("", plugin.ListInstalled(pluginApps))
+		for _, app := range pluginApps {
+			if app == nil || !app.Plugin() || !plugin.IsSireniaManaged(app) {
 				continue
 			}
-			return fmt.Errorf("error getting %s release: %s", app, err)
-		}
-		formation, err := client.GetFormation(app, release.ID)
-		if err != nil {
-			if err == controller.ErrNotFound {
-				continue
+			release, err := client.GetAppRelease(app.ID)
+			if err != nil {
+				if err == controller.ErrNotFound {
+					continue
+				}
+				return fmt.Errorf("error getting %s release: %s", app.Name, err)
 			}
-			return fmt.Errorf("error getting %s formation: %s", app, err)
-		}
-		for typ := range release.Processes {
-			want := 0
-			if sireniaDataProcessType(app) == typ {
-				if len(f.hosts) > 1 && formation.Processes[typ] < 3 {
-					want = 3
+			formation, err := client.GetFormation(app.ID, release.ID)
+			if err != nil {
+				if err == controller.ErrNotFound {
+					continue
+				}
+				return fmt.Errorf("error getting %s formation: %s", app.Name, err)
+			}
+			for typ := range release.Processes {
+				want := 0
+				if sireniaDataProcessType(app.Name) == typ {
+					if len(f.hosts) > 1 && formation.Processes[typ] < 3 {
+						want = 3
+					} else if formation.Processes[typ] < 1 {
+						want = 1
+					}
 				} else if formation.Processes[typ] < 1 {
 					want = 1
 				}
-			} else if formation.Processes[typ] < 1 {
-				want = 1
-			}
-			if want > 0 {
-				f.l.Info("found broken formation", "app", app, "process", typ)
-				if _, ok := changes[app]; !ok {
-					if formation.Processes == nil {
-						formation.Processes = make(map[string]int)
+				if want > 0 {
+					f.l.Info("found broken formation", "app", app.Name, "process", typ)
+					if _, ok := changes[app.Name]; !ok {
+						if formation.Processes == nil {
+							formation.Processes = make(map[string]int)
+						}
+						changes[app.Name] = formation
 					}
-					changes[app] = formation
+					changes[app.Name].Processes[typ] = want
 				}
-				changes[app].Processes[typ] = want
 			}
 		}
 	}

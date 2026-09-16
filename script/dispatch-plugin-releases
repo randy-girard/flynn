@@ -1,0 +1,84 @@
+#!/bin/bash
+#
+# Queue plugin Build and Release workflows for a published Flynn version.
+# Repo list: PLUGIN_RELEASE_REPOS (newline or comma separated owner/repo).
+# Auth: PLUGIN_RELEASE_TOKEN (or GH_TOKEN) with Actions: write on those repos.
+#
+# usage:
+#   PLUGIN_RELEASE_REPOS='owner/flynn-plugin-example' \
+#     ./script/dispatch-plugin-releases --version v20260915.0
+#
+
+set -eo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=/dev/null
+source "${ROOT}/script/lib/plugin-releases.sh"
+# shellcheck source=/dev/null
+source "${ROOT}/script/lib/ui.sh"
+
+VERSION=""
+PRERELEASE="false"
+DRY_RUN="false"
+
+usage() {
+  cat <<USAGE >&2
+usage: $0 --version vYYYYMMDD.N [--prerelease] [--dry-run]
+
+Dispatch each plugin repo's release.yml workflow using Flynn's published tag
+as both the plugin version and FLYNN_VERSION (ubuntu-noble pin).
+
+Environment:
+  PLUGIN_RELEASE_REPOS   owner/repo list (newlines, commas, # comments)
+  PLUGIN_RELEASE_TOKEN   GitHub token with actions:write on those repos
+  GH_TOKEN               used if PLUGIN_RELEASE_TOKEN is unset
+  GH                     gh binary (tests may override)
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      VERSION=$2
+      shift 2
+      ;;
+    --prerelease)
+      PRERELEASE="true"
+      shift
+      ;;
+    --prerelease=true|--prerelease=false)
+      PRERELEASE="${1#--prerelease=}"
+      shift
+      ;;
+    --dry-run)
+      DRY_RUN="true"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -z "${VERSION}" ]]; then
+  usage
+  exit 2
+fi
+
+if [[ "${DRY_RUN}" != "true" && -n "${PLUGIN_RELEASE_REPOS:-}" && -z "${PLUGIN_RELEASE_TOKEN:-${GH_TOKEN:-}}" ]]; then
+  echo "PLUGIN_RELEASE_TOKEN (or GH_TOKEN) is required to dispatch plugin releases" >&2
+  exit 1
+fi
+
+if [[ -n "${PLUGIN_RELEASE_TOKEN:-}" ]]; then
+  export GH_TOKEN="${PLUGIN_RELEASE_TOKEN}"
+fi
+
+info "plugin release dispatch ${VERSION} prerelease=${PRERELEASE} dry_run=${DRY_RUN}"
+plugin_dispatch_releases "${VERSION}" "${PLUGIN_RELEASE_REPOS:-}" "${PRERELEASE}" "${DRY_RUN}"

@@ -22,4 +22,19 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
 
 If a change is internal-only and has no user-visible effect, say so in the PR and skip docs — still add tests when the logic can regress.
 
+## Git commits
+
+**Always** use [Conventional Commits](https://www.conventionalcommits.org/) for every commit. Do not use unstructured subjects.
+
+Format: `<type>(<scope>): <summary>`
+
+- **type** is one of `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, `chore`, `ci`, `build`, `style`
+- **scope** is the subsystem (`cli`, `controller`, `host`, `router`, `discoverd`, `plugin`, …). Omit scope only for repo-wide docs or chore
+- **summary** is imperative, lowercase, and says why the change matters
+- Keep subjects ≤ 72 characters; add a body when the why is not obvious
+- Sign off every commit (`git commit -s`) for the DCO
+- Split unrelated work into separate commits
+
+Examples: `feat(cli): load plugin commands from cluster catalog`, `fix(host): ignore missing volumes on destroy`, `test(router): cover ACME HTTP-01 challenge serving`
+
 See [Development](docs/content/development.html.md) and [Contributing](CONTRIBUTING.md).

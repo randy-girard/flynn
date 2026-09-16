@@ -24,6 +24,21 @@ func TestOverlayInstanceIP(t *testing.T) {
 	}
 }
 
+func TestTrackSkipsHostNetworkAndNil(t *testing.T) {
+	p := newNetPolicy(log15.New())
+	p.Track(nil, net.ParseIP("100.64.0.1"))
+	p.Track(&host.Job{ID: "j1", Config: host.ContainerConfig{HostNetwork: true}}, net.ParseIP("100.64.0.1"))
+	p.Track(&host.Job{ID: "j2"}, nil)
+	if len(p.pending) != 0 {
+		t.Fatalf("pending=%v", p.pending)
+	}
+	p.Untrack(nil, nil)
+	p.Start(nil)
+	if p.isLocalIP(nil) {
+		t.Fatal("nil IP is not local")
+	}
+}
+
 func TestLocalIPsSurviveStaleSnapshot(t *testing.T) {
 	p := newNetPolicy(log15.New())
 	job := &host.Job{

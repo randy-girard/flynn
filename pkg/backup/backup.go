@@ -7,19 +7,38 @@ import (
 
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
+
+type backupAppClient interface {
+	GetApp(string) (*ct.App, error)
+	GetAppRelease(string) (*ct.Release, error)
+	GetFormation(string, string) (*ct.Formation, error)
+	GetExpandedFormation(string, string) (*ct.ExpandedFormation, error)
+}
 
 func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	tw := NewTarWriter("flynn-backup-"+time.Now().UTC().Format("2006-01-02_150405"), out, progress)
 	defer tw.Close()
 
-	// get app and release details for key apps
 	data, err := getApps(client)
 	if err != nil {
 		return err
 	}
+
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing apps for plugin inventory: %s", err)
+	}
+	installed := plugin.ListInstalled(apps)
+	if err := includePluginFormations(client, data, installed); err != nil {
+		return err
+	}
 	if err := tw.WriteJSON("flynn.json", data); err != nil {
 		return err
+	}
+	if err := tw.WriteJSON("plugins.json", installed); err != nil {
+		return fmt.Errorf("error writing plugin inventory: %s", err)
 	}
 
 	pgRelease := data["postgres"].Release
@@ -38,56 +57,91 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 		return fmt.Errorf("error dumping postgres database: %s", err)
 	}
 
-	// If mariadb is not present skip attempting to store the backup in the archive
-	if mariadb, ok := data["mariadb"]; ok && mariadb.Processes["mariadb"] > 0 {
-		mysqlRelease := mariadb.Release
-		mysqlJob := &ct.NewJob{
-			ReleaseID: mysqlRelease.ID,
-			Args: []string{
-				"bash",
-				"-c",
-				fmt.Sprintf("set -o pipefail; /usr/bin/mysqldump -h %s -u %s --all-databases --flush-privileges | gzip -9", mysqlRelease.Env["MYSQL_HOST"], mysqlRelease.Env["MYSQL_USER"]),
-			},
-			Env: map[string]string{
-				"MYSQL_PWD": mysqlRelease.Env["MYSQL_PWD"],
-			},
+	for _, p := range installed {
+		formation := data[p.Name]
+		spec := plugin.BackupSpecFor(p, formation)
+		if !shouldDumpPlugin(client, p, spec, formation) {
+			continue
+		}
+		job := &ct.NewJob{
+			ReleaseID:  formation.Release.ID,
+			Args:       spec.Args,
+			Env:        plugin.JobEnvFromSpec(spec.Env, formation.Release.Env),
 			DisableLog: true,
 			Partition:  ct.PartitionTypeBackground,
 		}
-		if err := tw.WriteCommandOutput(client, "mysql.sql.gz", "mariadb", mysqlJob); err != nil {
-			return fmt.Errorf("error dumping mariadb database: %s", err)
-		}
-	}
-
-	// If mongodb is not present skip attempting to store the backup in the archive
-	if mongodb, ok := data["mongodb"]; ok && mongodb.Processes["mongodb"] > 0 {
-		mongodbRelease := mongodb.Release
-		mongodbJob := &ct.NewJob{
-			ReleaseID: mongodbRelease.ID,
-			Args: []string{
-				"bash",
-				"-c",
-				fmt.Sprintf("set -o pipefail; /usr/bin/mongodump --host %s -u %s -p $MONGO_PWD --authenticationDatabase admin --archive | gzip -9", mongodbRelease.Env["MONGO_HOST"], mongodbRelease.Env["MONGO_USER"]),
-			},
-			Env: map[string]string{
-				"MONGO_PWD": mongodbRelease.Env["MONGO_PWD"],
-			},
-			DisableLog: true,
-			Partition:  ct.PartitionTypeBackground,
-		}
-		if err := tw.WriteCommandOutput(client, "mongodb.archive.gz", "mongodb", mongodbJob); err != nil {
-			return fmt.Errorf("error dumping mongodb database: %s", err)
+		if err := tw.WriteCommandOutput(client, spec.File, p.Name, job); err != nil {
+			return fmt.Errorf("error dumping %s database: %s", p.Name, err)
 		}
 	}
 	return nil
 }
 
-func getApps(client controller.Client) (map[string]*ct.ExpandedFormation, error) {
-	// app -> required for backup
+type jobLister interface {
+	JobList(appID string) ([]*ct.Job, error)
+}
+
+// shouldDumpPlugin reports whether a plugin appliance should be dumped into the
+// cluster backup. RequireScale skips idle appliances, but after an upgrade the
+// desired formation can be 0 while a dump process is still up. In that case
+// dump from the running job so restore still gets mysql/mongodb data.
+func shouldDumpPlugin(client jobLister, p plugin.Installed, spec *plugin.BackupSpec, formation *ct.ExpandedFormation) bool {
+	if spec == nil || formation == nil || formation.Release == nil {
+		return false
+	}
+	if !spec.RequireScale {
+		return true
+	}
+	proc := spec.Process
+	if proc == "" {
+		proc = p.Name
+	}
+	if formation.Processes[proc] > 0 {
+		return true
+	}
+	jobs, err := client.JobList(p.Name)
+	if err != nil {
+		return false
+	}
+	for _, j := range jobs {
+		if j == nil {
+			continue
+		}
+		if j.Type == proc && (j.State == ct.JobStateUp || j.State == ct.JobStateStarting) {
+			return true
+		}
+	}
+	return false
+}
+
+func includePluginFormations(client backupAppClient, data map[string]*ct.ExpandedFormation, installed []plugin.Installed) error {
+	for _, p := range installed {
+		if data[p.Name] != nil {
+			continue
+		}
+		app, err := client.GetApp(p.Name)
+		if err != nil {
+			continue
+		}
+		release, err := client.GetAppRelease(app.ID)
+		if err != nil {
+			return fmt.Errorf("error getting %s app release: %s", p.Name, err)
+		}
+		ef, err := client.GetExpandedFormation(app.ID, release.ID)
+		if err != nil {
+			return fmt.Errorf("error getting %s expanded formation: %s", p.Name, err)
+		}
+		if ef.DeprecatedImageArtifact == nil && len(ef.Artifacts) > 0 {
+			ef.DeprecatedImageArtifact = ef.Artifacts[0]
+		}
+		data[p.Name] = ef
+	}
+	return nil
+}
+
+func getApps(client backupAppClient) (map[string]*ct.ExpandedFormation, error) {
 	apps := map[string]bool{
 		"postgres":   true,
-		"mariadb":    false,
-		"mongodb":    false,
 		"discoverd":  true,
 		"flannel":    true,
 		"controller": true,
@@ -98,10 +152,8 @@ func getApps(client controller.Client) (map[string]*ct.ExpandedFormation, error)
 		if err != nil {
 			if required {
 				return nil, fmt.Errorf("error getting %s app details: %s", name, err)
-			} else {
-				// If it's not an essential app just exclude it from the backup and continue.
-				continue
 			}
+			continue
 		}
 		release, err := client.GetAppRelease(app.ID)
 		if err != nil {
@@ -116,9 +168,6 @@ func getApps(client controller.Client) (map[string]*ct.ExpandedFormation, error)
 			Release:   release,
 			Processes: formation.Processes,
 
-			// set DeprecatedImageArtifact to support restoring
-			// to old clusters (the URI is overwritten on restore,
-			// but the field is expected to be set)
 			DeprecatedImageArtifact: &ct.Artifact{Type: ct.DeprecatedArtifactTypeDocker},
 		}
 	}

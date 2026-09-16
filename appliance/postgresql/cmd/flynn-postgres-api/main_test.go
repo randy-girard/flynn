@@ -32,3 +32,27 @@ func TestRevokeConnectSQL(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDatabaseResourceID(t *testing.T) {
+	user := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	db := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	gotUser, gotDB, ok := parseDatabaseResourceID("/databases/" + user + ":" + db)
+	if !ok || gotUser != user || gotDB != db {
+		t.Fatalf("valid id: %s %s %v", gotUser, gotDB, ok)
+	}
+	for _, bad := range []string{
+		"",
+		"/databases/",
+		user,
+		"/databases/" + user + ":",
+		`/databases/` + user + `:"evil"`,
+		"/databases/" + user + ":postgres;drop",
+		"/databases/" + user + ":template1",
+		"/databases/" + user + ":bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbg",
+		" /databases/" + user + ":" + db + " ",
+	} {
+		if _, _, ok := parseDatabaseResourceID(bad); ok {
+			t.Fatalf("must reject %q", bad)
+		}
+	}
+}

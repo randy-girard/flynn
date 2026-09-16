@@ -47,6 +47,8 @@ grep -q 'flynn_chroot_apt' "${ROOT}/builder/ubuntu-setup.sh" \
   || { echo "ubuntu-setup chroot must retry apt-get (PATH shim does not apply)" >&2; exit 1; }
 grep -q 'apt_get_update_resilient' "${ROOT}/script/install-flynn" \
   || { echo "install-flynn must retry apt-get update" >&2; exit 1; }
+grep -q 'destroy-volumes --include-data || true' "${ROOT}/script/install-flynn.tmpl" \
+  || { echo "install-flynn cleanup must not fail the build if stale flynn-host segfaults" >&2; exit 1; }
 grep -q 'flynn_apt_update_host' "${ROOT}/setup.sh" \
   || { echo "setup.sh must retry host apt-get update" >&2; exit 1; }
 

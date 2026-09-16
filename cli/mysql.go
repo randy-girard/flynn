@@ -2,59 +2,14 @@ package main
 
 import (
 	"fmt"
-	"io"
-	"os"
 
-	"github.com/cheggaaa/pb"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/term"
-	"github.com/flynn/go-docopt"
 )
 
-func init() {
-	register("mysql", runMysql, `
-usage: flynn mysql console [--] [<argument>...]
-       flynn mysql dump [-q] [-f <file>]
-       flynn mysql restore [-q] [-f <file>]
-
-Options:
-	-f, --file=<file>  name of dump file
-	-q, --quiet        don't print progress
-
-Commands:
-	console  Open a console to a Flynn mysql database. Any valid arguments to mysql may be provided.
-	dump     Dump a mysql database. If file is not specified, will dump to stdout.
-	restore  Restore a database dump. If file is not specified, will restore from stdin.
-
-Examples:
-
-    $ flynn mysql console
-
-    $ flynn mysql console -- -e "CREATE DATABASE db"
-
-    $ flynn mysql dump -f db.dump
-
-    $ flynn mysql restore -f db.dump
-`)
-}
-
-func runMysql(args *docopt.Args, client controller.Client) error {
-	config, err := getAppMysqlRunConfig(client)
-	if err != nil {
-		return err
-	}
-
-	switch {
-	case args.Bool["console"]:
-		return runMysqlMysql(args, client, config)
-	case args.Bool["dump"]:
-		return runMysqlDump(args, client, config)
-	case args.Bool["restore"]:
-		return runMysqlRestore(args, client, config)
-	}
-	return nil
-}
+// MySQL console/dump/restore live on flynn-plugin-mariadb. These helpers remain
+// so `flynn export` / `flynn import` can dump and restore a provisioned database
+// without a compiled `flynn mysql` command.
 
 func getAppMysqlRunConfig(client controller.Client) (*runConfig, error) {
 	appRelease, err := client.GetAppRelease(mustApp())
@@ -97,42 +52,6 @@ func getMysqlRunConfig(client controller.Client, appName string, appRelease *ct.
 	return config, nil
 }
 
-func runMysqlMysql(args *docopt.Args, client controller.Client, config *runConfig) error {
-	config.Env["PAGER"] = "less"
-	config.Env["LESS"] = "--ignore-case --LONG-PROMPT --SILENT --tabs=4 --quit-if-one-screen --no-init --quit-at-eof"
-	config.Args = append([]string{
-		"mysql",
-		"-u", config.Env["MYSQL_USER"],
-		"-D", config.Env["MYSQL_DATABASE"],
-	}, args.All["<argument>"].([]string)...)
-	return runJob(client, *config)
-}
-
-func runMysqlDump(args *docopt.Args, client controller.Client, config *runConfig) error {
-	config.Stdout = os.Stdout
-	if filename := args.String["--file"]; filename != "" {
-		f, err := os.Create(filename)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		config.Stdout = f
-	}
-	if !args.Bool["--quiet"] && term.IsTerminal(os.Stderr.Fd()) {
-		bar := pb.New(0)
-		bar.SetUnits(pb.U_BYTES)
-		bar.ShowBar = false
-		bar.ShowSpeed = true
-		bar.Output = os.Stderr
-		bar.Start()
-		defer bar.Finish()
-		config.Stdout = io.MultiWriter(config.Stdout, bar)
-	}
-
-	configMysqlDump(config)
-	return runJob(client, *config)
-}
-
 func configMysqlDump(config *runConfig) {
 	config.Args = []string{
 		"mysqldump",
@@ -140,39 +59,6 @@ func configMysqlDump(config *runConfig) {
 		"-u", config.Env["MYSQL_USER"],
 		config.Env["MYSQL_DATABASE"],
 	}
-}
-
-func runMysqlRestore(args *docopt.Args, client controller.Client, config *runConfig) error {
-	config.Stdin = os.Stdin
-	var size int64
-	if filename := args.String["--file"]; filename != "" {
-		f, err := os.Open(filename)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		stat, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		size = stat.Size()
-		config.Stdin = f
-	}
-	if !args.Bool["--quiet"] && term.IsTerminal(os.Stderr.Fd()) {
-		bar := pb.New(0)
-		bar.SetUnits(pb.U_BYTES)
-		if size > 0 {
-			bar.Total = size
-		} else {
-			bar.ShowBar = false
-		}
-		bar.ShowSpeed = true
-		bar.Output = os.Stderr
-		bar.Start()
-		defer bar.Finish()
-		config.Stdin = bar.NewProxyReader(config.Stdin)
-	}
-	return mysqlRestore(client, config)
 }
 
 func mysqlRestore(client controller.Client, config *runConfig) error {

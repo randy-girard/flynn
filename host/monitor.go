@@ -7,6 +7,7 @@ import (
 	"github.com/flynn/flynn/discoverd/client"
 	"github.com/flynn/flynn/host/fixer"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/inconshreveable/log15"
 )
 
@@ -198,7 +199,7 @@ func (m *Monitor) repairCluster() error {
 	f.KillSchedulers()
 
 	log.Info("checking status of sirenia databases")
-	for _, db := range []string{"postgres", "mariadb", "mongodb"} {
+	for _, db := range plugin.SireniaServiceNames() {
 		log.Info("checking for database state", "db", db)
 		if _, err := discoverd.NewService(db).GetMeta(); err != nil {
 			if discoverd.IsNotFound(err) {

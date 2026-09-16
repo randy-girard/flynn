@@ -12,6 +12,7 @@ import (
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
 )
@@ -118,7 +119,7 @@ func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	}
 
 	f.l.Info("checking status of sirenia databases")
-	for _, db := range []string{"postgres", "mariadb", "mongodb"} {
+	for _, db := range plugin.SireniaServiceNames() {
 		f.l.Info("checking for database state", "db", db)
 		if _, err := discoverd.NewService(db).GetMeta(); err != nil {
 			if discoverd.IsNotFound(err) {

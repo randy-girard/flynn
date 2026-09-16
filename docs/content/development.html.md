@@ -38,12 +38,17 @@ $ cd /root/go/src/github.com/flynn/flynn
 ```
 
 The host repo is synced there. `setup.sh` (first provision) installs Go **1.24**,
-Docker, ZFS, `ipset`, and the datastore packages unit tests need (PostgreSQL,
-MariaDB/`mariabackup`, MongoDB, Redis).
+Docker, ZFS, `ipset`, PostgreSQL for Flynn unit tests, and MariaDB/MongoDB/Redis
+so Vagrant smoke can install those engines as plugins. GitHub Actions unit tests
+only start PostgreSQL.
 
 You can also work on a native Ubuntu 24.04 machine with the same packages.
 macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
+
+Optional appliances live in sibling repos next to this checkout (`../flynn-plugin-redis`,
+…). Install them on a cluster host with `flynn-host plugin install` after
+bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
@@ -61,12 +66,16 @@ $ make
 
 That runs `script/build-flynn`. Binaries land in `build/bin`, image manifests in
 `build/image`. `make clean` wipes them. `make release` stamps a git-derived
-version.
+version. `flynn-test` / `flynn-test-file-server` are omitted unless you pass
+`--test-binaries` or set `FLYNN_BUILD_TEST_BINARIES=1`.
 
 ### Cluster images
 
-A full platform build (squashfs layers for every system app) is `build.sh` on
-the builder. First time, or after Ubuntu/base-package changes:
+A full production platform build (squashfs layers for system apps and the CLI)
+is `build.sh` on the builder. It does **not** build cluster-test images
+(`test`, `test-apps` including MinIO, `controller-examples`). Those are only
+for the `test/` integration suite; add `./build.sh test` if you need them.
+First time, or after Ubuntu/base-package changes:
 
 ```
 $ ./build.sh --version vYYYYMMDD.N
@@ -145,6 +154,17 @@ CI, `make test-unit` / `script/run-unit-tests`, and
 PR base (or `origin/develop` locally) so you do not fail on unrelated
 historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
 
+Install the same check as **pre-commit** and **pre-push** hooks so unformatted
+Go never leaves the clone:
+
+```
+$ make install-git-hooks
+```
+
+That copies `script/githooks/gofmt-check` into `.git/hooks/` (no `git config`
+changes). Git does not enable committed hooks automatically; run the installer
+once per clone.
+
 ### bats (shell)
 
 ```
@@ -170,7 +190,13 @@ $ make test-unit
 Force Docker on Linux with `FLYNN_TEST_DOCKER=1`. Skip ZFS volume tests with
 `FLYNN_SKIP_VOLUME_TESTS=1`. Extra `go test` flags: `FLYNN_GO_TEST_FLAGS`.
 
-On the builder you need `mariabackup` (the Makefile checks). Package-level:
+Unit tests write Go coverage under **`coverage/`** (gitignored): `coverage.out`,
+an overview at `coverage/index.html` grouped by package area, and one HTML
+page per source file under `coverage/files/`. Open `coverage/index.html` in a
+browser. Set `FLYNN_SKIP_COVERAGE=1` to skip the report.
+
+On the builder, MariaDB/MongoDB/Redis stay installed for plugin smoke, not for
+Flynn `go test`. Package-level:
 
 ```
 $ go test -mod=vendor ./router
@@ -207,8 +233,8 @@ Full-stack Go tests live in `test/` (not `tests/`). They need a cluster.
 $ script/run-integration-tests
 ```
 
-That builds Flynn, bootstraps a cluster (`script/bootstrap-flynn`), and runs
-`bin/flynn-test`. Filter:
+That builds Flynn (including `flynn-test` host binaries), bootstraps a cluster
+(`script/bootstrap-flynn`), and runs `bin/flynn-test`. Filter:
 
 ```
 $ script/run-integration-tests -f 'RouterSuite\\.TestAdditionalHttpPorts'
@@ -248,9 +274,10 @@ Default flow:
    rows, exercise `flynn` / `flynn-host`, then `flynn-host update --all-nodes
    --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
-   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Redis,
-   Kafka, and ClickHouse volume data is not in the cluster backup; those
-   engines must come back empty.
+   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Installed
+   plugins restore with postgres (`plugins.json` is the inventory; do not
+   `plugin install` again). Redis, Kafka, and ClickHouse volume data is not
+   in the cluster backup; those engines must come back empty.
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
 
@@ -278,8 +305,17 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   Builds host binaries, `validate-gofmt`, `bats script/test`,
   `make test-unit-root-native`.
 * **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
-  — manual `workflow_dispatch` only. Builds base + cluster images in phases and
-  publishes GitHub Release assets. Version tags look like `vYYYYMMDD.N`.
+  — manual `workflow_dispatch` only. Builds base + production cluster images in
+  phases and publishes GitHub Release assets. Version tags look like
+  `vYYYYMMDD.N`. Omits `test`, `test-apps`, and `controller-examples`.
+  Drafts do not fan out plugin builds.
+* **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
+  — runs when a Flynn GitHub Release is **published** (or via `workflow_dispatch`).
+  It queues each plugin repo’s `Build and Release` workflow with the same tag
+  and `flynn_version` so ubuntu-noble matches Flynn. Plugin names are not in
+  Flynn source: set Actions variable `PLUGIN_RELEASE_REPOS` (`owner/repo` per
+  line) and secret `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on
+  those repos). Empty variable skips dispatch.
 
 ## Pull requests
 
@@ -301,6 +337,12 @@ Build images on the builder (or via the release workflow), then package:
 $ ./build.sh --version vYYYYMMDD.N cluster
 $ ./script/release --version vYYYYMMDD.N --target tarball
 $ ./script/release --version vYYYYMMDD.N --target github
+```
+
+Cluster-test images are not in that pipeline. Build them only when running `test/`:
+
+```
+$ ./build.sh --version vYYYYMMDD.N test
 ```
 
 `script/release` defaults to a local tarball. GitHub needs `gh` authenticated

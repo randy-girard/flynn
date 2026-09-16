@@ -8,8 +8,8 @@ import (
 	"github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/flynn/pkg/status"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
 )
 
 // Handler represents an HTTP API handler for the process.
@@ -37,6 +37,9 @@ func NewHandler() *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) { h.router.ServeHTTP(w, req) }
 
 func (h *Handler) healthStatus() status.Status {
+	if h.Peer == nil || h.Process == nil {
+		return status.Unhealthy
+	}
 	info := h.Peer.Info()
 	if info.State == nil || info.RetryPending != nil ||
 		(info.Role != state.RolePrimary && info.Role != state.RoleSync && info.Role != state.RoleAsync) {
@@ -62,26 +65,33 @@ func (h *Handler) healthStatus() status.Status {
 func (h *Handler) handleGetStatus(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	logger := h.Logger.New("fn", "handleGetStatus")
 
-	status := &client.Status{
-		Peer: h.Peer.Info(),
+	status := &client.Status{}
+	if h.Peer != nil {
+		status.Peer = h.Peer.Info()
 	}
-	var err error
-	status.Database, err = h.Process.Info()
-	if err != nil {
-		// Log the error, but don't return a 500. We will always have some
-		// information to return, but postgres may not be online.
-		logger.Error("error getting postgres info", "err", err)
+	if h.Process != nil {
+		var err error
+		status.Database, err = h.Process.Info()
+		if err != nil {
+			// Log the error, but don't return a 500. We will always have some
+			// information to return, but postgres may not be online.
+			logger.Error("error getting postgres info", "err", err)
+		}
 	}
 	httphelper.JSON(w, 200, status)
 }
 
 func (h *Handler) handlePostStop(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	go func() {
-		if err := h.Peer.Stop(); err != nil {
-			h.Logger.Error("error stopping peer", "err", err)
+		if h.Peer != nil {
+			if err := h.Peer.Stop(); err != nil {
+				h.Logger.Error("error stopping peer", "err", err)
+			}
 		}
-		if err := h.Heartbeater.Close(); err != nil {
-			h.Logger.Error("error closing heartbeater", "err", err)
+		if h.Heartbeater != nil {
+			if err := h.Heartbeater.Close(); err != nil {
+				h.Logger.Error("error closing heartbeater", "err", err)
+			}
 		}
 	}()
 	w.WriteHeader(200)

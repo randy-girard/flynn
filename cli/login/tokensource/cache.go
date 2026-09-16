@@ -53,7 +53,7 @@ var ErrTokenNotFound = errors.New("cached token not found")
 
 func (c *cache) readCache(path string) (*tokenCache, error) {
 	data, err := lockedfile.Read(path)
-	if err == os.ErrNotExist {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrTokenNotFound
 	}
 	if err != nil {

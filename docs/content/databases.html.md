@@ -5,10 +5,12 @@ layout: docs
 
 # Databases
 
-Flynn includes built-in database appliances that handle configuring and managing
-highly available databases automatically. These appliances are designed to
-provide the maximum amount of safety available from the database system while
-providing as much availability as possible without compromising safety.
+Postgres is included in Flynn. Other engines (Redis, MariaDB, MongoDB, Kafka,
+ClickHouse) are **plugins**: the operator installs them with
+[`flynn-host plugin install`](plugins.md) from a sibling repo or git URL. The
+user `flynn` CLI only shows those commands after the plugin is installed on the
+cluster. Command syntax lives on the plugin (`flynn-plugin.json` `cli`); the
+CLI fetches it from the cluster and runs matching actions as controller jobs.
 
 In some cases it is not possible to meet the strict guarantees of a 'CP' system
 under [CAP theorem](https://en.wikipedia.org/wiki/CAP_theorem) due to

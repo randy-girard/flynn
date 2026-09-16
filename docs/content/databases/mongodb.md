@@ -5,17 +5,27 @@ layout: docs
 
 # MongoDB
 
-The Flynn MongoDB appliance provides MongoDB 7.0 in a highly-available
-configuration with automatic provisioning. Replication is implemented using
-MongoDB's replica set feature. The image includes `mongod`, database tools, and
-`mongosh` (not the legacy `mongo` shell).
+MongoDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
+cluster host, then provision from an app. See [Plugins](plugins.md).
+
+```text
+sudo flynn-host plugin install mongodb --ref vX
+sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-mongodb.git --ref vX
+sudo flynn-host plugin install ../flynn-plugin-mongodb
+flynn resource add mongodb
+```
+
+The plugin provides MongoDB 7.0 in a highly-available configuration with
+automatic provisioning. Replication is implemented using MongoDB's replica set
+feature. The image includes `mongod`, database tools, and `mongosh` (not the
+legacy `mongo` shell).
 
 ## Usage
 
 ### Adding a database to an app
 
-MongoDB comes ready to go as soon as you've installed Flynn. After you create an
-app, you can provision a database for your app by running:
+MongoDB is available after the operator installs the plugin. After you create
+an app, provision a database with:
 
 ```text
 flynn resource add mongodb

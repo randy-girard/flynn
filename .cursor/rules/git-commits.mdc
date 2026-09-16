@@ -1,0 +1,18 @@
+---
+description: Always use Conventional Commits for every git commit
+alwaysApply: true
+---
+
+# Semantic git commits
+
+Follow [AGENTS.md](../../AGENTS.md). **Always** use Conventional Commits. Never write unstructured subjects.
+
+Format: `<type>(<scope>): <summary>`
+
+- Types: `feat`, `fix`, `test`, `docs`, `refactor`, `perf`, `chore`, `ci`, `build`, `style`
+- Scope is the subsystem (`cli`, `controller`, `host`, `router`, …). Omit it only for repo-wide docs or chore
+- Imperative, lowercase summary; ≤ 72 characters; body when the why is not obvious
+- Sign off every commit (`git commit -s`) for the DCO
+- Split unrelated work into separate logical commits
+
+Examples: `feat(cli): load plugin commands from cluster catalog`, `test(router): cover ACME HTTP-01 challenge serving`

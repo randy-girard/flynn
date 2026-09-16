@@ -20,6 +20,10 @@ type MongoDBSuite struct {
 
 var _ = c.ConcurrentSuite(&MongoDBSuite{})
 
+func (s *MongoDBSuite) SetUpSuite(t *c.C) {
+	s.skipUnlessProvider(t, "mongodb")
+}
+
 func (s *MongoDBSuite) TestDumpRestore(t *c.C) {
 	r := s.newGitRepo(t, "empty")
 	t.Assert(r.flynn("create"), Succeeds)

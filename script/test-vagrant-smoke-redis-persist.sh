@@ -16,7 +16,16 @@ if ! grep -q 'GET smoke_probe' "${smoke}"; then
   exit 1
 fi
 
-proc="${ROOT}/appliance/redis/process.go"
+proc="${ROOT}/../flynn-plugin-redis/process.go"
+main="${ROOT}/../flynn-plugin-redis/cmd/flynn-redis/main.go"
+if [[ ! -f "${proc}" || ! -f "${main}" ]]; then
+  if [[ -f "${ROOT}/appliance/redis/process.go" ]]; then
+    echo "redis still lives in Flynn; persistence checks belong in ../flynn-plugin-redis" >&2
+    exit 1
+  fi
+  echo "ok redis upgrade persistence (plugin checkout not present; Flynn tree has no appliance/redis)"
+  exit 0
+fi
 if ! grep -q 'appendonly yes' "${proc}"; then
   echo "redis.conf must enable AOF so SETs survive a non-graceful kill" >&2
   exit 1
@@ -26,7 +35,6 @@ if ! grep -q 'SHUTDOWN", "SAVE"' "${proc}" && ! grep -q 'SHUTDOWN SAVE' "${proc}
   exit 1
 fi
 
-main="${ROOT}/appliance/redis/cmd/flynn-redis/main.go"
 if ! grep -q 'BeforeExit(func() { m.Close() })' "${main}"; then
   echo "flynn-redis must Close (stop redis-server) on SIGTERM, not only the heartbeater" >&2
   exit 1

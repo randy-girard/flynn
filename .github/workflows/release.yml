@@ -2,7 +2,12 @@ name: Build and Release
 
 # Manual release only. Unit tests run via the separate Unit tests workflow;
 # this workflow splits the Flynn build across jobs/steps for fresh timeout budgets
-# (base → host binaries → toolchain images → app images).
+# (base → host binaries → toolchain images → production app images).
+# Cluster-test images (test, test-apps, controller-examples) are omitted; they
+# are not in bootstrap or the release images template. Build them with
+# `./build.sh test` when running the cluster integration suite.
+# Plugin rebuilds run from plugin-releases.yml when this GitHub Release is
+# published (drafts wait until you publish them).
 on:
   workflow_dispatch:
     inputs:
@@ -249,7 +254,7 @@ jobs:
         run: |
           set -eo pipefail
           cd "${{ env.FLYNN_ROOT }}"
-          echo "Building app images with concurrency=${APPS_CONCURRENCY}"
+          echo "Building production app images with concurrency=${APPS_CONCURRENCY} (omitting test, test-apps, controller-examples)"
           (
             while true; do
               sleep 300

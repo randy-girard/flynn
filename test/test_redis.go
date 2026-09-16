@@ -14,6 +14,10 @@ type RedisSuite struct {
 
 var _ = c.ConcurrentSuite(&RedisSuite{})
 
+func (s *RedisSuite) SetUpSuite(t *c.C) {
+	s.skipUnlessProvider(t, "redis")
+}
+
 func (s *RedisSuite) TestRedisEnv(t *c.C) {
 	a := s.newCliTestApp(t)
 

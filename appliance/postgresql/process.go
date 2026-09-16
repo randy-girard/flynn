@@ -1170,6 +1170,11 @@ default_text_search_config = 'pg_catalog.english'
 
 {{if .TimescaleDB}}
 shared_preload_libraries = 'timescaledb'
+# Flynn writes postgresql.conf itself; do not rely on timescaledb-tune (Debian's
+# cluster conf is unused). Keep workers modest for appliance memory limits.
+timescaledb.max_background_workers = 8
+max_worker_processes = 16
+max_parallel_workers = 4
 {{end}}
 
 {{if .SHMType}}

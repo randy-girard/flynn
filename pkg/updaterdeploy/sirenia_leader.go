@@ -4,6 +4,7 @@ import (
 	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/inconshreveable/log15"
 )
 
@@ -15,14 +16,8 @@ const (
 
 // SireniaApplianceServices lists discoverd service names for sirenia-managed
 // database appliances updated during cluster upgrades.
-var SireniaApplianceServices = []string{"postgres", "mariadb", "mongodb"}
-
-// optionalSireniaAppliances are database appliances that bootstrap with zero
-// database peers (API-only) and may never register discoverd instances until
-// an operator scales the formation up.
-var optionalSireniaAppliances = map[string]bool{
-	"mariadb": true,
-	"mongodb": true,
+func SireniaApplianceServices() []string {
+	return plugin.SireniaServiceNames()
 }
 
 // skipOptionalSireniaLeaderWait reports whether waiting for leader.<service>.discoverd
@@ -30,7 +25,7 @@ var optionalSireniaAppliances = map[string]bool{
 // Postgres is never skipped: a transient empty instance set during failover or
 // rolling restart must still be waited out.
 func skipOptionalSireniaLeaderWait(service string, instanceCount int, instancesErr error) bool {
-	if !optionalSireniaAppliances[service] {
+	if !plugin.OptionalSirenia(service) {
 		return false
 	}
 	return instancesErr != nil || instanceCount == 0
@@ -42,7 +37,7 @@ func skipOptionalSireniaLeaderWait(service string, instanceCount int, instancesE
 // controller jobs and follow-on deploys rely on it, so callers should wait for
 // the leader slot to repopulate before continuing.
 //
-// Optional appliances (mariadb, mongodb) deployed with zero database processes
+// Optional sirenia plugins that boot with zero database processes
 // never register peers in discoverd; waiting would always time out (~5 minutes).
 func WaitSireniaLeaderStable(service string, log log15.Logger) {
 	svc := discoverd.NewService(service)
@@ -87,7 +82,7 @@ func WaitPostgresDiscoverdLeaderStable(log log15.Logger) {
 // leader slot to repopulate. Used between rolling host restarts when multiple
 // database peers may have been disrupted on the previous host.
 func WaitSireniaApplianceLeadersStable(log log15.Logger) {
-	for _, service := range SireniaApplianceServices {
+	for _, service := range SireniaApplianceServices() {
 		WaitSireniaLeaderStable(service, log.New("service", service))
 	}
 }

@@ -12,7 +12,7 @@ on:
   workflow_call:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   GO_VERSION: '1.24'
@@ -46,23 +46,11 @@ jobs:
             libdevmapper-dev \
             postgresql \
             postgresql-contrib \
-            mariadb-server \
-            mariadb-backup \
-            redis-server \
             zfsutils-linux \
             bats \
             jq \
             curl \
-            git \
-            gnupg
-
-          # MongoDB appliance unit tests need mongod (not in Ubuntu main).
-          curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc \
-            | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
-          echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
-            | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-          sudo apt-get update
-          sudo apt-get install -y mongodb-org
+            git
 
       - name: Start PostgreSQL
         run: |
@@ -73,11 +61,6 @@ jobs:
           sudo -u postgres createuser -s root 2>/dev/null || true
           echo "PGHOST=/var/run/postgresql" >> "$GITHUB_ENV"
           echo "PGSSLMODE=disable" >> "$GITHUB_ENV"
-
-      - name: Start MariaDB and Redis
-        run: |
-          sudo service mariadb start || sudo service mysql start || true
-          sudo service redis-server start || true
 
       - name: Build Flynn binaries
         run: |
@@ -96,6 +79,15 @@ jobs:
           set -eo pipefail
           make test-unit-root-native 2>&1 | tee unit-test-output.log
 
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage/
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Upload unit test log
         if: failure()
         uses: actions/upload-artifact@v7
@@ -104,3 +96,25 @@ jobs:
           path: unit-test-output.log
           if-no-files-found: ignore
           retention-days: 7
+
+  coverage-badge:
+    name: Coverage badge
+    needs: unit
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main') && needs.unit.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download coverage
+        uses: actions/download-artifact@v7
+        with:
+          name: coverage-html
+          path: coverage
+
+      - name: Publish coverage badge
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./script/ci-push-coverage-badge

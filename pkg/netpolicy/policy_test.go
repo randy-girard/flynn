@@ -1,9 +1,11 @@
 package netpolicy
 
 import (
+	"path/filepath"
 	"testing"
 
 	host "github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 func TestClassifyJob(t *testing.T) {
@@ -85,6 +87,7 @@ func TestClassifyJob(t *testing.T) {
 			name: "mariadb data plane",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
+				"flynn-datastore":           "true",
 				"flynn-controller.app_name": "mariadb",
 				"flynn-controller.type":     "mariadb",
 			}},
@@ -94,6 +97,7 @@ func TestClassifyJob(t *testing.T) {
 			name: "mongodb data plane",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
+				"flynn-datastore":           "true",
 				"flynn-controller.app_name": "mongodb",
 				"flynn-controller.type":     "mongodb",
 			}},
@@ -163,6 +167,15 @@ func TestClassifyJob(t *testing.T) {
 }
 
 func TestUserMayResolveDiscoverd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "installed-plugins.json")
+	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
+	if err := plugin.WriteInstalled(path, []plugin.Installed{
+		{Name: "mariadb", Datastore: true},
+		{Name: "mongodb", Datastore: true},
+		{Name: "redis", Datastore: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if UserMayResolveDiscoverd(false, "postgres") {
 		t.Fatal("user jobs must not resolve internal discoverd names")
 	}
@@ -205,14 +218,30 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	if UserMayResolveDiscoverd(true, "mongodb-api") {
 		t.Fatal("user jobs must not resolve leader.mongodb-api.discoverd")
 	}
+	if UserMayResolveDiscoverd(true, "redis-GGGGGGGG-728c-4eb5-8c1d-a0d38924cbd8") {
+		t.Fatal("non-hex UUID appliance names must be denied")
+	}
+	if UserMayResolveDiscoverd(true, "redis-621e38ec728c4eb58c1da0d38924cbd8") {
+		t.Fatal("UUID appliance names without dashes must be denied")
+	}
 }
 
 func TestServiceForClass(t *testing.T) {
-	if ServiceForClass(ClassUser) != ServiceUser {
-		t.Fatal(ServiceForClass(ClassUser))
+	cases := []struct {
+		c    Class
+		svc  string
+		name string
+	}{
+		{ClassUser, ServiceUser, "user"},
+		{ClassBuild, ServiceBuild, "build"},
+		{ClassDatastore, ServiceData, "datastore"},
+		{ClassSystem, ServiceSys, "system"},
+		{Class(99), ServiceUser, "user"},
 	}
-	if ServiceForClass(ClassDatastore) != ServiceData {
-		t.Fatal(ServiceForClass(ClassDatastore))
+	for _, tc := range cases {
+		if ServiceForClass(tc.c) != tc.svc || tc.c.String() != tc.name {
+			t.Fatalf("%v -> %s %q", tc.c, ServiceForClass(tc.c), tc.c.String())
+		}
 	}
 }
 

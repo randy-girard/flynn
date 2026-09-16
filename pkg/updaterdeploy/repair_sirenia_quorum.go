@@ -9,6 +9,7 @@ import (
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	discoverd "github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/plugin"
 	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
 	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
@@ -43,16 +44,9 @@ func RepairSireniaClusterQuorum(ctrl controller.Client, restartDownJobs bool, lo
 	if err != nil {
 		return fmt.Errorf("list apps: %w", err)
 	}
-	appsByName := make(map[string]*ct.App, len(apps))
-	for _, app := range apps {
-		if app != nil && app.Name != "" {
-			appsByName[app.Name] = app
-		}
-	}
 
-	for _, appName := range sireniaApps {
-		app, ok := appsByName[appName]
-		if !ok {
+	for _, app := range apps {
+		if app == nil || !plugin.IsSireniaManaged(app) {
 			continue
 		}
 		if err := repairSireniaClusterQuorumForApp(ctrl, app, restartDownJobs, log); err != nil {

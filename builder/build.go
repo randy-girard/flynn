@@ -124,9 +124,16 @@ usage: flynn-builder build [options]
 options:
   -x, --version=<version>   version to use [default: dev]
   -v, --verbose             be verbose
-  -o, --only=<ids>          only build these images (comma-separated IDs, or toolchain/apps)
+  -o, --only=<ids>          only build these images (comma-separated IDs, or toolchain/apps/test)
 
 Build Flynn images using builder/manifest.json (generated from builder/manifest.json.template).
+
+ Named --only groups:
+
+   toolchain  base/tool images (ubuntu-noble, go, heroku-24, ...)
+   apps       production cluster and CLI images (omits test, test-apps,
+              controller-examples; used by GitHub Releases and build.sh)
+   test       cluster-integration images (test, test-apps, controller-examples)
 
  APT package cache:
 
@@ -576,9 +583,23 @@ var toolchainImageIDs = map[string]struct{}{
 	"slugrunner-24":   {},
 }
 
+// testImageIDs are used only by the cluster integration suite (test/).
+// Bootstrap and util/release/images_template.json never reference them, so
+// production --only=apps builds and GitHub Releases omit them.
+var testImageIDs = map[string]struct{}{
+	"test":                {},
+	"test-apps":           {},
+	"controller-examples": {},
+}
+
+func isTestImage(id string) bool {
+	_, ok := testImageIDs[id]
+	return ok
+}
+
 // expandImageSelection filters images by --only (comma-separated IDs or the
-// named groups "toolchain" / "apps"), then includes transitive base/build_with
-// dependencies so the dependency graph stays complete.
+// named groups "toolchain" / "apps" / "test"), then includes transitive
+// base/build_with dependencies so the dependency graph stays complete.
 func expandImageSelection(all []*Image, only string) ([]*Image, error) {
 	if strings.TrimSpace(only) == "" {
 		return all, nil
@@ -605,9 +626,20 @@ func expandImageSelection(all []*Image, only string) ([]*Image, error) {
 			}
 		case "apps":
 			for id := range byID {
-				if _, ok := toolchainImageIDs[id]; !ok {
-					requested[id] = struct{}{}
+				if _, ok := toolchainImageIDs[id]; ok {
+					continue
 				}
+				if isTestImage(id) {
+					continue
+				}
+				requested[id] = struct{}{}
+			}
+		case "test":
+			for id := range testImageIDs {
+				if _, ok := byID[id]; !ok {
+					return nil, fmt.Errorf("test image %q missing from manifest", id)
+				}
+				requested[id] = struct{}{}
 			}
 		default:
 			if _, ok := byID[tok]; !ok {
@@ -726,6 +758,9 @@ func (b *Builder) hasAllImageArtifacts(images []*Image) bool {
 	b.artifactsMtx.RLock()
 	defer b.artifactsMtx.RUnlock()
 	for _, img := range images {
+		if isTestImage(img.ID) {
+			continue
+		}
 		if _, ok := b.artifacts[img.ID]; !ok {
 			return false
 		}

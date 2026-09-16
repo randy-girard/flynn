@@ -6,6 +6,8 @@ This repository is a **community fork** of [flynn/flynn](https://github.com/flyn
 
 [Discord](https://discord.gg/VU2ZqrPUay) · [GitHub](https://github.com/randy-girard/flynn) · [Releases](https://github.com/randy-girard/flynn/releases)
 
+[![coverage](.github/badges/coverage.svg)](https://github.com/randy-girard/flynn/actions/workflows/unit-tests.yml)
+
 ## What Flynn does
 
 A Flynn cluster is a set of Ubuntu hosts. You deploy apps with `git push` or Docker, attach managed datastores, and the platform handles scheduling, routing, logs, TLS, and rolling updates.
@@ -29,7 +31,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 
 ## Requirements
 
-- **OS:** Ubuntu 24.04 LTS amd64 (the install script still accepts 16.04 and 18.04, but 24.04 is what this fork builds and tests against)
+- **OS:** Ubuntu 24.04 LTS amd64
 - **Hosts:** 2 GB RAM, 40 GB disk, and 2 CPU cores per node as a minimum; more for appliances and builds
 - **HA:** three or more nodes. A single node (`SINGLETON`) is fine for trying Flynn; do not use it as production
 - **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet
@@ -133,16 +135,21 @@ Language notes live under [docs/content/languages](docs/content/languages).
 
 ## Datastores
 
-Provision from an app with `flynn resource add <provider>`. Connection URLs are injected as environment variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach appliances at the **leader** hostname Flynn put in those URLs, not at internal `*.discoverd` names.
+Postgres is included in Flynn. Other engines are plugins (`flynn-host plugin
+install`; see [Plugins](docs/content/plugins.md)). Provision from an app with
+`flynn resource add <provider>`. Connection URLs are injected as environment
+variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach
+appliances at the **leader** hostname Flynn put in those URLs, not at internal
+`*.discoverd` names.
 
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
-| `postgres` | PostgreSQL **16** | HA (primary + sync + async) | PostGIS, pgRouting, TimescaleDB. `flynn pg psql` / `dump` / `restore` |
-| `mysql` | MariaDB **10.11** | HA, started on first provision | `flynn mysql console` / `dump` / `restore` |
-| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | `flynn mongodb mongo` / `dump` / `restore` |
-| `redis` | Redis (Ubuntu 24.04 package) | Single process | Ephemeral; caching and development only |
-| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | TLS to clients by default. Create topics before producing: `flynn kafka topics create` |
-| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | Create databases with `ON CLUSTER`: `flynn clickhouse databases create` |
+| `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg psql` / `dump` / `restore` |
+| `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin install mysql` |
+| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin install mongodb` |
+| `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin install redis`. Ephemeral; caching and development |
+| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin install kafka` |
+| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin install clickhouse` |
 
 Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Redis does not. Details: [Databases](docs/content/databases.html.md).
 

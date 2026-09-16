@@ -97,19 +97,23 @@ fi
 
 need "${ROOT}/host/img/packages.sh" 'libseccomp2' \
   "host runtime image must install libseccomp2, not the -dev headers"
+need "${ROOT}/host/img/packages.sh" 'CRYPTSETUP=n' \
+  "host image must skip cryptsetup initramfs probes on overlay builder roots"
+need "${ROOT}/host/img/packages.sh" 'FSTYPE=9p' \
+  "host image must tell the fsck hook the VM root is 9p, not overlay"
 if grep -q 'libseccomp-dev' "${ROOT}/host/img/packages.sh"; then
   echo "host image must not install libseccomp-dev" >&2
   exit 1
 fi
 
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-org-server' \
-  "mongodb image must install mongod, not the full mongodb-org metapackage"
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-database-tools' \
-  "mongodb image must keep mongodump/mongorestore"
-need "${ROOT}/appliance/mongodb/img/packages.sh" 'mongodb-mongosh' \
-  "mongodb image must keep mongosh"
-if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/appliance/mongodb/img/packages.sh"; then
-  echo "mongodb image must not install the mongodb-org metapackage" >&2
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-org-server' \
+  "mongodb plugin must install mongod, not the full mongodb-org metapackage"
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-database-tools' \
+  "mongodb plugin must keep mongodump/mongorestore"
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-mongosh' \
+  "mongodb plugin must keep mongosh"
+if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/../flynn-plugin-mongodb/img/packages.sh"; then
+  echo "mongodb plugin must not install the mongodb-org metapackage" >&2
   exit 1
 fi
 
@@ -119,6 +123,12 @@ need "${ROOT}/appliance/postgresql/img/packages.sh" 'timescaledb-2-postgresql-16
   "postgres slim-down must keep TimescaleDB"
 need "${ROOT}/appliance/postgresql/img/packages.sh" 'timescaledb-tools' \
   "postgres must install timescaledb-tools (timescaledb-tune; not a Recommends)"
+if grep -qE 'timescaledb-tune --yes' "${ROOT}/appliance/postgresql/img/packages.sh"; then
+  echo "postgres image must not run timescaledb-tune (Flynn writes postgresql.conf)" >&2
+  exit 1
+fi
+need "${ROOT}/appliance/postgresql/process.go" 'timescaledb.max_background_workers' \
+  "Flynn postgresql.conf must set timescaledb.max_background_workers"
 need "${ROOT}/appliance/postgresql/img/packages.sh" 'postgresql-16-pgrouting' \
   "postgres slim-down must keep pgRouting"
 if grep -q 'software-properties-common' "${ROOT}/appliance/postgresql/img/packages.sh"; then
@@ -126,16 +136,11 @@ if grep -q 'software-properties-common' "${ROOT}/appliance/postgresql/img/packag
   exit 1
 fi
 
-need "${ROOT}/appliance/kafka/img/packages.sh" 'site-docs' \
-  "kafka image must delete site-docs from the upstream tarball"
+need "${ROOT}/../flynn-plugin-kafka/img/packages.sh" 'site-docs' \
+  "kafka plugin must delete site-docs from the upstream tarball"
 
 for pkg in \
   "${ROOT}/appliance/postgresql/img/packages.sh" \
-  "${ROOT}/appliance/mariadb/img/packages.sh" \
-  "${ROOT}/appliance/mongodb/img/packages.sh" \
-  "${ROOT}/appliance/redis/img/packages.sh" \
-  "${ROOT}/appliance/kafka/img/packages.sh" \
-  "${ROOT}/appliance/clickhouse/img/packages.sh" \
   "${ROOT}/host/img/packages.sh" \
   "${ROOT}/gitreceive/img/packages.sh"
 do
@@ -145,10 +150,65 @@ do
     "${pkg} must run the shared apt/docs cleanup helper"
 done
 
-need "${ROOT}/appliance/clickhouse/img/packages.sh" 'libcap2-bin' \
-  "clickhouse must still install libcap2-bin long enough to clear file caps"
-need "${ROOT}/appliance/clickhouse/img/packages.sh" 'purge' \
-  "clickhouse must purge libcap2-bin after setcap"
+redis_pkg="${ROOT}/../flynn-plugin-redis/img/packages.sh"
+if [[ -f "${redis_pkg}" ]]; then
+  need "${redis_pkg}" '--no-install-recommends' \
+    "redis plugin packages must pass --no-install-recommends"
+  need "${redis_pkg}" 'apt-slim-finish.sh' \
+    "redis plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/redis/img/packages.sh" ]]; then
+  echo "redis still lives in Flynn; extract it or point this check at ../flynn-plugin-redis" >&2
+  exit 1
+fi
+
+mariadb_pkg="${ROOT}/../flynn-plugin-mariadb/img/packages.sh"
+if [[ -f "${mariadb_pkg}" ]]; then
+  need "${mariadb_pkg}" '--no-install-recommends' \
+    "mariadb plugin packages must pass --no-install-recommends"
+  need "${mariadb_pkg}" 'apt-slim-finish.sh' \
+    "mariadb plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/mariadb/img/packages.sh" ]]; then
+  echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mariadb" >&2
+  exit 1
+fi
+
+mongodb_pkg="${ROOT}/../flynn-plugin-mongodb/img/packages.sh"
+if [[ -f "${mongodb_pkg}" ]]; then
+  need "${mongodb_pkg}" '--no-install-recommends' \
+    "mongodb plugin packages must pass --no-install-recommends"
+  need "${mongodb_pkg}" 'apt-slim-finish.sh' \
+    "mongodb plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/mongodb/img/packages.sh" ]]; then
+  echo "mongodb still lives in Flynn; extract it or point this check at ../flynn-plugin-mongodb" >&2
+  exit 1
+fi
+
+kafka_pkg="${ROOT}/../flynn-plugin-kafka/img/packages.sh"
+if [[ -f "${kafka_pkg}" ]]; then
+  need "${kafka_pkg}" '--no-install-recommends' \
+    "kafka plugin packages must pass --no-install-recommends"
+  need "${kafka_pkg}" 'apt-slim-finish.sh' \
+    "kafka plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/kafka/img/packages.sh" ]]; then
+  echo "kafka still lives in Flynn; extract it or point this check at ../flynn-plugin-kafka" >&2
+  exit 1
+fi
+
+clickhouse_pkg="${ROOT}/../flynn-plugin-clickhouse/img/packages.sh"
+if [[ -f "${clickhouse_pkg}" ]]; then
+  need "${clickhouse_pkg}" '--no-install-recommends' \
+    "clickhouse plugin packages must pass --no-install-recommends"
+  need "${clickhouse_pkg}" 'apt-slim-finish.sh' \
+    "clickhouse plugin packages must run the shared apt/docs cleanup helper"
+elif [[ -f "${ROOT}/appliance/clickhouse/img/packages.sh" ]]; then
+  echo "clickhouse still lives in Flynn; extract it or point this check at ../flynn-plugin-clickhouse" >&2
+  exit 1
+fi
+
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'libcap2-bin' \
+  "clickhouse plugin must still install libcap2-bin long enough to clear file caps"
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'purge' \
+  "clickhouse plugin must purge libcap2-bin after setcap"
 
 need "${ROOT}/builder/img/go.sh" 'go/test' \
   "Go toolchain image must drop GOROOT test/doc trees"

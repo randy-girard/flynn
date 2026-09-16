@@ -24,6 +24,7 @@ import (
 	discoverd "github.com/flynn/flynn/discoverd/client"
 	hostconfig "github.com/flynn/flynn/host/config"
 	"github.com/flynn/flynn/pkg/exec"
+	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/tlscert"
 	"github.com/flynn/go-docopt"
@@ -182,9 +183,7 @@ func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.S
 		return res, nil
 	}
 
-	var data struct {
-		Discoverd, Flannel, Postgres, MariaDB, MongoDB, Controller *ct.ExpandedFormation
-	}
+	data := map[string]*ct.ExpandedFormation{}
 
 	jsonData, err := getFile("flynn.json")
 	if err != nil {
@@ -195,6 +194,25 @@ func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.S
 	}
 	if err := json.NewDecoder(jsonData).Decode(&data); err != nil {
 		return fmt.Errorf("error decoding backup data: %s", err)
+	}
+	for _, name := range []string{"discoverd", "flannel", "postgres", "controller"} {
+		if data[name] == nil {
+			return fmt.Errorf("backup missing %s formation", name)
+		}
+	}
+	discoverdApp := data["discoverd"]
+	flannelApp := data["flannel"]
+	postgresApp := data["postgres"]
+	controllerApp := data["controller"]
+
+	var installed []plugin.Installed
+	if pluginsJSON, err := getFile("plugins.json"); err == nil && pluginsJSON != nil {
+		if err := json.NewDecoder(pluginsJSON).Decode(&installed); err != nil {
+			return fmt.Errorf("error decoding plugin inventory: %s", err)
+		}
+		if err := plugin.WriteInstalled("", installed); err != nil {
+			fmt.Fprintf(os.Stderr, "WARN: could not write installed plugins file: %s\n", err)
+		}
 	}
 
 	db, err := getFile("postgres.sql.gz")
@@ -208,7 +226,7 @@ func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.S
 	// add buffer to the end of the SQL import containing commands that rewrite data in the controller db
 	sqlBuf := &bytes.Buffer{}
 	db = io.MultiReader(db, sqlBuf)
-	sqlBuf.WriteString(fmt.Sprintf("\\connect %s\n", data.Controller.Release.Env["PGDATABASE"]))
+	sqlBuf.WriteString(fmt.Sprintf("\\connect %s\n", controllerApp.Release.Env["PGDATABASE"]))
 	sqlBuf.WriteString(`
 CREATE FUNCTION pg_temp.json_object_update_key(
   "json"          jsonb,
@@ -270,22 +288,12 @@ $function$;
 	for _, step := range manifestSteps {
 		switch step.ID {
 		case "discoverd":
-			updateVolumes(data.Discoverd, step)
+			updateVolumes(discoverdApp, step)
 		case "postgres":
-			updateProcArgs(data.Postgres, step)
-			updateVolumes(data.Postgres, step)
+			updateProcArgs(postgresApp, step)
+			updateVolumes(postgresApp, step)
 		case "controller":
-			updateProcArgs(data.Controller, step)
-		case "mariadb":
-			if data.MariaDB != nil {
-				updateProcArgs(data.MariaDB, step)
-				updateVolumes(data.MariaDB, step)
-			}
-		case "mongodb":
-			if data.MongoDB != nil {
-				updateProcArgs(data.MongoDB, step)
-				updateVolumes(data.MongoDB, step)
-			}
+			updateProcArgs(controllerApp, step)
 		}
 		if step.Artifact != nil {
 			artifacts[step.ID] = step.Artifact
@@ -294,16 +302,19 @@ $function$;
 		}
 	}
 
-	data.Discoverd.Artifacts = []*ct.Artifact{artifacts["discoverd"]}
-	data.Discoverd.Release.Env["DISCOVERD_PEERS"] = "{{ range $ip := .SortedHostIPs }}{{ $ip }}:1111,{{ end }}"
-	data.Postgres.Artifacts = []*ct.Artifact{artifacts["postgres"]}
-	data.Flannel.Artifacts = []*ct.Artifact{artifacts["flannel"]}
-	data.Controller.Artifacts = []*ct.Artifact{artifacts["controller"]}
-	if data.MariaDB != nil {
-		data.MariaDB.Artifacts = []*ct.Artifact{artifacts["mariadb"]}
-	}
-	if data.MongoDB != nil {
-		data.MongoDB.Artifacts = []*ct.Artifact{artifacts["mongodb"]}
+	discoverdApp.Artifacts = []*ct.Artifact{artifacts["discoverd"]}
+	discoverdApp.Release.Env["DISCOVERD_PEERS"] = "{{ range $ip := .SortedHostIPs }}{{ $ip }}:1111,{{ end }}"
+	postgresApp.Artifacts = []*ct.Artifact{artifacts["postgres"]}
+	flannelApp.Artifacts = []*ct.Artifact{artifacts["flannel"]}
+	controllerApp.Artifacts = []*ct.Artifact{artifacts["controller"]}
+	for _, p := range installed {
+		f := data[p.Name]
+		if f == nil {
+			continue
+		}
+		if art := artifacts[p.Name]; art != nil {
+			f.Artifacts = []*ct.Artifact{art}
+		}
 	}
 
 	// set TELEMETRY_CLUSTER_ID
@@ -312,15 +323,15 @@ $function$;
 UPDATE releases SET env = jsonb_set(env, '{TELEMETRY_CLUSTER_ID}', '%q')
 WHERE release_id = (SELECT release_id FROM apps WHERE name = 'controller' AND deleted_at IS NULL);
 `, telemetryClusterID))
-	data.Controller.Release.Env["TELEMETRY_CLUSTER_ID"] = telemetryClusterID
+	controllerApp.Release.Env["TELEMETRY_CLUSTER_ID"] = telemetryClusterID
 
 	// set TELEMETRY_BOOTSTRAP_ID if unset
-	if data.Controller.Release.Env["TELEMETRY_BOOTSTRAP_ID"] == "" {
+	if controllerApp.Release.Env["TELEMETRY_BOOTSTRAP_ID"] == "" {
 		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = jsonb_set(env, '{TELEMETRY_BOOTSTRAP_ID}', '%q')
 WHERE release_id = (SELECT release_id FROM apps WHERE name = 'controller' AND deleted_at IS NULL);
 `, telemetryClusterID))
-		data.Controller.Release.Env["TELEMETRY_BOOTSTRAP_ID"] = telemetryClusterID
+		controllerApp.Release.Env["TELEMETRY_BOOTSTRAP_ID"] = telemetryClusterID
 	}
 
 	// update logaggregator args
@@ -341,7 +352,7 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'logaggregator' AN
 
 	// ensure flannel has NETWORK set if required
 	if network := os.Getenv("FLANNEL_NETWORK"); network != "" {
-		data.Flannel.Release.Env["NETWORK"] = network
+		flannelApp.Release.Env["NETWORK"] = network
 		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = pg_temp.json_object_update_key(env, 'NETWORK', '%s')
 WHERE release_id = (SELECT release_id FROM apps WHERE name = 'flannel' AND deleted_at IS NULL);
@@ -360,92 +371,78 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'gitreceive' AND d
 	// (which includes updating legacy appliances which had SINGLETON set
 	// on the database type rather than the release)
 	singleton := strconv.FormatBool(cfg.Singleton)
-	data.Postgres.Release.Env["SINGLETON"] = singleton
+	postgresApp.Release.Env["SINGLETON"] = singleton
+	sireniaSQLNames := []string{"'postgres'"}
+	for _, p := range installed {
+		f := data[p.Name]
+		if f == nil || f.Release == nil {
+			continue
+		}
+		spec := plugin.RestoreSpecFor(p, f)
+		if !p.Sirenia && (spec == nil || !spec.Sirenia) && !f.Release.IsSirenia() {
+			continue
+		}
+		sireniaSQLNames = append(sireniaSQLNames, "'"+p.Name+"'")
+		f.Release.Env["SINGLETON"] = singleton
+		proc := f.Release.Env["SIRENIA_PROCESS"]
+		if proc == "" {
+			proc = p.Name
+		}
+		if pt, ok := f.Release.Processes[proc]; ok && pt.Env != nil {
+			delete(pt.Env, "SINGLETON")
+			f.Release.Processes[proc] = pt
+		}
+		sqlBuf.WriteString(fmt.Sprintf(`
+DO $$
+  BEGIN
+    IF (SELECT processes->'%s' ? 'env' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL)) THEN
+      UPDATE releases SET processes = jsonb_set(processes, '{%s,env}', (processes #> '{%s,env}')::jsonb - 'SINGLETON')
+      WHERE release_id IN (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL);
+    END IF;
+  END;
+$$;`, proc, p.Name, proc, proc, p.Name))
+	}
 	sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = jsonb_set(env, '{SINGLETON}', '%q')
-WHERE release_id IN (SELECT release_id FROM apps WHERE name IN ('postgres', 'mariadb', 'mongodb'));
-`, singleton))
-
-	if data.MariaDB != nil {
-		data.MariaDB.Release.Env["SINGLETON"] = singleton
-		delete(data.MariaDB.Release.Processes["mariadb"].Env, "SINGLETON")
-		sqlBuf.WriteString(`
-DO $$
-  BEGIN
-    IF (SELECT processes->'mariadb' ? 'env' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'mariadb' AND deleted_at IS NULL)) THEN
-      UPDATE releases SET processes = jsonb_set(processes, '{mariadb,env}', (processes #> '{mariadb,env}')::jsonb - 'SINGLETON')
-      WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'mariadb' AND deleted_at IS NULL);
-    END IF;
-  END;
-$$;`)
-	}
-
-	if data.MongoDB != nil {
-		data.MongoDB.Release.Env["SINGLETON"] = singleton
-		delete(data.MongoDB.Release.Processes["mongodb"].Env, "SINGLETON")
-		sqlBuf.WriteString(`
-DO $$
-  BEGIN
-    IF (SELECT processes->'mongodb' ? 'env' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'mongodb' AND deleted_at IS NULL)) THEN
-      UPDATE releases SET processes = jsonb_set(processes, '{mongodb,env}', (processes #> '{mongodb,env}')::jsonb - 'SINGLETON')
-      WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'mongodb' AND deleted_at IS NULL);
-    END IF;
-  END;
-$$;`)
-	}
+WHERE release_id IN (SELECT release_id FROM apps WHERE name IN (%s));
+`, singleton, strings.Join(sireniaSQLNames, ", ")))
 
 	// modify app scale based on whether we are booting
 	// a singleton or HA cluster
-	var scale map[string]map[string]int
-	if cfg.Singleton {
-		scale = map[string]map[string]int{
-			"postgres":      {"postgres": 1, "web": 1},
-			"mariadb":       {"web": 1},
-			"mongodb":       {"web": 1},
-			"controller":    {"web": 1, "worker": 1},
-			"redis":         {"web": 1},
-			"kafka":         {"web": 1},
-			"clickhouse":    {"web": 1},
-			"blobstore":     {"web": 1},
-			"gitreceive":    {"app": 1},
-			"tarreceive":    {"app": 1},
-			"logaggregator": {"app": 1},
-			"status":        {"web": 1},
+	webN, dataN := 1, 1
+	if !cfg.Singleton {
+		webN, dataN = 2, 3
+	}
+	scale := map[string]map[string]int{
+		"postgres":      {"postgres": dataN, "web": webN},
+		"controller":    {"web": webN, "worker": webN},
+		"blobstore":     {"web": webN},
+		"gitreceive":    {"app": webN},
+		"tarreceive":    {"app": webN},
+		"logaggregator": {"app": webN},
+		"status":        {"web": webN},
+	}
+	postgresApp.Processes["postgres"] = dataN
+	postgresApp.Processes["web"] = webN
+	for _, p := range installed {
+		f := data[p.Name]
+		if f == nil {
+			continue
 		}
-		data.Postgres.Processes["postgres"] = 1
-		data.Postgres.Processes["web"] = 1
-		if data.MariaDB != nil {
-			data.MariaDB.Processes["mariadb"] = 1
-			data.MariaDB.Processes["web"] = 1
+		if f.Processes == nil {
+			f.Processes = map[string]int{}
 		}
-		if data.MongoDB != nil {
-			data.MongoDB.Processes["mongodb"] = 1
-			data.MongoDB.Processes["web"] = 1
+		f.Processes["web"] = webN
+		scale[p.Name] = map[string]int{"web": webN}
+		proc := ""
+		if f.Release != nil {
+			proc = f.Release.Env["SIRENIA_PROCESS"]
 		}
-	} else {
-		scale = map[string]map[string]int{
-			"postgres":      {"postgres": 3, "web": 2},
-			"mariadb":       {"web": 2},
-			"mongodb":       {"web": 2},
-			"controller":    {"web": 2, "worker": 2},
-			"redis":         {"web": 2},
-			"kafka":         {"web": 2},
-			"clickhouse":    {"web": 2},
-			"blobstore":     {"web": 2},
-			"gitreceive":    {"app": 2},
-			"tarreceive":    {"app": 2},
-			"logaggregator": {"app": 2},
-			"status":        {"web": 2},
+		if proc == "" {
+			proc = p.Name
 		}
-		data.Postgres.Processes["postgres"] = 3
-		data.Postgres.Processes["web"] = 2
-		if data.MariaDB != nil {
-			data.MariaDB.Processes["mariadb"] = 3
-			data.MariaDB.Processes["web"] = 2
-		}
-		if data.MongoDB != nil {
-			data.MongoDB.Processes["mongodb"] = 3
-			data.MongoDB.Processes["web"] = 2
+		if p.Sirenia || (f.Release != nil && f.Release.IsSirenia()) {
+			f.Processes[proc] = dataN
 		}
 	}
 	for app, procs := range scale {
@@ -460,14 +457,14 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at
 	// start discoverd/flannel/postgres
 	systemSteps := bootstrap.Manifest{
 		step("discoverd", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: data.Discoverd,
+			ExpandedFormation: discoverdApp,
 		}),
 		step("flannel", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: data.Flannel,
+			ExpandedFormation: flannelApp,
 		}),
 		step("wait-hosts", "wait-hosts", &bootstrap.WaitHostsAction{}),
 		step("postgres", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: data.Postgres,
+			ExpandedFormation: postgresApp,
 		}),
 		step("postgres-wait", "sirenia-wait", &bootstrap.SireniaWaitAction{
 			Service: "postgres",
@@ -492,7 +489,7 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 		"PGHOST":     "leader.postgres.discoverd",
 		"PGUSER":     "flynn",
 		"PGDATABASE": "postgres",
-		"PGPASSWORD": data.Postgres.Release.Env["PGPASSWORD"],
+		"PGPASSWORD": postgresApp.Release.Env["PGPASSWORD"],
 	}
 	cmd.Stdin = db
 	meta := bootstrap.StepMeta{ID: "restore", Action: "restore-postgres"}
@@ -514,7 +511,7 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
 
 	// import the router database into the controller database
-	script, err := routerMigrateScript(data.Controller.Release.Env)
+	script, err := routerMigrateScript(controllerApp.Release.Env)
 	if err != nil {
 		return err
 	}
@@ -540,10 +537,10 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	}
 
 	// start controller API
-	data.Controller.Processes = map[string]int{"web": 1}
+	controllerApp.Processes = map[string]int{"web": 1}
 	_, err = bootstrap.Manifest{
 		step("controller", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: data.Controller,
+			ExpandedFormation: controllerApp,
 		}),
 	}.RunWithState(ch, state)
 	if err != nil {
@@ -557,100 +554,16 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	if err != nil {
 		return fmt.Errorf("error getting controller instance: %s", err)
 	}
-	controllerKey := data.Controller.Release.Env["AUTH_KEY"]
+	controllerKey := controllerApp.Release.Env["AUTH_KEY"]
 	client, err := controller.NewClient("http://"+controllerInstances[0].Addr, controllerKey)
 	if err != nil {
 		return err
 	}
+	state.SetControllerKey(controllerKey)
+	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
 
-	// start mariadb and load data if it was present in the backup.
-	mysqldb, err := getFile("mysql.sql.gz")
-	if err == nil && data.MariaDB != nil {
-		_, err = bootstrap.Manifest{
-			step("mariadb", "run-app", &bootstrap.RunAppAction{
-				ExpandedFormation: data.MariaDB,
-			}),
-			step("mariadb-wait", "sirenia-wait", &bootstrap.SireniaWaitAction{
-				Service: "mariadb",
-			}),
-		}.RunWithState(ch, state)
-		if err != nil {
-			return err
-		}
-
-		// ensure the formation is correct in the database
-		if err := client.PutFormation(data.MariaDB.Formation()); err != nil {
-			return fmt.Errorf("error updating mariadb formation: %s", err)
-		}
-
-		cmd = exec.JobUsingHost(state.Hosts[0], artifacts["mariadb"], nil)
-		cmd.Args = []string{"mysql", "-u", "flynn", "-h", "leader.mariadb.discoverd"}
-		cmd.Env = map[string]string{
-			"MYSQL_PWD": data.MariaDB.Release.Env["MYSQL_PWD"],
-		}
-		cmd.Stdin = mysqldb
-		meta = bootstrap.StepMeta{ID: "restore", Action: "restore-mariadb"}
-		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "start", Timestamp: time.Now().UTC()}
-		out, err = cmd.CombinedOutput()
-		if os.Getenv("DEBUG") != "" {
-			fmt.Println(string(out))
-		}
-		if err != nil {
-			ch <- &bootstrap.StepInfo{
-				StepMeta:  meta,
-				State:     "error",
-				Error:     fmt.Sprintf("error running mysql restore: %s - %q", err, string(out)),
-				Err:       err,
-				Timestamp: time.Now().UTC(),
-			}
-			return err
-		}
-		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
-	}
-
-	// start mongodb and load data if it was present in the backup.
-	mongodb, err := getFile("mongodb.archive.gz")
-	if err == nil && data.MongoDB != nil {
-		_, err = bootstrap.Manifest{
-			step("mongodb", "run-app", &bootstrap.RunAppAction{
-				ExpandedFormation: data.MongoDB,
-			}),
-			step("mongodb-wait", "sirenia-wait", &bootstrap.SireniaWaitAction{
-				Service: "mongodb",
-			}),
-		}.RunWithState(ch, state)
-		if err != nil {
-			return err
-		}
-
-		// ensure the formation is correct in the database
-		if err := client.PutFormation(data.MongoDB.Formation()); err != nil {
-			return fmt.Errorf("error updating mongodb formation: %s", err)
-		}
-
-		cmd = exec.JobUsingHost(state.Hosts[0], artifacts["mongodb"], nil)
-		cmd.Args = []string{"mongorestore", "-h", "leader.mongodb.discoverd", "-u", "flynn", "-p", data.MongoDB.Release.Env["MONGO_PWD"], "--archive"}
-		cmd.Stdin = mongodb
-		meta = bootstrap.StepMeta{ID: "restore", Action: "restore-mongodb"}
-		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "start", Timestamp: time.Now().UTC()}
-		out, err = cmd.CombinedOutput()
-		if os.Getenv("DEBUG") != "" {
-			fmt.Println(string(out))
-		}
-		if err != nil {
-			ch <- &bootstrap.StepInfo{
-				StepMeta:  meta,
-				State:     "error",
-				Error:     fmt.Sprintf("error running mongodb restore: %s - %q", err, string(out)),
-				Err:       err,
-				Timestamp: time.Now().UTC(),
-			}
-			return err
-		}
-		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
-	}
-
-	// get blobstore config
+	// Plugin appliance images live in blobstore, not the Flynn tarball.
+	// Start blobstore before restoring mysql/mongodb dumps so run-app can pull layers.
 	blobstoreRelease, err := client.GetAppRelease("blobstore")
 	if err != nil {
 		return fmt.Errorf("error getting blobstore release: %s", err)
@@ -659,10 +572,6 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	if err != nil {
 		return fmt.Errorf("error getting blobstore expanded formation: %s", err)
 	}
-	state.SetControllerKey(controllerKey)
-	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
-
-	// start the blobstore
 	blobstoreFormation.Artifacts = []*ct.Artifact{artifacts["blobstore"]}
 	_, err = bootstrap.Manifest{
 		step("blobstore", "run-app", &bootstrap.RunAppAction{
@@ -675,6 +584,78 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 	}.RunWithState(ch, state)
 	if err != nil {
 		return err
+	}
+
+	for _, p := range installed {
+		f := data[p.Name]
+		if f == nil {
+			continue
+		}
+		spec := plugin.RestoreSpecFor(p, f)
+		if spec == nil {
+			continue
+		}
+		dump, err := getFile(spec.File)
+		if err != nil {
+			continue
+		}
+		if rel, err := client.GetAppRelease(p.Name); err == nil {
+			if ef, err := client.GetExpandedFormation(p.Name, rel.ID); err == nil && ef != nil && len(ef.Artifacts) > 0 {
+				f = ef
+			}
+		}
+		if art := artifacts[p.Name]; art != nil {
+			f.Artifacts = []*ct.Artifact{art}
+		}
+		if len(f.Artifacts) == 0 {
+			return fmt.Errorf("%s backup present but no image in the tarball or restored formation", p.Name)
+		}
+		f.Processes = plugin.RestoreProcesses(p, f)
+		steps := bootstrap.Manifest{
+			step(p.Name, "run-app", &bootstrap.RunAppAction{
+				ExpandedFormation: f,
+			}),
+		}
+		if spec.Sirenia {
+			steps = append(steps, step(p.Name+"-wait", "sirenia-wait", &bootstrap.SireniaWaitAction{
+				Service: p.Name,
+			}))
+		}
+		if _, err := steps.RunWithState(ch, state); err != nil {
+			return err
+		}
+		if err := client.PutFormation(f.Formation()); err != nil {
+			return fmt.Errorf("error updating %s formation: %s", p.Name, err)
+		}
+		img := plugin.RestoreImage(artifacts[p.Name], f)
+		if img == nil {
+			return fmt.Errorf("%s backup present but no image in the tarball or backup", p.Name)
+		}
+		args, err := plugin.ExpandReleaseArgs(spec.Args, f.Release.Env)
+		if err != nil {
+			return fmt.Errorf("error expanding %s restore args: %s", p.Name, err)
+		}
+		cmd = exec.JobUsingHost(state.Hosts[0], img, nil)
+		cmd.Args = args
+		cmd.Env = plugin.JobEnvFromSpec(spec.Env, f.Release.Env)
+		cmd.Stdin = dump
+		meta = bootstrap.StepMeta{ID: "restore", Action: "restore-" + p.Name}
+		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "start", Timestamp: time.Now().UTC()}
+		out, err = cmd.CombinedOutput()
+		if os.Getenv("DEBUG") != "" {
+			fmt.Println(string(out))
+		}
+		if err != nil {
+			ch <- &bootstrap.StepInfo{
+				StepMeta:  meta,
+				State:     "error",
+				Error:     fmt.Sprintf("error running %s restore: %s - %q", p.Name, err, string(out)),
+				Err:       err,
+				Timestamp: time.Now().UTC(),
+			}
+			return err
+		}
+		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
 	}
 
 	// now that the controller and blobstore are up and controller
@@ -700,22 +681,20 @@ UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s',
 );`, artifact.URI, jsonb(&artifact.RawManifest), jsonb(artifact.Hashes), artifact.Size, artifact.LayerURLTemplate, jsonb(artifact.Meta), step.ID))
 	}
 
-	// update the URI of redis artifacts currently being referenced by
-	// the redis app (which will also update all current redis resources
-	// to use the latest redis image)
-	redisImage := artifacts["redis-image"]
-	sqlBuf.WriteString(fmt.Sprintf(`
+	// update redis artifacts from a restored backup only when this tarball
+	// still ships a redis image (plugin-managed redis uses blobstore layers).
+	if redisImage := artifacts["redis-image"]; redisImage != nil {
+		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE artifacts SET uri = '%s', type = 'flynn', manifest = '%s', hashes = '%s', size = %d, layer_url_template = '%s', meta = '%s'
 WHERE artifact_id = (SELECT (env->>'REDIS_IMAGE_ID')::uuid FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL))
 OR uri = (SELECT env->>'REDIS_IMAGE_URI' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = 'redis' AND deleted_at IS NULL));`,
-		redisImage.URI, jsonb(&redisImage.RawManifest), jsonb(redisImage.Hashes), redisImage.Size, redisImage.LayerURLTemplate, jsonb(redisImage.Meta)))
+			redisImage.URI, jsonb(&redisImage.RawManifest), jsonb(redisImage.Hashes), redisImage.Size, redisImage.LayerURLTemplate, jsonb(redisImage.Meta)))
 
-	// ensure the image ID environment variables are set for legacy redis app
-	// with image URI variable
-	sqlBuf.WriteString(fmt.Sprintf(`
+		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = jsonb_set(env, '{REDIS_IMAGE_ID}', ('"' || (SELECT artifact_id::text FROM artifacts WHERE uri = '%s') || '"')::jsonb, true)
 WHERE env->>'REDIS_IMAGE_URI' IS NOT NULL;`,
-		artifacts["redis-image"].URI))
+			redisImage.URI))
+	}
 
 	// remove job and volume records created by previous clusters
 	sqlBuf.WriteString(fmt.Sprintf(`
@@ -739,9 +718,9 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 	cmd.Args = []string{"psql", "--echo-queries"}
 	cmd.Env = map[string]string{
 		"PGHOST":     "leader.postgres.discoverd",
-		"PGUSER":     data.Controller.Release.Env["PGUSER"],
-		"PGDATABASE": data.Controller.Release.Env["PGDATABASE"],
-		"PGPASSWORD": data.Controller.Release.Env["PGPASSWORD"],
+		"PGUSER":     controllerApp.Release.Env["PGUSER"],
+		"PGDATABASE": controllerApp.Release.Env["PGDATABASE"],
+		"PGPASSWORD": controllerApp.Release.Env["PGPASSWORD"],
 	}
 	cmd.Stdin = sqlBuf
 	meta = bootstrap.StepMeta{ID: "migrate-artifacts", Action: "migrate-artifacts"}
@@ -764,14 +743,14 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 	ch <- &bootstrap.StepInfo{StepMeta: meta, State: "done", Timestamp: time.Now().UTC()}
 
 	// start scheduler and enable cluster monitor
-	data.Controller.Processes = map[string]int{"scheduler": 1}
+	controllerApp.Processes = map[string]int{"scheduler": 1}
 	// only start one scheduler instance
-	schedulerProcess := data.Controller.Release.Processes["scheduler"]
+	schedulerProcess := controllerApp.Release.Processes["scheduler"]
 	schedulerProcess.Omni = false
-	data.Controller.Release.Processes["scheduler"] = schedulerProcess
+	controllerApp.Release.Processes["scheduler"] = schedulerProcess
 	_, err = bootstrap.Manifest{
 		step("controller-scheduler", "run-app", &bootstrap.RunAppAction{
-			ExpandedFormation: data.Controller,
+			ExpandedFormation: controllerApp,
 		}),
 		step("status", "status-check", &bootstrap.StatusCheckAction{
 			URL:     "http://status-web.discoverd",
@@ -785,34 +764,7 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 		return err
 	}
 
-	// mariadb and mongodb steps require the controller key
 	state.StepData["controller-key"] = &bootstrap.RandomData{controllerKey}
-
-	// deploy mariadb if it wasn't restored from the backup
-	if data.MariaDB == nil {
-		steps := bootstrap.Manifest{
-			manifestStepMap["mariadb-password"],
-			manifestStepMap["mariadb"],
-			manifestStepMap["add-mysql-provider"],
-			manifestStepMap["mariadb-wait"],
-		}
-		if _, err := steps.RunWithState(ch, state); err != nil {
-			return fmt.Errorf("error deploying mariadb: %s", err)
-		}
-	}
-
-	// deploy mongodb if it wasn't restored from the backup
-	if data.MongoDB == nil {
-		steps := bootstrap.Manifest{
-			manifestStepMap["mongodb-password"],
-			manifestStepMap["mongodb"],
-			manifestStepMap["add-mongodb-provider"],
-			manifestStepMap["mongodb-wait"],
-		}
-		if _, err := steps.RunWithState(ch, state); err != nil {
-			return fmt.Errorf("error deploying mongodb: %s", err)
-		}
-	}
 
 	// deploy tarreceive if it wasn't in the backup
 	if _, err := client.GetApp("tarreceive"); err == controller.ErrNotFound {
@@ -824,7 +776,7 @@ DELETE FROM volumes WHERE created_at < '%s';`,
 			return fmt.Errorf("error listing controller routes: %s", err)
 		}
 		for _, r := range routes {
-			if r.Domain == fmt.Sprintf("controller.%s", data.Controller.Release.Env["DEFAULT_ROUTE_DOMAIN"]) {
+			if r.Domain == fmt.Sprintf("controller.%s", controllerApp.Release.Env["DEFAULT_ROUTE_DOMAIN"]) {
 				state.StepData["controller-cert"] = &tlscert.Cert{
 					Cert:       r.Certificate.Cert,
 					PrivateKey: r.Certificate.Key,
@@ -879,6 +831,39 @@ WARN:
 		ch <- &bootstrap.StepInfo{StepMeta: meta, State: "end", Timestamp: time.Now().UTC()}
 	}
 
+	if err := waitRestoredPlugins(client, ch, state); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func waitRestoredPlugins(client controller.Client, ch chan *bootstrap.StepInfo, state *bootstrap.State) error {
+	apps, err := client.AppList()
+	if err != nil {
+		return fmt.Errorf("error listing restored plugins: %s", err)
+	}
+	installed := plugin.ListInstalled(apps)
+	if len(installed) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(installed))
+	for _, p := range installed {
+		names = append(names, p.Name)
+	}
+	log.Printf("restored plugins from backup: %s", strings.Join(names, ", "))
+	for _, p := range installed {
+		if p.Wait == "" {
+			continue
+		}
+		st := bootstrap.Step{
+			StepMeta: bootstrap.StepMeta{ID: "plugin-wait-" + p.Name, Action: "wait"},
+			Action:   &bootstrap.WaitAction{URL: p.Wait},
+		}
+		if _, err := (bootstrap.Manifest{st}).RunWithState(ch, state); err != nil {
+			return fmt.Errorf("plugin %s did not become ready after restore: %s", p.Name, err)
+		}
+	}
 	return nil
 }
 

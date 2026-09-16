@@ -18,7 +18,8 @@
 #      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
 #      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
-#      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Redis,
+#      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
+#      apps restore with postgres (no second flynn-host plugin install). Redis,
 #      Kafka, and ClickHouse volumes are not in the cluster backup; those
 #      engines must come back empty. Then destroy the cluster nodes (builder
 #      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
@@ -71,6 +72,11 @@
 #                        (nodes must already have flynn-host inited and :1113 up)
 #   RESUME_AT=upgrade    Skip through pre-upgrade verify; run --force tarball
 #                        updates (app + datastores must already be deployed)
+#   RESUME_AT=backup     Skip through upgrades; run cluster backup, wipe,
+#                        bootstrap --from-backup, and post-restore verify
+#                        (cluster must already be upgraded with plugins/apps)
+#   RESUME_AT=restore    Skip backup; reinstall --clean and bootstrap
+#                        --from-backup using the existing smoke-backup tar
 #   SKIP_UPGRADE=1       Skip the local tarball --all-nodes update passes
 #   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
 #                        and post-restore verify
@@ -96,6 +102,14 @@
 #                        STEP OK/WARN stay visible; Ctrl+R expands the log
 #                        without echoing ^R)
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
+#   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
+#                        after bootstrap, before resource add (default: redis
+#                        mysql mongodb kafka clickhouse). mysql resolves to the
+#                        mariadb checkout via flynn-plugin.json aliases.
+#                        Restore does not install again; plugins.json + postgres
+#                        already list and restore them.
+#   PLUGIN_REPO_ROOT     Parent of flynn-plugin-* checkouts (default: ..)
+#   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #
 
 set -euo pipefail
@@ -166,6 +180,9 @@ SMOKE_DETAIL="${SMOKE_DETAIL:-0}"
 RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
+PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse}"
+SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
 SMOKE_UNIT_PACKAGES=(
@@ -179,9 +196,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/netpolicy/
   ./pkg/squashfs/
   ./pkg/dockerimage/
-  ./appliance/clickhouse/
-  ./appliance/redis/
-  ./appliance/kafka/
+  ./pkg/plugin/
   ./appliance/postgresql/cmd/flynn-postgres-api/
   ./updater/
 )
@@ -2019,6 +2034,14 @@ if ! command -v ipset >/dev/null 2>&1; then
   apt-get install -y ipset
 fi
 command -v ipset >/dev/null
+src="${REPO_IN_VM}/build/bin/flynn-host"
+if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
+  echo "overlaying \${src} onto flynn-host (host-side restore/CLI fixes)"
+  install -m 0755 "\${src}" /usr/local/bin/flynn-host
+  if [[ -e /usr/bin/flynn-host ]]; then
+    install -m 0755 "\${src}" /usr/bin/flynn-host
+  fi
+fi
 for link in flannel.1 flynnbr0; do
   if ip link show "\${link}" &>/dev/null; then
     echo "removing stale \${link}"
@@ -2154,6 +2177,306 @@ step_bootstrap() {
   echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
+# True when flynn-plugin.json name, aliases, provider, or CLI command is $2.
+plugin_manifest_matches() {
+  local json=$1 want=$2
+  python3 - "$json" "$want" <<'PY'
+import json, sys
+
+path, want = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    m = json.load(f)
+if m.get("name") == want:
+    raise SystemExit(0)
+aliases = m.get("aliases") or []
+if isinstance(aliases, str):
+    aliases = [aliases]
+if want in aliases:
+    raise SystemExit(0)
+prov = m.get("provider") or {}
+if isinstance(prov, dict) and prov.get("name") == want:
+    raise SystemExit(0)
+cli = m.get("cli") or {}
+if isinstance(cli, dict) and cli.get("command") == want:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+plugin_checkout() {
+  local name=$1
+  local root="${PLUGIN_REPO_ROOT}"
+  local direct="${root}/flynn-plugin-${name}"
+  if [[ -d "${direct}" ]]; then
+    echo "${direct}"
+    return 0
+  fi
+  local dir json
+  for dir in "${root}"/flynn-plugin-*; do
+    [[ -d "${dir}" ]] || continue
+    json="${dir}/flynn-plugin.json"
+    [[ -f "${json}" ]] || continue
+    if plugin_manifest_matches "${json}" "${name}"; then
+      echo "${dir}"
+      return 0
+    fi
+  done
+  echo "${direct}"
+}
+
+# Long-lived builders (KEEP_BUILDER=1) may predate sibling plugin folders.
+# Vagrantfile globs flynn-plugin-* at `vagrant up`; reload to attach new mounts.
+ensure_plugin_vm_mounts() {
+  local name dir vm_path vm n
+  local vms="builder"
+  local reload_list=" "
+  for n in "${NODES[@]}"; do
+    if vagrant_vm_running "${n}"; then
+      vms="${vms} ${n}"
+    fi
+  done
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    if [[ ! -d "${dir}" ]]; then
+      echo "plugin checkout missing for ${name}: ${dir}" >&2
+      return 1
+    fi
+    vm_path="/opt/flynn-plugins/$(basename "${dir}")"
+    for vm in ${vms}; do
+      if node_root_script "${vm}" <<EOF
+test -f "${vm_path}/flynn-plugin.json"
+EOF
+      then
+        continue
+      fi
+      info "plugin ${name} not synced on ${vm} (${vm_path})"
+      if [[ "${reload_list}" != *" ${vm} "* ]]; then
+        reload_list="${reload_list}${vm} "
+      fi
+    done
+  done
+  if [[ "${reload_list}" == " " ]]; then
+    echo "plugin mounts present on ${vms}"
+    return 0
+  fi
+  for vm in ${reload_list}; do
+    info "vagrant reload ${vm} so Vagrantfile flynn-plugin-* synced_folder takes effect"
+    vagrant reload "${vm}" --no-provision
+    rm -f "$(node_ssh_config_path "${vm}")"
+    cache_node_ssh_config "${vm}" || return 1
+  done
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    vm_path="/opt/flynn-plugins/$(basename "${dir}")"
+    for vm in ${reload_list}; do
+      if ! node_root_script "${vm}" <<EOF
+test -f "${vm_path}/flynn-plugin.json"
+EOF
+      then
+        echo "plugin still not synced after reload: ${vm}:${vm_path}" >&2
+        return 1
+      fi
+    done
+  done
+}
+
+ensure_plugin_image() {
+  local dir=$1
+  if [[ ! -d "${dir}" ]]; then
+    echo "plugin checkout missing: ${dir}" >&2
+    return 1
+  fi
+  # A leftover dist/image.json is not enough: pre-stack plugin-build wrote a
+  # ~35MiB overlay-only squashfs. Installing that makes redis scale hang 5m.
+  if plugin_dist_ready "${dir}"; then
+    echo "plugin image ready (${dir}/dist, ubuntu-noble + delta)"
+    return 0
+  fi
+  # GitHub ubuntu-noble shares Flynn layer IDs with a local build but not the
+  # squashfs bytes (IDs hash recipe inputs, not GOARCH). Overlaying GitHub
+  # amd64 binaries on the cluster's arm64 layer makes jobs exit 126. Build on
+  # the builder against the ubuntu-noble squashfs from this smoke tarball.
+  info "building plugin image on builder (${dir})"
+  node_root_script builder <<EOF
+set -euo pipefail
+export PATH=/usr/local/go/bin:\$PATH
+export FLYNN_IMAGES_JSON="${REPO_IN_VM}/build/images.json"
+export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers-${BUILD_VERSION}
+export PLUGIN_BUILD_DOCKER=0
+mkdir -p "\$FLYNN_LAYERS_DIR"
+id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
+tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
+dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
+# Layer IDs hash recipe inputs, not bytes. Always extract from this smoke
+# tarball so a KEEP_BUILDER cache cannot feed plugin-build the previous build.
+tar -xOf "\$tarball" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\$dest"
+cd "/opt/flynn-plugins/$(basename "${dir}")"
+test -f flynn-plugin.json
+./script/plugin-build
+EOF
+  if ! plugin_dist_ready "${dir}"; then
+    echo "plugin-build did not produce a stacked ubuntu-noble image in ${dir}/dist" >&2
+    return 1
+  fi
+}
+
+# True when dist/image.json is Flynn ubuntu-noble plus a plugin delta, and every
+# referenced squashfs exists. Matches pkg/plugin.ValidatePluginLayers.
+plugin_dist_ready() {
+  local dir=$1
+  python3 - "${dir}" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+dist = os.path.join(root, "dist")
+path = os.path.join(dist, "image.json")
+if not os.path.isfile(path):
+    sys.exit(1)
+art = json.load(open(path))
+manifest = art.get("manifest") or {}
+layers = []
+for rootfs in manifest.get("rootfs") or []:
+    layers.extend(rootfs.get("layers") or [])
+if len(layers) < 2:
+    sys.exit(1)
+if int(layers[0].get("length") or 0) < 32 * 1024 * 1024:
+    sys.exit(1)
+files = (art.get("meta") or {}).get("flynn.plugin.files") or ""
+plugin_path = os.path.join(root, "flynn-plugin.json")
+if os.path.isfile(plugin_path):
+    plugin = json.load(open(plugin_path))
+    for entry in (plugin.get("build") or {}).get("entrypoint") or []:
+        rel = entry.lstrip("/")
+        if rel not in files.replace("\\", "/"):
+            sys.exit(1)
+if not files:
+    sys.exit(1)
+arch = (art.get("meta") or {}).get("flynn.plugin.arch") or ""
+machine = os.uname().machine.lower()
+if machine in ("arm64", "aarch64"):
+    want = "arm64"
+elif machine in ("x86_64", "amd64"):
+    want = "amd64"
+else:
+    want = machine
+if arch != want:
+    sys.exit(1)
+for layer in layers:
+    lid = layer.get("id") or ""
+    p1 = os.path.join(dist, "layers", lid + ".squashfs")
+    p2 = os.path.join(dist, lid + ".squashfs")
+    if not os.path.isfile(p1) and not os.path.isfile(p2):
+        sys.exit(1)
+sys.exit(0)
+PY
+}
+
+dump_plugin_install_diagnostics() {
+  local name=$1
+  info "plugin install diagnostics (${name})"
+  node_root_script node1 <<EOF || true
+set +e
+echo "=== flynn-host ps ==="
+flynn-host ps 2>/dev/null | head -n 80
+echo "=== ${name} job failures ==="
+grep -E 'error in change state|container exited|failed to connect|fork/exec|exec format' /var/log/flynn/flynn-host.log 2>/dev/null | tail -n 40
+echo "=== ${name} / squashfs in flynn-host.log ==="
+grep -E '${name}|squashfs|missing URL|unexpected HTTP|error getting squashfs' /var/log/flynn/flynn-host.log 2>/dev/null | tail -n 50
+echo "=== flynn-host journal ==="
+journalctl -u flynn-host.service -n 60 --no-pager 2>/dev/null
+EOF
+}
+
+# True when flynn-plugin.json publishes doc+actions so the user CLI fetches
+# usage from the cluster instead of a compiled handler.
+plugin_has_delegated_cli() {
+  local dir
+  dir="$(plugin_checkout "$1")"
+  python3 - "$dir" <<'PY'
+import json, os, sys
+path = os.path.join(sys.argv[1], "flynn-plugin.json")
+if not os.path.isfile(path):
+    sys.exit(1)
+cli = (json.load(open(path)).get("cli") or {})
+sys.exit(0 if cli.get("doc") and cli.get("actions") else 1)
+PY
+}
+
+# flynn help command list: a line whose first field is the plugin command.
+help_lists_plugin_command() {
+  local name=$1
+  local out
+  out="$(flynn1 help 2>&1)" || true
+  printf '%s\n' "${out}" | awk -v cmd="${name}" '$1==cmd {found=1; exit} END {exit found?0:1}'
+}
+
+probe_delegated_plugin_cli_hidden() {
+  local name=$1
+  local out rc=0
+  if help_lists_plugin_command "${name}"; then
+    echo "flynn help listed ${name} before flynn-host plugin install" >&2
+    return 1
+  fi
+  out="$(flynn1 "${name}" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then
+    echo "flynn ${name} succeeded before plugin install: ${out}" >&2
+    return 1
+  fi
+  echo "flynn help hides ${name}; flynn ${name} fails until plugin install (rc=${rc})"
+}
+
+probe_delegated_plugin_cli_visible() {
+  local name=$1
+  cli_probe "plugin-install" "cli-help-${name}" "${name}" \
+    flynn1 help || return 1
+  cli_probe "plugin-install" "cli-help-${name}-doc" "${name}" \
+    flynn1 help "${name}" || return 1
+}
+
+step_install_plugins() {
+  if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
+    echo "SKIP_PLUGIN_INSTALL=1"
+    return 0
+  fi
+  local name dir vm_path
+  ensure_flynn_cli_on_node1
+  ensure_plugin_vm_mounts || return 1
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    if plugin_has_delegated_cli "${name}"; then
+      if help_lists_plugin_command "${name}"; then
+        echo "plugin ${name} already in CLI catalog; skipping hidden-CLI probe"
+        continue
+      fi
+      probe_delegated_plugin_cli_hidden "${name}" || return 1
+    fi
+  done
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    ensure_plugin_image "${dir}" || return 1
+    vm_path="/opt/flynn-plugins/$(basename "${dir}")"
+    info "flynn-host plugin install ${name} (${vm_path})"
+    if ! node_root_script node1 <<EOF
+set -euo pipefail
+if [[ ! -f "${vm_path}/flynn-plugin.json" ]]; then
+  echo "plugin not synced into VM: ${vm_path}" >&2
+  exit 1
+fi
+flynn-host plugin install --no-build "${vm_path}"
+EOF
+    then
+      dump_plugin_install_diagnostics "${name}"
+      return 1
+    fi
+    if plugin_has_delegated_cli "${name}"; then
+      probe_delegated_plugin_cli_visible "${name}" || return 1
+    fi
+  done
+  echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
+}
+
 # Write the backup to the synced folder (host can inspect it) and copy to /tmp
 # on node1 so bootstrap --from-backup still works after install --clean wipes
 # /var/lib/flynn and /usr/local/bin/flynn*.
@@ -2177,6 +2500,7 @@ test -s "${vm_path}"
 # match and tar gets SIGPIPE (exit 141) under pipefail. Seen 2026-09-13.
 members="\$(tar -tf "${vm_path}")"
 printf '%s\n' "\${members}" | grep -F 'flynn.json' >/dev/null
+printf '%s\n' "\${members}" | grep -F 'plugins.json' >/dev/null
 printf '%s\n' "\${members}" | grep -F 'postgres.sql.gz' >/dev/null
 printf '%s\n' "\${members}" | grep -F 'mysql.sql.gz' >/dev/null
 printf '%s\n' "\${members}" | grep -F 'mongodb.archive.gz' >/dev/null
@@ -2192,10 +2516,14 @@ EOF
 }
 
 step_bootstrap_from_backup() {
-  local restore_path
+  local restore_path vm_path
   restore_path="$(backup_restore_path)"
+  vm_path="$(backup_vm_path)"
   node_root_script node1 <<EOF
 set -euo pipefail
+if [[ ! -s "${restore_path}" && -s "${vm_path}" ]]; then
+  cp -f "${vm_path}" "${restore_path}"
+fi
 test -s "${restore_path}"
 EOF
   # CLUSTER_DOMAIN is ignored for --from-backup; the domain from the backup
@@ -3081,8 +3409,61 @@ step_cli_functions() {
   cli_probe "${label}" "cli-pg-blobstore" "." \
     flynn1 -a blobstore pg psql -- -tAc "SELECT 1" || failed=1
 
-  cli_probe "${label}" "cli-mongo-dump" "" \
-    flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
+  # Plugin CLI: usage from the cluster catalog, job on the redis image.
+  if plugin_has_delegated_cli redis; then
+    cli_probe "${label}" "cli-help-redis" "redis" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-redis-doc" "redis-cli" \
+      flynn1 help redis || failed=1
+    rc=0
+    out="$(flynn1 -a "${APP_NAME}" redis dump -q -f /tmp/smoke-redis.dump 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && node_ssh node1 'test -s /tmp/smoke-redis.dump' </dev/null; then
+      record_check "${label}" "cli-redis-dump" "PASS" "rdb=$(node_ssh node1 'wc -c </tmp/smoke-redis.dump' </dev/null | tr -d ' ')"
+      echo "cli ${label} cli-redis-dump: PASS"
+    else
+      record_check "${label}" "cli-redis-dump" "FAIL" "rc=${rc} $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "cli ${label} cli-redis-dump: FAIL rc=${rc} ${out}" >&2
+      failed=1
+    fi
+    cli_probe "${label}" "cli-redis-restore" "" \
+      flynn1 -a "${APP_NAME}" redis restore -q -f /tmp/smoke-redis.dump || failed=1
+  fi
+
+  if plugin_has_delegated_cli mysql; then
+    cli_probe "${label}" "cli-help-mysql" "mysql" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-mysql-doc" "console" \
+      flynn1 help mysql || failed=1
+    cli_probe "${label}" "cli-mysql-dump" "" \
+      flynn1 -a "${APP_NAME}" mysql dump -q -f /tmp/smoke-mysql.dump || failed=1
+  fi
+
+  if plugin_has_delegated_cli mongodb; then
+    cli_probe "${label}" "cli-help-mongodb" "mongodb" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-mongodb-doc" "mongo" \
+      flynn1 help mongodb || failed=1
+    cli_probe "${label}" "cli-mongo-dump" "" \
+      flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
+  fi
+
+  if plugin_has_delegated_cli kafka; then
+    cli_probe "${label}" "cli-help-kafka" "kafka" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-kafka-doc" "topics" \
+      flynn1 help kafka || failed=1
+    cli_probe "${label}" "cli-kafka-topics" "" \
+      flynn1 -a "${APP_NAME}" kafka topics || failed=1
+  fi
+
+  if plugin_has_delegated_cli clickhouse; then
+    cli_probe "${label}" "cli-help-clickhouse" "clickhouse" \
+      flynn1 help || failed=1
+    cli_probe "${label}" "cli-help-clickhouse-doc" "client" \
+      flynn1 help clickhouse || failed=1
+    cli_probe "${label}" "cli-clickhouse-databases" "" \
+      flynn1 -a "${APP_NAME}" clickhouse databases || failed=1
+  fi
 
   # GET / lists every blob and 500s if postgres is briefly unavailable after
   # an update. /.well-known/status is the health check (SELECT 1). Retry:
@@ -3682,8 +4063,9 @@ apply_topology_spec() {
   esac
 }
 
-# One full install → bootstrap → deploy → verify → CLI → --force upgrades →
-# cluster backup → --clean reinstall → bootstrap --from-backup → re-verify.
+# One full install → bootstrap → plugin install → deploy → verify → CLI →
+# --force upgrades → cluster backup → --clean reinstall → bootstrap
+# --from-backup (plugins restore with postgres) → re-verify.
 # idx is 0-based; is_last=1 means KEEP_VMS can retain these cluster nodes.
 run_one_topology() {
   local size=$1
@@ -3714,7 +4096,11 @@ run_one_topology() {
     record "Bootstrap cluster (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_INSTALL=1"
     ensure_flynn_cli_on_node1
     configure_node_dns node1
-    register_cli_cluster || fail_shutdown "Bootstrap cluster (${TOPOLOGY_LABEL})" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
+    if [[ "${RESUME_AT}" == "restore" ]]; then
+      echo "RESUME_AT=restore: skipping CLI cluster add (cluster will be --clean reinstalled)"
+    else
+      register_cli_cluster || fail_shutdown "Bootstrap cluster (${TOPOLOGY_LABEL})" 0 "SKIP_INSTALL=1 but CLI cluster registration failed"
+    fi
   elif [[ "${RESUME_BOOTSTRAP:-0}" == "1" ]]; then
     record "Install local tarball on nodes (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
     record "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=bootstrap"
@@ -3728,6 +4114,12 @@ run_one_topology() {
     run_step "Install local tarball on nodes (${TOPOLOGY_LABEL})" step_install_flynn
     run_step "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" step_init_cluster
     run_step "Bootstrap cluster (${TOPOLOGY_LABEL})" step_bootstrap
+  fi
+
+  if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
+    record "Install plugins (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_PLUGIN_INSTALL=1"
+  else
+    run_step "Install plugins (${TOPOLOGY_LABEL})" step_install_plugins
   fi
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
@@ -3792,15 +4184,12 @@ run_one_topology() {
     record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
-  elif [[ "${SKIP_DEPLOY}" == "1" ]]; then
-    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
-    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
-    run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    if [[ "${RESUME_AT}" == "restore" ]]; then
+      record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=restore"
+    else
+      run_step "Cluster backup (${TOPOLOGY_LABEL})" step_cluster_backup
+    fi
     restore_drained_inventory
     run_step "Reinstall for restore (${TOPOLOGY_LABEL})" step_install_flynn
     run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
@@ -3868,6 +4257,24 @@ main() {
     SKIP_INSTALL=1
     SKIP_DEPLOY=1
     SKIP_VERIFY_BEFORE=1
+  fi
+  if [[ "${RESUME_AT}" == "backup" ]]; then
+    SKIP_VAGRANT_UP=1
+    SKIP_BUILD=1
+    SKIP_INSTALL=1
+    SKIP_PLUGIN_INSTALL=1
+    SKIP_DEPLOY=1
+    SKIP_VERIFY_BEFORE=1
+    SKIP_UPGRADE=1
+  fi
+  if [[ "${RESUME_AT}" == "restore" ]]; then
+    SKIP_VAGRANT_UP=1
+    SKIP_BUILD=1
+    SKIP_INSTALL=1
+    SKIP_PLUGIN_INSTALL=1
+    SKIP_DEPLOY=1
+    SKIP_VERIFY_BEFORE=1
+    SKIP_UPGRADE=1
   fi
 
   # Fail before touching VMs or wiping flynn-logs if the host-side tree is broken.

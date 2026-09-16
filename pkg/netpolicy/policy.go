@@ -5,9 +5,9 @@ package netpolicy
 
 import (
 	"net"
-	"strings"
 
 	host "github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/plugin"
 )
 
 // Discoverd service names (and matching ipset names) that publish overlay IPs
@@ -95,7 +95,10 @@ func UserMayResolveDiscoverd(leader bool, service string) bool {
 	if !leader {
 		return false
 	}
-	return isDatastoreApp(service) || service == "redis"
+	if plugin.DatastoreService(service) || isUUIDApplianceName(service) {
+		return true
+	}
+	return false
 }
 
 func isBuildJob(job *host.Job) bool {
@@ -121,31 +124,46 @@ func isDatastoreProcess(job *host.Job) bool {
 	if job.Metadata == nil {
 		return false
 	}
-	if !isDatastoreApp(job.Metadata["flynn-controller.app_name"]) {
+	if job.Metadata["flynn-controller.type"] == "web" {
 		return false
 	}
-	// API processes are type "web" (postgres-api, etc.) and must stay
-	// unreachable from user jobs except via the provisioned leader URL.
-	return job.Metadata["flynn-controller.type"] != "web"
-}
-
-func isDatastoreApp(name string) bool {
-	switch name {
-	case "postgres", "mariadb", "mongodb", "kafka", "clickhouse":
+	if job.Metadata["flynn-datastore"] == "true" {
 		return true
 	}
-	// Per-app appliances are <kind>-<uuid> (redis, kafka, clickhouse).
-	// Do not treat <kind>-api as a data-plane name.
-	return applianceUUIDName(name, "redis") ||
-		applianceUUIDName(name, "kafka") ||
-		applianceUUIDName(name, "clickhouse")
+	name := job.Metadata["flynn-controller.app_name"]
+	if name == "postgres" || isUUIDApplianceName(name) || plugin.DatastoreService(name) {
+		return true
+	}
+	return false
 }
 
-func applianceUUIDName(name, kind string) bool {
-	prefix := kind + "-"
-	if !strings.HasPrefix(name, prefix) {
+func isUUIDApplianceName(name string) bool {
+	const uuidLen = 36
+	if len(name) < uuidLen+2 {
 		return false
 	}
-	id := name[len(prefix):]
-	return strings.Count(id, "-") == 4 && len(id) >= 32
+	if name[len(name)-uuidLen-1] != '-' {
+		return false
+	}
+	id := name[len(name)-uuidLen:]
+	if len(id) != uuidLen {
+		return false
+	}
+	for i, c := range id {
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if !isHex(c) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func isHex(c rune) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
 }

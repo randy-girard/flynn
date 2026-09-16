@@ -69,6 +69,12 @@ func (a *App) System() bool {
 	return ok && v == "true"
 }
 
+// Plugin reports whether this app was installed by flynn-host plugin install.
+func (a *App) Plugin() bool {
+	v, ok := a.Meta["flynn-plugin"]
+	return ok && v == "true"
+}
+
 func (a *App) RedisAppliance() bool {
 	return a.System() && strings.HasPrefix(a.Name, "redis-")
 }
@@ -169,7 +175,7 @@ func (r *Release) IsSlugDeploy() bool {
 }
 
 // IsSirenia reports whether the release is for a sirenia-managed database
-// (postgres, mariadb, mongodb) by checking for the SIRENIA_PROCESS env var
+// (postgres and sirenia plugins) by checking for the SIRENIA_PROCESS env var
 // that the sirenia deployment strategy uses to identify the database process
 // type.
 func (r *Release) IsSirenia() bool {
