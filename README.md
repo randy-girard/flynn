@@ -67,15 +67,15 @@ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/instal
 
 That installs `flynn-host`, container images, and a systemd unit.
 
-**Three-node cluster** using the discovery service:
+**Three-node cluster** using a discovery API you run (there is no public hosted service). `--init-discovery` requires `DISCOVERY_SERVER`:
 
 ```bash
-# first node
-sudo flynn-host init --init-discovery
-# prints https://discovery.flynn.cloud.randygirard.com/clusters/<id>
+# first node (example URL; use your own discovery API)
+sudo DISCOVERY_SERVER=https://discovery.example.com flynn-host init --init-discovery
+# prints https://discovery.example.com/clusters/<id>
 
 # other nodes
-sudo flynn-host init --discovery https://discovery.flynn.cloud.randygirard.com/clusters/<id>
+sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
 
 sudo systemctl start flynn-host
 ```
@@ -87,10 +87,10 @@ sudo \
   CLUSTER_DOMAIN=example.com \
   flynn-host bootstrap \
   --min-hosts 3 \
-  --discovery https://discovery.flynn.cloud.randygirard.com/clusters/<id>
+  --discovery https://discovery.example.com/clusters/<id>
 ```
 
-You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead. Step-by-step instructions are in [Manual installation](docs/content/installation/manual.md). Production notes (dedicated ZFS, blobstore backends, backups) are in [Production](docs/content/production.html.md).
+You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead. To run discovery on the cluster itself, bootstrap one node with `--peer-ips`, install the discovery plugin, then join extra nodes with that token. Step-by-step instructions are in [Manual installation](docs/content/installation/manual.md). Production notes (dedicated ZFS, blobstore backends, backups) are in [Production](docs/content/production.html.md).
 
 Bootstrap uses a self-signed certificate. Configure ACME/Let's Encrypt next so the dashboard, controller, and app routes can get trusted TLS:
 

@@ -59,6 +59,17 @@ func TestRegisterInstance(t *testing.T) {
 	}
 }
 
+func TestNewTokenRequiresDiscoveryServer(t *testing.T) {
+	t.Setenv("DISCOVERY_SERVER", "")
+	_, err := NewToken()
+	if err == nil || !strings.Contains(err.Error(), "DISCOVERY_SERVER") {
+		t.Fatalf("got %v", err)
+	}
+	if !strings.Contains(err.Error(), ExampleServer) {
+		t.Fatalf("error should cite example URL: %v", err)
+	}
+}
+
 func TestNewTokenUsesDiscoveryServer(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/clusters" {

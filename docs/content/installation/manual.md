@@ -83,29 +83,27 @@ Raft for leader election and must know its peers.
 For more than one node, create a discovery token with `flynn-host init`. Skip
 this on a single-node install.
 
-On the first node:
+On the first node, point `--init-discovery` at a discovery API you run
+(`DISCOVERY_SERVER` is required; there is no public hosted service):
 
 ```
-$ sudo flynn-host init --init-discovery
-https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+$ sudo DISCOVERY_SERVER=https://discovery.example.com flynn-host init --init-discovery
+https://discovery.example.com/clusters/<id>
 ```
 
 On the other nodes:
 
 ```
-$ sudo flynn-host init --discovery https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+$ sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
 ```
 
-You can set `DISCOVERY_SERVER` if you run your own discovery API. The default
-server for this fork is `https://discovery.flynn.cloud.randygirard.com`.
-
-To run discovery **on the cluster** instead of the hosted service, bootstrap a
-single node with `--peer-ips`, then install the discovery plugin
-(`sudo flynn-host plugin install discovery`). The installer prints a join
-token (also `/etc/flynn/discovery-token`). Additional nodes use that token:
+To run discovery **on the cluster**, bootstrap a single node with `--peer-ips`,
+then install the discovery plugin (`sudo flynn-host plugin install discovery`).
+The installer prints a join token (also `/etc/flynn/discovery-token`). Additional
+nodes use that token:
 
 ```
-$ sudo flynn-host init --discovery https://discovery.demo.example.com/clusters/<id>
+$ sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
 ```
 
 Point `discovery.${CLUSTER_DOMAIN}` at the first node (wildcard DNS is enough)
@@ -154,7 +152,7 @@ $ sudo \
     CLUSTER_DOMAIN=demo.example.com \
     flynn-host bootstrap \
     --min-hosts 3 \
-    --discovery https://discovery.flynn.cloud.randygirard.com/clusters/53e8402e-030f-4861-95ba-d5b5a91b5902
+    --discovery https://discovery.example.com/clusters/<id>
 ```
 
 With peer IPs instead of discovery:

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/flynn/flynn/pkg/version"
@@ -97,11 +98,17 @@ func GetCluster(uri string) ([]*Instance, error) {
 	return data.Data, err
 }
 
+// ExampleServer is a documentation-only discovery API base URL. There is no
+// public hosted discovery service; operators must set DISCOVERY_SERVER to
+// their own compatible API (for example the in-cluster discovery plugin).
+const ExampleServer = "https://discovery.example.com"
+
 func NewToken() (string, error) {
-	uri := "https://discovery.flynn.cloud.randygirard.com/clusters"
-	if base := os.Getenv("DISCOVERY_SERVER"); base != "" {
-		uri = base + "/clusters"
+	server := strings.TrimRight(os.Getenv("DISCOVERY_SERVER"), "/")
+	if server == "" {
+		return "", fmt.Errorf("DISCOVERY_SERVER is not set; point it at a discovery API (example: DISCOVERY_SERVER=%s flynn-host init --init-discovery)", ExampleServer)
 	}
+	uri := server + "/clusters"
 
 	req, err := http.NewRequest("POST", uri, nil)
 	if err != nil {
