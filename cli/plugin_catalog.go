@@ -92,8 +92,8 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	return insertPluginHelpSection(usage, section)
 }
 
-// insertPluginHelpSection puts Plugins: after the command groups with a blank
-// line before them, then restores the footer (See 'flynn help …').
+// insertPluginHelpSection puts Plugins: after the core command list with a
+// blank line before them, then restores the footer (See 'flynn help …').
 func insertPluginHelpSection(usage string, section []string) string {
 	lines := strings.Split(usage, "\n")
 	out := make([]string, 0, len(lines)+len(section))
@@ -118,9 +118,9 @@ func insertPluginHelpSection(usage string, section []string) string {
 	return strings.Join(out, "\n")
 }
 
-// usageCommandNames is every indented command in the help lists. Scanning
+// usageCommandNames is every indented command in the help list. Scanning
 // every line treated "See" from the footer as a command and could hide a
-// plugin of that name. Group headers (Cluster:, Apps:, …) are skipped.
+// plugin of that name.
 func usageCommandNames(usage string) map[string]struct{} {
 	present := map[string]struct{}{}
 	for _, line := range strings.Split(usage, "\n") {

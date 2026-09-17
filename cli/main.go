@@ -37,47 +37,35 @@ Options:
 	-h, --help
 
 Commands:
-	help        show usage for a specific command
-	update      update the Flynn CLI from GitHub Releases
-	version     show flynn version
-
-Cluster:
-	cluster     manage clusters
-	login       authenticate with the dashboard (OAuth)
-	plugins     list plugins installed on this cluster
-
-Apps:
 	apps        list apps
+	cluster     manage clusters
 	create      create an app
 	delete      delete an app
-	info        show app information
-	meta        manage app metadata
-	remote      manage git remotes
-
-Jobs:
-	kill        kill jobs
-	log         get app log
-	ps          list jobs
-	run         run a job
-	scale       change formation
-
-Config:
-	env         manage env variables
-	limit       manage resource limits
-	route       manage routes
-	stack       manage deployment stack for git push
-
-Releases:
 	deployment  list deployments
 	docker      deploy Docker images to a Flynn cluster
+	env         manage env variables
 	export      export app data
+	help        show usage for a specific command
 	import      create app from exported data
-	release     manage app releases
-
-Add-ons:
+	info        show app information
+	kill        kill jobs
+	limit       manage resource limits
+	log         get app log
+	login       authenticate with the dashboard (OAuth)
+	meta        manage app metadata
 	pg          manage postgres database
+	plugins     list plugins installed on this cluster
 	provider    manage resource providers
+	ps          list jobs
+	release     manage app releases
+	remote      manage git remotes
 	resource    provision a new resource
+	route       manage routes
+	run         run a job
+	scale       change formation
+	stack       manage deployment stack for git push
+	update      update the Flynn CLI from GitHub Releases
+	version     show flynn version
 	volume      manage volumes
 
 See 'flynn help <command>' for more information on a specific command.

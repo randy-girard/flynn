@@ -91,47 +91,33 @@ Options:
   --version                  Show current version
 
 Commands:
-  help                       Show usage for a specific command
-  version                    Show current version
-
-Host:
-  daemon                     Start the daemon
-  init                       Create cluster configuration for daemon
-  list                       List ID and IP of each host
-  tags                       Manage flynn-host daemon tags
-
-Cluster:
+  acme                       Manage ACME/Let's Encrypt configuration
   bootstrap                  Bootstrap layer 1
+  cli-add-command            Get the 'flynn cluster add' command to manage this cluster
+  collect-debug-info         Collect debug information into an anonymous gist or tarball
+  daemon                     Start the daemon
   demote                     Demote a Flynn node from the consensus cluster
+  destroy-volumes            Destroy the local volume database
+  discover                   Return low-level information about a service
   download                   Download container images
   fix                        Fix a broken cluster
-  promote                    Promote a Flynn node into the consensus cluster
-  update                     Update Flynn components
-
-Jobs:
+  help                       Show usage for a specific command
+  init                       Create cluster configuration for daemon
   inspect                    Get low-level information about a job
+  list                       List ID and IP of each host
   log                        Get the logs of a job
+  log-sink                   Manage host log sinks
+  plugin                     Install and list cluster plugins
+  promote                    Promote a Flynn node into the consensus cluster
   ps                         List jobs
   run                        Run an interactive job
   signal                     Signal a job
   stop                       Stop running jobs
-
-Volumes:
-  destroy-volumes            Destroy the local volume database
+  tags                       Manage flynn-host daemon tags
+  update                     Update Flynn components
+  version                    Show current version
   volume                     Manage volumes on the Flynn node
-
-Networking:
-  acme                       Manage ACME/Let's Encrypt configuration
-  discover                   Return low-level information about a service
-
-Observability:
-  collect-debug-info         Collect debug information into an anonymous gist or tarball
-  log-sink                   Manage host log sinks
   webhooks                   Manage webhook notification endpoints
-
-Access:
-  cli-add-command            Get the 'flynn cluster add' command to manage this cluster
-  plugin                     Install and list cluster plugins
 
 See 'flynn-host help <command>' for more information on a specific command.
 `
