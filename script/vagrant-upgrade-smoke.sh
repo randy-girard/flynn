@@ -16,7 +16,7 @@
 #      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
 #      datastore provider, git-push test/apps/upgrade-smoke-docker on the
 #      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
-#      flynn-host, run flynn-host update --all-nodes --tarball --force twice,
+#      flynn-host, add/write/read/remove a persistent volume, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
 #      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
 #      apps restore with postgres (no second flynn-host plugin install). Redis,
@@ -88,6 +88,7 @@
 #   SKIP_BACKUP=1        Skip cluster backup, wipe, bootstrap --from-backup,
 #                        and post-restore verify
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
+#                        and the persistent-volume write/read/delete probe
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
 #                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
 #                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
@@ -1508,8 +1509,7 @@ set -euo pipefail
 case "\$(uname -m)" in
   x86_64)          cli_arch=amd64 ;;
   aarch64|arm64)   cli_arch=arm64 ;;
-  i386|i686)       cli_arch=386 ;;
-  *) echo "unsupported node arch \$(uname -m)" >&2; exit 1 ;;
+  *) echo "unsupported node arch \$(uname -m) (need amd64 or arm64)" >&2; exit 1 ;;
 esac
 src="${REPO_IN_VM}/build/bin/flynn-linux-\${cli_arch}"
 if [[ -x "\${src}" ]]; then
@@ -3837,6 +3837,135 @@ step_cli_functions() {
   echo "cli ${label}: apps/ps/scale/env/resource/route/release/log/run/docker-run/meta/host PASS"
 }
 
+# Persistent /data on the container-stack app: create a volume, write a file,
+# restart the job (scheduler must adopt the same volume), read the file back,
+# then decommission and destroy it. Uses a unique token so leftover
+# logaggregator lines cannot fake a pass.
+vol_log_has() {
+  local needle=$1
+  flynn1 -a "${DOCKER_APP_NAME}" log -n 400 | grep -qF "${needle}"
+}
+
+vol_active_ids() {
+  flynn1 -a "${DOCKER_APP_NAME}" volume 2>/dev/null | awk 'NR>1 && $1 ~ /^[0-9a-fA-F-]{36}$/ && $NF != "true" {print $1}'
+}
+
+vol_scale_zero() {
+  local out
+  out="$(flynn1 -a "${DOCKER_APP_NAME}" scale 2>/dev/null || true)"
+  if printf '%s' "${out}" | grep -qE '(^|[[:space:]])vol='; then
+    flynn1 -a "${DOCKER_APP_NAME}" scale vol=0
+  fi
+}
+
+step_volume() {
+  local label=$1
+  local token="vol-smoke-${label}-$(date +%s)"
+  local json="${ROOT}/.vagrant-upgrade-smoke-tmp/vol-release-${token}.json"
+  local vm_json="${REPO_IN_VM}/.vagrant-upgrade-smoke-tmp/vol-release-${token}.json"
+  local id="" ids id_loop out
+
+  ensure_flynn_cli_on_node1
+  mkdir -p "${ROOT}/.vagrant-upgrade-smoke-tmp"
+  echo "volume ${label}: persistent /data on ${DOCKER_APP_NAME} token=${token}"
+
+  vol_scale_zero || true
+  ids="$(vol_active_ids || true)"
+  for id_loop in ${ids}; do
+    flynn1 -a "${DOCKER_APP_NAME}" volume decommission "${id_loop}" || true
+    node_ssh node1 "sudo -H flynn-host volume delete $(printf '%q' "${id_loop}")" </dev/null || true
+  done
+  node_ssh node1 "sudo -H flynn-host volume gc" </dev/null || true
+
+  cat > "${json}" <<JSON
+{
+  "processes": {
+    "vol": {
+      "args": ["/bin/sh", "-c", "set -eu; if [ ! -f /data/probe.txt ]; then echo ${token} > /data/probe.txt; echo VOL_SMOKE_WROTE:${token}; else echo VOL_SMOKE_READ:\$(cat /data/probe.txt); fi; exec sleep 3600"],
+      "volumes": [{"path": "/data"}]
+    }
+  }
+}
+JSON
+
+  if ! node_ssh node1 "test -f $(printf '%q' "${vm_json}")" </dev/null; then
+    record_check "${label}" "vol-add" "FAIL" "missing ${vm_json}"
+    echo "volume ${label}: release JSON not visible in the VM" >&2
+    return 1
+  fi
+  if ! flynn1 -a "${DOCKER_APP_NAME}" release update "${vm_json}"; then
+    record_check "${label}" "vol-add" "FAIL" "release update failed"
+    echo "volume ${label}: release update failed" >&2
+    return 1
+  fi
+  if ! flynn1 -a "${DOCKER_APP_NAME}" scale vol=1; then
+    record_check "${label}" "vol-add" "FAIL" "scale vol=1 failed"
+    echo "volume ${label}: scale vol=1 failed" >&2
+    return 1
+  fi
+  if ! wait_for "volume write ${label}" 180 vol_log_has "VOL_SMOKE_WROTE:${token}"; then
+    out="$(flynn1 -a "${DOCKER_APP_NAME}" log -n 80 | tr '\n' ' ' | cut -c1-120 || true)"
+    record_check "${label}" "vol-write" "FAIL" "${out}"
+    echo "volume ${label}: missing VOL_SMOKE_WROTE:${token}: ${out}" >&2
+    vol_scale_zero || true
+    return 1
+  fi
+  record_check "${label}" "vol-write" "PASS" "VOL_SMOKE_WROTE:${token}"
+
+  id="$(vol_active_ids | head -n1 || true)"
+  if [[ -z "${id}" ]]; then
+    record_check "${label}" "vol-add" "FAIL" "no volume listed after scale"
+    echo "volume ${label}: flynn volume listed nothing" >&2
+    vol_scale_zero || true
+    return 1
+  fi
+  record_check "${label}" "vol-add" "PASS" "id=${id}"
+  echo "volume ${label}: created ${id}"
+
+  flynn1 -a "${DOCKER_APP_NAME}" scale vol=0
+  flynn1 -a "${DOCKER_APP_NAME}" scale vol=1
+  if ! wait_for "volume read ${label}" 180 vol_log_has "VOL_SMOKE_READ:${token}"; then
+    out="$(flynn1 -a "${DOCKER_APP_NAME}" log -n 80 | tr '\n' ' ' | cut -c1-120 || true)"
+    record_check "${label}" "vol-read" "FAIL" "${out}"
+    echo "volume ${label}: missing VOL_SMOKE_READ:${token} (volume did not persist): ${out}" >&2
+    vol_scale_zero || true
+    return 1
+  fi
+  record_check "${label}" "vol-read" "PASS" "VOL_SMOKE_READ:${token}"
+  echo "volume ${label}: read ${token} after restart"
+
+  flynn1 -a "${DOCKER_APP_NAME}" scale vol=0
+  if ! flynn1 -a "${DOCKER_APP_NAME}" volume decommission "${id}"; then
+    record_check "${label}" "vol-remove" "FAIL" "decommission ${id}"
+    echo "volume ${label}: decommission ${id} failed" >&2
+    return 1
+  fi
+  node_ssh node1 "sudo -H flynn-host volume delete $(printf '%q' "${id}")" </dev/null || true
+  node_ssh node1 "sudo -H flynn-host volume gc" </dev/null || true
+  if flynn1 -a "${DOCKER_APP_NAME}" volume 2>/dev/null | awk -v id="${id}" 'NR>1 && $1==id && $NF != "true" {found=1} END{exit found?0:1}'; then
+    record_check "${label}" "vol-remove" "FAIL" "${id} still active"
+    echo "volume ${label}: ${id} still listed as active after remove" >&2
+    return 1
+  fi
+  record_check "${label}" "vol-remove" "PASS" "decommissioned ${id}"
+  echo "volume ${label}: removed ${id}"
+}
+
+# Run live CLI probes and the volume lifecycle, or record both as SKIP.
+maybe_run_cli_and_volume() {
+  local cli_title=$1
+  local vol_title=$2
+  local label=$3
+  local skip_reason=${4:-}
+  if [[ -n "${skip_reason}" ]]; then
+    record "${cli_title}" "SKIP" 0 "${skip_reason}"
+    record "${vol_title}" "SKIP" 0 "${skip_reason}"
+    return 0
+  fi
+  run_step "${cli_title}" step_cli_functions "${label}"
+  run_step "${vol_title}" step_volume "${label}"
+}
+
 step_verify_before() {
   wait_for "app HTTP pre-upgrade" 180 probe_app_http
   assert_app_http pre-upgrade
@@ -4696,9 +4825,16 @@ run_one_topology() {
     run_step "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" step_verify_before
   fi
   if [[ "${SKIP_CLI}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
-    record "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
+    maybe_run_cli_and_volume \
+      "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" \
+      "Persistent volume (pre-upgrade) (${TOPOLOGY_LABEL})" \
+      pre-upgrade \
+      "SKIP_CLI/SKIP_VERIFY_BEFORE=1"
   else
-    run_step "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" step_cli_functions pre-upgrade
+    maybe_run_cli_and_volume \
+      "CLI functions (pre-upgrade) (${TOPOLOGY_LABEL})" \
+      "Persistent volume (pre-upgrade) (${TOPOLOGY_LABEL})" \
+      pre-upgrade
   fi
 
   if [[ "${TOPOLOGY_ACTION}" == "add" ]]; then
@@ -4707,18 +4843,32 @@ run_one_topology() {
     append_live_node node4
     run_step "Verify app/DBs after add-node (${TOPOLOGY_LABEL})" step_verify_membership after-add
     if [[ "${SKIP_CLI}" == "1" ]]; then
-      record "CLI functions after add-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+      maybe_run_cli_and_volume \
+        "CLI functions after add-node (${TOPOLOGY_LABEL})" \
+        "Persistent volume after add-node (${TOPOLOGY_LABEL})" \
+        after-add \
+        "SKIP_CLI=1"
     else
-      run_step "CLI functions after add-node (${TOPOLOGY_LABEL})" step_cli_functions after-add
+      maybe_run_cli_and_volume \
+        "CLI functions after add-node (${TOPOLOGY_LABEL})" \
+        "Persistent volume after add-node (${TOPOLOGY_LABEL})" \
+        after-add
     fi
   elif [[ "${TOPOLOGY_ACTION}" == "remove" ]]; then
     run_step "Remove node from running cluster (${TOPOLOGY_LABEL})" step_remove_cluster_node
     drop_live_node "$(cat "${WORK_DIR}/drained-node")"
     run_step "Verify app/DBs after remove-node (${TOPOLOGY_LABEL})" step_verify_membership after-remove
     if [[ "${SKIP_CLI}" == "1" ]]; then
-      record "CLI functions after remove-node (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+      maybe_run_cli_and_volume \
+        "CLI functions after remove-node (${TOPOLOGY_LABEL})" \
+        "Persistent volume after remove-node (${TOPOLOGY_LABEL})" \
+        after-remove \
+        "SKIP_CLI=1"
     else
-      run_step "CLI functions after remove-node (${TOPOLOGY_LABEL})" step_cli_functions after-remove
+      maybe_run_cli_and_volume \
+        "CLI functions after remove-node (${TOPOLOGY_LABEL})" \
+        "Persistent volume after remove-node (${TOPOLOGY_LABEL})" \
+        after-remove
     fi
   fi
 
@@ -4730,10 +4880,16 @@ run_one_topology() {
       run_step "Upgrade pass ${pass}/${UPGRADE_PASSES} --all-nodes (${TOPOLOGY_LABEL})" step_upgrade "${pass}"
       run_step "Verify app/DBs after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" step_verify_after "${pass}"
       if [[ "${SKIP_CLI}" == "1" ]]; then
-        record "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+        maybe_run_cli_and_volume \
+          "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+          "Persistent volume after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+          "post-upgrade-${pass}" \
+          "SKIP_CLI=1"
       else
-        run_step "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
-          step_cli_functions "post-upgrade-${pass}"
+        maybe_run_cli_and_volume \
+          "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+          "Persistent volume after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+          "post-upgrade-${pass}"
       fi
     done
   fi
@@ -4744,7 +4900,11 @@ run_one_topology() {
     record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
-    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+    maybe_run_cli_and_volume \
+      "CLI functions after restore (${TOPOLOGY_LABEL})" \
+      "Persistent volume after restore (${TOPOLOGY_LABEL})" \
+      post-restore \
+      "SKIP_BACKUP=1"
   else
     if [[ "${RESUME_AT}" == "restore" ]]; then
       record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=restore"
@@ -4757,9 +4917,16 @@ run_one_topology() {
     run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup
     run_step "Verify app/DBs after restore (${TOPOLOGY_LABEL})" step_verify_after_restore
     if [[ "${SKIP_CLI}" == "1" ]]; then
-      record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
+      maybe_run_cli_and_volume \
+        "CLI functions after restore (${TOPOLOGY_LABEL})" \
+        "Persistent volume after restore (${TOPOLOGY_LABEL})" \
+        post-restore \
+        "SKIP_CLI=1"
     else
-      run_step "CLI functions after restore (${TOPOLOGY_LABEL})" step_cli_functions post-restore
+      maybe_run_cli_and_volume \
+        "CLI functions after restore (${TOPOLOGY_LABEL})" \
+        "Persistent volume after restore (${TOPOLOGY_LABEL})" \
+        post-restore
     fi
   fi
 
