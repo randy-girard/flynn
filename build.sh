@@ -113,22 +113,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Generate version if not provided
+# Generate version if not provided (vYYYYMMDD.N; .N increments for the same day)
+# shellcheck source=script/lib/release.sh
+source "${FLYNN_ROOT}/script/lib/release.sh"
 if [[ -z "${VERSION}" ]]; then
-  # Format: vYYYYMMDD.N where N is incremented if multiple releases on same day
-  DATE_PREFIX="v$(date +%Y%m%d)"
-  # Fetch latest tags from remote to ensure we have the most up-to-date tag list
   echo "===> Fetching latest tags from remote..."
   git fetch --tags --force 2>/dev/null || echo "Warning: Could not fetch tags from remote"
-  # Check for existing tags with today's date
-  LATEST_TODAY=$(git tag -l "${DATE_PREFIX}.*" 2>/dev/null | sort -V | tail -n1)
-  if [[ -n "${LATEST_TODAY}" ]]; then
-    # Extract the iteration number and increment
-    ITERATION="${LATEST_TODAY##*.}"
-    VERSION="${DATE_PREFIX}.$((ITERATION + 1))"
-  else
-    VERSION="${DATE_PREFIX}.0"
-  fi
+  VERSION="$(next_release_version_from_tags)"
 fi
 
 echo "===> Building version: ${VERSION} (phase: ${PHASE})"

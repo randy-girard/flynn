@@ -13,9 +13,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag for the release (e.g., v20260904.0)'
-        required: true
+        description: 'Version tag (e.g. v20260917.0). Leave empty to use today UTC and the next .N'
+        required: false
         type: string
+        default: ''
       draft:
         description: 'Create as a draft (unpublished until you publish it in GitHub)'
         required: false
@@ -55,19 +56,31 @@ jobs:
     name: Build base image
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 180
+    outputs:
+      VERSION: ${{ steps.version.outputs.VERSION }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Validate version
+      - name: Resolve version
         id: version
         run: |
           set -eo pipefail
+          git fetch --tags --force
           VERSION="${{ inputs.version }}"
-          if [[ ! "${VERSION}" =~ ^v[0-9]{8}\.[0-9]+$ ]]; then
+          if [[ -z "${VERSION}" ]]; then
+            # shellcheck source=script/lib/release.sh
+            source ./script/lib/release.sh
+            VERSION="$(next_release_version_from_tags)"
+            echo "Using next version ${VERSION}"
+          elif [[ ! "${VERSION}" =~ ^v[0-9]{8}\.[0-9]+$ ]]; then
             echo "ERROR: version must look like vYYYYMMDD.N (got '${VERSION}')" >&2
+            exit 1
+          fi
+          if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+            echo "ERROR: tag ${VERSION} already exists" >&2
             exit 1
           fi
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
@@ -146,10 +159,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Validate version
+      - name: Resolve version
         id: version
         run: |
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ needs.build-base.outputs.VERSION }}"
           echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Flynn environment
@@ -328,7 +341,7 @@ jobs:
 
   publish:
     name: Publish GitHub release
-    needs: build-cluster
+    needs: [build-base, build-cluster]
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 30
     steps:
@@ -349,11 +362,11 @@ jobs:
           echo "DRAFT=${DRAFT}" >> "$GITHUB_OUTPUT"
           echo "PRERELEASE=${PRERELEASE}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate version
+      - name: Resolve version
         id: version
         run: |
           set -eo pipefail
-          VERSION="${{ inputs.version }}"
+          VERSION="${{ needs.build-base.outputs.VERSION }}"
           git fetch --tags --force
           if git rev-parse "${VERSION}" >/dev/null 2>&1; then
             echo "ERROR: tag ${VERSION} already exists" >&2

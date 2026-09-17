@@ -312,7 +312,9 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
 * **[Build and Release](https://github.com/randy-girard/flynn/actions/workflows/release.yml)**
   — manual `workflow_dispatch` only. Builds base + production cluster images in
   phases and publishes GitHub Release assets. Version tags look like
-  `vYYYYMMDD.N`. Omits `test`, `test-apps`, and `controller-examples`.
+  `vYYYYMMDD.N` (UTC date, then `.0`, `.1`, … for that day). Leave **version**
+  empty to pick the next unused tag; fill it in only to override. Omits `test`,
+  `test-apps`, and `controller-examples`.
   Check **dispatch_plugins** to queue plugin builds after the Flynn release
   exists (`GITHUB_TOKEN` cannot start other workflows from `release` events).
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
