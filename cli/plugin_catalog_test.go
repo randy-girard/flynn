@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"sort"
 	"strings"
 	"testing"
 
@@ -119,6 +120,9 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 	if _, ok := names["See"]; ok {
 		t.Fatal("footer See line must not count as a command")
 	}
+	if _, ok := names["Cluster:"]; ok {
+		t.Fatal("group headers must not count as commands")
+	}
 	if _, ok := names["help"]; !ok {
 		t.Fatal("help")
 	}
@@ -128,9 +132,40 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 	if _, ok := names["update"]; !ok {
 		t.Fatal("update")
 	}
+	if _, ok := names["volume"]; !ok {
+		t.Fatal("grouped commands after Commands: must still be found")
+	}
 	if _, ok := names["redis"]; ok {
 		t.Fatal("redis must not be compiled into root usage")
 	}
+}
+
+func TestCLIUsageGroupsAreAlphabetical(t *testing.T) {
+	var group []string
+	check := func() {
+		t.Helper()
+		if !sort.StringsAreSorted(group) {
+			t.Fatalf("group not alphabetical: %v", group)
+		}
+		group = nil
+	}
+	for _, line := range strings.Split(cliUsage, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "See '") {
+			break
+		}
+		if strings.HasPrefix(line, "\t") {
+			fields := strings.Fields(line)
+			if len(fields) > 0 {
+				group = append(group, fields[0])
+			}
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && trimmed != "Options:" {
+			check()
+		}
+	}
+	check()
 }
 
 func TestMergePluginUsageAddsRedisToRootUsage(t *testing.T) {

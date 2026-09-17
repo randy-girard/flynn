@@ -20,9 +20,8 @@ Manage app deployments.
 Commands:
     With no arguments, shows a list of deployments
 
-	timeout     gets or sets the number of seconds to wait for each job to start when deploying
-
 	batch-size  gets or sets the batch size for deployments using the in-batches strategy
+	timeout     gets or sets the number of seconds to wait for each job to start when deploying
 
 Examples:
 

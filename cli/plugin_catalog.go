@@ -92,39 +92,22 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 	return insertPluginHelpSection(usage, section)
 }
 
-// insertPluginHelpSection puts Plugins: after the Commands list with a blank
-// line between them, then restores the footer (See 'flynn help …').
+// insertPluginHelpSection puts Plugins: after the command groups with a blank
+// line before them, then restores the footer (See 'flynn help …').
 func insertPluginHelpSection(usage string, section []string) string {
 	lines := strings.Split(usage, "\n")
 	out := make([]string, 0, len(lines)+len(section))
-	inCommands := false
 	inserted := false
-	for i := 0; i < len(lines); {
-		line := lines[i]
+	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "Commands:" {
-			inCommands = true
-			out = append(out, line)
-			i++
-			continue
-		}
-		if inCommands && !inserted {
-			if strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t") {
-				out = append(out, line)
-				i++
-				continue
-			}
-			if trimmed == "" {
-				i++
-				continue
+		if !inserted && strings.HasPrefix(trimmed, "See '") {
+			for len(out) > 0 && out[len(out)-1] == "" {
+				out = out[:len(out)-1]
 			}
 			out = append(out, section...)
 			inserted = true
-			inCommands = false
-			continue
 		}
 		out = append(out, line)
-		i++
 	}
 	if !inserted {
 		for len(out) > 0 && out[len(out)-1] == "" {
@@ -135,25 +118,18 @@ func insertPluginHelpSection(usage string, section []string) string {
 	return strings.Join(out, "\n")
 }
 
-// usageCommandNames is the Commands: list only. Scanning every line treated
-// "See" from the footer as a command and could hide a plugin of that name.
+// usageCommandNames is every indented command in the help lists. Scanning
+// every line treated "See" from the footer as a command and could hide a
+// plugin of that name. Group headers (Cluster:, Apps:, …) are skipped.
 func usageCommandNames(usage string) map[string]struct{} {
 	present := map[string]struct{}{}
-	inCommands := false
 	for _, line := range strings.Split(usage, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "Commands:" {
-			inCommands = true
-			continue
-		}
-		if !inCommands {
-			continue
-		}
-		if trimmed == "" {
-			continue
+		if strings.HasPrefix(trimmed, "See '") {
+			break
 		}
 		if !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
-			break
+			continue
 		}
 		fields := strings.Fields(line)
 		if len(fields) > 0 {

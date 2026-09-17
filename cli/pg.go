@@ -25,8 +25,8 @@ Options:
 	-j, --jobs=<jobs>  number of pg_restore jobs to use [default: 1]
 
 Commands:
-	psql     Open a console to a Flynn postgres database. Any valid arguments to psql may be provided.
 	dump     Dump a postgres database. If file is not specified, will dump to stdout.
+	psql     Open a console to a Flynn postgres database. Any valid arguments to psql may be provided.
 	restore  Restore a database dump. If file is not specified, will restore from stdin.
 
 Examples:

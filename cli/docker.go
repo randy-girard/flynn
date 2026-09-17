@@ -35,13 +35,10 @@ usage: flynn docker push <image>
 Deploy Docker images to a Flynn cluster.
 
 Commands:
-	push          push and release a Docker image to the cluster
-
-	set-push-url  [DEPRECATED] set the Docker push URL (defaults to https://docker.$CLUSTER_DOMAIN)
-
 	login         [DEPRECATED] run "docker login" against the cluster's docker-receive app
-
 	logout        [DEPRECATED] run "docker logout" against the cluster's docker-receive app
+	push          push and release a Docker image to the cluster
+	set-push-url  [DEPRECATED] set the Docker push URL (defaults to https://docker.$CLUSTER_DOMAIN)
 
 Example:
 

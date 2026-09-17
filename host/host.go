@@ -92,54 +92,73 @@ Options:
 
 Commands:
   help                       Show usage for a specific command
-  init                       Create cluster configuration for daemon
+  version                    Show current version
+
+Host:
   daemon                     Start the daemon
-  update                     Update Flynn components
-  download                   Download container images
+  init                       Create cluster configuration for daemon
+  list                       List ID and IP of each host
+  tags                       Manage flynn-host daemon tags
+
+Cluster:
   bootstrap                  Bootstrap layer 1
+  demote                     Demote a Flynn node from the consensus cluster
+  download                   Download container images
+  fix                        Fix a broken cluster
+  promote                    Promote a Flynn node into the consensus cluster
+  update                     Update Flynn components
+
+Jobs:
   inspect                    Get low-level information about a job
   log                        Get the logs of a job
   ps                         List jobs
-  stop                       Stop running jobs
+  run                        Run an interactive job
   signal                     Signal a job
-  destroy-volumes            Destroys the local volume database
-  collect-debug-info         Collect debug information into an anonymous gist or tarball
-  list                       Lists ID and IP of each host
-  version                    Show current version
-  fix                        Fix a broken cluster
-  tags                       Manage flynn-host daemon tags
+  stop                       Stop running jobs
+
+Volumes:
+  destroy-volumes            Destroy the local volume database
+  volume                     Manage volumes on the Flynn node
+
+Networking:
+  acme                       Manage ACME/Let's Encrypt configuration
   discover                   Return low-level information about a service
-  promote                    Promotes a Flynn node to a member of the consensus cluster
-  demote                     Demotes a Flynn node, removing it from the consensus cluster
+
+Observability:
+  collect-debug-info         Collect debug information into an anonymous gist or tarball
   log-sink                   Manage host log sinks
   webhooks                   Manage webhook notification endpoints
+
+Access:
   cli-add-command            Get the 'flynn cluster add' command to manage this cluster
-  volume                     Manage volumes on the Flynn node
-  acme                       Manage ACME/Let's Encrypt configuration
   plugin                     Install and list cluster plugins
 
 See 'flynn-host help <command>' for more information on a specific command.
 `
 
+	if leadingVersionFlag(os.Args[1:]) {
+		cli.NotifyUpgradeIfAvailable()
+		fmt.Println(version.String())
+		return
+	}
+
 	args, _ := docopt.Parse(usage, nil, true, version.String(), true)
 	cmd := args.String["<command>"]
 	cmdArgs := args.All["<args>"].([]string)
 
-	if cmd == "help" {
-		if len(cmdArgs) == 0 { // `flynn help`
-			fmt.Println(usage)
-			return
-		} else { // `flynn help <command>`
-			cmd = cmdArgs[0]
-			cmdArgs = []string{"--help"}
-		}
+	switch cmd {
+	case "daemon", "update", "download":
+	default:
+		cli.NotifyUpgradeIfAvailable()
 	}
 
-	switch cmd {
-	case "", "daemon", "update", "download":
-	default:
-		if len(cmdArgs) != 1 || cmdArgs[0] != "--help" {
-			cli.NotifyUpgradeIfAvailable()
+	if cmd == "help" {
+		if len(cmdArgs) == 0 { // `flynn-host help`
+			fmt.Println(usage)
+			return
+		} else { // `flynn-host help <command>`
+			cmd = cmdArgs[0]
+			cmdArgs = []string{"--help"}
 		}
 	}
 
@@ -603,6 +622,19 @@ func runDaemon(args *docopt.Args) {
 
 	log.Info("blocking main goroutine")
 	<-make(chan struct{})
+}
+
+func leadingVersionFlag(argv []string) bool {
+	for _, a := range argv {
+		if a == "--version" {
+			return true
+		}
+		if a == "-h" || a == "--help" {
+			continue
+		}
+		return false
+	}
+	return false
 }
 
 func parseTagArgs(args string) map[string]string {

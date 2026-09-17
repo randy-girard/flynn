@@ -38,35 +38,47 @@ Options:
 
 Commands:
 	help        show usage for a specific command
-	cluster     manage clusters
-	login       authenticate with the dashboard (OAuth)
-	create      create an app
-	delete      delete an app
-	apps        list apps
-	info        show app information
-	ps          list jobs
-	kill        kill jobs
-	log         get app log
-	scale       change formation
-	run         run a job
-	env         manage env variables
-	limit       manage resource limits
-	stack       manage deployment stack for git push
-	meta        manage app metadata
-	route       manage routes
-	pg          manage postgres database
-	provider    manage resource providers
-	plugins     list plugins installed on this cluster
-	docker      deploy Docker images to a Flynn cluster
-	remote      manage git remotes
-	resource    provision a new resource
-	release     manage app releases
-	deployment  list deployments
-	volume      manage volumes
-	export      export app data
-	import      create app from exported data
 	update      update the Flynn CLI from GitHub Releases
 	version     show flynn version
+
+Cluster:
+	cluster     manage clusters
+	login       authenticate with the dashboard (OAuth)
+	plugins     list plugins installed on this cluster
+
+Apps:
+	apps        list apps
+	create      create an app
+	delete      delete an app
+	info        show app information
+	meta        manage app metadata
+	remote      manage git remotes
+
+Jobs:
+	kill        kill jobs
+	log         get app log
+	ps          list jobs
+	run         run a job
+	scale       change formation
+
+Config:
+	env         manage env variables
+	limit       manage resource limits
+	route       manage routes
+	stack       manage deployment stack for git push
+
+Releases:
+	deployment  list deployments
+	docker      deploy Docker images to a Flynn cluster
+	export      export app data
+	import      create app from exported data
+	release     manage app releases
+
+Add-ons:
+	pg          manage postgres database
+	provider    manage resource providers
+	resource    provision a new resource
+	volume      manage volumes
 
 See 'flynn help <command>' for more information on a specific command.
 `[1:]
@@ -75,6 +87,12 @@ func main() {
 	defer shutdown.Exit()
 
 	log.SetFlags(0)
+
+	if leadingVersionFlag(os.Args[1:]) {
+		updater.notifyIfUpdateAvailable()
+		fmt.Println(version.String())
+		return
+	}
 
 	// help=false: docopt must not print cliUsage on -h/--help. Installed
 	// plugin commands (redis, …) are merged from the cluster catalog.
@@ -85,6 +103,10 @@ func main() {
 
 	cmd, cmdArgs := positionalArgs(args)
 	help := helpFlag(args)
+
+	if cmd != "update" && cmd != "upgrade" {
+		updater.notifyIfUpdateAvailable()
+	}
 
 	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
 		fmt.Println(pluginAwareUsage(cliUsage))
@@ -118,9 +140,6 @@ func main() {
 		cmdArgs = []string{"--help"}
 	} else if help {
 		cmdArgs = []string{"--help"}
-	}
-	if cmd != "update" && cmd != "upgrade" {
-		updater.notifyIfUpdateAvailable()
 	}
 
 	if err := runCommand(cmd, cmdArgs); err != nil {
@@ -165,6 +184,19 @@ func positionalArgs(args *docopt.Args) (string, []string) {
 
 func helpFlag(args *docopt.Args) bool {
 	return args != nil && (args.Bool["--help"] || args.Bool["-h"])
+}
+
+func leadingVersionFlag(argv []string) bool {
+	for _, a := range argv {
+		if a == "--version" {
+			return true
+		}
+		if a == "-h" || a == "--help" {
+			continue
+		}
+		return false
+	}
+	return false
 }
 
 // needsFlynnLoginHint reports whether err likely means dashboard OAuth tokens are

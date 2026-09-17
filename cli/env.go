@@ -27,9 +27,9 @@ Options:
 Commands:
 	With no arguments, shows a list of environment variables.
 
+	get    returns the value of variable
 	set    sets value of one or more env variables
 	unset  deletes one or more variables
-	get    returns the value of variable
 
 Examples:
 

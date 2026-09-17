@@ -25,12 +25,12 @@ usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-
        flynn-host plugin <plugin> route remove <id>
 
 Commands:
-	install       Install a plugin from a local path, alias, or GitHub URL
-	update        Deploy a new release of an already-installed plugin
-	uninstall     Remove an installed plugin app, webhooks, and optional uninstall hook
-	list          List plugins installed on this cluster
 	credentials   Store a GitHub token for private or draft release assets
+	install       Install a plugin from a local path, alias, or GitHub URL
+	list          List plugins installed on this cluster
 	route         List, add, update, or remove routes for an installed plugin
+	uninstall     Remove an installed plugin app, webhooks, and optional uninstall hook
+	update        Deploy a new release of an already-installed plugin
 
 Options:
 	--no-build         Fail if dist/ is missing instead of running script/plugin-build
