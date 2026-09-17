@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -117,6 +118,26 @@ func (s *S) TestBadAuth(c *C) {
 	c.Assert(err, IsNil)
 	res.Body.Close()
 	c.Assert(res.StatusCode, Equals, 401)
+}
+
+// deleteExpectEmpty200 is the HTTP contract the dashboard (and flynn CLI Delete)
+// relies on: Flynn DELETE handlers succeed with 200 and no JSON body.
+func (s *S) deleteExpectEmpty200(c *C, path string) {
+	req, err := http.NewRequest("DELETE", s.srv.URL+path, nil)
+	c.Assert(err, IsNil)
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 200)
+	body, err := io.ReadAll(res.Body)
+	c.Assert(err, IsNil)
+	c.Assert(string(body), Equals, "")
+}
+
+func (s *S) TestDeleteAppEmptyBody(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "delete-app-empty-body"})
+	s.deleteExpectEmpty200(c, "/apps/"+app.ID)
 }
 
 func (s *S) createTestApp(c *C, in *ct.App) *ct.App {

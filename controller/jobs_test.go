@@ -179,6 +179,29 @@ func (s *S) TestKillJob(c *C) {
 	c.Assert(hc.IsStopped(jobID), Equals, true)
 }
 
+func (s *S) TestKillJobEmptyBody(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "killjob-empty-body"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	hostID := fakeHostID()
+	uuid := random.UUID()
+	jobID := cluster.GenerateJobID(hostID, uuid)
+	s.createTestJob(c, &ct.Job{
+		ID:        jobID,
+		UUID:      uuid,
+		HostID:    hostID,
+		AppID:     app.ID,
+		ReleaseID: release.ID,
+		Type:      "web",
+		State:     ct.JobStateStarting,
+	})
+	hc := tu.NewFakeHostClient(hostID, false)
+	hc.AddJob(&host.Job{ID: jobID})
+	s.cc.AddHost(hc)
+
+	s.deleteExpectEmpty200(c, "/apps/"+app.ID+"/jobs/"+jobID)
+	c.Assert(hc.IsStopped(jobID), Equals, true)
+}
+
 func (s *S) TestRunJobDetached(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "run-detached"})
 	artifact := s.createTestArtifact(c, &ct.Artifact{})

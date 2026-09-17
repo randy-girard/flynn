@@ -59,6 +59,8 @@ func (c *controllerAPI) DeleteApp(ctx context.Context, w http.ResponseWriter, re
 		respondWithError(w, err)
 		return
 	}
+	// HTTP 200 with an empty body (same as KillJob / DeleteRoute).
+	w.WriteHeader(200)
 }
 
 func (c *controllerAPI) ScheduleAppGarbageCollection(ctx context.Context, w http.ResponseWriter, req *http.Request) {

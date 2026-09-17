@@ -200,6 +200,12 @@ func (s *S) TestDeleteRoute(c *C) {
 	c.Assert(err, Equals, controller.ErrNotFound)
 }
 
+func (s *S) TestDeleteRouteEmptyBody(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "delete-route-empty-body"})
+	route := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "foo"}).ToRoute())
+	s.deleteExpectEmpty200(c, "/apps/"+app.ID+"/routes/"+route.FormattedID())
+}
+
 func (s *S) TestUpdateRoute(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "update-route"})
 	route0 := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "foo"}).ToRoute())

@@ -93,6 +93,8 @@ func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req 
 		respondWithError(w, err)
 		return
 	}
+	// HTTP 200 with an empty body (same as DeleteApp / DeleteRoute).
+	w.WriteHeader(200)
 }
 
 var runJobAttempts = attempt.Strategy{
