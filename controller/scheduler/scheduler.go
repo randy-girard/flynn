@@ -1154,8 +1154,10 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 
 // shouldDeferVolumeAllocation reports whether placing this job would create a
 // second persistent volume while a singleton sirenia peer still holds the
-// existing dataset. HA formations (count > 1) still get new volumes for extra
-// replicas; non-sirenia jobs keep the historical allocate-new behavior.
+// existing dataset. HA rolling deploys increment the new release from 0 to 1
+// while old peers still hold their volumes, so a formation count of 1 is not
+// a singleton signal; only SINGLETON=true defers allocation. Non-sirenia jobs
+// keep the historical allocate-new behavior.
 func (s *Scheduler) shouldDeferVolumeAllocation(job *Job, volReq *ct.VolumeReq) bool {
 	if volReq.DeleteOnStop {
 		return false
@@ -1163,7 +1165,7 @@ func (s *Scheduler) shouldDeferVolumeAllocation(job *Job, volReq *ct.VolumeReq) 
 	if s.findVolume(job, volReq) != nil {
 		return false
 	}
-	if job.Formation == nil || job.Formation.Release == nil || !job.Formation.Release.IsSirenia() {
+	if job.Formation == nil || job.Formation.Release == nil || !job.Formation.Release.IsSireniaSingleton() {
 		return false
 	}
 	if job.Formation.OriginalProcesses[job.Type] > 1 {

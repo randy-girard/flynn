@@ -1473,7 +1473,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 			// leader.postgres.discoverd NXDOMAIN immediately after postgres
 			// rollout) settle within a few retries. Scale timeouts after a
 			// rolling host restart are retried for the same reason.
-			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
+			maxUnsettled := updaterdeploy.MaxTransientDeployAttempts(deployErr)
 			if updaterdeploy.ShouldRetryTransientSystemDeploy(deployErr) && attempt < maxUnsettled {
 				appLog.Warn("deploy not settled, retrying",
 					"err", deployErr, "attempt", attempt, "max_attempts", maxUnsettled)
@@ -1571,7 +1571,7 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images
 		return err
 	}
 	if !app.System() && release.IsGitDeploy() {
-		if artifact.Meta["flynn.component"] != "slugrunner" {
+		if !artifact.IsSlugrunner() {
 			return errDeploySkipped{"app not using slugrunner image"}
 		}
 	}

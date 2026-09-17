@@ -271,22 +271,43 @@ loop:
 			return nil, err
 		}
 		log.Info("waiting for new instance to come up")
+		var exclude []string
+		if newPrimary != nil {
+			exclude = append(exclude, newPrimary.ID)
+		}
+		if newSync != nil {
+			exclude = append(exclude, newSync.ID)
+		}
 		var inst *discoverd.Instance
 		timeout := time.After(d.timeout)
+		poll := time.NewTicker(2 * time.Second)
+		defer poll.Stop()
 	loop:
 		for {
+			if found := lookupSireniaPeer(svc, d.NewReleaseID, processType, exclude...); found != nil {
+				inst = found
+				break loop
+			}
 			select {
 			case event, ok := <-events:
 				if !ok {
 					return nil, loggedErr("service event stream closed unexpectedly: %s", stream.Err())
 				}
 				if event.Kind == discoverd.EventKindUp &&
-					event.Instance.Meta != nil &&
-					event.Instance.Meta["FLYNN_RELEASE_ID"] == d.NewReleaseID &&
-					event.Instance.Meta["FLYNN_PROCESS_TYPE"] == processType {
-					inst = event.Instance
-					break loop
+					sireniaPeerMatchesRelease(event.Instance, d.NewReleaseID, processType) {
+					skip := false
+					for _, id := range exclude {
+						if event.Instance.ID == id {
+							skip = true
+							break
+						}
+					}
+					if !skip {
+						inst = event.Instance
+						break loop
+					}
 				}
+			case <-poll.C:
 			case <-timeout:
 				return nil, loggedErr("timed out waiting for new instance to come up")
 			}
@@ -448,8 +469,9 @@ func (d *DeployJob) deploySireniaSingleton(processType string, log log15.Logger)
 		return fmt.Errorf("sirenia process type %q has no discoverd service", processType)
 	}
 
+	svc := discoverd.NewService(proc.Service)
 	events := make(chan *discoverd.Event)
-	stream, err := discoverd.NewService(proc.Service).Watch(events)
+	stream, err := svc.Watch(events)
 	if err != nil {
 		log.Error("error creating service discovery watcher", "service", proc.Service, "err", err)
 		return err
@@ -505,9 +527,28 @@ waitCurrent:
 
 	// wait for the new peer to register in discoverd, which happens once
 	// the new job is started by the scheduler and the sirenia process
-	// reaches its running state on the adopted volume
+	// reaches its running state on the adopted volume. Poll discoverd in
+	// case the Up event was already consumed (or missed) after PutFormation.
 	timeout = time.After(d.timeout)
+	poll := time.NewTicker(2 * time.Second)
+	defer poll.Stop()
 	for {
+		if inst := lookupSireniaPeer(svc, d.NewReleaseID, processType); inst != nil {
+			log.Info("new sirenia peer registered", "addr", inst.Addr)
+			d.deployEvents <- ct.DeploymentEvent{
+				ReleaseID: d.NewReleaseID,
+				JobState:  ct.JobStateUp,
+				JobType:   processType,
+			}
+			log.Info("waiting for new sirenia peer to accept writes", "addr", inst.Addr)
+			if err := sireniaclient.NewClient(inst.Addr).WaitForReadWrite(syncTimeout); err != nil {
+				return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
+			}
+			// proceed with non-sirenia process types now that
+			// postgres is back up and the controller can again
+			// persist scale state
+			return d.deployOneByOne()
+		}
 		select {
 		case <-d.stop:
 			return worker.ErrStopped
@@ -515,37 +556,15 @@ waitCurrent:
 			if !ok {
 				return fmt.Errorf("service event stream closed unexpectedly: %s", stream.Err())
 			}
-			if event.Instance == nil || event.Instance.Meta == nil {
-				continue
-			}
 			if event.Kind == discoverd.EventKindDown &&
-				event.Instance.Meta["FLYNN_RELEASE_ID"] == d.OldReleaseID &&
-				event.Instance.Meta["FLYNN_PROCESS_TYPE"] == processType {
+				sireniaPeerMatchesRelease(event.Instance, d.OldReleaseID, processType) {
 				d.deployEvents <- ct.DeploymentEvent{
 					ReleaseID: d.OldReleaseID,
 					JobState:  ct.JobStateDown,
 					JobType:   processType,
 				}
-				continue
 			}
-			if event.Kind == discoverd.EventKindUp &&
-				event.Instance.Meta["FLYNN_RELEASE_ID"] == d.NewReleaseID &&
-				event.Instance.Meta["FLYNN_PROCESS_TYPE"] == processType {
-				log.Info("new sirenia peer registered", "addr", event.Instance.Addr)
-				d.deployEvents <- ct.DeploymentEvent{
-					ReleaseID: d.NewReleaseID,
-					JobState:  ct.JobStateUp,
-					JobType:   processType,
-				}
-				log.Info("waiting for new sirenia peer to accept writes", "addr", event.Instance.Addr)
-				if err := sireniaclient.NewClient(event.Instance.Addr).WaitForReadWrite(syncTimeout); err != nil {
-					return fmt.Errorf("new sirenia peer did not become read-write: %s", err)
-				}
-				// proceed with non-sirenia process types now that
-				// postgres is back up and the controller can again
-				// persist scale state
-				return d.deployOneByOne()
-			}
+		case <-poll.C:
 		case <-timeout:
 			return errors.New("timed out waiting for new sirenia peer to come up")
 		}

@@ -179,7 +179,15 @@ func (r *Release) IsSlugDeploy() bool {
 // that the sirenia deployment strategy uses to identify the database process
 // type.
 func (r *Release) IsSirenia() bool {
-	return r.Env["SIRENIA_PROCESS"] != ""
+	return r != nil && r.Env["SIRENIA_PROCESS"] != ""
+}
+
+// IsSireniaSingleton reports whether a sirenia-managed database is running as
+// a single peer. HA rolling deploys increment the new release formation from
+// 0 to 1 while old peers still hold their volumes, so a formation count of 1
+// is not sufficient to treat a job as singleton.
+func (r *Release) IsSireniaSingleton() bool {
+	return r.IsSirenia() && r.Env["SINGLETON"] == "true"
 }
 
 type ProcessType struct {
@@ -298,6 +306,17 @@ func (a *Artifact) LayerURL(layer *ImageLayer) string {
 
 func (a *Artifact) Blobstore() bool {
 	return a.Meta["blobstore"] == "true"
+}
+
+// IsSlugrunner reports whether the artifact is a slugrunner stack image.
+// Builder records flynn.component as the image id (slugrunner-24), while
+// some older releases used the alias "slugrunner".
+func (a *Artifact) IsSlugrunner() bool {
+	if a == nil || a.Meta == nil {
+		return false
+	}
+	c := a.Meta["flynn.component"]
+	return c == "slugrunner" || strings.HasPrefix(c, "slugrunner-")
 }
 
 type Formation struct {

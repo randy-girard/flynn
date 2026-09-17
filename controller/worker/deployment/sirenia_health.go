@@ -12,6 +12,41 @@ import (
 	"github.com/inconshreveable/log15"
 )
 
+func sireniaPeerMatchesRelease(inst *discoverd.Instance, releaseID, processType string) bool {
+	if inst == nil || inst.Meta == nil {
+		return false
+	}
+	return inst.Meta["FLYNN_RELEASE_ID"] == releaseID &&
+		inst.Meta["FLYNN_PROCESS_TYPE"] == processType
+}
+
+func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processType string, excludeIDs ...string) *discoverd.Instance {
+	skip := make(map[string]struct{}, len(excludeIDs))
+	for _, id := range excludeIDs {
+		if id != "" {
+			skip[id] = struct{}{}
+		}
+	}
+	for _, inst := range insts {
+		if !sireniaPeerMatchesRelease(inst, releaseID, processType) {
+			continue
+		}
+		if _, seen := skip[inst.ID]; seen {
+			continue
+		}
+		return inst
+	}
+	return nil
+}
+
+func lookupSireniaPeer(svc discoverd.Service, releaseID, processType string, excludeIDs ...string) *discoverd.Instance {
+	insts, err := discoverd.InstancesOrEmpty(svc)
+	if err != nil {
+		return nil
+	}
+	return findSireniaPeerByRelease(insts, releaseID, processType, excludeIDs...)
+}
+
 // sireniaClusterDeployReady reports whether an HA sirenia cluster has the
 // expected async peer count and is safe to start a rolling deploy. Clusters
 // with deposed peers but no asyncs may become ready once the primary

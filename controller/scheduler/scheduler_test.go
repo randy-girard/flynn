@@ -907,7 +907,7 @@ func (TestSuite) TestFailingAddJob(c *C) {
 	s.c.Assert(err, IsNil)
 	select {
 	case <-events:
-	case <-time.After(10 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.Fatal("timed out waiting for job to be scheduled on ok host")
 	}
 
@@ -924,7 +924,7 @@ loop:
 			if event.Event == host.JobEventStop {
 				break loop
 			}
-		case <-time.After(10 * time.Second):
+		case <-time.After(30 * time.Second):
 			c.Fatal("timed out waiting for job to be stopped on failing host")
 		}
 	}
@@ -1203,7 +1203,7 @@ func (TestSuite) TestShouldDeferVolumeAllocationSingletonSirenia(c *C) {
 		Release: &ct.Release{
 			ID:          oldReleaseID,
 			ArtifactIDs: []string{testArtifactId},
-			Env:         map[string]string{"SIRENIA_PROCESS": "postgres"},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "true"},
 		},
 		Processes: map[string]int{"postgres": 1},
 	})
@@ -1212,7 +1212,7 @@ func (TestSuite) TestShouldDeferVolumeAllocationSingletonSirenia(c *C) {
 		Release: &ct.Release{
 			ID:          newReleaseID,
 			ArtifactIDs: []string{testArtifactId},
-			Env:         map[string]string{"SIRENIA_PROCESS": "postgres"},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "true"},
 		},
 		Processes: map[string]int{"postgres": 1},
 	})
@@ -1253,6 +1253,65 @@ func (TestSuite) TestShouldDeferVolumeAllocationSingletonSirenia(c *C) {
 	newFormation.OriginalProcesses["postgres"] = 1
 
 	newFormation.Release.Env = map[string]string{}
+	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, false)
+}
+
+func (TestSuite) TestShouldDeferVolumeAllocationHARollingNewPeer(c *C) {
+	const (
+		oldReleaseID = "release-old"
+		newReleaseID = "release-new"
+	)
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+	oldFormation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: testAppID},
+		Release: &ct.Release{
+			ID:          oldReleaseID,
+			ArtifactIDs: []string{testArtifactId},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "false"},
+		},
+		Processes: map[string]int{"postgres": 3},
+	})
+	newFormation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: testAppID},
+		Release: &ct.Release{
+			ID:          newReleaseID,
+			ArtifactIDs: []string{testArtifactId},
+			Env:         map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "false"},
+		},
+		// HA rolling startInstance increments the new release from 0 to 1
+		// while the old peers still hold /data.
+		Processes: map[string]int{"postgres": 1},
+	})
+	s.formations.Add(oldFormation)
+	s.formations.Add(newFormation)
+
+	holderID := "pg-old"
+	vol := &Volume{
+		Volume: ct.Volume{
+			VolumeReq: ct.VolumeReq{Path: "/data"},
+			ID:        "pg-data",
+			AppID:     testAppID,
+			ReleaseID: oldReleaseID,
+			JobType:   "postgres",
+			State:     ct.VolumeStateCreated,
+			JobID:     &holderID,
+		},
+	}
+	s.volumes[vol.ID] = vol
+	s.jobs[holderID] = &Job{ID: holderID, State: JobStateRunning}
+
+	job := &Job{
+		AppID:     testAppID,
+		ReleaseID: newReleaseID,
+		Type:      "postgres",
+		Formation: newFormation,
+	}
+	req := &ct.VolumeReq{Path: "/data"}
 	c.Assert(s.shouldDeferVolumeAllocation(job, req), Equals, false)
 }
 

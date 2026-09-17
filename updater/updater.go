@@ -220,7 +220,7 @@ func run() error {
 				deployErr = nil
 				break
 			}
-			maxUnsettled := updaterdeploy.MaxTransientDeployUnsettledAttempts()
+			maxUnsettled := updaterdeploy.MaxTransientDeployAttempts(deployErr)
 			if updaterdeploy.ShouldRetryTransientSystemDeploy(deployErr) && attempt < maxUnsettled {
 				log.Warn("discovery or sirenia cluster not settled, retrying deploy",
 					"app", appInfo.Name, "err", deployErr, "attempt", attempt,
@@ -314,7 +314,7 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		return err
 	}
 	if !app.System() && release.IsGitDeploy() {
-		if artifact.Meta["flynn.component"] != "slugrunner" {
+		if !artifact.IsSlugrunner() {
 			return errDeploySkipped{"app not using slugrunner image"}
 		}
 	}

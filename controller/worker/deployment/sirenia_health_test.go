@@ -44,3 +44,44 @@ func TestSireniaClusterDeployReady(t *testing.T) {
 		t.Fatal("expected singleton cluster to be deploy-ready")
 	}
 }
+
+func TestFindSireniaPeerByRelease(t *testing.T) {
+	old := &discoverd.Instance{
+		ID: "old",
+		Meta: map[string]string{
+			"FLYNN_RELEASE_ID":   "rel-old",
+			"FLYNN_PROCESS_TYPE": "postgres",
+		},
+	}
+	first := &discoverd.Instance{
+		ID: "new-1",
+		Meta: map[string]string{
+			"FLYNN_RELEASE_ID":   "rel-new",
+			"FLYNN_PROCESS_TYPE": "postgres",
+		},
+	}
+	second := &discoverd.Instance{
+		ID: "new-2",
+		Meta: map[string]string{
+			"FLYNN_RELEASE_ID":   "rel-new",
+			"FLYNN_PROCESS_TYPE": "postgres",
+		},
+	}
+	insts := []*discoverd.Instance{old, first, second}
+
+	got := findSireniaPeerByRelease(insts, "rel-new", "postgres")
+	if got != first {
+		t.Fatalf("want first new peer, got %#v", got)
+	}
+	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", first.ID)
+	if got != second {
+		t.Fatalf("want second new peer after excluding first, got %#v", got)
+	}
+	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", first.ID, second.ID)
+	if got != nil {
+		t.Fatalf("want nil when all new peers excluded, got %#v", got)
+	}
+	if sireniaPeerMatchesRelease(nil, "rel-new", "postgres") {
+		t.Fatal("nil instance must not match")
+	}
+}

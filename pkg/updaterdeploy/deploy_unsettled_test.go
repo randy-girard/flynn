@@ -15,6 +15,8 @@ func TestShouldRetryAfterScaleTimeout(t *testing.T) {
 		{nil, false},
 		{fmt.Errorf("timed out waiting for scale to complete (waited 120 seconds)"), true},
 		{errors.New("Timed Out Waiting For Scale To Complete"), true},
+		{errors.New("timed out waiting for new instance to come up"), true},
+		{errors.New("timed out waiting for new sirenia peer to come up"), true},
 		{errors.New("deploy failed: timeout"), false},
 	}
 	for _, tc := range cases {
@@ -81,5 +83,23 @@ func TestTransientDeployRetryBudget(t *testing.T) {
 	}
 	if TransientDeployRetryDelay() < 5*time.Second {
 		t.Fatalf("retry delay %s is too short", TransientDeployRetryDelay())
+	}
+	instanceWait := errors.New("timed out waiting for new instance to come up")
+	if !ShouldRetryTransientSystemDeploy(instanceWait) {
+		t.Fatal("HA sirenia new-instance timeout must retry")
+	}
+	if got := MaxTransientDeployAttempts(instanceWait); got != MaxScaleTimeoutDeployAttempts() {
+		t.Fatalf("new-instance timeout attempts=%d want %d", got, MaxScaleTimeoutDeployAttempts())
+	}
+	peerWait := errors.New("timed out waiting for new sirenia peer to come up")
+	if got := MaxTransientDeployAttempts(peerWait); got != MaxScaleTimeoutDeployAttempts() {
+		t.Fatalf("singleton sirenia peer timeout attempts=%d want %d", got, MaxScaleTimeoutDeployAttempts())
+	}
+	if MaxScaleTimeoutDeployAttempts() < 2 || MaxScaleTimeoutDeployAttempts() > 5 {
+		t.Fatalf("scale-timeout retry budget %d should be a few attempts", MaxScaleTimeoutDeployAttempts())
+	}
+	nxdomain := errors.New("dial tcp: lookup leader.postgres.discoverd: no such host")
+	if got := MaxTransientDeployAttempts(nxdomain); got != MaxTransientDeployUnsettledAttempts() {
+		t.Fatalf("discoverd settle attempts=%d want %d", got, MaxTransientDeployUnsettledAttempts())
 	}
 }

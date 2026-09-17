@@ -7,6 +7,7 @@ import (
 
 const (
 	maxTransientDeployUnsettledAttempts = 24
+	maxScaleTimeoutDeployAttempts       = 3
 	transientDeployRetryDelay           = 10 * time.Second
 )
 
@@ -75,19 +76,47 @@ func ShouldRetryTransientSystemDeploy(err error) bool {
 }
 
 // ShouldRetryAfterScaleTimeout returns whether a deploy failed because the
-// controller's scale step did not finish before the app's deploy timeout.
-// This is common after a cluster-wide host restart when the scheduler is
-// still placing jobs.
+// controller's scale step or a sirenia startInstance wait did not finish
+// before the app's deploy timeout. This is common after a cluster-wide host
+// restart when the scheduler is still placing jobs. The HA sirenia wait
+// error is "timed out waiting for new instance to come up" (no "sirenia"
+// substring), so it is not covered by ShouldRetryAfterUnsettledDiscoverdLeader.
 func ShouldRetryAfterScaleTimeout(err error) bool {
 	if err == nil {
 		return false
 	}
-	return strings.Contains(strings.ToLower(err.Error()), "timed out waiting for scale to complete")
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "timed out waiting for scale to complete"):
+		return true
+	case strings.Contains(msg, "timed out waiting for new instance to come up"):
+		return true
+	case strings.Contains(msg, "timed out waiting for new sirenia peer to come up"):
+		return true
+	default:
+		return false
+	}
 }
 
 // MaxTransientDeployUnsettledAttempts is the retry budget for DeployAppRelease
 // when ShouldRetryAfterUnsettledDiscoverdLeader matches.
 func MaxTransientDeployUnsettledAttempts() int { return maxTransientDeployUnsettledAttempts }
+
+// MaxScaleTimeoutDeployAttempts is the retry budget for long deploy timeouts
+// (scale complete / new instance). Each attempt can take the full app deploy
+// timeout (up to 10 minutes for system apps), so this stays small.
+func MaxScaleTimeoutDeployAttempts() int { return maxScaleTimeoutDeployAttempts }
+
+// MaxTransientDeployAttempts returns the retry budget for a given transient
+// deploy error. Long scale/instance waits use MaxScaleTimeoutDeployAttempts
+// because each attempt can take the full app deploy timeout. Fast-failing
+// discoverd/controller errors keep the larger settle budget.
+func MaxTransientDeployAttempts(err error) int {
+	if ShouldRetryAfterScaleTimeout(err) {
+		return maxScaleTimeoutDeployAttempts
+	}
+	return maxTransientDeployUnsettledAttempts
+}
 
 // TransientDeployRetryDelay is the sleep between those retries.
 func TransientDeployRetryDelay() time.Duration { return transientDeployRetryDelay }

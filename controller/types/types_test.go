@@ -144,3 +144,36 @@ func TestReleaseDeployKind(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSireniaSingleton(t *testing.T) {
+	if (*Release)(nil).IsSireniaSingleton() {
+		t.Fatal("nil release must not be a sirenia singleton")
+	}
+	ha := &Release{Env: map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "false"}}
+	if ha.IsSireniaSingleton() {
+		t.Fatal("HA postgres (SINGLETON=false) must not defer as singleton")
+	}
+	unset := &Release{Env: map[string]string{"SIRENIA_PROCESS": "postgres"}}
+	if unset.IsSireniaSingleton() {
+		t.Fatal("sirenia without SINGLETON=true must not be treated as singleton")
+	}
+	one := &Release{Env: map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "true"}}
+	if !one.IsSirenia() || !one.IsSireniaSingleton() {
+		t.Fatal("SINGLETON=true postgres must be a sirenia singleton")
+	}
+}
+
+func TestArtifactIsSlugrunner(t *testing.T) {
+	if (*Artifact)(nil).IsSlugrunner() {
+		t.Fatal("nil artifact must not be slugrunner")
+	}
+	if (&Artifact{Meta: map[string]string{"flynn.component": "slugbuilder-24"}}).IsSlugrunner() {
+		t.Fatal("slugbuilder must not count as slugrunner")
+	}
+	if !(&Artifact{Meta: map[string]string{"flynn.component": "slugrunner"}}).IsSlugrunner() {
+		t.Fatal("legacy slugrunner alias must match")
+	}
+	if !(&Artifact{Meta: map[string]string{"flynn.component": "slugrunner-24"}}).IsSlugrunner() {
+		t.Fatal("heroku-24 slugrunner-24 must be updated on flynn-host update")
+	}
+}
