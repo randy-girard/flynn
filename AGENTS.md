@@ -32,7 +32,7 @@ Format: `<type>(<scope>): <summary>`
 - **scope** is the subsystem (`cli`, `controller`, `host`, `router`, `discoverd`, `plugin`, …). Omit scope only for repo-wide docs or chore
 - **summary** is imperative, lowercase, and says why the change matters
 - Keep subjects ≤ 72 characters; add a body when the why is not obvious
-- Sign off every commit (`git commit -s`) for the DCO
+- Use regular `git commit` only. Do **not** use DCO sign-off (`git commit -s`, `Signed-off-by`)
 - Split unrelated work into separate commits
 
 Examples: `feat(cli): load plugin commands from cluster catalog`, `fix(host): ignore missing volumes on destroy`, `test(router): cover ACME HTTP-01 challenge serving`
