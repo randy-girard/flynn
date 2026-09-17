@@ -28,7 +28,9 @@
 #      remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
 #      keep working), and discovery (singleton, install the discovery
 #      plugin, switch node1 to that token, join node2+node3 via the local
-#      discovery HTTP API, then deploy). Vagrant nodes are generated as
+#      discovery HTTP API, wait for sirenia HA, then deploy). After upgrades
+#      the discovery topology also takes a cluster backup and restores it
+#      onto the three hosts. Vagrant nodes are generated as
 #      node1..max(N) — e.g. 1,3,5 or 1,3,7; add reserves node4;
 #      discovery reserves node2 and node3.
 #   5. Print a step table, unit-test results, and a per-engine persistence
@@ -205,6 +207,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/httphelper/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
+  ./pkg/sirenia/ha/
   ./pkg/iptables/
   ./pkg/netpolicy/
   ./pkg/squashfs/
@@ -1443,6 +1446,56 @@ wait_datastores_ready() {
         ;;
     esac
   done
+}
+
+# discoverd GET /services/:name/instances is a JSON array of peers.
+sirenia_peer_count() {
+  local svc=$1
+  node_root_script node1 <<EOF
+python3 -c '
+import json, urllib.request, sys
+url = "http://127.0.0.1:1111/services/${svc}/instances"
+try:
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        data = json.load(resp)
+except Exception:
+    print(0)
+    sys.exit(0)
+print(len(data) if isinstance(data, list) else 0)
+'
+EOF
+}
+
+sirenia_is_ha() {
+  local svc=$1
+  local n
+  n="$(sirenia_peer_count "${svc}" | tr -d '[:space:]')"
+  [[ "${n}" =~ ^[0-9]+$ ]] && [[ "${n}" -ge 3 ]]
+}
+
+wait_sirenia_ha() {
+  local suffix=$1
+  shift
+  local svc
+  if [[ $# -eq 0 ]]; then
+    echo "wait_sirenia_ha: no services given" >&2
+    return 1
+  fi
+  for svc in "$@"; do
+    wait_for "${svc} HA (3 peers) ${suffix}" 900 sirenia_is_ha "${svc}" || return 1
+  done
+}
+
+wait_sirenia_ha_if_cluster() {
+  local suffix=$1
+  shift
+  if [[ "${#NODES[@]}" -lt 3 ]]; then
+    return 0
+  fi
+  if [[ $# -eq 0 ]]; then
+    set -- postgres mariadb mongodb
+  fi
+  wait_sirenia_ha "${suffix}" "$@"
 }
 
 ensure_flynn_cli_on_node1() {
@@ -2792,6 +2845,10 @@ EOF
     dump_overlay_diagnostics
     return 1
   fi
+  if ! wait_sirenia_ha_if_cluster "after restore" postgres mariadb mongodb; then
+    dump_overlay_diagnostics
+    return 1
+  fi
   echo "restored ${CLUSTER_DOMAIN} from ${restore_path} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
 }
 
@@ -3789,6 +3846,7 @@ step_verify_before() {
   assert_docker_http pre-upgrade
   assert_docker_ps pre-upgrade
   assert_databases pre-upgrade
+  wait_sirenia_ha_if_cluster "before upgrade" postgres mariadb mongodb || return 1
 }
 
 step_upgrade() {
@@ -4060,7 +4118,8 @@ if len(inst) < 3:
 print("discovery instances=%d" % len(inst))
 PY
 EOF
-  echo "discovery join verified: 3 hosts in flynn-host list and discovery API"
+  wait_sirenia_ha "after discovery join" postgres || return 1
+  echo "discovery join verified: 3 hosts in flynn-host list, discovery API, postgres HA"
 }
 
 # Join node4 to a running 3-node cluster (documented flynn-host init --peer-ips).
@@ -4686,16 +4745,6 @@ run_one_topology() {
     record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
-  elif [[ "${TOPOLOGY_ACTION}" == "discovery" ]]; then
-    # Singleton appliances plus later joins leave sirenia without a 3-node
-    # leader on --from-backup (mongodb-wait: no leader found). 1-node and
-    # 3-node topologies already cover backup/restore.
-    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
-    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
-    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
-    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
-    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
-    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
   else
     if [[ "${RESUME_AT}" == "restore" ]]; then
       record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=restore"

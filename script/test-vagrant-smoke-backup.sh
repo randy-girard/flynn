@@ -80,6 +80,13 @@ need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
+need 'wait_sirenia_ha_if_cluster "after restore"' \
+  "HA restore (including discovery 1→3) must wait for sirenia replica sets after --from-backup"
+
+if grep -q 'discovery grows a singleton' "${smoke}"; then
+  echo "discovery topology must run backup/restore, not skip it" >&2
+  exit 1
+fi
 
 if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not flynn-host plugin install; postgres backup already has plugin apps and artifacts" >&2

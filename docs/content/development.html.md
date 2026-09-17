@@ -269,7 +269,9 @@ Default flow:
    Size `2` is invalid. Named topologies: `add` (join `node4` then upgrade),
    `remove` (drain `node3` while HTTP and DBs keep working), and `discovery`
    (singleton, install the discovery plugin, join `node2`+`node3` via the
-   in-cluster discovery API).
+   in-cluster discovery API, wait for postgres/MariaDB/MongoDB to promote to
+   HA, then deploy). After upgrades, every topology including `discovery`
+   takes a cluster backup and restores with `--from-backup`.
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`

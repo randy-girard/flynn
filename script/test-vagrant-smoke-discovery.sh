@@ -42,8 +42,12 @@ need "${smoke}" 'remember_teardown_node node3' \
   "discovery topology must record node3 for teardown in the parent shell"
 need "${smoke}" 'resume/plugins already installed' \
   "backup/restore resume and SKIP_PLUGIN_INSTALL must not re-join node2/node3"
-need "${smoke}" 'discovery grows a singleton' \
-  "discovery topology must skip --from-backup; 1-node/3-node already restore"
+need "${smoke}" 'wait_sirenia_ha' \
+  "discovery join must wait for postgres HA after growing 1→3 hosts"
+need "${smoke}" 'after discovery join' \
+  "smoke must wait for postgres HA immediately after discovery join"
+need "${smoke}" 'wait_sirenia_ha_if_cluster "after restore"' \
+  "discovery --from-backup must wait for sirenia HA after restore"
 need "${smoke}" 'append_live_node node2' \
   "parent shell must keep node2 in NODES after discovery join"
 need "${smoke}" 'append_live_node node3' \
@@ -74,6 +78,11 @@ fi
 if grep -qE 'Name[[:space:]]*==[[:space:]]*"discovery"|name[[:space:]]*==[[:space:]]*"discovery"' \
   "${ROOT}/pkg/plugin/install.go" "${ROOT}/pkg/plugin/manifest.go"; then
   echo "Flynn core must not special-case discovery by name" >&2
+  exit 1
+fi
+
+if grep -q 'discovery grows a singleton' "${smoke}"; then
+  echo "discovery topology must run --from-backup, not skip it" >&2
   exit 1
 fi
 
