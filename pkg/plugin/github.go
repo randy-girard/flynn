@@ -129,7 +129,11 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 		return "", fmt.Errorf("GitHub release %s/%s@%s image.json: %w", src.Owner, src.Repo, rel.TagName, err)
 	}
 
-	for _, layer := range layers(art) {
+	ls := layers(art)
+	for i, layer := range ls {
+		if layer == nil || layer.ID == "" {
+			return "", fmt.Errorf("image.json layer %d missing id", i)
+		}
 		name := layer.ID + ".squashfs"
 		dest := filepath.Join(root, DistDir, name)
 		if a := rel.asset(name); a != nil {
@@ -137,6 +141,17 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 				return "", fmt.Errorf("layer %s: %w", layer.ID, err)
 			}
 			continue
+		}
+		// Flynn ubuntu-noble is already on the Flynn GitHub Release (same
+		// layer id). Plugin jobs only publish the overlay delta so N plugins
+		// do not re-upload ~200MiB in parallel (uploads.github.com 5xx).
+		if i < len(ls)-1 {
+			if u := flynnBaseLayerURL(art, name); u != "" {
+				if err := in.downloadURL(token, u, dest); err != nil {
+					return "", fmt.Errorf("layer %s from Flynn %s: %w", layer.ID, art.Meta["flynn.plugin.base"], err)
+				}
+				continue
+			}
 		}
 		if u := art.LayerURL(layer); u != "" {
 			if err := in.downloadURL(token, u, dest); err != nil {
@@ -356,4 +371,42 @@ func sanitizeURL(raw string) string {
 		return strings.SplitN(raw, "://", 2)[0] + "://***"
 	}
 	return raw
+}
+
+// githubBrowserDownloadURL builds a public GitHub Releases download URL.
+// Tests replace this to point at httptest.
+var githubBrowserDownloadURL = func(repo, tag, name string) string {
+	return fmt.Sprintf("https://github.com/%s/releases/download/%s/%s", repo, tag, name)
+}
+
+// parsePluginBase reads artifact meta flynn.plugin.base ("owner/repo@version").
+func parsePluginBase(meta map[string]string) (repo, version string, ok bool) {
+	if meta == nil {
+		return "", "", false
+	}
+	raw := strings.TrimSpace(meta["flynn.plugin.base"])
+	i := strings.LastIndex(raw, "@")
+	if i <= 0 || i >= len(raw)-1 {
+		return "", "", false
+	}
+	repo = strings.TrimSpace(raw[:i])
+	version = strings.TrimSpace(raw[i+1:])
+	if repo == "" || version == "" || version == "latest" {
+		return "", "", false
+	}
+	if strings.Count(repo, "/") != 1 {
+		return "", "", false
+	}
+	return repo, version, true
+}
+
+func flynnBaseLayerURL(art *ct.Artifact, name string) string {
+	if art == nil || name == "" {
+		return ""
+	}
+	repo, version, ok := parsePluginBase(art.Meta)
+	if !ok {
+		return ""
+	}
+	return githubBrowserDownloadURL(repo, version, name)
 }

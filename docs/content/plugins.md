@@ -201,10 +201,14 @@ A string value still works (`"redis": "/opt/flynn-plugins/flynn-plugin-redis"`
 or a git URL). `repo` may be `owner/name` when the GitHub repo does not match
 `flynn-plugin-<alias>`.
 
-The release must include `flynn-plugin.json`, `image.json`, `{id}.squashfs`,
-and any **`hooks.install` / `hooks.upgrade` / `hooks.uninstall`** scripts
-declared in the manifest (flat names such as `script-install.sh`). plugin-build
-copies those scripts into `dist/` so **Build and Release** uploads them. Flynn
+The release must include `flynn-plugin.json`, `image.json`, the plugin **delta**
+squashfs, and any **`hooks.install` / `hooks.upgrade` / `hooks.uninstall`**
+scripts declared in the manifest (flat names such as `script-install.sh`).
+plugin-build copies those scripts into `dist/` so **Build and Release** uploads
+them. Flynn ubuntu-noble is **not** re-uploaded from each plugin (the same
+~200MiB file from every plugin job 502s `uploads.github.com`). Hosts fetch that
+OS layer from the Flynn GitHub Release named in artifact meta
+`flynn.plugin.base` (`owner/repo@version`, same layer id as Flynn). Flynn
 reconstructs the repo-relative path (`script/install.sh`) when it unpacks the
 release, then runs the hook. Uploads of the squashfs layers go into the cluster
 blobstore so other hosts never talk to GitHub.
@@ -224,7 +228,8 @@ Each plugin is built with `version` and `flynn_version` set to the Flynn tag
 so the overlay uses that ubuntu-noble layer. Re-run **Dispatch plugin
 releases** from Actions if a plugin job was skipped or failed, or leave
 **dispatch_plugins** unchecked and run that workflow later. A plugin tag
-that already exists is skipped.
+that is already **published** with a squashfs asset is skipped; drafts and
+failed uploads are dispatched again so the plugin job can resume.
 
 Private repos and **draft** releases need a token (Contents: Read):
 

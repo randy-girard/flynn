@@ -21,6 +21,13 @@ if [[ "$1" == "release" && "$2" == "view" ]]; then
     shift
   done
   if [[ -n "${GH_EXISTING:-}" && -f "${GH_EXISTING}/${repo}/${version}" ]]; then
+    if [[ " $* " == *" --jq "* ]]; then
+      if grep -q draft "${GH_EXISTING}/${repo}/${version}"; then
+        echo false
+      else
+        echo true
+      fi
+    fi
     exit 0
   fi
   exit 1
@@ -68,17 +75,26 @@ EOF
   grep -q 'prerelease=true' "${LOG}"
 }
 
-@test "plugin_dispatch_releases skips tags that already exist" {
+@test "plugin_dispatch_releases skips published releases that already exist" {
   mkdir -p "${TMP}/existing/acme/flynn-plugin-cache"
-  touch "${TMP}/existing/acme/flynn-plugin-cache/v20260915.0"
+  echo complete > "${TMP}/existing/acme/flynn-plugin-cache/v20260915.0"
   export GH_EXISTING="${TMP}/existing"
   run plugin_dispatch_releases "v20260915.0" "acme/flynn-plugin-cache" "false" "false"
   assert_success
   if grep -q 'workflow run' "${LOG}"; then
-    echo "existing release must not be dispatched again" >&2
+    echo "existing published release must not be dispatched again" >&2
     cat "${LOG}" >&2
     return 1
   fi
+}
+
+@test "plugin_dispatch_releases retries draft or incomplete plugin releases" {
+  mkdir -p "${TMP}/existing/acme/flynn-plugin-cache"
+  echo draft > "${TMP}/existing/acme/flynn-plugin-cache/v20260915.0"
+  export GH_EXISTING="${TMP}/existing"
+  run plugin_dispatch_releases "v20260915.0" "acme/flynn-plugin-cache" "false" "false"
+  assert_success
+  grep -q 'workflow run release.yml --repo acme/flynn-plugin-cache' "${LOG}"
 }
 
 @test "dispatch-plugin-releases skips when PLUGIN_RELEASE_REPOS is empty" {

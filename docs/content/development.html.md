@@ -276,7 +276,8 @@ Default flow:
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
    `test/apps/upgrade-smoke-docker` on the **container** stack, probe HTTP and
-   rows, exercise `flynn` / `flynn-host`, then `flynn-host update --all-nodes
+   rows, exercise `flynn` / `flynn-host`, create a persistent volume, write a
+   file, read it after a job restart, and delete the volume, then `flynn-host update --all-nodes
    --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
    re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Installed
@@ -314,7 +315,10 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   phases and publishes GitHub Release assets. Version tags look like
   `vYYYYMMDD.N` (UTC date, then `.0`, `.1`, … for that day). Leave **version**
   empty to pick the next unused tag; fill it in only to override. Omits `test`,
-  `test-apps`, and `controller-examples`.
+  `test-apps`, and `controller-examples`. Release files are uploaded one at a
+  time onto a draft (with retries) so the job logs progress and can resume
+  after a cancelled run; the release is published only after every asset is
+  present unless you asked for a draft.
   Check **dispatch_plugins** to queue plugin builds after the Flynn release
   exists (`GITHUB_TOKEN` cannot start other workflows from `release` events).
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
@@ -322,6 +326,9 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   Flynn GitHub Release is **published** from the GitHub UI, or via its own
   `workflow_dispatch`. It queues each plugin repo’s `Build and Release`
   workflow with the same tag and `flynn_version` so ubuntu-noble matches Flynn.
+  Plugin jobs publish only the overlay delta; hosts fetch Flynn ubuntu-noble
+  from the Flynn GitHub Release (`flynn.plugin.base`). A published plugin
+  release is skipped on re-dispatch; drafts and failed uploads are retried.
   Plugin names are not in Flynn source: set Actions variable
   `PLUGIN_RELEASE_REPOS` (`owner/repo` per line) and secret
   `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on those repos).

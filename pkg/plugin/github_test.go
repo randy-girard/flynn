@@ -206,6 +206,141 @@ func TestFetchGitHubRelease(t *testing.T) {
 	}
 }
 
+func TestParsePluginBase(t *testing.T) {
+	cases := []struct {
+		meta       map[string]string
+		repo, vers string
+		ok         bool
+	}{
+		{map[string]string{"flynn.plugin.base": "randy-girard/flynn@v20260917.2"}, "randy-girard/flynn", "v20260917.2", true},
+		{map[string]string{"flynn.plugin.base": " randy-girard/flynn @ v20260917.2 "}, "randy-girard/flynn", "v20260917.2", true},
+		{map[string]string{"flynn.plugin.base": "randy-girard/flynn@latest"}, "", "", false},
+		{map[string]string{"flynn.plugin.base": "flynn@v1"}, "", "", false},
+		{nil, "", "", false},
+		{map[string]string{"flynn.plugin.base": ""}, "", "", false},
+	}
+	for _, c := range cases {
+		repo, vers, ok := parsePluginBase(c.meta)
+		if ok != c.ok || repo != c.repo || vers != c.vers {
+			t.Fatalf("%v: got %q %q %v", c.meta, repo, vers, ok)
+		}
+	}
+}
+
+func TestFetchGitHubOSLayerFromFlynnRelease(t *testing.T) {
+	osID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	deltaID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	manifest := &ct.ImageManifest{
+		Type: ct.ImageManifestTypeV1,
+		Rootfs: []*ct.ImageRootfs{{
+			Layers: []*ct.ImageLayer{
+				{
+					ID:     osID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 199 << 20,
+					Hashes: map[string]string{"sha512_256": osID},
+				},
+				{
+					ID:     deltaID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 34 << 20,
+					Hashes: map[string]string{"sha512_256": deltaID},
+				},
+			},
+		}},
+	}
+	raw := manifest.RawManifest()
+	image := &ct.Artifact{
+		Type:        ct.ArtifactTypeFlynn,
+		RawManifest: raw,
+		Hashes:      map[string]string{"sha512_256": "deadbeef"},
+		Size:        int64(len(raw)),
+		Meta: map[string]string{
+			"flynn.plugin.base": "randy-girard/flynn@v20260917.2",
+		},
+	}
+	imageJSON, _ := json.Marshal(image)
+	pluginJSON := []byte(`{
+  "name": "redis",
+  "kind": "resource-provider",
+  "provider": {"name": "redis", "url": "http://redis-api.discoverd/clusters"},
+  "app": {"name": "redis", "processes": {"web": {"args": ["/bin/start-flynn-redis", "api"]}}},
+  "artifacts": {"image": "https://example.invalid/image.json"}
+}`)
+	osBytes := []byte("flynn-ubuntu-noble")
+	deltaBytes := []byte("plugin-delta")
+	flynnHits := 0
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/randy-girard/flynn-plugin-redis/releases/tags/v20260914.0", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v20260914.0",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+				{Name: ImageJSON, BrowserDownloadURL: srv.URL + "/files/image.json"},
+				{Name: deltaID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + deltaID + ".squashfs"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	mux.HandleFunc("/files/image.json", func(w http.ResponseWriter, r *http.Request) { w.Write(imageJSON) })
+	mux.HandleFunc("/files/"+deltaID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(deltaBytes) })
+	mux.HandleFunc("/flynn/", func(w http.ResponseWriter, r *http.Request) {
+		flynnHits++
+		if !strings.HasSuffix(r.URL.Path, "/"+osID+".squashfs") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(osBytes)
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	orig := githubBrowserDownloadURL
+	defer func() { githubBrowserDownloadURL = orig }()
+	githubBrowserDownloadURL = func(repo, tag, name string) string {
+		if repo != "randy-girard/flynn" || tag != "v20260917.2" {
+			t.Fatalf("flynn url repo=%s tag=%s name=%s", repo, tag, name)
+		}
+		return srv.URL + "/flynn/" + repo + "/" + tag + "/" + name
+	}
+
+	in := &Installer{GitHubHTTP: srv.Client()}
+	dir, err := in.fetchGitHub(&GitHubSource{
+		Host:  "github.com",
+		Owner: "randy-girard",
+		Repo:  "flynn-plugin-redis",
+		Ref:   "v20260914.0",
+		API:   srv.URL,
+	}, filepath.Join(t.TempDir(), "missing-creds.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	if flynnHits != 1 {
+		t.Fatalf("Flynn OS layer downloads=%d", flynnHits)
+	}
+	if !DistReady(dir) {
+		t.Fatal("expected dist/ with Flynn OS layer plus plugin delta")
+	}
+	gotOS, err := os.ReadFile(filepath.Join(dir, DistDir, osID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOS) != string(osBytes) {
+		t.Fatalf("os layer %q", gotOS)
+	}
+	gotDelta, err := os.ReadFile(filepath.Join(dir, DistDir, deltaID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDelta) != string(deltaBytes) {
+		t.Fatalf("delta layer %q", gotDelta)
+	}
+}
+
 func TestHookAssetNames(t *testing.T) {
 	got := HookAssetNames("script/install.sh")
 	if len(got) != 2 || got[0] != "script-install.sh" || got[1] != "install.sh" {

@@ -48,10 +48,16 @@ ${raw}
 EOF
 }
 
-plugin_release_exists() {
+# True when the plugin already has a published GitHub Release with at least one
+# squashfs asset. Drafts and uploads that 5xx'd mid-flight are retried.
+plugin_release_complete() {
   local repo=$1 version=$2
   local gh=${GH:-gh}
-  "${gh}" release view "${version}" --repo "${repo}" >/dev/null 2>&1
+  local ok
+  ok="$("${gh}" release view "${version}" --repo "${repo}" --json isDraft,assets \
+    --jq '(.isDraft|not) and ([.assets[].name | select(endswith(".squashfs"))] | length) > 0' \
+    2>/dev/null)" || return 1
+  [[ "${ok}" == "true" ]]
 }
 
 # Queue each plugin's release.yml with the Flynn tag as version and flynn_version.
@@ -77,8 +83,8 @@ plugin_dispatch_releases() {
 
   while IFS= read -r repo || [[ -n "${repo}" ]]; do
     [[ -z "${repo}" ]] && continue
-    if [[ "${dry_run}" != "true" ]] && plugin_release_exists "${repo}" "${version}"; then
-      echo "skip ${repo}: ${version} already exists"
+    if [[ "${dry_run}" != "true" ]] && plugin_release_complete "${repo}" "${version}"; then
+      echo "skip ${repo}: ${version} already published"
       continue
     fi
     echo "dispatch ${repo} Build and Release version=${version} flynn_version=${version} prerelease=${prerelease}"
