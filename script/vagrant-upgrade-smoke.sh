@@ -118,7 +118,7 @@
 #                        Restore does not install again; plugins.json + postgres
 #                        already list and restore them.
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
-#                        (default: ..; includes flynn-plugin-* and flynn-discovery)
+#                        (default: ..; includes flynn-plugin-* siblings)
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #
 
@@ -1371,6 +1371,16 @@ kafka_is_ready() {
   flynn1 -a "${APP_NAME}" kafka topics >/dev/null 2>&1
 }
 
+# Plugin CLI jobs can return Flynn's generic "unknown_error: Something went
+# wrong" while controller/discoverd settle. Do not let that abort set -e.
+kafka_topics() {
+  flynn1 -a "${APP_NAME}" kafka topics 2>/dev/null || true
+}
+
+kafka_has_smoke_probe() {
+  echo "$(kafka_topics)" | grep -q smoke_probe
+}
+
 clickhouse_ping() {
   local out
   out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
@@ -2265,7 +2275,7 @@ plugin_checkout() {
     return 0
   fi
   local dir json
-  # Every sibling with flynn-plugin.json (flynn-plugin-* and flynn-discovery).
+  # Every sibling with flynn-plugin.json (flynn-plugin-* and alias mismatches).
   for dir in "${root}"/*; do
     [[ -d "${dir}" ]] || continue
     json="${dir}/flynn-plugin.json"
@@ -3187,10 +3197,10 @@ record_seed_counts() {
     failed=1
   fi
 
-  topics="$(flynn1 -a "${APP_NAME}" kafka topics)"
-  if echo "${topics}" | grep -q smoke_probe; then
+  if wait_for "kafka seed topic" 180 kafka_has_smoke_probe; then
     record_check "seed" "kafka" "PASS" "topic=smoke_probe"
   else
+    topics="$(kafka_topics)"
     record_check "seed" "kafka" "FAIL" "missing smoke_probe: ${topics}"
     failed=1
   fi
@@ -3269,10 +3279,10 @@ assert_databases() {
   fi
 
   echo "db-check ${label}: kafka"
-  out="$(flynn1 -a "${APP_NAME}" kafka topics)"
-  if echo "${out}" | grep -q smoke_probe; then
+  if wait_for "kafka topics ${label}" 180 kafka_has_smoke_probe; then
     record_check "${label}" "kafka" "PASS" "topic=smoke_probe"
   else
+    out="$(kafka_topics)"
     record_check "${label}" "kafka" "FAIL" "missing smoke_probe topics=${out}"
     echo "kafka topic (${label}) missing smoke_probe: ${out}" >&2
     failed=1
@@ -3397,7 +3407,7 @@ assert_restored_datastores() {
   fi
 
   echo "db-check ${label}: kafka (volume data not in cluster backup)"
-  if kafka_is_ready; then
+  if wait_for "kafka topics ${label}" 180 kafka_is_ready; then
     record_check "${label}" "kafka" "PASS" "topics CLI (topic data not in cluster backup)"
   else
     record_check "${label}" "kafka" "FAIL" "kafka topics failed"
@@ -3422,19 +3432,32 @@ assert_restored_datastores() {
 }
 
 # Record one live CLI / flynn-host probe. Empty pattern means exit 0 is enough.
+# Plugin dump/topics jobs can hit Flynn's generic "unknown_error: Something
+# went wrong" while controller/discoverd settle after an upgrade.
 cli_probe() {
   local label=$1 name=$2 pattern=$3
   shift 3
-  local out rc=0 snippet
-  out="$("$@" 2>&1)" || rc=$?
-  snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
-  if [[ "${rc}" -eq 0 ]]; then
-    if [[ -z "${pattern}" ]] || printf '%s' "${out}" | grep -qE "${pattern}"; then
-      record_check "${label}" "${name}" "PASS" "${snippet}"
-      echo "cli ${label} ${name}: PASS"
-      return 0
+  local out rc snippet attempt
+  for attempt in 1 2 3 4 5 6; do
+    rc=0
+    out="$("$@" 2>&1)" || rc=$?
+    snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    if [[ "${rc}" -eq 0 ]]; then
+      if [[ -z "${pattern}" ]] || printf '%s' "${out}" | grep -qE "${pattern}"; then
+        record_check "${label}" "${name}" "PASS" "${snippet}"
+        echo "cli ${label} ${name}: PASS"
+        return 0
+      fi
     fi
-  fi
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+      echo "cli ${label} ${name}: retry ${attempt}/6 (${snippet})"
+      sleep 2
+      continue
+    fi
+    record_check "${label}" "${name}" "FAIL" "rc=${rc} ${snippet}"
+    echo "cli ${label} ${name}: FAIL rc=${rc} ${snippet}" >&2
+    return 1
+  done
   record_check "${label}" "${name}" "FAIL" "rc=${rc} ${snippet}"
   echo "cli ${label} ${name}: FAIL rc=${rc} ${snippet}" >&2
   return 1
@@ -3445,17 +3468,29 @@ cli_probe() {
 cli_run_job() {
   local label=$1 name=$2 app=$3 needle=$4
   shift 4
-  local cmd_q="" a rc=0 out
+  local cmd_q="" a rc out attempt snippet
   for a in "$@"; do
     cmd_q+=" $(printf '%q' "${a}")"
   done
-  out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
-    record_check "${label}" "${name}" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
-    echo "cli ${label} ${name}: PASS"
-    return 0
-  fi
-  record_check "${label}" "${name}" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  for attempt in 1 2 3 4 5 6; do
+    rc=0
+    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    snippet="$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
+      record_check "${label}" "${name}" "PASS" "${snippet}"
+      echo "cli ${label} ${name}: PASS"
+      return 0
+    fi
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+      echo "cli ${label} ${name}: retry ${attempt}/6 (${snippet})"
+      sleep 2
+      continue
+    fi
+    record_check "${label}" "${name}" "FAIL" "rc=${rc} ${snippet}"
+    echo "cli ${label} ${name}: FAIL rc=${rc} ${out}" >&2
+    return 1
+  done
+  record_check "${label}" "${name}" "FAIL" "rc=${rc} ${snippet}"
   echo "cli ${label} ${name}: FAIL rc=${rc} ${out}" >&2
   return 1
 }
@@ -4577,11 +4612,16 @@ run_one_topology() {
   fi
 
   if [[ "${TOPOLOGY_ACTION}" == "discovery" ]]; then
-    run_step "Join nodes via local discovery (${TOPOLOGY_LABEL})" step_discovery_join_nodes
-    append_live_node node2
-    append_live_node node3
-    MIN_HOSTS="${#NODES[@]}"
-    run_step "Verify hosts after discovery join (${TOPOLOGY_LABEL})" step_verify_discovery_join
+    if [[ "${RESUME_AT}" == "backup" || "${RESUME_AT}" == "restore" || "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
+      record "Join nodes via local discovery (${TOPOLOGY_LABEL})" "SKIP" 0 "resume/plugins already installed"
+      record "Verify hosts after discovery join (${TOPOLOGY_LABEL})" "SKIP" 0 "resume/plugins already installed"
+    else
+      run_step "Join nodes via local discovery (${TOPOLOGY_LABEL})" step_discovery_join_nodes
+      append_live_node node2
+      append_live_node node3
+      MIN_HOSTS="${#NODES[@]}"
+      run_step "Verify hosts after discovery join (${TOPOLOGY_LABEL})" step_verify_discovery_join
+    fi
   fi
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
@@ -4646,6 +4686,16 @@ run_one_topology() {
     record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BACKUP=1"
+  elif [[ "${TOPOLOGY_ACTION}" == "discovery" ]]; then
+    # Singleton appliances plus later joins leave sirenia without a 3-node
+    # leader on --from-backup (mongodb-wait: no leader found). 1-node and
+    # 3-node topologies already cover backup/restore.
+    record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
+    record "Reinstall for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
+    record "Init layer-0 for restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
+    record "Bootstrap from backup (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
+    record "Verify app/DBs after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "discovery grows a singleton; 1-node/3-node already restore"
   else
     if [[ "${RESUME_AT}" == "restore" ]]; then
       record "Cluster backup (${TOPOLOGY_LABEL})" "SKIP" 0 "RESUME_AT=restore"

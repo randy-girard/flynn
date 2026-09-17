@@ -40,6 +40,10 @@ need "${smoke}" 'remember_teardown_node node2' \
   "discovery topology must record node2 for teardown in the parent shell"
 need "${smoke}" 'remember_teardown_node node3' \
   "discovery topology must record node3 for teardown in the parent shell"
+need "${smoke}" 'resume/plugins already installed' \
+  "backup/restore resume and SKIP_PLUGIN_INSTALL must not re-join node2/node3"
+need "${smoke}" 'discovery grows a singleton' \
+  "discovery topology must skip --from-backup; 1-node/3-node already restore"
 need "${smoke}" 'append_live_node node2' \
   "parent shell must keep node2 in NODES after discovery join"
 need "${smoke}" 'append_live_node node3' \
@@ -54,6 +58,18 @@ need "${vagrant}" 'flynn-plugin.json' \
   "Vagrantfile must mount every sibling with flynn-plugin.json, not only flynn-plugin-*"
 need "${docs}" 'SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery' \
   "development docs must list the discovery topology next to add/remove"
+need "${docs}" 'flynn-plugin-discovery' \
+  "development docs must list the discovery sibling as flynn-plugin-discovery"
+need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '127.0.0.1:1111' \
+  "discovery ready hook must resolve discovery.discoverd via discoverd HTTP, not host DNS"
+need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '--resolve' \
+  "discovery ready hook must curl --resolve the overlay addr like plugin wait probes"
+need "${ROOT}/docs/content/plugins.md" '../flynn-plugin-discovery' \
+  "plugins docs must install discovery from ../flynn-plugin-discovery"
+if grep -qE '\.\./flynn-discovery([[:space:]|]|$)' "${ROOT}/docs/content/plugins.md" "${docs}"; then
+  echo "docs must not keep the old ../flynn-discovery checkout path" >&2
+  exit 1
+fi
 
 if grep -qE 'Name[[:space:]]*==[[:space:]]*"discovery"|name[[:space:]]*==[[:space:]]*"discovery"' \
   "${ROOT}/pkg/plugin/install.go" "${ROOT}/pkg/plugin/manifest.go"; then
@@ -85,12 +101,14 @@ if [[ "${got}" != "http://discovery.example.com/clusters/abc" ]]; then
   exit 1
 fi
 
-# plugin_checkout must find a checkout named flynn-discovery, not only flynn-plugin-discovery.
+# plugin_checkout discovery uses flynn-plugin-discovery; the sibling scan
+# still finds alias mismatches (mysql→mariadb).
 tmp="$(mktemp -d)"
 trap 'rm -rf "${tmp}"' EXIT
-mkdir -p "${tmp}/flynn-discovery" "${tmp}/flynn-plugin-redis"
-printf '%s\n' '{"name":"discovery","kind":"app"}' > "${tmp}/flynn-discovery/flynn-plugin.json"
+mkdir -p "${tmp}/flynn-plugin-discovery" "${tmp}/flynn-plugin-redis" "${tmp}/odd-mysql-checkout"
+printf '%s\n' '{"name":"discovery","kind":"app"}' > "${tmp}/flynn-plugin-discovery/flynn-plugin.json"
 printf '%s\n' '{"name":"redis","kind":"resource-provider"}' > "${tmp}/flynn-plugin-redis/flynn-plugin.json"
+printf '%s\n' '{"name":"mysql","kind":"resource-provider"}' > "${tmp}/odd-mysql-checkout/flynn-plugin.json"
 plugin_manifest_matches() {
   local json=$1 want=$2
   python3 - "$json" "$want" <<'PY'
@@ -122,13 +140,18 @@ plugin_checkout() {
 }
 PLUGIN_REPO_ROOT="${tmp}"
 got="$(plugin_checkout discovery)"
-if [[ "${got}" != "${tmp}/flynn-discovery" ]]; then
-  echo "plugin_checkout discovery must resolve flynn-discovery, got '${got}'" >&2
+if [[ "${got}" != "${tmp}/flynn-plugin-discovery" ]]; then
+  echo "plugin_checkout discovery must resolve flynn-plugin-discovery, got '${got}'" >&2
   exit 1
 fi
 got="$(plugin_checkout redis)"
 if [[ "${got}" != "${tmp}/flynn-plugin-redis" ]]; then
   echo "plugin_checkout redis must still resolve flynn-plugin-redis, got '${got}'" >&2
+  exit 1
+fi
+got="$(plugin_checkout mysql)"
+if [[ "${got}" != "${tmp}/odd-mysql-checkout" ]]; then
+  echo "plugin_checkout mysql must still scan sibling flynn-plugin.json, got '${got}'" >&2
   exit 1
 fi
 

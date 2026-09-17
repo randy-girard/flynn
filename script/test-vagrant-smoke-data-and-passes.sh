@@ -74,6 +74,10 @@ need 'clickhouse replica' \
   "clickhouse seed must fan-out schema/rows to every replica so a node drain keeps smoke_db"
 need 'clickhouse_row_count' \
   "clickhouse counts must tolerate transient unknown_error after membership changes (set -e)"
+need 'kafka_has_smoke_probe' \
+  "kafka topic checks must retry Flynn unknown_error from plugin CLI jobs (set -e)"
+need 'wait_for "kafka topics' \
+  "assert_databases kafka must wait_for topics like clickhouse rows"
 need 'CHECK_FILE' \
   "per-engine checks must be written to a file (run_step is a subshell)"
 need 'smoke_db.rows' \
@@ -101,7 +105,7 @@ need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard' \
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
 if ! grep -Fq 'for dir in "${root}"/*' "${smoke}"; then
-  echo "plugin_checkout must scan every sibling flynn-plugin.json (discovery is flynn-discovery)" >&2
+  echo "plugin_checkout must scan every sibling flynn-plugin.json (mysql→mariadb, not only flynn-plugin-<alias>)" >&2
   echo '  missing for dir in "${root}"/*' >&2
   exit 1
 fi

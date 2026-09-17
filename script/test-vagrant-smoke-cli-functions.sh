@@ -23,6 +23,8 @@ need 'SKIP_CLI' \
   "smoke must allow skipping live CLI probes"
 need 'cli_probe' \
   "live CLI checks must record per-command PASS/FAIL"
+need 'unknown_error|connection refused' \
+  "cli_probe and cli_run_job must retry Flynn unknown_error from plugin dump/topics jobs"
 need 'flynn1 apps' \
   "CLI step must list apps through the controller"
 need 'cli-ps' \
