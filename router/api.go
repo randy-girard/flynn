@@ -37,8 +37,8 @@ func (api *API) StreamEvents(ctx context.Context, w http.ResponseWriter, req *ht
 	httpListener := api.router.ListenerFor("http")
 	tcpListener := api.router.ListenerFor("tcp")
 
-	httpEvents := make(chan *router.Event)
-	tcpEvents := make(chan *router.Event)
+	httpEvents := make(chan *router.Event, 32)
+	tcpEvents := make(chan *router.Event, 32)
 	sseEvents := make(chan *router.StreamEvent)
 	go httpListener.Watch(httpEvents, true)
 	go tcpListener.Watch(tcpEvents, true)
@@ -53,18 +53,22 @@ func (api *API) StreamEvents(ctx context.Context, w http.ResponseWriter, req *ht
 
 	sendEvents := func(events chan *router.Event) {
 		for {
-			e, ok := <-events
-			if !ok {
+			select {
+			case e, ok := <-events:
+				if !ok {
+					return
+				}
+				if _, ok := eventTypes[e.Event]; !ok {
+					continue
+				}
+				sseEvents <- &router.StreamEvent{
+					Event:   e.Event,
+					Route:   e.Route,
+					Backend: e.Backend,
+					Error:   e.Error,
+				}
+			case <-ctx.Done():
 				return
-			}
-			if _, ok := eventTypes[e.Event]; !ok {
-				continue
-			}
-			sseEvents <- &router.StreamEvent{
-				Event:   e.Event,
-				Route:   e.Route,
-				Backend: e.Backend,
-				Error:   e.Error,
 			}
 		}
 	}

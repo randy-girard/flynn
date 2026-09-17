@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/cache"
 	"github.com/flynn/flynn/pkg/connutil"
 	"github.com/flynn/flynn/router/proxy"
 	router "github.com/flynn/flynn/router/types"
@@ -159,28 +158,31 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 	}
 
 	h.l.mtx.Lock()
-	defer h.l.mtx.Unlock()
 	if h.l.closed {
+		h.l.mtx.Unlock()
+		return nil
+	}
+	if svc := h.l.services[r.Service]; svc != nil && svc.name != r.Service {
+		svc.refs--
+		if svc.refs <= 0 {
+			svc.Close()
+			delete(h.l.services, svc.name)
+		}
+	}
+	h.l.mtx.Unlock()
+
+	service, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
+	if err != nil {
+		return err
+	}
+	if service == nil {
 		return nil
 	}
 
-	service := h.l.services[r.Service]
-	if service != nil && service.name != r.Service {
-		service.refs--
-		if service.refs <= 0 {
-			service.Close()
-			delete(h.l.services, service.name)
-		}
-		service = nil
-	}
-	if service == nil {
-		sc, err := cache.New(h.l.discoverd.Service(r.Service))
-		if err != nil {
-			return err
-		}
-
-		service = newService(r.Service, sc, h.l.wm, r.DrainBackends)
-		h.l.services[r.Service] = service
+	h.l.mtx.Lock()
+	defer h.l.mtx.Unlock()
+	if h.l.closed {
+		return nil
 	}
 	r.service = service
 	var bf proxy.BackendListFunc

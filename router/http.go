@@ -226,28 +226,33 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 	}
 
 	h.l.mtx.Lock()
-	defer h.l.mtx.Unlock()
 	if h.l.closed {
+		h.l.mtx.Unlock()
+		return nil
+	}
+	if svc := h.l.services[r.Service]; svc != nil && svc.name != r.Service {
+		svc.refs--
+		if svc.refs <= 0 {
+			svc.Close()
+			delete(h.l.services, svc.name)
+		}
+	}
+	h.l.mtx.Unlock()
+
+	// cache.New waits for discoverd EventKindCurrent. Do that without the
+	// listener mutex or route "set" watchers time out under load.
+	service, err := bindListenerService(&h.l.mtx, &h.l.closed, h.l.services, h.l.wm, h.l.discoverd, r.Service, r.DrainBackends)
+	if err != nil {
+		return err
+	}
+	if service == nil {
 		return nil
 	}
 
-	service := h.l.services[r.Service]
-	if service != nil && service.name != r.Service {
-		service.refs--
-		if service.refs <= 0 {
-			service.Close()
-			delete(h.l.services, service.name)
-		}
-		service = nil
-	}
-	if service == nil {
-		sc, err := cache.New(h.l.discoverd.Service(r.Service))
-		if err != nil {
-			return err
-		}
-
-		service = newService(r.Service, sc, h.l.wm, r.DrainBackends)
-		h.l.services[r.Service] = service
+	h.l.mtx.Lock()
+	defer h.l.mtx.Unlock()
+	if h.l.closed {
+		return nil
 	}
 	service.refs++
 	var bf proxy.BackendListFunc
@@ -487,13 +492,24 @@ func (s *HTTPListener) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 }
 
 func (s *HTTPListener) serveACMEChallenge(w http.ResponseWriter, req *http.Request) {
-	// Lazily initialize the ACME service cache if needed
-	s.mtx.Lock()
-	if s.acmeService == nil {
-		s.acmeService, _ = cache.New(s.discoverd.Service("acme-challenge"))
-	}
+	s.mtx.RLock()
 	acmeSvc := s.acmeService
-	s.mtx.Unlock()
+	s.mtx.RUnlock()
+	if acmeSvc == nil {
+		sc, err := cache.New(s.discoverd.Service("acme-challenge"))
+		if err != nil {
+			fail(w, 503)
+			return
+		}
+		s.mtx.Lock()
+		if s.acmeService == nil {
+			s.acmeService = sc
+		} else {
+			sc.Close()
+		}
+		acmeSvc = s.acmeService
+		s.mtx.Unlock()
+	}
 
 	if acmeSvc == nil {
 		fail(w, 503)
@@ -538,6 +554,40 @@ type service struct {
 	stream stream.Stream
 	reqs   map[string]int64
 	cond   *sync.Cond
+}
+
+// bindListenerService returns a discoverd-backed service, creating it if needed.
+// cache.New blocks on EventKindCurrent and must not run while mtx is held.
+func bindListenerService(mtx *sync.RWMutex, closed *bool, services map[string]*service, wm *WatchManager, d DiscoverdClient, name string, drain bool) (*service, error) {
+	mtx.Lock()
+	if *closed {
+		mtx.Unlock()
+		return nil, nil
+	}
+	if svc := services[name]; svc != nil {
+		mtx.Unlock()
+		return svc, nil
+	}
+	mtx.Unlock()
+
+	sc, err := cache.New(d.Service(name))
+	if err != nil {
+		return nil, err
+	}
+
+	mtx.Lock()
+	defer mtx.Unlock()
+	if *closed {
+		sc.Close()
+		return nil, nil
+	}
+	if svc := services[name]; svc != nil {
+		sc.Close()
+		return svc, nil
+	}
+	svc := newService(name, sc, wm, drain)
+	services[name] = svc
+	return svc, nil
 }
 
 func newService(name string, sc *cache.ServiceCache, wm *WatchManager, trackBackends bool) *service {

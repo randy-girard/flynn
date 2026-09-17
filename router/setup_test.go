@@ -204,10 +204,12 @@ func (s *S) TearDownTest(c *C) {
 	s.store.cleanup()
 }
 
-const waitTimeout = time.Second
+// waitTimeout covers discoverd EventKindCurrent plus the async route "set"
+// event. One second is too short under -race / smoke-test load.
+const waitTimeout = 10 * time.Second
 
 func waitForEvent(c *C, w Watcher, event router.EventType, id string) func() *router.Event {
-	ch := make(chan *router.Event)
+	ch := make(chan *router.Event, 32)
 	w.Watch(ch, false)
 	return func() *router.Event {
 		defer w.Unwatch(ch)
