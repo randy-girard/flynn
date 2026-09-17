@@ -17,6 +17,7 @@ permissions:
 env:
   GO_VERSION: '1.24'
   GOFLAGS: '-mod=vendor -buildvcs=false'
+  FLYNN_SKIP_UPDATE_CHECK: '1'
 
 jobs:
   unit:

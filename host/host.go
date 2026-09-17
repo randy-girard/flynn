@@ -135,6 +135,14 @@ See 'flynn-host help <command>' for more information on a specific command.
 		}
 	}
 
+	switch cmd {
+	case "", "daemon", "update", "download":
+	default:
+		if len(cmdArgs) != 1 || cmdArgs[0] != "--help" {
+			cli.NotifyUpgradeIfAvailable()
+		}
+	}
+
 	if cmd == "daemon" {
 		// merge in args and env from config file, if available
 		var c *config.Config

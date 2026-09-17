@@ -120,7 +120,7 @@ func main() {
 		cmdArgs = []string{"--help"}
 	}
 	if cmd != "update" && cmd != "upgrade" {
-		defer updater.backgroundRun() // doesn't run if os.Exit is called
+		updater.notifyIfUpdateAvailable()
 	}
 
 	if err := runCommand(cmd, cmdArgs); err != nil {

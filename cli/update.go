@@ -11,14 +11,13 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	cfg "github.com/flynn/flynn/cli/config"
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
 	"github.com/kardianos/osext"
@@ -99,33 +98,22 @@ func (u *Updater) dlBase() string {
 	return "https://github.com"
 }
 
-func (u *Updater) backgroundRun() {
-	if u == nil {
-		return
+func (u *Updater) notifyIfUpdateAvailable() {
+	client := u.httpClient()
+	notifyClient := *client
+	if notifyClient.Timeout == 0 || notifyClient.Timeout > ghrelease.DefaultNotifyTimeout {
+		notifyClient.Timeout = ghrelease.DefaultNotifyTimeout
 	}
-	if !u.wantUpdate() {
-		return
-	}
-	self, err := osext.Executable()
-	if err != nil {
-		return
-	}
-	l := exec.Command("logger", "-tflynn")
-	c := exec.Command(self, "update")
-	if w, err := l.StdinPipe(); err == nil && l.Start() == nil {
-		c.Stdout = w
-		c.Stderr = w
-	}
-	_ = c.Start()
-}
-
-func (u *Updater) wantUpdate() bool {
-	path := filepath.Join(updateDir, upcktimePath)
-	if version.Dev() || readTime(path).After(time.Now()) {
-		return false
-	}
-	wait := 12*time.Hour + randDuration(8*time.Hour)
-	return writeTime(path, time.Now().Add(wait))
+	ghrelease.MaybeNotify(ghrelease.NotifyOptions{
+		Writer:         os.Stderr,
+		CurrentVersion: version.Release(),
+		Product:        "Flynn CLI",
+		UpgradeCommand: "flynn update",
+		Repo:           u.repo(),
+		CheckFile:      filepath.Join(updateDir, upcktimePath),
+		HTTPClient:     &notifyClient,
+		APIBase:        u.apiBase(),
+	})
 }
 
 func (u *Updater) run(opts updateOptions) error {
@@ -326,10 +314,6 @@ func selfPath() string {
 		return "this flynn binary"
 	}
 	return p
-}
-
-func randDuration(n time.Duration) time.Duration {
-	return time.Duration(random.Math.Int63n(int64(n)))
 }
 
 func readTime(path string) time.Time {

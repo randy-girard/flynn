@@ -12,6 +12,7 @@ esac
 export PGHOST="${PGHOST:-/var/run/postgresql}"
 export PGSSLMODE="${PGSSLMODE:-disable}"
 export FLYNN_TEST_IN_CONTAINER=1
+export FLYNN_SKIP_UPDATE_CHECK="${FLYNN_SKIP_UPDATE_CHECK:-1}"
 
 cd /src
 # shellcheck source=/dev/null
