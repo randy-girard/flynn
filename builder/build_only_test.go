@@ -366,7 +366,12 @@ func TestNo386CLIImages(t *testing.T) {
 		t.Fatal("runtime.Caller")
 	}
 	dir := filepath.Dir(thisFile)
-	for _, name := range []string{"manifest.json", "manifest.json.template"} {
+	// manifest.json is generated and gitignored; CI only has the template.
+	names := []string{"manifest.json.template"}
+	if _, err := os.Stat(filepath.Join(dir, "manifest.json")); err == nil {
+		names = append(names, "manifest.json")
+	}
+	for _, name := range names {
 		raw, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)
@@ -374,6 +379,9 @@ func TestNo386CLIImages(t *testing.T) {
 		var mf Manifest
 		if err := json.Unmarshal(raw, &mf); err != nil {
 			t.Fatalf("%s: %v", name, err)
+		}
+		if len(mf.Images) == 0 {
+			t.Fatalf("%s has no images", name)
 		}
 		for _, img := range mf.Images {
 			if strings.Contains(img.ID, "386") {
