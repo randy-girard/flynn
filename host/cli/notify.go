@@ -19,7 +19,9 @@ func hostUpdateCheckFile() string {
 }
 
 // NotifyUpgradeIfAvailable prints a stderr note when GitHub has a newer Flynn
-// release than this binary. Failures are ignored; tests set FLYNN_SKIP_UPDATE_CHECK.
+// release than this binary. The GitHub lookup is throttled; a known newer
+// release is printed on every command. Failures are ignored; tests set
+// FLYNN_SKIP_UPDATE_CHECK.
 func NotifyUpgradeIfAvailable() {
 	ghrelease.MaybeNotify(ghrelease.NotifyOptions{
 		Writer:         os.Stderr,

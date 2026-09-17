@@ -16,6 +16,7 @@ const (
 	// non-empty value (used by tests and scripted installs).
 	SkipUpdateCheckEnv = "FLYNN_SKIP_UPDATE_CHECK"
 	// DefaultNotifyInterval is how often MaybeNotify hits GitHub.
+	// A cached newer tag is still printed on every command.
 	DefaultNotifyInterval = 12 * time.Hour
 	// DefaultNotifyTimeout bounds a single GitHub lookup so CLI commands
 	// are not delayed when GitHub is slow or unreachable.
@@ -36,8 +37,15 @@ type NotifyOptions struct {
 	MinInterval    time.Duration
 }
 
+type notifyCache struct {
+	CheckedAt time.Time `json:"checked_at"`
+	Latest    string    `json:"latest"`
+}
+
 // MaybeNotify writes a one-line upgrade hint to opts.Writer when GitHub has a
-// newer release than CurrentVersion. Network and parse errors are ignored.
+// newer release than CurrentVersion. GitHub is polled at most once per
+// MinInterval; if a newer tag is already cached it is printed on every call.
+// Network and parse errors are ignored.
 func MaybeNotify(opts NotifyOptions) {
 	if strings.TrimSpace(os.Getenv(SkipUpdateCheckEnv)) != "" {
 		return
@@ -53,15 +61,37 @@ func MaybeNotify(opts NotifyOptions) {
 	if interval <= 0 {
 		interval = DefaultNotifyInterval
 	}
-	if opts.CheckFile != "" {
-		if info, err := os.Stat(opts.CheckFile); err == nil && time.Since(info.ModTime()) < interval {
-			return
-		}
-		if err := os.MkdirAll(filepath.Dir(opts.CheckFile), 0755); err == nil {
-			_ = os.WriteFile(opts.CheckFile, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0644)
+
+	cache := loadNotifyCache(opts.CheckFile)
+	needFetch := opts.CheckFile == "" || cache.CheckedAt.IsZero() || time.Since(cache.CheckedAt) >= interval
+	if needFetch {
+		if latest, ok := fetchLatestTag(opts); ok {
+			cache.Latest = latest
+			cache.CheckedAt = time.Now().UTC()
+			saveNotifyCache(opts.CheckFile, cache)
+		} else if cache.Latest != "" {
+			// Keep showing the last known newer tag; throttle retries.
+			cache.CheckedAt = time.Now().UTC()
+			saveNotifyCache(opts.CheckFile, cache)
 		}
 	}
 
+	latest := strings.TrimSpace(cache.Latest)
+	if latest == "" || !CompareVersions(current, latest) {
+		return
+	}
+	product := strings.TrimSpace(opts.Product)
+	if product == "" {
+		product = "Flynn"
+	}
+	upgradeCmd := strings.TrimSpace(opts.UpgradeCommand)
+	if upgradeCmd == "" {
+		upgradeCmd = "flynn update"
+	}
+	fmt.Fprintf(opts.Writer, "A newer %s is available (%s; this is %s). Run `%s` to upgrade.\n", product, latest, current, upgradeCmd)
+}
+
+func fetchLatestTag(opts NotifyOptions) (string, bool) {
 	client := opts.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: DefaultNotifyTimeout}
@@ -78,35 +108,73 @@ func MaybeNotify(opts NotifyOptions) {
 			repo = defaultNotifyRepo
 		}
 	}
-	product := strings.TrimSpace(opts.Product)
-	if product == "" {
-		product = "Flynn"
-	}
-	upgradeCmd := strings.TrimSpace(opts.UpgradeCommand)
-	if upgradeCmd == "" {
-		upgradeCmd = "flynn update"
-	}
-
 	req, err := http.NewRequest(http.MethodGet, api+"/repos/"+repo+"/releases/latest", nil)
 	if err != nil {
-		return
+		return "", false
 	}
 	req.Header.Set("User-Agent", UserAgent)
+	if tok := githubNotifyToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return
+		return "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return
+		return "", false
 	}
 	var release Release
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-		return
+		return "", false
 	}
 	latest := strings.TrimSpace(release.TagName)
-	if latest == "" || !CompareVersions(current, latest) {
+	if latest == "" {
+		return "", false
+	}
+	return latest, true
+}
+
+func githubNotifyToken() string {
+	for _, k := range []string{"FLYNN_GITHUB_TOKEN", "FLYNN_PLUGIN_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+		if t := strings.TrimSpace(os.Getenv(k)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+func loadNotifyCache(path string) notifyCache {
+	if path == "" {
+		return notifyCache{}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return notifyCache{}
+	}
+	var c notifyCache
+	if json.Unmarshal(data, &c) == nil && (!c.CheckedAt.IsZero() || strings.TrimSpace(c.Latest) != "") {
+		return c
+	}
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data))); err == nil {
+		return notifyCache{CheckedAt: t}
+	}
+	if info, err := os.Stat(path); err == nil {
+		return notifyCache{CheckedAt: info.ModTime()}
+	}
+	return notifyCache{}
+}
+
+func saveNotifyCache(path string, c notifyCache) {
+	if path == "" {
 		return
 	}
-	fmt.Fprintf(opts.Writer, "A newer %s is available (%s; this is %s). Run `%s` to upgrade.\n", product, latest, current, upgradeCmd)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return
+	}
+	data, err := json.Marshal(c)
+	if err != nil {
+		return
+	}
+	_ = os.WriteFile(path, append(data, '\n'), 0644)
 }
