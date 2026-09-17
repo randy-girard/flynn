@@ -343,7 +343,7 @@ jobs:
     name: Publish GitHub release
     needs: [build-base, build-cluster]
     runs-on: ${{ inputs.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -396,41 +396,16 @@ jobs:
           cat "${NOTES_FILE}"
           echo "-----------------------------------"
 
-          ARGS=(--title "Flynn ${VERSION}" --notes-file "${NOTES_FILE}")
-          if [[ "${{ steps.mode.outputs.DRAFT }}" == "true" ]]; then
-            ARGS+=(--draft)
-          fi
-          if [[ "${{ steps.mode.outputs.PRERELEASE }}" == "true" ]]; then
-            ARGS+=(--prerelease)
-          fi
-
-          shopt -s nullglob
-          FILES=()
-          LIMIT=2147483648
-          for f in build/release/*; do
-            [[ -f "${f}" ]] || continue
-            base="$(basename "${f}")"
-            # Never upload a mega release tarball; install-flynn expects per-file assets.
-            if [[ "${base}" == flynn-*.tar.gz ]]; then
-              echo "Skipping ${base} (mega-tarball; use individual assets)"
-              continue
-            fi
-            size="$(stat -c%s "${f}")"
-            if [[ "${size}" -ge "${LIMIT}" ]]; then
-              echo "ERROR: ${base} is ${size} bytes (>= 2GiB GitHub release asset limit)" >&2
-              exit 1
-            fi
-            FILES+=("${f}")
-          done
-          if [[ ${#FILES[@]} -eq 0 ]]; then
-            echo "ERROR: no release files found in build/release" >&2
-            exit 1
-          fi
-
-          echo "Uploading ${#FILES[@]} assets to GitHub Release ${VERSION}..."
-          gh release create "${VERSION}" "${ARGS[@]}" "${FILES[@]}"
-          echo "Created release ${VERSION}"
-          gh release view "${VERSION}"
+          # shellcheck source=script/lib/github-release-upload.sh
+          source ./script/lib/github-release-upload.sh
+          github_release_publish \
+            --version "${VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Flynn ${VERSION}" \
+            --notes-file "${NOTES_FILE}" \
+            --dir build/release \
+            --draft "${{ steps.mode.outputs.DRAFT }}" \
+            --prerelease "${{ steps.mode.outputs.PRERELEASE }}"
 
       - name: Dispatch plugin releases
         if: ${{ inputs.dispatch_plugins }}

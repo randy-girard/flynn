@@ -167,6 +167,8 @@ fi
 
 # shellcheck source=script/lib/release-notes.sh
 source "${ROOT}/script/lib/release-notes.sh"
+# shellcheck source=script/lib/github-release-upload.sh
+source "${ROOT}/script/lib/github-release-upload.sh"
 
 if [[ "${TARGET}" == "notes" ]]; then
   if $OUTPUT_SET; then
@@ -202,7 +204,6 @@ package_binaries() {
   CLI_BINARIES=(
     "flynn-linux-amd64"
     "flynn-linux-arm64"
-    "flynn-linux-386"
     "flynn-darwin-amd64"
     "flynn-darwin-arm64"
     "flynn-windows-amd64.exe"
@@ -459,42 +460,25 @@ create_github_release() {
 
   check_github_asset_sizes "${RELEASE_DIR}"
 
-  # Check if release already exists
-  if gh release view "${VERSION}" --repo "${GITHUB_REPO}" &> /dev/null; then
-    echo "  Release ${VERSION} exists, updating..."
-    gh release delete "${VERSION}" --repo "${GITHUB_REPO}" --yes || true
-  fi
-
-  # Build list of files to upload
-  UPLOAD_FILES=()
-  for f in "${RELEASE_DIR}"/*.gz "${RELEASE_DIR}"/*.sha512 "${RELEASE_DIR}"/install-flynn*; do
-    [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
-  done
-
-  # Add layer files (squashfs and json)
-  for f in "${RELEASE_DIR}"/*.squashfs "${RELEASE_DIR}"/*.json; do
-    [[ -f "$f" ]] && UPLOAD_FILES+=("$f")
-  done
-
-  # Create the release
   info "Pushing to GitHub Release ${VERSION}..."
   NOTES_FILE="$(mktemp)"
   flynn_github_release_notes "${VERSION}" "${GITHUB_REPO}" > "${NOTES_FILE}"
 
-  GH_RELEASE_FLAGS=()
+  local draft_flag=false prerelease_flag=false
   if $DRAFT; then
-    GH_RELEASE_FLAGS+=(--draft)
+    draft_flag=true
   fi
   if $PRERELEASE; then
-    GH_RELEASE_FLAGS+=(--prerelease)
+    prerelease_flag=true
   fi
-
-  gh release create "${VERSION}" \
+  github_release_publish \
+    --version "${VERSION}" \
     --repo "${GITHUB_REPO}" \
-    "${GH_RELEASE_FLAGS[@]}" \
     --title "Flynn ${VERSION}" \
     --notes-file "${NOTES_FILE}" \
-    "${UPLOAD_FILES[@]}"
+    --dir "${RELEASE_DIR}" \
+    --draft "${draft_flag}" \
+    --prerelease "${prerelease_flag}"
 
   rm -f "${NOTES_FILE}"
 
