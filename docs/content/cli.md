@@ -12,7 +12,7 @@ Host-level commands (`bootstrap`, `acme`, rolling update, plugin install, …) a
 
 ## Installation
 
-Pre-built binaries are published on [GitHub Releases](https://github.com/randy-girard/flynn/releases) for Linux, macOS (amd64 and arm64), and Windows.
+Pre-built binaries are published on [GitHub Releases](https://github.com/randy-girard/flynn/releases) for 64-bit Linux, macOS, and Windows (amd64 and arm64 where listed). 32-bit x86 is not supported.
 
 ```text
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash

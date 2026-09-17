@@ -165,7 +165,7 @@ curl -fsSL https://github.com/${repo}/releases/download/${version}/install-flynn
 | Binary | Platform |
 |--------|----------|
 | flynn-linux-amd64.gz | Linux (x86_64) |
-| flynn-linux-386.gz | Linux (x86) |
+| flynn-linux-arm64.gz | Linux (ARM64) |
 | flynn-darwin-amd64.gz | macOS (Intel) |
 | flynn-darwin-arm64.gz | macOS (Apple Silicon) |
 | flynn-windows-amd64.exe.gz | Windows (x86_64) |

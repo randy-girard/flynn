@@ -43,6 +43,10 @@ need "${smoke}" 'extra_args\+=\(--clean\)' "smoke reinstall on existing VMs must
 need "${smoke}" 'for link in flannel.1 flynnbr0' "smoke --clean must delete stale overlay devices"
 need "${smoke}" 'cli_arch=arm64' "smoke must install flynn-linux-arm64 on aarch64 nodes"
 need "${smoke}" 'flynn version' "smoke must execute the CLI (wrong-arch binaries exist but fail with Exec format error)"
+if grep -q 'cli_arch=386' "${smoke}"; then
+  echo "smoke must not install 32-bit CLI binaries" >&2
+  exit 1
+fi
 if ! grep -F 'ssh -F "${cfg}"' "${smoke}" >/dev/null; then
   echo "smoke must ssh via cached ssh-config (not vagrant ssh)" >&2
   exit 1

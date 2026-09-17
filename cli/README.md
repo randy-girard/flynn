@@ -4,7 +4,7 @@
 
 ## Installation
 
-Pre-built binaries for Linux, macOS (Intel and Apple Silicon), and Windows are published on [GitHub Releases](https://github.com/randy-girard/flynn/releases).
+Pre-built binaries for 64-bit Linux, macOS (Intel and Apple Silicon), and Windows are published on [GitHub Releases](https://github.com/randy-girard/flynn/releases). 32-bit x86 is not supported.
 
 ```text
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash

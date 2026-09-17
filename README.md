@@ -39,7 +39,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 
 ## Install the CLI
 
-The `flynn` CLI runs on Linux, macOS (Intel and Apple Silicon), and Windows.
+The `flynn` CLI runs on 64-bit Linux, macOS (Intel and Apple Silicon), and Windows. 32-bit x86 is not supported.
 
 ```bash
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash

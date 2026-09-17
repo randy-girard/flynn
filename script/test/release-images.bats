@@ -83,3 +83,31 @@ load "helper"
   grep -q 'default_builder_max_retries' "${build_sh}"
   grep -q 'Reducing concurrency' "${build_sh}"
 }
+
+@test "CLI builds omit 32-bit x86" {
+  manifest="${ROOT}/builder/manifest.json.template"
+  manifest_json="${ROOT}/builder/manifest.json"
+  build_flynn="${ROOT}/script/build-flynn"
+  release="${ROOT}/script/release"
+  notes="${ROOT}/script/lib/release-notes.sh"
+  pkg="${ROOT}/script/package-github-release"
+  install_cli="${ROOT}/script/install-flynn-cli"
+  install_release="${ROOT}/script/install-flynn-release"
+  smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
+
+  grep -q '"id": "cli-linux-amd64"' "${manifest}"
+  grep -q '"id": "cli-linux-arm64"' "${manifest}"
+  grep -q '"id": "cli-windows-amd64"' "${manifest}"
+  if grep -E 'cli-(linux|windows)-386|"GOARCH": "386"|linux/386|windows/386|flynn-linux-386' \
+      "${manifest}" "${manifest_json}" "${build_flynn}" "${release}" "${notes}" "${pkg}"; then
+    echo "386 CLI images/binaries must not be built or packaged" >&2
+    return 1
+  fi
+
+  grep -q '32-bit x86 is not supported' "${install_cli}"
+  grep -q '32-bit x86 is not supported' "${install_release}"
+  if grep -E 'echo "386"|arch="386"|cli_arch=386' "${install_cli}" "${install_release}" "${smoke}"; then
+    echo "installers/smoke must not map i386/i686 to 386" >&2
+    return 1
+  fi
+}

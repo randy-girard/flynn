@@ -556,15 +556,6 @@
       "template": "cli"
     },
     {
-      "id": "cli-linux-386",
-      "base": "busybox",
-      "env": {
-        "GOOS": "linux",
-        "GOARCH": "386"
-      },
-      "template": "cli"
-    },
-    {
       "id": "cli-darwin-amd64",
       "base": "busybox",
       "env": {
@@ -588,15 +579,6 @@
       "env": {
         "GOOS": "windows",
         "GOARCH": "amd64"
-      },
-      "template": "cli"
-    },
-    {
-      "id": "cli-windows-386",
-      "base": "busybox",
-      "env": {
-        "GOOS": "windows",
-        "GOARCH": "386"
       },
       "template": "cli"
     },

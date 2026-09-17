@@ -19,7 +19,7 @@ import (
 func TestCLIAssetName(t *testing.T) {
 	cases := []struct{ goos, goarch, want string }{
 		{"linux", "amd64", "flynn-linux-amd64.gz"},
-		{"linux", "386", "flynn-linux-386.gz"},
+		{"linux", "arm64", "flynn-linux-arm64.gz"},
 		{"darwin", "amd64", "flynn-darwin-amd64.gz"},
 		{"darwin", "arm64", "flynn-darwin-arm64.gz"},
 		{"windows", "amd64", "flynn-windows-amd64.exe.gz"},

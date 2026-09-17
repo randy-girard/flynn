@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 	"testing"
 
 	ct "github.com/flynn/flynn/controller/types"
@@ -356,4 +358,30 @@ func containsString(ss []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestNo386CLIImages(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller")
+	}
+	dir := filepath.Dir(thisFile)
+	for _, name := range []string{"manifest.json", "manifest.json.template"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var mf Manifest
+		if err := json.Unmarshal(raw, &mf); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		for _, img := range mf.Images {
+			if strings.Contains(img.ID, "386") {
+				t.Errorf("%s still has 386 CLI image %q", name, img.ID)
+			}
+			if img.Env["GOARCH"] == "386" {
+				t.Errorf("%s image %q still builds GOARCH=386", name, img.ID)
+			}
+		}
+	}
 }
