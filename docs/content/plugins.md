@@ -25,13 +25,13 @@ Development layout (relative to the Flynn repo):
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
 | `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
-| `discovery` | `../flynn-discovery` | (none; `kind: app`) |
+| `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
-plugin checkouts that contain `flynn-plugin.json` (`flynn-plugin-*` and
-`flynn-discovery`). A local checkout with `flynn-plugin.json` wins; if it is
-missing, the alias falls back to GitHub.
+plugin checkouts that contain `flynn-plugin.json` (`flynn-plugin-*`). A local
+checkout with `flynn-plugin.json` wins; if it is missing, the alias falls back
+to GitHub.
 
 From the Flynn checkout, on a cluster host:
 
@@ -39,7 +39,7 @@ From the Flynn checkout, on a cluster host:
 sudo flynn-host plugin install ../flynn-plugin-redis
 sudo flynn-host plugin install redis
 sudo flynn-host plugin install ../flynn-plugin-dashboard
-sudo flynn-host plugin install ../flynn-discovery
+sudo flynn-host plugin install ../flynn-plugin-discovery
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
@@ -109,9 +109,8 @@ cluster.
 
 On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
-syncs plugin checkouts (`flynn-plugin-*`, `flynn-discovery`) into
-`/opt/flynn-plugins/`, then runs `flynn-host plugin
-install` on node1.
+syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
+runs `flynn-host plugin install` on node1.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
 list **resource-provider** plugin commands under a **Plugins:** section (from
@@ -200,7 +199,7 @@ The default org is `randy-girard`; override with `--github-org`,
 
 A string value still works (`"redis": "/opt/flynn-plugins/flynn-plugin-redis"`
 or a git URL). `repo` may be `owner/name` when the GitHub repo does not match
-`flynn-plugin-<alias>` (the discovery plugin uses `randy-girard/flynn-discovery`).
+`flynn-plugin-<alias>`.
 
 The release must include `flynn-plugin.json`, `image.json`, `{id}.squashfs`,
 and any **`hooks.install` / `hooks.upgrade` / `hooks.uninstall`** scripts

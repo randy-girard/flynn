@@ -11,8 +11,8 @@ demo/*.log
 /build
 go-tuf/client
 go-tuf/repo
-flynn-discovery/Godeps
-flynn-discovery/flynn-discovery
+flynn-plugin-discovery/Godeps
+flynn-plugin-discovery/flynn-plugin-discovery
 .DS_Store
 *.log
 sha512_256_binary

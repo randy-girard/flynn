@@ -47,7 +47,7 @@ macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
 Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
-`../flynn-plugin-dashboard`, `../flynn-discovery`, …). Install them on a cluster host with
+`../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, …). Install them on a cluster host with
 `flynn-host plugin install` after bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
