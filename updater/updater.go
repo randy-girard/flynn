@@ -302,6 +302,9 @@ func (e errDeploySkipped) Error() string {
 func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, log log15.Logger) error {
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
+		if updaterdeploy.MissingAppReleaseSkip(app, err) {
+			return errDeploySkipped{updaterdeploy.MissingAppReleaseReason}
+		}
 		log.Error("error getting release", "err", err)
 		return err
 	}

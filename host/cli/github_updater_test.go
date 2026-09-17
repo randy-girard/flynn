@@ -44,6 +44,22 @@ func TestTarballUpdaterSetsRedisApplianceStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterSkipsAppsWithNoRelease(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	getRelease := strings.Index(body, "client.GetAppRelease(app.ID)")
+	skip := strings.Index(body, "updaterdeploy.MissingAppReleaseSkip(app, err)")
+	if getRelease < 0 || skip < 0 {
+		t.Fatal("deployApp must skip GetAppRelease not-found for non-system apps")
+	}
+	if skip < getRelease {
+		t.Fatal("missing-release skip must run after GetAppRelease")
+	}
+}
+
 func TestNormalizeHostname(t *testing.T) {
 	if got, want := normalizeHostname("Flynn-Test_Node-1"), "flynntestnode1"; got != want {
 		t.Fatalf("normalizeHostname: got %q, want %q", got, want)

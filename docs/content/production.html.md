@@ -440,7 +440,7 @@ unavailable for a few seconds while they are updated.
 
 To perform an in-place update of **binaries on one host** (no other nodes, no container image rollout), run `flynn-host update`. A newer GitHub release always continues past the flynn-host re-exec (init, CLI, daemon restart, and—on a single-node cluster—image rollout) without `--force`. `--force` repeats an update when the host is already on that version.
 
-To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images.
+To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images. After system apps, the updater refreshes slugrunner on user apps that already have a release. Apps created in the dashboard or with `flynn create` that have never been deployed are skipped; a missing release on a required system app still fails the update.
 
 ## Adding Hosts
 

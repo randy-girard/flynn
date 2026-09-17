@@ -72,6 +72,9 @@ Use --skip-images with --all-nodes to update binaries on every node without
 touching container images. --images-only requires --all-nodes (image rollout is
 always cluster-wide).
 
+User apps with no current release (created in the dashboard or with
+flynn create but never deployed) are skipped so the update can finish.
+
 When --tarball is specified, the update is performed from a local .tar.gz file
 (the same tarball produced by the release scripts) instead of GitHub. With
 --all-nodes, a temporary HTTP server is started on this node to serve the
