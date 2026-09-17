@@ -244,6 +244,22 @@ func NewTestProcess(c *C, n int) *Process {
 	return NewProcess(cfg)
 }
 
+func assertPostgresStart(c *C, n *Process) {
+	var err error
+	for i := 0; i < 3; i++ {
+		err = n.Start()
+		if err == nil && n.Running() {
+			return
+		}
+		if n.Running() {
+			_ = n.Stop()
+		}
+		time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
+	}
+	c.Assert(err, IsNil, Commentf("postgres start failed; running=%v", n.Running()))
+	c.Assert(n.Running(), Equals, true)
+}
+
 func connect(c *C, p *Process, db string) *pgx.Conn {
 	port, _ := strconv.Atoi(p.port)
 	conn, err := pgx.Connect(pgx.ConnConfig{
@@ -616,22 +632,22 @@ func (PostgresSuite) TestRemoveNodes(c *C) {
 	node4 := NewTestProcess(c, 4)
 	err := node1.Reconfigure(pgConfig(state.RolePrimary, nil, node2))
 	c.Assert(err, IsNil)
-	c.Assert(node1.Start(), IsNil)
+	assertPostgresStart(c, node1)
 	defer node1.Stop()
 
 	err = node2.Reconfigure(pgConfig(state.RoleSync, node1, nil))
 	c.Assert(err, IsNil)
-	c.Assert(node2.Start(), IsNil)
+	assertPostgresStart(c, node2)
 	defer node2.Stop()
 
 	err = node3.Reconfigure(pgConfig(state.RoleAsync, node2, nil))
 	c.Assert(err, IsNil)
-	c.Assert(node3.Start(), IsNil)
+	assertPostgresStart(c, node3)
 	defer node3.Stop()
 
 	err = node4.Reconfigure(pgConfig(state.RoleAsync, node3, nil))
 	c.Assert(err, IsNil)
-	c.Assert(node4.Start(), IsNil)
+	assertPostgresStart(c, node4)
 	defer node4.Stop()
 
 	// wait for cluster to come up

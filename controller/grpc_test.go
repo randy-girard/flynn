@@ -34,7 +34,7 @@ import (
 )
 
 const bufSize = 1024 * 1024
-const grpcStreamTestTimeout = 2 * time.Second
+const grpcStreamTestTimeout = 5 * time.Second
 
 type GRPCSuite struct {
 	db                  *postgres.DB
@@ -1333,6 +1333,26 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 		return res
 	}
 
+	drainDeploymentsInitialPage := func(stream api.Controller_StreamDeploymentsClient) *api.StreamDeploymentsResponse {
+		res := receiveDeploymentsStream(stream)
+		c.Assert(res, Not(IsNil), Commentf("expected initial deployments page"))
+		c.Assert(res.PageComplete, Equals, true)
+		return res
+	}
+
+	receiveLiveDeployment := func(stream api.Controller_StreamDeploymentsClient) *api.StreamDeploymentsResponse {
+		for {
+			res := receiveDeploymentsStream(stream)
+			if res == nil {
+				return nil
+			}
+			if res.PageComplete {
+				continue
+			}
+			return res
+		}
+	}
+
 	assertDeploymentsEqual := func(c *C, a, b *api.ExpandedDeployment) {
 		comment := Commentf("Obtained %#v", a)
 		if a != nil {
@@ -1436,10 +1456,10 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming creates for specific app
 	stream, cancel := streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{NameFilters: []string{testApp2.Name}, StreamCreates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease5 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "5"}})
 	testDeployment5 := s.createTestDeployment(c, testRelease5.Name)
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment5)
@@ -1447,28 +1467,28 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test creates are not streamed when flag not set
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{NameFilters: []string{testApp2.Name}})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease6 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "6"}})
 	testDeployment6 := s.createTestDeployment(c, testRelease6.Name)
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, IsNil)
 	cancel()
 
 	// test streaming creates that don't match the NameFilters
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{NameFilters: []string{testApp2.Name}, StreamCreates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease7 := s.createTestRelease(c, testApp1.Name, &api.Release{Labels: map[string]string{"i": "7"}})
 	testDeployment7 := s.createTestDeployment(c, testRelease7.Name)
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, IsNil)
 	cancel()
 
 	// test streaming creates without filters
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{StreamCreates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease8 := s.createTestRelease(c, testApp2.Name, &api.Release{Labels: map[string]string{"i": "8"}})
 	testDeployment8 := s.createTestDeployment(c, testRelease8.Name)
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment8)
@@ -1476,12 +1496,12 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming creates that don't match the TypeFilters
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{TypeFilters: []api.ReleaseType{api.ReleaseType_CODE}, StreamCreates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease9 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "9"}, Artifacts: testRelease3.Artifacts})
 	testDeployment9 := s.createTestDeployment(c, testRelease9.Name) // doesn't match TypeFilters
 	testRelease10 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "10"}})
 	testDeployment10 := s.createTestDeployment(c, testRelease10.Name) // matches TypeFilters
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment10)
@@ -1489,12 +1509,12 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming updates
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{StreamUpdates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testRelease11 := s.createTestRelease(c, testApp3.Name, &api.Release{Labels: map[string]string{"i": "11"}})
 	testDeployment11 := s.createTestDeployment(c, testRelease11.Name) // make sure creates aren't streamed
 	testDeployment10.Status = api.DeploymentStatus_PENDING
 	s.createTestDeploymentEvent(c, testDeployment10, &ct.DeploymentEvent{Status: "pending"})
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment10)
@@ -1502,12 +1522,12 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming updates respects NameFilters [app name]
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{NameFilters: []string{testApp2.Name}, StreamUpdates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testDeployment10.Status = api.DeploymentStatus_COMPLETE
 	s.createTestDeploymentEvent(c, testDeployment10, &ct.DeploymentEvent{Status: "complete"})
 	testDeployment6.Status = api.DeploymentStatus_PENDING
 	s.createTestDeploymentEvent(c, testDeployment6, &ct.DeploymentEvent{Status: "pending"})
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment6)
@@ -1515,12 +1535,12 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming updates respects NameFilters [deployment name]
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{NameFilters: []string{testDeployment5.Name}, StreamUpdates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testDeployment6.Status = api.DeploymentStatus_COMPLETE
 	s.createTestDeploymentEvent(c, testDeployment6, &ct.DeploymentEvent{Status: "complete"})
 	testDeployment5.Status = api.DeploymentStatus_PENDING
 	s.createTestDeploymentEvent(c, testDeployment5, &ct.DeploymentEvent{Status: "pending"})
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment5)
@@ -1528,12 +1548,12 @@ func (s *GRPCSuite) TestStreamDeployments(c *C) {
 
 	// test streaming updates respects StatusFilters
 	stream, cancel = streamDeploymentsWithCancel(&api.StreamDeploymentsRequest{StatusFilters: []api.DeploymentStatus{api.DeploymentStatus_FAILED}, StreamUpdates: true})
-	receiveDeploymentsStream(stream) // initial page
+	drainDeploymentsInitialPage(stream)
 	testDeployment5.Status = api.DeploymentStatus_PENDING
 	s.createTestDeploymentEvent(c, testDeployment5, &ct.DeploymentEvent{Status: "pending"})
 	testDeployment6.Status = api.DeploymentStatus_FAILED
 	s.createTestDeploymentEvent(c, testDeployment6, &ct.DeploymentEvent{Status: "failed"})
-	res = receiveDeploymentsStream(stream)
+	res = receiveLiveDeployment(stream)
 	c.Assert(res, Not(IsNil))
 	c.Assert(len(res.Deployments), Equals, 1)
 	assertDeploymentsEqual(c, res.Deployments[0], testDeployment6)

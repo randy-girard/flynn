@@ -841,6 +841,13 @@ func (p *Process) start() error {
 				log.Error("error stopping postgres", "err", err)
 			}
 			return err
+		case <-p.daemonExit:
+			log.Error("postgres exited while waiting to accept connections", "err", err)
+			p.setRunning(false)
+			if err == nil {
+				err = errors.New("postgres exited unexpectedly")
+			}
+			return err
 		case <-time.After(checkInterval):
 		}
 	}
