@@ -288,6 +288,14 @@ does not need to be the same, but the `--min-hosts` flag and cluster discovery
 flag should be specified. The `CLUSTER_DOMAIN` variable is ignored, the domain
 of the previous cluster will be used.
 
+Restoring a singleton backup onto `--min-hosts 3` keeps the backup's
+`SINGLETON` flag and process counts so Postgres/MariaDB/MongoDB can elect a
+leader during wait/dump. After controller is up, the scheduler promotes those
+appliances to HA (new `SINGLETON=false` release at scale 1, then data process
+scale 3) once three hosts are active. Restoring onto a single host still
+forces singleton scale. Growing a live singleton cluster to three hosts uses
+the same promotion path.
+
 ### App Export
 
 To export a single app, run `flynn -a APPNAME export --file app.tar`. A file

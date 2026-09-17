@@ -367,32 +367,35 @@ UPDATE releases SET processes = jsonb_set(processes, '{app,volumes}', '[{"path":
 WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'gitreceive' AND deleted_at IS NULL);
 `)
 
-	// update the SINGLETON environment variable for database appliances
-	// (which includes updating legacy appliances which had SINGLETON set
-	// on the database type rather than the release)
-	singleton := strconv.FormatBool(cfg.Singleton)
-	postgresApp.Release.Env["SINGLETON"] = singleton
-	sireniaSQLNames := []string{"'postgres'"}
-	for _, p := range installed {
-		f := data[p.Name]
-		if f == nil || f.Release == nil {
-			continue
-		}
-		spec := plugin.RestoreSpecFor(p, f)
-		if !p.Sirenia && (spec == nil || !spec.Sirenia) && !f.Release.IsSirenia() {
-			continue
-		}
-		sireniaSQLNames = append(sireniaSQLNames, "'"+p.Name+"'")
-		f.Release.Env["SINGLETON"] = singleton
-		proc := f.Release.Env["SIRENIA_PROCESS"]
-		if proc == "" {
-			proc = p.Name
-		}
-		if pt, ok := f.Release.Processes[proc]; ok && pt.Env != nil {
-			delete(pt.Env, "SINGLETON")
-			f.Release.Processes[proc] = pt
-		}
-		sqlBuf.WriteString(fmt.Sprintf(`
+	// Restoring onto a singleton destination still forces SINGLETON=true and
+	// scale 1 (including a 3-node backup onto one host). Restoring onto an HA
+	// destination keeps the backup's SINGLETON flag and process counts so
+	// sirenia wait/dump can elect a leader; the scheduler promotes leftover
+	// singletons after controller is up.
+	if cfg.Singleton {
+		singleton := strconv.FormatBool(true)
+		postgresApp.Release.Env["SINGLETON"] = singleton
+		sireniaSQLNames := []string{"'postgres'"}
+		for _, p := range installed {
+			f := data[p.Name]
+			if f == nil || f.Release == nil {
+				continue
+			}
+			spec := plugin.RestoreSpecFor(p, f)
+			if !p.Sirenia && (spec == nil || !spec.Sirenia) && !f.Release.IsSirenia() {
+				continue
+			}
+			sireniaSQLNames = append(sireniaSQLNames, "'"+p.Name+"'")
+			f.Release.Env["SINGLETON"] = singleton
+			proc := f.Release.Env["SIRENIA_PROCESS"]
+			if proc == "" {
+				proc = p.Name
+			}
+			if pt, ok := f.Release.Processes[proc]; ok && pt.Env != nil {
+				delete(pt.Env, "SINGLETON")
+				f.Release.Processes[proc] = pt
+			}
+			sqlBuf.WriteString(fmt.Sprintf(`
 DO $$
   BEGIN
     IF (SELECT processes->'%s' ? 'env' FROM releases WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL)) THEN
@@ -401,56 +404,52 @@ DO $$
     END IF;
   END;
 $$;`, proc, p.Name, proc, proc, p.Name))
-	}
-	sqlBuf.WriteString(fmt.Sprintf(`
+		}
+		sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE releases SET env = jsonb_set(env, '{SINGLETON}', '%q')
 WHERE release_id IN (SELECT release_id FROM apps WHERE name IN (%s));
 `, singleton, strings.Join(sireniaSQLNames, ", ")))
 
-	// modify app scale based on whether we are booting
-	// a singleton or HA cluster
-	webN, dataN := 1, 1
-	if !cfg.Singleton {
-		webN, dataN = 2, 3
-	}
-	scale := map[string]map[string]int{
-		"postgres":      {"postgres": dataN, "web": webN},
-		"controller":    {"web": webN, "worker": webN},
-		"blobstore":     {"web": webN},
-		"gitreceive":    {"app": webN},
-		"tarreceive":    {"app": webN},
-		"logaggregator": {"app": webN},
-		"status":        {"web": webN},
-	}
-	postgresApp.Processes["postgres"] = dataN
-	postgresApp.Processes["web"] = webN
-	for _, p := range installed {
-		f := data[p.Name]
-		if f == nil {
-			continue
+		webN, dataN := 1, 1
+		scale := map[string]map[string]int{
+			"postgres":      {"postgres": dataN, "web": webN},
+			"controller":    {"web": webN, "worker": webN},
+			"blobstore":     {"web": webN},
+			"gitreceive":    {"app": webN},
+			"tarreceive":    {"app": webN},
+			"logaggregator": {"app": webN},
+			"status":        {"web": webN},
 		}
-		if f.Processes == nil {
-			f.Processes = map[string]int{}
+		postgresApp.Processes["postgres"] = dataN
+		postgresApp.Processes["web"] = webN
+		for _, p := range installed {
+			f := data[p.Name]
+			if f == nil {
+				continue
+			}
+			if f.Processes == nil {
+				f.Processes = map[string]int{}
+			}
+			f.Processes["web"] = webN
+			scale[p.Name] = map[string]int{"web": webN}
+			proc := ""
+			if f.Release != nil {
+				proc = f.Release.Env["SIRENIA_PROCESS"]
+			}
+			if proc == "" {
+				proc = p.Name
+			}
+			if p.Sirenia || (f.Release != nil && f.Release.IsSirenia()) {
+				f.Processes[proc] = dataN
+			}
 		}
-		f.Processes["web"] = webN
-		scale[p.Name] = map[string]int{"web": webN}
-		proc := ""
-		if f.Release != nil {
-			proc = f.Release.Env["SIRENIA_PROCESS"]
-		}
-		if proc == "" {
-			proc = p.Name
-		}
-		if p.Sirenia || (f.Release != nil && f.Release.IsSirenia()) {
-			f.Processes[proc] = dataN
-		}
-	}
-	for app, procs := range scale {
-		for typ, count := range procs {
-			sqlBuf.WriteString(fmt.Sprintf(`
+		for app, procs := range scale {
+			for typ, count := range procs {
+				sqlBuf.WriteString(fmt.Sprintf(`
 UPDATE formations SET processes = jsonb_set(processes, '{%s}', '%d')
 WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at IS NULL);
 `, typ, count, app))
+			}
 		}
 	}
 
