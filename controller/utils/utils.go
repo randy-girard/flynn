@@ -327,6 +327,7 @@ type ControllerClient interface {
 	StreamFormations(since *time.Time, ch chan<- *ct.ExpandedFormation) (stream.Stream, error)
 	AppList() ([]*ct.App, error)
 	FormationListActive() ([]*ct.ExpandedFormation, error)
+	SetAppRelease(appID, releaseID string) error
 	PutJob(*ct.Job) error
 	JobListActive() ([]*ct.Job, error)
 	StreamSinks(since *time.Time, ch chan *ct.Sink) (stream.Stream, error)

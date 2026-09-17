@@ -8,6 +8,8 @@ layout: docs
 The Flynn Postgres appliance provides PostgreSQL 16 in a highly-available
 configuration with automatic provisioning. It automatically fails over to
 a synchronous replica with no loss of data if the primary server goes down.
+A single-host (`SINGLETON`) cluster runs one peer; when a third host joins,
+the scheduler promotes the appliance to a three-peer replica set automatically.
 
 The image includes **PostGIS 3**, **pgRouting**, and **TimescaleDB 2** in
 addition to `postgresql-contrib`.

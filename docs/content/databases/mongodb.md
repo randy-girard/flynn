@@ -17,7 +17,9 @@ flynn resource add mongodb
 
 The plugin provides MongoDB 7.0 in a highly-available configuration with
 automatic provisioning. Replication is implemented using MongoDB's replica set
-feature. The image includes `mongod`, database tools, and `mongosh` (not the
+feature. A single-host (`SINGLETON`) cluster runs one peer; when a third host
+joins, the scheduler promotes the appliance to a three-peer replica set
+automatically. The image includes `mongod`, database tools, and `mongosh` (not the
 legacy `mongo` shell).
 
 ## Usage

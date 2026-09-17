@@ -8,6 +8,7 @@ import (
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/controller/utils"
+	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/stream"
 )
 
@@ -125,6 +126,10 @@ func (c *FakeControllerClient) CreateRelease(appID string, release *ct.Release) 
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 
+	if release.ID == "" {
+		release.ID = random.UUID()
+	}
+	release.AppID = appID
 	c.releases[release.ID] = release
 	return nil
 }
@@ -216,6 +221,18 @@ func (c *FakeControllerClient) FormationListActive() ([]*ct.ExpandedFormation, e
 		}
 	}
 	return formations, nil
+}
+
+func (c *FakeControllerClient) SetAppRelease(appID, releaseID string) error {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if _, ok := c.apps[appID]; !ok {
+		return controller.ErrNotFound
+	}
+	if _, ok := c.releases[releaseID]; !ok {
+		return controller.ErrNotFound
+	}
+	return nil
 }
 
 func (c *FakeControllerClient) StreamFormations(since *time.Time, ch chan<- *ct.ExpandedFormation) (stream.Stream, error) {

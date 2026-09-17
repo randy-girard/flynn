@@ -41,6 +41,10 @@ resolve from user jobs.
 Redis, Kafka, and ClickHouse do not use the sirenia state machine described
 below. See each page for safety notes.
 
+On a single-host cluster, postgres/MariaDB/MongoDB run one peer
+(`SINGLETON=true`). When a third host joins, the scheduler promotes them to a
+three-peer replica set automatically.
+
 ## State Machine Design
 
 The Flynn database appliances are designed with a few goals in mind:

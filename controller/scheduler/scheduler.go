@@ -915,6 +915,7 @@ func (s *Scheduler) SyncHosts() (err error) {
 		return ErrNoHosts
 	}
 
+	s.maybePromoteSireniaHA()
 	return nil
 }
 
@@ -1165,13 +1166,36 @@ func (s *Scheduler) shouldDeferVolumeAllocation(job *Job, volReq *ct.VolumeReq) 
 	if s.findVolume(job, volReq) != nil {
 		return false
 	}
-	if job.Formation == nil || job.Formation.Release == nil || !job.Formation.Release.IsSireniaSingleton() {
+	if job.Formation == nil || job.Formation.Release == nil || !job.Formation.Release.IsSirenia() {
 		return false
 	}
-	if job.Formation.OriginalProcesses[job.Type] > 1 {
+	if job.Formation.Release.IsSireniaSingleton() {
+		if job.Formation.OriginalProcesses[job.Type] > 1 {
+			return false
+		}
+		return s.busyMatchingPersistentVolume(job, volReq) != nil
+	}
+	// Singleton → HA env flip: new release is SINGLETON=false at scale 1
+	// while the old singleton peer still holds /data. HA rolling deploys
+	// also start at scale 1, but their old peers are not singletons.
+	if job.Formation.OriginalProcesses[job.Type] == 1 {
+		return s.busyVolumeHeldBySireniaSingleton(job, volReq)
+	}
+	return false
+}
+
+func (s *Scheduler) busyVolumeHeldBySireniaSingleton(job *Job, req *ct.VolumeReq) bool {
+	vol := s.busyMatchingPersistentVolume(job, req)
+	if vol == nil || vol.JobID == nil {
 		return false
 	}
-	return s.busyMatchingPersistentVolume(job, volReq) != nil
+	if holder, ok := s.jobs[*vol.JobID]; ok && holder.Formation != nil && holder.Formation.Release != nil {
+		return holder.Formation.Release.IsSireniaSingleton()
+	}
+	if f := s.formations.Get(vol.AppID, vol.ReleaseID); f != nil && f.Release != nil {
+		return f.Release.IsSireniaSingleton()
+	}
+	return false
 }
 
 // busyMatchingPersistentVolume returns a same-app/type/path data volume whose
@@ -2133,6 +2157,7 @@ func (s *Scheduler) handleNewHost(id string) {
 	// we have a new host which may now match the tags of some blocked jobs
 	// and have their volumes so try to start them
 	s.maybeStartBlockedJobs(host)
+	s.maybePromoteSireniaHA()
 }
 
 // activeHostCount returns the number of active hosts (i.e. all hosts which

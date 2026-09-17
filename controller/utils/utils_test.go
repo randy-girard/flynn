@@ -225,8 +225,9 @@ func (expandStub) AppList() ([]*ct.App, error) { return nil, nil }
 func (expandStub) FormationListActive() ([]*ct.ExpandedFormation, error) {
 	return nil, nil
 }
-func (expandStub) PutJob(*ct.Job) error              { return nil }
-func (expandStub) JobListActive() ([]*ct.Job, error) { return nil, nil }
+func (expandStub) SetAppRelease(string, string) error { return nil }
+func (expandStub) PutJob(*ct.Job) error               { return nil }
+func (expandStub) JobListActive() ([]*ct.Job, error)  { return nil, nil }
 func (expandStub) StreamSinks(*time.Time, chan *ct.Sink) (stream.Stream, error) {
 	return nil, errors.New("unused")
 }
