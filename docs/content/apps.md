@@ -114,9 +114,19 @@ and can be followed in real time with `flynn log -f`.
 
 ### External Logs
 
-Apps can also stream their logs to remote syslog services using system or client
-libraries. Most programming languages have built-in support for remote logging,
-for example Python's `SysLogHandler`.
+Apps can stream logs to syslog with `flynn logsink:add syslog …` (one app) or
+operators can forward **all user apps**, **one app**, or **Flynn system jobs**
+from a host:
+
+```text
+flynn -a myapp logsink:add syslog syslog://logs.example:514/
+sudo flynn-host log-sink add syslog --scope apps syslog://logs.example:514/
+sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/
+sudo flynn-host otel add --scope system http://alloy.example:4318
+```
+
+`flynn-host otel` is OpenTelemetry (metrics and/or logs) for Grafana and other
+OTLP collectors. See [Production — Monitoring](production.html.md#monitoring).
 
 ## Routes
 
@@ -135,6 +145,24 @@ flynn route add http www.example.com
 
 DNS will also need to be configured for the domain, in this example
 `www.example.com` should be set to a CNAME to `$APPNAME.$CLUSTERDOMAIN`.
+
+### Cluster apex (root domain)
+
+Apps are normally `https://$APPNAME.$CLUSTERDOMAIN`. The **apex** is the
+cluster domain itself (`https://$CLUSTERDOMAIN`, for example
+`https://flynncluster.com` next to `https://www.flynncluster.com`). Only one
+app can own it. The www plugin registers both `www.$CLUSTERDOMAIN` and the
+apex on install. Change the owner later from a host:
+
+```text
+sudo flynn-host domain
+sudo flynn-host domain apex www
+sudo flynn-host domain apex dashboard
+sudo flynn-host domain apex --clear
+```
+
+Point DNS for the bare domain at the same addresses as the cluster (A/AAAA or
+ALIAS), the same way you already do for `$CLUSTERDOMAIN`.
 
 ### Additional Process Types
 
@@ -203,7 +231,7 @@ flynn-host acme enable-system-routes
 ```
 
 After this, public certificates replace the bootstrap self-signed cert. Clear
-the CLI TLS pin with `flynn cluster update-pin --clear`.
+the CLI TLS pin with `flynn cluster:refresh --clear`.
 
 To disable Let's Encrypt on all system app routes:
 

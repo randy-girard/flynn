@@ -26,6 +26,7 @@ Development layout (relative to the Flynn repo):
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
 | `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
+| `www` | `../flynn-plugin-www` | (none; `kind: app`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
@@ -40,6 +41,7 @@ sudo flynn-host plugin install ../flynn-plugin-redis
 sudo flynn-host plugin install redis
 sudo flynn-host plugin install ../flynn-plugin-dashboard
 sudo flynn-host plugin install ../flynn-plugin-discovery
+sudo flynn-host plugin install ../flynn-plugin-www
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
@@ -64,6 +66,11 @@ sudo flynn-host plugin dashboard route add http --auto-tls
 sudo flynn-host plugin dashboard route add http --auto-tls dashboard.example.com
 sudo flynn-host plugin dashboard route update http/<id> --auto-tls
 ```
+
+The **www** plugin also registers the cluster apex (`$CLUSTER_DOMAIN` with no
+subdomain) so `https://flynncluster.com` and `https://www.flynncluster.com` can
+serve the same homepage. Operators pick a different apex app with
+`flynn-host domain apex <app>`. See [Apps — cluster apex](apps.md#cluster-apex-root-domain).
 
 `<plugin>` is the installed app name (or its `cli.command`). Flynn does not
 special-case dashboard. Omit `<domain>` on `add http` when the plugin has
@@ -110,7 +117,9 @@ cluster.
 On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
-runs `flynn-host plugin install` on node1.
+runs `flynn-host plugin install` on node1. Default `PLUGIN_SMOKE_APPS` is
+`redis mysql mongodb kafka clickhouse dashboard www discovery` (every
+first-party plugin except the template).
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
 list **resource-provider** plugin commands under a **Plugins:** section (from
@@ -173,6 +182,7 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 sudo flynn-host plugin install redis --ref v20260914.0
 sudo flynn-host plugin install dashboard --auto-tls
 sudo flynn-host plugin install discovery
+sudo flynn-host plugin install www --auto-tls
 sudo flynn-host plugin update dashboard --ref v20260916.3
 sudo flynn-host plugin uninstall dashboard
 sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
@@ -243,7 +253,7 @@ Or set `FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot.
 
 ## Backup and restore
 
-`flynn cluster backup` writes a `plugins.json` inventory (name, kind, install
+`flynn-host backup` writes a `plugins.json` inventory (name, kind, install
 source, wait URL, CLI) next to `flynn.json`. Plugin apps, providers, artifacts,
 and squashfs layers live in the postgres dump (controller + default blobstore),
 so **`flynn-host bootstrap --from-backup` does not run plugin install again.**
