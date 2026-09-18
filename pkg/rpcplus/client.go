@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -26,6 +27,28 @@ func (e ServerError) Error() string {
 }
 
 var ErrShutdown = errors.New("connection is shut down")
+
+// isBenignRPCDisconnect reports a peer closing the RPC socket. flynn-host
+// watches containerinit over /.container-shared/rpc.sock; when a job exits
+// the unix conn returns a wrapped EOF (not bare io.EOF), which used to log
+// "rpc: client protocol error" on every container stop.
+func isBenignRPCDisconnect(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var op *net.OpError
+	if errors.As(err, &op) && (errors.Is(op.Err, io.EOF) || errors.Is(op.Err, io.ErrUnexpectedEOF) || errors.Is(op.Err, net.ErrClosed)) {
+		return true
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "EOF") {
+		return false
+	}
+	return strings.Contains(msg, "rpc.sock") || strings.Contains(msg, "use of closed network connection")
+}
 
 // Call represents an active RPC.
 type Call struct {
@@ -203,7 +226,7 @@ func (client *Client) input() {
 	}
 	client.mutex.Unlock()
 	client.sending.Unlock()
-	if err != io.EOF && !closing {
+	if !closing && !isBenignRPCDisconnect(err) {
 		log.Println("rpc: client protocol error:", err)
 	}
 }
