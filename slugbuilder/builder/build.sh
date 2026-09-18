@@ -160,6 +160,58 @@ fi
 buildpacks=(${buildpack_root}/*)
 selected_buildpack=
 
+try_inline_buildpack() {
+  local detect="${build_dir}/bin/detect"
+  local compile="${build_dir}/bin/compile"
+  if [[ ! -f "${detect}" || ! -f "${compile}" ]]; then
+    return 1
+  fi
+  chmod +x "${detect}" "${compile}" "${build_dir}/bin/release" 2>/dev/null || true
+  local name
+  if name=$(run_unprivileged "${detect}" "${build_dir}" 2>/dev/null); then
+    selected_buildpack="${build_dir}"
+    buildpack_name="${name:-Inline}"
+    return 0
+  fi
+  return 1
+}
+
+try_buildpacks_file() {
+  local list="${build_dir}/.buildpacks"
+  if [[ ! -f "${list}" ]]; then
+    return 1
+  fi
+  local url
+  url=$(grep -v '^[[:space:]]*#' "${list}" | grep -v '^[[:space:]]*$' | head -n1)
+  url=$(trim "${url}")
+  if [[ -z "${url}" ]]; then
+    return 1
+  fi
+  echo_title "Fetching buildpack from .buildpacks"
+  rm -rf "${buildpack_root}"/custom_*
+  bash /builder/install-buildpack \
+    "${buildpack_root}" \
+    "${url}" \
+    custom \
+    "${env_dir}"
+  local pack
+  pack=$(echo "${buildpack_root}"/custom_*)
+  if [[ ! -d "${pack}" ]]; then
+    return 1
+  fi
+  chmod -R a+rX "${pack}"
+  find "${pack}/bin" -type f -exec chmod a+x {} + 2>/dev/null || true
+  chown -R "${USER}:${USER}" "${pack}"
+  local name
+  if name=$(run_unprivileged "${pack}/bin/detect" "${build_dir}"); then
+    selected_buildpack="${pack}"
+    buildpack_name="${name}"
+    buildpacks=("${pack}")
+    return 0
+  fi
+  return 1
+}
+
 if [[ -n "${BUILDPACK_URL}" ]]; then
   echo_title "Fetching custom buildpack"
 
@@ -190,10 +242,21 @@ else
   done
 fi
 
+if [[ -z "${selected_buildpack}" ]]; then
+  try_inline_buildpack || true
+fi
+if [[ -z "${selected_buildpack}" ]]; then
+  try_buildpacks_file || true
+fi
+
 if [[ -n "${selected_buildpack}" ]]; then
   echo_title "${buildpack_name} app detected"
 else
   echo_title "Unable to select a buildpack"
+  echo_normal "No bundled buildpack matched this app."
+  echo_normal "Add language files (requirements.txt, Gemfile, package.json, …),"
+  echo_normal "a .buildpacks URL, BUILDPACK_URL, or bin/detect + bin/compile"
+  echo_normal "for an inline buildpack. For a Dockerfile: flynn stack:set container"
   exit 1
 fi
 
