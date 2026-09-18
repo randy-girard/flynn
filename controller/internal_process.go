@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 
@@ -225,16 +226,13 @@ func filterInternalProcessLogs(r io.ReadCloser) io.ReadCloser {
 	pr, pw := io.Pipe()
 	go func() {
 		defer r.Close()
-		dec := json.NewDecoder(r)
+		// NDJSON (one object per line). A streaming json.Decoder can block
+		// forever on a follow stream that has not closed a token.
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		var err error
-		for {
-			var raw json.RawMessage
-			if err = dec.Decode(&raw); err != nil {
-				if err == io.EOF {
-					err = nil
-				}
-				break
-			}
+		for sc.Scan() {
+			raw := sc.Bytes()
 			if logLineInternalProcess(raw) {
 				continue
 			}
@@ -244,6 +242,9 @@ func filterInternalProcessLogs(r io.ReadCloser) io.ReadCloser {
 			if _, err = pw.Write([]byte("\n")); err != nil {
 				break
 			}
+		}
+		if err == nil {
+			err = sc.Err()
 		}
 		pw.CloseWithError(err)
 	}()

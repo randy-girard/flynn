@@ -17,8 +17,8 @@ type releaseID struct {
 }
 
 func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	var release ct.Release
-	if err := httphelper.DecodeJSON(req, &release); err != nil {
+	release := &ct.Release{}
+	if err := httphelper.DecodeJSON(req, release); err != nil {
 		respondWithError(w, err)
 		return
 	}
@@ -50,20 +50,19 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 		}
 	}
 
-	if err := schema.Validate(&release); err != nil {
+	if err := schema.Validate(release); err != nil {
 		respondWithError(w, err)
 		return
 	}
-	if err := c.releaseRepo.Add(&release); err != nil {
+	if err := c.releaseRepo.Add(release); err != nil {
 		respondWithError(w, err)
 		return
 	}
 	if hideInternalLimits(ctx, app) {
-		redacted := redactRelease(&release)
-		httphelper.JSON(w, 200, redacted)
+		httphelper.JSON(w, 200, redactRelease(release))
 		return
 	}
-	httphelper.JSON(w, 200, &release)
+	httphelper.JSON(w, 200, release)
 }
 
 func (c *controllerAPI) GetAppReleases(ctx context.Context, w http.ResponseWriter, req *http.Request) {

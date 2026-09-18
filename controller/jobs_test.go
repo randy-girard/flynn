@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"time"
 
 	. "github.com/flynn/go-check"
 	tu "github.com/randy-girard/flynn/controller/testutils"
@@ -346,13 +347,33 @@ func (s *S) TestRunJobAttached(c *C) {
 	c.Assert(err, IsNil)
 	defer rwc.Close()
 
+	// Read stdout while writing stdin. jobs.go copies both directions on the
+	// hijacked conn; waiting for stdin before reading can stall the session
+	// under -race/cover (CI hung here for the full 10m package timeout).
+	stdout := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 10)
+		n, err := rwc.Read(buf)
+		if err != nil {
+			stdout <- err.Error()
+			return
+		}
+		stdout <- string(buf[:n])
+	}()
 	_, err = rwc.Write([]byte("test in"))
 	c.Assert(err, IsNil)
-	c.Assert(<-input, Equals, "test in")
-	buf := make([]byte, 10)
-	n, err := rwc.Read(buf)
-	c.Assert(err, IsNil)
-	c.Assert(string(buf[:n]), Equals, "test out")
+	select {
+	case got := <-input:
+		c.Assert(got, Equals, "test in")
+	case <-time.After(5 * time.Second):
+		c.Fatal("timed out waiting for attach stdin")
+	}
+	select {
+	case got := <-stdout:
+		c.Assert(got, Equals, "test out")
+	case <-time.After(5 * time.Second):
+		c.Fatal("timed out waiting for attach stdout")
+	}
 
 	jobs, err := hc.ListJobs()
 	c.Assert(err, IsNil)
