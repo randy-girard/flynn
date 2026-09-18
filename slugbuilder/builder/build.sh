@@ -163,17 +163,25 @@ selected_buildpack=
 if [[ -n "${BUILDPACK_URL}" ]]; then
   echo_title "Fetching custom buildpack"
 
-  buildpack="${buildpack_root}/custom*"
-  rm -rf "${buildpack}"
-  run_unprivileged "/builder/install-buildpack" \
+  # Clone as root: setuidgid exec of /builder/install-buildpack exits 111 when
+  # the script is missing +x or the flynn user cannot exec it. Do not swallow
+  # git clone errors — they are the only signal when GitHub/git fails.
+  rm -rf "${buildpack_root}"/custom_*
+  bash /builder/install-buildpack \
     "${buildpack_root}" \
     "${BUILDPACK_URL}" \
     custom \
-    "${env_dir}" \
-    &> /dev/null
-  buildpacks=($buildpack)
-  selected_buildpack=${buildpack[0]}
-  buildpack_name=$(run_unprivileged ${buildpack}/bin/detect "${build_dir}")
+    "${env_dir}"
+  buildpacks=("${buildpack_root}"/custom_*)
+  selected_buildpack="${buildpacks[0]}"
+  if [[ ! -d "${selected_buildpack}" ]]; then
+    echo_title "Unable to fetch custom buildpack"
+    exit 1
+  fi
+  chmod -R a+rX "${selected_buildpack}"
+  find "${selected_buildpack}/bin" -type f -exec chmod a+x {} + 2>/dev/null || true
+  chown -R "${USER}:${USER}" "${selected_buildpack}"
+  buildpack_name=$(run_unprivileged "${selected_buildpack}/bin/detect" "${build_dir}")
 else
   for buildpack in "${buildpacks[@]}"; do
     buildpack_name=$(run_unprivileged ${buildpack}/bin/detect "${build_dir}" 2>/dev/null) \
