@@ -15,23 +15,23 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/flynn/flynn/bootstrap/discovery"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/cli"
-	"github.com/flynn/flynn/host/config"
-	"github.com/flynn/flynn/host/logmux"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	volumeapi "github.com/flynn/flynn/host/volume/api"
-	volumemanager "github.com/flynn/flynn/host/volume/manager"
-	zfsVolume "github.com/flynn/flynn/host/volume/zfs"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
 	"github.com/opencontainers/runc/libcontainer"
 	_ "github.com/opencontainers/runc/libcontainer/nsenter"
+	"github.com/randy-girard/flynn/bootstrap/discovery"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/cli"
+	"github.com/randy-girard/flynn/host/config"
+	"github.com/randy-girard/flynn/host/logmux"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	volumeapi "github.com/randy-girard/flynn/host/volume/api"
+	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
+	zfsVolume "github.com/randy-girard/flynn/host/volume/zfs"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 const configFile = "/etc/flynn/host.json"
@@ -94,37 +94,63 @@ Options:
   --version                  Show current version
 
 Commands:
-  acme                       Manage ACME/Let's Encrypt configuration
-  backup                     Take a cluster backup
-  bootstrap                  Bootstrap layer 1
-  cli-add-command            Get the 'flynn cluster:add' command to manage this cluster
-  collect-debug-info         Collect debug information into an anonymous gist or tarball
-  daemon                     Start the daemon
-  demote                     Demote a Flynn node from the consensus cluster
-  destroy-volumes            Destroy the local volume database
-  discover                   Return low-level information about a service
-  domain                     Show cluster domain and apex (root) app
-  download                   Download container images
-  fix                        Fix a broken cluster
-  help                       Show usage for a specific command
-  init                       Create cluster configuration for daemon
-  inspect                    Get low-level information about a job
-  list                       List ID and IP of each host
-  log                        Get the logs of a job
-  log-sink                   Manage cluster and host log sinks
-  migrate-domain             Migrate the cluster base domain
-  otel                       Forward cluster metrics via the otel plugin
-  plugin                     Install and list cluster plugins
-  promote                    Promote a Flynn node into the consensus cluster
-  ps                         List jobs
-  run                        Run an interactive job
-  signal                     Signal a job
-  stop                       Stop running jobs
-  tags                       Manage flynn-host daemon tags
-  update                     Update Flynn components
-  version                    Show current version
-  volume                     Manage volumes on the Flynn node
-  webhooks                   Manage webhook notification endpoints
+  acme                            Show ACME/Let's Encrypt status
+  acme:configure                  Register a Let's Encrypt account
+  acme:disable                    Disable ACME for the cluster
+  acme:disable-system-routes      Disable Let's Encrypt on system app routes
+  acme:enable                     Enable ACME for the cluster
+  acme:enable-system-routes       Enable Let's Encrypt on system app routes
+  acme:status                     Show ACME/Let's Encrypt status
+  backup                          Take a cluster backup
+  bootstrap                       Bootstrap layer 1
+  cli-add-command                 Get the 'flynn cluster:add' command to manage this cluster
+  collect-debug-info              Collect debug information into an anonymous gist or tarball
+  daemon                          Start the daemon
+  demote                          Demote a Flynn node from the consensus cluster
+  destroy-volumes                 Destroy the local volume database
+  discover                        Return low-level information about a service
+  domain                          Show cluster domain and apex (root) app
+  domain:apex                     Set or clear which app serves the apex hostname
+  download                        Download container images
+  fix                             Fix a broken cluster
+  help                            Show usage for a specific command
+  init                            Create cluster configuration for daemon
+  inspect                         Get low-level information about a job
+  list                            List ID and IP of each host
+  log                             Get the logs of a job
+  log-sink                        List cluster log sinks
+  log-sink:add                    Add a cluster syslog sink
+  log-sink:list                   List cluster or host log sinks
+  log-sink:remove                 Remove a cluster log sink
+  migrate-domain                  Migrate the cluster base domain
+  otel                            List OpenTelemetry exporters
+  otel:add                        Add an OpenTelemetry exporter
+  otel:remove                     Remove an OpenTelemetry exporter
+  plugin:credentials-set          Store a GitHub token for plugin releases
+  plugin:credentials-show         Show whether GitHub plugin credentials are set
+  plugin:credentials-unset        Remove stored GitHub plugin credentials
+  plugin:install                  Install a plugin from a path, alias, or GitHub URL
+  plugin:list                     List installed plugins (--known for official plugins)
+  plugin:route                    List, add, update, or remove routes for an installed plugin
+  plugin:uninstall                Remove an installed plugin
+  plugin:update                   Deploy a new release of an installed plugin
+  promote                         Promote a Flynn node into the consensus cluster
+  ps                              List jobs
+  run                             Run an interactive job
+  signal                          Signal a job
+  stop                            Stop running jobs
+  tags                            List flynn-host daemon tags
+  tags:del                        Delete flynn-host daemon tags
+  tags:set                        Set flynn-host daemon tags
+  update                          Update Flynn components
+  version                         Show current version
+  volume:create                   Create a data volume on a host
+  volume:delete                   Delete volumes
+  volume:gc                       Garbage collect unused volumes
+  volume:list                     List volumes
+  webhooks                        List webhook notification endpoints
+  webhooks:add                    Add a webhook notification endpoint
+  webhooks:remove                 Remove a webhook notification endpoint
 
 See 'flynn-host help <command>' for more information on a specific command.
 `
@@ -183,6 +209,9 @@ See 'flynn-host help <command>' for more information on a specific command.
 			os.Setenv("FLYNN_HOST_AUTH_KEY", key)
 		}
 	}
+
+	cmd, cmdArgs, from := cli.ResolveCommand(cmd, cmdArgs)
+	cli.PrintCommandRename(from, cmd)
 
 	if err := cli.Run(cmd, cmdArgs); err != nil {
 		if err == cli.ErrInvalidCommand {

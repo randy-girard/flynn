@@ -11,9 +11,9 @@ import (
 	"strconv"
 	"strings"
 
-	controller "github.com/flynn/flynn/controller/client"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func init() {
@@ -195,7 +195,7 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 			return fmt.Errorf("error checking ACME configuration: %s", err)
 		}
 		if !acmeConfig.Enabled {
-			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' and 'flynn-host acme enable' first.")
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' and 'flynn-host acme:enable' first.")
 		}
 	}
 
@@ -211,6 +211,9 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 	u, err := url.Parse("http://" + args.String["<domain>"])
 	if err != nil {
 		return fmt.Errorf("Failed to parse %s as URL", args.String["<domain>"])
+	}
+	if router.HTTPPathRequiresClusterAdmin(u.Path) {
+		return fmt.Errorf("path-based HTTP routes (%s) can only be created with flynn-host route:add", args.String["<domain>"])
 	}
 
 	hr := &router.HTTPRoute{
@@ -299,7 +302,7 @@ func runRouteUpdateHTTP(args *docopt.Args, client controller.Client) error {
 			return fmt.Errorf("error checking ACME configuration: %s", err)
 		}
 		if !acmeConfig.Enabled {
-			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' and 'flynn-host acme enable' first.")
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' and 'flynn-host acme:enable' first.")
 		}
 		route.ManagedCertificateDomain = &route.Domain
 	} else if args.Bool["--no-auto-tls"] {

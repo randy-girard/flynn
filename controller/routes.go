@@ -5,11 +5,12 @@ import (
 	"net/http"
 	"sort"
 
-	"github.com/flynn/flynn/controller/data"
-	"github.com/flynn/flynn/controller/schema"
-	"github.com/flynn/flynn/pkg/ctxhelper"
-	"github.com/flynn/flynn/pkg/httphelper"
-	router "github.com/flynn/flynn/router/types"
+	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/data"
+	"github.com/randy-girard/flynn/controller/schema"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 )
 
@@ -26,6 +27,14 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
+	if router.HTTPPathRequiresClusterAdmin(route.Path) {
+		tok := authz.TokenFromContext(ctx)
+		if tok == nil || !tok.HasClusterAdmin() {
+			httphelper.Forbidden(w, "path-based HTTP routes can only be created with flynn-host cluster administrator credentials")
+			return
+		}
+	}
+
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
 		enabled, err := c.acmeConfigRepo.IsEnabled()
@@ -36,7 +45,7 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		if !enabled {
 			httphelper.Error(w, httphelper.JSONError{
 				Code:    httphelper.ValidationErrorCode,
-				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme configure' and 'flynn-host acme enable' first.",
+				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme:configure' and 'flynn-host acme:enable' first.",
 			})
 			return
 		}
@@ -134,7 +143,7 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 		if !enabled {
 			httphelper.Error(w, httphelper.JSONError{
 				Code:    httphelper.ValidationErrorCode,
-				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme configure' and 'flynn-host acme enable' first.",
+				Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme:configure' and 'flynn-host acme:enable' first.",
 			})
 			return
 		}
