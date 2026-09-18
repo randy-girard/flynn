@@ -51,6 +51,12 @@ need 'cli_run_job' \
   "CLI step must share a time-bounded flynn run helper"
 need 'echo smoke-cli' \
   "CLI step must run a one-off job (scheduler + slugrunner)"
+need 'buildpack-cli-run' \
+  "CLI step must flynn run against the custom .buildpacks app"
+need 'echo buildpack-cli' \
+  "custom-buildpack flynn run must execute a command in slugrunner"
+need 'cat .buildpack-stamp' \
+  "CLI step must read the custom compile stamp from the slug"
 need 'docker-cli-run' \
   "CLI step must flynn run against the Dockerfile/container-stack app"
 need 'echo docker-cli' \

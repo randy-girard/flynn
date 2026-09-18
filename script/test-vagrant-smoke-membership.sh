@@ -45,6 +45,8 @@ need 'step_membership_deploy' \
   "membership changes must re-run slug git-push, Dockerfile git-push, docker push, and flynn run"
 need 'slug app git dir missing' \
   "membership must git-push the regular slug app, not only the Dockerfile app"
+need 'buildpack app git dir missing' \
+  "membership must git-push the custom .buildpacks app after add/remove"
 need 'smoke_docker_push_image 0' \
   "membership must flynn docker push a pre-built image after add/remove"
 need 'git push attempt' \

@@ -14,9 +14,10 @@
 #   4. For each topology in SMOKE_TOPOLOGIES (default: 1-node singleton, then
 #      3-node HA): boot those VMs, install the tarball, bootstrap
 #      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
-#      datastore provider, git-push test/apps/upgrade-smoke-docker on the
-#      container stack (dockerbuilder-24), flynn docker push a pre-built
-#      image of the same Dockerfile, verify HTTP/status/rows, exercise flynn /
+#      datastore provider, git-push test/apps/upgrade-smoke-buildpack with a
+#      custom .buildpacks file (heroku-buildpack-inline + bin/compile), git-push
+#      test/apps/upgrade-smoke-docker on the container stack (dockerbuilder-24),
+#      flynn docker push a pre-built image of the same Dockerfile, verify HTTP/status/rows, exercise flynn /
 #      flynn-host, add/write/read/remove a persistent volume, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
 #      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
@@ -54,6 +55,8 @@
 #   BUILD_PHASE          build.sh phase: cluster|all|auto [default: auto]
 #   CLUSTER_DOMAIN       Bootstrap domain [default: upgrade-smoke.localflynn.com]
 #   APP_NAME             Slug/buildpack test app [default: upgrade-smoke]
+#   BUILDPACK_APP_NAME   Custom .buildpacks git-push app
+#                        [default: upgrade-smoke-buildpack]
 #   DOCKER_APP_NAME      Dockerfile git-push / container-stack app
 #                        [default: upgrade-smoke-docker]
 #   DOCKER_PUSH_APP_NAME Pre-built image via flynn docker push
@@ -145,6 +148,7 @@ BUILD_VERSION="${BUILD_VERSION:-}"
 BUILD_PHASE="${BUILD_PHASE:-auto}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-upgrade-smoke.localflynn.com}"
 APP_NAME="${APP_NAME:-upgrade-smoke}"
+BUILDPACK_APP_NAME="${BUILDPACK_APP_NAME:-upgrade-smoke-buildpack}"
 DOCKER_APP_NAME="${DOCKER_APP_NAME:-upgrade-smoke-docker}"
 DOCKER_PUSH_APP_NAME="${DOCKER_PUSH_APP_NAME:-upgrade-smoke-docker-push}"
 DOCKER_PUSH_IMAGE="${DOCKER_PUSH_IMAGE:-flynn-smoke-docker-push:local}"
@@ -510,7 +514,7 @@ print_datastore_report() {
   echo
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
-  echo " app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
+  echo " app=${APP_NAME}  buildpack_app=${BUILDPACK_APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
@@ -580,7 +584,7 @@ print_results_table() {
   echo
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
-  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}"
+  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  buildpack_app=${BUILDPACK_APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}"
   echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
@@ -1066,7 +1070,7 @@ configure_node_dns() {
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} www.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} www.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${BUILDPACK_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
@@ -3119,6 +3123,40 @@ EOF
   echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with ${DATASTORE_PROVIDERS[*]} (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
 
+# git-push an app whose .buildpacks file names heroku-buildpack-inline. That
+# is the documented custom-buildpack path (multi-buildpack auto-detects
+# .buildpacks; bin/compile writes a stamp the HTTP body must contain).
+step_deploy_buildpack_app() {
+  ensure_flynn_cli_on_node1
+  configure_node_dns node1
+
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -f "${REPO_IN_VM}/test/apps/upgrade-smoke-buildpack/.buildpacks"
+test -x "${REPO_IN_VM}/test/apps/upgrade-smoke-buildpack/bin/compile"
+rm -rf "/tmp/${BUILDPACK_APP_NAME}"
+mkdir -p "/tmp/${BUILDPACK_APP_NAME}"
+cp -a "${REPO_IN_VM}/test/apps/upgrade-smoke-buildpack/." "/tmp/${BUILDPACK_APP_NAME}/"
+cd "/tmp/${BUILDPACK_APP_NAME}"
+chmod +x bin/detect bin/compile bin/release
+test -f Procfile
+test -f web.rb
+grep -q 'heroku-buildpack-inline' .buildpacks
+git init
+git config user.email "smoke@flynn.test"
+git config user.name "smoke"
+git add -A
+git commit -m init
+if flynn apps | grep -qE "(^|\\s)${BUILDPACK_APP_NAME}(\\s|\$)"; then
+  flynn -a "${BUILDPACK_APP_NAME}" delete --yes || true
+fi
+flynn create --remote flynn "${BUILDPACK_APP_NAME}"
+timeout 600 git push flynn master
+flynn -a "${BUILDPACK_APP_NAME}" ps
+EOF
+  echo "buildpack app ${BUILDPACK_APP_NAME} deployed from test/apps/upgrade-smoke-buildpack (custom .buildpacks)"
+}
+
 # git-push a Dockerfile on the container stack. This is the only live coverage
 # of slimmed dockerbuilder-24 (ubuntu-noble + BuildKit + runc) and of tarreceive
 # converting the resulting image to squashfs.
@@ -3343,6 +3381,55 @@ PY
 echo "seed complete"
 EOF
   record_seed_counts
+}
+
+probe_buildpack_http() {
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${BUILDPACK_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || return 1
+  echo "${body}" | grep -q 'custom-buildpack ok'
+}
+
+assert_buildpack_http() {
+  local label=$1
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${BUILDPACK_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
+    record_check "${label}" "buildpack-http" "FAIL" "GET / curl failed"
+    echo "buildpack HTTP check (${label}) failed: curl error" >&2
+    return 1
+  }
+  if ! echo "${body}" | grep -q 'custom-buildpack ok'; then
+    record_check "${label}" "buildpack-http" "FAIL" "body=${body}"
+    echo "buildpack HTTP check (${label}) failed: body=${body}" >&2
+    return 1
+  fi
+  record_check "${label}" "buildpack-http" "PASS" "GET / => custom-buildpack ok"
+  echo "buildpack-http ${label}: ok"
+}
+
+assert_buildpack_ps() {
+  local label=$1
+  local out rc=0 attempt
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(flynn1 -a "${BUILDPACK_APP_NAME}" ps -t web 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="web" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
+      record_check "${label}" "buildpack-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "buildpack-ps ${label}: ok"
+      return 0
+    fi
+    echo "buildpack-ps ${label}: retry ${attempt}/12 rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 5
+  done
+  record_check "${label}" "buildpack-ps" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "buildpack-ps ${label}: FAIL rc=${rc} ${out}" >&2
+  return 1
+}
+
+wait_and_assert_buildpack_app() {
+  local label=$1
+  wait_for "buildpack app HTTP ${label}" 180 probe_buildpack_http
+  assert_buildpack_http "${label}"
+  assert_buildpack_ps "${label}"
 }
 
 probe_docker_http() {
@@ -3993,6 +4080,20 @@ step_cli_functions() {
 
   cli_run_job "${label}" "cli-run" "${APP_NAME}" "smoke-cli" echo smoke-cli || failed=1
 
+  # Custom .buildpacks app: slugrunner + heroku-buildpack-inline compile stamp.
+  cli_probe "${label}" "buildpack-cli-info" "${BUILDPACK_APP_NAME}|Git URL|Web URL" \
+    flynn1 -a "${BUILDPACK_APP_NAME}" info || failed=1
+  cli_probe "${label}" "buildpack-cli-ps" "web" \
+    flynn1 -a "${BUILDPACK_APP_NAME}" ps || failed=1
+  cli_probe "${label}" "buildpack-cli-route" "http|${BUILDPACK_APP_NAME}" \
+    flynn1 -a "${BUILDPACK_APP_NAME}" route || failed=1
+  cli_probe "${label}" "buildpack-cli-log" "" \
+    flynn1 -a "${BUILDPACK_APP_NAME}" log -n 20 || failed=1
+  cli_run_job "${label}" "buildpack-cli-run" "${BUILDPACK_APP_NAME}" "buildpack-cli" \
+    echo buildpack-cli || failed=1
+  cli_run_job "${label}" "buildpack-cli-stamp" "${BUILDPACK_APP_NAME}" "custom-buildpack ok" \
+    cat .buildpack-stamp || failed=1
+
   # Container-stack app: same image as the running app process, no /runner/init.
   cli_probe "${label}" "docker-cli-info" "${DOCKER_APP_NAME}|Git URL|Web URL" \
     flynn1 -a "${DOCKER_APP_NAME}" info || failed=1
@@ -4374,6 +4475,7 @@ step_verify_before() {
   wait_for "app /status pre-upgrade" 120 probe_app_status
   assert_app_status pre-upgrade
   assert_oom_subscription pre-upgrade
+  wait_and_assert_buildpack_app pre-upgrade
   wait_and_assert_docker_apps pre-upgrade
   assert_databases pre-upgrade
   wait_sirenia_ha_if_cluster "before upgrade" postgres mariadb mongodb || return 1
@@ -4403,6 +4505,7 @@ step_verify_after() {
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
   assert_oom_subscription "${label}"
+  wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   assert_databases "${label}"
   node_ssh node1 'sudo flynn-host version' || true
@@ -4415,24 +4518,28 @@ step_verify_after_restore() {
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
   assert_oom_subscription "${label}"
+  wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   assert_restored_datastores
   node_ssh node1 'sudo flynn-host version' || true
 }
 
 # Re-exercise every deploy path after add/remove so membership is not only
-# HTTP to formations that were already running: slug git-push, Dockerfile
-# git-push (container stack), and flynn docker push of a pre-built image.
+# HTTP to formations that were already running: slug git-push, custom
+# .buildpacks git-push, Dockerfile git-push (container stack), and flynn
+# docker push of a pre-built image.
 step_membership_deploy() {
   local label=$1
   ensure_flynn_cli_on_node1
   ensure_docker_cli_on_node1
-  info "membership deploy (${label}): git-push ${APP_NAME} + ${DOCKER_APP_NAME} + flynn docker push"
+  info "membership deploy (${label}): git-push ${APP_NAME} + ${BUILDPACK_APP_NAME} + ${DOCKER_APP_NAME} + flynn docker push"
   node_root_script node1 <<EOF
 set -euo pipefail
 slug="/tmp/${APP_NAME}"
+buildpack="/tmp/${BUILDPACK_APP_NAME}"
 docker_git="/tmp/${DOCKER_APP_NAME}"
 test -d "\${slug}/.git" || { echo "slug app git dir missing; deploy step must run first" >&2; exit 1; }
+test -d "\${buildpack}/.git" || { echo "buildpack app git dir missing; deploy step must run first" >&2; exit 1; }
 test -d "\${docker_git}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
 push_git() {
   local dir=\$1
@@ -4450,16 +4557,19 @@ push_git() {
   test "\$ok" = 1
 }
 push_git "\${slug}"
+push_git "\${buildpack}"
 push_git "\${docker_git}"
 flynn -a "${APP_NAME}" ps
+flynn -a "${BUILDPACK_APP_NAME}" ps
 flynn -a "${DOCKER_APP_NAME}" ps
 EOF
   smoke_docker_push_image 0
   wait_for "app HTTP ${label}" 180 probe_app_http
   assert_app_http "${label}"
+  wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   cli_run_job "${label}" "membership-run" "${APP_NAME}" "membership-ok" echo membership-ok
-  echo "membership deploy ${label}: slug git-push + docker git-push + docker push + flynn run ok"
+  echo "membership deploy ${label}: slug git-push + buildpack git-push + docker git-push + docker push + flynn run ok"
 }
 
 step_verify_membership() {
@@ -4469,6 +4579,7 @@ step_verify_membership() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 120 probe_app_status
   assert_app_status "${label}"
+  wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   assert_databases "${label}"
   step_membership_deploy "${label}"
@@ -5228,10 +5339,12 @@ run_one_topology() {
 
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
     record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
     record "Deploy Dockerfile app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
     record "Deploy docker-push app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
+    run_step "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" step_deploy_buildpack_app
     run_step "Deploy Dockerfile app (${TOPOLOGY_LABEL})" step_deploy_docker_app
     run_step "Deploy docker-push app (${TOPOLOGY_LABEL})" step_deploy_docker_push_app
   fi

@@ -42,6 +42,10 @@ grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
 grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
   || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
 
+need 'test/apps/upgrade-smoke-buildpack' \
+  "smoke must git-push a custom .buildpacks app, not only the stock Go slug"
+need 'step_deploy_buildpack_app' \
+  "smoke must have a dedicated custom-buildpack git-push step"
 need 'test/apps/upgrade-smoke-docker' \
   "smoke must git-push a Dockerfile app (dockerbuilder-24), not only the slug app"
 need 'docker-cli-run' \

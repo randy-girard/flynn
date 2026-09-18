@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Custom buildpack compile (run via heroku-buildpack-inline from .buildpacks).
+# Writes a stamp the web process serves so smoke can prove this compile ran.
+set -euo pipefail
+build_dir="${1:-.}"
+echo "Smoke custom buildpack"
+printf 'custom-buildpack ok\n' > "${build_dir}/.buildpack-stamp"
+test -f "${build_dir}/web.rb"

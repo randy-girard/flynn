@@ -47,6 +47,8 @@ need 'step_deploy_docker_push_app' \
   "every topology must flynn docker push a pre-built image, not only git-push"
 need 'wait_and_assert_docker_apps' \
   "every topology verify/membership phase must probe both Dockerfile paths"
+need 'wait_and_assert_buildpack_app' \
+  "every topology verify/membership phase must probe the custom .buildpacks app"
 need 'slug app git dir missing' \
   "membership must git-push the regular slug app after add/remove"
 need 'TEARDOWN_NODES' \
