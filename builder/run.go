@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/squashfs"
 	"github.com/flynn/go-docopt"
 )
@@ -22,7 +23,7 @@ Run a command and generate an image layer.
 
 func runRun(args *docopt.Args) error {
 	// run the command
-	cmdArgs := args.All["<args>"].([]string)
+	cmdArgs := cliutil.List(args, "<args>")
 	var execArgs []string
 	if len(cmdArgs) > 1 {
 		execArgs = cmdArgs[1:]
@@ -37,7 +38,8 @@ func runRun(args *docopt.Args) error {
 
 	path := "/mnt/out/layer.squashfs"
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		// create a squashfs layer of the diff in /out/layer.squashfs
+		// Squash the overlay diff onto the host bind at /mnt/out (local disk,
+		// not 9p). The outer builder then copies this file into layer-cache.
 		cmd = mksquashfsCommand(host.DiffPath, path, squashfs.DefaultExcludes())
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Fprintln(os.Stderr, string(out))

@@ -469,7 +469,8 @@ type HostResourceStats struct {
 	MemoryCachedBytes    uint64 `json:"memory_cached_bytes"`
 	MemoryBuffersBytes   uint64 `json:"memory_buffers_bytes"`
 
-	// Disk stats
+	// Disk stats for the Flynn node filesystem (/var/lib/flynn when present, else /).
+	DiskPath       string `json:"disk_path,omitempty"`
 	DiskTotalBytes uint64 `json:"disk_total_bytes"`
 	DiskUsedBytes  uint64 `json:"disk_used_bytes"`
 	DiskFreeBytes  uint64 `json:"disk_free_bytes"`
@@ -519,7 +520,7 @@ type WebhookEvent struct {
 	HostID      string            `json:"host_id"`
 	Code        string            `json:"code"`
 	Description string            `json:"description"`
-	Severity    string            `json:"severity"`     // "info", "warning", "error", "critical"
+	Severity    string            `json:"severity"` // "info", "warning", "error", "critical"
 	JobID       string            `json:"job_id,omitempty"`
 	AppID       string            `json:"app_id,omitempty"`
 	ProcessType string            `json:"process_type,omitempty"`
@@ -556,24 +557,25 @@ const (
 
 // H-codes: Job/Container lifecycle events
 const (
-	CodeJobCreate      = "H10" // Job created
-	CodeJobStart       = "H11" // Job started (running)
-	CodeJobStop        = "H12" // Job stopped (exit 0)
-	CodeJobCrash       = "H13" // Job crashed (non-zero exit)
-	CodeJobFailed      = "H14" // Job failed to start
-	CodeJobCleanup     = "H15" // Job cleaned up
-	CodeMemorySoft     = "H20" // Soft memory limit exceeded
-	CodeMemoryHard     = "H21" // Hard memory limit exceeded (OOM kill)
+	CodeJobCreate  = "H10" // Job created
+	CodeJobStart   = "H11" // Job started (running)
+	CodeJobStop    = "H12" // Job stopped (exit 0)
+	CodeJobCrash   = "H13" // Job crashed (non-zero exit)
+	CodeJobFailed  = "H14" // Job failed to start
+	CodeJobCleanup = "H15" // Job cleaned up
+	CodeMemorySoft = "H20" // Soft memory limit exceeded
+	CodeMemoryHard = "H21" // Hard memory limit exceeded (OOM kill)
 )
 
 // R-codes: Runtime events
 const (
-	CodeMountFailure   = "R10" // Squashfs mount/verification failure
+	CodeMountFailure = "R10" // Squashfs mount/verification failure
 )
 
-// D-codes: Daemon lifecycle events
+// D-codes: Daemon lifecycle and host health events
 const (
 	CodeDaemonStart    = "D10" // Daemon started
 	CodeDaemonShutdown = "D11" // Daemon shutting down
 	CodeDaemonUpdate   = "D12" // Daemon zero-downtime update initiated
+	CodeDiskFull       = "D20" // Host disk out of space
 )

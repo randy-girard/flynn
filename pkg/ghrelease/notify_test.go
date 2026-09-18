@@ -162,11 +162,10 @@ func TestMaybeNotifyFailedFetchKeepsCachedLatest(t *testing.T) {
 	}
 }
 
-func TestMaybeNotifyIgnoresDevVersion(t *testing.T) {
+func TestMaybeNotifyPrintsForDevVersion(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
-	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits++
+		_ = json.NewEncoder(w).Encode(Release{TagName: "v20260917.2"})
 	}))
 	defer srv.Close()
 	var buf bytes.Buffer
@@ -175,9 +174,52 @@ func TestMaybeNotifyIgnoresDevVersion(t *testing.T) {
 		CurrentVersion: "dev",
 		HTTPClient:     srv.Client(),
 		APIBase:        srv.URL,
+		CheckFile:      filepath.Join(t.TempDir(), "cktime"),
 	})
-	if hits != 0 {
-		t.Fatalf("hits=%d", hits)
+	if !strings.Contains(buf.String(), "this is dev") {
+		t.Fatalf("got %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "v20260917.2") {
+		t.Fatalf("got %q", buf.String())
+	}
+}
+
+func TestShouldPrintUpdate(t *testing.T) {
+	if shouldPrintUpdate("v20260917.2", "v20260917.2") {
+		t.Fatal("same tag")
+	}
+	if !shouldPrintUpdate("v20260917.1", "v20260917.2") {
+		t.Fatal("older calver")
+	}
+	if !shouldPrintUpdate("dev", "v20260917.2") {
+		t.Fatal("dev is older than a published tag")
+	}
+	if !shouldPrintUpdate("v20260917.1-gabcdef", "v20260917.2") {
+		t.Fatal("git suffix should not hide an older calver")
+	}
+	if shouldPrintUpdate("v20260917.1", "") {
+		t.Fatal("no latest")
+	}
+}
+
+func TestMaybeNotifyIgnoresSmokeVersion(t *testing.T) {
+	t.Setenv(SkipUpdateCheckEnv, "")
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		_ = json.NewEncoder(w).Encode(Release{TagName: "v20260917.2"})
+	}))
+	defer srv.Close()
+	var buf bytes.Buffer
+	MaybeNotify(NotifyOptions{
+		Writer:         &buf,
+		CurrentVersion: "v20260917.1-smoke",
+		HTTPClient:     srv.Client(),
+		APIBase:        srv.URL,
+		CheckFile:      filepath.Join(t.TempDir(), "cktime"),
+	})
+	if hits != 0 || buf.Len() != 0 {
+		t.Fatalf("hits=%d buf=%q", hits, buf.String())
 	}
 }
 

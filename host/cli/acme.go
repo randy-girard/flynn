@@ -419,7 +419,7 @@ func runACMEEnableSystemRoutes(client controller.Client) error {
 	fmt.Println("TLS certificates will be automatically provisioned.")
 	fmt.Println("\nThe TLS pin in ~/.flynnrc is no longer needed since all system routes")
 	fmt.Println("will use CA-signed Let's Encrypt certificates.")
-	fmt.Println("Run 'flynn cluster update-pin --clear' to remove it.")
+	fmt.Println("Run 'flynn cluster:refresh --clear' to remove it.")
 	return nil
 }
 

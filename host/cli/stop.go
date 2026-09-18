@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
 )
@@ -18,7 +19,7 @@ Stop running jobs`)
 func runStop(args *docopt.Args, client *cluster.Client) error {
 	success := true
 	clients := make(map[string]*cluster.Host)
-	for _, id := range args.All["ID"].([]string) {
+	for _, id := range cliutil.List(args, "ID") {
 		hostID, err := cluster.ExtractHostID(id)
 		if err != nil {
 			fmt.Printf("could not parse %s: %s", id, err)

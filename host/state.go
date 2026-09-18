@@ -70,8 +70,8 @@ func NewState(id string, stateFilePath string) *State {
 }
 
 /*
-	Restore prior state from the save location defined at construction time.
-	If the state save file is empty, nothing is loaded, and no error is returned.
+Restore prior state from the save location defined at construction time.
+If the state save file is empty, nothing is loaded, and no error is returned.
 */
 func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error) {
 	if err := s.Acquire(); err != nil {
@@ -644,6 +644,11 @@ func (s *State) sendEvent(job *host.ActiveJob, event host.JobEventType) {
 		}
 		j := job.Dup()
 		s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, j, nil)
+		if event == host.JobEventError && job.Error != nil && isNoSpaceErr(errors.New(*job.Error)) {
+			s.webhookDispatcher.SendDiskFull("Host disk out of space", job.Job.ID, j, map[string]string{
+				"reason": "job_start_enospc",
+			})
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/types"
 	"github.com/flynn/flynn/host/volume"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
 )
@@ -162,7 +163,7 @@ func runVolumeDelete(args *docopt.Args, client *cluster.Client) error {
 	}
 
 outer:
-	for _, id := range args.All["ID"].([]string) {
+	for _, id := range cliutil.List(args, "ID") {
 		// find this volume in the list
 		for _, v := range volumes {
 			if v.Volume.ID == id {

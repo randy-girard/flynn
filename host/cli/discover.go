@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/flynn/flynn/discoverd/client"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
 )
@@ -82,7 +83,7 @@ type serviceMeta struct {
 }
 
 func runDiscover(args *docopt.Args, c *cluster.Client) error {
-	services := args.All["<service>"].([]string)
+	services := cliutil.List(args, "<service>")
 
 	if !args.Bool["--json"] {
 		w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)

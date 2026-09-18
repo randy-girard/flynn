@@ -42,20 +42,29 @@ type notifyCache struct {
 	Latest    string    `json:"latest"`
 }
 
-// MaybeNotify writes a one-line upgrade hint to opts.Writer when GitHub has a
-// newer release than CurrentVersion. GitHub is polled at most once per
-// MinInterval; if a newer tag is already cached it is printed on every call.
-// Network and parse errors are ignored.
+// MaybeNotify writes a one-line upgrade hint to stderr (or opts.Writer) when
+// GitHub has a newer published release than CurrentVersion.
+//
+// It runs on every flynn / flynn-host command except:
+//   - FLYNN_SKIP_UPDATE_CHECK is set (tests and scripted installs)
+//   - CurrentVersion is empty
+//   - CurrentVersion contains "-smoke" (Vagrant smoke tarballs)
+//   - GitHub latest is missing or not newer (already up to date)
+//
+// "dev" (unstamped local builds) is treated as older than any published tag.
+// GitHub is polled at most once per MinInterval; a cached newer tag is still
+// printed on every call. Network and parse errors are ignored.
 func MaybeNotify(opts NotifyOptions) {
 	if strings.TrimSpace(os.Getenv(SkipUpdateCheckEnv)) != "" {
 		return
 	}
 	current := strings.TrimSpace(opts.CurrentVersion)
-	if current == "" || current == "dev" {
+	if current == "" || strings.Contains(current, "-smoke") {
 		return
 	}
-	if opts.Writer == nil {
-		return
+	w := opts.Writer
+	if w == nil {
+		w = os.Stderr
 	}
 	interval := opts.MinInterval
 	if interval <= 0 {
@@ -77,7 +86,7 @@ func MaybeNotify(opts NotifyOptions) {
 	}
 
 	latest := strings.TrimSpace(cache.Latest)
-	if latest == "" || !CompareVersions(current, latest) {
+	if !shouldPrintUpdate(current, latest) {
 		return
 	}
 	product := strings.TrimSpace(opts.Product)
@@ -88,7 +97,25 @@ func MaybeNotify(opts NotifyOptions) {
 	if upgradeCmd == "" {
 		upgradeCmd = "flynn update"
 	}
-	fmt.Fprintf(opts.Writer, "A newer %s is available (%s; this is %s). Run `%s` to upgrade.\n", product, latest, current, upgradeCmd)
+	fmt.Fprintf(w, "A newer %s is available (%s; this is %s). Run `%s` to upgrade.\n", product, latest, current, upgradeCmd)
+}
+
+// shouldPrintUpdate reports whether latest is a published tag newer than current.
+// "dev" is always older than a published tag. A -<git> suffix is ignored for
+// comparison (v20260917.1-gabcdef compares as v20260917.1).
+func shouldPrintUpdate(current, latest string) bool {
+	current = strings.TrimSpace(current)
+	latest = strings.TrimSpace(latest)
+	if current == "" || latest == "" {
+		return false
+	}
+	if current == "dev" {
+		return true
+	}
+	if i := strings.Index(current, "-"); i >= 0 {
+		current = current[:i]
+	}
+	return CompareVersions(current, latest)
 }
 
 func fetchLatestTag(opts NotifyOptions) (string, bool) {

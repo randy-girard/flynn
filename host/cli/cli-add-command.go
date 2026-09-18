@@ -17,7 +17,7 @@ func init() {
 	Register("cli-add-command", runCliAddCommand, `
 usage: flynn-host cli-add-command
 
-Get the 'flynn cluster add' command to manage this cluster.`)
+Get the 'flynn cluster:add' command to manage this cluster.`)
 }
 
 func runCliAddCommand(args *docopt.Args, client *cluster.Client) error {
@@ -73,7 +73,7 @@ func runCliAddCommand(args *docopt.Args, client *cluster.Client) error {
 	}
 
 	fmt.Printf("Install the Flynn CLI (see https://flynn.io/docs/cli for instructions) and paste the line below into a terminal window:\n\n")
-	fmt.Printf("flynn cluster add -p %v default %v %v\n", pin, domain, key)
+	fmt.Printf("flynn cluster:add -p %v default %v %v\n", pin, domain, key)
 
 	return nil
 }

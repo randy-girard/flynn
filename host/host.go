@@ -25,6 +25,7 @@ import (
 	volumeapi "github.com/flynn/flynn/host/volume/api"
 	volumemanager "github.com/flynn/flynn/host/volume/manager"
 	zfsVolume "github.com/flynn/flynn/host/volume/zfs"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
@@ -84,6 +85,8 @@ func main() {
 
 	defer shutdown.Exit()
 
+	cli.NotifyUpgradeIfAvailable()
+
 	usage := `usage: flynn-host [-h|--help] [--version] <command> [<args>...]
 
 Options:
@@ -92,13 +95,15 @@ Options:
 
 Commands:
   acme                       Manage ACME/Let's Encrypt configuration
+  backup                     Take a cluster backup
   bootstrap                  Bootstrap layer 1
-  cli-add-command            Get the 'flynn cluster add' command to manage this cluster
+  cli-add-command            Get the 'flynn cluster:add' command to manage this cluster
   collect-debug-info         Collect debug information into an anonymous gist or tarball
   daemon                     Start the daemon
   demote                     Demote a Flynn node from the consensus cluster
   destroy-volumes            Destroy the local volume database
   discover                   Return low-level information about a service
+  domain                     Show cluster domain and apex (root) app
   download                   Download container images
   fix                        Fix a broken cluster
   help                       Show usage for a specific command
@@ -106,7 +111,9 @@ Commands:
   inspect                    Get low-level information about a job
   list                       List ID and IP of each host
   log                        Get the logs of a job
-  log-sink                   Manage host log sinks
+  log-sink                   Manage cluster and host log sinks
+  migrate-domain             Migrate the cluster base domain
+  otel                       Forward metrics and logs to OpenTelemetry
   plugin                     Install and list cluster plugins
   promote                    Promote a Flynn node into the consensus cluster
   ps                         List jobs
@@ -123,20 +130,13 @@ See 'flynn-host help <command>' for more information on a specific command.
 `
 
 	if leadingVersionFlag(os.Args[1:]) {
-		cli.NotifyUpgradeIfAvailable()
 		fmt.Println(version.String())
 		return
 	}
 
 	args, _ := docopt.Parse(usage, nil, true, version.String(), true)
 	cmd := args.String["<command>"]
-	cmdArgs := args.All["<args>"].([]string)
-
-	switch cmd {
-	case "daemon", "update", "download":
-	default:
-		cli.NotifyUpgradeIfAvailable()
-	}
+	cmdArgs := cliutil.List(args, "<args>")
 
 	if cmd == "help" {
 		if len(cmdArgs) == 0 { // `flynn-host help`
@@ -355,6 +355,7 @@ func runDaemon(args *docopt.Args) {
 	if err != nil {
 		shutdown.Fatal(err)
 	}
+	sman.SetMetrics(backend)
 	backend.SetDefaultEnv("EXTERNAL_IP", externalIP)
 	backend.SetDefaultEnv("LISTEN_IP", listenIP)
 
@@ -510,6 +511,7 @@ func runDaemon(args *docopt.Args) {
 	log.Info("serving HTTP requests")
 	host.ServeHTTP()
 	webhookDisp.Send("D10", "Daemon started", "info", "", nil, nil)
+	host.startDiskWatch()
 
 	if controlFD > 0 {
 		// now that we are serving requests, send an "ok" message to the parent

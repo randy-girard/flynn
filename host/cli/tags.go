@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
 )
@@ -54,7 +55,7 @@ func runTagsSet(args *docopt.Args, client *cluster.Client) error {
 	if err != nil {
 		return err
 	}
-	pairs := args.All["<var>=<val>"].([]string)
+	pairs := cliutil.List(args, "<var>=<val>")
 	tags := make(map[string]string, len(pairs))
 	for _, s := range pairs {
 		keyVal := strings.SplitN(s, "=", 2)
@@ -72,7 +73,7 @@ func runTagsDel(args *docopt.Args, client *cluster.Client) error {
 	if err != nil {
 		return err
 	}
-	vars := args.All["<var>"].([]string)
+	vars := cliutil.List(args, "<var>")
 	tags := make(map[string]string, len(vars))
 	for _, v := range vars {
 		// empty tags get deleted on the host

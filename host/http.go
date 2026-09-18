@@ -16,8 +16,8 @@ import (
 	"time"
 
 	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/host/config"
+	"github.com/flynn/flynn/host/downloader"
 	"github.com/flynn/flynn/host/logmux"
 	host "github.com/flynn/flynn/host/types"
 	volumeapi "github.com/flynn/flynn/host/volume/api"
@@ -52,10 +52,13 @@ type Host struct {
 	maxJobConcurrency uint64
 
 	authKey string
-	
+
 	webhookDispatcher *WebhookDispatcher
 
 	log log15.Logger
+
+	diskWatchStop chan struct{}
+	diskWatchOnce sync.Once
 }
 
 // hostAuthKeyFromRequest returns the credential sent as Auth-Key or Basic password.
@@ -958,7 +961,52 @@ func (h *Host) CloseLogs() (host.LogBuffers, error) {
 	return h.backend.CloseLogs()
 }
 
+func (h *Host) startDiskWatch() {
+	if h.diskWatchStop != nil {
+		return
+	}
+	h.diskWatchStop = make(chan struct{})
+	go h.watchDisk()
+}
+
+func (h *Host) watchDisk() {
+	ticker := time.NewTicker(diskWatchInterval)
+	defer ticker.Stop()
+	h.checkHostDisk()
+	for {
+		select {
+		case <-h.diskWatchStop:
+			return
+		case <-ticker.C:
+			h.checkHostDisk()
+		}
+	}
+}
+
+func (h *Host) checkHostDisk() {
+	if h.backend == nil || h.webhookDispatcher == nil {
+		return
+	}
+	stats, err := h.backend.GetHostStats()
+	if err != nil || stats == nil || !diskOutOfSpace(stats) {
+		return
+	}
+	if h.log != nil {
+		h.log.Error("host disk out of space", "path", stats.DiskPath, "free_bytes", stats.DiskFreeBytes, "used_percent", diskUsedPercent(stats))
+	}
+	h.webhookDispatcher.SendDiskFull("Host disk out of space", "", nil, diskFullMetadata(stats))
+}
+
+func (h *Host) stopDiskWatch() {
+	h.diskWatchOnce.Do(func() {
+		if h.diskWatchStop != nil {
+			close(h.diskWatchStop)
+		}
+	})
+}
+
 func (h *Host) Close() error {
+	h.stopDiskWatch()
 	if h.listener != nil {
 		return h.listener.Close()
 	}

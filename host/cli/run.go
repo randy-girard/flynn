@@ -49,7 +49,7 @@ func runRun(args *docopt.Args, client *cluster.Client) error {
 		ImageArtifact: artifact,
 		Job: &host.Job{
 			Config: host.ContainerConfig{
-				Args:        append([]string{args.String["<command>"]}, args.All["<argument>"].([]string)...),
+				Args:        append([]string{args.String["<command>"]}, cliutil.List(args, "<argument>")...),
 				TTY:         term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()),
 				Stdin:       true,
 				DisableLog:  true,

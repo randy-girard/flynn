@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	discoverd "github.com/flynn/flynn/discoverd/client"
@@ -31,6 +32,9 @@ type WebhookDispatcher struct {
 	done   chan struct{}
 	log    log15.Logger
 	client *http.Client
+
+	diskFullMu   sync.Mutex
+	lastDiskFull time.Time
 }
 
 // NewWebhookDispatcher creates a new dispatcher. Call Run() to start processing events.
@@ -105,6 +109,25 @@ func (d *WebhookDispatcher) Send(code, description, severity string, jobID strin
 	default:
 		d.log.Warn("webhook event buffer full, dropping event", "code", code, "event_id", event.EventID)
 	}
+}
+
+// SendDiskFull emits D20 at most once per diskFullCooldown so a full disk
+// does not flood webhook endpoints.
+func (d *WebhookDispatcher) SendDiskFull(description string, jobID string, job *host.ActiveJob, metadata map[string]string) {
+	if d == nil {
+		return
+	}
+	if description == "" {
+		description = "Host disk out of space"
+	}
+	d.diskFullMu.Lock()
+	if !d.lastDiskFull.IsZero() && time.Since(d.lastDiskFull) < diskFullCooldown {
+		d.diskFullMu.Unlock()
+		return
+	}
+	d.lastDiskFull = time.Now()
+	d.diskFullMu.Unlock()
+	d.Send(host.CodeDiskFull, description, host.SeverityCritical, jobID, job, metadata)
 }
 
 // sanitizeJobForWebhook reduces an ActiveJob to the safe fields included in

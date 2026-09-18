@@ -7,6 +7,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
 )
 
@@ -55,7 +56,7 @@ func main() {
 		log.Fatalf("unknown command %q", name)
 	}
 
-	args, _ = docopt.Parse(cmd.Usage, append([]string{name}, args.All["<args>"].([]string)...), true, "", true)
+	args, _ = docopt.Parse(cmd.Usage, append([]string{name}, cliutil.List(args, "<args>")...), true, "", true)
 	if err := cmd.Run(args); err != nil {
 		log.Fatal(err)
 	}

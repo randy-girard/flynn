@@ -11,7 +11,6 @@ import (
 	"go/build"
 	"io"
 	"io/ioutil"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1597,19 +1596,14 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		job.Resources.SetLimit(resource.Type(typ), limit)
 	}
 
-	// mount the shared directory at /mnt as a 9p filesystem
-	ln, err := net.Listen("tcp", os.Getenv("EXTERNAL_IP")+":0")
-	if err != nil {
-		return nil, err
-	}
-	defer ln.Close()
-	go serveFilesystem(dir, ln)
-	addr := ln.Addr().(*net.TCPAddr)
+	// Bind-mount the host temp dir at /mnt so mksquashfs writes layer.squashfs
+	// on local disk. 9p (used previously) stalls for hours on large host-image
+	// diffs because squashfs does many small writes through netfs.
+	// Logs still go to build/log on the Vagrant share.
 	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
-		Device:   "9p",
-		Location: "/mnt",
-		Target:   addr.IP.String(),
-		Data:     fmt.Sprintf("trans=tcp,port=%d", addr.Port),
+		Target:    dir,
+		Location:  "/mnt",
+		Writeable: true,
 	})
 	job.Config.WorkingDir = "/mnt/src"
 

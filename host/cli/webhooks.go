@@ -6,6 +6,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/go-docopt"
@@ -83,7 +84,7 @@ func runWebhooksAdd(args *docopt.Args, client *cluster.Client) error {
 		return err
 	}
 	url := args.String["<url>"]
-	headers, err := parseHeaderFlags(args.All["--header"])
+	headers, err := parseHeaderFlags(cliutil.List(args, "--header"))
 	if err != nil {
 		return err
 	}
@@ -107,8 +108,7 @@ func runWebhooksAdd(args *docopt.Args, client *cluster.Client) error {
 
 // parseHeaderFlags converts repeated --header flag values of the form
 // "Name: value" or "Name=value" into a map suitable for WebhookConfig.Headers.
-func parseHeaderFlags(raw interface{}) (map[string]string, error) {
-	values, _ := raw.([]string)
+func parseHeaderFlags(values []string) (map[string]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
