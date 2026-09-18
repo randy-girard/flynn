@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -180,7 +181,7 @@ func (s *server) handleCreateLayer(w http.ResponseWriter, r *http.Request, p htt
 
 		// create squashfs layer
 		layerPath := filepath.Join(tmpDir, "layer.squashfs")
-		if out, err := exec.Command("mksquashfs", squashfs.Args(extractDir, layerPath, "-processors", "1")...).CombinedOutput(); err != nil {
+		if out, err := exec.Command("mksquashfs", squashfs.LayerArgs(extractDir, layerPath, "-processors", squashfs.ProcessorCount(runtime.NumCPU()))...).CombinedOutput(); err != nil {
 			return nil, fmt.Errorf("mksquashfs error: %s: %s", err, out)
 		}
 
