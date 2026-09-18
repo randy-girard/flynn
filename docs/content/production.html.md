@@ -243,6 +243,21 @@ of Flynn hosts, only these ports should be allowed:
 Internal cross-host cluster communication happens on a variety of UDP and TCP
 ports and should not be restricted.
 
+The installer owns public 22/80/443 and private cluster CIDRs. After install,
+`flynn-host firewall` shows managed UFW rules. Use it to allow a peer that is
+not in a private CIDR, or to open an extra TCP port (for example a TCP route):
+
+```text
+sudo flynn-host firewall
+sudo flynn-host firewall:peer-add <ip>
+sudo flynn-host firewall:expose 3001
+sudo flynn-host firewall:sync
+```
+
+`firewall:peer-remove` and `firewall:unexpose` drop those extra allows.
+`--peer-ips` and `--ports` on `firewall:sync` seed extra allows stored for later
+syncs.
+
 Outbound Internet access is required to deploy apps using many of the default
 buildpacks.
 
@@ -361,6 +376,7 @@ sudo flynn-host otel:add http://alloy.example:4318
 
 # Grafana Cloud (or any collector that needs a header)
 sudo flynn-host otel:add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
+sudo flynn-host otel:add --insecure https://collector.example:4318
 
 sudo flynn-host otel
 sudo flynn-host otel:remove <id>

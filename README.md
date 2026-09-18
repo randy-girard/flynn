@@ -15,10 +15,10 @@ A Flynn cluster is a set of Ubuntu hosts. You deploy apps with `git push` or Doc
 | Area | What you get |
 | --- | --- |
 | Deploy | `git push` with [Heroku-24 buildpacks](docs/content/apps.md#buildpacks), `git push` from a `Dockerfile` ([container stack](docs/content/docker.md#container-stack)), or `flynn docker push` of a local image |
-| Runtime | Process types from a `Procfile`, scale with `flynn scale`, zero-downtime deploys with automatic rollback |
-| Routing | HTTP/HTTPS and TCP routes, custom domains, HTTP/2, automatic Let's Encrypt certificates |
+| Runtime | Process types from a `Procfile`, scale with `flynn scale`, named runtime profiles (`small` / `medium` / `large`), zero-downtime deploys with automatic rollback |
+| Routing | HTTP/HTTPS and TCP routes, custom domains, path-based HTTP routes (`flynn-host route:add`), HTTP/2, automatic Let's Encrypt certificates |
 | Datastores | PostgreSQL 16, MariaDB 10.11, MongoDB 7.0, Redis, Kafka 3.9 (KRaft), ClickHouse |
-| Ops | Dashboard, CLI, ZFS volumes, clustered log aggregation, app export/import |
+| Ops | Dashboard, CLI, ZFS volumes, clustered log aggregation, app export/import, host firewall (`flynn-host firewall`) |
 | Isolation | User jobs cannot reach other jobs or internal APIs on the overlay; they use routes and injected datastore URLs |
 
 Flynn components (controller, router, scheduler, appliances, …) are themselves apps on the cluster. You scale and update the platform with the same APIs you use for your own software.
@@ -34,7 +34,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 - **OS:** Ubuntu 24.04 LTS amd64
 - **Hosts:** 2 GB RAM, 40 GB disk, and 2 CPU cores per node as a minimum; more for appliances and builds
 - **HA:** three or more nodes. A single node (`SINGLETON`) is fine for trying Flynn; do not use it as production
-- **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet
+- **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet. After install, `flynn-host firewall` manages peer IPs and extra TCP ports on the host UFW rules.
 - **Storage:** ZFS. The installer can create a zpool on a dedicated disk (`--zpool-create-device`); a sparse file is the default and is not recommended for production
 
 ## Install the CLI
@@ -132,7 +132,7 @@ flynn -a myapp docker:push myimage:tag
 flynn -a myapp scale app=1
 ```
 
-Apps bind HTTP on `$PORT`. Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, limits, and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
+Apps bind HTTP on `$PORT`. Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, named runtime profiles (`flynn limit:profile`), and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
 
 ### Buildpacks (heroku-24)
 

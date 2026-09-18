@@ -232,9 +232,12 @@ Let's say you have a domain `example.com` which is pointed at your Flynn cluster
 Add a route for that domain:
 
 ```
-$ flynn route add http example.com
+$ flynn route:add http example.com
 http/74b05faf-c062-42f2-8ffe-678cfa3c061b
 ```
+
+Path-based HTTP routes (`example.com/api`) require `flynn-host route:add` (cluster
+admin). See [Apps — Path-based HTTP routes](apps.md#path-based-http-routes).
 
 You should now have two routes for your application:
 

@@ -51,22 +51,23 @@ by some frameworks to configure database connections.
 
 ### Connecting to a console
 
-To connect to a `mongosh` console for the database, run `flynn mongodb mongo`.
-This does not require the MongoDB client to be installed locally or
-firewall/security changes, as it runs in a container on the Flynn cluster.
+To connect to a `mongosh` console for the database, run `flynn mongodb:cli`
+(alias `flynn mongodb mongo`). This does not require the MongoDB client to be
+installed locally or firewall/security changes, as it runs in a container on
+the Flynn cluster.
 
 ### Dumping and restoring
 
 The Flynn CLI provides commands for exporting and restoring database dumps.
 
-`flynn mongodb dump` saves a complete copy of the database to a local file.
+`flynn mongodb:dump` saves a complete copy of the database to a local file.
 
 ```text
-$ flynn mongodb dump -f latest.dump
+$ flynn mongodb:dump -f latest.dump
 60.34 MB 8.77 MB/s
 ```
 
-The file can be used to restore the database with `flynn mongodb restore`. It may
+The file can be used to restore the database with `flynn mongodb:restore`. It may
 also be imported into a local MongoDB database that is not managed by Flynn with
 `mongorestore` and `tar` to extract the Flynn dump:
 
@@ -76,12 +77,12 @@ $ tar -x -C tmp latest.dump # extract the dump to the temporary directory
 $ mongorestore tmp/* # you will need to use --host and auth flags as appropriate
 ```
 
-`flynn mongodb restore` loads a database dump from a local file into a Flynn
+`flynn mongodb:restore` loads a database dump from a local file into a Flynn
 MongoDB database. Any existing collections and objects will be dropped before
 restoring data.
 
 ```text
-$ flynn mongodb restore -f latest.dump
+$ flynn mongodb:restore -f latest.dump
 62.29 MB / 62.29 MB [===================] 100.00 % 4.96 MB/s
 ```
 

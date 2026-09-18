@@ -50,22 +50,23 @@ by some frameworks to configure database connections.
 
 ### Connecting to a console
 
-To connect to a `mysql` console for the database, run `flynn mysql console`.
-This does not require the MySQL client to be installed locally or
-firewall/security changes, as it runs in a container on the Flynn cluster.
+To connect to a `mysql` console for the database, run `flynn mysql:cli` (alias
+`flynn mysql console`). This does not require the MySQL client to be installed
+locally or firewall/security changes, as it runs in a container on the Flynn
+cluster.
 
 ### Dumping and restoring
 
 The Flynn CLI provides commands for exporting and restoring database dumps.
 
-`flynn mysql dump` saves a complete copy of the database schema and data to a local file.
+`flynn mysql:dump` saves a complete copy of the database schema and data to a local file.
 
 ```text
-$ flynn mysql dump -f latest.dump
+$ flynn mysql:dump -f latest.dump
 60.34 MB 8.77 MB/s
 ```
 
-The file can be used to restore the database with `flynn mysql restore`. It may
+The file can be used to restore the database with `flynn mysql:restore`. It may
 also be imported into a local MySQL database that is not managed by Flynn with
 `mysql`:
 
@@ -73,12 +74,12 @@ also be imported into a local MySQL database that is not managed by Flynn with
 $ mysql -D mydb < latest.dump
 ```
 
-`flynn mysql restore` loads a database dump from a local file into a Flynn MySQL
+`flynn mysql:restore` loads a database dump from a local file into a Flynn MySQL
 database. Any existing tables and database objects will be dropped before they
 are recreated.
 
 ```text
-$ flynn mysql restore -f latest.dump
+$ flynn mysql:restore -f latest.dump
 62.29 MB / 62.29 MB [===================] 100.00 % 4.96 MB/s
 ```
 

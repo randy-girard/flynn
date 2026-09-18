@@ -18,7 +18,7 @@ uses environment variables to configure applications.
 The `flynn env` command is used to read and write environment variables.
 
 ```text
-flynn env set SECRET=thisismysecret
+flynn env:set SECRET=thisismysecret
 ```
 
 Setting environment variables in Flynn creates a new release, which will restart
@@ -60,7 +60,7 @@ buildpack, you can also set the `BUILDPACK_URL` environment variable to specify
 a custom buildpack:
 
 ```text
-flynn env set BUILDPACK_URL=https://github.com/ryandotsmith/null-buildpack
+flynn env:set BUILDPACK_URL=https://github.com/ryandotsmith/null-buildpack
 ```
 
 ## Deployment
@@ -137,14 +137,26 @@ to receive traffic.
 
 ### Custom Domains
 
-To add an additional HTTP route, use `flynn route add http`:
+To add an additional HTTP route, use `flynn route:add http`:
 
 ```text
-flynn route add http www.example.com
+flynn route:add http www.example.com
 ```
 
 DNS will also need to be configured for the domain, in this example
 `www.example.com` should be set to a CNAME to `$APPNAME.$CLUSTERDOMAIN`.
+
+### Path-based HTTP routes
+
+A path on an HTTP route (`example.com/api`) can only be created by a cluster
+administrator:
+
+```text
+sudo flynn-host route:add http --app myapp example.com/api
+```
+
+`flynn route:add` rejects path-based routes. The user CLI can still list and
+remove them.
 
 ### Cluster apex (root domain)
 
@@ -179,7 +191,7 @@ Routes for the additional process type can be configured by specifying the
 `--service` flag:
 
 ```text
-flynn route add http --service myapp-admin-web admin.example.com
+flynn route:add http --service myapp-admin-web admin.example.com
 ```
 
 ### HTTPS
@@ -244,19 +256,19 @@ flynn-host acme:disable-system-routes
 Once ACME is enabled, you can create routes with automatic TLS:
 
 ```text
-flynn route add http --auto-tls www.example.com
+flynn route:add http --auto-tls www.example.com
 ```
 
 Or enable automatic TLS for an existing route:
 
 ```text
-flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --auto-tls
+flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --auto-tls
 ```
 
 To disable automatic TLS for a route:
 
 ```text
-flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --no-auto-tls
+flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --no-auto-tls
 ```
 
 **Note:** The domain must be publicly accessible and DNS must be properly
@@ -281,54 +293,58 @@ router can operate.
 
 ## Limits
 
-Memory and other resource limits can be retrieved and specified using the `flynn
-limit` command. For example:
+Process types use named runtime environments for CPU and memory. The cluster
+bootstraps three builtins:
+
+| Profile | Memory | CPU |
+| --- | --- | --- |
+| `small` | 512MB | 500 milliCPU |
+| `medium` | 1GB | 1000 milliCPU (matches the default when no profile is set) |
+| `large` | 2GB | 2000 milliCPU |
+
+List profiles and apply one:
 
 ```text
-flynn limit set web memory=2GB
+flynn limit
+flynn limit:profiles
+flynn limit:profile web small
 ```
 
-### CPU Shares
+Operators add or change profiles with `flynn-host runtime-profile:create` and
+`flynn-host runtime-profile:update`. Builtin `small` / `medium` / `large` cannot
+be removed.
 
-CPU shares are relative, the more shares a process has, the higher priority it
-is. When a host is under load, a job with 2000 milliCPUs will get twice the CPU
-time as a job with the default of 1000.
+Raw numeric CPU/memory (`flynn limit:set web memory=2GB`) is off by default
+(`allow_custom_limits`). Enable it with
+`sudo flynn-host runtime-profile:allow-custom` if operators and app
+collaborators should set those numbers. File descriptors and temp disk still
+use `limit:set`:
 
 ```text
-flynn limit set web cpu=1500
+flynn limit:set web max_fd=12000 temp_disk=200MB
 ```
 
-### Slugbuilder Limits
+CPU shares are relative: when a host is under load, a job with 2000 milliCPU
+gets twice the CPU time as a job with 1000.
 
-Some build processes require a lot of memory. If you encounter a slowness or
-arbitrary failures during `git push` deploys, try increasing the memory limit of
-the `slugbuilder` process:
+### Builder process limits
+
+`git push` copies `slugbuilder` (buildpack stack) or `dockerbuilder` (container
+stack) onto the app release. Those process types are hidden from dashboard JWTs
+(jobs, logs, formations). Cluster administrators and app members with
+`app:admin` (or `cluster:admin` / `*`) can set their limits; regular
+collaborators cannot.
 
 ```text
-flynn limit set slugbuilder memory=4GB
+flynn limit:set slugbuilder memory=4GB
+flynn limit:set dockerbuilder memory=4GB
 ```
 
-You can also specify a default `slugbuilder` memory limit globally, set the
-`SLUGBUILDER_DEFAULT_MEMORY_LIMIT` environment variable for the apps that handle
-`git push` deploys:
+You can also specify a default builder memory limit globally on the apps that
+handle `git push` deploys:
 
 ```text
-limit=SLUGBUILDER_DEFAULT_MEMORY_LIMIT=2GB
-flynn -a gitreceive env set $limit
-flynn -a taffy env set $limit
-```
-
-### Dockerbuilder Limits
-
-Apps on the `container` stack build images on the server during `git push`. If
-builds fail or are killed for memory, raise the `dockerbuilder` process limit:
-
-```text
-flynn limit set dockerbuilder memory=4GB
-```
-
-You can also set a default limit on gitreceive:
-
-```text
-flynn -a gitreceive env set DOCKERBUILDER_DEFAULT_MEMORY_LIMIT=4GB
+flynn -a gitreceive env:set SLUGBUILDER_DEFAULT_MEMORY_LIMIT=2GB
+flynn -a taffy env:set SLUGBUILDER_DEFAULT_MEMORY_LIMIT=2GB
+flynn -a gitreceive env:set DOCKERBUILDER_DEFAULT_MEMORY_LIMIT=4GB
 ```

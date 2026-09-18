@@ -185,9 +185,9 @@ allow `${app.ENV}`, `${resource}`, `${resource.ENV}`, and
 `${app.ENV|leader.${resource}.discoverd}`; env values are inserted once and not
 re-expanded.
 
-MariaDB, MongoDB, Kafka, and ClickHouse still have compiled `flynn` handlers
-until those plugins publish the same `doc`/`actions` contract; they stay hidden
-until the matching plugin is installed.
+Every resource-provider plugin (Redis, MariaDB, MongoDB, Kafka, ClickHouse)
+publishes the same `doc`/`actions` contract. Those commands stay hidden on
+`flynn help` until the matching plugin is installed on the cluster.
 
 ## Production
 

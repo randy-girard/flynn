@@ -73,7 +73,10 @@ ports externally on every node:
 
 **A firewall with this configuration is required.** Internal Flynn APIs must not
 be reachable from the internet; access to them is equivalent to root on the
-cluster.
+cluster. After install, `flynn-host firewall` manages extra peer IPs and TCP
+ports on the host UFW rules (`firewall:peer-add`, `firewall:expose`,
+`firewall:sync`). Public 22/80/443 and private cluster CIDRs stay
+installer-owned.
 
 Next, start a Layer 0 cluster: run `flynn-host` on every node. The daemon uses
 Raft for leader election and must know its peers.

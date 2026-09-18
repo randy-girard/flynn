@@ -44,10 +44,21 @@ by some libraries to configure connections.
 
 ### Connecting to a console
 
-To connect to a console for the database, run `flynn redis redis-cli`. This does
-not require the Redis client to be installed locally or firewall/security
-changes, as it runs in a container on the Flynn cluster. The console uses
-`REDIS_HOST` (`leader.<redis-app>.discoverd`), the same host as `REDIS_URL`.
+To connect to a console for the database, run `flynn redis:cli` (alias
+`flynn redis redis-cli`). This does not require the Redis client to be installed
+locally or firewall/security changes, as it runs in a container on the Flynn
+cluster. The console uses `REDIS_HOST` (`leader.<redis-app>.discoverd`), the
+same host as `REDIS_URL`.
+
+### Dumping and restoring
+
+`flynn redis:dump` writes an RDB dump. `flynn redis:restore` loads one. If
+`-f` is omitted, dump writes stdout and restore reads stdin:
+
+```text
+flynn redis:dump -f db.dump
+flynn redis:restore -f db.dump
+```
 
 ### External access
 

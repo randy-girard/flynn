@@ -31,7 +31,9 @@ Flynn uses several ports to communicate internally, and currently there is no
 authentication system for internal communication, so access to these ports must
 not be exposed to the Internet. A firewall must be configured so that the only
 Flynn ports accessible are 80 and 443 to prevent compromise. Access to these
-internal Flynn ports is equivalent to root access, so be careful.
+internal Flynn ports is equivalent to root access, so be careful. After
+install, `flynn-host firewall` manages extra peer IPs and TCP ports on the
+host UFW rules; see [Production — Firewalling](production.html.md#firewalling).
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. The TLS
@@ -54,10 +56,16 @@ datastores only at the leader host Flynn put in `DATABASE_URL` /
 router, or blobstore databases. Cross-app HTTP still works through routes you
 add (the router). System appliances keep a full overlay mesh.
 
-`flynn -a controller pg psql` (and the same for `blobstore` / other system
+`flynn -a controller pg:psql` (and the same for `blobstore` / other system
 apps) requires the cluster controller key. Dashboard tokens scoped to user
-apps cannot open those consoles. Treat the key from `flynn cluster add` as
+apps cannot open those consoles. Treat the key from `flynn cluster:add` as
 root.
+
+Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
+`slugrunner`) from jobs, logs, and formations. Setting those process limits
+requires the cluster key, `cluster:admin`, or `app:admin` on that app. Path-based
+HTTP routes (`example.com/api`) can only be created with
+`flynn-host route:add`.
 
 Applications are not a full kernel sandbox. Do not run untrusted code in
 Flynn. HostNetwork remains restricted to system/builder jobs.

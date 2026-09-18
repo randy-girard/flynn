@@ -86,7 +86,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `scale` | Formation (process counts) |
 | `ps` / `ps:kill` / `run` | Jobs |
 | `log` | Aggregated stdout/stderr |
-| `env` / `limit` / `meta` | Config, resource limits, metadata |
+| `env` / `limit` / `meta` | Config, named runtime profiles (`limit:profile`), raw `limit:set` (when allowed), metadata |
 | `apps:export` / `apps:import` | Backup and restore an app |
 
 ### Routing and resources
@@ -118,8 +118,17 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 
 | Command | Purpose |
 | --- | --- |
-| `plugin:list` | Installed plugins (`--known` lists official plugins, repos, and descriptions) |
+| `plugin:install` / `plugin:update` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions) |
+| `plugin:route <name>` | HTTP/TCP routes for a plugin app |
+| `plugin:credentials-*` | GitHub token for private/draft plugin releases |
 | `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
 | `otel` / `otel:add` | OpenTelemetry metrics (requires `flynn-host plugin:install otel`) |
+| `acme:configure` / `acme:status` / `acme:enable-system-routes` | Let's Encrypt account and system-route TLS |
+| `runtime-profile` / `runtime-profile:create` / `runtime-profile:allow-custom` | Named CPU/memory environments (`small`/`medium`/`large` plus custom) |
+| `firewall` / `firewall:sync` / `firewall:peer-add` / `firewall:expose` | Host UFW peer IPs and extra TCP ports |
+| `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |
 | `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname |
+| `backup` / `migrate-domain` / `update` | Cluster backup, domain rename, rolling host update |
+| `webhooks` / `webhooks:add` | Host webhooks (job events) |
+| `tags` / `tags:set` | Host tags for scheduler placement |
 | `fix` | Repair a broken cluster (interactive on a TTY; `--yes` for scripts) |
