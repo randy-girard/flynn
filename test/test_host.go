@@ -220,10 +220,10 @@ func (a *IshApp) Cleanup() {
 }
 
 /*
-	Make an 'ish' application on the given host, returning it when
-	it has registered readiness with discoverd.
+Make an 'ish' application on the given host, returning it when
+it has registered readiness with discoverd.
 
-	User will want to defer a.Cleanup() to clean up.
+User will want to defer a.Cleanup() to clean up.
 */
 func (s *Helper) makeIshApp(t *c.C, a *IshApp) (*IshApp, error) {
 	// pick a unique string to use as service name so this works with concurrent tests.
@@ -560,6 +560,9 @@ func (s *HostSuite) TestNotifyOOM(t *c.C) {
 				t.Fatalf("message stream closed unexpectedly: %s", stream.Err())
 			}
 			t.Log(msg.Msg)
+			if strings.Contains(msg.Msg, "memory limit") && strings.Contains(msg.Msg, "killed") {
+				return
+			}
 			if strings.Contains(msg.Msg, "FATAL: a container process was killed due to lack of available memory") {
 				return
 			}

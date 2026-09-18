@@ -1384,7 +1384,7 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 		}
 	}
 
-	notifyOOM, err := c.container.NotifyOOM()
+	notifyOOM, err := c.subscribeOOM()
 	if err != nil {
 		log.Warn("unable to subscribe to OOM notifications", "err", err)
 	} else {
@@ -2055,6 +2055,28 @@ func cgroupsReadonly(isBuild, writeableCgroups, systemApp, systemPartition bool)
 	return !writeableCgroups || (!systemApp && !systemPartition)
 }
 
+// subscribeOOM watches for cgroup OOM kills. libcontainer NotifyOOM uses
+// cgroup v1 memory.oom_control; on the unified hierarchy we poll memory.events.
+func (c *Container) subscribeOOM() (<-chan struct{}, error) {
+	if c.container != nil {
+		if ch, err := c.container.NotifyOOM(); err == nil {
+			return ch, nil
+		}
+	}
+	dir := findExistingDir(jobCgroupCandidates(c.job.Partition, c.job.ID))
+	if dir == "" {
+		return nil, fmt.Errorf("cgroup directory not found for job %s", c.job.ID)
+	}
+	eventsPath := memoryEventsPath(dir)
+	if _, err := os.Stat(eventsPath); err == nil {
+		return watchMemoryEvents(eventsPath, oomEventPollInterval, c.done)
+	}
+	if _, err := os.Stat(memoryOOMControlPath(dir)); err != nil {
+		return nil, fmt.Errorf("open %s: %w", memoryOOMControlPath(dir), err)
+	}
+	return nil, fmt.Errorf("cgroup v1 oom_control present but NotifyOOM failed for %s", dir)
+}
+
 // monitorMemoryUsage periodically checks memory usage and logs when soft limit is exceeded
 func (c *Container) monitorMemoryUsage(log log15.Logger) {
 	if c.softLimitBytes == 0 {
@@ -2435,9 +2457,9 @@ func (l *LibcontainerBackend) GetHostStats() (*host.HostResourceStats, error) {
 		return nil, fmt.Errorf("error reading uptime: %s", err)
 	}
 
-	// Disk stats for container root
-	if err := l.readDiskStats(result); err != nil {
-		// Non-fatal, just log
+	// Disk stats for the Flynn node filesystem
+	if err := fillDiskStats(result); err != nil && l.Logger != nil {
+		l.Logger.Warn("error reading node disk stats", "err", err)
 	}
 
 	// Network stats from /proc/net/dev
@@ -2528,20 +2550,6 @@ func (l *LibcontainerBackend) readUptime(stats *host.HostResourceStats) error {
 	if len(fields) >= 1 {
 		stats.UptimeSeconds, _ = strconv.ParseFloat(fields[0], 64)
 	}
-
-	return nil
-}
-
-// readDiskStats reads disk usage for the container root filesystem
-func (l *LibcontainerBackend) readDiskStats(stats *host.HostResourceStats) error {
-	var statfs syscall.Statfs_t
-	if err := syscall.Statfs(containerRoot, &statfs); err != nil {
-		return err
-	}
-
-	stats.DiskTotalBytes = statfs.Blocks * uint64(statfs.Bsize)
-	stats.DiskFreeBytes = statfs.Bfree * uint64(statfs.Bsize)
-	stats.DiskUsedBytes = stats.DiskTotalBytes - stats.DiskFreeBytes
 
 	return nil
 }
