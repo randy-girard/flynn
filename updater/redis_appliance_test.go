@@ -37,3 +37,17 @@ func TestUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 		t.Fatal("missing-release skip must run after GetAppRelease")
 	}
 }
+
+func TestUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "if !app.System() && !artifact.IsSlugrunner()") {
+		t.Fatal("docker:push and container-stack apps must not be rewritten to slugrunner")
+	}
+	if strings.Contains(body, "if !app.System() && release.IsGitDeploy()") {
+		t.Fatal("slugrunner skip must key off the artifact, not git deploy meta (docker:push is not a git deploy)")
+	}
+}

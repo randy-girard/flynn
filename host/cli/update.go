@@ -74,6 +74,8 @@ always cluster-wide).
 
 User apps with no current release (created in the dashboard or with
 flynn create but never deployed) are skipped so the update can finish.
+docker:push and container-stack apps keep their image; only slugrunner
+git apps are refreshed to the new slugrunner.
 
 When --tarball is specified, the update is performed from a local .tar.gz file
 (the same tarball produced by the release scripts) instead of GitHub. With

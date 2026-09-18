@@ -60,6 +60,20 @@ func TestTarballUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "if !app.System() && !artifact.IsSlugrunner()") {
+		t.Fatal("docker:push and container-stack apps must not be rewritten to slugrunner")
+	}
+	if strings.Contains(body, "if !app.System() && release.IsGitDeploy()") {
+		t.Fatal("slugrunner skip must key off the artifact, not git deploy meta (docker:push is not a git deploy)")
+	}
+}
+
 func TestNormalizeHostname(t *testing.T) {
 	if got, want := normalizeHostname("Flynn-Test_Node-1"), "flynntestnode1"; got != want {
 		t.Fatalf("normalizeHostname: got %q, want %q", got, want)

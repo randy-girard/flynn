@@ -96,6 +96,17 @@ need 'echo docker-push-cli' \
   "docker-push flynn run must execute echo in the pre-built image"
 need 'cat /start.sh' \
   "container flynn run must read /start.sh from the image"
+
+updater="${ROOT}/updater/updater.go"
+grep -q 'if !app.System() && !artifact.IsSlugrunner()' "${updater}" \
+  || { echo "updater must skip docker:push/container-stack apps (not rewrite them to slugrunner)" >&2; exit 1; }
+if grep -q 'if !app.System() && release.IsGitDeploy()' "${updater}"; then
+  echo "updater slugrunner skip must not require git deploy meta (docker:push is not git)" >&2
+  exit 1
+fi
+host_updater="${ROOT}/host/cli/github_updater.go"
+grep -q 'if !app.System() && !artifact.IsSlugrunner()' "${host_updater}" \
+  || { echo "github updater must skip docker:push/container-stack apps" >&2; exit 1; }
 need 'net-isolate-peer' \
   "smoke must prove Dockerfile jobs cannot reach other apps via discoverd"
 need 'slug app git dir missing' \

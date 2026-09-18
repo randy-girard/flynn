@@ -316,10 +316,11 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		log.Error("error getting release artifact", "err", err)
 		return err
 	}
-	if !app.System() && release.IsGitDeploy() {
-		if !artifact.IsSlugrunner() {
-			return errDeploySkipped{"app not using slugrunner image"}
-		}
+	// Only git/slug apps use slugrunner as artifact 0. docker:push and
+	// container-stack deploys store the user image there; rewriting that
+	// to slugrunner leaves CMD like /bin/sh /start.sh with no start.sh.
+	if !app.System() && !artifact.IsSlugrunner() {
+		return errDeploySkipped{"app not using slugrunner image"}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
 	if updateImageIDs(release.Env) {
