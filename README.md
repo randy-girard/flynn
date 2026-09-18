@@ -50,7 +50,7 @@ Pin a version with `--version`, or set `FLYNN_GITHUB_REPO` / `--repo` if you are
 After you bootstrap a cluster, add it:
 
 ```bash
-flynn cluster add <name> <domain> <key>
+flynn cluster:add <name> <domain> <key>
 # or, on a host in the cluster:
 sudo flynn-host cli-add-command
 ```
@@ -113,22 +113,22 @@ See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/conte
 ## Deploy an app
 
 ```bash
-flynn create myapp
-flynn resource add postgres    # optional; see datastores below
+flynn apps:create myapp
+flynn resource:add postgres    # optional; see datastores below
 git push flynn main            # or: master
 ```
 
 `git push` uses the **heroku-24** stack by default (buildpacks). To build a `Dockerfile` on the cluster with BuildKit:
 
 ```bash
-flynn stack set container
+flynn stack:set container
 git push flynn main
 ```
 
 To push an image you already built locally:
 
 ```bash
-flynn -a myapp docker push myimage:tag
+flynn -a myapp docker:push myimage:tag
 flynn -a myapp scale app=1
 ```
 
@@ -170,12 +170,12 @@ Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a p
 sudo flynn-host acme configure --email=admin@example.com --agree-tos
 sudo flynn-host acme status
 sudo flynn-host acme enable-system-routes   # controller, dashboard, …
-flynn route add http --auto-tls www.example.com
+flynn route:add http --auto-tls www.example.com
 ```
 
 Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host acme status` anytime.
 
-The name on the certificate must resolve to the cluster and pass HTTP-01 (ports 80/443 open). You can still attach your own cert with `--tls-cert` / `--tls-key`. After system routes have a public cert, clear the bootstrap TLS pin: `flynn cluster update-pin --clear`. See [Apps — HTTPS](docs/content/apps.md#https).
+The name on the certificate must resolve to the cluster and pass HTTP-01 (ports 80/443 open). You can still attach your own cert with `--tls-cert` / `--tls-key`. After system routes have a public cert, clear the bootstrap TLS pin: `flynn cluster:refresh --clear`. See [Apps — HTTPS](docs/content/apps.md#https).
 
 ## Architecture (short)
 

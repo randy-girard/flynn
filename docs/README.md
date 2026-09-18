@@ -34,6 +34,8 @@ Start at the [root README](../README.md) or pick a page. Agent notes (keep docs 
 - [Security](content/security.md)
 - [Stability](content/stability.md)
 - [HTTPS / Let's Encrypt](content/apps.md#https)
+- [Monitoring / OpenTelemetry](content/production.html.md#monitoring)
+- [Plugins](content/plugins.md)
 
 ## Reference
 

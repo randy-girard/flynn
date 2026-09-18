@@ -188,7 +188,7 @@ App routes opt in with `flynn route add http --auto-tls <domain>`. The name
 must resolve to the cluster so Let's Encrypt can complete HTTP-01 on ports 80
 and 443. You can still attach your own cert with `--tls-cert` / `--tls-key`.
 After system routes have a public certificate, run
-`flynn cluster update-pin --clear` so the CLI uses normal TLS verification
+`flynn cluster:refresh --clear` so the CLI uses normal TLS verification
 instead of the bootstrap pin.
 
 See [Apps — HTTPS](../apps.md#https).

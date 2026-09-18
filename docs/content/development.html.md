@@ -47,7 +47,7 @@ macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
 Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
-`../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, …). Install them on a cluster host with
+`../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`, …). Install them on a cluster host with
 `flynn-host plugin install` after bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
@@ -72,7 +72,9 @@ version. `flynn-test` / `flynn-test-file-server` are omitted unless you pass
 ### Cluster images
 
 A full production platform build (squashfs layers for system apps and the CLI)
-is `build.sh` on the builder. It does **not** build cluster-test images
+is `build.sh` on the builder. Layer squashfs is written on the VM’s local disk
+(`/mnt` is a bind of a host temp dir); `build/log` and the release tarball
+still land in the Vagrant share so you can inspect them from the laptop. It does **not** build cluster-test images
 (`test`, `test-apps` including MinIO, `controller-examples`). Those are only
 for the `test/` integration suite; add `./build.sh test` if you need them.
 First time, or after Ubuntu/base-package changes:
@@ -273,14 +275,17 @@ Default flow:
    HA, then deploy). After upgrades, every topology including `discovery`
    takes a cluster backup and restores with `--from-backup`.
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
-   on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`, deploy
+   on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`,
+   install every first-party plugin (`PLUGIN_SMOKE_APPS`: redis, mysql,
+   mongodb, kafka, clickhouse, dashboard, www, discovery), deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
-   `test/apps/upgrade-smoke-docker` on the **container** stack, probe HTTP and
+   `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn docker
+   push` a pre-built image of the same Dockerfile, probe HTTP and
    rows, exercise `flynn` / `flynn-host`, create a persistent volume, write a
    file, read it after a job restart, and delete the volume, then `flynn-host update --all-nodes
    --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
-   re-verify the slug/Docker apps plus postgres/mysql/mongodb data. Installed
+   re-verify the slug/Dockerfile git-push/docker-push apps plus postgres/mysql/mongodb data. Installed
    plugins restore with postgres (`plugins.json` is the inventory; do not
    `plugin install` again). Redis, Kafka, and ClickHouse volume data is not
    in the cluster backup; those engines must come back empty.
@@ -300,6 +305,7 @@ Useful environment:
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run |
+| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery) |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
 The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
@@ -365,6 +371,10 @@ $ ./build.sh --version vYYYYMMDD.N test
 `script/release` defaults to a local tarball. GitHub needs `gh` authenticated
 against `randy-girard/flynn`. Prefer the Actions workflow for production
 assets; it already splits toolchain vs app image builds.
+
+Release notes list **only the commits between the previous `v*` tag and this
+one**, by CalVer order, not `git log` on the current branch. Topic-branch
+commits that are not in that tag range stay out of the GitHub release body.
 
 Install a built release with
 [manual installation](installation/manual.md) or:

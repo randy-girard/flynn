@@ -48,7 +48,7 @@ This updates the user CLI only. Cluster hosts still use `flynn-host update`.
 
 ## Adding a cluster
 
-After bootstrap, the last log line includes a `flynn cluster add` command. You can also generate it on a host:
+After bootstrap, the last log line includes a `flynn cluster:add` command. You can also generate it on a host:
 
 ```text
 sudo flynn-host cli-add-command
@@ -57,12 +57,12 @@ sudo flynn-host cli-add-command
 Then:
 
 ```text
-flynn cluster add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspin>] <name> <domain> <key>
+flynn cluster:add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspin>] <name> <domain> <key>
 ```
 
 The TLS pin is stored in `~/.flynnrc` so the CLI can reject man-in-the-middle certificates. `flynn login` authenticates through the dashboard (OAuth) instead of a controller key.
 
-List and switch clusters with `flynn cluster`. Use `-c <cluster>` or `FLYNN_CLUSTER` to target a non-default cluster.
+List and switch clusters with `flynn cluster`. Use `-c <cluster>` or `FLYNN_CLUSTER` to target a non-default cluster. After `flynn-host migrate-domain`, run `flynn cluster:refresh` on each laptop.
 
 ## Usage
 
@@ -72,32 +72,33 @@ flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands appear under **Plugins:**. `flynn plugins` shows what the current cluster credential can see.
+Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands appear under **Plugins:**. `flynn plugin:list` shows what the current cluster credential can see.
 
 ### Apps and deploys
 
 | Command | Purpose |
 | --- | --- |
-| `create` / `delete` / `apps` / `info` | App lifecycle |
-| `stack` / `stack set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
-| `remote` | Git remotes |
-| `docker push` | Deploy a local Docker image |
-| `release` / `deployment` | Releases and deploy history |
+| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle |
+| `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
+| `git:remote` | Git remotes |
+| `docker:push` | Deploy a local Docker image |
+| `release` / `deploy` | Releases and deploy history |
 | `scale` | Formation (process counts) |
-| `ps` / `kill` / `run` | Jobs |
+| `ps` / `ps:kill` / `run` | Jobs |
 | `log` | Aggregated stdout/stderr |
 | `env` / `limit` / `meta` | Config, resource limits, metadata |
-| `export` / `import` | Backup and restore an app |
+| `apps:export` / `apps:import` | Backup and restore an app |
 
 ### Routing and resources
 
 | Command | Purpose |
 | --- | --- |
 | `route` | HTTP and TCP routes, `--auto-tls` |
-| `resource add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
-| `pg` / `mysql` / `mongodb` / `redis` | Consoles, dump, restore (plugin commands after install) |
-| `kafka` | Topics and consumer groups (after plugin install) |
-| `clickhouse` | Databases and client (after plugin install) |
+| `resource:add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
+| `pg:psql` / `mysql:cli` / `mongodb:cli` / `redis:cli` | Consoles, dump, restore (plugin commands after install) |
+| `kafka:topics` | Topics and consumer groups (after plugin install) |
+| `clickhouse:cli` | Databases and client (after plugin install) |
+| `logsink` | Per-app syslog sinks (`flynn-host log-sink` / `flynn-host otel` for cluster and system logs) |
 | `volume` | Persistent volumes |
 | `provider` | Resource providers |
 
@@ -105,10 +106,19 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 
 | Command | Purpose |
 | --- | --- |
-| `cluster` | Registered clusters |
-| `plugins` | Plugins installed on this cluster |
+| `cluster` / `cluster:add` / `cluster:refresh` | Registered clusters |
+| `plugin:list` | Plugins installed on this cluster |
 | `login` | Dashboard OAuth |
 | `update` / `upgrade` | Replace this CLI from GitHub Releases |
 | `version` | CLI version |
 
 The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).
+
+Host-level commands run on cluster nodes (`sudo flynn-host …`):
+
+| Command | Purpose |
+| --- | --- |
+| `log-sink` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
+| `otel` | OpenTelemetry metrics and logs (OTLP/HTTP) |
+| `domain` / `domain apex <app>` | Cluster domain and which app serves the apex (root) hostname |
+| `fix` | Repair a broken cluster (interactive on a TTY; `--yes` for scripts) |
