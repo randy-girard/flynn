@@ -59,6 +59,8 @@ OPTIONS:
   --zpool-create-device DEVICE     Device to create the flynn-default zpool on
   --zpool-create-options OPTIONS   Options to pass to 'zpool create'
   --tarball PATH                   Install from a local release .tar.gz (extracts to a temp dir)
+  --no-firewall                    Do not configure the host firewall (public TCP 22, 80, 443)
+  --no-logrotate                   Do not install logrotate for /var/log/flynn
 
 VARIABLES:
   FLYNN_VERSION          An explicit version to install (e.g. v2024.01.27.0)
@@ -279,6 +281,79 @@ EOF
   systemctl enable flynn-host.service
 }
 
+# Keep in sync with script/lib/host-hardening.sh
+flynn_firewall_public_tcp_ports() {
+  echo "22 80 443"
+}
+
+flynn_firewall_cluster_cidrs() {
+  echo "10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10"
+}
+
+flynn_logrotate_config() {
+  cat <<'EOF'
+# Flynn host and job logs. copytruncate avoids interrupting writers that keep
+# /var/log/flynn/*.log open (flynn-host, logsink).
+/var/log/flynn/*.log
+/var/log/flynn/*/*.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    sharedscripts
+}
+EOF
+}
+
+configure_flynn_logrotate() {
+  local dest_dir="${FLYNN_LOGROTATE_DIR:-/etc/logrotate.d}"
+  local log_dir="${FLYNN_LOG_DIR:-/var/log/flynn}"
+  info "configuring logrotate for ${log_dir}"
+  mkdir -p "${dest_dir}" "${log_dir}"
+  flynn_logrotate_config > "${dest_dir}/flynn"
+  chmod 0644 "${dest_dir}/flynn"
+}
+
+configure_flynn_firewall() {
+  info "configuring host firewall (public TCP 22, 80, 443; private cluster CIDRs)"
+
+  if [[ "${FLYNN_FIREWALL_DRY_RUN:-}" == "1" ]]; then
+    echo "default deny incoming"
+    echo "default allow outgoing"
+    local p
+    for p in $(flynn_firewall_public_tcp_ports); do
+      echo "allow ${p}/tcp"
+    done
+    local c
+    for c in $(flynn_firewall_cluster_cidrs); do
+      echo "allow from ${c}"
+    done
+    return 0
+  fi
+
+  if ! command -v ufw >/dev/null 2>&1; then
+    run apt-get install --yes ufw
+  fi
+
+  ufw default deny incoming
+  ufw default allow outgoing
+
+  local port
+  for port in $(flynn_firewall_public_tcp_ports); do
+    ufw allow "${port}/tcp" comment "flynn-public"
+  done
+
+  local cidr
+  for cidr in $(flynn_firewall_cluster_cidrs); do
+    ufw allow from "${cidr}" comment "flynn-cluster"
+  done
+
+  ufw --force enable
+}
+
 #############################################################################
 # GitHub-specific functions
 #############################################################################
@@ -488,6 +563,8 @@ main() {
   local remove=false
   local assume_yes=false
   local install_ntp=true
+  local configure_firewall=true
+  local configure_logrotate=true
   local zpool_dev=""
   local zpool_opts=""
   local LOCAL_TARBALL=""
@@ -537,6 +614,14 @@ main() {
         if [[ -z "$2" ]]; then fail "--tarball requires a path to a release .tar.gz archive"; fi
         LOCAL_TARBALL="$2"
         shift 2
+        ;;
+      --no-firewall)
+        configure_firewall=false
+        shift
+        ;;
+      --no-logrotate)
+        configure_logrotate=false
+        shift
         ;;
       -h|--help)
         usage
@@ -598,7 +683,7 @@ main() {
 
   # Install runtime dependencies (ntp is separate: on Ubuntu 24.04+ it often conflicts with
   # systemd-timesyncd / ntpsec via time-daemon; core packages must still install.)
-  local packages=("iptables" "ipset" "zfsutils-linux" "jq" "apparmor" "apparmor-utils" "net-tools" "iproute2")
+  local packages=("iptables" "ipset" "zfsutils-linux" "jq" "apparmor" "apparmor-utils" "net-tools" "iproute2" "ufw" "logrotate")
   info "installing runtime dependencies"
   run apt-get update
   run apt-get install --yes "${packages[@]}"
@@ -694,6 +779,12 @@ EOF
 
   install_flannel_link_file
   install_systemd_unit
+  if $configure_logrotate; then
+    configure_flynn_logrotate
+  fi
+  if $configure_firewall; then
+    configure_flynn_firewall
+  fi
 
   info "installation complete!"
   if $use_github_download; then

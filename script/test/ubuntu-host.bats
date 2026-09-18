@@ -20,3 +20,18 @@ load "helper"
   fi
   grep -q 'systemctl restart docker' "${ROOT}/script/configure-docker"
 }
+
+@test "install scripts lock public ingress to 22/80/443 and rotate Flynn logs" {
+  for f in \
+    "${ROOT}/script/install-flynn" \
+    "${ROOT}/script/install-flynn.tmpl" \
+    "${ROOT}/script/install-flynn-release"
+  do
+    grep -q 'ufw allow "${port}/tcp"' "${f}"
+    grep -q 'ufw default deny incoming' "${f}"
+    grep -q 'copytruncate' "${f}"
+    grep -q '/etc/logrotate.d' "${f}"
+    grep -q -- '--no-firewall' "${f}"
+    grep -q -- '--no-logrotate' "${f}"
+  done
+}
