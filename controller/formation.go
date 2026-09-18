@@ -36,6 +36,13 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 	formation.AppID = app.ID
 	formation.ReleaseID = release.ID
 
+	if hideInternal(ctx, app) && formation.Processes != nil {
+		stripInternalProcessCounts(formation.Processes)
+		if existing, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
+			formation.Processes = preserveInternalProcessCounts(formation.Processes, existing.Processes)
+		}
+	}
+
 	if err = schema.Validate(formation); err != nil {
 		respondWithError(w, err)
 		return
@@ -47,7 +54,11 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, scaleRequestAsFormation(req))
+	out := scaleRequestAsFormation(req)
+	if hideInternal(ctx, app) {
+		out = redactFormation(out)
+	}
+	httphelper.JSON(w, 200, out)
 }
 
 func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWriter, r *http.Request) {
@@ -66,6 +77,14 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	req.AppID = app.ID
 	req.ReleaseID = release.ID
 
+	if hideInternal(ctx, app) && req.NewProcesses != nil {
+		stripInternalProcessCounts(*req.NewProcesses)
+		if existing, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
+			merged := preserveInternalProcessCounts(*req.NewProcesses, existing.Processes)
+			req.NewProcesses = &merged
+		}
+	}
+
 	if err := schema.Validate(req); err != nil {
 		respondWithError(w, err)
 		return
@@ -79,6 +98,9 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if hideInternal(ctx, app) {
+		req = *redactScaleRequest(&req)
 	}
 	httphelper.JSON(w, 200, &req)
 }
@@ -94,6 +116,9 @@ func (c *controllerAPI) GetFormation(ctx context.Context, w http.ResponseWriter,
 			respondWithError(w, err)
 			return
 		}
+		if hideInternal(ctx, app) {
+			formation = redactExpandedFormation(formation)
+		}
 		httphelper.JSON(w, 200, formation)
 		return
 	}
@@ -102,6 +127,9 @@ func (c *controllerAPI) GetFormation(ctx context.Context, w http.ResponseWriter,
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if hideInternal(ctx, app) {
+		formation = redactFormation(formation)
 	}
 	httphelper.JSON(w, 200, formation)
 }
@@ -134,6 +162,9 @@ func (c *controllerAPI) ListFormations(ctx context.Context, w http.ResponseWrite
 		respondWithError(w, err)
 		return
 	}
+	if hideInternal(ctx, app) {
+		list = redactFormations(list)
+	}
 	httphelper.JSON(w, 200, list)
 }
 
@@ -148,6 +179,9 @@ func (c *controllerAPI) GetFormations(ctx context.Context, w http.ResponseWriter
 		if err != nil {
 			respondWithError(w, err)
 			return
+		}
+		if hideInternalToken(ctx) {
+			list = redactExpandedFormations(list)
 		}
 		httphelper.JSON(w, 200, list)
 		return
@@ -193,7 +227,11 @@ func (c *controllerAPI) streamFormations(ctx context.Context, w http.ResponseWri
 		return err
 	}
 	currentUpdatedAt := since
+	hide := hideInternalToken(ctx)
 	for _, formation := range formations {
+		if hide && formation != nil && (formation.App == nil || !formation.App.System()) {
+			formation = redactExpandedFormation(formation)
+		}
 		select {
 		case <-stream.Done:
 			return nil
@@ -230,6 +268,9 @@ func (c *controllerAPI) streamFormations(ctx context.Context, w http.ResponseWri
 			}
 			if formation.UpdatedAt.Before(currentUpdatedAt) {
 				continue
+			}
+			if hide && (formation.App == nil || !formation.App.System()) {
+				formation = redactExpandedFormation(formation)
 			}
 			select {
 			case <-stream.Done:

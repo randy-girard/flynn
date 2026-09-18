@@ -174,6 +174,22 @@ func (r *Release) IsSlugDeploy() bool {
 	return r.Meta["slugrunner.stack"] != "container"
 }
 
+// IsInternalProcessType reports git-deploy machinery that is not a user
+// process. slugbuilder/dockerbuilder run as one-shot build jobs (and may be
+// copied onto a release for build-job limits); slugrunner is the stack image.
+func IsInternalProcessType(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	for _, prefix := range []string{"slugbuilder", "dockerbuilder", "slugrunner"} {
+		if n == prefix || strings.HasPrefix(n, prefix+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSirenia reports whether the release is for a sirenia-managed database
 // (postgres and sirenia plugins) by checking for the SIRENIA_PROCESS env var
 // that the sirenia deployment strategy uses to identify the database process

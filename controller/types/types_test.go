@@ -177,3 +177,16 @@ func TestArtifactIsSlugrunner(t *testing.T) {
 		t.Fatal("heroku-24 slugrunner-24 must be updated on flynn-host update")
 	}
 }
+
+func TestIsInternalProcessType(t *testing.T) {
+	for _, name := range []string{"slugbuilder", "SlugBuilder", "slugbuilder-24", "dockerbuilder", "slugrunner", "slugrunner-24"} {
+		if !IsInternalProcessType(name) {
+			t.Fatalf("%q must be an internal process type", name)
+		}
+	}
+	for _, name := range []string{"web", "worker", "run", "postgres", ""} {
+		if IsInternalProcessType(name) {
+			t.Fatalf("%q must not be an internal process type", name)
+		}
+	}
+}

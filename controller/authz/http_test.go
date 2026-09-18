@@ -43,6 +43,11 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_read_cannot_list_apps", appRead, http.MethodGet, "/apps", false},
 
 		{"app_write_can_post_release", appWrite, http.MethodPost, "/apps/app-1/releases", true},
+		{"app_write_can_post_cluster_release", appWrite, http.MethodPost, "/releases", true},
+		{"app_read_cannot_post_cluster_release", appRead, http.MethodPost, "/releases", false},
+		{"app_admin_can_post_cluster_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}}}, http.MethodPost, "/releases", true},
+		{"app_admin_can_post_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}}}, http.MethodPost, "/apps/app-1/releases", true},
+		{"app_admin_can_deploy", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}}}, http.MethodPost, "/apps/app-1/deploy", true},
 		{"app_write_can_post_deploy_route", appWrite, http.MethodPost, "/apps/app-1/deploy", true},
 		{"wrong_app_denied", wrongApp, http.MethodGet, "/apps/app-1", false},
 
@@ -186,5 +191,58 @@ func TestTokenFromContext(t *testing.T) {
 	}
 	if TokenFromContext(&ctxValuer{key: TokenContextKey, val: "nope"}) != nil {
 		t.Fatal("wrong value type must yield a nil token")
+	}
+}
+
+func TestHideInternalProcesses(t *testing.T) {
+	clusterKey := &authorizer.Token{ClusterKey: true}
+	adminJWT := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	appRead := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:read"}}}}
+	cases := []struct {
+		name   string
+		tok    *authorizer.Token
+		system bool
+		want   bool
+	}{
+		{"cluster_key_user_app", clusterKey, false, false},
+		{"nil_tok_user_app", nil, false, false},
+		{"admin_jwt_user_app", adminJWT, false, true},
+		{"app_grant_user_app", appRead, false, true},
+		{"admin_jwt_system_app", adminJWT, true, false},
+		{"cluster_key_system_app", clusterKey, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := HideInternalProcesses(tc.tok, tc.system); got != tc.want {
+				t.Fatalf("HideInternalProcesses(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCanManageInternalProcessLimits(t *testing.T) {
+	clusterKey := &authorizer.Token{ClusterKey: true}
+	adminJWT := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	appWrite := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:write"}}}}
+	appAdmin := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}}}
+	cases := []struct {
+		name  string
+		tok   *authorizer.Token
+		appID string
+		want  bool
+	}{
+		{"cluster_key", clusterKey, "app-1", true},
+		{"admin_jwt", adminJWT, "app-1", true},
+		{"nil_tok", nil, "app-1", true},
+		{"app_write", appWrite, "app-1", false},
+		{"app_admin", appAdmin, "app-1", true},
+		{"app_admin_other_app", appAdmin, "other", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CanManageInternalProcessLimits(tc.tok, tc.appID); got != tc.want {
+				t.Fatalf("CanManageInternalProcessLimits(%s) = %v, want %v", tc.name, got, tc.want)
+			}
+		})
 	}
 }

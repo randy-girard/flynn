@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -29,9 +30,13 @@ func (c *controllerAPI) GetAppJobsStats(ctx context.Context, w http.ResponseWrit
 
 		// Filter jobs that belong to this app by checking job metadata
 		for _, jobStats := range jobsStats.Jobs {
-			if isJobForApp(h, jobStats.JobID, app.ID) {
-				result = append(result, jobStats)
+			if !isJobForApp(h, jobStats.JobID, app.ID) {
+				continue
 			}
+			if hideInternal(ctx, app) && jobStatsIsInternal(h, jobStats.JobID) {
+				continue
+			}
+			result = append(result, jobStats)
 		}
 	}
 
@@ -62,6 +67,27 @@ func isJobForApp(h interface {
 	// Fallback: check if job ID contains the app ID prefix
 	// Flynn job IDs typically have format: host-uuid-app-uuid
 	return strings.Contains(jobID, appID)
+}
+
+func jobProcessType(job host.ActiveJob) string {
+	if job.Job != nil && job.Job.Metadata != nil {
+		return job.Job.Metadata["flynn-controller.type"]
+	}
+	return ""
+}
+
+func jobStatsIsInternal(h interface {
+	ListJobs() (map[string]host.ActiveJob, error)
+}, jobID string) bool {
+	jobs, err := h.ListJobs()
+	if err != nil {
+		return false
+	}
+	job, ok := jobs[jobID]
+	if !ok {
+		return false
+	}
+	return ct.IsInternalProcessType(jobProcessType(job))
 }
 
 // AppJobStats extends ContainerStats with app-specific metadata
@@ -110,6 +136,9 @@ func (c *controllerAPI) GetAppJobsStatsEnriched(ctx context.Context, w http.Resp
 			}
 
 			if jobAppID != app.ID {
+				continue
+			}
+			if hideInternal(ctx, app) && ct.IsInternalProcessType(processType) {
 				continue
 			}
 

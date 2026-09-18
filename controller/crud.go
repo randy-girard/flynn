@@ -22,27 +22,37 @@ type Remover interface {
 }
 
 func crud(r *httprouter.Router, resource string, example interface{}, repo Repository) {
+	crudRegister(r, resource, example, repo, true)
+}
+
+func crudNoCreate(r *httprouter.Router, resource string, example interface{}, repo Repository) {
+	crudRegister(r, resource, example, repo, false)
+}
+
+func crudRegister(r *httprouter.Router, resource string, example interface{}, repo Repository, create bool) {
 	resourceType := reflect.TypeOf(example)
 	prefix := "/" + resource
 
-	r.POST(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
-		thing := reflect.New(resourceType).Interface()
-		if err := httphelper.DecodeJSON(req, thing); err != nil {
-			respondWithError(rw, err)
-			return
-		}
+	if create {
+		r.POST(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
+			thing := reflect.New(resourceType).Interface()
+			if err := httphelper.DecodeJSON(req, thing); err != nil {
+				respondWithError(rw, err)
+				return
+			}
 
-		if err := schema.Validate(thing); err != nil {
-			respondWithError(rw, err)
-			return
-		}
+			if err := schema.Validate(thing); err != nil {
+				respondWithError(rw, err)
+				return
+			}
 
-		if err := repo.Add(thing); err != nil {
-			respondWithError(rw, err)
-			return
-		}
-		httphelper.JSON(rw, 200, thing)
-	}))
+			if err := repo.Add(thing); err != nil {
+				respondWithError(rw, err)
+				return
+			}
+			httphelper.JSON(rw, 200, thing)
+		}))
+	}
 
 	lookup := func(ctx context.Context) (interface{}, error) {
 		params, _ := ctxhelper.ParamsFromContext(ctx)

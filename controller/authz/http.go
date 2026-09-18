@@ -25,6 +25,10 @@ const (
 	// app-scoped). Used for read-only cluster catalogs such as runtime
 	// profiles that app operators must list in order to apply them.
 	rkAnyAuth
+	// rkCreateRelease is POST /releases. The app id is in the body, so
+	// HTTPAllowed only checks that the caller can write some app (or is a
+	// cluster admin). CreateRelease enforces the specific app.
+	rkCreateRelease
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -48,6 +52,12 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkAnyAuth {
 		return true
+	}
+	if kind == rkCreateRelease {
+		if hasAnyAppWrite(tok) {
+			return true
+		}
+		return false
 	}
 	if kind == rkCluster {
 		return false
@@ -86,6 +96,37 @@ func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
 		return true
 	}
 	return tok != nil && tok.HasClusterAdmin()
+}
+
+// HideInternalProcesses is true when a user-app API response must omit
+// git-deploy internals (slugbuilder/dockerbuilder/slugrunner) from jobs,
+// logs, formations, and metrics. The cluster controller key still sees
+// them. Dashboard JWTs do not; operators inspect those jobs with flynn-host.
+func HideInternalProcesses(tok *authorizer.Token, systemApp bool) bool {
+	if systemApp {
+		return false
+	}
+	if tok == nil || tok.ClusterKey {
+		return false
+	}
+	return true
+}
+
+// CanManageInternalProcessLimits reports whether tok may see and change
+// slugbuilder/dockerbuilder/slugrunner resource limits on a user app.
+// Cluster admins and collaborators granted app:admin (or *) may; ordinary
+// app:read/write/deploy grants may not.
+func CanManageInternalProcessLimits(tok *authorizer.Token, appID string) bool {
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
+		return true
+	}
+	for _, p := range permissionsForApp(tok, appID) {
+		switch p {
+		case "*", "cluster:admin", "app:admin":
+			return true
+		}
+	}
+	return false
 }
 
 // platformAppNames are bootstrap/system apps addressed by name in the URL.
@@ -175,6 +216,11 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 			return rkBuildArtifact, ""
 		}
 		return rkCluster, ""
+	case "releases":
+		if m == http.MethodPost {
+			return rkCreateRelease, ""
+		}
+		return rkCluster, ""
 
 	case "apps":
 		if len(parts) == 1 {
@@ -208,6 +254,15 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 	}
 }
 
+func hasAnyAppWrite(tok *authorizer.Token) bool {
+	for _, g := range tok.AppGrants {
+		if grantCovers(tok, g.AppID, rkAppWrite) {
+			return true
+		}
+	}
+	return false
+}
+
 func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
 	perms := permissionsForApp(tok, appID)
 	if len(perms) == 0 {
@@ -217,6 +272,7 @@ func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
 	hasRead := false
 	hasWrite := false
 	hasDeploy := false
+	hasAdmin := false
 	for _, p := range perms {
 		switch p {
 		case "*":
@@ -229,6 +285,8 @@ func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
 			hasWrite = true
 		case "app:deploy":
 			hasDeploy = true
+		case "app:admin":
+			hasAdmin = true
 		}
 	}
 	if hasStar {
@@ -236,11 +294,11 @@ func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
 	}
 	switch need {
 	case rkAppRead:
-		return hasRead || hasWrite || hasDeploy
+		return hasRead || hasWrite || hasDeploy || hasAdmin
 	case rkAppWrite:
-		return hasWrite || hasDeploy
+		return hasWrite || hasDeploy || hasAdmin
 	case rkAppDeploy:
-		return hasDeploy || hasWrite
+		return hasDeploy || hasWrite || hasAdmin
 	default:
 		return false
 	}

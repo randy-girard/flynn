@@ -28,6 +28,9 @@ func (c *controllerAPI) ListJobs(ctx context.Context, w http.ResponseWriter, req
 		respondWithError(w, err)
 		return
 	}
+	if hideInternal(ctx, app) {
+		list = redactJobs(list)
+	}
 	httphelper.JSON(w, 200, list)
 }
 
@@ -36,6 +39,9 @@ func (c *controllerAPI) ListActiveJobs(ctx context.Context, w http.ResponseWrite
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if hideInternalToken(ctx) {
+		list = redactJobs(list)
 	}
 	httphelper.JSON(w, 200, list)
 }
@@ -46,6 +52,16 @@ func (c *controllerAPI) GetJob(ctx context.Context, w http.ResponseWriter, req *
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if ct.IsInternalProcessType(job.Type) {
+		hide := hideInternalToken(ctx)
+		if app, err := c.appRepo.Get(job.AppID); err == nil {
+			hide = hideInternal(ctx, app.(*ct.App))
+		}
+		if hide {
+			respondWithError(w, ErrNotFound)
+			return
+		}
 	}
 	httphelper.JSON(w, 200, job)
 }
@@ -78,6 +94,16 @@ func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req 
 	} else if job.HostID == "" {
 		httphelper.ValidationError(w, "", "cannot kill a job which has not been placed on a host")
 		return
+	}
+	if ct.IsInternalProcessType(job.Type) {
+		hide := hideInternalToken(ctx)
+		if app, err := c.appRepo.Get(job.AppID); err == nil {
+			hide = hideInternal(ctx, app.(*ct.App))
+		}
+		if hide {
+			respondWithError(w, ErrNotFound)
+			return
+		}
 	}
 
 	client, err := c.clusterClient.Host(job.HostID)

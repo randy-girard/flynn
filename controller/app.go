@@ -105,10 +105,20 @@ func (c *controllerAPI) AppLog(ctx context.Context, w http.ResponseWriter, req *
 		}
 		opts.Lines = &lines
 	}
-	rc, err := c.logaggc.GetLog(c.getApp(ctx).ID, &opts)
+	app := c.getApp(ctx)
+	hide := hideInternal(ctx, app)
+	if hide && opts.ProcessType != nil && ct.IsInternalProcessType(*opts.ProcessType) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(200)
+		return
+	}
+	rc, err := c.logaggc.GetLog(app.ID, &opts)
 	if err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if hide {
+		rc = filterInternalProcessLogs(rc)
 	}
 
 	if cn, ok := w.(http.CloseNotifier); ok {

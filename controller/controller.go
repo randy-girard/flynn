@@ -220,7 +220,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter := httprouter.New()
 
 	crud(httpRouter, "apps", ct.App{}, appRepo)
-	crud(httpRouter, "releases", ct.Release{}, releaseRepo)
+	crudNoCreate(httpRouter, "releases", ct.Release{}, releaseRepo)
 	crud(httpRouter, "providers", ct.Provider{}, providerRepo)
 	crud(httpRouter, "artifacts", ct.Artifact{}, artifactRepo)
 
@@ -265,6 +265,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.SetAppRelease)))
 	httpRouter.GET("/apps/:apps_id/release", httphelper.WrapHandler(api.appLookup(api.GetAppRelease)))
 	httpRouter.GET("/apps/:apps_id/releases", httphelper.WrapHandler(api.appLookup(api.GetAppReleases)))
+	httpRouter.POST("/releases", httphelper.WrapHandler(api.CreateRelease))
 
 	httpRouter.GET("/resources", httphelper.WrapHandler(api.GetResources))
 	httpRouter.POST("/providers/:providers_id/resources", httphelper.WrapHandler(api.ProvisionResource))
