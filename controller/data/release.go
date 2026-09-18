@@ -3,14 +3,15 @@ package data
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/resource"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	tarreceive "github.com/flynn/flynn/tarreceive/utils"
 	"github.com/flynn/que-go"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	tarreceive "github.com/randy-girard/flynn/tarreceive/utils"
 )
 
 type ReleaseRepo struct {
@@ -64,6 +65,20 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 			proc.DeprecatedData = false
 		}
 		resource.SetDefaults(&proc.Resources)
+		if name := strings.TrimSpace(proc.RuntimeProfile); name != "" {
+			p, err := scanRuntimeProfile(r.db.QueryRow("runtime_profile_select_by_name", strings.ToLower(name)))
+			if err != nil {
+				if err == ErrNotFound {
+					return ct.ValidationError{
+						Field:   "runtime_profile",
+						Message: fmt.Sprintf("unknown runtime profile %q", name),
+					}
+				}
+				return err
+			}
+			resource.ApplyNamedLimits(proc.Resources, p.Memory, p.CPU)
+			proc.RuntimeProfile = p.Name
+		}
 		release.Processes[typ] = proc
 	}
 

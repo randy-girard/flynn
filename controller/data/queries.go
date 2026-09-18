@@ -123,6 +123,14 @@ var preparedStatements = map[string]string{
 	"managed_certificate_list_expiring":      managedCertificateListExpiringQuery,
 	"acme_config_select":                     acmeConfigSelectQuery,
 	"acme_config_update":                     acmeConfigUpdateQuery,
+	"runtime_profile_list":                   runtimeProfileListQuery,
+	"runtime_profile_select":                 runtimeProfileSelectQuery,
+	"runtime_profile_select_by_name":         runtimeProfileSelectByNameQuery,
+	"runtime_profile_insert":                 runtimeProfileInsertQuery,
+	"runtime_profile_update":                 runtimeProfileUpdateQuery,
+	"runtime_profile_delete":                 runtimeProfileDeleteQuery,
+	"runtime_settings_select":                runtimeSettingsSelectQuery,
+	"runtime_settings_update":                runtimeSettingsUpdateQuery,
 }
 
 func PrepareStatements(conn *pgx.Conn) error {
@@ -762,4 +770,31 @@ UPDATE acme_config SET
 	account_key = $5
 WHERE id = 1
 RETURNING updated_at`
+
+	runtimeProfileListQuery = `
+SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+FROM runtime_profiles WHERE deleted_at IS NULL
+ORDER BY builtin DESC, name`
+	runtimeProfileSelectQuery = `
+SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+FROM runtime_profiles WHERE profile_id = $1 AND deleted_at IS NULL`
+	runtimeProfileSelectByNameQuery = `
+SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+FROM runtime_profiles WHERE name = $1 AND deleted_at IS NULL`
+	runtimeProfileInsertQuery = `
+INSERT INTO runtime_profiles (profile_id, name, memory, cpu, builtin)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING created_at, updated_at`
+	runtimeProfileUpdateQuery = `
+UPDATE runtime_profiles SET name = $2, memory = $3, cpu = $4, updated_at = now()
+WHERE profile_id = $1 AND deleted_at IS NULL
+RETURNING builtin, created_at, updated_at`
+	runtimeProfileDeleteQuery = `
+UPDATE runtime_profiles SET deleted_at = now()
+WHERE profile_id = $1 AND deleted_at IS NULL AND builtin = false`
+	runtimeSettingsSelectQuery = `
+SELECT allow_custom_limits, updated_at FROM runtime_settings WHERE id = 1`
+	runtimeSettingsUpdateQuery = `
+UPDATE runtime_settings SET allow_custom_limits = $1, updated_at = now()
+WHERE id = 1 RETURNING updated_at`
 )

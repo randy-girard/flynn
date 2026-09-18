@@ -8,15 +8,15 @@ import (
 	"net/url"
 	"time"
 
-	v1controller "github.com/flynn/flynn/controller/client/v1"
-	ct "github.com/flynn/flynn/controller/types"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/pinned"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
+	v1controller "github.com/randy-girard/flynn/controller/client/v1"
+	ct "github.com/randy-girard/flynn/controller/types"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/pinned"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type Client interface {
@@ -108,6 +108,13 @@ type Client interface {
 	GetACMEConfig() (*ct.ACMEConfig, error)
 	GetACMEConfigInternal() (*ct.ACMEConfig, error)
 	UpdateACMEConfig(config *ct.ACMEConfig) error
+	ListRuntimeProfiles() ([]*ct.RuntimeProfile, error)
+	GetRuntimeProfile(id string) (*ct.RuntimeProfile, error)
+	CreateRuntimeProfile(profile *ct.RuntimeProfile) error
+	UpdateRuntimeProfile(profile *ct.RuntimeProfile) error
+	DeleteRuntimeProfile(id string) error
+	GetRuntimeSettings() (*ct.RuntimeSettings, error)
+	UpdateRuntimeSettings(settings *ct.RuntimeSettings) error
 }
 
 type Config struct {

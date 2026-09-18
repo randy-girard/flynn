@@ -11,12 +11,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/tlscert"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/jtacoma/uritemplates"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	router "github.com/randy-girard/flynn/router/types"
 	cjson "github.com/tent/canonical-json-go"
 )
 
@@ -69,7 +69,7 @@ func (a *App) System() bool {
 	return ok && v == "true"
 }
 
-// Plugin reports whether this app was installed by flynn-host plugin install.
+// Plugin reports whether this app was installed by flynn-host plugin:install.
 func (a *App) Plugin() bool {
 	v, ok := a.Meta["flynn-plugin"]
 	return ok && v == "true"
@@ -206,6 +206,11 @@ type ProcessType struct {
 	LinuxCapabilities []string           `json:"linux_capabilities,omitempty"`
 	AllowedDevices    []*host.Device     `json:"allowed_devices,omitempty"`
 	WriteableCgroups  bool               `json:"writeable_cgroups,omitempty"`
+
+	// RuntimeProfile is the name of a cluster runtime environment (small,
+	// medium, large, or a custom profile). When set, memory and CPU limits
+	// are taken from that profile at release-create time.
+	RuntimeProfile string `json:"runtime_profile,omitempty"`
 
 	// Entrypoint and Cmd are DEPRECATED: use Args instead
 	DeprecatedCmd        []string `json:"cmd,omitempty"`
@@ -992,5 +997,22 @@ type ACMEConfig struct {
 // ErrACMENotEnabled is returned when ACME is required but not enabled
 var ErrACMENotEnabled = &ValidationError{
 	Field:   "acme",
-	Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme enable' to enable it.",
+	Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme:enable' to enable it.",
+}
+
+// RuntimeProfile is a named CPU/memory preset managed on the cluster.
+type RuntimeProfile struct {
+	ID        string     `json:"id,omitempty"`
+	Name      string     `json:"name"`
+	Memory    int64      `json:"memory"` // bytes
+	CPU       int64      `json:"cpu"`    // milliCPU
+	Builtin   bool       `json:"builtin"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// RuntimeSettings is the cluster-wide policy for process resource limits.
+type RuntimeSettings struct {
+	AllowCustomLimits bool       `json:"allow_custom_limits"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }

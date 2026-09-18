@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authorizer"
 )
 
 // routeKind describes how tight access must be for an HTTP request.
@@ -21,6 +21,10 @@ const (
 	// build:artifacts scope, which the gitreceive receiver mints only
 	// alongside an app grant for the app being built.
 	rkBuildArtifact
+	// rkAnyAuth is any valid controller credential (cluster admin or
+	// app-scoped). Used for read-only cluster catalogs such as runtime
+	// profiles that app operators must list in order to apply them.
+	rkAnyAuth
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -41,6 +45,9 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	kind, appID := httpRequirement(method, rawPath)
 	if kind == rkBuildArtifact {
 		return hasScopedBuildArtifact(tok)
+	}
+	if kind == rkAnyAuth {
+		return true
 	}
 	if kind == rkCluster {
 		return false
@@ -148,6 +155,19 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 	}
 
 	switch parts[0] {
+	case "runtime-profiles":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, ""
+		}
+		return rkCluster, ""
+	case "cluster":
+		if len(parts) >= 2 && parts[1] == "runtime-settings" {
+			if m == http.MethodGet || m == http.MethodHead {
+				return rkAnyAuth, ""
+			}
+			return rkCluster, ""
+		}
+		return rkCluster, ""
 	case "artifacts":
 		// POST /artifacts is the build artifact-creation route. Only the
 		// method matters; the artifact is not app-scoped in the URL.

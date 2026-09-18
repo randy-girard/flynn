@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authorizer"
 )
 
 func TestHTTPAllowed(t *testing.T) {
@@ -72,6 +72,12 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_write_cannot_psql_postgres", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "postgres", Permissions: []string{"app:write"}}}}, http.MethodPost, "/apps/postgres/jobs", false},
 		{"cluster_key_can_psql_controller", clusterKey, http.MethodPost, "/apps/controller/jobs", true},
 		{"admin_scope_can_psql_blobstore", adminBearer, http.MethodPost, "/apps/blobstore/jobs", true},
+
+		{"app_read_can_list_runtime_profiles", appRead, http.MethodGet, "/runtime-profiles", true},
+		{"app_read_cannot_create_runtime_profile", appRead, http.MethodPost, "/runtime-profiles", false},
+		{"app_write_cannot_put_runtime_settings", appWrite, http.MethodPut, "/cluster/runtime-settings", false},
+		{"app_read_can_get_runtime_settings", appRead, http.MethodGet, "/cluster/runtime-settings", true},
+		{"cluster_key_can_create_runtime_profile", clusterKey, http.MethodPost, "/runtime-profiles", true},
 	}
 
 	for _, tc := range cases {

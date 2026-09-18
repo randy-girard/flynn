@@ -1,11 +1,11 @@
 package data
 
 import (
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/postgres"
-	pgtestutils "github.com/flynn/flynn/pkg/testutils/postgres"
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	pgtestutils "github.com/randy-girard/flynn/pkg/testutils/postgres"
 )
 
 const bufSize = 1024 * 1024
@@ -286,4 +286,41 @@ func (s *S) TestMatchLabelFilters(c *C) {
 
 	// Empty List of Filters should always match
 	c.Assert(s.matchLabelFilters(c, []ct.LabelFilter{}, labels), Equals, true)
+}
+
+func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
+	repo := NewRuntimeProfileRepo(s.db)
+	list, err := repo.List()
+	c.Assert(err, IsNil)
+	c.Assert(len(list), Equals, 3)
+	names := map[string]bool{}
+	for _, p := range list {
+		names[p.Name] = true
+		c.Assert(p.Builtin, Equals, true)
+		c.Assert(p.Memory > 0, Equals, true)
+		c.Assert(p.CPU > 0, Equals, true)
+	}
+	c.Assert(names["small"], Equals, true)
+	c.Assert(names["medium"], Equals, true)
+	c.Assert(names["large"], Equals, true)
+
+	settings, err := repo.Settings()
+	c.Assert(err, IsNil)
+	c.Assert(settings.AllowCustomLimits, Equals, false)
+
+	custom := &ct.RuntimeProfile{Name: "xlarge", Memory: 4 * 1024 * 1024 * 1024, CPU: 4000}
+	c.Assert(repo.Add(custom), IsNil)
+	c.Assert(custom.ID, Not(Equals), "")
+	got, err := repo.GetByName("xlarge")
+	c.Assert(err, IsNil)
+	c.Assert(got.Memory, Equals, custom.Memory)
+
+	c.Assert(repo.Delete(list[0].ID), NotNil) // builtin
+	c.Assert(repo.Delete(custom.ID), IsNil)
+
+	settings.AllowCustomLimits = true
+	c.Assert(repo.UpdateSettings(settings), IsNil)
+	updated, err := repo.Settings()
+	c.Assert(err, IsNil)
+	c.Assert(updated.AllowCustomLimits, Equals, true)
 }

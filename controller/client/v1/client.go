@@ -14,13 +14,13 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // Client is a client for the v1 of the controller API.
@@ -1053,6 +1053,37 @@ func (c *Client) GetACMEConfigInternal() (*ct.ACMEConfig, error) {
 // UpdateACMEConfig updates the ACME/Let's Encrypt configuration
 func (c *Client) UpdateACMEConfig(config *ct.ACMEConfig) error {
 	return c.Put("/acme/config", config, config)
+}
+
+func (c *Client) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {
+	var list []*ct.RuntimeProfile
+	return list, c.Get("/runtime-profiles", &list)
+}
+
+func (c *Client) GetRuntimeProfile(id string) (*ct.RuntimeProfile, error) {
+	p := &ct.RuntimeProfile{}
+	return p, c.Get("/runtime-profiles/"+id, p)
+}
+
+func (c *Client) CreateRuntimeProfile(profile *ct.RuntimeProfile) error {
+	return c.Post("/runtime-profiles", profile, profile)
+}
+
+func (c *Client) UpdateRuntimeProfile(profile *ct.RuntimeProfile) error {
+	return c.Put("/runtime-profiles/"+profile.ID, profile, profile)
+}
+
+func (c *Client) DeleteRuntimeProfile(id string) error {
+	return c.Delete("/runtime-profiles/"+id, nil)
+}
+
+func (c *Client) GetRuntimeSettings() (*ct.RuntimeSettings, error) {
+	s := &ct.RuntimeSettings{}
+	return s, c.Get("/cluster/runtime-settings", s)
+}
+
+func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
+	return c.Put("/cluster/runtime-settings", settings, settings)
 }
 
 func (c *Client) Put(path string, in, out interface{}) error {

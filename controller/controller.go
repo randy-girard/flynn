@@ -13,27 +13,27 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/authz"
-	"github.com/flynn/flynn/controller/data"
-	"github.com/flynn/flynn/controller/name"
-	"github.com/flynn/flynn/controller/schema"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	logaggc "github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/ctxhelper"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/status"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/flynn/que-go"
 	"github.com/improbable-eng/grpc-web/go/grpcweb"
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/data"
+	"github.com/randy-girard/flynn/controller/name"
+	"github.com/randy-girard/flynn/controller/schema"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	logaggc "github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/status"
+	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 )
@@ -187,6 +187,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	volumeRepo := data.NewVolumeRepo(c.db)
 	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
 	acmeConfigRepo := data.NewACMEConfigRepo(c.db)
+	runtimeProfileRepo := data.NewRuntimeProfileRepo(c.db)
 
 	api := controllerAPI{
 		domainMigrationRepo:    domainMigrationRepo,
@@ -205,6 +206,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		volumeRepo:             volumeRepo,
 		managedCertificateRepo: managedCertificateRepo,
 		acmeConfigRepo:         acmeConfigRepo,
+		runtimeProfileRepo:     runtimeProfileRepo,
 		clusterClient:          c.cc,
 		logaggc:                c.lc,
 		que:                    q,
@@ -304,6 +306,14 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
 	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
 
+	httpRouter.GET("/runtime-profiles", httphelper.WrapHandler(api.ListRuntimeProfiles))
+	httpRouter.POST("/runtime-profiles", httphelper.WrapHandler(api.CreateRuntimeProfile))
+	httpRouter.GET("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.GetRuntimeProfile))
+	httpRouter.PUT("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.UpdateRuntimeProfile))
+	httpRouter.DELETE("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
+	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
+	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
+
 	// Host and stats endpoints
 	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
 	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
@@ -384,6 +394,7 @@ type controllerAPI struct {
 	volumeRepo             *data.VolumeRepo
 	managedCertificateRepo *data.ManagedCertificateRepo
 	acmeConfigRepo         *data.ACMEConfigRepo
+	runtimeProfileRepo     *data.RuntimeProfileRepo
 	clusterClient          utils.ClusterClient
 	logaggc                logClient
 	que                    *que.Client

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 // RouterMigrationStart is the ID of the migration that starts the router
@@ -1009,6 +1009,30 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 	)
 	migrations.Add(53,
 		`INSERT INTO sink_kinds (name) VALUES ('otel')`,
+	)
+	migrations.Add(54,
+		`CREATE TABLE runtime_profiles (
+			profile_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+			name text NOT NULL,
+			memory bigint NOT NULL CHECK (memory > 0),
+			cpu bigint NOT NULL CHECK (cpu > 0),
+			builtin boolean NOT NULL DEFAULT false,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			deleted_at timestamptz
+		)`,
+		`CREATE UNIQUE INDEX runtime_profiles_name_key ON runtime_profiles (name) WHERE deleted_at IS NULL`,
+		`CREATE TABLE runtime_settings (
+			id integer PRIMARY KEY,
+			allow_custom_limits boolean NOT NULL DEFAULT false,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`INSERT INTO runtime_settings (id, allow_custom_limits) VALUES (1, false)`,
+		`INSERT INTO runtime_profiles (name, memory, cpu, builtin) VALUES
+			('small', 268435456, 250, true),
+			('medium', 1073741824, 1000, true),
+			('large', 2147483648, 2000, true)`,
 	)
 }
 

@@ -35,6 +35,9 @@
       "description": "DEPRECATED (use volumes instead)",
       "type": "boolean"
     },
+    "runtime_profile": {
+      "type": "string"
+    },
     "omni": {
       "type": "boolean"
     }
