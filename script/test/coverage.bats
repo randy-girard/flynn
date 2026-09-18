@@ -13,11 +13,11 @@ teardown() {
 @test "report-unit-coverage merges profiles and writes HTML" {
   cat >"${COVER_TMP}/a.out" <<EOF
 mode: atomic
-github.com/flynn/flynn/pkg/plugin/manifest.go:96.32,99.2 2 1
+github.com/randy-girard/flynn/pkg/plugin/manifest.go:96.32,99.2 2 1
 EOF
   cat >"${COVER_TMP}/b.out" <<EOF
 mode: atomic
-github.com/flynn/flynn/pkg/plugin/catalog.go:16.48,23.2 2 0
+github.com/randy-girard/flynn/pkg/plugin/catalog.go:16.48,23.2 2 0
 EOF
 
   run env COVERAGE_DIR="${COVER_TMP}" "${ROOT}/script/report-unit-coverage" "${COVER_TMP}/a.out" "${COVER_TMP}/b.out"

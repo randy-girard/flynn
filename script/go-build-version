@@ -20,7 +20,7 @@ fi
 VERSION="$1"
 shift
 
-LDFLAGS="-X github.com/flynn/flynn/pkg/version.version=${VERSION}"
+LDFLAGS="-X github.com/randy-girard/flynn/pkg/version.version=${VERSION}"
 
 GO_BIN="${GOROOT:-/usr/local/go}/bin/go"
 if ! [[ -x "${GO_BIN}" ]]; then
