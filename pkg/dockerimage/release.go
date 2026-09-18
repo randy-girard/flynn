@@ -109,6 +109,22 @@ func NewAppRelease(appName string, prev *ct.Release, artifactID string, build *B
 	return release
 }
 
+// GitProcessName is the process type used for git-push container (Dockerfile)
+// deploys. gitreceive auto-scales "web", and `flynn scale web=1` is the
+// documented follow-up. Apps whose previous release only has "app" (the
+// historical docker-push default) keep that name so existing formations still
+// match.
+func GitProcessName(prev *ct.Release) string {
+	if prev != nil {
+		_, hasApp := prev.Processes["app"]
+		_, hasWeb := prev.Processes["web"]
+		if hasApp && !hasWeb {
+			return "app"
+		}
+	}
+	return "web"
+}
+
 // NewAppReleaseFromArtifact builds a release from a registered image artifact.
 func NewAppReleaseFromArtifact(appName string, prev *ct.Release, artifact *ct.Artifact, opts ReleaseOptions) *ct.Release {
 	build := &BuildResult{

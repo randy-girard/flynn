@@ -57,7 +57,7 @@ func TestBuildJob(t *testing.T) {
 }
 
 func TestDockerBuildJobEnv(t *testing.T) {
-	env := dockerBuildJobEnv("secret-key", "artifact-id", "abc123", nil)
+	env := dockerBuildJobEnv("secret-key", "artifact-id", "abc123", nil, "app-1")
 	if env["CONTROLLER_KEY"] != "secret-key" {
 		t.Fatalf("CONTROLLER_KEY = %q", env["CONTROLLER_KEY"])
 	}
@@ -76,10 +76,31 @@ func TestDockerBuildJobEnv(t *testing.T) {
 	if _, ok := env["DOCKERFILE"]; ok {
 		t.Fatal("DOCKERFILE should be absent when not in release env")
 	}
+	if !strings.Contains(env["BUILD_CACHE_URL"], "app-1-docker-cache.tgz") {
+		t.Fatalf("BUILD_CACHE_URL = %q", env["BUILD_CACHE_URL"])
+	}
 
-	env = dockerBuildJobEnv("k", "a", "v", map[string]string{"DOCKERFILE": "Dockerfile.prod"})
+	env = dockerBuildJobEnv("k", "a", "v", map[string]string{"DOCKERFILE": "Dockerfile.prod"}, "app-1")
 	if env["DOCKERFILE"] != "Dockerfile.prod" {
 		t.Fatalf("DOCKERFILE = %q, want Dockerfile.prod", env["DOCKERFILE"])
+	}
+}
+
+func TestDefaultScaleProcess(t *testing.T) {
+	if got := defaultScaleProcess(nil); got != "" {
+		t.Fatalf("nil = %q", got)
+	}
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"worker": {}}); got != "" {
+		t.Fatalf("worker-only = %q", got)
+	}
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"web": {}}); got != "web" {
+		t.Fatalf("web = %q", got)
+	}
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"app": {}}); got != "app" {
+		t.Fatalf("app = %q", got)
+	}
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"app": {}, "web": {}}); got != "web" {
+		t.Fatalf("app+web = %q", got)
 	}
 }
 
@@ -341,6 +362,10 @@ func TestSignedBuildCacheURLHMAC(t *testing.T) {
 	other := signedBuildCacheURL("app-1", "other-key")
 	if other == got {
 		t.Fatal("different keys must produce different tokens")
+	}
+	docker := signedDockerBuildCacheURL("app-1", "cluster-key")
+	if !strings.Contains(docker, "app-1-docker-cache.tgz") {
+		t.Fatalf("docker cache url %s", docker)
 	}
 }
 

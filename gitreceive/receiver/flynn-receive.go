@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -161,10 +160,18 @@ func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App
 // token scoped to the app ID, preventing one app's build from accessing
 // another app's cache.
 func signedBuildCacheURL(appID, key string) string {
+	return signedNamedCacheURL(appID, key, "cache")
+}
+
+func signedDockerBuildCacheURL(appID, key string) string {
+	return signedNamedCacheURL(appID, key, "docker-cache")
+}
+
+func signedNamedCacheURL(appID, key, name string) string {
 	mac := hmac.New(sha256.New, []byte(key))
 	mac.Write([]byte(appID))
 	token := hex.EncodeToString(mac.Sum(nil))
-	return fmt.Sprintf("%s/%s-cache.tgz?token=%s", blobstoreURL, appID, token)
+	return fmt.Sprintf("%s/%s-%s.tgz?token=%s", blobstoreURL, appID, name, token)
 }
 
 func parsePairs(args *docopt.Args, str string) (map[string]string, error) {
@@ -389,13 +396,13 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	fmt.Printf("-----> Building %s from Dockerfile...\n", app.Name)
 
 	imageArtifactID := random.UUID()
-	jobEnv := dockerBuildJobEnv(os.Getenv("CONTROLLER_KEY"), imageArtifactID, args.String["<rev>"], releaseEnv)
+	jobEnv := dockerBuildJobEnv(os.Getenv("CONTROLLER_KEY"), imageArtifactID, args.String["<rev>"], releaseEnv, app.ID)
 
 	// Build-job capabilities (CAP_SYS_ADMIN/NET_ADMIN/NET_RAW etc.) are applied
 	// centrally by flynn-host for dockerbuilder jobs; see isBuildJob in
 	// host/libcontainer_backend.go.
 	job := buildJob(dockerBuilder, app, prevRelease, jobEnv, "dockerbuilder", "/builder/build.sh")
-	if limit, err := resource.ParseLimit(resource.TypeTempDisk, "2G"); err == nil {
+	if limit, err := resource.ParseLimit(resource.TypeTempDisk, "4G"); err == nil {
 		job.Resources[resource.TypeTempDisk] = resource.Spec{Limit: &limit, Request: &limit}
 	}
 	if db, ok := prevRelease.Processes["dockerbuilder"]; ok {
@@ -451,6 +458,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	release := dockerimage.NewAppReleaseFromArtifact(app.Name, prevRelease, artifact, dockerimage.ReleaseOptions{
 		Env:                releaseEnv,
 		Meta:               releaseMeta,
+		ProcessName:        dockerimage.GitProcessName(prevRelease),
 		ServiceHealthCheck: true,
 		ExtraProcesses:     extra,
 	})
@@ -480,7 +488,7 @@ func localHostID() string {
 
 // dockerBuildJobEnv builds the environment for a dockerbuilder job. The
 // DOCKERFILE override is copied from the release env when present.
-func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, releaseEnv map[string]string) map[string]string {
+func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, releaseEnv map[string]string, appID string) map[string]string {
 	jobEnv := map[string]string{
 		"CONTROLLER_KEY":    controllerKey,
 		"IMAGE_ARTIFACT_ID": imageArtifactID,
@@ -488,6 +496,9 @@ func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, rel
 		"BUILDKITD_FLAGS":   "--root=/tmp/buildkitd --oci-worker-snapshotter=native",
 		"CI":                "true",
 		"BUILDKIT_PROGRESS": "plain",
+	}
+	if appID != "" {
+		jobEnv["BUILD_CACHE_URL"] = signedDockerBuildCacheURL(appID, controllerKey)
 	}
 	if dockerfile, ok := releaseEnv["DOCKERFILE"]; ok {
 		jobEnv["DOCKERFILE"] = dockerfile
@@ -560,25 +571,26 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	}
 
 	if needsDefaultScale(app.ID, prevRelease.ID, procs, client) {
-		fmt.Println("=====> Scaling initial release to web=1")
+		procName := defaultScaleProcess(procs)
+		fmt.Printf("=====> Scaling initial release to %s=1\n", procName)
 
 		timeout := time.Duration(app.DeployTimeout) * time.Second
 		opts := ct.ScaleOptions{
-			Processes: map[string]int{"web": 1},
+			Processes: map[string]int{procName: 1},
 			Timeout:   &timeout,
 			JobEventCallback: func(job *ct.Job) error {
 				switch job.State {
 				case ct.JobStateUp:
-					fmt.Println("=====> Initial web job started")
+					fmt.Printf("=====> Initial %s job started\n", procName)
 				case ct.JobStateDown:
-					return errors.New("Initial web job failed to start")
+					return fmt.Errorf("Initial %s job failed to start", procName)
 				}
 				return nil
 			},
 		}
-		fmt.Println("-----> Waiting for initial web job to start...")
+		fmt.Printf("-----> Waiting for initial %s job to start...\n", procName)
 		if err := client.ScaleAppRelease(app.ID, release.ID, opts); err != nil {
-			fmt.Println("-----> WARN: scaling initial release down to web=0 due to error")
+			fmt.Printf("-----> WARN: scaling initial release down to %s=0 due to error\n", procName)
 			if err := client.DeleteFormation(app.ID, release.ID); err != nil {
 				fmt.Println("-----> WARN: could not scale the initial release down (it may continue to run):", err)
 			}
@@ -590,11 +602,24 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	return nil
 }
 
+// defaultScaleProcess is the process type gitreceive scales to 1 on a first
+// deploy. Prefer "web" (buildpack + Dockerfile git push); fall back to "app"
+// for historical docker-push releases.
+func defaultScaleProcess(procs map[string]ct.ProcessType) string {
+	if _, ok := procs["web"]; ok {
+		return "web"
+	}
+	if _, ok := procs["app"]; ok {
+		return "app"
+	}
+	return ""
+}
+
 // needsDefaultScale indicates whether a release needs a default scale based on
-// whether it has a web process type and either has no previous release or no
-// previous scale.
+// whether it has a web (or app) process type and either has no previous
+// release or no previous scale.
 func needsDefaultScale(appID, prevReleaseID string, procs map[string]ct.ProcessType, client controller.Client) bool {
-	if _, ok := procs["web"]; !ok {
+	if defaultScaleProcess(procs) == "" {
 		return false
 	}
 	if prevReleaseID == "" {

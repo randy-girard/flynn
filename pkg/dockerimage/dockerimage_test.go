@@ -113,6 +113,21 @@ func TestNewAppRelease(t *testing.T) {
 	}
 }
 
+func TestGitProcessName(t *testing.T) {
+	if got := GitProcessName(nil); got != "web" {
+		t.Fatalf("nil prev = %q, want web", got)
+	}
+	if got := GitProcessName(&ct.Release{Processes: map[string]ct.ProcessType{"web": {}}}); got != "web" {
+		t.Fatalf("prev web = %q", got)
+	}
+	if got := GitProcessName(&ct.Release{Processes: map[string]ct.ProcessType{"app": {}}}); got != "app" {
+		t.Fatalf("prev app-only = %q, want app", got)
+	}
+	if got := GitProcessName(&ct.Release{Processes: map[string]ct.ProcessType{"app": {}, "web": {}}}); got != "web" {
+		t.Fatalf("prev app+web = %q, want web", got)
+	}
+}
+
 func TestNewAppReleaseContainerStack(t *testing.T) {
 	release := NewAppRelease("upgrade-smoke-docker", nil, "artifact-id", &BuildResult{
 		Args:       []string{"/bin/sh", "/start.sh"},
