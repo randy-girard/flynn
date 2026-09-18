@@ -8,12 +8,15 @@
   "definitions": {
     "sink_kind": {
       "type": "string",
-      "enum": ["syslog"]
+      "enum": ["syslog", "otel"]
     }
   },
   "additionalProperties": false,
   "properties": {
     "id": {
+      "$ref": "/schema/controller/common#/definitions/id"
+    },
+    "app_id": {
       "$ref": "/schema/controller/common#/definitions/id"
     },
     "kind": {

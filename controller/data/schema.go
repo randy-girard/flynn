@@ -1003,6 +1003,13 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 		// Insert default row (ACME disabled by default)
 		`INSERT INTO acme_config (id, enabled) VALUES (1, false)`,
 	)
+	migrations.Add(52,
+		`ALTER TABLE sinks ADD COLUMN app_id uuid REFERENCES apps (app_id)`,
+		`CREATE INDEX sinks_app_id_idx ON sinks (app_id) WHERE deleted_at IS NULL`,
+	)
+	migrations.Add(53,
+		`INSERT INTO sink_kinds (name) VALUES ('otel')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

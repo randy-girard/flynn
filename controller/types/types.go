@@ -822,15 +822,53 @@ type SinkKind string
 const (
 	SinkKindSyslog        SinkKind = "syslog"
 	SinkKindLogaggregator SinkKind = "logaggregator"
+	SinkKindOTLP          SinkKind = "otel"
+)
+
+const (
+	SinkScopeAll    = "all"
+	SinkScopeSystem = "system"
+	SinkScopeApps   = "apps"
 )
 
 type Sink struct {
 	ID          string           `json:"id"`
 	Kind        SinkKind         `json:"kind"`
+	AppID       string           `json:"app_id,omitempty"`
 	HostManaged bool             `json:"host_managed,omitempty"`
 	Config      *json.RawMessage `json:"config,omitempty"`
 	CreatedAt   *time.Time       `json:"created_at,omitempty"`
 	UpdatedAt   *time.Time       `json:"updated_at,omitempty"`
+}
+
+// ParseSinkScope normalizes log/metrics sink scope. Empty means all logs.
+func ParseSinkScope(s string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "all":
+		return SinkScopeAll, nil
+	case "system":
+		return SinkScopeSystem, nil
+	case "apps", "app":
+		return SinkScopeApps, nil
+	default:
+		return "", fmt.Errorf("invalid sink scope %q (want system, apps, or all)", s)
+	}
+}
+
+// AcceptSinkLog reports whether a log line should be forwarded. filterAppID
+// limits to one app; scope system/apps filters Flynn system jobs vs user apps.
+func AcceptSinkLog(scope, filterAppID, jobAppID string, system bool) bool {
+	if filterAppID != "" && jobAppID != filterAppID {
+		return false
+	}
+	switch scope {
+	case SinkScopeSystem:
+		return system
+	case SinkScopeApps:
+		return !system
+	default:
+		return true
+	}
 }
 
 type SyslogFormat string
@@ -848,6 +886,19 @@ type SyslogSinkConfig struct {
 	Insecure       bool         `json:"insecure,omitempty"`
 	StructuredData bool         `json:"structured_data,omitempty"`
 	Format         SyslogFormat `json:"format,omitempty"`
+	Scope          string       `json:"scope,omitempty"`
+}
+
+// OTLPSinkConfig forwards Flynn logs and/or host metrics to an OpenTelemetry
+// collector (OTLP/HTTP JSON). Endpoint is the collector base URL, for example
+// http://alloy.example:4318 (paths /v1/logs and /v1/metrics are appended).
+type OTLPSinkConfig struct {
+	Endpoint string            `json:"endpoint"`
+	Headers  map[string]string `json:"headers,omitempty"`
+	Insecure bool              `json:"insecure,omitempty"`
+	Logs     bool              `json:"logs,omitempty"`
+	Metrics  bool              `json:"metrics,omitempty"`
+	Scope    string            `json:"scope,omitempty"`
 }
 
 type LogAggregatorSinkConfig struct {

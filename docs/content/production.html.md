@@ -36,7 +36,7 @@ trusted certificates:
 ```text
 $ sudo flynn-host acme configure --email=admin@example.com --agree-tos
 $ sudo flynn-host acme enable-system-routes
-$ flynn cluster update-pin --clear
+$ flynn cluster:refresh --clear
 ```
 
 `CLUSTER_DOMAIN` and a wildcard must resolve to the cluster (HTTP-01 on ports
@@ -263,7 +263,7 @@ individual applications (including their databases).
 
 ### Cluster Backup
 
-To take a full-cluster backup, run `flynn cluster backup --file backup.tar`.
+To take a full-cluster backup, run `flynn-host backup --file backup.tar`.
 A file named `backup.tar` is created with the data needed to stand up a new
 cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
 MongoDB if they were running), `plugins.json` (which plugins were installed),
@@ -345,6 +345,39 @@ The `$AUTH_KEY` may be retrieved with this command:
 flynn -a status env get AUTH_KEY
 ```
 
+### OpenTelemetry (Grafana, Alloy, collector)
+
+`flynn-host otel` forwards **host metrics** (CPU, memory, disk, load, job
+counts) and/or **logs** to any OTLP/HTTP endpoint (`http://host:4318`, Grafana
+Alloy, the OpenTelemetry Collector, Grafana Cloud OTLP). Paths `/v1/metrics`
+and `/v1/logs` are appended.
+
+Logs are scoped so cluster monitoring is not mixed with application traffic:
+
+```text
+# Flynn system jobs (controller, router, postgres, plugins, …)
+sudo flynn-host otel add --scope system http://alloy.example:4318
+
+# All user apps
+sudo flynn-host otel add --logs --scope apps http://alloy.example:4318
+
+# One app (same idea as flynn -a myapp logsink)
+sudo flynn-host otel add --logs --app myapp http://alloy.example:4318
+
+# Metrics only
+sudo flynn-host otel add --metrics https://otlp.grafana.net/otlp
+```
+
+Syslog sinks still exist. `flynn logsink` is **per app**. `flynn-host log-sink`
+is cluster-wide and accepts the same `--scope` / `--app` filters:
+
+```text
+sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/
+flynn -a myapp logsink:add syslog syslog://logs.example:514/
+```
+
+The dashboard still shows live metrics for operators who are already logged in.
+
 ## Debugging
 
 Flynn is a self-hosting system, this allows you to use the `flynn` and
@@ -392,7 +425,7 @@ PostgreSQL cluster managed by Flynn.
 API call (`flynn run` of `psql`) and is authorized like every other `flynn`
 command:
 
-* **Cluster operators** who registered with `flynn cluster add` / `flynn-host
+* **Cluster operators** who registered with `flynn cluster:add` / `flynn-host
   cli-add-command` have the controller key. That key is cluster-admin (treat it
   like root). They can open a console on `controller`, `blobstore`, and other
   system apps. Do not put that key in application config or share it with
@@ -421,7 +454,7 @@ update method is backup/restore.
 The backup/restore update method involves taking a full backup of the cluster
 and restoring it to a new cluster with the new version of Flynn.
 
-1. Take a backup of the cluster with `flynn cluster backup --file backup.tar`.
+1. Take a backup of the cluster with `flynn-host backup --file backup.tar`.
 2. Install the new version of Flynn on a new cluster by following [the manual
    installation instructions](installation/manual.md) up to but not including
    the bootstrap step.
@@ -434,7 +467,7 @@ and restoring it to a new cluster with the new version of Flynn.
 ### In-place update
 
 The in-place updater is new and could cause cluster failure. We recommend taking
-a full backup of the cluster first with `flynn cluster backup`.  There is almost
+a full backup of the cluster first with `flynn-host backup`.  There is almost
 zero downtime during the cluster update, however database clusters may be
 unavailable for a few seconds while they are updated.
 

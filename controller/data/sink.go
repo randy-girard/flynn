@@ -31,14 +31,18 @@ func (r *SinkRepo) Add(s *ct.Sink) error {
 	if s.Config != nil {
 		config = []byte(*s.Config)
 	}
-	err = tx.QueryRow("sink_insert", s.ID, s.Kind, config).Scan(&s.CreatedAt, &s.UpdatedAt)
+	var appID *string
+	if s.AppID != "" {
+		appID = &s.AppID
+	}
+	err = tx.QueryRow("sink_insert", s.ID, s.Kind, config, appID).Scan(&s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		tx.Rollback()
 		return err
 	}
 	// create sink event
 	if err := CreateEvent(tx.Exec, &ct.Event{
-		AppID:      "",
+		AppID:      s.AppID,
 		ObjectID:   s.ID,
 		ObjectType: ct.EventTypeSink,
 	}, s); err != nil {
@@ -62,12 +66,16 @@ func scanSinks(rows *pgx.Rows) ([]*ct.Sink, error) {
 
 func scanSink(s postgres.Scanner) (*ct.Sink, error) {
 	sink := &ct.Sink{}
-	err := s.Scan(&sink.ID, &sink.Kind, &sink.Config, &sink.CreatedAt, &sink.UpdatedAt)
+	var appID *string
+	err := s.Scan(&sink.ID, &sink.Kind, &sink.Config, &appID, &sink.CreatedAt, &sink.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			err = ErrNotFound
 		}
 		return nil, err
+	}
+	if appID != nil {
+		sink.AppID = *appID
 	}
 	return sink, err
 }
@@ -111,7 +119,7 @@ func (r *SinkRepo) Remove(id string) error {
 	}
 	// create sink remove event
 	if err := CreateEvent(tx.Exec, &ct.Event{
-		AppID:      "",
+		AppID:      sink.AppID,
 		ObjectID:   sink.ID,
 		ObjectType: ct.EventTypeSinkDeletion,
 	}, sink); err != nil {

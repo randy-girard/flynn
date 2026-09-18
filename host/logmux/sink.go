@@ -45,6 +45,9 @@ type SinkManager struct {
 	dbPath string
 	db     *bolt.DB
 
+	metrics     HostMetrics
+	metricsOnce sync.Once
+
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
@@ -64,6 +67,12 @@ func NewSinkManager(dbPath string, mux *Mux, state JobStateGetter, logger log15.
 	}
 }
 
+// SetMetrics enables periodic OTLP metric export for otel sinks.
+func (sm *SinkManager) SetMetrics(m HostMetrics) {
+	sm.metrics = m
+	sm.startMetricsLoop()
+}
+
 type SinkHTTPAPI struct {
 	sm *SinkManager
 }
@@ -78,6 +87,7 @@ func (s *SinkHTTPAPI) GetSinks(w http.ResponseWriter, req *http.Request, ps http
 			Kind:        info.Kind,
 			Config:      &info.Config,
 			HostManaged: info.HostManaged,
+			AppID:       info.AppID,
 		})
 	}
 	s.sm.mtx.RUnlock()
@@ -146,6 +156,7 @@ func (sm *SinkManager) OpenDB() error {
 	if err := sm.restore(); err != nil {
 		return err
 	}
+	sm.startMetricsLoop()
 
 	// start persistence routine
 	go sm.persistSinks()
@@ -182,6 +193,7 @@ type SinkInfo struct {
 	Cursor      *utils.HostCursor `json:"cursor,omitempty"`
 	Config      json.RawMessage   `json:"config"`
 	HostManaged bool              `json:"host_managed"`
+	AppID       string            `json:"app_id,omitempty"`
 }
 
 func (sm *SinkManager) restore() error {
@@ -204,8 +216,56 @@ func (sm *SinkManager) newSink(s *SinkInfo) (Sink, error) {
 		return NewLogAggregatorSink(sm, s)
 	case ct.SinkKindSyslog:
 		return NewSyslogSink(sm, s)
+	case ct.SinkKindOTLP:
+		return NewOTLPSink(sm, s)
 	default:
 		return nil, fmt.Errorf("unknown sink kind: %q", s.Kind)
+	}
+}
+
+func (sm *SinkManager) startMetricsLoop() {
+	if sm.metrics == nil {
+		return
+	}
+	sm.metricsOnce.Do(func() {
+		go sm.exportMetricsLoop()
+	})
+}
+
+func (sm *SinkManager) exportMetricsLoop() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-sm.shutdownCh:
+			return
+		case <-ticker.C:
+			sm.exportMetricsOnce()
+		}
+	}
+}
+
+func (sm *SinkManager) exportMetricsOnce() {
+	if sm.metrics == nil {
+		return
+	}
+	stats, err := sm.metrics.GetHostStats()
+	if err != nil {
+		return
+	}
+	jobs, _ := sm.metrics.GetAllJobsStats()
+	sm.mtx.RLock()
+	sinks := make([]Sink, 0, len(sm.sinks))
+	for _, s := range sm.sinks {
+		sinks = append(sinks, s)
+	}
+	sm.mtx.RUnlock()
+	for _, s := range sinks {
+		if m, ok := s.(interface {
+			ExportMetrics(*host.HostResourceStats, *host.AllJobsStats) error
+		}); ok {
+			_ = m.ExportMetrics(stats, jobs)
+		}
 	}
 }
 
@@ -369,6 +429,7 @@ type LogAggregatorSink struct {
 	logger      log15.Logger
 	addr        string
 	hostManaged bool
+	appID       string
 
 	conn             net.Conn
 	aggregatorClient *client.Client
@@ -387,6 +448,7 @@ func NewLogAggregatorSink(sm *SinkManager, info *SinkInfo) (*LogAggregatorSink, 
 		id:          info.ID,
 		addr:        cfg.Addr,
 		hostManaged: info.HostManaged,
+		appID:       info.AppID,
 		shutdownCh:  make(chan struct{}),
 	}, nil
 }
@@ -402,6 +464,7 @@ func (s *LogAggregatorSink) Info() *SinkInfo {
 		Kind:        ct.SinkKindLogaggregator,
 		Config:      config,
 		HostManaged: s.hostManaged,
+		AppID:       s.appID,
 	}
 }
 
@@ -442,6 +505,10 @@ func (s *LogAggregatorSink) GetCursor(hostID string) (*utils.HostCursor, error) 
 }
 
 func (s *LogAggregatorSink) Write(m message) error {
+	appID, system := s.sm.jobMeta(m)
+	if !ct.AcceptSinkLog("", s.appID, appID, system) {
+		return nil
+	}
 	s.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err := s.conn.Write(rfc6587.Bytes(m.Message))
 	return err
@@ -467,6 +534,8 @@ type SyslogSink struct {
 	insecure       bool
 	structuredData bool
 	format         ct.SyslogFormat
+	appID          string
+	scope          string
 
 	mtx          sync.RWMutex
 	cache        *lru.Cache
@@ -493,6 +562,10 @@ func NewSyslogSink(sm *SinkManager, info *SinkInfo) (sink *SyslogSink, err error
 	if format == "" {
 		format = ct.SyslogFormatRFC6587
 	}
+	scope, err := ct.ParseSinkScope(cfg.Scope)
+	if err != nil {
+		return nil, err
+	}
 
 	return &SyslogSink{
 		sm:             sm,
@@ -503,6 +576,8 @@ func NewSyslogSink(sm *SinkManager, info *SinkInfo) (sink *SyslogSink, err error
 		insecure:       cfg.Insecure,
 		structuredData: cfg.StructuredData,
 		format:         format,
+		appID:          info.AppID,
+		scope:          scope,
 		cache:          lru.New(1000),
 		template:       t,
 		cursor:         info.Cursor,
@@ -517,12 +592,21 @@ func (s *SyslogSink) Name() string {
 func (s *SyslogSink) Info() *SinkInfo {
 	s.mtx.RLock()
 	defer s.mtx.RUnlock()
-	config, _ := json.Marshal(ct.SyslogSinkConfig{URL: s.url, Prefix: s.prefix})
+	config, _ := json.Marshal(ct.SyslogSinkConfig{
+		URL:            s.url,
+		Prefix:         s.prefix,
+		UseIDs:         s.useIDs,
+		Insecure:       s.insecure,
+		StructuredData: s.structuredData,
+		Format:         s.format,
+		Scope:          s.scope,
+	})
 	return &SinkInfo{
 		ID:     s.id,
 		Kind:   ct.SinkKindSyslog,
 		Config: config,
 		Cursor: s.cursor,
+		AppID:  s.appID,
 	}
 }
 
@@ -583,7 +667,26 @@ type cachedJob struct {
 	Prefix  []byte
 }
 
+func (sm *SinkManager) jobAppID(m message) string {
+	appID, _ := sm.jobMeta(m)
+	return appID
+}
+
+func (sm *SinkManager) jobMeta(m message) (appID string, system bool) {
+	jobID, _ := parseProcID(m.Message.ProcID)
+	job := sm.state.GetJob(jobID)
+	if job != nil && job.Job != nil {
+		appID = job.Job.Metadata["flynn-controller.app"]
+		system = job.Job.Metadata["flynn-system-app"] == "true" || job.Job.Partition == "system"
+	}
+	return appID, system
+}
+
 func (s *SyslogSink) Write(m message) error {
+	appID, system := s.sm.jobMeta(m)
+	if !ct.AcceptSinkLog(s.scope, s.appID, appID, system) {
+		return nil
+	}
 	// Lookup job in cache
 	var appName string
 	var prefix []byte
@@ -651,7 +754,7 @@ func (s *SyslogSink) Write(m message) error {
 	case ct.SyslogFormatNewline:
 		data = append(msg.Bytes(), '\n')
 	case ct.SyslogFormatPrefixedNewline:
-		data = bytes.Join([][]byte{prefix, []byte{' '}, msg.Bytes(), []byte{'\n'}}, nil)
+		data = bytes.Join([][]byte{prefix, {' '}, msg.Bytes(), {'\n'}}, nil)
 	}
 	s.conn.SetWriteDeadline(time.Now().Add(time.Second))
 	_, err := s.conn.Write(data)

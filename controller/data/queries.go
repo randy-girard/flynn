@@ -614,13 +614,13 @@ UPDATE backups SET status = $2, sha512 = $3, size = $4, error = $5, completed_at
 	backupSelectLatest = `
 SELECT backup_id, status, sha512, size, error, created_at, updated_at, completed_at FROM backups WHERE deleted_at IS NULL ORDER BY updated_at DESC LIMIT 1`
 	sinkListQuery = `
-SELECT sink_id, kind, config, created_at, updated_at FROM sinks WHERE deleted_at IS NULL ORDER BY updated_at DESC`
+SELECT sink_id, kind, config, app_id, created_at, updated_at FROM sinks WHERE deleted_at IS NULL ORDER BY updated_at DESC`
 	sinkListSinceQuery = `
-SELECT sink_id, kind, config, created_at, updated_at FROM sinks WHERE updated_at >= $1 AND deleted_at IS NULL ORDER BY updated_at DESC`
+SELECT sink_id, kind, config, app_id, created_at, updated_at FROM sinks WHERE updated_at >= $1 AND deleted_at IS NULL ORDER BY updated_at DESC`
 	sinkSelectQuery = `
-SELECT sink_id, kind, config, created_at, updated_at FROM sinks WHERE sink_id = $1`
+SELECT sink_id, kind, config, app_id, created_at, updated_at FROM sinks WHERE sink_id = $1`
 	sinkInsertQuery = `
-INSERT INTO sinks (sink_id, kind, config) VALUES ($1, $2, $3) RETURNING created_at, updated_at`
+INSERT INTO sinks (sink_id, kind, config, app_id) VALUES ($1, $2, $3, $4) RETURNING created_at, updated_at`
 	sinkDeleteQuery = `
 UPDATE sinks SET deleted_at = now() WHERE sink_id = $1 AND deleted_at IS NULL`
 	volumeListQuery = `
