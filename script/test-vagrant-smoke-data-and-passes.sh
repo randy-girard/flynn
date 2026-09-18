@@ -92,6 +92,10 @@ need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
 need 'step_install_plugins' \
   "after bootstrap, smoke must flynn-host plugin install from sibling repos before resource add"
+need 'flynn-host backup --file' \
+  "smoke must take a cluster backup with flynn-host backup"
+need 'flynn-upgrade-smoke-discoverd' \
+  "cluster backup must pin controller.discoverd for host net.Dial hijack"
 need 'assemble_plugin_github_unpack' \
   "plugin install in smoke must unpack GitHub release assets, not the git checkout"
 need 'dist/github-unpack' \
@@ -100,8 +104,8 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery' \
-  "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery)"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel' \
+  "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery, otel)"
 need 'www.\${CLUSTER_DOMAIN}' \
   "/etc/hosts must resolve www.CLUSTER_DOMAIN so the www plugin route is reachable"
 need 'plugin_manifest_matches' \
@@ -113,6 +117,8 @@ if ! grep -Fq 'for dir in "${root}"/*' "${smoke}"; then
 fi
 need 'ensure_plugin_vm_mounts' \
   "plugin install must reload VMs when sibling plugin folders are not synced"
+need 'Sync plugin VM mounts' \
+  "plugin synced_folders must attach before Flynn install so a reload cannot drop flynnbr0"
 need 'already in CLI catalog; skipping hidden-CLI probe' \
   "plugin install must skip the hidden-CLI probe when resuming with plugins already installed"
 need 'flynn-plugin-layers-' \
@@ -125,6 +131,10 @@ need 'flynn-host plugin install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
   "plugin install in smoke must not block on TTY setup prompts"
+need 'FLYNN_PLUGIN_SETUP_OTEL_ENDPOINT' \
+  "otel plugin install must configure the dummy collector without a TTY prompt"
+need 'probe_otel_export' \
+  "after otel install, smoke must wait for a dummy OTLP /v1/metrics POST"
 need 'probe_plugin_webhooks' \
   "after plugin install, smoke must confirm declared webhooks are registered on flynn-host"
 need 'secret_env' \

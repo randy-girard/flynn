@@ -347,29 +347,27 @@ flynn -a status env get AUTH_KEY
 
 ### OpenTelemetry (Grafana, Alloy, collector)
 
+OpenTelemetry metrics are an **optional plugin**. Clusters that do not install
+it do not export OTLP. After `flynn-host plugin install otel`,
 `flynn-host otel` forwards **host metrics** (CPU, memory, disk, load, job
-counts) and/or **logs** to any OTLP/HTTP endpoint (`http://host:4318`, Grafana
-Alloy, the OpenTelemetry Collector, Grafana Cloud OTLP). Paths `/v1/metrics`
-and `/v1/logs` are appended.
-
-Logs are scoped so cluster monitoring is not mixed with application traffic:
+counts) to any OTLP/HTTP endpoint (`http://host:4318`, Grafana Alloy, the
+OpenTelemetry Collector, Grafana Cloud OTLP). Path `/v1/metrics` is appended.
 
 ```text
-# Flynn system jobs (controller, router, postgres, plugins, …)
-sudo flynn-host otel add --scope system http://alloy.example:4318
+sudo flynn-host plugin install otel
 
-# All user apps
-sudo flynn-host otel add --logs --scope apps http://alloy.example:4318
+# Metrics to a local collector
+sudo flynn-host otel add http://alloy.example:4318
 
-# One app (same idea as flynn -a myapp logsink)
-sudo flynn-host otel add --logs --app myapp http://alloy.example:4318
+# Grafana Cloud (or any collector that needs a header)
+sudo flynn-host otel add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
 
-# Metrics only
-sudo flynn-host otel add --metrics https://otlp.grafana.net/otlp
+sudo flynn-host otel
+sudo flynn-host otel remove <id>
 ```
 
-Syslog sinks still exist. `flynn logsink` is **per app**. `flynn-host log-sink`
-is cluster-wide and accepts the same `--scope` / `--app` filters:
+Job logs stay on syslog. `flynn logsink` is **per app**. `flynn-host log-sink`
+is cluster-wide and accepts `--scope` / `--app` filters:
 
 ```text
 sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/

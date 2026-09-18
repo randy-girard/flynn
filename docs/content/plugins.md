@@ -27,6 +27,7 @@ Development layout (relative to the Flynn repo):
 | `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 | `www` | `../flynn-plugin-www` | (none; `kind: app`) |
+| `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
@@ -42,6 +43,7 @@ sudo flynn-host plugin install redis
 sudo flynn-host plugin install ../flynn-plugin-dashboard
 sudo flynn-host plugin install ../flynn-plugin-discovery
 sudo flynn-host plugin install ../flynn-plugin-www
+sudo flynn-host plugin install ../flynn-plugin-otel
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
@@ -118,8 +120,10 @@ On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin install` on node1. Default `PLUGIN_SMOKE_APPS` is
-`redis mysql mongodb kafka clickhouse dashboard www discovery` (every
-first-party plugin except the template).
+`redis mysql mongodb kafka clickhouse dashboard www discovery otel` (every
+first-party plugin except the template). Smoke starts a dummy OTLP/HTTP
+listener on the host (`:14318`) so the otel plugin has something to POST
+`/v1/metrics` to; it is not a real collector.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
 list **resource-provider** plugin commands under a **Plugins:** section (from

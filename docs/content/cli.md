@@ -98,7 +98,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `pg:psql` / `mysql:cli` / `mongodb:cli` / `redis:cli` | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` | Topics and consumer groups (after plugin install) |
 | `clickhouse:cli` | Databases and client (after plugin install) |
-| `logsink` | Per-app syslog sinks (`flynn-host log-sink` / `flynn-host otel` for cluster and system logs) |
+| `logsink` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin) |
 | `volume` | Persistent volumes |
 | `provider` | Resource providers |
 
@@ -119,6 +119,6 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | Command | Purpose |
 | --- | --- |
 | `log-sink` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
-| `otel` | OpenTelemetry metrics and logs (OTLP/HTTP) |
+| `otel` | OpenTelemetry metrics (requires `flynn-host plugin install otel`) |
 | `domain` / `domain apex <app>` | Cluster domain and which app serves the apex (root) hostname |
 | `fix` | Repair a broken cluster (interactive on a TTY; `--yes` for scripts) |

@@ -47,7 +47,8 @@ macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
 Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
-`../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`, …). Install them on a cluster host with
+`../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`,
+`../flynn-plugin-otel`, …). Install them on a cluster host with
 `flynn-host plugin install` after bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
@@ -277,7 +278,9 @@ Default flow:
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`,
    install every first-party plugin (`PLUGIN_SMOKE_APPS`: redis, mysql,
-   mongodb, kafka, clickhouse, dashboard, www, discovery), deploy
+   mongodb, kafka, clickhouse, dashboard, www, discovery, otel), start a dummy
+   OTLP/HTTP sink on the host and confirm the otel plugin POSTs `/v1/metrics`,
+   deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
    `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn docker
    push` a pre-built image of the same Dockerfile, probe HTTP and
@@ -305,7 +308,7 @@ Useful environment:
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run |
-| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery) |
+| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel) |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
 The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.

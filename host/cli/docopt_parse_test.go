@@ -47,8 +47,8 @@ func TestHostCLIPositionalLists(t *testing.T) {
 		t.Fatalf("fix flags: %+v", fixN.String)
 	}
 
-	otel := parseHostCLI(t, "otel", []string{"otel", "add", "--scope", "system", "http://127.0.0.1:4318"})
-	if otel.String["<endpoint>"] != "http://127.0.0.1:4318" || otel.String["--scope"] != "system" {
+	otel := parseHostCLI(t, "otel", []string{"otel", "add", "http://127.0.0.1:4318"})
+	if otel.String["<endpoint>"] != "http://127.0.0.1:4318" {
 		t.Fatalf("otel add: %+v", otel.String)
 	}
 

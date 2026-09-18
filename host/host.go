@@ -113,7 +113,7 @@ Commands:
   log                        Get the logs of a job
   log-sink                   Manage cluster and host log sinks
   migrate-domain             Migrate the cluster base domain
-  otel                       Forward metrics and logs to OpenTelemetry
+  otel                       Forward cluster metrics via the otel plugin
   plugin                     Install and list cluster plugins
   promote                    Promote a Flynn node into the consensus cluster
   ps                         List jobs
@@ -355,7 +355,6 @@ func runDaemon(args *docopt.Args) {
 	if err != nil {
 		shutdown.Fatal(err)
 	}
-	sman.SetMetrics(backend)
 	backend.SetDefaultEnv("EXTERNAL_IP", externalIP)
 	backend.SetDefaultEnv("LISTEN_IP", listenIP)
 

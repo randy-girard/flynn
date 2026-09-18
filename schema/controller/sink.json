@@ -8,7 +8,7 @@
   "definitions": {
     "sink_kind": {
       "type": "string",
-      "enum": ["syslog", "otel"]
+      "enum": ["syslog"]
     }
   },
   "additionalProperties": false,

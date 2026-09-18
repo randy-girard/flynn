@@ -822,7 +822,6 @@ type SinkKind string
 const (
 	SinkKindSyslog        SinkKind = "syslog"
 	SinkKindLogaggregator SinkKind = "logaggregator"
-	SinkKindOTLP          SinkKind = "otel"
 )
 
 const (
@@ -887,18 +886,6 @@ type SyslogSinkConfig struct {
 	StructuredData bool         `json:"structured_data,omitempty"`
 	Format         SyslogFormat `json:"format,omitempty"`
 	Scope          string       `json:"scope,omitempty"`
-}
-
-// OTLPSinkConfig forwards Flynn logs and/or host metrics to an OpenTelemetry
-// collector (OTLP/HTTP JSON). Endpoint is the collector base URL, for example
-// http://alloy.example:4318 (paths /v1/logs and /v1/metrics are appended).
-type OTLPSinkConfig struct {
-	Endpoint string            `json:"endpoint"`
-	Headers  map[string]string `json:"headers,omitempty"`
-	Insecure bool              `json:"insecure,omitempty"`
-	Logs     bool              `json:"logs,omitempty"`
-	Metrics  bool              `json:"metrics,omitempty"`
-	Scope    string            `json:"scope,omitempty"`
 }
 
 type LogAggregatorSinkConfig struct {

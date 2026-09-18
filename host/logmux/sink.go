@@ -45,9 +45,6 @@ type SinkManager struct {
 	dbPath string
 	db     *bolt.DB
 
-	metrics     HostMetrics
-	metricsOnce sync.Once
-
 	shutdownOnce sync.Once
 	shutdownCh   chan struct{}
 }
@@ -65,12 +62,6 @@ func NewSinkManager(dbPath string, mux *Mux, state JobStateGetter, logger log15.
 		state:      state,
 		shutdownCh: make(chan struct{}),
 	}
-}
-
-// SetMetrics enables periodic OTLP metric export for otel sinks.
-func (sm *SinkManager) SetMetrics(m HostMetrics) {
-	sm.metrics = m
-	sm.startMetricsLoop()
 }
 
 type SinkHTTPAPI struct {
@@ -156,7 +147,6 @@ func (sm *SinkManager) OpenDB() error {
 	if err := sm.restore(); err != nil {
 		return err
 	}
-	sm.startMetricsLoop()
 
 	// start persistence routine
 	go sm.persistSinks()
@@ -205,7 +195,13 @@ func (sm *SinkManager) restore() error {
 			if err := json.Unmarshal(v, sinkInfo); err != nil {
 				return fmt.Errorf("failed to deserialize sink info: %s", err)
 			}
-			return sm.addSink(string(k), sinkInfo, false)
+			if err := sm.addSink(string(k), sinkInfo, false); err != nil {
+				if sm.logger != nil {
+					sm.logger.Warn("skipping sink", "id", string(k), "kind", sinkInfo.Kind, "err", err)
+				}
+				return nil
+			}
+			return nil
 		})
 	})
 }
@@ -216,56 +212,8 @@ func (sm *SinkManager) newSink(s *SinkInfo) (Sink, error) {
 		return NewLogAggregatorSink(sm, s)
 	case ct.SinkKindSyslog:
 		return NewSyslogSink(sm, s)
-	case ct.SinkKindOTLP:
-		return NewOTLPSink(sm, s)
 	default:
 		return nil, fmt.Errorf("unknown sink kind: %q", s.Kind)
-	}
-}
-
-func (sm *SinkManager) startMetricsLoop() {
-	if sm.metrics == nil {
-		return
-	}
-	sm.metricsOnce.Do(func() {
-		go sm.exportMetricsLoop()
-	})
-}
-
-func (sm *SinkManager) exportMetricsLoop() {
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-sm.shutdownCh:
-			return
-		case <-ticker.C:
-			sm.exportMetricsOnce()
-		}
-	}
-}
-
-func (sm *SinkManager) exportMetricsOnce() {
-	if sm.metrics == nil {
-		return
-	}
-	stats, err := sm.metrics.GetHostStats()
-	if err != nil {
-		return
-	}
-	jobs, _ := sm.metrics.GetAllJobsStats()
-	sm.mtx.RLock()
-	sinks := make([]Sink, 0, len(sm.sinks))
-	for _, s := range sm.sinks {
-		sinks = append(sinks, s)
-	}
-	sm.mtx.RUnlock()
-	for _, s := range sinks {
-		if m, ok := s.(interface {
-			ExportMetrics(*host.HostResourceStats, *host.AllJobsStats) error
-		}); ok {
-			_ = m.ExportMetrics(stats, jobs)
-		}
 	}
 }
 

@@ -122,11 +122,11 @@ from a host:
 flynn -a myapp logsink:add syslog syslog://logs.example:514/
 sudo flynn-host log-sink add syslog --scope apps syslog://logs.example:514/
 sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/
-sudo flynn-host otel add --scope system http://alloy.example:4318
 ```
 
-`flynn-host otel` is OpenTelemetry (metrics and/or logs) for Grafana and other
-OTLP collectors. See [Production — Monitoring](production.html.md#monitoring).
+Optional cluster metrics (CPU, memory, disk, load) go to an OTLP collector
+after installing the **otel** plugin. See
+[Production — Monitoring](production.html.md#monitoring).
 
 ## Routes
 

@@ -40,7 +40,8 @@ Options:
 
 System logs (controller, router, plugins, other flynn-system-app jobs) use
 --scope system. User app logs use --scope apps, or --app NAME for one app
-(same as flynn -a NAME logsink). OpenTelemetry collectors use flynn-host otel.
+(same as flynn -a NAME logsink). OpenTelemetry metrics use the otel
+plugin (flynn-host plugin install otel, then flynn-host otel).
 
 Examples:
 

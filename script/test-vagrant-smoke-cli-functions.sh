@@ -144,7 +144,9 @@ need 'flynn-host list' \
 need 'cli-host-ps' \
   "CLI step must list host jobs"
 need 'cli-host-otel' \
-  "CLI step must list OpenTelemetry sinks"
+  "CLI step must list OpenTelemetry exporters (otel plugin)"
+need '14318' \
+  "CLI step must show the dummy OTLP collector endpoint after otel install"
 need 'cli-host-domain' \
   "CLI step must show cluster apex domain"
 need 'cli-host-fix-help' \

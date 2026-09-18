@@ -207,7 +207,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
@@ -2663,6 +2663,9 @@ step_install_plugins() {
       probe_delegated_plugin_cli_hidden "${name}" || return 1
     fi
   done
+  if otel_smoke_wanted; then
+    ensure_otel_smoke_sink || return 1
+  fi
   # shellcheck disable=SC2086
   for name in ${PLUGIN_SMOKE_APPS}; do
     dir="$(plugin_checkout "${name}")"
@@ -2683,6 +2686,9 @@ if [[ -e "${vm_unpack}/cmd" ]] || [[ -e "${vm_unpack}/.git" ]]; then
   exit 1
 fi
 export FLYNN_PLUGIN_NONINTERACTIVE=1
+if [[ "${name}" == "otel" || "${name}" == "opentelemetry" ]]; then
+  export FLYNN_PLUGIN_SETUP_OTEL_ENDPOINT="${OTEL_SMOKE_ENDPOINT:-}"
+fi
 flynn-host plugin install --no-build "${vm_unpack}"
 EOF
     then
@@ -2694,8 +2700,135 @@ EOF
     fi
     probe_plugin_wait_url "${name}" || return 1
     probe_plugin_webhooks "${name}" || return 1
+    if [[ "${name}" == "otel" || "${name}" == "opentelemetry" ]]; then
+      probe_otel_export || return 1
+    fi
   done
   echo "plugins installed: ${PLUGIN_SMOKE_APPS}"
+}
+
+otel_smoke_wanted() {
+  [[ " ${PLUGIN_SMOKE_APPS} " == *" otel "* || " ${PLUGIN_SMOKE_APPS} " == *" opentelemetry "* ]]
+}
+
+otel_flynnbr0_ready() {
+  node_root_script node1 <<'EOF'
+ip -4 -o addr show flynnbr0 2>/dev/null | awk '{print $4}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/'
+EOF
+}
+
+# Host-side dummy OTLP/HTTP sink. Plugin jobs POST /v1/metrics here; we do not
+# run a real collector. Bind on flynnbr0 so the otel system job can reach it.
+ensure_otel_smoke_sink() {
+  local url rc=0
+  if ! wait_for "flynnbr0 for otel dummy collector" 90 otel_flynnbr0_ready; then
+    dump_overlay_diagnostics
+    echo "otel smoke sink needs flynnbr0" >&2
+    return 1
+  fi
+  node_root_script node1 <<'EOF' || rc=$?
+set -euo pipefail
+ip="$(ip -4 -o addr show flynnbr0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+ip="$(printf '%s' "${ip}" | tr -d '[:space:]')"
+if [[ ! "${ip}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "flynnbr0 IPv4 missing; cannot start otel smoke sink" >&2
+  ip -br addr >&2 || true
+  exit 1
+fi
+port=14318
+got=/tmp/otel-smoke-metrics
+pidfile=/tmp/otel-smoke-sink.pid
+py=/tmp/otel-smoke-sink.py
+urlfile=/tmp/otel-smoke-sink.url
+cat > "${py}" <<'PY'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+GOT = "/tmp/otel-smoke-metrics"
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n)
+        if self.path.rstrip("/") == "/v1/metrics":
+            with open(GOT, "ab") as f:
+                f.write(body)
+                f.write(b"\n")
+            self.send_response(200)
+            self.end_headers()
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        return
+
+HTTPServer(("0.0.0.0", 14318), Handler).serve_forever()
+PY
+iptables -C INPUT -p tcp --dport "${port}" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "${port}" -j ACCEPT
+alive=0
+if [[ -f "${pidfile}" ]] && kill -0 "$(cat "${pidfile}" 2>/dev/null)" 2>/dev/null; then
+  alive=1
+fi
+if [[ "${alive}" -eq 0 ]]; then
+  rm -f "${got}" "${urlfile}"
+  nohup python3 "${py}" >/tmp/otel-smoke-sink.log 2>&1 &
+  echo $! > "${pidfile}"
+  disown $! 2>/dev/null || true
+fi
+deadline=$((SECONDS + 15))
+while (( SECONDS < deadline )); do
+  if python3 -c "import socket; s=socket.create_connection(('127.0.0.1', ${port}), 1); s.close()"; then
+    printf 'http://%s:%s\n' "${ip}" "${port}" | tee "${urlfile}"
+    exit 0
+  fi
+  sleep 0.2
+done
+echo "otel smoke sink did not listen on :${port}" >&2
+cat /tmp/otel-smoke-sink.log >&2 || true
+exit 1
+EOF
+  if [[ "${rc}" -ne 0 ]]; then
+    echo "otel smoke sink remote script failed (rc=${rc})" >&2
+    return 1
+  fi
+  url="$(node_ssh node1 'cat /tmp/otel-smoke-sink.url 2>/dev/null' </dev/null | tr -d '\r' | grep -E '^http://' | tail -n1)"
+  if [[ -z "${url}" ]]; then
+    echo "otel smoke sink URL missing" >&2
+    return 1
+  fi
+  OTEL_SMOKE_ENDPOINT="${url}"
+  echo "otel smoke sink ${OTEL_SMOKE_ENDPOINT}"
+}
+
+otel_sink_got_metrics() {
+  node_root_script node1 <<'EOF'
+set -euo pipefail
+grep -q 'flynn.host.' /tmp/otel-smoke-metrics 2>/dev/null
+EOF
+}
+
+probe_otel_export() {
+  local out
+  ensure_otel_smoke_sink || return 1
+  out="$(node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel' </dev/null || true)"
+  if ! printf '%s' "${out}" | grep -qE '14318'; then
+    info "flynn-host otel add ${OTEL_SMOKE_ENDPOINT}"
+    if ! node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel add $(printf '%q' "${OTEL_SMOKE_ENDPOINT}")" </dev/null; then
+      echo "flynn-host otel add ${OTEL_SMOKE_ENDPOINT} failed" >&2
+      return 1
+    fi
+  fi
+  if ! wait_for "otel dummy collector POST /v1/metrics" 60 otel_sink_got_metrics; then
+    echo "otel plugin did not POST OTLP metrics to ${OTEL_SMOKE_ENDPOINT}" >&2
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel; echo ---; sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn -a otel log -n 50; echo ---; cat /tmp/otel-smoke-sink.log 2>/dev/null | tail -n 40' </dev/null >&2 || true
+    return 1
+  fi
+  echo "otel plugin posted metrics to dummy collector ${OTEL_SMOKE_ENDPOINT}"
 }
 
 # Build the same tree GitHub fetchGitHub unpacks: flynn-plugin.json, dist/
@@ -2886,6 +3019,35 @@ step_cluster_backup() {
 set -euo pipefail
 mkdir -p "$(dirname "${vm_path}")"
 rm -f "${vm_path}" "${restore_path}"
+# flynn-host backup job attach hijacks with net.Dial. Host systemd-resolved
+# does not serve *.discoverd; pin controller from the discoverd HTTP API.
+python3 - <<'PY'
+import json, urllib.request
+from pathlib import Path
+hosts = Path("/etc/hosts")
+text = hosts.read_text()
+marker = "# flynn-upgrade-smoke-discoverd"
+block_names = []
+for svc in ("controller",):
+    inst = json.load(urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % svc, timeout=5))
+    if not inst:
+        raise SystemExit("no discoverd instances for %s" % svc)
+    addr = (inst[0] or {}).get("addr") or ""
+    ip = addr.rsplit(":", 1)[0]
+    if not ip:
+        raise SystemExit("bad discoverd addr for %s: %r" % (svc, addr))
+    block_names.append("%s %s.discoverd" % (ip, svc))
+block = marker + "\n" + "\n".join(block_names) + "\n"
+if marker in text:
+    pre, rest = text.split(marker, 1)
+    rest_lines = rest.splitlines(True)
+    rest_lines = rest_lines[1:]
+    while rest_lines and rest_lines[0].strip() and not rest_lines[0].startswith("#"):
+        rest_lines = rest_lines[1:]
+    text = pre + "".join(rest_lines)
+hosts.write_text(text.rstrip() + "\n" + block)
+print("pinned", "; ".join(block_names))
+PY
 flynn-host backup --file "${vm_path}"
 test -s "${vm_path}"
 # List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
@@ -3913,8 +4075,11 @@ step_cli_functions() {
     node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host ps' || failed=1
   cli_probe "${label}" "cli-host-version" "." \
     node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host version' || failed=1
-  cli_probe "${label}" "cli-host-otel" "." \
-    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel' || failed=1
+  if otel_smoke_wanted; then
+    ensure_otel_smoke_sink || failed=1
+    cli_probe "${label}" "cli-host-otel" "14318" \
+      node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel' || failed=1
+  fi
   cli_probe "${label}" "cli-host-domain" "CLUSTER DOMAIN" \
     node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host domain' || failed=1
   cli_probe "${label}" "cli-host-fix-help" "--yes" \
@@ -5034,6 +5199,12 @@ run_one_topology() {
     run_step "Vagrant up (cluster nodes) (${TOPOLOGY_LABEL})" step_vagrant_up_nodes
     CLUSTER_STARTED=1
     cache_all_node_ssh_configs
+  fi
+
+  # Attach sibling plugin folders before Flynn is installed. Reloading a
+  # bootstrapped node to pick up a new synced_folder drops flynnbr0.
+  if [[ "${SKIP_PLUGIN_INSTALL}" != "1" ]]; then
+    run_step "Sync plugin VM mounts (${TOPOLOGY_LABEL})" ensure_plugin_vm_mounts
   fi
 
   if [[ "${SKIP_INSTALL}" == "1" && "${RESUME_BOOTSTRAP:-0}" != "1" ]]; then

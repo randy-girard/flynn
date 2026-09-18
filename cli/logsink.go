@@ -21,7 +21,8 @@ List log sinks for the app.
 usage: flynn logsink:add syslog [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
 
 Add a syslog log sink for the app. Supported schemes are syslog and syslog+tls.
-Cluster-wide and Flynn system logs use flynn-host log-sink or flynn-host otel.
+Cluster-wide and Flynn system logs use flynn-host log-sink. Cluster metrics
+use the otel plugin (flynn-host otel).
 
 Options:
 	--use-ids          Use app IDs instead of app names in the syslog APP-NAME field.

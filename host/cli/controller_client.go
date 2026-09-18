@@ -44,5 +44,7 @@ func controllerClient() (controller.Client, error) {
 		return nil, fmt.Errorf("no controller instances found")
 	}
 	httpClient := discoverdHTTPClient()
-	return controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
+	// Hijack (job attach, cluster backup) uses net.Dial, not Transport.Dial, so
+	// the URL host must be dialable without *.discoverd in systemd-resolved.
+	return controller.NewClientWithHTTP("http://"+instances[0].Addr, instances[0].Meta["AUTH_KEY"], httpClient)
 }
