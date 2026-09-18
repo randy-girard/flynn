@@ -27,7 +27,7 @@ type NamedProfile struct {
 // Medium matches resource.Defaults() memory and CPU.
 func BuiltinProfiles() []NamedProfile {
 	return []NamedProfile{
-		{Name: ProfileSmall, Memory: 256 * units.MiB, CPU: 250, Builtin: true},
+		{Name: ProfileSmall, Memory: 512 * units.MiB, CPU: 500, Builtin: true},
 		{Name: ProfileMedium, Memory: 1 * units.GiB, CPU: 1000, Builtin: true},
 		{Name: ProfileLarge, Memory: 2 * units.GiB, CPU: 2000, Builtin: true},
 	}

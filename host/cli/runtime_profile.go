@@ -20,11 +20,11 @@ List cluster runtime environments (CPU/memory presets).
 	Register("runtime-profile:create", runRuntimeProfileCreate, `
 usage: flynn-host runtime-profile:create [--memory <bytes>] [--cpu <milli>] <name>
 
-Create a runtime environment. Memory is bytes (or 256MB / 1GB). CPU is milliCPU.
+Create a runtime environment. Memory is bytes (or 512MB / 1GB). CPU is milliCPU.
 
 Options:
-    --memory=<bytes>  Memory limit (default 256MB)
-    --cpu=<milli>     milliCPU limit (default 250)
+    --memory=<bytes>  Memory limit (default 512MB)
+    --cpu=<milli>     milliCPU limit (default 500)
 
 Examples:
 
@@ -33,7 +33,7 @@ Examples:
 	Register("runtime-profile:update", runRuntimeProfileUpdate, `
 usage: flynn-host runtime-profile:update [--name <name>] [--memory <bytes>] [--cpu <milli>] <id>
 
-Update a runtime environment by id.
+Update a runtime environment by id, including builtin small/medium/large.
 `)
 	Register("runtime-profile:remove", runRuntimeProfileRemove, `
 usage: flynn-host runtime-profile:remove <id>
@@ -75,8 +75,8 @@ func runRuntimeProfileCreate(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	mem := int64(256 * 1024 * 1024)
-	cpu := int64(250)
+	mem := int64(512 * 1024 * 1024)
+	cpu := int64(500)
 	if s := args.String["--memory"]; s != "" {
 		mem, err = resource.ParseLimit(resource.TypeMemory, s)
 		if err != nil {

@@ -303,6 +303,23 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(names["small"], Equals, true)
 	c.Assert(names["medium"], Equals, true)
 	c.Assert(names["large"], Equals, true)
+	var small *ct.RuntimeProfile
+	for _, p := range list {
+		if p.Name == "small" {
+			small = p
+		}
+	}
+	c.Assert(small, NotNil)
+	c.Assert(small.Memory, Equals, int64(512*1024*1024))
+	c.Assert(small.CPU, Equals, int64(500))
+	small.Memory = 768 * 1024 * 1024
+	small.CPU = 750
+	c.Assert(repo.Update(small), IsNil)
+	gotSmall, err := repo.Get(small.ID)
+	c.Assert(err, IsNil)
+	c.Assert(gotSmall.Memory, Equals, int64(768*1024*1024))
+	c.Assert(gotSmall.CPU, Equals, int64(750))
+	c.Assert(gotSmall.Builtin, Equals, true)
 
 	settings, err := repo.Settings()
 	c.Assert(err, IsNil)

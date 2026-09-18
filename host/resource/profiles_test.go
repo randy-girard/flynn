@@ -21,7 +21,7 @@ func TestBuiltinProfilesMatchDefaults(t *testing.T) {
 
 	small, _ := ProfileByName("small")
 	large, _ := ProfileByName("large")
-	if small.Memory != 256*units.MiB || small.CPU != 250 {
+	if small.Memory != 512*units.MiB || small.CPU != 500 {
 		t.Fatalf("small=%+v", small)
 	}
 	if large.Memory != 2*units.GiB || large.CPU != 2000 {

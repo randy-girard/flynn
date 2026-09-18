@@ -1030,9 +1030,13 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 		)`,
 		`INSERT INTO runtime_settings (id, allow_custom_limits) VALUES (1, false)`,
 		`INSERT INTO runtime_profiles (name, memory, cpu, builtin) VALUES
-			('small', 268435456, 250, true),
+			('small', 536870912, 500, true),
 			('medium', 1073741824, 1000, true),
 			('large', 2147483648, 2000, true)`,
+	)
+	migrations.Add(55,
+		`UPDATE runtime_profiles SET memory = 536870912, cpu = 500, updated_at = now()
+			WHERE name = 'small' AND builtin AND deleted_at IS NULL`,
 	)
 }
 

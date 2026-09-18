@@ -40,7 +40,7 @@ Examples:
 
 	$ flynn limit:profiles
 	NAME    MEMORY  CPU   BUILTIN
-	small   256MB   250   true
+	small   512MB   500   true
 	medium  1GB     1000  true
 	large   2GB     2000  true
 `)

@@ -10,7 +10,7 @@ import (
 
 func TestLookupRuntimeProfileByNameAndID(t *testing.T) {
 	list := []*ct.RuntimeProfile{
-		{ID: "abc", Name: "small", Memory: 256, CPU: 250, Builtin: true},
+		{ID: "abc", Name: "small", Memory: 512 * 1024 * 1024, CPU: 500, Builtin: true},
 		{ID: "def", Name: "xlarge", Memory: 1, CPU: 2},
 		nil,
 	}
@@ -26,7 +26,7 @@ func TestLookupRuntimeProfileByNameAndID(t *testing.T) {
 }
 
 func TestApplyRuntimeProfileToProcSetsLimits(t *testing.T) {
-	p := &ct.RuntimeProfile{Name: "small", Memory: 256 * 1024 * 1024, CPU: 250}
+	p := &ct.RuntimeProfile{Name: "small", Memory: 512 * 1024 * 1024, CPU: 500}
 	got := applyRuntimeProfileToProc(ct.ProcessType{}, p)
 	if got.RuntimeProfile != "small" {
 		t.Fatalf("profile %q", got.RuntimeProfile)
@@ -42,7 +42,7 @@ func TestApplyRuntimeProfileToProcSetsLimits(t *testing.T) {
 func TestFormatRuntimeProfiles(t *testing.T) {
 	out := formatRuntimeProfiles([]*ct.RuntimeProfile{
 		{Name: "large", Memory: 2 * 1024 * 1024 * 1024, CPU: 2000, Builtin: true},
-		{Name: "small", Memory: 256 * 1024 * 1024, CPU: 250, Builtin: true},
+		{Name: "small", Memory: 512 * 1024 * 1024, CPU: 500, Builtin: true},
 	})
 	if !strings.Contains(out, "small") || !strings.Contains(out, "large") {
 		t.Fatalf("output %q", out)
