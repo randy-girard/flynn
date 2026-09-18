@@ -11,6 +11,7 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/controller/utils"
 	"github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/host/volume"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/flynn/pkg/typeconv"
@@ -1111,6 +1112,13 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	c.Assert(got, NotNil)
 	c.Assert(got.ID, Equals, "vol-held-running")
 
+	// holder missing from s.jobs (scale to zero dropped the job before
+	// JobID was cleared) must be adopted, not skipped
+	delete(s.jobs, holderStoppedID)
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-held-running")
+
 	// ephemeral (DeleteOnStop) volumes are never adopted: the host
 	// destroys the underlying dataset when the holder exits, so reusing
 	// the scheduler's in-memory entry would cause AddJob to fail with
@@ -1130,6 +1138,15 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	}
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
 	c.Assert(got, IsNil)
+
+	// a volume created since the last SyncVolumes is missing from the
+	// hostVolumeIDs cache but still present on the host; adopt it.
+	hc := NewFakeHostClient(testHostID, false)
+	hc.PutVolume(&volume.Info{ID: "vol-stale"})
+	s.hosts = map[string]*Host{testHostID: NewHost(hc, s.logger)}
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-stale")
 }
 
 // TestFindVolumeRedisHeldByRunningJob is the redis all-at-once data-loss

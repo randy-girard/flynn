@@ -198,6 +198,13 @@ func (c *FakeHostClient) CreateVolume(providerID string, info *volume.Info) erro
 	return nil
 }
 
+func (c *FakeHostClient) PutVolume(info *volume.Info) {
+	if info == nil {
+		return
+	}
+	c.volumes[info.ID] = info
+}
+
 func (c *FakeHostClient) StreamEvents(id string, ch chan *host.Event) (stream.Stream, error) {
 	c.eventChannelsMtx.Lock()
 	if _, ok := c.eventChannels[ch]; ok {
@@ -219,7 +226,11 @@ func (c *FakeHostClient) StreamEvents(id string, ch chan *host.Event) (stream.St
 }
 
 func (c *FakeHostClient) ListVolumes() ([]*volume.Info, error) {
-	return nil, nil
+	out := make([]*volume.Info, 0, len(c.volumes))
+	for _, v := range c.volumes {
+		out = append(out, v)
+	}
+	return out, nil
 }
 
 func (c *FakeHostClient) StreamVolumes(ch chan *volume.Event) (stream.Stream, error) {

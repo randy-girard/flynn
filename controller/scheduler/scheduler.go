@@ -1125,12 +1125,12 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 		// is required for singleton sirenia updates where the old job
 		// is stopped and the new job is placed in rapid succession,
 		// before the host has reported the old job as exited.
+		// A JobID whose holder is gone from s.jobs (scale to zero
+		// dropped the job before persistVolume cleared the pointer)
+		// is also free.
 		if vol.JobID != nil && *vol.JobID != job.ID {
 			holder, ok := s.jobs[*vol.JobID]
-			if !ok {
-				continue
-			}
-			if holder.State != JobStateStopping && holder.State != JobStateStopped && holder.State != JobStateBlocked {
+			if ok && holder.State != JobStateStopping && holder.State != JobStateStopped && holder.State != JobStateBlocked {
 				continue
 			}
 		}
@@ -1238,19 +1238,31 @@ func (s *Scheduler) releaseKnownForApp(appID, releaseID string) bool {
 
 func (s *Scheduler) volumeExistsOnHost(hostID, volumeID string) bool {
 	if set, ok := s.hostVolumeIDs[hostID]; ok {
-		_, exists := set[volumeID]
-		return exists
+		if _, exists := set[volumeID]; exists {
+			return true
+		}
 	}
+	// hostVolumeIDs is only rebuilt in SyncVolumes. A volume created since
+	// the last sync is on the host but missing from the cache; treating
+	// that as "gc'd" makes scale 0→1 allocate a new empty dataset.
 	host, ok := s.hosts[hostID]
-	if !ok {
+	if !ok || host == nil || host.client == nil {
 		return false
 	}
 	volumes, err := host.client.ListVolumes()
 	if err != nil {
+		if set, ok := s.hostVolumeIDs[hostID]; ok {
+			_, exists := set[volumeID]
+			return exists
+		}
 		return false
 	}
 	for _, info := range volumes {
-		if info.ID == volumeID {
+		if info != nil && info.ID == volumeID {
+			if s.hostVolumeIDs[hostID] == nil {
+				s.hostVolumeIDs[hostID] = make(map[string]struct{})
+			}
+			s.hostVolumeIDs[hostID][volumeID] = struct{}{}
 			return true
 		}
 	}
@@ -1421,6 +1433,10 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		if vol.HostID == "" {
 			vol.HostID = req.Host.ID
 		}
+		if s.hostVolumeIDs[vol.HostID] == nil {
+			s.hostVolumeIDs[vol.HostID] = make(map[string]struct{})
+		}
+		s.hostVolumeIDs[vol.HostID][vol.ID] = struct{}{}
 	}
 	req.Error(nil)
 }

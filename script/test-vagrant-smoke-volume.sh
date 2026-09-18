@@ -31,6 +31,12 @@ need 'scale vol=0' \
   "volume step must stop the vol job so the scheduler can reattach the same volume"
 need 'volume detached' \
   "volume step must wait for the vol job to stop before scaling back up"
+need 'volume unattached' \
+  "volume step must wait until flynn volume show JobID is empty before scale-up"
+need 'vol_scale_zero' \
+  "volume cleanup must scale vol=0 before decommission"
+need 'vol_unattached' \
+  "volume step must treat a missing holder as free, not only flynn ps"
 need '"path": "/data"' \
   "volume process type must request a persistent /data volume (not delete_on_stop)"
 need '/tmp/vol-release-' \

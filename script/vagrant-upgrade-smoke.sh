@@ -4074,6 +4074,10 @@ vol_log_has() {
   flynn1 -a "${DOCKER_APP_NAME}" log -n 400 | grep -qF "${needle}"
 }
 
+vol_scale_zero() {
+  flynn1 -a "${DOCKER_APP_NAME}" scale vol=0 || true
+}
+
 vol_active_ids() {
   flynn1 -a "${DOCKER_APP_NAME}" volume 2>/dev/null | awk 'NR>1 && $1 ~ /^[0-9a-fA-F-]{36}$/ && $NF != "true" {print $1}'
 }
@@ -4082,6 +4086,13 @@ vol_jobs_stopped() {
   local out
   out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t vol 2>/dev/null || true)"
   ! printf '%s' "${out}" | awk 'NR>1 && $2=="vol" && ($3=="up" || $3=="pending" || $3=="starting" || $3=="stopping") { found=1 } END { exit !found }'
+}
+
+vol_unattached() {
+  local id=$1
+  local job
+  job="$(flynn1 -a "${DOCKER_APP_NAME}" volume show "${id}" 2>/dev/null | awk -F':[[:space:]]*' '$1=="JobID"{print $2}' || true)"
+  [[ -z "${job}" ]]
 }
 
 step_volume() {
@@ -4166,7 +4177,11 @@ EOF
     echo "volume ${label}: vol job still running after scale 0" >&2
     return 1
   fi
-  sleep 2
+  if ! wait_for "volume unattached ${label}" 60 vol_unattached "${id}"; then
+    record_check "${label}" "vol-read" "FAIL" "volume ${id} still has JobID after scale 0"
+    echo "volume ${label}: volume ${id} still attached after scale 0" >&2
+    return 1
+  fi
   flynn1 -a "${DOCKER_APP_NAME}" scale vol=1
   if ! wait_for "volume read ${label}" 180 vol_log_has "VOL_SMOKE_READ:${token}"; then
     out="$(flynn1 -a "${DOCKER_APP_NAME}" log -n 80 | tr '\n' ' ' | cut -c1-120 || true)"
