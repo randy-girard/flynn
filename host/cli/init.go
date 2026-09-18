@@ -2,10 +2,13 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/bootstrap/discovery"
 	"github.com/randy-girard/flynn/host/config"
+	"github.com/randy-girard/flynn/pkg/hostfw"
 )
 
 func init() {
@@ -41,6 +44,11 @@ func runInit(args *docopt.Args) error {
 	}
 	if ips := args.String["--peer-ips"]; ips != "" {
 		c.Args = append(c.Args, "--peer-ips", ips)
+		// Open those IPs on this host immediately so daemon join can reach them
+		// even when they are not in the installer RFC1918 CIDRs.
+		if err := hostfw.ApplySeedPeers(strings.Split(ips, ",")); err != nil {
+			fmt.Fprintf(os.Stderr, "warn: firewall peer seed: %v\n", err)
+		}
 	}
 
 	return c.WriteTo(args.String["--file"])

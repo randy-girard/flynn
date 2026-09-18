@@ -90,4 +90,19 @@ dry="$(configure_flynn_firewall)"
 echo "${dry}" | grep -qx 'allow 22/tcp'
 echo "${dry}" | grep -qx 'allow 443/tcp'
 
+need "${ROOT}/host/cli/firewall.go" 'firewall:peer-add' \
+  "flynn-host must add peer IPs to the host firewall"
+need "${ROOT}/host/cli/firewall.go" 'firewall:peer-remove' \
+  "flynn-host must drop peer IPs from the host firewall"
+need "${ROOT}/host/cli/firewall.go" 'firewall:expose' \
+  "flynn-host must open TCP ports for exposed services"
+need "${ROOT}/host/cli/firewall.go" 'firewall:unexpose' \
+  "flynn-host must close TCP ports when services are unexposed"
+need "${ROOT}/host/host.go" 'startHostFirewall' \
+  "flynn-host daemon must reconcile the firewall as peers join and leave"
+need "${ROOT}/pkg/hostfw/plan.go" 'KindPeer' \
+  "host firewall planner must model per-node peer allows"
+need "${ROOT}/pkg/hostfw/plan.go" 'KindExpose' \
+  "host firewall planner must model exposed TCP ports"
+
 echo "ok install firewall (22/80/443) and logrotate for /var/log/flynn"

@@ -34,6 +34,11 @@ func discoverdDial(network, addr string) (net.Conn, error) {
 	return dialer.Default.Dial(network, addr)
 }
 
+// ClusterController is the discoverd-backed controller client (cluster admin).
+func ClusterController() (controller.Client, error) {
+	return controllerClient()
+}
+
 // controllerClient returns a controller API client using discoverd for DNS.
 func controllerClient() (controller.Client, error) {
 	instances, err := discoverd.NewService("controller").Instances()

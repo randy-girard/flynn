@@ -74,6 +74,13 @@ var subAliases = map[string]map[string]string{
 	"route": {
 		"add": "route:add",
 	},
+	"firewall": {
+		"sync":        "firewall:sync",
+		"peer-add":    "firewall:peer-add",
+		"peer-remove": "firewall:peer-remove",
+		"expose":      "firewall:expose",
+		"unexpose":    "firewall:unexpose",
+	},
 }
 
 // ResolveCommand rewrites space-nested flynn-host commands to colon names.

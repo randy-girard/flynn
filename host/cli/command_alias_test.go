@@ -75,6 +75,8 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"runtime-profile", "runtime-profile:create", "runtime-profile:update",
 		"runtime-profile:remove", "runtime-profile:allow-custom",
 		"route:add",
+		"firewall", "firewall:sync", "firewall:peer-add", "firewall:peer-remove",
+		"firewall:expose", "firewall:unexpose",
 	}
 	for _, name := range want {
 		if commands[name] == nil {
@@ -91,6 +93,14 @@ func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
 	name, args, from = ResolveCommand("route", []string{"add", "http", "--app", "admin", "example.com/admin"})
 	if name != "route:add" || from != "route add" {
 		t.Fatalf("route add got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("firewall", []string{"peer-add", "10.0.0.5"})
+	if name != "firewall:peer-add" || from != "firewall peer-add" || strings.Join(args, " ") != "10.0.0.5" {
+		t.Fatalf("firewall peer-add got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("firewall", []string{"expose", "3001"})
+	if name != "firewall:expose" || from != "firewall expose" {
+		t.Fatalf("firewall expose got %q from=%q", name, from)
 	}
 }
 

@@ -112,6 +112,12 @@ Commands:
   domain                          Show cluster domain and apex (root) app
   domain:apex                     Set or clear which app serves the apex hostname
   download                        Download container images
+  firewall                        Show flynn-host managed firewall rules
+  firewall:expose                 Open a TCP port for an exposed service
+  firewall:peer-add               Allow cluster traffic from a node IP
+  firewall:peer-remove            Drop a node IP from the host firewall
+  firewall:sync                   Reconcile peer IPs and exposed TCP ports
+  firewall:unexpose               Close a previously exposed TCP port
   fix                             Fix a broken cluster
   help                            Show usage for a specific command
   init                            Create cluster configuration for daemon
@@ -136,7 +142,13 @@ Commands:
   plugin:update                   Deploy a new release of an installed plugin
   promote                         Promote a Flynn node into the consensus cluster
   ps                              List jobs
+  route:add                       Add an HTTP path route (cluster admin)
   run                             Run an interactive job
+  runtime-profile                 List cluster runtime environments
+  runtime-profile:allow-custom    Allow raw CPU/memory limits
+  runtime-profile:create          Create a runtime environment
+  runtime-profile:remove          Delete a custom runtime environment
+  runtime-profile:update          Update a runtime environment
   signal                          Signal a job
   stop                            Stop running jobs
   tags                            List flynn-host daemon tags
@@ -623,6 +635,7 @@ func runDaemon(args *docopt.Args) {
 		}
 	}
 	log.Info("connecting to cluster peers", "ips", peerIPs)
+	startHostFirewall(externalIP, peerIPs, log)
 	if err := discoverdManager.ConnectPeer(peerIPs); err != nil {
 		log.Info("no cluster peers available")
 	}
