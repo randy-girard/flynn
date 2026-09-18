@@ -1,10 +1,14 @@
 package fixer
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flynn/flynn/discoverd/client"
@@ -26,6 +30,13 @@ type ClusterFixer struct {
 	LocalPeerIPs func() []string
 	// HostStatus, if set, replaces h.GetStatus (tests).
 	HostStatus func(*cluster.Host) (*host.HostStatus, error)
+	// Stdin/Stdout used for interactive prompts (tests).
+	Stdin  io.Reader
+	Stdout io.Writer
+	// Interactive, if set, overrides TTY detection.
+	Interactive func() bool
+
+	in *bufio.Reader
 }
 
 func NewClusterFixer(hosts []*cluster.Host, c *cluster.Client, l log15.Logger) *ClusterFixer {
@@ -36,20 +47,165 @@ func NewClusterFixer(hosts []*cluster.Host, c *cluster.Client, l log15.Logger) *
 	}
 }
 
+func (f *ClusterFixer) stdin() io.Reader {
+	if f.Stdin != nil {
+		return f.Stdin
+	}
+	return os.Stdin
+}
+
+func (f *ClusterFixer) stdout() io.Writer {
+	if f.Stdout != nil {
+		return f.Stdout
+	}
+	return os.Stdout
+}
+
+func (f *ClusterFixer) isInteractive() bool {
+	if f.Interactive != nil {
+		return f.Interactive()
+	}
+	file, ok := f.stdin().(*os.File)
+	if !ok {
+		return false
+	}
+	st, err := file.Stat()
+	if err != nil {
+		return false
+	}
+	return st.Mode()&os.ModeCharDevice != 0
+}
+
+// FixMinHosts returns the expected host count. An omitted flag uses detected
+// discoverd members, or 1 when none are visible.
+func FixMinHosts(flag string, detected int) (int, error) {
+	flag = strings.TrimSpace(flag)
+	if flag != "" {
+		n, err := strconv.Atoi(flag)
+		if err != nil || n < 1 {
+			return 0, fmt.Errorf("invalid or missing --min-hosts value")
+		}
+		return n, nil
+	}
+	if detected > 0 {
+		return detected, nil
+	}
+	return 1, nil
+}
+
+func (f *ClusterFixer) resolveFixOptions(args *docopt.Args, detected int) (int, string, error) {
+	yes := args.Bool["--yes"]
+	peer := args.String["--peer-ips"]
+	minStr := args.String["--min-hosts"]
+	if minStr == "" {
+		minStr = args.String["-n"]
+	}
+	minHosts, err := FixMinHosts(minStr, detected)
+	if err != nil {
+		return 0, "", err
+	}
+	if yes || !f.isInteractive() {
+		return minHosts, peer, nil
+	}
+	minHosts, peer, err = f.promptFixOptions(minHosts, peer, detected)
+	if err != nil {
+		return 0, "", err
+	}
+	peerNote := peer
+	if peerNote == "" {
+		peerNote = "(probe this host)"
+	}
+	if !f.confirm(fmt.Sprintf("Run cluster fix with min-hosts=%d peer-ips=%s?", minHosts, peerNote)) {
+		return 0, "", fmt.Errorf("aborted")
+	}
+	return minHosts, peer, nil
+}
+
+func (f *ClusterFixer) promptFixOptions(minHosts int, peer string, detected int) (int, string, error) {
+	hint := strconv.Itoa(minHosts)
+	if detected > 0 {
+		hint = fmt.Sprintf("%d (discovered %d)", minHosts, detected)
+	}
+	line, err := f.readLine(fmt.Sprintf("Minimum expected hosts [%s]", hint))
+	if err != nil {
+		return 0, "", err
+	}
+	if strings.TrimSpace(line) != "" {
+		n, err := FixMinHosts(line, detected)
+		if err != nil {
+			return 0, "", err
+		}
+		minHosts = n
+	}
+	line, err = f.readLine(fmt.Sprintf("Peer IPs if discoverd is down [%s]", emptyDefault(peer, "probe this host")))
+	if err != nil {
+		return 0, "", err
+	}
+	if strings.TrimSpace(line) != "" {
+		peer = strings.TrimSpace(line)
+	}
+	return minHosts, peer, nil
+}
+
+func emptyDefault(val, fallback string) string {
+	if strings.TrimSpace(val) == "" {
+		return fallback
+	}
+	return val
+}
+
+func (f *ClusterFixer) reader() *bufio.Reader {
+	if f.in == nil {
+		f.in = bufio.NewReader(f.stdin())
+	}
+	return f.in
+}
+
+func (f *ClusterFixer) readLine(prompt string) (string, error) {
+	fmt.Fprintf(f.stdout(), "%s: ", prompt)
+	line, err := f.reader().ReadString('\n')
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func (f *ClusterFixer) confirm(msg string) bool {
+	fmt.Fprintf(f.stdout(), "%s (yes/no): ", msg)
+	for {
+		line, err := f.reader().ReadString('\n')
+		answer := strings.ToLower(strings.TrimSpace(line))
+		switch answer {
+		case "y", "yes":
+			return true
+		case "n", "no":
+			return false
+		}
+		if err != nil {
+			return false
+		}
+		fmt.Fprint(f.stdout(), "Please type 'yes' or 'no': ")
+	}
+}
+
 func (f *ClusterFixer) Run(args *docopt.Args, c *cluster.Client) error {
 	f.c = c
 	f.l = log15.New()
 	var err error
 
-	minHosts, err := strconv.Atoi(args.String["--min-hosts"])
-	if err != nil || minHosts < 1 {
-		return fmt.Errorf("invalid or missing --min-hosts value")
+	detected := 0
+	if hosts, herr := c.Hosts(); herr == nil {
+		detected = len(hosts)
+	}
+	minHosts, peerIPs, err := f.resolveFixOptions(args, detected)
+	if err != nil {
+		return err
 	}
 
 	f.hosts, err = c.Hosts()
 	if err != nil {
 		f.l.Error("unable to list hosts from discoverd, falling back to host HTTP API", "error", err)
-		f.hosts, err = f.hostsWhenDiscoverdDown(minHosts, args.String["--peer-ips"])
+		f.hosts, err = f.hostsWhenDiscoverdDown(minHosts, peerIPs)
 		if err != nil {
 			return err
 		}

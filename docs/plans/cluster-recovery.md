@@ -53,10 +53,12 @@ drift.
 vagrant ssh nodeN -c 'ip addr show flynnbr0 | grep inet; ss -ulnp | grep :53'
 
 # 2. Run fix (do not run concurrently with manual sirenia surgery)
+#    Interactive on a TTY (host count, peer IPs, confirm). Scripts use --yes.
 #    If discoverd is down, singleton clusters probe this host's :1113 API.
 #    Multi-host still needs --peer-ips when discoverd cannot list members.
-flynn-host fix -n 1
-flynn-host fix -n 3 --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
+flynn-host fix --yes
+flynn-host fix -n 1 --yes
+flynn-host fix -n 3 --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --yes
 
 # 3. For a broken sirenia database (postgres/mariadb/mongodb):
 #    - GET instances + meta from discoverd
