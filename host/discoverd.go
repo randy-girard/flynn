@@ -7,11 +7,11 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/logmux"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/logmux"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 var discoverdLogger = log15.New("component", "discoverd-manager")

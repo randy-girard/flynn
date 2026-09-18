@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/test/arg"
-	testcluster "github.com/flynn/flynn/test/cluster/client"
 	"github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/test/arg"
+	testcluster "github.com/randy-girard/flynn/test/cluster/client"
 )
 
 var args *arg.Args

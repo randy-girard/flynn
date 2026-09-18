@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/random"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/random"
+	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/crypto/nacl/secretbox"
 	"golang.org/x/net/context"
 )

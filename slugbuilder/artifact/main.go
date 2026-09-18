@@ -16,11 +16,11 @@ import (
 	"strings"
 
 	"github.com/docker/go-units"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/squashfs"
-	"github.com/flynn/flynn/pkg/typeconv"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/squashfs"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 	"gopkg.in/yaml.v2"
 )
 

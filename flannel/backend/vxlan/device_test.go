@@ -9,7 +9,7 @@ import (
 
 	"github.com/vishvananda/netlink"
 
-	"github.com/flynn/flynn/flannel/pkg/ip"
+	"github.com/randy-girard/flynn/flannel/pkg/ip"
 )
 
 // TestAddL2UsesReplaceSemantics guards against a regression where AddL2 installs

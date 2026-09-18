@@ -4,10 +4,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/stream"
-	routerc "github.com/flynn/flynn/router/client"
-	"github.com/flynn/flynn/router/types"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/stream"
+	routerc "github.com/randy-girard/flynn/router/client"
+	"github.com/randy-girard/flynn/router/types"
 )
 
 type RouterBackend struct {

@@ -6,8 +6,8 @@ import (
 	"net/url"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // LookupPluginApp finds an installed plugin by app name or CLI command.
@@ -31,7 +31,7 @@ func LookupPluginApp(apps []*ct.App, name string) (*ct.App, error) {
 	if byCLI != nil {
 		return byCLI, nil
 	}
-	return nil, fmt.Errorf("%s is not an installed plugin; see flynn-host plugin list", name)
+	return nil, fmt.Errorf("%s is not an installed plugin; see flynn-host plugin:list", name)
 }
 
 // PluginRouter manages HTTP/TCP routes on an installed plugin app. It is the

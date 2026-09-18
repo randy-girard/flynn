@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type Store interface {

@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flynn/flynn/logaggregator/client"
+	"github.com/randy-girard/flynn/logaggregator/client"
 
 	. "github.com/flynn/go-check"
 )

@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	worker "github.com/flynn/flynn/controller/worker/types"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	worker "github.com/randy-girard/flynn/controller/worker/types"
 )
 
 type DeployJob struct {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func TestExpandClusterVars(t *testing.T) {

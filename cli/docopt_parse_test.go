@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 )
 
 func parseCLI(t *testing.T, argv []string) *docopt.Args {
@@ -49,6 +49,10 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
 		{[]string{"cluster:add", "n", "d", "k"}, "<cluster-name>", []string{"n"}},
+		{[]string{"log-sink:add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
+		{[]string{"log-sink", "add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
+		{[]string{"logsink:add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
+		{[]string{"log-sink:remove", "sink-1"}, "<id>", []string{"sink-1"}},
 	}
 	for _, tc := range cases {
 		args := parseCLI(t, tc.argv)
@@ -78,5 +82,20 @@ func TestEnvGetSingleVarIsStringInDocopt(t *testing.T) {
 	}
 	if cliutil.String(args, "<var>") != "FLYNN_POSTGRES" {
 		t.Fatalf("got %q", cliutil.String(args, "<var>"))
+	}
+}
+
+func TestPluginListKnownParses(t *testing.T) {
+	args := parseCLI(t, []string{"plugin:list"})
+	if args.Bool["--known"] {
+		t.Fatal("plugin:list must not imply --known")
+	}
+	args = parseCLI(t, []string{"plugin:list", "--known"})
+	if !args.Bool["--known"] {
+		t.Fatal("plugin:list --known")
+	}
+	args = parseCLI(t, []string{"plugin", "list", "--known"})
+	if !args.Bool["--known"] {
+		t.Fatal("plugin list --known")
 	}
 }

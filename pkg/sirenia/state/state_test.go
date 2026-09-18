@@ -23,12 +23,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/appliance/postgresql/pgxlog"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/iotool"
-	"github.com/flynn/flynn/pkg/sirenia/simulator"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/kylelemons/godebug/pretty"
+	"github.com/randy-girard/flynn/appliance/postgresql/pgxlog"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/iotool"
+	"github.com/randy-girard/flynn/pkg/sirenia/simulator"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 var xlog = pgxlog.PgXLog{}

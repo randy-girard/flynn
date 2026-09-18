@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 func init() {

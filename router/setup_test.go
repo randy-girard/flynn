@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/cache"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/discoverd/testutil"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/discoverd/cache"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/discoverd/testutil"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func init() {

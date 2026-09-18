@@ -15,12 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
 	"github.com/hashicorp/raft"
 	"github.com/hashicorp/raft-boltdb"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/discoverd/client"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 const (

@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/mysqlurl"
-	sc "github.com/flynn/flynn/pkg/sirenia/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	c "github.com/flynn/go-check"
 	_ "github.com/go-sql-driver/mysql"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/mysqlurl"
+	sc "github.com/randy-girard/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 type SireniaRecoverySuite struct {

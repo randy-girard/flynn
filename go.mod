@@ -1,4 +1,4 @@
-module github.com/flynn/flynn
+module github.com/randy-girard/flynn
 
 go 1.24.0
 

@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/postgres"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 var (

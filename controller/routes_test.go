@@ -5,12 +5,12 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/tlscert"
-	"github.com/flynn/flynn/router/testutils"
-	router "github.com/flynn/flynn/router/types"
 	. "github.com/flynn/go-check"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/router/testutils"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type fakeStream struct{}

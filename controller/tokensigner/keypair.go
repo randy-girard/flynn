@@ -3,9 +3,9 @@ package tokensigner
 import (
 	"time"
 
-	api "github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/authz"
+	api "github.com/randy-girard/flynn/controller/api"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

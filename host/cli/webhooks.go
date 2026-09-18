@@ -6,25 +6,26 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func init() {
-	Register("webhooks", runWebhooks, `
+	Register("webhooks", runWebhooksListCmd, `
 usage: flynn-host webhooks
-       flynn-host webhooks add [-H <header>]... <url>
-       flynn-host webhooks remove <id>
 
-Manage webhook notification endpoints across all hosts.
+List webhook notification endpoints across all hosts.
 
-Commands:
-    With no arguments, lists all configured webhooks.
+Examples:
 
-    add       Add a webhook endpoint URL to all hosts
-    remove    Remove a webhook by ID from all hosts
+    $ flynn-host webhooks
+`)
+	Register("webhooks:add", runWebhooksAdd, `
+usage: flynn-host webhooks:add [-H <header>]... <url>
+
+Add a webhook endpoint URL to all hosts.
 
 Options:
     -H, --header <header>  Header to send on every delivery, "Name: value".
@@ -33,22 +34,22 @@ Options:
 
 Examples:
 
-    $ flynn-host webhooks
-    $ flynn-host webhooks add https://example.com/webhook
-    $ flynn-host webhooks add -H "X-Flynn-Webhook-Secret: s3cret" https://example.com/webhook
-    $ flynn-host webhooks remove abc-123
+    $ flynn-host webhooks:add https://example.com/webhook
+    $ flynn-host webhooks:add -H "X-Flynn-Webhook-Secret: s3cret" https://example.com/webhook
+`)
+	Register("webhooks:remove", runWebhooksRemove, `
+usage: flynn-host webhooks:remove <id>
+
+Remove a webhook by ID from all hosts.
+
+Examples:
+
+    $ flynn-host webhooks:remove abc-123
 `)
 }
 
-func runWebhooks(args *docopt.Args, client *cluster.Client) error {
-	switch {
-	case args.Bool["add"]:
-		return runWebhooksAdd(args, client)
-	case args.Bool["remove"]:
-		return runWebhooksRemove(args, client)
-	default:
-		return runWebhooksList(client)
-	}
+func runWebhooksListCmd(_ *docopt.Args, client *cluster.Client) error {
+	return runWebhooksList(client)
 }
 
 func runWebhooksList(client *cluster.Client) error {

@@ -4,10 +4,10 @@ import (
 	"os"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/stream"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 const serviceName = "controller-scheduler"

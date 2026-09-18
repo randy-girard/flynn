@@ -32,3 +32,9 @@ func TestGeneratedProtobufImportsVendoredModulesOnly(t *testing.T) {
 	check("controller.pb.go", controllerPBSource)
 	check("controller_grpc.pb.go", controllerGRPCSource)
 }
+
+func TestProtobufFileDescriptorInits(t *testing.T) {
+	if File_controller_proto == nil {
+		t.Fatal("controller protobuf descriptor failed to init")
+	}
+}

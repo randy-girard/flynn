@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func clusterPluginCatalog() (*plugin.Catalog, error) {
@@ -26,7 +26,7 @@ func requirePluginCommand(name string) error {
 
 func missingPluginCommand(name string, cat *plugin.Catalog, catErr error) error {
 	if catErr != nil || cat == nil || !cat.HasCommand(name) {
-		return fmt.Errorf("%s is not installed on this cluster. Operators: flynn-host plugin install %s", name, name)
+		return fmt.Errorf("%s is not installed on this cluster. Operators: flynn-host plugin:install %s", name, name)
 	}
 	return nil
 }

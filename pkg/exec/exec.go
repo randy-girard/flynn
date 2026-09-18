@@ -8,13 +8,13 @@ import (
 	"io/ioutil"
 	"sync"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/schedutil"
-	"github.com/flynn/flynn/pkg/stream"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/schedutil"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type Cmd struct {

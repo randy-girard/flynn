@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {

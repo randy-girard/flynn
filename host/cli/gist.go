@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/cheggaaa/pb"
-	"github.com/flynn/flynn/pkg/term"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/term"
 )
 
 // Actual limit is likely ~200mb.

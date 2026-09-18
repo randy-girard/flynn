@@ -1,5 +1,5 @@
 #!/bin/bash
-# Regression: flynn-host plugin uninstall must reverse install generically
+# Regression: flynn-host plugin:uninstall must reverse install generically
 # (app, routes via DeleteApp, webhooks, optional hooks.uninstall) without a
 # plugin-name switch. Resource providers with leftover resources refuse unless
 # --force.
@@ -36,16 +36,16 @@ need_file "${uninstall_test}" "plugin uninstall tests must exist"
 need_file "${cli}" "flynn-host plugin CLI must exist"
 need_file "${docs}" "plugin docs must exist"
 
-need_in "${cli}" 'plugin uninstall' \
+need_in "${cli}" 'plugin:uninstall' \
   "flynn-host plugin must expose uninstall"
-need_in "${cli}" 'plugin update' \
+need_in "${cli}" 'plugin:update' \
   "flynn-host plugin must expose update"
 need_in "${cli}" '--force' \
   "uninstall must expose --force for resource providers still in use"
 need_in "${cli_test}" 'TestPluginUninstallUsage' \
-  "docopt tests must cover flynn-host plugin uninstall"
+  "docopt tests must cover flynn-host plugin:uninstall"
 need_in "${cli_test}" 'TestPluginUpdateUsage' \
-  "docopt tests must cover flynn-host plugin update"
+  "docopt tests must cover flynn-host plugin:update"
 need_in "${uninstall}" 'func \(in \*Installer\) Uninstall' \
   "Installer.Uninstall must exist"
 need_in "${uninstall}" 'ensureProviderUnused' \
@@ -72,8 +72,8 @@ need_in "${install}" 'previousReleaseScaleDown' \
   "plugin reinstall must scale the previous release to zero"
 need_in "${install}" 'deployHook' \
   "plugin update must run hooks.upgrade instead of hooks.install"
-need_in "${docs}" 'plugin uninstall' \
-  "plugin docs must describe flynn-host plugin uninstall"
+need_in "${docs}" 'plugin:uninstall' \
+  "plugin docs must describe flynn-host plugin:uninstall"
 need_in "${docs}" 'dashboard lists them for cluster administrators' \
   "plugin docs must say the dashboard lists plugin system apps for cluster admins only"
 
@@ -82,4 +82,4 @@ if grep -nE 'Name[[:space:]]*==[[:space:]]*"dashboard"|name[[:space:]]*==[[:spac
   exit 1
 fi
 
-echo "ok flynn-host plugin uninstall reverses install generically"
+echo "ok flynn-host plugin:uninstall reverses install generically"

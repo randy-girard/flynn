@@ -3,12 +3,12 @@ package main
 import (
 	"io"
 
-	tu "github.com/flynn/flynn/controller/testutils"
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
 	. "github.com/flynn/go-check"
+	tu "github.com/randy-girard/flynn/controller/testutils"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func (s *S) createTestJob(c *C, in *ct.Job) *ct.Job {

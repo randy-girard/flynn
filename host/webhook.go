@@ -8,12 +8,12 @@ import (
 	"sync"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/dialer"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 const (

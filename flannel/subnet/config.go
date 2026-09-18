@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/flynn/flynn/flannel/pkg/ip"
+	"github.com/randy-girard/flynn/flannel/pkg/ip"
 )
 
 type Config struct {

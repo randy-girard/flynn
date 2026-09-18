@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/host/types"
+	"github.com/randy-girard/flynn/host/types"
 )
 
 func TestJobMatchesApp(t *testing.T) {

@@ -3,8 +3,8 @@ package fixer
 import (
 	"fmt"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func (f *ClusterFixer) FixFlannel() error {

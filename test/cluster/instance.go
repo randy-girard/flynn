@@ -14,13 +14,13 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/crypto/ssh"
 )
 

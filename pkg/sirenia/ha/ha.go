@@ -1,6 +1,6 @@
 package ha
 
-import ct "github.com/flynn/flynn/controller/types"
+import ct "github.com/randy-girard/flynn/controller/types"
 
 const (
 	// MinHosts is the smallest cluster that can run a sirenia replica set.

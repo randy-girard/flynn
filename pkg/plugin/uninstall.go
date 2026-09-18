@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // uninstallAPI is the controller subset used to tear down an installed plugin.
@@ -16,7 +16,7 @@ type uninstallAPI interface {
 	ResourceList(providerID string) ([]*ct.Resource, error)
 }
 
-// UninstallOptions is flynn-host plugin uninstall.
+// UninstallOptions is flynn-host plugin:uninstall.
 type UninstallOptions struct {
 	Name        string
 	Force       bool

@@ -5,7 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 
-	"github.com/flynn/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 )
 
 type GenTLSCertAction struct {

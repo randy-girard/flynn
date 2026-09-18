@@ -6,16 +6,16 @@ import (
 	"os"
 	"testing"
 
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/random"
 	. "github.com/flynn/go-check"
 	gzfs "github.com/mistifyio/go-zfs"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func Test(t *testing.T) { TestingT(t) }
 
 /*
-	Helper for temporary zpools, embeddable in tests.
+Helper for temporary zpools, embeddable in tests.
 */
 type TempZpool struct {
 	IDstring          string

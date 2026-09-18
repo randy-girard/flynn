@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/netpolicy"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 )
 
 var (

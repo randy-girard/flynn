@@ -5,8 +5,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func (d *DeployJob) deployInBatches() error {

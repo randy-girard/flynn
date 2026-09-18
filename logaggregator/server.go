@@ -8,12 +8,12 @@ import (
 	"os"
 	"sync"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/logaggregator/snapshot"
-	"github.com/flynn/flynn/logaggregator/utils"
-	"github.com/flynn/flynn/pkg/keepalive"
-	"github.com/flynn/flynn/pkg/syslog/rfc6587"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/logaggregator/snapshot"
+	"github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc6587"
 )
 
 type Server struct {

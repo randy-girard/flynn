@@ -114,14 +114,14 @@ and can be followed in real time with `flynn log -f`.
 
 ### External Logs
 
-Apps can stream logs to syslog with `flynn logsink:add syslog …` (one app) or
+Apps can stream logs to syslog with `flynn log-sink:add syslog …` (one app) or
 operators can forward **all user apps**, **one app**, or **Flynn system jobs**
 from a host:
 
 ```text
-flynn -a myapp logsink:add syslog syslog://logs.example:514/
-sudo flynn-host log-sink add syslog --scope apps syslog://logs.example:514/
-sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/
+flynn -a myapp log-sink:add syslog syslog://logs.example:514/
+sudo flynn-host log-sink:add syslog --scope apps syslog://logs.example:514/
+sudo flynn-host log-sink:add syslog --scope system syslog://logs.example:514/
 ```
 
 Optional cluster metrics (CPU, memory, disk, load) go to an OTLP collector
@@ -156,9 +156,9 @@ apex on install. Change the owner later from a host:
 
 ```text
 sudo flynn-host domain
-sudo flynn-host domain apex www
-sudo flynn-host domain apex dashboard
-sudo flynn-host domain apex --clear
+sudo flynn-host domain:apex www
+sudo flynn-host domain:apex dashboard
+sudo flynn-host domain:apex --clear
 ```
 
 Point DNS for the bare domain at the same addresses as the cluster (A/AAAA or
@@ -208,14 +208,14 @@ First, configure ACME with your contact email and agree to the Let's Encrypt
 Terms of Service:
 
 ```text
-flynn-host acme configure --email=admin@example.com --agree-tos
+flynn-host acme:configure --email=admin@example.com --agree-tos
 ```
 
 This command registers your ACME account and enables ACME for the cluster.
 You can check the current ACME configuration status with:
 
 ```text
-flynn-host acme status
+flynn-host acme:status
 ```
 
 Use `--staging` while testing (untrusted certificates) or `--directory-url` for
@@ -227,7 +227,7 @@ To enable Let's Encrypt on all system app routes (controller, dashboard, etc.),
 run the following command:
 
 ```text
-flynn-host acme enable-system-routes
+flynn-host acme:enable-system-routes
 ```
 
 After this, public certificates replace the bootstrap self-signed cert. Clear
@@ -236,7 +236,7 @@ the CLI TLS pin with `flynn cluster:refresh --clear`.
 To disable Let's Encrypt on all system app routes:
 
 ```text
-flynn-host acme disable-system-routes
+flynn-host acme:disable-system-routes
 ```
 
 #### Using Automatic TLS for Application Routes

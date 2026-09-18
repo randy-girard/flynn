@@ -7,13 +7,13 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/stream"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.Job {

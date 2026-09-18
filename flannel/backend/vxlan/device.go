@@ -9,7 +9,7 @@ import (
 	log "github.com/golang/glog"
 	"github.com/vishvananda/netlink"
 
-	"github.com/flynn/flynn/flannel/pkg/ip"
+	"github.com/randy-girard/flynn/flannel/pkg/ip"
 )
 
 type vxlanDeviceAttrs struct {

@@ -17,14 +17,14 @@ import (
 	"time"
 
 	"github.com/cupcake/jsonschema"
-	"github.com/flynn/flynn/controller/api"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/exec"
-	"github.com/flynn/flynn/pkg/random"
 	c "github.com/flynn/go-check"
 	"github.com/golang/protobuf/proto"
+	"github.com/randy-girard/flynn/controller/api"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/exec"
+	"github.com/randy-girard/flynn/pkg/random"
 	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -411,7 +411,7 @@ func (s *ControllerSuite) TestAppDeleteCleanup(t *c.C) {
 	t.Assert(r.git("push", "flynn", "master"), Succeeds)
 }
 
-// https://github.com/flynn/flynn/issues/2257
+// https://github.com/randy-girard/flynn/issues/2257
 func (s *ControllerSuite) TestResourceProvisionRecreatedApp(t *c.C) {
 	app := "app-recreate-" + random.String(8)
 	client := s.controllerClient(t)

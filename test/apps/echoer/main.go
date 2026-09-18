@@ -6,7 +6,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/flynn/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 func main() {

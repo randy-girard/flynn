@@ -17,17 +17,17 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/flynn/flynn/bootstrap"
-	controller "github.com/flynn/flynn/controller/client"
-	controllerdata "github.com/flynn/flynn/controller/data"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	hostconfig "github.com/flynn/flynn/host/config"
-	"github.com/flynn/flynn/pkg/exec"
-	"github.com/flynn/flynn/pkg/plugin"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/tlscert"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/bootstrap"
+	controller "github.com/randy-girard/flynn/controller/client"
+	controllerdata "github.com/randy-girard/flynn/controller/data"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	hostconfig "github.com/randy-girard/flynn/host/config"
+	"github.com/randy-girard/flynn/pkg/exec"
+	"github.com/randy-girard/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 )
 
 func init() {

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"syscall"
 
-	cfg "github.com/flynn/flynn/cli/config"
-	"github.com/flynn/flynn/cli/login/tokensource"
 	"github.com/flynn/go-docopt"
+	cfg "github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/cli/login/tokensource"
 )
 
 var gitRepo *bool

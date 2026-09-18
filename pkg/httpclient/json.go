@@ -3,6 +3,7 @@ package httpclient
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -14,8 +15,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 	"golang.org/x/oauth2"
 )
 
@@ -169,27 +170,7 @@ func (c *Client) Hijack(method, path string, header http.Header, in interface{})
 		addr = net.JoinHostPort(addr, port)
 	}
 
-	dial := c.HijackDial
-	if dial == nil {
-		if uri.Scheme == "https" {
-			dial = func(network, addr string) (net.Conn, error) {
-				host, _, _ := net.SplitHostPort(addr)
-				conn, err := net.Dial(network, addr)
-				if err != nil {
-					return nil, err
-				}
-				return struct {
-					net.Conn
-					writeCloser
-				}{
-					tls.Client(conn, &tls.Config{ServerName: host}),
-					conn.(writeCloser),
-				}, nil
-			}
-		} else {
-			dial = net.Dial
-		}
-	}
+	dial := c.hijackDial(uri)
 
 	conn, err := dial("tcp", addr)
 	if err != nil {
@@ -245,6 +226,74 @@ func (c *Client) Hijack(method, path string, header http.Header, in interface{})
 		}
 	}
 	return rwc.(ReadWriteCloser), nil
+}
+
+// hijackDial prefers an explicit HijackDial (pinned TLS), then the same Dial
+// the HTTP client uses. flynn-host sets Transport.Dial to resolve *.discoverd
+// via the discoverd API because systemd-resolved has no .discoverd zone.
+// Falling back to net.Dial here would ignore that dialer and fail lookup.
+func (c *Client) hijackDial(uri *url.URL) DialFunc {
+	if c.HijackDial != nil {
+		return c.HijackDial
+	}
+	t := httpTransport(c.HTTP)
+	if uri.Scheme == "https" {
+		if t != nil && t.DialTLS != nil {
+			return t.DialTLS
+		}
+		if d := transportTCPDial(t); d != nil {
+			return tlsWrapDial(d)
+		}
+		return tlsWrapDial(net.Dial)
+	}
+	if d := transportTCPDial(t); d != nil {
+		return d
+	}
+	return net.Dial
+}
+
+func httpTransport(hc *http.Client) *http.Transport {
+	if hc == nil || hc.Transport == nil {
+		return nil
+	}
+	rt := hc.Transport
+	if ot, ok := rt.(*oauth2.Transport); ok {
+		rt = ot.Base
+	}
+	t, _ := rt.(*http.Transport)
+	return t
+}
+
+func transportTCPDial(t *http.Transport) DialFunc {
+	if t == nil {
+		return nil
+	}
+	if t.Dial != nil {
+		return t.Dial
+	}
+	if t.DialContext != nil {
+		return func(network, addr string) (net.Conn, error) {
+			return t.DialContext(context.Background(), network, addr)
+		}
+	}
+	return nil
+}
+
+func tlsWrapDial(d DialFunc) DialFunc {
+	return func(network, addr string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(addr)
+		conn, err := d(network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			net.Conn
+			writeCloser
+		}{
+			tls.Client(conn, &tls.Config{ServerName: host}),
+			conn.(writeCloser),
+		}, nil
+	}
 }
 
 // Stream returns a stream.Stream for a specific method and path. in is an

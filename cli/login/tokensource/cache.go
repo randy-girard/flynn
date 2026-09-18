@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/flynn/flynn/cli/login/internal/oauth"
-	"github.com/flynn/flynn/pkg/lockedfile"
+	"github.com/randy-girard/flynn/cli/login/internal/oauth"
+	"github.com/randy-girard/flynn/pkg/lockedfile"
 	"golang.org/x/oauth2"
 )
 

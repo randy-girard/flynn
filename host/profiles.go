@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	host "github.com/flynn/flynn/host/types"
 	"github.com/opencontainers/runc/libcontainer/configs"
+	host "github.com/randy-girard/flynn/host/types"
 	"golang.org/x/sys/unix"
 )
 

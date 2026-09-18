@@ -16,17 +16,17 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/exec"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/schedutil"
-	"github.com/flynn/flynn/pkg/tlscert"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/exec"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/schedutil"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 )
 
 type BootConfig struct {

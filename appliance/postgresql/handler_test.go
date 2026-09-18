@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"testing"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/status"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 type hbStub struct {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authorizer"
+	api "github.com/randy-girard/flynn/controller/api"
+	"github.com/randy-girard/flynn/controller/authorizer"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

@@ -15,11 +15,11 @@ import (
 	"time"
 
 	acmelib "github.com/eggsampler/acme/v3"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/dialer"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/dialer"
 )
 
 const (
@@ -28,65 +28,102 @@ const (
 )
 
 func init() {
-	Register("acme", runACME, `
+	Register("acme", runACMEStatusCmd, `
 usage: flynn-host acme
-       flynn-host acme configure --email=<email> [--agree-tos] [--staging] [--directory-url=<url>]
-       flynn-host acme enable
-       flynn-host acme disable
-       flynn-host acme status
-       flynn-host acme enable-system-routes
-       flynn-host acme disable-system-routes
 
-Manage ACME/Let's Encrypt configuration for the cluster.
+Show current ACME/Let's Encrypt configuration status.
+`)
+	Register("acme:configure", runACMEConfigureCmd, `
+usage: flynn-host acme:configure --email=<email> [--agree-tos] [--staging] [--directory-url=<url>]
+
+Configure ACME with a contact email address.
 
 ACME must be configured and enabled before automatic TLS certificates can be
 provisioned for routes using the --auto-tls flag.
 
-Commands:
-    With no arguments, shows the current ACME configuration status.
-
-    configure              Configure ACME with a contact email address
-    enable                 Enable ACME/Let's Encrypt for the cluster
-    disable                Disable ACME/Let's Encrypt for the cluster
-    status                 Show current ACME configuration status
-    enable-system-routes   Enable Let's Encrypt on all system app routes
-    disable-system-routes  Disable Let's Encrypt on all system app routes
-
 Options:
-    --email=<email>          Contact email for Let's Encrypt account (required for configure)
+    --email=<email>          Contact email for Let's Encrypt account (required)
     --agree-tos              Agree to the Let's Encrypt Terms of Service
     --staging                Use Let's Encrypt staging server (for testing, issues untrusted certs)
     --directory-url=<url>    ACME directory URL (defaults to Let's Encrypt production)
 
 Examples:
-    $ flynn-host acme configure --email=admin@example.com --agree-tos
-    $ flynn-host acme configure --email=admin@example.com --agree-tos --staging
-    $ flynn-host acme enable
-    $ flynn-host acme status
-    $ flynn-host acme enable-system-routes
-    $ flynn-host acme disable-system-routes
+    $ flynn-host acme:configure --email=admin@example.com --agree-tos
+    $ flynn-host acme:configure --email=admin@example.com --agree-tos --staging
+`)
+	Register("acme:enable", runACMEEnableCmd, `
+usage: flynn-host acme:enable
+
+Enable ACME/Let's Encrypt for the cluster.
+`)
+	Register("acme:disable", runACMEDisableCmd, `
+usage: flynn-host acme:disable
+
+Disable ACME/Let's Encrypt for the cluster.
+`)
+	Register("acme:status", runACMEStatusCmd, `
+usage: flynn-host acme:status
+
+Show current ACME/Let's Encrypt configuration status.
+`)
+	Register("acme:enable-system-routes", runACMEEnableSystemRoutesCmd, `
+usage: flynn-host acme:enable-system-routes
+
+Enable Let's Encrypt on all system app routes.
+`)
+	Register("acme:disable-system-routes", runACMEDisableSystemRoutesCmd, `
+usage: flynn-host acme:disable-system-routes
+
+Disable Let's Encrypt on all system app routes.
 `)
 }
 
-func runACME(args *docopt.Args) error {
+func runACMEConfigureCmd(args *docopt.Args) error {
 	client, err := getControllerClient()
 	if err != nil {
 		return fmt.Errorf("error connecting to controller: %s", err)
 	}
+	return runACMEConfigure(args, client)
+}
 
-	if args.Bool["configure"] {
-		return runACMEConfigure(args, client)
-	} else if args.Bool["enable"] {
-		return runACMEEnable(client)
-	} else if args.Bool["disable"] {
-		return runACMEDisable(client)
-	} else if args.Bool["enable-system-routes"] {
-		return runACMEEnableSystemRoutes(client)
-	} else if args.Bool["disable-system-routes"] {
-		return runACMEDisableSystemRoutes(client)
+func runACMEEnableCmd(_ *docopt.Args) error {
+	client, err := getControllerClient()
+	if err != nil {
+		return fmt.Errorf("error connecting to controller: %s", err)
 	}
-	// Default: show status
+	return runACMEEnable(client)
+}
+
+func runACMEDisableCmd(_ *docopt.Args) error {
+	client, err := getControllerClient()
+	if err != nil {
+		return fmt.Errorf("error connecting to controller: %s", err)
+	}
+	return runACMEDisable(client)
+}
+
+func runACMEStatusCmd(_ *docopt.Args) error {
+	client, err := getControllerClient()
+	if err != nil {
+		return fmt.Errorf("error connecting to controller: %s", err)
+	}
 	return runACMEStatus(client)
+}
+
+func runACMEEnableSystemRoutesCmd(_ *docopt.Args) error {
+	client, err := getControllerClient()
+	if err != nil {
+		return fmt.Errorf("error connecting to controller: %s", err)
+	}
+	return runACMEEnableSystemRoutes(client)
+}
+
+func runACMEDisableSystemRoutesCmd(_ *docopt.Args) error {
+	client, err := getControllerClient()
+	if err != nil {
+		return fmt.Errorf("error connecting to controller: %s", err)
+	}
+	return runACMEDisableSystemRoutes(client)
 }
 
 func getControllerClient() (controller.Client, error) {
@@ -211,7 +248,7 @@ func runACMEConfigure(args *docopt.Args, client controller.Client) error {
 	fmt.Println("ACME account registered and enabled successfully.")
 	fmt.Println("\nYou can now use --auto-tls when adding routes to automatically provision TLS certificates.")
 	fmt.Println("\nTo enable Let's Encrypt on all system app routes, run:")
-	fmt.Println("  flynn-host acme enable-system-routes")
+	fmt.Println("  flynn-host acme:enable-system-routes")
 	return nil
 }
 
@@ -329,10 +366,10 @@ func runACMEEnable(client controller.Client) error {
 	}
 
 	if config.ContactEmail == "" || !config.HasAccountKey {
-		return fmt.Errorf("ACME is not configured. Run 'flynn-host acme configure --email=<email> --agree-tos' first.")
+		return fmt.Errorf("ACME is not configured. Run 'flynn-host acme:configure --email=<email> --agree-tos' first.")
 	}
 	if !config.TermsOfServiceAgreed {
-		return fmt.Errorf("You must agree to the Let's Encrypt Terms of Service. Run 'flynn-host acme configure --email=%s --agree-tos'.", config.ContactEmail)
+		return fmt.Errorf("You must agree to the Let's Encrypt Terms of Service. Run 'flynn-host acme:configure --email=%s --agree-tos'.", config.ContactEmail)
 	}
 
 	if config.Enabled {
@@ -407,7 +444,7 @@ func runACMEEnableSystemRoutes(client controller.Client) error {
 		return fmt.Errorf("error getting ACME config: %s", err)
 	}
 	if !config.Enabled {
-		return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first.")
+		return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' first.")
 	}
 
 	fmt.Println("Enabling Let's Encrypt for all system app routes...")

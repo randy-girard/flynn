@@ -8,9 +8,9 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/flynn/flynn/controller/client"
-	logaggc "github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/controller/client"
+	logaggc "github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
 
 	"github.com/flynn/go-docopt"
 )

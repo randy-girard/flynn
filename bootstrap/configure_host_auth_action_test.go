@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 // statusServer is an httptest server that serves /host/status with a

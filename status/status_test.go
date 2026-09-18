@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 func TestStatusHandlerPrivateIPBypassesKey(t *testing.T) {

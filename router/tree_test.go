@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/flynn/flynn/router/types"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/router/types"
 )
 
 func (s *S) TestTreeSlice(c *C) {

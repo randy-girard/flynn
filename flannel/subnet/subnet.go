@@ -12,8 +12,8 @@ import (
 
 	log "github.com/golang/glog"
 
-	"github.com/flynn/flynn/flannel/pkg/ip"
-	"github.com/flynn/flynn/flannel/pkg/task"
+	"github.com/randy-girard/flynn/flannel/pkg/ip"
+	"github.com/randy-girard/flynn/flannel/pkg/task"
 )
 
 const (
@@ -252,7 +252,7 @@ func (sm *SubnetManager) GetConfig() *Config {
 	return sm.config
 }
 
-/// Implementation
+// / Implementation
 func parseSubnetKey(s string) (ip.IP4Net, error) {
 	if parts := subnetRegex.FindStringSubmatch(s); len(parts) == 3 {
 		snIp := net.ParseIP(parts[1]).To4()

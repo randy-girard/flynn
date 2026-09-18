@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	host "github.com/flynn/flynn/host/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 func TestIsBuildJob(t *testing.T) {

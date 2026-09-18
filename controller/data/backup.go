@@ -1,9 +1,9 @@
 package data
 
 import (
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 type BackupRepo struct {

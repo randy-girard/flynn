@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 func TestPrepareReqTokenTakesPrecedenceOverKey(t *testing.T) {

@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func init() {

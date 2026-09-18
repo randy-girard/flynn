@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	host "github.com/flynn/flynn/host/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 func TestNewHostWithKeyAndStatus(t *testing.T) {

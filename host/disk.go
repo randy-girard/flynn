@@ -2,17 +2,16 @@ package main
 
 import (
 	"errors"
-	"os"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
-	host "github.com/flynn/flynn/host/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 const (
-	flynnDataRoot       = "/var/lib/flynn"
+	hostRootFS          = "/"
 	diskWatchInterval   = 30 * time.Second
 	diskFullCooldown    = 5 * time.Minute
 	diskFullUsedPercent = 98
@@ -20,30 +19,15 @@ const (
 	diskFullMinTotal    = 1 << 30   // skip tiny filesystems (tmpfs, etc.)
 )
 
-// flynnNodeDiskPath is the filesystem Flynn itself lives on: the data root
-// when that directory exists, otherwise the host root.
-func flynnNodeDiskPath() string {
-	if st, err := os.Stat(flynnDataRoot); err == nil && st.IsDir() {
-		return flynnDataRoot
-	}
-	return "/"
-}
-
-// fillDiskStats records usage of the Flynn node filesystem into stats.
+// fillDiskStats records usage of the host root filesystem into stats.
+// CPU and memory are already machine-wide; disk matches that instead of
+// only the Flynn data directory.
 func fillDiskStats(stats *host.HostResourceStats) error {
-	path := flynnNodeDiskPath()
 	var statfs syscall.Statfs_t
-	if err := syscall.Statfs(path, &statfs); err != nil {
-		if path != "/" {
-			path = "/"
-			if err2 := syscall.Statfs(path, &statfs); err2 != nil {
-				return err2
-			}
-		} else {
-			return err
-		}
+	if err := syscall.Statfs(hostRootFS, &statfs); err != nil {
+		return err
 	}
-	applyStatfs(stats, path, statfs)
+	applyStatfs(stats, hostRootFS, statfs)
 	return nil
 }
 
@@ -67,8 +51,8 @@ func diskUsedPercent(stats *host.HostResourceStats) int {
 	return int(stats.DiskUsedBytes * 100 / stats.DiskTotalBytes)
 }
 
-// diskOutOfSpace is true when the Flynn node filesystem cannot accept more
-// writes without risking job and image failures.
+// diskOutOfSpace is true when the host root filesystem cannot accept more
+// writes without risking jobs, images, and the rest of the machine.
 func diskOutOfSpace(stats *host.HostResourceStats) bool {
 	if stats == nil || stats.DiskTotalBytes == 0 {
 		return false

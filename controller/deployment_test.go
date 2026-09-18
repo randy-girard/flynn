@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	hh "github.com/flynn/flynn/pkg/httphelper"
 	. "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 func (s *S) TestCreateDeployment(c *C) {

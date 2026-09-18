@@ -40,6 +40,9 @@ func DefaultGitHubOrg() string {
 			return repo[:i]
 		}
 	}
+	if org := officialGitHubOrg(); org != "" {
+		return org
+	}
 	return defaultGitHubOrg
 }
 
@@ -54,17 +57,21 @@ func pluginRepoRoot() string {
 func defaultConfig() *Config {
 	cfg := &Config{
 		GitHubOrg: DefaultGitHubOrg(),
-		Aliases:   DiscoverLocalPlugins(pluginRepoRoot()),
+		Aliases:   officialAliases(),
 	}
 	if cfg.Aliases == nil {
 		cfg.Aliases = map[string]Alias{}
+	}
+	for name, a := range DiscoverLocalPlugins(pluginRepoRoot()) {
+		cfg.Aliases[name] = mergeAlias(cfg.Aliases[name], a)
 	}
 	mergeInstalledAliases(cfg.Aliases, ReadInstalled(""))
 	return cfg
 }
 
 // LoadConfig reads pluginsFile (default /etc/flynn/plugins.json). A missing
-// file is not an error: builtin aliases and FLYNN_PLUGIN_GITHUB_ORG still apply.
+// file is not an error: the official catalog, sibling checkouts, and
+// FLYNN_PLUGIN_GITHUB_ORG still apply. Operator aliases override the catalog.
 func LoadConfig(pluginsFile string) (*Config, error) {
 	cfg := defaultConfig()
 	if pluginsFile == "" {

@@ -7,8 +7,8 @@ import (
 	_ "net/http/pprof"
 	"os"
 
-	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 )
 
 var usage = `

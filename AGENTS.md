@@ -2,6 +2,10 @@
 
 This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branch is `develop`. Host OS is Ubuntu 24.04; Go is 1.24 with `-mod=vendor`.
 
+## Colon commands
+
+Nested `flynn` and `flynn-host` verbs are `noun:verb` (`env:get`, `plugin:install`, `volume:gc`). Standalone verbs stay verbs (`backup`, `daemon`, `update`). Space form is an alias only. See `.cursor/rules/colon-commands.mdc`.
+
 ## Keep docs and tests in sync with code
 
 When you change behavior, **do not ship code alone**. In the same change (or an immediate follow-up in the same PR):
@@ -21,6 +25,10 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
 4. **Do not leave docs describing removed or replaced behavior** (old Ubuntu, old DB versions, `dl.flynn.io`, tup, upstart, HHVM, Python 2, godep as the default, website `/docs/...` URLs).
 
 If a change is internal-only and has no user-visible effect, say so in the PR and skip docs — still add tests when the logic can regress.
+
+## Dashboard mock (sibling checkout only)
+
+**If `../flynn-plugin-dashboard` exists**, that plugin’s local Compose stack uses `mock/` instead of this cluster. When you change `GET /cluster/stats`, `GET /cluster/jobs-stats`, `GET /apps/:id/jobs-stats`, or the JSON on `host.HostResourceStats` / `host.ContainerStats`, update `../flynn-plugin-dashboard/mock` in the same work so the local dashboard still reflects the APIs. If that sibling folder is missing, ignore this.
 
 ## Git commits
 

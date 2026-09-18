@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/flannel/pkg/ip"
+	"github.com/randy-girard/flynn/flannel/pkg/ip"
 )
 
 type testSubnet struct {

@@ -1,10 +1,10 @@
 package main
 
 import (
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/cluster"
 	c "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 type VolumeSuite struct {

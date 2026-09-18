@@ -12,17 +12,17 @@ import (
 	"strconv"
 	"time"
 
-	cc "github.com/flynn/flynn/controller/client"
-	v1controller "github.com/flynn/flynn/controller/client/v1"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	g "github.com/flynn/flynn/pkg/examplegenerator"
-	"github.com/flynn/flynn/pkg/httprecorder"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/resource"
-	"github.com/flynn/flynn/pkg/typeconv"
-	router "github.com/flynn/flynn/router/types"
+	cc "github.com/randy-girard/flynn/controller/client"
+	v1controller "github.com/randy-girard/flynn/controller/client/v1"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	g "github.com/randy-girard/flynn/pkg/examplegenerator"
+	"github.com/randy-girard/flynn/pkg/httprecorder"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/resource"
+	"github.com/randy-girard/flynn/pkg/typeconv"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type generator struct {

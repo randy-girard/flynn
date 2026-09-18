@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func writeAppPlugin(t *testing.T, dir, name string) {

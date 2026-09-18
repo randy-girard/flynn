@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/flynn/flynn/cli/login"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/cli/login"
 )
 
 func init() {

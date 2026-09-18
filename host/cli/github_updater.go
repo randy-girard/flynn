@@ -20,22 +20,22 @@ import (
 	"syscall"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/cleanup"
-	"github.com/flynn/flynn/host/downloader"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/dialer"
-	"github.com/flynn/flynn/pkg/ghrelease"
-	"github.com/flynn/flynn/pkg/installsource"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/updaterdeploy"
-	"github.com/flynn/flynn/pkg/version"
-	"github.com/flynn/flynn/updater/imageenv"
-	updater "github.com/flynn/flynn/updater/types"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/cleanup"
+	"github.com/randy-girard/flynn/host/downloader"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/ghrelease"
+	"github.com/randy-girard/flynn/pkg/installsource"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/updaterdeploy"
+	"github.com/randy-girard/flynn/pkg/version"
+	"github.com/randy-girard/flynn/updater/imageenv"
+	updater "github.com/randy-girard/flynn/updater/types"
 )
 
 // Rolling-restart resilience knobs. Tunable via flags on `flynn-host update`
@@ -1502,7 +1502,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		appLog := log.New("name", app.Name)
 
 		if app.Plugin() {
-			appLog.Info("skipped deploy of plugin app (use flynn-host plugin update)")
+			appLog.Info("skipped deploy of plugin app (use flynn-host plugin:update)")
 			continue
 		}
 

@@ -1,10 +1,10 @@
 package main
 
 import (
-	. "github.com/flynn/flynn/controller/testutils"
-	ct "github.com/flynn/flynn/controller/types"
 	. "github.com/flynn/go-check"
 	"github.com/inconshreveable/log15"
+	. "github.com/randy-girard/flynn/controller/testutils"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func (TestSuite) TestMaybePromoteSireniaHA(c *C) {

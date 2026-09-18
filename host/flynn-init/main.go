@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/flynn/flynn/host/containerinit"
+	"github.com/randy-girard/flynn/host/containerinit"
 )
 
 func main() {

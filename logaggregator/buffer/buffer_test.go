@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
 
 // Hook gocheck up to the "go test" runner

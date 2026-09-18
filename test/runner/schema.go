@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 var migrations *postgres.Migrations

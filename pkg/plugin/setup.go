@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 const nonInteractiveEnv = "FLYNN_PLUGIN_NONINTERACTIVE"

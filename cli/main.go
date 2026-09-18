@@ -13,12 +13,12 @@ import (
 	"unicode"
 
 	"github.com/docker/go-units"
-	cfg "github.com/flynn/flynn/cli/config"
-	controller "github.com/flynn/flynn/controller/client"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
+	cfg "github.com/randy-girard/flynn/cli/config"
+	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 var (
@@ -62,17 +62,17 @@ Commands:
 	limit                list resource limits
 	limit:set            set resource limits
 	log                  get app log
+	log-sink             list app log sinks
+	log-sink:add         add an app log sink
+	log-sink:remove      remove an app log sink
 	login                authenticate with the dashboard (OAuth)
-	logsink              list app log sinks
-	logsink:add          add an app log sink
-	logsink:remove       remove an app log sink
 	meta                 list app metadata
 	meta:set             set app metadata
 	meta:unset           unset app metadata
 	pg:dump              dump a postgres database
 	pg:psql              postgres console
 	pg:restore           restore a postgres dump
-	plugin:list          list plugins installed on this cluster
+	plugin:list          list plugins installed on this cluster (--known for official plugins)
 	provider             list resource providers
 	provider:add         add a resource provider
 	ps                   list jobs

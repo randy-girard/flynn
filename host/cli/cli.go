@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 type command struct {

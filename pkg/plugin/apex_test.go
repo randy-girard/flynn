@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type apexStub struct {

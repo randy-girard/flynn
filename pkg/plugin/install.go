@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	router "github.com/flynn/flynn/router/types"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 const (
@@ -54,7 +54,7 @@ type Installer struct {
 }
 
 // WebhookHost is the subset of pkg/cluster.Host used to register webhooks
-// (the same API as `flynn-host webhooks add`).
+// (the same API as `flynn-host webhooks:add`).
 type WebhookHost interface {
 	ID() string
 	ListWebhooks() ([]*host.WebhookConfig, error)
@@ -74,7 +74,7 @@ type InstallOptions struct {
 	// AutoTLS enables Let's Encrypt on this plugin's HTTP routes (the
 	// same as `flynn route add http --auto-tls`). Requires cluster ACME.
 	AutoTLS bool
-	// Update is flynn-host plugin update: the plugin app must already exist.
+	// Update is flynn-host plugin:update: the plugin app must already exist.
 	// Install still upgrades an existing app, but update refuses a missing one.
 	Update bool
 }
@@ -195,7 +195,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 		}
 	case err == controller.ErrNotFound:
 		if opts.Update {
-			return fmt.Errorf("plugin %s is not installed; flynn-host plugin install %s", m.Name, m.Name)
+			return fmt.Errorf("plugin %s is not installed; flynn-host plugin:install %s", m.Name, m.Name)
 		}
 		app, err = in.createApp(m, resolved)
 		if err != nil {
@@ -606,9 +606,9 @@ func (in *Installer) attachAutoTLS(route *router.Route, require bool) error {
 	}
 	if !enabled {
 		if require {
-			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first")
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' first")
 		}
-		in.logf("skipping auto TLS for %s (ACME is not enabled; run flynn-host acme configure --email=<email> --agree-tos)", route.Domain)
+		in.logf("skipping auto TLS for %s (ACME is not enabled; run flynn-host acme:configure --email=<email> --agree-tos)", route.Domain)
 		return nil
 	}
 	domain := route.Domain
@@ -636,7 +636,7 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 				return fmt.Errorf("check ACME: %w", err)
 			}
 			if !on {
-				return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme configure --email=<email> --agree-tos' first")
+				return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' first")
 			}
 		}
 		if err == nil {

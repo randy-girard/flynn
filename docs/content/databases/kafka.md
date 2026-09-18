@@ -9,9 +9,9 @@ Kafka is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
 cluster host, then provision from an app. See [Plugins](plugins.md).
 
 ```text
-sudo flynn-host plugin install kafka --ref vX
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-kafka.git --ref vX
-sudo flynn-host plugin install ../flynn-plugin-kafka
+sudo flynn-host plugin:install kafka --ref vX
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-kafka.git --ref vX
+sudo flynn-host plugin:install ../flynn-plugin-kafka
 flynn resource add kafka
 ```
 

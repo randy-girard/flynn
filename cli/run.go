@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/term"
 )
 
 func init() {

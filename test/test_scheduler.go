@@ -10,17 +10,17 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/types"
-	logaggc "github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/typeconv"
-	routerc "github.com/flynn/flynn/router/client"
-	"github.com/flynn/flynn/router/types"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/types"
+	logaggc "github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/typeconv"
+	routerc "github.com/randy-girard/flynn/router/client"
+	"github.com/randy-girard/flynn/router/types"
 )
 
 type SchedulerSuite struct {

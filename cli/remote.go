@@ -4,8 +4,8 @@ import (
 	"log"
 	"os/exec"
 
-	"github.com/flynn/flynn/controller/client"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
 )
 
 func init() {

@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/connutil"
-	"github.com/flynn/flynn/router/proxy"
-	router "github.com/flynn/flynn/router/types"
+	"github.com/randy-girard/flynn/pkg/connutil"
+	"github.com/randy-girard/flynn/router/proxy"
+	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 )
 

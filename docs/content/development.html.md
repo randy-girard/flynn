@@ -49,7 +49,7 @@ ZFS, `flynn-host`, or the Vagrant smoke cluster.
 Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
 `../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`,
 `../flynn-plugin-otel`, …). Install them on a cluster host with
-`flynn-host plugin install` after bootstrap. See [Plugins](plugins.md).
+`flynn-host plugin:install` after bootstrap. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
@@ -338,10 +338,11 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   Plugin jobs publish only the overlay delta; hosts fetch Flynn ubuntu-noble
   from the Flynn GitHub Release (`flynn.plugin.base`). A published plugin
   release is skipped on re-dispatch; drafts and failed uploads are retried.
-  Plugin names are not in Flynn source: set Actions variable
+  Plugin names for CI dispatch are not hardcoded: set Actions variable
   `PLUGIN_RELEASE_REPOS` (`owner/repo` per line) and secret
   `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on those repos).
-  Empty variable skips dispatch.
+  `flynn-host plugin:install` short names come from
+  `pkg/plugin/official-plugins.json`. Empty variable skips dispatch.
 
 ## Pull requests
 

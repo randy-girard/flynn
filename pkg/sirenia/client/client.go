@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/sirenia/state"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 // ProcessIDKey returns the discoverd Meta key holding appliance-level peer

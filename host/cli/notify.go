@@ -4,8 +4,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flynn/flynn/pkg/ghrelease"
-	"github.com/flynn/flynn/pkg/version"
+	"github.com/randy-girard/flynn/pkg/ghrelease"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 func hostUpdateCheckFile() string {

@@ -3,8 +3,8 @@ package main
 import (
 	"path/filepath"
 
-	"github.com/flynn/flynn/host/types"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/host/types"
 )
 
 type ResourceCheckSuite struct{}

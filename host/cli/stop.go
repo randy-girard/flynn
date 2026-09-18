@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {

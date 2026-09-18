@@ -18,12 +18,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/cli/config"
-	"github.com/flynn/flynn/cli/login/internal/oauth"
-	"github.com/flynn/flynn/cli/login/tokensource"
-	controller "github.com/flynn/flynn/controller/client"
-	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/cli/login/internal/oauth"
+	"github.com/randy-girard/flynn/cli/login/tokensource"
+	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/oauth2"
 )
 

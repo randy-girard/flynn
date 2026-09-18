@@ -7,7 +7,7 @@ layout: docs
 
 Postgres is included in Flynn. Other engines (Redis, MariaDB, MongoDB, Kafka,
 ClickHouse) are **plugins**: the operator installs them with
-[`flynn-host plugin install`](plugins.md) from a sibling repo or git URL. The
+[`flynn-host plugin:install`](plugins.md) from a sibling repo or git URL. The
 user `flynn` CLI only shows those commands after the plugin is installed on the
 cluster. Command syntax lives on the plugin (`flynn-plugin.json` `cli`); the
 CLI fetches it from the cluster and runs matching actions as controller jobs.

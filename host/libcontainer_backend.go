@@ -22,26 +22,6 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/containerinit"
-	"github.com/flynn/flynn/host/logmux"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	volumemanager "github.com/flynn/flynn/host/volume/manager"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	logutils "github.com/flynn/flynn/logaggregator/utils"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/dialer"
-	"github.com/flynn/flynn/pkg/ifname"
-	"github.com/flynn/flynn/pkg/ipallocator"
-	"github.com/flynn/flynn/pkg/iptables"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/rpcplus"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
-	"github.com/flynn/flynn/pkg/term"
-	"github.com/flynn/flynn/pkg/verify"
 	"github.com/golang/groupcache/singleflight"
 	"github.com/inconshreveable/log15"
 	dhcp "github.com/krolaw/dhcp4"
@@ -51,6 +31,26 @@ import (
 	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/seccomp"
 	"github.com/rancher/sparse-tools/sparse"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/containerinit"
+	"github.com/randy-girard/flynn/host/logmux"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	logutils "github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/ifname"
+	"github.com/randy-girard/flynn/pkg/ipallocator"
+	"github.com/randy-girard/flynn/pkg/iptables"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/rpcplus"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
+	"github.com/randy-girard/flynn/pkg/term"
+	"github.com/randy-girard/flynn/pkg/verify"
 	"github.com/vishvananda/netlink"
 )
 
@@ -254,7 +254,7 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	}
 	if !bridgeExists {
 		// We need to explicitly assign the MAC address to avoid it changing to a lower value
-		// See: https://github.com/flynn/flynn/issues/223
+		// See: https://github.com/randy-girard/flynn/issues/223
 		mac := random.Bytes(5)
 		if err := netlink.LinkSetHardwareAddr(bridge, append([]byte{0xfe}, mac...)); err != nil {
 			return err
@@ -2457,9 +2457,9 @@ func (l *LibcontainerBackend) GetHostStats() (*host.HostResourceStats, error) {
 		return nil, fmt.Errorf("error reading uptime: %s", err)
 	}
 
-	// Disk stats for the Flynn node filesystem
+	// Disk stats for the host root filesystem
 	if err := fillDiskStats(result); err != nil && l.Logger != nil {
-		l.Logger.Warn("error reading node disk stats", "err", err)
+		l.Logger.Warn("error reading host disk stats", "err", err)
 	}
 
 	// Network stats from /proc/net/dev

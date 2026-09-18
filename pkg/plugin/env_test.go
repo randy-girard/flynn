@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 type releaseMap map[string]*ct.Release

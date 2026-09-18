@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"io"
 
-	"github.com/flynn/flynn/pkg/httprecorder"
+	"github.com/randy-girard/flynn/pkg/httprecorder"
 )
 
 type Example struct {

@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/flynn/flynn/pkg/testutils"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/testutils"
 )
 
 type ZfsSnapshotTests struct {

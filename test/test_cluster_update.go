@@ -10,13 +10,13 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/cluster"
-	sc "github.com/flynn/flynn/pkg/sirenia/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	c "github.com/flynn/go-check"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	sc "github.com/randy-girard/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 // clusterUpdateHelpers are shared by rolling-restart and sirenia recovery tests.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/squashfs"
+	"github.com/randy-girard/flynn/pkg/squashfs"
 )
 
 // TestMksquashfsCommandCapsMemory guards against mksquashfs reverting to its

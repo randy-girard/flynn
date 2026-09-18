@@ -3,8 +3,8 @@ package backend
 import (
 	"io"
 
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 var Postgres Backend = pg{}

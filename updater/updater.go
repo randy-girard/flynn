@@ -8,17 +8,17 @@ import (
 	"os"
 	"time"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/updaterdeploy"
-	"github.com/flynn/flynn/pkg/version"
-	"github.com/flynn/flynn/updater/accesstoken"
-	"github.com/flynn/flynn/updater/imageenv"
-	"github.com/flynn/flynn/updater/types"
 	"github.com/inconshreveable/log15"
 	"github.com/mattn/go-colorable"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/updaterdeploy"
+	"github.com/randy-girard/flynn/pkg/version"
+	"github.com/randy-girard/flynn/updater/accesstoken"
+	"github.com/randy-girard/flynn/updater/imageenv"
+	"github.com/randy-girard/flynn/updater/types"
 )
 
 var redisImage, slugBuilder, slugRunner, dockerBuilder, kafkaImage, clickHouseImage *ct.Artifact
@@ -249,7 +249,7 @@ func run() error {
 		log := log.New("name", app.Name)
 
 		if app.Plugin() {
-			log.Info("skipped deploy of plugin app (use flynn-host plugin update)")
+			log.Info("skipped deploy of plugin app (use flynn-host plugin:update)")
 			continue
 		}
 

@@ -5,11 +5,11 @@ import (
 	"net/http"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/status"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 type HealthcheckSuite struct {

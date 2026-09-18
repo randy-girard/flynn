@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/flynn/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 )
 
 var tlsCerts = map[string]*tlscert.Cert{

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func TestImageenvIDs(t *testing.T) {

@@ -3,8 +3,8 @@ package health
 import (
 	"time"
 
-	"github.com/flynn/flynn/pkg/stream"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type Monitor struct {

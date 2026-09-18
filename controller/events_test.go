@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/flynn/flynn/controller/data"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/random"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/data"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func (s *S) TestEvents(c *C) {

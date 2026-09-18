@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/attempt"
 )
 
 func Test(t *testing.T) {

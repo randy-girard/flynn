@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func TestFilterPluginUsageKeepsCoreCommands(t *testing.T) {
@@ -319,7 +319,7 @@ func TestMissingPluginCommand(t *testing.T) {
 		t.Fatalf("core CLI must not require a plugin: %v", err)
 	}
 	err := missingPluginCommand("mongodb", nil, errors.New("offline"))
-	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin install mongodb") {
+	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin:install mongodb") {
 		t.Fatalf("got %v", err)
 	}
 	err = missingPluginCommand("mongodb", &plugin.Catalog{}, nil)
@@ -339,7 +339,7 @@ func TestRequirePluginCommandLooksUpCatalog(t *testing.T) {
 	t.Cleanup(func() { plugin.CorePluginCommands = old })
 	plugin.CorePluginCommands = []string{"mysql"}
 	err := requirePluginCommand("mysql")
-	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin install mysql") {
+	if err == nil || !strings.Contains(err.Error(), "flynn-host plugin:install mysql") {
 		t.Fatalf("got %v", err)
 	}
 }

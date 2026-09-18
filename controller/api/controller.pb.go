@@ -1434,7 +1434,7 @@ func (x *App) GetDeleteTime() *timestamppb.Timestamp {
 	return nil
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 type HostHealthCheck struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Type is one of tcp, http, https
@@ -1554,7 +1554,7 @@ func (x *HostHealthCheck) GetStatus() int32 {
 	return 0
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 type HostService struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	DisplayName string                 `protobuf:"bytes,1,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
@@ -1728,7 +1728,7 @@ func (x *VolumeReq) GetDeleteOnStop() bool {
 	return false
 }
 
-// See github.com/flynn/flynn/host/resource Spec
+// See github.com/randy-girard/flynn/host/resource Spec
 type HostResourceSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Request, if set, is the amount of resource a job expects to consume,
@@ -1789,7 +1789,7 @@ func (x *HostResourceSpec) GetLimit() int64 {
 	return 0
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 type HostMount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Location      string                 `protobuf:"bytes,1,opt,name=location,proto3" json:"location,omitempty"`
@@ -3176,7 +3176,7 @@ const file_controller_proto_rawDesc = "" +
 	"\tUpdateApp\x12\x1e.flynn.api.v1.UpdateAppRequest\x1a\x11.flynn.api.v1.App\"\x00\x12M\n" +
 	"\vCreateScale\x12 .flynn.api.v1.CreateScaleRequest\x1a\x1a.flynn.api.v1.ScaleRequest\"\x00\x12L\n" +
 	"\rCreateRelease\x12\".flynn.api.v1.CreateReleaseRequest\x1a\x15.flynn.api.v1.Release\"\x00\x12\\\n" +
-	"\x10CreateDeployment\x12%.flynn.api.v1.CreateDeploymentRequest\x1a\x1d.flynn.api.v1.DeploymentEvent\"\x000\x01B+Z)github.com/flynn/flynn/controller/api;apib\x06proto3"
+	"\x10CreateDeployment\x12%.flynn.api.v1.CreateDeploymentRequest\x1a\x1d.flynn.api.v1.DeploymentEvent\"\x000\x01B2Z0github.com/randy-girard/flynn/controller/api;apib\x06proto3"
 
 var (
 	file_controller_proto_rawDescOnce sync.Once

@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {

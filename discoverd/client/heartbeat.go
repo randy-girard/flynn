@@ -8,9 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 // EnvInstanceMeta are environment variables which will be automatically added

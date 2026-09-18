@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 const (
@@ -279,7 +279,7 @@ func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease
 	if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 		hint := "check --ref and that the release is published"
 		if token == "" && (res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized) {
-			hint = "for private or draft releases set credentials: flynn-host plugin credentials set github"
+			hint = "for private or draft releases set credentials: flynn-host plugin:credentials-set github"
 		}
 		return nil, fmt.Errorf("GitHub release %s/%s@%s: %s (%s)", src.Owner, src.Repo, refOrLatest(ref), res.Status, hint)
 	}

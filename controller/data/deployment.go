@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flynn/flynn/controller/schema"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
 	"github.com/flynn/que-go"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/controller/schema"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 type DeploymentRepo struct {

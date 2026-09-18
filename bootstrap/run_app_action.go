@@ -6,13 +6,13 @@ import (
 	"net/url"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	hostresource "github.com/flynn/flynn/host/resource"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/resource"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	hostresource "github.com/randy-girard/flynn/host/resource"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/resource"
 )
 
 type RunAppAction struct {

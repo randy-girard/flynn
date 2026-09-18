@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/random"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func (s *S) provisionTestResourceWithServer(c *C, name string, apps []string) (*ct.Resource, *ct.Provider, *httptest.Server) {

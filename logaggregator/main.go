@@ -4,9 +4,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/logaggregator/client"
-	"github.com/flynn/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/logaggregator/client"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 
 	"github.com/inconshreveable/log15"
 )

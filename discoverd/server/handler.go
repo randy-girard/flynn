@@ -13,14 +13,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	dt "github.com/flynn/flynn/discoverd/types"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/sse"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/stream"
 	log "github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/discoverd/client"
+	dt "github.com/randy-girard/flynn/discoverd/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/sse"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 // StreamBufferSize is the size of the channel buffer used for event subscription.
@@ -227,7 +227,7 @@ func (h *Handler) serveGetService(w http.ResponseWriter, r *http.Request, params
 	// always return a stream due to Go's http.Client not
 	// maintaining headers through a redirect.
 	//
-	// See https://github.com/flynn/flynn/issues/1880
+	// See https://github.com/randy-girard/flynn/issues/1880
 	h.serveStream(w, params, discoverd.EventKindAll)
 }
 

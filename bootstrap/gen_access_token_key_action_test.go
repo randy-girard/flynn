@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/tokensigner"
+	api "github.com/randy-girard/flynn/controller/api"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/tokensigner"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

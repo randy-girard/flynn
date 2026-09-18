@@ -3,8 +3,8 @@ package main
 import (
 	"fmt"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // MySQL console/dump/restore live on flynn-plugin-mariadb. These helpers remain

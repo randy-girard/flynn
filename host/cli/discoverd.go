@@ -8,9 +8,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {

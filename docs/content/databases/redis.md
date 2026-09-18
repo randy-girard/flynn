@@ -9,9 +9,9 @@ Redis is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
 cluster host, then provision from an app. See [Plugins](plugins.md).
 
 ```text
-sudo flynn-host plugin install redis --ref v20260914.0
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
-sudo flynn-host plugin install ../flynn-plugin-redis
+sudo flynn-host plugin:install redis --ref v20260914.0
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+sudo flynn-host plugin:install ../flynn-plugin-redis
 flynn resource add redis
 ```
 

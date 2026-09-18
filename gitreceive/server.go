@@ -23,13 +23,13 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/flynn/flynn/controller/authorizer"
-	controller "github.com/flynn/flynn/controller/client"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/pkg/archiver"
-	"github.com/flynn/flynn/pkg/ctxhelper"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/status"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/pkg/archiver"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 func main() {

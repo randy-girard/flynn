@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/flynn/flynn/test/cluster2"
+	"github.com/randy-girard/flynn/test/cluster2"
 )
 
 func main() {

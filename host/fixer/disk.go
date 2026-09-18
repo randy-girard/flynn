@@ -3,7 +3,7 @@ package fixer
 import (
 	"time"
 
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 // FixLocalDisk removes orphaned image layer material on each host by invoking

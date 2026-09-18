@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/httphelper"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
 )
 

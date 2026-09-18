@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/authz"
-	"github.com/flynn/flynn/controller/tokensigner"
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/tokensigner"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 func TestBuildJob(t *testing.T) {

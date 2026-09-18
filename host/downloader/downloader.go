@@ -11,19 +11,19 @@ import (
 	"runtime"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/volume"
-	volumemanager "github.com/flynn/flynn/host/volume/manager"
-	"github.com/flynn/flynn/pkg/ghrelease"
-	"github.com/flynn/flynn/pkg/verify"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/volume"
+	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
+	"github.com/randy-girard/flynn/pkg/ghrelease"
+	"github.com/randy-girard/flynn/pkg/verify"
 )
 
 const (
-	maxDownloadRetries  = 5
-	initialRetryDelay   = 2 * time.Second
-	maxRetryDelay       = 30 * time.Second
-	retryBackoffFactor  = 2
+	maxDownloadRetries = 5
+	initialRetryDelay  = 2 * time.Second
+	maxRetryDelay      = 30 * time.Second
+	retryBackoffFactor = 2
 )
 
 // linuxBinaries maps release asset names to local binary names for the

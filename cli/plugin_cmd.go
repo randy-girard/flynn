@@ -7,12 +7,12 @@ import (
 	"strings"
 
 	"github.com/cheggaaa/pb"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/plugin"
-	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/term"
 )
 
 // runPluginCommand handles flynn <name> when <name> is not compiled into the
@@ -33,7 +33,7 @@ func runPluginCommand(name string, args []string) error {
 		return fmt.Errorf("%s is not a flynn command. See 'flynn help'", name)
 	}
 	if !spec.Runnable() {
-		return fmt.Errorf("%s is installed but does not define CLI actions; upgrade the plugin with flynn-host plugin install %s", name, name)
+		return fmt.Errorf("%s is installed but does not define CLI actions; upgrade the plugin with flynn-host plugin:install %s", name, name)
 	}
 
 	if action, rest, ok := spec.MatchFlynnDelegate(args); ok {

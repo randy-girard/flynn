@@ -31,16 +31,16 @@ import (
 	"syscall"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/discoverd/health"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/rpcplus"
-	"github.com/flynn/flynn/pkg/rpcplus/fdrpc"
-	sigutil "github.com/flynn/flynn/pkg/signal"
 	"github.com/inconshreveable/log15"
 	"github.com/kr/pty"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/discoverd/health"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/rpcplus"
+	"github.com/randy-girard/flynn/pkg/rpcplus/fdrpc"
+	sigutil "github.com/randy-girard/flynn/pkg/signal"
 )
 
 var logger log15.Logger

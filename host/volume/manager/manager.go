@@ -11,14 +11,14 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
-	"github.com/flynn/flynn/host/volume"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/host/volume"
 )
 
 /*
-	volume.Manager providers interfaces for both provisioning volume backends, and then creating volumes using them.
+volume.Manager providers interfaces for both provisioning volume backends, and then creating volumes using them.
 
-	There is one volume.Manager per host daemon process.
+There is one volume.Manager per host daemon process.
 */
 type Manager struct {
 	mutex sync.Mutex
@@ -199,16 +199,16 @@ func (m *Manager) Volumes() map[string]volume.Volume {
 }
 
 /*
-	volume.Manager implements the volume.Provider interface by
-	delegating NewVolume requests to the default Provider.
+volume.Manager implements the volume.Provider interface by
+delegating NewVolume requests to the default Provider.
 */
 func (m *Manager) NewVolume(info *volume.Info) (volume.Volume, error) {
 	return m.NewVolumeFromProvider("default", info)
 }
 
 /*
-	volume.Manager implements the volume.Provider interface by
-	delegating NewVolume requests to the named Provider.
+volume.Manager implements the volume.Provider interface by
+delegating NewVolume requests to the named Provider.
 */
 func (m *Manager) NewVolumeFromProvider(providerID string, info *volume.Info) (volume.Volume, error) {
 	m.mutex.Lock()
@@ -556,8 +556,8 @@ func (m *Manager) persistProvider(tx *bolt.Tx, id string) error {
 }
 
 /*
-	Proxies `volume.Provider` while making sure the manager remains
-	apprised of all volume lifecycle events.
+Proxies `volume.Provider` while making sure the manager remains
+apprised of all volume lifecycle events.
 */
 type managerProviderProxy struct {
 	volume.Provider

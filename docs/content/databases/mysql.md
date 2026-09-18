@@ -9,9 +9,9 @@ MariaDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on
 cluster host, then provision from an app. See [Plugins](plugins.md).
 
 ```text
-sudo flynn-host plugin install mysql --ref vX
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-mariadb.git --ref vX
-sudo flynn-host plugin install ../flynn-plugin-mariadb
+sudo flynn-host plugin:install mysql --ref vX
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mariadb.git --ref vX
+sudo flynn-host plugin:install ../flynn-plugin-mariadb
 flynn resource add mysql
 ```
 

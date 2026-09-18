@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regression: plugin install must register flynn-host webhooks from the
-# manifest (same API as `flynn-host webhooks add`) without special-casing a
+# manifest (same API as `flynn-host webhooks:add`) without special-casing a
 # plugin name. Smoke must confirm the registration after install.
 set -euo pipefail
 
@@ -41,7 +41,7 @@ need_in "${manifest}" 'SecretEnv' \
 need_in "${install}" 'ensureWebhooks' \
   "plugin install must register host webhooks after deploy"
 need_in "${install}" 'X-Flynn-Webhook-Secret' \
-  "plugin install must send the same secret header as flynn-host webhooks add -H"
+  "plugin install must send the same secret header as flynn-host webhooks:add -H"
 need_in "${install}" 'cluster.NewClient\(\).Hosts' \
   "plugin webhooks must use the flynn-host cluster API, not a plugin-name switch"
 need_in "${smoke}" 'probe_plugin_webhooks' \

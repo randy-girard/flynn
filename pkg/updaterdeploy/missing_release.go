@@ -1,8 +1,8 @@
 package updaterdeploy
 
 import (
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 const MissingAppReleaseReason = "app has no release"

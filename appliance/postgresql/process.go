@@ -15,13 +15,13 @@ import (
 	"text/template"
 	"time"
 
-	"github.com/flynn/flynn/appliance/postgresql/pgxlog"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
-	"github.com/flynn/flynn/pkg/sirenia/xlog"
 	"github.com/inconshreveable/log15"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/appliance/postgresql/pgxlog"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
+	"github.com/randy-girard/flynn/pkg/sirenia/xlog"
 )
 
 const (

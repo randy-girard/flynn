@@ -5,9 +5,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	fpg "github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	fpg "github.com/randy-girard/flynn/pkg/postgres"
 )
 
 // Job is a single unit of work for Que to perform.

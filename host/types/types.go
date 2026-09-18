@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/flynn/flynn/host/resource"
+	"github.com/randy-girard/flynn/host/resource"
 )
 
 // TagPrefix is the prefix added to tags in discoverd instance metadata
@@ -469,7 +469,7 @@ type HostResourceStats struct {
 	MemoryCachedBytes    uint64 `json:"memory_cached_bytes"`
 	MemoryBuffersBytes   uint64 `json:"memory_buffers_bytes"`
 
-	// Disk stats for the Flynn node filesystem (/var/lib/flynn when present, else /).
+	// Disk stats for the host root filesystem (/). Same machine-wide view as CPU and memory.
 	DiskPath       string `json:"disk_path,omitempty"`
 	DiskTotalBytes uint64 `json:"disk_total_bytes"`
 	DiskUsedBytes  uint64 `json:"disk_used_bytes"`

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 // NewClient uses the default discoverd configuration to create a cluster

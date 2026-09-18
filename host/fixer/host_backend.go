@@ -5,8 +5,8 @@ import (
 	"net"
 	"strings"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 // FixHostBackend re-applies persisted network/discoverd configuration on each

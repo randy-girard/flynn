@@ -3,7 +3,7 @@ package plugin
 import (
 	"encoding/json"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // catalogSource is the controller surface LoadCatalog needs. The full
@@ -110,7 +110,7 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 
 // CorePluginCommands are compiled-in flynn handlers for plugins that are not
 // yet fully extracted. Every first-party appliance CLI now lives on the plugin
-// and is fetched from the cluster catalog after flynn-host plugin install.
+// and is fetched from the cluster catalog after flynn-host plugin:install.
 var CorePluginCommands []string
 
 func IsCorePluginCommand(name string) bool {

@@ -5,8 +5,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/flynn/flynn/util/release/types"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/util/release/types"
 )
 
 func vagrant(args *docopt.Args) {

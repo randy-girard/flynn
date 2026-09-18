@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/cluster"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 type WaitHostsAction struct{}

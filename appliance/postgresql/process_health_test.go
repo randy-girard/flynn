@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/client"
 )
 
 func TestSkipStandbyHealthWhenUpstreamDown(t *testing.T) {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	sirenia "github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 const deposedRejoinWaitTimeout = 60 * time.Second

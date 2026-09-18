@@ -6,19 +6,19 @@ import (
 	"log"
 	"net/url"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func init() {
-	register("logsink", runAppLogSinkList, `
-usage: flynn logsink
+	register("log-sink", runAppLogSinkList, `
+usage: flynn log-sink
 
 List log sinks for the app.
 `)
-	register("logsink:add", runAppLogSinkAdd, `
-usage: flynn logsink:add syslog [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
+	register("log-sink:add", runAppLogSinkAdd, `
+usage: flynn log-sink:add syslog [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
 
 Add a syslog log sink for the app. Supported schemes are syslog and syslog+tls.
 Cluster-wide and Flynn system logs use flynn-host log-sink. Cluster metrics
@@ -31,10 +31,10 @@ Options:
 
 Examples:
 
-	$ flynn logsink:add syslog syslog+tls://rsyslog.host:514/
+	$ flynn log-sink:add syslog syslog+tls://rsyslog.host:514/
 `)
-	register("logsink:remove", runAppLogSinkRemove, `
-usage: flynn logsink:remove <id>
+	register("log-sink:remove", runAppLogSinkRemove, `
+usage: flynn log-sink:remove <id>
 
 Remove an app log sink with <id>.
 `)
@@ -124,7 +124,7 @@ func runAppLogSinkRemove(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	if sink.AppID == "" {
-		return fmt.Errorf("sink %s is a cluster log sink; remove it with flynn-host log-sink remove", id)
+		return fmt.Errorf("sink %s is a cluster log sink; remove it with flynn-host log-sink:remove", id)
 	}
 	if sink.AppID != app.ID {
 		return fmt.Errorf("sink %s does not belong to this app", id)

@@ -15,16 +15,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	dd "github.com/flynn/flynn/discoverd/deployment"
-	"github.com/flynn/flynn/discoverd/server"
-	dt "github.com/flynn/flynn/discoverd/types"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/keepalive"
-	"github.com/flynn/flynn/pkg/mux"
-	"github.com/flynn/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/discoverd/client"
+	dd "github.com/randy-girard/flynn/discoverd/deployment"
+	"github.com/randy-girard/flynn/discoverd/server"
+	dt "github.com/randy-girard/flynn/discoverd/types"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/mux"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 const (

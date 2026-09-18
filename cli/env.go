@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 )
 
 func init() {

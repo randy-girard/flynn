@@ -15,7 +15,7 @@ need() {
   fi
 }
 
-need "${ROOT}/host/cli/otel.go" 'plugin install otel' "flynn-host otel must require the otel plugin"
+need "${ROOT}/host/cli/otel.go" 'plugin:install otel' "flynn-host otel must require the otel plugin"
 need "${ROOT}/host/cli/otel.go" '/exporters' "flynn-host otel must talk to the plugin exporter API"
 if [[ -f "${ROOT}/host/logmux/otel.go" ]]; then
   echo "OTLP export must live in the otel plugin, not flynn-host logmux" >&2
@@ -23,7 +23,7 @@ if [[ -f "${ROOT}/host/logmux/otel.go" ]]; then
 fi
 need "${ROOT}/controller/types/types.go" 'SinkScopeSystem' "sinks must distinguish system vs app logs"
 need "${ROOT}/pkg/plugin/apex.go" 'AssignApex' "cluster apex must be assignable to an app"
-need "${ROOT}/host/cli/domain.go" 'domain apex' "flynn-host domain apex must exist"
+need "${ROOT}/host/cli/domain.go" 'domain:apex' "flynn-host domain:apex must exist"
 need "${ROOT}/host/cli/fix.go" '--yes' "flynn-host fix must have a non-interactive --yes flag"
 need "${ROOT}/host/fixer/fixer.go" 'isInteractive' "flynn-host fix must prompt on a TTY"
 need "${smoke}" 'cli-host-otel' "upgrade smoke must list OTEL exporters"

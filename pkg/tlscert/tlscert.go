@@ -3,7 +3,7 @@ package tlscert
 import (
 	"fmt"
 
-	"github.com/flynn/flynn/pkg/certgen"
+	"github.com/randy-girard/flynn/pkg/certgen"
 )
 
 type Cert struct {

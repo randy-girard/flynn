@@ -7,16 +7,16 @@ import (
 	"testing"
 	"time"
 
-	. "github.com/flynn/flynn/controller/testutils"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/typeconv"
 	. "github.com/flynn/go-check"
 	"github.com/inconshreveable/log15"
+	. "github.com/randy-girard/flynn/controller/testutils"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 func Test(t *testing.T) { TestingT(t) }

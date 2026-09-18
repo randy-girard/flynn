@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
 )
 
 func mkInst(addr, id string) *discoverd.Instance {

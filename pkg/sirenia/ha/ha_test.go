@@ -3,7 +3,7 @@ package ha
 import (
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func TestNeedsEnvFlip(t *testing.T) {

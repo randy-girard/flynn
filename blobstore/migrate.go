@@ -7,9 +7,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/flynn/flynn/blobstore/data"
-	"github.com/flynn/flynn/pkg/postgres"
 	docopt "github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/blobstore/data"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 func init() {

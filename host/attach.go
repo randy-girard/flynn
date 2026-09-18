@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/julienschmidt/httprouter"
 	"github.com/inconshreveable/log15"
+	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/host/types"
 )
 
 type attachHandler struct {

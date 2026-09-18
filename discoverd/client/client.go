@@ -13,11 +13,11 @@ import (
 	"sync"
 	"time"
 
-	dt "github.com/flynn/flynn/discoverd/types"
-	"github.com/flynn/flynn/pkg/httpclient"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
 	"github.com/inconshreveable/log15"
+	dt "github.com/randy-girard/flynn/discoverd/types"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 const (

@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/pkg/status"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 func TestGitHandlerAuthAndRouting(t *testing.T) {

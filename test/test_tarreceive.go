@@ -1,9 +1,9 @@
 package main
 
 import (
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/tarreceive/utils"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/tarreceive/utils"
 )
 
 type TarreceiveSuite struct {

@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/flynn/flynn/host/cleanup"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
+	"github.com/randy-girard/flynn/host/cleanup"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
 )
 
 // CleanupImageData removes orphaned per-job image material and unreferenced

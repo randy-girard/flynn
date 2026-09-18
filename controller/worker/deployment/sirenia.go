@@ -7,13 +7,13 @@ import (
 	"os"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/worker/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
-	"github.com/flynn/flynn/pkg/updaterdeploy"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/worker/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	sireniaclient "github.com/randy-girard/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
+	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 )
 
 // syncTimeout bounds how long the sirenia deploy waits for a freshly started

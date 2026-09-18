@@ -8,10 +8,20 @@ toc_min_level: 2
 
 Plugins are first-party cluster apps the operator installs with **`flynn-host`**,
 not the user `flynn` CLI. A plugin can be a resource provider (Redis, MariaDB, …)
-or any other system app (`kind: app`). Flynn core does not special-case a plugin
-by name: install reads `flynn-plugin.json` in the plugin repo.
+or any other system app (`kind: app`). Flynn ships
+`pkg/plugin/official-plugins.json` (embedded in `flynn-host`) so short names
+know which GitHub repo to use. Install itself is still generic: it reads
+`flynn-plugin.json` from that repo and does not special-case behavior by
+plugin name.
 
-Postgres stays in Flynn and is not a plugin.
+```text
+sudo flynn-host plugin:list --known
+flynn plugin:list --known
+sudo flynn-host plugin:install mysql
+```
+
+A path, git URL, `--github-org`, or `/etc/flynn/plugins.json` overrides the
+catalog. Postgres stays in Flynn and is not a plugin.
 
 ## Local sibling checkouts
 
@@ -32,47 +42,47 @@ Development layout (relative to the Flynn repo):
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
 plugin checkouts that contain `flynn-plugin.json` (`flynn-plugin-*`). A local
-checkout with `flynn-plugin.json` wins; if it is missing, the alias falls back
-to GitHub.
+checkout with `flynn-plugin.json` wins; if it is missing, the alias uses the
+official catalog (then `flynn-plugin-<name>`).
 
 From the Flynn checkout, on a cluster host:
 
 ```text
-sudo flynn-host plugin install ../flynn-plugin-redis
-sudo flynn-host plugin install redis
-sudo flynn-host plugin install ../flynn-plugin-dashboard
-sudo flynn-host plugin install ../flynn-plugin-discovery
-sudo flynn-host plugin install ../flynn-plugin-www
-sudo flynn-host plugin install ../flynn-plugin-otel
+sudo flynn-host plugin:install ../flynn-plugin-redis
+sudo flynn-host plugin:install redis
+sudo flynn-host plugin:install ../flynn-plugin-dashboard
+sudo flynn-host plugin:install ../flynn-plugin-discovery
+sudo flynn-host plugin:install ../flynn-plugin-www
+sudo flynn-host plugin:install ../flynn-plugin-otel
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
 stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
-is expanded). If cluster ACME is already enabled (`flynn-host acme configure`
-and `flynn-host acme enable`), HTTP plugin routes get Let's Encrypt at install
+is expanded). If cluster ACME is already enabled (`flynn-host acme:configure`
+and `flynn-host acme:enable`), HTTP plugin routes get Let's Encrypt at install
 automatically (same as `flynn route add http --auto-tls`). That covers the
 dashboard plugin and any other HTTP plugin; Flynn does not special-case a
 name. Set **`auto_tls`** on an HTTP route to request TLS even when you are
 not passing `--auto-tls`: without ACME, install logs a warning and leaves
-the route HTTP. Pass **`flynn-host plugin install --auto-tls`** to fail if
+the route HTTP. Pass **`flynn-host plugin:install --auto-tls`** to fail if
 ACME is not enabled.
 
 After install, operators manage those routes with the same shape as
 `flynn route`, scoped to the plugin:
 
 ```text
-sudo flynn-host plugin dashboard route
-sudo flynn-host plugin dashboard route add http --auto-tls
-sudo flynn-host plugin dashboard route add http --auto-tls dashboard.example.com
-sudo flynn-host plugin dashboard route update http/<id> --auto-tls
+sudo flynn-host plugin:route dashboard
+sudo flynn-host plugin:route dashboard add http --auto-tls
+sudo flynn-host plugin:route dashboard add http --auto-tls dashboard.example.com
+sudo flynn-host plugin:route dashboard update http/<id> --auto-tls
 ```
 
 The **www** plugin also registers the cluster apex (`$CLUSTER_DOMAIN` with no
 subdomain) so `https://flynncluster.com` and `https://www.flynncluster.com` can
 serve the same homepage. Operators pick a different apex app with
-`flynn-host domain apex <app>`. See [Apps — cluster apex](apps.md#cluster-apex-root-domain).
+`flynn-host domain:apex <app>`. See [Apps — cluster apex](apps.md#cluster-apex-root-domain).
 
 `<plugin>` is the installed app name (or its `cli.command`). Flynn does not
 special-case dashboard. Omit `<domain>` on `add http` when the plugin has
@@ -84,7 +94,7 @@ the same way as Redis. Installed plugin apps stay `flynn-system-app`; the
 dashboard lists them for cluster administrators and keeps them hidden from
 scoped collaborator tokens.
 **`webhooks`** registers the same host endpoints as
-`flynn-host webhooks add` (URL/headers expand `${KEY}`; `secret_env` sets
+`flynn-host webhooks:add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
 still runs on the host for anything the manifest cannot express. Optional
 **`hooks.ready`** runs after the wait URL succeeds (or after routes when there
@@ -98,9 +108,9 @@ not skipped.
 Uninstall reverses install without special-casing a plugin name:
 
 ```text
-sudo flynn-host plugin uninstall dashboard
-sudo flynn-host plugin uninstall redis
-sudo flynn-host plugin uninstall redis --force
+sudo flynn-host plugin:uninstall dashboard
+sudo flynn-host plugin:uninstall redis
+sudo flynn-host plugin:uninstall redis --force
 ```
 
 It runs optional **`hooks.uninstall`**, removes host webhooks whose IDs were
@@ -119,7 +129,7 @@ cluster.
 On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
-runs `flynn-host plugin install` on node1. Default `PLUGIN_SMOKE_APPS` is
+runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
 `redis mysql mongodb kafka clickhouse dashboard www discovery otel` (every
 first-party plugin except the template). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
@@ -134,13 +144,15 @@ add <provider>` works for `kind: resource-provider`.
 
 ```text
 flynn plugins
-sudo flynn-host plugin list
+flynn plugin:list --known
+sudo flynn-host plugin:list
+sudo flynn-host plugin:list --known
 ```
 
 ## User CLI
 
 The `flynn` binary does not ship Redis (or other extracted plugin) commands.
-Those commands appear only after `flynn-host plugin install` stamps
+Those commands appear only after `flynn-host plugin:install` stamps
 `flynn-plugin-cli` metadata on the plugin app.
 
 `flynn-plugin.json` `cli` holds:
@@ -152,14 +164,14 @@ Those commands appear only after `flynn-host plugin install` stamps
 - `actions[].flynn` — built-in laptop command scoped to the plugin app
   (`flynn redis` job CLIs stay on the user CLI; HTTP plugins that need
   Flynn’s route CLI on a cluster host use
-  `flynn-host plugin <name> route add http --auto-tls`).
+  `flynn-host plugin:route <name> add http --auto-tls`).
   A `kind: app` plugin only appears on `flynn help` when `"user": true`.
 - `passthrough` — append the user argv after the plugin command (nested CLIs)
 - `release_env` — copy the appliance release env into the job (TLS material)
 
 `flynn` and `args` are mutually exclusive on one action. Web system plugins
 should not ship a user `flynn` command; operators manage HTTP/TCP routes with
-`flynn-host plugin <name> route`. Set `"user": true` only for a `kind: app`
+`flynn-host plugin:route <name>`. Set `"user": true` only for a `kind: app`
 plugin that is meant for app developers the same way as a resource provider.
 
 Sirenia appliances may set `app.strategy`, `app.scale` (use `0` for the data
@@ -183,13 +195,13 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 (never `plugin-build` on the cluster):
 
 ```text
-sudo flynn-host plugin install redis --ref v20260914.0
-sudo flynn-host plugin install dashboard --auto-tls
-sudo flynn-host plugin install discovery
-sudo flynn-host plugin install www --auto-tls
-sudo flynn-host plugin update dashboard --ref v20260916.3
-sudo flynn-host plugin uninstall dashboard
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+sudo flynn-host plugin:install redis --ref v20260914.0
+sudo flynn-host plugin:install dashboard --auto-tls
+sudo flynn-host plugin:install discovery
+sudo flynn-host plugin:install www --auto-tls
+sudo flynn-host plugin:update dashboard --ref v20260916.3
+sudo flynn-host plugin:uninstall dashboard
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
 ```
 
 `--ref` is the GitHub release tag. Omit it to use the latest **published**
@@ -198,7 +210,7 @@ operator command once the plugin app exists: it deploys a new release,
 scales the previous release to zero, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Re-running
 **`plugin install`** on an existing app does the same in-place update.
-The default org is `randy-girard`; override with `--github-org`,
+The default org is `randy-girard` from `official-plugins.json`; override with `--github-org`,
 `FLYNN_PLUGIN_GITHUB_ORG`, or `/etc/flynn/plugins.json`:
 
 ```json
@@ -233,7 +245,8 @@ When a Flynn GitHub Release is created, check **dispatch_plugins** on
 GitHub UI also starts that workflow. Configure the Flynn repo (or org) with:
 
 * **Variable** `PLUGIN_RELEASE_REPOS` — one `owner/repo` per line (commas and
-  `#` comments are allowed). Do not put appliance names in Flynn source.
+  `#` comments are allowed). That list is CI dispatch only; `flynn-host`
+  install names live in `pkg/plugin/official-plugins.json`.
 * **Secret** `PLUGIN_RELEASE_TOKEN` — PAT or GitHub App token with **Actions:
   write** and **Contents: read** on those plugin repos (`GITHUB_TOKEN` cannot
   start workflows in another repository).
@@ -248,7 +261,7 @@ failed uploads are dispatched again so the plugin job can resume.
 Private repos and **draft** releases need a token (Contents: Read):
 
 ```text
-sudo flynn-host plugin credentials set github --token-file /root/github.token
+sudo flynn-host plugin:credentials-set github --token-file /root/github.token
 ```
 
 Or set `FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot.

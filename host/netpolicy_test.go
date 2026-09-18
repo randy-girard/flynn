@@ -4,10 +4,10 @@ import (
 	"net"
 	"testing"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/netpolicy"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 )
 
 func TestOverlayInstanceIP(t *testing.T) {

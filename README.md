@@ -95,8 +95,8 @@ You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead.
 Bootstrap uses a self-signed certificate. Configure ACME/Let's Encrypt next so the dashboard, controller, and app routes can get trusted TLS:
 
 ```bash
-sudo flynn-host acme configure --email=admin@example.com --agree-tos
-sudo flynn-host acme enable-system-routes
+sudo flynn-host acme:configure --email=admin@example.com --agree-tos
+sudo flynn-host acme:enable-system-routes
 ```
 
 `CLUSTER_DOMAIN` and `*.CLUSTER_DOMAIN` must resolve to the cluster (HTTP-01). Use `--staging` while testing (untrusted certs). More detail is in [HTTPS and Let's Encrypt](#https-and-lets-encrypt).
@@ -154,26 +154,26 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
 | `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg psql` / `dump` / `restore` |
-| `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin install mysql` |
-| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin install mongodb` |
-| `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin install redis`. Ephemeral; caching and development |
-| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin install kafka` |
-| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin install clickhouse` |
+| `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
+| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
+| `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin:install redis`. Ephemeral; caching and development |
+| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka` |
+| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse` |
 
 Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Redis does not. Details: [Databases](docs/content/databases.html.md).
 
 ## HTTPS and Let's Encrypt
 
-`flynn-host acme configure` registers a Let's Encrypt account, agrees to the ToS, and enables ACME on the cluster. Then enable it on system routes and on app routes you want auto-renewed:
+`flynn-host acme:configure` registers a Let's Encrypt account, agrees to the ToS, and enables ACME on the cluster. Then enable it on system routes and on app routes you want auto-renewed:
 
 ```bash
-sudo flynn-host acme configure --email=admin@example.com --agree-tos
-sudo flynn-host acme status
-sudo flynn-host acme enable-system-routes   # controller, dashboard, …
+sudo flynn-host acme:configure --email=admin@example.com --agree-tos
+sudo flynn-host acme:status
+sudo flynn-host acme:enable-system-routes   # controller, dashboard, …
 flynn route:add http --auto-tls www.example.com
 ```
 
-Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host acme status` anytime.
+Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host acme:status` anytime.
 
 The name on the certificate must resolve to the cluster and pass HTTP-01 (ports 80/443 open). You can still attach your own cert with `--tls-cert` / `--tls-key`. After system routes have a public cert, clear the bootstrap TLS pin: `flynn cluster:refresh --clear`. See [Apps — HTTPS](docs/content/apps.md#https).
 

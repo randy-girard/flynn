@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	worker "github.com/flynn/flynn/controller/worker/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
+	worker "github.com/randy-girard/flynn/controller/worker/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func sireniaPeerMatchesRelease(inst *discoverd.Instance, releaseID, processType string) bool {

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func redisPluginCLI() *plugin.CLI {

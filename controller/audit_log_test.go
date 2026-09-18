@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/httphelper"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func TestRedactEnvSecrets(t *testing.T) {

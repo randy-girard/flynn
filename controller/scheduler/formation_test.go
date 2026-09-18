@@ -1,8 +1,8 @@
 package main
 
 import (
-	ct "github.com/flynn/flynn/controller/types"
 	. "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func (TestSuite) TestFormationDiff(c *C) {

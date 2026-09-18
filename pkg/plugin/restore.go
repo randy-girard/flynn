@@ -1,6 +1,6 @@
 package plugin
 
-import ct "github.com/flynn/flynn/controller/types"
+import ct "github.com/randy-girard/flynn/controller/types"
 
 // RestoreImage uses a tarball image when this Flynn build still ships one.
 // Plugin appliances keep the backup's blobstore layers when the tarball has none.

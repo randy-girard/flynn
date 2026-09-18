@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
 )
 
 const (

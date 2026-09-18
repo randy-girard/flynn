@@ -4,7 +4,7 @@ import (
 	"io"
 	"net"
 
-	host "github.com/flynn/flynn/host/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 type AttachRequest struct {

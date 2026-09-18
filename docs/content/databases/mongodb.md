@@ -9,9 +9,9 @@ MongoDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on
 cluster host, then provision from an app. See [Plugins](plugins.md).
 
 ```text
-sudo flynn-host plugin install mongodb --ref vX
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-mongodb.git --ref vX
-sudo flynn-host plugin install ../flynn-plugin-mongodb
+sudo flynn-host plugin:install mongodb --ref vX
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mongodb.git --ref vX
+sudo flynn-host plugin:install ../flynn-plugin-mongodb
 flynn resource add mongodb
 ```
 

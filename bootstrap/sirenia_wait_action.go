@@ -3,9 +3,9 @@ package bootstrap
 import (
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/sirenia/client"
 )
 
 type SireniaWaitAction struct {

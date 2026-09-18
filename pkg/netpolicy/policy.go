@@ -6,8 +6,8 @@ package netpolicy
 import (
 	"net"
 
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/plugin"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 // Discoverd service names (and matching ipset names) that publish overlay IPs

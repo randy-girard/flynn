@@ -6,14 +6,14 @@ import (
 	"syscall"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/types"
-	logaggc "github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/dialer"
-	"github.com/flynn/flynn/pkg/exec"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/types"
+	logaggc "github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/exec"
 )
 
 type HostUpdateSuite struct {

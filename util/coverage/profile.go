@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const modulePath = "github.com/flynn/flynn/"
+const modulePath = "github.com/randy-girard/flynn/"
 
 type Block struct {
 	StartLine int

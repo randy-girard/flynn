@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/plugin"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func TestLookupOTELPlugin(t *testing.T) {
 	_, err := lookupOTELPlugin(nil)
-	if err == nil || !strings.Contains(err.Error(), "plugin install otel") {
+	if err == nil || !strings.Contains(err.Error(), "plugin:install otel") {
 		t.Fatalf("missing plugin: %v", err)
 	}
 	app := &ct.App{Name: "otel", Meta: map[string]string{

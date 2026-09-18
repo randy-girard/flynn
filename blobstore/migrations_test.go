@@ -6,10 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flynn/flynn/blobstore/backend"
-	"github.com/flynn/flynn/blobstore/data"
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/blobstore/backend"
+	"github.com/randy-girard/flynn/blobstore/data"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 type testMigrator struct {

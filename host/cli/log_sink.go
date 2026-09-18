@@ -9,27 +9,35 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {
-	Register("log-sink", runLogSink, `
+	Register("log-sink", runClusterLogSinkListCmd, `
 usage: flynn-host log-sink
-       flynn-host log-sink list [<host>]
-       flynn-host log-sink add syslog [--scope <scope>] [--app <app>] [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
-       flynn-host log-sink remove <id>
 
-Manage cluster and host log sinks.
+List cluster log sinks.
 
-Commands:
-    With no arguments, or 'list' without <host>, prints cluster log sinks.
+OpenTelemetry metrics use the otel plugin (flynn-host plugin:install otel,
+then flynn-host otel).
+`)
+	Register("log-sink:list", runLogSinkListCmd, `
+usage: flynn-host log-sink:list [<host>]
 
-    list <host>   Display sinks configured on a specific host
-    add syslog    Create a cluster-wide syslog sink
-    remove        Remove a cluster log sink
+List cluster log sinks, or sinks configured on a specific host.
+
+Examples:
+
+    $ flynn-host log-sink:list
+    $ flynn-host log-sink:list host1
+`)
+	Register("log-sink:add", runHostLogSinkAddSyslog, `
+usage: flynn-host log-sink:add syslog [--scope <scope>] [--app <app>] [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
+
+Create a cluster-wide syslog sink.
 
 Options:
 	--scope=<scope>    system (Flynn jobs), apps (user apps), or all [default: all]
@@ -40,34 +48,30 @@ Options:
 
 System logs (controller, router, plugins, other flynn-system-app jobs) use
 --scope system. User app logs use --scope apps, or --app NAME for one app
-(same as flynn -a NAME logsink). OpenTelemetry metrics use the otel
-plugin (flynn-host plugin install otel, then flynn-host otel).
+(same as flynn -a NAME log-sink).
 
 Examples:
 
-    $ flynn-host log-sink add syslog syslog+tls://rsyslog.host:514/
-    $ flynn-host log-sink add syslog --scope system syslog://logs.example:514/
-    $ flynn-host log-sink add syslog --app myapp syslog://logs.example:514/
-    $ flynn-host log-sink list host1
+    $ flynn-host log-sink:add syslog syslog+tls://rsyslog.host:514/
+    $ flynn-host log-sink:add syslog --scope system syslog://logs.example:514/
+    $ flynn-host log-sink:add syslog --app myapp syslog://logs.example:514/
+`)
+	Register("log-sink:remove", runHostLogSinkRemove, `
+usage: flynn-host log-sink:remove <id>
+
+Remove a cluster log sink.
 `)
 }
 
-func runLogSink(args *docopt.Args, client *cluster.Client) error {
-	switch {
-	case args.Bool["add"]:
-		switch {
-		case args.Bool["syslog"]:
-			return runHostLogSinkAddSyslog(args)
-		default:
-			return fmt.Errorf("Sink kind not supported")
-		}
-	case args.Bool["remove"]:
-		return runHostLogSinkRemove(args)
-	case args.Bool["list"] && args.String["<host>"] != "":
-		return runLogSinkList(args, client)
-	default:
+func runClusterLogSinkListCmd() error {
+	return runClusterLogSinkList()
+}
+
+func runLogSinkListCmd(args *docopt.Args, client *cluster.Client) error {
+	if args.String["<host>"] == "" {
 		return runClusterLogSinkList()
 	}
+	return runLogSinkList(args, client)
 }
 
 func runLogSinkList(args *docopt.Args, client *cluster.Client) error {

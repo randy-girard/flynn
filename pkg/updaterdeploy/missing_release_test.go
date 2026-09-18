@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func TestMissingAppReleaseSkip(t *testing.T) {

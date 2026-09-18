@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"strings"
 
-	controller "github.com/flynn/flynn/controller/client"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/dialer"
+	controller "github.com/randy-girard/flynn/controller/client"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/dialer"
 )
 
 func discoverdHTTPClient() *http.Client {
@@ -44,7 +44,9 @@ func controllerClient() (controller.Client, error) {
 		return nil, fmt.Errorf("no controller instances found")
 	}
 	httpClient := discoverdHTTPClient()
-	// Hijack (job attach, cluster backup) uses net.Dial, not Transport.Dial, so
-	// the URL host must be dialable without *.discoverd in systemd-resolved.
-	return controller.NewClientWithHTTP("http://"+instances[0].Addr, instances[0].Meta["AUTH_KEY"], httpClient)
+	// Use the discoverd DNS name, not a pinned instance IP. HTTP and Hijack
+	// share Transport.Dial (discoverdDial), so systemd-resolved not knowing
+	// *.discoverd is fine. Pinning would stick to a dead controller after a
+	// deploy; the updater already uses this URL for ResumingStream.
+	return controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
 }

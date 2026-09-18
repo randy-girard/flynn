@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/flynn/flynn/controller/client"
-	"github.com/flynn/flynn/pkg/dialer"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/client"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	sirenia "github.com/randy-girard/flynn/pkg/sirenia/client"
 )
 
 // ScaleUp scales up a dormant Sirenia cluster

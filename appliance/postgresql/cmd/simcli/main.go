@@ -1,4 +1,5 @@
 // Don't build to avoid vendoring uniline
+//go:build ignore
 // +build ignore
 
 package main
@@ -7,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/flynn/flynn/appliance/postgresql/simulator"
+	"github.com/randy-girard/flynn/appliance/postgresql/simulator"
 	"github.com/tiborvass/uniline"
 )
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func TestParseGitHubURL(t *testing.T) {
@@ -644,11 +644,17 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mysql.git" {
-		t.Fatalf("unknown alias uses flynn-plugin-<name>: %s", cfg.GitHubURL("mysql"))
+	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mariadb.git" {
+		t.Fatalf("official catalog must map mysql to mariadb: %s", cfg.GitHubURL("mysql"))
+	}
+	if cfg.GitHubURL("redis") != "https://github.com/randy-girard/flynn-plugin-redis.git" {
+		t.Fatalf("official catalog redis: %s", cfg.GitHubURL("redis"))
 	}
 	if cfg.alias("redis").Path != "" {
-		t.Fatalf("missing checkouts must not invent aliases: %+v", cfg.alias("redis"))
+		t.Fatalf("missing checkouts must not invent a local path: %+v", cfg.alias("redis"))
+	}
+	if cfg.GitHubURL("widget") != "https://github.com/randy-girard/flynn-plugin-widget.git" {
+		t.Fatalf("unknown alias uses flynn-plugin-<name>: %s", cfg.GitHubURL("widget"))
 	}
 }
 

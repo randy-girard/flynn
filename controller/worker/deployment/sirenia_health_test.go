@@ -3,8 +3,8 @@ package deployment
 import (
 	"testing"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func TestSireniaClusterDeployReady(t *testing.T) {

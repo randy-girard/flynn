@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 const (
@@ -47,7 +47,7 @@ type Manifest struct {
 	CLI         *CLI              `json:"cli,omitempty"`
 	Hooks       *Hooks            `json:"hooks,omitempty"`
 	Wait        string            `json:"wait,omitempty"`
-	// Setup is operator questions asked during flynn-host plugin install
+	// Setup is operator questions asked during flynn-host plugin:install
 	// when stdin is a TTY. Non-interactive installs use Default, Generate,
 	// existing env, or FLYNN_PLUGIN_SETUP_<ENV>.
 	Setup []SetupPrompt `json:"setup,omitempty"`
@@ -58,7 +58,7 @@ type Manifest struct {
 	// ${CLUSTER_DOMAIN}.
 	Routes []RouteSpec `json:"routes,omitempty"`
 	// Webhooks are registered on every flynn-host after deploy (same API as
-	// `flynn-host webhooks add`). URL and header values expand ${KEY} from
+	// `flynn-host webhooks:add`). URL and header values expand ${KEY} from
 	// cluster + release env. Flynn does not special-case plugin names.
 	Webhooks       []WebhookSpec   `json:"webhooks,omitempty"`
 	Aliases        []string        `json:"aliases,omitempty"`

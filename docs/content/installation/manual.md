@@ -98,7 +98,7 @@ $ sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
 ```
 
 To run discovery **on the cluster**, bootstrap a single node with `--peer-ips`,
-then install the discovery plugin (`sudo flynn-host plugin install discovery`).
+then install the discovery plugin (`sudo flynn-host plugin:install discovery`).
 The installer prints a join token (also `/etc/flynn/discovery-token`). Additional
 nodes use that token:
 
@@ -176,13 +176,13 @@ Bootstrap issues a self-signed certificate. For trusted TLS, on any cluster
 host, register ACME and enable it on system routes (controller, dashboard, …):
 
 ```
-$ sudo flynn-host acme configure --email=admin@example.com --agree-tos
-$ sudo flynn-host acme enable-system-routes
+$ sudo flynn-host acme:configure --email=admin@example.com --agree-tos
+$ sudo flynn-host acme:enable-system-routes
 ```
 
 `configure` also enables ACME for the cluster. Use `--staging` while testing
 (Let's Encrypt issues untrusted certs) or `--directory-url` for another ACME
-CA. Check status with `sudo flynn-host acme status`.
+CA. Check status with `sudo flynn-host acme:status`.
 
 App routes opt in with `flynn route add http --auto-tls <domain>`. The name
 must resolve to the cluster so Let's Encrypt can complete HTTP-01 on ports 80

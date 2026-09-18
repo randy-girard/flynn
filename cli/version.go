@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/flynn/flynn/pkg/version"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 func init() {

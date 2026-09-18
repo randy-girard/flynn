@@ -12,25 +12,29 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func init() {
-	Register("otel", runOTEL, `
+	Register("otel", runOTELListCmd, `
 usage: flynn-host otel
-       flynn-host otel add [--header <header>]... [--insecure] <endpoint>
-       flynn-host otel remove <id>
 
-Forward Flynn cluster metrics to an OpenTelemetry collector (OTLP/HTTP JSON).
+List OpenTelemetry exporters.
+
 Requires the otel plugin:
 
-    sudo flynn-host plugin install otel
+    sudo flynn-host plugin:install otel
 
 The plugin polls GET /cluster/stats and GET /cluster/jobs-stats and POSTs
-/v1/metrics. Job logs stay on flynn-host log-sink / flynn logsink (syslog).
+/v1/metrics. Job logs stay on flynn-host log-sink / flynn log-sink (syslog).
+`)
+	Register("otel:add", runOTELAddCmd, `
+usage: flynn-host otel:add [--header <header>]... [--insecure] <endpoint>
+
+Forward Flynn cluster metrics to an OpenTelemetry collector (OTLP/HTTP JSON).
 
 Options:
     --header=<header>  Extra HTTP header "Name: value" (repeatable)
@@ -38,9 +42,38 @@ Options:
 
 Examples:
 
-    $ flynn-host otel add http://alloy.example:4318
-    $ flynn-host otel add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
+    $ flynn-host otel:add http://alloy.example:4318
+    $ flynn-host otel:add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
 `)
+	Register("otel:remove", runOTELRemoveCmd, `
+usage: flynn-host otel:remove <id>
+
+Remove an OpenTelemetry exporter.
+`)
+}
+
+func runOTELListCmd(_ *docopt.Args) error {
+	client, base, err := otelPluginClient()
+	if err != nil {
+		return err
+	}
+	return runOTELList(client, base)
+}
+
+func runOTELAddCmd(args *docopt.Args) error {
+	client, base, err := otelPluginClient()
+	if err != nil {
+		return err
+	}
+	return runOTELAdd(client, base, args)
+}
+
+func runOTELRemoveCmd(args *docopt.Args) error {
+	client, base, err := otelPluginClient()
+	if err != nil {
+		return err
+	}
+	return runOTELRemove(client, base, args.String["<id>"])
 }
 
 type otelExporter struct {
@@ -48,21 +81,6 @@ type otelExporter struct {
 	Endpoint string            `json:"endpoint"`
 	Headers  map[string]string `json:"headers,omitempty"`
 	Insecure bool              `json:"insecure,omitempty"`
-}
-
-func runOTEL(args *docopt.Args) error {
-	client, base, err := otelPluginClient()
-	if err != nil {
-		return err
-	}
-	switch {
-	case args.Bool["add"]:
-		return runOTELAdd(client, base, args)
-	case args.Bool["remove"]:
-		return runOTELRemove(client, base, args.String["<id>"])
-	default:
-		return runOTELList(client, base)
-	}
 }
 
 func otelPluginClient() (*http.Client, string, error) {
@@ -87,7 +105,7 @@ func lookupOTELPlugin(apps []*ct.App) (*ct.App, error) {
 			return app, nil
 		}
 	}
-	return nil, fmt.Errorf("the otel plugin is not installed\nInstall it with: sudo flynn-host plugin install otel")
+	return nil, fmt.Errorf("the otel plugin is not installed\nInstall it with: sudo flynn-host plugin:install otel")
 }
 
 func otelPluginBase(app *ct.App) string {

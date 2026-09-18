@@ -3,7 +3,7 @@ package arg
 import (
 	"flag"
 
-	"github.com/flynn/flynn/test/cluster"
+	"github.com/randy-girard/flynn/test/cluster"
 )
 
 type Args struct {

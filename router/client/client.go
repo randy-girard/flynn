@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // ErrNotFound is returned when no route was found.

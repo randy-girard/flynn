@@ -6,8 +6,8 @@ import (
 	"io/ioutil"
 	"os"
 
-	ct "github.com/flynn/flynn/controller/types"
-	tarclient "github.com/flynn/flynn/tarreceive/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	tarclient "github.com/randy-girard/flynn/tarreceive/client"
 )
 
 // ImportOptions configures importing a docker save archive into Flynn.

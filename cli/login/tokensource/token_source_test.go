@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/cli/login/internal/oauth"
+	"github.com/randy-girard/flynn/cli/login/internal/oauth"
 	"golang.org/x/oauth2"
 )
 

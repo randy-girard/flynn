@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regression: web plugins enable Let's Encrypt through the generic plugin
-# contract (routes.auto_tls and flynn-host plugin install --auto-tls), not a
+# contract (routes.auto_tls and flynn-host plugin:install --auto-tls), not a
 # plugin-name switch. Smoke must not pass --auto-tls (Vagrant has no ACME).
 set -euo pipefail
 
@@ -40,19 +40,19 @@ need_in "${install}" 'ManagedCertificateDomain' \
 need_in "${install}" 'skipping auto TLS' \
   "declared auto_tls must warn and continue when cluster ACME is off"
 need_in "${install}" 'AutoTLS' \
-  "plugin install must honor flynn-host plugin install --auto-tls"
+  "plugin install must honor flynn-host plugin:install --auto-tls"
 need_in "${install}" 'spec.AutoTLS \|\| installAutoTLS \|\| acmeOn' \
   "plugin install must attach TLS on HTTP routes when cluster ACME is already enabled"
 need_in "${cli}" '--auto-tls' \
-  "flynn-host plugin install must expose --auto-tls for web plugins"
-need_in "${cli}" 'plugin <plugin> route add http' \
+  "flynn-host plugin:install must expose --auto-tls for web plugins"
+need_in "${cli}" 'plugin:route <plugin> add http' \
   "flynn-host plugin must expose flynn-route-shaped route commands for installed plugins"
-need_in "${cli}" 'plugin <plugin> route update' \
-  "flynn-host plugin route update must exist so operators can enable TLS after install"
+need_in "${cli}" 'plugin:route <plugin> update' \
+  "flynn-host plugin:route update must exist so operators can enable TLS after install"
 need_in "${docs}" 'auto_tls' \
   "plugin docs must describe route auto_tls and --auto-tls"
-need_in "${docs}" 'flynn-host plugin dashboard route add http' \
-  "plugin docs must show flynn-host plugin <name> route (kind: app is not a user flynn command)"
+need_in "${docs}" 'flynn-host plugin:route dashboard add http' \
+  "plugin docs must show flynn-host plugin:route <name> (kind: app is not a user flynn command)"
 
 if grep -qE -- 'plugin install.*--auto-tls' "${smoke}"; then
   echo "smoke must not pass --auto-tls (Vagrant clusters do not run Let's Encrypt)" >&2

@@ -9,10 +9,10 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	hh "github.com/flynn/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 type Config struct {

@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	hh "github.com/flynn/flynn/pkg/httphelper"
 	log "github.com/inconshreveable/log15"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
 
 type identifier interface {

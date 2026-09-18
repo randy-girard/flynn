@@ -6,12 +6,12 @@ import (
 	"net/http"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/verify"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/verify"
 )
 
 type ArtifactRepo struct {

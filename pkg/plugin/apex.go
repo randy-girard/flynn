@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	router "github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // ApexInfo is the app (if any) that currently serves the cluster root domain.

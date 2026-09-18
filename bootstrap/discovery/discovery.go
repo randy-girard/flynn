@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/pkg/version"
+	"github.com/randy-girard/flynn/pkg/version"
 	"golang.org/x/crypto/ssh"
 )
 

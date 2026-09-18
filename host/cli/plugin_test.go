@@ -32,18 +32,22 @@ func TestReadCredentialTokenFromFile(t *testing.T) {
 	}
 }
 
-func parsePluginUsage(t *testing.T, argv ...string) *docopt.Args {
+func parsePluginCmd(t *testing.T, name string, argv ...string) *docopt.Args {
 	t.Helper()
-	args, err := docopt.Parse(pluginUsage, argv, false, "", false)
+	cmd := commands[name]
+	if cmd == nil {
+		t.Fatalf("unknown command %q", name)
+	}
+	args, err := docopt.Parse(cmd.usage, argv, false, "", false)
 	if err != nil {
-		t.Fatalf("parse %q: %v", argv, err)
+		t.Fatalf("parse %s %q: %v", name, argv, err)
 	}
 	return args
 }
 
 func TestPluginRouteUsage(t *testing.T) {
-	args := parsePluginUsage(t, "plugin", "dashboard", "route", "add", "http", "--auto-tls")
-	if !args.Bool["route"] || !args.Bool["add"] || !args.Bool["http"] || !args.Bool["--auto-tls"] {
+	args := parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "add", "http", "--auto-tls")
+	if !args.Bool["add"] || !args.Bool["http"] || !args.Bool["--auto-tls"] {
 		t.Fatalf("flags: %+v", args)
 	}
 	if args.String["<plugin>"] != "dashboard" {
@@ -53,63 +57,72 @@ func TestPluginRouteUsage(t *testing.T) {
 		t.Fatalf("domain=%q", args.String["<domain>"])
 	}
 
-	args = parsePluginUsage(t, "plugin", "dashboard", "route", "add", "http", "--auto-tls", "dashboard.example.com")
+	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "add", "http", "--auto-tls", "dashboard.example.com")
 	if args.String["<domain>"] != "dashboard.example.com" {
 		t.Fatalf("domain=%q", args.String["<domain>"])
 	}
 
-	args = parsePluginUsage(t, "plugin", "dashboard", "route", "update", "http/abc", "--auto-tls")
+	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "update", "http/abc", "--auto-tls")
 	if !args.Bool["update"] || args.String["<id>"] != "http/abc" || !args.Bool["--auto-tls"] {
 		t.Fatalf("update: %+v", args)
 	}
 
-	args = parsePluginUsage(t, "plugin", "dashboard", "route")
-	if !args.Bool["route"] || args.Bool["add"] || args.Bool["install"] {
+	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard")
+	if args.Bool["add"] || args.Bool["update"] || args.Bool["remove"] {
 		t.Fatalf("list: %+v", args)
 	}
 
-	args = parsePluginUsage(t, "plugin", "install", "dashboard", "--auto-tls")
-	if !args.Bool["install"] || args.Bool["route"] || args.String["<source>"] != "dashboard" {
+	args = parsePluginCmd(t, "plugin:install", "plugin:install", "dashboard", "--auto-tls")
+	if !args.Bool["--auto-tls"] || args.String["<source>"] != "dashboard" {
 		t.Fatalf("install: %+v", args)
 	}
 }
 
 func TestPluginUninstallUsage(t *testing.T) {
-	args := parsePluginUsage(t, "plugin", "uninstall", "redis")
-	if !args.Bool["uninstall"] || args.Bool["install"] || args.Bool["route"] || args.Bool["--force"] {
+	args := parsePluginCmd(t, "plugin:uninstall", "plugin:uninstall", "redis")
+	if args.Bool["--force"] {
 		t.Fatalf("uninstall: %+v", args)
 	}
 	if args.String["<plugin>"] != "redis" {
 		t.Fatalf("plugin=%q", args.String["<plugin>"])
 	}
 
-	args = parsePluginUsage(t, "plugin", "uninstall", "--force", "redis")
-	if !args.Bool["uninstall"] || !args.Bool["--force"] || args.String["<plugin>"] != "redis" {
+	args = parsePluginCmd(t, "plugin:uninstall", "plugin:uninstall", "--force", "redis")
+	if !args.Bool["--force"] || args.String["<plugin>"] != "redis" {
 		t.Fatalf("force: %+v", args)
 	}
 
-	args = parsePluginUsage(t, "plugin", "uninstall", "dashboard")
-	if !args.Bool["uninstall"] || args.Bool["route"] || args.String["<plugin>"] != "dashboard" {
+	args = parsePluginCmd(t, "plugin:uninstall", "plugin:uninstall", "dashboard")
+	if args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("dashboard uninstall must not parse as route: %+v", args)
 	}
 }
 
 func TestPluginUpdateUsage(t *testing.T) {
-	args := parsePluginUsage(t, "plugin", "update", "dashboard")
-	if !args.Bool["update"] || args.Bool["install"] || args.Bool["route"] || args.Bool["uninstall"] {
-		t.Fatalf("update: %+v", args)
-	}
+	args := parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard")
 	if args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("plugin=%q", args.String["<plugin>"])
 	}
 
-	args = parsePluginUsage(t, "plugin", "update", "dashboard", "--ref", "v20260916.3")
-	if !args.Bool["update"] || args.String["--ref"] != "v20260916.3" || args.String["<plugin>"] != "dashboard" {
+	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--ref", "v20260916.3")
+	if args.String["--ref"] != "v20260916.3" || args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("update ref: %+v", args)
 	}
 
-	args = parsePluginUsage(t, "plugin", "dashboard", "route", "update", "http/abc")
-	if !args.Bool["route"] || !args.Bool["update"] || args.String["<id>"] != "http/abc" {
+	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "update", "http/abc")
+	if !args.Bool["update"] || args.String["<id>"] != "http/abc" {
 		t.Fatalf("route update must still parse: %+v", args)
+	}
+}
+
+func TestPluginListKnownUsage(t *testing.T) {
+	args := parsePluginCmd(t, "plugin:list", "plugin:list")
+	if args.Bool["--known"] {
+		t.Fatalf("list: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:list", "plugin:list", "--known")
+	if !args.Bool["--known"] {
+		t.Fatalf("list --known: %+v", args)
 	}
 }

@@ -3,7 +3,7 @@ package authz
 import (
 	"testing"
 
-	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authorizer"
 )
 
 func TestGRPCAllowed(t *testing.T) {

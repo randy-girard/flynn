@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
 )
 
 func TestRepairOrphanSireniaFormationsNoopWhenNoOrphans(t *testing.T) {

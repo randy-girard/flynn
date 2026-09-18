@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/keepalive"
-	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 var logger = log15.New()

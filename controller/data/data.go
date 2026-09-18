@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/typeconv"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 var ErrNotFound = ct.ErrNotFound

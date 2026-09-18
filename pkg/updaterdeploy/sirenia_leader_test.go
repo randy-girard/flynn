@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func TestSireniaApplianceServices(t *testing.T) {

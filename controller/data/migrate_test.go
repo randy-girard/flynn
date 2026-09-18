@@ -8,15 +8,15 @@ import (
 	"testing"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	pgtestutils "github.com/flynn/flynn/pkg/testutils/postgres"
-	"github.com/flynn/flynn/pkg/tlscert"
-	"github.com/flynn/flynn/router/testutils"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/jackc/pgx"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	pgtestutils "github.com/randy-girard/flynn/pkg/testutils/postgres"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/router/testutils"
+	router "github.com/randy-girard/flynn/router/types"
 
 	. "github.com/flynn/go-check"
 )

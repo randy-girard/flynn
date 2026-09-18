@@ -12,10 +12,10 @@ import (
 	"runtime"
 
 	"github.com/BurntSushi/toml"
-	"github.com/flynn/flynn/cli/login/tokensource"
-	controller "github.com/flynn/flynn/controller/client"
-	tarclient "github.com/flynn/flynn/tarreceive/client"
 	"github.com/mitchellh/go-homedir"
+	"github.com/randy-girard/flynn/cli/login/tokensource"
+	controller "github.com/randy-girard/flynn/controller/client"
+	tarclient "github.com/randy-girard/flynn/tarreceive/client"
 	"golang.org/x/oauth2"
 )
 

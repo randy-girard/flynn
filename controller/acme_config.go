@@ -3,8 +3,8 @@ package main
 import (
 	"net/http"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/httphelper"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
 )
 

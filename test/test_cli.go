@@ -20,16 +20,16 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
-	"github.com/flynn/flynn/cli/config"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/resource"
-	"github.com/flynn/flynn/pkg/attempt"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/tlscert"
-	"github.com/flynn/flynn/tarreceive/utils"
 	c "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/cli/config"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/tarreceive/utils"
 )
 
 type CLISuite struct {
@@ -1038,7 +1038,7 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 // outputs data before running commands (e.g. because the buildpack added a
 // profile script which prints something) succeeds.
 //
-// See https://github.com/flynn/flynn/issues/3351
+// See https://github.com/randy-girard/flynn/issues/3351
 func (s *CLISuite) TestExportBuildpackOutput(t *c.C) {
 	// create app
 	r := s.newGitRepo(t, "http")

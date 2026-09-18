@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/ghrelease"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/ghrelease"
 )
 
 const DefaultGitHubRepo = "randy-girard/flynn"

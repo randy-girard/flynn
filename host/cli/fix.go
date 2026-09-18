@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/flynn/flynn/host/fixer"
+	"github.com/randy-girard/flynn/host/fixer"
 )
 
 func init() {

@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/controller/schema"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/ctxhelper"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/sse"
+	"github.com/randy-girard/flynn/controller/schema"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/sse"
 	"golang.org/x/net/context"
 )
 

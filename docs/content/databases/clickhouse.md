@@ -9,9 +9,9 @@ ClickHouse is a Flynn **plugin** (not part of the bootstrap tarball). Install it
 on a cluster host, then provision from an app. See [Plugins](plugins.md).
 
 ```text
-sudo flynn-host plugin install clickhouse --ref vX
-sudo flynn-host plugin install https://github.com/randy-girard/flynn-plugin-clickhouse.git --ref vX
-sudo flynn-host plugin install ../flynn-plugin-clickhouse
+sudo flynn-host plugin:install clickhouse --ref vX
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-clickhouse.git --ref vX
+sudo flynn-host plugin:install ../flynn-plugin-clickhouse
 flynn resource add clickhouse
 ```
 

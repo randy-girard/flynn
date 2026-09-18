@@ -44,6 +44,28 @@ func TestExpandColonSuffix(t *testing.T) {
 	}
 }
 
+func TestResolveCommandLogSinkCanonical(t *testing.T) {
+	name, args, from := resolveCommand("log-sink", []string{"add", "syslog", "syslog://x"})
+	if name != "log-sink:add" || from != "log-sink add" || !reflect.DeepEqual(args, []string{"syslog", "syslog://x"}) {
+		t.Fatalf("got %q %q from=%q", name, args, from)
+	}
+}
+
+func TestResolveCommandLogSinkCompat(t *testing.T) {
+	name, args, from := resolveCommand("logsink", []string{"add", "syslog", "syslog://x"})
+	if name != "log-sink:add" || from != "logsink add" || !reflect.DeepEqual(args, []string{"syslog", "syslog://x"}) {
+		t.Fatalf("got %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("logsink:add", []string{"syslog", "syslog://x"})
+	if name != "log-sink:add" || from != "logsink:add" || !reflect.DeepEqual(args, []string{"syslog", "syslog://x"}) {
+		t.Fatalf("colon got %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("logsink", nil)
+	if name != "log-sink" || from != "logsink" || len(args) != 0 {
+		t.Fatalf("list got %q %q from=%q", name, args, from)
+	}
+}
+
 func TestPluginColonName(t *testing.T) {
 	if got := pluginColonName("redis", "redis-cli"); got != "redis:cli" {
 		t.Fatalf("got %q", got)

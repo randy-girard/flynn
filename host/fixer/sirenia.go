@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/client"
-	state "github.com/flynn/flynn/pkg/sirenia/state"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	sirenia "github.com/randy-girard/flynn/pkg/sirenia/client"
+	state "github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func (f *ClusterFixer) CheckSirenia(svc string) error {

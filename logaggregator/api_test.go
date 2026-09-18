@@ -9,11 +9,11 @@ import (
 	"io/ioutil"
 	"time"
 
-	"github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
-	"github.com/flynn/flynn/pkg/typeconv"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 func (s *LogAggregatorTestSuite) TestAPIGetLogWithNoResults(c *C) {

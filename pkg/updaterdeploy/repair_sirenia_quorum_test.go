@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	sireniaclient "github.com/flynn/flynn/pkg/sirenia/client"
-	sirenia "github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	sireniaclient "github.com/randy-girard/flynn/pkg/sirenia/client"
+	sirenia "github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func TestRegisteredSireniaJobs(t *testing.T) {

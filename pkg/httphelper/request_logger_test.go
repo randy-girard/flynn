@@ -5,8 +5,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/ctxhelper"
 	log "github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"golang.org/x/net/context"
 )
 

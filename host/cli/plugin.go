@@ -6,46 +6,21 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
-const pluginUsage = `
-usage: flynn-host plugin install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
-       flynn-host plugin update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <plugin>
-       flynn-host plugin uninstall [--force] [--github-org=ORG] <plugin>
-       flynn-host plugin list
-       flynn-host plugin credentials set github [--token-file=FILE] [--api=URL]
-       flynn-host plugin credentials unset github
-       flynn-host plugin credentials show github
-       flynn-host plugin <plugin> route
-       flynn-host plugin <plugin> route add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-drain-backends] [--disable-keep-alives] [<domain>]
-       flynn-host plugin <plugin> route add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
-       flynn-host plugin <plugin> route update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
-       flynn-host plugin <plugin> route remove <id>
+const pluginInstallUsage = `
+usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
 
-Commands:
-	credentials   Store a GitHub token for private or draft release assets
-	install       Install a plugin from a local path, alias, or GitHub URL
-	list          List plugins installed on this cluster
-	route         List, add, update, or remove routes for an installed plugin
-	uninstall     Remove an installed plugin app, webhooks, and optional uninstall hook
-	update        Deploy a new release of an already-installed plugin
+Install a plugin from a local path, alias, or GitHub URL.
 
 Options:
 	--no-build         Fail if dist/ is missing instead of running script/plugin-build
 	--rebuild          Run script/plugin-build even if dist/ already exists (local only)
 	--ref=REF          GitHub release tag (default: latest published, or plugins.json ref)
 	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
-	--force            Uninstall a resource-provider even if other apps still use it
 	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
-	--no-auto-tls      Disable Let's Encrypt on an existing HTTP route
-	--token-file=FILE  Read the GitHub token from a file (otherwise stdin)
-	--api=URL          GitHub API base (GitHub Enterprise)
-	-s, --service=<service>    service name to route to (defaults to the plugin name)
-	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS (http only)
-	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS (http only)
-	-p, --port=<port>          port to accept traffic on
 
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, registers a provider only when
@@ -53,64 +28,135 @@ kind is resource-provider, and registers flynn-host webhooks declared in
 the manifest. If cluster ACME is already enabled, HTTP plugin routes get
 Let's Encrypt automatically. Manifest auto_tls still requests TLS when you
 are not passing --auto-tls (warns if ACME is off). --auto-tls fails if ACME
-is off. After install, flynn-host plugin <name> route is the same shape as
+is off. After install, flynn-host plugin:route <name> is the same shape as
 flynn route (list / add http / update / remove) scoped to that plugin app.
-Uninstall reverses that: optional hooks.uninstall, plugin webhooks, then
-DeleteApp (routes and exclusive resources). Resource-provider plugins with
-provisioned resources still in use refuse unless --force. Flynn does not
-special-case plugin names. Re-running install on an existing plugin, or
-flynn-host plugin update, deploys a new release and scales the previous
-release to zero so old jobs leave discoverd. update requires the plugin
-app to already exist; install creates it. Update runs hooks.upgrade when
-declared (not hooks.install) and does not re-ask setup prompts.
-Local
-checkouts are used when present. Otherwise
-short names pull a published GitHub Release named flynn-plugin-<name> (or the
-repo declared by a sibling checkout / installed plugin). GitHub installs never
-build on the cluster; they unpack release assets (image layers plus any
-hooks.install scripts) rather than a git checkout.
+Install does not special-case a plugin name; short names come from the
+official catalog. Re-running install on an existing plugin deploys a new
+release and scales the previous release to zero so old jobs leave discoverd.
+Local checkouts are used when present. Otherwise short names pull a
+published GitHub Release from the official catalog
+(pkg/plugin/official-plugins.json, embedded in flynn-host), a sibling
+checkout, an installed plugin's github_repo, or flynn-plugin-<name>.
+Override with a path, git URL, --github-org, or /etc/flynn/plugins.json.
+GitHub installs never build on the cluster; they unpack release assets
+(image layers plus any hooks.install scripts) rather than a git checkout.
 
 Configure extra aliases and org in /etc/flynn/plugins.json. Installed plugins
 are recorded in /etc/flynn/installed-plugins.json so cluster backup, restore,
 and sirenia repair do not hardcode appliance names. Private repos use
-flynn-host plugin credentials, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
+flynn-host plugin:credentials-set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
 
 Examples:
 
-    $ flynn-host plugin install ../flynn-plugin-redis
-    $ flynn-host plugin install redis --ref v20260914.0
-    $ flynn-host plugin install dashboard --auto-tls
-    $ flynn-host plugin update dashboard --ref v20260916.3
-    $ flynn-host plugin dashboard route
-    $ flynn-host plugin dashboard route add http --auto-tls
-    $ flynn-host plugin dashboard route update http/<id> --auto-tls
-    $ flynn-host plugin install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
-    $ flynn-host plugin uninstall dashboard
-    $ flynn-host plugin uninstall redis --force
-    $ flynn-host plugin credentials set github --token-file /root/github.token
-    $ flynn-host plugin list
+    $ flynn-host plugin:install ../flynn-plugin-redis
+    $ flynn-host plugin:install redis --ref v20260914.0
+    $ flynn-host plugin:install dashboard --auto-tls
+    $ flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+`
+
+const pluginUpdateUsage = `
+usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <plugin>
+
+Deploy a new release of an already-installed plugin. update requires the
+plugin app to already exist. Update runs hooks.upgrade when declared
+(not hooks.install) and does not re-ask setup prompts.
+
+Examples:
+
+    $ flynn-host plugin:update dashboard --ref v20260916.3
+`
+
+const pluginUninstallUsage = `
+usage: flynn-host plugin:uninstall [--force] [--github-org=ORG] <plugin>
+
+Remove an installed plugin app, webhooks, and optional uninstall hook.
+Resource-provider plugins with provisioned resources still in use refuse
+unless --force.
+
+Options:
+	--force            Uninstall a resource-provider even if other apps still use it
+	--github-org=ORG   GitHub org for aliases
+
+Examples:
+
+    $ flynn-host plugin:uninstall dashboard
+    $ flynn-host plugin:uninstall redis --force
+`
+
+const pluginListUsage = `
+usage: flynn-host plugin:list [--known]
+
+List plugins installed on this cluster.
+
+Options:
+	--known            List first-party plugins from the catalog shipped with Flynn
+
+Examples:
+
+    $ flynn-host plugin:list
+    $ flynn-host plugin:list --known
+`
+
+const pluginCredentialsSetUsage = `
+usage: flynn-host plugin:credentials-set github [--token-file=FILE] [--api=URL]
+
+Store a GitHub token for private or draft release assets.
+
+Options:
+	--token-file=FILE  Read the GitHub token from a file (otherwise stdin)
+	--api=URL          GitHub API base (GitHub Enterprise)
+
+Examples:
+
+    $ flynn-host plugin:credentials-set github --token-file /root/github.token
+`
+
+const pluginCredentialsUnsetUsage = `
+usage: flynn-host plugin:credentials-unset github
+
+Remove stored GitHub plugin credentials.
+`
+
+const pluginCredentialsShowUsage = `
+usage: flynn-host plugin:credentials-show github
+
+Show whether GitHub plugin credentials are set.
+`
+
+const pluginRouteUsage = `
+usage: flynn-host plugin:route <plugin>
+       flynn-host plugin:route <plugin> add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-drain-backends] [--disable-keep-alives] [<domain>]
+       flynn-host plugin:route <plugin> add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
+       flynn-host plugin:route <plugin> update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
+       flynn-host plugin:route <plugin> remove <id>
+
+List, add, update, or remove routes for an installed plugin. Same shape as
+flynn route, scoped to that plugin app.
+
+Options:
+	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
+	--no-auto-tls      Disable Let's Encrypt on an existing HTTP route
+	-s, --service=<service>    service name to route to (defaults to the plugin name)
+	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS (http only)
+	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS (http only)
+	-p, --port=<port>          port to accept traffic on
+
+Examples:
+
+    $ flynn-host plugin:route dashboard
+    $ flynn-host plugin:route dashboard add http --auto-tls
+    $ flynn-host plugin:route dashboard update http/<id> --auto-tls
 `
 
 func init() {
-	Register("plugin", runPlugin, pluginUsage)
-}
-
-func runPlugin(args *docopt.Args) error {
-	switch {
-	case args.Bool["install"]:
-		return runPluginInstall(args)
-	case args.Bool["uninstall"]:
-		return runPluginUninstall(args)
-	case args.Bool["list"]:
-		return runPluginList()
-	case args.Bool["credentials"]:
-		return runPluginCredentials(args)
-	case args.Bool["route"]:
-		return runPluginRoute(args)
-	case args.Bool["update"]:
-		return runPluginUpdate(args)
-	}
-	return nil
+	Register("plugin:install", runPluginInstall, pluginInstallUsage)
+	Register("plugin:update", runPluginUpdate, pluginUpdateUsage)
+	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
+	Register("plugin:list", runPluginList, pluginListUsage)
+	Register("plugin:credentials-set", runPluginCredentialsSet, pluginCredentialsSetUsage)
+	Register("plugin:credentials-unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
+	Register("plugin:credentials-show", runPluginCredentialsShow, pluginCredentialsShowUsage)
+	Register("plugin:route", runPluginRoute, pluginRouteUsage)
 }
 
 func runPluginInstall(args *docopt.Args) error {
@@ -191,7 +237,10 @@ func runPluginUninstall(args *docopt.Args) error {
 	})
 }
 
-func runPluginList() error {
+func runPluginList(args *docopt.Args) error {
+	if args.Bool["--known"] {
+		return runPluginListKnown()
+	}
 	client, err := controllerClient()
 	if err != nil {
 		return err
@@ -223,36 +272,40 @@ func runPluginList() error {
 	return nil
 }
 
-func runPluginCredentials(args *docopt.Args) error {
+func runPluginListKnown() error {
+	return plugin.WriteKnownPlugins(os.Stdout, plugin.DefaultGitHubOrg(), plugin.KnownPlugins())
+}
+
+func runPluginCredentialsSet(args *docopt.Args) error {
 	host := "github.com"
-	switch {
-	case args.Bool["set"]:
-		token, err := readCredentialToken(args.String["--token-file"])
-		if err != nil {
-			return err
-		}
-		if err := plugin.SetGitHubCredentials("", host, token, args.String["--api"]); err != nil {
-			return err
-		}
-		fmt.Println("github credentials set")
-		return nil
-	case args.Bool["unset"]:
-		if err := plugin.UnsetGitHubCredentials("", host); err != nil {
-			return err
-		}
-		fmt.Println("github credentials unset")
-		return nil
-	case args.Bool["show"]:
-		ok, err := plugin.CredentialsSet("", host)
-		if err != nil {
-			return err
-		}
-		if ok {
-			fmt.Println("github credentials: set")
-		} else {
-			fmt.Println("github credentials: unset")
-		}
-		return nil
+	token, err := readCredentialToken(args.String["--token-file"])
+	if err != nil {
+		return err
+	}
+	if err := plugin.SetGitHubCredentials("", host, token, args.String["--api"]); err != nil {
+		return err
+	}
+	fmt.Println("github credentials set")
+	return nil
+}
+
+func runPluginCredentialsUnset(_ *docopt.Args) error {
+	if err := plugin.UnsetGitHubCredentials("", "github.com"); err != nil {
+		return err
+	}
+	fmt.Println("github credentials unset")
+	return nil
+}
+
+func runPluginCredentialsShow(_ *docopt.Args) error {
+	ok, err := plugin.CredentialsSet("", "github.com")
+	if err != nil {
+		return err
+	}
+	if ok {
+		fmt.Println("github credentials: set")
+	} else {
+		fmt.Println("github credentials: unset")
 	}
 	return nil
 }

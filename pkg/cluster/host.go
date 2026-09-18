@@ -12,11 +12,11 @@ import (
 	"strings"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/httpclient"
-	"github.com/flynn/flynn/pkg/stream"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/httpclient"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 // Host is a client for a host daemon.

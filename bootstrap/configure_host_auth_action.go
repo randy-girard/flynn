@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 type ConfigureHostAuthAction struct{}

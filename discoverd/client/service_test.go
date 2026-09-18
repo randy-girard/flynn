@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type stubService struct {

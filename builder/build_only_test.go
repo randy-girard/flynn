@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func testManifestImages() []*Image {
@@ -348,6 +348,32 @@ func TestWriteImagesAfterPartialBuild(t *testing.T) {
 	}
 	if _, ok := final["controller"]; !ok {
 		t.Fatal("partial success must still persist images.json for retry")
+	}
+}
+
+func TestGoInputsIncludesEmbedFiles(t *testing.T) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller")
+	}
+	root := filepath.Join(filepath.Dir(thisFile), "..")
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(wd) })
+
+	g := NewGoInputs(GoPlatform{})
+	inputs, err := g.Load("cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join("pkg", "plugin", "official-plugins.json")
+	if !containsString(inputs, want) {
+		t.Fatalf("cli Go inputs must include go:embed %s, got %d files", want, len(inputs))
 	}
 }
 

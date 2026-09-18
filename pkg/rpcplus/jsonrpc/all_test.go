@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/rpcplus"
+	"github.com/randy-girard/flynn/pkg/rpcplus"
 )
 
 type Args struct {

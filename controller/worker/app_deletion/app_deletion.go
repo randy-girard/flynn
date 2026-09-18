@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"net/http"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 type context struct {

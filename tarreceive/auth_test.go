@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	api "github.com/flynn/flynn/controller/api"
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/tokensigner"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/tarreceive/utils"
+	api "github.com/randy-girard/flynn/controller/api"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/tokensigner"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/tarreceive/utils"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 

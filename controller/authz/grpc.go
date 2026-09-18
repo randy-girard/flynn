@@ -3,7 +3,7 @@ package authz
 import (
 	"strings"
 
-	"github.com/flynn/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authorizer"
 )
 
 // GRPCAllowed returns whether the gRPC method may run with this principal.

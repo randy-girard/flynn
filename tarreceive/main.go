@@ -16,16 +16,16 @@ import (
 	"os/exec"
 	"path/filepath"
 
-	"github.com/flynn/flynn/controller/authorizer"
-	"github.com/flynn/flynn/controller/authz"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/archive"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/squashfs"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/tarreceive/utils"
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/archive"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/squashfs"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/tarreceive/utils"
 )
 
 func main() {

@@ -34,8 +34,8 @@ cluster host so the dashboard, controller, and `--auto-tls` app routes get
 trusted certificates:
 
 ```text
-$ sudo flynn-host acme configure --email=admin@example.com --agree-tos
-$ sudo flynn-host acme enable-system-routes
+$ sudo flynn-host acme:configure --email=admin@example.com --agree-tos
+$ sudo flynn-host acme:enable-system-routes
 $ flynn cluster:refresh --clear
 ```
 
@@ -270,7 +270,7 @@ MongoDB if they were running), `plugins.json` (which plugins were installed),
 a full `pg_dumpall` of Postgres (controller, blobstore files including plugin
 image layers, and every app Postgres database), and MariaDB/MongoDB dumps
 when those appliances are scaled above zero. Restore does **not** re-run
-`flynn-host plugin install`; plugin apps come back with postgres. Redis, Kafka,
+`flynn-host plugin:install`; plugin apps come back with postgres. Redis, Kafka,
 and ClickHouse keep data on volumes that are **not** included; after restore
 those engines come back empty. App slugs and container images stored in the
 blobstore (Postgres) are restored.
@@ -348,30 +348,30 @@ flynn -a status env get AUTH_KEY
 ### OpenTelemetry (Grafana, Alloy, collector)
 
 OpenTelemetry metrics are an **optional plugin**. Clusters that do not install
-it do not export OTLP. After `flynn-host plugin install otel`,
+it do not export OTLP. After `flynn-host plugin:install otel`,
 `flynn-host otel` forwards **host metrics** (CPU, memory, disk, load, job
 counts) to any OTLP/HTTP endpoint (`http://host:4318`, Grafana Alloy, the
 OpenTelemetry Collector, Grafana Cloud OTLP). Path `/v1/metrics` is appended.
 
 ```text
-sudo flynn-host plugin install otel
+sudo flynn-host plugin:install otel
 
 # Metrics to a local collector
-sudo flynn-host otel add http://alloy.example:4318
+sudo flynn-host otel:add http://alloy.example:4318
 
 # Grafana Cloud (or any collector that needs a header)
-sudo flynn-host otel add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
+sudo flynn-host otel:add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
 
 sudo flynn-host otel
-sudo flynn-host otel remove <id>
+sudo flynn-host otel:remove <id>
 ```
 
-Job logs stay on syslog. `flynn logsink` is **per app**. `flynn-host log-sink`
+Job logs stay on syslog. `flynn log-sink` is **per app**. `flynn-host log-sink`
 is cluster-wide and accepts `--scope` / `--app` filters:
 
 ```text
-sudo flynn-host log-sink add syslog --scope system syslog://logs.example:514/
-flynn -a myapp logsink:add syslog syslog://logs.example:514/
+sudo flynn-host log-sink:add syslog --scope system syslog://logs.example:514/
+flynn -a myapp log-sink:add syslog syslog://logs.example:514/
 ```
 
 The dashboard still shows live metrics for operators who are already logged in.

@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	logaggc "github.com/flynn/flynn/logaggregator/client"
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/typeconv"
+	ct "github.com/randy-girard/flynn/controller/types"
+	logaggc "github.com/randy-girard/flynn/logaggregator/client"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 
 	. "github.com/flynn/go-check"
 )

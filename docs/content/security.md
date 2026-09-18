@@ -37,8 +37,8 @@ Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. The TLS
 certificate used for communication is generated during installation
 (self-signed). Configure Let's Encrypt after bootstrap with
-`flynn-host acme configure --email=<you> --agree-tos` and
-`flynn-host acme enable-system-routes` so the dashboard and controller
+`flynn-host acme:configure --email=<you> --agree-tos` and
+`flynn-host acme:enable-system-routes` so the dashboard and controller
 present a trusted certificate; see [Apps — HTTPS](apps.md#https).
 A cryptographic hash of the certificate is pinned as part of the CLI
 configuration string to prevent man-in-the-middle attacks.

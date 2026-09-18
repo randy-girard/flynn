@@ -98,7 +98,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `pg:psql` / `mysql:cli` / `mongodb:cli` / `redis:cli` | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` | Topics and consumer groups (after plugin install) |
 | `clickhouse:cli` | Databases and client (after plugin install) |
-| `logsink` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin) |
+| `log-sink` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin). `logsink` is an alias. |
 | `volume` | Persistent volumes |
 | `provider` | Resource providers |
 
@@ -107,7 +107,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | Command | Purpose |
 | --- | --- |
 | `cluster` / `cluster:add` / `cluster:refresh` | Registered clusters |
-| `plugin:list` | Plugins installed on this cluster |
+| `plugin:list` | Plugins installed on this cluster (`--known` lists official plugins and GitHub repos) |
 | `login` | Dashboard OAuth |
 | `update` / `upgrade` | Replace this CLI from GitHub Releases |
 | `version` | CLI version |
@@ -118,7 +118,8 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 
 | Command | Purpose |
 | --- | --- |
-| `log-sink` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
-| `otel` | OpenTelemetry metrics (requires `flynn-host plugin install otel`) |
-| `domain` / `domain apex <app>` | Cluster domain and which app serves the apex (root) hostname |
+| `plugin:list` | Installed plugins (`--known` lists official plugins, repos, and descriptions) |
+| `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
+| `otel` / `otel:add` | OpenTelemetry metrics (requires `flynn-host plugin:install otel`) |
+| `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname |
 | `fix` | Repair a broken cluster (interactive on a TTY; `--yes` for scripts) |

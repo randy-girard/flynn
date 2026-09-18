@@ -3,6 +3,7 @@
 // license that can be found in the LICENSE file.
 
 // js does not support inter-process file locking.
+//go:build !js
 // +build !js
 
 package lockedfile_test
@@ -15,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/pkg/lockedfile"
+	"github.com/randy-girard/flynn/pkg/lockedfile"
 )
 
 func isPowerOf2(x int) bool {

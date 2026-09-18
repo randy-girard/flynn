@@ -6,10 +6,10 @@ import (
 	"net/http"
 	"os"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/tlscert"
 	que "github.com/flynn/que-go"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/tlscert"
 	"golang.org/x/net/context"
 )
 

@@ -1,8 +1,8 @@
 package schedutil
 
 import (
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 type HostSlice []*cluster.Host

@@ -6,27 +6,37 @@ import (
 	"os"
 	"text/tabwriter"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/go-docopt"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func init() {
 	register("plugin:list", runPlugins, `
-usage: flynn plugin:list
+usage: flynn plugin:list [--known]
 
 List plugins installed on the current cluster.
 
-The list comes from the controller (plugin apps the credential can see), not
-from a local checkout. Operators install with flynn-host plugin install.
-After install, plugin CLI commands also appear in flynn help when the
-plugin is a resource provider (or sets cli.user). kind: app system plugins
-are listed here but are not user flynn commands.
+--known prints first-party plugins Flynn knows how to install (name, GitHub
+repo, description) without talking to the cluster. Operators install with
+flynn-host plugin:install; flynn-host plugin:list --known is the same catalog.
+
+The installed list comes from the controller (plugin apps the credential can
+see), not from a local checkout. After install, plugin CLI commands also
+appear in flynn help when the plugin is a resource provider (or sets
+cli.user). kind: app system plugins are listed here but are not user flynn
+commands.
 `)
 }
 
-func runPlugins(_ *docopt.Args, client controller.Client) error {
+func runPlugins(args *docopt.Args) error {
+	if args != nil && args.Bool["--known"] {
+		return plugin.WriteKnownPlugins(os.Stdout, plugin.DefaultGitHubOrg(), plugin.KnownPlugins())
+	}
+	client, err := getClusterClient()
+	if err != nil {
+		return err
+	}
 	apps, err := client.AppList()
 	if err != nil {
 		return err

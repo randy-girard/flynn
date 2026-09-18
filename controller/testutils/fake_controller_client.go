@@ -5,11 +5,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type FakeControllerClient struct {

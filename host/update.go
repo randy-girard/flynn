@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 var (
@@ -43,22 +43,21 @@ var (
 //
 // * parent creates a control socket pair (via socketpair(2))
 //
-// * parent starts a child process, passing the API listener as FD 3, and a
-//   control socket as FD 4
+//   - parent starts a child process, passing the API listener as FD 3, and a
+//     control socket as FD 4
 //
 // * parent closes its API listener FD, state DBs and log followers.
 //
-// * parent signals the child to resume by sending "resume" message to control
-//   socket, followed by any partial log buffers.
+//   - parent signals the child to resume by sending "resume" message to control
+//     socket, followed by any partial log buffers.
 //
-// * child receives resume request, opens state DBs, seeds the log followers
-//   with the partial buffers and starts serving API requests
+//   - child receives resume request, opens state DBs, seeds the log followers
+//     with the partial buffers and starts serving API requests
 //
-// * child signals parent it is now serving requests by sending "ok" message to
-//   control socket
+//   - child signals parent it is now serving requests by sending "ok" message to
+//     control socket
 //
 // * parent sends response to client and shuts down seconds later
-//
 func (h *Host) Update(cmd *host.Command) error {
 	log := h.log.New("fn", "Update")
 

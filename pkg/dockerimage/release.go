@@ -3,8 +3,8 @@ package dockerimage
 import (
 	"strconv"
 
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 // ReleaseOptions configures how an app release is built from an imported image.

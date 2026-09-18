@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func TestControllerJobSkipsNilVolumes(t *testing.T) {

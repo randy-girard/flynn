@@ -6,10 +6,10 @@ import (
 	"os"
 
 	"github.com/cheggaaa/pb"
-	"github.com/flynn/flynn/pkg/backup"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/backup"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/term"
 )
 
 func init() {

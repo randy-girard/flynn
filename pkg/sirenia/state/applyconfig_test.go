@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/xlog"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/xlog"
 )
 
 // reconfigureStartsDB simulates sirenia appliances where Reconfigure starts the

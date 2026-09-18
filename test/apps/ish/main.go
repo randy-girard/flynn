@@ -8,12 +8,12 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 )
 
 /*
-	ish: the Inexusable/Insecure/Internet SHell.
+ish: the Inexusable/Insecure/Internet SHell.
 */
 func main() {
 	defer shutdown.Exit()

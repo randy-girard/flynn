@@ -34,6 +34,10 @@ if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup' | grep -qF 'S
   echo "SKIP_DEPLOY must not skip cluster backup (RESUME_AT=upgrade/backup still need restore)" >&2
   exit 1
 fi
+if ! grep -Fq "find %s -name '*.go' -exec cp -f {} %s/" "${ROOT}/builder/build.go"; then
+  echo "protobuild must copy generated stubs into the package dir before go build" >&2
+  exit 1
+fi
 need 'flynn-host backup --file' \
   "smoke must take a full-cluster backup via flynn-host"
 need '/tmp/flynn-smoke-backup.tar' \
@@ -89,7 +93,7 @@ if grep -q 'discovery grows a singleton' "${smoke}"; then
 fi
 
 if grep -q 'Reinstall plugins after restore' "${smoke}"; then
-  echo "restore must not flynn-host plugin install; postgres backup already has plugin apps and artifacts" >&2
+  echo "restore must not flynn-host plugin:install; postgres backup already has plugin apps and artifacts" >&2
   exit 1
 fi
 

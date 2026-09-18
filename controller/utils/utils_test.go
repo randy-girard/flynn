@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/stream"
+	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 func flynnArtifact(t *testing.T, entrypoints map[string]*ct.ImageEntrypoint, layers []*ct.ImageLayer) *ct.Artifact {

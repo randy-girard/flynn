@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 func init() {

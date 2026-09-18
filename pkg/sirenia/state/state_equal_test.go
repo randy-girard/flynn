@@ -3,8 +3,8 @@ package state_test
 import (
 	"testing"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/sirenia/state"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func inst(addr, id string) *discoverd.Instance {

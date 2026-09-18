@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/discoverd/server"
-	"github.com/flynn/flynn/pkg/keepalive"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/discoverd/server"
+	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 // Ensure the store can open and close.

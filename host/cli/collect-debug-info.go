@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/plugin"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 var flynnHostLogs = map[string]string{

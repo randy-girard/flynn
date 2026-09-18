@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 // ErrJobExists is returned when attempting to add a job to the state with an

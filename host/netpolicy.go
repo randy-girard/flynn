@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/iptables"
-	"github.com/flynn/flynn/pkg/netpolicy"
 	"github.com/inconshreveable/log15"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/iptables"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 )
 
 // netPolicy tracks overlay IPs in discoverd (cluster-wide) and mirrors them

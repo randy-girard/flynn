@@ -8,19 +8,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/sse"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/sse"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 /*
-	Stream manufactures a `pkg/stream.Stream`, starts a worker pumping events out of decoding, and returns that.
+Stream manufactures a `pkg/stream.Stream`, starts a worker pumping events out of decoding, and returns that.
 
-	The 'outputCh' parameter must be a sendable channel.  The "zero"-values of channel's content type will be created and used in the deserialization, then sent.
+The 'outputCh' parameter must be a sendable channel.  The "zero"-values of channel's content type will be created and used in the deserialization, then sent.
 
-	The return values from `httpclient.RawReq` are probably a useful starting point for the 'res' parameter.
+The return values from `httpclient.RawReq` are probably a useful starting point for the 'res' parameter.
 
-	Closing the returned `stream.Stream` shuts down the worker.
+Closing the returned `stream.Stream` shuts down the worker.
 */
 func Stream(res *http.Response, outputCh interface{}) stream.Stream {
 	stream := stream.New()

@@ -16,12 +16,12 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/flynn/flynn/blobstore/backend"
-	"github.com/flynn/flynn/blobstore/data"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/testutils/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/blobstore/backend"
+	"github.com/randy-girard/flynn/blobstore/data"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/testutils/postgres"
 )
 
 func initDB(t *testing.T) *postgres.DB {

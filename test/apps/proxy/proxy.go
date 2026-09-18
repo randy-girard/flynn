@@ -7,8 +7,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/dialer"
 )
 
 func main() {

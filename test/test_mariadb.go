@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/mysqlurl"
 	c "github.com/flynn/go-check"
 	_ "github.com/go-sql-driver/mysql"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/mysqlurl"
 )
 
 type MariaDBSuite struct {

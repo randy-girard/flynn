@@ -6,14 +6,14 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flynn/flynn/appliance/postgresql"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/shutdown"
-	sd "github.com/flynn/flynn/pkg/sirenia/discoverd"
-	"github.com/flynn/flynn/pkg/sirenia/state"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/appliance/postgresql"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	sd "github.com/randy-girard/flynn/pkg/sirenia/discoverd"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func main() {

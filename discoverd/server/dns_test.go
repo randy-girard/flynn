@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/plugin"
 	. "github.com/flynn/go-check"
 	"github.com/miekg/dns"
+	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 // Hook gocheck up to the "go test" runner

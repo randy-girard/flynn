@@ -6,7 +6,7 @@ import (
 	"encoding/pem"
 	"fmt"
 
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // Account represents an ACME account

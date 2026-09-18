@@ -1,0 +1,61 @@
+{
+  "github_org": "randy-girard",
+  "plugins": [
+    {
+      "name": "redis",
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-redis",
+      "description": "Redis. Provision with flynn resource add redis."
+    },
+    {
+      "name": "mariadb",
+      "aliases": ["mysql"],
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-mariadb",
+      "description": "MariaDB 10.11 (MySQL-compatible). Install as mariadb or mysql; provision with flynn resource add mysql."
+    },
+    {
+      "name": "mongodb",
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-mongodb",
+      "description": "MongoDB 7.0 replica set. Provision with flynn resource add mongodb."
+    },
+    {
+      "name": "kafka",
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-kafka",
+      "description": "Apache Kafka 3.9 (KRaft). Provision with flynn resource add kafka."
+    },
+    {
+      "name": "clickhouse",
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-clickhouse",
+      "description": "ClickHouse analytics database. Provision with flynn resource add clickhouse."
+    },
+    {
+      "name": "dashboard",
+      "kind": "app",
+      "repo": "flynn-plugin-dashboard",
+      "description": "Cluster web dashboard for operators."
+    },
+    {
+      "name": "www",
+      "kind": "app",
+      "repo": "flynn-plugin-www",
+      "description": "Public cluster homepage on the apex and www hostnames."
+    },
+    {
+      "name": "discovery",
+      "kind": "app",
+      "repo": "flynn-plugin-discovery",
+      "description": "Public cluster discovery endpoint."
+    },
+    {
+      "name": "otel",
+      "aliases": ["opentelemetry"],
+      "kind": "app",
+      "repo": "flynn-plugin-otel",
+      "description": "Forward cluster metrics to an OpenTelemetry collector (OTLP/HTTP)."
+    }
+  ]
+}

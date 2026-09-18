@@ -8,11 +8,11 @@ import (
 )
 
 func TestParseBlockLineAndAreas(t *testing.T) {
-	name, b, err := parseBlockLine("github.com/flynn/flynn/pkg/plugin/manifest.go:96.32,117.2 8 1")
+	name, b, err := parseBlockLine("github.com/randy-girard/flynn/pkg/plugin/manifest.go:96.32,117.2 8 1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if name != "github.com/flynn/flynn/pkg/plugin/manifest.go" || b.StartLine != 96 || b.EndLine != 117 || b.NumStmt != 8 || b.Count != 1 {
+	if name != "github.com/randy-girard/flynn/pkg/plugin/manifest.go" || b.StartLine != 96 || b.EndLine != 117 || b.NumStmt != 8 || b.Count != 1 {
 		t.Fatalf("%s %+v", name, b)
 	}
 	area, pkg := splitAreaPackage("pkg/plugin/manifest.go")
@@ -30,9 +30,9 @@ func TestWriteHTMLPerFileAndIndexSections(t *testing.T) {
 	dir := t.TempDir()
 	profile := filepath.Join(dir, "coverage.out")
 	data := "mode: atomic\n" +
-		"github.com/flynn/flynn/pkg/plugin/manifest.go:96.32,117.2 8 1\n" +
-		"github.com/flynn/flynn/pkg/plugin/catalog.go:16.48,23.2 2 0\n" +
-		"github.com/flynn/flynn/cli/plugin_catalog.go:18.43,24.2 2 1\n"
+		"github.com/randy-girard/flynn/pkg/plugin/manifest.go:96.32,117.2 8 1\n" +
+		"github.com/randy-girard/flynn/pkg/plugin/catalog.go:16.48,23.2 2 0\n" +
+		"github.com/randy-girard/flynn/cli/plugin_catalog.go:18.43,24.2 2 1\n"
 	if err := os.WriteFile(profile, []byte(data), 0644); err != nil {
 		t.Fatal(err)
 	}

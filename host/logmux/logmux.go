@@ -15,12 +15,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/logaggregator/utils"
-	"github.com/flynn/flynn/pkg/stream"
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
-	"github.com/flynn/flynn/pkg/syslog/rfc6587"
 	"github.com/inconshreveable/log15"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc6587"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 

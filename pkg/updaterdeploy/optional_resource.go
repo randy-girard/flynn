@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 const optionalResourceDeployTimeout = 5 * time.Minute

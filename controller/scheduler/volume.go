@@ -3,8 +3,8 @@ package main
 import (
 	"sync"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/volume"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/volume"
 )
 
 type Volume struct {

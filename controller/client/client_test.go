@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	v1controller "github.com/flynn/flynn/controller/client/v1"
+	v1controller "github.com/randy-girard/flynn/controller/client/v1"
 )
 
 func TestNewClientDefaultsAndToken(t *testing.T) {

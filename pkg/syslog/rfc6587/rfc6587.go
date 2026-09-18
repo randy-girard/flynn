@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
 
 // Bytes returns the RFC6587-framed bytes of an RFC5424 syslog Message,

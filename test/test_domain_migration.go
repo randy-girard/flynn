@@ -7,12 +7,12 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/dialer"
-	"github.com/flynn/flynn/pkg/random"
-	router "github.com/flynn/flynn/router/types"
 	c "github.com/flynn/go-check"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/dialer"
+	"github.com/randy-girard/flynn/pkg/random"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 type DomainMigrationSuite struct {

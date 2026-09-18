@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/cupcake/jsonschema"
-	ct "github.com/flynn/flynn/controller/types"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 var schemaCache map[string]*jsonschema.Schema

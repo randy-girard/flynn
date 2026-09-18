@@ -3,8 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 func init() {

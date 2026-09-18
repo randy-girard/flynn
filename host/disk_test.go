@@ -2,12 +2,11 @@ package main
 
 import (
 	"errors"
-	"os"
 	"syscall"
 	"testing"
 
-	host "github.com/flynn/flynn/host/types"
 	"github.com/inconshreveable/log15"
+	host "github.com/randy-girard/flynn/host/types"
 )
 
 func TestFillDiskStatsReportsThisMachine(t *testing.T) {
@@ -15,8 +14,8 @@ func TestFillDiskStatsReportsThisMachine(t *testing.T) {
 	if err := fillDiskStats(stats); err != nil {
 		t.Fatal(err)
 	}
-	if stats.DiskPath != flynnNodeDiskPath() && stats.DiskPath != "/" {
-		t.Fatalf("disk_path=%q", stats.DiskPath)
+	if stats.DiskPath != hostRootFS {
+		t.Fatalf("disk_path=%q want %q", stats.DiskPath, hostRootFS)
 	}
 	if stats.DiskTotalBytes == 0 {
 		t.Fatal("expected non-zero total bytes")
@@ -26,15 +25,13 @@ func TestFillDiskStatsReportsThisMachine(t *testing.T) {
 	}
 }
 
-func TestFlynnNodeDiskPathPrefersDataRoot(t *testing.T) {
-	if st, err := os.Stat(flynnDataRoot); err == nil && st.IsDir() {
-		if got := flynnNodeDiskPath(); got != flynnDataRoot {
-			t.Fatalf("got %q want %q", got, flynnDataRoot)
-		}
-		return
+func TestFillDiskStatsUsesHostRoot(t *testing.T) {
+	stats := &host.HostResourceStats{}
+	if err := fillDiskStats(stats); err != nil {
+		t.Fatal(err)
 	}
-	if got := flynnNodeDiskPath(); got != "/" {
-		t.Fatalf("got %q want / when %s is missing", got, flynnDataRoot)
+	if stats.DiskPath != "/" {
+		t.Fatalf("host disk must be the whole server root, got %q", stats.DiskPath)
 	}
 }
 
@@ -116,13 +113,13 @@ func TestSendDiskFullCooldown(t *testing.T) {
 
 func TestApplyStatfsUsesBavailForFree(t *testing.T) {
 	stats := &host.HostResourceStats{}
-	applyStatfs(stats, "/var/lib/flynn", syscall.Statfs_t{
+	applyStatfs(stats, "/", syscall.Statfs_t{
 		Blocks: 1000,
 		Bfree:  200,
 		Bavail: 150,
 		Bsize:  4096,
 	})
-	if stats.DiskPath != "/var/lib/flynn" {
+	if stats.DiskPath != "/" {
 		t.Fatalf("path %q", stats.DiskPath)
 	}
 	if stats.DiskTotalBytes != 1000*4096 {

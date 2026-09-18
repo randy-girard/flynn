@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/ctxhelper"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 )
 
 func decodeJSONError(t *testing.T, rec *httptest.ResponseRecorder) JSONError {

@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type WatchState string
@@ -86,15 +86,15 @@ var connectAttempts = attempt.Strategy{
 //
 // On reconnect, current events from the server are handled as follows:
 //
-// * EventKindUp
+//   - EventKindUp
 //     Compared to local instances, and only sent if the instance was previously
 //     unknown or has changed in some way (with the event's kind being set to
 //     EventKindUpdate in the latter case).
 //
-// * EventKindLeader
+//   - EventKindLeader
 //     Compared to the most recently known leader, and only sent if it differs.
 //
-// * EventKindServiceMeta
+//   - EventKindServiceMeta
 //     Compared to the most recently known service metadata, and only sent if
 //     it differs.
 func (s *service) Watch(ch chan *Event) (stream.Stream, error) {

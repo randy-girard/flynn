@@ -8,10 +8,10 @@ import (
 	"os/exec"
 	"path"
 
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/testutils"
 	. "github.com/flynn/go-check"
 	gzfs "github.com/mistifyio/go-zfs"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/testutils"
 )
 
 // note: whimsical/unique dataset names per test are chosen to help debug

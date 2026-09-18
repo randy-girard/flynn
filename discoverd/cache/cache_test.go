@@ -3,7 +3,7 @@ package cache
 import (
 	"testing"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
 )
 
 func TestAddrsInstancesAndLeader(t *testing.T) {

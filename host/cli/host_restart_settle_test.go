@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/host/types"
+	"github.com/randy-girard/flynn/host/types"
 )
 
 func TestRollingRestartTimingDefaults(t *testing.T) {

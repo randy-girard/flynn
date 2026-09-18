@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/pkg/ctxhelper"
 	log "github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 )
 
 type RequestLoggerFn func(handler http.Handler, logger log.Logger, clientIP string, rw *ResponseWriter, req *http.Request)

@@ -10,8 +10,8 @@ import (
 	"os/exec"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 type BlobstoreSuite struct {

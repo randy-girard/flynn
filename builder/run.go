@@ -6,10 +6,10 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/squashfs"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/squashfs"
 )
 
 var cmdRun = Command{

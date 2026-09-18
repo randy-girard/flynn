@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	worker "github.com/flynn/flynn/controller/worker/types"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/tlscert"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	worker "github.com/randy-girard/flynn/controller/worker/types"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // limits the number of concurrent requests to the router

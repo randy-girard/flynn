@@ -4,9 +4,9 @@ import (
 	"sort"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/pkg/typeconv"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 // JobState is a job's in-memory state

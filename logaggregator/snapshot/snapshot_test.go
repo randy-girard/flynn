@@ -5,7 +5,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 
 	. "github.com/flynn/go-check"
 )

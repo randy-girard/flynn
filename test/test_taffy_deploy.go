@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/cluster"
 	c "github.com/flynn/go-check"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 type TaffyDeploySuite struct {

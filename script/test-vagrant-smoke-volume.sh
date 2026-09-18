@@ -23,7 +23,7 @@ need 'VOL_SMOKE_READ' \
   "volume step must read the token back after restarting the vol job"
 need 'volume decommission' \
   "volume step must decommission the volume through the Flynn CLI"
-need 'flynn-host volume delete' \
+need 'flynn-host volume:delete' \
   "volume step must destroy the volume on the host after decommission"
 need 'scale vol=1' \
   "volume step must scale a process type that has a persistent /data volume"

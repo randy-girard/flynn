@@ -6,8 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/flynn/flynn/pkg/testutils"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/testutils"
 )
 
 type ZfsTransmitTests struct {
@@ -34,9 +34,9 @@ func (s *ZfsTransmitTests) TearDownTest(c *C) {
 }
 
 /*
-	Testing behaviors of 'zfs send' & 'zfs recv' in isolation to make sure deltas work the way we expect.
+Testing behaviors of 'zfs send' & 'zfs recv' in isolation to make sure deltas work the way we expect.
 
-	See integration tests for taking the full trip over the wire through the REST API.
+See integration tests for taking the full trip over the wire through the REST API.
 */
 func (s *ZfsTransmitTests) TestZfsSendRecvFull(c *C) {
 	// create volume; add content; snapshot it.
@@ -76,7 +76,7 @@ func (s *ZfsTransmitTests) TestZfsSendRecvFull(c *C) {
 }
 
 /*
-	Test that sending incremental deltas works (and is smaller than wholes).
+Test that sending incremental deltas works (and is smaller than wholes).
 */
 func (s *ZfsTransmitTests) TestZfsSendRecvIncremental(c *C) {
 	// create volume; add content; snapshot it.

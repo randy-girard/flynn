@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/cli/config"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/cli/config"
 	"golang.org/x/oauth2"
 )
 

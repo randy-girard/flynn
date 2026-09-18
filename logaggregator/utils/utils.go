@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	logagg "github.com/flynn/flynn/logaggregator/types"
-	"github.com/flynn/flynn/pkg/syslog/rfc5424"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
 
 func ParseMessage(data []byte) (*rfc5424.Message, *HostCursor, error) {

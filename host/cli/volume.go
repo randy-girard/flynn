@@ -10,51 +10,51 @@ import (
 	"time"
 
 	"github.com/docker/go-units"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {
-	Register("volume", runVolume, `
-usage: flynn-host volume list
-       flynn-host volume create [--provider=<provider>] <host>
-       flynn-host volume delete ID...
-       flynn-host volume gc
+	Register("volume:list", runVolumeList, `
+usage: flynn-host volume:list
 
-Commands:
-    list    Display a list of all volumes of known Flynn hosts
-    create  Creates a data volume on a host
-    delete  Deletes volumes, destroying any data stored on them
-    gc      Garbage collect currently unused volumes
+Display a list of all volumes of known Flynn hosts.
 
 Examples:
 
-    $ flynn-host volume list
-
-    $ flynn-host volume create --provider default host0
-
-    $ flynn-host volume destroy 102fad07-07a3-4841-bded-d9e8a3eedbd6
-
-    $ flynn-host volume gc
+    $ flynn-host volume:list
 `)
-}
+	Register("volume:create", runVolumeCreate, `
+usage: flynn-host volume:create [--provider=<provider>] <host>
 
-func runVolume(args *docopt.Args, client *cluster.Client) error {
-	switch {
-	case args.Bool["list"]:
-		return runVolumeList(args, client)
-	case args.Bool["delete"]:
-		return runVolumeDelete(args, client)
-	case args.Bool["create"]:
-		return runVolumeCreate(args, client)
-	case args.Bool["gc"]:
-		return runVolumeGarbageCollection(args, client)
-	}
-	return nil
+Create a data volume on a host.
+
+Examples:
+
+    $ flynn-host volume:create --provider default host0
+`)
+	Register("volume:delete", runVolumeDelete, `
+usage: flynn-host volume:delete ID...
+
+Delete volumes, destroying any data stored on them.
+
+Examples:
+
+    $ flynn-host volume:delete 102fad07-07a3-4841-bded-d9e8a3eedbd6
+`)
+	Register("volume:gc", runVolumeGarbageCollection, `
+usage: flynn-host volume:gc
+
+Garbage collect currently unused volumes.
+
+Examples:
+
+    $ flynn-host volume:gc
+`)
 }
 
 func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error {

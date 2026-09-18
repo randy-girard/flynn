@@ -13,22 +13,22 @@ import (
 	"sync"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/host/volume"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/cluster"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/status"
-	"github.com/flynn/flynn/pkg/stream"
-	"github.com/flynn/flynn/pkg/typeconv"
-	"github.com/flynn/flynn/router/types"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/typeconv"
+	"github.com/randy-girard/flynn/router/types"
 )
 
 const (
@@ -173,7 +173,7 @@ func main() {
 	// Use a low timeout for HTTP requests to avoid blocking the main loop.
 	//
 	// TODO: make all HTTP calls asynchronous
-	//       (see https://github.com/flynn/flynn/issues/1920)
+	//       (see https://github.com/randy-girard/flynn/issues/1920)
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	log.Info("creating cluster and controller clients")

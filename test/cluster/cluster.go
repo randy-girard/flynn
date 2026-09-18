@@ -14,11 +14,11 @@ import (
 	"time"
 
 	units "github.com/docker/go-units"
-	"github.com/flynn/flynn/cli/config"
-	controller "github.com/flynn/flynn/controller/client"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/test/buildlog"
+	"github.com/randy-girard/flynn/cli/config"
+	controller "github.com/randy-girard/flynn/controller/client"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/test/buildlog"
 )
 
 type ClusterType uint8

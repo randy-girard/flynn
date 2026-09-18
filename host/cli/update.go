@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flynn/flynn/pkg/installsource"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/installsource"
 )
 
 func init() {

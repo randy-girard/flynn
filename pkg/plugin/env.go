@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/random"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 // appReleaseGetter is the ClusterEnv subset of the controller client.

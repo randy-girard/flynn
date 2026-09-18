@@ -16,13 +16,13 @@ import (
 	"time"
 
 	acmelib "github.com/eggsampler/acme/v3"
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/stream"
-	router "github.com/flynn/flynn/router/types"
 	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/stream"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 // DefaultDirectoryURL is the default ACME directory URL (Let's Encrypt production)
@@ -309,7 +309,7 @@ func runServiceLoop(ctx context.Context, client controller.Client, responder *Re
 	log.Info("checking ACME configuration")
 	checkConfig()
 	if service == nil {
-		log.Info("ACME not configured, running in standby mode - configure with 'flynn-host acme configure'")
+		log.Info("ACME not configured, running in standby mode - configure with 'flynn-host acme:configure'")
 	}
 
 	for {

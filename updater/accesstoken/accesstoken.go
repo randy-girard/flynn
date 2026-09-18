@@ -1,7 +1,7 @@
 package accesstoken
 
 import (
-	"github.com/flynn/flynn/controller/tokensigner"
+	"github.com/randy-girard/flynn/controller/tokensigner"
 )
 
 // pair holds the cluster access-token keypair for the duration of one updater

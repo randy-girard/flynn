@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/stream"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/stream"
 )
 
 type Service interface {

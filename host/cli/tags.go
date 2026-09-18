@@ -6,33 +6,30 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/flynn/flynn/pkg/cliutil"
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func init() {
-	Register("tags", runTags, `
+	Register("tags", runTagsList, `
 usage: flynn-host tags
-       flynn-host tags set <hostid> <var>=<val>...
-       flynn-host tags del <hostid> <var>...
 
-Manage flynn-host daemon tags.
+List flynn-host daemon tags.
+`)
+	Register("tags:set", runTagsSet, `
+usage: flynn-host tags:set <hostid> <var>=<val>...
 
-Commands:
-	With no arguments, shows a list of current tags.
+Set one or more flynn-host daemon tags.
+`)
+	Register("tags:del", runTagsDel, `
+usage: flynn-host tags:del <hostid> <var>...
 
-	set    sets value of one or more tags
-	del    deletes one or more tags
+Delete one or more flynn-host daemon tags.
 `)
 }
 
-func runTags(args *docopt.Args, client *cluster.Client) error {
-	if args.Bool["set"] {
-		return runTagsSet(args, client)
-	} else if args.Bool["del"] {
-		return runTagsDel(args, client)
-	}
+func runTagsList(_ *docopt.Args, client *cluster.Client) error {
 	hosts, err := client.Hosts()
 	if err != nil {
 		return err

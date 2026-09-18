@@ -5,8 +5,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/flynn/flynn/pkg/postgres"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 var ErrNotFound = errors.New("file not found")

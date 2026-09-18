@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	router "github.com/flynn/flynn/router/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func TestWatchManagerDeliversRouteSet(t *testing.T) {

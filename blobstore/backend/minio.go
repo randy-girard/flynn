@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
 	"github.com/minio/minio-go"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func init() {

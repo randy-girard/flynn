@@ -113,7 +113,8 @@ func splitOwnerRepo(src *GitHubSource, repoPath string) error {
 
 // Resolve turns a CLI source (path, alias, or git URL) into a local directory
 // and/or a GitHub release to pull. Local checkouts win so Vagrant/dev keep
-// working; missing siblings fall back to GitHub using github_org / plugins.json.
+// working; missing siblings fall back to the official catalog, then
+// github_org / plugins.json.
 func Resolve(opts InstallOptions) (*Resolved, error) {
 	source := strings.TrimSpace(opts.Source)
 	if source == "" {

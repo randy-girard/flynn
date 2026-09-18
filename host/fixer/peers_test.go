@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func TestParsePeerIPList(t *testing.T) {

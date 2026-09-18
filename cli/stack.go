@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/flynn/flynn/controller/client"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
 )
 
 const (

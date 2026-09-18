@@ -13,8 +13,7 @@ const (
 
 // DiscoverLocalPlugins scans root for checkouts that contain flynn-plugin.json
 // and returns install aliases from each manifest (name, provider, CLI command,
-// and aliases). Flynn core has no builtin plugin name list; mysql resolves to
-// MariaDB only because that plugin's manifest says so.
+// and aliases). Sibling checkouts override the official catalog path/repo.
 func DiscoverLocalPlugins(root string) map[string]Alias {
 	out := map[string]Alias{}
 	if root == "" {
@@ -57,7 +56,7 @@ func mergeInstalledAliases(aliases map[string]Alias, installed []Installed) {
 		}
 		for _, name := range p.ResolveNames() {
 			existing := aliases[name]
-			if existing.Repo == "" {
+			if repo != "" {
 				existing.Repo = repo
 			}
 			aliases[name] = existing

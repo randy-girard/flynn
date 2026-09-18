@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/go-docopt"
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
 func TestLinuxHostBinaryFiles(t *testing.T) {

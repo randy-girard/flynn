@@ -6,13 +6,13 @@ import (
 	"os"
 	"strings"
 
-	discoverd "github.com/flynn/flynn/discoverd/client"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/resource"
-	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/julienschmidt/httprouter"
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/resource"
+	"github.com/randy-girard/flynn/pkg/shutdown"
 	"golang.org/x/net/context"
 )
 

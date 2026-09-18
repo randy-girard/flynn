@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/tlscert"
-	"github.com/flynn/flynn/router/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/tlscert"
+	"github.com/randy-girard/flynn/router/types"
 )
 
 type AddRouteAction struct {

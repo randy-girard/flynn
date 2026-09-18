@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flynn/flynn/pkg/version"
+	"github.com/randy-girard/flynn/pkg/version"
 )
 
 var telemetryURL = "https://dl.flynn.cloud.randygirard.com/measure/scheduler"

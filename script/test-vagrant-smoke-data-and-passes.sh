@@ -91,11 +91,27 @@ need 'sirenia_primary_read_write' \
 need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
 need 'step_install_plugins' \
-  "after bootstrap, smoke must flynn-host plugin install from sibling repos before resource add"
+  "after bootstrap, smoke must flynn-host plugin:install from sibling repos before resource add"
 need 'flynn-host backup --file' \
   "smoke must take a cluster backup with flynn-host backup"
-need 'flynn-upgrade-smoke-discoverd' \
-  "cluster backup must pin controller.discoverd for host net.Dial hijack"
+if grep -q 'flynn-upgrade-smoke-discoverd' "${smoke}"; then
+  echo "cluster backup must not pin /etc/hosts; Hijack must use the discoverd dialer" >&2
+  exit 1
+fi
+ctrl="${ROOT}/host/cli/controller_client.go"
+if ! grep -q 'http://controller.discoverd' "${ctrl}"; then
+  echo "flynn-host controller client must use controller.discoverd (discoverd Dial, not instance IP)" >&2
+  exit 1
+fi
+if grep -q 'http://"+instances\[0\].Addr' "${ctrl}"; then
+  echo "flynn-host must not pin controller Hijack to an instance IP" >&2
+  exit 1
+fi
+httpclient="${ROOT}/pkg/httpclient/json.go"
+if ! grep -q 'func (c \*Client) hijackDial' "${httpclient}"; then
+  echo "Hijack must use Transport.Dial (hijackDial) so *.discoverd works without /etc/hosts" >&2
+  exit 1
+fi
 need 'assemble_plugin_github_unpack' \
   "plugin install in smoke must unpack GitHub release assets, not the git checkout"
 need 'dist/github-unpack' \
@@ -106,6 +122,26 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
 fi
 need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel' \
   "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery, otel)"
+catalog="${ROOT}/pkg/plugin/official-plugins.json"
+need_file "${catalog}" "flynn-host must ship pkg/plugin/official-plugins.json for short-name installs"
+for name in redis mariadb mongodb kafka clickhouse dashboard www discovery otel; do
+  if ! grep -q "\"name\": \"${name}\"" "${catalog}"; then
+    echo "official plugin catalog must include ${name}" >&2
+    exit 1
+  fi
+done
+if ! grep -q '"mysql"' "${catalog}"; then
+  echo "official plugin catalog must alias mysql to mariadb" >&2
+  exit 1
+fi
+if ! grep -q '"opentelemetry"' "${catalog}"; then
+  echo "official plugin catalog must alias opentelemetry to otel" >&2
+  exit 1
+fi
+if ! grep -Fq 'plugin:list [--known]' "${ROOT}/host/cli/plugin.go"; then
+  echo "flynn-host plugin:list --known must show the official catalog" >&2
+  exit 1
+fi
 need 'www.\${CLUSTER_DOMAIN}' \
   "/etc/hosts must resolve www.CLUSTER_DOMAIN so the www plugin route is reachable"
 need 'plugin_manifest_matches' \
@@ -127,7 +163,7 @@ if grep -qE 'mysql\) echo .*flynn-plugin-mariadb' "${smoke}"; then
   echo "plugin_checkout must not hardcode mysql→mariadb" >&2
   exit 1
 fi
-need 'flynn-host plugin install' \
+need 'flynn-host plugin:install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
   "plugin install in smoke must not block on TTY setup prompts"

@@ -3,8 +3,8 @@ package main
 import (
 	"net/http"
 
-	"github.com/flynn/flynn/pkg/ctxhelper"
-	"github.com/flynn/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
 )
 

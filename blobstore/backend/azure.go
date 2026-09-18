@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/storage"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
 )
 
 func init() {

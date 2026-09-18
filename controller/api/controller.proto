@@ -2,7 +2,7 @@ syntax = 'proto3';
 
 package flynn.api.v1;
 
-option go_package = "github.com/flynn/flynn/controller/api;api";
+option go_package = "github.com/randy-girard/flynn/controller/api;api";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/duration.proto";
@@ -274,7 +274,7 @@ message App {
   google.protobuf.Timestamp delete_time = 9;
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 message HostHealthCheck {
   // Type is one of tcp, http, https
   string type = 1;
@@ -306,7 +306,7 @@ message HostHealthCheck {
   int32 status = 10;
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 message HostService {
   string display_name = 1;
 
@@ -330,7 +330,7 @@ message VolumeReq {
   bool delete_on_stop = 2;
 }
 
-// See github.com/flynn/flynn/host/resource Spec
+// See github.com/randy-girard/flynn/host/resource Spec
 message HostResourceSpec {
   // Request, if set, is the amount of resource a job expects to consume,
   // so the job should only be placed on a host with at least this amount
@@ -345,7 +345,7 @@ message HostResourceSpec {
   int64 limit = 2;
 }
 
-// See github.com/flynn/flynn/host/types Mount
+// See github.com/randy-girard/flynn/host/types Mount
 message HostMount {
   string location = 1;
 

@@ -8,14 +8,17 @@ import (
 
 // topAliases rewrites a single-token command (flynn create → apps:create).
 var topAliases = map[string]string{
-	"create":     "apps:create",
-	"delete":     "apps:destroy",
-	"info":       "apps:info",
-	"kill":       "ps:kill",
-	"export":     "apps:export",
-	"import":     "apps:import",
-	"plugins":    "plugin:list",
-	"deployment": "deploy",
+	"create":         "apps:create",
+	"delete":         "apps:destroy",
+	"info":           "apps:info",
+	"kill":           "ps:kill",
+	"export":         "apps:export",
+	"import":         "apps:import",
+	"plugins":        "plugin:list",
+	"deployment":     "deploy",
+	"logsink":        "log-sink",
+	"logsink:add":    "log-sink:add",
+	"logsink:remove": "log-sink:remove",
 }
 
 // subAliases rewrites flynn <noun> <verb> to flynn <noun>:<verb>.
@@ -106,9 +109,13 @@ var subAliases = map[string]map[string]string{
 	"plugin": {
 		"list": "plugin:list",
 	},
+	"log-sink": {
+		"add":    "log-sink:add",
+		"remove": "log-sink:remove",
+	},
 	"logsink": {
-		"add":    "logsink:add",
-		"remove": "logsink:remove",
+		"add":    "log-sink:add",
+		"remove": "log-sink:remove",
 	},
 }
 

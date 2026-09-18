@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/flynn/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/discoverd/client"
 )
 
 type MonitorMetadata struct {

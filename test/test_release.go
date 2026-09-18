@@ -9,12 +9,12 @@ import (
 	"strings"
 	"text/template"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/random"
-	tc "github.com/flynn/flynn/test/cluster"
-	updater "github.com/flynn/flynn/updater/types"
 	c "github.com/flynn/go-check"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/random"
+	tc "github.com/randy-girard/flynn/test/cluster"
+	updater "github.com/randy-girard/flynn/updater/types"
 )
 
 type ReleaseSuite struct {

@@ -26,21 +26,21 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/s3"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/httphelper"
-	"github.com/flynn/flynn/pkg/iotool"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
-	"github.com/flynn/flynn/pkg/shutdown"
-	"github.com/flynn/flynn/pkg/sse"
-	"github.com/flynn/flynn/pkg/stream"
-	"github.com/flynn/flynn/pkg/typeconv"
-	"github.com/flynn/flynn/test/arg"
-	"github.com/flynn/flynn/test/buildlog"
-	"github.com/flynn/flynn/test/cluster"
 	"github.com/flynn/tail"
 	"github.com/jackc/pgx"
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/iotool"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/shutdown"
+	"github.com/randy-girard/flynn/pkg/sse"
+	"github.com/randy-girard/flynn/pkg/stream"
+	"github.com/randy-girard/flynn/pkg/typeconv"
+	"github.com/randy-girard/flynn/test/arg"
+	"github.com/randy-girard/flynn/test/buildlog"
+	"github.com/randy-girard/flynn/test/cluster"
 )
 
 var logBucket = "flynn-ci-logs"
@@ -294,7 +294,7 @@ build/bin/flynn-host run \
   BLOBSTORE_S3_CONFIG="\${BLOBSTORE_S3_CONFIG}" \
   BLOBSTORE_GCS_CONFIG="\${BLOBSTORE_GCS_CONFIG}" \
   BLOBSTORE_AZURE_CONFIG="\${BLOBSTORE_AZURE_CONFIG}" \
-  /bin/bash "/go/src/github.com/flynn/flynn/test/run.sh" \
+  /bin/bash "/go/src/github.com/randy-girard/flynn/test/run.sh" \
   --cluster-api "http://{{ .RunnerIP }}/cluster/{{ .Cluster.ID }}" \
   --router-ip "{{ .Cluster.RouterIP }}" \
   --backups-dir "/mnt/backups" \
@@ -773,7 +773,7 @@ func (r *Runner) explainBuild(w http.ResponseWriter, req *http.Request, ps httpr
 	}
 	build.Reason = req.FormValue("reason")
 	build.IssueLink = req.FormValue("issue-link")
-	if build.IssueLink != "" && !strings.HasPrefix(build.IssueLink, "https://github.com/flynn/flynn/issues/") {
+	if build.IssueLink != "" && !strings.HasPrefix(build.IssueLink, "https://github.com/randy-girard/flynn/issues/") {
 		http.Error(w, fmt.Sprintf("Invalid GitHub issue link: %q\n", build.IssueLink), 400)
 		return
 	}

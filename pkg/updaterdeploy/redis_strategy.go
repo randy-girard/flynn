@@ -3,8 +3,8 @@ package updaterdeploy
 import (
 	"fmt"
 
-	ct "github.com/flynn/flynn/controller/types"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 type appStrategyUpdater interface {

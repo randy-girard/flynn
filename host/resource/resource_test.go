@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/docker/go-units"
-	"github.com/flynn/flynn/pkg/typeconv"
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 // Hook gocheck up to the "go test" runner

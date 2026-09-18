@@ -3,9 +3,9 @@ package main
 import (
 	"log"
 
-	"github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func init() {

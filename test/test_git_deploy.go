@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	controller "github.com/flynn/flynn/controller/client"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/attempt"
-	"github.com/flynn/flynn/pkg/term"
 	c "github.com/flynn/go-check"
 	"github.com/kr/pty"
+	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/term"
 )
 
 type GitDeploySuite struct {
@@ -197,7 +197,7 @@ func (s *GitDeploySuite) TestConfigDir(t *c.C) {
 	t.Assert(r.git("push", "flynn", "master"), Succeeds)
 }
 
-// TestLargeRepo ensures that there is no regression for https://github.com/flynn/flynn/issues/1799
+// TestLargeRepo ensures that there is no regression for https://github.com/randy-girard/flynn/issues/1799
 func (s *GitDeploySuite) TestLargeRepo(t *c.C) {
 	r := s.newGitRepo(t, "")
 

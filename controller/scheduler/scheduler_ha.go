@@ -1,8 +1,8 @@
 package main
 
 import (
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/sirenia/ha"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/sirenia/ha"
 )
 
 // maybePromoteSireniaHA flips singleton postgres/MariaDB/MongoDB appliances to

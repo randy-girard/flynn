@@ -13,7 +13,7 @@ import (
 	"encoding/base64"
 	"fmt"
 
-	api "github.com/flynn/flynn/controller/api"
+	api "github.com/randy-girard/flynn/controller/api"
 	"google.golang.org/protobuf/proto"
 )
 

@@ -23,15 +23,15 @@ import (
 	"time"
 
 	"github.com/cheggaaa/pb"
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/controller/utils"
-	"github.com/flynn/flynn/host/resource"
-	host "github.com/flynn/flynn/host/types"
-	"github.com/flynn/flynn/pkg/exec"
-	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
 	"github.com/golang/groupcache/singleflight"
 	"github.com/inconshreveable/log15"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
+	"github.com/randy-girard/flynn/host/resource"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/exec"
+	"github.com/randy-girard/flynn/pkg/term"
 	cjson "github.com/tent/canonical-json-go"
 )
 
@@ -1190,8 +1190,12 @@ func (b *Builder) BuildImage(image *Image) error {
 					// PATH: prefer /bin so we invoke protoc-gen-go(go install) before any other PATH binary.
 					// protoc 3.11's well-known types still declare legacy go_package paths; map them to
 					// google.golang.org/protobuf/types/known/* so -mod=vendor builds do not require genproto/ptypes.
-					fmt.Sprintf("PATH=/bin:/usr/local/bin:/usr/bin protoc -I /usr/local/include -I %s --go_out=%s --go_opt=module=github.com/flynn/flynn/controller/api --go_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb --go-grpc_out=%s --go-grpc_opt=module=github.com/flynn/flynn/controller/api --go-grpc_opt=require_unimplemented_servers=false --go-grpc_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go-grpc_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go-grpc_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go-grpc_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb %s",
+					fmt.Sprintf("PATH=/bin:/usr/local/bin:/usr/bin protoc -I /usr/local/include -I %s --go_out=%s --go_opt=module=github.com/randy-girard/flynn/controller/api --go_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb --go-grpc_out=%s --go-grpc_opt=module=github.com/randy-girard/flynn/controller/api --go-grpc_opt=require_unimplemented_servers=false --go-grpc_opt=Mgoogle/protobuf/timestamp.proto=google.golang.org/protobuf/types/known/timestamppb --go-grpc_opt=Mgoogle/protobuf/duration.proto=google.golang.org/protobuf/types/known/durationpb --go-grpc_opt=Mgoogle/protobuf/empty.proto=google.golang.org/protobuf/types/known/emptypb --go-grpc_opt=Mgoogle/protobuf/field_mask.proto=google.golang.org/protobuf/types/known/fieldmaskpb %s",
 						dir, outDir, outDir, strings.Join(paths, " ")),
+					// go build compiles /mnt/src, not /mnt/out/proto. Flatten generated
+					// stubs into the package so this layer cannot ship a binary built
+					// from a stale or string-replaced protobuf rawDesc.
+					fmt.Sprintf("find %s -name '*.go' -exec cp -f {} %s/ \\;", outDir, dir),
 				)
 			}
 		}
@@ -1938,14 +1942,84 @@ func NewGoInputs(platform GoPlatform) *GoInputs {
 	}
 }
 
+func packageBuildFiles(p *build.Package) ([]string, error) {
+	files := append([]string{}, p.GoFiles...)
+	files = append(files, p.CgoFiles...)
+	files = append(files, p.CFiles...)
+	files = append(files, p.HFiles...)
+	files = append(files, p.SFiles...)
+	files = append(files, p.IgnoredGoFiles...)
+	embeds, err := embedFilesForPackage(p.Dir, p.EmbedPatterns)
+	if err != nil {
+		return nil, err
+	}
+	files = append(files, embeds...)
+	return files, nil
+}
+
+// embedFilesForPackage expands //go:embed patterns relative to the package
+// directory. go/build used to expose EmbedFiles; Go 1.27 only keeps patterns.
+func embedFilesForPackage(pkgDir string, patterns []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	var files []string
+	add := func(path string) error {
+		rel, err := filepath.Rel(pkgDir, path)
+		if err != nil {
+			return err
+		}
+		if _, ok := seen[rel]; ok {
+			return nil
+		}
+		seen[rel] = struct{}{}
+		files = append(files, rel)
+		return nil
+	}
+	for _, pat := range patterns {
+		pat = strings.TrimPrefix(pat, "all:")
+		matches, err := filepath.Glob(filepath.Join(pkgDir, pat))
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range matches {
+			fi, err := os.Lstat(m)
+			if err != nil {
+				return nil, err
+			}
+			if !fi.IsDir() {
+				if err := add(m); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			err = filepath.Walk(m, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				if info.IsDir() {
+					return nil
+				}
+				return add(path)
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return files, nil
+}
+
 func (g *GoInputs) Load(dir string) ([]string, error) {
 	p, err := g.ctx.ImportDir(dir, 0)
 	if err != nil {
 		return nil, err
 	}
 	dedupe := make(map[string]struct{})
-	inputs := make([]string, len(p.GoFiles))
-	for i, file := range p.GoFiles {
+	pkgFiles, err := packageBuildFiles(p)
+	if err != nil {
+		return nil, err
+	}
+	inputs := make([]string, len(pkgFiles))
+	for i, file := range pkgFiles {
 		inputs[i] = filepath.Join(dir, file)
 	}
 	for _, pkg := range p.Imports {
@@ -1991,13 +2065,10 @@ func (g *GoInputs) load(pkg string) ([]string, error) {
 			return []string{}, nil
 		}
 
-		// add the source files
-		files := p.GoFiles
-		files = append(files, p.CgoFiles...)
-		files = append(files, p.CFiles...)
-		files = append(files, p.HFiles...)
-		files = append(files, p.SFiles...)
-		files = append(files, p.IgnoredGoFiles...)
+		files, err := packageBuildFiles(p)
+		if err != nil {
+			return nil, err
+		}
 
 		inputs := make([]string, len(files))
 		for i, file := range files {
@@ -2030,7 +2101,7 @@ func (g *GoInputs) load(pkg string) ([]string, error) {
 // option go_package) back to the tree Flynn expects next to each .proto file.
 // See controller/api: outputs land under .../controller/api/github.com/flynn/.../api/
 func normalizeGeneratedProtoRel(rel string) string {
-	nested := filepath.Join("controller", "api", "github.com", "flynn", "flynn", "controller", "api")
+	nested := filepath.Join("controller", "api", "github.com", "randy-girard", "flynn", "controller", "api")
 	if rel == nested {
 		return rel
 	}

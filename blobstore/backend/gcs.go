@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"cloud.google.com/go/storage"
-	"github.com/flynn/flynn/pkg/postgres"
-	"github.com/flynn/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/option"
 )

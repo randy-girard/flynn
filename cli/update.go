@@ -16,11 +16,11 @@ import (
 	"strings"
 	"time"
 
-	cfg "github.com/flynn/flynn/cli/config"
-	"github.com/flynn/flynn/pkg/ghrelease"
-	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
 	"github.com/kardianos/osext"
+	cfg "github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/pkg/ghrelease"
+	"github.com/randy-girard/flynn/pkg/version"
 	"gopkg.in/inconshreveable/go-update.v0"
 )
 

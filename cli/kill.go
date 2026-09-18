@@ -4,9 +4,9 @@ import (
 	"errors"
 	"log"
 
-	"github.com/flynn/flynn/controller/client"
-	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 )
 
 func init() {

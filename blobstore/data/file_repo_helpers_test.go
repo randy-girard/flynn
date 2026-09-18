@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flynn/flynn/blobstore/backend"
+	"github.com/randy-girard/flynn/blobstore/backend"
 )
 
 func TestGetBackendAndDefault(t *testing.T) {

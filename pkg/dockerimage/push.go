@@ -13,10 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	ct "github.com/flynn/flynn/controller/types"
-	"github.com/flynn/flynn/pkg/archive"
-	hh "github.com/flynn/flynn/pkg/httphelper"
-	tarclient "github.com/flynn/flynn/tarreceive/client"
+	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/archive"
+	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	tarclient "github.com/randy-girard/flynn/tarreceive/client"
 )
 
 // BuildResult holds the image manifest and process metadata produced from a

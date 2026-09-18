@@ -20,7 +20,7 @@
 #      flynn-host, add/write/read/remove a persistent volume, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
 #      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
-#      apps restore with postgres (no second flynn-host plugin install). Redis,
+#      apps restore with postgres (no second flynn-host plugin:install). Redis,
 #      Kafka, and ClickHouse volumes are not in the cluster backup; those
 #      engines must come back empty. Then destroy the cluster nodes (builder
 #      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
@@ -2626,7 +2626,7 @@ probe_delegated_plugin_cli_hidden() {
   local name=$1
   local out rc=0
   if help_lists_plugin_command "${name}"; then
-    echo "flynn help listed ${name} before flynn-host plugin install" >&2
+    echo "flynn help listed ${name} before flynn-host plugin:install" >&2
     return 1
   fi
   out="$(flynn1 "${name}" 2>&1)" || rc=$?
@@ -2674,7 +2674,7 @@ step_install_plugins() {
     assemble_plugin_github_unpack "${dir}" "${unpack}" || return 1
     vm_path="/opt/flynn-plugins/$(basename "${dir}")"
     vm_unpack="${vm_path}/dist/github-unpack"
-    info "flynn-host plugin install ${name} (${vm_unpack})"
+    info "flynn-host plugin:install ${name} (${vm_unpack})"
     if ! node_root_script node1 <<EOF
 set -euo pipefail
 if [[ ! -f "${vm_unpack}/flynn-plugin.json" ]]; then
@@ -2689,7 +2689,7 @@ export FLYNN_PLUGIN_NONINTERACTIVE=1
 if [[ "${name}" == "otel" || "${name}" == "opentelemetry" ]]; then
   export FLYNN_PLUGIN_SETUP_OTEL_ENDPOINT="${OTEL_SMOKE_ENDPOINT:-}"
 fi
-flynn-host plugin install --no-build "${vm_unpack}"
+flynn-host plugin:install --no-build "${vm_unpack}"
 EOF
     then
       dump_plugin_install_diagnostics "${name}"
@@ -2817,9 +2817,9 @@ probe_otel_export() {
   ensure_otel_smoke_sink || return 1
   out="$(node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel' </dev/null || true)"
   if ! printf '%s' "${out}" | grep -qE '14318'; then
-    info "flynn-host otel add ${OTEL_SMOKE_ENDPOINT}"
-    if ! node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel add $(printf '%q' "${OTEL_SMOKE_ENDPOINT}")" </dev/null; then
-      echo "flynn-host otel add ${OTEL_SMOKE_ENDPOINT} failed" >&2
+    info "flynn-host otel:add ${OTEL_SMOKE_ENDPOINT}"
+    if ! node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel:add $(printf '%q' "${OTEL_SMOKE_ENDPOINT}")" </dev/null; then
+      echo "flynn-host otel:add ${OTEL_SMOKE_ENDPOINT} failed" >&2
       return 1
     fi
   fi
@@ -2914,7 +2914,7 @@ PY
     return 0
   fi
   info "checking plugin ${name} wait URL ${wait_url}"
-  # flynn-host plugin install already waited with a discoverd-aware client.
+  # flynn-host plugin:install already waited with a discoverd-aware client.
   # Host systemd-resolved does not serve *.discoverd (that DNS is on flynnbr0),
   # so pin the original hostname to the overlay addr from GET /services/<svc>/instances.
   # Sirenia API /ping can take ~30s while it looks up leader.<app>.discoverd, so
@@ -2974,7 +2974,7 @@ for w in m.get("webhooks") or []:
     url = (w.get("url") or "").strip()
     if not url:
         continue
-    # secret_env is applied by flynn-host plugin install (X-Flynn-Webhook-Secret).
+    # secret_env is applied by flynn-host plugin:install (X-Flynn-Webhook-Secret).
     if domain:
         url = url.replace("${CLUSTER_DOMAIN}", domain)
     print(url)
@@ -3019,35 +3019,9 @@ step_cluster_backup() {
 set -euo pipefail
 mkdir -p "$(dirname "${vm_path}")"
 rm -f "${vm_path}" "${restore_path}"
-# flynn-host backup job attach hijacks with net.Dial. Host systemd-resolved
-# does not serve *.discoverd; pin controller from the discoverd HTTP API.
-python3 - <<'PY'
-import json, urllib.request
-from pathlib import Path
-hosts = Path("/etc/hosts")
-text = hosts.read_text()
-marker = "# flynn-upgrade-smoke-discoverd"
-block_names = []
-for svc in ("controller",):
-    inst = json.load(urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % svc, timeout=5))
-    if not inst:
-        raise SystemExit("no discoverd instances for %s" % svc)
-    addr = (inst[0] or {}).get("addr") or ""
-    ip = addr.rsplit(":", 1)[0]
-    if not ip:
-        raise SystemExit("bad discoverd addr for %s: %r" % (svc, addr))
-    block_names.append("%s %s.discoverd" % (ip, svc))
-block = marker + "\n" + "\n".join(block_names) + "\n"
-if marker in text:
-    pre, rest = text.split(marker, 1)
-    rest_lines = rest.splitlines(True)
-    rest_lines = rest_lines[1:]
-    while rest_lines and rest_lines[0].strip() and not rest_lines[0].startswith("#"):
-        rest_lines = rest_lines[1:]
-    text = pre + "".join(rest_lines)
-hosts.write_text(text.rstrip() + "\n" + block)
-print("pinned", "; ".join(block_names))
-PY
+# flynn-host backup Hijack uses Transport.Dial (discoverdDial), same as HTTP.
+# Do not pin controller.discoverd in /etc/hosts; that hides a production bug
+# and sticks to a dead instance IP after a controller deploy.
 flynn-host backup --file "${vm_path}"
 test -s "${vm_path}"
 # List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
@@ -4273,9 +4247,9 @@ step_volume() {
   ids="$(vol_active_ids || true)"
   for id_loop in ${ids}; do
     flynn1 -a "${DOCKER_APP_NAME}" volume decommission "${id_loop}" || true
-    node_ssh node1 "sudo -H flynn-host volume delete $(printf '%q' "${id_loop}")" </dev/null || true
+    node_ssh node1 "sudo -H flynn-host volume:delete $(printf '%q' "${id_loop}")" </dev/null || true
   done
-  node_ssh node1 "sudo -H flynn-host volume gc" </dev/null || true
+  node_ssh node1 "sudo -H flynn-host volume:gc" </dev/null || true
 
   # Write the release JSON on the VM with python so $(cat ...) stays literal
   # for the job (a shell heredoc would expand it when writing the file).
@@ -4364,8 +4338,8 @@ EOF
     echo "volume ${label}: decommission ${id} failed" >&2
     return 1
   fi
-  node_ssh node1 "sudo -H flynn-host volume delete $(printf '%q' "${id}")" </dev/null || true
-  node_ssh node1 "sudo -H flynn-host volume gc" </dev/null || true
+  node_ssh node1 "sudo -H flynn-host volume:delete $(printf '%q' "${id}")" </dev/null || true
+  node_ssh node1 "sudo -H flynn-host volume:gc" </dev/null || true
   if flynn1 -a "${DOCKER_APP_NAME}" volume 2>/dev/null | awk -v id="${id}" 'NR>1 && $1==id && $NF != "true" {found=1} END{exit found?0:1}'; then
     record_check "${label}" "vol-remove" "FAIL" "${id} still active"
     echo "volume ${label}: ${id} still listed as active after remove" >&2

@@ -3,8 +3,8 @@ package cli
 import (
 	"reflect"
 
-	ct "github.com/flynn/flynn/controller/types"
-	updater "github.com/flynn/flynn/updater/types"
+	ct "github.com/randy-girard/flynn/controller/types"
+	updater "github.com/randy-girard/flynn/updater/types"
 )
 
 // releaseConfigChanged reports whether updateFn would alter the release env or

@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	api "github.com/flynn/flynn/controller/api"
+	api "github.com/randy-girard/flynn/controller/api"
 	"golang.org/x/crypto/cryptobyte"
 	"golang.org/x/crypto/cryptobyte/asn1"
 	"google.golang.org/protobuf/proto"
