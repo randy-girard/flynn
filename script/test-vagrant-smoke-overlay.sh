@@ -64,5 +64,15 @@ need "${build}" 'GITHUB_ACTIONS' \
   "build.sh must detect GitHub Actions for lower memory/concurrency defaults"
 need "${build}" '^exit 0$' \
   "build.sh must exit 0 after success (a later phase_start not-found used to fail a completed build)"
+need "${ROOT}/builder/build.go" 'Location:  "/mnt"' \
+  "layer jobs must bind-mount the host temp dir at /mnt so mksquashfs writes local disk"
+if grep -qE 'Device:[[:space:]]+"9p"' "${ROOT}/builder/build.go"; then
+  echo "layer jobs must not squash over 9p (host image mksquashfs stalls on netfs_begin_write)" >&2
+  exit 1
+fi
+if [[ -f "${ROOT}/builder/fileserver.go" ]]; then
+  echo "builder/fileserver.go served /mnt over 9p; layer out must be a host bind, not 9p" >&2
+  exit 1
+fi
 
 echo "ok overlay/install/smoke cluster-setup regressions"

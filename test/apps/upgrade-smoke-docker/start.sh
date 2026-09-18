@@ -3,5 +3,5 @@
 set -eu
 port="${PORT:-8080}"
 mkdir -p /www
-printf 'docker-smoke ok\n' > /www/index.html
+printf '%s\n' "${SMOKE_BODY:-docker-smoke ok}" > /www/index.html
 exec httpd -f -p "${port}" -h /www

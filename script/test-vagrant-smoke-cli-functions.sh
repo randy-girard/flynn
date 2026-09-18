@@ -17,6 +17,12 @@ need() {
   fi
 }
 
+need './pkg/cliutil/' \
+  "host unit gate must compile docopt string/list helpers used by colon commands"
+need './host/fixer/' \
+  "host unit gate must compile interactive flynn-host fix"
+need './host/logmux/' \
+  "host unit gate must compile OTLP log/metrics sinks"
 need 'step_cli_functions' \
   "smoke must have a dedicated live CLI function step"
 need 'SKIP_CLI' \
@@ -49,6 +55,10 @@ need 'docker-cli-run' \
   "CLI step must flynn run against the Dockerfile/container-stack app"
 need 'echo docker-cli' \
   "container flynn run must execute a command without /runner/init"
+need 'docker-push-run' \
+  "CLI step must flynn run against the flynn docker push app"
+need 'echo docker-push-cli' \
+  "docker-push flynn run must execute a command in the pre-built image"
 need 'cat /start.sh' \
   "container flynn run must read a file from the Docker image"
 need 'net-isolate-peer' \
@@ -97,6 +107,28 @@ need 'flynn-host version' \
   "CLI step must run flynn-host version (stripped host binary)"
 need 'pg_available_extensions' \
   "CLI/seed must verify postgres PostGIS/pgRouting/Timescale still ship"
+need 'FLYNN_SKIP_UPDATE_CHECK' \
+  "smoke must skip GitHub upgrade notices so pg CONNECT matches stay exact"
+need 'smoke_pg_tf' \
+  "CLI pg probes must normalize boolean output (and ignore CLI notices)"
+
+# smoke_pg_tf must keep the SQL token when flynn prints an upgrade notice.
+eval "$(sed -n '/^smoke_pg_tf()/,/^}/p' "${smoke}")"
+got="$(smoke_pg_tf $'A newer Flynn CLI is available (v20260917.2; this is v20260917.1). Run `flynn update` to upgrade.\nt,f,f\n')"
+if [[ "${got}" != "t,f,f" ]]; then
+  echo "smoke_pg_tf must extract t,f,f from CLI upgrade notice, got ${got}" >&2
+  exit 1
+fi
+got="$(smoke_pg_tf $'A newer Flynn CLI is available (v20260917.2; this is v20260917.1). Run `flynn update` to upgrade.\nf\n')"
+if [[ "${got}" != "f" ]]; then
+  echo "smoke_pg_tf must extract trailing f from CLI upgrade notice, got ${got}" >&2
+  exit 1
+fi
+got="$(smoke_pg_tf "t,f,f")"
+if [[ "${got}" != "t,f,f" ]]; then
+  echo "smoke_pg_tf must keep a bare t,f,f, got ${got}" >&2
+  exit 1
+fi
 need 'cli-pg-connect' \
   "CLI step must prove the user-app role cannot CONNECT to postgres/template1"
 need 'cli-pg-controller' \
@@ -111,6 +143,14 @@ need 'flynn-host list' \
   "CLI step must list cluster hosts"
 need 'cli-host-ps' \
   "CLI step must list host jobs"
+need 'cli-host-otel' \
+  "CLI step must list OpenTelemetry sinks"
+need 'cli-host-domain' \
+  "CLI step must show cluster apex domain"
+need 'cli-host-fix-help' \
+  "CLI step must show interactive flynn-host fix --yes"
+need 'grep -qE --' \
+  "cli_probe must pass -- so patterns like --yes are not grep flags"
 need 'installing Flynn CLI on node1' \
   "smoke must (re)install the synced CLI so SKIP_BUILD still picks up CLI fixes"
 need 'CLI functions \(pre-upgrade\)' \

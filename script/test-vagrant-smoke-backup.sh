@@ -34,8 +34,8 @@ if grep -vE '^[[:space:]]*#' "${smoke}" | grep -F 'Cluster backup' | grep -qF 'S
   echo "SKIP_DEPLOY must not skip cluster backup (RESUME_AT=upgrade/backup still need restore)" >&2
   exit 1
 fi
-need 'flynn cluster backup --file' \
-  "smoke must take a full-cluster backup via the CLI"
+need 'flynn-host backup --file' \
+  "smoke must take a full-cluster backup via flynn-host"
 need '/tmp/flynn-smoke-backup.tar' \
   "backup copy must live in /tmp so install --clean cannot delete it"
 need 'backup_restore_path' \

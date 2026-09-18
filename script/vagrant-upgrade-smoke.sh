@@ -15,7 +15,8 @@
 #      3-node HA): boot those VMs, install the tarball, bootstrap
 #      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
 #      datastore provider, git-push test/apps/upgrade-smoke-docker on the
-#      container stack (dockerbuilder-24), verify HTTP/status/rows, exercise flynn /
+#      container stack (dockerbuilder-24), flynn docker push a pre-built
+#      image of the same Dockerfile, verify HTTP/status/rows, exercise flynn /
 #      flynn-host, add/write/read/remove a persistent volume, run flynn-host update --all-nodes --tarball --force twice,
 #      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
 #      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
@@ -53,8 +54,15 @@
 #   BUILD_PHASE          build.sh phase: cluster|all|auto [default: auto]
 #   CLUSTER_DOMAIN       Bootstrap domain [default: upgrade-smoke.localflynn.com]
 #   APP_NAME             Slug/buildpack test app [default: upgrade-smoke]
-#   DOCKER_APP_NAME      Dockerfile/container-stack app
+#   DOCKER_APP_NAME      Dockerfile git-push / container-stack app
 #                        [default: upgrade-smoke-docker]
+#   DOCKER_PUSH_APP_NAME Pre-built image via flynn docker push
+#                        [default: upgrade-smoke-docker-push]
+#   DOCKER_PUSH_IMAGE    Local docker tag used for flynn docker push
+#                        [default: flynn-smoke-docker-push:local]
+#   DOCKER_PUSH_BODY     HTTP body for the docker-push app (must differ
+#                        from the git-push Dockerfile app)
+#                        [default: docker-push ok]
 #   VAGRANT_MEMORY       Cluster node RAM MB [default: 6144]
 #   VAGRANT_CPUS         Cluster node CPUs [default: 2]
 #   BUILDER_MEMORY       Builder RAM MB [default: 30000]
@@ -89,6 +97,7 @@
 #                        and post-restore verify
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
 #                        and the persistent-volume write/read/delete probe
+#   SKIP_VOLUME=1        Skip only the persistent-volume probe (CLI still runs)
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
 #                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
 #                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
@@ -116,10 +125,10 @@
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before resource add (default: redis
-#                        mysql mongodb kafka clickhouse dashboard). mysql
-#                        resolves to the mariadb checkout via flynn-plugin.json.
-#                        Restore does not install again; plugins.json + postgres
-#                        already list and restore them.
+#                        mysql mongodb kafka clickhouse dashboard www
+#                        discovery). mysql resolves to the mariadb checkout via
+#                        flynn-plugin.json. Restore does not install again;
+#                        plugins.json + postgres already list and restore them.
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
@@ -137,6 +146,9 @@ BUILD_PHASE="${BUILD_PHASE:-auto}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-upgrade-smoke.localflynn.com}"
 APP_NAME="${APP_NAME:-upgrade-smoke}"
 DOCKER_APP_NAME="${DOCKER_APP_NAME:-upgrade-smoke-docker}"
+DOCKER_PUSH_APP_NAME="${DOCKER_PUSH_APP_NAME:-upgrade-smoke-docker-push}"
+DOCKER_PUSH_IMAGE="${DOCKER_PUSH_IMAGE:-flynn-smoke-docker-push:local}"
+DOCKER_PUSH_BODY="${DOCKER_PUSH_BODY:-docker-push ok}"
 REPO_IN_VM="/root/go/src/github.com/flynn/flynn"
 CLI_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 
@@ -179,6 +191,7 @@ SKIP_VERIFY_BEFORE="${SKIP_VERIFY_BEFORE:-0}"
 SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
 SKIP_CLI="${SKIP_CLI:-0}"
+SKIP_VOLUME="${SKIP_VOLUME:-0}"
 if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
   :
 elif [[ -n "${CLUSTER_SIZE:-}" ]]; then
@@ -194,7 +207,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
@@ -206,6 +219,7 @@ SMOKE_UNIT_PACKAGES=(
   ./controller/scheduler/
   ./controller/worker/deployment/
   ./pkg/httphelper/
+  ./pkg/cliutil/
   ./pkg/updaterdeploy/
   ./pkg/sirenia/state/
   ./pkg/sirenia/ha/
@@ -214,6 +228,8 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/squashfs/
   ./pkg/dockerimage/
   ./pkg/plugin/
+  ./host/fixer/
+  ./host/logmux/
   ./appliance/postgresql/cmd/flynn-postgres-api/
   ./updater/
 )
@@ -282,11 +298,21 @@ require_bin() {
 
 # Map Postgres boolean text to t/f. A bare boolean column is t/f; concatenating
 # booleans with || prints true/false (seen 2026-09-13 cli-pg-connect).
+# flynn may print an upgrade notice on stderr (captured with 2>&1); keep only
+# the trailing t,f,f (or t/f) token so that notice cannot fail the match.
 smoke_pg_tf() {
   local s
   s="$(printf '%s' "${1:-}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
   s="${s//true/t}"
   s="${s//false/f}"
+  if [[ "${s}" =~ (t,f,f|f,t,f|f,f,t|t,t,t|f,f,f|t,t,f|t,f,t|f,t,t)$ ]]; then
+    printf '%s' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  if [[ "${s}" =~ (^|[^tf,])([tf])$ ]]; then
+    printf '%s' "${BASH_REMATCH[2]}"
+    return 0
+  fi
   printf '%s' "${s}"
 }
 
@@ -484,7 +510,7 @@ print_datastore_report() {
   echo
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
-  echo " app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
+  echo " app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
   echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
@@ -554,7 +580,7 @@ print_results_table() {
   echo
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
-  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}"
+  echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}"
   echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
@@ -1040,7 +1066,7 @@ configure_node_dns() {
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} www.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
@@ -1524,7 +1550,54 @@ else
 fi
 command -v flynn
 # Must actually run on this machine; a wrong-arch binary fails here.
-flynn version
+# Smoke tarballs are older than GitHub latest; skip the upgrade notice so
+# exact stdout matches (pg CONNECT t,f,f) stay stable. sudo reads this via PAM.
+grep -q '^FLYNN_SKIP_UPDATE_CHECK=' /etc/environment 2>/dev/null || \
+  echo 'FLYNN_SKIP_UPDATE_CHECK=1' >> /etc/environment
+FLYNN_SKIP_UPDATE_CHECK=1 flynn version
+EOF
+}
+
+# flynn docker push runs `docker save` / `docker inspect` on the CLI host.
+# Cluster nodes do not ship docker.io; install it on node1 when missing.
+ensure_docker_cli_on_node1() {
+  info "ensuring docker CLI on node1 for flynn docker push"
+  node_root_script node1 <<'EOF'
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+mkdir -p /etc/docker
+# Keep Docker off Flynn's overlay/iptables. flynn docker push only needs
+# docker build/save/inspect on this node. bridge:none means RUN steps
+# have no container DNS, so docker build must use --network=host.
+if [[ ! -f /etc/docker/daemon.json ]]; then
+  cat > /etc/docker/daemon.json <<'JSON'
+{"iptables": false, "ip-forward": false, "ip-masq": false, "bridge": "none"}
+JSON
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  ok=0
+  for i in 1 2 3; do
+    if apt-get update -qq && apt-get install -y docker.io; then
+      ok=1
+      break
+    fi
+    echo "docker.io install attempt ${i} failed; retrying" >&2
+    sleep $((i * 5))
+  done
+  test "${ok}" = 1
+fi
+systemctl enable --now docker 2>/dev/null || service docker start 2>/dev/null || true
+command -v docker
+ready=0
+for i in 1 2 3 4 5 6; do
+  if docker info >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 2
+done
+test "${ready}" = 1
+docker version
 EOF
 }
 
@@ -1535,7 +1608,8 @@ EOF
 force_cluster_add_cmd() {
   local cmd=$1
   case "${cmd}" in
-    *' cluster add -f '*|*' cluster add --force '*) echo "${cmd}" ;;
+    *' cluster:add -f '*|*' cluster:add --force '*|*' cluster add -f '*|*' cluster add --force '*) echo "${cmd}" ;;
+    *' cluster:add '*) echo "${cmd/flynn cluster:add /flynn cluster:add -f }" ;;
     *) echo "${cmd/flynn cluster add /flynn cluster add -f }" ;;
   esac
 }
@@ -1546,16 +1620,16 @@ force_cluster_add_cmd() {
 register_cli_cluster() {
   local add_cmd
   add_cmd="$(
-    node_root_script node1 <<'EOF' | tee /dev/stderr | grep -E '^flynn cluster add ' | tail -1
+    node_root_script node1 <<'EOF' | tee /dev/stderr | grep -E '^flynn cluster(:add| add) ' | tail -1
 set -euo pipefail
 flynn-host cli-add-command
 EOF
   )"
   if [[ -z "${add_cmd}" && -f "${WORK_DIR}/bootstrap.log" ]]; then
-    add_cmd="$(grep -Eo 'flynn cluster add.*' "${WORK_DIR}/bootstrap.log" | tail -1 || true)"
+    add_cmd="$(grep -Eo 'flynn cluster(:add| add).*' "${WORK_DIR}/bootstrap.log" | tail -1 || true)"
   fi
   if [[ -z "${add_cmd}" ]]; then
-    echo "could not find 'flynn cluster add' command after bootstrap" >&2
+    echo "could not find 'flynn cluster:add' command after bootstrap" >&2
     return 1
   fi
   add_cmd="$(force_cluster_add_cmd "${add_cmd}")"
@@ -1574,7 +1648,9 @@ flynn1() {
   args_q="$(printf '%q ' "$@")"
   # Close stdin. `flynn run` attaches it to the job, and clickhouse-client
   # INSERT VALUES (and mongo shells without --eval) wait forever on a TTY.
-  node_ssh node1 "sudo -H flynn ${args_q}" </dev/null
+  # FLYNN_SKIP_UPDATE_CHECK: smoke builds are older than GitHub latest; the
+  # notice on stderr breaks exact stdout matches when callers use 2>&1.
+  node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 flynn ${args_q}" </dev/null
 }
 
 cluster_host_count() {
@@ -2533,12 +2609,17 @@ sys.exit(0 if cli.get("doc") and cli.get("actions") else 1)
 PY
 }
 
-# flynn help command list: a line whose first field is the plugin command.
+# flynn help command list: first field is the plugin name or a colon action
+# (redis:dump). Resource plugins no longer register a bare "redis" row.
 help_lists_plugin_command() {
   local name=$1
   local out
   out="$(flynn1 help 2>&1)" || true
-  printf '%s\n' "${out}" | awk -v cmd="${name}" '$1==cmd {found=1; exit} END {exit found?0:1}'
+  printf '%s\n' "${out}" | awk -v cmd="${name}" '
+    $1==cmd {found=1; exit}
+    index($1, cmd ":")==1 {found=1; exit}
+    END {exit found?0:1}
+  '
 }
 
 probe_delegated_plugin_cli_hidden() {
@@ -2805,7 +2886,7 @@ step_cluster_backup() {
 set -euo pipefail
 mkdir -p "$(dirname "${vm_path}")"
 rm -f "${vm_path}" "${restore_path}"
-flynn cluster backup --file "${vm_path}"
+flynn-host backup --file "${vm_path}"
 test -s "${vm_path}"
 # List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
 # match and tar gets SIGPIPE (exit 141) under pipefail. Seen 2026-09-13.
@@ -2936,6 +3017,49 @@ flynn -a "${DOCKER_APP_NAME}" scale app=1
 flynn -a "${DOCKER_APP_NAME}" ps
 EOF
   echo "docker app ${DOCKER_APP_NAME} deployed from test/apps/upgrade-smoke-docker (container stack)"
+}
+
+# Build the same Dockerfile locally and flynn docker push it. Distinct HTTP
+# body (DOCKER_PUSH_BODY) proves tarreceive imported this image, not the
+# git-push container-stack build.
+step_deploy_docker_push_app() {
+  ensure_flynn_cli_on_node1
+  ensure_docker_cli_on_node1
+  configure_node_dns node1
+  smoke_docker_push_image 1
+  echo "docker-push app ${DOCKER_PUSH_APP_NAME} deployed via flynn docker push (${DOCKER_PUSH_IMAGE})"
+}
+
+smoke_docker_push_image() {
+  local recreate=${1:-0}
+  node_root_script node1 <<EOF
+set -euo pipefail
+test -f "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/Dockerfile"
+rm -rf "/tmp/${DOCKER_PUSH_APP_NAME}"
+mkdir -p "/tmp/${DOCKER_PUSH_APP_NAME}"
+cp -a "${REPO_IN_VM}/test/apps/upgrade-smoke-docker/." "/tmp/${DOCKER_PUSH_APP_NAME}/"
+cd "/tmp/${DOCKER_PUSH_APP_NAME}"
+chmod +x start.sh
+ok=0
+for attempt in 1 2 3; do
+  if docker build --network=host --build-arg SMOKE_BODY=$(printf '%q' "${DOCKER_PUSH_BODY}") -t "${DOCKER_PUSH_IMAGE}" .; then
+    ok=1
+    break
+  fi
+  echo "docker build failed (attempt \${attempt}/3); retrying in 10s"
+  sleep 10
+done
+[[ "\${ok}" == "1" ]]
+if [[ "${recreate}" == "1" ]] && flynn apps | grep -qE "(^|\\s)${DOCKER_PUSH_APP_NAME}(\\s|\$)"; then
+  flynn -a "${DOCKER_PUSH_APP_NAME}" delete --yes || true
+fi
+if ! flynn apps | grep -qE "(^|\\s)${DOCKER_PUSH_APP_NAME}(\\s|\$)"; then
+  flynn create --remote flynn "${DOCKER_PUSH_APP_NAME}"
+fi
+timeout 600 flynn -a "${DOCKER_PUSH_APP_NAME}" docker push "${DOCKER_PUSH_IMAGE}"
+flynn -a "${DOCKER_PUSH_APP_NAME}" scale app=1
+flynn -a "${DOCKER_PUSH_APP_NAME}" ps
+EOF
 }
 
 # Build a comma-separated SQL VALUES list  (1,'dummy-1'),(2,'dummy-2'),...
@@ -3130,6 +3254,58 @@ assert_docker_ps() {
   return 1
 }
 
+probe_docker_push_http() {
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || return 1
+  echo "${body}" | grep -q "${DOCKER_PUSH_BODY}"
+}
+
+assert_docker_push_http() {
+  local label=$1
+  local body
+  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
+    record_check "${label}" "docker-push-http" "FAIL" "GET / curl failed"
+    echo "docker-push HTTP check (${label}) failed: curl error" >&2
+    return 1
+  }
+  if ! echo "${body}" | grep -q "${DOCKER_PUSH_BODY}"; then
+    record_check "${label}" "docker-push-http" "FAIL" "body=${body}"
+    echo "docker-push HTTP check (${label}) failed: body=${body}" >&2
+    return 1
+  fi
+  record_check "${label}" "docker-push-http" "PASS" "GET / => ${DOCKER_PUSH_BODY}"
+  echo "docker-push-http ${label}: ok"
+}
+
+assert_docker_push_ps() {
+  local label=$1
+  local out rc=0 attempt
+  for attempt in $(seq 1 12); do
+    rc=0
+    out="$(flynn1 -a "${DOCKER_PUSH_APP_NAME}" ps -t app 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="app" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
+      record_check "${label}" "docker-push-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      echo "docker-push-ps ${label}: ok"
+      return 0
+    fi
+    echo "docker-push-ps ${label}: retry ${attempt}/12 rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-60)"
+    sleep 5
+  done
+  record_check "${label}" "docker-push-ps" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+  echo "docker-push-ps ${label}: FAIL rc=${rc} ${out}" >&2
+  return 1
+}
+
+wait_and_assert_docker_apps() {
+  local label=$1
+  wait_for "docker app HTTP ${label}" 180 probe_docker_http
+  assert_docker_http "${label}"
+  assert_docker_ps "${label}"
+  wait_for "docker-push app HTTP ${label}" 180 probe_docker_push_http
+  assert_docker_push_http "${label}"
+  assert_docker_push_ps "${label}"
+}
+
 probe_app_http() {
   local body
   body="$(curl -fsS --max-time 30 -H "Host: ${APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || return 1
@@ -3154,6 +3330,42 @@ if any(not r.get(k) for k in need):
 if int(d.get("blob_count") or 0) < min_blobs:
     sys.exit(3)
 ' <<<"${body}"
+}
+
+assert_oom_subscription() {
+  local label=$1
+  local node
+  for node in "${NODES[@]}"; do
+    if ! node_root_script "${node}" <<'EOF'
+set -euo pipefail
+log=/var/log/flynn/flynn-host.log
+if [[ -f "${log}" ]] && grep -F 'unable to subscribe to OOM notifications' "${log}"; then
+  echo "flynn-host still cannot subscribe to OOM notifications (cgroup memory.events?)" >&2
+  exit 1
+fi
+if [[ -d /sys/fs/cgroup/flynn/user ]]; then
+  found=0
+  for d in /sys/fs/cgroup/flynn/user/*; do
+    [[ -d "${d}" ]] || continue
+    if [[ -f "${d}/memory.events" ]]; then
+      found=1
+      break
+    fi
+  done
+  if [[ "${found}" -eq 0 ]]; then
+    echo "no memory.events under /sys/fs/cgroup/flynn/user; OOM watch cannot work" >&2
+    ls -la /sys/fs/cgroup/flynn/user >&2 || true
+    exit 1
+  fi
+fi
+EOF
+    then
+      record_check "${label}" "oom-${node}" "FAIL" "OOM subscription"
+      return 1
+    fi
+    record_check "${label}" "oom-${node}" "PASS" "cgroup v2 OOM watch"
+  done
+  echo "oom ${label}: no 'unable to subscribe' warnings; memory.events present"
 }
 
 assert_app_http() {
@@ -3500,7 +3712,7 @@ cli_probe() {
     out="$("$@" 2>&1)" || rc=$?
     snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
     if [[ "${rc}" -eq 0 ]]; then
-      if [[ -z "${pattern}" ]] || printf '%s' "${out}" | grep -qE "${pattern}"; then
+      if [[ -z "${pattern}" ]] || printf '%s' "${out}" | grep -qE -- "${pattern}"; then
         record_check "${label}" "${name}" "PASS" "${snippet}"
         echo "cli ${label} ${name}: PASS"
         return 0
@@ -3531,7 +3743,7 @@ cli_run_job() {
   done
   for attempt in 1 2 3 4 5 6; do
     rc=0
-    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
     snippet="$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
     if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
       record_check "${label}" "${name}" "PASS" "${snippet}"
@@ -3566,7 +3778,7 @@ cli_run_must_fail() {
   done
   for attempt in $(seq 1 8); do
     rc=0
-    out="$(node_ssh node1 "sudo -H timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 timeout 20 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
     if [[ "${rc}" -ne 0 ]]; then
       if echo "${out}" | grep -qiE 'No app release|stat /runner/init|unknown app'; then
         record_check "${label}" "${name}" "FAIL" "run failed to start $(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
@@ -3668,6 +3880,16 @@ step_cli_functions() {
     wget -q -T 5 -O - "http://postgres.discoverd:5432/" || failed=1
   cli_run_must_fail "${label}" "net-isolate-api" "${DOCKER_APP_NAME}" \
     wget -q -T 5 -O - "http://postgres-api.discoverd/" || failed=1
+  cli_probe "${label}" "docker-push-info" "${DOCKER_PUSH_APP_NAME}|Web URL" \
+    flynn1 -a "${DOCKER_PUSH_APP_NAME}" info || failed=1
+  cli_probe "${label}" "docker-push-ps" "app" \
+    flynn1 -a "${DOCKER_PUSH_APP_NAME}" ps || failed=1
+  cli_probe "${label}" "docker-push-route" "http|${DOCKER_PUSH_APP_NAME}" \
+    flynn1 -a "${DOCKER_PUSH_APP_NAME}" route || failed=1
+  cli_probe "${label}" "docker-push-log" "" \
+    flynn1 -a "${DOCKER_PUSH_APP_NAME}" log -n 20 || failed=1
+  cli_run_job "${label}" "docker-push-run" "${DOCKER_PUSH_APP_NAME}" "docker-push-cli" \
+    echo docker-push-cli || failed=1
   cli_run_job "${label}" "net-db-leader" "${APP_NAME}" "db-leader-ok" \
     bash -c 'echo >/dev/tcp/leader.postgres.discoverd/5432 && echo db-leader-ok' || failed=1
 
@@ -3677,7 +3899,7 @@ step_cli_functions() {
   flynn1 -a "${APP_NAME}" meta unset smoke_cli >/dev/null || true
 
   rc=0
-  out="$(node_ssh node1 'sudo flynn-host list' </dev/null)" || rc=$?
+  out="$(node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host list' </dev/null)" || rc=$?
   hosts="$(printf '%s\n' "${out}" | awk 'NR>1 && NF>=2 {c++} END{print c+0}')"
   if [[ "${rc}" -eq 0 && "${hosts}" -ge "${#NODES[@]}" ]]; then
     record_check "${label}" "cli-host-list" "PASS" "hosts=${hosts}"
@@ -3688,9 +3910,15 @@ step_cli_functions() {
     failed=1
   fi
   cli_probe "${label}" "cli-host-ps" "." \
-    node_ssh node1 'sudo flynn-host ps' || failed=1
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host ps' || failed=1
   cli_probe "${label}" "cli-host-version" "." \
-    node_ssh node1 'sudo flynn-host version' || failed=1
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host version' || failed=1
+  cli_probe "${label}" "cli-host-otel" "." \
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host otel' || failed=1
+  cli_probe "${label}" "cli-host-domain" "CLUSTER DOMAIN" \
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host domain' || failed=1
+  cli_probe "${label}" "cli-host-fix-help" "--yes" \
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host help fix' || failed=1
 
   rc=0
   out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>&1)" || rc=$?
@@ -3813,7 +4041,7 @@ step_cli_functions() {
   rc=0
   for attempt in $(seq 1 12); do
     rc=0
-    out="$(node_ssh node1 "sudo -H timeout 90 flynn -a blobstore run -- wget -qO- http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
+    out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 timeout 90 flynn -a blobstore run -- wget -qO- http://blobstore.discoverd/.well-known/status" </dev/null)" || rc=$?
     if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q healthy; then
       blob_ok=1
       break
@@ -3850,23 +4078,19 @@ vol_active_ids() {
   flynn1 -a "${DOCKER_APP_NAME}" volume 2>/dev/null | awk 'NR>1 && $1 ~ /^[0-9a-fA-F-]{36}$/ && $NF != "true" {print $1}'
 }
 
-vol_scale_zero() {
+vol_jobs_stopped() {
   local out
-  out="$(flynn1 -a "${DOCKER_APP_NAME}" scale 2>/dev/null || true)"
-  if printf '%s' "${out}" | grep -qE '(^|[[:space:]])vol='; then
-    flynn1 -a "${DOCKER_APP_NAME}" scale vol=0
-  fi
+  out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t vol 2>/dev/null || true)"
+  ! printf '%s' "${out}" | awk 'NR>1 && $2=="vol" && ($3=="up" || $3=="pending" || $3=="starting" || $3=="stopping") { found=1 } END { exit !found }'
 }
 
 step_volume() {
   local label=$1
   local token="vol-smoke-${label}-$(date +%s)"
-  local json="${ROOT}/.vagrant-upgrade-smoke-tmp/vol-release-${token}.json"
-  local vm_json="${REPO_IN_VM}/.vagrant-upgrade-smoke-tmp/vol-release-${token}.json"
+  local vm_json="/tmp/vol-release-${token}.json"
   local id="" ids id_loop out
 
   ensure_flynn_cli_on_node1
-  mkdir -p "${ROOT}/.vagrant-upgrade-smoke-tmp"
   echo "volume ${label}: persistent /data on ${DOCKER_APP_NAME} token=${token}"
 
   vol_scale_zero || true
@@ -3877,20 +4101,32 @@ step_volume() {
   done
   node_ssh node1 "sudo -H flynn-host volume gc" </dev/null || true
 
-  cat > "${json}" <<JSON
-{
-  "processes": {
-    "vol": {
-      "args": ["/bin/sh", "-c", "set -eu; if [ ! -f /data/probe.txt ]; then echo ${token} > /data/probe.txt; echo VOL_SMOKE_WROTE:${token}; else echo VOL_SMOKE_READ:\$(cat /data/probe.txt); fi; exec sleep 3600"],
-      "volumes": [{"path": "/data"}]
+  # Write the release JSON on the VM with python so $(cat ...) stays literal
+  # for the job (a shell heredoc would expand it when writing the file).
+  if ! node_root_script node1 <<EOF
+python3 - "${token}" "${vm_json}" <<'PY'
+import json, pathlib, sys
+token, path = sys.argv[1], pathlib.Path(sys.argv[2])
+cmd = (
+    "set -eu; if [ ! -f /data/probe.txt ]; then echo {t} > /data/probe.txt; "
+    "echo VOL_SMOKE_WROTE:{t}; else echo VOL_SMOKE_READ:\$(cat /data/probe.txt); "
+    "fi; exec sleep 3600"
+).format(t=token)
+path.write_text(json.dumps({
+    "processes": {
+        "vol": {
+            "args": ["/bin/sh", "-c", cmd],
+            "volumes": [{"path": "/data"}],
+        }
     }
-  }
-}
-JSON
-
-  if ! node_ssh node1 "test -f $(printf '%q' "${vm_json}")" </dev/null; then
-    record_check "${label}" "vol-add" "FAIL" "missing ${vm_json}"
-    echo "volume ${label}: release JSON not visible in the VM" >&2
+}))
+if path.stat().st_size < 1:
+    raise SystemExit("empty volume release JSON")
+PY
+EOF
+  then
+    record_check "${label}" "vol-add" "FAIL" "write ${vm_json}"
+    echo "volume ${label}: could not write release JSON on the VM" >&2
     return 1
   fi
   if ! flynn1 -a "${DOCKER_APP_NAME}" release update "${vm_json}"; then
@@ -3923,6 +4159,14 @@ JSON
   echo "volume ${label}: created ${id}"
 
   flynn1 -a "${DOCKER_APP_NAME}" scale vol=0
+  # Wait until the scheduler drops the holder job, otherwise findVolume
+  # treats the dataset as busy and allocates a new empty volume.
+  if ! wait_for "volume detached ${label}" 60 vol_jobs_stopped; then
+    record_check "${label}" "vol-read" "FAIL" "vol job still running after scale 0"
+    echo "volume ${label}: vol job still running after scale 0" >&2
+    return 1
+  fi
+  sleep 2
   flynn1 -a "${DOCKER_APP_NAME}" scale vol=1
   if ! wait_for "volume read ${label}" 180 vol_log_has "VOL_SMOKE_READ:${token}"; then
     out="$(flynn1 -a "${DOCKER_APP_NAME}" log -n 80 | tr '\n' ' ' | cut -c1-120 || true)"
@@ -3963,6 +4207,10 @@ maybe_run_cli_and_volume() {
     return 0
   fi
   run_step "${cli_title}" step_cli_functions "${label}"
+  if [[ "${SKIP_VOLUME}" == "1" ]]; then
+    record "${vol_title}" "SKIP" 0 "SKIP_VOLUME=1"
+    return 0
+  fi
   run_step "${vol_title}" step_volume "${label}"
 }
 
@@ -3971,9 +4219,8 @@ step_verify_before() {
   assert_app_http pre-upgrade
   wait_for "app /status pre-upgrade" 120 probe_app_status
   assert_app_status pre-upgrade
-  wait_for "docker app HTTP pre-upgrade" 180 probe_docker_http
-  assert_docker_http pre-upgrade
-  assert_docker_ps pre-upgrade
+  assert_oom_subscription pre-upgrade
+  wait_and_assert_docker_apps pre-upgrade
   assert_databases pre-upgrade
   wait_sirenia_ha_if_cluster "before upgrade" postgres mariadb mongodb || return 1
 }
@@ -4001,9 +4248,8 @@ step_verify_after() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
-  wait_for "docker app HTTP ${label}" 180 probe_docker_http
-  assert_docker_http "${label}"
-  assert_docker_ps "${label}"
+  assert_oom_subscription "${label}"
+  wait_and_assert_docker_apps "${label}"
   assert_databases "${label}"
   node_ssh node1 'sudo flynn-host version' || true
 }
@@ -4014,42 +4260,52 @@ step_verify_after_restore() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 180 probe_app_status
   assert_app_status "${label}"
-  wait_for "docker app HTTP ${label}" 180 probe_docker_http
-  assert_docker_http "${label}"
-  assert_docker_ps "${label}"
+  assert_oom_subscription "${label}"
+  wait_and_assert_docker_apps "${label}"
   assert_restored_datastores
   node_ssh node1 'sudo flynn-host version' || true
 }
 
-# Git-push a new docker release and run a one-off so membership changes prove
-# deploys still work (not only HTTP to the existing formation).
+# Re-exercise every deploy path after add/remove so membership is not only
+# HTTP to formations that were already running: slug git-push, Dockerfile
+# git-push (container stack), and flynn docker push of a pre-built image.
 step_membership_deploy() {
   local label=$1
   ensure_flynn_cli_on_node1
-  info "membership deploy (${label}): git-push ${DOCKER_APP_NAME} + flynn run"
+  ensure_docker_cli_on_node1
+  info "membership deploy (${label}): git-push ${APP_NAME} + ${DOCKER_APP_NAME} + flynn docker push"
   node_root_script node1 <<EOF
 set -euo pipefail
-dir="/tmp/${DOCKER_APP_NAME}"
-test -d "\${dir}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
-cd "\${dir}"
-git commit --allow-empty -m "membership ${label}"
-ok=0
-for i in \$(seq 1 5); do
-  if timeout 600 git push flynn master; then
-    ok=1
-    break
-  fi
-  echo "git push attempt \$i failed; waiting for scheduler after membership change" >&2
-  sleep 30
-done
-test "\$ok" = 1
+slug="/tmp/${APP_NAME}"
+docker_git="/tmp/${DOCKER_APP_NAME}"
+test -d "\${slug}/.git" || { echo "slug app git dir missing; deploy step must run first" >&2; exit 1; }
+test -d "\${docker_git}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
+push_git() {
+  local dir=\$1
+  cd "\${dir}"
+  git commit --allow-empty -m "membership ${label}"
+  ok=0
+  for i in \$(seq 1 5); do
+    if timeout 600 git push flynn master; then
+      ok=1
+      break
+    fi
+    echo "git push attempt \$i in \${dir} failed; waiting for scheduler after membership change" >&2
+    sleep 30
+  done
+  test "\$ok" = 1
+}
+push_git "\${slug}"
+push_git "\${docker_git}"
+flynn -a "${APP_NAME}" ps
 flynn -a "${DOCKER_APP_NAME}" ps
 EOF
-  wait_for "docker app HTTP ${label}" 180 probe_docker_http
-  assert_docker_http "${label}"
-  assert_docker_ps "${label}"
+  smoke_docker_push_image 0
+  wait_for "app HTTP ${label}" 180 probe_app_http
+  assert_app_http "${label}"
+  wait_and_assert_docker_apps "${label}"
   cli_run_job "${label}" "membership-run" "${APP_NAME}" "membership-ok" echo membership-ok
-  echo "membership deploy ${label}: docker git-push + slug flynn run ok"
+  echo "membership deploy ${label}: slug git-push + docker git-push + docker push + flynn run ok"
 }
 
 step_verify_membership() {
@@ -4059,9 +4315,7 @@ step_verify_membership() {
   assert_app_http "${label}"
   wait_for "app /status ${label}" 120 probe_app_status
   assert_app_status "${label}"
-  wait_for "docker app HTTP ${label}" 180 probe_docker_http
-  assert_docker_http "${label}"
-  assert_docker_ps "${label}"
+  wait_and_assert_docker_apps "${label}"
   assert_databases "${label}"
   step_membership_deploy "${label}"
 }
@@ -4815,9 +5069,11 @@ run_one_topology() {
   if [[ "${SKIP_DEPLOY}" == "1" ]]; then
     record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
     record "Deploy Dockerfile app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
+    record "Deploy docker-push app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
     run_step "Deploy Dockerfile app (${TOPOLOGY_LABEL})" step_deploy_docker_app
+    run_step "Deploy docker-push app (${TOPOLOGY_LABEL})" step_deploy_docker_push_app
   fi
   if [[ "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
     record "Verify app/DBs before upgrade (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_VERIFY_BEFORE=1"

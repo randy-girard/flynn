@@ -224,6 +224,8 @@ need "${ROOT}/dockerbuilder/img/packages.sh" 'runc' \
   "dockerbuilder on ubuntu-noble must install runc for BuildKit's OCI worker"
 need "${smoke}" 'step_deploy_docker_app' \
   "smoke must git-push a Dockerfile app through slimmed dockerbuilder-24"
+need "${smoke}" 'step_deploy_docker_push_app' \
+  "smoke must flynn docker push a pre-built image through tarreceive"
 need "${smoke}" 'docker-http' \
   "smoke must HTTP-probe the Dockerfile app after moving dockerbuilder off heroku-24-build"
 need "${smoke}" 'docker-cli-run' \

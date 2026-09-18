@@ -100,8 +100,10 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard' \
-  "default plugin install list must include redis, mysql, mongodb, kafka, clickhouse, and dashboard"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery' \
+  "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery)"
+need 'www.\${CLUSTER_DOMAIN}' \
+  "/etc/hosts must resolve www.CLUSTER_DOMAIN so the www plugin route is reachable"
 need 'plugin_manifest_matches' \
   "plugin_checkout must resolve mysql from sibling flynn-plugin.json, not a hardcoded mariadb path"
 if ! grep -Fq 'for dir in "${root}"/*' "${smoke}"; then

@@ -29,12 +29,24 @@ need 'scale vol=1' \
   "volume step must scale a process type that has a persistent /data volume"
 need 'scale vol=0' \
   "volume step must stop the vol job so the scheduler can reattach the same volume"
+need 'volume detached' \
+  "volume step must wait for the vol job to stop before scaling back up"
 need '"path": "/data"' \
   "volume process type must request a persistent /data volume (not delete_on_stop)"
+need '/tmp/vol-release-' \
+  "volume release JSON must be written on the VM, not via a lagged Vagrant share"
+need 'python3 -' \
+  "volume job command must be JSON-encoded so \$(cat) is not expanded on the host"
 need 'maybe_run_cli_and_volume' \
   "CLI skip flags must also skip the volume probe"
+need 'SKIP_VOLUME' \
+  "smoke must allow skipping only the volume probe"
 need 'Persistent volume \(pre-upgrade\)' \
   "smoke must run the volume lifecycle before the first --force update"
+need 'Persistent volume after add-node' \
+  "add topology must re-run the volume lifecycle after joining a host"
+need 'Persistent volume after remove-node' \
+  "remove topology must re-run the volume lifecycle after draining a host"
 need 'Persistent volume after upgrade' \
   "smoke must re-run the volume lifecycle after flynn-host update"
 need 'Persistent volume after restore' \

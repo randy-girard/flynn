@@ -43,6 +43,12 @@ need 'step_remove_cluster_node' \
   "smoke must drain a node from a running cluster"
 need 'step_verify_membership' \
   "membership changes must re-check HTTP/DBs/deploys"
+need 'step_deploy_docker_push_app' \
+  "every topology must flynn docker push a pre-built image, not only git-push"
+need 'wait_and_assert_docker_apps' \
+  "every topology verify/membership phase must probe both Dockerfile paths"
+need 'slug app git dir missing' \
+  "membership must git-push the regular slug app after add/remove"
 need 'TEARDOWN_NODES' \
   "teardown must destroy a drained host VM even after it leaves NODES"
 need 'run_one_topology' \
