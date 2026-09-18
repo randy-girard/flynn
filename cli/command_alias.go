@@ -40,7 +40,9 @@ var subAliases = map[string]map[string]string{
 		"unset": "meta:unset",
 	},
 	"limit": {
-		"set": "limit:set",
+		"set":      "limit:set",
+		"profile":  "limit:profile",
+		"profiles": "limit:profiles",
 	},
 	"ps": {
 		"kill":  "ps:kill",

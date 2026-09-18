@@ -60,6 +60,8 @@ Commands:
 	git:remote           add a git remote for the app
 	help                 show usage for a specific command
 	limit                list resource limits
+	limit:profile        apply a runtime environment to a process type
+	limit:profiles       list cluster runtime environments
 	limit:set            set resource limits
 	log                  get app log
 	log-sink             list app log sinks

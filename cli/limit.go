@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/controller/client"
@@ -28,6 +29,20 @@ Examples:
 	$ flynn limit
 	web:     cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
 	worker:  cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
+`)
+	register("limit:profiles", runLimitProfiles, `
+usage: flynn limit:profiles
+
+List cluster runtime environments (small, medium, large, and custom profiles).
+Apply one to a process type with flynn limit:profile.
+
+Examples:
+
+	$ flynn limit:profiles
+	NAME    MEMORY  CPU   BUILTIN
+	small   256MB   250   true
+	medium  1GB     1000  true
+	large   2GB     2000  true
 `)
 	register("limit:set", runLimitSet, `
 usage: flynn limit:set <proc> <var>=<val>...
@@ -148,9 +163,26 @@ func runLimitSet(args *docopt.Args, client controller.Client) error {
 	return nil
 }
 
+func runLimitProfiles(_ *docopt.Args, client controller.Client) error {
+	list, err := client.ListRuntimeProfiles()
+	if err != nil {
+		return err
+	}
+	fmt.Print(formatRuntimeProfiles(list))
+	return nil
+}
+
 func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	proc := args.String["<proc>"]
 	name := args.String["<profile>"]
+	list, err := client.ListRuntimeProfiles()
+	if err != nil {
+		return err
+	}
+	profile := lookupRuntimeProfile(list, name)
+	if profile == nil {
+		return fmt.Errorf("unknown runtime profile %q; run `flynn limit:profiles`", name)
+	}
 	app, err := client.GetApp(mustApp())
 	if err != nil {
 		return err
@@ -164,10 +196,9 @@ func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	if release.Processes == nil {
 		release.Processes = make(map[string]ct.ProcessType)
 	}
-	t := release.Processes[proc]
-	t.RuntimeProfile = name
-	if t.Resources == nil {
-		t.Resources = resource.Defaults()
+	t := applyRuntimeProfileToProc(release.Processes[proc], profile)
+	if _, ok := release.Processes[proc]; !ok && proc != "slugbuilder" {
+		fmt.Fprintf(os.Stderr, "Warning: %q is not an existing process type, setting anyway\n", proc)
 	}
 	release.Processes[proc] = t
 	release.ID = ""
@@ -177,6 +208,54 @@ func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	if err := client.DeployAppRelease(app.ID, release.ID, nil); err != nil {
 		return err
 	}
-	fmt.Printf("Created release %s\n", release.ID)
+	fmt.Printf("Created release %s (%s: profile=%s memory=%s cpu=%d)\n",
+		release.ID, proc, profile.Name,
+		resource.FormatLimit(resource.TypeMemory, profile.Memory), profile.CPU)
 	return nil
+}
+
+func lookupRuntimeProfile(list []*ct.RuntimeProfile, nameOrID string) *ct.RuntimeProfile {
+	want := strings.ToLower(strings.TrimSpace(nameOrID))
+	if want == "" {
+		return nil
+	}
+	for _, p := range list {
+		if p == nil {
+			continue
+		}
+		if strings.ToLower(p.Name) == want || strings.ToLower(p.ID) == want {
+			return p
+		}
+	}
+	return nil
+}
+
+func applyRuntimeProfileToProc(t ct.ProcessType, profile *ct.RuntimeProfile) ct.ProcessType {
+	if t.Resources == nil {
+		t.Resources = resource.Defaults()
+	}
+	resource.ApplyNamedLimits(t.Resources, profile.Memory, profile.CPU)
+	t.RuntimeProfile = profile.Name
+	return t
+}
+
+func formatRuntimeProfiles(list []*ct.RuntimeProfile) string {
+	var b strings.Builder
+	w := tabwriter.NewWriter(&b, 1, 2, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tMEMORY\tCPU\tBUILTIN")
+	sorted := append([]*ct.RuntimeProfile{}, list...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i] == nil || sorted[j] == nil {
+			return sorted[j] != nil
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	for _, p := range sorted {
+		if p == nil {
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%d\t%t\n", p.Name, resource.FormatLimit(resource.TypeMemory, p.Memory), p.CPU, p.Builtin)
+	}
+	w.Flush()
+	return b.String()
 }
