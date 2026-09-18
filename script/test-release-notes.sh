@@ -88,5 +88,52 @@ if grep -qi 'ci: update coverage badge' "${sample}"; then
   grep -i 'ci: update coverage badge' "${sample}" >&2
   exit 1
 fi
+if ! grep -q 'sort -V' "${notes_lib}"; then
+  echo "release-notes lib must pick the previous tag by version, not git describe HEAD^" >&2
+  exit 1
+fi
+if grep -q 'describe --tags --abbrev=0 --match' "${notes_lib}"; then
+  echo "release-notes lib must not use git describe for the previous tag (wrong tag on topic branches)" >&2
+  exit 1
+fi
+
+scratch="$(mktemp -d)"
+trap 'rm -f "${sample}"; rm -rf "${scratch}"' EXIT
+git -C "${scratch}" init -q
+git -C "${scratch}" config user.email test@example.com
+git -C "${scratch}" config user.name test
+git -C "${scratch}" config commit.gpgsign false
+git -C "${scratch}" commit -q --allow-empty -m "feat: one"
+git -C "${scratch}" tag v20260101.0
+git -C "${scratch}" commit -q --allow-empty -m "feat: two"
+git -C "${scratch}" tag v20260102.0
+git -C "${scratch}" checkout -q -b topic
+git -C "${scratch}" commit -q --allow-empty -m "feat: topic-only"
+# shellcheck source=/dev/null
+source "${notes_lib}"
+(
+  cd "${scratch}"
+  prev="$(flynn_previous_release_tag v20260102.0)"
+  range="$(flynn_commit_range_since_previous v20260102.0)"
+  notes="$(flynn_categorized_release_notes "${range}")"
+  if [[ "${prev}" != "v20260101.0" ]]; then
+    echo "previous tag for v20260102.0 should be v20260101.0, got ${prev}" >&2
+    exit 1
+  fi
+  if [[ "${range}" != "v20260101.0..v20260102.0" ]]; then
+    echo "range should be previous..this tag, got ${range}" >&2
+    exit 1
+  fi
+  if printf '%s' "${notes}" | grep -q topic-only; then
+    echo "notes for v20260102.0 must not include topic-branch commits" >&2
+    printf '%s\n' "${notes}" >&2
+    exit 1
+  fi
+  if ! printf '%s' "${notes}" | grep -q 'feat: two'; then
+    echo "notes for v20260102.0 must include commits since the previous tag" >&2
+    printf '%s\n' "${notes}" >&2
+    exit 1
+  fi
+)
 
 echo "ok GitHub release notes are grouped like script/release"

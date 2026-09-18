@@ -5,24 +5,43 @@
 #
 # shellcheck shell=bash
 
+# Previous published v* tag, independent of the current branch. git describe
+# from the parent of HEAD follows ancestry and can pick the wrong tag on a
+# topic or release branch. We take the newest CalVer tag strictly older than
+# VERSION (or the newest tag when VERSION is empty / not yet tagged).
 flynn_previous_release_tag() {
   local version=${1:-}
-  local prev=""
-  prev="$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)"
-  if [[ -n "${version}" && "${prev}" == "${version}" ]]; then
-    prev="$(git describe --tags --abbrev=0 --match 'v*' "${version}^" 2>/dev/null || true)"
-  fi
-  printf '%s' "${prev}"
+  local tag
+  while IFS= read -r tag; do
+    [[ -z "${tag}" ]] && continue
+    if [[ -n "${version}" && "${tag}" == "${version}" ]]; then
+      continue
+    fi
+    if [[ -n "${version}" ]]; then
+      if [[ "$(printf '%s\n%s\n' "${tag}" "${version}" | sort -V | tail -n1)" != "${version}" ]]; then
+        continue
+      fi
+    fi
+    printf '%s' "${tag}"
+    return 0
+  done < <(git tag -l 'v*' 2>/dev/null | sort -V -r)
 }
 
+# Commits that landed in this release: previous tag .. this tag (or HEAD
+# when VERSION is not a git revision yet). Never walks the current branch
+# against an unrelated ancestor.
 flynn_commit_range_since_previous() {
   local version=${1:-}
-  local prev
+  local prev head
   prev="$(flynn_previous_release_tag "${version}")"
+  head="${version}"
+  if [[ -z "${head}" ]] || ! git rev-parse --verify --quiet "${head}^{commit}" >/dev/null 2>&1; then
+    head="HEAD"
+  fi
   if [[ -n "${prev}" ]]; then
-    printf '%s' "${prev}..HEAD"
+    printf '%s' "${prev}..${head}"
   else
-    printf '%s' "HEAD~20..HEAD"
+    printf '%s' "${head}"
   fi
 }
 
@@ -36,16 +55,16 @@ flynn_categorized_release_notes() {
   local range=$1
   local feat fix chore docs refactor perf testc build ci other notes=""
 
-  feat="$(git log --pretty=format:"- %s (%h)" --grep="^feat" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  fix="$(git log --pretty=format:"- %s (%h)" --grep="^fix" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  chore="$(git log --pretty=format:"- %s (%h)" --grep="^chore" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  docs="$(git log --pretty=format:"- %s (%h)" --grep="^docs" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  refactor="$(git log --pretty=format:"- %s (%h)" --grep="^refactor" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  perf="$(git log --pretty=format:"- %s (%h)" --grep="^perf" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  testc="$(git log --pretty=format:"- %s (%h)" --grep="^test" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  build="$(git log --pretty=format:"- %s (%h)" --grep="^build" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  ci="$(git log --pretty=format:"- %s (%h)" --grep="^ci" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
-  other="$(git log --pretty=format:"- %s (%h)" "${range}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" | flynn_omit_coverage_badge_notes || true)"
+  feat="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^feat" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  fix="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^fix" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  chore="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^chore" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  docs="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^docs" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  refactor="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^refactor" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  perf="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^perf" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  testc="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^test" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  build="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^build" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  ci="$(git log --no-merges --pretty=format:"- %s (%h)" --grep="^ci" "${range}" 2>/dev/null | flynn_omit_coverage_badge_notes || true)"
+  other="$(git log --no-merges --pretty=format:"- %s (%h)" "${range}" 2>/dev/null | grep -v -E "^- (feat|fix|chore|docs|refactor|perf|test|build|ci)" | flynn_omit_coverage_badge_notes || true)"
 
   if [[ -n "${feat}" ]]; then
     notes+="### ✨ Features
