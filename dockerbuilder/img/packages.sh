@@ -7,6 +7,8 @@ export DEBIAN_FRONTEND=noninteractive
 packages=(
   ca-certificates
   curl
+  gzip
+  pigz
   # BuildKit's OCI worker shells out to runc. heroku-24-build used to provide
   # it; ubuntu-noble does not.
   runc
