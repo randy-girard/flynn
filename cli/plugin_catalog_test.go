@@ -53,7 +53,7 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 		{Command: "stub"}, // provider-only: not runnable, must not appear
 	}}
 	got := mergePluginUsage(usage, cat, nil)
-	if !strings.Contains(got, "redis") || !strings.Contains(got, "manage redis databases") {
+	if !strings.Contains(got, "redis:dump") || !strings.Contains(got, "manage redis databases") {
 		t.Fatalf("installed plugin CLI must appear:\n%s", got)
 	}
 	if strings.Contains(got, "stub") {
@@ -62,7 +62,7 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 	if !strings.Contains(got, "ps") {
 		t.Fatal("core command dropped")
 	}
-	assertPluginHelpSection(t, got, "redis")
+	assertPluginHelpSection(t, got, "redis:dump")
 }
 
 func TestCLIUsageParsesHelpAndOptionalCommand(t *testing.T) {
@@ -123,8 +123,8 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 	if _, ok := names["help"]; !ok {
 		t.Fatal("help")
 	}
-	if _, ok := names["plugins"]; !ok {
-		t.Fatal("plugins")
+	if _, ok := names["plugin:list"]; !ok {
+		t.Fatal("plugin:list")
 	}
 	if _, ok := names["update"]; !ok {
 		t.Fatal("update")
@@ -177,11 +177,11 @@ func TestMergePluginUsageAddsRedisToRootUsage(t *testing.T) {
 		},
 	}}
 	got := mergePluginUsage(cliUsage, cat, nil)
-	if !strings.Contains(got, "redis") || !strings.Contains(got, "manage redis databases") {
+	if !strings.Contains(got, "redis:dump") || !strings.Contains(got, "manage redis databases") {
 		t.Fatalf("flynn --help must list installed redis:\n%s", got)
 	}
-	assertPluginHelpSection(t, got, "redis")
-	idxPluginsCmd := strings.Index(got, "\tplugins")
+	assertPluginHelpSection(t, got, "redis:dump")
+	idxPluginsCmd := strings.Index(got, "\tplugin:list")
 	idxPlugins := strings.Index(got, "Plugins:")
 	if idxPluginsCmd < 0 || idxPlugins < 0 || idxPluginsCmd > idxPlugins {
 		t.Fatalf("core plugins command belongs under Commands:\n%s", got)
@@ -278,13 +278,13 @@ func TestAppendCatalogCommandsBranches(t *testing.T) {
 		{Command: "kafka", Usage: "", Doc: "usage: flynn kafka", Actions: []plugin.CLIAction{{Name: "topics", Args: []string{"topics"}}}},
 	}}
 	got := mergePluginUsage(usage, cat, nil)
-	if !strings.Contains(got, "Plugins:") || !strings.Contains(got, "redis") || !strings.Contains(got, "plugin command") {
+	if !strings.Contains(got, "Plugins:") || !strings.Contains(got, "redis:dump") || !strings.Contains(got, "plugin command") {
 		t.Fatalf("default usage and Plugins section:\n%s", got)
 	}
 	if !strings.Contains(got, "list jobs\n\nPlugins:") {
 		t.Fatalf("blank line between Commands and Plugins:\n%s", got)
 	}
-	if strings.Count(got, "\tps") != 1 {
+	if strings.Count(got, "\tps          list jobs") != 1 {
 		t.Fatalf("compiled command must not be duplicated:\n%s", got)
 	}
 }

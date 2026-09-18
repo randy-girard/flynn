@@ -10,28 +10,24 @@ import (
 )
 
 func init() {
-	register("resource", runResource, `
+	register("resource", runResourceList, `
 usage: flynn resource
-       flynn resource add <provider>
-       flynn resource remove <provider> [<resource>]
 
-Manage resources for the app.
+List resources for the app.
+`)
+	register("resource:add", runResourceAdd, `
+usage: flynn resource:add <provider>
 
-Commands:
-       With no arguments, shows a list of resources.
+Provision a new resource for the app using <provider>.
+`)
+	register("resource:remove", runResourceRemove, `
+usage: flynn resource:remove <provider> [<resource>]
 
-       add     provisions a new resource for the app using <provider>.
-       remove  removes the existing <resource> provided by <provider>, resolves <resource> automatically if unambigious.
+Remove the existing <resource> provided by <provider>. Resolves <resource> automatically if unambiguous.
 `)
 }
 
-func runResource(args *docopt.Args, client controller.Client) error {
-	if args.Bool["add"] {
-		return runResourceAdd(args, client)
-	}
-	if args.Bool["remove"] {
-		return runResourceRemove(args, client)
-	}
+func runResourceList(args *docopt.Args, client controller.Client) error {
 
 	resources, err := client.AppResourceList(mustApp())
 	if err != nil {

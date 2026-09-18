@@ -18,7 +18,7 @@ func redisPluginCLI() *plugin.CLI {
 		Command:         "redis",
 		Usage:           "manage redis databases",
 		ResourceEnv:     "FLYNN_REDIS",
-		ResourceMissing: "No redis server found. Provision one with `flynn resource add redis`",
+		ResourceMissing: "No redis server found. Provision one with `flynn resource:add redis`",
 		Doc:             "usage: flynn redis redis-cli [--] [<argument>...]",
 		Actions: []plugin.CLIAction{{
 			Name:   "redis-cli",
@@ -266,7 +266,7 @@ func TestPluginJobConfigErrors(t *testing.T) {
 func TestPluginInterpDefaultMissingAndReleaseError(t *testing.T) {
 	spec := &plugin.CLI{Command: "cache", ResourceEnv: "FLYNN_CACHE"}
 	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}})
-	if err == nil || !strings.Contains(err.Error(), "flynn resource add cache") {
+	if err == nil || !strings.Contains(err.Error(), "flynn resource:add cache") {
 		t.Fatalf("default missing: %v", err)
 	}
 

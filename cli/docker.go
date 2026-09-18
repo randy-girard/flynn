@@ -25,40 +25,27 @@ import (
 )
 
 func init() {
-	register("docker", runDocker, `
-usage: flynn docker push <image>
-       flynn docker set-push-url [<url>]
-       flynn docker login
-       flynn docker logout
+	register("docker:push", runDockerPush, `
+usage: flynn docker:push <image>
 
-
-Deploy Docker images to a Flynn cluster.
-
-Commands:
-	login         [DEPRECATED] run "docker login" against the cluster's docker-receive app
-	logout        [DEPRECATED] run "docker logout" against the cluster's docker-receive app
-	push          push and release a Docker image to the cluster
-	set-push-url  [DEPRECATED] set the Docker push URL (defaults to https://docker.$CLUSTER_DOMAIN)
+Push and release a Docker image to the cluster.
 
 Example:
 
 	Assuming you have a Docker image tagged "my-custom-image:v2":
 
-	$ flynn docker push my-custom-image:v2
-	deploying Docker image: my-custom-image:v2
-	exporting image with 'docker save my-custom-image:v2'
-	111.58 MB 109.70 MB/s 1s
-	uploading layer fccbfa2912f0cd6b9d13f91f288f112a2b825f3f758a4443aacb45bfc108cc74
-	111.52 MB 25.56 MB/s 4s
-	uploading layer e1a9a6284d0d24d8194ac84b372619e75cd35a46866b74925b7274c7056561e4
-	15.50 KB 620.05 KB/s 0s
-	uploading layer ac7299292f8b2f710d3b911c6a4e02ae8f06792e39822e097f9c4e9c2672b32d
-	14.50 KB 601.45 KB/s 0s
-	uploading layer a5e66470b2812e91798db36eb103c1f1e135bbe167e4b2ad5ba425b8db98ee8d
-	5.50 KB 279.83 KB/s 0s
-	uploading layer a8de0e025d94b33db3542e1e8ce58829144b30c6cd1fff057eec55b1491933c3
-	3.00 KB 153.83 KB/s 0s
-	Docker image deployed, scale it with 'flynn scale app=N'
+	$ flynn docker:push my-custom-image:v2
+`)
+	register("docker:set-push-url", runDockerSetPushURL, `
+usage: flynn docker:set-push-url [<url>]
+
+[DEPRECATED] set the Docker push URL (defaults to https://docker.$CLUSTER_DOMAIN)
+`)
+	register("docker:login", runDockerLoginCmd, `
+usage: flynn docker:login
+`)
+	register("docker:logout", runDockerLogoutCmd, `
+usage: flynn docker:logout
 `)
 }
 
@@ -66,17 +53,12 @@ Example:
 // Docker images as tar layers.
 const minDockerPushTarVersion = "v20190425.0"
 
-func runDocker(args *docopt.Args, client controller.Client) error {
-	if args.Bool["set-push-url"] {
-		return runDockerSetPushURL(args)
-	} else if args.Bool["login"] {
-		return runDockerLogin()
-	} else if args.Bool["logout"] {
-		return runDockerLogout()
-	} else if args.Bool["push"] {
-		return runDockerPush(args, client)
-	}
-	return errors.New("unknown docker subcommand")
+func runDockerLoginCmd(_ *docopt.Args) error {
+	return runDockerLogin()
+}
+
+func runDockerLogoutCmd(_ *docopt.Args) error {
+	return runDockerLogout()
 }
 
 func runDockerSetPushURL(args *docopt.Args) error {

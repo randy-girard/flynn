@@ -5,19 +5,20 @@ import (
 	"log"
 
 	"github.com/flynn/flynn/controller/client"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
 )
 
 func init() {
-	register("kill", runKill, `
-usage: flynn kill <job>...
+	register("ps:kill", runKill, `
+usage: flynn ps:kill <job>...
 
 Kill running jobs.`)
 }
 
 func runKill(args *docopt.Args, client controller.Client) error {
 	success := true
-	for _, job := range args.All["<job>"].([]string) {
+	for _, job := range cliutil.List(args, "<job>") {
 		if err := client.DeleteJob(mustApp(), job); err != nil {
 			success = false
 			log.Printf("ERROR: could not kill job %s: %s\n", job, err)

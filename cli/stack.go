@@ -14,11 +14,10 @@ const (
 )
 
 func init() {
-	register("stack", runStack, `
+	register("stack", runStackShow, `
 usage: flynn stack
-       flynn stack set <stack>
 
-Manage the deployment stack for git push deploys.
+Show the deployment stack for git push deploys.
 
 Stacks:
   heroku-24  Build apps with buildpacks (default)
@@ -28,20 +27,24 @@ Examples:
 
 	$ flynn stack
 	heroku-24
+`)
+	register("stack:set", runStackSet, `
+usage: flynn stack:set <stack>
 
-	$ flynn stack set container
+Set the deployment stack for git push deploys.
+
+Stacks:
+  heroku-24  Build apps with buildpacks (default)
+  container  Build apps from a Dockerfile on the server using BuildKit
+
+Examples:
+
+	$ flynn stack:set container
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb.
 `)
 }
 
-func runStack(args *docopt.Args, client controller.Client) error {
-	if args.Bool["set"] {
-		return runStackSet(args, client)
-	}
-	return runStackShow(client)
-}
-
-func runStackShow(client controller.Client) error {
+func runStackShow(_ *docopt.Args, client controller.Client) error {
 	release, err := client.GetAppRelease(mustApp())
 	if err == controller.ErrNotFound {
 		fmt.Println(stackHeroku24)

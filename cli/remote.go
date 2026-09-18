@@ -9,8 +9,8 @@ import (
 )
 
 func init() {
-	register("remote", runRemote, `
-usage: flynn remote add [<remote>] [-y]
+	register("git:remote", runRemote, `
+usage: flynn git:remote [<remote>] [-y]
 
 Create a git remote that allows deploying the application via git.
 If a name for the remote is not provided 'flynn' will be used.
@@ -22,10 +22,10 @@ Options:
 
 Examples:
 
-	$ flynn -a turkeys-stupefy-perry remote add
+	$ flynn -a turkeys-stupefy-perry git:remote
 	Created remote flynn with url https://git.dev.localflynn.com/turkeys-stupefy-perry.git
 
-	$ flynn -a turkeys-stupefy-perry remote add staging
+	$ flynn -a turkeys-stupefy-perry git:remote staging
 	Created remote staging with url https://git.dev.localflynn.com/turkeys-stupefy-perry.git
 `)
 }

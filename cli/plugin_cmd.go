@@ -9,6 +9,7 @@ import (
 	"github.com/cheggaaa/pb"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/plugin"
 	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
@@ -57,10 +58,6 @@ func runPluginFlynnCommand(client controller.Client, spec *plugin.CLI, action *p
 	if flynnCmd == "" {
 		return fmt.Errorf("%s: missing flynn command", spec.Command)
 	}
-	cmd, ok := commands[flynnCmd]
-	if !ok {
-		return fmt.Errorf("%s: flynn %s is not a built-in CLI command", spec.Command, flynnCmd)
-	}
 	appName := strings.TrimSpace(spec.App)
 	if appName == "" {
 		return fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
@@ -83,8 +80,14 @@ func runPluginFlynnCommand(client controller.Client, spec *plugin.CLI, action *p
 			rest = rest[len(parts):]
 		}
 	}
+	fields := strings.Fields(flynnCmd)
+	resolved, rest, _ := resolveCommand(fields[0], append(fields[1:], rest...))
+	cmd, ok := commands[resolved]
+	if !ok {
+		return fmt.Errorf("%s: flynn %s is not a built-in CLI command", spec.Command, flynnCmd)
+	}
 	argv := make([]string, 1, 1+len(rest))
-	argv[0] = flynnCmd
+	argv[0] = resolved
 	argv = append(argv, rest...)
 	parsed, err := docopt.Parse(cmd.usage, argv, true, "", cmd.optsFirst)
 	if err != nil {
@@ -158,9 +161,7 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 		return nil, err
 	}
 	if action.Append != "" {
-		if extra, ok := args.All[action.Append].([]string); ok {
-			jobArgs = append(jobArgs, extra...)
-		}
+		jobArgs = append(jobArgs, cliutil.List(args, action.Append)...)
 	}
 
 	env := make(map[string]string, len(action.Env))
@@ -194,7 +195,7 @@ func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Rele
 		if in.Resource == "" {
 			msg := spec.ResourceMissing
 			if msg == "" {
-				msg = fmt.Sprintf("No %s resource found. Provision one with `flynn resource add %s`", spec.Command, spec.Command)
+				msg = fmt.Sprintf("No %s resource found. Provision one with `flynn resource:add %s`", spec.Command, spec.Command)
 			}
 			return in, nil, fmt.Errorf("%s", msg)
 		}

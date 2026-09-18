@@ -72,15 +72,18 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		if !cmd.Runnable() {
 			continue
 		}
-		if _, ok := present[cmd.Command]; ok {
-			continue
-		}
 		desc := cmd.Usage
 		if desc == "" {
 			desc = "plugin command"
 		}
-		extra = append(extra, fmt.Sprintf("\t%-11s %s", cmd.Command, desc))
-		present[cmd.Command] = struct{}{}
+		names := pluginHelpNames(cmd)
+		for _, name := range names {
+			if _, ok := present[name]; ok {
+				continue
+			}
+			extra = append(extra, fmt.Sprintf("\t%-22s %s", name, desc))
+			present[name] = struct{}{}
+		}
 	}
 	if len(extra) == 0 {
 		return usage
@@ -116,6 +119,30 @@ func insertPluginHelpSection(usage string, section []string) string {
 		out = append(out, section...)
 	}
 	return strings.Join(out, "\n")
+}
+
+func pluginHelpNames(cmd plugin.CLI) []string {
+	if len(cmd.Actions) == 0 {
+		return []string{cmd.Command}
+	}
+	names := make([]string, 0, len(cmd.Actions))
+	seen := map[string]struct{}{}
+	for _, a := range cmd.Actions {
+		if strings.TrimSpace(a.Name) == "" {
+			continue
+		}
+		name := pluginColonName(cmd.Command, a.Name)
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		return []string{cmd.Command}
+	}
+	sort.Strings(names)
+	return names
 }
 
 // usageCommandNames is every indented command in the help list. Scanning

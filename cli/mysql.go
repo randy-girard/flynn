@@ -22,7 +22,7 @@ func getAppMysqlRunConfig(client controller.Client) (*runConfig, error) {
 func getMysqlRunConfig(client appReleaseGetter, appName string, appRelease *ct.Release) (*runConfig, error) {
 	app := appRelease.Env["FLYNN_MYSQL"]
 	if app == "" {
-		return nil, fmt.Errorf("No mysql database found. Provision one with `flynn resource add mysql`")
+		return nil, fmt.Errorf("No mysql database found. Provision one with `flynn resource:add mysql`")
 	}
 
 	release, err := client.GetAppRelease(app)

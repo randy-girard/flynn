@@ -106,7 +106,7 @@ func (u *Updater) notifyIfUpdateAvailable() {
 	}
 	ghrelease.MaybeNotify(ghrelease.NotifyOptions{
 		Writer:         os.Stderr,
-		CurrentVersion: version.Release(),
+		CurrentVersion: version.String(),
 		Product:        "Flynn CLI",
 		UpgradeCommand: "flynn update",
 		Repo:           u.repo(),

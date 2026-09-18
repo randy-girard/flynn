@@ -26,127 +26,94 @@ import (
 )
 
 func init() {
-	register("cluster", runCluster, `
+	register("cluster", runClusterList, `
 usage: flynn cluster
-       flynn cluster add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] <cluster-name> <domain> <key>
-       flynn cluster remove <cluster-name>
-       flynn cluster default [<cluster-name>]
-       flynn cluster migrate-domain <domain>
-       flynn cluster update-pin [--clear]
-       flynn cluster backup [--file <file>]
-       flynn cluster log-sink
-       flynn cluster log-sink add syslog [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
-       flynn cluster log-sink remove <id>
 
-Manage Flynn clusters.
+List clusters configured in ~/.flynnrc.
+`)
+	register("cluster:add", runClusterAdd, `
+usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] <cluster-name> <domain> <key>
 
+Add <cluster-name> to the ~/.flynnrc configuration file.
 
-Commands:
-    With no arguments, shows a list of configured clusters.
-
-    add
-        Adds <cluster-name> to the ~/.flynnrc configuration file.
-
-        options:
-            -f, --force               force add cluster
-            -d, --default             set as default cluster
-            --git-url=<giturl>        git URL
-            --no-git                  skip git configuration
-            --dashboard-url=<url>     public dashboard URL (defaults to https://dashboard.<domain>)
-            --image-url=<url>         image URL
-            --docker-push-url=<url>   [DEPRECATED] Docker push URL
-            --docker                  [DEPRECATED] configure Docker to push to the cluster
-            -p, --tls-pin=<tlspin>    SHA256 of the cluster's TLS cert
-
-    remove
-        Removes <cluster-name> from the ~/.flynnrc configuration file.
-
-    default
-        With no arguments, prints the default cluster. With <cluster-name>, sets
-        the default cluster.
-
-    migrate-domain
-        Migrates the cluster's base domain from the current one to <domain>.
-
-        New certificates will be generated for the controller and new
-        routes will be added with the pattern <app-name>.<domain> for each app.
-
-    update-pin
-        Updates the TLS certificate pin for the current cluster by fetching
-        the current certificate from the controller.
-
-        This is useful after adding a Let's Encrypt certificate to the controller,
-        which changes the certificate and invalidates the original pin.
-
-        options:
-            --clear  Remove the TLS pin entirely instead of updating it.
-                     This is recommended for Let's Encrypt certificates since
-                     they are signed by a trusted CA and don't need pinning.
-
-    backup
-        Takes a backup of the cluster.
-
-        The backup may be restored while creating a new cluster with
-        'flynn-host bootstrap --from-backup'.
-
-        options:
-            --file=<backup-file>  file to write backup to (defaults to stdout)
-
-    log-sink
-        With no arguments, prints a list of registered log-sinks for this cluster
-
-    log-sink add syslog
-        Creates a new syslog log sink with specified <url> and optionally <prefix> template.
-        Supported schemes are syslog and syslog+tls
-
-        options:
-            --use-ids          Use app IDs instead of app names in the syslog APP-NAME field.
-            --insecure         Don't verify servers certificate chain or hostname. Should only be used for testing.
-            --format=<format>  One of rfc6587, newline, or prefixed_newline. Defaults to rfc6587.
-
-        examples:
-            $ flynn cluster log-sink add syslog syslog+tls://rsyslog.host:514/
-
-    log-sink remove
-        Removes a log sink with <id>
+Options:
+	-f, --force               force add cluster
+	-d, --default             set as default cluster
+	--git-url=<giturl>        git URL
+	--no-git                  skip git configuration
+	--dashboard-url=<url>     public dashboard URL (defaults to https://dashboard.<domain>)
+	--image-url=<url>         image URL
+	--docker-push-url=<url>   [DEPRECATED] Docker push URL
+	--docker                  [DEPRECATED] configure Docker to push to the cluster
+	-p, --tls-pin=<tlspin>    SHA256 of the cluster's TLS cert
 
 Examples:
 
-	$ flynn cluster add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default dev.localflynn.com e09dc5301d72be755a3d666f617c4600
+	$ flynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default dev.localflynn.com e09dc5301d72be755a3d666f617c4600
 	Cluster "default" added.
+`)
+	register("cluster:remove", runClusterRemove, `
+usage: flynn cluster:remove <cluster-name>
 
-	$ flynn cluster migrate-domain new.example.com
-	Migrate cluster domain from "example.com" to "new.example.com"? (yes/no): yes
-	Migrating cluster domain (this can take up to 2m0s)...
-	Changed cluster domain from "example.com" to "new.example.com"
+Remove <cluster-name> from the ~/.flynnrc configuration file.
+`)
+	register("cluster:default", runClusterDefault, `
+usage: flynn cluster:default [<cluster-name>]
 
-	$ flynn cluster update-pin
+Print the default cluster, or set it to <cluster-name>.
+`)
+	register("cluster:refresh", runClusterRefresh, `
+usage: flynn cluster:refresh [--clear]
+
+Refresh this laptop's cluster entry in ~/.flynnrc to match the live cluster:
+TLS pin, CA, git URLs, and controller/git/image/dashboard URLs after a host
+domain migration.
+
+Options:
+	--clear  Remove the TLS pin entirely instead of updating it.
+	         Recommended for Let's Encrypt certificates signed by a trusted CA.
+
+Examples:
+
+	$ flynn cluster:refresh
 	Updated TLS pin for cluster "default".
 
-	$ flynn cluster update-pin --clear
+	$ flynn cluster:refresh --clear
 	Cleared TLS pin for cluster "default". Standard TLS verification will be used.
+`)
+	// Hidden for one release: still run after the "moved to flynn-host" hint.
+	register("cluster:backup", runClusterBackup, `
+usage: flynn cluster:backup [--file <file>]
+
+Takes a backup of the cluster. Moved to flynn-host backup.
+
+Options:
+	--file=<backup-file>  file to write backup to (defaults to stdout)
+`)
+	register("cluster:migrate-domain", runClusterMigrateDomain, `
+usage: flynn cluster:migrate-domain <domain>
+
+Migrates the cluster's base domain. Moved to flynn-host migrate-domain.
+`)
+	register("cluster:log-sink", runLogSink, `
+usage: flynn cluster:log-sink
+       flynn cluster:log-sink add syslog [--scope <scope>] [--app <app>] [--use-ids] [--insecure] [--format <format>] <url> [<prefix>]
+       flynn cluster:log-sink remove <id>
+
+Manage cluster-wide log sinks. Moved to flynn-host log-sink.
+
+Options:
+	--scope=<scope>    system (Flynn jobs), apps (user apps), or all [default: all]
+	--app=<app>        Limit the sink to one app name or ID
+	--use-ids          Use app IDs instead of app names in the syslog APP-NAME field.
+	--insecure         Don't verify servers certificate chain or hostname. Should only be used for testing.
+	--format=<format>  One of rfc6587, newline, or prefixed_newline. Defaults to rfc6587.
 `)
 }
 
-func runCluster(args *docopt.Args) error {
+func runClusterList(_ *docopt.Args) error {
 	if err := readConfig(); err != nil {
 		return err
-	}
-
-	if args.Bool["log-sink"] {
-		return runLogSink(args)
-	} else if args.Bool["add"] {
-		return runClusterAdd(args)
-	} else if args.Bool["remove"] {
-		return runClusterRemove(args)
-	} else if args.Bool["default"] {
-		return runClusterDefault(args)
-	} else if args.Bool["migrate-domain"] {
-		return runClusterMigrateDomain(args)
-	} else if args.Bool["update-pin"] {
-		return runClusterUpdatePin(args)
-	} else if args.Bool["backup"] {
-		return runClusterBackup(args)
 	}
 
 	w := tabWriter()
@@ -179,6 +146,9 @@ func runCluster(args *docopt.Args) error {
 }
 
 func runClusterAdd(args *docopt.Args) error {
+	if err := readConfig(); err != nil {
+		return err
+	}
 	s := &cfg.Cluster{
 		Name:          args.String["<cluster-name>"],
 		Key:           args.String["<key>"],
@@ -289,6 +259,9 @@ func writeCACert(c controller.Client, name string) (string, error) {
 }
 
 func runClusterRemove(args *docopt.Args) error {
+	if err := readConfig(); err != nil {
+		return err
+	}
 	name := args.String["<cluster-name>"]
 
 	if c := config.Remove(name); c != nil {
@@ -318,6 +291,9 @@ func runClusterRemove(args *docopt.Args) error {
 }
 
 func runClusterDefault(args *docopt.Args) error {
+	if err := readConfig(); err != nil {
+		return err
+	}
 	name := args.String["<cluster-name>"]
 
 	if name == "" {
@@ -453,14 +429,16 @@ func runClusterMigrateDomain(args *docopt.Args) error {
 	}
 }
 
-func runClusterUpdatePin(args *docopt.Args) error {
+func runClusterRefresh(args *docopt.Args) error {
+	if err := readConfig(); err != nil {
+		return err
+	}
 	cluster, err := getCluster()
 	if err != nil {
 		return err
 	}
 
 	if args.Bool["--clear"] {
-		// Clear the TLS pin
 		if cluster.TLSPin == "" {
 			log.Printf("Cluster %q already has no TLS pin configured.", cluster.Name)
 			return nil
@@ -473,7 +451,88 @@ func runClusterUpdatePin(args *docopt.Args) error {
 		return nil
 	}
 
-	// Fetch the current certificate from the controller
+	if err := refreshClusterLocalURLs(cluster); err != nil {
+		return err
+	}
+	return updateClusterTLSPin(cluster)
+}
+
+func refreshClusterLocalURLs(cluster *cfg.Cluster) error {
+	client, err := cluster.Client()
+	if err != nil {
+		return err
+	}
+	release, err := client.GetAppRelease("controller")
+	if err != nil {
+		return err
+	}
+	domain := release.Env["DEFAULT_ROUTE_DOMAIN"]
+	if domain == "" {
+		return nil
+	}
+	oldDomain := controllerDomain(cluster.ControllerURL)
+	if oldDomain == "" || oldDomain == domain {
+		if err := writeClusterCA(client, cluster); err != nil {
+			log.Printf("Warning: could not refresh CA certificate: %s", err)
+		}
+		return nil
+	}
+
+	cluster.ControllerURL = fmt.Sprintf("https://controller.%s", domain)
+	cluster.GitURL = fmt.Sprintf("https://git.%s", domain)
+	cluster.ImageURL = fmt.Sprintf("https://images.%s", domain)
+	cluster.DockerPushURL = fmt.Sprintf("https://docker.%s", domain)
+	if cluster.DashboardURL == fmt.Sprintf("https://dashboard.%s", oldDomain) {
+		cluster.DashboardURL = fmt.Sprintf("https://dashboard.%s", domain)
+	}
+	if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", oldDomain) {
+		cluster.OAuthURL = fmt.Sprintf("https://dashboard.%s", domain)
+	}
+	if err := config.SaveTo(configPath()); err != nil {
+		return fmt.Errorf("Error saving config: %s", err)
+	}
+	if err := writeClusterCA(client, cluster); err != nil {
+		return err
+	}
+	caFile, err := cfg.CACertFile(cluster.Name)
+	if err != nil {
+		return err
+	}
+	defer caFile.Close()
+	if err := cfg.WriteGlobalGitConfig(cluster.GitURL, caFile.Name()); err != nil {
+		return err
+	}
+	cfg.ClearSystemCredentials(cluster.GitURL)
+	cfg.RemoveGlobalGitConfig(fmt.Sprintf("https://git.%s", oldDomain))
+	cfg.ClearSystemCredentials(fmt.Sprintf("https://git.%s", oldDomain))
+	log.Printf("Updated local URLs for cluster %q to domain %q.", cluster.Name, domain)
+	return nil
+}
+
+func controllerDomain(controllerURL string) string {
+	u, err := url.Parse(controllerURL)
+	if err != nil {
+		return ""
+	}
+	host := u.Hostname()
+	return strings.TrimPrefix(host, "controller.")
+}
+
+func writeClusterCA(client controller.Client, cluster *cfg.Cluster) error {
+	data, err := client.GetCACert()
+	if err != nil {
+		return err
+	}
+	dest, err := cfg.CACertFile(cluster.Name)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+	_, err = dest.Write(data)
+	return err
+}
+
+func updateClusterTLSPin(cluster *cfg.Cluster) error {
 	u, err := url.Parse(cluster.ControllerURL)
 	if err != nil {
 		return fmt.Errorf("Error parsing controller URL: %s", err)
@@ -631,17 +690,32 @@ func runLogSinkAddSyslog(args *docopt.Args, client controller.Client) error {
 		return fmt.Errorf("Invalid syslog format: %s", args.String["--format"])
 	}
 
+	scope, err := ct.ParseSinkScope(args.String["--scope"])
+	if err != nil {
+		return err
+	}
+	appID := ""
+	if name := args.String["--app"]; name != "" {
+		app, err := client.GetApp(name)
+		if err != nil {
+			return fmt.Errorf("app %q: %w", name, err)
+		}
+		appID = app.ID
+	}
+
 	data, _ := json.Marshal(ct.SyslogSinkConfig{
 		Prefix:   args.String["<prefix>"],
 		URL:      u.String(),
 		UseIDs:   args.Bool["--use-ids"],
 		Insecure: args.Bool["--insecure"],
 		Format:   format,
+		Scope:    scope,
 	})
 	config := json.RawMessage(data)
 
 	sink := &ct.Sink{
 		Kind:   ct.SinkKindSyslog,
+		AppID:  appID,
 		Config: &config,
 	}
 

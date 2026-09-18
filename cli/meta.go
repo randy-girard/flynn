@@ -6,51 +6,64 @@ import (
 
 	"github.com/flynn/flynn/controller/client"
 	"github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
 )
 
 func init() {
-	register("meta", runMeta, `
+	register("meta", runMetaList, `
 usage: flynn meta
-       flynn meta set <var>=<val>...
-       flynn meta unset <var>...
 
-Manage metadata for an application.
+List metadata for an application.
 
 Examples:
 
 	$ flynn meta
 	KEY  VALUE
 	foo  bar
+`)
+	register("meta:set", runMetaSetCmd, `
+usage: flynn meta:set <var>=<val>...
 
-	$ flynn meta set foo=baz bar=qux
+Set metadata for an application.
 
-	$ flynn meta
-	KEY  VALUE
-	foo  baz
-	bar  qux
+Examples:
 
-	$ flynn meta unset foo
+	$ flynn meta:set foo=baz bar=qux
+`)
+	register("meta:unset", runMetaUnsetCmd, `
+usage: flynn meta:unset <var>...
 
-	$ flynn meta
-	KEY  VALUE
-	bar  qux
+Unset metadata for an application.
+
+Examples:
+
+	$ flynn meta:unset foo
 `)
 }
 
-func runMeta(args *docopt.Args, client controller.Client) error {
+func runMetaList(args *docopt.Args, client controller.Client) error {
 	app, err := client.GetApp(mustApp())
 	if err != nil {
 		return err
 	}
+	return runMetaGet(app, args, client)
+}
 
-	if args.Bool["set"] {
-		return runMetaSet(app, args, client)
-	} else if args.Bool["unset"] {
-		return runMetaUnset(app, args, client)
-	} else {
-		return runMetaGet(app, args, client)
+func runMetaSetCmd(args *docopt.Args, client controller.Client) error {
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return err
 	}
+	return runMetaSet(app, args, client)
+}
+
+func runMetaUnsetCmd(args *docopt.Args, client controller.Client) error {
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return err
+	}
+	return runMetaUnset(app, args, client)
 }
 
 func runMetaGet(app *types.App, args *docopt.Args, client controller.Client) error {
@@ -64,7 +77,7 @@ func runMetaGet(app *types.App, args *docopt.Args, client controller.Client) err
 }
 
 func runMetaSet(app *types.App, args *docopt.Args, client controller.Client) error {
-	pairs := args.All["<var>=<val>"].([]string)
+	pairs := cliutil.List(args, "<var>=<val>")
 	if app.Meta == nil {
 		app.Meta = make(map[string]string, len(pairs))
 	}
@@ -79,7 +92,7 @@ func runMetaSet(app *types.App, args *docopt.Args, client controller.Client) err
 }
 
 func runMetaUnset(app *types.App, args *docopt.Args, client controller.Client) error {
-	vars := args.All["<var>"].([]string)
+	vars := cliutil.List(args, "<var>")
 	for _, s := range vars {
 		delete(app.Meta, s)
 	}

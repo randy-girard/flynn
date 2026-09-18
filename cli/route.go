@@ -17,73 +17,85 @@ import (
 )
 
 func init() {
-	register("route", runRoute, `
+	register("route", runRouteList, `
 usage: flynn route
-       flynn route add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
-       flynn route add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
-       flynn route update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
-       flynn route remove <id>
 
-Manage routes for application.
+List routes for the application.
+`)
+	register("route:add", runRouteAdd, `
+usage: flynn route:add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
+       flynn route:add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
+
+Add a route to an application.
 
 Options:
 	-s, --service=<service>    service name to route domain to (defaults to APPNAME-web)
 	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin (http only)
 	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin (http only)
 	--auto-tls                 automatically provision TLS certificate via Let's Encrypt (http only)
-	--no-auto-tls              disable automatic TLS certificate provisioning (update http only)
 	--sticky                   enable cookie-based sticky routing (http only)
-	--no-sticky                disable cookie-based sticky routing (update http only)
 	--leader                   enable leader-only routing mode
-	--no-leader                disable leader-only routing mode (update only)
 	-p, --port=<port>          port to accept traffic on
 	--no-drain-backends        don't wait for in-flight requests to complete before stopping backends
 	--disable-keep-alives      disable keep-alives between the router and backends for the given route
-	--enable-keep-alives       enable keep-alives between the router and backends for the given route (default for new routes)
-
-Commands:
-	With no arguments, shows a list of routes.
-
-	add     adds a route to an app
-	remove  removes a route
 
 Examples:
 
-	$ flynn route add http example.com
+	$ flynn route:add http example.com
 
-	$ flynn route add http --auto-tls example.com
+	$ flynn route:add http --auto-tls example.com
 
-	$ flynn route add http example.com/path/
+	$ flynn route:add tcp
+`)
+	register("route:update", runRouteUpdate, `
+usage: flynn route:update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
 
-	$ flynn route add tcp
+Update a route.
 
-	$ flynn route add tcp --leader
+Options:
+	-s, --service=<service>    service name to route domain to
+	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin (http only)
+	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin (http only)
+	--auto-tls                 automatically provision TLS certificate via Let's Encrypt (http only)
+	--no-auto-tls              disable automatic TLS certificate provisioning
+	--sticky                   enable cookie-based sticky routing (http only)
+	--no-sticky                disable cookie-based sticky routing
+	--leader                   enable leader-only routing mode
+	--no-leader                disable leader-only routing mode
+	--disable-keep-alives      disable keep-alives between the router and backends
+	--enable-keep-alives       enable keep-alives between the router and backends
+`)
+	register("route:remove", runRouteRemove, `
+usage: flynn route:remove <id>
+
+Remove a route.
 `)
 }
 
-func runRoute(args *docopt.Args, client controller.Client) error {
-	if args.Bool["add"] {
-		switch {
-		case args.Bool["http"]:
-			return runRouteAddHTTP(args, client)
-		case args.Bool["tcp"]:
-			return runRouteAddTCP(args, client)
-		default:
-			return fmt.Errorf("Route type %s not supported.", args.String["-t"])
-		}
-	} else if args.Bool["update"] {
-		typ := strings.Split(args.String["<id>"], "/")[0]
-		switch typ {
-		case "http":
-			return runRouteUpdateHTTP(args, client)
-		case "tcp":
-			return runRouteUpdateTCP(args, client)
-		default:
-			return fmt.Errorf("Route type %s not supported.", typ)
-		}
-	} else if args.Bool["remove"] {
-		return runRouteRemove(args, client)
+func runRouteAdd(args *docopt.Args, client controller.Client) error {
+	switch {
+	case args.Bool["http"]:
+		return runRouteAddHTTP(args, client)
+	case args.Bool["tcp"]:
+		return runRouteAddTCP(args, client)
+	default:
+		return fmt.Errorf("Route type %s not supported.", args.String["-t"])
 	}
+}
+
+func runRouteUpdate(args *docopt.Args, client controller.Client) error {
+	typ := strings.Split(args.String["<id>"], "/")[0]
+	switch typ {
+	case "http":
+		return runRouteUpdateHTTP(args, client)
+	case "tcp":
+		return runRouteUpdateTCP(args, client)
+	default:
+		return fmt.Errorf("Route type %s not supported.", typ)
+	}
+}
+
+func runRouteList(_ *docopt.Args, client controller.Client) error {
 
 	routes, err := client.AppRouteList(mustApp())
 	if err != nil {

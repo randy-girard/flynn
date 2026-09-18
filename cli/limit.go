@@ -10,50 +10,38 @@ import (
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/resource"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
 )
 
 func init() {
-	register("limit", runLimit, `
+	register("limit", runLimitList, `
 usage: flynn limit [-t <proc>]
-       flynn limit set <proc> <var>=<val>...
 
-Manage app resource limits.
+List app resource limits.
 
 Options:
-	-t, --process-type=<proc>  set or read limits for specified process type
-
-Commands:
-	With no arguments, shows a list of resource limits.
-
-	set    sets value of one or more resource limits
+	-t, --process-type=<proc>  read limits for specified process type
 
 Examples:
 
 	$ flynn limit
 	web:     cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
 	worker:  cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
+`)
+	register("limit:set", runLimitSet, `
+usage: flynn limit:set <proc> <var>=<val>...
 
-	$ flynn limit set web memory=512MB max_fd=12000 cpu=500 temp_disk=200MB
+Set app resource limits.
+
+Examples:
+
+	$ flynn limit:set web memory=512MB max_fd=12000 cpu=500 temp_disk=200MB
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb
-
-	$ flynn limit
-	web:     cpu=500   temp_disk=200MB  max_fd=12000  memory=512MB
-	worker:  cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
-
-	$ flynn limit set web memory=256MB
-	Created release b39fe25d0ea344b6b2af5cf4d6542a80
-
-	$ flynn limit
-	web:     cpu=500   temp_disk=200MB  max_fd=12000  memory=256MB
-	worker:  cpu=1000  temp_disk=100MB  max_fd=10000  memory=1GB
 `)
 }
 
-func runLimit(args *docopt.Args, client controller.Client) error {
-	if args.Bool["set"] {
-		return runLimitSet(args, client)
-	}
+func runLimitList(args *docopt.Args, client controller.Client) error {
 
 	release, err := client.GetAppRelease(mustApp())
 	if err == controller.ErrNotFound {
@@ -115,7 +103,7 @@ func runLimitSet(args *docopt.Args, client controller.Client) error {
 		t.Resources = resource.Defaults()
 	}
 
-	resources, err := resource.Parse(args.All["<var>=<val>"].([]string))
+	resources, err := resource.Parse(cliutil.List(args, "<var>=<val>"))
 	if err != nil {
 		return err
 	}

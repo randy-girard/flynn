@@ -15,34 +15,22 @@ import (
 )
 
 func init() {
-	register("volume", runVolume, `
+	register("volume", runVolumeList, `
 usage: flynn volume
-       flynn volume show [--json] <id>
-       flynn volume decommission <id>
 
-Manage cluster volumes.
-
-Commands:
-    With no arguments, displays current volumes.
-
-    show
-	    Show information about a volume.
-
-    decommission
-	    Decommission a volume.
-
-	    A decommissioned volume will continue to exist but will no longer
-	    be attached to new jobs by the scheduler.
+List cluster volumes.
 `)
-}
+	register("volume:show", runVolumeShow, `
+usage: flynn volume:show [--json] <id>
 
-func runVolume(args *docopt.Args, client controller.Client) error {
-	if args.Bool["show"] {
-		return runVolumeShow(args, client)
-	} else if args.Bool["decommission"] {
-		return runVolumeDecommission(args, client)
-	}
-	return runVolumeList(args, client)
+Show information about a volume.
+`)
+	register("volume:decommission", runVolumeDecommission, `
+usage: flynn volume:decommission <id>
+
+Decommission a volume. A decommissioned volume will continue to exist but will no longer
+be attached to new jobs by the scheduler.
+`)
 }
 
 func runVolumeList(args *docopt.Args, client controller.Client) error {

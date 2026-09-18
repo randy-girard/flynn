@@ -11,8 +11,8 @@ import (
 )
 
 func init() {
-	register("create", runCreate, `
-usage: flynn create [-r <remote>] [-y] [<name>]
+	register("apps:create", runCreate, `
+usage: flynn apps:create [-r <remote>] [-y] [<name>]
 
 Create an application in Flynn.
 
@@ -27,12 +27,12 @@ Options:
 
 Examples:
 
-	$ flynn create
+	$ flynn apps:create
 	Created turkeys-stupefy-perry
 `)
 
-	register("delete", runDelete, `
-usage: flynn delete [-y] [-r <remote>]
+	register("apps:destroy", runDelete, `
+usage: flynn apps:destroy [-y] [-r <remote>]
 
 Delete an app.
 
@@ -45,7 +45,7 @@ Options:
 
 Examples:
 
-	$ flynn -a turkeys-stupefy-perry delete
+	$ flynn -a turkeys-stupefy-perry apps:destroy
 	Are you sure you want to delete the app "turkeys-stupefy-perry"? (yes/no): yes
 	Deleted turkeys-stupefy-perry
 `)
@@ -65,19 +65,19 @@ Examples:
 	9d5be7be873c41b9898032c08aa87597  controller
 `)
 
-	register("info", runInfo, `
-usage: flynn info
+	register("apps:info", runInfo, `
+usage: flynn apps:info
 
 Show information for an app.
 
 Examples:
 
-	$ flynn info
+	$ flynn apps:info
 	=== example
 	Git URL:  https://git.dev.localflynn.com/example.git
 	Web URL:  http://example.dev.localflynn.com
 
-	$ flynn -a example info
+	$ flynn -a example apps:info
 	=== example
 	Git URL:  https://git.dev.localflynn.com/example.git
 	Web URL:  http://example.dev.localflynn.com

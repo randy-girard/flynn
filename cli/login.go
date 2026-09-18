@@ -13,7 +13,7 @@ usage: flynn login [-p] [-n <cluster-name>] [--controller-url=<url>] [--oob-code
 
 Authenticate with the Flynn dashboard (OAuth).
 
-With no arguments, uses the default cluster from ~/.flynnrc (or the only cluster if there is just one). The cluster entry must include a DashboardURL from flynn cluster add or an OAuthURL from a prior login.
+With no arguments, uses the default cluster from ~/.flynnrc (or the only cluster if there is just one). The cluster entry must include a DashboardURL from flynn cluster:add or an OAuthURL from a prior login.
 
 If <issuer-or-cluster> contains "://" or starts with http:, it is treated as the dashboard / OAuth issuer URL. Otherwise it is a cluster name in ~/.flynnrc (same as flynn -c <cluster> login).
 

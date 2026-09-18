@@ -13,8 +13,8 @@ import (
 )
 
 func init() {
-	register("plugins", runPlugins, `
-usage: flynn plugins
+	register("plugin:list", runPlugins, `
+usage: flynn plugin:list
 
 List plugins installed on the current cluster.
 

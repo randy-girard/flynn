@@ -9,52 +9,74 @@ import (
 	"github.com/cheggaaa/pb"
 	controller "github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/term"
 	"github.com/flynn/go-docopt"
 )
 
 func init() {
-	register("pg", runPg, `
-usage: flynn pg psql [--] [<argument>...]
-       flynn pg dump [-q] [-f <file>]
-       flynn pg restore [-q] [-j <jobs>] [-f <file>]
+	register("pg:psql", runPgPsql, `
+usage: flynn pg:psql [--] [<argument>...]
+
+Open a console to a Flynn postgres database. Any valid arguments to psql may be provided.
+
+Examples:
+
+    $ flynn pg:psql
+
+    $ flynn pg:psql -- -c "CREATE EXTENSION hstore"
+`)
+	register("pg:dump", runPgDumpCmd, `
+usage: flynn pg:dump [-q] [-f <file>]
+
+Dump a postgres database. If file is not specified, will dump to stdout.
+
+Options:
+	-f, --file=<file>  name of dump file
+	-q, --quiet        don't print progress
+
+Examples:
+
+    $ flynn pg:dump -f db.dump
+`)
+	register("pg:restore", runPgRestoreCmd, `
+usage: flynn pg:restore [-q] [-j <jobs>] [-f <file>]
+
+Restore a database dump. If file is not specified, will restore from stdin.
 
 Options:
 	-f, --file=<file>  name of dump file
 	-q, --quiet        don't print progress
 	-j, --jobs=<jobs>  number of pg_restore jobs to use [default: 1]
 
-Commands:
-	dump     Dump a postgres database. If file is not specified, will dump to stdout.
-	psql     Open a console to a Flynn postgres database. Any valid arguments to psql may be provided.
-	restore  Restore a database dump. If file is not specified, will restore from stdin.
-
 Examples:
 
-    $ flynn pg psql
-
-    $ flynn pg psql -- -c "CREATE EXTENSION hstore"
-
-    $ flynn pg dump -f db.dump
-
-    $ flynn pg restore -j 8 -f db.dump
+    $ flynn pg:restore -j 8 -f db.dump
 `)
 }
 
-func runPg(args *docopt.Args, client controller.Client) error {
+func runPgPsql(args *docopt.Args, client controller.Client) error {
 	config, err := getAppPgRunConfig(client)
 	if err != nil {
 		return err
 	}
-	switch {
-	case args.Bool["psql"]:
-		return runPsql(args, client, config)
-	case args.Bool["dump"]:
-		return runPgDump(args, client, config)
-	case args.Bool["restore"]:
-		return runPgRestore(args, client, config)
+	return runPsql(args, client, config)
+}
+
+func runPgDumpCmd(args *docopt.Args, client controller.Client) error {
+	config, err := getAppPgRunConfig(client)
+	if err != nil {
+		return err
 	}
-	return nil
+	return runPgDump(args, client, config)
+}
+
+func runPgRestoreCmd(args *docopt.Args, client controller.Client) error {
+	config, err := getAppPgRunConfig(client)
+	if err != nil {
+		return err
+	}
+	return runPgRestore(args, client, config)
 }
 
 func getAppPgRunConfig(client controller.Client) (*runConfig, error) {
@@ -68,7 +90,7 @@ func getAppPgRunConfig(client controller.Client) (*runConfig, error) {
 func getPgRunConfig(client controller.Client, app string, appRelease *ct.Release) (*runConfig, error) {
 	pgApp := appRelease.Env["FLYNN_POSTGRES"]
 	if pgApp == "" {
-		return nil, fmt.Errorf("No postgres database found. Provision one with `flynn resource add postgres`")
+		return nil, fmt.Errorf("No postgres database found. Provision one with `flynn resource:add postgres`")
 	}
 
 	pgRelease, err := client.GetAppRelease(pgApp)
@@ -96,7 +118,7 @@ func getPgRunConfig(client controller.Client, app string, appRelease *ct.Release
 func runPsql(args *docopt.Args, client controller.Client, config *runConfig) error {
 	config.Env["PAGER"] = "less"
 	config.Env["LESS"] = "--ignore-case --LONG-PROMPT --SILENT --tabs=4 --quit-if-one-screen --no-init --quit-at-eof"
-	config.Args = append([]string{"psql"}, args.All["<argument>"].([]string)...)
+	config.Args = append([]string{"psql"}, cliutil.List(args, "<argument>")...)
 	return runJob(client, *config)
 }
 

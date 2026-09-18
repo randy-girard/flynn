@@ -9,23 +9,19 @@ import (
 )
 
 func init() {
-	register("provider", runProvider, `
+	register("provider", runProviderList, `
 usage: flynn provider
-       flynn provider add <name> <url>
 
-Manage resource providers associated with the controller.
+List resource providers associated with the controller.
+`)
+	register("provider:add", runProviderAdd, `
+usage: flynn provider:add <name> <url>
 
-Commands:
-    With no arguments, displays current providers
-
-    add  creates a new provider <name> at <url>
+Create a new provider <name> at <url>.
 `)
 }
 
-func runProvider(args *docopt.Args, client controller.Client) error {
-	if args.Bool["add"] {
-		return runProviderAdd(args, client)
-	}
+func runProviderList(args *docopt.Args, client controller.Client) error {
 	providers, err := client.ProviderList()
 	if err != nil {
 		return err

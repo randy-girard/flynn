@@ -16,6 +16,7 @@ import (
 	ct "github.com/flynn/flynn/controller/types"
 	"github.com/flynn/flynn/host/resource"
 	host "github.com/flynn/flynn/host/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/cluster"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/term"
@@ -23,8 +24,8 @@ import (
 )
 
 func init() {
-	cmd := register("run", runRun, `
-usage: flynn run [-d] [-r <release>] [-e <entrypoint>] [-l] [--limits <limits>] [--profiles <profiles>] [--mounts-from <proc>] [--] <command> [<argument>...]
+	runUsage := func(cmd string) string {
+		return `usage: flynn ` + cmd + ` [-d] [-r <release>] [-e <entrypoint>] [-l] [--limits <limits>] [--profiles <profiles>] [--mounts-from <proc>] [--] <command> [<argument>...]
 
 Run a job.
 
@@ -36,8 +37,10 @@ Options:
 	--limits <limits>     comma separated limits for the run job (see "flynn limit -h" for format)
 	--profiles=<profiles> job profiles (comma separated)
 	--mounts-from <proc>  process type to copy mounts from
-`)
-	cmd.optsFirst = true
+`
+	}
+	register("ps:run", runRun, runUsage("ps:run")).optsFirst = true
+	register("run", runRun, runUsage("run")).optsFirst = true
 }
 
 // Declared here for Windows portability
@@ -48,7 +51,7 @@ func runRun(args *docopt.Args, client controller.Client) error {
 		App:        mustApp(),
 		Detached:   args.Bool["--detached"],
 		Release:    args.String["-r"],
-		Args:       append([]string{args.String["<command>"]}, args.All["<argument>"].([]string)...),
+		Args:       append([]string{args.String["<command>"]}, cliutil.List(args, "<argument>")...),
 		ReleaseEnv: true,
 		Exit:       true,
 		DisableLog: !args.Bool["--detached"] && !args.Bool["--enable-log"],

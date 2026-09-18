@@ -9,57 +9,74 @@ import (
 
 	"github.com/flynn/flynn/controller/client"
 	ct "github.com/flynn/flynn/controller/types"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/go-docopt"
 )
 
 func init() {
-	register("env", runEnv, `
+	register("env", runEnvList, `
 usage: flynn env [-t <proc>]
-       flynn env set [-t <proc>] <var>=<val>...
-       flynn env unset [-t <proc>] <var>...
-       flynn env get [-t <proc>] <var>
 
-Manage app environment variables.
+List app environment variables.
 
 Options:
-	-t, --process-type=<proc>  set or read env for specified process type
-
-Commands:
-	With no arguments, shows a list of environment variables.
-
-	get    returns the value of variable
-	set    sets value of one or more env variables
-	unset  deletes one or more variables
+	-t, --process-type=<proc>  read env for specified process type
 
 Examples:
-
-	$ flynn env set FOO=bar BAZ=foobar
-	Created release 5058ae7964f74c399a240bdd6e7d1bcb.
 
 	$ flynn env
 	BAZ=foobar
 	FOO=bar
+`)
+	register("env:set", runEnvSet, `
+usage: flynn env:set [-t <proc>] <var>=<val>...
 
-	$ flynn env get -t web FOO
-	bar
+Set app environment variables.
 
-	$ flynn env unset FOO
+Options:
+	-t, --process-type=<proc>  set env for specified process type
+
+Examples:
+
+	$ flynn env:set FOO=bar BAZ=foobar
+	Created release 5058ae7964f74c399a240bdd6e7d1bcb.
+`)
+	register("env:unset", runEnvUnset, `
+usage: flynn env:unset [-t <proc>] <var>...
+
+Unset app environment variables.
+
+Options:
+	-t, --process-type=<proc>  unset env for specified process type
+
+Examples:
+
+	$ flynn env:unset FOO
 	Created release b1bbd9bc76d6436ea2fd245300bce72e.
+`)
+	register("env:get", runEnvGet, `
+usage: flynn env:get [-t <proc>] <var>
+
+Get an app environment variable.
+
+Options:
+	-t, --process-type=<proc>  read env for specified process type
+
+Examples:
+
+	$ flynn env:get -t web FOO
+	bar
 `)
 }
 
 var envProc string
 
-func runEnv(args *docopt.Args, client controller.Client) error {
+func envProcessType(args *docopt.Args) {
 	envProc = args.String["--process-type"]
+}
 
-	if args.Bool["set"] {
-		return runEnvSet(args, client)
-	} else if args.Bool["unset"] {
-		return runEnvUnset(args, client)
-	} else if args.Bool["get"] {
-		return runEnvGet(args, client)
-	}
+func runEnvList(args *docopt.Args, client controller.Client) error {
+	envProcessType(args)
 
 	release, err := client.GetAppRelease(mustApp())
 	if err == controller.ErrNotFound {
@@ -91,7 +108,8 @@ func runEnv(args *docopt.Args, client controller.Client) error {
 }
 
 func runEnvSet(args *docopt.Args, client controller.Client) error {
-	pairs := args.All["<var>=<val>"].([]string)
+	envProcessType(args)
+	pairs := cliutil.List(args, "<var>=<val>")
 	env := make(map[string]*string, len(pairs))
 	for _, s := range pairs {
 		v := strings.SplitN(s, "=", 2)
@@ -109,7 +127,8 @@ func runEnvSet(args *docopt.Args, client controller.Client) error {
 }
 
 func runEnvUnset(args *docopt.Args, client controller.Client) error {
-	vars := args.All["<var>"].([]string)
+	envProcessType(args)
+	vars := cliutil.List(args, "<var>")
 	env := make(map[string]*string, len(vars))
 	for _, s := range vars {
 		env[s] = nil
@@ -123,7 +142,11 @@ func runEnvUnset(args *docopt.Args, client controller.Client) error {
 }
 
 func runEnvGet(args *docopt.Args, client controller.Client) error {
-	arg := args.All["<var>"].([]string)[0]
+	envProcessType(args)
+	arg := cliutil.String(args, "<var>")
+	if arg == "" {
+		return errors.New("missing var")
+	}
 	release, err := client.GetAppRelease(mustApp())
 	if err == controller.ErrNotFound {
 		return errors.New("no app release found")

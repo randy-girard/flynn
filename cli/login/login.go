@@ -151,7 +151,7 @@ func Run(args *docopt.Args, globalCluster string) error {
 	}
 
 	if issuer == "" {
-		return fmt.Errorf("no OAuth issuer: pass the dashboard URL, run `flynn cluster add` (stores dashboard URL), or set a default cluster in %s", config.DefaultPath())
+		return fmt.Errorf("no OAuth issuer: pass the dashboard URL, run `flynn cluster:add` (stores dashboard URL), or set a default cluster in %s", config.DefaultPath())
 	}
 	if !reauth && !prompt && controllerURL == "" {
 		return fmt.Errorf("--prompt or --controller-url must be specified to add a new cluster")
@@ -329,12 +329,12 @@ func Run(args *docopt.Args, globalCluster string) error {
 
 	domain := strings.TrimPrefix(controllerURL, "https://controller.")
 	clusterConfig := &config.Cluster{
-		Name:           clusterName,
-		OAuthURL:       issuer,
-		DashboardURL:   issuer,
+		Name:          clusterName,
+		OAuthURL:      issuer,
+		DashboardURL:  issuer,
 		ControllerURL: controllerURL,
-		GitURL:         "https://git." + domain,
-		ImageURL:       "https://images." + domain,
+		GitURL:        "https://git." + domain,
+		ImageURL:      "https://images." + domain,
 	}
 	if prev := existingClusters[clusterName]; prev != nil {
 		clusterConfig.Key = prev.Key

@@ -15,6 +15,7 @@ import (
 	"github.com/docker/go-units"
 	cfg "github.com/flynn/flynn/cli/config"
 	controller "github.com/flynn/flynn/controller/client"
+	"github.com/flynn/flynn/pkg/cliutil"
 	"github.com/flynn/flynn/pkg/shutdown"
 	"github.com/flynn/flynn/pkg/version"
 	"github.com/flynn/go-docopt"
@@ -37,36 +38,69 @@ Options:
 	-h, --help
 
 Commands:
-	apps        list apps
-	cluster     manage clusters
-	create      create an app
-	delete      delete an app
-	deployment  list deployments
-	docker      deploy Docker images to a Flynn cluster
-	env         manage env variables
-	export      export app data
-	help        show usage for a specific command
-	import      create app from exported data
-	info        show app information
-	kill        kill jobs
-	limit       manage resource limits
-	log         get app log
-	login       authenticate with the dashboard (OAuth)
-	meta        manage app metadata
-	pg          manage postgres database
-	plugins     list plugins installed on this cluster
-	provider    manage resource providers
-	ps          list jobs
-	release     manage app releases
-	remote      manage git remotes
-	resource    provision a new resource
-	route       manage routes
-	run         run a job
-	scale       change formation
-	stack       manage deployment stack for git push
-	update      update the Flynn CLI from GitHub Releases
-	version     show flynn version
-	volume      manage volumes
+	apps                 list apps
+	apps:create          create an app
+	apps:destroy         delete an app
+	apps:export          export app data
+	apps:import          create app from exported data
+	apps:info            show app information
+	cluster              list CLI cluster configs
+	cluster:add          add a cluster to ~/.flynnrc
+	cluster:default      get or set the default cluster
+	cluster:refresh      refresh TLS pin and URLs in ~/.flynnrc
+	cluster:remove       remove a cluster from ~/.flynnrc
+	deploy               list deployments
+	deploy:batch-size    get or set in-batches size
+	deploy:timeout       get or set deploy timeout
+	docker:push          push a Docker image
+	env                  list env variables
+	env:get              get an env variable
+	env:set              set env variables
+	env:unset            unset env variables
+	git:remote           add a git remote for the app
+	help                 show usage for a specific command
+	limit                list resource limits
+	limit:set            set resource limits
+	log                  get app log
+	login                authenticate with the dashboard (OAuth)
+	logsink              list app log sinks
+	logsink:add          add an app log sink
+	logsink:remove       remove an app log sink
+	meta                 list app metadata
+	meta:set             set app metadata
+	meta:unset           unset app metadata
+	pg:dump              dump a postgres database
+	pg:psql              postgres console
+	pg:restore           restore a postgres dump
+	plugin:list          list plugins installed on this cluster
+	provider             list resource providers
+	provider:add         add a resource provider
+	ps                   list jobs
+	ps:kill              kill jobs
+	ps:run               run a job
+	ps:scale             change formation
+	release              list app releases
+	release:add          add a release
+	release:destroy      delete a release
+	release:rollback     rollback to a previous release
+	release:show         show a release
+	release:update       update a release
+	resource             list app resources
+	resource:add         provision a resource
+	resource:remove      remove a resource
+	route                list routes
+	route:add            add a route
+	route:remove         remove a route
+	route:update         update a route
+	run                  run a job (shorthand for ps:run)
+	scale                change formation (shorthand for ps:scale)
+	stack                show git-push stack
+	stack:set            set git-push stack
+	update               update the Flynn CLI from GitHub Releases
+	version              show flynn version
+	volume               list volumes
+	volume:decommission  decommission a volume
+	volume:show          show a volume
 
 See 'flynn help <command>' for more information on a specific command.
 `[1:]
@@ -76,8 +110,9 @@ func main() {
 
 	log.SetFlags(0)
 
+	updater.notifyIfUpdateAvailable()
+
 	if leadingVersionFlag(os.Args[1:]) {
-		updater.notifyIfUpdateAvailable()
 		fmt.Println(version.String())
 		return
 	}
@@ -91,10 +126,6 @@ func main() {
 
 	cmd, cmdArgs := positionalArgs(args)
 	help := helpFlag(args)
-
-	if cmd != "update" && cmd != "upgrade" {
-		updater.notifyIfUpdateAvailable()
-	}
 
 	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
 		fmt.Println(pluginAwareUsage(cliUsage))
@@ -166,8 +197,7 @@ func positionalArgs(args *docopt.Args) (string, []string) {
 		return "", nil
 	}
 	cmd := args.String["<command>"]
-	cmdArgs, _ := args.All["<args>"].([]string)
-	return cmd, cmdArgs
+	return cmd, cliutil.List(args, "<args>")
 }
 
 func helpFlag(args *docopt.Args) bool {
@@ -244,12 +274,25 @@ func register(cmd string, f interface{}, usage string) *command {
 }
 
 func runCommand(name string, args []string) (err error) {
+	resolved, rest, from := resolveCommand(name, args)
+	if from != "" {
+		printCommandRename(from, resolved)
+		name, args = resolved, rest
+	}
+
 	argv := make([]string, 1, 1+len(args))
 	argv[0] = name
 	argv = append(argv, args...)
 
 	cmd, ok := commands[name]
 	if !ok {
+		if base, suffix, ok := splitColonCommand(name); ok {
+			pluginArgs := append(expandColonSuffix(base, suffix), args...)
+			return runPluginCommand(base, pluginArgs)
+		}
+		if to, from := pluginSpaceAlias(name, args); from != "" {
+			printCommandRename(from, to)
+		}
 		return runPluginCommand(name, args)
 	}
 	if err := requirePluginCommand(name); err != nil {

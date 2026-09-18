@@ -15,127 +15,101 @@ import (
 )
 
 func init() {
-	register("release", runRelease, `
+	register("release", runReleaseList, `
 usage: flynn release [-q|--quiet]
-       flynn release add [-t <type>] [-f <file>] <uri>
-       flynn release update <file> [<id>] [--clean]
-       flynn release show [--json] [<id>]
-       flynn release delete [-y] <id>
-       flynn release rollback [-y] [<id>]
 
-Manage app releases.
+List releases associated with the app.
 
 Options:
-	-q, --quiet        only print release IDs
+	-q, --quiet  only print release IDs
+`)
+	register("release:add", runReleaseAdd, `
+usage: flynn release:add [-t <type>] [-f <file>] <uri>
+
+DEPRECATED: Only works on legacy clusters.
+
+Create a new release from a Docker image.
+
+The optional file argument takes a path to a file containing release
+configuration in a JSON format. It's primarily used for specifying the
+release environment and processes (similar to a Procfile). It can take any
+of the arguments the controller Release type can take.
+
+Options:
 	-t <type>          type of the release. Currently only 'docker' is supported. [default: docker]
 	-f, --file=<file>  release configuration file
-	--json             print release configuration in JSON format
-	--clean            update from a clean slate (ignoring prior config)
-	-y, --yes          skip the confirmation prompt when deleting a release
-
-Commands:
-	With no arguments, shows a list of releases associated with the app.
-
-	add
-		DEPRECATED: Only works on legacy clusters.
-
-		Create a new release from a Docker image.
-
-		The optional file argument takes a path to a file containing release
-		configuration in a JSON format. It's primarily used for specifying the
-		release environment and processes (similar to a Procfile). It can take any
-		of the arguments the controller Release type can take.
-
-	show
-		Show information about a release.
-
-		Omit the ID to show information about the current release.
-
-	update
-		Update an existing release.
-
-		Takes a path to a file containing release configuration in a JSON format.
-		It can take any of the arguments the controller Release type can take, and
-		will override existing config with any values set thus. Omit the ID to
-		update the current release.
-
-		By default, the new release fields will be merged with the previous one,
-		specify --clean to not copy any fields from the previous release.
-
-	delete
-		Delete a release.
-
-		Any associated file artifacts (e.g. slugs) will also be deleted.
-
-	rollback
-		Rollback to a previous release. Deploys the previous release or specified release ID.
 
 Examples:
 
-	Release an echo server using the flynn/slugbuilder image as a base, running socat.
-
-	$ cat config.json
-	{
-		"env": {"MY_VAR": "Hello World, this will be available in all process types."},
-		"processes": {
-			"echo": {
-				"args": ["sh", "-c", "socat -v tcp-l:$PORT,fork exec:/bin/cat"],
-				"env": {"ECHO": "This var is specific to the echo process type."},
-				"ports": [{"proto": "tcp"}]
-			}
-		}
-	}
-	$ flynn release add -f config.json https://registry.hub.docker.com?name=flynn/slugbuilder&id=15d72b7f573b
+	$ flynn release:add -f config.json https://registry.hub.docker.com?name=flynn/slugbuilder&id=15d72b7f573b
 	Created release 989ce4a8-0088-444c-8379-caddded4b957.
+`)
+	register("release:update", runReleaseUpdate, `
+usage: flynn release:update <file> [<id>] [--clean]
 
-	$ flynn release
-	ID                                Created
-	989ce4a8-0088-444c-8379-caddded4b957  11 seconds ago
+Update an existing release.
 
-	$ flynn release show
+Takes a path to a file containing release configuration in a JSON format.
+It can take any of the arguments the controller Release type can take, and
+will override existing config with any values set thus. Omit the ID to
+update the current release.
+
+By default, the new release fields will be merged with the previous one,
+specify --clean to not copy any fields from the previous release.
+
+Options:
+	--clean  update from a clean slate (ignoring prior config)
+
+Examples:
+
+	$ flynn release:update update.json
+	Created release 1a270395-8d31-4ec1-953a-0683b4f12635.
+`)
+	register("release:show", runReleaseShow, `
+usage: flynn release:show [--json] [<id>]
+
+Show information about a release. Omit the ID to show the current release.
+
+Options:
+	--json  print release configuration in JSON format
+
+Examples:
+
+	$ flynn release:show
 	ID:             989ce4a8-0088-444c-8379-caddded4b957
 	Artifact:       docker+https://registry.hub.docker.com?name=flynn/slugbuilder&id=15d72b7f573b
 	Process Types:  echo
 	Created At:     2015-05-06 21:58:12.751741 +0000 UTC
 	ENV[MY_VAR]:    Hello World, this will be available in all process types.
+`)
+	register("release:destroy", runReleaseDelete, `
+usage: flynn release:destroy [-y] <id>
 
-	$ cat update.json
-	{
-		"processes": {
-			"echo": {
-				"omni": true
-			}
-		}
-	}
-	$ flynn release update update.json
-	Created release 1a270395-8d31-4ec1-953a-0683b4f12635.
+Delete a release. Any associated file artifacts (e.g. slugs) will also be deleted.
 
-	$ flynn release delete --yes c6b7f512-ef49-46f7-bb57-dd39e97bfb09
+Options:
+	-y, --yes  skip the confirmation prompt when deleting a release
+
+Examples:
+
+	$ flynn release:destroy --yes c6b7f512-ef49-46f7-bb57-dd39e97bfb09
 	Deleted release c6b7f512-ef49-46f7-bb57-dd39e97bfb09 (deleted 1 files)
+`)
+	register("release:rollback", runReleaseRollback, `
+usage: flynn release:rollback [-y] [<id>]
+
+Rollback to a previous release. Deploys the previous release or specified release ID.
+
+Options:
+	-y, --yes  skip the confirmation prompt
 `)
 }
 
-func runRelease(args *docopt.Args, client controller.Client) error {
-	if args.Bool["show"] {
-		return runReleaseShow(args, client)
+func runReleaseAdd(args *docopt.Args, client controller.Client) error {
+	if args.String["-t"] == "docker" {
+		return runReleaseAddDocker(args, client)
 	}
-	if args.Bool["add"] {
-		if args.String["-t"] == "docker" {
-			return runReleaseAddDocker(args, client)
-		} else {
-			return fmt.Errorf("Release type %s not supported.", args.String["-t"])
-		}
-	}
-	if args.Bool["update"] {
-		return runReleaseUpdate(args, client)
-	}
-	if args.Bool["delete"] {
-		return runReleaseDelete(args, client)
-	}
-	if args.Bool["rollback"] {
-		return runReleaseRollback(args, client)
-	}
-	return runReleaseList(args, client)
+	return fmt.Errorf("Release type %s not supported.", args.String["-t"])
 }
 
 func runReleaseList(args *docopt.Args, client controller.Client) error {

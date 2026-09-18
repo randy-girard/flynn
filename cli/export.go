@@ -28,8 +28,8 @@ import (
 )
 
 func init() {
-	register("export", runExport, `
-usage: flynn export [options]
+	register("apps:export", runExport, `
+usage: flynn apps:export [options]
 
 Export application configuration and data.
 
@@ -41,8 +41,8 @@ Options:
 	-q, --quiet        don't print progress
 `)
 
-	register("import", runImport, `
-usage: flynn import [options]
+	register("apps:import", runImport, `
+usage: flynn apps:import [options]
 
 Create a new application using exported configuration and data.
 
