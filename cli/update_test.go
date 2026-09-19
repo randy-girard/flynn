@@ -92,6 +92,7 @@ func TestUpdaterLatestTag(t *testing.T) {
 
 func TestUpdaterCheckAvailable(t *testing.T) {
 	t.Setenv("FLYNN_VERSION", "v20200101.0")
+	t.Setenv("FLYNN_UPDATE_CHECK_CACHE", filepath.Join(t.TempDir(), "update-check-cache.json"))
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/acme/flynn/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(`{"tag_name":"v20260915.0"}`))
@@ -102,6 +103,40 @@ func TestUpdaterCheckAvailable(t *testing.T) {
 	u := &Updater{HTTP: srv.Client(), API: srv.URL, Repo: "acme/flynn"}
 	if err := u.run(updateOptions{Check: true}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUpdaterCheckUsesCacheThenForce(t *testing.T) {
+	t.Setenv("FLYNN_VERSION", "v20200101.0")
+	t.Setenv("FLYNN_UPDATE_CHECK_CACHE", filepath.Join(t.TempDir(), "update-check-cache.json"))
+	t.Setenv("FLYNN_UPDATE_CHECK_TTL", "")
+	t.Setenv("FLYNN_GITHUB_TOKEN", "")
+	t.Setenv("FLYNN_PLUGIN_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	var hits int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/flynn/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		w.Write([]byte(`{"tag_name":"v20260915.0"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	u := &Updater{HTTP: srv.Client(), API: srv.URL, Repo: "acme/flynn"}
+	if err := u.run(updateOptions{Check: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := u.run(updateOptions{Check: true}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 1 {
+		t.Fatalf("hits=%d want 1 (fresh cache)", hits)
+	}
+	if err := u.run(updateOptions{Check: true, Force: true}); err != nil {
+		t.Fatal(err)
+	}
+	if hits != 2 {
+		t.Fatalf("hits=%d want 2 after --force", hits)
 	}
 }
 

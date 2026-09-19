@@ -18,19 +18,16 @@ import (
 
 	"github.com/flynn/go-docopt"
 	"github.com/kardianos/osext"
-	cfg "github.com/randy-girard/flynn/cli/config"
 	"github.com/randy-girard/flynn/pkg/ghrelease"
 	"github.com/randy-girard/flynn/pkg/version"
 	"gopkg.in/inconshreveable/go-update.v0"
 )
 
 const (
-	upcktimePath      = "cktime"
 	defaultGitHubRepo = "randy-girard/flynn"
 	updateTimeout     = 5 * time.Minute
 )
 
-var updateDir = filepath.Join(cfg.Dir(), "update")
 var updater = &Updater{}
 
 func init() {
@@ -40,21 +37,24 @@ Alias: flynn upgrade.
 
 Options:
 	--check           Show whether an update is available without installing
+	--force           With --check, ignore the on-disk update-check cache
 	--version=<tag>   Install this release tag instead of latest
 `
-	register("update", runUpdate, "usage: flynn update [--check] [--version=<tag>]\n"+body)
-	register("upgrade", runUpdate, "usage: flynn upgrade [--check] [--version=<tag>]\n"+body)
+	register("update", runUpdate, "usage: flynn update [--check] [--force] [--version=<tag>]\n"+body)
+	register("upgrade", runUpdate, "usage: flynn upgrade [--check] [--force] [--version=<tag>]\n"+body)
 }
 
 func runUpdate(args *docopt.Args) error {
 	return updater.run(updateOptions{
 		Check:   args.Bool["--check"],
+		Force:   args.Bool["--force"],
 		Version: strings.TrimSpace(args.String["--version"]),
 	})
 }
 
 type updateOptions struct {
 	Check   bool
+	Force   bool
 	Version string
 }
 
@@ -110,13 +110,16 @@ func (u *Updater) notifyIfUpdateAvailable() {
 		Product:        "Flynn CLI",
 		UpgradeCommand: "flynn update",
 		Repo:           u.repo(),
-		CheckFile:      filepath.Join(updateDir, upcktimePath),
+		CheckFile:      ghrelease.DefaultUpdateCheckCachePath(),
 		HTTPClient:     &notifyClient,
 		APIBase:        u.apiBase(),
 	})
 }
 
 func (u *Updater) run(opts updateOptions) error {
+	if opts.Check && opts.Version == "" {
+		return u.checkAvailable(opts.Force)
+	}
 	tag := opts.Version
 	if tag == "" {
 		var err error
@@ -171,6 +174,27 @@ func (u *Updater) run(opts updateOptions) error {
 		return err
 	}
 	fmt.Printf("Updated %s -> %s.\n", current, tag)
+	return nil
+}
+
+func (u *Updater) checkAvailable(force bool) error {
+	c := ghrelease.NewClient(u.repo(), nil)
+	c.SetHTTPClient(u.httpClient())
+	c.APIBase = u.apiBase()
+	current := version.Release()
+	rel, has, err := c.CheckForUpdateForce(current, force)
+	if err != nil {
+		return err
+	}
+	if rel == nil {
+		return errors.New("failed to parse release version from GitHub")
+	}
+	tag := strings.TrimSpace(rel.TagName)
+	if !has {
+		fmt.Printf("already up to date (%s)\n", tag)
+		return nil
+	}
+	fmt.Printf("update available: %s -> %s\n", current, tag)
 	return nil
 }
 
