@@ -58,6 +58,8 @@ func main() {
 type gitHandler struct {
 	controller controller.Client
 	auth       *authorizer.Authorizer
+	webhookURL string
+	httpClient *http.Client
 }
 
 type gitService struct {
@@ -79,7 +81,11 @@ var gitServices = [...]gitService{
 }
 
 func newGitHandler(controller controller.Client, auth *authorizer.Authorizer) *gitHandler {
-	return &gitHandler{controller, auth}
+	url := os.Getenv("CONTROLLER_URL")
+	if url == "" {
+		url = "http://controller.discoverd"
+	}
+	return &gitHandler{controller: controller, auth: auth, webhookURL: strings.TrimRight(url, "/") + "/github/webhook", httpClient: http.DefaultClient}
 }
 
 func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +93,11 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.URL.Path == status.Path {
 		status.HealthyHandler.ServeHTTP(w, r)
+		return
+	}
+
+	if r.Method == http.MethodPost && r.URL.Path == "/github/webhook" {
+		h.proxyGitHubWebhook(w, r)
 		return
 	}
 
@@ -410,4 +421,41 @@ func uploadRepo(path, cacheKey string) error {
 	}
 	resp.Body.Close()
 	return err
+}
+
+func (h *gitHandler) proxyGitHubWebhook(w http.ResponseWriter, r *http.Request) {
+	if h.httpClient == nil {
+		h.httpClient = http.DefaultClient
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	req, err := http.NewRequest(http.MethodPost, h.webhookURL, strings.NewReader(string(body)))
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	for _, key := range []string{"X-GitHub-Event", "X-GitHub-Delivery", "X-GitHub-Hook-ID", "X-Hub-Signature", "X-Hub-Signature-256", "Content-Type", "User-Agent"} {
+		if v := r.Header.Get(key); v != "" {
+			req.Header.Set(key, v)
+		}
+	}
+	if req.Header.Get("Content-Type") == "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := h.httpClient.Do(req)
+	if err != nil {
+		fail500(w, "github webhook", err)
+		return
+	}
+	defer res.Body.Close()
+	for k, vs := range res.Header {
+		for _, v := range vs {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(res.StatusCode)
+	_, _ = io.Copy(w, res.Body)
 }
