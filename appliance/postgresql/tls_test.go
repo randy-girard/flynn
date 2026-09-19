@@ -23,6 +23,13 @@ func TestEnsureServerTLSGeneratesFiles(t *testing.T) {
 	if _, err := os.Stat(p.tlsCAPath()); err != nil {
 		t.Fatalf("ca: %v", err)
 	}
+	keyInfo, err := os.Stat(p.tlsKeyPath())
+	if err != nil {
+		t.Fatalf("key: %v", err)
+	}
+	if keyInfo.Mode().Perm() != 0600 {
+		t.Fatalf("server.key mode %o, want 0600", keyInfo.Mode().Perm())
+	}
 	// second call must not regenerate
 	cert, _ := os.ReadFile(p.tlsCertPath())
 	if err := p.ensureServerTLS(); err != nil {

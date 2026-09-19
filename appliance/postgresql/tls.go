@@ -3,6 +3,7 @@ package postgresql
 import (
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/randy-girard/flynn/pkg/tlscert"
 )
@@ -48,14 +49,14 @@ func (p *Process) ensureServerTLS() error {
 	}
 
 	if certPEM, keyPEM := os.Getenv("TLS_CERT"), os.Getenv("TLS_KEY"); certPEM != "" && keyPEM != "" {
-		if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+		if err := p.writeTLSFile(certPath, certPEM, 0644); err != nil {
 			return err
 		}
-		if err := os.WriteFile(keyPath, []byte(keyPEM), 0600); err != nil {
+		if err := p.writeTLSFile(keyPath, keyPEM, 0600); err != nil {
 			return err
 		}
 		if ca := os.Getenv("CA_CERT"); ca != "" {
-			return os.WriteFile(caPath, []byte(ca), 0644)
+			return p.writeTLSFile(caPath, ca, 0644)
 		}
 		return nil
 	}
@@ -68,14 +69,45 @@ func (p *Process) ensureServerTLS() error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(certPath, []byte(c.Cert), 0644); err != nil {
+	if err := p.writeTLSFile(certPath, c.Cert, 0644); err != nil {
 		return err
 	}
-	if err := os.WriteFile(keyPath, []byte(c.PrivateKey), 0600); err != nil {
+	if err := p.writeTLSFile(keyPath, c.PrivateKey, 0600); err != nil {
 		return err
 	}
 	if c.CACert != "" {
-		return os.WriteFile(caPath, []byte(c.CACert), 0644)
+		return p.writeTLSFile(caPath, c.CACert, 0644)
+	}
+	return nil
+}
+
+// writeTLSFile writes path then chowns it to the data directory owner.
+// Unit tests run postgres via sudo -u postgres while the Go process is root;
+// a 0600 key owned by root makes postgres exit with "Permission denied".
+func (p *Process) writeTLSFile(path, contents string, perm os.FileMode) error {
+	if err := os.WriteFile(path, []byte(contents), perm); err != nil {
+		return err
+	}
+	return p.matchDataDirOwner(path)
+}
+
+func (p *Process) matchDataDirOwner(path string) error {
+	if p.dataDir == "" {
+		return nil
+	}
+	st, err := os.Stat(p.dataDir)
+	if err != nil {
+		return nil
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if os.Geteuid() == int(sys.Uid) {
+		return nil
+	}
+	if err := os.Chown(path, int(sys.Uid), int(sys.Gid)); err != nil && !os.IsPermission(err) {
+		return err
 	}
 	return nil
 }
