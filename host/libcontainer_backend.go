@@ -2613,8 +2613,9 @@ func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, erro
 	}
 
 	result := &host.ContainerStats{
-		JobID:     id,
-		Timestamp: time.Now(),
+		JobID:                id,
+		Timestamp:            time.Now(),
+		MemorySoftLimitBytes: container.softLimitBytes,
 	}
 
 	// CPU stats
@@ -2628,7 +2629,7 @@ func (l *LibcontainerBackend) GetJobStats(id string) (*host.ContainerStats, erro
 		// Memory stats
 		memStats := stats.CgroupStats.MemoryStats
 		result.MemoryUsageBytes = memStats.Usage.Usage
-		result.MemoryLimitBytes = memStats.Usage.Limit
+		result.MemoryLimitBytes = host.ReportedMemoryLimit(memStats.Usage.Limit)
 		result.MemoryMaxUsage = memStats.Usage.MaxUsage
 		result.MemoryCacheBytes = memStats.Cache
 

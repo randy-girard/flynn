@@ -431,10 +431,16 @@ type ContainerStats struct {
 
 	// Memory stats (from cgroups memory)
 	MemoryUsageBytes uint64 `json:"memory_usage_bytes"`
+	// MemoryLimitBytes is the cgroup hard cap (memory.max). Flynn sets this
+	// to 2× the process memory.limit. Zero when the cgroup is unlimited
+	// (cgroup v2 "max").
 	MemoryLimitBytes uint64 `json:"memory_limit_bytes"`
-	MemoryMaxUsage   uint64 `json:"memory_max_usage_bytes"`
-	MemoryCacheBytes uint64 `json:"memory_cache_bytes"`
-	MemoryRSSBytes   uint64 `json:"memory_rss_bytes"`
+	// MemorySoftLimitBytes is the process memory.limit Flynn monitors and
+	// logs (H20) when usage exceeds it. It is not a kernel memory.high.
+	MemorySoftLimitBytes uint64 `json:"memory_soft_limit_bytes,omitempty"`
+	MemoryMaxUsage       uint64 `json:"memory_max_usage_bytes"`
+	MemoryCacheBytes     uint64 `json:"memory_cache_bytes"`
+	MemoryRSSBytes       uint64 `json:"memory_rss_bytes"`
 
 	// Network stats (from veth interface)
 	NetworkRxBytes   uint64 `json:"network_rx_bytes"`
@@ -449,6 +455,16 @@ type ContainerStats struct {
 	// PIDs (from cgroups pids)
 	PIDsCurrent uint64 `json:"pids_current"`
 	PIDsLimit   uint64 `json:"pids_limit"`
+}
+
+// ReportedMemoryLimit returns a cgroup memory.max that is a real cap. cgroup
+// v2 "max" is typically a page-aligned MaxInt64 (~1<<63); callers should treat
+// 0 as unlimited.
+func ReportedMemoryLimit(limit uint64) uint64 {
+	if limit == 0 || limit >= 1<<62 {
+		return 0
+	}
+	return limit
 }
 
 // HostResourceStats contains aggregated resource usage for the host.

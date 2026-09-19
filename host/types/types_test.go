@@ -32,6 +32,21 @@ func TestMergeSecrets(t *testing.T) {
 	}
 }
 
+func TestReportedMemoryLimit(t *testing.T) {
+	if got := ReportedMemoryLimit(512 << 20); got != 512<<20 {
+		t.Fatalf("finite cap %d", got)
+	}
+	if got := ReportedMemoryLimit(0); got != 0 {
+		t.Fatalf("zero %d", got)
+	}
+	if got := ReportedMemoryLimit(1 << 63); got != 0 {
+		t.Fatalf("cgroup v2 max sentinel %d", got)
+	}
+	if got := ReportedMemoryLimit(^uint64(0)); got != 0 {
+		t.Fatalf("MaxUint64 %d", got)
+	}
+}
+
 // TestMergeSecretsEmpty verifies merging when neither side has secrets yields a
 // non-nil, empty slice (consistent with the other merged slice fields).
 func TestMergeSecretsEmpty(t *testing.T) {
