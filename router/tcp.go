@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/randy-girard/flynn/pkg/connutil"
+	"github.com/randy-girard/flynn/pkg/tlsconfig"
 	"github.com/randy-girard/flynn/router/proxy"
 	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
@@ -196,6 +198,17 @@ func (h *tcpSyncHandler) Set(data *router.Route) error {
 		RequestTracker:  service,
 		Logger:          logger,
 	})
+	if cert := r.Certificate; cert != nil && cert.Cert != "" && cert.Key != "" && router.TerminatesTLS(r.TLSMode) {
+		kp, err := tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key))
+		if err != nil {
+			return err
+		}
+		r.tlsConfig = tlsconfig.SecureCiphers(&tls.Config{
+			Certificates: []tls.Certificate{kp},
+			MinVersion:   tls.VersionTLS12,
+		})
+		r.Certificate = nil
+	}
 	if listener, ok := h.l.listeners[r.Port]; ok {
 		r.l = listener
 		delete(h.l.listeners, r.Port)
@@ -243,17 +256,24 @@ func (h *tcpSyncHandler) Remove(id string) error {
 type tcpRoute struct {
 	parent *TCPListener
 	*router.TCPRoute
-	l       net.Listener
-	addr    string
-	service *service
-	rp      *proxy.ReverseProxy
+	rawL      net.Listener
+	l         net.Listener
+	addr      string
+	service   *service
+	rp        *proxy.ReverseProxy
+	tlsConfig *tls.Config
 }
 
 func (r *tcpRoute) Serve(started chan<- error) {
 	var err error
-	// TODO: close the listener while there are no backends available
 	if r.l == nil {
 		r.l, err = listenFunc("tcp4", r.addr)
+	}
+	if err == nil {
+		r.rawL = r.l
+		if r.tlsConfig != nil {
+			r.l = tls.NewListener(r.l, r.tlsConfig)
+		}
 	}
 	if err != nil {
 		err = listenErr{r.addr, err}
@@ -272,16 +292,28 @@ func (r *tcpRoute) Serve(started chan<- error) {
 }
 
 func (r *tcpRoute) Close() {
+	raw := r.rawL
+	if raw == nil {
+		raw = r.l
+	}
 	if r.Port >= r.parent.startPort && r.Port <= r.parent.endPort {
-		// make a copy of the fd and create a new listener with it
-		fd, err := r.l.(*net.TCPListener).File()
+		tcpLn, ok := raw.(*net.TCPListener)
+		if !ok {
+			log.Println("Error getting TCP listener", raw)
+			r.l.Close()
+			return
+		}
+		fd, err := tcpLn.File()
 		if err != nil {
-			log.Println("Error getting listener fd", r.l)
+			log.Println("Error getting listener fd", raw)
+			r.l.Close()
 			return
 		}
 		r.parent.listeners[r.Port], err = net.FileListener(fd)
 		if err != nil {
-			log.Println("Error copying listener", r.l)
+			log.Println("Error copying listener", raw)
+			fd.Close()
+			r.l.Close()
 			return
 		}
 		fd.Close()

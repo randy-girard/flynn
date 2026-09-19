@@ -13,9 +13,11 @@ type Certificate struct {
 	ID string `json:"id,omitempty"`
 	// Routes contains the IDs of routes assigned to this cert
 	Routes []string `json:"routes,omitempty"`
-	// TLSCert is the optional TLS public certificate. It is only used for HTTP routes.
+	// Cert is the optional TLS public certificate (HTTP routes, and TCP
+	// routes with tls_mode=terminate).
 	Cert string `json:"cert,omitempty"`
-	// TLSCert is the optional TLS private key. It is only used for HTTP routes.
+	// Key is the optional TLS private key (HTTP routes, and TCP routes
+	// with tls_mode=terminate).
 	Key string `json:"key,omitempty"`
 	// Chain is a list of DER-encoded X.509 certificates (for managed certs).
 	Chain [][]byte `json:"chain,omitempty"`
@@ -90,14 +92,22 @@ type Route struct {
 	// UpdatedAt is the time this Route was last updated.
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
 
-	// Domain is the domain name of this Route. It is only used for HTTP routes.
+	// Domain is the hostname of this Route. HTTP routes multiplex on it
+	// (SNI / Host). TCP routes store it for TLS identity and operator DNS
+	// (for example postgres.clusterdomain).
 	Domain string `json:"domain,omitempty"`
+
+	// TLSMode is the TCP TLS handling: "" (plaintext), "passthrough"
+	// (backend speaks TLS), or "terminate" (router wraps the listener).
+	// HTTP routes ignore this field.
+	TLSMode string `json:"tls_mode,omitempty"`
 
 	// Certificate contains TLSCert and TLSKey
 	Certificate *Certificate `json:"certificate,omitempty"`
 
 	// ManagedCertificateDomain is the domain of the route's associated
-	// managed certificate (Let's Encrypt)
+	// managed certificate (Let's Encrypt). Used by HTTP routes and by TCP
+	// routes with tls_mode=terminate.
 	ManagedCertificateDomain *string `json:"managed_certificate_domain,omitempty"`
 
 	// Deprecated in favor of Certificate
@@ -159,6 +169,13 @@ func (r Route) TCPRoute() *TCPRoute {
 		DrainBackends: r.DrainBackends,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
+
+		Domain:                   r.Domain,
+		TLSMode:                  r.TLSMode,
+		Certificate:              r.Certificate,
+		ManagedCertificateDomain: r.ManagedCertificateDomain,
+		LegacyTLSCert:            r.LegacyTLSCert,
+		LegacyTLSKey:             r.LegacyTLSKey,
 	}
 }
 
@@ -226,6 +243,13 @@ type TCPRoute struct {
 	DrainBackends bool
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+
+	Domain                   string
+	TLSMode                  string
+	Certificate              *Certificate `json:"certificate,omitempty"`
+	ManagedCertificateDomain *string      `json:"managed_certificate_domain,omitempty"`
+	LegacyTLSCert            string       `json:"tls_cert,omitempty"`
+	LegacyTLSKey             string       `json:"tls_key,omitempty"`
 }
 
 func (r TCPRoute) FormattedID() string {
@@ -247,6 +271,13 @@ func (r TCPRoute) ToRoute() *Route {
 		DrainBackends: r.DrainBackends,
 		CreatedAt:     r.CreatedAt,
 		UpdatedAt:     r.UpdatedAt,
+
+		Domain:                   r.Domain,
+		TLSMode:                  r.TLSMode,
+		Certificate:              r.Certificate,
+		ManagedCertificateDomain: r.ManagedCertificateDomain,
+		LegacyTLSCert:            r.LegacyTLSCert,
+		LegacyTLSKey:             r.LegacyTLSKey,
 	}
 }
 

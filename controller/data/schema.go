@@ -1041,6 +1041,36 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 	migrations.Add(56,
 		`INSERT INTO event_types (name) VALUES ('runtime_profile'), ('runtime_settings')`,
 	)
+	migrations.Add(57,
+		`ALTER TABLE tcp_routes ADD COLUMN domain varchar(255) NOT NULL DEFAULT ''`,
+		`ALTER TABLE tcp_routes ADD COLUMN tls_mode varchar(32) NOT NULL DEFAULT ''`,
+		`ALTER TABLE tcp_routes ADD COLUMN managed_certificate_domain varchar(255)`,
+		`ALTER TABLE tcp_routes ADD CONSTRAINT tcp_routes_tls_mode_check CHECK (tls_mode IN ('', 'passthrough', 'terminate'))`,
+		`
+CREATE TABLE tcp_route_certificates (
+	tcp_route_id uuid NOT NULL REFERENCES tcp_routes (id) ON DELETE CASCADE,
+	certificate_id uuid NOT NULL REFERENCES certificates (id) ON DELETE RESTRICT,
+	PRIMARY KEY (tcp_route_id, certificate_id)
+)`,
+		`
+CREATE OR REPLACE FUNCTION notify_tcp_route_certificates_update() RETURNS TRIGGER AS $$
+BEGIN
+	IF (TG_OP = 'DELETE') THEN
+		PERFORM pg_notify('tcp_routes', OLD.tcp_route_id::varchar);
+	ELSIF (TG_OP = 'UPDATE') THEN
+		PERFORM pg_notify('tcp_routes', OLD.tcp_route_id::varchar);
+		PERFORM pg_notify('tcp_routes', NEW.tcp_route_id::varchar);
+	ELSIF (TG_OP = 'INSERT') THEN
+		PERFORM pg_notify('tcp_routes', NEW.tcp_route_id::varchar);
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql`,
+		`
+CREATE TRIGGER notify_tcp_route_certificates_update
+	AFTER INSERT OR UPDATE OR DELETE ON tcp_route_certificates
+	FOR EACH ROW EXECUTE PROCEDURE notify_tcp_route_certificates_update()`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -41,6 +41,33 @@ func (s *S) TestCreateTCPRoute(c *C) {
 	c.Assert(gotRoute, DeepEquals, route)
 }
 
+func (s *S) TestCreateTCPRouteWithTLS(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "create-tcp-route-tls"})
+	tlsCert := testutils.TLSConfigForDomain("postgres.example.com")
+	domain := "postgres.example.com"
+	route := s.createTestRoute(c, app.ID, (&router.TCPRoute{
+		Service: "postgres",
+		Leader:  true,
+		Domain:  domain,
+		TLSMode: router.TLSModeTerminate,
+		Certificate: &router.Certificate{
+			Cert: tlsCert.Cert,
+			Key:  tlsCert.PrivateKey,
+		},
+	}).ToRoute())
+	tcp := route.TCPRoute()
+	c.Assert(tcp.Domain, Equals, domain)
+	c.Assert(tcp.TLSMode, Equals, router.TLSModeTerminate)
+	c.Assert(tcp.Certificate, Not(IsNil))
+	c.Assert(tcp.Certificate.Cert, Equals, tlsCert.Cert)
+
+	got, err := s.c.GetRoute(app.ID, route.FormattedID())
+	c.Assert(err, IsNil)
+	c.Assert(got.TLSMode, Equals, router.TLSModeTerminate)
+	c.Assert(got.Domain, Equals, domain)
+	c.Assert(got.Certificate, Not(IsNil))
+}
+
 func (s *S) TestCreateHTTPRoute(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "create-http-route"})
 	route := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "create.example.com", Service: "foo"}).ToRoute())

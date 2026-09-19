@@ -271,13 +271,16 @@ func (r *RouteRepo) relinkManagedCertificate(tx *postgres.DBTx, route *router.Ro
 		return err
 	}
 
-	// Delete any existing route certificate mapping for the new route
-	if err := tx.Exec("route_certificate_delete_by_route_id", route.ID); err != nil {
+	deleteQ := "route_certificate_delete_by_route_id"
+	insertQ := "route_certificate_insert"
+	if route.Type == "tcp" {
+		deleteQ = "tcp_route_certificate_delete_by_route_id"
+		insertQ = "tcp_route_certificate_insert"
+	}
+	if err := tx.Exec(deleteQ, route.ID); err != nil {
 		return err
 	}
-
-	// Link the certificate to the route
-	if err := tx.Exec("route_certificate_insert", route.ID, certID); err != nil {
+	if err := tx.Exec(insertQ, route.ID, certID); err != nil {
 		return err
 	}
 
@@ -316,21 +319,39 @@ func (r *RouteRepo) resetManagedCertificateToPending(tx *postgres.DBTx, cert *ct
 }
 
 func (r *RouteRepo) addTCP(tx *postgres.DBTx, route *router.Route) error {
-	// TODO: check non-default HTTP ports if set
 	if route.Port == 80 || route.Port == 443 {
 		return ErrRouteReserved
 	}
-	return tx.QueryRow(
+	mode := router.NormalizeTLSMode(route.TLSMode)
+	if !router.ValidTLSMode(mode) {
+		return ErrRouteInvalid
+	}
+	route.TLSMode = mode
+	if route.Domain == "" && route.ManagedCertificateDomain != nil {
+		route.Domain = *route.ManagedCertificateDomain
+	}
+	if err := tx.QueryRow(
 		"tcp_route_insert",
 		route.ParentRef,
 		route.Service,
 		route.Port,
 		route.Leader,
 		route.DrainBackends,
-	).Scan(&route.ID, &route.Port, &route.CreatedAt, &route.UpdatedAt)
+		route.Domain,
+		route.TLSMode,
+		route.ManagedCertificateDomain,
+	).Scan(&route.ID, &route.Port, &route.CreatedAt, &route.UpdatedAt); err != nil {
+		return err
+	}
+
+	hasManagedCert := route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != ""
+	if hasManagedCert {
+		return r.ensureManagedCertificateByDomain(tx, route)
+	}
+	return r.addRouteCertWithTx(tx, route)
 }
 
-func (r *RouteRepo) addCertWithTx(tx *postgres.DBTx, cert *router.Certificate) error {
+func (r *RouteRepo) addCertWithTx(tx *postgres.DBTx, cert *router.Certificate, routeType string) error {
 	cert.Cert = strings.Trim(cert.Cert, " \n")
 	cert.Key = strings.Trim(cert.Key, " \n")
 
@@ -351,10 +372,16 @@ func (r *RouteRepo) addCertWithTx(tx *postgres.DBTx, cert *router.Certificate) e
 		return err
 	}
 	for _, rid := range cert.Routes {
-		if err := tx.Exec("route_certificate_delete_by_route_id", rid); err != nil {
+		deleteQ := "route_certificate_delete_by_route_id"
+		insertQ := "route_certificate_insert"
+		if routeType == "tcp" {
+			deleteQ = "tcp_route_certificate_delete_by_route_id"
+			insertQ = "tcp_route_certificate_insert"
+		}
+		if err := tx.Exec(deleteQ, rid); err != nil {
 			return err
 		}
-		if err := tx.Exec("route_certificate_insert", rid, cert.ID); err != nil {
+		if err := tx.Exec(insertQ, rid, cert.ID); err != nil {
 			return err
 		}
 	}
@@ -375,7 +402,7 @@ func (r *RouteRepo) addRouteCertWithTx(tx *postgres.DBTx, route *router.Route) e
 		return nil
 	}
 	cert.Routes = []string{route.ID}
-	if err := r.addCertWithTx(tx, cert); err != nil {
+	if err := r.addCertWithTx(tx, cert, route.Type); err != nil {
 		return err
 	}
 	route.Certificate = &router.Certificate{
@@ -465,7 +492,15 @@ func (r *RouteRepo) getTCP(id string) (*router.Route, error) {
 }
 
 func scanTCPRoute(s postgres.Scanner) (*router.Route, error) {
-	var route router.Route
+	var (
+		route                    router.Route
+		managedCertificateDomain *string
+		certID                   *string
+		certCert                 *string
+		certKey                  *string
+		certCreatedAt            *time.Time
+		certUpdatedAt            *time.Time
+	)
 	if err := s.Scan(
 		&route.ID,
 		&route.ParentRef,
@@ -473,12 +508,30 @@ func scanTCPRoute(s postgres.Scanner) (*router.Route, error) {
 		&route.Port,
 		&route.Leader,
 		&route.DrainBackends,
+		&route.Domain,
+		&route.TLSMode,
+		&managedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
+		&certID,
+		&certCert,
+		&certKey,
+		&certCreatedAt,
+		&certUpdatedAt,
 	); err != nil {
 		return nil, err
 	}
 	route.Type = "tcp"
+	route.ManagedCertificateDomain = managedCertificateDomain
+	if certID != nil {
+		route.Certificate = &router.Certificate{
+			ID:        *certID,
+			Cert:      *certCert,
+			Key:       *certKey,
+			CreatedAt: *certCreatedAt,
+			UpdatedAt: *certUpdatedAt,
+		}
+	}
 	return &route, nil
 }
 
@@ -629,12 +682,20 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 }
 
 func (r *RouteRepo) updateTCP(tx *postgres.DBTx, route *router.Route) error {
-	return tx.QueryRow(
+	mode := router.NormalizeTLSMode(route.TLSMode)
+	if !router.ValidTLSMode(mode) {
+		return ErrRouteInvalid
+	}
+	route.TLSMode = mode
+	if err := tx.QueryRow(
 		"tcp_route_update",
 		route.ParentRef,
 		route.Service,
 		route.Port,
 		route.Leader,
+		route.Domain,
+		route.TLSMode,
+		route.ManagedCertificateDomain,
 		route.ID,
 	).Scan(
 		&route.ID,
@@ -643,9 +704,29 @@ func (r *RouteRepo) updateTCP(tx *postgres.DBTx, route *router.Route) error {
 		&route.Port,
 		&route.Leader,
 		&route.DrainBackends,
+		&route.Domain,
+		&route.TLSMode,
+		&route.ManagedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
-	)
+	); err != nil {
+		return err
+	}
+
+	hasManagedCert := route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != ""
+	if hasManagedCert {
+		return r.ensureManagedCertificate(tx, route)
+	}
+
+	hasCert := route.Certificate != nil && (route.Certificate.Cert != "" || route.Certificate.Key != "")
+	hasLegacyCert := route.LegacyTLSCert != "" || route.LegacyTLSKey != ""
+	if !hasCert && !hasLegacyCert {
+		if err := tx.Exec("tcp_route_certificate_delete_by_route_id", route.ID); err != nil {
+			return err
+		}
+		return nil
+	}
+	return r.addRouteCertWithTx(tx, route)
 }
 
 func (r *RouteRepo) Delete(route *router.Route) error {

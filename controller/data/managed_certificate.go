@@ -127,6 +127,9 @@ func (r *ManagedCertificateRepo) Update(cert *ct.ManagedCertificate) error {
 
 		// Fetch the route with the newly-linked certificate and create an event
 		route, err := scanHTTPRouteFromTx(tx, cert.RouteID)
+		if err == pgx.ErrNoRows {
+			route, err = scanTCPRouteFromTx(tx, cert.RouteID)
+		}
 		if err != nil {
 			tx.Rollback()
 			return err
@@ -174,17 +177,24 @@ func (r *ManagedCertificateRepo) updateRouteCertificate(tx *postgres.DBTx, cert 
 		return err
 	}
 
-	// Delete any existing route certificate mapping
+	// Delete any existing route certificate mapping (HTTP or TCP).
 	if err := tx.Exec("route_certificate_delete_by_route_id", cert.RouteID); err != nil {
 		return err
 	}
-
-	// Link the certificate to the route
-	if err := tx.Exec("route_certificate_insert", cert.RouteID, certID); err != nil {
+	if err := tx.Exec("tcp_route_certificate_delete_by_route_id", cert.RouteID); err != nil {
 		return err
 	}
 
-	return nil
+	if _, err := scanHTTPRouteFromTx(tx, cert.RouteID); err == nil {
+		return tx.Exec("route_certificate_insert", cert.RouteID, certID)
+	} else if err != pgx.ErrNoRows {
+		return err
+	}
+	return tx.Exec("tcp_route_certificate_insert", cert.RouteID, certID)
+}
+
+func scanTCPRouteFromTx(tx *postgres.DBTx, id string) (*router.Route, error) {
+	return scanTCPRoute(tx.QueryRow("tcp_route_select", id))
 }
 
 // scanHTTPRouteFromTx queries an HTTP route within a transaction
