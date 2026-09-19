@@ -10,13 +10,14 @@ import (
 // verbatim and never re-scanned (so a password containing "${resource}" stays literal).
 type Interp struct {
 	App         map[string]string
+	AppName     string
 	Resource    string
 	ResourceEnv map[string]string
 }
 
-// Interpolate expands ${resource}, ${app.KEY}, ${app.KEY|fallback}, and
+// Interpolate expands ${resource}, ${app}, ${app.KEY}, ${app.KEY|fallback}, and
 // ${resource.KEY} in a manifest template. Fallback may only contain literals
-// and ${resource}.
+// and ${resource}. ${app} is the current flynn -a app name.
 func Interpolate(tmpl string, in Interp) (string, error) {
 	var b strings.Builder
 	i := 0
@@ -58,6 +59,8 @@ func expandPlaceholder(inner string, in Interp) (string, error) {
 	switch {
 	case inner == "resource":
 		return in.Resource, nil
+	case inner == "app":
+		return in.AppName, nil
 	case strings.HasPrefix(inner, "app."):
 		rest := strings.TrimPrefix(inner, "app.")
 		key, fallback, hasFB := strings.Cut(rest, "|")

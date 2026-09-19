@@ -268,6 +268,7 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 		DisableKeepAlives: r.DisableKeepAlives,
 		RequestTracker:    service,
 		Logger:            logger.New("service", r.Service),
+		Service:           r.Service,
 	})
 	r.rp.Error503Page = h.l.error503Page
 	r.service = service

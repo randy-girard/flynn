@@ -184,7 +184,14 @@ func (h *Host) rateLimitMiddleware(next http.Handler) http.Handler {
 var ErrNotFound = errors.New("host: unknown job")
 
 func (h *Host) StopJob(id string) error {
-	log := h.log.New("fn", "StopJob", "job.id", id)
+	return h.StopJobWithReason(id, "")
+}
+
+func (h *Host) StopJobWithReason(id, reason string) error {
+	if strings.TrimSpace(reason) != "" {
+		h.state.SetStopReason(id, reason)
+	}
+	log := h.log.New("fn", "StopJob", "job.id", id, "reason", reason)
 
 	log.Info("acquiring state database")
 	if err := h.state.Acquire(); err != nil {
@@ -365,7 +372,7 @@ func (h *jobAPI) GetJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 
 func (h *jobAPI) StopJob(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id := ps.ByName("id")
-	if err := h.host.StopJob(id); err != nil {
+	if err := h.host.StopJobWithReason(id, r.URL.Query().Get("reason")); err != nil {
 		httphelper.Error(w, err)
 		return
 	}

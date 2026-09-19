@@ -451,6 +451,12 @@ const (
 	PartitionTypeUser       PartitionType = "user"
 )
 
+// Process type names for one-off jobs created with POST /apps/:id/jobs.
+const (
+	ProcessTypeRunner  = "runner"  // detached one-off (`flynn run -d`, dashboard Run command)
+	ProcessTypeConsole = "console" // attached TTY (`flynn run`, dashboard Console)
+)
+
 type NewJob struct {
 	ReleaseID   string             `json:"release,omitempty"`
 	ArtifactIDs []string           `json:"artifacts,omitempty"`
@@ -466,6 +472,9 @@ type NewJob struct {
 	Data        bool               `json:"data,omitempty"`
 	Partition   PartitionType      `json:"partition,omitempty"`
 	Profiles    []host.JobProfile  `json:"profiles,omitempty"`
+	// Type is the process type name. Empty defaults to runner for detached
+	// one-offs and console for attached/TTY jobs.
+	Type string `json:"type,omitempty"`
 
 	// MountsFrom is a process type to copy mounts from
 	MountsFrom string `json:"mounts_from,omitempty"`
@@ -476,6 +485,19 @@ type NewJob struct {
 
 	// Artifact is DEPRECATED: use Artifacts instead
 	DeprecatedArtifact string `json:"artifact,omitempty"`
+}
+
+// NewJobProcessType is the process type stored on a one-off job. An explicit
+// Type wins; otherwise attached/TTY jobs are "console" and detached jobs are
+// "runner".
+func NewJobProcessType(j NewJob, attach bool) string {
+	if t := strings.TrimSpace(j.Type); t != "" {
+		return t
+	}
+	if attach || j.TTY {
+		return ProcessTypeConsole
+	}
+	return ProcessTypeRunner
 }
 
 const DefaultDeployTimeout = 120 // seconds
@@ -606,6 +628,9 @@ const (
 	EventTypeSinkDeletion            EventType = "sink_deletion"
 	EventTypeVolume                  EventType = "volume"
 	EventTypeManagedCertificate      EventType = "managed_certificate"
+	EventTypeRuntimeProfile          EventType = "runtime_profile"
+	EventTypeRuntimeSettings         EventType = "runtime_settings"
+	EventTypeScheduler               EventType = "scheduler"
 
 	// EventTypeDeprecatedScale is a deprecated event which is emitted for
 	// old clients waiting for formations to be scaled (new clients should
@@ -629,6 +654,21 @@ type Event struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 	Op         EventOp         `json:"-"`
 	CreatedAt  *time.Time      `json:"created_at,omitempty"`
+}
+
+// SchedulerEvent is posted by the scheduler plugin when a cron/interval job fires.
+type SchedulerEvent struct {
+	ID          string    `json:"id"`
+	AppID       string    `json:"app_id,omitempty"`
+	ScheduleID  string    `json:"schedule_id"`
+	Name        string    `json:"name,omitempty"`
+	Command     string    `json:"command"`
+	ProcessType string    `json:"process_type"`
+	Schedule    string    `json:"schedule"`
+	JobID       string    `json:"job_id,omitempty"`
+	JobUUID     string    `json:"job_uuid,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	FiredAt     time.Time `json:"fired_at,omitempty"`
 }
 
 type ScaleRequest struct {

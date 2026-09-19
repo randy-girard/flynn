@@ -86,6 +86,35 @@ func TestManifestValidateKinds(t *testing.T) {
 	if _, err := LoadManifest(dir); err == nil {
 		t.Fatal("resource-provider without provider must fail")
 	}
+
+	dir = t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "scheduler",
+		"kind": "scheduler",
+		"app": map[string]interface{}{
+			"name": "scheduler",
+			"processes": map[string]interface{}{
+				"web": map[string]interface{}{
+					"args":  []string{"/bin/scheduler"},
+					"ports": []map[string]interface{}{{"port": 80, "proto": "tcp"}},
+				},
+			},
+		},
+		"cli": map[string]interface{}{
+			"command": "scheduler",
+			"usage":   "manage scheduled jobs",
+		},
+	})
+	m, err = LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != KindScheduler {
+		t.Fatalf("got kind=%s", m.Kind)
+	}
+	if !m.CLI.UserVisible(m.Kind) {
+		t.Fatal("scheduler CLI must be user-visible")
+	}
 }
 
 func TestLoadManifestWebhooks(t *testing.T) {

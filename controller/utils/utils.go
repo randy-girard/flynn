@@ -49,6 +49,9 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 	metadata["flynn-controller.release"] = f.Release.ID
 	metadata["flynn-controller.formation"] = "true"
 	metadata["flynn-controller.type"] = name
+	if t.RuntimeProfile != "" {
+		metadata["flynn-controller.runtime_profile"] = t.RuntimeProfile
+	}
 	job := &host.Job{
 		ID:       id,
 		Metadata: metadata,

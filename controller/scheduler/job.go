@@ -6,6 +6,7 @@ import (
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
+	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
@@ -55,6 +56,10 @@ type Job struct {
 	Type      string `json:"type"`
 	AppID     string `json:"app_id"`
 	ReleaseID string `json:"release_id"`
+
+	// Reason is why this job is being started (start, restart, replace, scale).
+	// Copied onto the host job as flynn-controller.reason for app logs/events.
+	Reason string `json:"reason,omitempty"`
 
 	Args []string `json:"args,omitempty"`
 
@@ -207,6 +212,34 @@ func (j *Job) ControllerJob() *ct.Job {
 }
 
 type Jobs map[string]*Job
+
+// startReason is why the scheduler is adding jobs of this type: a first start,
+// a scale-up of an existing formation, or a replacement for another release.
+func (j Jobs) startReason(appID, releaseID, typ string) string {
+	sameRelease := 0
+	otherRelease := 0
+	for _, job := range j {
+		if job == nil || job.AppID != appID || job.Type != typ {
+			continue
+		}
+		switch job.State {
+		case JobStateStopped, JobStateStopping, JobStateBlocked:
+			continue
+		}
+		if job.ReleaseID == releaseID {
+			sameRelease++
+		} else {
+			otherRelease++
+		}
+	}
+	if otherRelease > 0 && sameRelease == 0 {
+		return host.JobReasonReplace
+	}
+	if sameRelease > 0 {
+		return host.JobReasonScale
+	}
+	return host.JobReasonStart
+}
 
 // WithFormationAndType returns a list of jobs which belong to the given
 // formation and have the given type, ordered with the most recently started

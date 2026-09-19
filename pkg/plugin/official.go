@@ -68,9 +68,9 @@ func parseOfficial(data []byte) (officialFile, error) {
 			return f, fmt.Errorf("plugin %s: description is required", p.Name)
 		}
 		switch p.Kind {
-		case KindResourceProvider, KindApp:
+		case KindResourceProvider, KindApp, KindScheduler:
 		default:
-			return f, fmt.Errorf("plugin %s: kind must be %q or %q", p.Name, KindResourceProvider, KindApp)
+			return f, fmt.Errorf("plugin %s: kind must be %q, %q, or %q", p.Name, KindResourceProvider, KindApp, KindScheduler)
 		}
 		var aliases []string
 		for _, a := range p.Aliases {

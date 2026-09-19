@@ -152,6 +152,7 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 	if err != nil {
 		return nil, err
 	}
+	in.AppName = appName
 	if resourceRelease == nil || resourceRelease.ID == "" {
 		return nil, fmt.Errorf("error getting %s release", spec.Command)
 	}

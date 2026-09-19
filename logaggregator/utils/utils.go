@@ -63,6 +63,8 @@ func StreamType(msg *rfc5424.Message) logagg.StreamType {
 		return logagg.StreamTypeStderr
 	case logagg.MsgIDInit:
 		return logagg.StreamTypeInit
+	case logagg.MsgIDSystem:
+		return logagg.StreamTypeSystem
 	default:
 		return logagg.StreamTypeUnknown
 	}

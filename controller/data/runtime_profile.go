@@ -59,12 +59,26 @@ func (r *RuntimeProfileRepo) Add(p *ct.RuntimeProfile) error {
 		p.ID = random.UUID()
 	}
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	return r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin).Scan(&p.CreatedAt, &p.UpdatedAt)
+	if err := r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
+		return err
+	}
+	return CreateEvent(r.db.Exec, &ct.Event{
+		ObjectID:   p.ID,
+		ObjectType: ct.EventTypeRuntimeProfile,
+		Op:         ct.EventOpCreate,
+	}, p)
 }
 
 func (r *RuntimeProfileRepo) Update(p *ct.RuntimeProfile) error {
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	return r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt)
+	if err := r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		return err
+	}
+	return CreateEvent(r.db.Exec, &ct.Event{
+		ObjectID:   p.ID,
+		ObjectType: ct.EventTypeRuntimeProfile,
+		Op:         ct.EventOpUpdate,
+	}, p)
 }
 
 func (r *RuntimeProfileRepo) Delete(id string) error {
@@ -75,7 +89,13 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 	if p.Builtin {
 		return ct.ValidationError{Field: "profile", Message: "cannot delete a builtin runtime profile"}
 	}
-	return r.db.Exec("runtime_profile_delete", id)
+	if err := r.db.Exec("runtime_profile_delete", id); err != nil {
+		return err
+	}
+	return CreateEvent(r.db.Exec, &ct.Event{
+		ObjectID:   p.ID,
+		ObjectType: ct.EventTypeRuntimeProfile,
+	}, p)
 }
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
@@ -88,5 +108,12 @@ func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 }
 
 func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
-	return r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits).Scan(&s.UpdatedAt)
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits).Scan(&s.UpdatedAt); err != nil {
+		return err
+	}
+	return CreateEvent(r.db.Exec, &ct.Event{
+		ObjectID:   "runtime-settings",
+		ObjectType: ct.EventTypeRuntimeSettings,
+		Op:         ct.EventOpUpdate,
+	}, s)
 }

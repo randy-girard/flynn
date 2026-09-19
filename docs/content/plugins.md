@@ -8,7 +8,7 @@ toc_min_level: 2
 
 Plugins are first-party cluster apps the operator installs with **`flynn-host`**,
 not the user `flynn` CLI. A plugin can be a resource provider (Redis, MariaDB, …)
-or any other system app (`kind: app`). Flynn ships
+or any other system app (`kind: app` or `kind: scheduler`). Flynn ships
 `pkg/plugin/official-plugins.json` (embedded in `flynn-host`) so short names
 know which GitHub repo to use. Install itself is still generic: it reads
 `flynn-plugin.json` from that repo and does not special-case behavior by
@@ -38,6 +38,7 @@ Development layout (relative to the Flynn repo):
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 | `www` | `../flynn-plugin-www` | (none; `kind: app`) |
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
+| `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
@@ -54,6 +55,7 @@ sudo flynn-host plugin:install ../flynn-plugin-dashboard
 sudo flynn-host plugin:install ../flynn-plugin-discovery
 sudo flynn-host plugin:install ../flynn-plugin-www
 sudo flynn-host plugin:install ../flynn-plugin-otel
+sudo flynn-host plugin:install ../flynn-plugin-scheduler
 ```
 
 Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
@@ -130,17 +132,20 @@ On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
-`redis mysql mongodb kafka clickhouse dashboard www discovery otel` (every
+`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler` (every
 first-party plugin except the template). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
-list **resource-provider** plugin commands under a **Plugins:** section (from
-the manifest stored on the plugin app, not a compiled-in `flynn` handler).
-`kind: app` system plugins are installed and listed by `flynn plugins` but
-do not add a user `flynn` command unless they set `cli.user`. `flynn resource
-add <provider>` works for `kind: resource-provider`.
+list **resource-provider** and **scheduler** plugin commands under a **Plugins:**
+section (from the manifest stored on the plugin app, not a compiled-in `flynn`
+handler). `kind: app` system plugins are installed and listed by `flynn plugins`
+but do not add a user `flynn` command unless they set `cli.user`. `flynn resource
+add <provider>` works for `kind: resource-provider`. After the scheduler plugin
+is installed, `flynn -a <app> scheduler` lists, adds, and removes cron/interval
+jobs for that app. Upgrade smoke schedules `echo scheduler-smoke` every 10s on
+the uploaded `upgrade-smoke` app and waits for `last_run_at` / `last_job_id`.
 
 ```text
 flynn plugins

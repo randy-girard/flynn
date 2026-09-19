@@ -49,7 +49,7 @@ $ flynn stack set heroku-24
 Optional configuration:
 
 - `flynn env:set DOCKERFILE=path/to/Dockerfile` — use a non-default Dockerfile
-- `flynn limit:set dockerbuilder memory=4GB` — raise build memory for large images (cluster admin or `app:admin`; see [Apps — Limits](apps.md#limits))
+- `flynn limit:set dockerbuilder memory=4GB` — raise build memory for large images (cluster controller key; see [Apps — Limits](apps.md#limits))
 
 ## Routing
 

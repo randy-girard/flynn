@@ -138,6 +138,14 @@ func TestJobConfigSystemPartitionEnvAndDeprecatedArgs(t *testing.T) {
 	if job.Config.LinuxCapabilities == nil || (*job.Config.LinuxCapabilities)[0] != "NET_BIND_SERVICE" {
 		t.Fatal("capabilities")
 	}
+	f.Release.Processes["web"] = ct.ProcessType{
+		RuntimeProfile: "large",
+		Args:           []string{"web"},
+	}
+	profiled := JobConfig(f, "web", "host1", "job-uuid")
+	if profiled.Metadata["flynn-controller.runtime_profile"] != "large" {
+		t.Fatalf("runtime_profile metadata=%v", profiled.Metadata)
+	}
 	if !job.Config.HostNetwork || len(job.Config.Ports) != 1 || job.Config.Ports[0].Port != 8080 {
 		t.Fatalf("ports/host network: %+v", job.Config)
 	}

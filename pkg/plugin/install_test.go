@@ -694,3 +694,86 @@ func TestEnsureRoutesAutoTLSWhenClusterACMEEnabled(t *testing.T) {
 		t.Fatalf("ACME off and no auto_tls must stay HTTP: %+v", off.created)
 	}
 }
+
+func TestApplyProvisionedResourcesProvisionsWhenOnlyStaleDatabaseURL(t *testing.T) {
+	cluster := map[string]string{
+		"DATABASE_URL": "postgres://old-user:old-pass@leader.postgres.discoverd:5432/olddb",
+	}
+	var provisioned []string
+	err := applyProvisionedResources(nil, nil, []string{"postgres"}, cluster, func(name string) (*ct.Resource, error) {
+		provisioned = append(provisioned, name)
+		return &ct.Resource{
+			ProviderID: "uuid-postgres",
+			Env: map[string]string{
+				"FLYNN_POSTGRES": "postgres",
+				"DATABASE_URL":   "postgres://new-user:new-pass@leader.postgres.discoverd:5432/newdb",
+			},
+		}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provisioned) != 1 || provisioned[0] != "postgres" {
+		t.Fatalf("provisioned=%v", provisioned)
+	}
+	if cluster["DATABASE_URL"] != "postgres://new-user:new-pass@leader.postgres.discoverd:5432/newdb" {
+		t.Fatalf("stale DATABASE_URL must be replaced, got %q", cluster["DATABASE_URL"])
+	}
+}
+
+func TestApplyProvisionedResourcesSkipsAttachedProviderUUID(t *testing.T) {
+	aliases := map[string]string{"postgres": "uuid-postgres", "uuid-postgres": "uuid-postgres"}
+	cluster := map[string]string{"DATABASE_URL": "postgres://stale"}
+	var provisioned int
+	err := applyProvisionedResources([]*ct.Resource{{
+		ProviderID: "uuid-postgres",
+		Env: map[string]string{
+			"FLYNN_POSTGRES": "postgres",
+			"DATABASE_URL":   "postgres://live",
+		},
+	}}, aliases, []string{"postgres"}, cluster, func(string) (*ct.Resource, error) {
+		provisioned++
+		return nil, fmt.Errorf("must not provision")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provisioned != 0 {
+		t.Fatal("attached postgres must not be provisioned again")
+	}
+	if cluster["DATABASE_URL"] != "postgres://live" {
+		t.Fatalf("resource env must overwrite cluster, got %q", cluster["DATABASE_URL"])
+	}
+}
+
+func TestApplyProvisionedResourcesSkipsFLYNNPostgres(t *testing.T) {
+	cluster := map[string]string{}
+	var provisioned int
+	err := applyProvisionedResources([]*ct.Resource{{
+		ProviderID: "some-uuid",
+		Env:        map[string]string{"FLYNN_POSTGRES": "postgres", "DATABASE_URL": "postgres://live"},
+	}}, nil, []string{"postgres"}, cluster, func(string) (*ct.Resource, error) {
+		provisioned++
+		return nil, fmt.Errorf("must not provision")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provisioned != 0 {
+		t.Fatal("FLYNN_POSTGRES must count as attached")
+	}
+}
+
+func TestProviderResourceAttached(t *testing.T) {
+	have := map[string]bool{"uuid-1": true}
+	aliases := map[string]string{"postgres": "uuid-1"}
+	if !providerResourceAttached(have, "postgres", aliases) {
+		t.Fatal("name must match provider UUID")
+	}
+	if providerResourceAttached(have, "redis", aliases) {
+		t.Fatal("unrelated provider")
+	}
+	if !providerResourceAttached(map[string]bool{"postgres": true}, "postgres", nil) {
+		t.Fatal("name key")
+	}
+}

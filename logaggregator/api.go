@@ -142,15 +142,19 @@ func writeMessages(ctx context.Context, w http.ResponseWriter, msgc <-chan *rfc5
 
 func NewMessageFromSyslog(m *rfc5424.Message) client.Message {
 	processType, jobID := splitProcID(m.ProcID)
+	stream := utils.StreamType(m)
+	source := "app"
+	if stream == logagg.StreamTypeSystem {
+		source = "flynn"
+	}
 	return client.Message{
 		HostID:      string(m.Hostname),
 		JobID:       string(jobID),
 		Msg:         string(m.Msg),
 		ProcessType: string(processType),
-		// TODO(bgentry): source is always "app" for now, could be router in future
-		Source:    "app",
-		Stream:    utils.StreamType(m),
-		Timestamp: m.Timestamp,
+		Source:      source,
+		Stream:      stream,
+		Timestamp:   m.Timestamp,
 	}
 }
 

@@ -184,9 +184,24 @@ func TestIsInternalProcessType(t *testing.T) {
 			t.Fatalf("%q must be an internal process type", name)
 		}
 	}
-	for _, name := range []string{"web", "worker", "run", "postgres", ""} {
+	for _, name := range []string{"web", "worker", "run", "runner", "console", "postgres", ""} {
 		if IsInternalProcessType(name) {
 			t.Fatalf("%q must not be an internal process type", name)
 		}
+	}
+}
+
+func TestNewJobProcessType(t *testing.T) {
+	if got := NewJobProcessType(NewJob{}, false); got != ProcessTypeRunner {
+		t.Fatalf("detached = %q, want runner", got)
+	}
+	if got := NewJobProcessType(NewJob{TTY: true}, false); got != ProcessTypeConsole {
+		t.Fatalf("tty = %q, want console", got)
+	}
+	if got := NewJobProcessType(NewJob{}, true); got != ProcessTypeConsole {
+		t.Fatalf("attach = %q, want console", got)
+	}
+	if got := NewJobProcessType(NewJob{Type: "custom"}, true); got != "custom" {
+		t.Fatalf("explicit = %q, want custom", got)
 	}
 }

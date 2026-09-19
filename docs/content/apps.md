@@ -112,6 +112,16 @@ Flynn automatically logs everything that app processes write to the standard
 output and standard error streams. These logs can be retrieved with `flynn log`,
 and can be followed in real time with `flynn log -f`.
 
+About every 30 seconds each running container also writes a system line of
+cgroup usage in `metric=value` form, prefixed with `metrics`:
+
+```text
+metrics cpu_percent=12.35 memory_bytes=67108864 memory_limit_bytes=536870912 memory_percent=12.5 net_rx_bytes=10 net_tx_bytes=20 io_read_bytes=3 io_write_bytes=4 pids=7
+```
+
+Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
+(`Starting web process`, `Scaling down web process`) use the same system stream.
+
 ### External Logs
 
 Apps can stream logs to syslog with `flynn log-sink:add syslog …` (one app) or
@@ -331,9 +341,8 @@ gets twice the CPU time as a job with 1000.
 
 `git push` copies `slugbuilder` (buildpack stack) or `dockerbuilder` (container
 stack) onto the app release. Those process types are hidden from dashboard JWTs
-(jobs, logs, formations). Cluster administrators and app members with
-`app:admin` (or `cluster:admin` / `*`) can set their limits; regular
-collaborators cannot.
+(jobs, logs, formations, and the Scale panel). Set their limits with the cluster
+controller key; dashboard users cannot change them.
 
 ```text
 flynn limit:set slugbuilder memory=4GB

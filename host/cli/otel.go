@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -32,18 +33,24 @@ The plugin polls GET /cluster/stats and GET /cluster/jobs-stats and POSTs
 /v1/metrics. Job logs stay on flynn-host log-sink / flynn log-sink (syslog).
 `)
 	Register("otel:add", runOTELAddCmd, `
-usage: flynn-host otel:add [--header <header>]... [--insecure] <endpoint>
+usage: flynn-host otel:add [--auth <type>] [--token <token>] [--username <user>] [--password <pass>] [--header <header>]... [--insecure] <endpoint>
 
 Forward Flynn cluster metrics to an OpenTelemetry collector (OTLP/HTTP JSON).
 
 Options:
+    --auth=<type>      Auth type: none, bearer, or basic (default: none)
+    --token=<token>    Bearer token
+    --username=<user>  Basic auth username
+    --password=<pass>  Basic auth password
     --header=<header>  Extra HTTP header "Name: value" (repeatable)
     --insecure         Skip TLS verification of the collector
 
 Examples:
 
     $ flynn-host otel:add http://alloy.example:4318
-    $ flynn-host otel:add --header "Authorization: Bearer TOKEN" https://otlp.grafana.net/otlp
+    $ flynn-host otel:add --auth bearer --token TOKEN https://otlp.grafana.net/otlp
+    $ flynn-host otel:add --auth basic --username USER --password PASS https://collector.example:4318
+    $ flynn-host otel:add --insecure https://collector.example:4318
 `)
 	Register("otel:remove", runOTELRemoveCmd, `
 usage: flynn-host otel:remove <id>
@@ -133,13 +140,13 @@ func runOTELList(client *http.Client, base string) error {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	defer w.Flush()
-	listRec(w, "ID", "ENDPOINT")
+	listRec(w, "ID", "ENDPOINT", "AUTH")
 	for _, e := range rows {
 		ep := e.Endpoint
 		if e.Insecure {
 			ep += " (insecure)"
 		}
-		listRec(w, e.ID, ep)
+		listRec(w, e.ID, ep, otelAuthKind(e.Headers))
 	}
 	return nil
 }
@@ -158,6 +165,18 @@ func runOTELAdd(client *http.Client, base string, args *docopt.Args) error {
 	headers, err := parseOTELHeaders(cliutil.List(args, "--header"))
 	if err != nil {
 		return err
+	}
+	authHeaders, err := otelAuthHeaders(args)
+	if err != nil {
+		return err
+	}
+	if len(authHeaders) > 0 {
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		for k, v := range authHeaders {
+			headers[k] = v
+		}
 	}
 	created, err := otelCreate(client, base, otelExporter{
 		Endpoint: endpoint,
@@ -195,6 +214,77 @@ func parseOTELHeaders(raw []string) (map[string]string, error) {
 		out[strings.TrimSpace(name)] = strings.TrimSpace(val)
 	}
 	return out, nil
+}
+
+func otelAuthHeaders(args *docopt.Args) (map[string]string, error) {
+	auth := strings.ToLower(strings.TrimSpace(args.String["--auth"]))
+	token := strings.TrimSpace(args.String["--token"])
+	user := strings.TrimSpace(args.String["--username"])
+	pass := args.String["--password"]
+	if auth == "" {
+		switch {
+		case token != "":
+			auth = "bearer"
+		case user != "" || pass != "":
+			auth = "basic"
+		default:
+			return nil, nil
+		}
+	}
+	switch auth {
+	case "none":
+		if token != "" || user != "" || pass != "" {
+			return nil, fmt.Errorf("--auth none cannot be combined with --token or --username/--password")
+		}
+		return nil, nil
+	case "bearer":
+		if token == "" {
+			return nil, fmt.Errorf("--token is required for bearer auth")
+		}
+		if user != "" || pass != "" {
+			return nil, fmt.Errorf("bearer auth cannot be combined with --username/--password")
+		}
+		if !strings.HasPrefix(strings.ToLower(token), "bearer ") {
+			token = "Bearer " + token
+		}
+		return map[string]string{"Authorization": token}, nil
+	case "basic":
+		if user == "" || pass == "" {
+			return nil, fmt.Errorf("--username and --password are required for basic auth")
+		}
+		if token != "" {
+			return nil, fmt.Errorf("basic auth cannot be combined with --token")
+		}
+		raw := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+		return map[string]string{"Authorization": "Basic " + raw}, nil
+	default:
+		return nil, fmt.Errorf("unknown --auth %q (want none, bearer, or basic)", args.String["--auth"])
+	}
+}
+
+func otelAuthKind(headers map[string]string) string {
+	if len(headers) == 0 {
+		return "none"
+	}
+	auth := headers["Authorization"]
+	if auth == "" {
+		for k, v := range headers {
+			if strings.EqualFold(k, "Authorization") {
+				auth = v
+				break
+			}
+		}
+	}
+	switch {
+	case strings.HasPrefix(strings.ToLower(auth), "bearer "):
+		return "bearer"
+	case strings.HasPrefix(strings.ToLower(auth), "basic "):
+		return "basic"
+	case len(headers) > 0:
+		return "headers"
+	default:
+		return "none"
+	}
 }
 
 func otelList(client *http.Client, base string) ([]otelExporter, error) {

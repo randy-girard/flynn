@@ -39,12 +39,9 @@ const rfc3339micro = "2006-01-02T15:04:05.000000Z07:00"
 func runLog(args *docopt.Args, client controller.Client) error {
 	rawOutput := args.Bool["--raw-output"]
 	opts := logagg.LogOpts{
-		Follow: args.Bool["--follow"],
-		JobID:  args.String["--job"],
-		StreamTypes: []logagg.StreamType{
-			logagg.StreamTypeStdout,
-			logagg.StreamTypeStderr,
-		},
+		Follow:      args.Bool["--follow"],
+		JobID:       args.String["--job"],
+		StreamTypes: logagg.DefaultStreamTypes(),
 	}
 	if ptype, ok := args.String["--process-type"]; ok {
 		opts.ProcessType = &ptype
@@ -86,7 +83,7 @@ func runLog(args *docopt.Args, client controller.Client) error {
 
 		var stream io.Writer
 		switch msg.Stream {
-		case logagg.StreamTypeStdout:
+		case logagg.StreamTypeStdout, logagg.StreamTypeSystem:
 			stream = os.Stdout
 		case logagg.StreamTypeStderr:
 			stream = stderr

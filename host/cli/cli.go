@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"unicode"
 
@@ -46,6 +47,10 @@ func Run(name string, args []string) error {
 	cmd, ok := commands[name]
 	if !ok {
 		return ErrInvalidCommand
+	}
+	if WantsHelp(args) {
+		fmt.Fprint(os.Stdout, FormatHelp(name))
+		return nil
 	}
 	parsedArgs, err := docopt.Parse(cmd.usage, argv, true, "", strings.Contains(cmd.usage, "[--]"))
 	if err != nil {

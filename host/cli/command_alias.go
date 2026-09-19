@@ -71,6 +71,9 @@ var subAliases = map[string]map[string]string{
 		"delete":       "runtime-profile:remove",
 		"allow-custom": "runtime-profile:allow-custom",
 	},
+	"events": {
+		"visible": "events:visible",
+	},
 	"route": {
 		"add": "route:add",
 	},
@@ -88,11 +91,14 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
-	if name == "plugin" && len(args) >= 2 && args[0] == "credentials" {
-		switch args[1] {
-		case "set", "unset", "show":
-			return "plugin:credentials-" + args[1], args[2:], "plugin credentials " + args[1]
+	if name == "plugin" && len(args) >= 1 && args[0] == "credentials" {
+		if len(args) >= 2 {
+			switch args[1] {
+			case "set", "unset", "show":
+				return "plugin:credentials-" + args[1], args[2:], "plugin credentials " + args[1]
+			}
 		}
+		return "plugin:credentials", args[1:], "plugin credentials"
 	}
 	if name == "plugin" && len(args) >= 2 && args[1] == "route" {
 		pluginName := args[0]
@@ -106,7 +112,7 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 			}
 		}
 	}
-	if target, ok := topAliases[name]; ok && target != name {
+	if target, ok := topAliases[name]; ok && target != name && helpOnlyArgs(args) {
 		return target, args, name
 	}
 	return name, args, ""

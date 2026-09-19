@@ -108,7 +108,7 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 	// (they should only need their own database).
 	p.db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "postgres" FROM "%s"`, username))
 
-	url := fmt.Sprintf("postgres://%s:%s@%s:5432/%s", username, password, serviceHost, database)
+	url := databaseURL(username, password, serviceHost, database)
 	httphelper.JSON(w, 200, resource.Resource{
 		ID: fmt.Sprintf("/databases/%s:%s", username, database),
 		Env: map[string]string{
@@ -164,6 +164,13 @@ func (p *pgAPI) ping(ctx context.Context, w http.ResponseWriter, req *http.Reque
 
 func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
+}
+
+// Flynn postgres does not speak TLS. pgx v5 defaults to sslmode=prefer, so
+// DATABASE_URL must disable SSL or clients log a refused handshake before
+// falling back to plaintext.
+func databaseURL(username, password, host, database string) string {
+	return fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable", username, password, host, database)
 }
 
 func parseDatabaseResourceID(id string) (user, database string, ok bool) {

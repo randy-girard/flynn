@@ -89,6 +89,11 @@ func (r *EventRepo) GetEvent(id int64) (*ct.Event, error) {
 	return scanEvent(row)
 }
 
+// Add inserts a controller event (used by plugins that post typed events).
+func (r *EventRepo) Add(e *ct.Event, payload interface{}) error {
+	return CreateEvent(r.db.Exec, e, payload)
+}
+
 func scanEvent(s postgres.Scanner) (*ct.Event, error) {
 	var event ct.Event
 	var typ string

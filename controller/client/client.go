@@ -74,6 +74,7 @@ type Client interface {
 	StreamEvents(opts ct.StreamEventsOptions, output chan *ct.Event) (stream.Stream, error)
 	ListEvents(opts ct.ListEventsOptions) ([]*ct.Event, error)
 	GetEvent(id int64) (*ct.Event, error)
+	CreateSchedulerEvent(appID string, ev *ct.SchedulerEvent) error
 	ExpectedScalingEvents(actual, expected map[string]int, releaseProcesses map[string]ct.ProcessType, clusterSize int) ct.JobEvents
 	RunJobAttached(appID string, job *ct.NewJob) (httpclient.ReadWriteCloser, error)
 	RunJobDetached(appID string, req *ct.NewJob) (*ct.Job, error)

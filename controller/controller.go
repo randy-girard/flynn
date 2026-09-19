@@ -288,6 +288,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 
 	httpRouter.GET("/events", httphelper.WrapHandler(api.Events))
 	httpRouter.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))
+	httpRouter.POST("/apps/:apps_id/scheduler-events", httphelper.WrapHandler(api.appLookup(api.CreateSchedulerEvent)))
 
 	httpRouter.GET("/volumes", httphelper.WrapHandler(api.GetVolumes))
 	httpRouter.PUT("/volumes/:volume_id", httphelper.WrapHandler(api.PutVolume))
@@ -320,6 +321,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
 	httpRouter.GET("/cluster/stats", httphelper.WrapHandler(api.GetClusterStats))
 	httpRouter.GET("/cluster/jobs-stats", httphelper.WrapHandler(api.GetClusterJobsStats))
+	httpRouter.GET("/cluster/router-metrics", httphelper.WrapHandler(api.GetRouterMetrics))
 	httpRouter.GET("/apps/:apps_id/jobs-stats", httphelper.WrapHandler(api.appLookup(api.GetAppJobsStats)))
 
 	grpcAPI := &grpcAPI{&api, c.db}

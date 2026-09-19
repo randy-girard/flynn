@@ -15,7 +15,9 @@ import (
 	"time"
 
 	"github.com/boltdb/bolt"
+	"github.com/randy-girard/flynn/host/logmux"
 	"github.com/randy-girard/flynn/host/types"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
 )
 
@@ -55,6 +57,7 @@ type State struct {
 	backend Backend
 
 	webhookDispatcher *WebhookDispatcher
+	logMux            *logmux.Mux
 }
 
 func NewState(id string, stateFilePath string) *State {
@@ -458,6 +461,21 @@ func (s *State) SetContainerPID(jobID string, pid int) {
 	s.persist(jobID)
 }
 
+func (s *State) SetStopReason(jobID, reason string) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	reason = strings.TrimSpace(reason)
+	job, ok := s.jobs[jobID]
+	if !ok || job == nil || job.Job == nil || reason == "" {
+		return
+	}
+	if job.Job.Metadata == nil {
+		job.Job.Metadata = map[string]string{}
+	}
+	job.Job.Metadata[host.MetaControllerStopReason] = reason
+	s.persist(jobID)
+}
+
 func (s *State) SetForceStop(jobID string) {
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
@@ -621,35 +639,48 @@ func (s *State) sendEvent(job *host.ActiveJob, event host.JobEventType) {
 		}
 	}()
 
-	// Dispatch webhook events for job lifecycle changes
-	if s.webhookDispatcher != nil {
-		var code, desc, severity string
-		switch event {
-		case host.JobEventCreate:
-			code, desc, severity = host.CodeJobCreate, "Job created", host.SeverityInfo
-		case host.JobEventStart:
-			code, desc, severity = host.CodeJobStart, "Job started", host.SeverityInfo
-		case host.JobEventStop:
-			if job.Status == host.StatusCrashed {
-				code, desc, severity = host.CodeJobCrash, "Job crashed (non-zero exit)", host.SeverityError
-			} else {
-				code, desc, severity = host.CodeJobStop, "Job stopped", host.SeverityInfo
-			}
-		case host.JobEventCleanup:
-			code, desc, severity = host.CodeJobCleanup, "Job cleaned up", host.SeverityInfo
-		case host.JobEventError:
-			code, desc, severity = host.CodeJobFailed, "Job failed to start", host.SeverityError
-		default:
+	// Dispatch webhook events and app log lines for job lifecycle changes
+	if s.webhookDispatcher != nil || s.logMux != nil {
+		code, desc, severity := host.JobLifecycleWebhook(event, job)
+		if code == "" {
 			return
 		}
 		j := job.Dup()
-		s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, j, nil)
-		if event == host.JobEventError && job.Error != nil && isNoSpaceErr(errors.New(*job.Error)) {
-			s.webhookDispatcher.SendDiskFull("Host disk out of space", job.Job.ID, j, map[string]string{
-				"reason": "job_start_enospc",
-			})
+		if s.webhookDispatcher != nil {
+			s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, j, host.JobLifecycleMetadata(job))
+			if event == host.JobEventError && job.Error != nil && isNoSpaceErr(errors.New(*job.Error)) {
+				s.webhookDispatcher.SendDiskFull("Host disk out of space", job.Job.ID, j, map[string]string{
+					"reason": "job_start_enospc",
+				})
+			}
+		}
+		if line := host.FormatJobLifecycleLog(event, job); line != "" {
+			s.writeLifecycleLog(job, line)
 		}
 	}
+}
+
+func (s *State) writeLifecycleLog(job *host.ActiveJob, line string) {
+	if s.logMux == nil || job == nil || job.Job == nil {
+		return
+	}
+	appID := job.Job.Metadata[host.MetaControllerApp]
+	if appID == "" && job.Job.Config.Env != nil {
+		appID = job.Job.Config.Env["FLYNN_APP_ID"]
+	}
+	if appID == "" {
+		return
+	}
+	jobType := job.Job.Metadata[host.MetaControllerType]
+	if jobType == "" && job.Job.Config.Env != nil {
+		jobType = job.Job.Config.Env["FLYNN_PROCESS_TYPE"]
+	}
+	s.logMux.Write(logagg.MsgIDSystem, &logmux.Config{
+		AppID:   appID,
+		HostID:  s.id,
+		JobType: jobType,
+		JobID:   job.Job.ID,
+	}, line)
 }
 
 func (s *State) SetPersistentSlot(slot string, jobID string) error {

@@ -1,17 +1,26 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
+	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+)
+
+var (
+	appGoneTimeout = 2 * time.Minute
+	appGonePoll    = 500 * time.Millisecond
 )
 
 // uninstallAPI is the controller subset used to tear down an installed plugin.
 // Tests replace Installer.UninstallClient.
 type uninstallAPI interface {
 	AppList() ([]*ct.App, error)
+	GetApp(id string) (*ct.App, error)
 	DeleteApp(appID string) (*ct.AppDeletion, error)
 	ResourceList(providerID string) ([]*ct.Resource, error)
 }
@@ -39,7 +48,9 @@ func (in *Installer) uninstallAPI() uninstallAPI {
 // Uninstall removes an installed plugin app, its host webhooks, and optional
 // uninstall hook. Flynn does not special-case plugin names. Resource-provider
 // plugins with provisioned resources still in use refuse unless Force is set.
-// DeleteApp already drops the plugin's HTTP/TCP routes and exclusive resources.
+// DeleteApp drops the plugin's HTTP/TCP routes and exclusive resources.
+// waitAppGone then polls until the app is gone so a reinstall cannot reuse a
+// release DATABASE_URL after the Postgres role has been dropped.
 func (in *Installer) Uninstall(opts UninstallOptions) error {
 	api := in.uninstallAPI()
 	if api == nil {
@@ -71,12 +82,51 @@ func (in *Installer) Uninstall(opts UninstallOptions) error {
 	}
 
 	in.logf("deleting app %s", app.Name)
+	var delErr error
 	if _, err := api.DeleteApp(app.ID); err != nil {
-		return fmt.Errorf("delete app %s: %w", app.Name, err)
+		delErr = fmt.Errorf("delete app %s: %w", app.Name, err)
+	}
+	if err := in.waitAppGone(api, app); err != nil {
+		if delErr != nil {
+			return delErr
+		}
+		return err
 	}
 	in.persistInventory()
 	in.logf("plugin %s uninstalled", rec.Name)
 	return nil
+}
+
+func (in *Installer) waitAppGone(api uninstallAPI, app *ct.App) error {
+	if api == nil || app == nil {
+		return nil
+	}
+	deadline := time.Now().Add(appGoneTimeout)
+	ids := []string{app.ID, app.Name}
+	for {
+		gone := true
+		for _, id := range ids {
+			if strings.TrimSpace(id) == "" {
+				continue
+			}
+			_, err := api.GetApp(id)
+			if err == nil {
+				gone = false
+				break
+			}
+			if err != controller.ErrNotFound && !errors.Is(err, controller.ErrNotFound) {
+				return fmt.Errorf("wait for %s deletion: %w", app.Name, err)
+			}
+		}
+		if gone {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("timed out waiting for app %s to be deleted", app.Name)
+		}
+		in.logf("waiting for app %s to finish deleting", app.Name)
+		time.Sleep(appGonePoll)
+	}
 }
 
 func (in *Installer) ensureProviderUnused(rec Installed, pluginAppID string, force bool) error {

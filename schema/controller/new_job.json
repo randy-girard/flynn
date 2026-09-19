@@ -78,6 +78,10 @@
       "items": {
         "type": "string"
       }
+    },
+    "type": {
+      "description": "process type name (defaults to runner for detached one-off jobs, console for TTY/attached jobs)",
+      "type": "string"
     }
   }
 }

@@ -73,8 +73,14 @@ func (in *Installer) applySetup(m *Manifest, cluster map[string]string) error {
 	ask := in.interactive()
 	inr := bufio.NewReader(in.reader())
 	for _, p := range m.Setup {
+		if !setupWhenMatches(p.When, cluster) {
+			continue
+		}
 		key := strings.TrimSpace(p.Env)
 		if cluster[key] != "" {
+			if _, err := applySetupChoice(key, cluster[key], p.Choices); err != nil {
+				return err
+			}
 			continue
 		}
 		def := ExpandClusterVars(p.Default, cluster)
@@ -85,6 +91,9 @@ func (in *Installer) applySetup(m *Manifest, cluster map[string]string) error {
 				label = key
 			}
 			hint := def
+			if hint == "" && len(p.Choices) > 0 {
+				hint = strings.Join(p.Choices, "/")
+			}
 			if p.Generate && hint == "" {
 				hint = "generated"
 			}
@@ -110,6 +119,11 @@ func (in *Installer) applySetup(m *Manifest, cluster map[string]string) error {
 				in.logf("generated %s (hidden)", key)
 			}
 		}
+		if canonical, err := applySetupChoice(key, val, p.Choices); err != nil {
+			return err
+		} else if canonical != "" {
+			val = canonical
+		}
 		if val == "" && !p.Optional {
 			return fmt.Errorf("setup %s: required (set FLYNN_PLUGIN_SETUP_%s, pass a TTY, or give setup.default)", key, key)
 		}
@@ -118,4 +132,34 @@ func (in *Installer) applySetup(m *Manifest, cluster map[string]string) error {
 		}
 	}
 	return nil
+}
+
+func setupWhenMatches(when string, cluster map[string]string) bool {
+	when = strings.TrimSpace(when)
+	if when == "" {
+		return true
+	}
+	if strings.HasPrefix(when, "!") {
+		key := strings.TrimSpace(strings.TrimPrefix(when, "!"))
+		return strings.TrimSpace(cluster[key]) == ""
+	}
+	key, want, ok := strings.Cut(when, "=")
+	got := strings.TrimSpace(cluster[strings.TrimSpace(key)])
+	if !ok {
+		return got != ""
+	}
+	return strings.EqualFold(got, strings.TrimSpace(want))
+}
+
+func applySetupChoice(key, val string, choices []string) (string, error) {
+	val = strings.TrimSpace(val)
+	if val == "" || len(choices) == 0 {
+		return val, nil
+	}
+	for _, c := range choices {
+		if strings.EqualFold(val, strings.TrimSpace(c)) {
+			return strings.TrimSpace(c), nil
+		}
+	}
+	return "", fmt.Errorf("setup %s: %q is not one of %s", key, val, strings.Join(choices, ", "))
 }

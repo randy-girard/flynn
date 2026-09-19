@@ -232,10 +232,10 @@ func TestCanManageInternalProcessLimits(t *testing.T) {
 		want  bool
 	}{
 		{"cluster_key", clusterKey, "app-1", true},
-		{"admin_jwt", adminJWT, "app-1", true},
+		{"admin_jwt", adminJWT, "app-1", false},
 		{"nil_tok", nil, "app-1", true},
 		{"app_write", appWrite, "app-1", false},
-		{"app_admin", appAdmin, "app-1", true},
+		{"app_admin", appAdmin, "app-1", false},
 		{"app_admin_other_app", appAdmin, "other", false},
 	}
 	for _, tc := range cases {

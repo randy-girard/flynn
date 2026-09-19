@@ -8,18 +8,21 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
 )
 
 type uninstallStub struct {
-	apps      []*ct.App
-	deleted   []string
-	deleteErr error
-	listErr   error
-	resources map[string][]*ct.Resource
-	resErr    error
+	apps        []*ct.App
+	deleted     []string
+	deleteErr   error
+	removeOnErr bool
+	listErr     error
+	resources   map[string][]*ct.Resource
+	resErr      error
+	getApp      func(id string) (*ct.App, error)
 }
 
 func (s *uninstallStub) AppList() ([]*ct.App, error) {
@@ -29,8 +32,20 @@ func (s *uninstallStub) AppList() ([]*ct.App, error) {
 	return s.apps, nil
 }
 
+func (s *uninstallStub) GetApp(id string) (*ct.App, error) {
+	if s.getApp != nil {
+		return s.getApp(id)
+	}
+	for _, a := range s.apps {
+		if a != nil && (a.ID == id || a.Name == id) {
+			return a, nil
+		}
+	}
+	return nil, ct.ErrNotFound
+}
+
 func (s *uninstallStub) DeleteApp(appID string) (*ct.AppDeletion, error) {
-	if s.deleteErr != nil {
+	if s.deleteErr != nil && !s.removeOnErr {
 		return nil, s.deleteErr
 	}
 	s.deleted = append(s.deleted, appID)
@@ -41,6 +56,9 @@ func (s *uninstallStub) DeleteApp(appID string) (*ct.AppDeletion, error) {
 		}
 	}
 	s.apps = out
+	if s.deleteErr != nil {
+		return nil, s.deleteErr
+	}
 	return &ct.AppDeletion{AppID: appID}, nil
 }
 
@@ -255,6 +273,63 @@ func TestUninstallContinuesWhenHostsUnavailable(t *testing.T) {
 	}
 	if len(stub.deleted) != 1 {
 		t.Fatalf("deleted=%v", stub.deleted)
+	}
+}
+
+func TestUninstallWaitsUntilAppGone(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	n := 0
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		getApp: func(id string) (*ct.App, error) {
+			n++
+			if n < 2 {
+				return app, nil
+			}
+			return nil, ct.ErrNotFound
+		},
+	}
+	oldTimeout, oldPoll := appGoneTimeout, appGonePoll
+	appGoneTimeout = time.Second
+	appGonePoll = time.Millisecond
+	t.Cleanup(func() {
+		appGoneTimeout, appGonePoll = oldTimeout, oldPoll
+	})
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub, Hosts: func() ([]WebhookHost, error) { return nil, nil }}
+	if err := in.Uninstall(UninstallOptions{Name: "widget"}); err != nil {
+		t.Fatal(err)
+	}
+	if n < 2 {
+		t.Fatalf("GetApp calls=%d, want to wait until gone", n)
+	}
+}
+
+func TestUninstallSucceedsWhenDeleteTimesOutButAppGoesAway(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{
+		apps:        []*ct.App{app},
+		deleteErr:   fmt.Errorf("timed out waiting for app deletion"),
+		removeOnErr: true,
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub, Hosts: func() ([]WebhookHost, error) { return nil, nil }}
+	if err := in.Uninstall(UninstallOptions{Name: "widget"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUninstallFailsWhenAppRemainsAfterDeleteError(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{apps: []*ct.App{app}, deleteErr: fmt.Errorf("controller down")}
+	oldTimeout, oldPoll := appGoneTimeout, appGonePoll
+	appGoneTimeout = 20 * time.Millisecond
+	appGonePoll = 5 * time.Millisecond
+	t.Cleanup(func() {
+		appGoneTimeout, appGonePoll = oldTimeout, oldPoll
+	})
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub, Hosts: func() ([]WebhookHost, error) { return nil, nil }}
+	err := in.Uninstall(UninstallOptions{Name: "widget"})
+	if err == nil || !strings.Contains(err.Error(), "controller down") {
+		t.Fatalf("got %v", err)
 	}
 }
 

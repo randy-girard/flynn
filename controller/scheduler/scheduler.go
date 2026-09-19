@@ -1014,7 +1014,7 @@ func (s *Scheduler) stopSurplusOmniJobs(formation *Formation) {
 
 		log.Info(fmt.Sprintf("detected %d surplus omni jobs", len(surplusJobs)), "type", typ)
 		for _, job := range surplusJobs {
-			s.stopJob(job)
+			s.stopJobReason(job, host.JobReasonScaleDown)
 		}
 	}
 }
@@ -1733,7 +1733,8 @@ func (s *Scheduler) handleFormationDiff(f *Formation, diff Processes) {
 	log.Info("formation in incorrect state", "diff", diff)
 	for typ, n := range diff {
 		if n > 0 {
-			log.Info(fmt.Sprintf("starting %d new %s jobs", n, typ))
+			reason := s.jobs.startReason(f.App.ID, f.Release.ID, typ)
+			log.Info(fmt.Sprintf("starting %d new %s jobs", n, typ), "reason", reason)
 			for i := 0; i < n; i++ {
 				job := &Job{
 					ID:        s.generateJobUUID(),
@@ -1744,6 +1745,7 @@ func (s *Scheduler) handleFormationDiff(f *Formation, diff Processes) {
 					StartedAt: time.Now(),
 					State:     JobStatePending,
 					Args:      f.Release.Processes[typ].Args,
+					Reason:    reason,
 				}
 				s.jobs.Add(job)
 
@@ -1755,7 +1757,7 @@ func (s *Scheduler) handleFormationDiff(f *Formation, diff Processes) {
 		} else if n < 0 {
 			log.Info(fmt.Sprintf("stopping %d %s jobs", -n, typ))
 			for i := 0; i < -n; i++ {
-				s.stopJobOfType(f, typ)
+				s.stopJobOfType(f, typ, host.JobReasonScaleDown)
 			}
 		}
 	}
@@ -2631,9 +2633,9 @@ func (s *Scheduler) triggerRectify(key utils.FormationKey) {
 	}
 }
 
-func (s *Scheduler) stopJobOfType(f *Formation, typ string) (err error) {
+func (s *Scheduler) stopJobOfType(f *Formation, typ string, reason string) (err error) {
 	log := s.logger.New("fn", "stopJobOfType", "app.id", f.App.ID, "release.id", f.Release.ID, "job.type", typ)
-	log.Info(fmt.Sprintf("stopping %s job", typ))
+	log.Info(fmt.Sprintf("stopping %s job", typ), "reason", reason)
 
 	defer func() {
 		if err != nil {
@@ -2645,10 +2647,27 @@ func (s *Scheduler) stopJobOfType(f *Formation, typ string) (err error) {
 	if err != nil {
 		return err
 	}
-	return s.stopJob(job)
+	return s.stopJobReason(job, reason)
 }
 
 func (s *Scheduler) stopJob(job *Job) error {
+	return s.stopJobReason(job, "")
+}
+
+type hostJobStopper interface {
+	StopJobWithReason(id, reason string) error
+}
+
+func stopHostJob(client utils.HostClient, id, reason string) error {
+	if strings.TrimSpace(reason) != "" {
+		if c, ok := client.(hostJobStopper); ok {
+			return c.StopJobWithReason(id, reason)
+		}
+	}
+	return client.StopJob(id)
+}
+
+func (s *Scheduler) stopJobReason(job *Job, reason string) error {
 	log := s.logger.New("fn", "stopJob", "job.id", job.ID, "job.type", job.Type, "job.state", job.State)
 	log.Info("stopping job")
 
@@ -2716,7 +2735,7 @@ func (s *Scheduler) stopJob(job *Job) error {
 		}
 
 		log.Info("requesting host to stop job")
-		if err := host.client.StopJob(job.JobID); err != nil {
+		if err := stopHostJob(host.client, job.JobID, reason); err != nil {
 			// when an error happens, we don't know if the job actually
 			// stopped or not, but just log the error instead of retrying
 			// and let the next SyncJobs routine determine if another
@@ -2764,6 +2783,9 @@ func (s *Scheduler) findJobToStop(f *Formation, typ string) (*Job, error) {
 
 func jobConfig(job *Job, hostID string) *host.Job {
 	j := utils.JobConfig(job.Formation.ExpandedFormation, job.Type, hostID, job.ID)
+	if job.Reason != "" {
+		j.Metadata["flynn-controller.reason"] = job.Reason
+	}
 	j.Config.Volumes = make([]host.VolumeBinding, len(job.Volumes))
 	for i, vol := range job.Volumes {
 		j.Config.Volumes[i] = host.VolumeBinding{
@@ -2829,6 +2851,7 @@ func (s *Scheduler) restartJob(job *Job) {
 		State:     JobStatePending,
 		Restarts:  restarts + 1,
 		Args:      job.Args,
+		Reason:    host.JobReasonRestart,
 	}
 	s.jobs.Add(newJob)
 

@@ -20,14 +20,7 @@ func hideInternalToken(ctx context.Context) bool {
 }
 
 func hideInternalLimits(ctx context.Context, app *ct.App) bool {
-	if app != nil && app.System() {
-		return false
-	}
-	tok := authz.TokenFromContext(ctx)
-	if app == nil {
-		return !authz.CanManageInternalProcessLimits(tok, "")
-	}
-	return !authz.CanManageInternalProcessLimits(tok, app.ID) && !authz.CanManageInternalProcessLimits(tok, app.Name)
+	return hideInternal(ctx, app)
 }
 
 func preserveInternalProcessTypes(dst map[string]ct.ProcessType, prev *ct.Release) map[string]ct.ProcessType {
@@ -279,6 +272,16 @@ func stripInternalProcessCounts(in map[string]int) {
 			delete(in, k)
 		}
 	}
+}
+
+// lockInternalProcessCounts drops attempted slugbuilder/dockerbuilder/slugrunner
+// scale values and restores whatever the existing formation already had.
+func lockInternalProcessCounts(existing, incoming map[string]int) map[string]int {
+	if incoming == nil {
+		return incoming
+	}
+	stripInternalProcessCounts(incoming)
+	return preserveInternalProcessCounts(incoming, existing)
 }
 
 func logLineInternalProcess(raw []byte) bool {

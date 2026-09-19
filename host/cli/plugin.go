@@ -98,6 +98,17 @@ Examples:
     $ flynn-host plugin:list --known
 `
 
+const pluginCredentialsUsage = `
+usage: flynn-host plugin:credentials
+
+Manage GitHub credentials for plugin releases.
+
+Commands:
+  set      Store a GitHub token for plugin releases
+  unset    Remove stored GitHub plugin credentials
+  show     Show whether GitHub plugin credentials are set
+`
+
 const pluginCredentialsSetUsage = `
 usage: flynn-host plugin:credentials-set github [--token-file=FILE] [--api=URL]
 
@@ -154,6 +165,7 @@ func init() {
 	Register("plugin:update", runPluginUpdate, pluginUpdateUsage)
 	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
 	Register("plugin:list", runPluginList, pluginListUsage)
+	Register("plugin:credentials", runPluginCredentials, pluginCredentialsUsage)
 	Register("plugin:credentials-set", runPluginCredentialsSet, pluginCredentialsSetUsage)
 	Register("plugin:credentials-unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
 	Register("plugin:credentials-show", runPluginCredentialsShow, pluginCredentialsShowUsage)
@@ -185,6 +197,11 @@ func runPluginInstall(args *docopt.Args) error {
 		Rebuild:   args.Bool["--rebuild"],
 		AutoTLS:   args.Bool["--auto-tls"],
 	})
+}
+
+func runPluginCredentials(_ *docopt.Args) error {
+	fmt.Print(FormatHelp("plugin:credentials"))
+	return nil
 }
 
 func runPluginUpdate(args *docopt.Args) error {

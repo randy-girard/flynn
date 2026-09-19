@@ -334,6 +334,48 @@ func (m *Mux) Follow(r io.ReadCloser, buffer string, msgID logagg.MsgID, config 
 	return s
 }
 
+// Write emits a single log line for an app (used for Flynn lifecycle messages).
+// It does not track job file descriptors; callers must not rely on it to keep
+// a job's WaitGroup open.
+func (m *Mux) Write(msgID logagg.MsgID, config *Config, line string) {
+	if m == nil || config == nil {
+		return
+	}
+	line = strings.TrimRight(line, "\n")
+	if line == "" || strings.TrimSpace(config.AppID) == "" {
+		return
+	}
+	hdr := &rfc5424.Header{
+		Hostname: []byte(config.HostID),
+		AppName:  []byte(config.AppID),
+		MsgID:    []byte(msgID),
+		Severity: 6,
+		Facility: 23,
+	}
+	if config.JobType != "" {
+		hdr.ProcID = []byte(config.JobType + "." + config.JobID)
+	} else {
+		hdr.ProcID = []byte(config.JobID)
+	}
+	msg := rfc5424.NewMessage(hdr, []byte(line))
+	cursor := &utils.HostCursor{
+		Time: msg.Timestamp,
+		Seq:  uint64(atomic.AddUint32(&m.msgSeq, 1)),
+	}
+	sd := &rfc5424.StructuredData{
+		ID: []byte("flynn"),
+		Params: []rfc5424.StructuredDataParam{
+			{Name: []byte("seq"), Value: []byte(strconv.FormatUint(cursor.Seq, 10))},
+		},
+	}
+	var sdBuf bytes.Buffer
+	sd.Encode(&sdBuf)
+	msg.StructuredData = sdBuf.Bytes()
+	l := m.appLog(config.AppID)
+	l.Write(message{cursor, msg})
+	l.Release()
+}
+
 type LogStream struct {
 	m      *Mux
 	log    io.Closer

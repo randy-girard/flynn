@@ -10,6 +10,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/pprof"
 	"github.com/randy-girard/flynn/pkg/sse"
 	"github.com/randy-girard/flynn/pkg/status"
+	"github.com/randy-girard/flynn/router/proxy"
 	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 )
@@ -25,6 +26,7 @@ func apiHandler(rtr *Router) http.Handler {
 	r.HandlerFunc("GET", status.Path, status.HealthyHandler.ServeHTTP)
 
 	r.GET("/events", httphelper.WrapHandler(api.StreamEvents))
+	r.GET("/metrics", httphelper.WrapHandler(api.GetMetrics))
 
 	r.HandlerFunc("GET", "/debug/*path", pprof.Handler.ServeHTTP)
 
@@ -75,4 +77,8 @@ func (api *API) StreamEvents(ctx context.Context, w http.ResponseWriter, req *ht
 	go sendEvents(httpEvents)
 	go sendEvents(tcpEvents)
 	sse.ServeStream(w, sseEvents, log)
+}
+
+func (api *API) GetMetrics(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	httphelper.JSON(w, 200, proxy.Snapshot())
 }

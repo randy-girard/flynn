@@ -129,9 +129,11 @@
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before resource add (default: redis
 #                        mysql mongodb kafka clickhouse dashboard www
-#                        discovery). mysql resolves to the mariadb checkout via
-#                        flynn-plugin.json. Restore does not install again;
-#                        plugins.json + postgres already list and restore them.
+#                        discovery otel scheduler). mysql resolves to the
+#                        mariadb checkout via flynn-plugin.json. Restore does
+#                        not install again; plugins.json + postgres already
+#                        list and restore them. Scheduler interval fire is
+#                        probed after the uploaded apps exist (CLI step).
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
@@ -211,7 +213,7 @@ RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
 DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
@@ -2715,6 +2717,10 @@ otel_smoke_wanted() {
   [[ " ${PLUGIN_SMOKE_APPS} " == *" otel "* || " ${PLUGIN_SMOKE_APPS} " == *" opentelemetry "* ]]
 }
 
+scheduler_smoke_wanted() {
+  [[ " ${PLUGIN_SMOKE_APPS} " == *" scheduler "* ]]
+}
+
 otel_flynnbr0_ready() {
   node_root_script node1 <<'EOF'
 ip -4 -o addr show flynnbr0 2>/dev/null | awk '{print $4}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/'
@@ -2833,6 +2839,94 @@ probe_otel_export() {
     return 1
   fi
   echo "otel plugin posted metrics to dummy collector ${OTEL_SMOKE_ENDPOINT}"
+}
+
+# scheduler info JSON with a successful interval fire (runner one-off started).
+scheduler_job_fired() {
+  local app=$1 id=$2
+  local out
+  out="$(flynn1 -a "${app}" scheduler info "${id}" 2>/dev/null)" || return 1
+  printf '%s' "${out}" | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+start = raw.find("{")
+if start < 0:
+    sys.exit(1)
+j = json.loads(raw[start:])
+if not j.get("last_run_at"):
+    sys.exit(1)
+if not j.get("last_job_id"):
+    sys.exit(1)
+if j.get("last_error"):
+    sys.exit(1)
+'
+}
+
+# Schedule an interval job on an uploaded app and wait for the runner to fire.
+# Plugins install before deploy, so this cannot run at plugin-install time.
+probe_scheduler_interval_job() {
+  local label=$1
+  local app="${APP_NAME}"
+  local name="smoke-interval"
+  local out rc id snippet attempt
+
+  if ! scheduler_smoke_wanted; then
+    return 0
+  fi
+
+  cli_probe "${label}" "cli-help-scheduler" "scheduler" \
+    flynn1 help || return 1
+  cli_probe "${label}" "cli-help-scheduler-doc" "--every" \
+    flynn1 help scheduler || return 1
+
+  id=""
+  out=""
+  rc=0
+  snippet=""
+  for attempt in 1 2 3 4 5 6; do
+    rc=0
+    out="$(flynn1 -a "${app}" scheduler add --command "echo scheduler-smoke" --type web --every 10s --name "${name}" 2>&1)" || rc=$?
+    snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    id="$(printf '%s' "${out}" | grep -Eo '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)"
+    if [[ "${rc}" -eq 0 && -n "${id}" ]]; then
+      break
+    fi
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+      echo "cli ${label} cli-scheduler-add: retry ${attempt}/6 (${snippet})"
+      sleep 2
+      continue
+    fi
+    break
+  done
+  if [[ "${rc}" -ne 0 || -z "${id}" ]]; then
+    record_check "${label}" "cli-scheduler-add" "FAIL" "rc=${rc} ${snippet}"
+    echo "cli ${label} cli-scheduler-add: FAIL rc=${rc} ${out}" >&2
+    return 1
+  fi
+  record_check "${label}" "cli-scheduler-add" "PASS" "id=${id} ${snippet}"
+  echo "cli ${label} cli-scheduler-add: PASS id=${id}"
+
+  if ! cli_probe "${label}" "cli-scheduler-list" "${name}|${id:0:8}" \
+    flynn1 -a "${app}" scheduler list; then
+    flynn1 -a "${app}" scheduler remove "${id}" >/dev/null || true
+    return 1
+  fi
+
+  if ! wait_for "scheduler interval job ${id} fire ${label}" 90 scheduler_job_fired "${app}" "${id}"; then
+    out="$(flynn1 -a "${app}" scheduler info "${id}" 2>&1 || true)"
+    record_check "${label}" "cli-scheduler-run" "FAIL" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-scheduler-run: FAIL ${out}" >&2
+    flynn1 -a "${app}" scheduler remove "${id}" >/dev/null || true
+    return 1
+  fi
+  out="$(flynn1 -a "${app}" scheduler info "${id}" 2>&1)" || true
+  snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+  record_check "${label}" "cli-scheduler-run" "PASS" "${snippet}"
+  echo "cli ${label} cli-scheduler-run: PASS"
+
+  cli_probe "${label}" "cli-scheduler-remove" "removed" \
+    flynn1 -a "${app}" scheduler remove "${id}" || return 1
+  return 0
 }
 
 # Build the same tree GitHub fetchGitHub unpacks: flynn-plugin.json, dist/
@@ -4119,6 +4213,7 @@ step_cli_functions() {
     flynn1 -a "${APP_NAME}" log -n 20 || failed=1
 
   cli_run_job "${label}" "cli-run" "${APP_NAME}" "smoke-cli" echo smoke-cli || failed=1
+  probe_scheduler_interval_job "${label}" || failed=1
 
   # Custom .buildpacks app: slugrunner + heroku-buildpack-inline compile stamp.
   cli_probe "${label}" "buildpack-cli-info" "${BUILDPACK_APP_NAME}|Git URL|Web URL" \

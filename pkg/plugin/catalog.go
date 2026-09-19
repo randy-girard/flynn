@@ -14,8 +14,8 @@ type catalogSource interface {
 }
 
 // Catalog is the cluster's installed plugin CLI commands published on the
-// user flynn CLI. Resource-provider plugins are included; kind: app system
-// plugins are not unless cli.user is true.
+// user flynn CLI. Resource-provider and scheduler plugins are included;
+// kind: app system plugins are not unless cli.user is true.
 type Catalog struct {
 	Commands []CLI `json:"commands"`
 }

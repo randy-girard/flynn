@@ -132,6 +132,7 @@ Commands:
   otel                            List OpenTelemetry exporters
   otel:add                        Add an OpenTelemetry exporter
   otel:remove                     Remove an OpenTelemetry exporter
+  plugin:credentials              Manage GitHub credentials for plugin releases
   plugin:credentials-set          Store a GitHub token for plugin releases
   plugin:credentials-show         Show whether GitHub plugin credentials are set
   plugin:credentials-unset        Remove stored GitHub plugin credentials
@@ -180,10 +181,9 @@ See 'flynn-host help <command>' for more information on a specific command.
 		if len(cmdArgs) == 0 { // `flynn-host help`
 			fmt.Println(usage)
 			return
-		} else { // `flynn-host help <command>`
-			cmd = cmdArgs[0]
-			cmdArgs = []string{"--help"}
 		}
+		cmd = cmdArgs[0]
+		cmdArgs = append(append([]string{}, cmdArgs[1:]...), "--help")
 	}
 
 	if cmd == "daemon" {
@@ -223,7 +223,9 @@ See 'flynn-host help <command>' for more information on a specific command.
 	}
 
 	cmd, cmdArgs, from := cli.ResolveCommand(cmd, cmdArgs)
-	cli.PrintCommandRename(from, cmd)
+	if !cli.WantsHelp(cmdArgs) {
+		cli.PrintCommandRename(from, cmd)
+	}
 
 	if err := cli.Run(cmd, cmdArgs); err != nil {
 		if err == cli.ErrInvalidCommand {
@@ -420,6 +422,7 @@ func runDaemon(args *docopt.Args) {
 		webhookDisp.Shutdown()
 	})
 	state.webhookDispatcher = webhookDisp
+	state.logMux = mux
 
 	host := &Host{
 		id:  hostID,
@@ -552,6 +555,7 @@ func runDaemon(args *docopt.Args) {
 	host.ServeHTTP()
 	webhookDisp.Send("D10", "Daemon started", "info", "", nil, nil)
 	host.startDiskWatch()
+	host.startContainerMetricsLogs()
 
 	if controlFD > 0 {
 		// now that we are serving requests, send an "ok" message to the parent

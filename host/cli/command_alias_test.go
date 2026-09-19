@@ -34,6 +34,14 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	if name != "plugin:route" || from != "plugin dashboard route" || !reflect.DeepEqual(args, []string{"dashboard", "add", "http", "--auto-tls"}) {
 		t.Fatalf("route got %q %q from=%q", name, args, from)
 	}
+	name, args, from = ResolveCommand("plugin", []string{"credentials", "--help"})
+	if name != "plugin:credentials" || from != "plugin credentials" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("credentials help got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin", []string{"--help"})
+	if name != "plugin:list" || from != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("plugin help got %q %q from=%q", name, args, from)
+	}
 }
 
 func TestResolveCommandLogSinkAlias(t *testing.T) {
@@ -65,6 +73,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
 		"plugin:install", "plugin:list", "plugin:update", "plugin:uninstall",
+		"plugin:credentials", "plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:route",
 		"tags", "tags:set", "tags:del",
@@ -74,6 +83,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"domain", "domain:apex",
 		"runtime-profile", "runtime-profile:create", "runtime-profile:update",
 		"runtime-profile:remove", "runtime-profile:allow-custom",
+		"events", "events:visible",
 		"route:add",
 		"firewall", "firewall:sync", "firewall:peer-add", "firewall:peer-remove",
 		"firewall:expose", "firewall:unexpose",

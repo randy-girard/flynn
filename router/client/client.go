@@ -52,6 +52,8 @@ func NewWithAddr(addr string) Client {
 type Client interface {
 	// StreamEvents streams router events with the given options
 	StreamEvents(opts *router.StreamEventsOptions, output chan *router.StreamEvent) (stream.Stream, error)
+	// GetMetrics returns recent HTTP request latency percentiles per backend service.
+	GetMetrics() ([]router.ServiceMetrics, error)
 }
 
 func (c *client) StreamEvents(opts *router.StreamEventsOptions, output chan *router.StreamEvent) (stream.Stream, error) {
@@ -65,4 +67,13 @@ func (c *client) StreamEvents(opts *router.StreamEventsOptions, output chan *rou
 		types[i] = string(t)
 	}
 	return c.ResumingStream("GET", "/events?types="+strings.Join(types, ","), output)
+}
+
+func (c *client) GetMetrics() ([]router.ServiceMetrics, error) {
+	var out []router.ServiceMetrics
+	err := c.Get("/metrics", &out)
+	if out == nil {
+		out = []router.ServiceMetrics{}
+	}
+	return out, err
 }

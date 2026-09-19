@@ -761,6 +761,10 @@ func (c *Client) ListEvents(opts ct.ListEventsOptions) ([]*ct.Event, error) {
 	return events, nil
 }
 
+func (c *Client) CreateSchedulerEvent(appID string, ev *ct.SchedulerEvent) error {
+	return c.Post(fmt.Sprintf("/apps/%s/scheduler-events", appID), ev, ev)
+}
+
 func (c *Client) GetEvent(id int64) (*ct.Event, error) {
 	var event *ct.Event
 	return event, c.Get(fmt.Sprintf("/events/%d", id), &event)

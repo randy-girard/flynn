@@ -1,7 +1,6 @@
 package logaggregator
 
 import (
-	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -36,8 +35,7 @@ func (o *LogOpts) EncodedQuery() string {
 		}
 		query.Set("stream_types", strings.Join(streamTypes, ","))
 	} else {
-		// default to just stdout / stderr
-		query.Set("stream_types", fmt.Sprintf("%s,%s", StreamTypeStdout, StreamTypeStderr))
+		query.Set("stream_types", DefaultStreamTypesQuery())
 	}
 	return query.Encode()
 }
@@ -48,8 +46,24 @@ const (
 	StreamTypeStdout  StreamType = "stdout"
 	StreamTypeStderr  StreamType = "stderr"
 	StreamTypeInit    StreamType = "init"
+	StreamTypeSystem  StreamType = "system"
 	StreamTypeUnknown StreamType = "unknown"
 )
+
+// DefaultStreamTypes is what `flynn log` and the dashboard show without --init:
+// process stdout/stderr plus Flynn lifecycle lines (start, restart, scale, …).
+func DefaultStreamTypes() []StreamType {
+	return []StreamType{StreamTypeStdout, StreamTypeStderr, StreamTypeSystem}
+}
+
+func DefaultStreamTypesQuery() string {
+	parts := DefaultStreamTypes()
+	s := make([]string, len(parts))
+	for i, t := range parts {
+		s[i] = string(t)
+	}
+	return strings.Join(s, ",")
+}
 
 type MsgID string
 
@@ -57,4 +71,5 @@ const (
 	MsgIDStdout MsgID = "ID1"
 	MsgIDStderr MsgID = "ID2"
 	MsgIDInit   MsgID = "ID3"
+	MsgIDSystem MsgID = "ID4"
 )

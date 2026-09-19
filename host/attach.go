@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"syscall"
 
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
@@ -150,7 +151,12 @@ func (h *attachHandler) attach(req *host.AttachReq, conn io.ReadWriteCloser) {
 		for {
 			frameType, err := r.ReadByte()
 			if err != nil {
-				// TODO: signal close to attach and close all connections
+				if req.Flags&host.AttachFlagStdin != 0 {
+					log.Info("attach client disconnected, sending SIGTERM")
+					if sigErr := h.backend.Signal(req.JobID, int(syscall.SIGTERM)); sigErr != nil {
+						log.Error("error signalling job after attach disconnect", "err", sigErr)
+					}
+				}
 				return
 			}
 			switch frameType {

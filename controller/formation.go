@@ -36,11 +36,12 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 	formation.AppID = app.ID
 	formation.ReleaseID = release.ID
 
-	if hideInternal(ctx, app) && formation.Processes != nil {
-		stripInternalProcessCounts(formation.Processes)
-		if existing, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
-			formation.Processes = preserveInternalProcessCounts(formation.Processes, existing.Processes)
+	if formation.Processes != nil {
+		var existing map[string]int
+		if f, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
+			existing = f.Processes
 		}
+		formation.Processes = lockInternalProcessCounts(existing, formation.Processes)
 	}
 
 	if err = schema.Validate(formation); err != nil {
@@ -77,12 +78,13 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	req.AppID = app.ID
 	req.ReleaseID = release.ID
 
-	if hideInternal(ctx, app) && req.NewProcesses != nil {
-		stripInternalProcessCounts(*req.NewProcesses)
-		if existing, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
-			merged := preserveInternalProcessCounts(*req.NewProcesses, existing.Processes)
-			req.NewProcesses = &merged
+	if req.NewProcesses != nil {
+		var existing map[string]int
+		if f, err := c.formationRepo.Get(app.ID, release.ID); err == nil {
+			existing = f.Processes
 		}
+		merged := lockInternalProcessCounts(existing, *req.NewProcesses)
+		req.NewProcesses = &merged
 	}
 
 	if err := schema.Validate(req); err != nil {

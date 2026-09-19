@@ -54,6 +54,19 @@ func TestPreserveInternalProcessCounts(t *testing.T) {
 	}
 }
 
+func TestLockInternalProcessCounts(t *testing.T) {
+	got := lockInternalProcessCounts(
+		map[string]int{"web": 2, "slugbuilder": 0},
+		map[string]int{"web": 5, "slugbuilder": 9},
+	)
+	if got["web"] != 5 || got["slugbuilder"] != 0 {
+		t.Fatalf("got %v", got)
+	}
+	if lockInternalProcessCounts(nil, nil) != nil {
+		t.Fatal("nil incoming must stay nil")
+	}
+}
+
 func TestLogLineInternalProcess(t *testing.T) {
 	if !logLineInternalProcess([]byte(`{"process_type":"slugbuilder","msg":"build"}`)) {
 		t.Fatal("slugbuilder log line must be hidden")
@@ -157,8 +170,8 @@ func TestPreserveInternalProcessTypes(t *testing.T) {
 func TestHideInternalLimits(t *testing.T) {
 	app := &ct.App{ID: "app-1", Name: "demo", Meta: map[string]string{}}
 	jwt := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{Scopes: []string{"cluster:admin"}})
-	if hideInternalLimits(jwt, app) {
-		t.Fatal("cluster admins must see builder limits on the release")
+	if !hideInternalLimits(jwt, app) {
+		t.Fatal("dashboard JWTs must not see builder limits on the release")
 	}
 	if !hideInternal(jwt, app) {
 		t.Fatal("cluster admins still must not see builder jobs")
@@ -172,8 +185,12 @@ func TestHideInternalLimits(t *testing.T) {
 	admin := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{
 		AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}},
 	})
-	if hideInternalLimits(admin, app) {
-		t.Fatal("app:admin must see builder limits")
+	if !hideInternalLimits(admin, app) {
+		t.Fatal("app:admin must not see builder limits")
+	}
+	key := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{ClusterKey: true})
+	if hideInternalLimits(key, app) {
+		t.Fatal("cluster key must still see builder limits")
 	}
 }
 

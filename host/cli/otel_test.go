@@ -80,3 +80,22 @@ func TestParseOTELHeaders(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestOTELAuthHeaders(t *testing.T) {
+	args := parseHostCLI(t, "otel:add", []string{"otel:add", "--auth", "bearer", "--token", "tok", "https://otlp.example/otlp"})
+	h, err := otelAuthHeaders(args)
+	if err != nil || h["Authorization"] != "Bearer tok" {
+		t.Fatalf("%v %v", h, err)
+	}
+	args = parseHostCLI(t, "otel:add", []string{"otel:add", "--username", "user", "--password", "pass", "https://otlp.example/otlp"})
+	h, err = otelAuthHeaders(args)
+	if err != nil || h["Authorization"] != "Basic dXNlcjpwYXNz" {
+		t.Fatalf("inferred basic: %v %v", h, err)
+	}
+	if otelAuthKind(map[string]string{"Authorization": "Bearer x"}) != "bearer" {
+		t.Fatal("kind bearer")
+	}
+	if otelAuthKind(nil) != "none" {
+		t.Fatal("kind none")
+	}
+}

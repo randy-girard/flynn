@@ -188,10 +188,11 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	hostID := client.ID()
 	id := cluster.GenerateJobID(hostID, uuid)
 	app := c.getApp(ctx)
+	procType := ct.NewJobProcessType(newJob, attach)
 	env := make(map[string]string, len(entrypoint.Env)+len(release.Env)+len(newJob.Env)+4)
 	env["FLYNN_APP_ID"] = app.ID
 	env["FLYNN_RELEASE_ID"] = release.ID
-	env["FLYNN_PROCESS_TYPE"] = ""
+	env["FLYNN_PROCESS_TYPE"] = procType
 	env["FLYNN_JOB_ID"] = id
 	for k, v := range entrypoint.Env {
 		env[k] = v
@@ -204,7 +205,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	for k, v := range newJob.Env {
 		env[k] = v
 	}
-	metadata := make(map[string]string, len(app.Meta)+len(newJob.Meta)+3)
+	metadata := make(map[string]string, len(app.Meta)+len(newJob.Meta)+4)
 	for k, v := range app.Meta {
 		metadata[k] = v
 	}
@@ -214,6 +215,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	metadata["flynn-controller.app"] = app.ID
 	metadata["flynn-controller.app_name"] = app.Name
 	metadata["flynn-controller.release"] = release.ID
+	metadata["flynn-controller.type"] = procType
 	job := &host.Job{
 		ID:       id,
 		Metadata: metadata,
@@ -306,6 +308,9 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		// that we're done and should clean up.
 		<-done
 
+		// Closing the console / attach client must stop the job so a TTY
+		// `/bin/sh` does not keep running after the UI disconnects.
+		_ = client.StopJob(job.ID)
 		return
 	} else {
 		httphelper.JSON(w, 200, &ct.Job{
@@ -313,6 +318,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 			UUID:      uuid,
 			HostID:    hostID,
 			ReleaseID: newJob.ReleaseID,
+			Type:      procType,
 			Args:      newJob.Args,
 		})
 	}

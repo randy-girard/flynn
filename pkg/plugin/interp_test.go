@@ -23,6 +23,18 @@ func TestInterpolateInsertsEnvOnce(t *testing.T) {
 	}
 }
 
+func TestInterpolateAppName(t *testing.T) {
+	in := Interp{AppName: "demo", Resource: "scheduler"}
+	got, err := Interpolate("${app}", in)
+	if err != nil || got != "demo" {
+		t.Fatalf("app=%q err=%v", got, err)
+	}
+	got, err = Interpolate("/bin/scheduler-cli --app ${app}", in)
+	if err != nil || got != "/bin/scheduler-cli --app demo" {
+		t.Fatalf("argv=%q err=%v", got, err)
+	}
+}
+
 func TestInterpolateFallbackWhenEnvEmpty(t *testing.T) {
 	in := Interp{App: map[string]string{}, Resource: "redis-xyz"}
 	got, err := Interpolate("${app.REDIS_HOST|leader.${resource}.discoverd}", in)
@@ -54,6 +66,9 @@ func TestCLIUserVisible(t *testing.T) {
 	}
 	if !c.UserVisible("") {
 		t.Fatal("legacy plugins without kind stay on the user flynn CLI")
+	}
+	if !c.UserVisible(KindScheduler) {
+		t.Fatal("scheduler CLI is user-visible")
 	}
 	if c.UserVisible(KindApp) {
 		t.Fatal("kind: app CLI is not user-visible by default")

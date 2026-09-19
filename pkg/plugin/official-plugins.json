@@ -56,6 +56,12 @@
       "kind": "app",
       "repo": "flynn-plugin-otel",
       "description": "Forward cluster metrics to an OpenTelemetry collector (OTLP/HTTP)."
+    },
+    {
+      "name": "scheduler",
+      "kind": "scheduler",
+      "repo": "flynn-plugin-scheduler",
+      "description": "Cron and interval jobs for apps. Manage with flynn scheduler."
     }
   ]
 }

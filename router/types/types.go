@@ -285,3 +285,14 @@ type StreamEvent struct {
 type StreamEventsOptions struct {
 	EventTypes []EventType
 }
+
+// ServiceMetrics is a snapshot of recent HTTP request latency for one
+// discoverd service the router is proxying.
+type ServiceMetrics struct {
+	Service   string  `json:"service"`
+	Requests  uint64  `json:"requests"`
+	Errors    uint64  `json:"errors"`
+	P50Millis float64 `json:"p50_ms"`
+	P95Millis float64 `json:"p95_ms"`
+	P99Millis float64 `json:"p99_ms"`
+}

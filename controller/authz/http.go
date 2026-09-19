@@ -100,8 +100,9 @@ func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
 
 // HideInternalProcesses is true when a user-app API response must omit
 // git-deploy internals (slugbuilder/dockerbuilder/slugrunner) from jobs,
-// logs, formations, and metrics. The cluster controller key still sees
-// them. Dashboard JWTs do not; operators inspect those jobs with flynn-host.
+// logs, formations, metrics, and release process maps. The cluster
+// controller key still sees them. Dashboard JWTs do not; operators inspect
+// those jobs with flynn-host and set builder limits with `flynn limit:set`.
 func HideInternalProcesses(tok *authorizer.Token, systemApp bool) bool {
 	if systemApp {
 		return false
@@ -114,19 +115,10 @@ func HideInternalProcesses(tok *authorizer.Token, systemApp bool) bool {
 
 // CanManageInternalProcessLimits reports whether tok may see and change
 // slugbuilder/dockerbuilder/slugrunner resource limits on a user app.
-// Cluster admins and collaborators granted app:admin (or *) may; ordinary
-// app:read/write/deploy grants may not.
+// Only the cluster controller key (flynn CLI / flynn-host / gitreceive) may;
+// dashboard JWTs, including cluster:admin and app:admin, may not.
 func CanManageInternalProcessLimits(tok *authorizer.Token, appID string) bool {
-	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
-		return true
-	}
-	for _, p := range permissionsForApp(tok, appID) {
-		switch p {
-		case "*", "cluster:admin", "app:admin":
-			return true
-		}
-	}
-	return false
+	return tok == nil || tok.ClusterKey
 }
 
 // platformAppNames are bootstrap/system apps addressed by name in the URL.

@@ -502,49 +502,120 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 	if err != nil && err != controller.ErrNotFound {
 		return fmt.Errorf("list resources for %s: %w", app.Name, err)
 	}
+	aliases := providerAliases(in.Client)
+	return applyProvisionedResources(existing, aliases, m.Resources, cluster, func(name string) (*ct.Resource, error) {
+		in.logf("provisioning %s resource for %s", name, app.Name)
+		return in.Client.ProvisionResource(&ct.ResourceReq{
+			ProviderID: name,
+			Apps:       []string{app.ID},
+		})
+	}, func(name string) {
+		in.logf("resource %s already attached to %s", name, app.Name)
+	})
+}
+
+// applyProvisionedResources attaches missing providers. A leftover DATABASE_URL
+// in cluster env is not proof a resource is still attached: uninstall can drop
+// the Postgres role while PreservePreviousEnv keeps the dead URL.
+func applyProvisionedResources(
+	existing []*ct.Resource,
+	aliases map[string]string,
+	wanted []string,
+	cluster map[string]string,
+	provision func(name string) (*ct.Resource, error),
+	already func(name string),
+) error {
 	have := map[string]bool{}
 	for _, res := range existing {
-		if res.ProviderID != "" {
-			have[res.ProviderID] = true
+		if res == nil {
+			continue
 		}
-		for k, v := range res.Env {
-			if v != "" && cluster[k] == "" {
-				cluster[k] = v
-			}
+		for _, key := range resourceProviderKeys(res) {
+			have[key] = true
 		}
+		mergeResourceEnv(cluster, res)
 	}
-	if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
-		for k, v := range prev.Env {
-			if v != "" && cluster[k] == "" {
-				cluster[k] = v
-			}
-		}
-	}
-	for _, name := range m.Resources {
+	for _, name := range wanted {
 		name = strings.TrimSpace(name)
 		if name == "" {
 			continue
 		}
-		if have[name] || cluster["DATABASE_URL"] != "" && strings.EqualFold(name, "postgres") {
-			in.logf("resource %s already attached to %s", name, app.Name)
+		if providerResourceAttached(have, name, aliases) {
+			if already != nil {
+				already(name)
+			}
 			continue
 		}
-		in.logf("provisioning %s resource for %s", name, app.Name)
-		res, err := in.Client.ProvisionResource(&ct.ResourceReq{
-			ProviderID: name,
-			Apps:       []string{app.ID},
-		})
+		if provision == nil {
+			return fmt.Errorf("provision %s: missing provisioner", name)
+		}
+		res, err := provision(name)
 		if err != nil {
 			return fmt.Errorf("provision %s: %w", name, err)
 		}
-		have[name] = true
-		for k, v := range res.Env {
-			if v != "" {
-				cluster[k] = v
-			}
+		for _, key := range resourceProviderKeys(res) {
+			have[key] = true
 		}
+		have[name] = true
+		mergeResourceEnv(cluster, res)
 	}
 	return nil
+}
+
+func mergeResourceEnv(cluster map[string]string, res *ct.Resource) {
+	if cluster == nil || res == nil {
+		return
+	}
+	for k, v := range res.Env {
+		if v != "" {
+			cluster[k] = v
+		}
+	}
+}
+
+func providerAliases(client providerClient) map[string]string {
+	out := map[string]string{}
+	if client == nil {
+		return out
+	}
+	list, err := client.ProviderList()
+	if err != nil {
+		return out
+	}
+	for _, p := range list {
+		if p == nil || strings.TrimSpace(p.Name) == "" {
+			continue
+		}
+		out[p.Name] = p.ID
+		if p.ID != "" {
+			out[p.ID] = p.ID
+		}
+	}
+	return out
+}
+
+func resourceProviderKeys(res *ct.Resource) []string {
+	if res == nil {
+		return nil
+	}
+	var keys []string
+	if res.ProviderID != "" {
+		keys = append(keys, res.ProviderID)
+	}
+	if v := strings.TrimSpace(res.Env["FLYNN_POSTGRES"]); v != "" {
+		keys = append(keys, v)
+	}
+	return keys
+}
+
+func providerResourceAttached(have map[string]bool, name string, aliases map[string]string) bool {
+	if have[name] {
+		return true
+	}
+	if id := aliases[name]; id != "" && have[id] {
+		return true
+	}
+	return false
 }
 
 func (in *Installer) routeAPI() RouteClient {

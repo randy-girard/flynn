@@ -207,6 +207,21 @@ func (s *LogAggregatorTestSuite) TestNewMessageFromSyslog(c *C) {
 	c.Assert(m.Timestamp, Equals, timestamp)
 }
 
+func (s *LogAggregatorTestSuite) TestNewMessageFromSyslogSystemSource(c *C) {
+	m := NewMessageFromSyslog(rfc5424.NewMessage(
+		&rfc5424.Header{
+			Hostname: []byte("host1"),
+			ProcID:   []byte("web.host1-abc"),
+			MsgID:    []byte("ID4"),
+		},
+		[]byte("Starting web process"),
+	))
+	c.Assert(m.Source, Equals, "flynn")
+	c.Assert(m.Stream, Equals, logagg.StreamTypeSystem)
+	c.Assert(m.Msg, Equals, "Starting web process")
+	c.Assert(m.ProcessType, Equals, "web")
+}
+
 func (s *LogAggregatorTestSuite) TestMessageMarshalJSON(c *C) {
 	timestamp, err := time.Parse(time.RFC3339Nano, "2009-11-10T23:00:00.123456Z")
 	c.Assert(err, IsNil)

@@ -60,6 +60,9 @@ type ReverseProxy struct {
 	Logger log15.Logger
 
 	Error503Page []byte
+
+	// Service is the discoverd service this proxy fronts; used for latency metrics.
+	Service string
 }
 
 // ReverseProxyConfig is used to initialise a ReverseProxy struct
@@ -70,6 +73,8 @@ type ReverseProxyConfig struct {
 	DisableKeepAlives bool
 	RequestTracker    RequestTracker
 	Logger            log15.Logger
+	// Service is the discoverd service this proxy fronts; used for latency metrics.
+	Service string
 }
 
 type RequestTracker interface {
@@ -92,6 +97,7 @@ func NewReverseProxy(c ReverseProxyConfig) *ReverseProxy {
 		FlushInterval:  10 * time.Millisecond,
 		RequestTracker: c.RequestTracker,
 		Logger:         c.Logger,
+		Service:        c.Service,
 	}
 }
 
@@ -109,11 +115,13 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyRequestTracker, p.RequestTracker))
 
 	res, trace, err := transport.RoundTrip(prepareRequest(req), l)
 	if err != nil {
-		p.errResponse(err, rw)
+		status := p.errResponse(err, rw)
+		Observe(p.Service, time.Since(start), status)
 		return
 	}
 	defer res.Body.Close()
@@ -122,6 +130,7 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 	prepareResponseHeaders(res)
 	p.writeResponse(rw, res)
+	Observe(p.Service, time.Since(start), res.StatusCode)
 	if location := res.Header.Get("Location"); location != "" {
 		l = l.New("location", location)
 	}

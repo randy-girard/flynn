@@ -227,7 +227,7 @@ func (s *S) TestRunJobDetached(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(res.ID, Not(Equals), "")
 	c.Assert(res.ReleaseID, Equals, release.ID)
-	c.Assert(res.Type, Equals, "")
+	c.Assert(res.Type, Equals, "runner")
 	c.Assert(res.Args, DeepEquals, args)
 
 	jobs, err := host.ListJobs()
@@ -239,6 +239,7 @@ func (s *S) TestRunJobDetached(c *C) {
 			"flynn-controller.app":          app.ID,
 			"flynn-controller.app_name":     app.Name,
 			"flynn-controller.release":      release.ID,
+			"flynn-controller.type":         "runner",
 			"foo":                           "baz",
 			"gc.max_inactive_slug_releases": "10",
 		})
@@ -246,7 +247,7 @@ func (s *S) TestRunJobDetached(c *C) {
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
 			"FLYNN_APP_ID":       app.ID,
 			"FLYNN_RELEASE_ID":   release.ID,
-			"FLYNN_PROCESS_TYPE": "",
+			"FLYNN_PROCESS_TYPE": "runner",
 			"FLYNN_JOB_ID":       job.ID,
 			"FOO":                "baz",
 			"JOB":                "true",
@@ -384,6 +385,7 @@ func (s *S) TestRunJobAttached(c *C) {
 			"flynn-controller.app":          app.ID,
 			"flynn-controller.app_name":     app.Name,
 			"flynn-controller.release":      release.ID,
+			"flynn-controller.type":         "console",
 			"foo":                           "baz",
 			"gc.max_inactive_slug_releases": "10",
 		})
@@ -391,7 +393,7 @@ func (s *S) TestRunJobAttached(c *C) {
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
 			"FLYNN_APP_ID":       app.ID,
 			"FLYNN_RELEASE_ID":   release.ID,
-			"FLYNN_PROCESS_TYPE": "",
+			"FLYNN_PROCESS_TYPE": "console",
 			"FLYNN_JOB_ID":       job.ID,
 			"FOO":                "baz",
 			"JOB":                "true",

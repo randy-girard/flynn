@@ -194,6 +194,56 @@ func TestApplySetupInteractiveAnswers(t *testing.T) {
 	}
 }
 
+func TestApplySetupChoicesAndWhen(t *testing.T) {
+	in := &Installer{
+		Stdin:       strings.NewReader("https://otlp.example:4318\nbearer\ntok-123\ntrue\n"),
+		Stdout:      io.Discard,
+		Interactive: func() bool { return true },
+	}
+	cluster := map[string]string{}
+	m := &Manifest{
+		Setup: []SetupPrompt{
+			{Env: "OTEL_ENDPOINT", Prompt: "Endpoint", Optional: true},
+			{Env: "OTEL_AUTH_TYPE", Prompt: "Auth", Default: "none", Choices: []string{"none", "bearer", "basic"}, When: "OTEL_ENDPOINT"},
+			{Env: "OTEL_BEARER_TOKEN", Prompt: "Token", Secret: true, When: "OTEL_AUTH_TYPE=bearer"},
+			{Env: "OTEL_USERNAME", Prompt: "User", When: "OTEL_AUTH_TYPE=basic"},
+			{Env: "OTEL_INSECURE", Prompt: "Insecure", Default: "false", Choices: []string{"false", "true"}, When: "OTEL_ENDPOINT"},
+		},
+	}
+	if err := in.applySetup(m, cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cluster["OTEL_AUTH_TYPE"] != "bearer" || cluster["OTEL_BEARER_TOKEN"] != "tok-123" {
+		t.Fatalf("%v", cluster)
+	}
+	if cluster["OTEL_USERNAME"] != "" {
+		t.Fatal("basic username must be skipped")
+	}
+	if cluster["OTEL_INSECURE"] != "true" {
+		t.Fatalf("insecure=%q", cluster["OTEL_INSECURE"])
+	}
+
+	skip := &Installer{Interactive: func() bool { return false }}
+	t.Setenv(nonInteractiveEnv, "1")
+	empty := map[string]string{}
+	if err := skip.applySetup(m, empty); err != nil {
+		t.Fatal(err)
+	}
+	if empty["OTEL_AUTH_TYPE"] != "" || empty["OTEL_BEARER_TOKEN"] != "" {
+		t.Fatalf("skipped auth when endpoint empty: %v", empty)
+	}
+
+	bad := &Installer{
+		Stdin:       strings.NewReader("http://x\nkerberos\n"),
+		Stdout:      io.Discard,
+		Interactive: func() bool { return true },
+	}
+	err := bad.applySetup(m, map[string]string{})
+	if err == nil || !strings.Contains(err.Error(), "OTEL_AUTH_TYPE") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestPreserveGeneratedEnvKeepsSetupSecrets(t *testing.T) {
 	m := &Manifest{
 		GenerateEnv: []string{"SESSION_SECRET"},

@@ -67,8 +67,9 @@ apps cannot open those consoles. Treat the key from `flynn cluster:add` as
 root.
 
 Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
-`slugrunner`) from jobs, logs, and formations. Setting those process limits
-requires the cluster key, `cluster:admin`, or `app:admin` on that app. Path-based
+`slugrunner`) from jobs, logs, formations, and release process maps. Setting
+those process limits requires the cluster controller key (`flynn limit:set` or
+flynn-host). Path-based
 HTTP routes (`example.com/api`) can only be created with
 `flynn-host route:add`.
 

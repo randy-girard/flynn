@@ -17,6 +17,7 @@ import (
 const (
 	KindResourceProvider = "resource-provider"
 	KindApp              = "app"
+	KindScheduler        = "scheduler"
 
 	ManifestName = "flynn-plugin.json"
 
@@ -214,10 +215,11 @@ func (c *CLI) Runnable() bool {
 }
 
 // UserVisible is whether the laptop `flynn` CLI should list and run this
-// command. Resource providers are user tools (flynn redis …). kind: app
-// system plugins stay off the user CLI unless cli.user is true. Plugins
-// installed before flynn-plugin-kind existed have an empty kind and stay
-// visible so `flynn redis` keeps working after upgrade.
+// command. Resource providers and the scheduler plugin are user tools
+// (`flynn redis …`, `flynn scheduler …`). kind: app system plugins stay off
+// the user CLI unless cli.user is true. Plugins installed before
+// flynn-plugin-kind existed have an empty kind and stay visible so
+// `flynn redis` keeps working after upgrade.
 func (c *CLI) UserVisible(kind string) bool {
 	if c == nil || strings.TrimSpace(c.Command) == "" {
 		return false
@@ -258,6 +260,11 @@ type SetupPrompt struct {
 	Secret   bool   `json:"secret,omitempty"`
 	Optional bool   `json:"optional,omitempty"`
 	Generate bool   `json:"generate,omitempty"`
+	// Choices, if set, restrict the answer to one of these values (case-insensitive).
+	Choices []string `json:"choices,omitempty"`
+	// When skips this prompt unless the expression matches already-answered
+	// setup env. Forms: "ENV" (non-empty), "!ENV" (empty), "ENV=value".
+	When string `json:"when,omitempty"`
 }
 
 // RouteSpec is a cluster route created from the plugin manifest.
@@ -307,9 +314,9 @@ func (m *Manifest) Validate() error {
 		return fmt.Errorf("%s: name is required", ManifestName)
 	}
 	switch m.Kind {
-	case KindResourceProvider, KindApp:
+	case KindResourceProvider, KindApp, KindScheduler:
 	default:
-		return fmt.Errorf("%s: kind must be %q or %q", ManifestName, KindResourceProvider, KindApp)
+		return fmt.Errorf("%s: kind must be %q, %q, or %q", ManifestName, KindResourceProvider, KindApp, KindScheduler)
 	}
 	if strings.TrimSpace(m.App.Name) == "" {
 		m.App.Name = m.Name
@@ -328,6 +335,12 @@ func (m *Manifest) Validate() error {
 		}
 		if strings.TrimSpace(p.Prompt) == "" {
 			return fmt.Errorf("%s: setup[%d].prompt is required", ManifestName, i)
+		}
+		if err := validateSetupWhen(p.When); err != nil {
+			return fmt.Errorf("%s: setup[%d].when: %w", ManifestName, i, err)
+		}
+		if err := validateSetupChoices(p.Choices); err != nil {
+			return fmt.Errorf("%s: setup[%d].choices: %w", ManifestName, i, err)
 		}
 	}
 	for i, r := range m.Routes {
@@ -542,4 +555,38 @@ func pingURLAllowed(raw string) bool {
 
 func httpOrHTTPS(scheme string) bool {
 	return scheme == "http" || scheme == "https"
+}
+
+func validateSetupWhen(when string) error {
+	when = strings.TrimSpace(when)
+	if when == "" {
+		return nil
+	}
+	if strings.HasPrefix(when, "!") {
+		if strings.TrimSpace(strings.TrimPrefix(when, "!")) == "" {
+			return fmt.Errorf("env name is required")
+		}
+		return nil
+	}
+	key, _, _ := strings.Cut(when, "=")
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("env name is required")
+	}
+	return nil
+}
+
+func validateSetupChoices(choices []string) error {
+	seen := map[string]struct{}{}
+	for _, c := range choices {
+		v := strings.TrimSpace(c)
+		if v == "" {
+			return fmt.Errorf("empty value")
+		}
+		k := strings.ToLower(v)
+		if _, ok := seen[k]; ok {
+			return fmt.Errorf("duplicate %q", v)
+		}
+		seen[k] = struct{}{}
+	}
+	return nil
 }

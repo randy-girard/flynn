@@ -146,7 +146,16 @@ func (c *Host) GetJob(id string) (*host.ActiveJob, error) {
 
 // StopJob stops a running job.
 func (c *Host) StopJob(id string) error {
-	return c.c.Delete(fmt.Sprintf("/host/jobs/%s", id))
+	return c.StopJobWithReason(id, "")
+}
+
+// StopJobWithReason stops a running job and records why (for example scale-down).
+func (c *Host) StopJobWithReason(id, reason string) error {
+	path := fmt.Sprintf("/host/jobs/%s", id)
+	if strings.TrimSpace(reason) != "" {
+		path += "?reason=" + url.QueryEscape(reason)
+	}
+	return c.c.Delete(path)
 }
 
 // ConfigureNetworking tells the host daemon to set up container networking.

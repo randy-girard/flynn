@@ -1538,10 +1538,10 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 		log.Warn("unable to subscribe to OOM notifications", "err", err)
 	} else {
 		go func() {
-			logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
-			defer logger.Close()
 			for range notifyOOM {
-				logger.Crit("FATAL: Container hard memory limit (2x configured limit) exceeded - container killed due to vastly exceeding memory limits")
+				if c.l.LogMux != nil {
+					c.l.LogMux.Write(logagg.MsgIDSystem, c.MuxConfig, "Hard memory limit exceeded; process killed (OOM)")
+				}
 				if wd := c.l.host.webhookDispatcher; wd != nil {
 					wd.Send(host.CodeMemoryHard, "Hard memory limit exceeded (OOM kill)", host.SeverityCritical, c.job.ID, nil, map[string]string{
 						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
@@ -1901,7 +1901,7 @@ func (l *LibcontainerBackend) Attach(req *AttachRequest) (err error) {
 	for msg := range ch {
 		var w io.Writer
 		switch logutils.StreamType(msg) {
-		case logagg.StreamTypeStdout:
+		case logagg.StreamTypeStdout, logagg.StreamTypeSystem:
 			w = req.Stdout
 		case logagg.StreamTypeStderr:
 			w = req.Stderr
@@ -2365,13 +2365,12 @@ func (c *Container) monitorMemoryUsage(log log15.Logger) {
 
 			memUsage := stats.CgroupStats.MemoryStats.Usage.Usage
 			if memUsage > c.softLimitBytes && !c.softLimitLogged {
-				// Soft limit exceeded - log event
-				logger := c.l.LogMux.Logger(logagg.MsgIDInit, c.MuxConfig, "component", "flynn-host")
-				logger.Warn("Container soft memory limit exceeded - exceeding memory limit",
-					"usage_bytes", memUsage,
-					"soft_limit_bytes", c.softLimitBytes,
-					"usage_percent", float64(memUsage)*100.0/float64(c.softLimitBytes))
-				logger.Close()
+				if c.l.LogMux != nil {
+					c.l.LogMux.Write(logagg.MsgIDSystem, c.MuxConfig, fmt.Sprintf(
+						"Soft memory limit exceeded (%d of %d bytes, %.0f%%)",
+						memUsage, c.softLimitBytes, float64(memUsage)*100.0/float64(c.softLimitBytes),
+					))
+				}
 				c.softLimitLogged = true
 				if wd := c.l.host.webhookDispatcher; wd != nil {
 					wd.Send(host.CodeMemorySoft, "Soft memory limit exceeded", host.SeverityWarning, c.job.ID, nil, map[string]string{

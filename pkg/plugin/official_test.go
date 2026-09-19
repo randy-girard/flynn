@@ -22,7 +22,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			got[a] = p
 		}
 	}
-	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry"} {
+	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler"} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("official catalog missing %s", name)
 		}
@@ -43,6 +43,9 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	}
 	if cfg.GitHubURL("otel") != "https://github.com/randy-girard/flynn-plugin-otel.git" {
 		t.Fatalf("otel: %s", cfg.GitHubURL("otel"))
+	}
+	if cfg.GitHubURL("scheduler") != "https://github.com/randy-girard/flynn-plugin-scheduler.git" {
+		t.Fatalf("scheduler: %s", cfg.GitHubURL("scheduler"))
 	}
 
 	r, err := Resolve(InstallOptions{Source: "mysql"})
@@ -116,7 +119,7 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}
