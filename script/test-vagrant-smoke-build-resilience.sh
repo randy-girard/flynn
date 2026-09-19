@@ -29,6 +29,8 @@ need 'step_fail_summary' \
   "fail table must prefer apt E: lines / FAIL / DATA RACE over Get:1 docker.com or coverage noise"
 need 'WARNING: DATA RACE' \
   "fail summary must surface go test -race reports hidden by trailing coverage lines"
+need 'invalid runtime symbol table' \
+  "builder unit tests must drop host-mounted Docker discoverd binaries that crash on the VM"
 
 need_file() {
   local path=$1 msg=$2

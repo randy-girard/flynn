@@ -2058,6 +2058,11 @@ cd "${REPO_IN_VM}"
 source "${REPO_IN_VM}/script/lib/git-safe-dir.sh"
 flynn_git_safe_directory "${REPO_IN_VM}"
 
+# Host Docker unit tests leave linux/arm64 binaries in the synced tree.
+# Those copies crash on this VM (invalid runtime symbol table). Drop
+# discoverd/flynn-host so script/build-flynn rebuilds them locally.
+rm -f "${REPO_IN_VM}/build/bin/discoverd" "${REPO_IN_VM}/build/bin/flynn-host" "${REPO_IN_VM}/build/bin/flynn-init"
+
 if [[ ! -x /usr/local/go/bin/go ]]; then
   echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
   exit 1
@@ -2113,6 +2118,9 @@ step_vagrant_up_nodes() {
   local node_mem="${VAGRANT_MEMORY:-6144}"
   local node_cpus="${VAGRANT_CPUS:-2}"
   info "starting ${TOPOLOGY_LABEL} nodes (${NODES[*]}) memory=${node_mem} cpus=${node_cpus}"
+  # KEEP_VMS_ON_FAIL leaves squashfs/overlay mounts that install --clean cannot
+  # delete (EROFS / device busy). Recreate the VMs so each topology is clean.
+  vagrant destroy -f "${NODES[@]}" || true
   VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${NODES[@]}"
   info "verifying VirtualBox NIC2 promiscuous mode (required for flannel VXLAN)"
   verify_nic_promisc
@@ -3023,7 +3031,7 @@ probe_scheduler_interval_job() {
     if [[ "${rc}" -eq 0 && -n "${id}" ]]; then
       break
     fi
-    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout|no such host'; then
       echo "cli ${label} cli-scheduler-add: retry ${attempt}/6 (${snippet})"
       sleep 2
       continue
@@ -4167,7 +4175,7 @@ cli_probe() {
         return 0
       fi
     fi
-    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout|no such host'; then
       echo "cli ${label} ${name}: retry ${attempt}/6 (${snippet})"
       sleep 2
       continue
@@ -4199,7 +4207,7 @@ cli_run_job() {
       echo "cli ${label} ${name}: PASS"
       return 0
     fi
-    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout'; then
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout|no such host'; then
       echo "cli ${label} ${name}: retry ${attempt}/6 (${snippet})"
       sleep 2
       continue

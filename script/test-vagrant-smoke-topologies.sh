@@ -79,6 +79,10 @@ if grep -v '^#' "${smoke}" | grep -qE -- '--min-hosts 3'; then
   echo "bootstrap must not hard-code --min-hosts 3" >&2
   exit 1
 fi
+if ! grep -Fq 'vagrant destroy -f "${NODES[@]}"' "${smoke}"; then
+  echo "vagrant up must destroy leftover cluster nodes before boot (KEEP_VMS_ON_FAIL remounts)" >&2
+  exit 1
+fi
 if ! grep -Fq 'vagrant up "${NODES[@]}"' "${smoke}"; then
   echo "vagrant up must boot only the current topology's nodes" >&2
   exit 1
