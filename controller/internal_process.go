@@ -50,6 +50,75 @@ func preserveInternalProcessTypes(dst map[string]ct.ProcessType, prev *ct.Releas
 	return dst
 }
 
+const metaSystemApp = "flynn-system-app"
+
+func stripSystemAppMetaUnlessAdmin(ctx context.Context, meta map[string]string) {
+	if authz.SystemAppAllowed(authz.TokenFromContext(ctx), true) {
+		return
+	}
+	delete(meta, metaSystemApp)
+}
+
+func sanitizeAppMetaUpdate(ctx context.Context, existing *ct.App, meta interface{}) interface{} {
+	tok := authz.TokenFromContext(ctx)
+	if authz.SystemAppAllowed(tok, true) {
+		return meta
+	}
+	m := metaToStringMap(meta)
+	if m == nil {
+		if existing != nil && existing.System() {
+			return map[string]string{metaSystemApp: "true"}
+		}
+		return meta
+	}
+	delete(m, metaSystemApp)
+	if existing != nil && existing.System() {
+		m[metaSystemApp] = "true"
+	}
+	return m
+}
+
+func metaToStringMap(v interface{}) map[string]string {
+	switch m := v.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			out[k] = val
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]string, len(m))
+		for k, val := range m {
+			s, ok := val.(string)
+			if !ok {
+				return nil
+			}
+			out[k] = s
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stripPrivilegedProcessTypes(procs map[string]ct.ProcessType) map[string]ct.ProcessType {
+	if procs == nil {
+		return nil
+	}
+	out := make(map[string]ct.ProcessType, len(procs))
+	for name, p := range procs {
+		p.HostNetwork = false
+		p.HostPIDNamespace = false
+		p.WriteableCgroups = false
+		p.LinuxCapabilities = nil
+		p.AllowedDevices = nil
+		p.Mounts = nil
+		p.Profiles = nil
+		out[name] = p
+	}
+	return out
+}
+
 func redactJobs(jobs []*ct.Job) []*ct.Job {
 	if len(jobs) == 0 {
 		return jobs

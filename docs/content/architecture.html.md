@@ -158,9 +158,13 @@ An instance of the router runs on every host so client traffic can land on any
 node.
 
 User-deployed jobs are isolated on the overlay: they cannot open connections to
-other user jobs or to internal Flynn services. They reach HTTP through routes
-you add, and datastores only at the leader host injected in `DATABASE_URL` /
-`REDIS_URL` / similar. System apps keep a full overlay mesh.
+other user jobs or to internal Flynn services. They cannot open host SSH,
+discoverd, or other node APIs. They reach HTTP through
+routes you add, and datastores only at the leader host injected in `DATABASE_URL` /
+`REDIS_URL` / similar. System apps keep a full overlay mesh. User jobs also
+run in a user namespace (container root is not host root); squashfs layers are
+idmapped so image UIDs still look like 0/5000 inside the job. Overlay `/` is
+chowned to the mapped UID so container images can create directories there.
 
 ## Buildpacks and container images
 

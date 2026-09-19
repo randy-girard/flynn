@@ -9,6 +9,7 @@ import (
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
 	"golang.org/x/net/context"
 )
 
@@ -173,5 +174,51 @@ func TestHideInternalLimits(t *testing.T) {
 	})
 	if hideInternalLimits(admin, app) {
 		t.Fatal("app:admin must see builder limits")
+	}
+}
+
+func TestStripPrivilegedProcessTypes(t *testing.T) {
+	in := map[string]ct.ProcessType{
+		"web": {
+			HostNetwork:       true,
+			HostPIDNamespace:  true,
+			WriteableCgroups:  true,
+			LinuxCapabilities: []string{"CAP_SYS_ADMIN"},
+			Mounts:            []host.Mount{{Target: "/var/run/docker.sock", Location: "/sock"}},
+			Profiles:          []host.JobProfile{host.JobProfileZFS},
+			Args:              []string{"web"},
+		},
+	}
+	out := stripPrivilegedProcessTypes(in)
+	p := out["web"]
+	if p.HostNetwork || p.HostPIDNamespace || p.WriteableCgroups || len(p.LinuxCapabilities) != 0 || len(p.Mounts) != 0 || len(p.Profiles) != 0 {
+		t.Fatalf("privileged fields survived: %+v", p)
+	}
+	if len(p.Args) != 1 || p.Args[0] != "web" {
+		t.Fatalf("args = %v", p.Args)
+	}
+	if !in["web"].HostNetwork {
+		t.Fatal("strip must not mutate the input process type")
+	}
+}
+
+func TestStripSystemAppMetaUnlessAdmin(t *testing.T) {
+	jwt := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{
+		AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:write"}}},
+	})
+	meta := map[string]string{"flynn-system-app": "true", "keep": "yes"}
+	stripSystemAppMetaUnlessAdmin(jwt, meta)
+	if _, ok := meta["flynn-system-app"]; ok {
+		t.Fatal("tenants must not be able to mark an app as flynn-system-app")
+	}
+	if meta["keep"] != "yes" {
+		t.Fatalf("meta = %v", meta)
+	}
+
+	admin := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{ClusterKey: true})
+	sys := map[string]string{"flynn-system-app": "true"}
+	stripSystemAppMetaUnlessAdmin(admin, sys)
+	if sys["flynn-system-app"] != "true" {
+		t.Fatal("cluster key must still be able to create system apps")
 	}
 }

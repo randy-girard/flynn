@@ -7,6 +7,7 @@ import (
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/cli"
 	"github.com/randy-girard/flynn/pkg/hostfw"
+	"github.com/randy-girard/flynn/pkg/iptables"
 )
 
 func startHostFirewall(selfIP string, seedPeers []string, log log15.Logger) {
@@ -33,6 +34,9 @@ func syncHostFirewall(selfIP string, seedPeers []string, log log15.Logger) {
 	desired := hostfw.MergeDesired(selfIP, extra, livePeers, liveFirewallPorts(log))
 	if err := hostfw.Reconcile(hostfw.UFWBackend{}, desired); err != nil {
 		log.Warn("firewall reconcile", "err", err)
+	}
+	if err := iptables.ReplaceSetIPs(iptables.NodeSet, iptables.NodeIPs(selfIP, livePeers)); err != nil {
+		log.Warn("node ipset", "err", err)
 	}
 }
 

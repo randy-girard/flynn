@@ -128,9 +128,97 @@ func UserToDatastoreArgs() []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-m", "set", "--match-set", netpolicy.ServiceData, "dst", "-j", "ACCEPT"}
 }
 
-// UserToBridgeArgs allows user jobs to reach the local gateway (discoverd DNS).
-func UserToBridgeArgs(bridgeAddr string) []string {
+// LegacyUserToBridgeArgs is the pre-fix rule that accepted every protocol/port
+// on the overlay gateway, including host SSH and discoverd HTTP when those
+// sockets are bound on the bridge address.
+func LegacyUserToBridgeArgs(bridgeAddr string) []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", bridgeAddr, "-j", "ACCEPT"}
+}
+
+// UserToBridgeDNSArgs allows user jobs to reach discoverd DNS on the overlay
+// gateway. proto is "udp" or "tcp".
+func UserToBridgeDNSArgs(bridgeAddr, proto string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", bridgeAddr, "-p", proto, "--dport", "53", "-j", "ACCEPT"}
+}
+
+// NodeSet is the ipset of host underlay IPs (this node and cluster peers).
+// It is not a discoverd service; flynn-host fills it from peer membership.
+const NodeSet = "flynn-net-nodes"
+
+// UserToNodeDropArgs drops NEW user-job packets to cluster node underlay IPs
+// (SSH, public discoverd, host HTTP APIs) after MASQUERADE toward the underlay.
+func UserToNodeDropArgs() []string {
+	return toNodeDropArgs(netpolicy.ServiceUser)
+}
+
+func BuildToNodeDropArgs() []string {
+	return toNodeDropArgs(netpolicy.ServiceBuild)
+}
+
+func toNodeDropArgs(set string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", set, "src", "-m", "set", "--match-set", NodeSet, "dst", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// UserToHostDNSArgs allows user overlay IPs to query host DNS (INPUT; the
+// gateway address is a local IP, so these packets do not traverse FORWARD).
+func UserToHostDNSArgs(proto string) []string {
+	return toHostDNSArgs(netpolicy.ServiceUser, proto)
+}
+
+func BuildToHostDNSArgs(proto string) []string {
+	return toHostDNSArgs(netpolicy.ServiceBuild, proto)
+}
+
+func toHostDNSArgs(set, proto string) []string {
+	return []string{"INPUT", "-m", "set", "--match-set", set, "src", "-p", proto, "--dport", "53", "-j", "ACCEPT"}
+}
+
+// UserToHostDiscoverdArgs is the pre-fix INPUT allow for discoverd HTTP on
+// the overlay gateway. flynn-host now registers user services itself, so
+// this hole is removed on upgrade.
+func UserToHostDiscoverdArgs(bridgeAddr string) []string {
+	return toHostDiscoverdArgs(netpolicy.ServiceUser, bridgeAddr)
+}
+
+func BuildToHostDiscoverdArgs(bridgeAddr string) []string {
+	return toHostDiscoverdArgs(netpolicy.ServiceBuild, bridgeAddr)
+}
+
+func toHostDiscoverdArgs(set, bridgeAddr string) []string {
+	return []string{"INPUT", "-m", "set", "--match-set", set, "src", "-d", bridgeAddr, "-p", "tcp", "--dport", netpolicy.DiscoverdHTTPPort, "-j", "ACCEPT"}
+}
+
+// UserToHostDropArgs drops NEW packets from user jobs to any host-local
+// address (SSH :22, :80/:443, host API, public-IP discoverd).
+func UserToHostDropArgs() []string {
+	return toHostDropArgs(netpolicy.ServiceUser)
+}
+
+func BuildToHostDropArgs() []string {
+	return toHostDropArgs(netpolicy.ServiceBuild)
+}
+
+func toHostDropArgs(set string) []string {
+	return []string{"INPUT", "-m", "set", "--match-set", set, "src", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// NodeIPs is the underlay address list for NodeSet: this host plus peers.
+func NodeIPs(self string, peers []string) []net.IP {
+	return UnionIPs(nil, parseIPv4s(append([]string{self}, peers...)))
+}
+
+func parseIPv4s(addrs []string) []net.IP {
+	out := make([]net.IP, 0, len(addrs))
+	for _, s := range addrs {
+		ip := net.ParseIP(strings.TrimSpace(s))
+		if ip == nil {
+			continue
+		}
+		if v4 := ip.To4(); v4 != nil {
+			out = append(out, v4)
+		}
+	}
+	return out
 }
 
 // BuildToUserDropArgs stops slug/docker builders from dialing user jobs.
@@ -143,33 +231,78 @@ func IsolationSets() []string {
 	return []string{netpolicy.ServiceUser, netpolicy.ServiceBuild, netpolicy.ServiceData, netpolicy.ServiceSys}
 }
 
-// EnableJobIsolation installs default-deny overlay rules for user jobs.
-// Call after EnableOutboundNAT. Requires the ipset kernel module and the
-// ipset binary. Same-host L2 isolation also needs br_netfilter (caller).
+// EnableJobIsolation installs default-deny overlay rules for user jobs and
+// host-local INPUT drops so tenants cannot open SSH, public discoverd, or
+// node APIs. Call after EnableOutboundNAT. Requires ipset. Same-host L2
+// isolation also needs br_netfilter (caller).
 func EnableJobIsolation(overlay, bridgeAddr string) error {
-	if err := EnsureSets(IsolationSets()...); err != nil {
+	if err := EnsureSets(append(IsolationSets(), NodeSet)...); err != nil {
 		return err
 	}
 	legacyDrop := LegacyUserOverlayDropArgs(overlay)
 	if Exists(legacyDrop...) {
 		_, _ = Raw(append([]string{"-D"}, legacyDrop...)...)
 	}
-	// Insert last-to-first so the chain order is: data ACCEPT, bridge ACCEPT,
-	// build→user DROP, user overlay DROP (before the broad incoming ACCEPT).
+	legacyBridge := LegacyUserToBridgeArgs(bridgeAddr)
+	if Exists(legacyBridge...) {
+		_, _ = Raw(append([]string{"-D"}, legacyBridge...)...)
+	}
+	// Insert last-to-first so the chain order is: data ACCEPT, DNS ACCEPT,
+	// build→user DROP, node DROP, user overlay DROP.
 	for _, args := range [][]string{
 		UserOverlayDropArgs(overlay),
+		UserToNodeDropArgs(),
+		BuildToNodeDropArgs(),
 		BuildToUserDropArgs(),
-		UserToBridgeArgs(bridgeAddr),
+		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
+		UserToBridgeDNSArgs(bridgeAddr, "udp"),
 		UserToDatastoreArgs(),
 	} {
+		if err := insertIfMissing("FORWARD isolation", args); err != nil {
+			return err
+		}
+	}
+	return EnableHostIsolation(bridgeAddr)
+}
+
+// EnableHostIsolation installs INPUT rules so user and build overlay IPs can
+// only open DNS. Discoverd HTTP is no longer reachable from those jobs;
+// flynn-host registers their backends.
+func EnableHostIsolation(bridgeAddr string) error {
+	for _, args := range [][]string{
+		UserToHostDiscoverdArgs(bridgeAddr),
+		BuildToHostDiscoverdArgs(bridgeAddr),
+	} {
 		if Exists(args...) {
-			continue
+			_, _ = Raw(append([]string{"-D"}, args...)...)
 		}
-		if output, err := Raw(append([]string{"-I"}, args...)...); err != nil {
-			return fmt.Errorf("unable to install job isolation: %s", err)
-		} else if len(output) != 0 {
-			return &ChainError{Chain: "FORWARD isolation", Output: output}
+	}
+	// Last-to-first: DROP, TCP/53, UDP/53 — per untrusted set.
+	for _, args := range [][]string{
+		UserToHostDropArgs(),
+		BuildToHostDropArgs(),
+		UserToHostDNSArgs("tcp"),
+		BuildToHostDNSArgs("tcp"),
+		UserToHostDNSArgs("udp"),
+		BuildToHostDNSArgs("udp"),
+	} {
+		if err := insertIfMissing("INPUT host isolation", args); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+func insertIfMissing(chain string, args []string) error {
+	if Exists(args...) {
+		return nil
+	}
+	output, err := Raw(append([]string{"-I"}, args...)...)
+	if err != nil {
+		return fmt.Errorf("unable to install job isolation: %s", err)
+	}
+	if len(output) != 0 {
+		return &ChainError{Chain: chain, Output: output}
 	}
 	return nil
 }

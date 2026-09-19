@@ -19,6 +19,10 @@ const (
 	ServiceSys   = "flynn-net-sys"
 )
 
+// DiscoverdHTTPPort is the host-local discoverd HTTP/Raft listener. User jobs
+// may reach it only on the overlay gateway, not on the host public IP.
+const DiscoverdHTTPPort = "1111"
+
 // DummyPort is used when registering an overlay IP in a netpolicy service.
 // Discoverd instances require host:port; the port is not dialed.
 const DummyPort = "1"

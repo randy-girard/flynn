@@ -528,6 +528,20 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	if !isSystemJob && !isBuilderJob && !isBuildJob(job) {
+		if job.Config.WriteableCgroups {
+			log.Warn("rejecting non-system job requesting writable cgroups")
+			httphelper.ValidationError(w, "writeable_cgroups", "only allowed for system and build jobs")
+			h.addJobRateLimitBucket.Put()
+			return
+		}
+		if len(job.Profiles) > 0 {
+			log.Warn("rejecting non-system job requesting device profiles")
+			httphelper.ValidationError(w, "profiles", "zfs/kvm/loop profiles are only allowed for system jobs")
+			h.addJobRateLimitBucket.Put()
+			return
+		}
+	}
 
 	if len(job.Mountspecs) == 0 {
 		log.Warn("rejecting job as no mountspecs set")

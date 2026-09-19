@@ -6,6 +6,7 @@ import (
 
 	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/controller/schema"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -44,6 +45,12 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 			if err := schema.Validate(thing); err != nil {
 				respondWithError(rw, err)
 				return
+			}
+
+			if resource == "apps" {
+				if app, ok := thing.(*ct.App); ok {
+					stripSystemAppMetaUnlessAdmin(ctx, app.Meta)
+				}
 			}
 
 			if err := repo.Add(thing); err != nil {

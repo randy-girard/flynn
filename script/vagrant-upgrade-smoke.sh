@@ -3184,10 +3184,9 @@ fi
 flynn create --remote flynn "${DOCKER_APP_NAME}"
 flynn -a "${DOCKER_APP_NAME}" stack set container
 timeout 600 git push flynn master
-# Container-stack releases use process type "app", not "web". gitreceive's
-# default scale only sets web=1, and stack set already created a release, so
-# the Dockerfile app would stay at 0 processes without this.
-flynn -a "${DOCKER_APP_NAME}" scale app=1
+# gitreceive auto-scales process type "web" for Dockerfile git deploys
+# (see dockerimage.GitProcessName). Historical docker-push still uses "app".
+flynn -a "${DOCKER_APP_NAME}" scale web=1
 flynn -a "${DOCKER_APP_NAME}" ps
 EOF
   echo "docker app ${DOCKER_APP_NAME} deployed from test/apps/upgrade-smoke-docker (container stack)"
@@ -3460,11 +3459,12 @@ assert_docker_ps() {
   local out rc=0 attempt
   # After restore on 4-host add, HTTP can pass before controller lists the
   # app job (header-only `flynn ps`). Do not grep "up" in the whole buffer:
-  # CREATED matches -iE 'up'. Require a data row with type app.
+  # CREATED matches -iE 'up'. Require a data row with type web (git-push
+  # Dockerfile process name after dockerimage.GitProcessName).
   for attempt in $(seq 1 12); do
     rc=0
-    out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t app 2>&1)" || rc=$?
-    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="app" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
+    out="$(flynn1 -a "${DOCKER_APP_NAME}" ps -t web 2>&1)" || rc=$?
+    if [[ "${rc}" -eq 0 ]] && echo "${out}" | awk 'NR>1 && $2=="web" && ($3=="up" || $3=="pending") { found=1 } END { exit !found }'; then
       record_check "${label}" "docker-ps" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
       echo "docker-ps ${label}: ok"
       return 0
@@ -3987,6 +3987,46 @@ cli_run_job() {
   return 1
 }
 
+# User jobs must be in a user namespace (container 0 → host uid ≥ 1_000_000).
+# System jobs (postgres) stay in the host user ns so volumes/ZFS keep UID 0.
+cli_userns_host() {
+  local label=$1
+  local rc=0 out
+  out="$(node_root_script node1 <<EOF
+set -eu
+# flynn-host ps/inspect write extra lines after awk exits; pipefail would
+# turn that SIGPIPE into rc=141 even when the checks pass.
+id=\$(flynn-host ps -q -f '{{if eq (metadata "flynn-controller.app_name") "${DOCKER_APP_NAME}"}}{{.Job.ID}}{{end}}' | awk 'NF{print; exit}')
+test -n "\$id"
+pid=\$(flynn-host inspect "\$id" | awk '\$1=="PID"{print \$2; exit}')
+test -n "\$pid"
+read c h s < /proc/\$pid/uid_map
+test "\$c" = 0
+test "\$h" -ge 1000000
+test "\$s" = 65536
+uid=\$(awk '/^Uid:/{print \$2}' /proc/\$pid/status)
+test "\$uid" -ge 1000000
+sysid=\$(flynn-host ps -q -f '{{if eq (metadata "flynn-controller.app_name") "postgres"}}{{.Job.ID}}{{end}}' | awk 'NF{print; exit}')
+test -n "\$sysid"
+syspid=\$(flynn-host inspect "\$sysid" | awk '\$1=="PID"{print \$2; exit}')
+test -n "\$syspid"
+read sc sh ss < /proc/\$syspid/uid_map
+test "\$sc" = 0
+test "\$sh" = 0
+test "\$ss" = 4294967295
+echo userns-host-ok
+EOF
+)" || rc=$?
+  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q userns-host-ok; then
+    record_check "${label}" "userns-host" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} userns-host: PASS"
+    return 0
+  fi
+  record_check "${label}" "userns-host" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-120)"
+  echo "cli ${label} userns-host: FAIL rc=${rc} ${out}" >&2
+  return 1
+}
+
 # Expect a one-off to fail (NXDOMAIN, iptables DROP, or timeout). Used to
 # prove user jobs cannot reach other apps or internal discoverd names.
 # Retry unexpected success: after bootstrap --from-backup, flynn-net-user
@@ -4097,9 +4137,9 @@ step_cli_functions() {
   # Container-stack app: same image as the running app process, no /runner/init.
   cli_probe "${label}" "docker-cli-info" "${DOCKER_APP_NAME}|Git URL|Web URL" \
     flynn1 -a "${DOCKER_APP_NAME}" info || failed=1
-  cli_probe "${label}" "docker-cli-ps" "app" \
+  cli_probe "${label}" "docker-cli-ps" "web" \
     flynn1 -a "${DOCKER_APP_NAME}" ps || failed=1
-  cli_probe "${label}" "docker-cli-scale" "app=" \
+  cli_probe "${label}" "docker-cli-scale" "web=" \
     flynn1 -a "${DOCKER_APP_NAME}" scale || failed=1
   cli_probe "${label}" "docker-cli-route" "http|${DOCKER_APP_NAME}" \
     flynn1 -a "${DOCKER_APP_NAME}" route || failed=1
@@ -4111,6 +4151,9 @@ step_cli_functions() {
     echo docker-cli || failed=1
   cli_run_job "${label}" "docker-cli-run-image" "${DOCKER_APP_NAME}" "httpd|PORT" \
     cat /start.sh || failed=1
+  cli_run_job "${label}" "userns-uid-map" "${DOCKER_APP_NAME}" "userns-ok" \
+    sh -c 'read c h s < /proc/self/uid_map; test "$c" = 0 && test "$h" -ge 1000000 && test "$s" = 65536 && test "$(stat -c %u /bin/sh)" = 0 && echo userns-ok' || failed=1
+  cli_userns_host "${label}" || failed=1
   cli_run_must_fail "${label}" "net-isolate-peer" "${DOCKER_APP_NAME}" \
     wget -q -T 5 -O - "http://${APP_NAME}-web.discoverd:8080/" || failed=1
   cli_run_must_fail "${label}" "net-isolate-internal" "${DOCKER_APP_NAME}" \

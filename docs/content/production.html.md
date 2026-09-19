@@ -245,7 +245,10 @@ ports and should not be restricted.
 
 The installer owns public 22/80/443 and private cluster CIDRs. After install,
 `flynn-host firewall` shows managed UFW rules. Use it to allow a peer that is
-not in a private CIDR, or to open an extra TCP port (for example a TCP route):
+not in a private CIDR, or to open an extra TCP port (for example a TCP route).
+User and build jobs are separately blocked from those host ports and from
+discoverd by overlay iptables, even though UFW allows the cluster CIDR for
+host-to-host traffic.
 
 ```text
 sudo flynn-host firewall

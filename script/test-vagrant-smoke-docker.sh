@@ -80,12 +80,18 @@ need 'docker-ps' \
   "smoke must show the Dockerfile app process up (not slugrunner /runner/init)"
 need 'docker-push-ps' \
   "smoke must show the docker-push app process up"
-need 'ps -t app' \
-  "docker-ps must list type app (header-only flynn ps after restore is not enough)"
+need 'DOCKER_APP_NAME}" ps -t web' \
+  "git-push Dockerfile jobs are type web (gitreceive GitProcessName)"
+need 'DOCKER_PUSH_APP_NAME}" ps -t app' \
+  "docker-push jobs stay type app"
+need '\$2=="web"' \
+  "docker-ps must match a data row of type web, not CREATED matching -iE up"
 need '\$2=="app"' \
-  "docker-ps must match a data row, not CREATED matching -iE up"
+  "docker-push-ps must match a data row of type app"
+need 'scale web=1' \
+  "git-push Dockerfile apps use process type web; smoke must scale web=1 after git push"
 need 'scale app=1' \
-  "Dockerfile apps use process type app; smoke must scale app=1 after git push"
+  "docker-push apps use process type app; smoke must scale app=1 after docker push"
 need 'docker-cli-run' \
   "smoke must flynn run against the Dockerfile app (no /runner/init)"
 need 'echo docker-cli' \

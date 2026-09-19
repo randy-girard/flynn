@@ -67,6 +67,16 @@ need 'echo docker-push-cli' \
   "docker-push flynn run must execute a command in the pre-built image"
 need 'cat /start.sh' \
   "container flynn run must read a file from the Docker image"
+need 'userns-uid-map' \
+  "CLI step must prove user jobs run in a user namespace"
+need 'userns-ok' \
+  "user-ns flynn run must see container 0, host uid >= 1000000, and root-owned image files"
+need 'cli_userns_host' \
+  "CLI step must check the host uid_map of a running user job"
+need 'userns-host-ok' \
+  "host-side probe must confirm user jobs are remapped and postgres is not"
+need '4294967295' \
+  "system jobs must keep the host identity uid_map"
 need 'net-isolate-peer' \
   "CLI step must prove user jobs cannot reach other apps on the overlay"
 need 'net-isolate-internal' \
@@ -77,6 +87,12 @@ need 'leader.postgres.discoverd' \
   "CLI step must prove user jobs can still reach the provisioned DATABASE_URL host"
 need 'docker-cli-ps' \
   "CLI step must list the Dockerfile app jobs"
+need 'docker-cli-ps" "web"' \
+  "git-push Dockerfile CLI ps must match process type web"
+need 'docker-cli-scale" "web=' \
+  "git-push Dockerfile CLI scale must show web="
+need 'awk .NF{print; exit}' \
+  "userns-host must not use head -1 under pipefail (SIGPIPE rc=141)"
 need 'docker-cli-log' \
   "CLI step must read Dockerfile app logs"
 need 'cli-help-mongodb' \
@@ -165,7 +181,7 @@ need 'CLI functions \(pre-upgrade\)' \
   "smoke must run CLI probes before the first --force update"
 need 'CLI functions after upgrade' \
   "smoke must re-run CLI probes after each --force update"
-if grep -qE 'scale web=' "${smoke}"; then
+if awk '/^step_cli_functions\(/,/^}/' "${smoke}" | grep -qE 'scale web='; then
   echo "CLI step must not scale web (creates extra jobs and races HTTP verify)" >&2
   exit 1
 fi

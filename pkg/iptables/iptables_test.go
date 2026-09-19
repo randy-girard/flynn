@@ -65,9 +65,13 @@ func TestJobIsolationRuleOrder(t *testing.T) {
 	if !strings.Contains(allowData, "flynn-net-data dst") || !strings.Contains(allowData, "ACCEPT") {
 		t.Fatalf("user→data = %s", allowData)
 	}
-	allowDNS := strings.Join(UserToBridgeArgs(bridge), " ")
-	if !strings.Contains(allowDNS, "-d "+bridge) || !strings.Contains(allowDNS, "ACCEPT") {
-		t.Fatalf("user→bridge = %s", allowDNS)
+	allowDNS := strings.Join(UserToBridgeDNSArgs(bridge, "udp"), " ")
+	if !strings.Contains(allowDNS, "-d "+bridge) || !strings.Contains(allowDNS, "--dport 53") || !strings.Contains(allowDNS, "ACCEPT") {
+		t.Fatalf("user→bridge DNS = %s", allowDNS)
+	}
+	legacyBridge := strings.Join(LegacyUserToBridgeArgs(bridge), " ")
+	if strings.Contains(legacyBridge, "dport") {
+		t.Fatalf("legacy user→bridge must accept every port (that is the bug): %s", legacyBridge)
 	}
 	buildDrop := strings.Join(BuildToUserDropArgs(), " ")
 	if !strings.Contains(buildDrop, "flynn-net-build src") || !strings.Contains(buildDrop, "flynn-net-user dst") {
@@ -88,8 +92,8 @@ func TestJobIsolationRuleOrder(t *testing.T) {
 		if i := strings.Index(body, "for _, args := range [][]string{"); i >= 0 {
 			loop = body[i:]
 		}
-		if !strings.Contains(loop, "UserOverlayDropArgs") || !strings.Contains(loop, "UserToDatastoreArgs") {
-			t.Fatal("EnableJobIsolation must insert datastore ACCEPT after overlay DROP in the loop (so ACCEPT ends up first)")
+		if !strings.Contains(loop, "UserOverlayDropArgs") || !strings.Contains(loop, "UserToDatastoreArgs") || !strings.Contains(loop, "UserToNodeDropArgs") {
+			t.Fatal("EnableJobIsolation must insert datastore ACCEPT, DNS, and node DROP around overlay DROP")
 		}
 		dropPos := strings.Index(loop, "UserOverlayDropArgs")
 		dataPos := strings.Index(loop, "UserToDatastoreArgs")
@@ -148,6 +152,68 @@ func TestEnableJobIsolationDeletesLegacyOverlayDrop(t *testing.T) {
 	}
 	if !strings.Contains(iso, `Raw(append([]string{"-D"}, legacyDrop...)...)`) {
 		t.Fatal("EnableJobIsolation must delete the legacy all-states DROP so upgrades install NEW-only")
+	}
+	if !strings.Contains(iso, "LegacyUserToBridgeArgs") || !strings.Contains(iso, "EnableHostIsolation") {
+		t.Fatal("EnableJobIsolation must replace unrestricted gateway ACCEPT and install INPUT host isolation")
+	}
+}
+
+func TestHostIsolationBlocksSSHAndPublicDiscoverd(t *testing.T) {
+	bridge := "100.64.57.1"
+	drop := strings.Join(UserToHostDropArgs(), " ")
+	if !strings.Contains(drop, "INPUT") || !strings.Contains(drop, "flynn-net-user src") || !strings.Contains(drop, "DROP") {
+		t.Fatalf("user→host DROP = %s", drop)
+	}
+	if !strings.Contains(drop, "--ctstate NEW") {
+		t.Fatal("host INPUT DROP must be NEW-only so DNS replies and related traffic are not blackholed")
+	}
+	disc := strings.Join(UserToHostDiscoverdArgs(bridge), " ")
+	if !strings.Contains(disc, "--dport 1111") {
+		t.Fatalf("legacy discoverd allow args (deleted on upgrade) = %s", disc)
+	}
+	src, err := os.ReadFile("iptables.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	iso := string(src)
+	if i := strings.Index(iso, "func EnableHostIsolation"); i >= 0 {
+		iso = iso[i:]
+	}
+	if !strings.Contains(iso, `Raw(append([]string{"-D"}, args...)...)`) || !strings.Contains(iso, "UserToHostDiscoverdArgs") {
+		t.Fatal("EnableHostIsolation must delete the gateway:1111 allow now that flynn-host registers services")
+	}
+	if strings.Contains(iso, "insertIfMissing(\"INPUT host isolation\", UserToHostDiscoverdArgs") {
+		t.Fatal("must not re-install discoverd INPUT allow for user jobs")
+	}
+	dns := strings.Join(UserToHostDNSArgs("udp"), " ")
+	if !strings.Contains(dns, "--dport 53") || !strings.Contains(dns, "ACCEPT") {
+		t.Fatalf("host DNS allow = %s", dns)
+	}
+	node := strings.Join(UserToNodeDropArgs(), " ")
+	if !strings.Contains(node, "FORWARD") || !strings.Contains(node, NodeSet) || !strings.Contains(node, "DROP") {
+		t.Fatalf("user→node DROP = %s", node)
+	}
+	buildDrop := strings.Join(BuildToHostDropArgs(), " ")
+	if !strings.Contains(buildDrop, "flynn-net-build src") {
+		t.Fatalf("build jobs must also be kept off host SSH: %s", buildDrop)
+	}
+}
+
+func TestNodeIPsIncludesSelfAndPeers(t *testing.T) {
+	got := NodeIPs("50.116.33.9", []string{"10.0.0.2", "50.116.33.9", "not-an-ip"})
+	if len(got) != 2 {
+		t.Fatalf("NodeIPs=%v", got)
+	}
+	if got[0].String() != "50.116.33.9" || got[1].String() != "10.0.0.2" {
+		t.Fatalf("NodeIPs order/contents=%v", got)
+	}
+}
+
+func TestIsolationSetsAreDiscoverdServicesNotNodeSet(t *testing.T) {
+	for _, s := range IsolationSets() {
+		if s == NodeSet {
+			t.Fatal("netpolicy must not watch flynn-net-nodes; that set is host underlay IPs, not overlay jobs")
+		}
 	}
 }
 

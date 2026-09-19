@@ -56,6 +56,11 @@ datastores only at the leader host Flynn put in `DATABASE_URL` /
 router, or blobstore databases. Cross-app HTTP still works through routes you
 add (the router). System appliances keep a full overlay mesh.
 
+User and build jobs cannot open the host control plane: SSH (`:22`),
+host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).
+DNS to the overlay gateway (`:53`) is allowed. flynn-host registers user
+HTTP backends with discoverd; the job never receives a `DISCOVERD` URL.
+
 `flynn -a controller pg:psql` (and the same for `blobstore` / other system
 apps) requires the cluster controller key. Dashboard tokens scoped to user
 apps cannot open those consoles. Treat the key from `flynn cluster:add` as
@@ -67,8 +72,19 @@ requires the cluster key, `cluster:admin`, or `app:admin` on that app. Path-base
 HTTP routes (`example.com/api`) can only be created with
 `flynn-host route:add`.
 
-Applications are not a full kernel sandbox. Do not run untrusted code in
-Flynn. HostNetwork remains restricted to system/builder jobs.
+Applications run in a user namespace: container UID 0 is an unprivileged
+host UID (≥ 1_000_000). Overlay squashfs layers stay owned by host 0/5000
+on disk; idmapped mounts make them appear as 0/5000 inside the job, so
+`/.containerconfig` (0600) and image files stay readable. The overlay
+root is chowned to the mapped UID so jobs can create directories at `/`.
+Default `HOME` for those jobs is `/tmp`. System and
+build jobs are not remapped (nested runc / host volumes). Isolation also
+includes `no_new_privs`, seccomp, AppArmor `flynn-default`, dropped
+capabilities, a private cgroup namespace, and the overlay/host firewall
+above. User jobs cannot request host network/PID, writable cgroups,
+device profiles (`zfs`/`kvm`/`loop`), extra capabilities, or host bind
+mounts (including runtime sockets). Do not run untrusted code in Flynn.
+HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not
 recommend running Flynn in environments where there is access to sensitive data

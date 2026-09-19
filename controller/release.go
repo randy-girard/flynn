@@ -48,6 +48,9 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 			}
 			release.Processes = preserveInternalProcessTypes(release.Processes, prev)
 		}
+		if !app.System() {
+			release.Processes = stripPrivilegedProcessTypes(release.Processes)
+		}
 	}
 
 	if err := schema.Validate(release); err != nil {

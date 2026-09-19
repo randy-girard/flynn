@@ -33,6 +33,17 @@ func (c *controllerAPI) UpdateApp(ctx context.Context, rw http.ResponseWriter, r
 		delete(data, "meta")
 	}
 
+	if meta, ok := data["meta"]; ok {
+		params, _ := ctxhelper.ParamsFromContext(ctx)
+		var existing *ct.App
+		if params != nil {
+			if a, err := c.appRepo.Get(params.ByName("apps_id")); err == nil {
+				existing, _ = a.(*ct.App)
+			}
+		}
+		data["meta"] = sanitizeAppMetaUpdate(ctx, existing, meta)
+	}
+
 	if err := schema.Validate(data); err != nil {
 		respondWithError(rw, err)
 		return

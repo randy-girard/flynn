@@ -45,6 +45,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/ifname"
 	"github.com/randy-girard/flynn/pkg/ipallocator"
 	"github.com/randy-girard/flynn/pkg/iptables"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/rpcplus"
 	"github.com/randy-girard/flynn/pkg/shutdown"
@@ -189,13 +190,16 @@ type LibcontainerBackend struct {
 }
 
 type Container struct {
-	ID        string         `json:"id"`
-	RootPath  string         `json:"root_path"`
-	TmpPath   string         `json:"tmp_path"`
-	IP        net.IP         `json:"ip"`
-	MAC       string         `json:"mac"`
-	Hostname  string         `json:"hostname"`
-	MuxConfig *logmux.Config `json:"mux_config"`
+	ID       string `json:"id"`
+	RootPath string `json:"root_path"`
+	TmpPath  string `json:"tmp_path"`
+	// OverlayPath is the original overlay mount when RootPath is an idmapped
+	// clone (user-namespace jobs). Empty for system/build jobs.
+	OverlayPath string         `json:"overlay_path,omitempty"`
+	IP          net.IP         `json:"ip"`
+	MAC         string         `json:"mac"`
+	Hostname    string         `json:"hostname"`
+	MuxConfig   *logmux.Config `json:"mux_config"`
 
 	container libcontainer.Container
 	job       *host.Job
@@ -205,6 +209,9 @@ type Container struct {
 	// Memory limit tracking
 	softLimitBytes  uint64 // Soft memory limit (memory.high)
 	softLimitLogged bool   // Whether we've already logged soft limit breach
+
+	svcMu  sync.Mutex
+	svcHBs []discoverd.Heartbeater
 
 	*containerinit.Client
 }
@@ -319,6 +326,13 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	overlay := iptables.OverlayNetworkFor(l.bridgeNet.String())
 	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String()); err != nil {
 		log.Error("error enabling job isolation", "err", err)
+		return err
+	}
+	l.envMtx.RLock()
+	extIP := l.defaultEnv["EXTERNAL_IP"]
+	l.envMtx.RUnlock()
+	if err := iptables.ReplaceSetIPs(iptables.NodeSet, iptables.NodeIPs(extIP, nil)); err != nil {
+		log.Error("error seeding node ipset", "err", err)
 		return err
 	}
 
@@ -470,12 +484,19 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		}
 	}()
 
+	lockUntrustedJob(job)
+
 	// set defaults and apply job profiles
 	if job.Partition == "" {
 		job.Partition = defaultPartition
 	}
 	if job.Config.LinuxCapabilities == nil {
-		job.Config.LinuxCapabilities = &host.DefaultCapabilities
+		src := host.DefaultCapabilities
+		if netpolicy.ClassifyJob(job) == netpolicy.ClassUser {
+			src = host.UserJobCapabilities
+		}
+		caps := append([]string(nil), src...)
+		job.Config.LinuxCapabilities = &caps
 	}
 	if job.Config.AllowedDevices == nil {
 		job.Config.AllowedDevices = &host.DefaultAllowedDevices
@@ -556,7 +577,14 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			return err
 		}
 	}
-	diffDir, err := l.setupRootOverlay(rootPath, tmpPath, job)
+	container.RootPath = rootPath
+	container.TmpPath = tmpPath
+	var idmap *userNSSpec
+	if useUserNS(job) {
+		s := userNSSpecForJob(job.ID)
+		idmap = &s
+	}
+	diffDir, err := l.setupRootOverlay(rootPath, tmpPath, job, idmap)
 	if err != nil {
 		log.Error("error setting up rootfs", "err", err)
 		return err
@@ -574,7 +602,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		return err
 	}
 	if err := os.Chmod(tmpInRoot, os.ModeSticky|0777); err != nil {
-		log.Error("error setting rootfs /tmp permissions", "err", err)
+		log.Error("error creating rootfs /tmp", "err", err)
 		return err
 	}
 
@@ -605,10 +633,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			{Type: configs.NEWNS},
 			{Type: configs.NEWUTS},
 			{Type: configs.NEWIPC},
-			// NOTE: NEWUSER namespace (SEC-002) removed — it requires extensive
-			// changes to filesystem layout, bind mount permissions, and container
-			// init to work correctly. The remaining security controls (seccomp,
-			// apparmor, capabilities, no-new-privileges) provide strong isolation.
+			// NEWUSER is prepended later for ClassUser jobs (idmapped overlay).
 		}),
 		Cgroups: &configs.Cgroup{
 			Path: filepath.Join("/flynn", job.Partition, job.ID),
@@ -763,13 +788,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	if !job.Config.HostPIDNamespace {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWPID})
 	}
-
-	// Build jobs run BuildKit, whose nested runc executor manages its own
-	// cgroup subtree. Give them a private cgroup namespace so the container
-	// sees its own cgroup (/flynn/<partition>/<id>) as the cgroup root; this
-	// keeps BuildKit's cgroup creation contained and lets it succeed against
-	// the writeable /sys/fs/cgroup mount configured above.
-	if isBuildJob(job) {
+	// Private cgroup view so /sys/fs/cgroup shows only this job, not sibling
+	// tenants or host systemd units. Build jobs keep a private cgroup ns even
+	// with HostPID so BuildKit's nested runc stays inside the job subtree.
+	if !job.Config.HostPIDNamespace || isBuildJob(job) {
 		config.Namespaces = append(config.Namespaces, configs.Namespace{Type: configs.NEWCGROUP})
 	}
 
@@ -812,13 +834,31 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		log.Error("error creating .container-shared", "err", err)
 		return err
 	}
+	if err := os.Chmod(sharedDir, 0700); err != nil {
+		log.Error("error restricting .container-shared", "err", err)
+		return err
+	}
+	initCopy := filepath.Join(tmpPath, "containerinit")
+	if err := copyFileMode(l.InitPath, initCopy, 0500); err != nil {
+		log.Error("error copying container init", "err", err)
+		return err
+	}
+	resolvCopy := filepath.Join(tmpPath, "resolv.conf")
+	if err := copyFileMode(l.resolvConf, resolvCopy, 0644); err != nil {
+		log.Error("error copying resolv.conf", "err", err)
+		return err
+	}
 
 	config.Mounts = append(config.Mounts,
-		bindMount(l.InitPath, "/.containerinit", false),
-		bindMount(l.resolvConf, "/etc/resolv.conf", false),
+		bindMount(initCopy, "/.containerinit", false),
+		bindMount(resolvCopy, "/etc/resolv.conf", false),
 		bindMount(sharedDir, "/.container-shared", true),
-		bindMount(diffDir, host.DiffPath, false),
 	)
+	// /.container-diff exposes the overlay upperdir layout. Build jobs need
+	// it to squash the layer; user workloads do not.
+	if exposeContainerDiff(job) {
+		config.Mounts = append(config.Mounts, bindMount(diffDir, host.DiffPath, false))
+	}
 
 	// Write secret credential files (mode 0600, root-owned) and bind-mount them
 	// read-only into the container. Secret content deliberately never enters the
@@ -860,7 +900,10 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		})
 	}
 
-	// apply volumes
+	// apply volumes. User-ns jobs get an idmapped clone so the ZFS/ext
+	// dataset itself is not permanently remapped for the next job.
+	var volIDMaps [][2]string
+	mapUserNS := useUserNS(job)
 	for _, v := range job.Config.Volumes {
 		vol := l.VolManager.GetVolume(v.VolumeID)
 		if vol == nil {
@@ -868,7 +911,13 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			log.Error("missing required volume", "volumeID", v.VolumeID, "err", err)
 			return err
 		}
-		config.Mounts = append(config.Mounts, bindMount(vol.Location(), v.Target, v.Writeable))
+		src := vol.Location()
+		if mapUserNS {
+			dst := filepath.Join(tmpPath, idmapVolDir, v.VolumeID)
+			volIDMaps = append(volIDMaps, [2]string{src, dst})
+			src = dst
+		}
+		config.Mounts = append(config.Mounts, bindMount(src, v.Target, v.Writeable))
 	}
 
 	// mutating job state, take state write lock
@@ -931,16 +980,18 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	if l.host != nil && l.host.authKey != "" && isSystemJob(job) {
 		systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
 	}
+	userEnv := userJobInitEnv(job)
 	l.envMtx.RLock()
 	err = writeContainerConfig(configPath, initConfig,
 		map[string]string{
 			"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 			"TERM": "xterm",
-			"HOME": "/",
+			"HOME": userJobHome(mapUserNS),
 		},
 		l.defaultEnv,
 		job.Config.Env,
 		systemEnv,
+		userEnv,
 		map[string]string{
 			"HOSTNAME": hostname,
 		},
@@ -1030,6 +1081,40 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			config.Capabilities.Ambient = append(config.Capabilities.Ambient, cap)
 		}
 	}
+	if mapUserNS {
+		spec := userNSSpecForJob(job.ID)
+		// Create bind destinations as host 0, then chown the overlay upper
+		// so runc inside NEWUSER can open them. Seeding after all mounts
+		// are assembled covers /.containerinit, /.containerconfig, volumes.
+		if err := seedOverlayMountTargets(rootPath, config.Mounts); err != nil {
+			log.Error("error seeding overlay mount targets", "err", err)
+			return err
+		}
+		if err := prepareUserNSOverlayRoot(rootPath, spec); err != nil {
+			log.Error("error preparing overlay root for mapped uid", "err", err)
+			return err
+		}
+		for _, dir := range []string{
+			filepath.Join(tmpPath, "upperfs", "overlay-upperdir"),
+			filepath.Join(tmpPath, "upperfs", "overlay-workdir"),
+		} {
+			if err := chownTree(dir, spec.HostID, spec.HostID); err != nil {
+				log.Error("error chowning overlay upper to mapped root", "err", err)
+				return err
+			}
+		}
+		applyUserNSConfig(config, spec)
+		log.Info("enabling user namespace", "host_uid", spec.HostID, "size", spec.Size)
+		if err := chownJobTmp(tmpPath, spec.HostID, spec.HostID); err != nil {
+			log.Error("error chowning container tmp to mapped root", "err", err)
+			return err
+		}
+		if err := prepareUserNSMounts(volIDMaps, spec); err != nil {
+			log.Error("error applying idmapped mounts", "err", err)
+			return err
+		}
+	}
+
 	if spec, ok := job.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
 		// cpu.shares is replaced by cpu.weight in cgroups v2
 		// cpu.shares range: 2-262144, default 1024
@@ -1066,6 +1151,12 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		// /proc/self/attr/exec with EPERM.
 		errMsg := err.Error()
 		if config.AppArmorProfile != "" && (strings.Contains(errMsg, "apparmor") || strings.Contains(errMsg, "apply apparmor")) {
+			// User jobs fail closed: retrying unconfined would drop the
+			// LSM that blocked unshare/mount in the isolation assessment.
+			if !isSystemJob(job) && !isBuildJob(job) {
+				c.Destroy()
+				return err
+			}
 			log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
 			c.Destroy()
 			config.AppArmorProfile = ""
@@ -1106,7 +1197,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	return nil
 }
 
-func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job *host.Job) (string, error) {
+func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job *host.Job, idmap *userNSSpec) (string, error) {
 	log := l.Logger.New("fn", "setupRootOverlay", "job.id", job.ID)
 	layers := make([]string, 0, len(job.Mountspecs)+1)
 	for _, spec := range job.Mountspecs {
@@ -1120,12 +1211,64 @@ func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job
 		}
 		layers = append(layers, path)
 	}
-	log.Info("mounting ext2 layer")
-	tmpfs, err := l.mountTmpfs(job)
+	log.Info("mounting writable layer")
+	var tmpfs string
+	var err error
+	if idmap != nil {
+		// ext2-on-zvol has no FS_ALLOW_IDMAP (EINVAL). User jobs use a
+		// tmpfs upper so overlay copy-up stays host-writable; squashfs
+		// lowers are idmapped separately.
+		size := int64(1 << 30)
+		if spec, ok := job.Resources[resource.TypeTempDisk]; ok && spec.Limit != nil {
+			size = *spec.Limit
+		}
+		tmpfs, err = mountUserNSWritable(scratchPath, size)
+	} else {
+		tmpfs, err = l.mountTmpfs(job)
+	}
 	if err != nil {
 		return "", err
 	}
 	layers = append(layers, tmpfs)
+	for _, dir := range []string{
+		filepath.Join(tmpfs, "overlay-upperdir"),
+		filepath.Join(tmpfs, "overlay-workdir"),
+		filepath.Join(tmpfs, "overlay-upperdir", "tmp"),
+	} {
+		if err := os.Mkdir(dir, 0755); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Chmod(filepath.Join(tmpfs, "overlay-upperdir", "tmp"), os.ModeSticky|0777); err != nil {
+		return "", err
+	}
+	if idmap != nil {
+		upper := filepath.Join(tmpfs, "overlay-upperdir")
+		if err := os.Mkdir(filepath.Join(upper, ".container-shared"), 0700); err != nil {
+			return "", err
+		}
+		if err := os.Mkdir(filepath.Join(upper, "etc"), 0755); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		for _, f := range []string{
+			filepath.Join(upper, ".containerinit"),
+			filepath.Join(upper, "etc", "resolv.conf"),
+		} {
+			if err := os.WriteFile(f, nil, 0755); err != nil {
+				return "", err
+			}
+		}
+	}
+	if idmap != nil && len(layers) > 1 {
+		// Overlay upper/work cannot be idmapped (copy-up returns EROFS).
+		// Idmap squashfs lowers only; the tmpfs upper stays host-writable.
+		log.Info("idmapping squashfs layers", "host_uid", idmap.HostID, "size", idmap.Size)
+		mapped, err := idmapCloneLayers(scratchPath, layers[:len(layers)-1], *idmap)
+		if err != nil {
+			return "", err
+		}
+		layers = append(mapped, tmpfs)
+	}
 	dirs := make([]string, len(layers))
 	for i, layer := range layers {
 		// append mount paths in reverse order as overlay
@@ -1134,8 +1277,14 @@ func (l *LibcontainerBackend) setupRootOverlay(rootPath, scratchPath string, job
 	}
 	upperDir := filepath.Join(tmpfs, "overlay-upperdir")
 	workDir := filepath.Join(tmpfs, "overlay-workdir")
-	for _, dir := range []string{upperDir, workDir} {
-		if err := os.Mkdir(dir, 0755); err != nil {
+	if idmap != nil {
+		// Chown upper/work before mount so overlay `/` is the mapped
+		// root from the start. Chown after mount does not update the
+		// cached overlay root inode (mkdir /www → EACCES in NEWUSER).
+		if err := chownTree(upperDir, idmap.HostID, idmap.HostID); err != nil {
+			return "", err
+		}
+		if err := chownTree(workDir, idmap.HostID, idmap.HostID); err != nil {
 			return "", err
 		}
 	}
@@ -1427,6 +1576,12 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 		case containerinit.StateRunning:
 			log.Info("container running")
 			c.l.State.SetStatusRunning(c.job.ID)
+			if err := c.registerJobServices(log); err != nil {
+				log.Error("error registering job services", "err", err)
+				c.Stop()
+				c.l.State.SetStatusFailed(c.job.ID, err)
+				return err
+			}
 
 			// if the job was stopped before it started, exit
 			if c.l.State.GetJob(c.job.ID).ForceStop {
@@ -1502,6 +1657,7 @@ func (c *Container) followLogs(log log15.Logger, buffer host.LogBuffer) error {
 func (c *Container) cleanup() error {
 	log := c.l.Logger.New("fn", "cleanup", "job.id", c.job.ID)
 	log.Info("starting cleanup")
+	c.closeJobServices()
 
 	c.l.logStreamMtx.Lock()
 	for _, s := range c.l.logStreams[c.job.ID] {
@@ -1526,14 +1682,17 @@ func (c *Container) cleanup() error {
 	}
 
 	if c.RootPath != "" {
-		if err := syscall.Unmount(c.RootPath, 0); err != nil && err != syscall.EINVAL && err != syscall.ENOENT {
-			log.Error("error unmounting root overlay", "err", err)
-		}
+		unmountUnder(c.RootPath)
+	}
+	if c.TmpPath != "" {
+		unmountUnder(c.TmpPath)
 	}
 
 	// remove the tmpfs volume (which has the same ID as the job)
-	if err := c.l.VolManager.DestroyVolume(c.job.ID); err != nil {
-		log.Error("error removing tmpfs volume", "err", err)
+	if c.job != nil && !useUserNS(c.job) {
+		if err := c.l.VolManager.DestroyVolume(c.job.ID); err != nil {
+			log.Error("error removing tmpfs volume", "err", err)
+		}
 	}
 
 	os.RemoveAll(c.TmpPath)
@@ -1624,6 +1783,7 @@ func (l *LibcontainerBackend) DiscoverdDeregister(id string) error {
 	if err != nil {
 		return err
 	}
+	container.closeJobServices()
 	return container.DiscoverdDeregister()
 }
 
@@ -2034,6 +2194,67 @@ func isSystemJob(job *host.Job) bool {
 		job.Metadata["flynn-controller.app_name"] == "builder"
 }
 
+// lockUntrustedJob strips host-escape knobs a tenant release can set
+// (CAP_SYS_ADMIN, host binds, device profiles, writable cgroups, host net/PID).
+// System jobs are unchanged. Build jobs keep Flynn-applied extra caps and a
+// writable cgroup, but cannot bring their own cap list, device profiles, or
+// runtime-socket binds.
+func lockUntrustedJob(job *host.Job) {
+	if job == nil || isSystemJob(job) {
+		return
+	}
+	job.Config.HostNetwork = false
+	job.Config.HostPIDNamespace = false
+	job.Profiles = nil
+	job.Config.AllowedDevices = nil
+	job.Config.AutoCreatedDevices = nil
+	job.Config.LinuxCapabilities = nil
+	if isBuildJob(job) {
+		job.Config.WriteableCgroups = true
+		job.Config.Mounts = filterSafeJobMounts(job.Config.Mounts)
+		return
+	}
+	job.Config.WriteableCgroups = false
+	job.Config.Mounts = nil
+}
+
+func filterSafeJobMounts(mounts []host.Mount) []host.Mount {
+	if len(mounts) == 0 {
+		return nil
+	}
+	out := make([]host.Mount, 0, len(mounts))
+	for _, m := range mounts {
+		if unsafeHostBind(m) {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+func unsafeHostBind(m host.Mount) bool {
+	if m.Device != "" && m.Device != "bind" {
+		return false
+	}
+	src := filepath.Clean(m.Target)
+	if src == "" || src == "." || src == "/" {
+		return true
+	}
+	base := filepath.Base(src)
+	if strings.Contains(base, ".sock") {
+		return true
+	}
+	for _, p := range []string{
+		"/var/run", "/run", "/etc", "/root", "/var/lib/flynn",
+		"/proc", "/sys", "/dev", "/boot", "/lib/modules", "/usr/lib/modules",
+	} {
+		if src == p || strings.HasPrefix(src, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // buildJobExtraCapabilities lists the Linux capabilities granted to build jobs
 // (dockerbuilder/slugbuilder) on top of the defaults. CAP_MKNOD/CAP_SYS_CHROOT
 // are needed to extract and chroot into rootfs tarballs; CAP_SYS_ADMIN,
@@ -2053,6 +2274,43 @@ func cgroupsReadonly(isBuild, writeableCgroups, systemApp, systemPartition bool)
 		return false
 	}
 	return !writeableCgroups || (!systemApp && !systemPartition)
+}
+
+func exposeContainerDiff(job *host.Job) bool {
+	return netpolicy.ClassifyJob(job) != netpolicy.ClassUser
+}
+
+func copyFileMode(src, dst string, mode os.FileMode) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	return os.Chmod(dst, mode)
+}
+
+// userJobInitEnv asks containerinit not to copy DISCOVERD into the workload
+// and not to register HTTP backends; flynn-host does that instead.
+func userJobInitEnv(job *host.Job) map[string]string {
+	if netpolicy.ClassifyJob(job) != netpolicy.ClassUser {
+		return nil
+	}
+	return map[string]string{
+		containerinit.HideDiscoverdEnv:      "1",
+		containerinit.HostRegistersServices: "1",
+	}
 }
 
 // subscribeOOM watches for cgroup OOM kills. libcontainer NotifyOOM uses

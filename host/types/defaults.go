@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package host
@@ -23,13 +24,30 @@ var DefaultCapabilities = []string{
 	"CAP_KILL",
 }
 
+// UserJobCapabilities is the bounding set for untrusted app jobs. Init still
+// needs SETUID/SETGID/DAC_OVERRIDE to drop to the flynn user; SETFCAP, SETPCAP
+// and audit caps are omitted so a later root-in-container bug cannot alter
+// file capabilities or the host audit log.
+var UserJobCapabilities = []string{
+	"CAP_NET_BIND_SERVICE",
+	"CAP_DAC_OVERRIDE",
+	"CAP_SETGID",
+	"CAP_SETUID",
+	"CAP_CHOWN",
+	"CAP_FOWNER",
+	"CAP_FSETID",
+	"CAP_KILL",
+}
+
 // DefaultAllowedDevices is the default list of devices containers are allowed
 // to access
 var DefaultAllowedDevices = fromConfigDevices(configs.DefaultAllowedDevices)
 
-// DefaultAutoCreatedDevices is the default list of devices created inside
-// containers
-var DefaultAutoCreatedDevices = fromConfigDevices(configs.DefaultAllowedDevices)
+// DefaultAutoCreatedDevices is the default list of device nodes created in
+// the container. Use SimpleDevices (paths only): AllowedDevices also lists
+// wildcard mknod rules with empty Path, and runc in a user namespace bind-
+// mounts each entry (os.Create on the rootfs path fails with EISDIR).
+var DefaultAutoCreatedDevices = fromConfigDevices(configs.DefaultSimpleDevices)
 
 func (d *Device) Config() *configs.Device {
 	return &configs.Device{

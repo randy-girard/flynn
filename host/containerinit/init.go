@@ -64,6 +64,14 @@ type Config struct {
 
 const SharedPath = "/.container-shared"
 
+// HideDiscoverdEnv tells containerinit to keep DISCOVERD for its own service
+// registration but omit it from the workload process environment.
+const HideDiscoverdEnv = "FLYNN_HIDE_DISCOVERD"
+
+// HostRegistersServices tells containerinit not to dial discoverd; flynn-host
+// registers HTTP backends so user jobs never need :1111.
+const HostRegistersServices = "FLYNN_HOST_REGISTERS_SERVICES"
+
 type State byte
 
 const (
@@ -385,6 +393,24 @@ func lookupStandardPath(name string) string {
 	return ""
 }
 
+// childEnv is the environment passed to the workload. containerinit keeps
+// DISCOVERD in Config.Env for service registration; user jobs set
+// HideDiscoverdEnv so the app process (and /proc/self/environ) never see it.
+func childEnv(env map[string]string) []string {
+	hide := env[HideDiscoverdEnv] == "1" || env[HostRegistersServices] == "1"
+	out := make([]string, 0, len(env))
+	for k, v := range env {
+		if k == HideDiscoverdEnv || k == HostRegistersServices {
+			continue
+		}
+		if hide && k == "DISCOVERD" {
+			continue
+		}
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
 func monitor(port host.Port, container *ContainerInit, env map[string]string, log log15.Logger) (discoverd.Heartbeater, error) {
 	config := port.Service
 	client := discoverd.NewClientWithURL(env["DISCOVERD"])
@@ -580,10 +606,7 @@ func containerInitApp(c *Config, logFile *os.File) error {
 	cmd := exec.Command(cmdPath, c.Args[1:]...)
 	cmd.Dir = c.WorkDir
 
-	cmd.Env = make([]string, 0, len(c.Env))
-	for k, v := range c.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
+	cmd.Env = childEnv(c.Env)
 
 	// App runs in its own session
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -724,20 +747,21 @@ func containerInitApp(c *Config, logFile *os.File) error {
 	init.changeState(StateRunning, "", -1)
 
 	init.mtx.Unlock() // Allow calls
-	// monitor services
 	hbs := make([]discoverd.Heartbeater, 0, len(c.Ports))
-	for _, port := range c.Ports {
-		if port.Service == nil {
-			continue
+	if c.Env[HostRegistersServices] != "1" {
+		for _, port := range c.Ports {
+			if port.Service == nil {
+				continue
+			}
+			log := log.New("name", port.Service.Name, "port", port.Port, "proto", port.Proto)
+			log.Info("monitoring service")
+			hb, err := monitor(port, init, c.Env, log)
+			if err != nil {
+				log.Error("error monitoring service", "err", err)
+				os.Exit(70)
+			}
+			hbs = append(hbs, hb)
 		}
-		log := log.New("name", port.Service.Name, "port", port.Port, "proto", port.Proto)
-		log.Info("monitoring service")
-		hb, err := monitor(port, init, c.Env, log)
-		if err != nil {
-			log.Error("error monitoring service", "err", err)
-			os.Exit(70)
-		}
-		hbs = append(hbs, hb)
 	}
 	exitCode := babySit(init, hbs)
 	log.Info("job exited", "status", exitCode)
