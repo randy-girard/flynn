@@ -36,6 +36,12 @@ need "${vagrant}" 'nicpromisc2", "allow-all"' \
   "Vagrantfile must set --nicpromisc2 allow-all on cluster node NICs (flannel VXLAN)"
 need "${vagrant}" '192\.168\.56\.\#\{19 \+ i\}' \
   "cluster node N must be 192.168.56.(19+N) (node1=.20)"
+need "${vagrant}" 'private_network' \
+  "cluster nodes must use a host-only private_network (not NAT forwards) for service ports"
+if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
+  echo "Vagrantfile must not NAT-forward cluster ports (that bypasses guest UFW)" >&2
+  exit 1
+fi
 
 smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
 need "${smoke}" 'VTEP MAC' "smoke script must diagnose device vs lease VTEP MAC"
@@ -52,6 +58,14 @@ if ! grep -F 'ssh -F "${cfg}"' "${smoke}" >/dev/null; then
   exit 1
 fi
 need "${smoke}" 'postgres_is_read_write' "smoke must verify postgres on a cluster node (overlay :5433 is not reachable from the host)"
+if ! grep -Fq 'http://${NODE1_IP}/' "${smoke}"; then
+  echo "smoke HTTP/app probes must use host-only node IPs, not localhost NAT forwards" >&2
+  exit 1
+fi
+if grep -qE '9079|9442' "${smoke}"; then
+  echo "smoke must not use Vagrant NAT-forwarded HTTP/HTTPS host ports" >&2
+  exit 1
+fi
 
 build="${ROOT}/build.sh"
 need "${build}" 'default_gomemlimit' \
