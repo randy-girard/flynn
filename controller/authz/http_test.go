@@ -52,8 +52,9 @@ func TestHTTPAllowed(t *testing.T) {
 		{"wrong_app_denied", wrongApp, http.MethodGet, "/apps/app-1", false},
 
 		{"deploy_grant_allows_named_deploy_route", appDeploy, http.MethodPost, "/apps/app-1/deploy", true},
-		// app:deploy satisfies rkAppWrite (see grantCovers), not only POST …/deploy.
-		{"deploy_grant_allows_post_subresource", appDeploy, http.MethodPost, "/apps/app-1/releases", true},
+		{"deploy_grant_cannot_post_subresource", appDeploy, http.MethodPost, "/apps/app-1/releases", false},
+		{"deploy_grant_cannot_post_cluster_release", appDeploy, http.MethodPost, "/releases", false},
+		{"deploy_grant_can_get_app", appDeploy, http.MethodGet, "/apps/app-1", true},
 
 		// build:artifacts scope + app grant may create artifacts...
 		{"build_token_can_post_artifacts", buildTok, http.MethodPost, "/artifacts", true},

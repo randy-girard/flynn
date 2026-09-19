@@ -271,24 +271,27 @@ func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
 			hasStar = true
 		case "cluster:admin":
 			hasStar = true
-		case "app:read":
+		case PermAppRead:
 			hasRead = true
-		case "app:write":
+		case PermAppWrite:
 			hasWrite = true
-		case "app:deploy":
+		case PermAppDeploy:
 			hasDeploy = true
-		case "app:admin":
+		case PermAppAdmin:
 			hasAdmin = true
 		}
 	}
 	if hasStar {
 		return true
 	}
+	// Named roles map 1:1 onto these grants (View=app:read, Deploy=app:deploy,
+	// Manage=app:write, Admin=app:admin). Higher grants imply lower ones, but
+	// Deploy does not imply Manage: app:deploy is POST …/deploy only.
 	switch need {
 	case rkAppRead:
 		return hasRead || hasWrite || hasDeploy || hasAdmin
 	case rkAppWrite:
-		return hasWrite || hasDeploy || hasAdmin
+		return hasWrite || hasAdmin
 	case rkAppDeploy:
 		return hasDeploy || hasWrite || hasAdmin
 	default:
