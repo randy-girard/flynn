@@ -91,12 +91,13 @@ func (s *S) TestJobGet(c *C) {
 		AppID:     app.ID,
 		ReleaseID: release.ID,
 		Type:      "web",
+		Name:      "web.4821",
 		State:     ct.JobStateStarting,
 		Meta:      map[string]string{"some": "info"},
 	})
 
-	// test getting the job with both the job ID and the UUID
-	for _, id := range []string{jobID, uuid} {
+	// test getting the job with the cluster ID, UUID, and short name
+	for _, id := range []string{jobID, uuid, "web.4821"} {
 		job, err := s.c.GetJob(app.ID, id)
 		c.Assert(err, IsNil)
 		c.Assert(job.ID, Equals, jobID)
@@ -104,7 +105,9 @@ func (s *S) TestJobGet(c *C) {
 		c.Assert(job.HostID, Equals, hostID)
 		c.Assert(job.AppID, Equals, app.ID)
 		c.Assert(job.ReleaseID, Equals, release.ID)
-		c.Assert(job.Meta, DeepEquals, map[string]string{"some": "info"})
+		c.Assert(job.Name, Equals, "web.4821")
+		c.Assert(job.Meta["some"], Equals, "info")
+		c.Assert(job.Meta["name"], Equals, "web.4821")
 	}
 }
 
@@ -207,8 +210,8 @@ func (s *S) TestRunJobDetached(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "run-detached"})
 	artifact := s.createTestArtifact(c, &ct.Artifact{})
 	hostID := fakeHostID()
-	host := tu.NewFakeHostClient(hostID, false)
-	s.cc.AddHost(host)
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
 
 	release := s.createTestRelease(c, app.ID, &ct.Release{
 		ArtifactIDs: []string{artifact.ID},
@@ -230,11 +233,14 @@ func (s *S) TestRunJobDetached(c *C) {
 	c.Assert(res.Type, Equals, "runner")
 	c.Assert(res.Args, DeepEquals, args)
 
-	jobs, err := host.ListJobs()
+	jobs, err := hc.ListJobs()
 	c.Assert(err, IsNil)
 	for _, j := range jobs {
 		job := j.Job
 		c.Assert(res.ID, Equals, job.ID)
+		name := job.Metadata[host.MetaControllerName]
+		c.Assert(ct.IsJobName(name), Equals, true)
+		delete(job.Metadata, host.MetaControllerName)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
 			"flynn-controller.app":          app.ID,
 			"flynn-controller.app_name":     app.Name,
@@ -244,6 +250,8 @@ func (s *S) TestRunJobDetached(c *C) {
 			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
+		c.Assert(job.Config.Env["FLYNN_JOB_NAME"], Equals, name)
+		delete(job.Config.Env, "FLYNN_JOB_NAME")
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
 			"FLYNN_APP_ID":       app.ID,
 			"FLYNN_RELEASE_ID":   release.ID,
@@ -381,6 +389,9 @@ func (s *S) TestRunJobAttached(c *C) {
 	for _, j := range jobs {
 		job := j.Job
 		c.Assert(job.ID, Equals, jobID)
+		name := job.Metadata[host.MetaControllerName]
+		c.Assert(ct.IsJobName(name), Equals, true)
+		delete(job.Metadata, host.MetaControllerName)
 		c.Assert(job.Metadata, DeepEquals, map[string]string{
 			"flynn-controller.app":          app.ID,
 			"flynn-controller.app_name":     app.Name,
@@ -390,6 +401,8 @@ func (s *S) TestRunJobAttached(c *C) {
 			"gc.max_inactive_slug_releases": "10",
 		})
 		c.Assert(job.Config.Args, DeepEquals, []string{"foo", "bar"})
+		c.Assert(job.Config.Env["FLYNN_JOB_NAME"], Equals, name)
+		delete(job.Config.Env, "FLYNN_JOB_NAME")
 		c.Assert(job.Config.Env, DeepEquals, map[string]string{
 			"FLYNN_APP_ID":       app.ID,
 			"FLYNN_RELEASE_ID":   release.ID,

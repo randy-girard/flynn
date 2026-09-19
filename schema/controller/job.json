@@ -34,6 +34,10 @@
       "description": "process type name from the release",
       "type": "string"
     },
+    "name": {
+      "description": "short process label such as web.4821",
+      "type": "string"
+    },
     "state": {
       "type": "string",
       "enum": ["pending", "starting", "up", "stopping", "down", "crashed", "failed"]

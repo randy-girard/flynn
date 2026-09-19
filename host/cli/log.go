@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/flynn/go-docopt"
@@ -195,12 +196,19 @@ func logLinePrefix(job host.ActiveJob) string {
 		if job.Job.Metadata != nil {
 			app = job.Job.Metadata["flynn-controller.app_name"]
 			ptype = job.Job.Metadata["flynn-controller.type"]
+			if n := job.Job.Metadata[host.MetaControllerName]; n != "" {
+				id = n
+			}
 		}
-		if u, err := cluster.ExtractUUID(id); err == nil && len(u) >= 8 {
-			id = u[:8]
+		if id == job.Job.ID {
+			if u, err := cluster.ExtractUUID(id); err == nil && len(u) >= 8 {
+				id = u[:8]
+			}
 		}
 	}
 	switch {
+	case app != "" && strings.Contains(id, "."):
+		return app + "." + id + " | "
 	case app != "" && ptype != "":
 		return app + "." + ptype + "." + id + " | "
 	case app != "":

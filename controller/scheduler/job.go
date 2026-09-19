@@ -53,7 +53,9 @@ type Job struct {
 	// need to track it before that happens.
 	ID string `json:"id"`
 
-	Type      string `json:"type"`
+	Type string `json:"type"`
+	// Name is the short label (web.4821) shown in CLI and dashboards.
+	Name      string `json:"name,omitempty"`
 	AppID     string `json:"app_id"`
 	ReleaseID string `json:"release_id"`
 
@@ -172,11 +174,13 @@ func (j *Job) ControllerJob() *ct.Job {
 		AppID:     j.AppID,
 		ReleaseID: j.ReleaseID,
 		Type:      j.Type,
+		Name:      j.Name,
 		Meta:      utils.JobMetaFromMetadata(j.metadata),
 		HostError: j.hostError,
 		RunAt:     j.RunAt,
 		Args:      j.Args,
 	}
+	ct.EnsureJobName(job)
 
 	switch j.State {
 	case JobStatePending:
@@ -287,4 +291,15 @@ func (js Jobs) GetProcesses(key utils.FormationKey) Processes {
 func (js Jobs) Add(j *Job) *Job {
 	js[j.ID] = j
 	return j
+}
+
+func (js Jobs) usedNames(appID string) []string {
+	var out []string
+	for _, job := range js {
+		if job == nil || job.AppID != appID || job.Name == "" || job.State == JobStateStopped {
+			continue
+		}
+		out = append(out, job.Name)
+	}
+	return out
 }

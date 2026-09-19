@@ -30,7 +30,51 @@ func (r *JobRepo) Get(id string) (*ct.Job, error) {
 	return scanJob(row)
 }
 
+// GetInApp resolves a UUID, cluster ID, or short name (web.4821) for one app.
+func (r *JobRepo) GetInApp(appID, id string) (*ct.Job, error) {
+	if job, err := r.Get(id); err == nil {
+		if appID == "" || job.AppID == appID {
+			return job, nil
+		}
+	}
+	jobs, err := r.List(appID)
+	if err != nil {
+		return nil, err
+	}
+	id = strings.TrimSpace(id)
+	var named *ct.Job
+	for _, job := range jobs {
+		if job.UUID == id || job.ID == id {
+			return job, nil
+		}
+		if JobDisplayOrStored(job) == id {
+			if named == nil || !job.IsDown() {
+				cp := *job
+				named = &cp
+				if !job.IsDown() {
+					return named, nil
+				}
+			}
+		}
+	}
+	if named != nil {
+		return named, nil
+	}
+	return nil, ErrNotFound
+}
+
+func JobDisplayOrStored(job *ct.Job) string {
+	if job == nil {
+		return ""
+	}
+	if job.Name != "" {
+		return job.Name
+	}
+	return ct.JobNameFromMeta(job.Meta)
+}
+
 func (r *JobRepo) Add(job *ct.Job) error {
+	ct.EnsureJobName(job)
 	tx, err := r.db.Begin()
 	if err != nil {
 		return err
@@ -111,6 +155,7 @@ func scanJob(s postgres.Scanner) (*ct.Job, error) {
 	if volumeIDs != "" {
 		job.VolumeIDs = split(volumeIDs[1:len(volumeIDs)-1], ",")
 	}
+	ct.EnsureJobName(job)
 	return job, nil
 }
 

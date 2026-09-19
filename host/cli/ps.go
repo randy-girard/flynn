@@ -91,6 +91,7 @@ func printJobs(jobs sortJobs, out io.Writer) {
 	w := tabwriter.NewWriter(out, 1, 2, 2, ' ', 0)
 	defer w.Flush()
 	listRec(w,
+		"NAME",
 		"ID",
 		"STATE",
 		"CREATED",
@@ -108,8 +109,13 @@ func printJobs(jobs sortJobs, out io.Writer) {
 		if job.Error != nil {
 			jobError = *job.Error
 		}
+		name := ""
+		if job.Job != nil && job.Job.Metadata != nil {
+			name = job.Job.Metadata[host.MetaControllerName]
+		}
 
 		listRec(w,
+			name,
 			job.Job.ID,
 			job.Status,
 			created,

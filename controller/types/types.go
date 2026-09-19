@@ -362,9 +362,11 @@ type Job struct {
 	// empty if the job is pending
 	HostID string `json:"host_id,omitempty"`
 
-	AppID      string            `json:"app,omitempty"`
-	ReleaseID  string            `json:"release,omitempty"`
-	Type       string            `json:"type,omitempty"`
+	AppID     string `json:"app,omitempty"`
+	ReleaseID string `json:"release,omitempty"`
+	Type      string `json:"type,omitempty"`
+	// Name is the short label (web.4821). UUID remains the primary key.
+	Name       string            `json:"name,omitempty"`
 	State      JobState          `json:"state,omitempty"`
 	Args       []string          `json:"args,omitempty"`
 	VolumeIDs  []string          `json:"volumes,omitempty"`

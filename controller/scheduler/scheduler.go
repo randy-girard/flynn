@@ -1426,6 +1426,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		}
 	}
 
+	s.assignJobName(req.Job)
 	req.Config = jobConfig(req.Job, req.Host.ID)
 	req.Job.JobID = req.Config.ID
 	req.Job.HostID = req.Host.ID
@@ -2374,6 +2375,11 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 	job.metadata = hostJob.Metadata
 	job.exitStatus = activeJob.ExitStatus
 	job.hostError = activeJob.Error
+	if n := strings.TrimSpace(hostJob.Metadata[host.MetaControllerName]); n != "" {
+		job.Name = n
+	} else {
+		s.assignJobName(job)
+	}
 
 	// if the host job is running but has a service, wait for either
 	// service or router events before marking the job as running
@@ -2472,7 +2478,21 @@ func (s *Scheduler) handleJobStatus(job *Job, status host.JobStatus) {
 	s.triggerRectify(job.Formation.key())
 }
 
+func (s *Scheduler) assignJobName(job *Job) {
+	if job == nil || job.Name != "" {
+		return
+	}
+	if job.metadata != nil {
+		if n := strings.TrimSpace(job.metadata[host.MetaControllerName]); n != "" {
+			job.Name = n
+			return
+		}
+	}
+	job.Name = ct.AllocateJobName(job.Type, s.jobs.usedNames(job.AppID))
+}
+
 func (s *Scheduler) persistJob(job *Job) {
+	s.assignJobName(job)
 	s.persistControllerJob(job.ControllerJob())
 }
 
@@ -2785,6 +2805,13 @@ func jobConfig(job *Job, hostID string) *host.Job {
 	j := utils.JobConfig(job.Formation.ExpandedFormation, job.Type, hostID, job.ID)
 	if job.Reason != "" {
 		j.Metadata["flynn-controller.reason"] = job.Reason
+	}
+	if job.Name != "" {
+		j.Metadata[host.MetaControllerName] = job.Name
+		if j.Config.Env == nil {
+			j.Config.Env = map[string]string{}
+		}
+		j.Config.Env["FLYNN_JOB_NAME"] = job.Name
 	}
 	j.Config.Volumes = make([]host.VolumeBinding, len(job.Volumes))
 	for i, vol := range job.Volumes {

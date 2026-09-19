@@ -48,7 +48,12 @@ func (c *controllerAPI) ListActiveJobs(ctx context.Context, w http.ResponseWrite
 
 func (c *controllerAPI) GetJob(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	job, err := c.jobRepo.Get(params.ByName("jobs_id"))
+	appID := params.ByName("apps_id")
+	// App lookup is optional so a job can still be fetched after the app is deleted.
+	if data, err := c.appRepo.Get(appID); err == nil {
+		appID = data.(*ct.App).ID
+	}
+	job, err := c.jobRepo.GetInApp(appID, params.ByName("jobs_id"))
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -87,7 +92,8 @@ func (c *controllerAPI) PutJob(ctx context.Context, w http.ResponseWriter, req *
 
 func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	job, err := c.jobRepo.Get(params.ByName("jobs_id"))
+	app := c.getApp(ctx)
+	job, err := c.jobRepo.GetInApp(app.ID, params.ByName("jobs_id"))
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -189,11 +195,31 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	id := cluster.GenerateJobID(hostID, uuid)
 	app := c.getApp(ctx)
 	procType := ct.NewJobProcessType(newJob, attach)
+	name := ""
+	if existing, err := c.jobRepo.List(app.ID); err == nil {
+		var used []string
+		for _, j := range existing {
+			if j.IsDown() {
+				continue
+			}
+			if n := ct.JobNameFromMeta(j.Meta); n != "" {
+				used = append(used, n)
+			} else if j.Name != "" {
+				used = append(used, j.Name)
+			}
+		}
+		name = ct.AllocateJobName(procType, used)
+	} else {
+		name = ct.AllocateJobName(procType, nil)
+	}
 	env := make(map[string]string, len(entrypoint.Env)+len(release.Env)+len(newJob.Env)+4)
 	env["FLYNN_APP_ID"] = app.ID
 	env["FLYNN_RELEASE_ID"] = release.ID
 	env["FLYNN_PROCESS_TYPE"] = procType
 	env["FLYNN_JOB_ID"] = id
+	if name != "" {
+		env["FLYNN_JOB_NAME"] = name
+	}
 	for k, v := range entrypoint.Env {
 		env[k] = v
 	}
@@ -216,6 +242,9 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	metadata["flynn-controller.app_name"] = app.Name
 	metadata["flynn-controller.release"] = release.ID
 	metadata["flynn-controller.type"] = procType
+	if name != "" {
+		metadata[host.MetaControllerName] = name
+	}
 	job := &host.Job{
 		ID:       id,
 		Metadata: metadata,
@@ -319,7 +348,9 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 			HostID:    hostID,
 			ReleaseID: newJob.ReleaseID,
 			Type:      procType,
+			Name:      name,
 			Args:      newJob.Args,
+			Meta:      map[string]string{ct.JobNameMetaKey: name},
 		})
 	}
 }

@@ -13,7 +13,7 @@ func init() {
 	register("ps:kill", runKill, `
 usage: flynn ps:kill <job>...
 
-Kill running jobs.`)
+Kill running jobs. <job> may be a short name (web.4821) or a UUID.`)
 }
 
 func runKill(args *docopt.Args, client controller.Client) error {

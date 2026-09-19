@@ -32,6 +32,7 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 		{JobEventCreate, sampleJob(JobReasonReplace, "large", "web"), "Replacing web process (runtime profile large)"},
 		{JobEventCreate, sampleJob(JobReasonScale, "", "web"), "Scaling up web process"},
 		{JobEventStart, sampleJob("", "medium", "web"), "web process started (runtime profile medium)"},
+		{JobEventStart, namedSampleJob("web.4821", "medium", "web"), "web process started (web.4821, runtime profile medium)"},
 		{JobEventStop, sampleJob("", "", "web"), "web process stopped"},
 		{JobEventStop, sampleStopJob(JobReasonScaleDown, "web"), "Scaling down web process"},
 		{JobEventError, &ActiveJob{Job: &Job{Metadata: map[string]string{MetaControllerType: "web"}}, Error: strPtr("boom")}, "web process failed to start: boom"},
@@ -88,6 +89,12 @@ func TestJobLifecycleWebhookCodes(t *testing.T) {
 	if code != CodeJobCrash || sev != SeverityError {
 		t.Fatalf("crash: %s %s", code, sev)
 	}
+}
+
+func namedSampleJob(name, profile, procType string) *ActiveJob {
+	job := sampleJob("", profile, procType)
+	job.Job.Metadata[MetaControllerName] = name
+	return job
 }
 
 func sampleStopJob(reason, procType string) *ActiveJob {

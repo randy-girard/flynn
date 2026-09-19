@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 	logaggc "github.com/randy-girard/flynn/logaggregator/client"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 
@@ -23,7 +24,7 @@ Stream log for an app.
 
 Options:
 	-f, --follow               stream new lines
-	-j, --job=<id>             filter logs to a specific job ID
+	-j, --job=<id>             filter logs to a job name (web.4821) or UUID
 	-n, --number=<lines>       return at most n lines from the log buffer
 	-r, --raw-output           output raw log messages with no prefix
 	-s, --split-stderr         send stderr lines to stderr
@@ -38,9 +39,19 @@ const rfc3339micro = "2006-01-02T15:04:05.000000Z07:00"
 
 func runLog(args *docopt.Args, client controller.Client) error {
 	rawOutput := args.Bool["--raw-output"]
+	jobID := args.String["--job"]
+	if jobID != "" && ct.IsJobName(jobID) {
+		if j, err := client.GetJob(mustApp(), jobID); err == nil {
+			if j.ID != "" {
+				jobID = j.ID
+			} else {
+				jobID = j.UUID
+			}
+		}
+	}
 	opts := logagg.LogOpts{
 		Follow:      args.Bool["--follow"],
-		JobID:       args.String["--job"],
+		JobID:       jobID,
 		StreamTypes: logagg.DefaultStreamTypes(),
 	}
 	if ptype, ok := args.String["--process-type"]; ok {

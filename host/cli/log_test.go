@@ -52,6 +52,18 @@ func TestLogLinePrefix(t *testing.T) {
 	if got != "dashboard.web.6e007458 | " {
 		t.Fatalf("%q", got)
 	}
+
+	named := host.ActiveJob{Job: &host.Job{
+		ID: "localhost-6e007458-ff0b-4aee-a42d-b318694e0b4c",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "dashboard",
+			"flynn-controller.type":     "web",
+			host.MetaControllerName:     "web.4821",
+		},
+	}}
+	if got := logLinePrefix(named); got != "dashboard.web.4821 | " {
+		t.Fatalf("named prefix %q", got)
+	}
 }
 
 func TestPrefixWriter(t *testing.T) {
