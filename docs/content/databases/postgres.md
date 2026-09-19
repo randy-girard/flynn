@@ -35,7 +35,40 @@ release. `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PGHOST` provide connection
 details for the database and are used automatically by many Postgres clients.
 
 Flynn will also create the `DATABASE_URL` environment variable which is utilized
-by some frameworks to configure database connections.
+by some frameworks to configure database connections. New URLs use
+`sslmode=require` so clients encrypt by default. The appliance enables
+`ssl=on` with a cluster-generated server certificate (SANs include
+`postgres.discoverd`, `leader.postgres.discoverd`, and
+`postgres.<cluster-domain>`). `pg_hba` still uses `host` (not `hostssl`), so
+in-cluster clients that pass `sslmode=disable` keep working.
+
+### External access
+
+Export the database on a TCP route with a stable hostname, then open the host
+port:
+
+```text
+flynn resource:expose postgres
+# default hostname postgres.<cluster-domain>, tls_mode=passthrough
+sudo flynn-host firewall:expose PORT   # on every host
+```
+
+Passthrough is required for Postgres: clients send an SSLRequest in plaintext
+before TLS, so router TLS terminate breaks `libpq`. Point DNS (or the cluster
+wildcard) at the hosts and connect with `sslmode=require` to
+`postgres.<cluster-domain>:PORT`.
+
+You can still create the route yourself:
+
+```text
+flynn route:add tcp --service postgres --leader --domain postgres.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+Remove with `flynn resource:unexpose postgres` then
+`sudo flynn-host firewall:unexpose PORT`. Treat the exported port as public;
+prefer a VPN when you can. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ### Connecting to a console
 
@@ -83,20 +116,6 @@ Postgres database, use `pg_dump` to create a dump file:
 ```text
 $ pg_dump --format=custom --no-acl --no-owner mydb > mydb.dump
 ```
-
-### External access
-
-An external route can be created that allows access to the database from
-services that are not running on Flynn.
-
-```text
-flynn -a postgres route add tcp --service postgres --leader
-```
-
-This will provision a TCP port that always points at the primary instance.
-
-For security reasons this port should be firewalled, and it should only be
-accessed over the local network, VPN, or SSH tunnel.
 
 ### Extensions
 

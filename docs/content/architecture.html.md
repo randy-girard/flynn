@@ -155,11 +155,23 @@ backing services based on configured routes.
 
 A route uses discoverd to find the instances of the named service and matches
 incoming requests against a pattern: a domain and optional path for HTTP, and
-a specific port for TCP.
+a specific port for TCP. TCP routes may also store a hostname (for example
+`postgres.clusterdomain`) used as TLS identity and operator DNS.
 
-TLS is terminated at the router. You can attach a certificate chain to a route,
-or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route add http
+HTTP TLS is terminated at the router. You can attach a certificate chain to a
+route, or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route add http
 --auto-tls`). HTTPS also enables HTTP/2.
+
+TCP routes have three TLS modes:
+
+* **off** — plaintext proxy (historical default for `flynn route add tcp`)
+* **passthrough** — the backend speaks TLS (default for `flynn resource:expose`;
+  required for Postgres/MySQL SSLRequest)
+* **terminate** — the router wraps the listener (`--auto-tls` or a manual cert)
+
+`flynn resource:expose` creates the TCP route and prints
+`sudo flynn-host firewall:expose PORT` so the host port is opened like HTTP
+routes on 80/443. See [Production — Firewalling](production.html.md#firewalling).
 
 An instance of the router runs on every host so client traffic can land on any
 node.

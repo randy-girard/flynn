@@ -92,17 +92,32 @@ $ mysqldump mydb > mydb.dump
 
 ### External access
 
-An external route can be created that allows access to the database from
-services that are not running on Flynn.
+Export the database on a TCP route with a stable hostname, then open the host
+port:
 
 ```text
-flynn -a mariadb route add tcp --service mariadb --leader
+flynn resource:expose mysql
+# default hostname mariadb.<cluster-domain>, tls_mode=passthrough
+sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-This will provision a TCP port that always points at the primary instance.
+Passthrough is required for MariaDB/MySQL: clients negotiate SSL after a
+plaintext handshake, so router TLS terminate breaks those clients. Point DNS
+(or the cluster wildcard) at the hosts and connect with TLS to
+`mariadb.<cluster-domain>:PORT`.
 
-For security reasons this port should be firewalled, and it should only be
-accessed over the local network, VPN, or SSH tunnel.
+You can still create the route yourself:
+
+```text
+flynn -a mariadb route add tcp --service mariadb --leader --domain mariadb.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+The MariaDB plugin must enable server TLS for encrypted connections; until it
+does, in-cluster clients keep using the discoverd host in `DATABASE_URL`.
+Remove with `flynn resource:unexpose mysql` then
+`sudo flynn-host firewall:unexpose PORT`. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety
 

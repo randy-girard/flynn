@@ -84,15 +84,28 @@ All `flynn clickhouse` commands run inside a container on the Flynn cluster.
 
 ### External access
 
-An external route can be created to allow access from services not running on
-Flynn:
+Export ClickHouse on a TCP route with a stable hostname, then open the host
+port:
 
 ```text
-flynn -a $(flynn env get FLYNN_CLICKHOUSE) route add tcp --service $(flynn env get FLYNN_CLICKHOUSE) --leader
+flynn resource:expose clickhouse
+sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-For security reasons this port should be firewalled and only accessed over the
-local network, VPN, or SSH tunnel.
+Default TLS mode is passthrough. If the plugin is still plaintext on the native
+port, use `flynn resource:expose clickhouse --auto-tls` until the appliance
+serves TLS.
+
+You can still create the route yourself:
+
+```text
+flynn -a $(flynn env get FLYNN_CLICKHOUSE) route add tcp --service $(flynn env get FLYNN_CLICKHOUSE) --leader --domain clickhouse.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+Remove with `flynn resource:unexpose clickhouse` then
+`sudo flynn-host firewall:unexpose PORT`. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety
 

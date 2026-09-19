@@ -45,6 +45,31 @@ On a single-host cluster, postgres/MariaDB/MongoDB run one peer
 (`SINGLETON=true`). When a third host joins, the scheduler promotes them to a
 three-peer replica set automatically.
 
+## External TLS access
+
+HTTP apps get a hostname on the cluster domain. Datastores use the same idea on
+a TCP port in 3000–3500. From the app that owns the resource:
+
+```text
+flynn resource:expose postgres
+sudo flynn-host firewall:expose PORT   # on every host
+```
+
+Default hostname is `<service>.<cluster-domain>` (for example
+`postgres.example.com`). Default TLS mode is **passthrough**: the router
+forwards bytes and the appliance speaks TLS (required for Postgres/MySQL
+SSLRequest). **terminate** wraps TLS at the router (`--auto-tls` or a manual
+cert) and is for TLS-first protocols when the backend is still plaintext.
+
+In-cluster jobs keep using the `*.discoverd` names in `DATABASE_URL` /
+`REDIS_URL` / similar. Those names do not need a TCP route. New provisioned
+Postgres URLs use `sslmode=require`; plaintext `sslmode=disable` still works
+inside the overlay.
+
+Remove the route with `flynn resource:unexpose <provider>`, then
+`sudo flynn-host firewall:unexpose PORT`. Details are on each engine page and
+in [Production — Firewalling](production.html.md#firewalling).
+
 ## State Machine Design
 
 The Flynn database appliances are designed with a few goals in mind:

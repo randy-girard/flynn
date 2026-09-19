@@ -95,8 +95,9 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 
 | Command | Purpose |
 | --- | --- |
-| `route` | HTTP and TCP routes, `--auto-tls` |
+| `route` | HTTP and TCP(/TLS) routes, `--auto-tls` |
 | `resource:add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
+| `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
 | `pg:psql` / `mysql:cli` / `mongodb:cli` / `redis:cli` | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` | Topics and consumer groups (after plugin install) |
 | `clickhouse:cli` | Databases and client (after plugin install) |
@@ -114,6 +115,30 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `update` / `upgrade` | Replace this CLI from GitHub Releases |
 | `version` | CLI version |
 
+### Datastore export
+
+`flynn resource:expose <provider>` (alias `flynn resource expose`) creates a
+leader TCP route for postgres, mysql, mongodb, redis, kafka, or clickhouse and
+prints the host command that opens the port:
+
+```text
+flynn resource:expose postgres
+flynn resource:expose redis --domain redis.example.com --auto-tls
+flynn resource:unexpose postgres
+```
+
+Default TLS mode is **passthrough** (the backend speaks TLS). `--auto-tls` or
+`--tls-cert`/`--tls-key` switches to **terminate**. You can still build the same
+thing with `flynn route:add tcp --service postgres --leader --domain
+postgres.example.com --tls-mode passthrough`. On each host:
+
+```text
+sudo flynn-host firewall:expose PORT
+```
+
+See [Production — Firewalling](production.html.md#firewalling) and
+[Databases](databases.html.md).
+
 The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).
 
 Host-level commands run on cluster nodes (`sudo flynn-host …`):
@@ -129,7 +154,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | `otel` / `otel:add` | OpenTelemetry metrics (requires `flynn-host plugin:install otel`) |
 | `acme:configure` / `acme:status` / `acme:enable-system-routes` | Let's Encrypt account and system-route TLS |
 | `runtime-profile` / `runtime-profile:create` / `runtime-profile:allow-custom` | Named CPU/memory environments (`small`/`medium`/`large` plus custom) |
-| `firewall` / `firewall:sync` / `firewall:peer-add` / `firewall:expose` | Host UFW peer IPs and extra TCP ports |
+| `firewall` / `firewall:sync` / `firewall:peer-add` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
 | `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |
 | `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname |
 | `backup` / `migrate-domain` / `update` | Cluster backup, domain rename, rolling host update |

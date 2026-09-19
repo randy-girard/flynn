@@ -24,7 +24,7 @@ See [CLI documentation](../docs/content/cli.md) for cluster add, `flynn login`, 
 flynn [-a app] [-c cluster] <command> [options] [arguments]
 ```
 
-Run `flynn help` for commands. `flynn update` (alias `upgrade`) replaces this binary from GitHub Releases. Host-level operations (`bootstrap`, ACME, cluster updates, `runtime-profile`, `firewall`) use `flynn-host` on cluster nodes. Named CPU/memory environments are `flynn limit:profiles` / `flynn limit:profile`.
+Run `flynn help` for commands. `flynn update` (alias `upgrade`) replaces this binary from GitHub Releases. Host-level operations (`bootstrap`, ACME, cluster updates, `runtime-profile`, `firewall`) use `flynn-host` on cluster nodes. Named CPU/memory environments are `flynn limit:profiles` / `flynn limit:profile`. Export a datastore with `flynn resource:expose postgres` (creates a TCP/TLS route and prints `sudo flynn-host firewall:expose PORT`).
 
 ## Credits
 
