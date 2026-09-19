@@ -108,6 +108,12 @@ var subAliases = map[string]map[string]string{
 		"login":        "docker:login",
 		"logout":       "docker:logout",
 	},
+	"github": {
+		"connect":    "github:connect",
+		"disconnect": "github:disconnect",
+		"deploy":     "github:deploy",
+		"set":        "github:set",
+	},
 	"pg": {
 		"psql":    "pg:psql",
 		"dump":    "pg:dump",

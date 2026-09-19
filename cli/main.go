@@ -63,6 +63,11 @@ Commands:
 	env:set              set env variables
 	env:unset            unset env variables
 	git:remote           add a git remote for the app
+	github               show connected GitHub repo
+	github:connect       connect a GitHub repo
+	github:deploy        deploy from GitHub
+	github:disconnect    disconnect GitHub
+	github:set           GitHub auto-deploy settings
 	help                 show usage for a specific command
 	limit                list resource limits
 	limit:profile        apply a runtime environment to a process type
