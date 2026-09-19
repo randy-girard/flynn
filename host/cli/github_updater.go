@@ -119,6 +119,20 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	currentVersion := version.String()
 	log.Info("checking for updates", "repo", repo, "current_version", currentVersion)
 
+	if checkOnly && targetVersion == "" {
+		release, hasUpdate, err := client.CheckForUpdateForce(currentVersion, force)
+		if err != nil {
+			log.Error("failed to get release info", "err", err)
+			return err
+		}
+		if release == nil || !hasUpdate {
+			fmt.Printf("Already on latest version: %s\n", currentVersion)
+			return nil
+		}
+		fmt.Printf("Update available: %s -> %s\n", currentVersion, release.TagName)
+		return nil
+	}
+
 	// Get release (latest or specific version)
 	var release *ghrelease.Release
 	var err error

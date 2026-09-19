@@ -17,9 +17,9 @@ Options:
   -b --bin-dir=<dir>             directory to download binaries to [default: /usr/local/bin]
   -c --config-dir=<dir>          directory to download config files to [default: /etc/flynn]
   --github-repo=<repo>           GitHub repository for updates [default: randy-girard/flynn]
-  --check                        only check for updates, don't install
+  --check                        only check for updates, don't install (cached for 1h; --force refreshes)
   --version=<ver>                update to a specific version
-  --force                        re-run an update even if flynn-host is already the latest version
+  --force                        re-run an update even if flynn-host is already the latest version; with --check, refresh the GitHub lookup cache
   --no-restart                   only download binaries, don't restart the daemon
   --skip-images                  skip updating container images and system apps
   --images-only                  only update container images and system apps (skip binaries)
