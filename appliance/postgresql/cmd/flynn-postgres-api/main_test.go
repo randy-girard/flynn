@@ -4,7 +4,7 @@ import "testing"
 
 func TestDatabaseURLDisablesSSL(t *testing.T) {
 	got := databaseURL("user", "pass", "leader.postgres.discoverd", "db")
-	want := "postgres://user:pass@leader.postgres.discoverd:5432/db?sslmode=disable"
+	want := "postgres://user:pass@leader.postgres.discoverd:5432/db?sslmode=require"
 	if got != want {
 		t.Fatalf("got %s", got)
 	}

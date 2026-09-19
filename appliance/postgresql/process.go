@@ -57,6 +57,7 @@ type Config struct {
 	ExtWhitelist bool
 	SHMType      string
 	WaitUpstream bool
+	TLSHosts     []string
 }
 
 type Process struct {
@@ -86,6 +87,7 @@ type Process struct {
 	extWhitelist bool
 	shmType      string
 	waitUpstream bool
+	tlsHosts     []string
 
 	// daemon is the postgres daemon command when running
 	daemon *exec.Cmd
@@ -120,6 +122,7 @@ func NewProcess(c Config) *Process {
 		extWhitelist:   c.ExtWhitelist,
 		shmType:        c.SHMType,
 		waitUpstream:   c.WaitUpstream,
+		tlsHosts:       c.TLSHosts,
 		events:         make(chan state.DatabaseEvent, 1),
 		cancelSyncWait: func() {},
 	}
@@ -1090,6 +1093,20 @@ func (p *Process) writeConfig(d configData) error {
 	d.TimescaleDB = p.timescaleDB
 	d.ExtWhitelist = p.extWhitelist
 	d.SHMType = p.shmType
+	if err := p.ensureServerTLS(); err != nil {
+		if p.log != nil {
+			p.log.Error("error ensuring postgres TLS certs", "err", err)
+		}
+		return err
+	}
+	if p.sslEnabled() {
+		d.SSL = true
+		d.SSLCertFile = tlsCertFile
+		d.SSLKeyFile = tlsKeyFile
+		if fileExists(p.tlsCAPath()) {
+			d.SSLCAFile = tlsCAFile
+		}
+	}
 	f, err := os.Create(p.configPath())
 	if err != nil {
 		return err
@@ -1170,13 +1187,23 @@ type configData struct {
 	TimescaleDB  bool
 	ExtWhitelist bool
 	SHMType      string
+
+	SSL         bool
+	SSLCertFile string
+	SSLKeyFile  string
+	SSLCAFile   string
 }
 
 var configTemplate = template.Must(template.New("postgresql.conf").Parse(`
 unix_socket_directories = ''
 listen_addresses = '0.0.0.0'
 port = {{.Port}}
-ssl = off
+{{if .SSL}}ssl = on
+ssl_cert_file = '{{.SSLCertFile}}'
+ssl_key_file = '{{.SSLKeyFile}}'
+{{if .SSLCAFile}}ssl_ca_file = '{{.SSLCAFile}}'{{end}}
+{{else}}ssl = off
+{{end}}
 max_connections = 400
 password_encryption = md5
 shared_buffers = 32MB
