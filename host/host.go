@@ -119,8 +119,8 @@ Commands:
   download                        Download container images
   firewall                        Show flynn-host managed firewall rules
   firewall:expose                 Open a TCP port for an exposed service
-  firewall:peer-add               Allow cluster traffic from a node IP
-  firewall:peer-remove            Drop a node IP from the host firewall
+  firewall:peer:add               Allow cluster traffic from a node IP
+  firewall:peer:remove            Drop a node IP from the host firewall
   firewall:sync                   Reconcile peer IPs and exposed TCP ports
   firewall:unexpose               Close a previously exposed TCP port
   fix                             Fix a broken cluster
@@ -144,9 +144,9 @@ Commands:
   otel:add                        Add an OpenTelemetry exporter
   otel:remove                     Remove an OpenTelemetry exporter
   plugin:credentials              Manage GitHub credentials for plugin releases
-  plugin:credentials-set          Store a GitHub token for plugin releases
-  plugin:credentials-show         Show whether GitHub plugin credentials are set
-  plugin:credentials-unset        Remove stored GitHub plugin credentials
+  plugin:credentials:set          Store a GitHub token for plugin releases
+  plugin:credentials:show         Show whether GitHub plugin credentials are set
+  plugin:credentials:unset        Remove stored GitHub plugin credentials
   plugin:install                  Install a plugin from a path, alias, or GitHub URL
   plugin:list                     List installed plugins (--known for official plugins)
   plugin:route                    List, add, update, or remove routes for an installed plugin

@@ -40,8 +40,14 @@ func TestExpandColonSuffix(t *testing.T) {
 	if got := expandColonSuffix("redis", "cli"); !reflect.DeepEqual(got, []string{"redis-cli"}) {
 		t.Fatalf("redis:cli %q", got)
 	}
+	if got := expandColonSuffix("kafka", "topics:create"); !reflect.DeepEqual(got, []string{"topics", "create"}) {
+		t.Fatalf("kafka:topics:create %q", got)
+	}
 	if got := expandColonSuffix("kafka", "topics-create"); !reflect.DeepEqual(got, []string{"topics", "create"}) {
-		t.Fatalf("kafka:topics-create %q", got)
+		t.Fatalf("kafka:topics-create alias %q", got)
+	}
+	if got := expandColonSuffix("kafka", "consumer-groups:create"); !reflect.DeepEqual(got, []string{"consumer-groups", "create"}) {
+		t.Fatalf("kafka:consumer-groups:create %q", got)
 	}
 	if got := expandColonSuffix("redis", "dump"); !reflect.DeepEqual(got, []string{"dump"}) {
 		t.Fatalf("redis:dump %q", got)
@@ -74,8 +80,17 @@ func TestPluginColonName(t *testing.T) {
 	if got := pluginColonName("redis", "redis-cli"); got != "redis:cli" {
 		t.Fatalf("got %q", got)
 	}
-	if got := pluginColonName("kafka", "topics create"); got != "kafka:topics-create" {
+	if got := pluginColonName("kafka", "topics create"); got != "kafka:topics:create" {
 		t.Fatalf("got %q", got)
+	}
+	if got := pluginColonName("kafka", "consumer-groups create"); got != "kafka:consumer-groups:create" {
+		t.Fatalf("hyphenated noun got %q", got)
+	}
+	if got := pluginColonName("kafka", "update-all"); got != "kafka:update-all" {
+		t.Fatalf("hyphenated verb got %q", got)
+	}
+	if got := pluginColonName("acme", "disable system routes"); got != "acme:disable-system-routes" {
+		t.Fatalf("multi-word action got %q", got)
 	}
 	if got := pluginColonName("mysql", "console"); got != "mysql:cli" {
 		t.Fatalf("got %q", got)

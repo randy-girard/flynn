@@ -43,7 +43,7 @@ GitHub installs never build on the cluster; they unpack release assets
 Configure extra aliases and org in /etc/flynn/plugins.json. Installed plugins
 are recorded in /etc/flynn/installed-plugins.json so cluster backup, restore,
 and sirenia repair do not hardcode appliance names. Private repos use
-flynn-host plugin:credentials-set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
+flynn-host plugin:credentials:set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
 
 Examples:
 
@@ -131,7 +131,7 @@ Commands:
 `
 
 const pluginCredentialsSetUsage = `
-usage: flynn-host plugin:credentials-set <host> [--token-file=FILE] [--api=URL]
+usage: flynn-host plugin:credentials:set <host> [--token-file=FILE] [--api=URL]
 
 Store a GitHub token for private or draft release assets. <host> is github
 (github.com) or a GitHub Enterprise hostname. On a TTY with no --token-file
@@ -143,14 +143,14 @@ Options:
 
 Examples:
 
-    $ flynn-host plugin:credentials-set github
-    $ flynn-host plugin:credentials-set github --token-file /root/github.token
-    $ cat /root/github.token | flynn-host plugin:credentials-set github
-    $ flynn-host plugin:credentials-set git.example.com --api https://git.example.com/api/v3 --token-file /root/ghe.token
+    $ flynn-host plugin:credentials:set github
+    $ flynn-host plugin:credentials:set github --token-file /root/github.token
+    $ cat /root/github.token | flynn-host plugin:credentials:set github
+    $ flynn-host plugin:credentials:set git.example.com --api https://git.example.com/api/v3 --token-file /root/ghe.token
 `
 
 const pluginCredentialsUnsetUsage = `
-usage: flynn-host plugin:credentials-unset <host>
+usage: flynn-host plugin:credentials:unset <host>
 
 Remove stored GitHub plugin credentials. <host> is github (github.com) or a
 GitHub Enterprise hostname. Prints whether credentials were removed or
@@ -158,11 +158,11 @@ nothing was stored.
 
 Examples:
 
-    $ flynn-host plugin:credentials-unset github
+    $ flynn-host plugin:credentials:unset github
 `
 
 const pluginCredentialsShowUsage = `
-usage: flynn-host plugin:credentials-show <host>
+usage: flynn-host plugin:credentials:show <host>
 
 Show whether GitHub plugin credentials are set. <host> is github (github.com)
 or a GitHub Enterprise hostname. Prints set/unset and the stored API URL
@@ -170,7 +170,7 @@ when present; never prints the token.
 
 Examples:
 
-    $ flynn-host plugin:credentials-show github
+    $ flynn-host plugin:credentials:show github
 `
 
 const pluginRouteUsage = `
@@ -207,9 +207,12 @@ func init() {
 	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
 	Register("plugin:list", runPluginList, pluginListUsage)
 	Register("plugin:credentials", runPluginCredentials, pluginCredentialsUsage)
-	Register("plugin:credentials-set", runPluginCredentialsSet, pluginCredentialsSetUsage)
-	Register("plugin:credentials-unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
-	Register("plugin:credentials-show", runPluginCredentialsShow, pluginCredentialsShowUsage)
+	Register("plugin:credentials:set", runPluginCredentialsSet, pluginCredentialsSetUsage)
+	Register("plugin:credentials:unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
+	Register("plugin:credentials:show", runPluginCredentialsShow, pluginCredentialsShowUsage)
+	Register("plugin:credentials-set", runPluginCredentialsSet, aliasUsage("plugin:credentials:set", "plugin:credentials-set", pluginCredentialsSetUsage))
+	Register("plugin:credentials-unset", runPluginCredentialsUnset, aliasUsage("plugin:credentials:unset", "plugin:credentials-unset", pluginCredentialsUnsetUsage))
+	Register("plugin:credentials-show", runPluginCredentialsShow, aliasUsage("plugin:credentials:show", "plugin:credentials-show", pluginCredentialsShowUsage))
 	Register("plugin:route", runPluginRoute, pluginRouteUsage)
 }
 

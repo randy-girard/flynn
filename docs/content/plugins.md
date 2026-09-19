@@ -289,11 +289,11 @@ argument is required: `github` means github.com, or pass a GitHub Enterprise
 hostname. `set` never takes the token on the command line.
 
 ```text
-sudo flynn-host plugin:credentials-set github
-sudo flynn-host plugin:credentials-set github --token-file /root/github.token
-sudo cat /root/github.token | sudo flynn-host plugin:credentials-set github
-sudo flynn-host plugin:credentials-show github
-sudo flynn-host plugin:credentials-unset github
+sudo flynn-host plugin:credentials:set github
+sudo flynn-host plugin:credentials:set github --token-file /root/github.token
+sudo cat /root/github.token | sudo flynn-host plugin:credentials:set github
+sudo flynn-host plugin:credentials:show github
+sudo flynn-host plugin:credentials:unset github
 ```
 
 On a TTY with no `--token-file` and no pipe, `set` prompts you to paste the
@@ -303,6 +303,7 @@ no pipe, and no `--token-file`, `set` errors instead of hanging. `show` prints
 credentials were removed or nothing was stored. Or set
 `FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot. GitHub
 Enterprise: store per hostname with `--api https://git.example.com/api/v3`.
+The hyphen forms (`plugin:credentials-set`) remain aliases.
 
 ## Backup and restore
 

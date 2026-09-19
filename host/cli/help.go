@@ -70,12 +70,20 @@ func namespaceCommands(name string) []namespaceCmd {
 	}
 	var out []namespaceCmd
 	for cmdName, cmd := range commands {
-		rest, ok := strings.CutPrefix(cmdName, prefix)
-		if !ok || rest == "" || strings.Contains(rest, ":") {
+		if _, aliased := hyphenAliases[cmdName]; aliased {
 			continue
 		}
+		rest, ok := strings.CutPrefix(cmdName, prefix)
+		if !ok || rest == "" {
+			continue
+		}
+		if i := strings.IndexByte(rest, ':'); i >= 0 {
+			if commands[prefix+rest[:i]] != nil {
+				continue
+			}
+		}
 		out = append(out, namespaceCmd{
-			verb: displayNamespaceVerb(rest),
+			verb: rest,
 			desc: shortDescription(cmd.usage),
 		})
 	}
@@ -84,13 +92,10 @@ func namespaceCommands(name string) []namespaceCmd {
 }
 
 func siblingPrefix(name string) string {
-	if name == "plugin:credentials" {
-		return "plugin:credentials-"
+	if hasPrefixedCommands(name + ":") {
+		return name + ":"
 	}
 	if !strings.Contains(name, ":") {
-		if hasPrefixedCommands(name + ":") {
-			return name + ":"
-		}
 		return ""
 	}
 	for alias, target := range topAliases {
@@ -108,13 +113,6 @@ func hasPrefixedCommands(prefix string) bool {
 		}
 	}
 	return false
-}
-
-func displayNamespaceVerb(rest string) string {
-	if strings.HasPrefix(rest, "credentials-") {
-		return "credentials " + strings.TrimPrefix(rest, "credentials-")
-	}
-	return rest
 }
 
 func shortDescription(usage string) string {

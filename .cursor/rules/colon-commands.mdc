@@ -1,0 +1,44 @@
+---
+description: Nested flynn and flynn-host commands use noun:verb colons, not spaces
+alwaysApply: true
+---
+
+# Colon commands
+
+`flynn` and `flynn-host` register nested verbs as **one token**: `noun:verb`.
+Do not add a new space-nested command (`flynn-host volume gc`) as the canonical name.
+
+Add **additional colons only when they make sense** — a real nested noun, not a hyphenated verb.
+
+```text
+# good
+flynn env:get DATABASE_URL
+flynn plugin:list --known
+flynn kafka:topics:create events
+flynn-host volume:gc
+flynn-host plugin:install redis
+flynn-host plugin:credentials:set github
+flynn-host firewall:peer:add 10.0.0.5
+flynn-host log-sink:add syslog syslog://logs.example:514/
+flynn-host acme:disable-system-routes
+flynn-host plugin:update-all
+
+# bad (canonical form)
+flynn env get DATABASE_URL
+flynn kafka:topics-create events
+flynn-host volume gc
+flynn-host plugin install redis
+flynn-host plugin:credentials-set github
+flynn-host firewall:peer-add 10.0.0.5
+flynn-host acme:disable:system:routes
+flynn-host plugin:update:all
+flynn-host log:sink:add
+```
+
+- **Noun + verb** → colon (`plugin:list`, `acme:configure`, `volume:delete`).
+- **Nested noun + verb** → extra colon (`plugin:credentials:set`, `firewall:peer:add`, `kafka:topics:create`).
+- **Hyphenated multi-word action or noun stays hyphenated** (`acme:disable-system-routes`, `acme:enable-system-routes`, `plugin:update-all`, `runtime-profile:allow-custom`, `docker:set-push-url`, `cluster:migrate-domain`, `log-sink:add`).
+- **Standalone verbs stay verbs** (`backup`, `daemon`, `update`, `ps`, `run`).
+- Space form is a **permanent alias** (print `flynn-host volume gc is now flynn-host volume:gc`). When a nested noun used to be hyphenated, that hyphen name is also a permanent alias (print `flynn-host plugin:credentials-set is now flynn-host plugin:credentials:set`). Register the colon name; map space and old hyphen forms in `command_alias.go`.
+- Root help is one alphabetical list of colon names. No `Commands:` subsections.
+- Docs, errors, and new tests use the colon form. Plugin `plugin:route <name>` is the colon spelling of `plugin <name> route`. Two-token plugin actions are `kafka:topics:create`, not `kafka:topics-create`.

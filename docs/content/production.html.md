@@ -261,12 +261,12 @@ host-to-host traffic.
 
 ```text
 sudo flynn-host firewall
-sudo flynn-host firewall:peer-add <ip>
+sudo flynn-host firewall:peer:add <ip>
 sudo flynn-host firewall:expose 3001
 sudo flynn-host firewall:sync
 ```
 
-`firewall:peer-remove` and `firewall:unexpose` drop those extra allows.
+`firewall:peer:remove` and `firewall:unexpose` drop those extra allows.
 `--peer-ips` and `--ports` on `firewall:sync` seed extra allows stored for later
 syncs.
 

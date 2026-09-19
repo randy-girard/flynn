@@ -105,7 +105,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `resource:add <provider>` | Provision postgres, mysql, mongodb, redis, kafka, clickhouse |
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
 | `pg:psql` / `mysql:cli` / `mongodb:cli` / `redis:cli` | Consoles, dump, restore (plugin commands after install) |
-| `kafka:topics` | Topics and consumer groups (after plugin install) |
+| `kafka:topics` / `kafka:topics:create` | Topics and consumer groups (after plugin install) |
 | `clickhouse:cli` | Databases and client (after plugin install) |
 | `log-sink` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin). `logsink` is an alias. |
 | `volume` | Persistent volumes |
@@ -181,7 +181,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | --- | --- |
 | `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
-| `plugin:credentials-set` / `plugin:credentials-show` / `plugin:credentials-unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
+| `plugin:credentials:set` / `plugin:credentials:show` / `plugin:credentials:unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
 | `metrics` | Live host CPU/memory/disk/load snapshot (`--host` for one node) |
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |
@@ -189,7 +189,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | `acme:configure` / `acme:status` / `acme:enable-system-routes` | Let's Encrypt account and system-route TLS |
 | `github:configure` / `github:status` / `github:setup` | Cluster GitHub App for dashboard/CLI GitHub deploys |
 | `runtime-profile` / `runtime-profile:create` / `runtime-profile:allow-custom` | Named CPU/memory environments (`small`/`medium`/`large` plus custom) |
-| `firewall` / `firewall:sync` / `firewall:peer-add` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
+| `firewall` / `firewall:sync` / `firewall:peer:add` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
 | `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |
 | `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname |
 | `backup` / `migrate-domain` / `update` | Cluster backup, domain rename, rolling host update |

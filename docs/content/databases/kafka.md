@@ -94,22 +94,22 @@ Topics must be created before they can be used.
 
 ```text
 # List topics
-flynn kafka topics
+flynn kafka:topics
 
 # Create a topic with 12 partitions, replication factor 3 and 7 days retention
-flynn kafka topics create events --partitions 12 --replication 3 --retention 7d
+flynn kafka:topics:create events --partitions 12 --replication 3 --retention 7d
 
 # Create a compacted topic with an arbitrary Kafka topic config
-flynn kafka topics create audit --config cleanup.policy=compact --config max.message.bytes=2000000
+flynn kafka:topics:create audit --config cleanup.policy=compact --config max.message.bytes=2000000
 
 # Describe a topic (partitions, replicas, in-sync replicas and config)
-flynn kafka topics info events
+flynn kafka:topics:info events
 
 # Change a topic's configuration
-flynn kafka topics configure events --retention 30d
+flynn kafka:topics:configure events --retention 30d
 
 # Delete a topic and all of its data
-flynn kafka topics destroy events
+flynn kafka:topics:destroy events
 ```
 
 The `--retention` flag accepts a duration such as `168h` or `7d` and is
@@ -120,19 +120,19 @@ supplied with one or more `--config key=value` flags.
 
 ```text
 # List consumer groups
-flynn kafka consumer-groups
+flynn kafka:consumer-groups
 
 # Register a consumer group against a topic
-flynn kafka consumer-groups create workers events
+flynn kafka:consumer-groups:create workers events
 
 # Describe a group's offsets and lag
-flynn kafka consumer-groups info workers
+flynn kafka:consumer-groups:info workers
 
 # Delete a group
-flynn kafka consumer-groups destroy workers
+flynn kafka:consumer-groups:destroy workers
 ```
 
-Kafka has no explicit "create group" operation; `consumer-groups create` seeds
+Kafka has no explicit "create group" operation; `kafka:consumer-groups:create` seeds
 the earliest committed offsets for the topic's partitions to register the group.
 
 All `flynn kafka` commands run inside a container on the Flynn cluster, so they

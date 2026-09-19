@@ -27,8 +27,16 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 		t.Fatalf("install got %q %q from=%q", name, args, from)
 	}
 	name, args, from = ResolveCommand("plugin", []string{"credentials", "set", "github"})
-	if name != "plugin:credentials-set" || from != "plugin credentials set" || !reflect.DeepEqual(args, []string{"github"}) {
+	if name != "plugin:credentials:set" || from != "plugin credentials set" || !reflect.DeepEqual(args, []string{"github"}) {
 		t.Fatalf("credentials got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin:credentials", []string{"set", "github"})
+	if name != "plugin:credentials:set" || from != "plugin:credentials set" || !reflect.DeepEqual(args, []string{"github"}) {
+		t.Fatalf("credentials colon-space got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin:credentials-set", []string{"github"})
+	if name != "plugin:credentials:set" || from != "plugin:credentials-set" || !reflect.DeepEqual(args, []string{"github"}) {
+		t.Fatalf("credentials hyphen got %q %q from=%q", name, args, from)
 	}
 	name, args, from = ResolveCommand("plugin", []string{"dashboard", "route", "add", "http", "--auto-tls"})
 	if name != "plugin:route" || from != "plugin dashboard route" || !reflect.DeepEqual(args, []string{"dashboard", "add", "http", "--auto-tls"}) {
@@ -41,6 +49,10 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	name, args, from = ResolveCommand("plugin", []string{"update-all"})
 	if name != "plugin:update-all" || from != "plugin update-all" || len(args) != 0 {
 		t.Fatalf("update-all got %q %q from=%q args=%q", name, args, from, args)
+	}
+	name, args, from = ResolveCommand("plugin:update-all", nil)
+	if name != "plugin:update-all" || from != "" {
+		t.Fatalf("update-all colon got %q from=%q", name, from)
 	}
 	name, args, from = ResolveCommand("plugin", []string{"--help"})
 	if name != "plugin:list" || from != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
@@ -77,7 +89,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
 		"plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",
-		"plugin:credentials", "plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
+		"plugin:credentials", "plugin:credentials:set", "plugin:credentials:unset", "plugin:credentials:show",
 		"plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:route",
 		"tags", "tags:set", "tags:del",
@@ -90,12 +102,40 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"runtime-profile:remove", "runtime-profile:allow-custom",
 		"events", "events:visible",
 		"route:add",
-		"firewall", "firewall:sync", "firewall:peer-add", "firewall:peer-remove",
+		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",
+		"firewall:peer-add", "firewall:peer-remove",
 		"firewall:expose", "firewall:unexpose",
 	}
 	for _, name := range want {
 		if commands[name] == nil {
 			t.Errorf("missing registered command %s", name)
+		}
+	}
+}
+
+func TestHyphenAliasesRewriteToNestedColons(t *testing.T) {
+	for alias, canonical := range hyphenAliases {
+		if commands[alias] == nil {
+			t.Errorf("missing hyphen alias %s", alias)
+		}
+		if commands[canonical] == nil {
+			t.Errorf("missing canonical %s", canonical)
+		}
+		name, args, from := ResolveCommand(alias, []string{"arg"})
+		if name != canonical || from != alias || !reflect.DeepEqual(args, []string{"arg"}) {
+			t.Errorf("%s: got %q %q from=%q", alias, name, args, from)
+		}
+	}
+	for _, name := range []string{
+		"acme:disable-system-routes", "acme:enable-system-routes",
+		"plugin:update-all", "runtime-profile:allow-custom",
+	} {
+		got, _, from := ResolveCommand(name, nil)
+		if got != name || from != "" {
+			t.Errorf("hyphenated verb %s rewritten to %q from=%q", name, got, from)
+		}
+		if _, ok := hyphenAliases[name]; ok {
+			t.Errorf("hyphenated verb %s must not be a hyphen alias", name)
 		}
 	}
 }
@@ -110,8 +150,20 @@ func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
 		t.Fatalf("route add got %q from=%q args=%q", name, from, args)
 	}
 	name, args, from = ResolveCommand("firewall", []string{"peer-add", "10.0.0.5"})
-	if name != "firewall:peer-add" || from != "firewall peer-add" || strings.Join(args, " ") != "10.0.0.5" {
+	if name != "firewall:peer:add" || from != "firewall peer-add" || strings.Join(args, " ") != "10.0.0.5" {
 		t.Fatalf("firewall peer-add got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("firewall", []string{"peer", "add", "10.0.0.5"})
+	if name != "firewall:peer:add" || from != "firewall peer add" || strings.Join(args, " ") != "10.0.0.5" {
+		t.Fatalf("firewall peer add got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("firewall:peer", []string{"remove", "10.0.0.5"})
+	if name != "firewall:peer:remove" || from != "firewall:peer remove" || strings.Join(args, " ") != "10.0.0.5" {
+		t.Fatalf("firewall:peer remove got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("firewall:peer-add", []string{"10.0.0.5"})
+	if name != "firewall:peer:add" || from != "firewall:peer-add" || strings.Join(args, " ") != "10.0.0.5" {
+		t.Fatalf("firewall:peer-add got %q from=%q args=%q", name, from, args)
 	}
 	name, args, from = ResolveCommand("firewall", []string{"expose", "3001"})
 	if name != "firewall:expose" || from != "firewall expose" {

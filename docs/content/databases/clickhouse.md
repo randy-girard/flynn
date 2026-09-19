@@ -63,16 +63,16 @@ Databases must be created before they can be used on a replicated cluster.
 
 ```text
 # List databases
-flynn clickhouse databases
+flynn clickhouse:databases
 
 # Create a replicated database on every replica
-flynn clickhouse databases create analytics
+flynn clickhouse:databases:create analytics
 
 # Show tables in a database
-flynn clickhouse databases info analytics
+flynn clickhouse:databases:info analytics
 
 # Delete a database from every replica
-flynn clickhouse databases destroy analytics
+flynn clickhouse:databases:destroy analytics
 ```
 
 Database DDL is executed with `ON CLUSTER flynn` so schema changes are applied

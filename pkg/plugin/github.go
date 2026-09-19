@@ -359,7 +359,7 @@ func (in *Installer) fetchReleaseJSON(src *GitHubSource, token, u, refLabel stri
 	if res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden {
 		hint := "check --ref and that the release is published"
 		if token == "" && (res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized) {
-			hint = "for private or draft releases set credentials: flynn-host plugin:credentials-set github"
+			hint = "for private or draft releases set credentials: flynn-host plugin:credentials:set github"
 		}
 		return nil, fmt.Errorf("GitHub release %s/%s@%s: %s (%s)", src.Owner, src.Repo, refLabel, res.Status, hint)
 	}
