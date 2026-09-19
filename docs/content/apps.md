@@ -89,6 +89,56 @@ flynn -a staging env set FOO=bar
 git push staging staging:master
 ```
 
+### GitHub deploys
+
+A cluster administrator creates one GitHub App for the cluster and saves its
+credentials. After that, an app owner can connect a repository and deploy a
+branch from the dashboard or the CLI. Automatic deploys use the same
+**taffy** + **gitreceive** / **flynn-receiver** path as a git clone, not a
+second build stack.
+
+Print the exact GitHub App permissions, events, and webhook URLs:
+
+```text
+sudo flynn-host github:setup
+```
+
+Create the GitHub App (Settings → Developer settings → GitHub Apps) with:
+
+- **Repository permissions:** Contents (read), Metadata (read), Commit statuses (read), Checks (read)
+- **Subscribe to events:** Push, Check suite, Check run, Status
+- **Webhook URL:** `https://controller.<cluster-domain>/github/webhook` (gitreceive also accepts `https://git.<cluster-domain>/github/webhook`)
+- **Webhook secret:** a random string, pasted into Flynn with the App ID and PEM private key
+
+Save it on a host:
+
+```text
+sudo flynn-host github:configure --app-id=123456 \
+  --private-key-file /root/flynn-github.pem \
+  --webhook-secret "$WEBHOOK_SECRET" \
+  --slug flynn-deploy
+sudo flynn-host github:status
+```
+
+Install the GitHub App on the GitHub account or organization that owns the
+repos, then connect one to a Flynn app (default branch is the repo default,
+usually `main` or `master`):
+
+```text
+flynn -a myapp github:connect acme/myapp
+flynn -a myapp github:connect --auto-deploy --wait-checks acme/myapp
+flynn -a myapp github:deploy
+flynn -a myapp github:deploy --branch release
+flynn -a myapp github:set --auto-deploy=on --wait-checks=on
+```
+
+`--wait-checks` is Heroku-style: Flynn records the pushed SHA and deploys only
+after GitHub Checks and commit statuses succeed. Repos without CI should leave
+wait-for-checks off.
+
+The dashboard Cluster → GitHub page has the same setup steps and credential
+form. The app Deploy page connects a repo and starts a deploy.
+
 ## Processes
 
 You can get a list of an app's individual processes using `flynn ps`. Each job

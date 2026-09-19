@@ -86,6 +86,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle |
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Git remotes |
+| `github` / `github:connect` / `github:deploy` / `github:set` | Connect a GitHub repo and deploy through taffy (cluster GitHub App) |
 | `docker:push` | Deploy a local Docker image |
 | `release` / `deploy` | Releases and deploy history |
 | `scale` | Formation (process counts) |
@@ -158,6 +159,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |
 | `otel` / `otel:add` | OpenTelemetry metrics (requires `flynn-host plugin:install otel`) |
 | `acme:configure` / `acme:status` / `acme:enable-system-routes` | Let's Encrypt account and system-route TLS |
+| `github:configure` / `github:status` / `github:setup` | Cluster GitHub App for dashboard/CLI GitHub deploys |
 | `runtime-profile` / `runtime-profile:create` / `runtime-profile:allow-custom` | Named CPU/memory environments (`small`/`medium`/`large` plus custom) |
 | `firewall` / `firewall:sync` / `firewall:peer-add` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
 | `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |

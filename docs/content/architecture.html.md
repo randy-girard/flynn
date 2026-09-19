@@ -218,6 +218,14 @@ deploy of the new release.
 On the **container** stack, gitreceive starts a *dockerbuilder* job instead.
 BuildKit produces an image that *tarreceive* imports.
 
+### taffy
+
+Taffy clones a Git repository (including GitHub App HTTPS clones) and pipes an
+archive of the revision into *flynn-receiver*, the same builder gitreceive uses
+for `git push`. Dashboard and `flynn github:deploy` start a taffy job. GitHub
+App webhooks on the controller (and proxied at gitreceive `/github/webhook`)
+can start that job automatically.
+
 ### blobstore
 
 The blobstore provides a simple API for storing and retrieving binary blobs.
