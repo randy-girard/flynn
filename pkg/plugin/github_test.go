@@ -341,6 +341,115 @@ func TestFetchGitHubOSLayerFromFlynnRelease(t *testing.T) {
 	}
 }
 
+func TestFetchGitHubSkipsOSLayerWhenLocal(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGitHubTokenAlt, "")
+
+	osID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	deltaID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	manifest := &ct.ImageManifest{
+		Type: ct.ImageManifestTypeV1,
+		Rootfs: []*ct.ImageRootfs{{
+			Layers: []*ct.ImageLayer{
+				{
+					ID:     osID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 199 << 20,
+					Hashes: map[string]string{"sha512_256": osID},
+				},
+				{
+					ID:     deltaID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 34 << 20,
+					Hashes: map[string]string{"sha512_256": deltaID},
+				},
+			},
+		}},
+	}
+	raw := manifest.RawManifest()
+	imageJSON, _ := json.Marshal(&ct.Artifact{
+		Type:        ct.ArtifactTypeFlynn,
+		RawManifest: raw,
+		Hashes:      map[string]string{"sha512_256": "deadbeef"},
+		Size:        int64(len(raw)),
+		Meta:        map[string]string{"flynn.plugin.base": "randy-girard/flynn@v20260919.0"},
+	})
+	pluginJSON := []byte(`{"name":"redis","kind":"app","app":{"name":"redis","processes":{"web":{"args":["/bin/x"]}}}}`)
+	osBytes := []byte("already-installed-ubuntu-noble")
+	deltaBytes := []byte("plugin-delta")
+	flynnHits := 0
+	osAssetHits := 0
+
+	cache := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cache, osID+".squashfs"), osBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/randy-girard/flynn-plugin-redis/releases/tags/v20260919.0.1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v20260919.0.1",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+				{Name: ImageJSON, BrowserDownloadURL: srv.URL + "/files/image.json"},
+				{Name: osID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + osID + ".squashfs"},
+				{Name: deltaID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + deltaID + ".squashfs"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	mux.HandleFunc("/files/image.json", func(w http.ResponseWriter, r *http.Request) { w.Write(imageJSON) })
+	mux.HandleFunc("/files/"+osID+".squashfs", func(w http.ResponseWriter, r *http.Request) {
+		osAssetHits++
+		w.Write([]byte("should-not-download"))
+	})
+	mux.HandleFunc("/files/"+deltaID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(deltaBytes) })
+	mux.HandleFunc("/flynn/", func(w http.ResponseWriter, r *http.Request) {
+		flynnHits++
+		http.NotFound(w, r)
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	orig := githubBrowserDownloadURL
+	defer func() { githubBrowserDownloadURL = orig }()
+	githubBrowserDownloadURL = func(repo, tag, name string) string {
+		return srv.URL + "/flynn/" + repo + "/" + tag + "/" + name
+	}
+
+	in := &Installer{GitHubHTTP: srv.Client(), LayerCacheDir: cache}
+	dir, err := in.fetchGitHub(&GitHubSource{
+		Host:  "github.com",
+		Owner: "randy-girard",
+		Repo:  "flynn-plugin-redis",
+		Ref:   "v20260919.0.1",
+		API:   srv.URL,
+	}, filepath.Join(t.TempDir(), "missing-creds.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	if osAssetHits != 0 || flynnHits != 0 {
+		t.Fatalf("OS GitHub downloads asset=%d flynn=%d", osAssetHits, flynnHits)
+	}
+	gotOS, err := os.ReadFile(filepath.Join(dir, DistDir, osID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOS) != string(osBytes) {
+		t.Fatalf("os layer %q", gotOS)
+	}
+	gotDelta, err := os.ReadFile(filepath.Join(dir, DistDir, deltaID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDelta) != string(deltaBytes) {
+		t.Fatalf("delta layer %q", gotDelta)
+	}
+}
+
 func TestHookAssetNames(t *testing.T) {
 	got := HookAssetNames("script/install.sh")
 	if len(got) != 2 || got[0] != "script-install.sh" || got[1] != "install.sh" {
@@ -869,7 +978,7 @@ func TestGetReleasePicksNewestPluginCalVer(t *testing.T) {
 		_ = json.NewEncoder(w).Encode([]githubRelease{
 			{TagName: "v20260919.2", Draft: false},
 			{TagName: "v20260919.2.1", Draft: false},
-			{TagName: "v20260920.0.0", Draft: true},
+			{TagName: "v20260920.0.0", Draft: false},
 			{TagName: "v20260918.9.9", Prerelease: true},
 			{TagName: "not-a-calver", Draft: false},
 		})
@@ -884,17 +993,23 @@ func TestGetReleasePicksNewestPluginCalVer(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	in := &Installer{GitHubHTTP: srv.Client()}
+	in := &Installer{GitHubHTTP: srv.Client(), FlynnVersion: "v20260919.2"}
 	rel, err := in.getRelease(&GitHubSource{Owner: "acme", Repo: "plug", Ref: "", API: srv.URL}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if rel.TagName != "v20260919.2.1" {
-		t.Fatalf("latest calver=%s, want v20260919.2.1 (plugin patch above Flynn-aligned tag)", rel.TagName)
+		t.Fatalf("compatible calver=%s, want v20260919.2.1 not a newer Flynn date.N", rel.TagName)
 	}
 	rel, err = in.getRelease(&GitHubSource{Owner: "acme", Repo: "plug", Ref: "v20260919.2.1", API: srv.URL}, "")
 	if err != nil || rel.TagName != "v20260919.2.1" {
 		t.Fatalf("explicit --ref: %+v %v", rel, err)
+	}
+
+	in.FlynnVersion = "v20260919.0"
+	_, err = in.getRelease(&GitHubSource{Owner: "acme", Repo: "plug", Ref: "", API: srv.URL}, "")
+	if err == nil || !strings.Contains(err.Error(), "v20260919.0") {
+		t.Fatalf("must not pick v20260919.2.* or v20260920 for Flynn v20260919.0, got %v", err)
 	}
 }
 

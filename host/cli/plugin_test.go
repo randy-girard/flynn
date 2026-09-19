@@ -109,6 +109,15 @@ func TestPluginUpdateUsage(t *testing.T) {
 		t.Fatalf("update ref: %+v", args)
 	}
 
+	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all")
+	if args.Bool["--auto-tls"] {
+		t.Fatalf("update-all: %+v", args)
+	}
+	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all", "--auto-tls")
+	if !args.Bool["--auto-tls"] {
+		t.Fatalf("update-all --auto-tls: %+v", args)
+	}
+
 	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "update", "http/abc")
 	if !args.Bool["update"] || args.String["<id>"] != "http/abc" {
 		t.Fatalf("route update must still parse: %+v", args)

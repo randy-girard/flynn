@@ -38,6 +38,10 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	if name != "plugin:credentials" || from != "plugin credentials" || !reflect.DeepEqual(args, []string{"--help"}) {
 		t.Fatalf("credentials help got %q %q from=%q", name, args, from)
 	}
+	name, args, from = ResolveCommand("plugin", []string{"update-all"})
+	if name != "plugin:update-all" || from != "plugin update-all" || len(args) != 0 {
+		t.Fatalf("update-all got %q %q from=%q args=%q", name, args, from, args)
+	}
 	name, args, from = ResolveCommand("plugin", []string{"--help"})
 	if name != "plugin:list" || from != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
 		t.Fatalf("plugin help got %q %q from=%q", name, args, from)
@@ -72,7 +76,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"volume:list", "volume:create", "volume:delete", "volume:gc",
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
-		"plugin:install", "plugin:list", "plugin:update", "plugin:uninstall",
+		"plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",
 		"plugin:credentials", "plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:route",

@@ -147,6 +147,7 @@ Commands:
   plugin:route                    List, add, update, or remove routes for an installed plugin
   plugin:uninstall                Remove an installed plugin
   plugin:update                   Deploy a new release of an installed plugin
+  plugin:update-all               Update all official plugins for this Flynn version
   promote                         Promote a Flynn node into the consensus cluster
   ps                              List jobs
   route:add                       Add an HTTP path route (cluster admin)

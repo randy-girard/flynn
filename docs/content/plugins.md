@@ -205,13 +205,24 @@ sudo flynn-host plugin:install dashboard --auto-tls
 sudo flynn-host plugin:install discovery
 sudo flynn-host plugin:install www --auto-tls
 sudo flynn-host plugin:update dashboard --ref v20260916.3.1
+sudo flynn-host plugin:update-all
 sudo flynn-host plugin:uninstall dashboard
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 ```
 
-`--ref` is the GitHub release tag (`vYYYYMMDD.N.P`, or a legacy `vYYYYMMDD.N`).
-Omit it to use the latest **published** calver tag (drafts and prereleases are
-skipped). **`plugin update`** is the
+`--ref` is the GitHub release tag. Flynn releases are always **`vYYYYMMDD.N`**.
+A plugin built against that Flynn is tagged **`vYYYYMMDD.N`** when first shipped
+for that Flynn, or **`vYYYYMMDD.N.B`** when only the plugin changes. Every
+`vYYYYMMDD.N.*` plugin requires Flynn `vYYYYMMDD.N` images. A cluster on
+`v20260919.0` installs and updates only plugins whose tag date.N matches
+(patch B may increase). **`plugin:install`** / **`plugin:update`** refuse a
+plugin release that does not match the running Flynn version.
+**`plugin:update`** without `--ref` picks the highest compatible
+`vYYYYMMDD.N.B` for this Flynn, never a newer Flynn date.N.
+**`plugin:update-all`** does that for every installed official plugin,
+continues past individual failures, and prints a per-plugin result.
+Omit `--ref` on a single update to use that same compatible calver
+(drafts and prereleases are skipped). **`plugin update`** is the
 operator command once the plugin app exists: it deploys a new release,
 scales the previous release to zero, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Re-running
@@ -240,10 +251,14 @@ plugin-build copies those scripts into `dist/` so **Build and Release** uploads
 them. Flynn ubuntu-noble is **not** re-uploaded from each plugin (the same
 ~200MiB file from every plugin job 502s `uploads.github.com`). Hosts fetch that
 OS layer from the Flynn GitHub Release named in artifact meta
-`flynn.plugin.base` (`owner/repo@version`, same layer id as Flynn). Flynn
-reconstructs the repo-relative path (`script/install.sh`) when it unpacks the
-release, then runs the hook. Uploads of the squashfs layers go into the cluster
-blobstore so other hosts never talk to GitHub.
+`flynn.plugin.base` (`owner/repo@version`, same layer id as Flynn) **only when
+the cluster does not already have that Flynn image**. If `/etc/flynn/images.json`,
+`FLYNN_IMAGES_JSON`, `/var/lib/flynn/layer-cache`, or installed Flynn artifacts
+already contain that OS layer, plugin build and GitHub install copy the local
+layer and fetch only the plugin delta. Flynn reconstructs the repo-relative
+path (`script/install.sh`) when it unpacks the release, then runs the hook.
+Uploads of the squashfs layers go into the cluster blobstore so other hosts
+never talk to GitHub.
 
 When a Flynn GitHub Release is created, **dispatch_plugins** is on by default
 on **Build and Release** so those plugin workflows are queued from the same
@@ -258,7 +273,7 @@ Configure the Flynn repo (or org) with:
   write** and **Contents: read** on those plugin repos (`GITHUB_TOKEN` cannot
   start workflows in another repository).
 
-Each plugin is built with its own `version` (`vYYYYMMDD.N.P`) and
+Each plugin is built with its own `version` (`vYYYYMMDD.N.B`) and
 `flynn_version` set to the Flynn tag so the overlay uses that ubuntu-noble
 layer. Flynn dispatch uses `{flynn_tag}.0`; a plugin-only change increments
 the last number without a new Flynn release. Re-run **Dispatch plugin
