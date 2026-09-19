@@ -24,7 +24,9 @@ type test struct {
 func newTest(t *testing.T) (s *test) {
 	defer func() {
 		if t.Failed() {
-			s.cleanup()
+			if s != nil && s.cleanup != nil {
+				s.cleanup()
+			}
 			t.FailNow()
 		}
 	}()
