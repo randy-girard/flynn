@@ -137,6 +137,8 @@
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
+#   SMOKE_FIREWALL_PORT  High TCP port for the post-bootstrap UFW
+#                        expose/unexpose probe [default: 27183]
 #
 
 set -euo pipefail
@@ -165,6 +167,8 @@ CLI_REPO="${FLYNN_GITHUB_REPO:-randy-girard/flynn}"
 CLUSTER_NET_PREFIX="192.168.56"
 CLUSTER_IP_OFFSET=19
 NODE1_IP="${CLUSTER_NET_PREFIX}.$((CLUSTER_IP_OFFSET + 1))"
+# High port outside 22/80/443 and the TCP-route 3000-3500 window.
+SMOKE_FIREWALL_PORT="${SMOKE_FIREWALL_PORT:-27183}"
 ALL_CLUSTER_NODES=()
 ALL_CLUSTER_IPS=()
 # apply_topology sets NODES / NODE_IPS / PEER_IPS / MIN_HOSTS per run.
@@ -1015,6 +1019,28 @@ wait_for() {
     fi
     sleep 5
   done
+}
+
+# TCP connect from this host (the Vagrant hypervisor) to ip:port.
+# Exit 0 on handshake, 1 on refuse/timeout. Used to prove UFW, not NAT forwards.
+host_tcp_connect() {
+  local ip=$1 port=$2 timeout=${3:-2}
+  python3 - "${ip}" "${port}" "${timeout}" <<'PY'
+import socket, sys
+ip, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
+try:
+    with socket.create_connection((ip, port), timeout=timeout):
+        raise SystemExit(0)
+except OSError:
+    raise SystemExit(1)
+PY
+}
+
+host_tcp_closed() {
+  if host_tcp_connect "$@"; then
+    return 1
+  fi
+  return 0
 }
 
 default_build_version() {
@@ -2373,6 +2399,112 @@ step_bootstrap() {
     return 1
   fi
   echo "bootstrapped ${CLUSTER_DOMAIN} (${TOPOLOGY_LABEL} min-hosts=${MIN_HOSTS})"
+}
+
+# After bootstrap: a random high port is closed from the Vagrant host, then
+# flynn-host firewall:expose opens it on nodeIP:PORT, then unexpose closes it
+# again. Listener stays up the whole time so "closed" is UFW, not an empty
+# bind. Installer CIDR allows 192.168.0.0/16 (cluster peer host APIs), which
+# would also allow the Vagrant host (vboxnet 192.168.56.1) and hide the gate;
+# drop that one allow for this probe. SSH stays on NAT (10.0.2.2 / 10.0.0.0/8).
+step_host_firewall_expose() {
+  local ip="${NODE1_IP}"
+  local port="${SMOKE_FIREWALL_PORT}"
+  local label="firewall-expose"
+
+  echo "firewall probe ${ip}:${port} from Vagrant host (no NAT forwarded_port)"
+
+  if host_tcp_connect "127.0.0.1" "${port}" 1; then
+    echo "NAT must not forward probe port ${port} (127.0.0.1:${port} is open on the host)" >&2
+    record_check "${label}" "no-nat-forward" "FAIL" "127.0.0.1:${port} open"
+    return 1
+  fi
+  record_check "${label}" "no-nat-forward" "PASS" "127.0.0.1:${port} closed"
+
+  node_root_script node1 <<EOF
+set -euo pipefail
+port=${port}
+cat > /tmp/smoke-fw-listen.py <<'PY'
+import socket, sys
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("0.0.0.0", port))
+s.listen(5)
+while True:
+    c, _ = s.accept()
+    try:
+        c.send(b"ok")
+    finally:
+        c.close()
+PY
+python3 /tmp/smoke-fw-listen.py "\${port}" >/tmp/smoke-fw-listen.log 2>&1 &
+echo \$! > /tmp/smoke-fw-listen.pid
+for i in \$(seq 1 50); do
+  if ss -lnt | grep -F ":${port}" >/dev/null; then
+    exit 0
+  fi
+  sleep 0.1
+done
+echo "listener did not bind :\${port}" >&2
+exit 1
+EOF
+
+  cleanup_fw_probe() {
+    trap - RETURN
+    node_root_script node1 <<EOF || true
+set +e
+port=${port}
+if command -v flynn-host >/dev/null 2>&1; then
+  FLYNN_SKIP_UPDATE_CHECK=1 flynn-host firewall:unexpose "\${port}" >/dev/null 2>&1
+fi
+if [[ -f /tmp/smoke-fw-listen.pid ]]; then
+  kill "\$(cat /tmp/smoke-fw-listen.pid)" >/dev/null 2>&1
+  rm -f /tmp/smoke-fw-listen.pid
+fi
+pkill -f smoke-fw-listen.py >/dev/null 2>&1
+if ! ufw status | grep -q '192.168.0.0/16'; then
+  ufw allow from 192.168.0.0/16 comment flynn-cluster >/dev/null
+fi
+rm -f /tmp/smoke-fw-listen.py /tmp/smoke-fw-listen.log
+exit 0
+EOF
+  }
+  trap cleanup_fw_probe RETURN
+
+  node_root_script node1 <<'EOF'
+set -euo pipefail
+if ufw status | grep -q '192.168.0.0/16'; then
+  ufw --force delete allow from 192.168.0.0/16 comment flynn-cluster >/dev/null \
+    || ufw --force delete allow from 192.168.0.0/16 >/dev/null
+fi
+EOF
+
+  if host_tcp_connect "${ip}" "${port}" 2; then
+    echo "expected ${ip}:${port} closed before firewall:expose (UFW should drop)" >&2
+    record_check "${label}" "before-expose" "FAIL" "${ip}:${port} open"
+    return 1
+  fi
+  record_check "${label}" "before-expose" "PASS" "${ip}:${port} closed"
+
+  node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host firewall:expose ${port}" </dev/null
+
+  if ! wait_for "${ip}:${port} after firewall:expose" 20 host_tcp_connect "${ip}" "${port}" 2; then
+    echo "expected ${ip}:${port} open after firewall:expose" >&2
+    record_check "${label}" "after-expose" "FAIL" "${ip}:${port} closed"
+    return 1
+  fi
+  record_check "${label}" "after-expose" "PASS" "${ip}:${port} open"
+
+  node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host firewall:unexpose ${port}" </dev/null
+
+  if ! wait_for "${ip}:${port} closed after firewall:unexpose" 20 host_tcp_closed "${ip}" "${port}" 2; then
+    echo "expected ${ip}:${port} closed after firewall:unexpose" >&2
+    record_check "${label}" "after-unexpose" "FAIL" "${ip}:${port} still open"
+    return 1
+  fi
+  record_check "${label}" "after-unexpose" "PASS" "${ip}:${port} closed"
+  echo "firewall expose/unexpose on ${ip}:${port}: PASS"
 }
 
 # True when flynn-plugin.json name, aliases, provider, or CLI command is $2.
@@ -5455,6 +5587,8 @@ run_one_topology() {
     run_step "Init layer-0 (peer-ips) (${TOPOLOGY_LABEL})" step_init_cluster
     run_step "Bootstrap cluster (${TOPOLOGY_LABEL})" step_bootstrap
   fi
+
+  run_step "Host firewall expose (${TOPOLOGY_LABEL})" step_host_firewall_expose
 
   if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
     record "Install plugins (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_PLUGIN_INSTALL=1"

@@ -40,12 +40,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   ENV['LANG']="en_US.UTF-8"
   ENV['LANGUAGE']="en_US.UTF-8"
 
-  # HTTP/HTTPS: bind on all host interfaces so another machine (e.g. a Caddy
-  # reverse proxy) on the LAN can reach the VM. If you only browse from the host,
-  # set host_ip back to "127.0.0.1" for stricter binding.
-  #
-  # Flynn router HTTP is guest:80 → host:8080 (not host:80). Point your proxy at
-  # http://<flynn-host-lan-ip>:8080 for plain HTTP to the router.
+  # Cluster access is the host-only NIC (192.168.56.x), not a NAT forwarded_port
+  # list. VirtualBox NAT forwards can bypass guest UFW and hide firewall:expose.
+  # Vagrant still NATs SSH (vagrant ssh). HTTP/HTTPS/TCP are nodeIP:PORT; UFW is
+  # the gate (22/80/443 plus whatever flynn-host firewall:expose opens).
   config.vm.define "builder" do |builder|
     builder.vm.hostname = "builder"
     builder.vm.synced_folder "./flynn-logs/builder", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
@@ -84,8 +82,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   #   end
 
   #   runner.vm.network "private_network", ip: "192.168.56.11"
-  #   runner.vm.network "forwarded_port", guest: 80, host: 8080
-  #   runner.vm.network "forwarded_port", guest: 443, host: 8443
 
   #   runner.vm.provision "shell", privileged: true, inline: <<-SHELL
   #     sudo su -l
@@ -123,8 +119,6 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       end
 
       runner.vm.network "private_network", ip: "192.168.56.#{19 + i}"
-      runner.vm.network "forwarded_port", guest: 80, host: 9079 + i
-      runner.vm.network "forwarded_port", guest: 443, host: 9442 + i
 
       runner.vm.provision "shell", privileged: true, inline: <<-SHELL
         sudo su -l

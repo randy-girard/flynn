@@ -105,4 +105,22 @@ need "${ROOT}/pkg/hostfw/plan.go" 'KindPeer' \
 need "${ROOT}/pkg/hostfw/plan.go" 'KindExpose' \
   "host firewall planner must model exposed TCP ports"
 
+smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
+need "${smoke}" 'step_host_firewall_expose' \
+  "smoke must probe flynn-host firewall:expose after bootstrap"
+need "${smoke}" 'firewall:expose' \
+  "smoke must run flynn-host firewall:expose on a high port"
+need "${smoke}" 'firewall:unexpose' \
+  "smoke must run flynn-host firewall:unexpose and re-check the port"
+need "${smoke}" 'host_tcp_connect' \
+  "smoke must TCP-connect from the Vagrant host to nodeIP:PORT (not a NAT forward)"
+need "${smoke}" 'Host firewall expose' \
+  "run_one_topology must run the firewall expose step after bootstrap"
+need "${smoke}" 'before-expose' \
+  "smoke must assert the probe port is closed before firewall:expose"
+need "${smoke}" 'after-unexpose' \
+  "smoke must assert the probe port is closed again after firewall:unexpose"
+need "${smoke}" 'SMOKE_FIREWALL_PORT' \
+  "firewall probe port must be a deterministic high port, not \$RANDOM"
+
 echo "ok install firewall (22/80/443) and logrotate for /var/log/flynn"
