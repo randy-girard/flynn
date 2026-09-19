@@ -163,6 +163,11 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	if plan.RolloutImages && !allNodes {
 		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
+	if plan.RolloutImages {
+		if err := prepareClusterDisk(log); err != nil {
+			return err
+		}
+	}
 
 	// expectedHostCount is captured during the rolling binary update and
 	// passed to updateImages so the image-pull step can wait for the
@@ -1044,9 +1049,26 @@ const deployTimeout = 30 * time.Minute
 
 const imagePullCleanupTimeout = 5 * time.Minute
 
-// prepareHostsForImagePull frees orphaned image material and verifies each host
-// has enough disk space before downloading update layers.
+func prepareClusterDisk(log log15.Logger) error {
+	hosts, err := cluster.NewClient().Hosts()
+	if err != nil {
+		return fmt.Errorf("cannot reclaim disk before update: %w", err)
+	}
+	if len(hosts) == 0 {
+		return fmt.Errorf("cannot reclaim disk before update: no hosts found")
+	}
+	log.Info("reclaiming disk on cluster hosts before update")
+	return prepareHostsForImagePull(hosts, log)
+}
+
+// prepareHostsForImagePull runs volume GC and orphaned-image cleanup, then
+// verifies each host has enough disk space before downloading update layers.
 func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
+	log.Info("garbage collecting unused volumes before image pull")
+	if err := garbageCollectUnusedVolumes(hosts, log); err != nil {
+		log.Warn("volume gc did not finish cleanly", "err", err)
+	}
+
 	log.Info("cleaning orphaned image data before image pull")
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(hosts))
@@ -1072,21 +1094,20 @@ func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
 	wg.Wait()
 	close(errChan)
 	for err := range errChan {
-		log.Warn("continuing after cleanup issue", "err", err)
+		log.Warn("image data cleanup issue", "err", err)
 	}
 
 	for _, h := range hosts {
 		stats, err := h.GetStats()
 		if err != nil {
-			log.Warn("could not check disk space", "host", h.ID(), "err", err)
-			continue
+			return fmt.Errorf("host %s: cannot measure free disk for image pull: %w", h.ID(), err)
 		}
 		free := stats.DiskFreeBytes
 		hostLog := log.New("host", h.ID())
 		hostLog.Info("filesystem free space", "free_gb", free>>30)
 		if free < cleanup.MinFreeBeforeImagePull {
-			return fmt.Errorf("host %s has insufficient disk space for image pull (%d GiB free, need at least %d GiB): free space under %s or run `flynn-host fix`",
-				h.ID(), free>>30, cleanup.MinFreeBeforeImagePull>>30, cleanup.LayerCacheDir)
+			return fmt.Errorf("host %s has insufficient disk for image pull (%d GiB free after reclaiming unused volumes and image cache, need at least %d GiB); add disk and retry",
+				h.ID(), free>>30, cleanup.MinFreeBeforeImagePull>>30)
 		}
 	}
 	return nil
@@ -1680,6 +1701,17 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 	log.Info("starting tarball-based update", "tarball", tarballPath)
 
+	hostCount, hostCountErr := clusterHostCount()
+	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
+	if plan.RolloutImages && !allNodes {
+		log.Info("single-node cluster: rolling out images without --all-nodes")
+	}
+	if plan.RolloutImages {
+		if err := prepareClusterDisk(log); err != nil {
+			return err
+		}
+	}
+
 	// Verify tarball exists
 	if _, err := os.Stat(tarballPath); err != nil {
 		return fmt.Errorf("tarball not found: %s", tarballPath)
@@ -1764,12 +1796,6 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 			log.Info("skipping remote host binary updates (--all-nodes not set)")
 			fmt.Println("Other cluster hosts were not updated. Run the same tarball update on each node, then run it again with --all-nodes to pull images everywhere and deploy system apps—or pass --all-nodes on this command to update every host now.")
 		}
-	}
-
-	hostCount, hostCountErr := clusterHostCount()
-	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
-	if plan.RolloutImages && !allNodes {
-		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
 
 	// Temporary HTTP server: only when pushing to other nodes or rolling out images cluster-wide.

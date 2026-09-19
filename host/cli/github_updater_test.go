@@ -314,6 +314,61 @@ func TestGitHubUpdateContinuesAfterReexecBeforeVersionAbort(t *testing.T) {
 	}
 }
 
+func TestUpdateRunsVolumeGCBeforeImagePull(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	gc := strings.Index(body, "garbageCollectUnusedVolumes(hosts, log)")
+	cleanup := strings.Index(body, "h.CleanupImageData()")
+	disk := strings.Index(body, "MinFreeBeforeImagePull")
+	if gc < 0 || cleanup < 0 || disk < 0 {
+		t.Fatal("image pull prep must garbage-collect volumes, clean image data, and check free space")
+	}
+	if gc > cleanup || cleanup > disk {
+		t.Fatal("volume gc must run before image-data cleanup and the free-space check")
+	}
+	if strings.Contains(body, "run `flynn-host volume:gc`") {
+		t.Fatal("update must reclaim volumes itself, not ask the operator to run volume:gc")
+	}
+	if !strings.Contains(body, "after reclaiming unused volumes and image cache") {
+		t.Fatal("disk-space error must say update already reclaimed unused volumes")
+	}
+	if !strings.Contains(body, "cannot measure free disk for image pull") {
+		t.Fatal("missing disk stats must abort the update")
+	}
+}
+
+func TestUpdateReclaimsDiskBeforeMutatingCluster(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	gh := strings.Index(body, "func runGitHubUpdate")
+	tb := strings.Index(body, "func runTarballUpdate")
+	if gh < 0 || tb < 0 || gh > tb {
+		t.Fatal("expected runGitHubUpdate before runTarballUpdate")
+	}
+	ghBody := body[gh:tb]
+	tbBody := body[tb:]
+	ghPrep := strings.Index(ghBody, "prepareClusterDisk(log)")
+	ghInstall := strings.Index(ghBody, "downloadAndInstallBinary")
+	if ghPrep < 0 || ghInstall < 0 || ghPrep > ghInstall {
+		t.Fatal("github update must reclaim disk before installing binaries")
+	}
+	tbPrep := strings.Index(tbBody, "prepareClusterDisk(log)")
+	tbExtract := strings.Index(tbBody, "extractTarball(")
+	tbBoot := strings.Index(tbBody, "bootstrapUpdateBinary")
+	if tbPrep < 0 || tbExtract < 0 || tbBoot < 0 {
+		t.Fatal("tarball update must reclaim disk, extract, and bootstrap flynn-host")
+	}
+	if tbPrep > tbExtract || tbPrep > tbBoot {
+		t.Fatal("tarball update must reclaim disk before extracting or installing binaries")
+	}
+}
+
 func TestParseHostFromURL(t *testing.T) {
 	cases := []struct {
 		in, want string

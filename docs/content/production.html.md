@@ -492,6 +492,8 @@ To perform an in-place update of **binaries on one host** (no other nodes, no co
 
 To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images. After system apps, the updater refreshes slugrunner on git/slug user apps that already have a release. Container-stack git deploys and `flynn docker:push` apps keep their own image artifacts (they are not rewritten to slugrunner, which would drop files like `/start.sh`). Apps created in the dashboard or with `flynn create` that have never been deployed are skipped; a missing release on a required system app still fails the update.
 
+When the update will pull container images, it first garbage-collects unused volumes (the same keep rules as `flynn-host volume:gc`: running jobs, controller-tracked volumes, and system images) and leftover image cache, then requires at least 5 GiB free on each host. Persistent database volumes the scheduler still tracks are not deleted. If a host is still short of space after that, the update stops before changing binaries so the cluster is not left half-upgraded.
+
 ## Adding Hosts
 
 Hosts may be added to an existing cluster by running `flynn-host init` with the

@@ -11,8 +11,9 @@ import (
 
 	"github.com/docker/go-units"
 	"github.com/flynn/go-docopt"
+	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
-	"github.com/randy-girard/flynn/host/types"
+	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/cluster"
@@ -58,7 +59,6 @@ Examples:
 }
 
 func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error {
-	// collect list of all volume ids currently attached to jobs
 	hosts, err := client.Hosts()
 	if err != nil {
 		return fmt.Errorf("could not list hosts: %s", err)
@@ -66,7 +66,61 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 	if len(hosts) == 0 {
 		return errors.New("no hosts found")
 	}
+	return garbageCollectUnusedVolumes(hosts, nil)
+}
 
+func volumeGCKeepFromJobs(jobs map[string]host.ActiveJob) map[string]struct{} {
+	keep := make(map[string]struct{})
+	for _, j := range jobs {
+		if j.Status != host.StatusRunning && j.Status != host.StatusStarting {
+			continue
+		}
+		if j.Job == nil {
+			continue
+		}
+		keep[j.Job.ID] = struct{}{}
+		for _, vb := range j.Job.Config.Volumes {
+			if vb.VolumeID != "" {
+				keep[vb.VolumeID] = struct{}{}
+			}
+		}
+		for _, m := range j.Job.Mountspecs {
+			if m != nil && m.ID != "" {
+				keep[m.ID] = struct{}{}
+			}
+		}
+	}
+	return keep
+}
+
+func addControllerVolumeKeep(keep map[string]struct{}, vols []*ct.Volume) {
+	for _, vol := range vols {
+		if vol == nil || vol.ID == "" {
+			continue
+		}
+		if vol.State == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+			continue
+		}
+		keep[vol.ID] = struct{}{}
+	}
+}
+
+func shouldGCVolume(v *volume.Info, keep map[string]struct{}) bool {
+	if v == nil || v.ID == "" {
+		return false
+	}
+	if _, ok := keep[v.ID]; ok {
+		return false
+	}
+	if v.Meta["flynn.system-image"] == "true" {
+		return false
+	}
+	return true
+}
+
+// garbageCollectUnusedVolumes deletes host volumes that are not attached to a
+// running job, not tracked by the controller scheduler, and not system images.
+func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error {
 	keep := make(map[string]struct{})
 	for _, h := range hosts {
 		jobs, err := h.ListJobs()
@@ -74,23 +128,8 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 			fmt.Printf("error listing jobs on host %s: %s\n", h.ID(), err)
 			continue
 		}
-		for _, j := range jobs {
-			if j.Status != host.StatusRunning && j.Status != host.StatusStarting {
-				continue
-			}
-
-			// keep the tmpfs (it has the same ID as the job)
-			keep[j.Job.ID] = struct{}{}
-
-			// keep the data volumes
-			for _, vb := range j.Job.Config.Volumes {
-				keep[vb.VolumeID] = struct{}{}
-			}
-
-			// keep the mounted layers
-			for _, m := range j.Job.Mountspecs {
-				keep[m.ID] = struct{}{}
-			}
+		for id := range volumeGCKeepFromJobs(jobs) {
+			keep[id] = struct{}{}
 		}
 	}
 
@@ -99,51 +138,38 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 		return err
 	}
 
-	// iterate over list of all volumes, deleting any not found in the keep list
-	success := true
-
 	// Keep volumes the controller scheduler still tracks. Without this,
 	// garbage collection can delete datasets that sirenia rolling deploys
 	// still reference, causing updates to hang until timeout.
 	if ctrl, err := controllerClient(); err == nil {
-		volumes, err := ctrl.VolumeList()
+		ctrlVols, err := ctrl.VolumeList()
 		if err != nil {
 			fmt.Printf("warning: could not list controller volumes for gc: %s\n", err)
 		} else {
-			for _, vol := range volumes {
-				if vol == nil || vol.ID == "" {
-					continue
-				}
-				if vol.State == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
-					continue
-				}
-				keep[vol.ID] = struct{}{}
-			}
+			addControllerVolumeKeep(keep, ctrlVols)
 		}
 	} else {
 		fmt.Printf("warning: could not connect to controller for volume gc: %s\n", err)
 	}
 
-outer:
+	success := true
 	for _, v := range volumes {
-		if _, ok := keep[v.Volume.ID]; ok {
-			continue outer
-		}
-		// don't delete system images
-		if v.Volume.Meta["flynn.system-image"] == "true" {
+		if !shouldGCVolume(v.Volume, keep) {
 			continue
 		}
 		if err := v.Host.DestroyVolume(v.Volume.ID); err != nil {
 			success = false
 			fmt.Printf("could not delete %s volume %s: %s\n", v.Volume.Type, v.Volume.ID, err)
-			continue outer
+			continue
 		}
 		fmt.Println("Deleted", v.Volume.Type, "volume", v.Volume.ID)
+		if log != nil {
+			log.Info("deleted unused volume", "type", v.Volume.Type, "id", v.Volume.ID, "host", v.Host.ID())
+		}
 	}
 	if !success {
 		return errors.New("could not garbage collect all volumes")
 	}
-
 	return nil
 }
 
