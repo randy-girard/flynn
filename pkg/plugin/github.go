@@ -136,6 +136,17 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 		}
 		name := layer.ID + ".squashfs"
 		dest := filepath.Join(root, DistDir, name)
+		// Skip GitHub for Flynn ubuntu-noble when this cluster already has
+		// that layer (layer-cache, local images.json, or Flynn artifacts).
+		if i < len(ls)-1 {
+			if local := in.localFlynnLayer(layer.ID); local != "" {
+				if err := linkOrCopyFile(local, dest); err != nil {
+					return "", fmt.Errorf("layer %s from local Flynn image: %w", layer.ID, err)
+				}
+				in.logf("using local Flynn OS layer %s (skip GitHub download)", layer.ID)
+				continue
+			}
+		}
 		if a := rel.asset(name); a != nil {
 			if err := in.downloadAsset(src, token, a, dest); err != nil {
 				return "", fmt.Errorf("layer %s: %w", layer.ID, err)
@@ -259,8 +270,12 @@ func (in *Installer) fetchGitHubHooks(root string, src *GitHubSource, token stri
 func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease, error) {
 	ref := src.Ref
 	if ref == "" || ref == "latest" {
-		if rel, err := in.latestCalVerRelease(src, token); err == nil {
+		rel, err := in.latestCalVerRelease(src, token)
+		if err == nil {
 			return rel, nil
+		}
+		if _, ok := ParseFlynnCalVer(in.flynnVersion()); ok {
+			return nil, err
 		}
 		return in.fetchReleaseJSON(src, token, in.githubAPI(src)+fmt.Sprintf("/repos/%s/%s/releases/latest", src.Owner, src.Repo), refOrLatest(ref))
 	}
@@ -271,14 +286,16 @@ func (in *Installer) githubAPI(src *GitHubSource) string {
 	return strings.TrimRight(src.API, "/")
 }
 
-// latestCalVerRelease picks the highest vYYYYMMDD.N.P (or legacy vYYYYMMDD.N)
-// among published, non-prerelease GitHub Releases so plugin:update without
-// --ref follows plugin-only patches, not whichever tag GitHub marked latest.
+// latestCalVerRelease picks the highest published vYYYYMMDD.N.B that matches
+// the running Flynn vYYYYMMDD.N. plugin:update without --ref must not jump to
+// a newer Flynn date.N. When Flynn is not a two-part calver (dev), it keeps
+// the highest calver among published, non-prerelease tags.
 func (in *Installer) latestCalVerRelease(src *GitHubSource, token string) (*githubRelease, error) {
 	all, err := in.listGitHubReleases(src, token)
 	if err != nil {
 		return nil, err
 	}
+	flynn, flynnOK := ParseFlynnCalVer(in.flynnVersion())
 	var best *githubRelease
 	for i := range all {
 		r := &all[i]
@@ -288,11 +305,17 @@ func (in *Installer) latestCalVerRelease(src *GitHubSource, token string) (*gith
 		if _, ok := ParsePluginCalVer(r.TagName); !ok {
 			continue
 		}
+		if flynnOK && !PluginMatchesFlynn(r.TagName, flynn.FlynnLine()) {
+			continue
+		}
 		if best == nil || ComparePluginCalVer(r.TagName, best.TagName) > 0 {
 			best = r
 		}
 	}
 	if best == nil {
+		if flynnOK {
+			return nil, fmt.Errorf("no published plugin release matches Flynn %s", flynn.FlynnLine())
+		}
 		return nil, fmt.Errorf("no published plugin calver releases")
 	}
 	return best, nil

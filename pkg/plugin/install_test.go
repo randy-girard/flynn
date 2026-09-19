@@ -40,6 +40,31 @@ func TestInstallRejectsGitHubRebuild(t *testing.T) {
 	}
 }
 
+func TestInstallRefusesIncompatiblePluginRef(t *testing.T) {
+	in := &Installer{FlynnVersion: "v20260919.0"}
+	err := in.Install(InstallOptions{
+		Source: "https://github.com/acme/flynn-plugin-redis.git",
+		Ref:    "v20260920.0.1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "v20260920.0") || !strings.Contains(err.Error(), "v20260919.0") {
+		t.Fatalf("newer Flynn plugin must be refused: %v", err)
+	}
+	err = in.Update(InstallOptions{
+		Source: "https://github.com/acme/flynn-plugin-redis.git",
+		Ref:    "v1",
+	})
+	if err == nil || !strings.Contains(err.Error(), "v1") {
+		t.Fatalf("non-calver --ref must be refused on a calver cluster: %v", err)
+	}
+	if err := in.refuseIncompatiblePlugin("v20260919.0.4"); err != nil {
+		t.Fatalf("compatible patch must be allowed: %v", err)
+	}
+	dev := &Installer{FlynnVersion: "dev"}
+	if err := dev.refuseIncompatiblePlugin("v20260920.0.1"); err != nil {
+		t.Fatalf("dev Flynn skips calver refuse: %v", err)
+	}
+}
+
 func TestInstallNoBuildWithoutDist(t *testing.T) {
 	dir := t.TempDir()
 	writeAppPlugin(t, dir, "widget")

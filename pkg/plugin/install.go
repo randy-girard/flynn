@@ -51,6 +51,11 @@ type Installer struct {
 	// UninstallClient is the controller subset used by Uninstall. Tests
 	// replace this; the default is Client.
 	UninstallClient uninstallAPI
+	// FlynnVersion overrides the running Flynn release for tests.
+	// Empty uses ClusterFlynnVersion (version.Release / FLYNN_VERSION).
+	FlynnVersion string
+	// LayerCacheDir overrides /var/lib/flynn/layer-cache for tests.
+	LayerCacheDir string
 }
 
 // WebhookHost is the subset of pkg/cluster.Host used to register webhooks
@@ -113,6 +118,28 @@ func (in *Installer) Update(opts InstallOptions) error {
 	return in.apply(opts)
 }
 
+func (in *Installer) flynnVersion() string {
+	if in != nil && strings.TrimSpace(in.FlynnVersion) != "" {
+		return strings.TrimSpace(in.FlynnVersion)
+	}
+	return ClusterFlynnVersion()
+}
+
+func (in *Installer) refuseIncompatiblePlugin(tag string) error {
+	flynn, ok := ParseFlynnCalVer(in.flynnVersion())
+	if !ok {
+		return nil
+	}
+	tag = strings.TrimSpace(tag)
+	if tag == "" || tag == "latest" {
+		return nil
+	}
+	if PluginMatchesFlynn(tag, flynn.FlynnLine()) {
+		return nil
+	}
+	return incompatiblePluginError(tag, flynn)
+}
+
 func (in *Installer) apply(opts InstallOptions) error {
 	resolved, err := Resolve(opts)
 	if err != nil {
@@ -124,6 +151,9 @@ func (in *Installer) apply(opts InstallOptions) error {
 		if opts.Rebuild {
 			return fmt.Errorf("GitHub plugin fetch cannot --rebuild; use a local checkout to build")
 		}
+		if err := in.refuseIncompatiblePlugin(resolved.Ref); err != nil {
+			return err
+		}
 		dir, err := in.fetchGitHub(resolved.GitHub, opts.CredsFile)
 		if err != nil {
 			return err
@@ -132,6 +162,9 @@ func (in *Installer) apply(opts InstallOptions) error {
 		root = dir
 		if resolved.Ref == "" {
 			resolved.Ref = resolved.GitHub.Ref
+		}
+		if err := in.refuseIncompatiblePlugin(resolved.Ref); err != nil {
+			return err
 		}
 	}
 
@@ -330,7 +363,26 @@ func (in *Installer) runBuild(root string) error {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
+	cmd.Env = append(os.Environ(), in.localFlynnImageEnv()...)
 	return cmd.Run()
+}
+
+func (in *Installer) localFlynnImageEnv() []string {
+	env := LocalFlynnImageEnv()
+	if in != nil && in.LayerCacheDir != "" {
+		replaced := false
+		prefix := EnvLayersDir + "="
+		for i, e := range env {
+			if strings.HasPrefix(e, prefix) {
+				env[i] = prefix + in.LayerCacheDir
+				replaced = true
+			}
+		}
+		if !replaced {
+			env = append(env, prefix+in.LayerCacheDir)
+		}
+	}
+	return env
 }
 
 func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.Artifact, error) {
