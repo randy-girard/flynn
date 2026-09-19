@@ -95,6 +95,16 @@ main() {
     need_bin_build=true
   elif find "${ROOT}/bootstrap" \( -name '*.go' -o -name '*.json' \) -newer "${flynn_host}" 2>/dev/null | grep -q .; then
     need_bin_build=true
+  elif [[ -x "${ROOT}/build/bin/discoverd" ]]; then
+    # Docker Desktop writes linux/arm64 ELFs into the Mac tree; on the
+    # Vagrant builder those copies often crash (vboxsf: "invalid runtime
+    # symbol table") and go test then cannot boot discoverd.
+    local discoverd_probe
+    discoverd_probe="$("${ROOT}/build/bin/discoverd" -h 2>&1 || true)"
+    if echo "${discoverd_probe}" | grep -qE 'invalid runtime symbol table|fatal error:|Exec format error'; then
+      info "existing discoverd is unusable; rebuilding host binaries"
+      need_bin_build=true
+    fi
   fi
 
   # Build binaries locally using Go instead of downloading from flynn.io
