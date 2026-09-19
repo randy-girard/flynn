@@ -17,6 +17,10 @@ func TestResolveCommandSubcommand(t *testing.T) {
 	if name != "env:set" || from != "env set" || !reflect.DeepEqual(args, []string{"FOO=bar"}) {
 		t.Fatalf("got %q %q from=%q", name, args, from)
 	}
+	name, args, from = resolveCommand("alert", []string{"add", "--metric", "cpu_percent"})
+	if name != "alert:add" || from != "alert add" {
+		t.Fatalf("alert add got %q from=%q", name, from)
+	}
 }
 
 func TestResolveCommandClusterBackupMoved(t *testing.T) {

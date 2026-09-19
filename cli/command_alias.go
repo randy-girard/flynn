@@ -30,6 +30,12 @@ var subAliases = map[string]map[string]string{
 		"export":  "apps:export",
 		"import":  "apps:import",
 	},
+	"alert": {
+		"add":     "alert:add",
+		"enable":  "alert:enable",
+		"disable": "alert:disable",
+		"remove":  "alert:remove",
+	},
 	"env": {
 		"set":   "env:set",
 		"unset": "env:unset",

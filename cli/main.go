@@ -38,6 +38,11 @@ Options:
 	-h, --help
 
 Commands:
+	alert                list app metric alerts
+	alert:add            add an app metric alert
+	alert:disable        disable an app metric alert
+	alert:enable         enable an app metric alert
+	alert:remove         delete an app metric alert
 	apps                 list apps
 	apps:create          create an app
 	apps:destroy         delete an app
@@ -71,6 +76,7 @@ Commands:
 	meta                 list app metadata
 	meta:set             set app metadata
 	meta:unset           unset app metadata
+	metrics              print the latest app metrics snapshot
 	pg:dump              dump a postgres database
 	pg:psql              postgres console
 	pg:restore           restore a postgres dump

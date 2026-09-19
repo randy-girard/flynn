@@ -15,6 +15,8 @@ func TestCLICommandNamesHaveNoSpaces(t *testing.T) {
 
 func TestCLINestedCommandsAreRegistered(t *testing.T) {
 	want := []string{
+		"alert", "alert:add", "alert:enable", "alert:disable", "alert:remove",
+		"metrics",
 		"env:get", "env:set", "env:unset",
 		"plugin:list",
 		"log-sink", "log-sink:add", "log-sink:remove",
