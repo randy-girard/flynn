@@ -180,9 +180,16 @@ func splitColonCommand(name string) (base, suffix string, ok bool) {
 	return name[:i], name[i+1:], true
 }
 
-// expandColonSuffix turns redis:cli / kafka:topics-create into plugin action tokens.
+// pluginColonName maps a plugin action to a colon command.
+// Two tokens become a nested noun:verb (kafka:topics:create). A hyphenated
+// noun stays hyphenated (kafka:consumer-groups:create). Three-or-more-token
+// actions stay hyphenated verbs (disable-system-routes).
 func pluginColonName(command, actionName string) string {
-	suffix := strings.ReplaceAll(actionName, " ", "-")
+	parts := strings.Fields(actionName)
+	suffix := strings.Join(parts, "-")
+	if len(parts) == 2 {
+		suffix = parts[0] + ":" + parts[1]
+	}
 	switch {
 	case command == "redis" && actionName == "redis-cli":
 		suffix = "cli"
@@ -235,6 +242,33 @@ func pluginSpaceAlias(name string, args []string) (to, from string) {
 	return pluginColonName(name, bestName), name + " " + strings.Join(args[:bestN], " ")
 }
 
+func pluginColonRename(name string) (to, from string) {
+	base, suffix, ok := splitColonCommand(name)
+	if !ok || strings.Contains(suffix, ":") || !strings.Contains(suffix, "-") {
+		return "", ""
+	}
+	cat, err := clusterPluginCatalog()
+	if err != nil || cat == nil {
+		return "", ""
+	}
+	spec := cat.Lookup(base)
+	if spec == nil {
+		return "", ""
+	}
+	for _, a := range spec.Actions {
+		if strings.Join(strings.Fields(a.Name), "-") != suffix {
+			continue
+		}
+		canonical := pluginColonName(base, a.Name)
+		if canonical != name {
+			return canonical, name
+		}
+	}
+	return "", ""
+}
+
+// expandColonSuffix turns redis:cli / kafka:topics:create into plugin action tokens.
+// Hyphen form kafka:topics-create remains an alias.
 func expandColonSuffix(plugin, suffix string) []string {
 	if suffix == "cli" {
 		switch plugin {
@@ -251,6 +285,9 @@ func expandColonSuffix(plugin, suffix string) []string {
 		default:
 			return []string{"cli"}
 		}
+	}
+	if strings.Contains(suffix, ":") {
+		return strings.Split(suffix, ":")
 	}
 	return strings.Split(suffix, "-")
 }

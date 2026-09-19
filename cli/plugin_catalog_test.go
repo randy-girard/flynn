@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -63,6 +64,28 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 		t.Fatal("core command dropped")
 	}
 	assertPluginHelpSection(t, got, "redis:dump")
+}
+
+func TestPluginHelpNamesUseNestedColons(t *testing.T) {
+	cmd := plugin.CLI{
+		Command: "kafka",
+		Actions: []plugin.CLIAction{
+			{Name: "topics"},
+			{Name: "topics create"},
+			{Name: "consumer-groups create"},
+			{Name: "update-all"},
+		},
+	}
+	got := pluginHelpNames(cmd)
+	want := []string{
+		"kafka:consumer-groups:create",
+		"kafka:topics",
+		"kafka:topics:create",
+		"kafka:update-all",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q want %q", got, want)
+	}
 }
 
 func TestCLIUsageParsesHelpAndOptionalCommand(t *testing.T) {

@@ -4,7 +4,7 @@ This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branc
 
 ## Colon commands
 
-Nested `flynn` and `flynn-host` verbs are `noun:verb` (`env:get`, `plugin:install`, `volume:gc`). Standalone verbs stay verbs (`backup`, `daemon`, `update`). Space form is an alias only. See `.cursor/rules/colon-commands.mdc`.
+Nested `flynn` and `flynn-host` verbs are `noun:verb` (`env:get`, `plugin:install`, `volume:gc`). Extra colons only for a nested noun (`plugin:credentials:set`, `kafka:topics:create`), not a hyphenated verb (`acme:disable-system-routes`). Standalone verbs stay verbs (`backup`, `daemon`, `update`). Space form is an alias only. See `.cursor/rules/colon-commands.mdc`.
 
 ## Keep docs and tests in sync with code
 

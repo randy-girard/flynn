@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 // topAliases rewrites a single-token command (flynn-host plugin → plugin:list).
@@ -14,6 +15,16 @@ var topAliases = map[string]string{
 	"logsink:list":    "log-sink:list",
 	"logsink:remove":  "log-sink:remove",
 	"runtime-profile": "runtime-profile",
+}
+
+// hyphenAliases rewrites nested-noun hyphen names to extra-colon canonical names.
+// Hyphenated verbs (plugin:update-all, acme:disable-system-routes) stay as-is.
+var hyphenAliases = map[string]string{
+	"plugin:credentials-set":   "plugin:credentials:set",
+	"plugin:credentials-unset": "plugin:credentials:unset",
+	"plugin:credentials-show":  "plugin:credentials:show",
+	"firewall:peer-add":        "firewall:peer:add",
+	"firewall:peer-remove":     "firewall:peer:remove",
 }
 
 // subAliases rewrites flynn-host <noun> <verb> to flynn-host <noun>:<verb>.
@@ -48,6 +59,11 @@ var subAliases = map[string]map[string]string{
 		"update-all": "plugin:update-all",
 		"uninstall":  "plugin:uninstall",
 		"list":       "plugin:list",
+	},
+	"plugin:credentials": {
+		"set":   "plugin:credentials:set",
+		"unset": "plugin:credentials:unset",
+		"show":  "plugin:credentials:show",
 	},
 	"tags": {
 		"set": "tags:set",
@@ -92,25 +108,37 @@ var subAliases = map[string]map[string]string{
 	},
 	"firewall": {
 		"sync":        "firewall:sync",
-		"peer-add":    "firewall:peer-add",
-		"peer-remove": "firewall:peer-remove",
+		"peer-add":    "firewall:peer:add",
+		"peer-remove": "firewall:peer:remove",
 		"expose":      "firewall:expose",
 		"unexpose":    "firewall:unexpose",
 	},
+	"firewall:peer": {
+		"add":    "firewall:peer:add",
+		"remove": "firewall:peer:remove",
+	},
 }
 
-// ResolveCommand rewrites space-nested flynn-host commands to colon names.
+func aliasUsage(canonical, alias, usage string) string {
+	return strings.ReplaceAll(usage, "flynn-host "+canonical, "flynn-host "+alias)
+}
+
+// ResolveCommand rewrites space-nested and hyphen-nested flynn-host commands to colon names.
 func ResolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
-	if name == "plugin" && len(args) >= 1 && args[0] == "credentials" {
-		if len(args) >= 2 {
-			switch args[1] {
-			case "set", "unset", "show":
-				return "plugin:credentials-" + args[1], args[2:], "plugin credentials " + args[1]
+	if target, ok := hyphenAliases[name]; ok {
+		return target, args, name
+	}
+	if len(args) >= 2 {
+		if subs, ok := subAliases[name+":"+args[0]]; ok {
+			if target, ok := subs[args[1]]; ok {
+				return target, args[2:], name + " " + args[0] + " " + args[1]
 			}
 		}
+	}
+	if name == "plugin" && len(args) >= 1 && args[0] == "credentials" {
 		return "plugin:credentials", args[1:], "plugin credentials"
 	}
 	if name == "plugin" && len(args) >= 2 && args[1] == "route" {

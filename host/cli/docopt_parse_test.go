@@ -60,9 +60,13 @@ func TestHostCLIPositionalLists(t *testing.T) {
 	if route.String["--app"] != "admin" || route.String["<domain>"] != "example.com/admin" {
 		t.Fatalf("route add: %+v", route.String)
 	}
-	peer := parseHostCLI(t, "firewall:peer-add", []string{"firewall:peer-add", "192.168.56.21"})
+	peer := parseHostCLI(t, "firewall:peer:add", []string{"firewall:peer:add", "192.168.56.21"})
 	if peer.String["<ip>"] != "192.168.56.21" {
-		t.Fatalf("firewall peer-add: %+v", peer.String)
+		t.Fatalf("firewall peer:add: %+v", peer.String)
+	}
+	peerAlias := parseHostCLI(t, "firewall:peer-add", []string{"firewall:peer-add", "192.168.56.21"})
+	if peerAlias.String["<ip>"] != "192.168.56.21" {
+		t.Fatalf("firewall peer-add alias: %+v", peerAlias.String)
 	}
 	expose := parseHostCLI(t, "firewall:expose", []string{"firewall:expose", "3001"})
 	if expose.String["<port>"] != "3001" {

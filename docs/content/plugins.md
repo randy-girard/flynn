@@ -287,11 +287,11 @@ failed uploads are dispatched again so the plugin job can resume.
 Private repos and **draft** releases need a token (Contents: Read):
 
 ```text
-sudo flynn-host plugin:credentials-set github --token-file /root/github.token
+sudo flynn-host plugin:credentials:set github --token-file /root/github.token
 ```
 
 Or set `FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot.
-`credentials show` prints `set` or `unset`, never the secret. GitHub Enterprise:
+`plugin:credentials:show` prints `set` or `unset`, never the secret. GitHub Enterprise:
 `--api https://git.example.com/api/v3` stored per hostname.
 
 ## Backup and restore

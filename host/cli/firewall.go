@@ -12,6 +12,19 @@ import (
 	"github.com/randy-girard/flynn/pkg/hostfw"
 )
 
+const firewallPeerAddUsage = `
+usage: flynn-host firewall:peer:add <ip>
+
+Allow all cluster traffic from a node IP. Use this on existing nodes before
+joining a host whose address is not in the private CIDR ranges.
+`
+
+const firewallPeerRemoveUsage = `
+usage: flynn-host firewall:peer:remove <ip>
+
+Drop a previously allowed peer IP once that node has left the cluster.
+`
+
 func init() {
 	Register("firewall", runFirewallStatus, `
 usage: flynn-host firewall
@@ -29,17 +42,10 @@ Options:
     --peer-ips=<ips>  comma-separated extra peer IPv4 addresses
     --ports=<ports>   comma-separated extra TCP ports to expose
 `)
-	Register("firewall:peer-add", runFirewallPeerAdd, `
-usage: flynn-host firewall:peer-add <ip>
-
-Allow all cluster traffic from a node IP. Use this on existing nodes before
-joining a host whose address is not in the private CIDR ranges.
-`)
-	Register("firewall:peer-remove", runFirewallPeerRemove, `
-usage: flynn-host firewall:peer-remove <ip>
-
-Drop a previously allowed peer IP once that node has left the cluster.
-`)
+	Register("firewall:peer:add", runFirewallPeerAdd, firewallPeerAddUsage)
+	Register("firewall:peer-add", runFirewallPeerAdd, aliasUsage("firewall:peer:add", "firewall:peer-add", firewallPeerAddUsage))
+	Register("firewall:peer:remove", runFirewallPeerRemove, firewallPeerRemoveUsage)
+	Register("firewall:peer-remove", runFirewallPeerRemove, aliasUsage("firewall:peer:remove", "firewall:peer-remove", firewallPeerRemoveUsage))
 	Register("firewall:expose", runFirewallExpose, `
 usage: flynn-host firewall:expose <port>
 

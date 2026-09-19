@@ -90,9 +90,9 @@ dry="$(configure_flynn_firewall)"
 echo "${dry}" | grep -qx 'allow 22/tcp'
 echo "${dry}" | grep -qx 'allow 443/tcp'
 
-need "${ROOT}/host/cli/firewall.go" 'firewall:peer-add' \
+need "${ROOT}/host/cli/firewall.go" 'firewall:peer:add' \
   "flynn-host must add peer IPs to the host firewall"
-need "${ROOT}/host/cli/firewall.go" 'firewall:peer-remove' \
+need "${ROOT}/host/cli/firewall.go" 'firewall:peer:remove' \
   "flynn-host must drop peer IPs from the host firewall"
 need "${ROOT}/host/cli/firewall.go" 'firewall:expose' \
   "flynn-host must open TCP ports for exposed services"

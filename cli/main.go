@@ -302,6 +302,9 @@ func runCommand(name string, args []string) (err error) {
 	cmd, ok := commands[name]
 	if !ok {
 		if base, suffix, ok := splitColonCommand(name); ok {
+			if to, from := pluginColonRename(name); from != "" {
+				printCommandRename(from, to)
+			}
 			pluginArgs := append(expandColonSuffix(base, suffix), args...)
 			return runPluginCommand(base, pluginArgs)
 		}

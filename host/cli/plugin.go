@@ -44,7 +44,7 @@ GitHub installs never build on the cluster; they unpack release assets
 Configure extra aliases and org in /etc/flynn/plugins.json. Installed plugins
 are recorded in /etc/flynn/installed-plugins.json so cluster backup, restore,
 and sirenia repair do not hardcode appliance names. Private repos use
-flynn-host plugin:credentials-set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
+flynn-host plugin:credentials:set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_TOKEN.
 
 Examples:
 
@@ -129,7 +129,7 @@ Commands:
 `
 
 const pluginCredentialsSetUsage = `
-usage: flynn-host plugin:credentials-set github [--token-file=FILE] [--api=URL]
+usage: flynn-host plugin:credentials:set github [--token-file=FILE] [--api=URL]
 
 Store a GitHub token for private or draft release assets.
 
@@ -139,17 +139,17 @@ Options:
 
 Examples:
 
-    $ flynn-host plugin:credentials-set github --token-file /root/github.token
+    $ flynn-host plugin:credentials:set github --token-file /root/github.token
 `
 
 const pluginCredentialsUnsetUsage = `
-usage: flynn-host plugin:credentials-unset github
+usage: flynn-host plugin:credentials:unset github
 
 Remove stored GitHub plugin credentials.
 `
 
 const pluginCredentialsShowUsage = `
-usage: flynn-host plugin:credentials-show github
+usage: flynn-host plugin:credentials:show github
 
 Show whether GitHub plugin credentials are set.
 `
@@ -188,9 +188,12 @@ func init() {
 	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
 	Register("plugin:list", runPluginList, pluginListUsage)
 	Register("plugin:credentials", runPluginCredentials, pluginCredentialsUsage)
-	Register("plugin:credentials-set", runPluginCredentialsSet, pluginCredentialsSetUsage)
-	Register("plugin:credentials-unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
-	Register("plugin:credentials-show", runPluginCredentialsShow, pluginCredentialsShowUsage)
+	Register("plugin:credentials:set", runPluginCredentialsSet, pluginCredentialsSetUsage)
+	Register("plugin:credentials:unset", runPluginCredentialsUnset, pluginCredentialsUnsetUsage)
+	Register("plugin:credentials:show", runPluginCredentialsShow, pluginCredentialsShowUsage)
+	Register("plugin:credentials-set", runPluginCredentialsSet, aliasUsage("plugin:credentials:set", "plugin:credentials-set", pluginCredentialsSetUsage))
+	Register("plugin:credentials-unset", runPluginCredentialsUnset, aliasUsage("plugin:credentials:unset", "plugin:credentials-unset", pluginCredentialsUnsetUsage))
+	Register("plugin:credentials-show", runPluginCredentialsShow, aliasUsage("plugin:credentials:show", "plugin:credentials-show", pluginCredentialsShowUsage))
 	Register("plugin:route", runPluginRoute, pluginRouteUsage)
 }
 
