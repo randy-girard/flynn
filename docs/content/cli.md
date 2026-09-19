@@ -84,7 +84,9 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `docker:push` | Deploy a local Docker image |
 | `release` / `deploy` | Releases and deploy history |
 | `scale` | Formation (process counts) |
-| `ps` / `ps:kill` / `run` | Jobs |
+| `ps` / `ps:kill` / `run` | Jobs (`<process type>.<number>` short names; UUID still works) |
+| `metrics` | Latest stored app metrics snapshot (dashboard plugin) |
+| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | App metric alerts (dashboard plugin) |
 | `log` | Aggregated stdout/stderr |
 | `env` / `limit` / `meta` | Config, named runtime profiles (`limit:profile`), raw `limit:set` (when allowed), metadata |
 | `apps:export` / `apps:import` | Backup and restore an app |
@@ -122,6 +124,8 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
 | `plugin:credentials-*` | GitHub token for private/draft plugin releases |
 | `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
+| `metrics` | Live host CPU/memory/disk/load snapshot (`--host` for one node) |
+| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |
 | `otel` / `otel:add` | OpenTelemetry metrics (requires `flynn-host plugin:install otel`) |
 | `acme:configure` / `acme:status` / `acme:enable-system-routes` | Let's Encrypt account and system-route TLS |
 | `runtime-profile` / `runtime-profile:create` / `runtime-profile:allow-custom` | Named CPU/memory environments (`small`/`medium`/`large` plus custom) |

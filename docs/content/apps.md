@@ -91,19 +91,19 @@ git push staging staging:master
 
 ## Processes
 
-You can get a list of an app's individual processes using `flynn ps`. The ID
-returned can then be passed to `flynn kill` to kill the process. Flynn will
-automatically restart any killed processes that are not one-off run jobs.
+You can get a list of an app's individual processes using `flynn ps`. Each job
+has a short name like `web.4821` (`<process type>.<number>`). Pass that name to
+`flynn kill` or `flynn log`. The cluster UUID still works if you have it.
 
 ```text
 # Get a list of processes
 $ flynn ps
-ID                                          TYPE  STATE  CREATED        RELEASE                               COMMAND
-host0-52aedfbf-e613-40f2-941a-d832d10fc400  web   up     6 seconds ago  cf39a906-38d1-4393-a6b1-8ad2befe8142  /runner/init start web
+ID        TYPE  STATE  CREATED        RELEASE                               COMMAND
+web.4821  web   up     6 seconds ago  cf39a906-38d1-4393-a6b1-8ad2befe8142  /runner/init start web
 
 # Kill a process
-$ flynn kill host-28a16c12-6136-4e06-93b1-2b014147de79
-Job host-28a16c12-6136-4e06-93b1-2b014147de79 killed.
+$ flynn kill web.4821
+Job web.4821 killed.
 ```
 
 ## Logs
@@ -121,6 +121,11 @@ metrics cpu_percent=12.35 memory_bytes=67108864 memory_limit_bytes=536870912 mem
 
 Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
 (`Starting web process`, `Scaling down web process`) use the same system stream.
+
+`flynn metrics` prints the latest stored app snapshot the dashboard uses for
+alerts. Add rules with `flynn alert:add` (email or webhook). Cluster-wide
+thresholds and live host samples use `flynn-host alert` and `flynn-host metrics`.
+See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring).
 
 ### External Logs
 
