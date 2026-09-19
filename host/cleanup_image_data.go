@@ -8,7 +8,7 @@ import (
 
 // CleanupImageData removes orphaned per-job image material and unreferenced
 // layer-cache files on this host's local filesystem. It does not destroy
-// persistent ZFS volumes.
+// persistent ZFS volumes or builder layer-cache blobs that have a .json sidecar.
 func (h *Host) CleanupImageData() error {
 	if h == nil || h.state == nil || h.vman == nil {
 		return nil

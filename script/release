@@ -298,12 +298,14 @@ package_layers() {
   ids="$(flynn_images_json_layer_ids "${json}")" || fail "could not read layer ids from ${json}"
 
   echo "  package_layers copies only images.json layer blobs"
+  local missing=0
   while IFS= read -r id; do
     [[ -z "${id}" ]] && continue
     src="${LAYER_CACHE}/${id}.squashfs"
     if [[ ! -f "${src}" ]]; then
       echo "ERROR: images.json layer ${id} has no squashfs at ${src}" >&2
-      fail "refusing to ship images.json with unpackaged layers"
+      missing=1
+      continue
     fi
     cp "${src}" "${RELEASE_DIR}/${id}.squashfs"
     if [[ -f "${LAYER_CACHE}/${id}.json" ]]; then
@@ -311,6 +313,9 @@ package_layers() {
     fi
     LAYER_COUNT=$((LAYER_COUNT + 1))
   done <<< "${ids}"
+  if [[ "${missing}" -ne 0 ]]; then
+    fail "refusing to ship images.json with unpackaged layers"
+  fi
 
   echo "  - ${LAYER_COUNT} layer squashfs files from images.json"
   flynn_verify_images_json_layers "${json}" "${RELEASE_DIR}" || fail "images.json layers missing from package dir"

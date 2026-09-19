@@ -144,3 +144,15 @@ func TestUnreferencedLayerIDs(t *testing.T) {
 		t.Fatalf("unreferencedLayerIDs = %v, want [orphan]", got)
 	}
 }
+
+func TestUnreferencedLayerIDsKeepsBuilderSidecar(t *testing.T) {
+	entries := []fs.DirEntry{
+		fakeDirEntry{name: "built.squashfs"},
+		fakeDirEntry{name: "built.json"},
+		fakeDirEntry{name: "downloaded.squashfs"},
+	}
+	got := unreferencedLayerIDs(entries, nil)
+	if len(got) != 1 || got[0] != "downloaded" {
+		t.Fatalf("unreferencedLayerIDs = %v, want [downloaded] (builder json pins built)", got)
+	}
+}

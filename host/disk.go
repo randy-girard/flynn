@@ -87,8 +87,9 @@ func diskLow(stats *host.HostResourceStats) bool {
 	return false
 }
 
-// shouldReclaimImageData is true when unused layer-cache and per-job image
-// dirs should be deleted. Persistent ZFS volumes are not included: those stay
+// shouldReclaimImageData is true when unused per-job image dirs (and
+// unreferenced downloaded layer-cache blobs without a builder sidecar) should
+// be deleted. Persistent ZFS volumes are not included: those stay
 // controller-gated via volume:gc / cluster update.
 func shouldReclaimImageData(stats *host.HostResourceStats, last, now time.Time) bool {
 	if now.Sub(last) >= imageCleanupInterval {

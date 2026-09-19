@@ -204,7 +204,7 @@ func (c *Host) ConfigureAuthKey(key string) error {
 }
 
 // CleanupImageData removes orphaned image tmp/mnt dirs and unreferenced
-// layer-cache files on the target host's local filesystem.
+// downloaded layer-cache files on the target host's local filesystem.
 func (c *Host) CleanupImageData() error {
 	hc := c.c.HTTP
 	if hc == nil {

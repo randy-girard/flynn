@@ -19,6 +19,8 @@ const (
 // ImageData removes orphaned per-job image material and unreferenced layer-cache
 // files on the local host filesystem. hostID must be this machine's host ID.
 // Only image directories for jobs owned by hostID are considered for removal.
+// Layer-cache squashfs files that have a builder .json sidecar are kept even
+// when no live job or squashfs volume references them.
 func ImageData(hostID string, jobs map[string]host.ActiveJob, vols []*volume.Info) error {
 	keepJobs := keepJobIDs(jobs)
 	keepLayers := keepLayerIDs(jobs, vols)
@@ -105,6 +107,11 @@ func orphanImageDirs(entries []os.DirEntry, keep map[string]struct{}, hostID str
 }
 
 func unreferencedLayerIDs(entries []os.DirEntry, keep map[string]struct{}) []string {
+	// Builder writes {id}.json next to {id}.squashfs. Those blobs are the
+	// release payload: no running job mounts them after flynn-builder
+	// finishes, so a keep-set of live jobs/volumes would delete them and
+	// images.json would list layers that package_layers cannot upload.
+	pinned := builderPinnedLayerIDs(entries)
 	var ids []string
 	for _, e := range entries {
 		name := e.Name()
@@ -115,7 +122,21 @@ func unreferencedLayerIDs(entries []os.DirEntry, keep map[string]struct{}) []str
 		if _, ok := keep[id]; ok {
 			continue
 		}
+		if _, ok := pinned[id]; ok {
+			continue
+		}
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+func builderPinnedLayerIDs(entries []os.DirEntry) map[string]struct{} {
+	pinned := make(map[string]struct{})
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasSuffix(name, ".json") && !e.IsDir() {
+			pinned[strings.TrimSuffix(name, ".json")] = struct{}{}
+		}
+	}
+	return pinned
 }
