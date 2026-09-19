@@ -124,6 +124,11 @@ Commands:
   firewall:sync                   Reconcile peer IPs and exposed TCP ports
   firewall:unexpose               Close a previously exposed TCP port
   fix                             Fix a broken cluster
+  github                          Show GitHub App status
+  github:configure                Save the cluster GitHub App for GitHub deploys
+  github:disable                  Clear the cluster GitHub App
+  github:setup                    Print GitHub App permissions and setup steps
+  github:status                   Show GitHub App status
   help                            Show usage for a specific command
   init                            Create cluster configuration for daemon
   inspect                         Get low-level information about a job
