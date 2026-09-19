@@ -48,6 +48,8 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"run", "bash"}, "<command>", []string{"bash"}},
 		{[]string{"run", "bash", "-c", "true"}, "<argument>", []string{"-c", "true"}},
 		{[]string{"resource:add", "redis"}, "<provider>", []string{"redis"}},
+		{[]string{"resource:expose", "postgres"}, "<provider>", []string{"postgres"}},
+		{[]string{"resource:unexpose", "mysql"}, "<provider>", []string{"mysql"}},
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
 		{[]string{"cluster:add", "n", "d", "k"}, "<cluster-name>", []string{"n"}},
@@ -99,5 +101,19 @@ func TestPluginListKnownParses(t *testing.T) {
 	args = parseCLI(t, []string{"plugin", "list", "--known"})
 	if !args.Bool["--known"] {
 		t.Fatal("plugin list --known")
+	}
+}
+
+func TestRouteAddTCPTLSFlags(t *testing.T) {
+	args := parseCLI(t, []string{"route:add", "tcp", "--service", "postgres", "--leader", "--domain", "postgres.example.com", "--tls-mode", "passthrough"})
+	if !args.Bool["tcp"] || args.String["--service"] != "postgres" || !args.Bool["--leader"] {
+		t.Fatalf("tcp flags: %+v %+v", args.Bool, args.String)
+	}
+	if args.String["--domain"] != "postgres.example.com" || args.String["--tls-mode"] != "passthrough" {
+		t.Fatalf("tls flags: %+v", args.String)
+	}
+	expose := parseCLI(t, []string{"resource:expose", "redis", "--domain", "redis.example.com", "--auto-tls"})
+	if expose.String["<provider>"] != "redis" || expose.String["--domain"] != "redis.example.com" || !expose.Bool["--auto-tls"] {
+		t.Fatalf("resource expose: %+v %+v", expose.String, expose.Bool)
 	}
 }

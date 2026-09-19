@@ -79,6 +79,7 @@ sudo flynn-host plugin:route dashboard
 sudo flynn-host plugin:route dashboard add http --auto-tls
 sudo flynn-host plugin:route dashboard add http --auto-tls dashboard.example.com
 sudo flynn-host plugin:route dashboard update http/<id> --auto-tls
+sudo flynn-host plugin:route redis add tcp --leader --domain redis.example.com --tls-mode passthrough
 ```
 
 The **www** plugin also registers the cluster apex (`$CLUSTER_DOMAIN` with no

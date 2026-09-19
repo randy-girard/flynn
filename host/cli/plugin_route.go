@@ -85,17 +85,30 @@ func runPluginRouteAddTCP(args *docopt.Args, app *ct.App, rt *plugin.PluginRoute
 	if err != nil {
 		return err
 	}
+	cert, key, err := pluginRouteTLSCert(args)
+	if err != nil {
+		return err
+	}
 	route, err := rt.AddTCP(app, plugin.TCPRouteOptions{
 		Service:       args.String["--service"],
 		Port:          port,
 		Leader:        args.Bool["--leader"],
 		DrainBackends: !args.Bool["--no-drain-backends"],
+		Domain:        args.String["--domain"],
+		TLSMode:       args.String["--tls-mode"],
+		AutoTLS:       args.Bool["--auto-tls"],
+		TLSCert:       cert,
+		TLSKey:        key,
 	})
 	if err != nil {
 		return err
 	}
 	hr := route.TCPRoute()
 	fmt.Printf("%s listening on port %d\n", hr.FormattedID(), hr.Port)
+	if hr.Domain != "" {
+		fmt.Printf("hostname %s tls_mode=%s\n", hr.Domain, hr.TLSMode)
+	}
+	fmt.Printf("On each host run: sudo flynn-host firewall:expose %d\n", hr.Port)
 	return nil
 }
 

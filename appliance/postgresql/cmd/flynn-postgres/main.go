@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/appliance/postgresql"
@@ -71,6 +72,7 @@ func main() {
 		ExtWhitelist: true,
 		WaitUpstream: true,
 		SHMType:      "posix",
+		TLSHosts:     postgresTLSHosts(serviceName),
 	})
 	dd := sd.NewDiscoverd(discoverd.DefaultClient.Service(serviceName), log.New("component", "discoverd"))
 
@@ -87,4 +89,23 @@ func main() {
 	handler.Logger = log.New("component", "http")
 
 	shutdown.Fatal(http.ListenAndServe(":"+httpPort, handler))
+}
+
+func postgresTLSHosts(serviceName string) []string {
+	if serviceName == "" {
+		serviceName = "postgres"
+	}
+	hosts := []string{
+		serviceName + ".discoverd",
+		"leader." + serviceName + ".discoverd",
+		serviceName,
+		"localhost",
+	}
+	for _, env := range []string{"DEFAULT_ROUTE_DOMAIN", "CLUSTER_DOMAIN"} {
+		if d := strings.TrimSpace(os.Getenv(env)); d != "" {
+			hosts = append(hosts, serviceName+"."+d, "*."+d, d)
+			break
+		}
+	}
+	return hosts
 }

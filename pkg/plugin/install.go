@@ -717,7 +717,13 @@ func (in *Installer) acmeEnabled() (bool, error) {
 }
 
 func (in *Installer) attachAutoTLS(route *router.Route, require bool) error {
-	if route == nil || route.Type != "http" || route.Domain == "" {
+	if route == nil || route.Domain == "" {
+		return nil
+	}
+	if route.Type != "http" && route.Type != "tcp" {
+		return nil
+	}
+	if route.Type == "tcp" && router.NormalizeTLSMode(route.TLSMode) == router.TLSModePassthrough {
 		return nil
 	}
 	if routeHasAutoTLS(route) {
@@ -739,6 +745,9 @@ func (in *Installer) attachAutoTLS(route *router.Route, require bool) error {
 	route.Certificate = nil
 	route.LegacyTLSCert = ""
 	route.LegacyTLSKey = ""
+	if route.Type == "tcp" {
+		route.TLSMode = router.TLSModeTerminate
+	}
 	in.logf("enabling auto TLS for %s", domain)
 	return nil
 }

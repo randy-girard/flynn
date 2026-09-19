@@ -73,6 +73,11 @@ func TestHostCLIPositionalLists(t *testing.T) {
 		t.Fatalf("firewall sync: %+v", sync.String)
 	}
 
+	pluginTCP := parseHostCLI(t, "plugin:route", []string{"plugin:route", "redis", "add", "tcp", "--leader", "--domain", "redis.example.com", "--tls-mode", "passthrough"})
+	if pluginTCP.String["<plugin>"] != "redis" || !pluginTCP.Bool["tcp"] || pluginTCP.String["--tls-mode"] != "passthrough" {
+		t.Fatalf("plugin route add tcp: %+v %+v", pluginTCP.String, pluginTCP.Bool)
+	}
+
 	domain := parseHostCLI(t, "domain:apex", []string{"domain:apex", "www"})
 	if domain.String["<app>"] != "www" {
 		t.Fatalf("domain apex: %+v %+v", domain.String, domain.Bool)

@@ -157,7 +157,7 @@ Show whether GitHub plugin credentials are set.
 const pluginRouteUsage = `
 usage: flynn-host plugin:route <plugin>
        flynn-host plugin:route <plugin> add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-drain-backends] [--disable-keep-alives] [<domain>]
-       flynn-host plugin:route <plugin> add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
+       flynn-host plugin:route <plugin> add tcp [-s <service>] [-p <port>] [--domain <host>] [--tls-mode <mode>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--leader] [--no-drain-backends]
        flynn-host plugin:route <plugin> update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
        flynn-host plugin:route <plugin> remove <id>
 
@@ -168,9 +168,11 @@ Options:
 	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
 	--no-auto-tls      Disable Let's Encrypt on an existing HTTP route
 	-s, --service=<service>    service name to route to (defaults to the plugin name)
-	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS (http only)
-	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS (http only)
+	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS
+	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS
 	-p, --port=<port>          port to accept traffic on
+	--tls-mode=<mode>          TCP TLS: off, passthrough, or terminate
+	--domain=<host>            hostname stored on TCP routes
 
 Examples:
 

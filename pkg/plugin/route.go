@@ -82,6 +82,11 @@ type TCPRouteOptions struct {
 	Port          int
 	Leader        bool
 	DrainBackends bool
+	Domain        string
+	TLSMode       string
+	AutoTLS       bool
+	TLSCert       string
+	TLSKey        string
 }
 
 func (r *PluginRouter) List(appID string) ([]*router.Route, error) {
@@ -198,6 +203,9 @@ func (r *PluginRouter) AddTCP(app *ct.App, opts TCPRouteOptions) (*router.Route,
 	if app == nil {
 		return nil, fmt.Errorf("plugin app is required")
 	}
+	if opts.AutoTLS && (opts.TLSCert != "" || opts.TLSKey != "") {
+		return nil, fmt.Errorf("--auto-tls cannot be used with --tls-cert or --tls-key")
+	}
 	existing, err := r.List(app.ID)
 	if err != nil {
 		return nil, fmt.Errorf("list routes for %s: %w", app.Name, err)
@@ -206,12 +214,32 @@ func (r *PluginRouter) AddTCP(app *ct.App, opts TCPRouteOptions) (*router.Route,
 	if service == "" {
 		service = DefaultRouteService(app, existing, "tcp")
 	}
+	mode := router.NormalizeTLSMode(opts.TLSMode)
+	if opts.TLSMode != "" && !router.ValidTLSMode(mode) {
+		return nil, fmt.Errorf("invalid tls mode %q", opts.TLSMode)
+	}
+	if opts.AutoTLS || opts.TLSCert != "" || opts.TLSKey != "" {
+		mode = router.TLSModeTerminate
+	}
+	domain := strings.TrimSpace(opts.Domain)
 	route := &router.Route{
 		Type:          "tcp",
 		Service:       service,
 		Port:          int32(opts.Port),
 		Leader:        opts.Leader,
 		DrainBackends: opts.DrainBackends,
+		Domain:        domain,
+		TLSMode:       mode,
+		LegacyTLSCert: opts.TLSCert,
+		LegacyTLSKey:  opts.TLSKey,
+	}
+	if opts.AutoTLS {
+		if domain == "" {
+			return nil, fmt.Errorf("domain is required for --auto-tls on a TCP route")
+		}
+		if err := r.enableAutoTLS(route); err != nil {
+			return nil, err
+		}
 	}
 	if err := r.Client.CreateRoute(app.ID, route); err != nil {
 		return nil, fmt.Errorf("create tcp route: %w", err)

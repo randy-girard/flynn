@@ -98,17 +98,29 @@ $ tar -cf ../mydb.dump .
 
 ### External access
 
-An external route can be created that allows access to the database from
-services that are not running on Flynn.
+Export the database on a TCP route with a stable hostname, then open the host
+port:
 
 ```text
-flynn -a mongodb route add tcp --service mongodb --leader
+flynn resource:expose mongodb
+sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-This will provision a TCP port that always points at the primary instance.
+Default TLS mode is passthrough so a TLS-enabled `mongod` can complete the
+handshake. If the plugin is still plaintext, use
+`flynn resource:expose mongodb --auto-tls` (router terminate) until the
+appliance serves TLS itself.
 
-For security reasons this port should be firewalled, and it should only be
-accessed over the local network, VPN, or SSH tunnel.
+You can still create the route yourself:
+
+```text
+flynn -a mongodb route add tcp --service mongodb --leader --domain mongodb.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+Remove with `flynn resource:unexpose mongodb` then
+`sudo flynn-host firewall:unexpose PORT`. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety
 

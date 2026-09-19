@@ -246,16 +246,17 @@ of Flynn hosts, only these ports should be allowed:
 
 * 80 (HTTP)
 * 443 (HTTPS)
-* 3000 to 3500 (user-defined TCP services, optional)
+* 3000 to 3500 (user-defined TCP services, optional — datastore exports and
+  other TCP routes)
 
 Internal cross-host cluster communication happens on a variety of UDP and TCP
 ports and should not be restricted.
 
 The installer owns public 22/80/443 and private cluster CIDRs. After install,
 `flynn-host firewall` shows managed UFW rules. Use it to allow a peer that is
-not in a private CIDR, or to open an extra TCP port (for example a TCP route).
-User and build jobs are separately blocked from those host ports and from
-discoverd by overlay iptables, even though UFW allows the cluster CIDR for
+not in a private CIDR, or to open an extra TCP port (a TCP route or an exported
+datastore). User and build jobs are separately blocked from those host ports and
+from discoverd by overlay iptables, even though UFW allows the cluster CIDR for
 host-to-host traffic.
 
 ```text
@@ -268,6 +269,33 @@ sudo flynn-host firewall:sync
 `firewall:peer-remove` and `firewall:unexpose` drop those extra allows.
 `--peer-ips` and `--ports` on `firewall:sync` seed extra allows stored for later
 syncs.
+
+### Exporting datastores
+
+HTTP apps get a stable hostname on the cluster domain. Datastores use the same
+idea on a TCP port in 3000–3500:
+
+```text
+flynn -a myapp resource:expose postgres
+# prints: sudo flynn-host firewall:expose PORT
+sudo flynn-host firewall:expose 3001   # on every host
+```
+
+`resource:expose` creates a leader TCP route (default hostname
+`<service>.<cluster-domain>`, for example `postgres.example.com`) with TLS
+passthrough so Postgres/MySQL native SSL still works. `--auto-tls` switches the
+route to TLS terminate and attaches a Let's Encrypt cert (HTTP-01 still uses
+ports 80/443). See [Databases](databases.html.md) and each engine page.
+
+`flynn-host` also opens live TCP route ports on its 15s firewall sync (same
+UFW `flynn-expose` rules). `firewall:expose` pins the port in Extra.Ports so it
+stays open if the controller is unreachable. After `resource:unexpose`, run
+`sudo flynn-host firewall:unexpose PORT` on each host.
+
+Treat an exported datastore port as public. Prefer TLS, restrict who can reach
+3000–3500, and use a VPN when you can. In-cluster apps keep using the
+`*.discoverd` names in `DATABASE_URL` / `REDIS_URL` / etc.; they do not need a
+TCP route.
 
 Outbound Internet access is required to deploy apps using many of the default
 buildpacks.

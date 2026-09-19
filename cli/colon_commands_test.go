@@ -23,7 +23,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"apps:create", "apps:destroy",
 		"docker:push",
 		"volume:show", "volume:decommission",
-		"route:add", "resource:add",
+		"route:add", "resource:add", "resource:expose", "resource:unexpose",
 		"cluster:add",
 		"limit:set", "limit:profile", "limit:profiles",
 	}

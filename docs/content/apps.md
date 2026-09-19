@@ -216,6 +216,13 @@ key are specified with the `--tls-cert` and `--tls-key` flags when creating or
 updating the route. Enabling HTTPS for a route also enables HTTP/2
 automatically.
 
+Datastores use TCP routes instead of HTTP. `flynn resource:expose postgres`
+creates a TLS-capable TCP route (default **passthrough**) and prints
+`sudo flynn-host firewall:expose PORT`. `--auto-tls` on a TCP route sets
+**terminate** and attaches a Let's Encrypt cert (HTTP-01 still uses 80/443).
+Do not terminate TLS for Postgres or MySQL. See
+[Databases — External TLS access](databases.html.md#external-tls-access).
+
 ```text
 flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --tls-cert cert.pem --tls-key cert.key
 ```

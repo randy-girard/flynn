@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -10,6 +11,7 @@ import (
 	. "github.com/flynn/go-check"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/discoverd/testutil"
+	"github.com/randy-girard/flynn/router/testutils"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -152,6 +154,44 @@ func (s *S) TestTCPLeaderRouting(c *C) {
 
 	discoverdSetLeaderTCP(c, l, "leader-routing-tcp", md5sum("tcp-"+srv2.Addr))
 	assertTCPConn(c, addr, "2")
+}
+
+func (s *S) TestTCPTLSTerminate(c *C) {
+	portInt := allocatePort()
+	addr := fmt.Sprintf("127.0.0.1:%d", portInt)
+
+	srv := NewTCPTestServer("tls-ok")
+	defer srv.Close()
+
+	l := s.newTCPListener(c)
+	defer l.Close()
+
+	cert := testutils.TLSConfigForDomain("postgres.example.com")
+	wait := waitForEvent(c, l, "set", "")
+	r := router.TCPRoute{
+		Service: "tls-tcp",
+		Port:    portInt,
+		Domain:  "postgres.example.com",
+		TLSMode: router.TLSModeTerminate,
+		Certificate: &router.Certificate{
+			Cert: cert.Cert,
+			Key:  cert.PrivateKey,
+		},
+	}.ToRoute()
+	s.store.add(r)
+	wait()
+
+	unregister := discoverdRegisterTCPService(c, l, "tls-tcp", srv.Addr)
+	defer unregister()
+
+	conn, err := tls.Dial("tcp", addr, &tls.Config{InsecureSkipVerify: true})
+	c.Assert(err, IsNil)
+	conn.Write([]byte("ping"))
+	conn.CloseWrite()
+	res, err := ioutil.ReadAll(conn)
+	conn.Close()
+	c.Assert(err, IsNil)
+	c.Assert(string(res), Equals, "tls-okping")
 }
 
 func (s *S) TestInitialTCPSync(c *C) {

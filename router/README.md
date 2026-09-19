@@ -9,6 +9,15 @@ are provisioned via a HTTP API. Only two pieces of data are required: the domain
 name and the service name. PostgreSQL is used as a pluggable persistence backend
 so that all instances of router get the same configuration.
 
+TCP routes may store a hostname and a TLS mode:
+
+* `tls_mode=""` — plaintext proxy
+* `tls_mode="passthrough"` — backend speaks TLS (datastore export default)
+* `tls_mode="terminate"` — router wraps the listener (certificate or `--auto-tls`)
+
+`flynn resource:expose` creates a TCP route in this range (ports 3000–3500).
+`flynn-host firewall:expose` opens the host port.
+
 ### Benefits over HAProxy/nginx
 
 The primary benefits are that it uses service discovery natively and supports

@@ -34,6 +34,11 @@ Flynn ports accessible are 80 and 443 to prevent compromise. Access to these
 internal Flynn ports is equivalent to root access, so be careful. After
 install, `flynn-host firewall` manages extra peer IPs and TCP ports on the
 host UFW rules; see [Production — Firewalling](production.html.md#firewalling).
+`flynn resource:expose` prints `flynn-host firewall:expose` when a datastore is
+exported on a TCP port in 3000–3500. Treat those ports as public; prefer TLS
+passthrough (backend certs) or terminate (`--auto-tls`). Postgres enables
+`ssl=on` with a cluster-generated certificate; in-cluster `sslmode=disable`
+clients still work.
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. The TLS

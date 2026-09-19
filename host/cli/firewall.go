@@ -43,7 +43,10 @@ Drop a previously allowed peer IP once that node has left the cluster.
 	Register("firewall:expose", runFirewallExpose, `
 usage: flynn-host firewall:expose <port>
 
-Open a TCP port on the host (for example a TCP route). 22/80/443 stay installer-owned.
+Open a TCP port on the host (for example a TCP route or an exported datastore).
+22/80/443 stay installer-owned. flynn resource:expose prints this command after
+it creates the TCP(/TLS) route. flynn-host also opens live TCP route ports on
+its periodic firewall sync.
 `)
 	Register("firewall:unexpose", runFirewallUnexpose, `
 usage: flynn-host firewall:unexpose <port>

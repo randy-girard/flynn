@@ -140,6 +140,36 @@ func TestPluginRouterUpdateAndRemove(t *testing.T) {
 	}
 }
 
+func TestPluginRouterAddTCPTLS(t *testing.T) {
+	app := pluginApp("redis")
+	stub := &routeStub{acme: &ct.ACMEConfig{Enabled: true}}
+	rt := &PluginRouter{Client: stub}
+	route, err := rt.AddTCP(app, TCPRouteOptions{
+		Service:       "redis",
+		Leader:        true,
+		DrainBackends: true,
+		Domain:        "redis.example.com",
+		TLSMode:       "passthrough",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.TLSMode != router.TLSModePassthrough || route.Domain != "redis.example.com" || !route.Leader {
+		t.Fatalf("%+v", route)
+	}
+	term, err := rt.AddTCP(app, TCPRouteOptions{
+		Service: "redis",
+		Domain:  "redis.example.com",
+		AutoTLS: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if term.TLSMode != router.TLSModeTerminate || !routeHasAutoTLS(term) {
+		t.Fatalf("terminate auto-tls %+v", term)
+	}
+}
+
 func TestPluginRouterRejectsCertWithAutoTLS(t *testing.T) {
 	app := pluginApp("widget")
 	rt := &PluginRouter{Client: &routeStub{acme: &ct.ACMEConfig{Enabled: true}}}

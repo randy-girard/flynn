@@ -141,18 +141,28 @@ TLS is enabled they transparently use the cluster's client certificate.
 
 ### External access
 
-An external route can be created to allow access from services not running on
-Flynn:
+Export Kafka on a TCP route with a stable hostname, then open the host port:
 
 ```text
-flynn -a $(flynn env get FLYNN_KAFKA) route add tcp --service $(flynn env get FLYNN_KAFKA) --leader
+flynn resource:expose kafka
+sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-External clients must present the client certificate (`KAFKA_CLIENT_CERT` /
-`KAFKA_CLIENT_CERT_KEY`) and trust the cluster CA (`KAFKA_TRUSTED_CERT`).
+Keep **passthrough** (the default): brokers already speak TLS on the client
+listener, and clients must present `KAFKA_CLIENT_CERT` /
+`KAFKA_CLIENT_CERT_KEY` and trust `KAFKA_TRUSTED_CERT`. Router terminate would
+break that mutual TLS.
 
-For security reasons this port should be firewalled and only accessed over the
-local network, VPN, or SSH tunnel.
+You can still create the route yourself:
+
+```text
+flynn -a $(flynn env get FLYNN_KAFKA) route add tcp --service $(flynn env get FLYNN_KAFKA) --leader --domain kafka.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+Remove with `flynn resource:unexpose kafka` then
+`sudo flynn-host firewall:unexpose PORT`. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety
 

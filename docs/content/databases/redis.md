@@ -62,17 +62,28 @@ flynn redis:restore -f db.dump
 
 ### External access
 
-An external route can be created that allows access to the database from
-services that are not running on Flynn.
+Export Redis on a TCP route with a stable hostname, then open the host port:
 
 ```text
-flynn -a $(flynn env get FLYNN_REDIS) route add tcp --service $(flynn env get FLYNN_REDIS) --leader
+flynn resource:expose redis
+sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-This will provision a TCP port that always points at the primary instance.
+The default hostname is the Redis app name on the cluster domain (from
+`FLYNN_REDIS`). Default TLS mode is passthrough. If the Redis plugin is still
+plaintext, use `flynn resource:expose redis --auto-tls` until the appliance
+serves TLS.
 
-For security reasons this port should be firewalled, and it should only be
-accessed over the local network, VPN, or SSH tunnel.
+You can still create the route yourself:
+
+```text
+flynn -a $(flynn env get FLYNN_REDIS) route add tcp --service $(flynn env get FLYNN_REDIS) --leader --domain redis.example.com --tls-mode passthrough
+sudo flynn-host firewall:expose PORT
+```
+
+Remove with `flynn resource:unexpose redis` then
+`sudo flynn-host firewall:unexpose PORT`. See
+[Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety
 

@@ -117,6 +117,7 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 			"PGUSER":         username,
 			"PGPASSWORD":     password,
 			"PGDATABASE":     database,
+			"PGSSLMODE":      "require",
 			"DATABASE_URL":   url,
 		},
 	})
@@ -166,11 +167,11 @@ func quoteIdent(name string) string {
 	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
-// Flynn postgres does not speak TLS. pgx v5 defaults to sslmode=prefer, so
-// DATABASE_URL must disable SSL or clients log a refused handshake before
-// falling back to plaintext.
+// Flynn postgres speaks TLS (ssl=on) but still accepts non-TLS so in-cluster
+// discoverd clients using sslmode=disable keep working. New DATABASE_URL values
+// require TLS (encrypt, no CA verify) so app clients prefer TLS by default.
 func databaseURL(username, password, host, database string) string {
-	return fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=disable", username, password, host, database)
+	return fmt.Sprintf("postgres://%s:%s@%s:5432/%s?sslmode=require", username, password, host, database)
 }
 
 func parseDatabaseResourceID(id string) (user, database string, ok bool) {
