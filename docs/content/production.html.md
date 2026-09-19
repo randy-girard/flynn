@@ -487,8 +487,11 @@ command:
   like root). They can open a console on `controller`, `blobstore`, and other
   system apps. Do not put that key in application config or share it with
   dashboard-only users.
-* **Dashboard users** (`flynn login`) only act on apps they were granted. They
-  can `flynn pg psql` their own app's database. They cannot open a console on
+* **Dashboard users** (`flynn login`) only act on apps they were granted. The
+  Team role (View=`app:read`, Deploy=`app:deploy`, Manage=`app:write`,
+  Admin=`app:admin`, or a custom combination) is what the controller enforces
+  on every CLI command. They can `flynn pg psql` their own app's database when
+  the role includes write-level access. They cannot open a console on
   `controller`, `blobstore`, `postgres`, or other system apps, even if a grant
   names those apps.
 * **Application jobs** cannot reach `postgres-api`, `controller`, or

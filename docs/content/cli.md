@@ -116,9 +116,28 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | --- | --- |
 | `cluster` / `cluster:add` / `cluster:refresh` | Registered clusters |
 | `plugin:list` | Plugins installed on this cluster (`--known` lists official plugins and GitHub repos) |
-| `login` | Dashboard OAuth |
+| `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `update` / `upgrade` | Replace this CLI from GitHub Releases |
 | `version` | CLI version |
+
+### App roles
+
+Dashboard Team roles are the same grants the controller and CLI enforce after
+`flynn login`. Selecting a role on an app mints those permissions in the access
+token.
+
+| Role | Grant | CLI / controller |
+| --- | --- | --- |
+| View | `app:read` | Read the app, logs, metrics, and jobs. No mutations. |
+| Deploy | `app:deploy` | `POST /apps/:id/deploy` (and read). Cannot scale, env, routes, or team. |
+| Manage | `app:write` | Config, scale, routes, releases, and deploy. Cannot manage team. |
+| Admin | `app:admin` | Full app access, including Team invites and collaborator roles. |
+
+Cluster administrators can create additional named roles that pick any
+combination of those four permissions. Custom roles appear in the app Team
+picker and still expand to the same grants in the token. `cluster:admin` (the
+controller key, or a dashboard cluster administrator) is not an app role; it
+bypasses app grants.
 
 ### Datastore export
 

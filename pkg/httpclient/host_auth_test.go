@@ -85,6 +85,9 @@ func TestRawReqMapsForbiddenJSON(t *testing.T) {
 	if !strings.Contains(je.Message, "flynn help login") {
 		t.Fatalf("help text missing: %s", je.Message)
 	}
+	if !strings.Contains(je.Message, "View=app:read") || !strings.Contains(je.Message, "Admin=app:admin") {
+		t.Fatalf("role mapping missing: %s", je.Message)
+	}
 }
 
 func TestRawReqNotFoundAndRedirect(t *testing.T) {

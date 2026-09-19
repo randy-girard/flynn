@@ -134,7 +134,7 @@ func (c *Client) rawReq(method, rawurl string, header http.Header, in, out inter
 					if jsonErr.Message != "" {
 						jsonErr.Message += " "
 					}
-					jsonErr.Message += "If you signed in via the Flynn dashboard, your token may be limited to specific apps; ask for broader collaborator permissions or use cluster credentials (see `flynn help login`)."
+					jsonErr.Message += "If you signed in via the Flynn dashboard, your token is limited to the apps and roles granted there (View=app:read, Deploy=app:deploy, Manage=app:write, Admin=app:admin); ask an app Admin for a broader role or use cluster credentials (see `flynn help login`)."
 				}
 				return res, jsonErr
 			}
