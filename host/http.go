@@ -57,8 +57,11 @@ type Host struct {
 
 	log log15.Logger
 
-	diskWatchStop chan struct{}
-	diskWatchOnce sync.Once
+	diskWatchStop    chan struct{}
+	diskWatchOnce    sync.Once
+	lastImageCleanup time.Time
+	// imageCleanup, if set, replaces CleanupImageData during disk watch (tests).
+	imageCleanup func() error
 }
 
 // hostAuthKeyFromRequest returns the credential sent as Auth-Key or Basic password.
@@ -997,18 +1000,47 @@ func (h *Host) watchDisk() {
 	}
 }
 
+func (h *Host) runImageCleanup() error {
+	if h.imageCleanup != nil {
+		return h.imageCleanup()
+	}
+	return h.CleanupImageData()
+}
+
 func (h *Host) checkHostDisk() {
-	if h.backend == nil || h.webhookDispatcher == nil {
+	if h.backend == nil {
 		return
 	}
+	now := time.Now()
 	stats, err := h.backend.GetHostStats()
-	if err != nil || stats == nil || !diskOutOfSpace(stats) {
+	if err != nil {
+		stats = nil
+	}
+	if shouldReclaimImageData(stats, h.lastImageCleanup, now) {
+		if cErr := h.runImageCleanup(); cErr != nil {
+			if h.log != nil {
+				h.log.Error("image cleanup failed", "err", cErr)
+			}
+		} else {
+			h.lastImageCleanup = now
+			if h.log != nil && stats != nil && (diskLow(stats) || diskOutOfSpace(stats)) {
+				h.log.Info("reclaimed unused image data", "path", stats.DiskPath, "free_bytes", stats.DiskFreeBytes)
+			}
+		}
+		stats, err = h.backend.GetHostStats()
+		if err != nil {
+			return
+		}
+	}
+	if stats == nil || !diskOutOfSpace(stats) {
 		return
 	}
 	if h.log != nil {
 		h.log.Error("host disk out of space", "path", stats.DiskPath, "free_bytes", stats.DiskFreeBytes, "used_percent", diskUsedPercent(stats))
 	}
-	h.webhookDispatcher.SendDiskFull("Host disk out of space", "", nil, diskFullMetadata(stats))
+	if h.webhookDispatcher != nil {
+		h.webhookDispatcher.SendDiskFull("Host disk out of space", "", nil, diskFullMetadata(stats))
+	}
 }
 
 func (h *Host) stopDiskWatch() {

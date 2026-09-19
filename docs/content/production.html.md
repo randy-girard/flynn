@@ -86,6 +86,14 @@ $ sudo zpool detach flynn-default /var/lib/flynn/volumes/zfs/vdev/flynn-default-
 $ sudo rm /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev
 ```
 
+### Image cache
+
+Job layers live on the host root filesystem (`/var/lib/flynn/layer-cache` and
+per-job image dirs), not in the ZFS pool. flynn-host deletes unused files there
+on a timer and when free space is low. That does not replace a dedicated ZFS
+pool, and leftover datasets still need `flynn-host volume:gc` or a cluster
+update (which runs the same GC before pulling images).
+
 ## Blobstore Backend
 
 Flynn stores binary blobs like compiled applications, git repo archives,

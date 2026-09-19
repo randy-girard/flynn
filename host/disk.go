@@ -11,12 +11,15 @@ import (
 )
 
 const (
-	hostRootFS          = "/"
-	diskWatchInterval   = 30 * time.Second
-	diskFullCooldown    = 5 * time.Minute
-	diskFullUsedPercent = 98
-	diskFullMinFree     = 256 << 20 // 256 MiB
-	diskFullMinTotal    = 1 << 30   // skip tiny filesystems (tmpfs, etc.)
+	hostRootFS           = "/"
+	diskWatchInterval    = 30 * time.Second
+	imageCleanupInterval = 15 * time.Minute
+	diskFullCooldown     = 5 * time.Minute
+	diskFullUsedPercent  = 98
+	diskLowUsedPercent   = 90
+	diskFullMinFree      = 256 << 20 // 256 MiB
+	diskLowMinFree       = 1 << 30   // 1 GiB
+	diskFullMinTotal     = 1 << 30   // skip tiny filesystems (tmpfs, etc.)
 )
 
 // fillDiskStats records usage of the host root filesystem into stats.
@@ -67,6 +70,31 @@ func diskOutOfSpace(stats *host.HostResourceStats) bool {
 		return true
 	}
 	return false
+}
+
+// diskLow is true when the root filesystem is still writable but close enough
+// to full that leftover image material should be deleted before jobs fail.
+func diskLow(stats *host.HostResourceStats) bool {
+	if stats == nil || stats.DiskTotalBytes == 0 {
+		return false
+	}
+	if diskUsedPercent(stats) >= diskLowUsedPercent {
+		return true
+	}
+	if stats.DiskTotalBytes >= diskFullMinTotal && stats.DiskFreeBytes < diskLowMinFree {
+		return true
+	}
+	return false
+}
+
+// shouldReclaimImageData is true when unused layer-cache and per-job image
+// dirs should be deleted. Persistent ZFS volumes are not included: those stay
+// controller-gated via volume:gc / cluster update.
+func shouldReclaimImageData(stats *host.HostResourceStats, last, now time.Time) bool {
+	if now.Sub(last) >= imageCleanupInterval {
+		return true
+	}
+	return diskLow(stats) || diskOutOfSpace(stats)
 }
 
 func diskFullMetadata(stats *host.HostResourceStats) map[string]string {

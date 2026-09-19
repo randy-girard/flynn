@@ -49,6 +49,13 @@ uses `libcontainer` to run containers and a custom system for container images.
 The APIs that flynn-host provides are not specific to Linux containers, so we
 call a running unit of work a *job*.
 
+flynn-host watches the host root filesystem. Every 15 minutes, and whenever
+free space is low, it deletes leftover per-job image directories and
+unreferenced layer-cache files. Persistent ZFS volumes are not garbage-collected
+this way: the controller tracks those, and `flynn-host volume:gc` (also run
+automatically before a cluster update) removes volumes that are neither in use
+nor still tracked.
+
 ## Bootstrapping
 
 After the `flynn-host` daemon is started on some hosts, the bootstrap tool
