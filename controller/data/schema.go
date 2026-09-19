@@ -1038,6 +1038,9 @@ ALTER TABLE http_routes ADD COLUMN disable_keep_alives boolean NOT NULL DEFAULT 
 		`UPDATE runtime_profiles SET memory = 536870912, cpu = 500, updated_at = now()
 			WHERE name = 'small' AND builtin AND deleted_at IS NULL`,
 	)
+	migrations.Add(56,
+		`INSERT INTO event_types (name) VALUES ('runtime_profile'), ('runtime_settings')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {
