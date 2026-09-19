@@ -1090,6 +1090,54 @@ func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
 	return c.Put("/cluster/runtime-settings", settings, settings)
 }
 
+func (c *Client) GetGitHubApp() (*ct.GitHubAppConfig, error) {
+	var wrap struct {
+		Config *ct.GitHubAppConfig `json:"config"`
+	}
+	if err := c.Get("/github/app", &wrap); err != nil {
+		return nil, err
+	}
+	if wrap.Config == nil {
+		return &ct.GitHubAppConfig{}, nil
+	}
+	return wrap.Config, nil
+}
+
+func (c *Client) UpdateGitHubApp(config *ct.GitHubAppConfig) error {
+	return c.Put("/github/app", config, config)
+}
+
+func (c *Client) ListGitHubInstallations() ([]*ct.GitHubInstallation, error) {
+	var list []*ct.GitHubInstallation
+	return list, c.Get("/github/installations", &list)
+}
+
+func (c *Client) ListGitHubInstallationRepos(installationID int64) ([]*ct.GitHubRepo, error) {
+	var list []*ct.GitHubRepo
+	return list, c.Get(fmt.Sprintf("/github/installations/%d/repos", installationID), &list)
+}
+
+func (c *Client) GetAppGitHub(appID string) (*ct.GitHubRepoConnection, error) {
+	conn := &ct.GitHubRepoConnection{}
+	return conn, c.Get("/apps/"+appID+"/github", conn)
+}
+
+func (c *Client) PutAppGitHub(appID string, conn *ct.GitHubRepoConnection) error {
+	return c.Put("/apps/"+appID+"/github", conn, conn)
+}
+
+func (c *Client) DeleteAppGitHub(appID string) error {
+	return c.Delete("/apps/"+appID+"/github", nil)
+}
+
+func (c *Client) DeployAppGitHub(appID string, req *ct.GitHubDeployRequest) (*ct.GitHubDeploy, error) {
+	if req == nil {
+		req = &ct.GitHubDeployRequest{}
+	}
+	out := &ct.GitHubDeploy{}
+	return out, c.Post("/apps/"+appID+"/github/deploy", req, out)
+}
+
 func (c *Client) Put(path string, in, out interface{}) error {
 	return c.send("PUT", path, in, out)
 }

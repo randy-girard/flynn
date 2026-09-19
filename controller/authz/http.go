@@ -201,6 +201,14 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 			return rkCluster, ""
 		}
 		return rkCluster, ""
+	case "github":
+		if len(parts) >= 2 && parts[1] == "webhook" {
+			return rkAnyAuth, ""
+		}
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, ""
+		}
+		return rkCluster, ""
 	case "artifacts":
 		// POST /artifacts is the build artifact-creation route. Only the
 		// method matters; the artifact is not app-scoped in the URL.
@@ -230,6 +238,9 @@ func httpRequirement(method, rawPath string) (routeKind, string) {
 			}
 		}
 		if m == http.MethodPost && parts[2] == "deploy" {
+			return rkAppDeploy, appID
+		}
+		if m == http.MethodPost && parts[2] == "github" && len(parts) >= 4 && parts[3] == "deploy" {
 			return rkAppDeploy, appID
 		}
 		switch m {

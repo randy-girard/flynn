@@ -65,6 +65,12 @@ var subAliases = map[string]map[string]string{
 		"enable-system-routes":  "acme:enable-system-routes",
 		"disable-system-routes": "acme:disable-system-routes",
 	},
+	"github": {
+		"configure": "github:configure",
+		"status":    "github:status",
+		"setup":     "github:setup",
+		"disable":   "github:disable",
+	},
 	"runtime-profile": {
 		"create":       "runtime-profile:create",
 		"update":       "runtime-profile:update",

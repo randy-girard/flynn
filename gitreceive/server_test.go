@@ -2,7 +2,10 @@ package main
 
 import (
 	"bytes"
+	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -13,10 +16,29 @@ func TestGitHandlerAuthAndRouting(t *testing.T) {
 	auth := authorizer.New([]string{"cluster-secret"}, nil, nil, 0)
 	h := newGitHandler(nil, auth)
 
+	var forwarded string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		forwarded = string(b)
+		w.WriteHeader(204)
+	}))
+	defer upstream.Close()
+	h.webhookURL = upstream.URL
+	h.httpClient = upstream.Client()
+
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("GET", status.Path, nil))
 	if rec.Code != 200 {
 		t.Fatalf("status=%d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/github/webhook", strings.NewReader(`{"zen":"ok"}`)))
+	if rec.Code != 204 {
+		t.Fatalf("webhook proxy=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if forwarded != `{"zen":"ok"}` {
+		t.Fatalf("forwarded body %q", forwarded)
 	}
 
 	rec = httptest.NewRecorder()

@@ -84,6 +84,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"webhooks", "webhooks:add", "webhooks:remove",
 		"acme", "acme:configure", "acme:enable", "acme:disable", "acme:status",
 		"acme:enable-system-routes", "acme:disable-system-routes",
+		"github", "github:configure", "github:status", "github:setup", "github:disable",
 		"domain", "domain:apex",
 		"runtime-profile", "runtime-profile:create", "runtime-profile:update",
 		"runtime-profile:remove", "runtime-profile:allow-custom",
