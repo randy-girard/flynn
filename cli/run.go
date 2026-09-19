@@ -111,6 +111,7 @@ type runConfig struct {
 	Resources  resource.Resources
 	MountsFrom string
 	Profiles   []host.JobProfile
+	Partition  ct.PartitionType
 
 	// DeprecatedArtifact is to support using an explicit artifact
 	// with old clusters which don't accept multiple artifacts
@@ -131,6 +132,7 @@ func runJob(client controller.Client, config runConfig) error {
 		Resources:          config.Resources,
 		MountsFrom:         config.MountsFrom,
 		Profiles:           config.Profiles,
+		Partition:          config.Partition,
 	}
 
 	// ensure slug apps from old clusters use /runner/init

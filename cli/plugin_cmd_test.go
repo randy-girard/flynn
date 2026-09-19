@@ -139,6 +139,9 @@ func TestPluginJobConfigAndIO(t *testing.T) {
 	if cfg.App != "demo" || cfg.Release != "redis-rel" || !cfg.DisableLog || !cfg.Exit {
 		t.Fatalf("%+v", cfg)
 	}
+	if cfg.Partition != ct.PartitionTypeSystem {
+		t.Fatalf("plugin CLI jobs must use the system partition so they can resolve plugin APIs, got %q", cfg.Partition)
+	}
 	if !containsArgPair(cfg.Args, "-a", "s3cret") {
 		t.Fatalf("args=%q", cfg.Args)
 	}

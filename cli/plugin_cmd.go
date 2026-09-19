@@ -181,6 +181,9 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 		Args:       jobArgs,
 		DisableLog: true,
 		Exit:       true,
+		// Plugin CLIs talk to plugin APIs (scheduler.discoverd, etc.).
+		// User-partition jobs only resolve leader.<datastore>.discoverd.
+		Partition: ct.PartitionTypeSystem,
 	}, nil
 }
 
