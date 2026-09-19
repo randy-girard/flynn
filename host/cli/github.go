@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/flynn/go-docopt"
-	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/githubapp"
 )
