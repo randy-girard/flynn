@@ -14,6 +14,7 @@ import (
 
 func TestMaybeNotifyPrintsWhenNewer(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
+	t.Setenv(UpdateChannelEnv, "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/repos/randy-girard/flynn/releases/latest" {
 			t.Errorf("path=%s", r.URL.Path)
@@ -83,6 +84,7 @@ func TestMaybeNotifySkippedByEnv(t *testing.T) {
 
 func TestMaybeNotifyThrottlesGitHubButStillPrints(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
+	t.Setenv(UpdateChannelEnv, "")
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits++
@@ -90,10 +92,16 @@ func TestMaybeNotifyThrottlesGitHubButStillPrints(t *testing.T) {
 	}))
 	defer srv.Close()
 	checkFile := filepath.Join(t.TempDir(), "cktime")
-	saveNotifyCache(checkFile, notifyCache{
-		CheckedAt: time.Now().UTC(),
-		Latest:    "v20260917.1",
-	})
+	saveUpdateCheckCache(checkFile, updateCheckCacheFile{Entries: map[string]updateCheckEntry{
+		updateCheckKey("randy-girard/flynn", "v20260916.0", ChannelStable): {
+			Repo:           "randy-girard/flynn",
+			CurrentVersion: "v20260916.0",
+			Channel:        ChannelStable,
+			Release:        &Release{TagName: "v20260917.1"},
+			HasUpdate:      true,
+			CheckedAt:      time.Now().UTC(),
+		},
+	}})
 	var buf bytes.Buffer
 	MaybeNotify(NotifyOptions{
 		Writer:         &buf,
@@ -111,7 +119,7 @@ func TestMaybeNotifyThrottlesGitHubButStillPrints(t *testing.T) {
 	}
 }
 
-func TestMaybeNotifyThrottledWithoutCachedLatestIsSilent(t *testing.T) {
+func TestMaybeNotifyCorruptCacheRefetches(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
 	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -132,22 +140,32 @@ func TestMaybeNotifyThrottledWithoutCachedLatestIsSilent(t *testing.T) {
 		APIBase:        srv.URL,
 		MinInterval:    time.Hour,
 	})
-	if hits != 0 || buf.Len() != 0 {
-		t.Fatalf("hits=%d buf=%q", hits, buf.String())
+	if hits != 1 {
+		t.Fatalf("hits=%d", hits)
+	}
+	if !strings.Contains(buf.String(), "v20260917.1") {
+		t.Fatalf("got %q", buf.String())
 	}
 }
 
 func TestMaybeNotifyFailedFetchKeepsCachedLatest(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
+	t.Setenv(UpdateChannelEnv, "")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))
 	defer srv.Close()
 	checkFile := filepath.Join(t.TempDir(), "cktime")
-	saveNotifyCache(checkFile, notifyCache{
-		CheckedAt: time.Now().UTC().Add(-2 * time.Hour),
-		Latest:    "v20260917.1",
-	})
+	saveUpdateCheckCache(checkFile, updateCheckCacheFile{Entries: map[string]updateCheckEntry{
+		updateCheckKey("randy-girard/flynn", "v20260916.0", ChannelStable): {
+			Repo:           "randy-girard/flynn",
+			CurrentVersion: "v20260916.0",
+			Channel:        ChannelStable,
+			Release:        &Release{TagName: "v20260917.1"},
+			HasUpdate:      true,
+			CheckedAt:      time.Now().UTC().Add(-2 * time.Hour),
+		},
+	}})
 	var buf bytes.Buffer
 	MaybeNotify(NotifyOptions{
 		Writer:         &buf,

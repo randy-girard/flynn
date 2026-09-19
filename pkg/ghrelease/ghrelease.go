@@ -48,6 +48,19 @@ type Client struct {
 	repo       string // e.g., "flynn/flynn"
 	httpClient *http.Client
 	log        log15.Logger
+
+	// APIBase overrides GitHubAPIBase (tests inject httptest servers).
+	APIBase string
+	// CachePath overrides DefaultUpdateCheckCachePath.
+	CachePath string
+	// Channel overrides ChannelFromVersion (stable or prerelease).
+	Channel string
+	// TTL overrides UpdateCheckTTL. A pointer so 0 can mean always refresh.
+	TTL *time.Duration
+	// Now overrides time.Now (tests freeze expiry).
+	Now func() time.Time
+
+	fetchLatest func(channel string) (*Release, error)
 }
 
 // NewClient creates a new GitHub Release client
@@ -59,29 +72,51 @@ func NewClient(repo string, log log15.Logger) *Client {
 	}
 }
 
-// GetLatestRelease fetches the latest release info
+// SetHTTPClient replaces the HTTP client (tests inject httptest clients).
+func (c *Client) SetHTTPClient(h *http.Client) {
+	if c == nil {
+		return
+	}
+	c.httpClient = h
+}
+
+func (c *Client) api() string {
+	if c != nil && strings.TrimSpace(c.APIBase) != "" {
+		return strings.TrimRight(c.APIBase, "/")
+	}
+	return GitHubAPIBase
+}
+
+func (c *Client) http() *http.Client {
+	if c != nil && c.httpClient != nil {
+		return c.httpClient
+	}
+	return &http.Client{Timeout: DefaultTimeout}
+}
+
+// GetLatestRelease fetches the latest release info (uncached; used by install).
 func (c *Client) GetLatestRelease() (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", GitHubAPIBase, c.repo)
+	url := fmt.Sprintf("%s/repos/%s/releases/latest", c.api(), c.repo)
 	return c.getRelease(url)
 }
 
 // GetReleaseByTag fetches a specific release by tag
 func (c *Client) GetReleaseByTag(tag string) (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", GitHubAPIBase, c.repo, tag)
+	url := fmt.Sprintf("%s/repos/%s/releases/tags/%s", c.api(), c.repo, tag)
 	return c.getRelease(url)
 }
 
 // ListReleases fetches all releases (for channel support)
 func (c *Client) ListReleases() ([]Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases", GitHubAPIBase, c.repo)
+	url := fmt.Sprintf("%s/repos/%s/releases", c.api(), c.repo)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	c.setAPIHeaders(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.http().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch releases: %w", err)
 	}
@@ -98,16 +133,86 @@ func (c *Client) ListReleases() ([]Release, error) {
 	return releases, nil
 }
 
-// CheckForUpdate compares current version with latest release
-// Returns the latest release, whether an update is available, and any error
+// CheckForUpdate compares current version with the latest release for the
+// client's channel. Fresh cache hits do not hit the network. Expired or
+// missing entries fetch, store, and return. Failures after a previous
+// successful lookup return the stale entry so CLI startup notify stays quiet.
 func (c *Client) CheckForUpdate(currentVersion string) (*Release, bool, error) {
-	latest, err := c.GetLatestRelease()
+	return c.CheckForUpdateForce(currentVersion, false)
+}
+
+// CheckForUpdateForce is CheckForUpdate, optionally bypassing a fresh cache.
+// FLYNN_UPDATE_CHECK_TTL=0 is treated as force.
+func (c *Client) CheckForUpdateForce(currentVersion string, force bool) (*Release, bool, error) {
+	currentVersion = strings.TrimSpace(currentVersion)
+	channel := c.channel(currentVersion)
+	ttl := c.ttlDuration()
+	if ttl == 0 {
+		force = true
+	}
+	path := c.cachePath()
+	key := updateCheckKey(c.repo, currentVersion, channel)
+	cache := loadUpdateCheckCache(path)
+	entry, hit := cache.Entries[key]
+	now := c.now()
+	if !force && hit && entry.Release != nil && !entry.CheckedAt.IsZero() && now.Sub(entry.CheckedAt) < ttl {
+		return slimRelease(entry.Release), entry.HasUpdate, nil
+	}
+
+	latest, err := c.fetchLatestForChannel(channel)
 	if err != nil {
+		if !force && hit && entry.Release != nil {
+			return slimRelease(entry.Release), entry.HasUpdate, nil
+		}
 		return nil, false, err
 	}
 
-	hasUpdate := CompareVersions(currentVersion, latest.TagName)
+	hasUpdate := shouldPrintUpdate(currentVersion, latest.TagName)
+	if cache.Entries == nil {
+		cache.Entries = map[string]updateCheckEntry{}
+	}
+	cache.Entries[key] = updateCheckEntry{
+		Repo:           c.repo,
+		CurrentVersion: currentVersion,
+		Channel:        channel,
+		Release:        slimRelease(latest),
+		HasUpdate:      hasUpdate,
+		CheckedAt:      now.UTC(),
+	}
+	saveUpdateCheckCache(path, cache)
 	return latest, hasUpdate, nil
+}
+
+func (c *Client) fetchLatestForChannel(channel string) (*Release, error) {
+	if c != nil && c.fetchLatest != nil {
+		return c.fetchLatest(channel)
+	}
+	if channel == ChannelPrerelease {
+		return c.latestIncludingPrerelease()
+	}
+	return c.GetLatestRelease()
+}
+
+func (c *Client) latestIncludingPrerelease() (*Release, error) {
+	all, err := c.ListReleases()
+	if err != nil {
+		return nil, err
+	}
+	var best *Release
+	for i := range all {
+		r := &all[i]
+		if r.Draft || strings.TrimSpace(r.TagName) == "" {
+			continue
+		}
+		if best == nil || CompareVersions(best.TagName, r.TagName) {
+			cp := *r
+			best = &cp
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("no published releases")
+	}
+	return best, nil
 }
 
 // CompareVersions returns true if latestVersion is newer than currentVersion
@@ -168,15 +273,31 @@ func GetReleaseURL(repo, version string) string {
 	return fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, version)
 }
 
+func (c *Client) setAPIHeaders(req *http.Request) {
+	req.Header.Set("User-Agent", UserAgent)
+	if tok := githubAPIToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+}
+
+func githubAPIToken() string {
+	for _, k := range []string{"FLYNN_GITHUB_TOKEN", "FLYNN_PLUGIN_GITHUB_TOKEN", "GITHUB_TOKEN"} {
+		if t := strings.TrimSpace(os.Getenv(k)); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 // getRelease is a helper to fetch a single release from a URL
 func (c *Client) getRelease(url string) (*Release, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", UserAgent)
+	c.setAPIHeaders(req)
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.http().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch release: %w", err)
 	}
