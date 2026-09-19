@@ -13,7 +13,7 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 		}
 	}
 	plugin := FormatHelp("plugin:list")
-	for _, want := range []string{"Commands:", "install", "uninstall", "update", "route", "credentials set"} {
+	for _, want := range []string{"Commands:", "install", "uninstall", "update", "update-all", "route", "credentials set"} {
 		if !strings.Contains(plugin, want) {
 			t.Fatalf("plugin help missing %q:\n%s", want, plugin)
 		}

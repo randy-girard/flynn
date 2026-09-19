@@ -43,10 +43,11 @@ var subAliases = map[string]map[string]string{
 		"apex": "domain:apex",
 	},
 	"plugin": {
-		"install":   "plugin:install",
-		"update":    "plugin:update",
-		"uninstall": "plugin:uninstall",
-		"list":      "plugin:list",
+		"install":    "plugin:install",
+		"update":     "plugin:update",
+		"update-all": "plugin:update-all",
+		"uninstall":  "plugin:uninstall",
+		"list":       "plugin:list",
 	},
 	"tags": {
 		"set": "tags:set",

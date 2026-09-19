@@ -18,7 +18,7 @@ Install a plugin from a local path, alias, or GitHub URL.
 Options:
 	--no-build         Fail if dist/ is missing instead of running script/plugin-build
 	--rebuild          Run script/plugin-build even if dist/ already exists (local only)
-	--ref=REF          GitHub release tag (default: latest published, or plugins.json ref)
+	--ref=REF          GitHub release tag matching this Flynn vYYYYMMDD.N (or vYYYYMMDD.N.B)
 	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
 	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
 
@@ -60,11 +60,30 @@ usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-o
 Deploy a new release of an already-installed plugin. update requires the
 plugin app to already exist. Update runs hooks.upgrade when declared
 (not hooks.install) and does not re-ask setup prompts. --ref is a plugin
-GitHub tag (vYYYYMMDD.N.P). Omit it to install the newest published calver.
+GitHub tag (vYYYYMMDD.N.B). Omit it to install the newest published calver
+that matches this cluster's Flynn version (vYYYYMMDD.N). A plugin tagged
+v20260919.0.3 installs on Flynn v20260919.0; v20260920.0 is refused.
 
 Examples:
 
     $ flynn-host plugin:update dashboard --ref v20260916.3.1
+    $ flynn-host plugin:update-all
+`
+
+const pluginUpdateAllUsage = `
+usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls]
+
+Update every installed official plugin to the highest compatible GitHub tag
+for this Flynn version (vYYYYMMDD.N.B; never a newer Flynn date.N). Continues
+past individual failures and prints a per-plugin result.
+
+Options:
+	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
+	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
+
+Examples:
+
+    $ flynn-host plugin:update-all
 `
 
 const pluginUninstallUsage = `
@@ -163,6 +182,7 @@ Examples:
 func init() {
 	Register("plugin:install", runPluginInstall, pluginInstallUsage)
 	Register("plugin:update", runPluginUpdate, pluginUpdateUsage)
+	Register("plugin:update-all", runPluginUpdateAll, pluginUpdateAllUsage)
 	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
 	Register("plugin:list", runPluginList, pluginListUsage)
 	Register("plugin:credentials", runPluginCredentials, pluginCredentialsUsage)
@@ -227,6 +247,29 @@ func runPluginUpdate(args *docopt.Args) error {
 		Cwd:       cwd,
 		NoBuild:   args.Bool["--no-build"],
 		Rebuild:   args.Bool["--rebuild"],
+		AutoTLS:   args.Bool["--auto-tls"],
+	})
+}
+
+func runPluginUpdateAll(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	in := &plugin.Installer{
+		Client: client,
+		HTTP:   discoverdHTTPClient(),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
+	}
+	return in.UpdateAll(plugin.InstallOptions{
+		GitHubOrg: args.String["--github-org"],
+		Cwd:       cwd,
 		AutoTLS:   args.Bool["--auto-tls"],
 	})
 }

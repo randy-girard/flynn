@@ -120,7 +120,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 
 | Command | Purpose |
 | --- | --- |
-| `plugin:install` / `plugin:update` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions) |
+| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
 | `plugin:credentials-*` | GitHub token for private/draft plugin releases |
 | `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
