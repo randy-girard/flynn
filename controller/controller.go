@@ -148,6 +148,10 @@ type handlerConfig struct {
 	tokenKey         *ecdsa.PublicKey
 	tokenMaxValidity time.Duration
 	caCert           []byte
+	githubHTTP       *http.Client
+	githubAPI        githubAPI
+	taffy            taffyLauncher
+	githubDomain     string
 }
 
 // NOTE: this is temporary until httphelper supports custom errors
@@ -188,6 +192,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
 	acmeConfigRepo := data.NewACMEConfigRepo(c.db)
 	runtimeProfileRepo := data.NewRuntimeProfileRepo(c.db)
+	githubAppRepo := data.NewGitHubAppRepo(c.db)
 
 	api := controllerAPI{
 		domainMigrationRepo:    domainMigrationRepo,
@@ -207,6 +212,11 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		managedCertificateRepo: managedCertificateRepo,
 		acmeConfigRepo:         acmeConfigRepo,
 		runtimeProfileRepo:     runtimeProfileRepo,
+		githubStore:            githubAppRepo,
+		githubHTTP:             c.githubHTTP,
+		githubAPI:              c.githubAPI,
+		taffy:                  c.taffy,
+		githubDomain:           c.githubDomain,
 		clusterClient:          c.cc,
 		logaggc:                c.lc,
 		que:                    q,
@@ -316,6 +326,16 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 
+	httpRouter.GET("/github/app", httphelper.WrapHandler(api.GetGitHubApp))
+	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.UpdateGitHubApp))
+	httpRouter.GET("/github/installations", httphelper.WrapHandler(api.ListGitHubInstallations))
+	httpRouter.GET("/github/installations/:installation_id/repos", httphelper.WrapHandler(api.ListGitHubInstallationRepos))
+	httpRouter.POST("/github/webhook", httphelper.WrapHandler(api.GitHubWebhook))
+	httpRouter.GET("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.GetAppGitHub)))
+	httpRouter.PUT("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.PutAppGitHub)))
+	httpRouter.DELETE("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.DeleteAppGitHub)))
+	httpRouter.POST("/apps/:apps_id/github/deploy", httphelper.WrapHandler(api.appLookup(api.DeployAppGitHub)))
+
 	// Host and stats endpoints
 	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
 	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
@@ -346,6 +366,10 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 
 		if r.URL.Path == "/ping" {
 			w.WriteHeader(200)
+			return
+		}
+		if r.URL.Path == "/github/webhook" && r.Method == http.MethodPost {
+			main.ServeHTTP(w, r)
 			return
 		}
 
@@ -398,6 +422,11 @@ type controllerAPI struct {
 	managedCertificateRepo *data.ManagedCertificateRepo
 	acmeConfigRepo         *data.ACMEConfigRepo
 	runtimeProfileRepo     *data.RuntimeProfileRepo
+	githubStore            githubStore
+	githubAPI              githubAPI
+	githubHTTP             *http.Client
+	taffy                  taffyLauncher
+	githubDomain           string
 	clusterClient          utils.ClusterClient
 	logaggc                logClient
 	que                    *que.Client

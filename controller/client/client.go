@@ -116,6 +116,14 @@ type Client interface {
 	DeleteRuntimeProfile(id string) error
 	GetRuntimeSettings() (*ct.RuntimeSettings, error)
 	UpdateRuntimeSettings(settings *ct.RuntimeSettings) error
+	GetGitHubApp() (*ct.GitHubAppConfig, error)
+	UpdateGitHubApp(config *ct.GitHubAppConfig) error
+	ListGitHubInstallations() ([]*ct.GitHubInstallation, error)
+	ListGitHubInstallationRepos(installationID int64) ([]*ct.GitHubRepo, error)
+	GetAppGitHub(appID string) (*ct.GitHubRepoConnection, error)
+	PutAppGitHub(appID string, conn *ct.GitHubRepoConnection) error
+	DeleteAppGitHub(appID string) error
+	DeployAppGitHub(appID string, req *ct.GitHubDeployRequest) (*ct.GitHubDeploy, error)
 }
 
 type Config struct {

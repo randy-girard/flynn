@@ -354,3 +354,105 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		})
 	}
 }
+
+func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Job, error) {
+	if app == nil || newJob == nil {
+		return nil, fmt.Errorf("missing job")
+	}
+	data, err := c.releaseRepo.Get(newJob.ReleaseID)
+	if err != nil {
+		return nil, err
+	}
+	release := data.(*ct.Release)
+	artifactIDs := newJob.ArtifactIDs
+	if len(artifactIDs) == 0 {
+		artifactIDs = release.ArtifactIDs
+	}
+	if len(artifactIDs) == 0 {
+		return nil, ct.ValidationError{Field: "release.ArtifactIDs", Message: "cannot be empty"}
+	}
+	artifactList, err := c.artifactRepo.ListIDs(artifactIDs...)
+	if err != nil {
+		return nil, err
+	}
+	artifacts := make([]*ct.Artifact, len(artifactIDs))
+	for i, id := range artifactIDs {
+		artifacts[i] = artifactList[id]
+	}
+	var entrypoint ct.ImageEntrypoint
+	if e := utils.GetEntrypoint(artifacts, ""); e != nil {
+		entrypoint = *e
+	}
+	hosts, err := c.clusterClient.Hosts()
+	if err != nil {
+		return nil, err
+	}
+	if len(hosts) == 0 {
+		return nil, errors.New("no hosts found")
+	}
+	client := hosts[random.Math.Intn(len(hosts))]
+	uuid := random.UUID()
+	hostID := client.ID()
+	id := cluster.GenerateJobID(hostID, uuid)
+	procType := ct.NewJobProcessType(*newJob, false)
+	env := make(map[string]string, len(entrypoint.Env)+len(release.Env)+len(newJob.Env)+4)
+	env["FLYNN_APP_ID"] = app.ID
+	env["FLYNN_RELEASE_ID"] = release.ID
+	env["FLYNN_PROCESS_TYPE"] = procType
+	env["FLYNN_JOB_ID"] = id
+	if newJob.ReleaseEnv {
+		for k, v := range release.Env {
+			env[k] = v
+		}
+	}
+	for k, v := range newJob.Env {
+		env[k] = v
+	}
+	metadata := make(map[string]string, len(app.Meta)+len(newJob.Meta)+4)
+	for k, v := range app.Meta {
+		metadata[k] = v
+	}
+	for k, v := range newJob.Meta {
+		metadata[k] = v
+	}
+	metadata["flynn-controller.app"] = app.ID
+	metadata["flynn-controller.app_name"] = app.Name
+	metadata["flynn-controller.release"] = release.ID
+	metadata["flynn-controller.type"] = procType
+	job := &host.Job{
+		ID:       id,
+		Metadata: metadata,
+		Config: host.ContainerConfig{
+			Args:       entrypoint.Args,
+			Env:        env,
+			WorkingDir: entrypoint.WorkingDir,
+			Uid:        entrypoint.Uid,
+			Gid:        entrypoint.Gid,
+		},
+		Resources: newJob.Resources,
+		Partition: string(newJob.Partition),
+		Profiles:  newJob.Profiles,
+	}
+	if app.Meta["flynn-system-app"] == "true" {
+		job.Partition = "system"
+	}
+	resource.SetDefaults(&job.Resources)
+	if len(newJob.Args) > 0 {
+		job.Config.Args = newJob.Args
+	}
+	utils.SetupMountspecs(job, artifacts)
+	if err := runJobAttempts.RunWithValidator(func() error {
+		return client.AddJob(job)
+	}, httphelper.IsRetryableError); err != nil {
+		return nil, fmt.Errorf("schedule failed: %s", err.Error())
+	}
+	return &ct.Job{
+		ID:        job.ID,
+		UUID:      uuid,
+		HostID:    hostID,
+		ReleaseID: newJob.ReleaseID,
+		Type:      procType,
+		Args:      newJob.Args,
+		Meta:      newJob.Meta,
+	}, nil
+}

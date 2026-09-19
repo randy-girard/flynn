@@ -83,6 +83,15 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_write_cannot_put_runtime_settings", appWrite, http.MethodPut, "/cluster/runtime-settings", false},
 		{"app_read_can_get_runtime_settings", appRead, http.MethodGet, "/cluster/runtime-settings", true},
 		{"cluster_key_can_create_runtime_profile", clusterKey, http.MethodPost, "/runtime-profiles", true},
+
+		{"app_read_can_get_github_app", appRead, http.MethodGet, "/github/app", true},
+		{"app_write_cannot_put_github_app", appWrite, http.MethodPut, "/github/app", false},
+		{"admin_can_put_github_app", adminBearer, http.MethodPut, "/github/app", true},
+		{"app_read_can_list_github_installations", appRead, http.MethodGet, "/github/installations", true},
+		{"app_write_can_put_app_github", appWrite, http.MethodPut, "/apps/app-1/github", true},
+		{"app_read_cannot_put_app_github", appRead, http.MethodPut, "/apps/app-1/github", false},
+		{"deploy_grant_can_github_deploy", appDeploy, http.MethodPost, "/apps/app-1/github/deploy", true},
+		{"app_read_cannot_github_deploy", appRead, http.MethodPost, "/apps/app-1/github/deploy", false},
 	}
 
 	for _, tc := range cases {
