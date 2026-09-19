@@ -327,14 +327,21 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   `test-apps`, and `controller-examples`. Release files are uploaded one at a
   time onto a draft (with retries) so the job logs progress and can resume
   after a cancelled run; the release is published only after every asset is
-  present unless you asked for a draft.
-  Check **dispatch_plugins** to queue plugin builds after the Flynn release
-  exists (`GITHUB_TOKEN` cannot start other workflows from `release` events).
+  present unless you asked for a draft. **draft** is off by default.
+  Packaging copies only squashfs layers listed in `images.json` and **fails**
+  if any listed layer is missing from `/var/lib/flynn/layer-cache` (so a
+  metadata-only builder cache hit cannot ship a GitHub Release that 404s on
+  `flynn-host update`).
+  **dispatch_plugins** is on by default so plugin builds are queued after the
+  Flynn release exists (`GITHUB_TOKEN` cannot start other workflows from
+  `release` events). Uncheck it to skip fan-out.
 * **[Dispatch plugin releases](https://github.com/randy-girard/flynn/actions/workflows/plugin-releases.yml)**
-  — runs from Build and Release when **dispatch_plugins** is checked, when a
+  — runs from Build and Release when **dispatch_plugins** is on, when a
   Flynn GitHub Release is **published** from the GitHub UI, or via its own
   `workflow_dispatch`. It queues each plugin repo’s `Build and Release`
-  workflow with the same tag and `flynn_version` so ubuntu-noble matches Flynn.
+  workflow with plugin version `{Flynn tag}.0` and `flynn_version` set to the
+  Flynn tag so ubuntu-noble matches Flynn. Plugin-only rebuilds use
+  `vYYYYMMDD.N.P` (last number increments) without a new Flynn release.
   Plugin jobs publish only the overlay delta; hosts fetch Flynn ubuntu-noble
   from the Flynn GitHub Release (`flynn.plugin.base`). A published plugin
   release is skipped on re-dispatch; drafts and failed uploads are retried.

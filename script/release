@@ -169,6 +169,8 @@ fi
 source "${ROOT}/script/lib/release-notes.sh"
 # shellcheck source=script/lib/github-release-upload.sh
 source "${ROOT}/script/lib/github-release-upload.sh"
+# shellcheck source=script/lib/release-layers.sh
+source "${ROOT}/script/lib/release-layers.sh"
 
 if [[ "${TARGET}" == "notes" ]]; then
   if $OUTPUT_SET; then
@@ -249,7 +251,7 @@ package_manifests() {
     gzip -c "${ROOT}/build/images.json" > "${RELEASE_DIR}/images.json.gz"
     echo "  - images.json.gz (from build/images.json)"
   else
-    echo "  (no images.json found)"
+    fail "images.json is required to package a Flynn release (looked in build/manifests/images.json and build/images.json)"
   fi
 
   # bootstrap-manifest.json
@@ -276,24 +278,42 @@ package_image_manifests() {
   fi
 }
 
-# Package squashfs layers
+# Package squashfs layers referenced by images.json. Copying the whole
+# layer-cache would still miss blobs the builder treated as cached from JSON
+# alone; copying only listed IDs and failing on a missing squashfs keeps
+# images.json and GitHub assets in lockstep.
 package_layers() {
   info "Packaging layers..."
-  LAYER_CACHE="/var/lib/flynn/layer-cache"
-  LAYER_COUNT=0
-
-  if [[ -d "${LAYER_CACHE}" ]] && [[ -n "$(ls -A ${LAYER_CACHE}/*.squashfs 2>/dev/null)" ]]; then
-    for layer_file in "${LAYER_CACHE}"/*.squashfs "${LAYER_CACHE}"/*.json; do
-      if [[ -f "$layer_file" ]]; then
-        layer_name=$(basename "$layer_file")
-        cp "$layer_file" "${RELEASE_DIR}/${layer_name}"
-        LAYER_COUNT=$((LAYER_COUNT + 1))
-      fi
-    done
-    echo "  - ${LAYER_COUNT} layer files"
+  local json=""
+  if [[ -f "${ROOT}/build/manifests/images.json" ]]; then
+    json="${ROOT}/build/manifests/images.json"
+  elif [[ -f "${ROOT}/build/images.json" ]]; then
+    json="${ROOT}/build/images.json"
   else
-    echo "  (no layers found in ${LAYER_CACHE})"
+    fail "images.json is required to package layers"
   fi
+
+  local LAYER_CACHE="/var/lib/flynn/layer-cache"
+  local ids id src LAYER_COUNT=0
+  ids="$(flynn_images_json_layer_ids "${json}")" || fail "could not read layer ids from ${json}"
+
+  echo "  package_layers copies only images.json layer blobs"
+  while IFS= read -r id; do
+    [[ -z "${id}" ]] && continue
+    src="${LAYER_CACHE}/${id}.squashfs"
+    if [[ ! -f "${src}" ]]; then
+      echo "ERROR: images.json layer ${id} has no squashfs at ${src}" >&2
+      fail "refusing to ship images.json with unpackaged layers"
+    fi
+    cp "${src}" "${RELEASE_DIR}/${id}.squashfs"
+    if [[ -f "${LAYER_CACHE}/${id}.json" ]]; then
+      cp "${LAYER_CACHE}/${id}.json" "${RELEASE_DIR}/${id}.json"
+    fi
+    LAYER_COUNT=$((LAYER_COUNT + 1))
+  done <<< "${ids}"
+
+  echo "  - ${LAYER_COUNT} layer squashfs files from images.json"
+  flynn_verify_images_json_layers "${json}" "${RELEASE_DIR}" || fail "images.json layers missing from package dir"
 }
 
 # Generate checksums

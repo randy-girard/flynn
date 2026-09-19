@@ -6,9 +6,10 @@ name: Build and Release
 # Cluster-test images (test, test-apps, controller-examples) are omitted; they
 # are not in bootstrap or the release images template. Build them with
 # `./build.sh test` when running the cluster integration suite.
-# Plugin rebuilds: check dispatch_plugins to run plugin-releases.yml after the
-# Flynn GitHub Release exists. GITHUB_TOKEN cannot start other workflows via
-# the release published event; publishing a draft in the GitHub UI still can.
+# Plugin rebuilds: dispatch_plugins defaults on so plugin-releases.yml runs after
+# the Flynn GitHub Release exists. Uncheck it to skip fan-out. GITHUB_TOKEN cannot
+# start other workflows via the release published event; publishing a draft in
+# the GitHub UI still can.
 on:
   workflow_dispatch:
     inputs:
@@ -21,12 +22,12 @@ on:
         description: 'Create as a draft (unpublished until you publish it in GitHub)'
         required: false
         type: boolean
-        default: true
+        default: false
       dispatch_plugins:
         description: 'Queue Dispatch plugin releases (plugin Build and Release fan-out) after this Flynn release'
         required: false
         type: boolean
-        default: false
+        default: true
       concurrency:
         description: 'Parallel flynn-builder app image builds (phase 2; default 2 on hosted runners)'
         required: false
@@ -312,6 +313,14 @@ jobs:
             --target package \
             --version "${{ steps.version.outputs.VERSION }}"
           sudo chown -R "$(id -u):$(id -g)" build/release
+          # shellcheck source=script/lib/release-layers.sh
+          source ./script/lib/release-layers.sh
+          if [[ -f build/release/images.json.gz ]]; then
+            flynn_verify_images_json_layers build/release/images.json.gz build/release
+          else
+            echo "ERROR: packaged release is missing images.json.gz" >&2
+            exit 1
+          fi
           ls -lah build/release/ | head -n 50
           echo "..."
           echo "Total files: $(find build/release -type f | wc -l)"

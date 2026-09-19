@@ -1428,20 +1428,53 @@ func (b *Builder) Artifact(name string) (*ct.Artifact, error) {
 }
 
 // GetCachedLayer gets a layer from the local /var/lib/flynn/layer-cache
-// directory, returning a nil layer for a cache miss
+// directory, returning a nil layer for a cache miss.
+//
+// Both the squashfs blob and the sidecar JSON must exist. Metadata-only cache
+// hits used to skip rebuilds and then package_layers would omit the blob,
+// so images.json shipped layer IDs that were not GitHub Release assets.
 func (b *Builder) GetCachedLayer(name, id string) (*ct.ImageLayer, error) {
-	// check the local cache
-	f, err := os.Open(b.layerConfigPath(id))
-	if err == nil {
-		defer f.Close()
-		layer := &ct.ImageLayer{}
-		return layer, json.NewDecoder(f).Decode(layer)
-	} else if !os.IsNotExist(err) {
+	layer, err := cachedLayerFromFiles(b.layerPath(id), b.layerConfigPath(id))
+	if err != nil {
 		return nil, err
 	}
+	if layer == nil {
+		if _, jsonErr := os.Stat(b.layerConfigPath(id)); jsonErr == nil {
+			if b.log != nil {
+				b.log.Info("layer metadata cached without squashfs; rebuilding", "name", name, "id", id)
+			}
+		}
+	}
+	return layer, nil
+}
 
-	// cache miss, return a nil layer so it gets generated
-	return nil, nil
+// cachedLayerFromFiles returns a decoded layer only when the squashfs blob and
+// sidecar JSON are both present. A missing blob is a cache miss so the layer
+// is rebuilt instead of reused from JSON alone.
+func cachedLayerFromFiles(squashfsPath, configPath string) (*ct.ImageLayer, error) {
+	st, err := os.Stat(squashfsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	f, err := os.Open(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	layer := &ct.ImageLayer{}
+	if err := json.NewDecoder(f).Decode(layer); err != nil {
+		return nil, err
+	}
+	if layer.Length > 0 && st.Size() != layer.Length {
+		return nil, nil
+	}
+	return layer, nil
 }
 
 // BuildLayer either returns a cached layer or runs a job to build the layer

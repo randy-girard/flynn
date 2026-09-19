@@ -191,3 +191,23 @@ teardown() {
   fi
   grep -q 'github_release_publish' "${ROOT}/script/release"
 }
+
+@test "github_release_publish fails when images.json lists a missing squashfs" {
+  dir="${TMP}/assets"
+  mkdir -p "${dir}"
+  echo notes > "${TMP}/notes.md"
+  printf 'x' > "${dir}/install-flynn-cli"
+  cat >"${dir}/images.json" <<'EOF'
+{"slugrunner":{"manifest":{"rootfs":[{"layers":[{"id":"deadbeef"}]}]}}}
+EOF
+  run github_release_publish \
+    --version v20990101.0 \
+    --repo acme/flynn \
+    --title "Flynn v20990101.0" \
+    --notes-file "${TMP}/notes.md" \
+    --dir "${dir}" \
+    --draft true \
+    --prerelease false
+  assert_failure
+  [[ "${output}" == *deadbeef* ]]
+}

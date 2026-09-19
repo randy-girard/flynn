@@ -14,6 +14,10 @@
 #
 # shellcheck shell=bash
 
+_github_release_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=script/lib/release-layers.sh
+source "${_github_release_lib_dir}/release-layers.sh"
+
 GITHUB_RELEASE_ASSET_LIMIT=2147483648
 GITHUB_RELEASE_UPLOAD_ATTEMPTS="${GITHUB_RELEASE_UPLOAD_ATTEMPTS:-4}"
 GITHUB_RELEASE_RETRY_SLEEP="${GITHUB_RELEASE_RETRY_SLEEP:-5}"
@@ -142,6 +146,20 @@ github_release_upload_one() {
   done
 }
 
+# Fail when images.json is in DIR but a listed layer squashfs is not.
+github_release_verify_images_json_layers() {
+  local dir=$1
+  local json=""
+  if [[ -f "${dir}/images.json" ]]; then
+    json="${dir}/images.json"
+  elif [[ -f "${dir}/images.json.gz" ]]; then
+    json="${dir}/images.json.gz"
+  else
+    return 0
+  fi
+  flynn_verify_images_json_layers "${json}" "${dir}"
+}
+
 github_release_id() {
   local version=$1 repo=$2
   github_release_cmd release view "${version}" --repo "${repo}" --json id --jq .id 2>/dev/null || true
@@ -202,6 +220,8 @@ github_release_publish() {
     bytes=$((bytes + $(github_release_file_size "${f}")))
   done
   echo "Publishing ${total} assets (${bytes} bytes, $(github_release_human_size "${bytes}")) to ${repo} ${version}"
+
+  github_release_verify_images_json_layers "${dir}" || return 1
 
   local create_args=(--repo "${repo}" --title "${title}" --notes-file "${notes}" --draft)
   if [[ "${prerelease}" == "true" ]]; then
