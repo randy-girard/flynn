@@ -58,8 +58,8 @@ need "${ROOT}/pkg/squashfs/mksquashfs.go" 'usr/share/doc' \
   "layer squashfs must exclude documentation from the overlay diff"
 need "${ROOT}/slugbuilder/artifact/main.go" 'squashfs\.Args' \
   "slugbuilder must write zstd squashfs slugs"
-need "${ROOT}/tarreceive/main.go" 'squashfs\.Args' \
-  "tarreceive must write zstd squashfs layers"
+need "${ROOT}/tarreceive/main.go" 'squashfs\.LayerArgs' \
+  "tarreceive must write zstd squashfs layers (LayerArgs, faster than cluster Args)"
 need "${ROOT}/builder/img/ubuntu-noble.sh" '-comp zstd' \
   "ubuntu-noble rootfs squashfs must use zstd"
 need "${ROOT}/builder/img/busybox.sh" '-comp zstd' \
