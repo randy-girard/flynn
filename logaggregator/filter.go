@@ -31,9 +31,12 @@ func (f filterFunc) Match(m *rfc5424.Message) bool {
 
 func filterJobID(jobID string) filterFunc {
 	a := []byte(jobID)
+	// ProcID stores processType.hostJobID (hostID-uuid). Match the cluster ID
+	// or a UUID suffix so flynn log -j <uuid> still filters.
+	suff := []byte("-" + jobID)
 	return func(m *rfc5424.Message) bool {
 		_, b := splitProcID(m.ProcID)
-		return bytes.Equal(a, b)
+		return bytes.Equal(a, b) || (len(a) > 0 && bytes.HasSuffix(b, suff))
 	}
 }
 

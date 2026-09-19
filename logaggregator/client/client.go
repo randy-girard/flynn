@@ -77,6 +77,8 @@ type Message struct {
 	HostID string `json:"host_id,omitempty"`
 	// JobID is the ID of the job that emitted this log message.
 	JobID string `json:"job_id,omitempty"`
+	// JobName is the allocated short process name (web.1), when present.
+	JobName string `json:"job_name,omitempty"`
 	// Msg is the actual content of this log message.
 	Msg string `json:"msg,omitempty"`
 	// ProcessType is the type of process that emitted this log message.

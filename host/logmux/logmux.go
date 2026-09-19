@@ -68,7 +68,16 @@ func New(hostID, logDir string, logger log15.Logger) *Mux {
 }
 
 type Config struct {
-	AppID, HostID, JobID, JobType string
+	AppID, HostID, JobID, JobType, JobName string
+}
+
+// procID is syslog PROCID: processType.hostJobID so filters can recover the
+// real host job UUID. The allocated short name (web.1) is not used here.
+func (c *Config) procID() []byte {
+	if c.JobType != "" {
+		return []byte(c.JobType + "." + c.JobID)
+	}
+	return []byte(c.JobID)
 }
 
 func (m *Mux) subscribe(app string, ch chan message) func() {
@@ -291,11 +300,7 @@ func (m *Mux) Follow(r io.ReadCloser, buffer string, msgID logagg.MsgID, config 
 		Severity: 6,  // Info
 		Facility: 23, // local7
 	}
-	if config.JobType != "" {
-		hdr.ProcID = []byte(config.JobType + "." + config.JobID)
-	} else {
-		hdr.ProcID = []byte(config.JobID)
-	}
+	hdr.ProcID = config.procID()
 
 	s := &LogStream{
 		m:    m,
@@ -330,7 +335,7 @@ func (m *Mux) Follow(r io.ReadCloser, buffer string, msgID logagg.MsgID, config 
 		delete(m.jobStarts, config.JobID)
 	}
 
-	go s.follow(r, buffer, config.AppID, hdr, wg)
+	go s.follow(r, buffer, config.AppID, hdr, config.JobName, wg)
 	return s
 }
 
@@ -352,22 +357,13 @@ func (m *Mux) Write(msgID logagg.MsgID, config *Config, line string) {
 		Severity: 6,
 		Facility: 23,
 	}
-	if config.JobType != "" {
-		hdr.ProcID = []byte(config.JobType + "." + config.JobID)
-	} else {
-		hdr.ProcID = []byte(config.JobID)
-	}
+	hdr.ProcID = config.procID()
 	msg := rfc5424.NewMessage(hdr, []byte(line))
 	cursor := &utils.HostCursor{
 		Time: msg.Timestamp,
 		Seq:  uint64(atomic.AddUint32(&m.msgSeq, 1)),
 	}
-	sd := &rfc5424.StructuredData{
-		ID: []byte("flynn"),
-		Params: []rfc5424.StructuredDataParam{
-			{Name: []byte("seq"), Value: []byte(strconv.FormatUint(cursor.Seq, 10))},
-		},
-	}
+	sd := flynnStructuredData(cursor.Seq, config.JobName)
 	var sdBuf bytes.Buffer
 	sd.Encode(&sdBuf)
 	msg.StructuredData = sdBuf.Bytes()
@@ -391,15 +387,12 @@ func (s *LogStream) Close() string {
 	return s.buf
 }
 
-func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header, wg *sync.WaitGroup) {
+func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header, jobName string, wg *sync.WaitGroup) {
 	defer wg.Done()
 	defer close(s.done)
 	l := s.m.appLog(appID)
 	seqBuf := make([]byte, 10)
-	sd := &rfc5424.StructuredData{
-		ID:     []byte("flynn"),
-		Params: []rfc5424.StructuredDataParam{{Name: []byte("seq")}},
-	}
+	sd := flynnStructuredData(0, jobName)
 
 	br := bufio.NewReaderSize(io.MultiReader(strings.NewReader(buffer), r), 10000)
 	for {
@@ -436,6 +429,19 @@ func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header,
 			return
 		}
 	}
+}
+
+func flynnStructuredData(seq uint64, jobName string) *rfc5424.StructuredData {
+	params := []rfc5424.StructuredDataParam{
+		{Name: []byte("seq"), Value: []byte(strconv.FormatUint(seq, 10))},
+	}
+	if jobName != "" {
+		params = append(params, rfc5424.StructuredDataParam{
+			Name:  []byte("job_name"),
+			Value: []byte(jobName),
+		})
+	}
+	return &rfc5424.StructuredData{ID: []byte("flynn"), Params: params}
 }
 
 func (m *Mux) StreamLog(appID, jobID string, history, follow bool, ch chan<- *rfc5424.Message) (stream.Stream, error) {

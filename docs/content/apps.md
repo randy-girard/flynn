@@ -160,7 +160,9 @@ Job web.4821 killed.
 
 Flynn automatically logs everything that app processes write to the standard
 output and standard error streams. These logs can be retrieved with `flynn log`,
-and can be followed in real time with `flynn log -f`.
+and can be followed in real time with `flynn log -f`. Each line is prefixed with
+the source and short job name, for example `app[web.4821]` or `flynn[web.1]`
+for system lines. Filter a process with `flynn log -j web.4821` (or the job UUID).
 
 About every 30 seconds each running container also writes a system line of
 cgroup usage in `metric=value` form, prefixed with `metrics`:

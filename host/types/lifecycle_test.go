@@ -58,6 +58,20 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 	}
 }
 
+func TestJobShortName(t *testing.T) {
+	if got := JobShortName(nil); got != "" {
+		t.Fatalf("nil=%q", got)
+	}
+	job := &Job{Metadata: map[string]string{MetaControllerName: "web.4821"}}
+	if got := JobShortName(job); got != "web.4821" {
+		t.Fatalf("meta=%q", got)
+	}
+	job = &Job{Config: ContainerConfig{Env: map[string]string{"FLYNN_JOB_NAME": "typ.9"}}}
+	if got := JobShortName(job); got != "typ.9" {
+		t.Fatalf("env=%q", got)
+	}
+}
+
 func TestJobLifecycleWebhookCodes(t *testing.T) {
 	code, desc, sev := JobLifecycleWebhook(JobEventCreate, sampleJob(JobReasonRestart, "", "web"))
 	if code != CodeJobRestart || sev != SeverityInfo || desc != "Restarting web process" {

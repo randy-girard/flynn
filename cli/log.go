@@ -22,6 +22,10 @@ usage: flynn log [-f] [-j <id>] [-n <lines>] [-r] [-s] [-t <type>] [-i]
 
 Stream log for an app.
 
+Lines are prefixed with source[name], using the short process name when
+allocated (app[web.1], flynn[web.4821]). Filter with -j using that name or
+the job UUID; filtering always uses the host job id, not the display name.
+
 Options:
 	-f, --follow               stream new lines
 	-j, --job=<id>             filter logs to a job name (web.4821) or UUID
@@ -106,14 +110,22 @@ func runLog(args *docopt.Args, client controller.Client) error {
 		if rawOutput {
 			fmt.Fprintln(stream, msg.Msg)
 		} else {
-			tstamp := msg.Timestamp.Format(rfc3339micro)
-			fmt.Fprintf(stream, "%s %s[%s.%s]: %s\n",
-				tstamp,
-				msg.Source,
-				msg.ProcessType,
-				msg.JobID,
-				msg.Msg,
-			)
+			fmt.Fprintln(stream, formatLogLine(msg))
 		}
 	}
+}
+
+func formatLogLine(msg logaggc.Message) string {
+	tstamp := msg.Timestamp.Format(rfc3339micro)
+	return fmt.Sprintf("%s %s[%s]: %s", tstamp, msg.Source, logJobLabel(msg), msg.Msg)
+}
+
+func logJobLabel(msg logaggc.Message) string {
+	if msg.JobName != "" {
+		return msg.JobName
+	}
+	if msg.ProcessType != "" {
+		return msg.ProcessType + "." + msg.JobID
+	}
+	return msg.JobID
 }

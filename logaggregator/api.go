@@ -150,12 +150,30 @@ func NewMessageFromSyslog(m *rfc5424.Message) client.Message {
 	return client.Message{
 		HostID:      string(m.Hostname),
 		JobID:       string(jobID),
+		JobName:     structuredParam(m, "job_name"),
 		Msg:         string(m.Msg),
 		ProcessType: string(processType),
 		Source:      source,
 		Stream:      stream,
 		Timestamp:   m.Timestamp,
 	}
+}
+
+func structuredParam(m *rfc5424.Message, name string) string {
+	if m == nil {
+		return ""
+	}
+	sd, err := rfc5424.ParseStructuredData(m.StructuredData)
+	if err != nil || sd == nil {
+		return ""
+	}
+	want := []byte(name)
+	for _, p := range sd.Params {
+		if bytes.Equal(p.Name, want) {
+			return string(p.Value)
+		}
+	}
+	return ""
 }
 
 var procIDsep = []byte{'.'}

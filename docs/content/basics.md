@@ -171,9 +171,9 @@ the app using the `log` command:
 
 ```
 $ flynn log
-2016-07-26T13:32:05.987763Z app[web.flynn-db0440f7-19b4-4369-b79e-7a48dba415c2]: hitcounter listening on port 8080
-2016-07-26T13:33:52.370073Z app[web.flynn-4ef91e4b-d0c3-4e3f-931b-6db3b551dcd9]: hitcounter listening on port 8080
-2016-07-26T13:33:52.402620Z app[web.flynn-ccd3aff7-80b3-46b4-a95f-006bfceb80c6]: hitcounter listening on port 8080
+2016-07-26T13:32:05.987763Z app[web.1]: hitcounter listening on port 8080
+2016-07-26T13:33:52.370073Z app[web.4821]: hitcounter listening on port 8080
+2016-07-26T13:33:52.402620Z app[web.900]: hitcounter listening on port 8080
 ```
 
 *See [the CLI docs](cli.md) for more information on the `flynn log` command.*
@@ -212,12 +212,12 @@ The logs of those processes should show the added log message:
 
 ```
 $ flynn log -n 6
-2016-07-26T13:37:01.634234Z app[web.flynn-1f6b3c21-3b6f-4dc0-86b3-4bfb9481b71a]: I've made a change!
-2016-07-26T13:37:01.634509Z app[web.flynn-f863b79a-d2b2-44d6-807b-1b508d758a8b]: I've made a change!
-2016-07-26T13:37:01.653521Z app[web.flynn-1f6b3c21-3b6f-4dc0-86b3-4bfb9481b71a]: hitcounter listening on port 8080
-2016-07-26T13:37:01.654673Z app[web.flynn-f863b79a-d2b2-44d6-807b-1b508d758a8b]: hitcounter listening on port 8080
-2016-07-26T13:37:01.666323Z app[web.flynn-8f61a0f9-0582-474c-a996-1bec7d496f2a]: I've made a change!
-2016-07-26T13:37:01.677524Z app[web.flynn-8f61a0f9-0582-474c-a996-1bec7d496f2a]: hitcounter listening on port 8080
+2016-07-26T13:37:01.634234Z app[web.1]: I've made a change!
+2016-07-26T13:37:01.634509Z app[web.4821]: I've made a change!
+2016-07-26T13:37:01.653521Z app[web.1]: hitcounter listening on port 8080
+2016-07-26T13:37:01.654673Z app[web.4821]: hitcounter listening on port 8080
+2016-07-26T13:37:01.666323Z app[web.900]: I've made a change!
+2016-07-26T13:37:01.677524Z app[web.900]: hitcounter listening on port 8080
 ```
 
 ## Routes

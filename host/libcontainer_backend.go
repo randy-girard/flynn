@@ -543,6 +543,7 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			HostID:  l.State.id,
 			JobType: job.Metadata["flynn-controller.type"],
 			JobID:   job.ID,
+			JobName: host.JobShortName(job),
 		},
 		l:    l,
 		job:  job,
@@ -2009,6 +2010,7 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 		container.MuxConfig.AppID = j.Job.Metadata["flynn-controller.app"]
 		container.MuxConfig.JobType = j.Job.Metadata["flynn-controller.type"]
 		container.MuxConfig.JobID = j.Job.ID
+		container.MuxConfig.JobName = host.JobShortName(j.Job)
 		readySignals[j.Job.ID] = make(chan error)
 		go container.watch(readySignals[j.Job.ID], buffers[j.Job.ID])
 	}

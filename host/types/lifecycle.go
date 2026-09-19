@@ -31,6 +31,20 @@ const (
 	CodeJobScaleDown = "H19" // stopped because the formation scaled down
 )
 
+// JobShortName is the allocated process name (web.1), from metadata or FLYNN_JOB_NAME.
+func JobShortName(job *Job) string {
+	if job == nil {
+		return ""
+	}
+	if n := strings.TrimSpace(job.Metadata[MetaControllerName]); n != "" {
+		return n
+	}
+	if job.Config.Env != nil {
+		return strings.TrimSpace(job.Config.Env["FLYNN_JOB_NAME"])
+	}
+	return ""
+}
+
 // JobProcessType is the formation process type (web, worker, …).
 func JobProcessType(job *ActiveJob) string {
 	if job == nil || job.Job == nil {

@@ -93,7 +93,7 @@ Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plug
 | `ps` / `ps:kill` / `run` | Jobs (`<process type>.<number>` short names; UUID still works) |
 | `metrics` | Latest stored app metrics snapshot (dashboard plugin) |
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | App metric alerts (dashboard plugin) |
-| `log` | Aggregated stdout/stderr |
+| `log` | Aggregated stdout/stderr, prefixed `source[web.1]` (`-j` takes a short name or UUID) |
 | `env` / `limit` / `meta` | Config, named runtime profiles (`limit:profile`), raw `limit:set` (when allowed), metadata |
 | `apps:export` / `apps:import` | Backup and restore an app |
 
@@ -139,6 +139,15 @@ combination of those four permissions. Custom roles appear in the app Team
 picker and still expand to the same grants in the token. `cluster:admin` (the
 controller key, or a dashboard cluster administrator) is not an app role; it
 bypasses app grants.
+
+### Logs
+
+`flynn log` prints each line as `source[name]: message`. `name` is the allocated
+short process name (`web.1`, `web.4821`, `typ.N`) when the job has one; older
+lines fall back to `processType.host-job-id`. System lines use source `flynn`
+(for example `flynn[web.1]: Starting web process`). Filter a process with
+`flynn log -j web.4821` or the job UUID — filtering uses the host job id, not
+the display name.
 
 ### Datastore export
 

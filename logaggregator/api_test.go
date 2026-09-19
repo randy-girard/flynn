@@ -201,10 +201,38 @@ func (s *LogAggregatorTestSuite) TestNewMessageFromSyslog(c *C) {
 
 	c.Assert(m.HostID, Equals, "a.b.flynn.local")
 	c.Assert(m.JobID, Equals, "flynn-abcd1234")
+	c.Assert(m.JobName, Equals, "")
 	c.Assert(m.ProcessType, Equals, "web")
 	c.Assert(m.Source, Equals, "app")
 	c.Assert(m.Stream, Equals, logagg.StreamTypeStdout)
 	c.Assert(m.Timestamp, Equals, timestamp)
+}
+
+func (s *LogAggregatorTestSuite) TestNewMessageFromSyslogJobName(c *C) {
+	msg := rfc5424.NewMessage(
+		&rfc5424.Header{
+			Hostname: []byte("host1"),
+			ProcID:   []byte("web.localhost-a0ee10eb-a24b-4bab-8f58-87cada82a68c"),
+			MsgID:    []byte("ID1"),
+		},
+		[]byte("hello"),
+	)
+	msg.StructuredData = []byte(`[flynn seq="1" job_name="web.1"]`)
+	m := NewMessageFromSyslog(msg)
+	c.Assert(m.JobID, Equals, "localhost-a0ee10eb-a24b-4bab-8f58-87cada82a68c")
+	c.Assert(m.JobName, Equals, "web.1")
+	c.Assert(m.ProcessType, Equals, "web")
+}
+
+func (s *LogAggregatorTestSuite) TestFilterJobIDHostUUID(c *C) {
+	msg := rfc5424.NewMessage(
+		&rfc5424.Header{ProcID: []byte("web.localhost-a0ee10eb-a24b-4bab-8f58-87cada82a68c")},
+		[]byte("hello"),
+	)
+	c.Assert(filterJobID("localhost-a0ee10eb-a24b-4bab-8f58-87cada82a68c").Match(msg), Equals, true)
+	c.Assert(filterJobID("a0ee10eb-a24b-4bab-8f58-87cada82a68c").Match(msg), Equals, true)
+	c.Assert(filterJobID("web.1").Match(msg), Equals, false)
+	c.Assert(filterJobID("other").Match(msg), Equals, false)
 }
 
 func (s *LogAggregatorTestSuite) TestNewMessageFromSyslogSystemSource(c *C) {
@@ -241,6 +269,12 @@ func (s *LogAggregatorTestSuite) TestMessageMarshalJSON(c *C) {
 	c.Assert(err, IsNil)
 
 	c.Assert(string(b), Equals, expected)
+
+	named := m
+	named.JobName = "web.1"
+	b, err = json.Marshal(named)
+	c.Assert(err, IsNil)
+	c.Assert(string(b), Equals, `{"host_id":"my.flynn.local","job_id":"deadbeef1234","job_name":"web.1","msg":"a log message","process_type":"web","source":"app","stream":"stderr","timestamp":"2009-11-10T23:00:00.123456Z"}`)
 }
 
 func assertAllLogsEquals(c *C, r io.Reader, expected string) {
@@ -269,9 +303,12 @@ func newMessageForApp(appname, procID, msg string) *rfc5424.Message {
 		},
 		[]byte(msg),
 	)
-	m.StructuredData = []byte(`[flynn seq="1"]`)
+	testMsgSeq++
+	m.StructuredData = []byte(fmt.Sprintf(`[flynn seq="%d"]`, testMsgSeq))
 	return m
 }
+
+var testMsgSeq uint64
 
 func marshalMessage(m *rfc5424.Message) string {
 	b, err := json.Marshal(NewMessageFromSyslog(m))

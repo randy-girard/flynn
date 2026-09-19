@@ -680,6 +680,7 @@ func (s *State) writeLifecycleLog(job *host.ActiveJob, line string) {
 		HostID:  s.id,
 		JobType: jobType,
 		JobID:   job.Job.ID,
+		JobName: host.JobShortName(job.Job),
 	}, line)
 }
 
