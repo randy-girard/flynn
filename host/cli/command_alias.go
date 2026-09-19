@@ -74,6 +74,12 @@ var subAliases = map[string]map[string]string{
 	"events": {
 		"visible": "events:visible",
 	},
+	"alert": {
+		"add":     "alert:add",
+		"enable":  "alert:enable",
+		"disable": "alert:disable",
+		"remove":  "alert:remove",
+	},
 	"route": {
 		"add": "route:add",
 	},

@@ -112,6 +112,10 @@ func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
 	if name != "firewall:expose" || from != "firewall expose" {
 		t.Fatalf("firewall expose got %q from=%q", name, from)
 	}
+	name, args, from = ResolveCommand("alert", []string{"add", "--metric", "disk_percent"})
+	if name != "alert:add" || from != "alert add" {
+		t.Fatalf("alert add got %q from=%q", name, from)
+	}
 }
 
 func TestHostCommandUsageStartsWithColonName(t *testing.T) {

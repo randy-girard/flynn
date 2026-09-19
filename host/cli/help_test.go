@@ -18,6 +18,12 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 			t.Fatalf("plugin help missing %q:\n%s", want, plugin)
 		}
 	}
+	alert := FormatHelp("alert")
+	for _, want := range []string{"usage: flynn-host alert", "Commands:", "add", "enable", "disable", "remove"} {
+		if !strings.Contains(alert, want) {
+			t.Fatalf("alert help missing %q:\n%s", want, alert)
+		}
+	}
 	add := FormatHelp("otel:add")
 	if strings.Contains(add, "\nCommands:") {
 		t.Fatalf("otel:add should not list the namespace:\n%s", add)

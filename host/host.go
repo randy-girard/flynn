@@ -101,6 +101,11 @@ Commands:
   acme:enable                     Enable ACME for the cluster
   acme:enable-system-routes       Enable Let's Encrypt on system app routes
   acme:status                     Show ACME/Let's Encrypt status
+  alert                           List cluster metric alerts
+  alert:add                       Add a cluster metric alert
+  alert:disable                   Disable a cluster metric alert
+  alert:enable                    Enable a cluster metric alert
+  alert:remove                    Delete a cluster metric alert
   backup                          Take a cluster backup
   bootstrap                       Bootstrap layer 1
   cli-add-command                 Get the 'flynn cluster:add' command to manage this cluster
@@ -128,6 +133,7 @@ Commands:
   log-sink:add                    Add a cluster syslog sink
   log-sink:list                   List cluster or host log sinks
   log-sink:remove                 Remove a cluster log sink
+  metrics                         Print a live host metrics snapshot
   migrate-domain                  Migrate the cluster base domain
   otel                            List OpenTelemetry exporters
   otel:add                        Add an OpenTelemetry exporter
