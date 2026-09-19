@@ -104,6 +104,33 @@ func TestDefaultScaleProcess(t *testing.T) {
 	}
 }
 
+func TestSlugReleaseProcessesDefaultsNewTypesToSmall(t *testing.T) {
+	prev := &ct.Release{Processes: map[string]ct.ProcessType{
+		"web":         {RuntimeProfile: "medium", Service: "myapp-web"},
+		"slugbuilder": {RuntimeProfile: "large"},
+	}}
+	procs := slugReleaseProcesses([]string{"web", "worker", ""}, prev, "myapp")
+	if procs["web"].RuntimeProfile != "medium" {
+		t.Fatalf("existing web = %q, want medium", procs["web"].RuntimeProfile)
+	}
+	if procs["web"].Service != "myapp-web" {
+		t.Fatalf("existing web service = %q", procs["web"].Service)
+	}
+	if procs["worker"].RuntimeProfile != "small" {
+		t.Fatalf("new worker = %q, want small", procs["worker"].RuntimeProfile)
+	}
+	if procs["slugbuilder"].RuntimeProfile != "large" {
+		t.Fatalf("slugbuilder = %q", procs["slugbuilder"].RuntimeProfile)
+	}
+	first := slugReleaseProcesses([]string{"web"}, nil, "myapp")
+	if first["web"].RuntimeProfile != "small" {
+		t.Fatalf("first web = %q, want small", first["web"].RuntimeProfile)
+	}
+	if first["web"].Service != "myapp-web" {
+		t.Fatalf("first web service = %q", first["web"].Service)
+	}
+}
+
 func TestResolveStack(t *testing.T) {
 	cases := []struct {
 		name    string

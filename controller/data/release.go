@@ -64,8 +64,7 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 			proc.Volumes = []ct.VolumeReq{{Path: "/data"}}
 			proc.DeprecatedData = false
 		}
-		resource.SetDefaults(&proc.Resources)
-		if name := strings.TrimSpace(proc.RuntimeProfile); name != "" {
+		if name := resource.ProcessRuntimeProfile(proc.RuntimeProfile, proc.Resources); name != "" {
 			p, err := scanRuntimeProfile(r.db.QueryRow("runtime_profile_select_by_name", strings.ToLower(name)))
 			if err != nil {
 				if err == ErrNotFound {
@@ -76,9 +75,13 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 				}
 				return err
 			}
+			if proc.Resources == nil {
+				proc.Resources = make(resource.Resources)
+			}
 			resource.ApplyNamedLimits(proc.Resources, p.Memory, p.CPU)
 			proc.RuntimeProfile = p.Name
 		}
+		resource.SetDefaults(&proc.Resources)
 		release.Processes[typ] = proc
 	}
 

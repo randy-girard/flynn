@@ -111,6 +111,9 @@ func TestNewAppRelease(t *testing.T) {
 	if proc.Ports[0].Service == nil || proc.Ports[0].Service.Name != "myapp-web" {
 		t.Fatalf("port service = %#v", proc.Ports[0].Service)
 	}
+	if proc.RuntimeProfile != "small" {
+		t.Fatalf("new process RuntimeProfile = %q, want small", proc.RuntimeProfile)
+	}
 }
 
 func TestGitProcessName(t *testing.T) {
@@ -125,6 +128,16 @@ func TestGitProcessName(t *testing.T) {
 	}
 	if got := GitProcessName(&ct.Release{Processes: map[string]ct.ProcessType{"app": {}, "web": {}}}); got != "web" {
 		t.Fatalf("prev app+web = %q, want web", got)
+	}
+}
+
+func TestNewAppReleasePreservesExistingRuntimeProfile(t *testing.T) {
+	prev := &ct.Release{Processes: map[string]ct.ProcessType{
+		"app": {RuntimeProfile: "large", Args: []string{"/old"}},
+	}}
+	release := NewAppRelease("myapp", prev, "artifact-id", &BuildResult{Args: []string{"/bin/app"}, ListenPort: 8080}, ReleaseOptions{})
+	if release.Processes["app"].RuntimeProfile != "large" {
+		t.Fatalf("existing app profile = %q, want large", release.Processes["app"].RuntimeProfile)
 	}
 }
 

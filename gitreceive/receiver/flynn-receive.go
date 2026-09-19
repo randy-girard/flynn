@@ -269,6 +269,44 @@ func resolveStack(releaseEnv map[string]string) (string, error) {
 	}
 }
 
+// slugReleaseProcesses copies existing process types from the previous release
+// and stamps first-seen types with the small runtime profile.
+func slugReleaseProcesses(processTypes []string, prev *ct.Release, appName string) map[string]ct.ProcessType {
+	var prevProcs map[string]ct.ProcessType
+	if prev != nil {
+		prevProcs = prev.Processes
+	}
+	procs := make(map[string]ct.ProcessType)
+	for _, t := range processTypes {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		proc, existed := prevProcs[t]
+		proc.Args = []string{"/runner/init", "start", t}
+		if !existed {
+			proc.RuntimeProfile = resource.ProfileSmall
+		}
+		if (t == "web" || strings.HasSuffix(t, "-web")) && proc.Service == "" {
+			proc.Service = appName + "-" + t
+			proc.Ports = []ct.Port{{
+				Port:  8080,
+				Proto: "tcp",
+				Service: &host.Service{
+					Name:   proc.Service,
+					Create: true,
+					Check:  &host.HealthCheck{Type: "tcp"},
+				},
+			}}
+		}
+		procs[t] = proc
+	}
+	if sb, ok := prevProcs["slugbuilder"]; ok {
+		procs["slugbuilder"] = sb
+	}
+	return procs
+}
+
 func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string, stackName string) error {
 	slugbuilderImageID := os.Getenv("SLUGBUILDER_24_IMAGE_ID")
 	slugrunnerImageID := os.Getenv("SLUGRUNNER_24_IMAGE_ID")
@@ -356,27 +394,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 	release.Meta["slugrunner.stack"] = stackName
 
-	procs := make(map[string]ct.ProcessType)
-	for _, t := range processTypes {
-		proc := prevRelease.Processes[t]
-		proc.Args = []string{"/runner/init", "start", t}
-		if (t == "web" || strings.HasSuffix(t, "-web")) && proc.Service == "" {
-			proc.Service = app.Name + "-" + t
-			proc.Ports = []ct.Port{{
-				Port:  8080,
-				Proto: "tcp",
-				Service: &host.Service{
-					Name:   proc.Service,
-					Create: true,
-					Check:  &host.HealthCheck{Type: "tcp"},
-				},
-			}}
-		}
-		procs[t] = proc
-	}
-	if sb, ok := prevRelease.Processes["slugbuilder"]; ok {
-		procs["slugbuilder"] = sb
-	}
+	procs := slugReleaseProcesses(processTypes, prevRelease, app.Name)
 	release.Processes = procs
 
 	return finishDeploy(client, app, prevRelease, release, procs)

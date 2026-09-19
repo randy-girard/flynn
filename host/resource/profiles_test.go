@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/docker/go-units"
+	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
 func TestBuiltinProfilesMatchDefaults(t *testing.T) {
@@ -58,5 +59,21 @@ func TestValidateProfileName(t *testing.T) {
 func TestProfileByNameUnknown(t *testing.T) {
 	if _, ok := ProfileByName("xlarge"); ok {
 		t.Fatal("xlarge is not builtin")
+	}
+}
+
+func TestProcessRuntimeProfileDefaultsNewTypesToSmall(t *testing.T) {
+	if got := ProcessRuntimeProfile("", nil); got != ProfileSmall {
+		t.Fatalf("empty process = %q, want small", got)
+	}
+	if got := ProcessRuntimeProfile("  LARGE ", nil); got != "LARGE" {
+		t.Fatalf("explicit profile = %q", got)
+	}
+	custom := Resources{TypeMemory: Spec{Limit: typeconv.Int64Ptr(256 * units.MiB)}}
+	if got := ProcessRuntimeProfile("", custom); got != "" {
+		t.Fatalf("custom memory should keep no named profile, got %q", got)
+	}
+	if HasMemoryOrCPU(nil) || HasMemoryOrCPU(Resources{}) {
+		t.Fatal("empty resources are not explicit")
 	}
 }

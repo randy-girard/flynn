@@ -24,13 +24,40 @@ type NamedProfile struct {
 }
 
 // BuiltinProfiles returns the three cluster defaults (small / medium / large).
-// Medium matches resource.Defaults() memory and CPU.
+// Medium matches resource.Defaults() memory and CPU used for one-off jobs.
+// New process types default to small the first time they are added to a release.
 func BuiltinProfiles() []NamedProfile {
 	return []NamedProfile{
 		{Name: ProfileSmall, Memory: 512 * units.MiB, CPU: 500, Builtin: true},
 		{Name: ProfileMedium, Memory: 1 * units.GiB, CPU: 1000, Builtin: true},
 		{Name: ProfileLarge, Memory: 2 * units.GiB, CPU: 2000, Builtin: true},
 	}
+}
+
+// HasMemoryOrCPU reports whether r already has an explicit memory or CPU request/limit.
+func HasMemoryOrCPU(r Resources) bool {
+	if r == nil {
+		return false
+	}
+	if spec, ok := r[TypeMemory]; ok && (spec.Limit != nil || spec.Request != nil) {
+		return true
+	}
+	if spec, ok := r[TypeCPU]; ok && (spec.Limit != nil || spec.Request != nil) {
+		return true
+	}
+	return false
+}
+
+// ProcessRuntimeProfile is the named profile to apply when persisting a process type.
+// An explicit profile is kept. First-time types (no memory or CPU set) default to small.
+func ProcessRuntimeProfile(name string, r Resources) string {
+	if n := strings.TrimSpace(name); n != "" {
+		return n
+	}
+	if HasMemoryOrCPU(r) {
+		return ""
+	}
+	return ProfileSmall
 }
 
 // ProfileByName returns the builtin profile with the given name (case-insensitive).

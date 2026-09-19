@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
 	host "github.com/randy-girard/flynn/host/types"
 )
 
@@ -45,10 +46,15 @@ func NewAppRelease(appName string, prev *ct.Release, artifactID string, build *B
 	}
 
 	proc := ct.ProcessType{}
+	existed := false
 	if prev != nil {
 		if p, ok := prev.Processes[processName]; ok {
 			proc = p
+			existed = true
 		}
+	}
+	if !existed {
+		proc.RuntimeProfile = resource.ProfileSmall
 	}
 	if build != nil && len(build.Args) > 0 {
 		proc.Args = append([]string{}, build.Args...)
