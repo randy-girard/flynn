@@ -13,6 +13,7 @@ const (
 	DefaultCredentialsFile = "/etc/flynn/plugin-credentials.json"
 	EnvGitHubToken         = "FLYNN_PLUGIN_GITHUB_TOKEN"
 	EnvGitHubTokenAlt      = "GITHUB_TOKEN"
+	DefaultGitHubHost      = "github.com"
 )
 
 // HostCredentials is one git host (github.com or a GitHub Enterprise hostname).
@@ -28,6 +29,19 @@ func credentialsPath(path string) string {
 		return path
 	}
 	return DefaultCredentialsFile
+}
+
+// NormalizeGitHubHost maps the CLI host argument to a credentials-file key.
+// "github" and "github.com" (any case) are github.com; other values are used as-is
+// (GitHub Enterprise hostnames).
+func NormalizeGitHubHost(host string) string {
+	host = strings.TrimSpace(host)
+	switch strings.ToLower(host) {
+	case "", "github", DefaultGitHubHost:
+		return DefaultGitHubHost
+	default:
+		return host
+	}
 }
 
 func LoadCredentials(path string) (CredentialsFile, error) {
@@ -62,10 +76,7 @@ func SaveCredentials(path string, creds CredentialsFile) error {
 // TokenForHost returns a GitHub token. Order: FLYNN_PLUGIN_GITHUB_TOKEN,
 // GITHUB_TOKEN, then the credentials file for that hostname.
 func TokenForHost(host, credsFile string) (string, string, error) {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		host = "github.com"
-	}
+	host = NormalizeGitHubHost(host)
 	if t := strings.TrimSpace(os.Getenv(EnvGitHubToken)); t != "" {
 		return t, "", nil
 	}
@@ -84,10 +95,7 @@ func TokenForHost(host, credsFile string) (string, string, error) {
 }
 
 func SetGitHubCredentials(path, host, token, api string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		host = "github.com"
-	}
+	host = NormalizeGitHubHost(host)
 	token = strings.TrimSpace(token)
 	if token == "" {
 		return fmt.Errorf("token is empty")
@@ -108,36 +116,50 @@ func SetGitHubCredentials(path, host, token, api string) error {
 	return SaveCredentials(path, creds)
 }
 
-func UnsetGitHubCredentials(path, host string) error {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		host = "github.com"
-	}
-	creds, err := LoadCredentials(path)
-	if err != nil {
-		return err
-	}
-	if _, ok := creds[host]; !ok {
-		return nil
-	}
-	delete(creds, host)
-	return SaveCredentials(path, creds)
-}
-
-func CredentialsSet(path, host string) (bool, error) {
-	host = strings.TrimSpace(host)
-	if host == "" {
-		host = "github.com"
-	}
-	if strings.TrimSpace(os.Getenv(EnvGitHubToken)) != "" || strings.TrimSpace(os.Getenv(EnvGitHubTokenAlt)) != "" {
-		return true, nil
-	}
+// UnsetGitHubCredentials removes stored credentials for host. removed is false
+// when nothing was stored for that host.
+func UnsetGitHubCredentials(path, host string) (removed bool, err error) {
+	host = NormalizeGitHubHost(host)
 	creds, err := LoadCredentials(path)
 	if err != nil {
 		return false, err
 	}
+	if _, ok := creds[host]; !ok {
+		return false, nil
+	}
+	delete(creds, host)
+	if err := SaveCredentials(path, creds); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func CredentialsSet(path, host string) (bool, error) {
+	set, _, err := CredentialStatus(path, host)
+	return set, err
+}
+
+// CredentialStatus reports whether a token is available for host (environment
+// or credentials file) and the API URL stored in the file. It never returns
+// the token.
+func CredentialStatus(path, host string) (set bool, api string, err error) {
+	host = NormalizeGitHubHost(host)
+	if strings.TrimSpace(os.Getenv(EnvGitHubToken)) != "" || strings.TrimSpace(os.Getenv(EnvGitHubTokenAlt)) != "" {
+		set = true
+	}
+	creds, err := LoadCredentials(path)
+	if err != nil {
+		return false, "", err
+	}
 	entry, ok := creds[host]
-	return ok && strings.TrimSpace(entry.Token) != "", nil
+	if !ok {
+		return set, "", nil
+	}
+	api = strings.TrimSpace(entry.API)
+	if strings.TrimSpace(entry.Token) != "" {
+		set = true
+	}
+	return set, api, nil
 }
 
 func ReadToken(r io.Reader) (string, error) {

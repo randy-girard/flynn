@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
@@ -122,6 +121,9 @@ usage: flynn-host plugin:credentials
 
 Manage GitHub credentials for plugin releases.
 
+The host argument is required: github (github.com) or a GitHub Enterprise
+hostname. set never puts the token in argv. show never prints the token.
+
 Commands:
   set      Store a GitHub token for plugin releases
   unset    Remove stored GitHub plugin credentials
@@ -129,29 +131,46 @@ Commands:
 `
 
 const pluginCredentialsSetUsage = `
-usage: flynn-host plugin:credentials-set github [--token-file=FILE] [--api=URL]
+usage: flynn-host plugin:credentials-set <host> [--token-file=FILE] [--api=URL]
 
-Store a GitHub token for private or draft release assets.
+Store a GitHub token for private or draft release assets. <host> is github
+(github.com) or a GitHub Enterprise hostname. On a TTY with no --token-file
+and no piped stdin, you are prompted to paste the token (input is hidden).
 
 Options:
-	--token-file=FILE  Read the GitHub token from a file (otherwise stdin)
+	--token-file=FILE  Read the GitHub token from a file
 	--api=URL          GitHub API base (GitHub Enterprise)
 
 Examples:
 
+    $ flynn-host plugin:credentials-set github
     $ flynn-host plugin:credentials-set github --token-file /root/github.token
+    $ cat /root/github.token | flynn-host plugin:credentials-set github
+    $ flynn-host plugin:credentials-set git.example.com --api https://git.example.com/api/v3 --token-file /root/ghe.token
 `
 
 const pluginCredentialsUnsetUsage = `
-usage: flynn-host plugin:credentials-unset github
+usage: flynn-host plugin:credentials-unset <host>
 
-Remove stored GitHub plugin credentials.
+Remove stored GitHub plugin credentials. <host> is github (github.com) or a
+GitHub Enterprise hostname. Prints whether credentials were removed or
+nothing was stored.
+
+Examples:
+
+    $ flynn-host plugin:credentials-unset github
 `
 
 const pluginCredentialsShowUsage = `
-usage: flynn-host plugin:credentials-show github
+usage: flynn-host plugin:credentials-show <host>
 
-Show whether GitHub plugin credentials are set.
+Show whether GitHub plugin credentials are set. <host> is github (github.com)
+or a GitHub Enterprise hostname. Prints set/unset and the stored API URL
+when present; never prints the token.
+
+Examples:
+
+    $ flynn-host plugin:credentials-show github
 `
 
 const pluginRouteUsage = `
@@ -337,64 +356,4 @@ func runPluginList(args *docopt.Args) error {
 
 func runPluginListKnown() error {
 	return plugin.WriteKnownPlugins(os.Stdout, plugin.DefaultGitHubOrg(), plugin.KnownPlugins())
-}
-
-func runPluginCredentialsSet(args *docopt.Args) error {
-	host := "github.com"
-	token, err := readCredentialToken(args.String["--token-file"])
-	if err != nil {
-		return err
-	}
-	if err := plugin.SetGitHubCredentials("", host, token, args.String["--api"]); err != nil {
-		return err
-	}
-	fmt.Println("github credentials set")
-	return nil
-}
-
-func runPluginCredentialsUnset(_ *docopt.Args) error {
-	if err := plugin.UnsetGitHubCredentials("", "github.com"); err != nil {
-		return err
-	}
-	fmt.Println("github credentials unset")
-	return nil
-}
-
-func runPluginCredentialsShow(_ *docopt.Args) error {
-	ok, err := plugin.CredentialsSet("", "github.com")
-	if err != nil {
-		return err
-	}
-	if ok {
-		fmt.Println("github credentials: set")
-	} else {
-		fmt.Println("github credentials: unset")
-	}
-	return nil
-}
-
-func readCredentialToken(path string) (string, error) {
-	if strings.TrimSpace(path) != "" {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return "", err
-		}
-		tok := strings.TrimSpace(string(data))
-		if tok == "" {
-			return "", fmt.Errorf("token file is empty")
-		}
-		return tok, nil
-	}
-	st, _ := os.Stdin.Stat()
-	if st != nil && st.Mode()&os.ModeCharDevice != 0 {
-		fmt.Fprintln(os.Stderr, "read GitHub token from stdin (token is not echoed in argv)")
-	}
-	tok, err := plugin.ReadToken(os.Stdin)
-	if err != nil {
-		return "", err
-	}
-	if tok == "" {
-		return "", fmt.Errorf("token is empty; pass --token-file or pipe a token on stdin")
-	}
-	return tok, nil
 }
