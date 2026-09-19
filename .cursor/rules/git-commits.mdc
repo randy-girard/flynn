@@ -1,9 +1,9 @@
 ---
-description: Always use Conventional Commits for every git commit
+description: Always use Conventional Commits and split work into logical commits
 alwaysApply: true
 ---
 
-# Semantic git commits
+# Semantic, logical git commits
 
 Follow [AGENTS.md](../../AGENTS.md). **Always** use Conventional Commits. Never write unstructured subjects.
 
@@ -13,6 +13,13 @@ Format: `<type>(<scope>): <summary>`
 - Scope is the subsystem (`cli`, `controller`, `host`, `router`, …). Omit it only for repo-wide docs or chore
 - Imperative, lowercase summary; ≤ 72 characters; body when the why is not obvious
 - Regular `git commit` only — no DCO (`git commit -s` / `Signed-off-by`)
-- Split unrelated work into separate logical commits
+
+When committing, **always split work into logical commits** (one concern each):
+
+- Do not dump an entire session or mixed features into one catch-all commit
+- Keep tests and docs that belong to that concern in the same commit
+- Do not mix a feature with an unrelated cleanup, rename, or formatting pass
+- Stage whole files by path (`git add path`). Do not use `git add -p` or `git add -i`
+- If one file mixes concerns, still commit the other files separately
 
 Examples: `feat(cli): load plugin commands from cluster catalog`, `test(router): cover ACME HTTP-01 challenge serving`

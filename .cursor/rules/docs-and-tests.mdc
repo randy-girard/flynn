@@ -9,4 +9,4 @@ Follow [AGENTS.md](../../AGENTS.md).
 
 When behavior changes, update the matching docs (README, `docs/content/`, component READMEs) and tests in the same work. Use GitHub-relative markdown links, not `/docs/...` website paths. Do not leave guides describing replaced stacks, versions, install URLs, or commands.
 
-Always use Conventional Commits (`<type>(<scope>): <summary>`) and DCO sign-off. See `.cursor/rules/git-commits.mdc`.
+Always use Conventional Commits (`<type>(<scope>): <summary>`) and split work into logical commits. See `.cursor/rules/git-commits.mdc`. No DCO sign-off.

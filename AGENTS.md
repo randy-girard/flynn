@@ -41,7 +41,9 @@ Format: `<type>(<scope>): <summary>`
 - **summary** is imperative, lowercase, and says why the change matters
 - Keep subjects ≤ 72 characters; add a body when the why is not obvious
 - Use regular `git commit` only. Do **not** use DCO sign-off (`git commit -s`, `Signed-off-by`)
-- Split unrelated work into separate commits
+- **Always commit logically**: one concern per commit. Do not dump an entire session or mixed features into one catch-all commit
+- Keep tests and docs for that concern in the same commit. Do not mix a feature with an unrelated cleanup
+- Stage whole files by path. Do not use `git add -p` or `git add -i`. If one file mixes concerns, still commit the other files separately
 
 Examples: `feat(cli): load plugin commands from cluster catalog`, `fix(host): ignore missing volumes on destroy`, `test(router): cover ACME HTTP-01 challenge serving`
 
