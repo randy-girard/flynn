@@ -195,17 +195,18 @@ With no local checkout, an alias pulls the plugin’s published GitHub Release
 (never `plugin-build` on the cluster):
 
 ```text
-sudo flynn-host plugin:install redis --ref v20260914.0
+sudo flynn-host plugin:install redis --ref v20260914.0.0
 sudo flynn-host plugin:install dashboard --auto-tls
 sudo flynn-host plugin:install discovery
 sudo flynn-host plugin:install www --auto-tls
-sudo flynn-host plugin:update dashboard --ref v20260916.3
+sudo flynn-host plugin:update dashboard --ref v20260916.3.1
 sudo flynn-host plugin:uninstall dashboard
-sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 ```
 
-`--ref` is the GitHub release tag. Omit it to use the latest **published**
-release (drafts and prereleases are skipped). **`plugin update`** is the
+`--ref` is the GitHub release tag (`vYYYYMMDD.N.P`, or a legacy `vYYYYMMDD.N`).
+Omit it to use the latest **published** calver tag (drafts and prereleases are
+skipped). **`plugin update`** is the
 operator command once the plugin app exists: it deploys a new release,
 scales the previous release to zero, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Re-running
@@ -218,7 +219,7 @@ The default org is `randy-girard` from `official-plugins.json`; override with `-
   "github_org": "randy-girard",
   "redis": {
     "url": "https://github.com/randy-girard/flynn-plugin-redis.git",
-    "ref": "v20260914.0"
+    "ref": "v20260914.0.0"
   }
 }
 ```
@@ -239,10 +240,11 @@ reconstructs the repo-relative path (`script/install.sh`) when it unpacks the
 release, then runs the hook. Uploads of the squashfs layers go into the cluster
 blobstore so other hosts never talk to GitHub.
 
-When a Flynn GitHub Release is created, check **dispatch_plugins** on
-**Build and Release** to queue those plugin workflows from the same run
-(`gh workflow run` on Dispatch plugin releases). Publishing a draft from the
-GitHub UI also starts that workflow. Configure the Flynn repo (or org) with:
+When a Flynn GitHub Release is created, **dispatch_plugins** is on by default
+on **Build and Release** so those plugin workflows are queued from the same
+run (`gh workflow run` on Dispatch plugin releases). Uncheck it to skip
+fan-out. Publishing a draft from the GitHub UI also starts that workflow.
+Configure the Flynn repo (or org) with:
 
 * **Variable** `PLUGIN_RELEASE_REPOS` — one `owner/repo` per line (commas and
   `#` comments are allowed). That list is CI dispatch only; `flynn-host`
@@ -251,11 +253,14 @@ GitHub UI also starts that workflow. Configure the Flynn repo (or org) with:
   write** and **Contents: read** on those plugin repos (`GITHUB_TOKEN` cannot
   start workflows in another repository).
 
-Each plugin is built with `version` and `flynn_version` set to the Flynn tag
-so the overlay uses that ubuntu-noble layer. Re-run **Dispatch plugin
-releases** from Actions if a plugin job was skipped or failed, or leave
-**dispatch_plugins** unchecked and run that workflow later. A plugin tag
-that is already **published** with a squashfs asset is skipped; drafts and
+Each plugin is built with its own `version` (`vYYYYMMDD.N.P`) and
+`flynn_version` set to the Flynn tag so the overlay uses that ubuntu-noble
+layer. Flynn dispatch uses `{flynn_tag}.0`; a plugin-only change increments
+the last number without a new Flynn release. Re-run **Dispatch plugin
+releases** from Actions if a plugin job was skipped or failed, or uncheck
+**dispatch_plugins** and run that workflow later. A plugin tag
+that is already **published** with a squashfs asset is skipped (including a
+legacy two-part tag matching the Flynn version); drafts and
 failed uploads are dispatched again so the plugin job can resume.
 
 Private repos and **draft** releases need a token (Contents: Read):

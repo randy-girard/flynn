@@ -104,8 +104,8 @@ func TestPluginUpdateUsage(t *testing.T) {
 		t.Fatalf("plugin=%q", args.String["<plugin>"])
 	}
 
-	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--ref", "v20260916.3")
-	if args.String["--ref"] != "v20260916.3" || args.String["<plugin>"] != "dashboard" {
+	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--ref", "v20260916.3.1")
+	if args.String["--ref"] != "v20260916.3.1" || args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("update ref: %+v", args)
 	}
 

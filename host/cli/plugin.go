@@ -49,9 +49,9 @@ flynn-host plugin:credentials-set github, FLYNN_PLUGIN_GITHUB_TOKEN, or GITHUB_T
 Examples:
 
     $ flynn-host plugin:install ../flynn-plugin-redis
-    $ flynn-host plugin:install redis --ref v20260914.0
+    $ flynn-host plugin:install redis --ref v20260914.0.0
     $ flynn-host plugin:install dashboard --auto-tls
-    $ flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0
+    $ flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 `
 
 const pluginUpdateUsage = `
@@ -59,11 +59,12 @@ usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-o
 
 Deploy a new release of an already-installed plugin. update requires the
 plugin app to already exist. Update runs hooks.upgrade when declared
-(not hooks.install) and does not re-ask setup prompts.
+(not hooks.install) and does not re-ask setup prompts. --ref is a plugin
+GitHub tag (vYYYYMMDD.N.P). Omit it to install the newest published calver.
 
 Examples:
 
-    $ flynn-host plugin:update dashboard --ref v20260916.3
+    $ flynn-host plugin:update dashboard --ref v20260916.3.1
 `
 
 const pluginUninstallUsage = `

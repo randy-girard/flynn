@@ -26,7 +26,8 @@ usage() {
 usage: $0 --version vYYYYMMDD.N [--prerelease] [--dry-run]
 
 Dispatch each plugin repo's release.yml workflow using Flynn's published tag
-as both the plugin version and FLYNN_VERSION (ubuntu-noble pin).
+as flynn_version and plugin version vYYYYMMDD.N.0. Plugin-only rebuilds use
+vYYYYMMDD.N.P without a new Flynn release.
 
 Environment:
   PLUGIN_RELEASE_REPOS   owner/repo list (newlines, commas, # comments)

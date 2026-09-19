@@ -863,6 +863,41 @@ func TestFetchGitHubMissingManifestAndAuth(t *testing.T) {
 	}
 }
 
+func TestGetReleasePicksNewestPluginCalVer(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/plug/releases", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode([]githubRelease{
+			{TagName: "v20260919.2", Draft: false},
+			{TagName: "v20260919.2.1", Draft: false},
+			{TagName: "v20260920.0.0", Draft: true},
+			{TagName: "v20260918.9.9", Prerelease: true},
+			{TagName: "not-a-calver", Draft: false},
+		})
+	})
+	mux.HandleFunc("/repos/acme/plug/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("must not fall back to GitHub latest when calver tags exist")
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("/repos/acme/plug/releases/tags/v20260919.2.1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{TagName: "v20260919.2.1"})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	in := &Installer{GitHubHTTP: srv.Client()}
+	rel, err := in.getRelease(&GitHubSource{Owner: "acme", Repo: "plug", Ref: "", API: srv.URL}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.TagName != "v20260919.2.1" {
+		t.Fatalf("latest calver=%s, want v20260919.2.1 (plugin patch above Flynn-aligned tag)", rel.TagName)
+	}
+	rel, err = in.getRelease(&GitHubSource{Owner: "acme", Repo: "plug", Ref: "v20260919.2.1", API: srv.URL}, "")
+	if err != nil || rel.TagName != "v20260919.2.1" {
+		t.Fatalf("explicit --ref: %+v %v", rel, err)
+	}
+}
+
 func TestSanitizeURLAndRefOrLatest(t *testing.T) {
 	if got := sanitizeURL("https://user:pass@github.com/acme/plug"); !strings.Contains(got, "://***") {
 		t.Fatalf("sanitize=%s", got)

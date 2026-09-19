@@ -60,7 +60,9 @@ plugin_release_complete() {
   [[ "${ok}" == "true" ]]
 }
 
-# Queue each plugin's release.yml with the Flynn tag as version and flynn_version.
+# Queue each plugin's release.yml with plugin tag vYYYYMMDD.N.0 and
+# flynn_version pin vYYYYMMDD.N. Plugin-only rebuilds increment the last
+# number without a new Flynn release.
 plugin_dispatch_releases() {
   local version=$1
   local blob=$2
@@ -74,6 +76,7 @@ plugin_dispatch_releases() {
     return 1
   fi
 
+  local plugin_version="${version}.0"
   local repos
   repos="$(plugin_release_repos_from_text "${blob}")" || return 1
   if [[ -z "${repos}" ]]; then
@@ -83,17 +86,17 @@ plugin_dispatch_releases() {
 
   while IFS= read -r repo || [[ -n "${repo}" ]]; do
     [[ -z "${repo}" ]] && continue
-    if [[ "${dry_run}" != "true" ]] && plugin_release_complete "${repo}" "${version}"; then
-      echo "skip ${repo}: ${version} already published"
+    if [[ "${dry_run}" != "true" ]] && plugin_release_already_published "${repo}" "${version}" "${plugin_version}"; then
+      echo "skip ${repo}: ${plugin_version} already published"
       continue
     fi
-    echo "dispatch ${repo} Build and Release version=${version} flynn_version=${version} prerelease=${prerelease}"
+    echo "dispatch ${repo} Build and Release version=${plugin_version} flynn_version=${version} prerelease=${prerelease}"
     if [[ "${dry_run}" == "true" ]]; then
       continue
     fi
     if ! "${gh}" workflow run release.yml \
       --repo "${repo}" \
-      -f "version=${version}" \
+      -f "version=${plugin_version}" \
       -f "flynn_version=${version}" \
       -f "draft=false" \
       -f "prerelease=${prerelease}"; then
@@ -104,4 +107,15 @@ plugin_dispatch_releases() {
 ${repos}
 EOF
   return "${failed}"
+}
+
+# Skip when the three-part plugin tag is complete, or when a legacy two-part
+# Flynn-aligned plugin release already shipped for this Flynn version.
+plugin_release_already_published() {
+  local repo=$1
+  local flynn_version=$2
+  local plugin_version=$3
+  plugin_release_complete "${repo}" "${plugin_version}" && return 0
+  plugin_release_complete "${repo}" "${flynn_version}" && return 0
+  return 1
 }

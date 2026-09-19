@@ -70,7 +70,7 @@ EOF
   run plugin_dispatch_releases "v20260915.0" "acme/flynn-plugin-cache" "true" "false"
   assert_success
   grep -q 'workflow run release.yml --repo acme/flynn-plugin-cache' "${LOG}"
-  grep -q 'version=v20260915.0' "${LOG}"
+  grep -q 'version=v20260915.0.0' "${LOG}"
   grep -q 'flynn_version=v20260915.0' "${LOG}"
   grep -q 'prerelease=true' "${LOG}"
 }
@@ -83,6 +83,19 @@ EOF
   assert_success
   if grep -q 'workflow run' "${LOG}"; then
     echo "existing published release must not be dispatched again" >&2
+    cat "${LOG}" >&2
+    return 1
+  fi
+}
+
+@test "plugin_dispatch_releases skips when three-part plugin tag already exists" {
+  mkdir -p "${TMP}/existing/acme/flynn-plugin-cache"
+  echo complete > "${TMP}/existing/acme/flynn-plugin-cache/v20260915.0.0"
+  export GH_EXISTING="${TMP}/existing"
+  run plugin_dispatch_releases "v20260915.0" "acme/flynn-plugin-cache" "false" "false"
+  assert_success
+  if grep -q 'workflow run' "${LOG}"; then
+    echo "existing vYYYYMMDD.N.0 must not be dispatched again" >&2
     cat "${LOG}" >&2
     return 1
   fi

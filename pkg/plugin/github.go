@@ -257,14 +257,71 @@ func (in *Installer) fetchGitHubHooks(root string, src *GitHubSource, token stri
 }
 
 func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease, error) {
-	api := strings.TrimRight(src.API, "/")
-	var u string
 	ref := src.Ref
 	if ref == "" || ref == "latest" {
-		u = fmt.Sprintf("%s/repos/%s/%s/releases/latest", api, src.Owner, src.Repo)
-	} else {
-		u = fmt.Sprintf("%s/repos/%s/%s/releases/tags/%s", api, src.Owner, src.Repo, url.PathEscape(ref))
+		if rel, err := in.latestCalVerRelease(src, token); err == nil {
+			return rel, nil
+		}
+		return in.fetchReleaseJSON(src, token, in.githubAPI(src)+fmt.Sprintf("/repos/%s/%s/releases/latest", src.Owner, src.Repo), refOrLatest(ref))
 	}
+	return in.fetchReleaseJSON(src, token, in.githubAPI(src)+fmt.Sprintf("/repos/%s/%s/releases/tags/%s", src.Owner, src.Repo, url.PathEscape(ref)), ref)
+}
+
+func (in *Installer) githubAPI(src *GitHubSource) string {
+	return strings.TrimRight(src.API, "/")
+}
+
+// latestCalVerRelease picks the highest vYYYYMMDD.N.P (or legacy vYYYYMMDD.N)
+// among published, non-prerelease GitHub Releases so plugin:update without
+// --ref follows plugin-only patches, not whichever tag GitHub marked latest.
+func (in *Installer) latestCalVerRelease(src *GitHubSource, token string) (*githubRelease, error) {
+	all, err := in.listGitHubReleases(src, token)
+	if err != nil {
+		return nil, err
+	}
+	var best *githubRelease
+	for i := range all {
+		r := &all[i]
+		if r.Draft || r.Prerelease || r.TagName == "" {
+			continue
+		}
+		if _, ok := ParsePluginCalVer(r.TagName); !ok {
+			continue
+		}
+		if best == nil || ComparePluginCalVer(r.TagName, best.TagName) > 0 {
+			best = r
+		}
+	}
+	if best == nil {
+		return nil, fmt.Errorf("no published plugin calver releases")
+	}
+	return best, nil
+}
+
+func (in *Installer) listGitHubReleases(src *GitHubSource, token string) ([]githubRelease, error) {
+	u := in.githubAPI(src) + fmt.Sprintf("/repos/%s/%s/releases?per_page=100", src.Owner, src.Repo)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	in.githubHeaders(req, token, "application/vnd.github+json")
+	res, err := in.githubHTTP().Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GitHub releases %s/%s: %w", src.Owner, src.Repo, err)
+	}
+	defer res.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(res.Body, 8<<20))
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub releases %s/%s: %s", src.Owner, src.Repo, res.Status)
+	}
+	var all []githubRelease
+	if err := json.Unmarshal(body, &all); err != nil {
+		return nil, fmt.Errorf("decode GitHub releases: %w", err)
+	}
+	return all, nil
+}
+
+func (in *Installer) fetchReleaseJSON(src *GitHubSource, token, u, refLabel string) (*githubRelease, error) {
 	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -281,7 +338,7 @@ func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease
 		if token == "" && (res.StatusCode == http.StatusNotFound || res.StatusCode == http.StatusUnauthorized) {
 			hint = "for private or draft releases set credentials: flynn-host plugin:credentials-set github"
 		}
-		return nil, fmt.Errorf("GitHub release %s/%s@%s: %s (%s)", src.Owner, src.Repo, refOrLatest(ref), res.Status, hint)
+		return nil, fmt.Errorf("GitHub release %s/%s@%s: %s (%s)", src.Owner, src.Repo, refLabel, res.Status, hint)
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub release %s/%s: %s", src.Owner, src.Repo, res.Status)
