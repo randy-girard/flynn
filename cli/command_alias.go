@@ -80,8 +80,10 @@ var subAliases = map[string]map[string]string{
 		"remove": "route:remove",
 	},
 	"resource": {
-		"add":    "resource:add",
-		"remove": "resource:remove",
+		"add":      "resource:add",
+		"remove":   "resource:remove",
+		"expose":   "resource:expose",
+		"unexpose": "resource:unexpose",
 	},
 	"provider": {
 		"add": "provider:add",

@@ -95,7 +95,9 @@ Commands:
 	release:update       update a release
 	resource             list app resources
 	resource:add         provision a resource
+	resource:expose      export a datastore on a TLS TCP route
 	resource:remove      remove a resource
+	resource:unexpose    remove a datastore TCP export route
 	route                list routes
 	route:add            add a route
 	route:remove         remove a route

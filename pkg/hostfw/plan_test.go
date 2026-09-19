@@ -38,10 +38,11 @@ func TestTCPPortsFromRoutes(t *testing.T) {
 		{Type: "tcp", Port: 3001},
 		{Type: "tcp", Port: 80},
 		{Type: "tcp", Port: 3001},
+		{Type: "tcp", Port: 3005, TLSMode: "passthrough"},
 		{Type: "tcp", Port: 0},
 		nil,
 	})
-	want := []int{3001}
+	want := []int{3001, 3005}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v want %v", got, want)
 	}

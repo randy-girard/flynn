@@ -24,15 +24,17 @@ List routes for the application.
 `)
 	register("route:add", runRouteAdd, `
 usage: flynn route:add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
-       flynn route:add tcp [-s <service>] [-p <port>] [--leader] [--no-drain-backends]
+       flynn route:add tcp [-s <service>] [-p <port>] [--domain <host>] [--tls-mode <mode>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--leader] [--no-drain-backends]
 
 Add a route to an application.
 
 Options:
 	-s, --service=<service>    service name to route domain to (defaults to APPNAME-web)
-	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin (http only)
-	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin (http only)
-	--auto-tls                 automatically provision TLS certificate via Let's Encrypt (http only)
+	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin
+	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin
+	--auto-tls                 automatically provision TLS certificate via Let's Encrypt
+	--tls-mode=<mode>          TCP TLS: off, passthrough, or terminate
+	--domain=<host>            hostname stored on TCP routes (for TLS identity / DNS)
 	--sticky                   enable cookie-based sticky routing (http only)
 	--leader                   enable leader-only routing mode
 	-p, --port=<port>          port to accept traffic on
@@ -46,6 +48,8 @@ Examples:
 	$ flynn route:add http --auto-tls example.com
 
 	$ flynn route:add tcp
+
+	$ flynn route:add tcp --service postgres --leader --domain postgres.example.com --tls-mode passthrough
 `)
 	register("route:update", runRouteUpdate, `
 usage: flynn route:update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
@@ -115,6 +119,25 @@ func runRouteList(_ *docopt.Args, client controller.Client) error {
 			route = port
 			protocol = "tcp"
 			service = k.TCPRoute().Service
+			tcp := k.TCPRoute()
+			switch router.NormalizeTLSMode(tcp.TLSMode) {
+			case router.TLSModeTerminate:
+				protocol = "tcp+tls"
+				if k.ManagedCertificateDomain != nil && *k.ManagedCertificateDomain != "" {
+					tlsStatus = "auto"
+				} else if tcp.Certificate != nil || tcp.LegacyTLSCert != "" {
+					tlsStatus = "manual"
+				} else {
+					tlsStatus = "terminate"
+				}
+			case router.TLSModePassthrough:
+				tlsStatus = "passthrough"
+			default:
+				tlsStatus = "none"
+			}
+			if tcp.Domain != "" {
+				route = tcp.Domain + ":" + port
+			}
 		case "http":
 			route = k.HTTPRoute().Domain
 			if port != "0" {
@@ -155,11 +178,45 @@ func runRouteAddTCP(args *docopt.Args, client controller.Client) error {
 		port = p
 	}
 
+	tlsMode := router.NormalizeTLSMode(args.String["--tls-mode"])
+	if args.String["--tls-mode"] != "" && !router.ValidTLSMode(tlsMode) {
+		return fmt.Errorf("invalid --tls-mode %q (off, passthrough, terminate)", args.String["--tls-mode"])
+	}
+
+	autoTLS := args.Bool["--auto-tls"]
+	tlsCert, tlsKey, err := parseTLSCert(args)
+	if err != nil {
+		return err
+	}
+	if autoTLS && (tlsCert != "" || tlsKey != "") {
+		return errors.New("--auto-tls cannot be used with --tls-cert or --tls-key")
+	}
+	if autoTLS {
+		tlsMode = router.TLSModeTerminate
+		acmeConfig, err := client.GetACMEConfig()
+		if err != nil {
+			return fmt.Errorf("error checking ACME configuration: %s", err)
+		}
+		if !acmeConfig.Enabled {
+			return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' and 'flynn-host acme:enable' first.")
+		}
+	} else if tlsCert != "" || tlsKey != "" {
+		tlsMode = router.TLSModeTerminate
+	}
+
+	domain := strings.TrimSpace(args.String["--domain"])
 	hr := &router.TCPRoute{
 		Service:       service,
 		Port:          port,
 		Leader:        args.Bool["--leader"],
 		DrainBackends: !args.Bool["--no-drain-backends"],
+		Domain:        domain,
+		TLSMode:       tlsMode,
+		LegacyTLSCert: tlsCert,
+		LegacyTLSKey:  tlsKey,
+	}
+	if autoTLS && domain != "" {
+		hr.ManagedCertificateDomain = &domain
 	}
 
 	r := hr.ToRoute()
@@ -168,6 +225,10 @@ func runRouteAddTCP(args *docopt.Args, client controller.Client) error {
 	}
 	hr = r.TCPRoute()
 	fmt.Printf("%s listening on port %d\n", hr.FormattedID(), hr.Port)
+	if hr.Domain != "" {
+		fmt.Printf("hostname %s tls_mode=%s\n", hr.Domain, displayTLSMode(hr.TLSMode))
+	}
+	fmt.Printf("On each host run: sudo flynn-host firewall:expose %d\n", hr.Port)
 	return nil
 }
 
