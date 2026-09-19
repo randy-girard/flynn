@@ -1074,3 +1074,75 @@ type RuntimeSettings struct {
 	AllowCustomLimits bool       `json:"allow_custom_limits"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
+
+// GitHubAppConfig is the cluster-wide GitHub App used for Heroku-style deploys.
+type GitHubAppConfig struct {
+	AppID            int64      `json:"app_id"`
+	Slug             string     `json:"slug,omitempty"`
+	PrivateKey       string     `json:"private_key,omitempty"`
+	WebhookSecret    string     `json:"webhook_secret,omitempty"`
+	ClientID         string     `json:"client_id,omitempty"`
+	ClientSecret     string     `json:"client_secret,omitempty"`
+	APIURL           string     `json:"api_url,omitempty"`
+	HasPrivateKey    bool       `json:"has_private_key,omitempty"`
+	HasWebhookSecret bool       `json:"has_webhook_secret,omitempty"`
+	Configured       bool       `json:"configured"`
+	InstallURL       string     `json:"install_url,omitempty"`
+	WebhookURL       string     `json:"webhook_url,omitempty"`
+	GitWebhookURL    string     `json:"git_webhook_url,omitempty"`
+	CreatedAt        *time.Time `json:"created_at,omitempty"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+}
+
+// GitHubRepoConnection links a Flynn app to a GitHub repository.
+type GitHubRepoConnection struct {
+	ID             string     `json:"id,omitempty"`
+	AppID          string     `json:"app_id,omitempty"`
+	InstallationID int64      `json:"installation_id"`
+	AccountLogin   string     `json:"account_login,omitempty"`
+	Owner          string     `json:"owner"`
+	Repo           string     `json:"repo"`
+	FullName       string     `json:"full_name,omitempty"`
+	Branch         string     `json:"branch"`
+	AutoDeploy     bool       `json:"auto_deploy"`
+	WaitForChecks  bool       `json:"wait_for_checks"`
+	PendingSHA     string     `json:"pending_sha,omitempty"`
+	LastDeploySHA  string     `json:"last_deploy_sha,omitempty"`
+	LastDeployAt   *time.Time `json:"last_deploy_at,omitempty"`
+	CreatedAt      *time.Time `json:"created_at,omitempty"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
+}
+
+// GitHubDeployRequest is a manual deploy of the connected GitHub repo.
+type GitHubDeployRequest struct {
+	Branch        string `json:"branch,omitempty"`
+	SHA           string `json:"sha,omitempty"`
+	WaitForChecks *bool  `json:"wait_for_checks,omitempty"`
+}
+
+// GitHubDeploy is the taffy job Flynn started for a GitHub deploy.
+type GitHubDeploy struct {
+	AppID    string `json:"app_id"`
+	JobID    string `json:"job_id,omitempty"`
+	Owner    string `json:"owner"`
+	Repo     string `json:"repo"`
+	Branch   string `json:"branch"`
+	SHA      string `json:"sha"`
+	Waiting  bool   `json:"waiting,omitempty"`
+	CloneURL string `json:"clone_url,omitempty"`
+}
+
+// GitHubInstallation is a GitHub account that installed the cluster app.
+type GitHubInstallation struct {
+	ID    int64  `json:"id"`
+	Login string `json:"login"`
+	Type  string `json:"type,omitempty"`
+}
+
+// GitHubRepo is a repository the installation can access.
+type GitHubRepo struct {
+	Name          string `json:"name"`
+	FullName      string `json:"full_name"`
+	DefaultBranch string `json:"default_branch,omitempty"`
+	Private       bool   `json:"private,omitempty"`
+}

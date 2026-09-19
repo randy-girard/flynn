@@ -133,6 +133,13 @@ var preparedStatements = map[string]string{
 	"runtime_profile_delete":                   runtimeProfileDeleteQuery,
 	"runtime_settings_select":                  runtimeSettingsSelectQuery,
 	"runtime_settings_update":                  runtimeSettingsUpdateQuery,
+	"github_app_config_select":                 githubAppConfigSelectQuery,
+	"github_app_config_update":                 githubAppConfigUpdateQuery,
+	"github_repo_select_by_app":                githubRepoSelectByAppQuery,
+	"github_repo_list_by_repo":                 githubRepoListByRepoQuery,
+	"github_repo_insert":                       githubRepoInsertQuery,
+	"github_repo_update":                       githubRepoUpdateQuery,
+	"github_repo_delete":                       githubRepoDeleteQuery,
 }
 
 func PrepareStatements(conn *pgx.Conn) error {
@@ -811,4 +818,46 @@ SELECT allow_custom_limits, updated_at FROM runtime_settings WHERE id = 1`
 	runtimeSettingsUpdateQuery = `
 UPDATE runtime_settings SET allow_custom_limits = $1, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
+
+	githubAppConfigSelectQuery = `
+SELECT app_id, slug, private_key, webhook_secret, client_id, client_secret, api_url, created_at, updated_at
+FROM github_app_config WHERE id = 1`
+	githubAppConfigUpdateQuery = `
+UPDATE github_app_config SET
+	app_id = $1,
+	slug = $2,
+	private_key = $3,
+	webhook_secret = $4,
+	client_id = $5,
+	client_secret = $6,
+	api_url = $7
+WHERE id = 1
+RETURNING created_at, updated_at`
+	githubRepoSelectByAppQuery = `
+SELECT connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks, pending_sha, last_deploy_sha, last_deploy_at, created_at, updated_at
+FROM github_repo_connections WHERE app_id = $1 AND deleted_at IS NULL`
+	githubRepoListByRepoQuery = `
+SELECT connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks, pending_sha, last_deploy_sha, last_deploy_at, created_at, updated_at
+FROM github_repo_connections WHERE lower(owner) = lower($1) AND lower(repo) = lower($2) AND deleted_at IS NULL`
+	githubRepoInsertQuery = `
+INSERT INTO github_repo_connections (connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING created_at, updated_at`
+	githubRepoUpdateQuery = `
+UPDATE github_repo_connections SET
+	installation_id = $2,
+	account_login = $3,
+	owner = $4,
+	repo = $5,
+	branch = $6,
+	auto_deploy = $7,
+	wait_for_checks = $8,
+	pending_sha = $9,
+	last_deploy_sha = $10,
+	last_deploy_at = $11
+WHERE connection_id = $1 AND deleted_at IS NULL
+RETURNING created_at, updated_at`
+	githubRepoDeleteQuery = `
+UPDATE github_repo_connections SET deleted_at = now()
+WHERE app_id = $1 AND deleted_at IS NULL`
 )

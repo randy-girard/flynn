@@ -1071,6 +1071,46 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	AFTER INSERT OR UPDATE OR DELETE ON tcp_route_certificates
 	FOR EACH ROW EXECUTE PROCEDURE notify_tcp_route_certificates_update()`,
 	)
+	migrations.Add(58,
+		`CREATE TABLE github_app_config (
+			id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			app_id bigint NOT NULL DEFAULT 0,
+			slug text,
+			private_key text,
+			webhook_secret text,
+			client_id text,
+			client_secret text,
+			api_url text,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TRIGGER set_updated_at_github_app_config
+			BEFORE UPDATE ON github_app_config FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		`INSERT INTO github_app_config (id) VALUES (1)`,
+		`CREATE TABLE github_repo_connections (
+			connection_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+			app_id uuid NOT NULL REFERENCES apps (app_id),
+			installation_id bigint NOT NULL,
+			account_login text NOT NULL DEFAULT '',
+			owner text NOT NULL,
+			repo text NOT NULL,
+			branch text NOT NULL,
+			auto_deploy boolean NOT NULL DEFAULT false,
+			wait_for_checks boolean NOT NULL DEFAULT false,
+			pending_sha text,
+			last_deploy_sha text,
+			last_deploy_at timestamptz,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			deleted_at timestamptz
+		)`,
+		`CREATE UNIQUE INDEX github_repo_connections_app_id_key ON github_repo_connections (app_id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX github_repo_connections_repo_idx ON github_repo_connections (owner, repo) WHERE deleted_at IS NULL`,
+		`CREATE TRIGGER set_updated_at_github_repo_connections
+			BEFORE UPDATE ON github_repo_connections FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {
