@@ -172,7 +172,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`):
 | --- | --- |
 | `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
-| `plugin:credentials-*` | GitHub token for private/draft plugin releases |
+| `plugin:credentials-set` / `plugin:credentials-show` / `plugin:credentials-unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
 | `metrics` | Live host CPU/memory/disk/load snapshot (`--host` for one node) |
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |

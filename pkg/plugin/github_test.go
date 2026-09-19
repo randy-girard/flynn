@@ -909,15 +909,17 @@ func TestCredentialsEnvOverridesFileAndUnset(t *testing.T) {
 	}
 
 	t.Setenv(EnvGitHubToken, "")
-	if err := UnsetGitHubCredentials(path, "github.com"); err != nil {
-		t.Fatal(err)
+	removed, err := UnsetGitHubCredentials(path, "github.com")
+	if err != nil || !removed {
+		t.Fatalf("unset: removed=%v err=%v", removed, err)
 	}
 	ok, err = CredentialsSet(path, "github.com")
 	if err != nil || ok {
 		t.Fatalf("unset: %v %v", ok, err)
 	}
-	if err := UnsetGitHubCredentials(path, "github.com"); err != nil {
-		t.Fatal(err)
+	removed, err = UnsetGitHubCredentials(path, "github.com")
+	if err != nil || removed {
+		t.Fatalf("second unset: removed=%v err=%v", removed, err)
 	}
 	tok, _, err = TokenForHost("", filepath.Join(t.TempDir(), "missing.json"))
 	if err != nil || tok != "" {

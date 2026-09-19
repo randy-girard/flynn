@@ -284,15 +284,25 @@ that is already **published** with a squashfs asset is skipped (including a
 legacy two-part tag matching the Flynn version); drafts and
 failed uploads are dispatched again so the plugin job can resume.
 
-Private repos and **draft** releases need a token (Contents: Read):
+Private repos and **draft** releases need a token (Contents: Read). The host
+argument is required: `github` means github.com, or pass a GitHub Enterprise
+hostname. `set` never takes the token on the command line.
 
 ```text
+sudo flynn-host plugin:credentials-set github
 sudo flynn-host plugin:credentials-set github --token-file /root/github.token
+sudo cat /root/github.token | sudo flynn-host plugin:credentials-set github
+sudo flynn-host plugin:credentials-show github
+sudo flynn-host plugin:credentials-unset github
 ```
 
-Or set `FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot.
-`credentials show` prints `set` or `unset`, never the secret. GitHub Enterprise:
-`--api https://git.example.com/api/v3` stored per hostname.
+On a TTY with no `--token-file` and no pipe, `set` prompts you to paste the
+token (input is hidden). A pipe still reads the token from stdin. With no TTY,
+no pipe, and no `--token-file`, `set` errors instead of hanging. `show` prints
+`set` or `unset` and a stored API URL, never the secret. `unset` says whether
+credentials were removed or nothing was stored. Or set
+`FLYNN_PLUGIN_GITHUB_TOKEN` / `GITHUB_TOKEN` on the host for one shot. GitHub
+Enterprise: store per hostname with `--api https://git.example.com/api/v3`.
 
 ## Backup and restore
 
