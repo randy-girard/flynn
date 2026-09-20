@@ -10,10 +10,10 @@ Pre-built binaries for 64-bit Linux, macOS (Intel and Apple Silicon), and Window
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash
 ```
 
-A specific version:
+A specific version (Flynn tags are `vYYYYMMDD.N`):
 
 ```text
-curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --version v2024.01.27.0
+curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn-cli | sudo bash -s -- --version v20260919.0
 ```
 
 See [CLI documentation](../docs/content/cli.md) for cluster add, `flynn login`, and the command list.

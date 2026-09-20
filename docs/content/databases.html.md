@@ -24,7 +24,7 @@ all use cases, including high volume, large dataset workloads.
 
 ## Appliances
 
-Provision from an app with `flynn resource add <provider>`. Connection details
+Provision from an app with `flynn resource:add <provider>`. Connection details
 are injected as environment variables. User jobs may resolve the **leader**
 hostname Flynn puts in those URLs; other internal `*.discoverd` names do not
 resolve from user jobs.

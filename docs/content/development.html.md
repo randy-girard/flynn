@@ -112,7 +112,7 @@ That stops any previous `flynn-host`, starts it again, and bootstraps Layer 1.
 `--size N` creates extra virtual interfaces on one machine for a multi-node
 layout. See `script/bootstrap-flynn -h`.
 
-The last bootstrap lines include `flynn cluster add …`. On Vagrant, host daemon
+The last bootstrap lines include `flynn cluster:add …`. On Vagrant, host daemon
 logs are `/var/log/flynn/flynn-host.log`, synced to `./flynn-logs/builder` on
 the laptop.
 
@@ -282,15 +282,15 @@ Default flow:
    OTLP/HTTP sink on the host and confirm the otel plugin POSTs `/v1/metrics`,
    deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
-   `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn docker
-   push` a pre-built image of the same Dockerfile, probe HTTP and
+   `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn
+   docker:push` a pre-built image of the same Dockerfile, probe HTTP and
    rows, exercise `flynn` / `flynn-host`, create a persistent volume, write a
    file, read it after a job restart, and delete the volume, then `flynn-host update --all-nodes
-   --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
+   --tarball --force` twice and re-verify. After that, `flynn-host backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
    re-verify the slug/Dockerfile git-push/docker-push apps plus postgres/mysql/mongodb data. Installed
    plugins restore with postgres (`plugins.json` is the inventory; do not
-   `plugin install` again). Redis, Kafka, and ClickHouse volume data is not
+   `plugin:install` again). Redis, Kafka, and ClickHouse volume data is not
    in the cluster backup; those engines must come back empty.
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.

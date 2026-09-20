@@ -38,7 +38,7 @@ prepare and build apps deployed with `git push` when the app is on the
 buildpack for most supported languages.
 
 To deploy from a `Dockerfile` instead, switch to the container stack with
-`flynn stack set container`. See the [Docker](docker.md) documentation for
+`flynn stack:set container`. See the [Docker](docker.md) documentation for
 details.
 
 The buildpack can be manually specified in cases where auto-detection is not
@@ -84,8 +84,8 @@ To deploy a different branch of the same repository, create a new app using the
 same git repository but with different remotes:
 
 ```
-flynn create myapp-staging --remote staging
-flynn -a staging env set FOO=bar
+flynn apps:create myapp-staging --remote staging
+flynn -a staging env:set FOO=bar
 git push staging staging:master
 ```
 
@@ -143,16 +143,16 @@ form. The app Deploy page connects a repo and starts a deploy.
 
 You can get a list of an app's individual processes using `flynn ps`. Each job
 has a short name like `web.4821` (`<process type>.<number>`). Pass that name to
-`flynn kill` or `flynn log`. The cluster UUID still works if you have it.
+`flynn ps:kill` or `flynn log`. The cluster UUID still works if you have it.
 
 ```text
 # Get a list of processes
 $ flynn ps
-ID        TYPE  STATE  CREATED        RELEASE                               COMMAND
-web.4821  web   up     6 seconds ago  cf39a906-38d1-4393-a6b1-8ad2befe8142  /runner/init start web
+NAME      TYPE  STATE  CREATED        ID
+web.4821  web   up     6 seconds ago  host0-cf39a906-38d1-4393-a6b1-8ad2befe8142
 
 # Kill a process
-$ flynn kill web.4821
+$ flynn ps:kill web.4821
 Job web.4821 killed.
 ```
 
@@ -276,7 +276,7 @@ Do not terminate TLS for Postgres or MySQL. See
 [Databases — External TLS access](databases.html.md#external-tls-access).
 
 ```text
-flynn route update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --tls-cert cert.pem --tls-key cert.key
+flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --tls-cert cert.pem --tls-key cert.key
 ```
 
 The certificate file should contain PEM-encoded certificate blocks for the

@@ -25,10 +25,10 @@ script/bootstrap-flynn
 
 ### Run the tests
 
-Run the `flynn cluster add` command from the bootstrap output to add the cluster to your `~/.flynnrc` file, then run the tests:
+Run the `flynn cluster:add` command from the bootstrap output to add the cluster to your `~/.flynnrc` file, then run the tests:
 
 ```text
-flynn cluster add ...
+flynn cluster:add ...
 cd ~/go/src/github.com/flynn/flynn/test
 bin/flynn-test --flynnrc ~/.flynnrc --cli `pwd`/../cli/bin/flynn
 ```
@@ -99,7 +99,7 @@ curl -fsSL -o install-flynn https://github.com/randy-girard/flynn/releases/lates
 sudo bash install-flynn
 sudo systemctl start flynn-host
 CLUSTER_DOMAIN=ci.example.com flynn-host bootstrap
-flynn cluster add -p <tls-pin> default ci.example.com <controller-key>
+flynn cluster:add -p <tls-pin> default ci.example.com <controller-key>
 ```
 
 Create a directory to store CI build images (this should be on a fast disk to
@@ -127,13 +127,13 @@ add the necessary environment variables (assuming the Flynn CI cluster is
 configured as `flynn-ci` in your `~/.flynnrc`):
 
 ```
-flynn -c flynn-ci -a ci env set AUTH_KEY=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set BLOBSTORE_S3_CONFIG=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set BLOBSTORE_GCS_CONFIG=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set BLOBSTORE_AZURE_CONFIG=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set GITHUB_TOKEN=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set AWS_ACCESS_KEY_ID=xxxxxxxxxx
-flynn -c flynn-ci -a ci env set AWS_SECRET_ACCESS_KEY=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set AUTH_KEY=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set BLOBSTORE_S3_CONFIG=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set BLOBSTORE_GCS_CONFIG=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set BLOBSTORE_AZURE_CONFIG=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set GITHUB_TOKEN=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set AWS_ACCESS_KEY_ID=xxxxxxxxxx
+flynn -c flynn-ci -a ci env:set AWS_SECRET_ACCESS_KEY=xxxxxxxxxx
 ```
 
 scale up the `runner` process:
@@ -145,7 +145,7 @@ flynn -c flynn-ci -a ci scale runner=1
 add a route with the CI TLS key and certificate:
 
 ```
-flynn -c flynn-ci -a ci route add http -s ci-web -c <ci.crt> -k <ci.key> ci.example.com
+flynn -c flynn-ci -a ci route:add http -s ci-web -c <ci.crt> -k <ci.key> ci.example.com
 ```
 
 CI should now be up and running at `https://ci.example.com`.

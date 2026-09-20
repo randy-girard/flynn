@@ -149,11 +149,11 @@ After creating the S3 bucket and credentials, configure the blobstore to use it 
 the backend with bucket, region, and access credentials:
 
 ```text
-flynn -a blobstore env set BACKEND_S3MAIN="backend=s3 region=us-east-1 \
+flynn -a blobstore env:set BACKEND_S3MAIN="backend=s3 region=us-east-1 \
 bucket=flynnblobstore access_key_id=$AWS_ACCESS_KEY_ID \
 secret_access_key=$AWS_SECRET_ACCESS_KEY"
 
-flynn -a blobstore env set DEFAULT_BACKEND=s3main
+flynn -a blobstore env:set DEFAULT_BACKEND=s3main
 ```
 
 If the credentials are invalid, the first command will fail, and you can check the
@@ -185,10 +185,10 @@ After creating the Cloud Storage bucket and credentials, configure the blobstore
 to use it as the backend, with the bucket name and key file:
 
 ```text
-flynn -a blobstore env set BACKEND_GCSMAIN="backend=gcs bucket=flynnblobstore" \
+flynn -a blobstore env:set BACKEND_GCSMAIN="backend=gcs bucket=flynnblobstore" \
 BACKEND_GCSMAIN_KEY="$(cat Project-7633a787c43f.json)"
 
-flynn -a blobstore env set DEFAULT_BACKEND=gcsmain
+flynn -a blobstore env:set DEFAULT_BACKEND=gcsmain
 ```
 
 If the credentials are invalid, the first command will fail, and you can check the
@@ -208,10 +208,10 @@ account and container. After setting those up, you should have an account name,
 account key, and container name, which can be used to configure the backend:
 
 ```text
-flynn -a blobstore env set BACKEND_AZUREMAIN="backend=azure account_key=xxx \
+flynn -a blobstore env:set BACKEND_AZUREMAIN="backend=azure account_key=xxx \
 account_name=yyy container=flynnblobstore"
 
-flynn -a blobstore env set DEFAULT_BACKEND=azuremain
+flynn -a blobstore env:set DEFAULT_BACKEND=azuremain
 ```
 
 If the credentials are invalid, the first command will fail, and you can check the
@@ -352,7 +352,7 @@ the same promotion path.
 
 ### App Export
 
-To export a single app, run `flynn -a APPNAME export --file app.tar`. A file
+To export a single app, run `flynn -a APPNAME apps:export --file app.tar`. A file
 named `app.tar` will be created with the app configuration and image, along with
 a copy of all data stored in associated databases. The app export can be
 restored to the same cluster under a different name, or a different Flynn
@@ -360,7 +360,7 @@ cluster.
 
 ### App Import
 
-To import an app, run `flynn import --file app.tar`. This will create a new app
+To import an app, run `flynn apps:import --file app.tar`. This will create a new app
 on the cluster, import the configuration, create databases, and import the data
 from the exported app. If you'd like to provide a new name for the app, the
 `--name` flag may be specified. By default a new route is created based on the
@@ -377,7 +377,7 @@ To configure the keypair, set the `SSH_CLIENT_KEY` and `SSH_CLIENT_HOSTS`
 environment variables on the built-in `gitreceive` app:
 
 ```text
-flynn -a gitreceive env set SSH_CLIENT_HOSTS="$(ssh-keyscan -H github.com)"\
+flynn -a gitreceive env:set SSH_CLIENT_HOSTS="$(ssh-keyscan -H github.com)"\
    SSH_CLIENT_KEY="$(cat ~/.ssh/id_rsa)"
 ```
 
@@ -396,7 +396,7 @@ addresses that are not reserved for private use.
 The `$AUTH_KEY` may be retrieved with this command:
 
 ```text
-flynn -a status env get AUTH_KEY
+flynn -a status env:get AUTH_KEY
 ```
 
 ### OpenTelemetry (Grafana, Alloy, collector)
@@ -478,7 +478,7 @@ tarball with the `--tarball` flag.
 The `controller`, `router`, and `blobstore` components store data in a
 PostgreSQL cluster managed by Flynn.
 
-`flynn -a $APP_NAME pg psql` is **not** a public console. It is a controller
+`flynn -a $APP_NAME pg:psql` is **not** a public console. It is a controller
 API call (`flynn run` of `psql`) and is authorized like every other `flynn`
 command:
 
@@ -490,7 +490,7 @@ command:
 * **Dashboard users** (`flynn login`) only act on apps they were granted. The
   Team role (View=`app:read`, Deploy=`app:deploy`, Manage=`app:write`,
   Admin=`app:admin`, or a custom combination of function/action grants) is what the controller enforces
-  on every CLI command. They can `flynn pg psql` their own app's database when
+  on every CLI command. They can `flynn pg:psql` their own app's database when
   the role includes write-level access. They cannot open a console on
   `controller`, `blobstore`, `postgres`, or other system apps, even if a grant
   names those apps.
@@ -500,8 +500,8 @@ command:
   only to its own database; `PUBLIC` CONNECT is revoked, so one app's user
   cannot open another app's (or the controller's) database.
 
-User-app consoles: `flynn -a myapp pg psql`. Platform databases: cluster key
-only, `flynn -a controller pg psql` / `flynn -a blobstore pg psql`.
+User-app consoles: `flynn -a myapp pg:psql`. Platform databases: cluster key
+only, `flynn -a controller pg:psql` / `flynn -a blobstore pg:psql`.
 
 ## Updating
 
@@ -533,7 +533,7 @@ unavailable for a few seconds while they are updated.
 
 To perform an in-place update of **binaries on one host** (no other nodes, no container image rollout), run `flynn-host update`. A newer GitHub release always continues past the flynn-host re-exec (init, CLI, daemon restart, and—on a single-node cluster—image rollout) without `--force`. `--force` repeats an update when the host is already on that version. `flynn-host update --check` only reports whether a newer GitHub release exists; that lookup is cached in `~/.flynn/update-check-cache.json` for one hour (same file, TTL, and `FLYNN_UPDATE_CHECK_*` variables as `flynn update --check`). `--check --force` or `FLYNN_UPDATE_CHECK_TTL=0` refreshes the cache. Installing still fetches a live release.
 
-To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images. After system apps, the updater refreshes slugrunner on git/slug user apps that already have a release. Container-stack git deploys and `flynn docker:push` apps keep their own image artifacts (they are not rewritten to slugrunner, which would drop files like `/start.sh`). Apps created in the dashboard or with `flynn create` that have never been deployed are skipped; a missing release on a required system app still fails the update.
+To update **every host**—push new `flynn-host` binaries to all peers, pull image layers on each node, and deploy system apps—run `flynn-host update --all-nodes` (after taking a backup as recommended above). Use `flynn-host update --skip-images` to roll binaries out everywhere without touching images. After system apps, the updater refreshes slugrunner on git/slug user apps that already have a release. Container-stack git deploys and `flynn docker:push` apps keep their own image artifacts (they are not rewritten to slugrunner, which would drop files like `/start.sh`). Apps created in the dashboard or with `flynn apps:create` that have never been deployed are skipped; a missing release on a required system app still fails the update.
 
 When the update will pull container images, it first garbage-collects unused volumes (the same keep rules as `flynn-host volume:gc`: running jobs, controller-tracked volumes, and system images) and leftover image cache, then requires at least 5 GiB free on each host. Persistent database volumes the scheduler still tracks are not deleted. If a host is still short of space after that, the update stops before changing binaries so the cluster is not left half-upgraded.
 
@@ -571,8 +571,8 @@ replicates data from the Raft leader before starting to service operations.
 
 When the process is complete a `discoverd` deployment should be run to update
 the `DISCOVERD_PEERS` environment variable. You can retrieve the current value
-with `flynn -a discoverd env get DISCOVERD_PEERS`. Replace the address of the
-old peer with the new one and update the value with `flynn -a discoverd env set
+with `flynn -a discoverd env:get DISCOVERD_PEERS`. Replace the address of the
+old peer with the new one and update the value with `flynn -a discoverd env:set
 DISCOVERD_PEERS=$PEER_IPS`
 
 At this point the host has been replaced successfully and the cluster will
@@ -589,7 +589,7 @@ and new keys can be added. Keys are stored in the environment variable
     NEW_KEY=$(openssl rand -hex 16)
 
     # Add the new key alongside the existing key
-    flynn -a controller env set -t web AUTH_KEY=$NEW_KEY,$(flynn -a controller env get AUTH_KEY)
+    flynn -a controller env:set -t web AUTH_KEY=$NEW_KEY,$(flynn -a controller env:get AUTH_KEY)
 
 To rotate an authentication key:
 
@@ -597,20 +597,20 @@ To rotate an authentication key:
     NEW_KEY=$(openssl rand -hex 16)
 
     # Add both the old and new keys to just the web process type
-    flynn -a controller env set -t web AUTH_KEY=$NEW_KEY,$(flynn -a controller env get AUTH_KEY)
+    flynn -a controller env:set -t web AUTH_KEY=$NEW_KEY,$(flynn -a controller env:get AUTH_KEY)
 
     # Update internal apps to use the new key
-    flynn -a gitreceive env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a tarreceive env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a taffy env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a redis env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a mariadb env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a mongodb env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a kafka env set CONTROLLER_KEY=$NEW_KEY
-    flynn -a clickhouse env set CONTROLLER_KEY=$NEW_KEY
+    flynn -a gitreceive env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a tarreceive env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a taffy env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a redis env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a mariadb env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a mongodb env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a kafka env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a clickhouse env:set CONTROLLER_KEY=$NEW_KEY
 
     # Set the global key to be the new key
-    flynn -a controller env set AUTH_KEY=$NEW_KEY
+    flynn -a controller env:set AUTH_KEY=$NEW_KEY
 
     # Unset the web process-specific key
-    flynn -a controller env unset -t web AUTH_KEY
+    flynn -a controller env:unset -t web AUTH_KEY
