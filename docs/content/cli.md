@@ -111,7 +111,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
 | `pg:psql` / `pg:dump` / `pg:restore` | Postgres console, dump, restore (built in) |
 | `mysql:cli` / `mongodb:cli` / `redis:cli` (+ `:dump` / `:restore`) | Consoles, dump, restore (plugin commands after install) |
-| `kafka:topics` / `kafka:topics:create` / `kafka:consumer-groups:create` | Topics and consumer groups (after plugin install; list groups with the space form `flynn kafka consumer-groups`, see [Kafka](databases/kafka.md#managing-consumer-groups)) |
+| `kafka:topics` / `kafka:topics:create` / `kafka:consumer-groups` / `kafka:consumer-groups:create` | Topics and consumer groups (after plugin install; see [Kafka](databases/kafka.md#managing-consumer-groups)) |
 | `clickhouse:cli` / `clickhouse:databases` / `clickhouse:databases:create` | Databases and client (after plugin install) |
 | `scheduler:list` / `scheduler:add` / `scheduler:remove` / … | Cron and interval jobs for an app (after the scheduler plugin is installed) |
 | `log-sink` / `log-sink:add` / `log-sink:remove` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin). `logsink` is an alias. |
