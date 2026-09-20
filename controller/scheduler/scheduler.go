@@ -100,6 +100,12 @@ type Scheduler struct {
 	// were garbage-collected on the host but still exist in the scheduler.
 	hostVolumeIDs map[string]map[string]struct{}
 
+	// volumeMisses counts consecutive SyncVolumes polls where a tracked
+	// volume was absent from the host listing. A single miss after host
+	// restart is often an incomplete ListVolumes (ZFS still importing);
+	// destroying then makes HA postgres deploys allocate empty datasets.
+	volumeMisses map[string]int
+
 	rectifyBatch map[utils.FormationKey]struct{}
 
 	// formationlessJobs is a map of formation keys to a list of jobs
@@ -132,6 +138,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		jobs:                  make(map[string]*Job),
 		volumes:               make(map[string]*Volume),
 		hostVolumeIDs:         make(map[string]map[string]struct{}),
+		volumeMisses:          make(map[string]int),
 		services:              make(map[string]*Service),
 		routes:                make(map[string]map[string]struct{}),
 		formations:            make(Formations),
@@ -832,9 +839,12 @@ func (s *Scheduler) SyncVolumes() {
 	// volumes tracked by the scheduler but missing from the host were likely
 	// garbage-collected out of band; mark them destroyed so placement will
 	// allocate a fresh dataset instead of failing with "required volume ...
-	// does not exist".
+	// does not exist". Require two consecutive misses and no live holder:
+	// a single incomplete ListVolumes after flynn-host restart would otherwise
+	// destroy postgres data volumes and force empty replica datasets.
 	for id, vol := range s.volumes {
 		if vol.GetState() == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
+			s.noteVolumePresentOnHost(id)
 			continue
 		}
 		if vol.HostID == "" {
@@ -845,6 +855,18 @@ func (s *Scheduler) SyncVolumes() {
 			continue
 		}
 		if _, exists := set[id]; exists {
+			s.noteVolumePresentOnHost(id)
+			continue
+		}
+		if s.volumeHeldByLiveJob(vol) {
+			log.Warn("volume missing on host listing but still held by a live job, not destroying",
+				"vol.id", id, "host.id", vol.HostID, "job.id", *vol.JobID)
+			s.noteVolumePresentOnHost(id)
+			continue
+		}
+		if !s.noteVolumeMissingFromHost(id) {
+			log.Warn("volume missing on host, waiting for a second miss before destroying",
+				"vol.id", id, "host.id", vol.HostID)
 			continue
 		}
 		log.Warn("volume missing on host, marking destroyed", "vol.id", id, "host.id", vol.HostID)
@@ -1141,9 +1163,14 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
-		// skip volumes that were garbage-collected on the host but are
-		// still present in the scheduler's in-memory state
-		if vol.HostID != "" && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
+		// skip ephemeral volumes that were garbage-collected on the host
+		// but are still present in the scheduler's in-memory state.
+		// Persistent volumes are still adopted: a single incomplete
+		// ListVolumes after host restart must not force a new empty dataset
+		// (HA sirenia would then never catch up). If the dataset is truly
+		// gone, AddJob fails with "required volume ... does not exist" and
+		// StartJob destroys then retries.
+		if vol.HostID != "" && vol.DeleteOnStop && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
 			continue
 		}
 
@@ -1236,6 +1263,38 @@ func (s *Scheduler) releaseKnownForApp(appID, releaseID string) bool {
 	return s.formations.Get(appID, releaseID) != nil
 }
 
+func (s *Scheduler) volumeHeldByLiveJob(vol *Volume) bool {
+	if vol == nil || vol.JobID == nil || *vol.JobID == "" {
+		return false
+	}
+	job, ok := s.jobs[*vol.JobID]
+	if !ok {
+		return false
+	}
+	switch job.State {
+	case JobStateStopped, JobStateBlocked:
+		return false
+	default:
+		return true
+	}
+}
+
+func (s *Scheduler) noteVolumePresentOnHost(id string) {
+	if s.volumeMisses != nil {
+		delete(s.volumeMisses, id)
+	}
+}
+
+// noteVolumeMissingFromHost records a ListVolumes miss. It reports true when
+// the volume has been missing for two consecutive SyncVolumes polls.
+func (s *Scheduler) noteVolumeMissingFromHost(id string) bool {
+	if s.volumeMisses == nil {
+		s.volumeMisses = make(map[string]int)
+	}
+	s.volumeMisses[id]++
+	return s.volumeMisses[id] >= 2
+}
+
 func (s *Scheduler) volumeExistsOnHost(hostID, volumeID string) bool {
 	if set, ok := s.hostVolumeIDs[hostID]; ok {
 		if _, exists := set[volumeID]; exists {
@@ -1321,11 +1380,16 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 			// look for an existing, unassigned volume
 			vol := s.findVolume(req.Job, &volReq)
 			if vol != nil && vol.HostID != "" && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
-				log.Warn("stale volume missing on host, marking destroyed", "vol.id", vol.ID, "host.id", vol.HostID)
-				vol.SetState(ct.VolumeStateDestroyed)
-				vol.JobID = nil
-				s.persistVolume(vol)
-				vol = nil
+				if vol.DeleteOnStop {
+					log.Warn("stale volume missing on host, marking destroyed", "vol.id", vol.ID, "host.id", vol.HostID)
+					vol.SetState(ct.VolumeStateDestroyed)
+					vol.JobID = nil
+					s.persistVolume(vol)
+					vol = nil
+				} else {
+					log.Warn("persistent volume missing from host listing, placing on recorded host anyway",
+						"vol.id", vol.ID, "host.id", vol.HostID)
+				}
 			}
 
 			if vol == nil {

@@ -1129,18 +1129,31 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
 	c.Assert(got, IsNil)
 
-	// volumes tracked by the scheduler but absent from the host (for
-	// example after out-of-band volume gc) must not be adopted
+	// persistent volumes still on the scheduler but missing from a single
+	// host listing (incomplete ListVolumes after restart) must be adopted
+	// so HA sirenia does not allocate an empty replica dataset.
 	stale := addVolume("vol-stale", testAppID, oldReleaseID, "postgres", "/data")
 	stale.HostID = testHostID
 	s.hostVolumeIDs = map[string]map[string]struct{}{
 		testHostID: {},
 	}
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-stale")
+
+	// ephemeral volumes absent from the host must not be adopted
+	delete(s.volumes, "vol-stale")
+	ephemMissing := addVolume("vol-ephem-missing", testAppID, oldReleaseID, "postgres", "/data")
+	ephemMissing.HostID = testHostID
+	ephemMissing.DeleteOnStop = true
+	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
 	c.Assert(got, IsNil)
 
 	// a volume created since the last SyncVolumes is missing from the
 	// hostVolumeIDs cache but still present on the host; adopt it.
+	delete(s.volumes, "vol-ephem-missing")
+	stale = addVolume("vol-stale", testAppID, oldReleaseID, "postgres", "/data")
+	stale.HostID = testHostID
 	hc := NewFakeHostClient(testHostID, false)
 	hc.PutVolume(&volume.Info{ID: "vol-stale"})
 	s.hosts = map[string]*Host{testHostID: NewHost(hc, s.logger)}
@@ -1411,4 +1424,62 @@ func (TestSuite) TestInternalStateCopiesJobs(c *C) {
 	}
 	orig.State = JobStateStopped
 	c.Assert(got.State, Equals, JobStateStarting)
+}
+
+func (TestSuite) TestNoteVolumeMissingFromHostRequiresTwoMisses(c *C) {
+	s := &Scheduler{volumeMisses: make(map[string]int)}
+	c.Assert(s.noteVolumeMissingFromHost("vol-1"), Equals, false)
+	c.Assert(s.noteVolumeMissingFromHost("vol-1"), Equals, true)
+	s.noteVolumePresentOnHost("vol-1")
+	c.Assert(s.noteVolumeMissingFromHost("vol-1"), Equals, false)
+}
+
+func (TestSuite) TestVolumeHeldByLiveJob(c *C) {
+	jobID := "job-1"
+	s := &Scheduler{jobs: make(Jobs)}
+	vol := &Volume{Volume: ct.Volume{JobID: &jobID}}
+	c.Assert(s.volumeHeldByLiveJob(vol), Equals, false)
+	s.jobs[jobID] = &Job{ID: jobID, State: JobStateRunning}
+	c.Assert(s.volumeHeldByLiveJob(vol), Equals, true)
+	s.jobs[jobID].State = JobStateStopping
+	c.Assert(s.volumeHeldByLiveJob(vol), Equals, true)
+	s.jobs[jobID].State = JobStateStopped
+	c.Assert(s.volumeHeldByLiveJob(vol), Equals, false)
+}
+
+func (TestSuite) TestSyncVolumesDoesNotDestroyOnFirstMissOrLiveJob(c *C) {
+	leader := false
+	s := &Scheduler{
+		ControllerClient: NewFakeControllerClient(),
+		volumes:          make(map[string]*Volume),
+		jobs:             make(Jobs),
+		hostVolumeIDs:    make(map[string]map[string]struct{}),
+		volumeMisses:     make(map[string]int),
+		logger:           log15.New(),
+		isLeader:         &leader,
+	}
+	hc := NewFakeHostClient(testHostID, false)
+	s.hosts = map[string]*Host{testHostID: NewHost(hc, s.logger)}
+	jobID := "pg-1"
+	s.jobs[jobID] = &Job{ID: jobID, State: JobStateRunning}
+	vol := &Volume{Volume: ct.Volume{
+		ID:        "vol-pg",
+		HostID:    testHostID,
+		AppID:     testAppID,
+		JobID:     &jobID,
+		State:     ct.VolumeStateCreated,
+		VolumeReq: ct.VolumeReq{Path: "/data"},
+	}}
+	s.volumes[vol.ID] = vol
+
+	s.SyncVolumes()
+	c.Assert(vol.GetState(), Equals, ct.VolumeStateCreated)
+	s.SyncVolumes()
+	c.Assert(vol.GetState(), Equals, ct.VolumeStateCreated)
+
+	s.jobs[jobID].State = JobStateStopped
+	s.SyncVolumes()
+	c.Assert(vol.GetState(), Equals, ct.VolumeStateCreated)
+	s.SyncVolumes()
+	c.Assert(vol.GetState(), Equals, ct.VolumeStateDestroyed)
 }
