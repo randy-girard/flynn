@@ -77,8 +77,12 @@ need 'userns-ok' \
   "user-ns flynn run must see container 0, host uid >= 1000000, and root-owned image files"
 need 'cli_userns_host' \
   "CLI step must check the host uid_map of a running user job"
-need 'userns-host-ok' \
-  "host-side probe must confirm user jobs are remapped and postgres is not"
+need 'userns-user-ok' \
+  "host-side probe must confirm user jobs are remapped"
+need 'userns-sys-ok' \
+  "host-side probe must confirm postgres stays in the host user ns"
+need 'flynn-controller.type' \
+  "userns-host must pick the formation web job, not a just-exited flynn run"
 need '4294967295' \
   "system jobs must keep the host identity uid_map"
 need 'net-isolate-peer' \
@@ -95,7 +99,9 @@ need 'docker-cli-ps" "web"' \
   "git-push Dockerfile CLI ps must match process type web"
 need 'docker-cli-scale" "web=' \
   "git-push Dockerfile CLI scale must show web="
-need 'awk .NF{print; exit}' \
+need '/\^\$\{node\}-' \
+  "userns-host must probe /proc on the host that owns the job"
+need 'print; exit' \
   "userns-host must not use head -1 under pipefail (SIGPIPE rc=141)"
 need 'docker-cli-log' \
   "CLI step must read Dockerfile app logs"

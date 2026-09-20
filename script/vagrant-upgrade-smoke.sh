@@ -4273,41 +4273,78 @@ cli_run_job() {
 
 # User jobs must be in a user namespace (container 0 → host uid ≥ 1_000_000).
 # System jobs (postgres) stay in the host user ns so volumes/ZFS keep UID 0.
+# Pick the formation web job on a host that actually has it: flynn-host ps is
+# newest-first, so a just-finished `flynn run` can win and then vanish from
+# /proc (seen 2026-09-20 3-node pre-upgrade). Peer hosts may hold the web
+# job or the postgres process, so try every node.
 cli_userns_host() {
   local label=$1
-  local rc=0 out
-  out="$(node_root_script node1 <<EOF
+  local node attempt rc out snippet user_ok=0 sys_ok=0
+  for attempt in 1 2 3 4 5 6; do
+    user_ok=0
+    for node in "${NODES[@]}"; do
+      rc=0
+      out="$(node_root_script "${node}" <<EOF
 set -eu
-# flynn-host ps/inspect write extra lines after awk exits; pipefail would
-# turn that SIGPIPE into rc=141 even when the checks pass.
-id=\$(flynn-host ps -q -f '{{if eq (metadata "flynn-controller.app_name") "${DOCKER_APP_NAME}"}}{{.Job.ID}}{{end}}' | awk 'NF{print; exit}')
+id=\$(flynn-host ps -q -f '{{if and (eq (metadata "flynn-controller.app_name") "${DOCKER_APP_NAME}") (eq (metadata "flynn-controller.type") "web")}}{{.Job.ID}}{{end}}' | awk '/^${node}-/{print; exit}')
 test -n "\$id"
 pid=\$(flynn-host inspect "\$id" | awk '\$1=="PID"{print \$2; exit}')
 test -n "\$pid"
+test -f /proc/\$pid/uid_map
 read c h s < /proc/\$pid/uid_map
 test "\$c" = 0
 test "\$h" -ge 1000000
 test "\$s" = 65536
 uid=\$(awk '/^Uid:/{print \$2}' /proc/\$pid/status)
 test "\$uid" -ge 1000000
-sysid=\$(flynn-host ps -q -f '{{if eq (metadata "flynn-controller.app_name") "postgres"}}{{.Job.ID}}{{end}}' | awk 'NF{print; exit}')
-test -n "\$sysid"
-syspid=\$(flynn-host inspect "\$sysid" | awk '\$1=="PID"{print \$2; exit}')
-test -n "\$syspid"
-read sc sh ss < /proc/\$syspid/uid_map
-test "\$sc" = 0
-test "\$sh" = 0
-test "\$ss" = 4294967295
-echo userns-host-ok
+echo userns-user-ok
 EOF
-)" || rc=$?
-  if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q userns-host-ok; then
-    record_check "${label}" "userns-host" "PASS" "$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+      )" || rc=$?
+      if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q userns-user-ok; then
+        user_ok=1
+        break
+      fi
+    done
+    [[ "${user_ok}" -eq 1 ]] && break
+    snippet="$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} userns-host: retry ${attempt}/6 user job (${snippet})"
+    sleep 2
+  done
+  for attempt in 1 2 3 4 5 6; do
+    sys_ok=0
+    for node in "${NODES[@]}"; do
+      rc=0
+      out="$(node_root_script "${node}" <<EOF
+set -eu
+id=\$(flynn-host ps -q -f '{{if eq (metadata "flynn-controller.app_name") "postgres"}}{{.Job.ID}}{{end}}' | awk '/^${node}-/{print; exit}')
+test -n "\$id"
+pid=\$(flynn-host inspect "\$id" | awk '\$1=="PID"{print \$2; exit}')
+test -n "\$pid"
+test -f /proc/\$pid/uid_map
+read c h s < /proc/\$pid/uid_map
+test "\$c" = 0
+test "\$h" = 0
+test "\$s" = 4294967295
+echo userns-sys-ok
+EOF
+      )" || rc=$?
+      if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q userns-sys-ok; then
+        sys_ok=1
+        break
+      fi
+    done
+    [[ "${sys_ok}" -eq 1 ]] && break
+    snippet="$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} userns-host: retry ${attempt}/6 postgres job (${snippet})"
+    sleep 2
+  done
+  if [[ "${user_ok}" -eq 1 && "${sys_ok}" -eq 1 ]]; then
+    record_check "${label}" "userns-host" "PASS" "user-ns remapped; postgres host ns"
     echo "cli ${label} userns-host: PASS"
     return 0
   fi
-  record_check "${label}" "userns-host" "FAIL" "rc=${rc} $(echo "${out}" | tr '\n' ' ' | cut -c1-120)"
-  echo "cli ${label} userns-host: FAIL rc=${rc} ${out}" >&2
+  record_check "${label}" "userns-host" "FAIL" "user_ok=${user_ok} sys_ok=${sys_ok} ${out}"
+  echo "cli ${label} userns-host: FAIL user_ok=${user_ok} sys_ok=${sys_ok} ${out}" >&2
   return 1
 }
 
