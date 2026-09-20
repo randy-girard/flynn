@@ -29,8 +29,8 @@ Run the `flynn cluster:add` command from the bootstrap output to add the cluster
 
 ```text
 flynn cluster:add ...
-cd ~/go/src/github.com/flynn/flynn/test
-bin/flynn-test --flynnrc ~/.flynnrc --cli `pwd`/../cli/bin/flynn
+# from the repository root; script/build-flynn puts both binaries in build/bin
+build/bin/flynn-test --flynnrc ~/.flynnrc --cli `pwd`/build/bin/flynn
 ```
 
 ## Auto booting clusters
