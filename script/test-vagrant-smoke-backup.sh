@@ -82,6 +82,8 @@ need 'post-restore' \
   "restore checks must be recorded as a post-restore phase"
 need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
+need 'umount -l' \
+  "smoke must unmount overlay/squashfs under /var/lib/flynn before install --clean"
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
 need 'wait_sirenia_ha_if_cluster "after restore"' \

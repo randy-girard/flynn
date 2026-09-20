@@ -2256,6 +2256,13 @@ extra_args=()
 if [[ -e /usr/local/bin/flynn-host || -d /var/lib/flynn ]]; then
   echo "existing Flynn install detected on ${node}; reinstalling with --clean"
   extra_args+=(--clean)
+  # Overlay/squashfs mounts survive flynn-host stop; --clean rm -rf then EROFS/EBUSY.
+  if [[ -r /proc/mounts ]]; then
+    while read -r mp; do
+      [[ -z "${mp}" ]] && continue
+      umount -l "${mp}" 2>/dev/null || umount "${mp}" 2>/dev/null || true
+    done < <(awk '$2 ~ /^\/var\/lib\/flynn(\/|$)/ { print $2 }' /proc/mounts | sort -r)
+  fi
 fi
 bash "\${install_script}" --yes --no-ntp "\${extra_args[@]}" --tarball "\${tarball}"
 # EnableJobIsolation runs in the node flynn-host process (not the host squashfs).
