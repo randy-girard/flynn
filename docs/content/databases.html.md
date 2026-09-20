@@ -34,7 +34,7 @@ resolve from user jobs.
 | [`postgres`](databases/postgres.md) | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain |
 | [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
 | [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
-| [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process, ephemeral |
+| [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process; AOF on a volume, no replicas, not in cluster backup |
 | [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
 | [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
 

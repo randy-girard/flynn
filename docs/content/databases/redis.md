@@ -16,8 +16,10 @@ flynn resource:add redis
 ```
 
 The plugin provides Redis from the Ubuntu 24.04 package set in a
-single process configuration. The data stored in this process is ephemeral and
-is intended for caching and development use.
+single process configuration. Redis writes an append-only file on a persistent
+volume, so data survives job restarts and `flynn-host update`, but there are no
+replicas and the volume is **not** part of `flynn-host backup`. Treat the data
+as ephemeral: caching, development, and test use.
 
 ## Usage
 
