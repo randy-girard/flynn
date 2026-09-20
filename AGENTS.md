@@ -1,6 +1,6 @@
 # Agent notes
 
-This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branch is `develop`. Host OS is Ubuntu 24.04; Go is 1.24 with `-mod=vendor`.
+This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branch is `main` (pull requests target `main`). Host OS is Ubuntu 24.04; Go is 1.24 with `-mod=vendor`.
 
 ## Colon commands
 

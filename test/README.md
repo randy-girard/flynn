@@ -80,7 +80,7 @@ sudo ./flynn-test \
 
 ## CI
 
-Pull requests against `develop` run the [Unit tests](../.github/workflows/unit-tests.yml)
+Pull requests against `main` run the [Unit tests](../.github/workflows/unit-tests.yml)
 GitHub Actions workflow (`gofmt`, `bats script/test`, `make test-unit-root-native`).
 Cluster acceptance is local: [Development — tests](../docs/content/development.html.md#tests)
 and `script/vagrant-upgrade-smoke.sh`.

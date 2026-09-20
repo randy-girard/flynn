@@ -142,7 +142,7 @@ $ flynn-host collect-debug-info --tarball
 
 ## Tests
 
-There are several layers. CI on pull requests to `develop` / `main` runs
+There are several layers. CI on pull requests to `main` runs
 **gofmt**, **bats**, and the **Linux unit suite**. Integration tests and Vagrant
 smoke are local (or a dedicated machine). They are the right gate for scheduler,
 network, datastore, upgrade, and CLI behavior.
@@ -155,7 +155,7 @@ $ util/commit-validator/validate-gofmt
 
 CI, `make test-unit` / `script/run-unit-tests`, and
 `script/vagrant-upgrade-smoke.sh` all run this check. It compares against the
-PR base (or `origin/develop` locally) so you do not fail on unrelated
+PR base (or `origin/main` locally) so you do not fail on unrelated
 historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
 
 Install the same check as **pre-commit** and **pre-push** hooks so unformatted
@@ -353,8 +353,8 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
 
 ## Pull requests
 
-Target **`develop`**. Sign off commits (`git commit -s`). Include tests, or
-explain why not.
+Target **`main`**. Use Conventional Commit subjects and plain `git commit` (no
+DCO sign-off). Include tests, or explain why not.
 
 * Pure Go / CLI: `make test-unit` (and gofmt) is the minimum
 * Scripts under `script/`: bats and/or the matching `script/test-*.sh`
