@@ -6,13 +6,13 @@ layout: docs
 # MongoDB
 
 MongoDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
-cluster host, then provision from an app. See [Plugins](plugins.md).
+cluster host, then provision from an app. See [Plugins](../plugins.md).
 
 ```text
 sudo flynn-host plugin:install mongodb --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mongodb.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-mongodb
-flynn resource add mongodb
+flynn resource:add mongodb
 ```
 
 The plugin provides MongoDB 7.0 in a highly-available configuration with
@@ -30,7 +30,7 @@ MongoDB is available after the operator installs the plugin. After you create
 an app, provision a database with:
 
 ```text
-flynn resource add mongodb
+flynn resource:add mongodb
 ```
 
 This will provision a database on the MongoDB cluster and configure your
@@ -42,12 +42,16 @@ provision a database, MongoDB will be started and configured.
 ### Connecting to the database
 
 Provisioning the database will add a few environment variables to your app
-release. `MONGO_HOST`, `MONGO_USER`, `MONGO_PWD`, and `MONGO_DATABASE` provide
-connection details for the database and are used automatically by many MongoDB
-clients.
+release. `MONGO_HOST`, `MONGO_PORT`, `MONGO_USER`, `MONGO_PWD`, and
+`MONGO_DATABASE` provide connection details for the database and are used
+automatically by many MongoDB clients. `FLYNN_MONGO` is the name of the
+MongoDB app.
 
 Flynn will also create the `DATABASE_URL` environment variable which is utilized
-by some frameworks to configure database connections.
+by some frameworks to configure database connections. TLS is on by default
+(`MONGO_TLS_ENABLED=true`, `DATABASE_URL` carries `tls=true`); the appliance
+CA is in `MONGO_TRUSTED_CERT`. `mongod` runs in `preferTLS` mode, so
+replication and older in-cluster clients can still connect without TLS.
 
 ### Connecting to a console
 
@@ -106,15 +110,15 @@ flynn resource:expose mongodb
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-Default TLS mode is passthrough so a TLS-enabled `mongod` can complete the
-handshake. If the plugin is still plaintext, use
-`flynn resource:expose mongodb --auto-tls` (router terminate) until the
-appliance serves TLS itself.
+Default TLS mode is passthrough so `mongod` completes the TLS handshake
+itself. External clients connect with `tls=true` and trust
+`MONGO_TRUSTED_CERT` (skip hostname verification if the route hostname is not
+on the certificate).
 
 You can still create the route yourself:
 
 ```text
-flynn -a mongodb route add tcp --service mongodb --leader --domain mongodb.example.com --tls-mode passthrough
+flynn -a mongodb route:add tcp --service mongodb --leader --domain mongodb.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

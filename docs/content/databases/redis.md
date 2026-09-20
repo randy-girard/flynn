@@ -6,13 +6,13 @@ layout: docs
 # Redis
 
 Redis is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
-cluster host, then provision from an app. See [Plugins](plugins.md).
+cluster host, then provision from an app. See [Plugins](../plugins.md).
 
 ```text
 sudo flynn-host plugin:install redis --ref v20260914.0.0
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 sudo flynn-host plugin:install ../flynn-plugin-redis
-flynn resource add redis
+flynn resource:add redis
 ```
 
 The plugin provides Redis from the Ubuntu 24.04 package set in a
@@ -27,7 +27,7 @@ Redis is available after the operator installs the plugin. After you create
 an app, provision a server with:
 
 ```text
-flynn resource add redis
+flynn resource:add redis
 ```
 
 This will provision a Redis server as a Flynn app and configure your application
@@ -37,10 +37,13 @@ to connect to it.
 
 Provisioning the database will add a few environment variables to your app
 release. `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` provide connection
-details for the database.
+details for the database. `FLYNN_REDIS` is the name of the Redis app.
 
 Flynn will also create the `REDIS_URL` environment variable which is utilized
-by some libraries to configure connections.
+by some libraries to configure connections. TLS on 6379 is on by default
+(`REDIS_TLS_ENABLED=true`), so `REDIS_URL` uses the `rediss://` scheme and the
+appliance CA is in `REDIS_TRUSTED_CERT`. The plaintext port is disabled while
+TLS is on; use `rediss://` or `redis-cli --tls`.
 
 ### Connecting to a console
 
@@ -70,14 +73,15 @@ sudo flynn-host firewall:expose PORT   # on every host
 ```
 
 The default hostname is the Redis app name on the cluster domain (from
-`FLYNN_REDIS`). Default TLS mode is passthrough. If the Redis plugin is still
-plaintext, use `flynn resource:expose redis --auto-tls` until the appliance
-serves TLS.
+`FLYNN_REDIS`). Default TLS mode is passthrough: the appliance already speaks
+TLS on 6379, so external clients connect with TLS and trust
+`REDIS_TRUSTED_CERT` (skip hostname verification if the route hostname is not
+on the certificate).
 
 You can still create the route yourself:
 
 ```text
-flynn -a $(flynn env get FLYNN_REDIS) route add tcp --service $(flynn env get FLYNN_REDIS) --leader --domain redis.example.com --tls-mode passthrough
+flynn -a $(flynn env:get FLYNN_REDIS) route:add tcp --service $(flynn env:get FLYNN_REDIS) --leader --domain redis.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

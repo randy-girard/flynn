@@ -6,13 +6,13 @@ layout: docs
 # Kafka
 
 Kafka is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
-cluster host, then provision from an app. See [Plugins](plugins.md).
+cluster host, then provision from an app. See [Plugins](../plugins.md).
 
 ```text
 sudo flynn-host plugin:install kafka --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-kafka.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-kafka
-flynn resource add kafka
+flynn resource:add kafka
 ```
 
 The plugin provisions an [Apache Kafka](https://kafka.apache.org) cluster that
@@ -33,7 +33,7 @@ Kafka is available after the operator installs the plugin. After you create an
 app, provision a cluster with:
 
 ```text
-flynn resource add kafka
+flynn resource:add kafka
 ```
 
 This provisions a Kafka cluster as a Flynn app (three brokers, or a single
@@ -85,7 +85,7 @@ TLS is enabled by default. To disable it cluster-wide, set
 `KAFKA_TLS_ENABLED=false` on the `kafka` system app before provisioning:
 
 ```text
-flynn -a kafka env set KAFKA_TLS_ENABLED=false
+flynn -a kafka env:set KAFKA_TLS_ENABLED=false
 ```
 
 ## Managing topics
@@ -156,7 +156,7 @@ break that mutual TLS.
 You can still create the route yourself:
 
 ```text
-flynn -a $(flynn env get FLYNN_KAFKA) route add tcp --service $(flynn env get FLYNN_KAFKA) --leader --domain kafka.example.com --tls-mode passthrough
+flynn -a $(flynn env:get FLYNN_KAFKA) route:add tcp --service $(flynn env:get FLYNN_KAFKA) --leader --domain kafka.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

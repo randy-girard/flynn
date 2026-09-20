@@ -6,13 +6,13 @@ layout: docs
 # ClickHouse
 
 ClickHouse is a Flynn **plugin** (not part of the bootstrap tarball). Install it
-on a cluster host, then provision from an app. See [Plugins](plugins.md).
+on a cluster host, then provision from an app. See [Plugins](../plugins.md).
 
 ```text
 sudo flynn-host plugin:install clickhouse --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-clickhouse.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-clickhouse
-flynn resource add clickhouse
+flynn resource:add clickhouse
 ```
 
 The plugin provisions a [ClickHouse](https://clickhouse.com) cluster with
@@ -32,7 +32,7 @@ ClickHouse is available after the operator installs the plugin. After you create
 an app, provision a cluster with:
 
 ```text
-flynn resource add clickhouse
+flynn resource:add clickhouse
 ```
 
 This provisions a ClickHouse cluster as a Flynn app and configures your
@@ -42,18 +42,24 @@ application to connect to it.
 
 Provisioning adds several environment variables to your app release:
 
-* `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients.
-* `CLICKHOUSE_HTTP_URL` — HTTP interface URL.
-* `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT` — the discoverd host and native port.
-* `CLICKHOUSE_HTTP_PORT` — the HTTP port (8123).
+* `FLYNN_CLICKHOUSE` — the name of the ClickHouse app.
+* `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients
+  (`clickhouses://` when TLS is on, the default).
+* `CLICKHOUSE_HTTP_URL` — HTTP interface URL (`https://` when TLS is on).
+* `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT` — the discoverd host and native port
+  (9440 with TLS; 9000 when `CLICKHOUSE_TLS_ENABLED=false`).
+* `CLICKHOUSE_HTTP_PORT` — the HTTP port (8443 with TLS; 8123 without).
 * `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` — credentials for the `default` user.
 * `CLICKHOUSE_DATABASE` — the built-in `default` database.
 * `CLICKHOUSE_CLUSTER` — the cluster name (`flynn`) used for `ON CLUSTER` DDL.
 * `CLICKHOUSE_REPLICA_COUNT` — the number of replicas in the cluster.
+* `CLICKHOUSE_TLS_ENABLED`, `CLICKHOUSE_TRUSTED_CERT` — TLS flag and the
+  appliance CA (PEM). Replica-to-replica traffic stays on plaintext 9000/8123.
 
 ### Connecting to a console
 
-To connect to a console for the cluster, run `flynn clickhouse client`. This
+To connect to a console for the cluster, run `flynn clickhouse:cli` (alias
+`flynn clickhouse client`). This
 does not require the ClickHouse client to be installed locally or firewall or
 security changes, as it runs in a container on the Flynn cluster.
 
@@ -92,14 +98,15 @@ flynn resource:expose clickhouse
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-Default TLS mode is passthrough. If the plugin is still plaintext on the native
-port, use `flynn resource:expose clickhouse --auto-tls` until the appliance
-serves TLS.
+Default TLS mode is passthrough: the appliance serves TLS on the native port
+9440, so external clients use `clickhouse-client --secure --port PORT` and trust
+`CLICKHOUSE_TRUSTED_CERT` (skip hostname verification if the route hostname is
+not on the certificate).
 
 You can still create the route yourself:
 
 ```text
-flynn -a $(flynn env get FLYNN_CLICKHOUSE) route add tcp --service $(flynn env get FLYNN_CLICKHOUSE) --leader --domain clickhouse.example.com --tls-mode passthrough
+flynn -a $(flynn env:get FLYNN_CLICKHOUSE) route:add tcp --service $(flynn env:get FLYNN_CLICKHOUSE) --leader --domain clickhouse.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

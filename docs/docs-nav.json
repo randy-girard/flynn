@@ -9,7 +9,7 @@
     { "title": "Apps", "path": "content/apps.md" },
     { "title": "Databases", "path": "content/databases.html.md", "children": [
           { "title": "PostgreSQL", "path": "content/databases/postgres.md" },
-          { "title": "MySQL", "path": "content/databases/mysql.md" },
+          { "title": "MariaDB", "path": "content/databases/mysql.md" },
           { "title": "MongoDB", "path": "content/databases/mongodb.md" },
           { "title": "Redis", "path": "content/databases/redis.md" },
           { "title": "Kafka", "path": "content/databases/kafka.md" },
@@ -24,6 +24,7 @@
       { "title": "Ruby", "path": "content/languages/ruby.md" }
     ] },
     { "title": "Docker", "path": "content/docker.md" },
+    { "title": "Plugins", "path": "content/plugins.md" },
     { "title": "Command Line Interface", "path": "content/cli.md" }
   ] },
   { "title": "Operating", "children": [

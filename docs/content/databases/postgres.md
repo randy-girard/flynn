@@ -22,7 +22,7 @@ Postgres comes ready to go as soon as you've installed Flynn. After you create
 an app, you can provision a database for your app by running:
 
 ```text
-flynn resource add postgres
+flynn resource:add postgres
 ```
 
 This will provision a database on the Postgres cluster and configure your
@@ -72,10 +72,10 @@ prefer a VPN when you can. See
 
 ### Connecting to a console
 
-To connect to a `psql` console for **your app's** database, run `flynn pg psql`.
+To connect to a `psql` console for **your app's** database, run `flynn pg:psql`.
 This does not require the Postgres client locally; it runs in a container on
 the cluster. It uses the same controller credential as other `flynn` commands:
-the cluster key from `flynn cluster add`, or a dashboard login that was granted
+the cluster key from `flynn cluster:add`, or a dashboard login that was granted
 that app. Platform databases (`controller`, `blobstore`, …) require the cluster
 key; see [Production — Internal Databases](../production.html.md#internal-databases).
 
@@ -83,14 +83,14 @@ key; see [Production — Internal Databases](../production.html.md#internal-data
 
 The Flynn CLI provides commands for exporting and restoring database dumps.
 
-`flynn pg dump` saves a complete copy of the database schema and data to a local file.
+`flynn pg:dump` saves a complete copy of the database schema and data to a local file.
 
 ```text
-$ flynn pg dump -f latest.dump
+$ flynn pg:dump -f latest.dump
 60.34 MB 8.77 MB/s
 ```
 
-The file can be used to restore the database with `flynn pg restore`. It
+The file can be used to restore the database with `flynn pg:restore`. It
 may also be imported into a local Postgres database that is not managed by Flynn
 with `pg_restore`:
 
@@ -98,12 +98,12 @@ with `pg_restore`:
 $ pg_restore --clean --no-acl --no-owner -d mydb latest.dump
 ```
 
-`flynn pg restore` loads a database dump from a local file into a Flynn Postgres
+`flynn pg:restore` loads a database dump from a local file into a Flynn Postgres
 database. Any existing tables and database objects will be dropped before they
 are recreated.
 
 ```text
-$ flynn pg restore -f latest.dump
+$ flynn pg:restore -f latest.dump
 62.29 MB / 62.29 MB [===================] 100.00 % 4.96 MB/s
 WARNING: errors ignored on restore: 4
 ```
@@ -123,7 +123,7 @@ The Flynn Postgres appliance ships `postgresql-contrib-16` plus PostGIS,
 pgRouting, and TimescaleDB. Enable an extension with `CREATE EXTENSION`:
 
 ```text
-$ flynn pg psql
+$ flynn pg:psql
 psql (16)
 Type "help" for help.
 
