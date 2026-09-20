@@ -3501,7 +3501,7 @@ set -euo pipefail
 APP="${APP_NAME}"
 ROWS="${rows}"
 
-flynn -a "\${APP}" pg psql -- -v ON_ERROR_STOP=1 -c "
+flynn -a "\${APP}" pg:psql -- -v ON_ERROR_STOP=1 -c "
 CREATE TABLE IF NOT EXISTS smoke_probe (id serial PRIMARY KEY, data text);
 DELETE FROM smoke_probe;
 INSERT INTO smoke_probe (data) VALUES ('pre-upgrade');
@@ -3512,7 +3512,7 @@ CREATE TABLE IF NOT EXISTS smoke_payload (id int PRIMARY KEY, payload text);
 DELETE FROM smoke_payload;
 INSERT INTO smoke_payload (id, payload) SELECT g, repeat('A', 1024) FROM generate_series(1, \${ROWS}) g;
 "
-exts="\$(flynn -a "\${APP}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")"
+exts="\$(flynn -a "\${APP}" pg:psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")"
 echo "\${exts}" | grep -qx postgis
 echo "\${exts}" | grep -qx pgrouting
 echo "\${exts}" | grep -qx timescaledb
@@ -3896,8 +3896,8 @@ record_seed_counts() {
   local failed=0
   local count payload topics
 
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "seed" "postgres" "PASS" "rows=${count} payload=${payload}"
   else
@@ -3964,9 +3964,9 @@ assert_databases() {
   local out count payload
 
   echo "db-check ${label}: postgres"
-  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4034,7 +4034,7 @@ assert_databases() {
 
   # Previous upgrade-pass markers must survive the next --force update.
   if [[ "${label}" == "post-upgrade-2" ]]; then
-    out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='post-upgrade-1'")"
+    out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='post-upgrade-1'")"
     if echo "${out}" | grep -q 'post-upgrade-1'; then
       record_check "${label}" "pg-marker" "PASS" "post-upgrade-1 still present"
     else
@@ -4058,7 +4058,7 @@ assert_databases() {
   fi
 
   echo "db-check ${label}: writing persistence markers"
-  flynn1 -a "${APP_NAME}" pg psql -- -c "INSERT INTO smoke_probe (data) VALUES ('${label}');" >/dev/null
+  flynn1 -a "${APP_NAME}" pg:psql -- -c "INSERT INTO smoke_probe (data) VALUES ('${label}');" >/dev/null
   flynn1 -a "${APP_NAME}" mysql console -- -e "INSERT INTO smoke_probe (id, data) VALUES ($((RANDOM % 100000 + 2)), '${label}');" >/dev/null
   flynn1 -a "${APP_NAME}" mongodb mongo -- --eval "db.smoke_probe.insertOne({data:'${label}'});" >/dev/null
   flynn1 -a "${APP_NAME}" redis redis-cli SET "smoke_probe_${label}" 1 >/dev/null
@@ -4079,9 +4079,9 @@ assert_restored_datastores() {
   local out count payload marker
 
   echo "db-check ${label}: postgres"
-  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4118,7 +4118,7 @@ assert_restored_datastores() {
     for pass in $(seq 1 "${UPGRADE_PASSES}"); do
       marker="post-upgrade-${pass}"
       echo "db-check ${label}: ${marker} markers"
-      out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
+      out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
       if echo "${out}" | grep -q "${marker}"; then
         record_check "${label}" "pg-${marker}" "PASS" "still present"
       else
@@ -4162,6 +4162,33 @@ assert_restored_datastores() {
     return 1
   fi
   echo "databases ${label}: postgres/mysql/mongodb restored; redis/kafka/clickhouse up empty"
+}
+
+# User-app pg:psql with the same unknown_error retries as cli_probe.
+# After flynn-host update, postgres can 500 for a few seconds; a one-shot
+# query failed 2026-09-20 on 1-node post-upgrade-1 (cli-pg-extensions).
+# Always use the colon form: the space-form alias prints a notice on stderr.
+cli_pg_query() {
+  local label=$1 name=$2 app=$3 sql=$4
+  local rc=0 out snippet attempt
+  for attempt in 1 2 3 4 5 6; do
+    rc=0
+    out="$(flynn1 -a "${app}" pg:psql -- -tAc "${sql}" 2>&1)" || rc=$?
+    snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    if [[ "${rc}" -eq 0 ]]; then
+      printf '%s' "${out}"
+      return 0
+    fi
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout|no such host'; then
+      echo "cli ${label} ${name}: retry ${attempt}/6 (${snippet})" >&2
+      sleep 2
+      continue
+    fi
+    printf '%s' "${out}"
+    return "${rc}"
+  done
+  printf '%s' "${out}"
+  return "${rc}"
 }
 
 # Record one live CLI / flynn-host probe. Empty pattern means exit 0 is enough.
@@ -4446,7 +4473,7 @@ step_cli_functions() {
     node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host help fix' || failed=1
 
   rc=0
-  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>&1)" || rc=$?
+  out="$(cli_pg_query "${label}" "cli-pg-extensions" "${APP_NAME}" "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")" || rc=$?
   if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q postgis && echo "${out}" | grep -q pgrouting && echo "${out}" | grep -q timescaledb; then
     record_check "${label}" "cli-pg-extensions" "PASS" "$(echo "${out}" | tr '\n' ' ')"
     echo "cli ${label} pg-extensions: PASS"
@@ -4460,7 +4487,7 @@ step_cli_functions() {
   # controller database. Cluster key can still open platform consoles.
   # Emit t/f in SQL: boolean||boolean prints true/false, which failed 2026-09-13.
   rc=0
-  out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, current_database(), 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'postgres', 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'template1', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+  out="$(cli_pg_query "${label}" "cli-pg-connect" "${APP_NAME}" "SELECT CASE WHEN has_database_privilege(current_user, current_database(), 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'postgres', 'CONNECT') THEN 't' ELSE 'f' END||','||CASE WHEN has_database_privilege(current_user, 'template1', 'CONNECT') THEN 't' ELSE 'f' END")" || rc=$?
   out="$(smoke_pg_tf "${out}")"
   if [[ "${rc}" -eq 0 && "${out}" == "t,f,f" ]]; then
     record_check "${label}" "cli-pg-connect" "PASS" "own=t postgres=f template1=f"
@@ -4482,7 +4509,7 @@ step_cli_functions() {
   fi
   if [[ -n "${ctl_db}" && "${ctl_db}" =~ ^[A-Za-z0-9_]+$ ]]; then
     rc=0
-    out="$(flynn1 -a "${APP_NAME}" pg psql -- -tAc "SELECT CASE WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END" 2>&1)" || rc=$?
+    out="$(cli_pg_query "${label}" "cli-pg-no-controller" "${APP_NAME}" "SELECT CASE WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END")" || rc=$?
     out="$(smoke_pg_tf "${out}")"
     if [[ "${rc}" -eq 0 && "${out}" == "f" ]]; then
       record_check "${label}" "cli-pg-no-controller" "PASS" "no CONNECT on ${ctl_db}"
@@ -4498,9 +4525,9 @@ step_cli_functions() {
     failed=1
   fi
   cli_probe "${label}" "cli-pg-controller" "." \
-    flynn1 -a controller pg psql -- -tAc "SELECT 1" || failed=1
+    flynn1 -a controller pg:psql -- -tAc "SELECT 1" || failed=1
   cli_probe "${label}" "cli-pg-blobstore" "." \
-    flynn1 -a blobstore pg psql -- -tAc "SELECT 1" || failed=1
+    flynn1 -a blobstore pg:psql -- -tAc "SELECT 1" || failed=1
 
   # Plugin CLI: usage from the cluster catalog, job on the redis image.
   if plugin_has_delegated_cli redis; then

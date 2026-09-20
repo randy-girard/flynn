@@ -133,6 +133,14 @@ need 'flynn-host version' \
   "CLI step must run flynn-host version (stripped host binary)"
 need 'pg_available_extensions' \
   "CLI/seed must verify postgres PostGIS/pgRouting/Timescale still ship"
+need 'cli_pg_query' \
+  "pg:psql probes must retry unknown_error after flynn-host upgrades"
+need 'pg:psql' \
+  "CLI postgres probes must use the colon form (space form prints an alias notice)"
+if grep -qE '(^|[^:])pg psql' "${smoke}"; then
+  echo "CLI step must not use space-form pg psql (use pg:psql)" >&2
+  exit 1
+fi
 need 'FLYNN_SKIP_UPDATE_CHECK' \
   "smoke must skip GitHub upgrade notices so pg CONNECT matches stay exact"
 need 'smoke_pg_tf' \

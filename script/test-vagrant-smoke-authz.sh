@@ -59,7 +59,7 @@ need "${smoke}" 'cli-pg-controller' \
   "smoke must flynn -a controller pg psql with the cluster key"
 need "${smoke}" 'cli-pg-blobstore' \
   "smoke must flynn -a blobstore pg psql with the cluster key"
-need "${smoke}" 'flynn1 -a controller pg psql' \
+need "${smoke}" 'flynn1 -a controller pg:psql' \
   "platform console probe must use the cluster CLI (not a user job)"
 need "${ROOT}/script/test-vagrant-smoke-backup.sh" 'grep -q' \
   "backup SIGPIPE contract must keep forbidding tar -tf | grep -q"
