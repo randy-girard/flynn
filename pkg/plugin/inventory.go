@@ -20,22 +20,23 @@ const (
 // Capabilities (aliases, sirenia, cluster dump/restore) are stamped from
 // flynn-plugin.json at install so Flynn core never hardcodes plugin names.
 type Installed struct {
-	Name            string       `json:"name"`
-	Kind            string       `json:"kind,omitempty"`
-	Source          string       `json:"source,omitempty"`
-	Ref             string       `json:"ref,omitempty"`
-	Wait            string       `json:"wait,omitempty"`
-	AppID           string       `json:"app_id,omitempty"`
-	CLI             *CLI         `json:"cli,omitempty"`
-	Aliases         []string     `json:"aliases,omitempty"`
-	Provider        string       `json:"provider,omitempty"`
-	GitHubRepo      string       `json:"github_repo,omitempty"`
-	Datastore       bool         `json:"datastore,omitempty"`
-	Sirenia         bool         `json:"sirenia,omitempty"`
-	SireniaOptional bool         `json:"sirenia_optional,omitempty"`
-	Backup          *BackupSpec  `json:"backup,omitempty"`
-	Restore         *RestoreSpec `json:"restore,omitempty"`
-	Status          *StatusSpec  `json:"status,omitempty"`
+	Name            string         `json:"name"`
+	Kind            string         `json:"kind,omitempty"`
+	Source          string         `json:"source,omitempty"`
+	Ref             string         `json:"ref,omitempty"`
+	Wait            string         `json:"wait,omitempty"`
+	AppID           string         `json:"app_id,omitempty"`
+	CLI             *CLI           `json:"cli,omitempty"`
+	Aliases         []string       `json:"aliases,omitempty"`
+	Provider        string         `json:"provider,omitempty"`
+	GitHubRepo      string         `json:"github_repo,omitempty"`
+	Datastore       bool           `json:"datastore,omitempty"`
+	Sirenia         bool           `json:"sirenia,omitempty"`
+	SireniaOptional bool           `json:"sirenia_optional,omitempty"`
+	Backup          *BackupSpec    `json:"backup,omitempty"`
+	Restore         *RestoreSpec   `json:"restore,omitempty"`
+	Status          *StatusSpec    `json:"status,omitempty"`
+	Dashboard       *DashboardSpec `json:"dashboard,omitempty"`
 }
 
 // BackupSpec is a cluster-backup dump produced by a plugin appliance.
@@ -113,6 +114,9 @@ func RecordFromApp(app *ct.App) Installed {
 		}
 		if rec.CLI == nil {
 			rec.CLI = CLIFromApp(app)
+		}
+		if rec.Dashboard == nil {
+			rec.Dashboard = DashboardFromApp(app)
 		}
 	}
 	if app.Meta[MetaDatastore] == "true" {

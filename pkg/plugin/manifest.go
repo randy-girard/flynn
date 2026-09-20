@@ -21,18 +21,24 @@ const (
 
 	ManifestName = "flynn-plugin.json"
 
-	MetaSystemApp    = "flynn-system-app"
-	MetaPlugin       = "flynn-plugin"
-	MetaDatastore    = "flynn-datastore"
-	MetaPluginCLI    = "flynn-plugin-cli"
-	MetaPluginKind   = "flynn-plugin-kind"
-	MetaPluginSource = "flynn-plugin-source"
-	MetaPluginRef    = "flynn-plugin-ref"
-	MetaPluginWait   = "flynn-plugin-wait"
-	MetaPluginRecord = "flynn-plugin-record"
+	MetaSystemApp       = "flynn-system-app"
+	MetaPlugin          = "flynn-plugin"
+	MetaDatastore       = "flynn-datastore"
+	MetaPluginCLI       = "flynn-plugin-cli"
+	MetaPluginKind      = "flynn-plugin-kind"
+	MetaPluginSource    = "flynn-plugin-source"
+	MetaPluginRef       = "flynn-plugin-ref"
+	MetaPluginWait      = "flynn-plugin-wait"
+	MetaPluginRecord    = "flynn-plugin-record"
+	MetaPluginDashboard = "flynn-plugin-dashboard"
 
 	// ImageSelf in image_env means "the artifact ID of this plugin's image".
 	ImageSelf = "self"
+
+	DashboardSurfaceAppResources    = "app.resources"
+	DashboardSurfaceAppDeploy       = "app.deploy"
+	DashboardSurfaceClusterSettings = "cluster.settings"
+	DashboardSurfaceClusterNav      = "cluster.nav"
 )
 
 // Manifest is flynn-plugin.json at the root of a plugin repo.
@@ -67,8 +73,35 @@ type Manifest struct {
 	ClusterBackup  *BackupSpec     `json:"cluster_backup,omitempty"`
 	ClusterRestore *RestoreSpec    `json:"cluster_restore,omitempty"`
 	Status         *StatusSpec     `json:"status,omitempty"`
+	Dashboard      *DashboardSpec  `json:"dashboard,omitempty"`
 	Build          json.RawMessage `json:"build,omitempty"`
 	Artifacts      *Artifacts      `json:"artifacts,omitempty"`
+}
+
+// DashboardSpec is the optional Heroku-style addon UI contract. The dashboard
+// plugin discovers this from app meta (not a compiled-in plugin list) and
+// hosts the plugin's pages inside its chrome.
+type DashboardSpec struct {
+	// BaseURL is the discoverd URL the dashboard reverse-proxies (for example
+	// http://redis.discoverd/dashboard). Plugins must not expose CONTROLLER_KEY
+	// to the browser; they authenticate a signed dashboard SSO token.
+	BaseURL  string           `json:"base_url"`
+	Surfaces []string         `json:"surfaces,omitempty"`
+	Card     *DashboardCard   `json:"card,omitempty"`
+	Routes   []DashboardRoute `json:"routes,omitempty"`
+}
+
+// DashboardCard is the Resources-tab overview tile.
+type DashboardCard struct {
+	Title       string `json:"title"`
+	Description string `json:"description,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+}
+
+// DashboardRoute is one page under the plugin UI tree.
+type DashboardRoute struct {
+	Path  string `json:"path"`
+	Title string `json:"title"`
 }
 
 type Provider struct {
@@ -373,6 +406,9 @@ func (m *Manifest) Validate() error {
 		m.Webhooks[i].URL = url
 		m.Webhooks[i].SecretEnv = strings.TrimSpace(w.SecretEnv)
 	}
+	if err := m.validateDashboard(); err != nil {
+		return err
+	}
 	if m.CLI != nil {
 		for i, a := range m.CLI.Actions {
 			flynnCmd := strings.TrimSpace(a.Flynn)
@@ -414,6 +450,11 @@ func (m *Manifest) AppMeta() map[string]string {
 	if rec, err := json.Marshal(m.Record()); err == nil {
 		meta[MetaPluginRecord] = string(rec)
 	}
+	if m.Dashboard != nil {
+		if raw, err := json.Marshal(m.Dashboard); err == nil {
+			meta[MetaPluginDashboard] = string(raw)
+		}
+	}
 	return meta
 }
 
@@ -435,6 +476,7 @@ func (m *Manifest) Record() Installed {
 		SireniaOptional: m.sireniaOptional(),
 		Wait:            m.PingURL(),
 		CLI:             m.CLI,
+		Dashboard:       m.Dashboard,
 	}
 	if rec.Name == "" {
 		rec.Name = m.Name
@@ -543,6 +585,75 @@ func (m *Manifest) PingURL() string {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String()
+}
+
+func (m *Manifest) validateDashboard() error {
+	if m == nil || m.Dashboard == nil {
+		return nil
+	}
+	d := m.Dashboard
+	base := strings.TrimSpace(d.BaseURL)
+	if base == "" {
+		return fmt.Errorf("%s: dashboard.base_url is required", ManifestName)
+	}
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" || !httpOrHTTPS(u.Scheme) {
+		return fmt.Errorf("%s: dashboard.base_url must be http(s)", ManifestName)
+	}
+	d.BaseURL = base
+	for i, s := range d.Surfaces {
+		s = strings.TrimSpace(s)
+		switch s {
+		case DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav:
+		default:
+			return fmt.Errorf("%s: dashboard.surfaces[%d] must be %q, %q, %q, or %q", ManifestName, i, DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav)
+		}
+		d.Surfaces[i] = s
+	}
+	if d.Card != nil {
+		d.Card.Title = strings.TrimSpace(d.Card.Title)
+		if d.Card.Title == "" {
+			return fmt.Errorf("%s: dashboard.card.title is required when card is set", ManifestName)
+		}
+	}
+	for i, r := range d.Routes {
+		path := strings.TrimSpace(r.Path)
+		if path == "" {
+			return fmt.Errorf("%s: dashboard.routes[%d].path is required", ManifestName, i)
+		}
+		if !strings.HasPrefix(path, "/") {
+			return fmt.Errorf("%s: dashboard.routes[%d].path must start with /", ManifestName, i)
+		}
+		title := strings.TrimSpace(r.Title)
+		if title == "" {
+			return fmt.Errorf("%s: dashboard.routes[%d].title is required", ManifestName, i)
+		}
+		d.Routes[i].Path = path
+		d.Routes[i].Title = title
+	}
+	return nil
+}
+
+// DashboardFromApp reads the dashboard UI contract stamped on a plugin app.
+func DashboardFromApp(app *ct.App) *DashboardSpec {
+	if app == nil || app.Meta == nil {
+		return nil
+	}
+	raw := app.Meta[MetaPluginDashboard]
+	if raw == "" {
+		if rec := strings.TrimSpace(app.Meta[MetaPluginRecord]); rec != "" {
+			var inst Installed
+			if err := json.Unmarshal([]byte(rec), &inst); err == nil && inst.Dashboard != nil {
+				return inst.Dashboard
+			}
+		}
+		return nil
+	}
+	var d DashboardSpec
+	if err := json.Unmarshal([]byte(raw), &d); err != nil || strings.TrimSpace(d.BaseURL) == "" {
+		return nil
+	}
+	return &d
 }
 
 func pingURLAllowed(raw string) bool {

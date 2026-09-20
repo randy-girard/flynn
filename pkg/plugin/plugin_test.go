@@ -117,6 +117,96 @@ func TestManifestValidateKinds(t *testing.T) {
 	}
 }
 
+func TestManifestDashboardContract(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "cache",
+		"kind": "resource-provider",
+		"provider": map[string]string{
+			"name": "cache",
+			"url":  "http://cache-api.discoverd/clusters",
+		},
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{
+				"web": map[string]interface{}{"args": []string{"/bin/api"}},
+			},
+		},
+		"dashboard": map[string]interface{}{
+			"base_url": "http://cache.discoverd/dashboard",
+			"surfaces": []string{"app.resources"},
+			"card": map[string]string{
+				"title":       "Cache",
+				"description": "In-memory cache",
+				"icon":        "redis",
+			},
+			"routes": []map[string]string{
+				{"path": "/", "title": "Overview"},
+				{"path": "/metrics", "title": "Metrics"},
+			},
+		},
+	})
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Dashboard == nil || m.Dashboard.BaseURL != "http://cache.discoverd/dashboard" {
+		t.Fatalf("dashboard: %+v", m.Dashboard)
+	}
+	meta := m.AppMeta()
+	if meta[MetaPluginDashboard] == "" {
+		t.Fatal("expected flynn-plugin-dashboard meta")
+	}
+	if rec := m.Record(); rec.Dashboard == nil || rec.Dashboard.Card == nil || rec.Dashboard.Card.Title != "Cache" {
+		t.Fatalf("record dashboard: %+v", rec.Dashboard)
+	}
+	got := DashboardFromApp(&ct.App{Meta: meta})
+	if got == nil || got.BaseURL != "http://cache.discoverd/dashboard" || len(got.Routes) != 2 {
+		t.Fatalf("DashboardFromApp: %+v", got)
+	}
+
+	dir = t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "cache",
+		"kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{"web": map[string]interface{}{"args": []string{"/bin/x"}}},
+		},
+		"dashboard": map[string]interface{}{"base_url": "not-a-url"},
+	})
+	if _, err := LoadManifest(dir); err == nil {
+		t.Fatal("invalid dashboard.base_url must fail")
+	}
+
+	dir = t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "cache",
+		"kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{"web": map[string]interface{}{"args": []string{"/bin/x"}}},
+		},
+		"dashboard": map[string]interface{}{
+			"base_url": "http://cache.discoverd/dashboard",
+			"surfaces": []string{"not.a.surface"},
+		},
+	})
+	if _, err := LoadManifest(dir); err == nil {
+		t.Fatal("unknown dashboard surface must fail")
+	}
+
+	if DashboardFromApp(nil) != nil || DashboardFromApp(&ct.App{}) != nil {
+		t.Fatal("empty dashboard meta")
+	}
+	if DashboardFromApp(&ct.App{Meta: map[string]string{MetaPluginDashboard: "{"}}) != nil {
+		t.Fatal("invalid dashboard json")
+	}
+	fromRec := DashboardFromApp(&ct.App{Meta: map[string]string{
+		MetaPluginRecord: `{"dashboard":{"base_url":"http://pg.discoverd/dashboard"}}`,
+	}})
+	if fromRec == nil || fromRec.BaseURL != "http://pg.discoverd/dashboard" {
+		t.Fatalf("record fallback: %+v", fromRec)
+	}
+}
+
 func TestLoadManifestWebhooks(t *testing.T) {
 	dir := t.TempDir()
 	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{

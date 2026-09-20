@@ -197,6 +197,57 @@ Every resource-provider plugin (Redis, MariaDB, MongoDB, Kafka, ClickHouse)
 publishes the same `doc`/`actions` contract. Those commands stay hidden on
 `flynn help` until the matching plugin is installed on the cluster.
 
+## Dashboard addon pages
+
+The dashboard plugin is a host/shell. Plugin UIs live on each plugin’s
+cluster-level `web` process (Heroku add-on style): the dashboard shows a
+resource card, and opening it renders pages the plugin serves.
+
+`flynn-plugin.json` may include a `dashboard` block. Install stamps it on the
+plugin app as `flynn-plugin-dashboard` meta (and inside `flynn-plugin-record`)
+so the dashboard discovers capabilities from the cluster catalog, not a
+compiled-in list.
+
+```json
+{
+  "dashboard": {
+    "base_url": "http://redis.discoverd/dashboard",
+    "surfaces": ["app.resources"],
+    "card": {
+      "title": "Redis",
+      "description": "In-memory cache and datastore",
+      "icon": "redis"
+    },
+    "routes": [
+      {"path": "/", "title": "Overview"},
+      {"path": "/console", "title": "Console"},
+      {"path": "/backup", "title": "Backup"},
+      {"path": "/metrics", "title": "Metrics"}
+    ]
+  }
+}
+```
+
+- `base_url` is a discoverd HTTP URL. The dashboard reverse-proxies it at
+  stable paths such as `/apps/:id/resources/:plugin/...` and does not give the
+  browser `CONTROLLER_KEY`.
+- `surfaces` is one or more of `app.resources` (Resources tab card),
+  `app.deploy` (Deploy tab mount), `cluster.settings`, or `cluster.nav`.
+  GitHub-style integrations use deploy/settings, not a Resources card.
+- The plugin authenticates a short-lived dashboard SSO JWT (ES256, JWKS at
+  `http://dashboard.discoverd/.well-known/jwks.json`) that carries app id,
+  user, and permissions.
+- Uninstalled plugins do not appear as a broken iframe; the dashboard shows
+  an install hint (`sudo flynn-host plugin:install <name>`).
+- Datastore plugins emit **per-app process metrics as events** (app id,
+  resource id, timestamp, series). The dashboard stores them on the same path
+  as app metrics swimlanes so a plugin Metrics page can chart that app’s
+  resource. Metric names belong in the plugin README so alerts can hook them.
+
+Postgres is core Flynn (not a plugin repo). The dashboard hosts a first-party
+postgres module that follows this same card/route contract so it can move
+later.
+
 ## Production
 
 With no local checkout, an alias pulls the plugin’s published GitHub Release
