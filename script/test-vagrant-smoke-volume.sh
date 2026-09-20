@@ -19,6 +19,8 @@ need 'step_volume' \
   "smoke must have a persistent-volume lifecycle step"
 need 'VOL_SMOKE_WROTE' \
   "volume step must write a unique token into /data"
+need 'flynn-host log' \
+  "volume wait must fall back to flynn-host log when logaggregator lags"
 need 'VOL_SMOKE_READ' \
   "volume step must read the token back after restarting the vol job"
 need 'volume decommission' \

@@ -4676,7 +4676,15 @@ step_cli_functions() {
 # logaggregator lines cannot fake a pass.
 vol_log_has() {
   local needle=$1
-  flynn1 -a "${DOCKER_APP_NAME}" log -n 400 | grep -qF "${needle}"
+  if flynn1 -a "${DOCKER_APP_NAME}" log -n 400 | grep -qF "${needle}"; then
+    return 0
+  fi
+  # logaggregator can lag or omit one-shot stdout (seen 2026-09-20 1-node:
+  # flynn log had only metrics while flynn-host log already had VOL_SMOKE_WROTE).
+  local id
+  id="$(node_ssh node1 "sudo flynn-host ps -aq -f '{{if and (eq (metadata \"flynn-controller.app_name\") \"${DOCKER_APP_NAME}\") (eq (metadata \"flynn-controller.type\") \"vol\")}}{{.Job.ID}}{{end}}'" </dev/null | awk 'NF{print; exit}')"
+  [[ -n "${id}" ]] || return 1
+  node_ssh node1 "sudo flynn-host log $(printf '%q' "${id}")" </dev/null | grep -qF "${needle}"
 }
 
 vol_scale_zero() {
