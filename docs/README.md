@@ -40,6 +40,7 @@ Start at the [root README](../README.md) or pick a page. Agent notes (keep docs 
 ## Reference
 
 - [Architecture](content/architecture.html.md)
+- [Controller API](api-examples/controller.md)
 - [Roadmap](content/roadmap.md)
 - [Contributing](content/contributing.md)
 - [Development](content/development.html.md)
