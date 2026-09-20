@@ -1,0 +1,11 @@
+---
+description: When flynn-plugin-dashboard is a sibling, keep its mock stats APIs aligned with Flynn
+globs: host/types/**,host/disk.go,host/libcontainer_backend.go,controller/hosts.go,controller/stats.go
+alwaysApply: false
+---
+
+# Sibling dashboard mock
+
+**Only if `../flynn-plugin-dashboard` exists.** Otherwise skip this rule.
+
+That plugin’s Compose stack uses `mock/`, not this cluster. Changing `GET /cluster/stats`, `GET /cluster/jobs-stats`, `GET /apps/:id/jobs-stats`, or JSON on `host.HostResourceStats` / `host.ContainerStats` requires updating `../flynn-plugin-dashboard/mock` in the same work (`hostStatsAt` / `jobStatsAt` keys). See [AGENTS.md](../../AGENTS.md).
