@@ -3,6 +3,8 @@ package main
 import (
 	"reflect"
 	"testing"
+
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func TestResolveCommandTopLevel(t *testing.T) {
@@ -37,20 +39,52 @@ func TestResolveCommandClusterBackupMoved(t *testing.T) {
 }
 
 func TestExpandColonSuffix(t *testing.T) {
-	if got := expandColonSuffix("redis", "cli"); !reflect.DeepEqual(got, []string{"redis-cli"}) {
+	if got := expandColonSuffixWith("redis", "cli", nil); !reflect.DeepEqual(got, []string{"redis-cli"}) {
 		t.Fatalf("redis:cli %q", got)
 	}
-	if got := expandColonSuffix("kafka", "topics:create"); !reflect.DeepEqual(got, []string{"topics", "create"}) {
+	if got := expandColonSuffixWith("kafka", "topics:create", nil); !reflect.DeepEqual(got, []string{"topics", "create"}) {
 		t.Fatalf("kafka:topics:create %q", got)
 	}
-	if got := expandColonSuffix("kafka", "topics-create"); !reflect.DeepEqual(got, []string{"topics", "create"}) {
+	if got := expandColonSuffixWith("kafka", "topics-create", nil); !reflect.DeepEqual(got, []string{"topics", "create"}) {
 		t.Fatalf("kafka:topics-create alias %q", got)
 	}
-	if got := expandColonSuffix("kafka", "consumer-groups:create"); !reflect.DeepEqual(got, []string{"consumer-groups", "create"}) {
+	if got := expandColonSuffixWith("kafka", "consumer-groups:create", nil); !reflect.DeepEqual(got, []string{"consumer-groups", "create"}) {
 		t.Fatalf("kafka:consumer-groups:create %q", got)
 	}
-	if got := expandColonSuffix("redis", "dump"); !reflect.DeepEqual(got, []string{"dump"}) {
+	if got := expandColonSuffixWith("redis", "dump", nil); !reflect.DeepEqual(got, []string{"dump"}) {
 		t.Fatalf("redis:dump %q", got)
+	}
+}
+
+// Hyphenated plugin nouns must not be split on "-" when the catalog declares
+// them: flynn kafka:consumer-groups is the action "consumer-groups", not
+// "consumer groups".
+func TestExpandColonSuffixKeepsHyphenatedNouns(t *testing.T) {
+	kafka := &plugin.CLI{Command: "kafka", Actions: []plugin.CLIAction{
+		{Name: "topics"},
+		{Name: "topics create"},
+		{Name: "consumer-groups"},
+		{Name: "consumer-groups create"},
+	}}
+	cases := map[string][]string{
+		"consumer-groups":        {"consumer-groups"},
+		"consumer-groups:create": {"consumer-groups", "create"},
+		"consumer-groups-create": {"consumer-groups", "create"},
+		"consumer-groups:info":   {"consumer-groups", "info"},
+		"topics":                 {"topics"},
+		"topics-create":          {"topics", "create"},
+		"topics:create":          {"topics", "create"},
+		"topics:info":            {"topics", "info"},
+		"partitions-reassign":    {"partitions", "reassign"},
+		"consumer-groups:x:y:z":  {"consumer-groups", "x", "y", "z"},
+	}
+	for suffix, want := range cases {
+		if got := expandColonSuffixWith("kafka", suffix, kafka); !reflect.DeepEqual(got, want) {
+			t.Errorf("kafka:%s = %q, want %q", suffix, got, want)
+		}
+	}
+	if got := expandColonSuffixWith("kafka", "cli", kafka); !reflect.DeepEqual(got, []string{"cli"}) {
+		t.Errorf("kafka:cli with catalog = %q", got)
 	}
 }
 

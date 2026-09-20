@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 // topAliases rewrites a single-token command (flynn create → apps:create).
@@ -268,10 +270,46 @@ func pluginColonRename(name string) (to, from string) {
 }
 
 // expandColonSuffix turns redis:cli / kafka:topics:create into plugin action tokens.
-// Hyphen form kafka:topics-create remains an alias.
-func expandColonSuffix(plugin, suffix string) []string {
+// Hyphen form kafka:topics-create remains an alias. The cluster catalog, when
+// reachable, keeps hyphenated nouns such as kafka:consumer-groups intact.
+func expandColonSuffix(pluginName, suffix string) []string {
+	var spec *plugin.CLI
+	if cat, err := clusterPluginCatalog(); err == nil && cat != nil {
+		spec = cat.Lookup(pluginName)
+	}
+	return expandColonSuffixWith(pluginName, suffix, spec)
+}
+
+// pluginActionTokens matches suffix against the plugin's declared action
+// names so a hyphenated noun (consumer-groups) is one token rather than being
+// split on "-". Both the colon form (consumer-groups:create) and the hyphen
+// alias (consumer-groups-create) resolve to the declared fields; a declared
+// noun followed by extra colon tokens keeps the noun and splits the rest.
+func pluginActionTokens(suffix string, spec *plugin.CLI) []string {
+	if spec == nil {
+		return nil
+	}
+	var best []string
+	for _, a := range spec.Actions {
+		fields := strings.Fields(a.Name)
+		if len(fields) == 0 {
+			continue
+		}
+		colon := strings.Join(fields, ":")
+		if suffix == colon || suffix == strings.Join(fields, "-") {
+			return fields
+		}
+		if strings.HasPrefix(suffix, colon+":") && len(fields) > len(best) {
+			rest := strings.Split(strings.TrimPrefix(suffix, colon+":"), ":")
+			best = append(append([]string{}, fields...), rest...)
+		}
+	}
+	return best
+}
+
+func expandColonSuffixWith(pluginName, suffix string, spec *plugin.CLI) []string {
 	if suffix == "cli" {
-		switch plugin {
+		switch pluginName {
 		case "redis":
 			return []string{"redis-cli"}
 		case "mysql":
@@ -285,6 +323,9 @@ func expandColonSuffix(plugin, suffix string) []string {
 		default:
 			return []string{"cli"}
 		}
+	}
+	if tokens := pluginActionTokens(suffix, spec); tokens != nil {
+		return tokens
 	}
 	if strings.Contains(suffix, ":") {
 		return strings.Split(suffix, ":")
