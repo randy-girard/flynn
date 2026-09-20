@@ -100,6 +100,61 @@ CI splits those across jobs; locally they must stay on the same machine so
 substitute for `build.sh` when you need installable cluster images or a smoke
 tarball.
 
+### Incremental rebuilds
+
+`./build.sh cluster` after a code change only redoes what that change touched,
+at two levels:
+
+- **Image layers.** Every layer ID is a hash of its declared inputs (the Go
+  source files `go/build` resolves for that binary, `go.mod`, `go.sum`,
+  `vendor/**`, scripts, copied files) plus the base image manifest. A layer
+  whose ID already exists in `/var/lib/flynn/layer-cache` is reused without
+  running a job (`<image> layer reuse (cached)` in `build/log/build-*.log`);
+  the squashfs is length- and digest-checked first, so a corrupt blob is a
+  miss. `build.sh prep` moves the layer cache aside across the
+  `install-flynn --remove --clean` it runs, the same way it already preserved
+  the base squashfs, so package-install layers (`host-packages`,
+  `postgres-packages`, …) and the toolchain images survive between runs.
+  Before this the cache was wiped by every `prep`, which is why a one-line fix
+  used to cost a full ~10 minute rebuild.
+- **Go compilation.** Layers that run `go build`, `cgo build`, `gobin` or
+  `protoc` bind-mount a shared Go build cache from the builder's local disk
+  (`/var/cache/flynn/go-build`) at `/root/.cache/go-build` and set `GOCACHE`
+  to it. Go's cache is keyed by the content hash of each package's sources and
+  the toolchain, so a change in `pkg/httpclient` recompiles that package and
+  its dependents and links the binary; the rest of `vendor/` and the standard
+  library come from the cache. Without this every image job compiled the whole
+  dependency tree cold (1.5–4 min each) even when only one file changed.
+
+Layer identity is unaffected by the Go cache: IDs are still derived from the
+inputs alone, so a cache hit or miss never changes which image you get, only how
+long a layer that has to be rebuilt takes. `root/.cache` is excluded from every
+layer squashfs, so nothing from the cache ships in an image.
+
+Knobs:
+
+- `FLYNN_GO_BUILD_CACHE=/path` moves the Go cache; `FLYNN_NO_GO_BUILD_CACHE=1`
+  compiles cold (useful when you suspect the cache). Go trims entries unused
+  for five days; `sudo rm -rf /var/cache/flynn/go-build` resets it.
+- `FLYNN_NO_LAYER_CACHE_KEEP=1` makes `prep` wipe the layer cache as it used
+  to. After every `apps` phase `flynn-builder prune` evicts layers that the new
+  `build/images.json` does not reference and that have not been used (mtime,
+  refreshed on each cache hit) for `FLYNN_LAYER_CACHE_MAX_AGE` (default
+  `168h`); `FLYNN_LAYER_CACHE_PRUNE=0` skips it, `flynn-builder prune
+  --dry-run` shows what it would drop.
+- `SKIP_BUILD=1` on `script/vagrant-upgrade-smoke.sh` reuses the existing
+  tarball when nothing changed at all.
+- Always go through `build.sh cluster` (or a phase list that starts with
+  `prep`) after editing code. `build.sh apps` on its own trusts the previous
+  `build/images.json` and skips an image whose recorded layers still exist,
+  which with a persistent layer cache means a stale image; `prep` runs
+  `make clean`, which removes that file.
+
+What still runs every time: host binaries (`script/build-flynn`, incremental
+via the builder's own `GOCACHE`), the local stack start/stop around the image
+jobs, per-layer `mksquashfs`, and tarball packaging (`script/release --target
+tarball`).
+
 ## Running a local cluster
 
 After a binary (and, for a real cluster, image) build:
