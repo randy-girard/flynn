@@ -44,6 +44,23 @@ func TestTarballUpdaterSetsRedisApplianceStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterSetsRouterStrategyBeforeDeploy(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	ensure := strings.Index(body, "EnsureRouterStrategy")
+	wait := strings.Index(body, "client.DeployAppRelease")
+	if fn < 0 || ensure < 0 || wait < 0 {
+		t.Fatal("tarball updater must set router one-down-one-up before DeployAppRelease")
+	}
+	if ensure < fn || wait < ensure {
+		t.Fatal("EnsureRouterStrategy must run inside deployApp before DeployAppRelease")
+	}
+}
+
 func TestTarballUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 	src, err := os.ReadFile("github_updater.go")
 	if err != nil {

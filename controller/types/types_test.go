@@ -101,6 +101,45 @@ func TestEnsureRedisApplianceStrategyEmptyAndOneByOne(t *testing.T) {
 	}
 }
 
+func TestEnsureRouterStrategy(t *testing.T) {
+	system := map[string]string{"flynn-system-app": "true"}
+	router := &App{Name: "router", Meta: system, Strategy: "all-at-once"}
+	if !router.Router() {
+		t.Fatal("system app named router must be classified as the cluster router")
+	}
+	if !router.EnsureRouterStrategy() {
+		t.Fatal("all-at-once router must switch to one-down-one-up")
+	}
+	if router.Strategy != RouterStrategy {
+		t.Fatalf("Strategy = %q, want %q", router.Strategy, RouterStrategy)
+	}
+	if router.EnsureRouterStrategy() {
+		t.Fatal("already-correct router strategy must be a no-op")
+	}
+
+	for _, stale := range []string{"", "all-at-once", "one-by-one"} {
+		app := &App{Name: "router", Meta: system, Strategy: stale}
+		if !app.EnsureRouterStrategy() {
+			t.Fatalf("strategy %q must switch to one-down-one-up", stale)
+		}
+	}
+
+	user := &App{Name: "router", Strategy: "all-at-once"}
+	if user.Router() || user.EnsureRouterStrategy() {
+		t.Fatal("non-system app named router must not have its strategy rewritten")
+	}
+	other := &App{Name: "blobstore", Meta: system, Strategy: "all-at-once"}
+	if other.EnsureRouterStrategy() {
+		t.Fatal("other system apps must not have their strategy rewritten")
+	}
+	if (&App{}).EnsureRouterStrategy() {
+		t.Fatal("empty app must not be treated as the router")
+	}
+	if RouterStrategy != "one-down-one-up" {
+		t.Fatalf("RouterStrategy = %q, want one-down-one-up", RouterStrategy)
+	}
+}
+
 func TestReleaseDeployKind(t *testing.T) {
 	cases := []struct {
 		name   string

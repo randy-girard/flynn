@@ -107,6 +107,29 @@ func (a *App) EnsureRedisApplianceStrategy() bool {
 	return true
 }
 
+// Router reports whether this is the cluster HTTP/HTTPS/TCP router (host
+// network, binds :80/:443, one job per host).
+func (a *App) Router() bool {
+	return a != nil && a.System() && a.Name == "router"
+}
+
+// RouterStrategy stops the old host-network router before starting the
+// replacement. all-at-once starts the new job while the old one still binds
+// :80/:443, so the new job stays in "starting" forever (seen 2026-09-20:
+// 1-node flynn-host update --force pass 2 timed out after 600s).
+const RouterStrategy = "one-down-one-up"
+
+// EnsureRouterStrategy sets Strategy to RouterStrategy when this is the
+// router still on another strategy. Returns true if the in-memory app was
+// changed (caller should persist via UpdateApp).
+func (a *App) EnsureRouterStrategy() bool {
+	if a == nil || !a.Router() || a.Strategy == RouterStrategy {
+		return false
+	}
+	a.Strategy = RouterStrategy
+	return true
+}
+
 // Critical apps cannot be completely scaled down by the scheduler
 func (a *App) Critical() bool {
 	v, ok := a.Meta["flynn-system-critical"]

@@ -337,7 +337,8 @@
     "action": "deploy-app",
     "app": {
       "name": "router",
-      "meta": {"flynn-system-app": "true"}
+      "meta": {"flynn-system-app": "true"},
+      "strategy": "one-down-one-up"
     },
     "artifacts": [$image_artifact[router]],
     "release": {

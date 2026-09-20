@@ -72,5 +72,11 @@ need_in "${ROOT}/updater/updater.go" 'artifact.IsSlugrunner\(\)' \
   "in-cluster updater must redeploy heroku-24 slug apps"
 need_in "${ROOT}/controller/types/types_test.go" 'heroku-24 slugrunner-24 must be updated' \
   "unit tests must cover slugrunner-24 update matching"
+need_in "${github_updater}" 'EnsureRouterStrategy' \
+  "flynn-host update must stop the old host-network router before starting the replacement"
+need_in "${incluster}" 'EnsureRouterStrategy' \
+  "in-cluster updater must stop the old host-network router before starting the replacement"
+need_in "${ROOT}/bootstrap/manifest_template.json" '"strategy": "one-down-one-up"' \
+  "bootstrap must create the router with one-down-one-up (host-network :80/:443)"
 
 echo "ok updater retries HA sirenia new-instance timeout and polls discoverd"

@@ -1596,6 +1596,10 @@ func (e errDeploySkipped) Error() string {
 
 func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images map[string]*ct.Artifact, updateFn updater.UpdateReleaseFn, force bool, log log15.Logger) error {
 	ensureSystemDeployTimeout(client, app, log)
+	if err := updaterdeploy.EnsureRouterStrategy(client, app, log); err != nil {
+		log.Error("error setting router deploy strategy", "err", err)
+		return err
+	}
 
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {

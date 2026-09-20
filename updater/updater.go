@@ -300,6 +300,10 @@ func (e errDeploySkipped) Error() string {
 }
 
 func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, updateFn updater.UpdateReleaseFn, log log15.Logger) error {
+	if err := updaterdeploy.EnsureRouterStrategy(client, app, log); err != nil {
+		log.Error("error setting router deploy strategy", "err", err)
+		return err
+	}
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		if updaterdeploy.MissingAppReleaseSkip(app, err) {
