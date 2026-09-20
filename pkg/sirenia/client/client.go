@@ -169,7 +169,30 @@ func replSyncCaughtUp(up *Status, downstreamClient *Client, expected *discoverd.
 	if err != nil || down == nil || down.Database == nil || !down.Database.Running {
 		return false
 	}
+	if !downstreamFollowsUpstream(up, down, idKey) {
+		return false
+	}
 	return true
+}
+
+// downstreamFollowsUpstream reports whether down is configured to replicate
+// from up. After an HA rolling deploy stops the old sync, the replacement
+// async must re-point at the primary before it is a valid cascading source
+// for the next peer; matching only SyncedDownstream allowed a stale primary
+// sync name to pass while the async still followed the peer that was just
+// stopped.
+func downstreamFollowsUpstream(up, down *Status, idKey string) bool {
+	if down == nil || down.Database == nil || down.Database.Config == nil || down.Database.Config.Upstream == nil {
+		return false
+	}
+	if up == nil || up.Peer == nil || up.Peer.ID == "" {
+		return true
+	}
+	src := down.Database.Config.Upstream
+	if idKey != "" && src.Meta != nil && src.Meta[idKey] != "" {
+		return src.Meta[idKey] == up.Peer.ID
+	}
+	return src.ID == up.Peer.ID
 }
 
 // SyncedWith returns a predicate that reports whether replication has caught up

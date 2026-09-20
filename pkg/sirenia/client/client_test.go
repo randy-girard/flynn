@@ -14,6 +14,7 @@ import (
 	"time"
 
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func mkInst(addr, id string) *discoverd.Instance {
@@ -102,17 +103,17 @@ func sireniaTestClient(t *testing.T, srv *httptest.Server) *Client {
 }
 
 func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
-	downstream := mkInst("10.0.0.9:5432", "new-async")
 	var downRunning int32
-	upSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(Status{
-			Database: &DatabaseInfo{Running: true, SyncedDownstream: downstream, XLog: "0/1"},
-		})
-	}))
-	defer upSrv.Close()
 	downSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(Status{
-			Database: &DatabaseInfo{Running: atomic.LoadInt32(&downRunning) == 1, XLog: "0/1"},
+			Database: &DatabaseInfo{
+				Running: atomic.LoadInt32(&downRunning) == 1,
+				XLog:    "0/1",
+				Config: &state.Config{
+					Role:     state.RoleAsync,
+					Upstream: &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "primary-1"}},
+				},
+			},
 		})
 	}))
 	defer downSrv.Close()
@@ -123,6 +124,18 @@ func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
 	}
 	downPort, _ := strconv.Atoi(downPortStr)
 	peer := mkInst(net.JoinHostPort("127.0.0.1", strconv.Itoa(downPort-1)), "new-async")
+
+	upSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(Status{
+			Peer: &state.PeerInfo{ID: "primary-1"},
+			Database: &DatabaseInfo{
+				Running:          true,
+				SyncedDownstream: peer,
+				XLog:             "0/1",
+			},
+		})
+	}))
+	defer upSrv.Close()
 
 	up := sireniaTestClient(t, upSrv)
 	errCh := make(chan error, 1)
@@ -142,6 +155,22 @@ func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("WaitForReplSync did not succeed after downstream started")
+	}
+}
+
+func TestDownstreamFollowsUpstream(t *testing.T) {
+	up := &Status{Peer: &state.PeerInfo{ID: "primary-1"}}
+	follow := &Status{Database: &DatabaseInfo{Config: &state.Config{
+		Upstream: &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "primary-1"}},
+	}}}
+	if !downstreamFollowsUpstream(up, follow, "POSTGRES_ID") {
+		t.Fatal("expected follow")
+	}
+	other := &Status{Database: &DatabaseInfo{Config: &state.Config{
+		Upstream: &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "other"}},
+	}}}
+	if downstreamFollowsUpstream(up, other, "POSTGRES_ID") {
+		t.Fatal("must not treat a replica of a different peer as caught up")
 	}
 }
 

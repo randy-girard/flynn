@@ -393,14 +393,20 @@ loop:
 	}
 
 	log.Info("replacing the Sync node")
-	_, err = startInstance()
-	if err != nil {
-		return err
-	}
+	// Stop the old sync *before* starting its replacement. The current
+	// async (newPrimary) still replicates from that sync; introducing a
+	// fourth peer first lets sirenia assign the not-yet-started replacement
+	// as the async's upstream (flannel IP of the next job). The async then
+	// never follows the primary, and waitForReplSync(newPrimary, newSync)
+	// times out. Promote the async to sync first, then add the new async.
 	if err := stopInstance(state.Sync); err != nil {
 		return err
 	}
 	if err := waitForSync(state.Primary, newPrimary); err != nil {
+		return err
+	}
+	_, err = startInstance()
+	if err != nil {
 		return err
 	}
 
