@@ -21,11 +21,11 @@ func sireniaPeerMatchesRelease(inst *discoverd.Instance, releaseID, processType 
 		inst.Meta["FLYNN_PROCESS_TYPE"] == processType
 }
 
-func sireniaPeerExcluded(inst *discoverd.Instance, idKey string, exclude []*discoverd.Instance) bool {
+func sireniaPeerExcluded(inst *discoverd.Instance, idKey string, excludeIDs []*discoverd.Instance) bool {
 	if inst == nil {
 		return false
 	}
-	for _, ex := range exclude {
+	for _, ex := range excludeIDs {
 		if ex == nil {
 			continue
 		}
@@ -39,12 +39,12 @@ func sireniaPeerExcluded(inst *discoverd.Instance, idKey string, exclude []*disc
 	return false
 }
 
-func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processType, idKey string, exclude ...*discoverd.Instance) *discoverd.Instance {
+func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processType, idKey string, excludeIDs ...*discoverd.Instance) *discoverd.Instance {
 	for _, inst := range insts {
 		if !sireniaPeerMatchesRelease(inst, releaseID, processType) {
 			continue
 		}
-		if sireniaPeerExcluded(inst, idKey, exclude) {
+		if sireniaPeerExcluded(inst, idKey, excludeIDs) {
 			continue
 		}
 		return inst
@@ -52,12 +52,12 @@ func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processTyp
 	return nil
 }
 
-func lookupSireniaPeer(svc discoverd.Service, releaseID, processType, idKey string, exclude ...*discoverd.Instance) *discoverd.Instance {
+func lookupSireniaPeer(svc discoverd.Service, releaseID, processType, idKey string, excludeIDs ...*discoverd.Instance) *discoverd.Instance {
 	insts, err := discoverd.InstancesOrEmpty(svc)
 	if err != nil {
 		return nil
 	}
-	return findSireniaPeerByRelease(insts, releaseID, processType, idKey, exclude...)
+	return findSireniaPeerByRelease(insts, releaseID, processType, idKey, excludeIDs...)
 }
 
 // sireniaClusterDeployReady reports whether an HA sirenia cluster has the

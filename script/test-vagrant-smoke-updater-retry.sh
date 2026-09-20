@@ -52,7 +52,7 @@ need_in "${sirenia_health}" 'lookupSireniaPeer' \
   "sirenia must poll discoverd for a new-release peer"
 need_in "${sirenia_health}" 'excludeIDs' \
   "HA startInstance poll must skip already-started new peers"
-need_in "${sirenia}" 'lookupSireniaPeer\(svc, d.NewReleaseID, processType, exclude' \
+need_in "${sirenia}" 'lookupSireniaPeer\(svc, d.NewReleaseID, processType, idKey, exclude' \
   "HA startInstance wait must poll discoverd excluding known new peers"
 need_in "${github_updater}" 'MaxTransientDeployAttempts\(deployErr\)' \
   "flynn-host update must size retries from the deploy error"
