@@ -61,6 +61,10 @@ func TestShortDescription(t *testing.T) {
 	if got != "Set app environment variables" {
 		t.Fatalf("got %q", got)
 	}
+	got = ShortDescription("usage: flynn-host list\n\nExample:\n\n  $ flynn-host list\n\nLists ID and IP of each host")
+	if got != "Lists ID and IP of each host" {
+		t.Fatalf("example heading: %q", got)
+	}
 }
 
 func TestFormatItems(t *testing.T) {

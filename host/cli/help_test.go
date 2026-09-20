@@ -70,6 +70,12 @@ func TestRootHelpListsParentsOnly(t *testing.T) {
 			t.Fatalf("root help should not list %q:\n%s", nested, got)
 		}
 	}
+	if strings.Contains(got, "Example:") {
+		t.Fatalf("root help leaked an example heading:\n%s", got)
+	}
+	if !strings.Contains(got, "Lists ID and IP of each host") {
+		t.Fatalf("list summary missing:\n%s", got)
+	}
 }
 
 func TestHelpTopicKeepsNamespaceRoots(t *testing.T) {

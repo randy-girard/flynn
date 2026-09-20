@@ -15,13 +15,14 @@ func init() {
 	Register("list", runListHosts, `
 usage: flynn-host list
 
+Lists ID and IP of each host.
+
 Example:
 
   $ flynn-host list
   ID    ADDR
   host  10.0.2.15:1113
-
-Lists ID and IP of each host`)
+`)
 }
 
 func hostRaftStatus(host *cluster.Host, peers []string, leader string) (raftStatus string) {

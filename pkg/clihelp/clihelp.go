@@ -103,6 +103,7 @@ func ShortDescription(usage string) string {
 		switch {
 		case strings.HasPrefix(lower, "usage:"),
 			strings.HasPrefix(lower, "options:"),
+			strings.HasPrefix(lower, "example:"),
 			strings.HasPrefix(lower, "examples:"),
 			strings.HasPrefix(lower, "commands:"),
 			strings.HasPrefix(line, "flynn-host "),
