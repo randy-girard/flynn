@@ -527,7 +527,7 @@ and restoring it to a new cluster with the new version of Flynn.
 ### In-place update
 
 The in-place updater is new and could cause cluster failure. We recommend taking
-a full backup of the cluster first with `flynn-host backup`.  There is almost
+a full backup of the cluster first with `flynn-host backup`. There is almost
 zero downtime during the cluster update, however database clusters may be
 unavailable for a few seconds while they are updated.
 

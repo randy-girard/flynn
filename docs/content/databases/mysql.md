@@ -80,7 +80,7 @@ also be imported into a local MySQL database that is not managed by Flynn with
 $ mysql -D mydb < latest.dump
 ```
 
-`flynn mysql:restore` loads a database dump from a local file into a Flynn MySQL
+`flynn mysql:restore` loads a database dump from a local file into a Flynn MariaDB
 database. Any existing tables and database objects will be dropped before they
 are recreated.
 
