@@ -57,7 +57,9 @@ source "${notes_lib}"
 sample="$(mktemp)"
 trap 'rm -f "${sample}"' EXIT
 bash "${release}" --target notes --version v20990101.0 --github-repo randy-girard/flynn --output "${sample}" >/dev/null
-if ! grep -q '### ✨ Features\|### 🐛 Bug Fixes\|### 🧪 Tests\|### 👷 CI\|### 📦 Other Changes' "${sample}"; then
+# Any conventional-commit group counts: a docs-only or chore-only range emits
+# just its own heading, which used to fail this gate on the docs commit.
+if ! grep -qE '^### ' "${sample}"; then
   echo "generated notes must include at least one conventional-commit group" >&2
   head -n 40 "${sample}" >&2
   exit 1
