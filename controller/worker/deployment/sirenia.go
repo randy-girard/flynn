@@ -393,20 +393,40 @@ loop:
 	}
 
 	log.Info("replacing the Sync node")
-	// Stop the old sync *before* starting its replacement. The current
-	// async (newPrimary) still replicates from that sync; introducing a
-	// fourth peer first lets sirenia assign the not-yet-started replacement
-	// as the async's upstream (flannel IP of the next job). The async then
-	// never follows the primary, and waitForReplSync(newPrimary, newSync)
-	// times out. Promote the async to sync first, then add the new async.
+	// Start the replacement *before* stopping the old sync so the replica
+	// set keeps three live peers during the new job's base backup. Wait
+	// until the cluster names that job as the tail async (still following
+	// the current first async, not the primary) and it has caught up with
+	// that actual upstream; only then stop the old sync and wait for the
+	// promoted async to follow the primary. Starting without that wait let
+	// sirenia wire a not-yet-started peer as an upstream, and stopping the
+	// old sync first dropped HA for the duration of the backup.
+	newInst, err := startInstance()
+	if err != nil {
+		return err
+	}
+	waitForTopology := func(pred func(*sireniaclient.Status) bool, what string) error {
+		log.Info("waiting for sirenia topology", "what", what, "peer", newInst.Addr)
+		sc := sireniaclient.NewClient(state.Primary.Addr)
+		if err := sc.WaitUntil(pred, syncTimeout); err != nil {
+			log.Error("error waiting for sirenia topology", "what", what, "err", err)
+			return err
+		}
+		return nil
+	}
+	if err := waitForTopology(sireniaclient.SyncReplaceTopologyReady(state.Sync, newPrimary, newInst, idKey), "new peer is tail async"); err != nil {
+		return err
+	}
+	if err := waitForSync(asyncUpstream, newInst); err != nil {
+		return err
+	}
 	if err := stopInstance(state.Sync); err != nil {
 		return err
 	}
-	if err := waitForSync(state.Primary, newPrimary); err != nil {
+	if err := waitForSyncPeer(state.Primary, newPrimary); err != nil {
 		return err
 	}
-	_, err = startInstance()
-	if err != nil {
+	if err := waitForSync(state.Primary, newPrimary); err != nil {
 		return err
 	}
 

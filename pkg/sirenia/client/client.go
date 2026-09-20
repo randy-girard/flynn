@@ -145,9 +145,49 @@ func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, t
 		return fmt.Errorf("nil downstream peer")
 	}
 	dclient := NewClient(downstream.Addr)
-	return c.waitFor(func(up *Status) bool {
+	return c.WaitUntil(func(up *Status) bool {
 		return replSyncCaughtUp(up, dclient, downstream, idKey)
 	}, timeout)
+}
+
+// WaitUntil polls /status until pred returns true or timeout elapses.
+func (c *Client) WaitUntil(pred func(*Status) bool, timeout time.Duration) error {
+	return c.waitFor(pred, timeout)
+}
+
+// IsTailAsync reports whether peer is the last entry in the cluster's async
+// chain. A newly started replacement must land here: if it were inserted at
+// the front, the existing first async would re-point its upstream at a peer
+// that has not finished its base backup.
+func IsTailAsync(s *state.State, peer *discoverd.Instance, idKey string) bool {
+	if s == nil || peer == nil || len(s.Async) == 0 {
+		return false
+	}
+	return SamePeer(idKey, s.Async[len(s.Async)-1], peer)
+}
+
+// SyncReplaceTopologyReady is true when the cluster has absorbed a newly
+// started sync-replacement as the tail async without taking over the recorded
+// sync or shuffling the first async. The deploy worker waits for this before
+// stopping the old sync, so the replica set keeps three live peers while the
+// new job completes its base backup.
+func SyncReplaceTopologyReady(oldSync, firstAsync, newPeer *discoverd.Instance, idKey string) func(*Status) bool {
+	return func(status *Status) bool {
+		if status == nil || status.Peer == nil || status.Peer.State == nil {
+			return false
+		}
+		s := status.Peer.State
+		if !SamePeer(idKey, s.Sync, oldSync) {
+			return false
+		}
+		if len(s.Async) < 2 {
+			return false
+		}
+		if firstAsync != nil && !SamePeer(idKey, s.Async[0], firstAsync) {
+			return false
+		}
+		return IsTailAsync(s, newPeer, idKey)
+	}
 }
 
 // replSyncCaughtUp reports whether upstream names expected as its synced
