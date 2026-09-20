@@ -305,15 +305,23 @@ $ script/run-single-integration-test.sh …
 nested containers/KVM and is much slower than `make test-unit`. Details:
 [test/README.md](../../test/README.md).
 
-### Vagrant upgrade smoke
+### Vagrant smoke
 
 This is the cluster acceptance suite used for upgrades, datastores, Docker
-deploys, overlay isolation, and node join/drain. Run it from the **repo root on
-the laptop** (it drives Vagrant):
+deploys, overlay isolation, and node join/drain, and it is the gate before every
+release: it needs real VMs, so it cannot run in GitHub Actions. Run it from the
+**repo root on the laptop** (it drives Vagrant):
 
 ```
-$ script/vagrant-upgrade-smoke.sh
+$ script/vagrant-smoke.sh
 ```
+
+`script/vagrant-smoke.sh` is a thin entrypoint over
+`script/vagrant-upgrade-smoke.sh`, which still holds the implementation (the
+name predates the test covering far more than upgrades); options, environment
+variables and the `script/test-vagrant-smoke-*.sh` contract tests are the same
+for both. After a fix, the rebuild on the builder is incremental (see
+[Incremental rebuilds](#incremental-rebuilds)).
 
 Default flow:
 

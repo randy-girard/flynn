@@ -83,7 +83,7 @@ sudo ./flynn-test \
 Pull requests against `main` run the [Unit tests](../.github/workflows/unit-tests.yml)
 GitHub Actions workflow (`gofmt`, `bats script/test`, `make test-unit-root-native`).
 Cluster acceptance is local: [Development — tests](../docs/content/development.html.md#tests)
-and `script/vagrant-upgrade-smoke.sh`.
+and `script/vagrant-smoke.sh` (entrypoint over `script/vagrant-upgrade-smoke.sh`).
 
 The rest of this section describes the historical in-cluster CI app (KVM nested
 clusters). Prefer GitHub Actions plus Vagrant smoke unless you are maintaining

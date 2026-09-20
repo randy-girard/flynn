@@ -30,7 +30,7 @@ This fork does **not** use the Developer Certificate of Origin. Use plain `git c
 
 1. Branch from `main` (not a long-lived personal copy of `master`).
 1. Rebase onto current `main`.
-1. Run the tests you can (`make test-unit`; integration or `script/vagrant-upgrade-smoke.sh` if the change needs a cluster).
+1. Run the tests you can (`make test-unit`; integration or `script/vagrant-smoke.sh` if the change needs a cluster).
 1. Run `gofmt -s` (or `make install-git-hooks` so pre-commit / pre-push run `validate-gofmt`).
 1. Use a Conventional Commit subject on every commit (`<type>(<scope>): <summary>`); no DCO sign-off.
 1. Include tests, or explain in the commit message why the change is hard to test.
