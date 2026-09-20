@@ -30,8 +30,12 @@ func RepairStaleVolumes(ctrl controller.Client, hosts []*cluster.Host, log log15
 		log = log15.New()
 	}
 
-	volumes, err := ctrl.VolumeList()
-	if err != nil {
+	var volumes []*ct.Volume
+	if err := callWithRetry(func() error {
+		var e error
+		volumes, e = ctrl.VolumeList()
+		return e
+	}); err != nil {
 		return fmt.Errorf("list controller volumes: %w", err)
 	}
 
@@ -60,7 +64,7 @@ func RepairStaleVolumes(ctrl controller.Client, hosts []*cluster.Host, log log15
 		log.Warn("marking stale volume destroyed", "vol.id", vol.ID, "host.id", vol.HostID, "app.id", vol.AppID)
 		vol.State = ct.VolumeStateDestroyed
 		vol.JobID = nil
-		if err := ctrl.PutVolume(vol); err != nil {
+		if err := callWithRetry(func() error { return ctrl.PutVolume(vol) }); err != nil {
 			return fmt.Errorf("mark volume %s destroyed: %w", vol.ID, err)
 		}
 		repaired++
@@ -106,27 +110,49 @@ func volumeHeldByLiveJob(vol *ct.Volume, liveJobs map[string]bool) bool {
 	return liveJobs[*vol.JobID]
 }
 
+func addLiveJobs(live map[string]bool, jobs []*ct.Job) {
+	for _, job := range jobs {
+		if job == nil {
+			continue
+		}
+		if job.State == ct.JobStateUp || job.State == ct.JobStateStarting {
+			live[job.ID] = true
+		}
+	}
+}
+
 func liveJobIDs(ctrl controller.Client, volumes []*ct.Volume) (map[string]bool, error) {
+	live := make(map[string]bool)
+	var active []*ct.Job
+	activeErr := callWithRetry(func() error {
+		var e error
+		active, e = ctrl.JobListActive()
+		return e
+	})
+	if activeErr == nil {
+		addLiveJobs(live, active)
+		return live, nil
+	}
+
 	appIDs := make(map[string]struct{})
 	for _, vol := range volumes {
 		if vol != nil && vol.AppID != "" {
 			appIDs[vol.AppID] = struct{}{}
 		}
 	}
-	live := make(map[string]bool)
+	if len(appIDs) == 0 {
+		return nil, activeErr
+	}
 	for appID := range appIDs {
-		jobs, err := ctrl.JobList(appID)
-		if err != nil {
+		var jobs []*ct.Job
+		if err := callWithRetry(func() error {
+			var e error
+			jobs, e = ctrl.JobList(appID)
+			return e
+		}); err != nil {
 			return nil, err
 		}
-		for _, job := range jobs {
-			if job == nil {
-				continue
-			}
-			if job.State == ct.JobStateUp || job.State == ct.JobStateStarting {
-				live[job.ID] = true
-			}
-		}
+		addLiveJobs(live, jobs)
 	}
 	return live, nil
 }

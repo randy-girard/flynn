@@ -40,8 +40,12 @@ func RepairSireniaClusterQuorum(ctrl controller.Client, restartDownJobs bool, lo
 		log = log15.New()
 	}
 
-	apps, err := ctrl.AppList()
-	if err != nil {
+	var apps []*ct.App
+	if err := callWithRetry(func() error {
+		var e error
+		apps, e = ctrl.AppList()
+		return e
+	}); err != nil {
 		return fmt.Errorf("list apps: %w", err)
 	}
 
@@ -78,8 +82,12 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 		return nil
 	}
 
-	release, err := ctrl.GetRelease(activeRelease)
-	if err != nil {
+	var release *ct.Release
+	if err := callWithRetry(func() error {
+		var e error
+		release, e = ctrl.GetRelease(activeRelease)
+		return e
+	}); err != nil {
 		return fmt.Errorf("get active %s release: %w", app.Name, err)
 	}
 	processType := release.Env["SIRENIA_PROCESS"]
@@ -87,8 +95,12 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 		processType = app.Name
 	}
 
-	formations, err := ctrl.FormationList(app.ID)
-	if err != nil {
+	var formations []*ct.Formation
+	if err := callWithRetry(func() error {
+		var e error
+		formations, e = ctrl.FormationList(app.ID)
+		return e
+	}); err != nil {
 		return fmt.Errorf("list %s formations: %w", app.Name, err)
 	}
 	expected := 0
@@ -117,8 +129,12 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 	}
 	registered := registeredSireniaJobs(instances)
 
-	jobs, err := ctrl.JobList(app.ID)
-	if err != nil {
+	var jobs []*ct.Job
+	if err := callWithRetry(func() error {
+		var e error
+		jobs, e = ctrl.JobList(app.ID)
+		return e
+	}); err != nil {
 		return fmt.Errorf("list %s jobs: %w", app.Name, err)
 	}
 
@@ -127,7 +143,7 @@ func repairSireniaClusterQuorumForApp(ctrl controller.Client, app *ct.App, resta
 	for _, jobID := range restartIDs {
 		log.Warn("restarting unregistered or stuck sirenia job",
 			"job.id", jobID, "registered", registered[jobID], "reason", reasons[jobID])
-		if err := ctrl.DeleteJob(app.ID, jobID); err != nil {
+		if err := callWithRetry(func() error { return ctrl.DeleteJob(app.ID, jobID) }); err != nil {
 			return fmt.Errorf("restart %s job %s: %w", app.Name, jobID, err)
 		}
 		restarted++

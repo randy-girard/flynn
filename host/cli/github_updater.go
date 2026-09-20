@@ -1369,11 +1369,16 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		}
 		return dialer.Default.Dial(network, addr)
 	}
-	httpClient := &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
+	httpClient := newControllerHTTPClient(discoverdDial, 0)
 	client, err := controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
 	if err != nil {
 		log.Error("error creating controller client", "err", err)
 		return fmt.Errorf("error creating controller client: %w", err)
+	}
+	repairClient, err := controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], newControllerHTTPClient(discoverdDial, controllerRepairHTTPTimeout))
+	if err != nil {
+		log.Error("error creating controller repair client", "err", err)
+		return fmt.Errorf("error creating controller repair client: %w", err)
 	}
 
 	// Validate images
@@ -1405,14 +1410,14 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	// on postgres being fully healthy (with asyncs).
 	if hosts, err := clusterClient.Hosts(); err != nil {
 		log.Warn("could not list hosts for volume repair", "err", err)
-	} else if err := updaterdeploy.RepairStaleVolumes(client, hosts, log); err != nil {
+	} else if err := updaterdeploy.RepairStaleVolumes(repairClient, hosts, log); err != nil {
 		log.Warn("error repairing stale volumes", "err", err)
 	}
 	repairSireniaClusters(log)
-	if err := updaterdeploy.RepairOrphanSireniaFormations(client, log); err != nil {
+	if err := updaterdeploy.RepairOrphanSireniaFormations(repairClient, log); err != nil {
 		log.Warn("error repairing orphan sirenia formations", "err", err)
 	}
-	if err := updaterdeploy.RepairSireniaClusterQuorum(client, restartDownJobs, log); err != nil {
+	if err := updaterdeploy.RepairSireniaClusterQuorum(repairClient, restartDownJobs, log); err != nil {
 		log.Warn("error repairing sirenia cluster quorum", "err", err)
 	}
 

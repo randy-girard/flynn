@@ -3,6 +3,7 @@ package updaterdeploy
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	controller "github.com/randy-girard/flynn/controller/client"
@@ -27,10 +28,13 @@ func TestIsTrackedAppVolume(t *testing.T) {
 
 type fakeVolumeController struct {
 	controller.Client
-	volumes    []*ct.Volume
-	jobs       map[string][]*ct.Job
-	put        []*ct.Volume
-	jobListErr error
+	volumes     []*ct.Volume
+	jobs        map[string][]*ct.Job
+	put         []*ct.Volume
+	jobListErr  error
+	jobListHang chan struct{}
+	activeErr   error
+	skipActive  bool
 }
 
 func (f *fakeVolumeController) VolumeList() ([]*ct.Volume, error) { return f.volumes, nil }
@@ -40,10 +44,32 @@ func (f *fakeVolumeController) PutVolume(v *ct.Volume) error {
 	return nil
 }
 func (f *fakeVolumeController) JobList(appID string) ([]*ct.Job, error) {
+	if f.jobListHang != nil {
+		<-f.jobListHang
+	}
 	if f.jobListErr != nil {
 		return nil, f.jobListErr
 	}
 	return f.jobs[appID], nil
+}
+func (f *fakeVolumeController) JobListActive() ([]*ct.Job, error) {
+	if f.jobListHang != nil {
+		<-f.jobListHang
+	}
+	if f.activeErr != nil {
+		return nil, f.activeErr
+	}
+	if f.skipActive {
+		return nil, errors.New("JobListActive unavailable")
+	}
+	if f.jobListErr != nil {
+		return nil, f.jobListErr
+	}
+	var all []*ct.Job
+	for _, jobs := range f.jobs {
+		all = append(all, jobs...)
+	}
+	return all, nil
 }
 
 func TestRepairStaleVolumes_RequiresTwoConsecutiveMisses(t *testing.T) {
@@ -186,5 +212,69 @@ func TestLiveJobIDs(t *testing.T) {
 	}
 	if !live["up"] || !live["starting"] || live["down"] {
 		t.Fatalf("live=%v", live)
+	}
+}
+
+func TestLiveJobIDsFallsBackToJobList(t *testing.T) {
+	ctrl := &fakeVolumeController{
+		skipActive: true,
+		jobs: map[string][]*ct.Job{
+			"app-1": {{ID: "up", State: ct.JobStateUp}},
+		},
+	}
+	live, err := liveJobIDs(ctrl, []*ct.Volume{{AppID: "app-1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !live["up"] {
+		t.Fatalf("live=%v", live)
+	}
+}
+
+func TestLiveJobIDsTimesOutHungJobList(t *testing.T) {
+	origT, origA, origD := repairCallTimeout, repairCallAttempts, repairCallDelay
+	repairCallTimeout = 40 * time.Millisecond
+	repairCallAttempts = 2
+	repairCallDelay = 0
+	defer func() {
+		repairCallTimeout = origT
+		repairCallAttempts = origA
+		repairCallDelay = origD
+	}()
+
+	ctrl := &fakeVolumeController{jobListHang: make(chan struct{})}
+	start := time.Now()
+	_, err := liveJobIDs(ctrl, []*ct.Volume{{AppID: "app-1"}})
+	if err == nil {
+		t.Fatal("expected timeout")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("hung JobList took %s, want bounded timeout", elapsed)
+	}
+}
+
+func TestCallWithRetrySucceedsAfterTransientError(t *testing.T) {
+	origT, origA, origD := repairCallTimeout, repairCallAttempts, repairCallDelay
+	repairCallTimeout = time.Second
+	repairCallAttempts = 3
+	repairCallDelay = 0
+	defer func() {
+		repairCallTimeout = origT
+		repairCallAttempts = origA
+		repairCallDelay = origD
+	}()
+
+	n := 0
+	if err := callWithRetry(func() error {
+		n++
+		if n < 2 {
+			return errors.New("transient")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("attempts=%d", n)
 	}
 }

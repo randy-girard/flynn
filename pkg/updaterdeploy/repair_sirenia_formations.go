@@ -40,8 +40,12 @@ func RepairOrphanSireniaFormations(ctrl controller.Client, log log15.Logger) err
 		log = log15.New()
 	}
 
-	apps, err := ctrl.AppList()
-	if err != nil {
+	var apps []*ct.App
+	if err := callWithRetry(func() error {
+		var e error
+		apps, e = ctrl.AppList()
+		return e
+	}); err != nil {
 		return fmt.Errorf("list apps: %w", err)
 	}
 
@@ -86,8 +90,12 @@ func repairOrphanSireniaFormationsForApp(ctrl controller.Client, app *ct.App, lo
 		return 0, nil
 	}
 
-	release, err := ctrl.GetRelease(activeRelease)
-	if err != nil {
+	var release *ct.Release
+	if err := callWithRetry(func() error {
+		var e error
+		release, e = ctrl.GetRelease(activeRelease)
+		return e
+	}); err != nil {
 		return 0, fmt.Errorf("get active %s release: %w", app.Name, err)
 	}
 	processType := release.Env["SIRENIA_PROCESS"]
@@ -95,8 +103,12 @@ func repairOrphanSireniaFormationsForApp(ctrl controller.Client, app *ct.App, lo
 		processType = app.Name
 	}
 
-	formations, err := ctrl.FormationList(app.ID)
-	if err != nil {
+	var formations []*ct.Formation
+	if err := callWithRetry(func() error {
+		var e error
+		formations, e = ctrl.FormationList(app.ID)
+		return e
+	}); err != nil {
 		return 0, fmt.Errorf("list %s formations: %w", app.Name, err)
 	}
 
@@ -116,7 +128,7 @@ func repairOrphanSireniaFormationsForApp(ctrl controller.Client, app *ct.App, lo
 			"active.release.id", activeRelease,
 		)
 		formation.Processes[processType] = 0
-		if err := ctrl.PutFormation(formation); err != nil {
+		if err := callWithRetry(func() error { return ctrl.PutFormation(formation) }); err != nil {
 			return repaired, fmt.Errorf("scale orphan %s formation %s: %w", app.Name, formation.ReleaseID, err)
 		}
 		repaired++
