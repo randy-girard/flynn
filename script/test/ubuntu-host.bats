@@ -35,3 +35,14 @@ load "helper"
     grep -q -- '--no-logrotate' "${f}"
   done
 }
+
+@test "install --clean unmounts overlay and squashfs under /var/lib/flynn" {
+  for f in \
+    "${ROOT}/script/install-flynn" \
+    "${ROOT}/script/install-flynn.tmpl" \
+    "${ROOT}/script/install-flynn-release"
+  do
+    grep -q 'unmount_under_flynn' "${f}"
+    grep -q '/var/lib/flynn' "${f}"
+  done
+}

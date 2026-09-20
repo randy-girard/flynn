@@ -94,6 +94,20 @@ check_installed() {
   fi
 }
 
+# Overlay/squashfs job mounts stay after flynn-host stop. rm -rf then hits
+# EROFS on squashfs lowerdirs and EBUSY on overlay mounts.
+unmount_under_flynn() {
+  local mp
+  if [[ ! -r /proc/mounts ]]; then
+    return 0
+  fi
+  info "unmounting Flynn image and volume mounts"
+  while read -r mp; do
+    [[ -z "${mp}" ]] && continue
+    umount -l "${mp}" 2>/dev/null || umount "${mp}" 2>/dev/null || true
+  done < <(awk '$2 ~ /^\/var\/lib\/flynn(\/|$)/ { print $2 }' /proc/mounts | sort -r)
+}
+
 do_remove() {
   local assume_yes=$1
   warn "*** WARNING ***"
@@ -125,6 +139,7 @@ do_remove() {
   if zpool list 2>/dev/null | grep -q "flynn-default"; then
     zpool destroy flynn-default || true
   fi
+  unmount_under_flynn
   info "removing Flynn files and directories"
   rm -rf /usr/local/bin/flynn* /var/lib/flynn /etc/flynn \
     /etc/init/flynn-host.conf /lib/systemd/system/flynn-host.service
