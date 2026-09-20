@@ -1,0 +1,18 @@
+---
+description: Isolated git worktrees live only under FlynnWorkspace/.worktrees
+alwaysApply: true
+---
+
+# Isolated worktrees
+
+Follow [AGENTS.md](../../AGENTS.md).
+
+When a change needs an isolated checkout (parallel work, a smoke-test-safe branch, a critic worktree), add it under the **workspace** parent, not inside this repo:
+
+```
+/Users/rgirard/Documents/FlynnWorkspace/.worktrees/<short-name>
+```
+
+From this repo: `git worktree add ../.worktrees/<short-name> -b <branch>`. From a plugin: `git worktree add ../../.worktrees/<short-name> -b <branch>`.
+
+Do **not** put worktrees in `worktrees/`, `flynn/.kilo/worktrees/`, or as sibling clones named `flynn-<topic>` / `flynn-plugin-dashboard-*`. After the branch is merged, `git worktree remove` that directory (and `git branch -d` the local branch).

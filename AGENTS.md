@@ -32,6 +32,16 @@ If a change is internal-only and has no user-visible effect, say so in the PR an
 
 **If `../flynn-plugin-dashboard` exists**, that plugin’s local Compose stack uses `mock/` instead of this cluster. When you change `GET /cluster/stats`, `GET /cluster/jobs-stats`, `GET /apps/:id/jobs-stats`, or the JSON on `host.HostResourceStats` / `host.ContainerStats`, update `../flynn-plugin-dashboard/mock` in the same work so the local dashboard still reflects the APIs. If that sibling folder is missing, ignore this.
 
+## Isolated worktrees
+
+Put extra checkouts in **one** place, the workspace-level `.worktrees/` directory (sibling of this `flynn/` clone), never inside the repo and never as a second top-level clone:
+
+```
+../.worktrees/<short-name>
+```
+
+Example: `git worktree add ../.worktrees/flynn-sirenia-sync -b fix/sirenia-sync-start-first`. Plugin repos use `../../.worktrees/<short-name>` from their checkout. Do not create `worktrees/`, `flynn/.kilo/worktrees/`, or sibling folders named `flynn-<topic>` / `flynn-plugin-dashboard-*`. Remove the worktree (and its local branch) after the work is merged.
+
 ## Git commits
 
 **Always** use [Conventional Commits](https://www.conventionalcommits.org/) for every commit. Do not use unstructured subjects.

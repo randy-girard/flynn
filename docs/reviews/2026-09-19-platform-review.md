@@ -705,4 +705,4 @@ Plugins: all `flynn-plugin.json`; `flynn-plugin-dashboard/{cmd/dashboard/main.go
 - The dashboard OAuth authorization-code exchange and the frontend `api/` client beyond a sink search; no browser-based testing.
 - Kafka and ClickHouse `process.go`/`admin.go` business logic (topic ACLs, keeper quorum) beyond the HTTP handler surface.
 - Any runtime testing — this review is static; no cluster was exercised and no exploit was executed.
-- Sibling checkouts and repos listed as out of scope (`flynn-plugin-dashboard-*`, `flynn-datastore-tls`, `flynn-resource-demo`, `flynn-cursor-agent-test`, `flynn-ansible`, `.worktrees/*`, `worktrees/*`, `flynn/.kilo/`).
+- Sibling checkouts and repos listed as out of scope (`flynn-resource-demo`, `flynn-cursor-agent-test`, `flynn-ansible`, isolated worktrees under `../.worktrees/`).
