@@ -2259,9 +2259,9 @@ if [[ -e /usr/local/bin/flynn-host || -d /var/lib/flynn ]]; then
   # Overlay/squashfs mounts survive flynn-host stop; --clean rm -rf then EROFS/EBUSY.
   if [[ -r /proc/mounts ]]; then
     while read -r mp; do
-      [[ -z "${mp}" ]] && continue
-      umount -l "${mp}" 2>/dev/null || umount "${mp}" 2>/dev/null || true
-    done < <(awk '$2 ~ /^\/var\/lib\/flynn(\/|$)/ { print $2 }' /proc/mounts | sort -r)
+      [[ -z "\${mp}" ]] && continue
+      umount -l "\${mp}" 2>/dev/null || umount "\${mp}" 2>/dev/null || true
+    done < <(awk '\$2 ~ /^\/var\/lib\/flynn(\/|\$)/ { print \$2 }' /proc/mounts | sort -r)
   fi
 fi
 bash "\${install_script}" --yes --no-ntp "\${extra_args[@]}" --tarball "\${tarball}"

@@ -84,6 +84,10 @@ need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
 need 'umount -l' \
   "smoke must unmount overlay/squashfs under /var/lib/flynn before install --clean"
+if ! grep -qF '\${mp}' "${smoke}"; then
+  echo "smoke overlay unmount must escape mp so the node heredoc runs it" >&2
+  exit 1
+fi
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
 need 'wait_sirenia_ha_if_cluster "after restore"' \
