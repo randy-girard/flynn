@@ -38,6 +38,7 @@ func TestSyncedWithUsesMetaIdentity(t *testing.T) {
 
 	statusOldID := &Status{
 		Database: &DatabaseInfo{
+			Running:          true,
 			SyncedDownstream: oldSync,
 		},
 	}
@@ -47,6 +48,7 @@ func TestSyncedWithUsesMetaIdentity(t *testing.T) {
 
 	statusNewID := &Status{
 		Database: &DatabaseInfo{
+			Running:          true,
 			SyncedDownstream: newSync,
 		},
 	}
@@ -54,9 +56,12 @@ func TestSyncedWithUsesMetaIdentity(t *testing.T) {
 		t.Fatal("expected true when Meta identity matches")
 	}
 
-	statusNil := &Status{Database: &DatabaseInfo{}}
+	statusNil := &Status{Database: &DatabaseInfo{Running: true}}
 	if check(statusNil) {
 		t.Fatal("expected false when SyncedDownstream is nil")
+	}
+	if check(&Status{Database: &DatabaseInfo{Running: false, SyncedDownstream: newSync}}) {
+		t.Fatal("expected false when upstream postgres is not running")
 	}
 }
 
@@ -64,11 +69,11 @@ func TestSyncedWithFallsBackToDiscoverdID(t *testing.T) {
 	downstream := mkInst("10.0.0.3:5432", "async-1")
 	check := SyncedWith(downstream, "")
 
-	if !check(&Status{Database: &DatabaseInfo{SyncedDownstream: downstream}}) {
+	if !check(&Status{Database: &DatabaseInfo{Running: true, SyncedDownstream: downstream}}) {
 		t.Fatal("expected true when discoverd IDs match and idKey is empty")
 	}
 	other := mkInst("10.0.0.4:5432", "async-2")
-	if check(&Status{Database: &DatabaseInfo{SyncedDownstream: other}}) {
+	if check(&Status{Database: &DatabaseInfo{Running: true, SyncedDownstream: other}}) {
 		t.Fatal("expected false when discoverd IDs differ")
 	}
 }
@@ -81,8 +86,62 @@ func TestSyncedWithIgnoresEmptyMeta(t *testing.T) {
 	}
 	synced := mkInst("10.0.0.2:5432", "other")
 	check := SyncedWith(expected, "POSTGRES_ID")
-	if check(&Status{Database: &DatabaseInfo{SyncedDownstream: synced}}) {
+	if check(&Status{Database: &DatabaseInfo{Running: true, SyncedDownstream: synced}}) {
 		t.Fatal("expected false when expected Meta id is empty")
+	}
+}
+
+func sireniaTestClient(t *testing.T, srv *httptest.Server) *Client {
+	t.Helper()
+	host, portStr, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	return NewClient(net.JoinHostPort(host, strconv.Itoa(port-1)))
+}
+
+func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
+	downstream := mkInst("10.0.0.9:5432", "new-async")
+	var downRunning int32
+	upSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(Status{
+			Database: &DatabaseInfo{Running: true, SyncedDownstream: downstream, XLog: "0/1"},
+		})
+	}))
+	defer upSrv.Close()
+	downSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(Status{
+			Database: &DatabaseInfo{Running: atomic.LoadInt32(&downRunning) == 1, XLog: "0/1"},
+		})
+	}))
+	defer downSrv.Close()
+
+	_, downPortStr, err := net.SplitHostPort(downSrv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	downPort, _ := strconv.Atoi(downPortStr)
+	peer := mkInst(net.JoinHostPort("127.0.0.1", strconv.Itoa(downPort-1)), "new-async")
+
+	up := sireniaTestClient(t, upSrv)
+	errCh := make(chan error, 1)
+	go func() { errCh <- up.WaitForReplSync(peer, "POSTGRES_ID", 3*time.Second) }()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("WaitForReplSync succeeded while downstream was down: %v", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+
+	atomic.StoreInt32(&downRunning, 1)
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("WaitForReplSync: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("WaitForReplSync did not succeed after downstream started")
 	}
 }
 

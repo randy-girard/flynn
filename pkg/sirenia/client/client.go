@@ -141,7 +141,35 @@ func IsPeerUnreachableError(err error) bool {
 }
 
 func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, timeout time.Duration) error {
-	return c.waitFor(SyncedWith(downstream, idKey), timeout)
+	if downstream == nil {
+		return fmt.Errorf("nil downstream peer")
+	}
+	dclient := NewClient(downstream.Addr)
+	return c.waitFor(func(up *Status) bool {
+		return replSyncCaughtUp(up, dclient, downstream, idKey)
+	}, timeout)
+}
+
+// replSyncCaughtUp reports whether upstream names expected as its synced
+// replica and that peer is actually running. An upstream can report
+// SyncedDownstream from a stale pg_stat_replication row while the replacement
+// job is still waiting for a basebackup; requiring Database.Running on both
+// sides prevents the sirenia deploy from stopping the next peer too early.
+func replSyncCaughtUp(up *Status, downstreamClient *Client, expected *discoverd.Instance, idKey string) bool {
+	if up == nil || up.Database == nil || !up.Database.Running || up.Database.SyncedDownstream == nil {
+		return false
+	}
+	if !SamePeer(idKey, expected, up.Database.SyncedDownstream) {
+		return false
+	}
+	if downstreamClient == nil {
+		return false
+	}
+	down, err := downstreamClient.Status()
+	if err != nil || down == nil || down.Database == nil || !down.Database.Running {
+		return false
+	}
+	return true
 }
 
 // SyncedWith returns a predicate that reports whether replication has caught up
@@ -150,7 +178,7 @@ func (c *Client) WaitForReplSync(downstream *discoverd.Instance, idKey string, t
 // correctly.
 func SyncedWith(expected *discoverd.Instance, idKey string) func(*Status) bool {
 	return func(status *Status) bool {
-		if status.Database == nil || status.Database.SyncedDownstream == nil {
+		if status == nil || status.Database == nil || !status.Database.Running || status.Database.SyncedDownstream == nil {
 			return false
 		}
 		synced := status.Database.SyncedDownstream
