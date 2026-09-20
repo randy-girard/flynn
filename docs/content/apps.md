@@ -173,6 +173,10 @@ metrics cpu_percent=12.35 memory_bytes=67108864 memory_limit_bytes=536870912 mem
 
 Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
 (`Starting web process`, `Scaling down web process`) use the same system stream.
+They are emitted asynchronously by the host and are best-effort: a `flynn log
+-f` follower that stops reading is skipped after one second rather than
+stalling the host, so a saturated follower may miss lines while other clients
+and the on-disk log still receive them.
 
 `flynn metrics` prints the latest stored app snapshot the dashboard uses for
 alerts. Add rules with `flynn alert:add` (email or webhook). Cluster-wide
