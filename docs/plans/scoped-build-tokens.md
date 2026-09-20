@@ -125,7 +125,7 @@ whole cluster.
    that emits the P-256 keypair; public → `ACCESS_TOKEN_KEY`
    (controller/tarreceive), private → `ACCESS_TOKEN_SIGNING_KEY` (gitreceive).
 4. Build timeout + token TTL: a single operator knob, the **app release env var
-   `FLYNN_BUILD_TIMEOUT`** (a Go duration string) set with `flynn env set` (on
+   `FLYNN_BUILD_TIMEOUT`** (a Go duration string) set with `flynn env:set` (on
    the app being built, or on the gitreceive app for a cluster-wide default),
    default **15m**. It drives both (a) the receiver killing the build job if it
    runs longer than the timeout, and (b) the minted build-token TTL (token TTL =
@@ -200,10 +200,10 @@ self-contained commit that builds + vets for `GOOS=linux`:
    P-256 keypair once; publish public → `ACCESS_TOKEN_KEY`, private →
    `ACCESS_TOKEN_SIGNING_KEY` on gitreceive. Wire `ACCESS_TOKEN_MAX_VALIDITY`.
 7. **operator-overridable build timeout (`FLYNN_BUILD_TIMEOUT`)** — receiver
-   reads `FLYNN_BUILD_TIMEOUT` from the app release env (via `flynn env set`),
+   reads `FLYNN_BUILD_TIMEOUT` from the app release env (via `flynn env:set`),
    falling back to its own process env (gitreceive app-level default) then the
    built-in 15m default, and clamps to a 30m cluster max. This single value
    both bounds build execution (the receiver kills the build job if it exceeds
    the timeout, failing the push with a clear message) and sets the minted
-   token TTL (token TTL = build timeout). Set via the flynn CLI `env set` (not a
+   token TTL (token TTL = build timeout). Set via the flynn CLI `env:set` (not a
    `git push` flag, which git cannot plumb to the receiver).
