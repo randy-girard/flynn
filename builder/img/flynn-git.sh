@@ -105,7 +105,8 @@ ttl="${FLYNN_GIT_CACHE_TTL:-3600}"
 
 needs_fetch=true
 if [[ -d "${mirror}" && -f "${stamp}" ]]; then
-  age=$(( $(date +%s) - $(stat -c %Y "${stamp}" 2>/dev/null || echo 0) ))
+  stamp_mtime="$(stat -c %Y "${stamp}" 2>/dev/null || stat -f %m "${stamp}" 2>/dev/null || echo 0)"
+  age=$(( $(date +%s) - stamp_mtime ))
   [[ "${age}" -lt "${ttl}" ]] && needs_fetch=false
 fi
 
