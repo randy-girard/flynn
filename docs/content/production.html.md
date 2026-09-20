@@ -489,7 +489,7 @@ command:
   dashboard-only users.
 * **Dashboard users** (`flynn login`) only act on apps they were granted. The
   Team role (View=`app:read`, Deploy=`app:deploy`, Manage=`app:write`,
-  Admin=`app:admin`, or a custom combination) is what the controller enforces
+  Admin=`app:admin`, or a custom combination of function/action grants) is what the controller enforces
   on every CLI command. They can `flynn pg psql` their own app's database when
   the role includes write-level access. They cannot open a console on
   `controller`, `blobstore`, `postgres`, or other system apps, even if a grant

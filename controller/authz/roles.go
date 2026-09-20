@@ -3,8 +3,8 @@ package authz
 // Named app roles used by the dashboard Team picker and documented for
 // `flynn login` tokens. Selecting a role grants these controller permissions
 // on that app; HTTPAllowed (and the CLI, which calls the same API) then
-// enforce the grants. Custom cluster roles may combine the same permission
-// strings; they never introduce new verbs.
+// enforce the grants. Custom cluster roles may combine coarse aliases and
+// function/action grants (app:<function>:<action>).
 const (
 	PermAppRead   = "app:read"
 	PermAppDeploy = "app:deploy"
@@ -26,7 +26,7 @@ var DefaultAppRoles = []AppRole{
 	{
 		ID:          "view",
 		Name:        "View",
-		Description: "Read the app, logs, metrics, and team. Cannot change anything.",
+		Description: "View every app function. Cannot change anything.",
 		Permissions: []string{PermAppRead},
 	},
 	{
@@ -49,17 +49,41 @@ var DefaultAppRoles = []AppRole{
 	},
 }
 
-// AppPermissionCatalog is the set of controller grants a custom role may include.
-var AppPermissionCatalog = []string{PermAppRead, PermAppDeploy, PermAppWrite, PermAppAdmin}
+// AppPermissionCatalog is the set of controller grants a custom role may include
+// (coarse aliases plus function/action grants).
+var AppPermissionCatalog = []string{
+	PermAppRead, PermAppDeploy, PermAppWrite, PermAppAdmin,
+	PermAppOverviewRead,
+	PermAppScaleRead, PermAppScaleWrite,
+	PermAppEnvRead, PermAppEnvWrite,
+	PermAppLogsRead,
+	PermAppMetricsRead,
+	PermAppAlertsRead, PermAppAlertsWrite,
+	PermAppJobsRead, PermAppJobsRun, PermAppJobsStop,
+	PermAppSchedulerRead, PermAppSchedulerWrite,
+	PermAppActivityRead,
+	PermAppRoutesRead, PermAppRoutesWrite,
+	PermAppResourcesRead, PermAppResourcesWrite,
+	PermAppGitHubRead, PermAppGitHubWrite,
+	PermAppTeamRead, PermAppTeamWrite,
+	PermAppDelete,
+}
+
+var knownAppPerms map[string]bool
+
+func init() {
+	knownAppPerms = make(map[string]bool, len(AppPermissionCatalog))
+	for _, p := range AppPermissionCatalog {
+		knownAppPerms[p] = true
+	}
+	for i := range DefaultAppRoles {
+		DefaultAppRoles[i].Permissions = ExpandedAppPermissions(DefaultAppRoles[i].Permissions)
+	}
+}
 
 // KnownAppPermission reports whether p is a controller app grant.
 func KnownAppPermission(p string) bool {
-	switch p {
-	case PermAppRead, PermAppDeploy, PermAppWrite, PermAppAdmin:
-		return true
-	default:
-		return false
-	}
+	return knownAppPerms[p]
 }
 
 // DefaultRoleByID returns a built-in app role.

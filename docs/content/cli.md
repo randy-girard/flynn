@@ -77,7 +77,7 @@ flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn`, `flynn --help`, or `flynn help <command>` for flags. Installed plugin commands appear under **Plugins:**. `flynn plugin:list` shows what the current cluster credential can see.
+Run `flynn` or `flynn --help` for parent commands (including installed plugins under **Plugins:**). `flynn help env` or `flynn env --help` lists that command and its subcommands. The same shape applies to plugins: `flynn help redis` / `flynn redis --help` lists `dump`, `cli`, and `restore`. `flynn plugin:list` shows what the current cluster credential can see.
 
 ### Apps and deploys
 
@@ -129,14 +129,12 @@ token.
 
 | Role | Grant | CLI / controller |
 | --- | --- | --- |
-| View | `app:read` | Read the app, logs, metrics, and jobs. No mutations. |
+| View | `app:read` | Read every app function (overview, logs, metrics, jobs, team list). No mutations. |
 | Deploy | `app:deploy` | `POST /apps/:id/deploy` (and read). Cannot scale, env, routes, or team. |
 | Manage | `app:write` | Config, scale, routes, releases, and deploy. Cannot manage team. |
 | Admin | `app:admin` | Full app access, including Team invites and collaborator roles. |
 
-Cluster administrators can create additional named roles that pick any
-combination of those four permissions. Custom roles appear in the app Team
-picker and still expand to the same grants in the token. `cluster:admin` (the
+Cluster administrators can create additional named roles that pick **function and action** grants (`app:logs:read`, `app:scale:write`, `app:jobs:run`, `app:team:write`, …). The four grants above remain aliases: `app:read` is all view actions, `app:write` is all mutations except team, `app:admin` is everything. Custom roles appear in the app Team picker and expand to the same grants in the token. `cluster:admin` (the
 controller key, or a dashboard cluster administrator) is not an app role; it
 bypasses app grants.
 
@@ -175,7 +173,7 @@ See [Production — Firewalling](production.html.md#firewalling) and
 
 The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).
 
-Host-level commands run on cluster nodes (`sudo flynn-host …`):
+Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` and `flynn-host --help` list parent commands; `flynn-host help plugin` or `flynn-host plugin --help` lists `install`, `list`, `credentials`, and the rest.
 
 | Command | Purpose |
 | --- | --- |

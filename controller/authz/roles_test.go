@@ -8,12 +8,6 @@ import (
 )
 
 func TestDefaultAppRolesGrantMapping(t *testing.T) {
-	want := map[string]string{
-		"view":   PermAppRead,
-		"deploy": PermAppDeploy,
-		"manage": PermAppWrite,
-		"admin":  PermAppAdmin,
-	}
 	if len(DefaultAppRoles) != 4 {
 		t.Fatalf("DefaultAppRoles len=%d, want 4", len(DefaultAppRoles))
 	}
@@ -23,13 +17,6 @@ func TestDefaultAppRolesGrantMapping(t *testing.T) {
 			t.Fatalf("duplicate role id %q", r.ID)
 		}
 		seen[r.ID] = true
-		perm, ok := want[r.ID]
-		if !ok {
-			t.Fatalf("unexpected default role %q", r.ID)
-		}
-		if len(r.Permissions) != 1 || r.Permissions[0] != perm {
-			t.Fatalf("role %s permissions=%v, want [%s]", r.ID, r.Permissions, perm)
-		}
 		if r.Name == "" || r.Description == "" {
 			t.Fatalf("role %s missing name or description", r.ID)
 		}
@@ -37,6 +24,25 @@ func TestDefaultAppRolesGrantMapping(t *testing.T) {
 		if !ok || got.Name != r.Name {
 			t.Fatalf("DefaultRoleByID(%s) = %+v, ok=%v", r.ID, got, ok)
 		}
+		if len(r.Permissions) < 2 {
+			t.Fatalf("role %s should store fine grants, got %v", r.ID, r.Permissions)
+		}
+	}
+	view, _ := DefaultRoleByID("view")
+	if !HasAppPermission(view.Permissions, PermAppLogsRead) || HasAppPermission(view.Permissions, PermAppDeploy) {
+		t.Fatalf("view grants=%v", view.Permissions)
+	}
+	deploy, _ := DefaultRoleByID("deploy")
+	if !HasAppPermission(deploy.Permissions, PermAppDeploy) || HasAppPermission(deploy.Permissions, PermAppScaleWrite) {
+		t.Fatalf("deploy grants=%v", deploy.Permissions)
+	}
+	manage, _ := DefaultRoleByID("manage")
+	if !HasAppPermission(manage.Permissions, PermAppScaleWrite) || HasAppPermission(manage.Permissions, PermAppTeamWrite) {
+		t.Fatalf("manage grants=%v", manage.Permissions)
+	}
+	admin, _ := DefaultRoleByID("admin")
+	if !HasAppPermission(admin.Permissions, PermAppTeamWrite) || !HasAppPermission(admin.Permissions, PermAppDelete) {
+		t.Fatalf("admin grants=%v", admin.Permissions)
 	}
 	if _, ok := DefaultRoleByID("nope"); ok {
 		t.Fatal("unknown role id must not resolve")
@@ -49,7 +55,7 @@ func TestKnownAppPermission(t *testing.T) {
 			t.Fatalf("%s must be a known app permission", p)
 		}
 	}
-	if KnownAppPermission("cluster:admin") || KnownAppPermission("app:delete") || KnownAppPermission("") {
+	if KnownAppPermission("cluster:admin") || KnownAppPermission("app:foo") || KnownAppPermission("") {
 		t.Fatal("cluster and invented verbs must not count as app permissions")
 	}
 }

@@ -12,9 +12,7 @@ type routeKind int
 
 const (
 	rkCluster routeKind = iota
-	rkAppRead
-	rkAppWrite
-	rkAppDeploy
+	rkAppAccess
 	// rkBuildArtifact is the cluster-level artifact-creation route
 	// (POST /artifacts). Artifacts are global (not app-scoped in the URL),
 	// so this cannot be a per-app grant; it is instead gated on the
@@ -46,7 +44,7 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if tok.HasClusterAdmin() {
 		return true
 	}
-	kind, appID := httpRequirement(method, rawPath)
+	kind, appID, perm := httpRequirement(method, rawPath)
 	if kind == rkBuildArtifact {
 		return hasScopedBuildArtifact(tok)
 	}
@@ -54,10 +52,7 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 		return true
 	}
 	if kind == rkCreateRelease {
-		if hasAnyAppWrite(tok) {
-			return true
-		}
-		return false
+		return hasAnyReleaseWrite(tok)
 	}
 	if kind == rkCluster {
 		return false
@@ -68,7 +63,7 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if IsPlatformAppName(appID) {
 		return false
 	}
-	return grantCovers(tok, appID, kind)
+	return grantCovers(tok, appID, perm)
 }
 
 // TokenContextKey stores the request principal on the handler context.
@@ -175,139 +170,165 @@ func hasScopedBuildArtifact(tok *authorizer.Token) bool {
 	return false
 }
 
-func httpRequirement(method, rawPath string) (routeKind, string) {
+func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string) {
 	path := strings.Trim(rawPath, "/")
 	if path == "" {
-		return rkCluster, ""
+		return rkCluster, "", ""
 	}
 	parts := strings.Split(path, "/")
 	m := strings.ToUpper(method)
 
 	if len(parts) == 0 || parts[0] == "" {
-		return rkCluster, ""
+		return rkCluster, "", ""
 	}
 
 	switch parts[0] {
 	case "runtime-profiles":
 		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, ""
+			return rkAnyAuth, "", ""
 		}
-		return rkCluster, ""
+		return rkCluster, "", ""
 	case "cluster":
 		if len(parts) >= 2 && parts[1] == "runtime-settings" {
 			if m == http.MethodGet || m == http.MethodHead {
-				return rkAnyAuth, ""
+				return rkAnyAuth, "", ""
 			}
-			return rkCluster, ""
+			return rkCluster, "", ""
 		}
-		return rkCluster, ""
+		return rkCluster, "", ""
 	case "github":
 		if len(parts) >= 2 && parts[1] == "webhook" {
-			return rkAnyAuth, ""
+			return rkAnyAuth, "", ""
 		}
 		if m == http.MethodGet || m == http.MethodHead {
-			return rkAnyAuth, ""
+			return rkAnyAuth, "", ""
 		}
-		return rkCluster, ""
+		return rkCluster, "", ""
 	case "artifacts":
 		// POST /artifacts is the build artifact-creation route. Only the
 		// method matters; the artifact is not app-scoped in the URL.
 		if m == http.MethodPost {
-			return rkBuildArtifact, ""
+			return rkBuildArtifact, "", ""
 		}
-		return rkCluster, ""
+		return rkCluster, "", ""
 	case "releases":
 		if m == http.MethodPost {
-			return rkCreateRelease, ""
+			return rkCreateRelease, "", ""
 		}
-		return rkCluster, ""
+		return rkCluster, "", ""
 
 	case "apps":
 		if len(parts) == 1 {
-			return rkCluster, ""
+			return rkCluster, "", ""
 		}
 		appID := parts[1]
 		if len(parts) == 2 {
 			switch m {
 			case http.MethodGet, http.MethodHead:
-				return rkAppRead, appID
-			case http.MethodPost, http.MethodDelete:
-				return rkAppWrite, appID
+				return rkAppAccess, appID, ""
+			case http.MethodDelete:
+				return rkAppAccess, appID, PermAppDelete
 			default:
-				return rkAppWrite, appID
+				return rkAppAccess, appID, PermAppWrite
 			}
 		}
-		if m == http.MethodPost && parts[2] == "deploy" {
-			return rkAppDeploy, appID
-		}
-		if m == http.MethodPost && parts[2] == "github" && len(parts) >= 4 && parts[3] == "deploy" {
-			return rkAppDeploy, appID
-		}
-		switch m {
-		case http.MethodGet, http.MethodHead:
-			return rkAppRead, appID
-		case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-			return rkAppWrite, appID
-		default:
-			return rkAppWrite, appID
-		}
+		return rkAppAccess, appID, appSubPerm(m, parts[2:])
 
 	default:
-		return rkCluster, ""
+		return rkCluster, "", ""
 	}
 }
 
-func hasAnyAppWrite(tok *authorizer.Token) bool {
+func appSubPerm(method string, rest []string) string {
+	if len(rest) == 0 {
+		return PermAppRead
+	}
+	res := rest[0]
+	write := method != http.MethodGet && method != http.MethodHead
+	switch res {
+	case "log":
+		return PermAppLogsRead
+	case "formations", "scale":
+		if write {
+			return PermAppScaleWrite
+		}
+		return PermAppScaleRead
+	case "jobs":
+		switch method {
+		case http.MethodPost, http.MethodPut, http.MethodPatch:
+			return PermAppJobsRun
+		case http.MethodDelete:
+			return PermAppJobsStop
+		default:
+			return PermAppJobsRead
+		}
+	case "jobs-stats":
+		return PermAppMetricsRead
+	case "deploy":
+		return PermAppDeploy
+	case "deployments":
+		return PermAppActivityRead
+	case "release":
+		if write {
+			return permSharedReleaseWrite
+		}
+		return ""
+	case "releases":
+		if write {
+			return PermAppWrite
+		}
+		return PermAppActivityRead
+	case "resources":
+		if write {
+			return PermAppResourcesWrite
+		}
+		return PermAppResourcesRead
+	case "routes":
+		if write {
+			return PermAppRoutesWrite
+		}
+		return PermAppRoutesRead
+	case "github":
+		if len(rest) >= 2 && rest[1] == "deploy" {
+			return PermAppDeploy
+		}
+		if write {
+			return PermAppGitHubWrite
+		}
+		return PermAppGitHubRead
+	case "volumes":
+		if write {
+			return PermAppResourcesWrite
+		}
+		return PermAppResourcesRead
+	case "gc":
+		return PermAppDelete
+	case "meta":
+		return PermAppWrite
+	case "scheduler-events":
+		if write {
+			return PermAppSchedulerWrite
+		}
+		return PermAppSchedulerRead
+	default:
+		if write {
+			return PermAppWrite
+		}
+		return PermAppRead
+	}
+}
+
+func hasAnyReleaseWrite(tok *authorizer.Token) bool {
 	for _, g := range tok.AppGrants {
-		if grantCovers(tok, g.AppID, rkAppWrite) {
+		if CanCreateRelease(g.Permissions) {
 			return true
 		}
 	}
 	return false
 }
 
-func grantCovers(tok *authorizer.Token, appID string, need routeKind) bool {
-	perms := permissionsForApp(tok, appID)
-	if len(perms) == 0 {
-		return false
-	}
-	hasStar := false
-	hasRead := false
-	hasWrite := false
-	hasDeploy := false
-	hasAdmin := false
-	for _, p := range perms {
-		switch p {
-		case "*":
-			hasStar = true
-		case "cluster:admin":
-			hasStar = true
-		case PermAppRead:
-			hasRead = true
-		case PermAppWrite:
-			hasWrite = true
-		case PermAppDeploy:
-			hasDeploy = true
-		case PermAppAdmin:
-			hasAdmin = true
-		}
-	}
-	if hasStar {
-		return true
-	}
-	// Named roles map 1:1 onto these grants (View=app:read, Deploy=app:deploy,
-	// Manage=app:write, Admin=app:admin). Higher grants imply lower ones, but
-	// Deploy does not imply Manage: app:deploy is POST …/deploy only.
-	switch need {
-	case rkAppRead:
-		return hasRead || hasWrite || hasDeploy || hasAdmin
-	case rkAppWrite:
-		return hasWrite || hasAdmin
-	case rkAppDeploy:
-		return hasDeploy || hasWrite || hasAdmin
-	default:
-		return false
-	}
+func grantCovers(tok *authorizer.Token, appID, need string) bool {
+	return HasAppPermission(permissionsForApp(tok, appID), need)
 }
 
 func permissionsForApp(tok *authorizer.Token, appID string) []string {
