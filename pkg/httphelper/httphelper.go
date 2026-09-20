@@ -24,7 +24,27 @@ import (
 
 type ErrorCode string
 
-var RetryClient = &http.Client{Transport: &http.Transport{Dial: dialer.Retry.Dial}}
+const (
+	// RetryResponseHeaderTimeout bounds how long RetryClient waits for
+	// response headers. SSE/log streams send headers immediately, so this
+	// does not cancel an open body; a total Client.Timeout would.
+	RetryResponseHeaderTimeout = 30 * time.Second
+	RetryTLSHandshakeTimeout   = 10 * time.Second
+	RetryIdleConnTimeout       = 90 * time.Second
+)
+
+// RetryClient is the shared HTTP client for cluster RPCs. It has no total
+// Timeout so streaming (SSE/hijack) callers are not cut off after a wall
+// clock; the Transport still fails hung header/dial waits.
+var RetryClient = &http.Client{
+	Transport: &http.Transport{
+		Dial:                  dialer.Retry.Dial,
+		ResponseHeaderTimeout: RetryResponseHeaderTimeout,
+		TLSHandshakeTimeout:   RetryTLSHandshakeTimeout,
+		IdleConnTimeout:       RetryIdleConnTimeout,
+		ExpectContinueTimeout: time.Second,
+	},
+}
 
 const (
 	NotFoundErrorCode           ErrorCode = "not_found"

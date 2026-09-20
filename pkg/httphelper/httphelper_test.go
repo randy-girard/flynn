@@ -161,3 +161,25 @@ func TestFlushWriter(t *testing.T) {
 		t.Fatalf("%d %v %q", n, err, buf.String())
 	}
 }
+
+func TestRetryClientHasNoTotalTimeout(t *testing.T) {
+	if RetryClient == nil || RetryClient.Transport == nil {
+		t.Fatal("RetryClient must be configured")
+	}
+	if RetryClient.Timeout != 0 {
+		t.Fatalf("RetryClient.Timeout=%s; total Timeout would cancel SSE streams", RetryClient.Timeout)
+	}
+	tr, ok := RetryClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("RetryClient.Transport is %T", RetryClient.Transport)
+	}
+	if tr.ResponseHeaderTimeout != RetryResponseHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout=%s want %s", tr.ResponseHeaderTimeout, RetryResponseHeaderTimeout)
+	}
+	if tr.TLSHandshakeTimeout != RetryTLSHandshakeTimeout {
+		t.Fatalf("TLSHandshakeTimeout=%s want %s", tr.TLSHandshakeTimeout, RetryTLSHandshakeTimeout)
+	}
+	if tr.Dial == nil {
+		t.Fatal("Dial must be set (retry dialer)")
+	}
+}
