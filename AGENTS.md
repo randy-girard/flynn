@@ -13,7 +13,7 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
 1. **Docs** — Update the user-facing pages that describe the behavior. At minimum check:
    - Root [README.md](README.md) if install, features, or datastore versions changed
    - [docs/content/](docs/content/) for the matching topic (apps, docker, databases, CLI, plugins, install, development, production, security)
-   - [docs/content/cli.md](docs/content/cli.md) when you add, rename, or remove a `flynn` / `flynn-host` command — every registered command is listed there in `noun:verb` form, and other pages must not keep the old spelling
+   - [docs/content/cli.md](docs/content/cli.md) when you add, rename, or remove a `flynn` / `flynn-host` command — every canonical command is listed there in `noun:verb` form (compatibility alias registrations such as space forms or `plugin:credentials-set` are exempt), and other pages must not keep the old spelling
    - Component READMEs (`cli/`, `controller/`, `host/`, `router/`, `test/`, `script/`, …) if that component’s interface changed
    - [docs/README.md](docs/README.md) **and** [docs/docs-nav.json](docs/docs-nav.json) if you add or rename a guide
    - Plugin contract changes (manifest fields in `pkg/plugin`, install/update/uninstall flow, `official-plugins.json`, `flynn resource:expose` providers): [docs/content/plugins.md](docs/content/plugins.md), [docs/content/databases/](docs/content/databases/), and the sibling `../flynn-plugin-*/README.md` + `flynn-plugin.json` when that checkout exists

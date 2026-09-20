@@ -10,7 +10,7 @@ Follow [AGENTS.md](../../AGENTS.md).
 When behavior changes, update the matching docs and tests in the same work:
 
 - Root `README.md` (install, features, datastore versions), `docs/content/` for the topic (apps, docker, databases, CLI, plugins, install, development, production, security), and component READMEs (`cli/`, `controller/`, `host/`, `router/`, `test/`, `script/`, …) whose interface changed.
-- Adding or renaming a `flynn` / `flynn-host` command: `docs/content/cli.md` (every registered command is listed there, in `noun:verb` form) and any page that shows the old spelling.
+- Adding or renaming a `flynn` / `flynn-host` command: `docs/content/cli.md` (every canonical command is listed there in `noun:verb` form; compatibility alias registrations such as space forms or `plugin:credentials-set` are exempt) and any page that shows the old spelling.
 - Adding or renaming a guide: `docs/docs-nav.json` and `docs/README.md`.
 - Plugin-facing behavior (manifest fields in `pkg/plugin`, install/update/uninstall flow, `official-plugins.json`, `flynn resource:expose` providers): `docs/content/plugins.md`, `docs/content/databases/*.md`, and the affected `../flynn-plugin-*/README.md` + `flynn-plugin.json` when that sibling checkout exists.
 
