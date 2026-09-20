@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/boltdb/bolt"
@@ -58,7 +59,26 @@ type State struct {
 
 	webhookDispatcher *WebhookDispatcher
 	logMux            *logmux.Mux
+
+	// lifecycle carries job lifecycle notifications (webhooks + app log
+	// lines) to a single worker goroutine so that sendEvent never performs
+	// network or log-mux I/O while the caller holds s.mtx. Sends are
+	// non-blocking; lifecycleDropped counts events lost to a full queue.
+	lifecycle        chan lifecycleEvent
+	lifecycleOnce    sync.Once
+	lifecycleDropped uint64
 }
+
+type lifecycleEvent struct {
+	job   *host.ActiveJob
+	event host.JobEventType
+}
+
+// lifecycleQueueSize bounds the number of lifecycle notifications waiting on
+// the worker. Each is a small struct plus a job copy; a stalled log follower
+// used to block the state lock outright, so a bounded queue with drops is the
+// safe direction.
+const lifecycleQueueSize = 1024
 
 func NewState(id string, stateFilePath string) *State {
 	return &State{
@@ -69,6 +89,7 @@ func NewState(id string, stateFilePath string) *State {
 		listeners:     make(map[string]map[chan host.Event]struct{}),
 		attachers:     make(map[string]map[chan struct{}]struct{}),
 		dbCond:        sync.NewCond(&sync.Mutex{}),
+		lifecycle:     make(chan lifecycleEvent, lifecycleQueueSize),
 	}
 }
 
@@ -639,25 +660,67 @@ func (s *State) sendEvent(job *host.ActiveJob, event host.JobEventType) {
 		}
 	}()
 
-	// Dispatch webhook events and app log lines for job lifecycle changes
+	// Dispatch webhook events and app log lines for job lifecycle changes.
+	// This must not block: sendEvent runs under s.mtx (write-locked in
+	// AddJob/SetStatus*), and both the webhook dispatcher and the log mux
+	// can stall on a slow peer. A stalled `flynn log -f` subscriber once
+	// pinned s.mtx here, which made every /host/jobs request on the host
+	// time out mid-upgrade. Hand the work to the lifecycle worker instead.
 	if s.webhookDispatcher != nil || s.logMux != nil {
-		code, desc, severity := host.JobLifecycleWebhook(event, job)
-		if code == "" {
-			return
-		}
-		j := job.Dup()
-		if s.webhookDispatcher != nil {
-			s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, j, host.JobLifecycleMetadata(job))
-			if event == host.JobEventError && job.Error != nil && isNoSpaceErr(errors.New(*job.Error)) {
-				s.webhookDispatcher.SendDiskFull("Host disk out of space", job.Job.ID, j, map[string]string{
-					"reason": "job_start_enospc",
-				})
-			}
-		}
-		if line := host.FormatJobLifecycleLog(event, job); line != "" {
-			s.writeLifecycleLog(job, line)
+		s.enqueueLifecycle(j, event)
+	}
+}
+
+// enqueueLifecycle queues a lifecycle notification for the worker without
+// blocking. job must already be a copy (see ActiveJob.Dup) so the worker
+// reads a stable snapshot outside s.mtx.
+func (s *State) enqueueLifecycle(job *host.ActiveJob, event host.JobEventType) {
+	if s.lifecycle == nil {
+		return
+	}
+	s.lifecycleOnce.Do(func() { go s.runLifecycleWorker() })
+	select {
+	case s.lifecycle <- lifecycleEvent{job: job, event: event}:
+	default:
+		atomic.AddUint64(&s.lifecycleDropped, 1)
+	}
+}
+
+// runLifecycleWorker drains s.lifecycle in order so webhook events and app
+// log lines for one job keep their create → start → stop sequence.
+func (s *State) runLifecycleWorker() {
+	for ev := range s.lifecycle {
+		s.dispatchLifecycle(ev.job, ev.event)
+	}
+}
+
+// dispatchLifecycle sends the webhook and writes the app log line for one
+// lifecycle event. It runs off the state lock and may block on I/O.
+func (s *State) dispatchLifecycle(job *host.ActiveJob, event host.JobEventType) {
+	if job == nil || job.Job == nil {
+		return
+	}
+	code, desc, severity := host.JobLifecycleWebhook(event, job)
+	if code == "" {
+		return
+	}
+	if s.webhookDispatcher != nil {
+		s.webhookDispatcher.Send(code, desc, severity, job.Job.ID, job, host.JobLifecycleMetadata(job))
+		if event == host.JobEventError && job.Error != nil && isNoSpaceErr(errors.New(*job.Error)) {
+			s.webhookDispatcher.SendDiskFull("Host disk out of space", job.Job.ID, job, map[string]string{
+				"reason": "job_start_enospc",
+			})
 		}
 	}
+	if line := host.FormatJobLifecycleLog(event, job); line != "" {
+		s.writeLifecycleLog(job, line)
+	}
+}
+
+// LifecycleDropped reports how many lifecycle notifications were discarded
+// because the worker queue was full.
+func (s *State) LifecycleDropped() uint64 {
+	return atomic.LoadUint64(&s.lifecycleDropped)
 }
 
 func (s *State) writeLifecycleLog(job *host.ActiveJob, line string) {

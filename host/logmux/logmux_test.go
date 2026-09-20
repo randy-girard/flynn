@@ -111,3 +111,36 @@ func TestMuxWriteSkipsEmptyApp(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+// A per-app follower that has stopped reading must not block the writer
+// indefinitely: State.sendEvent writes lifecycle lines under the host state
+// lock, and an unbounded send here hung a whole host mid-upgrade.
+func TestMuxWriteDoesNotBlockOnStalledFollower(t *testing.T) {
+	old := broadcastTimeout
+	broadcastTimeout = 50 * time.Millisecond
+	defer func() { broadcastTimeout = old }()
+
+	m := New("host1", t.TempDir(), log15.New())
+	stalled := make(chan message) // unbuffered and never read
+	unsub := m.subscribe("app-1", stalled)
+	defer unsub()
+	healthy := make(chan message, 1)
+	unsubHealthy := m.subscribe("app-1", healthy)
+	defer unsubHealthy()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "Starting web process")
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked on a follower that never reads")
+	}
+	select {
+	case <-healthy:
+	case <-time.After(time.Second):
+		t.Fatal("healthy follower must still receive the line")
+	}
+}
