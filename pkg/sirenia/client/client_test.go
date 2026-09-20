@@ -217,6 +217,63 @@ func TestSyncReplaceTopologyReady(t *testing.T) {
 	}
 }
 
+func TestReplicaOf(t *testing.T) {
+	upstream := mkInst("10.0.0.2:5432", "async-0")
+	check := ReplicaOf(upstream, "POSTGRES_ID")
+	if !check(&Status{Database: &DatabaseInfo{
+		Running: true,
+		Config:  &state.Config{Upstream: mkInst("10.0.0.2:5432", "async-0")},
+	}}) {
+		t.Fatal("expected true when running database follows upstream")
+	}
+	if check(&Status{Database: &DatabaseInfo{
+		Running: false,
+		Config:  &state.Config{Upstream: mkInst("10.0.0.2:5432", "async-0")},
+	}}) {
+		t.Fatal("must wait until postgres is running (base backup finished)")
+	}
+	if check(&Status{Database: &DatabaseInfo{
+		Running: true,
+		Config:  &state.Config{Upstream: mkInst("10.0.0.9:5432", "other")},
+	}}) {
+		t.Fatal("must not treat a replica of a different peer as ready")
+	}
+	if check(&Status{}) || check(nil) {
+		t.Fatal("nil status is not a replica")
+	}
+}
+
+func TestAsyncReplaceTopologyReady(t *testing.T) {
+	oldAsync := mkInst("10.0.0.3:5432", "old-async")
+	newPeer := mkInst("10.0.0.4:5432", "new-async")
+	sync := mkInst("10.0.0.2:5432", "sync")
+	ready := AsyncReplaceTopologyReady(oldAsync, newPeer, "POSTGRES_ID")
+
+	ok := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  sync,
+		Async: []*discoverd.Instance{oldAsync, newPeer},
+	}}}
+	if !ready(ok) {
+		t.Fatal("expected ready when new peer is tail and old async is still recorded")
+	}
+
+	front := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  sync,
+		Async: []*discoverd.Instance{newPeer, oldAsync},
+	}}}
+	if ready(front) {
+		t.Fatal("must not treat a new peer inserted at the front as ready")
+	}
+
+	dropped := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  sync,
+		Async: []*discoverd.Instance{newPeer},
+	}}}
+	if ready(dropped) {
+		t.Fatal("must not proceed after the old async has already been dropped")
+	}
+}
+
 func TestWaitUntilSyncReplaceTopology(t *testing.T) {
 	oldSync := mkInst("10.0.0.2:5432", "old-sync")
 	first := mkInst("10.0.0.3:5432", "new-primary")

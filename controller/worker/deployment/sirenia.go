@@ -254,6 +254,8 @@ loop:
 		}
 	}
 
+	idKey := sireniaclient.ProcessIDKey(processType)
+
 	// newPrimary is the first new instance started, newSync the second
 	var newPrimary, newSync *discoverd.Instance
 	startInstance := func() (*discoverd.Instance, error) {
@@ -271,12 +273,12 @@ loop:
 			return nil, err
 		}
 		log.Info("waiting for new instance to come up")
-		var exclude []string
+		var exclude []*discoverd.Instance
 		if newPrimary != nil {
-			exclude = append(exclude, newPrimary.ID)
+			exclude = append(exclude, newPrimary)
 		}
 		if newSync != nil {
-			exclude = append(exclude, newSync.ID)
+			exclude = append(exclude, newSync)
 		}
 		var inst *discoverd.Instance
 		timeout := time.After(d.timeout)
@@ -284,7 +286,7 @@ loop:
 		defer poll.Stop()
 	loop:
 		for {
-			if found := lookupSireniaPeer(svc, d.NewReleaseID, processType, exclude...); found != nil {
+			if found := lookupSireniaPeer(svc, d.NewReleaseID, processType, idKey, exclude...); found != nil {
 				inst = found
 				break loop
 			}
@@ -294,18 +296,10 @@ loop:
 					return nil, loggedErr("service event stream closed unexpectedly: %s", stream.Err())
 				}
 				if event.Kind == discoverd.EventKindUp &&
-					sireniaPeerMatchesRelease(event.Instance, d.NewReleaseID, processType) {
-					skip := false
-					for _, id := range exclude {
-						if event.Instance.ID == id {
-							skip = true
-							break
-						}
-					}
-					if !skip {
-						inst = event.Instance
-						break loop
-					}
+					sireniaPeerMatchesRelease(event.Instance, d.NewReleaseID, processType) &&
+					!sireniaPeerExcluded(event.Instance, idKey, exclude) {
+					inst = event.Instance
+					break loop
 				}
 			case <-poll.C:
 			case <-timeout:
@@ -342,13 +336,34 @@ loop:
 		}
 		return nil
 	}
+	waitForTopology := func(pred func(*sireniaclient.Status) bool, what string) error {
+		log.Info("waiting for sirenia topology", "what", what)
+		sc := sireniaclient.NewClient(state.Primary.Addr)
+		if err := sc.WaitUntil(pred, syncTimeout); err != nil {
+			if st, serr := sc.Status(); serr == nil && st != nil && st.Peer != nil && st.Peer.State != nil {
+				log.Error("error waiting for sirenia topology", "what", what, "err", err, "asyncs", len(st.Peer.State.Async))
+			} else {
+				log.Error("error waiting for sirenia topology", "what", what, "err", err)
+			}
+			return err
+		}
+		return nil
+	}
+	waitForReplica := func(inst, upstream *discoverd.Instance, what string) error {
+		log.Info("waiting for replica to follow upstream", "what", what, "inst", inst.Addr, "upstream", upstream.Addr)
+		sc := sireniaclient.NewClient(inst.Addr)
+		if err := sc.WaitUntil(sireniaclient.ReplicaOf(upstream, idKey), syncTimeout); err != nil {
+			log.Error("error waiting for replica to follow upstream", "what", what, "err", err)
+			return err
+		}
+		return nil
+	}
 	// waitForSyncPeer blocks until the cluster (as reported by upstream) names
 	// successor as its synchronous peer. Stopping the primary before its
 	// designated successor is the recorded sync leaves the cluster unable to
 	// elect a new primary: only the sync can take over, so if a different peer
 	// is still the sync when the primary dies, that peer must take over instead
 	// of the new peer we started, and the new primary never becomes read-write.
-	idKey := sireniaclient.ProcessIDKey(processType)
 	waitForSyncPeer := func(upstream, successor *discoverd.Instance) error {
 		log.Info("waiting for successor to become the synchronous peer", "upstream", upstream.Addr, "successor", successor.Addr)
 		sc := sireniaclient.NewClient(upstream.Addr)
@@ -378,11 +393,22 @@ loop:
 	}
 	for i := 0; i < len(state.Async); i++ {
 		log.Info("replacing an Async node")
+		oldAsync := state.Async[i]
 		newInst, err := startInstance()
 		if err != nil {
 			return err
 		}
-		if err := stopInstance(state.Async[i]); err != nil {
+		// Discoverd registration happens before pg_basebackup. Keep the old
+		// async up until the new job is the tail of the chain and has a
+		// running database following it; stopping first killed the backup
+		// source and the replacement never joined the replica set.
+		if err := waitForTopology(sireniaclient.AsyncReplaceTopologyReady(oldAsync, newInst, idKey), "new peer is tail async of the peer it replaces"); err != nil {
+			return err
+		}
+		if err := waitForReplica(newInst, oldAsync, "new async finished base backup"); err != nil {
+			return err
+		}
+		if err := stopInstance(oldAsync); err != nil {
 			return err
 		}
 		if err := waitForSync(asyncUpstream, newInst); err != nil {
@@ -396,28 +422,17 @@ loop:
 	// Start the replacement *before* stopping the old sync so the replica
 	// set keeps three live peers during the new job's base backup. Wait
 	// until the cluster names that job as the tail async (still following
-	// the current first async, not the primary) and it has caught up with
-	// that actual upstream; only then stop the old sync and wait for the
-	// promoted async to follow the primary. Starting without that wait let
-	// sirenia wire a not-yet-started peer as an upstream, and stopping the
-	// old sync first dropped HA for the duration of the backup.
+	// the current first async, not the primary) and it has a running
+	// database following that actual upstream; only then stop the old sync
+	// and wait for the promoted async to follow the primary.
 	newInst, err := startInstance()
 	if err != nil {
 		return err
 	}
-	waitForTopology := func(pred func(*sireniaclient.Status) bool, what string) error {
-		log.Info("waiting for sirenia topology", "what", what, "peer", newInst.Addr)
-		sc := sireniaclient.NewClient(state.Primary.Addr)
-		if err := sc.WaitUntil(pred, syncTimeout); err != nil {
-			log.Error("error waiting for sirenia topology", "what", what, "err", err)
-			return err
-		}
-		return nil
-	}
 	if err := waitForTopology(sireniaclient.SyncReplaceTopologyReady(state.Sync, newPrimary, newInst, idKey), "new peer is tail async"); err != nil {
 		return err
 	}
-	if err := waitForSync(asyncUpstream, newInst); err != nil {
+	if err := waitForReplica(newInst, newPrimary, "sync replacement finished base backup"); err != nil {
 		return err
 	}
 	if err := stopInstance(state.Sync); err != nil {
@@ -559,7 +574,7 @@ waitCurrent:
 	poll := time.NewTicker(2 * time.Second)
 	defer poll.Stop()
 	for {
-		if inst := lookupSireniaPeer(svc, d.NewReleaseID, processType); inst != nil {
+		if inst := lookupSireniaPeer(svc, d.NewReleaseID, processType, sireniaclient.ProcessIDKey(processType)); inst != nil {
 			log.Info("new sirenia peer registered", "addr", inst.Addr)
 			d.deployEvents <- ct.DeploymentEvent{
 				ReleaseID: d.NewReleaseID,

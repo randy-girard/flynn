@@ -712,14 +712,6 @@ func (p *Peer) evalClusterState() {
 		return
 	}
 
-	presentPeers := make(map[string]struct{}, len(p.Info().Peers))
-	presentPeers[p.Info().State.Primary.Meta[p.idKey]] = struct{}{}
-	presentPeers[p.Info().State.Sync.Meta[p.idKey]] = struct{}{}
-
-	newAsync := make([]*discoverd.Instance, 0, len(p.Info().Peers))
-	newDeposed := make([]*discoverd.Instance, 0, len(p.Info().State.Deposed))
-	changes := false
-
 	// Peers are identified by their appliance ID (Meta[idKey]), which lives in
 	// the data volume and therefore survives job replacement. A replacement
 	// job at a new flannel IP is the *same* peer at a *different* address, so
@@ -732,49 +724,18 @@ func (p *Peer) evalClusterState() {
 		log.Info("sync peer re-registered with a new instance, updating state",
 			"peer.id", cur.Meta[p.idKey], "old_addr", p.Info().State.Sync.Addr, "new_addr", cur.Addr)
 		newSync = cur
+	}
+
+	newAsync, newDeposed, changes := nextAsyncMembership(p.idKey, p.Info().State, p.Info().Peers)
+	if newSync != nil {
 		changes = true
 	}
 
-	for _, a := range p.Info().State.Async {
-		cur := p.presentPeer(a)
-		if cur == nil {
-			log.Debug("peer missing", "async.id", a.Meta[p.idKey], "async.addr", a.Addr)
-			changes = true
-			continue
-		}
-		presentPeers[a.Meta[p.idKey]] = struct{}{}
-		if !peersEqual(cur, a) {
-			log.Info("async peer re-registered with a new instance, updating state",
-				"peer.id", cur.Meta[p.idKey], "old_addr", a.Addr, "new_addr", cur.Addr)
-			changes = true
-		}
-		newAsync = append(newAsync, cur)
-	}
-
-	for _, d := range p.Info().State.Deposed {
-		if cur := p.presentPeer(d); cur != nil {
-			log.Info("deposed peer rejoined, re-adding as async",
-				"peer.id", cur.Meta[p.idKey], "peer.addr", cur.Addr)
-			presentPeers[cur.Meta[p.idKey]] = struct{}{}
-			newAsync = append(newAsync, cur)
-			changes = true
-		} else {
-			newDeposed = append(newDeposed, d)
-		}
-	}
-
-	for _, peer := range p.Info().Peers {
-		if _, ok := presentPeers[peer.Meta[p.idKey]]; ok {
-			continue
-		}
-		log.Debug("new peer", "async.id", peer.Meta[p.idKey], "async.addr", peer.Addr)
-		newAsync = append(newAsync, peer)
-		changes = true
-	}
-
-	if p.refreshPrimaryDownstream(log) {
-		return
-	}
+	// Refreshing the primary's downstream must not skip membership writes:
+	// a rolling deploy starts the replacement (a new async) while the old
+	// sync is still recorded, and dropping that update leaves WaitUntil
+	// sitting on SyncReplaceTopologyReady until the deploy times out.
+	p.refreshPrimaryDownstream(log)
 
 	if !changes && len(newDeposed) == len(p.Info().State.Deposed) {
 		return
@@ -1374,4 +1335,114 @@ func (p *Peer) putClusterState() error {
 	}
 	p.stateIndex = s.Index
 	return nil
+}
+
+func peerApplianceID(idKey string, inst *discoverd.Instance) string {
+	if inst == nil || inst.Meta == nil {
+		return ""
+	}
+	return inst.Meta[idKey]
+}
+
+func instanceByApplianceID(idKey, id string, peers []*discoverd.Instance) *discoverd.Instance {
+	if id == "" {
+		return nil
+	}
+	for _, peer := range peers {
+		if peerApplianceID(idKey, peer) == id {
+			return peer
+		}
+	}
+	return nil
+}
+
+func hasNewcomerPeer(idKey string, peers []*discoverd.Instance, assigned map[string]struct{}) bool {
+	for _, peer := range peers {
+		id := peerApplianceID(idKey, peer)
+		if id == "" {
+			continue
+		}
+		if _, ok := assigned[id]; !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func assignedReplicaIDs(idKey string, st *State) map[string]struct{} {
+	assigned := make(map[string]struct{})
+	if st == nil {
+		return assigned
+	}
+	for _, inst := range append(append([]*discoverd.Instance{st.Primary, st.Sync}, st.Async...), st.Deposed...) {
+		if id := peerApplianceID(idKey, inst); id != "" {
+			assigned[id] = struct{}{}
+		}
+	}
+	return assigned
+}
+
+// nextAsyncMembership builds the async/deposed lists the primary should write.
+// Brand-new appliance IDs are always appended at the tail. Recorded asyncs
+// that are briefly missing are kept in their slots whenever a newcomer is also
+// present, so the newcomer cannot take index 0 and become an existing async's
+// upstream before it has finished its base backup.
+func nextAsyncMembership(idKey string, st *State, peers []*discoverd.Instance) (newAsync, newDeposed []*discoverd.Instance, changes bool) {
+	if st == nil {
+		return nil, nil, false
+	}
+	keepMissing := hasNewcomerPeer(idKey, peers, assignedReplicaIDs(idKey, st))
+
+	newAsync = make([]*discoverd.Instance, 0, len(peers))
+	present := make(map[string]struct{}, len(peers))
+	if id := peerApplianceID(idKey, st.Primary); id != "" {
+		present[id] = struct{}{}
+	}
+	if id := peerApplianceID(idKey, st.Sync); id != "" {
+		present[id] = struct{}{}
+	}
+
+	for _, a := range st.Async {
+		id := peerApplianceID(idKey, a)
+		cur := instanceByApplianceID(idKey, id, peers)
+		if cur == nil {
+			if keepMissing && id != "" {
+				newAsync = append(newAsync, a)
+				present[id] = struct{}{}
+				continue
+			}
+			changes = true
+			continue
+		}
+		present[id] = struct{}{}
+		if !peersEqual(cur, a) {
+			changes = true
+		}
+		newAsync = append(newAsync, cur)
+	}
+
+	newDeposed = make([]*discoverd.Instance, 0, len(st.Deposed))
+	for _, d := range st.Deposed {
+		id := peerApplianceID(idKey, d)
+		if cur := instanceByApplianceID(idKey, id, peers); cur != nil {
+			present[id] = struct{}{}
+			newAsync = append(newAsync, cur)
+			changes = true
+			continue
+		}
+		newDeposed = append(newDeposed, d)
+	}
+
+	for _, peer := range peers {
+		id := peerApplianceID(idKey, peer)
+		if id == "" {
+			continue
+		}
+		if _, ok := present[id]; ok {
+			continue
+		}
+		newAsync = append(newAsync, peer)
+		changes = true
+	}
+	return newAsync, newDeposed, changes
 }

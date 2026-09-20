@@ -37,6 +37,10 @@ func (s *Scheduler) maybePromoteSireniaHA() {
 			continue
 		}
 		if ha.NeedsScale(f.Release, procs) {
+			if s.sireniaSkipAutoscale(appID) {
+				seen[appID] = struct{}{}
+				continue
+			}
 			if !s.sireniaDataJobRunning(f) {
 				continue
 			}
@@ -76,6 +80,31 @@ func (s *Scheduler) sireniaDataJobRunning(f *Formation) bool {
 		}
 	}
 	return false
+}
+
+// sireniaSkipAutoscale reports whether the scheduler must not force a
+// formation to HA replica count. A rolling sirenia deploy keeps the old
+// replica set (often already at DataCount) while incrementing the new
+// release one peer at a time; autoscaling the new release to 3 mid-deploy
+// starts extra asyncs and the sync-replacement wait never sees that job as
+// the tail. The same skip applies when any formation of the app is already
+// at HA count: the replica set exists, and a lagging formation is a deploy
+// in progress rather than a singleton that still needs promotion.
+func (s *Scheduler) sireniaSkipAutoscale(appID string) bool {
+	active, maxData := 0, 0
+	for _, f := range s.formations {
+		if f == nil || f.App == nil || f.App.ID != appID || f.Release == nil || !f.Release.IsSirenia() {
+			continue
+		}
+		n := f.OriginalProcesses[ha.DataProcess(f.Release)]
+		if n > 0 {
+			active++
+		}
+		if n > maxData {
+			maxData = n
+		}
+	}
+	return active > 1 || maxData >= ha.DataCount
 }
 
 func (s *Scheduler) promoteSireniaEnvFlip(f *Formation) error {

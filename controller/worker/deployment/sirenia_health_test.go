@@ -69,19 +69,34 @@ func TestFindSireniaPeerByRelease(t *testing.T) {
 	}
 	insts := []*discoverd.Instance{old, first, second}
 
-	got := findSireniaPeerByRelease(insts, "rel-new", "postgres")
+	got := findSireniaPeerByRelease(insts, "rel-new", "postgres", "POSTGRES_ID")
 	if got != first {
 		t.Fatalf("want first new peer, got %#v", got)
 	}
-	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", first.ID)
+	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", "POSTGRES_ID", first)
 	if got != second {
 		t.Fatalf("want second new peer after excluding first, got %#v", got)
 	}
-	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", first.ID, second.ID)
+	got = findSireniaPeerByRelease(insts, "rel-new", "postgres", "POSTGRES_ID", first, second)
 	if got != nil {
 		t.Fatalf("want nil when all new peers excluded, got %#v", got)
 	}
 	if sireniaPeerMatchesRelease(nil, "rel-new", "postgres") {
 		t.Fatal("nil instance must not match")
+	}
+
+	rereg := &discoverd.Instance{
+		ID: "new-1-reregistered",
+		Meta: map[string]string{
+			"FLYNN_RELEASE_ID":   "rel-new",
+			"FLYNN_PROCESS_TYPE": "postgres",
+			"POSTGRES_ID":        "peer-1",
+		},
+	}
+	first.Meta["POSTGRES_ID"] = "peer-1"
+	second.Meta["POSTGRES_ID"] = "peer-2"
+	got = findSireniaPeerByRelease([]*discoverd.Instance{old, rereg, second}, "rel-new", "postgres", "POSTGRES_ID", first)
+	if got != second {
+		t.Fatalf("want second peer when first re-registered with a new discoverd ID, got %#v", got)
 	}
 }

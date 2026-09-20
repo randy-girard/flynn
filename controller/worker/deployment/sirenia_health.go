@@ -9,6 +9,7 @@ import (
 	"github.com/inconshreveable/log15"
 	worker "github.com/randy-girard/flynn/controller/worker/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	sireniaclient "github.com/randy-girard/flynn/pkg/sirenia/client"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
@@ -20,18 +21,30 @@ func sireniaPeerMatchesRelease(inst *discoverd.Instance, releaseID, processType 
 		inst.Meta["FLYNN_PROCESS_TYPE"] == processType
 }
 
-func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processType string, excludeIDs ...string) *discoverd.Instance {
-	skip := make(map[string]struct{}, len(excludeIDs))
-	for _, id := range excludeIDs {
-		if id != "" {
-			skip[id] = struct{}{}
+func sireniaPeerExcluded(inst *discoverd.Instance, idKey string, exclude []*discoverd.Instance) bool {
+	if inst == nil {
+		return false
+	}
+	for _, ex := range exclude {
+		if ex == nil {
+			continue
+		}
+		if inst.ID != "" && inst.ID == ex.ID {
+			return true
+		}
+		if sireniaclient.SamePeer(idKey, inst, ex) {
+			return true
 		}
 	}
+	return false
+}
+
+func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processType, idKey string, exclude ...*discoverd.Instance) *discoverd.Instance {
 	for _, inst := range insts {
 		if !sireniaPeerMatchesRelease(inst, releaseID, processType) {
 			continue
 		}
-		if _, seen := skip[inst.ID]; seen {
+		if sireniaPeerExcluded(inst, idKey, exclude) {
 			continue
 		}
 		return inst
@@ -39,12 +52,12 @@ func findSireniaPeerByRelease(insts []*discoverd.Instance, releaseID, processTyp
 	return nil
 }
 
-func lookupSireniaPeer(svc discoverd.Service, releaseID, processType string, excludeIDs ...string) *discoverd.Instance {
+func lookupSireniaPeer(svc discoverd.Service, releaseID, processType, idKey string, exclude ...*discoverd.Instance) *discoverd.Instance {
 	insts, err := discoverd.InstancesOrEmpty(svc)
 	if err != nil {
 		return nil
 	}
-	return findSireniaPeerByRelease(insts, releaseID, processType, excludeIDs...)
+	return findSireniaPeerByRelease(insts, releaseID, processType, idKey, exclude...)
 }
 
 // sireniaClusterDeployReady reports whether an HA sirenia cluster has the

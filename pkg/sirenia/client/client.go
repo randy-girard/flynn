@@ -166,6 +166,52 @@ func IsTailAsync(s *state.State, peer *discoverd.Instance, idKey string) bool {
 	return SamePeer(idKey, s.Async[len(s.Async)-1], peer)
 }
 
+// ReplicaOf is true when peer has a running database configured to replicate
+// from upstream. Discoverd registration happens before pg_basebackup, so the
+// deploy worker waits for this on the new job itself before stopping the peer
+// it replaces — that keeps the backup source alive for the duration of the copy.
+func ReplicaOf(upstream *discoverd.Instance, idKey string) func(*Status) bool {
+	return func(status *Status) bool {
+		if status == nil || status.Database == nil || !status.Database.Running || status.Database.Config == nil {
+			return false
+		}
+		return SamePeer(idKey, status.Database.Config.Upstream, upstream)
+	}
+}
+
+func asyncContains(s *state.State, peer *discoverd.Instance, idKey string) bool {
+	if s == nil || peer == nil {
+		return false
+	}
+	for _, a := range s.Async {
+		if SamePeer(idKey, a, peer) {
+			return true
+		}
+	}
+	return false
+}
+
+// AsyncReplaceTopologyReady is true when the cluster has absorbed a newly
+// started async-replacement as the tail of the chain without dropping the
+// async it is replacing. The deploy worker waits for this (and ReplicaOf)
+// before stopping the old async so the new job's base backup still has a live
+// upstream.
+func AsyncReplaceTopologyReady(oldAsync, newPeer *discoverd.Instance, idKey string) func(*Status) bool {
+	return func(status *Status) bool {
+		if status == nil || status.Peer == nil || status.Peer.State == nil {
+			return false
+		}
+		s := status.Peer.State
+		if !asyncContains(s, oldAsync, idKey) {
+			return false
+		}
+		if SamePeer(idKey, oldAsync, newPeer) {
+			return false
+		}
+		return IsTailAsync(s, newPeer, idKey)
+	}
+}
+
 // SyncReplaceTopologyReady is true when the cluster has absorbed a newly
 // started sync-replacement as the tail async without taking over the recorded
 // sync or shuffling the first async. The deploy worker waits for this before

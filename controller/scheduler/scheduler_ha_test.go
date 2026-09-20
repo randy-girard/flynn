@@ -64,6 +64,50 @@ func (TestSuite) TestMaybePromoteSireniaHA(c *C) {
 	c.Assert(active[0].Processes["web"], Equals, 2)
 }
 
+func (TestSuite) TestMaybePromoteSireniaHASkipsRollingDeploy(c *C) {
+	cc := NewFakeControllerClient()
+	app := &ct.App{ID: "postgres", Name: "postgres"}
+	oldRel := &ct.Release{
+		ID:  "pg-old",
+		Env: map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "false"},
+	}
+	newRel := &ct.Release{
+		ID:  "pg-new",
+		Env: map[string]string{"SIRENIA_PROCESS": "postgres", "SINGLETON": "false"},
+	}
+	c.Assert(cc.CreateApp(app), IsNil)
+	c.Assert(cc.CreateRelease(app.ID, oldRel), IsNil)
+	c.Assert(cc.CreateRelease(app.ID, newRel), IsNil)
+	oldProcs := map[string]int{"postgres": 3, "web": 2}
+	newProcs := map[string]int{"postgres": 1, "web": 0}
+	c.Assert(cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: oldRel.ID, Processes: oldProcs}), IsNil)
+	c.Assert(cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: newRel.ID, Processes: newProcs}), IsNil)
+
+	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), log15.New())
+	leader := true
+	s.isLeader = &leader
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{App: app, Release: oldRel, Processes: oldProcs}))
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{App: app, Release: newRel, Processes: newProcs}))
+	for _, id := range []string{"h1", "h2", "h3"} {
+		s.hosts[id] = &Host{ID: id}
+	}
+	s.jobs["pg-new"] = &Job{
+		AppID:     app.ID,
+		ReleaseID: newRel.ID,
+		Type:      "postgres",
+		State:     JobStateRunning,
+	}
+
+	s.maybePromoteSireniaHA()
+
+	newForm, err := cc.GetFormation(app.ID, newRel.ID)
+	c.Assert(err, IsNil)
+	c.Assert(newForm.Processes["postgres"], Equals, 1)
+	oldForm, err := cc.GetFormation(app.ID, oldRel.ID)
+	c.Assert(err, IsNil)
+	c.Assert(oldForm.Processes["postgres"], Equals, 3)
+}
+
 func (TestSuite) TestMaybePromoteSireniaHARequiresThreeHosts(c *C) {
 	cc := NewFakeControllerClient()
 	app := &ct.App{ID: "postgres", Name: "postgres"}
