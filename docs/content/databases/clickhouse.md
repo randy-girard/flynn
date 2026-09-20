@@ -54,7 +54,9 @@ Provisioning adds several environment variables to your app release:
 * `CLICKHOUSE_CLUSTER` — the cluster name (`flynn`) used for `ON CLUSTER` DDL.
 * `CLICKHOUSE_REPLICA_COUNT` — the number of replicas in the cluster.
 * `CLICKHOUSE_TLS_ENABLED`, `CLICKHOUSE_TRUSTED_CERT` — TLS flag and the
-  appliance CA (PEM). Replica-to-replica traffic stays on plaintext 9000/8123.
+  appliance CA (PEM). Replication between replicas uses the plaintext
+  `interserver_http_port` 9009 on the overlay network; the plaintext client
+  ports 9000/8123 remain open next to the TLS ports.
 
 ### Connecting to a console
 
