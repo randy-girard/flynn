@@ -32,6 +32,17 @@ If a change is internal-only and has no user-visible effect, say so in the PR an
 
 **If `../flynn-plugin-dashboard` exists**, that plugin’s local Compose stack uses `mock/` instead of this cluster. When you change `GET /cluster/stats`, `GET /cluster/jobs-stats`, `GET /apps/:id/jobs-stats`, or the JSON on `host.HostResourceStats` / `host.ContainerStats`, update `../flynn-plugin-dashboard/mock` in the same work so the local dashboard still reflects the APIs. If that sibling folder is missing, ignore this.
 
+## Plans
+
+Working notes, design docs, and implementation plans do **not** live in this
+repo. Put them in the workspace-level folder (sibling of this `flynn/` clone):
+
+```
+../.plans/<topic>.md
+```
+
+Do not recreate `docs/plans/` here. User-facing docs stay in `docs/content/`.
+
 ## Isolated worktrees
 
 Put extra checkouts in **one** place, the workspace-level `.worktrees/` directory (sibling of this `flynn/` clone), never inside the repo and never as a second top-level clone:
