@@ -17,6 +17,7 @@ usage: flynn-builder <command> [<args>...]
 Commands:
   build      build Flynn images
   run        run a command and generate an image layer
+  prune      evict unreferenced, idle layers from the layer cache
 `[1:]
 
 type Command struct {
@@ -51,6 +52,8 @@ func main() {
 		cmd = cmdBuild
 	case "run":
 		cmd = cmdRun
+	case "prune":
+		cmd = cmdPrune
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		log.Fatalf("unknown command %q", name)

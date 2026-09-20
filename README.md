@@ -229,7 +229,7 @@ script/bootstrap-flynn        # single-node cluster from local images
 make test-unit                # go test; uses Docker on macOS/Windows
 ```
 
-`make test-integration` boots a nested cluster. Cluster, datastore, overlay, and upgrade changes should also run `script/vagrant-upgrade-smoke.sh`. See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
+`make test-integration` boots a nested cluster. Cluster, datastore, overlay, and upgrade changes should also run `script/vagrant-smoke.sh`. See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

@@ -58,6 +58,16 @@ const flynnGitCacheMountPoint = "/var/cache/flynn-git-cache"
 // flynnGitCacheSubdir stores the git mirrors under ubuntu_ports_cache.
 const flynnGitCacheSubdir = "_git_mirrors"
 
+// goBuildCacheMountPoint is where the shared Go build cache is bind-mounted
+// inside layers that compile Go. It lives under root/.cache, which
+// squashfs.DefaultExcludes already drops, so the cache never lands in a layer.
+const goBuildCacheMountPoint = "/root/.cache/go-build"
+
+// defaultGoBuildCacheDir is the host directory backing goBuildCacheMountPoint.
+// It is outside /var/lib/flynn so `install-flynn --remove --clean` (run by
+// build.sh prep) keeps it, and on local disk rather than the Vagrant share.
+const defaultGoBuildCacheDir = "/var/cache/flynn/go-build"
+
 // flynnAptLayerPrelude runs before layers that invoke apt. Ubuntu runs downloads as _apt; minimal
 // base layers and host bind mounts often leave /var/cache/apt/archives/partial root-only, which
 // breaks pkgAcquire (Permission denied). chmod fixes the cache; APT::Sandbox::User mirrors common
@@ -168,7 +178,80 @@ Build Flynn images using builder/manifest.json (generated from builder/manifest.
    subsequent builds reuse it. FLYNN_GIT_CACHE_TTL (seconds; default 3600) controls
    how often the mirror is refreshed. Set FLYNN_NO_GIT_CACHE=1 to bypass.
 
+ Go build cache:
+
+   Layers that run go build / cgo build / gobin / protoc bind-mount a shared Go
+   build cache (default /var/cache/flynn/go-build on this machine) at
+   /root/.cache/go-build and set GOCACHE to it. A fresh job then recompiles only
+   the packages whose sources changed instead of the whole vendor tree, the same
+   way an incremental compile works. Layer IDs are still derived only from the
+   declared inputs, so image identity and cache hits are unchanged; the cache
+   only speeds up layers that would be rebuilt anyway.
+
+   Set FLYNN_GO_BUILD_CACHE to an absolute directory to override the location,
+   or FLYNN_NO_GO_BUILD_CACHE=1 to compile cold. Go trims entries unused for
+   five days; rm -rf the directory to reset it.
+
 `[1:],
+}
+
+// goBuildCacheDir returns the host directory backing the shared Go build cache
+// and whether the cache is enabled.
+func goBuildCacheDir(log log15.Logger) (string, bool) {
+	if strings.TrimSpace(os.Getenv("FLYNN_NO_GO_BUILD_CACHE")) == "1" {
+		return "", false
+	}
+	p := strings.TrimSpace(os.Getenv("FLYNN_GO_BUILD_CACHE"))
+	if p == "" {
+		return defaultGoBuildCacheDir, true
+	}
+	if low := strings.ToLower(p); p == "-" || low == "disable" || low == "off" {
+		return "", false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		if log != nil {
+			log.Warn("invalid FLYNN_GO_BUILD_CACHE", "path", p, "err", err)
+		}
+		return "", false
+	}
+	return abs, true
+}
+
+// layerBuildsGo reports whether the layer runs the Go toolchain and so
+// benefits from the shared build cache.
+func layerBuildsGo(l *Layer) bool {
+	if l == nil {
+		return false
+	}
+	return len(l.GoBuild) > 0 || len(l.CGoBuild) > 0 || len(l.GoBin) > 0 || len(l.ProtoBuild) > 0
+}
+
+// appendGoBuildCacheMount bind-mounts the shared Go build cache into a Go
+// build job and points GOCACHE at it. It must run after generateLayerID:
+// GOCACHE is job plumbing, not a layer input, exactly like FLYNN_VERSION.
+func (b *Builder) appendGoBuildCacheMount(job *host.Job, l *Layer) bool {
+	if !layerBuildsGo(l) {
+		return false
+	}
+	dir, want := goBuildCacheDir(b.log)
+	if !want || dir == "" {
+		return false
+	}
+	if !setupSharedCacheDir(b.log, "go build cache", dir) {
+		return false
+	}
+	job.Config.Mounts = append(job.Config.Mounts, host.Mount{
+		Target:    dir,
+		Location:  goBuildCacheMountPoint,
+		Writeable: true,
+	})
+	if job.Config.Env == nil {
+		job.Config.Env = make(map[string]string)
+	}
+	job.Config.Env["GOCACHE"] = goBuildCacheMountPoint
+	b.log.Info("go build cache mounted", "host_path", dir, "mount", goBuildCacheMountPoint)
+	return true
 }
 
 func aptArchiveCacheDir(log log15.Logger) (string, bool) {
@@ -340,6 +423,9 @@ type Builder struct {
 	// build/images.json on success
 	artifacts    map[string]*ct.Artifact
 	artifactsMtx sync.RWMutex
+
+	// layerCacheDir overrides defaultLayerCacheDir (tests only)
+	layerCacheDir string
 
 	// envTemplateData is used as the data when interpolating
 	// environment variable templates
@@ -1434,23 +1520,43 @@ func (b *Builder) Artifact(name string) (*ct.Artifact, error) {
 // hits used to skip rebuilds and then package_layers would omit the blob,
 // so images.json shipped layer IDs that were not GitHub Release assets.
 func (b *Builder) GetCachedLayer(name, id string) (*ct.ImageLayer, error) {
-	layer, err := cachedLayerFromFiles(b.layerPath(id), b.layerConfigPath(id))
+	squashfsPath, configPath := b.layerPath(id), b.layerConfigPath(id)
+	layer, err := cachedLayerFromFiles(squashfsPath, configPath)
 	if err != nil {
 		return nil, err
 	}
 	if layer == nil {
-		if _, jsonErr := os.Stat(b.layerConfigPath(id)); jsonErr == nil {
+		if _, jsonErr := os.Stat(configPath); jsonErr == nil {
 			if b.log != nil {
-				b.log.Info("layer metadata cached without squashfs; rebuilding", "name", name, "id", id)
+				b.log.Info("layer cached without a matching squashfs; rebuilding", "name", name, "id", id)
 			}
 		}
+		return nil, nil
+	}
+	// The cache now persists across builds (build.sh prep keeps it), so mark
+	// last use: `flynn-builder prune` evicts by mtime.
+	touchLayerFiles(squashfsPath, configPath)
+	if b.log != nil {
+		b.log.Info(fmt.Sprintf("%s layer reuse (cached)", name), "layer.id", id)
 	}
 	return layer, nil
 }
 
+// touchLayerFiles bumps mtime on a reused layer so age-based pruning treats
+// the cache as LRU. Failures are ignored: a stale mtime only risks an early
+// evict-and-rebuild, never a wrong image.
+func touchLayerFiles(paths ...string) {
+	now := time.Now()
+	for _, p := range paths {
+		_ = os.Chtimes(p, now, now)
+	}
+}
+
 // cachedLayerFromFiles returns a decoded layer only when the squashfs blob and
-// sidecar JSON are both present. A missing blob is a cache miss so the layer
-// is rebuilt instead of reused from JSON alone.
+// sidecar JSON are both present, the blob has the recorded length and, when
+// the sidecar carries one, the recorded sha512_256 digest. A missing or
+// mismatched blob is a cache miss so the layer is rebuilt instead of reused.
+// Digest verification matters now that the cache outlives a single build.
 func cachedLayerFromFiles(squashfsPath, configPath string) (*ct.ImageLayer, error) {
 	st, err := os.Stat(squashfsPath)
 	if err != nil {
@@ -1474,7 +1580,29 @@ func cachedLayerFromFiles(squashfsPath, configPath string) (*ct.ImageLayer, erro
 	if layer.Length > 0 && st.Size() != layer.Length {
 		return nil, nil
 	}
+	if want := layer.Hashes["sha512_256"]; want != "" {
+		got, err := fileSHA512_256(squashfsPath)
+		if err != nil {
+			return nil, err
+		}
+		if got != want {
+			return nil, nil
+		}
+	}
 	return layer, nil
+}
+
+func fileSHA512_256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha512.New512_256()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // BuildLayer either returns a cached layer or runs a job to build the layer
@@ -1592,6 +1720,10 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		job.Config.Env["FLYNN_HTTP_CACHE_ROOT"] = flynnHTTPDownloadMountPoint
 		job.Config.Env["FLYNN_GIT_CACHE_ROOT"] = flynnGitCacheMountPoint
 	}
+	// Shared GOCACHE so a changed package recompiles only itself and its
+	// dependents. id was generated from env before this point, so GOCACHE
+	// (like FLYNN_VERSION below) does not affect layer identity.
+	b.appendGoBuildCacheMount(job, l)
 	cmd := exec.Cmd{Job: job}
 
 	// run bash inside the job, passing the commands via stdin
@@ -1772,14 +1904,27 @@ func (b *Builder) GoInputsFor(platform GoPlatform) *GoInputs {
 	return g
 }
 
-const layerURLTemplate = "file:///var/lib/flynn/layer-cache/{id}.squashfs"
+const (
+	defaultLayerCacheDir = "/var/lib/flynn/layer-cache"
+	layerURLTemplate     = "file://" + defaultLayerCacheDir + "/{id}.squashfs"
+)
+
+// layerCache returns the layer cache directory (b.layerCacheDir when set,
+// which tests use; otherwise the fixed location build.sh and script/release
+// share).
+func (b *Builder) layerCache() string {
+	if b.layerCacheDir != "" {
+		return b.layerCacheDir
+	}
+	return defaultLayerCacheDir
+}
 
 func (b *Builder) layerPath(id string) string {
-	return fmt.Sprintf("/var/lib/flynn/layer-cache/%s.squashfs", id)
+	return filepath.Join(b.layerCache(), id+".squashfs")
 }
 
 func (b *Builder) layerConfigPath(id string) string {
-	return fmt.Sprintf("/var/lib/flynn/layer-cache/%s.json", id)
+	return filepath.Join(b.layerCache(), id+".json")
 }
 
 type fileInput struct {
