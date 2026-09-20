@@ -29,6 +29,14 @@
 #   stay in order (prep → binaries → start → toolchain → apps → stop) on the same
 #   machine so /var/lib/flynn/layer-cache and build/images.json carry forward.
 #
+# Incremental rebuilds:
+#   prep preserves /var/lib/flynn/layer-cache (and the base squashfs) across the
+#   install-flynn --remove it runs, so layers whose inputs did not change are
+#   reused; Go layers also share a persistent GOCACHE (see flynn-builder build
+#   --help). After apps, unreferenced layers idle for FLYNN_LAYER_CACHE_MAX_AGE
+#   (default 168h) are pruned. FLYNN_NO_LAYER_CACHE_KEEP=1 wipes the layer cache
+#   in prep; FLYNN_LAYER_CACHE_PRUNE=0 skips the prune.
+#
 # Concurrency (optional):
 #   TOOLCHAIN_CONCURRENCY  default 2 (conservative; toolchain images are heavy)
 #   APPS_CONCURRENCY       default nproc locally, 2 on GitHub Actions, or FLYNN_BUILD_CONCURRENCY
@@ -144,6 +152,7 @@ export DISCOVERD_PEERS=192.0.2.200:1111
 export TELEMETRY_URL=http://localhost:8080/measure/scheduler
 export FLYNN_REPOSITORY=http://localhost:8080
 export SQUASHFS="/var/lib/flynn/base-layer.squashfs"
+export LAYER_CACHE="/var/lib/flynn/layer-cache"
 export UBUNTU_CODENAME
 UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
 
@@ -158,13 +167,20 @@ teardown_flynn() {
   echo "===> Stopping Flynn and removing install..."
   ./script/stop-all
   # install-flynn --remove does rm -rf /var/lib/flynn, which is also where the
-  # base squashfs lives. Preserve it so `build.sh cluster` (documented as the
-  # "base squashfs exists" path) does not delete its own prerequisite. Same
-  # filesystem, so these are renames.
-  local saved=""
+  # base squashfs and the content-addressed layer cache live. Preserve both so
+  # `build.sh cluster` (documented as the "base squashfs exists" path) does not
+  # delete its own prerequisite, and so an unchanged layer (its ID is a hash of
+  # its inputs) is reused instead of rebuilt on every run. Same filesystem, so
+  # these are renames. FLYNN_NO_LAYER_CACHE_KEEP=1 drops the layer cache too.
+  local saved="" saved_layers=""
   if [[ -f "${SQUASHFS}" ]]; then
     saved="/var/lib/flynn-base-layer.squashfs.keep"
     sudo mv -f "${SQUASHFS}" "${saved}"
+  fi
+  if [[ -d "${LAYER_CACHE}" ]] && [[ "${FLYNN_NO_LAYER_CACHE_KEEP:-}" != "1" ]]; then
+    saved_layers="/var/lib/flynn-layer-cache.keep"
+    sudo rm -rf "${saved_layers}"
+    sudo mv -f "${LAYER_CACHE}" "${saved_layers}"
   fi
   ./script/install-flynn --remove --clean --yes
   if [[ -n "${saved}" ]]; then
@@ -172,6 +188,29 @@ teardown_flynn() {
     sudo mv -f "${saved}" "${SQUASHFS}"
     echo "===> Preserved base squashfs at ${SQUASHFS}"
   fi
+  if [[ -n "${saved_layers}" ]]; then
+    sudo mkdir -p "$(dirname "${LAYER_CACHE}")"
+    sudo mv -f "${saved_layers}" "${LAYER_CACHE}"
+    echo "===> Preserved layer cache at ${LAYER_CACHE} ($(ls "${LAYER_CACHE}" | grep -c '\.squashfs$' || true) layers)"
+  fi
+}
+
+# Drop layer-cache entries that the build just written does not reference and
+# that have not been used recently. flynn-builder touches a layer on every
+# cache hit, so mtime is last-use. FLYNN_LAYER_CACHE_MAX_AGE (Go duration,
+# default 168h) bounds retention; FLYNN_LAYER_CACHE_PRUNE=0 skips pruning.
+prune_layer_cache() {
+  if [[ "${FLYNN_LAYER_CACHE_PRUNE:-1}" == "0" ]]; then
+    echo "===> Skipping layer cache prune (FLYNN_LAYER_CACHE_PRUNE=0)"
+    return 0
+  fi
+  cd "${FLYNN_ROOT}"
+  if [[ ! -x build/bin/flynn-builder ]] || [[ ! -f build/images.json ]]; then
+    return 0
+  fi
+  echo "===> Pruning unreferenced layer cache entries older than ${FLYNN_LAYER_CACHE_MAX_AGE:-168h}..."
+  build/bin/flynn-builder prune --max-age="${FLYNN_LAYER_CACHE_MAX_AGE:-168h}" || \
+    echo "WARNING: layer cache prune failed; continuing" >&2
 }
 
 require_base_squashfs() {
@@ -422,6 +461,7 @@ run_phase_apps() {
   echo "===> [apps] Building production app images (concurrency=${concurrency})..."
   run_flynn_builder_only apps "${concurrency}"
   flynn-host ps -a || true
+  prune_layer_cache
   echo "===> [apps] Complete."
 }
 
