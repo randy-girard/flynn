@@ -3017,7 +3017,7 @@ probe_scheduler_interval_job() {
   cli_probe "${label}" "cli-help-scheduler" "scheduler" \
     flynn1 help || return 1
   cli_probe "${label}" "cli-help-scheduler-doc" "--every" \
-    flynn1 help scheduler || return 1
+    flynn1 help scheduler add || return 1
 
   id=""
   out=""

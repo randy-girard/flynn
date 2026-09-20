@@ -45,6 +45,8 @@ need "${smoke}" 'cli-scheduler-remove' \
   "scheduler smoke must delete the interval job so it does not keep firing"
 need "${smoke}" 'cli-help-scheduler' \
   "CLI step must show scheduler in flynn help after plugin install"
+need "${smoke}" 'help scheduler add' \
+  "scheduler --every docs live under flynn help scheduler add, not parent help"
 
 if awk '/^step_install_plugins\(/,/^}/' "${smoke}" | grep -q 'probe_scheduler_interval_job'; then
   echo "scheduler interval fire cannot run at plugin-install time; apps are not deployed yet" >&2
