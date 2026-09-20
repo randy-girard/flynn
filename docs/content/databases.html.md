@@ -101,6 +101,12 @@ accepted until the new sync has caught up. A variety of safety conditions are in
 place so that a promotion will never cause writes to be lost or split brain to
 occur.
 
+Rolling deploys of an HA appliance start each replacement peer and wait for it
+to join the async chain and catch up **before** stopping the peer it replaces.
+That keeps three live replicas during the new job's base backup; writes still
+pause for a few seconds when the old sync is stopped and sirenia promotes the
+async, which is the same window a sync failure already causes.
+
 The cluster state is maintained by the primary and stored in discoverd. The
 discoverd DNS and HTTP APIs expose the current primary instance.
 

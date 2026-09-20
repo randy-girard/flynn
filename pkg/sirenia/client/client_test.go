@@ -158,6 +158,88 @@ func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
 	}
 }
 
+func TestIsTailAsync(t *testing.T) {
+	sync := mkInst("10.0.0.2:5432", "sync")
+	first := mkInst("10.0.0.3:5432", "async-0")
+	tail := mkInst("10.0.0.4:5432", "async-1")
+	s := &state.State{Sync: sync, Async: []*discoverd.Instance{first, tail}}
+	if !IsTailAsync(s, tail, "POSTGRES_ID") {
+		t.Fatal("expected tail async")
+	}
+	if IsTailAsync(s, first, "POSTGRES_ID") {
+		t.Fatal("first async is not the tail")
+	}
+	if IsTailAsync(&state.State{}, tail, "POSTGRES_ID") {
+		t.Fatal("empty async list is not a tail")
+	}
+}
+
+func TestSyncReplaceTopologyReady(t *testing.T) {
+	oldSync := mkInst("10.0.0.2:5432", "old-sync")
+	first := mkInst("10.0.0.3:5432", "new-primary")
+	newPeer := mkInst("10.0.0.4:5432", "new-sync")
+	ready := SyncReplaceTopologyReady(oldSync, first, newPeer, "POSTGRES_ID")
+
+	ok := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  oldSync,
+		Async: []*discoverd.Instance{first, newPeer},
+	}}}
+	if !ready(ok) {
+		t.Fatal("expected ready when new peer is tail async and old sync is still recorded")
+	}
+
+	insertedFirst := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  oldSync,
+		Async: []*discoverd.Instance{newPeer, first},
+	}}}
+	if ready(insertedFirst) {
+		t.Fatal("must not treat a new peer inserted at the front as ready")
+	}
+
+	tookOver := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  first,
+		Async: []*discoverd.Instance{newPeer},
+	}}}
+	if ready(tookOver) {
+		t.Fatal("must not proceed after the old sync has already been taken over")
+	}
+
+	onlyNew := &Status{Peer: &state.PeerInfo{State: &state.State{
+		Sync:  oldSync,
+		Async: []*discoverd.Instance{newPeer},
+	}}}
+	if ready(onlyNew) {
+		t.Fatal("a single async means the existing first async was dropped")
+	}
+
+	if ready(&Status{}) || ready(nil) {
+		t.Fatal("nil status is not ready")
+	}
+}
+
+func TestWaitUntilSyncReplaceTopology(t *testing.T) {
+	oldSync := mkInst("10.0.0.2:5432", "old-sync")
+	first := mkInst("10.0.0.3:5432", "new-primary")
+	newPeer := mkInst("10.0.0.4:5432", "new-sync")
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		st := &state.State{Sync: oldSync, Async: []*discoverd.Instance{first}}
+		if atomic.AddInt32(&n, 1) >= 2 {
+			st.Async = []*discoverd.Instance{first, newPeer}
+		}
+		_ = json.NewEncoder(w).Encode(Status{Peer: &state.PeerInfo{State: st}})
+	}))
+	defer srv.Close()
+
+	c := sireniaTestClient(t, srv)
+	if err := c.WaitUntil(SyncReplaceTopologyReady(oldSync, first, newPeer, "POSTGRES_ID"), 3*time.Second); err != nil {
+		t.Fatalf("WaitUntil: %v (calls=%d)", err, n)
+	}
+	if n < 2 {
+		t.Fatalf("expected to poll until the new peer appeared as tail async, calls=%d", n)
+	}
+}
+
 func TestDownstreamFollowsUpstream(t *testing.T) {
 	up := &Status{Peer: &state.PeerInfo{ID: "primary-1"}}
 	follow := &Status{Database: &DatabaseInfo{Config: &state.Config{

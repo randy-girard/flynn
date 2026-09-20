@@ -17,7 +17,10 @@ flynn resource:add mysql
 
 The plugin provides MariaDB 10.11 LTS in a highly-available configuration with
 automatic provisioning. It automatically fails over to a synchronous replica
-with no loss of data if the primary server goes down. A single-host
+with no loss of data if the primary server goes down. A rolling update starts
+each replacement replica and waits for it to catch up before stopping the peer
+it replaces, so the three-peer set stays intact during the new job's base
+backup. A single-host
 (`SINGLETON`) cluster runs one peer; when a third host joins, the scheduler
 promotes the appliance to a three-peer replica set automatically.
 
