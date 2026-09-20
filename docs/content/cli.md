@@ -10,7 +10,7 @@ The `flynn` CLI is the client for the [controller](architecture.html.md#controll
 
 Host-level commands (`bootstrap`, `acme`, rolling update, plugin install, …) are on `flynn-host`, which runs on cluster nodes. This page covers the user CLI, with a shorter [`flynn-host` table](#flynn-host) at the end.
 
-This page is a **curated** reference grouped by task, not a generated dump. Every registered `flynn` and `flynn-host` command is listed at least once below; flags, defaults, and the full text for each command come from `flynn help <command>` / `flynn-host help <command>`. Nested verbs are written in the canonical `noun:verb` form (`env:get`, `plugin:install`, `volume:gc`); the space form (`flynn env get`) is a permanent alias and prints the colon name.
+This page is a **curated** reference grouped by task, not a generated dump. Every canonical user-facing `flynn` and `flynn-host` command is listed at least once below; flags, defaults, and the full text for each command come from `flynn help <command>` / `flynn-host help <command>`. Nested verbs are written in the canonical `noun:verb` form (`env:get`, `plugin:install`, `volume:gc`). The space form (`flynn env get`) and the older hyphen spellings of nested nouns (`plugin:credentials-set`, `plugin:credentials-show`, `plugin:credentials-unset`, `firewall:peer-add`, `firewall:peer-remove`) are compatibility aliases: they run the same command and print `… is now …` on stderr, and they are not listed separately here. The canonical form prints nothing.
 
 ## Installation
 
@@ -193,7 +193,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `download` | Fetch `flynn-host` binaries, config, and images for a release from GitHub (`--version`, `--github-repo`; used by the installer) |
 | `update` | Rolling host update from GitHub Releases (`--all-nodes`, `--skip-images`, `--check`, `--check --force`, `--force`) |
 | `backup` / `migrate-domain` / `cli-add-command` | Cluster backup tarball, domain rename, print the `flynn cluster:add` line for this cluster |
-| `list` / `promote` / `demote` / `discover` | Raft membership (`peer` vs `proxy`), promote or demote a peer (`--force` when it is gone), resolve discoverd services |
+| `list` / `promote` / `demote` / `discover` | Raft membership (`peer` vs `proxy`), promote a node to a peer, demote one (`demote -f` / `--force` when the node is already gone), resolve discoverd services |
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
 | `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. |
