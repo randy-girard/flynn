@@ -101,15 +101,22 @@ func (m *Mux) subscribe(app string, ch chan message) func() {
 	}
 }
 
+// broadcastTimeout bounds how long a writer waits on any single subscriber.
+// Writers include job stdout followers and the host state's lifecycle log
+// lines; a subscriber that has stopped reading (a `flynn log -f` whose client
+// went away mid-upgrade) must cost the writer at most this, never a hang.
+var broadcastTimeout = time.Second
+
 func (m *Mux) broadcast(app string, msg message) {
 	m.subscribersMtx.RLock()
 	defer m.subscribersMtx.RUnlock()
 
-	timeout := time.NewTimer(time.Second)
+	timeout := time.NewTimer(broadcastTimeout)
+	defer timeout.Stop()
 	l := m.logger.New("fn", "broadcast", "sample", "0.1")
 	r := rand.New(rand.NewSource(time.Now().Unix()))
 	for ch := range m.subscribers[firehoseApp] {
-		timeout.Reset(time.Second)
+		timeout.Reset(broadcastTimeout)
 		select {
 		case ch <- msg:
 		case <-timeout.C:
@@ -118,8 +125,20 @@ func (m *Mux) broadcast(app string, msg message) {
 			}
 		}
 	}
+	// Per-app followers used to get an unbounded send here. subscribe()
+	// drains the channel on unsubscribe, but a live subscriber that is itself
+	// blocked forwarding to a slow HTTP client never reads, and everything
+	// upstream of this call (appLog.Write, State.sendEvent under s.mtx) hung
+	// with it. Apply the same bounded wait as the firehose.
 	for ch := range m.subscribers[app] {
-		ch <- msg
+		timeout.Reset(broadcastTimeout)
+		select {
+		case ch <- msg:
+		case <-timeout.C:
+			if r.Intn(9) == 0 {
+				l.Error("dropping log line due to follower write timeout", "app", app)
+			}
+		}
 	}
 }
 
