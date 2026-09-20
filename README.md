@@ -14,7 +14,7 @@ A Flynn cluster is a set of Ubuntu hosts. You deploy apps with `git push` or Doc
 
 | Area | What you get |
 | --- | --- |
-| Deploy | `git push` with [Heroku-24 buildpacks](docs/content/apps.md#buildpacks), `git push` from a `Dockerfile` ([container stack](docs/content/docker.md#container-stack)), or `flynn docker push` of a local image |
+| Deploy | `git push` with [Heroku-24 buildpacks](docs/content/apps.md#buildpacks), `git push` from a `Dockerfile` ([container stack](docs/content/docker.md#container-stack)), or `flynn docker:push` of a local image |
 | Runtime | Process types from a `Procfile`, scale with `flynn scale`, named runtime profiles (`small` / `medium` / `large`), zero-downtime deploys with automatic rollback |
 | Routing | HTTP/HTTPS and TCP routes, custom domains, path-based HTTP routes (`flynn-host route:add`), HTTP/2, automatic Let's Encrypt certificates |
 | Datastores | PostgreSQL 16, MariaDB 10.11, MongoDB 7.0, Redis, Kafka 3.9 (KRaft), ClickHouse |
@@ -144,19 +144,19 @@ Language notes live under [docs/content/languages](docs/content/languages).
 
 ## Datastores
 
-Postgres is included in Flynn. Other engines are plugins (`flynn-host plugin
-install`; see [Plugins](docs/content/plugins.md)). Provision from an app with
-`flynn resource add <provider>`. Connection URLs are injected as environment
+Postgres is included in Flynn. Other engines are plugins (`flynn-host
+plugin:install`; see [Plugins](docs/content/plugins.md)). Provision from an app with
+`flynn resource:add <provider>`. Connection URLs are injected as environment
 variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach
 appliances at the **leader** hostname Flynn put in those URLs, not at internal
 `*.discoverd` names.
 
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
-| `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg psql` / `dump` / `restore` |
+| `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg:psql` / `pg:dump` / `pg:restore` |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
-| `redis` | Redis (Ubuntu 24.04 package) | Single process | **Plugin.** `flynn-host plugin:install redis`. Ephemeral; caching and development |
+| `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. No replicas and not in `flynn-host backup`; caching and development |
 | `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka` |
 | `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse` |
 

@@ -5,7 +5,7 @@
 Flynn deploys **one shared PostgreSQL cluster** during bootstrap:
 
 - A single `postgres` app with 3 database processes (primary + sync + async) and 2 API processes (`web`)
-- All `flynn resource add postgres` calls hit the same API, which creates a user/database pair on the shared cluster
+- All `flynn resource:add postgres` calls hit the same API, which creates a user/database pair on the shared cluster
 - Sirenia manages HA: automatic failover, streaming replication, synchronous commit
 - `flynn-postgres-api` is a thin HTTP service that does `CREATE USER` / `CREATE DATABASE` / `DROP DATABASE`
 
@@ -84,7 +84,7 @@ flynn pg:attach <cluster-name> --app <app> [--as <NAME>]
 - Creates an attachment record linking cluster to app
 - Sets managed env vars: `<NAME>_URL`, `<NAME>_HOST`, etc.
 - Default `<NAME>` is `DATABASE` (so `DATABASE_URL`); additional attachments get auto-names like `POSTGRESQL_AMBER`
-- Managed env vars cannot be overwritten via `flynn env set`
+- Managed env vars cannot be overwritten via `flynn env:set`
 
 **Managed env var enforcement** requires:
 - Modifying the release creation path in the controller to check if a key is owned by an attachment
@@ -140,7 +140,7 @@ Uses follower-based upgrade pattern:
 - New CLI commands: `flynn pg:create`, `flynn pg:attach`, `flynn pg:detach`, `flynn pg:info`, `flynn pg:destroy`
 - New controller API endpoints for cluster CRUD and attachment management
 - Managed env var enforcement
-- Keep `flynn resource add postgres` as backward-compatible shortcut
+- Keep `flynn resource:add postgres` as backward-compatible shortcut
 
 Key files to modify:
 - `controller/data/` — new repos for clusters and attachments

@@ -112,7 +112,7 @@ That stops any previous `flynn-host`, starts it again, and bootstraps Layer 1.
 `--size N` creates extra virtual interfaces on one machine for a multi-node
 layout. See `script/bootstrap-flynn -h`.
 
-The last bootstrap lines include `flynn cluster add …`. On Vagrant, host daemon
+The last bootstrap lines include `flynn cluster:add …`. On Vagrant, host daemon
 logs are `/var/log/flynn/flynn-host.log`, synced to `./flynn-logs/builder` on
 the laptop.
 
@@ -142,8 +142,8 @@ $ flynn-host collect-debug-info --tarball
 
 ## Tests
 
-There are several layers. CI on pull requests to `develop` / `main` runs
-**gofmt**, **bats**, and the **Linux unit suite**. Integration tests and Vagrant
+There are several layers. CI on pushes and pull requests to `main` (and `develop`, while that
+branch exists) runs **gofmt**, **bats**, and the **Linux unit suite**. Integration tests and Vagrant
 smoke are local (or a dedicated machine). They are the right gate for scheduler,
 network, datastore, upgrade, and CLI behavior.
 
@@ -155,8 +155,9 @@ $ util/commit-validator/validate-gofmt
 
 CI, `make test-unit` / `script/run-unit-tests`, and
 `script/vagrant-upgrade-smoke.sh` all run this check. It compares against the
-PR base (or `origin/develop` locally) so you do not fail on unrelated
-historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
+PR base in CI; locally it uses the first of `origin/develop`, `origin/main`,
+or `origin/master` that exists (`util/commit-validator/.validate`), so you do
+not fail on unrelated historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
 
 Install the same check as **pre-commit** and **pre-push** hooks so unformatted
 Go never leaves the clone:
@@ -282,15 +283,15 @@ Default flow:
    OTLP/HTTP sink on the host and confirm the otel plugin POSTs `/v1/metrics`,
    deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
-   `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn docker
-   push` a pre-built image of the same Dockerfile, probe HTTP and
+   `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn
+   docker:push` a pre-built image of the same Dockerfile, probe HTTP and
    rows, exercise `flynn` / `flynn-host`, create a persistent volume, write a
    file, read it after a job restart, and delete the volume, then `flynn-host update --all-nodes
-   --tarball --force` twice and re-verify. After that, `flynn cluster backup`,
+   --tarball --force` twice and re-verify. After that, `flynn-host backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
    re-verify the slug/Dockerfile git-push/docker-push apps plus postgres/mysql/mongodb data. Installed
    plugins restore with postgres (`plugins.json` is the inventory; do not
-   `plugin install` again). Redis, Kafka, and ClickHouse volume data is not
+   `plugin:install` again). Redis, Kafka, and ClickHouse volume data is not
    in the cluster backup; those engines must come back empty.
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
@@ -353,8 +354,8 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
 
 ## Pull requests
 
-Target **`develop`**. Sign off commits (`git commit -s`). Include tests, or
-explain why not.
+Target **`main`**. Use Conventional Commit subjects and plain `git commit` (no
+DCO sign-off). Include tests, or explain why not.
 
 * Pure Go / CLI: `make test-unit` (and gofmt) is the minimum
 * Scripts under `script/`: bats and/or the matching `script/test-*.sh`

@@ -5,32 +5,32 @@
       "name": "redis",
       "kind": "resource-provider",
       "repo": "flynn-plugin-redis",
-      "description": "Redis. Provision with flynn resource add redis."
+      "description": "Redis. Provision with flynn resource:add redis."
     },
     {
       "name": "mariadb",
       "aliases": ["mysql"],
       "kind": "resource-provider",
       "repo": "flynn-plugin-mariadb",
-      "description": "MariaDB 10.11 (MySQL-compatible). Install as mariadb or mysql; provision with flynn resource add mysql."
+      "description": "MariaDB 10.11 (MySQL-compatible). Install as mariadb or mysql; provision with flynn resource:add mysql."
     },
     {
       "name": "mongodb",
       "kind": "resource-provider",
       "repo": "flynn-plugin-mongodb",
-      "description": "MongoDB 7.0 replica set. Provision with flynn resource add mongodb."
+      "description": "MongoDB 7.0 replica set. Provision with flynn resource:add mongodb."
     },
     {
       "name": "kafka",
       "kind": "resource-provider",
       "repo": "flynn-plugin-kafka",
-      "description": "Apache Kafka 3.9 (KRaft). Provision with flynn resource add kafka."
+      "description": "Apache Kafka 3.9 (KRaft). Provision with flynn resource:add kafka."
     },
     {
       "name": "clickhouse",
       "kind": "resource-provider",
       "repo": "flynn-plugin-clickhouse",
-      "description": "ClickHouse analytics database. Provision with flynn resource add clickhouse."
+      "description": "ClickHouse analytics database. Provision with flynn resource:add clickhouse."
     },
     {
       "name": "dashboard",

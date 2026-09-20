@@ -1,7 +1,9 @@
 # flynn-test runner rootfs
 
-The scripts in this directory build an Ubuntu 14.04 rootfs image to be used with
-User-mode Linux (see `../uml` for UML build tooling).
+The scripts in this directory build an **Ubuntu 24.04** rootfs image
+(`rootfs.img`, from the `ubuntu-base` tarball) plus the matching `vmlinuz` for
+the KVM clusters that `flynn-test` boots (see [test/README.md](../README.md)).
+The historical User-mode Linux notes below are kept for the TAP/bridge setup.
 
 The image expects a network configuration to be provided via `hostfs`.
 

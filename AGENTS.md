@@ -1,6 +1,6 @@
 # Agent notes
 
-This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branch is `develop`. Host OS is Ubuntu 24.04; Go is 1.24 with `-mod=vendor`.
+This is the **randy-girard/flynn** community fork of Flynn (PaaS). Default branch is `main` (pull requests target `main`). Host OS is Ubuntu 24.04; Go is 1.24 with `-mod=vendor`.
 
 ## Colon commands
 
@@ -12,9 +12,11 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
 
 1. **Docs** — Update the user-facing pages that describe the behavior. At minimum check:
    - Root [README.md](README.md) if install, features, or datastore versions changed
-   - [docs/content/](docs/content/) for the matching topic (apps, docker, databases, CLI, install, development, production, security)
-   - Component READMEs (`cli/`, `controller/`, `test/`, …) if that component’s interface changed
-   - [docs/README.md](docs/README.md) if you add or rename a guide
+   - [docs/content/](docs/content/) for the matching topic (apps, docker, databases, CLI, plugins, install, development, production, security)
+   - [docs/content/cli.md](docs/content/cli.md) when you add, rename, or remove a `flynn` / `flynn-host` command — every canonical command is listed there in `noun:verb` form (compatibility alias registrations such as space forms or `plugin:credentials-set` are exempt), and other pages must not keep the old spelling
+   - Component READMEs (`cli/`, `controller/`, `host/`, `router/`, `test/`, `script/`, …) if that component’s interface changed
+   - [docs/README.md](docs/README.md) **and** [docs/docs-nav.json](docs/docs-nav.json) if you add or rename a guide
+   - Plugin contract changes (manifest fields in `pkg/plugin`, install/update/uninstall flow, `official-plugins.json`, `flynn resource:expose` providers): [docs/content/plugins.md](docs/content/plugins.md), [docs/content/databases/](docs/content/databases/), and the sibling `../flynn-plugin-*/README.md` + `flynn-plugin.json` when that checkout exists
 2. **Links** — Use **relative file paths** that work on GitHub (`databases/clickhouse.md`, not `/docs/databases/clickhouse`). This fork does not host the old flynn.io docs site.
 3. **Tests** — Add or update coverage at the right layer:
    - Unit: `make test-unit` / `go test` next to the code
@@ -22,7 +24,7 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
    - Smoke driver contracts: `script/test-vagrant-smoke-*.sh` if you change `script/vagrant-upgrade-smoke.sh`
    - Cluster / overlay / datastores / dockerbuilder / upgrades / membership / backup-restore: `script/vagrant-upgrade-smoke.sh` (narrow with `SMOKE_TOPOLOGIES` if needed)
    - Full-stack Go: `script/run-integration-tests` for `test/` suites
-4. **Do not leave docs describing removed or replaced behavior** (old Ubuntu, old DB versions, `dl.flynn.io`, tup, upstart, HHVM, Python 2, godep as the default, website `/docs/...` URLs).
+4. **Do not leave docs describing removed or replaced behavior** (old Ubuntu, old DB versions, `dl.flynn.io`, tup, upstart, HHVM, Python 2, godep as the default, website `/docs/...` URLs, the `develop` branch, DCO sign-off, space-form command aliases as the documented spelling).
 
 If a change is internal-only and has no user-visible effect, say so in the PR and skip docs — still add tests when the logic can regress.
 

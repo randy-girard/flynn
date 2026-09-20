@@ -169,7 +169,7 @@ $ sudo \
     --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
 ```
 
-The last bootstrap log line is the `flynn cluster add` command for the [CLI](../cli.md). You can also run `sudo flynn-host cli-add-command` on a host.
+The last bootstrap log line is the `flynn cluster:add` command for the [CLI](../cli.md). You can also run `sudo flynn-host cli-add-command` on a host.
 
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
 `veth*` interfaces, then open a GitHub issue.
@@ -188,7 +188,7 @@ $ sudo flynn-host acme:enable-system-routes
 (Let's Encrypt issues untrusted certs) or `--directory-url` for another ACME
 CA. Check status with `sudo flynn-host acme:status`.
 
-App routes opt in with `flynn route add http --auto-tls <domain>`. The name
+App routes opt in with `flynn route:add http --auto-tls <domain>`. The name
 must resolve to the cluster so Let's Encrypt can complete HTTP-01 on ports 80
 and 443. You can still attach your own cert with `--tls-cert` / `--tls-key`.
 After system routes have a public certificate, run

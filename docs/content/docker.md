@@ -8,7 +8,7 @@ toc_min_level: 2
 
 Flynn can run applications from Docker images in two ways:
 
-- **`flynn docker push`** — push a pre-built image from your machine
+- **`flynn docker:push`** — push a pre-built image from your machine
 - **`git push` with the container stack** — build from a `Dockerfile` on the
   cluster (see [Container stack](#container-stack))
 
@@ -20,7 +20,7 @@ same image import and release logic in the cluster.
 Run the following to push a Docker image to `tarreceive` and deploy it:
 
 ```
-$ flynn -a APPNAME docker push IMAGE
+$ flynn -a APPNAME docker:push IMAGE
 ```
 
 where `APPNAME` is the name of an existing Flynn app and `IMAGE` is a reference
@@ -33,17 +33,17 @@ To build from a `Dockerfile` on the server instead of using buildpacks, switch
 the app to the container stack and deploy with `git push`:
 
 ```
-$ flynn stack set container
+$ flynn stack:set container
 $ git push flynn master
 ```
 
 The cluster builds the image with [BuildKit](https://github.com/moby/buildkit)
-and imports it using the same pipeline as `flynn docker push`.
+and imports it using the same pipeline as `flynn docker:push`.
 
 Switch back to buildpack deploys at any time:
 
 ```
-$ flynn stack set heroku-24
+$ flynn stack:set heroku-24
 ```
 
 Optional configuration:
@@ -60,7 +60,7 @@ listen on the port which is set in the `PORT` environment variable.
 ## Example (pre-built image)
 
 Here is an example of deploying the [Flynn Node.js example app](https://github.com/flynn-examples/nodejs-flynn-example)
-using `flynn docker push`.
+using `flynn docker:push`.
 
 Clone the git repository:
 
@@ -78,18 +78,18 @@ $ docker build -t nodejs-flynn-example .
 Create an app:
 
 ```
-$ flynn create --remote "" nodejs
+$ flynn apps:create --remote "" nodejs
 Created nodejs
 ```
 
 _NOTE: the `--remote ""` flag prevents Flynn trying to configure the local
 git repository with a `flynn` remote, something which is useful only when
-deploying with `git push` rather than `flynn docker push`._
+deploying with `git push` rather than `flynn docker:push`._
 
 Push the Docker image:
 
 ```
-$ flynn -a nodejs docker push nodejs-flynn-example
+$ flynn -a nodejs docker:push nodejs-flynn-example
 deploying Docker image: nodejs-flynn-example
 exporting image with 'docker save nodejs-flynn-example'
 650.67 MB 107.82 MB/s 6s
@@ -159,8 +159,8 @@ The app can also be reached externally via the automatically registered route
 With a `Dockerfile` committed in your repository:
 
 ```
-$ flynn create myapp
-$ flynn stack set container
+$ flynn apps:create myapp
+$ flynn stack:set container
 $ git push flynn master
 -----> Building myapp from Dockerfile...
 -----> Uploading image...

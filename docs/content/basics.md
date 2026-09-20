@@ -30,7 +30,7 @@ Inside the cloned repo, create a Flynn application:
 
 ```
 $ cd go-flynn-example
-$ flynn create example
+$ flynn apps:create example
 Created example
 ```
 
@@ -56,7 +56,7 @@ http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f05
 The app depends on Postgres, so add a database:
 
 ```
-$ flynn resource add postgres
+$ flynn resource:add postgres
 Created resource 320f38ba-36bc-40ce-97e5-dad1b5c3bd20 and release c7b793ca-b7b1-4da0-bd1d-4ed95c1b52e8.
 ```
 
@@ -113,8 +113,8 @@ process, as can be seen with the `ps` command:
 
 ```
 $ flynn ps
-ID                                          TYPE  STATE  CREATED             RELEASE                               COMMAND
-flynn-db0440f7-19b4-4369-b79e-7a48dba415c2  web   up     About a minute ago  ccd1aa34-77f7-4b7c-9772-e5d39a9f2d1e  /runner/init start web
+NAME   TYPE  STATE  CREATED             ID
+web.1  web   up     About a minute ago  host0-db0440f7-19b4-4369-b79e-7a48dba415c2
 ```
 
 Run more web processes using the `scale` command:
@@ -137,10 +137,10 @@ scale completed in 464.957638ms
 
 ```
 $ flynn ps
-ID                                          TYPE  STATE  CREATED         RELEASE                               COMMAND
-flynn-db0440f7-19b4-4369-b79e-7a48dba415c2  web   up     2 minutes ago   ccd1aa34-77f7-4b7c-9772-e5d39a9f2d1e  /runner/init start web
-flynn-4ef91e4b-d0c3-4e3f-931b-6db3b551dcd9  web   up     16 seconds ago  ccd1aa34-77f7-4b7c-9772-e5d39a9f2d1e  /runner/init start web
-flynn-ccd3aff7-80b3-46b4-a95f-006bfceb80c6  web   up     16 seconds ago  ccd1aa34-77f7-4b7c-9772-e5d39a9f2d1e  /runner/init start web
+NAME      TYPE  STATE  CREATED         ID
+web.1     web   up     2 minutes ago   host0-db0440f7-19b4-4369-b79e-7a48dba415c2
+web.4821  web   up     16 seconds ago  host0-4ef91e4b-d0c3-4e3f-931b-6db3b551dcd9
+web.900   web   up     16 seconds ago  host0-ccd3aff7-80b3-46b4-a95f-006bfceb80c6
 ```
 
 Repeated HTTP requests should show that the requests are load balanced across
@@ -202,10 +202,10 @@ Once that push has succeeded, you should now see 3 new processes:
 
 ```
 $ flynn ps
-ID                                          TYPE  STATE  CREATED        RELEASE                               COMMAND
-flynn-8f61a0f9-0582-474c-a996-1bec7d496f2a  web   up     6 seconds ago  677a8a2b-f67d-4e50-8712-1a1524a23b6f  /runner/init start web
-flynn-f863b79a-d2b2-44d6-807b-1b508d758a8b  web   up     6 seconds ago  677a8a2b-f67d-4e50-8712-1a1524a23b6f  /runner/init start web
-flynn-1f6b3c21-3b6f-4dc0-86b3-4bfb9481b71a  web   up     6 seconds ago  677a8a2b-f67d-4e50-8712-1a1524a23b6f  /runner/init start web
+NAME      TYPE  STATE  CREATED        ID
+web.1     web   up     6 seconds ago  host0-8f61a0f9-0582-474c-a996-1bec7d496f2a
+web.4821  web   up     6 seconds ago  host0-f863b79a-d2b2-44d6-807b-1b508d758a8b
+web.900   web   up     6 seconds ago  host0-1f6b3c21-3b6f-4dc0-86b3-4bfb9481b71a
 ```
 
 The logs of those processes should show the added log message:
@@ -303,18 +303,18 @@ Scale the `clock` service to one process and get its output:
 $ flynn scale clock=1
 
 $ flynn ps
-ID                                          TYPE  STATE   CREATED         RELEASE                               COMMAND
-flynn-5a2b2364-cfb6-411e-86f8-af9298994f09  clock  up     13 seconds ago  7f81b96d-3834-4eed-8b05-9ce66cc07b54  /runner/init start clock
-flynn-c0b01f0f-4236-4d01-94eb-fe8c16f3dc0e  web    up     13 seconds ago  7f81b96d-3834-4eed-8b05-9ce66cc07b54  /runner/init start web
-flynn-7453bc70-6b79-4776-9f32-c57506ba28f6  web    up     13 seconds ago  7f81b96d-3834-4eed-8b05-9ce66cc07b54  /runner/init start web
-flynn-4fc38d7d-06d8-4285-a225-ae0cdeb58e03  web    up     13 seconds ago  7f81b96d-3834-4eed-8b05-9ce66cc07b54  /runner/init start web
+NAME      TYPE   STATE  CREATED         ID
+clock.1   clock  up     13 seconds ago  host0-5a2b2364-cfb6-411e-86f8-af9298994f09
+web.1     web    up     13 seconds ago  host0-c0b01f0f-4236-4d01-94eb-fe8c16f3dc0e
+web.4821  web    up     13 seconds ago  host0-7453bc70-6b79-4776-9f32-c57506ba28f6
+web.900   web    up     13 seconds ago  host0-4fc38d7d-06d8-4285-a225-ae0cdeb58e03
 
 $ flynn log -t clock
-2016-07-26T13:47:11.217109Z app[clock.flynn-5a2b2364-cfb6-411e-86f8-af9298994f09]: 2016-07-26 13:47:11.216175147 +0000 UTC
-2016-07-26T13:47:12.221625Z app[clock.flynn-5a2b2364-cfb6-411e-86f8-af9298994f09]: 2016-07-26 13:47:12.221232786 +0000 UTC
-2016-07-26T13:47:13.217002Z app[clock.flynn-5a2b2364-cfb6-411e-86f8-af9298994f09]: 2016-07-26 13:47:13.21673476 +0000 UTC
-2016-07-26T13:47:14.216574Z app[clock.flynn-5a2b2364-cfb6-411e-86f8-af9298994f09]: 2016-07-26 13:47:14.216298339 +0000 UTC
-2016-07-26T13:47:15.216373Z app[clock.flynn-5a2b2364-cfb6-411e-86f8-af9298994f09]: 2016-07-26 13:47:15.21610766 +0000 UTC
+2016-07-26T13:47:11.217109Z app[clock.1]: 2016-07-26 13:47:11.216175147 +0000 UTC
+2016-07-26T13:47:12.221625Z app[clock.1]: 2016-07-26 13:47:12.221232786 +0000 UTC
+2016-07-26T13:47:13.217002Z app[clock.1]: 2016-07-26 13:47:13.21673476 +0000 UTC
+2016-07-26T13:47:14.216574Z app[clock.1]: 2016-07-26 13:47:14.216298339 +0000 UTC
+2016-07-26T13:47:15.216373Z app[clock.1]: 2016-07-26 13:47:15.21610766 +0000 UTC
 ```
 
 ## Run

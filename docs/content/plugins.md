@@ -27,7 +27,7 @@ catalog. Postgres stays in Flynn and is not a plugin.
 
 Development layout (relative to the Flynn repo):
 
-| Alias | Path from `flynn/` | Provider (`flynn resource add`) |
+| Alias | Path from `flynn/` | Provider (`flynn resource:add`) |
 |-------|--------------------|----------------------------------|
 | `redis` | `../flynn-plugin-redis` | `redis` |
 | `mariadb` / `mysql` | `../flynn-plugin-mariadb` | `mysql` |
@@ -64,7 +64,7 @@ stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
 is expanded). If cluster ACME is already enabled (`flynn-host acme:configure`
 and `flynn-host acme:enable`), HTTP plugin routes get Let's Encrypt at install
-automatically (same as `flynn route add http --auto-tls`). That covers the
+automatically (same as `flynn route:add http --auto-tls`). That covers the
 dashboard plugin and any other HTTP plugin; Flynn does not special-case a
 name. Set **`auto_tls`** on an HTTP route to request TLS even when you are
 not passing `--auto-tls`: without ACME, install logs a warning and leaves
@@ -143,15 +143,15 @@ list **resource-provider** and **scheduler** plugin **parent** commands under a 
 section (from the manifest stored on the plugin app, not a compiled-in `flynn`
 handler). Nested plugin verbs (`redis:dump`, `kafka:topics:create`) show up on
 `flynn help <plugin>` / `flynn <plugin> --help`, not on the root list. `kind: app`
-system plugins are installed and listed by `flynn plugins`
-but do not add a user `flynn` command unless they set `cli.user`. `flynn resource
-add <provider>` works for `kind: resource-provider`. After the scheduler plugin
+system plugins are installed and listed by `flynn plugin:list`
+but do not add a user `flynn` command unless they set `cli.user`. `flynn
+resource:add <provider>` works for `kind: resource-provider`. After the scheduler plugin
 is installed, `flynn -a <app> scheduler` lists, adds, and removes cron/interval
 jobs for that app. Upgrade smoke schedules `echo scheduler-smoke` every 10s on
 the uploaded `upgrade-smoke` app and waits for `last_run_at` / `last_job_id`.
 
 ```text
-flynn plugins
+flynn plugin:list
 flynn plugin:list --known
 sudo flynn-host plugin:list
 sudo flynn-host plugin:list --known
@@ -225,11 +225,11 @@ plugin release that does not match the running Flynn version.
 **`plugin:update-all`** does that for every installed official plugin,
 continues past individual failures, and prints a per-plugin result.
 Omit `--ref` on a single update to use that same compatible calver
-(drafts and prereleases are skipped). **`plugin update`** is the
+(drafts and prereleases are skipped). **`plugin:update`** is the
 operator command once the plugin app exists: it deploys a new release,
 scales the previous release to zero, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Re-running
-**`plugin install`** on an existing app does the same in-place update.
+**`plugin:install`** on an existing app does the same in-place update.
 The default org is `randy-girard` from `official-plugins.json`; override with `--github-org`,
 `FLYNN_PLUGIN_GITHUB_ORG`, or `/etc/flynn/plugins.json`:
 

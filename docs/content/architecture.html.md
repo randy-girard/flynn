@@ -159,12 +159,12 @@ a specific port for TCP. TCP routes may also store a hostname (for example
 `postgres.clusterdomain`) used as TLS identity and operator DNS.
 
 HTTP TLS is terminated at the router. You can attach a certificate chain to a
-route, or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route add http
+route, or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route:add http
 --auto-tls`). HTTPS also enables HTTP/2.
 
 TCP routes have three TLS modes:
 
-* **off** — plaintext proxy (historical default for `flynn route add tcp`)
+* **off** — plaintext proxy (historical default for `flynn route:add tcp`)
 * **passthrough** — the backend speaks TLS (default for `flynn resource:expose`;
   required for Postgres/MySQL SSLRequest)
 * **terminate** — the router wraps the listener (`--auto-tls` or a manual cert)
@@ -191,9 +191,9 @@ chowned to the mapped UID so container images can create directories there.
 Buildpacks](https://devcenter.heroku.com/articles/buildpacks) turn source into a
 *slug* (a tarball of the app and its dependencies) that *slugrunner* executes.
 
-Apps can instead use the **container** stack (`flynn stack set container`). The
+Apps can instead use the **container** stack (`flynn stack:set container`). The
 cluster builds a `Dockerfile` with BuildKit (*dockerbuilder*) and imports the
-image the same way as `flynn docker push` (*tarreceive*).
+image the same way as `flynn docker:push` (*tarreceive*).
 
 Neither path is special-cased in the scheduler; both register artifacts and
 releases through the controller and roll out with the same deploy logic.

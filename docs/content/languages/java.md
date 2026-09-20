@@ -68,7 +68,7 @@ If this command needs to be customized, it can be done by setting the
 environment variable `MAVEN_CUSTOM_OPTS`:
 
 ```
-flynn env set MAVEN_CUSTOM_OPTS="-dFirstCustomProperty=abc -dSecondCustomProperty=xyz"
+flynn env:set MAVEN_CUSTOM_OPTS="-dFirstCustomProperty=abc -dSecondCustomProperty=xyz"
 ```
 
 This results in the following Maven command:
