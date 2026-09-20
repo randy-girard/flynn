@@ -22,5 +22,7 @@ ubuntu_ports_cache
 *.tar.gz
 builder/manifest.json
 docs/local/
+docs/reviews/
+docs/plans/
 script/docker/unit-tests/.image-built
 /coverage/

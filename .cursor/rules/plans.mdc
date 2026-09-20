@@ -7,13 +7,14 @@ alwaysApply: true
 
 Follow [AGENTS.md](../../AGENTS.md).
 
-Working notes, design docs, and implementation plans belong in the **workspace**
-parent, not under `docs/`:
+Working notes, design docs, implementation plans, reviews, and local status
+files belong in the **workspace** parent, not under `docs/`:
 
 ```
 /Users/rgirard/Documents/FlynnWorkspace/.plans/<topic>.md
 ```
 
-Do not add files to `docs/plans/` (that directory was removed). Keep
-user-facing guides in `docs/content/`. When a plan is done, leave it in
-`.plans/` unless the user asks to turn it into a guide.
+Do not add files to `docs/plans/`, `docs/reviews/`, or `docs/local/` (those
+directories were removed). Keep user-facing guides in `docs/content/`. When a
+plan is done, leave it in `.plans/` unless the user asks to turn it into a
+guide.

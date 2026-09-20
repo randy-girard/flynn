@@ -34,14 +34,16 @@ If a change is internal-only and has no user-visible effect, say so in the PR an
 
 ## Plans
 
-Working notes, design docs, and implementation plans do **not** live in this
-repo. Put them in the workspace-level folder (sibling of this `flynn/` clone):
+Working notes, design docs, implementation plans, point-in-time reviews, and
+local cluster status files do **not** live in this repo. Put them in the
+workspace-level folder (sibling of this `flynn/` clone):
 
 ```
 ../.plans/<topic>.md
 ```
 
-Do not recreate `docs/plans/` here. User-facing docs stay in `docs/content/`.
+Do not recreate `docs/plans/`, `docs/reviews/`, or `docs/local/` here.
+User-facing docs stay in `docs/content/`.
 
 ## Isolated worktrees
 
