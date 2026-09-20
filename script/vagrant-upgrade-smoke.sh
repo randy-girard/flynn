@@ -1365,10 +1365,34 @@ EOF
   return 0
 }
 
+# Vagrant id file, or the running VM name flynn_<node>_*. Parallel
+# vagrant up of many nodes can return before every id file is written.
+vbox_id_for_node() {
+  local node=$1 idfile id n=0
+  idfile="${ROOT}/.vagrant/machines/${node}/virtualbox/id"
+  while [[ ${n} -lt 15 ]]; do
+    id="$(tr -d '[:space:]' < "${idfile}" 2>/dev/null || true)"
+    if [[ -z "${id}" ]]; then
+      id="$(VBoxManage list vms | sed -n "s/^\"flynn_${node}_[^\"]*\" {\\([^}]*\\)}\$/\\1/p" | tail -n 1)"
+    fi
+    if [[ -n "${id}" ]]; then
+      if [[ ! -s "${idfile}" ]]; then
+        mkdir -p "$(dirname "${idfile}")"
+        printf '%s\n' "${id}" > "${idfile}"
+      fi
+      printf '%s\n' "${id}"
+      return 0
+    fi
+    sleep 1
+    n=$((n + 1))
+  done
+  return 1
+}
+
 verify_nic_promisc() {
   local node id line
   for node in "${NODES[@]}"; do
-    id="$(cat "${ROOT}/.vagrant/machines/${node}/virtualbox/id" 2>/dev/null || true)"
+    id="$(vbox_id_for_node "${node}" || true)"
     if [[ -z "${id}" ]]; then
       echo "missing VirtualBox id for ${node}" >&2
       return 1

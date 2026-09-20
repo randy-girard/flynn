@@ -44,6 +44,10 @@ if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
 fi
 
 smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
+need "${smoke}" 'vbox_id_for_node' \
+  "NIC promisc check must wait for the Vagrant id file (parallel vagrant up can lag)"
+need "${smoke}" 'VBoxManage list vms' \
+  "NIC promisc check must fall back to VBoxManage list vms if the id file is missing"
 need "${smoke}" 'VTEP MAC' "smoke script must diagnose device vs lease VTEP MAC"
 need "${smoke}" 'extra_args\+=\(--clean\)' "smoke reinstall on existing VMs must pass --clean"
 need "${smoke}" 'for link in flannel.1 flynnbr0' "smoke --clean must delete stale overlay devices"
