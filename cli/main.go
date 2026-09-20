@@ -26,9 +26,10 @@ var (
 	flagApp     string
 )
 
-// cliUsage is the root flynn help text. Command is optional so `flynn`,
-// `flynn -h`, and `flynn --help` reach pluginAwareUsage instead of docopt
+// cliUsage is the root flynn parse string. Command is optional so `flynn`,
+// `flynn -h`, and `flynn --help` reach formatRootHelp instead of docopt
 // printing this string and exiting (which omitted installed plugin CLIs).
+// The Commands list is generated from registered parent commands.
 var cliUsage = `
 usage: flynn [-h] [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
@@ -36,88 +37,6 @@ Options:
 	-a <app>
 	-c <cluster>
 	-h, --help
-
-Commands:
-	alert                list app metric alerts
-	alert:add            add an app metric alert
-	alert:disable        disable an app metric alert
-	alert:enable         enable an app metric alert
-	alert:remove         delete an app metric alert
-	apps                 list apps
-	apps:create          create an app
-	apps:destroy         delete an app
-	apps:export          export app data
-	apps:import          create app from exported data
-	apps:info            show app information
-	cluster              list CLI cluster configs
-	cluster:add          add a cluster to ~/.flynnrc
-	cluster:default      get or set the default cluster
-	cluster:refresh      refresh TLS pin and URLs in ~/.flynnrc
-	cluster:remove       remove a cluster from ~/.flynnrc
-	deploy               list deployments
-	deploy:batch-size    get or set in-batches size
-	deploy:timeout       get or set deploy timeout
-	docker:push          push a Docker image
-	env                  list env variables
-	env:get              get an env variable
-	env:set              set env variables
-	env:unset            unset env variables
-	git:remote           add a git remote for the app
-	github               show connected GitHub repo
-	github:connect       connect a GitHub repo
-	github:deploy        deploy from GitHub
-	github:disconnect    disconnect GitHub
-	github:set           GitHub auto-deploy settings
-	help                 show usage for a specific command
-	limit                list resource limits
-	limit:profile        apply a runtime environment to a process type
-	limit:profiles       list cluster runtime environments
-	limit:set            set resource limits
-	log                  get app log
-	log-sink             list app log sinks
-	log-sink:add         add an app log sink
-	log-sink:remove      remove an app log sink
-	login                authenticate with the dashboard (OAuth)
-	meta                 list app metadata
-	meta:set             set app metadata
-	meta:unset           unset app metadata
-	metrics              print the latest app metrics snapshot
-	pg:dump              dump a postgres database
-	pg:psql              postgres console
-	pg:restore           restore a postgres dump
-	plugin:list          list plugins installed on this cluster (--known for official plugins)
-	provider             list resource providers
-	provider:add         add a resource provider
-	ps                   list jobs
-	ps:kill              kill jobs
-	ps:run               run a job
-	ps:scale             change formation
-	release              list app releases
-	release:add          add a release
-	release:destroy      delete a release
-	release:rollback     rollback to a previous release
-	release:show         show a release
-	release:update       update a release
-	resource             list app resources
-	resource:add         provision a resource
-	resource:expose      export a datastore on a TLS TCP route
-	resource:remove      remove a resource
-	resource:unexpose    remove a datastore TCP export route
-	route                list routes
-	route:add            add a route
-	route:remove         remove a route
-	route:update         update a route
-	run                  run a job (shorthand for ps:run)
-	scale                change formation (shorthand for ps:scale)
-	stack                show git-push stack
-	stack:set            set git-push stack
-	update               update the Flynn CLI from GitHub Releases
-	version              show flynn version
-	volume               list volumes
-	volume:decommission  decommission a volume
-	volume:show          show a volume
-
-See 'flynn help <command>' for more information on a specific command.
 `[1:]
 
 func main() {
@@ -143,7 +62,7 @@ func main() {
 	help := helpFlag(args)
 
 	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
-		fmt.Println(pluginAwareUsage(cliUsage))
+		fmt.Print(formatRootHelp())
 		return
 	}
 
@@ -170,10 +89,24 @@ func main() {
 	}
 
 	if cmd == "help" {
-		cmd = cmdArgs[0]
-		cmdArgs = []string{"--help"}
-	} else if help {
-		cmdArgs = []string{"--help"}
+		topic := helpTopic(cmdArgs[0], cmdArgs[1:])
+		if !knownHelpTopic(topic) && !knownHelpTopic(cmdArgs[0]) {
+			log.Printf("%q is not a Flynn command. See 'flynn help'.", cmdArgs[0])
+			shutdown.ExitWithCode(1)
+			return
+		}
+		fmt.Print(formatHelp(topic))
+		return
+	}
+	if help || wantsHelp(cmdArgs) {
+		topic := helpTopic(cmd, cmdArgs)
+		if !knownHelpTopic(topic) && !knownHelpTopic(cmd) {
+			log.Printf("%q is not a Flynn command. See 'flynn help'.", cmd)
+			shutdown.ExitWithCode(1)
+			return
+		}
+		fmt.Print(formatHelp(topic))
+		return
 	}
 
 	if err := runCommand(cmd, cmdArgs); err != nil {

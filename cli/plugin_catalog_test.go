@@ -54,8 +54,11 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 		{Command: "stub"}, // provider-only: not runnable, must not appear
 	}}
 	got := mergePluginUsage(usage, cat, nil)
-	if !strings.Contains(got, "redis:dump") || !strings.Contains(got, "manage redis databases") {
+	if !strings.Contains(got, "redis") || !strings.Contains(got, "manage redis databases") {
 		t.Fatalf("installed plugin CLI must appear:\n%s", got)
+	}
+	if strings.Contains(got, "redis:dump") {
+		t.Fatalf("root help must list the plugin parent, not redis:dump:\n%s", got)
 	}
 	if strings.Contains(got, "stub") {
 		t.Fatalf("non-runnable catalog entries must not appear:\n%s", got)
@@ -63,7 +66,7 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 	if !strings.Contains(got, "ps") {
 		t.Fatal("core command dropped")
 	}
-	assertPluginHelpSection(t, got, "redis:dump")
+	assertPluginHelpSection(t, got, "redis")
 }
 
 func TestPluginHelpNamesUseNestedColons(t *testing.T) {
@@ -77,6 +80,10 @@ func TestPluginHelpNamesUseNestedColons(t *testing.T) {
 		},
 	}
 	got := pluginHelpNames(cmd)
+	if !reflect.DeepEqual(got, []string{"kafka"}) {
+		t.Fatalf("root help names got %q", got)
+	}
+	got = pluginActionNames(cmd)
 	want := []string{
 		"kafka:consumer-groups:create",
 		"kafka:topics",
@@ -139,15 +146,18 @@ func TestCLIUsageParsesHelpAndOptionalCommand(t *testing.T) {
 }
 
 func TestUsageCommandNamesFromRootUsage(t *testing.T) {
-	names := usageCommandNames(cliUsage)
+	names := usageCommandNames(formatRootHelp())
 	if _, ok := names["See"]; ok {
 		t.Fatal("footer See line must not count as a command")
 	}
 	if _, ok := names["help"]; !ok {
 		t.Fatal("help")
 	}
-	if _, ok := names["plugin:list"]; !ok {
-		t.Fatal("plugin:list")
+	if _, ok := names["plugin"]; !ok {
+		t.Fatal("plugin")
+	}
+	if _, ok := names["plugin:list"]; ok {
+		t.Fatal("plugin:list belongs under flynn help plugin")
 	}
 	if _, ok := names["update"]; !ok {
 		t.Fatal("update")
@@ -163,23 +173,27 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 func TestCLIUsageCommandsAreAlphabetical(t *testing.T) {
 	var names []string
 	inCommands := false
-	for _, line := range strings.Split(cliUsage, "\n") {
+	for _, line := range strings.Split(formatRootHelp(), "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "See '") {
+		if strings.HasPrefix(trimmed, "See '") || trimmed == "Plugins:" {
 			break
 		}
 		if trimmed == "Commands:" {
 			inCommands = true
 			continue
 		}
-		if strings.HasSuffix(trimmed, ":") && trimmed != "Options:" {
+		if strings.HasSuffix(trimmed, ":") && trimmed != "Options:" && trimmed != "Commands:" {
 			t.Fatalf("help must not group commands under %q", trimmed)
 		}
-		if inCommands && strings.HasPrefix(line, "\t") {
-			fields := strings.Fields(line)
-			if len(fields) > 0 {
-				names = append(names, fields[0])
-			}
+		if !inCommands || trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			names = append(names, fields[0])
 		}
 	}
 	if len(names) < 2 {
@@ -199,14 +213,17 @@ func TestMergePluginUsageAddsRedisToRootUsage(t *testing.T) {
 			Actions: []plugin.CLIAction{{Name: "dump", Args: []string{"/bin/dump"}}},
 		},
 	}}
-	got := mergePluginUsage(cliUsage, cat, nil)
-	if !strings.Contains(got, "redis:dump") || !strings.Contains(got, "manage redis databases") {
+	got := mergePluginUsage(formatCoreRootHelp(), cat, nil)
+	if !strings.Contains(got, "redis") || !strings.Contains(got, "manage redis databases") {
 		t.Fatalf("flynn --help must list installed redis:\n%s", got)
 	}
-	assertPluginHelpSection(t, got, "redis:dump")
-	idxPluginsCmd := strings.Index(got, "\tplugin:list")
+	if strings.Contains(got, "redis:dump") {
+		t.Fatalf("root help must list the plugin parent, not redis:dump:\n%s", got)
+	}
+	assertPluginHelpSection(t, got, "redis")
+	idxPlugin := strings.Index(got, "\n  plugin")
 	idxPlugins := strings.Index(got, "Plugins:")
-	if idxPluginsCmd < 0 || idxPlugins < 0 || idxPluginsCmd > idxPlugins {
+	if idxPlugin < 0 || idxPlugins < 0 || idxPlugin > idxPlugins {
 		t.Fatalf("core plugins command belongs under Commands:\n%s", got)
 	}
 }
@@ -216,7 +233,7 @@ func assertPluginHelpSection(t *testing.T, got, cmd string) {
 	idxCommands := strings.Index(got, "Commands:")
 	idxPlugins := strings.Index(got, "Plugins:")
 	idxCmd := strings.Index(got, "\t"+cmd)
-	idxSee := strings.Index(got, "See 'flynn help")
+	idxSee := strings.Index(got, "See 'flynn help <command>")
 	if idxCommands < 0 || idxPlugins < 0 || idxCmd < 0 || idxSee < 0 {
 		t.Fatalf("missing Commands/Plugins/%s/See:\n%s", cmd, got)
 	}
@@ -301,8 +318,11 @@ func TestAppendCatalogCommandsBranches(t *testing.T) {
 		{Command: "kafka", Usage: "", Doc: "usage: flynn kafka", Actions: []plugin.CLIAction{{Name: "topics", Args: []string{"topics"}}}},
 	}}
 	got := mergePluginUsage(usage, cat, nil)
-	if !strings.Contains(got, "Plugins:") || !strings.Contains(got, "redis:dump") || !strings.Contains(got, "plugin command") {
+	if !strings.Contains(got, "Plugins:") || !strings.Contains(got, "redis") || !strings.Contains(got, "plugin command") {
 		t.Fatalf("default usage and Plugins section:\n%s", got)
+	}
+	if strings.Contains(got, "redis:dump") {
+		t.Fatalf("root help must list redis, not redis:dump:\n%s", got)
 	}
 	if !strings.Contains(got, "list jobs\n\nPlugins:") {
 		t.Fatalf("blank line between Commands and Plugins:\n%s", got)
@@ -328,12 +348,15 @@ func TestFilterPluginUsageHidesMissingCoreCommands(t *testing.T) {
 }
 
 func TestPluginAwareUsageWithoutCluster(t *testing.T) {
-	got := pluginAwareUsage(cliUsage)
+	got := formatRootHelp()
 	if !strings.Contains(got, "Commands:") {
 		t.Fatalf("%s", got)
 	}
 	if strings.Contains(got, "Plugins:") {
 		t.Fatal("no cluster means no Plugins section")
+	}
+	if strings.Contains(got, "env:set") || strings.Contains(got, "plugin:list") {
+		t.Fatalf("root help must list parents only:\n%s", got)
 	}
 }
 

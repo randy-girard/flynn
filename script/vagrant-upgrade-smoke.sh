@@ -2755,8 +2755,8 @@ sys.exit(0 if cli.get("doc") and cli.get("actions") else 1)
 PY
 }
 
-# flynn help command list: first field is the plugin name or a colon action
-# (redis:dump). Resource plugins no longer register a bare "redis" row.
+# flynn help command list: first field is the plugin parent (redis) or a colon
+# action (redis:dump). Root help lists the parent; flynn help redis lists children.
 help_lists_plugin_command() {
   local name=$1
   local out

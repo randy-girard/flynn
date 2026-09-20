@@ -139,9 +139,11 @@ listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.
 
 After install, `flynn`, `flynn --help`, and `flynn help` against that cluster
-list **resource-provider** and **scheduler** plugin commands under a **Plugins:**
+list **resource-provider** and **scheduler** plugin **parent** commands under a **Plugins:**
 section (from the manifest stored on the plugin app, not a compiled-in `flynn`
-handler). `kind: app` system plugins are installed and listed by `flynn plugins`
+handler). Nested plugin verbs (`redis:dump`, `kafka:topics:create`) show up on
+`flynn help <plugin>` / `flynn <plugin> --help`, not on the root list. `kind: app`
+system plugins are installed and listed by `flynn plugins`
 but do not add a user `flynn` command unless they set `cli.user`. `flynn resource
 add <provider>` works for `kind: resource-provider`. After the scheduler plugin
 is installed, `flynn -a <app> scheduler` lists, adds, and removes cron/interval
@@ -164,7 +166,7 @@ Those commands appear only after `flynn-host plugin:install` stamps
 `flynn-plugin.json` `cli` holds:
 
 - `command` / `usage` — name and one-liner for `flynn help`
-- `doc` — full docopt usage for `flynn help <command>` and argv parsing
+- `doc` — full docopt usage for leaf `flynn help <command>:<action>` and argv parsing
 - `actions` — how each subcommand runs
 - `actions[].args` — cluster job argv in the plugin/resource image
 - `actions[].flynn` — built-in laptop command scoped to the plugin app

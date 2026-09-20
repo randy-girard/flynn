@@ -12,14 +12,21 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 			t.Fatalf("otel help missing %q:\n%s", want, got)
 		}
 	}
-	plugin := FormatHelp("plugin:list")
-	for _, want := range []string{"Commands:", "install", "uninstall", "update", "update-all", "route", "credentials"} {
+	plugin := FormatHelp("plugin")
+	for _, want := range []string{"Commands:", "install", "uninstall", "update", "update-all", "route", "credentials", "list"} {
 		if !strings.Contains(plugin, want) {
 			t.Fatalf("plugin help missing %q:\n%s", want, plugin)
 		}
 	}
 	if strings.Contains(plugin, "credentials-set") || strings.Contains(plugin, "credentials set") {
 		t.Fatalf("plugin help should list the credentials namespace, not hyphen verbs:\n%s", plugin)
+	}
+	if strings.Contains(plugin, "credentials:set") {
+		t.Fatalf("plugin help should not list grandchildren:\n%s", plugin)
+	}
+	list := FormatHelp("plugin:list")
+	if strings.Contains(list, "\nCommands:") {
+		t.Fatalf("plugin:list is a leaf:\n%s", list)
 	}
 	creds := FormatHelp("plugin:credentials")
 	for _, want := range []string{"set", "unset", "show"} {
@@ -51,13 +58,42 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	}
 }
 
+func TestRootHelpListsParentsOnly(t *testing.T) {
+	got := RootHelp()
+	for _, want := range []string{"Commands:", "plugin", "otel", "volume", "acme", "help"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("root help missing %q:\n%s", want, got)
+		}
+	}
+	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "acme:configure"} {
+		if strings.Contains(got, nested) {
+			t.Fatalf("root help should not list %q:\n%s", nested, got)
+		}
+	}
+}
+
+func TestHelpTopicKeepsNamespaceRoots(t *testing.T) {
+	if got := HelpTopic("plugin", []string{"--help"}); got != "plugin" {
+		t.Fatalf("plugin --help: %q", got)
+	}
+	if got := HelpTopic("plugin", nil); got != "plugin" {
+		t.Fatalf("plugin: %q", got)
+	}
+	if got := HelpTopic("plugin:install", []string{"--help"}); got != "plugin:install" {
+		t.Fatalf("plugin:install --help: %q", got)
+	}
+	if got := HelpTopic("otel", []string{"add", "--help"}); got != "otel:add" {
+		t.Fatalf("otel add --help: %q", got)
+	}
+}
+
 func TestAllHostCommandsHaveHelp(t *testing.T) {
 	for name, cmd := range commands {
 		if strings.TrimSpace(cmd.usage) == "" {
 			t.Errorf("%s has empty usage", name)
 		}
 		got := FormatHelp(name)
-		if !strings.Contains(got, "usage: flynn-host "+name) {
+		if !strings.Contains(got, "usage: flynn-host "+name) && hyphenAliases[name] == "" {
 			t.Errorf("%s help missing usage line:\n%s", name, got)
 		}
 	}

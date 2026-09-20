@@ -87,97 +87,14 @@ func main() {
 
 	cli.NotifyUpgradeIfAvailable()
 
-	usage := `usage: flynn-host [-h|--help] [--version] <command> [<args>...]
+	// help=false: we print parent-only RootHelp instead of docopt's full
+	// nested command list. <command> is optional so `flynn-host` and
+	// `flynn-host --help` reach that path.
+	usage := `usage: flynn-host [-h|--help] [--version] [<command>] [<args>...]
 
 Options:
   -h, --help                 Show this message
   --version                  Show current version
-
-Commands:
-  acme                            Show ACME/Let's Encrypt status
-  acme:configure                  Register a Let's Encrypt account
-  acme:disable                    Disable ACME for the cluster
-  acme:disable-system-routes      Disable Let's Encrypt on system app routes
-  acme:enable                     Enable ACME for the cluster
-  acme:enable-system-routes       Enable Let's Encrypt on system app routes
-  acme:status                     Show ACME/Let's Encrypt status
-  alert                           List cluster metric alerts
-  alert:add                       Add a cluster metric alert
-  alert:disable                   Disable a cluster metric alert
-  alert:enable                    Enable a cluster metric alert
-  alert:remove                    Delete a cluster metric alert
-  backup                          Take a cluster backup
-  bootstrap                       Bootstrap layer 1
-  cli-add-command                 Get the 'flynn cluster:add' command to manage this cluster
-  collect-debug-info              Collect debug information into an anonymous gist or tarball
-  daemon                          Start the daemon
-  demote                          Demote a Flynn node from the consensus cluster
-  destroy-volumes                 Destroy the local volume database
-  discover                        Return low-level information about a service
-  domain                          Show cluster domain and apex (root) app
-  domain:apex                     Set or clear which app serves the apex hostname
-  download                        Download container images
-  firewall                        Show flynn-host managed firewall rules
-  firewall:expose                 Open a TCP port for an exposed service
-  firewall:peer:add               Allow cluster traffic from a node IP
-  firewall:peer:remove            Drop a node IP from the host firewall
-  firewall:sync                   Reconcile peer IPs and exposed TCP ports
-  firewall:unexpose               Close a previously exposed TCP port
-  fix                             Fix a broken cluster
-  github                          Show GitHub App status
-  github:configure                Save the cluster GitHub App for GitHub deploys
-  github:disable                  Clear the cluster GitHub App
-  github:setup                    Print GitHub App permissions and setup steps
-  github:status                   Show GitHub App status
-  help                            Show usage for a specific command
-  init                            Create cluster configuration for daemon
-  inspect                         Get low-level information about a job
-  list                            List ID and IP of each host
-  log                             Get the logs of a job
-  log-sink                        List cluster log sinks
-  log-sink:add                    Add a cluster syslog sink
-  log-sink:list                   List cluster or host log sinks
-  log-sink:remove                 Remove a cluster log sink
-  metrics                         Print a live host metrics snapshot
-  migrate-domain                  Migrate the cluster base domain
-  otel                            List OpenTelemetry exporters
-  otel:add                        Add an OpenTelemetry exporter
-  otel:remove                     Remove an OpenTelemetry exporter
-  plugin:credentials              Manage GitHub credentials for plugin releases
-  plugin:credentials:set          Store a GitHub token for plugin releases
-  plugin:credentials:show         Show whether GitHub plugin credentials are set
-  plugin:credentials:unset        Remove stored GitHub plugin credentials
-  plugin:install                  Install a plugin from a path, alias, or GitHub URL
-  plugin:list                     List installed plugins (--known for official plugins)
-  plugin:route                    List, add, update, or remove routes for an installed plugin
-  plugin:uninstall                Remove an installed plugin
-  plugin:update                   Deploy a new release of an installed plugin
-  plugin:update-all               Update all official plugins for this Flynn version
-  promote                         Promote a Flynn node into the consensus cluster
-  ps                              List jobs
-  route:add                       Add an HTTP path route (cluster admin)
-  run                             Run an interactive job
-  runtime-profile                 List cluster runtime environments
-  runtime-profile:allow-custom    Allow raw CPU/memory limits
-  runtime-profile:create          Create a runtime environment
-  runtime-profile:remove          Delete a custom runtime environment
-  runtime-profile:update          Update a runtime environment
-  signal                          Signal a job
-  stop                            Stop running jobs
-  tags                            List flynn-host daemon tags
-  tags:del                        Delete flynn-host daemon tags
-  tags:set                        Set flynn-host daemon tags
-  update                          Update Flynn components
-  version                         Show current version
-  volume:create                   Create a data volume on a host
-  volume:delete                   Delete volumes
-  volume:gc                       Garbage collect unused volumes
-  volume:list                     List volumes
-  webhooks                        List webhook notification endpoints
-  webhooks:add                    Add a webhook notification endpoint
-  webhooks:remove                 Remove a webhook notification endpoint
-
-See 'flynn-host help <command>' for more information on a specific command.
 `
 
 	if leadingVersionFlag(os.Args[1:]) {
@@ -185,17 +102,36 @@ See 'flynn-host help <command>' for more information on a specific command.
 		return
 	}
 
-	args, _ := docopt.Parse(usage, nil, true, version.String(), true)
+	args, _ := docopt.Parse(usage, nil, false, version.String(), true)
 	cmd := args.String["<command>"]
 	cmdArgs := cliutil.List(args, "<args>")
+	globalHelp := args != nil && (args.Bool["--help"] || args.Bool["-h"])
 
+	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
+		fmt.Print(cli.RootHelp())
+		return
+	}
 	if cmd == "help" {
-		if len(cmdArgs) == 0 { // `flynn-host help`
-			fmt.Println(usage)
+		topic := cli.HelpTopic(cmdArgs[0], cmdArgs[1:])
+		if !cli.KnownHelpTopic(topic) && !cli.KnownHelpTopic(cmdArgs[0]) {
+			fmt.Printf("ERROR: %q is not a valid command\n\n", cmdArgs[0])
+			fmt.Print(cli.RootHelp())
+			shutdown.ExitWithCode(1)
 			return
 		}
-		cmd = cmdArgs[0]
-		cmdArgs = append(append([]string{}, cmdArgs[1:]...), "--help")
+		fmt.Print(cli.FormatHelp(topic))
+		return
+	}
+	if globalHelp || cli.WantsHelp(cmdArgs) {
+		topic := cli.HelpTopic(cmd, cmdArgs)
+		if !cli.KnownHelpTopic(topic) && !cli.KnownHelpTopic(cmd) {
+			fmt.Printf("ERROR: %q is not a valid command\n\n", cmd)
+			fmt.Print(cli.RootHelp())
+			shutdown.ExitWithCode(1)
+			return
+		}
+		fmt.Print(cli.FormatHelp(topic))
+		return
 	}
 
 	if cmd == "daemon" {
@@ -242,7 +178,7 @@ See 'flynn-host help <command>' for more information on a specific command.
 	if err := cli.Run(cmd, cmdArgs); err != nil {
 		if err == cli.ErrInvalidCommand {
 			fmt.Printf("ERROR: %q is not a valid command\n\n", cmd)
-			fmt.Println(usage)
+			fmt.Print(cli.RootHelp())
 			shutdown.ExitWithCode(1)
 		} else if _, ok := err.(cli.ErrAlreadyLogged); ok {
 			shutdown.ExitWithCode(1)

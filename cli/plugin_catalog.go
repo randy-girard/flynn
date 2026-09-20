@@ -122,7 +122,18 @@ func insertPluginHelpSection(usage string, section []string) string {
 }
 
 func pluginHelpNames(cmd plugin.CLI) []string {
+	if cmd.Command == "" {
+		return nil
+	}
+	return []string{cmd.Command}
+}
+
+// pluginActionNames is every colon command a plugin publishes (redis:dump).
+func pluginActionNames(cmd plugin.CLI) []string {
 	if len(cmd.Actions) == 0 {
+		if cmd.Command == "" {
+			return nil
+		}
 		return []string{cmd.Command}
 	}
 	names := make([]string, 0, len(cmd.Actions))
