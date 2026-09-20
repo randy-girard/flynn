@@ -78,5 +78,13 @@ need_in "${incluster}" 'EnsureRouterStrategy' \
   "in-cluster updater must stop the old host-network router before starting the replacement"
 need_in "${ROOT}/bootstrap/manifest_template.json" '"strategy": "one-down-one-up"' \
   "bootstrap must create the router with one-down-one-up (host-network :80/:443)"
+need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'omniRollPlan' \
+  "omni one-down-one-up must roll host-network jobs one host at a time"
+need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'waitOldOmniJobsStopped' \
+  "omni rolling must wait for old jobs to release host ports before starting the replacement"
+need_in "${ROOT}/controller/scheduler/job.go" 'FormationHostIDsTag' \
+  "scheduler must honor flynn-host-ids formation tags for omni rolling"
+need_in "${ROOT}/controller/scheduler/formation.go" 'RectifyOmniFunc' \
+  "omni counts must multiply by matching hosts when flynn-host-ids tags are set"
 
 echo "ok updater retries HA sirenia new-instance timeout and polls discoverd"

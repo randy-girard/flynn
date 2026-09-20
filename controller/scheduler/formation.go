@@ -88,10 +88,21 @@ func NewFormation(ef *ct.ExpandedFormation) *Formation {
 // RectifyOmni updates the process counts for omni jobs by multiplying them by
 // the host count, returning whether or not any counts have changed
 func (f *Formation) RectifyOmni(hostCount int) bool {
+	return f.RectifyOmniFunc(func(string) int { return hostCount })
+}
+
+// RectifyOmniFunc is RectifyOmni with a per-type matching host count. Omni
+// formations tagged with flynn-host-ids must multiply by the hosts that tag
+// actually matches, not the whole cluster, or the scheduler will start extra
+// jobs on excluded hosts.
+func (f *Formation) RectifyOmniFunc(hostCount func(typ string) int) bool {
+	if hostCount == nil || f.Release == nil {
+		return false
+	}
 	changed := false
 	for typ, proc := range f.Release.Processes {
 		if proc.Omni && f.Processes != nil && f.Processes[typ] > 0 {
-			count := f.OriginalProcesses[typ] * hostCount
+			count := f.OriginalProcesses[typ] * hostCount(typ)
 			if f.Processes[typ] != count {
 				f.Processes[typ] = count
 				changed = true

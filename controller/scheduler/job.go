@@ -127,9 +127,21 @@ func (j *Job) Tags() map[string]string {
 }
 
 // TagsMatchHost checks whether all of the job's tags match the corresponding
-// host's tags
+// host's tags. FormationHostIDsTag is matched against host.ID, not host.Tags,
+// so omni rolling can pin a process to specific hosts without mutating
+// discoverd host metadata.
 func (j *Job) TagsMatchHost(host *Host) bool {
-	for k, v := range j.Tags() {
+	if host == nil {
+		return false
+	}
+	tags := j.Tags()
+	if !ct.HostIDsTagMatches(tags, host.ID) {
+		return false
+	}
+	for k, v := range tags {
+		if k == ct.FormationHostIDsTag {
+			continue
+		}
 		if w, ok := host.Tags[k]; !ok || v != w {
 			return false
 		}

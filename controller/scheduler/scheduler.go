@@ -1977,7 +1977,7 @@ func (s *Scheduler) unfollowHost(host *Host) {
 	// rectify the omni job counts so that when omni jobs are marked as
 	// stopped, they are not restarted
 	for _, formation := range s.formations {
-		formation.RectifyOmni(s.activeHostCount())
+		s.rectifyFormationOmni(formation)
 	}
 
 	for _, job := range s.jobs {
@@ -2031,7 +2031,7 @@ func (s *Scheduler) HandleHostEvent(e *discoverd.Event) {
 			// so that when down events are received for omni jobs,
 			// they are not restarted
 			for _, formation := range s.formations {
-				formation.RectifyOmni(s.activeHostCount())
+				s.rectifyFormationOmni(formation)
 			}
 
 			return
@@ -2254,6 +2254,34 @@ func (s *Scheduler) activeHostCount() int {
 		}
 	}
 	return count
+}
+
+// matchingOmniHostCount is the number of active hosts that may run this omni
+// process type, honoring formation tags including flynn-host-ids.
+func (s *Scheduler) matchingOmniHostCount(formation *Formation, typ string) int {
+	if formation == nil {
+		return 0
+	}
+	job := &Job{Type: typ, Formation: formation}
+	n := 0
+	for _, host := range s.hosts {
+		if host == nil || host.Shutdown {
+			continue
+		}
+		if job.TagsMatchHost(host) {
+			n++
+		}
+	}
+	return n
+}
+
+func (s *Scheduler) rectifyFormationOmni(formation *Formation) bool {
+	if formation == nil {
+		return false
+	}
+	return formation.RectifyOmniFunc(func(typ string) int {
+		return s.matchingOmniHostCount(formation, typ)
+	})
 }
 
 func (s *Scheduler) PerformHostChecks() {
@@ -2612,7 +2640,7 @@ func (s *Scheduler) handleFormation(ef *ct.ExpandedFormation) (formation *Format
 		}
 
 		// ensure the formation has the correct omni job counts
-		if formation.RectifyOmni(s.activeHostCount()) {
+		if s.rectifyFormationOmni(formation) {
 			s.triggerRectify(formation.key())
 		}
 

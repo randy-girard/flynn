@@ -51,6 +51,20 @@ func TestSireniaDeployNotSkippedWhenOldReleaseActive(t *testing.T) {
 	}
 }
 
+func TestOneDownOneUpDeployNotSkippedWhenOldReleaseActive(t *testing.T) {
+	target := map[string]int{"app": 1}
+	d := &DeployJob{
+		Deployment:   &ct.Deployment{Strategy: "one-down-one-up", Processes: target},
+		oldFormation: &ct.Formation{Processes: map[string]int{"app": 1}},
+		newFormation: &ct.Formation{Processes: map[string]int{"app": 1}},
+	}
+	shouldSkip := processesEqual(d.newFormation.Processes, d.Processes) &&
+		(d.Strategy != "one-down-one-up" || !d.oldReleaseStillActive())
+	if shouldSkip {
+		t.Fatal("omni one-down-one-up must not skip while old routers still run")
+	}
+}
+
 func TestOneDownOneUpIsAKnownStrategy(t *testing.T) {
 	src, err := os.ReadFile("job.go")
 	if err != nil {
@@ -79,6 +93,9 @@ func TestScaleOneDownOneUpStopsOldBeforeStartingNew(t *testing.T) {
 	up := strings.Index(fn, "scaleNewFormationUpByOne")
 	if down < 0 || up < 0 || down > up {
 		t.Fatal("one-down-one-up must scale the old formation down before starting the replacement (else redis findVolume allocates an empty /data)")
+	}
+	if !strings.Contains(fn, "processIsOmni") || !strings.Contains(fn, "scaleOmniOneDownOneUp") {
+		t.Fatal("omni processes (router) must roll one host at a time instead of scaling formation 1→0 cluster-wide")
 	}
 }
 

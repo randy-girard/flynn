@@ -99,6 +99,30 @@ func (TestSuite) TestFormationRectifyOmni(c *C) {
 	assertRectify(2, false, map[string]int{"web": 4, "omni": 4})
 }
 
+func (TestSuite) TestFormationRectifyOmniFuncHostIDs(c *C) {
+	release := &ct.Release{Processes: map[string]ct.ProcessType{
+		"app": {Omni: true},
+	}}
+	formation := NewFormation(&ct.ExpandedFormation{
+		Release:   release,
+		Processes: Processes{"app": 1},
+		Tags: map[string]map[string]string{
+			"app": {ct.FormationHostIDsTag: "host1,host2"},
+		},
+	})
+	changed := formation.RectifyOmniFunc(func(typ string) int {
+		n := 0
+		for _, id := range []string{"host1", "host2", "host3"} {
+			if ct.HostIDsTagMatches(formation.Tags[typ], id) {
+				n++
+			}
+		}
+		return n
+	})
+	c.Assert(changed, Equals, true)
+	c.Assert(formation.Processes["app"], Equals, 2)
+}
+
 func (TestSuite) TestDiffScaleDownOf(c *C) {
 	type test struct {
 		diff     Processes

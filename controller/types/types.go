@@ -117,6 +117,11 @@ func (a *App) Router() bool {
 // replacement. all-at-once starts the new job while the old one still binds
 // :80/:443, so the new job stays in "starting" forever (seen 2026-09-20:
 // 1-node flynn-host update --force pass 2 timed out after 600s).
+//
+// The router process is omni (one per host). one-down-one-up therefore rolls
+// hosts sequentially: each node drops its old router, starts the new one, then
+// the next host moves. Other nodes keep serving. A single-node cluster still
+// has a brief HTTP/HTTPS blip.
 const RouterStrategy = "one-down-one-up"
 
 // EnsureRouterStrategy sets Strategy to RouterStrategy when this is the

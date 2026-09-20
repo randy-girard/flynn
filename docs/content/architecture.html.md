@@ -175,9 +175,10 @@ routes on 80/443. See [Production — Firewalling](production.html.md#firewallin
 
 An instance of the router runs on every host so client traffic can land on any
 node. The router uses host networking and binds ports 80 and 443, so
-`flynn-host update` stops the old router job before starting the replacement
-(a brief HTTP/HTTPS blip on that host). Redis appliances use the same
-one-down-one-up strategy so the data volume is reused.
+`flynn-host update` stops the old router before starting the replacement, one
+host at a time on a multi-node cluster (other nodes keep serving). A
+single-node cluster still has a brief HTTP/HTTPS blip. Redis appliances use the
+same one-down-one-up strategy so the data volume is reused.
 
 User-deployed jobs are isolated on the overlay: they cannot open connections to
 other user jobs or to internal Flynn services. They cannot open host SSH,

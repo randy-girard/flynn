@@ -83,6 +83,8 @@ func (d *DeployJob) Perform() error {
 	if processesEqual(d.newFormation.Processes, d.Processes) {
 		if d.Strategy == "sirenia" && d.sireniaOldReleaseActive() {
 			log.Info("sirenia new formation matches target but old release still active, continuing deploy")
+		} else if d.Strategy == "one-down-one-up" && d.oldReleaseStillActive() {
+			log.Info("one-down-one-up new formation matches target but old release still active, continuing deploy")
 		} else {
 			log.Info("deployment already completed, nothing to do")
 			return nil
@@ -103,6 +105,7 @@ func (d *DeployJob) Perform() error {
 func (d *DeployJob) scaleOldRelease(wait bool) error {
 	opts := ct.ScaleOptions{
 		Processes:        d.oldFormation.Processes,
+		Tags:             d.oldFormation.Tags,
 		Timeout:          &d.timeout,
 		Stop:             d.stop,
 		NoWait:           !wait,
@@ -181,6 +184,9 @@ func (d *DeployJob) scaleUpDownInBatches(typ string, batchCount int, log log15.L
 }
 
 func (d *DeployJob) scaleOneDownOneUp(typ string, log log15.Logger) error {
+	if d.processIsOmni(typ) {
+		return d.scaleOmniOneDownOneUp(typ, log)
+	}
 	for i := 0; i < d.Processes[typ]; i++ {
 		if err := d.scaleOldFormationDownByOne(typ, log); err != nil {
 			return err
