@@ -1145,64 +1145,99 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
-		// If the error is AppArmor-related ("apply apparmor profile" or
-		// "apparmor failed"), retry without the profile so the container
-		// can still start. This handles kernels (e.g. 6.8.0-100-generic)
-		// that have AppArmor loaded but refuse profile transitions via
-		// /proc/self/attr/exec with EPERM.
-		errMsg := err.Error()
-		if config.AppArmorProfile != "" && (strings.Contains(errMsg, "apparmor") || strings.Contains(errMsg, "apply apparmor")) {
-			// User jobs fail closed: retrying unconfined would drop the
-			// LSM that blocked unshare/mount in the isolation assessment.
-			if !isSystemJob(job) && !isBuildJob(job) {
+		// Transient EPERM writing /proc/self/attr/exec is observed ~9s
+		// after each flynn-host (re)start while jobs launch. setup-apparmor.sh
+		// loads flynn-default only at image build (build.sh), not on daemon
+		// start, so this is not a profile reload race; the LSM occasionally
+		// refuses change_onexec until it settles. Retry the confined start
+		// for every job class before fail-closed / unconfined fallback.
+		if config.AppArmorProfile != "" && isAppArmorApplyErr(err) {
+			for attempt := 1; attempt < confinedStartAttempts; attempt++ {
+				delay, ok := nextConfinedStartDelay(attempt, confinedStartAttempts)
+				if !ok {
+					break
+				}
+				log.Warn("confined start failed, retrying with AppArmor", "attempt", attempt, "delay", delay, "err", err)
+				confinedStartSleep(delay)
 				c.Destroy()
-				return err
-			}
-			log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
-			c.Destroy()
-			config.AppArmorProfile = ""
-			if err := regenerateVethHostNames(config); err != nil {
-				return err
-			}
-			c, err = l.factory.Create(job.ID, config)
-			if err != nil {
-				return err
-			}
-			process = &libcontainer.Process{
-				Init:            true,
-				Args:            []string{"/.containerinit", job.ID},
-				User:            "0:0",
-				NoNewPrivileges: &noNewPriv,
-			}
-			if err := c.Run(process); err != nil {
-				if isNetworkIfaceExistsErr(err) {
-					log.Error("veth still existed after AppArmor retry, regenerating", "err", err)
-					c.Destroy()
-					if rerr := regenerateVethHostNames(config); rerr != nil {
-						return rerr
-					}
-					c, err = l.factory.Create(job.ID, config)
-					if err != nil {
-						return err
-					}
-					process = &libcontainer.Process{
-						Init:            true,
-						Args:            []string{"/.containerinit", job.ID},
-						User:            "0:0",
-						NoNewPrivileges: &noNewPriv,
-					}
-					if err := c.Run(process); err != nil {
-						c.Destroy()
-						return err
-					}
-				} else {
+				if rerr := regenerateVethHostNames(config); rerr != nil {
+					return rerr
+				}
+				c, err = l.factory.Create(job.ID, config)
+				if err != nil {
+					return err
+				}
+				process = &libcontainer.Process{
+					Init:            true,
+					Args:            []string{"/.containerinit", job.ID},
+					User:            "0:0",
+					NoNewPrivileges: &noNewPriv,
+				}
+				err = c.Run(process)
+				if err == nil {
+					break
+				}
+				if !isAppArmorApplyErr(err) {
 					c.Destroy()
 					return err
 				}
 			}
-		} else {
-			c.Destroy()
-			return err
+		}
+		if err != nil {
+			errMsg := err.Error()
+			if config.AppArmorProfile != "" && (strings.Contains(errMsg, "apparmor") || strings.Contains(errMsg, "apply apparmor")) {
+				// User jobs fail closed: retrying unconfined would drop the
+				// LSM that blocked unshare/mount in the isolation assessment.
+				if !isSystemJob(job) && !isBuildJob(job) {
+					c.Destroy()
+					return err
+				}
+				log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
+				c.Destroy()
+				config.AppArmorProfile = ""
+				if err := regenerateVethHostNames(config); err != nil {
+					return err
+				}
+				c, err = l.factory.Create(job.ID, config)
+				if err != nil {
+					return err
+				}
+				process = &libcontainer.Process{
+					Init:            true,
+					Args:            []string{"/.containerinit", job.ID},
+					User:            "0:0",
+					NoNewPrivileges: &noNewPriv,
+				}
+				if err := c.Run(process); err != nil {
+					if isNetworkIfaceExistsErr(err) {
+						log.Error("veth still existed after AppArmor retry, regenerating", "err", err)
+						c.Destroy()
+						if rerr := regenerateVethHostNames(config); rerr != nil {
+							return rerr
+						}
+						c, err = l.factory.Create(job.ID, config)
+						if err != nil {
+							return err
+						}
+						process = &libcontainer.Process{
+							Init:            true,
+							Args:            []string{"/.containerinit", job.ID},
+							User:            "0:0",
+							NoNewPrivileges: &noNewPriv,
+						}
+						if err := c.Run(process); err != nil {
+							c.Destroy()
+							return err
+						}
+					} else {
+						c.Destroy()
+						return err
+					}
+				}
+			} else {
+				c.Destroy()
+				return err
+			}
 		}
 	}
 	go process.Wait()
