@@ -32,32 +32,32 @@
 | Severity | Count |
 |---|---|
 | Critical | 3 |
-| High | 11 |
-| Medium | 16 |
+| High | 12 |
+| Medium | 17 |
 | Low | 19 |
 | Info | 3 |
-| **Total** | **52** |
+| **Total** | **54** |
 
 ### By area
 
 | Area | Critical | High | Medium | Low | Info | Total |
 |---|---|---|---|---|---|---|
-| Security | 3 | 10 | 11 | 11 | 1 | 36 |
+| Security | 3 | 11 | 12 | 11 | 1 | 38 |
 | Reliability | 0 | 1 | 2 | 7 | 0 | 10 |
 | Stability | 0 | 0 | 2 | 1 | 0 | 3 |
 | Performance | 0 | 0 | 1 | 0 | 0 | 1 |
 | Hygiene (Info) | 0 | 0 | 0 | 0 | 2 | 2 |
 
-Critical: SEC-001, SEC-002, SEC-004. High: SEC-003, SEC-005–SEC-011, SEC-028, SEC-029, REL-007. Medium: SEC-012, SEC-013, SEC-015–SEC-020, SEC-030–SEC-032, REL-001, REL-008, STAB-001, STAB-003, PERF-001. Low: SEC-014, SEC-021–SEC-027, SEC-033–SEC-035, REL-002, REL-003, REL-005, REL-006, REL-009–REL-011, STAB-002. Info: INFO-001–INFO-003.
+Critical: SEC-001, SEC-002, SEC-004. High: SEC-003, SEC-005–SEC-011, SEC-028, SEC-029, SEC-036, REL-007. Medium: SEC-012, SEC-013, SEC-015–SEC-020, SEC-030–SEC-032, SEC-037, REL-001, REL-008, STAB-001, STAB-003, PERF-001. Low: SEC-014, SEC-021–SEC-027, SEC-033–SEC-035, REL-002, REL-003, REL-005, REL-006, REL-009–REL-011, STAB-002. Info: INFO-001–INFO-003.
 
-**Revision note (second pass, same day).** Sections 4.12–4.19 were added to cover the components originally listed as not reviewed. Existing IDs are stable; the following existing findings were revised after reading more code: SEC-003 (Critical → High: user/build containers *cannot* reach discoverd `:1111` — the INPUT/FORWARD rules delete the legacy ACCEPTs — but the key is trivially obtainable from the node network, see SEC-028), SEC-014 (Medium → Low: `GetJob` is app-scoped via `GetInApp`; only `PutJob` is unscoped), SEC-017 (two "needs confirmation" items resolved: gRPC authz bypass not applicable, x/crypto/ssh not production-reachable), STAB-002 (confirmed), SEC-002 (`ALLOW_DEV_TOKEN` confirmed `false` in the plugin manifest).
+**Revision note (second pass, same day).** Sections 4.12–4.19 were added to cover the components originally listed as not reviewed. Existing IDs are stable; the following existing findings were revised after reading more code: SEC-003 (Critical → High: user/build containers *cannot* reach discoverd `:1111` — the INPUT/FORWARD rules delete the legacy ACCEPTs — but the key is trivially obtainable from the node network, see SEC-028), SEC-014 (Medium → Low: `GetJob` is app-scoped via `GetInApp`; only `PutJob` is unscoped), SEC-017 (two "needs confirmation" items resolved: gRPC authz bypass not applicable, x/crypto/ssh not production-reachable), STAB-002 (confirmed), SEC-002 (`ALLOW_DEV_TOKEN` confirmed `false` in the plugin manifest). A third pass after independent verification corrected STAB-001 (the hard RAM cap is 2× the configured limit, not "swap equal to memory"), fixed the SEC-025 references to `router/handlers.go`, named both job-builder entry points in SEC-001, and added SEC-036 (dev-token fail-open default → unauthenticated admin) and SEC-037 (`POST /releases` without `app_id` bypasses app checks and privileged-process stripping).
 
 The overarching theme: the fork added a real privilege boundary (app-scoped tokens, fine-grained grants, user namespaces, netpolicy) on top of an upstream architecture that assumed every authenticated caller and every internal service was fully trusted. Most Critical/High items are places where that old assumption still leaks through the new boundary.
 
 ## 3. Top 10 to work on next
 
 1. **SEC-001** — `RunJob` passes caller-supplied `meta`/`partition`/`profiles` to the host; a `jobs:run` grant on any app yields a system-class job (host auth key in env, `zfs`/`kvm` profiles, no userns, system netpolicy) → host root.
-2. **SEC-002** — Dashboard mints a token with `nil` scopes + `nil` grants for a non-admin user with zero collaborator rows; the controller treats that as cluster admin.
+2. **SEC-002** — Dashboard mints a token with `nil` scopes + `nil` grants for a non-admin user with zero collaborator rows; the controller treats that as cluster admin. **SEC-036** is the same minting branch reached without any session when `ALLOW_DEV_TOKEN` is unset/true (the plugin manifest sets it false; the code default is true).
 3. **SEC-004** — Blobstore has no authentication and is reachable from build jobs; the "signed build cache URL" is never verified server-side. Cross-app slug/cache poisoning and cluster-wide image deletion.
 4. **SEC-028 / SEC-003** — The controller publishes `CONTROLLER_KEY` as discoverd instance metadata (`AUTH_KEY`), and discoverd `:1111` is unauthenticated (`DISCOVERD_AUTH_KEY` is never set). Anyone on the node network gets the cluster admin key with one `GET`; `POST /shutdown` and raft peer edits are also open.
 5. **SEC-029** — Datastore appliance admin HTTP APIs (`postgres :5433`, `mariadb :3307`, `mongodb :27018`, `redis :6380`, Kafka topic API) are unauthenticated and netpolicy allows user containers to every datastore port: `GET /backup` dumps all MariaDB databases, `POST /stop` halts any datastore, Kafka topics can be deleted.
@@ -67,7 +67,7 @@ The overarching theme: the fork added a real privilege boundary (app-scoped toke
 9. **REL-007** — Let's Encrypt certificates are never renewed and failed issuances are never retried (`ListExpiring` has no callers; only `pending` certificates are processed), contrary to the docs. Every ACME-backed route goes dark within 90 days.
 10. **SEC-006 / SEC-011 / SEC-009** — Build jobs run root-in-container with `CAP_SYS_ADMIN`, seccomp unconfined, no AppArmor, no userns, with `CONTROLLER_KEY` in the environment, on top of vendored `runc/libcontainer v1.0.0-rc8` (2019). Any `git push` is one known libcontainer weakness away from host root.
 
-Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster secrets), **SEC-017** (x/net, grpc, yaml.v2 reachable vulns), **SEC-031/SEC-032** (unverified toolchain/tarball downloads and plaintext, unchecksummed binary distribution during rolling updates).
+Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster secrets), **SEC-013/SEC-037** (`scale:write` can mint and attach releases, and `POST /releases` without `app_id` skips privileged-process stripping), **SEC-017** (x/net, grpc, yaml.v2 reachable vulns), **SEC-031/SEC-032** (unverified toolchain/tarball downloads and plaintext, unchecksummed binary distribution during rolling updates).
 
 ## 4. Findings
 
@@ -76,7 +76,7 @@ Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster s
 #### SEC-001 — `RunJob` honours caller-controlled `meta`, `partition` and `profiles`; escalates to host root
 
 - **Severity:** Critical · **Area:** Security · **Component:** `flynn/controller`, `flynn/host` · **Origin:** fork-introduced (upstream had no per-app boundary; the fork added one but did not sanitise this input) · **Effort:** S
-- **Refs:** `flynn/controller/jobs.go:137-266` (also the attach path `:362-436`), `flynn/schema/controller/new_job.json`, `flynn/host/libcontainer_backend.go:2183-2197` (`isSystemJob`), `:2204-2214` (`lockUntrustedJob`), `:507-508` (profiles), `:982` (`FLYNN_HOST_AUTH_KEY`), `flynn/host/userns.go:39-44`, `flynn/pkg/netpolicy/policy.go:115-125`, `flynn-plugin-dashboard/internal/runjobws/handler.go:62`.
+- **Refs:** `flynn/controller/jobs.go:137-330` (`RunJob`, the `POST /apps/:id/jobs` handler for both attached and detached runs; pass-through at `:234-238` and `:262-263`) **and** `:358-450` (`startDetachedJob`, a second job builder with the identical pass-through at `:433-437`, reached from the GitHub deploy path `flynn/controller/github_deploy.go:96`), `flynn/schema/controller/new_job.json`, `flynn/host/libcontainer_backend.go:2183-2197` (`isSystemJob`), `:2204-2214` (`lockUntrustedJob`), `:507-508` (profiles), `:982` (`FLYNN_HOST_AUTH_KEY`), `flynn/host/userns.go:39-44`, `flynn/pkg/netpolicy/policy.go:115-125`, `flynn-plugin-dashboard/internal/runjobws/handler.go:62`.
 - **Description.** `RunJob` decodes `ct.NewJob` from the request body and builds the `host.Job` by merging `newJob.Meta` over `app.Meta`, then setting `Partition: string(newJob.Partition)` and `Profiles: newJob.Profiles` verbatim:
 
   ```go
@@ -97,7 +97,8 @@ Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster s
 
   A system job skips `lockUntrustedJob`, keeps `Profiles` (`jobProfiles` includes device/host-mount profiles such as zfs/kvm), runs **without** a user namespace (`useUserNS` → `ClassifyJob != ClassUser`), receives `FLYNN_HOST_AUTH_KEY` in its environment (`:982`), and is placed in the `system` netpolicy class (no overlay/node/host drops). The JSON schema allows `meta`, `partition` (`enum` includes `system`) and `profiles`. The route is guarded only by `app:jobs:run` for the target app. The dashboard's run-job websocket forwards the raw client JSON to this endpoint with the cluster key (`runjobws/handler.go:62`), so any dashboard user with "run" on one app reaches it.
 - **Impact.** A collaborator with `jobs:run` on a single app obtains a container with the host API key (`:1113` full control incl. arbitrary privileged jobs), raw device access via profiles, and no userns → host root on every node.
-- **Fix.** In `RunJob` (both variants) for non-admin callers: drop reserved keys from `newJob.Meta` (`flynn-system-app`, `flynn-controller.*`, `flynn-datastore`, `flynn-plugin`), force `Partition = "user"` (or `""`) unless `app.Meta["flynn-system-app"]=="true"`, and reject non-empty `Profiles`. Additionally, make the host derive trust from a signed/attested field the controller sets rather than free-form metadata (defence in depth).
+- **Entry points.** Two code paths build the `host.Job` from a `ct.NewJob` without sanitising these fields: `RunJob` (`jobs.go:262-263`), which serves `POST /apps/:id/jobs` for attached *and* detached requests and is what the CLI, dashboard websocket and any app-scoped token hit; and `startDetachedJob` (`jobs.go:433-437`), used by the GitHub deploy webhook to launch taffy. The second is fed a controller-built `NewJob` today, but it is the same unsanitised copy and must be fixed together so a future caller cannot reintroduce the hole.
+- **Fix.** In both `RunJob` and `startDetachedJob` (ideally one shared `newJobToHostJob` helper) for non-admin callers: drop reserved keys from `newJob.Meta` (`flynn-system-app`, `flynn-controller.*`, `flynn-datastore`, `flynn-plugin`), force `Partition = "user"` (or `""`) unless `app.Meta["flynn-system-app"]=="true"`, and reject non-empty `Profiles`. Additionally, make the host derive trust from a signed/attested field the controller sets rather than free-form metadata (defence in depth).
 
 #### SEC-013 — `scale:write`/`env:write` can create and activate arbitrary releases; `SetAppRelease`/`RunJob` accept releases of other apps
 
@@ -115,6 +116,14 @@ Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster s
   `SetAppRelease` loads `rid.ID`, validates the schema and calls `appRepo.SetRelease(app, release.ID)`; neither it nor `TxSetRelease` compares `release.AppID` to `app.ID`. `RunJob` likewise loads `newJob.ReleaseID` without checking it belongs to the app in the URL.
 - **Impact.** (a) A custom role holding only `app:scale:write` can `POST /releases` with a new artifact + env and then `PUT /apps/:id/release`, i.e. deploy arbitrary code and rewrite config despite lacking `app:deploy`/`app:env:write`. Default roles ("Deploy", "Manage") are not affected. (b) Given another app's release UUID (not enumerable, but leaks via events/logs), an app-scoped token can activate that release on its own app or run a job with `release_env: true` and read the other app's env/secrets.
 - **Fix.** Require `PermAppDeploy` (or a dedicated `release:write`) for `CreateRelease`/`SetAppRelease`; in `SetAppRelease`, `RunJob`, `RunJobAttach` reject when `release.AppID != "" && release.AppID != app.ID`.
+
+#### SEC-037 — `POST /releases` with no `app_id` skips every app-level check, including privileged-process stripping
+
+- **Severity:** Medium · **Area:** Security · **Component:** `flynn/controller` · **Origin:** fork-introduced (the app-scoped checks and `stripPrivilegedProcessTypes` are fork code; upstream had no boundary) · **Effort:** S
+- **Refs:** `flynn/controller/controller.go:278` (`POST /releases` is the only create route; there is no `/apps/:id/releases` POST), `flynn/controller/authz/http.go:214-217` (`rkCreateRelease` → `hasAnyReleaseWrite(tok)`: any token with `env:write`/`scale:write` on *any* app passes the middleware), `flynn/controller/release.go:20-54` (all authorisation, `SystemAppAllowed`, `preserveInternalProcessTypes` and `stripPrivilegedProcessTypes` live inside `if release.AppID != ""`), `:55-62` (schema validate + `releaseRepo.Add` unconditionally), `:84-112` (`SetAppRelease` then attaches any release ID without re-checking or re-stripping), `flynn/controller/utils/utils.go:60-78` (`JobConfig` copies `HostNetwork`, `HostPIDNamespace`, `Mounts`, `WriteableCgroups`, `Profiles`, `LinuxCapabilities`, `AllowedDevices` from the release into the `host.Job`), `flynn/host/libcontainer_backend.go:2204-2221` (`lockUntrustedJob` clears them again for non-system jobs).
+- **Description.** `CreateRelease` treats the body-supplied `release.AppID` as the authorisation subject. That is correct when it is present (verified: `HTTPAllowed(tok, POST, /apps/<id>/releases)` is enforced, so an attacker cannot create a release *for* another app). But when the body omits `app_id`, `app` stays `nil` and the function falls straight through to `releaseRepo.Add`: no per-app permission, no system-app check, and — crucially — no `stripPrivilegedProcessTypes`, so the stored release keeps `host_network`, `host_pid_namespace`, `mounts`, `linux_capabilities`, `allowed_devices`, `writeable_cgroups` and `profiles`. `SetAppRelease` (SEC-013) then lets the same low-privilege token attach that release to its own app, and the scheduler's `JobConfig` copies the privileged fields into every job of the formation.
+- **Impact.** Controller-side privilege stripping — the layer that is supposed to keep app-scoped tokens from requesting host mounts/capabilities — is bypassed with two API calls. Today the host's `lockUntrustedJob` neutralises the fields for non-system jobs, so the practical result is a release the controller *believes* is unprivileged but which would run privileged if (a) the host-side guard regresses, (b) the app is flagged system via SEC-001, or (c) an older host without `lockUntrustedJob` is still in the cluster during an update. It also lets a `scale:write`-only token mint releases with arbitrary env, which SEC-013 covers.
+- **Fix.** Reject `POST /releases` without `app_id` for non-admin tokens; always run `stripPrivilegedProcessTypes` for non-system apps regardless of how the release was created; in `SetAppRelease` re-validate `release.AppID == app.ID` and re-strip before attaching.
 
 #### SEC-014 — `PutJob` does not bind the job to the app in the URL
 
@@ -141,7 +150,7 @@ Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster s
 #### SEC-002 — Non-admin dashboard user with zero collaborator rows receives a cluster-admin token
 
 - **Severity:** Critical · **Area:** Security · **Component:** `flynn-plugin-dashboard`, `flynn/controller/authorizer` · **Origin:** fork-introduced · **Effort:** S
-- **Refs:** `flynn-plugin-dashboard/internal/tokens/mint_user.go:14-42`, `flynn-plugin-dashboard/internal/tokens/tokens.go:34-48`, `flynn/controller/authorizer/authorizer.go:48-58`.
+- **Refs:** `flynn-plugin-dashboard/internal/tokens/mint_user.go:14-41`, `flynn-plugin-dashboard/internal/tokens/tokens.go:34-48`, `flynn/controller/authorizer/authorizer.go:48-58`.
 - **Evidence.**
 
   ```go
@@ -157,6 +166,26 @@ Also close behind: **SEC-012** (unsigned plugin hooks run as root with cluster s
   With `rows` empty this mints scopes=`nil`, appGrants=`nil`; the controller's `HasClusterAdmin()` returns `true` for that token.
 - **Reproduction path.** Admin invites a user (collaborator row created), later removes them from the app (row deleted) or creates a user via the users API with `cluster_admin=false` and no apps yet. The user logs in and calls `/api/token` (or the OAuth code exchange) → token → any controller call succeeds as admin, including `RunJob` with `partition: system` (SEC-001). The `u == nil` dev fallback is gated by `ALLOW_DEV_TOKEN`; **confirmed** `flynn-plugin-dashboard/flynn-plugin.json:46` sets it to `"false"` (the Go default in `internal/config/config.go:93` is `true`, see SEC-035).
 - **Fix.** In `MintTokenForUser`, return an error (or a token with an explicit `none` scope) when a real, non-admin user has no grants. In the controller, remove the empty-means-admin rule (INFO-003).
+
+#### SEC-036 — `ALLOW_DEV_TOKEN` defaults to `true` in code and turns `GET /api/token` into an unauthenticated cluster-admin endpoint
+
+- **Severity:** High (config-gated: mitigated to Info when installed via the plugin manifest) · **Area:** Security · **Component:** `flynn-plugin-dashboard` · **Origin:** fork-introduced · **Effort:** S
+- **Refs:** `flynn-plugin-dashboard/internal/config/config.go:93` (`AllowDevToken: getEnv("ALLOW_DEV_TOKEN", "true") == "true"`), `internal/auth/auth.go:313-356` (`APIToken`: when `allowDevToken` is true the session is *optional*; `:344-348` fall back to `userID = "dev"`), `internal/tokens/mint_user.go:14-33` (`MintTokenForUser` never receives or checks `AllowDevToken`; `u == nil && len(rows) == 0` → `cluster:admin`), `flynn-plugin.json:46` (`"ALLOW_DEV_TOKEN": "false"`), `compose.yaml:69` (`"true"`), `cmd/dashboard/main.go:58` (startup only warns/uses the flag together with `BOOTSTRAP_ADMIN_PASSWORD`).
+- **Evidence.**
+
+  ```go
+  // internal/auth/auth.go:344-351 (allowDevToken branch)
+  if userEmail == "" { userID = "dev"; userEmail = "dev@localhost" }
+  access, _, err := tokens.MintTokenForUser(mint, s, "flynn-dashboard", userID, userEmail)
+  // internal/tokens/mint_user.go:32-33
+  if u == nil && len(rows) == 0 {
+      return m.MintControllerAccessToken(clientID, userID, email, []string{clusterAdminScope}, nil)
+  }
+  ```
+
+- **Description.** With `ALLOW_DEV_TOKEN` unset or `true`, `GET /api/token` with **no cookie at all** resolves to the synthetic user `dev`, which is absent from `users`, has no collaborator rows, and is therefore minted a `cluster:admin` controller token (the same branch as SEC-002). The same happens for a *deleted* user whose session cookie is still valid (`GetUserByID` → `nil` → email stays empty → `dev`). The OAuth code/refresh paths (`auth.go:763-774`, `:805-815`) are safe because they return `user not found` when `u == nil`. The dashboard's public route means this is reachable from the internet in any deployment where the variable is not explicitly set to `false`: `compose.yaml` (dev), a hand-rolled deployment, or a future manifest regression. Because `MintTokenForUser` does not know about the flag, there is no second line of defence.
+- **Impact.** Unauthenticated remote cluster admin whenever the env var is missing or true. In the stock plugin install the manifest sets `false`, so today this is a latent fail-open default rather than an active exposure.
+- **Fix.** Default `ALLOW_DEV_TOKEN` to `false`; refuse to start with it `true` unless `PUBLIC_URL` is `localhost`; delete the `u == nil` admin branch in `MintTokenForUser` (SEC-002) so a synthetic or deleted user can never receive admin; and have `APIToken` require a session even in dev mode.
 
 #### SEC-019 — New users are created with `cluster_admin = TRUE` and demoted non-atomically
 
@@ -248,12 +277,23 @@ See §4.9; the reachable trace is `flynn/slugbuilder/artifact/main.go:242` (`loa
 - **Description.** The profile blocks ~35 syscalls and allows everything else. Docker's default profile (which the comment cites) is an allow-list of ~350 syscalls with everything else denied. Not covered here, for example: `open_by_handle_at`/`name_to_handle_at` (classic escape with `CAP_DAC_READ_SEARCH`), `process_vm_readv/writev`, `ptrace` (allowed; relevant with `CAP_SYS_PTRACE`), `mbind`/`set_mempolicy`, `io_uring_*`, `fsopen`/`fsmount`/`fspick` (new mount API; `move_mount`/`open_tree` are blocked but `fsmount` is not), `personality`, `sysfs`, `uselib`, `vm86`. User jobs also have userns + capability drop + AppArmor, so this is defence-in-depth rather than a direct hole.
 - **Fix.** Switch to an allow-list (import Docker's/containerd's default profile JSON and translate to `configs.Syscall`), keep the deny-list only as a fallback when libseccomp lacks a name.
 
-#### STAB-001 — Memory swap limit set to 2× memory; scheduler placement is count-based
+#### STAB-001 — Hard memory cap is 2× the configured limit; scheduler placement is count-based
 
-- **Severity:** Medium · **Area:** Stability · **Component:** `flynn/host`, `flynn/controller/scheduler` · **Origin:** inherited (limit semantics), unknown for the 2× comment · **Effort:** M
-- **Refs:** `flynn/host/libcontainer_backend.go:647`, `:1049-1064`, `flynn/controller/scheduler/scheduler.go` (placement loop, host choice by job count).
-- **Description.** `MemorySwap` is set equal to the memory limit ("total = 2x limit"), so each job may consume its limit again in swap; the scheduler chooses hosts by number of jobs per type, not by reserved memory. A host can therefore be committed far beyond RAM+swap; OOM then kills arbitrary system jobs (postgres, discoverd) rather than the offender.
-- **Fix.** Set `MemorySwap == Memory` (no additional swap) for user jobs, and add memory-aware placement using `host.Resources` and the per-host stats already collected.
+- **Severity:** Medium · **Area:** Stability · **Component:** `flynn/host`, `flynn/controller/scheduler` · **Origin:** fork-introduced (the 2× "two-tier" scheme; upstream set `Memory == limit`), placement is inherited · **Effort:** M
+- **Refs:** `flynn/host/libcontainer_backend.go:646-647` (defaults), `:1040-1049` (per-job), `flynn/controller/scheduler/scheduler.go` (placement loop, host choice by job count).
+- **Evidence.**
+
+  ```go
+  // flynn/host/libcontainer_backend.go:646-647 (defaults) and :1048-1049 (configured limit)
+  Memory:     defaultMemory * 2, // Hard limit = 2x default
+  MemorySwap: defaultMemory,     // Swap limit = default, so total = 2x default
+  ...
+  config.Cgroups.Resources.Memory = limit * 2 // Hard limit (memory.max) = 2x configured limit
+  config.Cgroups.Resources.MemorySwap = limit // Swap limit, so total = 2x limit
+  ```
+
+- **Description (corrected).** The host deliberately sets the cgroup hard RAM cap (`memory.max`) to **twice** the limit the user configured (or twice the 1 GiB default) and additionally allows swap up to the configured limit; `memory.high` is intentionally not set, and the configured value is only used for logging in `monitorMemoryUsage`. So a process type declared at 512 MiB may hold 1 GiB of RAM before the OOM killer acts. The scheduler, meanwhile, chooses hosts by number of jobs per type, not by reserved memory, and the controller reports/plans on the *configured* value. A host can therefore be committed to 2× what its formations declare; when it runs out, the kernel OOM-kills arbitrary cgroups, including system jobs (postgres, discoverd), rather than the offender.
+- **Fix.** Make `memory.max` equal the configured limit (with `memory.high` slightly below it if a soft tier is wanted), keep swap at most equal to the limit, and add memory-aware placement using `host.Resources` and the per-host stats already collected. If the 2× headroom is intentional, the scheduler must plan with the doubled figure.
 
 #### STAB-002 — No `pids` cgroup limit by default (needs confirmation)
 
@@ -290,8 +330,20 @@ See §4.9; the reachable trace is `flynn/slugbuilder/artifact/main.go:242` (`loa
 #### SEC-025 — `X-Forwarded-Proto` / `X-Forwarded-For` are appended, not replaced
 
 - **Severity:** Low · **Area:** Security · **Component:** `flynn/router` · **Origin:** inherited · **Effort:** S
-- **Refs:** `flynn/router/http.go:345-352` (`fwdProtoHandler`), `flynn/router/proxy/reverseproxy.go` (XFF handling).
-- **Description.** A client speaking plain HTTP to the router can pre-set `X-Forwarded-Proto: https` and it is passed through; backends that trust it (e.g. to skip an HTTPS redirect or set `Secure` cookies) are misled. Same for `X-Forwarded-For` spoofing when `proxyProtocol` is off.
+- **Refs:** `flynn/router/handlers.go:9-46` (`fwdProtoHandler.ServeHTTP`: `:27-32` folds prior `X-Forwarded-For` values and appends the peer IP; `:34-43` appends `Proto`/`Port` to any prior `X-Forwarded-Proto`/`X-Forwarded-Port`); the handler is only *installed* in `flynn/router/http.go:345-353` (HTTP listener, `Proto: "http"`) and `:399-402` (HTTPS listener, `Proto: "https"`).
+- **Evidence.**
+
+  ```go
+  // flynn/router/handlers.go:35-42
+  proto, port := h.Proto, h.Port
+  if prior, ok := r.Header[fwdProtoHeaderName]; ok {
+      proto = strings.Join(prior, ", ") + ", " + proto
+  }
+  ...
+  r.Header.Set(fwdProtoHeaderName, proto)
+  ```
+
+- **Description.** A client speaking plain HTTP to the router can pre-set `X-Forwarded-Proto: https`; the router turns it into `https, http` rather than replacing it, and backends that read the first element (the common convention) believe the request was TLS — e.g. skipping an HTTPS redirect or setting `Secure` cookies. `X-Forwarded-For` gets the same treatment, so only the **last** element is trustworthy (the `status` service reads the last element, which is correct; app frameworks that read the first are spoofable).
 - **Fix.** Overwrite `X-Forwarded-Proto` unconditionally; either overwrite `X-Forwarded-For` or document that only the last hop is trustworthy.
 
 #### REL-006 — TLS listener lacks `ReadHeaderTimeout`
@@ -562,12 +614,12 @@ Provider APIs (`/databases`, `/clusters`) run as `web` processes classified syst
 
 ### 4.19 Dashboard frontend/backend depth and supply chain
 
-#### SEC-035 — Dashboard: websocket lacks an Origin check, webhook secret accepted in the query string, dev-token default is `true` in code
+#### SEC-035 — Dashboard: websocket lacks an Origin check, webhook secret accepted in the query string
 
 - **Severity:** Low · **Area:** Security · **Component:** `flynn-plugin-dashboard` · **Origin:** fork-introduced · **Effort:** S
-- **Refs:** `flynn-plugin-dashboard/cmd/dashboard/main.go:237-243` (`websocket.New(...)` default config: all origins), `internal/runjobws/handler.go:18-50` (auth = `session` cookie + per-app `jobs:run` check — good), `internal/webhook/ingest.go:23-26` (`?secret=` accepted), `internal/config/config.go:93` (`ALLOW_DEV_TOKEN` default `"true"`), `flynn-plugin.json:46` (`"false"` when installed as a plugin), `internal/auth/auth.go:177-178,304-305` (`HttpOnly`, `Secure` when the public URL is https, `SameSite=Lax`).
-- **Description.** CSRF: state-changing API calls are JSON `POST`s authenticated by a `SameSite=Lax` cookie, which modern browsers do not attach to cross-site `fetch`/`XMLHttpRequest`, so classic CSRF is mitigated without a token; there are no state-changing `GET`s. The run-job websocket relies on the same cookie and never checks `Origin`; Lax also withholds cookies from cross-site WebSocket handshakes in current Chromium/Firefox/WebKit, so cross-site WebSocket hijacking is mitigated by browser policy only — a `Strict`/`Lax` regression or an older browser would expose a job-exec channel. XSS: no `dangerouslySetInnerHTML`/`innerHTML`/`eval` sinks in `web/src` (React escaping; external links use `rel="noreferrer"`). Webhook ingest accepts the shared secret as `?secret=`, which ends up in router/access logs. The Go default of `ALLOW_DEV_TOKEN=true` is only safe because the manifest overrides it.
-- **Fix.** Set `websocket.Config{Origins: []string{publicURL}}`; drop `?secret=` support; flip the code default to `false`; consider `SameSite=Strict` for the session cookie plus a CSRF header check on `/api/ws`.
+- **Refs:** `flynn-plugin-dashboard/cmd/dashboard/main.go:237-243` (`websocket.New(...)` default config: all origins), `internal/runjobws/handler.go:18-50` (auth = `session` cookie + per-app `jobs:run` check — good), `internal/webhook/ingest.go:23-26` (`?secret=` accepted), `internal/config/config.go:93` (`ALLOW_DEV_TOKEN` default `"true"` — the unauthenticated-admin consequence is its own finding, SEC-036), `flynn-plugin.json:46` (`"false"` when installed as a plugin), `internal/auth/auth.go:177-178,304-305` (`HttpOnly`, `Secure` when the public URL is https, `SameSite=Lax`).
+- **Description.** CSRF: state-changing API calls are JSON `POST`s authenticated by a `SameSite=Lax` cookie, which modern browsers do not attach to cross-site `fetch`/`XMLHttpRequest`, so classic CSRF is mitigated without a token; there are no state-changing `GET`s. The run-job websocket relies on the same cookie and never checks `Origin`; Lax also withholds cookies from cross-site WebSocket handshakes in current Chromium/Firefox/WebKit, so cross-site WebSocket hijacking is mitigated by browser policy only — a `Strict`/`Lax` regression or an older browser would expose a job-exec channel. XSS: no `dangerouslySetInnerHTML`/`innerHTML`/`eval` sinks in `web/src` (React escaping; external links use `rel="noreferrer"`). Webhook ingest accepts the shared secret as `?secret=`, which ends up in router/access logs. The Go default of `ALLOW_DEV_TOKEN=true` is only safe because the manifest overrides it (see SEC-036 for the exact path and impact).
+- **Fix.** Set `websocket.Config{Origins: []string{publicURL}}`; drop `?secret=` support; consider `SameSite=Strict` for the session cookie plus a CSRF header check on `/api/ws`.
 
 #### SEC-031 — Build/base image supply chain: unverified toolchain and vendor tarballs, unpinned apt packages
 
