@@ -119,8 +119,9 @@ supplied with one or more `--config key=value` flags.
 ## Managing consumer groups
 
 ```text
-# List consumer groups
-flynn kafka:consumer-groups
+# List consumer groups (space form: the CLI does not accept the bare
+# hyphenated noun `kafka:consumer-groups`)
+flynn kafka consumer-groups
 
 # Register a consumer group against a topic
 flynn kafka:consumer-groups:create workers events
