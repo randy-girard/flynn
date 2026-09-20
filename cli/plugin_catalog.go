@@ -9,12 +9,20 @@ import (
 )
 
 func clusterPluginCatalog() (*plugin.Catalog, error) {
+	return fetchPluginCatalog()
+}
+
+func fetchClusterPluginCatalog() (*plugin.Catalog, error) {
 	client, err := getClusterClient()
 	if err != nil {
 		return nil, err
 	}
 	return plugin.LoadCatalog(client)
 }
+
+// fetchPluginCatalog is the live cluster catalog. CLI tests replace it so
+// help and usage checks cannot hang on ~/.flynnrc.
+var fetchPluginCatalog = fetchClusterPluginCatalog
 
 func requirePluginCommand(name string) error {
 	if !plugin.IsCorePluginCommand(name) {
