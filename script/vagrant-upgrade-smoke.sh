@@ -3807,20 +3807,36 @@ if [[ -f "${log}" ]] && grep -F 'unable to subscribe to OOM notifications' "${lo
   echo "flynn-host still cannot subscribe to OOM notifications (cgroup memory.events?)" >&2
   exit 1
 fi
-if [[ -d /sys/fs/cgroup/flynn/user ]]; then
-  found=0
-  for d in /sys/fs/cgroup/flynn/user/*; do
-    [[ -d "${d}" ]] || continue
-    if [[ -f "${d}/memory.events" ]]; then
-      found=1
-      break
-    fi
-  done
-  if [[ "${found}" -eq 0 ]]; then
-    echo "no memory.events under /sys/fs/cgroup/flynn/user; OOM watch cannot work" >&2
-    ls -la /sys/fs/cgroup/flynn/user >&2 || true
+root=/sys/fs/cgroup/flynn
+if [[ ! -d "${root}" ]]; then
+  echo "missing ${root}; OOM watch cannot work" >&2
+  exit 1
+fi
+# Peer nodes often have no user jobs (scheduler puts the slug on one host).
+# Require memory.events on each partition and on any job children; an empty
+# user/ dir is fine if system jobs are present (seen 2026-09-20 3-node node2).
+any_job=0
+for part in user system background; do
+  dir="${root}/${part}"
+  [[ -d "${dir}" ]] || continue
+  if [[ ! -f "${dir}/memory.events" ]]; then
+    echo "no memory.events on ${dir}; OOM watch cannot work" >&2
+    ls -la "${dir}" >&2 || true
     exit 1
   fi
+  for d in "${dir}"/*; do
+    [[ -d "${d}" ]] || continue
+    if [[ ! -f "${d}/memory.events" ]]; then
+      echo "no memory.events in job cgroup ${d}" >&2
+      exit 1
+    fi
+    any_job=1
+  done
+done
+if [[ "${any_job}" -eq 0 ]]; then
+  echo "no job cgroups under ${root}; OOM watch has nothing to subscribe" >&2
+  ls -la "${root}" >&2 || true
+  exit 1
 fi
 EOF
     then

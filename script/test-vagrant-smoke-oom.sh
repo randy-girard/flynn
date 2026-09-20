@@ -24,5 +24,11 @@ need "${ROOT}/host/oom_test.go" 'TestWatchMemoryEvents' "OOM watcher must have u
 need "${backend}" 'subscribeOOM' "libcontainer backend must use subscribeOOM, not only NotifyOOM"
 need "${smoke}" 'assert_oom_subscription' "upgrade smoke must assert OOM subscription"
 need "${smoke}" 'unable to subscribe to OOM notifications' "smoke must fail if OOM subscribe warnings reappear"
+need "${smoke}" 'user system background' \
+  "OOM check must look at every partition, not only user jobs (3-node peers can have an empty user/ dir)"
+if grep -qE 'no memory.events under /sys/fs/cgroup/flynn/user' "${smoke}"; then
+  echo "OOM check must not fail a host that has no user jobs but has system cgroups" >&2
+  exit 1
+fi
 
 echo "ok OOM cgroup v2 watch is covered by unit code and upgrade smoke"
