@@ -58,8 +58,12 @@ type Client struct {
 	c *httpclient.Client
 }
 
+// httpClient is used for sirenia /status polls. WaitFor* already retries
+// until its own deadline; a 15-minute Client.Timeout meant one hung /status
+// (no ResponseHeaderTimeout on the shared transport) consumed the entire
+// WaitForReplSync budget and surfaced as "timeout waiting for expected status".
 var httpClient = &http.Client{
-	Timeout:   15 * time.Minute,
+	Timeout:   10 * time.Second,
 	Transport: httphelper.RetryClient.Transport,
 }
 

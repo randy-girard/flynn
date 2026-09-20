@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,6 +110,33 @@ func TestWaitForReadWriteEventually(t *testing.T) {
 	}
 	if calls < 2 {
 		t.Fatalf("expected multiple status polls before read-write, got %d", calls)
+	}
+}
+
+func TestWaitForRetriesHungStatus(t *testing.T) {
+	var n int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if atomic.AddInt32(&n, 1) == 1 {
+			time.Sleep(250 * time.Millisecond)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(Status{
+			Database: &DatabaseInfo{ReadWrite: true},
+		})
+	}))
+	defer srv.Close()
+
+	host, portStr, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, _ := strconv.Atoi(portStr)
+	c := NewClientWithHTTP(net.JoinHostPort(host, strconv.Itoa(port-1)), &http.Client{Timeout: 80 * time.Millisecond})
+	if err := c.WaitForReadWrite(2 * time.Second); err != nil {
+		t.Fatalf("WaitForReadWrite: %v (calls=%d)", err, n)
+	}
+	if n < 2 {
+		t.Fatalf("expected hung status to be retried, calls=%d", n)
 	}
 }
 
