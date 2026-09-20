@@ -49,6 +49,10 @@ need 'log -n 20' \
   "CLI step must read logaggregator output without --follow"
 need 'cli_run_job' \
   "CLI step must share a time-bounded flynn run helper"
+if ! awk '/^cli_run_job\(/,/^}/' "${smoke}" | grep -q '2>&1'; then
+  echo "cli_run_job must capture ssh stderr so unknown_error retries" >&2
+  exit 1
+fi
 need 'echo smoke-cli' \
   "CLI step must run a one-off job (scheduler + slugrunner)"
 need 'buildpack-cli-run' \

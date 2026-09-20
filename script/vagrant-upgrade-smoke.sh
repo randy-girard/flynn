@@ -4207,7 +4207,7 @@ cli_run_job() {
   done
   for attempt in 1 2 3 4 5 6; do
     rc=0
-    out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null)" || rc=$?
+    out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 timeout 90 flynn -a $(printf '%q' "${app}") run --${cmd_q}" </dev/null 2>&1)" || rc=$?
     snippet="$(echo "${out}" | tr '\n' ' ' | cut -c1-80)"
     if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -qE "${needle}"; then
       record_check "${label}" "${name}" "PASS" "${snippet}"
