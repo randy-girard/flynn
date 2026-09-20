@@ -1161,6 +1161,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
 			c.Destroy()
 			config.AppArmorProfile = ""
+			if err := regenerateVethHostNames(config); err != nil {
+				return err
+			}
 			c, err = l.factory.Create(job.ID, config)
 			if err != nil {
 				return err
@@ -1172,8 +1175,30 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				NoNewPrivileges: &noNewPriv,
 			}
 			if err := c.Run(process); err != nil {
-				c.Destroy()
-				return err
+				if isNetworkIfaceExistsErr(err) {
+					log.Error("veth still existed after AppArmor retry, regenerating", "err", err)
+					c.Destroy()
+					if rerr := regenerateVethHostNames(config); rerr != nil {
+						return rerr
+					}
+					c, err = l.factory.Create(job.ID, config)
+					if err != nil {
+						return err
+					}
+					process = &libcontainer.Process{
+						Init:            true,
+						Args:            []string{"/.containerinit", job.ID},
+						User:            "0:0",
+						NoNewPrivileges: &noNewPriv,
+					}
+					if err := c.Run(process); err != nil {
+						c.Destroy()
+						return err
+					}
+				} else {
+					c.Destroy()
+					return err
+				}
 			}
 		} else {
 			c.Destroy()
