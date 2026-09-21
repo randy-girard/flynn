@@ -93,6 +93,19 @@ func (r *ManagedCertificateRepo) ListExpiring(before time.Time) ([]*ct.ManagedCe
 	return scanManagedCertificates(rows)
 }
 
+func (r *ManagedCertificateRepo) ListByStatus(status ct.ManagedCertificateStatus) ([]*ct.ManagedCertificate, error) {
+	rows, err := r.db.Query("managed_certificate_list_by_status", string(status))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanManagedCertificates(rows)
+}
+
+func (r *ManagedCertificateRepo) ListFailed() ([]*ct.ManagedCertificate, error) {
+	return r.ListByStatus(ct.ManagedCertificateStatusFailed)
+}
+
 func (r *ManagedCertificateRepo) Update(cert *ct.ManagedCertificate) error {
 	tx, err := r.db.Begin()
 	if err != nil {

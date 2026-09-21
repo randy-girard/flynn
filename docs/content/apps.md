@@ -349,6 +349,10 @@ To disable automatic TLS for a route:
 flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --no-auto-tls
 ```
 
+Issued certificates are renewed automatically about 30 days before they expire.
+Failed issuances are retried later with backoff so Let's Encrypt is not contacted
+on every error.
+
 **Note:** The domain must be publicly accessible and DNS must be properly
 configured before requesting a certificate. Let's Encrypt validates domain
 ownership using HTTP-01 challenges.

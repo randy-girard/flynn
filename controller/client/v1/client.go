@@ -1017,6 +1017,21 @@ func (c *Client) ListManagedCertificates() ([]*ct.ManagedCertificate, error) {
 	return certs, c.Get("/managed-certificates", &certs)
 }
 
+// ListExpiringManagedCertificates returns issued managed certificates that
+// expire at or before the given time.
+func (c *Client) ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error) {
+	var certs []*ct.ManagedCertificate
+	q := url.Values{"expiring_before": {before.UTC().Format(time.RFC3339Nano)}}
+	return certs, c.Get("/managed-certificates?"+q.Encode(), &certs)
+}
+
+// ListFailedManagedCertificates returns managed certificates whose last
+// issuance or renewal attempt failed.
+func (c *Client) ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	var certs []*ct.ManagedCertificate
+	return certs, c.Get("/managed-certificates?status=failed", &certs)
+}
+
 // GetManagedCertificate returns a specific managed certificate
 func (c *Client) GetManagedCertificate(certID string) (*ct.ManagedCertificate, error) {
 	cert := &ct.ManagedCertificate{}
