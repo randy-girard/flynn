@@ -4,13 +4,27 @@ set -eo pipefail
 
 GO_SH_REPO="$(pwd)"
 go_version="1.24.12"
+# Official SHA256 from https://go.dev/dl/?mode=json&include=all (go1.24.12).
+go_sha256_amd64="bddf8e653c82429aea7aec2520774e79925d4bb929fe20e67ecc00dd5af44c50"
+go_sha256_arm64="4e02e2979e53b40f3666bba9f7e5ea0b99ea5156e0824b343fd054742c25498d"
 gobin_commit="ef6664e41f0bfe3007869844d318bb2bfa2627f9"
 dir="/usr/local"
 
 apt-get update
 apt-get install --yes --no-install-recommends git build-essential pkg-config libseccomp-dev
 
-curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-$(dpkg --print-architecture).tar.gz"
+go_arch="$(dpkg --print-architecture)"
+case "${go_arch}" in
+  amd64) go_sha256="${go_sha256_amd64}" ;;
+  arm64) go_sha256="${go_sha256_arm64}" ;;
+  *)
+    echo "unsupported architecture for pinned Go checksum: ${go_arch}" >&2
+    exit 1
+    ;;
+esac
+
+curl --retry 5 --retry-delay 3 -fsSLo /tmp/go.tar.gz "https://go.dev/dl/go${go_version}.linux-${go_arch}.tar.gz"
+echo "${go_sha256}  /tmp/go.tar.gz" | sha256sum -c -
 rm -rf "${dir}/go"
 tar xzf /tmp/go.tar.gz -C "${dir}"
 rm /tmp/go.tar.gz

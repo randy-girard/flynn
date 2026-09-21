@@ -1,6 +1,11 @@
 #!/bin/bash
 #
 # A script to install Flynn from GitHub releases.
+#
+# The published release installer is generated from install-flynn-release
+# (script/release), not this file. This template is the in-tree GitHub
+# variant used by tests and older docs; keep its checksum checks in sync
+# with install-flynn-release.
 
 usage() {
   cat <<USAGE >&2
@@ -196,13 +201,33 @@ main() {
     info "latest version is ${version}"
   fi
 
-  local download_url="https://github.com/${repo_url}/releases/download/${version}/flynn-host.gz"
-  if ! curl -fsSL -o "${tmp}/flynn-host.gz" "${download_url}"; then
+  local host_arch
+  case "$(uname -m)" in
+    x86_64|amd64) host_arch=amd64 ;;
+    aarch64|arm64) host_arch=arm64 ;;
+    *) fail "unsupported architecture: $(uname -m)" ;;
+  esac
+  local host_asset="flynn-host-linux-${host_arch}.gz"
+  local release_url="https://github.com/${repo_url}/releases/download/${version}"
+
+  info "downloading checksums"
+  if ! curl -fsSL -o "${tmp}/checksums.sha512" "${release_url}/checksums.sha512"; then
+    fail "failed to download checksums from ${release_url}"
+  fi
+
+  local download_url="${release_url}/${host_asset}"
+  if ! curl -fsSL -o "${tmp}/${host_asset}" "${download_url}"; then
     fail "failed to download flynn-host binary from ${download_url}"
   fi
 
-  run gunzip "flynn-host.gz"
-  run chmod +x "flynn-host"
+  info "verifying flynn-host binary checksum"
+  if ! grep "${host_asset}" checksums.sha512 | sha512sum --check --status; then
+    fail "failed to verify flynn-host binary checksum"
+  fi
+
+  run gunzip "${host_asset}"
+  run chmod +x "flynn-host-linux-${host_arch}"
+  run mv "flynn-host-linux-${host_arch}" flynn-host
 
   info "setting release update channel to \"${channel}\""
   mkdir -p "/etc/flynn"
