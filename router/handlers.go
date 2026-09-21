@@ -12,10 +12,16 @@ const (
 	fwdPortHeaderName  = "X-Forwarded-Port"
 )
 
-// fwdProtoHandler is an http.Handler that sets the X-Forwarded-For header on
-// inbound requests to match the remote IP address, and sets X-Forwarded-Proto
-// and X-Forwarded-Port headers to match the values in Proto and Port. If those
-// headers already exist, the new values will be appended.
+// fwdProtoHandler records the hop Flynn observed on inbound requests.
+//
+// X-Forwarded-Proto and X-Forwarded-Port are overwritten unconditionally with
+// Proto and Port (this listener's scheme and port). Client-supplied values are
+// discarded so a request on the HTTP listener cannot claim it arrived over TLS.
+//
+// X-Forwarded-For appends the peer IP to any prior chain. Only the last
+// element is the address Flynn observed; earlier hops are client-controlled
+// and must not be trusted. The status service and request logger already
+// read the last element.
 type fwdProtoHandler struct {
 	http.Handler
 	Proto string
@@ -23,8 +29,9 @@ type fwdProtoHandler struct {
 }
 
 func (h fwdProtoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// If we aren't the first proxy retain prior X-Forwarded-* information as a
-	// comma+space separated list and fold multiple headers into one.
+	// Append the observed peer IP. Prior X-Forwarded-For hops are retained
+	// as a comma+space list so downstream services that already read the
+	// last element keep working; only that last element is trustworthy.
 	if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		if prior, ok := r.Header[fwdForHeaderName]; ok {
 			clientIP = strings.Join(prior, ", ") + ", " + clientIP
@@ -32,15 +39,8 @@ func (h fwdProtoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set(fwdForHeaderName, clientIP)
 	}
 
-	proto, port := h.Proto, h.Port
-	if prior, ok := r.Header[fwdProtoHeaderName]; ok {
-		proto = strings.Join(prior, ", ") + ", " + proto
-	}
-	if prior, ok := r.Header[fwdPortHeaderName]; ok {
-		port = strings.Join(prior, ", ") + ", " + port
-	}
-	r.Header.Set(fwdProtoHeaderName, proto)
-	r.Header.Set(fwdPortHeaderName, port)
+	r.Header.Set(fwdProtoHeaderName, h.Proto)
+	r.Header.Set(fwdPortHeaderName, h.Port)
 
 	h.Handler.ServeHTTP(w, r)
 }
