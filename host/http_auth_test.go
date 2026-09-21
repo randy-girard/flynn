@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/inconshreveable/log15"
 )
 
 func TestHostAuthKeyFromRequest(t *testing.T) {
@@ -59,9 +57,14 @@ func TestHostAuthMiddleware(t *testing.T) {
 			want: http.StatusUnauthorized,
 		},
 		{
-			name:   "no key subnet auth-key 401",
-			method: "POST", path: "/host/auth-key", remote: "10.0.0.9:9",
+			name:   "no key subnet update 401",
+			method: "POST", path: "/host/update", remote: "10.0.0.9:9",
 			want: http.StatusUnauthorized,
+		},
+		{
+			name:   "no key subnet auth-key TOFU allowed",
+			method: "POST", path: "/host/auth-key", remote: "10.0.0.9:9",
+			want: http.StatusNoContent,
 		},
 		{
 			name:   "no key X-Forwarded-For spoof 401",
@@ -137,13 +140,29 @@ func TestHostAuthMiddleware(t *testing.T) {
 	}
 }
 
+// TestConfigureAuthKeyEmptyRejectsSubnet documents the multi-node bootstrap
+// exception: configure-host-auth runs on one coordinator and POSTs
+// /host/auth-key to every peer's advertised IP. While the key is empty that
+// one route stays TOFU; job/volume/update APIs on the subnet stay 401.
 func TestConfigureAuthKeyEmptyRejectsSubnet(t *testing.T) {
-	api := &jobAPI{host: &Host{log: log15.New()}}
-	req := httptest.NewRequest("POST", "/host/auth-key", nil)
-	req.RemoteAddr = "10.0.0.8:9"
-	rec := httptest.NewRecorder()
-	api.ConfigureAuthKey(rec, req, nil)
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status=%d", rec.Code)
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	wrapped := (&Host{}).authMiddleware(ok)
+
+	authReq := httptest.NewRequest("POST", "/host/auth-key", nil)
+	authReq.RemoteAddr = "10.0.0.8:9"
+	authRec := httptest.NewRecorder()
+	wrapped.ServeHTTP(authRec, authReq)
+	if authRec.Code != http.StatusNoContent {
+		t.Fatalf("POST /host/auth-key from subnet: status=%d want %d", authRec.Code, http.StatusNoContent)
+	}
+
+	jobsReq := httptest.NewRequest("GET", "/host/jobs", nil)
+	jobsReq.RemoteAddr = "10.0.0.8:9"
+	jobsRec := httptest.NewRecorder()
+	wrapped.ServeHTTP(jobsRec, jobsReq)
+	if jobsRec.Code != http.StatusUnauthorized {
+		t.Fatalf("GET /host/jobs from subnet: status=%d want %d", jobsRec.Code, http.StatusUnauthorized)
 	}
 }

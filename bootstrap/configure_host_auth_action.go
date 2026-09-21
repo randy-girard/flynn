@@ -62,9 +62,10 @@ func configureHostAuthOn(h *cluster.Host, key, clientKey string) error {
 	return last
 }
 
-// configureAuthDialAddrs prefers 127.0.0.1 when addr is this machine so
-// first-time ConfigureAuthKey still works against a fail-closed empty-key
-// daemon (loopback/unix only). Remote advertised IPs are unchanged.
+// configureAuthDialAddrs prefers 127.0.0.1 when addr is this machine
+// (faster on-node TOFU). Remote advertised IPs are unchanged; empty-key
+// POST /host/auth-key remains allowed on those addresses for multi-node
+// bootstrap.
 func configureAuthDialAddrs(addr string) []string {
 	if loop := loopbackAuthAddr(addr); loop != "" && loop != addr {
 		return []string{loop, addr}

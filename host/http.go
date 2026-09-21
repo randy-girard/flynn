@@ -93,10 +93,14 @@ func writeHostUnauthorized(w http.ResponseWriter) {
 // or Basic auth password matching the host's authKey.
 //
 // GET /host/status is always unauthenticated (health and bootstrap discovery).
-// When no authKey is configured, every other request fails closed unless it
-// arrived from TCP loopback or a Unix socket (local flynn-host CLI and
-// on-node bootstrap). X-Forwarded-For is ignored. After a key is set,
-// loopback is not a bypass; authKeyValid must succeed.
+// When no authKey is configured:
+//   - POST /host/auth-key is trust-on-first-use from any peer (multi-node
+//     bootstrap's configure-host-auth dials advertised IPs, not loopback)
+//   - every other non-status request fails closed unless it arrived from
+//     TCP loopback or a Unix socket (local flynn-host CLI)
+//
+// X-Forwarded-For is ignored. After a key is set, loopback is not a bypass;
+// authKeyValid must succeed.
 func (h *Host) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/host/status" && r.Method == "GET" {
@@ -105,6 +109,10 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		if h.authKey == "" {
+			if r.URL.Path == "/host/auth-key" && r.Method == "POST" {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if httphelper.RequestFromLoopbackOrUnix(r) {
 				next.ServeHTTP(w, r)
 				return
@@ -823,14 +831,10 @@ func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ ht
 func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "ConfigureAuthKey")
 
-	// First-time TOFU is loopback/unix only (not the cluster subnet), even if
-	// this handler is reached without authMiddleware.
-	if h.host.authKey == "" {
-		if !httphelper.RequestFromLoopbackOrUnix(req) {
-			writeHostUnauthorized(w)
-			return
-		}
-	} else if !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
+	// Empty-key TOFU is allowed here so a coordinator can POST the cluster
+	// key to each advertised :1113. After a key is set, the existing
+	// credential check applies (loopback is not a bypass).
+	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
 		writeHostUnauthorized(w)
 		return
 	}

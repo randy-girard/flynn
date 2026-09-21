@@ -48,30 +48,28 @@ the daemon. After that, host-to-host update pulls and the `flynn-host` CLI
 present the same key.
 
 When no key is configured (fresh host, missing `host.json`, or before
-bootstrap) the API **fails closed**:
+bootstrap) the API **fails closed**, with two exceptions:
 
 * `GET /host/status` stays unauthenticated (health checks and bootstrap host
   discovery).
+* First-time `POST /host/auth-key` is trust-on-first-use from any peer,
+  including advertised subnet IPs. Multi-node bootstrap runs
+  `configure-host-auth` on one coordinator and must reach every host's
+  `:1113`, not only loopback.
 * Every other method is `401` unless the client is on **TCP loopback**
-  (`127.0.0.0/8` or `::1`) or a **Unix domain socket**. That is what lets the
-  local `flynn-host` CLI and on-node bootstrap still talk to a daemon that
-  has not received the cluster key yet.
-* First-time `POST /host/auth-key` (ConfigureAuthKey with an empty key) is
-  loopback/unix only, **not** from the cluster subnet. After a key is set,
-  loopback is not a bypass; the request must present `authKey`.
+  (`127.0.0.0/8` or `::1`) or a **Unix domain socket** (local `flynn-host`
+  CLI). Job, volume, and update APIs are not opened on the subnet.
 
-Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
+After a key is set, loopback is not a bypass; the request must present
+`authKey`. Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
 
 `flynn-host init` does **not** generate a unique per-host key. A random key
 at init would desynchronize multi-node bootstrap, which installs one shared
 secret. If `FLYNN_HOST_AUTH_KEY` is already in the environment, init persists
 it into `host.json`. Joining hosts should set that cluster key before the
-daemon listens.
-
-Multi-node `configure-host-auth` still dials each host's advertised address.
-Peers that have no key yet reject those POSTs (they are not loopback).
-Pre-set the same `FLYNN_HOST_AUTH_KEY` on every node, or rely on the local
-host rewrite to `127.0.0.1` when the daemon binds `0.0.0.0` (the default).
+daemon listens. Bootstrap still prefers `127.0.0.1` when configuring the
+local host (faster); remote peers use the advertised address and empty-key
+TOFU on `POST /host/auth-key` only.
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. The TLS
