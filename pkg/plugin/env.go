@@ -137,7 +137,7 @@ func previousReleaseScaleDown(prev *ct.Release, formation *ct.Formation) map[str
 // (controller/postgres). It does not assume any plugin is installed.
 func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 	out := map[string]string{}
-	for _, app := range []string{"controller", "postgres", "gitreceive"} {
+	for _, app := range []string{"controller", "postgres", "gitreceive", "discoverd"} {
 		release, err := client.GetAppRelease(app)
 		if err != nil {
 			continue
@@ -147,6 +147,9 @@ func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 		}
 		if key := release.Env["AUTH_KEY"]; key != "" && out["CONTROLLER_KEY"] == "" {
 			out["CONTROLLER_KEY"] = key
+		}
+		if v := release.Env["DISCOVERD_AUTH_KEY"]; v != "" {
+			out["DISCOVERD_AUTH_KEY"] = v
 		}
 		if v := release.Env["SINGLETON"]; v != "" {
 			out["SINGLETON"] = v

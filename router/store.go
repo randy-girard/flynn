@@ -24,8 +24,9 @@ var controllerAttempts = attempt.Strategy{
 }
 
 func NewControllerStore() (*ControllerStore, error) {
-	// Discover a controller instance to obtain the AUTH_KEY, but create the
-	// client using the discoverd DNS name so it automatically follows the
+	// Discover a controller instance (and obtain AUTH_KEY from env, falling
+	// back to instance meta during mixed-version rolling updates), but create
+	// the client using the discoverd DNS name so it automatically follows the
 	// controller if its overlay IP changes (e.g. after a daemon restart).
 	// Retry for up to 2 minutes to handle startup ordering during updates,
 	// where the controller service may not yet be registered in discoverd.
@@ -39,7 +40,7 @@ func NewControllerStore() (*ControllerStore, error) {
 			return fmt.Errorf("no controller instances available")
 		}
 		inst := instances[0]
-		client, err = controller.NewClient("", inst.Meta["AUTH_KEY"])
+		client, err = controller.NewClient("", controller.KeyFromEnvOrMeta(inst.Meta))
 		return err
 	})
 	if err != nil {

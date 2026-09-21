@@ -821,7 +821,8 @@ func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ ht
 	}
 
 	var input struct {
-		Key string `json:"key"`
+		Key string            `json:"key"`
+		Env map[string]string `json:"env,omitempty"`
 	}
 	if err := httphelper.DecodeJSON(req, &input); err != nil {
 		httphelper.Error(w, err)
@@ -832,7 +833,14 @@ func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ ht
 		return
 	}
 
-	if err := config.SetAuthKey(config.DefaultPath, input.Key); err != nil {
+	kv := map[string]string{"FLYNN_HOST_AUTH_KEY": input.Key}
+	for k, v := range input.Env {
+		if k == "" {
+			continue
+		}
+		kv[k] = v
+	}
+	if err := config.SetEnv(config.DefaultPath, kv); err != nil {
 		log.Error("error writing host auth key", "err", err)
 		httphelper.Error(w, err)
 		return

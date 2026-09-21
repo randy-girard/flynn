@@ -1370,12 +1370,13 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		return dialer.Default.Dial(network, addr)
 	}
 	httpClient := newControllerHTTPClient(discoverdDial, 0)
-	client, err := controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
+	key := controller.KeyFromEnvOrMeta(instances[0].Meta)
+	client, err := controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)
 	if err != nil {
 		log.Error("error creating controller client", "err", err)
 		return fmt.Errorf("error creating controller client: %w", err)
 	}
-	repairClient, err := controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], newControllerHTTPClient(discoverdDial, controllerRepairHTTPTimeout))
+	repairClient, err := controller.NewClientWithHTTP("http://controller.discoverd", key, newControllerHTTPClient(discoverdDial, controllerRepairHTTPTimeout))
 	if err != nil {
 		log.Error("error creating controller repair client", "err", err)
 		return fmt.Errorf("error creating controller repair client: %w", err)

@@ -80,6 +80,19 @@ func TestClusterEnvFallsBackToAuthKeyAndRouteDomain(t *testing.T) {
 	}
 }
 
+func TestClusterEnvCopiesDiscoverdAuthKey(t *testing.T) {
+	env, err := ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{"CONTROLLER_KEY": "ck"}},
+		"discoverd":  {Env: map[string]string{"DISCOVERD_AUTH_KEY": "disc-secret"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["DISCOVERD_AUTH_KEY"] != "disc-secret" {
+		t.Fatalf("DISCOVERD_AUTH_KEY=%q", env["DISCOVERD_AUTH_KEY"])
+	}
+}
+
 func TestClusterEnvCopiesGitreceiveAccessTokens(t *testing.T) {
 	env, err := ClusterEnv(releaseMap{
 		"controller": {Env: map[string]string{

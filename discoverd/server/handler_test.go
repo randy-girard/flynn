@@ -723,6 +723,88 @@ func NewHandler() *Handler {
 	return h
 }
 
+func TestHandler_AuthRejectsMutatingWithoutKey(t *testing.T) {
+	h := NewHandler()
+	h.AuthKey = "cluster-discoverd-secret"
+	h.Store.AddServiceFn = func(service string, config *discoverd.ServiceConfig) error {
+		t.Fatal("unauthenticated PUT must not reach the store")
+		return nil
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("PUT", "/services/abc", strings.NewReader(`{"leader_type":"manual"}`)))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "Auth-Key") {
+		t.Fatalf("body=%s", w.Body.String())
+	}
+}
+
+func TestHandler_AuthAllowsStatusAndPing(t *testing.T) {
+	h := NewHandler()
+	h.AuthKey = "cluster-discoverd-secret"
+
+	for _, path := range []string{"/ping", "/.well-known/status"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, MustNewHTTPRequest("GET", path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestHandler_AuthAcceptsHeaderAndBasic(t *testing.T) {
+	h := NewHandler()
+	h.AuthKey = "cluster-discoverd-secret"
+	var called int
+	h.Store.AddServiceFn = func(service string, config *discoverd.ServiceConfig) error {
+		called++
+		return nil
+	}
+
+	req := MustNewHTTPRequest("PUT", "/services/abc", strings.NewReader(`{"leader_type":"manual"}`))
+	req.Header.Set("Auth-Key", "cluster-discoverd-secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("Auth-Key status=%d body=%s", w.Code, w.Body.String())
+	}
+
+	req = MustNewHTTPRequest("PUT", "/services/abc", strings.NewReader(`{"leader_type":"manual"}`))
+	req.SetBasicAuth("", "cluster-discoverd-secret")
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("basic status=%d body=%s", w.Code, w.Body.String())
+	}
+	if called != 2 {
+		t.Fatalf("store called %d times", called)
+	}
+}
+
+func TestHandler_GetInstancesRedactsAuthKey(t *testing.T) {
+	h := NewHandler()
+	h.Store.InstancesFn = func(service string) ([]*discoverd.Instance, error) {
+		return []*discoverd.Instance{{
+			ID:   "inst0",
+			Meta: map[string]string{"AUTH_KEY": "controller-secret", "FLYNN_APP_NAME": "controller"},
+		}}, nil
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("GET", "/services/controller/instances", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "controller-secret") || strings.Contains(w.Body.String(), "AUTH_KEY") {
+		t.Fatalf("AUTH_KEY leaked: %s", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "FLYNN_APP_NAME") {
+		t.Fatalf("other meta stripped: %s", w.Body.String())
+	}
+}
+
 // MustNewHTTPRequest returns a new HTTP request. Panic on error.
 func MustNewHTTPRequest(method, urlStr string, body io.Reader) *http.Request {
 	u, err := url.Parse(urlStr)

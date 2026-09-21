@@ -35,6 +35,10 @@ func init() {
 
 type Config struct {
 	Endpoints []string
+	// AuthKey is sent as Auth-Key / HTTP basic password. When empty, the
+	// client reads DISCOVERD_AUTH_KEY from the environment at request time so
+	// late bootstrap Setenv still authenticates DefaultClient.
+	AuthKey string
 }
 
 type Client struct {
@@ -45,12 +49,14 @@ type Client struct {
 	idx     uint64
 	mu      sync.RWMutex
 	Logger  log15.Logger
+	Key     string
 }
 
 func NewClientWithConfig(config Config) *Client {
 	client := &Client{
 		servers: make(map[string]*httpclient.Client, len(config.Endpoints)),
 		Logger:  defaultLogger,
+		Key:     config.AuthKey,
 	}
 	checkRedirect := func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {
@@ -80,7 +86,9 @@ func NewClientWithConfig(config Config) *Client {
 }
 
 func NewClientWithURL(url string) *Client {
-	return NewClientWithConfig(Config{Endpoints: formatURLs(strings.Split(url, ","))})
+	cfg := defaultConfig()
+	cfg.Endpoints = formatURLs(strings.Split(url, ","))
+	return NewClientWithConfig(cfg)
 }
 
 func NewClient() *Client {
@@ -92,7 +100,34 @@ func defaultConfig() Config {
 	if urls == "" || urls == "none" {
 		urls = "http://127.0.0.1:1111"
 	}
-	return Config{Endpoints: formatURLs(strings.Split(urls, ","))}
+	return Config{
+		Endpoints: formatURLs(strings.Split(urls, ",")),
+		AuthKey:   os.Getenv("DISCOVERD_AUTH_KEY"),
+	}
+}
+
+func (c *Client) authKey() string {
+	if c.Key != "" {
+		return c.Key
+	}
+	return os.Getenv("DISCOVERD_AUTH_KEY")
+}
+
+func (c *Client) refreshAuth() {
+	key := c.authKey()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, s := range c.servers {
+		s.Key = key
+	}
+}
+
+func (c *Client) authHeader() http.Header {
+	h := make(http.Header)
+	if key := c.authKey(); key != "" {
+		h.Set("Auth-Key", key)
+	}
+	return h
 }
 
 func formatURLs(urls []string) []string {
@@ -125,6 +160,7 @@ func (c *Client) httpClient(url string) *httpclient.Client {
 	return &httpclient.Client{
 		URL:  url,
 		HTTP: c.hc,
+		Key:  c.authKey(),
 	}
 }
 
@@ -179,6 +215,8 @@ func (c *Client) updateServers(servers []string, idx uint64) {
 }
 
 func (c *Client) Do(method string, path string, in, out interface{}, streamReq bool) (res stream.Stream, err error) {
+	c.refreshAuth()
+
 	var leaderReq bool
 	switch method {
 	case "PUT", "DEL", "POST":
@@ -222,7 +260,8 @@ func (c *Client) Do(method string, path string, in, out interface{}, streamReq b
 		for _, hc := range orderedServers {
 			var rsp *http.Response
 			if streamReq {
-				h := http.Header{"Accept": []string{"text/event-stream"}}
+				h := c.authHeader()
+				h.Set("Accept", "text/event-stream")
 				// use a copy of the client with a zero timeout (it doesn't really
 				// make sense to have a stream with a timeout)
 				httpClient := *hc.HTTP
@@ -232,7 +271,8 @@ func (c *Client) Do(method string, path string, in, out interface{}, streamReq b
 					res = httpclient.Stream(rsp, out)
 				}
 			} else {
-				h := http.Header{"Accept": []string{"application/json"}}
+				h := c.authHeader()
+				h.Set("Accept", "application/json")
 				rsp, err = hc.RawReq(method, path, h, in, out)
 				if err == nil && out == nil {
 					rsp.Body.Close()
@@ -341,6 +381,7 @@ func (c *Client) RaftLeader() (res dt.RaftLeader, err error) {
 }
 
 func (c *Client) serverByHost(url string) *httpclient.Client {
+	c.refreshAuth()
 	for _, s := range c.servers {
 		if s.URL == url {
 			return s

@@ -71,10 +71,11 @@ func EnsureOptionalResourceApp(client controller.Client, name string, image *ct.
 	}
 
 	env := map[string]string{
-		spec.ServiceEnv:  name,
-		"CONTROLLER_KEY": controllerKey,
-		spec.ImageEnv:    image.ID,
-		"SINGLETON":      fmt.Sprintf("%t", singleton),
+		spec.ServiceEnv:      name,
+		"CONTROLLER_KEY":     controllerKey,
+		"DISCOVERD_AUTH_KEY": discoverdAuthKeyFromCluster(client),
+		spec.ImageEnv:        image.ID,
+		"SINGLETON":          fmt.Sprintf("%t", singleton),
 	}
 	for k, v := range spec.ExtraEnv {
 		env[k] = v
@@ -143,6 +144,19 @@ func controllerKeyFromCluster(client controller.Client) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unable to find controller key in cluster")
+}
+
+func discoverdAuthKeyFromCluster(client controller.Client) string {
+	for _, appName := range []string{"discoverd", "controller", "postgres"} {
+		release, err := client.GetAppRelease(appName)
+		if err != nil {
+			continue
+		}
+		if key := release.Env["DISCOVERD_AUTH_KEY"]; key != "" {
+			return key
+		}
+	}
+	return ""
 }
 
 func clusterSingleton(client controller.Client) bool {

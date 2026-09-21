@@ -58,10 +58,8 @@ var manifest []byte
 
 func runBootstrap(args *docopt.Args) error {
 	log.SetFlags(log.Lmicroseconds)
-	if key, err := hostconfig.LoadAuthKey(hostconfig.DefaultPath); err != nil {
-		return fmt.Errorf("error loading host auth key: %s", err)
-	} else if key != "" {
-		os.Setenv("FLYNN_HOST_AUTH_KEY", key)
+	if err := hostconfig.ApplySecretsToEnv(hostconfig.DefaultPath); err != nil {
+		return fmt.Errorf("error loading host config secrets: %s", err)
 	}
 	logf := textLogger
 	if args.Bool["--json"] {

@@ -27,9 +27,11 @@ HTTPS.
 
 ## Internal Communication
 
-Flynn uses several ports to communicate internally, and currently there is no
-authentication system for internal communication, so access to these ports must
-not be exposed to the Internet. A firewall must be configured so that the only
+Flynn uses several ports to communicate internally. The host HTTP API
+authenticates with `FLYNN_HOST_AUTH_KEY`, and discoverd's HTTP API
+authenticates with `DISCOVERD_AUTH_KEY`. Other internal services still
+rely on network isolation, so access to these ports must not be exposed
+to the Internet. A firewall must be configured so that the only
 Flynn ports accessible are 80 and 443 to prevent compromise. Access to these
 internal Flynn ports is equivalent to root access, so be careful. After
 install, `flynn-host firewall` manages extra peer IPs and TCP ports on the
@@ -49,6 +51,24 @@ certificate used for communication is generated during installation
 present a trusted certificate; see [Apps — HTTPS](apps.md#https).
 A cryptographic hash of the certificate is pinned as part of the CLI
 configuration string to prevent man-in-the-middle attacks.
+
+discoverd's HTTP API (`:1111`) requires `DISCOVERD_AUTH_KEY` (a 128-bit
+secret generated at bootstrap, the same size as `CONTROLLER_KEY` /
+`FLYNN_HOST_AUTH_KEY`). System jobs receive the key in their environment;
+`flynn-host` persists it in `/etc/flynn/host.json` and injects it into
+system-class containers. The client sends it as an `Auth-Key` header
+(or HTTP basic password). `/ping` and `/.well-known/status` stay
+unauthenticated so health checks work. DNS on `:53` is unauthenticated
+because user jobs need it. User and build jobs still cannot open
+`:1111` (host iptables). Do not bind discoverd only to loopback; hosts
+need peer HTTP.
+
+The controller no longer publishes `AUTH_KEY` (the cluster admin key) in
+discoverd instance metadata. `GET /services/controller/instances` does
+not return that secret. System consumers (router, status, updater,
+flynn-host CLI) read `CONTROLLER_KEY` or `AUTH_KEY` from their
+environment and only fall back to instance meta during mixed-version
+rolling updates.
 
 ## Applications
 
