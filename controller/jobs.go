@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
@@ -146,12 +147,22 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		return
 	}
 
+	app := c.getApp(ctx)
+	if err := sanitizeOneOffJob(app, &newJob, authz.TokenFromContext(ctx)); err != nil {
+		respondWithError(w, err)
+		return
+	}
+
 	data, err := c.releaseRepo.Get(newJob.ReleaseID)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
 	release := data.(*ct.Release)
+	if err := releaseOwnedByApp(release, app); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	var artifactIDs []string
 	if len(newJob.ArtifactIDs) > 0 {
 		artifactIDs = newJob.ArtifactIDs
@@ -193,7 +204,6 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	uuid := random.UUID()
 	hostID := client.ID()
 	id := cluster.GenerateJobID(hostID, uuid)
-	app := c.getApp(ctx)
 	procType := ct.NewJobProcessType(newJob, attach)
 	name := ""
 	if existing, err := c.jobRepo.List(app.ID); err == nil {
@@ -359,11 +369,17 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	if app == nil || newJob == nil {
 		return nil, fmt.Errorf("missing job")
 	}
+	if err := sanitizeOneOffJob(app, newJob, nil); err != nil {
+		return nil, err
+	}
 	data, err := c.releaseRepo.Get(newJob.ReleaseID)
 	if err != nil {
 		return nil, err
 	}
 	release := data.(*ct.Release)
+	if err := releaseOwnedByApp(release, app); err != nil {
+		return nil, err
+	}
 	artifactIDs := newJob.ArtifactIDs
 	if len(artifactIDs) == 0 {
 		artifactIDs = release.ArtifactIDs
