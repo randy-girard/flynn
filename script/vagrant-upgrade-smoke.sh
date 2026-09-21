@@ -2734,12 +2734,14 @@ ensure_plugin_image() {
   fi
   local flynn_id stamp
   flynn_id="$(plugin_flynn_module_id)"
+  plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
   stamp="${dir}/dist/.flynn-module-id"
+  stamp_val="${flynn_id} ${plugin_id}"
   # A leftover dist/image.json is not enough: pre-stack plugin-build wrote a
   # ~35MiB overlay-only squashfs. Installing that makes redis scale hang 5m.
   # Dist also has to be compiled against this Flynn (SEC-003 Auth-Key); plugin
   # go.mod pins a published module that predates discoverd auth.
-  if plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${flynn_id}" ]]; then
+  if plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${stamp_val}" ]]; then
     echo "plugin image ready (${dir}/dist, ubuntu-noble + delta, flynn ${flynn_id:0:8})"
     return 0
   fi
@@ -2786,7 +2788,7 @@ EOF
     return 1
   fi
   mkdir -p "${dir}/dist"
-  printf '%s\n' "${flynn_id}" > "${stamp}"
+  printf '%s\n' "${stamp_val}" > "${stamp}"
 }
 
 # True when dist/image.json is Flynn ubuntu-noble plus a plugin delta, and every

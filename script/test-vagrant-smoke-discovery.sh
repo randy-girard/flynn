@@ -66,6 +66,8 @@ need "${docs}" 'flynn-plugin-discovery' \
   "development docs must list the discovery sibling as flynn-plugin-discovery"
 need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '127.0.0.1:1111' \
   "discovery ready hook must resolve discovery.discoverd via discoverd HTTP, not host DNS"
+need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" 'DISCOVERD_AUTH_KEY' \
+  "discovery ready hook must send DISCOVERD_AUTH_KEY when resolving *.discoverd (SEC-003)"
 need "${ROOT}/../flynn-plugin-discovery/script/ready.sh" '--resolve' \
   "discovery ready hook must curl --resolve the overlay addr like plugin wait probes"
 need "${ROOT}/docs/content/plugins.md" '../flynn-plugin-discovery' \
