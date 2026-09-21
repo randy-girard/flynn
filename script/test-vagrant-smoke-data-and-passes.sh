@@ -92,7 +92,7 @@ need 'post-upgrade-2' \
   "smoke must assert pass-1 markers still exist after the second upgrade"
 need 'sirenia_primary_read_write' \
   "smoke must wait for postgres/mariadb/mongodb after each upgrade pass"
-need 'add_header("Auth-Key"' \
+need 'DISCOVERD_AUTH_KEY' \
   "sirenia/discoverd probes must send DISCOVERD_AUTH_KEY (SEC-003)"
 need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
