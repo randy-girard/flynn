@@ -9,7 +9,16 @@ import (
 	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
-const DefaultTempDiskSize int64 = 100 * units.MiB
+const (
+	DefaultTempDiskSize int64 = 100 * units.MiB
+
+	// DefaultPidsLimit is the default cgroup pids.max (and max_procs) for
+	// every job. 4096 is high enough for postgres (max_connections plus
+	// background workers is typically well under 200) and build jobs
+	// (BuildKit nested runc plus parallel compile), while still bounding a
+	// fork bomb below kernel.pid_max. Override with the max_procs resource.
+	DefaultPidsLimit int64 = 4096
+)
 
 type Spec struct {
 	// Request, if set, is the amount of resource a job expects to consume,
@@ -54,12 +63,23 @@ var defaults = Resources{
 	TypeCPU:      {Limit: typeconv.Int64Ptr(1000)}, // results in Linux default of 1024 shares
 	TypeTempDisk: {Request: typeconv.Int64Ptr(DefaultTempDiskSize), Limit: typeconv.Int64Ptr(DefaultTempDiskSize)},
 	TypeMaxFD:    {Request: typeconv.Int64Ptr(10000), Limit: typeconv.Int64Ptr(10000)},
+	TypeMaxProcs: {Request: typeconv.Int64Ptr(DefaultPidsLimit), Limit: typeconv.Int64Ptr(DefaultPidsLimit)},
 }
 
 type Resources map[Type]Spec
 
 func (r Resources) SetLimit(typ Type, size int64) {
 	r[typ] = Spec{Request: typeconv.Int64Ptr(size), Limit: typeconv.Int64Ptr(size)}
+}
+
+// PidsLimit returns the cgroup pids.max for r. A positive max_procs Limit
+// overrides DefaultPidsLimit; missing or non-positive values use the default
+// so every job is capped (STAB-002).
+func PidsLimit(r Resources) int64 {
+	if spec, ok := r[TypeMaxProcs]; ok && spec.Limit != nil && *spec.Limit > 0 {
+		return *spec.Limit
+	}
+	return DefaultPidsLimit
 }
 
 func Defaults() Resources {
