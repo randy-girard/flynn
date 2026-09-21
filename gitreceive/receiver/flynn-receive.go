@@ -3,9 +3,6 @@ package main
 import (
 	"archive/tar"
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +20,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/dockerimage"
 	"github.com/randy-girard/flynn/pkg/exec"
@@ -135,12 +133,11 @@ func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) 
 
 // applyBuildCredential delivers the build credential to a job. When a signing
 // key is configured it mints an app-scoped token and delivers it via a root-only
-// secret mount. CONTROLLER_KEY is left in the job env so build.sh can relocate
-// it to /run/secrets/controller_key (SEC-003) as a fallback when the host has
-// not yet been updated to mount ContainerSecrets; create-artifact prefers the
-// mounted bearer token when present. build.sh unsets CONTROLLER_KEY before any
-// buildpack/Dockerfile step runs, so attacker-controlled build code still
-// cannot read the cluster key from the environment.
+// secret mount, then removes CONTROLLER_KEY from the job env (SEC-011). The
+// scoped token authenticates to the controller, tarreceive, and blobstore
+// slug/tarreceive paths. Hosts that cannot mount ContainerSecrets will fail
+// those builds until they are updated; clusters without a signing key keep
+// the legacy CONTROLLER_KEY env (still relocated by build.sh, SEC-003).
 func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App, releaseEnv map[string]string) error {
 	if signer == nil {
 		return nil
@@ -153,6 +150,9 @@ func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App
 		Path: buildTokenPath,
 		Data: []byte(token),
 	})
+	if job.Config.Env != nil {
+		delete(job.Config.Env, "CONTROLLER_KEY")
+	}
 	return nil
 }
 
@@ -168,9 +168,7 @@ func signedDockerBuildCacheURL(appID, key string) string {
 }
 
 func signedNamedCacheURL(appID, key, name string) string {
-	mac := hmac.New(sha256.New, []byte(key))
-	mac.Write([]byte(appID))
-	token := hex.EncodeToString(mac.Sum(nil))
+	token := blobstoreauth.CacheToken(appID, key)
 	return fmt.Sprintf("%s/%s-%s.tgz?token=%s", blobstoreURL, appID, name, token)
 }
 

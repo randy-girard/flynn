@@ -18,6 +18,7 @@ import (
 	"github.com/docker/go-units"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/squashfs"
 	"github.com/randy-girard/flynn/pkg/typeconv"
@@ -211,6 +212,7 @@ func upload(data io.Reader, url string) error {
 	if err != nil {
 		return err
 	}
+	blobstoreauth.Apply(req)
 	res, err := hh.RetryClient.Do(req)
 	if err != nil {
 		return err

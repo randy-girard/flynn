@@ -23,6 +23,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/archive"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/squashfs"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -104,7 +105,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleGetLayer(w http.ResponseWriter, r *http.Request, p httprouter.Params) {
 	id := p.ByName("id")
-	res, err := httphelper.RetryClient.Get(utils.ConfigURL(id))
+	req, err := http.NewRequest("GET", utils.ConfigURL(id), nil)
+	if err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	blobstoreauth.Apply(req)
+	res, err := httphelper.RetryClient.Do(req)
 	if err != nil {
 		httphelper.Error(w, err)
 		return
@@ -264,6 +271,7 @@ func upload(data io.Reader, url string) error {
 	if err != nil {
 		return err
 	}
+	blobstoreauth.Apply(req)
 	res, err := httphelper.RetryClient.Do(req)
 	if err != nil {
 		return err

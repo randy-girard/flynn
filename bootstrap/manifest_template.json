@@ -320,6 +320,10 @@
     },
     "artifacts": [$image_artifact[blobstore]],
     "release": {
+      "env": {
+        "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
+      },
       "processes": {
         "web": {
           "ports": [{"port": 80, "proto": "tcp"}],
@@ -605,7 +609,7 @@
   {
     "id": "blobstore-wait",
     "action": "wait",
-    "url": "http://blobstore.discoverd",
+    "url": "http://blobstore.discoverd/.well-known/status",
     "status": 200
   },
   {

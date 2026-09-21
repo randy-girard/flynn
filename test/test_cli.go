@@ -1222,6 +1222,7 @@ func (s *CLISuite) TestSlugReleaseGarbageCollection(t *c.C) {
 	put := func(url string, data []byte) {
 		req, err := http.NewRequest("PUT", url, bytes.NewReader(data))
 		t.Assert(err, c.IsNil)
+		req.SetBasicAuth("", s.clusterConf(t).Key)
 		res, err := http.DefaultClient.Do(req)
 		t.Assert(err, c.IsNil)
 		res.Body.Close()

@@ -15,6 +15,7 @@ import (
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/archive"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	tarclient "github.com/randy-girard/flynn/tarreceive/client"
 )
@@ -163,6 +164,7 @@ func uploadManifest(data []byte, url string) error {
 	if err != nil {
 		return err
 	}
+	blobstoreauth.Apply(req)
 	res, err := hh.RetryClient.Do(req)
 	if err != nil {
 		return err
