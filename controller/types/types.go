@@ -638,6 +638,7 @@ const (
 	EventTypeAppRelease              EventType = "app_release"
 	EventTypeDeployment              EventType = "deployment"
 	EventTypeJob                     EventType = "job"
+	EventTypeCrashLoop               EventType = "crash_loop"
 	EventTypeScaleRequest            EventType = "scale_request"
 	EventTypeScaleRequestCancelation EventType = "scale_request_cancelation"
 	EventTypeRelease                 EventType = "release"
@@ -667,6 +668,10 @@ const (
 	// create and wait for scale requests)
 	EventTypeDeprecatedScale EventType = "scale"
 )
+
+// CrashLoopEventRestarts is the consecutive scheduler restart count at which a
+// crash_loop event is emitted. First crashes and rolling deploys stay below it.
+const CrashLoopEventRestarts int32 = 15
 
 type EventOp string
 
