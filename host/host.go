@@ -157,17 +157,11 @@ Options:
 		for k, v := range c.Env {
 			os.Setenv(k, v)
 		}
-	} else if os.Getenv("FLYNN_HOST_AUTH_KEY") == "" {
-		// CLI subcommands (ps, inspect, log, stop, ...) build a cluster client
-		// that authenticates to the daemon with FLYNN_HOST_AUTH_KEY from the
-		// environment. When the daemon has auth enabled, load the key from the
-		// host config file so the CLI can authenticate without the operator
-		// exporting it manually.
-		if key, err := config.LoadAuthKey(configFile); err != nil {
-			shutdown.Fatalf("error loading host auth key: %s", err)
-		} else if key != "" {
-			os.Setenv("FLYNN_HOST_AUTH_KEY", key)
-		}
+	} else if err := config.ApplySecretsToEnv(configFile); err != nil {
+		// CLI subcommands authenticate to the host API, discoverd, and
+		// controller with secrets from host.json when they are not already
+		// exported in the environment.
+		shutdown.Fatalf("error loading host config secrets: %s", err)
 	}
 
 	cmd, cmdArgs, from := cli.ResolveCommand(cmd, cmdArgs)

@@ -22,9 +22,28 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	}
 	key := data.Data
 
+	extra := map[string]string{}
+	if dkey := s.DiscoverdAuthKey(); dkey != "" {
+		extra["DISCOVERD_AUTH_KEY"] = dkey
+		os.Setenv("DISCOVERD_AUTH_KEY", dkey)
+	}
+	ck := s.controllerKey
+	if ck == "" {
+		if d, ok := s.StepData["controller-key"].(*RandomData); ok {
+			ck = d.Data
+		}
+	}
+	if ck != "" {
+		extra["AUTH_KEY"] = ck
+		extra["CONTROLLER_KEY"] = ck
+		os.Setenv("AUTH_KEY", ck)
+		os.Setenv("CONTROLLER_KEY", ck)
+		s.SetControllerKey(ck)
+	}
+
 	clientKey := os.Getenv("FLYNN_HOST_AUTH_KEY")
 	for _, h := range s.Hosts {
-		if err := configureHostAuthOn(h, key, clientKey); err != nil {
+		if err := configureHostAuthOn(h, key, clientKey, extra); err != nil {
 			return fmt.Errorf("bootstrap: error configuring host auth on %s: %s", h.Addr(), err)
 		}
 	}
@@ -45,14 +64,14 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	return nil
 }
 
-func configureHostAuthOn(h *cluster.Host, key, clientKey string) error {
+func configureHostAuthOn(h *cluster.Host, key, clientKey string, extra map[string]string) error {
 	var last error
 	for _, addr := range configureAuthDialAddrs(h.Addr()) {
 		client := cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), clientKey)
-		err := client.ConfigureAuthKey(key)
+		err := client.ConfigureHostSecrets(key, extra)
 		if err != nil && clientKey != "" {
 			client = cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), "")
-			err = client.ConfigureAuthKey(key)
+			err = client.ConfigureHostSecrets(key, extra)
 		}
 		if err == nil {
 			return nil

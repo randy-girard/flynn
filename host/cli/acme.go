@@ -157,7 +157,7 @@ func getControllerClient() (controller.Client, error) {
 		return dialer.Default.Dial(network, addr)
 	}
 	httpClient := &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
-	return controller.NewClientWithHTTP("http://controller.discoverd", instances[0].Meta["AUTH_KEY"], httpClient)
+	return controller.NewClientWithHTTP("http://controller.discoverd", controller.KeyFromEnvOrMeta(instances[0].Meta), httpClient)
 }
 
 func runACMEConfigure(args *docopt.Args, client controller.Client) error {

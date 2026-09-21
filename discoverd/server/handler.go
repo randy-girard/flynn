@@ -340,8 +340,8 @@ func (h *Handler) serveGetInstances(w http.ResponseWriter, r *http.Request, para
 		return
 	}
 
-	// Write instances to the response.
-	hh.JSON(w, 200, instances)
+	// Write instances to the response. AUTH_KEY is never returned (SEC-028).
+	hh.JSON(w, 200, redactInstances(instances))
 }
 
 // servePutLeader sets the leader for a service.
@@ -392,8 +392,8 @@ func (h *Handler) serveGetLeader(w http.ResponseWriter, r *http.Request, params 
 		return
 	}
 
-	// Write leader to the response.
-	hh.JSON(w, 200, leader)
+	// Write leader to the response. AUTH_KEY is never returned (SEC-028).
+	hh.JSON(w, 200, redactInstance(leader))
 }
 
 // servePing returns a 200 OK.
@@ -440,10 +440,32 @@ func (h *Handler) serveStream(w http.ResponseWriter, params httprouter.Params, k
 	service := params.ByName("service")
 	stream := h.Store.Subscribe(service, true, kind, ch)
 
+	redacted := make(chan *discoverd.Event, StreamBufferSize)
+	done := make(chan struct{})
+	go func() {
+		defer close(redacted)
+		for {
+			select {
+			case ev, ok := <-ch:
+				if !ok {
+					return
+				}
+				select {
+				case redacted <- redactEvent(ev):
+				case <-done:
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	// Create and serve an SSE stream.
-	s := sse.NewStream(w, ch, nil)
+	s := sse.NewStream(w, redacted, nil)
 	s.Serve()
 	s.Wait()
+	close(done)
 	stream.Close()
 
 	// Check if there was an error while closing.
@@ -528,4 +550,52 @@ func redirectToHost(w http.ResponseWriter, r *http.Request, hostport string) {
 
 	// Redirect request to new host.
 	http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
+}
+
+// instanceAuthKeyMeta is the controller cluster-admin key previously published
+// on discoverd instances (SEC-028). It is stored for mixed-version fallback
+// but never returned over the HTTP API.
+const instanceAuthKeyMeta = "AUTH_KEY"
+
+func redactInstance(inst *discoverd.Instance) *discoverd.Instance {
+	if inst == nil || inst.Meta == nil {
+		return inst
+	}
+	if _, ok := inst.Meta[instanceAuthKeyMeta]; !ok {
+		return inst
+	}
+	cp := *inst
+	meta := make(map[string]string, len(inst.Meta)-1)
+	for k, v := range inst.Meta {
+		if k == instanceAuthKeyMeta {
+			continue
+		}
+		meta[k] = v
+	}
+	cp.Meta = meta
+	return &cp
+}
+
+func redactInstances(instances []*discoverd.Instance) []*discoverd.Instance {
+	if len(instances) == 0 {
+		return instances
+	}
+	out := make([]*discoverd.Instance, len(instances))
+	for i, inst := range instances {
+		out[i] = redactInstance(inst)
+	}
+	return out
+}
+
+func redactEvent(ev *discoverd.Event) *discoverd.Event {
+	if ev == nil || ev.Instance == nil {
+		return ev
+	}
+	redacted := redactInstance(ev.Instance)
+	if redacted == ev.Instance {
+		return ev
+	}
+	cp := *ev
+	cp.Instance = redacted
+	return &cp
 }

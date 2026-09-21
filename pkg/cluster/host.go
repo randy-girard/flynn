@@ -225,7 +225,17 @@ func (c *Host) ListVolumes() ([]*volume.Info, error) {
 // ConfigureAuthKey persists an auth key in the target host's config and
 // restarts the daemon so it takes effect.
 func (c *Host) ConfigureAuthKey(key string) error {
-	return c.c.Post("/host/auth-key", map[string]string{"key": key}, nil)
+	return c.ConfigureHostSecrets(key, nil)
+}
+
+// ConfigureHostSecrets persists the host API key plus extra env (for example
+// DISCOVERD_AUTH_KEY) in the target host's config and restarts the daemon.
+func (c *Host) ConfigureHostSecrets(key string, env map[string]string) error {
+	body := map[string]interface{}{"key": key}
+	if len(env) > 0 {
+		body["env"] = env
+	}
+	return c.c.Post("/host/auth-key", body, nil)
 }
 
 // CleanupImageData removes orphaned image tmp/mnt dirs and unreferenced

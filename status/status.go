@@ -153,7 +153,14 @@ func controllerReqFn() (*http.Request, error) {
 	if err != nil {
 		return nil, err
 	}
-	req.SetBasicAuth("", instances[0].Meta["AUTH_KEY"])
+	// AUTH_KEY in this app is the status API key, not the cluster controller
+	// key. Prefer CONTROLLER_KEY; fall back to discoverd instance meta for
+	// mixed-version rolling updates (SEC-028).
+	key := strings.TrimSpace(os.Getenv("CONTROLLER_KEY"))
+	if key == "" && instances[0].Meta != nil {
+		key = strings.TrimSpace(instances[0].Meta["AUTH_KEY"])
+	}
+	req.SetBasicAuth("", key)
 	return req, nil
 }
 

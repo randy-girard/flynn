@@ -45,6 +45,16 @@ var ErrShutdown = errors.New("controller: shutting down")
 
 var schemaRoot = "/etc/flynn-controller/jsonschema"
 
+// controllerHTTPInstance is the discoverd registration for the controller HTTP
+// API. AUTH_KEY is intentionally omitted (SEC-028); consumers use AUTH_KEY or
+// CONTROLLER_KEY from their environment.
+func controllerHTTPInstance(addr string) *discoverd.Instance {
+	return &discoverd.Instance{
+		Addr:  addr,
+		Proto: "http",
+	}
+}
+
 func main() {
 	defer shutdown.Exit()
 
@@ -91,13 +101,7 @@ func main() {
 	// Listen for database migration, reset connpool on new migration
 	go postgres.ResetOnMigration(db, logger, doneCh)
 
-	httpService, err := discoverd.DefaultClient.AddServiceAndRegisterInstance("controller", &discoverd.Instance{
-		Addr:  httpAddr,
-		Proto: "http",
-		Meta: map[string]string{
-			"AUTH_KEY": os.Getenv("AUTH_KEY"),
-		},
-	})
+	httpService, err := discoverd.DefaultClient.AddServiceAndRegisterInstance("controller", controllerHTTPInstance(httpAddr))
 	if err != nil {
 		shutdown.Fatal(err)
 	}

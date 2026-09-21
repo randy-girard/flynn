@@ -11,6 +11,18 @@
     "data": "{{ getenv \"FLYNN_HOST_AUTH_KEY\" }}"
   },
   {
+    "id": "discoverd-key",
+    "action": "gen-random",
+    "discoverd_auth_key": true,
+    "data": "{{ getenv \"DISCOVERD_AUTH_KEY\" }}"
+  },
+  {
+    "id": "controller-key",
+    "action": "gen-random",
+    "controller_key": true,
+    "data": "{{ getenv \"CONTROLLER_KEY\" }}"
+  },
+  {
     "id": "configure-host-auth",
     "action": "configure-host-auth"
   },
@@ -39,7 +51,8 @@
         "DISCOVERD_PEERS": "{{ range $ip := .SortedHostIPs }}{{ $ip }}:1111,{{ end }}",
         "DISCOVERD": "none",
         "DEBUG": "{{ getenv \"DEBUG\" }}",
-        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -68,7 +81,8 @@
         "DISCOVERD": "none",
         "BACKEND": "{{ getenv \"FLANNEL_BACKEND\" }}",
         "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}",
-        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}"
+        "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -109,7 +123,8 @@
         "PGUSER": "flynn",
         "PGPASSWORD": "{{ (index .StepData \"pg-password\").Data }}",
         "SIRENIA_PROCESS": "postgres",
-        "SINGLETON": "{{ .Singleton }}"
+        "SINGLETON": "{{ .Singleton }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },
       "processes": {
         "postgres": {
@@ -129,12 +144,6 @@
       "postgres": 3,
       "web": 2
     }
-  },
-  {
-    "id": "controller-key",
-    "action": "gen-random",
-    "controller_key": true,
-    "data": "{{ getenv \"CONTROLLER_KEY\" }}"
   },
   {
     "id": "access-token-key",
@@ -188,6 +197,7 @@
         "TELEMETRY_BOOTSTRAP_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
         "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
         "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
         "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
@@ -322,7 +332,8 @@
     "release": {
       "env": {
         "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },
       "processes": {
         "web": {
@@ -350,7 +361,10 @@
         "TLSCERT": "{{ (index .StepData \"controller-cert\").Cert }}",
         "TLSKEY": "{{ (index .StepData \"controller-cert\").PrivateKey }}",
         "COOKIE_KEY": "{{ (index .StepData \"router-sticky-key\").Data }}",
-        "PROXY_PROTOCOL": "{{ getenv \"PROXY_PROTOCOL\" }}"
+        "PROXY_PROTOCOL": "{{ getenv \"PROXY_PROTOCOL\" }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}"
       },
       "processes": {
         "app": {
@@ -374,6 +388,11 @@
     },
     "artifacts": [$image_artifact[acme]],
     "release": {
+      "env": {
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}"
+      },
       "processes": {
         "app": {
           "args": ["/bin/flynn-acme"],
@@ -397,6 +416,7 @@
     "release": {
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
         "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
         "ACCESS_TOKEN_SIGNING_KEY": "{{ (index .StepData \"access-token-key\").PrivateKey }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
@@ -436,6 +456,7 @@
       "env": {
         "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
         "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
       },
       "processes": {
@@ -531,6 +552,9 @@
     },
     "artifacts": [$image_artifact[logaggregator]],
     "release": {
+      "env": {
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
+      },
       "processes": {
         "app": {
           "args": ["/bin/logaggregator"],
@@ -556,6 +580,7 @@
     "release": {
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
         "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
         "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"
@@ -577,7 +602,9 @@
     "artifacts": [$image_artifact[status]],
     "release": {
       "env": {
-        "AUTH_KEY": "{{ (index .StepData \"status-key\").Data }}"
+        "AUTH_KEY": "{{ (index .StepData \"status-key\").Data }}",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
+        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },
       "processes": {
         "web": {

@@ -38,7 +38,6 @@ Examples:
         "addr": "100.100.36.4:80",
         "proto": "http",
         "meta": {
-          "AUTH_KEY": "9b7b3b382f13425da3a8cb390f0937b8",
           "FLYNN_APP_ID": "2169984c-c15f-499d-be77-636612425330",
           "FLYNN_JOB_ID": "host-b773161b-3e50-43ec-bb38-5c492c2ba2fa",
           "FLYNN_PROCESS_TYPE": "web",
@@ -52,7 +51,6 @@ Examples:
           "addr": "100.100.36.4:80",
           "proto": "http",
           "meta": {
-            "AUTH_KEY": "9b7b3b382f13425da3a8cb390f0937b8",
             "FLYNN_APP_ID": "2169984c-c15f-499d-be77-636612425330",
             "FLYNN_JOB_ID": "host-b773161b-3e50-43ec-bb38-5c492c2ba2fa",
             "FLYNN_PROCESS_TYPE": "web",

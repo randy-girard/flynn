@@ -35,14 +35,29 @@ type State struct {
 	HostTimeout time.Duration
 	JobTimeout  time.Duration
 
-	discoverd     *discoverd.Client
-	controller    controller.Client
-	controllerKey string
-	hostAuthKey   string
+	discoverd        *discoverd.Client
+	controller       controller.Client
+	controllerKey    string
+	hostAuthKey      string
+	discoverdAuthKey string
 }
 
 func (s *State) SetHostAuthKey(key string) {
 	s.hostAuthKey = key
+}
+
+func (s *State) SetDiscoverdAuthKey(key string) {
+	s.discoverdAuthKey = key
+	if key != "" {
+		os.Setenv("DISCOVERD_AUTH_KEY", key)
+	}
+}
+
+func (s *State) DiscoverdAuthKey() string {
+	if s.discoverdAuthKey != "" {
+		return s.discoverdAuthKey
+	}
+	return os.Getenv("DISCOVERD_AUTH_KEY")
 }
 
 // HostAuthKey returns the cluster host API auth key, falling back to the

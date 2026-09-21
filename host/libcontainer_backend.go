@@ -989,8 +989,13 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// deliberately excluded so they cannot authenticate to the host API. See
 	// isSystemJob for the full rationale.
 	systemEnv := map[string]string{}
-	if l.host != nil && l.host.authKey != "" && isSystemJob(job) {
-		systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
+	if isSystemJob(job) {
+		if l.host != nil && l.host.authKey != "" {
+			systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
+		}
+		if key := os.Getenv("DISCOVERD_AUTH_KEY"); key != "" {
+			systemEnv["DISCOVERD_AUTH_KEY"] = key
+		}
 	}
 	userEnv := userJobInitEnv(job)
 	l.envMtx.RLock()

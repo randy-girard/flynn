@@ -475,7 +475,7 @@ func controllerClient() (controller.Client, error) {
 		return nil, err
 	}
 	inst := instances[0]
-	return controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+	return controller.NewClient("http://"+inst.Addr, controller.KeyFromEnvOrMeta(inst.Meta))
 }
 
 func loadHostImage(path string) (*ct.Artifact, error) {

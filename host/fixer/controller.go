@@ -16,7 +16,7 @@ import (
 func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startScheduler bool) error {
 	f.l.Info("found controller instance, checking critical formations")
 	inst := instances[0]
-	client, err := controller.NewClient("http://"+inst.Addr, inst.Meta["AUTH_KEY"])
+	client, err := controller.NewClient("http://"+inst.Addr, controller.KeyFromEnvOrMeta(inst.Meta))
 	if err != nil {
 		return fmt.Errorf("unexpected error creating controller client: %s", err)
 	}

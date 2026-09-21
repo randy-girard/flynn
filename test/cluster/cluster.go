@@ -288,7 +288,7 @@ func (c *Cluster) setup() error {
 	if err != nil {
 		return err
 	}
-	client, err := controller.NewClient("", instances[0].Meta["AUTH_KEY"])
+	client, err := controller.NewClient("", controller.KeyFromEnvOrMeta(instances[0].Meta))
 	if err != nil {
 		return err
 	}

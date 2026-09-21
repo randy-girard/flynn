@@ -120,3 +120,48 @@ func TestPersistEnvAuthKeyNoopAndSet(t *testing.T) {
 		t.Fatalf("args=%v", opened.Args)
 	}
 }
+
+func TestSetEnvMergesSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	if err := SetAuthKey(path, "host-secret"); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetEnv(path, map[string]string{
+		"DISCOVERD_AUTH_KEY": "disc-secret",
+		"AUTH_KEY":           "controller-secret",
+		"CONTROLLER_KEY":     "controller-secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Env["FLYNN_HOST_AUTH_KEY"] != "host-secret" {
+		t.Fatalf("host key clobbered: %v", c.Env)
+	}
+	if c.Env["DISCOVERD_AUTH_KEY"] != "disc-secret" {
+		t.Fatalf("discoverd key: %v", c.Env)
+	}
+}
+
+func TestApplySecretsToEnv(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	if err := SetEnv(path, map[string]string{
+		"FLYNN_HOST_AUTH_KEY": "host-secret",
+		"DISCOVERD_AUTH_KEY":  "disc-secret",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "already")
+	t.Setenv("DISCOVERD_AUTH_KEY", "")
+	if err := ApplySecretsToEnv(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("FLYNN_HOST_AUTH_KEY") != "already" {
+		t.Fatal("must not override existing env")
+	}
+	if os.Getenv("DISCOVERD_AUTH_KEY") != "disc-secret" {
+		t.Fatalf("DISCOVERD_AUTH_KEY=%q", os.Getenv("DISCOVERD_AUTH_KEY"))
+	}
+}
