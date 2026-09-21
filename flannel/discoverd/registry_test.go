@@ -137,6 +137,33 @@ func TestUpdateSubnet(t *testing.T) {
 	s.assertSubnets(map[string][]byte{"10.3.1.0-24": []byte(`{"PublicIP":"4.5.6.7"}`)})
 }
 
+func TestGetSubnetsPrunesDeadHosts(t *testing.T) {
+	s := newTest(t)
+	defer s.cleanup()
+
+	if _, err := s.registry.CreateSubnet("10.3.1.0-24", `{"PublicIP":"1.2.3.4"}`, 0); err != nil {
+		t.Fatalf("error creating live subnet: %s", err)
+	}
+	if _, err := s.registry.CreateSubnet("10.3.2.0-24", `{"PublicIP":"5.6.7.8"}`, 0); err != nil {
+		t.Fatalf("error creating dead subnet: %s", err)
+	}
+
+	hb, err := s.client.Register("flannel-test", "1.2.3.4:5001")
+	if err != nil {
+		t.Fatalf("error registering instance: %s", err)
+	}
+	defer hb.Close()
+
+	res, err := s.registry.GetSubnets()
+	if err != nil {
+		t.Fatalf("error getting subnets: %s", err)
+	}
+	expected := map[string][]byte{"10.3.1.0-24": []byte(`{"PublicIP":"1.2.3.4"}`)}
+	if !reflect.DeepEqual(res.Subnets, expected) {
+		t.Fatalf("unexpected subnets, expected %s, got %s", expected, res.Subnets)
+	}
+}
+
 func TestWatchSubnets(t *testing.T) {
 	s := newTest(t)
 	defer s.cleanup()

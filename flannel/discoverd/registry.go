@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"time"
 
+	log "github.com/golang/glog"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/flannel/subnet"
 )
@@ -44,7 +46,7 @@ func (r *registry) GetConfig() ([]byte, error) {
 }
 
 func (r *registry) GetSubnets() (*subnet.Response, error) {
-	net, err := r.getNetwork()
+	net, err := r.getNetworkPruned()
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +59,7 @@ func rawJSON(s string) *json.RawMessage {
 }
 
 func (r *registry) CreateSubnet(sn, data string, ttl uint64) (*subnet.Response, error) {
-	net, err := r.getNetwork()
+	net, err := r.getNetworkPruned()
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +77,7 @@ func (r *registry) CreateSubnet(sn, data string, ttl uint64) (*subnet.Response, 
 }
 
 func (r *registry) UpdateSubnet(sn, data string, ttl uint64) (*subnet.Response, error) {
-	net, err := r.getNetwork()
+	net, err := r.getNetworkPruned()
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +104,12 @@ func (r *registry) WatchSubnets(since uint64, stop chan bool) (*subnet.Response,
 		case event, ok := <-r.events:
 			if !ok {
 				return nil, errors.New("unexpected close of discoverd event stream")
+			}
+			if event.Kind == discoverd.EventKindDown {
+				if net, err := r.getNetwork(); err == nil {
+					r.pruneOrphans(net)
+				}
+				continue
 			}
 			if event.Kind != discoverd.EventKindServiceMeta {
 				continue
@@ -140,6 +148,40 @@ func (r *registry) getNetwork() (*Network, error) {
 	return net, nil
 }
 
+// getNetworkPruned loads service meta and drops subnet leases whose host is
+// no longer registered as a flannel discoverd instance.
+func (r *registry) getNetworkPruned() (*Network, error) {
+	net, err := r.getNetwork()
+	if err != nil {
+		return nil, err
+	}
+	r.pruneOrphans(net)
+	return net, nil
+}
+
+// pruneOrphans removes leases that do not belong to a live flannel instance
+// and persists the result. If no instances are visible, leases are left
+// untouched so a live host is never reclaimed while discoverd is empty or
+// unreachable.
+func (r *registry) pruneOrphans(net *Network) {
+	instances, err := discoverd.InstancesOrEmpty(r.service)
+	if err != nil {
+		return
+	}
+	if len(instances) == 0 {
+		return
+	}
+	kept, removed := pruneExpiredSubnets(net.Subnets, liveInstanceHosts(instances))
+	if len(removed) == 0 {
+		return
+	}
+	net.Subnets = kept
+	if err := r.setNetwork(net); err != nil {
+		return
+	}
+	log.Infof("pruned %d expired flannel subnet lease(s): %v", len(removed), removed)
+}
+
 func (r *registry) setNetwork(net *Network) error {
 	data, err := json.Marshal(net)
 	if err != nil {
@@ -154,11 +196,66 @@ func (r *registry) setNetwork(net *Network) error {
 }
 
 func newResponse(net *Network) *subnet.Response {
-	// set a far future expiry as discoverd meta does not currently support ttl.
+	// Expiration is a placeholder: discoverd service meta has no TTL.
+	// Leases are reclaimed when the host's flannel instance disappears.
 	exp := time.Now().AddDate(10, 0, 0)
 	subnets := make(map[string][]byte, len(net.Subnets))
 	for subnet, data := range net.Subnets {
 		subnets[subnet] = []byte(*data)
 	}
 	return &subnet.Response{Subnets: subnets, Index: net.index, Expiration: &exp}
+}
+
+func leasePublicIP(data []byte) (string, bool) {
+	var attrs struct {
+		PublicIP string `json:"PublicIP"`
+	}
+	if err := json.Unmarshal(data, &attrs); err != nil || attrs.PublicIP == "" {
+		return "", false
+	}
+	return attrs.PublicIP, true
+}
+
+func liveInstanceHosts(instances []*discoverd.Instance) map[string]struct{} {
+	hosts := make(map[string]struct{}, len(instances))
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		host := inst.Host()
+		if host == "" {
+			continue
+		}
+		hosts[host] = struct{}{}
+	}
+	return hosts
+}
+
+// pruneExpiredSubnets drops leases whose PublicIP is not among liveHosts.
+// Leases with missing or unparseable attrs are kept so a live host is never
+// reclaimed due to a decode error.
+func pruneExpiredSubnets(subnets map[string]*json.RawMessage, liveHosts map[string]struct{}) (map[string]*json.RawMessage, []string) {
+	if len(subnets) == 0 {
+		return subnets, nil
+	}
+	kept := make(map[string]*json.RawMessage, len(subnets))
+	var removed []string
+	for sn, data := range subnets {
+		if data == nil {
+			kept[sn] = data
+			continue
+		}
+		ip, ok := leasePublicIP(*data)
+		if !ok {
+			kept[sn] = data
+			continue
+		}
+		if _, live := liveHosts[ip]; live {
+			kept[sn] = data
+			continue
+		}
+		removed = append(removed, sn)
+	}
+	sort.Strings(removed)
+	return kept, removed
 }

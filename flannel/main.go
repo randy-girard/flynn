@@ -318,6 +318,25 @@ func run(be backend.Backend, sm *subnet.SubnetManager, exit chan int) {
 
 	log.Infof("Using %s as external interface", ipaddr)
 
+	// Register the flannel instance before acquiring a subnet lease so
+	// pruneExpiredSubnets will treat this host as live and will not reclaim
+	// its /24. Closing the heartbeater on exit lets the lease expire with
+	// the instance.
+	var hb disc.Heartbeater
+	if opts.discoverdURL != "" {
+		client := disc.NewClientWithURL(opts.discoverdURL)
+		addr := net.JoinHostPort(ipaddr.String(), opts.httpPort)
+		for {
+			hb, err = client.AddServiceAndRegister("flannel", addr)
+			if err == nil {
+				break
+			}
+			log.Error("Failed to register flannel instance: ", err)
+			time.Sleep(time.Second)
+		}
+		defer hb.Close()
+	}
+
 	sn, err := be.Init(iface, ipaddr, opts.httpPort, opts.ipMasq)
 	if err != nil {
 		return
@@ -329,9 +348,6 @@ func run(be backend.Backend, sm *subnet.SubnetManager, exit chan int) {
 	if err = httpServer(sm, ipaddr.String(), opts.httpPort); err != nil {
 		err = fmt.Errorf("error starting HTTP server: %s", err)
 		return
-	}
-	if opts.discoverdURL != "" {
-		disc.NewClientWithURL(opts.discoverdURL).AddServiceAndRegister("flannel", net.JoinHostPort(ipaddr.String(), opts.httpPort))
 	}
 
 	log.Infof("%s mode initialized", be.Name())
