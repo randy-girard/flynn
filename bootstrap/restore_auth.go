@@ -59,6 +59,10 @@ func (a *ConfigureRestoreAuthAction) Run(s *State) error {
 	}
 	if ck := extra["CONTROLLER_KEY"]; ck != "" {
 		s.SetControllerKey(ck)
+		// Sirenia wait polls appliance /status from this process. The
+		// client reads CONTROLLER_KEY from the environment, not from state.
+		os.Setenv("AUTH_KEY", ck)
+		os.Setenv("CONTROLLER_KEY", ck)
 	}
 	if err := waitForHostAuth(s); err != nil {
 		return err

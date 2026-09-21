@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -67,5 +68,8 @@ func TestConfigureRestoreAuthPushesDiscoverdKey(t *testing.T) {
 	}
 	if s.DiscoverdAuthKey() != "disc-secret" {
 		t.Fatalf("state discoverd key=%q", s.DiscoverdAuthKey())
+	}
+	if os.Getenv("CONTROLLER_KEY") != "ctl-secret" || os.Getenv("AUTH_KEY") != "ctl-secret" {
+		t.Fatalf("bootstrap process must see the controller key for appliance /status, CONTROLLER_KEY=%q AUTH_KEY=%q", os.Getenv("CONTROLLER_KEY"), os.Getenv("AUTH_KEY"))
 	}
 }
