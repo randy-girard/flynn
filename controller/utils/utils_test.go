@@ -9,6 +9,7 @@ import (
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/stream"
 )
 
@@ -273,5 +274,50 @@ func TestFormationKeyString(t *testing.T) {
 	k := NewFormationKey("a", "r")
 	if k.String() != "a:r" {
 		t.Fatalf("%s", k)
+	}
+}
+
+type fakeVolumeCreator struct {
+	got *volume.Info
+}
+
+func (f *fakeVolumeCreator) CreateVolume(_ string, info *volume.Info) error {
+	if info.ID == "" {
+		info.ID = "vol-created"
+	}
+	cp := *info
+	f.got = &cp
+	return nil
+}
+
+func TestProvisionVolumeCopiesSize(t *testing.T) {
+	const size int64 = 4 * 1024 * 1024 * 1024
+	h := &fakeVolumeCreator{}
+	job := &host.Job{Metadata: map[string]string{
+		"flynn-controller.app":     "app",
+		"flynn-controller.release": "rel",
+		"flynn-controller.type":    "web",
+	}}
+	info, err := ProvisionVolume(&ct.VolumeReq{Path: "/data", Size: size}, h, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size != size {
+		t.Fatalf("returned Size=%d, want %d", info.Size, size)
+	}
+	if h.got == nil || h.got.Size != size {
+		t.Fatalf("host create Size=%v, want %d", h.got, size)
+	}
+}
+
+func TestProvisionVolumeZeroSizeIsUnset(t *testing.T) {
+	h := &fakeVolumeCreator{}
+	job := &host.Job{Metadata: map[string]string{}}
+	info, err := ProvisionVolume(&ct.VolumeReq{Path: "/data"}, h, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Size != 0 {
+		t.Fatalf("unset Size should stay 0 so the host applies DefaultSize, got %d", info.Size)
 	}
 }

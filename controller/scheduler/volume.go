@@ -33,6 +33,7 @@ func (v *Volume) Info() *volume.Info {
 		ID:   v.ID,
 		Type: v.Type,
 		Meta: v.Meta,
+		Size: v.Size,
 	}
 }
 
@@ -49,6 +50,7 @@ func NewVolume(info *volume.Info, state ct.VolumeState, hostID string) *Volume {
 			VolumeReq: ct.VolumeReq{
 				Path:         info.Meta["flynn-controller.path"],
 				DeleteOnStop: info.Meta["flynn-controller.delete_on_stop"] == "true",
+				Size:         info.Size,
 			},
 			ID:        info.ID,
 			HostID:    hostID,

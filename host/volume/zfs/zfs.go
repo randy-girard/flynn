@@ -185,6 +185,7 @@ func (p *Provider) NewVolume(info *volume.Info) (volume.Volume, error) {
 	}
 	info.Type = volume.VolumeTypeData
 	info.CreatedAt = time.Now()
+	info.Size = volume.RefquotaBytes(info)
 	v := &zfsVolume{
 		info:      info,
 		provider:  p,
@@ -198,9 +199,7 @@ func (p *Provider) NewVolume(info *volume.Info) (volume.Volume, error) {
 	//   cannot mount 'flynn-default/data/xxx': mountpoint or dataset is busy
 	//   filesystem successfully created, but not mounted
 	err := zfsCreateAttempts.Run(func() (err error) {
-		v.dataset, err = zfs.CreateFilesystem(p.datasetPath(info), map[string]string{
-			"mountpoint": v.basemount,
-		})
+		v.dataset, err = zfs.CreateFilesystem(p.datasetPath(info), volume.DataFilesystemProps(v.basemount, info))
 		if err != nil {
 			// destroy the volume before trying again so we don't
 			// get "dataset already exists" on the next try
@@ -646,6 +645,8 @@ func (p *Provider) RestoreVolumeState(volInfo *volume.Info, data json.RawMessage
 	if err := json.Unmarshal(data, record); err != nil {
 		return nil, fmt.Errorf("cannot restore volume %q: %s", volInfo.ID, err)
 	}
+	// Do not set refquota here: upgrading must not resize or cap existing
+	// datasets. NewVolume applies refquota only on create.
 	// handle legacy info which don't have a Type
 	if volInfo.Type == "" {
 		if record.Filesystem != nil {
