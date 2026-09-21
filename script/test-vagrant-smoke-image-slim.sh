@@ -218,6 +218,12 @@ need "${smoke}" 'pg_available_extensions' \
   "smoke must verify postgres still ships postgis/pgrouting/timescaledb"
 need "${smoke}" 'mongodb dump' \
   "smoke must run flynn mongodb dump against the slimmed mongodump tools"
+mongodb_plugin_json="${ROOT}/../flynn-plugin-mongodb/flynn-plugin.json"
+need_file "${mongodb_plugin_json}" "mongodb dump TLS flags live in flynn-plugin.json"
+grep -q -- '--ssl' "${mongodb_plugin_json}" \
+  || { echo "mongodb dump must use mongodump --ssl (database-tools reject --tls)" >&2; exit 1; }
+grep -q -- '--tlsInsecure' "${mongodb_plugin_json}" \
+  || { echo "mongodb dump must use --tlsInsecure (database-tools reject --tlsAllowInvalidCertificates)" >&2; exit 1; }
 need "${smoke}" 'blobstore.discoverd/.well-known/status' \
   "smoke must hit blobstore status after moving it to busybox"
 need "${ROOT}/dockerbuilder/img/packages.sh" 'runc' \

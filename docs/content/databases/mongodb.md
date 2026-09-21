@@ -65,6 +65,8 @@ the Flynn cluster.
 The Flynn CLI provides commands for exporting and restoring database dumps.
 
 `flynn mongodb:dump` saves a complete copy of the database to a local file.
+The in-cluster job talks to 27017 with mongodump `--ssl --tlsInsecure` (the
+database tools do not accept mongosh's `--tls` flag).
 
 ```text
 $ flynn mongodb:dump -f latest.dump
