@@ -40,6 +40,10 @@ Development layout (relative to the Flynn repo):
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 
+The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
+cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
+Collector `--auth` on `otel:add` is for the OTLP endpoint only.
+
 Override aliases and the GitHub org in `/etc/flynn/plugins.json` (see
 [Production](#production)). `PLUGIN_REPO_ROOT` (default `..`) is the parent of
 plugin checkouts that contain `flynn-plugin.json` (`flynn-plugin-*`). A local
