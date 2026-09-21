@@ -26,6 +26,15 @@ need 'RESUME_AT=restore' \
   "smoke must resume at --from-backup using an existing smoke-backup tar"
 need 'overlaying' \
   "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
+backup_go="${ROOT}/pkg/backup/backup.go"
+if ! grep -q 'formationForBackup' "${backup_go}"; then
+  echo "flynn-host backup must tolerate a missing formation on the current postgres release" >&2
+  exit 1
+fi
+if ! grep -q 'TestGetAppsFallbackWhenCurrentFormationMissing' "${ROOT}/pkg/backup/backup_test.go"; then
+  echo "backup must test GetFormation 404 after updater creates a release" >&2
+  exit 1
+fi
 if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go"; then
   echo "bootstrap --from-backup must start blobstore before plugin dump restore" >&2
   exit 1

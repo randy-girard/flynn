@@ -3,6 +3,7 @@ package backup
 import (
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/randy-girard/flynn/controller/client"
@@ -15,6 +16,7 @@ type backupAppClient interface {
 	GetAppRelease(string) (*ct.Release, error)
 	GetFormation(string, string) (*ct.Formation, error)
 	GetExpandedFormation(string, string) (*ct.ExpandedFormation, error)
+	FormationList(string) ([]*ct.Formation, error)
 }
 
 func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
@@ -159,7 +161,7 @@ func getApps(client backupAppClient) (map[string]*ct.ExpandedFormation, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error getting %s app release: %s", name, err)
 		}
-		formation, err := client.GetFormation(app.ID, release.ID)
+		formation, err := formationForBackup(client, app.ID, release.ID)
 		if err != nil {
 			return nil, fmt.Errorf("error getting %s app formation: %s", name, err)
 		}
@@ -172,4 +174,48 @@ func getApps(client backupAppClient) (map[string]*ct.ExpandedFormation, error) {
 		}
 	}
 	return data, nil
+}
+
+func formationNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if err == ct.ErrNotFound {
+		return true
+	}
+	return strings.Contains(err.Error(), "resource not found")
+}
+
+// formationForBackup returns the formation for the current release. After an
+// updater deploy the current release can exist before its formation row, which
+// used to abort flynn-host backup with "resource not found". Fall back to
+// processes from another scaled formation on the same app, then an empty map.
+func formationForBackup(client backupAppClient, appID, releaseID string) (*ct.Formation, error) {
+	f, err := client.GetFormation(appID, releaseID)
+	if err == nil && f != nil {
+		return f, nil
+	}
+	if err != nil && !formationNotFound(err) {
+		return nil, err
+	}
+	list, listErr := client.FormationList(appID)
+	if listErr != nil && !formationNotFound(listErr) {
+		return nil, listErr
+	}
+	processes := map[string]int{}
+	for _, item := range list {
+		if item == nil {
+			continue
+		}
+		if item.ReleaseID == releaseID {
+			return item, nil
+		}
+		for _, n := range item.Processes {
+			if n > 0 {
+				processes = item.Processes
+				break
+			}
+		}
+	}
+	return &ct.Formation{AppID: appID, ReleaseID: releaseID, Processes: processes}, nil
 }

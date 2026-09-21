@@ -323,7 +323,10 @@ cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
 MongoDB if they were running), `plugins.json` (which plugins were installed),
 a full `pg_dumpall` of Postgres (controller, blobstore files including plugin
 image layers, and every app Postgres database), and MariaDB/MongoDB dumps
-when those appliances are scaled above zero. Restore does **not** re-run
+when those appliances are scaled above zero. If the current postgres release
+has no formation row yet (seen after an updater deploy), backup copies
+process counts from another scaled formation on that app instead of failing.
+Restore does **not** re-run
 `flynn-host plugin:install`; plugin apps come back with postgres. Redis, Kafka,
 and ClickHouse keep data on volumes that are **not** included; after restore
 those engines come back empty. App slugs and container images stored in the

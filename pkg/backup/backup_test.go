@@ -40,9 +40,26 @@ func (s backupStub) GetAppRelease(id string) (*ct.Release, error) {
 func (s backupStub) GetFormation(appID, releaseID string) (*ct.Formation, error) {
 	f, ok := s.formations[appID+"/"+releaseID]
 	if !ok {
-		return nil, errors.New("no formation")
+		return nil, ct.ErrNotFound
 	}
 	return f, nil
+}
+
+func (s backupStub) FormationList(appID string) ([]*ct.Formation, error) {
+	if err, ok := s.err["formations:"+appID]; ok {
+		return nil, err
+	}
+	var out []*ct.Formation
+	prefix := appID + "/"
+	for key, f := range s.formations {
+		if strings.HasPrefix(key, prefix) && f != nil {
+			item := *f
+			item.AppID = appID
+			item.ReleaseID = strings.TrimPrefix(key, prefix)
+			out = append(out, &item)
+		}
+	}
+	return out, nil
 }
 
 func (s backupStub) GetExpandedFormation(appID, releaseID string) (*ct.ExpandedFormation, error) {
@@ -114,6 +131,31 @@ func TestGetAppsFailsOnMissingRelease(t *testing.T) {
 	stub.releases = map[string]*ct.Release{}
 	if _, err := getApps(stub); err == nil || !strings.Contains(err.Error(), "release") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestGetAppsFallbackWhenCurrentFormationMissing(t *testing.T) {
+	stub := requiredBackupApps()
+	delete(stub.formations, "postgres-id/postgres-rel")
+	stub.formations["postgres-id/old-rel"] = &ct.Formation{Processes: map[string]int{"postgres": 1, "web": 1}}
+	data, err := getApps(stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data["postgres"].Processes["postgres"] != 1 {
+		t.Fatalf("processes=%v", data["postgres"].Processes)
+	}
+}
+
+func TestGetAppsEmptyFormationWhenNoneExist(t *testing.T) {
+	stub := requiredBackupApps()
+	delete(stub.formations, "postgres-id/postgres-rel")
+	data, err := getApps(stub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data["postgres"] == nil || data["postgres"].Release == nil {
+		t.Fatal("postgres backup must continue without a formation row")
 	}
 }
 

@@ -370,7 +370,9 @@ The hyphen forms (`plugin:credentials-set`) remain aliases.
 source, wait URL, CLI) next to `flynn.json`. Plugin apps, providers, artifacts,
 and squashfs layers live in the postgres dump (controller + default blobstore),
 so **`flynn-host bootstrap --from-backup` does not run plugin install again.**
-Restore waits for each plugin’s ping URL, then continues.
+Restore waits for each plugin’s ping URL, then continues. A missing formation
+on the current postgres release does not abort the backup (process counts
+are taken from another scaled formation on that app).
 
 Plugin **volume** data (Redis AOF, Kafka topics, ClickHouse tables) is still
 not in the cluster backup; those engines come back empty. Reinstalling a
