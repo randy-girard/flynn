@@ -21,8 +21,12 @@ func TestGRPCAllowed(t *testing.T) {
 	if GRPCAllowed(scoped, "/flynn.api.v1.Controller/StreamJobs") {
 		t.Fatal("app-scoped must not stream jobs")
 	}
-	legacy := &authorizer.Token{}
-	if !GRPCAllowed(legacy, "/anything") {
-		t.Fatal("legacy unsigned dashboard token is cluster admin")
+	empty := &authorizer.Token{}
+	if GRPCAllowed(empty, "/anything") {
+		t.Fatal("empty token must not be cluster admin")
+	}
+	star := &authorizer.Token{Scopes: []string{"*"}}
+	if !GRPCAllowed(star, "/anything") {
+		t.Fatal("* scope is cluster admin")
 	}
 }

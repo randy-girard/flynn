@@ -28,9 +28,16 @@ func TestHasClusterAdmin(t *testing.T) {
 	if !star.HasClusterAdmin() {
 		t.Fatal("* scope")
 	}
-	legacy := Token{}
-	if !legacy.HasClusterAdmin() {
-		t.Fatal("unsigned dashboard token with no scopes/grants")
+	empty := Token{}
+	if empty.HasClusterAdmin() {
+		t.Fatal("empty token with no scopes/grants must not be cluster admin")
+	}
+	emptySlices := Token{Scopes: []string{}, AppGrants: []AppGrant{}}
+	if emptySlices.HasClusterAdmin() {
+		t.Fatal("token with empty scopes and grants must not be cluster admin")
+	}
+	if empty.BearerScopedToApps() || emptySlices.BearerScopedToApps() {
+		t.Fatal("empty token is not app-scoped")
 	}
 	scoped := Token{AppGrants: []AppGrant{{AppID: "app-1", Permissions: []string{"app:read"}}}}
 	if scoped.HasClusterAdmin() {

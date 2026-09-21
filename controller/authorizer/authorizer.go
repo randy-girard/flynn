@@ -43,10 +43,16 @@ type Token struct {
 	AppGrants  []AppGrant
 }
 
-// HasClusterAdmin reports full cluster access (cluster install key, legacy unsigned
-// dashboard tokens with no scopes/grants, or explicit cluster:admin / * scope).
+// HasClusterAdmin reports full cluster access: the cluster install key, or an
+// explicit cluster:admin / * scope. A nil token is treated as admin only for
+// legacy internal callers; HTTP middleware never authorizes a nil token
+// (AuthorizeRequest returns ErrInvalid instead). An empty Token with no
+// ClusterKey, scopes, or grants is not admin.
 func (t *Token) HasClusterAdmin() bool {
-	if t == nil || t.ClusterKey {
+	if t == nil {
+		return true
+	}
+	if t.ClusterKey {
 		return true
 	}
 	for _, s := range t.Scopes {
@@ -54,7 +60,7 @@ func (t *Token) HasClusterAdmin() bool {
 			return true
 		}
 	}
-	return len(t.Scopes) == 0 && len(t.AppGrants) == 0
+	return false
 }
 
 // BearerScopedToApps is true for JWTs that are not cluster-wide.

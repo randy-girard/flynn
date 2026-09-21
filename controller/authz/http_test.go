@@ -9,7 +9,7 @@ import (
 
 func TestHTTPAllowed(t *testing.T) {
 	clusterKey := &authorizer.Token{ClusterKey: true}
-	legacyFull := &authorizer.Token{}
+	emptyTok := &authorizer.Token{}
 	adminBearer := &authorizer.Token{Scopes: []string{"cluster:admin"}}
 	appRead := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:read"}}}}
 	appWrite := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:write"}}}}
@@ -34,7 +34,8 @@ func TestHTTPAllowed(t *testing.T) {
 		{"nil_denied", nil, http.MethodGet, "/apps/app-1", false},
 
 		{"cluster_key_any_route", clusterKey, http.MethodGet, "/providers", true},
-		{"legacy_full_cluster_apps_list", legacyFull, http.MethodGet, "/apps", true},
+		{"empty_token_cannot_list_apps", emptyTok, http.MethodGet, "/apps", false},
+		{"empty_token_cannot_get_app", emptyTok, http.MethodGet, "/apps/app-1", false},
 		{"scoped_admin_providers", adminBearer, http.MethodGet, "/providers", true},
 
 		{"app_read_can_get_app", appRead, http.MethodGet, "/apps/app-1", true},
@@ -124,7 +125,7 @@ func TestTarreceiveAllowed(t *testing.T) {
 	}{
 		{"nil_denied", nil, false},
 		{"cluster_key_allowed", &authorizer.Token{ClusterKey: true}, true},
-		{"legacy_full_allowed", &authorizer.Token{}, true},
+		{"empty_token_denied", &authorizer.Token{}, false},
 		{"admin_scope_allowed", &authorizer.Token{Scopes: []string{"cluster:admin"}}, true},
 		{
 			"build_token_allowed",

@@ -41,8 +41,11 @@ passthrough (backend certs) or terminate (`--auto-tls`). Postgres enables
 clients still work.
 
 Access to the controller is available via HTTPS over port 443, and
-a randomly generated bearer token is used for authentication. The TLS
-certificate used for communication is generated during installation
+a randomly generated bearer token is used for authentication. Cluster
+administrator access is the install key (`ClusterKey`), a dashboard JWT
+with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
+empty app grants is not an administrator; it has no controller access.
+The TLS certificate used for communication is generated during installation
 (self-signed). Configure Let's Encrypt after bootstrap with
 `flynn-host acme:configure --email=<you> --agree-tos` and
 `flynn-host acme:enable-system-routes` so the dashboard and controller
