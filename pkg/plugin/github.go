@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -165,7 +166,7 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 			}
 		}
 		if u := art.LayerURL(layer); u != "" {
-			if err := in.downloadURL(token, u, dest); err != nil {
+			if err := in.downloadLayerURL(src, token, u, dest); err != nil {
 				return "", fmt.Errorf("layer %s: %w", layer.ID, err)
 			}
 			continue
@@ -398,6 +399,84 @@ func (in *Installer) downloadURL(token, rawURL, dest string) error {
 		accept = "application/octet-stream"
 	}
 	return in.downloadURLAuth(token, rawURL, dest, accept)
+}
+
+// downloadLayerURL fetches a layer from image.json's LayerURL. That URL is
+// attacker-controlled in a malicious manifest (SEC-018), so the GitHub token
+// is attached only for github.com / api.github.com / githubusercontent.com
+// (and the GitHub Enterprise host for this source). Other hosts are refused
+// unless --allow-external-layers, which downloads without credentials.
+func (in *Installer) downloadLayerURL(src *GitHubSource, token, rawURL, dest string) error {
+	token, err := in.layerURLCredentials(src, token, rawURL)
+	if err != nil {
+		return err
+	}
+	return in.downloadURL(token, rawURL, dest)
+}
+
+func (in *Installer) layerURLCredentials(src *GitHubSource, token, rawURL string) (string, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid layer URL %s", sanitizeURL(rawURL))
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "", fmt.Errorf("refusing layer URL with scheme %q", scheme)
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("invalid layer URL %s", sanitizeURL(rawURL))
+	}
+	host := canonicalHTTPHost(u.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("invalid layer URL %s", sanitizeURL(rawURL))
+	}
+	if layerURLTokenHost(host, src) {
+		if scheme != "https" {
+			return "", nil
+		}
+		return token, nil
+	}
+	if in != nil && in.AllowExternalLayers {
+		return "", nil
+	}
+	return "", fmt.Errorf("refusing to fetch layer from host %q (not GitHub); pass --allow-external-layers to download without credentials", host)
+}
+
+func layerURLTokenHost(host string, src *GitHubSource) bool {
+	if githubTokenHost(host) {
+		return true
+	}
+	if src == nil {
+		return false
+	}
+	return host != "" && host == canonicalHTTPHost(src.Host)
+}
+
+// githubTokenHost reports whether Authorization may be sent to this download
+// host. GitHub's META API lists *.githubusercontent.com as a wildcard they
+// own; verified CDN names include objects.githubusercontent.com (classic
+// release assets), objects-origin.githubusercontent.com, and
+// release-assets.githubusercontent.com (current release-asset CDN).
+func githubTokenHost(host string) bool {
+	host = canonicalHTTPHost(host)
+	switch host {
+	case "github.com", "www.github.com", "api.github.com":
+		return true
+	case "githubusercontent.com":
+		return true
+	}
+	return strings.HasSuffix(host, ".githubusercontent.com")
+}
+
+func canonicalHTTPHost(host string) string {
+	host = strings.ToLower(strings.TrimSpace(host))
+	host = strings.TrimSuffix(host, ".")
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	return host
 }
 
 func (in *Installer) downloadURLAuth(token, rawURL, dest, accept string) error {

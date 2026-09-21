@@ -76,6 +76,14 @@ func TestPluginRouteUsage(t *testing.T) {
 	if !args.Bool["--auto-tls"] || args.String["<source>"] != "dashboard" {
 		t.Fatalf("install: %+v", args)
 	}
+	if args.Bool["--allow-external-layers"] {
+		t.Fatalf("install default must not allow external layers: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:install", "plugin:install", "dashboard", "--allow-external-layers")
+	if !args.Bool["--allow-external-layers"] || args.String["<source>"] != "dashboard" {
+		t.Fatalf("install --allow-external-layers: %+v", args)
+	}
 }
 
 func TestPluginUninstallUsage(t *testing.T) {
@@ -116,6 +124,15 @@ func TestPluginUpdateUsage(t *testing.T) {
 	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all", "--auto-tls")
 	if !args.Bool["--auto-tls"] {
 		t.Fatalf("update-all --auto-tls: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--allow-external-layers")
+	if !args.Bool["--allow-external-layers"] || args.String["<plugin>"] != "dashboard" {
+		t.Fatalf("update --allow-external-layers: %+v", args)
+	}
+	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all", "--allow-external-layers")
+	if !args.Bool["--allow-external-layers"] {
+		t.Fatalf("update-all --allow-external-layers: %+v", args)
 	}
 
 	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "update", "http/abc")

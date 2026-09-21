@@ -66,12 +66,13 @@ func runOfficialUpdates(plugins []Installed, opts InstallOptions, update func(In
 			continue
 		}
 		err := update(InstallOptions{
-			Source:      name,
-			GitHubOrg:   opts.GitHubOrg,
-			Cwd:         opts.Cwd,
-			AutoTLS:     opts.AutoTLS,
-			PluginsFile: opts.PluginsFile,
-			CredsFile:   opts.CredsFile,
+			Source:              name,
+			GitHubOrg:           opts.GitHubOrg,
+			Cwd:                 opts.Cwd,
+			AutoTLS:             opts.AutoTLS,
+			PluginsFile:         opts.PluginsFile,
+			CredsFile:           opts.CredsFile,
+			AllowExternalLayers: opts.AllowExternalLayers,
 		})
 		if err != nil {
 			failed++
