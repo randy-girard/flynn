@@ -64,6 +64,18 @@ func TestGenerateCAAndLeaf(t *testing.T) {
 		t.Fatalf("client usage=%v", pc.ExtKeyUsage)
 	}
 
+	both, err := Generate(Params{Hosts: []string{"db.internal"}, ServerAndClient: true, CA: ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bc, err := x509.ParseCertificate(both.DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bc.ExtKeyUsage) != 2 || bc.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth || bc.ExtKeyUsage[1] != x509.ExtKeyUsageClientAuth {
+		t.Fatalf("server+client usage=%v", bc.ExtKeyUsage)
+	}
+
 	block, _ := pem.Decode([]byte(leaf.PEM))
 	if block == nil || block.Type != "CERTIFICATE" {
 		t.Fatal("leaf PEM")

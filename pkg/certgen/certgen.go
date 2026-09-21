@@ -20,7 +20,10 @@ type Params struct {
 	// Client, when set on a leaf certificate, marks the certificate for TLS
 	// client authentication (mutual TLS) instead of server authentication.
 	Client bool
-	CA     *Certificate
+	// ServerAndClient marks a leaf for both server and client authentication.
+	// MongoDB replica members present one certificate in both roles.
+	ServerAndClient bool
+	CA              *Certificate
 }
 
 type Certificate struct {
@@ -56,7 +59,7 @@ func Generate(p Params) (*Certificate, error) {
 		NotAfter:     notAfter,
 
 		BasicConstraintsValid: true,
-		IsCA: p.IsCA,
+		IsCA:                  p.IsCA,
 	}
 	if p.IsCA {
 		template.Subject.OrganizationalUnit = []string{"Flynn Ephemeral CA"}
@@ -64,9 +67,12 @@ func Generate(p Params) (*Certificate, error) {
 	} else {
 		template.Subject.CommonName = p.Hosts[0]
 		template.KeyUsage = x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature
-		if p.Client {
+		switch {
+		case p.ServerAndClient:
+			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
+		case p.Client:
 			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-		} else {
+		default:
 			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}
 		}
 	}
