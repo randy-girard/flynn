@@ -356,7 +356,7 @@ func TestGitPushAllowed(t *testing.T) {
 		{"cluster_key_push_anywhere", GitPushAllowed, clusterKey, "uuid-1", "myapp", true},
 		{"cluster_key_push_other", GitPushAllowed, clusterKey, "uuid-2", "other", true},
 		{"admin_jwt_push_anywhere", GitPushAllowed, adminJWT, "uuid-2", "other", true},
-		{"legacy_full_push", GitPushAllowed, legacyFull, "uuid-1", "myapp", true},
+		{"legacy_empty_cannot_push", GitPushAllowed, legacyFull, "uuid-1", "myapp", false},
 		{"deploy_push_own_app", GitPushAllowed, appDeploy, "uuid-1", "myapp", true},
 		{"write_push_own_app", GitPushAllowed, appWrite, "uuid-1", "myapp", true},
 		{"admin_push_own_app", GitPushAllowed, appAdmin, "uuid-1", "myapp", true},

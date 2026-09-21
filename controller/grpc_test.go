@@ -1656,6 +1656,7 @@ func mintGRPCBearerToken(c *C, priv *ecdsa.PrivateKey) string {
 		UserEmail:  "grpc-test@flynn.local",
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(30 * time.Minute)),
+		Scopes:     []string{"cluster:admin"},
 	})
 	c.Assert(err, IsNil)
 	return "flynn." + tok
