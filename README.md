@@ -90,6 +90,8 @@ sudo \
   --discovery https://discovery.example.com/clusters/<id>
 ```
 
+`flynn-host` presents that cluster id as a bearer token when talking to the discovery API. `GET /.well-known/cluster` is not a public join URL. Combine `--discovery` with `--peer-ips` so bootstrap only contacts those hosts.
+
 You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead. To run discovery on the cluster itself, bootstrap one node with `--peer-ips`, install the discovery plugin, then join extra nodes with that token. Step-by-step instructions are in [Manual installation](docs/content/installation/manual.md). Production notes (dedicated ZFS, blobstore backends, backups) are in [Production](docs/content/production.html.md).
 
 Bootstrap uses a self-signed certificate. Configure ACME/Let's Encrypt next so the dashboard, controller, and app routes can get trusted TLS:

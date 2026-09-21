@@ -95,6 +95,8 @@ $ sudo DISCOVERY_SERVER=https://discovery.example.com flynn-host init --init-dis
 https://discovery.example.com/clusters/<id>
 ```
 
+`POST /clusters` still returns that token URL. The token is the join capability: `flynn-host` presents the cluster id as `Authorization: Bearer` when it registers and lists instances. `GET /.well-known/cluster` on the discovery plugin is not a public join URL (it requires `CONTROLLER_KEY` on a cluster install).
+
 On the other nodes:
 
 ```
@@ -158,6 +160,8 @@ $ sudo \
     --min-hosts 3 \
     --discovery https://discovery.example.com/clusters/<id>
 ```
+
+Pass `--peer-ips` as well when you already know the node addresses. Bootstrap then only contacts those hosts and never sends `FLYNN_HOST_AUTH_KEY` to a discovery-registered URL that is not on that list.
 
 With peer IPs instead of discovery:
 
