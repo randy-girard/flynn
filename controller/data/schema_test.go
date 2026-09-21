@@ -341,3 +341,12 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(updated.AllowCustomLimits, Equals, true)
 }
+
+// Scheduler job fires record object_type "scheduler". events.object_type is a
+// foreign key to event_types, and that row was missing, so smoke CLI checks
+// failed with events_object_type_fkey (SQLSTATE 23503).
+func (s *S) TestSchedulerEventTypeExists(c *C) {
+	var n int
+	c.Assert(s.db.QueryRow("SELECT count(*) FROM event_types WHERE name = $1", "scheduler").Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+}

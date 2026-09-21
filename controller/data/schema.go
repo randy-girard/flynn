@@ -1114,6 +1114,9 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(59,
 		`INSERT INTO event_types (name) VALUES ('crash_loop')`,
 	)
+	migrations.Add(60,
+		`INSERT INTO event_types (name) VALUES ('scheduler')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {
