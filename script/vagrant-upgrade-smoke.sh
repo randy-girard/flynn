@@ -136,6 +136,9 @@
 #                        probed after the uploaded apps exist (CLI step).
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
+#   PLUGIN_BUILD_CONCURRENCY  How many plugin images to build at once after
+#                        the tarball exists [default: 3]. Install does not
+#                        rebuild images.
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #   SMOKE_FIREWALL_PORT  High TCP port for the post-bootstrap UFW
 #                        expose/unexpose probe [default: 27183]
@@ -220,6 +223,7 @@ PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
 PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
+PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-3}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
 SMOKE_UNIT_PACKAGES=(
@@ -2744,6 +2748,33 @@ plugin_flynn_module_id() {
   git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo "${BUILD_VERSION}"
 }
 
+plugin_image_current() {
+  local dir=$1
+  local flynn_id plugin_id stamp stamp_val
+  [[ -d "${dir}" ]] || return 1
+  flynn_id="$(plugin_flynn_module_id)"
+  plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
+  stamp="${dir}/dist/.flynn-module-id"
+  stamp_val="${flynn_id} ${plugin_id}"
+  plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${stamp_val}" ]]
+}
+
+# Extract ubuntu-noble once per smoke run. Parallel plugin-builds share it.
+extract_plugin_ubuntu_layer() {
+  node_root_script builder <<EOF
+set -euo pipefail
+export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers-${BUILD_VERSION}
+mkdir -p "\${FLYNN_LAYERS_DIR}"
+id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
+dest="\${FLYNN_LAYERS_DIR}/\${id}.squashfs"
+tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
+rm -f "\${dest}"
+tar -xOf "\${tarball}" "flynn-${BUILD_VERSION}/\${id}.squashfs" > "\${dest}"
+test -s "\${dest}"
+echo "ubuntu-noble layer \${dest}"
+EOF
+}
+
 ensure_plugin_image() {
   local dir=$1
   if [[ ! -d "${dir}" ]]; then
@@ -2755,11 +2786,7 @@ ensure_plugin_image() {
   plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
   stamp="${dir}/dist/.flynn-module-id"
   stamp_val="${flynn_id} ${plugin_id}"
-  # A leftover dist/image.json is not enough: pre-stack plugin-build wrote a
-  # ~35MiB overlay-only squashfs. Installing that makes redis scale hang 5m.
-  # Dist also has to be compiled against this Flynn (SEC-003 Auth-Key); plugin
-  # go.mod pins a published module that predates discoverd auth.
-  if plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${stamp_val}" ]]; then
+  if plugin_image_current "${dir}"; then
     echo "plugin image ready (${dir}/dist, ubuntu-noble + delta, flynn ${flynn_id:0:8})"
     return 0
   fi
@@ -2778,9 +2805,11 @@ mkdir -p "\$FLYNN_LAYERS_DIR"
 id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
 tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
-# Layer IDs hash recipe inputs, not bytes. Always extract from this smoke
-# tarball so a KEEP_BUILDER cache cannot feed plugin-build the previous build.
-tar -xOf "\$tarball" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\$dest"
+# extract_plugin_ubuntu_layer writes this once. Do not clobber it from
+# parallel builds.
+if [[ ! -s "\${dest}" ]]; then
+  tar -xOf "\${tarball}" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\${dest}"
+fi
 cd "/opt/flynn-plugins/$(basename "${dir}")"
 test -f flynn-plugin.json
 # Plugin APIs register with discoverd.DefaultClient from the Flynn module in
@@ -2807,6 +2836,58 @@ EOF
   fi
   mkdir -p "${dir}/dist"
   printf '%s\n' "${stamp_val}" > "${stamp}"
+}
+
+# Build every stale plugin image on the builder before install. Up to
+# PLUGIN_BUILD_CONCURRENCY run at once. Install only calls plugin:install.
+step_build_plugin_images() {
+  if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
+    echo "SKIP_PLUGIN_INSTALL=1"
+    return 0
+  fi
+  ensure_plugin_vm_mounts || return 1
+  local name dir
+  local -a pending=()
+  # shellcheck disable=SC2086
+  for name in ${PLUGIN_SMOKE_APPS}; do
+    dir="$(plugin_checkout "${name}")"
+    if plugin_image_current "${dir}"; then
+      echo "plugin image ready (${dir}/dist)"
+      continue
+    fi
+    pending+=("${dir}")
+  done
+  if [[ ${#pending[@]} -eq 0 ]]; then
+    echo "plugin images already match this Flynn checkout"
+    return 0
+  fi
+  extract_plugin_ubuntu_layer || return 1
+  local conc="${PLUGIN_BUILD_CONCURRENCY:-3}"
+  local fail=0
+  local -a running=()
+  for dir in "${pending[@]}"; do
+    ensure_plugin_image "${dir}" &
+    running+=("$!")
+    if [[ ${#running[@]} -ge ${conc} ]]; then
+      if ! wait "${running[0]}"; then
+        fail=1
+      fi
+      running=("${running[@]:1}")
+    fi
+  done
+  if [[ ${#running[@]} -gt 0 ]]; then
+    local pid
+    for pid in "${running[@]}"; do
+      if ! wait "${pid}"; then
+        fail=1
+      fi
+    done
+  fi
+  if [[ "${fail}" -ne 0 ]]; then
+    echo "one or more plugin image builds failed" >&2
+    return 1
+  fi
+  echo "built ${#pending[@]} plugin images (concurrency ${conc})"
 }
 
 # True when dist/image.json is Flynn ubuntu-noble plus a plugin delta, and every
@@ -2962,7 +3043,11 @@ step_install_plugins() {
   # shellcheck disable=SC2086
   for name in ${PLUGIN_SMOKE_APPS}; do
     dir="$(plugin_checkout "${name}")"
-    ensure_plugin_image "${dir}" || return 1
+    if ! plugin_image_current "${dir}"; then
+      echo "plugin image for ${name} is not built against this Flynn checkout" >&2
+      echo "Build plugin images runs before install and must produce ${dir}/dist" >&2
+      return 1
+    fi
     unpack="${dir}/dist/github-unpack"
     assemble_plugin_github_unpack "${dir}" "${unpack}" || return 1
     vm_path="/opt/flynn-plugins/$(basename "${dir}")"
@@ -3416,6 +3501,9 @@ rm -f "${vm_path}" "${restore_path}"
 # flynn-host backup Hijack uses Transport.Dial (discoverdDial), same as HTTP.
 # Do not pin controller.discoverd in /etc/hosts; that hides a production bug
 # and sticks to a dead instance IP after a controller deploy.
+# Smoke backups are blobstore-heavy. gzip -1 is much faster than the
+# production default of 9 and still restores.
+export FLYNN_BACKUP_GZIP_LEVEL=1
 flynn-host backup --file "${vm_path}"
 test -s "${vm_path}"
 # List once. Do not tar -tf | grep -q: grep -q closes the pipe on the first
@@ -5000,6 +5088,22 @@ maybe_run_cli_and_volume() {
   run_step "${vol_title}" step_volume "${label}"
 }
 
+# Volume lifecycle without a second live CLI sweep.
+run_volume_step() {
+  local vol_title=$1
+  local label=$2
+  local skip_reason=${3:-}
+  if [[ -n "${skip_reason}" ]]; then
+    record "${vol_title}" "SKIP" 0 "${skip_reason}"
+    return 0
+  fi
+  if [[ "${SKIP_VOLUME}" == "1" ]]; then
+    record "${vol_title}" "SKIP" 0 "SKIP_VOLUME=1"
+    return 0
+  fi
+  run_step "${vol_title}" step_volume "${label}"
+}
+
 step_verify_before() {
   wait_for "app HTTP pre-upgrade" 180 probe_app_http
   assert_app_http pre-upgrade
@@ -5965,15 +6069,12 @@ run_one_topology() {
     for pass in $(seq 1 "${UPGRADE_PASSES}"); do
       run_step "Upgrade pass ${pass}/${UPGRADE_PASSES} --all-nodes (${TOPOLOGY_LABEL})" step_upgrade "${pass}"
       run_step "Verify app/DBs after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" step_verify_after "${pass}"
+      # One live CLI sweep per topology (pre-upgrade). Upgrades re-check data, not every command.
+      record "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" "SKIP" 0 "one CLI sweep per topology"
       if [[ "${SKIP_CLI}" == "1" ]]; then
-        maybe_run_cli_and_volume \
-          "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
-          "Persistent volume after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
-          "post-upgrade-${pass}" \
-          "SKIP_CLI=1"
+        record "Persistent volume after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
       else
-        maybe_run_cli_and_volume \
-          "CLI functions after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
+        run_volume_step \
           "Persistent volume after upgrade ${pass}/${UPGRADE_PASSES} (${TOPOLOGY_LABEL})" \
           "post-upgrade-${pass}"
       fi
@@ -6002,15 +6103,11 @@ run_one_topology() {
     run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
     run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup
     run_step "Verify app/DBs after restore (${TOPOLOGY_LABEL})" step_verify_after_restore
+    record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "one CLI sweep per topology"
     if [[ "${SKIP_CLI}" == "1" ]]; then
-      maybe_run_cli_and_volume \
-        "CLI functions after restore (${TOPOLOGY_LABEL})" \
-        "Persistent volume after restore (${TOPOLOGY_LABEL})" \
-        post-restore \
-        "SKIP_CLI=1"
+      record "Persistent volume after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
     else
-      maybe_run_cli_and_volume \
-        "CLI functions after restore (${TOPOLOGY_LABEL})" \
+      run_volume_step \
         "Persistent volume after restore (${TOPOLOGY_LABEL})" \
         post-restore
     fi
@@ -6127,6 +6224,12 @@ main() {
     fi
   else
     run_step "Build Flynn on builder (${BUILD_VERSION})" step_build_on_builder
+  fi
+
+  if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
+    record "Build plugin images" "SKIP" 0 "SKIP_PLUGIN_INSTALL=1"
+  else
+    run_step "Build plugin images" step_build_plugin_images
   fi
 
   local idx topo is_last

@@ -213,6 +213,14 @@ need 'flynn.plugin.arch' \
   "smoke must rebuild plugin dist when Go binaries do not match the Flynn host architecture (exit 126)"
 need 'FLYNN_LAYERS_DIR' \
   "plugin-build must overlay the local Flynn ubuntu-noble layer, not GitHub's same-ID other-arch squashfs"
+need 'step_build_plugin_images' \
+  "plugin images must be built once before install, not inside plugin:install"
+need 'PLUGIN_BUILD_CONCURRENCY' \
+  "plugin image builds must run in parallel with a concurrency cap"
+need 'Build plugin images' \
+  "smoke must have a Build plugin images step after the tarball exists"
+need 'plugin_image_current' \
+  "install must refuse a plugin image that was not built against this Flynn"
 need 'go mod edit -replace' \
   "plugin-build must compile against this Flynn checkout so plugin APIs send DISCOVERD_AUTH_KEY (SEC-003)"
 need '.flynn-module-id' \

@@ -37,6 +37,12 @@ if ! grep -q 'TestGetAppsFallbackWhenCurrentFormationMissing' "${ROOT}/pkg/backu
   echo "backup must test GetFormation 404 after updater creates a release" >&2
   exit 1
 fi
+need 'FLYNN_BACKUP_GZIP_LEVEL=1' \
+  "smoke backups must use gzip -1; production stays at gzip -9"
+if ! grep -q 'postgresDumpGzipLevel' "${backup_go}"; then
+  echo "pg_dumpall gzip level must be configurable for smoke" >&2
+  exit 1
+fi
 if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go"; then
   echo "bootstrap --from-backup must start blobstore before plugin dump restore" >&2
   exit 1

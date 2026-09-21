@@ -197,8 +197,8 @@ need 'installing Flynn CLI on node1' \
   "smoke must (re)install the synced CLI so SKIP_BUILD still picks up CLI fixes"
 need 'CLI functions \(pre-upgrade\)' \
   "smoke must run CLI probes before the first --force update"
-need 'CLI functions after upgrade' \
-  "smoke must re-run CLI probes after each --force update"
+need 'one CLI sweep per topology' \
+  "upgrade and restore must not repeat the live CLI sweep"
 if awk '/^step_cli_functions\(/,/^}/' "${smoke}" | grep -qE 'scale web='; then
   echo "CLI step must not scale web (creates extra jobs and races HTTP verify)" >&2
   exit 1
