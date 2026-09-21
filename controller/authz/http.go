@@ -27,6 +27,11 @@ const (
 	// HTTPAllowed only checks that the caller can write some app (or is a
 	// cluster admin). CreateRelease enforces the specific app.
 	rkCreateRelease
+	// rkGitHubCatalog is GET/HEAD /github/installations and
+	// /github/installations/:id/repos. Cluster admins see every GitHub App
+	// installation. App-scoped tokens need github:write on at least one app;
+	// the handler then filters to installations linked to those apps.
+	rkGitHubCatalog
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -53,6 +58,9 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkCreateRelease {
 		return hasAnyReleaseWrite(tok)
+	}
+	if kind == rkGitHubCatalog {
+		return hasAnyGitHubWrite(tok)
 	}
 	if kind == rkCluster {
 		return false
@@ -201,6 +209,11 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkAnyAuth, "", ""
 		}
 		if m == http.MethodGet || m == http.MethodHead {
+			if len(parts) >= 2 && parts[1] == "installations" {
+				return rkGitHubCatalog, "", ""
+			}
+			// GET /github/app stays any-auth so the dashboard can show
+			// "GitHub App is not configured" vs the connect panel.
 			return rkAnyAuth, "", ""
 		}
 		return rkCluster, "", ""
@@ -325,6 +338,29 @@ func hasAnyReleaseWrite(tok *authorizer.Token) bool {
 		}
 	}
 	return false
+}
+
+func hasAnyGitHubWrite(tok *authorizer.Token) bool {
+	for _, g := range tok.AppGrants {
+		if HasAppPermission(g.Permissions, PermAppGitHubWrite) {
+			return true
+		}
+	}
+	return false
+}
+
+// GitHubWriteAppIDs returns app IDs the token may connect GitHub on.
+// restricted is false for cluster admins (no catalog filter).
+func GitHubWriteAppIDs(tok *authorizer.Token) (ids []string, restricted bool) {
+	if tok == nil || tok.HasClusterAdmin() {
+		return nil, false
+	}
+	for _, g := range tok.AppGrants {
+		if HasAppPermission(g.Permissions, PermAppGitHubWrite) {
+			ids = append(ids, g.AppID)
+		}
+	}
+	return ids, true
 }
 
 func grantCovers(tok *authorizer.Token, appID, need string) bool {
