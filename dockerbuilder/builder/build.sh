@@ -24,26 +24,44 @@ if [[ -n "${CONTROLLER_KEY}" ]]; then
   unset CONTROLLER_KEY
 fi
 
+# GitHub Releases digest for buildkit-v0.23.2.linux-*.tar.gz
+# (api.github.com/repos/moby/buildkit/releases/tags/v0.23.2).
+# The dockerbuilder image already bakes BuildKit in img/packages.sh; this
+# fallback is only for older/custom images that lack it.
+BUILDKIT_VERSION=v0.23.2
+BUILDKIT_SHA256_AMD64=2771c3403e3a1f75a83cde387a05365794d3b900c355e864772a36c3ce541f82
+BUILDKIT_SHA256_ARM64=6385ff70b2fb4134b50ac3183eea3a0b06c6f6129173940d73178ae0477368f1
+
 ensure_buildkit() {
   export PATH="/usr/local/buildkit/bin:/usr/local/bin:${PATH}"
   if command -v buildctl >/dev/null && buildctl --version >/dev/null 2>&1 \
     && { [[ -x /usr/local/bin/buildctl-daemonless.sh ]] || [[ -x /builder/buildctl-daemonless.sh ]]; }; then
     return 0
   fi
-  local arch
+  local arch sha256
   case "$(uname -m)" in
-    x86_64|amd64) arch=amd64 ;;
-    aarch64|arm64) arch=arm64 ;;
+    x86_64|amd64)
+      arch=amd64
+      sha256="${BUILDKIT_SHA256_AMD64}"
+      ;;
+    aarch64|arm64)
+      arch=arm64
+      sha256="${BUILDKIT_SHA256_ARM64}"
+      ;;
     *)
       echo $'\e[1G----->' "unsupported architecture: $(uname -m)" >&2
       return 1
       ;;
   esac
-  local ver=v0.23.2
   echo $'\e[1G----->' Installing BuildKit...
   mkdir -p /usr/local/buildkit
-  curl -fsSL "https://github.com/moby/buildkit/releases/download/${ver}/buildkit-${ver}.linux-${arch}.tar.gz" \
-    | tar -xzf - -C /usr/local/buildkit
+  local tgz
+  tgz="$(mktemp)"
+  curl -fsSL "https://github.com/moby/buildkit/releases/download/${BUILDKIT_VERSION}/buildkit-${BUILDKIT_VERSION}.linux-${arch}.tar.gz" \
+    -o "${tgz}"
+  echo "${sha256}  ${tgz}" | sha256sum -c -
+  tar -xzf "${tgz}" -C /usr/local/buildkit
+  rm -f "${tgz}"
   if [[ -x /builder/buildctl-daemonless.sh ]]; then
     install -m 0755 /builder/buildctl-daemonless.sh /usr/local/buildkit/bin/buildctl-daemonless.sh
   fi
