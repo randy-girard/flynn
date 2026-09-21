@@ -206,9 +206,10 @@ func HasAppPermission(perms []string, need string) bool {
 	return false
 }
 
-// CanCreateRelease is true when the grant may POST /releases (env or scale
-// edits). Deploy uses POST /apps/:id/deploy with an existing release id.
+// CanCreateRelease is true when the grant may POST /releases (env edits mint
+// a new release). Scale-only grants must not: they change formation counts on
+// an existing release. Deploy uses POST /apps/:id/deploy with an existing
+// release id and does not mint one.
 func CanCreateRelease(perms []string) bool {
-	return HasAppPermission(perms, PermAppEnvWrite) ||
-		HasAppPermission(perms, PermAppScaleWrite)
+	return HasAppPermission(perms, PermAppEnvWrite)
 }

@@ -89,7 +89,14 @@ includes `no_new_privs`, seccomp, AppArmor `flynn-default`, dropped
 capabilities, a private cgroup namespace, and the overlay/host firewall
 above. User jobs cannot request host network/PID, writable cgroups,
 device profiles (`zfs`/`kvm`/`loop`), extra capabilities, or host bind
-mounts (including runtime sockets). Do not run untrusted code in Flynn.
+mounts (including runtime sockets). The controller strips those fields
+from user-app releases at create and again before `PUT /apps/:id/release`
+attaches a release; a cluster-admin or controller key can still create
+privileged releases for system apps. `POST /releases` requires `app_id`
+for app-scoped tokens, and minting a release needs `app:env:write` (the
+Manage and Admin roles include it). `app:scale:write` alone cannot mint
+a release. A release minted for one app cannot be attached to
+another. Do not run untrusted code in Flynn.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not

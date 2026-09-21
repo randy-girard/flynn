@@ -135,6 +135,12 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 	return tx.Commit()
 }
 
+// UpdateProcesses persists process types on an existing release. Used to
+// re-strip privileged fields before attaching a release to a non-system app.
+func (r *ReleaseRepo) UpdateProcesses(id string, processes map[string]ct.ProcessType) error {
+	return r.db.Exec("release_update_processes", processes, id)
+}
+
 func (r *ReleaseRepo) Get(id string) (interface{}, error) {
 	return r.TxGet(r.db, id)
 }

@@ -21,8 +21,17 @@ func TestHasAppPermissionGranular(t *testing.T) {
 	if !CanCreateRelease([]string{PermAppEnvWrite}) {
 		t.Fatal("env:write may POST /releases")
 	}
+	if CanCreateRelease([]string{PermAppScaleWrite}) {
+		t.Fatal("scale:write must not POST /releases")
+	}
 	if CanCreateRelease([]string{PermAppDeploy}) {
 		t.Fatal("deploy must not POST /releases")
+	}
+	if !CanCreateRelease([]string{PermAppWrite}) {
+		t.Fatal("manage (app:write) may POST /releases")
+	}
+	if !CanCreateRelease([]string{PermAppAdmin}) {
+		t.Fatal("admin may POST /releases")
 	}
 	view := ExpandedAppPermissions([]string{PermAppRead})
 	if len(view) < 2 || !HasAppPermission(view, PermAppLogsRead) || HasAppPermission(view, PermAppDeploy) {

@@ -24,8 +24,9 @@ const (
 	// profiles that app operators must list in order to apply them.
 	rkAnyAuth
 	// rkCreateRelease is POST /releases. The app id is in the body, so
-	// HTTPAllowed only checks that the caller can write some app (or is a
-	// cluster admin). CreateRelease enforces the specific app.
+	// HTTPAllowed only checks that the caller can mint a release for some
+	// app (env:write, or cluster admin). CreateRelease then requires app_id
+	// for non-admin tokens and enforces the specific app.
 	rkCreateRelease
 )
 
@@ -325,6 +326,19 @@ func hasAnyReleaseWrite(tok *authorizer.Token) bool {
 		}
 	}
 	return false
+}
+
+// CanCreateReleaseForApp is true when tok may POST /releases for this app
+// (by id or name). Cluster admins may create for any app; app-scoped tokens
+// need env:write on that app (scale:write alone is not enough).
+func CanCreateReleaseForApp(tok *authorizer.Token, appID string) bool {
+	if tok == nil {
+		return false
+	}
+	if tok.HasClusterAdmin() {
+		return true
+	}
+	return CanCreateRelease(permissionsForApp(tok, appID))
 }
 
 func grantCovers(tok *authorizer.Token, appID, need string) bool {
