@@ -1245,7 +1245,12 @@ iptables -t nat -L POSTROUTING -n -v 2>/dev/null | head -n 12 || true
 echo "-- VTEP MAC: device vs lease (must match; udev MACAddressPolicy can rewrite it) --"
 dev_mac="\$(cat /sys/class/net/flannel.1/address 2>/dev/null || true)"
 echo "device flannel.1 mac=\${dev_mac:-none} addr_assign_type=\$(cat /sys/class/net/flannel.1/addr_assign_type 2>/dev/null || echo n/a)"
-curl -fsS --max-time 3 http://127.0.0.1:1111/services/flannel/meta 2>/dev/null | python3 -c '
+dkey=\$(python3 -c 'import json
+try:
+ print(((json.load(open("/etc/flynn/host.json")) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or "")
+except Exception:
+ print("")' 2>/dev/null || true)
+curl -fsS --max-time 3 -H "Auth-Key: \${dkey}" http://127.0.0.1:1111/services/flannel/meta 2>/dev/null | python3 -c '
 import json,sys
 d=json.load(sys.stdin).get("data",{})
 for sn,a in sorted((d.get("subnets") or {}).items()):
@@ -1259,7 +1264,7 @@ for ip in ${bridges}; do
   ping -c1 -W2 "\$ip" >/dev/null 2>&1 && echo "ok \$ip" || echo "FAIL \$ip"
 done
 echo "-- postgres meta --"
-curl -fsS --max-time 3 http://127.0.0.1:1111/services/postgres/meta 2>&1 | head -c 500; echo
+curl -fsS --max-time 3 -H "Auth-Key: \${dkey}" http://127.0.0.1:1111/services/postgres/meta 2>&1 | head -c 500; echo
 echo "-- flynn-host --"
 systemctl is-active flynn-host.service 2>/dev/null || true
 command -v ipset >/dev/null && echo "ipset=\$(command -v ipset)" || echo "ipset=MISSING"
@@ -1421,8 +1426,17 @@ export SIRENIA_SERVICE="${service}"
 python3 - <<'PY'
 import json, os, sys, urllib.request
 
-def get(url):
-    with urllib.request.urlopen(url, timeout=5) as r:
+def get(url, timeout=5):
+    key = ""
+    try:
+        with open("/etc/flynn/host.json") as f:
+            key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+    except Exception:
+        pass
+    req = urllib.request.Request(url)
+    if key:
+        req.add_header("Auth-Key", key)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.load(r)
 
 service = os.environ["SIRENIA_SERVICE"]
@@ -1538,8 +1552,17 @@ sirenia_peer_count() {
 python3 -c '
 import json, urllib.request, sys
 url = "http://127.0.0.1:1111/services/${svc}/instances"
+key = ""
 try:
-    with urllib.request.urlopen(url, timeout=5) as resp:
+    with open("/etc/flynn/host.json") as f:
+        key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+except Exception:
+    pass
+req = urllib.request.Request(url)
+if key:
+    req.add_header("Auth-Key", key)
+try:
+    with urllib.request.urlopen(req, timeout=5) as resp:
         data = json.load(resp)
 except Exception:
     print(0)
@@ -1857,7 +1880,16 @@ prefix = os.environ["DRAIN_PREFIX"] + "-"
 services = ("postgres", "mariadb", "mongodb", "redis", "flynn-host")
 
 def get(url):
-    with urllib.request.urlopen(url, timeout=5) as r:
+    key = ""
+    try:
+        with open("/etc/flynn/host.json") as f:
+            key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+    except Exception:
+        pass
+    req = urllib.request.Request(url)
+    if key:
+        req.add_header("Auth-Key", key)
+    with urllib.request.urlopen(req, timeout=5) as r:
         return json.load(r)
 
 leftover = []
@@ -1893,7 +1925,16 @@ python3 - <<'PY'
 import json, os, sys, urllib.request
 
 def get(url):
-    with urllib.request.urlopen(url, timeout=5) as r:
+    key = ""
+    try:
+        with open("/etc/flynn/host.json") as f:
+            key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+    except Exception:
+        pass
+    req = urllib.request.Request(url)
+    if key:
+        req.add_header("Auth-Key", key)
+    with urllib.request.urlopen(req, timeout=5) as r:
         return json.load(r)
 
 service = os.environ["SIRENIA_SERVICE"]
@@ -3198,7 +3239,16 @@ host = u.hostname or ""
 resolve = ""
 if host.endswith(".discoverd"):
     svc = host[: -len(".discoverd")]
-    with urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % svc, timeout=5) as resp:
+    key = ""
+    try:
+        with open("/etc/flynn/host.json") as f:
+            key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+    except Exception:
+        pass
+    req = urllib.request.Request("http://127.0.0.1:1111/services/%s/instances" % svc)
+    if key:
+        req.add_header("Auth-Key", key)
+    with urllib.request.urlopen(req, timeout=5) as resp:
         inst = json.load(resp)
     if not inst:
         raise SystemExit("no discoverd instances for %s" % svc)
@@ -3611,7 +3661,16 @@ app = os.environ["CH_APP"]
 user = os.environ.get("CH_USER") or "default"
 pwd = os.environ.get("CH_PWD") or ""
 rows = os.environ["CH_ROWS"]
-insts = json.load(urllib.request.urlopen("http://127.0.0.1:1111/services/%s/instances" % app, timeout=10))
+key = ""
+try:
+    with open("/etc/flynn/host.json") as f:
+        key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+except Exception:
+    pass
+req = urllib.request.Request("http://127.0.0.1:1111/services/%s/instances" % app)
+if key:
+    req.add_header("Auth-Key", key)
+insts = json.load(urllib.request.urlopen(req, timeout=10))
 if not insts:
     sys.exit("no clickhouse replicas in discoverd")
 queries = [
@@ -5007,7 +5066,16 @@ if [[ -s /etc/flynn/discovery-token ]]; then
 fi
 python3 - <<'PY'
 import json, urllib.request
-with urllib.request.urlopen("http://127.0.0.1:1111/services/discovery/instances", timeout=5) as resp:
+key = ""
+try:
+    with open("/etc/flynn/host.json") as f:
+        key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+except Exception:
+    pass
+req = urllib.request.Request("http://127.0.0.1:1111/services/discovery/instances")
+if key:
+    req.add_header("Auth-Key", key)
+with urllib.request.urlopen(req, timeout=5) as resp:
     inst = json.load(resp)
 if not inst:
     raise SystemExit("no discovery instances")
@@ -5286,6 +5354,12 @@ import json, os, urllib.request
 
 want = int(os.environ["WANT_HOSTS"])
 url = "http://127.0.0.1:1111/services/cluster-monitor/meta"
+auth = ""
+try:
+    with open("/etc/flynn/host.json") as f:
+        auth = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+except Exception:
+    pass
 
 class PutRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -5299,7 +5373,10 @@ class PutRedirect(urllib.request.HTTPRedirectHandler):
         )
 
 opener = urllib.request.build_opener(PutRedirect)
-with opener.open(url, timeout=10) as resp:
+get_req = urllib.request.Request(url)
+if auth:
+    get_req.add_header("Auth-Key", auth)
+with opener.open(get_req, timeout=10) as resp:
     meta = json.load(resp)
 data = meta.get("data") or {}
 if isinstance(data, str):
@@ -5310,6 +5387,8 @@ body = json.dumps({"index": meta["index"], "data": data}).encode()
 req = urllib.request.Request(
     url, data=body, method="PUT", headers={"Content-Type": "application/json"}
 )
+if auth:
+    req.add_header("Auth-Key", auth)
 with opener.open(req, timeout=10) as resp:
     out = json.load(resp)
 print("cluster-monitor hosts=%s index=%s" % (want, out.get("index")))
