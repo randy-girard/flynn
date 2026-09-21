@@ -404,3 +404,31 @@ func TestParseHostFromURL(t *testing.T) {
 		}
 	}
 }
+
+func TestUpdateRemoteBinariesPassesChecksums(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, checksums)") {
+		t.Fatal("SEC-032: remote PullBinariesAndConfig must receive the SHA-512 checksum map")
+	}
+	if strings.Contains(body, "h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, nil)") {
+		t.Fatal("SEC-032: must not pull remote binaries with a nil checksum map")
+	}
+}
+
+func TestTarballUpdateDocumentsMissingChecksumRisk(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "SEC-032 residual risk") {
+		t.Fatal("tarball updates without checksums.sha512 must document SEC-032 residual risk")
+	}
+	if !strings.Contains(body, "updateRemoteBinaries(\"\", binDir, configDir, tarballVersion, baseURL, checksums,") {
+		t.Fatal("tarball remote binary pull must pass checksums when the archive includes them")
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -441,6 +442,12 @@ func (h *jobAPI) PullImages(w http.ResponseWriter, r *http.Request, ps httproute
 
 func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	log := h.host.log.New("fn", "PullBinariesAndConfig")
+	var checksums map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&checksums); err != nil && err != io.EOF {
+		r.Body.Close()
+		httphelper.Error(w, err)
+		return
+	}
 	r.Body.Close()
 
 	query := r.URL.Query()
@@ -459,7 +466,7 @@ func (h *jobAPI) PullBinariesAndConfig(w http.ResponseWriter, r *http.Request, p
 		log.Info("downloading binaries from GitHub", "repo", repo, "version", query.Get("version"))
 	}
 
-	paths, err := d.DownloadBinaries(query.Get("bin-dir"))
+	paths, err := d.DownloadBinaries(query.Get("bin-dir"), checksums)
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
 		// Surface the underlying download error verbatim so the

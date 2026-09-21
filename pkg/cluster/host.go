@@ -292,8 +292,10 @@ func (c *Host) PullImages(repository, configDir, version, baseURL string, body i
 
 // PullBinariesAndConfig pulls binaries and config from a GitHub release or
 // a custom base URL. If baseURL is non-empty, binaries are downloaded from
-// that URL instead of GitHub.
-func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version, baseURL string, body io.Reader) (map[string]string, error) {
+// that URL instead of GitHub. checksums is an optional filename→SHA-512 map
+// from checksums.sha512; the receiving host verifies each gzipped binary
+// before installing it.
+func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version, baseURL string, checksums map[string]string) (map[string]string, error) {
 	query := make(url.Values)
 	query.Set("repository", repository)
 	query.Set("bin-dir", binDir)
@@ -304,7 +306,7 @@ func (c *Host) PullBinariesAndConfig(repository, binDir, configDir, version, bas
 	}
 	path := "/host/pull/binaries?" + query.Encode()
 	var paths map[string]string
-	return paths, c.c.Post(path, body, &paths)
+	return paths, c.c.Post(path, checksums, &paths)
 }
 
 func (c *Host) ResourceCheck(request host.ResourceCheck) error {
