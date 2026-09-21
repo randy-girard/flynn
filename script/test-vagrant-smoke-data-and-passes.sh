@@ -94,6 +94,8 @@ need 'sirenia_primary_read_write' \
   "smoke must wait for postgres/mariadb/mongodb after each upgrade pass"
 need 'DISCOVERD_AUTH_KEY' \
   "sirenia/discoverd probes must send DISCOVERD_AUTH_KEY (SEC-003)"
+need 'CONTROLLER_KEY' \
+  "sirenia appliance /status probes must send CONTROLLER_KEY (SEC-029)"
 need 'wait_datastores_ready "after bootstrap" postgres' \
   "bootstrap must only wait for postgres (mariadb/mongodb stay scaled to 0 until resource add)"
 need 'step_install_plugins' \

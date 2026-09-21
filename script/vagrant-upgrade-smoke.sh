@@ -1265,6 +1265,27 @@ for ip in ${bridges}; do
 done
 echo "-- postgres meta --"
 curl -fsS --max-time 3 -H "Auth-Key: \${dkey}" http://127.0.0.1:1111/services/postgres/meta 2>&1 | head -c 500; echo
+echo "-- postgres /status (SEC-029 appliance auth) --"
+ckey=\$(python3 -c 'import json
+try:
+ print(((json.load(open("/etc/flynn/host.json")) or {}).get("env") or {}).get("CONTROLLER_KEY") or ((json.load(open("/etc/flynn/host.json")) or {}).get("env") or {}).get("AUTH_KEY") or "")
+except Exception:
+ print("")' 2>/dev/null || true)
+paddr=\$(curl -fsS --max-time 3 -H "Auth-Key: \${dkey}" http://127.0.0.1:1111/services/postgres/meta 2>/dev/null | python3 -c 'import json,sys
+d=json.load(sys.stdin).get("data",{})
+if isinstance(d,str):
+ d=json.loads(d)
+p=(d.get("primary") or {})
+print(p.get("addr") or "")' 2>/dev/null || true)
+if [[ -n "\${paddr}" ]]; then
+  phost=\${paddr%:*}
+  pport=\${paddr##*:}
+  sport=\$((pport + 1))
+  echo "primary=\${paddr} status=http://\${phost}:\${sport}/status"
+  curl -sS --max-time 3 -H "Auth-Key: \${ckey}" "http://\${phost}:\${sport}/status" 2>&1 | head -c 500; echo
+else
+  echo "no postgres primary addr"
+fi
 echo "-- flynn-host --"
 systemctl is-active flynn-host.service 2>/dev/null || true
 command -v ipset >/dev/null && echo "ipset=\$(command -v ipset)" || echo "ipset=MISSING"
@@ -1426,13 +1447,19 @@ export SIRENIA_SERVICE="${service}"
 python3 - <<'PY'
 import json, os, sys, urllib.request
 
-def get(url, timeout=5):
-    key = ""
+def host_env(*names):
     try:
         with open("/etc/flynn/host.json") as f:
-            key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+            env = (json.load(f) or {}).get("env") or {}
     except Exception:
-        pass
+        return ""
+    for name in names:
+        v = env.get(name) or ""
+        if v:
+            return v
+    return ""
+
+def get(url, timeout=5, key=""):
     req = urllib.request.Request(url)
     if key:
         req.add_header("Auth-Key", key)
@@ -1440,7 +1467,7 @@ def get(url, timeout=5):
         return json.load(r)
 
 service = os.environ["SIRENIA_SERVICE"]
-meta = get("http://127.0.0.1:1111/services/%s/meta" % service)
+meta = get("http://127.0.0.1:1111/services/%s/meta" % service, key=host_env("DISCOVERD_AUTH_KEY"))
 data = meta.get("data", meta)
 state = json.loads(data) if isinstance(data, str) else data
 primary = state.get("primary") or {}
@@ -1448,7 +1475,8 @@ addr = primary.get("addr") or primary.get("Addr") or ""
 if not addr:
     sys.exit("no %s primary in meta: %s" % (service, json.dumps(state)[:300]))
 host, port = addr.rsplit(":", 1)
-status = get("http://%s:%d/status" % (host, int(port) + 1))
+# SEC-029: appliance GET /status requires CONTROLLER_KEY (Auth-Key / Bearer / basic).
+status = get("http://%s:%d/status" % (host, int(port) + 1), key=host_env("CONTROLLER_KEY", "AUTH_KEY"))
 db = status.get("database") or {}
 if not (db.get("running") and db.get("read_write")):
     sys.exit("%s primary %s not read-write: %s" % (service, addr, json.dumps(status)[:300]))
