@@ -2722,23 +2722,32 @@ EOF
   done
 }
 
+plugin_flynn_module_id() {
+  git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo "${BUILD_VERSION}"
+}
+
 ensure_plugin_image() {
   local dir=$1
   if [[ ! -d "${dir}" ]]; then
     echo "plugin checkout missing: ${dir}" >&2
     return 1
   fi
+  local flynn_id stamp
+  flynn_id="$(plugin_flynn_module_id)"
+  stamp="${dir}/dist/.flynn-module-id"
   # A leftover dist/image.json is not enough: pre-stack plugin-build wrote a
   # ~35MiB overlay-only squashfs. Installing that makes redis scale hang 5m.
-  if plugin_dist_ready "${dir}"; then
-    echo "plugin image ready (${dir}/dist, ubuntu-noble + delta)"
+  # Dist also has to be compiled against this Flynn (SEC-003 Auth-Key); plugin
+  # go.mod pins a published module that predates discoverd auth.
+  if plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${flynn_id}" ]]; then
+    echo "plugin image ready (${dir}/dist, ubuntu-noble + delta, flynn ${flynn_id:0:8})"
     return 0
   fi
   # GitHub ubuntu-noble shares Flynn layer IDs with a local build but not the
   # squashfs bytes (IDs hash recipe inputs, not GOARCH). Overlaying GitHub
   # amd64 binaries on the cluster's arm64 layer makes jobs exit 126. Build on
   # the builder against the ubuntu-noble squashfs from this smoke tarball.
-  info "building plugin image on builder (${dir})"
+  info "building plugin image on builder (${dir}) against Flynn ${flynn_id:0:8}"
   node_root_script builder <<EOF
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
@@ -2754,12 +2763,30 @@ dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
 tar -xOf "\$tarball" "flynn-${BUILD_VERSION}/\$id.squashfs" > "\$dest"
 cd "/opt/flynn-plugins/$(basename "${dir}")"
 test -f flynn-plugin.json
+# Plugin APIs register with discoverd.DefaultClient from the Flynn module in
+# go.mod. Replace with this smoke checkout so Auth-Key is sent (SEC-003), then
+# restore go.mod so the synced workspace is not left dirty.
+if [[ -f go.mod ]]; then
+  cp go.mod go.mod.flynn-smoke.bak
+  [[ -f go.sum ]] && cp go.sum go.sum.flynn-smoke.bak
+  go mod edit -replace "github.com/randy-girard/flynn=${REPO_IN_VM}"
+fi
 ./script/plugin-build
+if [[ -f go.mod.flynn-smoke.bak ]]; then
+  mv go.mod.flynn-smoke.bak go.mod
+  if [[ -f go.sum.flynn-smoke.bak ]]; then
+    mv go.sum.flynn-smoke.bak go.sum
+  elif [[ -f go.sum ]]; then
+    rm -f go.sum
+  fi
+fi
 EOF
   if ! plugin_dist_ready "${dir}"; then
     echo "plugin-build did not produce a stacked ubuntu-noble image in ${dir}/dist" >&2
     return 1
   fi
+  mkdir -p "${dir}/dist"
+  printf '%s\n' "${flynn_id}" > "${stamp}"
 }
 
 # True when dist/image.json is Flynn ubuntu-noble plus a plugin delta, and every
