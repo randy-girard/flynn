@@ -273,6 +273,9 @@ type Port struct {
 type VolumeReq struct {
 	Path         string `json:"path,omitempty"`
 	DeleteOnStop bool   `json:"delete_on_stop,omitempty"`
+	// Size is the volume capacity in bytes (ZFS refquota). Zero uses the
+	// host default (20 GiB).
+	Size int64 `json:"size,omitempty"`
 }
 
 type Volume struct {

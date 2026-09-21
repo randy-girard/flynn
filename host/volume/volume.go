@@ -9,19 +9,19 @@ import (
 var ErrNoSuchVolume = errors.New("no such volume")
 
 /*
-	A Volume is a persistent and sharable filesystem.  Unlike most of the filesystem in a job's
-	container, which is ephemeral and is discarded after job termination, Volumes can be used to
-	store data and may be reconnected to a later job (or to multiple jobs).
+A Volume is a persistent and sharable filesystem.  Unlike most of the filesystem in a job's
+container, which is ephemeral and is discarded after job termination, Volumes can be used to
+store data and may be reconnected to a later job (or to multiple jobs).
 
-	Volumes may also support additional features for their section of the filesystem, such
-	storage quotas, read-only mounts, snapshotting operation, etc.
+Volumes may also support additional features for their section of the filesystem, such
+storage quotas, read-only mounts, snapshotting operation, etc.
 
-	The Flynn host service maintains a locally persistent knowledge
-	of mounts, and supplies this passively to the orchestration API.
-	The host service does *not* perform services such as garbage collection of unmounted
-	volumes (how is it to know whether you still want that data preserved for a future job?)
-	or transport and persistence of volumes between hosts (that should be orchestrated via
-	the API from a higher level service).
+The Flynn host service maintains a locally persistent knowledge
+of mounts, and supplies this passively to the orchestration API.
+The host service does *not* perform services such as garbage collection of unmounted
+volumes (how is it to know whether you still want that data preserved for a future job?)
+or transport and persistence of volumes between hosts (that should be orchestrated via
+the API from a higher level service).
 */
 type Volume interface {
 	Info() *Info
@@ -38,11 +38,20 @@ type Volume interface {
 	`volume.Info` names and describes info about a volume.
 	It is a serializable structure intended for API use.
 */
+
+// DefaultSize is the ZFS refquota applied to newly created data volumes
+// when Info.Size is unset. Existing volumes restored from persistence are
+// not resized.
+const DefaultSize int64 = 20 * 1024 * 1024 * 1024 // 20 GiB
+
 type Info struct {
 	ID        string            `json:"id"`
 	Type      VolumeType        `json:"type"`
 	Meta      map[string]string `json:"meta,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
+	// Size is the volume capacity in bytes. On create it becomes the ZFS
+	// refquota (default DefaultSize). Zero means unset (legacy volumes).
+	Size int64 `json:"size,omitempty"`
 }
 
 type VolumeType string

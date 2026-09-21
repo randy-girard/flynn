@@ -196,6 +196,7 @@ var provisionVolumeAttempts = attempt.Strategy{
 
 func ProvisionVolume(req *ct.VolumeReq, h VolumeCreator, job *host.Job) (*volume.Info, error) {
 	vol := &volume.Info{
+		Size: req.Size,
 		Meta: map[string]string{
 			"flynn-controller.app":            job.Metadata["flynn-controller.app"],
 			"flynn-controller.release":        job.Metadata["flynn-controller.release"],
