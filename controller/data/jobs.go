@@ -120,6 +120,15 @@ func (r *JobRepo) Add(job *ct.Job) error {
 		return err
 	}
 
+	// emit crash_loop once the scheduler has restarted this process N times
+	if job.Restarts != nil && *job.Restarts == ct.CrashLoopEventRestarts {
+		crashLoopID := strings.Join([]string{"crash_loop", job.UUID}, "|")
+		if err := tx.Exec("event_insert_unique", job.AppID, job.UUID, crashLoopID, string(ct.EventTypeCrashLoop), job); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 

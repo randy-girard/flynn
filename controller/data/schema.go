@@ -1111,6 +1111,9 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 			BEFORE UPDATE ON github_repo_connections FOR EACH ROW
 			EXECUTE PROCEDURE set_updated_at_column()`,
 	)
+	migrations.Add(59,
+		`INSERT INTO event_types (name) VALUES ('crash_loop')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

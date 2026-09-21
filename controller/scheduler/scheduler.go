@@ -2978,18 +2978,48 @@ func (s *Scheduler) restartJob(job *Job) {
 	s.persistJob(newJob)
 
 	s.logger.Info("scheduling job restart", "fn", "restartJob", "old_job.id", job.ID, "new_job.id", newJob.ID, "attempts", newJob.Restarts, "delay", backoff)
+	if newJob.Restarts == uint(ct.CrashLoopEventRestarts) {
+		s.logger.Warn("process is in a crash loop", "fn", "restartJob", "app.id", job.AppID, "release.id", job.ReleaseID, "job.type", job.Type, "old_job.id", job.ID, "new_job.id", newJob.ID, "attempts", newJob.Restarts, "delay", backoff)
+	}
 	newJob.restartTimer = time.AfterFunc(backoff, func() { s.StartJob(newJob) })
 }
 
+const (
+	// backoffImmediateRestarts is how many consecutive crashes restart with no
+	// delay so rolling deploys and a first crash are not slowed down.
+	backoffImmediateRestarts = 5
+	backoffBase              = 10 * time.Second
+	backoffMax               = 5 * time.Minute
+)
+
 func (s *Scheduler) getBackoffDuration(restarts uint) time.Duration {
-	switch {
-	case restarts < 5:
+	return backoffDuration(restarts, random.Math.Float64())
+}
+
+// backoffDuration returns how long to wait before restarting a crashed job.
+// restarts below backoffImmediateRestarts are immediate. After that the wait
+// doubles from backoffBase up to backoffMax. jitterUnit in [0, 1] applies
+// equal jitter so concurrent crash loops do not restart in lockstep.
+func backoffDuration(restarts uint, jitterUnit float64) time.Duration {
+	if restarts < backoffImmediateRestarts {
 		return 0
-	case restarts < 15:
-		return 10 * time.Second
-	default:
-		return 30 * time.Second
 	}
+	d := backoffBase
+	for i := uint(0); i < restarts-backoffImmediateRestarts; i++ {
+		next := d * 2
+		if next > backoffMax || next < d {
+			d = backoffMax
+			break
+		}
+		d = next
+	}
+	if jitterUnit < 0 {
+		jitterUnit = 0
+	}
+	if jitterUnit > 1 {
+		jitterUnit = 1
+	}
+	return time.Duration(float64(d)/2 + float64(d)/2*jitterUnit)
 }
 
 func (s *Scheduler) startHTTPServer(port string) {
