@@ -83,6 +83,20 @@ func (c *controllerAPI) PutJob(ctx context.Context, w http.ResponseWriter, req *
 		return
 	}
 
+	// Bind the job to the URL app. PutJob is not wrapped in appLookup so the
+	// scheduler can still persist its own jobs after the app is deleted.
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	appID := params.ByName("apps_id")
+	if data, err := c.appRepo.Get(appID); err == nil {
+		appID = data.(*ct.App).ID
+	}
+	if job.AppID == "" {
+		job.AppID = appID
+	} else if job.AppID != appID {
+		respondWithError(w, ct.ValidationError{Field: "app", Message: "must match the app in the URL"})
+		return
+	}
+
 	if err := c.jobRepo.Add(&job); err != nil {
 		respondWithError(w, err)
 		return
