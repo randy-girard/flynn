@@ -56,6 +56,9 @@ type Installer struct {
 	FlynnVersion string
 	// LayerCacheDir overrides /var/lib/flynn/layer-cache for tests.
 	LayerCacheDir string
+	// AllowExternalLayers fetches image.json LayerURL hosts that are not
+	// GitHub. The GitHub token is never sent to those hosts (SEC-018).
+	AllowExternalLayers bool
 }
 
 // WebhookHost is the subset of pkg/cluster.Host used to register webhooks
@@ -82,6 +85,9 @@ type InstallOptions struct {
 	// Update is flynn-host plugin:update: the plugin app must already exist.
 	// Install still upgrades an existing app, but update refuses a missing one.
 	Update bool
+	// AllowExternalLayers is --allow-external-layers: fetch non-GitHub
+	// layer URLs from image.json without GitHub credentials.
+	AllowExternalLayers bool
 }
 
 // RouteClient is the controller subset used to create HTTP/TCP routes and
@@ -141,6 +147,7 @@ func (in *Installer) refuseIncompatiblePlugin(tag string) error {
 }
 
 func (in *Installer) apply(opts InstallOptions) error {
+	in.AllowExternalLayers = opts.AllowExternalLayers
 	resolved, err := Resolve(opts)
 	if err != nil {
 		return err

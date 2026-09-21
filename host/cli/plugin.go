@@ -10,16 +10,17 @@ import (
 )
 
 const pluginInstallUsage = `
-usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <source>
+usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] <source>
 
 Install a plugin from a local path, alias, or GitHub URL.
 
 Options:
-	--no-build         Fail if dist/ is missing instead of running script/plugin-build
-	--rebuild          Run script/plugin-build even if dist/ already exists (local only)
-	--ref=REF          GitHub release tag matching this Flynn vYYYYMMDD.N (or vYYYYMMDD.N.B)
-	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
-	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
+	--no-build                 Fail if dist/ is missing instead of running script/plugin-build
+	--rebuild                  Run script/plugin-build even if dist/ already exists (local only)
+	--ref=REF                  GitHub release tag matching this Flynn vYYYYMMDD.N (or vYYYYMMDD.N.B)
+	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
+	--auto-tls                 Enable Let's Encrypt on HTTP routes (requires ACME)
+	--allow-external-layers    Fetch non-GitHub image.json layer URLs without GitHub credentials
 
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, registers a provider only when
@@ -54,7 +55,7 @@ Examples:
 `
 
 const pluginUpdateUsage = `
-usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] <plugin>
+usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] <plugin>
 
 Deploy a new release of an already-installed plugin. update requires the
 plugin app to already exist. Update runs hooks.upgrade when declared
@@ -70,15 +71,16 @@ Examples:
 `
 
 const pluginUpdateAllUsage = `
-usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls]
+usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls] [--allow-external-layers]
 
 Update every installed official plugin to the highest compatible GitHub tag
 for this Flynn version (vYYYYMMDD.N.B; never a newer Flynn date.N). Continues
 past individual failures and prints a per-plugin result.
 
 Options:
-	--github-org=ORG   GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
-	--auto-tls         Enable Let's Encrypt on HTTP routes (requires ACME)
+	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
+	--auto-tls                 Enable Let's Encrypt on HTTP routes (requires ACME)
+	--allow-external-layers    Fetch non-GitHub image.json layer URLs without GitHub credentials
 
 Examples:
 
@@ -233,13 +235,14 @@ func runPluginInstall(args *docopt.Args) error {
 		Stdin:  os.Stdin,
 	}
 	return in.Install(plugin.InstallOptions{
-		Source:    args.String["<source>"],
-		Ref:       args.String["--ref"],
-		GitHubOrg: args.String["--github-org"],
-		Cwd:       cwd,
-		NoBuild:   args.Bool["--no-build"],
-		Rebuild:   args.Bool["--rebuild"],
-		AutoTLS:   args.Bool["--auto-tls"],
+		Source:              args.String["<source>"],
+		Ref:                 args.String["--ref"],
+		GitHubOrg:           args.String["--github-org"],
+		Cwd:                 cwd,
+		NoBuild:             args.Bool["--no-build"],
+		Rebuild:             args.Bool["--rebuild"],
+		AutoTLS:             args.Bool["--auto-tls"],
+		AllowExternalLayers: args.Bool["--allow-external-layers"],
 	})
 }
 
@@ -265,13 +268,14 @@ func runPluginUpdate(args *docopt.Args) error {
 		Stdin:  os.Stdin,
 	}
 	return in.Update(plugin.InstallOptions{
-		Source:    args.String["<plugin>"],
-		Ref:       args.String["--ref"],
-		GitHubOrg: args.String["--github-org"],
-		Cwd:       cwd,
-		NoBuild:   args.Bool["--no-build"],
-		Rebuild:   args.Bool["--rebuild"],
-		AutoTLS:   args.Bool["--auto-tls"],
+		Source:              args.String["<plugin>"],
+		Ref:                 args.String["--ref"],
+		GitHubOrg:           args.String["--github-org"],
+		Cwd:                 cwd,
+		NoBuild:             args.Bool["--no-build"],
+		Rebuild:             args.Bool["--rebuild"],
+		AutoTLS:             args.Bool["--auto-tls"],
+		AllowExternalLayers: args.Bool["--allow-external-layers"],
 	})
 }
 
@@ -292,9 +296,10 @@ func runPluginUpdateAll(args *docopt.Args) error {
 		Stdin:  os.Stdin,
 	}
 	return in.UpdateAll(plugin.InstallOptions{
-		GitHubOrg: args.String["--github-org"],
-		Cwd:       cwd,
-		AutoTLS:   args.Bool["--auto-tls"],
+		GitHubOrg:           args.String["--github-org"],
+		Cwd:                 cwd,
+		AutoTLS:             args.Bool["--auto-tls"],
+		AllowExternalLayers: args.Bool["--allow-external-layers"],
 	})
 }
 

@@ -1103,3 +1103,182 @@ func TestDownloadAssetPaths(t *testing.T) {
 		t.Fatal("non-200 download")
 	}
 }
+
+func TestGitHubTokenHost(t *testing.T) {
+	allow := []string{
+		"github.com",
+		"GitHub.COM",
+		"github.com.",
+		"www.github.com",
+		"api.github.com",
+		"objects.githubusercontent.com",
+		"objects-origin.githubusercontent.com",
+		"release-assets.githubusercontent.com",
+		"raw.githubusercontent.com",
+		"media.githubusercontent.com",
+		"githubusercontent.com",
+	}
+	for _, host := range allow {
+		if !githubTokenHost(host) {
+			t.Errorf("allow %q", host)
+		}
+	}
+	deny := []string{
+		"",
+		"evil.example",
+		"github.com.evil.example",
+		"evil-github.com",
+		"notgithub.com",
+		"api.github.com.evil.example",
+		"objects.githubusercontent.com.evil.example",
+		"githubusercontent.com.attacker.example",
+		"githubusercontent.com.evil.example",
+		"127.0.0.1",
+		"localhost",
+	}
+	for _, host := range deny {
+		if githubTokenHost(host) {
+			t.Errorf("deny %q", host)
+		}
+	}
+}
+
+func TestLayerURLCredentials(t *testing.T) {
+	src := &GitHubSource{Host: "github.com"}
+	in := &Installer{}
+	tok, err := in.layerURLCredentials(src, "secret", "https://objects.githubusercontent.com/layers/x")
+	if err != nil || tok != "secret" {
+		t.Fatalf("github cdn: tok=%q err=%v", tok, err)
+	}
+	tok, err = in.layerURLCredentials(src, "secret", "https://github.com/acme/plug/releases/download/v1/x.squashfs")
+	if err != nil || tok != "secret" {
+		t.Fatalf("github.com: tok=%q err=%v", tok, err)
+	}
+	tok, err = in.layerURLCredentials(src, "secret", "http://github.com/acme/plug/releases/download/v1/x.squashfs")
+	if err != nil || tok != "" {
+		t.Fatalf("http github must not send token: tok=%q err=%v", tok, err)
+	}
+
+	_, err = in.layerURLCredentials(src, "secret", "https://attacker.example/steal")
+	if err == nil || !strings.Contains(err.Error(), "--allow-external-layers") {
+		t.Fatalf("external host: %v", err)
+	}
+	_, err = in.layerURLCredentials(src, "secret", "https://github.com.evil.example/steal")
+	if err == nil || !strings.Contains(err.Error(), "github.com.evil.example") {
+		t.Fatalf("lookalike: %v", err)
+	}
+	_, err = in.layerURLCredentials(src, "secret", "file:///etc/passwd")
+	if err == nil || !strings.Contains(err.Error(), "scheme") {
+		t.Fatalf("file: %v", err)
+	}
+
+	in.AllowExternalLayers = true
+	tok, err = in.layerURLCredentials(src, "secret", "https://attacker.example/steal")
+	if err != nil || tok != "" {
+		t.Fatalf("allow-external must strip token: tok=%q err=%v", tok, err)
+	}
+
+	ghe := &GitHubSource{Host: "git.example.com:8443"}
+	in.AllowExternalLayers = false
+	tok, err = in.layerURLCredentials(ghe, "ghe-token", "https://git.example.com/acme/plug/releases/download/v1/x.squashfs")
+	if err != nil || tok != "ghe-token" {
+		t.Fatalf("ghe host: tok=%q err=%v", tok, err)
+	}
+}
+
+func TestFetchGitHubLayerURLDoesNotExfilToken(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "leaked-token")
+	t.Setenv(EnvGitHubTokenAlt, "")
+
+	osID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	deltaID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	var attackerHits int
+	var attackerAuth []string
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerHits++
+		attackerAuth = append(attackerAuth, r.Header.Get("Authorization"))
+		w.Write([]byte("stolen"))
+	}))
+	defer attacker.Close()
+
+	manifest := &ct.ImageManifest{
+		Type: ct.ImageManifestTypeV1,
+		Rootfs: []*ct.ImageRootfs{{
+			Layers: []*ct.ImageLayer{
+				{
+					ID:     osID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 199 << 20,
+					Hashes: map[string]string{"sha512_256": osID},
+				},
+				{
+					ID:     deltaID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 34 << 20,
+					Hashes: map[string]string{"sha512_256": deltaID},
+				},
+			},
+		}},
+	}
+	raw := manifest.RawManifest()
+	imageJSON, _ := json.Marshal(&ct.Artifact{
+		Type:             ct.ArtifactTypeFlynn,
+		RawManifest:      raw,
+		Hashes:           map[string]string{"sha512_256": "deadbeef"},
+		Size:             int64(len(raw)),
+		LayerURLTemplate: attacker.URL + "/layers/{id}.squashfs",
+	})
+	pluginJSON := []byte(`{"name":"redis","kind":"app","app":{"name":"redis","processes":{"web":{"args":["/bin/x"]}}}}`)
+	osBytes := []byte("ubuntu-noble")
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/plug/releases/tags/v20260919.0.1", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v20260919.0.1",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+				{Name: ImageJSON, BrowserDownloadURL: srv.URL + "/files/image.json"},
+				{Name: osID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + osID + ".squashfs"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	mux.HandleFunc("/files/image.json", func(w http.ResponseWriter, r *http.Request) { w.Write(imageJSON) })
+	mux.HandleFunc("/files/"+osID+".squashfs", func(w http.ResponseWriter, r *http.Request) { w.Write(osBytes) })
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	src := &GitHubSource{
+		Host:  "github.com",
+		Owner: "acme",
+		Repo:  "plug",
+		Ref:   "v20260919.0.1",
+		API:   srv.URL,
+	}
+	in := &Installer{GitHubHTTP: &http.Client{}}
+	_, err := in.fetchGitHub(src, "")
+	if err == nil || !strings.Contains(err.Error(), "--allow-external-layers") {
+		t.Fatalf("must refuse external LayerURL: %v", err)
+	}
+	if attackerHits != 0 {
+		t.Fatalf("refused download must not contact attacker (hits=%d auth=%v)", attackerHits, attackerAuth)
+	}
+
+	in.AllowExternalLayers = true
+	dir, err := in.fetchGitHub(src, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	if attackerHits != 1 {
+		t.Fatalf("allow-external hits=%d", attackerHits)
+	}
+	if len(attackerAuth) != 1 || attackerAuth[0] != "" {
+		t.Fatalf("GitHub token must not be sent to attacker: %v", attackerAuth)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, DistDir, deltaID+".squashfs"))
+	if err != nil || string(got) != "stolen" {
+		t.Fatalf("external layer %q %v", got, err)
+	}
+}
