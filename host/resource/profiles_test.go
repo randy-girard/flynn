@@ -45,6 +45,9 @@ func TestApplyNamedLimitsOverwritesMemoryAndCPU(t *testing.T) {
 	if r[TypeTempDisk].Limit == nil {
 		t.Fatal("temp_disk default must be preserved")
 	}
+	if r[TypeMaxProcs].Limit == nil || *r[TypeMaxProcs].Limit != DefaultPidsLimit {
+		t.Fatalf("max_procs default must be preserved, got %+v", r[TypeMaxProcs])
+	}
 }
 
 func TestValidateProfileName(t *testing.T) {

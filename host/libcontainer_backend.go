@@ -645,6 +645,9 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 				// aggressive kernel reclaim and make the container very slow when over limit.
 				Memory:     defaultMemory * 2, // Hard limit = 2x default
 				MemorySwap: defaultMemory,     // Swap limit = default, so total = 2x default
+				// STAB-002: always cap pids.max so a fork bomb cannot exhaust
+				// host PID space. Overwritten below when max_procs is set.
+				PidsLimit: resource.DefaultPidsLimit,
 			},
 		},
 		// SEC-012: expanded masked paths matching Docker defaults to prevent
@@ -813,6 +816,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			Soft: uint64(*spec.Request),
 		})
 	}
+	// STAB-002: pids cgroup limit is per-job; RLIMIT_NPROC is per-uid and
+	// shared across jobs mapped to the same uid, so it cannot contain a
+	// fork bomb on its own. Always apply PidsLimit, including when the job
+	// skipped resource.SetDefaults.
+	config.Cgroups.Resources.PidsLimit = jobPidsLimit(job)
 
 	log.Info("mounting container directories and files")
 	jobIDParts := strings.SplitN(job.ID, "-", 2)
@@ -2447,6 +2455,16 @@ func (c *Container) monitorMemoryUsage(log log15.Logger) {
 			}
 		}
 	}
+}
+
+// jobPidsLimit returns the cgroup pids.max for a job. System and build jobs
+// share the default: 4096 is well above postgres workers + connections and
+// BuildKit nested runc / parallel compile. Override with max_procs.
+func jobPidsLimit(job *host.Job) int64 {
+	if job == nil {
+		return resource.DefaultPidsLimit
+	}
+	return resource.PidsLimit(job.Resources)
 }
 
 func milliCPUToShares(milliCPU uint64) uint64 {
