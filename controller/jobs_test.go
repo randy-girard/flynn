@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"io"
+	"net/http"
 	"time"
 
 	. "github.com/flynn/go-check"
@@ -152,6 +155,58 @@ func (s *S) TestJobStateChanges(c *C) {
 	gotJob, err = s.c.GetJob(app.ID, job.ID)
 	c.Assert(err, IsNil)
 	c.Assert(gotJob.State, Equals, ct.JobStateDown)
+}
+
+func (s *S) putJobRaw(c *C, appID string, job *ct.Job) *http.Response {
+	body, err := json.Marshal(job)
+	c.Assert(err, IsNil)
+	req, err := http.NewRequest("PUT", s.srv.URL+"/apps/"+appID+"/jobs/"+job.UUID, bytes.NewReader(body))
+	c.Assert(err, IsNil)
+	req.SetBasicAuth("", authKey)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	return res
+}
+
+func (s *S) TestPutJobRejectsMismatchedAppID(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "putjob-app-bind"})
+	other := s.createTestApp(c, &ct.App{Name: "putjob-app-bind-other"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	uuid := random.UUID()
+	res := s.putJobRaw(c, app.ID, &ct.Job{
+		UUID:      uuid,
+		AppID:     other.ID,
+		ReleaseID: release.ID,
+		Type:      "web",
+		State:     ct.JobStatePending,
+	})
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 400)
+
+	_, err := s.c.GetJob(app.ID, uuid)
+	c.Assert(err, Equals, ct.ErrNotFound)
+	_, err = s.c.GetJob(other.ID, uuid)
+	c.Assert(err, Equals, ct.ErrNotFound)
+}
+
+func (s *S) TestPutJobFillsEmptyAppID(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "putjob-empty-app"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	uuid := random.UUID()
+	res := s.putJobRaw(c, app.ID, &ct.Job{
+		UUID:      uuid,
+		ReleaseID: release.ID,
+		Type:      "web",
+		State:     ct.JobStatePending,
+	})
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 200)
+
+	got, err := s.c.GetJob(app.ID, uuid)
+	c.Assert(err, IsNil)
+	c.Assert(got.AppID, Equals, app.ID)
+	c.Assert(got.UUID, Equals, uuid)
 }
 
 func fakeHostID() string {
