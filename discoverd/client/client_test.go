@@ -52,6 +52,27 @@ func TestClientConfigAuthKeyOverridesEnv(t *testing.T) {
 	}
 }
 
+func TestClientPicksUpLateEnvAuthKey(t *testing.T) {
+	t.Setenv("DISCOVERD_AUTH_KEY", "")
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("Auth-Key")
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	client := NewClientWithURL(srv.URL)
+	t.Setenv("DISCOVERD_AUTH_KEY", "late-env")
+	var peers []string
+	if err := client.Get("/raft/peers", &peers); err != nil {
+		t.Fatal(err)
+	}
+	if gotHeader != "late-env" {
+		t.Fatalf("Auth-Key=%q", gotHeader)
+	}
+}
+
 func TestClientMaintainsHeadersOnRedirect(t *testing.T) {
 	errc := make(chan error, 1)
 	mux := http.NewServeMux()

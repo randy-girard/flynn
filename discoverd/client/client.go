@@ -35,9 +35,10 @@ func init() {
 
 type Config struct {
 	Endpoints []string
-	// AuthKey is sent as Auth-Key / HTTP basic password. When empty, the
-	// client reads DISCOVERD_AUTH_KEY from the environment at request time so
-	// late bootstrap Setenv still authenticates DefaultClient.
+	// AuthKey is sent as Auth-Key (and as HTTP basic password on clients
+	// constructed with a key already set). When empty, the client reads
+	// DISCOVERD_AUTH_KEY from the environment at request time so late
+	// bootstrap Setenv still authenticates DefaultClient via Auth-Key.
 	AuthKey string
 }
 
@@ -111,15 +112,6 @@ func (c *Client) authKey() string {
 		return c.Key
 	}
 	return os.Getenv("DISCOVERD_AUTH_KEY")
-}
-
-func (c *Client) refreshAuth() {
-	key := c.authKey()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, s := range c.servers {
-		s.Key = key
-	}
 }
 
 func (c *Client) authHeader() http.Header {
@@ -215,8 +207,6 @@ func (c *Client) updateServers(servers []string, idx uint64) {
 }
 
 func (c *Client) Do(method string, path string, in, out interface{}, streamReq bool) (res stream.Stream, err error) {
-	c.refreshAuth()
-
 	var leaderReq bool
 	switch method {
 	case "PUT", "DEL", "POST":
@@ -381,7 +371,6 @@ func (c *Client) RaftLeader() (res dt.RaftLeader, err error) {
 }
 
 func (c *Client) serverByHost(url string) *httpclient.Client {
-	c.refreshAuth()
 	for _, s := range c.servers {
 		if s.URL == url {
 			return s
