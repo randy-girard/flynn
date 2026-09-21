@@ -46,6 +46,10 @@ by some frameworks to configure database connections. New URLs use
 `postgres.<cluster-domain>`). `pg_hba` still uses `host` (not `hostssl`), so
 in-cluster clients that pass `sslmode=disable` keep working.
 
+App `DATABASE_URL` connections use TCP 5432. The appliance admin HTTP API on
+:5433 (`/status`, `/stop`) requires the cluster controller key; `GET
+/.well-known/status` stays open for health checks. User jobs cannot open :5433.
+
 ### External access
 
 Export the database on a TCP route with a stable hostname, then open the host

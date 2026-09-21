@@ -336,6 +336,16 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	} else if updated {
 		skipDeploy = false
 	}
+	if app.Name == "postgres" {
+		if release.Env == nil {
+			release.Env = map[string]string{}
+		}
+		if key, err := updaterdeploy.ControllerKeyFromCluster(client); err == nil {
+			if updaterdeploy.EnsureApplianceControllerKey(release.Env, key) {
+				skipDeploy = false
+			}
+		}
+	}
 	if skipDeploy {
 		return errDeploySkipped{"app is already using latest images"}
 	}

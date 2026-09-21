@@ -256,3 +256,23 @@ func TestInstanceHost(t *testing.T) {
 		t.Fatal("empty addr")
 	}
 }
+
+func TestUserDatastoreTCPPortsAreDataPlaneOnly(t *testing.T) {
+	seen := map[string]bool{}
+	for _, p := range UserDatastoreTCPPorts {
+		if seen[p] {
+			t.Fatalf("duplicate port %s", p)
+		}
+		seen[p] = true
+	}
+	for _, p := range []string{"5432", "3306", "27017", "6379", "9092", "9440", "8443", "8123", "9000"} {
+		if !seen[p] {
+			t.Fatalf("missing data-plane port %s", p)
+		}
+	}
+	for _, p := range []string{"5433", "3307", "27018", "6380", "9090", "9093", "9094", "9095", "9009"} {
+		if seen[p] {
+			t.Fatalf("admin/internal port %s must not be reachable from user jobs", p)
+		}
+	}
+}

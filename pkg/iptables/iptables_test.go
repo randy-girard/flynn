@@ -61,9 +61,43 @@ func TestJobIsolationRuleOrder(t *testing.T) {
 	if strings.Contains(legacy, "ctstate") {
 		t.Fatalf("legacy overlay DROP must match all states (that is the bug): %s", legacy)
 	}
-	allowData := strings.Join(UserToDatastoreArgs(), " ")
+	allowData := strings.Join(UserToDatastoreArgs("5432"), " ")
 	if !strings.Contains(allowData, "flynn-net-data dst") || !strings.Contains(allowData, "ACCEPT") {
 		t.Fatalf("user→data = %s", allowData)
+	}
+	if !strings.Contains(allowData, "-p tcp") || !strings.Contains(allowData, "--dport 5432") {
+		t.Fatal("user→data ACCEPT must be TCP and port-restricted so admin HTTP is not reachable")
+	}
+	legacyData := strings.Join(LegacyUserToDatastoreArgs(), " ")
+	if strings.Contains(legacyData, "dport") {
+		t.Fatalf("legacy user→data must accept every port (that is the bug): %s", legacyData)
+	}
+	seenPorts := map[string]bool{}
+	for _, rule := range UserToDatastoreRules() {
+		joined := strings.Join(rule, " ")
+		if !strings.Contains(joined, "--dport") || !strings.Contains(joined, "-p tcp") {
+			t.Fatalf("datastore ACCEPT must be one proto/port: %s", joined)
+		}
+		dport := ""
+		for i, a := range rule {
+			if a == "--dport" && i+1 < len(rule) {
+				dport = rule[i+1]
+			}
+		}
+		if dport == "" {
+			t.Fatalf("missing --dport: %v", rule)
+		}
+		seenPorts[dport] = true
+	}
+	for _, p := range []string{"5432", "3306", "27017", "6379", "9092", "9440"} {
+		if !seenPorts[p] {
+			t.Fatalf("missing data-plane port %s in UserToDatastoreRules", p)
+		}
+	}
+	for _, p := range []string{"5433", "3307", "27018", "6380", "9090", "9093", "9095"} {
+		if seenPorts[p] {
+			t.Fatalf("admin/controller port %s must not be in UserToDatastoreRules", p)
+		}
 	}
 	allowDNS := strings.Join(UserToBridgeDNSArgs(bridge, "udp"), " ")
 	if !strings.Contains(allowDNS, "-d "+bridge) || !strings.Contains(allowDNS, "--dport 53") || !strings.Contains(allowDNS, "ACCEPT") {
@@ -83,20 +117,20 @@ func TestJobIsolationRuleOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := string(src)
-	dataAt := strings.Index(body, "UserToDatastoreArgs()")
+	dataAt := strings.Index(body, "UserToDatastoreRules()")
 	dropAt := strings.Index(body, "UserOverlayDropArgs(overlay)")
 	if dataAt < 0 || dropAt < 0 || dataAt < dropAt {
-		// EnableJobIsolation inserts last-to-first; UserToDatastoreArgs must
+		// EnableJobIsolation inserts last-to-first; UserToDatastoreRules must
 		// appear after UserOverlayDropArgs in the insert loop.
 		loop := body
-		if i := strings.Index(body, "for _, args := range [][]string{"); i >= 0 {
+		if i := strings.Index(body, "iso := [][]string{"); i >= 0 {
 			loop = body[i:]
 		}
-		if !strings.Contains(loop, "UserOverlayDropArgs") || !strings.Contains(loop, "UserToDatastoreArgs") || !strings.Contains(loop, "UserToNodeDropArgs") {
+		if !strings.Contains(loop, "UserOverlayDropArgs") || !strings.Contains(loop, "UserToDatastoreRules") || !strings.Contains(loop, "UserToNodeDropArgs") {
 			t.Fatal("EnableJobIsolation must insert datastore ACCEPT, DNS, and node DROP around overlay DROP")
 		}
 		dropPos := strings.Index(loop, "UserOverlayDropArgs")
-		dataPos := strings.Index(loop, "UserToDatastoreArgs")
+		dataPos := strings.Index(loop, "UserToDatastoreRules")
 		if dataPos < dropPos {
 			t.Fatal("insert loop must list DROP first so ACCEPT is at the top of FORWARD")
 		}
@@ -155,6 +189,9 @@ func TestEnableJobIsolationDeletesLegacyOverlayDrop(t *testing.T) {
 	}
 	if !strings.Contains(iso, "LegacyUserToBridgeArgs") || !strings.Contains(iso, "EnableHostIsolation") {
 		t.Fatal("EnableJobIsolation must replace unrestricted gateway ACCEPT and install INPUT host isolation")
+	}
+	if !strings.Contains(iso, "LegacyUserToDatastoreArgs") || !strings.Contains(iso, `Raw(append([]string{"-D"}, legacyData...)...)`) {
+		t.Fatal("EnableJobIsolation must delete the unrestricted user→data ACCEPT so upgrades install per-port rules")
 	}
 }
 

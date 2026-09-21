@@ -122,10 +122,28 @@ func LegacyUserOverlayDropArgs(overlay string) []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-d", overlay, "-j", "DROP"}
 }
 
-// UserToDatastoreArgs allows user jobs to reach appliance data-plane IPs
-// (the hosts embedded in provisioned DATABASE_URL / REDIS_URL / …).
-func UserToDatastoreArgs() []string {
+// LegacyUserToDatastoreArgs is the pre-fix ACCEPT that matched every
+// protocol/port on flynn-net-data, including appliance admin HTTP
+// (postgres :5433, mariadb :3307, mongodb :27018, redis :6380, kafka :9095,
+// clickhouse :9090).
+func LegacyUserToDatastoreArgs() []string {
 	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-m", "set", "--match-set", netpolicy.ServiceData, "dst", "-j", "ACCEPT"}
+}
+
+// UserToDatastoreArgs allows user jobs to reach one TCP data-plane port on
+// appliance IPs (the hosts in DATABASE_URL / REDIS_URL / …).
+func UserToDatastoreArgs(dport string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceUser, "src", "-m", "set", "--match-set", netpolicy.ServiceData, "dst", "-p", "tcp", "--dport", dport, "-j", "ACCEPT"}
+}
+
+// UserToDatastoreRules is one ACCEPT per UserDatastoreTCPPorts entry.
+func UserToDatastoreRules() [][]string {
+	ports := netpolicy.UserDatastoreTCPPorts
+	rules := make([][]string, 0, len(ports))
+	for _, p := range ports {
+		rules = append(rules, UserToDatastoreArgs(p))
+	}
+	return rules
 }
 
 // LegacyUserToBridgeArgs is the pre-fix rule that accepted every protocol/port
@@ -247,17 +265,22 @@ func EnableJobIsolation(overlay, bridgeAddr string) error {
 	if Exists(legacyBridge...) {
 		_, _ = Raw(append([]string{"-D"}, legacyBridge...)...)
 	}
-	// Insert last-to-first so the chain order is: data ACCEPT, DNS ACCEPT,
-	// build→user DROP, node DROP, user overlay DROP.
-	for _, args := range [][]string{
+	legacyData := LegacyUserToDatastoreArgs()
+	if Exists(legacyData...) {
+		_, _ = Raw(append([]string{"-D"}, legacyData...)...)
+	}
+	// Insert last-to-first so the chain order is: data ACCEPT (per port),
+	// DNS ACCEPT, build→user DROP, node DROP, user overlay DROP.
+	iso := [][]string{
 		UserOverlayDropArgs(overlay),
 		UserToNodeDropArgs(),
 		BuildToNodeDropArgs(),
 		BuildToUserDropArgs(),
 		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
 		UserToBridgeDNSArgs(bridgeAddr, "udp"),
-		UserToDatastoreArgs(),
-	} {
+	}
+	iso = append(iso, UserToDatastoreRules()...)
+	for _, args := range iso {
 		if err := insertIfMissing("FORWARD isolation", args); err != nil {
 			return err
 		}

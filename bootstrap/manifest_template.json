@@ -92,6 +92,12 @@
     "action": "gen-random"
   },
   {
+    "id": "controller-key",
+    "action": "gen-random",
+    "controller_key": true,
+    "data": "{{ getenv \"CONTROLLER_KEY\" }}"
+  },
+  {
     "id": "postgres",
     "app": {
       "name": "postgres",
@@ -108,6 +114,7 @@
         "PGHOST": "leader.postgres.discoverd",
         "PGUSER": "flynn",
         "PGPASSWORD": "{{ (index .StepData \"pg-password\").Data }}",
+        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "SIRENIA_PROCESS": "postgres",
         "SINGLETON": "{{ .Singleton }}"
       },
@@ -129,12 +136,6 @@
       "postgres": 3,
       "web": 2
     }
-  },
-  {
-    "id": "controller-key",
-    "action": "gen-random",
-    "controller_key": true,
-    "data": "{{ getenv \"CONTROLLER_KEY\" }}"
   },
   {
     "id": "access-token-key",

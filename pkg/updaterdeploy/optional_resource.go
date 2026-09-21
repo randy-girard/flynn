@@ -130,6 +130,12 @@ func ensureProvider(client controller.Client, name, url string) error {
 }
 
 func controllerKeyFromCluster(client controller.Client) (string, error) {
+	return ControllerKeyFromCluster(client)
+}
+
+// ControllerKeyFromCluster returns the cluster controller key from the
+// controller or postgres release.
+func ControllerKeyFromCluster(client controller.Client) (string, error) {
 	for _, appName := range []string{"controller", "postgres"} {
 		release, err := client.GetAppRelease(appName)
 		if err != nil {
@@ -143,6 +149,17 @@ func controllerKeyFromCluster(client controller.Client) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("unable to find controller key in cluster")
+}
+
+// EnsureApplianceControllerKey copies the cluster key onto a datastore
+// appliance release so its admin HTTP API can authenticate sirenia peers
+// and provider callers. Returns true if env was changed.
+func EnsureApplianceControllerKey(env map[string]string, key string) bool {
+	if env == nil || key == "" || env["CONTROLLER_KEY"] != "" {
+		return false
+	}
+	env["CONTROLLER_KEY"] = key
+	return true
 }
 
 func clusterSingleton(client controller.Client) bool {

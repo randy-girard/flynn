@@ -56,7 +56,15 @@ Applications run in their own network namespace on the overlay. User jobs
 cannot open connections to other user jobs or to internal Flynn services
 (`controller`, `blobstore`, `postgres-api`, …). They may reach provisioned
 datastores only at the leader host Flynn put in `DATABASE_URL` /
-`REDIS_URL` / etc. Each Postgres role can CONNECT only to its own database
+`REDIS_URL` / etc., and only on the database protocol ports (Postgres
+5432, MariaDB 3306, MongoDB 27017, Redis 6379, Kafka 9092, ClickHouse
+9440/8443/8123/9000). Appliance admin HTTP on those same IPs (Postgres
+5433, MariaDB 3307, MongoDB 27018, Redis 6380, Kafka 9095, ClickHouse
+9090) is blocked from user jobs. Those admin APIs (`/backup`, `/stop`,
+Kafka topic/group management, ClickHouse database management) require
+the cluster controller key (HTTP basic or `Authorization: Bearer`).
+`GET /.well-known/status` stays unauthenticated for health checks.
+Each Postgres role can CONNECT only to its own database
 (`PUBLIC` CONNECT is revoked), so a user job cannot open the controller,
 router, or blobstore databases. Cross-app HTTP still works through routes you
 add (the router). System appliances keep a full overlay mesh.

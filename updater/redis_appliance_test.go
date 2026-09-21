@@ -68,3 +68,16 @@ func TestUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
 		t.Fatal("slugrunner skip must key off the artifact, not git deploy meta (docker:push is not a git deploy)")
 	}
 }
+
+func TestUpdaterInjectsPostgresControllerKey(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	ensure := strings.Index(body, "EnsureApplianceControllerKey")
+	if fn < 0 || ensure < 0 || ensure < fn {
+		t.Fatal("deployApp must copy CONTROLLER_KEY onto postgres appliance releases")
+	}
+}

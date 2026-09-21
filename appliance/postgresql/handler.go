@@ -6,6 +6,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
 	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/sirenia/client"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
@@ -20,13 +21,17 @@ type Handler struct {
 	Peer        *state.Peer
 	Heartbeater discoverd.Heartbeater
 	Logger      log15.Logger
+	// AuthKey is the cluster secret required on every route except
+	// /.well-known/status. Empty denies those routes (fail closed).
+	AuthKey string
 }
 
 // NewHandler returns a new instance of Handler.
 func NewHandler() *Handler {
 	h := &Handler{
-		router: httprouter.New(),
-		Logger: log15.New(),
+		router:  httprouter.New(),
+		Logger:  log15.New(),
+		AuthKey: appliancehttp.Key(),
 	}
 	h.router.Handler("GET", status.Path, status.Handler(h.healthStatus))
 	h.router.GET("/status", h.handleGetStatus)
@@ -34,7 +39,13 @@ func NewHandler() *Handler {
 	return h
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) { h.router.ServeHTTP(w, req) }
+func (h *Handler) ServeHTTP(w http.ResponseWriter, req *http.Request) {
+	if !appliancehttp.PublicStatusPath(req.URL.Path) && !appliancehttp.Authorized(req, h.AuthKey) {
+		appliancehttp.Unauthorized(w)
+		return
+	}
+	h.router.ServeHTTP(w, req)
+}
 
 func (h *Handler) healthStatus() status.Status {
 	if h.Peer == nil || h.Process == nil {
