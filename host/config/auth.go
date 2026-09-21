@@ -47,3 +47,15 @@ func SetAuthKey(file, key string) error {
 	}
 	return os.Chmod(file, 0600)
 }
+
+// PersistEnvAuthKey writes FLYNN_HOST_AUTH_KEY from the environment into
+// file when the variable is set. It is a no-op when the env is empty so
+// flynn-host init does not invent a per-host secret that would desynchronize
+// cluster bootstrap (configure-host-auth sets one cluster-wide key).
+func PersistEnvAuthKey(file string) error {
+	key := os.Getenv("FLYNN_HOST_AUTH_KEY")
+	if key == "" {
+		return nil
+	}
+	return SetAuthKey(file, key)
+}

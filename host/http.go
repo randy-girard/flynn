@@ -81,28 +81,40 @@ func (h *Host) authKeyValid(key string) bool {
 	return subtle.ConstantTimeCompare([]byte(key), []byte(h.authKey)) == 1
 }
 
+func writeHostUnauthorized(w http.ResponseWriter) {
+	w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
+	httphelper.Error(w, httphelper.JSONError{
+		Code:    httphelper.UnauthorizedErrorCode,
+		Message: "authentication required",
+	})
+}
+
 // authMiddleware wraps an http.Handler and requires a valid Auth-Key header
-// or Basic auth password matching the host's authKey. If no authKey is
-// configured, all requests are allowed (backwards compatibility).
+// or Basic auth password matching the host's authKey.
+//
+// GET /host/status is always unauthenticated (health and bootstrap discovery).
+// When no authKey is configured, every other request fails closed unless it
+// arrived from TCP loopback or a Unix socket (local flynn-host CLI and
+// on-node bootstrap). X-Forwarded-For is ignored. After a key is set,
+// loopback is not a bypass; authKeyValid must succeed.
 func (h *Host) authMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if h.authKey == "" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Allow unauthenticated health checks
 		if r.URL.Path == "/host/status" && r.Method == "GET" {
 			next.ServeHTTP(w, r)
 			return
 		}
 
+		if h.authKey == "" {
+			if httphelper.RequestFromLoopbackOrUnix(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeHostUnauthorized(w)
+			return
+		}
+
 		if !h.authKeyValid(hostAuthKeyFromRequest(r)) {
-			w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
-			httphelper.Error(w, httphelper.JSONError{
-				Code:    httphelper.UnauthorizedErrorCode,
-				Message: "authentication required",
-			})
+			writeHostUnauthorized(w)
 			return
 		}
 
@@ -811,12 +823,15 @@ func (h *jobAPI) SystemctlRestart(w http.ResponseWriter, req *http.Request, _ ht
 func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "ConfigureAuthKey")
 
-	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="flynn-host"`)
-		httphelper.Error(w, httphelper.JSONError{
-			Code:    httphelper.UnauthorizedErrorCode,
-			Message: "authentication required",
-		})
+	// First-time TOFU is loopback/unix only (not the cluster subnet), even if
+	// this handler is reached without authMiddleware.
+	if h.host.authKey == "" {
+		if !httphelper.RequestFromLoopbackOrUnix(req) {
+			writeHostUnauthorized(w)
+			return
+		}
+	} else if !h.host.authKeyValid(hostAuthKeyFromRequest(req)) {
+		writeHostUnauthorized(w)
 		return
 	}
 

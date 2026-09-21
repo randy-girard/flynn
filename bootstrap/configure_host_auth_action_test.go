@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -49,6 +50,47 @@ func (s *statusServer) client() *cluster.Host {
 }
 
 func (s *statusServer) Close() { s.srv.Close() }
+
+func TestConfigureAuthDialAddrs(t *testing.T) {
+	if got := configureAuthDialAddrs("127.0.0.1:1113"); len(got) != 1 || got[0] != "127.0.0.1:1113" {
+		t.Fatalf("loopback: %v", got)
+	}
+	if got := configureAuthDialAddrs("[::1]:1113"); len(got) != 1 || got[0] != "[::1]:1113" {
+		t.Fatalf("ipv6 loopback: %v", got)
+	}
+	// A non-local advertised IP must stay as-is (no subnet TOFU rewrite).
+	if got := configureAuthDialAddrs("198.51.100.20:1113"); len(got) != 1 || got[0] != "198.51.100.20:1113" {
+		t.Fatalf("remote: %v", got)
+	}
+
+	localIP := firstNonLoopbackIP(t)
+	if localIP == "" {
+		t.Skip("no non-loopback interface address")
+	}
+	addr := net.JoinHostPort(localIP, "1113")
+	got := configureAuthDialAddrs(addr)
+	if len(got) != 2 || got[0] != "127.0.0.1:1113" || got[1] != addr {
+		t.Fatalf("local advertised %s: %v", addr, got)
+	}
+}
+
+func firstNonLoopbackIP(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP == nil || n.IP.IsLoopback() || n.IP.IsLinkLocalUnicast() {
+			continue
+		}
+		if v4 := n.IP.To4(); v4 != nil {
+			return v4.String()
+		}
+	}
+	return ""
+}
 
 // TestWaitForHostAuthAllReady verifies that when every host already reports
 // auth enabled, waitForHostAuth returns immediately without error.
