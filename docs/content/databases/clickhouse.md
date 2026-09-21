@@ -63,7 +63,10 @@ Provisioning adds several environment variables to your app release:
 To connect to a console for the cluster, run `flynn clickhouse:cli` (alias
 `flynn clickhouse client`). This
 does not require the ClickHouse client to be installed locally or firewall or
-security changes, as it runs in a container on the Flynn cluster.
+security changes, as it runs in a container on the Flynn cluster. The CLI uses
+`--secure` against **9440** and accepts the Flynn-minted appliance certificate
+(the private CA is not in the image trust store). External clients should
+still pass `CLICKHOUSE_TRUSTED_CERT`.
 
 ## Managing databases
 

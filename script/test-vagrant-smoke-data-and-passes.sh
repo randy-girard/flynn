@@ -41,6 +41,14 @@ grep -q 'tty INSERT VALUES' "${clickhouse_cli_test}" \
   || { echo "clickhouse plugin CLI must cover TTY INSERT VALUES stdin close" >&2; exit 1; }
 grep -q 'pipe INSERT VALUES' "${clickhouse_cli_test}" \
   || { echo "clickhouse plugin CLI must keep piped stdin for INSERT FORMAT CSV" >&2; exit 1; }
+clickhouse_admin="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main.go"
+need_file "${clickhouse_admin}" "clickhouse-client TLS flags live in flynn-clickhouse admin"
+grep -q -- '--accept-invalid-certificate' "${clickhouse_admin}" \
+  || { echo "clickhouse-client --secure must accept the Flynn-minted CA (not in the image trust store)" >&2; exit 1; }
+clickhouse_tls_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/main_test.go"
+need_file "${clickhouse_tls_test}" "clickhouse-client TLS flags must have unit tests"
+grep -q 'TestClickhouseClientTLSArgs' "${clickhouse_tls_test}" \
+  || { echo "clickhouse plugin must test clickhouseClientTLSArgs (TLS verify failed on 9440)" >&2; exit 1; }
 
 need 'test/apps/upgrade-smoke-buildpack' \
   "smoke must git-push a custom .buildpacks app, not only the stock Go slug"
