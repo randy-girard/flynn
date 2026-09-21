@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -67,14 +68,14 @@ func TestHostAuthMiddleware(t *testing.T) {
 			want: http.StatusNoContent,
 		},
 		{
-			name:   "no key subnet discoverd notify allowed",
-			method: "POST", path: "/host/discoverd", remote: "192.0.2.200:9",
-			want: http.StatusNoContent,
+			name:   "no key subnet discoverd notify 401",
+			method: "POST", path: "/host/discoverd", remote: "198.51.100.9:9",
+			want: http.StatusUnauthorized,
 		},
 		{
-			name:   "no key subnet network notify allowed",
-			method: "POST", path: "/host/network", remote: "192.0.2.200:9",
-			want: http.StatusNoContent,
+			name:   "no key subnet network notify 401",
+			method: "POST", path: "/host/network", remote: "198.51.100.9:9",
+			want: http.StatusUnauthorized,
 		},
 		{
 			name:   "no key X-Forwarded-For spoof 401",
@@ -180,5 +181,35 @@ func TestConfigureAuthKeyEmptyRejectsSubnet(t *testing.T) {
 	wrapped.ServeHTTP(jobsRec, jobsReq)
 	if jobsRec.Code != http.StatusUnauthorized {
 		t.Fatalf("GET /host/jobs from subnet: status=%d want %d", jobsRec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestHostAuthMiddlewareLocalInterface(t *testing.T) {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local net.IP
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP == nil || n.IP.IsLoopback() || n.IP.To4() == nil {
+			continue
+		}
+		local = n.IP
+		break
+	}
+	if local == nil {
+		t.Skip("no non-loopback IPv4 on this host")
+	}
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	wrapped := (&Host{}).authMiddleware(ok)
+	req := httptest.NewRequest("POST", "/host/discoverd", nil)
+	req.RemoteAddr = net.JoinHostPort(local.String(), "9")
+	rec := httptest.NewRecorder()
+	wrapped.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST /host/discoverd from local %s: status=%d want %d", local, rec.Code, http.StatusNoContent)
 	}
 }

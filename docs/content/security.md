@@ -58,13 +58,12 @@ bootstrap) the API **fails closed**, with these exceptions:
   including advertised subnet IPs. Multi-node bootstrap runs
   `configure-host-auth` on one coordinator and must reach every host's
   `:1113`, not only loopback.
-* First-time `POST /host/discoverd` and `POST /host/network` are the same
-  empty-key window. discoverd and flannel notify via the host `--listen-ip`
-  (the builder and cluster daemons do not listen on loopback), and
-  `flynn-host` is not registered in discoverd until that webhook succeeds.
-* Every other method is `401` unless the client is on **TCP loopback**
-  (`127.0.0.0/8` or `::1`) or a **Unix domain socket** (local `flynn-host`
-  CLI). Job, volume, and update APIs are not opened on the subnet.
+* Every other method is `401` unless the client is on **this host**: TCP
+  loopback (`127.0.0.0/8` or `::1`), a **Unix domain socket**, or a **local
+  interface IP**. `flynn-host` often listens on `--listen-ip` rather than
+  `127.0.0.1`; discoverd, flannel, and the image builder notify that address
+  from the same machine. Job, volume, and update APIs stay closed to other
+  hosts on the subnet.
 
 After a key is set, loopback is not a bypass; the request must present
 `authKey`. Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
@@ -75,8 +74,7 @@ secret. If `FLYNN_HOST_AUTH_KEY` is already in the environment, init persists
 it into `host.json`. Joining hosts should set that cluster key before the
 daemon listens. Bootstrap still prefers `127.0.0.1` when configuring the
 local host (faster); remote peers use the advertised address and empty-key
-TOFU on `POST /host/auth-key`. discoverd/flannel notify uses the same
-empty-key window on `POST /host/discoverd` and `POST /host/network`.
+TOFU on `POST /host/auth-key` only.
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. Cluster

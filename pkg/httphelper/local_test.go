@@ -1,6 +1,7 @@
 package httphelper
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -51,5 +52,41 @@ func TestRequestFromLoopbackOrUnix(t *testing.T) {
 				t.Fatalf("RemoteAddr=%q forwarded=%q got %v want %v", tc.remote, tc.forwarded, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRequestFromLocalMachine(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/host/jobs", nil)
+	req.RemoteAddr = "10.0.0.5:1113"
+	if RequestFromLocalMachine(req) {
+		t.Fatal("foreign subnet IP must not count as local machine")
+	}
+	req.RemoteAddr = "127.0.0.1:9"
+	if !RequestFromLocalMachine(req) {
+		t.Fatal("loopback must count as local machine")
+	}
+
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var local net.IP
+	for _, a := range addrs {
+		n, ok := a.(*net.IPNet)
+		if !ok || n.IP == nil || n.IP.IsLoopback() {
+			continue
+		}
+		if n.IP.To4() == nil {
+			continue
+		}
+		local = n.IP
+		break
+	}
+	if local == nil {
+		t.Skip("no non-loopback IPv4 on this host")
+	}
+	req.RemoteAddr = net.JoinHostPort(local.String(), "9")
+	if !RequestFromLocalMachine(req) {
+		t.Fatalf("own interface %s must count as local machine", local)
 	}
 }
