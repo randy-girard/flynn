@@ -106,12 +106,6 @@
     "action": "gen-random"
   },
   {
-    "id": "controller-key",
-    "action": "gen-random",
-    "controller_key": true,
-    "data": "{{ getenv \"CONTROLLER_KEY\" }}"
-  },
-  {
     "id": "postgres",
     "app": {
       "name": "postgres",
