@@ -26,6 +26,8 @@ need 'RESUME_AT=restore' \
   "smoke must resume at --from-backup using an existing smoke-backup tar"
 need 'overlaying' \
   "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
+need 'overlay_flynn_host_on_node' \
+  "upgrade --force must re-overlay flynn-host; tarball update drops the SKIP_BUILD binary"
 backup_go="${ROOT}/pkg/backup/backup.go"
 if ! grep -q 'formationForBackup' "${backup_go}"; then
   echo "flynn-host backup must tolerate a missing formation on the current postgres release" >&2

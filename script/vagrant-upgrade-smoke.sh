@@ -2321,6 +2321,24 @@ EOF
   echo "built $(basename "${BUILT_TARBALL}") ($(du -h "${BUILT_TARBALL}" | awk '{print $1}'))"
 }
 
+# flynn-host backup/restore CLI lives in this binary. SKIP_BUILD overlays
+# build/bin over the tarball copy; flynn-host update --force puts the tarball
+# binary back, so upgrades must overlay again.
+overlay_flynn_host_on_node() {
+  local node=$1
+  node_root_script "${node}" <<EOF
+set -euo pipefail
+src="${REPO_IN_VM}/build/bin/flynn-host"
+if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
+  echo "overlaying \${src} onto flynn-host (host-side restore/CLI fixes)"
+  install -m 0755 "\${src}" /usr/local/bin/flynn-host
+  if [[ -e /usr/bin/flynn-host ]]; then
+    install -m 0755 "\${src}" /usr/bin/flynn-host
+  fi
+fi
+EOF
+}
+
 install_flynn_on_node() {
   local node=$1
   local tarball_in_vm
@@ -4996,7 +5014,7 @@ step_verify_before() {
 
 step_upgrade() {
   resolve_built_tarball
-  local tarball_in_vm
+  local tarball_in_vm node
   tarball_in_vm="$(tarball_vm_path)"
   local pass=${1:-1}
 
@@ -5006,6 +5024,10 @@ set -euo pipefail
 test -f "${tarball_in_vm}"
 flynn-host update --all-nodes --tarball "${tarball_in_vm}" --force
 EOF
+  # --force reinstalls flynn-host from the tarball and drops the SKIP_BUILD overlay.
+  for node in "${NODES[@]}"; do
+    overlay_flynn_host_on_node "${node}"
+  done
   wait_datastores_ready "after upgrade ${pass}" postgres mariadb mongodb redis || return 1
   echo "local tarball update pass ${pass} complete"
 }
