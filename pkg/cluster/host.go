@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,8 +81,13 @@ func (c *Host) GetStatus() (*host.HostStatus, error) {
 
 // GetStats returns resource usage stats for this host.
 func (c *Host) GetStats() (*host.HostResourceStats, error) {
+	return c.GetStatsContext(context.Background())
+}
+
+// GetStatsContext is GetStats with a request context (REL-001).
+func (c *Host) GetStatsContext(ctx context.Context) (*host.HostResourceStats, error) {
 	var res host.HostResourceStats
-	err := c.c.Get("/host/stats", &res)
+	err := c.c.GetWithContext(ctx, "/host/stats", &res)
 	return &res, err
 }
 
@@ -94,8 +100,13 @@ func (c *Host) GetJobStats(jobID string) (*host.ContainerStats, error) {
 
 // GetAllJobsStats returns stats for all jobs on this host.
 func (c *Host) GetAllJobsStats() (*host.AllJobsStats, error) {
+	return c.GetAllJobsStatsContext(context.Background())
+}
+
+// GetAllJobsStatsContext is GetAllJobsStats with a request context (REL-001).
+func (c *Host) GetAllJobsStatsContext(ctx context.Context) (*host.AllJobsStats, error) {
 	var res host.AllJobsStats
-	err := c.c.Get("/host/jobs-stats", &res)
+	err := c.c.GetWithContext(ctx, "/host/jobs-stats", &res)
 	return &res, err
 }
 
@@ -120,8 +131,13 @@ func WaitForHostStatus(hostIP string, desired func(*host.HostStatus) bool) (*hos
 
 // ListJobs lists all jobs on the host.
 func (c *Host) ListJobs() (map[string]host.ActiveJob, error) {
+	return c.ListJobsContext(context.Background())
+}
+
+// ListJobsContext is ListJobs with a request context (REL-001).
+func (c *Host) ListJobsContext(ctx context.Context) (map[string]host.ActiveJob, error) {
 	var jobs map[string]host.ActiveJob
-	err := c.c.Get("/host/jobs", &jobs)
+	err := c.c.GetWithContext(ctx, "/host/jobs", &jobs)
 	return jobs, err
 }
 

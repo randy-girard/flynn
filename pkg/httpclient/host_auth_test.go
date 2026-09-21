@@ -1,6 +1,7 @@
 package httpclient
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/randy-girard/flynn/pkg/httphelper"
 )
@@ -134,6 +136,36 @@ func TestRawReqNotFoundAndRedirect(t *testing.T) {
 	c = &Client{URL: fail.URL, HTTP: fail.Client()}
 	if err := c.Get("/", nil); err == nil {
 		t.Fatal("500 must fail")
+	}
+}
+
+func TestGetWithContextCanceled(t *testing.T) {
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := &Client{URL: srv.URL, HTTP: srv.Client()}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- c.GetWithContext(ctx, "/", nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server was not hit")
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if err == nil {
+			t.Fatal("canceled GetWithContext must fail")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetWithContext did not honor cancel")
 	}
 }
 
