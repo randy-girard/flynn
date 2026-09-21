@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/githubapp"
@@ -132,8 +133,14 @@ func (c *controllerAPI) ListGitHubInstallations(ctx context.Context, w http.Resp
 		respondWithError(w, err)
 		return
 	}
+	allow, restricted := c.githubInstallationAllowlist(ctx)
 	out := make([]ct.GitHubInstallation, 0, len(insts))
 	for _, in := range insts {
+		if restricted {
+			if _, ok := allow[in.ID]; !ok {
+				continue
+			}
+		}
 		out = append(out, ct.GitHubInstallation{ID: in.ID, Login: in.Account.Login, Type: in.Account.Type})
 	}
 	httphelper.JSON(w, 200, out)
@@ -145,6 +152,13 @@ func (c *controllerAPI) ListGitHubInstallationRepos(ctx context.Context, w http.
 	if err != nil || id <= 0 {
 		respondWithError(w, ct.ValidationError{Field: "installation_id", Message: "is invalid"})
 		return
+	}
+	allow, restricted := c.githubInstallationAllowlist(ctx)
+	if restricted {
+		if _, ok := allow[id]; !ok {
+			httphelper.JSON(w, 200, []ct.GitHubRepo{})
+			return
+		}
 	}
 	api, err := c.gitHubAPI()
 	if err != nil {
@@ -161,6 +175,34 @@ func (c *controllerAPI) ListGitHubInstallationRepos(ctx context.Context, w http.
 		out = append(out, ct.GitHubRepo{Name: r.Name, FullName: r.FullName, DefaultBranch: r.DefaultBranch, Private: r.Private})
 	}
 	httphelper.JSON(w, 200, out)
+}
+
+// githubInstallationAllowlist returns GitHub App installation IDs already
+// linked to apps the caller can github:write. restricted is false for cluster
+// admins and for the first-connect case (github:write but no links yet), so
+// the dashboard Connect GitHub picker still lists the GitHub App catalog.
+func (c *controllerAPI) githubInstallationAllowlist(ctx context.Context) (allow map[int64]struct{}, restricted bool) {
+	appIDs, restricted := authz.GitHubWriteAppIDs(authz.TokenFromContext(ctx))
+	if !restricted {
+		return nil, false
+	}
+	if c.githubStore == nil {
+		return map[int64]struct{}{}, true
+	}
+	allow = make(map[int64]struct{})
+	for _, appID := range appIDs {
+		conn, err := c.githubStore.GetConnection(appID)
+		if err != nil {
+			continue
+		}
+		if conn != nil && conn.InstallationID > 0 {
+			allow[conn.InstallationID] = struct{}{}
+		}
+	}
+	if len(allow) == 0 {
+		return nil, false
+	}
+	return allow, true
 }
 
 func (c *controllerAPI) GetAppGitHub(ctx context.Context, w http.ResponseWriter, req *http.Request) {

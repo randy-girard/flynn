@@ -17,7 +17,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/githubapp"
 	"golang.org/x/net/context"
 )
@@ -367,11 +371,35 @@ func TestParseGitHubAppID(t *testing.T) {
 	}
 }
 
+func githubListAPI() *controllerAPI {
+	store := newMemGitHubStore()
+	_ = store.PutConnection(&ct.GitHubRepoConnection{AppID: "app-1", InstallationID: 3, Owner: "acme", Repo: "app"})
+	return &controllerAPI{
+		githubStore: store,
+		githubAPI: &fakeGitHubAPI{
+			insts: []githubapp.Installation{
+				{ID: 3, Account: githubapp.Account{Login: "acme", Type: "Organization"}},
+				{ID: 9, Account: githubapp.Account{Login: "other", Type: "User"}},
+			},
+			repos: map[int64][]githubapp.Repo{
+				3: {{Name: "app", FullName: "acme/app", DefaultBranch: "master"}},
+				9: {{Name: "secret", FullName: "other/secret", DefaultBranch: "main", Private: true}},
+			},
+		},
+	}
+}
+
+func tokenCtx(tok *authorizer.Token) context.Context {
+	return context.WithValue(context.Background(), authz.TokenContextKey, tok)
+}
+
+func installationReposCtx(tok *authorizer.Token, id string) context.Context {
+	ctx := tokenCtx(tok)
+	return ctxhelper.NewContextParams(ctx, httprouter.Params{{Key: "installation_id", Value: id}})
+}
+
 func TestGitHubListInstallations(t *testing.T) {
-	api := &controllerAPI{githubAPI: &fakeGitHubAPI{
-		insts: []githubapp.Installation{{ID: 3, Account: githubapp.Account{Login: "acme", Type: "Organization"}}},
-		repos: map[int64][]githubapp.Repo{3: {{Name: "app", FullName: "acme/app", DefaultBranch: "master"}}},
-	}}
+	api := githubListAPI()
 	rec := httptest.NewRecorder()
 	api.ListGitHubInstallations(context.Background(), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
 	if rec.Code != 200 {
@@ -379,7 +407,85 @@ func TestGitHubListInstallations(t *testing.T) {
 	}
 	var insts []ct.GitHubInstallation
 	_ = json.Unmarshal(rec.Body.Bytes(), &insts)
-	if len(insts) != 1 || insts[0].Login != "acme" {
-		t.Fatalf("%+v", insts)
+	if len(insts) != 2 {
+		t.Fatalf("unauthenticated/admin catalog = %+v, want both installations", insts)
+	}
+}
+
+func TestGitHubListInstallationsFiltersToLinkedApps(t *testing.T) {
+	api := githubListAPI()
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:github:write"}}}}
+	rec := httptest.NewRecorder()
+	api.ListGitHubInstallations(tokenCtx(tok), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.Bytes())
+	}
+	var insts []ct.GitHubInstallation
+	_ = json.Unmarshal(rec.Body.Bytes(), &insts)
+	if len(insts) != 1 || insts[0].ID != 3 || insts[0].Login != "acme" {
+		t.Fatalf("filtered catalog = %+v, want only acme (3)", insts)
+	}
+
+	rec = httptest.NewRecorder()
+	api.ListGitHubInstallationRepos(installationReposCtx(tok, "3"), rec, httptest.NewRequest(http.MethodGet, "/github/installations/3/repos", nil))
+	if rec.Code != 200 {
+		t.Fatalf("linked repos %d %s", rec.Code, rec.Body.Bytes())
+	}
+	var repos []ct.GitHubRepo
+	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
+	if len(repos) != 1 || repos[0].FullName != "acme/app" {
+		t.Fatalf("linked repos = %+v", repos)
+	}
+
+	rec = httptest.NewRecorder()
+	api.ListGitHubInstallationRepos(installationReposCtx(tok, "9"), rec, httptest.NewRequest(http.MethodGet, "/github/installations/9/repos", nil))
+	if rec.Code != 200 {
+		t.Fatalf("unlinked repos %d %s", rec.Code, rec.Body.Bytes())
+	}
+	repos = nil
+	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
+	if len(repos) != 0 {
+		t.Fatalf("unlinked installation must not list repos: %+v", repos)
+	}
+}
+
+func TestGitHubListInstallationsFirstConnectUnfiltered(t *testing.T) {
+	api := githubListAPI()
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-new", Permissions: []string{"app:write"}}}}
+	rec := httptest.NewRecorder()
+	api.ListGitHubInstallations(tokenCtx(tok), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.Bytes())
+	}
+	var insts []ct.GitHubInstallation
+	_ = json.Unmarshal(rec.Body.Bytes(), &insts)
+	if len(insts) != 2 {
+		t.Fatalf("first connect must list the GitHub App catalog for the picker: %+v", insts)
+	}
+
+	rec = httptest.NewRecorder()
+	api.ListGitHubInstallationRepos(installationReposCtx(tok, "9"), rec, httptest.NewRequest(http.MethodGet, "/github/installations/9/repos", nil))
+	if rec.Code != 200 {
+		t.Fatalf("first-connect repos %d %s", rec.Code, rec.Body.Bytes())
+	}
+	var repos []ct.GitHubRepo
+	_ = json.Unmarshal(rec.Body.Bytes(), &repos)
+	if len(repos) != 1 || repos[0].FullName != "other/secret" {
+		t.Fatalf("first-connect repos = %+v", repos)
+	}
+}
+
+func TestGitHubListInstallationsAdminSeesAll(t *testing.T) {
+	api := githubListAPI()
+	tok := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	rec := httptest.NewRecorder()
+	api.ListGitHubInstallations(tokenCtx(tok), rec, httptest.NewRequest(http.MethodGet, "/github/installations", nil))
+	if rec.Code != 200 {
+		t.Fatalf("%d %s", rec.Code, rec.Body.Bytes())
+	}
+	var insts []ct.GitHubInstallation
+	_ = json.Unmarshal(rec.Body.Bytes(), &insts)
+	if len(insts) != 2 {
+		t.Fatalf("admin catalog = %+v, want both installations", insts)
 	}
 }

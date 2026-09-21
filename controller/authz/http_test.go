@@ -88,7 +88,16 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_read_can_get_github_app", appRead, http.MethodGet, "/github/app", true},
 		{"app_write_cannot_put_github_app", appWrite, http.MethodPut, "/github/app", false},
 		{"admin_can_put_github_app", adminBearer, http.MethodPut, "/github/app", true},
-		{"app_read_can_list_github_installations", appRead, http.MethodGet, "/github/installations", true},
+		{"app_read_cannot_list_github_installations", appRead, http.MethodGet, "/github/installations", false},
+		{"app_read_cannot_list_github_repos", appRead, http.MethodGet, "/github/installations/7/repos", false},
+		{"app_read_cannot_head_github_installations", appRead, http.MethodHead, "/github/installations", false},
+		{"github_read_cannot_list_github_installations", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:github:read"}}}}, http.MethodGet, "/github/installations", false},
+		{"deploy_cannot_list_github_installations", appDeploy, http.MethodGet, "/github/installations", false},
+		{"app_write_can_list_github_installations", appWrite, http.MethodGet, "/github/installations", true},
+		{"app_write_can_list_github_repos", appWrite, http.MethodGet, "/github/installations/7/repos", true},
+		{"github_write_can_list_github_installations", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:github:write"}}}}, http.MethodGet, "/github/installations", true},
+		{"github_write_can_list_github_repos", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:github:write"}}}}, http.MethodGet, "/github/installations/7/repos", true},
+		{"admin_can_list_github_installations", adminBearer, http.MethodGet, "/github/installations", true},
 		{"app_write_can_put_app_github", appWrite, http.MethodPut, "/apps/app-1/github", true},
 		{"app_read_cannot_put_app_github", appRead, http.MethodPut, "/apps/app-1/github", false},
 		{"deploy_grant_can_github_deploy", appDeploy, http.MethodPost, "/apps/app-1/github/deploy", true},
@@ -113,6 +122,34 @@ func TestHTTPAllowed(t *testing.T) {
 				t.Fatalf("HTTPAllowed(tok, %q, %q) = %v, want %v", tc.method, tc.path, got, tc.allowed)
 			}
 		})
+	}
+}
+
+func TestGitHubWriteAppIDs(t *testing.T) {
+	admin := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	if ids, restricted := GitHubWriteAppIDs(admin); restricted || len(ids) != 0 {
+		t.Fatalf("admin GitHubWriteAppIDs = %v restricted=%v, want unrestricted", ids, restricted)
+	}
+	if ids, restricted := GitHubWriteAppIDs(nil); restricted || len(ids) != 0 {
+		t.Fatalf("nil GitHubWriteAppIDs = %v restricted=%v, want unrestricted", ids, restricted)
+	}
+	write := &authorizer.Token{AppGrants: []authorizer.AppGrant{
+		{AppID: "app-1", Permissions: []string{PermAppGitHubWrite}},
+		{AppID: "app-2", Permissions: []string{PermAppGitHubRead}},
+		{AppID: "app-3", Permissions: []string{PermAppWrite}},
+	}}
+	ids, restricted := GitHubWriteAppIDs(write)
+	if !restricted {
+		t.Fatal("app-scoped github:write must be restricted")
+	}
+	want := map[string]bool{"app-1": true, "app-3": true}
+	if len(ids) != 2 {
+		t.Fatalf("GitHubWriteAppIDs = %v, want app-1 and app-3", ids)
+	}
+	for _, id := range ids {
+		if !want[id] {
+			t.Fatalf("unexpected app id %q in %v", id, ids)
+		}
 	}
 }
 
