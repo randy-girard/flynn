@@ -163,6 +163,40 @@ func TarreceiveAllowed(tok *authorizer.Token) bool {
 	return hasScopedBuildArtifact(tok)
 }
 
+// GitPushAllowed reports whether tok may git-push (git-receive-pack) to the
+// given app. Cluster admins, including the cluster controller key, may push
+// anywhere. App-scoped tokens need app:deploy on that app — the same grant
+// HTTPAllowed requires for POST /apps/:id/deploy. Coarser aliases that expand
+// to app:deploy (app:write, app:admin) also qualify, so flynn-receive build
+// tokens (app:write on their app) can push only that app.
+func GitPushAllowed(tok *authorizer.Token, appID, appName string) bool {
+	return gitAppAllowed(tok, appID, appName, PermAppDeploy)
+}
+
+// GitFetchAllowed reports whether tok may git-fetch/clone (git-upload-pack)
+// the given app. Cluster admins may fetch anywhere. App-scoped tokens need
+// app:read (or any grant that expands to it) on that app, so a token for one
+// app cannot clone another by name.
+func GitFetchAllowed(tok *authorizer.Token, appID, appName string) bool {
+	return gitAppAllowed(tok, appID, appName, PermAppRead)
+}
+
+func gitAppAllowed(tok *authorizer.Token, appID, appName, need string) bool {
+	if tok == nil {
+		return false
+	}
+	if tok.HasClusterAdmin() {
+		return true
+	}
+	if HasAppPermission(permissionsForApp(tok, appID), need) {
+		return true
+	}
+	if appName != "" && appName != appID {
+		return HasAppPermission(permissionsForApp(tok, appName), need)
+	}
+	return false
+}
+
 // hasScopedBuildArtifact reports whether the token may create a build artifact:
 // it must carry the build:artifacts scope AND at least one app grant, so the
 // credential is always tied to a specific app being built and is worthless on
