@@ -23,6 +23,25 @@ const (
 // may reach it only on the overlay gateway, not on the host public IP.
 const DiscoverdHTTPPort = "1111"
 
+// UserDatastoreTCPPorts are the data-plane TCP ports user jobs may reach on
+// flynn-net-data IPs (the hosts in DATABASE_URL / REDIS_URL / KAFKA_URL / …).
+// Admin HTTP is not listed: postgres :5433, mariadb :3307, mongodb :27018,
+// redis :6380, kafka :9095, clickhouse :9090. Kafka :9093/:9094 are the
+// KRaft controller and inter-broker listeners, not the client data plane
+// (9092). ClickHouse 8123/8443/9000/9440 are query listeners; 9009 is
+// interserver replication and stays blocked from user jobs.
+var UserDatastoreTCPPorts = []string{
+	"3306",  // MariaDB / MySQL
+	"5432",  // PostgreSQL
+	"6379",  // Redis
+	"8123",  // ClickHouse HTTP
+	"8443",  // ClickHouse HTTPS
+	"9000",  // ClickHouse native
+	"9092",  // Kafka client
+	"9440",  // ClickHouse native TLS
+	"27017", // MongoDB
+}
+
 // DummyPort is used when registering an overlay IP in a netpolicy service.
 // Discoverd instances require host:port; the port is not dialed.
 const DummyPort = "1"

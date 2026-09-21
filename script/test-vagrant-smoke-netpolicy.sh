@@ -29,6 +29,10 @@ need "${ipt}" 'conntrack", "--ctstate", "NEW' \
   "user overlay DROP must be NEW-only so router replies to user jobs are not dropped"
 need "${ipt}" 'UserToDatastoreArgs' \
   "user jobs must be allowed to reach datastore IPs"
+need "${ipt}" 'LegacyUserToDatastoreArgs' \
+  "upgrades must delete the unrestricted user→data ACCEPT"
+need "${policy}" 'UserDatastoreTCPPorts' \
+  "user→data ACCEPT must be limited to database protocol ports"
 need "${ROOT}/pkg/iptables/ipset.go" 'EnsureSets' \
   "isolation uses ipsets synced across hosts"
 need "${ROOT}/host/netpolicy.go" 'ServiceForClass' \

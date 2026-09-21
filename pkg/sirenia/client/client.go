@@ -12,6 +12,7 @@ import (
 	"time"
 
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
@@ -87,6 +88,7 @@ func NewClientWithHTTP(addr string, httpClient *http.Client) *Client {
 		c: &httpclient.Client{
 			URL:  fmt.Sprintf("http://%s:%d", host, port+1),
 			HTTP: httpClient,
+			Key:  appliancehttp.Key(),
 		},
 	}
 }

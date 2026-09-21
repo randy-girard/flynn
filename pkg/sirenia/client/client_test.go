@@ -471,3 +471,28 @@ func TestStopReturnsWithoutWaitingForSlowShutdown(t *testing.T) {
 		t.Fatal("stop handler was not invoked")
 	}
 }
+
+func TestNewClientSendsApplianceKey(t *testing.T) {
+	t.Setenv("CONTROLLER_KEY", "cluster-secret")
+	t.Setenv("AUTH_KEY", "")
+	got := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pass, _ := r.BasicAuth()
+		got <- pass
+		w.WriteHeader(200)
+	}))
+	defer srv.Close()
+
+	c := sireniaTestClient(t, srv)
+	if err := c.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case pass := <-got:
+		if pass != "cluster-secret" {
+			t.Fatalf("basic password=%q", pass)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stop handler was not invoked")
+	}
+}
