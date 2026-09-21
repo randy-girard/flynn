@@ -413,8 +413,10 @@ func (s *HTTPListener) listenAndServeTLS() error {
 		}
 
 		server := &http.Server{
-			Addr:    listener.Addr().String(),
-			Handler: handler,
+			Addr:              listener.Addr().String(),
+			Handler:           handler,
+			IdleTimeout:       httpIdleTimeout,
+			ReadHeaderTimeout: httpHeaderTimeout,
 			TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){
 				http2.NextProtoTLS: http2Handler,
 				"h2-14":            http2Handler,
