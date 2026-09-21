@@ -94,11 +94,18 @@ func (api *HTTPAPI) Create(w http.ResponseWriter, r *http.Request, ps httprouter
 		httphelper.Error(w, err)
 		return
 	}
+	if err := volume.ValidateCreateVolumeID(info.ID); err != nil {
+		httphelper.ValidationError(w, "id", "must be a UUID")
+		return
+	}
 	vol, err := api.vman.NewVolumeFromProvider(providerID, &info)
 	if err != nil {
 		switch err {
 		case volumemanager.ErrNoSuchProvider:
 			httphelper.ObjectNotFoundError(w, fmt.Sprintf("no volume provider with id %q", providerID))
+			return
+		case volume.ErrInvalidVolumeID:
+			httphelper.ValidationError(w, "id", "must be a UUID")
 			return
 		default:
 			httphelper.Error(w, err)
