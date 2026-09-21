@@ -267,3 +267,54 @@ func TestCanManageInternalProcessLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestGitPushAllowed(t *testing.T) {
+	clusterKey := &authorizer.Token{ClusterKey: true}
+	adminJWT := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	legacyFull := &authorizer.Token{}
+	appRead := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "uuid-1", Permissions: []string{PermAppRead}}}}
+	appDeploy := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "uuid-1", Permissions: []string{PermAppDeploy}}}}
+	appWrite := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "uuid-1", Permissions: []string{PermAppWrite}}}}
+	appAdmin := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "uuid-1", Permissions: []string{PermAppAdmin}}}}
+	buildTok := &authorizer.Token{
+		Scopes:    []string{ScopeBuildArtifacts},
+		AppGrants: []authorizer.AppGrant{{AppID: "uuid-1", Permissions: []string{PermAppWrite}}},
+	}
+	otherWrite := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "other", Permissions: []string{PermAppWrite}}}}
+	grantByName := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "myapp", Permissions: []string{PermAppDeploy}}}}
+
+	type check func(*authorizer.Token, string, string) bool
+	cases := []struct {
+		name    string
+		fn      check
+		tok     *authorizer.Token
+		appID   string
+		appName string
+		want    bool
+	}{
+		{"nil_cannot_push", GitPushAllowed, nil, "uuid-1", "myapp", false},
+		{"nil_cannot_fetch", GitFetchAllowed, nil, "uuid-1", "myapp", false},
+		{"cluster_key_push_anywhere", GitPushAllowed, clusterKey, "uuid-1", "myapp", true},
+		{"cluster_key_push_other", GitPushAllowed, clusterKey, "uuid-2", "other", true},
+		{"admin_jwt_push_anywhere", GitPushAllowed, adminJWT, "uuid-2", "other", true},
+		{"legacy_full_push", GitPushAllowed, legacyFull, "uuid-1", "myapp", true},
+		{"deploy_push_own_app", GitPushAllowed, appDeploy, "uuid-1", "myapp", true},
+		{"write_push_own_app", GitPushAllowed, appWrite, "uuid-1", "myapp", true},
+		{"admin_push_own_app", GitPushAllowed, appAdmin, "uuid-1", "myapp", true},
+		{"build_token_push_own_app", GitPushAllowed, buildTok, "uuid-1", "myapp", true},
+		{"build_token_cannot_push_other", GitPushAllowed, buildTok, "uuid-2", "other", false},
+		{"read_cannot_push", GitPushAllowed, appRead, "uuid-1", "myapp", false},
+		{"read_can_fetch_own_app", GitFetchAllowed, appRead, "uuid-1", "myapp", true},
+		{"read_cannot_fetch_other", GitFetchAllowed, appRead, "uuid-2", "other", false},
+		{"wrong_app_cannot_push", GitPushAllowed, otherWrite, "uuid-1", "myapp", false},
+		{"grant_by_name_can_push", GitPushAllowed, grantByName, "uuid-1", "myapp", true},
+		{"deploy_can_fetch_own", GitFetchAllowed, appDeploy, "uuid-1", "myapp", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.fn(tc.tok, tc.appID, tc.appName); got != tc.want {
+				t.Fatalf("%s = %v, want %v", tc.name, got, tc.want)
+			}
+		})
+	}
+}

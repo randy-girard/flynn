@@ -71,6 +71,13 @@ apps) requires the cluster controller key. Dashboard tokens scoped to user
 apps cannot open those consoles. Treat the key from `flynn cluster:add` as
 root.
 
+`git push` to gitreceive requires the cluster controller key, `cluster:admin`,
+or `app:deploy` on that app (or a coarser grant that expands to it, such as
+`app:write` / `app:admin`). A valid token for one app cannot push to another
+app by name. View-only (`app:read`) tokens cannot push. GitHub webhooks at
+`POST /github/webhook` are authenticated with the webhook HMAC, not git
+credentials.
+
 Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
 `slugrunner`) from jobs, logs, formations, and release process maps. Setting
 those process limits requires the cluster controller key (`flynn limit:set` or

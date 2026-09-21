@@ -24,7 +24,9 @@ import (
 	"syscall"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/pkg/archiver"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -55,11 +57,18 @@ func main() {
 	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(newGitHandler(cc, auth)))))
 }
 
+// appLookup is the GetApp subset gitreceive needs. The cluster-key controller
+// client is used for the lookup; grants are checked against the returned app.
+type appLookup interface {
+	GetApp(id string) (*ct.App, error)
+}
+
 type gitHandler struct {
-	controller controller.Client
+	controller appLookup
 	auth       *authorizer.Authorizer
 	webhookURL string
 	httpClient *http.Client
+	prepare    func(cacheKey string) (string, error)
 }
 
 type gitService struct {
@@ -80,12 +89,18 @@ var gitServices = [...]gitService{
 	{"POST", "/git-receive-pack", handlePostRPC, "git-receive-pack"},
 }
 
-func newGitHandler(controller controller.Client, auth *authorizer.Authorizer) *gitHandler {
+func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandler {
 	url := os.Getenv("CONTROLLER_URL")
 	if url == "" {
 		url = "http://controller.discoverd"
 	}
-	return &gitHandler{controller: controller, auth: auth, webhookURL: strings.TrimRight(url, "/") + "/github/webhook", httpClient: http.DefaultClient}
+	return &gitHandler{
+		controller: controller,
+		auth:       auth,
+		webhookURL: strings.TrimRight(url, "/") + "/github/webhook",
+		httpClient: http.DefaultClient,
+		prepare:    prepareRepo,
+	}
 }
 
 func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +116,8 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := h.auth.AuthorizeRequest(r); err != nil {
+	tok, err := h.auth.AuthorizeRequest(r)
+	if err != nil {
 		w.Header().Set("WWW-Authenticate", "Basic")
 		http.Error(w, "Authentication required", 401)
 		return
@@ -123,7 +139,9 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Lookup app
+	// Lookup app with the cluster-key client, then enforce the caller's grants
+	// against app.ID. Git remotes address apps by name; dashboard/build tokens
+	// grant by UUID, so GetApp-as-caller would 403 even for a legitimate push.
 	app, err := h.controller.GetApp(name)
 	if err == controller.ErrNotFound {
 		http.Error(w, "unknown app", 404)
@@ -133,7 +151,25 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	repoPath, err := prepareRepo(app.ID)
+	rpc := g.rpc
+	if rpc == "" {
+		rpc = r.URL.Query().Get("service")
+	}
+	if rpc == "git-receive-pack" {
+		if !authz.GitPushAllowed(tok, app.ID, app.Name) {
+			http.Error(w, "Forbidden", 403)
+			return
+		}
+	} else if !authz.GitFetchAllowed(tok, app.ID, app.Name) {
+		http.Error(w, "Forbidden", 403)
+		return
+	}
+
+	prepare := h.prepare
+	if prepare == nil {
+		prepare = prepareRepo
+	}
+	repoPath, err := prepare(app.ID)
 	if err != nil {
 		fail500(w, "prepareRepo", err)
 		return
