@@ -27,12 +27,13 @@ HTTPS.
 
 ## Internal Communication
 
-Flynn uses several ports to communicate internally. Most of those ports still
-have no authentication, so they must not be exposed to the Internet. A firewall
-must be configured so that the only Flynn ports accessible are 80 and 443 to
-prevent compromise. Access to these internal Flynn ports is equivalent to root
-access, so be careful. The host API (`:1113`) is the exception documented
-below; firewall it the same way. After
+Flynn uses several ports to communicate internally. Some internal HTTP APIs
+authenticate (controller, tarreceive, blobstore, host API); others still
+trust the overlay and host firewall. Access to these ports must not be
+exposed to the Internet. A firewall must be configured so that the only
+Flynn ports accessible are 80 and 443 to prevent compromise. Access to
+unauthenticated internal ports is equivalent to root access, so be careful.
+After
 install, `flynn-host firewall` manages extra peer IPs and TCP ports on the
 host UFW rules; see [Production — Firewalling](production.html.md#firewalling).
 `flynn resource:expose` prints `flynn-host firewall:expose` when a datastore is
@@ -94,6 +95,35 @@ datastores only at the leader host Flynn put in `DATABASE_URL` /
 (`PUBLIC` CONNECT is revoked), so a user job cannot open the controller,
 router, or blobstore databases. Cross-app HTTP still works through routes you
 add (the router). System appliances keep a full overlay mesh.
+
+Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
+cannot reach user jobs or the host control plane, but they can still reach
+cluster services the build needs, including blobstore. Blobstore HTTP
+requires the cluster `AUTH_KEY` / `CONTROLLER_KEY` (Basic or Bearer) for
+object GET/PUT/DELETE. `/.well-known/status` and `HEAD /` stay
+unauthenticated so bootstrap and health checks work. Per-app
+`BUILD_CACHE_URL` query tokens are HMAC-SHA256 of the app ID under the
+cluster key and are verified server-side; a token is valid only for that
+app's `-cache.tgz` / `-docker-cache.tgz` objects. A scoped
+`build:artifacts` token (the same one create-artifact uses for the
+controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
+
+When gitreceive can mint a scoped build token it mounts it at
+`/run/secrets/controller_token` and does **not** put `CONTROLLER_KEY` in
+the build job environment (it would otherwise remain in the container
+config and `/proc` environ). Clusters that have not configured
+`ACCESS_TOKEN_SIGNING_KEY` still inject `CONTROLLER_KEY` so older hosts
+keep working; `build.sh` relocates that key to
+`/run/secrets/controller_key` and unsets the env before buildpack code
+runs. Treat that fallback as a temporary upgrade path, not a security
+boundary.
+
+Existing clusters that already have a blobstore release should set
+`AUTH_KEY` (and `ACCESS_TOKEN_KEY` from the controller) on blobstore
+after this change:
+
+    flynn -a blobstore env:set AUTH_KEY="$(flynn -a controller env:get AUTH_KEY)" \
+      ACCESS_TOKEN_KEY="$(flynn -a controller env:get ACCESS_TOKEN_KEY)"
 
 User and build jobs cannot open the host control plane: SSH (`:22`),
 host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).

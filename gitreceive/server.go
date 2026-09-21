@@ -29,6 +29,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/pkg/archiver"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -388,7 +389,12 @@ func prepareRepo(cacheKey string) (string, error) {
 		return "", err
 	}
 
-	res, err := http.Get(blobstoreCacheURL(cacheKey))
+	req, err := http.NewRequest("GET", blobstoreCacheURL(cacheKey), nil)
+	if err != nil {
+		return "", err
+	}
+	blobstoreauth.Apply(req)
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}
@@ -451,6 +457,7 @@ func uploadRepo(path, cacheKey string) error {
 
 	// upload the tarball to the blobstore
 	req, _ := http.NewRequest("PUT", blobstoreCacheURL(cacheKey), r)
+	blobstoreauth.Apply(req)
 	resp, err := http.DefaultClient.Do(req)
 	if err := <-errCh; err != nil {
 		return err

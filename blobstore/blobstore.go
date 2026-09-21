@@ -16,6 +16,7 @@ import (
 	"github.com/randy-girard/flynn/blobstore/backend"
 	"github.com/randy-girard/flynn/blobstore/data"
 	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/shutdown"
@@ -166,7 +167,13 @@ func runServer(_ *docopt.Args) error {
 
 	log.Println("Blobstore serving files on " + addr)
 
-	mux.Handle("/", handler(repo))
+	keys := blobstoreauth.EnvKeys()
+	if len(keys) == 0 {
+		if k := blobstoreauth.ClusterKey(); k != "" {
+			keys = []string{k}
+		}
+	}
+	mux.Handle("/", protect(handler(repo), keys, clusterAuthorizer(keys)))
 	mux.Handle(status.Path, status.Handler(func() status.Status {
 		if err := db.Exec("SELECT 1"); err != nil {
 			return status.Unhealthy

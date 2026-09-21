@@ -102,8 +102,8 @@ upload_layer() {
 
   info "uploading layer ${layer_id}"
   local url="http://blobstore.discoverd/ci/layers/${layer_id}.squashfs"
-  if ! flynn -a blobstore run curl --silent --head "${url}" | grep -qF "HTTP/1.1 200 OK"; then
-    flynn -a blobstore run curl -X PUT --data-binary @- "${url}" < "${layer}"
+  if ! flynn -a blobstore run -- sh -c "curl --silent --head -u :\"\$AUTH_KEY\" '${url}'" | grep -qF "HTTP/1.1 200 OK"; then
+    flynn -a blobstore run -- sh -c "curl -u :\"\$AUTH_KEY\" -X PUT --data-binary @- '${url}'" < "${layer}"
   fi
 }
 

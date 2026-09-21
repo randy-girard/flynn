@@ -41,6 +41,7 @@ import (
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	logutils "github.com/randy-girard/flynn/logaggregator/utils"
 	"github.com/randy-girard/flynn/pkg/attempt"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/dialer"
 	"github.com/randy-girard/flynn/pkg/ifname"
 	"github.com/randy-girard/flynn/pkg/ipallocator"
@@ -137,8 +138,10 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 		buildJobMemoryLimits: buildJobMemoryLimits,
 	}
 	l.netpol = newNetPolicy(config.Logger)
-	l.httpClient = &http.Client{Transport: &http.Transport{
-		Dial: dialer.RetryDial(l.discoverdDial),
+	l.httpClient = &http.Client{Transport: &blobstoreauth.Transport{
+		Base: &http.Transport{
+			Dial: dialer.RetryDial(l.discoverdDial),
+		},
 	}}
 	return l, nil
 }
@@ -2244,7 +2247,7 @@ func isBuildJob(job *host.Job) bool {
 // they execute attacker-controlled code (arbitrary buildpacks and Dockerfile
 // RUN steps from a `git push`), so any container env var — including the host
 // key — is readable by that code. Those builders never call the host API (they
-// talk to the controller/tarreceive/blobstore with CONTROLLER_KEY); the host
+// talk to the controller/tarreceive/blobstore with a scoped build token); the host
 // API call that launches them is made by the gitreceive receiver, which is a
 // system app and gets the key that way. Giving the key to a slug/dockerbuilder
 // would let any user who can push escalate to the (privileged) host API.

@@ -606,7 +606,8 @@ To rotate an authentication key:
 
     # Update internal apps to use the new key
     flynn -a gitreceive env:set CONTROLLER_KEY=$NEW_KEY
-    flynn -a tarreceive env:set CONTROLLER_KEY=$NEW_KEY
+    flynn -a tarreceive env:set CONTROLLER_KEY=$NEW_KEY AUTH_KEY=$NEW_KEY
+    flynn -a blobstore env:set AUTH_KEY=$NEW_KEY
     flynn -a taffy env:set CONTROLLER_KEY=$NEW_KEY
     flynn -a redis env:set CONTROLLER_KEY=$NEW_KEY
     flynn -a mariadb env:set CONTROLLER_KEY=$NEW_KEY

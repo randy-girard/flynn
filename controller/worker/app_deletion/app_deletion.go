@@ -10,6 +10,7 @@ import (
 	"github.com/inconshreveable/log15"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
@@ -108,6 +109,7 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 			log.Error("error creating app cache delete request", "err", err)
 			return err
 		}
+		blobstoreauth.ApplyIfBlobstore(req)
 		res, err := http.DefaultClient.Do(req)
 		if err != nil {
 			log.Error("error performing app cache delete request", "err", err)

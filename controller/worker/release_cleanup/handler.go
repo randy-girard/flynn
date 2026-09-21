@@ -9,6 +9,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
@@ -58,6 +59,7 @@ func deleteFile(uri string) error {
 	if err != nil {
 		return err
 	}
+	blobstoreauth.ApplyIfBlobstore(req)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return err

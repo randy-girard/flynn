@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/random"
@@ -150,7 +151,12 @@ func downloadManifest(artifact *ct.Artifact) error {
 		return err
 	}
 
-	res, err := hh.RetryClient.Get(artifact.URI)
+	req, err := http.NewRequest("GET", artifact.URI, nil)
+	if err != nil {
+		return err
+	}
+	blobstoreauth.ApplyIfBlobstore(req)
+	res, err := hh.RetryClient.Do(req)
 	if err != nil {
 		return err
 	}

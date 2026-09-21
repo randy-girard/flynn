@@ -235,8 +235,8 @@ func TestMintBuildToken(t *testing.T) {
 }
 
 // TestApplyBuildCredentialWithSigner verifies that when a signer is configured
-// the token is delivered via a root-only secret mount while CONTROLLER_KEY is
-// preserved for build.sh to relocate as a legacy fallback.
+// the token is delivered via a root-only secret mount and CONTROLLER_KEY is
+// stripped from the job env (SEC-011).
 func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	signer, _ := newBuildKeyPair(t)
 	app := &ct.App{ID: "app-1", Name: "myapp"}
@@ -248,8 +248,8 @@ func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	if err := applyBuildCredential(signer, job, app, nil); err != nil {
 		t.Fatalf("applyBuildCredential: %s", err)
 	}
-	if job.Config.Env["CONTROLLER_KEY"] != "cluster-god-key" {
-		t.Fatal("CONTROLLER_KEY must be preserved for build.sh SEC-003 fallback")
+	if _, ok := job.Config.Env["CONTROLLER_KEY"]; ok {
+		t.Fatal("CONTROLLER_KEY must not remain in build job env when a scoped token is mounted")
 	}
 	if job.Config.Env["SLUG_IMAGE_ID"] != "x" {
 		t.Fatal("unrelated env should be preserved")

@@ -15,6 +15,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -992,6 +993,7 @@ func putFile(httpClient *http.Client, url, path string) error {
 		return err
 	}
 	req.ContentLength = st.Size()
+	blobstoreauth.ApplyIfBlobstore(req)
 	res, err := httpClient.Do(req)
 	if err != nil {
 		return err
@@ -1008,6 +1010,7 @@ func putBytes(httpClient *http.Client, url string, body []byte) error {
 	if err != nil {
 		return err
 	}
+	blobstoreauth.ApplyIfBlobstore(req)
 	res, err := httpClient.Do(req)
 	if err != nil {
 		return err

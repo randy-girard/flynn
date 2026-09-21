@@ -234,6 +234,8 @@ can start that job automatically.
 
 The blobstore provides a simple API for storing and retrieving binary blobs.
 Git repositories, app slugs, and buildpack caches are stored in the blobstore.
+Object routes require the cluster key; health (`/.well-known/status`) does not.
+Build-cache URLs carry a per-app HMAC token that blobstore verifies.
 
 ### slugrunner
 

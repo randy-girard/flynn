@@ -577,7 +577,7 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 			ExpandedFormation: blobstoreFormation,
 		}),
 		step("blobstore-wait", "wait", &bootstrap.WaitAction{
-			URL:    "http://blobstore.discoverd",
+			URL:    "http://blobstore.discoverd/.well-known/status",
 			Status: 200,
 		}),
 	}.RunWithState(ch, state)
@@ -812,7 +812,7 @@ WARN:
 
 		// delete docker-receive registry files if present
 		cmd := exec.JobUsingHost(state.Hosts[0], artifacts["blobstore"], nil)
-		cmd.Args = []string{"curl", "-fsSL", "-X", "DELETE", "http://blobstore.discoverd/docker-receive/"}
+		cmd.Args = []string{"curl", "-fsSL", "-u", ":" + controllerKey, "-X", "DELETE", "http://blobstore.discoverd/docker-receive/"}
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, `
@@ -822,7 +822,7 @@ WARN:
 WARN: %s
 WARN: %s
 WARN:
-WARN: You will need to delete them manually with 'flynn -a blobstore run curl -X DELETE http://blobstore.discoverd/docker-receive/'.
+WARN: You will need to delete them manually with 'flynn -a blobstore run curl -u :"$AUTH_KEY" -X DELETE http://blobstore.discoverd/docker-receive/'.
 WARN:
 `, out, err)
 		}
