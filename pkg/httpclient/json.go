@@ -56,6 +56,13 @@ func ToJSON(v interface{}) (io.Reader, error) {
 }
 
 func (c *Client) prepareReq(method, rawurl string, header http.Header, in interface{}) (*http.Request, error) {
+	return c.prepareReqContext(context.Background(), method, rawurl, header, in)
+}
+
+func (c *Client) prepareReqContext(ctx context.Context, method, rawurl string, header http.Header, in interface{}) (*http.Request, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var payload io.Reader
 	switch v := in.(type) {
 	case io.Reader:
@@ -69,7 +76,7 @@ func (c *Client) prepareReq(method, rawurl string, header http.Header, in interf
 		}
 	}
 
-	req, err := http.NewRequest(method, rawurl, payload)
+	req, err := http.NewRequestWithContext(ctx, method, rawurl, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -92,14 +99,22 @@ func (c *Client) prepareReq(method, rawurl string, header http.Header, in interf
 }
 
 func (c *Client) RawReq(method, path string, header http.Header, in, out interface{}) (*http.Response, error) {
-	return c.RawReqWithHTTP(method, path, header, in, out, c.HTTP)
+	return c.RawReqWithContext(context.Background(), method, path, header, in, out)
+}
+
+func (c *Client) RawReqWithContext(ctx context.Context, method, path string, header http.Header, in, out interface{}) (*http.Response, error) {
+	return c.RawReqWithHTTPContext(ctx, method, path, header, in, out, c.HTTP)
 }
 
 func (c *Client) RawReqWithHTTP(method, path string, header http.Header, in, out interface{}, client *http.Client) (*http.Response, error) {
+	return c.RawReqWithHTTPContext(context.Background(), method, path, header, in, out, client)
+}
+
+func (c *Client) RawReqWithHTTPContext(ctx context.Context, method, path string, header http.Header, in, out interface{}, client *http.Client) (*http.Response, error) {
 	rawurl := c.URL + path
 
 	for {
-		resp, err := c.rawReq(method, rawurl, header, in, out, client)
+		resp, err := c.rawReqContext(ctx, method, rawurl, header, in, out, client)
 
 		// If this is a redirect then update the URL and try again.
 		if resp != nil && resp.StatusCode == http.StatusTemporaryRedirect {
@@ -112,8 +127,8 @@ func (c *Client) RawReqWithHTTP(method, path string, header http.Header, in, out
 	}
 }
 
-func (c *Client) rawReq(method, rawurl string, header http.Header, in, out interface{}, client *http.Client) (*http.Response, error) {
-	req, err := c.prepareReq(method, rawurl, header, in)
+func (c *Client) rawReqContext(ctx context.Context, method, rawurl string, header http.Header, in, out interface{}, client *http.Client) (*http.Response, error) {
+	req, err := c.prepareReqContext(ctx, method, rawurl, header, in)
 	if err != nil {
 		return nil, err
 	}
@@ -330,15 +345,23 @@ func (c *Client) StreamWithHeader(method, path string, header http.Header, in, o
 }
 
 func (c *Client) Send(method, path string, in, out interface{}) error {
-	return c.SendWithHeader(method, path, nil, in, out)
+	return c.SendWithContext(context.Background(), method, path, in, out)
+}
+
+func (c *Client) SendWithContext(ctx context.Context, method, path string, in, out interface{}) error {
+	return c.SendWithHeaderContext(ctx, method, path, nil, in, out)
 }
 
 func (c *Client) SendWithHeader(method, path string, header http.Header, in, out interface{}) error {
+	return c.SendWithHeaderContext(context.Background(), method, path, header, in, out)
+}
+
+func (c *Client) SendWithHeaderContext(ctx context.Context, method, path string, header http.Header, in, out interface{}) error {
 	h := http.Header{"Accept": []string{"application/json"}}
 	for k, vs := range header {
 		h[k] = vs
 	}
-	res, err := c.RawReq(method, path, h, in, out)
+	res, err := c.RawReqWithContext(ctx, method, path, h, in, out)
 	if err == nil && out == nil {
 		res.Body.Close()
 	}
@@ -358,7 +381,11 @@ func (c *Client) Post(path string, in, out interface{}) error {
 }
 
 func (c *Client) Get(path string, out interface{}) error {
-	return c.Send("GET", path, nil, out)
+	return c.GetWithContext(context.Background(), path, out)
+}
+
+func (c *Client) GetWithContext(ctx context.Context, path string, out interface{}) error {
+	return c.SendWithContext(ctx, "GET", path, nil, out)
 }
 
 func (c *Client) Delete(path string) error {

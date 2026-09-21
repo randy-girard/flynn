@@ -28,7 +28,7 @@ const (
 	// RetryResponseHeaderTimeout bounds how long RetryClient waits for
 	// response headers. SSE/log streams send headers immediately, so this
 	// does not cancel an open body; a total Client.Timeout would.
-	RetryResponseHeaderTimeout = 30 * time.Second
+	RetryResponseHeaderTimeout = 10 * time.Second
 	RetryTLSHandshakeTimeout   = 10 * time.Second
 	RetryIdleConnTimeout       = 90 * time.Second
 )

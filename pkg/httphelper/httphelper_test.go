@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -181,5 +182,17 @@ func TestRetryClientHasNoTotalTimeout(t *testing.T) {
 	}
 	if tr.Dial == nil {
 		t.Fatal("Dial must be set (retry dialer)")
+	}
+}
+
+func TestRetryClientTimeoutWouldBreakStreams(t *testing.T) {
+	// RetryClient is shared by controller SSE, logaggregator, router events,
+	// and cluster attach/hijack. A total Client.Timeout would cancel those
+	// streams; ResponseHeaderTimeout only bounds hung headers.
+	if RetryClient.Timeout != 0 {
+		t.Fatalf("do not set RetryClient.Timeout; streaming callers share this client")
+	}
+	if RetryResponseHeaderTimeout != 10*time.Second {
+		t.Fatalf("ResponseHeaderTimeout=%s want 10s (REL-001)", RetryResponseHeaderTimeout)
 	}
 }

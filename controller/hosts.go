@@ -46,7 +46,9 @@ func (c *controllerAPI) GetHostStats(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
-	stats, err := h.GetStats()
+	hostCtx, cancel := context.WithTimeout(ctx, statsHostTimeout)
+	defer cancel()
+	stats, err := getHostStats(hostCtx, h)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -63,18 +65,7 @@ func (c *controllerAPI) GetClusterStats(ctx context.Context, w http.ResponseWrit
 		return
 	}
 
-	result := make([]*host.HostResourceStats, 0, len(hosts))
-	for _, h := range hosts {
-		stats, err := h.GetStats()
-		if err != nil {
-			// Log but continue - don't fail entire request for one host
-			logger.Warn("failed to get stats for host", "host_id", h.ID(), "error", err)
-			continue
-		}
-		result = append(result, stats)
-	}
-
-	httphelper.JSON(w, 200, result)
+	httphelper.JSON(w, 200, collectClusterStats(ctx, asStatsHosts(hosts)))
 }
 
 // EnrichedContainerStats extends ContainerStats with job metadata
@@ -95,35 +86,5 @@ func (c *controllerAPI) GetClusterJobsStats(ctx context.Context, w http.Response
 		return
 	}
 
-	result := make([]*EnrichedContainerStats, 0)
-	for _, h := range hosts {
-		jobsStats, err := h.GetAllJobsStats()
-		if err != nil {
-			// Log but continue - don't fail entire request for one host
-			logger.Warn("failed to get jobs stats for host", "host_id", h.ID(), "error", err)
-			continue
-		}
-
-		// Get job metadata to enrich stats
-		jobs, _ := h.ListJobs()
-
-		for _, jobStats := range jobsStats.Jobs {
-			enriched := &EnrichedContainerStats{
-				ContainerStats: jobStats,
-				HostID:         h.ID(),
-			}
-
-			// Try to get metadata from job
-			if job, ok := jobs[jobStats.JobID]; ok && job.Job != nil && job.Job.Metadata != nil {
-				enriched.AppID = job.Job.Metadata["flynn-controller.app"]
-				enriched.AppName = job.Job.Metadata["flynn-controller.app_name"]
-				enriched.ReleaseID = job.Job.Metadata["flynn-controller.release"]
-				enriched.ProcessType = job.Job.Metadata["flynn-controller.type"]
-			}
-
-			result = append(result, enriched)
-		}
-	}
-
-	httphelper.JSON(w, 200, result)
+	httphelper.JSON(w, 200, collectClusterJobsStats(ctx, asStatsHosts(hosts)))
 }
