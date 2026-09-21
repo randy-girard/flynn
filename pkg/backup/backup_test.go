@@ -159,6 +159,21 @@ func TestGetAppsEmptyFormationWhenNoneExist(t *testing.T) {
 	}
 }
 
+func TestPostgresDumpGzipLevel(t *testing.T) {
+	t.Setenv("FLYNN_BACKUP_GZIP_LEVEL", "")
+	if got := postgresDumpCommand(); got != "set -o pipefail; pg_dumpall --clean --if-exists | gzip -9" {
+		t.Fatalf("default: %q", got)
+	}
+	t.Setenv("FLYNN_BACKUP_GZIP_LEVEL", "1")
+	if got := postgresDumpCommand(); got != "set -o pipefail; pg_dumpall --clean --if-exists | gzip -1" {
+		t.Fatalf("smoke level: %q", got)
+	}
+	t.Setenv("FLYNN_BACKUP_GZIP_LEVEL", "fast")
+	if got := postgresDumpGzipLevel(); got != "9" {
+		t.Fatalf("invalid level must stay 9, got %q", got)
+	}
+}
+
 type dumpJobLister struct {
 	jobs map[string][]*ct.Job
 	err  error

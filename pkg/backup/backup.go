@@ -3,6 +3,7 @@ package backup
 import (
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -46,7 +47,7 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 	pgRelease := data["postgres"].Release
 	pgJob := &ct.NewJob{
 		ReleaseID: pgRelease.ID,
-		Args:      []string{"bash", "-c", "set -o pipefail; pg_dumpall --clean --if-exists | gzip -9"},
+		Args:      []string{"bash", "-c", postgresDumpCommand()},
 		Env: map[string]string{
 			"PGHOST":     pgRelease.Env["PGHOST"],
 			"PGUSER":     pgRelease.Env["PGUSER"],
@@ -77,6 +78,21 @@ func Run(client controller.Client, out io.Writer, progress ProgressBar) error {
 		}
 	}
 	return nil
+}
+
+// postgresDumpGzipLevel is gzip -N for pg_dumpall. Production backups stay at
+// 9. Smoke sets FLYNN_BACKUP_GZIP_LEVEL=1 because the blobstore makes the
+// dump multi-gigabyte and -9 dominates the backup step.
+func postgresDumpGzipLevel() string {
+	level := strings.TrimSpace(os.Getenv("FLYNN_BACKUP_GZIP_LEVEL"))
+	if len(level) == 1 && level[0] >= '1' && level[0] <= '9' {
+		return level
+	}
+	return "9"
+}
+
+func postgresDumpCommand() string {
+	return fmt.Sprintf("set -o pipefail; pg_dumpall --clean --if-exists | gzip -%s", postgresDumpGzipLevel())
 }
 
 type jobLister interface {
