@@ -67,10 +67,17 @@ func RegisterInstance(info Info) (string, error) {
 	}
 	// TODO(titanous): retry
 	uri := info.ClusterURL + "/instances"
-	res, err := http.Post(uri, "application/json", bytes.NewReader(jsonData))
+	req, err := http.NewRequest(http.MethodPost, uri, bytes.NewReader(jsonData))
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("Content-Type", "application/json")
+	setClusterAuth(req, info.ClusterURL)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
 	if res.StatusCode != http.StatusCreated && res.StatusCode != http.StatusConflict {
 		return "", urlError("POST", uri, res.StatusCode)
 	}
@@ -81,12 +88,19 @@ func RegisterInstance(info Info) (string, error) {
 }
 
 func GetCluster(uri string) ([]*Instance, error) {
+	clusterURL := uri
 	uri += "/instances"
-	res, err := http.Get(uri)
+	req, err := http.NewRequest(http.MethodGet, uri, nil)
+	if err != nil {
+		return nil, err
+	}
+	setClusterAuth(req, clusterURL)
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode != 200 {
+		res.Body.Close()
 		return nil, urlError("GET", uri, res.StatusCode)
 	}
 	defer res.Body.Close()
@@ -96,6 +110,25 @@ func GetCluster(uri string) ([]*Instance, error) {
 	}
 	err = json.NewDecoder(res.Body).Decode(&data)
 	return data.Data, err
+}
+
+func setClusterAuth(req *http.Request, clusterURL string) {
+	if id := clusterIDFromURL(clusterURL); id != "" {
+		req.Header.Set("Authorization", "Bearer "+id)
+	}
+}
+
+func clusterIDFromURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	path := strings.Trim(u.Path, "/")
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-1]
 }
 
 // ExampleServer is a documentation-only discovery API base URL. There is no

@@ -10,8 +10,11 @@ import (
 
 func TestGetCluster(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/instances" {
+		if r.URL.Path != "/clusters/tok-1/instances" {
 			t.Errorf("path=%s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer tok-1" {
+			t.Errorf("auth=%q", r.Header.Get("Authorization"))
 		}
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"data": []Instance{{ID: "i1", Name: "node1"}},
@@ -19,7 +22,7 @@ func TestGetCluster(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	got, err := GetCluster(srv.URL)
+	got, err := GetCluster(srv.URL + "/clusters/tok-1")
 	if err != nil || len(got) != 1 || got[0].ID != "i1" {
 		t.Fatalf("%v %v", got, err)
 	}
@@ -35,8 +38,11 @@ func TestGetCluster(t *testing.T) {
 
 func TestRegisterInstance(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/instances" {
+		if r.Method != http.MethodPost || r.URL.Path != "/clusters/tok-1/instances" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer tok-1" {
+			t.Errorf("auth=%q", r.Header.Get("Authorization"))
 		}
 		var body struct {
 			Data Instance `json:"data"`
@@ -53,7 +59,7 @@ func TestRegisterInstance(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	id, err := RegisterInstance(Info{ClusterURL: srv.URL, InstanceURL: "http://10.0.0.1", Name: "node1"})
+	id, err := RegisterInstance(Info{ClusterURL: srv.URL + "/clusters/tok-1", InstanceURL: "http://10.0.0.1", Name: "node1"})
 	if err != nil || id != "assigned-id" {
 		t.Fatalf("%q %v", id, err)
 	}
@@ -94,5 +100,14 @@ func TestURLError(t *testing.T) {
 	err := urlError("GET", "http://x", 418)
 	if err == nil || !strings.Contains(err.Error(), "418") {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestClusterIDFromURL(t *testing.T) {
+	if got := clusterIDFromURL("https://discovery.example.com/clusters/tok-1"); got != "tok-1" {
+		t.Fatalf("%q", got)
+	}
+	if got := clusterIDFromURL("http://127.0.0.1:9"); got != "" {
+		t.Fatalf("empty path %q", got)
 	}
 }

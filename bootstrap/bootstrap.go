@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"net/url"
 	"os"
 	"reflect"
 	"sort"
+	"strings"
 	"text/template"
 	"time"
 
@@ -264,19 +266,23 @@ func Run(manifestData []byte, ch chan<- *StepInfo, cfg Config, only []string) er
 }
 
 func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Duration) error {
+	peerURLs := append([]string(nil), urls...)
 	if len(urls) == 0 {
 		urls = []string{"http://127.0.0.1:1113"}
 	}
 	t := time.After(timeout)
 	for {
-		if state.ClusterURL != "" {
+		if state.ClusterURL != "" && len(peerURLs) == 0 {
 			instances, err := discovery.GetCluster(state.ClusterURL)
 			if err != nil {
 				return fmt.Errorf("error discovering cluster: %s", err)
 			}
-			urls = make([]string, len(instances))
-			for i, inst := range instances {
-				urls[i] = inst.URL
+			urls = make([]string, 0, len(instances))
+			for _, inst := range instances {
+				if inst == nil || inst.URL == "" {
+					continue
+				}
+				urls = append(urls, inst.URL)
 			}
 		}
 
@@ -284,19 +290,34 @@ func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Du
 		remaining := make(map[string]struct{}, known)
 		online := 0
 		if known >= expected {
-			for _, url := range urls {
-				remaining[url] = struct{}{}
+			for _, u := range urls {
+				remaining[u] = struct{}{}
 			}
 			state.Hosts = make([]*cluster.Host, 0, known)
-			for _, url := range urls {
-				h := cluster.NewHostWithKey("", url, nil, nil, state.HostAuthKey())
+			for _, rawURL := range urls {
+				if len(peerURLs) > 0 && !urlInPeerList(rawURL, peerURLs) {
+					continue
+				}
+				// Probe without the host key. /host/status is auth-exempt, but
+				// sending FLYNN_HOST_AUTH_KEY to a poisoned discovery URL would
+				// still exfiltrate it.
+				h := cluster.NewHostWithKey("", rawURL, nil, nil, "")
 				status, err := h.GetStatus()
 				if err != nil {
 					continue
 				}
-				delete(remaining, url)
+				clientURL := strings.TrimSpace(status.URL)
+				if clientURL == "" {
+					clientURL = rawURL
+				} else if !discoveryHostsMatch(rawURL, clientURL) {
+					continue
+				}
+				if len(peerURLs) > 0 && !urlInPeerList(clientURL, peerURLs) {
+					continue
+				}
+				delete(remaining, rawURL)
 				online++
-				state.Hosts = append(state.Hosts, state.HostClient(status.ID, status.URL, nil))
+				state.Hosts = append(state.Hosts, state.HostClient(status.ID, clientURL, nil))
 			}
 			if online >= expected {
 				break
@@ -307,8 +328,8 @@ func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Du
 		case <-t:
 			msg := fmt.Sprintf("timed out waiting for %d hosts to come online (currently %d online)\n\n", expected, online)
 			msg += "The following hosts were discovered but remained unreachable:\n"
-			for url := range remaining {
-				msg += "\n" + url + "\n"
+			for u := range remaining {
+				msg += "\n" + u + "\n"
 			}
 			msg += "\n"
 			return fmt.Errorf("%s", msg)
@@ -317,6 +338,50 @@ func checkOnlineHosts(expected int, state *State, urls []string, timeout time.Du
 		}
 	}
 	return nil
+}
+
+func discoveryHostsMatch(connected, reported string) bool {
+	a, err1 := urlHostname(connected)
+	b, err2 := urlHostname(reported)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	return strings.EqualFold(a, b)
+}
+
+func urlInPeerList(raw string, peerURLs []string) bool {
+	host, err := urlHostname(raw)
+	if err != nil {
+		return false
+	}
+	for _, p := range peerURLs {
+		ph, err := urlHostname(p)
+		if err != nil {
+			continue
+		}
+		if strings.EqualFold(host, ph) {
+			return true
+		}
+	}
+	return false
+}
+
+func urlHostname(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("empty url")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("missing host")
+	}
+	return host, nil
 }
 
 func interpolate(s *State, arg string) string {
