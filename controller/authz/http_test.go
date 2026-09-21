@@ -114,6 +114,7 @@ func TestHTTPAllowed(t *testing.T) {
 		{"routes_write_can_post_route", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:routes:write"}}}}, http.MethodPost, "/apps/app-1/routes", true},
 		{"env_write_can_put_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:env:write"}}}}, http.MethodPut, "/apps/app-1/release", true},
 		{"env_write_can_post_cluster_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:env:write"}}}}, http.MethodPost, "/releases", true},
+		{"scale_write_cannot_post_cluster_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:scale:write"}}}}, http.MethodPost, "/releases", false},
 	}
 
 	for _, tc := range cases {
@@ -151,6 +152,26 @@ func TestGitHubWriteAppIDs(t *testing.T) {
 		if !want[id] {
 			t.Fatalf("unexpected app id %q in %v", id, ids)
 		}
+	}
+}
+
+func TestCanCreateReleaseForApp(t *testing.T) {
+	envTok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{PermAppEnvWrite}}}}
+	scaleTok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{PermAppScaleWrite}}}}
+	if !CanCreateReleaseForApp(envTok, "app-1") {
+		t.Fatal("env:write may create a release for its app")
+	}
+	if CanCreateReleaseForApp(envTok, "other") {
+		t.Fatal("env:write must not create a release for another app")
+	}
+	if CanCreateReleaseForApp(scaleTok, "app-1") {
+		t.Fatal("scale:write must not create a release")
+	}
+	if CanCreateReleaseForApp(nil, "app-1") {
+		t.Fatal("nil token must not create a release")
+	}
+	if !CanCreateReleaseForApp(&authorizer.Token{ClusterKey: true}, "app-1") {
+		t.Fatal("cluster key may create a release")
 	}
 }
 

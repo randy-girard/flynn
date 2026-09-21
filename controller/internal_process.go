@@ -94,6 +94,17 @@ func metaToStringMap(v interface{}) map[string]string {
 	}
 }
 
+func processTypesPrivileged(procs map[string]ct.ProcessType) bool {
+	for _, p := range procs {
+		if p.HostNetwork || p.HostPIDNamespace || p.WriteableCgroups ||
+			len(p.LinuxCapabilities) > 0 || len(p.AllowedDevices) > 0 ||
+			len(p.Mounts) > 0 || len(p.Profiles) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func stripPrivilegedProcessTypes(procs map[string]ct.ProcessType) map[string]ct.ProcessType {
 	if procs == nil {
 		return nil

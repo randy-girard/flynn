@@ -25,6 +25,7 @@ var preparedStatements = map[string]string{
 	"release_list_page":                        releaseListPageQuery,
 	"release_select":                           releaseSelectQuery,
 	"release_insert":                           releaseInsertQuery,
+	"release_update_processes":                 releaseUpdateProcessesQuery,
 	"release_app_list":                         releaseAppListQuery,
 	"release_artifacts_insert":                 releaseArtifactsInsertQuery,
 	"release_artifacts_delete":                 releaseArtifactsDeleteQuery,
@@ -251,6 +252,8 @@ FROM releases r WHERE r.release_id = $1 AND r.deleted_at IS NULL`
 	releaseInsertQuery = `
 INSERT INTO releases (release_id, app_id, env, processes, meta)
 VALUES ($1, $2, $3, $4, $5) RETURNING created_at`
+	releaseUpdateProcessesQuery = `
+UPDATE releases SET processes = $1 WHERE release_id = $2 AND deleted_at IS NULL`
 	releaseAppListQuery = `
 SELECT r.release_id, r.app_id,
   ARRAY(

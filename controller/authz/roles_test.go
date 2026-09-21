@@ -44,6 +44,12 @@ func TestDefaultAppRolesGrantMapping(t *testing.T) {
 	if !HasAppPermission(admin.Permissions, PermAppTeamWrite) || !HasAppPermission(admin.Permissions, PermAppDelete) {
 		t.Fatalf("admin grants=%v", admin.Permissions)
 	}
+	if CanCreateRelease(view.Permissions) || CanCreateRelease(deploy.Permissions) {
+		t.Fatal("view and deploy must not mint releases")
+	}
+	if !CanCreateRelease(manage.Permissions) || !CanCreateRelease(admin.Permissions) {
+		t.Fatal("manage and admin must still mint releases")
+	}
 	if _, ok := DefaultRoleByID("nope"); ok {
 		t.Fatal("unknown role id must not resolve")
 	}
@@ -86,6 +92,10 @@ func TestDefaultAppRolesHTTP(t *testing.T) {
 		{"manage", http.MethodPost, "/apps/app-1/deploy", true},
 		{"manage", http.MethodPost, "/apps/app-1/releases", true},
 		{"manage", http.MethodPost, "/apps/app-1/scale", true},
+		{"manage", http.MethodPost, "/releases", true},
+		{"deploy", http.MethodPost, "/releases", false},
+		{"view", http.MethodPost, "/releases", false},
+		{"admin", http.MethodPost, "/releases", true},
 		{"admin", http.MethodGet, "/apps/app-1", true},
 		{"admin", http.MethodPost, "/apps/app-1/deploy", true},
 		{"admin", http.MethodPost, "/apps/app-1/releases", true},
