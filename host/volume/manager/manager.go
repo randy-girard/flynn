@@ -211,6 +211,11 @@ volume.Manager implements the volume.Provider interface by
 delegating NewVolume requests to the named Provider.
 */
 func (m *Manager) NewVolumeFromProvider(providerID string, info *volume.Info) (volume.Volume, error) {
+	if info != nil {
+		if err := volume.ValidateCreateVolumeID(info.ID); err != nil {
+			return nil, err
+		}
+	}
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	if p, ok := m.providers[providerID]; ok {
