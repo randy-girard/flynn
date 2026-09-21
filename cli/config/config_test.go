@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -75,6 +76,58 @@ func TestReadWriteFlynnrc(t *testing.T) {
 	}
 	if got.Clusters[0].Key != "cluster-secret" || got.Clusters[0].TLSPin != "abc" {
 		t.Fatalf("secrets: %+v", got.Clusters[0])
+	}
+}
+
+func TestSaveToRestrictsFlynnrcMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SEC-022 file mode is a POSIX permission concern")
+	}
+	c := &Config{Default: "prod", Clusters: []*Cluster{{
+		Name:          "prod",
+		Key:           "cluster-secret",
+		ControllerURL: "https://controller.example",
+	}}}
+
+	t.Run("new file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "flynnrc")
+		if err := c.SaveTo(path); err != nil {
+			t.Fatal(err)
+		}
+		assertFileMode(t, path, 0600)
+	})
+
+	t.Run("existing world-readable file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "flynnrc")
+		if err := os.WriteFile(path, []byte("stale"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		// WriteFile honors umask; force the inherited 0644 the finding describes.
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		st, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0644 {
+			t.Fatalf("precondition: got %o", st.Mode().Perm())
+		}
+		if err := c.SaveTo(path); err != nil {
+			t.Fatal(err)
+		}
+		assertFileMode(t, path, 0600)
+	})
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := st.Mode().Perm(); got != want {
+		t.Fatalf("%s mode %o, want %o", path, got, want)
 	}
 }
 

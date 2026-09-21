@@ -205,11 +205,17 @@ func (c *Config) SetDefault(name string) bool {
 }
 
 func (c *Config) SaveTo(path string) error {
-	f, err := os.Create(path)
+	// SEC-022: ~/.flynnrc holds cluster keys; never inherit the process umask
+	// (os.Create is 0666 → typically 0644). OpenFile 0600 covers new files;
+	// chmod tightens an existing world-readable config on the next save.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
+	if err := f.Chmod(0600); err != nil {
+		return err
+	}
 
 	if len(c.Clusters) != 0 {
 		if err := toml.NewEncoder(f).Encode(c); err != nil {
