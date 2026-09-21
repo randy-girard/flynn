@@ -406,6 +406,11 @@ it do not export OTLP. After `flynn-host plugin:install otel`,
 `flynn-host otel` forwards **host metrics** (CPU, memory, disk, load, job
 counts) to any OTLP/HTTP endpoint (`http://host:4318`, Grafana Alloy, the
 OpenTelemetry Collector, Grafana Cloud OTLP). Path `/v1/metrics` is appended.
+The plugin `/exporters` API requires the cluster key (HTTP Basic with an empty
+username, or Bearer). `flynn-host otel` sends it automatically
+(`CONTROLLER_KEY` / `AUTH_KEY`, else the controller discoverd `AUTH_KEY`).
+Collector `--auth bearer` / `--auth basic` on `otel:add` are OTLP exporter
+headers, not this Flynn API.
 
 ```text
 sudo flynn-host plugin:install otel

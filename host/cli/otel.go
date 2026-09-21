@@ -60,27 +60,27 @@ Remove an OpenTelemetry exporter.
 }
 
 func runOTELListCmd(_ *docopt.Args) error {
-	client, base, err := otelPluginClient()
+	client, base, key, err := otelPluginClient()
 	if err != nil {
 		return err
 	}
-	return runOTELList(client, base)
+	return runOTELList(client, base, key)
 }
 
 func runOTELAddCmd(args *docopt.Args) error {
-	client, base, err := otelPluginClient()
+	client, base, key, err := otelPluginClient()
 	if err != nil {
 		return err
 	}
-	return runOTELAdd(client, base, args)
+	return runOTELAdd(client, base, key, args)
 }
 
 func runOTELRemoveCmd(args *docopt.Args) error {
-	client, base, err := otelPluginClient()
+	client, base, key, err := otelPluginClient()
 	if err != nil {
 		return err
 	}
-	return runOTELRemove(client, base, args.String["<id>"])
+	return runOTELRemove(client, base, key, args.String["<id>"])
 }
 
 type otelExporter struct {
@@ -90,20 +90,46 @@ type otelExporter struct {
 	Insecure bool              `json:"insecure,omitempty"`
 }
 
-func otelPluginClient() (*http.Client, string, error) {
+func otelPluginClient() (*http.Client, string, string, error) {
 	ctrl, err := controllerClient()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	apps, err := ctrl.AppList()
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
 	app, err := lookupOTELPlugin(apps)
 	if err != nil {
-		return nil, "", err
+		return nil, "", "", err
 	}
-	return discoverdHTTPClient(), otelPluginBase(app), nil
+	key, err := otelClusterKey()
+	if err != nil {
+		return nil, "", "", err
+	}
+	return discoverdHTTPClient(), otelPluginBase(app), key, nil
+}
+
+// otelClusterKey is the Flynn API key for the otel plugin /exporters routes
+// (not collector --auth headers). Prefer CONTROLLER_KEY / AUTH_KEY so this
+// still works if discoverd stops publishing AUTH_KEY (SEC-028).
+func otelClusterKey() (string, error) {
+	if key := strings.TrimSpace(os.Getenv("CONTROLLER_KEY")); key != "" {
+		return key, nil
+	}
+	if key := strings.TrimSpace(os.Getenv("AUTH_KEY")); key != "" {
+		return key, nil
+	}
+	return controllerAuthKey()
+}
+
+func otelSetPluginAuth(req *http.Request, key string) error {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return fmt.Errorf("otel plugin: cluster key is required")
+	}
+	req.SetBasicAuth("", key)
+	return nil
 }
 
 func lookupOTELPlugin(apps []*ct.App) (*ct.App, error) {
@@ -133,8 +159,8 @@ func otelPluginBase(app *ct.App) string {
 	return "http://" + name + ".discoverd"
 }
 
-func runOTELList(client *http.Client, base string) error {
-	rows, err := otelList(client, base)
+func runOTELList(client *http.Client, base, key string) error {
+	rows, err := otelList(client, base, key)
 	if err != nil {
 		return err
 	}
@@ -151,7 +177,7 @@ func runOTELList(client *http.Client, base string) error {
 	return nil
 }
 
-func runOTELAdd(client *http.Client, base string, args *docopt.Args) error {
+func runOTELAdd(client *http.Client, base, key string, args *docopt.Args) error {
 	endpoint := strings.TrimRight(strings.TrimSpace(args.String["<endpoint>"]), "/")
 	u, err := url.Parse(endpoint)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -178,7 +204,7 @@ func runOTELAdd(client *http.Client, base string, args *docopt.Args) error {
 			headers[k] = v
 		}
 	}
-	created, err := otelCreate(client, base, otelExporter{
+	created, err := otelCreate(client, base, key, otelExporter{
 		Endpoint: endpoint,
 		Headers:  headers,
 		Insecure: args.Bool["--insecure"],
@@ -190,11 +216,11 @@ func runOTELAdd(client *http.Client, base string, args *docopt.Args) error {
 	return nil
 }
 
-func runOTELRemove(client *http.Client, base, id string) error {
+func runOTELRemove(client *http.Client, base, key, id string) error {
 	if strings.TrimSpace(id) == "" {
 		return fmt.Errorf("exporter id is required")
 	}
-	if err := otelDelete(client, base, id); err != nil {
+	if err := otelDelete(client, base, key, id); err != nil {
 		return err
 	}
 	log.Printf("Removed OpenTelemetry exporter %s.", id)
@@ -287,9 +313,12 @@ func otelAuthKind(headers map[string]string) string {
 	}
 }
 
-func otelList(client *http.Client, base string) ([]otelExporter, error) {
+func otelList(client *http.Client, base, key string) ([]otelExporter, error) {
 	req, err := http.NewRequest(http.MethodGet, base+"/exporters", nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := otelSetPluginAuth(req, key); err != nil {
 		return nil, err
 	}
 	res, err := client.Do(req)
@@ -308,7 +337,7 @@ func otelList(client *http.Client, base string) ([]otelExporter, error) {
 	return rows, nil
 }
 
-func otelCreate(client *http.Client, base string, exp otelExporter) (*otelExporter, error) {
+func otelCreate(client *http.Client, base, key string, exp otelExporter) (*otelExporter, error) {
 	raw, err := json.Marshal(exp)
 	if err != nil {
 		return nil, err
@@ -318,6 +347,9 @@ func otelCreate(client *http.Client, base string, exp otelExporter) (*otelExport
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := otelSetPluginAuth(req, key); err != nil {
+		return nil, err
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -334,9 +366,12 @@ func otelCreate(client *http.Client, base string, exp otelExporter) (*otelExport
 	return &created, nil
 }
 
-func otelDelete(client *http.Client, base, id string) error {
+func otelDelete(client *http.Client, base, key, id string) error {
 	req, err := http.NewRequest(http.MethodDelete, base+"/exporters/"+id, nil)
 	if err != nil {
+		return err
+	}
+	if err := otelSetPluginAuth(req, key); err != nil {
 		return err
 	}
 	res, err := client.Do(req)
