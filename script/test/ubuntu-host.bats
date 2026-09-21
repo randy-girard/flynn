@@ -36,6 +36,13 @@ load "helper"
   done
 }
 
+@test "legacy GitHub installer verifies checksums.sha512 like install-flynn-release" {
+  grep -q 'checksums.sha512' "${ROOT}/script/install-flynn.tmpl"
+  grep -q 'sha512sum --check' "${ROOT}/script/install-flynn.tmpl"
+  grep -q 'github_download_checksums' "${ROOT}/script/install-flynn-release"
+  grep -q 'checksums.sha512' "${ROOT}/script/install-flynn-release"
+}
+
 @test "install --clean unmounts overlay and squashfs under /var/lib/flynn" {
   for f in \
     "${ROOT}/script/install-flynn" \
