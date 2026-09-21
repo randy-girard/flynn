@@ -61,10 +61,14 @@ func ScaleUp(app, controllerKey, serviceAddr, procName, singleton string, logger
 		return err
 	}
 
-	// If database is running then exit.
-	if formation.Processes[procName] > 0 {
-		logger.Info("database is running, scaling not necessary")
-		return nil
+	// Another API process may have already published the formation. That does
+	// not mean the primary is writable. Returning here lets this process run
+	// DDL while semi-sync has no slave: the statement waits forever for an
+	// ack, locks the privilege tables, and /status stops answering, so the
+	// replicas never start.
+	if alreadyScaledStillWaits(formation.Processes[procName]) {
+		logger.Info("database is running, waiting until it is read-write")
+		return waitForReadWrite(serviceAddr, logger)
 	}
 
 	// Copy processes and increase database processes.
@@ -87,12 +91,21 @@ func ScaleUp(app, controllerKey, serviceAddr, procName, singleton string, logger
 		return err
 	}
 
-	sc = sirenia.NewClient(serviceAddr)
+	return waitForReadWrite(serviceAddr, logger)
+}
+
+// alreadyScaledStillWaits is true when another ScaleUp already published
+// database processes. The caller must wait for read-write before DDL.
+func alreadyScaledStillWaits(processCount int) bool {
+	return processCount > 0
+}
+
+func waitForReadWrite(serviceAddr string, logger log15.Logger) error {
+	sc := sirenia.NewClient(serviceAddr)
 	if err := sc.WaitForReadWrite(5 * time.Minute); err != nil {
 		logger.Error("wait for read write", "err", err)
 		return errors.New("timed out while starting sirenia cluster")
 	}
-
 	logger.Info("scaling complete")
 	return nil
 }
