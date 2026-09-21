@@ -20,26 +20,55 @@ func (c *controllerAPI) GetManagedCertificates(ctx context.Context, w http.Respo
 		return
 	}
 
-	sinceParam := req.URL.Query().Get("since")
-	var certs []*ct.ManagedCertificate
-	var err error
-
-	if sinceParam != "" {
-		since, parseErr := time.Parse(time.RFC3339Nano, sinceParam)
-		if parseErr != nil {
-			httphelper.ValidationError(w, "since", "must be a valid RFC3339 timestamp")
+	certs, err := c.listManagedCertificates(req)
+	if err != nil {
+		if ve, ok := err.(listManagedCertificatesError); ok {
+			httphelper.ValidationError(w, ve.field, ve.reason)
 			return
 		}
-		certs, err = c.managedCertificateRepo.ListSince(since)
-	} else {
-		certs, err = c.managedCertificateRepo.List()
-	}
-
-	if err != nil {
 		respondWithError(w, err)
 		return
 	}
 	httphelper.JSON(w, 200, certs)
+}
+
+type listManagedCertificatesError struct {
+	field, reason string
+}
+
+func (e listManagedCertificatesError) Error() string {
+	return e.field + ": " + e.reason
+}
+
+func (c *controllerAPI) listManagedCertificates(req *http.Request) ([]*ct.ManagedCertificate, error) {
+	q := req.URL.Query()
+	if beforeParam := q.Get("expiring_before"); beforeParam != "" {
+		before, err := time.Parse(time.RFC3339Nano, beforeParam)
+		if err != nil {
+			before, err = time.Parse(time.RFC3339, beforeParam)
+		}
+		if err != nil {
+			return nil, listManagedCertificatesError{field: "expiring_before", reason: "must be a valid RFC3339 timestamp"}
+		}
+		return c.managedCertificateRepo.ListExpiring(before)
+	}
+	if statusParam := q.Get("status"); statusParam != "" {
+		status := ct.ManagedCertificateStatus(statusParam)
+		switch status {
+		case ct.ManagedCertificateStatusPending, ct.ManagedCertificateStatusIssued, ct.ManagedCertificateStatusFailed, ct.ManagedCertificateStatusRenewing:
+		default:
+			return nil, listManagedCertificatesError{field: "status", reason: "must be pending, issued, failed, or renewing"}
+		}
+		return c.managedCertificateRepo.ListByStatus(status)
+	}
+	if sinceParam := q.Get("since"); sinceParam != "" {
+		since, err := time.Parse(time.RFC3339Nano, sinceParam)
+		if err != nil {
+			return nil, listManagedCertificatesError{field: "since", reason: "must be a valid RFC3339 timestamp"}
+		}
+		return c.managedCertificateRepo.ListSince(since)
+	}
+	return c.managedCertificateRepo.List()
 }
 
 func (c *controllerAPI) streamManagedCertificates(ctx context.Context, w http.ResponseWriter, req *http.Request) (err error) {

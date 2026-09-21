@@ -1052,8 +1052,15 @@ type ManagedCertificate struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// AddError adds an error to the managed certificate
+// AddError records an issuance error on the managed certificate.
 func (m *ManagedCertificate) AddError(errType, detail string) {
+	now := time.Now().UTC()
+	msg := detail
+	if errType != "" {
+		msg = errType + ": " + detail
+	}
+	m.LastError = &msg
+	m.LastErrorAt = &now
 	m.Errors = append(m.Errors, &ManagedCertificateError{
 		Type:   errType,
 		Detail: detail,

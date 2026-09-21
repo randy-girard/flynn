@@ -244,3 +244,17 @@ func TestNewJobProcessType(t *testing.T) {
 		t.Fatalf("explicit = %q, want custom", got)
 	}
 }
+
+func TestManagedCertificateAddErrorSetsLastError(t *testing.T) {
+	cert := &ManagedCertificate{Domain: "ex.com"}
+	cert.AddError("order_error", "rate limited")
+	if len(cert.Errors) != 1 || cert.Errors[0].Type != "order_error" {
+		t.Fatalf("Errors = %+v", cert.Errors)
+	}
+	if cert.LastError == nil || *cert.LastError != "order_error: rate limited" {
+		t.Fatalf("LastError = %v", cert.LastError)
+	}
+	if cert.LastErrorAt == nil {
+		t.Fatal("LastErrorAt not set")
+	}
+}

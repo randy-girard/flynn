@@ -92,3 +92,26 @@ func TestHostCLIPositionalLists(t *testing.T) {
 		t.Fatalf("log-sink add: %+v", sink.String)
 	}
 }
+
+func TestACMECommandsStillRegistered(t *testing.T) {
+	for _, name := range []string{
+		"acme",
+		"acme:configure",
+		"acme:enable",
+		"acme:disable",
+		"acme:status",
+		"acme:enable-system-routes",
+		"acme:disable-system-routes",
+	} {
+		if commands[name] == nil {
+			t.Fatalf("missing flynn-host %s", name)
+		}
+	}
+	cfg := parseHostCLI(t, "acme:configure", []string{"acme:configure", "--email=ops@example.com", "--agree-tos"})
+	if cfg.String["--email"] != "ops@example.com" || !cfg.Bool["--agree-tos"] {
+		t.Fatalf("acme:configure: %+v %+v", cfg.String, cfg.Bool)
+	}
+	parseHostCLI(t, "acme:status", []string{"acme:status"})
+	parseHostCLI(t, "acme:enable", []string{"acme:enable"})
+	parseHostCLI(t, "acme:disable", []string{"acme:disable"})
+}

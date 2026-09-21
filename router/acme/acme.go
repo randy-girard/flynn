@@ -36,6 +36,8 @@ const StagingDirectoryURL = "https://acme-staging-v02.api.letsencrypt.org/direct
 type ControllerClient interface {
 	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
+	ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error)
+	ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error)
 	CreateRoute(appID string, route *router.Route) error
 	DeleteRoute(appID string, routeID string) error
 }
@@ -51,6 +53,14 @@ func (w *controllerClientWrapper) StreamManagedCertificates(since *time.Time, ou
 
 func (w *controllerClientWrapper) UpdateManagedCertificate(cert *ct.ManagedCertificate) error {
 	return w.client.UpdateManagedCertificate(cert)
+}
+
+func (w *controllerClientWrapper) ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error) {
+	return w.client.ListExpiringManagedCertificates(before)
+}
+
+func (w *controllerClientWrapper) ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	return w.client.ListFailedManagedCertificates()
 }
 
 func (w *controllerClientWrapper) CreateRoute(appID string, route *router.Route) error {
@@ -122,15 +132,20 @@ func (a *ACME) CreateAccount(account *Account) error {
 
 // Service orders certificates for pending managed certificates using the ACME protocol
 type Service struct {
-	client      *acmelib.Client
-	account     acmelib.Account
-	controller  ControllerClient
-	responder   *Responder
-	handling    map[string]struct{}
-	handlingMtx sync.Mutex
-	stop        chan struct{}
-	done        chan struct{}
-	log         log15.Logger
+	client          *acmelib.Client
+	account         acmelib.Account
+	controller      ControllerClient
+	responder       *Responder
+	handling        map[string]struct{}
+	handlingMtx     sync.Mutex
+	failCount       map[string]int
+	failCountMtx    sync.Mutex
+	now             func() time.Time
+	renewalInterval time.Duration
+	handle          func(*ct.ManagedCertificate)
+	stop            chan struct{}
+	done            chan struct{}
+	log             log15.Logger
 }
 
 // NewService returns a Service that uses the given account, controller client and responder
@@ -142,16 +157,21 @@ func (a *ACME) NewService(account *Account, controllerClient ControllerClient, r
 		log.Error("error initializing ACME service", "err", err)
 		return nil, err
 	}
-	return &Service{
-		client:     a.client,
-		account:    acmeAccount,
-		controller: controllerClient,
-		responder:  responder,
-		handling:   make(map[string]struct{}),
-		stop:       make(chan struct{}),
-		done:       make(chan struct{}),
-		log:        log,
-	}, nil
+	s := &Service{
+		client:          a.client,
+		account:         acmeAccount,
+		controller:      controllerClient,
+		responder:       responder,
+		handling:        make(map[string]struct{}),
+		failCount:       make(map[string]int),
+		now:             time.Now,
+		renewalInterval: DefaultRenewalInterval,
+		stop:            make(chan struct{}),
+		done:            make(chan struct{}),
+		log:             log,
+	}
+	s.handle = s.handleCertificate
+	return s, nil
 }
 
 // configPollInterval is how often to poll for ACME configuration changes
@@ -341,6 +361,18 @@ func (s *Service) Run() {
 
 	s.log.Info("streaming managed certificates started successfully")
 
+	renewStop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.renewalLoop(renewStop)
+	}()
+	defer func() {
+		close(renewStop)
+		wg.Wait()
+	}()
+
 	for {
 		select {
 		case cert, ok := <-certs:
@@ -353,24 +385,48 @@ func (s *Service) Run() {
 				continue
 			}
 			s.log.Info("received certificate from stream", "domain", cert.Domain, "status", cert.Status, "id", cert.ID)
-			if cert.Status != ct.ManagedCertificateStatusPending {
-				s.log.Debug("skipping non-pending certificate", "domain", cert.Domain, "status", cert.Status)
-				continue
-			}
-			s.handlingMtx.Lock()
-			if _, ok := s.handling[cert.Domain]; ok {
-				s.handlingMtx.Unlock()
-				s.log.Debug("already handling certificate", "domain", cert.Domain)
-				continue
-			}
-			s.handling[cert.Domain] = struct{}{}
-			s.handlingMtx.Unlock()
-			s.log.Info("starting certificate handling", "domain", cert.Domain)
-			go s.handleCertificate(cert)
+			s.dispatch(cert)
 		case <-s.stop:
 			s.log.Info("stopping ACME service")
 			return
 		}
+	}
+}
+
+func (s *Service) dispatch(cert *ct.ManagedCertificate) {
+	if cert.Status != ct.ManagedCertificateStatusPending {
+		s.log.Debug("skipping non-pending certificate", "domain", cert.Domain, "status", cert.Status)
+		return
+	}
+	s.handlingMtx.Lock()
+	if _, ok := s.handling[cert.Domain]; ok {
+		s.handlingMtx.Unlock()
+		s.log.Debug("already handling certificate", "domain", cert.Domain)
+		return
+	}
+	s.handling[cert.Domain] = struct{}{}
+	s.handlingMtx.Unlock()
+	s.log.Info("starting certificate handling", "domain", cert.Domain)
+	handle := s.handle
+	if handle == nil {
+		handle = s.handleCertificate
+	}
+	go func() {
+		defer func() {
+			s.handlingMtx.Lock()
+			delete(s.handling, cert.Domain)
+			s.handlingMtx.Unlock()
+		}()
+		handle(cert)
+	}()
+}
+
+func (s *Service) failCert(cert *ct.ManagedCertificate, errType, detail string) {
+	cert.Status = ct.ManagedCertificateStatusFailed
+	cert.AddError(errType, detail)
+	s.recordFailure(cert.ID)
+	if err := s.controller.UpdateManagedCertificate(cert); err != nil {
+		s.log.Error("error updating failed certificate", "domain", cert.Domain, "err", err)
 	}
 }
 
@@ -392,12 +448,6 @@ func (s *Service) Stopped() bool {
 
 // handleCertificate handles a pending managed certificate
 func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
-	defer func() {
-		s.handlingMtx.Lock()
-		delete(s.handling, cert.Domain)
-		s.handlingMtx.Unlock()
-	}()
-
 	log := s.log.New("domain", cert.Domain)
 	log.Info("handling managed certificate")
 
@@ -405,9 +455,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	order, err := s.client.NewOrder(s.account, []acmelib.Identifier{{Type: "dns", Value: cert.Domain}})
 	if err != nil {
 		log.Error("error creating ACME order", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("order_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "order_error", err.Error())
 		return
 	}
 	cert.OrderURL = order.URL
@@ -418,9 +466,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 		auth, err := s.client.FetchAuthorization(s.account, authURL)
 		if err != nil {
 			log.Error("error fetching authorization", "err", err)
-			cert.Status = ct.ManagedCertificateStatusFailed
-			cert.AddError("auth_error", err.Error())
-			s.controller.UpdateManagedCertificate(cert)
+			s.failCert(cert, "auth_error", err.Error())
 			return
 		}
 
@@ -434,9 +480,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 		}
 		if challenge.URL == "" {
 			log.Error("no HTTP-01 challenge found")
-			cert.Status = ct.ManagedCertificateStatusFailed
-			cert.AddError("challenge_error", "no HTTP-01 challenge found")
-			s.controller.UpdateManagedCertificate(cert)
+			s.failCert(cert, "challenge_error", "no HTTP-01 challenge found")
 			return
 		}
 
@@ -448,9 +492,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 		// Update the challenge
 		if _, err := s.client.UpdateChallenge(s.account, challenge); err != nil {
 			log.Error("error updating challenge", "err", err)
-			cert.Status = ct.ManagedCertificateStatusFailed
-			cert.AddError("challenge_error", err.Error())
-			s.controller.UpdateManagedCertificate(cert)
+			s.failCert(cert, "challenge_error", err.Error())
 			return
 		}
 	}
@@ -459,9 +501,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	order, err = s.waitForOrder(order)
 	if err != nil {
 		log.Error("error waiting for order", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("order_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "order_error", err.Error())
 		return
 	}
 
@@ -469,9 +509,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	privKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Error("error generating private key", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("key_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "key_error", err.Error())
 		return
 	}
 	csrTemplate := &x509.CertificateRequest{
@@ -480,17 +518,13 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, privKey)
 	if err != nil {
 		log.Error("error creating CSR", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("csr_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "csr_error", err.Error())
 		return
 	}
 	csr, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
 		log.Error("error parsing CSR", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("csr_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "csr_error", err.Error())
 		return
 	}
 
@@ -498,9 +532,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	order, err = s.client.FinalizeOrder(s.account, order, csr)
 	if err != nil {
 		log.Error("error finalizing order", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("finalize_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "finalize_error", err.Error())
 		return
 	}
 
@@ -508,9 +540,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	certs, err := s.client.FetchCertificates(s.account, order.Certificate)
 	if err != nil {
 		log.Error("error fetching certificate", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("fetch_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "fetch_error", err.Error())
 		return
 	}
 
@@ -518,9 +548,7 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	keyDER, err := x509.MarshalECPrivateKey(privKey)
 	if err != nil {
 		log.Error("error encoding private key", "err", err)
-		cert.Status = ct.ManagedCertificateStatusFailed
-		cert.AddError("key_error", err.Error())
-		s.controller.UpdateManagedCertificate(cert)
+		s.failCert(cert, "key_error", err.Error())
 		return
 	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{
@@ -547,6 +575,9 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 	cert.Status = ct.ManagedCertificateStatusIssued
 	cert.Cert = string(certPEM)
 	cert.Key = string(keyPEM)
+	cert.LastError = nil
+	cert.LastErrorAt = nil
+	s.clearFailures(cert.ID)
 	if err := s.controller.UpdateManagedCertificate(cert); err != nil {
 		log.Error("error updating managed certificate", "err", err)
 		return

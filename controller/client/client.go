@@ -103,6 +103,8 @@ type Client interface {
 	ListSinks() ([]*ct.Sink, error)
 	StreamSinks(since *time.Time, output chan *ct.Sink) (stream.Stream, error)
 	ListManagedCertificates() ([]*ct.ManagedCertificate, error)
+	ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error)
+	ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error)
 	GetManagedCertificate(certID string) (*ct.ManagedCertificate, error)
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
 	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)

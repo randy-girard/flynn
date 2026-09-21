@@ -123,6 +123,7 @@ var preparedStatements = map[string]string{
 	"managed_certificate_update_route_id":      managedCertificateUpdateRouteIDQuery,
 	"managed_certificate_delete":               managedCertificateDeleteQuery,
 	"managed_certificate_list_expiring":        managedCertificateListExpiringQuery,
+	"managed_certificate_list_by_status":       managedCertificateListByStatusQuery,
 	"acme_config_select":                       acmeConfigSelectQuery,
 	"acme_config_update":                       acmeConfigUpdateQuery,
 	"runtime_profile_list":                     runtimeProfileListQuery,
@@ -777,6 +778,11 @@ SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_er
 FROM managed_certificates
 WHERE deleted_at IS NULL AND status = 'issued' AND expires_at <= $1
 ORDER BY expires_at`
+	managedCertificateListByStatusQuery = `
+SELECT id, domain, route_id, status, cert, key, cert_sha256, expires_at, last_error, last_error_at, created_at, updated_at
+FROM managed_certificates
+WHERE deleted_at IS NULL AND status = $1
+ORDER BY last_error_at NULLS FIRST, updated_at`
 
 	// ACME configuration
 	acmeConfigSelectQuery = `
