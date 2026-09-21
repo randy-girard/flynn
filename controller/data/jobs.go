@@ -107,7 +107,30 @@ func (r *JobRepo) Add(job *ct.Job) error {
 	}
 
 	for i, volID := range job.VolumeIDs {
+		if volID == "" {
+			continue
+		}
+		// A volume can already be destroyed when the scheduler records a later
+		// job state. Failing the whole insert (23503) is retried as
+		// unknown_error and blocks scale-request completion for that release.
+		// Postgres aborts the transaction on the FK error, so roll back to a
+		// savepoint and keep the job row.
+		if err := tx.Exec("SAVEPOINT job_volume"); err != nil {
+			tx.Rollback()
+			return err
+		}
 		if err := tx.Exec("job_volume_insert", job.UUID, volID, i); err != nil {
+			if postgres.IsPostgresCode(err, postgres.ForeignKeyViolation) {
+				if rbErr := tx.Exec("ROLLBACK TO SAVEPOINT job_volume"); rbErr != nil {
+					tx.Rollback()
+					return rbErr
+				}
+				continue
+			}
+			tx.Rollback()
+			return err
+		}
+		if err := tx.Exec("RELEASE SAVEPOINT job_volume"); err != nil {
 			tx.Rollback()
 			return err
 		}
