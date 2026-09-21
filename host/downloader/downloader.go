@@ -2,6 +2,8 @@ package downloader
 
 import (
 	"compress/gzip"
+	"crypto/sha512"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -86,14 +88,23 @@ func (d *Downloader) assetURL(filename string) string {
 // DownloadBinaries downloads the Flynn binaries from GitHub releases to the
 // given dir with the version suffixed (e.g. /usr/local/bin/flynn-host.v20150726.0)
 // and updates non-versioned symlinks.
-func (d *Downloader) DownloadBinaries(dir string) (map[string]string, error) {
+//
+// checksums is an optional map of gzipped asset filename to SHA-512 hex digest
+// (the same mapping as checksums.sha512). When non-empty, each downloaded
+// archive is verified before it is decompressed. An empty map skips
+// verification so tarball updates without checksums still work; callers that
+// serve binaries over plaintext HTTP should pass checksums when available.
+func (d *Downloader) DownloadBinaries(dir string, checksums map[string]string) (map[string]string, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("error creating bin dir: %s", err)
+	}
+	if d.baseURL != "" && len(checksums) == 0 {
+		d.log.Warn("downloading binaries over HTTP without SHA-512 checksums; on-path substitution is not detected (SEC-032 residual risk)")
 	}
 	binaries := linuxBinaries()
 	paths := make(map[string]string, len(binaries))
 	for assetName, localName := range binaries {
-		path, err := d.downloadGzippedBinary(assetName, localName, dir)
+		path, err := d.downloadGzippedBinary(assetName, localName, dir, checksums)
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +208,7 @@ func downloadFileHTTP(url, destPath string) error {
 // downloadGzippedBinary downloads a gzipped binary from GitHub releases, decompresses it,
 // and creates a versioned file with a symlink. The assetName is the name in the release
 // (e.g., flynn-host-linux-amd64) and localName is the local binary name (e.g., flynn-host).
-func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (string, error) {
+func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string, checksums map[string]string) (string, error) {
 	// Construct the asset URL
 	gzName := assetName + ".gz"
 	assetURL := d.assetURL(gzName)
@@ -208,6 +219,13 @@ func (d *Downloader) downloadGzippedBinary(assetName, localName, dir string) (st
 		return "", fmt.Errorf("error downloading %s: %s", assetName, err)
 	}
 	defer os.Remove(tmpPath)
+
+	if err := verifyDownloadedSHA512(tmpPath, gzName, checksums); err != nil {
+		return "", err
+	}
+	if len(checksums) > 0 {
+		d.log.Info("checksum verified", "name", gzName)
+	}
 
 	// Open and decompress
 	gzFile, err := os.Open(tmpPath)
@@ -304,6 +322,42 @@ func (d *Downloader) downloadGzippedFile(name, dir string) (string, error) {
 func symlink(target, link string) error {
 	os.Remove(link)
 	return os.Symlink(target, link)
+}
+
+// verifyDownloadedSHA512 checks a downloaded gzipped asset against checksums
+// when a SHA-512 map was provided. An empty map skips verification (tarball
+// updates that do not include checksums.sha512).
+func verifyDownloadedSHA512(path, gzName string, checksums map[string]string) error {
+	if len(checksums) == 0 {
+		return nil
+	}
+	expected, ok := checksums[gzName]
+	if !ok {
+		return fmt.Errorf("no checksum found for %s", gzName)
+	}
+	if err := verifySHA512File(path, expected); err != nil {
+		return fmt.Errorf("checksum verification failed for %s: %s", gzName, err)
+	}
+	return nil
+}
+
+// verifySHA512File verifies a file's SHA-512 checksum.
+func verifySHA512File(path, expected string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	h := sha512.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(h.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actual)
+	}
+	return nil
 }
 
 // DownloadImagesManifest downloads the images manifest and returns the images map

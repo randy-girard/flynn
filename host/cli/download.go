@@ -72,7 +72,7 @@ func runDownload(args *docopt.Args) error {
 
 	// Download binaries
 	log.Info("downloading binaries", "dir", binDir)
-	binPaths, err := d.DownloadBinaries(binDir)
+	binPaths, err := d.DownloadBinaries(binDir, nil)
 	if err != nil {
 		log.Error("error downloading binaries", "err", err)
 		return err

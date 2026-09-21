@@ -262,7 +262,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 				return err
 			}
 
-			n, err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", args.Bool["--no-restart"], log)
+			n, err := updateRemoteBinaries(repo, binDir, configDir, release.TagName, "", checksums, args.Bool["--no-restart"], log)
 			if err != nil {
 				return err
 			}
@@ -331,12 +331,14 @@ func restartDaemon(binDir string, log log15.Logger) (bool, error) {
 // at a time (rolling) to maintain cluster availability.
 // For GitHub updates, repo should be set and baseURL empty.
 // For tarball updates, baseURL should point to the temp HTTP server.
+// checksums is the SHA-512 map the receiving host uses to verify downloads
+// (required for GitHub; optional for tarballs that omit checksums.sha512).
 //
 // It returns the expected cluster host count observed before the rolling
 // restart so the caller can gate later steps (e.g. image pulls) on the
 // cluster repopulating discoverd, rather than racing a partially-rejoined
 // raft state.
-func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRestart bool, log log15.Logger) (int, error) {
+func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, checksums map[string]string, noRestart bool, log log15.Logger) (int, error) {
 	// Retry discoverd lookup — after a systemctl restart the local daemon
 	// may not have re-registered with discoverd yet.
 	clusterClient := cluster.NewClient()
@@ -414,7 +416,7 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, noRe
 		hostLog.Info("pulling binaries on remote host")
 		fmt.Printf("Updating binaries on %s...\n", h.ID())
 
-		_, err := h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, nil)
+		_, err := h.PullBinariesAndConfig(repo, binDir, configDir, version, baseURL, checksums)
 		if err != nil {
 			hostLog.Error("failed to pull binaries on remote host", "err", err)
 			return expectedHostCount, fmt.Errorf("failed to update binaries on host %s: %w", h.ID(), err)
@@ -1757,6 +1759,13 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	}
 	log.Info("extracted tarball", "version", tarballVersion, "content_dir", contentDir)
 
+	// checksums is populated from checksums.sha512 when the tarball includes
+	// it. GitHub updates always have this file; tarball updates may not.
+	// Missing checksums are not fatal (do not break --tarball), but remotes
+	// then cannot verify binaries pulled over the coordinator's plaintext
+	// HTTP file server (SEC-032 residual risk).
+	var checksums map[string]string
+
 	// Update binaries unless --images-only was specified
 	if !imagesOnly {
 		if err := bootstrapUpdateBinary(contentDir, tarballVersion, binDir, os.Args, log); err != nil {
@@ -1765,10 +1774,13 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 		// Parse checksums from the tarball contents
 		checksumPath := filepath.Join(contentDir, "checksums.sha512")
-		checksums, err := parseChecksums(checksumPath)
+		parsed, err := parseChecksums(checksumPath)
 		if err != nil {
 			log.Warn("no checksums file in tarball, skipping verification", "err", err)
-			checksums = nil
+		} else if len(parsed) == 0 {
+			log.Warn("checksums.sha512 in tarball is empty, skipping verification")
+		} else {
+			checksums = parsed
 		}
 
 		// Install binaries from extracted files
@@ -1855,7 +1867,10 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 			if err := settleLocalRestartBeforeRemotes(args.Bool["--no-restart"], log); err != nil {
 				return err
 			}
-			n, err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, args.Bool["--no-restart"], log)
+			if len(checksums) == 0 {
+				log.Warn("tarball has no checksums.sha512; remote hosts will pull binaries over plaintext HTTP without integrity checks (SEC-032 residual risk)")
+			}
+			n, err := updateRemoteBinaries("", binDir, configDir, tarballVersion, baseURL, checksums, args.Bool["--no-restart"], log)
 			if err != nil {
 				return err
 			}
