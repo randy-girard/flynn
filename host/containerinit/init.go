@@ -64,8 +64,9 @@ type Config struct {
 
 const SharedPath = "/.container-shared"
 
-// HideDiscoverdEnv tells containerinit to keep DISCOVERD for its own service
-// registration but omit it from the workload process environment.
+// HideDiscoverdEnv tells containerinit to keep DISCOVERD and
+// DISCOVERD_AUTH_KEY for its own service registration but omit them from the
+// workload process environment.
 const HideDiscoverdEnv = "FLYNN_HIDE_DISCOVERD"
 
 // HostRegistersServices tells containerinit not to dial discoverd; flynn-host
@@ -394,8 +395,8 @@ func lookupStandardPath(name string) string {
 }
 
 // childEnv is the environment passed to the workload. containerinit keeps
-// DISCOVERD in Config.Env for service registration; user jobs set
-// HideDiscoverdEnv so the app process (and /proc/self/environ) never see it.
+// DISCOVERD and DISCOVERD_AUTH_KEY in Config.Env for service registration;
+// user jobs set HideDiscoverdEnv so the app process never sees them.
 func childEnv(env map[string]string) []string {
 	hide := env[HideDiscoverdEnv] == "1" || env[HostRegistersServices] == "1"
 	out := make([]string, 0, len(env))
@@ -403,7 +404,7 @@ func childEnv(env map[string]string) []string {
 		if k == HideDiscoverdEnv || k == HostRegistersServices {
 			continue
 		}
-		if hide && k == "DISCOVERD" {
+		if hide && (k == "DISCOVERD" || k == "DISCOVERD_AUTH_KEY") {
 			continue
 		}
 		out = append(out, k+"="+v)
@@ -411,9 +412,17 @@ func childEnv(env map[string]string) []string {
 	return out
 }
 
+func discoverdClientFromEnv(env map[string]string) *discoverd.Client {
+	client := discoverd.NewClientWithURL(env["DISCOVERD"])
+	if k := env["DISCOVERD_AUTH_KEY"]; k != "" {
+		client.Key = k
+	}
+	return client
+}
+
 func monitor(port host.Port, container *ContainerInit, env map[string]string, log log15.Logger) (discoverd.Heartbeater, error) {
 	config := port.Service
-	client := discoverd.NewClientWithURL(env["DISCOVERD"])
+	client := discoverdClientFromEnv(env)
 	client.Logger = logger.New("component", "discoverd")
 
 	if config.Create {

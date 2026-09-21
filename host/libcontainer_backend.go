@@ -993,9 +993,11 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		if l.host != nil && l.host.authKey != "" {
 			systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
 		}
-		if key := os.Getenv("DISCOVERD_AUTH_KEY"); key != "" {
-			systemEnv["DISCOVERD_AUTH_KEY"] = key
-		}
+	}
+	// Every job's containerinit must authenticate to discoverd to register
+	// services. User child processes still omit the key via childEnv hide.
+	if key := os.Getenv("DISCOVERD_AUTH_KEY"); key != "" {
+		systemEnv["DISCOVERD_AUTH_KEY"] = key
 	}
 	userEnv := userJobInitEnv(job)
 	l.envMtx.RLock()
