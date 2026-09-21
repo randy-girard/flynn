@@ -265,6 +265,13 @@ Routes for the additional process type can be configured by specifying the
 flynn route:add http --service myapp-admin-web admin.example.com
 ```
 
+`--service` must name a discoverd service this app owns. Flynn registers
+buildpack `web` / `*-web` process types as `$APPNAME-$TYPE` and docker
+container deploys as `$APPNAME-web`. A custom `service` (or port service
+name) on the app's current release is also allowed. Cluster administrators
+may still create routes for platform apps (dashboard, www, discovery,
+controller). TCP routes use the same ownership rule.
+
 ### HTTPS
 
 The router can automatically terminate HTTPS traffic, the certificate chain and
