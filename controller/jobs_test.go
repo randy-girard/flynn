@@ -5,14 +5,18 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"time"
 
 	. "github.com/flynn/go-check"
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	tu "github.com/randy-girard/flynn/controller/testutils"
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/random"
+	"golang.org/x/net/context"
 )
 
 func (s *S) createTestJob(c *C, in *ct.Job) *ct.Job {
@@ -487,3 +491,172 @@ func (a *rawAttachClient) ResizeTTY(uint16, uint16) error { return nil }
 func (a *rawAttachClient) CloseWrite() error              { return nil }
 func (a *rawAttachClient) Write(p []byte) (int, error)    { return a.rwc.Write(p) }
 func (a *rawAttachClient) Close() error                   { return a.rwc.Close() }
+
+func (s *S) runJobWithToken(c *C, app *ct.App, tok *authorizer.Token, newJob *ct.NewJob) *httptest.ResponseRecorder {
+	body, err := json.Marshal(newJob)
+	c.Assert(err, IsNil)
+	req, err := http.NewRequest("POST", "/apps/"+app.ID+"/jobs", bytes.NewReader(body))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	ctx := context.WithValue(context.Background(), "app", app)
+	ctx = context.WithValue(ctx, authz.TokenContextKey, tok)
+	s.api.RunJob(ctx, rec, req)
+	return rec
+}
+
+func (s *S) TestRunJobAppScopedCannotSetSystemTrust(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "run-untrusted"})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: app.ID, Permissions: []string{"app:jobs:run"}}}}
+	rec := s.runJobWithToken(c, app, tok, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"echo", "hi"},
+		Partition: ct.PartitionTypeSystem,
+		Meta: map[string]string{
+			"keep":                      "yes",
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "builder",
+			"flynn-datastore":           "true",
+			"flynn-plugin":              "true",
+		},
+	})
+	c.Assert(rec.Code, Equals, 200)
+
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.Partition, Not(Equals), "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "")
+		c.Assert(job.Metadata["flynn-controller.app_name"], Equals, app.Name)
+		c.Assert(job.Metadata["keep"], Equals, "yes")
+		c.Assert(job.Metadata["flynn-datastore"], Equals, "")
+		c.Assert(job.Metadata["flynn-plugin"], Equals, "")
+		c.Assert(job.Profiles, IsNil)
+	}
+
+	rec = s.runJobWithToken(c, app, tok, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"echo", "hi"},
+		Profiles:  []host.JobProfile{host.JobProfileZFS},
+	})
+	c.Assert(rec.Code, Equals, 400)
+}
+
+func (s *S) TestRunJobClusterAdminCanSetSystemTrust(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "run-admin-trust"})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	res, err := s.c.RunJobDetached(app.ID, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"echo", "hi"},
+		Partition: ct.PartitionTypeSystem,
+		Profiles:  []host.JobProfile{host.JobProfileZFS},
+		Meta:      map[string]string{"flynn-system-app": "true"},
+	})
+	c.Assert(err, IsNil)
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.ID, Equals, res.ID)
+		c.Assert(job.Partition, Equals, "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
+		c.Assert(job.Profiles, DeepEquals, []host.JobProfile{host.JobProfileZFS})
+	}
+}
+
+func (s *S) TestRunJobRejectsForeignRelease(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "run-own-release"})
+	other := s.createTestApp(c, &ct.App{Name: "run-other-release"})
+	foreign := s.createTestRelease(c, other.ID, &ct.Release{})
+	_, err := s.c.RunJobDetached(app.ID, &ct.NewJob{
+		ReleaseID: foreign.ID,
+		Args:      []string{"echo", "hi"},
+	})
+	c.Assert(err, NotNil)
+}
+
+func (s *S) TestStartDetachedJobAppScopedCannotSetSystemTrust(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "start-untrusted"})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	_, err := s.api.startDetachedJob(app, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"echo", "hi"},
+		Profiles:  []host.JobProfile{host.JobProfileKVM},
+	})
+	c.Assert(err, NotNil)
+
+	res, err := s.api.startDetachedJob(app, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"echo", "hi"},
+		Partition: ct.PartitionTypeSystem,
+		Meta: map[string]string{
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "builder",
+			"keep":                      "yes",
+		},
+	})
+	c.Assert(err, IsNil)
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.ID, Equals, res.ID)
+		c.Assert(job.Partition, Not(Equals), "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "")
+		c.Assert(job.Metadata["flynn-controller.app_name"], Equals, app.Name)
+		c.Assert(job.Metadata["keep"], Equals, "yes")
+		c.Assert(job.Profiles, IsNil)
+	}
+}
+
+func (s *S) TestStartDetachedJobSystemAppKeepsTrust(c *C) {
+	app := s.createTestApp(c, &ct.App{
+		Name: "start-system-trust",
+		Meta: map[string]string{"flynn-system-app": "true"},
+	})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	res, err := s.api.startDetachedJob(app, &ct.NewJob{
+		ReleaseID: release.ID,
+		Args:      []string{"/bin/taffy"},
+		Partition: ct.PartitionTypeSystem,
+		Profiles:  []host.JobProfile{host.JobProfileZFS},
+		Meta:      map[string]string{"github": "true", "flynn-system-app": "true"},
+	})
+	c.Assert(err, IsNil)
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
+	for _, j := range jobs {
+		job := j.Job
+		c.Assert(job.ID, Equals, res.ID)
+		c.Assert(job.Partition, Equals, "system")
+		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
+		c.Assert(job.Metadata["github"], Equals, "true")
+		c.Assert(job.Profiles, DeepEquals, []host.JobProfile{host.JobProfileZFS})
+	}
+}

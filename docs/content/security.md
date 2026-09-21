@@ -123,7 +123,13 @@ includes `no_new_privs`, seccomp, AppArmor `flynn-default`, dropped
 capabilities, a private cgroup namespace, and the overlay/host firewall
 above. User jobs cannot request host network/PID, writable cgroups,
 device profiles (`zfs`/`kvm`/`loop`), extra capabilities, or host bind
-mounts (including runtime sockets). Do not run untrusted code in Flynn.
+mounts (including runtime sockets). One-off jobs (`POST /apps/:id/jobs`,
+`jobs:run`) also cannot become system-class: app-scoped callers have
+reserved metadata (`flynn-system-app`, `flynn-controller.*`,
+`flynn-datastore`, `flynn-plugin`) stripped, `partition=system` forced
+to `user`, and non-empty device profiles rejected. System apps and
+cluster-admin credentials still run on the system partition with
+existing profiles. Do not run untrusted code in Flynn.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not

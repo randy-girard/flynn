@@ -66,6 +66,7 @@
       "type": "boolean"
     },
     "partition": {
+      "description": "job partition. system is honored only for system apps and cluster-admin credentials; app-scoped callers are forced to user",
       "$ref": "/schema/controller/common#/definitions/partition"
     },
     "mounts_from": {
@@ -73,7 +74,7 @@
       "type": "string"
     },
     "profiles": {
-      "description": "job profiles",
+      "description": "job profiles (zfs/kvm/loop). rejected for app-scoped callers on non-system apps",
       "type": "array",
       "items": {
         "type": "string"

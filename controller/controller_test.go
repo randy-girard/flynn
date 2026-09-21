@@ -37,6 +37,7 @@ type S struct {
 	cc     *tu.FakeCluster
 	srv    *httptest.Server
 	hc     handlerConfig
+	api    *controllerAPI
 	c      controller.Client
 	flac   *fakeLogAggregatorClient
 	caCert []byte
@@ -94,7 +95,8 @@ func (s *S) SetUpSuite(c *C) {
 		keys:   []string{authKey},
 		caCert: s.caCert,
 	}
-	handler, _, _ := appHandler(s.hc)
+	handler, _, api := appHandler(s.hc)
+	s.api = api
 	s.srv = httptest.NewServer(handler)
 	client, err := controller.NewClient(s.srv.URL, authKey)
 	c.Assert(err, IsNil)
