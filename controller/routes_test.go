@@ -8,6 +8,8 @@ import (
 	. "github.com/flynn/go-check"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/tlscert"
 	"github.com/randy-girard/flynn/router/testutils"
 	router "github.com/randy-girard/flynn/router/types"
@@ -379,4 +381,91 @@ func (s *S) TestStreamRouteEvents(c *C) {
 	case <-time.After(10 * time.Second):
 		c.Fatal("Timed out waiting for remove event")
 	}
+}
+
+func (s *S) TestCreateRouteServiceOwnership(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "sec007-shop"})
+	scoped := s.scopedClient(c, app)
+
+	route := (&router.HTTPRoute{Domain: "sec007-shop.example.com", Service: app.Name + "-web"}).ToRoute()
+	c.Assert(scoped.CreateRoute(app.ID, route), IsNil)
+	c.Assert(route.Service, Equals, app.Name+"-web")
+
+	tcp := (&router.TCPRoute{Service: app.Name + "-web"}).ToRoute()
+	c.Assert(scoped.CreateRoute(app.ID, tcp), IsNil)
+
+	rel := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{
+			"web": {Service: "sec007-declared"},
+			"api": {Ports: []ct.Port{{Service: &host.Service{Name: "sec007-from-port"}}}},
+		},
+	})
+	c.Assert(s.c.SetAppRelease(app.ID, rel.ID), IsNil)
+	app, err := s.c.GetApp(app.ID)
+	c.Assert(err, IsNil)
+
+	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-declared.example.com", Service: "sec007-declared"}).ToRoute()), IsNil)
+	c.Assert(scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-port.example.com", Service: "sec007-from-port"}).ToRoute()), IsNil)
+
+	for _, svc := range []string{"controller", "blobstore", "postgres-api", "dashboard-web", "controller-web"} {
+		err := scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-" + svc + ".example.com", Service: svc}).ToRoute())
+		c.Assert(err, NotNil)
+		c.Assert(httphelper.IsForbidden(err), Equals, true, Commentf("service %s: %v", svc, err))
+	}
+
+	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-other.example.com", Service: "other-web"}).ToRoute())
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsForbidden(err), Equals, true)
+
+	sys := s.createTestApp(c, &ct.App{Name: "sec007-www", Meta: map[string]string{"flynn-system-app": "true"}})
+	hijack := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": {Service: sys.Name}},
+	})
+	c.Assert(s.c.SetAppRelease(app.ID, hijack.ID), IsNil)
+	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-hijack.example.com", Service: sys.Name}).ToRoute())
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsForbidden(err), Equals, true)
+	c.Assert(err.Error(), Matches, ".*system app service.*")
+
+	ctrlRel := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": {Service: "controller"}},
+	})
+	c.Assert(s.c.SetAppRelease(app.ID, ctrlRel.ID), IsNil)
+	err = scoped.CreateRoute(app.ID, (&router.HTTPRoute{Domain: "sec007-ctrl.example.com", Service: "controller"}).ToRoute())
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsForbidden(err), Equals, true)
+}
+
+func (s *S) TestCreateRouteSystemAppsStillWorkForAdmin(c *C) {
+	for _, spec := range []struct {
+		name    string
+		service string
+		domain  string
+	}{
+		{name: "sec007-dashboard", service: "dashboard", domain: "sec007-dashboard.example.com"},
+		{name: "sec007-discovery", service: "discovery", domain: "sec007-discovery.example.com"},
+		{name: "sec007-controller-app", service: "controller-web", domain: "sec007-controller-web.example.com"},
+	} {
+		app := s.createTestApp(c, &ct.App{Name: spec.name, Meta: map[string]string{"flynn-system-app": "true"}})
+		route := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: spec.domain, Service: spec.service}).ToRoute())
+		c.Assert(route.Service, Equals, spec.service)
+	}
+
+	www := s.createTestApp(c, &ct.App{Name: "www", Meta: map[string]string{"flynn-system-app": "true"}})
+	route := s.createTestRoute(c, www.ID, (&router.HTTPRoute{Domain: "sec007-www.example.com", Service: "www"}).ToRoute())
+	c.Assert(route.Service, Equals, "www")
+}
+
+func (s *S) TestUpdateRouteServiceOwnership(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "sec007-update"})
+	route := s.createTestRoute(c, app.ID, (&router.HTTPRoute{Domain: "sec007-update.example.com", Service: app.Name + "-web"}).ToRoute())
+	scoped := s.scopedClient(c, app)
+
+	route.Service = app.Name + "-admin-web"
+	c.Assert(scoped.UpdateRoute(app.ID, route.FormattedID(), route), IsNil)
+
+	route.Service = "controller"
+	err := scoped.UpdateRoute(app.ID, route.FormattedID(), route)
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsForbidden(err), Equals, true)
 }

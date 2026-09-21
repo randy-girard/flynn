@@ -35,6 +35,10 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		}
 	}
 
+	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
+		return
+	}
+
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
 		enabled, err := c.acmeConfigRepo.IsEnabled()
@@ -132,6 +136,10 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	}
 	route.Type = params.ByName("routes_type")
 	route.ID = params.ByName("routes_id")
+
+	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
+		return
+	}
 
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {

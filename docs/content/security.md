@@ -76,7 +76,11 @@ Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
 those process limits requires the cluster controller key (`flynn limit:set` or
 flynn-host). Path-based
 HTTP routes (`example.com/api`) can only be created with
-`flynn-host route:add`.
+`flynn-host route:add`. App-scoped tokens with `app:routes:write` can only
+point a route at a discoverd service this app owns (`$APP-web` /
+`$APP-$TYPE`, or a `service` declared on the current release). Routing to
+system services (`controller`, `blobstore`, `postgres-api`, dashboard, www,
+discovery) requires the cluster controller key.
 
 Applications run in a user namespace: container UID 0 is an unprivileged
 host UID (≥ 1_000_000). Overlay squashfs layers stay owned by host 0/5000

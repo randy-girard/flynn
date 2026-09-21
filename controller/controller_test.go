@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,12 +12,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/controller/api"
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/controller/data"
 	tu "github.com/randy-girard/flynn/controller/testutils"
+	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/pkg/certgen"
@@ -24,6 +30,7 @@ import (
 	pgtestutils "github.com/randy-girard/flynn/pkg/testutils/postgres"
 	"github.com/randy-girard/flynn/pkg/typeconv"
 	cjson "github.com/tent/canonical-json-go"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func init() {
@@ -34,12 +41,13 @@ func init() {
 func Test(t *testing.T) { TestingT(t) }
 
 type S struct {
-	cc     *tu.FakeCluster
-	srv    *httptest.Server
-	hc     handlerConfig
-	c      controller.Client
-	flac   *fakeLogAggregatorClient
-	caCert []byte
+	cc          *tu.FakeCluster
+	srv         *httptest.Server
+	hc          handlerConfig
+	c           controller.Client
+	flac        *fakeLogAggregatorClient
+	caCert      []byte
+	tokenSigner *tokensigner.Signer
 }
 
 var _ = Suite(&S{})
@@ -87,12 +95,17 @@ func (s *S) SetUpSuite(c *C) {
 
 	s.flac = newFakeLogAggregatorClient()
 	s.cc = tu.NewFakeCluster()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	c.Assert(err, IsNil)
+	s.tokenSigner = tokensigner.New(priv)
 	s.hc = handlerConfig{
-		db:     db,
-		cc:     s.cc,
-		lc:     s.flac,
-		keys:   []string{authKey},
-		caCert: s.caCert,
+		db:               db,
+		cc:               s.cc,
+		lc:               s.flac,
+		keys:             []string{authKey},
+		tokenKey:         &priv.PublicKey,
+		tokenMaxValidity: time.Hour,
+		caCert:           s.caCert,
 	}
 	handler, _, _ := appHandler(s.hc)
 	s.srv = httptest.NewServer(handler)
@@ -143,6 +156,26 @@ func (s *S) TestDeleteAppEmptyBody(c *C) {
 func (s *S) createTestApp(c *C, in *ct.App) *ct.App {
 	c.Assert(s.c.CreateApp(in), IsNil)
 	return in
+}
+
+func (s *S) scopedClient(c *C, app *ct.App, perms ...string) controller.Client {
+	if len(perms) == 0 {
+		perms = []string{"app:routes:write"}
+	}
+	now := time.Now()
+	tok, err := s.tokenSigner.Sign(&api.AccessToken{
+		UserEmail:  "scoped@flynn.test",
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(15 * time.Minute)),
+		AppGrants: []*api.AppGrant{
+			{AppId: app.ID, Permissions: perms},
+			{AppId: app.Name, Permissions: perms},
+		},
+	})
+	c.Assert(err, IsNil)
+	client, err := controller.NewClientWithToken(s.srv.URL, tok)
+	c.Assert(err, IsNil)
+	return client
 }
 
 func (s *S) TestCreateApp(c *C) {
