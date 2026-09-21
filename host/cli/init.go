@@ -51,5 +51,12 @@ func runInit(args *docopt.Args) error {
 		}
 	}
 
-	return c.WriteTo(args.String["--file"])
+	file := args.String["--file"]
+	if err := c.WriteTo(file); err != nil {
+		return err
+	}
+	// Persist a pre-shared cluster key if the operator already exported it.
+	// Do not generate a unique key here: that would reject configure-host-auth
+	// on other nodes that do not know this host's secret.
+	return config.PersistEnvAuthKey(file)
 }

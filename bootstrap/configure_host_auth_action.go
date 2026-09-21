@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"time"
 
@@ -23,13 +24,7 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 
 	clientKey := os.Getenv("FLYNN_HOST_AUTH_KEY")
 	for _, h := range s.Hosts {
-		client := cluster.NewHostWithKey(h.ID(), h.Addr(), nil, h.Tags(), clientKey)
-		err := client.ConfigureAuthKey(key)
-		if err != nil && clientKey != "" {
-			client = cluster.NewHostWithKey(h.ID(), h.Addr(), nil, h.Tags(), "")
-			err = client.ConfigureAuthKey(key)
-		}
-		if err != nil {
+		if err := configureHostAuthOn(h, key, clientKey); err != nil {
 			return fmt.Errorf("bootstrap: error configuring host auth on %s: %s", h.Addr(), err)
 		}
 	}
@@ -37,17 +32,86 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	os.Setenv("FLYNN_HOST_AUTH_KEY", key)
 
 	// ConfigureAuthKey schedules an asynchronous daemon restart, so the
-	// pre-restart daemon (which still has auth disabled) keeps answering the
-	// auth-exempt /host/status endpoint for a short window. Wait until every
-	// host reports auth is enabled, which only happens once the daemon has
-	// actually restarted with the new key; otherwise later actions open job
-	// event streams against a daemon that is about to be restarted out from
-	// under them and time out waiting for events.
+	// pre-restart daemon keeps answering the auth-exempt GET /host/status
+	// endpoint for a short window. Wait until every host reports auth is
+	// enabled, which only happens once the daemon has actually restarted
+	// with the new key; otherwise later actions open job event streams
+	// against a daemon that is about to be restarted out from under them
+	// and time out waiting for events.
 	if err := waitForHostAuth(s); err != nil {
 		return err
 	}
 	s.refreshHostClients()
 	return nil
+}
+
+func configureHostAuthOn(h *cluster.Host, key, clientKey string) error {
+	var last error
+	for _, addr := range configureAuthDialAddrs(h.Addr()) {
+		client := cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), clientKey)
+		err := client.ConfigureAuthKey(key)
+		if err != nil && clientKey != "" {
+			client = cluster.NewHostWithKey(h.ID(), addr, nil, h.Tags(), "")
+			err = client.ConfigureAuthKey(key)
+		}
+		if err == nil {
+			return nil
+		}
+		last = err
+	}
+	return last
+}
+
+// configureAuthDialAddrs prefers 127.0.0.1 when addr is this machine
+// (faster on-node TOFU). Remote advertised IPs are unchanged; empty-key
+// POST /host/auth-key remains allowed on those addresses for multi-node
+// bootstrap.
+func configureAuthDialAddrs(addr string) []string {
+	if loop := loopbackAuthAddr(addr); loop != "" && loop != addr {
+		return []string{loop, addr}
+	}
+	return []string{addr}
+}
+
+func loopbackAuthAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	ip := net.ParseIP(host)
+	if ip != nil && ip.IsLoopback() {
+		return addr
+	}
+	if !hostIPIsLocalInterface(ip) {
+		return ""
+	}
+	return net.JoinHostPort("127.0.0.1", port)
+}
+
+func hostIPIsLocalInterface(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, a := range addrs {
+		var ifaceIP net.IP
+		switch v := a.(type) {
+		case *net.IPNet:
+			ifaceIP = v.IP
+		case *net.IPAddr:
+			ifaceIP = v.IP
+		}
+		if ifaceIP != nil && ifaceIP.Equal(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // waitForHostAuth blocks until every host in the bootstrap state reports that

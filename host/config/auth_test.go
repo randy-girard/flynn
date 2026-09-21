@@ -79,3 +79,44 @@ func TestSetAuthKeyPersistsAndChmods(t *testing.T) {
 		t.Fatal("old key must not remain on disk")
 	}
 }
+
+func TestPersistEnvAuthKeyNoopAndSet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	c := New()
+	c.Args = []string{"--external-ip", "10.0.0.1"}
+	if err := c.WriteTo(path); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "")
+	if err := PersistEnvAuthKey(path); err != nil {
+		t.Fatal(err)
+	}
+	key, err := LoadAuthKey(path)
+	if err != nil || key != "" {
+		t.Fatalf("empty env must not invent a key: %q %v", key, err)
+	}
+
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "shared-cluster")
+	if err := PersistEnvAuthKey(path); err != nil {
+		t.Fatal(err)
+	}
+	key, err = LoadAuthKey(path)
+	if err != nil || key != "shared-cluster" {
+		t.Fatalf("persist: %q %v", key, err)
+	}
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0600 {
+		t.Fatalf("perm=%o", st.Mode().Perm())
+	}
+	opened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(opened.Args) != 2 || opened.Args[1] != "10.0.0.1" {
+		t.Fatalf("args=%v", opened.Args)
+	}
+}

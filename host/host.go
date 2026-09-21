@@ -358,7 +358,7 @@ func runDaemon(args *docopt.Args) {
 	if authKey != "" {
 		log.Info("host HTTP API authentication enabled")
 	} else {
-		log.Warn("host HTTP API authentication disabled (set --auth-key or FLYNN_HOST_AUTH_KEY)")
+		log.Warn("host HTTP API auth key unset; non-status requests fail closed except loopback/unix")
 	}
 
 	discoverdManager := NewDiscoverdManager(backend, sman, hostID, publishAddr, tags)

@@ -27,11 +27,12 @@ HTTPS.
 
 ## Internal Communication
 
-Flynn uses several ports to communicate internally, and currently there is no
-authentication system for internal communication, so access to these ports must
-not be exposed to the Internet. A firewall must be configured so that the only
-Flynn ports accessible are 80 and 443 to prevent compromise. Access to these
-internal Flynn ports is equivalent to root access, so be careful. After
+Flynn uses several ports to communicate internally. Most of those ports still
+have no authentication, so they must not be exposed to the Internet. A firewall
+must be configured so that the only Flynn ports accessible are 80 and 443 to
+prevent compromise. Access to these internal Flynn ports is equivalent to root
+access, so be careful. The host API (`:1113`) is the exception documented
+below; firewall it the same way. After
 install, `flynn-host firewall` manages extra peer IPs and TCP ports on the
 host UFW rules; see [Production — Firewalling](production.html.md#firewalling).
 `flynn resource:expose` prints `flynn-host firewall:expose` when a datastore is
@@ -39,6 +40,36 @@ exported on a TCP port in 3000–3500. Treat those ports as public; prefer TLS
 passthrough (backend certs) or terminate (`--auto-tls`). Postgres enables
 `ssl=on` with a cluster-generated certificate; in-cluster `sslmode=disable`
 clients still work.
+
+The flynn-host HTTP API (`:1113`) uses `FLYNN_HOST_AUTH_KEY` (the `Auth-Key`
+header or HTTP Basic password). Bootstrap writes one cluster-wide key to
+`/etc/flynn/host.json` (mode `0600`) via `POST /host/auth-key` and restarts
+the daemon. After that, host-to-host update pulls and the `flynn-host` CLI
+present the same key.
+
+When no key is configured (fresh host, missing `host.json`, or before
+bootstrap) the API **fails closed**, with two exceptions:
+
+* `GET /host/status` stays unauthenticated (health checks and bootstrap host
+  discovery).
+* First-time `POST /host/auth-key` is trust-on-first-use from any peer,
+  including advertised subnet IPs. Multi-node bootstrap runs
+  `configure-host-auth` on one coordinator and must reach every host's
+  `:1113`, not only loopback.
+* Every other method is `401` unless the client is on **TCP loopback**
+  (`127.0.0.0/8` or `::1`) or a **Unix domain socket** (local `flynn-host`
+  CLI). Job, volume, and update APIs are not opened on the subnet.
+
+After a key is set, loopback is not a bypass; the request must present
+`authKey`. Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
+
+`flynn-host init` does **not** generate a unique per-host key. A random key
+at init would desynchronize multi-node bootstrap, which installs one shared
+secret. If `FLYNN_HOST_AUTH_KEY` is already in the environment, init persists
+it into `host.json`. Joining hosts should set that cluster key before the
+daemon listens. Bootstrap still prefers `127.0.0.1` when configuring the
+local host (faster); remote peers use the advertised address and empty-key
+TOFU on `POST /host/auth-key` only.
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. The TLS
