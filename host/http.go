@@ -97,6 +97,9 @@ func writeHostUnauthorized(w http.ResponseWriter) {
 // When no authKey is configured:
 //   - POST /host/auth-key is trust-on-first-use from any peer (multi-node
 //     bootstrap's configure-host-auth dials advertised IPs, not loopback)
+//   - POST /host/discoverd and POST /host/network are the same TOFU window:
+//     discoverd and flannel notify via --listen-ip (not loopback), and the
+//     daemon is not registered in discoverd until that webhook succeeds
 //   - every other non-status request fails closed unless it arrived from
 //     TCP loopback or a Unix socket (local flynn-host CLI)
 //
@@ -110,7 +113,7 @@ func (h *Host) authMiddleware(next http.Handler) http.Handler {
 		}
 
 		if h.authKey == "" {
-			if r.URL.Path == "/host/auth-key" && r.Method == "POST" {
+			if r.Method == "POST" && (r.URL.Path == "/host/auth-key" || r.URL.Path == "/host/discoverd" || r.URL.Path == "/host/network") {
 				next.ServeHTTP(w, r)
 				return
 			}

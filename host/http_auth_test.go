@@ -67,6 +67,16 @@ func TestHostAuthMiddleware(t *testing.T) {
 			want: http.StatusNoContent,
 		},
 		{
+			name:   "no key subnet discoverd notify allowed",
+			method: "POST", path: "/host/discoverd", remote: "192.0.2.200:9",
+			want: http.StatusNoContent,
+		},
+		{
+			name:   "no key subnet network notify allowed",
+			method: "POST", path: "/host/network", remote: "192.0.2.200:9",
+			want: http.StatusNoContent,
+		},
+		{
 			name:   "no key X-Forwarded-For spoof 401",
 			method: "GET", path: "/host/jobs", remote: "198.51.100.9:9",
 			fwdFor: "127.0.0.1",
@@ -102,6 +112,12 @@ func TestHostAuthMiddleware(t *testing.T) {
 			name:    "key set unauthed jobs 401",
 			authKey: "cluster-secret",
 			method:  "GET", path: "/host/jobs", remote: "127.0.0.1:9",
+			want: http.StatusUnauthorized,
+		},
+		{
+			name:    "key set unauthed discoverd 401",
+			authKey: "cluster-secret",
+			method:  "POST", path: "/host/discoverd", remote: "192.0.2.200:9",
 			want: http.StatusUnauthorized,
 		},
 		{
