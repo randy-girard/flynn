@@ -348,6 +348,20 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'logaggregator' AN
 		}
 	}
 
+	// Push the backup discoverd key onto the host before discoverd starts.
+	// Otherwise the daemon cannot register and wait-hosts times out.
+	discoverdKey := ""
+	controllerKey := ""
+	if discoverdApp.Release != nil && discoverdApp.Release.Env != nil {
+		discoverdKey = discoverdApp.Release.Env["DISCOVERD_AUTH_KEY"]
+	}
+	if controllerApp.Release != nil && controllerApp.Release.Env != nil {
+		controllerKey = controllerApp.Release.Env["AUTH_KEY"]
+		if controllerKey == "" {
+			controllerKey = controllerApp.Release.Env["CONTROLLER_KEY"]
+		}
+	}
+
 	// ensure flannel has NETWORK set if required
 	if network := os.Getenv("FLANNEL_NETWORK"); network != "" {
 		flannelApp.Release.Env["NETWORK"] = network
@@ -453,6 +467,10 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at
 
 	// start discoverd/flannel/postgres
 	systemSteps := bootstrap.Manifest{
+		step("restore-host-secrets", "configure-restore-auth", &bootstrap.ConfigureRestoreAuthAction{
+			DiscoverdKey:  discoverdKey,
+			ControllerKey: controllerKey,
+		}),
 		step("discoverd", "run-app", &bootstrap.RunAppAction{
 			ExpandedFormation: discoverdApp,
 		}),

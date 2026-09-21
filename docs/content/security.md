@@ -93,7 +93,9 @@ discoverd's HTTP API (`:1111`) requires `DISCOVERD_AUTH_KEY` (a 128-bit
 secret generated at bootstrap, the same size as `CONTROLLER_KEY` /
 `FLYNN_HOST_AUTH_KEY`). System jobs receive the key in their environment;
 `flynn-host` persists it in `/etc/flynn/host.json` and injects it into
-system-class containers. The client sends it as an `Auth-Key` header
+system-class containers. `flynn-host bootstrap --from-backup` writes that
+key onto each host and restarts the daemon before starting discoverd, so
+the host can register and `wait-hosts` can finish. The client sends it as an `Auth-Key` header
 (or HTTP basic password). `/ping` and `/.well-known/status` stay
 unauthenticated so health checks work. DNS on `:53` is unauthenticated
 because user jobs need it. User and build jobs still cannot open
