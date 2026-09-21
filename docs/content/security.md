@@ -207,7 +207,10 @@ privileged releases for system apps. `POST /releases` requires `app_id`
 for app-scoped tokens, and minting a release needs `app:env:write` (the
 Manage and Admin roles include it). `app:scale:write` alone cannot mint
 a release. A release minted for one app cannot be attached to
-another. Do not run untrusted code in Flynn.
+another. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
+app's release when the caller is cluster-admin, or when that release is
+the image of a resource attached to this app (`flynn redis:cli` and the
+other plugin consoles). Do not run untrusted code in Flynn.
 HostNetwork remains restricted to system/builder jobs.
 
 There may be other unknown security flaws in Flynn. For the time being we do not

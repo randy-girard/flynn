@@ -147,3 +147,22 @@ func TestReleaseOwnedByApp(t *testing.T) {
 		t.Fatalf("err = %v, want release validation error", err)
 	}
 }
+
+func TestRunJobAllowsRelease(t *testing.T) {
+	app := &ct.App{ID: "shop"}
+	foreign := &ct.Release{ID: "rel-redis", AppID: "redis-app"}
+	scoped := scopedJobsRunToken(app.ID)
+	if err := runJobAllowsRelease(foreign, app, scoped, nil); err == nil {
+		t.Fatal("app-scoped token must not run an unrelated app release")
+	}
+	if err := runJobAllowsRelease(foreign, app, scoped, []string{"/clusters/rel-redis"}); err != nil {
+		t.Fatalf("attached redis resource: %v", err)
+	}
+	admin := &authorizer.Token{ClusterKey: true}
+	if err := runJobAllowsRelease(foreign, app, admin, nil); err != nil {
+		t.Fatalf("cluster key plugin CLI: %v", err)
+	}
+	if err := runJobAllowsRelease(&ct.Release{AppID: app.ID}, app, scoped, nil); err != nil {
+		t.Fatalf("own release: %v", err)
+	}
+}

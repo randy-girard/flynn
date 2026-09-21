@@ -173,7 +173,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		return
 	}
 	release := data.(*ct.Release)
-	if err := releaseOwnedByApp(release, app); err != nil {
+	if err := runJobAllowsRelease(release, app, authz.TokenFromContext(ctx), c.attachedResourceIDs(app)); err != nil {
 		respondWithError(w, err)
 		return
 	}
@@ -485,4 +485,27 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		Args:      newJob.Args,
 		Meta:      newJob.Meta,
 	}, nil
+}
+
+func (c *controllerAPI) attachedResourceIDs(app *ct.App) []string {
+	if c == nil || c.resourceRepo == nil || app == nil || app.ID == "" {
+		return nil
+	}
+	list, err := c.resourceRepo.AppList(app.ID)
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(list)*2)
+	for _, r := range list {
+		if r == nil {
+			continue
+		}
+		if r.ID != "" {
+			ids = append(ids, r.ID)
+		}
+		if r.ExternalID != "" {
+			ids = append(ids, r.ExternalID)
+		}
+	}
+	return ids
 }
