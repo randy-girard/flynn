@@ -3,12 +3,14 @@ package main
 import (
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -63,19 +65,29 @@ usage: flynn cluster:default [<cluster-name>]
 Print the default cluster, or set it to <cluster-name>.
 `)
 	register("cluster:refresh", runClusterRefresh, `
-usage: flynn cluster:refresh [--clear]
+usage: flynn cluster:refresh [--clear] [-y]
 
 Refresh this laptop's cluster entry in ~/.flynnrc to match the live cluster:
 TLS pin, CA, git URLs, and controller/git/image/dashboard URLs after a host
 domain migration.
 
+Pin updates print the new certificate fingerprint and require confirmation
+unless -y/--yes is given. A publicly signed controller (for example Let's
+Encrypt) is dialed with normal TLS verification first; certificate
+verification is skipped only when that handshake fails (typical for the
+bootstrap self-signed cert).
+
 Options:
-	--clear  Remove the TLS pin entirely instead of updating it.
-	         Recommended for Let's Encrypt certificates signed by a trusted CA.
+	--clear    Remove the TLS pin entirely instead of updating it.
+	           Recommended for Let's Encrypt certificates signed by a trusted CA.
+	-y, --yes  Accept the new TLS pin without prompting (required for scripts).
 
 Examples:
 
 	$ flynn cluster:refresh
+	Updated TLS pin for cluster "default".
+
+	$ flynn cluster:refresh --yes
 	Updated TLS pin for cluster "default".
 
 	$ flynn cluster:refresh --clear
@@ -454,7 +466,7 @@ func runClusterRefresh(args *docopt.Args) error {
 	if err := refreshClusterLocalURLs(cluster); err != nil {
 		return err
 	}
-	return updateClusterTLSPin(cluster)
+	return updateClusterTLSPin(cluster, args.Bool["--yes"])
 }
 
 func refreshClusterLocalURLs(cluster *cfg.Cluster) error {
@@ -532,39 +544,133 @@ func writeClusterCA(client controller.Client, cluster *cfg.Cluster) error {
 	return err
 }
 
-func updateClusterTLSPin(cluster *cfg.Cluster) error {
-	u, err := url.Parse(cluster.ControllerURL)
+func tlsPinFromDER(der []byte) string {
+	h := sha256.Sum256(der)
+	return base64.StdEncoding.EncodeToString(h[:])
+}
+
+func controllerTLSAddr(controllerURL string) (string, error) {
+	u, err := url.Parse(controllerURL)
 	if err != nil {
-		return fmt.Errorf("Error parsing controller URL: %s", err)
+		return "", fmt.Errorf("Error parsing controller URL: %s", err)
 	}
-
 	host := u.Host
-	if !strings.Contains(host, ":") {
-		host = host + ":443"
+	if host == "" {
+		return "", fmt.Errorf("Error parsing controller URL: missing host")
+	}
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		host = net.JoinHostPort(strings.Trim(host, "[]"), "443")
+	}
+	return host, nil
+}
+
+// dialTLSPin prefers a verified handshake (publicly signed ACME/CA certs) and
+// only falls back to insecure dial when verification fails, so self-signed
+// bootstrap certs still work. verifiedCfg/insecureCfg may be nil.
+func dialTLSPin(addr string, verifiedCfg, insecureCfg *tls.Config) (*tls.Conn, bool, error) {
+	if verifiedCfg == nil {
+		verifiedCfg = &tls.Config{}
+	}
+	conn, err := tls.Dial("tcp", addr, verifiedCfg)
+	if err == nil {
+		return conn, true, nil
+	}
+	if insecureCfg == nil {
+		insecureCfg = &tls.Config{InsecureSkipVerify: true}
+	}
+	conn, err = tls.Dial("tcp", addr, insecureCfg)
+	if err != nil {
+		return nil, false, err
+	}
+	return conn, false, nil
+}
+
+func tlsPinFromConn(conn *tls.Conn) (string, *x509.Certificate, error) {
+	state := conn.ConnectionState()
+	if len(state.PeerCertificates) == 0 {
+		return "", nil, errors.New("No certificates returned by controller")
+	}
+	leaf := state.PeerCertificates[0]
+	return tlsPinFromDER(leaf.Raw), leaf, nil
+}
+
+func tlsPinRefreshSummary(name, oldPin, newPin string, leaf *x509.Certificate, verified bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "TLS pin refresh for cluster %q\n", name)
+	if leaf != nil {
+		fmt.Fprintf(&b, "Certificate Subject: %s\n", leaf.Subject.CommonName)
+		fmt.Fprintf(&b, "Certificate Issuer: %s\n", leaf.Issuer.CommonName)
+		fmt.Fprintf(&b, "Valid Until: %s\n", leaf.NotAfter.Format(time.RFC3339))
+	}
+	if oldPin == "" {
+		fmt.Fprintf(&b, "Old Pin: (none)\n")
+	} else {
+		fmt.Fprintf(&b, "Old Pin: %s\n", oldPin)
+	}
+	fmt.Fprintf(&b, "New Pin: %s\n", newPin)
+	if verified {
+		fmt.Fprintf(&b, "TLS verification: system CAs (publicly signed)\n")
+	} else {
+		fmt.Fprintf(&b, "TLS verification: skipped (untrusted or self-signed)\n")
+	}
+	return b.String()
+}
+
+func tlsPinRefreshPrompt(clusterName string, verified bool) string {
+	if verified {
+		return fmt.Sprintf("Store the new TLS pin for cluster %q? The certificate verified against system CAs", clusterName)
+	}
+	return fmt.Sprintf("Store the new TLS pin for cluster %q? The certificate was NOT verified against system CAs", clusterName)
+}
+
+var errTLSPinRefreshAborted = errors.New("TLS pin update aborted")
+
+func confirmTLSPinRefresh(yes, interactive bool, prompt func(string) bool, msg string) error {
+	if yes {
+		return nil
+	}
+	if !interactive {
+		return errors.New("TLS pin changed; re-run with --yes to accept the new fingerprint")
+	}
+	if prompt == nil {
+		prompt = promptYesNo
+	}
+	if !prompt(msg) {
+		return errTLSPinRefreshAborted
+	}
+	return nil
+}
+
+func updateClusterTLSPin(cluster *cfg.Cluster, yes bool) error {
+	addr, err := controllerTLSAddr(cluster.ControllerURL)
+	if err != nil {
+		return err
 	}
 
-	// Connect without certificate verification to get the current cert
-	conn, err := tls.Dial("tcp", host, &tls.Config{
-		InsecureSkipVerify: true,
-	})
+	conn, verified, err := dialTLSPin(addr, &tls.Config{}, &tls.Config{InsecureSkipVerify: true})
 	if err != nil {
 		return fmt.Errorf("Error connecting to controller: %s", err)
 	}
 	defer conn.Close()
 
-	state := conn.ConnectionState()
-	if len(state.PeerCertificates) == 0 {
-		return errors.New("No certificates returned by controller")
+	newPin, leaf, err := tlsPinFromConn(conn)
+	if err != nil {
+		return err
 	}
 
-	// Calculate the pin (SHA256 of the leaf certificate's DER bytes, base64 encoded)
-	leafCert := state.PeerCertificates[0]
-	h := sha256.Sum256(leafCert.Raw)
-	newPin := base64.StdEncoding.EncodeToString(h[:])
+	fmt.Print(tlsPinRefreshSummary(cluster.Name, cluster.TLSPin, newPin, leaf, verified))
 
 	if cluster.TLSPin == newPin {
 		log.Printf("TLS pin for cluster %q is already up to date.", cluster.Name)
 		return nil
+	}
+
+	if err := confirmTLSPinRefresh(yes, term.IsTerminal(os.Stdin.Fd()), promptYesNo, tlsPinRefreshPrompt(cluster.Name, verified)); err != nil {
+		if errors.Is(err, errTLSPinRefreshAborted) {
+			fmt.Println("Aborted")
+			return nil
+		}
+		return err
 	}
 
 	oldPin := cluster.TLSPin
@@ -578,13 +684,6 @@ func updateClusterTLSPin(cluster *cfg.Cluster) error {
 	} else {
 		log.Printf("Updated TLS pin for cluster %q.", cluster.Name)
 	}
-
-	// Show certificate info for verification
-	fmt.Printf("Certificate Subject: %s\n", leafCert.Subject.CommonName)
-	fmt.Printf("Certificate Issuer: %s\n", leafCert.Issuer.CommonName)
-	fmt.Printf("Valid Until: %s\n", leafCert.NotAfter.Format(time.RFC3339))
-	fmt.Printf("New Pin: %s\n", newPin)
-
 	return nil
 }
 

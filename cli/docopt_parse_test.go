@@ -117,3 +117,26 @@ func TestRouteAddTCPTLSFlags(t *testing.T) {
 		t.Fatalf("resource expose: %+v %+v", expose.String, expose.Bool)
 	}
 }
+
+func TestClusterRefreshParsesYes(t *testing.T) {
+	args := parseCLI(t, []string{"cluster:refresh"})
+	if args.Bool["--yes"] || args.Bool["--clear"] {
+		t.Fatal("default refresh must not imply --yes or --clear")
+	}
+	args = parseCLI(t, []string{"cluster:refresh", "--yes"})
+	if !args.Bool["--yes"] {
+		t.Fatal("cluster:refresh --yes")
+	}
+	args = parseCLI(t, []string{"cluster:refresh", "-y"})
+	if !args.Bool["--yes"] {
+		t.Fatal("cluster:refresh -y")
+	}
+	args = parseCLI(t, []string{"cluster", "refresh", "--yes"})
+	if !args.Bool["--yes"] {
+		t.Fatal("cluster refresh --yes")
+	}
+	args = parseCLI(t, []string{"cluster:refresh", "--clear"})
+	if !args.Bool["--clear"] || args.Bool["--yes"] {
+		t.Fatal("cluster:refresh --clear must not imply --yes")
+	}
+}
