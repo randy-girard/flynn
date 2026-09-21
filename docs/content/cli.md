@@ -69,7 +69,7 @@ flynn cluster:add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspi
 
 The TLS pin is stored in `~/.flynnrc` so the CLI can reject man-in-the-middle certificates. `flynn login` authenticates through the dashboard (OAuth) instead of a controller key.
 
-List and switch clusters with `flynn cluster` and `flynn cluster:default <name>`; drop one with `flynn cluster:remove <name>`. Use `-c <cluster>` or `FLYNN_CLUSTER` to target a non-default cluster. After `flynn-host migrate-domain`, run `flynn cluster:refresh` on each laptop.
+List and switch clusters with `flynn cluster` and `flynn cluster:default <name>`; drop one with `flynn cluster:remove <name>`. Use `-c <cluster>` or `FLYNN_CLUSTER` to target a non-default cluster. After `flynn-host migrate-domain`, run `flynn cluster:refresh` on each laptop. Pin updates print the new fingerprint and require confirmation; pass `--yes` for scripts. If the controller presents a publicly signed certificate (Let’s Encrypt), refresh verifies it with system CAs before pinning. `--clear` drops the pin so the CLI uses normal TLS verification.
 
 ## Usage
 
@@ -122,7 +122,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` | Registered clusters in `~/.flynnrc` |
+| `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` | Registered clusters in `~/.flynnrc` (`refresh --yes` accepts a new TLS pin without prompting) |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
 | `plugin:list` | Plugins installed on this cluster (`--known` lists official plugins and GitHub repos; `plugins` is an alias) |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
