@@ -154,7 +154,10 @@ releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, postgres
 `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY` on jobs that talk to discoverd,
 and the same controller key onto redis appliances, router, and acme).
 `flynn-host plugin:update` / `plugin:install` do the same for plugin
-apps. You do not need to `env:set` those keys by hand after an upgrade.
+apps. Catalog plugins print that they receive cluster secrets and
+continue. Third-party plugins prompt on a TTY (cluster-admin equivalent);
+pass `--yes` for non-interactive installs. You do not need to `env:set`
+those keys by hand after an upgrade.
 Rotating a key is still a separate operator step; see
 [Production — Controller Keys](production.html.md#controller-keys).
 

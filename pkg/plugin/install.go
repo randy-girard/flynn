@@ -89,6 +89,9 @@ type InstallOptions struct {
 	// AllowExternalLayers is --allow-external-layers: fetch non-GitHub
 	// layer URLs from image.json without GitHub credentials.
 	AllowExternalLayers bool
+	// Yes is --yes: accept cluster-secret injection without a prompt.
+	// Required for third-party plugins when stdin is not a TTY.
+	Yes bool
 }
 
 // RouteClient is the controller subset used to create HTTP/TCP routes and
@@ -184,6 +187,21 @@ func (in *Installer) apply(opts InstallOptions) error {
 
 	if opts.AutoTLS && !hasHTTPRoute(m) {
 		return fmt.Errorf("--auto-tls requires an HTTP route; plugin %s has none", m.Name)
+	}
+
+	alreadyInstalled := false
+	if in.Client != nil {
+		if app, err := in.Client.GetApp(m.App.Name); err == nil && app != nil {
+			alreadyInstalled = true
+		} else if err != nil && err != controller.ErrNotFound {
+			return err
+		}
+	}
+	if opts.Update && in.Client != nil && !alreadyInstalled {
+		return fmt.Errorf("plugin %s is not installed; flynn-host plugin:install %s", m.Name, m.Name)
+	}
+	if err := in.confirmClusterSecrets(m, resolved, opts, alreadyInstalled); err != nil {
+		return err
 	}
 
 	if resolved.GitHub != nil {

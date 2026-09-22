@@ -73,6 +73,7 @@ func runOfficialUpdates(plugins []Installed, opts InstallOptions, update func(In
 			PluginsFile:         opts.PluginsFile,
 			CredsFile:           opts.CredsFile,
 			AllowExternalLayers: opts.AllowExternalLayers,
+			Yes:                 opts.Yes,
 		})
 		if err != nil {
 			failed++

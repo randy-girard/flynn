@@ -72,6 +72,11 @@ func TestPluginRouteUsage(t *testing.T) {
 		t.Fatalf("list: %+v", args)
 	}
 
+	args = parsePluginCmd(t, "plugin:install", "plugin:install", "dashboard", "--yes")
+	if !args.Bool["--yes"] || args.String["<source>"] != "dashboard" {
+		t.Fatalf("install --yes: %+v", args)
+	}
+
 	args = parsePluginCmd(t, "plugin:install", "plugin:install", "dashboard", "--auto-tls")
 	if !args.Bool["--auto-tls"] || args.String["<source>"] != "dashboard" {
 		t.Fatalf("install: %+v", args)
@@ -107,7 +112,12 @@ func TestPluginUninstallUsage(t *testing.T) {
 }
 
 func TestPluginUpdateUsage(t *testing.T) {
-	args := parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard")
+	args := parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--yes")
+	if !args.Bool["--yes"] || args.String["<plugin>"] != "dashboard" {
+		t.Fatalf("update --yes: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard")
 	if args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("plugin=%q", args.String["<plugin>"])
 	}
@@ -133,6 +143,11 @@ func TestPluginUpdateUsage(t *testing.T) {
 	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all", "--allow-external-layers")
 	if !args.Bool["--allow-external-layers"] {
 		t.Fatalf("update-all --allow-external-layers: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:update-all", "plugin:update-all", "--yes")
+	if !args.Bool["--yes"] {
+		t.Fatalf("update-all --yes: %+v", args)
 	}
 
 	args = parsePluginCmd(t, "plugin:route", "plugin:route", "dashboard", "update", "http/abc")

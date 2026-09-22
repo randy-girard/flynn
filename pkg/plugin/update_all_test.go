@@ -58,12 +58,12 @@ func TestRunOfficialUpdatesContinues(t *testing.T) {
 		{Name: "redis"},
 		{Name: "dashboard"},
 		{Name: "otel"},
-	}, InstallOptions{AutoTLS: true, AllowExternalLayers: true}, func(opts InstallOptions) error {
+	}, InstallOptions{AutoTLS: true, AllowExternalLayers: true, Yes: true}, func(opts InstallOptions) error {
 		called = append(called, opts.Source)
 		if opts.Source == "dashboard" {
 			return fmt.Errorf("boom")
 		}
-		if !opts.AutoTLS || !opts.AllowExternalLayers || opts.Source == "" {
+		if !opts.AutoTLS || !opts.AllowExternalLayers || !opts.Yes || opts.Source == "" {
 			t.Fatalf("%+v", opts)
 		}
 		return nil

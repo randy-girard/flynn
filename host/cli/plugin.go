@@ -10,7 +10,7 @@ import (
 )
 
 const pluginInstallUsage = `
-usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] <source>
+usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes] <source>
 
 Install a plugin from a local path, alias, or GitHub URL.
 
@@ -21,6 +21,15 @@ Options:
 	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
 	--auto-tls                 Enable Let's Encrypt on HTTP routes (requires ACME)
 	--allow-external-layers    Fetch non-GitHub image.json layer URLs without GitHub credentials
+	--yes                      Accept cluster-secret injection without a prompt
+
+Plugin jobs receive CONTROLLER_KEY, DISCOVERD_AUTH_KEY, and access-token
+keys so appliance admin HTTP and discoverd can authenticate. That is
+cluster-admin equivalent. Flynn catalog plugins (plugin:list --known)
+print that note and continue. Third-party plugins prompt on a TTY;
+non-interactive installs must pass --yes. Re-running install on an
+existing plugin deploys a new release and scales the previous release
+to zero so old jobs leave discoverd.
 
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, registers a provider only when
@@ -31,10 +40,8 @@ are not passing --auto-tls (warns if ACME is off). --auto-tls fails if ACME
 is off. After install, flynn-host plugin:route <name> is the same shape as
 flynn route (list / add http / update / remove) scoped to that plugin app.
 Install does not special-case a plugin name; short names come from the
-official catalog. Re-running install on an existing plugin deploys a new
-release and scales the previous release to zero so old jobs leave discoverd.
-Local checkouts are used when present. Otherwise short names pull a
-published GitHub Release from the official catalog
+official catalog. Local checkouts are used when present. Otherwise short
+names pull a published GitHub Release from the official catalog
 (pkg/plugin/official-plugins.json, embedded in flynn-host), a sibling
 checkout, an installed plugin's github_repo, or flynn-plugin-<name>.
 Override with a path, git URL, --github-org, or /etc/flynn/plugins.json.
@@ -51,18 +58,21 @@ Examples:
     $ flynn-host plugin:install ../flynn-plugin-redis
     $ flynn-host plugin:install redis --ref v20260914.0.0
     $ flynn-host plugin:install dashboard --auto-tls
+    $ flynn-host plugin:install https://github.com/acme/flynn-plugin-widget.git --yes --ref v20260922.0.0
     $ flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 `
 
 const pluginUpdateUsage = `
-usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] <plugin>
+usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes] <plugin>
 
 Deploy a new release of an already-installed plugin. update requires the
 plugin app to already exist. Update runs hooks.upgrade when declared
-(not hooks.install) and does not re-ask setup prompts. --ref is a plugin
-GitHub tag (vYYYYMMDD.N.B). Omit it to install the newest published calver
-that matches this cluster's Flynn version (vYYYYMMDD.N). A plugin tagged
-v20260919.0.3 installs on Flynn v20260919.0; v20260920.0 is refused.
+(not hooks.install) and does not re-ask setup prompts. --yes accepts
+cluster-secret injection without a prompt (needed for third-party plugins
+on a non-TTY). --ref is a plugin GitHub tag (vYYYYMMDD.N.B). Omit it to
+install the newest published calver that matches this cluster's Flynn
+version (vYYYYMMDD.N). A plugin tagged v20260919.0.3 installs on Flynn
+v20260919.0; v20260920.0 is refused.
 
 Examples:
 
@@ -71,7 +81,7 @@ Examples:
 `
 
 const pluginUpdateAllUsage = `
-usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls] [--allow-external-layers]
+usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes]
 
 Update every installed official plugin to the highest compatible GitHub tag
 for this Flynn version (vYYYYMMDD.N.B; never a newer Flynn date.N). Continues
@@ -81,6 +91,7 @@ Options:
 	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
 	--auto-tls                 Enable Let's Encrypt on HTTP routes (requires ACME)
 	--allow-external-layers    Fetch non-GitHub image.json layer URLs without GitHub credentials
+	--yes                      Accept cluster-secret injection without a prompt
 
 Examples:
 
@@ -243,6 +254,7 @@ func runPluginInstall(args *docopt.Args) error {
 		Rebuild:             args.Bool["--rebuild"],
 		AutoTLS:             args.Bool["--auto-tls"],
 		AllowExternalLayers: args.Bool["--allow-external-layers"],
+		Yes:                 args.Bool["--yes"],
 	})
 }
 
@@ -276,6 +288,7 @@ func runPluginUpdate(args *docopt.Args) error {
 		Rebuild:             args.Bool["--rebuild"],
 		AutoTLS:             args.Bool["--auto-tls"],
 		AllowExternalLayers: args.Bool["--allow-external-layers"],
+		Yes:                 args.Bool["--yes"],
 	})
 }
 
@@ -300,6 +313,7 @@ func runPluginUpdateAll(args *docopt.Args) error {
 		Cwd:                 cwd,
 		AutoTLS:             args.Bool["--auto-tls"],
 		AllowExternalLayers: args.Bool["--allow-external-layers"],
+		Yes:                 args.Bool["--yes"],
 	})
 }
 

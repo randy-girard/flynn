@@ -183,6 +183,8 @@ need 'flynn-host plugin:install' \
   "plugins must be installed with flynn-host, not the user flynn CLI"
 need 'FLYNN_PLUGIN_NONINTERACTIVE=1' \
   "plugin install in smoke must not block on TTY setup prompts"
+need 'plugin:install --no-build --yes' \
+  "plugin install in smoke must pass --yes so cluster-secret injection never waits on a TTY"
 need 'FLYNN_PLUGIN_SETUP_OTEL_ENDPOINT' \
   "otel plugin install must configure the dummy collector without a TTY prompt"
 need 'probe_otel_export' \

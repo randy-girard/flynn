@@ -3117,7 +3117,7 @@ export FLYNN_PLUGIN_NONINTERACTIVE=1
 if [[ "${name}" == "otel" || "${name}" == "opentelemetry" ]]; then
   export FLYNN_PLUGIN_SETUP_OTEL_ENDPOINT="${OTEL_SMOKE_ENDPOINT:-}"
 fi
-flynn-host plugin:install --no-build "${vm_unpack}"
+flynn-host plugin:install --no-build --yes "${vm_unpack}"
 EOF
     then
       dump_plugin_install_diagnostics "${name}"

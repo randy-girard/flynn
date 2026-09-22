@@ -68,7 +68,7 @@ func TestInstallRefusesIncompatiblePluginRef(t *testing.T) {
 func TestInstallNoBuildWithoutDist(t *testing.T) {
 	dir := t.TempDir()
 	writeAppPlugin(t, dir, "widget")
-	err := (&Installer{}).Install(InstallOptions{Source: dir, NoBuild: true})
+	err := (&Installer{}).Install(InstallOptions{Source: dir, NoBuild: true, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "--no-build") {
 		t.Fatalf("got %v", err)
 	}
@@ -77,7 +77,7 @@ func TestInstallNoBuildWithoutDist(t *testing.T) {
 func TestInstallMissingBuildScript(t *testing.T) {
 	dir := t.TempDir()
 	writeAppPlugin(t, dir, "widget")
-	err := (&Installer{Stderr: io.Discard}).Install(InstallOptions{Source: dir})
+	err := (&Installer{Stderr: io.Discard}).Install(InstallOptions{Source: dir, Yes: true})
 	if err == nil || !strings.Contains(err.Error(), "plugin-build") {
 		t.Fatalf("got %v", err)
 	}
@@ -95,7 +95,7 @@ func TestInstallInvokesBuildHook(t *testing.T) {
 			}
 			return fmt.Errorf("stop")
 		},
-	}).Install(InstallOptions{Source: dir})
+	}).Install(InstallOptions{Source: dir, Yes: true})
 	if !called {
 		t.Fatal("Build was not called")
 	}

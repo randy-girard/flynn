@@ -64,7 +64,11 @@ sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
 ```
 
-Install reads `flynn-plugin.json` only. Manifest **`setup`** prompts run on a TTY
+Install reads `flynn-plugin.json` only. Catalog plugins log that their jobs
+receive `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, and access-token keys
+(cluster-admin equivalent) and continue. A third-party source (path, git
+URL, or `--github-org` that is not Flynn's catalog) prompts on a TTY;
+non-interactive installs must pass **`--yes`**. Manifest **`setup`** prompts run on a TTY
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
 stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
@@ -268,6 +272,7 @@ sudo flynn-host plugin:update dashboard --ref v20260916.3.1
 sudo flynn-host plugin:update-all
 sudo flynn-host plugin:uninstall dashboard
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
+sudo flynn-host plugin:install https://github.com/acme/flynn-plugin-widget.git --yes --ref v20260922.0.0
 ```
 
 `--ref` is the GitHub release tag. Flynn releases are always **`vYYYYMMDD.N`**.
