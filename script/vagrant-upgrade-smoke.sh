@@ -2838,9 +2838,9 @@ plugin_flynn_compile_paths() {
 }
 
 plugin_flynn_compile_id() {
-  local -a paths=()
-  mapfile -t paths < <(plugin_flynn_compile_paths)
-  git -C "${ROOT}" ls-files -- "${paths[@]}" \
+  # macOS /bin/bash is 3.2 (no mapfile). Word-split the path list.
+  # shellcheck disable=SC2046
+  git -C "${ROOT}" ls-files -- $(plugin_flynn_compile_paths) \
     | git -C "${ROOT}" hash-object --stdin-paths \
     | git hash-object --stdin
 }
@@ -2848,7 +2848,6 @@ plugin_flynn_compile_id() {
 plugin_image_current() {
   local dir=$1
   local compile_id plugin_id stamp stamp_val got old_flynn old_plugin
-  local -a paths=()
   [[ -d "${dir}" ]] || return 1
   compile_id="$(plugin_flynn_compile_id)"
   plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
@@ -2867,8 +2866,8 @@ plugin_image_current() {
   fi
   # Previous smokes stamped Flynn HEAD. Reuse dist when compile inputs match.
   if git -C "${ROOT}" cat-file -e "${old_flynn}^{commit}" 2>/dev/null; then
-    mapfile -t paths < <(plugin_flynn_compile_paths)
-    if git -C "${ROOT}" diff --quiet "${old_flynn}" HEAD -- "${paths[@]}"; then
+    # shellcheck disable=SC2046
+    if git -C "${ROOT}" diff --quiet "${old_flynn}" HEAD -- $(plugin_flynn_compile_paths); then
       printf '%s\n' "${stamp_val}" > "${stamp}"
       echo "plugin image ready (compile inputs unchanged since ${old_flynn:0:8})"
       return 0
