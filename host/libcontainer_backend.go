@@ -1685,11 +1685,16 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 }
 
 func (c *Container) followLogs(log log15.Logger, buffer host.LogBuffer) error {
+	// logStreamMtx only guards the logStreams map. GetStreams and
+	// LogMux.Follow block on the container; holding the lock across them
+	// stalled every later job on the host, so an omni router roll stayed
+	// "starting" until the scale timed out.
 	c.l.logStreamMtx.Lock()
-	defer c.l.logStreamMtx.Unlock()
 	if _, ok := c.l.logStreams[c.job.ID]; ok {
+		c.l.logStreamMtx.Unlock()
 		return nil
 	}
+	c.l.logStreamMtx.Unlock()
 
 	log.Info("getting stdout")
 	stdout, stderr, initLog, err := c.Client.GetStreams()
@@ -1728,7 +1733,16 @@ func (c *Container) followLogs(log log15.Logger, buffer host.LogBuffer) error {
 		return err
 	}
 	logStreams["initLog"] = c.l.LogMux.Follow(initLogR, buffer["initLog"], logagg.MsgIDInit, c.MuxConfig)
+	c.l.logStreamMtx.Lock()
+	if _, ok := c.l.logStreams[c.job.ID]; ok {
+		c.l.logStreamMtx.Unlock()
+		for _, s := range logStreams {
+			s.Close()
+		}
+		return nil
+	}
 	c.l.logStreams[c.job.ID] = logStreams
+	c.l.logStreamMtx.Unlock()
 
 	return nil
 }
