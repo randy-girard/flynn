@@ -15,6 +15,19 @@ func seedPair(publicKey, privateKey string) {
 	pair.public, pair.private, pair.ok = publicKey, privateKey, true
 }
 
+// PublicKey is the cached access-token public key for this updater process, or "".
+func PublicKey() string {
+	if pair.ok {
+		return pair.public
+	}
+	return ""
+}
+
+// ResetPairForTest clears the process-local keypair cache.
+func ResetPairForTest() {
+	pair.public, pair.private, pair.ok = "", "", false
+}
+
 func generatedPair() (publicKey, privateKey string, err error) {
 	if pair.ok {
 		return pair.public, pair.private, nil
@@ -33,7 +46,8 @@ func generatedPair() (publicKey, privateKey string, err error) {
 //
 // gitreceive is updated before controller/tarreceive in the updater deploy
 // order, so a repaired keypair on gitreceive is propagated to verifiers via
-// the cached pair.
+// the cached pair. blobstore deploys earlier than gitreceive; BackfillAppAuth
+// seeds the pair from the current gitreceive release first.
 func Update(appName string, env map[string]string) (bool, error) {
 	if env == nil {
 		return false, nil
@@ -41,7 +55,7 @@ func Update(appName string, env map[string]string) (bool, error) {
 	switch appName {
 	case "gitreceive":
 		return updateGitreceive(env)
-	case "controller", "tarreceive":
+	case "controller", "tarreceive", "blobstore":
 		return updateVerifier(env)
 	default:
 		return false, nil

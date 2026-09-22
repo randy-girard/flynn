@@ -91,6 +91,19 @@ func TestTarballUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterBackfillsClusterAuthKeys(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	ensure := strings.Index(body, "BackfillAppAuth")
+	if fn < 0 || ensure < 0 || ensure < fn {
+		t.Fatal("tarball updater deployApp must copy missing cluster auth keys onto system-app releases")
+	}
+}
+
 func TestNormalizeHostname(t *testing.T) {
 	if got, want := normalizeHostname("Flynn-Test_Node-1"), "flynntestnode1"; got != want {
 		t.Fatalf("normalizeHostname: got %q, want %q", got, want)

@@ -475,6 +475,7 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 		PreserveGeneratedEnv(m, env, prev.Env)
 		PreservePreviousEnv(env, prev.Env)
 	}
+	EnsureClusterAuthEnv(env, cluster)
 	release := &ct.Release{
 		ArtifactIDs: []string{image.ID},
 		Env:         env,

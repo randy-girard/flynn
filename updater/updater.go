@@ -16,7 +16,6 @@ import (
 	"github.com/randy-girard/flynn/pkg/status"
 	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 	"github.com/randy-girard/flynn/pkg/version"
-	"github.com/randy-girard/flynn/updater/accesstoken"
 	"github.com/randy-girard/flynn/updater/imageenv"
 	"github.com/randy-girard/flynn/updater/types"
 )
@@ -330,21 +329,14 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	if updateImageIDs(release.Env) {
 		skipDeploy = false
 	}
-	if updated, err := accesstoken.Update(app.Name, release.Env); err != nil {
-		log.Error("error updating access token keys", "err", err)
+	if release.Env == nil {
+		release.Env = map[string]string{}
+	}
+	if updated, err := updaterdeploy.BackfillAppAuth(client, app, release.Env); err != nil {
+		log.Error("error backfilling cluster auth keys", "err", err)
 		return err
 	} else if updated {
 		skipDeploy = false
-	}
-	if app.Name == "postgres" {
-		if release.Env == nil {
-			release.Env = map[string]string{}
-		}
-		if key, err := updaterdeploy.ControllerKeyFromCluster(client); err == nil {
-			if updaterdeploy.EnsureApplianceControllerKey(release.Env, key) {
-				skipDeploy = false
-			}
-		}
 	}
 	if skipDeploy {
 		return errDeploySkipped{"app is already using latest images"}

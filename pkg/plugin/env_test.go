@@ -123,6 +123,36 @@ func TestClusterEnvCopiesGitreceiveAccessTokens(t *testing.T) {
 	}
 }
 
+func TestEnsureClusterAuthEnvFillsMissingKeys(t *testing.T) {
+	env := map[string]string{"CONTROLLER_KEY": ""}
+	cluster := map[string]string{
+		"AUTH_KEY":           "legacy",
+		"DISCOVERD_AUTH_KEY": "disc",
+		"ACCESS_TOKEN_KEY":   "pub",
+	}
+	if !EnsureClusterAuthEnv(env, cluster) {
+		t.Fatal("expected change")
+	}
+	if env["CONTROLLER_KEY"] != "legacy" || env["DISCOVERD_AUTH_KEY"] != "disc" || env["ACCESS_TOKEN_KEY"] != "pub" {
+		t.Fatalf("%v", env)
+	}
+	if EnsureClusterAuthEnv(env, map[string]string{"CONTROLLER_KEY": "other", "DISCOVERD_AUTH_KEY": "nope"}) {
+		t.Fatal("must not overwrite")
+	}
+	if env["CONTROLLER_KEY"] != "legacy" {
+		t.Fatalf("overwrote CONTROLLER_KEY: %v", env)
+	}
+}
+
+func TestEnsureClusterAuthEnvNilSafe(t *testing.T) {
+	if EnsureClusterAuthEnv(nil, map[string]string{"CONTROLLER_KEY": "k"}) {
+		t.Fatal("nil env")
+	}
+	if EnsureClusterAuthEnv(map[string]string{}, nil) {
+		t.Fatal("nil cluster")
+	}
+}
+
 func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 	m := &Manifest{
 		GenerateEnv: []string{"MYSQL_PWD"},

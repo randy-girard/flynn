@@ -59,6 +59,38 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 	return env
 }
 
+// clusterAuthEnvKeys are copied onto plugin releases on install/update when
+// empty so older plugin apps pick up CONTROLLER_KEY / DISCOVERD_AUTH_KEY
+// without a manual env:set.
+var clusterAuthEnvKeys = []string{
+	"CONTROLLER_KEY",
+	"DISCOVERD_AUTH_KEY",
+	"ACCESS_TOKEN_KEY",
+	"ACCESS_TOKEN_SIGNING_KEY",
+	"ACCESS_TOKEN_PRIVATE_KEY",
+}
+
+// EnsureClusterAuthEnv copies missing cluster secrets onto env. It never
+// overwrites a non-empty value. AUTH_KEY is used only as a CONTROLLER_KEY
+// fallback (controller releases historically store the cluster key there).
+func EnsureClusterAuthEnv(env, cluster map[string]string) bool {
+	if env == nil || cluster == nil {
+		return false
+	}
+	changed := false
+	for _, k := range clusterAuthEnvKeys {
+		if env[k] == "" && cluster[k] != "" {
+			env[k] = cluster[k]
+			changed = true
+		}
+	}
+	if env["CONTROLLER_KEY"] == "" && cluster["AUTH_KEY"] != "" {
+		env["CONTROLLER_KEY"] = cluster["AUTH_KEY"]
+		changed = true
+	}
+	return changed
+}
+
 // PreservePreviousEnv copies env keys from a previous release that the new
 // release did not set (for example DATABASE_URL from a provisioned resource).
 func PreservePreviousEnv(env, previous map[string]string) {

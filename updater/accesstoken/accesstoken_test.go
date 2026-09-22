@@ -13,6 +13,18 @@ func TestUpdateNilEnvAndUnknownApp(t *testing.T) {
 	}
 }
 
+func TestUpdateBlobstoreUsesVerifierPair(t *testing.T) {
+	ResetPairForTest()
+	if _, err := Update("gitreceive", map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	updated, err := Update("blobstore", env)
+	if err != nil || !updated || env["ACCESS_TOKEN_KEY"] == "" {
+		t.Fatalf("blobstore: updated=%v env=%v err=%v", updated, env, err)
+	}
+}
+
 func TestUpdateTarreceiveUsesVerifierPair(t *testing.T) {
 	pair.ok = false
 	if _, err := Update("gitreceive", map[string]string{}); err != nil {

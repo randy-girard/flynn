@@ -76,8 +76,8 @@ func TestUpdaterInjectsPostgresControllerKey(t *testing.T) {
 	}
 	body := string(src)
 	fn := strings.Index(body, "func deployApp(")
-	ensure := strings.Index(body, "EnsureApplianceControllerKey")
+	ensure := strings.Index(body, "BackfillAppAuth")
 	if fn < 0 || ensure < 0 || ensure < fn {
-		t.Fatal("deployApp must copy CONTROLLER_KEY onto postgres appliance releases")
+		t.Fatal("deployApp must copy missing cluster auth keys onto system-app releases")
 	}
 }

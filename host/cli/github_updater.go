@@ -1609,6 +1609,15 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images
 	if imageenv.Update(release.Env, imageenvIDs(images)) {
 		skipDeploy = false
 	}
+	if release.Env == nil {
+		release.Env = map[string]string{}
+	}
+	if updated, err := updaterdeploy.BackfillAppAuth(client, app, release.Env); err != nil {
+		log.Error("error backfilling cluster auth keys", "err", err)
+		return err
+	} else if updated {
+		skipDeploy = false
+	}
 	skip, forceConfigMigration := shouldSkipUnchangedDeploy(skipDeploy, force, release, updateFn)
 	if skip {
 		return errDeploySkipped{"app is already using latest images"}

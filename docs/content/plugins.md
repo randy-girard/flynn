@@ -284,7 +284,9 @@ continues past individual failures, and prints a per-plugin result.
 Omit `--ref` on a single update to use that same compatible calver
 (drafts and prereleases are skipped). **`plugin:update`** is the
 operator command once the plugin app exists: it deploys a new release,
-scales the previous release to zero, runs **`hooks.upgrade`** when declared
+scales the previous release to zero, copies missing cluster secrets
+(`CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, access-token keys) from
+controller/postgres/gitreceive, runs **`hooks.upgrade`** when declared
 (not **`hooks.install`**), and does not re-ask setup prompts. Re-running
 **`plugin:install`** on an existing app does the same in-place update.
 The default org is `randy-girard` from `official-plugins.json`; override with `--github-org`,

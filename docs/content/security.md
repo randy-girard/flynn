@@ -143,19 +143,20 @@ controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
 When gitreceive can mint a scoped build token it mounts it at
 `/run/secrets/controller_token` and does **not** put `CONTROLLER_KEY` in
 the build job environment (it would otherwise remain in the container
-config and `/proc` environ). Clusters that have not configured
-`ACCESS_TOKEN_SIGNING_KEY` still inject `CONTROLLER_KEY` so older hosts
-keep working; `build.sh` relocates that key to
-`/run/secrets/controller_key` and unsets the env before buildpack code
-runs. Treat that fallback as a temporary upgrade path, not a security
-boundary.
+config and `/proc` environ). When `ACCESS_TOKEN_SIGNING_KEY` is unset,
+gitreceive still injects `CONTROLLER_KEY` so older hosts keep working;
+`build.sh` relocates that key to `/run/secrets/controller_key` and unsets
+the env before buildpack code runs. Treat that fallback as a temporary
+upgrade path, not a security boundary.
 
-Existing clusters that already have a blobstore release should set
-`AUTH_KEY` (and `ACCESS_TOKEN_KEY` from the controller) on blobstore
-after this change:
-
-    flynn -a blobstore env:set AUTH_KEY="$(flynn -a controller env:get AUTH_KEY)" \
-      ACCESS_TOKEN_KEY="$(flynn -a controller env:get ACCESS_TOKEN_KEY)"
+`flynn-host update` copies missing cluster secrets onto system-app
+releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, postgres
+`CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY` on jobs that talk to discoverd,
+and the same controller key onto redis appliances, router, and acme).
+`flynn-host plugin:update` / `plugin:install` do the same for plugin
+apps. You do not need to `env:set` those keys by hand after an upgrade.
+Rotating a key is still a separate operator step; see
+[Production — Controller Keys](production.html.md#controller-keys).
 
 User and build jobs cannot open the host control plane: SSH (`:22`),
 host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).
