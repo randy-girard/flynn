@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,5 +79,25 @@ func TestShouldGCVolume(t *testing.T) {
 	}
 	if !shouldGCVolume(&volume.Info{ID: "orphan"}, keep) {
 		t.Fatal("unused non-system volume must be gc'd")
+	}
+}
+
+func TestVolumeGCSkipsDestroyWhenControllerListFails(t *testing.T) {
+	src, err := os.ReadFile("volume.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	warn := strings.Index(body, `warning: could not list controller volumes for gc`)
+	skip := strings.Index(body, `skipping volume gc`)
+	destroy := strings.Index(body, "DestroyVolume")
+	if warn < 0 || skip < 0 {
+		t.Fatal("volume gc must skip destroys when the controller volume list fails")
+	}
+	if destroy < 0 || skip > destroy {
+		t.Fatal("must return before DestroyVolume when controller volumes cannot be listed")
+	}
+	if !strings.Contains(body, "controllerKeyFromActiveJobs(jobs)") {
+		t.Fatal("volume gc must seed AUTH_KEY from controller jobs before GET /volumes")
 	}
 }

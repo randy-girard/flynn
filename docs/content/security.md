@@ -106,8 +106,11 @@ The controller no longer publishes `AUTH_KEY` (the cluster admin key) in
 discoverd instance metadata. `GET /services/controller/instances` does
 not return that secret. System consumers (router, status, updater,
 flynn-host CLI) read `CONTROLLER_KEY` or `AUTH_KEY` from their
-environment and only fall back to instance meta during mixed-version
-rolling updates.
+environment (including `/etc/flynn/host.json` via the flynn-host CLI)
+and only fall back to instance meta during mixed-version rolling
+updates. If both are empty, `flynn-host` reads `AUTH_KEY` /
+`CONTROLLER_KEY` from a running controller job so `volume:gc` and
+`flynn-host update` do not 401 on `GET /volumes`.
 
 ## Applications
 

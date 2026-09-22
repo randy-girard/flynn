@@ -1351,7 +1351,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	// registered controller accepting TCP but not answering HTTP; pinning addrs[0]
 	// made every artifact retry hit that peer.
 	httpClient := newControllerHTTPClient(discoverdDial, 0)
-	key := controller.KeyFromEnvOrMeta(instances[0].Meta)
+	key := controllerAPIKey(instances[0].Meta)
+	if key == "" {
+		return missingControllerKeyErr()
+	}
 	client, err := controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)
 	if err != nil {
 		log.Error("error creating controller client", "err", err)

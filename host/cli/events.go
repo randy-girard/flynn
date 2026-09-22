@@ -12,7 +12,6 @@ import (
 	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
-	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/cliutil"
@@ -148,9 +147,9 @@ func controllerAuthKey() (string, error) {
 	if len(instances) > 0 {
 		meta = instances[0].Meta
 	}
-	key := controller.KeyFromEnvOrMeta(meta)
+	key := controllerAPIKey(meta)
 	if key == "" {
-		return "", fmt.Errorf("controller AUTH_KEY is unavailable")
+		return "", missingControllerKeyErr()
 	}
 	return key, nil
 }

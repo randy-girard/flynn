@@ -131,6 +131,16 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 		for id := range volumeGCKeepFromJobs(jobs) {
 			keep[id] = struct{}{}
 		}
+		// SEC-028: discoverd no longer publishes AUTH_KEY. Seed it from the
+		// controller job we already listed so GET /volumes does not 401.
+		if k := controllerKeyFromActiveJobs(jobs); k != "" {
+			if os.Getenv("AUTH_KEY") == "" {
+				os.Setenv("AUTH_KEY", k)
+			}
+			if os.Getenv("CONTROLLER_KEY") == "" {
+				os.Setenv("CONTROLLER_KEY", k)
+			}
+		}
 	}
 
 	volumes, err := clusterVolumes(hosts)
@@ -141,16 +151,19 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 	// Keep volumes the controller scheduler still tracks. Without this,
 	// garbage collection can delete datasets that sirenia rolling deploys
 	// still reference, causing updates to hang until timeout.
-	if ctrl, err := controllerClient(); err == nil {
-		ctrlVols, err := ctrl.VolumeList()
-		if err != nil {
-			fmt.Printf("warning: could not list controller volumes for gc: %s\n", err)
-		} else {
-			addControllerVolumeKeep(keep, ctrlVols)
-		}
-	} else {
+	// If the controller volume list cannot be loaded (including a 401 after
+	// SEC-028 stopped publishing AUTH_KEY in discoverd), skip destroys.
+	ctrl, err := controllerClient()
+	if err != nil {
 		fmt.Printf("warning: could not connect to controller for volume gc: %s\n", err)
+		return fmt.Errorf("skipping volume gc: %w", err)
 	}
+	ctrlVols, err := ctrl.VolumeList()
+	if err != nil {
+		fmt.Printf("warning: could not list controller volumes for gc: %s\n", err)
+		return fmt.Errorf("skipping volume gc: %w", err)
+	}
+	addControllerVolumeKeep(keep, ctrlVols)
 
 	success := true
 	for _, v := range volumes {

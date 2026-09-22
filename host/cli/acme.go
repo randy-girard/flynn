@@ -136,7 +136,11 @@ func getControllerClient() (controller.Client, error) {
 	// Same discoverd dial as the updater: rotate across controller instances
 	// instead of pinning the first registration.
 	httpClient := &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
-	return controller.NewClientWithHTTP("http://controller.discoverd", controller.KeyFromEnvOrMeta(instances[0].Meta), httpClient)
+	key := controllerAPIKey(instances[0].Meta)
+	if key == "" {
+		return nil, missingControllerKeyErr()
+	}
+	return controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)
 }
 
 func runACMEConfigure(args *docopt.Args, client controller.Client) error {

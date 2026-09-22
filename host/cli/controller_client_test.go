@@ -36,6 +36,22 @@ func TestControllerClientUsesDiscoverdNameNotInstanceIP(t *testing.T) {
 	}
 }
 
+func TestControllerClientUsesAPIKeyHelperAfterSEC028(t *testing.T) {
+	for _, path := range []string{"controller_client.go", "github_updater.go", "acme.go", "events.go"} {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(src)
+		if !strings.Contains(body, "controllerAPIKey(") {
+			t.Fatalf("%s must use controllerAPIKey so volume gc and update work after AUTH_KEY left discoverd meta", path)
+		}
+		if strings.Contains(body, "KeyFromEnvOrMeta(") {
+			t.Fatalf("%s must not call KeyFromEnvOrMeta directly (empty discoverd meta 401s GET /volumes)", path)
+		}
+	}
+}
+
 func TestDiscoverdDialPassthroughNumericAddr(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

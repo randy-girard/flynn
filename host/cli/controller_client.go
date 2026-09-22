@@ -87,5 +87,9 @@ func controllerClient() (controller.Client, error) {
 	// share Transport.Dial (discoverdDial), so systemd-resolved not knowing
 	// *.discoverd is fine. Pinning would stick to a dead controller after a
 	// deploy; the updater already uses this URL for ResumingStream.
-	return controller.NewClientWithHTTP("http://controller.discoverd", controller.KeyFromEnvOrMeta(instances[0].Meta), httpClient)
+	key := controllerAPIKey(instances[0].Meta)
+	if key == "" {
+		return nil, missingControllerKeyErr()
+	}
+	return controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)
 }
