@@ -48,6 +48,18 @@
 #
 # Usage (from repo root):
 #   script/vagrant-upgrade-smoke.sh
+#   script/vagrant-smoke.sh --list
+#   script/vagrant-smoke.sh --item singleton
+#   script/vagrant-smoke.sh --item ha,add-node
+#   script/vagrant-smoke.sh --matrix ./smoke-matrix.yaml
+#
+# Matrix (file-driven configs; env vars still override individual fields):
+#   smoke-matrix.example.yaml   committed catalog of configurations
+#   smoke-matrix.yaml           gitignored local copy (used when present)
+#   SMOKE_MATRIX                path to a different matrix file
+#   SMOKE_MATRIX_ITEM           same as --item (comma-separated ids)
+#   --item ID                   run that item even if it is disabled
+#   --list                      print items and exit (no VMs)
 #
 # Environment:
 #   BUILD_VERSION        Version string for the local build/tarball
@@ -155,6 +167,104 @@ cd "${ROOT}"
 
 source "${ROOT}/script/lib/ui.sh"
 
+SMOKE_MATRIX_PY="${ROOT}/script/lib/smoke-matrix.py"
+SMOKE_MATRIX_CLI_FILE=""
+SMOKE_MATRIX_CLI_ITEMS=()
+SMOKE_MATRIX_LIST=0
+SMOKE_MATRIX_USE_ITEMS=1
+SMOKE_MATRIX_SELECTED=()
+FLYNN_MAX_NODES_FLOOR=""
+
+_smoke_matrix_add_items() {
+  local raw=$1 part
+  raw="${raw// /}"
+  local IFS=','
+  # shellcheck disable=SC2086
+  set -- ${raw}
+  for part in "$@"; do
+    [[ -z "${part}" ]] && continue
+    SMOKE_MATRIX_CLI_ITEMS+=("${part}")
+  done
+}
+
+smoke_matrix() {
+  local args=(python3 "${SMOKE_MATRIX_PY}" --root "${ROOT}")
+  if [[ -n "${SMOKE_MATRIX_CLI_FILE}" ]]; then
+    args+=(--matrix "${SMOKE_MATRIX_CLI_FILE}")
+  fi
+  local id
+  if [[ ${#SMOKE_MATRIX_CLI_ITEMS[@]} -gt 0 ]]; then
+    for id in "${SMOKE_MATRIX_CLI_ITEMS[@]}"; do
+      args+=(--item "${id}")
+    done
+  fi
+  "${args[@]}" "$@"
+}
+
+parse_smoke_cli() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"
+        exit 0
+        ;;
+      --list)
+        SMOKE_MATRIX_LIST=1
+        shift
+        ;;
+      --matrix)
+        if [[ $# -lt 2 ]]; then
+          fail "--matrix requires a file path"
+        fi
+        SMOKE_MATRIX_CLI_FILE="$2"
+        shift 2
+        ;;
+      --matrix=*)
+        SMOKE_MATRIX_CLI_FILE="${1#--matrix=}"
+        shift
+        ;;
+      --item|--items)
+        if [[ $# -lt 2 ]]; then
+          fail "--item requires a matrix item id"
+        fi
+        _smoke_matrix_add_items "$2"
+        shift 2
+        ;;
+      --item=*|--items=*)
+        _smoke_matrix_add_items "${1#*=}"
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      -*)
+        fail "unknown option $1 (try --help)"
+        ;;
+      *)
+        fail "unexpected argument $1 (try --help)"
+        ;;
+    esac
+  done
+}
+
+parse_smoke_cli "$@"
+
+if ! command -v python3 >/dev/null 2>&1; then
+  fail "required binary not found: python3"
+fi
+export SMOKE_MATRIX_EXPLICIT
+SMOKE_MATRIX_EXPLICIT="$(python3 "${SMOKE_MATRIX_PY}" --root "${ROOT}" snapshot-env)"
+if [[ "${SMOKE_MATRIX_LIST}" == "1" ]]; then
+  smoke_matrix list
+  exit 0
+fi
+eval "$(smoke_matrix apply-run)"
+SMOKE_MATRIX_USE_ITEMS="$(smoke_matrix use-items)"
+if [[ "${SMOKE_MATRIX_USE_ITEMS}" == "1" ]]; then
+  smoke_matrix select >/dev/null
+fi
+
 BUILD_VERSION="${BUILD_VERSION:-}"
 BUILD_PHASE="${BUILD_PHASE:-auto}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-upgrade-smoke.localflynn.com}"
@@ -213,7 +323,7 @@ if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
   :
 elif [[ -n "${CLUSTER_SIZE:-}" ]]; then
   SMOKE_TOPOLOGIES="${CLUSTER_SIZE}"
-else
+elif [[ "${SMOKE_MATRIX_USE_ITEMS}" != "1" ]]; then
   SMOKE_TOPOLOGIES="1,3"
 fi
 UPGRADE_PASSES="${UPGRADE_PASSES:-2}"
@@ -6047,6 +6157,9 @@ expand_cluster_inventory() {
       fi
     done
   fi
+  if [[ -n "${FLYNN_MAX_NODES_FLOOR:-}" && "${need}" -lt "${FLYNN_MAX_NODES_FLOOR}" ]]; then
+    need="${FLYNN_MAX_NODES_FLOOR}"
+  fi
   discovered="$(discover_vagrant_node_count)"
   if [[ "${discovered}" -gt "${need}" ]]; then
     need="${discovered}"
@@ -6375,12 +6488,19 @@ run_one_topology() {
   fi
 }
 
-main() {
-  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-    usage
-    exit 0
-  fi
+run_smoke_topologies() {
+  local idx topo is_last
+  for idx in "${!TOPOLOGIES[@]}"; do
+    topo="${TOPOLOGIES[$idx]}"
+    is_last=0
+    if [[ $((idx + 1)) -eq ${#TOPOLOGIES[@]} ]]; then
+      is_last=1
+    fi
+    run_one_topology "${topo}" "${idx}" "${is_last}"
+  done
+}
 
+main() {
   require_bin vagrant curl python3 git
   if [[ "${SKIP_UNIT_TESTS}" != "1" ]]; then
     require_bin go
@@ -6390,7 +6510,40 @@ main() {
     BUILD_VERSION="$(default_build_version)"
   fi
 
-  parse_smoke_topologies || fail_shutdown "Parse SMOKE_TOPOLOGIES" 0 "invalid SMOKE_TOPOLOGIES=${SMOKE_TOPOLOGIES}"
+  if [[ "${SMOKE_MATRIX_USE_ITEMS}" == "1" ]]; then
+    local id oldifs
+    SMOKE_MATRIX_SELECTED=()
+    oldifs="${IFS}"
+    IFS=$'\n'
+    # shellcheck disable=SC2207
+    SMOKE_MATRIX_SELECTED=($(smoke_matrix select))
+    IFS="${oldifs}"
+    if [[ ${#SMOKE_MATRIX_SELECTED[@]} -eq 0 ]]; then
+      fail_shutdown "Parse smoke matrix" 0 "no matrix items selected"
+    fi
+    FLYNN_MAX_NODES_FLOOR="$(smoke_matrix max-inventory)"
+    if [[ ${#SMOKE_MATRIX_SELECTED[@]} -gt 1 ]]; then
+      if [[ -n "${RESUME_AT}" ]]; then
+        fail_shutdown "Parse smoke matrix" 0 "RESUME_AT requires a single --item (got ${SMOKE_MATRIX_SELECTED[*]})"
+      fi
+      if [[ "${SKIP_INSTALL}" == "1" ]]; then
+        fail_shutdown "Parse smoke matrix" 0 "SKIP_INSTALL requires a single --item (got ${SMOKE_MATRIX_SELECTED[*]})"
+      fi
+      if [[ "${SKIP_DEPLOY}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
+        fail_shutdown "Parse smoke matrix" 0 "SKIP_DEPLOY/SKIP_VERIFY_BEFORE require a single --item (got ${SMOKE_MATRIX_SELECTED[*]})"
+      fi
+    fi
+    local specs spec
+    specs="$(smoke_matrix all-topologies)"
+    TOPOLOGIES=()
+    # shellcheck disable=SC2086
+    for spec in ${specs}; do
+      TOPOLOGIES+=("${spec}")
+    done
+    expand_cluster_inventory
+  else
+    parse_smoke_topologies || fail_shutdown "Parse SMOKE_TOPOLOGIES" 0 "invalid SMOKE_TOPOLOGIES=${SMOKE_TOPOLOGIES}"
+  fi
 
   ui_session_begin
   if [[ "${SMOKE_DETAIL}" == "1" ]]; then
@@ -6399,7 +6552,11 @@ main() {
     _UI_COLLAPSE_BODY=1
     smoke_prepare_tty
   fi
-  info "local build smoke: version=${BUILD_VERSION} topologies=${SMOKE_TOPOLOGIES}"
+  if [[ "${SMOKE_MATRIX_USE_ITEMS}" == "1" ]]; then
+    info "local build smoke: version=${BUILD_VERSION} matrix=${SMOKE_MATRIX_FILE:-} items=${SMOKE_MATRIX_SELECTED[*]}"
+  else
+    info "local build smoke: version=${BUILD_VERSION} topologies=${SMOKE_TOPOLOGIES}"
+  fi
   if [[ "${SMOKE_DETAIL}" == "1" ]]; then
     info "command output live (SMOKE_DETAIL=1)"
   else
@@ -6484,15 +6641,34 @@ main() {
     run_step "Build plugin images" step_build_plugin_images
   fi
 
-  local idx topo is_last
-  for idx in "${!TOPOLOGIES[@]}"; do
-    topo="${TOPOLOGIES[$idx]}"
-    is_last=0
-    if [[ $((idx + 1)) -eq ${#TOPOLOGIES[@]} ]]; then
-      is_last=1
-    fi
-    run_one_topology "${topo}" "${idx}" "${is_last}"
-  done
+  if [[ "${SMOKE_MATRIX_USE_ITEMS}" == "1" ]]; then
+    local item_idx item_id item_is_last saved_keep_vms
+    item_idx=0
+    for item_id in "${SMOKE_MATRIX_SELECTED[@]}"; do
+      item_is_last=0
+      if [[ $((item_idx + 1)) -eq ${#SMOKE_MATRIX_SELECTED[@]} ]]; then
+        item_is_last=1
+      fi
+      if [[ -n "${SMOKE_MATRIX_CLI_FILE}" ]]; then
+        eval "$(python3 "${SMOKE_MATRIX_PY}" --root "${ROOT}" --matrix "${SMOKE_MATRIX_CLI_FILE}" --item "${item_id}" apply-item)"
+      else
+        eval "$(python3 "${SMOKE_MATRIX_PY}" --root "${ROOT}" --item "${item_id}" apply-item)"
+      fi
+      info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES}"
+      parse_smoke_topologies || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid topologies=${SMOKE_TOPOLOGIES}"
+      if [[ "${item_is_last}" != "1" ]]; then
+        saved_keep_vms="${KEEP_VMS}"
+        KEEP_VMS=0
+        run_smoke_topologies
+        KEEP_VMS="${saved_keep_vms}"
+      else
+        run_smoke_topologies
+      fi
+      item_idx=$((item_idx + 1))
+    done
+  else
+    run_smoke_topologies
+  fi
 
   if [[ "${KEEP_VMS}" == "1" ]]; then
     record "Teardown builder" "SKIP" 0 "KEEP_VMS=1"

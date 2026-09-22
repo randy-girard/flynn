@@ -4,6 +4,7 @@ bin
 .vagrant-upgrade-smoke-tmp/
 .vagrant-upgrade-smoke-last-failure.log
 .vagrant-upgrade-smoke-last-results.txt
+/smoke-matrix.yaml
 script/custom-vagrant
 demo/*.log
 *.swp

@@ -11,8 +11,10 @@
 # predates the test growing past upgrades); every option, environment variable
 # and companion contract test documented there applies here unchanged.
 #
-#   script/vagrant-smoke.sh                    # full run, all default topologies
-#   SMOKE_TOPOLOGIES=3 script/vagrant-smoke.sh # one topology
+#   script/vagrant-smoke.sh                    # enabled items in smoke-matrix.yaml
+#   script/vagrant-smoke.sh --list             # show matrix items (no VMs)
+#   script/vagrant-smoke.sh --item singleton   # one named configuration
+#   SMOKE_TOPOLOGIES=3 script/vagrant-smoke.sh # env still overrides topologies
 #   SKIP_BUILD=1 script/vagrant-smoke.sh       # reuse the last tarball
 #
 # Incremental rebuilds: build.sh keeps the image layer cache and a shared Go

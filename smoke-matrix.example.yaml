@@ -1,0 +1,76 @@
+# Flynn Vagrant smoke matrix.
+#
+# Copy to smoke-matrix.yaml (gitignored) and edit for local runs:
+#   cp smoke-matrix.example.yaml smoke-matrix.yaml
+#
+# script/vagrant-smoke.sh reads smoke-matrix.yaml if it exists, otherwise this
+# file. Each enabled item is a cluster configuration (topologies + skip flags +
+# plugins). The builder/build happens once; items run in order.
+#
+#   script/vagrant-smoke.sh                  # every enabled item
+#   script/vagrant-smoke.sh --list           # show ids without booting VMs
+#   script/vagrant-smoke.sh --item singleton # one item (runs even if disabled)
+#   script/vagrant-smoke.sh --item ha,add-node
+#
+# Environment variables override matching fields for the selected run
+# (SKIP_BUILD=1, SMOKE_TOPOLOGIES=3, PLUGIN_SMOKE_APPS=..., …). Setting
+# SMOKE_TOPOLOGIES or CLUSTER_SIZE without --item is a single env-driven run,
+# same as before this file existed.
+#
+# SMOKE_MATRIX=/path/to/file.yaml and --matrix FILE pick a different document.
+
+version: 1
+
+defaults:
+  skip_unit_tests: false
+  skip_build: false
+  skip_upgrade: false
+  skip_backup: false
+  skip_cli: false
+  skip_volume: false
+  skip_plugin_install: false
+  upgrade_passes: 2
+  seed_rows: 200
+  blob_count: 100
+  plugins:
+    - redis
+    - mysql
+    - mongodb
+    - kafka
+    - clickhouse
+    - dashboard
+    - www
+    - discovery
+    - otel
+    - scheduler
+
+items:
+  - id: singleton
+    description: 1-node full path (install, plugins, deploys, upgrade, backup)
+    topologies: "1"
+
+  - id: ha
+    description: 3-node HA full path
+    topologies: "3"
+
+  - id: add-node
+    description: join node4 on a running 3-node cluster, then upgrade
+    topologies: add
+    enabled: false
+
+  - id: remove-node
+    description: drain node3 from a 3-node cluster, then upgrade
+    topologies: remove
+    enabled: false
+
+  - id: discovery
+    description: singleton, then join node2 and node3 via the discovery plugin
+    topologies: discovery
+    enabled: false
+
+  - id: install-only
+    description: install and verify without upgrade or backup (fast iterate)
+    topologies: "1"
+    skip_upgrade: true
+    skip_backup: true
+    enabled: false

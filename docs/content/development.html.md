@@ -316,11 +316,25 @@ release: it needs real VMs, so it cannot run in GitHub Actions. Run it from the
 $ script/vagrant-smoke.sh
 ```
 
+Configurations live in a matrix document, not a pile of environment variables:
+
+- `smoke-matrix.example.yaml` — committed catalog of layouts (singleton, HA,
+  add-node, remove-node, discovery, install-only)
+- `smoke-matrix.yaml` — gitignored local copy; used when present
+  (`cp smoke-matrix.example.yaml smoke-matrix.yaml`)
+
+```
+$ script/vagrant-smoke.sh --list
+$ script/vagrant-smoke.sh --item singleton
+$ script/vagrant-smoke.sh --item ha,add-node
+$ SKIP_BUILD=1 script/vagrant-smoke.sh --item install-only
+```
+
 `script/vagrant-smoke.sh` is a thin entrypoint over
 `script/vagrant-upgrade-smoke.sh`, which still holds the implementation (the
 name predates the test covering far more than upgrades); options, environment
-variables and the `script/test-vagrant-smoke-*.sh` contract tests are the same
-for both. After a fix, the rebuild on the builder is incremental (see
+variables, the matrix files, and the `script/test-vagrant-smoke-*.sh` contract
+tests are the same for both. After a fix, the rebuild on the builder is incremental (see
 [Incremental rebuilds](#incremental-rebuilds)).
 
 Default flow:
@@ -332,13 +346,15 @@ Default flow:
    suite via `script/run-unit-tests` on the VM (Redis, Postgres, MariaDB,
    MongoDB, ZFS). Failures stop before cluster nodes.
 3. **Build** — cluster images on the builder, tarball in `build/release/`.
-4. **Topologies** — default `SMOKE_TOPOLOGIES=1,3` (singleton, then 3-node HA).
-   Size `2` is invalid. Named topologies: `add` (join `node4` then upgrade),
-   `remove` (drain `node3` while HTTP and DBs keep working), and `discovery`
-   (singleton, install the discovery plugin, join `node2`+`node3` via the
-   in-cluster discovery API, wait for postgres/MariaDB/MongoDB to promote to
-   HA, then deploy). After upgrades, every topology including `discovery`
-   takes a cluster backup and restores with `--from-backup`.
+4. **Matrix items** — enabled rows in the matrix (example default: `singleton`
+   then `ha`, i.e. 1-node then 3-node HA). Size `2` is invalid. Named
+   topologies: `add` (join `node4` then upgrade), `remove` (drain `node3`
+   while HTTP and DBs keep working), and `discovery` (singleton, install the
+   discovery plugin, join `node2`+`node3` via the in-cluster discovery API,
+   wait for postgres/MariaDB/MongoDB to promote to HA, then deploy). Enable
+   those in your local `smoke-matrix.yaml` or pass `--item add-node`. After
+   upgrades, every topology including `discovery` takes a cluster backup and
+   restores with `--from-backup`.
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`,
    install every first-party plugin (`PLUGIN_SMOKE_APPS`: redis, mysql,
@@ -359,11 +375,15 @@ Default flow:
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
 
-Useful environment:
+Useful flags and environment (matrix fields win unless the variable is already
+set in the environment):
 
-| Variable | Meaning |
+| Variable / flag | Meaning |
 | --- | --- |
-| `SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery` | Which layouts to run |
+| `--item singleton` | Run one matrix row (even if `enabled: false`) |
+| `--list` | Print matrix items and exit |
+| `--matrix PATH` / `SMOKE_MATRIX` | Use a different matrix file |
+| `SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery` | Env-driven layouts (skips matrix items unless `--item` is set) |
 | `SKIP_UNIT_TESTS=1` | Skip host + builder unit gates |
 | `SKIP_BUILD=1` | Reuse `build/release/flynn-${BUILD_VERSION}.tar.gz` |
 | `SKIP_UPGRADE=1` | Install and verify only |
@@ -371,7 +391,7 @@ Useful environment:
 | `SKIP_CLI=1` | Skip live CLI probes |
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
-| `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run |
+| `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |
 | `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler) |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
@@ -423,7 +443,7 @@ DCO sign-off). Include tests, or explain why not.
 * Pure Go / CLI: `make test-unit` (and gofmt) is the minimum
 * Scripts under `script/`: bats and/or the matching `script/test-*.sh`
 * Cluster, overlay, datastores, dockerbuilder, upgrades, membership, backup/restore: run
-  `script/vagrant-upgrade-smoke.sh` (narrow with `SMOKE_TOPOLOGIES` if needed)
+  `script/vagrant-upgrade-smoke.sh` (narrow with `--item` or `SMOKE_TOPOLOGIES` if needed)
 
 See [Contributing](contributing.md).
 
