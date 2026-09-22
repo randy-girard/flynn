@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/randy-girard/flynn/pkg/sirenia/client"
+	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
 func TestSkipStandbyHealthWhenUpstreamDown(t *testing.T) {
@@ -57,5 +58,15 @@ func TestPostgresStandbyLooksHealthy(t *testing.T) {
 					tc.receiver, tc.start, tc.current, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestReconfigureHAPrimaryAllowsNilDownstream(t *testing.T) {
+	p := NewProcess(Config{ID: "node1", Singleton: false, DataDir: t.TempDir(), Port: "6500"})
+	if err := p.Reconfigure(&state.Config{Role: state.RolePrimary}); err != nil {
+		t.Fatalf("SINGLETON=false primary at scale 1 must accept nil downstream (one-node-write): %v", err)
+	}
+	if p.config() == nil || p.config().Role != state.RolePrimary {
+		t.Fatal("expected RolePrimary config to be stored for Start")
 	}
 }

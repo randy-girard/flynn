@@ -213,9 +213,11 @@ func (p *Process) Reconfigure(config *state.Config) error {
 
 	switch config.Role {
 	case state.RolePrimary:
-		if !p.singleton && config.Downstream == nil {
-			return errors.New("missing downstream peer")
-		}
+		// Nil downstream is one-node-write: singleton, or SINGLETON=false at
+		// scale 1 after the scheduler env-flips a 1-node cluster toward HA
+		// before replicas exist. Rejecting that leaves postgres stopped,
+		// controller cannot PutFormation, and HA scale deadlocks.
+		// assumePrimary already starts RW with a nil downstream.
 	case state.RoleSync, state.RoleAsync:
 		if config.Upstream == nil {
 			return fmt.Errorf("missing upstream peer")
@@ -754,6 +756,19 @@ func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 }
 
 func (p *Process) updateSync(downstream *discoverd.Instance) error {
+	if downstream == nil {
+		log := p.log.New("fn", "updateSync")
+		log.Info("no downstream, remaining one-node-write")
+		if err := p.writeConfig(configData{ReadOnly: false}); err != nil {
+			log.Error("error writing postgres.conf", "path", p.configPath(), "err", err)
+			return err
+		}
+		if err := p.sighup(); err != nil {
+			p.log.Error("error reloading daemon configuration", "err", err)
+			return err
+		}
+		return nil
+	}
 	log := p.log.New("fn", "updateSync", "downstream", downstream.Addr)
 	log.Info("changing sync")
 
@@ -910,6 +925,9 @@ func (p *Process) sighup() error {
 }
 
 func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
+	if inst == nil {
+		return
+	}
 	stopCh := make(chan struct{})
 	doneCh := make(chan struct{})
 
