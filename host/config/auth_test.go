@@ -121,6 +121,39 @@ func TestPersistEnvAuthKeyNoopAndSet(t *testing.T) {
 	}
 }
 
+func TestPersistEnvAuthKeyPersistsDiscoverd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	c := New()
+	c.Args = []string{"--peer-ips", "10.0.0.1"}
+	if err := c.WriteTo(path); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "host-secret")
+	t.Setenv("DISCOVERD_AUTH_KEY", "disc-secret")
+	t.Setenv("AUTH_KEY", "controller-secret")
+	t.Setenv("CONTROLLER_KEY", "controller-secret")
+	if err := PersistEnvAuthKey(path); err != nil {
+		t.Fatal(err)
+	}
+	opened, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.Env["FLYNN_HOST_AUTH_KEY"] != "host-secret" {
+		t.Fatalf("host=%v", opened.Env)
+	}
+	if opened.Env["DISCOVERD_AUTH_KEY"] != "disc-secret" {
+		t.Fatalf("discoverd=%v", opened.Env)
+	}
+	if opened.Env["CONTROLLER_KEY"] != "controller-secret" {
+		t.Fatalf("controller=%v", opened.Env)
+	}
+	if len(opened.Args) != 2 || opened.Args[1] != "10.0.0.1" {
+		t.Fatalf("args=%v", opened.Args)
+	}
+}
+
 func TestSetEnvMergesSecrets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.json")
 	if err := SetAuthKey(path, "host-secret"); err != nil {

@@ -99,14 +99,22 @@ func SetEnv(file string, kv map[string]string) error {
 	return os.Chmod(file, 0600)
 }
 
-// PersistEnvAuthKey writes FLYNN_HOST_AUTH_KEY from the environment into
-// file when the variable is set. It is a no-op when the env is empty so
-// flynn-host init does not invent a per-host secret that would desynchronize
-// cluster bootstrap (configure-host-auth sets one cluster-wide key).
+// PersistEnvAuthKey writes cluster secrets from the environment into file
+// when they are set. It is a no-op when they are empty so flynn-host init
+// does not invent per-host secrets that would desynchronize bootstrap
+// (configure-host-auth sets one cluster-wide key). Joining a running
+// cluster requires the operator to export at least FLYNN_HOST_AUTH_KEY and
+// DISCOVERD_AUTH_KEY from an existing host first; otherwise discoverd
+// rejects the peer as unauthorized.
 func PersistEnvAuthKey(file string) error {
-	key := os.Getenv("FLYNN_HOST_AUTH_KEY")
-	if key == "" {
+	kv := make(map[string]string)
+	for _, k := range cliSecretEnv {
+		if v := os.Getenv(k); v != "" {
+			kv[k] = v
+		}
+	}
+	if len(kv) == 0 {
 		return nil
 	}
-	return SetAuthKey(file, key)
+	return SetEnv(file, kv)
 }

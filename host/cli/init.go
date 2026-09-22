@@ -55,8 +55,9 @@ func runInit(args *docopt.Args) error {
 	if err := c.WriteTo(file); err != nil {
 		return err
 	}
-	// Persist a pre-shared cluster key if the operator already exported it.
-	// Do not generate a unique key here: that would reject configure-host-auth
-	// on other nodes that do not know this host's secret.
+	// Persist pre-shared cluster secrets if the operator already exported
+	// them (FLYNN_HOST_AUTH_KEY, DISCOVERD_AUTH_KEY, …). Do not generate a
+	// unique key here: that would reject configure-host-auth on other
+	// nodes, and a join without DISCOVERD_AUTH_KEY is unauthorized.
 	return config.PersistEnvAuthKey(file)
 }
