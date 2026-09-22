@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
+	if err = c.validateFormationScale(formation.Processes); err != nil {
+		respondWithError(w, err)
+		return
+	}
 
 	req := newScaleRequest(formation, release)
 	req, err = c.formationRepo.AddScaleRequest(req, false)
@@ -90,6 +95,12 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	if err := schema.Validate(req); err != nil {
 		respondWithError(w, err)
 		return
+	}
+	if req.NewProcesses != nil {
+		if err := c.validateFormationScale(*req.NewProcesses); err != nil {
+			respondWithError(w, err)
+			return
+		}
 	}
 
 	if req.State == ct.ScaleRequestStatePending {
@@ -316,4 +327,27 @@ func scaleRequestAsFormation(sr *ct.ScaleRequest) *ct.Formation {
 		CreatedAt: sr.CreatedAt,
 		UpdatedAt: sr.UpdatedAt,
 	}
+}
+
+func (c *controllerAPI) validateFormationScale(processes map[string]int) error {
+	if processes == nil {
+		return nil
+	}
+	s, err := c.runtimeProfileRepo.Settings()
+	if err != nil {
+		return err
+	}
+	max := s.MaxProcessesOrDefault()
+	for name, n := range processes {
+		if ct.IsInternalProcessType(name) {
+			continue
+		}
+		if n > max {
+			return ct.ValidationError{
+				Field:   "processes." + name,
+				Message: fmt.Sprintf("scale %d exceeds cluster maximum of %d", n, max),
+			}
+		}
+	}
+	return nil
 }

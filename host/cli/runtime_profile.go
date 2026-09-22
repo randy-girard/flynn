@@ -61,7 +61,7 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t\n", settings.AllowCustomLimits)
+	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault())
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tBUILTIN")
 	for _, p := range list {
@@ -147,10 +147,17 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	s := &ct.RuntimeSettings{AllowCustomLimits: !args.Bool["--disable"]}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	s := &ct.RuntimeSettings{
+		AllowCustomLimits: !args.Bool["--disable"],
+		MaxProcesses:      cur.MaxProcessesOrDefault(),
+	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t\n", s.AllowCustomLimits)
+	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", s.AllowCustomLimits, s.MaxProcessesOrDefault())
 	return nil
 }

@@ -100,7 +100,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,14 @@ func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 }
 
 func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits).Scan(&s.UpdatedAt); err != nil {
+	cur, err := r.Settings()
+	if err != nil {
+		return err
+	}
+	if s.MaxProcesses < 1 {
+		s.MaxProcesses = cur.MaxProcessesOrDefault()
+	}
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{

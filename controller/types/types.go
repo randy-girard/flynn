@@ -1112,10 +1112,22 @@ type RuntimeProfile struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
+// DefaultMaxProcesses is the cluster default for how many jobs a process type may run.
+const DefaultMaxProcesses = 10
+
 // RuntimeSettings is the cluster-wide policy for process resource limits.
 type RuntimeSettings struct {
 	AllowCustomLimits bool       `json:"allow_custom_limits"`
+	MaxProcesses      int        `json:"max_processes"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+}
+
+// MaxProcessesOrDefault returns the cluster scale cap, falling back to DefaultMaxProcesses.
+func (s *RuntimeSettings) MaxProcessesOrDefault() int {
+	if s == nil || s.MaxProcesses < 1 {
+		return DefaultMaxProcesses
+	}
+	return s.MaxProcesses
 }
 
 // GitHubAppConfig is the cluster-wide GitHub App used for Heroku-style deploys.
