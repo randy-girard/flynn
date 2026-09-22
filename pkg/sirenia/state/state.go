@@ -678,17 +678,17 @@ func (p *Peer) evalClusterState() {
 		p.updatingState = nil
 	}
 
-	if p.Info().State.Freeze != nil {
-		log.Info("cluster frozen, not making any changes")
-		return
-	}
-
 	if !p.singleton && p.Info().State.Singleton {
 		log.Info("configured for normal mode but found cluster in singleton mode, transitioning cluster to normal mode")
 		if p.Info().State.Primary.Meta[p.idKey] != p.id {
 			panic(fmt.Sprintf("unexpected cluster state, we should be the primary, but %s is", p.Info().State.Primary.Meta[p.idKey]))
 		}
 		p.startTransitionToNormalMode()
+		return
+	}
+
+	if p.Info().State.Freeze != nil {
+		log.Info("cluster frozen, not making any changes")
 		return
 	}
 
@@ -1068,7 +1068,12 @@ func (p *Peer) startTakeoverWithPeer(reason string, minWAL xlog.Position, newSta
 		}
 	}()
 
-	if p.Info().State.Freeze != nil {
+	// A frozen singleton cluster is the 1-node bootstrap freeze. When this
+	// peer is configured for HA (SINGLETON=false after the scheduler env-flip),
+	// the freeze must not block startTransitionToNormalMode — otherwise extra
+	// jobs stay unassigned and a later system-app deploy uses singleton
+	// replace, which stops the only primary.
+	if p.Info().State.Freeze != nil && !(p.Info().State.Singleton && !p.singleton) {
 		return ErrClusterFrozen
 	}
 

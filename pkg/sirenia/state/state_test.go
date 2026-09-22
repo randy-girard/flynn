@@ -1011,6 +1011,68 @@ func TestSingletonUpgradeToNormal(t *testing.T) {
 	})
 }
 
+// TestFrozenSingletonEnvFlipTransitionsToNormal covers the scheduler HA
+// env-flip: SINGLETON=false against a still-frozen singleton cluster. Extra
+// peers must join as sync without an explicit unfreeze, or they stay
+// unassigned and a later system-app deploy uses singleton replace.
+func TestFrozenSingletonEnvFlipTransitionsToNormal(t *testing.T) {
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(1, 1),
+		InitWAL:    xlog.Zero(),
+		Freeze:     state.NewFreezeDetails("singleton"),
+		Singleton:  true,
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "echo test: env-flip primary against frozen singleton"},
+		{Cmd: "setclusterstate", JSON: gen1},
+		{Cmd: "startpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RolePrimary,
+					State: gen1,
+					Peers: []*discoverd.Instance{node(1, 1)},
+				},
+				Db: &simulator.DbInfo{
+					Online:  true,
+					Config:  &state.Config{Role: state.RolePrimary},
+					CurXLog: "0/0000000A",
+				},
+			},
+		},
+		{Cmd: "echo test: add sync peer without unfreeze"},
+		{Cmd: "addpeer"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:   node1ID,
+					Role: state.RolePrimary,
+					State: &state.State{
+						Generation: 2,
+						Primary:    node(1, 1),
+						Sync:       node(2, 2),
+						InitWAL:    "0/0000000A",
+					},
+					Peers: []*discoverd.Instance{node(1, 1), node(2, 2)},
+				},
+				Db: &simulator.DbInfo{
+					Online: true,
+					Config: &state.Config{
+						Role:       state.RolePrimary,
+						Downstream: node(2, 2),
+					},
+					CurXLog: "0/00000014",
+				},
+			},
+		},
+	})
+}
+
 // Test starting as a deposed peer
 func TestStartDeposed(t *testing.T) {
 	gen2 := &state.State{
