@@ -19,6 +19,8 @@ need 'step_add_cluster_node' \
   "smoke must add a VM to an already-bootstrapped cluster"
 need 'flynn-host init --peer-ips' \
   "joining a host must use flynn-host init --peer-ips of the running cluster"
+need 'seed_joining_host_secrets' \
+  "joining a host must copy DISCOVERD_AUTH_KEY from node1 before flynn-host starts"
 need 'step_remove_cluster_node' \
   "smoke must remove a host from a running cluster"
 need 'restore_drained_inventory' \
@@ -74,12 +76,47 @@ if ! grep -Fq 'drained-node' "${smoke}"; then
 fi
 need 'refusing to remove node1' \
   "remove-node must keep node1 (CLI and bootstrap)"
+need 'redis_job_host_from_ps' \
+  "remove-node must parse redis placement from flynn ps ID (nodeN-uuid), not NAME"
+if ! grep -Fq 'split($NF' "${smoke}"; then
+  echo "redis host parse must use the last column; NAME is redis.1234 and never matches node3" >&2
+  echo '  missing split($NF) in smoke' >&2
+  exit 1
+fi
+
+# CREATED is "8 minutes ago"; NAME redis.1138 has no hyphen. A $1 split
+# always "finds" a host that is not a node, so drain of node3 kills redis.
+got_host="$(printf '%s\n' \
+  'NAME TYPE STATE CREATED ID' \
+  'redis.1138 redis up 8 minutes ago node3-22980b90-5e70-471a-9c31-78c1aa871211' \
+  | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+    split($NF, a, "-")
+    if (a[1] ~ /^node[0-9]+$/) { print a[1]; exit }
+  }')"
+if [[ "${got_host}" != "node3" ]]; then
+  echo "redis_job_host_from_ps fixture must yield node3, got '${got_host}'" >&2
+  exit 1
+fi
+wrong_host="$(printf '%s\n' \
+  'NAME TYPE STATE CREATED ID' \
+  'redis.1138 redis up 8 minutes ago node3-22980b90-5e70-471a-9c31-78c1aa871211' \
+  | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+    split($1, a, "-")
+    print a[1]
+    exit
+  }')"
+if [[ "${wrong_host}" == "node3" ]]; then
+  echo "NAME-column parse must not look like a host id (got ${wrong_host})" >&2
+  exit 1
+fi
 need 'clickhouse replica' \
   "remove-node clickhouse checks need every replica seeded (leader-only MergeTree dies with the drained host)"
 need 'bounce_controller_scheduler' \
   "remove-node must restart the controller scheduler; drain can panic its loop"
 need 'controller_scheduler_replaced' \
   "scheduler bounce must wait for a new job ID, not the draining one still marked up"
+need 'controller_scheduler_live_line' \
+  "scheduler bounce must ignore drained-host scheduler rows still marked up"
 need 'sync_cluster_monitor_hosts' \
   "add/remove must update cluster-monitor hosts so flynn-host update does not wait for drained peers"
 need 'Upgrade pass' \

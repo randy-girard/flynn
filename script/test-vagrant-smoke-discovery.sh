@@ -22,6 +22,10 @@ need "${smoke}" 'step_discovery_join_nodes' \
   "smoke must join extra VMs using the in-cluster discovery plugin"
 need "${smoke}" 'flynn-host init --discovery' \
   "joining via discovery must use flynn-host init --discovery, not only peer-ips"
+need "${smoke}" 'Authorization: Bearer' \
+  "discovery instance list/register requires the cluster id as Authorization: Bearer"
+need "${smoke}" 'seed_joining_host_secrets' \
+  "discovery joiners must copy DISCOVERD_AUTH_KEY from node1 before flynn-host starts"
 need "${smoke}" 'host_json_set_discovery' \
   "node1 host.json must gain --discovery without restarting the singleton daemon"
 need "${smoke}" 'read_discovery_join_token' \
@@ -32,6 +36,10 @@ need "${smoke}" 'discovery_route_up' \
   "smoke must wait for the discovery HTTP route on node1 before joining"
 need "${smoke}" 'step_verify_discovery_join' \
   "after join, smoke must require 3 flynn-host peers and 3 discovery instances"
+need "${smoke}" 'discovery_instances_ready' \
+  "discovery instance GET must wait until postgres is reachable (500 until then)"
+need "${smoke}" 'postgres read-write after discovery join' \
+  "discovery verify must wait for postgres before GET /instances"
 need "${smoke}" 'TOPOLOGY_ACTION=discovery' \
   "discovery topology must boot 1-node then join node2 and node3"
 need "${smoke}" 'TOPOLOGY_LABEL="1-node-discovery"' \
@@ -44,6 +52,8 @@ need "${smoke}" 'resume/plugins already installed' \
   "backup/restore resume and SKIP_PLUGIN_INSTALL must not re-join node2/node3"
 need "${smoke}" 'wait_sirenia_ha' \
   "discovery join must wait for postgres HA after growing 1→3 hosts"
+need "${smoke}" 'still singleton in discoverd meta' \
+  "sirenia HA wait must reject frozen singleton state with unassigned extras"
 need "${smoke}" 'after discovery join' \
   "smoke must wait for postgres HA immediately after discovery join"
 need "${smoke}" 'wait_sirenia_ha_if_cluster "after restore"' \

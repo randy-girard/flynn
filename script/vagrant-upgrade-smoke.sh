@@ -1606,9 +1606,51 @@ EOF
 
 sirenia_is_ha() {
   local svc=$1
-  local n
-  n="$(sirenia_peer_count "${svc}" | tr -d '[:space:]')"
-  [[ "${n}" =~ ^[0-9]+$ ]] && [[ "${n}" -ge 3 ]]
+  node_root_script node1 <<EOF
+python3 - "${svc}" <<'PY'
+import json, sys, urllib.request
+svc = sys.argv[1]
+key = ""
+try:
+    with open("/etc/flynn/host.json") as f:
+        key = ((json.load(f) or {}).get("env") or {}).get("DISCOVERD_AUTH_KEY") or ""
+except Exception:
+    pass
+
+def get(path):
+    req = urllib.request.Request("http://127.0.0.1:1111" + path)
+    if key:
+        req.add_header("Auth-Key", key)
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        return json.load(resp)
+
+try:
+    inst = get("/services/%s/instances" % svc)
+except Exception:
+    sys.exit("discoverd instances unavailable")
+if not isinstance(inst, list) or len(inst) < 3:
+    sys.exit("%s instances=%s want >=3" % (svc, len(inst) if isinstance(inst, list) else inst))
+try:
+    meta = get("/services/%s/meta" % svc)
+except Exception:
+    sys.exit("%s meta unavailable" % svc)
+data = meta.get("data") or {}
+if isinstance(data, str):
+    try:
+        data = json.loads(data)
+    except Exception:
+        pass
+if not isinstance(data, dict):
+    sys.exit("%s meta data is not an object" % svc)
+# Env-flip can register 3 jobs while discoverd state stays frozen singleton
+# (unassigned extras). Require a real replica set before upgrades.
+if data.get("singleton"):
+    sys.exit("%s still singleton in discoverd meta" % svc)
+if not data.get("sync"):
+    sys.exit("%s has no sync peer in discoverd meta" % svc)
+print("%s HA peers=%d generation=%s" % (svc, len(inst), data.get("generation")))
+PY
+EOF
 }
 
 wait_sirenia_ha() {
@@ -2217,6 +2259,14 @@ step_vagrant_up_nodes() {
   info "starting ${TOPOLOGY_LABEL} nodes (${NODES[*]}) memory=${node_mem} cpus=${node_cpus}"
   # KEEP_VMS_ON_FAIL leaves squashfs/overlay mounts that install --clean cannot
   # delete (EROFS / device busy). Recreate the VMs so each topology is clean.
+  # Also destroy leftover nodeN VMs from a larger topology. A live node2 still
+  # serves the previous discoverd/controller and a fresh singleton then waits
+  # forever on those overlay addresses.
+  expand_cluster_inventory
+  if [[ ${#ALL_CLUSTER_NODES[@]} -gt 0 ]]; then
+    info "destroying cluster node VMs (${ALL_CLUSTER_NODES[*]}) before ${TOPOLOGY_LABEL}"
+    vagrant destroy -f "${ALL_CLUSTER_NODES[@]}" || true
+  fi
   vagrant destroy -f "${NODES[@]}" || true
   VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${NODES[@]}"
   info "verifying VirtualBox NIC2 promiscuous mode (required for flannel VXLAN)"
@@ -5327,12 +5377,13 @@ step_discovery_join_nodes() {
     return 1
   fi
   info "local discovery token ${http_token}"
+  local cluster_id="${http_token##*/}"
   host_json_set_discovery node1 "${http_token}" || return 1
   node_root_script node1 <<EOF
 set -euo pipefail
 mkdir -p /etc/flynn
 printf '%s\n' "${http_token}" > /etc/flynn/discovery-token
-curl -fsS --max-time 15 "${http_token}/instances" >/dev/null
+curl -fsS --max-time 15 -H "Authorization: Bearer ${cluster_id}" "${http_token}/instances" >/dev/null
 echo "node1 can GET ${http_token}/instances"
 EOF
 
@@ -5358,9 +5409,13 @@ EOF
     info "joining ${extra} with flynn-host init --discovery ${http_token}"
     node_root_script "${extra}" <<EOF
 set -euo pipefail
-curl -fsS --max-time 15 "${http_token}/instances" >/dev/null
+curl -fsS --max-time 15 -H "Authorization: Bearer ${cluster_id}" "${http_token}/instances" >/dev/null
 flynn-host init --discovery "${http_token}" --external-ip "${extra_ip}"
 systemctl enable flynn-host.service
+EOF
+    seed_joining_host_secrets "${extra}" || return 1
+    node_root_script "${extra}" <<EOF
+set -euo pipefail
 systemctl restart flynn-host.service
 EOF
     if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
@@ -5386,6 +5441,27 @@ EOF
   echo "joined node2 and node3 via ${http_token}; cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
 }
 
+discovery_instances_ready() {
+  node_root_script node1 <<'EOF'
+set -euo pipefail
+token="$(tr -d '[:space:]' </etc/flynn/discovery-token)"
+token="${token/#https:/http:}"
+python3 - "${token}" <<'PY'
+import json, sys, urllib.request
+token = sys.argv[1].rstrip("/")
+url = token + "/instances"
+cluster_id = token.rsplit("/", 1)[-1]
+req = urllib.request.Request(url, headers={"Authorization": "Bearer " + cluster_id})
+with urllib.request.urlopen(req, timeout=15) as resp:
+    data = json.load(resp)
+inst = data.get("data") or []
+if len(inst) < 3:
+    raise SystemExit("discovery instances=%d want >=3" % len(inst))
+print("discovery instances=%d" % len(inst))
+PY
+EOF
+}
+
 step_verify_discovery_join() {
   local ip listed
   if [[ "${#NODES[@]}" -ne 3 ]]; then
@@ -5399,23 +5475,74 @@ step_verify_discovery_join() {
       return 1
     fi
   done
+  # Discovery stores instances in postgres. After 1→3 the leader may be
+  # unreachable until sirenia elects; GET /instances is 500 until then.
+  wait_for "postgres read-write after discovery join" 900 postgres_is_read_write || return 1
+  wait_sirenia_ha "after discovery join" postgres || return 1
+  wait_for "discovery instances >=3" 180 discovery_instances_ready || return 1
+  echo "discovery join verified: 3 hosts in flynn-host list, discovery API, postgres HA"
+}
+
+# Copy cluster secrets from node1 onto a joining host's host.json.
+# flynn-host init writes args only; a bootstrapped cluster's discoverd
+# requires DISCOVERD_AUTH_KEY, so a join without these env keys stays
+# unauthorized and never appears in flynn-host list.
+seed_joining_host_secrets() {
+  local dest=$1
+  local tmp_dir="${ROOT}/.vagrant-upgrade-smoke-tmp"
+  local id src_vm
+  mkdir -p "${tmp_dir}"
+  REMOTE_SCRIPT_SEQ=$(( ${REMOTE_SCRIPT_SEQ:-0} + 1 ))
+  id="join-secrets.${dest}.${REMOTE_SCRIPT_SEQ}.$(date +%s)"
+  src_vm="${REPO_IN_VM}/.vagrant-upgrade-smoke-tmp/${id}.json"
   node_root_script node1 <<EOF
 set -euo pipefail
-token="\$(tr -d '[:space:]' </etc/flynn/discovery-token)"
-token="\${token/#https:/http:}"
-python3 - "\${token}" <<'PY'
-import json, sys, urllib.request
-url = sys.argv[1].rstrip("/") + "/instances"
-with urllib.request.urlopen(url, timeout=15) as resp:
-    data = json.load(resp)
-inst = data.get("data") or []
-if len(inst) < 3:
-    raise SystemExit("discovery instances=%d want >=3" % len(inst))
-print("discovery instances=%d" % len(inst))
+python3 - <<'PY'
+import json, os
+cfg = json.load(open("/etc/flynn/host.json"))
+env = cfg.get("env") or {}
+out = {}
+for k in ("FLYNN_HOST_AUTH_KEY", "DISCOVERD_AUTH_KEY", "AUTH_KEY", "CONTROLLER_KEY"):
+    v = env.get(k) or ""
+    if v:
+        out[k] = v
+if "DISCOVERD_AUTH_KEY" not in out or "FLYNN_HOST_AUTH_KEY" not in out:
+    raise SystemExit("node1 host.json missing FLYNN_HOST_AUTH_KEY or DISCOVERD_AUTH_KEY")
+path = "${src_vm}"
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(out, f)
+os.chmod(path, 0o600)
+print("wrote cluster secret names for join: %s" % ",".join(sorted(out)))
 PY
 EOF
-  wait_sirenia_ha "after discovery join" postgres || return 1
-  echo "discovery join verified: 3 hosts in flynn-host list, discovery API, postgres HA"
+  node_root_script "${dest}" <<EOF
+set -euo pipefail
+src="${src_vm}"
+for i in \$(seq 1 30); do
+  if [[ -f "\${src}" ]]; then
+    break
+  fi
+  sleep 1
+done
+test -f "\${src}" || { echo "cluster secrets file not visible on ${dest}: \${src}" >&2; exit 1; }
+python3 - <<'PY'
+import json, os
+src = "${src_vm}"
+path = "/etc/flynn/host.json"
+secrets = json.load(open(src))
+cfg = json.load(open(path))
+if cfg.get("env") is None:
+    cfg["env"] = {}
+cfg["env"].update(secrets)
+with open(path, "w") as f:
+    json.dump(cfg, f, indent="\t")
+    f.write("\n")
+os.chmod(path, 0o600)
+print("seeded ${dest} host.json env names: %s" % ",".join(sorted(secrets)))
+PY
+rm -f "\${src}"
+EOF
 }
 
 # Join node4 to a running 3-node cluster (documented flynn-host init --peer-ips).
@@ -5446,6 +5573,10 @@ step_add_cluster_node() {
 set -euo pipefail
 flynn-host init --peer-ips "${join_ips}" --external-ip "${extra_ip}"
 systemctl enable flynn-host.service
+EOF
+  seed_joining_host_secrets "${extra}" || return 1
+  node_root_script "${extra}" <<EOF
+set -euo pipefail
 systemctl restart flynn-host.service
 EOF
   if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
@@ -5473,22 +5604,38 @@ EOF
 # Flynn redis is a singleton with a host-local /data volume. Draining that
 # host cannot reattach the AOF, so pick a different HA node when redis lives
 # on the default drain target.
+#
+# flynn ps ID is nodeN-<job-uuid> when placed. NAME is redis.1234 (no host).
+# CREATED is "8 minutes ago", so only $1/$2/$3/$NF are stable field numbers.
+redis_job_host_from_ps() {
+  awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+    split($NF, a, "-")
+    if (a[1] ~ /^node[0-9]+$/) {
+      print a[1]
+      exit
+    }
+  }'
+}
+
 redis_job_host() {
   local app out
   app="$(flynn1 -a "${APP_NAME}" env get FLYNN_REDIS)" || return 1
   out="$(flynn1 -a "${app}" ps)" || return 1
-  echo "${out}" | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
-    split($1, a, "-")
-    print a[1]
-    exit
-  }'
+  echo "${out}" | redis_job_host_from_ps
 }
 
 pick_remove_node() {
   local drop redis_host
   drop="${NODES[$((${#NODES[@]} - 1))]}"
-  redis_host="$(redis_job_host || true)"
-  if [[ -n "${redis_host}" && "${redis_host}" == "${drop}" && "${#NODES[@]}" -ge 3 ]]; then
+  redis_host="$(redis_job_host)" || {
+    echo "could not locate redis singleton host from flynn ps; refusing drain (host-local AOF)" >&2
+    return 1
+  }
+  if [[ -z "${redis_host}" ]]; then
+    echo "redis flynn ps has no placed nodeN id; refusing drain (host-local AOF)" >&2
+    return 1
+  fi
+  if [[ "${redis_host}" == "${drop}" && "${#NODES[@]}" -ge 3 ]]; then
     echo "redis singleton is on ${drop}; draining ${NODES[$((${#NODES[@]} - 2))]} instead (host-local AOF)" >&2
     drop="${NODES[$((${#NODES[@]} - 2))]}"
   fi
@@ -5496,30 +5643,66 @@ pick_remove_node() {
 }
 
 controller_scheduler_up() {
-  flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {found=1} END { exit !found }'
+  controller_scheduler_live_name >/dev/null
+}
+
+# First up scheduler that is not on the drained host. Prints "name id".
+controller_scheduler_live_line() {
+  local drop
+  drop="$(cat "${WORK_DIR}/drained-node" 2>/dev/null || true)"
+  flynn1 -a controller ps | awk -v drop="${drop}" '
+    NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {
+      split($NF, a, "-")
+      if (drop != "" && a[1] == drop) next
+      print $1, $NF
+      exit
+    }'
+}
+
+controller_scheduler_live_name() {
+  local line name
+  line="$(controller_scheduler_live_line)" || return 1
+  name="${line%% *}"
+  [[ -n "${name}" ]]
 }
 
 controller_scheduler_replaced() {
-  local old=$1 id
-  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {print $1; exit}')"
-  [[ -n "${id}" && "${id}" != "${old}" ]]
+  local old_name=$1
+  local drop
+  drop="$(cat "${WORK_DIR}/drained-node" 2>/dev/null || true)"
+  flynn1 -a controller ps | awk -v old="${old_name}" -v drop="${drop}" '
+    NR>1 && $2=="scheduler" && tolower($3) ~ /up|running/ {
+      split($NF, a, "-")
+      if (drop != "" && a[1] == drop) next
+      if ($1 != old) found=1
+    }
+    END { exit !found }'
 }
 
 # Host drain can panic the leader scheduler (nil volume on persistJob). The
 # process may stay "up" with its loop dead, so new deploys sit pending until
-# we replace it.
+# we replace it. Controller scheduler is often present on more than one host
+# even at scale=1 (stale rows / omni leftovers); wait for *a* live scheduler
+# that is not the killed job and not on the drained host.
 bounce_controller_scheduler() {
-  local id
-  id="$(flynn1 -a controller ps | awk 'NR>1 && $2=="scheduler" && tolower($3) !~ /pending|down/ {print $1; exit}')"
-  if [[ -z "${id}" ]]; then
+  local line name id
+  line="$(controller_scheduler_live_line)" || true
+  name="${line%% *}"
+  id="${line#* }"
+  if [[ -z "${name}" ]]; then
     echo "no running controller scheduler found after drain" >&2
     wait_for "controller scheduler running" 180 controller_scheduler_up
     return
   fi
-  echo "bouncing controller scheduler ${id} after host drain" >&2
-  flynn1 -a controller kill "${id}" || true
-  wait_for "new controller scheduler after ${id}" 180 controller_scheduler_replaced "${id}"
-  # Give the replacement time to elect and recover host/job state before deploys.
+  echo "bouncing controller scheduler ${name} (${id}) after host drain" >&2
+  flynn1 -a controller kill "${name}" || true
+  # Other hosts may already have a live scheduler; that counts as replaced.
+  if controller_scheduler_replaced "${name}"; then
+    echo "live scheduler already present after killing ${name}" >&2
+  else
+    wait_for "new controller scheduler after ${name}" 180 controller_scheduler_replaced "${name}"
+  fi
+  # Give the active scheduler time to elect and recover host/job state.
   sleep 15
 }
 

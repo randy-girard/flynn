@@ -83,6 +83,10 @@ if ! grep -Fq 'vagrant destroy -f "${NODES[@]}"' "${smoke}"; then
   echo "vagrant up must destroy leftover cluster nodes before boot (KEEP_VMS_ON_FAIL remounts)" >&2
   exit 1
 fi
+if ! grep -Fq 'vagrant destroy -f "${ALL_CLUSTER_NODES[@]}"' "${smoke}"; then
+  echo "vagrant up must destroy leftover nodeN VMs from a larger topology" >&2
+  exit 1
+fi
 if ! grep -Fq 'vagrant up "${NODES[@]}"' "${smoke}"; then
   echo "vagrant up must boot only the current topology's nodes" >&2
   exit 1
