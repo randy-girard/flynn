@@ -106,7 +106,7 @@ flynn kafka:topics:create audit --config cleanup.policy=compact --config max.mes
 flynn kafka:topics:info events
 
 # Change a topic's configuration
-flynn kafka:topics:configure events --retention 30d
+flynn kafka:topics:configure events --retention 30d --config cleanup.policy=compact
 
 # Delete a topic and all of its data
 flynn kafka:topics:destroy events
@@ -122,8 +122,14 @@ supplied with one or more `--config key=value` flags.
 # List consumer groups
 flynn kafka:consumer-groups
 
-# Register a consumer group against a topic
+# Register a consumer group against a topic (seeds earliest offsets by default)
 flynn kafka:consumer-groups:create workers events
+
+# Seed at the latest offset, a specific offset, a timestamp, or a relative shift
+flynn kafka:consumer-groups:create workers events --to-latest
+flynn kafka:consumer-groups:create workers events --to-offset 12
+flynn kafka:consumer-groups:create workers events --to-datetime 2024-01-01T00:00:00.000
+flynn kafka:consumer-groups:create workers events --shift-by -1
 
 # Describe a group's offsets and lag
 flynn kafka:consumer-groups:info workers
@@ -133,7 +139,9 @@ flynn kafka:consumer-groups:destroy workers
 ```
 
 Kafka has no explicit "create group" operation; `kafka:consumer-groups:create` seeds
-the earliest committed offsets for the topic's partitions to register the group.
+committed offsets for the topic's partitions to register the group. The default is
+`--to-earliest`. Pass `--to-latest`, `--to-offset`, `--to-datetime`, or `--shift-by`
+to choose a different reset, the same flags as `kafka-consumer-groups.sh`.
 
 All `flynn kafka` commands run inside a container on the Flynn cluster, so they
 require no local Kafka installation and no firewall or security changes. When
