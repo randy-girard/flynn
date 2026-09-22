@@ -28,7 +28,6 @@ import (
 	"github.com/randy-girard/flynn/host/cleanup"
 	"github.com/randy-girard/flynn/host/downloader"
 	"github.com/randy-girard/flynn/pkg/cluster"
-	"github.com/randy-girard/flynn/pkg/dialer"
 	"github.com/randy-girard/flynn/pkg/ghrelease"
 	"github.com/randy-girard/flynn/pkg/installsource"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -1347,30 +1346,10 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		return fmt.Errorf("no controller instances found")
 	}
 
-	// Create an HTTP client with a custom dialer that resolves .discoverd
-	// hostnames through the discoverd HTTP API, since the host's system DNS
-	// resolver (systemd-resolved) doesn't know about the .discoverd zone.
-	// This also ensures that when the controller deploys itself (one-by-one
-	// strategy), ResumingStream reconnections resolve to whichever controller
-	// instance is currently alive, rather than retrying a dead pinned IP.
-	discoverdDial := func(network, addr string) (net.Conn, error) {
-		host, _, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, err
-		}
-		if strings.HasSuffix(host, ".discoverd") {
-			service := strings.TrimSuffix(host, ".discoverd")
-			addrs, err := discoverd.NewService(service).Addrs()
-			if err != nil {
-				return nil, err
-			}
-			if len(addrs) == 0 {
-				return nil, fmt.Errorf("lookup %s: no such host", host)
-			}
-			addr = addrs[0]
-		}
-		return dialer.Default.Dial(network, addr)
-	}
+	// discoverdDial resolves *.discoverd through the discoverd API (systemd-resolved
+	// does not) and rotates across instances. A host restart can leave the first
+	// registered controller accepting TCP but not answering HTTP; pinning addrs[0]
+	// made every artifact retry hit that peer.
 	httpClient := newControllerHTTPClient(discoverdDial, 0)
 	key := controller.KeyFromEnvOrMeta(instances[0].Meta)
 	client, err := controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)

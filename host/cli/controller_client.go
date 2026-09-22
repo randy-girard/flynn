@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -15,23 +16,56 @@ func discoverdHTTPClient() *http.Client {
 	return &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
 }
 
+// lookupDiscoverdAddrs is replaced in tests. Production uses the local discoverd API.
+var lookupDiscoverdAddrs = func(service string) ([]string, error) {
+	return discoverd.NewService(service).Addrs()
+}
+
+// discoverdDialCursor rotates the first instance so a hung registration
+// (still listed, TCP accept or blackhole) cannot pin every request.
+var discoverdDialCursor uint64
+
+// rotateDiscoverdAddrs returns addrs starting at a rotating index, then the rest.
+// Callers try them in order so a refused first peer fails over in the same dial.
+func rotateDiscoverdAddrs(addrs []string) []string {
+	if len(addrs) == 0 {
+		return nil
+	}
+	start := int(atomic.AddUint64(&discoverdDialCursor, 1)-1) % len(addrs)
+	out := make([]string, len(addrs))
+	for i := range addrs {
+		out[i] = addrs[(start+i)%len(addrs)]
+	}
+	return out
+}
+
 func discoverdDial(network, addr string) (net.Conn, error) {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasSuffix(host, ".discoverd") {
-		service := strings.TrimSuffix(host, ".discoverd")
-		addrs, err := discoverd.NewService(service).Addrs()
-		if err != nil {
-			return nil, err
-		}
-		if len(addrs) == 0 {
-			return nil, fmt.Errorf("lookup %s: no such host", host)
-		}
-		addr = addrs[0]
+	if !strings.HasSuffix(host, ".discoverd") {
+		return dialer.Default.Dial(network, addr)
 	}
-	return dialer.Default.Dial(network, addr)
+	service := strings.TrimSuffix(host, ".discoverd")
+	addrs, err := lookupDiscoverdAddrs(service)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("lookup %s: no such host", host)
+	}
+	var firstErr error
+	for _, candidate := range rotateDiscoverdAddrs(addrs) {
+		conn, err := dialer.Default.Dial(network, candidate)
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, firstErr
 }
 
 // ClusterController is the discoverd-backed controller client (cluster admin).
