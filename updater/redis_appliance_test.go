@@ -81,3 +81,20 @@ func TestUpdaterInjectsPostgresControllerKey(t *testing.T) {
 		t.Fatal("deployApp must copy missing cluster auth keys onto system-app releases")
 	}
 }
+
+func TestUpdaterLoadsControllerKeyFromJobsAfterSEC028(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if strings.Contains(body, "KeyFromEnvOrMeta(") {
+		t.Fatal("updater must not call KeyFromEnvOrMeta directly (empty discoverd meta 401s POST /artifacts)")
+	}
+	if !strings.Contains(body, "controllerkey.FromHosts(") {
+		t.Fatal("updater must fall back to AUTH_KEY on running controller jobs")
+	}
+	if !strings.Contains(body, "CreateArtifactWithRetry(") {
+		t.Fatal("updater must not retry controller 401 when creating image artifacts")
+	}
+}

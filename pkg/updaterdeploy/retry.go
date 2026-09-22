@@ -3,6 +3,8 @@ package updaterdeploy
 import (
 	"fmt"
 	"time"
+
+	"github.com/randy-girard/flynn/pkg/httpclient"
 )
 
 // Overridable for tests. These bound non-streaming controller RPCs used
@@ -40,6 +42,9 @@ func callWithRetry(fn func() error) error {
 		err = callWithTimeout(repairCallTimeout, fn)
 		if err == nil {
 			return nil
+		}
+		if httpclient.IsUnauthorized(err) {
+			return err
 		}
 	}
 	if err == nil {

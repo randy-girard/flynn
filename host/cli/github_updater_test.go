@@ -445,3 +445,20 @@ func TestTarballUpdateDocumentsMissingChecksumRisk(t *testing.T) {
 		t.Fatal("tarball remote binary pull must pass checksums when the archive includes them")
 	}
 }
+
+func TestTarballUpdaterLoadsControllerKeyFromJobs(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "controllerAPIKeyFromHosts(") {
+		t.Fatal("update must load AUTH_KEY from controller jobs after SEC-028 so repairs and POST /artifacts do not 401")
+	}
+	if !strings.Contains(body, "CreateArtifactWithRetry(") {
+		t.Fatal("image artifact create must use CreateArtifactWithRetry so 401 is not retried")
+	}
+	if strings.Contains(body, "failed to create %s image artifact after retries") {
+		t.Fatal("local 401-retry loop must not remain in github_updater")
+	}
+}

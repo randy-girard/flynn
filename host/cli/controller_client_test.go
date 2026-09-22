@@ -43,7 +43,7 @@ func TestControllerClientUsesAPIKeyHelperAfterSEC028(t *testing.T) {
 			t.Fatal(err)
 		}
 		body := string(src)
-		if !strings.Contains(body, "controllerAPIKey(") {
+		if !strings.Contains(body, "controllerAPIKey") {
 			t.Fatalf("%s must use controllerAPIKey so volume gc and update work after AUTH_KEY left discoverd meta", path)
 		}
 		if strings.Contains(body, "KeyFromEnvOrMeta(") {

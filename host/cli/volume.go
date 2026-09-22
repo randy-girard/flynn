@@ -134,12 +134,7 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 		// SEC-028: discoverd no longer publishes AUTH_KEY. Seed it from the
 		// controller job we already listed so GET /volumes does not 401.
 		if k := controllerKeyFromActiveJobs(jobs); k != "" {
-			if os.Getenv("AUTH_KEY") == "" {
-				os.Setenv("AUTH_KEY", k)
-			}
-			if os.Getenv("CONTROLLER_KEY") == "" {
-				os.Setenv("CONTROLLER_KEY", k)
-			}
+			seedControllerKey(k)
 		}
 	}
 

@@ -108,9 +108,11 @@ not return that secret. System consumers (router, status, updater,
 flynn-host CLI) read `CONTROLLER_KEY` or `AUTH_KEY` from their
 environment (including `/etc/flynn/host.json` via the flynn-host CLI)
 and only fall back to instance meta during mixed-version rolling
-updates. If both are empty, `flynn-host` reads `AUTH_KEY` /
-`CONTROLLER_KEY` from a running controller job so `volume:gc` and
-`flynn-host update` do not 401 on `GET /volumes`.
+updates. If both are empty, `flynn-host` and the in-cluster updater read
+`AUTH_KEY` / `CONTROLLER_KEY` from a running controller job so `volume:gc`,
+volume/sirenia repair, and `POST /artifacts` during `flynn-host update` do
+not 401. HTTP 401 is not retried as a transient error. When the key is
+found on a job, `flynn-host` also writes it to `/etc/flynn/host.json`.
 
 ## Applications
 

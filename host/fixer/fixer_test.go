@@ -2,6 +2,7 @@ package fixer
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 
@@ -102,6 +103,17 @@ func TestResolveFixOptionsAborted(t *testing.T) {
 	}
 	if _, _, err := f.resolveFixOptions(args, 1); err == nil || !strings.Contains(err.Error(), "aborted") {
 		t.Fatalf("want aborted, got %v", err)
+	}
+}
+
+func TestFixControllerLoadsKeyFromJobs(t *testing.T) {
+	src, err := os.ReadFile("controller.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "controllerkey.FromHosts(") {
+		t.Fatal("FixController must load AUTH_KEY from running controller jobs after SEC-028")
 	}
 }
 

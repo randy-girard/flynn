@@ -13,6 +13,8 @@ import (
 	"github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/controllerkey"
 	"github.com/randy-girard/flynn/pkg/status"
 	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 	"github.com/randy-girard/flynn/pkg/version"
@@ -79,7 +81,23 @@ func run() error {
 		log.Error("error looking up controller in service discovery", "err", err)
 		return err
 	}
-	client, err := controller.NewClient("", controller.KeyFromEnvOrMeta(instances[0].Meta))
+	key := controllerkey.FromEnvOrMeta(instances[0].Meta)
+	if key == "" {
+		if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
+			key = controllerkey.FromHosts(hosts)
+		}
+	}
+	if key == "" {
+		log.Error("controller AUTH_KEY is unavailable")
+		return fmt.Errorf("controller AUTH_KEY is unavailable (discoverd no longer publishes it; set AUTH_KEY or CONTROLLER_KEY)")
+	}
+	if os.Getenv("AUTH_KEY") == "" {
+		os.Setenv("AUTH_KEY", key)
+	}
+	if os.Getenv("CONTROLLER_KEY") == "" {
+		os.Setenv("CONTROLLER_KEY", key)
+	}
+	client, err := controller.NewClient("", key)
 	if err != nil {
 		log.Error("error creating controller client", "err", err)
 		return err
@@ -114,50 +132,38 @@ func run() error {
 	}
 
 	log.Info("creating new image artifacts")
-	createArtifactWithRetry := func(name string, img *ct.Artifact) error {
-		for attempt := 1; attempt <= 6; attempt++ {
-			if err := client.CreateArtifact(img); err != nil {
-				log.Warn("error creating image artifact, retrying",
-					"name", name, "attempt", attempt, "err", err)
-				time.Sleep(10 * time.Second)
-				continue
-			}
-			return nil
-		}
-		return fmt.Errorf("failed to create %s image artifact after retries", name)
-	}
 	if img, ok := images["redis"]; ok {
 		redisImage = img
-		if err := createArtifactWithRetry("redis", redisImage); err != nil {
+		if err := updaterdeploy.CreateArtifactWithRetry(client, "redis", redisImage, log); err != nil {
 			log.Error(err.Error())
 			return err
 		}
 	}
 	slugRunner = images["slugrunner"]
-	if err := createArtifactWithRetry("slugrunner", slugRunner); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "slugrunner", slugRunner, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}
 	slugBuilder = images["slugbuilder"]
-	if err := createArtifactWithRetry("slugbuilder", slugBuilder); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "slugbuilder", slugBuilder, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}
 	dockerBuilder = images["dockerbuilder"]
-	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "dockerbuilder", dockerBuilder, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}
 	if img, ok := images["kafka"]; ok {
 		kafkaImage = img
-		if err := createArtifactWithRetry("kafka", kafkaImage); err != nil {
+		if err := updaterdeploy.CreateArtifactWithRetry(client, "kafka", kafkaImage, log); err != nil {
 			log.Error(err.Error())
 			return err
 		}
 	}
 	if img, ok := images["clickhouse"]; ok {
 		clickHouseImage = img
-		if err := createArtifactWithRetry("clickhouse", clickHouseImage); err != nil {
+		if err := updaterdeploy.CreateArtifactWithRetry(client, "clickhouse", clickHouseImage, log); err != nil {
 			log.Error(err.Error())
 			return err
 		}

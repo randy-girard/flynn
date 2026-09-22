@@ -1346,12 +1346,20 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		return fmt.Errorf("no controller instances found")
 	}
 
+	// Re-list hosts after the daemon restart so AUTH_KEY can be read from
+	// running controller jobs (SEC-028 stopped publishing it in discoverd).
+	hosts, err = clusterClient.Hosts()
+	if err != nil {
+		log.Warn("could not list hosts for controller key", "err", err)
+		hosts = nil
+	}
+
 	// discoverdDial resolves *.discoverd through the discoverd API (systemd-resolved
 	// does not) and rotates across instances. A host restart can leave the first
 	// registered controller accepting TCP but not answering HTTP; pinning addrs[0]
 	// made every artifact retry hit that peer.
 	httpClient := newControllerHTTPClient(discoverdDial, 0)
-	key := controllerAPIKey(instances[0].Meta)
+	key := controllerAPIKeyFromHosts(instances[0].Meta, hosts)
 	if key == "" {
 		return missingControllerKeyErr()
 	}
@@ -1393,9 +1401,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	// This must happen BEFORE creating image artifacts because the
 	// controller's CreateArtifact depends on blobstore, which depends
 	// on postgres being fully healthy (with asyncs).
-	if hosts, err := clusterClient.Hosts(); err != nil {
-		log.Warn("could not list hosts for volume repair", "err", err)
-	} else if err := updaterdeploy.RepairStaleVolumes(repairClient, hosts, log); err != nil {
+	if err := updaterdeploy.RepairStaleVolumes(repairClient, hosts, log); err != nil {
 		log.Warn("error repairing stale volumes", "err", err)
 	}
 	repairSireniaClusters(log)
@@ -1408,38 +1414,27 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 
 	// Create image artifacts for common images, with retries since
 	// blobstore may still be stabilizing after the sirenia repair.
+	// HTTP 401 is not retried (empty AUTH_KEY after SEC-028).
 	log.Info("creating image artifacts")
-	createArtifactWithRetry := func(name string, img *ct.Artifact) error {
-		for attempt := 1; attempt <= 6; attempt++ {
-			if err := client.CreateArtifact(img); err != nil {
-				log.Warn("error creating image artifact, retrying",
-					"name", name, "attempt", attempt, "err", err)
-				time.Sleep(10 * time.Second)
-				continue
-			}
-			return nil
-		}
-		return fmt.Errorf("failed to create %s image artifact after retries", name)
-	}
 	redisImage := images["redis"]
 	if redisImage != nil {
-		if err := createArtifactWithRetry("redis", redisImage); err != nil {
+		if err := updaterdeploy.CreateArtifactWithRetry(client, "redis", redisImage, log); err != nil {
 			log.Error(err.Error())
 			return err
 		}
 	}
 	slugRunner := images["slugrunner"]
-	if err := createArtifactWithRetry("slugrunner", slugRunner); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "slugrunner", slugRunner, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}
 	slugBuilder := images["slugbuilder"]
-	if err := createArtifactWithRetry("slugbuilder", slugBuilder); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "slugbuilder", slugBuilder, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}
 	dockerBuilder := images["dockerbuilder"]
-	if err := createArtifactWithRetry("dockerbuilder", dockerBuilder); err != nil {
+	if err := updaterdeploy.CreateArtifactWithRetry(client, "dockerbuilder", dockerBuilder, log); err != nil {
 		log.Error(err.Error())
 		return err
 	}

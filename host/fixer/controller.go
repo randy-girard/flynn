@@ -10,13 +10,21 @@ import (
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/controllerkey"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startScheduler bool) error {
 	f.l.Info("found controller instance, checking critical formations")
 	inst := instances[0]
-	client, err := controller.NewClient("http://"+inst.Addr, controller.KeyFromEnvOrMeta(inst.Meta))
+	key := controller.KeyFromEnvOrMeta(inst.Meta)
+	if key == "" {
+		key = controllerkey.FromHosts(f.hosts)
+	}
+	if key == "" {
+		return fmt.Errorf("controller AUTH_KEY is unavailable (discoverd no longer publishes it; set AUTH_KEY or CONTROLLER_KEY, or keep a running controller job)")
+	}
+	client, err := controller.NewClient("http://"+inst.Addr, key)
 	if err != nil {
 		return fmt.Errorf("unexpected error creating controller client: %s", err)
 	}
