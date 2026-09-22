@@ -141,8 +141,8 @@
 #                        rebuild images. Dist is reused when plugin HEAD and
 #                        the Flynn packages plugins compile against are
 #                        unchanged (docs/CLI/updater-only Flynn commits skip
-#                        Kafka/npm rebuilds). Builder fetch cache lives in
-#                        /var/cache/flynn/plugin-fetch (Kafka tarball, npm).
+#                        Kafka/npm rebuilds). Kafka’s Apache dist is vendored
+#                        in flynn-plugin-kafka/img (split tarball parts).
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #   SMOKE_FIREWALL_PORT  High TCP port for the post-bootstrap UFW
 #                        expose/unexpose probe [default: 27183]
@@ -2892,35 +2892,6 @@ echo "ubuntu-noble layer \${dest}"
 EOF
 }
 
-# Seed builder-local caches used inside plugin overlay chroots (Kafka tarball)
-# and host-side dashboard `npm ci` (NPM_CONFIG_CACHE).
-prefetch_plugin_fetch_cache() {
-  node_root_script builder <<'EOF'
-set -euo pipefail
-CACHE_DIR=/var/cache/flynn/plugin-fetch
-mkdir -p "${CACHE_DIR}/npm" /var/cache/apt/archives
-chmod 0755 /var/cache/flynn /var/cache/flynn/plugin-fetch "${CACHE_DIR}/npm"
-dest="${CACHE_DIR}/kafka_2.13-3.9.0.tgz"
-url="https://archive.apache.org/dist/kafka/3.9.0/kafka_2.13-3.9.0.tgz"
-# Keep in sync with flynn-plugin-kafka/img/packages.sh
-sha="5324c1f44d4c84ea469712c2cc3d2d15545c3716edbb5353722df9c661fcc78b031fcf07d1c4f0309c5fdb32686665dfb0cffe55210cd3a1fe2a370538cb4e6d"
-if [[ -f "${dest}.partial" && ! -s "${dest}" ]]; then
-  mv "${dest}.partial" "${dest}"
-fi
-if [[ -s "${dest}" ]] && echo "${sha}  ${dest}" | sha512sum -c -; then
-  echo "kafka tarball already cached (${dest})"
-else
-  echo "prefetching kafka tarball to ${dest}"
-  curl -fSL -C - -o "${dest}" "${url}" || {
-    rm -f "${dest}"
-    curl -fSL -o "${dest}" "${url}"
-  }
-  echo "${sha}  ${dest}" | sha512sum -c -
-fi
-ls -lh "${dest}"
-EOF
-}
-
 ensure_plugin_image() {
   local dir=$1
   if [[ ! -d "${dir}" ]]; then
@@ -2947,10 +2918,9 @@ export PATH=/usr/local/go/bin:\$PATH
 export FLYNN_IMAGES_JSON="${REPO_IN_VM}/build/images.json"
 export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers-${BUILD_VERSION}
 export PLUGIN_BUILD_DOCKER=0
-export FLYNN_PLUGIN_FETCH_CACHE=/var/cache/flynn/plugin-fetch
-export NPM_CONFIG_CACHE=/var/cache/flynn/plugin-fetch/npm
+export NPM_CONFIG_CACHE=/var/cache/flynn/npm
 export npm_config_prefer_offline=true
-mkdir -p "\$FLYNN_LAYERS_DIR" "\$FLYNN_PLUGIN_FETCH_CACHE/npm" /var/cache/apt/archives
+mkdir -p "\$FLYNN_LAYERS_DIR" "\$NPM_CONFIG_CACHE"
 id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
 tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
@@ -3011,12 +2981,6 @@ step_build_plugin_images() {
     return 0
   fi
   extract_plugin_ubuntu_layer || return 1
-  for dir in "${pending[@]}"; do
-    if [[ "$(basename "${dir}")" == flynn-plugin-kafka ]]; then
-      prefetch_plugin_fetch_cache || return 1
-      break
-    fi
-  done
   local conc="${PLUGIN_BUILD_CONCURRENCY:-6}"
   local fail=0
   local -a running=()

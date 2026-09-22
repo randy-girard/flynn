@@ -225,10 +225,6 @@ need 'plugin_image_current' \
   "install must refuse a plugin image that was not built against this Flynn"
 need 'plugin_flynn_compile_id' \
   "plugin dist stamp must hash Flynn packages plugins compile against, not every Flynn commit"
-need 'prefetch_plugin_fetch_cache' \
-  "smoke must seed Kafka/npm fetch cache on the builder before plugin-build"
-need 'FLYNN_PLUGIN_FETCH_CACHE' \
-  "plugin-build chroot must see the builder fetch cache (Kafka tarball)"
 need 'go mod edit -replace' \
   "plugin-build must compile against this Flynn checkout so plugin APIs send DISCOVERD_AUTH_KEY (SEC-003)"
 need '.flynn-module-id' \
