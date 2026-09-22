@@ -137,8 +137,12 @@
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
 #   PLUGIN_BUILD_CONCURRENCY  How many plugin images to build at once after
-#                        the tarball exists [default: 3]. Install does not
-#                        rebuild images.
+#                        the tarball exists [default: 6]. Install does not
+#                        rebuild images. Dist is reused when plugin HEAD and
+#                        the Flynn packages plugins compile against are
+#                        unchanged (docs/CLI/updater-only Flynn commits skip
+#                        Kafka/npm rebuilds). Builder fetch cache lives in
+#                        /var/cache/flynn/plugin-fetch (Kafka tarball, npm).
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
 #   SMOKE_FIREWALL_PORT  High TCP port for the post-bootstrap UFW
 #                        expose/unexpose probe [default: 27183]
@@ -223,7 +227,7 @@ PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
 PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
-PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-3}"
+PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-6}"
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
 SMOKE_UNIT_PACKAGES=(
@@ -2798,15 +2802,79 @@ plugin_flynn_module_id() {
   git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo "${BUILD_VERSION}"
 }
 
+# Flynn trees that plugin binaries compile against after go.mod replace.
+# host/cli, updater, docs, and pkg/plugin (install CLI) are excluded so a
+# Flynn-only docs/CLI/updater commit does not rebuild Kafka/npm images.
+plugin_flynn_compile_paths() {
+  printf '%s\n' \
+    go.mod \
+    go.sum \
+    discoverd \
+    controller/client \
+    controller/types \
+    controller/authorizer \
+    controller/api \
+    controller/tokensigner \
+    host/types \
+    host/resource \
+    pkg/httpclient \
+    pkg/httphelper \
+    pkg/status \
+    pkg/cluster \
+    pkg/sse \
+    pkg/dialer \
+    pkg/shutdown \
+    pkg/random \
+    pkg/resource \
+    pkg/attempt \
+    pkg/certgen \
+    pkg/sirenia \
+    pkg/keepalive \
+    pkg/tlsconfig \
+    pkg/stream \
+    pkg/cors \
+    pkg/ctxhelper \
+    pkg/version
+}
+
+plugin_flynn_compile_id() {
+  local -a paths=()
+  mapfile -t paths < <(plugin_flynn_compile_paths)
+  git -C "${ROOT}" ls-files -- "${paths[@]}" \
+    | git -C "${ROOT}" hash-object --stdin-paths \
+    | git hash-object --stdin
+}
+
 plugin_image_current() {
   local dir=$1
-  local flynn_id plugin_id stamp stamp_val
+  local compile_id plugin_id stamp stamp_val got old_flynn old_plugin
+  local -a paths=()
   [[ -d "${dir}" ]] || return 1
-  flynn_id="$(plugin_flynn_module_id)"
+  compile_id="$(plugin_flynn_compile_id)"
   plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
   stamp="${dir}/dist/.flynn-module-id"
-  stamp_val="${flynn_id} ${plugin_id}"
-  plugin_dist_ready "${dir}" && [[ -f "${stamp}" ]] && [[ "$(cat "${stamp}")" == "${stamp_val}" ]]
+  stamp_val="${compile_id} ${plugin_id}"
+  plugin_dist_ready "${dir}" || return 1
+  [[ -f "${stamp}" ]] || return 1
+  got="$(cat "${stamp}")"
+  if [[ "${got}" == "${stamp_val}" ]]; then
+    return 0
+  fi
+  old_flynn="${got%% *}"
+  old_plugin="${got#* }"
+  if [[ "${old_plugin}" != "${plugin_id}" ]]; then
+    return 1
+  fi
+  # Previous smokes stamped Flynn HEAD. Reuse dist when compile inputs match.
+  if git -C "${ROOT}" cat-file -e "${old_flynn}^{commit}" 2>/dev/null; then
+    mapfile -t paths < <(plugin_flynn_compile_paths)
+    if git -C "${ROOT}" diff --quiet "${old_flynn}" HEAD -- "${paths[@]}"; then
+      printf '%s\n' "${stamp_val}" > "${stamp}"
+      echo "plugin image ready (compile inputs unchanged since ${old_flynn:0:8})"
+      return 0
+    fi
+  fi
+  return 1
 }
 
 # Extract ubuntu-noble once per smoke run. Parallel plugin-builds share it.
@@ -2825,33 +2893,65 @@ echo "ubuntu-noble layer \${dest}"
 EOF
 }
 
+# Seed builder-local caches used inside plugin overlay chroots (Kafka tarball)
+# and host-side dashboard `npm ci` (NPM_CONFIG_CACHE).
+prefetch_plugin_fetch_cache() {
+  node_root_script builder <<'EOF'
+set -euo pipefail
+CACHE_DIR=/var/cache/flynn/plugin-fetch
+mkdir -p "${CACHE_DIR}/npm" /var/cache/apt/archives
+chmod 0755 /var/cache/flynn /var/cache/flynn/plugin-fetch "${CACHE_DIR}/npm"
+dest="${CACHE_DIR}/kafka_2.13-3.9.0.tgz"
+url="https://archive.apache.org/dist/kafka/3.9.0/kafka_2.13-3.9.0.tgz"
+# Keep in sync with flynn-plugin-kafka/img/packages.sh
+sha="5324c1f44d4c84ea469712c2cc3d2d15545c3716edbb5353722df9c661fcc78b031fcf07d1c4f0309c5fdb32686665dfb0cffe55210cd3a1fe2a370538cb4e6d"
+if [[ -f "${dest}.partial" && ! -s "${dest}" ]]; then
+  mv "${dest}.partial" "${dest}"
+fi
+if [[ -s "${dest}" ]] && echo "${sha}  ${dest}" | sha512sum -c -; then
+  echo "kafka tarball already cached (${dest})"
+else
+  echo "prefetching kafka tarball to ${dest}"
+  curl -fSL -C - -o "${dest}" "${url}" || {
+    rm -f "${dest}"
+    curl -fSL -o "${dest}" "${url}"
+  }
+  echo "${sha}  ${dest}" | sha512sum -c -
+fi
+ls -lh "${dest}"
+EOF
+}
+
 ensure_plugin_image() {
   local dir=$1
   if [[ ! -d "${dir}" ]]; then
     echo "plugin checkout missing: ${dir}" >&2
     return 1
   fi
-  local flynn_id stamp
-  flynn_id="$(plugin_flynn_module_id)"
+  local compile_id stamp
+  compile_id="$(plugin_flynn_compile_id)"
   plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
   stamp="${dir}/dist/.flynn-module-id"
-  stamp_val="${flynn_id} ${plugin_id}"
+  stamp_val="${compile_id} ${plugin_id}"
   if plugin_image_current "${dir}"; then
-    echo "plugin image ready (${dir}/dist, ubuntu-noble + delta, flynn ${flynn_id:0:8})"
+    echo "plugin image ready (${dir}/dist, ubuntu-noble + delta, compile ${compile_id:0:8})"
     return 0
   fi
   # GitHub ubuntu-noble shares Flynn layer IDs with a local build but not the
   # squashfs bytes (IDs hash recipe inputs, not GOARCH). Overlaying GitHub
   # amd64 binaries on the cluster's arm64 layer makes jobs exit 126. Build on
   # the builder against the ubuntu-noble squashfs from this smoke tarball.
-  info "building plugin image on builder (${dir}) against Flynn ${flynn_id:0:8}"
+  info "building plugin image on builder (${dir}) against Flynn compile ${compile_id:0:8}"
   node_root_script builder <<EOF
 set -euo pipefail
 export PATH=/usr/local/go/bin:\$PATH
 export FLYNN_IMAGES_JSON="${REPO_IN_VM}/build/images.json"
 export FLYNN_LAYERS_DIR=/tmp/flynn-plugin-layers-${BUILD_VERSION}
 export PLUGIN_BUILD_DOCKER=0
-mkdir -p "\$FLYNN_LAYERS_DIR"
+export FLYNN_PLUGIN_FETCH_CACHE=/var/cache/flynn/plugin-fetch
+export NPM_CONFIG_CACHE=/var/cache/flynn/plugin-fetch/npm
+export npm_config_prefer_offline=true
+mkdir -p "\$FLYNN_LAYERS_DIR" "\$FLYNN_PLUGIN_FETCH_CACHE/npm" /var/cache/apt/archives
 id=\$(python3 -c "import json; art=json.load(open('${REPO_IN_VM}/build/images.json')); img=art.get('ubuntu-noble') or art.get('postgres'); layers=[l for rf in (img.get('manifest') or {}).get('rootfs') or [] for l in rf.get('layers') or []]; print(layers[0]['id'])")
 tarball="${REPO_IN_VM}/build/release/flynn-${BUILD_VERSION}.tar.gz"
 dest="\$FLYNN_LAYERS_DIR/\$id.squashfs"
@@ -2912,7 +3012,13 @@ step_build_plugin_images() {
     return 0
   fi
   extract_plugin_ubuntu_layer || return 1
-  local conc="${PLUGIN_BUILD_CONCURRENCY:-3}"
+  for dir in "${pending[@]}"; do
+    if [[ "$(basename "${dir}")" == flynn-plugin-kafka ]]; then
+      prefetch_plugin_fetch_cache || return 1
+      break
+    fi
+  done
+  local conc="${PLUGIN_BUILD_CONCURRENCY:-6}"
   local fail=0
   local -a running=()
   for dir in "${pending[@]}"; do
