@@ -12,6 +12,15 @@ py="${ROOT}/script/lib/smoke-matrix.py"
 docs="${ROOT}/docs/content/development.html.md"
 gitignore="${ROOT}/.gitignore"
 
+# vagrant-upgrade-smoke.sh snapshots matrix-related env (SKIP_BUILD, KEEP_*,
+# …) into SMOKE_MATRIX_EXPLICIT before it runs this script. That snapshot is
+# for the live smoke run. It must not hide file-driven exports this
+# regression asserts (defaults.skip_build → SKIP_BUILD=1, and the same for
+# other SKIP_* keys). An empty snapshot still lets the explicit-win check
+# below override one key.
+export SMOKE_MATRIX_EXPLICIT='{}'
+unset SKIP_BUILD
+
 need() {
   local file=$1 needle=$2 msg=$3
   if ! grep -Fq -- "${needle}" "${file}"; then
@@ -181,18 +190,15 @@ items:
     topologies: "3"
     skip_cli: true
 EOF
-# Isolate from the parent smoke run: SKIP_BUILD=1 and SMOKE_MATRIX_EXPLICIT
-# would otherwise keep skip_build from exporting SKIP_BUILD=1.
-isolate=(env -u SKIP_BUILD -u SMOKE_MATRIX_EXPLICIT)
-out="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" apply-run)"
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" apply-run)"
 echo "${out}" | grep -q 'SKIP_BUILD=1' \
   || { echo "defaults.skip_build must export SKIP_BUILD=1" >&2; echo "${out}" >&2; exit 1; }
-out="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" --item only apply-item)"
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" --item only apply-item)"
 echo "${out}" | grep -q 'SMOKE_TOPOLOGIES=3' \
   || { echo "item topologies must export SMOKE_TOPOLOGIES=3" >&2; echo "${out}" >&2; exit 1; }
 echo "${out}" | grep -q 'SKIP_CLI=1' \
   || { echo "item skip_cli must export SKIP_CLI=1" >&2; echo "${out}" >&2; exit 1; }
-inv="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" max-inventory)"
+inv="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" max-inventory)"
 if [[ "${inv}" != "3" ]]; then
   echo "max-inventory for topologies 3 must be 3, got ${inv}" >&2
   exit 1
