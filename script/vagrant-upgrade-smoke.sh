@@ -49,6 +49,7 @@
 # Usage (from repo root):
 #   script/vagrant-upgrade-smoke.sh
 #   script/vagrant-smoke.sh --list
+#   script/vagrant-smoke.sh --item quick
 #   script/vagrant-smoke.sh --item singleton
 #   script/vagrant-smoke.sh --item ha,add-node
 #   script/vagrant-smoke.sh --matrix ./smoke-matrix.yaml
@@ -59,6 +60,9 @@
 #   SMOKE_MATRIX                path to a different matrix file
 #   SMOKE_MATRIX_ITEM           same as --item (comma-separated ids)
 #   --item ID                   run that item even if it is disabled
+#   --item minio               1-node S3-compatible blobstore (MinIO sidecar)
+#                               + mysql plugin backup/restore. Disabled in the
+#                               example matrix (extra RAM). --item still runs it.
 #   --list                      print items and exit (no VMs)
 #
 # Environment:
@@ -113,6 +117,11 @@
 #   SKIP_CLI=1           Skip live flynn / flynn-host CLI function steps
 #                        and the persistent-volume write/read/delete probe
 #   SKIP_VOLUME=1        Skip only the persistent-volume probe (CLI still runs)
+#   SKIP_BUILDPACK=1     Skip the custom .buildpacks git-push app
+#   SMOKE_DATASTORES     Space-separated resource providers to attach and
+#                        verify (default: postgres mysql mongodb redis kafka
+#                        clickhouse). Matrix field: datastores.
+#   WAIT_FOR_INTERVAL    Seconds between wait_for polls [default: 2]
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
 #                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
 #                        1 = singleton; N>=3 = HA; 2 is invalid (Flynn).
@@ -156,6 +165,9 @@
 #                        Kafka/npm rebuilds). Kafka’s Apache dist is vendored
 #                        in flynn-plugin-kafka/img (split tarball parts).
 #   SKIP_PLUGIN_INSTALL=1  Assume plugins are already installed
+#   SMOKE_BLOBSTORE_BACKEND  Set to minio to point blobstore at an S3-compatible
+#                        MinIO sidecar on node1 (survives Flynn --clean). Used
+#                        by matrix item minio.
 #   SMOKE_FIREWALL_PORT  High TCP port for the post-bootstrap UFW
 #                        expose/unexpose probe [default: 27183]
 #
@@ -319,6 +331,8 @@ SKIP_UPGRADE="${SKIP_UPGRADE:-0}"
 SKIP_BACKUP="${SKIP_BACKUP:-0}"
 SKIP_CLI="${SKIP_CLI:-0}"
 SKIP_VOLUME="${SKIP_VOLUME:-0}"
+SKIP_BUILDPACK="${SKIP_BUILDPACK:-0}"
+WAIT_FOR_INTERVAL="${WAIT_FOR_INTERVAL:-2}"
 if [[ -n "${SMOKE_TOPOLOGIES:-}" ]]; then
   :
 elif [[ -n "${CLUSTER_SIZE:-}" ]]; then
@@ -332,12 +346,85 @@ SMOKE_BLOB_COUNT="${SMOKE_BLOB_COUNT:-100}"
 SMOKE_DETAIL="${SMOKE_DETAIL:-0}"
 RESUME_AT="${RESUME_AT:-}"
 SHARED_LOG_DIRS=(builder)
-DATASTORE_PROVIDERS=(postgres mysql mongodb redis kafka clickhouse)
+SMOKE_DATASTORES="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
+DATASTORE_PROVIDERS=()
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
 PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-6}"
+SMOKE_BLOBSTORE_BACKEND="${SMOKE_BLOBSTORE_BACKEND:-}"
+SMOKE_MINIO_STARTED=0
+SMOKE_MINIO_PORT="${SMOKE_MINIO_PORT:-19000}"
+SMOKE_MINIO_ACCESS_KEY="${SMOKE_MINIO_ACCESS_KEY:-AKIAIOSFODNN7EXAMPLE}"
+SMOKE_MINIO_SECRET_KEY="${SMOKE_MINIO_SECRET_KEY:-wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY}"
+SMOKE_MINIO_BUCKET="${SMOKE_MINIO_BUCKET:-flynnblobstore}"
+
+sync_datastore_providers() {
+  local raw="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
+  # shellcheck disable=SC2206
+  DATASTORE_PROVIDERS=(${raw})
+  if [[ ${#DATASTORE_PROVIDERS[@]} -eq 0 ]]; then
+    echo "SMOKE_DATASTORES is empty (need at least postgres)" >&2
+    return 1
+  fi
+}
+
+datastore_wanted() {
+  local name=$1
+  local p
+  for p in "${DATASTORE_PROVIDERS[@]}"; do
+    if [[ "${p}" == "${name}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+selected_wait_services() {
+  local mode=${1:-0}
+  datastore_wanted postgres && echo postgres
+  datastore_wanted mysql && echo mariadb
+  datastore_wanted mongodb && echo mongodb
+  datastore_wanted redis && echo redis
+  case "${mode}" in
+    1)
+      datastore_wanted kafka && echo kafka
+      datastore_wanted clickhouse && echo clickhouse-ping
+      ;;
+    2)
+      datastore_wanted kafka && echo kafka
+      datastore_wanted clickhouse && echo clickhouse
+      ;;
+  esac
+}
+
+wait_selected_datastores_ready() {
+  local suffix=$1
+  local mode=${2:-0}
+  local services=() svc
+  while read -r svc; do
+    [[ -n "${svc}" ]] && services+=("${svc}")
+  done < <(selected_wait_services "${mode}")
+  if [[ ${#services[@]} -eq 0 ]]; then
+    return 0
+  fi
+  wait_datastores_ready "${suffix}" "${services[@]}"
+}
+
+wait_selected_sirenia_ha() {
+  local suffix=$1
+  local args=()
+  datastore_wanted postgres && args+=(postgres)
+  datastore_wanted mysql && args+=(mariadb)
+  datastore_wanted mongodb && args+=(mongodb)
+  if [[ ${#args[@]} -eq 0 ]]; then
+    return 0
+  fi
+  wait_sirenia_ha_if_cluster "${suffix}" "${args[@]}"
+}
+
+sync_datastore_providers
 # Host-side packages that compile without Linux netlink/ZFS. Run before Vagrant
 # so a broken CLI/datastore change cannot burn a 3-node cluster boot.
 SMOKE_UNIT_PACKAGES=(
@@ -391,6 +478,7 @@ cleanup() {
   smoke_stop_detail_tail
   smoke_restore_tty
   ui_session_end 2>/dev/null || true
+  stop_minio_sidecar 2>/dev/null || true
   rm -rf "${WORK_DIR}"
 }
 trap cleanup EXIT
@@ -1135,7 +1223,7 @@ wait_for() {
       echo "timed out waiting for ${desc} after ${timeout}s" >&2
       return 1
     fi
-    sleep 5
+    sleep "${WAIT_FOR_INTERVAL}"
   done
 }
 
@@ -1481,8 +1569,15 @@ EOF
       return 1
     fi
   done
-  # Allow remote subnet routes / FDB entries to settle, then require reachability.
-  sleep 20
+  # Poll overlay reachability instead of a fixed sleep so singleton/quick
+  # continues as soon as FDB/routes are up (still bounded by 20s).
+  local settle_deadline=$(( $(date +%s) + 20 ))
+  while (( $(date +%s) < settle_deadline )); do
+    if overlay_peers_reachable >/dev/null 2>&1; then
+      break
+    fi
+    sleep "${WAIT_FOR_INTERVAL}"
+  done
   for node in "${NODES[@]}"; do
     if ! node_root_script "${node}" <<'EOF' >/dev/null 2>&1
 set -euo pipefail
@@ -3248,6 +3343,151 @@ probe_delegated_plugin_cli_visible() {
     flynn1 help "${name}" || return 1
 }
 
+smoke_minio_wanted() {
+  [[ "${SMOKE_BLOBSTORE_BACKEND:-}" == "minio" ]]
+}
+
+smoke_minio_endpoint() {
+  echo "$(cluster_node_ip 1):${SMOKE_MINIO_PORT}"
+}
+
+stop_minio_sidecar() {
+  if [[ "${SMOKE_MINIO_STARTED}" != "1" ]]; then
+    return 0
+  fi
+  if [[ "${KEEP_MINIO:-0}" == "1" ]]; then
+    info "KEEP_MINIO=1: leaving flynn-smoke-minio on node1"
+    return 0
+  fi
+  node_root_script node1 <<'EOF' || true
+set -euo pipefail
+systemctl stop flynn-smoke-minio 2>/dev/null || true
+systemctl disable flynn-smoke-minio 2>/dev/null || true
+rm -f /etc/systemd/system/flynn-smoke-minio.service
+systemctl daemon-reload 2>/dev/null || true
+EOF
+  SMOKE_MINIO_STARTED=0
+}
+
+# MinIO lives on node1 as a systemd unit outside Flynn so --clean restore
+# does not wipe objects. Blobstore jobs reach it on the host-only IP.
+start_minio_sidecar() {
+  local port="${SMOKE_MINIO_PORT}"
+  local key="${SMOKE_MINIO_ACCESS_KEY}"
+  local secret="${SMOKE_MINIO_SECRET_KEY}"
+  info "starting MinIO sidecar on node1 :${port}"
+  node_root_script node1 <<EOF
+set -euo pipefail
+port="${port}"
+key="${key}"
+secret="${secret}"
+bin=/opt/flynn-smoke/minio
+data=/opt/flynn-smoke/data
+mkdir -p "\${data}" "\$(dirname "\${bin}")"
+if [[ ! -x "\${bin}" ]]; then
+  arch="\$(uname -m)"
+  case "\${arch}" in
+    x86_64) minio_arch=amd64; sha=7c5bd8512c6e966455b1d198209358b2d191c77a83ab377c4073281065fb855f ;;
+    aarch64|arm64) minio_arch=arm64; sha=5c83cd2cf151717ba0243f73e1c7802ff36e272b67144bdd7f1f7d684fd6f03d ;;
+    *) echo "unsupported node arch \${arch} for MinIO" >&2; exit 1 ;;
+  esac
+  ver="RELEASE.2025-09-07T16-13-09Z"
+  url="https://github.com/minio/minio/releases/download/\${ver}/minio.linux-\${minio_arch}.\${ver}"
+  tmp="\$(mktemp)"
+  curl -fsSL --retry 5 --retry-delay 3 -o "\${tmp}" "\${url}"
+  echo "\${sha}  \${tmp}" | sha256sum -c -
+  install -m 0755 "\${tmp}" "\${bin}"
+  rm -f "\${tmp}"
+fi
+cat > /etc/systemd/system/flynn-smoke-minio.service <<UNIT
+[Unit]
+Description=Flynn smoke MinIO (S3-compatible blobstore sidecar)
+After=network.target
+
+[Service]
+Type=simple
+Environment=MINIO_ROOT_USER=\${key}
+Environment=MINIO_ROOT_PASSWORD=\${secret}
+Environment=MINIO_ACCESS_KEY=\${key}
+Environment=MINIO_SECRET_KEY=\${secret}
+ExecStart=\${bin} server --address 0.0.0.0:\${port} \${data}
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now flynn-smoke-minio
+for i in \$(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:\${port}/minio/health/live" >/dev/null 2>&1; then
+    echo "minio sidecar healthy on :\${port}"
+    exit 0
+  fi
+  sleep 1
+done
+echo "minio sidecar failed to become healthy" >&2
+systemctl status flynn-smoke-minio --no-pager >&2 || true
+journalctl -u flynn-smoke-minio -n 40 --no-pager >&2 || true
+exit 1
+EOF
+  SMOKE_MINIO_STARTED=1
+}
+
+blobstore_default_backend_minio() {
+  node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 flynn-host blobstore:status" </dev/null | grep -q 'Default backend: minio'
+}
+
+verify_blobstore_minio_backend() {
+  local label=${1:-minio}
+  local out rc=0 count
+  ensure_flynn_cli_on_node1
+  node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host firewall:expose ${SMOKE_MINIO_PORT}" </dev/null || true
+  out="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 flynn-host blobstore:status" </dev/null)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] || ! echo "${out}" | grep -q 'Default backend: minio'; then
+    echo "blobstore DEFAULT_BACKEND is not minio (${label})" >&2
+    echo "${out}" >&2
+    return 1
+  fi
+  count="$(node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 flynn -a blobstore pg:psql -- -Atc \"SELECT count(*) FROM files WHERE backend = 'minio' AND deleted_at IS NULL\"" </dev/null)" || rc=$?
+  count="$(echo "${count}" | tr -d '[:space:]')"
+  if [[ "${rc}" -ne 0 ]]; then
+    echo "blobstore files query failed rc=${rc} (${label})" >&2
+    return 1
+  fi
+  if [[ ! "${count}" =~ ^[0-9]+$ ]] || [[ "${count}" -lt 1 ]]; then
+    echo "expected minio-backed files, got count=${count:-?} (${label})" >&2
+    return 1
+  fi
+  echo "blobstore minio backend ${label}: files=${count} endpoint=$(smoke_minio_endpoint)"
+  record_check "${label}" "blobstore-minio" "PASS" "files=${count}"
+}
+
+step_blobstore_minio() {
+  if ! smoke_minio_wanted; then
+    echo "SMOKE_BLOBSTORE_BACKEND=${SMOKE_BLOBSTORE_BACKEND:-} (not minio)"
+    return 0
+  fi
+  start_minio_sidecar
+  local port="${SMOKE_MINIO_PORT}"
+  node_ssh node1 "sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host firewall:expose ${port}" </dev/null
+  ensure_flynn_cli_on_node1
+  info "pointing blobstore at MinIO $(smoke_minio_endpoint)"
+  node_root_script node1 <<EOF
+set -euo pipefail
+export FLYNN_SKIP_UPDATE_CHECK=1
+flynn-host blobstore:set --backend=minio --name=minio --bucket=${SMOKE_MINIO_BUCKET} \
+  --endpoint=$(smoke_minio_endpoint) --insecure \
+  --access-key-id=${SMOKE_MINIO_ACCESS_KEY} --secret-access-key=${SMOKE_MINIO_SECRET_KEY} \
+  --migrate --delete
+EOF
+  if ! wait_for "blobstore DEFAULT_BACKEND=minio" 180 blobstore_default_backend_minio; then
+    echo "blobstore did not pick up DEFAULT_BACKEND=minio" >&2
+    return 1
+  fi
+  verify_blobstore_minio_backend "blobstore-minio"
+}
+
 step_install_plugins() {
   if [[ "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
     echo "SKIP_PLUGIN_INSTALL=1"
@@ -3741,8 +3981,25 @@ members="\$(tar -tf "${vm_path}")"
 printf '%s\n' "\${members}" | grep -F 'flynn.json' >/dev/null
 printf '%s\n' "\${members}" | grep -F 'plugins.json' >/dev/null
 printf '%s\n' "\${members}" | grep -F 'postgres.sql.gz' >/dev/null
+EOF
+  # Optional engine dumps follow selected SMOKE_DATASTORES (minio item is
+  # postgres+mysql only; full singleton/ha still require mysql+mongodb).
+  if datastore_wanted mysql; then
+    node_root_script node1 <<EOF
+set -euo pipefail
+members="\$(tar -tf "${vm_path}")"
 printf '%s\n' "\${members}" | grep -F 'mysql.sql.gz' >/dev/null
+EOF
+  fi
+  if datastore_wanted mongodb; then
+    node_root_script node1 <<EOF
+set -euo pipefail
+members="\$(tar -tf "${vm_path}")"
 printf '%s\n' "\${members}" | grep -F 'mongodb.archive.gz' >/dev/null
+EOF
+  fi
+  node_root_script node1 <<EOF
+set -euo pipefail
 cp -f "${vm_path}" "${restore_path}"
 test -s "${restore_path}"
 ls -lh "${vm_path}" "${restore_path}"
@@ -3769,11 +4026,11 @@ EOF
   # is reused (same upgrade-smoke.localflynn.com /etc/hosts entries).
   run_layer1_bootstrap --from-backup "${restore_path}"
   info "waiting for restored postgres/mariadb/mongodb/redis"
-  if ! wait_datastores_ready "after restore" postgres mariadb mongodb redis kafka clickhouse-ping; then
+  if ! wait_selected_datastores_ready "after restore" 1; then
     dump_overlay_diagnostics
     return 1
   fi
-  if ! wait_sirenia_ha_if_cluster "after restore" postgres mariadb mongodb; then
+  if ! wait_selected_sirenia_ha "after restore"; then
     dump_overlay_diagnostics
     return 1
   fi
@@ -3825,7 +4082,7 @@ EOF
     record_check "deploy" "${provider}" "PASS" "resource added"
   done
 
-  wait_datastores_ready "after resource add" postgres mariadb mongodb redis || return 1
+  wait_selected_datastores_ready "after resource add" 0 || return 1
   seed_datastores
   echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with ${DATASTORE_PROVIDERS[*]} (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
@@ -3960,13 +4217,21 @@ seed_datastores() {
   local rows="${SMOKE_SEED_ROWS}"
   local mysql_vals
   mysql_vals="$(smoke_sql_values "${rows}")"
+  local seed_postgres=0 seed_mysql=0 seed_mongodb=0 seed_redis=0 seed_kafka=0 seed_clickhouse=0
+  datastore_wanted postgres && seed_postgres=1
+  datastore_wanted mysql && seed_mysql=1
+  datastore_wanted mongodb && seed_mongodb=1
+  datastore_wanted redis && seed_redis=1
+  datastore_wanted kafka && seed_kafka=1
+  datastore_wanted clickhouse && seed_clickhouse=1
 
-  info "seeding ${rows} dummy rows/keys/payloads per datastore"
+  info "seeding ${rows} dummy rows/keys/payloads per datastore (${DATASTORE_PROVIDERS[*]})"
   node_root_script node1 <<EOF
 set -euo pipefail
 APP="${APP_NAME}"
 ROWS="${rows}"
 
+if [[ "${seed_postgres}" == "1" ]]; then
 flynn -a "\${APP}" pg:psql -- -v ON_ERROR_STOP=1 -c "
 CREATE TABLE IF NOT EXISTS smoke_probe (id serial PRIMARY KEY, data text);
 DELETE FROM smoke_probe;
@@ -3983,7 +4248,9 @@ echo "\${exts}" | grep -qx postgis
 echo "\${exts}" | grep -qx pgrouting
 echo "\${exts}" | grep -qx timescaledb
 echo "postgres extensions available: \${exts}"
+fi
 
+if [[ "${seed_mysql}" == "1" ]]; then
 flynn -a "\${APP}" mysql console -- -e "
 CREATE TABLE IF NOT EXISTS smoke_probe (id INT PRIMARY KEY, data TEXT);
 DELETE FROM smoke_probe;
@@ -3995,7 +4262,9 @@ CREATE TABLE IF NOT EXISTS smoke_payload (id INT PRIMARY KEY, payload TEXT);
 DELETE FROM smoke_payload;
 INSERT INTO smoke_payload (id, payload) SELECT id, REPEAT('A', 1024) FROM smoke_rows;
 "
+fi
 
+if [[ "${seed_mongodb}" == "1" ]]; then
 flynn -a "\${APP}" mongodb mongo -- --quiet --eval "
 db.smoke_probe.deleteMany({});
 db.smoke_probe.insertOne({id:1, data:'pre-upgrade'});
@@ -4005,14 +4274,18 @@ var blob = Array(257).join('A');
 for (var i=1; i<=\${ROWS}; i++) { docs.push({n:i, data:'dummy-'+i, blob:blob}); }
 db.smoke_rows.insertMany(docs);
 "
+fi
 
+if [[ "${seed_redis}" == "1" ]]; then
 flynn -a "\${APP}" redis redis-cli EVAL "
 local pad = string.rep('A', 128)
 for i=1,tonumber(ARGV[1]) do redis.call('SET', 'dummy:'..i, pad) end
 redis.call('SET', 'smoke_probe', 'pre-upgrade')
 return ARGV[1]
 " 0 "\${ROWS}"
+fi
 
+if [[ "${seed_kafka}" == "1" ]]; then
 # Topic metadata lives on the kafka /data volume; recreate is ok if a prior
 # failed run left the name behind.
 ok=0
@@ -4026,7 +4299,9 @@ for i in \$(seq 1 30); do
 done
 test "\$ok" = 1
 flynn -a "\${APP}" kafka topics | grep -q smoke_probe
+fi
 
+if [[ "${seed_clickhouse}" == "1" ]]; then
 ok=0
 for i in \$(seq 1 30); do
   # Local MergeTree on the leader (Keeper is often unreachable for ON CLUSTER
@@ -4093,6 +4368,7 @@ if failed:
     sys.exit(1)
 print("clickhouse seeded on %d replicas" % len(insts))
 PY
+fi
 echo "seed complete"
 EOF
   record_seed_counts
@@ -4142,6 +4418,10 @@ assert_buildpack_ps() {
 
 wait_and_assert_buildpack_app() {
   local label=$1
+  if [[ "${SKIP_BUILDPACK}" == "1" ]]; then
+    record_check "${label}" "buildpack-http" "SKIP" "SKIP_BUILDPACK=1"
+    return 0
+  fi
   wait_for "buildpack app HTTP ${label}" 180 probe_buildpack_http
   assert_buildpack_http "${label}"
   assert_buildpack_ps "${label}"
@@ -4254,17 +4534,17 @@ probe_app_http() {
 probe_app_status() {
   local body
   body="$(curl -sS --max-time 30 -H "Host: ${APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/status")" || return 1
-  MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" python3 -c '
+  MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="${DATASTORE_PROVIDERS[*]}" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
+need = os.environ.get("NEED_RESOURCES", "").split()
 try:
     d = json.loads(raw)
 except Exception:
     sys.exit(2)
 r = d.get("resources") or {}
-need = ["postgres", "mysql", "mongodb", "redis", "kafka", "clickhouse"]
-if any(not r.get(k) for k in need):
+if not need or any(not r.get(k) for k in need):
     sys.exit(1)
 if int(d.get("blob_count") or 0) < min_blobs:
     sys.exit(3)
@@ -4350,17 +4630,17 @@ assert_app_status() {
     echo "app-status (${label}) curl failed" >&2
     return 1
   }
-  parsed="$(MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" python3 -c '
+  parsed="$(MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="${DATASTORE_PROVIDERS[*]}" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
+need = os.environ.get("NEED_RESOURCES", "").split()
 try:
     d = json.loads(raw)
 except Exception as e:
     print("invalid json: %s raw=%r" % (e, raw[:240]))
     sys.exit(2)
 r = d.get("resources") or {}
-need = ["postgres", "mysql", "mongodb", "redis", "kafka", "clickhouse"]
 missing = [k for k in need if not r.get(k)]
 blobs = int(d.get("blob_count") or 0)
 parts = ["blobs=%d" % blobs] + ["%s=%s" % (k, int(bool(r.get(k)))) for k in need]
@@ -4387,6 +4667,7 @@ record_seed_counts() {
   local failed=0
   local count payload topics
 
+  if datastore_wanted postgres; then
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
   payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
@@ -4395,7 +4676,9 @@ record_seed_counts() {
     record_check "seed" "postgres" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
     failed=1
   fi
+  fi
 
+  if datastore_wanted mysql; then
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
   payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
@@ -4404,7 +4687,9 @@ record_seed_counts() {
     record_check "seed" "mysql" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
     failed=1
   fi
+  fi
 
+  if datastore_wanted mongodb; then
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "seed" "mongodb" "PASS" "docs=${count}"
@@ -4412,7 +4697,9 @@ record_seed_counts() {
     record_check "seed" "mongodb" "FAIL" "docs=${count:-?} want>=${rows}"
     failed=1
   fi
+  fi
 
+  if datastore_wanted redis; then
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
   if [[ -n "${count}" && "${count}" -ge $((rows + 1)) ]]; then
     record_check "seed" "redis" "PASS" "dbsize=${count}"
@@ -4420,7 +4707,9 @@ record_seed_counts() {
     record_check "seed" "redis" "FAIL" "dbsize=${count:-?} want>=$((rows + 1))"
     failed=1
   fi
+  fi
 
+  if datastore_wanted kafka; then
   if wait_for "kafka seed topic" 180 kafka_has_smoke_probe; then
     record_check "seed" "kafka" "PASS" "topic=smoke_probe"
   else
@@ -4428,7 +4717,9 @@ record_seed_counts() {
     record_check "seed" "kafka" "FAIL" "missing smoke_probe: ${topics}"
     failed=1
   fi
+  fi
 
+  if datastore_wanted clickhouse; then
   count="$(clickhouse_row_count)"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "seed" "clickhouse" "PASS" "rows=${count}"
@@ -4436,12 +4727,13 @@ record_seed_counts() {
     record_check "seed" "clickhouse" "FAIL" "rows=${count:-?} want>=${rows}"
     failed=1
   fi
+  fi
 
   if [[ "${failed}" -ne 0 ]]; then
     echo "seed count verification failed" >&2
     return 1
   fi
-  echo "seed verified: postgres/mysql/mongodb/redis/kafka/clickhouse rows>=${rows}"
+  echo "seed verified: ${DATASTORE_PROVIDERS[*]} rows>=${rows}"
 }
 
 # Require seeded dummy data (and any earlier verify-pass markers) to still be
@@ -4454,6 +4746,7 @@ assert_databases() {
   local failed=0
   local out count payload
 
+  if datastore_wanted postgres; then
   echo "db-check ${label}: postgres"
   out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
@@ -4465,7 +4758,9 @@ assert_databases() {
     echo "postgres (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted mysql; then
   echo "db-check ${label}: mysql"
   out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
@@ -4477,7 +4772,9 @@ assert_databases() {
     echo "mysql (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted mongodb; then
   echo "db-check ${label}: mongodb"
   out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
@@ -4488,7 +4785,9 @@ assert_databases() {
     echo "mongodb (${label}) failed: probe=${out} docs=${count}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted redis; then
   echo "db-check ${label}: redis"
   out="$(flynn1 -a "${APP_NAME}" redis redis-cli GET smoke_probe)"
   local aof
@@ -4501,7 +4800,9 @@ assert_databases() {
     echo "redis (${label}) failed: probe=${out} dbsize=${count}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted kafka; then
   echo "db-check ${label}: kafka"
   if wait_for "kafka topics ${label}" 180 kafka_has_smoke_probe; then
     record_check "${label}" "kafka" "PASS" "topic=smoke_probe"
@@ -4511,7 +4812,9 @@ assert_databases() {
     echo "kafka topic (${label}) missing smoke_probe: ${out}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted clickhouse; then
   echo "db-check ${label}: clickhouse"
   if wait_for "clickhouse rows ${label}" 180 clickhouse_seed_ready; then
     count="$(clickhouse_row_count)"
@@ -4522,9 +4825,11 @@ assert_databases() {
     echo "clickhouse row count (${label}) = ${count}, want >= ${rows}" >&2
     failed=1
   fi
+  fi
 
   # Previous upgrade-pass markers must survive the next --force update.
   if [[ "${label}" == "post-upgrade-2" ]]; then
+    if datastore_wanted postgres; then
     out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='post-upgrade-1'")"
     if echo "${out}" | grep -q 'post-upgrade-1'; then
       record_check "${label}" "pg-marker" "PASS" "post-upgrade-1 still present"
@@ -4533,6 +4838,8 @@ assert_databases() {
       echo "postgres lost post-upgrade-1 marker before pass 2: ${out}" >&2
       failed=1
     fi
+    fi
+    if datastore_wanted redis; then
     out="$(flynn1 -a "${APP_NAME}" redis redis-cli GET smoke_probe_post-upgrade-1)"
     if echo "${out}" | grep -q 1; then
       record_check "${label}" "redis-marker" "PASS" "smoke_probe_post-upgrade-1=1"
@@ -4540,6 +4847,7 @@ assert_databases() {
       record_check "${label}" "redis-marker" "FAIL" "lost key: ${out}"
       echo "redis lost smoke_probe_post-upgrade-1: ${out}" >&2
       failed=1
+    fi
     fi
   fi
 
@@ -4549,15 +4857,25 @@ assert_databases() {
   fi
 
   echo "db-check ${label}: writing persistence markers"
-  flynn1 -a "${APP_NAME}" pg:psql -- -c "INSERT INTO smoke_probe (data) VALUES ('${label}');" >/dev/null
-  flynn1 -a "${APP_NAME}" mysql console -- -e "INSERT INTO smoke_probe (id, data) VALUES ($((RANDOM % 100000 + 2)), '${label}');" >/dev/null
-  flynn1 -a "${APP_NAME}" mongodb mongo -- --eval "db.smoke_probe.insertOne({data:'${label}'});" >/dev/null
-  flynn1 -a "${APP_NAME}" redis redis-cli SET "smoke_probe_${label}" 1 >/dev/null
+  if datastore_wanted postgres; then
+    flynn1 -a "${APP_NAME}" pg:psql -- -c "INSERT INTO smoke_probe (data) VALUES ('${label}');" >/dev/null
+  fi
+  if datastore_wanted mysql; then
+    flynn1 -a "${APP_NAME}" mysql console -- -e "INSERT INTO smoke_probe (id, data) VALUES ($((RANDOM % 100000 + 2)), '${label}');" >/dev/null
+  fi
+  if datastore_wanted mongodb; then
+    flynn1 -a "${APP_NAME}" mongodb mongo -- --eval "db.smoke_probe.insertOne({data:'${label}'});" >/dev/null
+  fi
+  if datastore_wanted redis; then
+    flynn1 -a "${APP_NAME}" redis redis-cli SET "smoke_probe_${label}" 1 >/dev/null
+  fi
+  if datastore_wanted clickhouse; then
   # INSERT SELECT, not VALUES: clickhouse-client treats VALUES as "read more
   # rows from stdin" and never exits while flynn run keeps stdin open.
   flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT toUInt32(100000 + ${RANDOM}), '${label}'" >/dev/null || true
+  fi
 
-  echo "databases ${label}: postgres/mysql/mongodb/redis/kafka/clickhouse PASS (rows>=${rows})"
+  echo "databases ${label}: ${DATASTORE_PROVIDERS[*]} PASS (rows>=${rows})"
 }
 
 # Cluster backup dumps postgres (incl. blobstore + app DBs), MariaDB, and
@@ -4569,6 +4887,7 @@ assert_restored_datastores() {
   local failed=0
   local out count payload marker
 
+  if datastore_wanted postgres; then
   echo "db-check ${label}: postgres"
   out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
@@ -4580,7 +4899,9 @@ assert_restored_datastores() {
     echo "postgres (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted mysql; then
   echo "db-check ${label}: mysql"
   out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
@@ -4592,7 +4913,9 @@ assert_restored_datastores() {
     echo "mysql (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted mongodb; then
   echo "db-check ${label}: mongodb"
   out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
   count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
@@ -4603,8 +4926,9 @@ assert_restored_datastores() {
     echo "mongodb (${label}) failed: probe=${out} docs=${count}" >&2
     failed=1
   fi
+  fi
 
-  if [[ "${SKIP_UPGRADE}" != "1" ]]; then
+  if [[ "${SKIP_UPGRADE}" != "1" ]] && datastore_wanted postgres; then
     local pass
     for pass in $(seq 1 "${UPGRADE_PASSES}"); do
       marker="post-upgrade-${pass}"
@@ -4620,6 +4944,7 @@ assert_restored_datastores() {
     done
   fi
 
+  if datastore_wanted redis; then
   echo "db-check ${label}: redis (volume data not in cluster backup)"
   out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
   if echo "${out}" | grep -qi PONG; then
@@ -4629,7 +4954,9 @@ assert_restored_datastores() {
     echo "redis (${label}) PING failed: ${out}" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted kafka; then
   echo "db-check ${label}: kafka (volume data not in cluster backup)"
   if wait_for "kafka topics ${label}" 180 kafka_is_ready; then
     record_check "${label}" "kafka" "PASS" "topics CLI (topic data not in cluster backup)"
@@ -4638,7 +4965,9 @@ assert_restored_datastores() {
     echo "kafka (${label}) topics CLI failed" >&2
     failed=1
   fi
+  fi
 
+  if datastore_wanted clickhouse; then
   echo "db-check ${label}: clickhouse (volume data not in cluster backup)"
   if clickhouse_ping; then
     record_check "${label}" "clickhouse" "PASS" "SELECT 1 (rows not in cluster backup)"
@@ -4646,6 +4975,7 @@ assert_restored_datastores() {
     record_check "${label}" "clickhouse" "FAIL" "SELECT 1 failed"
     echo "clickhouse (${label}) SELECT 1 failed" >&2
     failed=1
+  fi
   fi
 
   if [[ "${failed}" -ne 0 ]]; then
@@ -5342,7 +5672,7 @@ step_verify_before() {
   wait_and_assert_buildpack_app pre-upgrade
   wait_and_assert_docker_apps pre-upgrade
   assert_databases pre-upgrade
-  wait_sirenia_ha_if_cluster "before upgrade" postgres mariadb mongodb || return 1
+  wait_selected_sirenia_ha "before upgrade" || return 1
 }
 
 step_upgrade() {
@@ -5361,7 +5691,7 @@ EOF
   for node in "${NODES[@]}"; do
     overlay_flynn_host_on_node "${node}"
   done
-  wait_datastores_ready "after upgrade ${pass}" postgres mariadb mongodb redis || return 1
+  wait_selected_datastores_ready "after upgrade ${pass}" 0 || return 1
   echo "local tarball update pass ${pass} complete"
 }
 
@@ -5400,14 +5730,16 @@ step_membership_deploy() {
   local label=$1
   ensure_flynn_cli_on_node1
   ensure_docker_cli_on_node1
-  info "membership deploy (${label}): git-push ${APP_NAME} + ${BUILDPACK_APP_NAME} + ${DOCKER_APP_NAME} + flynn docker push"
+  info "membership deploy (${label}): git-push ${APP_NAME} + ${DOCKER_APP_NAME} + flynn docker push"
   node_root_script node1 <<EOF
 set -euo pipefail
 slug="/tmp/${APP_NAME}"
 buildpack="/tmp/${BUILDPACK_APP_NAME}"
 docker_git="/tmp/${DOCKER_APP_NAME}"
 test -d "\${slug}/.git" || { echo "slug app git dir missing; deploy step must run first" >&2; exit 1; }
-test -d "\${buildpack}/.git" || { echo "buildpack app git dir missing; deploy step must run first" >&2; exit 1; }
+if [[ "${SKIP_BUILDPACK}" != "1" ]]; then
+  test -d "\${buildpack}/.git" || { echo "buildpack app git dir missing; deploy step must run first" >&2; exit 1; }
+fi
 test -d "\${docker_git}/.git" || { echo "docker app git dir missing; deploy step must run first" >&2; exit 1; }
 push_git() {
   local dir=\$1
@@ -5425,10 +5757,14 @@ push_git() {
   test "\$ok" = 1
 }
 push_git "\${slug}"
-push_git "\${buildpack}"
+if [[ "${SKIP_BUILDPACK}" != "1" ]]; then
+  push_git "\${buildpack}"
+fi
 push_git "\${docker_git}"
 flynn -a "${APP_NAME}" ps
-flynn -a "${BUILDPACK_APP_NAME}" ps
+if [[ "${SKIP_BUILDPACK}" != "1" ]]; then
+  flynn -a "${BUILDPACK_APP_NAME}" ps
+fi
 flynn -a "${DOCKER_APP_NAME}" ps
 EOF
   smoke_docker_push_image 0
@@ -5442,7 +5778,7 @@ EOF
 
 step_verify_membership() {
   local label=$1
-  wait_datastores_ready "${label}" postgres mariadb mongodb redis clickhouse || return 1
+  wait_selected_datastores_ready "${label}" 2 || return 1
   wait_for "app HTTP ${label}" 180 probe_app_http
   assert_app_http "${label}"
   wait_for "app /status ${label}" 120 probe_app_status
@@ -6292,6 +6628,7 @@ run_one_topology() {
   local idx=$2
   local is_last=$3
   local pass
+  sync_datastore_providers || return 1
   apply_topology_spec "${size}"
   info "topology ${TOPOLOGY_LABEL} ($((idx + 1))/${#TOPOLOGIES[@]}): nodes=${NODES[*]} peer-ips=${PEER_IPS} min-hosts=${MIN_HOSTS} action=${TOPOLOGY_ACTION:-none}"
   clear_cluster_shared_logs
@@ -6350,6 +6687,12 @@ run_one_topology() {
     run_step "Install plugins (${TOPOLOGY_LABEL})" step_install_plugins
   fi
 
+  if smoke_minio_wanted; then
+    run_step "MinIO blobstore backend (${TOPOLOGY_LABEL})" step_blobstore_minio
+  else
+    record "MinIO blobstore backend (${TOPOLOGY_LABEL})" "SKIP" 0 "SMOKE_BLOBSTORE_BACKEND=${SMOKE_BLOBSTORE_BACKEND:-postgres}"
+  fi
+
   if [[ "${TOPOLOGY_ACTION}" == "discovery" ]]; then
     if [[ "${RESUME_AT}" == "backup" || "${RESUME_AT}" == "restore" || "${SKIP_PLUGIN_INSTALL}" == "1" ]]; then
       record "Join nodes via local discovery (${TOPOLOGY_LABEL})" "SKIP" 0 "resume/plugins already installed"
@@ -6370,7 +6713,11 @@ run_one_topology() {
     record "Deploy docker-push app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
   else
     run_step "Deploy app + DB resources (${TOPOLOGY_LABEL})" step_deploy_app
-    run_step "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" step_deploy_buildpack_app
+    if [[ "${SKIP_BUILDPACK}" == "1" ]]; then
+      record "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_BUILDPACK=1"
+    else
+      run_step "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" step_deploy_buildpack_app
+    fi
     run_step "Deploy Dockerfile app (${TOPOLOGY_LABEL})" step_deploy_docker_app
     run_step "Deploy docker-push app (${TOPOLOGY_LABEL})" step_deploy_docker_push_app
   fi
@@ -6468,6 +6815,11 @@ run_one_topology() {
     run_step "Init layer-0 for restore (${TOPOLOGY_LABEL})" step_init_cluster
     run_step "Bootstrap from backup (${TOPOLOGY_LABEL})" step_bootstrap_from_backup
     run_step "Verify app/DBs after restore (${TOPOLOGY_LABEL})" step_verify_after_restore
+    if smoke_minio_wanted; then
+      run_step "Verify MinIO blobstore after restore (${TOPOLOGY_LABEL})" verify_blobstore_minio_backend post-restore
+    else
+      record "Verify MinIO blobstore after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SMOKE_BLOBSTORE_BACKEND=${SMOKE_BLOBSTORE_BACKEND:-postgres}"
+    fi
     record "CLI functions after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "one CLI sweep per topology"
     if [[ "${SKIP_CLI}" == "1" ]]; then
       record "Persistent volume after restore (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_CLI=1"
@@ -6654,7 +7006,9 @@ main() {
       else
         eval "$(python3 "${SMOKE_MATRIX_PY}" --root "${ROOT}" --item "${item_id}" apply-item)"
       fi
-      info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES}"
+      sync_datastore_providers || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid SMOKE_DATASTORES=${SMOKE_DATASTORES}"
+      PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
+      info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES} datastores=${DATASTORE_PROVIDERS[*]}"
       parse_smoke_topologies || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid topologies=${SMOKE_TOPOLOGIES}"
       if [[ "${item_is_last}" != "1" ]]; then
         saved_keep_vms="${KEEP_VMS}"

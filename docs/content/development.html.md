@@ -310,21 +310,28 @@ nested containers/KVM and is much slower than `make test-unit`. Details:
 This is the cluster acceptance suite used for upgrades, datastores, Docker
 deploys, overlay isolation, and node join/drain, and it is the gate before every
 release: it needs real VMs, so it cannot run in GitHub Actions. Run it from the
-**repo root on the laptop** (it drives Vagrant):
+**repo root on the laptop** (it drives Vagrant).
+
+For most day-to-day changes, use the **quick** matrix row (about half the time
+of a full 1-node upgrade smoke): one node, git-push + docker-push + postgres,
+no plugin install, no custom buildpack, no CLI/volume sweep, no upgrade, no
+backup. Keep `singleton` and `ha` for upgrade/HA/plugin work and as the
+pre-release gate.
 
 ```
-$ script/vagrant-smoke.sh
+$ script/vagrant-smoke.sh --item quick
 ```
 
 Configurations live in a matrix document, not a pile of environment variables:
 
-- `smoke-matrix.example.yaml` — committed catalog of layouts (singleton, HA,
+- `smoke-matrix.example.yaml` — committed catalog of layouts (quick, singleton, HA,
   add-node, remove-node, discovery, install-only)
 - `smoke-matrix.yaml` — gitignored local copy; used when present
   (`cp smoke-matrix.example.yaml smoke-matrix.yaml`)
 
 ```
 $ script/vagrant-smoke.sh --list
+$ script/vagrant-smoke.sh --item quick
 $ script/vagrant-smoke.sh --item singleton
 $ script/vagrant-smoke.sh --item ha,add-node
 $ SKIP_BUILD=1 script/vagrant-smoke.sh --item install-only
@@ -380,6 +387,8 @@ set in the environment):
 
 | Variable / flag | Meaning |
 | --- | --- |
+| `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push + postgres |
+| `--item minio` | 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore. Extra RAM; disabled in the example matrix. |
 | `--item singleton` | Run one matrix row (even if `enabled: false`) |
 | `--list` | Print matrix items and exit |
 | `--matrix PATH` / `SMOKE_MATRIX` | Use a different matrix file |
@@ -389,6 +398,9 @@ set in the environment):
 | `SKIP_UPGRADE=1` | Install and verify only |
 | `SKIP_BACKUP=1` | Skip cluster backup + `--from-backup` restore |
 | `SKIP_CLI=1` | Skip live CLI probes |
+| `SKIP_BUILDPACK=1` | Skip the custom `.buildpacks` git-push app |
+| `SMOKE_DATASTORES` | Space-separated providers to attach (default: all six) |
+| `SMOKE_BLOBSTORE_BACKEND=minio` | Point blobstore at a MinIO sidecar on node1 (`--item minio`) |
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |

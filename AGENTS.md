@@ -22,7 +22,7 @@ When you change behavior, **do not ship code alone**. In the same change (or an 
    - Unit: `make test-unit` / `go test` next to the code
    - Shell helpers: `bats script/test` or `script/test-*.sh`
    - Smoke driver contracts: `script/test-vagrant-smoke-*.sh` if you change `script/vagrant-upgrade-smoke.sh`
-   - Cluster / overlay / datastores / dockerbuilder / upgrades / membership / backup-restore: `script/vagrant-smoke.sh` (entrypoint over `script/vagrant-upgrade-smoke.sh`; narrow with `--item` or `SMOKE_TOPOLOGIES` if needed)
+   - Cluster / overlay / datastores / dockerbuilder / upgrades / membership / backup-restore: `script/vagrant-smoke.sh` (entrypoint over `script/vagrant-upgrade-smoke.sh`; `--item quick` for the contributor path, `--item minio` for S3-compatible blobstore, `singleton`/`ha` for the release gate)
    - Full-stack Go: `script/run-integration-tests` for `test/` suites
 4. **Do not leave docs describing removed or replaced behavior** (old Ubuntu, old DB versions, `dl.flynn.io`, tup, upstart, HHVM, Python 2, godep as the default, website `/docs/...` URLs, the `develop` branch, DCO sign-off, space-form command aliases as the documented spelling).
 

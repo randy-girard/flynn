@@ -31,7 +31,7 @@ You need a GitHub account. See GitHub's docs on [forking](https://docs.github.co
 
 1. Create a feature branch off `main`.
 1. [Rebase](https://git-scm.com/book/en/v2/Git-Branching-Rebasing) onto current `main`.
-1. Run `make test-unit` (and integration or `script/vagrant-smoke.sh` when the change needs a cluster).
+1. Run `make test-unit` (and `script/vagrant-smoke.sh --item quick` when the change needs a cluster; `singleton`/`ha` before a release).
 1. Run `gofmt -s` (or `make install-git-hooks` so pre-commit / pre-push run `validate-gofmt`).
 1. Use a Conventional Commit subject on every commit (`<type>(<scope>): <summary>`); no DCO sign-off.
 

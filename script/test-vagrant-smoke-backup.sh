@@ -73,12 +73,16 @@ need 'step_verify_after_restore' \
   "smoke must re-verify apps and datastores after restore"
 need 'assert_restored_datastores' \
   "restore verify must not reuse assert_databases (redis/kafka/clickhouse data is not in the backup)"
-need 'wait_datastores_ready "after restore" postgres mariadb mongodb redis kafka clickhouse-ping' \
-  "after restore, wait for SQL appliances plus empty redis/kafka/clickhouse engines"
+need 'wait_selected_datastores_ready "after restore"' \
+  "after restore, wait for the selected SQL appliances plus empty redis/kafka/clickhouse engines"
 need 'mysql.sql.gz' \
-  "cluster backup must include the MariaDB dump (smoke always provisions mysql)"
+  "cluster backup must include the MariaDB dump when mysql is selected"
 need 'mongodb.archive.gz' \
-  "cluster backup must include the MongoDB dump (smoke always provisions mongodb)"
+  "cluster backup must include the MongoDB dump when mongodb is selected"
+need 'datastore_wanted mysql' \
+  "mysql.sql.gz must be required only when mysql is in SMOKE_DATASTORES"
+need 'datastore_wanted mongodb' \
+  "mongodb.archive.gz must be required only when mongodb is in SMOKE_DATASTORES"
 need 'postgres.sql.gz' \
   "cluster backup must include postgres.sql.gz"
 need 'flynn.json' \
@@ -107,7 +111,7 @@ if ! grep -qF '\${mp}' "${smoke}"; then
 fi
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
-need 'wait_sirenia_ha_if_cluster "after restore"' \
+need 'wait_selected_sirenia_ha "after restore"' \
   "HA restore (including discovery 1→3) must wait for sirenia replica sets after --from-backup"
 
 if grep -q 'discovery grows a singleton' "${smoke}"; then

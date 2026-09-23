@@ -55,11 +55,14 @@ ITEM_FIELDS = {
     "skip_cli": "SKIP_CLI",
     "skip_volume": "SKIP_VOLUME",
     "skip_plugin_install": "SKIP_PLUGIN_INSTALL",
+    "skip_buildpack": "SKIP_BUILDPACK",
     "resume_at": "RESUME_AT",
     "upgrade_passes": "UPGRADE_PASSES",
     "seed_rows": "SMOKE_SEED_ROWS",
     "blob_count": "SMOKE_BLOB_COUNT",
     "plugins": "PLUGIN_SMOKE_APPS",
+    "datastores": "SMOKE_DATASTORES",
+    "blobstore_backend": "SMOKE_BLOBSTORE_BACKEND",
 }
 
 FIELD_TO_ENV = {**RUN_FIELDS, **ITEM_FIELDS}
@@ -189,6 +192,8 @@ def _parse_list(lines: list[tuple[int, str]], idx: int, indent: int) -> tuple[li
 
 
 def _parse_scalar(s: str) -> Any:
+    if s == "[]":
+        return []
     if s == "" or s in ("null", "~"):
         return None
     if s in ("true", "True", "yes", "YES"):
@@ -296,7 +301,7 @@ def _env_value(field: str, value: Any) -> str:
         if isinstance(value, list):
             return ",".join(str(x) for x in value)
         return str(value).replace(" ", "")
-    if field == "plugins":
+    if field in ("plugins", "datastores"):
         if isinstance(value, list):
             return " ".join(str(x) for x in value)
         return str(value).strip()
@@ -468,7 +473,18 @@ def cmd_apply_run(args: argparse.Namespace) -> int:
     matrix = load_matrix(path)
     expl = explicit_env()
     defaults = matrix.get("defaults") or {}
-    lines = assignments(RUN_FIELDS, defaults, expl)
+    run_values = dict(defaults)
+    fields = dict(RUN_FIELDS)
+    items = select_items(matrix, _wanted(args))
+    # Plugin images are built once before the item loop. If every selected
+    # row skips install, skip that whole-run rebuild too (quick smoke).
+    if items and all(
+        _as_bool(merge_item(matrix, it).get("skip_plugin_install", False))
+        for it in items
+    ):
+        run_values["skip_plugin_install"] = True
+        fields["skip_plugin_install"] = "SKIP_PLUGIN_INSTALL"
+    lines = assignments(fields, run_values, expl)
     lines.append(f"SMOKE_MATRIX_FILE={shlex.quote(path)}")
     sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
     return 0

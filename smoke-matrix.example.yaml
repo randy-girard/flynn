@@ -9,6 +9,7 @@
 #
 #   script/vagrant-smoke.sh                  # every enabled item
 #   script/vagrant-smoke.sh --list           # show ids without booting VMs
+#   script/vagrant-smoke.sh --item quick     # contributor default (boot + git/docker + postgres)
 #   script/vagrant-smoke.sh --item singleton # one item (runs even if disabled)
 #   script/vagrant-smoke.sh --item ha,add-node
 #
@@ -29,6 +30,7 @@ defaults:
   skip_cli: false
   skip_volume: false
   skip_plugin_install: false
+  skip_buildpack: false
   upgrade_passes: 2
   seed_rows: 200
   blob_count: 100
@@ -73,4 +75,37 @@ items:
     topologies: "1"
     skip_upgrade: true
     skip_backup: true
+    enabled: false
+
+  - id: quick
+    description: contributor smoke — 1-node boot, git-push, docker-push, postgres (no upgrade/backup/plugins)
+    topologies: "1"
+    skip_upgrade: true
+    skip_backup: true
+    skip_cli: true
+    skip_volume: true
+    skip_plugin_install: true
+    skip_buildpack: true
+    seed_rows: 20
+    blob_count: 10
+    plugins: []
+    datastores:
+      - postgres
+    enabled: false
+
+  - id: minio
+    description: 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore
+    topologies: "1"
+    skip_upgrade: true
+    skip_cli: true
+    skip_volume: true
+    skip_buildpack: true
+    seed_rows: 20
+    blob_count: 10
+    plugins:
+      - mysql
+    datastores:
+      - postgres
+      - mysql
+    blobstore_backend: minio
     enabled: false

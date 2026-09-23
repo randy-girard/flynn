@@ -231,10 +231,10 @@ need '.flynn-module-id' \
   "plugin dist must be rebuilt when Flynn compile inputs or the plugin checkout change"
 need 'dump_plugin_install_diagnostics' \
   "plugin install failure must dump flynn-host job/squashfs logs, not only the scale timeout"
-need 'wait_datastores_ready "after resource add" postgres mariadb mongodb redis' \
-  "after provisioning, smoke must wait for every scaled sirenia appliance plus redis"
-need 'wait_datastores_ready "after upgrade' \
-  "after each --force update, smoke must wait for postgres/mariadb/mongodb/redis"
+need 'wait_selected_datastores_ready "after resource add"' \
+  "after provisioning, smoke must wait for the selected datastore engines"
+need 'wait_selected_datastores_ready "after upgrade' \
+  "after each --force update, smoke must wait for the selected datastore engines"
 need 'record_check' \
   "smoke must record per-engine results for the final report"
 need 'print_datastore_report' \

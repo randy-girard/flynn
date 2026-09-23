@@ -13,6 +13,8 @@
 #
 #   script/vagrant-smoke.sh                    # enabled items in smoke-matrix.yaml
 #   script/vagrant-smoke.sh --list             # show matrix items (no VMs)
+#   script/vagrant-smoke.sh --item quick       # contributor default (boot + git/docker + postgres)
+#   script/vagrant-smoke.sh --item minio       # S3-compatible blobstore (MinIO) + mysql backup
 #   script/vagrant-smoke.sh --item singleton   # one named configuration
 #   SMOKE_TOPOLOGIES=3 script/vagrant-smoke.sh # env still overrides topologies
 #   SKIP_BUILD=1 script/vagrant-smoke.sh       # reuse the last tarball

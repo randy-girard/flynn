@@ -56,7 +56,7 @@ need "${smoke}" 'still singleton in discoverd meta' \
   "sirenia HA wait must reject frozen singleton state with unassigned extras"
 need "${smoke}" 'after discovery join' \
   "smoke must wait for postgres HA immediately after discovery join"
-need "${smoke}" 'wait_sirenia_ha_if_cluster "after restore"' \
+need "${smoke}" 'wait_selected_sirenia_ha "after restore"' \
   "discovery --from-backup must wait for sirenia HA after restore"
 need "${smoke}" 'append_live_node node2' \
   "parent shell must keep node2 in NODES after discovery join"
