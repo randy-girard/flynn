@@ -108,7 +108,6 @@ var subAliases = map[string]map[string]string{
 		"set":         "blobstore:set",
 		"credentials": "blobstore:credentials",
 		"migrate":     "blobstore:migrate",
-		"gc":          "blobstore:gc",
 	},
 	"events": {
 		"visible": "events:visible",
