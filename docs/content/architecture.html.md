@@ -159,8 +159,7 @@ a specific port for TCP. TCP routes may also store a hostname (for example
 `postgres.clusterdomain`) used as TLS identity and operator DNS.
 
 HTTP TLS is terminated at the router. You can attach a certificate chain to a
-route, or enable ACME/Let's Encrypt (`flynn-host acme` and `flynn route:add http
---auto-tls`). HTTPS also enables HTTP/2.
+route, or enable ACME/Let's Encrypt (`flynn-host letsencrypt` and `flynn letsencrypt:enable`). HTTPS also enables HTTP/2.
 
 TCP routes have three TLS modes:
 
@@ -235,7 +234,9 @@ can start that job automatically.
 The blobstore provides a simple API for storing and retrieving binary blobs.
 Git repositories, app slugs, and buildpack caches are stored in the blobstore.
 Object routes require the cluster key; health (`/.well-known/status`) does not.
-Build-cache URLs carry a per-app HMAC token that blobstore verifies.
+Build-cache URLs carry a per-app HMAC token that blobstore verifies. Postgres is
+the default backend; operators switch to S3-compatible storage with
+`flynn-host blobstore:set` (see [Production — Blobstore Backend](production.html.md#blobstore-backend)).
 
 ### slugrunner
 

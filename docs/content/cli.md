@@ -85,7 +85,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases). Dashboard paths, system apps, plugins, and planned plugin names are reserved. |
+| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases). Dashboard paths, system apps, plugins, planned plugins, and public-site hosts (`blog`, `docs`, `tos`) are reserved. |
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Add or replace the `flynn` git remote for the current app |
 | `github` / `github:connect` / `github:deploy` / `github:set` / `github:disconnect` | Connect a GitHub repo and deploy through taffy (cluster GitHub App) |
@@ -106,7 +106,8 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `route` / `route:add http\|tcp` / `route:update` / `route:remove` | HTTP and TCP(/TLS) routes, `--auto-tls`, `--tls-mode`, `--leader`; path-based HTTP routes need `flynn-host route:add` |
+| `route` / `route:add http\|tcp` / `route:update` / `route:remove` | HTTP and TCP(/TLS) routes, `--tls-mode`, `--leader`; path-based HTTP routes need `flynn-host route:add` |
+| `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:status` | Automatic HTTPS for a hostname or HTTP route id (requires the Let's Encrypt plugin) |
 | `resource` / `resource:add <provider>` / `resource:remove <provider> [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse |
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
 | `pg:psql` / `pg:dump` / `pg:restore` | Postgres console, dump, restore (built in) |
@@ -203,7 +204,8 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `metrics` | Live host CPU/memory/disk/load snapshot (`--host` for one node) |
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |
 | `otel` / `otel:add` / `otel:remove` | OpenTelemetry metrics exporters (requires `flynn-host plugin:install otel`) |
-| `acme` / `acme:configure` / `acme:status` / `acme:enable` / `acme:disable` / `acme:enable-system-routes` / `acme:disable-system-routes` | Let's Encrypt account, cluster ACME on/off, and system-route TLS |
+| `letsencrypt` / `letsencrypt:configure` / `letsencrypt:status` / `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:enable-system-routes` / `letsencrypt:disable-system-routes` | Let's Encrypt account, cluster ACME on/off, and system-route TLS (`acme:*` remains as an alias) |
+| `blobstore` / `blobstore:status` / `blobstore:set` / `blobstore:credentials` / `blobstore:migrate` | Inspect the blobstore backend, switch to S3-compatible storage, rotate access keys, migrate objects (`--delete` removes them from the old backend). Writes `BACKEND_<name>` and `DEFAULT_BACKEND` on the blobstore app. |
 | `github` / `github:setup` / `github:configure` / `github:status` / `github:disable` | Cluster GitHub App for dashboard/CLI GitHub deploys |
 | `runtime` / `runtime:create` / `runtime:update` / `runtime:remove` / `runtime:allow-custom` / `runtime:reserve` | Named CPU/memory runtimes (`small`/`medium`/`large` plus custom). New runtimes share host capacity (caps only). `runtime:create --reserve` or `runtime:reserve <id>` guarantees Request on the host for that runtime. |
 | `firewall` / `firewall:sync` / `firewall:peer:add` / `firewall:peer:remove` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |

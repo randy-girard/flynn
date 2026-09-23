@@ -56,16 +56,28 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	if !strings.Contains(add, "--auth") {
 		t.Fatalf("otel:add help missing --auth:\n%s", add)
 	}
+	le := FormatHelp("letsencrypt")
+	for _, want := range []string{"usage: flynn-host letsencrypt", "Commands:", "letsencrypt:configure", "letsencrypt:enable-system-routes"} {
+		if !strings.Contains(le, want) {
+			t.Fatalf("letsencrypt help missing %q:\n%s", want, le)
+		}
+	}
+	bs := FormatHelp("blobstore")
+	for _, want := range []string{"usage: flynn-host blobstore", "Commands:", "blobstore:status", "blobstore:set", "blobstore:credentials", "blobstore:migrate"} {
+		if !strings.Contains(bs, want) {
+			t.Fatalf("blobstore help missing %q:\n%s", want, bs)
+		}
+	}
 }
 
 func TestRootHelpListsParentsOnly(t *testing.T) {
 	got := RootHelp()
-	for _, want := range []string{"Commands:", "plugin", "otel", "volume", "acme", "help"} {
+	for _, want := range []string{"Commands:", "plugin", "otel", "volume", "letsencrypt", "acme", "blobstore", "help"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("root help missing %q:\n%s", want, got)
 		}
 	}
-	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "acme:configure"} {
+	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
 		if strings.Contains(got, nested) {
 			t.Fatalf("root help should not list %q:\n%s", nested, got)
 		}

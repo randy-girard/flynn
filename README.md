@@ -166,16 +166,18 @@ Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a p
 
 ## HTTPS and Let's Encrypt
 
-`flynn-host acme:configure` registers a Let's Encrypt account, agrees to the ToS, and enables ACME on the cluster. Then enable it on system routes and on app routes you want auto-renewed:
+Install the Let's Encrypt plugin, register an ACME account, then turn HTTPS on for hostnames:
 
 ```bash
-sudo flynn-host acme:configure --email=admin@example.com --agree-tos
-sudo flynn-host acme:status
-sudo flynn-host acme:enable-system-routes   # controller, dashboard, …
-flynn route:add http --auto-tls www.example.com
+sudo flynn-host plugin:install letsencrypt
+sudo flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
+sudo flynn-host letsencrypt:status
+sudo flynn-host letsencrypt:enable-system-routes   # controller, dashboard, …
+flynn route:add http www.example.com
+flynn letsencrypt:enable www.example.com
 ```
 
-Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host acme:status` anytime.
+Useful flags on `configure`: `--staging` (Let's Encrypt staging, untrusted certs) and `--directory-url` (another ACME CA). Check `flynn-host letsencrypt:status` anytime.
 
 The name on the certificate must resolve to the cluster and pass HTTP-01 (ports 80/443 open). You can still attach your own cert with `--tls-cert` / `--tls-key`. After system routes have a public cert, clear the bootstrap TLS pin: `flynn cluster:refresh --clear`. See [Apps — HTTPS](docs/content/apps.md#https).
 
@@ -231,7 +233,7 @@ script/bootstrap-flynn        # single-node cluster from local images
 make test-unit                # go test; uses Docker on macOS/Windows
 ```
 
-`make test-integration` boots a nested cluster. Cluster, datastore, overlay, and upgrade changes should also run `script/vagrant-smoke.sh` (file-driven matrix in `smoke-matrix.example.yaml`; `--item singleton` runs one row). See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
+`make test-integration` boots a nested cluster. For most cluster/docs/CLI changes run `script/vagrant-smoke.sh --item quick` (1-node boot, git-push, docker-push, postgres). Upgrade, backup, HA, and plugin changes should use `singleton`/`ha`; the pre-release gate is the enabled matrix (`singleton` then `ha`). See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

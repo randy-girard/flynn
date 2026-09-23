@@ -29,13 +29,15 @@ on the stability of cluster consensus.
 
 ## TLS / Let's Encrypt
 
-Bootstrap uses a self-signed certificate. For production, configure ACME on a
-cluster host so the dashboard, controller, and `--auto-tls` app routes get
-trusted certificates:
+Bootstrap uses a self-signed certificate. For production, install the Let's
+Encrypt plugin and configure ACME on a cluster host so the dashboard,
+controller, and app hostnames get trusted certificates:
 
 ```text
-$ sudo flynn-host acme:configure --email=admin@example.com --agree-tos
-$ sudo flynn-host acme:enable-system-routes
+$ sudo flynn-host plugin:install letsencrypt
+$ sudo flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
+$ sudo flynn-host letsencrypt:enable-system-routes
+$ flynn letsencrypt:enable www.example.com
 $ flynn cluster:refresh --clear
 ```
 
@@ -149,28 +151,42 @@ After creating the S3 bucket and credentials, configure the blobstore to use it 
 the backend with bucket, region, and access credentials:
 
 ```text
-flynn -a blobstore env:set BACKEND_S3MAIN="backend=s3 region=us-east-1 \
-bucket=flynnblobstore access_key_id=$AWS_ACCESS_KEY_ID \
-secret_access_key=$AWS_SECRET_ACCESS_KEY"
-
-flynn -a blobstore env:set DEFAULT_BACKEND=s3main
+sudo flynn-host blobstore:set --backend=s3 --bucket=flynnblobstore --region=us-east-1 \
+  --access-key-id=$AWS_ACCESS_KEY_ID --secret-access-key=$AWS_SECRET_ACCESS_KEY \
+  --migrate --delete
 ```
 
-If the credentials are invalid, the first command will fail, and you can check the
+`blobstore:set` writes the same `BACKEND_<name>` and `DEFAULT_BACKEND` env the
+blobstore process already reads (`s3main` is the default `--name` for S3). Inspect
+the current backend with `sudo flynn-host blobstore:status` (secrets are redacted).
+Rotate keys later with `sudo flynn-host blobstore:credentials --access-key-id=… --secret-access-key=…`.
+
+If the credentials are invalid, the command will fail, and you can check the
 logs with `flynn -a blobstore log`.
 
-Finally, migrate the existing blobs from Postgres to S3 and remove them from
-Postgres:
+`--migrate --delete` copies existing objects onto the new backend and removes them
+from Postgres. You can also run that step separately:
 
 ```text
-flynn -a blobstore run /bin/flynn-blobstore migrate --delete
+sudo flynn-host blobstore:migrate --delete
 ```
 
-Or if you're on a version of Flynn older than v20160924.0:
+The equivalent `flynn -a blobstore env:set` / `flynn -a blobstore run /bin/flynn-blobstore migrate --delete` path still works.
+
+On Flynn older than v20160924.0 the migrate binary was `/bin/flynn-blobstore-migrate`.
+
+### MinIO and other S3-compatible stores
+
+Any S3-compatible endpoint (MinIO, Garage, Ceph RGW, …) uses `--backend=minio`:
 
 ```text
-flynn -a blobstore run /bin/flynn-blobstore-migrate --delete
+sudo flynn-host blobstore:set --backend=minio --bucket=flynnblobstore \
+  --endpoint=minio.example.com:9000 --access-key-id=$MINIO_ACCESS_KEY \
+  --secret-access-key=$MINIO_SECRET_KEY --migrate --delete
 ```
+
+Pass `--insecure` when the endpoint is HTTP. `flynn-host blobstore:status` and
+`blobstore:credentials` work the same as for Amazon S3.
 
 ### Google Cloud Storage
 
@@ -198,7 +214,7 @@ Finally, migrate the existing blobs from Postgres to Cloud Storage and
 remove them from Postgres:
 
 ```text
-flynn -a blobstore run /bin/flynn-blobstore migrate --delete
+sudo flynn-host blobstore:migrate --delete
 ```
 
 ### Microsoft Azure Storage
@@ -221,7 +237,7 @@ Finally, migrate the existing blobs from Postgres to Azure Storage and
 remove them from Postgres:
 
 ```text
-flynn -a blobstore run /bin/flynn-blobstore migrate --delete
+sudo flynn-host blobstore:migrate --delete
 ```
 
 
@@ -330,7 +346,11 @@ Restore does **not** re-run
 `flynn-host plugin:install`; plugin apps come back with postgres. Redis, Kafka,
 and ClickHouse keep data on volumes that are **not** included; after restore
 those engines come back empty. App slugs and container images stored in the
-blobstore (Postgres) are restored.
+blobstore Postgres backend are restored from that dump. If blobstore was switched
+to S3, MinIO, GCS, or Azure (`flynn-host blobstore:set` / `DEFAULT_BACKEND`),
+object bytes stay in that bucket; the backup still includes controller env so
+restore reconnects to the same backend. Keep the bucket (and credentials) when
+you restore.
 
 The Vagrant upgrade smoke (`script/vagrant-upgrade-smoke.sh`) exercises this
 path after the in-place `--force` updates: backup, `install --clean`, then

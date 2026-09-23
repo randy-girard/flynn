@@ -94,6 +94,8 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"plugin:route",
 		"tags", "tags:set", "tags:del",
 		"webhooks", "webhooks:add", "webhooks:remove",
+		"letsencrypt", "letsencrypt:configure", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
+		"letsencrypt:enable-system-routes", "letsencrypt:disable-system-routes",
 		"acme", "acme:configure", "acme:enable", "acme:disable", "acme:status",
 		"acme:enable-system-routes", "acme:disable-system-routes",
 		"github", "github:configure", "github:status", "github:setup", "github:disable",
@@ -105,6 +107,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",
 		"firewall:peer-add", "firewall:peer-remove",
 		"firewall:expose", "firewall:unexpose",
+		"blobstore", "blobstore:status", "blobstore:set", "blobstore:credentials", "blobstore:migrate",
 	}
 	for _, name := range want {
 		if commands[name] == nil {
@@ -172,6 +175,14 @@ func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
 	name, args, from = ResolveCommand("alert", []string{"add", "--metric", "disk_percent"})
 	if name != "alert:add" || from != "alert add" {
 		t.Fatalf("alert add got %q from=%q", name, from)
+	}
+	name, args, from = ResolveCommand("blobstore", []string{"set", "--backend=minio"})
+	if name != "blobstore:set" || from != "blobstore set" || strings.Join(args, " ") != "--backend=minio" {
+		t.Fatalf("blobstore set got %q from=%q args=%q", name, from, args)
+	}
+	name, args, from = ResolveCommand("blobstore", []string{"credentials", "--name=minio"})
+	if name != "blobstore:credentials" || from != "blobstore credentials" {
+		t.Fatalf("blobstore credentials got %q from=%q", name, from)
 	}
 }
 

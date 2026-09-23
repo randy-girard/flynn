@@ -57,6 +57,8 @@ curl -u :$AUTH_KEY http://blobstore.discoverd/?dir=/dir2
 Right now, files are stored as large objects in PostgreSQL (the default) or on
 the local filesystem. Production clusters can use S3, GCS, or Azure backends;
 see [Production — Blobstore Backend](../docs/content/production.html.md#blobstore-backend).
+Operators configure S3-compatible storage with `flynn-host blobstore:set` (and
+inspect with `flynn-host blobstore:status`).
 
 Flynn uses blobstore to store and retrieve Heroku-style slugs built with
 [slugbuilder](../slugbuilder).

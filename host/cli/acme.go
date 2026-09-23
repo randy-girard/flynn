@@ -18,6 +18,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 const (
@@ -37,7 +38,7 @@ usage: flynn-host acme:configure --email=<email> [--agree-tos] [--staging] [--di
 Configure ACME with a contact email address.
 
 ACME must be configured and enabled before automatic TLS certificates can be
-provisioned for routes using the --auto-tls flag.
+provisioned with flynn letsencrypt:enable. Requires the Let's Encrypt plugin.
 
 Options:
     --email=<email>          Contact email for Let's Encrypt account (required)
@@ -46,8 +47,56 @@ Options:
     --directory-url=<url>    ACME directory URL (defaults to Let's Encrypt production)
 
 Examples:
-    $ flynn-host acme:configure --email=admin@example.com --agree-tos
-    $ flynn-host acme:configure --email=admin@example.com --agree-tos --staging
+    $ flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
+    $ flynn-host letsencrypt:configure --email=admin@example.com --agree-tos --staging
+`)
+	Register("letsencrypt:configure", runACMEConfigureCmd, `
+usage: flynn-host letsencrypt:configure --email=<email> [--agree-tos] [--staging] [--directory-url=<url>]
+
+Configure a Let's Encrypt / ACME account for this cluster.
+
+The Let's Encrypt plugin must be installed first:
+    sudo flynn-host plugin:install letsencrypt
+
+Options:
+    --email=<email>          Contact email for Let's Encrypt account (required)
+    --agree-tos              Agree to the Let's Encrypt Terms of Service
+    --staging                Use Let's Encrypt staging server (for testing, issues untrusted certs)
+    --directory-url=<url>    ACME directory URL (defaults to Let's Encrypt production)
+
+Examples:
+    $ flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
+    $ flynn-host letsencrypt:configure --email=admin@example.com --agree-tos --staging
+`)
+	Register("letsencrypt:enable", runACMEEnableCmd, `
+usage: flynn-host letsencrypt:enable
+
+Enable Let's Encrypt for the cluster.
+`)
+	Register("letsencrypt:disable", runACMEDisableCmd, `
+usage: flynn-host letsencrypt:disable
+
+Disable Let's Encrypt for the cluster.
+`)
+	Register("letsencrypt:status", runACMEStatusCmd, `
+usage: flynn-host letsencrypt:status
+
+Show current Let's Encrypt configuration status.
+`)
+	Register("letsencrypt:enable-system-routes", runACMEEnableSystemRoutesCmd, `
+usage: flynn-host letsencrypt:enable-system-routes
+
+Enable Let's Encrypt on all system app routes.
+`)
+	Register("letsencrypt:disable-system-routes", runACMEDisableSystemRoutesCmd, `
+usage: flynn-host letsencrypt:disable-system-routes
+
+Disable Let's Encrypt on all system app routes.
+`)
+	Register("letsencrypt", runACMEStatusCmd, `
+usage: flynn-host letsencrypt
+
+Show current Let's Encrypt configuration status.
 `)
 	Register("acme:enable", runACMEEnableCmd, `
 usage: flynn-host acme:enable
@@ -143,7 +192,31 @@ func getControllerClient() (controller.Client, error) {
 	return controller.NewClientWithHTTP("http://controller.discoverd", key, httpClient)
 }
 
+func lookupLetsEncryptPlugin(apps []*ct.App) (*ct.App, error) {
+	if app, err := plugin.LookupPluginApp(apps, "letsencrypt"); err == nil {
+		return app, nil
+	}
+	for _, a := range apps {
+		if a != nil && a.Name == "acme" && a.System() {
+			return a, nil
+		}
+	}
+	return nil, fmt.Errorf("the Let's Encrypt plugin is not installed\nInstall it with: sudo flynn-host plugin:install letsencrypt")
+}
+
+func requireLetsEncryptPlugin(client controller.Client) error {
+	apps, err := client.AppList()
+	if err != nil {
+		return err
+	}
+	_, err = lookupLetsEncryptPlugin(apps)
+	return err
+}
+
 func runACMEConfigure(args *docopt.Args, client controller.Client) error {
+	if err := requireLetsEncryptPlugin(client); err != nil {
+		return err
+	}
 	email := args.String["--email"]
 	if email == "" {
 		return fmt.Errorf("--email is required")
@@ -229,9 +302,10 @@ func runACMEConfigure(args *docopt.Args, client controller.Client) error {
 	}
 
 	fmt.Println("ACME account registered and enabled successfully.")
-	fmt.Println("\nYou can now use --auto-tls when adding routes to automatically provision TLS certificates.")
+	fmt.Println("\nEnable HTTPS on a hostname with:")
+	fmt.Println("  flynn letsencrypt:enable www.example.com")
 	fmt.Println("\nTo enable Let's Encrypt on all system app routes, run:")
-	fmt.Println("  flynn-host acme:enable-system-routes")
+	fmt.Println("  flynn-host letsencrypt:enable-system-routes")
 	return nil
 }
 
@@ -343,16 +417,19 @@ func enableLetsEncryptOnSystemRoutes(client controller.Client) error {
 }
 
 func runACMEEnable(client controller.Client) error {
+	if err := requireLetsEncryptPlugin(client); err != nil {
+		return err
+	}
 	config, err := client.GetACMEConfig()
 	if err != nil {
 		return fmt.Errorf("error getting ACME config: %s", err)
 	}
 
 	if config.ContactEmail == "" || !config.HasAccountKey {
-		return fmt.Errorf("ACME is not configured. Run 'flynn-host acme:configure --email=<email> --agree-tos' first.")
+		return fmt.Errorf("ACME is not configured. Run 'flynn-host letsencrypt:configure --email=<email> --agree-tos' first.")
 	}
 	if !config.TermsOfServiceAgreed {
-		return fmt.Errorf("You must agree to the Let's Encrypt Terms of Service. Run 'flynn-host acme:configure --email=%s --agree-tos'.", config.ContactEmail)
+		return fmt.Errorf("You must agree to the Let's Encrypt Terms of Service. Run 'flynn-host letsencrypt:configure --email=%s --agree-tos'.", config.ContactEmail)
 	}
 
 	if config.Enabled {
@@ -366,7 +443,7 @@ func runACMEEnable(client controller.Client) error {
 	}
 
 	fmt.Println("ACME/Let's Encrypt has been enabled for this cluster.")
-	fmt.Println("You can now use --auto-tls when adding routes to automatically provision TLS certificates.")
+	fmt.Println("Enable HTTPS on a hostname with: flynn letsencrypt:enable www.example.com")
 	return nil
 }
 
@@ -421,13 +498,16 @@ func runACMEStatus(client controller.Client) error {
 }
 
 func runACMEEnableSystemRoutes(client controller.Client) error {
+	if err := requireLetsEncryptPlugin(client); err != nil {
+		return err
+	}
 	// Check if ACME is enabled
 	config, err := client.GetACMEConfig()
 	if err != nil {
 		return fmt.Errorf("error getting ACME config: %s", err)
 	}
 	if !config.Enabled {
-		return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host acme:configure --email=<email> --agree-tos' first.")
+		return fmt.Errorf("ACME/Let's Encrypt is not enabled for this cluster.\nRun 'flynn-host letsencrypt:configure --email=<email> --agree-tos' first.")
 	}
 
 	fmt.Println("Enabling Let's Encrypt for all system app routes...")

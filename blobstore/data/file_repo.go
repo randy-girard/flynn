@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"regexp"
 	"strings"
 
 	"github.com/jackc/pgx"
@@ -15,8 +14,6 @@ import (
 	"github.com/stevvooe/resumable"
 	"github.com/stevvooe/resumable/sha512"
 )
-
-var configEnvPattern = regexp.MustCompile(`^BACKEND_([A-Z0-9]+)$`)
 
 func NewFileRepoFromEnv(db *postgres.DB) (*FileRepo, error) {
 	backends := []backend.Backend{backend.Postgres}
@@ -59,30 +56,6 @@ func NewFileRepoFromEnv(db *postgres.DB) (*FileRepo, error) {
 		}
 	}
 	return NewFileRepo(db, backends, defaultBackend), nil
-}
-
-func parseBackendInfo(environment []string, name, params string) (map[string]string, error) {
-	info := make(map[string]string)
-	for _, token := range strings.Split(params, " ") {
-		if token == "" {
-			continue
-		}
-		kv := strings.SplitN(token, "=", 2)
-		if len(kv) < 2 {
-			return nil, fmt.Errorf("blobstore: error parsing backend kv pair %q", token)
-		}
-		info[kv[0]] = kv[1]
-	}
-	prefix := strings.ToUpper(fmt.Sprintf("BACKEND_%s_", name))
-	for _, env := range environment {
-		if !strings.HasPrefix(env, prefix) {
-			continue
-		}
-		kv := strings.SplitN(env, "=", 2)
-		k := strings.ToLower(strings.TrimPrefix(kv[0], prefix))
-		info[k] = kv[1]
-	}
-	return info, nil
 }
 
 type FileRepo struct {

@@ -135,6 +135,11 @@ var subAliases = map[string]map[string]string{
 		"add":    "log-sink:add",
 		"remove": "log-sink:remove",
 	},
+	"letsencrypt": {
+		"enable":  "letsencrypt:enable",
+		"disable": "letsencrypt:disable",
+		"status":  "letsencrypt:status",
+	},
 }
 
 // movedToHost is printed for commands that now live on flynn-host. The old

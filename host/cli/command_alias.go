@@ -73,6 +73,14 @@ var subAliases = map[string]map[string]string{
 		"add":    "webhooks:add",
 		"remove": "webhooks:remove",
 	},
+	"letsencrypt": {
+		"configure":             "letsencrypt:configure",
+		"enable":                "letsencrypt:enable",
+		"disable":               "letsencrypt:disable",
+		"status":                "letsencrypt:status",
+		"enable-system-routes":  "letsencrypt:enable-system-routes",
+		"disable-system-routes": "letsencrypt:disable-system-routes",
+	},
 	"acme": {
 		"configure":             "acme:configure",
 		"enable":                "acme:enable",
@@ -94,6 +102,12 @@ var subAliases = map[string]map[string]string{
 		"delete":       "runtime:remove",
 		"allow-custom": "runtime:allow-custom",
 		"reserve":      "runtime:reserve",
+	},
+	"blobstore": {
+		"status":      "blobstore:status",
+		"set":         "blobstore:set",
+		"credentials": "blobstore:credentials",
+		"migrate":     "blobstore:migrate",
 	},
 	"events": {
 		"visible": "events:visible",

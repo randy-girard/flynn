@@ -317,12 +317,7 @@
     "action": "create-artifact",
     "artifact": $image_artifact[dockerbuilder-24]
   },
-  {
-    "id": "acme-image",
-    "action": "create-artifact",
-    "artifact": $image_artifact[acme]
-  },
-  {
+	{
     "id": "blobstore",
     "action": "deploy-app",
     "app": {
@@ -373,32 +368,6 @@
           "args": ["/bin/flynn-router", "-http-port", "80", "-https-port", "443", "-tcp-range-start", "3000", "-tcp-range-end", "3500"],
           "omni": true,
           "service": "router-api"
-        }
-      }
-    },
-    "processes": {
-      "app": 1
-    }
-  },
-  {
-    "id": "acme",
-    "action": "deploy-app",
-    "app": {
-      "name": "acme",
-      "meta": {"flynn-system-app": "true"}
-    },
-    "artifacts": [$image_artifact[acme]],
-    "release": {
-      "env": {
-        "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
-        "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
-        "AUTH_KEY": "{{ (index .StepData \"controller-key\").Data }}"
-      },
-      "processes": {
-        "app": {
-          "args": ["/bin/flynn-acme"],
-          "ports": [{"port": 8080, "proto": "tcp"}],
-          "service": "acme-challenge"
         }
       }
     },

@@ -1,5 +1,4 @@
 {
-  "acme":           $image_artifact[acme],
   "host":           $image_artifact[host],
   "flannel":        $image_artifact[flannel],
   "discoverd":      $image_artifact[discoverd],

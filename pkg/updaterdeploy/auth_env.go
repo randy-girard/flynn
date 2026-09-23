@@ -114,7 +114,7 @@ func EnsureReleaseAuthEnv(appName string, env map[string]string, s ClusterSecret
 		changed = EnsureApplianceControllerKey(env, s.ControllerKey) || changed
 		changed = setIfEmpty(env, "ACCESS_TOKEN_KEY", s.AccessTokenKey) || changed
 		return changed
-	case "router", "acme":
+	case "router", "acme", "letsencrypt":
 		changed = setIfEmpty(env, "AUTH_KEY", s.ControllerKey) || changed
 		return EnsureApplianceControllerKey(env, s.ControllerKey) || changed
 	default:

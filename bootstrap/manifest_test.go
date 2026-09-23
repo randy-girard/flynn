@@ -50,15 +50,15 @@ func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 		t.Fatal("discoverd-key must be generated and persisted on hosts before discoverd starts")
 	}
 	n := strings.Count(s, `"DISCOVERD_AUTH_KEY"`)
-	if n < 12 {
+	if n < 11 {
 		t.Fatalf("DISCOVERD_AUTH_KEY must be passed into system apps, got %d", n)
 	}
-	for _, app := range []string{"discoverd", "flannel", "postgres", "controller", "blobstore", "router", "acme", "gitreceive", "tarreceive", "logaggregator", "taffy", "status"} {
+	for _, app := range []string{"discoverd", "flannel", "postgres", "controller", "blobstore", "router", "gitreceive", "tarreceive", "logaggregator", "taffy", "status"} {
 		if !strings.Contains(s, app) {
 			t.Fatalf("missing app %s", app)
 		}
 	}
-	if strings.Count(s, `(index .StepData \"discoverd-key\").Data`) < 12 {
+	if strings.Count(s, `(index .StepData \"discoverd-key\").Data`) < 11 {
 		t.Fatalf("discoverd-key not referenced enough times: %d", strings.Count(s, `(index .StepData \"discoverd-key\").Data`))
 	}
 }

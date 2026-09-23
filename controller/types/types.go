@@ -1116,7 +1116,7 @@ type ACMEConfig struct {
 // ErrACMENotEnabled is returned when ACME is required but not enabled
 var ErrACMENotEnabled = &ValidationError{
 	Field:   "acme",
-	Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host acme:enable' to enable it.",
+	Message: "ACME/Let's Encrypt is not enabled. Run 'flynn-host letsencrypt:configure --email=<email> --agree-tos' to enable it.",
 }
 
 // RuntimeProfile is a named CPU/memory preset managed on the cluster.

@@ -32,7 +32,7 @@ Options:
 	-s, --service=<service>    service name to route domain to (defaults to APPNAME-web)
 	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin
 	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin
-	--auto-tls                 automatically provision TLS certificate via Let's Encrypt
+	--auto-tls                 hidden: use flynn letsencrypt:enable <hostname> instead
 	--tls-mode=<mode>          TCP TLS: off, passthrough, or terminate
 	--domain=<host>            hostname stored on TCP routes (for TLS identity / DNS)
 	--sticky                   enable cookie-based sticky routing (http only)
@@ -44,8 +44,7 @@ Options:
 Examples:
 
 	$ flynn route:add http example.com
-
-	$ flynn route:add http --auto-tls example.com
+	$ flynn letsencrypt:enable example.com
 
 	$ flynn route:add tcp
 
@@ -60,7 +59,7 @@ Options:
 	-s, --service=<service>    service name to route domain to
 	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS, - for stdin (http only)
 	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS, - for stdin (http only)
-	--auto-tls                 automatically provision TLS certificate via Let's Encrypt (http only)
+	--auto-tls                 hidden: use flynn letsencrypt:enable <hostname> instead (http only)
 	--no-auto-tls              disable automatic TLS certificate provisioning
 	--sticky                   enable cookie-based sticky routing (http only)
 	--no-sticky                disable cookie-based sticky routing

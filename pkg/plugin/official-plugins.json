@@ -58,6 +58,13 @@
       "description": "Forward cluster metrics to an OpenTelemetry collector (OTLP/HTTP)."
     },
     {
+      "name": "letsencrypt",
+      "aliases": ["acme", "le"],
+      "kind": "app",
+      "repo": "flynn-plugin-letsencrypt",
+      "description": "Let's Encrypt / ACME certificates. Enable HTTPS with flynn letsencrypt:enable <hostname>."
+    },
+    {
       "name": "scheduler",
       "kind": "scheduler",
       "repo": "flynn-plugin-scheduler",

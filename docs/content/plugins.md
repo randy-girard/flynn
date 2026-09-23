@@ -38,6 +38,7 @@ Development layout (relative to the Flynn repo):
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 | `www` | `../flynn-plugin-www` | (none; `kind: app`) |
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
+| `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
@@ -72,9 +73,11 @@ non-interactive installs must pass **`--yes`**. Manifest **`setup`** prompts run
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
 stdin is not a TTY). **`resources`** attaches existing providers (for example
 `postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
-is expanded). If cluster ACME is already enabled (`flynn-host acme:configure`
-and `flynn-host acme:enable`), HTTP plugin routes get Let's Encrypt at install
-automatically (same as `flynn route:add http --auto-tls`). That covers the
+is expanded). If cluster ACME is already enabled (`flynn-host letsencrypt:configure`
+and `flynn-host letsencrypt:enable`), HTTP plugin routes get Let's Encrypt at install
+automatically. Operators can also turn HTTPS on later with
+`flynn letsencrypt:enable <hostname>` (same as the old `flynn route:add http --auto-tls`
+flag, which remains as a hidden alias). That covers the
 dashboard plugin and any other HTTP plugin; Flynn does not special-case a
 name. Set **`auto_tls`** on an HTTP route to request TLS even when you are
 not passing `--auto-tls`: without ACME, install logs a warning and leaves
@@ -144,7 +147,7 @@ cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
 `redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler` (every
-first-party plugin except the template). Smoke starts a dummy OTLP/HTTP
+first-party plugin except the template and Let's Encrypt; Vagrant has no ACME). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.
 

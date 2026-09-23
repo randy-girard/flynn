@@ -25,6 +25,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"github", "github:connect", "github:disconnect", "github:deploy", "github:set",
 		"volume:show", "volume:decommission",
 		"route:add", "resource:add", "resource:expose", "resource:unexpose",
+		"letsencrypt", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
 		"cluster:add", "cluster:migrate-domain",
 		"limit:set", "limit:profiles", "limit:runtime",
 	}

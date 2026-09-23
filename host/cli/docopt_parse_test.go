@@ -114,4 +114,42 @@ func TestACMECommandsStillRegistered(t *testing.T) {
 	parseHostCLI(t, "acme:status", []string{"acme:status"})
 	parseHostCLI(t, "acme:enable", []string{"acme:enable"})
 	parseHostCLI(t, "acme:disable", []string{"acme:disable"})
+	for _, name := range []string{
+		"letsencrypt",
+		"letsencrypt:configure",
+		"letsencrypt:enable",
+		"letsencrypt:disable",
+		"letsencrypt:status",
+		"letsencrypt:enable-system-routes",
+		"letsencrypt:disable-system-routes",
+	} {
+		if commands[name] == nil {
+			t.Fatalf("missing flynn-host %s", name)
+		}
+	}
+	cfgLE := parseHostCLI(t, "letsencrypt:configure", []string{"letsencrypt:configure", "--email=ops@example.com", "--agree-tos"})
+	if cfgLE.String["--email"] != "ops@example.com" || !cfgLE.Bool["--agree-tos"] {
+		t.Fatalf("letsencrypt:configure: %+v %+v", cfgLE.String, cfgLE.Bool)
+	}
+}
+
+func TestBlobstoreHostCLIParse(t *testing.T) {
+	set := parseHostCLI(t, "blobstore:set", []string{
+		"blobstore:set", "--backend=minio", "--bucket=b", "--endpoint=127.0.0.1:9000",
+		"--access-key-id=k", "--secret-access-key=s", "--insecure", "--migrate", "--delete",
+	})
+	if set.String["--backend"] != "minio" || set.String["--endpoint"] != "127.0.0.1:9000" || !set.Bool["--delete"] {
+		t.Fatalf("blobstore:set: %+v %+v", set.String, set.Bool)
+	}
+	creds := parseHostCLI(t, "blobstore:credentials", []string{
+		"blobstore:credentials", "--name=minio", "--access-key-id=k", "--secret-access-key=s",
+	})
+	if creds.String["--name"] != "minio" || creds.String["--access-key-id"] != "k" {
+		t.Fatalf("blobstore:credentials: %+v", creds.String)
+	}
+	parseHostCLI(t, "blobstore:status", []string{"blobstore:status"})
+	mig := parseHostCLI(t, "blobstore:migrate", []string{"blobstore:migrate", "--delete"})
+	if !mig.Bool["--delete"] {
+		t.Fatal("blobstore:migrate --delete")
+	}
 }

@@ -180,19 +180,22 @@ If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
 
 ## HTTPS / Let's Encrypt
 
-Bootstrap issues a self-signed certificate. For trusted TLS, on any cluster
-host, register ACME and enable it on system routes (controller, dashboard, …):
+Bootstrap issues a self-signed certificate. For trusted TLS, install the Let's
+Encrypt plugin, register ACME, and enable it on system routes (controller,
+dashboard, …):
 
 ```
-$ sudo flynn-host acme:configure --email=admin@example.com --agree-tos
-$ sudo flynn-host acme:enable-system-routes
+$ sudo flynn-host plugin:install letsencrypt
+$ sudo flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
+$ sudo flynn-host letsencrypt:enable-system-routes
 ```
 
 `configure` also enables ACME for the cluster. Use `--staging` while testing
 (Let's Encrypt issues untrusted certs) or `--directory-url` for another ACME
-CA. Check status with `sudo flynn-host acme:status`.
+CA. Check status with `sudo flynn-host letsencrypt:status`.
 
-App routes opt in with `flynn route:add http --auto-tls <domain>`. The name
+App routes opt in with `flynn letsencrypt:enable <domain>` after
+`flynn route:add http <domain>`. The name
 must resolve to the cluster so Let's Encrypt can complete HTTP-01 on ports 80
 and 443. You can still attach your own cert with `--tls-cert` / `--tls-key`.
 After system routes have a public certificate, run

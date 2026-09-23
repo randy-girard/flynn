@@ -83,8 +83,9 @@ with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
 empty app grants is not an administrator; it has no controller access.
 The TLS certificate used for communication is generated during installation
 (self-signed). Configure Let's Encrypt after bootstrap with
-`flynn-host acme:configure --email=<you> --agree-tos` and
-`flynn-host acme:enable-system-routes` so the dashboard and controller
+`flynn-host plugin:install letsencrypt`,
+`flynn-host letsencrypt:configure --email=<you> --agree-tos` and
+`flynn-host letsencrypt:enable-system-routes` so the dashboard and controller
 present a trusted certificate; see [Apps — HTTPS](apps.md#https).
 A cryptographic hash of the certificate is pinned as part of the CLI
 configuration string to prevent man-in-the-middle attacks.

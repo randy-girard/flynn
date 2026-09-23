@@ -17,9 +17,10 @@ App names are lowercase letters, digits, and hyphen-separated groups
 
 User apps cannot use names that collide with dashboard paths (`plugins`,
 `system`, `new`), Flynn system apps (`postgres`, `controller`,
-`discoverd`), official plugins (`redis`, `www`, `dashboard`), or names
-reserved for planned plugins. Bootstrap and `flynn-host plugin:install`
-can still create those apps as system or plugin apps.
+`discoverd`), official plugins (`redis`, `www`, `dashboard`), planned
+plugins, or public company-site hosts (`blog`, `docs`, `status`, `tos`,
+`security`). Bootstrap and `flynn-host plugin:install` can still create
+those apps as system or plugin apps.
 
 ## Configuration
 
@@ -312,18 +313,19 @@ Flynn can automatically provision and renew TLS certificates using Let's Encrypt
 
 #### Enabling Let's Encrypt at the Cluster Level
 
-First, configure ACME with your contact email and agree to the Let's Encrypt
-Terms of Service:
+Install the Let's Encrypt plugin, then configure ACME with your contact email
+and agree to the Let's Encrypt Terms of Service:
 
 ```text
-flynn-host acme:configure --email=admin@example.com --agree-tos
+sudo flynn-host plugin:install letsencrypt
+flynn-host letsencrypt:configure --email=admin@example.com --agree-tos
 ```
 
 This command registers your ACME account and enables ACME for the cluster.
 You can check the current ACME configuration status with:
 
 ```text
-flynn-host acme:status
+flynn-host letsencrypt:status
 ```
 
 Use `--staging` while testing (untrusted certificates) or `--directory-url` for
@@ -335,7 +337,7 @@ To enable Let's Encrypt on all system app routes (controller, dashboard, etc.),
 run the following command:
 
 ```text
-flynn-host acme:enable-system-routes
+flynn-host letsencrypt:enable-system-routes
 ```
 
 After this, public certificates replace the bootstrap self-signed cert. Clear
@@ -344,27 +346,29 @@ the CLI TLS pin with `flynn cluster:refresh --clear`.
 To disable Let's Encrypt on all system app routes:
 
 ```text
-flynn-host acme:disable-system-routes
+flynn-host letsencrypt:disable-system-routes
 ```
 
 #### Using Automatic TLS for Application Routes
 
-Once ACME is enabled, you can create routes with automatic TLS:
+Once ACME is enabled, add an HTTP route and turn HTTPS on with the Let's Encrypt
+plugin:
 
 ```text
-flynn route:add http --auto-tls www.example.com
+flynn route:add http www.example.com
+flynn letsencrypt:enable www.example.com
 ```
 
-Or enable automatic TLS for an existing route:
+You can also pass a route id (`http/<uuid>`):
 
 ```text
-flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --auto-tls
+flynn letsencrypt:enable http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1
 ```
 
-To disable automatic TLS for a route:
+To disable automatic TLS for a hostname or route:
 
 ```text
-flynn route:update http/2b3b2004-38f1-4e68-b856-7d8af3e4c6e1 --no-auto-tls
+flynn letsencrypt:disable www.example.com
 ```
 
 Issued certificates are renewed automatically about 30 days before they expire.

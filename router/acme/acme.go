@@ -330,7 +330,7 @@ func runServiceLoop(ctx context.Context, client controller.Client, responder *Re
 	log.Info("checking ACME configuration")
 	checkConfig()
 	if service == nil {
-		log.Info("ACME not configured, running in standby mode - configure with 'flynn-host acme:configure'")
+		log.Info("ACME not configured, running in standby mode - configure with 'flynn-host letsencrypt:configure'")
 	}
 
 	for {
