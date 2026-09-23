@@ -13,7 +13,7 @@ usage: flynn login [-p] [-n <cluster-name>] [--controller-url=<url>] [--oob-code
 
 Authenticate with the Flynn dashboard (OAuth).
 
-The token is limited to the apps and roles granted in the dashboard. Built-in app roles map onto controller grants: View=app:read, Deploy=app:deploy, Manage=app:write, Admin=app:admin. Cluster administrators may add custom named roles that combine those same permissions. The controller enforces the grants on every CLI command; ask an app Admin or cluster administrator if a command is forbidden.
+The token is limited to the apps and roles granted in the dashboard. Built-in app roles map onto controller grants: View=app:read, Deploy=app:deploy, Manage=app:write, Admin=app:admin. Those four roles are fixed in OSS Flynn; granular custom roles require the enterprise plugin. The controller enforces the grants on every CLI command; ask an app Admin or cluster administrator if a command is forbidden.
 
 With no arguments, uses the default cluster from ~/.flynnrc (or the only cluster if there is just one). The cluster entry must include a DashboardURL from flynn cluster:add or an OAuthURL from a prior login.
 

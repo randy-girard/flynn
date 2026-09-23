@@ -3,8 +3,8 @@ package authz
 // Named app roles used by the dashboard Team picker and documented for
 // `flynn login` tokens. Selecting a role grants these controller permissions
 // on that app; HTTPAllowed (and the CLI, which calls the same API) then
-// enforce the grants. Custom cluster roles may combine coarse aliases and
-// function/action grants (app:<function>:<action>).
+// enforce the grants. OSS Flynn freezes these four roles; custom
+// function/action bundles require the enterprise plugin (see oss.go).
 const (
 	PermAppRead   = "app:read"
 	PermAppDeploy = "app:deploy"
