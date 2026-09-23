@@ -98,8 +98,10 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"acme:enable-system-routes", "acme:disable-system-routes",
 		"github", "github:configure", "github:status", "github:setup", "github:disable",
 		"domain", "domain:apex",
+		"runtime", "runtime:create", "runtime:update",
+		"runtime:remove", "runtime:allow-custom", "runtime:reserve",
 		"runtime-profile", "runtime-profile:create", "runtime-profile:update",
-		"runtime-profile:remove", "runtime-profile:allow-custom",
+		"runtime-profile:remove", "runtime-profile:allow-custom", "runtime-profile:reserve",
 		"events", "events:visible",
 		"route:add",
 		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",
@@ -128,7 +130,7 @@ func TestHyphenAliasesRewriteToNestedColons(t *testing.T) {
 	}
 	for _, name := range []string{
 		"acme:disable-system-routes", "acme:enable-system-routes",
-		"plugin:update-all", "runtime-profile:allow-custom",
+		"plugin:update-all", "runtime:allow-custom", "runtime:reserve",
 	} {
 		got, _, from := ResolveCommand(name, nil)
 		if got != name || from != "" {
@@ -141,9 +143,17 @@ func TestHyphenAliasesRewriteToNestedColons(t *testing.T) {
 }
 
 func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
-	name, args, from := ResolveCommand("runtime-profile", []string{"create", "xlarge"})
-	if name != "runtime-profile:create" || from != "runtime-profile create" || !reflect.DeepEqual(args, []string{"xlarge"}) {
+	name, args, from := ResolveCommand("runtime", []string{"create", "xlarge"})
+	if name != "runtime:create" || from != "runtime create" || !reflect.DeepEqual(args, []string{"xlarge"}) {
 		t.Fatalf("got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("runtime-profile", []string{"create", "xlarge"})
+	if name != "runtime:create" || from != "runtime-profile create" || !reflect.DeepEqual(args, []string{"xlarge"}) {
+		t.Fatalf("legacy runtime-profile create: %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("runtime-profile:create", []string{"xlarge"})
+	if name != "runtime:create" || from != "runtime-profile:create" || !reflect.DeepEqual(args, []string{"xlarge"}) {
+		t.Fatalf("legacy runtime-profile:create: %q %q from=%q", name, args, from)
 	}
 	name, args, from = ResolveCommand("route", []string{"add", "http", "--app", "admin", "example.com/admin"})
 	if name != "route:add" || from != "route add" {

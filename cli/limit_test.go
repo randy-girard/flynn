@@ -63,4 +63,8 @@ func TestResolveCommandLimitProfiles(t *testing.T) {
 	if name != "limit:profile" || from != "limit profile" || strings.Join(args, " ") != "web small" {
 		t.Fatalf("apply got %q %q from=%q", name, args, from)
 	}
+	name, args, from = resolveCommand("limit", []string{"runtime", "web", "small"})
+	if name != "limit:runtime" || from != "limit runtime" || strings.Join(args, " ") != "web small" {
+		t.Fatalf("runtime got %q %q from=%q", name, args, from)
+	}
 }

@@ -83,7 +83,7 @@ func ApplyNamedLimits(r Resources, memoryBytes, milliCPU int64) {
 // ValidateProfileName rejects empty or whitespace-only names.
 func ValidateProfileName(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return fmt.Errorf("runtime profile name is required")
+		return fmt.Errorf("runtime name is required")
 	}
 	return nil
 }

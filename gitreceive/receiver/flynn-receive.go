@@ -268,7 +268,7 @@ func resolveStack(releaseEnv map[string]string) (string, error) {
 }
 
 // slugReleaseProcesses copies existing process types from the previous release
-// and stamps first-seen types with the small runtime profile.
+// and stamps first-seen types with the small runtime.
 func slugReleaseProcesses(processTypes []string, prev *ct.Release, appName string) map[string]ct.ProcessType {
 	var prevProcs map[string]ct.ProcessType
 	if prev != nil {

@@ -1121,6 +1121,9 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE runtime_settings ADD COLUMN max_processes integer NOT NULL DEFAULT 10`,
 		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_max_processes_check CHECK (max_processes >= 1)`,
 	)
+	migrations.Add(62,
+		`ALTER TABLE runtime_settings ADD COLUMN reserve_resources boolean NOT NULL DEFAULT false`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"net/http"
 	"os"
 	"reflect"
@@ -44,6 +43,7 @@ var (
 	ErrJobNotPending    = errors.New("job is no longer pending")
 	ErrNoHostsMatchTags = errors.New("no hosts found matching job tags")
 	ErrHostIsDown       = errors.New("host is down")
+	ErrNoHostCapacity   = errors.New("no hosts with enough reserved CPU or memory")
 	// ErrVolumeInUse is returned when a singleton sirenia job must adopt an
 	// existing data volume that is still held by a running peer. StartJob
 	// retries until the old job is stopping so we never allocate a second
@@ -124,6 +124,10 @@ type Scheduler struct {
 	generateJobUUID func() string
 
 	routerBackends map[string]*RouterBackend
+
+	// reserveResources, when true, only places a job on a host that still
+	// has that job's requested CPU and memory free. Off by default.
+	reserveResources bool
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -747,6 +751,8 @@ func (s *Scheduler) SyncFormations() {
 		active[utils.FormationKey{AppID: f.App.ID, ReleaseID: f.Release.ID}] = struct{}{}
 		s.handleFormation(f)
 	}
+
+	s.syncRuntimeSettings(log)
 
 	// check that all formations we think are active are still active
 	for _, f := range s.formations {
@@ -1450,36 +1456,22 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	}
 
 	// if we didn't pick a host for the job's volumes, pick a host with
-	// the least amount of jobs running of the given type
+	// the least amount of jobs running of the given type. When
+	// reserve_resources is on, skip hosts that cannot fit the job's
+	// requested CPU/memory.
 	if req.Host == nil {
 		formation := req.Job.Formation
 		counts := s.jobs.GetHostJobCounts(formation.key(), req.Job.Type)
-		var minCount int = math.MaxInt32
-		for _, h := range s.ShuffledHosts() {
-			if h.Shutdown {
-				continue
-			}
-			if !req.Job.TagsMatchHost(h) {
-				continue
-			}
-			count, ok := counts[h.ID]
-			if !ok || count == 0 {
-				req.Host = h
-				break
-			}
-			if count < minCount {
-				minCount = count
-				req.Host = h
-			}
-		}
+		req.Host = s.pickHost(req.Job, counts)
 
-		// if we still didn't pick a host, the job's tags don't match
-		// any hosts so mark it as blocked and return an error to
-		// cause the StartJob goroutine to stop trying to place the job
 		if req.Host == nil {
 			req.Job.State = JobStateBlocked
 			s.persistJob(req.Job)
-			req.Error(ErrNoHostsMatchTags)
+			if s.reserveResources && s.anyHostMatchesTags(req.Job) {
+				req.Error(ErrNoHostCapacity)
+			} else {
+				req.Error(ErrNoHostsMatchTags)
+			}
 			return
 		}
 
@@ -1865,6 +1857,9 @@ outer:
 		} else if err == ErrNoHostsMatchTags {
 			log.Warn("unable to place job as tags don't match any hosts")
 			return
+		} else if err == ErrNoHostCapacity {
+			log.Warn("unable to place job as no host has enough reserved CPU or memory")
+			return
 		} else if err == ErrJobNotPending {
 			log.Warn("unable to place job as it is no longer pending")
 			return
@@ -1945,6 +1940,12 @@ func (s *Scheduler) followHost(h utils.HostClient) (*Host, error) {
 	}
 
 	host := NewHost(h, s.logger)
+	if stats, err := h.GetStats(); err == nil && stats != nil {
+		host.MemoryTotalBytes = stats.MemoryTotalBytes
+		if stats.CPUCount > 0 {
+			host.CPUMilli = int64(stats.CPUCount) * 1000
+		}
+	}
 	volumes, err := host.StreamVolumeEventsTo(s.volumeEvents)
 	if err != nil {
 		return nil, err

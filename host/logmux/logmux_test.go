@@ -22,10 +22,10 @@ func TestMuxWriteSystemLine(t *testing.T) {
 		JobType: "web",
 		JobID:   "host1-abc",
 		JobName: "web.1",
-	}, "Starting web process (runtime profile large)")
+	}, "Starting web process (runtime large)")
 	select {
 	case msg := <-ch:
-		if string(msg.Msg) != "Starting web process (runtime profile large)" {
+		if string(msg.Msg) != "Starting web process (runtime large)" {
 			t.Fatalf("msg=%q", msg.Msg)
 		}
 		if string(msg.MsgID) != string(logagg.MsgIDSystem) {

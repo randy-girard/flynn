@@ -27,12 +27,12 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 		job   *ActiveJob
 		want  string
 	}{
-		{JobEventCreate, sampleJob("", "large", "web"), "Starting web process (runtime profile large)"},
+		{JobEventCreate, sampleJob("", "large", "web"), "Starting web process (runtime large)"},
 		{JobEventCreate, sampleJob(JobReasonRestart, "", "web"), "Restarting web process"},
-		{JobEventCreate, sampleJob(JobReasonReplace, "large", "web"), "Replacing web process (runtime profile large)"},
+		{JobEventCreate, sampleJob(JobReasonReplace, "large", "web"), "Replacing web process (runtime large)"},
 		{JobEventCreate, sampleJob(JobReasonScale, "", "web"), "Scaling up web process"},
-		{JobEventStart, sampleJob("", "medium", "web"), "web process started (runtime profile medium)"},
-		{JobEventStart, namedSampleJob("web.4821", "medium", "web"), "web process started (web.4821, runtime profile medium)"},
+		{JobEventStart, sampleJob("", "medium", "web"), "web process started (runtime medium)"},
+		{JobEventStart, namedSampleJob("web.4821", "medium", "web"), "web process started (web.4821, runtime medium)"},
 		{JobEventStop, sampleJob("", "", "web"), "web process stopped"},
 		{JobEventStop, sampleStopJob(JobReasonScaleDown, "web"), "Scaling down web process"},
 		{JobEventError, &ActiveJob{Job: &Job{Metadata: map[string]string{MetaControllerType: "web"}}, Error: strPtr("boom")}, "web process failed to start: boom"},

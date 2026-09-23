@@ -11,41 +11,62 @@ import (
 	"github.com/randy-girard/flynn/host/resource"
 )
 
-func init() {
-	Register("runtime-profile", runRuntimeProfileList, `
-usage: flynn-host runtime-profile
+const (
+	runtimeListUsage = `
+usage: flynn-host runtime
 
-List cluster runtime environments (CPU/memory presets).
-`)
-	Register("runtime-profile:create", runRuntimeProfileCreate, `
-usage: flynn-host runtime-profile:create [--memory <bytes>] [--cpu <milli>] <name>
+List cluster runtimes (CPU/memory presets).
+`
+	runtimeCreateUsage = `
+usage: flynn-host runtime:create [--memory <bytes>] [--cpu <milli>] <name>
 
-Create a runtime environment. Memory is bytes (or 512MB / 1GB). CPU is milliCPU.
+Create a runtime. Memory is bytes (or 512MB / 1GB). CPU is milliCPU.
 
 Options:
-    --memory=<bytes>  Memory limit (default 512MB)
-    --cpu=<milli>     milliCPU limit (default 500)
+    --memory=<bytes>  Memory cap (also reserved when cluster reservation is on; default 512MB)
+    --cpu=<milli>     milliCPU cap (also reserved when cluster reservation is on; default 500)
 
 Examples:
 
-    $ flynn-host runtime-profile:create --memory 512MB --cpu 500 xlarge
-`)
-	Register("runtime-profile:update", runRuntimeProfileUpdate, `
-usage: flynn-host runtime-profile:update [--name <name>] [--memory <bytes>] [--cpu <milli>] <id>
+    $ flynn-host runtime:create --memory 512MB --cpu 500 xlarge
+`
+	runtimeUpdateUsage = `
+usage: flynn-host runtime:update [--name <name>] [--memory <bytes>] [--cpu <milli>] <id>
 
-Update a runtime environment by id, including builtin small/medium/large.
-`)
-	Register("runtime-profile:remove", runRuntimeProfileRemove, `
-usage: flynn-host runtime-profile:remove <id>
+Update a runtime by id, including builtin small/medium/large.
+`
+	runtimeRemoveUsage = `
+usage: flynn-host runtime:remove <id>
 
-Delete a custom runtime environment. Builtin small/medium/large cannot be removed.
-`)
-	Register("runtime-profile:allow-custom", runRuntimeProfileAllowCustom, `
-usage: flynn-host runtime-profile:allow-custom [--disable]
+Delete a custom runtime. Builtin small/medium/large cannot be removed.
+`
+	runtimeAllowCustomUsage = `
+usage: flynn-host runtime:allow-custom [--disable]
 
 Allow (or --disable) cluster admins and app operators to set raw CPU/memory
-limits instead of only named profiles.
-`)
+limits instead of only named runtimes.
+`
+	runtimeReserveUsage = `
+usage: flynn-host runtime:reserve [--disable]
+
+Guarantee CPU and memory on the host when placing processes (off by default).
+When enabled, a process stays pending until a host has that much free Request.
+`
+)
+
+func init() {
+	Register("runtime", runRuntimeProfileList, runtimeListUsage)
+	Register("runtime:create", runRuntimeProfileCreate, runtimeCreateUsage)
+	Register("runtime:update", runRuntimeProfileUpdate, runtimeUpdateUsage)
+	Register("runtime:remove", runRuntimeProfileRemove, runtimeRemoveUsage)
+	Register("runtime:allow-custom", runRuntimeProfileAllowCustom, runtimeAllowCustomUsage)
+	Register("runtime:reserve", runRuntimeReserve, runtimeReserveUsage)
+	Register("runtime-profile", runRuntimeProfileList, aliasUsage("runtime", "runtime-profile", runtimeListUsage))
+	Register("runtime-profile:create", runRuntimeProfileCreate, aliasUsage("runtime:create", "runtime-profile:create", runtimeCreateUsage))
+	Register("runtime-profile:update", runRuntimeProfileUpdate, aliasUsage("runtime:update", "runtime-profile:update", runtimeUpdateUsage))
+	Register("runtime-profile:remove", runRuntimeProfileRemove, aliasUsage("runtime:remove", "runtime-profile:remove", runtimeRemoveUsage))
+	Register("runtime-profile:allow-custom", runRuntimeProfileAllowCustom, aliasUsage("runtime:allow-custom", "runtime-profile:allow-custom", runtimeAllowCustomUsage))
+	Register("runtime-profile:reserve", runRuntimeReserve, aliasUsage("runtime:reserve", "runtime-profile:reserve", runtimeReserveUsage))
 }
 
 func runRuntimeProfileList(_ *docopt.Args) error {
@@ -61,7 +82,7 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault())
+	fmt.Printf("allow_custom_limits=%t max_processes=%d reserve_resources=%t\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault(), settings.ReserveResources)
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tBUILTIN")
 	for _, p := range list {
@@ -154,10 +175,32 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 	s := &ct.RuntimeSettings{
 		AllowCustomLimits: !args.Bool["--disable"],
 		MaxProcesses:      cur.MaxProcessesOrDefault(),
+		ReserveResources:  cur.ReserveResources,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", s.AllowCustomLimits, s.MaxProcessesOrDefault())
+	fmt.Printf("allow_custom_limits=%t max_processes=%d reserve_resources=%t\n", s.AllowCustomLimits, s.MaxProcessesOrDefault(), s.ReserveResources)
+	return nil
+}
+
+func runRuntimeReserve(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	s := &ct.RuntimeSettings{
+		AllowCustomLimits: cur.AllowCustomLimits,
+		MaxProcesses:      cur.MaxProcessesOrDefault(),
+		ReserveResources:  !args.Bool["--disable"],
+	}
+	if err := client.UpdateRuntimeSettings(s); err != nil {
+		return err
+	}
+	fmt.Printf("allow_custom_limits=%t max_processes=%d reserve_resources=%t\n", s.AllowCustomLimits, s.MaxProcessesOrDefault(), s.ReserveResources)
 	return nil
 }

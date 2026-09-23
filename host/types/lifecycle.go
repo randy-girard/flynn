@@ -201,7 +201,7 @@ func lifecycleExtra(job *ActiveJob) string {
 		}
 	}
 	if p := JobRuntimeProfile(job); p != "" {
-		parts = append(parts, "runtime profile "+p)
+		parts = append(parts, "runtime "+p)
 	}
 	return strings.Join(parts, ", ")
 }

@@ -382,36 +382,45 @@ router can operate.
 
 ## Limits
 
-Process types use named runtime environments for CPU and memory. The cluster
-bootstraps three builtins:
+Process types use named runtimes for CPU and memory. Each runtime's CPU and
+memory values are applied as the process **cap**. Reservation of that CPU and
+memory on the host is **optional and off by default**. When you turn it on
+(`flynn-host runtime:reserve`), the scheduler only places a process on a host
+that still has that much free Request; otherwise the process stays pending.
 
-| Profile | Memory | CPU |
+The cluster bootstraps three builtins:
+
+| Runtime | Memory | CPU |
 | --- | --- | --- |
 | `small` | 512MB | 500 milliCPU |
-| `medium` | 1GB | 1000 milliCPU (matches the default when no profile is set) |
+| `medium` | 1GB | 1000 milliCPU (matches the default when no runtime is set) |
 | `large` | 2GB | 2000 milliCPU |
 
-List profiles and apply one:
+List runtimes and apply one:
 
 ```text
 flynn limit
 flynn limit:profiles
-flynn limit:profile web small
+flynn limit:runtime web small
 ```
 
-Operators add or change profiles with `flynn-host runtime-profile:create` and
-`flynn-host runtime-profile:update`. Builtin `small` / `medium` / `large` cannot
+Operators add or change runtimes with `flynn-host runtime:create` and
+`flynn-host runtime:update`. Builtin `small` / `medium` / `large` cannot
 be removed.
 
 Raw numeric CPU/memory (`flynn limit:set web memory=2GB`) is off by default
 (`allow_custom_limits`). Enable it with
-`sudo flynn-host runtime-profile:allow-custom` if operators and app
+`sudo flynn-host runtime:allow-custom` if operators and app
 collaborators should set those numbers. File descriptors and temp disk still
 use `limit:set`:
 
 ```text
 flynn limit:set web max_fd=12000 temp_disk=200MB
 ```
+
+Host-level CPU/memory reservation is off by default. Enable it with
+`sudo flynn-host runtime:reserve` if a process must wait until a host has
+that much free Request instead of packing onto a busy node.
 
 CPU shares are relative: when a host is under load, a job with 2000 milliCPU
 gets twice the CPU time as a job with 1000.

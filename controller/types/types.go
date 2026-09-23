@@ -1119,6 +1119,7 @@ const DefaultMaxProcesses = 10
 type RuntimeSettings struct {
 	AllowCustomLimits bool       `json:"allow_custom_limits"`
 	MaxProcesses      int        `json:"max_processes"`
+	ReserveResources  bool       `json:"reserve_resources"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
 

@@ -14,17 +14,24 @@ var topAliases = map[string]string{
 	"logsink:add":     "log-sink:add",
 	"logsink:list":    "log-sink:list",
 	"logsink:remove":  "log-sink:remove",
-	"runtime-profile": "runtime-profile",
+	"runtime-profile": "runtime",
+	"runtime":         "runtime",
 }
 
 // hyphenAliases rewrites nested-noun hyphen names to extra-colon canonical names.
 // Hyphenated verbs (plugin:update-all, acme:disable-system-routes) stay as-is.
 var hyphenAliases = map[string]string{
-	"plugin:credentials-set":   "plugin:credentials:set",
-	"plugin:credentials-unset": "plugin:credentials:unset",
-	"plugin:credentials-show":  "plugin:credentials:show",
-	"firewall:peer-add":        "firewall:peer:add",
-	"firewall:peer-remove":     "firewall:peer:remove",
+	"plugin:credentials-set":       "plugin:credentials:set",
+	"plugin:credentials-unset":     "plugin:credentials:unset",
+	"plugin:credentials-show":      "plugin:credentials:show",
+	"firewall:peer-add":            "firewall:peer:add",
+	"firewall:peer-remove":         "firewall:peer:remove",
+	"runtime-profile":              "runtime",
+	"runtime-profile:create":       "runtime:create",
+	"runtime-profile:update":       "runtime:update",
+	"runtime-profile:remove":       "runtime:remove",
+	"runtime-profile:allow-custom": "runtime:allow-custom",
+	"runtime-profile:reserve":      "runtime:reserve",
 }
 
 // subAliases rewrites flynn-host <noun> <verb> to flynn-host <noun>:<verb>.
@@ -87,12 +94,21 @@ var subAliases = map[string]map[string]string{
 		"setup":     "github:setup",
 		"disable":   "github:disable",
 	},
+	"runtime": {
+		"create":       "runtime:create",
+		"update":       "runtime:update",
+		"remove":       "runtime:remove",
+		"delete":       "runtime:remove",
+		"allow-custom": "runtime:allow-custom",
+		"reserve":      "runtime:reserve",
+	},
 	"runtime-profile": {
-		"create":       "runtime-profile:create",
-		"update":       "runtime-profile:update",
-		"remove":       "runtime-profile:remove",
-		"delete":       "runtime-profile:remove",
-		"allow-custom": "runtime-profile:allow-custom",
+		"create":       "runtime:create",
+		"update":       "runtime:update",
+		"remove":       "runtime:remove",
+		"delete":       "runtime:remove",
+		"allow-custom": "runtime:allow-custom",
+		"reserve":      "runtime:reserve",
 	},
 	"events": {
 		"visible": "events:visible",
@@ -128,9 +144,6 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
-	if target, ok := hyphenAliases[name]; ok {
-		return target, args, name
-	}
 	if len(args) >= 2 {
 		if subs, ok := subAliases[name+":"+args[0]]; ok {
 			if target, ok := subs[args[1]]; ok {
@@ -152,6 +165,9 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 				return target, args[1:], name + " " + args[0]
 			}
 		}
+	}
+	if target, ok := hyphenAliases[name]; ok {
+		return target, args, name
 	}
 	if target, ok := topAliases[name]; ok && target != name && helpOnlyArgs(args) {
 		return target, args, name

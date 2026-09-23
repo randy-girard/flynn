@@ -15,11 +15,13 @@ import (
 )
 
 type Host struct {
-	ID       string            `json:"id"`
-	Tags     map[string]string `json:"tags"`
-	Healthy  bool              `json:"healthy"`
-	Checks   int               `json:"checks"`
-	Shutdown bool              `json:"shutdown"`
+	ID               string            `json:"id"`
+	Tags             map[string]string `json:"tags"`
+	Healthy          bool              `json:"healthy"`
+	Checks           int               `json:"checks"`
+	Shutdown         bool              `json:"shutdown"`
+	MemoryTotalBytes uint64            `json:"memory_total_bytes,omitempty"`
+	CPUMilli         int64             `json:"cpu_milli,omitempty"`
 
 	client   utils.HostClient
 	stop     chan struct{}

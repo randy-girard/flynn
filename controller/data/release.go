@@ -70,7 +70,7 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 				if err == ErrNotFound {
 					return ct.ValidationError{
 						Field:   "runtime_profile",
-						Message: fmt.Sprintf("unknown runtime profile %q", name),
+						Message: fmt.Sprintf("unknown runtime %q", name),
 					}
 				}
 				return err

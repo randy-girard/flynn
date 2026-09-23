@@ -33,8 +33,8 @@ Examples:
 	register("limit:profiles", runLimitProfiles, `
 usage: flynn limit:profiles
 
-List cluster runtime environments (small, medium, large, and custom profiles).
-Apply one to a process type with flynn limit:profile.
+List cluster runtimes (small, medium, large, and custom).
+Apply one to a process type with flynn limit:runtime.
 
 Examples:
 
@@ -54,18 +54,20 @@ Examples:
 	$ flynn limit:set web memory=512MB max_fd=12000 cpu=500 temp_disk=200MB
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb
 `)
-	register("limit:profile", runLimitProfile, `
-usage: flynn limit:profile <proc> <profile>
+	limitRuntimeUsage := `
+usage: flynn limit:runtime <proc> <profile>
 
-Apply a named runtime environment (small, medium, large, or a custom profile)
+Apply a named runtime (small, medium, large, or a custom runtime)
 to a process type. Custom CPU/memory numbers require the cluster setting
-allow_custom_limits (see flynn-host runtime-profile:allow-custom).
+allow_custom_limits (see flynn-host runtime:allow-custom).
 
 Examples:
 
-	$ flynn limit:profile web small
+	$ flynn limit:runtime web small
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb
-`)
+`
+	register("limit:runtime", runLimitProfile, limitRuntimeUsage)
+	register("limit:profile", runLimitProfile, strings.ReplaceAll(limitRuntimeUsage, "limit:runtime", "limit:profile"))
 }
 
 func runLimitList(args *docopt.Args, client controller.Client) error {
@@ -99,7 +101,7 @@ func formatLimits(w io.Writer, s string, t ct.ProcessType) {
 	r := t.Resources
 	limits := make([]string, 0, len(r)+1)
 	if t.RuntimeProfile != "" {
-		limits = append(limits, "profile="+t.RuntimeProfile)
+		limits = append(limits, "runtime="+t.RuntimeProfile)
 	}
 	for typ, spec := range r {
 		if limit := spec.Limit; limit != nil {
@@ -139,7 +141,7 @@ func runLimitSet(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	if !settings.AllowCustomLimits {
-		return fmt.Errorf("custom CPU/memory limits are disabled on this cluster; apply a named profile with `flynn limit:profile %s <small|medium|large>` or ask a cluster admin to enable custom limits", proc)
+		return fmt.Errorf("custom CPU/memory limits are disabled on this cluster; apply a named runtime with `flynn limit:runtime %s <small|medium|large>` or ask a cluster admin to enable custom limits", proc)
 	}
 
 	resources, err := resource.Parse(cliutil.List(args, "<var>=<val>"))
@@ -181,7 +183,7 @@ func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	}
 	profile := lookupRuntimeProfile(list, name)
 	if profile == nil {
-		return fmt.Errorf("unknown runtime profile %q; run `flynn limit:profiles`", name)
+		return fmt.Errorf("unknown runtime %q; run `flynn limit:profiles`", name)
 	}
 	app, err := client.GetApp(mustApp())
 	if err != nil {
@@ -208,7 +210,7 @@ func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	if err := client.DeployAppRelease(app.ID, release.ID, nil); err != nil {
 		return err
 	}
-	fmt.Printf("Created release %s (%s: profile=%s memory=%s cpu=%d)\n",
+	fmt.Printf("Created release %s (%s: runtime=%s memory=%s cpu=%d)\n",
 		release.ID, proc, profile.Name,
 		resource.FormatLimit(resource.TypeMemory, profile.Memory), profile.CPU)
 	return nil
