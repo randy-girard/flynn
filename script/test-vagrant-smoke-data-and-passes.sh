@@ -255,6 +255,8 @@ need 'RESUME_AT=restore' \
   "smoke must be able to resume at bootstrap --from-backup after a failed restore"
 need 'db-check' \
   "assert_databases must log per-engine progress so a hang is obvious"
+need 'smoke_cli_retry' \
+  "assert_databases must retry unknown_error on pg:psql after HA controller roll"
 need 'step_host_unit_tests' \
   "smoke must run host unit tests before Vagrant up"
 need 'validate-gofmt' \

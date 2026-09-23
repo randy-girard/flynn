@@ -4748,9 +4748,9 @@ assert_databases() {
 
   if datastore_wanted postgres; then
   echo "db-check ${label}: postgres"
-  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4762,9 +4762,9 @@ assert_databases() {
 
   if datastore_wanted mysql; then
   echo "db-check ${label}: mysql"
-  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "mysql" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4776,8 +4776,8 @@ assert_databases() {
 
   if datastore_wanted mongodb; then
   echo "db-check ${label}: mongodb"
-  out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "${label}" "mongodb" "PASS" "probe=pre-upgrade docs=${count}"
   else
@@ -4789,10 +4789,10 @@ assert_databases() {
 
   if datastore_wanted redis; then
   echo "db-check ${label}: redis"
-  out="$(flynn1 -a "${APP_NAME}" redis redis-cli GET smoke_probe)"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" redis redis-cli GET smoke_probe)"
   local aof
-  aof="$(flynn1 -a "${APP_NAME}" redis redis-cli INFO persistence)"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
+  aof="$(smoke_cli_retry flynn1 -a "${APP_NAME}" redis redis-cli INFO persistence)"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
   if echo "${out}" | grep -q 'pre-upgrade' && echo "${aof}" | grep -q 'aof_enabled:1' && [[ -n "${count}" && "${count}" -ge $((rows + 1)) ]]; then
     record_check "${label}" "redis" "PASS" "probe=pre-upgrade dbsize=${count} aof=1"
   else
@@ -4889,9 +4889,9 @@ assert_restored_datastores() {
 
   if datastore_wanted postgres; then
   echo "db-check ${label}: postgres"
-  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4903,9 +4903,9 @@ assert_restored_datastores() {
 
   if datastore_wanted mysql; then
   echo "db-check ${label}: mysql"
-  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "${label}" "mysql" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
@@ -4917,8 +4917,8 @@ assert_restored_datastores() {
 
   if datastore_wanted mongodb; then
   echo "db-check ${label}: mongodb"
-  out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "${label}" "mongodb" "PASS" "probe=pre-upgrade docs=${count}"
   else
@@ -4933,7 +4933,7 @@ assert_restored_datastores() {
     for pass in $(seq 1 "${UPGRADE_PASSES}"); do
       marker="post-upgrade-${pass}"
       echo "db-check ${label}: ${marker} markers"
-      out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
+      out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
       if echo "${out}" | grep -q "${marker}"; then
         record_check "${label}" "pg-${marker}" "PASS" "still present"
       else
@@ -4983,6 +4983,32 @@ assert_restored_datastores() {
     return 1
   fi
   echo "databases ${label}: postgres/mysql/mongodb restored; redis/kafka/clickhouse up empty"
+}
+
+# User-app resource CLIs (pg:psql, mysql, mongodb, redis) can return Flynn's
+# generic "unknown_error: Something went wrong" for a few seconds after
+# flynn-host update while controller/postgres settle. assert_databases used
+# to fail HA post-upgrade-1 on a one-shot pg:psql.
+smoke_cli_retry() {
+  local attempt rc out snippet
+  for attempt in 1 2 3 4 5 6; do
+    rc=0
+    out="$("$@" 2>&1)" || rc=$?
+    snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    if [[ "${rc}" -eq 0 ]]; then
+      printf '%s' "${out}"
+      return 0
+    fi
+    if echo "${out}" | grep -qiE 'unknown_error|connection refused|connection reset|i/o timeout|no such host'; then
+      echo "db-check retry ${attempt}/6 (${snippet})" >&2
+      sleep 2
+      continue
+    fi
+    printf '%s' "${out}"
+    return "${rc}"
+  done
+  printf '%s' "${out}"
+  return "${rc}"
 }
 
 # User-app pg:psql with the same unknown_error retries as cli_probe.

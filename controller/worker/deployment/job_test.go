@@ -58,10 +58,24 @@ func TestOneDownOneUpDeployNotSkippedWhenOldReleaseActive(t *testing.T) {
 		oldFormation: &ct.Formation{Processes: map[string]int{"app": 1}},
 		newFormation: &ct.Formation{Processes: map[string]int{"app": 1}},
 	}
-	shouldSkip := processesEqual(d.newFormation.Processes, d.Processes) &&
-		(d.Strategy != "one-down-one-up" || !d.oldReleaseStillActive())
+	shouldSkip := processesEqual(d.newFormation.Processes, d.Processes) && !d.oldReleaseStillActive()
 	if shouldSkip {
 		t.Fatal("omni one-down-one-up must not skip while old routers still run")
+	}
+}
+
+func TestOneByOneDeployNotSkippedWhenOldReleaseActive(t *testing.T) {
+	target := map[string]int{"web": 2, "scheduler": 1}
+	d := &DeployJob{
+		Deployment:   &ct.Deployment{Strategy: "one-by-one", Processes: target},
+		oldFormation: &ct.Formation{Processes: map[string]int{"web": 2, "scheduler": 1}},
+		newFormation: &ct.Formation{Processes: map[string]int{"web": 2, "scheduler": 1}},
+	}
+	if !processesEqual(d.newFormation.Processes, d.Processes) {
+		t.Fatal("test precondition: new formation already at target")
+	}
+	if !d.oldReleaseStillActive() {
+		t.Fatal("old controller jobs must still count as active")
 	}
 }
 
@@ -72,6 +86,25 @@ func TestOneDownOneUpIsAKnownStrategy(t *testing.T) {
 	}
 	if !strings.Contains(string(src), `case "one-down-one-up":`) {
 		t.Fatal("Perform must dispatch one-down-one-up (redis appliance strategy)")
+	}
+}
+
+func TestScaleOneByOneRollsOmniOneHostAtATime(t *testing.T) {
+	src, err := os.ReadFile("job.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "func (d *DeployJob) scaleOneByOne"
+	start := strings.Index(string(src), marker)
+	if start < 0 {
+		t.Fatal("scaleOneByOne missing")
+	}
+	fn := string(src[start:])
+	if end := strings.Index(fn, "\nfunc "); end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "processIsOmni") || !strings.Contains(fn, "scaleOmniOneDownOneUp") {
+		t.Fatal("one-by-one omni processes (controller scheduler) must roll one host at a time")
 	}
 }
 

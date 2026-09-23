@@ -343,6 +343,12 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		log.Error("error creating artifact", "err", err)
 		return err
 	}
+	if releases, listErr := client.AppReleaseList(app.ID); listErr != nil {
+		log.Warn("could not list releases to reuse an in-flight update", "err", listErr)
+	} else if reuse := updaterdeploy.ReusableUpdateRelease(release.ID, image.ID, releases); reuse != nil {
+		log.Info("reusing existing update release instead of creating another", "release.id", reuse.ID)
+		return waitDeployAppRelease(client, app.ID, reuse.ID, log)
+	}
 	release.ID = ""
 	release.ArtifactIDs[0] = image.ID
 	if updateFn != nil {
@@ -352,9 +358,13 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		log.Error("error creating new release", "err", err)
 		return err
 	}
+	return waitDeployAppRelease(client, app.ID, release.ID, log)
+}
+
+func waitDeployAppRelease(client controller.Client, appID, releaseID string, log log15.Logger) error {
 	timeoutCh := make(chan struct{})
 	time.AfterFunc(deployTimeout, func() { close(timeoutCh) })
-	if err := client.DeployAppRelease(app.ID, release.ID, timeoutCh); err != nil {
+	if err := client.DeployAppRelease(appID, releaseID, timeoutCh); err != nil {
 		log.Error("error deploying app", "err", err)
 		return err
 	}

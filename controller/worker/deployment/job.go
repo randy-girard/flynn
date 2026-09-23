@@ -83,8 +83,12 @@ func (d *DeployJob) Perform() error {
 	if processesEqual(d.newFormation.Processes, d.Processes) {
 		if d.Strategy == "sirenia" && d.sireniaOldReleaseActive() {
 			log.Info("sirenia new formation matches target but old release still active, continuing deploy")
-		} else if d.Strategy == "one-down-one-up" && d.oldReleaseStillActive() {
-			log.Info("one-down-one-up new formation matches target but old release still active, continuing deploy")
+		} else if d.oldReleaseStillActive() {
+			// one-by-one omni (controller scheduler) starts the new
+			// formation first. A scale timeout can leave both releases
+			// running; the next deploy of the same release must finish
+			// draining the old jobs instead of no-op'ing.
+			log.Info("new formation matches target but old release still active, continuing deploy")
 		} else {
 			log.Info("deployment already completed, nothing to do")
 			return nil
@@ -167,6 +171,9 @@ func (d *DeployJob) logJobEvent(job *ct.Job) error {
 }
 
 func (d *DeployJob) scaleOneByOne(typ string, log log15.Logger) error {
+	if d.processIsOmni(typ) {
+		return d.scaleOmniOneDownOneUp(typ, log)
+	}
 	return d.scaleUpDownInBatches(typ, 1, log)
 }
 

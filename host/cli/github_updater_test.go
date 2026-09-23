@@ -105,6 +105,20 @@ func TestTarballUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterReusesInFlightUpdateRelease(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	reuse := strings.Index(body, "ReusableUpdateRelease")
+	create := strings.Index(body, "client.CreateRelease(app.ID, release)")
+	if fn < 0 || reuse < 0 || create < 0 || reuse < fn || create < reuse {
+		t.Fatal("scale-timeout retries must reuse the in-flight release instead of stacking formations")
+	}
+}
+
 func TestTarballUpdaterBackfillsClusterAuthKeys(t *testing.T) {
 	src, err := os.ReadFile("github_updater.go")
 	if err != nil {
