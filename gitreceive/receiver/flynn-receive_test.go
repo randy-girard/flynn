@@ -405,3 +405,25 @@ func TestParsePairs(t *testing.T) {
 		t.Fatal("malformed pair")
 	}
 }
+
+func TestWatchInitialScaleIgnoresTransientDown(t *testing.T) {
+	cb := watchInitialScale("web")
+	if err := cb(&ct.Job{State: ct.JobStateDown}); err != nil {
+		t.Fatalf("first down must wait for a replacement: %v", err)
+	}
+	if err := cb(&ct.Job{State: ct.JobStateUp}); err != nil {
+		t.Fatalf("up after a crash must succeed: %v", err)
+	}
+}
+
+func TestWatchInitialScaleFailsAfterRepeatedDown(t *testing.T) {
+	cb := watchInitialScale("web")
+	for i := 0; i < initialJobDownThreshold; i++ {
+		if err := cb(&ct.Job{State: ct.JobStateDown}); err != nil {
+			t.Fatalf("down %d must be ignored: %v", i+1, err)
+		}
+	}
+	if err := cb(&ct.Job{State: ct.JobStateDown}); err == nil {
+		t.Fatal("repeated downs must fail the initial scale")
+	}
+}

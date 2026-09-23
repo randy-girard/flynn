@@ -76,8 +76,9 @@ func ShouldRetryTransientSystemDeploy(err error) bool {
 }
 
 // ShouldRetryAfterScaleTimeout returns whether a deploy failed because the
-// controller's scale step or a sirenia startInstance wait did not finish
-// before the app's deploy timeout. This is common after a cluster-wide host
+// controller's scale step, a sirenia startInstance wait, or an omni
+// one-down-one-up wait for old scheduler/router jobs did not finish before
+// the app's deploy timeout. This is common after a cluster-wide host
 // restart when the scheduler is still placing jobs. The HA sirenia wait
 // error is "timed out waiting for new instance to come up" (no "sirenia"
 // substring), so it is not covered by ShouldRetryAfterUnsettledDiscoverdLeader.
@@ -92,6 +93,8 @@ func ShouldRetryAfterScaleTimeout(err error) bool {
 	case strings.Contains(msg, "timed out waiting for new instance to come up"):
 		return true
 	case strings.Contains(msg, "timed out waiting for new sirenia peer to come up"):
+		return true
+	case strings.Contains(msg, "timed out waiting for old") && strings.Contains(msg, "jobs to stop"):
 		return true
 	default:
 		return false

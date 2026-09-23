@@ -592,17 +592,9 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 
 		timeout := time.Duration(app.DeployTimeout) * time.Second
 		opts := ct.ScaleOptions{
-			Processes: map[string]int{procName: 1},
-			Timeout:   &timeout,
-			JobEventCallback: func(job *ct.Job) error {
-				switch job.State {
-				case ct.JobStateUp:
-					fmt.Printf("=====> Initial %s job started\n", procName)
-				case ct.JobStateDown:
-					return fmt.Errorf("Initial %s job failed to start", procName)
-				}
-				return nil
-			},
+			Processes:        map[string]int{procName: 1},
+			Timeout:          &timeout,
+			JobEventCallback: watchInitialScale(procName),
 		}
 		fmt.Printf("-----> Waiting for initial %s job to start...\n", procName)
 		if err := client.ScaleAppRelease(app.ID, release.ID, opts); err != nil {
@@ -616,6 +608,31 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 
 	fmt.Println("=====> Application deployed")
 	return nil
+}
+
+// initialJobDownThreshold matches controller deploy scale-up: a first web
+// job can exit once (host restart, brief overlay blip) and still come up.
+const initialJobDownThreshold = 5
+
+func watchInitialScale(procName string) func(*ct.Job) error {
+	downs := 0
+	return func(job *ct.Job) error {
+		if job == nil {
+			return nil
+		}
+		switch job.State {
+		case ct.JobStateUp:
+			fmt.Printf("=====> Initial %s job started\n", procName)
+		case ct.JobStateDown:
+			downs++
+			if downs <= initialJobDownThreshold {
+				fmt.Printf("-----> WARN: initial %s job exited (attempt %d/%d); waiting for a replacement\n", procName, downs, initialJobDownThreshold)
+				return nil
+			}
+			return fmt.Errorf("Initial %s job failed to start", procName)
+		}
+		return nil
+	}
 }
 
 // defaultScaleProcess is the process type gitreceive scales to 1 on a first

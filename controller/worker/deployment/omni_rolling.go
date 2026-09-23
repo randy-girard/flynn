@@ -201,36 +201,78 @@ func (d *DeployJob) finishOmniRoll(typ string, log log15.Logger) error {
 	return nil
 }
 
+func leftoverOmniJobs(jobs []*ct.Job, oldReleaseID, typ string, allowed map[string]struct{}) []*ct.Job {
+	var leftover []*ct.Job
+	for _, job := range jobs {
+		if job == nil || job.ReleaseID != oldReleaseID || job.Type != typ {
+			continue
+		}
+		if !jobHoldsHostPort(job) {
+			continue
+		}
+		if _, ok := allowed[job.HostID]; ok {
+			continue
+		}
+		leftover = append(leftover, job)
+	}
+	return leftover
+}
+
+func jobStopID(job *ct.Job) string {
+	if job == nil {
+		return ""
+	}
+	if job.UUID != "" {
+		return job.UUID
+	}
+	return job.ID
+}
+
+// omniForceStopAfter is how long waitOldOmniJobsStopped waits for a graceful
+// stop before DeleteJob on leftovers. Scheduler/router jobs that sit in
+// stopping/up after formation=0 block the next host's omni start.
+var omniForceStopAfter = 8 * time.Second
+
 func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, log log15.Logger) error {
 	allowed := make(map[string]struct{}, len(remainingHosts))
 	for _, id := range remainingHosts {
 		allowed[id] = struct{}{}
 	}
-	deadline := time.Now().Add(d.timeout)
+	started := time.Now()
+	deadline := started.Add(d.timeout)
+	if d.timeout <= 0 {
+		deadline = started.Add(10 * time.Minute)
+	}
+	forced := false
 	for {
 		jobs, err := d.client.JobList(d.AppID)
 		if err != nil {
 			return err
 		}
-		var leftover []string
-		for _, job := range jobs {
-			if job == nil || job.ReleaseID != d.OldReleaseID || job.Type != typ {
-				continue
-			}
-			if !jobHoldsHostPort(job) {
-				continue
-			}
-			if _, ok := allowed[job.HostID]; ok {
-				continue
-			}
-			leftover = append(leftover, job.HostID)
-		}
+		leftover := leftoverOmniJobs(jobs, d.OldReleaseID, typ, allowed)
 		if len(leftover) == 0 {
 			return nil
 		}
-		log.Info("waiting for old omni jobs to release host ports", "hosts", leftover)
+		hosts := make([]string, 0, len(leftover))
+		for _, job := range leftover {
+			hosts = append(hosts, job.HostID)
+		}
+		log.Info("waiting for old omni jobs to release host ports", "hosts", hosts)
+		if !forced && time.Since(started) >= omniForceStopAfter {
+			for _, job := range leftover {
+				id := jobStopID(job)
+				if id == "" {
+					continue
+				}
+				log.Warn("force-stopping leftover omni job", "job.id", id, "host.id", job.HostID, "job.state", job.State)
+				if err := d.client.DeleteJob(d.AppID, id); err != nil {
+					log.Warn("force-stop leftover omni job failed", "job.id", id, "err", err)
+				}
+			}
+			forced = true
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("timed out waiting for old %s jobs to stop on %v", typ, leftover)
+			return fmt.Errorf("timed out waiting for old %s jobs to stop on %v", typ, hosts)
 		}
 		select {
 		case <-d.stop:
