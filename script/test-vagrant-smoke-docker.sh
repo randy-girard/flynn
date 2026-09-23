@@ -72,6 +72,10 @@ need 'DOCKER_PUSH_BODY' \
   "docker-push HTTP body must be configurable and distinct from git-push"
 need 'wait_and_assert_docker_apps' \
   "every topology verify phase must probe both Dockerfile deploy paths"
+need 'docker-http .*retry' \
+  "assert_docker_http must retry 503s after flynn-host update (HA post-upgrade TOCTOU)"
+need 'docker-push-http .*retry' \
+  "assert_docker_push_http must retry the same router roll as docker-http"
 need 'docker-http' \
   "smoke must HTTP-probe the Dockerfile git-push app before and after upgrade"
 need 'docker-push-http' \

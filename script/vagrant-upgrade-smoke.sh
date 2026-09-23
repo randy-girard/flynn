@@ -4435,19 +4435,26 @@ probe_docker_http() {
 
 assert_docker_http() {
   local label=$1
-  local body
-  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
-    record_check "${label}" "docker-http" "FAIL" "GET / curl failed"
-    echo "docker HTTP check (${label}) failed: curl error" >&2
-    return 1
-  }
-  if ! echo "${body}" | grep -q 'docker-smoke ok'; then
-    record_check "${label}" "docker-http" "FAIL" "body=${body}"
-    echo "docker HTTP check (${label}) failed: body=${body}" >&2
-    return 1
-  fi
-  record_check "${label}" "docker-http" "PASS" "GET / => docker-smoke ok"
-  echo "docker-http ${label}: ok"
+  local body attempt
+  # wait_for can pass on a single 200 while routers are still rolling after
+  # flynn-host update; HA post-upgrade-1 then 503'd the follow-up GET.
+  for attempt in $(seq 1 12); do
+    body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/" 2>/dev/null)" || {
+      echo "docker-http ${label}: retry ${attempt}/12 curl error" >&2
+      sleep 5
+      continue
+    }
+    if echo "${body}" | grep -q 'docker-smoke ok'; then
+      record_check "${label}" "docker-http" "PASS" "GET / => docker-smoke ok"
+      echo "docker-http ${label}: ok"
+      return 0
+    fi
+    echo "docker-http ${label}: retry ${attempt}/12 body=$(echo "${body}" | tr '\n' ' ' | cut -c1-60)" >&2
+    sleep 5
+  done
+  record_check "${label}" "docker-http" "FAIL" "GET / curl failed"
+  echo "docker HTTP check (${label}) failed: curl error" >&2
+  return 1
 }
 
 assert_docker_ps() {
@@ -4481,19 +4488,24 @@ probe_docker_push_http() {
 
 assert_docker_push_http() {
   local label=$1
-  local body
-  body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/")" || {
-    record_check "${label}" "docker-push-http" "FAIL" "GET / curl failed"
-    echo "docker-push HTTP check (${label}) failed: curl error" >&2
-    return 1
-  }
-  if ! echo "${body}" | grep -q "${DOCKER_PUSH_BODY}"; then
-    record_check "${label}" "docker-push-http" "FAIL" "body=${body}"
-    echo "docker-push HTTP check (${label}) failed: body=${body}" >&2
-    return 1
-  fi
-  record_check "${label}" "docker-push-http" "PASS" "GET / => ${DOCKER_PUSH_BODY}"
-  echo "docker-push-http ${label}: ok"
+  local body attempt
+  for attempt in $(seq 1 12); do
+    body="$(curl -fsS --max-time 30 -H "Host: ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/" 2>/dev/null)" || {
+      echo "docker-push-http ${label}: retry ${attempt}/12 curl error" >&2
+      sleep 5
+      continue
+    }
+    if echo "${body}" | grep -q "${DOCKER_PUSH_BODY}"; then
+      record_check "${label}" "docker-push-http" "PASS" "GET / => ${DOCKER_PUSH_BODY}"
+      echo "docker-push-http ${label}: ok"
+      return 0
+    fi
+    echo "docker-push-http ${label}: retry ${attempt}/12 body=$(echo "${body}" | tr '\n' ' ' | cut -c1-60)" >&2
+    sleep 5
+  done
+  record_check "${label}" "docker-push-http" "FAIL" "GET / curl failed"
+  echo "docker-push HTTP check (${label}) failed: curl error" >&2
+  return 1
 }
 
 assert_docker_push_ps() {
