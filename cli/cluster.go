@@ -93,6 +93,19 @@ Examples:
 	$ flynn cluster:refresh --clear
 	Cleared TLS pin for cluster "default". Standard TLS verification will be used.
 `)
+	register("cluster:ca", runClusterCA, `
+usage: flynn cluster:ca
+
+Print the Flynn cluster CA certificate (PEM) stored for the current cluster
+(~/.flynn/ca-certs/<name>.pem). Use this to trust Flynn-minted TLS in a
+browser or OS store. git already uses this file via http.<git-url>.sslCAInfo
+from cluster:add. After Let's Encrypt is on system routes, you do not need
+this CA; run flynn cluster:refresh --clear instead.
+
+The CLI does not take --insecure for controller/git. Trust is the TLS pin
+in ~/.flynnrc plus this CA file, or public Web PKI after
+flynn-host letsencrypt:enable-system-routes.
+`)
 	// Hidden for one release: still run after the "moved to flynn-host" hint.
 	register("cluster:backup", runClusterBackup, `
 usage: flynn cluster:backup [--file <file>]
@@ -203,15 +216,13 @@ func runClusterAdd(args *docopt.Args) error {
 	}
 
 	var caPath string
-	if s.GitURL != "" || s.DockerPushURL != "" {
-		client, err := s.Client()
-		if err != nil {
-			return err
-		}
-		caPath, err = writeCACert(client, s.Name)
-		if err != nil {
-			return fmt.Errorf("Error writing CA certificate: %s", err)
-		}
+	client, err := s.Client()
+	if err != nil {
+		return err
+	}
+	caPath, err = writeCACert(client, s.Name)
+	if err != nil {
+		return fmt.Errorf("Error writing CA certificate: %s", err)
 	}
 
 	if s.GitURL != "" {
@@ -268,6 +279,38 @@ func writeCACert(c controller.Client, name string) (string, error) {
 	defer dest.Close()
 	_, err = dest.Write(data)
 	return dest.Name(), err
+}
+
+func runClusterCA(args *docopt.Args) error {
+	cluster, err := getCluster()
+	if err != nil {
+		return err
+	}
+	path := cfg.CACertPath(cluster.Name)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		client, cerr := cluster.Client()
+		if cerr != nil {
+			return fmt.Errorf("cluster CA not stored at %s and controller client failed: %w", path, cerr)
+		}
+		path, err = writeCACert(client, cluster.Name)
+		if err != nil {
+			return err
+		}
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+	}
+	fmt.Fprint(os.Stdout, string(data))
+	if !strings.HasSuffix(string(data), "\n") {
+		fmt.Fprintln(os.Stdout)
+	}
+	fmt.Fprintf(os.Stderr, "cluster CA for %q: %s\n", cluster.Name, path)
+	return nil
 }
 
 func runClusterRemove(args *docopt.Args) error {

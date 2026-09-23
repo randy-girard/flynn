@@ -26,7 +26,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"volume:show", "volume:decommission",
 		"route:add", "resource:add", "resource:expose", "resource:unexpose",
 		"letsencrypt", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
-		"cluster:add", "cluster:migrate-domain",
+		"cluster:add", "cluster:migrate-domain", "cluster:ca",
 		"limit:set", "limit:profiles", "limit:runtime",
 	}
 	for _, name := range want {

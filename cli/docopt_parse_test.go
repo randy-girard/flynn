@@ -144,3 +144,8 @@ func TestClusterRefreshParsesYes(t *testing.T) {
 		t.Fatal("cluster:refresh --clear must not imply --yes")
 	}
 }
+
+func TestClusterCAParses(t *testing.T) {
+	parseCLI(t, []string{"cluster:ca"})
+	parseCLI(t, []string{"cluster", "ca"})
+}

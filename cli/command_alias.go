@@ -100,6 +100,7 @@ var subAliases = map[string]map[string]string{
 		"default":        "cluster:default",
 		"update-pin":     "cluster:refresh",
 		"refresh":        "cluster:refresh",
+		"ca":             "cluster:ca",
 		"backup":         "cluster:backup",
 		"log-sink":       "cluster:log-sink",
 		"migrate-domain": "cluster:migrate-domain",

@@ -82,7 +82,21 @@ administrator access is the install key (`ClusterKey`), a dashboard JWT
 with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
 empty app grants is not an administrator; it has no controller access.
 The TLS certificate used for communication is generated during installation
-(self-signed). Configure Let's Encrypt after bootstrap with
+(self-signed). Operators should not pass `--insecure` or skip-verify to talk
+to the controller, git, or dashboard:
+
+1. **`flynn cluster:add`** stores a TLS pin in `~/.flynnrc` and writes the
+   Flynn CA to `~/.flynn/ca-certs/<cluster>.pem`. The CLI verifies the pin;
+   git uses `http.<git-url>.sslCAInfo` on that file. Print the CA with
+   `flynn cluster:ca` if you need it in an OS or browser trust store.
+2. **Let's Encrypt on system routes** (`flynn-host plugin:install letsencrypt`,
+   `letsencrypt:configure`, `letsencrypt:enable-system-routes`) replaces the
+   bootstrap cert with a publicly trusted certificate. Then run
+   `flynn cluster:refresh --clear` so the CLI uses system CAs instead of the
+   pin. Intra-cluster mTLS (discoverd, host APIs, appliances) still uses the
+   Flynn CA.
+
+Configure Let's Encrypt after bootstrap with
 `flynn-host plugin:install letsencrypt`,
 `flynn-host letsencrypt:configure --email=<you> --agree-tos` and
 `flynn-host letsencrypt:enable-system-routes` so the dashboard and controller

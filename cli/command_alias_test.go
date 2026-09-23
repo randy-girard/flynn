@@ -36,6 +36,10 @@ func TestResolveCommandClusterBackupMoved(t *testing.T) {
 	if movedToHost[name] != "flynn-host backup" {
 		t.Fatalf("moved hint %q", movedToHost[name])
 	}
+	name, args, from = resolveCommand("cluster", []string{"ca"})
+	if name != "cluster:ca" || from != "cluster ca" {
+		t.Fatalf("cluster ca got %q from=%q", name, from)
+	}
 }
 
 func TestExpandColonSuffix(t *testing.T) {
