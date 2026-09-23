@@ -51,6 +51,7 @@ var subAliases = map[string]map[string]string{
 		"set":      "limit:set",
 		"profile":  "limit:profile",
 		"profiles": "limit:profiles",
+		"runtime":  "limit:runtime",
 	},
 	"ps": {
 		"kill":  "ps:kill",

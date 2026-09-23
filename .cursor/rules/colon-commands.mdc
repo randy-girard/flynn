@@ -37,7 +37,7 @@ flynn-host log:sink:add
 
 - **Noun + verb** → colon (`plugin:list`, `acme:configure`, `volume:delete`).
 - **Nested noun + verb** → extra colon (`plugin:credentials:set`, `firewall:peer:add`, `kafka:topics:create`).
-- **Hyphenated multi-word action or noun stays hyphenated** (`acme:disable-system-routes`, `acme:enable-system-routes`, `plugin:update-all`, `runtime-profile:allow-custom`, `docker:set-push-url`, `cluster:migrate-domain`, `log-sink:add`).
+- **Hyphenated multi-word action or noun stays hyphenated** (`acme:disable-system-routes`, `acme:enable-system-routes`, `plugin:update-all`, `runtime:allow-custom`, `docker:set-push-url`, `cluster:migrate-domain`, `log-sink:add`).
 - **Standalone verbs stay verbs** (`backup`, `daemon`, `update`, `ps`, `run`).
 - Space form is a **permanent alias** (print `flynn-host volume gc is now flynn-host volume:gc`). When a nested noun used to be hyphenated, that hyphen name is also a permanent alias (print `flynn-host plugin:credentials-set is now flynn-host plugin:credentials:set`). Register the colon name; map space and old hyphen forms in `command_alias.go`.
 - Root help lists **parent commands only** (one alphabetical list, no grouped subsections). Nested verbs — including plugin actions such as `redis:dump` — appear under `flynn help <parent>` / `flynn <parent> --help` (and the same for `flynn-host`).

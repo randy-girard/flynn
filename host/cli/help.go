@@ -20,7 +20,7 @@ See 'flynn-host help <command>' or 'flynn-host <command> --help' for a command a
 `
 
 type namespaceCmd struct {
-	verb string
+	name string
 	desc string
 }
 
@@ -147,7 +147,7 @@ func FormatHelp(name string) string {
 	b.WriteString("\nCommands:\n")
 	items := make([]clihelp.Item, 0, len(children))
 	for _, s := range children {
-		items = append(items, clihelp.Item{Name: s.verb, Desc: s.desc})
+		items = append(items, clihelp.Item{Name: s.name, Desc: s.desc})
 	}
 	b.WriteString(clihelp.FormatItems(items))
 	return b.String()
@@ -160,7 +160,7 @@ func namespaceCommands(name string) []namespaceCmd {
 	for _, verb := range verbs {
 		full := name + ":" + verb
 		out = append(out, namespaceCmd{
-			verb: verb,
+			name: full,
 			desc: clihelp.ShortDescription(commandUsage(full)),
 		})
 	}

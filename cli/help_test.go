@@ -9,7 +9,7 @@ import (
 
 func TestFormatHelpListsCoreChildren(t *testing.T) {
 	got := formatHelp("env")
-	for _, want := range []string{"usage: flynn env", "Commands:", "get", "set", "unset"} {
+	for _, want := range []string{"usage: flynn env", "Commands:", "env:get", "env:set", "env:unset"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("env help missing %q:\n%s", want, got)
 		}
@@ -27,13 +27,13 @@ func TestFormatHelpListsPluginChildren(t *testing.T) {
 		want  []string
 		hide  []string
 	}{
-		{"redis", []string{"usage: flynn redis", "manage redis databases", "Commands:", "dump", "restore", "cli", "redis-cli"}, []string{"redis:dump"}},
-		{"mysql", []string{"usage: flynn mysql", "manage mysql databases", "Commands:", "dump", "restore", "cli", "console"}, []string{"mysql:dump"}},
-		{"mongodb", []string{"usage: flynn mongodb", "manage mongodb databases", "Commands:", "dump", "restore", "cli", "mongo"}, []string{"mongodb:dump"}},
-		{"clickhouse", []string{"usage: flynn clickhouse", "manage clickhouse clusters", "Commands:", "cli", "client", "databases"}, []string{"clickhouse:databases:create"}},
-		{"scheduler", []string{"usage: flynn scheduler", "manage scheduled jobs for an app", "Commands:", "list", "add", "remove", "enable", "disable", "info"}, []string{"scheduler:list"}},
-		{"kafka", []string{"topics", "consumer-groups:create"}, []string{"topics:create"}},
-		{"kafka:topics", []string{"create"}, nil},
+		{"redis", []string{"usage: flynn redis", "manage redis databases", "Commands:", "redis:dump", "redis:restore", "redis:cli"}, []string{"dump dump"}},
+		{"mysql", []string{"usage: flynn mysql", "manage mysql databases", "Commands:", "mysql:dump", "mysql:restore", "mysql:cli"}, []string{"dump dump"}},
+		{"mongodb", []string{"usage: flynn mongodb", "manage mongodb databases", "Commands:", "mongodb:dump", "mongodb:restore", "mongodb:cli"}, []string{"dump dump"}},
+		{"clickhouse", []string{"usage: flynn clickhouse", "manage clickhouse clusters", "Commands:", "clickhouse:cli", "clickhouse:databases"}, []string{"clickhouse:databases:create"}},
+		{"scheduler", []string{"usage: flynn scheduler", "manage scheduled jobs for an app", "Commands:", "scheduler:list", "scheduler:add", "scheduler:remove", "scheduler:enable", "scheduler:disable", "scheduler:info"}, nil},
+		{"kafka", []string{"kafka:topics", "kafka:consumer-groups:create"}, []string{"kafka:topics:create"}},
+		{"kafka:topics", []string{"kafka:topics:create"}, nil},
 	}
 	for _, tc := range cases {
 		got := formatHelpWith(tc.topic, cat)

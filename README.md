@@ -15,7 +15,7 @@ A Flynn cluster is a set of Ubuntu hosts. You deploy apps with `git push` or Doc
 | Area | What you get |
 | --- | --- |
 | Deploy | `git push` with [Heroku-24 buildpacks](docs/content/apps.md#buildpacks), `git push` from a `Dockerfile` ([container stack](docs/content/docker.md#container-stack)), or `flynn docker:push` of a local image |
-| Runtime | Process types from a `Procfile`, scale with `flynn scale`, named runtime profiles (`small` / `medium` / `large`), zero-downtime deploys with automatic rollback |
+| Runtime | Process types from a `Procfile`, scale with `flynn scale`, named runtimes (`small` / `medium` / `large`), zero-downtime deploys with automatic rollback |
 | Routing | HTTP/HTTPS and TCP routes, custom domains, path-based HTTP routes (`flynn-host route:add`), HTTP/2, automatic Let's Encrypt certificates |
 | Datastores | PostgreSQL 16, MariaDB 10.11, MongoDB 7.0, Redis, Kafka 3.9 (KRaft), ClickHouse |
 | Ops | Dashboard, CLI, ZFS volumes, clustered log aggregation, app export/import, host firewall (`flynn-host firewall`) |
@@ -134,7 +134,7 @@ flynn -a myapp docker:push myimage:tag
 flynn -a myapp scale app=1
 ```
 
-Apps bind HTTP on `$PORT`. Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, named runtime profiles (`flynn limit:profile`), and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
+Apps bind HTTP on `$PORT`. Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, named runtimes (`flynn limit:runtime`), and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
 
 ### Buildpacks (heroku-24)
 

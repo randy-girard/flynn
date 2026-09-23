@@ -7,13 +7,13 @@ import (
 
 func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	got := FormatHelp("otel")
-	for _, want := range []string{"usage: flynn-host otel", "Commands:", "add", "remove", "OpenTelemetry"} {
+	for _, want := range []string{"usage: flynn-host otel", "Commands:", "otel:add", "otel:remove", "OpenTelemetry"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("otel help missing %q:\n%s", want, got)
 		}
 	}
 	plugin := FormatHelp("plugin")
-	for _, want := range []string{"Commands:", "install", "uninstall", "update", "update-all", "route", "credentials", "list"} {
+	for _, want := range []string{"Commands:", "plugin:install", "plugin:uninstall", "plugin:update", "plugin:update-all", "plugin:route", "plugin:credentials", "plugin:list"} {
 		if !strings.Contains(plugin, want) {
 			t.Fatalf("plugin help missing %q:\n%s", want, plugin)
 		}
@@ -21,7 +21,7 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	if strings.Contains(plugin, "credentials-set") || strings.Contains(plugin, "credentials set") {
 		t.Fatalf("plugin help should list the credentials namespace, not hyphen verbs:\n%s", plugin)
 	}
-	if strings.Contains(plugin, "credentials:set") {
+	if strings.Contains(plugin, "plugin:credentials:set") {
 		t.Fatalf("plugin help should not list grandchildren:\n%s", plugin)
 	}
 	list := FormatHelp("plugin:list")
@@ -29,22 +29,22 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 		t.Fatalf("plugin:list is a leaf:\n%s", list)
 	}
 	creds := FormatHelp("plugin:credentials")
-	for _, want := range []string{"set", "unset", "show"} {
+	for _, want := range []string{"plugin:credentials:set", "plugin:credentials:unset", "plugin:credentials:show"} {
 		if !strings.Contains(creds, want) {
 			t.Fatalf("plugin:credentials help missing %q:\n%s", want, creds)
 		}
 	}
 	fw := FormatHelp("firewall")
-	for _, want := range []string{"peer:add", "peer:remove", "expose", "sync", "unexpose"} {
+	for _, want := range []string{"firewall:peer:add", "firewall:peer:remove", "firewall:expose", "firewall:sync", "firewall:unexpose"} {
 		if !strings.Contains(fw, want) {
 			t.Fatalf("firewall help missing %q:\n%s", want, fw)
 		}
 	}
 	if strings.Contains(fw, "peer-add") {
-		t.Fatalf("firewall help should list peer:add, not peer-add:\n%s", fw)
+		t.Fatalf("firewall help should list firewall:peer:add, not peer-add:\n%s", fw)
 	}
 	alert := FormatHelp("alert")
-	for _, want := range []string{"usage: flynn-host alert", "Commands:", "add", "enable", "disable", "remove"} {
+	for _, want := range []string{"usage: flynn-host alert", "Commands:", "alert:add", "alert:enable", "alert:disable", "alert:remove"} {
 		if !strings.Contains(alert, want) {
 			t.Fatalf("alert help missing %q:\n%s", want, alert)
 		}

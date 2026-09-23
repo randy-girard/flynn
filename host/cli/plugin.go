@@ -138,9 +138,9 @@ The host argument is required: github (github.com) or a GitHub Enterprise
 hostname. set never puts the token in argv. show never prints the token.
 
 Commands:
-  set      Store a GitHub token for plugin releases
-  unset    Remove stored GitHub plugin credentials
-  show     Show whether GitHub plugin credentials are set
+  plugin:credentials:set    Store a GitHub token for plugin releases
+  plugin:credentials:unset  Remove stored GitHub plugin credentials
+  plugin:credentials:show   Show whether GitHub plugin credentials are set
 `
 
 const pluginCredentialsSetUsage = `

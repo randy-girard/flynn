@@ -178,14 +178,14 @@ func formatHelpWith(name string, cat *plugin.Catalog) string {
 	b.WriteString("\nCommands:\n")
 	items := make([]clihelp.Item, 0, len(children))
 	for _, s := range children {
-		items = append(items, clihelp.Item{Name: s.verb, Desc: s.desc})
+		items = append(items, clihelp.Item{Name: s.name, Desc: s.desc})
 	}
 	b.WriteString(clihelp.FormatItems(items))
 	return b.String()
 }
 
 type helpChild struct {
-	verb string
+	name string
 	desc string
 }
 
@@ -203,7 +203,7 @@ func helpChildrenWith(name string, cat *plugin.Catalog) []helpChild {
 				desc = pluginActionDesc(spec, full)
 			}
 		}
-		out = append(out, helpChild{verb: verb, desc: desc})
+		out = append(out, helpChild{name: full, desc: desc})
 	}
 	return out
 }
