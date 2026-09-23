@@ -144,6 +144,9 @@ func Resolve(opts InstallOptions) (*Resolved, error) {
 	}
 
 	alias, aliased := cfg.Aliases[source]
+	if IsPrivatePluginName(source) && !privatePluginOverride(alias, aliased) {
+		return nil, &PrivateCatalogError{Name: source}
+	}
 	if !aliased {
 		if strings.ContainsAny(source, `/\`) || strings.HasPrefix(source, ".") {
 			return nil, &NotFoundError{Source: source, Tried: source}
@@ -177,6 +180,13 @@ func Resolve(opts InstallOptions) (*Resolved, error) {
 	}
 	applyGitHub(out, gh, cfg, firstNonEmpty(out.Ref, alias.Ref))
 	return out, nil
+}
+
+func privatePluginOverride(alias Alias, aliased bool) bool {
+	if !aliased {
+		return false
+	}
+	return alias.Path != "" || alias.URL != "" || alias.Repo != ""
 }
 
 func applyGitHub(out *Resolved, gh *GitHubSource, cfg *Config, ref string) {

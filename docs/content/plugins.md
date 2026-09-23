@@ -23,6 +23,21 @@ sudo flynn-host plugin:install mysql
 A path, git URL, `--github-org`, or `/etc/flynn/plugins.json` overrides the
 catalog. Postgres stays in Flynn and is not a plugin.
 
+## Public catalog vs private plugins
+
+`plugin:list --known` is the **public** first-party catalog. Those names
+(`redis`, `dashboard`, …) are what `flynn-host plugin:install <name>`
+resolves. Flynn also has **private** first-party plugins (for example
+`enterprise`). They exist, but they are **not** in that catalog and
+**cannot** be installed out of the box with `plugin:install <name>`.
+`--known` lists them in a separate footer so operators know the names.
+A local checkout or `/etc/flynn/plugins.json` override can still point at a
+private source if the operator already has one.
+
+Plugin HTTP APIs and CLIs should trust the Flynn cluster CA (or Let's Encrypt
+on system routes) the same way `flynn` does. Do not document `--insecure` or
+TLS skip-verify as the normal way to talk to plugin or controller endpoints.
+
 ## Local sibling checkouts
 
 Development layout (relative to the Flynn repo):
@@ -172,7 +187,7 @@ sudo flynn-host plugin:list --check
 sudo flynn-host plugin:list --known
 ```
 
-`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`.
+`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`. `--known` is the public catalog only; private first-party plugins appear in a footer and cannot be installed with `plugin:install <name>`.
 
 ## User CLI
 

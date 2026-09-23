@@ -25,8 +25,17 @@ type KnownPlugin struct {
 }
 
 type officialFile struct {
-	GitHubOrg string        `json:"github_org"`
-	Plugins   []KnownPlugin `json:"plugins"`
+	GitHubOrg      string          `json:"github_org"`
+	Plugins        []KnownPlugin   `json:"plugins"`
+	PrivatePlugins []PrivatePlugin `json:"private_plugins,omitempty"`
+}
+
+// PrivatePlugin is a first-party plugin that exists but is not in the public
+// install catalog. It is listed for operators so they know the name, but
+// plugin:install <name> will not resolve it.
+type PrivatePlugin struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 var (
@@ -88,6 +97,21 @@ func parseOfficial(data []byte) (officialFile, error) {
 			seen[name] = p.Name
 		}
 	}
+	for i := range f.PrivatePlugins {
+		p := &f.PrivatePlugins[i]
+		p.Name = strings.TrimSpace(p.Name)
+		p.Description = strings.TrimSpace(p.Description)
+		if p.Name == "" {
+			return f, fmt.Errorf("private_plugins[%d]: name is required", i)
+		}
+		if p.Description == "" {
+			return f, fmt.Errorf("private plugin %s: description is required", p.Name)
+		}
+		if owner, ok := seen[p.Name]; ok {
+			return f, fmt.Errorf("duplicate plugin name %q (%s and private %s)", p.Name, owner, p.Name)
+		}
+		seen[p.Name] = p.Name
+	}
 	return f, nil
 }
 
@@ -137,6 +161,41 @@ func KnownPlugins() []KnownPlugin {
 	return out
 }
 
+// PrivatePlugins are first-party plugins that exist but are not installable
+// from plugin:list --known / plugin:install <name>.
+func PrivatePlugins() []PrivatePlugin {
+	priv := mustOfficial().PrivatePlugins
+	out := make([]PrivatePlugin, len(priv))
+	copy(out, priv)
+	return out
+}
+
+// IsPrivatePluginName is true when name is listed as private (not a catalog install alias).
+func IsPrivatePluginName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	for _, p := range PrivatePlugins() {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// PrivateCatalogError is returned when plugin:install is given a private plugin name.
+type PrivateCatalogError struct {
+	Name string
+}
+
+func (e *PrivateCatalogError) Error() string {
+	if e == nil {
+		return "private plugin is not in the public catalog"
+	}
+	return e.Name + " is a private first-party plugin. It is not in the public catalog (plugin:list --known) and cannot be installed with plugin:install " + e.Name
+}
+
 func officialGitHubOrg() string {
 	return strings.TrimSpace(mustOfficial().GitHubOrg)
 }
@@ -159,5 +218,19 @@ func WriteKnownPlugins(w io.Writer, org string, plugins []KnownPlugin) error {
 	for _, p := range plugins {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.Name, strings.Join(p.Aliases, ", "), p.Kind, p.RepoSlug(org), p.Description)
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	priv := PrivatePlugins()
+	if len(priv) == 0 {
+		return nil
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Private first-party plugins (not in this catalog; plugin:install <name> will not resolve them):")
+	pt := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
+	fmt.Fprintln(pt, "NAME\tDESCRIPTION")
+	for _, p := range priv {
+		fmt.Fprintf(pt, "%s\t%s\n", p.Name, p.Description)
+	}
+	return pt.Flush()
 }

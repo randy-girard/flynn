@@ -111,6 +111,12 @@ func TestParseOfficialRejectsBadCatalog(t *testing.T) {
 	]}`)); err == nil {
 		t.Fatal("duplicate alias")
 	}
+	if _, err := parseOfficial([]byte(`{"plugins":[{"name":"redis","kind":"app","repo":"r","description":"one"}],"private_plugins":[{"name":"redis","description":"hidden"}]}`)); err == nil {
+		t.Fatal("private name colliding with catalog")
+	}
+	if _, err := parseOfficial([]byte(`{"private_plugins":[{"name":"enterprise"}]}`)); err == nil {
+		t.Fatal("private description required")
+	}
 }
 
 func TestWriteKnownPlugins(t *testing.T) {
@@ -123,6 +129,47 @@ func TestWriteKnownPlugins(t *testing.T) {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}
+	}
+	for _, needle := range []string{"Private first-party plugins", "enterprise", "not in this catalog"} {
+		if !strings.Contains(out, needle) {
+			t.Fatalf("missing private catalog note %q in:\n%s", needle, out)
+		}
+	}
+	if strings.Contains(out, "flynn-plugin-enterprise") {
+		t.Fatal("private plugins must not appear as installable catalog repos")
+	}
+}
+
+func TestPrivatePluginsNotInstallable(t *testing.T) {
+	t.Setenv(EnvGitHubOrg, "")
+	t.Setenv(EnvFlynnRepo, "")
+	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	t.Setenv(EnvInstalledFile, t.TempDir()+"/none.json")
+
+	if !IsPrivatePluginName("enterprise") {
+		t.Fatal("enterprise must be a private plugin")
+	}
+	if LookupOfficial(Installed{Name: "enterprise"}) != nil {
+		t.Fatal("enterprise must not be in the public catalog")
+	}
+	_, err := Resolve(InstallOptions{Source: "enterprise"})
+	if err == nil {
+		t.Fatal("plugin:install enterprise must fail")
+	}
+	if _, ok := err.(*PrivateCatalogError); !ok {
+		t.Fatalf("want PrivateCatalogError, got %T %v", err, err)
+	}
+
+	path := t.TempDir() + "/plugins.json"
+	writeJSON(t, path, map[string]interface{}{
+		"enterprise": map[string]string{"url": "https://github.com/acme/flynn-plugin-enterprise.git"},
+	})
+	over, err := Resolve(InstallOptions{Source: "enterprise", PluginsFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if over.GitHub == nil || over.GitHub.Owner != "acme" || over.GitHub.Repo != "flynn-plugin-enterprise" {
+		t.Fatalf("plugins.json override must still work: %+v", over.GitHub)
 	}
 }
 
