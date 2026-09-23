@@ -283,15 +283,7 @@ func run() error {
 			continue
 		}
 
-		log.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, nil, log); err != nil {
-			if e, ok := err.(errDeploySkipped); ok {
-				log.Info("skipped deploy of app", "reason", e.reason)
-				continue
-			}
-			return err
-		}
-		log.Info("finished deploy of app")
+		log.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
 	}
 	return nil
 }

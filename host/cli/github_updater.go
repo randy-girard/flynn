@@ -1551,15 +1551,9 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 			continue
 		}
 
-		appLog.Info("starting deploy of app to update slugrunner")
-		if err := deployApp(client, app, slugRunner, images, nil, force, appLog); err != nil {
-			if e, ok := err.(errDeploySkipped); ok {
-				appLog.Info("skipped deploy of app", "reason", e.reason)
-				continue
-			}
-			return err
-		}
-		appLog.Info("finished deploy of app")
+		// User apps keep their current image. Cluster updates only roll system
+		// apps and Redis appliances so user processes are not restarted.
+		appLog.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
 	}
 
 	fmt.Println("System apps and container images updated successfully")

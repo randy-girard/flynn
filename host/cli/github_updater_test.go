@@ -77,6 +77,20 @@ func TestTarballUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterDoesNotRestartUserApps(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if strings.Contains(body, "starting deploy of app to update slugrunner") {
+		t.Fatal("cluster updates must not deploy slugrunner onto user apps")
+	}
+	if !strings.Contains(body, "cluster updates do not restart user apps") {
+		t.Fatal("cluster updates must skip user apps so running processes stay up")
+	}
+}
+
 func TestTarballUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
 	src, err := os.ReadFile("github_updater.go")
 	if err != nil {
