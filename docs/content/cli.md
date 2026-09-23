@@ -67,7 +67,7 @@ Then:
 flynn cluster:add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspin>] <name> <domain> <key>
 ```
 
-The TLS pin is stored in `~/.flynnrc` so the CLI can reject man-in-the-middle certificates. `flynn login` authenticates through the dashboard (OAuth) instead of a controller key.
+The TLS pin is stored in `~/.flynnrc` so the CLI can reject man-in-the-middle certificates. `cluster:add` also writes the Flynn CA to `~/.flynn/ca-certs/<name>.pem` and points git at it (`sslCAInfo`), so `git push` and the CLI do not need `--insecure`. Print the CA with `flynn cluster:ca`. After system-route Let's Encrypt, `flynn cluster:refresh --clear` uses public Web PKI. `flynn login` authenticates through the dashboard (OAuth) instead of a controller key.
 
 List and switch clusters with `flynn cluster` and `flynn cluster:default <name>`; drop one with `flynn cluster:remove <name>`. Use `-c <cluster>` or `FLYNN_CLUSTER` to target a non-default cluster. After `flynn-host migrate-domain`, run `flynn cluster:refresh` on each laptop. Pin updates print the new fingerprint and require confirmation; pass `--yes` for scripts. If the controller presents a publicly signed certificate (Let’s Encrypt), refresh verifies it with system CAs before pinning. `--clear` drops the pin so the CLI uses normal TLS verification.
 
@@ -123,9 +123,9 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` | Registered clusters in `~/.flynnrc` (`refresh --yes` accepts a new TLS pin without prompting) |
+| `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` / `cluster:ca` | Registered clusters in `~/.flynnrc`. `cluster:add` stores a TLS pin and the Flynn CA (`~/.flynn/ca-certs/<name>.pem`); git uses `http.<git-url>.sslCAInfo` so `git push` does not need `--insecure`. `cluster:ca` prints that PEM. After Let's Encrypt on system routes, `cluster:refresh --clear` uses public Web PKI. |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
-| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists official plugins and GitHub repos; `plugins` is an alias) |
+| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the public catalog and GitHub repos, plus a footer for private first-party plugins that cannot be `plugin:install`'d; `plugins` is an alias) |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand) |
 | `update` / `upgrade` | Replace this CLI from GitHub Releases |
@@ -145,9 +145,12 @@ token.
 | Manage | `app:write` | Config, scale, routes, releases, and deploy. Cannot manage team. |
 | Admin | `app:admin` | Full app access, including Team invites and collaborator roles. |
 
-Cluster administrators can create additional named roles that pick **function and action** grants (`app:logs:read`, `app:scale:write`, `app:jobs:run`, `app:team:write`, …). The four grants above remain aliases: `app:read` is all view actions, `app:write` is all mutations except team, `app:admin` is everything. Custom roles appear in the app Team picker and expand to the same grants in the token. `cluster:admin` (the
-controller key, or a dashboard cluster administrator) is not an app role; it
-bypasses app grants.
+Those four roles are **fixed** in OSS Flynn. Operators cannot create custom
+roles or change built-in permissions. Granular function/action grants
+(`app:logs:read`, `app:scale:write`, …) remain the internal expansion of the
+aliases and are still enforced on tokens; composing new bundles is an
+enterprise-plugin feature. `cluster:admin` (the controller key, or a dashboard
+cluster administrator) is not an app role; it bypasses app grants.
 
 ### Logs
 
@@ -192,12 +195,13 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | --- | --- |
 | `init` / `bootstrap` / `daemon` | Write `/etc/flynn/host.json` (`--peer-ips`, `--discovery`, `--init-discovery`, `--external-ip`), bootstrap Layer 1 (`--min-hosts`, `--from-backup`), run the host daemon (systemd) |
 | `download` | Fetch `flynn-host` binaries, config, and images for a release from GitHub (`--version`, `--github-repo`; used by the installer) |
-| `update` | Rolling host update from GitHub Releases (`--all-nodes`, `--skip-images`, `--check`, `--check --force`, `--force`) |
+| `update` | Rolling host update from GitHub Releases (`--all-nodes`, `--skip-images`, `--check`, `--check --force`, `--force`, `--version`) |
+| `rollback` | Restore a previous GitHub tag (`--version` required; implies `--all-nodes --force`). Does not undo user deploys, volumes, or plugin data. |
 | `backup` / `migrate-domain` / `cli-add-command` | Cluster backup tarball, domain rename, print the `flynn cluster:add` line for this cluster |
 | `list` / `promote` / `demote` / `discover` | Raft membership (`peer` vs `proxy`), promote a node to a peer, demote one (`demote -f` / `--force` when the node is already gone), resolve discoverd services |
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
-| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists official plugins, repos, and descriptions). `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
+| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists the public catalog, repos, and descriptions, then a footer for private first-party plugins that `plugin:install <name>` will not resolve). `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed official plugin to the max compatible tag. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
 | `plugin:credentials:set` / `plugin:credentials:show` / `plugin:credentials:unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` / `log-sink:list` / `log-sink:remove` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
