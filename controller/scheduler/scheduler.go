@@ -125,9 +125,10 @@ type Scheduler struct {
 
 	routerBackends map[string]*RouterBackend
 
-	// reserveResources, when true, only places a job on a host that still
-	// has that job's requested CPU and memory free. Off by default.
-	reserveResources bool
+	// reserveResources, when true on a runtime, only places jobs using
+	// that runtime on a host that still has the requested CPU and memory
+	// free. Off by default per runtime.
+	profileReserve map[string]bool
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -137,6 +138,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		discoverd:             disc,
 		logger:                l,
 		maxHostChecks:         defaultMaxHostChecks,
+		profileReserve:        make(map[string]bool),
 		hosts:                 make(map[string]*Host),
 		routers:               make(map[string]*Router),
 		jobs:                  make(map[string]*Job),
@@ -752,7 +754,7 @@ func (s *Scheduler) SyncFormations() {
 		s.handleFormation(f)
 	}
 
-	s.syncRuntimeSettings(log)
+	s.syncRuntimeProfiles(log)
 
 	// check that all formations we think are active are still active
 	for _, f := range s.formations {
@@ -1456,9 +1458,8 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	}
 
 	// if we didn't pick a host for the job's volumes, pick a host with
-	// the least amount of jobs running of the given type. When
-	// reserve_resources is on, skip hosts that cannot fit the job's
-	// requested CPU/memory.
+	// the least amount of jobs running of the given type. Jobs whose
+	// runtime reserves resources skip hosts that cannot fit the Request.
 	if req.Host == nil {
 		formation := req.Job.Formation
 		counts := s.jobs.GetHostJobCounts(formation.key(), req.Job.Type)
@@ -1467,7 +1468,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		if req.Host == nil {
 			req.Job.State = JobStateBlocked
 			s.persistJob(req.Job)
-			if s.reserveResources && s.anyHostMatchesTags(req.Job) {
+			if s.jobReservesResources(req.Job) && s.anyHostMatchesTags(req.Job) {
 				req.Error(ErrNoHostCapacity)
 			} else {
 				req.Error(ErrNoHostsMatchTags)

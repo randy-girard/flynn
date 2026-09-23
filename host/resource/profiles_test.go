@@ -36,11 +36,18 @@ func TestBuiltinProfilesMatchDefaults(t *testing.T) {
 func TestApplyNamedLimitsOverwritesMemoryAndCPU(t *testing.T) {
 	r := Defaults()
 	ApplyNamedLimits(r, 256*units.MiB, 250)
-	if *r[TypeMemory].Limit != 256*units.MiB || *r[TypeMemory].Request != 256*units.MiB {
-		t.Fatalf("memory %+v", r[TypeMemory])
+	if *r[TypeMemory].Limit != 256*units.MiB || *r[TypeMemory].Request != 0 {
+		t.Fatalf("shared memory %+v", r[TypeMemory])
 	}
-	if *r[TypeCPU].Limit != 250 || *r[TypeCPU].Request != 250 {
-		t.Fatalf("cpu %+v", r[TypeCPU])
+	if *r[TypeCPU].Limit != 250 || *r[TypeCPU].Request != 0 {
+		t.Fatalf("shared cpu %+v", r[TypeCPU])
+	}
+	ApplyNamedLimitsWithReserve(r, 512*units.MiB, 500, true)
+	if *r[TypeMemory].Limit != 512*units.MiB || *r[TypeMemory].Request != 512*units.MiB {
+		t.Fatalf("reserved memory %+v", r[TypeMemory])
+	}
+	if *r[TypeCPU].Limit != 500 || *r[TypeCPU].Request != 500 {
+		t.Fatalf("reserved cpu %+v", r[TypeCPU])
 	}
 	if r[TypeTempDisk].Limit == nil {
 		t.Fatal("temp_disk default must be preserved")

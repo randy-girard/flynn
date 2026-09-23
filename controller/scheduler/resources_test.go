@@ -9,6 +9,10 @@ import (
 )
 
 func testJobWithRequest(mem, cpu int64) *Job {
+	return testJobWithProfile("shared", mem, cpu, mem, cpu)
+}
+
+func testJobWithProfile(profile string, reqMem, reqCPU, limMem, limCPU int64) *Job {
 	return &Job{
 		Type: "web",
 		Formation: &Formation{
@@ -16,9 +20,10 @@ func testJobWithRequest(mem, cpu int64) *Job {
 				Release: &ct.Release{
 					Processes: map[string]ct.ProcessType{
 						"web": {
+							RuntimeProfile: profile,
 							Resources: resource.Resources{
-								resource.TypeMemory: {Request: typeconv.Int64Ptr(mem), Limit: typeconv.Int64Ptr(mem)},
-								resource.TypeCPU:    {Request: typeconv.Int64Ptr(cpu), Limit: typeconv.Int64Ptr(cpu)},
+								resource.TypeMemory: {Request: typeconv.Int64Ptr(reqMem), Limit: typeconv.Int64Ptr(limMem)},
+								resource.TypeCPU:    {Request: typeconv.Int64Ptr(reqCPU), Limit: typeconv.Int64Ptr(limCPU)},
 							},
 						},
 					},
@@ -40,7 +45,7 @@ func TestJobResourceRequest(t *testing.T) {
 }
 
 func TestHostHasCapacityUnknownHostAllows(t *testing.T) {
-	s := &Scheduler{jobs: Jobs{}, hosts: map[string]*Host{}}
+	s := &Scheduler{jobs: Jobs{}, hosts: map[string]*Host{}, profileReserve: map[string]bool{}}
 	h := &Host{ID: "h1"}
 	job := testJobWithRequest(1<<30, 1000)
 	if !s.hostHasCapacity(h, job) {
@@ -56,23 +61,24 @@ func TestHostHasCapacityRejectsOvercommit(t *testing.T) {
 				HostID:    "h1",
 				State:     JobStateRunning,
 				Type:      "web",
-				Formation: testJobWithRequest(2<<30, 1500).Formation,
+				Formation: testJobWithProfile("guaranteed", 2<<30, 1500, 2<<30, 1500).Formation,
 			},
 		},
-		hosts: map[string]*Host{},
+		hosts:          map[string]*Host{},
+		profileReserve: map[string]bool{"guaranteed": true},
 	}
 	h := &Host{ID: "h1", MemoryTotalBytes: 3 << 30, CPUMilli: 2000}
-	next := testJobWithRequest(2<<30, 1000)
+	next := testJobWithProfile("guaranteed", 2<<30, 1000, 2<<30, 1000)
 	if s.hostHasCapacity(h, next) {
 		t.Fatal("expected overcommit reject")
 	}
-	small := testJobWithRequest(512<<20, 250)
+	small := testJobWithProfile("guaranteed", 512<<20, 250, 512<<20, 250)
 	if !s.hostHasCapacity(h, small) {
 		t.Fatal("expected remaining capacity")
 	}
 }
 
-func TestPickHostIgnoresCapacityWhenReservationOff(t *testing.T) {
+func TestPickHostIgnoresCapacityWhenRuntimeIsShared(t *testing.T) {
 	h := &Host{ID: "h1", MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
 	s := &Scheduler{
 		jobs: Jobs{
@@ -81,32 +87,66 @@ func TestPickHostIgnoresCapacityWhenReservationOff(t *testing.T) {
 				HostID:    "h1",
 				State:     JobStateRunning,
 				Type:      "web",
-				Formation: testJobWithRequest(1<<30, 1000).Formation,
+				Formation: testJobWithProfile("shared", 1<<30, 1000, 1<<30, 1000).Formation,
 			},
 		},
-		hosts: map[string]*Host{"h1": h},
+		hosts:          map[string]*Host{"h1": h},
+		profileReserve: map[string]bool{"shared": false},
 	}
-	job := testJobWithRequest(1<<30, 1000)
+	job := testJobWithProfile("shared", 1<<30, 1000, 1<<30, 1000)
 	counts := map[string]int{"h1": 1}
 	if got := s.pickHost(job, counts); got != h {
-		t.Fatal("reservation off must still pack onto the only host")
-	}
-	s.reserveResources = true
-	if got := s.pickHost(job, counts); got != nil {
-		t.Fatal("reservation on must leave the job unplaced when the host is full")
+		t.Fatal("shared runtime must still pack onto the only host")
 	}
 }
 
-func TestPickHostUsesCapacityWhenReservationOn(t *testing.T) {
+func TestPickHostUsesCapacityWhenRuntimeGuarantees(t *testing.T) {
 	h := &Host{ID: "h1", MemoryTotalBytes: 2 << 30, CPUMilli: 2000}
 	s := &Scheduler{
-		jobs:  Jobs{},
-		hosts: map[string]*Host{"h1": h},
+		jobs:           Jobs{},
+		hosts:          map[string]*Host{"h1": h},
+		profileReserve: map[string]bool{"guaranteed": true},
 	}
-	s.reserveResources = true
-	job := testJobWithRequest(1<<30, 1000)
+	job := testJobWithProfile("guaranteed", 1<<30, 1000, 1<<30, 1000)
 	if got := s.pickHost(job, nil); got != h {
-		t.Fatal("reservation on must place when the host has remaining Request")
+		t.Fatal("guaranteed runtime must place when the host has remaining Request")
+	}
+	full := &Scheduler{
+		jobs: Jobs{
+			"running": {
+				ID:        "running",
+				HostID:    "h1",
+				State:     JobStateRunning,
+				Type:      "web",
+				Formation: testJobWithProfile("guaranteed", 2<<30, 2000, 2<<30, 2000).Formation,
+			},
+		},
+		hosts:          map[string]*Host{"h1": h},
+		profileReserve: map[string]bool{"guaranteed": true},
+	}
+	if got := full.pickHost(job, map[string]int{"h1": 1}); got != nil {
+		t.Fatal("guaranteed runtime must leave the job unplaced when the host is full")
+	}
+}
+
+func TestSharedJobsDoNotConsumeReservedCapacity(t *testing.T) {
+	h := &Host{ID: "h1", MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	s := &Scheduler{
+		jobs: Jobs{
+			"shared": {
+				ID:        "shared",
+				HostID:    "h1",
+				State:     JobStateRunning,
+				Type:      "web",
+				Formation: testJobWithProfile("shared", 0, 0, 1<<30, 1000).Formation,
+			},
+		},
+		hosts:          map[string]*Host{"h1": h},
+		profileReserve: map[string]bool{"shared": false, "guaranteed": true},
+	}
+	job := testJobWithProfile("guaranteed", 1<<30, 1000, 1<<30, 1000)
+	if !s.hostHasCapacity(h, job) {
+		t.Fatal("shared runtimes must not take guaranteed slots")
 	}
 }
 
@@ -118,9 +158,10 @@ func TestHostReservedIgnoresStoppedJobs(t *testing.T) {
 				HostID:    "h1",
 				State:     JobStateStopped,
 				Type:      "web",
-				Formation: testJobWithRequest(8<<30, 8000).Formation,
+				Formation: testJobWithProfile("guaranteed", 8<<30, 8000, 8<<30, 8000).Formation,
 			},
 		},
+		profileReserve: map[string]bool{"guaranteed": true},
 	}
 	mem, cpu := s.hostReservedResources("h1")
 	if mem != 0 || cpu != 0 {

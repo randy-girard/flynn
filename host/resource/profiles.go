@@ -71,13 +71,26 @@ func ProfileByName(name string) (NamedProfile, bool) {
 	return NamedProfile{}, false
 }
 
-// ApplyNamedLimits sets memory and CPU request+limit from a named profile.
+// ApplyNamedLimits sets memory and CPU caps from a named profile. Request
+// (host reservation) stays zero so the process shares unused capacity.
 func ApplyNamedLimits(r Resources, memoryBytes, milliCPU int64) {
+	ApplyNamedLimitsWithReserve(r, memoryBytes, milliCPU, false)
+}
+
+// ApplyNamedLimitsWithReserve sets memory and CPU limits from a named profile.
+// When reserve is true, Request matches Limit so the scheduler guarantees that
+// much CPU and memory on the host. When false, Request is 0: the process still
+// cannot exceed the limits, but it does not hold a reservation.
+func ApplyNamedLimitsWithReserve(r Resources, memoryBytes, milliCPU int64, reserve bool) {
 	if r == nil {
 		return
 	}
-	r[TypeMemory] = Spec{Request: typeconv.Int64Ptr(memoryBytes), Limit: typeconv.Int64Ptr(memoryBytes)}
-	r[TypeCPU] = Spec{Request: typeconv.Int64Ptr(milliCPU), Limit: typeconv.Int64Ptr(milliCPU)}
+	reqMem, reqCPU := int64(0), int64(0)
+	if reserve {
+		reqMem, reqCPU = memoryBytes, milliCPU
+	}
+	r[TypeMemory] = Spec{Request: typeconv.Int64Ptr(reqMem), Limit: typeconv.Int64Ptr(memoryBytes)}
+	r[TypeCPU] = Spec{Request: typeconv.Int64Ptr(reqCPU), Limit: typeconv.Int64Ptr(milliCPU)}
 }
 
 // ValidateProfileName rejects empty or whitespace-only names.

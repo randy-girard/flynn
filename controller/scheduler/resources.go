@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
@@ -23,6 +25,17 @@ func jobResourceRequest(job *Job) (mem, cpu int64) {
 	return mem, cpu
 }
 
+func jobRuntimeProfileName(job *Job) string {
+	if job == nil || job.Formation == nil || job.Formation.Release == nil {
+		return ""
+	}
+	t, ok := job.Formation.Release.Processes[job.Type]
+	if !ok {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(t.RuntimeProfile))
+}
+
 func jobHoldsReservation(job *Job) bool {
 	if job == nil || job.HostID == "" {
 		return false
@@ -35,6 +48,17 @@ func jobHoldsReservation(job *Job) bool {
 	}
 }
 
+func (s *Scheduler) jobReservesResources(job *Job) bool {
+	if s == nil {
+		return false
+	}
+	name := jobRuntimeProfileName(job)
+	if name == "" {
+		return false
+	}
+	return s.profileReserve[name]
+}
+
 func (s *Scheduler) hostReservedResources(hostID string) (mem, cpu int64) {
 	if s == nil {
 		return 0, 0
@@ -43,7 +67,24 @@ func (s *Scheduler) hostReservedResources(hostID string) (mem, cpu int64) {
 		if job == nil || job.HostID != hostID || !jobHoldsReservation(job) {
 			continue
 		}
+		if !s.jobReservesResources(job) {
+			continue
+		}
 		m, c := jobResourceRequest(job)
+		if m <= 0 && c <= 0 {
+			// Guaranteed runtime whose Request was not copied onto the
+			// process: count the cap so the host still cannot overbook.
+			if job.Formation != nil && job.Formation.Release != nil {
+				if t, ok := job.Formation.Release.Processes[job.Type]; ok {
+					if spec, ok := t.Resources[resource.TypeMemory]; ok && spec.Limit != nil {
+						m = *spec.Limit
+					}
+					if spec, ok := t.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
+						c = *spec.Limit
+					}
+				}
+			}
+		}
 		mem += m
 		cpu += c
 	}
@@ -55,6 +96,18 @@ func (s *Scheduler) hostHasCapacity(h *Host, job *Job) bool {
 		return false
 	}
 	needMem, needCPU := jobResourceRequest(job)
+	if needMem <= 0 && needCPU <= 0 && s.jobReservesResources(job) {
+		if job.Formation != nil && job.Formation.Release != nil {
+			if t, ok := job.Formation.Release.Processes[job.Type]; ok {
+				if spec, ok := t.Resources[resource.TypeMemory]; ok && spec.Limit != nil {
+					needMem = *spec.Limit
+				}
+				if spec, ok := t.Resources[resource.TypeCPU]; ok && spec.Limit != nil {
+					needCPU = *spec.Limit
+				}
+			}
+		}
+	}
 	if needMem <= 0 && needCPU <= 0 {
 		return true
 	}
@@ -100,44 +153,49 @@ func betterHost(cur *Host, curCount int, next *Host, nextCount int) (*Host, int)
 	return cur, curCount
 }
 
-type runtimeSettingsGetter interface {
-	GetRuntimeSettings() (*ct.RuntimeSettings, error)
+type runtimeProfileLister interface {
+	ListRuntimeProfiles() ([]*ct.RuntimeProfile, error)
 }
 
-func (s *Scheduler) syncRuntimeSettings(log log15.Logger) {
+func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
 	if s == nil {
 		return
 	}
-	g, ok := s.ControllerClient.(runtimeSettingsGetter)
+	g, ok := s.ControllerClient.(runtimeProfileLister)
 	if !ok {
 		return
 	}
-	st, err := g.GetRuntimeSettings()
+	list, err := g.ListRuntimeProfiles()
 	if err != nil {
-		log.Error("error getting runtime settings", "err", err)
+		log.Error("error listing runtime profiles", "err", err)
 		return
 	}
-	on := st != nil && st.ReserveResources
-	if s.reserveResources != on {
-		log.Info("runtime reservation setting", "reserve_resources", on)
+	next := make(map[string]bool, len(list))
+	for _, p := range list {
+		if p == nil {
+			continue
+		}
+		next[strings.ToLower(strings.TrimSpace(p.Name))] = p.ReserveResources
 	}
-	s.reserveResources = on
+	s.profileReserve = next
 }
 
-// pickHost chooses a tag-matching host. When reserveResources is on, only
-// hosts with remaining requested CPU/memory are eligible (jobs stay pending
-// if nothing fits). When it is off, jobs pack onto the least-loaded host.
+// pickHost chooses a tag-matching host. Jobs whose runtime guarantees
+// resources only land on hosts with remaining requested CPU/memory (they stay
+// pending if nothing fits). Shared runtimes pack onto the least-loaded host
+// and keep their CPU/memory as caps only.
 func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	if s == nil || job == nil {
 		return nil
 	}
+	needReserve := s.jobReservesResources(job)
 	var fit *Host
 	var fitCount int
 	for _, h := range s.ShuffledHosts() {
 		if h == nil || h.Shutdown || !job.TagsMatchHost(h) {
 			continue
 		}
-		if s.reserveResources && !s.hostHasCapacity(h, job) {
+		if needReserve && !s.hostHasCapacity(h, job) {
 			continue
 		}
 		count := hostJobCount(counts, h.ID)

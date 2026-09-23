@@ -19,7 +19,7 @@ func NewRuntimeProfileRepo(db *postgres.DB) *RuntimeProfileRepo {
 
 func scanRuntimeProfile(s postgres.Scanner) (*ct.RuntimeProfile, error) {
 	p := &ct.RuntimeProfile{}
-	err := s.Scan(&p.ID, &p.Name, &p.Memory, &p.CPU, &p.Builtin, &p.CreatedAt, &p.UpdatedAt)
+	err := s.Scan(&p.ID, &p.Name, &p.Memory, &p.CPU, &p.Builtin, &p.ReserveResources, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			err = ErrNotFound
@@ -59,7 +59,7 @@ func (r *RuntimeProfileRepo) Add(p *ct.RuntimeProfile) error {
 		p.ID = random.UUID()
 	}
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	if err := r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin, p.ReserveResources).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
 		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{
@@ -71,7 +71,7 @@ func (r *RuntimeProfileRepo) Add(p *ct.RuntimeProfile) error {
 
 func (r *RuntimeProfileRepo) Update(p *ct.RuntimeProfile) error {
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	if err := r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU, p.ReserveResources).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{

@@ -312,14 +312,17 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(small, NotNil)
 	c.Assert(small.Memory, Equals, int64(512*1024*1024))
 	c.Assert(small.CPU, Equals, int64(500))
+	c.Assert(small.ReserveResources, Equals, false)
 	small.Memory = 768 * 1024 * 1024
 	small.CPU = 750
+	small.ReserveResources = true
 	c.Assert(repo.Update(small), IsNil)
 	gotSmall, err := repo.Get(small.ID)
 	c.Assert(err, IsNil)
 	c.Assert(gotSmall.Memory, Equals, int64(768*1024*1024))
 	c.Assert(gotSmall.CPU, Equals, int64(750))
 	c.Assert(gotSmall.Builtin, Equals, true)
+	c.Assert(gotSmall.ReserveResources, Equals, true)
 
 	settings, err := repo.Settings()
 	c.Assert(err, IsNil)
@@ -332,6 +335,7 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	got, err := repo.GetByName("xlarge")
 	c.Assert(err, IsNil)
 	c.Assert(got.Memory, Equals, custom.Memory)
+	c.Assert(got.ReserveResources, Equals, false)
 
 	c.Assert(repo.Delete(list[0].ID), NotNil) // builtin
 	c.Assert(repo.Delete(custom.ID), IsNil)
@@ -357,5 +361,11 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 func (s *S) TestSchedulerEventTypeExists(c *C) {
 	var n int
 	c.Assert(s.db.QueryRow("SELECT count(*) FROM event_types WHERE name = $1", "scheduler").Scan(&n), IsNil)
+	c.Assert(n, Equals, 1)
+}
+
+func (s *S) TestRuntimeEventTypeExists(c *C) {
+	var n int
+	c.Assert(s.db.QueryRow("SELECT count(*) FROM event_types WHERE name = $1", "runtime").Scan(&n), IsNil)
 	c.Assert(n, Equals, 1)
 }

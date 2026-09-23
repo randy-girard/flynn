@@ -1124,6 +1124,12 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(62,
 		`ALTER TABLE runtime_settings ADD COLUMN reserve_resources boolean NOT NULL DEFAULT false`,
 	)
+	migrations.Add(63,
+		`ALTER TABLE runtime_profiles ADD COLUMN reserve_resources boolean NOT NULL DEFAULT false`,
+	)
+	migrations.Add(64,
+		`INSERT INTO event_types (name) VALUES ('runtime')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {
