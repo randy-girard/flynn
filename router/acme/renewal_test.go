@@ -108,8 +108,8 @@ func testService(ctrl *stubController) *Service {
 }
 
 func TestRetryBackoffExponentialCap(t *testing.T) {
-	if DefaultRenewalInterval < time.Hour {
-		t.Fatalf("DefaultRenewalInterval = %s, want at least 1h", DefaultRenewalInterval)
+	if DefaultRenewalInterval != 24*time.Hour {
+		t.Fatalf("DefaultRenewalInterval = %s, want 24h", DefaultRenewalInterval)
 	}
 	if RenewalWindow != 30*24*time.Hour {
 		t.Fatalf("RenewalWindow = %s", RenewalWindow)

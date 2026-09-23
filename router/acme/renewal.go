@@ -8,8 +8,9 @@ import (
 
 const (
 	// DefaultRenewalInterval is how often the ACME service looks for expiring
-	// and failed certificates. Hours, not seconds, so we do not hammer the CA.
-	DefaultRenewalInterval = time.Hour
+	// and failed certificates. Daily is enough for a 30-day renewal window
+	// and stays inside Let's Encrypt rate limits.
+	DefaultRenewalInterval = 24 * time.Hour
 
 	// RenewalWindow is how far ahead of expiry issued certificates are
 	// reset to pending so handleCertificate can reissue them.
