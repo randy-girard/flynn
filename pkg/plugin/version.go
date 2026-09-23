@@ -133,6 +133,20 @@ func HighestCompatiblePluginTag(tags []string, flynnVersion string) (string, boo
 	return best, best != ""
 }
 
+// PluginNeedsUpdate is true when available is a higher calver than current.
+// An empty current with a known available tag is treated as needing an update.
+func PluginNeedsUpdate(current, available string) bool {
+	available = strings.TrimSpace(available)
+	if available == "" {
+		return false
+	}
+	current = strings.TrimSpace(current)
+	if current == "" {
+		return true
+	}
+	return ComparePluginCalVer(available, current) > 0
+}
+
 // ClusterFlynnVersion is the running Flynn release (commit suffix stripped).
 func ClusterFlynnVersion() string {
 	return version.Release()

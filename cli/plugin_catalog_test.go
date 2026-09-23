@@ -247,13 +247,16 @@ func assertPluginHelpSection(t *testing.T, got, cmd string) {
 
 func TestWritePluginTable(t *testing.T) {
 	var buf strings.Builder
-	n := writePluginTable(&buf, nil)
-	if n != 0 || !strings.Contains(buf.String(), "NAME") {
-		t.Fatalf("empty: n=%d %q", n, buf.String())
+	rows := plugin.ListedFromInstalled(nil)
+	if err := plugin.WriteUserPluginTable(&buf, rows, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), "NAME") || !strings.Contains(buf.String(), "VERSION") {
+		t.Fatalf("empty: %q", buf.String())
 	}
 
 	buf.Reset()
-	n = writePluginTable(&buf, []*ct.App{
+	rows = plugin.ListedFromInstalled(plugin.ListInstalled([]*ct.App{
 		{Name: "router", Meta: map[string]string{"flynn-system-app": "true"}},
 		{
 			Name: "redis",
@@ -272,9 +275,12 @@ func TestWritePluginTable(t *testing.T) {
 				"flynn-plugin-cli":  `{"command":"control-ui","usage":"cluster UI"}`,
 			},
 		},
-	})
-	if n != 2 {
-		t.Fatalf("n=%d", n)
+	}))
+	if err := plugin.WriteUserPluginTable(&buf, rows, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("n=%d", len(rows))
 	}
 	got := buf.String()
 	for _, want := range []string{"redis", "resource-provider", "manage redis databases", "v20260915.0", "control-ui", "app"} {
@@ -292,7 +298,7 @@ func TestWritePluginTable(t *testing.T) {
 
 func TestPrintPluginListEmpty(t *testing.T) {
 	var out, errBuf strings.Builder
-	printPluginList(&out, &errBuf, nil)
+	printPluginList(&out, &errBuf, nil, false)
 	if !strings.Contains(out.String(), "NAME") {
 		t.Fatalf("header: %q", out.String())
 	}
@@ -303,7 +309,7 @@ func TestPrintPluginListEmpty(t *testing.T) {
 	printPluginList(&out, &errBuf, []*ct.App{{
 		Name: "redis",
 		Meta: map[string]string{"flynn-plugin": "true"},
-	}})
+	}}, false)
 	if errBuf.Len() != 0 {
 		t.Fatalf("installed plugin must not print empty notice: %q", errBuf.String())
 	}

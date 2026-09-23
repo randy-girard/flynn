@@ -58,6 +58,14 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	if name != "plugin:list" || from != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
 		t.Fatalf("plugin help got %q %q from=%q", name, args, from)
 	}
+	name, args, from = ResolveCommand("plugin", []string{"--check"})
+	if name != "plugin:list" || from != "plugin" || !reflect.DeepEqual(args, []string{"--check"}) {
+		t.Fatalf("plugin --check got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin", []string{"list", "--check"})
+	if name != "plugin:list" || from != "plugin list" || !reflect.DeepEqual(args, []string{"--check"}) {
+		t.Fatalf("plugin list --check got %q %q from=%q", name, args, from)
+	}
 }
 
 func TestResolveCommandLogSinkAlias(t *testing.T) {
@@ -107,7 +115,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",
 		"firewall:peer-add", "firewall:peer-remove",
 		"firewall:expose", "firewall:unexpose",
-		"blobstore", "blobstore:status", "blobstore:set", "blobstore:credentials", "blobstore:migrate",
+		"blobstore", "blobstore:status", "blobstore:set", "blobstore:credentials", "blobstore:migrate", "blobstore:gc",
 	}
 	for _, name := range want {
 		if commands[name] == nil {
@@ -183,6 +191,10 @@ func TestResolveCommandRuntimeProfileAlias(t *testing.T) {
 	name, args, from = ResolveCommand("blobstore", []string{"credentials", "--name=minio"})
 	if name != "blobstore:credentials" || from != "blobstore credentials" {
 		t.Fatalf("blobstore credentials got %q from=%q", name, from)
+	}
+	name, args, from = ResolveCommand("blobstore", []string{"gc", "--keep=5"})
+	if name != "blobstore:gc" || from != "blobstore gc" {
+		t.Fatalf("blobstore gc got %q from=%q", name, from)
 	}
 }
 

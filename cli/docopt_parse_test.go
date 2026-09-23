@@ -102,6 +102,10 @@ func TestPluginListKnownParses(t *testing.T) {
 	if !args.Bool["--known"] {
 		t.Fatal("plugin list --known")
 	}
+	args = parseCLI(t, []string{"plugin:list", "--check"})
+	if !args.Bool["--check"] {
+		t.Fatal("plugin:list --check")
+	}
 }
 
 func TestRouteAddTCPTLSFlags(t *testing.T) {

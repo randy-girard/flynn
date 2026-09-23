@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -13,9 +12,11 @@ import (
 
 func init() {
 	register("plugin:list", runPlugins, `
-usage: flynn plugin:list [--known]
+usage: flynn plugin:list [--known] [--check]
 
-List plugins installed on the current cluster.
+List plugins installed on the current cluster, including the installed VERSION
+(GitHub tag). --check queries GitHub for the highest compatible tag for this
+Flynn version and shows UPDATE and STATUS (current, update, or -).
 
 --known prints first-party plugins Flynn knows how to install (name, GitHub
 repo, description) without talking to the cluster. Operators install with
@@ -41,30 +42,25 @@ func runPlugins(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	printPluginList(os.Stdout, os.Stderr, apps)
+	check := args != nil && args.Bool["--check"]
+	printPluginList(os.Stdout, os.Stderr, apps, check)
 	return nil
 }
 
-func printPluginList(stdout, stderr io.Writer, apps []*ct.App) {
-	n := writePluginTable(stdout, apps)
-	if n == 0 {
+func printPluginList(stdout, stderr io.Writer, apps []*ct.App, check bool) {
+	installed := plugin.ListInstalled(apps)
+	var rows []plugin.ListedPlugin
+	if check {
+		in := &plugin.Installer{Stdout: stdout, Stderr: stderr}
+		rows = in.CheckUpdates(installed, "")
+	} else {
+		rows = plugin.ListedFromInstalled(installed)
+	}
+	_ = plugin.WriteUserPluginTable(stdout, rows, check)
+	if len(rows) == 0 {
 		fmt.Fprintln(stderr, "no plugins installed")
 	}
-}
-
-func writePluginTable(w io.Writer, apps []*ct.App) int {
-	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	defer tw.Flush()
-	fmt.Fprintln(tw, "NAME\tKIND\tCOMMAND\tUSAGE\tREF")
-	n := 0
-	for _, p := range plugin.ListInstalled(apps) {
-		cmd, usage := "", ""
-		if p.CLI != nil && p.CLI.UserVisible(p.Kind) {
-			cmd = p.CLI.Command
-			usage = p.CLI.Usage
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.Kind, cmd, usage, p.Ref)
-		n++
+	if check {
+		plugin.WritePluginUpdateNotes(stderr, rows)
 	}
-	return n
 }

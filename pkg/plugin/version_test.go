@@ -82,8 +82,26 @@ func TestHighestCompatiblePluginTag(t *testing.T) {
 	if _, ok := HighestCompatiblePluginTag(tags, "v20260918.0"); ok {
 		t.Fatal("no tags for an older Flynn date.N")
 	}
-	if _, ok := HighestCompatiblePluginTag(tags, "dev"); ok {
+	if _, ok := ParseFlynnCalVer("dev"); ok {
 		t.Fatal("dev Flynn has no compatible calver")
+	}
+}
+
+func TestPluginNeedsUpdate(t *testing.T) {
+	if PluginNeedsUpdate("v20260919.0.3", "v20260919.0.3") {
+		t.Fatal("same tag")
+	}
+	if PluginNeedsUpdate("v20260919.0", "v20260919.0.0") {
+		t.Fatal("two-part equals .0")
+	}
+	if !PluginNeedsUpdate("v20260919.0.1", "v20260919.0.3") {
+		t.Fatal("higher patch is an update")
+	}
+	if !PluginNeedsUpdate("", "v20260919.0.1") {
+		t.Fatal("empty current with available tag")
+	}
+	if PluginNeedsUpdate("v20260919.0.3", "") {
+		t.Fatal("no available tag")
 	}
 }
 

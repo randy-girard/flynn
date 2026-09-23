@@ -3,7 +3,6 @@ package cli
 import (
 	"fmt"
 	"os"
-	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/pkg/plugin"
@@ -116,16 +115,20 @@ Examples:
 `
 
 const pluginListUsage = `
-usage: flynn-host plugin:list [--known]
+usage: flynn-host plugin:list [--known] [--check]
 
-List plugins installed on this cluster.
+List plugins installed on this cluster, including the installed VERSION
+(GitHub tag). --check queries GitHub for the highest compatible tag for
+this Flynn version and shows UPDATE and STATUS (current, update, or -).
 
 Options:
 	--known            List first-party plugins from the catalog shipped with Flynn
+	--check            Compare installed versions to published GitHub releases
 
 Examples:
 
     $ flynn-host plugin:list
+    $ flynn-host plugin:list --check
     $ flynn-host plugin:list --known
 `
 
@@ -353,25 +356,24 @@ func runPluginList(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	_ = plugin.WriteInstalled("", plugin.ListInstalled(apps))
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	defer w.Flush()
-	fmt.Fprintln(w, "NAME\tKIND\tCLI\tSOURCE\tREF")
-	n := 0
-	for _, app := range apps {
-		if !app.Plugin() {
-			continue
-		}
-		kind := app.Meta[plugin.MetaPluginKind]
-		cliName := ""
-		if c := plugin.CLIFromApp(app); c != nil {
-			cliName = c.Command
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", app.Name, kind, cliName, app.Meta[plugin.MetaPluginSource], app.Meta[plugin.MetaPluginRef])
-		n++
+	installed := plugin.ListInstalled(apps)
+	_ = plugin.WriteInstalled("", installed)
+	check := args.Bool["--check"]
+	var rows []plugin.ListedPlugin
+	if check {
+		in := &plugin.Installer{Stdout: os.Stdout, Stderr: os.Stderr}
+		rows = in.CheckUpdates(installed, "")
+	} else {
+		rows = plugin.ListedFromInstalled(installed)
 	}
-	if n == 0 {
+	if err := plugin.WriteHostPluginTable(os.Stdout, rows, check); err != nil {
+		return err
+	}
+	if len(rows) == 0 {
 		fmt.Fprintln(os.Stderr, "no plugins installed")
+	}
+	if check {
+		plugin.WritePluginUpdateNotes(os.Stderr, rows)
 	}
 	return nil
 }

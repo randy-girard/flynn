@@ -165,10 +165,14 @@ the uploaded `upgrade-smoke` app and waits for `last_run_at` / `last_job_id`.
 
 ```text
 flynn plugin:list
+flynn plugin:list --check
 flynn plugin:list --known
 sudo flynn-host plugin:list
+sudo flynn-host plugin:list --check
 sudo flynn-host plugin:list --known
 ```
+
+`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`.
 
 ## User CLI
 

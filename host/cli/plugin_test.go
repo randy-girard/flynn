@@ -158,12 +158,17 @@ func TestPluginUpdateUsage(t *testing.T) {
 
 func TestPluginListKnownUsage(t *testing.T) {
 	args := parsePluginCmd(t, "plugin:list", "plugin:list")
-	if args.Bool["--known"] {
+	if args.Bool["--known"] || args.Bool["--check"] {
 		t.Fatalf("list: %+v", args)
 	}
 
 	args = parsePluginCmd(t, "plugin:list", "plugin:list", "--known")
 	if !args.Bool["--known"] {
 		t.Fatalf("list --known: %+v", args)
+	}
+
+	args = parsePluginCmd(t, "plugin:list", "plugin:list", "--check")
+	if !args.Bool["--check"] || args.Bool["--known"] {
+		t.Fatalf("list --check: %+v", args)
 	}
 }

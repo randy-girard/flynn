@@ -108,6 +108,7 @@ var subAliases = map[string]map[string]string{
 		"set":         "blobstore:set",
 		"credentials": "blobstore:credentials",
 		"migrate":     "blobstore:migrate",
+		"gc":          "blobstore:gc",
 	},
 	"events": {
 		"visible": "events:visible",
@@ -168,10 +169,22 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 	if target, ok := hyphenAliases[name]; ok {
 		return target, args, name
 	}
+	if name == "plugin" && flagOnlyArgs(args) {
+		return "plugin:list", args, "plugin"
+	}
 	if target, ok := topAliases[name]; ok && target != name && helpOnlyArgs(args) {
 		return target, args, name
 	}
 	return name, args, ""
+}
+
+func flagOnlyArgs(args []string) bool {
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") {
+			return false
+		}
+	}
+	return true
 }
 
 func PrintCommandRename(from, to string) {
