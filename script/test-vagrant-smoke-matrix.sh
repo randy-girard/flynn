@@ -181,15 +181,18 @@ items:
     topologies: "3"
     skip_cli: true
 EOF
-out="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" apply-run)"
+# Isolate from the parent smoke run: SKIP_BUILD=1 and SMOKE_MATRIX_EXPLICIT
+# would otherwise keep skip_build from exporting SKIP_BUILD=1.
+isolate=(env -u SKIP_BUILD -u SMOKE_MATRIX_EXPLICIT)
+out="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" apply-run)"
 echo "${out}" | grep -q 'SKIP_BUILD=1' \
   || { echo "defaults.skip_build must export SKIP_BUILD=1" >&2; echo "${out}" >&2; exit 1; }
-out="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" --item only apply-item)"
+out="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" --item only apply-item)"
 echo "${out}" | grep -q 'SMOKE_TOPOLOGIES=3' \
   || { echo "item topologies must export SMOKE_TOPOLOGIES=3" >&2; echo "${out}" >&2; exit 1; }
 echo "${out}" | grep -q 'SKIP_CLI=1' \
   || { echo "item skip_cli must export SKIP_CLI=1" >&2; echo "${out}" >&2; exit 1; }
-inv="$(python3 "${py}" --root "${ROOT}" --matrix "${tmp}" max-inventory)"
+inv="$("${isolate[@]}" python3 "${py}" --root "${ROOT}" --matrix "${tmp}" max-inventory)"
 if [[ "${inv}" != "3" ]]; then
   echo "max-inventory for topologies 3 must be 3, got ${inv}" >&2
   exit 1
