@@ -17,7 +17,7 @@ usage: flynn apps:create [-r <remote>] [-y] [<name>]
 Create an application in Flynn.
 
 If a name is not provided, a random name will be generated.
-Dashboard paths, Flynn system apps, plugins, and planned plugin names are reserved.
+Dashboard paths, Flynn system apps, plugins, planned plugins, and public-site hosts are reserved.
 
 If run from a git repository, a 'flynn' remote will be created or replaced that
 allows deploying the application via git.

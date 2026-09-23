@@ -201,7 +201,7 @@ func TestReservedAppName(t *testing.T) {
 		"postgres", "controller", "redis", "dashboard", "mysql", "otel",
 		"letsencrypt", "minio", "scheduler", "sirenia", "nginx", "firewall",
 		"bootstrap", "github", "volume", "log-sink", "change-password",
-		"kubernetes", "cron",
+		"kubernetes", "cron", "blog", "tos", "security", "docs", "privacy",
 	} {
 		if !ReservedAppName(name) {
 			t.Fatalf("%q should be reserved", name)

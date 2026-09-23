@@ -433,13 +433,26 @@ func init() {
 		"promote", "quota", "queue", "saml", "sentinel", "session", "sessions",
 		"snapshot", "sqlite", "ssl", "storage", "tls", "token", "tokens",
 		"tracing", "uptime", "wal-g",
+		// company / marketing / public site (subdomains)
+		"about", "acceptable-use", "advisories", "assets", "blog", "brand",
+		"bug-bounty", "careers", "case-studies", "cdn", "changelog",
+		"community", "company", "compliance", "contact", "cookies", "customers",
+		"docs", "documentation", "download", "downloads", "dpa", "features",
+		"forum", "forums", "gdpr", "get-started", "handbook", "help",
+		"imprint", "incidents", "investors", "learn", "legal", "marketing",
+		"media", "news", "newsletter", "open-source", "opensource", "partners",
+		"pgp", "plans", "press", "pricing", "privacy", "privacy-policy",
+		"product", "products", "roadmap", "sales", "security", "sign-up",
+		"signup", "sla", "static", "statuspage", "stories", "support",
+		"terms", "terms-of-service", "tos", "trust", "try",
 	} {
 		reservedAppNames[name] = struct{}{}
 	}
 }
 
 // ReservedAppName is true when name is a dashboard path, Flynn system app,
-// official plugin, or a name we expect to use for a future plugin.
+// official plugin, a name we expect to use for a future plugin, or a
+// company/public-site host (blog, docs, tos, security, …).
 func ReservedAppName(name string) bool {
 	_, ok := reservedAppNames[strings.ToLower(strings.TrimSpace(name))]
 	return ok
