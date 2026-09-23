@@ -10,7 +10,7 @@ func sampleJob(reason, profile, procType string) *ActiveJob {
 		meta[MetaControllerReason] = reason
 	}
 	if profile != "" {
-		meta[MetaControllerRuntimeProfile] = profile
+		meta[MetaControllerRuntime] = profile
 	}
 	return &ActiveJob{
 		Job: &Job{

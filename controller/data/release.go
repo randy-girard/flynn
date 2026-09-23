@@ -69,7 +69,7 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 			if err != nil {
 				if err == ErrNotFound {
 					return ct.ValidationError{
-						Field:   "runtime_profile",
+						Field:   "runtime",
 						Message: fmt.Sprintf("unknown runtime %q", name),
 					}
 				}
@@ -78,7 +78,7 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 			if proc.Resources == nil {
 				proc.Resources = make(resource.Resources)
 			}
-			resource.ApplyNamedLimits(proc.Resources, p.Memory, p.CPU)
+			resource.ApplyNamedLimitsWithReserve(proc.Resources, p.Memory, p.CPU, p.ReserveResources)
 			proc.RuntimeProfile = p.Name
 		}
 		resource.SetDefaults(&proc.Resources)

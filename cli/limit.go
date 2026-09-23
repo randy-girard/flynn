@@ -67,7 +67,6 @@ Examples:
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb
 `
 	register("limit:runtime", runLimitProfile, limitRuntimeUsage)
-	register("limit:profile", runLimitProfile, strings.ReplaceAll(limitRuntimeUsage, "limit:runtime", "limit:profile"))
 }
 
 func runLimitList(args *docopt.Args, client controller.Client) error {
@@ -236,7 +235,7 @@ func applyRuntimeProfileToProc(t ct.ProcessType, profile *ct.RuntimeProfile) ct.
 	if t.Resources == nil {
 		t.Resources = resource.Defaults()
 	}
-	resource.ApplyNamedLimits(t.Resources, profile.Memory, profile.CPU)
+	resource.ApplyNamedLimitsWithReserve(t.Resources, profile.Memory, profile.CPU, profile.ReserveResources)
 	t.RuntimeProfile = profile.Name
 	return t
 }
@@ -244,7 +243,7 @@ func applyRuntimeProfileToProc(t ct.ProcessType, profile *ct.RuntimeProfile) ct.
 func formatRuntimeProfiles(list []*ct.RuntimeProfile) string {
 	var b strings.Builder
 	w := tabwriter.NewWriter(&b, 1, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tMEMORY\tCPU\tBUILTIN")
+	fmt.Fprintln(w, "NAME\tMEMORY\tCPU\tRESERVE\tBUILTIN")
 	sorted := append([]*ct.RuntimeProfile{}, list...)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i] == nil || sorted[j] == nil {
@@ -256,7 +255,7 @@ func formatRuntimeProfiles(list []*ct.RuntimeProfile) string {
 		if p == nil {
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%d\t%t\n", p.Name, resource.FormatLimit(resource.TypeMemory, p.Memory), p.CPU, p.Builtin)
+		fmt.Fprintf(w, "%s\t%s\t%d\t%t\t%t\n", p.Name, resource.FormatLimit(resource.TypeMemory, p.Memory), p.CPU, p.ReserveResources, p.Builtin)
 	}
 	w.Flush()
 	return b.String()

@@ -252,9 +252,9 @@ type ProcessType struct {
 	WriteableCgroups  bool               `json:"writeable_cgroups,omitempty"`
 
 	// RuntimeProfile is the name of a cluster runtime environment (small,
-	// medium, large, or a custom profile). When set, memory and CPU limits
-	// are taken from that profile at release-create time.
-	RuntimeProfile string `json:"runtime_profile,omitempty"`
+	// medium, large, or a custom runtime). When set, memory and CPU limits
+	// are taken from that runtime at release-create time.
+	RuntimeProfile string `json:"runtime,omitempty"`
 
 	// Entrypoint and Cmd are DEPRECATED: use Args instead
 	DeprecatedCmd        []string `json:"cmd,omitempty"`
@@ -262,6 +262,24 @@ type ProcessType struct {
 
 	// Data is DEPRECATED: populate Volumes instead
 	DeprecatedData bool `json:"data,omitempty"`
+}
+
+// UnmarshalJSON accepts both `runtime` and the legacy `runtime_profile` key
+// so stored releases created before the rename still load.
+func (p *ProcessType) UnmarshalJSON(data []byte) error {
+	type alias ProcessType
+	aux := struct {
+		alias
+		Legacy string `json:"runtime_profile"`
+	}{}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*p = ProcessType(aux.alias)
+	if strings.TrimSpace(p.RuntimeProfile) == "" {
+		p.RuntimeProfile = strings.TrimSpace(aux.Legacy)
+	}
+	return nil
 }
 
 type Port struct {
@@ -662,7 +680,7 @@ const (
 	EventTypeSinkDeletion            EventType = "sink_deletion"
 	EventTypeVolume                  EventType = "volume"
 	EventTypeManagedCertificate      EventType = "managed_certificate"
-	EventTypeRuntimeProfile          EventType = "runtime_profile"
+	EventTypeRuntimeProfile          EventType = "runtime"
 	EventTypeRuntimeSettings         EventType = "runtime_settings"
 	EventTypeScheduler               EventType = "scheduler"
 
@@ -1103,19 +1121,25 @@ var ErrACMENotEnabled = &ValidationError{
 
 // RuntimeProfile is a named CPU/memory preset managed on the cluster.
 type RuntimeProfile struct {
-	ID        string     `json:"id,omitempty"`
-	Name      string     `json:"name"`
-	Memory    int64      `json:"memory"` // bytes
-	CPU       int64      `json:"cpu"`    // milliCPU
-	Builtin   bool       `json:"builtin"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Name    string `json:"name"`
+	Memory  int64  `json:"memory"` // bytes
+	CPU     int64  `json:"cpu"`    // milliCPU
+	Builtin bool   `json:"builtin"`
+	// ReserveResources, when true, guarantees this runtime's CPU and memory
+	// on the host at schedule time. Off by default: the process still has
+	// those values as caps (limits) but shares unused host capacity.
+	ReserveResources bool       `json:"reserve_resources"`
+	CreatedAt        *time.Time `json:"created_at,omitempty"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
 }
 
 // DefaultMaxProcesses is the cluster default for how many jobs a process type may run.
 const DefaultMaxProcesses = 10
 
 // RuntimeSettings is the cluster-wide policy for process resource limits.
+// ReserveResources on this struct is unused for scheduling; guarantees are
+// per runtime profile (RuntimeProfile.ReserveResources).
 type RuntimeSettings struct {
 	AllowCustomLimits bool       `json:"allow_custom_limits"`
 	MaxProcesses      int        `json:"max_processes"`

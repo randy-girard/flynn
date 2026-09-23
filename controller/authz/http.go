@@ -226,7 +226,7 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 	}
 
 	switch parts[0] {
-	case "runtime-profiles":
+	case "runtimes":
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkAnyAuth, "", ""
 		}

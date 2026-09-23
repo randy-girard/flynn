@@ -802,21 +802,21 @@ WHERE id = 1
 RETURNING updated_at`
 
 	runtimeProfileListQuery = `
-SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
 FROM runtime_profiles WHERE deleted_at IS NULL
 ORDER BY builtin DESC, name`
 	runtimeProfileSelectQuery = `
-SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
 FROM runtime_profiles WHERE profile_id = $1 AND deleted_at IS NULL`
 	runtimeProfileSelectByNameQuery = `
-SELECT profile_id, name, memory, cpu, builtin, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
 FROM runtime_profiles WHERE name = $1 AND deleted_at IS NULL`
 	runtimeProfileInsertQuery = `
-INSERT INTO runtime_profiles (profile_id, name, memory, cpu, builtin)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO runtime_profiles (profile_id, name, memory, cpu, builtin, reserve_resources)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING created_at, updated_at`
 	runtimeProfileUpdateQuery = `
-UPDATE runtime_profiles SET name = $2, memory = $3, cpu = $4, updated_at = now()
+UPDATE runtime_profiles SET name = $2, memory = $3, cpu = $4, reserve_resources = $5, updated_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL
 RETURNING builtin, created_at, updated_at`
 	runtimeProfileDeleteQuery = `

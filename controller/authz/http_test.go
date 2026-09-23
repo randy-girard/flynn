@@ -80,11 +80,11 @@ func TestHTTPAllowed(t *testing.T) {
 		{"cluster_key_can_psql_controller", clusterKey, http.MethodPost, "/apps/controller/jobs", true},
 		{"admin_scope_can_psql_blobstore", adminBearer, http.MethodPost, "/apps/blobstore/jobs", true},
 
-		{"app_read_can_list_runtime_profiles", appRead, http.MethodGet, "/runtime-profiles", true},
-		{"app_read_cannot_create_runtime_profile", appRead, http.MethodPost, "/runtime-profiles", false},
+		{"app_read_can_list_runtimes", appRead, http.MethodGet, "/runtimes", true},
+		{"app_read_cannot_create_runtime", appRead, http.MethodPost, "/runtimes", false},
 		{"app_write_cannot_put_runtime_settings", appWrite, http.MethodPut, "/cluster/runtime-settings", false},
 		{"app_read_can_get_runtime_settings", appRead, http.MethodGet, "/cluster/runtime-settings", true},
-		{"cluster_key_can_create_runtime_profile", clusterKey, http.MethodPost, "/runtime-profiles", true},
+		{"cluster_key_can_create_runtime", clusterKey, http.MethodPost, "/runtimes", true},
 
 		{"app_read_can_get_github_app", appRead, http.MethodGet, "/github/app", true},
 		{"app_write_cannot_put_github_app", appWrite, http.MethodPut, "/github/app", false},

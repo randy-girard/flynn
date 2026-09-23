@@ -322,11 +322,11 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
 	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
 
-	httpRouter.GET("/runtime-profiles", httphelper.WrapHandler(api.ListRuntimeProfiles))
-	httpRouter.POST("/runtime-profiles", httphelper.WrapHandler(api.CreateRuntimeProfile))
-	httpRouter.GET("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.GetRuntimeProfile))
-	httpRouter.PUT("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.UpdateRuntimeProfile))
-	httpRouter.DELETE("/runtime-profiles/:runtime_profiles_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
+	httpRouter.GET("/runtimes", httphelper.WrapHandler(api.ListRuntimeProfiles))
+	httpRouter.POST("/runtimes", httphelper.WrapHandler(api.CreateRuntimeProfile))
+	httpRouter.GET("/runtimes/:runtimes_id", httphelper.WrapHandler(api.GetRuntimeProfile))
+	httpRouter.PUT("/runtimes/:runtimes_id", httphelper.WrapHandler(api.UpdateRuntimeProfile))
+	httpRouter.DELETE("/runtimes/:runtimes_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
 	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 

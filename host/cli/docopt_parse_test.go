@@ -52,9 +52,9 @@ func TestHostCLIPositionalLists(t *testing.T) {
 		t.Fatalf("otel add: %+v", otel.String)
 	}
 
-	rt := parseHostCLI(t, "runtime-profile:create", []string{"runtime-profile:create", "--memory", "512MB", "--cpu", "500", "xlarge"})
+	rt := parseHostCLI(t, "runtime:create", []string{"runtime:create", "--memory", "512MB", "--cpu", "500", "xlarge"})
 	if rt.String["<name>"] != "xlarge" || rt.String["--memory"] != "512MB" || rt.String["--cpu"] != "500" {
-		t.Fatalf("runtime-profile create: %+v", rt.String)
+		t.Fatalf("runtime create: %+v", rt.String)
 	}
 	route := parseHostCLI(t, "route:add", []string{"route:add", "http", "--app", "admin", "example.com/admin"})
 	if route.String["--app"] != "admin" || route.String["<domain>"] != "example.com/admin" {

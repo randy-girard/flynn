@@ -1,6 +1,10 @@
 package types
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestRedisApplianceStrategy(t *testing.T) {
 	app := NewRedisApplianceApp("redis-11111111-2222-3333-4444-555555555555")
@@ -256,5 +260,32 @@ func TestManagedCertificateAddErrorSetsLastError(t *testing.T) {
 	}
 	if cert.LastErrorAt == nil {
 		t.Fatal("LastErrorAt not set")
+	}
+}
+
+func TestProcessTypeUnmarshalRuntime(t *testing.T) {
+	var next ProcessType
+	if err := json.Unmarshal([]byte(`{"runtime":"large"}`), &next); err != nil {
+		t.Fatal(err)
+	}
+	if next.RuntimeProfile != "large" {
+		t.Fatalf("runtime = %q", next.RuntimeProfile)
+	}
+	var legacy ProcessType
+	if err := json.Unmarshal([]byte(`{"runtime_profile":"small"}`), &legacy); err != nil {
+		t.Fatal(err)
+	}
+	if legacy.RuntimeProfile != "small" {
+		t.Fatalf("legacy runtime_profile = %q", legacy.RuntimeProfile)
+	}
+	raw, err := json.Marshal(ProcessType{RuntimeProfile: "medium"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"runtime":"medium"`) {
+		t.Fatalf("marshal = %s", raw)
+	}
+	if strings.Contains(string(raw), "runtime_profile") {
+		t.Fatalf("marshal still used runtime_profile: %s", raw)
 	}
 }

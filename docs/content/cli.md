@@ -85,7 +85,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases) |
+| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases). Dashboard paths, system apps, plugins, and planned plugin names are reserved. |
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Add or replace the `flynn` git remote for the current app |
 | `github` / `github:connect` / `github:deploy` / `github:set` / `github:disconnect` | Connect a GitHub repo and deploy through taffy (cluster GitHub App) |
@@ -98,7 +98,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | App metric alerts (dashboard plugin) |
 | `log` | Aggregated stdout/stderr, prefixed `source[web.1]` (`-j` takes a short name or UUID) |
 | `env` / `env:get` / `env:set` / `env:unset` | App config (`-t <proc>` scopes to one process type) |
-| `limit` / `limit:profiles` / `limit:runtime` / `limit:set` | Named runtimes; raw `limit:set` for numeric CPU/memory (when allowed), `max_fd`, `temp_disk`. `limit:profile` is an alias of `limit:runtime`. |
+| `limit` / `limit:profiles` / `limit:runtime` / `limit:set` | Named runtimes; raw `limit:set` for numeric CPU/memory (when allowed), `max_fd`, `temp_disk`. |
 | `meta` / `meta:set` / `meta:unset` | App metadata |
 | `apps:export` / `apps:import` | Backup and restore an app (`export` / `import` are aliases) |
 
@@ -205,7 +205,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `otel` / `otel:add` / `otel:remove` | OpenTelemetry metrics exporters (requires `flynn-host plugin:install otel`) |
 | `acme` / `acme:configure` / `acme:status` / `acme:enable` / `acme:disable` / `acme:enable-system-routes` / `acme:disable-system-routes` | Let's Encrypt account, cluster ACME on/off, and system-route TLS |
 | `github` / `github:setup` / `github:configure` / `github:status` / `github:disable` | Cluster GitHub App for dashboard/CLI GitHub deploys |
-| `runtime` / `runtime:create` / `runtime:update` / `runtime:remove` / `runtime:allow-custom` / `runtime:reserve` | Named CPU/memory runtimes (`small`/`medium`/`large` plus custom). `runtime:reserve` optionally guarantees Request on the host (off by default). `runtime-profile*` names still work as aliases. |
+| `runtime` / `runtime:create` / `runtime:update` / `runtime:remove` / `runtime:allow-custom` / `runtime:reserve` | Named CPU/memory runtimes (`small`/`medium`/`large` plus custom). New runtimes share host capacity (caps only). `runtime:create --reserve` or `runtime:reserve <id>` guarantees Request on the host for that runtime. |
 | `firewall` / `firewall:sync` / `firewall:peer:add` / `firewall:peer:remove` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
 | `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |
 | `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname (`--clear` resets) |

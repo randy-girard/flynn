@@ -8,30 +8,23 @@ import (
 
 // topAliases rewrites a single-token command (flynn-host plugin → plugin:list).
 var topAliases = map[string]string{
-	"plugin":          "plugin:list",
-	"volume":          "volume:list",
-	"logsink":         "log-sink",
-	"logsink:add":     "log-sink:add",
-	"logsink:list":    "log-sink:list",
-	"logsink:remove":  "log-sink:remove",
-	"runtime-profile": "runtime",
-	"runtime":         "runtime",
+	"plugin":         "plugin:list",
+	"volume":         "volume:list",
+	"logsink":        "log-sink",
+	"logsink:add":    "log-sink:add",
+	"logsink:list":   "log-sink:list",
+	"logsink:remove": "log-sink:remove",
+	"runtime":        "runtime",
 }
 
 // hyphenAliases rewrites nested-noun hyphen names to extra-colon canonical names.
 // Hyphenated verbs (plugin:update-all, acme:disable-system-routes) stay as-is.
 var hyphenAliases = map[string]string{
-	"plugin:credentials-set":       "plugin:credentials:set",
-	"plugin:credentials-unset":     "plugin:credentials:unset",
-	"plugin:credentials-show":      "plugin:credentials:show",
-	"firewall:peer-add":            "firewall:peer:add",
-	"firewall:peer-remove":         "firewall:peer:remove",
-	"runtime-profile":              "runtime",
-	"runtime-profile:create":       "runtime:create",
-	"runtime-profile:update":       "runtime:update",
-	"runtime-profile:remove":       "runtime:remove",
-	"runtime-profile:allow-custom": "runtime:allow-custom",
-	"runtime-profile:reserve":      "runtime:reserve",
+	"plugin:credentials-set":   "plugin:credentials:set",
+	"plugin:credentials-unset": "plugin:credentials:unset",
+	"plugin:credentials-show":  "plugin:credentials:show",
+	"firewall:peer-add":        "firewall:peer:add",
+	"firewall:peer-remove":     "firewall:peer:remove",
 }
 
 // subAliases rewrites flynn-host <noun> <verb> to flynn-host <noun>:<verb>.
@@ -95,14 +88,6 @@ var subAliases = map[string]map[string]string{
 		"disable":   "github:disable",
 	},
 	"runtime": {
-		"create":       "runtime:create",
-		"update":       "runtime:update",
-		"remove":       "runtime:remove",
-		"delete":       "runtime:remove",
-		"allow-custom": "runtime:allow-custom",
-		"reserve":      "runtime:reserve",
-	},
-	"runtime-profile": {
 		"create":       "runtime:create",
 		"update":       "runtime:update",
 		"remove":       "runtime:remove",

@@ -34,8 +34,15 @@ func TestApplyRuntimeProfileToProcSetsLimits(t *testing.T) {
 	if got.Resources[resource.TypeMemory].Limit == nil || *got.Resources[resource.TypeMemory].Limit != p.Memory {
 		t.Fatalf("memory %+v", got.Resources[resource.TypeMemory])
 	}
+	if got.Resources[resource.TypeMemory].Request == nil || *got.Resources[resource.TypeMemory].Request != 0 {
+		t.Fatalf("shared memory request %+v", got.Resources[resource.TypeMemory])
+	}
 	if got.Resources[resource.TypeCPU].Limit == nil || *got.Resources[resource.TypeCPU].Limit != p.CPU {
 		t.Fatalf("cpu %+v", got.Resources[resource.TypeCPU])
+	}
+	reserved := applyRuntimeProfileToProc(ct.ProcessType{}, &ct.RuntimeProfile{Name: "iso", Memory: p.Memory, CPU: p.CPU, ReserveResources: true})
+	if reserved.Resources[resource.TypeMemory].Request == nil || *reserved.Resources[resource.TypeMemory].Request != p.Memory {
+		t.Fatalf("reserved memory %+v", reserved.Resources[resource.TypeMemory])
 	}
 }
 
@@ -44,7 +51,7 @@ func TestFormatRuntimeProfiles(t *testing.T) {
 		{Name: "large", Memory: 2 * 1024 * 1024 * 1024, CPU: 2000, Builtin: true},
 		{Name: "small", Memory: 512 * 1024 * 1024, CPU: 500, Builtin: true},
 	})
-	if !strings.Contains(out, "small") || !strings.Contains(out, "large") {
+	if !strings.Contains(out, "small") || !strings.Contains(out, "large") || !strings.Contains(out, "RESERVE") {
 		t.Fatalf("output %q", out)
 	}
 	smallAt := strings.Index(out, "small")
@@ -59,12 +66,8 @@ func TestResolveCommandLimitProfiles(t *testing.T) {
 	if name != "limit:profiles" || from != "limit profiles" || len(args) != 0 {
 		t.Fatalf("got %q %q from=%q", name, args, from)
 	}
-	name, args, from = resolveCommand("limit", []string{"profile", "web", "small"})
-	if name != "limit:profile" || from != "limit profile" || strings.Join(args, " ") != "web small" {
-		t.Fatalf("apply got %q %q from=%q", name, args, from)
-	}
 	name, args, from = resolveCommand("limit", []string{"runtime", "web", "small"})
 	if name != "limit:runtime" || from != "limit runtime" || strings.Join(args, " ") != "web small" {
-		t.Fatalf("runtime got %q %q from=%q", name, args, from)
+		t.Fatalf("apply got %q %q from=%q", name, args, from)
 	}
 }

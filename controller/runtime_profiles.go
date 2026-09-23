@@ -26,7 +26,7 @@ func (c *controllerAPI) ListRuntimeProfiles(ctx context.Context, w http.Response
 
 func (c *controllerAPI) GetRuntimeProfile(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	p, err := c.runtimeProfileRepo.Get(params.ByName("runtime_profiles_id"))
+	p, err := c.runtimeProfileRepo.Get(params.ByName("runtimes_id"))
 	if err != nil {
 		if err == data.ErrNotFound {
 			err = ErrNotFound
@@ -62,7 +62,7 @@ func (c *controllerAPI) UpdateRuntimeProfile(ctx context.Context, w http.Respons
 		respondWithError(w, err)
 		return
 	}
-	p.ID = params.ByName("runtime_profiles_id")
+	p.ID = params.ByName("runtimes_id")
 	if err := validateRuntimeProfile(&p, true); err != nil {
 		respondWithError(w, err)
 		return
@@ -79,7 +79,7 @@ func (c *controllerAPI) UpdateRuntimeProfile(ctx context.Context, w http.Respons
 
 func (c *controllerAPI) DeleteRuntimeProfile(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	if err := c.runtimeProfileRepo.Delete(params.ByName("runtime_profiles_id")); err != nil {
+	if err := c.runtimeProfileRepo.Delete(params.ByName("runtimes_id")); err != nil {
 		if err == data.ErrNotFound {
 			err = ErrNotFound
 		}

@@ -49,7 +49,6 @@ var subAliases = map[string]map[string]string{
 	},
 	"limit": {
 		"set":      "limit:set",
-		"profile":  "limit:profile",
 		"profiles": "limit:profiles",
 		"runtime":  "limit:runtime",
 	},

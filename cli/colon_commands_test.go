@@ -26,7 +26,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"volume:show", "volume:decommission",
 		"route:add", "resource:add", "resource:expose", "resource:unexpose",
 		"cluster:add", "cluster:migrate-domain",
-		"limit:set", "limit:profile", "limit:profiles", "limit:runtime",
+		"limit:set", "limit:profiles", "limit:runtime",
 	}
 	for _, name := range want {
 		if commands[name] == nil {

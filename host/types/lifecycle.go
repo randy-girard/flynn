@@ -19,7 +19,8 @@ const (
 	MetaControllerName           = "flynn-controller.name"
 	MetaControllerReason         = "flynn-controller.reason"
 	MetaControllerStopReason     = "flynn-controller.stop-reason"
-	MetaControllerRuntimeProfile = "flynn-controller.runtime_profile"
+	MetaControllerRuntime        = "flynn-controller.runtime"
+	MetaControllerRuntimeProfile = "flynn-controller.runtime_profile" // legacy job metadata
 	MetaControllerApp            = "flynn-controller.app"
 )
 
@@ -81,6 +82,9 @@ func JobStopReason(job *ActiveJob) string {
 func JobRuntimeProfile(job *ActiveJob) string {
 	if job == nil || job.Job == nil {
 		return ""
+	}
+	if v := strings.TrimSpace(job.Job.Metadata[MetaControllerRuntime]); v != "" {
+		return v
 	}
 	return strings.TrimSpace(job.Job.Metadata[MetaControllerRuntimeProfile])
 }
@@ -185,7 +189,7 @@ func JobLifecycleMetadata(job *ActiveJob) map[string]string {
 		out["stop_reason"] = v
 	}
 	if v := JobRuntimeProfile(job); v != "" {
-		out["runtime_profile"] = v
+		out["runtime"] = v
 	}
 	if len(out) == 0 {
 		return nil
