@@ -2,6 +2,8 @@ package cli
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/flynn/go-docopt"
@@ -81,6 +83,32 @@ When --tarball is specified, the update is performed from a local .tar.gz file
 (the same tarball produced by the release scripts) instead of GitHub. With
 --all-nodes, a temporary HTTP server is started on this node to serve the
 tarball contents to other cluster nodes.`)
+	Register("rollback", runRollback, `
+usage: flynn-host rollback --version=<ver> [options]
+
+Options:
+  -b --bin-dir=<dir>             directory to download binaries to [default: /usr/local/bin]
+  -c --config-dir=<dir>          directory to download config files to [default: /etc/flynn]
+  --github-repo=<repo>           GitHub repository [default: randy-girard/flynn]
+  --version=<ver>                Flynn GitHub release tag to restore (required)
+  --no-restart                   only download binaries, don't restart the daemon
+  --skip-images                  skip updating container images and system apps
+  --images-only                  only roll back container images and system apps
+  --tarball=<path>               restore from a local release tarball instead of GitHub
+  --this-host                    only this machine (default is every cluster host)
+  --health-timeout=<duration>    per-host wait for the cluster to report healthy
+  --inter-host-delay=<duration>  extra settle delay after a host is healthy
+  --wait-jobs-timeout=<duration> per-host wait for jobs to land on a restarted host
+  --restart-down-jobs            also restart down database peer jobs during quorum repair
+
+Install a previously published Flynn release on this cluster. This is the
+supported rollback after a bad in-place upgrade: same path as
+flynn-host update --version --all-nodes --force.
+
+It does not undo user app deploys, postgres/volume data, blobstore objects,
+or plugin databases. After the platform is on the older tag, run
+flynn-host plugin:update-all so plugins match that Flynn calver.
+`)
 }
 
 // minVersion is the minimum version that can be updated from.
@@ -125,6 +153,25 @@ func runUpdate(args *docopt.Args) error {
 	}
 
 	return runGitHubUpdate(args, repo, configDir, log)
+}
+
+func runRollback(args *docopt.Args) error {
+	if strings.TrimSpace(args.String["--version"]) == "" && strings.TrimSpace(args.String["--tarball"]) == "" {
+		return fmt.Errorf("rollback requires --version (GitHub tag) or --tarball")
+	}
+	if args.Bool == nil {
+		args.Bool = map[string]bool{}
+	}
+	args.Bool["--force"] = true
+	if !args.Bool["--this-host"] {
+		args.Bool["--all-nodes"] = true
+	}
+	fmt.Fprint(os.Stderr, `Rolling Flynn back to a previous platform release.
+This restores host binaries and (unless --skip-images) system-app images.
+It does not roll back user app releases, postgres data, volumes, blobstore
+objects, or plugin databases. Afterward run: sudo flynn-host plugin:update-all
+`)
+	return runUpdate(args)
 }
 
 // applyUpdateTimingFlags parses the optional --health-timeout,

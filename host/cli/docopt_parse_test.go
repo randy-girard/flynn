@@ -153,3 +153,13 @@ func TestBlobstoreHostCLIParse(t *testing.T) {
 		t.Fatal("blobstore:migrate --delete")
 	}
 }
+
+func TestRollbackParses(t *testing.T) {
+	args := parseHostCLI(t, "rollback", []string{"rollback", "--version=v20260919.0"})
+	if args.String["--version"] != "v20260919.0" {
+		t.Fatalf("rollback --version: %+v", args.String)
+	}
+	if args.Bool["--this-host"] {
+		t.Fatal("this-host must be off by default")
+	}
+}

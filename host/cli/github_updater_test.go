@@ -334,6 +334,13 @@ func TestShouldAbortGitHubUpdate(t *testing.T) {
 	if shouldAbortGitHubUpdate(false, false, current, next) {
 		t.Fatal("newer release must update")
 	}
+	const prev = "v20260916.1"
+	if !shouldAbortGitHubUpdate(false, false, current, prev) {
+		t.Fatal("older release without --force must abort (use rollback or --force)")
+	}
+	if shouldAbortGitHubUpdate(true, false, current, prev) {
+		t.Fatal("--force must allow installing an older release")
+	}
 }
 
 func TestContinueAfterHostReexec(t *testing.T) {
