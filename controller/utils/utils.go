@@ -50,7 +50,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 	metadata["flynn-controller.formation"] = "true"
 	metadata["flynn-controller.type"] = name
 	if t.RuntimeProfile != "" {
-		metadata["flynn-controller.runtime_profile"] = t.RuntimeProfile
+		metadata[host.MetaControllerRuntime] = t.RuntimeProfile
 	}
 	job := &host.Job{
 		ID:       id,
@@ -370,6 +370,93 @@ func (c clusterClientWrapper) StreamHostEvents(ch chan *discoverd.Event) (stream
 }
 
 var AppNamePattern = regexp.MustCompile(`^[a-z\d]+(-[a-z\d]+)*$`)
+
+// reservedAppNames cannot be chosen for a user app. Bootstrap and plugin
+// install still create these names with flynn-system-app / flynn-plugin meta.
+var reservedAppNames = map[string]struct{}{}
+
+func init() {
+	for _, name := range []string{
+		// dashboard paths and chrome
+		"account", "activity", "admin", "alerts", "apps", "console", "deploy",
+		"env", "events", "invite", "jobs", "login", "logs", "metrics", "new",
+		"plugin", "plugins", "releases", "resources", "roles", "runtime",
+		"scale", "settings", "system", "team", "users",
+		// bootstrap / updater system apps and internals
+		"appliance", "artifact", "artifacts", "blobstore", "bootstrap", "builder",
+		"buildkit", "buildpack", "buildpacks", "controller", "core", "dashboard",
+		"discover", "discoverd", "docker", "dockerbuilder", "flannel", "formation",
+		"formations", "gitreceive", "installer", "logaggregator", "overlay",
+		"pinkerton", "postgres", "postgresql", "router", "sirenia", "slug",
+		"slugbuilder", "slugrunner", "status", "taffy", "tarreceive", "updater",
+		"zfs",
+		// official plugins and catalog aliases
+		"clickhouse", "discovery", "kafka", "mariadb", "mongo", "mongodb",
+		"mysql", "opentelemetry", "otel", "redis", "scheduler", "template", "www",
+		// CLI / host / platform words
+		"addon", "addons", "alert", "backup", "catalog", "cert", "certs",
+		"cluster", "clusters", "config", "container", "containers", "database",
+		"datastore", "dns", "domain", "domains", "event", "export", "firewall",
+		"flynn", "follower", "git", "github", "health", "healthcheck", "host",
+		"hosts", "iam", "image", "images", "import", "infra", "infrastructure",
+		"init", "install", "internal", "job", "key", "keys", "leader", "limit",
+		"limits", "log", "log-sink", "logsink", "marketplace", "metric",
+		"monitor", "monitoring", "node", "nodes", "org", "orgs", "ping",
+		"platform", "process", "processes", "provider", "providers", "proxy",
+		"rbac", "replica", "resource", "restore", "route", "routes", "runtimes",
+		"secret", "secrets", "sink", "ssh", "stack", "stacks", "syslog",
+		"update", "upgrade", "version", "volume", "volumes", "vpn", "webhook",
+		"webhooks",
+		// datastores, queues, search
+		"beanstalkd", "cassandra", "cockroach", "cockroachdb", "consul",
+		"dragonfly", "druid", "elasticsearch", "etcd", "influx", "influxdb",
+		"keydb", "meilisearch", "memcached", "nats", "neo4j", "nsq", "opensearch",
+		"percona", "pgbouncer", "postgis", "presto", "pulsar", "rabbitmq",
+		"redpanda", "rqlite", "scylla", "scylladb", "solr", "tidb", "timescaledb",
+		"trino", "typesense", "valkey", "vitess", "zookeeper",
+		// observability, identity, storage, edge
+		"acme", "alertmanager", "ansible", "authentik", "billing", "caddy",
+		"ceph", "certbot", "cert-manager", "collector", "coredns", "dex",
+		"enterprise", "envoy", "fluentd", "forgejo", "gitea", "gitlab", "grafana",
+		"haproxy", "harbor", "jaeger", "jenkins", "kibana", "keycloak", "ldap",
+		"letsencrypt", "loki", "mail", "mailhog", "mailpit", "minio", "nginx",
+		"oauth", "oidc", "packer", "payment", "payments", "postfix", "prometheus",
+		"pulumi", "registry", "restic", "s3", "smtp", "sso", "step-ca", "tempo",
+		"terraform", "thanos", "traefik", "vector", "vault", "wireguard", "zipkin",
+		// more dashboard, host CLI, identity, and likely plugins
+		"auth", "authentication", "authorization", "authelia", "barman", "ca",
+		"cache", "cadvisor", "cgroup", "change-password", "citus", "compose",
+		"credentials", "cron", "daemon", "demote", "drone", "fluent-bit",
+		"fluentbit", "galera", "gateway", "gogs", "https", "identity", "ingress",
+		"k8s", "kubernetes", "loadbalancer", "migrate-domain", "namespace",
+		"nomad", "password", "patroni", "pgbackrest", "pgpool", "policy",
+		"promote", "quota", "queue", "saml", "sentinel", "session", "sessions",
+		"snapshot", "sqlite", "ssl", "storage", "tls", "token", "tokens",
+		"tracing", "uptime", "wal-g",
+	} {
+		reservedAppNames[name] = struct{}{}
+	}
+}
+
+// ReservedAppName is true when name is a dashboard path, Flynn system app,
+// official plugin, or a name we expect to use for a future plugin.
+func ReservedAppName(name string) bool {
+	_, ok := reservedAppNames[strings.ToLower(strings.TrimSpace(name))]
+	return ok
+}
+
+// ValidateAppName checks pattern, length, and reserved names. System and
+// plugin apps may use reserved names so bootstrap and flynn-host plugin:install
+// still work.
+func ValidateAppName(name string, systemOrPlugin bool) error {
+	if len(name) > 100 || !AppNamePattern.MatchString(name) {
+		return ct.ValidationError{Field: "name", Message: "is invalid"}
+	}
+	if !systemOrPlugin && ReservedAppName(name) {
+		return ct.ValidationError{Field: "name", Message: "is reserved"}
+	}
+	return nil
+}
 
 func FormationTagsEqual(a, b map[string]map[string]string) bool {
 	if len(a) != len(b) {

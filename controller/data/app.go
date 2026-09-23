@@ -42,8 +42,8 @@ func (r *AppRepo) Add(data interface{}) error {
 		// Safe cast because name_ids is limited to 32 bit size in schema
 		app.Name = name.Get(uint32(nameID))
 	}
-	if len(app.Name) > 100 || !utils.AppNamePattern.MatchString(app.Name) {
-		return ct.ValidationError{Field: "name", Message: "is invalid"}
+	if err := utils.ValidateAppName(app.Name, app.System() || app.Plugin()); err != nil {
+		return err
 	}
 	if app.ID == "" {
 		app.ID = random.UUID()

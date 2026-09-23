@@ -144,8 +144,8 @@ func TestJobConfigSystemPartitionEnvAndDeprecatedArgs(t *testing.T) {
 		Args:           []string{"web"},
 	}
 	profiled := JobConfig(f, "web", "host1", "job-uuid")
-	if profiled.Metadata["flynn-controller.runtime_profile"] != "large" {
-		t.Fatalf("runtime_profile metadata=%v", profiled.Metadata)
+	if profiled.Metadata["flynn-controller.runtime"] != "large" {
+		t.Fatalf("runtime metadata=%v", profiled.Metadata)
 	}
 	if !job.Config.HostNetwork || len(job.Config.Ports) != 1 || job.Config.Ports[0].Port != 8080 {
 		t.Fatalf("ports/host network: %+v", job.Config)
@@ -192,6 +192,51 @@ func TestFormationTagsEqualAndAppName(t *testing.T) {
 	}
 	if !AppNamePattern.MatchString("upgrade-smoke") || AppNamePattern.MatchString("Bad_Name") {
 		t.Fatal("app name pattern")
+	}
+}
+
+func TestReservedAppName(t *testing.T) {
+	for _, name := range []string{
+		"plugins", "Plugins", " system ", "plugin", "new",
+		"postgres", "controller", "redis", "dashboard", "mysql", "otel",
+		"letsencrypt", "minio", "scheduler", "sirenia", "nginx", "firewall",
+		"bootstrap", "github", "volume", "log-sink", "change-password",
+		"kubernetes", "cron",
+	} {
+		if !ReservedAppName(name) {
+			t.Fatalf("%q should be reserved", name)
+		}
+	}
+	for _, name := range []string{"demo", "brand-new", "my-plugins", "myapp", ""} {
+		if ReservedAppName(name) {
+			t.Fatalf("%q should not be reserved", name)
+		}
+	}
+}
+
+func TestReservedAppNamesMatchPattern(t *testing.T) {
+	for name := range reservedAppNames {
+		if !AppNamePattern.MatchString(name) {
+			t.Errorf("reserved name %q is not a valid app name", name)
+		}
+	}
+}
+
+func TestValidateAppNameAllowsSystemReserved(t *testing.T) {
+	if err := ValidateAppName("postgres", false); err == nil {
+		t.Fatal("user app named postgres should be reserved")
+	}
+	if err := ValidateAppName("postgres", true); err != nil {
+		t.Fatalf("system postgres: %v", err)
+	}
+	if err := ValidateAppName("redis", true); err != nil {
+		t.Fatalf("plugin redis: %v", err)
+	}
+	if err := ValidateAppName("demo", false); err != nil {
+		t.Fatalf("demo: %v", err)
+	}
+	if err := ValidateAppName("Bad_Name", false); err == nil {
+		t.Fatal("invalid pattern")
 	}
 }
 

@@ -10,6 +10,17 @@ Applications can be deployed to Flynn using [Buildpacks](#buildpacks) or
 [Docker](docker.md). This page provides information about the management and
 configuration of apps on Flynn.
 
+## Names
+
+App names are lowercase letters, digits, and hyphen-separated groups
+(`my-app`), at most 100 characters.
+
+User apps cannot use names that collide with dashboard paths (`plugins`,
+`system`, `new`), Flynn system apps (`postgres`, `controller`,
+`discoverd`), official plugins (`redis`, `www`, `dashboard`), or names
+reserved for planned plugins. Bootstrap and `flynn-host plugin:install`
+can still create those apps as system or plugin apps.
+
 ## Configuration
 
 As suggested in [_The Twelve-Factor App_](http://12factor.net/config), Flynn
@@ -383,10 +394,19 @@ router can operate.
 ## Limits
 
 Process types use named runtimes for CPU and memory. Each runtime's CPU and
-memory values are applied as the process **cap**. Reservation of that CPU and
-memory on the host is **optional and off by default**. When you turn it on
-(`flynn-host runtime:reserve`), the scheduler only places a process on a host
-that still has that much free Request; otherwise the process stays pending.
+memory values are applied as the process **cap** (the max it may use). A
+runtime does **not** guarantee that capacity on the host unless you turn
+reservation on for that runtime. Shared runtimes pack onto nodes and keep
+those maxes; a guaranteed runtime stays pending until a host has that much
+free Request.
+
+Enable a guarantee when creating or updating a runtime:
+
+```text
+sudo flynn-host runtime:create --reserve --memory 1GB --cpu 1000 isolated
+sudo flynn-host runtime:reserve small
+sudo flynn-host runtime:reserve --disable small
+```
 
 The cluster bootstraps three builtins:
 
@@ -418,9 +438,9 @@ use `limit:set`:
 flynn limit:set web max_fd=12000 temp_disk=200MB
 ```
 
-Host-level CPU/memory reservation is off by default. Enable it with
-`sudo flynn-host runtime:reserve` if a process must wait until a host has
-that much free Request instead of packing onto a busy node.
+Host-level CPU/memory reservation is off per runtime. Enable it on the
+runtimes that must wait until a host has that much free Request; other
+runtimes keep sharing leftover capacity under the same maxes.
 
 CPU shares are relative: when a host is under load, a job with 2000 milliCPU
 gets twice the CPU time as a job with 1000.
