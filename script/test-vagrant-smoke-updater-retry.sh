@@ -54,6 +54,10 @@ need_in "${sirenia_health}" 'excludeIDs' \
   "HA startInstance poll must skip already-started new peers"
 need_in "${sirenia}" 'lookupSireniaPeer\(svc, d.NewReleaseID, processType, idKey, exclude' \
   "HA startInstance wait must poll discoverd excluding known new peers"
+need_in "${unsettled}" ': eof' \
+  "controller HTTP Put .../release: EOF must retry as unavailable"
+need_in "${unsettled_test}" 'controller.discoverd/apps' \
+  "unit tests must cover controller HTTP EOF during DeployAppRelease"
 need_in "${github_updater}" 'MaxTransientDeployAttempts\(deployErr\)' \
   "flynn-host update must size retries from the deploy error"
 need_in "${incluster}" 'MaxTransientDeployAttempts\(deployErr\)' \
@@ -76,6 +80,16 @@ need_in "${github_updater}" 'EnsureRouterStrategy' \
   "flynn-host update must stop the old host-network router before starting the replacement"
 need_in "${incluster}" 'EnsureRouterStrategy' \
   "in-cluster updater must stop the old host-network router before starting the replacement"
+need_in "${github_updater}" 'clusterHostCount' \
+  "flynn-host update must size controller strategy from cluster host count"
+need_in "${incluster}" 'cluster.NewClient\(\).Hosts\(\)' \
+  "in-cluster updater must size controller strategy from cluster host count"
+need_in "${ROOT}/controller/types/types.go" 'ControllerStrategy' \
+  "controller deploys must use all-at-once so JobList is not waited on after the last scheduler exits"
+need_in "${ROOT}/bootstrap/manifest_template.json" '"strategy": "all-at-once"' \
+  "bootstrap must create the controller with all-at-once (start new scheduler before stopping the last one)"
+need_in "${ROOT}/pkg/updaterdeploy/controller_strategy.go" 'EnsureControllerStrategy' \
+  "updaterdeploy must persist controller all-at-once before DeployAppRelease"
 need_in "${ROOT}/bootstrap/manifest_template.json" '"strategy": "one-down-one-up"' \
   "bootstrap must create the router with one-down-one-up (host-network :80/:443)"
 need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'omniRollPlan' \

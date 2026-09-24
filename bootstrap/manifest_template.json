@@ -242,7 +242,7 @@
     "app": {
       "name": "controller",
       "meta": {"flynn-system-app": "true"},
-      "strategy": "one-by-one",
+      "strategy": "all-at-once",
       "deploy_timeout": 120
     }
   },

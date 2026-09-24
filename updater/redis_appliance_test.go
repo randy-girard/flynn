@@ -39,6 +39,26 @@ func TestUpdaterSetsRouterStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestUpdaterSetsControllerStrategyBeforeDeploy(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	ensure := strings.Index(body, "EnsureControllerStrategy")
+	wait := strings.Index(body, "client.DeployAppRelease")
+	if fn < 0 || ensure < 0 || wait < 0 {
+		t.Fatal("updater must set controller all-at-once before DeployAppRelease")
+	}
+	if ensure < fn || wait < ensure {
+		t.Fatal("EnsureControllerStrategy must run inside deployApp before DeployAppRelease")
+	}
+	if !strings.Contains(body, "cluster.NewClient().Hosts()") {
+		t.Fatal("in-cluster updater must size controller strategy from cluster host count")
+	}
+}
+
 func TestUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 	src, err := os.ReadFile("updater.go")
 	if err != nil {

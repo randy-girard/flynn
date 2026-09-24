@@ -61,6 +61,26 @@ func TestTarballUpdaterSetsRouterStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestTarballUpdaterSetsControllerStrategyBeforeDeploy(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func deployApp(")
+	ensure := strings.Index(body, "EnsureControllerStrategy")
+	wait := strings.Index(body, "client.DeployAppRelease")
+	if fn < 0 || ensure < 0 || wait < 0 {
+		t.Fatal("tarball updater must set controller all-at-once before DeployAppRelease")
+	}
+	if ensure < fn || wait < ensure {
+		t.Fatal("EnsureControllerStrategy must run inside deployApp before DeployAppRelease")
+	}
+	if !strings.Contains(body, "clusterHostCount()") {
+		t.Fatal("tarball updater must size controller strategy from cluster host count")
+	}
+}
+
 func TestTarballUpdaterSkipsAppsWithNoRelease(t *testing.T) {
 	src, err := os.ReadFile("github_updater.go")
 	if err != nil {

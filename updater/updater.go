@@ -301,6 +301,14 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 		log.Error("error setting router deploy strategy", "err", err)
 		return err
 	}
+	hostCount := 1
+	if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
+		hostCount = len(hosts)
+	}
+	if err := updaterdeploy.EnsureControllerStrategy(client, app, hostCount, log); err != nil {
+		log.Error("error setting controller deploy strategy", "err", err)
+		return err
+	}
 	release, err := client.GetAppRelease(app.ID)
 	if err != nil {
 		if updaterdeploy.MissingAppReleaseSkip(app, err) {

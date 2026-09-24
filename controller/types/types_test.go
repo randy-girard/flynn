@@ -144,6 +144,59 @@ func TestEnsureRouterStrategy(t *testing.T) {
 	}
 }
 
+func TestEnsureControllerStrategy(t *testing.T) {
+	system := map[string]string{"flynn-system-app": "true"}
+	controller := &App{Name: "controller", Meta: system, Strategy: "one-by-one"}
+	if !controller.Controller() {
+		t.Fatal("system app named controller must be classified as the cluster controller")
+	}
+	if !controller.EnsureControllerStrategy(1) {
+		t.Fatal("one-by-one controller must switch to all-at-once on 1 host")
+	}
+	if controller.Strategy != ControllerStrategy {
+		t.Fatalf("Strategy = %q, want %q", controller.Strategy, ControllerStrategy)
+	}
+	if controller.EnsureControllerStrategy(1) {
+		t.Fatal("already-correct 1-host controller strategy must be a no-op")
+	}
+
+	ha := &App{Name: "controller", Meta: system, Strategy: "all-at-once"}
+	if !ha.EnsureControllerStrategy(3) {
+		t.Fatal("all-at-once controller must switch to one-by-one on 3 hosts")
+	}
+	if ha.Strategy != ControllerHAStrategy {
+		t.Fatalf("HA Strategy = %q, want %q", ha.Strategy, ControllerHAStrategy)
+	}
+	if ha.EnsureControllerStrategy(3) {
+		t.Fatal("already-correct HA controller strategy must be a no-op")
+	}
+
+	for _, stale := range []string{"", "one-by-one", "one-down-one-up"} {
+		app := &App{Name: "controller", Meta: system, Strategy: stale}
+		if !app.EnsureControllerStrategy(1) {
+			t.Fatalf("strategy %q must switch to all-at-once on 1 host", stale)
+		}
+	}
+
+	user := &App{Name: "controller", Strategy: "one-by-one"}
+	if user.Controller() || user.EnsureControllerStrategy(1) {
+		t.Fatal("non-system app named controller must not have its strategy rewritten")
+	}
+	other := &App{Name: "blobstore", Meta: system, Strategy: "one-by-one"}
+	if other.EnsureControllerStrategy(1) {
+		t.Fatal("other system apps must not have their strategy rewritten")
+	}
+	if (&App{}).EnsureControllerStrategy(1) {
+		t.Fatal("empty app must not be treated as the controller")
+	}
+	if ControllerStrategy != "all-at-once" {
+		t.Fatalf("ControllerStrategy = %q, want all-at-once", ControllerStrategy)
+	}
+	if ControllerHAStrategy != "one-by-one" {
+		t.Fatalf("ControllerHAStrategy = %q, want one-by-one", ControllerHAStrategy)
+	}
+}
+
 func TestReleaseDeployKind(t *testing.T) {
 	cases := []struct {
 		name   string

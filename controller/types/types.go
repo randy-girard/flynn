@@ -113,6 +113,44 @@ func (a *App) Router() bool {
 	return a != nil && a.System() && a.Name == "router"
 }
 
+// Controller reports whether this is the cluster controller app (web,
+// scheduler, and worker share one image; scheduler is omni).
+func (a *App) Controller() bool {
+	return a != nil && a.System() && a.Name == "controller"
+}
+
+// ControllerStrategy starts the new scheduler before stopping the old one on
+// a 1-node cluster. one-by-one / one-down-one-up scale the omni scheduler to
+// zero first and then wait on JobList. JobList is only updated by the
+// scheduler, so on a 1-node cluster that wait deadlocks after the last
+// scheduler exits (seen 2026-09-24: flynn-host update --force singleton timed
+// out waiting for old scheduler jobs to stop on [node1] for 600s × 3).
+//
+// Multi-node clusters keep one-by-one so omni rolling can stop one host at a
+// time while other schedulers keep JobList current (HA all-at-once timed out
+// waiting for scale after rolling host restarts).
+const ControllerStrategy = "all-at-once"
+
+const ControllerHAStrategy = "one-by-one"
+
+// EnsureControllerStrategy sets Strategy for the controller based on cluster
+// size. hostCount <= 1 uses all-at-once; hostCount > 1 uses one-by-one.
+// Returns true if the in-memory app was changed (caller should persist).
+func (a *App) EnsureControllerStrategy(hostCount int) bool {
+	if a == nil || !a.Controller() {
+		return false
+	}
+	want := ControllerStrategy
+	if hostCount > 1 {
+		want = ControllerHAStrategy
+	}
+	if a.Strategy == want {
+		return false
+	}
+	a.Strategy = want
+	return true
+}
+
 // RouterStrategy stops the old host-network router before starting the
 // replacement. all-at-once starts the new job while the old one still binds
 // :80/:443, so the new job stays in "starting" forever (seen 2026-09-20:
