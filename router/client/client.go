@@ -54,6 +54,8 @@ type Client interface {
 	StreamEvents(opts *router.StreamEventsOptions, output chan *router.StreamEvent) (stream.Stream, error)
 	// GetMetrics returns recent HTTP request latency percentiles per backend service.
 	GetMetrics() ([]router.ServiceMetrics, error)
+	// GetMetricsWithSamples includes the in-window sample list for merging across routers.
+	GetMetricsWithSamples() ([]router.ServiceMetrics, error)
 }
 
 func (c *client) StreamEvents(opts *router.StreamEventsOptions, output chan *router.StreamEvent) (stream.Stream, error) {
@@ -70,8 +72,16 @@ func (c *client) StreamEvents(opts *router.StreamEventsOptions, output chan *rou
 }
 
 func (c *client) GetMetrics() ([]router.ServiceMetrics, error) {
+	return c.getMetrics("/metrics")
+}
+
+func (c *client) GetMetricsWithSamples() ([]router.ServiceMetrics, error) {
+	return c.getMetrics("/metrics?samples=1")
+}
+
+func (c *client) getMetrics(path string) ([]router.ServiceMetrics, error) {
 	var out []router.ServiceMetrics
-	err := c.Get("/metrics", &out)
+	err := c.Get(path, &out)
 	if out == nil {
 		out = []router.ServiceMetrics{}
 	}

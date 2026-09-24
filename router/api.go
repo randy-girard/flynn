@@ -80,5 +80,9 @@ func (api *API) StreamEvents(ctx context.Context, w http.ResponseWriter, req *ht
 }
 
 func (api *API) GetMetrics(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if req.URL.Query().Get("samples") == "1" {
+		httphelper.JSON(w, 200, proxy.SnapshotWithSamples())
+		return
+	}
 	httphelper.JSON(w, 200, proxy.Snapshot())
 }

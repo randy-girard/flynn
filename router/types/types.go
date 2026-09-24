@@ -318,7 +318,8 @@ type StreamEventsOptions struct {
 }
 
 // ServiceMetrics is a snapshot of recent HTTP request latency for one
-// discoverd service the router is proxying.
+// discoverd service the router is proxying. Percentiles are milliseconds
+// until the backend responded (TTFB), from requests in the recent window.
 type ServiceMetrics struct {
 	Service   string  `json:"service"`
 	Requests  uint64  `json:"requests"`
@@ -326,4 +327,8 @@ type ServiceMetrics struct {
 	P50Millis float64 `json:"p50_ms"`
 	P95Millis float64 `json:"p95_ms"`
 	P99Millis float64 `json:"p99_ms"`
+	// Samples is the in-window latency population used to compute the
+	// percentiles. Omitted from public JSON unless the caller asked for it
+	// (controller merge across router instances).
+	Samples []float64 `json:"samples,omitempty"`
 }

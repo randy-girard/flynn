@@ -128,9 +128,12 @@ func (p *ReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	defer p.RequestTracker.TrackRequestDone(trace.Backend.Addr)
 	defer transport.trackRequestEnd(trace.Backend)
 
+	// Record backend TTFB (headers received), not time-to-last-byte after
+	// copying the body to the client — download time is not app latency.
+	Observe(p.Service, time.Since(start), res.StatusCode)
+
 	prepareResponseHeaders(res)
 	p.writeResponse(rw, res)
-	Observe(p.Service, time.Since(start), res.StatusCode)
 	if location := res.Header.Get("Location"); location != "" {
 		l = l.New("location", location)
 	}
