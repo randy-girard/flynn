@@ -72,6 +72,8 @@ need 'generate_series' \
   "smoke must bulk-insert postgres dummy rows"
 need 'pg_available_extensions' \
   "smoke must verify postgis/pgrouting/timescaledb survived image slimming"
+need 'postgres extensions available' \
+  "seed must print available postgres extensions after retries"
 need 'smoke_payload' \
   "smoke must seed a 1KB payload table (postgres/mysql) so restarts copy real data"
 need 'payload TEXT' \

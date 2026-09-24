@@ -105,6 +105,19 @@ need "${ROOT}/pkg/hostfw/plan.go" 'KindPeer' \
 need "${ROOT}/pkg/hostfw/plan.go" 'KindExpose' \
   "host firewall planner must model exposed TCP ports"
 
+need "${ROOT}/host/job_services.go" 'waitDiscoverdConfigured' \
+  "reconnected user jobs must wait for discoverd instead of Stop() during host restart"
+need "${ROOT}/pkg/updaterdeploy/controller_strategy.go" 'EnsureControllerStrategy' \
+  "flynn-host update must persist controller all-at-once before deploying the scheduler"
+need "${ROOT}/pkg/rpcplus/fdrpc/client.go" 'DialTimeout' \
+  "containerinit Dial must time out so a stuck watch cannot hang omni rolls"
+need "${ROOT}/host/volume/zfs/zfs.go" 'remount after failed destroy' \
+  "failed zfs destroy must remount squashfs so jobs do not start against ENOENT"
+need "${ROOT}/host/cli/volume.go" 'Squashfs layers are shared' \
+  "volume gc during update must keep image layers from jobs that are not Running yet"
+need "${ROOT}/script/vagrant-upgrade-smoke.sh" './pkg/rpcplus/fdrpc/' \
+  "host unit gate must compile fdrpc Dial tests"
+
 smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
 need "${smoke}" 'step_host_firewall_expose' \
   "smoke must probe flynn-host firewall:expose after bootstrap"

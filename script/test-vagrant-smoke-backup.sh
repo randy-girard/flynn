@@ -22,8 +22,8 @@ need 'RESUME_AT=backup' \
   "smoke must resume at backup without requiring a fresh deploy"
 need 'RESUME_AT}" == "backup"' \
   "RESUME_AT=backup must set skip flags in main, not only in the usage comment"
-need 'RESUME_AT=restore' \
-  "smoke must resume at --from-backup using an existing smoke-backup tar"
+need 'apply_resume_at_skips' \
+  "RESUME_AT=restore must re-apply SKIP_UPGRADE after matrix apply-item"
 need 'overlaying' \
   "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
 need 'overlay_flynn_host_on_node' \
@@ -39,8 +39,16 @@ if ! grep -q 'TestGetAppsFallbackWhenCurrentFormationMissing' "${ROOT}/pkg/backu
 fi
 need 'FLYNN_BACKUP_GZIP_LEVEL=1' \
   "smoke backups must use gzip -1; production stays at gzip -9"
-if ! grep -q 'postgresDumpGzipLevel' "${backup_go}"; then
-  echo "pg_dumpall gzip level must be configurable for smoke" >&2
+if ! grep -q 'SkipDumpallTemplateDatabases' "${ROOT}/pkg/backup/dumpall_filter.go"; then
+  echo "restore must skip template0/template1 so a fresh postgres does not recreate them" >&2
+  exit 1
+fi
+if ! grep -q 'SkipDumpallTemplateDatabases' "${ROOT}/host/cli/bootstrap.go"; then
+  echo "bootstrap --from-backup must filter pg_dumpall template databases" >&2
+  exit 1
+fi
+if ! grep -q 'postgresApp.Processes\["web"\] = 0' "${ROOT}/host/cli/bootstrap.go"; then
+  echo "bootstrap --from-backup must not start postgres-api during dump restore" >&2
   exit 1
 fi
 if ! grep -q 'Start blobstore before restoring' "${ROOT}/host/cli/bootstrap.go"; then

@@ -436,6 +436,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/httphelper/
   ./pkg/cliutil/
   ./pkg/updaterdeploy/
+  ./pkg/backup/
   ./pkg/sirenia/state/
   ./pkg/sirenia/ha/
   ./pkg/iptables/
@@ -443,6 +444,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/squashfs/
   ./pkg/dockerimage/
   ./pkg/plugin/
+  ./pkg/rpcplus/fdrpc/
   ./host/fixer/
   ./host/logmux/
   ./appliance/postgresql/cmd/flynn-postgres-api/
@@ -4232,7 +4234,9 @@ APP="${APP_NAME}"
 ROWS="${rows}"
 
 if [[ "${seed_postgres}" == "1" ]]; then
-flynn -a "\${APP}" pg:psql -- -v ON_ERROR_STOP=1 -c "
+ok=0
+for i in \$(seq 1 12); do
+  if flynn -a "\${APP}" pg:psql -- -v ON_ERROR_STOP=1 -c "
 CREATE TABLE IF NOT EXISTS smoke_probe (id serial PRIMARY KEY, data text);
 DELETE FROM smoke_probe;
 INSERT INTO smoke_probe (data) VALUES ('pre-upgrade');
@@ -4242,11 +4246,23 @@ INSERT INTO smoke_rows (id, data) SELECT g, 'dummy-' || g FROM generate_series(1
 CREATE TABLE IF NOT EXISTS smoke_payload (id int PRIMARY KEY, payload text);
 DELETE FROM smoke_payload;
 INSERT INTO smoke_payload (id, payload) SELECT g, repeat('A', 1024) FROM generate_series(1, \${ROWS}) g;
-"
-exts="\$(flynn -a "\${APP}" pg:psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")"
-echo "\${exts}" | grep -qx postgis
-echo "\${exts}" | grep -qx pgrouting
-echo "\${exts}" | grep -qx timescaledb
+"; then
+    ok=1
+    break
+  fi
+  sleep 2
+done
+test "\$ok" = 1
+ok=0
+for i in \$(seq 1 12); do
+  exts="\$(flynn -a "\${APP}" pg:psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>/dev/null || true)"
+  if echo "\${exts}" | grep -qx postgis && echo "\${exts}" | grep -qx pgrouting && echo "\${exts}" | grep -qx timescaledb; then
+    ok=1
+    break
+  fi
+  sleep 2
+done
+test "\$ok" = 1
 echo "postgres extensions available: \${exts}"
 fi
 
@@ -6657,6 +6673,45 @@ apply_topology_spec() {
   esac
 }
 
+# Matrix apply-item re-exports SKIP_* from smoke-matrix.yaml, which would
+# otherwise undo RESUME_AT=restore (seen 2026-09-24: resume ran Upgrade pass 1
+# against a cluster with no controller).
+apply_resume_at_skips() {
+  case "${RESUME_AT}" in
+    bootstrap)
+      SKIP_VAGRANT_UP=1
+      SKIP_BUILD=1
+      SKIP_INSTALL=1
+      RESUME_BOOTSTRAP=1
+      ;;
+    upgrade)
+      SKIP_VAGRANT_UP=1
+      SKIP_BUILD=1
+      SKIP_INSTALL=1
+      SKIP_DEPLOY=1
+      SKIP_VERIFY_BEFORE=1
+      ;;
+    backup)
+      SKIP_VAGRANT_UP=1
+      SKIP_BUILD=1
+      SKIP_INSTALL=1
+      SKIP_PLUGIN_INSTALL=1
+      SKIP_DEPLOY=1
+      SKIP_VERIFY_BEFORE=1
+      SKIP_UPGRADE=1
+      ;;
+    restore)
+      SKIP_VAGRANT_UP=1
+      SKIP_BUILD=1
+      SKIP_INSTALL=1
+      SKIP_PLUGIN_INSTALL=1
+      SKIP_DEPLOY=1
+      SKIP_VERIFY_BEFORE=1
+      SKIP_UPGRADE=1
+      ;;
+  esac
+}
+
 # One full install → bootstrap → plugin install → deploy → verify → CLI →
 # --force upgrades → cluster backup → --clean reinstall → bootstrap
 # --from-backup (plugins restore with postgres) → re-verify.
@@ -6954,38 +7009,7 @@ main() {
   fi
 
   # RESUME_AT=bootstrap: pick up after a failed/aborted run when layer-0 is already up.
-  if [[ "${RESUME_AT}" == "bootstrap" ]]; then
-    SKIP_VAGRANT_UP=1
-    SKIP_BUILD=1
-    SKIP_INSTALL=1
-    # Re-enable bootstrap despite SKIP_INSTALL's usual "skip all cluster setup".
-    RESUME_BOOTSTRAP=1
-  fi
-  if [[ "${RESUME_AT}" == "upgrade" ]]; then
-    SKIP_VAGRANT_UP=1
-    SKIP_BUILD=1
-    SKIP_INSTALL=1
-    SKIP_DEPLOY=1
-    SKIP_VERIFY_BEFORE=1
-  fi
-  if [[ "${RESUME_AT}" == "backup" ]]; then
-    SKIP_VAGRANT_UP=1
-    SKIP_BUILD=1
-    SKIP_INSTALL=1
-    SKIP_PLUGIN_INSTALL=1
-    SKIP_DEPLOY=1
-    SKIP_VERIFY_BEFORE=1
-    SKIP_UPGRADE=1
-  fi
-  if [[ "${RESUME_AT}" == "restore" ]]; then
-    SKIP_VAGRANT_UP=1
-    SKIP_BUILD=1
-    SKIP_INSTALL=1
-    SKIP_PLUGIN_INSTALL=1
-    SKIP_DEPLOY=1
-    SKIP_VERIFY_BEFORE=1
-    SKIP_UPGRADE=1
-  fi
+  apply_resume_at_skips
 
   # Fail before touching VMs or wiping flynn-logs if the host-side tree is broken.
   if [[ "${SKIP_UNIT_TESTS}" == "1" ]]; then
@@ -7048,6 +7072,7 @@ main() {
       PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
       info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES} datastores=${DATASTORE_PROVIDERS[*]}"
       parse_smoke_topologies || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid topologies=${SMOKE_TOPOLOGIES}"
+      apply_resume_at_skips
       if [[ "${item_is_last}" != "1" ]]; then
         saved_keep_vms="${KEEP_VMS}"
         KEEP_VMS=0
