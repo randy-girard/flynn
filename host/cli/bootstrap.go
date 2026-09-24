@@ -24,6 +24,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	hostconfig "github.com/randy-girard/flynn/host/config"
+	"github.com/randy-girard/flynn/pkg/backup"
 	"github.com/randy-girard/flynn/pkg/exec"
 	"github.com/randy-girard/flynn/pkg/plugin"
 	"github.com/randy-girard/flynn/pkg/random"
@@ -220,6 +221,7 @@ func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.S
 	if db == nil {
 		return fmt.Errorf("did not find postgres.sql.gz in backup file")
 	}
+	db = backup.SkipDumpallTemplateDatabases(db)
 
 	// add buffer to the end of the SQL import containing commands that rewrite data in the controller db
 	sqlBuf := &bytes.Buffer{}
@@ -464,6 +466,14 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = '%s' AND deleted_at
 			}
 		}
 	}
+
+	if postgresApp.Processes == nil {
+		postgresApp.Processes = map[string]int{}
+	}
+	// postgres-api (web) races pg_dumpall catalog updates and can leave
+	// template1 invalid. The restored formation still has web=1 so the
+	// scheduler starts it after controller is up.
+	postgresApp.Processes["web"] = 0
 
 	// start discoverd/flannel/postgres
 	systemSteps := bootstrap.Manifest{

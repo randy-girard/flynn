@@ -92,7 +92,11 @@ func postgresDumpGzipLevel() string {
 }
 
 func postgresDumpCommand() string {
-	return fmt.Sprintf("set -o pipefail; pg_dumpall --clean --if-exists | gzip -%s", postgresDumpGzipLevel())
+	// template0/template1 stay as the destination cluster created them.
+	// Recreating template1 from pg_dumpall --clean races a freshly started
+	// Flynn postgres and leaves it invalid (FATAL: cannot connect to invalid
+	// database "template1").
+	return fmt.Sprintf("set -o pipefail; pg_dumpall --clean --if-exists --exclude-database=template0 --exclude-database=template1 | gzip -%s", postgresDumpGzipLevel())
 }
 
 type jobLister interface {
