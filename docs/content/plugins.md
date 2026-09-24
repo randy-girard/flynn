@@ -363,11 +363,15 @@ Configure the Flynn repo (or org) with:
 * **Secret** `PLUGIN_RELEASE_TOKEN` — PAT or GitHub App token with **Actions:
   write** and **Contents: read** on those plugin repos (`GITHUB_TOKEN` cannot
   start workflows in another repository).
-* **Variable** `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` — Discord webhook for the
-  release channel. After each published Flynn or plugin GitHub Release (not
-  drafts), CI posts `@everyone`, the change notes, and a link to the release.
-  The GitHub publish step fails if that post does not return HTTP 200/204.
-  Omit the variable to skip. A secret with the same name is also accepted.
+* **Flynn secret** `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` (or
+  `DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL`) — Discord webhook for the Flynn
+  release channel. After a published Flynn GitHub Release (not a draft), CI
+  posts `@everyone`, the change notes, and a link to the release. Flynn prefers
+  the repo secret so a plugin-channel **variable** cannot override it.
+* **Plugin variable** `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` — Discord webhook
+  for the plugins release channel, set on each plugin repo. Same post shape as
+  Flynn. The GitHub publish step fails if Discord does not return HTTP 200/204.
+  Omit the variable/secret to skip.
 
 Each plugin is built with its own `version` (`vYYYYMMDD.N.B`) and
 `flynn_version` set to the Flynn tag so the overlay uses that ubuntu-noble

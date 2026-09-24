@@ -19,6 +19,7 @@ teardown() {
 }
 
 @test "discord_notify_github_release skips when webhook is unset" {
+  unset DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL
   unset DISCORD_RELEASE_CHANNEL_WEBHOOK_URL
   echo "feat(router): faster TTFB" >"${TMP}/notes.md"
   run discord_notify_github_release \
@@ -221,8 +222,23 @@ PY
   [[ "${output}" == *"failed after 3 attempts"* ]]
 }
 
-@test "release workflow passes DISCORD_RELEASE_CHANNEL_WEBHOOK_URL into publish" {
+@test "discord_notify_github_release prefers Flynn webhook over plugins webhook" {
+  export DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL="https://discord.com/api/webhooks/flynn/abc"
+  export DISCORD_RELEASE_CHANNEL_WEBHOOK_URL="https://discord.com/api/webhooks/plugins/abc"
+  echo "notes" >"${TMP}/notes.md"
+  run discord_notify_github_release \
+    --repo acme/flynn \
+    --version v20990101.0 \
+    --title "Flynn v20990101.0" \
+    --notes-file "${TMP}/notes.md" \
+    --draft false \
+    --prerelease false
+  assert_success
+  [[ "$(cat "${POSTS}.url")" == "https://discord.com/api/webhooks/flynn/abc" ]]
+}
+
+@test "release workflow prefers Flynn Discord secrets over plugin-channel vars" {
   wf="${ROOT}/.github/workflows/release.yml"
-  grep -A4 'name: Create GitHub Release' "${wf}" | grep -q 'DISCORD_RELEASE_CHANNEL_WEBHOOK_URL'
-  grep -q 'vars.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL' "${wf}"
+  grep -q 'DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL' "${wf}"
+  grep -q 'secrets.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL || vars.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL' "${wf}"
 }

@@ -1,12 +1,13 @@
 # Post a Discord channel message after a GitHub Release is published.
 #
-# Reads DISCORD_RELEASE_CHANNEL_WEBHOOK_URL (Actions variable or secret).
-# Skips when the URL is empty or the release is still a draft. Posts the
-# title, changelog (compare link + conventional-commit groups), and the
-# html release URL. Install command blocks and Assets/Artifacts sections
-# stay on the GitHub Release body and are stripped here. Does not list
-# GitHub Release assets. A Discord failure is logged and does not fail
-# the GitHub publish.
+# Flynn prefers DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL (the Flynn
+# release channel), then DISCORD_RELEASE_CHANNEL_WEBHOOK_URL. Plugin
+# repos only set the latter (release-plugins). Skips when both are empty
+# or the release is still a draft. Posts the title, changelog (compare
+# link + conventional-commit groups), and the html release URL. Install
+# command blocks and Assets/Artifacts sections stay on the GitHub Release
+# body and are stripped here. Does not list GitHub Release assets. The
+# publish step fails if Discord does not return HTTP 200/204 after retries.
 #
 # shellcheck shell=bash
 
@@ -104,10 +105,14 @@ discord_notify_github_release() {
     return 1
   fi
 
-  local webhook="${DISCORD_RELEASE_CHANNEL_WEBHOOK_URL:-}"
+  local webhook="${DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL:-}"
   webhook="${webhook//[$'\t\r\n ']/}"
   if [[ -z "${webhook}" ]]; then
-    echo "Discord release notify skipped (DISCORD_RELEASE_CHANNEL_WEBHOOK_URL unset)"
+    webhook="${DISCORD_RELEASE_CHANNEL_WEBHOOK_URL:-}"
+    webhook="${webhook//[$'\t\r\n ']/}"
+  fi
+  if [[ -z "${webhook}" ]]; then
+    echo "Discord release notify skipped (webhook unset)"
     return 0
   fi
   if [[ "${draft}" == "true" ]]; then

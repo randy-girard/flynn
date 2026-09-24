@@ -392,7 +392,9 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DISCORD_RELEASE_CHANNEL_WEBHOOK_URL: ${{ vars.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL || secrets.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL }}
+          # Flynn channel first (secret wins so a copied plugin var cannot steal the post).
+          DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL: ${{ secrets.DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL || vars.DISCORD_FLYNN_RELEASE_CHANNEL_WEBHOOK_URL }}
+          DISCORD_RELEASE_CHANNEL_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL || vars.DISCORD_RELEASE_CHANNEL_WEBHOOK_URL }}
         run: |
           set -eo pipefail
           VERSION="${{ steps.version.outputs.VERSION }}"
