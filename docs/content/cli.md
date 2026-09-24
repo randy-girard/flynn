@@ -157,7 +157,7 @@ cluster administrator) is not an app role; it bypasses app grants.
 `flynn log` prints each line as `source[name]: message`. `name` is the allocated
 short process name (`web.1`, `web.4821`, `typ.N`) when the job has one; older
 lines fall back to `processType.host-job-id`. System lines use source `flynn`
-(for example `flynn[web.1]: Starting web process`). Filter a process with
+(for example `flynn[web.1]: Scaling up web process with command \`bin/web\``). Filter a process with
 `flynn log -j web.4821` or the job UUID — filtering uses the host job id, not
 the display name.
 

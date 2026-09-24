@@ -29,7 +29,7 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 	}{
 		{JobEventCreate, sampleJob("", "large", "web"), "Starting web process (runtime large)"},
 		{JobEventCreate, sampleJob(JobReasonRestart, "", "web"), "Restarting web process"},
-		{JobEventCreate, sampleJob(JobReasonReplace, "large", "web"), "Replacing web process (runtime large)"},
+		{JobEventCreate, sampleJob(JobReasonReplace, "large", "web"), "Scaling up web process (runtime large)"},
 		{JobEventCreate, sampleJob(JobReasonScale, "", "web"), "Scaling up web process"},
 		{JobEventStart, sampleJob("", "medium", "web"), "web process started (runtime medium)"},
 		{JobEventStart, namedSampleJob("web.4821", "medium", "web"), "web process started (web.4821, runtime medium)"},
@@ -58,6 +58,24 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 	}
 }
 
+func TestFormatJobLifecycleLogIncludesCommand(t *testing.T) {
+	job := sampleJob(JobReasonScale, "", "web")
+	job.Job.Config.Args = []string{"/runner/init", "web"}
+	got := FormatJobLifecycleLog(JobEventCreate, job)
+	want := "Scaling up web process with command `/runner/init web`"
+	if got != want {
+		t.Fatalf("create: %q want %q", got, want)
+	}
+	got = FormatJobLifecycleLog(JobEventStart, job)
+	want = "web process started with command `/runner/init web`"
+	if got != want {
+		t.Fatalf("start: %q want %q", got, want)
+	}
+	if JobCommand(nil) != "" || JobCommand(&ActiveJob{}) != "" {
+		t.Fatal("empty job must have no command")
+	}
+}
+
 func TestJobShortName(t *testing.T) {
 	if got := JobShortName(nil); got != "" {
 		t.Fatalf("nil=%q", got)
@@ -78,7 +96,7 @@ func TestJobLifecycleWebhookCodes(t *testing.T) {
 		t.Fatalf("restart: %s %s %s", code, sev, desc)
 	}
 	code, _, _ = JobLifecycleWebhook(JobEventCreate, sampleJob(JobReasonReplace, "", "web"))
-	if code != CodeJobReplace {
+	if code != CodeJobScaleUp {
 		t.Fatalf("replace code=%s", code)
 	}
 	code, _, _ = JobLifecycleWebhook(JobEventCreate, sampleJob(JobReasonScale, "", "web"))

@@ -24,4 +24,14 @@ func TestJobsStartReason(t *testing.T) {
 	if got := jobs.startReason("app", "rel-new", "worker"); got != host.JobReasonStart {
 		t.Fatalf("other type: %s", got)
 	}
+	jobs = Jobs{}
+	jobs.Add(&Job{ID: "d", AppID: "app", ReleaseID: "rel-old", Type: "web", State: JobStateStopping})
+	if got := jobs.startReason("app", "rel-new", "web"); got != host.JobReasonScale {
+		t.Fatalf("one-down-one-up after drain: %s", got)
+	}
+	jobs = Jobs{}
+	jobs.Add(&Job{ID: "e", AppID: "app", ReleaseID: "rel-old", Type: "web", State: JobStateStopped})
+	if got := jobs.startReason("app", "rel-new", "web"); got != host.JobReasonScale {
+		t.Fatalf("stopped old release: %s", got)
+	}
 }

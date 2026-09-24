@@ -100,14 +100,12 @@ func FormatJobLifecycleLog(event JobEventType, job *ActiveJob) string {
 		switch reason {
 		case JobReasonRestart:
 			verb = "Restarting"
-		case JobReasonReplace:
-			verb = "Replacing"
-		case JobReasonScale:
+		case JobReasonReplace, JobReasonScale:
 			verb = "Scaling up"
 		}
-		return joinLifecycle(fmt.Sprintf("%s %s process", verb, typ), extra)
+		return joinLifecycle(withCommand(fmt.Sprintf("%s %s process", verb, typ), job), extra)
 	case JobEventStart:
-		return joinLifecycle(fmt.Sprintf("%s process started", typ), extra)
+		return joinLifecycle(withCommand(fmt.Sprintf("%s process started", typ), job), extra)
 	case JobEventStop:
 		if JobStopReason(job) == JobReasonScaleDown {
 			return joinLifecycle(fmt.Sprintf("Scaling down %s process", typ), extra)
@@ -150,9 +148,9 @@ func JobLifecycleWebhook(event JobEventType, job *ActiveJob) (code, description,
 		switch reason {
 		case JobReasonRestart:
 			return CodeJobRestart, description, SeverityInfo
-		case JobReasonReplace:
-			return CodeJobReplace, description, SeverityInfo
-		case JobReasonScale:
+		case JobReasonReplace, JobReasonScale:
+			// Redeploys and formation increases both show as scale-up so
+			// one-down-one-up is not only a scale-down in logs and events.
 			return CodeJobScaleUp, description, SeverityInfo
 		default:
 			return CodeJobCreate, description, SeverityInfo
@@ -208,6 +206,22 @@ func lifecycleExtra(job *ActiveJob) string {
 		parts = append(parts, "runtime "+p)
 	}
 	return strings.Join(parts, ", ")
+}
+
+// JobCommand is the container argv, for start/scale log lines.
+func JobCommand(job *ActiveJob) string {
+	if job == nil || job.Job == nil || len(job.Job.Config.Args) == 0 {
+		return ""
+	}
+	return strings.Join(job.Job.Config.Args, " ")
+}
+
+func withCommand(msg string, job *ActiveJob) string {
+	cmd := JobCommand(job)
+	if cmd == "" {
+		return msg
+	}
+	return msg + " with command `" + cmd + "`"
 }
 
 func joinLifecycle(msg, extra string) string {

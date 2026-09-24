@@ -231,27 +231,32 @@ type Jobs map[string]*Job
 
 // startReason is why the scheduler is adding jobs of this type: a first start,
 // a scale-up of an existing formation, or a replacement for another release.
+// Stopped/stopping jobs still count: one-down-one-up drains the old release
+// before the new job is created, and that must be a scale-up, not a first start.
 func (j Jobs) startReason(appID, releaseID, typ string) string {
-	sameRelease := 0
-	otherRelease := 0
+	liveSame, liveOther := 0, 0
+	knownType := false
 	for _, job := range j {
 		if job == nil || job.AppID != appID || job.Type != typ {
 			continue
 		}
-		switch job.State {
-		case JobStateStopped, JobStateStopping, JobStateBlocked:
+		if job.State == JobStateBlocked {
 			continue
 		}
+		knownType = true
+		live := job.State != JobStateStopped && job.State != JobStateStopping
 		if job.ReleaseID == releaseID {
-			sameRelease++
-		} else {
-			otherRelease++
+			if live {
+				liveSame++
+			}
+		} else if live {
+			liveOther++
 		}
 	}
-	if otherRelease > 0 && sameRelease == 0 {
+	if liveOther > 0 && liveSame == 0 {
 		return host.JobReasonReplace
 	}
-	if sameRelease > 0 {
+	if liveSame > 0 || knownType {
 		return host.JobReasonScale
 	}
 	return host.JobReasonStart
