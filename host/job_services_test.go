@@ -1,8 +1,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	host "github.com/randy-girard/flynn/host/types"
 )
@@ -38,5 +41,35 @@ func TestJobServiceInstance(t *testing.T) {
 	}
 	if _, ok := discoverd.EnvInstanceMeta["FLYNN_APP_NAME"]; !ok {
 		t.Fatal("sanity: FLYNN_APP_NAME is instance meta")
+	}
+}
+
+func TestRegisterJobServicesWaitsForDiscoverd(t *testing.T) {
+	l := &LibcontainerBackend{discoverdConfigured: make(chan struct{})}
+	c := &Container{
+		l: l,
+		job: &host.Job{
+			Metadata: map[string]string{
+				"flynn-controller.app_name": "shop",
+				"flynn-controller.type":     "web",
+			},
+			Config: host.ContainerConfig{Env: map[string]string{"EXTERNAL_IP": "10.0.0.1"}},
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- c.registerJobServices(log15.New()) }()
+	select {
+	case err := <-done:
+		t.Fatalf("returned before discoverd configured: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	close(l.discoverdConfigured)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "not configured") {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("did not return after discoverdConfigured")
 	}
 }

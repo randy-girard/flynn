@@ -47,10 +47,29 @@ func (c *Container) closeJobServices() {
 	}
 }
 
+func (c *Container) waitDiscoverdConfigured(log log15.Logger) {
+	if c == nil || c.l == nil || c.l.discoverdConfigured == nil {
+		return
+	}
+	select {
+	case <-c.l.discoverdConfigured:
+		return
+	default:
+	}
+	if log != nil {
+		log.Info("waiting for discoverd before registering job services")
+	}
+	<-c.l.discoverdConfigured
+}
+
 func (c *Container) registerJobServices(log log15.Logger) error {
 	if !hostRegistersServices(c.job) {
 		return nil
 	}
+	// Reconnected watches after a flynn-host restart reach StateRunning
+	// before ConfigureDiscoverd. Failing here Stop()s the job; on a
+	// 1-node upgrade that kills user apps while the router is rolling.
+	c.waitDiscoverdConfigured(log)
 	client := c.l.discoverdClient
 	if client == nil {
 		return fmt.Errorf("discoverd client is not configured")
