@@ -91,9 +91,11 @@ func KnownHelpTopic(name string) bool {
 func RootHelp() string {
 	all := registeredHelpNames()
 	parents := clihelp.Parents(all)
-	items := make([]clihelp.Item, 0, len(parents)+1)
+	installed := installedHostPlugins()
+	core := make([]clihelp.Item, 0, len(parents)+1)
+	plug := make([]clihelp.Item, 0)
 	seen := map[string]struct{}{}
-	add := func(name, desc string) {
+	add := func(dst *[]clihelp.Item, name, desc string) {
 		if _, ok := seen[name]; ok {
 			return
 		}
@@ -101,14 +103,33 @@ func RootHelp() string {
 		if desc == "" {
 			desc = name + " commands"
 		}
-		items = append(items, clihelp.Item{Name: name, Desc: desc})
+		*dst = append(*dst, clihelp.Item{Name: name, Desc: desc})
 	}
-	add("help", "Show usage for a specific command")
+	add(&core, "help", "Show usage for a specific command")
 	for _, name := range parents {
-		add(name, clihelp.ShortDescription(commandUsage(name)))
+		if _, skip := hostPluginHelpSkip[name]; skip {
+			continue
+		}
+		if pluginName, ok := hostPluginForParent(name); ok {
+			if _, have := installed[pluginName]; have {
+				add(&plug, name, clihelp.ShortDescription(commandUsage(name)))
+			}
+			continue
+		}
+		add(&core, name, clihelp.ShortDescription(commandUsage(name)))
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	return rootHelpHeader + "\nCommands:\n" + clihelp.FormatItems(items) + rootHelpFooter
+	sort.Slice(core, func(i, j int) bool { return core[i].Name < core[j].Name })
+	sort.Slice(plug, func(i, j int) bool { return plug[i].Name < plug[j].Name })
+	var b strings.Builder
+	b.WriteString(rootHelpHeader)
+	b.WriteString("\nCommands:\n")
+	b.WriteString(clihelp.FormatItems(core))
+	if len(plug) > 0 {
+		b.WriteString("\nPlugins:\n")
+		b.WriteString(clihelp.FormatItems(plug))
+	}
+	b.WriteString(rootHelpFooter)
+	return b.String()
 }
 
 func commandUsage(name string) string {

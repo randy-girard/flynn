@@ -1,9 +1,57 @@
 package cli
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/randy-girard/flynn/pkg/plugin"
 )
+
+func isolateInstalledPlugins(t *testing.T, plugins []plugin.Installed) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "installed-plugins.json")
+	if err := plugin.WriteInstalled(path, plugins); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(plugin.EnvInstalledFile, path)
+}
+
+func helpSectionNames(help, heading string) []string {
+	var names []string
+	in := false
+	for _, line := range strings.Split(help, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == heading {
+			in = true
+			continue
+		}
+		if strings.HasSuffix(trimmed, ":") && !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "  ") {
+			in = false
+			continue
+		}
+		if !in || trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "\t") && !strings.HasPrefix(line, "  ") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			names = append(names, fields[0])
+		}
+	}
+	return names
+}
+
+func containsName(names []string, want string) bool {
+	for _, n := range names {
+		if n == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	got := FormatHelp("otel")
@@ -71,10 +119,20 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 }
 
 func TestRootHelpListsParentsOnly(t *testing.T) {
+	isolateInstalledPlugins(t, nil)
 	got := RootHelp()
-	for _, want := range []string{"Commands:", "plugin", "otel", "volume", "letsencrypt", "acme", "blobstore", "help"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("root help missing %q:\n%s", want, got)
+	commands := helpSectionNames(got, "Commands:")
+	for _, want := range []string{"plugin", "volume", "blobstore", "help"} {
+		if !containsName(commands, want) {
+			t.Fatalf("root Commands missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "\nPlugins:") {
+		t.Fatalf("root help must not list Plugins: when none are installed:\n%s", got)
+	}
+	for _, pluginCmd := range []string{"otel", "letsencrypt", "acme", "github", "alert", "events"} {
+		if containsName(commands, pluginCmd) {
+			t.Fatalf("uninstalled plugin command %q must not appear in Commands:\n%s", pluginCmd, got)
 		}
 	}
 	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
@@ -87,6 +145,58 @@ func TestRootHelpListsParentsOnly(t *testing.T) {
 	}
 	if !strings.Contains(got, "Lists ID and IP of each host") {
 		t.Fatalf("list summary missing:\n%s", got)
+	}
+}
+
+func TestRootHelpPluginsSection(t *testing.T) {
+	isolateInstalledPlugins(t, []plugin.Installed{
+		{Name: "otel"},
+		{Name: "letsencrypt"},
+		{Name: "github"},
+	})
+	got := RootHelp()
+	commands := helpSectionNames(got, "Commands:")
+	plugins := helpSectionNames(got, "Plugins:")
+	if !strings.Contains(got, "\nPlugins:") {
+		t.Fatalf("root help missing Plugins section:\n%s", got)
+	}
+	for _, want := range []string{"otel", "letsencrypt", "github"} {
+		if !containsName(plugins, want) {
+			t.Fatalf("Plugins missing %q:\n%s", want, got)
+		}
+		if containsName(commands, want) {
+			t.Fatalf("%q belongs under Plugins, not Commands:\n%s", want, got)
+		}
+	}
+	if containsName(plugins, "acme") {
+		t.Fatalf("acme is a letsencrypt alias and must not appear:\n%s", got)
+	}
+	for _, core := range []string{"plugin", "volume", "help"} {
+		if !containsName(commands, core) {
+			t.Fatalf("Commands missing core %q:\n%s", core, got)
+		}
+		if containsName(plugins, core) {
+			t.Fatalf("core %q must stay in Commands:\n%s", core, got)
+		}
+	}
+	for _, hidden := range []string{"alert", "events"} {
+		if containsName(plugins, hidden) || containsName(commands, hidden) {
+			t.Fatalf("dashboard command %q listed without dashboard installed:\n%s", hidden, got)
+		}
+	}
+}
+
+func TestRootHelpDashboardPluginCommands(t *testing.T) {
+	isolateInstalledPlugins(t, []plugin.Installed{{Name: "dashboard"}})
+	got := RootHelp()
+	plugins := helpSectionNames(got, "Plugins:")
+	for _, want := range []string{"alert", "events"} {
+		if !containsName(plugins, want) {
+			t.Fatalf("dashboard Plugins missing %q:\n%s", want, got)
+		}
+	}
+	if containsName(plugins, "otel") || containsName(helpSectionNames(got, "Commands:"), "otel") {
+		t.Fatalf("otel listed without otel installed:\n%s", got)
 	}
 }
 
