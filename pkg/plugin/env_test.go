@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"errors"
+	"path/filepath"
 	"testing"
 
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -193,5 +194,54 @@ func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 	PreserveGeneratedEnv(m, env, map[string]string{"MYSQL_PWD": "keep-me"})
 	if env["MYSQL_PWD"] != "keep-me" {
 		t.Fatalf("preserve: %q (generated %q)", env["MYSQL_PWD"], first)
+	}
+}
+
+func TestInjectGitHubTokenFromCredentialsFile(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGitHubTokenAlt, "")
+	path := filepath.Join(t.TempDir(), "plugin-credentials.json")
+	if err := SetGitHubCredentials(path, "github.com", "ghp_from_file", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	env := map[string]string{}
+	injectGitHubToken(env, path)
+	if env[EnvGitHubToken] != "ghp_from_file" {
+		t.Fatalf("%s=%q", EnvGitHubToken, env[EnvGitHubToken])
+	}
+	if env[EnvGitHubTokenAlt] != "ghp_from_file" {
+		t.Fatalf("%s=%q", EnvGitHubTokenAlt, env[EnvGitHubTokenAlt])
+	}
+
+	env = map[string]string{EnvGitHubToken: "keep-plugin", EnvGitHubTokenAlt: "keep-github"}
+	injectGitHubToken(env, path)
+	if env[EnvGitHubToken] != "ghp_from_file" {
+		t.Fatalf("FLYNN_PLUGIN_GITHUB_TOKEN should follow host credentials, got %q", env[EnvGitHubToken])
+	}
+	if env[EnvGitHubTokenAlt] != "keep-github" {
+		t.Fatalf("GITHUB_TOKEN must stay when already set, got %q", env[EnvGitHubTokenAlt])
+	}
+
+	injectGitHubToken(nil, path)
+	empty := map[string]string{}
+	injectGitHubToken(empty, filepath.Join(t.TempDir(), "missing.json"))
+	if empty[EnvGitHubToken] != "" || empty[EnvGitHubTokenAlt] != "" {
+		t.Fatalf("missing file must not set tokens: %v", empty)
+	}
+}
+
+func TestReleaseEnvInjectsGitHubTokenFromHostEnv(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "from-host-env")
+	t.Setenv(EnvGitHubTokenAlt, "")
+	env := ReleaseEnv(&Manifest{Env: map[string]string{"FLYNN_WIDGET": "widget"}}, "art", map[string]string{})
+	if env[EnvGitHubToken] != "from-host-env" {
+		t.Fatalf("%s=%q", EnvGitHubToken, env[EnvGitHubToken])
+	}
+	if env[EnvGitHubTokenAlt] != "from-host-env" {
+		t.Fatalf("%s=%q", EnvGitHubTokenAlt, env[EnvGitHubTokenAlt])
+	}
+	if env["FLYNN_WIDGET"] != "widget" {
+		t.Fatalf("static env lost: %v", env)
 	}
 }

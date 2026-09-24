@@ -56,7 +56,27 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 			env[k] = cluster[k]
 		}
 	}
+	injectGitHubToken(env, "")
 	return env
+}
+
+// injectGitHubToken copies the host GitHub token onto plugin release env so
+// jobs (dashboard update checks) can list private releases. TokenForHost
+// reads process env then /etc/flynn/plugin-credentials.json. The token is
+// never logged. GITHUB_TOKEN is set only when empty so an existing value is
+// kept.
+func injectGitHubToken(env map[string]string, credsFile string) {
+	if env == nil {
+		return
+	}
+	token, _, err := TokenForHost(DefaultGitHubHost, credsFile)
+	if err != nil || token == "" {
+		return
+	}
+	env[EnvGitHubToken] = token
+	if env[EnvGitHubTokenAlt] == "" {
+		env[EnvGitHubTokenAlt] = token
+	}
 }
 
 // clusterAuthEnvKeys are copied onto plugin releases on install/update when
