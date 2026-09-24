@@ -16,6 +16,19 @@ import (
 	"time"
 )
 
+func TestUpdateIsRegisteredAndUpgradeIsNot(t *testing.T) {
+	if commands["update"] == nil {
+		t.Fatal("flynn update must stay registered")
+	}
+	if commands["upgrade"] != nil {
+		t.Fatal("flynn upgrade is not a CLI command; use flynn update")
+	}
+	help := formatHelp("update")
+	if strings.Contains(help, "Alias: flynn upgrade") || strings.Contains(help, "flynn upgrade") {
+		t.Fatalf("update help must not mention upgrade:\n%s", help)
+	}
+}
+
 func TestCLIAssetName(t *testing.T) {
 	cases := []struct{ goos, goarch, want string }{
 		{"linux", "amd64", "flynn-linux-amd64.gz"},

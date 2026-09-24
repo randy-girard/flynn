@@ -36,7 +36,7 @@ Environment variables: `FLYNN_VERSION`, `FLYNN_GITHUB_REPO` (default `randy-gira
 
 ## Updating the CLI
 
-`flynn update` (alias `flynn upgrade`) downloads the latest published CLI from [GitHub Releases](https://github.com/randy-girard/flynn/releases), verifies `checksums.sha512`, and replaces the running binary.
+`flynn update` downloads the latest published CLI from [GitHub Releases](https://github.com/randy-girard/flynn/releases), verifies `checksums.sha512`, and replaces the running binary.
 
 ```text
 flynn update
@@ -128,7 +128,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the public catalog and GitHub repos, plus a footer for private first-party plugins that cannot be `plugin:install`'d; `plugins` is an alias) |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand) |
-| `update` / `upgrade` | Replace this CLI from GitHub Releases |
+| `update` | Replace this CLI from GitHub Releases |
 | `install` | Deprecated cluster installer stub; use the [manual installation](installation/manual.md) script |
 | `version` | CLI version |
 

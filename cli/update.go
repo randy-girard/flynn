@@ -33,7 +33,6 @@ var updater = &Updater{}
 func init() {
 	const body = `
 Download the latest Flynn CLI from GitHub Releases and replace this binary.
-Alias: flynn upgrade.
 
 Options:
 	--check           Show whether an update is available without installing
@@ -41,7 +40,6 @@ Options:
 	--version=<tag>   Install this release tag instead of latest
 `
 	register("update", runUpdate, "usage: flynn update [--check] [--force] [--version=<tag>]\n"+body)
-	register("upgrade", runUpdate, "usage: flynn upgrade [--check] [--force] [--version=<tag>]\n"+body)
 }
 
 func runUpdate(args *docopt.Args) error {

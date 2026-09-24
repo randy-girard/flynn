@@ -162,6 +162,9 @@ func TestUsageCommandNamesFromRootUsage(t *testing.T) {
 	if _, ok := names["update"]; !ok {
 		t.Fatal("update")
 	}
+	if _, ok := names["upgrade"]; ok {
+		t.Fatal("upgrade must not be a root command")
+	}
 	if _, ok := names["volume"]; !ok {
 		t.Fatal("volume")
 	}

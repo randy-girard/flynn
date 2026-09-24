@@ -27,11 +27,15 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"letsencrypt", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
 		"cluster:add", "cluster:migrate-domain", "cluster:ca",
 		"limit:set", "limit:profiles", "limit:runtime",
+		"update",
 	}
 	for _, name := range want {
 		if commands[name] == nil {
 			t.Errorf("missing registered command %s", name)
 		}
+	}
+	if commands["upgrade"] != nil {
+		t.Error("upgrade must not be a root command; keep flynn update only")
 	}
 }
 
