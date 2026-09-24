@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDatabaseURLDisablesSSL(t *testing.T) {
 	got := databaseURL("user", "pass", "leader.postgres.discoverd", "db")
@@ -63,4 +66,35 @@ func TestParseDatabaseResourceID(t *testing.T) {
 			t.Fatalf("must reject %q", bad)
 		}
 	}
+}
+
+func TestValidDumpDatabase(t *testing.T) {
+	if !validDumpDatabase("appdb") || !validDumpDatabase("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb") {
+		t.Fatal("expected valid names")
+	}
+	for _, bad := range []string{"", "postgres;drop", "db name", "a/b", strings.Repeat("x", 64)} {
+		if validDumpDatabase(bad) {
+			t.Fatalf("must reject %q", bad)
+		}
+	}
+}
+
+func TestPgDumpRestoreArgv(t *testing.T) {
+	dump := pgDumpArgv("appdb")
+	if dump[0] != "pg_dump" || !containsStr(dump, "--format=custom") || !containsStr(dump, "--dbname=appdb") {
+		t.Fatalf("%v", dump)
+	}
+	restore := pgRestoreArgv("appdb")
+	if restore[0] != "pg_restore" || !containsStr(restore, "--clean") || !containsStr(restore, "--dbname=appdb") {
+		t.Fatalf("%v", restore)
+	}
+}
+
+func containsStr(in []string, want string) bool {
+	for _, s := range in {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }

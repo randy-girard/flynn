@@ -55,6 +55,9 @@ func main() {
 	router.POST("/databases", httphelper.WrapHandler(api.createDatabase))
 	router.DELETE("/databases", httphelper.WrapHandler(api.dropDatabase))
 	router.GET("/ping", httphelper.WrapHandler(api.ping))
+	router.GET("/dump", httphelper.WrapHandler(api.dumpDatabase))
+	router.POST("/dump", httphelper.WrapHandler(api.dumpDatabase))
+	router.POST("/restore", httphelper.WrapHandler(api.restoreDatabase))
 
 	port := os.Getenv("PORT")
 	if port == "" {
