@@ -2,7 +2,9 @@
 #
 # Reads DISCORD_RELEASE_CHANNEL_WEBHOOK_URL (Actions variable or secret).
 # Skips when the URL is empty or the release is still a draft. Posts the
-# title, grouped change notes, and the html release URL. Does not list
+# title, changelog (compare link + conventional-commit groups), and the
+# html release URL. Install command blocks and Assets/Artifacts sections
+# stay on the GitHub Release body and are stripped here. Does not list
 # GitHub Release assets. A Discord failure is logged and does not fail
 # the GitHub publish.
 #
@@ -23,15 +25,33 @@ discord_release_html_url() {
   printf 'https://github.com/%s/releases/tag/%s' "${repo}" "${version}"
 }
 
+# Keep title/compare + categorized conventional-commit groups. Drop
+# ## Install… blocks (CLI/host curls, plugin install, image.json, layers)
+# and ## Artifacts / ## Assets tables. GitHub notes stay unchanged.
+discord_release_changelog_only() {
+  python3 - "$1" <<'PY'
+import re, sys
+
+text = open(sys.argv[1], encoding="utf-8").read().replace("\r\n", "\n")
+cut = re.search(r"(?im)^##[ \t]+(?:Install\b|Artifacts\b|Assets\b)", text)
+if cut:
+    text = text[: cut.start()]
+text = re.sub(r"(?m)^\s*---\s*\n?", "", text)
+text = re.sub(r"\n{3,}", "\n\n", text).strip()
+sys.stdout.write(text)
+PY
+}
+
 # args: title, url, prerelease true|false, notes-file
 discord_release_payload() {
   local title=$1 url=$2 prerelease=$3 notes_file=$4
-  python3 - "${title}" "${url}" "${prerelease}" "${notes_file}" <<'PY'
+  local notes
+  notes="$(discord_release_changelog_only "${notes_file}")"
+  python3 - "${title}" "${url}" "${prerelease}" "${notes}" <<'PY'
 import json, sys
 
-title, url, prerelease, notes_file = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-notes = open(notes_file, encoding="utf-8").read().replace("\r\n", "\n").strip()
-if not notes:
+title, url, prerelease, notes = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+if not notes.strip():
     notes = "See the GitHub release for details."
 # Embed description limit is 4096; keep headroom for Discord markdown.
 limit = 3500
