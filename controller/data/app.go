@@ -58,7 +58,7 @@ func (r *AppRepo) Add(data interface{}) error {
 		app.Meta = make(map[string]string)
 	}
 	if _, ok := app.Meta["gc.max_inactive_slug_releases"]; !ok {
-		app.Meta["gc.max_inactive_slug_releases"] = "10"
+		app.Meta["gc.max_inactive_slug_releases"] = defaultInactiveSlugReleases(r.db)
 	}
 
 	if err := tx.QueryRow("app_insert", app.ID, app.Name, app.Meta, app.Strategy, app.DeployTimeout).Scan(&app.CreatedAt, &app.UpdatedAt); err != nil {

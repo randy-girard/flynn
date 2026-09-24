@@ -206,6 +206,8 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 		AllowCustomLimits: !args.Bool["--disable"],
 		MaxProcesses:      cur.MaxProcessesOrDefault(),
 		ReserveResources:  cur.ReserveResources,
+		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:      cur.BlobGCMaxAge,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err

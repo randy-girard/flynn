@@ -1175,6 +1175,9 @@ type RuntimeProfile struct {
 // DefaultMaxProcesses is the cluster default for how many jobs a process type may run.
 const DefaultMaxProcesses = 10
 
+// DefaultBlobGCKeep is how many previous inactive git slugs / images to retain.
+const DefaultBlobGCKeep = 10
+
 // RuntimeSettings is the cluster-wide policy for process resource limits.
 // ReserveResources on this struct is unused for scheduling; guarantees are
 // per runtime profile (RuntimeProfile.ReserveResources).
@@ -1182,6 +1185,8 @@ type RuntimeSettings struct {
 	AllowCustomLimits bool       `json:"allow_custom_limits"`
 	MaxProcesses      int        `json:"max_processes"`
 	ReserveResources  bool       `json:"reserve_resources"`
+	BlobGCKeep        int        `json:"blob_gc_keep"`
+	BlobGCMaxAge      string     `json:"blob_gc_max_age"`
 	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
 }
 
@@ -1191,6 +1196,14 @@ func (s *RuntimeSettings) MaxProcessesOrDefault() int {
 		return DefaultMaxProcesses
 	}
 	return s.MaxProcesses
+}
+
+// BlobGCKeepOrDefault is previous blobs to keep; 0 is a valid "keep none".
+func (s *RuntimeSettings) BlobGCKeepOrDefault() int {
+	if s == nil || s.BlobGCKeep < 0 {
+		return DefaultBlobGCKeep
+	}
+	return s.BlobGCKeep
 }
 
 // GitHubAppConfig is the cluster-wide GitHub App used for Heroku-style deploys.

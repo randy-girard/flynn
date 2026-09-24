@@ -328,6 +328,8 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(settings.AllowCustomLimits, Equals, false)
 	c.Assert(settings.ReserveResources, Equals, false)
+	c.Assert(settings.BlobGCKeep, Equals, 10)
+	c.Assert(settings.BlobGCMaxAge, Equals, "")
 
 	custom := &ct.RuntimeProfile{Name: "xlarge", Memory: 4 * 1024 * 1024 * 1024, CPU: 4000}
 	c.Assert(repo.Add(custom), IsNil)
@@ -353,6 +355,16 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(reserved.ReserveResources, Equals, true)
 	c.Assert(reserved.AllowCustomLimits, Equals, true)
+	c.Assert(reserved.BlobGCKeep, Equals, 10)
+
+	reserved.BlobGCKeep = 5
+	reserved.BlobGCMaxAge = "720h"
+	c.Assert(repo.UpdateSettings(reserved), IsNil)
+	blobs, err := repo.Settings()
+	c.Assert(err, IsNil)
+	c.Assert(blobs.BlobGCKeep, Equals, 5)
+	c.Assert(blobs.BlobGCMaxAge, Equals, "720h")
+	c.Assert(blobs.AllowCustomLimits, Equals, true)
 }
 
 // Scheduler job fires record object_type "scheduler". events.object_type is a

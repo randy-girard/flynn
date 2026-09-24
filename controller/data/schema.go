@@ -1130,6 +1130,11 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(64,
 		`INSERT INTO event_types (name) VALUES ('runtime')`,
 	)
+	migrations.Add(65,
+		`ALTER TABLE runtime_settings ADD COLUMN blob_gc_keep integer NOT NULL DEFAULT 10`,
+		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_blob_gc_keep_check CHECK (blob_gc_keep >= 0)`,
+		`ALTER TABLE runtime_settings ADD COLUMN blob_gc_max_age text NOT NULL DEFAULT ''`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

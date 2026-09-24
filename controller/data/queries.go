@@ -135,6 +135,7 @@ var preparedStatements = map[string]string{
 	"runtime_profile_delete":                   runtimeProfileDeleteQuery,
 	"runtime_settings_select":                  runtimeSettingsSelectQuery,
 	"runtime_settings_update":                  runtimeSettingsUpdateQuery,
+	"app_sync_gc_keep":                         appSyncGCKeepQuery,
 	"github_app_config_select":                 githubAppConfigSelectQuery,
 	"github_app_config_update":                 githubAppConfigUpdateQuery,
 	"github_repo_select_by_app":                githubRepoSelectByAppQuery,
@@ -824,10 +825,19 @@ RETURNING builtin, created_at, updated_at`
 UPDATE runtime_profiles SET deleted_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL AND builtin = false`
 	runtimeSettingsSelectQuery = `
-SELECT allow_custom_limits, max_processes, reserve_resources, updated_at FROM runtime_settings WHERE id = 1`
+SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, updated_at FROM runtime_settings WHERE id = 1`
 	runtimeSettingsUpdateQuery = `
-UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, updated_at = now()
+UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
+	appSyncGCKeepQuery = `
+UPDATE apps SET meta = jsonb_set(
+	CASE WHEN meta = 'null' OR meta IS NULL THEN '{}'::jsonb ELSE meta END,
+	'{gc.max_inactive_slug_releases}',
+	to_jsonb($1::text),
+	true
+), updated_at = now()
+WHERE deleted_at IS NULL
+AND COALESCE(meta->>'gc.max_inactive_slug_releases', '') = $2`
 
 	githubAppConfigSelectQuery = `
 SELECT app_id, slug, private_key, webhook_secret, client_id, client_secret, api_url, created_at, updated_at

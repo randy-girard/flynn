@@ -1,6 +1,7 @@
 package data
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx"
@@ -100,7 +101,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -115,12 +116,29 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 	if s.MaxProcesses < 1 {
 		s.MaxProcesses = cur.MaxProcessesOrDefault()
 	}
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources).Scan(&s.UpdatedAt); err != nil {
+	if s.BlobGCKeep < 0 {
+		s.BlobGCKeep = cur.BlobGCKeepOrDefault()
+	}
+	oldKeep := cur.BlobGCKeepOrDefault()
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge).Scan(&s.UpdatedAt); err != nil {
 		return err
+	}
+	if s.BlobGCKeep != oldKeep {
+		if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep), strconv.Itoa(oldKeep)); err != nil {
+			return err
+		}
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{
 		ObjectID:   "runtime-settings",
 		ObjectType: ct.EventTypeRuntimeSettings,
 		Op:         ct.EventOpUpdate,
 	}, s)
+}
+
+func defaultInactiveSlugReleases(db *postgres.DB) string {
+	s, err := NewRuntimeProfileRepo(db).Settings()
+	if err != nil {
+		return strconv.Itoa(ct.DefaultBlobGCKeep)
+	}
+	return strconv.Itoa(s.BlobGCKeepOrDefault())
 }

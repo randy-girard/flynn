@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -99,10 +100,45 @@ func (c *controllerAPI) GetRuntimeSettings(ctx context.Context, w http.ResponseW
 }
 
 func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	var s ct.RuntimeSettings
-	if err := httphelper.DecodeJSON(req, &s); err != nil {
+	var body struct {
+		AllowCustomLimits bool    `json:"allow_custom_limits"`
+		MaxProcesses      int     `json:"max_processes"`
+		ReserveResources  bool    `json:"reserve_resources"`
+		BlobGCKeep        *int    `json:"blob_gc_keep"`
+		BlobGCMaxAge      *string `json:"blob_gc_max_age"`
+	}
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
 		return
+	}
+	cur, err := c.runtimeProfileRepo.Settings()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	s := ct.RuntimeSettings{
+		AllowCustomLimits: body.AllowCustomLimits,
+		MaxProcesses:      body.MaxProcesses,
+		ReserveResources:  body.ReserveResources,
+		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:      cur.BlobGCMaxAge,
+	}
+	if body.BlobGCKeep != nil {
+		if *body.BlobGCKeep < 0 {
+			respondWithError(w, ct.ValidationError{Field: "blob_gc_keep", Message: "must be 0 or more"})
+			return
+		}
+		s.BlobGCKeep = *body.BlobGCKeep
+	}
+	if body.BlobGCMaxAge != nil {
+		age := strings.TrimSpace(*body.BlobGCMaxAge)
+		if age != "" && age != "0" {
+			if _, err := time.ParseDuration(age); err != nil {
+				respondWithError(w, ct.ValidationError{Field: "blob_gc_max_age", Message: "must be a Go duration such as 720h"})
+				return
+			}
+		}
+		s.BlobGCMaxAge = age
 	}
 	if err := c.runtimeProfileRepo.UpdateSettings(&s); err != nil {
 		respondWithError(w, err)
