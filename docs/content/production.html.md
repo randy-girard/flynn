@@ -100,6 +100,13 @@ on a timer and when free space is low. That does not replace a dedicated ZFS
 pool, and leftover datasets still need `flynn-host volume:gc` or a cluster
 update (which runs the same GC before pulling images).
 
+A file-backed zpool (the default sparse vdev) often keeps allocated extents
+after ZFS frees them, so `du` of the vdev stays large while `zpool list` ALLOC
+is small. `sudo flynn-host disk:reclaim` runs volume GC, image-cache cleanup,
+and `zpool trim` so those holes return to the host root filesystem. It does not
+delete Postgres or other volumes the scheduler still tracks. TRIM is skipped
+when the vdev does not support it.
+
 ## Blobstore Backend
 
 Flynn stores binary blobs like compiled applications, git repo archives,

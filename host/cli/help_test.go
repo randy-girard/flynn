@@ -116,13 +116,26 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 			t.Fatalf("blobstore help missing %q:\n%s", want, bs)
 		}
 	}
+	disk := FormatHelp("disk")
+	for _, want := range []string{"usage: flynn-host disk", "Commands:", "disk:reclaim"} {
+		if !strings.Contains(disk, want) {
+			t.Fatalf("disk help missing %q:\n%s", want, disk)
+		}
+	}
+	reclaim := FormatHelp("disk:reclaim")
+	if strings.Contains(reclaim, "\nCommands:") {
+		t.Fatalf("disk:reclaim is a leaf:\n%s", reclaim)
+	}
+	if !strings.Contains(reclaim, "volume:gc") || !strings.Contains(reclaim, "TRIM") {
+		t.Fatalf("disk:reclaim help should describe GC and TRIM:\n%s", reclaim)
+	}
 }
 
 func TestRootHelpListsParentsOnly(t *testing.T) {
 	isolateInstalledPlugins(t, nil)
 	got := RootHelp()
 	commands := helpSectionNames(got, "Commands:")
-	for _, want := range []string{"plugin", "volume", "blobstore", "help"} {
+	for _, want := range []string{"plugin", "volume", "disk", "blobstore", "help"} {
 		if !containsName(commands, want) {
 			t.Fatalf("root Commands missing %q:\n%s", want, got)
 		}
@@ -135,7 +148,7 @@ func TestRootHelpListsParentsOnly(t *testing.T) {
 			t.Fatalf("uninstalled plugin command %q must not appear in Commands:\n%s", pluginCmd, got)
 		}
 	}
-	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
+	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "disk:reclaim", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
 		if strings.Contains(got, nested) {
 			t.Fatalf("root help should not list %q:\n%s", nested, got)
 		}
@@ -171,7 +184,7 @@ func TestRootHelpPluginsSection(t *testing.T) {
 	if containsName(plugins, "acme") {
 		t.Fatalf("acme is a letsencrypt alias and must not appear:\n%s", got)
 	}
-	for _, core := range []string{"plugin", "volume", "help"} {
+	for _, core := range []string{"plugin", "volume", "disk", "help"} {
 		if !containsName(commands, core) {
 			t.Fatalf("Commands missing core %q:\n%s", core, got)
 		}
@@ -212,6 +225,12 @@ func TestHelpTopicKeepsNamespaceRoots(t *testing.T) {
 	}
 	if got := HelpTopic("otel", []string{"add", "--help"}); got != "otel:add" {
 		t.Fatalf("otel add --help: %q", got)
+	}
+	if got := HelpTopic("disk", nil); got != "disk" {
+		t.Fatalf("disk: %q", got)
+	}
+	if got := HelpTopic("disk", []string{"reclaim", "--help"}); got != "disk:reclaim" {
+		t.Fatalf("disk reclaim --help: %q", got)
 	}
 }
 

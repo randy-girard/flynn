@@ -21,6 +21,21 @@ func TestResolveCommandVolumeSpaceAlias(t *testing.T) {
 	}
 }
 
+func TestResolveCommandDiskReclaimAlias(t *testing.T) {
+	name, args, from := ResolveCommand("disk", []string{"reclaim"})
+	if name != "disk:reclaim" || from != "disk reclaim" || len(args) != 0 {
+		t.Fatalf("disk reclaim got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("disk", nil)
+	if name != "disk:reclaim" || from != "disk" || len(args) != 0 {
+		t.Fatalf("bare disk got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("disk:reclaim", []string{"--host", "localhost"})
+	if name != "disk:reclaim" || from != "" || !reflect.DeepEqual(args, []string{"--host", "localhost"}) {
+		t.Fatalf("colon got %q %q from=%q", name, args, from)
+	}
+}
+
 func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 	name, args, from := ResolveCommand("plugin", []string{"install", "redis", "--ref", "v1"})
 	if name != "plugin:install" || from != "plugin install" || !reflect.DeepEqual(args, []string{"redis", "--ref", "v1"}) {
@@ -94,6 +109,7 @@ func TestHostCommandNamesHaveNoSpaces(t *testing.T) {
 func TestHostNestedCommandsAreRegistered(t *testing.T) {
 	want := []string{
 		"volume:list", "volume:create", "volume:delete", "volume:gc",
+		"disk:reclaim",
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
 		"plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",

@@ -384,6 +384,7 @@ func runDaemon(args *docopt.Args) {
 		authKey:           authKey,
 		webhookDispatcher: webhookDisp,
 		maxJobConcurrency: maxJobConcurrency,
+		zpoolName:         zpoolName,
 	}
 	backend.SetHost(host)
 

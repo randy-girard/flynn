@@ -63,6 +63,7 @@ type Host struct {
 	lastImageCleanup time.Time
 	// imageCleanup, if set, replaces CleanupImageData during disk watch (tests).
 	imageCleanup func() error
+	zpoolName    string
 }
 
 // hostAuthKeyFromRequest returns the credential sent as Auth-Key or Basic password.
@@ -900,6 +901,16 @@ func (h *jobAPI) CleanupImageData(w http.ResponseWriter, r *http.Request, _ http
 	w.WriteHeader(http.StatusOK)
 }
 
+func (h *jobAPI) ReclaimDisk(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "ReclaimDisk")
+	if err := h.host.ReclaimDisk(); err != nil {
+		log.Error("error reclaiming disk", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/jobs", h.ListJobs)
 	r.GET("/host/jobs/:id", h.GetJob)
@@ -917,6 +928,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.GET("/host/jobs-stats", h.GetAllJobsStats)
 	r.POST("/host/resource-check", h.ResourceCheck)
 	r.POST("/host/cleanup-image-data", h.CleanupImageData)
+	r.POST("/host/reclaim-disk", h.ReclaimDisk)
 	r.POST("/host/update", h.Update)
 	r.POST("/host/systemctl-restart", h.SystemctlRestart)
 	r.POST("/host/auth-key", h.ConfigureAuthKey)

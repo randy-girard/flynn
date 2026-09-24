@@ -152,6 +152,10 @@ func TestBlobstoreHostCLIParse(t *testing.T) {
 	if !mig.Bool["--delete"] {
 		t.Fatal("blobstore:migrate --delete")
 	}
+	reclaim := parseHostCLI(t, "disk:reclaim", []string{"disk:reclaim", "--host", "localhost"})
+	if reclaim.String["--host"] != "localhost" {
+		t.Fatalf("disk:reclaim --host: %+v", reclaim.String)
+	}
 }
 
 func TestRollbackParses(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 var topAliases = map[string]string{
 	"plugin":         "plugin:list",
 	"volume":         "volume:list",
+	"disk":           "disk:reclaim",
 	"logsink":        "log-sink",
 	"logsink:add":    "log-sink:add",
 	"logsink:list":   "log-sink:list",
@@ -35,6 +36,9 @@ var subAliases = map[string]map[string]string{
 		"delete":  "volume:delete",
 		"destroy": "volume:delete",
 		"gc":      "volume:gc",
+	},
+	"disk": {
+		"reclaim": "disk:reclaim",
 	},
 	"log-sink": {
 		"list":   "log-sink:list",

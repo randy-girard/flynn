@@ -54,7 +54,8 @@ free space is low, it deletes leftover per-job image directories and
 unreferenced layer-cache files. Persistent ZFS volumes are not garbage-collected
 this way: the controller tracks those, and `flynn-host volume:gc` (also run
 automatically before a cluster update) removes volumes that are neither in use
-nor still tracked.
+nor still tracked. `flynn-host disk:reclaim` runs that volume GC, the image
+cleanup, and ZFS TRIM so a sparse file vdev can give unused space back to `/`.
 
 ## Bootstrapping
 

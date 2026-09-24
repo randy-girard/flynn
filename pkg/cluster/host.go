@@ -254,6 +254,23 @@ func (c *Host) CleanupImageData() error {
 	return client.Post("/host/cleanup-image-data", nil, nil)
 }
 
+// ReclaimDisk deletes leftover image material on the target host and waits
+// for ZFS TRIM so a file-backed pool can punch holes in its vdev.
+func (c *Host) ReclaimDisk() error {
+	hc := c.c.HTTP
+	const timeout = 15 * time.Minute
+	if hc == nil {
+		hc = &http.Client{Timeout: timeout}
+	} else if hc.Timeout == 0 || hc.Timeout < timeout {
+		client := *hc
+		client.Timeout = timeout
+		hc = &client
+	}
+	client := *c.c
+	client.HTTP = hc
+	return client.Post("/host/reclaim-disk", nil, nil)
+}
+
 // CheckOverlay reports whether the host can reach addr over the overlay network.
 func (c *Host) CheckOverlay(addr string) error {
 	return c.c.Get("/host/overlay-check?addr="+url.QueryEscape(addr), nil)
