@@ -62,6 +62,8 @@ func TestShouldRetryAfterControllerUnavailable(t *testing.T) {
 		{errors.New("dial tcp 127.0.0.1:443: connection refused"), true},
 		{errors.New("read: connection reset by peer"), true},
 		{errors.New("i/o timeout"), true},
+		{errors.New(`Put "http://controller.discoverd/apps/8e3d34b0-4aad-4cc4-8b04-696aa081999e/release": EOF`), true},
+		{errors.New("read: use of closed network connection"), true},
 		{errors.New("release not found"), false},
 		{errors.New("validation error"), false},
 	}

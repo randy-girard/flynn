@@ -62,6 +62,10 @@ func ShouldRetryAfterControllerUnavailable(err error) bool {
 		return true
 	case strings.Contains(msg, "unexpected eof"):
 		return true
+	case strings.Contains(msg, ": eof"):
+		return true
+	case strings.Contains(msg, "use of closed network connection"):
+		return true
 	default:
 		return false
 	}

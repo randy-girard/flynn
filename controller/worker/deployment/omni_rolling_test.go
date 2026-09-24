@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -112,5 +113,23 @@ func TestJobStopIDPrefersUUID(t *testing.T) {
 	}
 	if jobStopID(&ct.Job{ID: "host-only"}) != "host-only" {
 		t.Fatal("fall back to cluster id when uuid is empty")
+	}
+}
+
+func TestLeftoverJobReleasedOnHost(t *testing.T) {
+	if leftoverJobReleasedOnHost(nil) {
+		t.Fatal("nil error is still in flight")
+	}
+	if leftoverJobReleasedOnHost(fmt.Errorf("connection refused")) {
+		t.Fatal("transient errors must not look like a released job")
+	}
+	if !leftoverJobReleasedOnHost(fmt.Errorf("host: job is already stopped")) {
+		t.Fatal("already-stopped host jobs have released the port")
+	}
+	if !leftoverJobReleasedOnHost(fmt.Errorf("host: unknown job")) {
+		t.Fatal("missing host jobs have released the port")
+	}
+	if !leftoverJobReleasedOnHost(fmt.Errorf("controller: not found")) {
+		t.Fatal("not-found jobs have released the port")
 	}
 }

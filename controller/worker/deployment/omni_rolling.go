@@ -3,6 +3,7 @@ package deployment
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/inconshreveable/log15"
@@ -265,7 +266,12 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 					continue
 				}
 				log.Warn("force-stopping leftover omni job", "job.id", id, "host.id", job.HostID, "job.state", job.State)
-				if err := d.client.DeleteJob(d.AppID, id); err != nil {
+				err := d.client.DeleteJob(d.AppID, id)
+				if err != nil && leftoverJobReleasedOnHost(err) {
+					d.persistOmniJobReleased(job, log)
+					continue
+				}
+				if err != nil {
 					log.Warn("force-stop leftover omni job failed", "job.id", id, "err", err)
 				}
 			}
@@ -279,5 +285,26 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 			return worker.ErrStopped
 		case <-time.After(200 * time.Millisecond):
 		}
+	}
+}
+
+func leftoverJobReleasedOnHost(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already stopped") ||
+		strings.Contains(msg, "unknown job") ||
+		strings.Contains(msg, "not found")
+}
+
+func (d *DeployJob) persistOmniJobReleased(job *ct.Job, log log15.Logger) {
+	if d == nil || d.client == nil || job == nil {
+		return
+	}
+	down := *job
+	down.State = ct.JobStateDown
+	if err := d.client.PutJob(&down); err != nil && log != nil {
+		log.Warn("could not persist omni job as down", "job.id", jobStopID(job), "err", err)
 	}
 }
