@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +59,8 @@ type Installer struct {
 	FlynnVersion string
 	// LayerCacheDir overrides /var/lib/flynn/layer-cache for tests.
 	LayerCacheDir string
+	// BlobstorePrefix overrides http://blobstore.discoverd/plugins for tests.
+	BlobstorePrefix string
 	// AllowExternalLayers fetches image.json LayerURL hosts that are not
 	// GitHub. The GitHub token is never sent to those hosts (SEC-018).
 	AllowExternalLayers bool
@@ -411,20 +415,118 @@ func (in *Installer) localFlynnImageEnv() []string {
 	return env
 }
 
-func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.Artifact, error) {
-	httpClient := in.http()
-	prefix := fmt.Sprintf("%s/%s", blobstorePrefix, pluginName)
-	layerTmpl := prefix + "/layers/{id}.squashfs"
+func (in *Installer) pluginBlobstorePrefix() string {
+	if in != nil && strings.TrimSpace(in.BlobstorePrefix) != "" {
+		return strings.TrimRight(strings.TrimSpace(in.BlobstorePrefix), "/")
+	}
+	return blobstorePrefix
+}
 
+func (in *Installer) pluginObjectPrefix(pluginName string) string {
+	return fmt.Sprintf("%s/%s", in.pluginBlobstorePrefix(), pluginName)
+}
+
+func (in *Installer) uploadDistLayers(pluginName string, dist *DistArtifact) (layerTmpl string, extraMeta map[string]string, err error) {
+	if dist == nil || dist.Artifact == nil {
+		return "", nil, fmt.Errorf("missing plugin image")
+	}
+	httpClient := in.http()
+	prefix := in.pluginObjectPrefix(pluginName)
+	layerTmpl = prefix + "/layers/{id}.squashfs"
+	extraMeta = map[string]string{}
 	ls := layers(dist.Artifact)
 	in.logf("uploading %d layer(s) for %s", len(ls), pluginName)
-	for _, layer := range ls {
+	for i, layer := range ls {
+		if layer == nil || layer.ID == "" {
+			return "", nil, fmt.Errorf("image layer %d missing id", i)
+		}
 		src := dist.LayerPath(layer.ID)
 		url := fmt.Sprintf("%s/layers/%s.squashfs", prefix, layer.ID)
+		size := layerSourceSize(src, layer)
+		overlay := i == len(ls)-1
+		skip, flynnURL := in.skipLayerUpload(httpClient, url, layer.ID, size, overlay)
+		if skip {
+			if flynnURL != "" && flynnURL != url {
+				extraMeta["layer_url."+layer.ID] = flynnURL
+			}
+			in.logf("layer %s already in blobstore (%d bytes); skip upload", layer.ID, size)
+			continue
+		}
 		in.logf("uploading layer %s (%d bytes)", layer.ID, layer.Length)
 		if err := putFile(httpClient, url, src); err != nil {
-			return nil, fmt.Errorf("upload layer %s: %w", layer.ID, err)
+			return "", nil, fmt.Errorf("upload layer %s: %w", layer.ID, err)
 		}
+	}
+	return layerTmpl, extraMeta, nil
+}
+
+// skipLayerUpload reports whether a layer PUT can be omitted.
+//
+// Overlay/delta (the last plugin layer) is skipped only when HEAD/GET on the
+// plugin-prefix blobstore object already matches size.
+//
+// Flynn OS layers (not the last layer) may also skip a duplicate plugin-prefix
+// PUT when jobs can still fetch the squashfs. LayerURLTemplate is the plugin
+// prefix, so skipping PUT without that object 404s on other hosts. Reuse an
+// existing Flynn artifact LayerURL for this layer ID when that URL is already
+// a blobstore object of matching size; otherwise skip only on plugin-prefix HEAD 200.
+func (in *Installer) skipLayerUpload(httpClient *http.Client, pluginURL, id string, size int64, overlay bool) (skip bool, flynnURL string) {
+	if blobstoreHasObject(httpClient, pluginURL, size) {
+		return true, ""
+	}
+	if overlay {
+		return false, ""
+	}
+	if in.localFlynnLayer(id) == "" && !in.clusterHasFlynnLayer(id) {
+		return false, ""
+	}
+	flynnURL = in.flynnLayerURL(id)
+	if flynnURL == "" || flynnURL == pluginURL {
+		return false, ""
+	}
+	if in.reusableLayerURL(flynnURL, pluginURL) && blobstoreHasObject(httpClient, flynnURL, size) {
+		return true, flynnURL
+	}
+	return false, ""
+}
+
+func layerSourceSize(src string, layer *ct.ImageLayer) int64 {
+	if src != "" {
+		if st, err := os.Stat(src); err == nil {
+			return st.Size()
+		}
+	}
+	if layer != nil {
+		return layer.Length
+	}
+	return 0
+}
+
+func (in *Installer) reusableLayerURL(raw, pluginURL string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	if blobstoreauth.IsBlobstoreURL(u) {
+		return true
+	}
+	p, err := url.Parse(pluginURL)
+	if err != nil || p.Host == "" || u.Host == "" {
+		return false
+	}
+	// Tests point BlobstorePrefix at httptest; reuse Flynn URLs on that host only.
+	return canonicalHTTPHost(u.Hostname()) == canonicalHTTPHost(p.Hostname())
+}
+
+func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.Artifact, error) {
+	httpClient := in.http()
+	layerTmpl, extraMeta, err := in.uploadDistLayers(pluginName, dist)
+	if err != nil {
+		return nil, err
 	}
 
 	raw := dist.Artifact.RawManifest
@@ -432,7 +534,7 @@ func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.
 	if manifestID == "" && dist.Artifact.Hashes != nil {
 		manifestID = dist.Artifact.Hashes["sha512_256"]
 	}
-	manifestURL := fmt.Sprintf("%s/images/%s.json", prefix, manifestID)
+	manifestURL := fmt.Sprintf("%s/images/%s.json", in.pluginObjectPrefix(pluginName), manifestID)
 	if p := dist.ManifestPath(); p != "" {
 		if err := putFile(httpClient, manifestURL, p); err != nil {
 			return nil, fmt.Errorf("upload manifest: %w", err)
@@ -445,6 +547,9 @@ func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.
 
 	meta := map[string]string{"blobstore": "true", "flynn.plugin": "true"}
 	for k, v := range dist.Artifact.Meta {
+		meta[k] = v
+	}
+	for k, v := range extraMeta {
 		meta[k] = v
 	}
 	meta["blobstore"] = "true"
@@ -995,6 +1100,94 @@ func ensureProvider(client providerClient, name, url string) error {
 		return fmt.Errorf("create provider %s: %w", name, err)
 	}
 	return nil
+}
+
+func blobstoreHasObject(httpClient *http.Client, rawURL string, size int64) bool {
+	if rawURL == "" {
+		return false
+	}
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	code, ok := blobstoreHeadMatches(httpClient, rawURL, size)
+	if ok {
+		return true
+	}
+	switch code {
+	case 0, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return blobstoreGetMatches(httpClient, rawURL, size)
+	default:
+		return false
+	}
+}
+
+func blobstoreHeadMatches(httpClient *http.Client, rawURL string, size int64) (int, bool) {
+	req, err := http.NewRequest(http.MethodHead, rawURL, nil)
+	if err != nil {
+		return 0, false
+	}
+	blobstoreauth.ApplyIfBlobstore(req)
+	res, err := httpClient.Do(req)
+	if err != nil {
+		return 0, false
+	}
+	defer res.Body.Close()
+	return res.StatusCode, blobstoreStatusMatches(res, size)
+}
+
+func blobstoreGetMatches(httpClient *http.Client, rawURL string, size int64) bool {
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	blobstoreauth.ApplyIfBlobstore(req)
+	res, err := httpClient.Do(req)
+	if err != nil {
+		return false
+	}
+	io.Copy(io.Discard, io.LimitReader(res.Body, 64))
+	res.Body.Close()
+	if res.StatusCode == http.StatusPartialContent {
+		if n := contentRangeTotal(res.Header.Get("Content-Range")); n >= 0 {
+			return size <= 0 || n == size
+		}
+	}
+	return blobstoreStatusMatches(res, size)
+}
+
+func blobstoreStatusMatches(res *http.Response, size int64) bool {
+	if res == nil || res.StatusCode != http.StatusOK {
+		return false
+	}
+	n := res.ContentLength
+	if n < 0 {
+		if s := res.Header.Get("Content-Length"); s != "" {
+			if parsed, err := strconv.ParseInt(s, 10, 64); err == nil {
+				n = parsed
+			}
+		}
+	}
+	if size > 0 && n >= 0 && n != size {
+		return false
+	}
+	if size > 0 && n < 0 {
+		return false
+	}
+	return true
+}
+
+func contentRangeTotal(v string) int64 {
+	// bytes 0-0/211136512
+	i := strings.LastIndex(v, "/")
+	if i < 0 || i == len(v)-1 {
+		return -1
+	}
+	n, err := strconv.ParseInt(v[i+1:], 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 func putFile(httpClient *http.Client, url, path string) error {

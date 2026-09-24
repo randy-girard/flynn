@@ -174,6 +174,57 @@ func (in *Installer) clusterHasFlynnLayer(id string) bool {
 	return artifactsHaveLayer(arts, id)
 }
 
+// flynnLayerURL is an existing artifact LayerURL for this layer ID (images.json
+// then controller artifacts). Prefer a non-plugin Flynn image so plugin jobs
+// can fetch the OS squashfs without a second copy under the plugin prefix.
+func (in *Installer) flynnLayerURL(id string) string {
+	if id == "" {
+		return ""
+	}
+	if p := localImagesJSONPath(); p != "" {
+		arts, err := readImagesJSONArtifacts(p)
+		if err == nil {
+			if u := layerURLFromArtifacts(arts, id); u != "" {
+				return u
+			}
+		}
+	}
+	if in == nil || in.Client == nil {
+		return ""
+	}
+	arts, err := in.Client.ArtifactList()
+	if err != nil {
+		return ""
+	}
+	return layerURLFromArtifacts(arts, id)
+}
+
+func layerURLFromArtifacts(arts []*ct.Artifact, id string) string {
+	var pluginURL string
+	for _, a := range arts {
+		if a == nil {
+			continue
+		}
+		for _, layer := range layers(a) {
+			if layer == nil || layer.ID != id {
+				continue
+			}
+			u := a.LayerURL(layer)
+			if u == "" {
+				continue
+			}
+			if a.Meta != nil && a.Meta["flynn.plugin"] == "true" {
+				if pluginURL == "" {
+					pluginURL = u
+				}
+				continue
+			}
+			return u
+		}
+	}
+	return pluginURL
+}
+
 func linkOrCopyFile(src, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err

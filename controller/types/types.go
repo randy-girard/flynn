@@ -403,6 +403,13 @@ func (a *Artifact) Manifest() *ImageManifest {
 }
 
 func (a *Artifact) LayerURL(layer *ImageLayer) string {
+	if layer != nil && layer.ID != "" && a.Meta != nil {
+		// layer_url.{id} overrides the template so a plugin artifact can
+		// reuse an existing Flynn OS layer URL without a second blobstore PUT.
+		if u := strings.TrimSpace(a.Meta["layer_url."+layer.ID]); u != "" {
+			return u
+		}
+	}
 	tmpl, err := uritemplates.Parse(a.LayerURLTemplate)
 	if err != nil {
 		return ""
