@@ -30,17 +30,18 @@ func TestVolumeGCKeepFromJobs(t *testing.T) {
 				Config: host.ContainerConfig{
 					Volumes: []host.VolumeBinding{{VolumeID: "stale-data"}},
 				},
+				Mountspecs: []*host.Mountspec{{ID: "layer-done"}},
 			},
 		},
 	}
 	keep := volumeGCKeepFromJobs(jobs)
-	for _, id := range []string{"job-run", "data-1", "layer-1"} {
+	for _, id := range []string{"job-run", "data-1", "layer-1", "layer-done"} {
 		if _, ok := keep[id]; !ok {
-			t.Fatalf("running job must keep %s", id)
+			t.Fatalf("must keep %s", id)
 		}
 	}
 	if _, ok := keep["job-done"]; ok {
-		t.Fatal("finished jobs must not pin volumes")
+		t.Fatal("finished jobs must not pin ext2/tmpfs volumes by job ID")
 	}
 	if _, ok := keep["stale-data"]; ok {
 		t.Fatal("volumes on finished jobs must be eligible for gc")
@@ -99,5 +100,8 @@ func TestVolumeGCSkipsDestroyWhenControllerListFails(t *testing.T) {
 	}
 	if !strings.Contains(body, "controllerKeyFromActiveJobs(jobs)") {
 		t.Fatal("volume gc must seed AUTH_KEY from controller jobs before GET /volumes")
+	}
+	if !strings.Contains(body, `return fmt.Errorf("skipping volume gc: error listing jobs on host %s: %w", h.ID(), err)`) {
+		t.Fatal("volume gc must skip destroys when any host ListJobs fails")
 	}
 }

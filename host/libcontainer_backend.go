@@ -1404,7 +1404,16 @@ func (l *LibcontainerBackend) mountSquashfs(m *host.Mountspec) (string, error) {
 	// given layer ID
 	path, err := l.layerLoader.Do(m.ID, func() (interface{}, error) {
 		if vol := l.VolManager.GetVolume(m.ID); vol != nil {
-			return vol.Location(), nil
+			if vm, ok := vol.(interface{ EnsureMounted() error }); ok {
+				if err := vm.EnsureMounted(); err != nil {
+					return "", fmt.Errorf("error remounting squashfs layer %s: %s", m.ID, err)
+				}
+			}
+			loc := vol.Location()
+			if _, err := os.Stat(loc); err == nil {
+				return loc, nil
+			}
+			return "", fmt.Errorf("error getting squashfs layer %s: mount path %s is missing", m.ID, loc)
 		}
 
 		if m.URL == "" {

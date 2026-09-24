@@ -59,6 +59,20 @@ need 'Persistent volume after upgrade' \
   "smoke must re-run the volume lifecycle after flynn-host update"
 need 'Persistent volume after restore' \
   "smoke must re-run the volume lifecycle after backup restore"
+need_in_host() {
+  local file=$1 needle=$2 msg=$3
+  if ! grep -qE "${needle}" "${file}"; then
+    echo "${msg}" >&2
+    echo "  missing /${needle}/ in ${file}" >&2
+    exit 1
+  fi
+}
+need_in_host "${ROOT}/host/volume/zfs/zfs.go" 'remount after failed destroy' \
+  "zfs destroy must remount squashfs layers when the dataset is still busy"
+need_in_host "${ROOT}/host/cli/volume.go" 'Squashfs layers are shared' \
+  "volume gc must keep image layers from finished jobs so host-restart GC cannot unmount them"
+need_in_host "${ROOT}/host/libcontainer_backend.go" 'EnsureMounted' \
+  "starting a job must remount a squashfs volume whose mount path disappeared"
 if grep -A20 'vol": {' "${smoke}" | grep -q 'delete_on_stop'; then
   echo "volume smoke must persist /data across job stop (no delete_on_stop)" >&2
   exit 1

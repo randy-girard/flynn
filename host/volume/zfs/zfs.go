@@ -344,7 +344,8 @@ func (p *Provider) DestroyVolume(v volume.Volume) error {
 }
 
 func (p *Provider) destroy(vol *zfsVolume) error {
-	if vol.IsSnapshot() || vol.filesystem != nil {
+	needsMount := vol.IsSnapshot() || vol.filesystem != nil
+	if needsMount {
 		if err := syscall.Unmount(vol.basemount, 0); err != nil {
 			return err
 		}
@@ -358,6 +359,14 @@ func (p *Provider) destroy(vol *zfsVolume) error {
 			err = vol.dataset.Destroy(zfs.DestroyForceUmount)
 		}
 		if err != nil {
+			// DestroyForceUmount / the explicit Unmount above can leave the
+			// dataset unmounted while still busy. Put the mount back so
+			// GetVolume callers do not hand jobs a missing squashfs path.
+			if needsMount {
+				if remountErr := p.mountDataset(vol); remountErr != nil {
+					return fmt.Errorf("%s (remount after failed destroy: %s)", err, remountErr)
+				}
+			}
 			return err
 		}
 	}
@@ -618,6 +627,15 @@ func (v *zfsVolume) Provider() volume.Provider {
 
 func (v *zfsVolume) Location() string {
 	return v.basemount
+}
+
+// EnsureMounted remounts the dataset if a failed destroy (or host restart)
+// left the volume recorded but the mount path gone.
+func (v *zfsVolume) EnsureMounted() error {
+	if v == nil || v.provider == nil {
+		return fmt.Errorf("volume has no provider")
+	}
+	return v.provider.mountDataset(v)
 }
 
 func (p *Provider) MarshalGlobalState() (json.RawMessage, error) {

@@ -72,18 +72,21 @@ func runVolumeGarbageCollection(args *docopt.Args, client *cluster.Client) error
 func volumeGCKeepFromJobs(jobs map[string]host.ActiveJob) map[string]struct{} {
 	keep := make(map[string]struct{})
 	for _, j := range jobs {
-		if j.Status != host.StatusRunning && j.Status != host.StatusStarting {
-			continue
-		}
 		if j.Job == nil {
 			continue
 		}
-		keep[j.Job.ID] = struct{}{}
-		for _, vb := range j.Job.Config.Volumes {
-			if vb.VolumeID != "" {
-				keep[vb.VolumeID] = struct{}{}
+		live := j.Status == host.StatusRunning || j.Status == host.StatusStarting
+		if live {
+			keep[j.Job.ID] = struct{}{}
+			for _, vb := range j.Job.Config.Volumes {
+				if vb.VolumeID != "" {
+					keep[vb.VolumeID] = struct{}{}
+				}
 			}
 		}
+		// Squashfs layers are shared by every job of a release. After a host
+		// restart, jobs are often not Running yet; GC must still pin their
+		// image layers so a failed zfs destroy cannot unmount them.
 		for _, m := range j.Job.Mountspecs {
 			if m != nil && m.ID != "" {
 				keep[m.ID] = struct{}{}
@@ -126,7 +129,7 @@ func garbageCollectUnusedVolumes(hosts []*cluster.Host, log log15.Logger) error 
 		jobs, err := h.ListJobs()
 		if err != nil {
 			fmt.Printf("error listing jobs on host %s: %s\n", h.ID(), err)
-			continue
+			return fmt.Errorf("skipping volume gc: error listing jobs on host %s: %w", h.ID(), err)
 		}
 		for id := range volumeGCKeepFromJobs(jobs) {
 			keep[id] = struct{}{}
