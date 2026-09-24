@@ -59,8 +59,11 @@ func TestFormatHelpListsPluginChildren(t *testing.T) {
 func TestRootHelpHidesPluginActions(t *testing.T) {
 	got := mergePluginUsage(formatCoreRootHelp(), datastorePluginCatalog(), nil)
 	for _, parent := range []string{"redis", "mysql", "mongodb", "clickhouse", "kafka", "scheduler"} {
-		if !strings.Contains(got, "\t"+parent) {
+		if !strings.Contains(got, "\n  "+parent) {
 			t.Errorf("root must list %s:\n%s", parent, got)
+		}
+		if strings.Contains(got, "\t"+parent) {
+			t.Errorf("Plugins list must indent %s like Commands (two spaces), not a tab:\n%s", parent, got)
 		}
 	}
 	for _, nested := range []string{"redis:dump", "mysql:dump", "mongodb:dump", "clickhouse:databases", "kafka:topics", "scheduler:list"} {

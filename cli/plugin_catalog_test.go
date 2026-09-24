@@ -232,7 +232,7 @@ func assertPluginHelpSection(t *testing.T, got, cmd string) {
 	t.Helper()
 	idxCommands := strings.Index(got, "Commands:")
 	idxPlugins := strings.Index(got, "Plugins:")
-	idxCmd := strings.Index(got, "\t"+cmd)
+	idxCmd := strings.Index(got, "\n  "+cmd)
 	idxSee := strings.Index(got, "See 'flynn help <command>")
 	if idxCommands < 0 || idxPlugins < 0 || idxCmd < 0 || idxSee < 0 {
 		t.Fatalf("missing Commands/Plugins/%s/See:\n%s", cmd, got)
@@ -242,6 +242,9 @@ func assertPluginHelpSection(t *testing.T, got, cmd string) {
 	}
 	if !strings.Contains(got, "\n\nPlugins:\n") {
 		t.Fatalf("blank line required between Commands and Plugins:\n%s", got)
+	}
+	if strings.Contains(got, "\t"+cmd) {
+		t.Fatalf("Plugins list must indent like Commands (two spaces), not a tab:\n%s", got)
 	}
 }
 
@@ -335,6 +338,12 @@ func TestAppendCatalogCommandsBranches(t *testing.T) {
 	}
 	if strings.Count(got, "\tps          list jobs") != 1 {
 		t.Fatalf("compiled command must not be duplicated:\n%s", got)
+	}
+	if strings.Contains(got, "\tredis") || strings.Contains(got, "\tkafka") {
+		t.Fatalf("Plugins list must indent like Commands (two spaces), not a tab:\n%s", got)
+	}
+	if !strings.Contains(got, "\n  kafka") || !strings.Contains(got, "\n  redis") {
+		t.Fatalf("plugin commands must use FormatItems two-space indent:\n%s", got)
 	}
 }
 

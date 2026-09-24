@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -72,7 +73,7 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		return usage
 	}
 	present := usageCommandNames(usage)
-	var extra []string
+	var extra []clihelp.Item
 	for _, cmd := range cat.Commands {
 		if cmd.Command == "" {
 			continue
@@ -89,16 +90,17 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 			if _, ok := present[name]; ok {
 				continue
 			}
-			extra = append(extra, fmt.Sprintf("\t%-22s %s", name, desc))
+			extra = append(extra, clihelp.Item{Name: name, Desc: desc})
 			present[name] = struct{}{}
 		}
 	}
 	if len(extra) == 0 {
 		return usage
 	}
-	sort.Strings(extra)
+	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
+	formatted := strings.TrimRight(clihelp.FormatItems(extra), "\n")
 	section := []string{"", "Plugins:"}
-	section = append(section, extra...)
+	section = append(section, strings.Split(formatted, "\n")...)
 	section = append(section, "")
 	return insertPluginHelpSection(usage, section)
 }
