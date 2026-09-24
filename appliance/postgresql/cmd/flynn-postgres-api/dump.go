@@ -35,6 +35,14 @@ func pgRestoreArgv(database string) []string {
 	return []string{"pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "--dbname=" + database}
 }
 
+func pgDumpallArgv() []string {
+	return []string{"pg_dumpall", "--clean", "--if-exists", "--exclude-database=template0", "--exclude-database=template1"}
+}
+
+func pgDumpallRestoreArgv() []string {
+	return []string{"psql", "--dbname=postgres", "-v", "ON_ERROR_STOP=1"}
+}
+
 func pgClientEnv() []string {
 	env := os.Environ()
 	env = append(env, "PGHOST="+serviceHost, "PGUSER=flynn", "PGPORT=5432")
@@ -46,36 +54,42 @@ func pgClientEnv() []string {
 
 func (p *pgAPI) dumpDatabase(_ context.Context, w http.ResponseWriter, req *http.Request) {
 	database := strings.TrimSpace(req.URL.Query().Get("database"))
-	if !validDumpDatabase(database) {
+	argv := pgDumpArgv(database)
+	filename := "postgres.dump"
+	if database == "" {
+		argv = pgDumpallArgv()
+		filename = "postgres-all.sql"
+	} else if !validDumpDatabase(database) {
 		httphelper.ValidationError(w, "database", "is invalid")
 		return
 	}
-	argv := pgDumpArgv(database)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = pgClientEnv()
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="postgres.dump"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	cmd.Stdout = w
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
-		httphelper.Error(w, fmt.Errorf("pg_dump: %w", err))
+		httphelper.Error(w, fmt.Errorf("%s: %w", argv[0], err))
 	}
 }
 
 func (p *pgAPI) restoreDatabase(_ context.Context, w http.ResponseWriter, req *http.Request) {
 	database := strings.TrimSpace(req.URL.Query().Get("database"))
-	if !validDumpDatabase(database) {
+	argv := pgRestoreArgv(database)
+	if database == "" {
+		argv = pgDumpallRestoreArgv()
+	} else if !validDumpDatabase(database) {
 		httphelper.ValidationError(w, "database", "is invalid")
 		return
 	}
-	argv := pgRestoreArgv(database)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Env = pgClientEnv()
 	cmd.Stdin = req.Body
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 	if err := cmd.Run(); err != nil {
-		httphelper.Error(w, fmt.Errorf("pg_restore: %w", err))
+		httphelper.Error(w, fmt.Errorf("%s: %w", argv[0], err))
 		return
 	}
 	w.WriteHeader(http.StatusOK)

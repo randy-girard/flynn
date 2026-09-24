@@ -88,6 +88,13 @@ func TestPgDumpRestoreArgv(t *testing.T) {
 	if restore[0] != "pg_restore" || !containsStr(restore, "--clean") || !containsStr(restore, "--dbname=appdb") {
 		t.Fatalf("%v", restore)
 	}
+	all := pgDumpallArgv()
+	if all[0] != "pg_dumpall" || !containsStr(all, "--exclude-database=template1") {
+		t.Fatalf("%v", all)
+	}
+	if got := pgDumpallRestoreArgv(); got[0] != "psql" || !containsStr(got, "--dbname=postgres") {
+		t.Fatalf("%v", got)
+	}
 }
 
 func containsStr(in []string, want string) bool {
