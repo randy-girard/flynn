@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+	"time"
 
 	"github.com/randy-girard/flynn/pkg/rpcplus"
 )
@@ -133,10 +134,17 @@ func NewClient(conn *net.UnixConn) *rpcplus.Client {
 	return rpcplus.NewClientWithCodec(client)
 }
 
+const dialTimeout = time.Second
+
 func Dial(path string) (*rpcplus.Client, error) {
-	conn, err := net.DialUnix("unix", nil, &net.UnixAddr{Net: "unix", Name: path})
+	conn, err := net.DialTimeout("unix", path, dialTimeout)
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(conn), nil
+	unixConn, ok := conn.(*net.UnixConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("fdrpc: expected *net.UnixConn")
+	}
+	return NewClient(unixConn), nil
 }
