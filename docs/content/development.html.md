@@ -424,9 +424,10 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   time onto a draft (with retries) so the job logs progress and can resume
   after a cancelled run; the release is published only after every asset is
   present unless you asked for a draft. **draft** is off by default.
-  After a non-draft GitHub Release is published, CI posts the change notes and
-  release URL to Discord when `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` is set
+  After a non-draft GitHub Release is published, CI posts `@everyone` plus the
+  change notes and release URL to Discord when `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` is set
   (org/repo Actions variable or secret). Assets are not listed in that message.
+  The publish job fails if Discord does not return HTTP 200/204 after retries.
   Packaging copies only squashfs layers listed in `images.json` and **fails**
   if any listed layer is missing from `/var/lib/flynn/layer-cache` (so a
   metadata-only builder cache hit cannot ship a GitHub Release that 404s on
@@ -448,8 +449,9 @@ The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
   `PLUGIN_RELEASE_REPOS` (`owner/repo` per line) and secret
   `PLUGIN_RELEASE_TOKEN` (Actions: write + Contents: read on those repos).
   Set `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` (variable or secret) to post
-  published release notes and the GitHub release URL to Discord; drafts skip
-  the post and assets are omitted.
+  `@everyone` plus published release notes and the GitHub release URL to Discord;
+  drafts skip the post and assets are omitted. The publish step fails if Discord
+  does not acknowledge the post.
   `flynn-host plugin:install` short names come from
   `pkg/plugin/official-plugins.json`. Empty variable skips dispatch.
 

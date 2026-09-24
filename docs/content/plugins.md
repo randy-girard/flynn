@@ -365,8 +365,9 @@ Configure the Flynn repo (or org) with:
   start workflows in another repository).
 * **Variable** `DISCORD_RELEASE_CHANNEL_WEBHOOK_URL` — Discord webhook for the
   release channel. After each published Flynn or plugin GitHub Release (not
-  drafts), CI posts the change notes and a link to the release. Omit it to skip.
-  A secret with the same name is also accepted.
+  drafts), CI posts `@everyone`, the change notes, and a link to the release.
+  The GitHub publish step fails if that post does not return HTTP 200/204.
+  Omit the variable to skip. A secret with the same name is also accepted.
 
 Each plugin is built with its own `version` (`vYYYYMMDD.N.B`) and
 `flynn_version` set to the Flynn tag so the overlay uses that ubuntu-noble

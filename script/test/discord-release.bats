@@ -111,6 +111,8 @@ import json, sys
 payload = json.loads(open(sys.argv[1]).read())
 blob = json.dumps(payload)
 desc = payload["embeds"][0]["description"]
+assert payload["content"].startswith("@everyone")
+assert payload["allowed_mentions"]["parse"] == ["everyone"]
 assert "Flynn v20990101.0" in desc
 assert "Full Changelog" in desc
 assert "v20260923.0...v20990101.0" in desc
@@ -201,6 +203,22 @@ import json, sys
 payload = json.loads(open(sys.argv[1]).read())
 assert payload["embeds"][0]["title"].startswith("Prerelease:")
 PY
+}
+
+@test "discord_notify_github_release fails after repeated HTTP errors" {
+  export DISCORD_RELEASE_CHANNEL_WEBHOOK_URL="https://discord.com/api/webhooks/1/abc"
+  export DISCORD_RELEASE_RETRY_SLEEP=0
+  echo "notes" >"${TMP}/notes.md"
+  discord_release_http_post() { printf '500'; }
+  run discord_notify_github_release \
+    --repo acme/flynn \
+    --version v20990101.0 \
+    --title "Flynn v20990101.0" \
+    --notes-file "${TMP}/notes.md" \
+    --draft false \
+    --prerelease false
+  assert_failure
+  [[ "${output}" == *"failed after 3 attempts"* ]]
 }
 
 @test "release workflow passes DISCORD_RELEASE_CHANNEL_WEBHOOK_URL into publish" {

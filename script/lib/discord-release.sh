@@ -63,7 +63,7 @@ if prerelease == "true":
     heading = "Prerelease: " + title
 
 # content is the short ping; notes live in the embed (not asset lists).
-content = f"**{heading}**\n{url}"
+content = f"@everyone **{heading}**\n{url}"
 if len(content) > 2000:
     content = content[:1999] + "…"
 
@@ -75,7 +75,7 @@ print(json.dumps({
         "description": notes,
         "color": 5793266,
     }],
-    "allowed_mentions": {"parse": []},
+    "allowed_mentions": {"parse": ["everyone"]},
 }))
 PY
 }
@@ -124,19 +124,24 @@ discord_notify_github_release() {
 
   local payload
   if ! payload="$(discord_release_payload "${title}" "${url}" "${prerelease}" "${notes}")"; then
-    echo "warning: Discord release payload failed" >&2
-    return 0
+    echo "ERROR: Discord release payload failed" >&2
+    return 1
   fi
 
-  local code
-  code="$(discord_release_http_post "${webhook}" "${payload}")" || code="000"
-  case "${code}" in
-    200|204)
-      echo "Discord release notify posted (${code}) ${url}"
-      ;;
-    *)
-      echo "warning: Discord release notify HTTP ${code} (release ${version} is still published)" >&2
-      ;;
-  esac
-  return 0
+  local code attempt
+  for attempt in 1 2 3; do
+    code="$(discord_release_http_post "${webhook}" "${payload}")" || code="000"
+    case "${code}" in
+      200|204)
+        echo "Discord release notify posted (${code}) ${url}"
+        return 0
+        ;;
+    esac
+    echo "Discord release notify HTTP ${code} (attempt ${attempt}/3)" >&2
+    if [[ "${attempt}" -lt 3 ]]; then
+      sleep "${DISCORD_RELEASE_RETRY_SLEEP:-2}"
+    fi
+  done
+  echo "ERROR: Discord release notify failed after 3 attempts (release ${version} is still published)" >&2
+  return 1
 }

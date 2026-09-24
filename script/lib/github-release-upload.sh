@@ -274,11 +274,17 @@ github_release_publish() {
 
   echo "Created release ${version}"
   github_release_cmd release view "${version}" --repo "${repo}"
-  discord_notify_github_release \
+  local html_url=""
+  html_url="$(github_release_cmd release view "${version}" --repo "${repo}" --json url --jq .url || true)"
+  if ! discord_notify_github_release \
     --repo "${repo}" \
     --version "${version}" \
     --title "${title}" \
     --notes-file "${notes}" \
     --draft "${draft}" \
-    --prerelease "${prerelease}"
+    --prerelease "${prerelease}" \
+    --url "${html_url}"; then
+    echo "ERROR: Discord release notify failed for ${version}" >&2
+    return 1
+  fi
 }
