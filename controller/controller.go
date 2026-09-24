@@ -156,6 +156,7 @@ type handlerConfig struct {
 	githubAPI        githubAPI
 	taffy            taffyLauncher
 	githubDomain     string
+	githubPluginURL  string
 }
 
 // NOTE: this is temporary until httphelper supports custom errors
@@ -221,12 +222,16 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		githubAPI:              c.githubAPI,
 		taffy:                  c.taffy,
 		githubDomain:           c.githubDomain,
+		githubPluginURL:        c.githubPluginURL,
 		clusterClient:          c.cc,
 		logaggc:                c.lc,
 		que:                    q,
 		caCert:                 c.caCert,
 		config:                 c,
 		authorizer:             authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
+	}
+	if strings.TrimSpace(api.githubPluginURL) == "" {
+		api.githubPluginURL = "http://github.discoverd"
 	}
 
 	shutdown.BeforeExit(api.Shutdown)
@@ -330,15 +335,16 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 
-	httpRouter.GET("/github/app", httphelper.WrapHandler(api.GetGitHubApp))
-	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.UpdateGitHubApp))
-	httpRouter.GET("/github/installations", httphelper.WrapHandler(api.ListGitHubInstallations))
-	httpRouter.GET("/github/installations/:installation_id/repos", httphelper.WrapHandler(api.ListGitHubInstallationRepos))
-	httpRouter.POST("/github/webhook", httphelper.WrapHandler(api.GitHubWebhook))
-	httpRouter.GET("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.GetAppGitHub)))
-	httpRouter.PUT("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.PutAppGitHub)))
-	httpRouter.DELETE("/apps/:apps_id/github", httphelper.WrapHandler(api.appLookup(api.DeleteAppGitHub)))
-	httpRouter.POST("/apps/:apps_id/github/deploy", httphelper.WrapHandler(api.appLookup(api.DeployAppGitHub)))
+	httpRouter.GET("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GetGitHubApp)))
+	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.UpdateGitHubApp)))
+	httpRouter.GET("/github/installations", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallations)))
+	httpRouter.GET("/github/installations/:installation_id/repos", httphelper.WrapHandler(api.maybeGitHubPlugin(api.ListGitHubInstallationRepos)))
+	httpRouter.POST("/github/webhook", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GitHubWebhook)))
+	httpRouter.GET("/github/export", httphelper.WrapHandler(api.ExportGitHub))
+	httpRouter.GET("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.GetAppGitHub))))
+	httpRouter.PUT("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.PutAppGitHub))))
+	httpRouter.DELETE("/apps/:apps_id/github", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeleteAppGitHub))))
+	httpRouter.POST("/apps/:apps_id/github/deploy", httphelper.WrapHandler(api.maybeGitHubPlugin(api.appLookup(api.DeployAppGitHub))))
 
 	// Host and stats endpoints
 	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
@@ -431,6 +437,7 @@ type controllerAPI struct {
 	githubHTTP             *http.Client
 	taffy                  taffyLauncher
 	githubDomain           string
+	githubPluginURL        string
 	clusterClient          utils.ClusterClient
 	logaggc                logClient
 	que                    *que.Client

@@ -112,6 +112,17 @@ func TestCLIMatchActionLongestWins(t *testing.T) {
 	}
 }
 
+func TestCLIMatchActionFallsBackToShow(t *testing.T) {
+	cli := &CLI{Actions: []CLIAction{
+		{Name: "connect"},
+		{Name: "show"},
+	}}
+	got := cli.MatchAction(map[string]bool{})
+	if got == nil || got.Name != "show" {
+		t.Fatalf("empty bools should use show, got %+v", got)
+	}
+}
+
 func TestInterpolateRejectsInvalidIdentAndInterpolateAll(t *testing.T) {
 	in := Interp{App: map[string]string{"OK": "1", "REDIS_PASSWORD": "p${resource}w"}}
 	for _, bad := range []string{"${app.FOO-BAR}", "${app.9X}", "${app.}", "${app.OK;rm}"} {

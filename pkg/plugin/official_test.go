@@ -22,7 +22,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			got[a] = p
 		}
 	}
-	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler"} {
+	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "github"} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("official catalog missing %s", name)
 		}
@@ -125,7 +125,7 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "letsencrypt", "flynn-plugin-letsencrypt"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}

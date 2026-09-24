@@ -225,9 +225,10 @@ BuildKit produces an image that *tarreceive* imports.
 
 Taffy clones a Git repository (including GitHub App HTTPS clones) and pipes an
 archive of the revision into *flynn-receiver*, the same builder gitreceive uses
-for `git push`. Dashboard and `flynn github:deploy` start a taffy job. GitHub
-App webhooks on the controller (and proxied at gitreceive `/github/webhook`)
-can start that job automatically.
+for `git push`. After `flynn-host plugin:install github`, the dashboard Deploy
+tab and `flynn github:deploy` start a taffy job. GitHub App webhooks on the
+controller (and proxied at gitreceive `/github/webhook`) can start that job
+automatically.
 
 ### blobstore
 

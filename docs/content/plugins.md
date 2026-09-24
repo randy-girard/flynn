@@ -55,6 +55,7 @@ Development layout (relative to the Flynn repo):
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
 | `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
+| `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
@@ -78,6 +79,7 @@ sudo flynn-host plugin:install ../flynn-plugin-discovery
 sudo flynn-host plugin:install ../flynn-plugin-www
 sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
+sudo flynn-host plugin:install ../flynn-plugin-github
 ```
 
 Install reads `flynn-plugin.json` only. Catalog plugins log that their jobs
@@ -261,8 +263,8 @@ compiled-in list.
 ```
 
 - `base_url` is a discoverd HTTP URL. The dashboard reverse-proxies it at
-  stable paths such as `/apps/:id/resources/:plugin/...` and does not give the
-  browser `CONTROLLER_KEY`.
+  `/api/plugin-ui/:plugin/...` (Resources, Deploy, and Cluster mounts) and does
+  not give the browser `CONTROLLER_KEY`.
 - `surfaces` is one or more of `app.resources` (Resources tab card),
   `app.deploy` (Deploy tab mount), `cluster.settings`, or `cluster.nav`.
   GitHub-style integrations use deploy/settings, not a Resources card.

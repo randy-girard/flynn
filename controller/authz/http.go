@@ -243,6 +243,9 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		if len(parts) >= 2 && parts[1] == "webhook" {
 			return rkAnyAuth, "", ""
 		}
+		if len(parts) >= 2 && parts[1] == "export" {
+			return rkCluster, "", ""
+		}
 		if m == http.MethodGet || m == http.MethodHead {
 			if len(parts) >= 2 && parts[1] == "installations" {
 				return rkGitHubCatalog, "", ""

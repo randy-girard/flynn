@@ -22,6 +22,7 @@ type githubStore interface {
 	UpdateConfig(*ct.GitHubAppConfig) error
 	GetConnection(appID string) (*ct.GitHubRepoConnection, error)
 	ListByRepo(owner, repo string) ([]*ct.GitHubRepoConnection, error)
+	ListAll() ([]*ct.GitHubRepoConnection, error)
 	PutConnection(*ct.GitHubRepoConnection) error
 	UpdateDeployState(*ct.GitHubRepoConnection) error
 	DeleteConnection(appID string) error

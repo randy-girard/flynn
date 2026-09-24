@@ -75,6 +75,17 @@ func (m *memGitHubStore) ListByRepo(owner, repo string) ([]*ct.GitHubRepoConnect
 	return out, nil
 }
 
+func (m *memGitHubStore) ListAll() ([]*ct.GitHubRepoConnection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]*ct.GitHubRepoConnection, 0, len(m.conns))
+	for _, c := range m.conns {
+		cp := *c
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
 func (m *memGitHubStore) PutConnection(c *ct.GitHubRepoConnection) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

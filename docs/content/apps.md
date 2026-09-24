@@ -103,11 +103,15 @@ git push staging staging:master
 
 ### GitHub deploys
 
-A cluster administrator creates one GitHub App for the cluster and saves its
-credentials. After that, an app owner can connect a repository and deploy a
-branch from the dashboard or the CLI. Automatic deploys use the same
-**taffy** + **gitreceive** / **flynn-receiver** path as a git clone, not a
-second build stack.
+Install the GitHub plugin, then a cluster administrator creates one GitHub App
+for the cluster and saves its credentials. After that, an app owner can connect
+a repository and deploy a branch from the dashboard or the CLI. Automatic
+deploys use the same **taffy** + **gitreceive** / **flynn-receiver** path as a
+git clone, not a second build stack.
+
+```text
+sudo flynn-host plugin:install github
+```
 
 Print the exact GitHub App permissions, events, and webhook URLs:
 

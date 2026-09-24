@@ -69,6 +69,12 @@
       "kind": "scheduler",
       "repo": "flynn-plugin-scheduler",
       "description": "Cron and interval jobs for apps. Manage with flynn scheduler."
+    },
+    {
+      "name": "github",
+      "kind": "app",
+      "repo": "flynn-plugin-github",
+      "description": "GitHub App deploys. Connect a repo with flynn github:connect after flynn-host plugin:install github."
     }
   ],
   "private_plugins": [

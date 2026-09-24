@@ -97,6 +97,19 @@ func (r *GitHubAppRepo) ListByRepo(owner, repo string) ([]*ct.GitHubRepoConnecti
 		return nil, err
 	}
 	defer rows.Close()
+	return scanGitHubRepos(rows)
+}
+
+func (r *GitHubAppRepo) ListAll() ([]*ct.GitHubRepoConnection, error) {
+	rows, err := r.db.Query("github_repo_list_all")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanGitHubRepos(rows)
+}
+
+func scanGitHubRepos(rows *pgx.Rows) ([]*ct.GitHubRepoConnection, error) {
 	var out []*ct.GitHubRepoConnection
 	for rows.Next() {
 		c, err := scanGitHubRepo(rows)

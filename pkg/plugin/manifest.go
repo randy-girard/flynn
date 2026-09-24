@@ -201,7 +201,11 @@ func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
 			bestN = len(parts)
 		}
 	}
-	return best
+	if best != nil {
+		return best
+	}
+	// `flynn <plugin>` with no subcommand: use a show action when present.
+	return c.Action("show")
 }
 
 // MatchFlynnDelegate reports a compiled-in flynn command the user invoked as

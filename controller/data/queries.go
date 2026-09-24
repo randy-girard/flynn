@@ -139,6 +139,7 @@ var preparedStatements = map[string]string{
 	"github_app_config_update":                 githubAppConfigUpdateQuery,
 	"github_repo_select_by_app":                githubRepoSelectByAppQuery,
 	"github_repo_list_by_repo":                 githubRepoListByRepoQuery,
+	"github_repo_list_all":                     githubRepoListAllQuery,
 	"github_repo_insert":                       githubRepoInsertQuery,
 	"github_repo_update":                       githubRepoUpdateQuery,
 	"github_repo_delete":                       githubRepoDeleteQuery,
@@ -848,6 +849,9 @@ FROM github_repo_connections WHERE app_id = $1 AND deleted_at IS NULL`
 	githubRepoListByRepoQuery = `
 SELECT connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks, pending_sha, last_deploy_sha, last_deploy_at, created_at, updated_at
 FROM github_repo_connections WHERE lower(owner) = lower($1) AND lower(repo) = lower($2) AND deleted_at IS NULL`
+	githubRepoListAllQuery = `
+SELECT connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks, pending_sha, last_deploy_sha, last_deploy_at, created_at, updated_at
+FROM github_repo_connections WHERE deleted_at IS NULL ORDER BY created_at`
 	githubRepoInsertQuery = `
 INSERT INTO github_repo_connections (connection_id, app_id, installation_id, account_login, owner, repo, branch, auto_deploy, wait_for_checks)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

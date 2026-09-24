@@ -22,7 +22,6 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"log-sink", "log-sink:add", "log-sink:remove",
 		"apps:create", "apps:destroy",
 		"docker:push", "docker:set-push-url",
-		"github", "github:connect", "github:disconnect", "github:deploy", "github:set",
 		"volume:show", "volume:decommission",
 		"route:add", "resource:add", "resource:expose", "resource:unexpose",
 		"letsencrypt", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
