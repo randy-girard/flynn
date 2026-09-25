@@ -236,6 +236,32 @@ func TestExecutePluginCLIFlynnDelegate(t *testing.T) {
 	}
 }
 
+func TestPluginJobConfigClusterUsesPluginApp(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = ""
+
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"enterprise": {ID: "ent-rel", Env: map[string]string{"ENTERPRISE_URL": "http://enterprise.discoverd"}},
+	}}
+	spec := &plugin.CLI{
+		Command: "enterprise",
+		App:     "enterprise",
+		Actions: []plugin.CLIAction{{
+			Name:    "show",
+			Args:    []string{"/bin/enterprise-cli"},
+			Cluster: true,
+		}},
+	}
+	cfg, err := pluginJobConfig(client, spec, spec.Action("show"), &docopt.Args{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "enterprise" || cfg.Release != "ent-rel" {
+		t.Fatalf("%+v", cfg)
+	}
+}
+
 func TestPluginJobConfigErrors(t *testing.T) {
 	old := flagApp
 	t.Cleanup(func() { flagApp = old })

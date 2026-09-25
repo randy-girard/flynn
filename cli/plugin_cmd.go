@@ -142,7 +142,10 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 }
 
 func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
-	appName := mustApp()
+	appName := strings.TrimSpace(spec.App)
+	if action == nil || !action.Cluster || appName == "" {
+		appName = mustApp()
+	}
 	appRelease, err := client.GetAppRelease(appName)
 	if err != nil {
 		return nil, fmt.Errorf("error getting app release: %s", err)

@@ -173,6 +173,9 @@ type CLIAction struct {
 	// Flynn, if set, runs that built-in flynn command against the plugin
 	// app instead of starting a cluster job. Mutually exclusive with Args.
 	Flynn string `json:"flynn,omitempty"`
+	// Cluster runs the catalog job against the plugin system app instead of
+	// requiring flynn -a on the user's current app (enterprise, pipeline).
+	Cluster bool `json:"cluster,omitempty"`
 }
 
 // MatchAction returns the action whose Name tokens are all true in docopt

@@ -34,6 +34,14 @@ resolves. Flynn also has **private** first-party plugins (for example
 A local checkout or `/etc/flynn/plugins.json` override can still point at a
 private source if the operator already has one.
 
+The **enterprise** plugin (`../flynn-plugin-enterprise`) is that private
+plugin. After a path install it advertises `http://enterprise.discoverd/`,
+which unlocks dashboard granular RBAC, and serves **Cluster → Enterprise**
+pages (roles, OIDC SSO, audit, policy, license). Catalog CLI:
+`flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`,
+`enterprise:audit`. Uninstalling it returns the cluster to the four built-in
+app roles.
+
 Plugin HTTP APIs and CLIs should trust the Flynn cluster CA (or Let's Encrypt
 on system routes) the same way `flynn` does. Do not document `--insecure` or
 TLS skip-verify as the normal way to talk to plugin or controller endpoints.
@@ -56,6 +64,7 @@ Development layout (relative to the Flynn repo):
 | `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
+| `enterprise` (private) | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**. Not installable as `plugin:install enterprise`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
@@ -80,6 +89,7 @@ sudo flynn-host plugin:install ../flynn-plugin-www
 sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
 sudo flynn-host plugin:install ../flynn-plugin-github
+sudo flynn-host plugin:install ../flynn-plugin-enterprise
 ```
 
 Install reads `flynn-plugin.json` only. Catalog plugins log that their jobs
@@ -210,6 +220,8 @@ Those commands appear only after `flynn-host plugin:install` stamps
   A `kind: app` plugin only appears on `flynn help` when `"user": true`.
 - `passthrough` — append the user argv after the plugin command (nested CLIs)
 - `release_env` — copy the appliance release env into the job (TLS material)
+- `cluster` — run the job against the plugin system app (no `flynn -a` on the
+  caller's current app). Used by enterprise and pipeline.
 
 `flynn` and `args` are mutually exclusive on one action. Web system plugins
 should not ship a user `flynn` command; operators manage HTTP/TCP routes with

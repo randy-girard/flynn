@@ -149,8 +149,14 @@ Those four roles are **fixed** in OSS Flynn. Operators cannot create custom
 roles or change built-in permissions. Granular function/action grants
 (`app:logs:read`, `app:scale:write`, …) remain the internal expansion of the
 aliases and are still enforced on tokens; composing new bundles is an
-enterprise-plugin feature. `cluster:admin` (the controller key, or a dashboard
-cluster administrator) is not an app role; it bypasses app grants.
+enterprise-plugin feature. Install `flynn-plugin-enterprise` from a checkout
+(`sudo flynn-host plugin:install ../flynn-plugin-enterprise`); the public
+catalog name `enterprise` is private and will not resolve. After install,
+`flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`, and
+`enterprise:audit` manage custom roles, OIDC, and the audit log. The dashboard
+**Cluster → Enterprise** pages host that UI. `cluster:admin` (the controller
+key, or a dashboard cluster administrator) is not an app role; it bypasses app
+grants.
 
 ### Logs
 
