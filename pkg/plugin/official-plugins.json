@@ -88,5 +88,11 @@
       "repo": "flynn-plugin-enterprise",
       "description": "SSO, audit, and granular RBAC. Unlock custom roles with flynn-host plugin:install enterprise."
     }
+  ],
+  "private_plugins": [
+    {
+      "name": "billing",
+      "description": "Hosted Stripe billing, plans, dyno metering, and feature paywalls. Not installable with plugin:install billing; company-operated clusters only."
+    }
   ]
 }

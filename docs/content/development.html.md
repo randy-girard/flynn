@@ -48,8 +48,11 @@ ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
 Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
 `../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`,
-`../flynn-plugin-otel`, `../flynn-plugin-scheduler`, `../flynn-plugin-github`, …). Install them on a cluster host with
-`flynn-host plugin:install` after bootstrap. See [Plugins](plugins.md).
+`../flynn-plugin-otel`, `../flynn-plugin-scheduler`, `../flynn-plugin-github`,
+`../flynn-plugin-enterprise`, `../flynn-plugin-billing`, …). Install catalog
+plugins on a cluster host with `flynn-host plugin:install` after bootstrap.
+`billing` is private (hosted only): install from the sibling path, not
+`plugin:install billing`. See [Plugins](plugins.md).
 
 Go builds use vendored modules (`GOFLAGS=-mod=vendor`). Match `gofmt -s`.
 GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run

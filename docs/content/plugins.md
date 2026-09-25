@@ -37,7 +37,33 @@ advertises `http://enterprise.discoverd/`, which unlocks dashboard granular
 RBAC, and serves **Cluster → Enterprise** pages (roles, OIDC SSO, audit,
 policy, license). Catalog CLI: `flynn enterprise`, `enterprise:role-add`,
 `enterprise:sso-set`, `enterprise:audit`. Uninstalling it returns the cluster
-to the four built-in app roles.
+to the four built-in app roles. On Flynn **hosted**, a paid billing plan that
+includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
+(enterprise probes `http://billing.discoverd/entitlements`).
+
+## Private plugins
+
+`private_plugins` in `official-plugins.json` are first-party plugins that exist
+but are **not** installable with `flynn-host plugin:install <name>`.
+`plugin:list --known` prints them in a footer. Install from a path, private git
+URL, or `/etc/flynn/plugins.json` override. That list is for Flynn’s hosted
+control plane, not self-hosted OSS.
+
+| Name | Path from `flynn/` | Notes |
+|------|--------------------|--------|
+| `billing` | `../flynn-plugin-billing` | Hosted Stripe billing, plans, dyno-hour metering, feature paywalls. **Cluster → Billing**. |
+
+```text
+sudo flynn-host plugin:install ../flynn-plugin-billing
+```
+
+Add `randy-girard/flynn-plugin-billing` to the Flynn repo **variable**
+`PLUGIN_RELEASE_REPOS` so Flynn **Build and Release** fan-out queues this
+plugin’s Build and Release workflow. The repo is private.
+
+Self-hosted clusters without billing are not paywalled. GitHub and pipeline
+plugin UIs are gated only when billing is installed, Stripe is configured, and
+the subscribed plan does not include those feature ids.
 
 Plugin HTTP APIs and CLIs should trust the Flynn cluster CA (or Let's Encrypt
 on system routes) the same way `flynn` does. Do not document `--insecure` or
@@ -63,6 +89,7 @@ Development layout (relative to the Flynn repo):
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
 | `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
 | `enterprise` | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**; `flynn-host plugin:install enterprise`) |
+| `billing` (private) | `../flynn-plugin-billing` | (none; `kind: app`; hosted only; **Cluster → Billing**; not in `plugin:install billing`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).

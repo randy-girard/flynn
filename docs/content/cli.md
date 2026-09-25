@@ -126,7 +126,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` / `cluster:ca` | Registered clusters in `~/.flynnrc`. `cluster:add` stores a TLS pin and the Flynn CA (`~/.flynn/ca-certs/<name>.pem`); git uses `http.<git-url>.sslCAInfo` so `git push` does not need `--insecure`. `cluster:ca` prints that PEM. After Let's Encrypt on system routes, `cluster:refresh --clear` uses public Web PKI. |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
-| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`; `plugins` is an alias) |
+| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`, plus a footer for private plugins such as `billing`; `plugins` is an alias) |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand) |
 | `update` | Replace this CLI from GitHub Releases |
@@ -155,9 +155,15 @@ enterprise-plugin feature. Install it from the catalog
 (`sudo flynn-host plugin:install ../flynn-plugin-enterprise`). After install,
 `flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`, and
 `enterprise:audit` manage custom roles, OIDC, and the audit log. The dashboard
-**Cluster → Enterprise** pages host that UI. `cluster:admin` (the controller
+**Cluster → Enterprise** pages host that UI. On Flynn hosted, a paid **billing**
+plan that includes `rbac`/`sso` can unlock those features without pasting a
+`flynn-ent` key. `cluster:admin` (the controller
 key, or a dashboard cluster administrator) is not an app role; it bypasses app
 grants.
+
+Hosted billing (`flynn billing`, **Cluster → Billing**) is a private plugin.
+It is not in `plugin:install billing`; install `../flynn-plugin-billing` on
+company-operated clusters only.
 
 ### Logs
 

@@ -130,8 +130,8 @@ func TestWriteKnownPlugins(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}
 	}
-	if strings.Contains(out, "Private first-party plugins") {
-		t.Fatal("empty private catalog must not print a footer")
+	if !strings.Contains(out, "Private first-party plugins") || !strings.Contains(out, "billing") {
+		t.Fatalf("private catalog must list billing:\n%s", out)
 	}
 }
 
@@ -165,6 +165,36 @@ func TestEnterpriseIsCatalogInstallable(t *testing.T) {
 	}
 	if over.GitHub == nil || over.GitHub.Owner != "acme" || over.GitHub.Repo != "flynn-plugin-enterprise" {
 		t.Fatalf("plugins.json override must still work: %+v", over.GitHub)
+	}
+}
+
+func TestBillingIsPrivateNotInstallable(t *testing.T) {
+	t.Setenv(EnvGitHubOrg, "")
+	t.Setenv(EnvFlynnRepo, "")
+	t.Setenv(EnvPluginRepoRoot, t.TempDir())
+	t.Setenv(EnvInstalledFile, t.TempDir()+"/none.json")
+
+	if !IsPrivatePluginName("billing") {
+		t.Fatal("billing must be a private first-party plugin")
+	}
+	_, err := Resolve(InstallOptions{Source: "billing"})
+	if err == nil {
+		t.Fatal("plugin:install billing must not resolve")
+	}
+	if _, ok := err.(*PrivateCatalogError); !ok {
+		t.Fatalf("want PrivateCatalogError, got %T %v", err, err)
+	}
+
+	path := t.TempDir() + "/plugins.json"
+	writeJSON(t, path, map[string]interface{}{
+		"billing": map[string]string{"url": "https://github.com/randy-girard/flynn-plugin-billing.git"},
+	})
+	over, err := Resolve(InstallOptions{Source: "billing", PluginsFile: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if over.GitHub == nil || over.GitHub.Repo != "flynn-plugin-billing" {
+		t.Fatalf("plugins.json must still install billing: %+v", over.GitHub)
 	}
 }
 
