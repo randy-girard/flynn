@@ -298,7 +298,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 	}
 
 	if m.Kind == KindResourceProvider {
-		if err := ensureProvider(in.Client, m.Provider.Name, m.Provider.URL); err != nil {
+		if err := ensureProvider(in.Client, m.Provider.Name, m.Provider.URL, m.Provider.TenantSafe); err != nil {
 			return err
 		}
 	}
@@ -1151,7 +1151,7 @@ func (in *Installer) http() *http.Client {
 	return http.DefaultClient
 }
 
-func ensureProvider(client providerClient, name, url string) error {
+func ensureProvider(client providerClient, name, url string, tenantSafe bool) error {
 	providers, err := client.ProviderList()
 	if err != nil {
 		return fmt.Errorf("list providers: %w", err)
@@ -1161,7 +1161,7 @@ func ensureProvider(client providerClient, name, url string) error {
 			return nil
 		}
 	}
-	if err := client.CreateProvider(&ct.Provider{Name: name, URL: url}); err != nil {
+	if err := client.CreateProvider(&ct.Provider{Name: name, URL: url, TenantSafe: tenantSafe}); err != nil {
 		return fmt.Errorf("create provider %s: %w", name, err)
 	}
 	return nil

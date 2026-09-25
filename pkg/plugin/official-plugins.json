@@ -94,5 +94,12 @@
       "name": "billing",
       "description": "Hosted Stripe billing, plans, dyno metering, and feature paywalls. Not installable with plugin:install billing; company-operated clusters only."
     }
+  ],
+  "plugin_groups": [
+    {
+      "name": "hosted",
+      "plugins": ["dashboard", "enterprise", "billing"],
+      "tenancy_mode": "hosted"
+    }
   ]
 }

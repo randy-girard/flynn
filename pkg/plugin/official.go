@@ -24,10 +24,21 @@ type KnownPlugin struct {
 	Description string   `json:"description"`
 }
 
+// PluginGroup is a named set of plugins installed together.
+// plugin:install <name> installs each member. TenancyMode, when set, is the
+// cluster tenancy mode applied after every member installs (hosted does not
+// enable public signup).
+type PluginGroup struct {
+	Name        string   `json:"name"`
+	Plugins     []string `json:"plugins"`
+	TenancyMode string   `json:"tenancy_mode,omitempty"`
+}
+
 type officialFile struct {
 	GitHubOrg      string          `json:"github_org"`
 	Plugins        []KnownPlugin   `json:"plugins"`
 	PrivatePlugins []PrivatePlugin `json:"private_plugins,omitempty"`
+	PluginGroups   []PluginGroup   `json:"plugin_groups,omitempty"`
 }
 
 // PrivatePlugin is a first-party plugin that exists but is not in the public
@@ -112,7 +123,65 @@ func parseOfficial(data []byte) (officialFile, error) {
 		}
 		seen[p.Name] = p.Name
 	}
+	groupNames := map[string]struct{}{}
+	for i := range f.PluginGroups {
+		g := &f.PluginGroups[i]
+		g.Name = strings.TrimSpace(g.Name)
+		g.TenancyMode = strings.TrimSpace(g.TenancyMode)
+		if g.Name == "" {
+			return f, fmt.Errorf("plugin_groups[%d]: name is required", i)
+		}
+		if _, ok := groupNames[g.Name]; ok {
+			return f, fmt.Errorf("duplicate plugin group %q", g.Name)
+		}
+		groupNames[g.Name] = struct{}{}
+		if _, ok := seen[g.Name]; ok {
+			return f, fmt.Errorf("plugin group %q collides with a plugin name", g.Name)
+		}
+		if len(g.Plugins) == 0 {
+			return f, fmt.Errorf("plugin group %s: plugins is required", g.Name)
+		}
+		if g.TenancyMode != "" && g.TenancyMode != "self_hosted" && g.TenancyMode != "hosted" {
+			return f, fmt.Errorf("plugin group %s: tenancy_mode must be self_hosted or hosted", g.Name)
+		}
+		var members []string
+		memberSeen := map[string]struct{}{}
+		for _, name := range g.Plugins {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				return f, fmt.Errorf("plugin group %s: empty plugin name", g.Name)
+			}
+			if _, ok := seen[name]; !ok {
+				return f, fmt.Errorf("plugin group %s: unknown plugin %q", g.Name, name)
+			}
+			if _, ok := memberSeen[name]; ok {
+				return f, fmt.Errorf("plugin group %s: duplicate plugin %q", g.Name, name)
+			}
+			memberSeen[name] = struct{}{}
+			members = append(members, name)
+		}
+		g.Plugins = members
+	}
 	return f, nil
+}
+
+// PluginGroups is the embedded install-group catalog.
+func PluginGroups() []PluginGroup {
+	groups := mustOfficial().PluginGroups
+	out := make([]PluginGroup, len(groups))
+	copy(out, groups)
+	return out
+}
+
+// LookupGroup returns a plugin group by name (plugin:install hosted).
+func LookupGroup(name string) (PluginGroup, bool) {
+	name = strings.TrimSpace(name)
+	for _, g := range mustOfficial().PluginGroups {
+		if g.Name == name {
+			return g, true
+		}
+	}
+	return PluginGroup{}, false
 }
 
 // Names is the install aliases this catalog entry answers to.

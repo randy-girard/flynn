@@ -90,6 +90,7 @@ Development layout (relative to the Flynn repo):
 | `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
 | `enterprise` | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**; `flynn-host plugin:install enterprise`) |
 | `billing` (private) | `../flynn-plugin-billing` | (none; `kind: app`; hosted only; **Cluster → Billing**; not in `plugin:install billing`) |
+| `hosted` (group) | dashboard + enterprise + billing | Installs those three plugins and sets cluster tenancy mode to `hosted`. Public signup stays off. `billing` resolves only from `plugins.json` plus `plugin:credentials`. |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
@@ -117,7 +118,23 @@ sudo flynn-host plugin:install ../flynn-plugin-github
 sudo flynn-host plugin:install ../flynn-plugin-pipeline
 sudo flynn-host plugin:install enterprise
 sudo flynn-host plugin:install ../flynn-plugin-enterprise
+sudo flynn-host plugin:install hosted
 ```
+
+`plugin:install hosted` is a plugin group. It installs `dashboard`, `enterprise`,
+and `billing`, then sets the cluster tenancy mode to `hosted`. It does not
+turn on public signup. `billing` is private: the group install fails, and
+names `billing`, if `plugins.json` does not point at that repo. Configure
+`plugin:credentials` the same way as any other private GitHub clone. The
+install does not skip a member it cannot resolve.
+
+Resource providers may set **`provider.tenant_safe`** (`tenant_safe` in
+`flynn-plugin.json`). The controller stores it on the provider. In `hosted`
+tenancy mode, a non-operator can provision only providers with `tenant_safe`
+true. `self_hosted` ignores the flag. Leave it false until the provider has
+per-resource credentials and limits (Postgres, MariaDB, MongoDB, and Redis
+are the usual candidates; Kafka and ClickHouse stay false until they do).
+
 
 Install reads `flynn-plugin.json` only. Catalog plugins log that their jobs
 receive `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, and access-token keys

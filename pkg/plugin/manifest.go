@@ -107,6 +107,11 @@ type DashboardRoute struct {
 type Provider struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
+	// TenantSafe is true when this provider isolates credentials, network
+	// reach, and resource limits well enough for hosted tenants. In hosted
+	// tenancy mode the controller rejects provision from non-operators unless
+	// this is true. Self-hosted clusters ignore it.
+	TenantSafe bool `json:"tenant_safe,omitempty"`
 }
 
 type AppSpec struct {

@@ -271,7 +271,7 @@ func (s *providerStub) CreateProvider(p *ct.Provider) error {
 
 func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
 	existing := &providerStub{list: []*ct.Provider{{Name: "redis", URL: "http://redis-api.discoverd"}}}
-	if err := ensureProvider(existing, "redis", "http://other"); err != nil {
+	if err := ensureProvider(existing, "redis", "http://other", false); err != nil {
 		t.Fatal(err)
 	}
 	if existing.created != nil {
@@ -279,17 +279,17 @@ func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
 	}
 
 	created := &providerStub{}
-	if err := ensureProvider(created, "redis", "http://redis-api.discoverd/clusters"); err != nil {
+	if err := ensureProvider(created, "redis", "http://redis-api.discoverd/clusters", true); err != nil {
 		t.Fatal(err)
 	}
-	if created.created == nil || created.created.Name != "redis" || created.created.URL != "http://redis-api.discoverd/clusters" {
+	if created.created == nil || created.created.Name != "redis" || created.created.URL != "http://redis-api.discoverd/clusters" || !created.created.TenantSafe {
 		t.Fatalf("%+v", created.created)
 	}
 
-	if err := ensureProvider(&providerStub{listErr: fmt.Errorf("down")}, "redis", "http://x"); err == nil {
+	if err := ensureProvider(&providerStub{listErr: fmt.Errorf("down")}, "redis", "http://x", false); err == nil {
 		t.Fatal("list error")
 	}
-	if err := ensureProvider(&providerStub{createErr: fmt.Errorf("denied")}, "redis", "http://x"); err == nil {
+	if err := ensureProvider(&providerStub{createErr: fmt.Errorf("denied")}, "redis", "http://x", false); err == nil {
 		t.Fatal("create error")
 	}
 }
