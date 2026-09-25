@@ -64,8 +64,10 @@ sudo flynn-host cli-add-command
 Then:
 
 ```text
-flynn cluster:add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspin>] <name> <domain> <key>
+flynn cluster:add [-f] [-d] [--git-url <url>] [--dashboard-url <url>] [-p <tlspin>] [--token <token>] <name> <domain> [<key>]
 ```
+
+`--token` stores a personal access token in place of the cluster key. Context (`flynn context:use <handle>`) is a remembered default owner for `apps:create` and collaborator commands. It is not an access check.
 
 The TLS pin is stored in `~/.flynnrc` so the CLI can reject man-in-the-middle certificates. `cluster:add` also writes the Flynn CA to `~/.flynn/ca-certs/<name>.pem` and points git at it (`sslCAInfo`), so `git push` and the CLI do not need `--insecure`. Print the CA with `flynn cluster:ca`. After system-route Let's Encrypt, `flynn cluster:refresh --clear` uses public Web PKI. `flynn login` authenticates through the dashboard (OAuth) instead of a controller key.
 
@@ -102,6 +104,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `limit` / `limit:profiles` / `limit:runtime` / `limit:set` | Named runtimes; raw `limit:set` for numeric CPU/memory (when allowed), `max_fd`, `temp_disk`. |
 | `meta` / `meta:set` / `meta:unset` | App metadata |
 | `apps:export` / `apps:import` | Backup and restore an app (`export` / `import` are aliases) |
+| `apps:create --owner <handle>` / `apps:transfer <app> <handle>` | Set the owning account on create, or transfer an app. The cluster key with no owner leaves the app unowned. |
 
 ### Routing and resources
 
@@ -127,6 +130,12 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` / `cluster:ca` | Registered clusters in `~/.flynnrc`. `cluster:add` stores a TLS pin and the Flynn CA (`~/.flynn/ca-certs/<name>.pem`); git uses `http.<git-url>.sslCAInfo` so `git push` does not need `--insecure`. `cluster:ca` prints that PEM. After Let's Encrypt on system routes, `cluster:refresh --clear` uses public Web PKI. |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
 | `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`, plus a footer for private plugins such as `billing`; `plugins` is an alias) |
+| `whoami` | Print the authenticated user, personal account, and whether the credential is a cluster admin |
+| `token` / `token:create` / `token:list` / `token:revoke` | Personal access tokens. Create prints the secret once |
+| `context` / `context:list` / `context:use <handle>` | Remember a default owner handle per cluster in `~/.flynnrc`. Not an access check |
+| `collaborator` / `collaborator:list` / `collaborator:add` / `collaborator:remove` | Account collaborators, or app collaborators when `-a` is set. Roles: view, deploy, manage, admin |
+| `user` / `user:list` / `user:info` / `user:create` / `user:disable` / `user:enable` / `user:admin` / `user:token` | Operator user management (cluster key or cluster admin). `user:token` prints a token once |
+| `account:suspend` / `account:unsuspend` / `account:quota:set` | Suspend an account or set explicit quotas. Zero and negative limits are rejected |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand) |
 | `update` | Replace this CLI from GitHub Releases |
@@ -215,7 +224,9 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
 | `disk:reclaim` | Free unused host disk: volume GC, leftover image dirs, then ZFS TRIM so a file-backed pool can punch holes (`--host` for one node) |
-| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists the catalog, repos, and descriptions, including `enterprise`). `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed plugin (catalog, third-party GitHub source, or `flynn-plugin-<name>`) to the max compatible tag. Layers already on the host (`/var/lib/flynn/layer-cache`) skip GitHub download; Flynn OS layers skip blobstore re-upload when Flynn already has a LayerURL. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
+| `tenancy:mode` / `tenancy:network-policy` | Show or set `self_hosted` or `hosted` with the cluster key. Network policy prints dry-run nftables and does not change job namespaces. `self_hosted` prints nothing. Hosted mode does not enable signup |
+| `user:bootstrap-admin <email>` | Create or reset a cluster admin using the local cluster key. A generated password is printed once |
+| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists the catalog, repos, and descriptions, including `enterprise`). `plugin:install hosted` installs the hosted group (dashboard, enterprise, billing) and sets tenancy mode to `hosted` without enabling signup. `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed plugin (catalog, third-party GitHub source, or `flynn-plugin-<name>`) to the max compatible tag. Layers already on the host (`/var/lib/flynn/layer-cache`) skip GitHub download; Flynn OS layers skip blobstore re-upload when Flynn already has a LayerURL. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
 | `plugin:credentials:set` / `plugin:credentials:show` / `plugin:credentials:unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` / `log-sink:list` / `log-sink:remove` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |

@@ -25,13 +25,6 @@ var topAliases = map[string]string{
 
 // subAliases rewrites flynn <noun> <verb> to flynn <noun>:<verb>.
 var subAliases = map[string]map[string]string{
-	"apps": {
-		"create":  "apps:create",
-		"destroy": "apps:destroy",
-		"info":    "apps:info",
-		"export":  "apps:export",
-		"import":  "apps:import",
-	},
 	"alert": {
 		"add":     "alert:add",
 		"enable":  "alert:enable",
@@ -104,6 +97,44 @@ var subAliases = map[string]map[string]string{
 		"backup":         "cluster:backup",
 		"log-sink":       "cluster:log-sink",
 		"migrate-domain": "cluster:migrate-domain",
+	},
+	"token": {
+		"create": "token:create",
+		"list":   "token:list",
+		"revoke": "token:revoke",
+	},
+	"context": {
+		"list": "context:list",
+		"use":  "context:use",
+	},
+	"collaborator": {
+		"list":   "collaborator:list",
+		"add":    "collaborator:add",
+		"remove": "collaborator:remove",
+	},
+	"user": {
+		"list":    "user:list",
+		"info":    "user:info",
+		"create":  "user:create",
+		"disable": "user:disable",
+		"enable":  "user:enable",
+		"admin":   "user:admin",
+		"token":   "user:token",
+	},
+	"account": {
+		"suspend":   "account:suspend",
+		"unsuspend": "account:unsuspend",
+	},
+	"account:quota": {
+		"set": "account:quota:set",
+	},
+	"apps": {
+		"create":   "apps:create",
+		"destroy":  "apps:destroy",
+		"info":     "apps:info",
+		"export":   "apps:export",
+		"import":   "apps:import",
+		"transfer": "apps:transfer",
 	},
 	"docker": {
 		"push":         "docker:push",

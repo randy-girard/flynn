@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strings"
 
 	"github.com/flynn/go-docopt"
 	controller "github.com/randy-girard/flynn/controller/client"
@@ -12,9 +13,11 @@ import (
 
 func init() {
 	register("apps:create", runCreate, `
-usage: flynn apps:create [-r <remote>] [-y] [<name>]
+usage: flynn apps:create [-r <remote>] [-y] [--owner <owner>] [<name>]
 
-Create an application in Flynn.
+Create an application in Flynn. --owner sets owner_account from a handle
+(user or org). Without it, the current context handle is used when one is
+set. The cluster key with no owner leaves the app unowned (operator/system).
 
 If a name is not provided, a random name will be generated.
 Dashboard paths, Flynn system apps, plugins, planned plugins, and public-site hosts are reserved.
@@ -25,6 +28,7 @@ allows deploying the application via git.
 Options:
 	-r, --remote=<remote>  Name of git remote to create, empty string for none. [default: flynn]
 	-y, --yes              Skip the confirmation prompt if the git remote already exists.
+	--owner=<owner>        Handle that owns the new app (defaults to the current context)
 
 Examples:
 
@@ -89,6 +93,17 @@ func runCreate(args *docopt.Args, client controller.Client) error {
 	app := &ct.App{}
 	app.Name = args.String["<name>"]
 	remote := args.String["--remote"]
+	owner := strings.TrimSpace(args.String["--owner"])
+	if owner == "" && clusterConf != nil {
+		owner = strings.TrimSpace(clusterConf.Context)
+	}
+	if owner != "" {
+		account, err := resolveOwner(client, owner)
+		if err != nil {
+			return err
+		}
+		app.OwnerAccount = account
+	}
 
 	if inGitRepo() && !args.Bool["--yes"] {
 		// Test if remote name exists and prompt user

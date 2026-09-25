@@ -31,6 +31,9 @@ type Cluster struct {
 	GitURL        string `json:"git_url"`
 	ImageURL      string `json:"image_url"`
 	DockerPushURL string `json:"docker_push_url,omitempty" toml:"DockerPushURL,omitempty"`
+	// Context is the default owner handle for create and collaborator commands.
+	// It is not an access check.
+	Context string `json:"context,omitempty" toml:"Context,omitempty"`
 }
 
 func (c *Cluster) Client() (controller.Client, error) {

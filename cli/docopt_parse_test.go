@@ -53,6 +53,10 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
 		{[]string{"cluster:add", "n", "d", "k"}, "<cluster-name>", []string{"n"}},
+		{[]string{"cluster:add", "--token", "flynn_pat_abc", "n", "d"}, "<cluster-name>", []string{"n"}},
+		{[]string{"apps:transfer", "myapp", "ada"}, "<app>", []string{"myapp"}},
+		{[]string{"account:quota:set", "--apps=5", "ada"}, "<handle>", []string{"ada"}},
+		{[]string{"token:create", "laptop"}, "<name>", []string{"laptop"}},
 		{[]string{"log-sink:add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
 		{[]string{"log-sink", "add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
 		{[]string{"logsink:add", "syslog", "syslog://127.0.0.1:514"}, "<url>", []string{"syslog://127.0.0.1:514"}},
@@ -148,4 +152,14 @@ func TestClusterRefreshParsesYes(t *testing.T) {
 func TestClusterCAParses(t *testing.T) {
 	parseCLI(t, []string{"cluster:ca"})
 	parseCLI(t, []string{"cluster", "ca"})
+}
+
+func TestTenancyCommandsParse(t *testing.T) {
+	parseCLI(t, []string{"whoami"})
+	parseCLI(t, []string{"context:use", "ada"})
+	parseCLI(t, []string{"context", "use", "ada"})
+	args := parseCLI(t, []string{"cluster:add", "--token", "flynn_pat_abc", "n", "d"})
+	if args.String["--token"] != "flynn_pat_abc" || args.String["<key>"] != "" {
+		t.Fatalf("token add: %+v", args.String)
+	}
 }

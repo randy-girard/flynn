@@ -34,7 +34,7 @@ usage: flynn cluster
 List clusters configured in ~/.flynnrc.
 `)
 	register("cluster:add", runClusterAdd, `
-usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] <cluster-name> <domain> <key>
+usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] <cluster-name> <domain> [<key>]
 
 Add <cluster-name> to the ~/.flynnrc configuration file.
 
@@ -48,6 +48,7 @@ Options:
 	--docker-push-url=<url>   [DEPRECATED] Docker push URL
 	--docker                  [DEPRECATED] configure Docker to push to the cluster
 	-p, --tls-pin=<tlspin>    SHA256 of the cluster's TLS cert
+	--token=<token>           Personal access token to use instead of the cluster key
 
 Examples:
 
@@ -174,9 +175,16 @@ func runClusterAdd(args *docopt.Args) error {
 	if err := readConfig(); err != nil {
 		return err
 	}
+	key := args.String["<key>"]
+	if tok := strings.TrimSpace(args.String["--token"]); tok != "" {
+		key = tok
+	}
+	if key == "" {
+		return errors.New("cluster:add requires a cluster key or --token")
+	}
 	s := &cfg.Cluster{
 		Name:          args.String["<cluster-name>"],
-		Key:           args.String["<key>"],
+		Key:           key,
 		GitURL:        args.String["--git-url"],
 		ImageURL:      args.String["--image-url"],
 		DockerPushURL: args.String["--docker-push-url"],
