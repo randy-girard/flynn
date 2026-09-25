@@ -57,6 +57,13 @@ var subAliases = map[string]map[string]string{
 	"domain": {
 		"apex": "domain:apex",
 	},
+	"tenancy": {
+		"mode":           "tenancy:mode",
+		"network-policy": "tenancy:network-policy",
+	},
+	"user": {
+		"bootstrap-admin": "user:bootstrap-admin",
+	},
 	"plugin": {
 		"install":    "plugin:install",
 		"update":     "plugin:update",

@@ -5,13 +5,18 @@ import (
 	"os"
 
 	"github.com/flynn/go-docopt"
+	v1 "github.com/randy-girard/flynn/controller/client/v1"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
 const pluginInstallUsage = `
 usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes] <source>
 
-Install a plugin from a local path, alias, or GitHub URL.
+Install a plugin from a local path, alias, GitHub URL, or plugin group.
+The hosted group installs dashboard, enterprise, and billing, then sets
+tenancy mode to hosted. billing must resolve from plugins.json and
+plugin:credentials. Signup stays off.
 
 Options:
 	--no-build                 Fail if dist/ is missing instead of running script/plugin-build
@@ -238,6 +243,9 @@ func init() {
 }
 
 func runPluginInstall(args *docopt.Args) error {
+	if _, ok := plugin.LookupGroup(args.String["<source>"]); ok {
+		return runPluginGroupInstall(args)
+	}
 	client, err := controllerClient()
 	if err != nil {
 		return err
@@ -385,4 +393,56 @@ func runPluginList(args *docopt.Args) error {
 
 func runPluginListKnown() error {
 	return plugin.WriteKnownPlugins(os.Stdout, plugin.DefaultGitHubOrg(), plugin.KnownPlugins())
+}
+
+func runPluginGroupInstall(args *docopt.Args) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	opts := plugin.InstallOptions{
+		Source:              args.String["<source>"],
+		Ref:                 args.String["--ref"],
+		GitHubOrg:           args.String["--github-org"],
+		Cwd:                 cwd,
+		NoBuild:             args.Bool["--no-build"],
+		Rebuild:             args.Bool["--rebuild"],
+		AutoTLS:             args.Bool["--auto-tls"],
+		AllowExternalLayers: args.Bool["--allow-external-layers"],
+		Yes:                 args.Bool["--yes"],
+	}
+	group, _, err := plugin.ResolveGroupMembers(opts.Source, opts)
+	if err != nil {
+		return err
+	}
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	in := &plugin.Installer{
+		Client: client,
+		HTTP:   discoverdHTTPClient(),
+		Stdout: os.Stdout,
+		Stderr: os.Stderr,
+		Stdin:  os.Stdin,
+	}
+	for _, name := range group.Plugins {
+		member := opts
+		member.Source = name
+		if err := in.Install(member); err != nil {
+			return fmt.Errorf("plugin group %s: install %s: %w", group.Name, name, err)
+		}
+	}
+	if group.TenancyMode == "" {
+		return nil
+	}
+	v, ok := client.(*v1.Client)
+	if !ok {
+		return fmt.Errorf("plugin group %s: controller client cannot set tenancy mode %s", group.Name, group.TenancyMode)
+	}
+	if err := v.Put("/tenancy", map[string]string{"mode": group.TenancyMode}, &ct.TenancySettings{}); err != nil {
+		return fmt.Errorf("plugin group %s: set tenancy mode %s: %w", group.Name, group.TenancyMode, err)
+	}
+	fmt.Fprintf(os.Stdout, "tenancy mode set to %s (signup stays off unless set separately)\n", group.TenancyMode)
+	return nil
 }
