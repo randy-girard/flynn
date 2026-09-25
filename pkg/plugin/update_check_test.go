@@ -26,8 +26,8 @@ func TestGitHubSourceForInstalled(t *testing.T) {
 	if gh := GitHubSourceForInstalled(Installed{Name: "custom-local"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-custom-local" {
 		t.Fatalf("name convention: %+v", gh)
 	}
-	if gh := GitHubSourceForInstalled(Installed{Name: "enterprise"}, "randy-girard"); gh != nil {
-		t.Fatalf("private plugin: %+v", gh)
+	if gh := GitHubSourceForInstalled(Installed{Name: "enterprise"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-enterprise" {
+		t.Fatalf("catalog enterprise: %+v", gh)
 	}
 }
 

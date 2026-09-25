@@ -127,7 +127,7 @@ List plugins installed on this cluster, including the installed VERSION
 this Flynn version and shows UPDATE and STATUS (current, update, or -).
 
 Options:
-	--known            List the public first-party catalog Flynn can plugin:install. Private first-party plugins are listed in a footer and cannot be installed from this catalog.
+	--known            List the first-party catalog Flynn can plugin:install (including enterprise).
 	--check            Compare installed versions to published GitHub releases
 
 Examples:

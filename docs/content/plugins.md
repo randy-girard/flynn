@@ -23,24 +23,21 @@ sudo flynn-host plugin:install mysql
 A path, git URL, `--github-org`, or `/etc/flynn/plugins.json` overrides the
 catalog. Postgres stays in Flynn and is not a plugin.
 
-## Public catalog vs private plugins
+## First-party catalog
 
-`plugin:list --known` is the **public** first-party catalog. Those names
-(`redis`, `dashboard`, …) are what `flynn-host plugin:install <name>`
-resolves. Flynn also has **private** first-party plugins (for example
-`enterprise`). They exist, but they are **not** in that catalog and
-**cannot** be installed out of the box with `plugin:install <name>`.
-`--known` lists them in a separate footer so operators know the names.
-A local checkout or `/etc/flynn/plugins.json` override can still point at a
-private source if the operator already has one.
+`plugin:list --known` is the first-party catalog. Those names
+(`redis`, `dashboard`, `enterprise`, …) are what
+`flynn-host plugin:install <name>` resolves. A path, git URL,
+`--github-org`, or `/etc/flynn/plugins.json` override can still point at a
+different source.
 
-The **enterprise** plugin (`../flynn-plugin-enterprise`) is that private
-plugin. After a path install it advertises `http://enterprise.discoverd/`,
-which unlocks dashboard granular RBAC, and serves **Cluster → Enterprise**
-pages (roles, OIDC SSO, audit, policy, license). Catalog CLI:
-`flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`,
-`enterprise:audit`. Uninstalling it returns the cluster to the four built-in
-app roles.
+The **enterprise** plugin (`../flynn-plugin-enterprise`) is in that catalog.
+Install it with `flynn-host plugin:install enterprise`. After install it
+advertises `http://enterprise.discoverd/`, which unlocks dashboard granular
+RBAC, and serves **Cluster → Enterprise** pages (roles, OIDC SSO, audit,
+policy, license). Catalog CLI: `flynn enterprise`, `enterprise:role-add`,
+`enterprise:sso-set`, `enterprise:audit`. Uninstalling it returns the cluster
+to the four built-in app roles.
 
 Plugin HTTP APIs and CLIs should trust the Flynn cluster CA (or Let's Encrypt
 on system routes) the same way `flynn` does. Do not document `--insecure` or
@@ -65,7 +62,7 @@ Development layout (relative to the Flynn repo):
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
 | `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
-| `enterprise` (private) | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**. Not installable as `plugin:install enterprise`) |
+| `enterprise` | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**; `flynn-host plugin:install enterprise`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
 cluster key. `flynn-host otel` sends it (HTTP Basic, empty username).
@@ -91,6 +88,7 @@ sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
 sudo flynn-host plugin:install ../flynn-plugin-github
 sudo flynn-host plugin:install ../flynn-plugin-pipeline
+sudo flynn-host plugin:install enterprise
 sudo flynn-host plugin:install ../flynn-plugin-enterprise
 ```
 
@@ -201,7 +199,7 @@ sudo flynn-host plugin:list --check
 sudo flynn-host plugin:list --known
 ```
 
-`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`. `--known` is the public catalog only; private first-party plugins appear in a footer and cannot be installed with `plugin:install <name>`.
+`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`. `--known` is the first-party catalog `plugin:install <name>` resolves (including `enterprise`).
 
 ## User CLI
 

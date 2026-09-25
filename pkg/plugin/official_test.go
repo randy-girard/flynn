@@ -22,7 +22,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			got[a] = p
 		}
 	}
-	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "github", "pipeline"} {
+	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "github", "pipeline", "enterprise"} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("official catalog missing %s", name)
 		}
@@ -125,39 +125,34 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}
 	}
-	for _, needle := range []string{"Private first-party plugins", "enterprise", "not in this catalog"} {
-		if !strings.Contains(out, needle) {
-			t.Fatalf("missing private catalog note %q in:\n%s", needle, out)
-		}
-	}
-	if strings.Contains(out, "flynn-plugin-enterprise") {
-		t.Fatal("private plugins must not appear as installable catalog repos")
+	if strings.Contains(out, "Private first-party plugins") {
+		t.Fatal("empty private catalog must not print a footer")
 	}
 }
 
-func TestPrivatePluginsNotInstallable(t *testing.T) {
+func TestEnterpriseIsCatalogInstallable(t *testing.T) {
 	t.Setenv(EnvGitHubOrg, "")
 	t.Setenv(EnvFlynnRepo, "")
 	t.Setenv(EnvPluginRepoRoot, t.TempDir())
 	t.Setenv(EnvInstalledFile, t.TempDir()+"/none.json")
 
-	if !IsPrivatePluginName("enterprise") {
-		t.Fatal("enterprise must be a private plugin")
+	if IsPrivatePluginName("enterprise") {
+		t.Fatal("enterprise must be in the public catalog")
 	}
-	if LookupOfficial(Installed{Name: "enterprise"}) != nil {
-		t.Fatal("enterprise must not be in the public catalog")
+	if LookupOfficial(Installed{Name: "enterprise"}) == nil {
+		t.Fatal("enterprise must resolve from the official catalog")
 	}
-	_, err := Resolve(InstallOptions{Source: "enterprise"})
-	if err == nil {
-		t.Fatal("plugin:install enterprise must fail")
+	r, err := Resolve(InstallOptions{Source: "enterprise"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, ok := err.(*PrivateCatalogError); !ok {
-		t.Fatalf("want PrivateCatalogError, got %T %v", err, err)
+	if r.GitHub == nil || r.GitHub.Owner != "randy-girard" || r.GitHub.Repo != "flynn-plugin-enterprise" {
+		t.Fatalf("plugin:install enterprise: %+v", r.GitHub)
 	}
 
 	path := t.TempDir() + "/plugins.json"

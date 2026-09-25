@@ -81,12 +81,12 @@
       "kind": "app",
       "repo": "flynn-plugin-pipeline",
       "description": "Environments and artifact promotion. Group apps with flynn pipeline after flynn-host plugin:install pipeline."
-    }
-  ],
-  "private_plugins": [
+    },
     {
       "name": "enterprise",
-      "description": "SSO, audit, and granular RBAC. Exists as a first-party plugin but is not available out of the box and cannot be installed with plugin:install."
+      "kind": "app",
+      "repo": "flynn-plugin-enterprise",
+      "description": "SSO, audit, and granular RBAC. Unlock custom roles with flynn-host plugin:install enterprise."
     }
   ]
 }

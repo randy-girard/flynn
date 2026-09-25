@@ -126,7 +126,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` / `cluster:ca` | Registered clusters in `~/.flynnrc`. `cluster:add` stores a TLS pin and the Flynn CA (`~/.flynn/ca-certs/<name>.pem`); git uses `http.<git-url>.sslCAInfo` so `git push` does not need `--insecure`. `cluster:ca` prints that PEM. After Let's Encrypt on system routes, `cluster:refresh --clear` uses public Web PKI. |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
-| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the public catalog and GitHub repos, plus a footer for private first-party plugins that cannot be `plugin:install`'d; `plugins` is an alias) |
+| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`; `plugins` is an alias) |
 | `login` | Dashboard OAuth. The token is limited to the apps and roles granted in the dashboard (see [App roles](#app-roles)). |
 | `git-credentials` | Git credential helper (installed into git config by `cluster:add`; not typed by hand) |
 | `update` | Replace this CLI from GitHub Releases |
@@ -150,9 +150,9 @@ Those four roles are **fixed** in OSS Flynn. Operators cannot create custom
 roles or change built-in permissions. Granular function/action grants
 (`app:logs:read`, `app:scale:write`, …) remain the internal expansion of the
 aliases and are still enforced on tokens; composing new bundles is an
-enterprise-plugin feature. Install `flynn-plugin-enterprise` from a checkout
-(`sudo flynn-host plugin:install ../flynn-plugin-enterprise`); the public
-catalog name `enterprise` is private and will not resolve. After install,
+enterprise-plugin feature. Install it from the catalog
+(`sudo flynn-host plugin:install enterprise`) or a checkout
+(`sudo flynn-host plugin:install ../flynn-plugin-enterprise`). After install,
 `flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`, and
 `enterprise:audit` manage custom roles, OIDC, and the audit log. The dashboard
 **Cluster → Enterprise** pages host that UI. `cluster:admin` (the controller
@@ -209,7 +209,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
 | `disk:reclaim` | Free unused host disk: volume GC, leftover image dirs, then ZFS TRIM so a file-backed pool can punch holes (`--host` for one node) |
-| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists the public catalog, repos, and descriptions, then a footer for private first-party plugins that `plugin:install <name>` will not resolve). `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed plugin (catalog, third-party GitHub source, or `flynn-plugin-<name>`) to the max compatible tag. Layers already on the host (`/var/lib/flynn/layer-cache`) skip GitHub download; Flynn OS layers skip blobstore re-upload when Flynn already has a LayerURL. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
+| `plugin:install` / `plugin:update` / `plugin:update-all` / `plugin:uninstall` / `plugin:list` | First-party plugins (`--known` lists the catalog, repos, and descriptions, including `enterprise`). `plugin:list` shows the installed `VERSION`; `--check` queries GitHub for the highest compatible tag and prints `UPDATE` and `STATUS` (`current` or `update`). Install/update only accept plugin tags whose `vYYYYMMDD.N` matches this Flynn version; `plugin:update-all` updates every installed plugin (catalog, third-party GitHub source, or `flynn-plugin-<name>`) to the max compatible tag. Layers already on the host (`/var/lib/flynn/layer-cache`) skip GitHub download; Flynn OS layers skip blobstore re-upload when Flynn already has a LayerURL. Catalog plugins log that they receive cluster secrets; third-party sources prompt (or require `--yes` when stdin is not a TTY). |
 | `plugin:route <name>` | HTTP/TCP routes for a plugin app |
 | `plugin:credentials:set` / `plugin:credentials:show` / `plugin:credentials:unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` / `log-sink:list` / `log-sink:remove` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
