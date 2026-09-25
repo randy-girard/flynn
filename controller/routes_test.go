@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"net/http/httptest"
+	"os"
 	"strings"
 	"time"
 
@@ -468,4 +470,56 @@ func (s *S) TestUpdateRouteServiceOwnership(c *C) {
 	err := scoped.UpdateRoute(app.ID, route.FormattedID(), route)
 	c.Assert(err, NotNil)
 	c.Assert(httphelper.IsForbidden(err), Equals, true)
+}
+
+func (s *S) includedRouteClient(c *C, domain string) (controller.Client, func()) {
+	c.Assert(os.Setenv("DEFAULT_ROUTE_DOMAIN", domain), IsNil)
+	handler, _, _ := appHandler(s.hc)
+	srv := httptest.NewServer(handler)
+	client, err := controller.NewClient(srv.URL, authKey)
+	c.Assert(err, IsNil)
+	return client, func() {
+		srv.Close()
+		os.Unsetenv("DEFAULT_ROUTE_DOMAIN")
+	}
+}
+
+func (s *S) TestIncludedHTTPRouteIsEnforced(c *C) {
+	client, cleanup := s.includedRouteClient(c, "lock.example")
+	defer cleanup()
+
+	app := &ct.App{Name: "included-lock"}
+	c.Assert(client.CreateApp(app), IsNil)
+
+	routes, err := client.AppRouteList(app.ID)
+	c.Assert(err, IsNil)
+	c.Assert(routes, HasLen, 1)
+	c.Assert(routes[0].Domain, Equals, "included-lock.lock.example")
+	c.Assert(routes[0].Included, Equals, true)
+
+	err = client.DeleteRoute(app.ID, routes[0].FormattedID())
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsForbidden(err), Equals, true)
+
+	change := *routes[0]
+	change.Domain = "other.example.com"
+	err = client.UpdateRoute(app.ID, routes[0].FormattedID(), &change)
+	c.Assert(err, NotNil)
+	c.Assert(httphelper.IsValidationError(err), Equals, true)
+
+	deleter, ok := client.(interface {
+		DeleteRouteForAppDeletion(string, string) error
+	})
+	c.Assert(ok, Equals, true)
+	c.Assert(deleter.DeleteRouteForAppDeletion(app.ID, routes[0].FormattedID()), IsNil)
+
+	again, err := client.AppRouteList(app.ID)
+	c.Assert(err, IsNil)
+	found := false
+	for _, route := range again {
+		if route.Included && route.Domain == "included-lock.lock.example" {
+			found = true
+		}
+	}
+	c.Assert(found, Equals, true)
 }

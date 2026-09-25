@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/data"
@@ -96,7 +98,7 @@ func (c *controllerAPI) GetRoute(ctx context.Context, w http.ResponseWriter, req
 		respondWithError(w, err)
 		return
 	}
-
+	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), route)
 	httphelper.JSON(w, 200, route)
 }
 
@@ -117,7 +119,13 @@ func (c *controllerAPI) GetRouteList(ctx context.Context, w http.ResponseWriter,
 }
 
 func (c *controllerAPI) GetAppRouteList(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	routes, err := c.routeRepo.List(routeParentRef(c.getApp(ctx).ID))
+	app := c.getApp(ctx)
+	routes, err := c.routeRepo.List(routeParentRef(app.ID))
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	routes, err = c.appRepo.EnsureIncludedRoute(app, routes)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -136,6 +144,31 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	}
 	route.Type = params.ByName("routes_type")
 	route.ID = params.ByName("routes_id")
+
+	existing, err := c.getRoute(ctx)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	app := c.getApp(ctx)
+	if data.IsIncludedHTTPRoute(existing, app, c.appRepo.DefaultDomain()) {
+		if incoming := strings.TrimSpace(route.Domain); incoming != "" && !strings.EqualFold(incoming, existing.Domain) {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: fmt.Sprintf("the included HTTP route %s cannot change domain", existing.Domain),
+			})
+			return
+		}
+		if route.Path != "" && data.HTTPRoutePath(route.Path) != data.HTTPRoutePath(existing.Path) {
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: fmt.Sprintf("the included HTTP route %s cannot change path", existing.Domain),
+			})
+			return
+		}
+		route.Domain = existing.Domain
+		route.Path = existing.Path
+	}
 
 	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
 		return
@@ -164,6 +197,7 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 		respondWithError(w, err)
 		return
 	}
+	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), &route)
 	httphelper.JSON(w, 200, route)
 }
 
@@ -171,6 +205,12 @@ func (c *controllerAPI) DeleteRoute(ctx context.Context, w http.ResponseWriter, 
 	route, err := c.getRoute(ctx)
 	if err != nil {
 		respondWithError(w, err)
+		return
+	}
+
+	app := c.getApp(ctx)
+	if data.IsIncludedHTTPRoute(route, app, c.appRepo.DefaultDomain()) && req.URL.Query().Get("app_deletion") != "1" {
+		httphelper.Forbidden(w, fmt.Sprintf("the included HTTP route %s cannot be removed", route.Domain))
 		return
 	}
 

@@ -46,7 +46,7 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 	}
 	for _, route := range routes {
 		log.Info("deleting route", "route_id", route.FormattedID())
-		if err := c.client.DeleteRoute(app.ID, route.FormattedID()); err != nil {
+		if err := deleteAppRoute(c.client, app.ID, route.FormattedID()); err != nil {
 			log.Info("error deleting route", "route_id", route.FormattedID(), "err", err)
 			return err
 		}
@@ -156,4 +156,15 @@ func (c *context) createEvent(a *ct.AppDeletion, err error) error {
 		e.Error = err.Error()
 	}
 	return c.db.Exec("event_insert", a.AppID, a.AppID, string(ct.EventTypeAppDeletion), e)
+}
+
+type includedRouteDeleter interface {
+	DeleteRouteForAppDeletion(appID, routeID string) error
+}
+
+func deleteAppRoute(client controller.Client, appID, routeID string) error {
+	if d, ok := client.(includedRouteDeleter); ok {
+		return d.DeleteRouteForAppDeletion(appID, routeID)
+	}
+	return client.DeleteRoute(appID, routeID)
 }

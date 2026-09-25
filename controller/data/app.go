@@ -13,7 +13,6 @@ import (
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/random"
-	router "github.com/randy-girard/flynn/router/types"
 )
 
 type AppRepo struct {
@@ -83,13 +82,7 @@ func (r *AppRepo) Add(data interface{}) error {
 	}
 
 	if !app.System() && r.defaultDomain != "" {
-		route := (&router.HTTPRoute{
-			ParentRef:     ct.RouteParentRefPrefix + app.ID,
-			Domain:        fmt.Sprintf("%s.%s", app.Name, r.defaultDomain),
-			Service:       app.Name + "-web",
-			DrainBackends: true,
-		}).ToRoute()
-		if err := r.routes.Add(route); err != nil {
+		if err := r.routes.Add(r.newIncludedRoute(app)); err != nil {
 			log.Printf("Error creating default route for %s: %s", app.Name, err)
 		}
 	}

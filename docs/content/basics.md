@@ -49,8 +49,8 @@ at the `example-web` service:
 
 ```
 $ flynn route
-ROUTE                             SERVICE      ID                                         STICKY  LEADER  PATH
-http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f0574cb6871  false   false   /
+ROUTE                             SERVICE      ID                                         STICKY  LEADER  PATH  INCLUDED
+http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f0574cb6871  false   false   /     yes
 ```
 
 The app depends on Postgres, so add a database:
@@ -243,9 +243,9 @@ You should now have two routes for your application:
 
 ```
 $ flynn route
-ROUTE                             SERVICE      ID                                         STICKY  LEADER  PATH
+ROUTE                             SERVICE      ID                                         STICKY  LEADER  PATH  INCLUDED
 http:example.com                  example-web  http/74b05faf-c062-42f2-8ffe-678cfa3c061b  false   false   /
-http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f0574cb6871  false   false   /
+http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f0574cb6871  false   false   /     yes
 ```
 
 HTTP requests to `example.com` should be routed to the web processes:

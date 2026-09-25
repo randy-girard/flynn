@@ -131,6 +131,10 @@ type Route struct {
 	// DisableKeepAlives when set will disable keep-alives between the
 	// router and backends for this route
 	DisableKeepAlives bool `json:"disable_keep_alives,omitempty"`
+
+	// Included is set on read for the HTTP route Flynn creates with the app
+	// ({app}.{DEFAULT_ROUTE_DOMAIN}). It is not stored.
+	Included bool `json:"included,omitempty"`
 }
 
 func (r Route) FormattedID() string {

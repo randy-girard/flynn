@@ -80,6 +80,10 @@
     },
     "updated_at": {
       "$ref": "/schema/common#/definitions/updated_at"
+    },
+    "included": {
+      "type": "boolean",
+      "description": "True for the HTTP route Flynn creates with the app ({app}.{DEFAULT_ROUTE_DOMAIN}). Computed on read; cannot be removed."
     }
   }
 }

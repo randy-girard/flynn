@@ -450,6 +450,12 @@ func (c *Client) DeleteRoute(appID string, routeID string) error {
 	return c.Delete(fmt.Sprintf("/apps/%s/routes/%s", appID, routeID), nil)
 }
 
+// DeleteRouteForAppDeletion deletes a route, including the undeletable cluster
+// hostname, while an app is being removed.
+func (c *Client) DeleteRouteForAppDeletion(appID string, routeID string) error {
+	return c.Delete(fmt.Sprintf("/apps/%s/routes/%s?app_deletion=1", appID, routeID), nil)
+}
+
 // GetFormation returns details for the specified formation under app and
 // release.
 func (c *Client) GetFormation(appID, releaseID string) (*ct.Formation, error) {

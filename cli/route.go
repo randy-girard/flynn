@@ -72,6 +72,9 @@ Options:
 usage: flynn route:remove <id>
 
 Remove a route.
+
+The included HTTP route created with the app ({app}.{cluster domain}) cannot
+be removed.
 `)
 }
 
@@ -109,7 +112,7 @@ func runRouteList(_ *docopt.Args, client controller.Client) error {
 	defer w.Flush()
 
 	var route, port, protocol, service, sticky, path, tlsStatus string
-	listRec(w, "ROUTE", "SERVICE", "ID", "STICKY", "LEADER", "TLS", "PATH")
+	listRec(w, "ROUTE", "SERVICE", "ID", "STICKY", "LEADER", "TLS", "PATH", "INCLUDED")
 	for _, k := range routes {
 		port = strconv.Itoa(int(k.Port))
 		tlsStatus = ""
@@ -157,7 +160,11 @@ func runRouteList(_ *docopt.Args, client controller.Client) error {
 			sticky = fmt.Sprintf("%t", k.Sticky)
 			path = k.HTTPRoute().Path
 		}
-		listRec(w, protocol+":"+route, service, k.FormattedID(), sticky, k.Leader, tlsStatus, path)
+		included := ""
+		if k.Included {
+			included = "yes"
+		}
+		listRec(w, protocol+":"+route, service, k.FormattedID(), sticky, k.Leader, tlsStatus, path, included)
 	}
 	return nil
 }
@@ -299,6 +306,7 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	fmt.Println(route.FormattedID())
+	printHTTPRouteCNAME(client, mustApp(), route.Domain)
 	return nil
 }
 
@@ -448,10 +456,33 @@ func readPEM(typ string, path string, stdin []byte) ([]byte, error) {
 
 func runRouteRemove(args *docopt.Args, client controller.Client) error {
 	routeID := args.String["<id>"]
+	appName := mustApp()
 
-	if err := client.DeleteRoute(mustApp(), routeID); err != nil {
+	if route, err := client.GetRoute(appName, routeID); err == nil && route.Included {
+		return fmt.Errorf("the included HTTP route %s cannot be removed", route.Domain)
+	}
+
+	if err := client.DeleteRoute(appName, routeID); err != nil {
 		return err
 	}
 	fmt.Printf("Route %s removed.\n", routeID)
 	return nil
+}
+
+func printHTTPRouteCNAME(client controller.Client, appName, domain string) {
+	cluster := clusterRouteDomain(client)
+	included := dataIncludedDomain(appName, cluster)
+	if cluster == "" || domain == "" || strings.EqualFold(domain, included) {
+		return
+	}
+	fmt.Printf("Create a CNAME for %s pointing at %s\n", domain, included)
+}
+
+func dataIncludedDomain(appName, cluster string) string {
+	appName = strings.TrimSpace(appName)
+	cluster = strings.TrimSpace(cluster)
+	if appName == "" || cluster == "" {
+		return ""
+	}
+	return appName + "." + cluster
 }
