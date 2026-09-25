@@ -115,8 +115,11 @@ func IsForbidden(err error) bool {
 
 // IsRetryableError indicates whether a HTTP request can be safely retried.
 func IsRetryableError(err error) bool {
-	e, ok := err.(JSONError)
-	return ok && e.Retry
+	var e JSONError
+	if errors.As(err, &e) {
+		return e.Retry
+	}
+	return false
 }
 
 // SEC-016: CORSAllowAll defaults to permissive CORS for backwards compatibility.
@@ -229,8 +232,15 @@ func buildJSONError(err error) *JSONError {
 			Code:    SyntaxErrorCode,
 			Message: "The provided JSON input is invalid",
 		}
-	case pgx.PgError, *net.OpError, syscall.Errno:
+	case pgx.PgError:
 		jsonError.Retry = true
+		jsonError.Message = v.Error()
+	case *net.OpError:
+		jsonError.Retry = true
+		jsonError.Message = v.Error()
+	case syscall.Errno:
+		jsonError.Retry = true
+		jsonError.Message = v.Error()
 	case JSONError:
 		jsonError = &v
 	case *JSONError:
@@ -238,6 +248,13 @@ func buildJSONError(err error) *JSONError {
 	default:
 		if err == pgx.ErrDeadConn {
 			jsonError.Retry = true
+			jsonError.Message = err.Error()
+		} else {
+			var pgErr pgx.PgError
+			if errors.As(err, &pgErr) {
+				jsonError.Retry = true
+				jsonError.Message = pgErr.Error()
+			}
 		}
 	}
 	return jsonError

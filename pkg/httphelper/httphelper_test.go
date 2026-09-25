@@ -3,6 +3,7 @@ package httphelper
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -52,6 +53,23 @@ func TestErrorStatusAndRetryMapping(t *testing.T) {
 			t.Errorf("%v: %+v", tc.err, je)
 		}
 	}
+
+	rec := httptest.NewRecorder()
+	Error(rec, pgx.PgError{Message: "cannot execute CREATE DATABASE in a read-only transaction"})
+	je := decodeJSONError(t, rec)
+	if !strings.Contains(je.Message, "CREATE DATABASE") || je.Message == "Something went wrong" {
+		t.Fatalf("pgx message must reach the client, got %q", je.Message)
+	}
+	if !je.Retry {
+		t.Fatal("pgx errors must be retryable")
+	}
+
+	rec = httptest.NewRecorder()
+	Error(rec, &net.OpError{Op: "dial", Err: syscall.ECONNREFUSED})
+	je = decodeJSONError(t, rec)
+	if je.Message == "Something went wrong" || !strings.Contains(je.Message, "connection refused") {
+		t.Fatalf("net error message must reach the client, got %q", je.Message)
+	}
 }
 
 func TestJSONErrorHelpersAndJSONNilSlice(t *testing.T) {
@@ -75,6 +93,10 @@ func TestJSONErrorHelpersAndJSONNilSlice(t *testing.T) {
 	}
 	if !IsRetryableError(JSONError{Code: UnknownErrorCode, Retry: true}) {
 		t.Fatal("retry")
+	}
+	wrapped := fmt.Errorf("provision postgres: %w", JSONError{Code: UnknownErrorCode, Message: "Something went wrong", Retry: true})
+	if !IsRetryableError(wrapped) {
+		t.Fatal("wrapped retry JSONError must still be retryable")
 	}
 
 	rec := httptest.NewRecorder()

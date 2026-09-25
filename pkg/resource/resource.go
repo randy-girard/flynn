@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"strings"
 
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
@@ -21,15 +23,34 @@ func Provision(uri string, config []byte) (*Resource, error) {
 		return nil, err
 	}
 	defer res.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
 	if res.StatusCode != 200 {
-		return nil, fmt.Errorf("resource: unexpected status code %d", res.StatusCode)
+		return nil, provisionStatusError(res.StatusCode, body)
 	}
 
 	resource := &Resource{}
-	if err := json.NewDecoder(res.Body).Decode(resource); err != nil {
+	if err := json.Unmarshal(body, resource); err != nil {
 		return nil, err
 	}
 	return resource, nil
+}
+
+func provisionStatusError(status int, body []byte) error {
+	var jsonErr hh.JSONError
+	if json.Unmarshal(body, &jsonErr) == nil && jsonErr.Code != "" {
+		return jsonErr
+	}
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		msg = http.StatusText(status)
+	}
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	return fmt.Errorf("resource: unexpected status code %d: %s", status, msg)
 }
 
 func Deprovision(uri, id string) error {
