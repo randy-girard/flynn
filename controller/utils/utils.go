@@ -379,7 +379,7 @@ func init() {
 	for _, name := range []string{
 		// dashboard paths and chrome
 		"account", "activity", "admin", "alerts", "apps", "console", "deploy",
-		"env", "events", "invite", "jobs", "login", "logs", "metrics", "new",
+		"env", "events", "invite", "jobs", "login", "signup", "sign-up", "logs", "metrics", "new",
 		"plugin", "plugins", "releases", "resources", "roles", "runtime",
 		"scale", "settings", "system", "team", "users",
 		// bootstrap / updater system apps and internals
@@ -442,8 +442,8 @@ func init() {
 		"imprint", "incidents", "investors", "learn", "legal", "marketing",
 		"media", "news", "newsletter", "open-source", "opensource", "partners",
 		"pgp", "plans", "press", "pricing", "privacy", "privacy-policy",
-		"product", "products", "roadmap", "sales", "security", "sign-up",
-		"signup", "sla", "static", "statuspage", "stories", "support",
+		"product", "products", "roadmap", "sales", "security",
+		"sla", "static", "statuspage", "stories", "support",
 		"terms", "terms-of-service", "tos", "trust", "try",
 	} {
 		reservedAppNames[name] = struct{}{}

@@ -201,6 +201,7 @@ func TestReservedAppName(t *testing.T) {
 		"postgres", "controller", "redis", "dashboard", "mysql", "otel",
 		"letsencrypt", "minio", "scheduler", "sirenia", "nginx", "firewall",
 		"bootstrap", "github", "volume", "log-sink", "change-password",
+		"login", "signup", "sign-up",
 		"kubernetes", "cron", "blog", "tos", "security", "docs", "privacy",
 	} {
 		if !ReservedAppName(name) {
