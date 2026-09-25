@@ -81,35 +81,31 @@ type pgAPI struct {
 
 func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	username, password, database := random.Hex(16), random.Hex(16), random.Hex(16)
+	plan := BuildProvisionPlan(username, password, database, TenantConnectionLimit)
 
-	if err := p.db.Exec(fmt.Sprintf(`CREATE USER "%s" WITH PASSWORD '%s'`, username, password)); err != nil {
+	var applied []string
+	fail := func(err error) {
+		for i := len(applied) - 1; i >= 0; i-- {
+			switch {
+			case strings.HasPrefix(applied[i], "CREATE DATABASE"):
+				p.db.Exec("DROP DATABASE " + quoteIdent(database))
+			case strings.HasPrefix(applied[i], "CREATE USER"):
+				p.db.Exec("DROP USER " + quoteIdent(username))
+			}
+		}
 		httphelper.Error(w, err)
+	}
+	for _, stmt := range plan.Maintenance {
+		if err := p.db.Exec(stmt); err != nil {
+			fail(err)
+			return
+		}
+		applied = append(applied, stmt)
+	}
+	if err := p.applyTenantDB(database, plan.TenantDB); err != nil {
+		fail(err)
 		return
 	}
-	// Create database with the user as owner. This gives them full privileges
-	// including CREATE on the public schema (required for PostgreSQL 15+).
-	if err := p.db.Exec(fmt.Sprintf(`CREATE DATABASE "%s" OWNER "%s"`, database, username)); err != nil {
-		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
-		httphelper.Error(w, err)
-		return
-	}
-
-	// Isolate the new database: revoke the default PUBLIC connect privilege
-	// so that only the owning user (and the "flynn" superuser) can connect.
-	if err := p.db.Exec(revokeConnectSQL(database)); err != nil {
-		// best-effort cleanup
-		p.db.Exec(fmt.Sprintf(`DROP DATABASE "%s"`, database))
-		p.db.Exec(fmt.Sprintf(`DROP USER "%s"`, username))
-		httphelper.Error(w, err)
-		return
-	}
-	// Explicitly grant connect to the owner (redundant for owner, but
-	// makes the intent clear and survives ownership changes).
-	p.db.Exec(fmt.Sprintf(`GRANT CONNECT ON DATABASE "%s" TO "%s"`, database, username))
-
-	// Revoke the user's ability to connect to the shared postgres database
-	// (they should only need their own database).
-	p.db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE "postgres" FROM "%s"`, username))
 
 	url := databaseURL(username, password, serviceHost, database)
 	httphelper.JSON(w, 200, resource.Resource{
@@ -164,6 +160,26 @@ func (p *pgAPI) ping(ctx context.Context, w http.ResponseWriter, req *http.Reque
 		return
 	}
 	w.WriteHeader(200)
+}
+
+// applyTenantDB installs the CREATE EXTENSION block inside the new database.
+func (p *pgAPI) applyTenantDB(database string, stmts []string) error {
+	tenant, err := postgres.Open(&postgres.Conf{
+		Service:  serviceName,
+		User:     "flynn",
+		Password: os.Getenv("PGPASSWORD"),
+		Database: database,
+	}, nil)
+	if err != nil {
+		return err
+	}
+	defer tenant.Close()
+	for _, stmt := range stmts {
+		if err := tenant.Exec(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func quoteIdent(name string) string {
