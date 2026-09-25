@@ -14,6 +14,7 @@ import (
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -768,6 +769,22 @@ func TestApplyProvisionedResourcesSkipsAttachedProviderUUID(t *testing.T) {
 	}
 	if cluster["DATABASE_URL"] != "postgres://live" {
 		t.Fatalf("resource env must overwrite cluster, got %q", cluster["DATABASE_URL"])
+	}
+}
+
+func TestRetryableResourceProvision(t *testing.T) {
+	unknown := fmt.Errorf("provision postgres: unknown_error: Something went wrong")
+	if !retryableResourceProvision(unknown) {
+		t.Fatal("collapsed postgres-api unknown_error must retry")
+	}
+	if retryableResourceProvision(fmt.Errorf("plugin github is not found")) {
+		t.Fatal("not found must not retry")
+	}
+	if retryableResourceProvision(fmt.Errorf("validation: name is required")) {
+		t.Fatal("validation must not retry")
+	}
+	if !retryableResourceProvision(httphelper.JSONError{Code: httphelper.UnknownErrorCode, Retry: true, Message: "dial tcp: i/o timeout"}) {
+		t.Fatal("retry JSONError must retry")
 	}
 }
 

@@ -133,7 +133,7 @@ func TestUploadDistLayersSkipsExistingPluginPrefix(t *testing.T) {
 	if store.putCount() != 0 {
 		t.Fatalf("second upload PUTs=%d want 0", store.putCount())
 	}
-	if !strings.Contains(log.String(), "already in blobstore") {
+	if !strings.Contains(log.String(), "skip upload") {
 		t.Fatalf("log=%q", log.String())
 	}
 }
@@ -233,7 +233,7 @@ func TestUploadDistLayersReusesFlynnLayerURL(t *testing.T) {
 	if strings.Contains(strings.Join(store.putPaths(), " "), "os-layer") {
 		t.Fatal("must not PUT Flynn OS layer into plugin prefix")
 	}
-	if !strings.Contains(log.String(), "already in blobstore") {
+	if !strings.Contains(log.String(), "skip upload") {
 		t.Fatalf("log=%q", log.String())
 	}
 	art := &ct.Artifact{LayerURLTemplate: tmpl, Meta: meta}
@@ -243,6 +243,50 @@ func TestUploadDistLayersReusesFlynnLayerURL(t *testing.T) {
 	wantDelta := srv.URL + "/plugins/widget/layers/delta-layer.squashfs"
 	if got := art.LayerURL(&ct.ImageLayer{ID: "delta-layer"}); got != wantDelta {
 		t.Fatalf("job delta URL=%s", got)
+	}
+}
+
+func TestUploadDistLayersSkipsOSWhenLocalAndFlynnURL(t *testing.T) {
+	osBody := bytes.Repeat([]byte("O"), 32)
+	deltaBody := bytes.Repeat([]byte("D"), 16)
+	dist := testUploadDist(t, osBody, deltaBody)
+	cache := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cache, "os-layer.squashfs"), osBody, 0644); err != nil {
+		t.Fatal(err)
+	}
+	store := newFakeBlobstore()
+	srv := httptest.NewServer(store)
+	defer srv.Close()
+
+	img := filepath.Join(t.TempDir(), "images.json")
+	writeFlynnImagesJSON(t, img, "https://github.com/randy-girard/flynn/releases/download/v20260924.3/layers/{id}.squashfs", "os-layer", int64(len(osBody)))
+	t.Setenv(EnvImagesJSON, img)
+	t.Setenv(EnvLayersDir, cache)
+
+	var log bytes.Buffer
+	in := &Installer{
+		HTTP:            srv.Client(),
+		Stdout:          &log,
+		BlobstorePrefix: srv.URL + "/plugins",
+		LayerCacheDir:   cache,
+	}
+	tmpl, meta, err := in.uploadDistLayers("github", dist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFlynn := "https://github.com/randy-girard/flynn/releases/download/v20260924.3/layers/os-layer.squashfs"
+	if meta["layer_url.os-layer"] != wantFlynn {
+		t.Fatalf("meta=%v", meta)
+	}
+	if store.putCount() != 1 || store.putPaths()[0] != "/plugins/github/layers/delta-layer.squashfs" {
+		t.Fatalf("must PUT overlay only, puts=%v", store.putPaths())
+	}
+	if !strings.Contains(log.String(), "skip upload") {
+		t.Fatalf("log=%q", log.String())
+	}
+	art := &ct.Artifact{LayerURLTemplate: tmpl, Meta: meta}
+	if got := art.LayerURL(&ct.ImageLayer{ID: "os-layer"}); got != wantFlynn {
+		t.Fatalf("job OS URL=%s", got)
 	}
 }
 

@@ -345,11 +345,13 @@ OS layer from the Flynn GitHub Release named in artifact meta
 `flynn.plugin.base` (`owner/repo@version`, same layer id as Flynn) **only when
 the cluster does not already have that Flynn image**. If `/etc/flynn/images.json`,
 `FLYNN_IMAGES_JSON`, `/var/lib/flynn/layer-cache`, or installed Flynn artifacts
-already contain that OS layer, plugin build and GitHub install copy the local
-layer and fetch only the plugin delta. Flynn reconstructs the repo-relative
+already contain a layer, **plugin:install** and **plugin:update** copy it from
+the local cache (OS **and** plugin delta) and skip GitHub. The Flynn OS layer
+is not copied into the plugin blobstore prefix when Flynn already publishes a
+LayerURL; jobs use that URL (or the host layer-cache, same as `flynn-host
+update`). Overlay/delta still uploads once so other hosts can fetch it.
+Flynn reconstructs the repo-relative
 path (`script/install.sh`) when it unpacks the release, then runs the hook.
-Uploads of the squashfs layers go into the cluster blobstore so other hosts
-never talk to GitHub.
 
 When a Flynn GitHub Release is created, **dispatch_plugins** is on by default
 on **Build and Release** so those plugin workflows are queued from the same

@@ -33,7 +33,10 @@ to zero so old jobs leave discoverd.
 The installer is generic: it reads flynn-plugin.json, uploads layers to the
 cluster blobstore, deploys the system app, registers a provider only when
 kind is resource-provider, and registers flynn-host webhooks declared in
-the manifest. If cluster ACME is already enabled, HTTP plugin routes get
+the manifest. Squashfs already in this host's layer-cache (flynn-host
+update or a previous plugin install) is reused: GitHub is not re-downloaded
+and the Flynn OS layer is not copied into the plugin blobstore prefix when
+Flynn already publishes a LayerURL. If cluster ACME is already enabled, HTTP plugin routes get
 Let's Encrypt automatically. Manifest auto_tls still requests TLS when you
 are not passing --auto-tls (warns if ACME is off). --auto-tls fails if ACME
 is off. After install, flynn-host plugin:route <name> is the same shape as

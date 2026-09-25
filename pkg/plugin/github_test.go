@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -433,6 +434,114 @@ func TestFetchGitHubSkipsOSLayerWhenLocal(t *testing.T) {
 
 	if osAssetHits != 0 || flynnHits != 0 {
 		t.Fatalf("OS GitHub downloads asset=%d flynn=%d", osAssetHits, flynnHits)
+	}
+	gotOS, err := os.ReadFile(filepath.Join(dir, DistDir, osID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotOS) != string(osBytes) {
+		t.Fatalf("os layer %q", gotOS)
+	}
+	gotDelta, err := os.ReadFile(filepath.Join(dir, DistDir, deltaID+".squashfs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotDelta) != string(deltaBytes) {
+		t.Fatalf("delta layer %q", gotDelta)
+	}
+}
+
+func TestFetchGitHubSkipsOverlayWhenLocal(t *testing.T) {
+	t.Setenv(EnvGitHubToken, "")
+	t.Setenv(EnvGitHubTokenAlt, "")
+
+	osID := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	deltaID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	manifest := &ct.ImageManifest{
+		Type: ct.ImageManifestTypeV1,
+		Rootfs: []*ct.ImageRootfs{{
+			Layers: []*ct.ImageLayer{
+				{
+					ID:     osID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 199 << 20,
+					Hashes: map[string]string{"sha512_256": osID},
+				},
+				{
+					ID:     deltaID,
+					Type:   ct.ImageLayerTypeSquashfs,
+					Length: 34 << 20,
+					Hashes: map[string]string{"sha512_256": deltaID},
+				},
+			},
+		}},
+	}
+	raw := manifest.RawManifest()
+	imageJSON, _ := json.Marshal(&ct.Artifact{
+		Type:        ct.ArtifactTypeFlynn,
+		RawManifest: raw,
+		Hashes:      map[string]string{"sha512_256": "deadbeef"},
+		Size:        int64(len(raw)),
+	})
+	pluginJSON := []byte(`{"name":"github","kind":"app","app":{"name":"github","processes":{"web":{"args":["/bin/x"]}}}}`)
+	osBytes := []byte("already-installed-ubuntu-noble")
+	deltaBytes := []byte("already-installed-plugin-delta")
+	osAssetHits := 0
+	deltaAssetHits := 0
+
+	cache := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cache, osID+".squashfs"), osBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cache, deltaID+".squashfs"), deltaBytes, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	var srv *httptest.Server
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/randy-girard/flynn-plugin-github/releases/tags/v20260924.3.0", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(githubRelease{
+			TagName: "v20260924.3.0",
+			Assets: []githubAsset{
+				{Name: ManifestName, BrowserDownloadURL: srv.URL + "/files/flynn-plugin.json"},
+				{Name: ImageJSON, BrowserDownloadURL: srv.URL + "/files/image.json"},
+				{Name: osID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + osID + ".squashfs"},
+				{Name: deltaID + ".squashfs", BrowserDownloadURL: srv.URL + "/files/" + deltaID + ".squashfs"},
+			},
+		})
+	})
+	mux.HandleFunc("/files/flynn-plugin.json", func(w http.ResponseWriter, r *http.Request) { w.Write(pluginJSON) })
+	mux.HandleFunc("/files/image.json", func(w http.ResponseWriter, r *http.Request) { w.Write(imageJSON) })
+	mux.HandleFunc("/files/"+osID+".squashfs", func(w http.ResponseWriter, r *http.Request) {
+		osAssetHits++
+		w.Write([]byte("should-not-download-os"))
+	})
+	mux.HandleFunc("/files/"+deltaID+".squashfs", func(w http.ResponseWriter, r *http.Request) {
+		deltaAssetHits++
+		w.Write([]byte("should-not-download-delta"))
+	})
+	srv = httptest.NewServer(mux)
+	defer srv.Close()
+
+	var log bytes.Buffer
+	in := &Installer{GitHubHTTP: srv.Client(), LayerCacheDir: cache, Stdout: &log}
+	dir, err := in.fetchGitHub(&GitHubSource{
+		Host:  "github.com",
+		Owner: "randy-girard",
+		Repo:  "flynn-plugin-github",
+		Ref:   "v20260924.3.0",
+		API:   srv.URL,
+	}, filepath.Join(t.TempDir(), "missing-creds.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+
+	if osAssetHits != 0 || deltaAssetHits != 0 {
+		t.Fatalf("GitHub layer downloads os=%d delta=%d", osAssetHits, deltaAssetHits)
+	}
+	if !strings.Contains(log.String(), "skip GitHub download") {
+		t.Fatalf("log=%q", log.String())
 	}
 	gotOS, err := os.ReadFile(filepath.Join(dir, DistDir, osID+".squashfs"))
 	if err != nil {

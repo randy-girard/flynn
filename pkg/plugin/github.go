@@ -137,16 +137,14 @@ func (in *Installer) fetchGitHub(src *GitHubSource, credsFile string) (string, e
 		}
 		name := layer.ID + ".squashfs"
 		dest := filepath.Join(root, DistDir, name)
-		// Skip GitHub for Flynn ubuntu-noble when this cluster already has
-		// that layer (layer-cache, local images.json, or Flynn artifacts).
-		if i < len(ls)-1 {
-			if local := in.localFlynnLayer(layer.ID); local != "" {
-				if err := linkOrCopyFile(local, dest); err != nil {
-					return "", fmt.Errorf("layer %s from local Flynn image: %w", layer.ID, err)
-				}
-				in.logf("using local Flynn OS layer %s (skip GitHub download)", layer.ID)
-				continue
+		// Skip GitHub when this host already has the squashfs (layer-cache
+		// from flynn-host update, a prior plugin install, or images.json).
+		if local := in.localFlynnLayer(layer.ID); local != "" {
+			if err := linkOrCopyFile(local, dest); err != nil {
+				return "", fmt.Errorf("layer %s from local cache: %w", layer.ID, err)
 			}
+			in.logf("using local layer %s (skip GitHub download)", layer.ID)
+			continue
 		}
 		if a := rel.asset(name); a != nil {
 			if err := in.downloadAsset(src, token, a, dest); err != nil {

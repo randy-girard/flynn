@@ -17,8 +17,10 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -27,6 +29,15 @@ const (
 	deployTimeout   = 5 * time.Minute
 	pingTimeout     = 2 * time.Minute
 )
+
+// provisionResourceAttempts retries postgres-api (and other provider) 500s.
+// A long plugin image upload can race a brief postgres/controller blip, and
+// httphelper used to collapse those to "unknown_error: Something went wrong".
+var provisionResourceAttempts = attempt.Strategy{
+	Min:   5,
+	Total: 90 * time.Second,
+	Delay: 2 * time.Second,
+}
 
 // Installer deploys any plugin described by flynn-plugin.json. Callers supply
 // a controller client and an HTTP client that can resolve *.discoverd (the
@@ -449,7 +460,7 @@ func (in *Installer) uploadDistLayers(pluginName string, dist *DistArtifact) (la
 			if flynnURL != "" && flynnURL != url {
 				extraMeta["layer_url."+layer.ID] = flynnURL
 			}
-			in.logf("layer %s already in blobstore (%d bytes); skip upload", layer.ID, size)
+			in.logf("layer %s already present (%d bytes); skip upload", layer.ID, size)
 			continue
 		}
 		in.logf("uploading layer %s (%d bytes)", layer.ID, layer.Length)
@@ -465,11 +476,12 @@ func (in *Installer) uploadDistLayers(pluginName string, dist *DistArtifact) (la
 // Overlay/delta (the last plugin layer) is skipped only when HEAD/GET on the
 // plugin-prefix blobstore object already matches size.
 //
-// Flynn OS layers (not the last layer) may also skip a duplicate plugin-prefix
-// PUT when jobs can still fetch the squashfs. LayerURLTemplate is the plugin
-// prefix, so skipping PUT without that object 404s on other hosts. Reuse an
-// existing Flynn artifact LayerURL for this layer ID when that URL is already
-// a blobstore object of matching size; otherwise skip only on plugin-prefix HEAD 200.
+// Flynn OS layers (not the last layer) skip a duplicate plugin-prefix PUT when
+// jobs can still fetch the squashfs: either the Flynn blobstore already has
+// the object, or this host's layer-cache has it and Flynn images.json /
+// artifacts already publish a LayerURL (GitHub or blobstore) — the same
+// source flynn-host update used. LayerURLTemplate is the plugin prefix, so
+// skipping PUT without a Flynn LayerURL 404s on other hosts.
 func (in *Installer) skipLayerUpload(httpClient *http.Client, pluginURL, id string, size int64, overlay bool) (skip bool, flynnURL string) {
 	if blobstoreHasObject(httpClient, pluginURL, size) {
 		return true, ""
@@ -485,6 +497,9 @@ func (in *Installer) skipLayerUpload(httpClient *http.Client, pluginURL, id stri
 		return false, ""
 	}
 	if in.reusableLayerURL(flynnURL, pluginURL) && blobstoreHasObject(httpClient, flynnURL, size) {
+		return true, flynnURL
+	}
+	if in.localFlynnLayer(id) != "" {
 		return true, flynnURL
 	}
 	return false, ""
@@ -688,14 +703,50 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 	}
 	aliases := providerAliases(in.Client)
 	return applyProvisionedResources(existing, aliases, m.Resources, cluster, func(name string) (*ct.Resource, error) {
-		in.logf("provisioning %s resource for %s", name, app.Name)
-		return in.Client.ProvisionResource(&ct.ResourceReq{
-			ProviderID: name,
-			Apps:       []string{app.ID},
-		})
+		return in.provisionResourceWithRetry(app, name)
 	}, func(name string) {
 		in.logf("resource %s already attached to %s", name, app.Name)
 	})
+}
+
+func (in *Installer) provisionResourceWithRetry(app *ct.App, name string) (*ct.Resource, error) {
+	var res *ct.Resource
+	err := provisionResourceAttempts.RunWithValidator(func() error {
+		in.logf("provisioning %s resource for %s", name, app.Name)
+		r, err := in.Client.ProvisionResource(&ct.ResourceReq{
+			ProviderID: name,
+			Apps:       []string{app.ID},
+		})
+		if err != nil {
+			if retryableResourceProvision(err) {
+				in.logf("provision %s: %v; retrying", name, err)
+			}
+			return err
+		}
+		res = r
+		return nil
+	}, retryableResourceProvision)
+	return res, err
+}
+
+// retryableResourceProvision retries collapsed controller/postgres-api 500s
+// ("unknown_error: Something went wrong") and explicit retry JSON errors.
+func retryableResourceProvision(err error) bool {
+	if err == nil {
+		return false
+	}
+	if httphelper.IsRetryableError(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "not found") || strings.Contains(msg, "validation") {
+		return false
+	}
+	return strings.Contains(msg, "unknown_error") ||
+		strings.Contains(msg, "something went wrong") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "no such host")
 }
 
 // applyProvisionedResources attaches missing providers. A leftover DATABASE_URL
