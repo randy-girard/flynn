@@ -109,6 +109,51 @@ func TestTarballUpdaterDoesNotRestartUserApps(t *testing.T) {
 	if !strings.Contains(body, "cluster updates do not restart user apps") {
 		t.Fatal("cluster updates must skip user apps so running processes stay up")
 	}
+	if !strings.Contains(body, "if !recycleUserApps") {
+		t.Fatal("user-app recycle must stay opt-in")
+	}
+}
+
+func TestTarballUpdaterRecyclesUserAppsWhenRequested(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "deployOrRecycleUserApp") {
+		t.Fatal("--recycle-user-apps must deploy slugrunner user apps")
+	}
+	if !strings.Contains(body, "recycleUserAppCurrentRelease") {
+		t.Fatal("docker/container-stack user apps must recycle on the current image")
+	}
+	if !strings.Contains(body, "validateRecycleUserAppsFlag(recycleUserApps, skipImages, plan.RolloutImages)") {
+		t.Fatal("--recycle-user-apps must require image/system-app rollout")
+	}
+	help, err := os.ReadFile("update.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(help), "--recycle-user-apps") {
+		t.Fatal("flynn-host update help must document --recycle-user-apps")
+	}
+}
+
+func TestReleaseForCurrentImageRecycle(t *testing.T) {
+	in := &ct.Release{ID: "old", ArtifactIDs: []string{"img-a", "img-b"}}
+	got := releaseForCurrentImageRecycle(in)
+	if got == nil || got.ID != "" {
+		t.Fatalf("recycle release must clear ID, got %#v", got)
+	}
+	if len(got.ArtifactIDs) != 2 || got.ArtifactIDs[0] != "img-a" || got.ArtifactIDs[1] != "img-b" {
+		t.Fatalf("recycle release must keep artifacts, got %#v", got.ArtifactIDs)
+	}
+	got.ArtifactIDs[0] = "mutated"
+	if in.ArtifactIDs[0] != "img-a" {
+		t.Fatal("recycle copy must not alias the original artifact slice")
+	}
+	if releaseForCurrentImageRecycle(nil) != nil {
+		t.Fatal("nil release must stay nil")
+	}
 }
 
 func TestTarballUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
@@ -132,9 +177,13 @@ func TestTarballUpdaterReusesInFlightUpdateRelease(t *testing.T) {
 	}
 	body := string(src)
 	fn := strings.Index(body, "func deployApp(")
-	reuse := strings.Index(body, "ReusableUpdateRelease")
-	create := strings.Index(body, "client.CreateRelease(app.ID, release)")
-	if fn < 0 || reuse < 0 || create < 0 || reuse < fn || create < reuse {
+	if fn < 0 {
+		t.Fatal("deployApp must exist")
+	}
+	deployBody := body[fn:]
+	reuse := strings.Index(deployBody, "ReusableUpdateRelease")
+	create := strings.Index(deployBody, "client.CreateRelease(app.ID, release)")
+	if reuse < 0 || create < 0 || create < reuse {
 		t.Fatal("scale-timeout retries must reuse the in-flight release instead of stacking formations")
 	}
 }

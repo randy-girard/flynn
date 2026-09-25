@@ -85,6 +85,21 @@ func TestValidateImagesOnlyFlags(t *testing.T) {
 	}
 }
 
+func TestValidateRecycleUserAppsFlag(t *testing.T) {
+	if err := validateRecycleUserAppsFlag(false, true, false); err != nil {
+		t.Fatalf("skip-images without recycle should be allowed: %v", err)
+	}
+	if err := validateRecycleUserAppsFlag(true, false, true); err != nil {
+		t.Fatalf("recycle with image rollout should be allowed: %v", err)
+	}
+	if err := validateRecycleUserAppsFlag(true, true, false); err == nil {
+		t.Fatal("expected error for --recycle-user-apps with --skip-images")
+	}
+	if err := validateRecycleUserAppsFlag(true, false, false); err == nil {
+		t.Fatal("expected error for --recycle-user-apps without image rollout")
+	}
+}
+
 type fmtTestError string
 
 func (e fmtTestError) Error() string { return string(e) }

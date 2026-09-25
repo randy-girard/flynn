@@ -27,6 +27,7 @@ var redisImage, slugBuilder, slugRunner, dockerBuilder, kafkaImage, clickHouseIm
 // use a flag to determine whether to use a TTY log formatter because actually
 // assigning a TTY to the job causes reading images via stdin to fail.
 var isTTY = flag.Bool("tty", false, "use a TTY log formatter")
+var recycleUserApps = flag.Bool("recycle-user-apps", false, "also restart user apps after system apps")
 
 const deployTimeout = 30 * time.Minute
 
@@ -283,13 +284,67 @@ func run() error {
 			continue
 		}
 
-		log.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
+		if !*recycleUserApps {
+			log.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
+			continue
+		}
+
+		log.Info("starting deploy of user app")
+		if err := deployOrRecycleUserApp(client, app, log); err != nil {
+			if e, ok := err.(errDeploySkipped); ok {
+				log.Info("skipped deploy of user app", "reason", e.reason)
+				continue
+			}
+			return err
+		}
+		log.Info("finished deploy of user app")
 	}
 	return nil
 }
 
 type errDeploySkipped struct {
 	reason string
+}
+
+const skipReasonUserAppNotSlugrunner = "app not using slugrunner image"
+
+func deployOrRecycleUserApp(client controller.Client, app *ct.App, log log15.Logger) error {
+	if slugRunner != nil {
+		err := deployApp(client, app, slugRunner, nil, log)
+		if err == nil {
+			return nil
+		}
+		e, ok := err.(errDeploySkipped)
+		if !ok {
+			return err
+		}
+		if e.reason != skipReasonUserAppNotSlugrunner {
+			return e
+		}
+	}
+	log.Info("recycling docker or container-stack user app on current image")
+	return recycleUserAppCurrentRelease(client, app, log)
+}
+
+func recycleUserAppCurrentRelease(client controller.Client, app *ct.App, log log15.Logger) error {
+	release, err := client.GetAppRelease(app.ID)
+	if err != nil {
+		if updaterdeploy.MissingAppReleaseSkip(app, err) {
+			return errDeploySkipped{updaterdeploy.MissingAppReleaseReason}
+		}
+		log.Error("error getting release", "err", err)
+		return err
+	}
+	if len(release.ArtifactIDs) == 0 {
+		return errDeploySkipped{"release has no artifacts"}
+	}
+	release.ID = ""
+	log.Info("creating release to recycle user app")
+	if err := client.CreateRelease(app.ID, release); err != nil {
+		log.Error("error creating recycle release", "err", err)
+		return err
+	}
+	return waitDeployAppRelease(client, app.ID, release.ID, log)
 }
 
 func (e errDeploySkipped) Error() string {
@@ -329,7 +384,7 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, update
 	// container-stack deploys store the user image there; rewriting that
 	// to slugrunner leaves CMD like /bin/sh /start.sh with no start.sh.
 	if !app.System() && !artifact.IsSlugrunner() {
-		return errDeploySkipped{"app not using slugrunner image"}
+		return errDeploySkipped{skipReasonUserAppNotSlugrunner}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
 	if updateImageIDs(release.Env) {

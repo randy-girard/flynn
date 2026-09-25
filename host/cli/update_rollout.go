@@ -51,3 +51,14 @@ func validateImagesOnlyFlags(imagesOnly, allNodes bool, hostCount int, hostCount
 	}
 	return nil
 }
+
+// validateRecycleUserAppsFlag rejects recycling user apps when image rollout is skipped.
+func validateRecycleUserAppsFlag(recycleUserApps, skipImages, rolloutImages bool) error {
+	if !recycleUserApps {
+		return nil
+	}
+	if skipImages || !rolloutImages {
+		return fmt.Errorf("--recycle-user-apps requires container image rollout; use --all-nodes on a multi-host cluster (cannot combine with --skip-images)")
+	}
+	return nil
+}

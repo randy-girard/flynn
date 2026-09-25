@@ -107,6 +107,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 	imagesOnly := args.Bool["--images-only"]
 	allNodes := args.Bool["--all-nodes"]
 	restartDownJobs := args.Bool["--restart-down-jobs"]
+	recycleUserApps := args.Bool["--recycle-user-apps"]
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
@@ -173,6 +174,9 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 
 	hostCount, hostCountErr := clusterHostCount()
 	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
+	if err := validateRecycleUserAppsFlag(recycleUserApps, skipImages, plan.RolloutImages); err != nil {
+		return err
+	}
 	if plan.RolloutImages && !allNodes {
 		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
@@ -277,7 +281,7 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 		if !plan.RolloutImages {
 			log.Info("skipping container images and system app rollout (local-only update)")
 			fmt.Println("Skipping container images and system apps on this run. After flynn-host matches on every node, run: flynn-host update --all-nodes")
-		} else if err := updateImages(repo, configDir, release.TagName, "", force, restartDownJobs, expectedHostCount, log); err != nil {
+		} else if err := updateImages(repo, configDir, release.TagName, "", force, restartDownJobs, recycleUserApps, expectedHostCount, log); err != nil {
 			return err
 		}
 	}
@@ -1157,11 +1161,12 @@ func shouldAbortGitHubUpdate(force, continuingReexec bool, currentVersion, targe
 // controller. If baseURL is non-empty, images are fetched from that URL
 // instead of GitHub. When force is true, system apps are redeployed even
 // if the image manifest matches the currently deployed artifact.
+// recycleUserApps also restarts git/slug and docker user apps after system apps.
 // expectedHosts is the cluster size observed before any rolling restart;
 // when > 1, we wait for that many hosts to be visible in discoverd
 // before fanning out, so a partially-rejoined cluster doesn't silently
 // skip nodes.
-func updateImages(repo, configDir, targetVersion, baseURL string, force, restartDownJobs bool, expectedHosts int, log log15.Logger) error {
+func updateImages(repo, configDir, targetVersion, baseURL string, force, restartDownJobs, recycleUserApps bool, expectedHosts int, log log15.Logger) error {
 	// Create downloader (without volume manager - we're just getting the manifest)
 	var d *downloader.Downloader
 	if baseURL != "" {
@@ -1551,17 +1556,87 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 			continue
 		}
 
-		// User apps keep their current image. Cluster updates only roll system
-		// apps and Redis appliances so user processes are not restarted.
-		appLog.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
+		if !recycleUserApps {
+			appLog.Info("skipped deploy of user app", "reason", "cluster updates do not restart user apps")
+			continue
+		}
+
+		appLog.Info("starting deploy of user app")
+		if err := deployOrRecycleUserApp(client, app, slugRunner, images, force, appLog); err != nil {
+			if e, ok := err.(errDeploySkipped); ok {
+				appLog.Info("skipped deploy of user app", "reason", e.reason)
+				continue
+			}
+			return err
+		}
+		appLog.Info("finished deploy of user app")
 	}
 
-	fmt.Println("System apps and container images updated successfully")
+	if recycleUserApps {
+		fmt.Println("System apps, user apps, and container images updated successfully")
+	} else {
+		fmt.Println("System apps and container images updated successfully")
+	}
 	return nil
 }
 
 type errDeploySkipped struct {
 	reason string
+}
+
+const skipReasonUserAppNotSlugrunner = "app not using slugrunner image"
+
+func deployOrRecycleUserApp(client controller.Client, app *ct.App, slugRunner *ct.Artifact, images map[string]*ct.Artifact, force bool, log log15.Logger) error {
+	if slugRunner != nil {
+		err := deployApp(client, app, slugRunner, images, nil, force, log)
+		if err == nil {
+			return nil
+		}
+		e, ok := err.(errDeploySkipped)
+		if !ok {
+			return err
+		}
+		if e.reason != skipReasonUserAppNotSlugrunner {
+			return e
+		}
+	}
+	log.Info("recycling docker or container-stack user app on current image")
+	return recycleUserAppCurrentRelease(client, app, log)
+}
+
+func recycleUserAppCurrentRelease(client controller.Client, app *ct.App, log log15.Logger) error {
+	release, err := client.GetAppRelease(app.ID)
+	if err != nil {
+		if updaterdeploy.MissingAppReleaseSkip(app, err) {
+			return errDeploySkipped{updaterdeploy.MissingAppReleaseReason}
+		}
+		log.Error("error getting release", "err", err)
+		return err
+	}
+	cloned := releaseForCurrentImageRecycle(release)
+	if cloned == nil || len(cloned.ArtifactIDs) == 0 {
+		return errDeploySkipped{"release has no artifacts"}
+	}
+	log.Info("creating release to recycle user app")
+	if err := client.CreateRelease(app.ID, cloned); err != nil {
+		log.Error("error creating recycle release", "err", err)
+		return err
+	}
+	return waitDeployAppRelease(client, app.ID, cloned.ID, log)
+}
+
+// releaseForCurrentImageRecycle copies a user-app release so a deploy can
+// bounce jobs without rewriting artifact 0 to slugrunner.
+func releaseForCurrentImageRecycle(release *ct.Release) *ct.Release {
+	if release == nil {
+		return nil
+	}
+	cloned := cloneReleaseForUpdate(release)
+	cloned.ID = ""
+	if release.ArtifactIDs != nil {
+		cloned.ArtifactIDs = append([]string(nil), release.ArtifactIDs...)
+	}
+	return cloned
 }
 
 func (e errDeploySkipped) Error() string {
@@ -1603,7 +1678,7 @@ func deployApp(client controller.Client, app *ct.App, image *ct.Artifact, images
 	// container-stack deploys store the user image there; rewriting that
 	// to slugrunner leaves CMD like /bin/sh /start.sh with no start.sh.
 	if !app.System() && !artifact.IsSlugrunner() {
-		return errDeploySkipped{"app not using slugrunner image"}
+		return errDeploySkipped{skipReasonUserAppNotSlugrunner}
 	}
 	skipDeploy := artifact.Manifest().ID() == image.Manifest().ID()
 	if imageenv.Update(release.Env, imageenvIDs(images)) {
@@ -1717,6 +1792,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 	allNodes := args.Bool["--all-nodes"]
 	force := args.Bool["--force"]
 	restartDownJobs := args.Bool["--restart-down-jobs"]
+	recycleUserApps := args.Bool["--recycle-user-apps"]
 
 	if imagesOnly && !allNodes {
 		n, err := clusterHostCount()
@@ -1729,6 +1805,9 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 	hostCount, hostCountErr := clusterHostCount()
 	plan := decideUpdateRollout(allNodes, skipImages, imagesOnly, hostCount, hostCountErr == nil)
+	if err := validateRecycleUserAppsFlag(recycleUserApps, skipImages, plan.RolloutImages); err != nil {
+		return err
+	}
 	if plan.RolloutImages && !allNodes {
 		log.Info("single-node cluster: rolling out images without --all-nodes")
 	}
@@ -1880,7 +1959,7 @@ func runTarballUpdate(args *docopt.Args, tarballPath, configDir string, log log1
 
 		// Update container images and system apps
 		if needImages {
-			if err := updateImages("", configDir, tarballVersion, baseURL, force, restartDownJobs, expectedHostCount, log); err != nil {
+			if err := updateImages("", configDir, tarballVersion, baseURL, force, restartDownJobs, recycleUserApps, expectedHostCount, log); err != nil {
 				return err
 			}
 		}

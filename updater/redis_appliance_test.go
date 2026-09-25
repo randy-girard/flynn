@@ -87,6 +87,23 @@ func TestUpdaterDoesNotRestartUserApps(t *testing.T) {
 	if !strings.Contains(body, "cluster updates do not restart user apps") {
 		t.Fatal("cluster updates must skip user apps so running processes stay up")
 	}
+	if !strings.Contains(body, "if !*recycleUserApps") {
+		t.Fatal("in-cluster updater must keep user-app recycle opt-in")
+	}
+}
+
+func TestUpdaterRecyclesUserAppsWhenRequested(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "deployOrRecycleUserApp") {
+		t.Fatal("-recycle-user-apps must deploy slugrunner user apps")
+	}
+	if !strings.Contains(body, "recycleUserAppCurrentRelease") {
+		t.Fatal("docker/container-stack user apps must recycle on the current image")
+	}
 }
 
 func TestUpdaterSkipsNonSlugrunnerUserApps(t *testing.T) {
@@ -110,9 +127,13 @@ func TestUpdaterReusesInFlightUpdateRelease(t *testing.T) {
 	}
 	body := string(src)
 	fn := strings.Index(body, "func deployApp(")
-	reuse := strings.Index(body, "ReusableUpdateRelease")
-	create := strings.Index(body, "client.CreateRelease(app.ID, release)")
-	if fn < 0 || reuse < 0 || create < 0 || reuse < fn || create < reuse {
+	if fn < 0 {
+		t.Fatal("deployApp must exist")
+	}
+	deployBody := body[fn:]
+	reuse := strings.Index(deployBody, "ReusableUpdateRelease")
+	create := strings.Index(deployBody, "client.CreateRelease(app.ID, release)")
+	if reuse < 0 || create < 0 || create < reuse {
 		t.Fatal("scale-timeout retries must reuse the in-flight release instead of stacking formations")
 	}
 }

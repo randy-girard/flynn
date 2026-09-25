@@ -52,6 +52,12 @@ Options:
                                  re-asserting the formation so the scheduler replaces
                                  them. Without this flag only unregistered or unhealthy
                                  up/starting jobs are restarted.
+  --recycle-user-apps            after system apps, also restart user apps. Git/slug
+                                 apps deploy onto the new slugrunner; docker:push and
+                                 container-stack apps recycle on their current image.
+                                 Off by default so user processes keep running.
+                                 Requires image rollout (--all-nodes on multi-host;
+                                 cannot combine with --skip-images).
 
 Update Flynn components using GitHub releases or a local tarball.
 
@@ -74,10 +80,9 @@ Use --skip-images with --all-nodes to update binaries on every node without
 touching container images. --images-only requires --all-nodes (image rollout is
 always cluster-wide).
 
-User apps with no current release (created in the dashboard or with
-flynn create but never deployed) are skipped so the update can finish.
-docker:push and container-stack apps keep their image; only slugrunner
-git apps are refreshed to the new slugrunner.
+User apps keep running unless --recycle-user-apps is set. Apps with no
+current release (created in the dashboard or with flynn create but never
+deployed) are skipped so the update can finish.
 
 When --tarball is specified, the update is performed from a local .tar.gz file
 (the same tarball produced by the release scripts) instead of GitHub. With
@@ -100,6 +105,7 @@ Options:
   --inter-host-delay=<duration>  extra settle delay after a host is healthy
   --wait-jobs-timeout=<duration> per-host wait for jobs to land on a restarted host
   --restart-down-jobs            also restart down database peer jobs during quorum repair
+  --recycle-user-apps            also restart user apps onto the restored platform images
 
 Install a previously published Flynn release on this cluster. This is the
 supported rollback after a bad in-place upgrade: same path as
