@@ -64,6 +64,7 @@ Development layout (relative to the Flynn repo):
 | `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
+| `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**) |
 | `enterprise` (private) | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**. Not installable as `plugin:install enterprise`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the
@@ -89,6 +90,7 @@ sudo flynn-host plugin:install ../flynn-plugin-www
 sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
 sudo flynn-host plugin:install ../flynn-plugin-github
+sudo flynn-host plugin:install ../flynn-plugin-pipeline
 sudo flynn-host plugin:install ../flynn-plugin-enterprise
 ```
 
@@ -320,7 +322,7 @@ for that Flynn, or **`vYYYYMMDD.N.B`** when only the plugin changes. Every
 plugin release that does not match the running Flynn version.
 **`plugin:update`** without `--ref` picks the highest compatible
 `vYYYYMMDD.N.B` for this Flynn, never a newer Flynn date.N.
-**`plugin:update-all`** does that for every installed official plugin,
+**`plugin:update-all`** does that for every installed plugin,
 continues past individual failures, and prints a per-plugin result.
 Omit `--ref` on a single update to use that same compatible calver
 (drafts and prereleases are skipped). **`plugin:update`** is the

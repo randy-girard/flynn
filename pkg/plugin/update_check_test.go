@@ -20,8 +20,14 @@ func TestGitHubSourceForInstalled(t *testing.T) {
 	if gh := GitHubSourceForInstalled(Installed{Name: "x", Source: "https://github.com/other/plug.git"}, ""); gh == nil || gh.Owner != "other" || gh.Repo != "plug" {
 		t.Fatalf("source url: %+v", gh)
 	}
-	if gh := GitHubSourceForInstalled(Installed{Name: "custom-local"}, ""); gh != nil {
-		t.Fatalf("unknown plugin: %+v", gh)
+	if gh := GitHubSourceForInstalled(Installed{Name: "pipeline"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-pipeline" {
+		t.Fatalf("catalog pipeline: %+v", gh)
+	}
+	if gh := GitHubSourceForInstalled(Installed{Name: "custom-local"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-custom-local" {
+		t.Fatalf("name convention: %+v", gh)
+	}
+	if gh := GitHubSourceForInstalled(Installed{Name: "enterprise"}, "randy-girard"); gh != nil {
+		t.Fatalf("private plugin: %+v", gh)
 	}
 }
 

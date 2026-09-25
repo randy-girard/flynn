@@ -594,7 +594,7 @@ because the target is not newer than the running host. It defaults to
 `--this-host` to update only the machine you are on.
 
 Take a `flynn-host backup` first when you can. After the platform is on the
-older tag, run `sudo flynn-host plugin:update-all` so first-party plugins
+older tag, run `sudo flynn-host plugin:update-all` so installed plugins
 match that Flynn calver.
 
 **What rollback restores:** `flynn-host` / `flynn-init` / CLI binaries and,

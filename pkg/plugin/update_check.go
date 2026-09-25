@@ -83,6 +83,9 @@ func GitHubSourceForInstalled(rec Installed, githubOrg string) *GitHubSource {
 	if looksLikeGitURL(rec.Source) {
 		return try(rec.Source)
 	}
+	if rec.Name != "" && !strings.ContainsAny(rec.Name, `/\`) && !IsPrivatePluginName(rec.Name) {
+		return try("flynn-plugin-" + rec.Name)
+	}
 	return nil
 }
 

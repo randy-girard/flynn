@@ -85,9 +85,11 @@ Examples:
 const pluginUpdateAllUsage = `
 usage: flynn-host plugin:update-all [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes]
 
-Update every installed official plugin to the highest compatible GitHub tag
-for this Flynn version (vYYYYMMDD.N.B; never a newer Flynn date.N). Continues
-past individual failures and prints a per-plugin result.
+Update every installed plugin to the highest compatible GitHub tag for this
+Flynn version (vYYYYMMDD.N.B; never a newer Flynn date.N). Official catalog
+plugins, third-party installs with a GitHub source, and names that resolve
+to flynn-plugin-<name> are included. Continues past individual failures
+and prints a per-plugin result.
 
 Options:
 	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)

@@ -75,6 +75,12 @@
       "kind": "app",
       "repo": "flynn-plugin-github",
       "description": "GitHub App deploys. Connect a repo with flynn github:connect after flynn-host plugin:install github."
+    },
+    {
+      "name": "pipeline",
+      "kind": "app",
+      "repo": "flynn-plugin-pipeline",
+      "description": "Environments and artifact promotion. Group apps with flynn pipeline after flynn-host plugin:install pipeline."
     }
   ],
   "private_plugins": [

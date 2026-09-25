@@ -20,18 +20,19 @@ func TestOfficialInstalledFiltersCatalog(t *testing.T) {
 	apps := []*ct.App{
 		officialPluginApp("redis"),
 		officialPluginApp("dashboard"),
+		officialPluginApp("pipeline"),
 		officialPluginApp("custom-widget"),
 		{Name: "postgres"},
 	}
 	got := OfficialInstalled(apps)
-	if len(got) != 2 {
+	if len(got) != 3 {
 		t.Fatalf("got %#v", got)
 	}
 	names := map[string]bool{}
 	for _, p := range got {
 		names[p.Name] = true
 	}
-	if !names["redis"] || !names["dashboard"] || names["custom-widget"] {
+	if !names["redis"] || !names["dashboard"] || !names["pipeline"] || names["custom-widget"] {
 		t.Fatalf("names=%v", names)
 	}
 }
@@ -54,7 +55,7 @@ func TestRunOfficialUpdatesContinues(t *testing.T) {
 		fmt.Fprintf(&buf, format+"\n", args...)
 	}
 	called := []string{}
-	err := runOfficialUpdates([]Installed{
+	err := runInstalledUpdates([]Installed{
 		{Name: "redis"},
 		{Name: "dashboard"},
 		{Name: "otel"},
@@ -87,5 +88,34 @@ func TestUpdateAllNoClientAndEmpty(t *testing.T) {
 	in := &Installer{}
 	if err := in.UpdateAll(InstallOptions{}); err == nil || !strings.Contains(err.Error(), "controller") {
 		t.Fatalf("missing client: %v", err)
+	}
+}
+
+func TestUpdateSourceForInstalled(t *testing.T) {
+	if got := updateSourceForInstalled(Installed{Name: "pipeline"}); got != "pipeline" {
+		t.Fatalf("catalog name: %s", got)
+	}
+	if got := updateSourceForInstalled(Installed{Name: "widget", GitHubRepo: "acme/flynn-plugin-widget"}); got != "acme/flynn-plugin-widget" {
+		t.Fatalf("stamped repo: %s", got)
+	}
+	if got := updateSourceForInstalled(Installed{Name: "widget", Source: "https://github.com/acme/flynn-plugin-widget.git"}); got != "https://github.com/acme/flynn-plugin-widget.git" {
+		t.Fatalf("git source: %s", got)
+	}
+}
+
+func TestRunInstalledUpdatesIncludesThirdParty(t *testing.T) {
+	called := []string{}
+	err := runInstalledUpdates([]Installed{
+		{Name: "pipeline"},
+		{Name: "widget", GitHubRepo: "acme/flynn-plugin-widget"},
+	}, InstallOptions{Yes: true}, func(opts InstallOptions) error {
+		called = append(called, opts.Source)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(called, ",") != "pipeline,acme/flynn-plugin-widget" {
+		t.Fatalf("called=%v", called)
 	}
 }

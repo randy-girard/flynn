@@ -39,9 +39,10 @@ func LookupOfficial(rec Installed) *KnownPlugin {
 	return nil
 }
 
-// UpdateAll updates every installed official plugin to the highest compatible
-// tag for this Flynn version. Individual failures are logged and the rest
-// continue; a non-nil error is returned if any plugin failed.
+// UpdateAll updates every installed plugin that has a resolvable GitHub
+// source (official catalog, stamped github_repo, git Source URL, or the
+// flynn-plugin-<name> convention). Individual failures are logged and the
+// rest continue; a non-nil error is returned if any plugin failed.
 func (in *Installer) UpdateAll(opts InstallOptions) error {
 	if in == nil || in.Client == nil {
 		return fmt.Errorf("missing controller client")
@@ -50,19 +51,37 @@ func (in *Installer) UpdateAll(opts InstallOptions) error {
 	if err != nil {
 		return fmt.Errorf("list apps: %w", err)
 	}
-	plugins := OfficialInstalled(apps)
+	plugins := ListInstalled(apps)
 	if len(plugins) == 0 {
-		in.logf("no official plugins installed")
+		in.logf("no plugins installed")
 		return nil
 	}
-	return runOfficialUpdates(plugins, opts, in.Update, in.logf)
+	return runInstalledUpdates(plugins, opts, in.Update, in.logf)
 }
 
-func runOfficialUpdates(plugins []Installed, opts InstallOptions, update func(InstallOptions) error, logf func(string, ...interface{})) error {
+func updateSourceForInstalled(p Installed) string {
+	if LookupOfficial(p) != nil {
+		if name := strings.TrimSpace(p.Name); name != "" {
+			return name
+		}
+	}
+	if repo := strings.TrimSpace(p.GitHubRepo); repo != "" {
+		return repo
+	}
+	if src := strings.TrimSpace(p.Source); looksLikeGitURL(src) {
+		return src
+	}
+	return strings.TrimSpace(p.Name)
+}
+
+func runInstalledUpdates(plugins []Installed, opts InstallOptions, update func(InstallOptions) error, logf func(string, ...interface{})) error {
 	failed := 0
 	for _, p := range plugins {
-		name := strings.TrimSpace(p.Name)
+		name := updateSourceForInstalled(p)
 		if name == "" {
+			if logf != nil {
+				logf("plugin %s: skipped: no update source", strings.TrimSpace(p.Name))
+			}
 			continue
 		}
 		err := update(InstallOptions{
@@ -87,7 +106,7 @@ func runOfficialUpdates(plugins []Installed, opts InstallOptions, update func(In
 		}
 	}
 	if failed > 0 {
-		return fmt.Errorf("%d of %d official plugin(s) failed to update", failed, len(plugins))
+		return fmt.Errorf("%d of %d plugin(s) failed to update", failed, len(plugins))
 	}
 	return nil
 }
