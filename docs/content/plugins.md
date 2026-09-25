@@ -64,7 +64,7 @@ Development layout (relative to the Flynn repo):
 | `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
-| `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**) |
+| `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
 | `enterprise` (private) | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**. Not installable as `plugin:install enterprise`) |
 
 The **otel** exporter API (`GET`/`POST`/`DELETE /exporters`) requires the

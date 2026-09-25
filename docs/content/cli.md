@@ -89,6 +89,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Add or replace the `flynn` git remote for the current app |
 | `github` / `github:connect` / `github:deploy` / `github:set` / `github:disconnect` | Connect a GitHub repo and deploy through taffy (requires `flynn-host plugin:install github`) |
+| `pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:remove` / `pipeline:info` / `pipeline:delete` / `pipeline:set` / `pipeline:promotions` / `pipeline:preview` / `pipeline:promote` | Environments and artifact promotion (requires `flynn-host plugin:install pipeline`). Cluster commands take a pipeline name or id; `pipeline:promote` uses `-a` for the source app. |
 | `docker:push` / `docker:login` / `docker:logout` / `docker:set-push-url` | Deploy a local Docker image through tarreceive; manage the push URL and its credentials |
 | `release` / `release:show` / `release:add` / `release:update` / `release:rollback` / `release:destroy` | Release history, inspect or edit release JSON, roll back, delete |
 | `deploy` / `deploy:timeout` / `deploy:batch-size` | Deploy history and per-app deploy settings (`deployment` is an alias) |
