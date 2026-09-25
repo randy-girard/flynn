@@ -217,6 +217,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		managedCertificateRepo: managedCertificateRepo,
 		acmeConfigRepo:         acmeConfigRepo,
 		runtimeProfileRepo:     runtimeProfileRepo,
+		tenancy:                data.NewTenancyRepo(c.db),
 		githubStore:            githubAppRepo,
 		githubHTTP:             c.githubHTTP,
 		githubAPI:              c.githubAPI,
@@ -354,10 +355,42 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/cluster/router-metrics", httphelper.WrapHandler(api.GetRouterMetrics))
 	httpRouter.GET("/apps/:apps_id/jobs-stats", httphelper.WrapHandler(api.appLookup(api.GetAppJobsStats)))
 
+	httpRouter.GET("/tenancy", httphelper.WrapHandler(api.GetTenancy))
+	httpRouter.PUT("/tenancy", httphelper.WrapHandler(api.PutTenancy))
+	httpRouter.POST("/users", httphelper.WrapHandler(api.CreateUser))
+	httpRouter.GET("/users", httphelper.WrapHandler(api.ListUsers))
+	httpRouter.GET("/users/:users_id", httphelper.WrapHandler(api.GetUser))
+	httpRouter.PATCH("/users/:users_id", httphelper.WrapHandler(api.PatchUser))
+	httpRouter.DELETE("/users/:users_id", httphelper.WrapHandler(api.DeleteUser))
+	httpRouter.POST("/users/:users_id/bootstrap-token", httphelper.WrapHandler(api.BootstrapUserToken))
+	httpRouter.POST("/accounts/:accounts_id/suspend", httphelper.WrapHandler(api.SuspendAccount))
+	httpRouter.POST("/accounts/:accounts_id/unsuspend", httphelper.WrapHandler(api.UnsuspendAccount))
+	httpRouter.GET("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.GetQuota))
+	httpRouter.PUT("/accounts/:accounts_id/quota", httphelper.WrapHandler(api.PutQuota))
+	httpRouter.GET("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.ListAccountCollaborators))
+	httpRouter.POST("/accounts/:accounts_id/collaborators", httphelper.WrapHandler(api.AddAccountCollaborator))
+	httpRouter.DELETE("/accounts/:accounts_id/collaborators/:users_id", httphelper.WrapHandler(api.DeleteAccountCollaborator))
+	httpRouter.POST("/handles", httphelper.WrapHandler(api.CreateHandle))
+	httpRouter.GET("/handles/:handles_id", httphelper.WrapHandler(api.GetHandle))
+	httpRouter.DELETE("/handles/:handles_id", httphelper.WrapHandler(api.DeleteHandle))
+	httpRouter.PUT("/memberships", httphelper.WrapHandler(api.PutMembership))
+	httpRouter.DELETE("/memberships", httphelper.WrapHandler(api.DeleteMembership))
+	httpRouter.GET("/memberships", httphelper.WrapHandler(api.ListMemberships))
+	httpRouter.GET("/whoami", httphelper.WrapHandler(api.WhoAmI))
+	httpRouter.POST("/tokens", httphelper.WrapHandler(api.CreateToken))
+	httpRouter.GET("/tokens", httphelper.WrapHandler(api.ListTokens))
+	httpRouter.DELETE("/tokens/:tokens_id", httphelper.WrapHandler(api.DeleteToken))
+	httpRouter.POST("/apps/:apps_id/transfer", httphelper.WrapHandler(api.appLookup(api.TransferApp)))
+	httpRouter.GET("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.ListAppCollaborators)))
+	httpRouter.POST("/apps/:apps_id/collaborators", httphelper.WrapHandler(api.appLookup(api.AddAppCollaborator)))
+	httpRouter.DELETE("/apps/:apps_id/collaborators/:users_id", httphelper.WrapHandler(api.appLookup(api.DeleteAppCollaborator)))
+	httpRouter.POST("/domains/verify", httphelper.WrapHandler(api.VerifyDomain))
+	httpRouter.POST("/domains/verify/:hostname/check", httphelper.WrapHandler(api.CheckDomain))
+
 	grpcAPI := &grpcAPI{&api, c.db}
 	grpcSrv := grpcAPI.grpcServer()
 
-	handler := muxHandler(httpRouter, grpcSrv, api.authorizer)
+	handler := muxHandler(httpRouter, grpcSrv, api.authorizer, &api)
 	if os.Getenv("AUDIT_LOG") == "true" {
 		handler = httphelper.NewRequestLoggerCustom(handler, auditLoggerFn)
 	} else {
@@ -366,7 +399,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	return httphelper.ContextInjector("controller", handler), grpcSrv, &api
 }
 
-func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.Authorizer) http.Handler {
+func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.Authorizer, api *controllerAPI) http.Handler {
 	grpcWeb := grpcweb.WrapServer(grpcSrv)
 	return httphelper.CORSAllowAll.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if shutdown.IsActive() {
@@ -395,8 +428,21 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			return
 		}
 		auth, err := authorizer.AuthorizeRequest(r)
+		if err != nil && api != nil {
+			auth, err = api.authenticatePAT(r)
+		}
 		if err != nil {
 			w.WriteHeader(401)
+			return
+		}
+		if api != nil {
+			if err := api.expandToken(auth); err != nil {
+				w.WriteHeader(401)
+				return
+			}
+		}
+		if auth != nil && auth.Blocked {
+			httphelper.Forbidden(w, "this account is suspended")
 			return
 		}
 		if !authz.HTTPAllowed(auth, r.Method, r.URL.Path) {
@@ -404,7 +450,9 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			return
 		}
 		if rw, ok := w.(*httphelper.ResponseWriter); ok {
-			rw.SetContext(context.WithValue(rw.Context(), authz.TokenContextKey, auth))
+			ctx := context.WithValue(rw.Context(), authz.TokenContextKey, auth)
+			ctx = context.WithValue(ctx, apiContextKey{}, api)
+			rw.SetContext(ctx)
 		}
 		if auth.ID != "" {
 			r.Header.Set("Flynn-Auth-ID", auth.ID)
@@ -432,6 +480,7 @@ type controllerAPI struct {
 	managedCertificateRepo *data.ManagedCertificateRepo
 	acmeConfigRepo         *data.ACMEConfigRepo
 	runtimeProfileRepo     *data.RuntimeProfileRepo
+	tenancy                *data.TenancyRepo
 	githubStore            githubStore
 	githubAPI              githubAPI
 	githubHTTP             *http.Client

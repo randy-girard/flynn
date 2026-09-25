@@ -23,7 +23,11 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 	if err != nil {
 		return err
 	}
-	err = tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env).Scan(&r.CreatedAt)
+	var owner *string
+	if r.OwnerAccount != "" {
+		owner = &r.OwnerAccount
+	}
+	err = tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env, owner).Scan(&r.CreatedAt)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -140,7 +144,11 @@ func (rr *ResourceRepo) RemoveApp(resourceID, appID string) (*ct.Resource, error
 func scanResource(s postgres.Scanner) (*ct.Resource, error) {
 	r := &ct.Resource{}
 	var appIDs string
-	err := s.Scan(&r.ID, &r.ProviderID, &r.ExternalID, &r.Env, &appIDs, &r.CreatedAt)
+	var owner *string
+	err := s.Scan(&r.ID, &r.ProviderID, &r.ExternalID, &r.Env, &appIDs, &r.CreatedAt, &owner)
+	if owner != nil {
+		r.OwnerAccount = *owner
+	}
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
 	} else if err != nil {

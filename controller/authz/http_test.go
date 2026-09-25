@@ -115,6 +115,18 @@ func TestHTTPAllowed(t *testing.T) {
 		{"env_write_can_put_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:env:write"}}}}, http.MethodPut, "/apps/app-1/release", true},
 		{"env_write_can_post_cluster_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:env:write"}}}}, http.MethodPost, "/releases", true},
 		{"scale_write_cannot_post_cluster_release", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:scale:write"}}}}, http.MethodPost, "/releases", false},
+
+		{"user_can_list_apps", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/apps", true},
+		{"user_can_create_app", &authorizer.Token{UserID: "u1"}, http.MethodPost, "/apps", true},
+		{"user_can_get_providers", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/providers", true},
+		{"app_read_can_get_provider_catalog", appRead, http.MethodGet, "/providers", true},
+		{"app_read_cannot_provision", appRead, http.MethodPost, "/providers/postgres/resources", false},
+		{"app_write_can_provision", appWrite, http.MethodPost, "/providers/postgres/resources", true},
+		{"user_can_get_tenancy", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/tenancy", true},
+		{"app_read_cannot_put_tenancy", appRead, http.MethodPut, "/tenancy", false},
+		{"stranger_grant_cannot_get_other_app", wrongApp, http.MethodGet, "/apps/app-1", false},
+		{"user_can_whoami", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/whoami", true},
+		{"app_read_cannot_whoami", appRead, http.MethodGet, "/whoami", false},
 	}
 
 	for _, tc := range cases {

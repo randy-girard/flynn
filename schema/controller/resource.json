@@ -29,6 +29,10 @@
     "apps": {
       "$ref": "/schema/controller/common#/definitions/apps"
     },
+    "owner_account": {
+      "description": "Account that owns this resource, copied from the app it was first attached to.",
+      "type": "string"
+    },
     "created_at": {
       "$ref": "/schema/controller/common#/definitions/created_at"
     }

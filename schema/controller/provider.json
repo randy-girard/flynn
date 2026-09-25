@@ -27,6 +27,10 @@
     "url": {
       "type": "string",
       "format": "uri"
+    },
+    "tenant_safe": {
+      "description": "When true, non-operators may provision this provider in hosted tenancy mode.",
+      "type": "boolean"
     }
   }
 }

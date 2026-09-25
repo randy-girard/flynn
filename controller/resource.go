@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 
+	"github.com/randy-girard/flynn/controller/access"
+	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -23,6 +25,41 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
+	if err := c.hostedTenantSafe(ctx, p); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	var owner string
+	if len(rr.Apps) > 0 {
+		app, err := c.appRepo.Get(rr.Apps[0])
+		if err != nil {
+			respondWithError(w, err)
+			return
+		}
+		target := app.(*ct.App)
+		if !c.requireAppManage(ctx, w, target) {
+			return
+		}
+		if err := c.rejectIfSuspended(target.OwnerAccount); err != nil {
+			respondWithError(w, err)
+			return
+		}
+		owner = target.OwnerAccount
+		if owner != "" {
+			n, err := c.tenancy.CountResources(owner)
+			if err != nil {
+				respondWithError(w, err)
+				return
+			}
+			if err := c.quotaAllows(owner, 0, 0, 0, n+1, 0); err != nil {
+				respondWithError(w, err)
+				return
+			}
+		}
+	} else if tok := authz.TokenFromContext(ctx); tok != nil && !tok.ClusterKey && !tok.HasClusterAdmin() {
+		httphelper.Forbidden(w, "provisioning requires an app you can manage")
+		return
+	}
 
 	var config []byte
 	if rr.Config != nil {
@@ -37,10 +74,11 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	}
 
 	res := &ct.Resource{
-		ProviderID: p.ID,
-		ExternalID: data.ID,
-		Env:        data.Env,
-		Apps:       rr.Apps,
+		ProviderID:   p.ID,
+		ExternalID:   data.ID,
+		Env:          data.Env,
+		Apps:         rr.Apps,
+		OwnerAccount: owner,
 	}
 
 	if err := schema.Validate(res); err != nil {
@@ -68,7 +106,7 @@ func (c *controllerAPI) GetProviderResources(ctx context.Context, w http.Respons
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, res)
+	httphelper.JSON(w, 200, c.filterResources(ctx, res))
 }
 
 func (c *controllerAPI) GetResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -148,6 +186,11 @@ func (c *controllerAPI) DeleteResource(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
+	if res.OwnerAccount != "" {
+		if !c.canAdminAccount(ctx, w, res.OwnerAccount) {
+			return
+		}
+	}
 	logger.Info("deprovisioning", "url", p.URL, "external.id", res.ExternalID)
 	if err := resource.Deprovision(p.URL, res.ExternalID); err != nil {
 		logger.Error("error deprovisioning", "err", err)
@@ -175,7 +218,31 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 		return
 	}
 
-	resource, err := c.resourceRepo.AddApp(params.ByName("resources_id"), params.ByName("app_id"))
+	resource, err := c.resourceRepo.Get(params.ByName("resources_id"))
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	appRaw, err := c.appRepo.Get(params.ByName("app_id"))
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	app := appRaw.(*ct.App)
+	if resource.OwnerAccount != "" && app.OwnerAccount != resource.OwnerAccount {
+		httphelper.Forbidden(w, "a resource can only be attached to an app with the same owner_account")
+		return
+	}
+	if !c.requireAppManage(ctx, w, app) {
+		return
+	}
+	if resource.OwnerAccount == "" && app.OwnerAccount != "" && c.tenancy != nil {
+		if err := c.tenancy.SetResourceOwner(resource.ID, app.OwnerAccount); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	}
+	resource, err = c.resourceRepo.AddApp(params.ByName("resources_id"), params.ByName("app_id"))
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -193,6 +260,14 @@ func (c *controllerAPI) DeleteResourceApp(ctx context.Context, w http.ResponseWr
 		return
 	}
 
+	existing, err := c.resourceRepo.Get(params.ByName("resources_id"))
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if existing.OwnerAccount != "" && !c.canAdminAccount(ctx, w, existing.OwnerAccount) {
+		return
+	}
 	resource, err := c.resourceRepo.RemoveApp(params.ByName("resources_id"), params.ByName("app_id"))
 	if err != nil {
 		respondWithError(w, err)
@@ -200,6 +275,31 @@ func (c *controllerAPI) DeleteResourceApp(ctx context.Context, w http.ResponseWr
 	}
 
 	httphelper.JSON(w, 200, resource)
+}
+
+func (c *controllerAPI) filterResources(ctx context.Context, res []*ct.Resource) []*ct.Resource {
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
+		return res
+	}
+	var out []*ct.Resource
+	for _, item := range res {
+		if item.OwnerAccount == "" {
+			continue
+		}
+		if c.canAdminOwner(ctx, item.OwnerAccount) {
+			out = append(out, item)
+		}
+	}
+	if out == nil {
+		out = []*ct.Resource{}
+	}
+	return out
+}
+
+func (c *controllerAPI) canAdminOwner(ctx context.Context, account string) bool {
+	res := c.accessForAccount(ctx, account)
+	return access.Has(res.Permissions, access.PermAppAdmin) || res.ImplicitOwner || res.OrgManager
 }
 
 func (c *controllerAPI) GetAppResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {

@@ -50,6 +50,12 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 			if resource == "apps" {
 				if app, ok := thing.(*ct.App); ok {
 					stripSystemAppMetaUnlessAdmin(ctx, app.Meta)
+					if api := apiFromContext(ctx); api != nil {
+						if err := api.prepareNewApp(ctx, app); err != nil {
+							respondWithError(rw, err)
+							return
+						}
+					}
 				}
 			}
 
@@ -81,6 +87,11 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 		if err != nil {
 			respondWithError(rw, err)
 			return
+		}
+		if resource == "apps" {
+			if api := apiFromContext(ctx); api != nil {
+				list = api.filterVisibleApps(ctx, list)
+			}
 		}
 		httphelper.JSON(rw, 200, list)
 	}))

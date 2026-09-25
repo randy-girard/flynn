@@ -38,9 +38,14 @@ type AppGrant struct {
 type Token struct {
 	ID         string
 	User       string
+	UserID     string
 	ClusterKey bool
-	Scopes     []string
-	AppGrants  []AppGrant
+	// Blocked is set when the user or their personal account is suspended or
+	// disabled. The HTTP middleware denies the request. A nil token is never
+	// blocked; HasClusterAdmin still treats nil as legacy admin.
+	Blocked   bool
+	Scopes    []string
+	AppGrants []AppGrant
 }
 
 // HasClusterAdmin reports full cluster access: the cluster install key, or an
@@ -184,6 +189,7 @@ func (a *Authorizer) AuthorizeToken(token string) (*Token, error) {
 	return &Token{
 		ID:         strings.TrimRight(base64.URLEncoding.EncodeToString(idBytes[:]), "="),
 		User:       t.UserEmail,
+		UserID:     t.GetUserId(),
 		ClusterKey: false,
 		Scopes:     scopes,
 		AppGrants:  grants,

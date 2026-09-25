@@ -60,8 +60,13 @@ type App struct {
 	Strategy      string            `json:"strategy,omitempty"`
 	ReleaseID     string            `json:"release,omitempty"`
 	DeployTimeout int32             `json:"deploy_timeout,omitempty"`
-	CreatedAt     *time.Time        `json:"created_at,omitempty"`
-	UpdatedAt     *time.Time        `json:"updated_at,omitempty"`
+	// OwnerAccount is user:<id>, org:<id>, or empty for operator/system apps.
+	// It changes only through app transfer, not through meta updates.
+	OwnerAccount string `json:"owner_account,omitempty"`
+	// CreatedBy is the user id that created the app. Transfer keeps it.
+	CreatedBy string     `json:"created_by,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
 func (a *App) System() bool {
@@ -651,20 +656,22 @@ func (e *DeploymentEvent) Err() error {
 }
 
 type Provider struct {
-	ID        string     `json:"id,omitempty"`
-	URL       string     `json:"url,omitempty"`
-	Name      string     `json:"name,omitempty"`
-	CreatedAt *time.Time `json:"created_at,omitempty"`
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	ID         string     `json:"id,omitempty"`
+	URL        string     `json:"url,omitempty"`
+	Name       string     `json:"name,omitempty"`
+	TenantSafe bool       `json:"tenant_safe,omitempty"`
+	CreatedAt  *time.Time `json:"created_at,omitempty"`
+	UpdatedAt  *time.Time `json:"updated_at,omitempty"`
 }
 
 type Resource struct {
-	ID         string            `json:"id,omitempty"`
-	ProviderID string            `json:"provider,omitempty"`
-	ExternalID string            `json:"external_id,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
-	Apps       []string          `json:"apps,omitempty"`
-	CreatedAt  *time.Time        `json:"created_at,omitempty"`
+	ID           string            `json:"id,omitempty"`
+	ProviderID   string            `json:"provider,omitempty"`
+	ExternalID   string            `json:"external_id,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Apps         []string          `json:"apps,omitempty"`
+	OwnerAccount string            `json:"owner_account,omitempty"`
+	CreatedAt    *time.Time        `json:"created_at,omitempty"`
 }
 
 type ResourceReq struct {

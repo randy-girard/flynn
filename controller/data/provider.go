@@ -29,7 +29,7 @@ func (r *ProviderRepo) Add(data interface{}) error {
 	if err != nil {
 		return err
 	}
-	err = tx.QueryRow("provider_insert", p.Name, p.URL).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
+	err = tx.QueryRow("provider_insert", p.Name, p.URL, p.TenantSafe).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -46,7 +46,7 @@ func (r *ProviderRepo) Add(data interface{}) error {
 
 func scanProvider(s postgres.Scanner) (*ct.Provider, error) {
 	p := &ct.Provider{}
-	err := s.Scan(&p.ID, &p.Name, &p.URL, &p.CreatedAt, &p.UpdatedAt)
+	err := s.Scan(&p.ID, &p.Name, &p.URL, &p.TenantSafe, &p.CreatedAt, &p.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		err = ErrNotFound
 	}

@@ -49,6 +49,14 @@
     "deploy_timeout": {
       "$ref": "/schema/controller/common#/definitions/deploy_timeout"
     },
+    "owner_account": {
+      "description": "Account that owns the app (user:<id> or org:<id>). Empty for operator/system apps.",
+      "type": "string"
+    },
+    "created_by": {
+      "description": "User id that created the app. Unchanged by transfer.",
+      "type": "string"
+    },
     "created_at": {
       "$ref": "/schema/controller/common#/definitions/created_at"
     },

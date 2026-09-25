@@ -53,6 +53,10 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
+	if err = c.enforceScale(ctx, app, existingProcesses(c, app.ID, release.ID), formation.Processes); err != nil {
+		respondWithError(w, err)
+		return
+	}
 
 	req := newScaleRequest(formation, release)
 	req, err = c.formationRepo.AddScaleRequest(req, false)
@@ -98,6 +102,10 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	}
 	if req.NewProcesses != nil {
 		if err := c.validateFormationScale(*req.NewProcesses); err != nil {
+			respondWithError(w, err)
+			return
+		}
+		if err := c.enforceScale(ctx, app, existingProcesses(c, app.ID, release.ID), *req.NewProcesses); err != nil {
 			respondWithError(w, err)
 			return
 		}

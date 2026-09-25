@@ -160,10 +160,10 @@ const (
 	pingQuery = `SELECT 1`
 	// apps
 	appListQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL ORDER BY created_at DESC`
 	appListPageQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps
 WHERE
   deleted_at IS NULL
@@ -177,19 +177,19 @@ ORDER BY created_at DESC
 LIMIT $4;
 `
 	appSelectByNameQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL AND name = $1`
 	appSelectByNameForUpdateQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL AND name = $1 FOR UPDATE`
 	appSelectByNameOrIDQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) LIMIT 1`
 	appSelectByNameOrIDForUpdateQuery = `
-SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
 FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) LIMIT 1 FOR UPDATE`
 	appInsertQuery = `
-INSERT INTO apps (app_id, name, meta, strategy, deploy_timeout) VALUES ($1, $2, $3, $4, $5) RETURNING created_at, updated_at`
+INSERT INTO apps (app_id, name, meta, strategy, deploy_timeout, owner_account, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING created_at, updated_at`
 	appUpdateStrategyQuery = `
 UPDATE apps SET strategy = $2, updated_at = now() WHERE app_id = $1`
 	appUpdateMetaQuery = `
@@ -556,16 +556,16 @@ INSERT INTO job_volumes (job_id, volume_id, index) VALUES ($1, $2, $3)
 ON CONFLICT ON CONSTRAINT job_volumes_pkey DO UPDATE SET index = $3
 	`
 	providerListQuery = `
-SELECT provider_id, name, url, created_at, updated_at
+SELECT provider_id, name, url, tenant_safe, created_at, updated_at
 FROM providers WHERE deleted_at IS NULL ORDER BY created_at DESC`
 	providerSelectByNameQuery = `
-SELECT provider_id, name, url, created_at, updated_at
+SELECT provider_id, name, url, tenant_safe, created_at, updated_at
 FROM providers WHERE deleted_at IS NULL AND name = $1`
 	providerSelectByNameOrIDQuery = `
-SELECT provider_id, name, url, created_at, updated_at
+SELECT provider_id, name, url, tenant_safe, created_at, updated_at
 FROM providers WHERE deleted_at IS NULL AND (provider_id = $1 OR name = $2) LIMIT 1`
 	providerInsertQuery = `
-INSERT INTO providers (name, url) VALUES ($1, $2)
+INSERT INTO providers (name, url, tenant_safe) VALUES ($1, $2, $3)
 RETURNING provider_id, created_at, updated_at`
 	resourceListQuery = `
 SELECT resource_id, provider_id, external_id, env,
@@ -574,7 +574,7 @@ SELECT resource_id, provider_id, external_id, env,
     FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at
+  ), created_at, owner_account
 FROM resources r
 WHERE deleted_at IS NULL
 ORDER BY created_at DESC`
@@ -585,7 +585,7 @@ SELECT resource_id, provider_id, external_id, env,
     FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at
+  ), created_at, owner_account
 FROM resources r
 WHERE provider_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC`
@@ -596,7 +596,7 @@ SELECT DISTINCT(r.resource_id), r.provider_id, r.external_id, r.env,
 	FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), r.created_at
+  ), r.created_at, r.owner_account
 FROM resources r
 JOIN app_resources a USING (resource_id)
 WHERE a.app_id = $1 AND r.deleted_at IS NULL AND a.deleted_at IS NULL
@@ -608,12 +608,12 @@ SELECT resource_id, provider_id, external_id, env,
 	FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at
+  ), created_at, owner_account
 FROM resources r
 WHERE resource_id = $1 AND deleted_at IS NULL`
 	resourceInsertQuery = `
-INSERT INTO resources (resource_id, provider_id, external_id, env)
-VALUES ($1, $2, $3, $4) RETURNING created_at`
+INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account)
+VALUES ($1, $2, $3, $4, $5) RETURNING created_at`
 	resourceDeleteQuery = `
 UPDATE resources SET deleted_at = now() WHERE resource_id = $1 AND deleted_at IS NULL`
 	appResourceInsertAppByNameQuery = `

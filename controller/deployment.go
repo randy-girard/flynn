@@ -24,7 +24,12 @@ func (c *controllerAPI) CreateDeployment(ctx context.Context, w http.ResponseWri
 		respondWithError(w, err)
 		return
 	}
-	appID := c.getApp(ctx).ID
+	app := c.getApp(ctx)
+	if err := c.rejectIfSuspended(app.OwnerAccount); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	appID := app.ID
 
 	d, err := c.deploymentRepo.Add(appID, rid.ID)
 	if err != nil {

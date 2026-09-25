@@ -1135,6 +1135,96 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_blob_gc_keep_check CHECK (blob_gc_keep >= 0)`,
 		`ALTER TABLE runtime_settings ADD COLUMN blob_gc_max_age text NOT NULL DEFAULT ''`,
 	)
+	migrations.Add(66,
+		`CREATE TABLE users (
+			id uuid PRIMARY KEY,
+			handle text NOT NULL UNIQUE,
+			email text NOT NULL UNIQUE,
+			password_hash text NOT NULL,
+			cluster_admin boolean NOT NULL DEFAULT false,
+			disabled boolean NOT NULL DEFAULT false,
+			suspended boolean NOT NULL DEFAULT false,
+			email_verified boolean NOT NULL DEFAULT true,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TRIGGER set_updated_at_users
+			BEFORE UPDATE ON users FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		`CREATE TABLE handles (
+			handle text PRIMARY KEY,
+			account text NOT NULL UNIQUE,
+			kind text NOT NULL CHECK (kind IN ('user', 'org', 'enterprise_account'))
+		)`,
+		`ALTER TABLE apps ADD COLUMN owner_account text`,
+		`ALTER TABLE apps ADD COLUMN created_by uuid REFERENCES users (id)`,
+		`CREATE INDEX apps_owner_account_idx ON apps (owner_account) WHERE deleted_at IS NULL`,
+		`CREATE TABLE account_collaborators (
+			account text NOT NULL,
+			user_id uuid NOT NULL REFERENCES users (id),
+			role text NOT NULL CHECK (role IN ('view', 'deploy', 'manage', 'admin')),
+			PRIMARY KEY (account, user_id)
+		)`,
+		`CREATE TABLE app_collaborators (
+			app_id uuid NOT NULL REFERENCES apps (app_id),
+			user_id uuid NOT NULL REFERENCES users (id),
+			role text NOT NULL CHECK (role IN ('view', 'deploy', 'manage', 'admin')),
+			PRIMARY KEY (app_id, user_id)
+		)`,
+		`CREATE TABLE memberships (
+			user_id uuid NOT NULL REFERENCES users (id),
+			subject text NOT NULL,
+			role text NOT NULL,
+			PRIMARY KEY (user_id, subject)
+		)`,
+		`CREATE TABLE personal_access_tokens (
+			id uuid PRIMARY KEY,
+			user_id uuid NOT NULL REFERENCES users (id),
+			name text NOT NULL,
+			scopes text NOT NULL DEFAULT '',
+			token_hash text NOT NULL UNIQUE,
+			expires_at timestamptz,
+			revoked_at timestamptz,
+			created_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TABLE account_quotas (
+			account text PRIMARY KEY,
+			max_apps integer,
+			max_processes integer,
+			max_memory_mb integer,
+			max_resources integer,
+			max_collaborators integer
+		)`,
+		`CREATE TABLE account_state (
+			account text PRIMARY KEY,
+			suspended boolean NOT NULL DEFAULT false,
+			suspended_at timestamptz
+		)`,
+		`CREATE TABLE verified_domains (
+			hostname text PRIMARY KEY,
+			owner_account text NOT NULL,
+			token text NOT NULL,
+			verified_at timestamptz
+		)`,
+		`CREATE TABLE core_audit (
+			id bigserial PRIMARY KEY,
+			at timestamptz NOT NULL DEFAULT now(),
+			actor text NOT NULL,
+			action text NOT NULL,
+			account text,
+			app_id uuid,
+			data jsonb NOT NULL DEFAULT '{}'::jsonb
+		)`,
+		`ALTER TABLE resources ADD COLUMN owner_account text`,
+		`ALTER TABLE providers ADD COLUMN tenant_safe boolean NOT NULL DEFAULT false`,
+		`CREATE TABLE cluster_settings (
+			id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			tenancy_mode text NOT NULL DEFAULT 'self_hosted',
+			signup_enabled boolean NOT NULL DEFAULT false,
+			CONSTRAINT cluster_settings_mode_check CHECK (tenancy_mode IN ('self_hosted', 'hosted'))
+		)`,
+		`INSERT INTO cluster_settings (id) VALUES (1)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

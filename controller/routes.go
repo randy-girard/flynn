@@ -40,6 +40,10 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
 		return
 	}
+	if err := c.checkHostname(ctx, c.getApp(ctx), route.Domain); err != nil {
+		respondWithError(w, err)
+		return
+	}
 
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
@@ -114,6 +118,7 @@ func (c *controllerAPI) GetRouteList(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
+	routes = c.filterRoutes(ctx, routes)
 	sort.Sort(sortedRoutes(routes))
 	httphelper.JSON(w, 200, routes)
 }

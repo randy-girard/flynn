@@ -60,7 +60,14 @@ func (r *AppRepo) Add(data interface{}) error {
 		app.Meta["gc.max_inactive_slug_releases"] = defaultInactiveSlugReleases(r.db)
 	}
 
-	if err := tx.QueryRow("app_insert", app.ID, app.Name, app.Meta, app.Strategy, app.DeployTimeout).Scan(&app.CreatedAt, &app.UpdatedAt); err != nil {
+	var owner, createdBy *string
+	if app.OwnerAccount != "" {
+		owner = &app.OwnerAccount
+	}
+	if app.CreatedBy != "" {
+		createdBy = &app.CreatedBy
+	}
+	if err := tx.QueryRow("app_insert", app.ID, app.Name, app.Meta, app.Strategy, app.DeployTimeout, owner, createdBy).Scan(&app.CreatedAt, &app.UpdatedAt); err != nil {
 		tx.Rollback()
 		if postgres.IsUniquenessError(err, "apps_name_idx") {
 			return httphelper.ObjectExistsErr(fmt.Sprintf("application %q already exists", app.Name))
@@ -91,8 +98,14 @@ func (r *AppRepo) Add(data interface{}) error {
 
 func scanApp(s postgres.Scanner) (*ct.App, error) {
 	app := &ct.App{}
-	var releaseID *string
-	err := s.Scan(&app.ID, &app.Name, &app.Meta, &app.Strategy, &releaseID, &app.DeployTimeout, &app.CreatedAt, &app.UpdatedAt)
+	var releaseID, owner, createdBy *string
+	err := s.Scan(&app.ID, &app.Name, &app.Meta, &app.Strategy, &releaseID, &app.DeployTimeout, &app.CreatedAt, &app.UpdatedAt, &owner, &createdBy)
+	if owner != nil {
+		app.OwnerAccount = *owner
+	}
+	if createdBy != nil {
+		app.CreatedBy = *createdBy
+	}
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
 	} else if err != nil {

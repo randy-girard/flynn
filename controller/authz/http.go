@@ -33,6 +33,15 @@ const (
 	// installation. App-scoped tokens need github:write on at least one app;
 	// the handler then filters to installations linked to those apps.
 	rkGitHubCatalog
+	// rkUserSession is a route a user token (UserID set) may call. The
+	// handler enforces the specific account or app. Cluster admin is already
+	// allowed above. App-scoped tokens without a user id stay denied, which
+	// keeps GET /apps a 403 for dashboard grants that only list one app.
+	rkUserSession
+	// rkManageProvider is resource provision, attach, and delete. A user id
+	// or an app:write / app:admin grant may reach the handler, which checks
+	// the target app.
+	rkManageProvider
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -62,6 +71,12 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkGitHubCatalog {
 		return hasAnyGitHubWrite(tok)
+	}
+	if kind == rkUserSession {
+		return tok.UserID != ""
+	}
+	if kind == rkManageProvider {
+		return tok.UserID != "" || tokenCanManageSomeApp(tok)
 	}
 	if kind == rkCluster {
 		return false
@@ -226,6 +241,36 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 	}
 
 	switch parts[0] {
+	case "tenancy":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, "", ""
+		}
+		return rkCluster, "", ""
+	case "whoami", "tokens", "domains":
+		return rkUserSession, "", ""
+	case "handles":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
+	case "accounts":
+		if len(parts) >= 3 && parts[2] == "collaborators" {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
+	case "providers":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, "", ""
+		}
+		if len(parts) >= 3 && parts[2] == "resources" {
+			return rkManageProvider, "", ""
+		}
+		return rkCluster, "", ""
+	case "routes":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
 	case "runtimes":
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkAnyAuth, "", ""
@@ -270,9 +315,15 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 
 	case "apps":
 		if len(parts) == 1 {
+			if m == http.MethodGet || m == http.MethodHead || m == http.MethodPost {
+				return rkUserSession, "", ""
+			}
 			return rkCluster, "", ""
 		}
 		appID := parts[1]
+		if len(parts) >= 3 && (parts[2] == "collaborators" || parts[2] == "transfer") {
+			return rkUserSession, appID, ""
+		}
 		if len(parts) == 2 {
 			switch m {
 			case http.MethodGet, http.MethodHead:
@@ -372,6 +423,15 @@ func appSubPerm(method string, rest []string) string {
 func hasAnyReleaseWrite(tok *authorizer.Token) bool {
 	for _, g := range tok.AppGrants {
 		if CanCreateRelease(g.Permissions) {
+			return true
+		}
+	}
+	return false
+}
+
+func tokenCanManageSomeApp(tok *authorizer.Token) bool {
+	for _, g := range tok.AppGrants {
+		if HasAppPermission(g.Permissions, PermAppWrite) || HasAppPermission(g.Permissions, PermAppAdmin) {
 			return true
 		}
 	}
