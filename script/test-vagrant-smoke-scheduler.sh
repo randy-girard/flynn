@@ -21,7 +21,7 @@ need "${ROOT}/controller/types/types.go" 'EventTypeScheduler' \
   "controller events must include scheduler fires"
 need "${ROOT}/cli/plugin_cmd.go" 'PartitionTypeSystem' \
   "plugin CLI jobs must run in the system partition so scheduler.discoverd resolves"
-need "${smoke}" 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler' \
+need "${smoke}" 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline' \
   "default plugin install list must include scheduler"
 need "${smoke}" 'scheduler_smoke_wanted' \
   "upgrade smoke must gate scheduler probes on PLUGIN_SMOKE_APPS"

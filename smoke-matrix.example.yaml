@@ -45,6 +45,7 @@ defaults:
     - discovery
     - otel
     - scheduler
+    - pipeline
 
 items:
   - id: singleton
@@ -108,4 +109,19 @@ items:
       - postgres
       - mysql
     blobstore_backend: minio
+    enabled: false
+
+  - id: pipeline
+    description: 1-node pipeline create/add/promote into an undeployed production app
+    topologies: "1"
+    skip_upgrade: true
+    skip_backup: true
+    skip_volume: true
+    skip_buildpack: true
+    seed_rows: 20
+    blob_count: 10
+    plugins:
+      - pipeline
+    datastores:
+      - postgres
     enabled: false

@@ -175,7 +175,7 @@ On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
-`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler` (every
+`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline` (every
 first-party plugin except the template and Let's Encrypt; Vagrant has no ACME). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.

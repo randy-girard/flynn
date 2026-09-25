@@ -63,6 +63,9 @@
 #   --item minio               1-node S3-compatible blobstore (MinIO sidecar)
 #                               + mysql plugin backup/restore. Disabled in the
 #                               example matrix (extra RAM). --item still runs it.
+#   --item pipeline            1-node pipeline create/add/promote into an
+#                               undeployed production app. Disabled in the
+#                               example matrix. --item still runs it.
 #   --list                      print items and exit (no VMs)
 #
 # Environment:
@@ -150,11 +153,12 @@
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before resource add (default: redis
 #                        mysql mongodb kafka clickhouse dashboard www
-#                        discovery otel scheduler). mysql resolves to the
-#                        mariadb checkout via flynn-plugin.json. Restore does
-#                        not install again; plugins.json + postgres already
-#                        list and restore them. Scheduler interval fire is
-#                        probed after the uploaded apps exist (CLI step).
+#                        discovery otel scheduler pipeline). mysql resolves to
+#                        the mariadb checkout via flynn-plugin.json. Restore
+#                        does not install again; plugins.json + postgres
+#                        already list and restore them. Scheduler interval
+#                        fire and pipeline promote are probed after the
+#                        uploaded apps exist (CLI step).
 #   PLUGIN_REPO_ROOT     Parent of plugin checkouts with flynn-plugin.json
 #                        (default: ..; includes flynn-plugin-* siblings)
 #   PLUGIN_BUILD_CONCURRENCY  How many plugin images to build at once after
@@ -349,7 +353,7 @@ SHARED_LOG_DIRS=(builder)
 SMOKE_DATASTORES="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
 DATASTORE_PROVIDERS=()
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-6}"
@@ -3564,6 +3568,18 @@ scheduler_smoke_wanted() {
   [[ " ${PLUGIN_SMOKE_APPS} " == *" scheduler "* ]]
 }
 
+pipeline_smoke_wanted() {
+  [[ " ${PLUGIN_SMOKE_APPS} " == *" pipeline "* ]]
+}
+
+pipeline_smoke_name() {
+  echo "smoke-pipe"
+}
+
+pipeline_prod_app() {
+  echo "${APP_NAME}-prod"
+}
+
 otel_flynnbr0_ready() {
   node_root_script node1 <<'EOF'
 ip -4 -o addr show flynnbr0 2>/dev/null | awk '{print $4}' | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/'
@@ -3769,6 +3785,108 @@ probe_scheduler_interval_job() {
 
   cli_probe "${label}" "cli-scheduler-remove" "removed" \
     flynn1 -a "${app}" scheduler remove "${id}" || return 1
+  return 0
+}
+
+# Create a pipeline, attach the uploaded app as staging and a new empty
+# production app, then promote. This is the undeployed-dest path (CreateRelease
+# + first scale). Plugins install before deploy, so this cannot run at
+# plugin-install time. Must not treat a plugin SSO JWT as controller AUTH_KEY
+# (that 401s POST /releases).
+pipeline_add_member() {
+  local pipe=$1 app=$2 env=$3
+  local out rc=0
+  out="$(flynn1 pipeline:add "${pipe}" "${app}" "${env}" 2>&1)" || rc=$?
+  if [[ "${rc}" -eq 0 ]]; then
+    return 0
+  fi
+  if echo "${out}" | grep -qiE 'already|exists|unique|duplicate'; then
+    return 0
+  fi
+  echo "${out}"
+  return 1
+}
+
+probe_pipeline_promote() {
+  local label=$1
+  local src="${APP_NAME}"
+  local dest pipe out rc snippet had_release=0
+
+  if ! pipeline_smoke_wanted; then
+    return 0
+  fi
+
+  dest="$(pipeline_prod_app)"
+  pipe="$(pipeline_smoke_name)"
+
+  cli_probe "${label}" "cli-help-pipeline" "pipeline" \
+    flynn1 help || return 1
+  cli_probe "${label}" "cli-help-pipeline-promote" "pipeline:promote|-a" \
+    flynn1 help pipeline || return 1
+
+  if flynn1 apps 2>/dev/null | awk 'NR>1 {print $2}' | grep -qx "${dest}"; then
+    record_check "${label}" "cli-pipeline-create-app" "PASS" "exists ${dest}"
+    echo "cli ${label} cli-pipeline-create-app: PASS exists ${dest}"
+  else
+    cli_probe "${label}" "cli-pipeline-create-app" "${dest}|Created|created" \
+      flynn1 create -r "" "${dest}" || return 1
+  fi
+
+  if flynn1 pipeline 2>/dev/null | awk 'NR>1 {print $1}' | grep -qx "${pipe}"; then
+    record_check "${label}" "cli-pipeline-create" "PASS" "exists ${pipe}"
+    echo "cli ${label} cli-pipeline-create: PASS exists ${pipe}"
+  else
+    cli_probe "${label}" "cli-pipeline-create" "created ${pipe}|${pipe}" \
+      flynn1 pipeline:create "${pipe}" || return 1
+  fi
+
+  out="$(pipeline_add_member "${pipe}" "${src}" staging 2>&1)" || {
+    record_check "${label}" "cli-pipeline-add-staging" "FAIL" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-pipeline-add-staging: FAIL ${out}" >&2
+    return 1
+  }
+  record_check "${label}" "cli-pipeline-add-staging" "PASS" "${src} staging"
+  echo "cli ${label} cli-pipeline-add-staging: PASS"
+
+  out="$(pipeline_add_member "${pipe}" "${dest}" production 2>&1)" || {
+    record_check "${label}" "cli-pipeline-add-production" "FAIL" "$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-pipeline-add-production: FAIL ${out}" >&2
+    return 1
+  }
+  record_check "${label}" "cli-pipeline-add-production" "PASS" "${dest} production"
+  echo "cli ${label} cli-pipeline-add-production: PASS"
+
+  cli_probe "${label}" "cli-pipeline-info" "${src}|${dest}|staging|production" \
+    flynn1 pipeline:info "${pipe}" || return 1
+
+  if flynn1 -a "${dest}" release >/dev/null 2>&1; then
+    had_release=1
+  fi
+
+  rc=0
+  out="$(flynn1 -a "${src}" pipeline:promote 2>&1)" || rc=$?
+  snippet="$(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-120)"
+  if [[ "${rc}" -ne 0 ]] || echo "${out}" | grep -qiE 'failed|401|unexpected status|missing user credentials'; then
+    record_check "${label}" "cli-pipeline-promote" "FAIL" "rc=${rc} ${snippet}"
+    echo "cli ${label} cli-pipeline-promote: FAIL rc=${rc} ${out}" >&2
+    return 1
+  fi
+  if ! echo "${out}" | grep -qiE 'complete|nothing to promote'; then
+    record_check "${label}" "cli-pipeline-promote" "FAIL" "${snippet}"
+    echo "cli ${label} cli-pipeline-promote: FAIL ${out}" >&2
+    return 1
+  fi
+  record_check "${label}" "cli-pipeline-promote" "PASS" "${snippet}"
+  echo "cli ${label} cli-pipeline-promote: PASS"
+
+  cli_probe "${label}" "cli-pipeline-dest-release" "." \
+    flynn1 -a "${dest}" release || return 1
+  if [[ "${had_release}" -eq 0 ]]; then
+    cli_probe "${label}" "cli-pipeline-dest-ps" "web" \
+      flynn1 -a "${dest}" ps || return 1
+  fi
+  cli_probe "${label}" "cli-pipeline-promotions" "complete|STATUS" \
+    flynn1 pipeline:promotions "${pipe}" || return 1
   return 0
 }
 
@@ -5300,6 +5418,7 @@ step_cli_functions() {
 
   cli_run_job "${label}" "cli-run" "${APP_NAME}" "smoke-cli" echo smoke-cli || failed=1
   probe_scheduler_interval_job "${label}" || failed=1
+  probe_pipeline_promote "${label}" || failed=1
 
   # Custom .buildpacks app: slugrunner + heroku-buildpack-inline compile stamp.
   cli_probe "${label}" "buildpack-cli-info" "${BUILDPACK_APP_NAME}|Git URL|Web URL" \

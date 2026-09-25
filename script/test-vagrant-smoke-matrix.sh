@@ -42,6 +42,8 @@ need "${smoke}" '--item quick' \
   "smoke header must document the contributor quick item"
 need "${smoke}" '--item minio' \
   "smoke header must document the MinIO blobstore item"
+need "${smoke}" '--item pipeline' \
+  "smoke header must document the pipeline promote item"
 need "${smoke}" 'SMOKE_BLOBSTORE_BACKEND' \
   "smoke must honor SMOKE_BLOBSTORE_BACKEND / blobstore_backend"
 need "${smoke}" 'start_minio_sidecar' \
@@ -80,10 +82,12 @@ need "${example}" 'id: quick' \
   "example matrix must include the contributor quick smoke"
 need "${example}" 'id: minio' \
   "example matrix must include the MinIO S3-compatible blobstore profile"
+need "${example}" 'id: pipeline' \
+  "example matrix must include the pipeline promote profile"
 need "${example}" 'blobstore_backend: minio' \
   "minio profile must set blobstore_backend"
 need "${example}" 'enabled: false' \
-  "membership/discovery/iterate/quick/minio profiles must be opt-in in the example"
+  "membership/discovery/iterate/quick/minio/pipeline profiles must be opt-in in the example"
 need "${docs}" '--item quick' \
   "development docs must tell contributors to run --item quick"
 need "${gitignore}" '/smoke-matrix.yaml' \
@@ -109,6 +113,8 @@ echo "${listed}" | grep -q 'quick' \
   || { echo "--list must include quick" >&2; echo "${listed}" >&2; exit 1; }
 echo "${listed}" | grep -q 'minio' \
   || { echo "--list must include minio" >&2; echo "${listed}" >&2; exit 1; }
+echo "${listed}" | grep -q 'pipeline' \
+  || { echo "--list must include pipeline" >&2; echo "${listed}" >&2; exit 1; }
 
 out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" select)"
 if [[ "${out}" != $'singleton\nha' ]]; then
@@ -155,6 +161,29 @@ echo "${out}" | grep -q "PLUGIN_SMOKE_APPS='mysql'" \
   || { echo "minio must install the mysql plugin" >&2; echo "${out}" >&2; exit 1; }
 if echo "${out}" | grep -q 'SKIP_BACKUP=1'; then
   echo "minio must run backup/restore" >&2
+  echo "${out}" >&2
+  exit 1
+fi
+
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item pipeline apply-item)"
+echo "${out}" | grep -q 'SMOKE_TOPOLOGIES=1' \
+  || { echo "pipeline must set topologies=1" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SKIP_UPGRADE=1' \
+  || { echo "pipeline must set SKIP_UPGRADE=1" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SKIP_BACKUP=1' \
+  || { echo "pipeline must set SKIP_BACKUP=1" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q "PLUGIN_SMOKE_APPS='pipeline'" \
+  || echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=pipeline' \
+  || { echo "pipeline must install the pipeline plugin" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SMOKE_DATASTORES=postgres' \
+  || { echo "pipeline must set SMOKE_DATASTORES=postgres" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'SKIP_CLI=1'; then
+  echo "pipeline must run the live CLI step so promote is exercised" >&2
+  echo "${out}" >&2
+  exit 1
+fi
+if echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1'; then
+  echo "pipeline must install the pipeline plugin" >&2
   echo "${out}" >&2
   exit 1
 fi

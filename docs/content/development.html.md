@@ -325,7 +325,7 @@ $ script/vagrant-smoke.sh --item quick
 Configurations live in a matrix document, not a pile of environment variables:
 
 - `smoke-matrix.example.yaml` — committed catalog of layouts (quick, singleton, HA,
-  add-node, remove-node, discovery, install-only)
+  add-node, remove-node, discovery, install-only, minio, pipeline)
 - `smoke-matrix.yaml` — gitignored local copy; used when present
   (`cp smoke-matrix.example.yaml smoke-matrix.yaml`)
 
@@ -334,6 +334,7 @@ $ script/vagrant-smoke.sh --list
 $ script/vagrant-smoke.sh --item quick
 $ script/vagrant-smoke.sh --item singleton
 $ script/vagrant-smoke.sh --item ha,add-node
+$ script/vagrant-smoke.sh --item pipeline
 $ SKIP_BUILD=1 script/vagrant-smoke.sh --item install-only
 ```
 
@@ -365,7 +366,7 @@ Default flow:
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`,
    install every first-party plugin (`PLUGIN_SMOKE_APPS`: redis, mysql,
-   mongodb, kafka, clickhouse, dashboard, www, discovery, otel, scheduler), start a dummy
+   mongodb, kafka, clickhouse, dashboard, www, discovery, otel, scheduler, pipeline), start a dummy
    OTLP/HTTP sink on the host and confirm the otel plugin POSTs `/v1/metrics`,
    deploy
    `test/apps/upgrade-smoke` against every datastore provider, `git push`
@@ -389,6 +390,7 @@ set in the environment):
 | --- | --- |
 | `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push + postgres |
 | `--item minio` | 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore. Extra RAM; disabled in the example matrix. |
+| `--item pipeline` | 1-node pipeline create/add/promote into an undeployed production app. Disabled in the example matrix. |
 | `--item singleton` | Run one matrix row (even if `enabled: false`) |
 | `--list` | Print matrix items and exit |
 | `--matrix PATH` / `SMOKE_MATRIX` | Use a different matrix file |
@@ -404,7 +406,7 @@ set in the environment):
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |
-| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler) |
+| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline) |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
 The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
