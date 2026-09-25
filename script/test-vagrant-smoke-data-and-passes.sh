@@ -259,6 +259,12 @@ need 'db-check' \
   "assert_databases must log per-engine progress so a hang is obvious"
 need 'smoke_cli_retry' \
   "assert_databases must retry unknown_error on pg:psql after HA controller roll"
+need 'record_seed_counts' \
+  "smoke must verify seeded row counts after deploy"
+if ! awk '/^record_seed_counts\(\)/,/^}/' "${smoke}" | grep -q smoke_cli_retry; then
+  echo "record_seed_counts must retry unknown_error like assert_databases" >&2
+  exit 1
+fi
 need 'step_host_unit_tests' \
   "smoke must run host unit tests before Vagrant up"
 need 'validate-gofmt' \

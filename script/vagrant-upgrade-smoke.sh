@@ -4696,8 +4696,8 @@ record_seed_counts() {
   local count payload topics
 
   if datastore_wanted postgres; then
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "seed" "postgres" "PASS" "rows=${count} payload=${payload}"
   else
@@ -4707,8 +4707,8 @@ record_seed_counts() {
   fi
 
   if datastore_wanted mysql; then
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
     record_check "seed" "mysql" "PASS" "rows=${count} payload=${payload}"
   else
@@ -4718,7 +4718,7 @@ record_seed_counts() {
   fi
 
   if datastore_wanted mongodb; then
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
     record_check "seed" "mongodb" "PASS" "docs=${count}"
   else
@@ -4728,7 +4728,7 @@ record_seed_counts() {
   fi
 
   if datastore_wanted redis; then
-  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
+  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
   if [[ -n "${count}" && "${count}" -ge $((rows + 1)) ]]; then
     record_check "seed" "redis" "PASS" "dbsize=${count}"
   else
