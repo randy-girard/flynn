@@ -18,6 +18,9 @@ the scheduler promotes the appliance to a three-peer replica set automatically.
 The image includes **PostGIS 3**, **pgRouting**, and **TimescaleDB 2** in
 addition to `postgresql-contrib`.
 
+Each resource role gets a `CONNECTION LIMIT` and cannot `CREATE EXTENSION` for
+untrusted extensions. `CONNECT` stays revoked from `PUBLIC`.
+
 ## Usage
 
 ### Adding a database to an app

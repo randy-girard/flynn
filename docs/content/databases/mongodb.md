@@ -22,6 +22,12 @@ joins, the scheduler promotes the appliance to a three-peer replica set
 automatically. The image includes `mongod`, database tools, and `mongosh` (not the
 legacy `mongo` shell).
 
+Each resource gets a user with `dbOwner` on its own database. Provision stores a
+connection budget (default 20) and rejects `max_connections` above
+`MONGO_MAX_CONNECTIONS`. It does not change the server-wide
+`maxIncomingConnections` setting. The provider sets `tenant_safe`. See
+[Plugins](../plugins.md).
+
 ## Usage
 
 ### Adding a database to an app

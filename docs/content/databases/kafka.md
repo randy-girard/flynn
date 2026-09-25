@@ -23,7 +23,13 @@ automatically.
 
 Topics are **not** created automatically. Auto topic creation is disabled on the
 brokers, so a topic must be created with the `flynn kafka` CLI before any
-producer or consumer can use it.
+producer or consumer can use it. Topic and group names must stay under the
+resource prefix.
+
+Each resource gets its own SCRAM-SHA-256 user and ACLs limited to
+`flynn.<resource-id>.`. The client listener requires SASL. The broker admin
+principal is not returned to the app. The provider sets `tenant_safe`, so
+hosted tenants may provision it. See [Plugins](../plugins.md).
 
 ## Usage
 

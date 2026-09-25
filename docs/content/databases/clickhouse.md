@@ -24,6 +24,10 @@ single-node/`SINGLETON` installs).
 User databases must be created with the `flynn clickhouse` CLI so they are
 provisioned with `ON CLUSTER` DDL and replicated to every replica.
 
+`flynn resource:add clickhouse` creates a database and a user granted only that
+database, with a memory and query quota. The app receives that user, not the
+cluster `default` user. The provider sets `tenant_safe`. See [Plugins](../plugins.md).
+
 ## Usage
 
 ### Adding a cluster to an app

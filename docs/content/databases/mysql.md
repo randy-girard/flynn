@@ -24,6 +24,10 @@ backup. A single-host
 (`SINGLETON`) cluster runs one peer; when a third host joins, the scheduler
 promotes the appliance to a three-peer replica set automatically.
 
+Each resource user is created with `MAX_USER_CONNECTIONS` (default 20, override
+with `MYSQL_MAX_USER_CONNECTIONS` on the API). The provider sets `tenant_safe`.
+See [Plugins](../plugins.md).
+
 ## Usage
 
 ### Adding a database to an app

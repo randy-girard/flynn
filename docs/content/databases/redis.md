@@ -21,6 +21,10 @@ volume, so data survives job restarts and `flynn-host update`, but there are no
 replicas and the volume is **not** part of `flynn-host backup`. Treat the data
 as ephemeral: caching, development, and test use.
 
+Each resource is its own Redis instance and must have a password (`requirepass`).
+Provision fails if that password would be empty. The provider sets `tenant_safe`.
+See [Plugins](../plugins.md).
+
 ## Usage
 
 ### Adding a server to an app
