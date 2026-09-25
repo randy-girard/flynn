@@ -673,8 +673,33 @@ func TestEnsureRoutesAutoTLSUpdatesExisting(t *testing.T) {
 	if err := in.ensureRoutes(app, m, cluster, true); err != nil {
 		t.Fatal(err)
 	}
-	if len(stub.updated) != 0 {
-		t.Fatal("already-managed cert must not be updated again")
+	if len(stub.updated) != 1 {
+		t.Fatal("already-managed cert must be re-touched so ACME can retry")
+	}
+}
+
+func TestEnsureRoutesAutoTLSMatchesExistingDomain(t *testing.T) {
+	app := &ct.App{ID: "app1", Name: "www"}
+	cluster := map[string]string{"CLUSTER_DOMAIN": "ex.local"}
+	m := &Manifest{
+		Routes: []RouteSpec{
+			{Type: "http", Domain: "www.${CLUSTER_DOMAIN}", Service: "www", AutoTLS: true},
+		},
+	}
+	existing := &router.Route{Type: "http", ID: "inc", Domain: "www.ex.local", Service: "www-web"}
+	stub := &routeStub{
+		routes: []*router.Route{existing},
+		acme:   &ct.ACMEConfig{Enabled: true},
+	}
+	in := &Installer{Stdout: io.Discard, RouteClient: stub}
+	if err := in.ensureRoutes(app, m, cluster, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.created) != 0 || len(stub.updated) != 1 {
+		t.Fatalf("created=%d updated=%d", len(stub.created), len(stub.updated))
+	}
+	if stub.updated[0].ID != "inc" || !routeHasAutoTLS(stub.updated[0]) {
+		t.Fatalf("updated %+v", stub.updated[0])
 	}
 }
 

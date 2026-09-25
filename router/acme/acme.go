@@ -38,6 +38,7 @@ type ControllerClient interface {
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
 	ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error)
 	ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error)
+	ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error)
 	CreateRoute(appID string, route *router.Route) error
 	DeleteRoute(appID string, routeID string) error
 }
@@ -61,6 +62,10 @@ func (w *controllerClientWrapper) ListExpiringManagedCertificates(before time.Ti
 
 func (w *controllerClientWrapper) ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error) {
 	return w.client.ListFailedManagedCertificates()
+}
+
+func (w *controllerClientWrapper) ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	return w.client.ListPendingManagedCertificates()
 }
 
 func (w *controllerClientWrapper) CreateRoute(appID string, route *router.Route) error {
@@ -514,7 +519,8 @@ func (s *Service) handleCertificate(cert *ct.ManagedCertificate) {
 		return
 	}
 	csrTemplate := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: cert.Domain},
+		Subject:  pkix.Name{CommonName: cert.Domain},
+		DNSNames: []string{cert.Domain},
 	}
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, privKey)
 	if err != nil {

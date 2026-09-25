@@ -22,9 +22,11 @@ type stubController struct {
 	updates            []*ct.ManagedCertificate
 	expiring           []*ct.ManagedCertificate
 	failed             []*ct.ManagedCertificate
+	pending            []*ct.ManagedCertificate
 	listExpiringBefore time.Time
 	listExpiringErr    error
 	listFailedErr      error
+	listPendingErr     error
 	updateErr          error
 }
 
@@ -61,6 +63,12 @@ func (c *stubController) ListFailedManagedCertificates() ([]*ct.ManagedCertifica
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.failed, c.listFailedErr
+}
+
+func (c *stubController) ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pending, c.listPendingErr
 }
 
 func (c *stubController) CreateRoute(string, *router.Route) error { return nil }
@@ -118,12 +126,12 @@ func TestRetryBackoffExponentialCap(t *testing.T) {
 		failures int
 		want     time.Duration
 	}{
-		{0, time.Hour},
-		{1, 2 * time.Hour},
-		{2, 4 * time.Hour},
-		{3, 8 * time.Hour},
-		{4, 16 * time.Hour},
-		{5, 24 * time.Hour},
+		{0, 2 * time.Minute},
+		{1, 4 * time.Minute},
+		{2, 8 * time.Minute},
+		{3, 16 * time.Minute},
+		{4, 32 * time.Minute},
+		{5, 64 * time.Minute},
 		{10, 24 * time.Hour},
 	}
 	for _, c := range cases {
@@ -168,7 +176,7 @@ func TestReconcileMarksExpiringPending(t *testing.T) {
 
 func TestReconcileRetriesFailedAfterBackoff(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
-	lastErr := now.Add(-30 * time.Minute)
+	lastErr := now.Add(-30 * time.Second)
 	cert := &ct.ManagedCertificate{
 		ID:          "c1",
 		Domain:      "ex.com",
@@ -184,7 +192,7 @@ func TestReconcileRetriesFailedAfterBackoff(t *testing.T) {
 		t.Fatalf("retried too early: %+v", ctrl.updates)
 	}
 
-	s.now = func() time.Time { return now.Add(2 * time.Hour) }
+	s.now = func() time.Time { return now.Add(3 * time.Minute) }
 	s.reconcile()
 	if len(ctrl.updates) != 1 || ctrl.updates[0].Status != ct.ManagedCertificateStatusPending {
 		t.Fatalf("updates = %+v", ctrl.updateStatuses())
@@ -193,7 +201,7 @@ func TestReconcileRetriesFailedAfterBackoff(t *testing.T) {
 
 func TestReconcileFailedBackoffGrows(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
-	lastErr := now.Add(-90 * time.Minute)
+	lastErr := now.Add(-5 * time.Minute)
 	cert := &ct.ManagedCertificate{
 		ID:          "c1",
 		Domain:      "ex.com",
@@ -203,17 +211,17 @@ func TestReconcileFailedBackoffGrows(t *testing.T) {
 	ctrl := &stubController{failed: []*ct.ManagedCertificate{cert}}
 	s := testService(ctrl)
 	s.now = func() time.Time { return now }
-	s.failCount["c1"] = 2 // 4h backoff
+	s.failCount["c1"] = 2 // 8m backoff
 
 	s.reconcile()
 	if len(ctrl.updates) != 0 {
-		t.Fatal("4h backoff should still be waiting at 90m")
+		t.Fatal("8m backoff should still be waiting at 5m")
 	}
 
-	s.now = func() time.Time { return now.Add(3 * time.Hour) }
+	s.now = func() time.Time { return now.Add(4 * time.Minute) }
 	s.reconcile()
 	if len(ctrl.updates) != 1 {
-		t.Fatalf("expected retry after 4h backoff, updates=%d", len(ctrl.updates))
+		t.Fatalf("expected retry after 8m backoff, updates=%d", len(ctrl.updates))
 	}
 }
 
@@ -227,6 +235,38 @@ func TestReconcileFailedWithoutTimestampRetries(t *testing.T) {
 	s.reconcile()
 	if len(ctrl.updates) != 1 {
 		t.Fatal("failed certs with no timestamp should be retried")
+	}
+}
+
+func TestReconcileRetriesStuckPending(t *testing.T) {
+	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
+	stale := now.Add(-5 * time.Minute)
+	fresh := now.Add(-30 * time.Second)
+	handled := make(chan string, 2)
+	ctrl := &stubController{pending: []*ct.ManagedCertificate{
+		{ID: "old", Domain: "www.ex.com", Status: ct.ManagedCertificateStatusPending, UpdatedAt: &stale},
+		{ID: "new", Domain: "fresh.ex.com", Status: ct.ManagedCertificateStatusPending, UpdatedAt: &fresh},
+	}}
+	s := testService(ctrl)
+	s.now = func() time.Time { return now }
+	s.handle = func(cert *ct.ManagedCertificate) {
+		handled <- cert.Domain
+	}
+
+	s.reconcile()
+
+	select {
+	case d := <-handled:
+		if d != "www.ex.com" {
+			t.Fatalf("handled %s, want www.ex.com", d)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stuck pending cert was not re-dispatched")
+	}
+	select {
+	case d := <-handled:
+		t.Fatalf("fresh pending cert should wait: %s", d)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
 

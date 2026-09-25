@@ -105,6 +105,7 @@ type Client interface {
 	ListManagedCertificates() ([]*ct.ManagedCertificate, error)
 	ListExpiringManagedCertificates(before time.Time) ([]*ct.ManagedCertificate, error)
 	ListFailedManagedCertificates() ([]*ct.ManagedCertificate, error)
+	ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error)
 	GetManagedCertificate(certID string) (*ct.ManagedCertificate, error)
 	UpdateManagedCertificate(cert *ct.ManagedCertificate) error
 	StreamManagedCertificates(since *time.Time, output chan *ct.ManagedCertificate) (stream.Stream, error)

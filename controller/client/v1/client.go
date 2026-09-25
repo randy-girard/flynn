@@ -1038,6 +1038,13 @@ func (c *Client) ListFailedManagedCertificates() ([]*ct.ManagedCertificate, erro
 	return certs, c.Get("/managed-certificates?status=failed", &certs)
 }
 
+// ListPendingManagedCertificates returns managed certificates that have not
+// finished issuance. ACME uses this to retry certs whose stream event was missed.
+func (c *Client) ListPendingManagedCertificates() ([]*ct.ManagedCertificate, error) {
+	var certs []*ct.ManagedCertificate
+	return certs, c.Get("/managed-certificates?status=pending", &certs)
+}
+
 // GetManagedCertificate returns a specific managed certificate
 func (c *Client) GetManagedCertificate(certID string) (*ct.ManagedCertificate, error) {
 	cert := &ct.ManagedCertificate{}

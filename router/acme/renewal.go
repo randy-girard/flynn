@@ -16,8 +16,13 @@ const (
 	// reset to pending so handleCertificate can reissue them.
 	RenewalWindow = 30 * 24 * time.Hour
 
-	initialRetryBackoff = time.Hour
+	initialRetryBackoff = 2 * time.Minute
 	maxRetryBackoff     = 24 * time.Hour
+
+	// pendingRetryAge is how long a certificate may sit in pending before
+	// reconcile re-dispatches it. Fresh stream events are handled immediately;
+	// this covers missed events after plugin install.
+	pendingRetryAge = 2 * time.Minute
 )
 
 func retryBackoff(failures int) time.Duration {
@@ -68,6 +73,7 @@ func (s *Service) renewalLoop(stop <-chan struct{}) {
 func (s *Service) reconcile() {
 	s.renewExpiring()
 	s.retryFailed()
+	s.retryPending()
 }
 
 func (s *Service) renewExpiring() {
@@ -103,6 +109,45 @@ func (s *Service) retryFailed() {
 		s.log.Info("retrying failed certificate", "domain", cert.Domain, "last_error_at", cert.LastErrorAt)
 		s.markPending(cert)
 	}
+}
+
+func (s *Service) retryPending() {
+	certs, err := s.controller.ListPendingManagedCertificates()
+	if err != nil {
+		s.log.Error("error listing pending certificates", "err", err)
+		return
+	}
+	now := s.currentTime()
+	for _, cert := range certs {
+		if cert == nil {
+			continue
+		}
+		if !s.shouldRetryPending(cert, now) {
+			continue
+		}
+		s.log.Info("retrying stuck pending certificate", "domain", cert.Domain, "updated_at", cert.UpdatedAt)
+		s.dispatch(cert)
+	}
+}
+
+func (s *Service) shouldRetryPending(cert *ct.ManagedCertificate, now time.Time) bool {
+	if cert.Status != ct.ManagedCertificateStatusPending {
+		return false
+	}
+	s.handlingMtx.Lock()
+	_, busy := s.handling[cert.Domain]
+	s.handlingMtx.Unlock()
+	if busy {
+		return false
+	}
+	seen := cert.UpdatedAt
+	if seen == nil {
+		seen = cert.CreatedAt
+	}
+	if seen == nil {
+		return true
+	}
+	return !now.Before(seen.Add(pendingRetryAge))
 }
 
 func (s *Service) shouldRetryFailed(cert *ct.ManagedCertificate, now time.Time) bool {

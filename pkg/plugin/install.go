@@ -883,6 +883,17 @@ func routeKey(typ, domain, service string) string {
 	return typ + "/" + domain + "/" + service
 }
 
+func routeDomainKey(typ, domain string) string {
+	return typ + "/" + domain
+}
+
+func existingHTTPRoute(have map[string]*router.Route, haveDomain map[string]*router.Route, typ, domain, service string) *router.Route {
+	if prev := have[routeKey(typ, domain, service)]; prev != nil {
+		return prev
+	}
+	return haveDomain[routeDomainKey(typ, domain)]
+}
+
 func routeHasAutoTLS(r *router.Route) bool {
 	return r != nil && r.ManagedCertificateDomain != nil && strings.TrimSpace(*r.ManagedCertificateDomain) != ""
 }
@@ -963,11 +974,13 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 		return fmt.Errorf("list routes for %s: %w", app.Name, err)
 	}
 	have := map[string]*router.Route{}
+	haveDomain := map[string]*router.Route{}
 	for _, r := range existing {
 		if r == nil {
 			continue
 		}
 		have[routeKey(r.Type, r.Domain, r.Service)] = r
+		haveDomain[routeDomainKey(r.Type, r.Domain)] = r
 	}
 	for _, spec := range m.Routes {
 		typ := spec.Type
@@ -976,9 +989,8 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 		}
 		domain := ExpandClusterVars(spec.Domain, cluster)
 		wantTLS := typ == "http" && (spec.AutoTLS || installAutoTLS || acmeOn)
-		key := routeKey(typ, domain, spec.Service)
-		if prev := have[key]; prev != nil {
-			if !wantTLS || routeHasAutoTLS(prev) {
+		if prev := existingHTTPRoute(have, haveDomain, typ, domain, spec.Service); prev != nil {
+			if !wantTLS {
 				in.logf("route %s %s already exists", typ, domain)
 				continue
 			}
@@ -986,8 +998,10 @@ func (in *Installer) ensureRoutes(app *ct.App, m *Manifest, cluster map[string]s
 				return err
 			}
 			if !routeHasAutoTLS(prev) {
+				in.logf("route %s %s already exists", typ, domain)
 				continue
 			}
+			// Re-touch so a failed or stuck-pending ACME cert is queued again.
 			in.logf("updating %s route %s with auto TLS", typ, domain)
 			if err := api.UpdateRoute(app.ID, prev.FormattedID(), prev); err != nil {
 				return fmt.Errorf("update route %s: %w", domain, err)
