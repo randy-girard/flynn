@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/cheggaaa/pb"
@@ -41,6 +42,10 @@ func runPluginCommand(name string, args []string) error {
 		return runPluginFlynnCommand(client, spec, action, rest)
 	}
 
+	// pg:psql pg-harbor-kxmnpq selects that instance. The token is not part of
+	// the docopt usage, so redis-cli PING stays a redis argument.
+	resourceName, args := peelResourceName(name, args)
+
 	argv := make([]string, 1, 1+len(args))
 	argv[0] = name
 	argv = append(argv, args...)
@@ -48,7 +53,40 @@ func runPluginCommand(name string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if resourceName != "" {
+		if parsed.String == nil {
+			parsed.String = map[string]string{}
+		}
+		parsed.String["<name>"] = resourceName
+	}
 	return executePluginCLI(client, spec, parsed, args)
+}
+
+// peelResourceName removes one full resource app name (prefix-word-xxxxxx)
+// from the plugin argv. A token that is not that shape is left alone.
+func peelResourceName(command string, args []string) (string, []string) {
+	command = strings.ToLower(strings.TrimSpace(command))
+	if command == "" || len(args) == 0 {
+		return "", args
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8}$`)
+	for i, arg := range args {
+		if arg == "--" {
+			return "", args
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		token := strings.ToLower(arg)
+		if !re.MatchString(token) {
+			continue
+		}
+		rest := make([]string, 0, len(args)-1)
+		rest = append(rest, args[:i]...)
+		rest = append(rest, args[i+1:]...)
+		return token, rest
+	}
+	return "", args
 }
 
 func runPluginFlynnCommand(client controller.Client, spec *plugin.CLI, action *plugin.CLIAction, extra []string) error {

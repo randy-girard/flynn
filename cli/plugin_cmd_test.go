@@ -366,6 +366,21 @@ func TestPluginMatchActionPrefersLongestName(t *testing.T) {
 	}
 }
 
+func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
+	name, rest := peelResourceName("redis", []string{"redis-cli", "PING"})
+	if name != "" || len(rest) != 2 || rest[1] != "PING" {
+		t.Fatalf("PING must stay an argument, got name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("pg", []string{"psql", "pg-harbor-kxmnpq", "--", "-c", "SELECT 1"})
+	if name != "pg-harbor-kxmnpq" || strings.Join(rest, " ") != "psql -- -c SELECT 1" {
+		t.Fatalf("name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("pg", []string{"psql", "--", "pg-harbor-kxmnpq"})
+	if name != "" {
+		t.Fatalf("tokens after -- are arguments: %q", name)
+	}
+}
+
 func TestPluginInterpNamedResource(t *testing.T) {
 	named := "pg-harbor-kxmnpq"
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
