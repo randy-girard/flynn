@@ -4444,8 +4444,16 @@ if [[ "${seed_kafka}" == "1" ]]; then
 # Topic metadata lives on the kafka /data volume; recreate is ok if a prior
 # failed run left the name behind.
 ok=0
+# Topics must start with KAFKA_TOPIC_PREFIX (flynn.<resource-id>.).
+KPREFIX="\$(flynn -a "\${APP}" env get KAFKA_TOPIC_PREFIX 2>/dev/null | tr -d '[:space:]' || true)"
 for i in \$(seq 1 30); do
-  if flynn -a "\${APP}" kafka topics create smoke_probe --partitions 1 --replication 1 \\
+  if [[ -n "\${KPREFIX}" ]]; then
+    if flynn -a "\${APP}" kafka topics create "\${KPREFIX}smoke_probe" --partitions 1 --replication 1 \\
+      || flynn -a "\${APP}" kafka topics | grep -q smoke_probe; then
+      ok=1
+      break
+    fi
+  elif flynn -a "\${APP}" kafka topics create smoke_probe --partitions 1 --replication 1 \\
     || flynn -a "\${APP}" kafka topics | grep -q smoke_probe; then
     ok=1
     break
