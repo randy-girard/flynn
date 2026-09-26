@@ -49,7 +49,7 @@ func TestPluginInterpRedisDialsLeaderDiscoverd(t *testing.T) {
 			"FLYNN_REDIS":    redisApp,
 			"REDIS_PASSWORD": "s3cret",
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestPluginInterpRedisUsesREDISHost(t *testing.T) {
 			"REDIS_HOST":     host,
 			"REDIS_PASSWORD": "s3cret",
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,18 +98,18 @@ func TestPluginInterpRedisUsesREDISHost(t *testing.T) {
 }
 
 func TestPluginInterpRequiresResource(t *testing.T) {
-	_, _, err := pluginInterp(fakeRedisReleaseClient{}, redisPluginCLI(), &ct.Release{Env: map[string]string{}})
+	_, _, err := pluginInterp(fakeRedisReleaseClient{}, redisPluginCLI(), &ct.Release{Env: map[string]string{}}, "")
 	if err == nil || !strings.Contains(err.Error(), "No redis server found") {
 		t.Fatalf("got %v", err)
 	}
 
-	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "widget"}, &ct.Release{})
+	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "widget"}, &ct.Release{}, "")
 	if err == nil || !strings.Contains(err.Error(), "does not declare a resource") {
 		t.Fatalf("got %v", err)
 	}
 
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{"widget": {ID: "rel"}}}
-	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "widget", App: "widget"}, &ct.Release{})
+	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "widget", App: "widget"}, &ct.Release{}, "")
 	if err != nil || in.Resource != "widget" || rel.ID != "rel" {
 		t.Fatalf("app-named plugin: %+v %v %v", in, rel, err)
 	}
@@ -294,12 +294,12 @@ func TestPluginJobConfigErrors(t *testing.T) {
 
 func TestPluginInterpDefaultMissingAndReleaseError(t *testing.T) {
 	spec := &plugin.CLI{Command: "cache", ResourceEnv: "FLYNN_CACHE"}
-	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}})
+	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}}, "")
 	if err == nil || !strings.Contains(err.Error(), "flynn resource:add cache") {
 		t.Fatalf("default missing: %v", err)
 	}
 
-	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "cache", App: "cache"}, nil)
+	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "cache", App: "cache"}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "error getting cache release") {
 		t.Fatalf("release lookup: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestPluginInterpPasswordNotRescanned(t *testing.T) {
 			"FLYNN_REDIS":    redisApp,
 			"REDIS_PASSWORD": "x${resource}y",
 		},
-	})
+	}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,6 +363,38 @@ func TestPluginMatchActionPrefersLongestName(t *testing.T) {
 	got = spec.MatchAction(map[string]bool{"topics": true})
 	if got == nil || got.Name != "topics" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestPluginInterpNamedResource(t *testing.T) {
+	named := "pg-harbor-kxmnpq"
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		named: {ID: "pg-rel", Env: map[string]string{
+			"POSTGRES_URL":      "postgres://app:pw@leader." + named + ".discoverd:5432/db?sslmode=require",
+			"POSTGRES_PASSWORD": "pw",
+		}},
+	}}
+	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "pg", ResourceEnv: "FLYNN_POSTGRES"}, &ct.Release{
+		Env: map[string]string{
+			"FLYNN_POSTGRES": "pg-other-aaaaaa",
+			"POSTGRES_URL":   "postgres://wrong",
+		},
+	}, "harbor-kxmnpq")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != named || rel.ID != "pg-rel" {
+		t.Fatalf("resource %q release %v", in.Resource, rel)
+	}
+	if in.App["POSTGRES_URL"] != client.releases[named].Env["POSTGRES_URL"] {
+		t.Fatalf("named URL: %q", in.App["POSTGRES_URL"])
+	}
+	args, err := plugin.InterpolateAll([]string{"psql", "${app.POSTGRES_URL}"}, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args[1] != in.App["POSTGRES_URL"] {
+		t.Fatalf("psql %q", args)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/term"
 )
 
@@ -151,7 +152,7 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 		return nil, fmt.Errorf("error getting app release: %s", err)
 	}
 
-	in, resourceRelease, err := pluginInterp(client, spec, appRelease)
+	in, resourceRelease, err := pluginInterp(client, spec, appRelease, resourceNameArg(args))
 	if err != nil {
 		return nil, err
 	}
@@ -190,13 +191,22 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 	}, nil
 }
 
-func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Release) (plugin.Interp, *ct.Release, error) {
+func resourceNameArg(args *docopt.Args) string {
+	if args == nil || args.String == nil {
+		return ""
+	}
+	return strings.TrimSpace(args.String["<name>"])
+}
+
+func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Release, resourceName string) (plugin.Interp, *ct.Release, error) {
 	in := plugin.Interp{App: map[string]string{}}
 	if appRelease != nil && appRelease.Env != nil {
 		in.App = appRelease.Env
 	}
 
 	switch {
+	case strings.TrimSpace(resourceName) != "":
+		in.Resource = resname.Canonical(spec.Command, resourceName)
 	case spec.ResourceEnv != "":
 		in.Resource = in.App[spec.ResourceEnv]
 		if in.Resource == "" {
@@ -219,7 +229,44 @@ func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Rele
 	if resRelease != nil {
 		in.ResourceEnv = resRelease.Env
 	}
+	if strings.TrimSpace(resourceName) != "" && resRelease != nil {
+		copied := make(map[string]string, len(in.App)+len(resRelease.Env))
+		for key, val := range in.App {
+			copied[key] = val
+		}
+		in.App = copied
+		applyNamedResource(in.App, in.Resource, resRelease.Env)
+	}
 	return in, resRelease, nil
+}
+
+// applyNamedResource points console placeholders at the instance named on the
+// command line. Host keys from the app's default attachment are dropped so
+// manifests fall back to leader.<name>.discoverd, then the instance release
+// env (password, URL) is copied in.
+func applyNamedResource(app map[string]string, resource string, env map[string]string) {
+	if app == nil {
+		return
+	}
+	for _, key := range []string{
+		"REDIS_HOST", "POSTGRES_URL", "DATABASE_URL", "MYSQL_HOST", "MONGO_HOST",
+		"CLICKHOUSE_HOST", "KAFKA_HOST", "KAFKA_URL",
+	} {
+		delete(app, key)
+	}
+	for key, val := range env {
+		if val != "" {
+			app[key] = val
+		}
+	}
+	if resource != "" {
+		host := "leader." + resource + ".discoverd"
+		for _, key := range []string{"REDIS_HOST", "MYSQL_HOST", "MONGO_HOST", "CLICKHOUSE_HOST", "KAFKA_HOST"} {
+			if app[key] == "" {
+				app[key] = host
+			}
+		}
+	}
 }
 
 func pluginJobIO(config *runConfig, action *plugin.CLIAction, args *docopt.Args) (func(), error) {
