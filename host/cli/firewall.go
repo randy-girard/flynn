@@ -29,8 +29,10 @@ func init() {
 	Register("firewall", runFirewallStatus, `
 usage: flynn-host firewall
 
-Show flynn-host managed firewall rules (peer IPs and exposed TCP ports).
-Public 22/80/443 and private cluster CIDRs are owned by the installer.
+Show flynn-host managed firewall rules (peer IPs, exposed TCP ports, and
+per-instance database ports). Public 22/80/443 and private cluster CIDRs are
+owned by the installer. Instance ports are open only on hosts running that
+instance.
 `)
 	Register("firewall:sync", runFirewallSync, `
 usage: flynn-host firewall:sync [--peer-ips <ips>] [--ports <ports>]
@@ -71,7 +73,7 @@ func runFirewallStatus(_ *docopt.Args) error {
 	fmt.Fprintf(os.Stderr, "state %s extra_peers=%s extra_ports=%v\n", hostfw.StatePath(), strings.Join(extra.Peers, ","), extra.Ports)
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "KIND\tPORT\tFROM\tCOMMENT")
-	managed := hostfw.Managed(have)
+	managed := append(hostfw.Managed(have), hostfw.InstanceManaged(have)...)
 	sort.Slice(managed, func(i, j int) bool { return managed[i].Key() < managed[j].Key() })
 	if len(managed) == 0 {
 		fmt.Fprintln(w, "(none)\t\t\t")

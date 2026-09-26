@@ -30,6 +30,7 @@ import (
 	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
 	zfsVolume "github.com/randy-girard/flynn/host/volume/zfs"
 	"github.com/randy-girard/flynn/pkg/cliutil"
+	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
 )
@@ -582,7 +583,9 @@ func runDaemon(args *docopt.Args) {
 		}
 	}
 	log.Info("connecting to cluster peers", "ips", peerIPs)
-	startHostFirewall(externalIP, peerIPs, log)
+	startHostFirewall(hostID, externalIP, peerIPs, log, func() []instanceport.Job {
+		return instanceJobsFromActive(hostID, state.GetActive())
+	})
 	if err := discoverdManager.ConnectPeer(peerIPs); err != nil {
 		log.Info("no cluster peers available")
 	}

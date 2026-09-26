@@ -7,19 +7,22 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/instanceport"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
 const (
-	KindPublic  = "public"
-	KindCluster = "cluster"
-	KindPeer    = "peer"
-	KindExpose  = "expose"
+	KindPublic   = "public"
+	KindCluster  = "cluster"
+	KindPeer     = "peer"
+	KindExpose   = "expose"
+	KindInstance = "instance"
 
-	CommentPublic  = "flynn-public"
-	CommentCluster = "flynn-cluster"
-	CommentPeer    = "flynn-peer"
-	CommentExpose  = "flynn-expose"
+	CommentPublic   = "flynn-public"
+	CommentCluster  = "flynn-cluster"
+	CommentPeer     = "flynn-peer"
+	CommentExpose   = "flynn-expose"
+	CommentInstance = "flynn-instance"
 )
 
 // Rule is one UFW-style ingress allow. flynn-host only adds/removes KindPeer
@@ -177,8 +180,42 @@ func Managed(rules []Rule) []Rule {
 }
 
 func Diff(have, want []Rule) (add, remove []Rule) {
-	have = Managed(have)
-	want = Managed(want)
+	return diffRules(Managed(have), Managed(want))
+}
+
+// InstancePorts is the TCP ports this host should allow for database instances
+// whose jobs are running here. Other instances' ports are omitted.
+func InstancePorts(hostID string, jobs []instanceport.Job) []int {
+	return instanceport.PortsForHost(hostID, jobs)
+}
+
+// InstanceRules are flynn-instance allows for ports. Route exposes stay KindExpose.
+func InstanceRules(ports []int) []Rule {
+	var rules []Rule
+	for _, port := range NormalizePorts(ports) {
+		rules = append(rules, Rule{
+			Kind:    KindInstance,
+			Port:    port,
+			Comment: CommentInstance,
+		})
+	}
+	sort.Slice(rules, func(i, j int) bool { return rules[i].Key() < rules[j].Key() })
+	return rules
+}
+
+// InstanceManaged returns per-instance allows. Route reconcile ignores these
+// so a TCP route sync does not close a database instance port.
+func InstanceManaged(rules []Rule) []Rule {
+	var out []Rule
+	for _, r := range rules {
+		if r.Kind == KindInstance {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func diffRules(have, want []Rule) (add, remove []Rule) {
 	hm := map[string]Rule{}
 	wm := map[string]Rule{}
 	for _, r := range have {

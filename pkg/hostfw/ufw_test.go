@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/randy-girard/flynn/pkg/instanceport"
 )
 
 type fakeUFW struct {
@@ -44,19 +46,73 @@ To                         Action      From
 Anywhere                   ALLOW       10.0.0.0/8                 # flynn-cluster
 Anywhere                   ALLOW       192.168.56.21              # flynn-peer
 3001/tcp                   ALLOW       Anywhere                   # flynn-expose
+3100/tcp                   ALLOW       Anywhere                   # flynn-instance
 80/tcp                     ALLOW       Anywhere
 `
 	got := ParseUFWStatus(out)
-	if len(got) != 4 {
+	if len(got) != 5 {
 		t.Fatalf("got %+v", got)
 	}
 	kinds := map[string]int{}
 	for _, r := range got {
 		kinds[r.Kind]++
 	}
-	if kinds[KindPublic] != 1 || kinds[KindCluster] != 1 || kinds[KindPeer] != 1 || kinds[KindExpose] != 1 {
+	if kinds[KindPublic] != 1 || kinds[KindCluster] != 1 || kinds[KindPeer] != 1 || kinds[KindExpose] != 1 || kinds[KindInstance] != 1 {
 		t.Fatalf("kinds %+v rules %+v", kinds, got)
 	}
+}
+
+func TestReconcileInstancePortsFollowsHostPlan(t *testing.T) {
+	jobs := []instanceport.Job{
+		{InstanceID: "a", Port: 3100, Host: "h1"},
+		{InstanceID: "b", Port: 3101, Host: "h2"},
+	}
+	b := &fakeUFW{rules: []Rule{
+		{Kind: KindPeer, From: "10.0.0.2", Comment: CommentPeer},
+		{Kind: KindExpose, Port: 3001, Comment: CommentExpose},
+	}}
+	if err := ReconcileInstancePorts(b, InstancePorts("h1", jobs)); err != nil {
+		t.Fatal(err)
+	}
+	if ports := instancePorts(b.rules); !reflect.DeepEqual(ports, []int{3100}) {
+		t.Fatalf("h1 opened %v rules %+v", ports, b.rules)
+	}
+	if err := Reconcile(b, Desired{PeerIPs: []string{"10.0.0.2"}, ExposedTCP: []int{3001}}); err != nil {
+		t.Fatal(err)
+	}
+	if ports := instancePorts(b.rules); !reflect.DeepEqual(ports, []int{3100}) {
+		t.Fatalf("route sync closed instance port: %+v", b.rules)
+	}
+
+	moved := []instanceport.Job{
+		{InstanceID: "a", Port: 3100, Host: "h2"},
+		{InstanceID: "b", Port: 3101, Host: "h2"},
+	}
+	if err := ReconcileInstancePorts(b, InstancePorts("h1", moved)); err != nil {
+		t.Fatal(err)
+	}
+	if ports := instancePorts(b.rules); len(ports) != 0 {
+		t.Fatalf("old host still open %v", ports)
+	}
+	if err := ReconcileInstancePorts(b, InstancePorts("h2", moved)); err != nil {
+		t.Fatal(err)
+	}
+	if ports := instancePorts(b.rules); !reflect.DeepEqual(ports, []int{3100, 3101}) {
+		t.Fatalf("new host %v", ports)
+	}
+	for _, r := range InstanceRules(InstancePorts("h1", jobs)) {
+		if r.Port == 3101 {
+			t.Fatal("plan for the host running A included B's port")
+		}
+	}
+}
+
+func instancePorts(rules []Rule) []int {
+	var ports []int
+	for _, r := range InstanceManaged(rules) {
+		ports = append(ports, r.Port)
+	}
+	return ports
 }
 
 func TestReconcileAddAndRemove(t *testing.T) {

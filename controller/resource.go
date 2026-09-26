@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/randy-girard/flynn/controller/access"
 	"github.com/randy-girard/flynn/controller/authz"
@@ -9,6 +10,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/resource"
 	"golang.org/x/net/context"
@@ -85,11 +87,16 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
+	env, err := c.stampInstancePort(p, data.ID, data.Env)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
 
 	res := &ct.Resource{
 		ProviderID:   p.ID,
 		ExternalID:   data.ID,
-		Env:          data.Env,
+		Env:          env,
 		Apps:         rr.Apps,
 		OwnerAccount: owner,
 	}
@@ -313,6 +320,40 @@ func (c *controllerAPI) filterResources(ctx context.Context, res []*ct.Resource)
 func (c *controllerAPI) canAdminOwner(ctx context.Context, account string) bool {
 	res := c.accessForAccount(ctx, account)
 	return access.Has(res.Permissions, access.PermAppAdmin) || res.ImplicitOwner || res.OrgManager
+}
+
+var instancePortAssign sync.Mutex
+
+func (c *controllerAPI) stampInstancePort(p *ct.Provider, externalID string, env map[string]string) (map[string]string, error) {
+	if p == nil || c.resourceRepo == nil || !instanceport.IsDatastore(p.Name) || pgappliance.IsPlatformApplianceURL(p.URL) {
+		return env, nil
+	}
+	instancePortAssign.Lock()
+	defer instancePortAssign.Unlock()
+	list, err := c.resourceRepo.List()
+	if err != nil {
+		return nil, err
+	}
+	used := map[int]string{}
+	for _, r := range list {
+		if r == nil || r.Env == nil {
+			continue
+		}
+		port, ok := instanceport.ParsePort(r.Env[instanceport.EnvPort])
+		if !ok {
+			continue
+		}
+		id := r.ExternalID
+		if id == "" {
+			id = r.ID
+		}
+		used[port] = id
+	}
+	assigned, err := instanceport.AssignEnv(externalID, env, used)
+	if err != nil {
+		return nil, ct.ValidationError{Field: "env", Message: err.Error()}
+	}
+	return assigned, nil
 }
 
 func (c *controllerAPI) GetAppResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {

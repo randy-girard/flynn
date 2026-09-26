@@ -72,6 +72,34 @@ Remove the route with `flynn resource:unexpose <provider>`, then
 `sudo flynn-host firewall:unexpose PORT`. Details are on each engine page and
 in [Production — Firewalling](production.html.md#firewalling).
 
+## Per-instance ports
+
+`flynn resource:add` for the tenant Postgres plugin, Redis, MariaDB (`mysql`),
+MongoDB, Kafka, and ClickHouse stores a TCP port from 3000–3500 on that
+resource. Allocation refuses a port another resource already owns. The
+platform Postgres appliance does not get one. The port is
+`FLYNN_INSTANCE_PORT`. `FLYNN_INSTANCE_ID` is the resource's external id.
+Both are returned in the app environment with the connection URL.
+
+In-cluster clients use the discoverd hostname in that URL. The discoverd URL
+keeps the service port (`5432`, `6379`, and so on). The host port is the
+external path: clients outside the cluster connect to a host that is running
+this instance, on `FLYNN_INSTANCE_PORT`.
+
+`flynn-host` opens that port only on hosts where this instance's processes
+are running. The instance job carries `flynn-instance.id` and
+`flynn-instance.port`. A datastore job may instead set `flynn-datastore=true`
+and carry `FLYNN_INSTANCE_ID` / `FLYNN_INSTANCE_PORT` in its own environment.
+An app that only received those variables from the resource does not open the
+port. Every 15 seconds the host rebuilds the expose set from the jobs it is
+running. After a scale, failover, or reschedule, that sync opens the port on
+the new host and closes it on the host that no longer runs the job.
+
+The plan for an instance lists that instance's port and the hosts running it.
+It does not list another instance's port. The allow is for this process on
+this host. Two instances on one host are two ports. A shared listener does
+not demultiplex tenants.
+
 ## State Machine Design
 
 The Flynn database appliances are designed with a few goals in mind:

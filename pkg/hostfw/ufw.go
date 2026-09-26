@@ -146,6 +146,8 @@ func kindFromComment(comment string) string {
 		return KindPeer
 	case CommentExpose:
 		return KindExpose
+	case CommentInstance:
+		return KindInstance
 	default:
 		return ""
 	}
@@ -176,6 +178,30 @@ func Reconcile(b Backend, want Desired) error {
 		return err
 	}
 	add, remove := Diff(have, Plan(want))
+	for _, r := range remove {
+		if err := b.Delete(r); err != nil {
+			return err
+		}
+	}
+	for _, r := range add {
+		if err := b.Allow(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReconcileInstancePorts opens and closes per-instance TCP allows on this host.
+// It does not add, remove, or interpret peer and route-expose rules.
+func ReconcileInstancePorts(b Backend, ports []int) error {
+	if b == nil {
+		return nil
+	}
+	have, err := b.List()
+	if err != nil {
+		return err
+	}
+	add, remove := diffRules(InstanceManaged(have), InstanceRules(ports))
 	for _, r := range remove {
 		if err := b.Delete(r); err != nil {
 			return err
