@@ -37,6 +37,7 @@ const (
 
 	DashboardSurfaceAppResources    = "app.resources"
 	DashboardSurfaceAppDeploy       = "app.deploy"
+	DashboardSurfaceAppScale        = "app.scale"
 	DashboardSurfaceClusterSettings = "cluster.settings"
 	DashboardSurfaceClusterNav      = "cluster.nav"
 )
@@ -85,10 +86,13 @@ type DashboardSpec struct {
 	// BaseURL is the discoverd URL the dashboard reverse-proxies (for example
 	// http://redis.discoverd/dashboard). Plugins must not expose CONTROLLER_KEY
 	// to the browser; they authenticate a signed dashboard SSO token.
-	BaseURL  string           `json:"base_url"`
-	Surfaces []string         `json:"surfaces,omitempty"`
-	Card     *DashboardCard   `json:"card,omitempty"`
-	Routes   []DashboardRoute `json:"routes,omitempty"`
+	BaseURL  string   `json:"base_url"`
+	Surfaces []string `json:"surfaces,omitempty"`
+	// Placement tells the dashboard where to host this UI. "web-scale" sits
+	// next to web process scale instead of the resource-card grid.
+	Placement string           `json:"placement,omitempty"`
+	Card      *DashboardCard   `json:"card,omitempty"`
+	Routes    []DashboardRoute `json:"routes,omitempty"`
 }
 
 // DashboardCard is the Resources-tab overview tile.
@@ -96,6 +100,8 @@ type DashboardCard struct {
 	Title       string `json:"title"`
 	Description string `json:"description,omitempty"`
 	Icon        string `json:"icon,omitempty"`
+	// Hidden keeps the card off the resource-card grid (web-scale plugins).
+	Hidden bool `json:"hidden,omitempty"`
 }
 
 // DashboardRoute is one page under the plugin UI tree.
@@ -616,9 +622,9 @@ func (m *Manifest) validateDashboard() error {
 	for i, s := range d.Surfaces {
 		s = strings.TrimSpace(s)
 		switch s {
-		case DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav:
+		case DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceAppScale, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav:
 		default:
-			return fmt.Errorf("%s: dashboard.surfaces[%d] must be %q, %q, %q, or %q", ManifestName, i, DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav)
+			return fmt.Errorf("%s: dashboard.surfaces[%d] must be %q, %q, %q, %q, or %q", ManifestName, i, DashboardSurfaceAppResources, DashboardSurfaceAppDeploy, DashboardSurfaceAppScale, DashboardSurfaceClusterSettings, DashboardSurfaceClusterNav)
 		}
 		d.Surfaces[i] = s
 	}

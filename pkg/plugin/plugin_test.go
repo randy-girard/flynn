@@ -207,6 +207,40 @@ func TestManifestDashboardContract(t *testing.T) {
 	}
 }
 
+func TestDashboardWebScalePlacementRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{
+		"name": "autoscale",
+		"kind": "app",
+		"app": map[string]interface{}{
+			"processes": map[string]interface{}{"web": map[string]interface{}{"args": []string{"/bin/autoscale"}}},
+		},
+		"dashboard": map[string]interface{}{
+			"base_url":  "http://autoscale.discoverd/dashboard",
+			"surfaces":  []string{"app.resources", "app.scale"},
+			"placement": "web-scale",
+			"card": map[string]interface{}{
+				"title":  "Autoscale",
+				"hidden": true,
+			},
+		},
+	})
+	m, err := LoadManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Dashboard == nil || m.Dashboard.Placement != "web-scale" || m.Dashboard.Card == nil || !m.Dashboard.Card.Hidden {
+		t.Fatalf("manifest dashboard: %+v", m.Dashboard)
+	}
+	got := DashboardFromApp(&ct.App{Meta: m.AppMeta()})
+	if got == nil || got.Placement != "web-scale" || got.Card == nil || !got.Card.Hidden {
+		t.Fatalf("stamped dashboard dropped placement: %+v", got)
+	}
+	if len(got.Surfaces) != 2 || got.Surfaces[1] != DashboardSurfaceAppScale {
+		t.Fatalf("surfaces: %+v", got.Surfaces)
+	}
+}
+
 func TestLoadManifestWebhooks(t *testing.T) {
 	dir := t.TempDir()
 	writeJSON(t, filepath.Join(dir, ManifestName), map[string]interface{}{

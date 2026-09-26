@@ -86,6 +86,7 @@ Development layout (relative to the Flynn repo):
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
 | `letsencrypt` / `acme` / `le` | `../flynn-plugin-letsencrypt` | (none; `kind: app`) |
 | `scheduler` | `../flynn-plugin-scheduler` | (none; `kind: scheduler`) |
+| `autoscale` | `../flynn-plugin-autoscale` | (none; `kind: app`; web dyno scale on response time; `flynn autoscale` / `autoscale:enable` / `autoscale:disable` / `autoscale:set` / `autoscale:info`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
 | `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
 | `enterprise` | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**; `flynn-host plugin:install enterprise`) |
@@ -114,6 +115,7 @@ sudo flynn-host plugin:install ../flynn-plugin-discovery
 sudo flynn-host plugin:install ../flynn-plugin-www
 sudo flynn-host plugin:install ../flynn-plugin-otel
 sudo flynn-host plugin:install ../flynn-plugin-scheduler
+sudo flynn-host plugin:install ../flynn-plugin-autoscale
 sudo flynn-host plugin:install ../flynn-plugin-github
 sudo flynn-host plugin:install ../flynn-plugin-pipeline
 sudo flynn-host plugin:install enterprise
@@ -233,6 +235,14 @@ resource:add <provider>` works for `kind: resource-provider`. After the schedule
 is installed, `flynn -a <app> scheduler` lists, adds, and removes cron/interval
 jobs for that app. Upgrade smoke schedules `echo scheduler-smoke` every 10s on
 the uploaded `upgrade-smoke` app and waits for `last_run_at` / `last_job_id`.
+After the autoscale plugin is installed, `flynn -a <app> autoscale` shows the
+web-dyno policy. `autoscale:enable` turns it on, `autoscale:disable` turns it
+off, and `autoscale:set` changes min, max, p95 threshold, window, and cooldown.
+Only `web` and `*-web` process types move, and only when router HTTP response
+time p95 stays above the threshold for the window. A manual scale is applied
+immediately; the next autoscaler decision still enforces min and max and does
+not undo a manual change during cooldown. `flynn-host plugin:uninstall autoscale`
+stops the loop and leaves formations where they are.
 
 ```text
 flynn plugin:list

@@ -22,7 +22,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			got[a] = p
 		}
 	}
-	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "github", "pipeline", "enterprise"} {
+	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "autoscale", "github", "pipeline", "enterprise"} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("official catalog missing %s", name)
 		}
@@ -46,6 +46,9 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	}
 	if cfg.GitHubURL("scheduler") != "https://github.com/randy-girard/flynn-plugin-scheduler.git" {
 		t.Fatalf("scheduler: %s", cfg.GitHubURL("scheduler"))
+	}
+	if cfg.GitHubURL("autoscale") != "https://github.com/randy-girard/flynn-plugin-autoscale.git" {
+		t.Fatalf("autoscale: %s", cfg.GitHubURL("autoscale"))
 	}
 
 	r, err := Resolve(InstallOptions{Source: "mysql"})
@@ -125,7 +128,7 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "autoscale", "flynn-plugin-autoscale", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}

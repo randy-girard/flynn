@@ -71,6 +71,12 @@
       "description": "Cron and interval jobs for apps. Manage with flynn scheduler."
     },
     {
+      "name": "autoscale",
+      "kind": "app",
+      "repo": "flynn-plugin-autoscale",
+      "description": "Scale web dynos when router HTTP response time p95 stays high. Manage with flynn autoscale."
+    },
+    {
       "name": "github",
       "kind": "app",
       "repo": "flynn-plugin-github",
