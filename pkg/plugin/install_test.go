@@ -844,3 +844,12 @@ func TestProviderResourceAttached(t *testing.T) {
 		t.Fatal("name key")
 	}
 }
+
+func TestPluginResourceProviderUsesPlatformAppliance(t *testing.T) {
+	if got := pluginResourceProvider("postgres"); got != "platform-postgres" {
+		t.Fatalf("postgres -> %s", got)
+	}
+	if got := pluginResourceProvider("redis"); got != "redis" {
+		t.Fatalf("redis -> %s", got)
+	}
+}

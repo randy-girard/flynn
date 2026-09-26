@@ -387,7 +387,7 @@ joined_datastores() {
     printf '%s' "none"
     return
   fi
-  printf '%s' "$(joined_datastores)"
+  printf '%s' "${DATASTORE_PROVIDERS[*]}"
 }
 
 datastore_wanted() {

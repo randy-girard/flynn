@@ -709,12 +709,23 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 	})
 }
 
+// pluginResourceProvider maps a manifest resource name to the controller
+// provider. "postgres" in a plugin manifest is the platform appliance.
+// The tenant product is the postgres plugin, not this attachment.
+func pluginResourceProvider(name string) string {
+	if strings.TrimSpace(name) == "postgres" {
+		return "platform-postgres"
+	}
+	return name
+}
+
 func (in *Installer) provisionResourceWithRetry(app *ct.App, name string) (*ct.Resource, error) {
 	var res *ct.Resource
 	err := provisionResourceAttempts.RunWithValidator(func() error {
-		in.logf("provisioning %s resource for %s", name, app.Name)
+		provider := pluginResourceProvider(name)
+		in.logf("provisioning %s resource for %s", provider, app.Name)
 		r, err := in.Client.ProvisionResource(&ct.ResourceReq{
-			ProviderID: name,
+			ProviderID: provider,
 			Apps:       []string{app.ID},
 		})
 		if err != nil {
