@@ -41,7 +41,7 @@ func blobCount(fsys embed.FS) int {
 
 func resourceFlags(getenv func(string) string) map[string]bool {
 	return map[string]bool{
-		"postgres":   getenv("FLYNN_POSTGRES") != "",
+		"postgres":   getenv("FLYNN_POSTGRES") != "" || getenv("DATABASE_URL") != "",
 		"mysql":      getenv("FLYNN_MYSQL") != "",
 		"mongodb":    getenv("FLYNN_MONGO") != "",
 		"redis":      getenv("FLYNN_REDIS") != "" || getenv("REDIS_URL") != "",

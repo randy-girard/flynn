@@ -122,6 +122,17 @@ func TestBuildStatusOKWithAllDatastoreEnv(t *testing.T) {
 	if st.BlobCount < 1 {
 		t.Fatalf("blob_count=%d", st.BlobCount)
 	}
+	urlOnly := map[string]string{
+		"DATABASE_URL":     "postgres://db",
+		"FLYNN_MYSQL":      "mysql",
+		"FLYNN_MONGO":      "mongo",
+		"FLYNN_REDIS":      "redis",
+		"FLYNN_KAFKA":      "kafka",
+		"FLYNN_CLICKHOUSE": "ch",
+	}
+	if got := buildStatus(dataFS, func(k string) string { return urlOnly[k] }); !got.Resources["postgres"] || !got.OK {
+		t.Fatalf("DATABASE_URL should satisfy postgres: %+v", got)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) {

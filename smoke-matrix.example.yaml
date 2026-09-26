@@ -35,6 +35,7 @@ defaults:
   seed_rows: 200
   blob_count: 100
   plugins:
+    - postgres
     - redis
     - mysql
     - mongodb
