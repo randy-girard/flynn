@@ -207,6 +207,25 @@ func TestRetryClientHasNoTotalTimeout(t *testing.T) {
 	}
 }
 
+func TestClientForProvisionKeepsDiscoverdDial(t *testing.T) {
+	dial := func(network, addr string) (net.Conn, error) {
+		return nil, fmt.Errorf("dial %s", addr)
+	}
+	base := &http.Client{Transport: &http.Transport{Dial: dial, ResponseHeaderTimeout: time.Second}}
+	got := ClientForProvision(base)
+	tr, ok := got.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport %T", got.Transport)
+	}
+	if tr.ResponseHeaderTimeout != ProvisionHeaderTimeout {
+		t.Fatalf("header timeout %s", tr.ResponseHeaderTimeout)
+	}
+	_, err := tr.Dial("tcp", "controller.discoverd:80")
+	if err == nil || !strings.Contains(err.Error(), "controller.discoverd") {
+		t.Fatalf("dial %v", err)
+	}
+}
+
 func TestProvisionClientWaitsForDatabaseBoot(t *testing.T) {
 	if ProvisionClient.Timeout != 0 {
 		t.Fatalf("ProvisionClient.Timeout=%s", ProvisionClient.Timeout)

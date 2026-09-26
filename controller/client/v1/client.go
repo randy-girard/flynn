@@ -229,12 +229,12 @@ func (c *Client) ProvisionResource(req *ct.ResourceReq) (*ct.Resource, error) {
 		return nil, errors.New("controller: missing provider id")
 	}
 	res := &ct.Resource{}
-	// ProvisionClient waits for the provider to boot a database. RetryClient
-	// would time out at 10s and the CLI would start another one.
+	// Keep this client's dialer. flynn-host resolves *.discoverd without
+	// system DNS; swapping in ProvisionClient makes that lookup fail.
 	_, err := c.RawReqWithHTTP("POST", fmt.Sprintf("/providers/%s/resources", req.ProviderID), http.Header{
 		"Accept":       []string{"application/json"},
 		"Content-Type": []string{"application/json"},
-	}, req, res, httphelper.ProvisionClient)
+	}, req, res, httphelper.ClientForProvision(c.HTTP))
 	return res, err
 }
 

@@ -51,6 +51,28 @@ var RetryClient = &http.Client{
 // and start another database while the first one is still booting.
 const ProvisionHeaderTimeout = 15 * time.Minute
 
+// ClientForProvision keeps base's dialer (flynn-host resolves *.discoverd
+// itself) and waits ProvisionHeaderTimeout for headers. A nil base, or a
+// transport that is not *http.Transport, falls back to ProvisionClient only
+// when base is nil.
+func ClientForProvision(base *http.Client) *http.Client {
+	if base == nil {
+		return ProvisionClient
+	}
+	out := *base
+	out.Timeout = 0
+	tr, ok := base.Transport.(*http.Transport)
+	if !ok || tr == nil {
+		return &out
+	}
+	cloned := tr.Clone()
+	if cloned.ResponseHeaderTimeout < ProvisionHeaderTimeout {
+		cloned.ResponseHeaderTimeout = ProvisionHeaderTimeout
+	}
+	out.Transport = cloned
+	return &out
+}
+
 // ProvisionClient is for provider provision calls only. It has no total
 // Timeout, same as RetryClient, but it waits long enough for one database
 // to start instead of retrying the POST.
