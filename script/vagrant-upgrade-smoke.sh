@@ -382,9 +382,20 @@ sync_datastore_providers() {
   fi
 }
 
+joined_datastores() {
+  if [[ ${#DATASTORE_PROVIDERS[@]} -eq 0 ]]; then
+    printf '%s' "none"
+    return
+  fi
+  printf '%s' "$(joined_datastores)"
+}
+
 datastore_wanted() {
   local name=$1
   local p
+  if [[ ${#DATASTORE_PROVIDERS[@]} -eq 0 ]]; then
+    return 1
+  fi
   for p in "${DATASTORE_PROVIDERS[@]}"; do
     if [[ "${p}" == "${name}" ]]; then
       return 0
@@ -741,7 +752,7 @@ print_datastore_report() {
   ui_banner "================================================================================"
   ui_banner " App, CLI & datastore persistence"
   echo " app=${APP_NAME}  buildpack_app=${BUILDPACK_APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  passes=${UPGRADE_PASSES}"
-  echo " topologies=${SMOKE_TOPOLOGIES}  providers=${DATASTORE_PROVIDERS[*]}"
+  echo " topologies=${SMOKE_TOPOLOGIES:-}  providers=$(joined_datastores)"
   ui_banner "================================================================================"
   if [[ ! -s "${CHECK_FILE}" ]]; then
     echo " (no app/datastore checks recorded — verify steps did not run)"
@@ -4200,6 +4211,7 @@ git push flynn master
 EOF
 
   local provider
+  if [[ ${#DATASTORE_PROVIDERS[@]} -gt 0 ]]; then
   for provider in "${DATASTORE_PROVIDERS[@]}"; do
     info "adding ${provider} resource"
     if ! wait_for "${provider} resource add" 600 flynn1 -a "${APP_NAME}" resource add "${provider}"; then
@@ -4209,10 +4221,11 @@ EOF
     fi
     record_check "deploy" "${provider}" "PASS" "resource added"
   done
+  fi
 
   wait_selected_datastores_ready "after resource add" 0 || return 1
   seed_datastores
-  echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with ${DATASTORE_PROVIDERS[*]} (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
+  echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with $(joined_datastores) (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
 
 # git-push an app whose .buildpacks file names heroku-buildpack-inline. That
@@ -4353,7 +4366,7 @@ seed_datastores() {
   datastore_wanted kafka && seed_kafka=1
   datastore_wanted clickhouse && seed_clickhouse=1
 
-  info "seeding ${rows} dummy rows/keys/payloads per datastore (${DATASTORE_PROVIDERS[*]})"
+  info "seeding ${rows} dummy rows/keys/payloads per datastore ($(joined_datastores))"
   node_root_script node1 <<EOF
 set -euo pipefail
 APP="${APP_NAME}"
@@ -4688,7 +4701,7 @@ probe_app_http() {
 probe_app_status() {
   local body
   body="$(curl -sS --max-time 30 -H "Host: ${APP_NAME}.${CLUSTER_DOMAIN}" "http://${NODE1_IP}/status")" || return 1
-  MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="${DATASTORE_PROVIDERS[*]}" python3 -c '
+  MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="$(joined_datastores)" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
@@ -4784,7 +4797,7 @@ assert_app_status() {
     echo "app-status (${label}) curl failed" >&2
     return 1
   }
-  parsed="$(MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="${DATASTORE_PROVIDERS[*]}" python3 -c '
+  parsed="$(MIN_BLOBS="$((SMOKE_BLOB_COUNT + 1))" NEED_RESOURCES="$(joined_datastores)" python3 -c '
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
@@ -4887,7 +4900,7 @@ record_seed_counts() {
     echo "seed count verification failed" >&2
     return 1
   fi
-  echo "seed verified: ${DATASTORE_PROVIDERS[*]} rows>=${rows}"
+  echo "seed verified: $(joined_datastores) rows>=${rows}"
 }
 
 # Require seeded dummy data (and any earlier verify-pass markers) to still be
@@ -5029,7 +5042,7 @@ assert_databases() {
   flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT toUInt32(100000 + ${RANDOM}), '${label}'" >/dev/null || true
   fi
 
-  echo "databases ${label}: ${DATASTORE_PROVIDERS[*]} PASS (rows>=${rows})"
+  echo "databases ${label}: $(joined_datastores) PASS (rows>=${rows})"
 }
 
 # Cluster backup dumps postgres (incl. blobstore + app DBs), MariaDB, and
@@ -5395,13 +5408,15 @@ step_cli_functions() {
   if [[ "${rc}" -eq 0 ]]; then
     local missing=()
     local provider
+    if [[ ${#DATASTORE_PROVIDERS[@]} -gt 0 ]]; then
     for provider in "${DATASTORE_PROVIDERS[@]}"; do
       if ! printf '%s' "${out}" | grep -qi "${provider}"; then
         missing+=("${provider}")
       fi
     done
+    fi
     if [[ ${#missing[@]} -eq 0 ]]; then
-      record_check "${label}" "cli-resource" "PASS" "providers=${DATASTORE_PROVIDERS[*]}"
+      record_check "${label}" "cli-resource" "PASS" "providers=$(joined_datastores)"
       echo "cli ${label} cli-resource: PASS"
     else
       record_check "${label}" "cli-resource" "FAIL" "missing ${missing[*]}"
@@ -7197,7 +7212,7 @@ main() {
       fi
       sync_datastore_providers || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid SMOKE_DATASTORES=${SMOKE_DATASTORES}"
       PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
-      info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES} datastores=${DATASTORE_PROVIDERS[*]}"
+      info "matrix item ${item_id} ($((item_idx + 1))/${#SMOKE_MATRIX_SELECTED[@]}): topologies=${SMOKE_TOPOLOGIES} datastores=$(joined_datastores)"
       parse_smoke_topologies || fail_shutdown "Parse smoke matrix item ${item_id}" 0 "invalid topologies=${SMOKE_TOPOLOGIES}"
       apply_resume_at_skips
       if [[ "${item_is_last}" != "1" ]]; then
