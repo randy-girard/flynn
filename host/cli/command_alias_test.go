@@ -134,6 +134,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"firewall:peer-add", "firewall:peer-remove",
 		"firewall:expose", "firewall:unexpose",
 		"blobstore", "blobstore:status", "blobstore:set", "blobstore:credentials", "blobstore:migrate",
+		"pg:psql", "pg:dump", "pg:restore",
 	}
 	for _, name := range want {
 		if commands[name] == nil {

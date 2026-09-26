@@ -43,8 +43,6 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"kill", "job-1"}, "<job>", []string{"job-1"}},
 		{[]string{"scale"}, "<type>=<spec>", nil},
 		{[]string{"ps:scale", "web=1"}, "<type>=<spec>", []string{"web=1"}},
-		{[]string{"pg:psql"}, "<argument>", nil},
-		{[]string{"pg:psql", "--", "-c", "SELECT 1"}, "<argument>", []string{"-c", "SELECT 1"}},
 		{[]string{"run", "bash"}, "<command>", []string{"bash"}},
 		{[]string{"run", "bash", "-c", "true"}, "<argument>", []string{"-c", "true"}},
 		{[]string{"resource:add", "redis"}, "<provider>", []string{"redis"}},

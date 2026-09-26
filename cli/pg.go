@@ -14,46 +14,10 @@ import (
 	"github.com/randy-girard/flynn/pkg/term"
 )
 
-func init() {
-	register("pg:psql", runPgPsql, `
-usage: flynn pg:psql [--] [<argument>...]
-
-Open a console to a Flynn postgres database. Any valid arguments to psql may be provided.
-
-Examples:
-
-    $ flynn pg:psql
-
-    $ flynn pg:psql -- -c "CREATE EXTENSION hstore"
-`)
-	register("pg:dump", runPgDumpCmd, `
-usage: flynn pg:dump [-q] [-f <file>]
-
-Dump a postgres database. If file is not specified, will dump to stdout.
-
-Options:
-	-f, --file=<file>  name of dump file
-	-q, --quiet        don't print progress
-
-Examples:
-
-    $ flynn pg:dump -f db.dump
-`)
-	register("pg:restore", runPgRestoreCmd, `
-usage: flynn pg:restore [-q] [-j <jobs>] [-f <file>]
-
-Restore a database dump. If file is not specified, will restore from stdin.
-
-Options:
-	-f, --file=<file>  name of dump file
-	-q, --quiet        don't print progress
-	-j, --jobs=<jobs>  number of pg_restore jobs to use [default: 1]
-
-Examples:
-
-    $ flynn pg:restore -j 8 -f db.dump
-`)
-}
+// pg:psql, pg:dump, and pg:restore are not user CLI commands.
+// Tenant Postgres is flynn pg from the postgres plugin.
+// The platform database is flynn-host pg:psql / pg:dump / pg:restore.
+// The helpers below remain for flynn export of an app that still has FLYNN_POSTGRES.
 
 func runPgPsql(args *docopt.Args, client controller.Client) error {
 	config, err := getAppPgRunConfig(client)

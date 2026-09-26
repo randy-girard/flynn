@@ -148,11 +148,6 @@ var subAliases = map[string]map[string]string{
 		"deploy":     "github:deploy",
 		"set":        "github:set",
 	},
-	"pg": {
-		"psql":    "pg:psql",
-		"dump":    "pg:dump",
-		"restore": "pg:restore",
-	},
 	"remote": {
 		"add": "git:remote",
 	},

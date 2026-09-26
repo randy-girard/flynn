@@ -114,7 +114,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:status` | Automatic HTTPS for a hostname or HTTP route id (requires the Let's Encrypt plugin) |
 | `resource` / `resource:add <provider>` / `resource:remove <provider> [<resource>]` | Provision or remove mysql, mongodb, redis, kafka, clickhouse. `postgres` is the tenant plugin (`flynn-plugin-postgres`, not yet installed), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom` |
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
-| `pg:psql` / `pg:dump` / `pg:restore` | Postgres console, dump, restore (built in) |
+| `pg:info` / `pg:psql` / `pg:dump` / `pg:restore` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. The platform database is `flynn-host pg:psql` |
 | `mysql:cli` / `mongodb:cli` / `redis:cli` (+ `:dump` / `:restore`) | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` / `kafka:topics:create` / `kafka:consumer-groups` / `kafka:consumer-groups:create` | Topics and consumer groups (after plugin install; see [Kafka](databases/kafka.md#managing-consumer-groups)) |
 | `clickhouse:cli` / `clickhouse:databases` / `clickhouse:databases:create` | Databases and client (after plugin install) |

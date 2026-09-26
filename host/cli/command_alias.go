@@ -114,6 +114,11 @@ var subAliases = map[string]map[string]string{
 		"allow-custom": "runtime:allow-custom",
 		"reserve":      "runtime:reserve",
 	},
+	"pg": {
+		"psql":    "pg:psql",
+		"dump":    "pg:dump",
+		"restore": "pg:restore",
+	},
 	"db-runtime": {
 		"create":       "db-runtime:create",
 		"update":       "db-runtime:update",

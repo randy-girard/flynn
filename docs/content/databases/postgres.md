@@ -86,7 +86,8 @@ major-upgrade path. A follower may use a different `--runtime` name. Runtime
 sizing itself lands in a later ticket.
 
 `flynn pg:info` shows the leader, followers, and lag. `flynn pg:psql` opens a
-console for this instance's URL only.
+console for this instance's URL only. Those commands come from the postgres
+plugin. They are not built into the `flynn` CLI.
 
 ### Connecting to the database
 
@@ -133,18 +134,21 @@ prefer a VPN when you can. See
 
 ### Connecting to a console
 
-To connect to a `psql` console for **your app's** database, run `flynn pg:psql`.
-This does not require the Postgres client locally; it runs in a container on
-the cluster. It uses the same controller credential as other `flynn` commands:
-the cluster key from `flynn cluster:add`, or a dashboard login that was granted
-that app. Platform databases (`controller`, `blobstore`, …) require the cluster
-key; see [Production — Internal Databases](../production.html.md#internal-databases).
+To connect to a `psql` console for **your app's** database, install the postgres
+plugin and run `flynn pg:psql`. That command is the plugin, not a built-in
+`flynn` command. It runs in a container on the cluster and uses the same
+controller credential as other `flynn` commands.
+
+The platform database (controller, blobstore, and the built-in appliance) is
+not that console. On a cluster host, run `flynn-host pg:psql`, `flynn-host
+pg:dump`, or `flynn-host pg:restore`. See
+[Production — Internal Databases](../production.html.md#internal-databases).
 
 ### Dumping and restoring
 
-The Flynn CLI provides commands for exporting and restoring database dumps.
+The postgres plugin provides commands for exporting and restoring an app database.
 
-`flynn pg:dump` saves a complete copy of the database schema and data to a local file.
+`flynn pg:dump` saves a complete copy of that instance's schema and data to a local file.
 
 ```text
 $ flynn pg:dump -f latest.dump

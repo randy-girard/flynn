@@ -186,10 +186,10 @@ host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).
 DNS to the overlay gateway (`:53`) is allowed. flynn-host registers user
 HTTP backends with discoverd; the job never receives a `DISCOVERD` URL.
 
-`flynn -a controller pg:psql` (and the same for `blobstore` / other system
-apps) requires the cluster controller key. Dashboard tokens scoped to user
-apps cannot open those consoles. Treat the key from `flynn cluster:add` as
-root.
+`flynn-host pg:psql` opens the platform database and requires the cluster
+controller key on the host. Dashboard tokens scoped to user apps cannot open
+that console. Tenant consoles are `flynn pg:psql` from the postgres plugin.
+Treat the key from `flynn cluster:add` as root.
 
 `git push` to gitreceive requires the cluster controller key, `cluster:admin`,
 or `app:deploy` on that app (or a coarser grant that expands to it, such as
