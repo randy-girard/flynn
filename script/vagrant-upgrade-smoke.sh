@@ -4705,7 +4705,7 @@ probe_app_status() {
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
-need = os.environ.get("NEED_RESOURCES", "").split()
+need = [k for k in os.environ.get("NEED_RESOURCES", "").split() if k and k != "none"]
 try:
     d = json.loads(raw)
 except Exception:
@@ -4801,7 +4801,7 @@ assert_app_status() {
 import json, os, sys
 raw = sys.stdin.read()
 min_blobs = int(os.environ["MIN_BLOBS"])
-need = os.environ.get("NEED_RESOURCES", "").split()
+need = [k for k in os.environ.get("NEED_RESOURCES", "").split() if k and k != "none"]
 try:
     d = json.loads(raw)
 except Exception as e:
