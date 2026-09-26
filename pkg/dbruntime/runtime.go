@@ -4,10 +4,11 @@
 //
 // Each engine ships small, medium, and large presets. Those numbers are
 // independent: Redis small disk is smaller than Postgres small disk.
-// Cluster admins persist creates, updates, and removals in a host JSON file
-// (see DefaultPath). There is no controller table. Updating a definition
-// does not resize instances already created from it; there is no in-place
-// resize.
+// flynn-host writes /etc/flynn/db-runtimes.json and publishes the same catalog
+// to the controller. Plugin jobs started by flynn-host carry the cluster
+// controller key, so they may create runtimes too. The dashboard may create
+// them only for a cluster admin. Updating a definition does not resize
+// instances already created from it; there is no in-place resize.
 package dbruntime
 
 import (
@@ -80,6 +81,14 @@ type Catalog struct {
 // ErrCustomSizesDisabled is returned when a tenant sets raw CPU, memory, or
 // disk and an admin has not allowed custom sizes.
 var ErrCustomSizesDisabled = errors.New("custom CPU, memory, and disk are disabled; choose a published database runtime with --runtime (default small) or ask a cluster admin to run flynn-host db-runtime:allow-custom")
+
+// CanManage reports whether this caller may create, update, or remove database
+// runtimes. flynn-host and plugin jobs that run with the cluster controller
+// key are always allowed. A dashboard session is allowed only when it is a
+// cluster admin.
+func CanManage(clusterKeyOrHost, clusterAdmin bool) bool {
+	return clusterKeyOrHost || clusterAdmin
+}
 
 // ErrBuiltinRemove is returned when removing small, medium, or large.
 var ErrBuiltinRemove = errors.New("builtin database runtimes cannot be removed")

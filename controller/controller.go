@@ -328,6 +328,10 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/acme/config", httphelper.WrapHandler(api.GetACMEConfig))
 	httpRouter.PUT("/acme/config", httphelper.WrapHandler(api.UpdateACMEConfig))
 
+	httpRouter.GET("/db-runtimes", httphelper.WrapHandler(api.ListDBRuntimes))
+	httpRouter.POST("/db-runtimes", httphelper.WrapHandler(api.CreateDBRuntime))
+	httpRouter.PUT("/db-runtimes", httphelper.WrapHandler(api.ReplaceDBRuntimes))
+
 	httpRouter.GET("/runtimes", httphelper.WrapHandler(api.ListRuntimeProfiles))
 	httpRouter.POST("/runtimes", httphelper.WrapHandler(api.CreateRuntimeProfile))
 	httpRouter.GET("/runtimes/:runtimes_id", httphelper.WrapHandler(api.GetRuntimeProfile))

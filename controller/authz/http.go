@@ -276,6 +276,13 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkAnyAuth, "", ""
 		}
 		return rkCluster, "", ""
+	case "db-runtimes":
+		// List is for anyone who can provision. Creates are flynn-host
+		// (cluster key, including plugin jobs) or a cluster admin on the web.
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, "", ""
+		}
+		return rkCluster, "", ""
 	case "cluster":
 		if len(parts) >= 2 && parts[1] == "runtime-settings" {
 			if m == http.MethodGet || m == http.MethodHead {

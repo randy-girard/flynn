@@ -130,6 +130,7 @@ func runDBRuntimeCreate(args *docopt.Args) error {
 	if err := dbruntime.Save(path, cat); err != nil {
 		return err
 	}
+	publishDBRuntimes(cat)
 	eng, err := dbruntime.NormalizeEngine(r.Engine)
 	if err != nil {
 		return err
@@ -175,6 +176,7 @@ func runDBRuntimeUpdate(args *docopt.Args) error {
 	if err := dbruntime.Save(path, cat); err != nil {
 		return err
 	}
+	publishDBRuntimes(cat)
 	fmt.Printf("%s/%s\n", r.Engine, r.Name)
 	return nil
 }
@@ -187,7 +189,11 @@ func runDBRuntimeRemove(args *docopt.Args) error {
 	if err := cat.Remove(args.String["<engine>"], args.String["<name>"]); err != nil {
 		return err
 	}
-	return dbruntime.Save(path, cat)
+	if err := dbruntime.Save(path, cat); err != nil {
+		return err
+	}
+	publishDBRuntimes(cat)
+	return nil
 }
 
 func runDBRuntimeAllowCustom(args *docopt.Args) error {
@@ -199,6 +205,26 @@ func runDBRuntimeAllowCustom(args *docopt.Args) error {
 	if err := dbruntime.Save(path, cat); err != nil {
 		return err
 	}
+	publishDBRuntimes(cat)
 	fmt.Printf("allow_custom_sizes=%t\n", cat.AllowCustomSizes)
 	return nil
+}
+
+// publishDBRuntimes copies the host catalog to the controller. flynn-host is
+// on the cluster and uses the controller key, so this is allowed. Plugin jobs
+// started by flynn-host use that same key against POST /db-runtimes. A missing
+// controller (unit tests, a host that is not bootstrapped) keeps the file.
+func publishDBRuntimes(cat dbruntime.Catalog) {
+	client, err := controllerClient()
+	if err != nil {
+		return
+	}
+	type publisher interface {
+		ReplaceDBRuntimes(catalog *dbruntime.Catalog) error
+	}
+	api, ok := client.(publisher)
+	if !ok {
+		return
+	}
+	_ = api.ReplaceDBRuntimes(&cat)
 }

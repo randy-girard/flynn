@@ -85,6 +85,10 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_write_cannot_put_runtime_settings", appWrite, http.MethodPut, "/cluster/runtime-settings", false},
 		{"app_read_can_get_runtime_settings", appRead, http.MethodGet, "/cluster/runtime-settings", true},
 		{"cluster_key_can_create_runtime", clusterKey, http.MethodPost, "/runtimes", true},
+		{"app_read_can_list_db_runtimes", appRead, http.MethodGet, "/db-runtimes", true},
+		{"app_read_cannot_create_db_runtime", appRead, http.MethodPost, "/db-runtimes", false},
+		{"cluster_key_can_create_db_runtime", clusterKey, http.MethodPost, "/db-runtimes", true},
+		{"admin_can_create_db_runtime", adminBearer, http.MethodPost, "/db-runtimes", true},
 
 		{"app_read_can_get_github_app", appRead, http.MethodGet, "/github/app", true},
 		{"app_write_cannot_put_github_app", appWrite, http.MethodPut, "/github/app", false},

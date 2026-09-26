@@ -16,6 +16,7 @@ import (
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/status"
@@ -1085,6 +1086,19 @@ func (c *Client) GetACMEConfigInternal() (*ct.ACMEConfig, error) {
 // UpdateACMEConfig updates the ACME/Let's Encrypt configuration
 func (c *Client) UpdateACMEConfig(config *ct.ACMEConfig) error {
 	return c.Put("/acme/config", config, config)
+}
+
+func (c *Client) ListDBRuntimes() (*dbruntime.Catalog, error) {
+	cat := &dbruntime.Catalog{}
+	return cat, c.Get("/db-runtimes", cat)
+}
+
+func (c *Client) CreateDBRuntime(runtime *dbruntime.Runtime) error {
+	return c.Post("/db-runtimes", runtime, runtime)
+}
+
+func (c *Client) ReplaceDBRuntimes(catalog *dbruntime.Catalog) error {
+	return c.Put("/db-runtimes", catalog, catalog)
 }
 
 func (c *Client) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {

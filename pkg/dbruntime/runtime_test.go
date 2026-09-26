@@ -6,6 +6,18 @@ import (
 	"testing"
 )
 
+func TestCanManageAllowsHostAndClusterAdmin(t *testing.T) {
+	if !CanManage(true, false) {
+		t.Fatal("flynn-host")
+	}
+	if !CanManage(false, true) {
+		t.Fatal("cluster admin")
+	}
+	if CanManage(false, false) {
+		t.Fatal("tenant")
+	}
+}
+
 func TestBuiltinsDifferByEngine(t *testing.T) {
 	cat := BuiltinCatalog()
 	if len(cat.Runtimes) != len(Engines)*3 {
