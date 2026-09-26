@@ -811,7 +811,7 @@ print_results_table() {
   ui_banner "================================================================================"
   ui_banner " Flynn Vagrant upgrade smoke results (local build)"
   echo " build=${BUILD_VERSION:-n/a}  domain=${CLUSTER_DOMAIN}  app=${APP_NAME}  buildpack_app=${BUILDPACK_APP_NAME}  docker_app=${DOCKER_APP_NAME}  docker_push_app=${DOCKER_PUSH_APP_NAME}"
-  echo " topologies=${SMOKE_TOPOLOGIES}  seed_rows=${SMOKE_SEED_ROWS}  blobs=${SMOKE_BLOB_COUNT}  upgrade_passes=${UPGRADE_PASSES}"
+  echo " topologies=${SMOKE_TOPOLOGIES:-}  seed_rows=${SMOKE_SEED_ROWS:-}  blobs=${SMOKE_BLOB_COUNT:-}  upgrade_passes=${UPGRADE_PASSES:-}"
   if [[ -n "${BUILT_TARBALL}" ]]; then
     echo " tarball=${BUILT_TARBALL}"
   fi
@@ -2548,7 +2548,7 @@ fi
 
 transient_build_failure() {
   [[ -f "\$1" ]] || return 1
-  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 |Couldn.t create temporary file /tmp/apt.conf' "\$1"
+  grep -qE 'Failed to fetch|Hash Sum mismatch|Temporary failure resolving|Connection timed out|Could not resolve|Network is unreachable|502 Bad Gateway|503 Service|download.docker.com|Unable to lock directory|Could not get lock|I/O error|Connection reset|TLS handshake|the remote end hung up|Clearing|Splitting up|503  |504  |522 |Couldn.t create temporary file /tmp/apt.conf|Couldn.t download package' "\$1"
 }
 
 attempt=1
