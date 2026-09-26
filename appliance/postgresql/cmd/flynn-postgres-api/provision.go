@@ -3,10 +3,19 @@ package main
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/randy-girard/flynn/pkg/pgappliance"
 )
+
+// platformExtension is the same pattern as the event trigger. Controller and
+// blobstore run these statements as the database owner, not as flynn.
+var platformExtension = regexp.MustCompile(`(?i)create[[:space:]]+extension[[:space:]]+(if[[:space:]]+not[[:space:]]+exists[[:space:]]+)?("uuid-ossp"|uuid-ossp|"pgcrypto"|pgcrypto)([^a-z0-9_]|$)`)
+
+func platformRoleExtensionAllowed(query string) bool {
+	return platformExtension.MatchString(query)
+}
 
 // TenantConnectionLimit is the CONNECTION LIMIT on each provisioned role.
 const TenantConnectionLimit = 20
@@ -82,14 +91,22 @@ func quoteLiteral(s string) string {
 }
 
 // blockCreateExtensionSQL installs an event trigger that rejects CREATE
-// EXTENSION unless the current user is the flynn superuser.
+// EXTENSION unless the current user is the flynn superuser, or the statement
+// is one of the extensions the controller and blobstore migrations run as
+// their own (non-superuser) role: uuid-ossp and pgcrypto.
 func blockCreateExtensionSQL() []string {
 	return []string{
 		`CREATE OR REPLACE FUNCTION flynn_block_create_extension() RETURNS event_trigger LANGUAGE plpgsql AS $fn$
+DECLARE
+  q text := lower(current_query());
 BEGIN
-  IF current_user <> 'flynn' THEN
-    RAISE EXCEPTION 'CREATE EXTENSION is not allowed for tenant roles';
+  IF current_user = 'flynn' THEN
+    RETURN;
   END IF;
+  IF q ~ 'create[[:space:]]+extension[[:space:]]+(if[[:space:]]+not[[:space:]]+exists[[:space:]]+)?("uuid-ossp"|uuid-ossp|"pgcrypto"|pgcrypto)([^a-z0-9_]|$)' THEN
+    RETURN;
+  END IF;
+  RAISE EXCEPTION 'CREATE EXTENSION is not allowed for tenant roles';
 END;
 $fn$`,
 		`DROP EVENT TRIGGER IF EXISTS flynn_block_create_extension`,

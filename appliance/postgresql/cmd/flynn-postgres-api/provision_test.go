@@ -27,6 +27,17 @@ func TestBuildProvisionPlanLimitsAndExtensions(t *testing.T) {
 	if !strings.Contains(tenant, "CREATE EXTENSION is not allowed for tenant roles") || !strings.Contains(tenant, "CREATE EVENT TRIGGER") {
 		t.Fatalf("extension block:\n%s", tenant)
 	}
+	for _, stmt := range []string{
+		`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`,
+		`CREATE EXTENSION IF NOT EXISTS "pgcrypto"`,
+	} {
+		if !platformRoleExtensionAllowed(stmt) {
+			t.Fatalf("platform migrations must be allowed: %s", stmt)
+		}
+	}
+	if platformRoleExtensionAllowed(`CREATE EXTENSION IF NOT EXISTS "file_fdw"`) {
+		t.Fatal("untrusted extensions must stay blocked")
+	}
 	if strings.Contains(tenant, "p'w") {
 		t.Fatal("tenant sql must not include the password")
 	}
