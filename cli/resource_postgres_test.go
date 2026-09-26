@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
 )
 
@@ -63,17 +65,67 @@ func TestSingleAttachmentEnv(t *testing.T) {
 	}
 }
 
-func TestPostgresProvisionConfig(t *testing.T) {
-	got, err := postgresProvisionConfig("redis", "ANALYTICS", "res", "perf-l", "logical")
+func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
+	cat := dbruntime.BuiltinCatalog()
+	got, err := databaseProvisionConfig("scheduler", "ANALYTICS", "res", "perf-l", "logical", "", "", "", cat)
 	if err != nil || got != nil {
-		t.Fatalf("non-postgres config %s %v", got, err)
+		t.Fatalf("non-database config %s %v", got, err)
 	}
-	got, err = postgresProvisionConfig("postgres", "", "", "", "")
-	if err != nil || got != nil {
-		t.Fatalf("empty config %s %v", got, err)
+	got, err = databaseProvisionConfig("redis", "", "", "", "", "", "", "", cat)
+	if err != nil || got == nil {
+		t.Fatalf("redis default %s %v", got, err)
 	}
-	got, err = postgresProvisionConfig("postgres", "ANALYTICS", "leader", "perf-l", "logical")
+	var redis databaseProvisionBody
+	if err := json.Unmarshal(*got, &redis); err != nil {
+		t.Fatal(err)
+	}
+	small, _ := cat.Find(dbruntime.EngineRedis, "small")
+	if redis.Runtime != "small" || redis.Disk != small.Disk || redis.CPU != small.CPU || redis.Memory != small.Memory {
+		t.Fatalf("redis small %#v", redis)
+	}
+	got, err = databaseProvisionConfig("postgres", "", "", "", "", "", "", "", cat)
+	if err != nil || got == nil {
+		t.Fatal(err)
+	}
+	var pg databaseProvisionBody
+	if err := json.Unmarshal(*got, &pg); err != nil {
+		t.Fatal(err)
+	}
+	pgSmall, _ := cat.Find(dbruntime.EnginePostgres, "small")
+	if pg.Disk != pgSmall.Disk || pg.Disk <= redis.Disk {
+		t.Fatalf("postgres disk %d redis disk %d", pg.Disk, redis.Disk)
+	}
+	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "medium", "logical", "", "", "", cat)
 	if err != nil || got == nil || !strings.Contains(string(*got), `"as":"ANALYTICS"`) || !strings.Contains(string(*got), `"follow":"leader"`) {
 		t.Fatalf("config %s %v", got, err)
+	}
+	med, _ := cat.Find(dbruntime.EnginePostgres, "medium")
+	var sized databaseProvisionBody
+	if err := json.Unmarshal(*got, &sized); err != nil {
+		t.Fatal(err)
+	}
+	if sized.Runtime != "medium" || sized.Disk != med.Disk || sized.Replication != "logical" {
+		t.Fatalf("medium %#v", sized)
+	}
+	_, err = databaseProvisionConfig("mysql", "", "", "cache", "", "", "", "", cat)
+	var unpublished *dbruntime.UnpublishedError
+	if !errors.As(err, &unpublished) {
+		t.Fatalf("unpublished runtime: %v", err)
+	}
+	_, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
+	if !errors.Is(err, dbruntime.ErrCustomSizesDisabled) {
+		t.Fatalf("raw size: %v", err)
+	}
+	cat.AllowCustomSizes = true
+	got, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
+	if err != nil || got == nil {
+		t.Fatal(err)
+	}
+	var custom databaseProvisionBody
+	if err := json.Unmarshal(*got, &custom); err != nil {
+		t.Fatal(err)
+	}
+	if custom.Runtime != "custom" || custom.CPU != 100 || custom.Disk != 1<<30 {
+		t.Fatalf("custom %#v", custom)
 	}
 }

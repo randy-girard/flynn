@@ -402,7 +402,7 @@ router can operate.
 
 ## Limits
 
-Process types use named runtimes for CPU and memory. Each runtime's CPU and
+Process types use named runtimes for CPU and memory. Database instance sizes are a separate catalog, `flynn-host db-runtime` (see [Databases](databases.html.md#database-runtimes)). Each app runtime's CPU and
 memory values are applied as the process **cap** (the max it may use). A
 runtime does **not** guarantee that capacity on the host unless you turn
 reservation on for that runtime. Shared runtimes pack onto nodes and keep

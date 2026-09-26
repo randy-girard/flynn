@@ -43,6 +43,49 @@ resolve from user jobs.
 Redis, Kafka, and ClickHouse do not use the sirenia state machine described
 below. See each page for safety notes.
 
+## Database runtimes
+
+A database runtime is a name plus CPU, memory, and disk for one engine
+(`postgres`, `redis`, `mariadb`, `mongodb`, `kafka`, `clickhouse`). The
+MariaDB provider on `resource:add` is `mysql`. These are **not** app process
+runtimes. `flynn-host runtime` and `flynn limit:runtime` size app processes
+only. Database runtimes are listed and edited with `flynn-host db-runtime`.
+
+Each engine ships `small`, `medium`, and `large`. The numbers are per engine.
+Redis `small` disk is 1GB; Postgres `small` disk is 10GB.
+
+| Engine | small | medium | large |
+| --- | --- | --- | --- |
+| postgres | 500 milliCPU, 512MB, 10GB | 1000 milliCPU, 1GB, 50GB | 2000 milliCPU, 2GB, 100GB |
+| redis | 250 milliCPU, 256MB, 1GB | 500 milliCPU, 512MB, 5GB | 1000 milliCPU, 1GB, 10GB |
+| mariadb | 500 milliCPU, 512MB, 8GB | 1000 milliCPU, 1GB, 32GB | 2000 milliCPU, 2GB, 80GB |
+| mongodb | 500 milliCPU, 1GB, 16GB | 1000 milliCPU, 2GB, 64GB | 2000 milliCPU, 4GB, 200GB |
+| kafka | 1000 milliCPU, 1GB, 20GB | 2000 milliCPU, 2GB, 100GB | 4000 milliCPU, 4GB, 500GB |
+| clickhouse | 1000 milliCPU, 2GB, 32GB | 2000 milliCPU, 4GB, 128GB | 4000 milliCPU, 8GB, 500GB |
+
+```text
+flynn resource:add redis
+flynn resource:add redis --runtime medium
+sudo flynn-host db-runtime
+sudo flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB redis cache
+sudo flynn-host db-runtime:update --disk 2GB redis small
+sudo flynn-host db-runtime:remove redis cache
+```
+
+Omitting `--runtime` uses `small`. There is no controller table for these
+definitions. Builtins are in memory. Admin creates, updates, removals, and
+the custom-size switch are stored in `/etc/flynn/db-runtimes.json`
+(`FLYNN_DB_RUNTIMES` overrides the path). `flynn resource:add` reads that
+same file. On a machine without it, only the builtins above are published
+and custom sizes stay off.
+
+Changing a definition does not resize instances already created from it.
+There is no in-place resize; provision a new resource to get a new size.
+
+Tenants cannot set raw `--cpu`, `--memory`, or `--disk`, and they cannot
+request a runtime name that is not published. A cluster admin allows raw
+sizes with `sudo flynn-host db-runtime:allow-custom`.
+
 On a single-host cluster, postgres/MariaDB/MongoDB run one peer
 (`SINGLETON=true`). When a third host joins, the scheduler promotes them to a
 three-peer replica set automatically.

@@ -126,6 +126,8 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"domain", "domain:apex",
 		"runtime", "runtime:create", "runtime:update",
 		"runtime:remove", "runtime:allow-custom", "runtime:reserve",
+		"db-runtime", "db-runtime:create", "db-runtime:update",
+		"db-runtime:remove", "db-runtime:allow-custom",
 		"events", "events:visible",
 		"route:add",
 		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",

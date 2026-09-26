@@ -114,6 +114,13 @@ var subAliases = map[string]map[string]string{
 		"allow-custom": "runtime:allow-custom",
 		"reserve":      "runtime:reserve",
 	},
+	"db-runtime": {
+		"create":       "db-runtime:create",
+		"update":       "db-runtime:update",
+		"remove":       "db-runtime:remove",
+		"delete":       "db-runtime:remove",
+		"allow-custom": "db-runtime:allow-custom",
+	},
 	"blobstore": {
 		"status":      "blobstore:status",
 		"set":         "blobstore:set",

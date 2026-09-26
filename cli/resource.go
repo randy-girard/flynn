@@ -11,6 +11,7 @@ import (
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
 	router "github.com/randy-girard/flynn/router/types"
@@ -23,9 +24,14 @@ usage: flynn resource
 List resources for the app.
 `)
 	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>]
+usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
 
 Provision a new resource for the app using <provider>.
+
+For postgres, mysql, redis, mongodb, kafka, and clickhouse, the new instance
+is sized from a database runtime (flynn-host db-runtime). Those are not app
+process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
+are rejected unless a cluster admin has allowed custom sizes.
 
 For postgres, the installed plugin (provider postgres at postgres-plugin.discoverd)
 receives --as, --follow, --runtime, and --replication. The platform appliance
@@ -35,8 +41,11 @@ The default name DATABASE sets only DATABASE_URL.
 Options:
 	--as=<name>              attachment env name (default DATABASE)
 	--follow=<resource>      read-only follower of an existing postgres resource
-	--runtime=<name>         runtime name for this instance
+	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     streaming (same major) or logical (major upgrade)
+	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
+	--memory=<bytes>         raw memory (only when custom sizes are allowed)
+	--disk=<bytes>           raw disk (only when custom sizes are allowed)
 `)
 	register("resource:attach", runResourceAttach, `
 usage: flynn resource:attach <provider> <resource> [--as <name>]
@@ -121,7 +130,11 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	}
 
 	req := &ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}}
-	cfg, err := postgresProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--runtime"], args.String["--replication"])
+	cat, err := dbruntime.Load(dbruntime.Path())
+	if err != nil {
+		return err
+	}
+	cfg, err := databaseProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
 	if err != nil {
 		return err
 	}
@@ -167,29 +180,66 @@ func rejectPlatformPostgresAdd(provider string, client controller.Client) error 
 	return nil
 }
 
-// postgresProvisionConfig is the body forwarded to flynn-plugin-postgres.
-// Other providers are unchanged. Empty postgres flags send no config.
-func postgresProvisionConfig(provider, as, follow, runtime, replication string) (*json.RawMessage, error) {
-	if provider != "postgres" {
+type databaseProvisionBody struct {
+	As          string `json:"as,omitempty"`
+	Follow      string `json:"follow,omitempty"`
+	Runtime     string `json:"runtime,omitempty"`
+	Replication string `json:"replication,omitempty"`
+	CPU         int64  `json:"cpu,omitempty"`
+	Memory      int64  `json:"memory,omitempty"`
+	Disk        int64  `json:"disk,omitempty"`
+}
+
+// databaseProvisionConfig sizes postgres, mysql, redis, mongodb, kafka, and
+// clickhouse from the database-runtime catalog. Other providers are unchanged.
+// Omitting runtime uses small. Raw cpu, memory, or disk is rejected unless
+// the catalog allows custom sizes. The size is fixed on this request;
+// later edits to the runtime definition do not resize this instance.
+func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
+	if _, ok := dbruntime.ProviderEngine(provider); !ok {
+		if cpuRaw != "" || memRaw != "" || diskRaw != "" {
+			return nil, fmt.Errorf("cpu, memory, and disk apply to database providers (postgres, mysql, redis, mongodb, kafka, clickhouse)")
+		}
 		return nil, nil
 	}
-	cfg := map[string]string{}
-	if as != "" {
-		cfg["as"] = as
+	var custom dbruntime.Size
+	if cpuRaw != "" {
+		n, err := dbruntime.ParseCPU(cpuRaw)
+		if err != nil {
+			return nil, err
+		}
+		custom.CPU = n
 	}
-	if follow != "" {
-		cfg["follow"] = follow
+	if memRaw != "" {
+		n, err := dbruntime.ParseBytes(memRaw)
+		if err != nil {
+			return nil, err
+		}
+		custom.Memory = n
 	}
-	if runtime != "" {
-		cfg["runtime"] = runtime
+	if diskRaw != "" {
+		n, err := dbruntime.ParseBytes(diskRaw)
+		if err != nil {
+			return nil, err
+		}
+		custom.Disk = n
 	}
-	if replication != "" {
-		cfg["replication"] = replication
+	sz, name, err := dbruntime.ResolveProvision(provider, runtime, custom, cat, cat.AllowCustomSizes)
+	if err != nil {
+		return nil, err
 	}
-	if len(cfg) == 0 {
-		return nil, nil
+	body := databaseProvisionBody{
+		Runtime: name,
+		CPU:     sz.CPU,
+		Memory:  sz.Memory,
+		Disk:    sz.Disk,
 	}
-	raw, err := json.Marshal(cfg)
+	if provider == "postgres" {
+		body.As = as
+		body.Follow = follow
+		body.Replication = replication
+	}
+	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
