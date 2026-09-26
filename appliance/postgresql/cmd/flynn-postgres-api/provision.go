@@ -1,21 +1,59 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/randy-girard/flynn/pkg/pgappliance"
 )
 
 // TenantConnectionLimit is the CONNECTION LIMIT on each provisioned role.
 const TenantConnectionLimit = 20
 
-// ProvisionPlan is the SQL for one tenant database. Maintenance statements
-// run on the postgres maintenance database. TenantDB statements run inside
-// the new database as the flynn superuser and block CREATE EXTENSION for
-// every role except flynn (untrusted extensions already require superuser;
-// the event trigger also rejects trusted extensions).
+// ProvisionPlan is the SQL for one database on the platform appliance.
+// Maintenance statements run on the postgres maintenance database. TenantDB
+// statements run inside the new database as the flynn superuser and block
+// CREATE EXTENSION for every role except flynn. Tenant apps never receive
+// this plan; only the platform marker (controller, blobstore) does.
 type ProvisionPlan struct {
 	Maintenance []string
 	TenantDB    []string
+}
+
+// planProvision builds system-database SQL only after the platform marker is
+// accepted. A tenant body returns before any CREATE USER / CREATE DATABASE text.
+func planProvision(body []byte, username, password, database string) (ProvisionPlan, error) {
+	if err := pgappliance.AllowProvision(body); err != nil {
+		return ProvisionPlan{}, err
+	}
+	return BuildProvisionPlan(username, password, database, TenantConnectionLimit), nil
+}
+
+// rejectSuperuserPassword refuses to publish the appliance superuser password
+// as an app role password.
+func rejectSuperuserPassword(password, superuser string) error {
+	if superuser != "" && password == superuser {
+		return errors.New("refusing to inject the appliance superuser password")
+	}
+	return nil
+}
+
+// provisionEnv is the app environment for a role created on the appliance.
+// It never copies the appliance superuser password.
+func provisionEnv(service, host, username, password, database, superuser string) (map[string]string, error) {
+	if err := rejectSuperuserPassword(password, superuser); err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"FLYNN_POSTGRES": service,
+		"PGHOST":         host,
+		"PGUSER":         username,
+		"PGPASSWORD":     password,
+		"PGDATABASE":     database,
+		"PGSSLMODE":      "require",
+		"DATABASE_URL":   databaseURL(username, password, host, database),
+	}, nil
 }
 
 // BuildProvisionPlan returns the provision SQL. Passwords are SQL literals.

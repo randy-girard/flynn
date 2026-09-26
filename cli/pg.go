@@ -90,7 +90,7 @@ func getAppPgRunConfig(client controller.Client) (*runConfig, error) {
 func getPgRunConfig(client controller.Client, app string, appRelease *ct.Release) (*runConfig, error) {
 	pgApp := appRelease.Env["FLYNN_POSTGRES"]
 	if pgApp == "" {
-		return nil, fmt.Errorf("No postgres database found. Provision one with `flynn resource:add postgres`")
+		return nil, fmt.Errorf("No postgres database found. Tenant Postgres requires the postgres plugin (flynn-plugin-postgres); `flynn resource:add postgres` does not use the platform appliance")
 	}
 
 	pgRelease, err := client.GetAppRelease(pgApp)

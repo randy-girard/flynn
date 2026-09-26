@@ -123,7 +123,9 @@
 #   SKIP_BUILDPACK=1     Skip the custom .buildpacks git-push app
 #   SMOKE_DATASTORES     Space-separated resource providers to attach and
 #                        verify (default: postgres mysql mongodb redis kafka
-#                        clickhouse). Matrix field: datastores.
+#                        clickhouse). "none" attaches nothing: the platform
+#                        Postgres appliance still boots, but the smoke app does
+#                        not resource:add postgres onto it. Matrix field: datastores.
 #   WAIT_FOR_INTERVAL    Seconds between wait_for polls [default: 2]
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
 #                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
@@ -366,10 +368,16 @@ SMOKE_MINIO_BUCKET="${SMOKE_MINIO_BUCKET:-flynnblobstore}"
 
 sync_datastore_providers() {
   local raw="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
+  # "none" means no tenant resource:add. The platform Postgres appliance still
+  # starts at bootstrap; quick smoke must not provision a tenant database on it.
+  if [[ "${raw}" == "none" ]]; then
+    DATASTORE_PROVIDERS=()
+    return 0
+  fi
   # shellcheck disable=SC2206
   DATASTORE_PROVIDERS=(${raw})
   if [[ ${#DATASTORE_PROVIDERS[@]} -eq 0 ]]; then
-    echo "SMOKE_DATASTORES is empty (need at least postgres)" >&2
+    echo "SMOKE_DATASTORES is empty (use none, or at least one provider)" >&2
     return 1
   fi
 }
@@ -4690,7 +4698,7 @@ try:
 except Exception:
     sys.exit(2)
 r = d.get("resources") or {}
-if not need or any(not r.get(k) for k in need):
+if any(not r.get(k) for k in need):
     sys.exit(1)
 if int(d.get("blob_count") or 0) < min_blobs:
     sys.exit(3)

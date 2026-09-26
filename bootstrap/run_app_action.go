@@ -11,6 +11,7 @@ import (
 	hostresource "github.com/randy-girard/flynn/host/resource"
 	"github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/resource"
 )
@@ -89,7 +90,16 @@ func (a *RunAppAction) Run(s *State) error {
 			return err
 		}
 		lookupDiscoverdURLHost(s, u, time.Second)
-		res, err := resource.Provision(u.String(), nil)
+		// System apps (controller) are created on the platform appliance before
+		// the controller exists. The platform marker is not a tenant provision.
+		var body []byte
+		if pgappliance.IsPlatformApplianceURL(p.URL) {
+			body, err = pgappliance.SystemProvisionBody(true)
+			if err != nil {
+				return err
+			}
+		}
+		res, err := resource.Provision(u.String(), body)
 		if err != nil {
 			return err
 		}

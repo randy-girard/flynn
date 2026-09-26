@@ -9,6 +9,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/resource"
 	"golang.org/x/net/context"
 )
@@ -30,13 +31,14 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		return
 	}
 	var owner string
+	var target *ct.App
 	if len(rr.Apps) > 0 {
 		app, err := c.appRepo.Get(rr.Apps[0])
 		if err != nil {
 			respondWithError(w, err)
 			return
 		}
-		target := app.(*ct.App)
+		target = app.(*ct.App)
 		if !c.requireAppManage(ctx, w, target) {
 			return
 		}
@@ -66,6 +68,17 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		config = *rr.Config
 	} else {
 		config = []byte(`{}`)
+	}
+	// The built-in appliance is the platform database. Bootstrap still creates
+	// the controller and blobstore databases (system apps, platform marker).
+	// A tenant app never reaches the appliance, so no tenant role is created.
+	if pgappliance.IsPlatformApplianceURL(p.URL) {
+		body, err := pgappliance.SystemProvisionBody(target != nil && target.System())
+		if err != nil {
+			respondWithError(w, ct.ValidationError{Field: "provider", Message: err.Error()})
+			return
+		}
+		config = body
 	}
 	data, err := resource.Provision(p.URL, config)
 	if err != nil {

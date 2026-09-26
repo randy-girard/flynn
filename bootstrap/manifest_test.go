@@ -58,6 +58,12 @@ func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 			t.Fatalf("missing app %s", app)
 		}
 	}
+	if strings.Count(s, `"name":"platform-postgres"`) != 2 {
+		t.Fatalf("controller and blobstore must use the platform-postgres provider, got %d", strings.Count(s, `"name":"platform-postgres"`))
+	}
+	if strings.Contains(s, `"name":"postgres"`) {
+		t.Fatal("bootstrap must not register the built-in appliance as the postgres resource provider")
+	}
 	if strings.Count(s, `(index .StepData \"discoverd-key\").Data`) < 11 {
 		t.Fatalf("discoverd-key not referenced enough times: %d", strings.Count(s, `(index .StepData \"discoverd-key\").Data`))
 	}

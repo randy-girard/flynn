@@ -316,10 +316,10 @@ release: it needs real VMs, so it cannot run in GitHub Actions. Run it from the
 **repo root on the laptop** (it drives Vagrant).
 
 For most day-to-day changes, use the **quick** matrix row (about half the time
-of a full 1-node upgrade smoke): one node, git-push + docker-push + postgres,
-no plugin install, no custom buildpack, no CLI/volume sweep, no upgrade, no
-backup. Keep `singleton` and `ha` for upgrade/HA/plugin work and as the
-pre-release gate.
+of a full 1-node upgrade smoke): one node, git-push + docker-push, no tenant
+database on the platform Postgres appliance, no plugin install, no custom
+buildpack, no CLI/volume sweep, no upgrade, no backup. Keep `singleton` and
+`ha` for upgrade/HA/plugin work and as the pre-release gate.
 
 ```
 $ script/vagrant-smoke.sh --item quick
@@ -391,7 +391,7 @@ set in the environment):
 
 | Variable / flag | Meaning |
 | --- | --- |
-| `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push + postgres |
+| `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push. No tenant database on the platform Postgres appliance |
 | `--item minio` | 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore. Extra RAM; disabled in the example matrix. |
 | `--item pipeline` | 1-node pipeline create/add/promote into an undeployed production app. Disabled in the example matrix. |
 | `--item singleton` | Run one matrix row (even if `enabled: false`) |

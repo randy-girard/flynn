@@ -13,7 +13,7 @@
 #
 #   script/vagrant-smoke.sh                    # enabled items in smoke-matrix.yaml
 #   script/vagrant-smoke.sh --list             # show matrix items (no VMs)
-#   script/vagrant-smoke.sh --item quick       # contributor default (boot + git/docker + postgres)
+#   script/vagrant-smoke.sh --item quick       # contributor default (boot + git/docker; no tenant postgres)
 #   script/vagrant-smoke.sh --item minio       # S3-compatible blobstore (MinIO) + mysql backup
 #   script/vagrant-smoke.sh --item pipeline    # pipeline create/add/promote into an empty prod app
 #   script/vagrant-smoke.sh --item singleton   # one named configuration

@@ -116,7 +116,9 @@ See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/conte
 
 ```bash
 flynn apps:create myapp
-flynn resource:add postgres    # optional; see datastores below
+# tenant Postgres is flynn-plugin-postgres (not yet installed);
+# this does not provision on the platform appliance
+flynn resource:add postgres
 git push flynn main            # or: master
 ```
 
@@ -146,8 +148,11 @@ Language notes live under [docs/content/languages](docs/content/languages).
 
 ## Datastores
 
-Postgres is included in Flynn. Other engines are plugins (`flynn-host
-plugin:install`; see [Plugins](docs/content/plugins.md)). Provision from an app with
+The built-in Postgres appliance is the platform database (controller,
+blobstore). Tenant databases do not live on it. `flynn resource:add postgres`
+needs the upcoming `flynn-plugin-postgres` and does not create a role on the
+platform appliance. Other engines are plugins (`flynn-host plugin:install`;
+see [Plugins](docs/content/plugins.md)). Provision those from an app with
 `flynn resource:add <provider>`. Connection URLs are injected as environment
 variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach
 appliances at the **leader** hostname Flynn put in those URLs, not at internal
@@ -155,7 +160,8 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
-| `postgres` | PostgreSQL **16** | HA (primary + sync + async) | In core. PostGIS, pgRouting, TimescaleDB. `flynn pg:psql` / `pg:dump` / `pg:restore` |
+| platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `resource:add postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
+| `postgres` | PostgreSQL **16** | Plugin instance | **Upcoming plugin** `flynn-plugin-postgres` (not installed yet). `flynn pg:psql` / `pg:dump` / `pg:restore` once a database is attached |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. No replicas and not in `flynn-host backup`; caching and development |

@@ -79,7 +79,7 @@ items:
     enabled: false
 
   - id: quick
-    description: contributor smoke — 1-node boot, git-push, docker-push, postgres (no upgrade/backup/plugins)
+    description: contributor smoke — 1-node boot, git-push, docker-push (no tenant postgres, upgrade, backup, or plugins)
     topologies: "1"
     skip_upgrade: true
     skip_backup: true
@@ -91,7 +91,7 @@ items:
     blob_count: 10
     plugins: []
     datastores:
-      - postgres
+      - none
     enabled: false
 
   - id: minio

@@ -5,58 +5,74 @@ layout: docs
 
 # PostgreSQL
 
-The Flynn Postgres appliance provides PostgreSQL 16 in a highly-available
-configuration with automatic provisioning. It automatically fails over to
-a synchronous replica with no loss of data if the primary server goes down.
-A rolling update starts each replacement replica and waits for it to catch up
-before stopping the peer it replaces, so the three-peer set stays intact during
-the new job's base backup. Writes still pause briefly when the old sync is
-promoted off, the same window a sync failure already causes.
-A single-host (`SINGLETON`) cluster runs one peer; when a third host joins,
-the scheduler promotes the appliance to a three-peer replica set automatically.
+Flynn has two different Postgres roles. They are not interchangeable.
+
+The **platform appliance** (`appliance/postgresql`, system app `postgres`) is
+the database bootstrap starts for the controller and other system apps
+(blobstore). It stays in Flynn, uses sirenia, and is not a catalog plugin.
+`flynn resource:add postgres` does not create a role or database on it, and
+tenant apps never receive its superuser password.
+
+**Tenant Postgres** is the upcoming `flynn-plugin-postgres` plugin (that repo
+does not exist yet). After it is installed, `flynn resource:add postgres`
+provisions a database on the plugin instance. Until then the command fails
+and tells you the plugin is not installed.
+
+The platform image is PostgreSQL 16 in a highly-available configuration. It
+automatically fails over to a synchronous replica with no loss of data if the
+primary server goes down. A rolling update starts each replacement replica and
+waits for it to catch up before stopping the peer it replaces, so the
+three-peer set stays intact during the new job's base backup. Writes still
+pause briefly when the old sync is promoted off, the same window a sync
+failure already causes. A single-host (`SINGLETON`) cluster runs one peer;
+when a third host joins, the scheduler promotes the appliance to a three-peer
+replica set automatically.
 
 The image includes **PostGIS 3**, **pgRouting**, and **TimescaleDB 2** in
 addition to `postgresql-contrib`.
 
-Each resource role gets a `CONNECTION LIMIT` and cannot `CREATE EXTENSION` for
-untrusted extensions. `CONNECT` stays revoked from `PUBLIC`.
+Roles the platform appliance creates for system apps get a `CONNECTION LIMIT`
+and cannot `CREATE EXTENSION` except as the appliance superuser. `CONNECT`
+stays revoked from `PUBLIC`. Those roles are not tenant databases.
 
 ## Usage
 
 ### Adding a database to an app
 
-Postgres comes ready to go as soon as you've installed Flynn. After you create
-an app, you can provision a database for your app by running:
+The platform appliance is already running after install. It is only for
+system apps. To give an app its own database, install the postgres plugin
+(not yet available) and then run:
 
 ```text
 flynn resource:add postgres
 ```
 
-This will provision a database on the Postgres cluster and configure your
-application to connect to it.
+That command does not provision a database on the platform appliance. With
+the plugin installed it configures the app to connect to the plugin instance.
 
 ### Connecting to the database
 
-Provisioning the database will add a few environment variables to your app
-release. `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PGHOST` provide connection
-details for the database and are used automatically by many Postgres clients.
+A provisioned plugin database adds environment variables to the app release.
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PGHOST` provide connection details
+and are used automatically by many Postgres clients. Those values are a role
+on the plugin instance, not the platform appliance superuser.
 
 Flynn will also create the `DATABASE_URL` environment variable which is utilized
 by some frameworks to configure database connections. New URLs use
-`sslmode=require` so clients encrypt by default. The appliance enables
+`sslmode=require` so clients encrypt by default. The platform appliance enables
 `ssl=on` with a cluster-generated server certificate (SANs include
 `postgres.discoverd`, `leader.postgres.discoverd`, and
 `postgres.<cluster-domain>`). `pg_hba` still uses `host` (not `hostssl`), so
 in-cluster clients that pass `sslmode=disable` keep working.
 
-App `DATABASE_URL` connections use TCP 5432. The appliance admin HTTP API on
-:5433 (`/status`, `/stop`) requires the cluster controller key; `GET
+App `DATABASE_URL` connections use TCP 5432. The platform appliance admin HTTP
+API on :5433 (`/status`, `/stop`) requires the cluster controller key; `GET
 /.well-known/status` stays open for health checks. User jobs cannot open :5433.
 
 ### External access
 
-Export the database on a TCP route with a stable hostname, then open the host
-port:
+Export the platform appliance on a TCP route with a stable hostname, then open
+the host port:
 
 ```text
 flynn resource:expose postgres

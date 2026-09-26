@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -86,6 +87,9 @@ func runResourceList(args *docopt.Args, client controller.Client) error {
 
 func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	provider := args.String["<provider>"]
+	if err := rejectPlatformPostgresAdd(provider, client); err != nil {
+		return err
+	}
 
 	res, err := client.ProvisionResource(&ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}})
 	if err != nil {
@@ -105,6 +109,26 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 
 	log.Printf("Created resource %s and release %s.", res.ID, releaseID)
 
+	return nil
+}
+
+// rejectPlatformPostgresAdd stops `flynn resource:add postgres` from creating
+// a role on the built-in appliance. A future postgres plugin registers its own
+// provider named postgres at a different URL and is left alone.
+func rejectPlatformPostgresAdd(provider string, client controller.Client) error {
+	if provider != "postgres" {
+		return nil
+	}
+	p, err := client.GetProvider(provider)
+	if err != nil {
+		if errors.Is(err, controller.ErrNotFound) {
+			return pgappliance.ErrTenantProvision
+		}
+		return err
+	}
+	if p == nil || pgappliance.IsPlatformApplianceURL(p.URL) {
+		return pgappliance.ErrTenantProvision
+	}
 	return nil
 }
 

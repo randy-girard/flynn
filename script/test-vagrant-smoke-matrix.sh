@@ -40,6 +40,8 @@ need "${smoke}" '--item' \
   "smoke must accept --item to run one matrix configuration"
 need "${smoke}" '--item quick' \
   "smoke header must document the contributor quick item"
+need "${smoke}" '[[ "${raw}" == "none" ]]' \
+  "quick smoke must treat SMOKE_DATASTORES=none as no tenant resource:add"
 need "${smoke}" '--item minio' \
   "smoke header must document the MinIO blobstore item"
 need "${smoke}" '--item pipeline' \
@@ -141,8 +143,13 @@ echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1' \
   || { echo "quick must set SKIP_PLUGIN_INSTALL=1" >&2; echo "${out}" >&2; exit 1; }
 echo "${out}" | grep -q 'SKIP_BUILDPACK=1' \
   || { echo "quick must set SKIP_BUILDPACK=1" >&2; echo "${out}" >&2; exit 1; }
-echo "${out}" | grep -q 'SMOKE_DATASTORES=postgres' \
-  || { echo "quick must set SMOKE_DATASTORES=postgres" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SMOKE_DATASTORES=none' \
+  || { echo "quick must set SMOKE_DATASTORES=none (no tenant database on the platform appliance)" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'SMOKE_DATASTORES=postgres'; then
+  echo "quick must not resource:add postgres on the platform appliance" >&2
+  echo "${out}" >&2
+  exit 1
+fi
 echo "${out}" | grep -q "PLUGIN_SMOKE_APPS=''" \
   || { echo "quick must clear PLUGIN_SMOKE_APPS" >&2; echo "${out}" >&2; exit 1; }
 

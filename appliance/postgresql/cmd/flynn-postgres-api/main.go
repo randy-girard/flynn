@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -80,8 +81,27 @@ type pgAPI struct {
 }
 
 func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(req.Body, 1<<20))
+	if err != nil {
+		httphelper.Error(w, err)
+		return
+	}
 	username, password, database := random.Hex(16), random.Hex(16), random.Hex(16)
-	plan := BuildProvisionPlan(username, password, database, TenantConnectionLimit)
+	if err := rejectSuperuserPassword(password, os.Getenv("PGPASSWORD")); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	// Tenant requests fail here, before CREATE USER / CREATE DATABASE is built.
+	plan, err := planProvision(body, username, password, database)
+	if err != nil {
+		httphelper.ValidationError(w, "provider", err.Error())
+		return
+	}
+	env, err := provisionEnv(serviceName, serviceHost, username, password, database, os.Getenv("PGPASSWORD"))
+	if err != nil {
+		httphelper.Error(w, err)
+		return
+	}
 
 	var applied []string
 	fail := func(err error) {
@@ -107,18 +127,9 @@ func (p *pgAPI) createDatabase(ctx context.Context, w http.ResponseWriter, req *
 		return
 	}
 
-	url := databaseURL(username, password, serviceHost, database)
 	httphelper.JSON(w, 200, resource.Resource{
-		ID: fmt.Sprintf("/databases/%s:%s", username, database),
-		Env: map[string]string{
-			"FLYNN_POSTGRES": serviceName,
-			"PGHOST":         serviceHost,
-			"PGUSER":         username,
-			"PGPASSWORD":     password,
-			"PGDATABASE":     database,
-			"PGSSLMODE":      "require",
-			"DATABASE_URL":   url,
-		},
+		ID:  fmt.Sprintf("/databases/%s:%s", username, database),
+		Env: env,
 	})
 }
 

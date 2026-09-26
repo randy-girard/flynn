@@ -21,7 +21,12 @@ sudo flynn-host plugin:install mysql
 ```
 
 A path, git URL, `--github-org`, or `/etc/flynn/plugins.json` overrides the
-catalog. Postgres stays in Flynn and is not a plugin.
+catalog. The built-in Postgres appliance (`appliance/postgresql`, system app
+`postgres`) stays in Flynn. It is the platform database for the controller
+and other system apps, not a catalog plugin and not the tenant Postgres
+product. Tenant Postgres is the upcoming `flynn-plugin-postgres` (that repo
+does not exist yet). `flynn resource:add postgres` does not provision a
+database on the platform appliance; it requires that plugin.
 
 ## First-party catalog
 

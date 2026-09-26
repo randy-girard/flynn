@@ -5,7 +5,9 @@ layout: docs
 
 # Databases
 
-Postgres is included in Flynn. Other engines (Redis, MariaDB, MongoDB, Kafka,
+Postgres is the platform appliance in Flynn (controller and other system apps).
+It is not a tenant database. Tenant Postgres is the upcoming
+`flynn-plugin-postgres`. Other engines (Redis, MariaDB, MongoDB, Kafka,
 ClickHouse) are **plugins**: the operator installs them with
 [`flynn-host plugin:install`](plugins.md) from a sibling repo or git URL. The
 user `flynn` CLI only shows those commands after the plugin is installed on the
