@@ -207,6 +207,19 @@ func TestRetryClientHasNoTotalTimeout(t *testing.T) {
 	}
 }
 
+func TestProvisionClientWaitsForDatabaseBoot(t *testing.T) {
+	if ProvisionClient.Timeout != 0 {
+		t.Fatalf("ProvisionClient.Timeout=%s", ProvisionClient.Timeout)
+	}
+	tr, ok := ProvisionClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("ProvisionClient.Transport is %T", ProvisionClient.Transport)
+	}
+	if tr.ResponseHeaderTimeout != ProvisionHeaderTimeout || tr.ResponseHeaderTimeout <= RetryResponseHeaderTimeout {
+		t.Fatalf("header timeout %s must be %s and longer than the retry client", tr.ResponseHeaderTimeout, ProvisionHeaderTimeout)
+	}
+}
+
 func TestRetryClientTimeoutWouldBreakStreams(t *testing.T) {
 	// RetryClient is shared by controller SSE, logaggregator, router events,
 	// and cluster attach/hijack. A total Client.Timeout would cancel those

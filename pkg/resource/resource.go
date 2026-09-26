@@ -18,7 +18,7 @@ type Resource struct {
 }
 
 func Provision(uri string, config []byte) (*Resource, error) {
-	res, err := hh.RetryClient.Post(uri, "application/json", bytes.NewBuffer(config))
+	res, err := hh.ProvisionClient.Post(uri, "application/json", bytes.NewBuffer(config))
 	if err != nil {
 		return nil, err
 	}

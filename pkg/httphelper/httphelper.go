@@ -46,6 +46,24 @@ var RetryClient = &http.Client{
 	},
 }
 
+// ProvisionHeaderTimeout is how long a resource provision may run before
+// response headers. RetryClient's 10s header timeout would abort the caller
+// and start another database while the first one is still booting.
+const ProvisionHeaderTimeout = 15 * time.Minute
+
+// ProvisionClient is for provider provision calls only. It has no total
+// Timeout, same as RetryClient, but it waits long enough for one database
+// to start instead of retrying the POST.
+var ProvisionClient = &http.Client{
+	Transport: &http.Transport{
+		Dial:                  dialer.Retry.Dial,
+		ResponseHeaderTimeout: ProvisionHeaderTimeout,
+		TLSHandshakeTimeout:   RetryTLSHandshakeTimeout,
+		IdleConnTimeout:       RetryIdleConnTimeout,
+		ExpectContinueTimeout: time.Second,
+	},
+}
+
 const (
 	NotFoundErrorCode           ErrorCode = "not_found"
 	ObjectNotFoundErrorCode     ErrorCode = "object_not_found"
