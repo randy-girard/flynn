@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -22,9 +23,37 @@ usage: flynn resource
 List resources for the app.
 `)
 	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider>
+usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>]
 
 Provision a new resource for the app using <provider>.
+
+For postgres, the installed plugin (provider postgres at postgres-plugin.discoverd)
+receives --as, --follow, --runtime, and --replication. The platform appliance
+at postgres-api.discoverd is not used. --as ANALYTICS sets only ANALYTICS_URL.
+The default name DATABASE sets only DATABASE_URL.
+
+Options:
+	--as=<name>              attachment env name (default DATABASE)
+	--follow=<resource>      read-only follower of an existing postgres resource
+	--runtime=<name>         runtime name for this instance
+	--replication=<mode>     streaming (same major) or logical (major upgrade)
+`)
+	register("resource:attach", runResourceAttach, `
+usage: flynn resource:attach <provider> <resource> [--as <name>]
+
+Attach an existing resource to this app.
+
+For postgres, --as sets one env var (<NAME>_URL). The default name is the
+resource's existing *_URL key. The same resource can attach to several apps
+with different names.
+
+Options:
+	--as=<name>  attachment env name
+`)
+	register("resource:detach", runResourceDetach, `
+usage: flynn resource:detach <provider> <resource>
+
+Detach a resource from this app and remove the attachment env var.
 `)
 	register("resource:remove", runResourceRemove, `
 usage: flynn resource:remove <provider> [<resource>]
@@ -91,7 +120,13 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
-	res, err := client.ProvisionResource(&ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}})
+	req := &ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}}
+	cfg, err := postgresProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--runtime"], args.String["--replication"])
+	if err != nil {
+		return err
+	}
+	req.Config = cfg
+	res, err := client.ProvisionResource(req)
 	if err != nil {
 		return err
 	}
@@ -113,8 +148,8 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 }
 
 // rejectPlatformPostgresAdd stops `flynn resource:add postgres` from creating
-// a role on the built-in appliance. A future postgres plugin registers its own
-// provider named postgres at a different URL and is left alone.
+// a role on the built-in appliance. When the postgres plugin is installed it
+// registers provider postgres at postgres-plugin.discoverd, and that URL is allowed.
 func rejectPlatformPostgresAdd(provider string, client controller.Client) error {
 	if provider != "postgres" {
 		return nil
@@ -129,6 +164,123 @@ func rejectPlatformPostgresAdd(provider string, client controller.Client) error 
 	if p == nil || pgappliance.IsPlatformApplianceURL(p.URL) {
 		return pgappliance.ErrTenantProvision
 	}
+	return nil
+}
+
+// postgresProvisionConfig is the body forwarded to flynn-plugin-postgres.
+// Other providers are unchanged. Empty postgres flags send no config.
+func postgresProvisionConfig(provider, as, follow, runtime, replication string) (*json.RawMessage, error) {
+	if provider != "postgres" {
+		return nil, nil
+	}
+	cfg := map[string]string{}
+	if as != "" {
+		cfg["as"] = as
+	}
+	if follow != "" {
+		cfg["follow"] = follow
+	}
+	if runtime != "" {
+		cfg["runtime"] = runtime
+	}
+	if replication != "" {
+		cfg["replication"] = replication
+	}
+	if len(cfg) == 0 {
+		return nil, nil
+	}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		return nil, err
+	}
+	msg := json.RawMessage(raw)
+	return &msg, nil
+}
+
+func singleAttachmentEnv(resourceEnv map[string]string, as string) (map[string]string, error) {
+	var key, val string
+	n := 0
+	for k, v := range resourceEnv {
+		if strings.HasSuffix(k, "_URL") && v != "" {
+			n++
+			key, val = k, v
+		}
+	}
+	if n != 1 {
+		return nil, fmt.Errorf("postgres attachment expects exactly one *_URL, found %d", n)
+	}
+	name := key[:len(key)-len("_URL")]
+	if strings.TrimSpace(as) != "" {
+		name = strings.ToUpper(strings.TrimSpace(as))
+	}
+	return map[string]string{name + "_URL": val}, nil
+}
+
+func runResourceAttach(args *docopt.Args, client controller.Client) error {
+	provider := args.String["<provider>"]
+	resource := args.String["<resource>"]
+	res, err := client.AddResourceApp(provider, resource, mustApp())
+	if err != nil {
+		return err
+	}
+	env := make(map[string]*string)
+	if provider == "postgres" {
+		one, err := singleAttachmentEnv(res.Env, args.String["--as"])
+		if err != nil {
+			return err
+		}
+		for k, v := range one {
+			s := v
+			env[k] = &s
+		}
+	} else {
+		for k, v := range res.Env {
+			s := v
+			env[k] = &s
+		}
+	}
+	releaseID, err := setEnv(client, "", env)
+	if err != nil {
+		return err
+	}
+	log.Printf("Attached resource %s and release %s.", res.ID, releaseID)
+	return nil
+}
+
+func runResourceDetach(args *docopt.Args, client controller.Client) error {
+	provider := args.String["<provider>"]
+	resource := args.String["<resource>"]
+	res, err := client.DeleteResourceApp(provider, resource, mustApp())
+	if err != nil {
+		return err
+	}
+	release, err := client.GetAppRelease(mustApp())
+	if err != nil {
+		return err
+	}
+	env := make(map[string]*string)
+	for k, v := range res.Env {
+		if release.Env[k] == v {
+			env[k] = nil
+		}
+	}
+	if provider == "postgres" {
+		for k, v := range release.Env {
+			if !strings.HasSuffix(k, "_URL") {
+				continue
+			}
+			for _, rv := range res.Env {
+				if v == rv {
+					env[k] = nil
+				}
+			}
+		}
+	}
+	releaseID, err := setEnv(client, "", env)
+	if err != nil {
+		return err
+	}
+	log.Printf("Detached resource %s and release %s.", res.ID, releaseID)
 	return nil
 }
 

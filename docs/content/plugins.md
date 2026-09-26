@@ -24,9 +24,10 @@ A path, git URL, `--github-org`, or `/etc/flynn/plugins.json` overrides the
 catalog. The built-in Postgres appliance (`appliance/postgresql`, system app
 `postgres`) stays in Flynn. It is the platform database for the controller
 and other system apps, not a catalog plugin and not the tenant Postgres
-product. Tenant Postgres is the upcoming `flynn-plugin-postgres` (that repo
-does not exist yet). `flynn resource:add postgres` does not provision a
-database on the platform appliance; it requires that plugin.
+product. Tenant Postgres is `flynn-plugin-postgres` (provider `postgres` at
+`postgres-plugin.discoverd`). `flynn resource:add postgres` provisions one
+isolated instance on that plugin. It does not provision a database on the
+platform appliance.
 
 ## First-party catalog
 

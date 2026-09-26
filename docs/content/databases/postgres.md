@@ -13,10 +13,11 @@ the database bootstrap starts for the controller and other system apps
 `flynn resource:add postgres` does not create a role or database on it, and
 tenant apps never receive its superuser password.
 
-**Tenant Postgres** is the upcoming `flynn-plugin-postgres` plugin (that repo
-does not exist yet). After it is installed, `flynn resource:add postgres`
-provisions a database on the plugin instance. Until then the command fails
-and tells you the plugin is not installed.
+**Tenant Postgres** is the `flynn-plugin-postgres` plugin. Install it with
+`flynn-host plugin:install postgres`. It registers provider `postgres` at
+`postgres-plugin.discoverd`. `flynn resource:add postgres` provisions on that
+plugin. It does not create a role on the platform appliance, and it does not
+dial `postgres-api.discoverd`.
 
 The platform image is PostgreSQL 16 in a highly-available configuration. It
 automatically fails over to a synchronous replica with no loss of data if the
@@ -41,25 +42,58 @@ stays revoked from `PUBLIC`. Those roles are not tenant databases.
 
 The platform appliance is already running after install. It is only for
 system apps. To give an app its own database, install the postgres plugin
-(not yet available) and then run:
+and then run:
 
 ```text
 flynn resource:add postgres
+flynn resource:add postgres --as ANALYTICS
 ```
 
-That command does not provision a database on the platform appliance. With
-the plugin installed it configures the app to connect to the plugin instance.
+That command does not provision a database on the platform appliance. It
+creates a new Flynn app with one volume and exactly one Postgres node. Two
+resources do not share an app, volume, superuser, or any credential that can
+read the other instance. Sirenia is not started.
+
+`--as ANALYTICS` sets only `ANALYTICS_URL`. The default name `DATABASE` sets
+only `DATABASE_URL`. `flynn resource:attach` / `flynn resource:detach` add and
+remove that variable. The same resource can attach to several apps under
+different names. `flynn env:set` of an attached `*_URL` is rejected while it
+is attached.
+
+Inside one instance you can add databases and users. Those users exist only
+in that instance.
+
+### Follow, wait, promote
+
+There is no in-place resize or upgrade. Create a follower, wait until it is
+caught up, then promote:
+
+```text
+flynn resource:add postgres --follow <resource> --replication streaming
+flynn pg:wait <follower>
+flynn pg:promote <follower>
+```
+
+A follower is a separate resource, not an extra node. It is read-only. It
+cannot follow another follower. Its own `--as` does not replace the leader
+URL until promote. Promote makes the follower writable, ends the follow, and
+rewrites the primary attachment `*_URL`. The old leader remains its own
+resource. `flynn pg:unfollow <follower>` stops replication and leaves a
+standalone writable copy.
+
+`--replication streaming` is same-major. `--replication logical` is the
+major-upgrade path. A follower may use a different `--runtime` name. Runtime
+sizing itself lands in a later ticket.
+
+`flynn pg:info` shows the leader, followers, and lag. `flynn pg:psql` opens a
+console for this instance's URL only.
 
 ### Connecting to the database
 
-A provisioned plugin database adds environment variables to the app release.
-`PGDATABASE`, `PGUSER`, `PGPASSWORD`, and `PGHOST` provide connection details
-and are used automatically by many Postgres clients. Those values are a role
-on the plugin instance, not the platform appliance superuser.
-
-Flynn will also create the `DATABASE_URL` environment variable which is utilized
-by some frameworks to configure database connections. New URLs use
-`sslmode=require` so clients encrypt by default. The platform appliance enables
+A provisioned plugin database adds one environment variable to the app
+release: `DATABASE_URL`, or `<NAME>_URL` when you pass `--as <NAME>`. That
+URL is a role on this instance, not the platform appliance superuser. New
+URLs use `sslmode=require`. The platform appliance enables
 `ssl=on` with a cluster-generated server certificate (SANs include
 `postgres.discoverd`, `leader.postgres.discoverd`, and
 `postgres.<cluster-domain>`). `pg_hba` still uses `host` (not `hostssl`), so

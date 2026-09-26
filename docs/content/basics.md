@@ -54,18 +54,17 @@ http:example.demo.localflynn.com  example-web  http/2e37467e-08fc-47e5-853b-4f05
 ```
 
 The app depends on Postgres. Tenant databases come from the postgres plugin
-(`flynn-plugin-postgres`, not yet installed), not from the platform appliance
-that bootstrap starts for the controller:
+(`flynn-plugin-postgres`), not from the platform appliance that bootstrap
+starts for the controller:
 
 ```
 $ flynn resource:add postgres
 ```
 
-Until that plugin is installed, the command fails instead of creating a role
-on the platform server. After install, provisioning adds environment variables
-to the app release. `DATABASE_URL`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, and
-`PGHOST` are connection details for that plugin database. They are not the
-platform appliance superuser.
+That creates one isolated instance and sets `DATABASE_URL` only. It does not
+create a role on the platform server, and the URL is not the platform
+appliance superuser. Install the plugin with `flynn-host plugin:install postgres`
+first. Until then the command fails.
 
 Push to the `flynn` Git remote to deploy the application:
 

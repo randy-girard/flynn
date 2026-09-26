@@ -19,7 +19,7 @@ const PlatformProvisionBody = `{"platform":true}`
 
 // ErrTenantProvision is returned when a request would create a role on the
 // platform appliance for something other than a system app.
-var ErrTenantProvision = errors.New("tenant Postgres is not the platform appliance; install the postgres plugin (flynn-plugin-postgres), which is not yet installed")
+var ErrTenantProvision = errors.New("tenant Postgres is not the platform appliance; install the postgres plugin (flynn-plugin-postgres) and run flynn resource:add postgres")
 
 // IsPlatformApplianceURL reports whether raw is the built-in appliance API.
 func IsPlatformApplianceURL(raw string) bool {

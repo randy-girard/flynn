@@ -8,6 +8,12 @@
       "description": "Redis. Provision with flynn resource:add redis."
     },
     {
+      "name": "postgres",
+      "kind": "resource-provider",
+      "repo": "flynn-plugin-postgres",
+      "description": "Tenant Postgres. One isolated instance per resource. Provision with flynn resource:add postgres. Not the platform appliance."
+    },
+    {
       "name": "mariadb",
       "aliases": ["mysql"],
       "kind": "resource-provider",

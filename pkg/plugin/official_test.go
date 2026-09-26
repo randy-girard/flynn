@@ -22,7 +22,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			got[a] = p
 		}
 	}
-	for _, name := range []string{"redis", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "autoscale", "github", "pipeline", "enterprise"} {
+	for _, name := range []string{"redis", "postgres", "mariadb", "mysql", "mongodb", "kafka", "clickhouse", "dashboard", "www", "discovery", "otel", "opentelemetry", "scheduler", "autoscale", "github", "pipeline", "enterprise"} {
 		if _, ok := got[name]; !ok {
 			t.Fatalf("official catalog missing %s", name)
 		}
@@ -83,6 +83,9 @@ func TestOfficialCatalogOverrideAndInstalledRepo(t *testing.T) {
 	cfg, err := LoadConfig(t.TempDir() + "/missing.json")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if cfg.GitHubURL("postgres") != "https://github.com/randy-girard/flynn-plugin-postgres.git" {
+		t.Fatalf("postgres: %s", cfg.GitHubURL("postgres"))
 	}
 	if cfg.GitHubURL("redis") != "https://github.com/acme/custom-redis.git" {
 		t.Fatalf("installed github_repo must win over catalog: %s", cfg.GitHubURL("redis"))

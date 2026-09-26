@@ -150,8 +150,8 @@ Language notes live under [docs/content/languages](docs/content/languages).
 
 The built-in Postgres appliance is the platform database (controller,
 blobstore). Tenant databases do not live on it. `flynn resource:add postgres`
-needs the upcoming `flynn-plugin-postgres` and does not create a role on the
-platform appliance. Other engines are plugins (`flynn-host plugin:install`;
+uses `flynn-plugin-postgres` (one app, one volume, one node per resource) and
+does not create a role on the platform appliance. Other engines are plugins (`flynn-host plugin:install`;
 see [Plugins](docs/content/plugins.md)). Provision those from an app with
 `flynn resource:add <provider>`. Connection URLs are injected as environment
 variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach
@@ -161,7 +161,7 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
 | platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `resource:add postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
-| `postgres` | PostgreSQL **16** | Plugin instance | **Upcoming plugin** `flynn-plugin-postgres` (not installed yet). `flynn pg:psql` / `pg:dump` / `pg:restore` once a database is attached |
+| `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. No replicas and not in `flynn-host backup`; caching and development |
