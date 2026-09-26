@@ -7,9 +7,31 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 )
+
+func TestProvisionWaitsPastTheRetryHeaderTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Longer than RetryClient's 10s header timeout. A provision that
+		// is aborted here is retried and starts a second database.
+		time.Sleep(hh.RetryResponseHeaderTimeout + time.Second)
+		_ = json.NewEncoder(w).Encode(Resource{
+			ID:  "db",
+			Env: map[string]string{"DATABASE_URL": "postgres://db"},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := Provision(srv.URL+"/databases", []byte(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "db" || got.Env["DATABASE_URL"] == "" {
+		t.Fatalf("%+v", got)
+	}
+}
 
 func TestProvisionParsesProviderJSONError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
