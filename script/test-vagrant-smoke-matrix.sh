@@ -199,6 +199,10 @@ out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item quick apply
 echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1' \
   || { echo "quick apply-run must skip plugin image builds" >&2; echo "${out}" >&2; exit 1; }
 
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" apply-run)"
+echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=.*postgres' \
+  || { echo "apply-run must build the union of item plugins, including postgres" >&2; echo "${out}" >&2; exit 1; }
+
 out="$(SMOKE_MATRIX_EXPLICIT='{"SKIP_UPGRADE":"0"}' python3 "${py}" --root "${ROOT}" --matrix "${example}" --item install-only apply-item)"
 if echo "${out}" | grep -q 'SKIP_UPGRADE='; then
   echo "explicit SKIP_UPGRADE must win over the matrix file, got:" >&2

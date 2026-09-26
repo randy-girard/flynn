@@ -468,6 +468,23 @@ def cmd_select(args: argparse.Namespace) -> int:
     return 0
 
 
+def plugin_names(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if str(x).strip()]
+    return [part for part in str(value).split() if part]
+
+
+def union_plugins(matrix: dict[str, Any], items: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for it in items:
+        for name in plugin_names(merge_item(matrix, it).get("plugins")):
+            if name not in seen:
+                seen.append(name)
+    return seen
+
+
 def cmd_apply_run(args: argparse.Namespace) -> int:
     path = resolve_matrix_path(args.root, args.matrix)
     matrix = load_matrix(path)
@@ -485,6 +502,11 @@ def cmd_apply_run(args: argparse.Namespace) -> int:
         run_values["skip_plugin_install"] = True
         fields["skip_plugin_install"] = "SKIP_PLUGIN_INSTALL"
     lines = assignments(fields, run_values, expl)
+    # Images are built once, before any item applies its own plugin list.
+    if "PLUGIN_SMOKE_APPS" not in expl:
+        names = union_plugins(matrix, items)
+        if names:
+            lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(names))}")
     lines.append(f"SMOKE_MATRIX_FILE={shlex.quote(path)}")
     sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
     return 0
