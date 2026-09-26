@@ -49,8 +49,10 @@ grep -q 'flynn_chroot_apt' "${ROOT}/builder/ubuntu-setup.sh" \
   || { echo "ubuntu-setup chroot must retry apt-get (PATH shim does not apply)" >&2; exit 1; }
 grep -q 'apt_get_update_resilient' "${ROOT}/script/install-flynn" \
   || { echo "install-flynn must retry apt-get update" >&2; exit 1; }
-grep -q 'destroy-volumes --include-data || true' "${ROOT}/script/install-flynn.tmpl" \
-  || { echo "install-flynn cleanup must not fail the build if stale flynn-host segfaults" >&2; exit 1; }
+grep -q 'timeout --signal=TERM --kill-after=10s 45' "${ROOT}/script/install-flynn.tmpl" \
+  || { echo "install-flynn cleanup must time out a stuck destroy-volumes" >&2; exit 1; }
+grep -q 'zpool destroy flynn-default did not finish' "${ROOT}/script/install-flynn.tmpl" \
+  || { echo "install-flynn cleanup must continue when zpool destroy times out" >&2; exit 1; }
 grep -q 'unmount_under_flynn' "${ROOT}/script/install-flynn" \
   || { echo "install --clean must unmount overlay/squashfs under /var/lib/flynn before rm -rf" >&2; exit 1; }
 grep -q 'flynn_apt_update_host' "${ROOT}/setup.sh" \

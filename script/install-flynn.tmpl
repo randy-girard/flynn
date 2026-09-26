@@ -450,12 +450,21 @@ do_remove() {
     run sudo umount "${path}"
   done
   if which flynn-host &>/dev/null; then
-    # A leftover flynn-host from a previous builder install can segfault
-    # (seen on stale binaries). Cleanup still rm -rf /var/lib/flynn below.
-    flynn-host destroy-volumes --include-data || true
+    # A leftover flynn-host can spin in destroy-volumes (wedged bolt db or a
+    # missing zpool) instead of exiting. Bound it, then destroy the pool.
+    # Cleanup still rm -rf /var/lib/flynn below.
+    info "destroying volume state (45s budget)"
+    destroy_volume_state /var/lib/flynn/volumes
+    for db in /var/lib/flynn/volumes-*/volumes.bolt; do
+      [ -e "${db}" ] || continue
+      destroy_volume_state "$(dirname "${db}")"
+    done
   fi
-  if zpool list | grep -q "flynn-default"; then
-    run zpool destroy flynn-default
+  if zpool list 2>/dev/null | grep -q "flynn-default"; then
+    info "destroying zpool flynn-default (60s budget)"
+    if ! timeout --signal=TERM --kill-after=15s 60 zpool destroy -f flynn-default; then
+      warn "zpool destroy flynn-default did not finish; continuing cleanup"
+    fi
   fi
 
   unmount_under_flynn
@@ -567,6 +576,17 @@ EOF
   done
   if [[ "${rc}" -ne 0 ]]; then
     fail "failed to run apt-get update, exit status ${rc}"
+  fi
+}
+
+# destroy_volume_state asks flynn-host to drop datasets under volpath.
+# A stuck destroy must not block install --clean; the zpool destroy and
+# rm -rf that follow are the fallback.
+destroy_volume_state() {
+  local volpath="$1"
+  if ! timeout --signal=TERM --kill-after=10s 45 \
+      flynn-host destroy-volumes --include-data --volpath="${volpath}"; then
+    warn "flynn-host destroy-volumes ${volpath} did not finish; continuing"
   fi
 }
 
