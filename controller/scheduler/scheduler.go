@@ -1175,9 +1175,10 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 		// but are still present in the scheduler's in-memory state.
 		// Persistent volumes are still adopted: a single incomplete
 		// ListVolumes after host restart must not force a new empty dataset
-		// (HA sirenia would then never catch up). If the dataset is truly
-		// gone, AddJob fails with "required volume ... does not exist" and
-		// StartJob destroys then retries.
+		// (HA sirenia would then never catch up). If an ephemeral dataset
+		// is gone, AddJob fails with "required volume ... does not exist"
+		// and StartJob destroys then retries. Persistent volumes stay
+		// blocked instead of being replaced with empty data.
 		if vol.HostID != "" && vol.DeleteOnStop && !s.volumeExistsOnHost(vol.HostID, vol.ID) {
 			continue
 		}
@@ -1342,6 +1343,26 @@ func isMissingHostVolumeError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "required volume") && strings.Contains(msg, "does not exist")
+}
+
+// shouldReplaceMissingVolumes is true only when every attached volume is
+// ephemeral. Persistent volumes must not be destroyed and replaced with empty
+// datasets: that is silent data loss (redis AOF, kafka topics).
+func shouldReplaceMissingVolumes(vols []*Volume) bool {
+	if len(vols) == 0 {
+		return true
+	}
+	any := false
+	for _, vol := range vols {
+		if vol == nil {
+			continue
+		}
+		any = true
+		if !vol.DeleteOnStop {
+			return false
+		}
+	}
+	return any
 }
 
 func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
@@ -1893,6 +1914,14 @@ outer:
 			return
 		}
 		if isMissingHostVolumeError(err) {
+			if !shouldReplaceMissingVolumes(job.Volumes) {
+				log.Error("host rejected job due to missing persistent volume; blocking to avoid empty replacement", "err", err)
+				msg := err.Error()
+				job.hostError = &msg
+				job.State = JobStateBlocked
+				s.persistJob(job)
+				return
+			}
 			log.Warn("host rejected job due to missing volume, marking volumes destroyed and retrying", "err", err)
 			for _, vol := range job.Volumes {
 				if vol.GetState() != ct.VolumeStateDestroyed {

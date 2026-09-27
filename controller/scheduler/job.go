@@ -159,6 +159,39 @@ func (j *Job) VolumeRequests() []ct.VolumeReq {
 	return nil
 }
 
+func (j *Job) processType() (ct.ProcessType, bool) {
+	if j == nil || j.Formation == nil || j.Formation.Release == nil {
+		return ct.ProcessType{}, false
+	}
+	proc, ok := j.Formation.Release.Processes[j.Type]
+	return proc, ok
+}
+
+// isPersistentSingleton is a one-process job whose /data (or other) volume
+// stays on the host. Redis, Kafka, ClickHouse, and plugin mysql/mongo are
+// this shape. Sirenia HA (OriginalProcesses > 1) and omni jobs are not:
+// those must keep spreading across hosts.
+func (j *Job) isPersistentSingleton() bool {
+	proc, ok := j.processType()
+	if !ok || proc.Omni {
+		return false
+	}
+	persistent := false
+	for _, r := range j.VolumeRequests() {
+		if !r.DeleteOnStop {
+			persistent = true
+			break
+		}
+	}
+	if !persistent {
+		return false
+	}
+	if j.Formation.OriginalProcesses != nil && j.Formation.OriginalProcesses[j.Type] > 1 {
+		return false
+	}
+	return true
+}
+
 func (j *Job) Service() string {
 	if j.Formation == nil {
 		return ""

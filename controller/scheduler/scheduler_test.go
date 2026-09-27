@@ -1483,3 +1483,35 @@ func (TestSuite) TestSyncVolumesDoesNotDestroyOnFirstMissOrLiveJob(c *C) {
 	s.SyncVolumes()
 	c.Assert(vol.GetState(), Equals, ct.VolumeStateDestroyed)
 }
+
+func TestShouldReplaceMissingVolumes(t *testing.T) {
+	if !shouldReplaceMissingVolumes(nil) {
+		t.Fatal("no volumes: nothing persistent to protect")
+	}
+	if !shouldReplaceMissingVolumes([]*Volume{
+		{Volume: ct.Volume{VolumeReq: ct.VolumeReq{DeleteOnStop: true}}},
+	}) {
+		t.Fatal("ephemeral volumes may be replaced")
+	}
+	if shouldReplaceMissingVolumes([]*Volume{
+		{Volume: ct.Volume{VolumeReq: ct.VolumeReq{Path: "/data"}}},
+	}) {
+		t.Fatal("persistent /data must not be replaced with an empty dataset")
+	}
+	if shouldReplaceMissingVolumes([]*Volume{
+		{Volume: ct.Volume{VolumeReq: ct.VolumeReq{DeleteOnStop: true}}},
+		{Volume: ct.Volume{VolumeReq: ct.VolumeReq{Path: "/data"}}},
+	}) {
+		t.Fatal("a mix that includes persistent data must not be replaced")
+	}
+}
+
+func TestIsMissingHostVolumeError(t *testing.T) {
+	err := errors.New("job abc required volume vol-1, but that volume does not exist")
+	if !isMissingHostVolumeError(err) {
+		t.Fatal("host missing-volume error must match")
+	}
+	if isMissingHostVolumeError(errors.New("connection refused")) {
+		t.Fatal("unrelated errors must not look like missing volumes")
+	}
+}

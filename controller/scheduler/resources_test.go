@@ -150,6 +150,69 @@ func TestSharedJobsDoNotConsumeReservedCapacity(t *testing.T) {
 	}
 }
 
+func persistSingletonTestJob(typ string) *Job {
+	return &Job{
+		Type: typ,
+		Formation: &Formation{
+			OriginalProcesses: Processes{typ: 1},
+			ExpandedFormation: &ct.ExpandedFormation{
+				Release: &ct.Release{
+					Processes: map[string]ct.ProcessType{
+						typ: {Volumes: []ct.VolumeReq{{Path: "/data"}}},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestPickHostPacksPersistentSingletons(t *testing.T) {
+	h1 := &Host{ID: "h1"}
+	h2 := &Host{ID: "h2"}
+	h3 := &Host{ID: "h3"}
+	redisJob := persistSingletonTestJob("redis")
+	redisJob.ID = "redis-1"
+	redisJob.HostID = "h1"
+	redisJob.State = JobStateRunning
+	s := &Scheduler{
+		jobs:  Jobs{"redis-1": redisJob},
+		hosts: map[string]*Host{"h1": h1, "h2": h2, "h3": h3},
+	}
+	kafka := persistSingletonTestJob("kafka")
+	for i := 0; i < 20; i++ {
+		got := s.pickHost(kafka, map[string]int{})
+		if got == nil || got.ID != "h1" {
+			t.Fatalf("attempt %d: packed persistent singleton onto %v, want h1 (redis volume host)", i, got)
+		}
+	}
+}
+
+func TestPickHostSpreadsPersistentHA(t *testing.T) {
+	h1 := &Host{ID: "h1"}
+	h2 := &Host{ID: "h2"}
+	h3 := &Host{ID: "h3"}
+	peer := persistSingletonTestJob("postgres")
+	peer.Formation.OriginalProcesses["postgres"] = 3
+	peer.ID = "pg-1"
+	peer.HostID = "h1"
+	peer.State = JobStateRunning
+	s := &Scheduler{
+		jobs:  Jobs{"pg-1": peer},
+		hosts: map[string]*Host{"h1": h1, "h2": h2, "h3": h3},
+	}
+	next := persistSingletonTestJob("postgres")
+	next.Formation.OriginalProcesses["postgres"] = 3
+	for i := 0; i < 20; i++ {
+		got := s.pickHost(next, map[string]int{"h1": 1})
+		if got == nil {
+			t.Fatal("HA postgres peer must still place")
+		}
+		if got.ID == "h1" {
+			t.Fatalf("attempt %d: HA peer packed onto h1; replicas must spread", i)
+		}
+	}
+}
+
 func TestHostReservedIgnoresStoppedJobs(t *testing.T) {
 	s := &Scheduler{
 		jobs: Jobs{

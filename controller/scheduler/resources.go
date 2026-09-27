@@ -180,17 +180,44 @@ func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
 	s.profileReserve = next
 }
 
+func (s *Scheduler) hostPersistentSingletonCount(hostID string) int {
+	if s == nil {
+		return 0
+	}
+	n := 0
+	for _, job := range s.jobs {
+		if job == nil || job.HostID != hostID {
+			continue
+		}
+		if job.State == JobStateStopped || job.State == JobStateStopping {
+			continue
+		}
+		if job.isPersistentSingleton() {
+			n++
+		}
+	}
+	return n
+}
+
 // pickHost chooses a tag-matching host. Jobs whose runtime guarantees
 // resources only land on hosts with remaining requested CPU/memory (they stay
 // pending if nothing fits). Shared runtimes pack onto the least-loaded host
 // and keep their CPU/memory as caps only.
+//
+// Persistent singletons (one broker/volume per resource) pack onto a host
+// that already has other persistent singletons. pickHost used to return the
+// first shuffled host with zero jobs of *this* type, which scattered redis,
+// kafka, and clickhouse across HA nodes so a drain of any one host destroyed
+// tenant data.
 func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	if s == nil || job == nil {
 		return nil
 	}
 	needReserve := s.jobReservesResources(job)
+	packPersist := job.isPersistentSingleton()
 	var fit *Host
 	var fitCount int
+	var fitPack int
 	for _, h := range s.ShuffledHosts() {
 		if h == nil || h.Shutdown || !job.TagsMatchHost(h) {
 			continue
@@ -199,6 +226,13 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 			continue
 		}
 		count := hostJobCount(counts, h.ID)
+		if packPersist {
+			pack := s.hostPersistentSingletonCount(h.ID)
+			if fit == nil || count < fitCount || (count == fitCount && pack > fitPack) {
+				fit, fitCount, fitPack = h, count, pack
+			}
+			continue
+		}
 		if count == 0 {
 			return h
 		}
