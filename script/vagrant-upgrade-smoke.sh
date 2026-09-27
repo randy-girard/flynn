@@ -1764,7 +1764,7 @@ clickhouse_rows_table() {
   if [[ -z "${db}" ]]; then
     db="smoke_db"
   fi
-  printf '%s.rows' "${db}"
+  printf '`%s`.rows' "${db}"
 }
 
 clickhouse_row_count() {
@@ -4487,15 +4487,15 @@ for i in \$(seq 1 30); do
     CHDB=smoke_db
     flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
   fi
-  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS \${CHDB}.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
+  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS \`\${CHDB}\`.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
     ok=1
     break
   fi
   sleep 10
 done
 test "\$ok" = 1
-flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS \${CHDB}.rows"
-flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO \${CHDB}.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
+flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS \`\${CHDB}\`.rows"
+flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO \`\${CHDB}\`.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
 CH_APP="\$(flynn -a "\${APP}" env get FLYNN_CLICKHOUSE)"
 CH_USER="\$(flynn -a "\${APP}" env get CLICKHOUSE_USER)"
 CH_PWD="\$(flynn -a "\${APP}" env get CLICKHOUSE_PASSWORD)"
@@ -4521,9 +4521,9 @@ insts = json.load(urllib.request.urlopen(req, timeout=10))
 if not insts:
     sys.exit("no clickhouse replicas in discoverd")
 queries = [
-    "CREATE TABLE IF NOT EXISTS %s.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id" % db,
-    "TRUNCATE TABLE IF EXISTS %s.rows" % db,
-    "INSERT INTO %s.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % (db, rows),
+    "CREATE TABLE IF NOT EXISTS `%s`.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id" % db,
+    "TRUNCATE TABLE IF EXISTS `%s`.rows" % db,
+    "INSERT INTO `%s`.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % (db, rows),
 ]
 failed = 0
 for inst in insts:

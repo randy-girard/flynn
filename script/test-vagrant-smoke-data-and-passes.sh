@@ -247,7 +247,7 @@ need 'probe_app_http' \
   "HTTP wait retries must not record FAIL/PASS on every attempt"
 need '</dev/null' \
   "flynn1 must close stdin so clickhouse-client INSERT cannot hang on a TTY"
-need 'CHDB\}\.rows SELECT' \
+need 'clickhouse_rows_table\) SELECT' \
   "clickhouse marker rows must use INSERT SELECT (INSERT VALUES waits on stdin)"
 need 'RESUME_AT=upgrade' \
   "smoke must be able to resume at the --force update after a hung pre-upgrade verify"
