@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
+	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/resource"
 	"golang.org/x/net/context"
 )
@@ -87,6 +89,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
+	data.Env = resname.MergeAttachment(c.appReleaseEnv(target), data.Env, provisionAs(config))
 	env, err := c.stampInstancePort(p, data.ID, data.Env)
 	if err != nil {
 		respondWithError(w, err)
@@ -112,6 +115,31 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		return
 	}
 	httphelper.JSON(w, 200, res)
+}
+
+func provisionAs(config []byte) string {
+	var body struct {
+		As string `json:"as"`
+	}
+	if json.Unmarshal(config, &body) != nil {
+		return ""
+	}
+	return body.As
+}
+
+func (c *controllerAPI) appReleaseEnv(app *ct.App) map[string]string {
+	if app == nil || app.ReleaseID == "" || c.releaseRepo == nil {
+		return nil
+	}
+	rel, err := c.releaseRepo.Get(app.ReleaseID)
+	if err != nil || rel == nil {
+		return nil
+	}
+	release, ok := rel.(*ct.Release)
+	if !ok || release == nil {
+		return nil
+	}
+	return release.Env
 }
 
 func (c *controllerAPI) GetProviderResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {

@@ -86,36 +86,65 @@ var identityEnv = []struct{ name, url string }{
 }
 
 // MergeAttachment copies a provision response onto an app.
-// The first database of that type keeps the usual variable (DATABASE_URL,
-// REDIS_URL, KAFKA_URL, CLICKHOUSE_URL). A later one is
-// PREFIX_WORD_DATABASE_URL from the resource name pg-harbor-kxmnpq, and it
-// does not replace the first attachment's variables.
-func MergeAttachment(existing, incoming map[string]string) map[string]string {
+// The resource always gets PREFIX_WORD_DATABASE_URL (pg-harbor-kxmnpq →
+// PG_HARBOR_DATABASE_URL). --as NAME adds NAME_URL as well. When the app does
+// not already have the engine's usual variable (DATABASE_URL, REDIS_URL,
+// KAFKA_URL, CLICKHOUSE_URL), that variable is set to the same URL. Existing
+// values are left alone. Every *_URL returned here is an attachment and must
+// not be changed with env:set.
+func MergeAttachment(existing, incoming map[string]string, as string) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
 		return out
 	}
 	name, conv := resourceIdentity(incoming)
-	if conv != "" && strings.TrimSpace(existing[conv]) != "" && name != "" {
-		val := incoming[conv]
-		if val == "" {
-			val = incoming["POSTGRES_URL"]
-		}
-		if key := ExtraDatabaseURL(name, func(k string) bool { return existing[k] != "" }); key != "" && val != "" {
-			out[key] = val
-		}
+	url := connectionURL(incoming, conv)
+	if url == "" || name == "" {
 		for k, v := range incoming {
-			if k == conv || existing[k] != "" {
-				continue
-			}
 			out[k] = v
 		}
 		return out
 	}
+	taken := func(k string) bool {
+		return strings.TrimSpace(existing[k]) != "" || out[k] != ""
+	}
+	if key := ExtraDatabaseURL(name, taken); key != "" {
+		out[key] = url
+	}
+	if as = strings.ToUpper(strings.TrimSpace(as)); as != "" {
+		key := as + "_URL"
+		if !taken(key) {
+			out[key] = url
+		}
+	}
+	if conv != "" && !taken(conv) {
+		out[conv] = url
+	}
+	if strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != "" && !taken("POSTGRES_URL") {
+		out["POSTGRES_URL"] = url
+	}
 	for k, v := range incoming {
+		if strings.HasSuffix(k, "_URL") || taken(k) {
+			continue
+		}
 		out[k] = v
 	}
 	return out
+}
+
+func connectionURL(incoming map[string]string, conv string) string {
+	if conv != "" && strings.TrimSpace(incoming[conv]) != "" {
+		return incoming[conv]
+	}
+	if v := strings.TrimSpace(incoming["POSTGRES_URL"]); v != "" {
+		return v
+	}
+	for k, v := range incoming {
+		if strings.HasSuffix(k, "_URL") && strings.Contains(v, "://") {
+			return v
+		}
+	}
+	return ""
 }
 
 func resourceIdentity(env map[string]string) (name, urlKey string) {

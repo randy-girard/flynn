@@ -145,7 +145,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
-	env := appliedAttachmentEnv(client, res.Env)
+	env := appliedAttachmentEnv(client, res.Env, args.String["--as"])
 
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
@@ -226,13 +226,13 @@ func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw,
 		return nil, err
 	}
 	body := databaseProvisionBody{
+		As:      as,
 		Runtime: name,
 		CPU:     sz.CPU,
 		Memory:  sz.Memory,
 		Disk:    sz.Disk,
 	}
 	if provider == "postgres" {
-		body.As = as
 		body.Follow = follow
 		body.Replication = replication
 	}
@@ -244,35 +244,16 @@ func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw,
 	return &msg, nil
 }
 
-func appliedAttachmentEnv(client controller.Client, incoming map[string]string) map[string]*string {
+func appliedAttachmentEnv(client controller.Client, incoming map[string]string, as string) map[string]*string {
 	existing := map[string]string{}
 	if release, err := client.GetAppRelease(mustApp()); err == nil && release != nil && release.Env != nil {
 		existing = release.Env
 	}
-	merged := resname.MergeAttachment(existing, incoming)
+	merged := resname.MergeAttachment(existing, incoming, as)
 	env := make(map[string]*string, len(merged))
 	for k, v := range merged {
 		s := v
 		env[k] = &s
-	}
-	return env
-}
-
-func renameAttachmentAs(env map[string]*string, as string) map[string]*string {
-	as = strings.ToUpper(strings.TrimSpace(as))
-	if as == "" {
-		return env
-	}
-	var val string
-	for k, v := range env {
-		if v != nil && strings.HasSuffix(k, "_URL") && strings.Contains(*v, "://") {
-			val = *v
-			delete(env, k)
-			break
-		}
-	}
-	if val != "" {
-		env[as+"_URL"] = &val
 	}
 	return env
 }
@@ -319,10 +300,7 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	env := appliedAttachmentEnv(client, res.Env)
-	if as := strings.TrimSpace(args.String["--as"]); as != "" {
-		env = renameAttachmentAs(env, as)
-	}
+	env := appliedAttachmentEnv(client, res.Env, args.String["--as"])
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err
