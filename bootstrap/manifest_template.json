@@ -225,7 +225,8 @@
     },
     "artifacts": [$image_artifact[controller]],
     "processes": {
-      "web": 1
+      "web": 1,
+      "worker": 1
     },
     "resources": [{"name":"platform-postgres", "url":"http://postgres-api.discoverd/databases"}]
   },

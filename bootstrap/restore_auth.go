@@ -3,9 +3,19 @@ package bootstrap
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/randy-girard/flynn/pkg/random"
 )
+
+// RestoreAuthJobSettle is how long --from-backup waits after the host daemon
+// restarts with backup secrets, before run-app discoverd. libcontainer init
+// and flynn-host both block on the bootstrap unix socket for ~9s after each
+// daemon restart (AppArmor change_onexec EPERM). Starting discoverd in that
+// window never emits a job start event (singleton restore 2026-09-27).
+const RestoreAuthJobSettle = 12 * time.Second
+
+var restoreAuthJobSettle = RestoreAuthJobSettle
 
 // ConfigureRestoreAuthAction pushes the backup's discoverd and controller
 // keys onto each host before discoverd is started. A restored discoverd
@@ -66,6 +76,9 @@ func (a *ConfigureRestoreAuthAction) Run(s *State) error {
 	}
 	if err := waitForHostAuth(s); err != nil {
 		return err
+	}
+	if restoreAuthJobSettle > 0 {
+		time.Sleep(restoreAuthJobSettle)
 	}
 	s.refreshHostClients()
 	return nil

@@ -25,7 +25,17 @@ func TestRestoreHostEnv(t *testing.T) {
 	}
 }
 
+func TestRestoreAuthJobSettleCoversAppArmorWindow(t *testing.T) {
+	if RestoreAuthJobSettle < 10*time.Second {
+		t.Fatalf("RestoreAuthJobSettle=%s, want >= 10s (libcontainer AppArmor window after daemon restart)", RestoreAuthJobSettle)
+	}
+}
+
 func TestConfigureRestoreAuthPushesDiscoverdKey(t *testing.T) {
+	orig := restoreAuthJobSettle
+	restoreAuthJobSettle = 0
+	defer func() { restoreAuthJobSettle = orig }()
+
 	var gotEnv map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {

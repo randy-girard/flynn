@@ -561,8 +561,10 @@ WHERE release_id = (SELECT release_id FROM apps WHERE name = 'discoverd' AND del
 		return err
 	}
 
-	// start controller API
-	controllerApp.Processes = map[string]int{"web": 1}
+	// start controller API and worker. Restore then starts plugin apps from
+	// the backup; if worker waits on the scheduler it is still down when
+	// status-check runs (600s) and bootstrap fails.
+	controllerApp.Processes = map[string]int{"web": 1, "worker": 1}
 	_, err = bootstrap.Manifest{
 		step("controller", "run-app", &bootstrap.RunAppAction{
 			ExpandedFormation: controllerApp,

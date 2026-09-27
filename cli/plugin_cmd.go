@@ -203,11 +203,12 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 	if err != nil {
 		return nil, err
 	}
+	jobArgs = compactPluginArgs(jobArgs)
 	if action.Append != "" {
 		jobArgs = append(jobArgs, cliutil.List(args, action.Append)...)
 	}
 
-	env := make(map[string]string, len(action.Env))
+	env := make(map[string]string, len(action.Env)+6)
 	for k, v := range action.Env {
 		s, err := plugin.Interpolate(v, in)
 		if err != nil {
@@ -215,6 +216,7 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 		}
 		env[k] = s
 	}
+	copyAppPGEnv(env, in.App)
 
 	return &runConfig{
 		App:        appName,
@@ -227,6 +229,27 @@ func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.C
 		// User-partition jobs only resolve leader.<datastore>.discoverd.
 		Partition: ct.PartitionTypeSystem,
 	}, nil
+}
+
+func compactPluginArgs(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		if a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+func copyAppPGEnv(env, app map[string]string) {
+	if env == nil || app == nil {
+		return
+	}
+	for _, k := range []string{"PGHOST", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE", "PGPORT"} {
+		if env[k] == "" && app[k] != "" {
+			env[k] = app[k]
+		}
+	}
 }
 
 func resourceNameArg(args *docopt.Args) string {
@@ -243,7 +266,9 @@ func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Rele
 	}
 
 	switch {
-	case strings.TrimSpace(resourceName) != "":
+	case spec.ResourceEnv != "" && strings.TrimSpace(resourceName) != "":
+		// pg:psql pg-harbor-kxmnpq. pipeline:create <name> also has <name>
+		// in docopt; that is the pipeline name, not a datastore instance.
 		in.Resource = resname.Canonical(spec.Command, resourceName)
 	case spec.ResourceEnv != "":
 		in.Resource = in.App[spec.ResourceEnv]

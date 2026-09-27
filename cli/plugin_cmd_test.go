@@ -413,6 +413,42 @@ func TestPluginInterpNamedResource(t *testing.T) {
 	}
 }
 
+func TestPluginInterpClusterCreateNameIsNotResource(t *testing.T) {
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"pipeline": {ID: "pipeline-release"},
+	}}
+	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "pipeline", App: "pipeline"}, &ct.Release{
+		Env: map[string]string{"DATABASE_URL": "postgres://leader.postgres.discoverd/db"},
+	}, "smoke-pipe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != "pipeline" || rel.ID != "pipeline-release" {
+		t.Fatalf("pipeline:create <name> must use the plugin app, got resource %q release %v", in.Resource, rel)
+	}
+}
+
+func TestCompactPluginArgsDropsEmptyURL(t *testing.T) {
+	got := compactPluginArgs([]string{"psql", "", "-tAc", "SELECT 1"})
+	if strings.Join(got, " ") != "psql -tAc SELECT 1" {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestCopyAppPGEnvFillsPlatformConsole(t *testing.T) {
+	env := map[string]string{"PAGER": "less"}
+	copyAppPGEnv(env, map[string]string{
+		"PGHOST":     "leader.postgres.discoverd",
+		"PGUSER":     "blob",
+		"PGPASSWORD": "pw",
+		"PGDATABASE": "blobdb",
+		"PGSSLMODE":  "require",
+	})
+	if env["PGHOST"] != "leader.postgres.discoverd" || env["PGDATABASE"] != "blobdb" || env["PAGER"] != "less" {
+		t.Fatalf("%v", env)
+	}
+}
+
 func containsArgPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {
