@@ -5,6 +5,12 @@ import (
 	"time"
 )
 
+func TestMaxPoolConnectionsIsPerProcess(t *testing.T) {
+	if MaxPoolConnections < 2 || MaxPoolConnections > 8 {
+		t.Fatalf("MaxPoolConnections=%d: HA multiplies this by controller processes; 20 exhausted a 20-conn role", MaxPoolConnections)
+	}
+}
+
 func TestPostgresReadWriteBudget(t *testing.T) {
 	if postgresReadWriteBudget < 2*time.Minute {
 		t.Fatalf("postgresReadWriteBudget=%s is too short for sirenia restart recovery", postgresReadWriteBudget)

@@ -9,10 +9,10 @@ import (
 )
 
 func TestBuildProvisionPlanLimitsAndExtensions(t *testing.T) {
-	plan := BuildProvisionPlan("abcdabcdabcdabcdabcdabcdabcdabcd", "p'w", "dbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdb", 100)
+	plan := BuildProvisionPlan("abcdabcdabcdabcdabcdabcdabcdabcd", "p'w", "dbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdb", 0)
 	joined := strings.Join(plan.Maintenance, "\n")
-	if !strings.Contains(joined, `CONNECTION LIMIT 100`) {
-		t.Fatalf("missing connection limit:\n%s", joined)
+	if strings.Contains(joined, `CONNECTION LIMIT`) {
+		t.Fatalf("platform roles must not get a tenant CONNECTION LIMIT (pool size is per process):\n%s", joined)
 	}
 	if !strings.Contains(joined, `NOSUPERUSER`) {
 		t.Fatalf("role must not be superuser:\n%s", joined)
@@ -38,8 +38,9 @@ func TestBuildProvisionPlanLimitsAndExtensions(t *testing.T) {
 	if platformRoleExtensionAllowed(`CREATE EXTENSION IF NOT EXISTS "file_fdw"`) {
 		t.Fatal("untrusted extensions must stay blocked")
 	}
-	if TenantConnectionLimit < 100 {
-		t.Fatalf("platform controller on HA needs CONNECTION LIMIT >= 100, got %d", TenantConnectionLimit)
+	limited := BuildProvisionPlan("abcdabcdabcdabcdabcdabcdabcdabcd", "pw", "dbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdb", 20)
+	if !strings.Contains(strings.Join(limited.Maintenance, "\n"), `CONNECTION LIMIT 20`) {
+		t.Fatal("BuildProvisionPlan must still emit CONNECTION LIMIT when asked")
 	}
 	if strings.Contains(tenant, "p'w") {
 		t.Fatal("tenant sql must not include the password")
@@ -70,6 +71,9 @@ func TestPlatformProvisionStillPreparesSystemDatabase(t *testing.T) {
 	joined := strings.Join(plan.Maintenance, "\n")
 	if !strings.Contains(joined, "CREATE USER") || !strings.Contains(joined, "CREATE DATABASE") {
 		t.Fatalf("system database SQL:\n%s", joined)
+	}
+	if strings.Contains(joined, "CONNECTION LIMIT") {
+		t.Fatalf("platform provision must not cap the controller role:\n%s", joined)
 	}
 }
 

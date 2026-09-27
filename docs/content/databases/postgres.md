@@ -32,9 +32,12 @@ replica set automatically.
 The image includes **PostGIS 3**, **pgRouting**, and **TimescaleDB 2** in
 addition to `postgresql-contrib`.
 
-Roles the platform appliance creates for system apps get a `CONNECTION LIMIT`
-and cannot `CREATE EXTENSION` except as the appliance superuser. `CONNECT`
-stays revoked from `PUBLIC`. Those roles are not tenant databases.
+Roles the platform appliance creates for system apps cannot `CREATE EXTENSION`
+except as the appliance superuser. `CONNECT` stays revoked from `PUBLIC`.
+Those roles are not tenant databases and do not get a `CONNECTION LIMIT`:
+each controller process already caps itself with a small pgx pool, and an
+HA cluster runs several of those processes. Tenant Postgres still applies
+`CONNECTION LIMIT` on the plugin appliance.
 
 ## Usage
 

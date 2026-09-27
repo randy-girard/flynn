@@ -75,8 +75,9 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		if err := c.setDeploymentDone(deployment.ID); err != nil {
 			log.Error("error marking the deployment as done", "err", err)
 			// isolate_deploys is WHERE finished_at IS NULL. Emitting complete
-			// here leaves the unique index held (HA 2026-09-27: postgres
-			// CONNECTION LIMIT exhausted the controller role).
+			// here leaves the unique index held (HA 2026-09-27: each
+			// controller process opened a 20-conn pool against a 20-conn
+			// role limit).
 			if e == nil {
 				e = err
 			}

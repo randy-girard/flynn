@@ -37,6 +37,14 @@ const (
 	// postgresReadWriteBudget caps how long Wait blocks for the sirenia primary
 	// to accept write transactions after a restart or failover.
 	postgresReadWriteBudget = 5 * time.Minute
+
+	// MaxPoolConnections is per process (pgx default is 5). The pool used to
+	// be 20, which matched the entire platform role CONNECTION LIMIT, so a
+	// 3-node controller (web×2 + worker×2 + scheduler omni×3) tried to open
+	// 140 connections and setDeploymentDone failed with SQLSTATE 53300.
+	// Tenant plugin isolation is a separate CONNECTION LIMIT on the plugin
+	// appliance, not this pool.
+	MaxPoolConnections = 5
 )
 
 var readWritePollInterval = 100 * time.Millisecond
@@ -289,7 +297,7 @@ func Open(conf *Conf, afterConn func(*pgx.Conn) error) (*DB, error) {
 	connPool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
 		ConnConfig:     connConfig,
 		AfterConnect:   afterConn,
-		MaxConnections: 20,
+		MaxConnections: MaxPoolConnections,
 		AcquireTimeout: 30 * time.Second,
 	})
 	db := &DB{connPool, conf, host}

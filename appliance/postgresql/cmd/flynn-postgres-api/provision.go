@@ -17,12 +17,6 @@ func platformRoleExtensionAllowed(query string) bool {
 	return platformExtension.MatchString(query)
 }
 
-// TenantConnectionLimit is the CONNECTION LIMIT on each provisioned role.
-// Controller on a 3-node cluster runs web+worker plus an omni scheduler per
-// host; 20 was exhausted (SQLSTATE 53300) so setDeploymentDone could not
-// clear isolate_deploys and later resource adds failed (HA 2026-09-27).
-const TenantConnectionLimit = 100
-
 // ProvisionPlan is the SQL for one database on the platform appliance.
 // Maintenance statements run on the postgres maintenance database. TenantDB
 // statements run inside the new database as the flynn superuser and block
@@ -39,7 +33,13 @@ func planProvision(body []byte, username, password, database string) (ProvisionP
 	if err := pgappliance.AllowProvision(body); err != nil {
 		return ProvisionPlan{}, err
 	}
-	return BuildProvisionPlan(username, password, database, TenantConnectionLimit), nil
+	// Platform controller/blobstore are system apps sharing one appliance.
+	// Do not put CONNECTION LIMIT on these roles: each process opens a pool
+	// of MaxPoolConnections, and HA runs web+worker plus an omni scheduler
+	// per host. A tenant-style cap of 20 was exhausted (SQLSTATE 53300);
+	// raising it to 100 only hid the pool×process budget. Tenant Postgres
+	// keeps CONNECTION LIMIT on the plugin appliance (start.sh).
+	return BuildProvisionPlan(username, password, database, 0), nil
 }
 
 // rejectSuperuserPassword refuses to publish the appliance superuser password
@@ -70,13 +70,13 @@ func provisionEnv(service, host, username, password, database, superuser string)
 
 // BuildProvisionPlan returns the provision SQL. Passwords are SQL literals.
 func BuildProvisionPlan(username, password, database string, limit int) ProvisionPlan {
-	if limit <= 0 {
-		limit = TenantConnectionLimit
-	}
 	user := quoteIdent(username)
 	db := quoteIdent(database)
 	pass := quoteLiteral(password)
-	role := fmt.Sprintf(`CREATE USER %s WITH PASSWORD %s CONNECTION LIMIT %d NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`, user, pass, limit)
+	role := fmt.Sprintf(`CREATE USER %s WITH PASSWORD %s NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`, user, pass)
+	if limit > 0 {
+		role = fmt.Sprintf(`CREATE USER %s WITH PASSWORD %s CONNECTION LIMIT %d NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION`, user, pass, limit)
+	}
 	return ProvisionPlan{
 		Maintenance: []string{
 			role,

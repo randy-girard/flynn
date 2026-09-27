@@ -517,6 +517,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/squashfs/
   ./pkg/dockerimage/
   ./pkg/plugin/
+  ./pkg/postgres/
   ./pkg/rpcplus/fdrpc/
   ./host/fixer/
   ./host/logmux/
@@ -1954,7 +1955,7 @@ add_app_resource() {
     echo "${provider} resource add failed; waiting for in-progress deploy then retrying once" >&2
     wait_app_deploy_idle "retry ${provider}" || return 1
     if resource_env_ready "${provider}"; then
-      echo "ready: ${provider} resource env set after wait"
+      echo "ready: ${provider} resource env present after wait"
       return 0
     fi
     flynn1 -a "${APP_NAME}" resource add "${provider}" || return 1
