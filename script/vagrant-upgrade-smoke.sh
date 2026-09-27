@@ -1756,9 +1756,21 @@ clickhouse_ping() {
 # ClickHouse seed uses local MergeTree plus HTTP replica fan-out. After a node
 # join/drain the CLI can briefly return CH "unknown_error" instead of a count;
 # do not let that abort the step under set -e.
+# The tenant user may create tables in CLICKHOUSE_DATABASE only. smoke_db is
+# the fallback when that env is unset.
+clickhouse_rows_table() {
+  local db
+  db="$(flynn1 -a "${APP_NAME}" env get CLICKHOUSE_DATABASE 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -z "${db}" ]]; then
+    db="smoke_db"
+  fi
+  printf '%s.rows' "${db}"
+}
+
 clickhouse_row_count() {
-  local out
-  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM smoke_db.rows" 2>/dev/null || true)"
+  local out table
+  table="$(clickhouse_rows_table)"
+  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM ${table}" 2>/dev/null || true)"
   numeric_count "${out}"
 }
 
@@ -4470,20 +4482,24 @@ for i in \$(seq 1 30); do
   # Local MergeTree on the leader (Keeper is often unreachable for ON CLUSTER
   # DDL). Fan-out the same schema/rows to every replica over HTTP :8123 so a
   # later node drain still has smoke_db on the remaining hosts.
-  flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
-  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
+  CHDB="\$(flynn -a "\${APP}" env get CLICKHOUSE_DATABASE 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ -z "\${CHDB}" ]]; then
+    CHDB=smoke_db
+    flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
+  fi
+  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS \${CHDB}.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
     ok=1
     break
   fi
   sleep 10
 done
 test "\$ok" = 1
-flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS smoke_db.rows"
-flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
+flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS \${CHDB}.rows"
+flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO \${CHDB}.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
 CH_APP="\$(flynn -a "\${APP}" env get FLYNN_CLICKHOUSE)"
 CH_USER="\$(flynn -a "\${APP}" env get CLICKHOUSE_USER)"
 CH_PWD="\$(flynn -a "\${APP}" env get CLICKHOUSE_PASSWORD)"
-export CH_APP CH_USER CH_PWD
+export CH_APP CH_USER CH_PWD CHDB
 CH_ROWS="\${ROWS}" python3 - <<'PY'
 import json, os, sys, urllib.error, urllib.parse, urllib.request
 
@@ -4491,6 +4507,7 @@ app = os.environ["CH_APP"]
 user = os.environ.get("CH_USER") or "default"
 pwd = os.environ.get("CH_PWD") or ""
 rows = os.environ["CH_ROWS"]
+db = os.environ.get("CHDB") or "smoke_db"
 key = ""
 try:
     with open("/etc/flynn/host.json") as f:
@@ -4504,10 +4521,9 @@ insts = json.load(urllib.request.urlopen(req, timeout=10))
 if not insts:
     sys.exit("no clickhouse replicas in discoverd")
 queries = [
-    "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic",
-    "CREATE TABLE IF NOT EXISTS smoke_db.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id",
-    "TRUNCATE TABLE IF EXISTS smoke_db.rows",
-    "INSERT INTO smoke_db.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % rows,
+    "CREATE TABLE IF NOT EXISTS %s.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id" % db,
+    "TRUNCATE TABLE IF EXISTS %s.rows" % db,
+    "INSERT INTO %s.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % (db, rows),
 ]
 failed = 0
 for inst in insts:
@@ -5047,7 +5063,7 @@ assert_databases() {
   if datastore_wanted clickhouse; then
   # INSERT SELECT, not VALUES: clickhouse-client treats VALUES as "read more
   # rows from stdin" and never exits while flynn run keeps stdin open.
-  flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO smoke_db.rows SELECT toUInt32(100000 + ${RANDOM}), '${label}'" >/dev/null || true
+  flynn1 -a "${APP_NAME}" clickhouse client -- --query "INSERT INTO $(clickhouse_rows_table) SELECT toUInt32(100000 + ${RANDOM}), '${label}'" >/dev/null || true
   fi
 
   echo "databases ${label}: $(joined_datastores) PASS (rows>=${rows})"
