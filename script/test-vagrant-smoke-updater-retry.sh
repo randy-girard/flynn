@@ -102,6 +102,10 @@ need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'waitNewOmniJobsU
   "omni must wait on JobList for new schedulers so the last old job is not the only one left"
 need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'persistOmniJobReleased' \
   "stale stopping/up JobList rows must be persisted down after DeleteJob"
+need_in "${ROOT}/pkg/postgres/postgres.go" 'MaxPoolConnections' \
+  "controller pgx pool must stay small; HA multiplies it by process count"
+need_in "${ROOT}/appliance/postgresql/cmd/flynn-postgres-api/provision.go" 'BuildProvisionPlan\(username, password, database, 0\)' \
+  "platform postgres roles must not get a tenant CONNECTION LIMIT"
 need_in "${ROOT}/controller/scheduler/job.go" 'FormationHostIDsTag' \
   "scheduler must honor flynn-host-ids formation tags for omni rolling"
 need_in "${ROOT}/controller/scheduler/formation.go" 'RectifyOmniFunc' \

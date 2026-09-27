@@ -49,6 +49,10 @@ clickhouse_tls_test="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse/mai
 need_file "${clickhouse_tls_test}" "clickhouse-client TLS flags must have unit tests"
 grep -q 'TestClickhouseClientTLSArgs' "${clickhouse_tls_test}" \
   || { echo "clickhouse plugin must test clickhouseClientTLSArgs (TLS verify failed on 9440)" >&2; exit 1; }
+clickhouse_api="${ROOT}/../flynn-plugin-clickhouse/cmd/flynn-clickhouse-api/main.go"
+need_file "${clickhouse_api}" "clickhouse-api provisions tenant clusters"
+grep -q 'clickhouseAdminRetryable' "${clickhouse_api}" \
+  || { echo "clickhouse-api must retry admin HTTP while leader DNS/HTTP catches up (not only KEEPER_EXCEPTION)" >&2; exit 1; }
 
 need 'test/apps/upgrade-smoke-buildpack' \
   "smoke must git-push a custom .buildpacks app, not only the stock Go slug"
