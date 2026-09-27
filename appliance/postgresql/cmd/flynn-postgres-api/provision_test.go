@@ -9,9 +9,9 @@ import (
 )
 
 func TestBuildProvisionPlanLimitsAndExtensions(t *testing.T) {
-	plan := BuildProvisionPlan("abcdabcdabcdabcdabcdabcdabcdabcd", "p'w", "dbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdb", 20)
+	plan := BuildProvisionPlan("abcdabcdabcdabcdabcdabcdabcdabcd", "p'w", "dbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdb", 100)
 	joined := strings.Join(plan.Maintenance, "\n")
-	if !strings.Contains(joined, `CONNECTION LIMIT 20`) {
+	if !strings.Contains(joined, `CONNECTION LIMIT 100`) {
 		t.Fatalf("missing connection limit:\n%s", joined)
 	}
 	if !strings.Contains(joined, `NOSUPERUSER`) {
@@ -37,6 +37,9 @@ func TestBuildProvisionPlanLimitsAndExtensions(t *testing.T) {
 	}
 	if platformRoleExtensionAllowed(`CREATE EXTENSION IF NOT EXISTS "file_fdw"`) {
 		t.Fatal("untrusted extensions must stay blocked")
+	}
+	if TenantConnectionLimit < 100 {
+		t.Fatalf("platform controller on HA needs CONNECTION LIMIT >= 100, got %d", TenantConnectionLimit)
 	}
 	if strings.Contains(tenant, "p'w") {
 		t.Fatal("tenant sql must not include the password")

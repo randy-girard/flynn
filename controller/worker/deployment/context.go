@@ -74,6 +74,13 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		log.Info("marking the deployment as done")
 		if err := c.setDeploymentDone(deployment.ID); err != nil {
 			log.Error("error marking the deployment as done", "err", err)
+			// isolate_deploys is WHERE finished_at IS NULL. Emitting complete
+			// here leaves the unique index held (HA 2026-09-27: postgres
+			// CONNECTION LIMIT exhausted the controller role).
+			if e == nil {
+				e = err
+			}
+			return
 		}
 
 		if e == nil {
@@ -161,7 +168,9 @@ func (c *context) rollback(l log15.Logger, deployment *ct.Deployment, original *
 }
 
 func (c *context) setDeploymentDone(id string) error {
-	return c.execWithRetries("deployment_update_finished_at_now", id)
+	return doneAttempts.Run(func() error {
+		return c.db.Exec("deployment_update_finished_at_now", id)
+	})
 }
 
 func (c *context) createDeploymentEvent(e ct.DeploymentEvent) error {
@@ -174,6 +183,13 @@ func (c *context) createDeploymentEvent(e ct.DeploymentEvent) error {
 var execAttempts = attempt.Strategy{
 	Total: 10 * time.Second,
 	Delay: 100 * time.Millisecond,
+}
+
+// doneAttempts is longer than execAttempts: marking finished_at must survive
+// a brief platform-postgres connection-limit storm or isolate_deploys sticks.
+var doneAttempts = attempt.Strategy{
+	Total: 60 * time.Second,
+	Delay: 500 * time.Millisecond,
 }
 
 // Retry db queries in case postgres has been deployed

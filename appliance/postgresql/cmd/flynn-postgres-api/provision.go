@@ -18,7 +18,10 @@ func platformRoleExtensionAllowed(query string) bool {
 }
 
 // TenantConnectionLimit is the CONNECTION LIMIT on each provisioned role.
-const TenantConnectionLimit = 20
+// Controller on a 3-node cluster runs web+worker plus an omni scheduler per
+// host; 20 was exhausted (SQLSTATE 53300) so setDeploymentDone could not
+// clear isolate_deploys and later resource adds failed (HA 2026-09-27).
+const TenantConnectionLimit = 100
 
 // ProvisionPlan is the SQL for one database on the platform appliance.
 // Maintenance statements run on the postgres maintenance database. TenantDB
