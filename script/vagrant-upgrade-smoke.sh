@@ -6527,14 +6527,15 @@ EOF
   sync_cluster_monitor_hosts
 }
 
-# Flynn redis is a singleton with a host-local /data volume. Draining that
-# host cannot reattach the AOF, so pick a different HA node when redis lives
-# on the default drain target.
+# Flynn redis/kafka/clickhouse and plugin mysql/mongo are singletons with a
+# host-local /data volume. Draining that host cannot reattach the dataset, so
+# pick a different HA node when any of them live on the default drain target.
 #
 # flynn ps ID is nodeN-<job-uuid> when placed. NAME is redis.1234 (no host).
 # CREATED is "8 minutes ago", so only $1/$2/$3/$NF are stable field numbers.
-redis_job_host_from_ps() {
-  awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
+job_host_from_ps() {
+  local typ=$1
+  awk -v typ="${typ}" 'NR>1 && $2==typ && tolower($3) ~ /up|running/ {
     split($NF, a, "-")
     if (a[1] ~ /^node[0-9]+$/) {
       print a[1]
@@ -6543,27 +6544,83 @@ redis_job_host_from_ps() {
   }'
 }
 
-redis_job_host() {
-  local app out
-  app="$(flynn1 -a "${APP_NAME}" env get FLYNN_REDIS)" || return 1
-  out="$(flynn1 -a "${app}" ps)" || return 1
-  echo "${out}" | redis_job_host_from_ps
+redis_job_host_from_ps() {
+  job_host_from_ps redis
+}
+
+plugin_volume_host() {
+  local envkey=$1 typ=$2
+  local app out host
+  app="$(flynn1 -a "${APP_NAME}" env get "${envkey}" 2>/dev/null | tr -d '[:space:]')" || return 0
+  [[ -n "${app}" ]] || return 0
+  out="$(flynn1 -a "${app}" ps 2>/dev/null)" || return 0
+  host="$(echo "${out}" | job_host_from_ps "${typ}")"
+  [[ -n "${host}" ]] && printf '%s\n' "${host}"
+  return 0
+}
+
+# Print a drain target that is not node1 and does not hold a host-local
+# singleton volume. Prefers the last live node so we still drop the newest
+# HA member when it is safe. Args: nodes... -- protected-hosts...
+choose_drain_target() {
+  local -a nodes=() protected=()
+  local seen_sep=0 a n p skip i
+  for a in "$@"; do
+    if [[ "${a}" == "--" ]]; then
+      seen_sep=1
+      continue
+    fi
+    if [[ "${seen_sep}" -eq 0 ]]; then
+      nodes+=("${a}")
+    elif [[ -n "${a}" ]]; then
+      protected+=("${a}")
+    fi
+  done
+  if [[ "${#nodes[@]}" -lt 3 ]]; then
+    echo "choose_drain_target needs at least 3 nodes" >&2
+    return 1
+  fi
+  for (( i=${#nodes[@]}-1; i>=0; i-- )); do
+    n="${nodes[$i]}"
+    [[ "${n}" == "node1" ]] && continue
+    skip=0
+    for p in "${protected[@]}"; do
+      if [[ "${n}" == "${p}" ]]; then
+        skip=1
+        break
+      fi
+    done
+    [[ "${skip}" -eq 1 ]] && continue
+    printf '%s\n' "${n}"
+    return 0
+  done
+  echo "no drainable host: singleton volumes occupy every HA node (${protected[*]})" >&2
+  return 1
 }
 
 pick_remove_node() {
-  local drop redis_host
-  drop="${NODES[$((${#NODES[@]} - 1))]}"
-  redis_host="$(redis_job_host)" || {
-    echo "could not locate redis singleton host from flynn ps; refusing drain (host-local AOF)" >&2
-    return 1
-  }
-  if [[ -z "${redis_host}" ]]; then
-    echo "redis flynn ps has no placed nodeN id; refusing drain (host-local AOF)" >&2
-    return 1
-  fi
-  if [[ "${redis_host}" == "${drop}" && "${#NODES[@]}" -ge 3 ]]; then
-    echo "redis singleton is on ${drop}; draining ${NODES[$((${#NODES[@]} - 2))]} instead (host-local AOF)" >&2
-    drop="${NODES[$((${#NODES[@]} - 2))]}"
+  local drop default_drop host
+  local -a protected=()
+  local spec envkey typ provider
+  for spec in "redis:FLYNN_REDIS:redis" "kafka:FLYNN_KAFKA:kafka" "clickhouse:FLYNN_CLICKHOUSE:clickhouse" "mysql:FLYNN_MYSQL:mariadb" "mongodb:FLYNN_MONGO:mongodb"; do
+    provider="${spec%%:*}"
+    envkey="${spec#*:}"
+    envkey="${envkey%%:*}"
+    typ="${spec##*:}"
+    if ! datastore_wanted "${provider}"; then
+      continue
+    fi
+    host="$(plugin_volume_host "${envkey}" "${typ}")" || true
+    if [[ -z "${host}" ]]; then
+      echo "could not locate ${provider} singleton host from flynn ps; refusing drain (host-local /data)" >&2
+      return 1
+    fi
+    protected+=("${host}")
+  done
+  default_drop="${NODES[$((${#NODES[@]} - 1))]}"
+  drop="$(choose_drain_target "${NODES[@]}" -- "${protected[@]}")" || return 1
+  if [[ "${drop}" != "${default_drop}" ]]; then
+    echo "singleton volume host-local /data on ${default_drop}; draining ${drop} instead" >&2
   fi
   echo "${drop}"
 }

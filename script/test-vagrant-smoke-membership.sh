@@ -76,10 +76,26 @@ if ! grep -Fq 'drained-node' "${smoke}"; then
 fi
 need 'refusing to remove node1' \
   "remove-node must keep node1 (CLI and bootstrap)"
+need 'job_host_from_ps' \
+  "remove-node must parse plugin placement from flynn ps ID (nodeN-uuid), not NAME"
 need 'redis_job_host_from_ps' \
-  "remove-node must parse redis placement from flynn ps ID (nodeN-uuid), not NAME"
+  "remove-node must keep the redis ps-host helper (AOF is host-local)"
+need 'choose_drain_target' \
+  "remove-node must skip every singleton volume host, not only redis"
+need 'FLYNN_KAFKA:kafka' \
+  "remove-node must treat kafka /data like redis AOF (one broker, RF=1)"
+need 'FLYNN_CLICKHOUSE:clickhouse' \
+  "remove-node must not drain the clickhouse volume host"
+need 'FLYNN_MYSQL:mariadb' \
+  "remove-node must not drain the plugin mysql volume host"
+need 'FLYNN_MONGO:mongodb' \
+  "remove-node must not drain the plugin mongo volume host"
+need 'no drainable host' \
+  "remove-node must refuse when singleton volumes occupy every HA node"
+need 'host-local /data' \
+  "remove-node must refuse drain of host-local plugin volumes"
 if ! grep -Fq 'split($NF' "${smoke}"; then
-  echo "redis host parse must use the last column; NAME is redis.1234 and never matches node3" >&2
+  echo "plugin host parse must use the last column; NAME is redis.1234 and never matches node3" >&2
   echo '  missing split($NF) in smoke' >&2
   exit 1
 fi
@@ -107,6 +123,32 @@ wrong_host="$(printf '%s\n' \
   }')"
 if [[ "${wrong_host}" == "node3" ]]; then
   echo "NAME-column parse must not look like a host id (got ${wrong_host})" >&2
+  exit 1
+fi
+kafka_host="$(printf '%s\n' \
+  'NAME TYPE STATE CREATED ID' \
+  'kafka.4 kafka up 8 minutes ago node2-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' \
+  | awk -v typ=kafka 'NR>1 && $2==typ && tolower($3) ~ /up|running/ {
+    split($NF, a, "-")
+    if (a[1] ~ /^node[0-9]+$/) { print a[1]; exit }
+  }')"
+if [[ "${kafka_host}" != "node2" ]]; then
+  echo "job_host_from_ps kafka fixture must yield node2, got '${kafka_host}'" >&2
+  exit 1
+fi
+eval "$(sed -n '/^choose_drain_target()/,/^}/p' "${smoke}")"
+got="$(choose_drain_target node1 node2 node3 -- node3)"
+if [[ "${got}" != "node2" ]]; then
+  echo "choose_drain_target must skip redis/kafka host node3, got '${got}'" >&2
+  exit 1
+fi
+got="$(choose_drain_target node1 node2 node3 --)"
+if [[ "${got}" != "node3" ]]; then
+  echo "choose_drain_target must prefer the last HA node when volumes are elsewhere, got '${got}'" >&2
+  exit 1
+fi
+if choose_drain_target node1 node2 node3 -- node2 node3 >/dev/null; then
+  echo "choose_drain_target must refuse when every HA node holds a singleton volume" >&2
   exit 1
 fi
 need 'clickhouse replica' \
