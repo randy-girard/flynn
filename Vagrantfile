@@ -40,10 +40,74 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   ENV['LANG']="en_US.UTF-8"
   ENV['LANGUAGE']="en_US.UTF-8"
 
-  # Cluster access is the host-only NIC (192.168.56.x), not a NAT forwarded_port
-  # list. VirtualBox NAT forwards can bypass guest UFW and hide firewall:expose.
+  # Cluster access is the host-only NIC, not a NAT forwarded_port list.
+  # VirtualBox NAT forwards can bypass guest UFW and hide firewall:expose.
   # Vagrant still NATs SSH (vagrant ssh). HTTP/HTTPS/TCP are nodeIP:PORT; UFW is
   # the gate (22/80/443 plus whatever flynn-host firewall:expose opens).
+  #
+  # FLYNN_VAGRANT_ENV selects which machines this process owns:
+  #   smoke (default)  builder + nodeN on 192.168.56.0/24, state in .vagrant
+  #   dev               dev-builder (+ optional dev-nodeN) on 192.168.57.0/24,
+  #                     state in .vagrant-dev
+  # Smoke and the laptop dev loop can both be up. They do not share a VM,
+  # a host-only address, or a Vagrant machine index.
+  vagrant_env = ENV.fetch("FLYNN_VAGRANT_ENV", "smoke")
+
+  if vagrant_env == "dev"
+    config.vm.define "dev-builder" do |dev|
+      dev.vm.hostname = "dev-builder"
+      dev.vm.synced_folder "./flynn-logs/dev-builder", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+
+      dev.disksize.size = "100GB"
+      dev.vm.provider "virtualbox" do |v, override|
+        v.memory = ENV["VAGRANT_MEMORY"] || 12288
+        v.cpus = ENV["VAGRANT_CPUS"] || 4
+        v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+      end
+
+      dev.vm.provision "shell", privileged: true, inline: <<-SHELL
+        sudo su -l
+
+        cd /root/go/src/github.com/flynn/flynn
+        ./setup.sh
+      SHELL
+
+      dev.vm.network "private_network", ip: "192.168.57.10"
+    end
+
+    # Optional extra hosts for the dev cluster. Default is none: the dev
+    # loop bootstraps on dev-builder. FLYNN_DEV_NODES=3 adds dev-node1..3
+    # at 192.168.57.(19+N), the same offset smoke uses on 192.168.56.0/24.
+    dev_nodes = Integer(ENV.fetch("FLYNN_DEV_NODES", "0"))
+    raise "FLYNN_DEV_NODES must be >= 0 (got #{dev_nodes})" if dev_nodes < 0
+    (1..dev_nodes).each do |i|
+      config.vm.define "dev-node#{i}" do |runner|
+        runner.vm.hostname = "dev-node#{i}"
+        runner.vm.synced_folder "./flynn-logs/dev-node#{i}", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+
+        runner.disksize.size = "100GB"
+        runner.vm.provider "virtualbox" do |v, override|
+          v.memory = ENV["VAGRANT_MEMORY"] || 6144
+          v.cpus = ENV["VAGRANT_CPUS"] || 2
+          v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+          v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+        end
+
+        runner.vm.network "private_network", ip: "192.168.57.#{19 + i}"
+
+        runner.vm.provision "shell", privileged: true, inline: <<-SHELL
+          sudo su -l
+          apt-get update
+
+          growpart /dev/sda 3
+          pvresize /dev/sda3
+          lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
+        SHELL
+      end
+    end
+  elsif vagrant_env != "smoke"
+    raise "FLYNN_VAGRANT_ENV must be smoke or dev (got #{vagrant_env})"
+  else
   config.vm.define "builder" do |builder|
     builder.vm.hostname = "builder"
     builder.vm.synced_folder "./flynn-logs/builder", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
@@ -130,6 +194,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
       SHELL
     end
+  end
   end
 
 end

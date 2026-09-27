@@ -187,6 +187,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "${ROOT}"
 
+# Smoke owns .vagrant and 192.168.56.0/24 (builder, node1..). The dev loop
+# uses .vagrant-dev and 192.168.57.0/24, so both can be up together.
+export FLYNN_VAGRANT_ENV=smoke
+export VAGRANT_DOTFILE_PATH="${ROOT}/.vagrant"
+
 source "${ROOT}/script/lib/ui.sh"
 
 SMOKE_MATRIX_PY="${ROOT}/script/lib/smoke-matrix.py"

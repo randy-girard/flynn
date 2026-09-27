@@ -1,5 +1,6 @@
 bin
 .vagrant
+.vagrant-dev/
 .vbox_version
 .vagrant-upgrade-smoke-tmp/
 .vagrant-upgrade-smoke-last-failure.log

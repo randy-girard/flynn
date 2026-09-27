@@ -36,6 +36,10 @@ need "${vagrant}" 'nicpromisc2", "allow-all"' \
   "Vagrantfile must set --nicpromisc2 allow-all on cluster node NICs (flannel VXLAN)"
 need "${vagrant}" '192\.168\.56\.\#\{19 \+ i\}' \
   "cluster node N must be 192.168.56.(19+N) (node1=.20)"
+need "${vagrant}" 'FLYNN_VAGRANT_ENV' \
+  "Vagrantfile must keep smoke and dev machines in separate environments"
+need "${vagrant}" '192\.168\.57\.10' \
+  "dev-builder must use 192.168.57.10 so it can run beside smoke builder .10"
 need "${vagrant}" 'private_network' \
   "cluster nodes must use a host-only private_network (not NAT forwards) for service ports"
 if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
@@ -44,6 +48,10 @@ if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
 fi
 
 smoke="${ROOT}/script/vagrant-upgrade-smoke.sh"
+need "${smoke}" 'FLYNN_VAGRANT_ENV=smoke' \
+  "smoke must pin FLYNN_VAGRANT_ENV=smoke"
+need "${smoke}" 'VAGRANT_DOTFILE_PATH="\$\{ROOT\}/\.vagrant"' \
+  "smoke must keep its machine index in .vagrant, not .vagrant-dev"
 need "${smoke}" 'vbox_id_for_node' \
   "NIC promisc check must wait for the Vagrant id file (parallel vagrant up can lag)"
 need "${smoke}" 'VBoxManage list vms' \
