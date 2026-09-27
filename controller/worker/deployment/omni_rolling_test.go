@@ -2,8 +2,11 @@ package deployment
 
 import (
 	"fmt"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
@@ -113,6 +116,50 @@ func TestJobStopIDPrefersUUID(t *testing.T) {
 	}
 	if jobStopID(&ct.Job{ID: "host-only"}) != "host-only" {
 		t.Fatal("fall back to cluster id when uuid is empty")
+	}
+}
+
+func TestOmniStopWaitIsNotADeployTimeout(t *testing.T) {
+	if omniStopWaitLimit > 45*time.Second {
+		t.Fatalf("omni leftover wait %s is a timeout band-aid; force-stop should finish in seconds", omniStopWaitLimit)
+	}
+	if omniForceStopAfter > 15*time.Second {
+		t.Fatalf("graceful omni stop wait %s too long for local smoke", omniForceStopAfter)
+	}
+	if omniPortReleaseSettle > 3*time.Second {
+		t.Fatalf("port settle %s too long", omniPortReleaseSettle)
+	}
+}
+
+func TestProcessHostNetwork(t *testing.T) {
+	d := &DeployJob{
+		newRelease: &ct.Release{Processes: map[string]ct.ProcessType{
+			"app":       {Omni: true, HostNetwork: true},
+			"scheduler": {Omni: true},
+		}},
+	}
+	if !d.processHostNetwork("app") {
+		t.Fatal("router app process uses the host network")
+	}
+	if d.processHostNetwork("scheduler") {
+		t.Fatal("controller scheduler is overlay omni")
+	}
+}
+
+func TestOmniLastHostStartsNewBeforeOldZero(t *testing.T) {
+	src, err := os.ReadFile("omni_rolling.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "scaleNewOmni") || !strings.Contains(body, "OldZero") {
+		t.Fatal("last omni host must start the new scheduler before scaling old to zero")
+	}
+	if !strings.Contains(body, "processHostNetwork") {
+		t.Fatal("host-network omni (router) must keep stop-then-start on the last host")
+	}
+	if !strings.Contains(body, "waitNewOmniJobsUp") {
+		t.Fatal("omni must wait on JobList for new jobs, not ScaleRequest complete")
 	}
 }
 

@@ -127,16 +127,22 @@ func (d *DeployJob) scaleOldRelease(wait bool) error {
 const newJobFailureThreshold = 5
 
 func (d *DeployJob) scaleNewRelease() error {
+	return d.scaleNewReleaseWait(true)
+}
+
+func (d *DeployJob) scaleNewReleaseWait(wait bool) error {
 	failures := 0
 	opts := ct.ScaleOptions{
 		Processes: d.newFormation.Processes,
 		Tags:      d.newFormation.Tags,
 		Timeout:   &d.timeout,
 		Stop:      d.stop,
+		NoWait:    !wait,
 		JobEventCallback: func(job *ct.Job) error {
 			d.logJobEvent(job)
-			// return an error if we get more than newJobFailureThreshold
-			// down events when scaling the new formation up
+			if !wait {
+				return nil
+			}
 			if job.State == ct.JobStateDown {
 				failures++
 				if failures <= newJobFailureThreshold {

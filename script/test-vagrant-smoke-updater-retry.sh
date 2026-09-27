@@ -96,6 +96,12 @@ need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'omniRollPlan' \
   "omni one-down-one-up must roll host-network jobs one host at a time"
 need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'waitOldOmniJobsStopped' \
   "omni rolling must wait for old jobs to release host ports before starting the replacement"
+need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'scaleOldRelease\(false\)' \
+  "omni must not wait on ScaleRequest complete; stopping jobs never complete that wait"
+need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'waitNewOmniJobsUp' \
+  "omni must wait on JobList for new schedulers so the last old job is not the only one left"
+need_in "${ROOT}/controller/worker/deployment/omni_rolling.go" 'persistOmniJobReleased' \
+  "stale stopping/up JobList rows must be persisted down after DeleteJob"
 need_in "${ROOT}/controller/scheduler/job.go" 'FormationHostIDsTag' \
   "scheduler must honor flynn-host-ids formation tags for omni rolling"
 need_in "${ROOT}/controller/scheduler/formation.go" 'RectifyOmniFunc' \

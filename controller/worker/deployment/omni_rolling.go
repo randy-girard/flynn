@@ -75,6 +75,20 @@ func (d *DeployJob) processIsOmni(typ string) bool {
 	return false
 }
 
+func (d *DeployJob) processHostNetwork(typ string) bool {
+	if d.newRelease != nil {
+		if p, ok := d.newRelease.Processes[typ]; ok && p.HostNetwork {
+			return true
+		}
+	}
+	if d.oldRelease != nil {
+		if p, ok := d.oldRelease.Processes[typ]; ok && p.HostNetwork {
+			return true
+		}
+	}
+	return false
+}
+
 func (d *DeployJob) oldReleaseStillActive() bool {
 	if d.oldFormation == nil {
 		return false
@@ -157,23 +171,56 @@ func (d *DeployJob) scaleOmniOneDownOneUp(typ string, log log15.Logger) error {
 	for i, step := range plan {
 		log.Info("omni roll step", "step", i+1, "old_hosts", step.OldHostIDs, "new_hosts", step.NewHostIDs, "old_zero", step.OldZero)
 
+		if step.OldZero && !d.processHostNetwork(typ) {
+			// Overlay omni (controller scheduler): never stop the last old
+			// job until some new scheduler exists. Do not wait for every
+			// cluster host (add-node node4 may not have the new job yet;
+			// 30s of waiting for it blocked the upgrade). Host-network
+			// omni (router) still stops first so :80/:443 can bind.
+			haveNew, err := d.omniHostIDs(typ, d.NewReleaseID)
+			if err != nil {
+				return err
+			}
+			if len(haveNew) == 0 {
+				if err := d.scaleNewOmni(typ, nil, true, nil, log); err != nil {
+					return err
+				}
+			} else {
+				d.setFormationHostIDs(d.newFormation, typ, nil, true, d.Processes[typ])
+				if err := d.scaleNewReleaseWait(false); err != nil {
+					log.Error("error clearing new omni host tags", "err", err)
+					return err
+				}
+			}
+			d.setFormationHostIDs(d.oldFormation, typ, nil, true, 0)
+			if err := d.scaleOldRelease(false); err != nil {
+				log.Error("error scaling old omni formation to zero", "err", err)
+				return err
+			}
+			if err := d.waitOldOmniJobsStopped(typ, nil, log); err != nil {
+				return err
+			}
+			continue
+		}
+
 		oldCount := d.Processes[typ]
 		if step.OldZero {
 			oldCount = 0
 		}
 		d.setFormationHostIDs(d.oldFormation, typ, step.OldHostIDs, step.OldZero, oldCount)
-		if err := d.scaleOldRelease(true); err != nil {
+		// NoWait: ScaleAppRelease waits for ScaleRequest complete, and the
+		// scheduler still counts stopping jobs as running, so a leftover
+		// router/scheduler can block the whole deploy timeout (HA pass 2
+		// sat 600s here and never reached force-stop). Put the formation
+		// and wait on JobList + DeleteJob instead.
+		if err := d.scaleOldRelease(false); err != nil {
 			log.Error("error scaling old omni formation", "err", err)
 			return err
 		}
 		if err := d.waitOldOmniJobsStopped(typ, step.OldHostIDs, log); err != nil {
 			return err
 		}
-
-		newCount := d.Processes[typ]
-		d.setFormationHostIDs(d.newFormation, typ, step.NewHostIDs, step.ClearNewTags, newCount)
-		if err := d.scaleNewRelease(); err != nil {
-			log.Error("error scaling new omni formation", "err", err)
+		if err := d.scaleNewOmni(typ, step.NewHostIDs, step.ClearNewTags, step.NewHostIDs, log); err != nil {
 			return err
 		}
 	}
@@ -181,17 +228,24 @@ func (d *DeployJob) scaleOmniOneDownOneUp(typ string, log log15.Logger) error {
 	return d.finishOmniRoll(typ, log)
 }
 
+func (d *DeployJob) scaleNewOmni(typ string, hostIDs []string, clear bool, waitHosts []string, log log15.Logger) error {
+	d.setFormationHostIDs(d.newFormation, typ, hostIDs, clear, d.Processes[typ])
+	if err := d.scaleNewReleaseWait(false); err != nil {
+		log.Error("error scaling new omni formation", "err", err)
+		return err
+	}
+	return d.waitNewOmniJobsUp(typ, waitHosts, log)
+}
+
 func (d *DeployJob) finishOmniRoll(typ string, log log15.Logger) error {
 	if d.newFormation.Processes[typ] != d.Processes[typ] || len(d.newFormation.Tags[typ]) > 0 {
-		d.setFormationHostIDs(d.newFormation, typ, nil, true, d.Processes[typ])
-		if err := d.scaleNewRelease(); err != nil {
-			log.Error("error clearing new omni host tags", "err", err)
+		if err := d.scaleNewOmni(typ, nil, true, nil, log); err != nil {
 			return err
 		}
 	}
 	if d.oldFormation.Processes[typ] != 0 {
 		d.setFormationHostIDs(d.oldFormation, typ, nil, true, 0)
-		if err := d.scaleOldRelease(true); err != nil {
+		if err := d.scaleOldRelease(false); err != nil {
 			log.Error("error scaling old omni formation to zero", "err", err)
 			return err
 		}
@@ -234,17 +288,24 @@ func jobStopID(job *ct.Job) string {
 // stopping/up after formation=0 block the next host's omni start.
 var omniForceStopAfter = 8 * time.Second
 
+// omniStopWaitLimit caps leftover waiting. The deploy timeout is not a
+// substitute for stopping jobs; local smoke should finish this in seconds.
+var omniStopWaitLimit = 30 * time.Second
+
+var omniStopPoll = 200 * time.Millisecond
+
+// omniPortReleaseSettle is a brief pause after DeleteJob so host-network
+// ports (:80/:443) can unbind before the replacement omni job starts.
+var omniPortReleaseSettle = time.Second
+
 func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, log log15.Logger) error {
 	allowed := make(map[string]struct{}, len(remainingHosts))
 	for _, id := range remainingHosts {
 		allowed[id] = struct{}{}
 	}
 	started := time.Now()
-	deadline := started.Add(d.timeout)
-	if d.timeout <= 0 {
-		deadline = started.Add(10 * time.Minute)
-	}
-	forced := false
+	deadline := started.Add(omniStopWaitLimit)
+	var lastForce time.Time
 	for {
 		jobs, err := d.client.JobList(d.AppID)
 		if err != nil {
@@ -259,7 +320,8 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 			hosts = append(hosts, job.HostID)
 		}
 		log.Info("waiting for old omni jobs to release host ports", "hosts", hosts)
-		if !forced && time.Since(started) >= omniForceStopAfter {
+		if time.Since(started) >= omniForceStopAfter && (lastForce.IsZero() || time.Since(lastForce) >= omniForceStopAfter) {
+			forced := false
 			for _, job := range leftover {
 				id := jobStopID(job)
 				if id == "" {
@@ -267,15 +329,24 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 				}
 				log.Warn("force-stopping leftover omni job", "job.id", id, "host.id", job.HostID, "job.state", job.State)
 				err := d.client.DeleteJob(d.AppID, id)
-				if err != nil && leftoverJobReleasedOnHost(err) {
-					d.persistOmniJobReleased(job, log)
+				if err != nil && !leftoverJobReleasedOnHost(err) {
+					log.Warn("force-stop leftover omni job failed", "job.id", id, "err", err)
 					continue
 				}
-				if err != nil {
-					log.Warn("force-stop leftover omni job failed", "job.id", id, "err", err)
+				// Host accepted the stop (or the job is already gone). Persist
+				// down so a stale stopping/up JobList row cannot block the
+				// next host. One-shot force-stop left pass 2 waiting forever.
+				d.persistOmniJobReleased(job, log)
+				forced = true
+			}
+			lastForce = time.Now()
+			if forced {
+				select {
+				case <-d.stop:
+					return worker.ErrStopped
+				case <-time.After(omniPortReleaseSettle):
 				}
 			}
-			forced = true
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for old %s jobs to stop on %v", typ, hosts)
@@ -283,7 +354,52 @@ func (d *DeployJob) waitOldOmniJobsStopped(typ string, remainingHosts []string, 
 		select {
 		case <-d.stop:
 			return worker.ErrStopped
-		case <-time.After(200 * time.Millisecond):
+		case <-time.After(omniStopPoll):
+		}
+	}
+}
+
+func (d *DeployJob) waitNewOmniJobsUp(typ string, waitHosts []string, log log15.Logger) error {
+	want := make(map[string]struct{}, len(waitHosts))
+	for _, id := range waitHosts {
+		if id != "" {
+			want[id] = struct{}{}
+		}
+	}
+	started := time.Now()
+	deadline := started.Add(omniStopWaitLimit)
+	for {
+		have, err := d.omniHostIDs(typ, d.NewReleaseID)
+		if err != nil {
+			return err
+		}
+		present := make(map[string]struct{}, len(have))
+		for _, id := range have {
+			present[id] = struct{}{}
+		}
+		ready := false
+		if len(want) == 0 {
+			ready = len(have) > 0
+		} else {
+			ready = true
+			for id := range want {
+				if _, ok := present[id]; !ok {
+					ready = false
+					break
+				}
+			}
+		}
+		if ready {
+			return nil
+		}
+		log.Info("waiting for new omni jobs to start", "want", waitHosts, "have", have)
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timed out waiting for new %s jobs to start (want %v, have %v)", typ, waitHosts, have)
+		}
+		select {
+		case <-d.stop:
+			return worker.ErrStopped
+		case <-time.After(omniStopPoll):
 		}
 	}
 }
