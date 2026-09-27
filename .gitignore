@@ -12,6 +12,7 @@ demo/*.log
 *.test
 /tmp
 /build
+/build-dev
 go-tuf/client
 go-tuf/repo
 flynn-plugin-discovery/Godeps

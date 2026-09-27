@@ -20,7 +20,13 @@ Install [Vagrant](https://www.vagrantup.com/) (≥ 1.9), [VirtualBox](https://ww
 and the `vagrant-disksize` plugin.
 
 Do **not** run a bare `vagrant up`. That boots the builder and every cluster
-node (heavy). See [Vagrant](installation/vagrant.md).
+node (heavy). See [Vagrant](installation/vagrant.md). For a laptop cluster that
+can sit beside smoke, use `script/vagrant-dev.sh` (`.vagrant-dev`, **dev-builder**
+at `192.168.57.10`). `script/vagrant-dev.sh reload` (alias `restart`) reboots
+those VMs and starts `flynn-host` again. `script/vagrant-dev.sh stop` (alias
+`halt`) powers them off; `script/vagrant-dev.sh destroy` (alias `teardown`)
+deletes the VMs without touching smoke or `./build-dev`. Flynn artifacts from
+that loop land in `./build-dev` on the laptop; smoke keeps `./build`.
 
 Clone this fork, then start only the builder:
 
@@ -339,13 +345,17 @@ $ script/vagrant-smoke.sh --item singleton
 $ script/vagrant-smoke.sh --item ha,add-node
 $ script/vagrant-smoke.sh --item pipeline
 $ SKIP_BUILD=1 script/vagrant-smoke.sh --item install-only
+$ script/vagrant-smoke.sh stop           # halt builder + nodeN (disks stay)
+$ script/vagrant-smoke.sh destroy        # delete those VMs (alias: teardown)
 ```
 
 `script/vagrant-smoke.sh` is a thin entrypoint over
-`script/vagrant-upgrade-smoke.sh`, which still holds the implementation (the
+`script/vagrant-upgrade-smoke.sh`, which still holds the suite (the
 name predates the test covering far more than upgrades); options, environment
 variables, the matrix files, and the `script/test-vagrant-smoke-*.sh` contract
-tests are the same for both. After a fix, the rebuild on the builder is incremental (see
+tests are the same for both. Subcommands `status`, `ssh`, `up`, `reload`,
+`stop`, and `destroy` (and their aliases) go to `script/vagrant-smoke-env.sh`
+and only touch `.vagrant`. After a fix, the rebuild on the builder is incremental (see
 [Incremental rebuilds](#incremental-rebuilds)).
 
 Default flow:

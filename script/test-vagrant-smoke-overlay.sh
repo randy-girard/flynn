@@ -40,6 +40,8 @@ need "${vagrant}" 'FLYNN_VAGRANT_ENV' \
   "Vagrantfile must keep smoke and dev machines in separate environments"
 need "${vagrant}" '192\.168\.57\.10' \
   "dev-builder must use 192.168.57.10 so it can run beside smoke builder .10"
+need "${vagrant}" './build-dev' \
+  "dev must overlay ./build-dev onto guest build/ so smoke keeps ./build"
 need "${vagrant}" 'private_network' \
   "cluster nodes must use a host-only private_network (not NAT forwards) for service ports"
 if grep -vE '^\s*#' "${vagrant}" | grep -q 'forwarded_port'; then
@@ -52,6 +54,10 @@ need "${smoke}" 'FLYNN_VAGRANT_ENV=smoke' \
   "smoke must pin FLYNN_VAGRANT_ENV=smoke"
 need "${smoke}" 'VAGRANT_DOTFILE_PATH="\$\{ROOT\}/\.vagrant"' \
   "smoke must keep its machine index in .vagrant, not .vagrant-dev"
+if grep -Fq 'build-dev' "${smoke}"; then
+  echo "smoke must keep Flynn artifacts in ./build, not ./build-dev" >&2
+  exit 1
+fi
 need "${smoke}" 'vbox_id_for_node' \
   "NIC promisc check must wait for the Vagrant id file (parallel vagrant up can lag)"
 need "${smoke}" 'VBoxManage list vms' \
@@ -86,6 +92,10 @@ need "${build}" '12GiB' \
   "build.sh must default GOMEMLIMIT to 12GiB locally"
 need "${build}" '4GiB' \
   "build.sh must default GOMEMLIMIT to 4GiB on GitHub Actions"
+need "${build}" 'MemTotal' \
+  "build.sh must cap GOMEMLIMIT to guest RAM so a 12GB laptop-loop VM does not OOM"
+need "${ROOT}/script/flynn-builder" 'GOMEMLIMIT' \
+  "script/flynn-builder must set GOMEMLIMIT; a direct invoke used to OOM-kill the process"
 need "${build}" 'GITHUB_ACTIONS' \
   "build.sh must detect GitHub Actions for lower memory/concurrency defaults"
 need "${build}" '^exit 0$' \

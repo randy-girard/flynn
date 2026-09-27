@@ -20,6 +20,32 @@ fi
 export GO111MODULE=on
 export GOFLAGS=-mod=vendor
 
+# flynn-builder copies layer diffs in memory (20GB+ RSS on the 30GB smoke
+# builder). An uncapped heap on the 12GB laptop-loop VM is a kernel OOM kill:
+# "Killed" from this script, anon-rss ~11GB. GOMEMLIMIT is a GC target, not a
+# hard cgroup cap, but it keeps the heap under guest RAM.
+if [[ -z "${GOMEMLIMIT:-}" ]]; then
+  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    export GOMEMLIMIT=4GiB
+  else
+    export GOMEMLIMIT=12GiB
+  fi
+fi
+if [[ -r /proc/meminfo ]]; then
+  mem_kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)"
+  if [[ "${mem_kb}" =~ ^[0-9]+$ ]]; then
+    cap_gib=$((mem_kb / 1024 / 1024 - 4))
+    if [[ "${cap_gib}" -lt 2 ]]; then
+      cap_gib=2
+    fi
+    want_gib="${GOMEMLIMIT%GiB}"
+    if [[ "${want_gib}" =~ ^[0-9]+$ ]] && [[ "${want_gib}" -gt "${cap_gib}" ]]; then
+      echo "GOMEMLIMIT ${GOMEMLIMIT} exceeds this guest (${cap_gib}GiB usable); capping" >&2
+      export GOMEMLIMIT="${cap_gib}GiB"
+    fi
+  fi
+fi
+
 "$(dirname "$0")/prepare-builder-manifest"
 
 build/bin/flynn-builder "$@"

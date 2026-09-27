@@ -37,8 +37,12 @@ need 'cli-ps' \
   "CLI step must list jobs"
 need 'cli-scale' \
   "CLI step must read formation scale"
-need 'env get FLYNN_POSTGRES' \
-  "CLI step must read datastore env via flynn env get"
+need 'smoke_identity_env_keys' \
+  "CLI step must read datastore identity env for the selected engines"
+need 'cli-env-get' \
+  "CLI step must flynn env get the attached identity app name"
+need 'env get "\$\{ident\}"' \
+  "cli-env-get must use the selected engine key, not always FLYNN_POSTGRES"
 need 'cli-resource' \
   "CLI step must list app resources for every datastore provider"
 need 'cli-route' \
@@ -175,6 +179,8 @@ need 'cli-pg-controller' \
   "CLI step must open controller psql with the cluster key"
 need 'cli-pg-blobstore' \
   "CLI step must open blobstore psql with the cluster key"
+need 'flynn-host pg:psql' \
+  "platform controller/blobstore consoles must use flynn-host pg, not the tenant plugin"
 need 'timeout 90 flynn' \
   "flynn run must be time-bounded so a hung scheduler cannot stall smoke"
 need 'meta set' \

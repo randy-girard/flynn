@@ -22,8 +22,21 @@
 #   script/vagrant-smoke.sh --item singleton --datastore postgres
 #   script/vagrant-smoke.sh --item singleton --datastore redis --datastore kafka
 #
+# VM lifecycle (does not run the suite; .vagrant only, never .vagrant-dev):
+#   script/vagrant-smoke.sh status|ssh|up|reload|restart|stop|halt|destroy|teardown
+#   script/vagrant-smoke.sh env                # same commands; env help
+#
 # Incremental rebuilds: build.sh keeps the image layer cache and a shared Go
 # build cache on the builder between runs, so after a fix only the layers whose
 # inputs changed are rebuilt (see docs/content/development.html.md).
 set -euo pipefail
-exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/vagrant-upgrade-smoke.sh" "$@"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+case "${1:-}" in
+  status|ssh|up|reload|restart|stop|halt|destroy|teardown|env)
+    if [[ "${1}" == "env" ]]; then
+      shift
+    fi
+    exec "${HERE}/vagrant-smoke-env.sh" "$@"
+    ;;
+esac
+exec "${HERE}/vagrant-upgrade-smoke.sh" "$@"

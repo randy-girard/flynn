@@ -56,11 +56,11 @@ need "${smoke}" 'smoke_pg_tf' \
 need "${smoke}" 'cli-pg-no-controller' \
   "smoke must prove the user-app role cannot CONNECT to the controller database"
 need "${smoke}" 'cli-pg-controller' \
-  "smoke must flynn -a controller pg psql with the cluster key"
+  "smoke must open the platform controller database with the cluster key"
 need "${smoke}" 'cli-pg-blobstore' \
-  "smoke must flynn -a blobstore pg psql with the cluster key"
-need "${smoke}" 'flynn1 -a controller pg:psql' \
-  "platform console probe must use the cluster CLI (not a user job)"
+  "smoke must open the platform blobstore database with the cluster key"
+need "${smoke}" 'flynn-host pg:psql' \
+  "platform console probe must use flynn-host pg (not the tenant plugin CLI)"
 need "${ROOT}/script/test-vagrant-smoke-backup.sh" 'grep -q' \
   "backup SIGPIPE contract must keep forbidding tar -tf | grep -q"
 need "${ROOT}/script/test-vagrant-smoke-data-and-passes.sh" 'ui_table_cell' \

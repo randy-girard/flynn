@@ -28,6 +28,26 @@ need 'overlaying' \
   "reinstall must overlay a locally built flynn-host so restore fixes are not stuck on the tarball binary"
 need 'overlay_flynn_host_on_node' \
   "upgrade --force must re-overlay flynn-host; tarball update drops the SKIP_BUILD binary"
+need 'flynn-host-overlay' \
+  "SKIP_BUILD overlay must be a CLI sidecar; replacing the daemon binary deadlocks restore discoverd"
+need 'ensure_bootstrap_manifest_starts_worker' \
+  "restore bootstrap must start controller-worker with web so plugin apps cannot starve status-check"
+if ! grep -q 'procs\["worker"\] = 1' "${smoke}"; then
+  echo "SKIP_BUILD tarball manifests must be patched so controller run-app starts worker" >&2
+  exit 1
+fi
+if ! grep -q '"worker": 1' "${ROOT}/bootstrap/manifest_template.json"; then
+  echo "bootstrap manifest must start controller-worker with controller web" >&2
+  exit 1
+fi
+if ! grep -q 'web": 1, "worker": 1' "${ROOT}/host/cli/bootstrap.go"; then
+  echo "bootstrap --from-backup must start controller-worker with controller web" >&2
+  exit 1
+fi
+if ! grep -q 'RestoreAuthJobSettle' "${ROOT}/bootstrap/restore_auth.go"; then
+  echo "bootstrap --from-backup must settle after restore-auth daemon restart before discoverd" >&2
+  exit 1
+fi
 backup_go="${ROOT}/pkg/backup/backup.go"
 if ! grep -q 'formationForBackup' "${backup_go}"; then
   echo "flynn-host backup must tolerate a missing formation on the current postgres release" >&2
@@ -99,20 +119,24 @@ need 'plugins.json' \
   "cluster backup must contain plugins.json so restore knows which plugins were installed"
 need 'keys not in cluster backup' \
   "redis after restore must PING only; keys are not in the cluster backup"
+need 'tenant rows not in cluster backup' \
+  "tenant postgres after restore must SELECT 1; isolated instance volumes are not in postgres.sql.gz"
 need 'topic data not in cluster backup' \
-  "kafka after restore must only require the topics CLI"
+  "kafka after restore must only require the cluster app to be running"
 need 'rows not in cluster backup' \
   "clickhouse after restore must only require SELECT 1"
 need 'clickhouse-ping' \
   "restore must not wait on clickhouse_seed_ready (smoke_db is not restored)"
-need 'kafka_is_ready' \
-  "smoke must wait for kafka topics CLI after restore"
+need 'kafka-ping' \
+  "restore must not wait on kafka tenant topics (SCRAM users are in the volume, not the backup)"
 need 'post-restore' \
   "restore checks must be recorded as a post-restore phase"
 need 'Reinstall for restore' \
   "restore must reinstall Flynn (--clean) before bootstrap --from-backup"
 need 'umount -l' \
   "smoke must unmount overlay/squashfs under /var/lib/flynn before install --clean"
+need 'flynn-host libcontainer-init' \
+  "reinstall --clean must kill hung libcontainer-init before umount"
 if ! grep -qF '\${mp}' "${smoke}"; then
   echo "smoke overlay unmount must escape mp so the node heredoc runs it" >&2
   exit 1
@@ -120,7 +144,11 @@ fi
 need 'Init layer-0 for restore' \
   "restore must re-init peer-ips after --clean"
 need 'wait_selected_sirenia_ha "after restore"' \
-  "HA restore (including discovery 1→3) must wait for sirenia replica sets after --from-backup"
+  "HA restore (including discovery 1→3) must wait for postgres sirenia after --from-backup"
+if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(mariadb)'; then
+  echo "mysql/mongodb plugins ScaleUp singleton; wait_selected_sirenia_ha must not wait for mariadb HA" >&2
+  exit 1
+fi
 
 if grep -q 'discovery grows a singleton' "${smoke}"; then
   echo "discovery topology must run backup/restore, not skip it" >&2

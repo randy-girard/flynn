@@ -53,14 +53,19 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # a host-only address, or a Vagrant machine index.
   vagrant_env = ENV.fetch("FLYNN_VAGRANT_ENV", "smoke")
 
+  # The checkout is one synced tree, so ./build would be shared. Overlay an
+  # env-specific host dir onto guest build/ so binaries, images.json, and
+  # release tarballs do not overwrite each other. Smoke keeps ./build.
   if vagrant_env == "dev"
+    config.vm.synced_folder "./build-dev", "/root/go/src/github.com/flynn/flynn/build", create: true, group: "root", owner: "root"
+
     config.vm.define "dev-builder" do |dev|
       dev.vm.hostname = "dev-builder"
       dev.vm.synced_folder "./flynn-logs/dev-builder", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
 
       dev.disksize.size = "100GB"
       dev.vm.provider "virtualbox" do |v, override|
-        v.memory = ENV["VAGRANT_MEMORY"] || 12288
+        v.memory = ENV["VAGRANT_MEMORY"] || 30000
         v.cpus = ENV["VAGRANT_CPUS"] || 4
         v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
       end

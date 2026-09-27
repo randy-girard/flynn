@@ -68,6 +68,8 @@ need "${smoke}" 'FLYNN_MAX_NODES_FLOOR' \
   "inventory must cover every selected item before the first vagrant up"
 need "${entry}" '--item singleton' \
   "vagrant-smoke.sh must document --item"
+need "${entry}" 'vagrant-smoke-env.sh' \
+  "vagrant-smoke.sh must dispatch status/ssh/up/reload/stop/destroy to the smoke env helper"
 need "${example}" 'id: singleton' \
   "example matrix must include the 1-node configuration"
 need "${example}" 'id: ha' \

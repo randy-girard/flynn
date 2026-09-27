@@ -40,7 +40,9 @@
 # Concurrency (optional):
 #   TOOLCHAIN_CONCURRENCY  default 2 (conservative; toolchain images are heavy)
 #   APPS_CONCURRENCY       default nproc locally, 2 on GitHub Actions, or FLYNN_BUILD_CONCURRENCY
-#   GOMEMLIMIT             default 12GiB locally, 4GiB on GitHub Actions
+#   GOMEMLIMIT             default 12GiB locally, 4GiB on GitHub Actions;
+#                          capped to MemTotal-4GiB so a 12GB laptop-loop VM
+#                          does not OOM-kill flynn-builder
 #   FLYNN_BUILDER_MAX_RETRIES  default 10 locally, 4 on GitHub Actions
 #   FLYNN_GO_BUILD_P       cap `go build -p` inside image jobs (default 2 on GHA)
 #   CI sets APPS_CONCURRENCY via the release workflow input (default 2).
@@ -379,15 +381,28 @@ default_apps_concurrency() {
 }
 
 default_gomemlimit() {
+  local want cap_gib want_gib mem_kb
   if [[ -n "${GOMEMLIMIT:-}" ]]; then
-    echo "${GOMEMLIMIT}"
-    return
+    want="${GOMEMLIMIT}"
+  elif [[ -n "${GITHUB_ACTIONS:-}" ]]; then
+    want="4GiB"
+  else
+    want="12GiB"
   fi
-  if [[ -n "${GITHUB_ACTIONS:-}" ]]; then
-    echo "4GiB"
-    return
+  if [[ -r /proc/meminfo ]]; then
+    mem_kb="$(awk '/^MemTotal:/ {print $2; exit}' /proc/meminfo)"
+    if [[ "${mem_kb}" =~ ^[0-9]+$ ]]; then
+      cap_gib=$((mem_kb / 1024 / 1024 - 4))
+      if [[ "${cap_gib}" -lt 2 ]]; then
+        cap_gib=2
+      fi
+      want_gib="${want%GiB}"
+      if [[ "${want_gib}" =~ ^[0-9]+$ ]] && [[ "${want_gib}" -gt "${cap_gib}" ]]; then
+        want="${cap_gib}GiB"
+      fi
+    fi
   fi
-  echo "12GiB"
+  echo "${want}"
 }
 
 default_builder_max_retries() {

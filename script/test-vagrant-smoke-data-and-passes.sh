@@ -225,6 +225,8 @@ need 'Build plugin images' \
   "smoke must have a Build plugin images step after the tarball exists"
 need 'plugin_image_current' \
   "install must refuse a plugin image that was not built against this Flynn"
+need 'plugin_checkout_id' \
+  "plugin images must rebuild when the sibling plugin checkout is dirty"
 need 'plugin_flynn_compile_id' \
   "plugin dist stamp must hash Flynn packages plugins compile against, not every Flynn commit"
 need 'go mod edit -replace' \
@@ -235,8 +237,32 @@ need 'dump_plugin_install_diagnostics' \
   "plugin install failure must dump flynn-host job/squashfs logs, not only the scale timeout"
 need 'wait_selected_datastores_ready "after resource add"' \
   "after provisioning, smoke must wait for the selected datastore engines"
+need 'add_app_resource' \
+  "resource add must not be polled with wait_for (retries re-provision during setEnv deploy)"
+need 'wait_app_deploy_idle' \
+  "each resource add must wait for the smoke app deploy; overlapping setEnv drops identity env"
+need 'FINISHED is empty' \
+  "deploy idle must wait for finished_at (CLI FINISHED column), not STATUS complete alone"
+need 'resource_env_ready' \
+  "resource add is not done until FLYNN_* identity env is set (listed resources can lack env)"
+if grep -q 'wait_for "${provider} resource add"' "${smoke}"; then
+  echo "resource add must not use wait_for; add_app_resource waits for deploy idle then adds once" >&2
+  exit 1
+fi
+need '900 mariadb_is_read_write' \
+  "HA mariadb formation can exceed 10 minutes; wait_datastores_ready must allow 900s"
+if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(mariadb)'; then
+  echo "mysql/mongodb plugins stay singleton until a replica is added; HA wait is postgres only" >&2
+  exit 1
+fi
 need 'wait_selected_datastores_ready "after upgrade' \
   "after each --force update, smoke must wait for the selected datastore engines"
+need 'smoke_identity_env_keys' \
+  "cli-env must use FLYNN_CLICKHOUSE (or the selected engine), not always FLYNN_POSTGRES"
+need 'datastore_wanted postgres' \
+  "tenant pg:psql CLI checks must not run on a clickhouse-only smoke"
+need 'datastore_wanted redis && plugin_has_delegated_cli redis' \
+  "plugin redis CLI checks must not run unless redis is in this smoke"
 need 'record_check' \
   "smoke must record per-engine results for the final report"
 need 'print_datastore_report' \
@@ -249,11 +275,17 @@ need '</dev/null' \
   "flynn1 must close stdin so clickhouse-client INSERT cannot hang on a TTY"
 need 'clickhouse_rows_table\) SELECT' \
   "clickhouse marker rows must use INSERT SELECT (INSERT VALUES waits on stdin)"
+need '600 clickhouse_ping' \
+  "clickhouse ping after restore must wait up to 600s while keeper and clickhouse scale"
 python3 - "${smoke}" <<'PY'
-import pathlib, sys
+import pathlib, re, sys
 t = pathlib.Path(sys.argv[1]).read_text()
-if "\\`\\${CHDB}\\`" not in t:
-    raise SystemExit("clickhouse identifiers must be quoted so hyphenated names are not subtraction")
+if r"printf '`%s`.rows'" not in t.replace("\\`", "`"):
+    raise SystemExit("clickhouse identifiers must be built with printf so backticks are not a shell command")
+if "`${CHDB}`" in t.replace("\\`", "`").replace("\\${", "${"):
+    raise SystemExit("a backtick around ${CHDB} is executed by the node shell")
+if re.search(r'(?<!\\)\$\{CHDB\}', t):
+    raise SystemExit("unescaped ${CHDB} is expanded on the laptop under set -u")
 PY
 need 'RESUME_AT=upgrade' \
   "smoke must be able to resume at the --force update after a hung pre-upgrade verify"

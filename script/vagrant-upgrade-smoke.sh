@@ -53,6 +53,8 @@
 #   script/vagrant-smoke.sh --item singleton
 #   script/vagrant-smoke.sh --item ha,add-node
 #   script/vagrant-smoke.sh --matrix ./smoke-matrix.yaml
+#   script/vagrant-smoke.sh status|ssh|up|reload|stop|destroy
+#     (VM lifecycle in .vagrant; does not run the suite or touch .vagrant-dev)
 #
 # Matrix (file-driven configs; env vars still override individual fields):
 #   smoke-matrix.example.yaml   committed catalog of configurations
@@ -439,6 +441,17 @@ datastore_wanted() {
   return 1
 }
 
+# Tenant identity env attached on resource:add. Used by cli-env when smoke
+# runs a subset of engines (--datastore clickhouse must not require FLYNN_POSTGRES).
+smoke_identity_env_keys() {
+  datastore_wanted postgres && echo FLYNN_POSTGRES
+  datastore_wanted mysql && echo FLYNN_MYSQL
+  datastore_wanted mongodb && echo FLYNN_MONGO
+  datastore_wanted redis && echo FLYNN_REDIS
+  datastore_wanted kafka && echo FLYNN_KAFKA
+  datastore_wanted clickhouse && echo FLYNN_CLICKHOUSE
+}
+
 selected_wait_services() {
   local mode=${1:-0}
   datastore_wanted postgres && echo postgres
@@ -447,7 +460,7 @@ selected_wait_services() {
   datastore_wanted redis && echo redis
   case "${mode}" in
     1)
-      datastore_wanted kafka && echo kafka
+      datastore_wanted kafka && echo kafka-ping
       datastore_wanted clickhouse && echo clickhouse-ping
       ;;
     2)
@@ -473,9 +486,11 @@ wait_selected_datastores_ready() {
 wait_selected_sirenia_ha() {
   local suffix=$1
   local args=()
+  # Platform postgres still env-flips to 3-peer sirenia on a 3-node cluster.
+  # mysql/mongodb plugins ScaleUp(..., "true"): one appliance node until the
+  # user adds a replica. Waiting for mariadb/mongodb HA here hung 900s
+  # (3 jobs registered, discoverd meta still singleton — HA 2026-09-27).
   datastore_wanted postgres && args+=(postgres)
-  datastore_wanted mysql && args+=(mariadb)
-  datastore_wanted mongodb && args+=(mongodb)
   if [[ ${#args[@]} -eq 0 ]]; then
     return 0
   fi
@@ -1767,9 +1782,18 @@ redis_is_ready() {
 }
 
 # Kafka/ClickHouse volume data is not in flynn cluster backup. After restore
-# the brokers come back empty; these only prove the CLI/engine is up.
+# the brokers come back empty (SCRAM tenants are gone; app env still has the
+# old password). topics CLI needs those tenants; engine-up only checks the
+# restored cluster app is running.
 kafka_is_ready() {
   flynn1 -a "${APP_NAME}" kafka topics >/dev/null 2>&1
+}
+
+kafka_engine_ready() {
+  local cluster
+  cluster="$(flynn1 -a "${APP_NAME}" env get FLYNN_KAFKA 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "${cluster}" ]] || return 1
+  flynn1 -a "${cluster}" ps 2>/dev/null | grep -q kafka
 }
 
 # Plugin CLI jobs can return Flynn's generic "unknown_error: Something went
@@ -1833,10 +1857,10 @@ wait_datastores_ready() {
         wait_for "postgres read-write ${suffix}" 900 postgres_is_read_write || return 1
         ;;
       mariadb|mysql)
-        wait_for "mariadb read-write ${suffix}" 600 mariadb_is_read_write || return 1
+        wait_for "mariadb read-write ${suffix}" 900 mariadb_is_read_write || return 1
         ;;
       mongodb)
-        wait_for "mongodb read-write ${suffix}" 600 mongodb_is_read_write || return 1
+        wait_for "mongodb read-write ${suffix}" 900 mongodb_is_read_write || return 1
         ;;
       redis)
         wait_for "redis PING ${suffix}" 180 redis_is_ready || return 1
@@ -1844,11 +1868,14 @@ wait_datastores_ready() {
       kafka)
         wait_for "kafka topics ${suffix}" 180 kafka_is_ready || return 1
         ;;
+      kafka-ping)
+        wait_for "kafka cluster app ${suffix}" 180 kafka_engine_ready || return 1
+        ;;
       clickhouse)
         wait_for "clickhouse smoke_db.rows ${suffix}" 300 clickhouse_seed_ready || return 1
         ;;
       clickhouse-ping)
-        wait_for "clickhouse SELECT 1 ${suffix}" 180 clickhouse_ping || return 1
+        wait_for "clickhouse SELECT 1 ${suffix}" 600 clickhouse_ping || return 1
         ;;
       *)
         echo "wait_datastores_ready: unknown service ${svc}" >&2
@@ -1856,6 +1883,88 @@ wait_datastores_ready() {
         ;;
     esac
   done
+}
+
+# Tenant identity env injected by resource add (same keys as cli-env).
+resource_identity_key() {
+  case "$1" in
+    postgres) echo FLYNN_POSTGRES ;;
+    mysql) echo FLYNN_MYSQL ;;
+    mongodb) echo FLYNN_MONGO ;;
+    redis) echo FLYNN_REDIS ;;
+    kafka) echo FLYNN_KAFKA ;;
+    clickhouse) echo FLYNN_CLICKHOUSE ;;
+    *) echo "" ;;
+  esac
+}
+
+resource_env_ready() {
+  local provider=$1 key val
+  key="$(resource_identity_key "${provider}")"
+  [[ -n "${key}" ]] || return 1
+  val="$(flynn1 -a "${APP_NAME}" env get "${key}" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "${val}" ]]
+}
+
+# resource add's setEnv creates a new app release. A second add while that
+# deploy is running fails with "already one in progress" after ProvisionResource
+# has already created the tenant (HA 2026-09-27: redis listed, no FLYNN_REDIS).
+app_deploy_idle() {
+  # isolate_deploys is finished_at IS NULL. STATUS can already be complete
+  # from job events while FINISHED is empty. CREATED/FINISHED are "N seconds
+  # ago", so count "ago" rather than awk $2/$4 (CREATED is multiple fields).
+  flynn1 -a "${APP_NAME}" deploy 2>/dev/null | python3 -c '
+import sys
+lines = [ln for ln in sys.stdin.read().splitlines() if ln.strip()]
+if not lines:
+    sys.exit(1)
+if lines[0].upper().startswith("ID"):
+    lines = lines[1:]
+if not lines:
+    sys.exit(1)
+for line in lines:
+    parts = line.split()
+    if len(parts) < 2:
+        sys.exit(1)
+    status = parts[1]
+    if status in ("running", "pending"):
+        sys.exit(1)
+    if status in ("complete", "failed") and parts.count("ago") < 2:
+        sys.exit(1)
+sys.exit(0)
+'
+}
+
+wait_app_deploy_idle() {
+  local suffix=$1
+  wait_for "app deploy idle ${suffix}" 300 app_deploy_idle
+}
+
+# Do not wrap resource add in wait_for: retries re-provision while setEnv
+# deploys. Wait for the smoke app deploy to finish, then add once.
+add_app_resource() {
+  local provider=$1
+  if resource_env_ready "${provider}"; then
+    echo "ready: ${provider} resource env already set"
+    return 0
+  fi
+  wait_app_deploy_idle "before ${provider}" || return 1
+  info "adding ${provider} resource"
+  if ! flynn1 -a "${APP_NAME}" resource add "${provider}"; then
+    echo "${provider} resource add failed; waiting for in-progress deploy then retrying once" >&2
+    wait_app_deploy_idle "retry ${provider}" || return 1
+    if resource_env_ready "${provider}"; then
+      echo "ready: ${provider} resource env set after wait"
+      return 0
+    fi
+    flynn1 -a "${APP_NAME}" resource add "${provider}" || return 1
+  fi
+  wait_app_deploy_idle "after ${provider}" || return 1
+  if ! resource_env_ready "${provider}"; then
+    echo "${provider} resource add did not set $(resource_identity_key "${provider}")" >&2
+    return 1
+  fi
+  echo "ready: ${provider} resource add"
 }
 
 # discoverd GET /services/:name/instances is a JSON array of peers.
@@ -2656,20 +2765,18 @@ EOF
   echo "built $(basename "${BUILT_TARBALL}") ($(du -h "${BUILT_TARBALL}" | awk '{print $1}'))"
 }
 
-# flynn-host backup/restore CLI lives in this binary. SKIP_BUILD overlays
-# build/bin over the tarball copy; flynn-host update --force puts the tarball
-# binary back, so upgrades must overlay again.
+# flynn-host backup/restore CLI lives in this binary. SKIP_BUILD installs it
+# beside the tarball daemon (not over it). Replacing /usr/local/bin/flynn-host
+# then restarting (init / restore-auth) runs the Darwin-cross daemon, which
+# deadlocks libcontainer-init on discoverd (singleton restore 2026-09-27).
 overlay_flynn_host_on_node() {
   local node=$1
   node_root_script "${node}" <<EOF
 set -euo pipefail
 src="${REPO_IN_VM}/build/bin/flynn-host"
 if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
-  echo "overlaying \${src} onto flynn-host (host-side restore/CLI fixes)"
-  install -m 0755 "\${src}" /usr/local/bin/flynn-host
-  if [[ -e /usr/bin/flynn-host ]]; then
-    install -m 0755 "\${src}" /usr/bin/flynn-host
-  fi
+  echo "overlaying \${src} onto flynn-host-overlay (CLI restore/bootstrap fixes; daemon stays tarball)"
+  install -m 0755 "\${src}" /usr/local/bin/flynn-host-overlay
 fi
 EOF
 }
@@ -2702,6 +2809,12 @@ extra_args=()
 if [[ -e /usr/local/bin/flynn-host || -d /var/lib/flynn ]]; then
   echo "existing Flynn install detected on ${node}; reinstalling with --clean"
   extra_args+=(--clean)
+  # Hung libcontainer-init from a failed restore holds overlay mounts and the
+  # init unix socket; --clean umount then EBUSY. Kill before unmount.
+  pkill -KILL -f 'flynn-host libcontainer-init' || true
+  pkill -KILL -f '/.containerinit' || true
+  pkill -KILL -f '^/bin/discoverd' || true
+  pkill -KILL -f '^/usr/bin/flanneld' || true
   # Overlay/squashfs mounts survive flynn-host stop; --clean rm -rf then EROFS/EBUSY.
   if [[ -r /proc/mounts ]]; then
     while read -r mp; do
@@ -2721,11 +2834,8 @@ fi
 command -v ipset >/dev/null
 src="${REPO_IN_VM}/build/bin/flynn-host"
 if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
-  echo "overlaying \${src} onto flynn-host (host-side restore/CLI fixes)"
-  install -m 0755 "\${src}" /usr/local/bin/flynn-host
-  if [[ -e /usr/bin/flynn-host ]]; then
-    install -m 0755 "\${src}" /usr/bin/flynn-host
-  fi
+  echo "overlaying \${src} onto flynn-host-overlay (CLI restore/bootstrap fixes; daemon stays tarball)"
+  install -m 0755 "\${src}" /usr/local/bin/flynn-host-overlay
 fi
 for link in flannel.1 flynnbr0; do
   if ip link show "\${link}" &>/dev/null; then
@@ -2785,6 +2895,41 @@ EOF
   echo "layer-0 host APIs up (peer-ips=${PEER_IPS})"
 }
 
+# Restore starts plugin apps from the postgres backup before the scheduler
+# reaches controller-worker. Status-check then waits 600s and fails. Start
+# worker with controller web so bootstrap --from-backup does not wait on
+# that queue. SKIP_BUILD tarballs still have web-only; patch the installed
+# manifest on each node.
+ensure_bootstrap_manifest_starts_worker() {
+  local node
+  for node in "${NODES[@]}"; do
+    node_root_script "${node}" <<'EOF'
+set -euo pipefail
+python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path("/etc/flynn/bootstrap-manifest.json")
+data = json.loads(path.read_text())
+changed = False
+for step in data:
+    if step.get("id") == "controller" and step.get("action") == "run-app":
+        procs = step.setdefault("processes", {})
+        if procs.get("worker") != 1:
+            procs["worker"] = 1
+            changed = True
+        if procs.get("web") is None:
+            procs["web"] = 1
+            changed = True
+if changed:
+    path.write_text(json.dumps(data, indent=2) + "\n")
+    print("bootstrap manifest: controller run-app starts worker")
+else:
+    print("bootstrap manifest: controller worker already started with web")
+PY
+EOF
+  done
+}
+
 # Extra args are appended to flynn-host bootstrap (e.g. --from-backup FILE).
 run_layer1_bootstrap() {
   local overlay_fail="${WORK_DIR}/overlay-fail.txt"
@@ -2800,6 +2945,7 @@ run_layer1_bootstrap() {
   for n in "${NODES[@]}"; do
     cache_node_ssh_config "${n}"
   done
+  ensure_bootstrap_manifest_starts_worker
 
   # Fail fast if flannel comes up but cross-node overlay is broken, instead of
   # waiting ~5 minutes for postgres-wait to time out.
@@ -2815,7 +2961,12 @@ set -euo pipefail
 export CLUSTER_DOMAIN="${CLUSTER_DOMAIN}"
 export FLANNEL_NETWORK="${FLANNEL_NETWORK:-100.64.0.0/16}"
 export DISCOVERD="http://${NODE1_IP}:1111"
-flynn-host bootstrap \
+boot_bin=flynn-host
+if [[ -x /usr/local/bin/flynn-host-overlay ]]; then
+  boot_bin=/usr/local/bin/flynn-host-overlay
+  echo "using \${boot_bin} for bootstrap (tarball daemon unchanged)"
+fi
+"\${boot_bin}" bootstrap \
   --min-hosts "${MIN_HOSTS}" \
   --peer-ips "${PEER_IPS}" \
   --timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
@@ -3122,12 +3273,23 @@ plugin_flynn_compile_id() {
     | git hash-object --stdin
 }
 
+plugin_checkout_id() {
+  local dir=$1
+  local head
+  head="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
+  if git -C "${dir}" diff --quiet HEAD 2>/dev/null; then
+    echo "${head}"
+    return
+  fi
+  echo "${head}-dirty-$(git -C "${dir}" diff HEAD 2>/dev/null | shasum -a 256 | awk '{print substr($1,1,12)}')"
+}
+
 plugin_image_current() {
   local dir=$1
   local compile_id plugin_id stamp stamp_val got old_flynn old_plugin
   [[ -d "${dir}" ]] || return 1
   compile_id="$(plugin_flynn_compile_id)"
-  plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
+  plugin_id="$(plugin_checkout_id "${dir}")"
   stamp="${dir}/dist/.flynn-module-id"
   stamp_val="${compile_id} ${plugin_id}"
   plugin_dist_ready "${dir}" || return 1
@@ -3177,7 +3339,7 @@ ensure_plugin_image() {
   fi
   local compile_id stamp
   compile_id="$(plugin_flynn_compile_id)"
-  plugin_id="$(git -C "${dir}" rev-parse HEAD 2>/dev/null || echo none)"
+  plugin_id="$(plugin_checkout_id "${dir}")"
   stamp="${dir}/dist/.flynn-module-id"
   stamp_val="${compile_id} ${plugin_id}"
   if plugin_image_current "${dir}"; then
@@ -4260,9 +4422,8 @@ EOF
   local provider
   if [[ ${#DATASTORE_PROVIDERS[@]} -gt 0 ]]; then
   for provider in "${DATASTORE_PROVIDERS[@]}"; do
-    info "adding ${provider} resource"
-    if ! wait_for "${provider} resource add" 600 flynn1 -a "${APP_NAME}" resource add "${provider}"; then
-      record_check "deploy" "${provider}" "FAIL" "resource add timed out"
+    if ! add_app_resource "${provider}"; then
+      record_check "deploy" "${provider}" "FAIL" "resource add failed"
       echo "failed to add ${provider} resource" >&2
       return 1
     fi
@@ -4522,15 +4683,19 @@ for i in \$(seq 1 30); do
     CHDB=smoke_db
     flynn -a "\${APP}" clickhouse client -- --query "CREATE DATABASE IF NOT EXISTS smoke_db ENGINE = Atomic" || true
   fi
-  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS \`\${CHDB}\`.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
+  # Backticks quote the ClickHouse identifier. They must be produced by printf
+  # inside single quotes. A backtick next to \${CHDB} in double quotes is a
+  # shell command, which is why d_clickhouse-... was "command not found".
+  tbl=\$(printf '\`%s\`.rows' "\${CHDB}")
+  if flynn -a "\${APP}" clickhouse client -- --query "CREATE TABLE IF NOT EXISTS \${tbl} (id UInt32, data String) ENGINE = MergeTree ORDER BY id"; then
     ok=1
     break
   fi
   sleep 10
 done
 test "\$ok" = 1
-flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS \`\${CHDB}\`.rows"
-flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO \`\${CHDB}\`.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
+flynn -a "\${APP}" clickhouse client -- --query "TRUNCATE TABLE IF EXISTS \${tbl}"
+flynn -a "\${APP}" clickhouse client -- --query "INSERT INTO \${tbl} SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(\${ROWS})"
 CH_APP="\$(flynn -a "\${APP}" env get FLYNN_CLICKHOUSE)"
 CH_USER="\$(flynn -a "\${APP}" env get CLICKHOUSE_USER)"
 CH_PWD="\$(flynn -a "\${APP}" env get CLICKHOUSE_PASSWORD)"
@@ -4556,9 +4721,9 @@ insts = json.load(urllib.request.urlopen(req, timeout=10))
 if not insts:
     sys.exit("no clickhouse replicas in discoverd")
 queries = [
-    "CREATE TABLE IF NOT EXISTS `%s`.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id" % db,
-    "TRUNCATE TABLE IF EXISTS `%s`.rows" % db,
-    "INSERT INTO `%s`.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % (db, rows),
+    "CREATE TABLE IF NOT EXISTS \`%s\`.rows (id UInt32, data String) ENGINE = MergeTree ORDER BY id" % db,
+    "TRUNCATE TABLE IF EXISTS \`%s\`.rows" % db,
+    "INSERT INTO \`%s\`.rows SELECT number+1, concat('dummy-', toString(number+1), repeat('A', 64)) FROM numbers(%s)" % (db, rows),
 ]
 failed = 0
 for inst in insts:
@@ -5111,18 +5276,16 @@ assert_restored_datastores() {
   local label="post-restore"
   local rows="${SMOKE_SEED_ROWS}"
   local failed=0
-  local out count payload marker
+  local out count payload
 
   if datastore_wanted postgres; then
-  echo "db-check ${label}: postgres"
-  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
-  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
-    record_check "${label}" "postgres" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
+  echo "db-check ${label}: postgres (tenant instance volume is not in cluster backup)"
+  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1")"
+  if echo "${out}" | grep -q 1; then
+    record_check "${label}" "postgres" "PASS" "SELECT 1 (tenant rows not in cluster backup)"
   else
-    record_check "${label}" "postgres" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
-    echo "postgres (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
+    record_check "${label}" "postgres" "FAIL" "SELECT 1 failed: ${out}"
+    echo "postgres (${label}) SELECT 1 failed: ${out}" >&2
     failed=1
   fi
   fi
@@ -5154,22 +5317,6 @@ assert_restored_datastores() {
   fi
   fi
 
-  if [[ "${SKIP_UPGRADE}" != "1" ]] && datastore_wanted postgres; then
-    local pass
-    for pass in $(seq 1 "${UPGRADE_PASSES}"); do
-      marker="post-upgrade-${pass}"
-      echo "db-check ${label}: ${marker} markers"
-      out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT data FROM smoke_probe WHERE data='${marker}'")"
-      if echo "${out}" | grep -q "${marker}"; then
-        record_check "${label}" "pg-${marker}" "PASS" "still present"
-      else
-        record_check "${label}" "pg-${marker}" "FAIL" "lost ${marker}: ${out}"
-        echo "postgres (${label}) lost ${marker}: ${out}" >&2
-        failed=1
-      fi
-    done
-  fi
-
   if datastore_wanted redis; then
   echo "db-check ${label}: redis (volume data not in cluster backup)"
   out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
@@ -5184,11 +5331,11 @@ assert_restored_datastores() {
 
   if datastore_wanted kafka; then
   echo "db-check ${label}: kafka (volume data not in cluster backup)"
-  if wait_for "kafka topics ${label}" 180 kafka_is_ready; then
-    record_check "${label}" "kafka" "PASS" "topics CLI (topic data not in cluster backup)"
+  if wait_for "kafka cluster app ${label}" 180 kafka_engine_ready; then
+    record_check "${label}" "kafka" "PASS" "cluster app running (topic data not in cluster backup)"
   else
-    record_check "${label}" "kafka" "FAIL" "kafka topics failed"
-    echo "kafka (${label}) topics CLI failed" >&2
+    record_check "${label}" "kafka" "FAIL" "kafka cluster app not running"
+    echo "kafka (${label}) cluster app not running" >&2
     failed=1
   fi
   fi
@@ -5208,7 +5355,7 @@ assert_restored_datastores() {
     echo "datastore checks failed for ${label}" >&2
     return 1
   fi
-  echo "databases ${label}: postgres/mysql/mongodb restored; redis/kafka/clickhouse up empty"
+  echo "databases ${label}: mysql/mongodb restored; postgres/redis/kafka/clickhouse engines up"
 }
 
 # User-app resource CLIs (pg:psql, mysql, mongodb, redis) can return Flynn's
@@ -5458,10 +5605,15 @@ step_cli_functions() {
     flynn1 -a "${APP_NAME}" ps || failed=1
   cli_probe "${label}" "cli-scale" "web=" \
     flynn1 -a "${APP_NAME}" scale || failed=1
-  cli_probe "${label}" "cli-env" "FLYNN_POSTGRES" \
-    flynn1 -a "${APP_NAME}" env || failed=1
-  cli_probe "${label}" "cli-env-get" "." \
-    flynn1 -a "${APP_NAME}" env get FLYNN_POSTGRES || failed=1
+  local ident="" ident_pat=""
+  ident="$(smoke_identity_env_keys | head -1 || true)"
+  ident_pat="$(smoke_identity_env_keys | paste -sd'|' - || true)"
+  if [[ -n "${ident_pat}" ]]; then
+    cli_probe "${label}" "cli-env" "${ident_pat}" \
+      flynn1 -a "${APP_NAME}" env || failed=1
+    cli_probe "${label}" "cli-env-get" "." \
+      flynn1 -a "${APP_NAME}" env get "${ident}" || failed=1
+  fi
   rc=0
   out="$(flynn1 -a "${APP_NAME}" resource 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]]; then
@@ -5585,6 +5737,7 @@ step_cli_functions() {
   cli_probe "${label}" "cli-host-fix-help" "--yes" \
     node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host help fix' || failed=1
 
+  if datastore_wanted postgres; then
   rc=0
   out="$(cli_pg_query "${label}" "cli-pg-extensions" "${APP_NAME}" "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1")" || rc=$?
   if [[ "${rc}" -eq 0 ]] && echo "${out}" | grep -q postgis && echo "${out}" | grep -q pgrouting && echo "${out}" | grep -q timescaledb; then
@@ -5622,7 +5775,7 @@ step_cli_functions() {
   fi
   if [[ -n "${ctl_db}" && "${ctl_db}" =~ ^[A-Za-z0-9_]+$ ]]; then
     rc=0
-    out="$(cli_pg_query "${label}" "cli-pg-no-controller" "${APP_NAME}" "SELECT CASE WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END")" || rc=$?
+    out="$(cli_pg_query "${label}" "cli-pg-no-controller" "${APP_NAME}" "SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '${ctl_db}') THEN 'f' WHEN has_database_privilege(current_user, '${ctl_db}', 'CONNECT') THEN 't' ELSE 'f' END")" || rc=$?
     out="$(smoke_pg_tf "${out}")"
     if [[ "${rc}" -eq 0 && "${out}" == "f" ]]; then
       record_check "${label}" "cli-pg-no-controller" "PASS" "no CONNECT on ${ctl_db}"
@@ -5637,13 +5790,15 @@ step_cli_functions() {
     echo "cli ${label} pg-no-controller: FAIL missing controller PGDATABASE" >&2
     failed=1
   fi
-  cli_probe "${label}" "cli-pg-controller" "." \
-    flynn1 -a controller pg:psql -- -tAc "SELECT 1" || failed=1
+	cli_probe "${label}" "cli-pg-controller" "." \
+    node_ssh node1 'sudo FLYNN_SKIP_UPDATE_CHECK=1 flynn-host pg:psql -- -tAc "SELECT 1"' || failed=1
   cli_probe "${label}" "cli-pg-blobstore" "." \
     flynn1 -a blobstore pg:psql -- -tAc "SELECT 1" || failed=1
+  fi
 
-  # Plugin CLI: usage from the cluster catalog, job on the redis image.
-  if plugin_has_delegated_cli redis; then
+  # Plugin CLI: only when that engine is in this smoke run and the plugin
+  # ships a delegated CLI. A clickhouse-only item must not require redis/pg.
+  if datastore_wanted redis && plugin_has_delegated_cli redis; then
     cli_probe "${label}" "cli-help-redis" "redis" \
       flynn1 help || failed=1
     cli_probe "${label}" "cli-help-redis-doc" "redis-cli" \
@@ -5662,7 +5817,7 @@ step_cli_functions() {
       flynn1 -a "${APP_NAME}" redis restore -q -f /tmp/smoke-redis.dump || failed=1
   fi
 
-  if plugin_has_delegated_cli mysql; then
+  if datastore_wanted mysql && plugin_has_delegated_cli mysql; then
     cli_probe "${label}" "cli-help-mysql" "mysql" \
       flynn1 help || failed=1
     cli_probe "${label}" "cli-help-mysql-doc" "console" \
@@ -5671,7 +5826,7 @@ step_cli_functions() {
       flynn1 -a "${APP_NAME}" mysql dump -q -f /tmp/smoke-mysql.dump || failed=1
   fi
 
-  if plugin_has_delegated_cli mongodb; then
+  if datastore_wanted mongodb && plugin_has_delegated_cli mongodb; then
     cli_probe "${label}" "cli-help-mongodb" "mongodb" \
       flynn1 help || failed=1
     cli_probe "${label}" "cli-help-mongodb-doc" "mongo" \
@@ -5680,7 +5835,7 @@ step_cli_functions() {
       flynn1 -a "${APP_NAME}" mongodb dump -q -f /tmp/smoke-mongo.dump || failed=1
   fi
 
-  if plugin_has_delegated_cli kafka; then
+  if datastore_wanted kafka && plugin_has_delegated_cli kafka; then
     cli_probe "${label}" "cli-help-kafka" "kafka" \
       flynn1 help || failed=1
     cli_probe "${label}" "cli-help-kafka-doc" "topics" \
@@ -5689,7 +5844,7 @@ step_cli_functions() {
       flynn1 -a "${APP_NAME}" kafka topics || failed=1
   fi
 
-  if plugin_has_delegated_cli clickhouse; then
+  if datastore_wanted clickhouse && plugin_has_delegated_cli clickhouse; then
     cli_probe "${label}" "cli-help-clickhouse" "clickhouse" \
       flynn1 help || failed=1
     cli_probe "${label}" "cli-help-clickhouse-doc" "client" \

@@ -109,6 +109,8 @@ The root `Vagrantfile` uses the `bento/ubuntu-24.04` box.
 
 - `vagrant up builder` — build VM (`setup.sh` installs Go, Docker, ZFS, and appliance test deps)
 - `vagrant up node1 node2 node3` — a three-node cluster on a host-only network
+- `script/vagrant-smoke.sh` — acceptance suite (`--item quick`); also `status` / `ssh` / `up` / `reload` / `stop` / `destroy` for `.vagrant` (aliases `restart` / `halt` / `teardown`)
+- `script/vagrant-dev.sh` — laptop loop in `.vagrant-dev` (`dev-builder` at 192.168.57.10); artifacts in `./build-dev` so they do not overwrite smoke’s `./build`; `reload` / `stop` / `destroy` (aliases `restart` / `halt` / `teardown`)
 
 See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/content/development.html.md).
 
