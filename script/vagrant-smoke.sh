@@ -19,6 +19,8 @@
 #   script/vagrant-smoke.sh --item singleton   # one named configuration
 #   SMOKE_TOPOLOGIES=3 script/vagrant-smoke.sh # env still overrides topologies
 #   SKIP_BUILD=1 script/vagrant-smoke.sh       # reuse the last tarball
+#   script/vagrant-smoke.sh --item singleton --datastore postgres
+#   script/vagrant-smoke.sh --item singleton --datastore redis --datastore kafka
 #
 # Incremental rebuilds: build.sh keeps the image layer cache and a shared Go
 # build cache on the builder between runs, so after a fix only the layers whose

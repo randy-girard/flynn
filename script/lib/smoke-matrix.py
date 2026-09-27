@@ -503,7 +503,12 @@ def cmd_apply_run(args: argparse.Namespace) -> int:
         fields["skip_plugin_install"] = "SKIP_PLUGIN_INSTALL"
     lines = assignments(fields, run_values, expl)
     # Images are built once, before any item applies its own plugin list.
-    if "PLUGIN_SMOKE_APPS" not in expl:
+    # --datastore / SMOKE_DATASTORES builds only those engine images.
+    if "PLUGIN_SMOKE_APPS" not in expl and "SMOKE_DATASTORES" in expl:
+        only = [p for p in expl["SMOKE_DATASTORES"].split() if p and p != "none"]
+        if only:
+            lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(only))}")
+    elif "PLUGIN_SMOKE_APPS" not in expl:
         names = union_plugins(matrix, items)
         if names:
             lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(names))}")
@@ -523,9 +528,18 @@ def cmd_apply_item(args: argparse.Namespace) -> int:
     item = items[0]
     merged = merge_item(matrix, item)
     expl = explicit_env()
-    lines = assignments(ITEM_FIELDS, merged, expl)
+    assign_from = dict(merged)
+    if "SMOKE_DATASTORES" in expl and "PLUGIN_SMOKE_APPS" not in expl:
+        assign_from.pop("plugins", None)
+    lines = assignments(ITEM_FIELDS, assign_from, expl)
     lines.append(f"SMOKE_MATRIX_ITEM={shlex.quote(str(item['id']))}")
-    if "PLUGIN_SMOKE_APPS" not in expl and "plugins" in merged and merged["plugins"] is not None:
+    if "PLUGIN_SMOKE_APPS" not in expl and "SMOKE_DATASTORES" in expl:
+        only = [p for p in expl["SMOKE_DATASTORES"].split() if p and p != "none"]
+        if only:
+            quoted = shlex.quote(" ".join(only))
+            lines.append(f"PLUGIN_SMOKE_APPS={quoted}")
+            lines.append(f"PLUGIN_SMOKE_APPS_REQUESTED={quoted}")
+    elif "PLUGIN_SMOKE_APPS" not in expl and "plugins" in merged and merged["plugins"] is not None:
         plugins = _env_value("plugins", merged["plugins"])
         lines.append(f"PLUGIN_SMOKE_APPS_REQUESTED={shlex.quote(plugins)}")
     sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))

@@ -126,6 +126,10 @@
 #                        clickhouse). "none" attaches nothing: the platform
 #                        Postgres appliance still boots, but the smoke app does
 #                        not resource:add postgres onto it. Matrix field: datastores.
+#   --datastore ENGINE   Smoke one engine (repeatable). Same as
+#                        SMOKE_DATASTORES="postgres" and only that plugin image
+#                        is built. Example:
+#                        script/vagrant-smoke.sh --item singleton --datastore postgres
 #   WAIT_FOR_INTERVAL    Seconds between wait_for polls [default: 2]
 #   SMOKE_TOPOLOGIES     Comma-separated topologies, each getting
 #                        install/bootstrap/deploy/verify/upgrade/backup/CLI.
@@ -252,6 +256,17 @@ parse_smoke_cli() {
         _smoke_matrix_add_items "${1#*=}"
         shift
         ;;
+      --datastore|--engine)
+        if [[ $# -lt 2 ]]; then
+          fail "--datastore requires an engine (postgres, mysql, mongodb, redis, kafka, clickhouse)"
+        fi
+        _smoke_add_datastore "$2"
+        shift 2
+        ;;
+      --datastore=*|--engine=*)
+        _smoke_add_datastore "${1#*=}"
+        shift
+        ;;
       --)
         shift
         break
@@ -264,6 +279,21 @@ parse_smoke_cli() {
         ;;
     esac
   done
+}
+
+_smoke_add_datastore() {
+  local name=$1
+  case "${name}" in
+    postgres|mysql|mongodb|redis|kafka|clickhouse|none) ;;
+    *) fail "unknown datastore ${name} (postgres, mysql, mongodb, redis, kafka, clickhouse, none)" ;;
+  esac
+  if [[ -z "${SMOKE_DATASTORES_CLI:-}" ]]; then
+    SMOKE_DATASTORES_CLI="${name}"
+  else
+    SMOKE_DATASTORES_CLI="${SMOKE_DATASTORES_CLI} ${name}"
+  fi
+  SMOKE_DATASTORES="${SMOKE_DATASTORES_CLI}"
+  export SMOKE_DATASTORES
 }
 
 parse_smoke_cli "$@"

@@ -13,6 +13,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
+	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -144,11 +145,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
-	env := make(map[string]*string)
-	for k, v := range res.Env {
-		s := v
-		env[k] = &s
-	}
+	env := appliedAttachmentEnv(client, res.Env)
 
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
@@ -247,6 +244,55 @@ func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw,
 	return &msg, nil
 }
 
+func appliedAttachmentEnv(client controller.Client, incoming map[string]string) map[string]*string {
+	existing := map[string]string{}
+	if release, err := client.GetAppRelease(mustApp()); err == nil && release != nil && release.Env != nil {
+		existing = release.Env
+	}
+	merged := resname.MergeAttachment(existing, incoming)
+	env := make(map[string]*string, len(merged))
+	for k, v := range merged {
+		s := v
+		env[k] = &s
+	}
+	return env
+}
+
+func renameAttachmentAs(env map[string]*string, as string) map[string]*string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	if as == "" {
+		return env
+	}
+	var val string
+	for k, v := range env {
+		if v != nil && strings.HasSuffix(k, "_URL") && strings.Contains(*v, "://") {
+			val = *v
+			delete(env, k)
+			break
+		}
+	}
+	if val != "" {
+		env[as+"_URL"] = &val
+	}
+	return env
+}
+
+func unsetMatchingURLs(env map[string]*string, release, resource map[string]string) {
+	if release == nil || resource == nil {
+		return
+	}
+	for k, v := range release {
+		if !strings.HasSuffix(k, "_URL") || !strings.Contains(v, "://") {
+			continue
+		}
+		for _, rv := range resource {
+			if v == rv {
+				env[k] = nil
+			}
+		}
+	}
+}
+
 func singleAttachmentEnv(resourceEnv map[string]string, as string) (map[string]string, error) {
 	var key, val string
 	n := 0
@@ -273,21 +319,9 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	env := make(map[string]*string)
-	if provider == "postgres" {
-		one, err := singleAttachmentEnv(res.Env, args.String["--as"])
-		if err != nil {
-			return err
-		}
-		for k, v := range one {
-			s := v
-			env[k] = &s
-		}
-	} else {
-		for k, v := range res.Env {
-			s := v
-			env[k] = &s
-		}
+	env := appliedAttachmentEnv(client, res.Env)
+	if as := strings.TrimSpace(args.String["--as"]); as != "" {
+		env = renameAttachmentAs(env, as)
 	}
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
@@ -314,18 +348,7 @@ func runResourceDetach(args *docopt.Args, client controller.Client) error {
 			env[k] = nil
 		}
 	}
-	if provider == "postgres" {
-		for k, v := range release.Env {
-			if !strings.HasSuffix(k, "_URL") {
-				continue
-			}
-			for _, rv := range res.Env {
-				if v == rv {
-					env[k] = nil
-				}
-			}
-		}
-	}
+	unsetMatchingURLs(env, release.Env, res.Env)
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err
@@ -364,6 +387,7 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 			env[k] = nil
 		}
 	}
+	unsetMatchingURLs(env, release.Env, res.Env)
 
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {

@@ -245,4 +245,23 @@ if [[ "${inv}" != "3" ]]; then
 fi
 rm -f "${tmp}"
 
+need "${smoke}" '--datastore' \
+  "smoke must accept --datastore to run one engine"
+need "${entry}" '--datastore postgres' \
+  "vagrant-smoke must document a single-engine run"
+
+out="$(SMOKE_MATRIX_EXPLICIT='{"SMOKE_DATASTORES":"postgres"}' python3 "${py}" --root "${ROOT}" --matrix "${example}" --item singleton apply-item)"
+echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=postgres' \
+  || { echo "one datastore must build only that plugin" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=.*redis'; then
+  echo "postgres-only smoke must not build redis" >&2
+  echo "${out}" >&2
+  exit 1
+fi
+echo "${out}" | grep -q 'SMOKE_DATASTORES=' && {
+  echo "explicit SMOKE_DATASTORES must not be rewritten by the matrix" >&2
+  echo "${out}" >&2
+  exit 1
+} || true
+
 echo "ok smoke matrix is file-driven with env overrides and --item"

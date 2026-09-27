@@ -72,3 +72,83 @@ func index(n int) int {
 	}
 	return int(b[0]) % n
 }
+
+// identityEnv is the resource app name on a provision response, and the URL
+// variable that engine uses for the first attachment on an app.
+var identityEnv = []struct{ name, url string }{
+	{"FLYNN_REDIS", "REDIS_URL"},
+	{"FLYNN_KAFKA", "KAFKA_URL"},
+	{"FLYNN_CLICKHOUSE", "CLICKHOUSE_URL"},
+	{"FLYNN_MYSQL", "DATABASE_URL"},
+	{"FLYNN_MONGO", "DATABASE_URL"},
+	{"FLYNN_MONGODB", "DATABASE_URL"},
+	{"FLYNN_POSTGRES", "DATABASE_URL"},
+}
+
+// MergeAttachment copies a provision response onto an app.
+// The first database of that type keeps the usual variable (DATABASE_URL,
+// REDIS_URL, KAFKA_URL, CLICKHOUSE_URL). A later one is
+// PREFIX_WORD_DATABASE_URL from the resource name pg-harbor-kxmnpq, and it
+// does not replace the first attachment's variables.
+func MergeAttachment(existing, incoming map[string]string) map[string]string {
+	out := map[string]string{}
+	if len(incoming) == 0 {
+		return out
+	}
+	name, conv := resourceIdentity(incoming)
+	if conv != "" && strings.TrimSpace(existing[conv]) != "" && name != "" {
+		val := incoming[conv]
+		if val == "" {
+			val = incoming["POSTGRES_URL"]
+		}
+		if key := ExtraDatabaseURL(name, func(k string) bool { return existing[k] != "" }); key != "" && val != "" {
+			out[key] = val
+		}
+		for k, v := range incoming {
+			if k == conv || existing[k] != "" {
+				continue
+			}
+			out[k] = v
+		}
+		return out
+	}
+	for k, v := range incoming {
+		out[k] = v
+	}
+	return out
+}
+
+func resourceIdentity(env map[string]string) (name, urlKey string) {
+	for _, id := range identityEnv {
+		if v := strings.TrimSpace(env[id.name]); v != "" {
+			return v, id.url
+		}
+	}
+	return "", ""
+}
+
+// ExtraDatabaseURL is PREFIX_WORD_DATABASE_URL. If that key is taken, the
+// six-letter suffix is included so two resources that share a word stay distinct.
+func ExtraDatabaseURL(resourceApp string, taken func(string) bool) string {
+	prefix, word, suffix, ok := splitAppName(resourceApp)
+	if !ok {
+		return ""
+	}
+	key := strings.ToUpper(prefix+"_"+word) + "_DATABASE_URL"
+	if taken != nil && taken(key) {
+		key = strings.ToUpper(prefix+"_"+word+"_"+suffix) + "_DATABASE_URL"
+	}
+	return key
+}
+
+func splitAppName(resourceApp string) (prefix, word, suffix string, ok bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(resourceApp)), "-")
+	if len(parts) < 3 {
+		return "", "", "", false
+	}
+	prefix, word, suffix = parts[0], parts[1], parts[len(parts)-1]
+	if prefix == "" || word == "" || len(suffix) < 6 {
+		return "", "", "", false
+	}
+	return prefix, word, suffix, true
+}

@@ -249,6 +249,12 @@ need '</dev/null' \
   "flynn1 must close stdin so clickhouse-client INSERT cannot hang on a TTY"
 need 'clickhouse_rows_table\) SELECT' \
   "clickhouse marker rows must use INSERT SELECT (INSERT VALUES waits on stdin)"
+python3 - "${smoke}" <<'PY'
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+if "\\`\\${CHDB}\\`" not in t:
+    raise SystemExit("clickhouse identifiers must be quoted so hyphenated names are not subtraction")
+PY
 need 'RESUME_AT=upgrade' \
   "smoke must be able to resume at the --force update after a hung pre-upgrade verify"
 need 'RESUME_AT=backup' \
