@@ -5,10 +5,16 @@ import (
 	"github.com/randy-girard/flynn/pkg/sirenia/ha"
 )
 
-// maybePromoteSireniaHA flips singleton postgres/MariaDB/MongoDB appliances to
-// HA when the cluster has at least three active hosts. Releases are immutable,
-// so SINGLETON=false is a new release at scale 1 (volume handoff), then a later
+// maybePromoteSireniaHA flips the platform postgres appliance to HA when the
+// cluster has at least three active hosts. Releases are immutable, so
+// SINGLETON=false is a new release at scale 1 (volume handoff), then a later
 // pass scales the data process to 3 once that primary is running.
+//
+// Plugin mysql/mongodb stay singleton until the operator adds a replica
+// (mysql:nodes:add / mongodb:nodes:add). Auto-promoting them on a 3-host
+// Flynn cluster races the first resource:add: ScaleUp sees a primary, then
+// the env flip elects a new replica set and create-user hits
+// NotWritablePrimary.
 func (s *Scheduler) maybePromoteSireniaHA() {
 	if !s.IsLeader() || s.activeHostCount() < ha.MinHosts {
 		return
@@ -16,6 +22,9 @@ func (s *Scheduler) maybePromoteSireniaHA() {
 	seen := make(map[string]struct{})
 	for _, f := range s.formations {
 		if f == nil || f.App == nil || f.Release == nil || !f.Release.IsSirenia() {
+			continue
+		}
+		if f.App.Plugin() {
 			continue
 		}
 		appID := f.App.ID

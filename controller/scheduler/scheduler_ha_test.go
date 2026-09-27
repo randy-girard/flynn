@@ -168,3 +168,46 @@ func (TestSuite) TestMaybePromoteSireniaHARequiresLeader(c *C) {
 	c.Assert(active, HasLen, 1)
 	c.Assert(active[0].Release.Env["SINGLETON"], Equals, "true")
 }
+
+func (TestSuite) TestMaybePromoteSireniaHASkipsPluginApps(c *C) {
+	cc := NewFakeControllerClient()
+	app := &ct.App{
+		ID:   "mongodb",
+		Name: "mongodb",
+		Meta: map[string]string{"flynn-plugin": "true"},
+	}
+	release := &ct.Release{
+		ID:  "mongo-single",
+		Env: map[string]string{"SIRENIA_PROCESS": "mongodb", "SINGLETON": "true"},
+	}
+	c.Assert(cc.CreateApp(app), IsNil)
+	c.Assert(cc.CreateRelease(app.ID, release), IsNil)
+	procs := map[string]int{"mongodb": 1, "web": 1}
+	c.Assert(cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: procs}), IsNil)
+
+	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), log15.New())
+	leader := true
+	s.isLeader = &leader
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{
+		App:       app,
+		Release:   release,
+		Processes: procs,
+	}))
+	for _, id := range []string{"h1", "h2", "h3"} {
+		s.hosts[id] = &Host{ID: id}
+	}
+	s.jobs["mongo-1"] = &Job{
+		AppID:     app.ID,
+		ReleaseID: release.ID,
+		Type:      "mongodb",
+		State:     JobStateRunning,
+	}
+
+	s.maybePromoteSireniaHA()
+	active, err := cc.FormationListActive()
+	c.Assert(err, IsNil)
+	c.Assert(active, HasLen, 1)
+	c.Assert(active[0].Release.ID, Equals, release.ID)
+	c.Assert(active[0].Release.Env["SINGLETON"], Equals, "true")
+	c.Assert(active[0].Processes["mongodb"], Equals, 1)
+}

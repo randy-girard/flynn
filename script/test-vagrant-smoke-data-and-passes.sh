@@ -259,6 +259,11 @@ if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(maria
   echo "mysql/mongodb plugins stay singleton until a replica is added; HA wait is postgres only" >&2
   exit 1
 fi
+ha_go="${ROOT}/controller/scheduler/scheduler_ha.go"
+if ! grep -q 'f.App.Plugin()' "${ha_go}"; then
+  echo "maybePromoteSireniaHA must skip plugin apps; mysql/mongo stay singleton until nodes:add" >&2
+  exit 1
+fi
 need 'wait_selected_datastores_ready "after upgrade' \
   "after each --force update, smoke must wait for the selected datastore engines"
 need 'smoke_identity_env_keys' \
