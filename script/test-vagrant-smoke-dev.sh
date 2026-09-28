@@ -87,10 +87,26 @@ if ! grep -Fq 'start-stop-daemon' "${ROOT}/script/start-flynn-host"; then
   echo "start-flynn-host must keep start-stop-daemon (vagrant-dev is not systemd flynn-host)" >&2
   exit 1
 fi
+if ! grep -Fq 'cli-add-command' "${ROOT}/script/vagrant-dev-creds.sh"; then
+  echo "vagrant-dev-creds.sh must read AUTH_KEY from the running controller job, not leftover host.json" >&2
+  exit 1
+fi
 if ! grep -Fq 'FLYNN_DEV_PIN=' "${ROOT}/script/vagrant-dev-creds.sh"; then
   echo "vagrant-dev-creds.sh must print labeled FLYNN_DEV_PIN so ssh banners cannot steal line 1" >&2
   exit 1
 fi
+if ! grep -Fq 'rejected cluster key' "${ROOT}/cli/cluster.go"; then
+  echo "cluster:add must fail on GET /apps 401 so setup does not store a leftover host.json key" >&2
+  exit 1
+fi
+sample_add=$'Install the Flynn CLI\n\nflynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default 1.localflynn.com e09dc5301d72be755a3d666f617c4600\n'
+python3 - <<PY
+import re
+text = """${sample_add}"""
+m = re.search(r"flynn cluster:add -p (\S+) \S+ \S+ (\S+)\s*$", text, re.M)
+if not m or m.group(2) != "e09dc5301d72be755a3d666f617c4600":
+    raise SystemExit("cli-add-command parse failed")
+PY
 if ! grep -Fq 'parse_dev_creds' "${script}"; then
   echo "vagrant-dev.sh must parse labeled creds, not ssh stdout line 1/2" >&2
   exit 1
@@ -113,6 +129,30 @@ if ! grep -Fq 'discoverd.DefaultClient = discoverd.NewClient()' "${ROOT}/host/ho
 fi
 if ! grep -Fq 'FLYNN_SKIP_UPDATE_CHECK' "${ROOT}/script/vagrant-dev-mac.sh"; then
   echo "vagrant-dev-mac.sh must skip the CLI update nag during cluster:add" >&2
+  exit 1
+fi
+if ! grep -Fq 'FLYNN_KEEP_CLUSTER=1' "${ROOT}/script/vagrant-dev.sh"; then
+  echo "vagrant-dev.sh build must keep a bootstrapped cluster (build.sh cluster stop-all kills discoverd)" >&2
+  exit 1
+fi
+if ! grep -Fq 'keep_bootstrapped_cluster' "${ROOT}/build.sh"; then
+  echo "build.sh must skip teardown/stop-all when FLYNN_KEEP_CLUSTER=1 and host.json exist" >&2
+  exit 1
+fi
+if ! grep -Fq 'startStopDaemonRestartScript' "${ROOT}/host/cli/github_updater.go"; then
+  echo "flynn-host update must restart start-stop-daemon on vagrant-dev" >&2
+  exit 1
+fi
+if ! grep -Fq -e '--bin-dir=' "${ROOT}/script/vagrant-dev-update.sh"; then
+  echo "vagrant-dev-update.sh must install the tarball into build/bin for start-flynn-host" >&2
+  exit 1
+fi
+if ! grep -Fq 'treating as not bootstrapped' "${ROOT}/script/vagrant-dev-ensure-cluster.sh"; then
+  echo "ensure-cluster must exit 2 when leftover host.json has no controller so setup bootstraps" >&2
+  exit 1
+fi
+if ! grep -Fq 'host_json_bootstrapped' "${ROOT}/script/vagrant-dev-ensure-cluster.sh"; then
+  echo "ensure-cluster must ignore a guest-cli DISCOVERD-only host.json stub" >&2
   exit 1
 fi
 sample=$'Welcome to Ubuntu\nFLYNN_DEV_PIN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nFLYNN_DEV_KEY=0123456789abcdef0123456789abcdef\n'

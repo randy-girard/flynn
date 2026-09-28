@@ -72,9 +72,13 @@ script/vagrant-dev.sh stop       # halt VMs (disks stay)
 script/vagrant-dev.sh destroy    # delete VMs (alias: teardown); ./build-dev stays
 script/vagrant-dev.sh status
 script/vagrant-dev.sh ssh
+script/vagrant-dev.sh build      # rebuild cluster images; keeps a bootstrapped cluster running
+script/vagrant-dev.sh update     # flynn-host update from the new tarball
 ```
 
 `reload` / `restart` run `vagrant reload --no-provision` on every machine already in `.vagrant-dev` (or the names you pass, e.g. `script/vagrant-dev.sh reload dev-node1`). They do not create missing VMs. Nested `script/bootstrap-flynn` on **dev-builder** does not install a boot-time systemd unit, so after a reboot the script starts `flynn-host` again if the cluster was already bootstrapped.
+
+`script/vagrant-dev.sh build` sets `FLYNN_KEEP_CLUSTER=1` so `build.sh cluster` does not `stop-all` / `install-flynn --remove` a bootstrapped cluster. Without that, discoverd on `192.0.2.200:1111` is gone and `flynn-host ps` fails with connection refused. `update` restarts the start-stop-daemon flynn-host (this VM has no `flynn-host.service`). If a previous `build` already tore the cluster down, `setup` treats leftover `/etc/flynn/host.json` as not bootstrapped and runs `bootstrap-flynn` again. Laptop `cluster:add` reads the controller job `AUTH_KEY` (`flynn-host cli-add-command`), not a stale `host.json` secret; `GET /ca-cert` does not check the key, so a leftover key used to look like success and then `GET /apps` returned 401.
 
 `stop` / `halt` run `vagrant halt`. `destroy` / `teardown` run `vagrant destroy -f`. Both stay in `.vagrant-dev` and do not touch smoke. Destroy does not delete `./build-dev` or `./flynn-logs`.
 

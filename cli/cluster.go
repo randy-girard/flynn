@@ -23,6 +23,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/backup"
+	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/term"
 )
@@ -179,7 +180,7 @@ func runClusterAdd(args *docopt.Args) error {
 	if err := readConfig(); err != nil {
 		return err
 	}
-	key := args.String["<key>"]
+	key := strings.TrimSpace(args.String["<key>"])
 	if tok := strings.TrimSpace(args.String["--token"]); tok != "" {
 		key = tok
 	}
@@ -267,6 +268,15 @@ func runClusterAdd(args *docopt.Args) error {
 		}
 	}
 
+	// GET /ca-cert is unauthenticated. Prove a cluster key before writing
+	// ~/.flynnrc so setup does not print "Cluster added" and then 401 on
+	// flynn apps. Personal access tokens are scoped and may not list apps.
+	if args.String["--token"] == "" {
+		if err := verifyClusterKey(s); err != nil {
+			return err
+		}
+	}
+
 	if err := config.SaveTo(configPath()); err != nil {
 		return err
 	}
@@ -275,6 +285,20 @@ func runClusterAdd(args *docopt.Args) error {
 		log.Printf("Cluster %q added and set as default.", s.Name)
 	} else {
 		log.Printf("Cluster %q added.", s.Name)
+	}
+	return nil
+}
+
+func verifyClusterKey(s *cfg.Cluster) error {
+	client, err := s.Client()
+	if err != nil {
+		return err
+	}
+	if _, err := client.AppList(); err != nil {
+		if httpclient.IsUnauthorized(err) {
+			return fmt.Errorf("controller rejected cluster key (HTTP 401) on GET /apps. GET /ca-cert does not check the key. Use AUTH_KEY from the running controller job (flynn-host cli-add-command), not a leftover /etc/flynn/host.json secret")
+		}
+		log.Printf("warning: could not list apps after cluster:add: %v", err)
 	}
 	return nil
 }

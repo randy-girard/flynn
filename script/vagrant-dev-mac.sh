@@ -29,7 +29,11 @@ rm -f "${hosts_tmp}"
 
 export FLYNN_SKIP_UPDATE_CHECK=1
 flynn cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
-flynn -c local apps >/dev/null
+if ! flynn -c local apps >/dev/null; then
+  echo "controller rejected the cluster key on GET /apps (cluster:add only checks TLS/CA)." >&2
+  echo "Re-run setup after pulling the latest script/vagrant-dev-creds.sh, or from the VM: sudo flynn-host cli-add-command" >&2
+  exit 1
+fi
 
 ca="${HOME}/.flynn/ca-certs/local.pem"
 if [[ -f "${ca}" ]]; then
