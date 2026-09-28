@@ -52,6 +52,22 @@ func TestLocalImagesJSONAndEnv(t *testing.T) {
 	}
 }
 
+func TestLocalImagesJSONUsesFLYNNRoot(t *testing.T) {
+	root := t.TempDir()
+	img := filepath.Join(root, "build", "images.json")
+	if err := os.MkdirAll(filepath.Dir(img), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(img, []byte(`{"ubuntu-noble":{"type":"flynn"}}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvImagesJSON, "")
+	t.Setenv("FLYNN_ROOT", root)
+	if localImagesJSONPath() != img {
+		t.Fatalf("got %q want %q", localImagesJSONPath(), img)
+	}
+}
+
 func TestImagesJSONHasLayer(t *testing.T) {
 	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	manifest := &ct.ImageManifest{

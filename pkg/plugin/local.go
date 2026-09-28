@@ -23,6 +23,23 @@ var defaultImagesJSONPaths = []string{
 	"/etc/flynn/images.json.gz",
 }
 
+func localImagesJSONCandidates() []string {
+	out := append([]string{}, defaultImagesJSONPaths...)
+	if root := strings.TrimSpace(os.Getenv("FLYNN_ROOT")); root != "" {
+		out = append([]string{
+			filepath.Join(root, "build", "images.json"),
+			filepath.Join(root, "build", "manifests", "images.json"),
+		}, out...)
+	}
+	out = append(out,
+		"/root/go/src/github.com/flynn/flynn/build/images.json",
+		"/root/go/src/github.com/flynn/flynn/build/manifests/images.json",
+		"/root/go/src/github.com/randy-girard/flynn/build/images.json",
+		"/root/go/src/github.com/randy-girard/flynn/build/manifests/images.json",
+	)
+	return out
+}
+
 // FindLocalFlynnLayer returns a local squashfs for a Flynn OS/base layer id.
 // Checks FLYNN_LAYERS_DIR, /var/lib/flynn/layer-cache, and files next to a
 // local images.json (FLYNN_IMAGES_JSON or /etc/flynn/images.json).
@@ -72,7 +89,7 @@ func localImagesJSONPath() string {
 			return p
 		}
 	}
-	for _, p := range defaultImagesJSONPaths {
+	for _, p := range localImagesJSONCandidates() {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
