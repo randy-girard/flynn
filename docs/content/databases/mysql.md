@@ -1,28 +1,32 @@
 ---
-title: MariaDB
+title: MySQL
 layout: docs
 ---
 
-# MariaDB
+# MySQL
 
-MariaDB is a Flynn **plugin** (not part of the bootstrap tarball). Install it on a
-cluster host, then provision from an app. See [Plugins](../plugins.md).
+MySQL is a Flynn **plugin** (not part of the bootstrap tarball). The engine is
+MariaDB 10.11 LTS. Install it on a cluster host, then provision from an app.
+See [Plugins](../plugins.md). Canonical install name is `mysql`; `mariadb` is a
+deprecated alias. The plugin app is `mysql-plugin` (provider
+`http://mysql-plugin.discoverd/databases`).
 
 ```text
 sudo flynn-host plugin:install mysql --ref vX
+sudo flynn-host plugin:install mariadb --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mariadb.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-mariadb
 flynn resource:add mysql
 ```
 
-The plugin provides MariaDB 10.11 LTS in a highly-available configuration with
-automatic provisioning. It automatically fails over to a synchronous replica
-with no loss of data if the primary server goes down. A rolling update starts
-each replacement replica and waits for it to catch up before stopping the peer
-it replaces, so the three-peer set stays intact during the new job's base
-backup. A single-host
-(`SINGLETON`) cluster runs one peer; when a third host joins, the scheduler
-promotes the appliance to a three-peer replica set automatically.
+The plugin provides MySQL-compatible databases in a highly-available
+configuration with automatic provisioning. It automatically fails over to a
+synchronous replica with no loss of data if the primary server goes down. A
+rolling update starts each replacement replica and waits for it to catch up
+before stopping the peer it replaces, so the three-peer set stays intact
+during the new job's base backup. A single-host (`SINGLETON`) cluster runs one
+peer; when a third host joins, the scheduler promotes the appliance to a
+three-peer replica set automatically.
 
 Each resource user is created with `MAX_USER_CONNECTIONS` (default 20, override
 with `MYSQL_MAX_USER_CONNECTIONS` on the API). The provider sets `tenant_safe`.
@@ -32,26 +36,26 @@ See [Plugins](../plugins.md).
 
 ### Adding a database to an app
 
-MariaDB is available after the operator installs the plugin. After you create
+MySQL is available after the operator installs the plugin. After you create
 an app, provision a database with:
 
 ```text
 flynn resource:add mysql
 ```
 
-This will provision a database on the MariaDB cluster and configure your
+This will provision a database on the MySQL cluster and configure your
 application to connect to it.
 
-By default, MariaDB is not running in the Flynn cluster. The first time you
-provision a database, MariaDB will be started and configured.
+By default, MySQL is not running in the Flynn cluster. The first time you
+provision a database, MySQL will be started and configured.
 
 ### Connecting to the database
 
 Provisioning the database will add a few environment variables to your app
 release. `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PWD`, and
 `MYSQL_DATABASE` provide connection details for the database and are used
-automatically by many MySQL clients. `FLYNN_MYSQL` is the name of the MariaDB
-app.
+automatically by many MySQL clients. `FLYNN_MYSQL` is the name of the MySQL
+discoverd service (`mysql`).
 
 Flynn will also create the `DATABASE_URL` environment variable which is utilized
 by some frameworks to configure database connections. TLS on 3306 is on by
@@ -87,7 +91,7 @@ also be imported into a local MySQL database that is not managed by Flynn with
 $ mysql -D mydb < latest.dump
 ```
 
-`flynn mysql:restore` loads a database dump from a local file into a Flynn MariaDB
+`flynn mysql:restore` loads a database dump from a local file into a Flynn MySQL
 database. Any existing tables and database objects will be dropped before they
 are recreated.
 
@@ -110,19 +114,19 @@ port:
 
 ```text
 flynn resource:expose mysql
-# default hostname mariadb.<cluster-domain>, tls_mode=passthrough
+# default hostname mysql.<cluster-domain>, tls_mode=passthrough
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
-Passthrough is required for MariaDB/MySQL: clients negotiate SSL after a
+Passthrough is required for MySQL: clients negotiate SSL after a
 plaintext handshake, so router TLS terminate breaks those clients. Point DNS
 (or the cluster wildcard) at the hosts and connect with TLS to
-`mariadb.<cluster-domain>:PORT`.
+`mysql.<cluster-domain>:PORT`.
 
 You can still create the route yourself:
 
 ```text
-flynn -a mariadb route:add tcp --service mariadb --leader --domain mariadb.example.com --tls-mode passthrough
+flynn -a mysql-plugin route:add tcp --service mysql --leader --domain mysql.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

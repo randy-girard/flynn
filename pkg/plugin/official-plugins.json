@@ -14,11 +14,11 @@
       "description": "Tenant Postgres. One isolated instance per resource. Provision with flynn resource:add postgres. Not the platform appliance."
     },
     {
-      "name": "mariadb",
-      "aliases": ["mysql"],
+      "name": "mysql",
+      "aliases": ["mariadb"],
       "kind": "resource-provider",
       "repo": "flynn-plugin-mariadb",
-      "description": "MariaDB 10.11 (MySQL-compatible). Install as mariadb or mysql; provision with flynn resource:add mysql."
+      "description": "MySQL-compatible databases (MariaDB 10.11 engine). Install as mysql or mariadb; provision with flynn resource:add mysql."
     },
     {
       "name": "mongodb",

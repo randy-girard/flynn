@@ -157,17 +157,17 @@ func TestEnsureClusterAuthEnvNilSafe(t *testing.T) {
 func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 	m := &Manifest{
 		GenerateEnv: []string{"MYSQL_PWD"},
-		Env:         map[string]string{"FLYNN_MYSQL": "mariadb"},
+		Env:         map[string]string{"FLYNN_MYSQL": "mysql"},
 		App: AppSpec{
 			Processes: map[string]ct.ProcessType{
-				"mariadb": {},
-				"web":     {},
+				"mysql": {},
+				"web":   {},
 			},
-			Scale: map[string]int{"mariadb": 0},
+			Scale: map[string]int{"mysql": 0},
 		},
 	}
 	scale := FormationScale(m, map[string]string{"SINGLETON": "true"})
-	if scale["mariadb"] != 0 || scale["web"] != 1 {
+	if scale["mysql"] != 0 || scale["web"] != 1 {
 		t.Fatalf("%v", scale)
 	}
 	scale = FormationScale(m, nil)
@@ -187,7 +187,7 @@ func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 	}
 
 	env := ReleaseEnv(m, "art", map[string]string{})
-	if env["FLYNN_MYSQL"] != "mariadb" || len(env["MYSQL_PWD"]) != 32 {
+	if env["FLYNN_MYSQL"] != "mysql" || len(env["MYSQL_PWD"]) != 32 {
 		t.Fatalf("%v", env)
 	}
 	first := env["MYSQL_PWD"]

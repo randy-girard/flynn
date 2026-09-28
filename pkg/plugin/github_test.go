@@ -153,8 +153,8 @@ func TestFetchGitHubRelease(t *testing.T) {
 	pluginJSON := []byte(`{
   "name": "redis",
   "kind": "resource-provider",
-  "provider": {"name": "redis", "url": "http://redis-api.discoverd/clusters"},
-  "app": {"name": "redis", "processes": {"web": {"args": ["/bin/start-flynn-redis", "api"]}}},
+  "provider": {"name": "redis", "url": "http://redis-plugin.discoverd/clusters"},
+  "app": {"name": "redis-plugin", "processes": {"web": {"args": ["/bin/start-flynn-redis", "api"]}}},
   "artifacts": {"image": "https://example.invalid/image.json"}
 }`)
 	layerBytes := []byte("squashfs-bytes")
@@ -264,8 +264,8 @@ func TestFetchGitHubOSLayerFromFlynnRelease(t *testing.T) {
 	pluginJSON := []byte(`{
   "name": "redis",
   "kind": "resource-provider",
-  "provider": {"name": "redis", "url": "http://redis-api.discoverd/clusters"},
-  "app": {"name": "redis", "processes": {"web": {"args": ["/bin/start-flynn-redis", "api"]}}},
+  "provider": {"name": "redis", "url": "http://redis-plugin.discoverd/clusters"},
+  "app": {"name": "redis-plugin", "processes": {"web": {"args": ["/bin/start-flynn-redis", "api"]}}},
   "artifacts": {"image": "https://example.invalid/image.json"}
 }`)
 	osBytes := []byte("flynn-ubuntu-noble")
@@ -863,7 +863,7 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mariadb.git" {
-		t.Fatalf("official catalog must map mysql to mariadb: %s", cfg.GitHubURL("mysql"))
+		t.Fatalf("official catalog must map mysql to flynn-plugin-mariadb: %s", cfg.GitHubURL("mysql"))
 	}
 	if cfg.GitHubURL("redis") != "https://github.com/randy-girard/flynn-plugin-redis.git" {
 		t.Fatalf("official catalog redis: %s", cfg.GitHubURL("redis"))

@@ -648,17 +648,17 @@ func TestListInstalledSkipsNilAndNonPlugins(t *testing.T) {
 		{Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}},
 		{
 			ID:   "app-2",
-			Name: "redis",
+			Name: "redis-plugin",
 			Meta: map[string]string{
 				MetaPlugin:       "true",
 				MetaPluginKind:   KindResourceProvider,
 				MetaPluginSource: "redis",
 				MetaPluginRef:    "v1",
-				MetaPluginWait:   "http://redis-api.discoverd/ping",
+				MetaPluginWait:   "http://redis-plugin.discoverd/ping",
 			},
 		},
 	})
-	if len(got) != 1 || got[0].Name != "redis" || got[0].Kind != KindResourceProvider || got[0].Ref != "v1" {
+	if len(got) != 1 || got[0].Name != "redis-plugin" || got[0].Kind != KindResourceProvider || got[0].Ref != "v1" {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -668,12 +668,12 @@ func TestAnnotateInstallRefreshesCLI(t *testing.T) {
 		Name: "kafka",
 		Kind: KindResourceProvider,
 		App: AppSpec{
-			Name: "kafka",
+			Name: "kafka-plugin",
 			Processes: map[string]ct.ProcessType{
 				"web": {Args: []string{"/bin/x"}},
 			},
 		},
-		Provider: &Provider{Name: "kafka", URL: "http://kafka-api.discoverd/clusters"},
+		Provider: &Provider{Name: "kafka", URL: "http://kafka-plugin.discoverd/clusters"},
 		CLI: &CLI{
 			Command: "kafka",
 			Actions: []CLIAction{{
@@ -690,6 +690,9 @@ func TestAnnotateInstallRefreshesCLI(t *testing.T) {
 	cli := CLIFromApp(&ct.App{Meta: got})
 	if cli == nil || len(cli.Actions) != 1 || cli.Actions[0].Env["KAFKA_BOOTSTRAP_SERVERS"] == "" {
 		t.Fatalf("reinstall must refresh CLI catalog, got %+v", cli)
+	}
+	if got := m.PingURL(); got != "http://kafka-plugin.discoverd/ping" {
+		t.Fatalf("PingURL=%q", got)
 	}
 }
 

@@ -25,7 +25,8 @@ import (
 const (
 	EnginePostgres   = "postgres"
 	EngineRedis      = "redis"
-	EngineMariaDB    = "mariadb"
+	EngineMySQL      = "mysql"
+	EngineMariaDB    = "mariadb" // older db-runtimes.json files
 	EngineMongoDB    = "mongodb"
 	EngineKafka      = "kafka"
 	EngineClickHouse = "clickhouse"
@@ -43,7 +44,7 @@ const (
 var Engines = []string{
 	EnginePostgres,
 	EngineRedis,
-	EngineMariaDB,
+	EngineMySQL,
 	EngineMongoDB,
 	EngineKafka,
 	EngineClickHouse,
@@ -133,7 +134,7 @@ func builtinRuntimes() []Runtime {
 	rows := []row{
 		{EnginePostgres, 500, 1000, 2000, 512 * mib, 1 * gib, 2 * gib, 10 * gib, 50 * gib, 100 * gib},
 		{EngineRedis, 250, 500, 1000, 256 * mib, 512 * mib, 1 * gib, 1 * gib, 5 * gib, 10 * gib},
-		{EngineMariaDB, 500, 1000, 2000, 512 * mib, 1 * gib, 2 * gib, 8 * gib, 32 * gib, 80 * gib},
+		{EngineMySQL, 500, 1000, 2000, 512 * mib, 1 * gib, 2 * gib, 8 * gib, 32 * gib, 80 * gib},
 		{EngineMongoDB, 500, 1000, 2000, 1 * gib, 2 * gib, 4 * gib, 16 * gib, 64 * gib, 200 * gib},
 		{EngineKafka, 1000, 2000, 4000, 1 * gib, 2 * gib, 4 * gib, 20 * gib, 100 * gib, 500 * gib},
 		{EngineClickHouse, 1000, 2000, 4000, 2 * gib, 4 * gib, 8 * gib, 32 * gib, 128 * gib, 500 * gib},
@@ -149,14 +150,23 @@ func builtinRuntimes() []Runtime {
 	return out
 }
 
+// storedEngineMatches is true when a catalog row's engine is the canonical
+// name or a deprecated alias (mariadb in older db-runtimes.json files).
+func storedEngineMatches(stored, canonical string) bool {
+	got, err := NormalizeEngine(stored)
+	if err != nil {
+		return stored == canonical
+	}
+	return got == canonical
+}
+
 // ProviderEngine maps a resource:add provider to a catalog engine.
-// mysql is the MariaDB provider name.
 func ProviderEngine(provider string) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "postgres", "postgresql":
 		return EnginePostgres, true
 	case "mysql", "mariadb":
-		return EngineMariaDB, true
+		return EngineMySQL, true
 	case EngineRedis:
 		return EngineRedis, true
 	case EngineMongoDB:
@@ -174,7 +184,7 @@ func ProviderEngine(provider string) (string, bool) {
 func NormalizeEngine(engine string) (string, error) {
 	e, ok := ProviderEngine(engine)
 	if !ok {
-		return "", fmt.Errorf("engine must be one of postgres, redis, mariadb, mongodb, kafka, clickhouse")
+		return "", fmt.Errorf("engine must be one of postgres, redis, mysql, mongodb, kafka, clickhouse")
 	}
 	return e, nil
 }
@@ -238,7 +248,7 @@ func (c Catalog) Find(engine, name string) (Runtime, bool) {
 	}
 	name = strings.ToLower(strings.TrimSpace(name))
 	for _, r := range c.Runtimes {
-		if r.Engine == eng && r.Name == name {
+		if storedEngineMatches(r.Engine, eng) && r.Name == name {
 			return r, true
 		}
 	}
@@ -373,7 +383,7 @@ func (c *Catalog) Update(engine, name string, f UpdateFields) (Runtime, error) {
 	name = strings.ToLower(strings.TrimSpace(name))
 	idx := -1
 	for i, r := range c.Runtimes {
-		if r.Engine == eng && r.Name == name {
+		if storedEngineMatches(r.Engine, eng) && r.Name == name {
 			idx = i
 			break
 		}
@@ -422,7 +432,7 @@ func (c *Catalog) Remove(engine, name string) error {
 	name = strings.ToLower(strings.TrimSpace(name))
 	idx := -1
 	for i, r := range c.Runtimes {
-		if r.Engine == eng && r.Name == name {
+		if storedEngineMatches(r.Engine, eng) && r.Name == name {
 			idx = i
 			break
 		}

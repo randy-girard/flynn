@@ -2,6 +2,7 @@ package dbruntime
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -80,8 +81,12 @@ func TestValidateRejectsBadFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng, _ := NormalizeEngine("mysql")
-	if eng != EngineMariaDB {
+	if eng != EngineMySQL {
 		t.Fatalf("mysql -> %s", eng)
+	}
+	eng, _ = NormalizeEngine("mariadb")
+	if eng != EngineMySQL {
+		t.Fatalf("mariadb -> %s", eng)
 	}
 }
 
@@ -99,7 +104,7 @@ func TestResolveDefaultAndUnpublished(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	med, _ := cat.Find(EngineMariaDB, "medium")
+	med, _ := cat.Find(EngineMySQL, "medium")
 	if got != med.Size() {
 		t.Fatalf("mysql medium %#v", got)
 	}
@@ -187,7 +192,7 @@ func TestCustomRuntimeFileRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt, ok := cat.Find(EngineMariaDB, "cache")
-	if !ok || rt.Builtin || rt.Engine != EngineMariaDB {
+	if !ok || rt.Builtin || rt.Engine != EngineMySQL {
 		t.Fatalf("create %#v %v", rt, ok)
 	}
 	cat.AllowCustomSizes = true
@@ -209,7 +214,7 @@ func TestCustomRuntimeFileRoundTrip(t *testing.T) {
 	if err := got.Remove(EngineMariaDB, "cache"); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := got.Find(EngineMariaDB, "cache"); ok {
+	if _, ok := got.Find(EngineMySQL, "cache"); ok {
 		t.Fatal("cache still present")
 	}
 	if _, err := got.Update(EngineRedis, "small", UpdateFields{Name: strPtr("tiny")}); err == nil {
@@ -232,3 +237,30 @@ func TestParseCPUAndBytes(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+func TestLoadRewritesLegacyMariaDBEngine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "db-runtimes.json")
+	body := `{
+  "allow_custom_sizes": false,
+  "runtimes": [
+    {"name": "small", "engine": "mariadb", "cpu": 111, "memory": 222, "disk": 333, "builtin": true},
+    {"name": "cache", "engine": "mariadb", "cpu": 10, "memory": 20, "disk": 30, "builtin": false}
+  ]
+}`
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cat, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	small, ok := cat.Find("mariadb", "small")
+	if !ok || small.CPU != 111 || small.Engine != EngineMySQL {
+		t.Fatalf("legacy small %#v %v", small, ok)
+	}
+	cache, ok := cat.Find("mysql", "cache")
+	if !ok || cache.CPU != 10 || cache.Engine != EngineMySQL {
+		t.Fatalf("legacy cache %#v %v", cache, ok)
+	}
+}

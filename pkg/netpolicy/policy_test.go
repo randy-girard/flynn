@@ -84,12 +84,12 @@ func TestClassifyJob(t *testing.T) {
 			want: ClassDatastore,
 		},
 		{
-			name: "mariadb data plane",
+			name: "mysql data plane",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
 				"flynn-datastore":           "true",
-				"flynn-controller.app_name": "mariadb",
-				"flynn-controller.type":     "mariadb",
+				"flynn-controller.app_name": "mysql-plugin",
+				"flynn-controller.type":     "mysql",
 			}},
 			want: ClassDatastore,
 		},
@@ -122,10 +122,10 @@ func TestClassifyJob(t *testing.T) {
 			want: ClassSystem,
 		},
 		{
-			name: "mariadb-api is system not datastore",
+			name: "mysql-plugin web is system not datastore",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-system-app":          "true",
-				"flynn-controller.app_name": "mariadb",
+				"flynn-controller.app_name": "mysql-plugin",
 				"flynn-controller.type":     "web",
 			}},
 			want: ClassSystem,
@@ -170,7 +170,7 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installed-plugins.json")
 	t.Setenv("FLYNN_INSTALLED_PLUGINS", path)
 	if err := plugin.WriteInstalled(path, []plugin.Installed{
-		{Name: "mariadb", Datastore: true},
+		{Name: "mysql", Aliases: []string{"mariadb"}, Datastore: true},
 		{Name: "mongodb", Datastore: true},
 		{Name: "redis", Datastore: true},
 	}); err != nil {
@@ -190,6 +190,9 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	}
 	if !UserMayResolveDiscoverd(true, "clickhouse-11111111-2222-3333-4444-555555555555") {
 		t.Fatal("user jobs may resolve leader.clickhouse-<uuid>.discoverd")
+	}
+	if !UserMayResolveDiscoverd(true, "mysql") {
+		t.Fatal("user jobs may resolve leader.mysql.discoverd")
 	}
 	if !UserMayResolveDiscoverd(true, "mariadb") {
 		t.Fatal("user jobs may resolve leader.mariadb.discoverd")
@@ -215,8 +218,8 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	if UserMayResolveDiscoverd(true, "redis-api") {
 		t.Fatal("user jobs must not resolve leader.redis-api.discoverd")
 	}
-	if UserMayResolveDiscoverd(true, "mongodb-api") {
-		t.Fatal("user jobs must not resolve leader.mongodb-api.discoverd")
+	if UserMayResolveDiscoverd(true, "mongodb-plugin") {
+		t.Fatal("user jobs must not resolve leader.mongodb-plugin.discoverd")
 	}
 	if UserMayResolveDiscoverd(true, "redis-GGGGGGGG-728c-4eb5-8c1d-a0d38924cbd8") {
 		t.Fatal("non-hex UUID appliance names must be denied")

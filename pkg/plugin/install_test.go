@@ -308,7 +308,7 @@ func (s *providerStub) CreateProvider(p *ct.Provider) error {
 }
 
 func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
-	existing := &providerStub{list: []*ct.Provider{{Name: "redis", URL: "http://redis-api.discoverd"}}}
+	existing := &providerStub{list: []*ct.Provider{{Name: "redis", URL: "http://redis-plugin.discoverd"}}}
 	if err := ensureProvider(existing, "redis", "http://other", false); err != nil {
 		t.Fatal(err)
 	}
@@ -317,10 +317,10 @@ func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
 	}
 
 	created := &providerStub{}
-	if err := ensureProvider(created, "redis", "http://redis-api.discoverd/clusters", true); err != nil {
+	if err := ensureProvider(created, "redis", "http://redis-plugin.discoverd/clusters", true); err != nil {
 		t.Fatal(err)
 	}
-	if created.created == nil || created.created.Name != "redis" || created.created.URL != "http://redis-api.discoverd/clusters" || !created.created.TenantSafe {
+	if created.created == nil || created.created.Name != "redis" || created.created.URL != "http://redis-plugin.discoverd/clusters" || !created.created.TenantSafe {
 		t.Fatalf("%+v", created.created)
 	}
 

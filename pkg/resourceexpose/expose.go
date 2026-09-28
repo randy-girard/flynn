@@ -16,15 +16,16 @@ type Spec struct {
 	// DefaultApp is used when EnvKey is unset (shared cluster appliances).
 	DefaultApp string
 	// DefaultService is the discoverd service when the appliance app name
-	// is not also the service (mariadb vs mysql).
+	// is not also the service. Empty means the app name is the service
+	// (tenant mysql/redis instances).
 	DefaultService string
 	Leader         bool
 }
 
 var specs = []Spec{
 	{Provider: "postgres", EnvKey: "FLYNN_POSTGRES", DefaultApp: "postgres", DefaultService: "postgres", Leader: true},
-	{Provider: "mysql", EnvKey: "FLYNN_MYSQL", DefaultApp: "mariadb", DefaultService: "mariadb", Leader: true},
-	{Provider: "mariadb", EnvKey: "FLYNN_MYSQL", DefaultApp: "mariadb", DefaultService: "mariadb", Leader: true},
+	{Provider: "mysql", EnvKey: "FLYNN_MYSQL", Leader: true},
+	{Provider: "mariadb", EnvKey: "FLYNN_MYSQL", Leader: true},
 	{Provider: "mongodb", EnvKey: "FLYNN_MONGO", DefaultApp: "mongodb", DefaultService: "mongodb", Leader: true},
 	{Provider: "redis", EnvKey: "FLYNN_REDIS", Leader: true},
 	{Provider: "kafka", EnvKey: "FLYNN_KAFKA", DefaultApp: "kafka", DefaultService: "kafka", Leader: true},

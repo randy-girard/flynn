@@ -1,5 +1,9 @@
 package main
 
+// The MySQL plugin (flynn-plugin-mariadb) is installed as mysql; mariadb is a
+// deprecated alias. Plugin app is mysql-plugin, data service is mysql.
+// This file name is historical.
+
 import (
 	"database/sql"
 	"fmt"
@@ -24,7 +28,7 @@ func (s *MariaDBSuite) SetUpSuite(t *c.C) {
 
 // Sirenia integration tests
 var sireniaMariaDB = sireniaDatabase{
-	appName:    "mariadb",
+	appName:    "mysql-plugin",
 	serviceKey: "FLYNN_MYSQL",
 	hostKey:    "MYSQL_HOST",
 	initDb: func(t *c.C, r *ct.Release, d *sireniaDeploy) {

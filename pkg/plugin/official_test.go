@@ -27,8 +27,11 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			t.Fatalf("official catalog missing %s", name)
 		}
 	}
-	if got["mysql"].Name != "mariadb" || got["mysql"].Repo != "flynn-plugin-mariadb" {
-		t.Fatalf("mysql must resolve to mariadb: %+v", got["mysql"])
+	if got["mysql"].Name != "mysql" || got["mysql"].Repo != "flynn-plugin-mariadb" {
+		t.Fatalf("mysql must be canonical: %+v", got["mysql"])
+	}
+	if got["mariadb"].Name != "mysql" || got["mariadb"].Repo != "flynn-plugin-mariadb" {
+		t.Fatalf("mariadb must alias mysql: %+v", got["mariadb"])
 	}
 	if _, ok := got["example"]; ok {
 		t.Fatal("template plugin must not be in the official catalog")

@@ -9,7 +9,7 @@
     { "title": "Apps", "path": "content/apps.md" },
     { "title": "Databases", "path": "content/databases.html.md", "children": [
           { "title": "PostgreSQL", "path": "content/databases/postgres.md" },
-          { "title": "MariaDB", "path": "content/databases/mysql.md" },
+          { "title": "MySQL", "path": "content/databases/mysql.md" },
           { "title": "MongoDB", "path": "content/databases/mongodb.md" },
           { "title": "Redis", "path": "content/databases/redis.md" },
           { "title": "Kafka", "path": "content/databases/kafka.md" },

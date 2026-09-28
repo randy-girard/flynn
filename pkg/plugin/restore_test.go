@@ -47,9 +47,9 @@ func TestRestoreProcessesScalesDumpJob(t *testing.T) {
 }
 
 func TestRestoreProcessesUsesBackupProcessHint(t *testing.T) {
-	p := Installed{Name: "mysql", Backup: &BackupSpec{Process: "mariadb"}}
-	got := RestoreProcesses(p, &ct.ExpandedFormation{Processes: map[string]int{"mariadb": 0, "web": 2}})
-	if got["mariadb"] != 1 || got["web"] != 2 {
+	p := Installed{Name: "mysql", Backup: &BackupSpec{Process: "mysql"}}
+	got := RestoreProcesses(p, &ct.ExpandedFormation{Processes: map[string]int{"mysql": 0, "web": 2}})
+	if got["mysql"] != 1 || got["web"] != 2 {
 		t.Fatalf("hinted dump process must scale to 1: %v", got)
 	}
 	if len(RestoreProcesses(Installed{}, nil)) != 0 {

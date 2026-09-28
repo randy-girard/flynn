@@ -21,9 +21,13 @@ func TestLookupAndResolve(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	app, svc = mysql.ResolveAppService(map[string]string{"FLYNN_MYSQL": "mysql-foo"})
+	if app != "mysql-foo" || svc != "mysql-foo" {
+		t.Fatalf("mysql tenant %s %s", app, svc)
+	}
 	app, svc = mysql.ResolveAppService(map[string]string{"FLYNN_MYSQL": "mariadb"})
 	if app != "mariadb" || svc != "mariadb" {
-		t.Fatalf("mysql %s %s", app, svc)
+		t.Fatalf("mysql legacy env %s %s", app, svc)
 	}
 
 	redis, err := Lookup("redis")
@@ -85,7 +89,7 @@ func TestFindTCPRoute(t *testing.T) {
 	routes := []*router.Route{
 		{Type: "http", Service: "postgres", Domain: "x"},
 		{Type: "tcp", Service: "postgres", Domain: "postgres.example.com", Port: 3001},
-		{Type: "tcp", Service: "mariadb", Domain: "mysql.example.com", Port: 3002},
+		{Type: "tcp", Service: "mysql", Domain: "mysql.example.com", Port: 3002},
 	}
 	got := FindTCPRoute(routes, "postgres", "postgres.example.com")
 	if got == nil || got.Port != 3001 {
@@ -94,7 +98,7 @@ func TestFindTCPRoute(t *testing.T) {
 	if FindTCPRoute(routes, "postgres", "other.example") != nil {
 		t.Fatal("domain miss should be nil")
 	}
-	if got := FindTCPRoute(routes, "mariadb", ""); got == nil || got.Port != 3002 {
+	if got := FindTCPRoute(routes, "mysql", ""); got == nil || got.Port != 3002 {
 		t.Fatalf("fallback %+v", got)
 	}
 }

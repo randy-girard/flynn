@@ -87,7 +87,7 @@ func Save(path string, c Catalog) error {
 
 func indexOf(list []Runtime, engine, name string) int {
 	for i, r := range list {
-		if r.Engine == engine && r.Name == name {
+		if storedEngineMatches(r.Engine, engine) && r.Name == name {
 			return i
 		}
 	}

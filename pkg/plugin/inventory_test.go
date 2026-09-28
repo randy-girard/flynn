@@ -130,7 +130,7 @@ func TestDatastoreServiceAndOptionalSirenia(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "installed-plugins.json")
 	t.Setenv(EnvInstalledFile, path)
 	if err := WriteInstalled(path, []Installed{
-		{Name: "mariadb", Aliases: []string{"mysql"}, Datastore: true, Sirenia: true, SireniaOptional: true},
+		{Name: "mysql", Aliases: []string{"mariadb"}, Datastore: true, Sirenia: true, SireniaOptional: true},
 		{Name: "cache", Sirenia: true, SireniaOptional: false},
 	}); err != nil {
 		t.Fatal(err)
