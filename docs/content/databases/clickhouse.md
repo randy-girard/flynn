@@ -15,6 +15,9 @@ sudo flynn-host plugin:install ../flynn-plugin-clickhouse
 flynn resource:add clickhouse
 ```
 
+The controller app is `clickhouse-plugin` (`flynn-host ps`, `flynn -a clickhouse-plugin`).
+Provider name stays `clickhouse`.
+
 The plugin provisions a [ClickHouse](https://clickhouse.com) cluster with
 [ClickHouse Keeper](https://clickhouse.com/docs/en/guides/sre/keeper/clickhouse-keeper)
 for replication coordination. A cluster is spread across the nodes of your Flynn

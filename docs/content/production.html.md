@@ -348,22 +348,24 @@ To take a full-cluster backup, run `flynn-host backup --file backup.tar`.
 A file named `backup.tar` is created with the data needed to stand up a new
 cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
 MongoDB if they were running), `plugins.json` (which plugins were installed),
-a full `pg_dumpall` of Postgres (controller, blobstore files including plugin
-image layers, and every app Postgres database), and MariaDB/MongoDB dumps
-when those appliances are scaled above zero. If the current postgres release
-has no formation row yet (seen after an updater deploy), backup copies
-process counts from another scaled formation on that app instead of failing.
-Restore does **not** re-run
-`flynn-host plugin:install`; plugin apps come back with postgres. Redis, Kafka,
-and ClickHouse keep data on volumes that are **not** included; after restore
-those engines come back empty. App slugs and container images stored in the
-blobstore Postgres backend are restored from that dump. If blobstore was switched
-to S3, MinIO, GCS, or Azure (`flynn-host blobstore:set` / `DEFAULT_BACKEND`),
-object bytes stay in that bucket; the backup still includes controller env so
-restore reconnects to the same backend. Keep the bucket (and credentials) when
-you restore.
+a full `pg_dumpall` of the **platform** Postgres appliance (controller,
+blobstore files including plugin image layers, and plugin metadata databases
+attached to `platform-postgres`), and MariaDB/MongoDB dumps when those
+plugin appliances are scaled above zero. Tenant Postgres instance volumes
+are not in that dump. If the current postgres release has no formation row
+yet (seen after an updater deploy), backup copies process counts from
+another scaled formation on that app instead of failing. Restore does
+**not** re-run `flynn-host plugin:install`; plugin apps come back with
+postgres. Redis, Kafka, ClickHouse, and tenant Postgres keep data on
+volumes that are **not** included; after restore those engines come back
+empty. App slugs and container images stored in the blobstore Postgres
+backend are restored from that dump. If blobstore was switched to S3,
+MinIO, GCS, or Azure (`flynn-host blobstore:set` / `DEFAULT_BACKEND`),
+object bytes stay in that bucket; the backup still includes controller env
+so restore reconnects to the same backend. Keep the bucket (and
+credentials) when you restore.
 
-The Vagrant upgrade smoke (`script/vagrant-upgrade-smoke.sh`) exercises this
+The Vagrant upgrade smoke (`script/vagrant/suite.sh`) exercises this
 path after the in-place `--force` updates: backup, `install --clean`, then
 `flynn-host bootstrap --from-backup`.
 

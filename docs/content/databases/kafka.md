@@ -15,6 +15,9 @@ sudo flynn-host plugin:install ../flynn-plugin-kafka
 flynn resource:add kafka
 ```
 
+The controller app is `kafka-plugin` (`flynn-host ps`, `flynn -a kafka-plugin`).
+Provider name stays `kafka`.
+
 The plugin provisions an [Apache Kafka](https://kafka.apache.org) cluster that
 runs in [KRaft mode](https://kafka.apache.org/documentation/#kraft) (no
 ZooKeeper). A cluster is spread across the nodes of your Flynn install, with
@@ -88,10 +91,10 @@ traffic stays on the private cluster network in plaintext, which keeps the
 quorum robust and avoids per-broker certificate distribution.
 
 TLS is enabled by default. To disable it cluster-wide, set
-`KAFKA_TLS_ENABLED=false` on the `kafka` system app before provisioning:
+`KAFKA_TLS_ENABLED=false` on the `kafka-plugin` system app before provisioning:
 
 ```text
-flynn -a kafka env:set KAFKA_TLS_ENABLED=false
+flynn -a kafka-plugin env:set KAFKA_TLS_ENABLED=false
 ```
 
 ## Managing topics

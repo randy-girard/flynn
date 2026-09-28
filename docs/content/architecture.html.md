@@ -110,9 +110,12 @@ failover of a highly available PostgreSQL cluster running within Flynn. We use
 synchronous replication in a chained cluster that is easy to reason about to
 ensure that no data is lost.
 
-All persistent data stored by Flynn components is in Postgres. It provides
-a great combination of features, performance, and reliability that we have not
-found in any other database systems.
+All persistent data stored by Flynn **system** components is in this
+appliance. Tenant databases are the `postgres` catalog plugin
+(`flynn resource:add postgres` after `flynn-host plugin:install postgres`),
+not roles on this cluster. The appliance provides a great combination of
+features, performance, and reliability that we have not found in any other
+database systems.
 
 ## Controller
 

@@ -55,7 +55,9 @@ flynn resource:add postgres --as ANALYTICS
 That command does not provision a database on the platform appliance. It
 creates a new Flynn app with one volume and exactly one Postgres node. Two
 resources do not share an app, volume, superuser, or any credential that can
-read the other instance. Sirenia is not started.
+read the other instance. Sirenia is not started. The command waits until the
+new instance has finished `initdb` and registered in discoverd (up to five
+minutes on a new volume).
 
 `--as ANALYTICS` sets only `ANALYTICS_URL`. The default name `DATABASE` sets
 only `DATABASE_URL`. `flynn resource:attach` / `flynn resource:detach` add and
@@ -109,28 +111,30 @@ API on :5433 (`/status`, `/stop`) requires the cluster controller key; `GET
 
 ### External access
 
-Export the platform appliance on a TCP route with a stable hostname, then open
-the host port:
+`flynn resource:expose postgres` exports **this app's tenant instance** (the
+plugin resource), not the platform appliance. It creates a leader TCP route
+and prints the host command that opens the port:
 
 ```text
 flynn resource:expose postgres
-# default hostname postgres.<cluster-domain>, tls_mode=passthrough
+# default hostname <service>.<cluster-domain>, tls_mode=passthrough
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
 Passthrough is required for Postgres: clients send an SSLRequest in plaintext
 before TLS, so router TLS terminate breaks `libpq`. Point DNS (or the cluster
-wildcard) at the hosts and connect with `sslmode=require` to
-`postgres.<cluster-domain>:PORT`.
+wildcard) at the hosts and connect with `sslmode=require`.
 
-You can still create the route yourself:
+The platform appliance is a different discoverd service (`postgres`). Export
+that only from a host if you need operator access; tenant apps should not
+receive its superuser URL.
 
 ```text
 flynn route:add tcp --service postgres --leader --domain postgres.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn resource:unexpose postgres` then
+Remove a tenant export with `flynn resource:unexpose postgres` then
 `sudo flynn-host firewall:unexpose PORT`. Treat the exported port as public;
 prefer a VPN when you can. See
 [Production — Firewalling](../production.html.md#firewalling).
@@ -149,40 +153,23 @@ pg:dump`, or `flynn-host pg:restore`. See
 
 ### Dumping and restoring
 
-The postgres plugin provides commands for exporting and restoring an app database.
+There is no user `flynn pg:dump` / `flynn pg:restore`. Those are not in the
+postgres plugin CLI (`pg:info`, `pg:follow`, `pg:wait`, `pg:promote`,
+`pg:unfollow`, `pg:psql`). The plugin dashboard has a Backup page for an
+instance.
 
-`flynn pg:dump` saves a complete copy of that instance's schema and data to a local file.
+`flynn-host pg:dump` / `flynn-host pg:restore` dump the **platform** appliance
+(controller, blobstore, plugin metadata on `platform-postgres`). They do not
+dump a tenant instance. Cluster `flynn-host backup` uses `pg_dumpall` on that
+same appliance; tenant instance volumes are not in the tarball.
 
-```text
-$ flynn pg:dump -f latest.dump
-60.34 MB 8.77 MB/s
-```
-
-The file can be used to restore the database with `flynn pg:restore`. It
-may also be imported into a local Postgres database that is not managed by Flynn
-with `pg_restore`:
-
-```text
-$ pg_restore --clean --no-acl --no-owner -d mydb latest.dump
-```
-
-`flynn pg:restore` loads a database dump from a local file into a Flynn Postgres
-database. Any existing tables and database objects will be dropped before they
-are recreated.
+To copy a tenant database with tools on your laptop, connect with the
+injected `DATABASE_URL` (or `flynn pg:psql`) and run `pg_dump` /
+`pg_restore` yourself:
 
 ```text
-$ flynn pg:restore -f latest.dump
-62.29 MB / 62.29 MB [===================] 100.00 % 4.96 MB/s
-WARNING: errors ignored on restore: 4
-```
-
-This will generate some warnings, but they are generally safe to ignore.
-
-The restore command may also be used to restore a database dump from another non-Flynn
-Postgres database, use `pg_dump` to create a dump file:
-
-```text
-$ pg_dump --format=custom --no-acl --no-owner mydb > mydb.dump
+$ pg_dump --format=custom --no-acl --no-owner "$DATABASE_URL" > mydb.dump
+$ pg_restore --clean --no-acl --no-owner -d mydb mydb.dump
 ```
 
 ### Extensions

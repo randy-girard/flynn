@@ -5,10 +5,17 @@ layout: docs
 
 # Databases
 
-Postgres is the platform appliance in Flynn (controller and other system apps).
-It is not a tenant database. Tenant Postgres is the upcoming
-`flynn-plugin-postgres`. Other engines (Redis, MariaDB, MongoDB, Kafka,
-ClickHouse) are **plugins**: the operator installs them with
+The **platform Postgres appliance** (system app `postgres`) is the database
+bootstrap starts for the controller, blobstore, and other system apps. It is
+not a tenant database.
+
+**Tenant Postgres** is the catalog plugin `flynn-plugin-postgres`. Install it
+with `flynn-host plugin:install postgres`, then provision with
+`flynn resource:add postgres`. That command does not create a role on the
+platform appliance.
+
+Other engines (Redis, MariaDB, MongoDB, Kafka, ClickHouse) are also
+**plugins**: the operator installs them with
 [`flynn-host plugin:install`](plugins.md) from a sibling repo or git URL. The
 user `flynn` CLI only shows those commands after the plugin is installed on the
 cluster. Command syntax lives on the plugin (`flynn-plugin.json` `cli`); the
@@ -33,23 +40,25 @@ resolve from user jobs.
 
 | Provider | Engine | Topology |
 | --- | --- | --- |
-| [`postgres`](databases/postgres.md) | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain |
+| platform `postgres` app | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain. **Not** `resource:add postgres`. System apps only |
+| [`postgres`](databases/postgres.md) | PostgreSQL 16 (plugin) | One node, own app and volume. `flynn resource:add postgres` after `flynn-host plugin:install postgres`. Not sirenia |
 | [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
 | [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
 | [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process; AOF on a volume, no replicas, not in cluster backup |
 | [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
 | [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
 
-Redis, Kafka, and ClickHouse do not use the sirenia state machine described
-below. See each page for safety notes.
+The tenant Postgres plugin, Redis, Kafka, and ClickHouse do not use the
+sirenia state machine described below. See each page for safety notes.
 
 ## Database runtimes
 
 A database runtime is a name plus CPU, memory, and disk for one engine
-(`postgres`, `redis`, `mariadb`, `mongodb`, `kafka`, `clickhouse`). The
-MariaDB provider on `resource:add` is `mysql`. These are **not** app process
-runtimes. `flynn-host runtime` and `flynn limit:runtime` size app processes
-only. Database runtimes are listed and edited with `flynn-host db-runtime`.
+(`postgres`, `redis`, `mysql`, `mongodb`, `kafka`, `clickhouse`). The
+MySQL provider on `resource:add` is `mysql` (`mariadb` is an install alias).
+These are **not** app process runtimes. `flynn-host runtime` and
+`flynn limit:runtime` size app processes only. Database runtimes are listed
+and edited with `flynn-host db-runtime`.
 
 Each engine ships `small`, `medium`, and `large`. The numbers are per engine.
 Redis `small` disk is 1GB; Postgres `small` disk is 10GB.
@@ -58,7 +67,7 @@ Redis `small` disk is 1GB; Postgres `small` disk is 10GB.
 | --- | --- | --- | --- |
 | postgres | 500 milliCPU, 512MB, 10GB | 1000 milliCPU, 1GB, 50GB | 2000 milliCPU, 2GB, 100GB |
 | redis | 250 milliCPU, 256MB, 1GB | 500 milliCPU, 512MB, 5GB | 1000 milliCPU, 1GB, 10GB |
-| mariadb | 500 milliCPU, 512MB, 8GB | 1000 milliCPU, 1GB, 32GB | 2000 milliCPU, 2GB, 80GB |
+| mysql | 500 milliCPU, 512MB, 8GB | 1000 milliCPU, 1GB, 32GB | 2000 milliCPU, 2GB, 80GB |
 | mongodb | 500 milliCPU, 1GB, 16GB | 1000 milliCPU, 2GB, 64GB | 2000 milliCPU, 4GB, 200GB |
 | kafka | 1000 milliCPU, 1GB, 20GB | 2000 milliCPU, 2GB, 100GB | 4000 milliCPU, 4GB, 500GB |
 | clickhouse | 1000 milliCPU, 2GB, 32GB | 2000 milliCPU, 4GB, 128GB | 4000 milliCPU, 8GB, 500GB |
@@ -86,9 +95,11 @@ Tenants cannot set raw `--cpu`, `--memory`, or `--disk`, and they cannot
 request a runtime name that is not published. A cluster admin allows raw
 sizes with `sudo flynn-host db-runtime:allow-custom`.
 
-On a single-host cluster, postgres/MariaDB/MongoDB run one peer
-(`SINGLETON=true`). When a third host joins, the scheduler promotes them to a
-three-peer replica set automatically.
+On a single-host cluster, the **platform** Postgres appliance, MariaDB, and
+MongoDB run one peer (`SINGLETON=true`). When a third host joins, the
+scheduler promotes those sirenia/replica-set appliances to a three-peer
+set automatically. Tenant Postgres from the plugin stays one node per
+resource; resize is follow, wait, promote.
 
 ## External TLS access
 

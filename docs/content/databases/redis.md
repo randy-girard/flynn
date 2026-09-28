@@ -15,6 +15,9 @@ sudo flynn-host plugin:install ../flynn-plugin-redis
 flynn resource:add redis
 ```
 
+The controller app is `redis-plugin` (`flynn-host ps`, `flynn -a redis-plugin`).
+Provider name stays `redis`.
+
 The plugin provides Redis from the Ubuntu 24.04 package set in a
 single process configuration. Redis writes an append-only file on a persistent
 volume, so data survives job restarts and `flynn-host update`, but there are no

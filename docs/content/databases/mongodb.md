@@ -15,6 +15,10 @@ sudo flynn-host plugin:install ../flynn-plugin-mongodb
 flynn resource:add mongodb
 ```
 
+The plugin controller app is `mongodb-plugin` (`flynn-host ps`). The provider
+API is `http://mongodb-plugin.discoverd/databases`. Provision with
+`flynn resource:add mongodb`.
+
 The plugin provides MongoDB 7.0 in a highly-available configuration with
 automatic provisioning. Replication is implemented using MongoDB's replica set
 feature. A single-host (`SINGLETON`) cluster runs one peer; when a third host

@@ -29,6 +29,12 @@ product. Tenant Postgres is `flynn-plugin-postgres` (provider `postgres` at
 isolated instance on that plugin. It does not provision a database on the
 platform appliance.
 
+Plugin controller apps are named `<plugin>-plugin` (`dashboard-plugin`,
+`mongodb-plugin`, …). That is what `flynn-host ps` prints
+(`flynn-controller.app_name`). The catalog install name stays `dashboard` /
+`mongodb`. Resource provider names stay `mongodb` so `flynn resource:add mongodb`
+still works.
+
 ## First-party catalog
 
 `plugin:list --known` is the first-party catalog. Those names
@@ -81,8 +87,9 @@ Development layout (relative to the Flynn repo):
 
 | Alias | Path from `flynn/` | Provider (`flynn resource:add`) |
 |-------|--------------------|----------------------------------|
+| `postgres` | `../flynn-plugin-postgres` | `postgres` (tenant instances; not the platform appliance) |
 | `redis` | `../flynn-plugin-redis` | `redis` |
-| `mariadb` / `mysql` | `../flynn-plugin-mariadb` | `mysql` |
+| `mysql` / `mariadb` | `../flynn-plugin-mariadb` | `mysql` |
 | `mongodb` | `../flynn-plugin-mongodb` | `mongodb` |
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
@@ -114,6 +121,8 @@ official catalog (then `flynn-plugin-<name>`).
 From the Flynn checkout, on a cluster host:
 
 ```text
+sudo flynn-host plugin:install ../flynn-plugin-postgres
+sudo flynn-host plugin:install postgres
 sudo flynn-host plugin:install ../flynn-plugin-redis
 sudo flynn-host plugin:install redis
 sudo flynn-host plugin:install ../flynn-plugin-dashboard
@@ -226,8 +235,7 @@ On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
-`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline` (every
-first-party plugin except the template and Let's Encrypt; Vagrant has no ACME). Smoke starts a dummy OTLP/HTTP
+`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline` (matches `script/vagrant/suite.sh`; Let's Encrypt is omitted because Vagrant has no ACME; tenant `postgres` is a catalog plugin but is not in that default list). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.
 
@@ -300,9 +308,9 @@ allow `${app.ENV}`, `${resource}`, `${resource.ENV}`, and
 `${app.ENV|leader.${resource}.discoverd}`; env values are inserted once and not
 re-expanded.
 
-Every resource-provider plugin (Redis, MariaDB, MongoDB, Kafka, ClickHouse)
-publishes the same `doc`/`actions` contract. Those commands stay hidden on
-`flynn help` until the matching plugin is installed on the cluster.
+Every resource-provider plugin (Postgres, Redis, MariaDB, MongoDB, Kafka,
+ClickHouse) publishes the same `doc`/`actions` contract. Those commands stay
+hidden on `flynn help` until the matching plugin is installed on the cluster.
 
 ## Dashboard addon pages
 
@@ -351,9 +359,11 @@ compiled-in list.
   as app metrics swimlanes so a plugin Metrics page can chart that app’s
   resource. Metric names belong in the plugin README so alerts can hook them.
 
-Postgres is core Flynn (not a plugin repo). The dashboard hosts a first-party
-postgres module that follows this same card/route contract so it can move
-later.
+Tenant Postgres is `flynn-plugin-postgres` and stamps its own `dashboard`
+block (`base_url` on `postgres-plugin.discoverd`). The dashboard also keeps a
+first-party module for the **platform** `platform-postgres` appliance (system
+apps only). Uninstalled tenant Postgres shows the same install hint as other
+plugins (`sudo flynn-host plugin:install postgres`).
 
 ## Production
 
@@ -489,8 +499,10 @@ Restore waits for each plugin’s ping URL, then continues. A missing formation
 on the current postgres release does not abort the backup (process counts
 are taken from another scaled formation on that app).
 
-Plugin **volume** data (Redis AOF, Kafka topics, ClickHouse tables) is still
-not in the cluster backup; those engines come back empty. Reinstalling a
-plugin after restore would only be needed if you restored a backup that
-never had the plugin, or if you are adding a plugin that was not installed
-when the backup was taken.
+Plugin **volume** data (tenant Postgres instance volumes, Redis AOF, Kafka
+topics, ClickHouse tables) is still not in the cluster backup; those engines
+come back empty. `pg_dumpall` in the tarball is the **platform** appliance
+only (controller, blobstore, and plugin metadata databases attached to
+`platform-postgres`). Reinstalling a plugin after restore would only be
+needed if you restored a backup that never had the plugin, or if you are
+adding a plugin that was not installed when the backup was taken.

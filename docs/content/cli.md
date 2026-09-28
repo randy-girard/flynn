@@ -87,7 +87,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 
 | Command | Purpose |
 | --- | --- |
-| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases). Dashboard paths, system apps, plugins, planned plugins, and public-site hosts (`blog`, `docs`, `tos`) are reserved. |
+| `apps` / `apps:create` / `apps:destroy` / `apps:info` | App lifecycle (`create`, `delete`, `info` are aliases). `flynn apps` lists apps the current credential may see: a user token only owned/collaborator apps; the cluster key (cluster-admin) omits platform, system, and plugin apps unless you pass `--all`. Dashboard grants cannot list apps (`403`). Dashboard paths, system apps, plugins, planned plugins, and public-site hosts (`blog`, `docs`, `tos`) are reserved. |
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Add or replace the `flynn` git remote for the current app |
 | `github` / `github:connect` / `github:deploy` / `github:set` / `github:disconnect` | Connect a GitHub repo and deploy through taffy (requires `flynn-host plugin:install github`) |
@@ -112,9 +112,11 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `route` / `route:add http\|tcp` / `route:update` / `route:remove` | HTTP and TCP(/TLS) routes, `--tls-mode`, `--leader`; path-based HTTP routes need `flynn-host route:add` |
 | `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:status` | Automatic HTTPS for a hostname or HTTP route id (requires the Let's Encrypt plugin) |
-| `resource` / `resource:add <provider>` / `resource:remove <provider> [<resource>]` | Provision or remove mysql, mongodb, redis, kafka, clickhouse. `postgres` is the tenant plugin (`flynn-plugin-postgres`, not yet installed), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom` |
+| `resource` / `resource:add <provider>` / `resource:remove <provider> [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse. `postgres` is the tenant plugin (`flynn-host plugin:install postgres`), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom` |
+| `resource:attach` / `resource:detach` | Attach or detach an existing resource (`--as` sets the env name for postgres) |
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
-| `pg:info` / `pg:psql` / `pg:dump` / `pg:restore` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. The platform database is `flynn-host pg:psql` |
+| `pg:info` / `pg:follow` / `pg:wait` / `pg:promote` / `pg:unfollow` / `pg:psql` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. There is no user `flynn pg:dump`. The platform database is `flynn-host pg:psql` |
+| `autoscale` / `autoscale:enable` / `autoscale:disable` / `autoscale:set` / `autoscale:info` | Web-dyno scale on router HTTP p95 (after `flynn-host plugin:install autoscale`) |
 | `mysql:cli` / `mongodb:cli` / `redis:cli` (+ `:dump` / `:restore`) | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` / `kafka:topics:create` / `kafka:consumer-groups` / `kafka:consumer-groups:create` | Topics and consumer groups (after plugin install; see [Kafka](databases/kafka.md#managing-consumer-groups)) |
 | `clickhouse:cli` / `clickhouse:databases` / `clickhouse:databases:create` | Databases and client (after plugin install) |
@@ -220,6 +222,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `update` | Rolling host update from GitHub Releases (`--all-nodes`, `--skip-images`, `--recycle-user-apps`, `--check`, `--check --force`, `--force`, `--version`) |
 | `rollback` | Restore a previous GitHub tag (`--version` required; implies `--all-nodes --force`). Does not undo user deploys, volumes, or plugin data. |
 | `backup` / `migrate-domain` / `cli-add-command` | Cluster backup tarball, domain rename, print the `flynn cluster:add` line for this cluster |
+| `pg:psql` / `pg:dump` / `pg:restore` | Platform Postgres appliance (controller database). Tenant instances use `flynn pg` from the postgres plugin |
 | `list` / `promote` / `demote` / `discover` | Raft membership (`peer` vs `proxy`), promote a node to a peer, demote one (`demote -f` / `--force` when the node is already gone), resolve discoverd services |
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
