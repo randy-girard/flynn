@@ -1,6 +1,9 @@
 bin
 .vagrant
 .vagrant-dev/
+__pycache__/
+*.py[cod]
+*$py.class
 .vbox_version
 .vagrant-upgrade-smoke-tmp/
 .vagrant-upgrade-smoke-last-failure.log
