@@ -55,6 +55,8 @@ grep -q 'zpool destroy flynn-default did not finish' "${ROOT}/script/install-fly
   || { echo "install-flynn cleanup must continue when zpool destroy times out" >&2; exit 1; }
 grep -q 'unmount_under_flynn' "${ROOT}/script/install-flynn" \
   || { echo "install --clean must unmount overlay/squashfs under /var/lib/flynn before rm -rf" >&2; exit 1; }
+grep -q 'flynn_path_is_mount' "${ROOT}/script/clean-flynn" \
+  || { echo "make clean must empty a mounted guest build/ (vagrant-dev ./build-dev overlay)" >&2; exit 1; }
 grep -q 'flynn_apt_update_host' "${ROOT}/setup.sh" \
   || { echo "setup.sh must retry host apt-get update" >&2; exit 1; }
 

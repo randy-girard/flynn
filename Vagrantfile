@@ -56,6 +56,7 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   # The checkout is one synced tree, so ./build would be shared. Overlay an
   # env-specific host dir onto guest build/ so binaries, images.json, and
   # release tarballs do not overwrite each other. Smoke keeps ./build.
+  # script/clean-flynn must empty this mount, not rm -rf the mountpoint.
   if vagrant_env == "dev"
     config.vm.synced_folder "./build-dev", "/root/go/src/github.com/flynn/flynn/build", create: true, group: "root", owner: "root"
 

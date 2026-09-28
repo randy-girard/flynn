@@ -4,13 +4,21 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "${ROOT}/script/lib/ui.sh"
+source "${ROOT}/script/lib/clean-build.sh"
 
 main() {
   info "stopping Flynn cluster"
   "${ROOT}/script/kill-flynn"
 
   info "removing build dir"
-  sudo rm -rf "${ROOT}/build"
+  # vagrant-dev overlays host ./build-dev onto guest build/. rm -rf of that
+  # path is rm of a mountpoint and fails with Device or resource busy.
+  if flynn_path_is_mount "${ROOT}/build"; then
+    info "emptying mounted build dir (dev overlays ./build-dev here)"
+    sudo find "${ROOT}/build" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+  else
+    sudo rm -rf "${ROOT}/build"
+  fi
 }
 
 main $@

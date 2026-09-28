@@ -71,6 +71,11 @@ if ! grep -Fq 'destroy|teardown)' "${script}"; then
   echo "vagrant-dev.sh must accept destroy and teardown" >&2
   exit 1
 fi
+if ! grep -q 'flynn_path_is_mount' "${ROOT}/script/clean-flynn"; then
+  echo "clean-flynn must not rm -rf guest build/ when it is the build-dev mount" >&2
+  exit 1
+fi
+bash "${ROOT}/script/test-clean-flynn.sh"
 help="$(bash "${script}" help)"
 for want in "setup" "cli" "bootstrap" "update" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps"; do
   if ! grep -Fq "${want}" <<<"${help}"; then
