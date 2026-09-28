@@ -354,6 +354,43 @@ run_phase_binaries() {
   echo "===> [binaries] Complete."
 }
 
+# discoverd_up is flynn-builder's registry (host.json DISCOVERD / 192.0.2.200:1111).
+# Probe /ping (200, auth-exempt). GET /services is not a route (404); curl -f
+# treated that as "down" after ConfigureNetworking had already succeeded.
+discoverd_up() {
+  curl -sf --max-time 2 -o /dev/null "http://192.0.2.200:1111/ping"
+}
+
+# KEEP_CLUSTER image builds talk to a bootstrap discoverd that may require
+# DISCOVERD_AUTH_KEY from host.json. flynn-builder does not load that file.
+export_host_json_secrets() {
+  [[ -f /etc/flynn/host.json ]] || return 0
+  eval "$(python3 - <<'PY'
+import json, shlex
+try:
+    env = (json.load(open("/etc/flynn/host.json")) or {}).get("env") or {}
+except Exception:
+    raise SystemExit(0)
+for k in ("DISCOVERD", "DISCOVERD_AUTH_KEY", "FLYNN_HOST_AUTH_KEY", "AUTH_KEY"):
+    v = str(env.get(k) or "").strip()
+    if v:
+        print("export %s=%s" % (k, shlex.quote(v)))
+PY
+)"
+}
+
+wait_for_discoverd() {
+  local i
+  for i in $(seq 1 30); do
+    if discoverd_up; then
+      echo "===> discoverd is up on 192.0.2.200:1111"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 # --- Phase: start (local Flynn stack for flynn-builder jobs) ---
 run_phase_start() {
   require_base_squashfs
@@ -364,23 +401,29 @@ run_phase_start() {
   if keep_bootstrapped_cluster; then
     echo "===> [start] Reusing bootstrapped cluster (not start-all; that would wipe job state)"
     ./script/start-flynn-host --no-destroy-vols --no-destroy-state 0 || true
-    local i
-    for i in $(seq 1 30); do
-      if curl -s --max-time 1 -o /dev/null "http://192.0.2.200:1111/services"; then
-        echo "===> [start] discoverd is up"
-        echo "===> [start] Complete."
-        return 0
-      fi
-      sleep 2
-    done
-    echo "WARNING: discoverd did not answer on 192.0.2.200:1111; image builds may fail" >&2
-    echo "===> [start] Complete."
-    return 0
+    if wait_for_discoverd; then
+      export_host_json_secrets
+      echo "===> [start] Complete."
+      return 0
+    fi
+    # host.json exists after configure-host-auth even when bootstrap died at
+    # flannel. KEEP_CLUSTER then skipped start-all and toolchain retried
+    # flynn-builder 10 times against a dead 192.0.2.200:1111.
+    echo "===> [start] discoverd still down; falling back to start-all so flynn-builder can list hosts" >&2
+    ./script/kill-flynn || true
+    killall discoverd 2>/dev/null || true
+    rm -rf /tmp/discoverd-data
+    unset DISCOVERD_AUTH_KEY AUTH_KEY || true
   fi
   ./script/start-all
   zfs set sync=disabled flynn-default
   zfs set reservation=512M flynn-default
   zfs set refreservation=512M flynn-default
+  if ! wait_for_discoverd; then
+    echo "ERROR: discoverd did not answer on 192.0.2.200:1111; flynn-builder cannot list hosts" >&2
+    echo "hint: check /tmp/discoverd.log and /tmp/flynn-host-0.log, or script/vagrant.sh bootstrap" >&2
+    exit 1
+  fi
 
   echo "===> [start] Complete."
 }
@@ -455,6 +498,11 @@ run_flynn_builder_only() {
   local attempt=1
 
   cd "${FLYNN_ROOT}"
+  if ! discoverd_up; then
+    echo "ERROR: discoverd is down on 192.0.2.200:1111; not retrying flynn-builder ${max_retries} times" >&2
+    flynn-host ps -a || true
+    return 1
+  fi
   while [[ ${attempt} -le ${max_retries} ]]; do
     echo "===> Running flynn-builder --only=${only} (attempt ${attempt} of ${max_retries}) version=${VERSION} concurrency=${concurrency} GOMEMLIMIT=${gomemlimit}"
     # flynn-builder has been observed at >20 GB RSS during --only=apps (9p
@@ -471,6 +519,10 @@ run_flynn_builder_only() {
     echo ""
     echo "===> flynn-builder --only=${only} FAILED (attempt ${attempt} of ${max_retries})!"
     flynn-host ps -a || true
+    if ! discoverd_up; then
+      echo "ERROR: discoverd went down during --only=${only}; not retrying" >&2
+      return 1
+    fi
     if [[ ${attempt} -eq ${max_retries} ]]; then
       echo "===> Maximum retry attempts reached. Exiting."
       return 1
