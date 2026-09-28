@@ -35,8 +35,9 @@ Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 
-echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongodb-server-8.0.gpg ] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-8.0.list
-curl -fsSL https://www.mongodb.org/static/pgp/server-8.0.asc | sudo gpg -o /usr/share/keyrings/mongodb-server-8.0.gpg --dearmor --yes
+# shellcheck source=script/lib/mongodb-apt.sh
+source "${SCRIPT_DIR}/script/lib/mongodb-apt.sh"
+flynn_mongodb_install_apt_repo || exit 1
 
 flynn_apt_cmd update || exit 1
 flynn_apt_cmd install -y \

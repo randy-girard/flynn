@@ -106,11 +106,13 @@ apt-get -qy --fix-missing install language-pack-en
 update-locale LANG=en_US.UTF-8 LANGUAGE=en_US.UTF-8 LC_ALL=en_US.UTF-8
 dpkg-reconfigure locales
 
-# add the mongodb-org repo (mongodb is not in the noble archive)
-curl -fsSL https://pgp.mongodb.com/server-8.0.asc \
-  | gpg --dearmor -o /etc/apt/keyrings/mongodb.gpg
-chmod a+r /etc/apt/keyrings/mongodb.gpg
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/mongodb.gpg] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
+# add the mongodb-org repo (mongodb is not in the noble archive).
+# ASCII key + signed-by; skip gpg dearmor (no /dev/tty in some chroots).
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL --retry 5 --retry-delay 2 https://pgp.mongodb.com/server-8.0.asc \
+  -o /etc/apt/keyrings/mongodb-server-8.0.asc
+chmod a+r /etc/apt/keyrings/mongodb-server-8.0.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/mongodb-server-8.0.asc] https://repo.mongodb.org/apt/ubuntu noble/mongodb-org/8.0 multiverse" \
   > /etc/apt/sources.list.d/mongodb-org-8.0.list
 
 # update lists

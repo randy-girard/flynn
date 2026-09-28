@@ -59,12 +59,27 @@ flynn_apt_cmd() {
   local n=1
   local delay=5
   local rc=0
+  local log
   flynn_apt_install_conf
+  log="$(mktemp)"
   while true; do
-    if apt-get "$@"; then
+    # Capture rc from apt-get itself. `if apt-get; then; fi; rc=$?` is always 0
+    # because a failed test in `if` is not the if-statement's status.
+    rc=0
+    apt-get "$@" >"${log}" 2>&1 || rc=$?
+    cat "${log}"
+    if grep -qE 'NO_PUBKEY|is not signed' "${log}"; then
+      echo "apt-get $* failed with a GPG signing error (not retrying, rc=${rc})" >&2
+      rm -f "${log}"
+      if [[ "${rc}" -eq 0 ]]; then
+        rc=100
+      fi
+      return "${rc}"
+    fi
+    if [[ "${rc}" -eq 0 ]]; then
+      rm -f "${log}"
       return 0
     fi
-    rc=$?
     if [[ "${n}" -ge "${max}" ]]; then
       break
     fi
@@ -80,6 +95,7 @@ flynn_apt_cmd() {
       delay=45
     fi
   done
+  rm -f "${log}"
   return "${rc}"
 }
 
