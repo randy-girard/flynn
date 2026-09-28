@@ -105,3 +105,31 @@ func TestLifecycleQueueDropsWhenFullInsteadOfBlocking(t *testing.T) {
 		t.Fatalf("dropped=%d want 10", got)
 	}
 }
+
+func TestWaitAttachReturnsWhenAttacherNeverCompletes(t *testing.T) {
+	old := attachWaitTimeout
+	attachWaitTimeout = 50 * time.Millisecond
+	defer func() { attachWaitTimeout = old }()
+
+	state := NewState("host1", filepath.Join(t.TempDir(), "host-state-db"))
+	ch := make(chan struct{}) // nobody receives the signal or completes the handshake
+	if job := state.AddAttacher("job-1", ch); job != nil {
+		t.Fatal("attacher must register before the job exists")
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		state.WaitAttach("job-1")
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("WaitAttach blocked on a log attach that never finished; jobs stay starting")
+	}
+}
+
+func TestWaitAttachTimeoutIsNotADeployTimeout(t *testing.T) {
+	if attachWaitTimeout > 15*time.Second {
+		t.Fatalf("attach wait %s is a timeout band-aid; resume the container in seconds", attachWaitTimeout)
+	}
+}

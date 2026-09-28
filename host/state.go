@@ -599,16 +599,29 @@ func (s *State) RemoveAttacher(jobID string, ch chan struct{}) {
 	}
 }
 
+// attachWaitTimeout is how long WaitAttach will wait for a log-attach client
+// before resuming the container anyway. An unbounded wait left every job on
+// a newly joined host in "starting" (add-node pass 2, 2026-09-27): the
+// logaggregator attach handshake never finished, containerinit never got
+// Resume, StartedAt stayed zero, and controller ScaleRequest never saw a
+// running scheduler on node4.
+var attachWaitTimeout = 5 * time.Second
+
 func (s *State) WaitAttach(jobID string) {
 	s.mtx.Lock()
 	a := s.attachers[jobID]
 	delete(s.attachers, jobID)
 	s.mtx.Unlock()
 	for ch := range a {
-		// signal attach
-		ch <- struct{}{}
-		// wait for attach
-		<-ch
+		select {
+		case ch <- struct{}{}:
+		case <-time.After(attachWaitTimeout):
+			continue
+		}
+		select {
+		case <-ch:
+		case <-time.After(attachWaitTimeout):
+		}
 	}
 }
 
