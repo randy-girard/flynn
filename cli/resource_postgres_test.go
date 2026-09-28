@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -32,6 +34,25 @@ func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
 	})
 	if !errors.Is(err, pgappliance.ErrTenantProvision) {
 		t.Fatalf("platform provider: %v", err)
+	}
+}
+
+func TestResourceAddPostgresDoesNotScaleTheInstance(t *testing.T) {
+	src, err := os.ReadFile("resource.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(src), "ScaleAppRelease") {
+		t.Fatal("resource:add must ProvisionResource on postgres-plugin; the plugin starts the instance")
+	}
+	if !strings.Contains(string(src), "ProvisionResource") {
+		t.Fatal("resource:add must call ProvisionResource")
+	}
+	if !ct.ShouldProbeScaleStall(5 * time.Minute) {
+		t.Fatal("a 5m ScaleAppRelease wait enables stall probes; the plugin must NoWait and poll discoverd")
+	}
+	if ct.ScaleStartingStuckTimeout >= time.Minute {
+		t.Fatal("initdb typically exceeds ScaleStartingStuckTimeout")
 	}
 }
 
