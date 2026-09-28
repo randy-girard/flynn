@@ -2,10 +2,12 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -77,6 +79,65 @@ func (c *controllerAPI) ReplaceDBRuntimes(ctx context.Context, w http.ResponseWr
 	}
 	dbRuntimeMu.Lock()
 	dbRuntimeCat = cat
+	dbRuntimeMu.Unlock()
+	httphelper.JSON(w, 200, cat)
+}
+
+func (c *controllerAPI) UpdateDBRuntime(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if !canManageDBRuntimes(ctx) {
+		httphelper.Forbidden(w, "updating a database runtime requires flynn-host or a cluster admin")
+		return
+	}
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	var body dbruntime.Runtime
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	fields := dbruntime.UpdateFields{CPU: &body.CPU, Memory: &body.Memory, Disk: &body.Disk}
+	if n := strings.TrimSpace(body.Name); n != "" {
+		fields.Name = &n
+	}
+	dbRuntimeMu.Lock()
+	defer dbRuntimeMu.Unlock()
+	updated, err := dbRuntimeCat.Update(params.ByName("engine"), params.ByName("name"), fields)
+	if err != nil {
+		respondWithError(w, ct.ValidationError{Field: "runtime", Message: err.Error()})
+		return
+	}
+	httphelper.JSON(w, 200, updated)
+}
+
+func (c *controllerAPI) DeleteDBRuntime(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if !canManageDBRuntimes(ctx) {
+		httphelper.Forbidden(w, "removing a database runtime requires flynn-host or a cluster admin")
+		return
+	}
+	params, _ := ctxhelper.ParamsFromContext(ctx)
+	dbRuntimeMu.Lock()
+	defer dbRuntimeMu.Unlock()
+	if err := dbRuntimeCat.Remove(params.ByName("engine"), params.ByName("name")); err != nil {
+		respondWithError(w, ct.ValidationError{Field: "runtime", Message: err.Error()})
+		return
+	}
+	w.WriteHeader(200)
+}
+
+func (c *controllerAPI) UpdateDBRuntimeSettings(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if !canManageDBRuntimes(ctx) {
+		httphelper.Forbidden(w, "updating database runtime settings requires flynn-host or a cluster admin")
+		return
+	}
+	var body struct {
+		AllowCustomSizes bool `json:"allow_custom_sizes"`
+	}
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	dbRuntimeMu.Lock()
+	dbRuntimeCat.AllowCustomSizes = body.AllowCustomSizes
+	cat := dbRuntimeCat
 	dbRuntimeMu.Unlock()
 	httphelper.JSON(w, 200, cat)
 }

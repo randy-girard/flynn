@@ -1144,6 +1144,19 @@ func (c *Client) ReplaceDBRuntimes(catalog *dbruntime.Catalog) error {
 	return c.Put("/db-runtimes", catalog, catalog)
 }
 
+func (c *Client) UpdateDBRuntime(engine, name string, runtime *dbruntime.Runtime) error {
+	return c.Put("/db-runtimes/"+engine+"/"+name, runtime, runtime)
+}
+
+func (c *Client) DeleteDBRuntime(engine, name string) error {
+	return c.Delete("/db-runtimes/"+engine+"/"+name, nil)
+}
+
+func (c *Client) UpdateDBRuntimeSettings(allowCustomSizes bool) (*dbruntime.Catalog, error) {
+	cat := &dbruntime.Catalog{}
+	return cat, c.Put("/cluster/db-runtime-settings", map[string]bool{"allow_custom_sizes": allowCustomSizes}, cat)
+}
+
 func (c *Client) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) {
 	var list []*ct.RuntimeProfile
 	return list, c.Get("/runtimes", &list)

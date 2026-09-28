@@ -331,6 +331,9 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/db-runtimes", httphelper.WrapHandler(api.ListDBRuntimes))
 	httpRouter.POST("/db-runtimes", httphelper.WrapHandler(api.CreateDBRuntime))
 	httpRouter.PUT("/db-runtimes", httphelper.WrapHandler(api.ReplaceDBRuntimes))
+	httpRouter.PUT("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.UpdateDBRuntime))
+	httpRouter.DELETE("/db-runtimes/:engine/:name", httphelper.WrapHandler(api.DeleteDBRuntime))
+	httpRouter.PUT("/cluster/db-runtime-settings", httphelper.WrapHandler(api.UpdateDBRuntimeSettings))
 
 	httpRouter.GET("/runtimes", httphelper.WrapHandler(api.ListRuntimeProfiles))
 	httpRouter.POST("/runtimes", httphelper.WrapHandler(api.CreateRuntimeProfile))
