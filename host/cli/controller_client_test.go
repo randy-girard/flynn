@@ -31,8 +31,8 @@ func TestControllerClientUsesDiscoverdNameNotInstanceIP(t *testing.T) {
 	if strings.Contains(body, `"http://"+instances[0].Addr`) {
 		t.Fatal("controllerClient must not pin Hijack to a controller instance IP")
 	}
-	if !strings.Contains(body, "Dial: discoverdDial") {
-		t.Fatal("discoverdHTTPClient must set Transport.Dial to discoverdDial")
+	if !strings.Contains(body, "newControllerHTTPClient(discoverdDial") {
+		t.Fatal("discoverdHTTPClient must dial controller.discoverd through newControllerHTTPClient")
 	}
 }
 

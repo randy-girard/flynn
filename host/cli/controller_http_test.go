@@ -26,6 +26,23 @@ func TestNewControllerHTTPClientStreamingHasNoTimeout(t *testing.T) {
 	}
 }
 
+func TestDiscoverdHTTPClientHasResponseHeaderTimeout(t *testing.T) {
+	c := discoverdHTTPClient()
+	if c.Timeout != 0 {
+		t.Fatalf("Timeout=%s, want 0 for streaming and large uploads", c.Timeout)
+	}
+	tr, ok := c.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("Transport is %T", c.Transport)
+	}
+	if tr.ResponseHeaderTimeout != controllerResponseHeaderTimeout {
+		t.Fatalf("ResponseHeaderTimeout=%s", tr.ResponseHeaderTimeout)
+	}
+	if tr.Dial == nil {
+		t.Fatal("Dial must be set")
+	}
+}
+
 func TestNewControllerHTTPClientRepairHasTimeout(t *testing.T) {
 	c := newControllerHTTPClient(nil, controllerRepairHTTPTimeout)
 	if c.Timeout != controllerRepairHTTPTimeout {

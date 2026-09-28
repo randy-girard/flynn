@@ -13,7 +13,7 @@ import (
 )
 
 func discoverdHTTPClient() *http.Client {
-	return &http.Client{Transport: &http.Transport{Dial: discoverdDial}}
+	return newControllerHTTPClient(discoverdDial, 0)
 }
 
 // lookupDiscoverdAddrs is replaced in tests. Production uses the local discoverd API.
