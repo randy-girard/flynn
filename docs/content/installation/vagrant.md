@@ -48,41 +48,47 @@ Reach cluster services on the host-only addresses, not Vagrant NAT port forwards
 
 Provisioning a cluster from these VMs is the same as [manual installation](manual.md): install `flynn-host` on each node, `flynn-host init` with `--peer-ips` or a discovery token, then `flynn-host bootstrap`.
 
-`script/vagrant-smoke.sh` is the acceptance suite (`--item quick`, and so on). The same entrypoint also has VM lifecycle commands for the smoke env (`.vagrant`, **builder** + **nodeN**). They do not touch the laptop loop:
+`script/vagrant-smoke.sh` (or `make vagrant-smoke`) is the acceptance suite (`--item quick`, `--item datastores`, and so on). The same entrypoint also has VM lifecycle commands for the smoke env (`.vagrant`, **builder** + **nodeN**). They do not touch the laptop loop:
 
 ```text
-script/vagrant-smoke.sh status
-script/vagrant-smoke.sh ssh              # builder; or: ssh node1
-script/vagrant-smoke.sh up               # boot VMs already in .vagrant
-script/vagrant-smoke.sh reload           # alias: restart
-script/vagrant-smoke.sh stop             # alias: halt
-script/vagrant-smoke.sh destroy          # alias: teardown; ./build stays
+make vagrant-smoke-status
+make vagrant-smoke-ssh               # builder; or: make vagrant-smoke-ssh VM=node1
+make vagrant-smoke-up                # boot VMs already in .vagrant
+make vagrant-smoke-reload            # alias: restart
+make vagrant-smoke-stop              # alias: halt
+make vagrant-smoke-destroy           # alias: teardown; ./build stays
+# same commands: script/vagrant-smoke.sh status|ssh|up|reload|stop|destroy
 ```
+
+Scripts live under `script/vagrant/` (shared `lib/`, smoke lifecycle in `smoke-env.sh`). `script/vagrant/suite.sh` is still the suite.
 
 ## Laptop development cluster
 
-`script/vagrant-dev.sh` is a second Vagrant environment, kept apart from smoke so both can be up. It uses `.vagrant-dev`, a VM named **dev-builder** at `192.168.57.10`, and optional extra hosts `dev-node1` … `dev-nodeN` on `192.168.57.(19+N)` (`FLYNN_DEV_NODES=N`). Do not run a bare `vagrant up` for this loop either; that still boots smoke.
+`script/vagrant.sh` is the laptop loop (the default Vagrant script). Smoke keeps the `-smoke` suffix so both can be up without sharing running VMs. The laptop env uses `.vagrant-dev`, **dev-builder** at `192.168.57.10`, and **dev-node1** at `192.168.57.20` by default (`FLYNN_DEV_NODES=1`). Set `FLYNN_DEV_NODES=0` for builder-only, or `N` for `dev-node1` … `dev-nodeN` on `192.168.57.(19+N)`. Do not run a bare `vagrant up` for this loop either; that still boots smoke.
 
 ```text
-script/vagrant-dev.sh setup      # first time: boot, bootstrap, connect this laptop
-script/vagrant-dev.sh up         # boot only dev-builder
-script/vagrant-dev.sh reload     # reboot VMs and start flynn-host again
-script/vagrant-dev.sh restart    # same as reload
-script/vagrant-dev.sh stop       # halt VMs (disks stay)
-script/vagrant-dev.sh destroy    # delete VMs (alias: teardown); ./build-dev stays
-script/vagrant-dev.sh status
-script/vagrant-dev.sh ssh
-script/vagrant-dev.sh build      # rebuild cluster images; keeps a bootstrapped cluster running
-script/vagrant-dev.sh update     # flynn-host update from the new tarball
+make vagrant-setup           # first time: boot, build images if needed, bootstrap, connect
+make vagrant-up              # boot dev-builder and dev-node1
+make vagrant-reload          # reboot VMs and start flynn-host again
+make vagrant-stop            # halt VMs (disks stay)
+make vagrant-destroy         # delete VMs; ./build-dev stays
+make vagrant-status
+make vagrant-ssh
+make vagrant-build           # boot builder if needed and build images (works before setup)
+make vagrant-cli             # build the laptop flynn CLI and install it to /usr/local/bin
+make vagrant-bootstrap       # first cluster on dev-builder (script/bootstrap-flynn)
+make vagrant-update          # flynn-host update from the new tarball
+make vagrant                 # help
+# same commands: script/vagrant.sh setup|up|reload|stop|destroy|status|ssh|build|cli|bootstrap|update
 ```
 
-`reload` / `restart` run `vagrant reload --no-provision` on every machine already in `.vagrant-dev` (or the names you pass, e.g. `script/vagrant-dev.sh reload dev-node1`). They do not create missing VMs. Nested `script/bootstrap-flynn` on **dev-builder** does not install a boot-time systemd unit, so after a reboot the script starts `flynn-host` again if the cluster was already bootstrapped.
+`reload` / `restart` run `vagrant reload --no-provision` on every machine already in `.vagrant-dev` (or the names you pass, e.g. `make vagrant-reload VM=dev-node1`). They do not create missing VMs. Nested `script/bootstrap-flynn` on **dev-builder** does not install a boot-time systemd unit, so after a reboot the script starts `flynn-host` again if the cluster was already bootstrapped.
 
-`script/vagrant-dev.sh build` sets `FLYNN_KEEP_CLUSTER=1` so `build.sh cluster` does not `stop-all` / `install-flynn --remove` a bootstrapped cluster. Without that, discoverd on `192.0.2.200:1111` is gone and `flynn-host ps` fails with connection refused. `update` restarts the start-stop-daemon flynn-host (this VM has no `flynn-host.service`). If a previous `build` already tore the cluster down, `setup` treats leftover `/etc/flynn/host.json` as not bootstrapped and runs `bootstrap-flynn` again. Laptop `cluster:add` reads the controller job `AUTH_KEY` (`flynn-host cli-add-command`), not a stale `host.json` secret; `GET /ca-cert` does not check the key, so a leftover key used to look like success and then `GET /apps` returned 401.
+`setup` bootstraps from the layer cache. If there is no tarball and the cache is empty, it builds images instead of failing with “run build then setup again.” `build` can run first on a fresh builder (it boots `dev-builder` if needed). After a cluster exists, `build` sets `FLYNN_KEEP_CLUSTER=1` so `build.sh cluster` does not `stop-all` / `install-flynn --remove`. Without that, discoverd on `192.0.2.200:1111` is gone and `flynn-host ps` fails with connection refused. `update` restarts the start-stop-daemon flynn-host (this VM has no `flynn-host.service`). If a previous `build` already tore the cluster down, `setup` treats leftover `/etc/flynn/host.json` as not bootstrapped and runs `bootstrap-flynn` again. Laptop `cluster:add` reads the controller job `AUTH_KEY` (`flynn-host cli-add-command`), not a stale `host.json` secret; `GET /ca-cert` does not check the key, so a leftover key used to look like success and then `GET /apps` returned 401.
 
 `stop` / `halt` run `vagrant halt`. `destroy` / `teardown` run `vagrant destroy -f`. Both stay in `.vagrant-dev` and do not touch smoke. Destroy does not delete `./build-dev` or `./flynn-logs`.
 
-The source tree is shared, but Flynn **build outputs** are not. Inside the VM they still look like `build/`; on the laptop they land in `./build-dev` (binaries, `images.json`, release tarballs). Smoke keeps `./build`. After this mount is added, run `script/vagrant-dev.sh reload` so the overlay attaches. If you already built on the shared `./build`, copy what you need (`cp -a build/. build-dev/`) or run `script/vagrant-dev.sh build` again.
+The source tree and `ubuntu_ports_cache` are shared, but Flynn **build outputs** and running VMs are not. Inside the VM they still look like `build/`; on the laptop they land in `./build-dev` (binaries, `images.json`, release tarballs). Smoke keeps `./build`. After this mount is added, run `make vagrant-reload` so the overlay attaches. If you already built on the shared `./build`, copy what you need (`cp -a build/. build-dev/`) or run `make vagrant-build` again.
 
 See [Development](../development.html.md).
 

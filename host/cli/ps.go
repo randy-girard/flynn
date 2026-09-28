@@ -133,7 +133,7 @@ func discoverdListHint(err error) string {
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "192.0.2.200:1111") && strings.Contains(msg, "connection refused") {
-		return msg + " (discoverd is down on the vagrant-dev listen IP; script/vagrant-dev.sh build used to stop-all the cluster — reload if host.json exists, otherwise bootstrap again)"
+		return msg + " (discoverd is down on the vagrant-dev listen IP; script/vagrant.sh build used to stop-all the cluster — reload if host.json exists, otherwise bootstrap again)"
 	}
 	return msg
 }

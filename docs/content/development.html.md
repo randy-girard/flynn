@@ -21,14 +21,16 @@ and the `vagrant-disksize` plugin.
 
 Do **not** run a bare `vagrant up`. That boots the builder and every cluster
 node (heavy). See [Vagrant](installation/vagrant.md). For a laptop cluster that
-can sit beside smoke, use `script/vagrant-dev.sh` (`.vagrant-dev`, **dev-builder**
-at `192.168.57.10`). `script/vagrant-dev.sh reload` (alias `restart`) reboots
-those VMs and starts `flynn-host` again. `script/vagrant-dev.sh stop` (alias
-`halt`) powers them off; `script/vagrant-dev.sh destroy` (alias `teardown`)
-deletes the VMs without touching smoke or `./build-dev`. Flynn artifacts from
-that loop land in `./build-dev` on the laptop; smoke keeps `./build`.
+can sit beside smoke, use `script/vagrant.sh` / `make vagrant-setup`
+(`.vagrant-dev`, **dev-builder** at `192.168.57.10` and **dev-node1** at
+`192.168.57.20`). `make vagrant-reload`
+(alias `restart`) reboots those VMs and starts `flynn-host` again.
+`make vagrant-stop` (alias `halt`) powers them off; `make vagrant-destroy`
+(alias `teardown`) deletes the VMs without touching smoke or `./build-dev`.
+Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
+keeps `./build`. Implementation lives in `script/vagrant/`.
 
-Clone this fork, then start only the builder:
+Clone this fork, then start only the smoke builder (not the laptop loop):
 
 ```
 $ git clone https://github.com/randy-girard/flynn.git
@@ -52,7 +54,8 @@ You can also work on a native Ubuntu 24.04 machine with the same packages.
 macOS is fine for editing and for **Docker-wrapped unit tests**; it cannot run
 ZFS, `flynn-host`, or the Vagrant smoke cluster.
 
-Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-redis`,
+Optional plugins live in sibling repos next to this checkout (`../flynn-plugin-postgres`,
+`../flynn-plugin-redis`,
 `../flynn-plugin-dashboard`, `../flynn-plugin-discovery`, `../flynn-plugin-www`,
 `../flynn-plugin-otel`, `../flynn-plugin-scheduler`, `../flynn-plugin-github`,
 `../flynn-plugin-enterprise`, `../flynn-plugin-billing`, …). Install catalog
@@ -71,12 +74,14 @@ GitHub Actions, `script/run-unit-tests`, and Vagrant smoke all run
 For day-to-day Go work on the builder (or Linux):
 
 ```
+$ make help
 $ make
 ```
 
-That runs `script/build-flynn`. Binaries land in `build/bin`, image manifests in
-`build/image`. `make clean` wipes them. `make release` stamps a git-derived
-version. `flynn-test` / `flynn-test-file-server` are omitted unless you pass
+`make help` lists every public target and the `ITEM` / `VM` / `ARGS` variables.
+A bare `make` still runs `script/build-flynn`. Binaries land in `build/bin`,
+image manifests in `build/image`. `make clean` wipes them. `make release`
+stamps a git-derived version. `flynn-test` / `flynn-test-file-server` are omitted unless you pass
 `--test-binaries` or set `FLYNN_BUILD_TEST_BINARIES=1`.
 
 ### Cluster images
@@ -151,7 +156,7 @@ Knobs:
   refreshed on each cache hit) for `FLYNN_LAYER_CACHE_MAX_AGE` (default
   `168h`); `FLYNN_LAYER_CACHE_PRUNE=0` skips it, `flynn-builder prune
   --dry-run` shows what it would drop.
-- `SKIP_BUILD=1` on `script/vagrant-upgrade-smoke.sh` reuses the existing
+- `SKIP_BUILD=1` on `script/vagrant/suite.sh` reuses the existing
   tarball when nothing changed at all.
 - Always go through `build.sh cluster` (or a phase list that starts with
   `prep`) after editing code. `build.sh apps` on its own trusts the previous
@@ -218,7 +223,7 @@ $ util/commit-validator/validate-gofmt
 ```
 
 CI, `make test-unit` / `script/run-unit-tests`, and
-`script/vagrant-upgrade-smoke.sh` all run this check. It compares against the
+`script/vagrant/suite.sh` all run this check. It compares against the
 PR base in CI; locally it uses the first of `origin/develop`, `origin/main`,
 or `origin/master` that exists (`util/commit-validator/.validate`), so you do
 not fail on unrelated historical drift. `FLYNN_TEST_SKIP_CHECKS=1` skips bats only; gofmt still runs.
@@ -240,8 +245,8 @@ once per clone.
 $ bats script/test
 ```
 
-Covers installer/git/curl/release helper scripts. CI installs `bats` and runs
-this before `go test`.
+Covers installer/git/curl/release helper scripts and `make help`. CI installs
+`bats` and runs this before `go test`.
 
 ### Unit tests (Go)
 
@@ -281,18 +286,18 @@ the builder VM (or CI’s Ubuntu runner) can.
 ### Smoke script regressions
 
 These are fast host checks. They do **not** boot VMs. They assert that
-`script/vagrant-upgrade-smoke.sh` still contains the behaviors we care about
+`script/vagrant/suite.sh` still contains the behaviors we care about
 (datastores, overlay isolation, dockerbuilder, membership, image-slim, …):
 
 ```
-$ bash script/test-vagrant-smoke-cli-functions.sh
+$ bash script/vagrant/test/cli-functions.sh
 # or all of them:
-$ for s in script/test-vagrant-smoke-*.sh; do bash "$s" || exit 1; done
+$ for s in script/vagrant/test/*.sh; do bash "$s" || exit 1; done
 ```
 
 Related one-off script tests: `script/test-apt-retry.sh`,
 `script/test-release-notes.sh`. The Vagrant smoke driver runs every
-`script/test-vagrant-smoke-*.sh` before it starts VirtualBox.
+`script/vagrant/test/*.sh` before it starts VirtualBox.
 
 ### Integration tests
 
@@ -334,7 +339,7 @@ $ script/vagrant-smoke.sh --item quick
 Configurations live in a matrix document, not a pile of environment variables:
 
 - `smoke-matrix.example.yaml` — committed catalog of layouts (quick, singleton, HA,
-  add-node, remove-node, discovery, install-only, minio, pipeline)
+  add-node, remove-node, discovery, install-only, minio, pipeline, datastores)
 - `smoke-matrix.yaml` — gitignored local copy; used when present
   (`cp smoke-matrix.example.yaml smoke-matrix.yaml`)
 
@@ -344,23 +349,28 @@ $ script/vagrant-smoke.sh --item quick
 $ script/vagrant-smoke.sh --item singleton
 $ script/vagrant-smoke.sh --item ha,add-node
 $ script/vagrant-smoke.sh --item pipeline
+$ script/vagrant-smoke.sh --item datastores
 $ SKIP_BUILD=1 script/vagrant-smoke.sh --item install-only
 $ script/vagrant-smoke.sh stop           # halt builder + nodeN (disks stay)
 $ script/vagrant-smoke.sh destroy        # delete those VMs (alias: teardown)
+$ make vagrant-smoke                     # same as --item quick
+$ make vagrant-smoke-stop
+$ make vagrant-smoke-destroy
 ```
 
 `script/vagrant-smoke.sh` is a thin entrypoint over
-`script/vagrant-upgrade-smoke.sh`, which still holds the suite (the
+`script/vagrant/suite.sh`, which still holds the suite (the
 name predates the test covering far more than upgrades); options, environment
-variables, the matrix files, and the `script/test-vagrant-smoke-*.sh` contract
+variables, the matrix files, and the `script/vagrant/test/*.sh` contract
 tests are the same for both. Subcommands `status`, `ssh`, `up`, `reload`,
-`stop`, and `destroy` (and their aliases) go to `script/vagrant-smoke-env.sh`
-and only touch `.vagrant`. After a fix, the rebuild on the builder is incremental (see
+`stop`, and `destroy` (and their aliases) go to `script/vagrant/smoke-env.sh`
+and only touch `.vagrant`. Shared lifecycle helpers live in `script/vagrant/lib/`.
+After a fix, the rebuild on the builder is incremental (see
 [Incremental rebuilds](#incremental-rebuilds)).
 
 Default flow:
 
-1. **Host gate** — all `script/test-vagrant-smoke-*.sh`, then a set of
+1. **Host gate** — all `script/vagrant/test/*.sh`, then a set of
    Darwin-safe `go test` packages (`./cli/`, `./pkg/netpolicy/`, sirenia,
    updater, …) plus `test/apps/upgrade-smoke`. Failures stop before VMs.
 2. **Builder gate** — `vagrant up builder`, then the full native Linux unit
@@ -391,8 +401,9 @@ Default flow:
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
    re-verify the slug/Dockerfile git-push/docker-push apps plus postgres/mysql/mongodb data. Installed
    plugins restore with postgres (`plugins.json` is the inventory; do not
-   `plugin:install` again). Redis, Kafka, and ClickHouse volume data is not
-   in the cluster backup; those engines must come back empty.
+   `plugin:install` again). Redis, Kafka, ClickHouse, and tenant Postgres
+   instance volumes are not in the cluster backup; those engines must come
+   back empty. `pg_dumpall` is the platform appliance only.
 
 Logs: `./flynn-logs/{builder,node*}`. Cleared at start unless `KEEP_LOGS=1`.
 
@@ -404,6 +415,7 @@ set in the environment):
 | `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push. No tenant database on the platform Postgres appliance |
 | `--item minio` | 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore. Extra RAM; disabled in the example matrix. |
 | `--item pipeline` | 1-node pipeline create/add/promote into an undeployed production app. Disabled in the example matrix. |
+| `--item datastores` | 1-node: install every datastore plugin and `resource:add` each on a throwaway app (no upgrade/backup/docker). Disabled in the example matrix. |
 | `--item singleton` | Run one matrix row (even if `enabled: false`) |
 | `--list` | Print matrix items and exit |
 | `--matrix PATH` / `SMOKE_MATRIX` | Use a different matrix file |
@@ -419,10 +431,10 @@ set in the environment):
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |
-| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline) |
+| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline). Tenant `postgres` is a catalog plugin; it is not in that suite.sh default. |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
-The smoke header in `script/vagrant-upgrade-smoke.sh` lists the rest.
+The smoke header in `script/vagrant/suite.sh` lists the rest.
 
 ## CI
 
@@ -484,7 +496,7 @@ DCO sign-off). Include tests, or explain why not.
 * Pure Go / CLI: `make test-unit` (and gofmt) is the minimum
 * Scripts under `script/`: bats and/or the matching `script/test-*.sh`
 * Cluster, overlay, datastores, dockerbuilder, upgrades, membership, backup/restore: run
-  `script/vagrant-upgrade-smoke.sh` (narrow with `--item` or `SMOKE_TOPOLOGIES` if needed)
+  `script/vagrant/suite.sh` (narrow with `--item` or `SMOKE_TOPOLOGIES` if needed)
 
 See [Contributing](contributing.md).
 

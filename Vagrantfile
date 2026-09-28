@@ -47,8 +47,8 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   #
   # FLYNN_VAGRANT_ENV selects which machines this process owns:
   #   smoke (default)  builder + nodeN on 192.168.56.0/24, state in .vagrant
-  #   dev               dev-builder (+ optional dev-nodeN) on 192.168.57.0/24,
-  #                     state in .vagrant-dev
+  #   dev               dev-builder + dev-node1 (FLYNN_DEV_NODES, default 1)
+  #                     on 192.168.57.0/24, state in .vagrant-dev
   # Smoke and the laptop dev loop can both be up. They do not share a VM,
   # a host-only address, or a Vagrant machine index.
   vagrant_env = ENV.fetch("FLYNN_VAGRANT_ENV", "smoke")
@@ -81,10 +81,10 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       dev.vm.network "private_network", ip: "192.168.57.10"
     end
 
-    # Optional extra hosts for the dev cluster. Default is none: the dev
-    # loop bootstraps on dev-builder. FLYNN_DEV_NODES=3 adds dev-node1..3
+    # Extra hosts for the laptop cluster. Default is one (dev-node1 at
+    # 192.168.57.20). FLYNN_DEV_NODES=0 is builder-only; 3 adds dev-node1..3
     # at 192.168.57.(19+N), the same offset smoke uses on 192.168.56.0/24.
-    dev_nodes = Integer(ENV.fetch("FLYNN_DEV_NODES", "0"))
+    dev_nodes = Integer(ENV.fetch("FLYNN_DEV_NODES", "1"))
     raise "FLYNN_DEV_NODES must be >= 0 (got #{dev_nodes})" if dev_nodes < 0
     (1..dev_nodes).each do |i|
       config.vm.define "dev-node#{i}" do |runner|

@@ -109,8 +109,8 @@ The root `Vagrantfile` uses the `bento/ubuntu-24.04` box.
 
 - `vagrant up builder` — build VM (`setup.sh` installs Go, Docker, ZFS, and appliance test deps)
 - `vagrant up node1 node2 node3` — a three-node cluster on a host-only network
-- `script/vagrant-smoke.sh` — acceptance suite (`--item quick`); also `status` / `ssh` / `up` / `reload` / `stop` / `destroy` for `.vagrant` (aliases `restart` / `halt` / `teardown`)
-- `script/vagrant-dev.sh` — laptop loop in `.vagrant-dev` (`dev-builder` at 192.168.57.10); artifacts in `./build-dev` so they do not overwrite smoke’s `./build`; `reload` / `stop` / `destroy` (aliases `restart` / `halt` / `teardown`)
+- `script/vagrant-smoke.sh` / `make vagrant-smoke` — acceptance suite (`--item quick`); also `status` / `ssh` / `up` / `reload` / `stop` / `destroy` for `.vagrant` (aliases `restart` / `halt` / `teardown`)
+- `script/vagrant.sh` / `make vagrant-setup` — laptop loop in `.vagrant-dev` (`dev-builder` at 192.168.57.10 and `dev-node1` at 192.168.57.20 by default); artifacts in `./build-dev` so they do not overwrite smoke’s `./build`; `reload` / `stop` / `destroy` (aliases `restart` / `halt` / `teardown`). Shared code is under `script/vagrant/`.
 
 See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/content/development.html.md).
 
@@ -118,7 +118,7 @@ See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/conte
 
 ```bash
 flynn apps:create myapp
-# tenant Postgres is flynn-plugin-postgres (not yet installed);
+# after: sudo flynn-host plugin:install postgres
 # this does not provision on the platform appliance
 flynn resource:add postgres
 git push flynn main            # or: master
@@ -163,14 +163,14 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
 | platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `resource:add postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
-| `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote |
+| `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote. Instance volumes are not in `flynn-host backup` |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. No replicas and not in `flynn-host backup`; caching and development |
 | `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka` |
 | `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse` |
 
-Postgres, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Redis does not. Details: [Databases](docs/content/databases.html.md).
+The platform Postgres appliance, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Tenant Postgres from the plugin is one node (follow, wait, promote). Redis does not replicate. Details: [Databases](docs/content/databases.html.md).
 
 ## HTTPS and Let's Encrypt
 
@@ -236,12 +236,13 @@ Needs Ubuntu 24.04 with Docker, ZFS, and the packages in `setup.sh` (the Vagrant
 git clone https://github.com/randy-girard/flynn.git
 cd flynn
 vagrant up builder            # Ubuntu 24.04 build VM
+make help                     # list Makefile targets
 make                          # script/build-flynn (host binaries)
 script/bootstrap-flynn        # single-node cluster from local images
 make test-unit                # go test; uses Docker on macOS/Windows
 ```
 
-`make test-integration` boots a nested cluster. For most cluster/docs/CLI changes run `script/vagrant-smoke.sh --item quick` (1-node boot, git-push, docker-push, postgres). Upgrade, backup, HA, and plugin changes should use `singleton`/`ha`; the pre-release gate is the enabled matrix (`singleton` then `ha`). See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
+`make test-integration` boots a nested cluster. For most cluster/docs/CLI changes run `script/vagrant-smoke.sh --item quick` (1-node boot, git-push, docker-push; no tenant database, no plugin install). Upgrade, backup, HA, and plugin changes should use `singleton`/`ha`; the pre-release gate is the enabled matrix (`singleton` then `ha`). See [Development](docs/content/development.html.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 
