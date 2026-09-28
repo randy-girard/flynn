@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 	"text/tabwriter"
 	"text/template"
 	"time"
@@ -59,7 +60,7 @@ func runPs(args *docopt.Args, client *cluster.Client) error {
 func jobList(client *cluster.Client, all bool) (sortJobs, error) {
 	hosts, err := client.Hosts()
 	if err != nil {
-		return nil, fmt.Errorf("could not list hosts: %s", err)
+		return nil, fmt.Errorf("could not list hosts: %s", discoverdListHint(err))
 	}
 	if len(hosts) == 0 {
 		return nil, errors.New("no hosts found")
@@ -124,4 +125,15 @@ func printJobs(jobs sortJobs, out io.Writer) {
 			jobError,
 		)
 	}
+}
+
+func discoverdListHint(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "192.0.2.200:1111") && strings.Contains(msg, "connection refused") {
+		return msg + " (discoverd is down on the vagrant-dev listen IP; script/vagrant-dev.sh build used to stop-all the cluster — reload if host.json exists, otherwise bootstrap again)"
+	}
+	return msg
 }

@@ -51,6 +51,17 @@ fi
 
 echo "updating from ${tarball} using ${host_bin}"
 install -m 0755 "${host_bin}" /usr/local/libexec/flynn-host
-bash "${ROOT}/script/vagrant-dev-guest-cli.sh"
+export FLYNN_ROOT="${ROOT}"
 export PATH="/usr/local/bin:${ROOT}/build/bin:${PATH}"
-exec flynn-host update --tarball "${ROOT}/${tarball}" --force
+# Install the tarball into build/bin so start-flynn-host (vagrant-dev) execs
+# the new binary. Default --bin-dir is /usr/local/bin and would leave the
+# start-stop-daemon --exec path on the previous inode.
+flynn-host update --tarball "${ROOT}/${tarball}" --force --bin-dir="${ROOT}/build/bin"
+bash "${ROOT}/script/vagrant-dev-guest-cli.sh"
+if ! curl -s --max-time 2 -o /dev/null "http://192.0.2.200:1111/services"; then
+  echo "discoverd is not on 192.0.2.200:1111; starting the existing cluster if it was bootstrapped"
+  if ! bash "${ROOT}/script/vagrant-dev-ensure-cluster.sh"; then
+    echo "cluster did not come back. vagrant-dev.sh build used to tear it down; run script/vagrant-dev.sh bootstrap" >&2
+    exit 1
+  fi
+fi

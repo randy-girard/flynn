@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -577,5 +578,47 @@ func TestSystemDeployTimeoutIsPlacementCeiling(t *testing.T) {
 	}
 	if ct.ScaleStartingStuckTimeout >= minSystemDeployTimeout {
 		t.Fatal("stuck starting must fail faster than the system deploy ceiling")
+	}
+}
+
+func TestStartStopDaemonRestartScriptUsesFLYNNRoot(t *testing.T) {
+	root := t.TempDir()
+	scriptDir := filepath.Join(root, "script")
+	if err := os.Mkdir(scriptDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(scriptDir, "restart-flynn")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLYNN_ROOT", root)
+	got, err := startStopDaemonRestartScript()
+	if err != nil || got != path {
+		t.Fatalf("got %q %v", got, err)
+	}
+}
+
+func TestRestartDaemonFallsBackToStartStopDaemon(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "startStopDaemonRestartScript") {
+		t.Fatal("vagrant-dev flynn-host update must restart start-stop-daemon, not only systemd")
+	}
+	if !strings.Contains(body, "script/restart-flynn") {
+		t.Fatal("start-stop-daemon restart must call script/restart-flynn")
+	}
+}
+
+func TestDiscoverdListHintMentionsVagrantDev(t *testing.T) {
+	err := fmt.Errorf(`Get "http://192.0.2.200:1111/services/flynn-host/instances": dial tcp 192.0.2.200:1111: connect: connection refused`)
+	got := discoverdListHint(err)
+	if !strings.Contains(got, "vagrant-dev") || !strings.Contains(got, "bootstrap") {
+		t.Fatalf("hint=%q", got)
+	}
+	if discoverdListHint(fmt.Errorf("other")) != "other" {
+		t.Fatal("unrelated errors must pass through")
 	}
 }

@@ -294,17 +294,38 @@ func runGitHubUpdate(args *docopt.Args, repo, configDir string, log log15.Logger
 // This ensures systemd properly tracks the new daemon process.
 // restartDaemon returns true if the daemon was actually restarted, false if
 // it was skipped (e.g. daemon not running locally).
+// restartDaemon restarts the local flynn-host daemon. systemd units use
+// systemctl. vagrant-dev uses start-stop-daemon (no flynn-host.service), so
+// skipping restart there left DISCOVERD at 192.0.2.200:1111 with nothing listening.
+// restartDaemon returns true if the daemon was actually restarted, false if
+// it was skipped (e.g. daemon not running locally).
 func restartDaemon(binDir string, log log15.Logger) (bool, error) {
-	log.Info("restarting local daemon via systemctl")
-
-	// Check if the daemon is running before attempting restart
 	statusCmd := exec.Command("systemctl", "is-active", "--quiet", "flynn-host")
-	if err := statusCmd.Run(); err != nil {
-		log.Warn("local flynn-host daemon is not active, skipping restart")
-		fmt.Println("Local flynn-host daemon is not active. Start it with: systemctl start flynn-host")
-		return false, nil
+	if err := statusCmd.Run(); err == nil {
+		return restartSystemdDaemon(log)
 	}
 
+	script, err := startStopDaemonRestartScript()
+	if err != nil {
+		log.Warn("local flynn-host daemon is not systemd and start-stop-daemon restart was not found, skipping restart", "err", err)
+		fmt.Println("Local flynn-host is not a systemd unit. Restart with: script/start-flynn-host -k -z 0")
+		return false, nil
+	}
+	log.Info("restarting local daemon via start-stop-daemon", "script", script)
+	fmt.Println("Restarting local flynn-host daemon (start-stop-daemon, not systemd)...")
+	cmd := exec.Command(script, "-s", "1")
+	cmd.Dir = filepath.Dir(filepath.Dir(script))
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		log.Error("start-stop-daemon restart failed", "err", err)
+		return false, fmt.Errorf("failed to restart daemon via %s: %s", script, err)
+	}
+	return waitDaemonResponsive(log)
+}
+
+func restartSystemdDaemon(log log15.Logger) (bool, error) {
+	log.Info("restarting local daemon via systemctl")
 	fmt.Println("Restarting local flynn-host daemon via systemctl...")
 	cmd := exec.Command("systemctl", "restart", "flynn-host")
 	cmd.Stdout = os.Stdout
@@ -313,8 +334,10 @@ func restartDaemon(binDir string, log log15.Logger) (bool, error) {
 		log.Error("systemctl restart failed", "err", err)
 		return false, fmt.Errorf("failed to restart daemon via systemctl: %s", err)
 	}
+	return waitDaemonResponsive(log)
+}
 
-	// Wait for the daemon to be responsive after restart
+func waitDaemonResponsive(log log15.Logger) (bool, error) {
 	log.Info("waiting for daemon to become responsive after restart")
 	localIPs := getLocalIPs()
 	for i := 0; i < 15; i++ {
@@ -324,9 +347,25 @@ func restartDaemon(binDir string, log log15.Logger) (bool, error) {
 			return true, nil
 		}
 	}
-
-	log.Warn("daemon may still be starting up after systemctl restart")
+	log.Warn("daemon may still be starting up after restart")
 	return true, nil
+}
+
+func startStopDaemonRestartScript() (string, error) {
+	roots := []string{}
+	if v := strings.TrimSpace(os.Getenv("FLYNN_ROOT")); v != "" {
+		roots = append(roots, v)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		roots = append(roots, cwd)
+	}
+	for _, root := range roots {
+		p := filepath.Join(root, "script", "restart-flynn")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("script/restart-flynn not found (set FLYNN_ROOT)")
 }
 
 // updateRemoteBinaries pushes binary and config updates to all other cluster

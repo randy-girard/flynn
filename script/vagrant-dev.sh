@@ -26,7 +26,7 @@ usage: script/vagrant-dev.sh <setup|up|status|ssh|build|cli|bootstrap|update|rel
   up         Boot only dev-builder (${DEV_MEMORY} MB, ${DEV_CPUS} CPUs unless overridden)
   status     vagrant status of every VM in this env
   ssh        Shell on dev-builder
-  build      Build cluster images on dev-builder (includes the Ubuntu base layer the first time)
+  build      Build cluster images on dev-builder without tearing down a bootstrapped cluster
   cli        Build the laptop flynn CLI and install it to /usr/local/bin
   bootstrap  First cluster on dev-builder (script/bootstrap-flynn)
   update     flynn-host update from the newest build/release tarball
@@ -250,7 +250,9 @@ reload_dev_machines() {
 
 # start_existing_cluster brings flynn-host back after a reboot. Nested
 # bootstrap on the builder does not install a systemd unit, so a VM reload
-# leaves the daemon down. Do not bootstrap a new cluster from here.
+# leaves the daemon down. Do not bootstrap a new cluster from here; exit 2
+# from ensure-cluster means host.json is missing or the controller never
+# answered (run script/vagrant-dev.sh bootstrap / setup).
 start_existing_cluster() {
   set +e
   run_as_root "cd ${SRC} && script/vagrant-dev-ensure-cluster.sh"
@@ -309,6 +311,9 @@ boot_builder() {
 }
 
 # ensure_cluster starts an existing cluster or bootstraps a new one.
+# ensure-cluster.sh exits 2 when host.json is missing, is a DISCOVERD-only
+# stub, or flynn-host came back without a controller (build.sh used to wipe
+# volumes and leave host.json behind).
 ensure_cluster() {
   set +e
   run_as_root "cd ${SRC} && script/vagrant-dev-ensure-cluster.sh"
@@ -328,8 +333,12 @@ ensure_cluster() {
 # vagrant ssh login banner cannot shift pin/key onto the wrong fields.
 parse_dev_creds() {
   local creds=$1
-  pin="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_PIN=//p' | tail -1)"
-  key="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_KEY=//p' | tail -1)"
+  pin="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_PIN=//p' | tail -1 | tr -d '\r')"
+  key="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_KEY=//p' | tail -1 | tr -d '\r')"
+  pin="${pin#"${pin%%[![:space:]]*}"}"
+  pin="${pin%"${pin##*[![:space:]]}"}"
+  key="${key#"${key%%[![:space:]]*}"}"
+  key="${key%"${key##*[![:space:]]}"}"
   if [[ -z "${pin}" ]]; then
     pin="$(printf '%s\n' "${creds}" | grep -E '^[A-Za-z0-9+/]{43}=$' | tail -1 || true)"
   fi
@@ -376,7 +385,7 @@ case "${cmd}" in
   build)
     # cluster reuses /var/lib/flynn/base-layer.squashfs. The first build has to
     # create that layer (./build.sh with no phase is base, then cluster).
-    run_as_root "cd ${SRC} && if [ -f /var/lib/flynn/base-layer.squashfs ]; then ./build.sh cluster; else ./build.sh; fi"
+    run_as_root "cd ${SRC} && export FLYNN_KEEP_CLUSTER=1 FLYNN_ROOT=${SRC} && if [ -f /var/lib/flynn/base-layer.squashfs ]; then ./build.sh cluster; else ./build.sh; fi"
     ;;
   cli)
     "${ROOT}/script/vagrant-dev-cli.sh"

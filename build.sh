@@ -161,9 +161,20 @@ UBUNTU_CODENAME=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAM
 echo "GO VERSION"
 echo "$(go version)"
 
+# keep_bootstrapped_cluster is the vagrant-dev laptop loop: rebuild images on
+# the existing cluster instead of teardown + start-all + stop-all, which
+# kills discoverd on 192.0.2.200:1111 and leaves flynn-host ps connection-refused.
+keep_bootstrapped_cluster() {
+  [[ "${FLYNN_KEEP_CLUSTER:-}" == "1" ]] && [[ -f /etc/flynn/host.json ]]
+}
+
 teardown_flynn() {
   if [[ -n "${FLYNN_BUILD_SKIP_TEARDOWN:-}" ]]; then
     echo "===> Skipping Flynn teardown (FLYNN_BUILD_SKIP_TEARDOWN set)"
+    return 0
+  fi
+  if keep_bootstrapped_cluster; then
+    echo "===> Skipping Flynn teardown (FLYNN_KEEP_CLUSTER=1 and /etc/flynn/host.json exist)"
     return 0
   fi
   echo "===> Stopping Flynn and removing install..."
@@ -350,6 +361,22 @@ run_phase_start() {
   ensure_builder_isolation_tools
 
   echo "===> [start] Starting Flynn stack..."
+  if keep_bootstrapped_cluster; then
+    echo "===> [start] Reusing bootstrapped cluster (not start-all; that would wipe job state)"
+    ./script/start-flynn-host --no-destroy-vols --no-destroy-state 0 || true
+    local i
+    for i in $(seq 1 30); do
+      if curl -s --max-time 1 -o /dev/null "http://192.0.2.200:1111/services"; then
+        echo "===> [start] discoverd is up"
+        echo "===> [start] Complete."
+        return 0
+      fi
+      sleep 2
+    done
+    echo "WARNING: discoverd did not answer on 192.0.2.200:1111; image builds may fail" >&2
+    echo "===> [start] Complete."
+    return 0
+  fi
   ./script/start-all
   zfs set sync=disabled flynn-default
   zfs set reservation=512M flynn-default
@@ -495,6 +522,12 @@ run_phase_test() {
 run_phase_stop() {
   cd "${FLYNN_ROOT}"
   cp ./script/install-flynn /usr/bin/install-flynn
+
+  if keep_bootstrapped_cluster; then
+    echo "===> [stop] Leaving bootstrapped cluster running (FLYNN_KEEP_CLUSTER=1)"
+    echo "===> [stop] Complete."
+    return 0
+  fi
 
   echo "===> [stop] Stopping local Flynn stack..."
   ./script/stop-all
