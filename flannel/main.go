@@ -80,10 +80,8 @@ func flagsFromEnv(prefix string, fs *flag.FlagSet) {
 }
 
 func writeSubnetFile(sn *backend.SubnetDef) error {
-	// Write out the first usable IP by incrementing
-	// sn.IP by one
 	net := sn.Net
-	net.IP += 1
+	net.IP = net.FirstUsable()
 
 	dir, name := filepath.Split(opts.subnetFile)
 	os.MkdirAll(dir, 0755)
@@ -112,7 +110,7 @@ func notifyWebhook(sn *backend.SubnetDef) error {
 		return nil
 	}
 	net := sn.Net
-	net.IP += 1
+	net.IP = net.FirstUsable()
 	data := struct {
 		JobID  string `json:"job_id"`
 		Subnet string `json:"subnet"`
@@ -215,21 +213,28 @@ func newBackend() (backend.Backend, *subnet.SubnetManager, error) {
 }
 
 func httpServer(sn *subnet.SubnetManager, publicIP, port string) error {
-	overlayListener, err := net.Listen("tcp", net.JoinHostPort(sn.Lease().Network.IP.String(), port))
-	if err != nil {
-		return err
-	}
-	publicListener, err := net.Listen("tcp", net.JoinHostPort(publicIP, port))
-	if err != nil {
-		return err
-	}
-
 	http.HandleFunc("/ping", func(http.ResponseWriter, *http.Request) {})
 	status.AddHandler(status.SimpleHandler(func() error {
 		return pingLeases(sn.Leases())
 	}))
-	go http.Serve(keepalive.Listener(overlayListener), nil)
+
+	// Public IP first: this is always assigned (EXTERNAL_IP / lo:0). Overlay
+	// bind is the bridge address, which notifyWebhook creates for the alloc
+	// backend. The lease network address (e.g. 100.100.9.0) is never on an
+	// interface, so listening there fails with EADDRNOTAVAIL.
+	publicListener, err := net.Listen("tcp", net.JoinHostPort(publicIP, port))
+	if err != nil {
+		return err
+	}
 	go http.Serve(keepalive.Listener(publicListener), nil)
+
+	overlayAddr := net.JoinHostPort(sn.Lease().Network.FirstUsable().String(), port)
+	overlayListener, err := net.Listen("tcp", overlayAddr)
+	if err != nil {
+		log.Warningf("overlay HTTP listen %s failed: %v", overlayAddr, err)
+		return nil
+	}
+	go http.Serve(keepalive.Listener(overlayListener), nil)
 	return nil
 }
 
@@ -259,7 +264,7 @@ func pingLeases(leases []subnet.SubnetLease) error {
 	for i := 0; i < workers; i++ {
 		go func() {
 			for l := range work {
-				res, err := client.Get(fmt.Sprintf("http://%s:%s/ping", l.Network.IP, l.Attrs.HTTPPort))
+				res, err := client.Get(fmt.Sprintf("http://%s:%s/ping", l.Network.FirstUsable(), l.Attrs.HTTPPort))
 				if err == nil {
 					res.Body.Close()
 				}

@@ -98,6 +98,17 @@ func TestIP4Net(t *testing.T) {
 		t.Error("Contains failed")
 	}
 
+	if n1.FirstUsable().String() != "1.2.3.1" {
+		t.Errorf("FirstUsable: got %s want 1.2.3.1", n1.FirstUsable())
+	}
+	overlay := mkIP4Net("100.100.9.0", 24)
+	if overlay.FirstUsable().String() != "100.100.9.1" {
+		t.Errorf("FirstUsable overlay: got %s want 100.100.9.1", overlay.FirstUsable())
+	}
+	if overlay.IP.String() == overlay.FirstUsable().String() {
+		t.Fatal("HTTP must not bind the CIDR network address")
+	}
+
 	j, err := json.Marshal(n1)
 	if err != nil {
 		t.Error("Marshal of IP4Net failed: ", err)

@@ -110,6 +110,13 @@ func (n IP4Net) Next() IP4Net {
 	}
 }
 
+// FirstUsable is the first host address in n (network address + 1). Flynn
+// assigns this to the host bridge; the CIDR network address itself is not
+// configured on any interface.
+func (n IP4Net) FirstUsable() IP4 {
+	return n.IP + 1
+}
+
 func FromIPNet(n *net.IPNet) IP4Net {
 	prefixLen, _ := n.Mask.Size()
 	return IP4Net{
