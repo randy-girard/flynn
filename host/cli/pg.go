@@ -4,7 +4,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	"time"
 
 	"github.com/flynn/go-docopt"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -126,7 +129,9 @@ func hostPgPsql(client platformPgClient, psqlArgs []string, stdin io.Reader, std
 	}
 	req := newPlatformJob(job)
 	if f, ok := stdin.(*os.File); ok && term.IsTerminal(f.Fd()) {
-		req.TTY = true
+		if err := preparePlatformJobTTY(req, f); err != nil {
+			return err
+		}
 	}
 	return runPlatformJob(client, job.App, req, stdin, stdout, stderr, false)
 }
@@ -165,6 +170,36 @@ func newPlatformJob(job platformpg.Job) *ct.NewJob {
 	}
 }
 
+func preparePlatformJobTTY(req *ct.NewJob, stdin *os.File) error {
+	ws, err := term.GetWinsize(stdin.Fd())
+	if err != nil {
+		return err
+	}
+	termName := os.Getenv("TERM")
+	if termName == "" {
+		termName = "xterm"
+	}
+	setJobTTYSize(req, ws.Width, ws.Height, termName)
+	return nil
+}
+
+func setJobTTYSize(req *ct.NewJob, width, height uint16, termName string) {
+	if req == nil {
+		return
+	}
+	req.TTY = true
+	req.Columns = int(width)
+	req.Lines = int(height)
+	if req.Env == nil {
+		req.Env = map[string]string{}
+	}
+	req.Env["COLUMNS"] = strconv.Itoa(int(width))
+	req.Env["LINES"] = strconv.Itoa(int(height))
+	if termName != "" {
+		req.Env["TERM"] = termName
+	}
+}
+
 func runPlatformJob(client platformPgClient, app string, req *ct.NewJob, stdin io.Reader, stdout, stderr io.Writer, restore bool) error {
 	rwc, err := client.RunJobAttached(app, req)
 	if err != nil {
@@ -172,6 +207,40 @@ func runPlatformJob(client platformPgClient, app string, req *ct.NewJob, stdin i
 	}
 	defer rwc.Close()
 	attach := cluster.NewAttachClient(rwc)
+
+	var termState *term.State
+	if req != nil && req.TTY {
+		inFile, ok := stdin.(*os.File)
+		if !ok {
+			return fmt.Errorf("platform postgres TTY job requires a local terminal")
+		}
+		termState, err = term.MakeRaw(inFile.Fd())
+		if err != nil {
+			return err
+		}
+		defer term.RestoreTerminal(inFile.Fd(), termState)
+		go func() {
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGWINCH)
+			for range ch {
+				ws, err := term.GetWinsize(inFile.Fd())
+				if err != nil {
+					return
+				}
+				_ = attach.ResizeTTY(ws.Height, ws.Width)
+				_ = attach.Signal(int(syscall.SIGWINCH))
+			}
+		}()
+		go func() {
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+			sig := <-ch
+			_ = attach.Signal(int(sig.(syscall.Signal)))
+			time.Sleep(10 * time.Second)
+			_ = attach.Signal(int(syscall.SIGKILL))
+		}()
+	}
+
 	if stdin != nil {
 		go func() {
 			_, _ = io.Copy(attach, stdin)

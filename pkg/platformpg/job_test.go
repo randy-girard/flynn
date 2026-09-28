@@ -23,6 +23,9 @@ func TestFromControllerPsqlTargetsPlatformApp(t *testing.T) {
 	if len(job.Args) != 3 || job.Args[0] != "psql" || job.Args[2] != "SELECT 1" {
 		t.Fatalf("args %v", job.Args)
 	}
+	if job.Env["PAGER"] != "less" || job.Env["LESS"] == "" {
+		t.Fatal("interactive psql must set PAGER=less")
+	}
 }
 
 func TestFromControllerRejectsTenantShape(t *testing.T) {

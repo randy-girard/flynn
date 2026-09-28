@@ -181,6 +181,16 @@ need 'cli-pg-blobstore' \
   "CLI step must open blobstore psql with the cluster key"
 need 'flynn-host pg:psql' \
   "platform controller/blobstore consoles must use flynn-host pg, not the tenant plugin"
+
+pg_host="${ROOT}/host/cli/pg.go"
+if [[ ! -f "${pg_host}" ]]; then
+  echo "missing ${pg_host}" >&2
+  exit 1
+fi
+if ! grep -q 'MakeRaw' "${pg_host}"; then
+  echo "flynn-host pg:psql must put the local terminal in raw mode so less q/space work" >&2
+  exit 1
+fi
 need 'timeout 90 flynn' \
   "flynn run must be time-bounded so a hung scheduler cannot stall smoke"
 need 'meta set' \
