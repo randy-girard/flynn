@@ -1813,6 +1813,30 @@ clickhouse_ping() {
   [[ "$(echo "${out}" | tr -d '[:space:]')" == "1" ]]
 }
 
+# Platform postgres_is_read_write is the cluster appliance. Tenant pg:psql is a
+# plugin instance; HA restore can leave it unqueryable for tens of seconds after
+# sirenia is already read-write (3-node post-restore failed in 3s, 2026-09-27).
+tenant_postgres_ping() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1" 2>/dev/null || true)"
+  echo "${out}" | grep -q 1
+}
+
+restored_mysql_probe() {
+  local out count payload rows="${SMOKE_SEED_ROWS}"
+  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'" 2>/dev/null || true)"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows" 2>/dev/null || true)")"
+  payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload" 2>/dev/null || true)")"
+  echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]
+}
+
+restored_mongodb_probe() {
+  local out count rows="${SMOKE_SEED_ROWS}"
+  out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data' 2>/dev/null || true)"
+  count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()' 2>/dev/null || true)")"
+  echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]
+}
+
 # ClickHouse seed uses local MergeTree plus HTTP replica fan-out. After a node
 # join/drain the CLI can briefly return CH "unknown_error" instead of a count;
 # do not let that abort the step under set -e.
@@ -5281,10 +5305,10 @@ assert_restored_datastores() {
 
   if datastore_wanted postgres; then
   echo "db-check ${label}: postgres (tenant instance volume is not in cluster backup)"
-  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1")"
-  if echo "${out}" | grep -q 1; then
+  if wait_for "postgres SELECT 1 ${label}" 180 tenant_postgres_ping; then
     record_check "${label}" "postgres" "PASS" "SELECT 1 (tenant rows not in cluster backup)"
   else
+    out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1" 2>&1 || true)"
     record_check "${label}" "postgres" "FAIL" "SELECT 1 failed: ${out}"
     echo "postgres (${label}) SELECT 1 failed: ${out}" >&2
     failed=1
@@ -5293,12 +5317,14 @@ assert_restored_datastores() {
 
   if datastore_wanted mysql; then
   echo "db-check ${label}: mysql"
-  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'")"
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
-  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
+  if wait_for "mysql dump ${label}" 180 restored_mysql_probe; then
+    count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows" 2>/dev/null || true)")"
+    payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload" 2>/dev/null || true)")"
     record_check "${label}" "mysql" "PASS" "probe=pre-upgrade rows=${count} payload=${payload}"
   else
+    out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'" 2>&1 || true)"
+    count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows" 2>/dev/null || true)")"
+    payload="$(numeric_count "$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload" 2>/dev/null || true)")"
     record_check "${label}" "mysql" "FAIL" "probe=${out} rows=${count:-?} payload=${payload:-?} want>=${rows}"
     echo "mysql (${label}) failed: probe=${out} rows=${count} payload=${payload}" >&2
     failed=1
@@ -5307,11 +5333,12 @@ assert_restored_datastores() {
 
   if datastore_wanted mongodb; then
   echo "db-check ${label}: mongodb"
-  out="$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data')"
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
-  if echo "${out}" | grep -q 'pre-upgrade' && [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
+  if wait_for "mongodb dump ${label}" 180 restored_mongodb_probe; then
+    count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()' 2>/dev/null || true)")"
     record_check "${label}" "mongodb" "PASS" "probe=pre-upgrade docs=${count}"
   else
+    out="$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_probe.findOne({data:"pre-upgrade"}).data' 2>&1 || true)"
+    count="$(numeric_count "$(flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()' 2>/dev/null || true)")"
     record_check "${label}" "mongodb" "FAIL" "probe=${out} docs=${count:-?} want>=${rows}"
     echo "mongodb (${label}) failed: probe=${out} docs=${count}" >&2
     failed=1
@@ -5320,10 +5347,10 @@ assert_restored_datastores() {
 
   if datastore_wanted redis; then
   echo "db-check ${label}: redis (volume data not in cluster backup)"
-  out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
-  if echo "${out}" | grep -qi PONG; then
+  if wait_for "redis PING ${label}" 180 redis_is_ready; then
     record_check "${label}" "redis" "PASS" "PING (keys not in cluster backup)"
   else
+    out="$(flynn1 -a "${APP_NAME}" redis redis-cli PING 2>/dev/null || true)"
     record_check "${label}" "redis" "FAIL" "PING failed: ${out}"
     echo "redis (${label}) PING failed: ${out}" >&2
     failed=1

@@ -121,6 +121,14 @@ need 'keys not in cluster backup' \
   "redis after restore must PING only; keys are not in the cluster backup"
 need 'tenant rows not in cluster backup' \
   "tenant postgres after restore must SELECT 1; isolated instance volumes are not in postgres.sql.gz"
+need 'wait_for "postgres SELECT 1' \
+  "HA restore must wait for tenant pg:psql; platform sirenia read-write is not enough"
+need 'tenant_postgres_ping' \
+  "restore verify must poll tenant postgres instead of a one-shot smoke_cli_retry"
+need 'restored_mysql_probe' \
+  "HA restore must wait for mysql dump rows, not a 12s CLI retry"
+need 'restored_mongodb_probe' \
+  "HA restore must wait for mongodb dump docs, not a 12s CLI retry"
 need 'topic data not in cluster backup' \
   "kafka after restore must only require the cluster app to be running"
 need 'rows not in cluster backup' \
