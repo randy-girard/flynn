@@ -76,6 +76,14 @@ need_in "${ROOT}/updater/updater.go" 'artifact.IsSlugrunner\(\)' \
   "in-cluster updater must redeploy heroku-24 slug apps"
 need_in "${ROOT}/controller/types/types_test.go" 'heroku-24 slugrunner-24 must be updated' \
   "unit tests must cover slugrunner-24 update matching"
+need_in "${github_updater}" 'const minSystemDeployTimeout = 10 \* time.Minute' \
+  "flynn-host update must keep a 10m placement ceiling for pending system-app jobs, not as a stuck-start wait"
+need_in "${ROOT}/controller/types/scale_stuck.go" 'ErrJobsStuckStarting' \
+  "long ScaleAppRelease waits must fail stuck starting jobs instead of sitting 10 minutes"
+need_in "${ROOT}/controller/client/v1/client.go" 'ErrJobsStuckStarting' \
+  "ScaleAppRelease must poll JobList for stuck starting jobs"
+need_in "${ROOT}/controller/client/v1/client.go" 'jobListProbe' \
+  "ScaleAppRelease must bound JobList so a wedged controller does not sit the deploy timeout"
 need_in "${github_updater}" 'EnsureRouterStrategy' \
   "flynn-host update must stop the old host-network router before starting the replacement"
 need_in "${incluster}" 'EnsureRouterStrategy' \

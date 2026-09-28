@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -564,5 +565,17 @@ func TestTarballUpdaterLoadsControllerKeyFromJobs(t *testing.T) {
 	}
 	if strings.Contains(body, "failed to create %s image artifact after retries") {
 		t.Fatal("local 401-retry loop must not remain in github_updater")
+	}
+}
+
+func TestSystemDeployTimeoutIsPlacementCeiling(t *testing.T) {
+	if minSystemDeployTimeout != 10*time.Minute {
+		t.Fatalf("minSystemDeployTimeout = %s, want 10m placement ceiling", minSystemDeployTimeout)
+	}
+	if !ct.ShouldProbeScaleStall(minSystemDeployTimeout) {
+		t.Fatal("system-app 10m waits must probe stuck starting jobs")
+	}
+	if ct.ScaleStartingStuckTimeout >= minSystemDeployTimeout {
+		t.Fatal("stuck starting must fail faster than the system deploy ceiling")
 	}
 }

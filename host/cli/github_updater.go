@@ -1132,9 +1132,11 @@ func prepareHostsForImagePull(hosts []*cluster.Host, log log15.Logger) error {
 	return nil
 }
 
-// minSystemDeployTimeout is the minimum scale/deploy window for system apps
-// during cluster updates. The default app deploy timeout (120s) is too short
-// after a rolling host restart while the scheduler is still placing jobs.
+// minSystemDeployTimeout is a placement ceiling for system-app ScaleAppRelease
+// after a rolling host restart: pending jobs may wait this long for a host
+// and image pull. It is not how long a healthy scale takes, and it is not
+// how long a job stuck in "starting" should wait -- ScaleAppRelease fails
+// those in ct.ScaleStartingStuckTimeout instead of sitting this full window.
 const minSystemDeployTimeout = 10 * time.Minute
 
 const updateReexecEnv = "FLYNN_UPDATE_REEXEC"

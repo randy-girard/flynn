@@ -19,6 +19,8 @@ func TestShouldRetryAfterScaleTimeout(t *testing.T) {
 		{errors.New("timed out waiting for new sirenia peer to come up"), true},
 		{fmt.Errorf("timed out waiting for old scheduler jobs to stop on [node1]"), true},
 		{errors.New("timed out waiting for old app jobs to stop on [node2 node3]"), true},
+		{errors.New("scale failed: jobs stuck in starting for >30s (not waiting for the deploy timeout): app node1-abc host=node1"), false},
+		{errors.New("scale failed: JobList did not return in 15s (controller HTTP is wedged, not a slow scale)"), false},
 		{errors.New("deploy failed: timeout"), false},
 	}
 	for _, tc := range cases {

@@ -347,6 +347,13 @@ func (c *Client) ScaleAppRelease(appID, releaseID string, opts ct.ScaleOptions) 
 	}
 
 	timeout := time.After(*opts.Timeout)
+	var stall <-chan time.Time
+	if ct.ShouldProbeScaleStall(*opts.Timeout) {
+		tick := time.NewTicker(ct.ScaleStallPollInterval)
+		defer tick.Stop()
+		stall = tick.C
+	}
+	seenStarting := make(map[string]time.Time)
 	for {
 		select {
 		case event, ok := <-events:
@@ -387,7 +394,38 @@ func (c *Client) ScaleAppRelease(appID, releaseID string, opts ct.ScaleOptions) 
 			return ct.ErrScalingStopped
 		case <-timeout:
 			return fmt.Errorf("timed out waiting for scale to complete (waited %.f seconds)", opts.Timeout.Seconds())
+		case <-stall:
+			jobs, err := c.jobListProbe(appID, ct.ScaleJobListProbeTimeout)
+			if err == errJobListTimeout {
+				return ct.ErrScaleJobListHung(ct.ScaleJobListProbeTimeout)
+			}
+			if err != nil {
+				continue
+			}
+			if err := ct.ErrJobsStuckStarting(jobs, releaseID, time.Now(), seenStarting); err != nil {
+				return err
+			}
 		}
+	}
+}
+
+var errJobListTimeout = errors.New("job list probe timed out")
+
+func (c *Client) jobListProbe(appID string, d time.Duration) ([]*ct.Job, error) {
+	type result struct {
+		jobs []*ct.Job
+		err  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		jobs, err := c.JobList(appID)
+		ch <- result{jobs, err}
+	}()
+	select {
+	case r := <-ch:
+		return r.jobs, r.err
+	case <-time.After(d):
+		return nil, errJobListTimeout
 	}
 }
 
