@@ -51,6 +51,9 @@ type Mux struct {
 
 	appLogsMtx sync.Mutex
 	appLogs    map[string]*appLog
+
+	// diskWriter, if set, replaces lumberjack so tests can stall disk I/O.
+	diskWriter func(path string) io.WriteCloser
 }
 
 const firehoseApp = "_all"
@@ -180,7 +183,10 @@ func (m *Mux) addSink(sink Sink) {
 				}
 
 				bufferedMessages := make(chan message)
-				firehose := make(chan message)
+				// Buffer the live firehose so a slow logaggregator write does
+				// not immediately stall Follow. broadcast() still times out if
+				// this fills (sink reconnect, vboxsf, etc.).
+				firehose := make(chan message, 256)
 				done := make(chan struct{})
 
 				// subscribe to all messages
@@ -410,6 +416,7 @@ func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header,
 	defer wg.Done()
 	defer close(s.done)
 	l := s.m.appLog(appID)
+	defer l.Release()
 	seqBuf := make([]byte, 10)
 	sd := flynnStructuredData(0, jobName)
 
@@ -721,30 +728,63 @@ func (m *Mux) appLog(id string) *appLog {
 	}
 
 	// if not, create log
-	l := &appLog{
-		appID: id,
-		m:     m,
-		refs:  1,
-		l: &lumberjack.Logger{
-			Filename:   filepath.Join(m.logDir, id+".log"),
+	path := filepath.Join(m.logDir, id+".log")
+	var w io.WriteCloser
+	if m.diskWriter != nil {
+		w = m.diskWriter(path)
+	} else {
+		w = &lumberjack.Logger{
+			Filename:   path,
 			MaxBackups: 1,
-		},
+		}
 	}
+	l := &appLog{
+		appID:  id,
+		m:      m,
+		refs:   1,
+		diskCh: make(chan []byte, appLogDiskQueue),
+		w:      w,
+	}
+	go l.writeDisk()
 	m.appLogs[id] = l
 	return l
 }
 
+// appLogDiskQueue is how many lines Follow may have in flight to disk. A
+// stuck lumberjack write (vboxsf, NFS) must not back up job stdout: the
+// controller logs every HTTP request, and a full stdout pipe wedges /ping.
+const appLogDiskQueue = 1024
+
 type appLog struct {
-	appID string
-	m     *Mux
-	l     *lumberjack.Logger
+	appID  string
+	m      *Mux
+	w      io.WriteCloser
+	diskCh chan []byte
 
 	mtx  sync.Mutex
 	refs int
 }
 
+func (l *appLog) writeDisk() {
+	defer l.w.Close()
+	for b := range l.diskCh {
+		if _, err := l.w.Write(b); err != nil {
+			l.m.logger.Error("error writing job log", "app.id", l.appID, "err", err)
+		}
+	}
+}
+
 func (l *appLog) Write(msg message) {
-	l.l.Write(append(rfc6587.Bytes(msg.Message), '\n'))
+	payload := append(rfc6587.Bytes(msg.Message), '\n')
+	cp := make([]byte, len(payload))
+	copy(cp, payload)
+	select {
+	case l.diskCh <- cp:
+	default:
+		if rand.Intn(50) == 0 {
+			l.m.logger.Error("dropping job log line, disk queue full", "app.id", l.appID)
+		}
+	}
 	l.m.broadcast(l.appID, msg)
 }
 
@@ -755,8 +795,10 @@ func (l *appLog) Release() {
 	defer l.mtx.Unlock()
 	l.refs--
 	if l.refs == 0 {
-		// we're the last user, clean it up
-		l.l.Close()
+		// Drain the disk writer instead of closing w here: writeDisk may
+		// still be blocked on lumberjack/vboxsf. Closing the queue lets it
+		// exit and Close the file when the in-flight write returns.
+		close(l.diskCh)
 		l.m.appLogsMtx.Lock()
 		delete(l.m.appLogs, l.appID)
 		l.m.appLogsMtx.Unlock()

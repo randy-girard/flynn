@@ -144,3 +144,56 @@ func TestMuxWriteDoesNotBlockOnStalledFollower(t *testing.T) {
 		t.Fatal("healthy follower must still receive the line")
 	}
 }
+
+func TestMuxWriteDoesNotBlockOnStuckDisk(t *testing.T) {
+	m := New("host1", t.TempDir(), log15.New())
+	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 32; i++ {
+			m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "line")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Write blocked on a log file nobody is reading")
+	}
+}
+
+func TestMuxFollowDoesNotStallWhenDiskIsStuck(t *testing.T) {
+	m := New("host1", t.TempDir(), log15.New())
+	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }
+	ch := make(chan message, 8)
+	unsub := m.subscribe("app-1", ch)
+	defer unsub()
+	r, w := io.Pipe()
+	stream := m.Follow(r, "", logagg.MsgIDStdout, &Config{
+		AppID:  "app-1",
+		HostID: "host1",
+		JobID:  "job-1",
+	})
+	defer stream.Close()
+	if _, err := w.Write([]byte("one\ntwo\nthree\n")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal("Follow stalled while the on-disk log could not be written")
+		}
+	}
+}
+
+type hangWriter struct {
+	block chan struct{}
+}
+
+func (h *hangWriter) Write(p []byte) (int, error) {
+	<-h.block
+	return len(p), nil
+}
+
+func (h *hangWriter) Close() error { return nil }
