@@ -150,8 +150,9 @@ receive `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, and access-token keys
 URL, or `--github-org` that is not Flynn's catalog) prompts on a TTY;
 non-interactive installs must pass **`--yes`**. Manifest **`setup`** prompts run on a TTY
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when
-stdin is not a TTY). **`resources`** attaches existing providers (for example
-`postgres`) on first install. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
+stdin is not a TTY). **`resources`** attaches existing providers on first install.
+Core Flynn plugins attach **`platform-postgres`** (the built-in appliance),
+not the tenant **`postgres`** plugin. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
 is expanded). If cluster ACME is already enabled (`flynn-host letsencrypt:configure`
 and `flynn-host letsencrypt:enable`), HTTP plugin routes get Let's Encrypt at install
 automatically. Operators can also turn HTTPS on later with
@@ -191,9 +192,9 @@ scoped collaborator tokens.
 **`webhooks`** registers the same host endpoints as
 `flynn-host webhooks:add` (URL/headers expand `${KEY}`; `secret_env` sets
 `X-Flynn-Webhook-Secret` from generated release env). Optional **`hooks.install`**
-still runs on the host for anything the manifest cannot express. Optional
-**`hooks.ready`** runs after the wait URL succeeds (or after routes when there
-is no wait) so the plugin app can already be serving. GitHub installs
+runs after the app is deployed and the wait URL succeeds (or after routes when
+there is no wait), for anything the manifest cannot express. Optional
+**`hooks.ready`** runs after that so the plugin app can already be serving. GitHub installs
 unpack **release assets only** (not a git checkout), so a declared hook must be
 published next to `image.json`. GitHub asset names cannot contain slashes:
 `script/install.sh` is uploaded as `script-install.sh` (basename `install.sh`

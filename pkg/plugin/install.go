@@ -136,11 +136,29 @@ func (in *Installer) Install(opts InstallOptions) error {
 	return in.apply(opts)
 }
 
-// Update deploys a new release of an already-installed plugin (same layers and
-// scale-down as a reinstall, without first-install setup prompts).
+// Update deploys a new release of an already-installed plugin. A local
+// checkout runs script/plugin-build unless --no-build so source changes
+// actually ship (reusing dist/ would redeploy the previous squashfs).
 func (in *Installer) Update(opts InstallOptions) error {
 	opts.Update = true
 	return in.apply(opts)
+}
+
+// pluginImageBuildNeeded reports whether a local checkout should run
+// script/plugin-build. GitHub releases ship dist/. --no-build never compiles.
+// plugin:update of a local path compiles even when dist/ already exists so
+// "layer already present; skip upload" is not a silent no-op of old squashfs.
+func pluginImageBuildNeeded(opts InstallOptions, distReady bool) bool {
+	if opts.Rebuild {
+		return true
+	}
+	if opts.NoBuild {
+		return false
+	}
+	if !distReady {
+		return true
+	}
+	return opts.Update
 }
 
 func (in *Installer) flynnVersion() string {
@@ -223,13 +241,20 @@ func (in *Installer) apply(opts InstallOptions) error {
 		if !DistReady(root) {
 			return fmt.Errorf("plugin %s GitHub release is missing image.json / layers; publish Build and Release or install from a local checkout", m.Name)
 		}
-	} else if opts.Rebuild || !DistReady(root) {
-		if opts.NoBuild {
-			return fmt.Errorf("plugin %s has no built image under dist/; run script/plugin-build or omit --no-build", m.Name)
+	} else {
+		distReady := DistReady(root)
+		if opts.Rebuild && opts.NoBuild {
+			in.logf("ignoring --no-build because --rebuild was set")
 		}
-		in.logf("building plugin image (dist/ missing or --rebuild)")
-		if err := in.runBuild(root); err != nil {
-			return fmt.Errorf("plugin-build: %w", err)
+		if pluginImageBuildNeeded(opts, distReady) {
+			in.logf("building plugin image (dist/ missing, --rebuild, or local plugin:update)")
+			if err := in.runBuild(root); err != nil {
+				return fmt.Errorf("plugin-build: %w", err)
+			}
+		} else if !distReady {
+			return fmt.Errorf("plugin %s has no built image under dist/; drop --no-build or run script/plugin-build", m.Name)
+		} else {
+			in.logf("using existing dist/; pass --rebuild to compile this checkout")
 		}
 	}
 
@@ -289,11 +314,9 @@ func (in *Installer) apply(opts InstallOptions) error {
 		return err
 	}
 
-	if err := in.runHook(root, m, m.deployHook(updating), cluster); err != nil {
-		return err
-	}
-
-	if err := in.deployRelease(app, m, artifact, cluster); err != nil {
+	in.logf("deploying %s", m.App.Name)
+	dep, err := in.deployRelease(app, m, artifact, cluster)
+	if err != nil {
 		return err
 	}
 
@@ -308,10 +331,21 @@ func (in *Installer) apply(opts InstallOptions) error {
 	}
 
 	if ping := m.PingURL(); ping != "" {
-		in.logf("waiting for %s", ping)
-		if err := waitHTTP(in.http(), ping, pingTimeout); err != nil {
+		waitFor := pingTimeout
+		if dep != nil && dep.timeout > waitFor {
+			waitFor = dep.timeout
+		}
+		in.logf("waiting for %s (timeout %s)", ping, waitFor)
+		if err := waitHTTP(in.http(), ping, waitFor); err != nil {
+			in.restorePreviousRelease(app, dep)
 			return fmt.Errorf("plugin %s did not become ready: %w", m.Name, err)
 		}
+	}
+
+	// hooks.install (or upgrade) after the app is up so operator logs are not
+	// the last line of a hung ScaleAppRelease.
+	if err := in.runHook(root, m, m.deployHook(updating), cluster); err != nil {
+		return err
 	}
 
 	if err := in.runHook(root, m, m.readyHook(), cluster); err != nil {
@@ -368,6 +402,7 @@ func (m *Manifest) upgradeHook() string {
 
 // deployHook is hooks.install on first install. On update it is hooks.upgrade
 // when declared; the install hook is not re-run (it may not be idempotent).
+// apply() runs this after deploy and the wait URL.
 func (m *Manifest) deployHook(updating bool) string {
 	if updating {
 		return m.upgradeHook()
@@ -404,8 +439,52 @@ func (in *Installer) runBuild(root string) error {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
-	cmd.Env = append(os.Environ(), in.localFlynnImageEnv()...)
+	cmd.Env = mergeGoBinPath(append(os.Environ(), in.localFlynnImageEnv()...), "/usr/local/go/bin")
 	return cmd.Run()
+}
+
+func pathListContains(path, dir string) bool {
+	for _, p := range strings.Split(path, string(os.PathListSeparator)) {
+		if p == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeGoBinPath prepends goBin to PATH when goBin/go exists. sudo flynn-host
+// plugin:update uses secure_path and drops /usr/local/go/bin on vagrant-dev.
+func mergeGoBinPath(env []string, goBin string) []string {
+	goBin = strings.TrimRight(goBin, string(os.PathSeparator))
+	if goBin == "" {
+		return env
+	}
+	if st, err := os.Stat(filepath.Join(goBin, "go")); err != nil || st.IsDir() {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	foundPATH := false
+	for _, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		if !ok || k != "PATH" {
+			out = append(out, e)
+			continue
+		}
+		foundPATH = true
+		if pathListContains(v, goBin) {
+			out = append(out, e)
+			continue
+		}
+		out = append(out, "PATH="+goBin+string(os.PathListSeparator)+v)
+	}
+	if !foundPATH {
+		cur := os.Getenv("PATH")
+		if !pathListContains(cur, goBin) {
+			cur = goBin + string(os.PathListSeparator) + cur
+		}
+		out = append(out, "PATH="+cur)
+	}
+	return out
 }
 
 func (in *Installer) localFlynnImageEnv() []string {
@@ -605,7 +684,34 @@ func (in *Installer) createApp(m *Manifest, resolved *Resolved) (*ct.App, error)
 	return app, nil
 }
 
-func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact, cluster map[string]string) error {
+type pluginDeploy struct {
+	prev     *ct.Release
+	prevForm *ct.Formation
+	timeout  time.Duration
+}
+
+// pluginScaleNoWait is true when install already polls PingURL. Waiting on
+// ScaleAppRelease's event stream then burns deployTimeout (5m) with no extra
+// logs if the job never becomes healthy.
+func pluginScaleNoWait(m *Manifest) bool {
+	return m != nil && strings.TrimSpace(m.PingURL()) != ""
+}
+
+func (in *Installer) restorePreviousRelease(app *ct.App, dep *pluginDeploy) {
+	if in == nil || in.Client == nil || app == nil || dep == nil || dep.prev == nil || dep.prevForm == nil || len(dep.prevForm.Processes) == 0 {
+		return
+	}
+	in.logf("restoring previous %s release %s after failed readiness", app.Name, dep.prev.ID)
+	timeout := dep.timeout
+	_ = in.Client.ScaleAppRelease(app.ID, dep.prev.ID, ct.ScaleOptions{
+		Processes: dep.prevForm.Processes,
+		Timeout:   &timeout,
+		NoWait:    true,
+	})
+	_ = in.Client.SetAppRelease(app.ID, dep.prev.ID)
+}
+
+func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact, cluster map[string]string) (*pluginDeploy, error) {
 	env := ReleaseEnv(m, image.ID, cluster)
 	var prev *ct.Release
 	if p, err := in.Client.GetAppRelease(app.ID); err == nil && p != nil {
@@ -619,8 +725,9 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 		Env:         env,
 		Processes:   m.App.Processes,
 	}
+	in.logf("creating %s release", app.Name)
 	if err := in.Client.CreateRelease(app.ID, release); err != nil {
-		return fmt.Errorf("create release: %w", err)
+		return nil, fmt.Errorf("create release: %w", err)
 	}
 
 	procs := FormationScale(m, cluster)
@@ -628,36 +735,46 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 	if m.App.DeployTimeout > 0 {
 		timeout = time.Duration(m.App.DeployTimeout) * time.Second
 	}
-	if err := in.Client.ScaleAppRelease(app.ID, release.ID, ct.ScaleOptions{
-		Processes: procs,
-		Timeout:   &timeout,
-	}); err != nil {
-		return fmt.Errorf("scale %s: %w", m.App.Name, err)
-	}
+	dep := &pluginDeploy{prev: prev, timeout: timeout}
+
 	if prev != nil && prev.ID != release.ID {
-		var form *ct.Formation
 		if f, err := in.Client.GetFormation(app.ID, prev.ID); err == nil {
-			form = f
+			dep.prevForm = f
 		}
-		if zeros := previousReleaseScaleDown(prev, form); len(zeros) > 0 {
-			in.logf("stopping previous %s release %s", m.App.Name, prev.ID)
+		if zeros := previousReleaseScaleDown(prev, dep.prevForm); len(zeros) > 0 {
+			in.logf("stopping previous %s release %s so the new job can be placed", app.Name, prev.ID)
 			if err := in.Client.ScaleAppRelease(app.ID, prev.ID, ct.ScaleOptions{
 				Processes: zeros,
 				Timeout:   &timeout,
 			}); err != nil {
-				return fmt.Errorf("scale down previous %s release: %w", m.App.Name, err)
+				return dep, fmt.Errorf("scale down previous %s release: %w", app.Name, err)
 			}
 		}
 	}
+
+	scaleOpts := ct.ScaleOptions{
+		Processes: procs,
+		Timeout:   &timeout,
+		NoWait:    pluginScaleNoWait(m),
+	}
+	if scaleOpts.NoWait {
+		in.logf("scaling %s %v (readiness via wait URL)", app.Name, procs)
+	} else {
+		in.logf("waiting for %s formation %v (timeout %s)", app.Name, procs, timeout)
+	}
+	if err := in.Client.ScaleAppRelease(app.ID, release.ID, scaleOpts); err != nil {
+		in.restorePreviousRelease(app, dep)
+		return dep, fmt.Errorf("scale %s: %w", app.Name, err)
+	}
 	if err := in.Client.SetAppRelease(app.ID, release.ID); err != nil {
-		return fmt.Errorf("set release: %w", err)
+		return dep, fmt.Errorf("set release: %w", err)
 	}
 	for k, v := range env {
 		if v != "" {
 			cluster[k] = v
 		}
 	}
-	return nil
+	return dep, nil
 }
 
 func (in *Installer) runHook(root string, m *Manifest, rel string, cluster map[string]string) error {
@@ -710,13 +827,16 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 }
 
 // pluginResourceProvider maps a manifest resource name to the controller
-// provider. "postgres" in a plugin manifest is the platform appliance.
-// The tenant product is the postgres plugin, not this attachment.
+// provider. Core Flynn plugins attach the built-in appliance
+// (platform-postgres / postgres-api.discoverd), not the tenant postgres plugin.
+// "postgres" is accepted as an alias so older manifests still hit the appliance.
 func pluginResourceProvider(name string) string {
-	if strings.TrimSpace(name) == "postgres" {
+	switch strings.TrimSpace(name) {
+	case "postgres", "platform-postgres":
 		return "platform-postgres"
+	default:
+		return name
 	}
-	return name
 }
 
 func (in *Installer) provisionResourceWithRetry(app *ct.App, name string) (*ct.Resource, error) {
@@ -855,6 +975,19 @@ func resourceProviderKeys(res *ct.Resource) []string {
 }
 
 func providerResourceAttached(have map[string]bool, name string, aliases map[string]string) bool {
+	want := pluginResourceProvider(name)
+	if have[want] {
+		return true
+	}
+	if id := aliases[want]; id != "" && have[id] {
+		return true
+	}
+	if want == "platform-postgres" {
+		// Appliance databases set FLYNN_POSTGRES=postgres (the postgres app).
+		// The tenant plugin provider is also named postgres; do not treat
+		// aliases["postgres"] as the appliance.
+		return have["postgres"]
+	}
 	if have[name] {
 		return true
 	}

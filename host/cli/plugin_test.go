@@ -122,6 +122,11 @@ func TestPluginUpdateUsage(t *testing.T) {
 		t.Fatalf("plugin=%q", args.String["<plugin>"])
 	}
 
+	args = parsePluginCmd(t, "plugin:update", "plugin:update", "--rebuild", "/opt/flynn-plugins/flynn-plugin-dashboard")
+	if !args.Bool["--rebuild"] || args.String["<plugin>"] != "/opt/flynn-plugins/flynn-plugin-dashboard" {
+		t.Fatalf("update --rebuild local: %+v", args)
+	}
+
 	args = parsePluginCmd(t, "plugin:update", "plugin:update", "dashboard", "--ref", "v20260916.3.1")
 	if args.String["--ref"] != "v20260916.3.1" || args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("update ref: %+v", args)

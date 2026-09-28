@@ -170,6 +170,11 @@ func FormationScale(m *Manifest, cluster map[string]string) map[string]int {
 // release that plugin install just replaced. ScaleAppRelease only updates
 // the new release; without this, the old formation stays at web=1 and
 // discoverd keeps both backends (HTML from vN, JS from vN-1 → 404s).
+//
+// Plugin updates apply this *before* scaling the new release. A singleton
+// host cannot place a second dashboard (or similar) web job while the old
+// web=1 job still holds RAM; waiting on the new formation looks hung after
+// "resource postgres already attached".
 func previousReleaseScaleDown(prev *ct.Release, formation *ct.Formation) map[string]int {
 	zeros := map[string]int{}
 	if formation != nil {

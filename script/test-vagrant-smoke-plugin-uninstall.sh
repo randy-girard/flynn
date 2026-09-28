@@ -70,8 +70,12 @@ need_in "${install}" 'uninstallHook' \
   "manifest must expose hooks.uninstall"
 need_in "${install}" 'previousReleaseScaleDown' \
   "plugin reinstall must scale the previous release to zero"
-need_in "${install}" 'deployHook' \
-  "plugin update must run hooks.upgrade instead of hooks.install"
+need_in "${install}" 'so the new job can be placed' \
+  "plugin reinstall must stop the previous release before placing the new job"
+need_in "${install}" 'pluginScaleNoWait' \
+  "plugin install must not wait on the scale event stream when a wait URL exists"
+need_in "${install}" 'after the app is up so operator logs' \
+  "install hooks must run after deploy and wait, not before scale"
 need_in "${docs}" 'plugin:uninstall' \
   "plugin docs must describe flynn-host plugin:uninstall"
 need_in "${docs}" 'dashboard lists them for cluster administrators' \

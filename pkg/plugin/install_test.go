@@ -75,6 +75,31 @@ func TestInstallNoBuildWithoutDist(t *testing.T) {
 	}
 }
 
+func TestPluginImageBuildNeeded(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name      string
+		opts      InstallOptions
+		distReady bool
+		want      bool
+	}{
+		{name: "install reuses dist", opts: InstallOptions{}, distReady: true, want: false},
+		{name: "install builds when dist missing", opts: InstallOptions{}, distReady: false, want: true},
+		{name: "install --rebuild", opts: InstallOptions{Rebuild: true}, distReady: true, want: true},
+		{name: "update local checkout rebuilds", opts: InstallOptions{Update: true}, distReady: true, want: true},
+		{name: "update --no-build reuses dist", opts: InstallOptions{Update: true, NoBuild: true}, distReady: true, want: false},
+		{name: "--no-build never compiles", opts: InstallOptions{NoBuild: true}, distReady: false, want: false},
+		{name: "--rebuild wins over --no-build", opts: InstallOptions{Rebuild: true, NoBuild: true}, distReady: false, want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pluginImageBuildNeeded(tc.opts, tc.distReady); got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestInstallMissingBuildScript(t *testing.T) {
 	dir := t.TempDir()
 	writeAppPlugin(t, dir, "widget")
@@ -253,6 +278,19 @@ func TestInstallHookAndRunHook(t *testing.T) {
 	}
 }
 
+func TestPluginScaleNoWaitWhenWaitURL(t *testing.T) {
+	if pluginScaleNoWait(nil) {
+		t.Fatal("nil manifest")
+	}
+	if pluginScaleNoWait(&Manifest{}) {
+		t.Fatal("no wait URL must wait on ScaleAppRelease")
+	}
+	m := &Manifest{Wait: "http://dashboard.discoverd/.well-known/status"}
+	if !pluginScaleNoWait(m) {
+		t.Fatal("dashboard wait URL must skip the scale event-stream wait")
+	}
+}
+
 type providerStub struct {
 	list      []*ct.Provider
 	listErr   error
@@ -291,6 +329,38 @@ func TestEnsureProviderIdempotentAndCreates(t *testing.T) {
 	}
 	if err := ensureProvider(&providerStub{createErr: fmt.Errorf("denied")}, "redis", "http://x", false); err == nil {
 		t.Fatal("create error")
+	}
+}
+
+func TestMergeGoBinPath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	goBin := filepath.Join(dir, "gobin")
+	if err := os.Mkdir(goBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(goBin, "go"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := mergeGoBinPath([]string{"FOO=bar", "PATH=/usr/bin"}, goBin)
+	var path string
+	for _, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			path = strings.TrimPrefix(e, "PATH=")
+		}
+	}
+	wantPrefix := goBin + string(os.PathListSeparator)
+	if !strings.HasPrefix(path, wantPrefix) {
+		t.Fatalf("PATH=%q want prefix %q", path, wantPrefix)
+	}
+	again := mergeGoBinPath(env, goBin)
+	for _, e := range again {
+		if strings.HasPrefix(e, "PATH=") && strings.Count(e, goBin) != 1 {
+			t.Fatalf("must not duplicate go bin: %s", e)
+		}
+	}
+	if got := mergeGoBinPath([]string{"PATH=/usr/bin"}, filepath.Join(dir, "missing")); len(got) != 1 || got[0] != "PATH=/usr/bin" {
+		t.Fatalf("missing go binary must leave env: %v", got)
 	}
 }
 
@@ -773,7 +843,7 @@ func TestApplyProvisionedResourcesProvisionsWhenOnlyStaleDatabaseURL(t *testing.
 }
 
 func TestApplyProvisionedResourcesSkipsAttachedProviderUUID(t *testing.T) {
-	aliases := map[string]string{"postgres": "uuid-postgres", "uuid-postgres": "uuid-postgres"}
+	aliases := map[string]string{"platform-postgres": "uuid-postgres", "uuid-postgres": "uuid-postgres"}
 	cluster := map[string]string{"DATABASE_URL": "postgres://stale"}
 	var provisioned int
 	err := applyProvisionedResources([]*ct.Resource{{
@@ -794,6 +864,42 @@ func TestApplyProvisionedResourcesSkipsAttachedProviderUUID(t *testing.T) {
 	}
 	if cluster["DATABASE_URL"] != "postgres://live" {
 		t.Fatalf("resource env must overwrite cluster, got %q", cluster["DATABASE_URL"])
+	}
+}
+
+func TestApplyProvisionedResourcesIgnoresTenantPostgresPlugin(t *testing.T) {
+	aliases := map[string]string{
+		"postgres":          "uuid-plugin",
+		"uuid-plugin":       "uuid-plugin",
+		"platform-postgres": "uuid-appliance",
+		"uuid-appliance":    "uuid-appliance",
+	}
+	cluster := map[string]string{}
+	var provisioned []string
+	err := applyProvisionedResources([]*ct.Resource{{
+		ProviderID: "uuid-plugin",
+		Env: map[string]string{
+			"FLYNN_POSTGRES": "pg-harbor-kxmnpq",
+			"DATABASE_URL":   "postgres://plugin",
+		},
+	}}, aliases, []string{"postgres"}, cluster, func(name string) (*ct.Resource, error) {
+		provisioned = append(provisioned, name)
+		return &ct.Resource{
+			ProviderID: "uuid-appliance",
+			Env: map[string]string{
+				"FLYNN_POSTGRES": "postgres",
+				"DATABASE_URL":   "postgres://appliance",
+			},
+		}, nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(provisioned) != 1 || provisioned[0] != "postgres" {
+		t.Fatalf("tenant postgres plugin must not satisfy platform-postgres, provisioned=%v", provisioned)
+	}
+	if cluster["DATABASE_URL"] != "postgres://appliance" {
+		t.Fatalf("appliance DATABASE_URL, got %q", cluster["DATABASE_URL"])
 	}
 }
 
@@ -832,22 +938,31 @@ func TestApplyProvisionedResourcesSkipsFLYNNPostgres(t *testing.T) {
 }
 
 func TestProviderResourceAttached(t *testing.T) {
-	have := map[string]bool{"uuid-1": true}
-	aliases := map[string]string{"postgres": "uuid-1"}
+	have := map[string]bool{"uuid-appliance": true}
+	aliases := map[string]string{"platform-postgres": "uuid-appliance", "postgres": "uuid-plugin"}
 	if !providerResourceAttached(have, "postgres", aliases) {
-		t.Fatal("name must match provider UUID")
+		t.Fatal("platform-postgres UUID must match")
+	}
+	if !providerResourceAttached(have, "platform-postgres", aliases) {
+		t.Fatal("explicit platform-postgres must match")
+	}
+	if providerResourceAttached(map[string]bool{"uuid-plugin": true}, "postgres", aliases) {
+		t.Fatal("tenant postgres plugin UUID must not count as the appliance")
 	}
 	if providerResourceAttached(have, "redis", aliases) {
 		t.Fatal("unrelated provider")
 	}
 	if !providerResourceAttached(map[string]bool{"postgres": true}, "postgres", nil) {
-		t.Fatal("name key")
+		t.Fatal("FLYNN_POSTGRES=postgres must count as the appliance")
 	}
 }
 
 func TestPluginResourceProviderUsesPlatformAppliance(t *testing.T) {
 	if got := pluginResourceProvider("postgres"); got != "platform-postgres" {
 		t.Fatalf("postgres -> %s", got)
+	}
+	if got := pluginResourceProvider("platform-postgres"); got != "platform-postgres" {
+		t.Fatalf("platform-postgres -> %s", got)
 	}
 	if got := pluginResourceProvider("redis"); got != "redis" {
 		t.Fatalf("redis -> %s", got)

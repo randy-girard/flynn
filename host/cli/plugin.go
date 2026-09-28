@@ -19,8 +19,8 @@ tenancy mode to hosted. billing must resolve from plugins.json and
 plugin:credentials. Signup stays off.
 
 Options:
-	--no-build                 Fail if dist/ is missing instead of running script/plugin-build
-	--rebuild                  Run script/plugin-build even if dist/ already exists (local only)
+	--no-build                 Reuse dist/ without compiling (fails if dist/ is missing)
+	--rebuild                  Run script/plugin-build even if dist/ already exists; overrides --no-build
 	--ref=REF                  GitHub release tag matching this Flynn vYYYYMMDD.N (or vYYYYMMDD.N.B)
 	--github-org=ORG           GitHub org for aliases (default: FLYNN_PLUGIN_GITHUB_ORG or randy-girard)
 	--auto-tls                 Enable Let's Encrypt on HTTP routes (requires ACME)
@@ -73,17 +73,20 @@ const pluginUpdateUsage = `
 usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-org=ORG] [--auto-tls] [--allow-external-layers] [--yes] <plugin>
 
 Deploy a new release of an already-installed plugin. update requires the
-plugin app to already exist. Update runs hooks.upgrade when declared
-(not hooks.install) and does not re-ask setup prompts. --yes accepts
-cluster-secret injection without a prompt (needed for third-party plugins
-on a non-TTY). --ref is a plugin GitHub tag (vYYYYMMDD.N.B). Omit it to
-install the newest published calver that matches this cluster's Flynn
-version (vYYYYMMDD.N). A plugin tagged v20260919.0.3 installs on Flynn
-v20260919.0; v20260920.0 is refused.
+plugin app to already exist. A local checkout runs script/plugin-build
+unless --no-build; otherwise dist/ is reused and source changes never
+ship. GitHub updates use the published image. Update runs hooks.upgrade
+when declared (not hooks.install) and does not re-ask setup prompts.
+--yes accepts cluster-secret injection without a prompt (needed for
+third-party plugins on a non-TTY). --ref is a plugin GitHub tag
+(vYYYYMMDD.N.B). Omit it to install the newest published calver that
+matches this cluster's Flynn version (vYYYYMMDD.N). A plugin tagged
+v20260919.0.3 installs on Flynn v20260919.0; v20260920.0 is refused.
 
 Examples:
 
     $ flynn-host plugin:update dashboard --ref v20260916.3.1
+    $ flynn-host plugin:update --rebuild /opt/flynn-plugins/flynn-plugin-dashboard
     $ flynn-host plugin:update-all
 `
 
