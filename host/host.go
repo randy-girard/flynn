@@ -158,11 +158,17 @@ Options:
 		for k, v := range c.Env {
 			os.Setenv(k, v)
 		}
-	} else if err := config.ApplySecretsToEnv(configFile); err != nil {
-		// CLI subcommands authenticate to the host API, discoverd, and
-		// controller with secrets from host.json when they are not already
-		// exported in the environment.
-		shutdown.Fatalf("error loading host config secrets: %s", err)
+	} else {
+		if err := config.ApplySecretsToEnv(configFile); err != nil {
+			// CLI subcommands authenticate to the host API, discoverd, and
+			// controller with secrets from host.json when they are not already
+			// exported in the environment.
+			shutdown.Fatalf("error loading host config secrets: %s", err)
+		}
+		// discoverd.DefaultClient is created at package init with
+		// 127.0.0.1:1111. bootstrap-flynn binds discoverd on the listen IP
+		// (192.0.2.200); ApplySecretsToEnv loads DISCOVERD from host.json.
+		discoverd.DefaultClient = discoverd.NewClient()
 	}
 
 	cmd, cmdArgs, from := cli.ResolveCommand(cmd, cmdArgs)

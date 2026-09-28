@@ -38,18 +38,19 @@ if [[ -z "${tarball}" ]]; then
 fi
 
 host_bin=""
-for candidate in "${ROOT}/build/bin/flynn-host" /usr/local/bin/flynn-host /usr/bin/flynn-host; do
-  if [[ -x "${candidate}" ]]; then
+for candidate in "${ROOT}/build/bin/flynn-host" /usr/local/libexec/flynn-host; do
+  if [[ -x "${candidate}" ]] && ! head -1 "${candidate}" | grep -q '^#!'; then
     host_bin="${candidate}"
     break
   fi
 done
 if [[ -z "${host_bin}" ]]; then
-  echo "flynn-host was not found in build/bin or /usr/local/bin" >&2
+  echo "flynn-host was not found in build/bin or /usr/local/libexec" >&2
   exit 1
 fi
 
 echo "updating from ${tarball} using ${host_bin}"
-install -m 0755 "${host_bin}" /usr/local/bin/flynn-host
+install -m 0755 "${host_bin}" /usr/local/libexec/flynn-host
+bash "${ROOT}/script/vagrant-dev-guest-cli.sh"
 export PATH="/usr/local/bin:${ROOT}/build/bin:${PATH}"
 exec flynn-host update --tarball "${ROOT}/${tarball}" --force

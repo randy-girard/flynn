@@ -142,6 +142,9 @@ main() {
   # ensure log dir exists
   sudo mkdir -p $log_dir
 
+  # Not a systemd unit. POST /host/auth-key must apply the key in-process
+  # (INVOCATION_ID unset); systemctl restart flynn-host would not replace
+  # this pid and bootstrap configure-host-auth would time out.
   sudo start-stop-daemon \
     --start \
     --background \

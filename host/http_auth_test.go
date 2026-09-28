@@ -4,7 +4,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
+
+	hosttypes "github.com/randy-girard/flynn/host/types"
 )
 
 func TestHostAuthKeyFromRequest(t *testing.T) {
@@ -211,5 +214,41 @@ func TestHostAuthMiddlewareLocalInterface(t *testing.T) {
 	wrapped.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("POST /host/discoverd from local %s: status=%d want %d", local, rec.Code, http.StatusNoContent)
+	}
+}
+
+func TestDaemonManagedBySystemd(t *testing.T) {
+	t.Setenv("INVOCATION_ID", "")
+	if daemonManagedBySystemd() {
+		t.Fatal("empty INVOCATION_ID must mean not systemd-managed")
+	}
+	t.Setenv("INVOCATION_ID", "3d8c8b0e0c1a4c2e9f7a")
+	if !daemonManagedBySystemd() {
+		t.Fatal("INVOCATION_ID must mean systemd-managed")
+	}
+}
+
+func TestEnableAuthInProcess(t *testing.T) {
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "")
+	t.Setenv("DISCOVERD_AUTH_KEY", "")
+	h := &Host{status: &hosttypes.HostStatus{ID: "host0"}}
+	h.enableAuthInProcess("cluster-secret", map[string]string{
+		"FLYNN_HOST_AUTH_KEY": "cluster-secret",
+		"DISCOVERD_AUTH_KEY":  "disc-secret",
+	})
+	if h.authKey != "cluster-secret" {
+		t.Fatalf("authKey=%q", h.authKey)
+	}
+	if !h.status.Auth {
+		t.Fatal("status.Auth must be true so waitForHostAuth can proceed without a restart")
+	}
+	if !h.authKeyValid("cluster-secret") {
+		t.Fatal("in-process key must authenticate immediately")
+	}
+	if os.Getenv("DISCOVERD_AUTH_KEY") != "disc-secret" {
+		t.Fatalf("DISCOVERD_AUTH_KEY=%q", os.Getenv("DISCOVERD_AUTH_KEY"))
+	}
+	if os.Getenv("FLYNN_HOST_AUTH_KEY") != "cluster-secret" {
+		t.Fatalf("FLYNN_HOST_AUTH_KEY=%q", os.Getenv("FLYNN_HOST_AUTH_KEY"))
 	}
 }

@@ -92,6 +92,20 @@ func firstNonLoopbackIP(t *testing.T) string {
 	return ""
 }
 
+func TestDiscoverdEnvFromHostsAndEnv(t *testing.T) {
+	t.Setenv("DISCOVERD", "none")
+	st := &State{Hosts: []*cluster.Host{
+		cluster.NewHostWithKey("h0", "192.0.2.200:1113", nil, nil, ""),
+	}}
+	if got := discoverdEnv(st); got != "192.0.2.200:1111" {
+		t.Fatalf("from hosts: %q", got)
+	}
+	t.Setenv("DISCOVERD", "192.0.2.200:1111,192.0.2.201:1111")
+	if got := discoverdEnv(st); got != "192.0.2.200:1111,192.0.2.201:1111" {
+		t.Fatalf("from env: %q", got)
+	}
+}
+
 // TestWaitForHostAuthAllReady verifies that when every host already reports
 // auth enabled, waitForHostAuth returns immediately without error.
 func TestWaitForHostAuthAllReady(t *testing.T) {

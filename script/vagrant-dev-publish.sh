@@ -1,8 +1,12 @@
 #!/bin/bash
 # Publish the in-VM cluster address (192.0.2.200) on the Vagrant host-only
 # NIC so the laptop can open the router. bootstrap-flynn binds the router to
-# that address only.
+# that address only. Also install flynn-host on PATH for in-guest CLI use.
 set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [[ -x "${ROOT}/script/vagrant-dev-guest-cli.sh" ]]; then
+  bash "${ROOT}/script/vagrant-dev-guest-cli.sh"
+fi
 nic="$(ip -4 -o addr show | awk '$4 ~ /^192\.168\.(56|57)\./ {print $2; exit}')"
 if [[ -z "${nic}" ]]; then
   echo "no 192.168.56/57 host-only interface; skipping publish" >&2

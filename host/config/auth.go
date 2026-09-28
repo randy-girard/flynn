@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 )
 
 const DefaultPath = "/etc/flynn/host.json"
@@ -41,9 +42,9 @@ func LoadEnvKey(file, name string) (string, error) {
 	return c.Env[name], nil
 }
 
-// ApplySecretsToEnv copies cluster secrets from the host config file into the
-// process environment when they are not already set, so flynn-host CLI
-// subcommands can authenticate to the host API, discoverd, and controller.
+// ApplySecretsToEnv copies cluster secrets (and DISCOVERD) from the host
+// config file into the process environment when they are not already set, so
+// flynn-host CLI subcommands can authenticate and find discoverd.
 func ApplySecretsToEnv(file string) error {
 	if file == "" {
 		file = DefaultPath
@@ -61,6 +62,11 @@ func ApplySecretsToEnv(file string) error {
 	for _, k := range cliSecretEnv {
 		if os.Getenv(k) == "" && c.Env[k] != "" {
 			os.Setenv(k, c.Env[k])
+		}
+	}
+	if os.Getenv("DISCOVERD") == "" || os.Getenv("DISCOVERD") == "none" {
+		if v := strings.TrimSpace(c.Env["DISCOVERD"]); v != "" && v != "none" {
+			os.Setenv("DISCOVERD", v)
 		}
 	}
 	return nil

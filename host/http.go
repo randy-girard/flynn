@@ -874,8 +874,48 @@ func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ ht
 		return
 	}
 
+	// systemd units restart so host.json env is loaded at process start.
+	// start-flynn-host / vagrant-dev use start-stop-daemon, so
+	// `systemctl restart flynn-host` never replaces this pid and bootstrap
+	// waitForHostAuth times out on GET /host/status (Auth stays false).
+	if !daemonManagedBySystemd() {
+		h.host.enableAuthInProcess(input.Key, kv)
+		log.Info("host auth key applied in-process", "reason", "not systemd-managed")
+		httphelper.JSON(w, http.StatusOK, map[string]string{"status": "configured"})
+		return
+	}
+
 	log.Info("host auth key configured, scheduling restart")
 	h.scheduleDaemonRestart(log, w)
+}
+
+// daemonManagedBySystemd reports whether this flynn-host process is a
+// systemd unit. systemd sets INVOCATION_ID; start-stop-daemon does not.
+func daemonManagedBySystemd() bool {
+	return os.Getenv("INVOCATION_ID") != ""
+}
+
+// enableAuthInProcess loads the cluster key and host.json env into this
+// running daemon so GET /host/status reports Auth and later jobs inherit
+// DISCOVERD_AUTH_KEY without a restart.
+func (h *Host) enableAuthInProcess(key string, env map[string]string) {
+	h.authKey = key
+	h.statusMtx.Lock()
+	if h.status == nil {
+		h.status = &host.HostStatus{}
+	}
+	h.status.Auth = key != ""
+	h.statusMtx.Unlock()
+	for k, v := range env {
+		if k == "" {
+			continue
+		}
+		if v == "" {
+			os.Unsetenv(k)
+			continue
+		}
+		os.Setenv(k, v)
+	}
 }
 
 func (h *jobAPI) scheduleDaemonRestart(log log15.Logger, w http.ResponseWriter) {

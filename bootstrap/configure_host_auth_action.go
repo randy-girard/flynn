@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/randy-girard/flynn/pkg/cluster"
@@ -40,6 +41,10 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 		os.Setenv("CONTROLLER_KEY", ck)
 		s.SetControllerKey(ck)
 	}
+	if d := discoverdEnv(s); d != "" {
+		extra["DISCOVERD"] = d
+		os.Setenv("DISCOVERD", d)
+	}
 
 	clientKey := os.Getenv("FLYNN_HOST_AUTH_KEY")
 	for _, h := range s.Hosts {
@@ -50,13 +55,11 @@ func (a *ConfigureHostAuthAction) Run(s *State) error {
 	s.SetHostAuthKey(key)
 	os.Setenv("FLYNN_HOST_AUTH_KEY", key)
 
-	// ConfigureAuthKey schedules an asynchronous daemon restart, so the
-	// pre-restart daemon keeps answering the auth-exempt GET /host/status
-	// endpoint for a short window. Wait until every host reports auth is
-	// enabled, which only happens once the daemon has actually restarted
-	// with the new key; otherwise later actions open job event streams
-	// against a daemon that is about to be restarted out from under them
-	// and time out waiting for events.
+	// systemd-managed hosts schedule an asynchronous daemon restart, so
+	// the pre-restart daemon keeps answering the auth-exempt GET
+	// /host/status endpoint with Auth=false until it is replaced. Wait
+	// until every host reports Auth. start-flynn-host / vagrant-dev apply
+	// the key in-process instead, so this returns as soon as status flips.
 	if err := waitForHostAuth(s); err != nil {
 		return err
 	}
@@ -133,10 +136,32 @@ func hostIPIsLocalInterface(ip net.IP) bool {
 	return false
 }
 
+// discoverdEnv is the DISCOVERD URL list to persist in host.json so the
+// flynn-host CLI does not fall back to 127.0.0.1:1111. bootstrap-flynn and
+// vagrant-dev bind discoverd on the TEST-NET listen IP (192.0.2.200), not
+// loopback.
+func discoverdEnv(s *State) string {
+	if d := strings.TrimSpace(os.Getenv("DISCOVERD")); d != "" && d != "none" {
+		return d
+	}
+	if s == nil {
+		return ""
+	}
+	ips := s.SortedHostIPs()
+	parts := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if ip == "" {
+			continue
+		}
+		parts = append(parts, net.JoinHostPort(ip, "1111"))
+	}
+	return strings.Join(parts, ",")
+}
+
 // waitForHostAuth blocks until every host in the bootstrap state reports that
-// auth is enabled (HostStatus.Auth), which only happens once the daemon has
-// actually restarted with the new key. It returns an error if s.HostTimeout
-// elapses before all hosts are ready.
+// auth is enabled (HostStatus.Auth): after a systemd restart, or immediately
+// when the daemon applied the key in-process. It returns an error if
+// s.HostTimeout elapses before all hosts are ready.
 func waitForHostAuth(s *State) error {
 	const waitInterval = 500 * time.Millisecond
 	timeout := time.After(s.HostTimeout)

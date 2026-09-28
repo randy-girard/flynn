@@ -198,3 +198,26 @@ func TestApplySecretsToEnv(t *testing.T) {
 		t.Fatalf("DISCOVERD_AUTH_KEY=%q", os.Getenv("DISCOVERD_AUTH_KEY"))
 	}
 }
+
+func TestApplySecretsToEnvDiscoverd(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	if err := SetEnv(path, map[string]string{
+		"DISCOVERD": "192.0.2.200:1111",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DISCOVERD", "")
+	if err := ApplySecretsToEnv(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("DISCOVERD") != "192.0.2.200:1111" {
+		t.Fatalf("DISCOVERD=%q", os.Getenv("DISCOVERD"))
+	}
+	t.Setenv("DISCOVERD", "none")
+	if err := ApplySecretsToEnv(path); err != nil {
+		t.Fatal(err)
+	}
+	if os.Getenv("DISCOVERD") != "192.0.2.200:1111" {
+		t.Fatalf("DISCOVERD=none must be replaced from host.json, got %q", os.Getenv("DISCOVERD"))
+	}
+}

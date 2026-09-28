@@ -222,14 +222,16 @@ func (c *Host) ListVolumes() ([]*volume.Info, error) {
 	return volumes, c.c.Get("/storage/volumes", &volumes)
 }
 
-// ConfigureAuthKey persists an auth key in the target host's config and
-// restarts the daemon so it takes effect.
+// ConfigureAuthKey persists an auth key in the target host's config. A
+// systemd-managed daemon restarts so the key takes effect; otherwise the
+// running daemon applies it in-process (start-flynn-host / vagrant-dev).
 func (c *Host) ConfigureAuthKey(key string) error {
 	return c.ConfigureHostSecrets(key, nil)
 }
 
 // ConfigureHostSecrets persists the host API key plus extra env (for example
-// DISCOVERD_AUTH_KEY) in the target host's config and restarts the daemon.
+// DISCOVERD_AUTH_KEY) in the target host's config. systemd-managed daemons
+// restart; otherwise the running daemon applies the secrets in-process.
 func (c *Host) ConfigureHostSecrets(key string, env map[string]string) error {
 	body := map[string]interface{}{"key": key}
 	if len(env) > 0 {

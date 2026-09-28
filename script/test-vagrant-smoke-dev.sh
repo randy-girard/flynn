@@ -75,6 +75,18 @@ if ! grep -q 'flynn_path_is_mount' "${ROOT}/script/clean-flynn"; then
   echo "clean-flynn must not rm -rf guest build/ when it is the build-dev mount" >&2
   exit 1
 fi
+if ! grep -Fq 'INVOCATION_ID' "${ROOT}/host/http.go"; then
+  echo "ConfigureAuthKey must detect systemd via INVOCATION_ID so vagrant-dev (start-stop-daemon) applies auth in-process" >&2
+  exit 1
+fi
+if ! grep -Fq 'enableAuthInProcess' "${ROOT}/host/http.go"; then
+  echo "ConfigureAuthKey must apply the host auth key in-process when flynn-host is not a systemd unit" >&2
+  exit 1
+fi
+if ! grep -Fq 'start-stop-daemon' "${ROOT}/script/start-flynn-host"; then
+  echo "start-flynn-host must keep start-stop-daemon (vagrant-dev is not systemd flynn-host)" >&2
+  exit 1
+fi
 if ! grep -Fq 'FLYNN_DEV_PIN=' "${ROOT}/script/vagrant-dev-creds.sh"; then
   echo "vagrant-dev-creds.sh must print labeled FLYNN_DEV_PIN so ssh banners cannot steal line 1" >&2
   exit 1
@@ -85,6 +97,18 @@ if ! grep -Fq 'parse_dev_creds' "${script}"; then
 fi
 if ! grep -Fq 'CAClient' "${ROOT}/cli/cluster.go"; then
   echo "cluster:add must fetch /ca-cert without the cluster key" >&2
+  exit 1
+fi
+if ! grep -Fq 'vagrant-dev-guest-cli.sh' "${ROOT}/script/vagrant-dev-publish.sh"; then
+  echo "vagrant-dev publish must install flynn-host on the guest PATH" >&2
+  exit 1
+fi
+if ! grep -Fq '192.0.2.200:1111' "${ROOT}/script/vagrant-dev-guest-cli.sh"; then
+  echo "guest flynn-host wrapper must set DISCOVERD to the TEST-NET listen IP" >&2
+  exit 1
+fi
+if ! grep -Fq 'discoverd.DefaultClient = discoverd.NewClient()' "${ROOT}/host/host.go"; then
+  echo "flynn-host CLI must recreate DefaultClient after loading host.json DISCOVERD" >&2
   exit 1
 fi
 if ! grep -Fq 'FLYNN_SKIP_UPDATE_CHECK' "${ROOT}/script/vagrant-dev-mac.sh"; then
