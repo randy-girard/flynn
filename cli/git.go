@@ -73,11 +73,10 @@ func gitRemotes() (map[string]remoteApp, error) {
 }
 
 func appFromGitURL(remote string) *remoteApp {
+	if config == nil {
+		return nil
+	}
 	for _, s := range config.Clusters {
-		if flagCluster != "" && s.Name != flagCluster {
-			continue
-		}
-
 		prefix := gitHTTPURLPre(s.GitURL)
 		if strings.HasPrefix(remote, prefix) && strings.HasSuffix(remote, gitURLSuffix) {
 			return &remoteApp{s, remote[len(prefix) : len(remote)-len(gitURLSuffix)]}

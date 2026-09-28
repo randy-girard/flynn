@@ -134,8 +134,7 @@ func applyGlobalFlags(args *docopt.Args) error {
 		return err
 	}
 	if ra, err := appFromGitRemote(flagApp); err == nil {
-		clusterConf = ra.Cluster
-		flagApp = ra.Name
+		bindGitRemoteApp(ra)
 	}
 	return nil
 }
@@ -308,34 +307,74 @@ func getClusterClient() (controller.Client, error) {
 
 var ErrNoClusters = errors.New("no clusters configured")
 
-func getCluster() (*cfg.Cluster, error) {
-	app() // try to look up and cache app/cluster from git remotes
-	if clusterConf != nil {
-		return clusterConf, nil
+// clusterNameOverride is -c / FLYNN_CLUSTER, else the flynnrc default.
+// Git remotes may still supply the app name; they do not override this cluster.
+func clusterNameOverride() string {
+	if name := strings.TrimSpace(flagCluster); name != "" {
+		return name
 	}
+	if config != nil {
+		return strings.TrimSpace(config.Default)
+	}
+	return ""
+}
+
+func selectCluster(conf *cfg.Config, name string, gitRemote *cfg.Cluster) (*cfg.Cluster, error) {
+	if conf == nil || len(conf.Clusters) == 0 {
+		return nil, ErrNoClusters
+	}
+	if name != "" {
+		for _, s := range conf.Clusters {
+			if s.Name == name {
+				return s, nil
+			}
+		}
+		return nil, fmt.Errorf("unknown cluster %q", name)
+	}
+	if gitRemote != nil {
+		return gitRemote, nil
+	}
+	return conf.Clusters[0], nil
+}
+
+func getCluster() (*cfg.Cluster, error) {
 	if err := readConfig(); err != nil {
 		return nil, err
 	}
-	if len(config.Clusters) == 0 {
-		return nil, ErrNoClusters
-	}
-	name := flagCluster
-	// Get the default cluster
-	if name == "" {
-		name = config.Default
-	}
-	// Default cluster not set, pick the first one
-	if name == "" {
-		clusterConf = config.Clusters[0]
+	name := clusterNameOverride()
+	if name != "" {
+		c, err := selectCluster(config, name, nil)
+		if err != nil {
+			return nil, err
+		}
+		clusterConf = c
 		return clusterConf, nil
 	}
-	for _, s := range config.Clusters {
-		if s.Name == name {
-			clusterConf = s
-			return s, nil
-		}
+	if clusterConf != nil {
+		return clusterConf, nil
 	}
-	return nil, fmt.Errorf("unknown cluster %q", name)
+	if _, err := app(); err == nil && clusterConf != nil {
+		return clusterConf, nil
+	}
+	c, err := selectCluster(config, "", nil)
+	if err != nil {
+		return nil, err
+	}
+	clusterConf = c
+	return clusterConf, nil
+}
+
+func bindGitRemoteApp(ra *remoteApp) {
+	if ra == nil {
+		return
+	}
+	flagApp = ra.Name
+	if clusterNameOverride() != "" {
+		return
+	}
+	if clusterConf == nil {
+		clusterConf = ra.Cluster
+	}
 }
 
 func app() (string, error) {
@@ -357,8 +396,7 @@ func app() (string, error) {
 	if ra == nil {
 		return "", errors.New("no app found, run from a repo with a flynn remote or specify one with -a")
 	}
-	clusterConf = ra.Cluster
-	flagApp = ra.Name
+	bindGitRemoteApp(ra)
 	return ra.Name, nil
 }
 
