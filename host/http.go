@@ -870,7 +870,10 @@ func (h *jobAPI) ConfigureAuthKey(w http.ResponseWriter, req *http.Request, _ ht
 	}
 	if err := config.SetEnv(config.DefaultPath, kv); err != nil {
 		log.Error("error writing host auth key", "err", err)
-		httphelper.Error(w, err)
+		httphelper.Error(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("write %s: %s", config.DefaultPath, err),
+		})
 		return
 	}
 

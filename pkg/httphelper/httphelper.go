@@ -294,6 +294,11 @@ func buildJSONError(err error) *JSONError {
 			if errors.As(err, &pgErr) {
 				jsonError.Retry = true
 				jsonError.Message = pgErr.Error()
+			} else {
+				var pathErr *os.PathError
+				if errors.As(err, &pathErr) {
+					jsonError.Message = err.Error()
+				}
 			}
 		}
 	}

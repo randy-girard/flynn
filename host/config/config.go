@@ -3,8 +3,8 @@ package config
 import (
 	"encoding/json"
 	"io"
-	"io/ioutil"
 	"os"
+	"path/filepath"
 )
 
 func Open(file string) (*Config, error) {
@@ -34,9 +34,14 @@ func New() *Config {
 }
 
 func (c *Config) WriteTo(name string) error {
+	if dir := filepath.Dir(name); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
 	data, err := json.MarshalIndent(c, "", "\t")
 	if err != nil {
 		return err
 	}
-	return ioutil.WriteFile(name, append(data, '\n'), 0644)
+	return os.WriteFile(name, append(data, '\n'), 0644)
 }

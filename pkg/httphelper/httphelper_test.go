@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -69,6 +70,13 @@ func TestErrorStatusAndRetryMapping(t *testing.T) {
 	je = decodeJSONError(t, rec)
 	if je.Message == "Something went wrong" || !strings.Contains(je.Message, "connection refused") {
 		t.Fatalf("net error message must reach the client, got %q", je.Message)
+	}
+
+	rec = httptest.NewRecorder()
+	Error(rec, &os.PathError{Op: "open", Path: "/etc/flynn/host.json", Err: os.ErrNotExist})
+	je = decodeJSONError(t, rec)
+	if je.Message == "Something went wrong" || !strings.Contains(je.Message, "/etc/flynn/host.json") {
+		t.Fatalf("path error message must reach the client, got %q", je.Message)
 	}
 }
 

@@ -221,3 +221,14 @@ func TestApplySecretsToEnvDiscoverd(t *testing.T) {
 		t.Fatalf("DISCOVERD=none must be replaced from host.json, got %q", os.Getenv("DISCOVERD"))
 	}
 }
+
+func TestSetEnvCreatesMissingDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "etc", "flynn", "host.json")
+	if err := SetEnv(path, map[string]string{"FLYNN_HOST_AUTH_KEY": "fresh"}); err != nil {
+		t.Fatal(err)
+	}
+	key, err := LoadAuthKey(path)
+	if err != nil || key != "fresh" {
+		t.Fatalf("load: %q %v", key, err)
+	}
+}

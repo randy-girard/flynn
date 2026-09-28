@@ -141,6 +141,7 @@ main() {
 
   # ensure log dir exists
   sudo mkdir -p $log_dir
+  sudo mkdir -p /etc/flynn
 
   # Not a systemd unit. POST /host/auth-key must apply the key in-process
   # (INVOCATION_ID unset); systemctl restart flynn-host would not replace
