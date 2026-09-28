@@ -22,6 +22,26 @@ plugins, or public company-site hosts (`blog`, `docs`, `status`, `tos`,
 `security`). Bootstrap and `flynn-host plugin:install` can still create
 those apps as system or plugin apps.
 
+## Listing
+
+`flynn apps` is not a dump of every app on the cluster.
+
+The default `flynn cluster:add` line uses the controller cluster key. That
+key is **cluster-admin**. A cluster-admin `GET /apps` used to return the full catalog, including bootstrap apps (`controller`,
+`postgres`, `router`, `gitreceive`, `blobstore`, …) and plugin apps. The
+default listing now hides those so a leaked or casually shared cluster key
+does not advertise cluster internals. Operators who need the catalog pass
+`flynn apps --all` (the controller query is `GET /apps?all=true`).
+`flynn-host` and other operator tools still request that full catalog.
+
+A **user token** (`flynn login`, `flynn token:create`, `user:token`) may
+call `GET /apps`, but the handler returns only apps the user owns
+(`owner_account=user:<id>`) or is a collaborator on. App-scoped dashboard
+grants cannot list apps at all (`403`). `--all` does not expand a user
+token to the operator catalog.
+
+See [Security](security.md#app-catalog) and [CLI — Apps](cli.md).
+
 ## Configuration
 
 As suggested in [_The Twelve-Factor App_](http://12factor.net/config), Flynn
@@ -391,11 +411,13 @@ and **system apps** can find backends. User-deployed jobs cannot reach other
 jobs on the overlay — including other apps and other process types of the
 same app — unless they go through a route you have added (`flynn route`).
 
-Provisioned datastore URLs use `leader.<service>.discoverd` (for example
-`leader.postgres.discoverd` in `DATABASE_URL`). User jobs may resolve those
-leader names only. Internal names such as `postgres.discoverd`,
-`postgres-api.discoverd`, `blobstore.discoverd`, and `$APP-$TYPE.discoverd`
-do not resolve for user jobs.
+Provisioned datastore URLs use the **leader** hostname Flynn put in
+`DATABASE_URL` / `REDIS_URL` / similar (often `leader.<service>.discoverd`).
+User jobs may resolve those leader names only. Internal names such as
+`postgres.discoverd`, `postgres-api.discoverd`, `postgres-plugin.discoverd`,
+`blobstore.discoverd`, and `$APP-$TYPE.discoverd` do not resolve for user
+jobs. Tenant Postgres is the postgres plugin; its URL is not the platform
+appliance.
 
 System apps keep a full overlay mesh so appliances, the controller, and the
 router can operate.

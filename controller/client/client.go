@@ -82,6 +82,7 @@ type Client interface {
 	JobList(appID string) ([]*ct.Job, error)
 	JobListActive() ([]*ct.Job, error)
 	AppList() ([]*ct.App, error)
+	AppListVisible() ([]*ct.App, error)
 	ArtifactList() ([]*ct.Artifact, error)
 	ReleaseList() ([]*ct.Release, error)
 	AppReleaseList(appID string) ([]*ct.Release, error)

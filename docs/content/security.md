@@ -129,6 +129,27 @@ volume/sirenia repair, and `POST /artifacts` during `flynn-host update` do
 not 401. HTTP 401 is not retried as a transient error. When the key is
 found on a job, `flynn-host` also writes it to `/etc/flynn/host.json`.
 
+## App catalog
+
+`GET /apps` is scoped to the caller:
+
+* **Cluster key / `cluster:admin`.** Default response omits platform,
+  system (`flynn-system-app`), and plugin (`flynn-plugin`) apps. Pass
+  `?all=true` (CLI: `flynn apps --all`) for the operator catalog.
+  `flynn-host`, plugin install, backup, and the updater use that full
+  list. Treat the cluster key as superuser: it can still `GET /apps/:id`
+  for system apps by name.
+* **User token** (`UserID` set). Returns only apps the user owns or
+  collaborates on. `?all=true` does not reveal other tenants' apps or
+  platform apps.
+* **App-scoped token** (dashboard grant, build token). `GET /apps` is
+  `403`. The token may only `GET /apps/:id` for apps it was granted.
+
+`flynn cluster:add` after bootstrap stores the cluster key, which is why
+`flynn apps` on a new cluster used to print `gitreceive`, `router`,
+`blobstore`, `postgres`, and `controller`. That was superuser listing,
+not a public catalog.
+
 ## Applications
 
 Applications run in their own network namespace on the overlay. User jobs

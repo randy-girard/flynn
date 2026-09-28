@@ -873,8 +873,17 @@ func (c *Client) JobListActive() ([]*ct.Job, error) {
 	return jobs, c.Get("/active-jobs", &jobs)
 }
 
-// AppList returns a list of all apps.
+// AppList returns the operator catalog (GET /apps?all=true): every app,
+// including platform, system, and plugin apps. flynn-host, plugin install,
+// backup, and other operator tools use this so they can find system apps.
 func (c *Client) AppList() ([]*ct.App, error) {
+	var apps []*ct.App
+	return apps, c.Get("/apps?all=true", &apps)
+}
+
+// AppListVisible returns GET /apps without the operator catalog. Cluster
+// admins see user apps only. User tokens see apps they own or collaborate on.
+func (c *Client) AppListVisible() ([]*ct.App, error) {
 	var apps []*ct.App
 	return apps, c.Get("/apps", &apps)
 }

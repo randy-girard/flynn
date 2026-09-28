@@ -55,18 +55,28 @@ Examples:
 	Deleted turkeys-stupefy-perry
 `)
 	register("apps", runApps, `
-usage: flynn apps
+usage: flynn apps [--all]
 
-List all apps.
+List apps visible to the current credential.
+
+A user token lists only apps you own or are a collaborator on. The cluster
+key and other cluster-admin credentials omit platform, system, and plugin
+apps by default so a shared key does not advertise cluster internals.
+Pass --all (cluster-admin) for the full catalog. flynn-host and other
+operator tools still request that catalog themselves.
+
+Options:
+	--all  Include platform, system, and plugin apps (cluster-admin)
 
 Examples:
 
 	$ flynn apps
 	ID                                NAME
-	f1e85f5392454a329929e3f27f7a5644  gitreceive
-	4c6325c1f13547059e5496c91a6a97dd  router
-	8cfd94d040b14bd8aecc086c8f5f5e0d  blobstore
-	f488cfb478f54edea497bf6347c2eb80  postgres
+	a1b2c3d4e5f64789a0b1c2d3e4f50617  myapp
+
+	$ flynn apps --all
+	ID                                NAME
+	a1b2c3d4e5f64789a0b1c2d3e4f50617  myapp
 	9d5be7be873c41b9898032c08aa87597  controller
 `)
 
@@ -159,7 +169,7 @@ func runDelete(args *docopt.Args, client controller.Client) error {
 }
 
 func runApps(args *docopt.Args, client controller.Client) error {
-	apps, err := client.AppList()
+	apps, err := listApps(client, args.Bool["--all"])
 	if err != nil {
 		return err
 	}
@@ -172,6 +182,18 @@ func runApps(args *docopt.Args, client controller.Client) error {
 		listRec(w, a.ID, a.Name)
 	}
 	return nil
+}
+
+type appCatalog interface {
+	AppList() ([]*ct.App, error)
+	AppListVisible() ([]*ct.App, error)
+}
+
+func listApps(client appCatalog, all bool) ([]*ct.App, error) {
+	if all {
+		return client.AppList()
+	}
+	return client.AppListVisible()
 }
 
 func runInfo(_ *docopt.Args, client controller.Client) error {

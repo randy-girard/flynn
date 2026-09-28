@@ -82,7 +82,7 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 		httphelper.JSON(rw, 200, thing)
 	}))
 
-	r.GET(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, _ *http.Request) {
+	r.GET(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
 		list, err := repo.List()
 		if err != nil {
 			respondWithError(rw, err)
@@ -90,7 +90,7 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 		}
 		if resource == "apps" {
 			if api := apiFromContext(ctx); api != nil {
-				list = api.filterVisibleApps(ctx, list)
+				list = api.filterVisibleApps(ctx, wantCatalogAll(req), list)
 			}
 		}
 		httphelper.JSON(rw, 200, list)

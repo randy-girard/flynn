@@ -91,6 +91,17 @@ func TestEnvGetSingleVarIsStringInDocopt(t *testing.T) {
 	}
 }
 
+func TestAppsParsesAllFlag(t *testing.T) {
+	args := parseCLI(t, []string{"apps"})
+	if args.Bool["--all"] {
+		t.Fatal("flynn apps must not imply --all")
+	}
+	args = parseCLI(t, []string{"apps", "--all"})
+	if !args.Bool["--all"] {
+		t.Fatal("flynn apps --all")
+	}
+}
+
 func TestPluginListKnownParses(t *testing.T) {
 	args := parseCLI(t, []string{"plugin:list"})
 	if args.Bool["--known"] {

@@ -42,6 +42,9 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_read_head_app", appRead, http.MethodHead, "/apps/app-1", true},
 		{"app_read_cannot_post_subresource", appRead, http.MethodPost, "/apps/app-1/releases", false},
 		{"app_read_cannot_list_apps", appRead, http.MethodGet, "/apps", false},
+		{"app_write_cannot_list_apps", appWrite, http.MethodGet, "/apps", false},
+		{"app_admin_cannot_list_apps", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:admin"}}}}, http.MethodGet, "/apps", false},
+		{"app_read_cannot_head_apps", appRead, http.MethodHead, "/apps", false},
 
 		{"app_write_can_post_release", appWrite, http.MethodPost, "/apps/app-1/releases", true},
 		{"app_write_can_post_cluster_release", appWrite, http.MethodPost, "/releases", true},
@@ -140,6 +143,29 @@ func TestHTTPAllowed(t *testing.T) {
 				t.Fatalf("HTTPAllowed(tok, %q, %q) = %v, want %v", tc.method, tc.path, got, tc.allowed)
 			}
 		})
+	}
+}
+
+func TestAppScopedTokenForbiddenOnGETApps(t *testing.T) {
+	// Dashboard grants are app-scoped and must not enumerate the cluster catalog.
+	cases := [][]string{
+		{"app:read"},
+		{"app:write"},
+		{"app:admin"},
+		{"app:deploy"},
+		{ScopeBuildArtifacts},
+	}
+	for _, perms := range cases {
+		tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: perms}}}
+		if HTTPAllowed(tok, http.MethodGet, "/apps") {
+			t.Fatalf("app-scoped %v must 403 on GET /apps", perms)
+		}
+	}
+	if !HTTPAllowed(&authorizer.Token{UserID: "u1"}, http.MethodGet, "/apps") {
+		t.Fatal("user tokens may GET /apps (handler then filters)")
+	}
+	if !HTTPAllowed(&authorizer.Token{ClusterKey: true}, http.MethodGet, "/apps") {
+		t.Fatal("cluster key may GET /apps")
 	}
 }
 

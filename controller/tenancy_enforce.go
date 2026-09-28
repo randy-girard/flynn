@@ -39,15 +39,22 @@ func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
 	return c.quotaAllows(app.OwnerAccount, usage.Apps+1, 0, 0, 0, 0)
 }
 
-func (c *controllerAPI) filterVisibleApps(ctx context.Context, list interface{}) interface{} {
+func (c *controllerAPI) filterVisibleApps(ctx context.Context, includeAll bool, list interface{}) interface{} {
 	apps, ok := list.([]*ct.App)
 	if !ok || c == nil {
 		return list
 	}
 	tok := authz.TokenFromContext(ctx)
-	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
+	if tok == nil {
 		return apps
 	}
+	if tok.HasClusterAdmin() {
+		if includeAll {
+			return apps
+		}
+		return dropInternalCatalogApps(apps)
+	}
+	// Non-admins never receive the operator catalog, even with ?all=1.
 	var out []*ct.App
 	for _, app := range apps {
 		if !appVisible(tok, app) {
@@ -61,22 +68,62 @@ func (c *controllerAPI) filterVisibleApps(ctx context.Context, list interface{})
 	return out
 }
 
+func dropInternalCatalogApps(apps []*ct.App) []*ct.App {
+	var out []*ct.App
+	for _, app := range apps {
+		if catalogInternalApp(app) {
+			continue
+		}
+		out = append(out, app)
+	}
+	if out == nil {
+		out = []*ct.App{}
+	}
+	return out
+}
+
+func catalogInternalApp(app *ct.App) bool {
+	if app == nil {
+		return false
+	}
+	return app.System() || app.Plugin() || authz.IsPlatformAppName(app.Name)
+}
+
+func wantCatalogAll(req *http.Request) bool {
+	if req == nil || req.URL == nil {
+		return false
+	}
+	q := req.URL.Query()
+	return truthyQuery(q.Get("all")) || truthyQuery(q.Get("system"))
+}
+
+func truthyQuery(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
+}
+
 func appVisible(tok *authorizer.Token, app *ct.App) bool {
 	if tok == nil || app == nil {
 		return false
 	}
-	named := false
+	if catalogInternalApp(app) {
+		return false
+	}
+	if tok.UserID != "" && app.OwnerAccount == "user:"+tok.UserID {
+		return true
+	}
 	for _, g := range tok.AppGrants {
 		if g.AppID == app.ID || g.AppID == app.Name {
 			if authz.HasAppPermission(g.Permissions, "") {
-				named = true
+				return true
 			}
 		}
 	}
-	if app.OwnerAccount == "" {
-		return named
-	}
-	return named
+	return false
 }
 
 func (c *controllerAPI) rejectIfSuspended(account string) error {

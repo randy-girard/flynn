@@ -37,6 +37,9 @@ const (
 	// handler enforces the specific account or app. Cluster admin is already
 	// allowed above. App-scoped tokens without a user id stay denied, which
 	// keeps GET /apps a 403 for dashboard grants that only list one app.
+	// User tokens that pass this check still must not receive the full app
+	// catalog: GET /apps filters to owned/collaborator apps. Cluster-admin
+	// GET /apps omits system/plugin apps unless ?all=true.
 	rkUserSession
 	// rkManageProvider is resource provision, attach, and delete. A user id
 	// or an app:write / app:admin grant may reach the handler, which checks
