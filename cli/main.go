@@ -16,6 +16,7 @@ import (
 	"github.com/flynn/go-docopt"
 	cfg "github.com/randy-girard/flynn/cli/config"
 	controller "github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
@@ -134,7 +135,9 @@ func applyGlobalFlags(args *docopt.Args) error {
 		return err
 	}
 	if ra, err := appFromGitRemote(flagApp); err == nil {
-		bindGitRemoteApp(ra)
+		if err := bindGitRemoteApp(ra); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -364,17 +367,49 @@ func getCluster() (*cfg.Cluster, error) {
 	return clusterConf, nil
 }
 
-func bindGitRemoteApp(ra *remoteApp) {
+func gitRemoteClusterMismatch(ra *remoteApp, clusterName string) error {
+	if ra == nil || ra.Cluster == nil || clusterName == "" {
+		return nil
+	}
+	if ra.Cluster.Name == clusterName {
+		return nil
+	}
+	return fmt.Errorf("git remote is app %q on cluster %q; current cluster is %q. Use flynn -c %s ps or flynn -a <app> for cluster %q", ra.Name, ra.Cluster.Name, clusterName, ra.Cluster.Name, clusterName)
+}
+
+func bindGitRemoteApp(ra *remoteApp) error {
 	if ra == nil {
-		return
+		return errors.New("no app found, run from a repo with a flynn remote or specify one with -a")
+	}
+	if err := gitRemoteClusterMismatch(ra, clusterNameOverride()); err != nil {
+		return err
 	}
 	flagApp = ra.Name
-	if clusterNameOverride() != "" {
-		return
-	}
-	if clusterConf == nil {
+	if clusterNameOverride() == "" && clusterConf == nil {
 		clusterConf = ra.Cluster
 	}
+	return nil
+}
+
+func currentClusterName() string {
+	if clusterConf != nil && clusterConf.Name != "" {
+		return clusterConf.Name
+	}
+	return clusterNameOverride()
+}
+
+func errAppNotOnCluster(err error, app string) error {
+	if err == nil || err != ct.ErrNotFound {
+		return err
+	}
+	app = strings.TrimSpace(app)
+	if app == "" {
+		return err
+	}
+	if name := currentClusterName(); name != "" {
+		return fmt.Errorf("app %q not found on cluster %q", app, name)
+	}
+	return fmt.Errorf("app %q not found on this cluster", app)
 }
 
 func app() (string, error) {
@@ -396,7 +431,9 @@ func app() (string, error) {
 	if ra == nil {
 		return "", errors.New("no app found, run from a repo with a flynn remote or specify one with -a")
 	}
-	bindGitRemoteApp(ra)
+	if err := bindGitRemoteApp(ra); err != nil {
+		return "", err
+	}
 	return ra.Name, nil
 }
 

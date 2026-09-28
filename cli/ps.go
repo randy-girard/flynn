@@ -46,9 +46,10 @@ Example:
 }
 
 func runPs(args *docopt.Args, client controller.Client) error {
-	jobs, err := client.JobList(mustApp())
+	app := mustApp()
+	jobs, err := client.JobList(app)
 	if err != nil {
-		return err
+		return errAppNotOnCluster(err, app)
 	}
 	sort.Sort(sortJobs(jobs))
 	w := tabWriter()

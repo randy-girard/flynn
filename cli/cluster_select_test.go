@@ -1,9 +1,11 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	cfg "github.com/randy-girard/flynn/cli/config"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func resetCLIClusterState(t *testing.T) {
@@ -86,17 +88,36 @@ func TestGetClusterFlagOverridesDefault(t *testing.T) {
 	}
 }
 
-func TestBindGitRemoteAppKeepsDefaultCluster(t *testing.T) {
+func TestBindGitRemoteAppRejectsOtherCluster(t *testing.T) {
 	resetCLIClusterState(t)
 	cloud, local, conf := testClusters()
 	config = conf
 	clusterConf = local
-	bindGitRemoteApp(&remoteApp{Cluster: cloud, Name: "resource-demo"})
-	if flagApp != "resource-demo" {
+	err := bindGitRemoteApp(&remoteApp{Cluster: cloud, Name: "resource-demo"})
+	if err == nil {
+		t.Fatal("expected git remote / cluster mismatch")
+	}
+	if flagApp != "" {
+		t.Fatalf("must not bind an app from another cluster, got %q", flagApp)
+	}
+	if clusterConf != local {
+		t.Fatalf("cluster %q", clusterConf.Name)
+	}
+}
+
+func TestBindGitRemoteAppMatchingClusterSetsApp(t *testing.T) {
+	resetCLIClusterState(t)
+	_, local, conf := testClusters()
+	config = conf
+	clusterConf = local
+	if err := bindGitRemoteApp(&remoteApp{Cluster: local, Name: "dashboard"}); err != nil {
+		t.Fatal(err)
+	}
+	if flagApp != "dashboard" {
 		t.Fatalf("app %q", flagApp)
 	}
 	if clusterConf != local {
-		t.Fatalf("cluster %q, want local", clusterConf.Name)
+		t.Fatalf("cluster %q", clusterConf.Name)
 	}
 }
 
@@ -105,9 +126,25 @@ func TestBindGitRemoteAppUsesGitClusterWithoutDefault(t *testing.T) {
 	cloud, _, conf := testClusters()
 	conf.Default = ""
 	config = conf
-	bindGitRemoteApp(&remoteApp{Cluster: cloud, Name: "resource-demo"})
+	if err := bindGitRemoteApp(&remoteApp{Cluster: cloud, Name: "resource-demo"}); err != nil {
+		t.Fatal(err)
+	}
 	if clusterConf != cloud {
 		t.Fatalf("cluster %+v", clusterConf)
+	}
+}
+
+func TestErrAppNotOnCluster(t *testing.T) {
+	resetCLIClusterState(t)
+	_, local, conf := testClusters()
+	config = conf
+	clusterConf = local
+	err := errAppNotOnCluster(ct.ErrNotFound, "resource-demo")
+	if err == nil || !strings.Contains(err.Error(), `app "resource-demo" not found on cluster "local"`) {
+		t.Fatalf("got %v", err)
+	}
+	if errAppNotOnCluster(nil, "resource-demo") != nil {
+		t.Fatal("nil")
 	}
 }
 
