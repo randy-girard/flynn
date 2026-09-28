@@ -36,6 +36,18 @@ type Cluster struct {
 	Context string `json:"context,omitempty" toml:"Context,omitempty"`
 }
 
+func (c *Cluster) pinnedControllerConfig() (controller.Config, error) {
+	var pin []byte
+	if c.TLSPin != "" {
+		var err error
+		pin, err = base64.StdEncoding.DecodeString(c.TLSPin)
+		if err != nil {
+			return controller.Config{}, fmt.Errorf("error decoding tls pin: %s", err)
+		}
+	}
+	return controller.Config{Pin: pin}, nil
+}
+
 func (c *Cluster) Client() (controller.Client, error) {
 	if c.OAuthURL != "" {
 		ts, err := tokensource.New(c.OAuthURL, c.ControllerURL, TokenCache())
@@ -44,16 +56,22 @@ func (c *Cluster) Client() (controller.Client, error) {
 		}
 		return controller.NewClientWithHTTP(c.ControllerURL, "", oauth2.NewClient(context.Background(), ts))
 	}
-
-	var pin []byte
-	if c.TLSPin != "" {
-		var err error
-		pin, err = base64.StdEncoding.DecodeString(c.TLSPin)
-		if err != nil {
-			return nil, fmt.Errorf("error decoding tls pin: %s", err)
-		}
+	cfg, err := c.pinnedControllerConfig()
+	if err != nil {
+		return nil, err
 	}
-	return controller.NewClientWithConfig(c.ControllerURL, c.Key, controller.Config{Pin: pin})
+	return controller.NewClientWithConfig(c.ControllerURL, c.Key, cfg)
+}
+
+// CAClient is an unauthenticated controller client for GET /ca-cert. That
+// route is TOFU: sending a wrong cluster key 401s on older controllers even
+// though the same request with no credentials succeeds.
+func (c *Cluster) CAClient() (controller.Client, error) {
+	cfg, err := c.pinnedControllerConfig()
+	if err != nil {
+		return nil, err
+	}
+	return controller.NewClientWithConfig(c.ControllerURL, "", cfg)
 }
 
 func (c *Cluster) TarClient() (*tarclient.Client, error) {

@@ -753,12 +753,13 @@ func (s *S) TestGetCACertWithAuth(c *C) {
 }
 
 func (s *S) TestGetCACertWithInvalidAuth(c *C) {
+	// GET /ca-cert is TOFU: a wrong key must not 401, because cluster:add
+	// used to send the key and fail even when no credentials would succeed.
 	client, err := controller.NewClient(s.srv.URL, "invalid-key")
 	c.Assert(err, IsNil)
 	cert, err := client.GetCACert()
-	c.Assert(err, Not(IsNil))
-	c.Assert(len(cert), Equals, 0)
-	c.Assert(strings.Contains(err.Error(), "unexpected status 401"), Equals, true)
+	c.Assert(err, IsNil)
+	c.Assert(cert, DeepEquals, s.caCert)
 }
 
 func (s *S) TestGetCACertWithoutAuth(c *C) {

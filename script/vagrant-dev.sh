@@ -324,11 +324,24 @@ ensure_cluster() {
   run_as_root "cd ${SRC} && script/bootstrap-flynn"
 }
 
+# parse_dev_creds reads labeled FLYNN_DEV_PIN=/FLYNN_DEV_KEY= lines so a
+# vagrant ssh login banner cannot shift pin/key onto the wrong fields.
+parse_dev_creds() {
+  local creds=$1
+  pin="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_PIN=//p' | tail -1)"
+  key="$(printf '%s\n' "${creds}" | sed -n 's/^FLYNN_DEV_KEY=//p' | tail -1)"
+  if [[ -z "${pin}" ]]; then
+    pin="$(printf '%s\n' "${creds}" | grep -E '^[A-Za-z0-9+/]{43}=$' | tail -1 || true)"
+  fi
+  if [[ -z "${key}" ]]; then
+    key="$(printf '%s\n' "${creds}" | grep -E '^[0-9a-f]{32}$' | tail -1 || true)"
+  fi
+}
+
 connect_laptop() {
   local creds pin key
   creds="$(run_as_root "cd ${SRC} && script/vagrant-dev-creds.sh")"
-  pin="$(printf '%s\n' "${creds}" | sed -n '1p')"
-  key="$(printf '%s\n' "${creds}" | sed -n '2p')"
+  parse_dev_creds "${creds}"
   if [[ -z "${pin}" || -z "${key}" ]]; then
     echo "could not read the cluster pin and key" >&2
     exit 1

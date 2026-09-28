@@ -27,7 +27,9 @@ echo "sudo is needed once to point ${DOMAIN} at ${IP}"
 sudo install -m 644 "${hosts_tmp}" /etc/hosts
 rm -f "${hosts_tmp}"
 
+export FLYNN_SKIP_UPDATE_CHECK=1
 flynn cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
+flynn -c local apps >/dev/null
 
 ca="${HOME}/.flynn/ca-certs/local.pem"
 if [[ -f "${ca}" ]]; then

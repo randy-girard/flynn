@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	v1controller "github.com/randy-girard/flynn/controller/client/v1"
 )
 
 func TestDefaultPathHonorsFLYNNRC(t *testing.T) {
@@ -159,6 +161,38 @@ func TestCACertPath(t *testing.T) {
 	p := CACertPath("prod")
 	if !strings.HasSuffix(p, filepath.Join("ca-certs", "prod.pem")) {
 		t.Fatalf("%s", p)
+	}
+}
+
+func TestCAClientOmitsKey(t *testing.T) {
+	c := &Cluster{
+		ControllerURL: "https://controller.example",
+		Key:           "cluster-secret",
+	}
+	ca, err := c.CAClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1, ok := ca.(*v1controller.Client)
+	if !ok {
+		t.Fatalf("%T", ca)
+	}
+	if v1.Key != "" {
+		t.Fatalf("CAClient must not send the cluster key, got %q", v1.Key)
+	}
+	cli, err := c.Client()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1c, ok := cli.(*v1controller.Client)
+	if !ok {
+		t.Fatalf("%T", cli)
+	}
+	if v1c.Key != "cluster-secret" {
+		t.Fatalf("Client key=%q", v1c.Key)
+	}
+	if _, err := (&Cluster{ControllerURL: "https://c", TLSPin: "not-base64"}).CAClient(); err == nil {
+		t.Fatal("invalid pin must fail")
 	}
 }
 

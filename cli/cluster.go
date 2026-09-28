@@ -224,11 +224,11 @@ func runClusterAdd(args *docopt.Args) error {
 	}
 
 	var caPath string
-	client, err := s.Client()
+	caClient, err := s.CAClient()
 	if err != nil {
 		return err
 	}
-	caPath, err = writeCACert(client, s.Name)
+	caPath, err = writeCACert(caClient, s.Name)
 	if err != nil {
 		return fmt.Errorf("Error writing CA certificate: %s", err)
 	}
@@ -300,7 +300,7 @@ func runClusterCA(args *docopt.Args) error {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		client, cerr := cluster.Client()
+		client, cerr := cluster.CAClient()
 		if cerr != nil {
 			return fmt.Errorf("cluster CA not stored at %s and controller client failed: %w", path, cerr)
 		}

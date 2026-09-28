@@ -75,6 +75,29 @@ if ! grep -q 'flynn_path_is_mount' "${ROOT}/script/clean-flynn"; then
   echo "clean-flynn must not rm -rf guest build/ when it is the build-dev mount" >&2
   exit 1
 fi
+if ! grep -Fq 'FLYNN_DEV_PIN=' "${ROOT}/script/vagrant-dev-creds.sh"; then
+  echo "vagrant-dev-creds.sh must print labeled FLYNN_DEV_PIN so ssh banners cannot steal line 1" >&2
+  exit 1
+fi
+if ! grep -Fq 'parse_dev_creds' "${script}"; then
+  echo "vagrant-dev.sh must parse labeled creds, not ssh stdout line 1/2" >&2
+  exit 1
+fi
+if ! grep -Fq 'CAClient' "${ROOT}/cli/cluster.go"; then
+  echo "cluster:add must fetch /ca-cert without the cluster key" >&2
+  exit 1
+fi
+if ! grep -Fq 'FLYNN_SKIP_UPDATE_CHECK' "${ROOT}/script/vagrant-dev-mac.sh"; then
+  echo "vagrant-dev-mac.sh must skip the CLI update nag during cluster:add" >&2
+  exit 1
+fi
+sample=$'Welcome to Ubuntu\nFLYNN_DEV_PIN=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\nFLYNN_DEV_KEY=0123456789abcdef0123456789abcdef\n'
+pin="$(printf '%s\n' "${sample}" | sed -n 's/^FLYNN_DEV_PIN=//p' | tail -1)"
+key="$(printf '%s\n' "${sample}" | sed -n 's/^FLYNN_DEV_KEY=//p' | tail -1)"
+if [[ "${pin}" != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" || "${key}" != "0123456789abcdef0123456789abcdef" ]]; then
+  echo "labeled creds parse failed: pin=${pin} key=${key}" >&2
+  exit 1
+fi
 bash "${ROOT}/script/test-clean-flynn.sh"
 help="$(bash "${script}" help)"
 for want in "setup" "cli" "bootstrap" "update" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps"; do

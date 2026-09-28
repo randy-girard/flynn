@@ -426,8 +426,10 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			return
 		}
 
-		_, password, _ := r.BasicAuth()
-		if password == "" && r.URL.Path == "/ca-cert" {
+		// GET /ca-cert is TOFU: cluster:add must download the CA before the
+		// key is known to be valid. A wrong Basic password used to 401 here
+		// even though the same request with no credentials succeeded.
+		if r.URL.Path == "/ca-cert" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 			main.ServeHTTP(w, r)
 			return
 		}
