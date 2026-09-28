@@ -88,6 +88,7 @@ var subAliases = map[string]map[string]string{
 		"decommission": "volume:decommission",
 	},
 	"cluster": {
+		"list":           "cluster:list",
 		"add":            "cluster:add",
 		"remove":         "cluster:remove",
 		"default":        "cluster:default",

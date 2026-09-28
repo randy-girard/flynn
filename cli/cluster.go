@@ -28,11 +28,15 @@ import (
 )
 
 func init() {
-	register("cluster", runClusterList, `
+	clusterListUsage := `
 usage: flynn cluster
+       flynn cluster:list
 
-List clusters configured in ~/.flynnrc.
-`)
+List clusters configured in ~/.flynnrc. This reads the laptop config only;
+it does not contact a controller.
+`
+	register("cluster", runClusterList, clusterListUsage)
+	register("cluster:list", runClusterList, clusterListUsage)
 	register("cluster:add", runClusterAdd, `
 usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] <cluster-name> <domain> [<key>]
 

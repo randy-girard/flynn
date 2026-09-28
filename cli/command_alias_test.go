@@ -40,6 +40,10 @@ func TestResolveCommandClusterBackupMoved(t *testing.T) {
 	if name != "cluster:ca" || from != "cluster ca" {
 		t.Fatalf("cluster ca got %q from=%q", name, from)
 	}
+	name, args, from = resolveCommand("cluster", []string{"list"})
+	if name != "cluster:list" || from != "cluster list" || len(args) != 0 {
+		t.Fatalf("cluster list got %q %q from=%q", name, args, from)
+	}
 }
 
 func TestExpandColonSuffix(t *testing.T) {

@@ -152,6 +152,12 @@ func TestClusterCAParses(t *testing.T) {
 	parseCLI(t, []string{"cluster", "ca"})
 }
 
+func TestClusterListParses(t *testing.T) {
+	parseCLI(t, []string{"cluster"})
+	parseCLI(t, []string{"cluster:list"})
+	parseCLI(t, []string{"cluster", "list"})
+}
+
 func TestTenancyCommandsParse(t *testing.T) {
 	parseCLI(t, []string{"whoami"})
 	parseCLI(t, []string{"context:use", "ada"})
