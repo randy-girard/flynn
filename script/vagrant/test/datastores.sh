@@ -92,8 +92,12 @@ if awk '/^exercise_datastore_followers\(/,/^}/' "${smoke}" | grep -q 'APP_NAME="
 fi
 need "${smoke}" 'DATASTORE_RESOURCE_APP' \
   "follower verify must name the instance on the throwaway app (flynn pg:psql pg-xxx)"
+need "${smoke}" 'flynn_ds' \
+  "datastore CLI helper must insert the named resource before --"
 need "${smoke}" 'attempt ${attempt}/20' \
   "resource:add must retry; 3-node controller db-runtimes are in-memory per web job"
+need "${smoke}" 'redis_follower_seeded' \
+  "redis follower verify must wait for replicaof to copy seeded keys, not only PING"
 
 # skip_deploy is set so git-push is skipped, but throwaway provision still
 # boots both 1-node and 3-node clusters. The single-topology SKIP_DEPLOY

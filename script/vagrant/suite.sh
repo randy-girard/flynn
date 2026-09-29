@@ -2295,7 +2295,11 @@ exercise_datastore_followers() {
       case "${provider}" in
         postgres) wait_for "${provider} follower ping" 300 tenant_postgres_ping || phase_ok=0 ;;
         mysql) wait_for "${provider} follower ping" 300 tenant_mysql_ping || phase_ok=0 ;;
-        redis) wait_for "${provider} follower ping" 300 redis_follower_ping || phase_ok=0 ;;
+        redis) wait_for "${provider} follower ping" 300 redis_follower_ping || phase_ok=0
+               if [[ "${phase_ok}" == "1" ]]; then
+                 wait_for "${provider} follower seed" 300 redis_follower_seeded || phase_ok=0
+               fi
+               ;;
         kafka) wait_for "${provider} follower topic" 300 kafka_has_smoke_probe || phase_ok=0 ;;
         clickhouse) wait_for "${provider} follower ping" 300 clickhouse_ping || phase_ok=0 ;;
         *) phase_ok=0 ;;
@@ -2331,6 +2335,12 @@ redis_follower_ping() {
   local out
   out="$(flynn_ds redis redis-cli PING 2>/dev/null || true)"
   echo "${out}" | grep -q PONG
+}
+
+redis_follower_seeded() {
+  local count rows="${SMOKE_SEED_ROWS}"
+  count="$(numeric_count "$(flynn_ds redis redis-cli DBSIZE 2>/dev/null || true)")"
+  [[ -n "${count}" && "${count}" -ge $((rows + 1)) ]]
 }
 
 # discoverd GET /services/:name/instances is a JSON array of peers.
