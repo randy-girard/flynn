@@ -52,6 +52,66 @@ func TestCreatedResourceMessage(t *testing.T) {
 	}
 }
 
+func TestResourceDisplayNameAndMatch(t *testing.T) {
+	res := &ct.Resource{
+		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
+		ExternalID: "deadbeefdeadbeef",
+		ProviderID: "prov-1",
+		Env:        map[string]string{"FLYNN_POSTGRES": "pg-harbor-kxmnpq"},
+	}
+	if resourceDisplayName(res) != "pg-harbor-kxmnpq" {
+		t.Fatalf("name %q", resourceDisplayName(res))
+	}
+	if !resourceMatchesRef(res, "pg-harbor-kxmnpq") || !resourceMatchesRef(res, res.ID) || !resourceMatchesRef(res, "deadbeefdeadbeef") {
+		t.Fatal("match NAME, ID, and ExternalID")
+	}
+	if resourceMatchesRef(res, "other") {
+		t.Fatal("unknown ref")
+	}
+}
+
+type resourceLookupClient struct {
+	controller.Client
+	provider *ct.Provider
+	appList  []*ct.Resource
+	allList  []*ct.Resource
+}
+
+func (c resourceLookupClient) GetProvider(string) (*ct.Provider, error) {
+	return c.provider, nil
+}
+
+func (c resourceLookupClient) AppResourceList(string) ([]*ct.Resource, error) {
+	return c.appList, nil
+}
+
+func (c resourceLookupClient) ResourceList(string) ([]*ct.Resource, error) {
+	return c.allList, nil
+}
+
+func TestLookupProviderResourceByName(t *testing.T) {
+	res := &ct.Resource{
+		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
+		ProviderID: "prov-1",
+		Env:        map[string]string{"FLYNN_POSTGRES": "pg-harbor-kxmnpq"},
+	}
+	c := resourceLookupClient{
+		provider: &ct.Provider{ID: "prov-1", Name: "postgres"},
+		appList:  []*ct.Resource{res},
+	}
+	got, err := lookupProviderResource(c, "shop", "postgres", "pg-harbor-kxmnpq")
+	if err != nil || got == nil || got.ID != res.ID {
+		t.Fatalf("by name: %+v %v", got, err)
+	}
+	peer, err := resolvePeerRef(c, "shop", "postgres", res.ID)
+	if err != nil || peer != "pg-harbor-kxmnpq" {
+		t.Fatalf("peer from ID: %q %v", peer, err)
+	}
+	if _, err := lookupProviderResource(c, "shop", "postgres", "missing"); err == nil {
+		t.Fatal("missing must fail")
+	}
+}
+
 func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
 	err := rejectPlatformPostgresAdd("postgres", postgresProviderClient{err: controller.ErrNotFound})
 	if !errors.Is(err, pgappliance.ErrTenantProvision) {

@@ -23,6 +23,9 @@ func init() {
 usage: flynn resource
 
 List resources for the app.
+
+NAME is the isolated instance (pg-harbor-kxmnpq). Use it with pg:psql,
+redis-cli, --follow, --join, resource:attach, and resource:remove.
 `)
 	register("resource:add", runResourceAdd, `
 usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--join <resource>] [--runtime <name>] [--replication <mode>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
@@ -45,8 +48,8 @@ The default name DATABASE sets only DATABASE_URL.
 
 Options:
 	--as=<name>              attachment env name (default DATABASE)
-	--follow=<resource>      replica resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
-	--join=<resource>        extra kafka or mongodb cluster node (new container on that cluster)
+	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
+	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     streaming (same major) or logical (major upgrade)
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
@@ -58,9 +61,9 @@ usage: flynn resource:attach <provider> <resource> [--as <name>]
 
 Attach an existing resource to this app.
 
-For postgres, --as sets one env var (<NAME>_URL). The default name is the
-resource's existing *_URL key. The same resource can attach to several apps
-with different names.
+<resource> is the NAME or ID from flynn resource. For postgres, --as sets one
+env var (<NAME>_URL). The default name is the resource's existing *_URL key.
+The same resource can attach to several apps with different names.
 
 Options:
 	--as=<name>  attachment env name
@@ -69,11 +72,15 @@ Options:
 usage: flynn resource:detach <provider> <resource>
 
 Detach a resource from this app and remove the attachment env var.
+
+<resource> is the NAME or ID from flynn resource.
 `)
 	register("resource:remove", runResourceRemove, `
 usage: flynn resource:remove <provider> [<resource>]
 
-Remove the existing <resource> provided by <provider>. Resolves <resource> automatically if unambiguous.
+Remove the existing <resource> provided by <provider>. <resource> is the NAME
+or ID from flynn resource. Resolves automatically if the app has exactly one
+resource for <provider>.
 `)
 	register("resource:expose", runResourceExpose, `
 usage: flynn resource:expose <provider> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
@@ -117,13 +124,13 @@ func runResourceList(args *docopt.Args, client controller.Client) error {
 
 	var provider *ct.Provider
 
-	listRec(w, "ID", "Provider ID", "Provider Name")
+	listRec(w, "NAME", "PROVIDER", "ID")
 	for _, j := range resources {
 		provider, err = client.GetProvider(j.ProviderID)
 		if err != nil {
 			return err
 		}
-		listRec(w, j.ID, j.ProviderID, provider.Name)
+		listRec(w, resourceDisplayName(j), provider.Name, j.ID)
 	}
 
 	return err
@@ -140,7 +147,15 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := databaseProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--join"], args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
+	follow, err := resolvePeerRef(client, mustApp(), provider, args.String["--follow"])
+	if err != nil {
+		return err
+	}
+	join, err := resolvePeerRef(client, mustApp(), provider, args.String["--join"])
+	if err != nil {
+		return err
+	}
+	cfg, err := databaseProvisionConfig(provider, args.String["--as"], follow, join, args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
 	if err != nil {
 		return err
 	}
@@ -205,6 +220,98 @@ func createdResourceMessage(res *ct.Resource, as string) string {
 		return fmt.Sprintf("Created resource %s (as %s) and a new release.", name, as)
 	}
 	return fmt.Sprintf("Created resource %s and a new release.", name)
+}
+
+// resourceDisplayName is the isolated instance operators copy from flynn
+// resource (pg-harbor-kxmnpq). It is what pg:psql and --follow/--join take.
+func resourceDisplayName(res *ct.Resource) string {
+	if res == nil {
+		return ""
+	}
+	if name, _ := resname.Identity(res.Env); name != "" {
+		return name
+	}
+	if n := strings.TrimSpace(res.ExternalID); n != "" {
+		return n
+	}
+	return strings.TrimSpace(res.ID)
+}
+
+func resourceMatchesRef(res *ct.Resource, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if res == nil || ref == "" {
+		return false
+	}
+	if strings.EqualFold(res.ID, ref) {
+		return true
+	}
+	if strings.EqualFold(strings.TrimSpace(res.ExternalID), ref) {
+		return true
+	}
+	return strings.EqualFold(resourceDisplayName(res), ref)
+}
+
+// resolvePeerRef turns a flynn resource NAME or ID into the isolated app name
+// plugins expect for --follow/--join. Empty ref is unchanged.
+func resolvePeerRef(client controller.Client, app, provider, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", nil
+	}
+	res, err := lookupProviderResource(client, app, provider, ref)
+	if err != nil {
+		return "", err
+	}
+	if name := resourceDisplayName(res); name != "" {
+		return name, nil
+	}
+	return ref, nil
+}
+
+func lookupProviderResource(client controller.Client, app, provider, ref string) (*ct.Resource, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("resource is required")
+	}
+	p, err := client.GetProvider(provider)
+	if err != nil {
+		return nil, err
+	}
+	match := func(list []*ct.Resource) []*ct.Resource {
+		var out []*ct.Resource
+		for _, r := range list {
+			if r == nil || r.ProviderID != p.ID {
+				continue
+			}
+			if resourceMatchesRef(r, ref) {
+				out = append(out, r)
+			}
+		}
+		return out
+	}
+	if strings.TrimSpace(app) != "" {
+		list, err := client.AppResourceList(app)
+		if err != nil {
+			return nil, err
+		}
+		if got := match(list); len(got) == 1 {
+			return got[0], nil
+		} else if len(got) > 1 {
+			return nil, fmt.Errorf("multiple resources match %q; use the ID from flynn resource", ref)
+		}
+	}
+	list, err := client.ResourceList(p.ID)
+	if err != nil {
+		return nil, err
+	}
+	got := match(list)
+	if len(got) == 1 {
+		return got[0], nil
+	}
+	if len(got) > 1 {
+		return nil, fmt.Errorf("multiple resources match %q; use the ID from flynn resource", ref)
+	}
+	return nil, fmt.Errorf("resource %q not found for %s; see flynn resource", ref, provider)
 }
 
 // rejectPlatformPostgresAdd stops `flynn resource:add postgres` from creating
@@ -383,8 +490,11 @@ func singleAttachmentEnv(resourceEnv map[string]string, as string) (map[string]s
 
 func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	provider := args.String["<provider>"]
-	resource := args.String["<resource>"]
-	res, err := client.AddResourceApp(provider, resource, mustApp())
+	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
+	if err != nil {
+		return err
+	}
+	res, err := client.AddResourceApp(provider, resRef.ID, mustApp())
 	if err != nil {
 		return err
 	}
@@ -393,14 +503,17 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Attached resource %s and release %s.", res.ID, releaseID)
+	log.Printf("Attached resource %s and release %s.", resourceDisplayName(res), releaseID)
 	return nil
 }
 
 func runResourceDetach(args *docopt.Args, client controller.Client) error {
 	provider := args.String["<provider>"]
-	resource := args.String["<resource>"]
-	res, err := client.DeleteResourceApp(provider, resource, mustApp())
+	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
+	if err != nil {
+		return err
+	}
+	res, err := client.DeleteResourceApp(provider, resRef.ID, mustApp())
 	if err != nil {
 		return err
 	}
@@ -419,7 +532,7 @@ func runResourceDetach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("Detached resource %s and release %s.", res.ID, releaseID)
+	log.Printf("Detached resource %s and release %s.", resourceDisplayName(res), releaseID)
 	return nil
 }
 
@@ -433,6 +546,12 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		resRef, err := lookupProviderResource(client, mustApp(), provider, resource)
+		if err != nil {
+			return err
+		}
+		resource = resRef.ID
 	}
 
 	res, err := client.DeleteResource(provider, resource)
@@ -460,7 +579,7 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
-	log.Printf("Deleted resource %s, created release %s.", res.ID, releaseID)
+	log.Printf("Deleted resource %s, created release %s.", resourceDisplayName(res), releaseID)
 
 	return nil
 }
@@ -481,7 +600,7 @@ func resolveResource(provider string, client controller.Client) (string, error) 
 		}
 	}
 	if len(matched) != 1 {
-		return "", fmt.Errorf("App has more than one resource for %s, specify resource ID", provider)
+		return "", fmt.Errorf("App has more than one resource for %s, specify NAME or ID from flynn resource", provider)
 	}
 	return matched[0].ID, nil
 }

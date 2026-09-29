@@ -2293,10 +2293,10 @@ teardown_throwaway_datastores() {
   info "tearing down datastore resources on ${app}"
   for provider in "${DATASTORE_PROVIDERS[@]}"; do
     while read -r id; do
-      [[ -z "${id}" || "${id}" == ID ]] && continue
+      [[ -z "${id}" || "${id}" == ID || "${id}" == NAME ]] && continue
       flynn1 -a "${app}" resource remove "${provider}" "${id}" || \
         flynn1 -a "${app}" resource remove "${provider}" "${id}" --yes || true
-    done < <(flynn1 -a "${app}" resource 2>/dev/null | awk -v p="${provider}" 'NR>1 && tolower($NF)==tolower(p) {print $1}')
+    done < <(flynn1 -a "${app}" resource 2>/dev/null | awk -v p="${provider}" 'NR>1 && tolower($2)==tolower(p) {print $1}')
   done
 }
 

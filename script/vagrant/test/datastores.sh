@@ -43,6 +43,10 @@ need "${smoke}" 'teardown_throwaway_datastores' \
   "throwaway provision must resource:remove after seed and follow"
 need "${smoke}" '--follow' \
   "replica engines must be provisioned with resource:add --follow"
+need "${ROOT}/cli/resource.go" 'listRec(w, "NAME", "PROVIDER", "ID")' \
+  "flynn resource must print NAME for pg:psql, --follow, and --join"
+need "${smoke}" 'tolower($2)==tolower(p)' \
+  "resource teardown must match PROVIDER (column 2) now that NAME is first"
 need "${smoke}" 'datastore_extra_node_flag' \
   "kafka/mongodb must use --join; replica engines keep --follow"
 need "${smoke}" 'mongodb:nodes:add' \
