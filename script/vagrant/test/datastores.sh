@@ -44,7 +44,7 @@ need "${smoke}" 'teardown_throwaway_datastores' \
 need "${smoke}" '--follow' \
   "followers must be provisioned with resource:add --follow"
 need "${smoke}" 'mongodb:nodes:add' \
-  "mongodb has no --follow; smoke must add a replica-set member"
+  "mongodb --follow adds a replica-set member; nodes:add remains the fallback"
 need "${example}" 'topologies: "1,3"' \
   "datastores must run 1-node and 3-node clusters"
 need "${smoke}" 'tenant_mysql_ping' \
@@ -100,6 +100,8 @@ need "${smoke}" 'flynn_ds' \
   "datastore CLI helper must insert the named resource before --"
 need "${smoke}" 'attempt ${attempt}/20' \
   "resource:add must retry; 3-node controller db-runtimes are in-memory per web job"
+need "${smoke}" 'kafka_cluster_ready' \
+  "kafka --follow must wait for a second broker in the same cluster"
 need "${smoke}" 'redis_follower_seeded' \
   "redis follower verify must wait for replicaof to copy seeded keys, not only PING"
 

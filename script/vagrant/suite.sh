@@ -1830,6 +1830,16 @@ kafka_has_smoke_probe() {
   echo "$(kafka_topics)" | grep -q smoke_probe
 }
 
+kafka_cluster_ready() {
+  local svc n
+  svc="${DATASTORE_RESOURCE_APP:-}"
+  if [[ -z "${svc}" ]]; then
+    svc="$(flynn1 -a "${APP_NAME}" env get FLYNN_KAFKA 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+  n="$(sirenia_peer_count "${svc}" 2>/dev/null || echo 0)"
+  [[ "${n}" -ge 2 ]]
+}
+
 clickhouse_ping() {
   local out
   out="$(flynn_ds clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
@@ -2236,10 +2246,6 @@ mongodb_replica_ready() {
 add_throwaway_follower() {
   local app=$1 provider=$2
   local cand leader added=0 attempt
-  if [[ "${provider}" == mongodb ]]; then
-    add_mongodb_replica "${app}"
-    return
-  fi
   leader="$(datastore_leader_app "${app}" "${provider}")"
   if [[ -z "${leader}" ]]; then
     echo "${provider} has no leader app on ${app}" >&2
@@ -2263,6 +2269,10 @@ add_throwaway_follower() {
     echo "resource:add ${cand} --follow failed; trying next candidate" >&2
   done < <(resource_add_candidates "${provider}")
   if [[ "${added}" != "1" ]]; then
+    if [[ "${provider}" == mongodb ]]; then
+      add_mongodb_replica "${app}"
+      return
+    fi
     echo "${provider} follower add failed on ${app}" >&2
     return 1
   fi
@@ -2295,38 +2305,42 @@ exercise_datastore_followers() {
     saved="${APP_NAME}"
     APP_NAME="${app}"
     DATASTORE_RESOURCE_APP=""
-    if [[ "${provider}" != mongodb ]]; then
-      url="$(flynn1 -a "${app}" env get FOLLOWER_URL 2>/dev/null | tr -d '[:space:]' || true)"
+    url="$(flynn1 -a "${app}" env get FOLLOWER_URL 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -n "${url}" ]]; then
       fol="$(url_resource_app "${url}")"
-      if [[ -z "${fol}" ]]; then
-        record_check "follower" "${provider}" "FAIL" "could not parse follower app from FOLLOWER_URL"
-        APP_NAME="${saved}"
-        return 1
-      fi
-      # Name the follower on the throwaway app. flynn -a <database-app> pg:psql
-      # tries to run a job on the datastore and is rejected.
-      DATASTORE_RESOURCE_APP="${fol}"
-      phase_ok=1
-      case "${provider}" in
-        postgres) wait_for "${provider} follower ping" 300 tenant_postgres_ping || phase_ok=0 ;;
-        mysql) wait_for "${provider} follower ping" 300 tenant_mysql_ping || phase_ok=0 ;;
-        redis) wait_for "${provider} follower ping" 300 redis_follower_ping || phase_ok=0
-               if [[ "${phase_ok}" == "1" ]]; then
-                 wait_for "${provider} follower seed" 300 redis_follower_seeded || phase_ok=0
-               fi
-               ;;
-        kafka) wait_for "${provider} follower topic" 300 kafka_has_smoke_probe || phase_ok=0 ;;
-        clickhouse) wait_for "${provider} follower ping" 300 clickhouse_ping || phase_ok=0 ;;
-        *) phase_ok=0 ;;
-      esac
-      if [[ "${phase_ok}" != "1" ]]; then
-        APP_NAME="${saved}"
-        DATASTORE_RESOURCE_APP=""
-        DATASTORE_PROVIDERS=("${saved_providers[@]}")
-        echo "${provider} follower ${fol} did not become ready" >&2
-        record_check "follower" "${provider}" "FAIL" "not ready"
-        return 1
-      fi
+    elif [[ "${provider}" == mongodb ]]; then
+      fol="$(flynn1 -a "${app}" env get FLYNN_MONGO 2>/dev/null | tr -d '[:space:]' || true)"
+    fi
+    if [[ -z "${fol}" ]]; then
+      record_check "follower" "${provider}" "FAIL" "could not parse follower app from FOLLOWER_URL"
+      APP_NAME="${saved}"
+      return 1
+    fi
+    DATASTORE_RESOURCE_APP="${fol}"
+    phase_ok=1
+    case "${provider}" in
+      postgres) wait_for "${provider} follower ping" 300 tenant_postgres_ping || phase_ok=0 ;;
+      mysql) wait_for "${provider} follower ping" 300 tenant_mysql_ping || phase_ok=0 ;;
+      redis) wait_for "${provider} follower ping" 300 redis_follower_ping || phase_ok=0
+             if [[ "${phase_ok}" == "1" ]]; then
+               wait_for "${provider} follower seed" 300 redis_follower_seeded || phase_ok=0
+             fi
+             ;;
+      kafka) wait_for "${provider} cluster brokers" 300 kafka_cluster_ready || phase_ok=0
+             wait_for "${provider} follower topic" 300 kafka_has_smoke_probe || phase_ok=0 ;;
+      mongodb) MONGODB_REPLICA_SERVICE="${fol}"
+               wait_for "${provider} replica discoverd" 300 mongodb_replica_ready || phase_ok=0
+               wait_for "${provider} follower ping" 300 tenant_mongodb_ping || phase_ok=0 ;;
+      clickhouse) wait_for "${provider} follower ping" 300 clickhouse_ping || phase_ok=0 ;;
+      *) phase_ok=0 ;;
+    esac
+    if [[ "${phase_ok}" != "1" ]]; then
+      APP_NAME="${saved}"
+      DATASTORE_RESOURCE_APP=""
+      DATASTORE_PROVIDERS=("${saved_providers[@]}")
+      echo "${provider} follower ${fol} did not become ready" >&2
+      record_check "follower" "${provider}" "FAIL" "not ready"
+      return 1
     fi
     DATASTORE_PROVIDERS=("${provider}")
     RECORD_PHASE=follower

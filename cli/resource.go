@@ -34,15 +34,17 @@ is sized from a database runtime (flynn-host db-runtime). Those are not app
 process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
 are rejected unless a cluster admin has allowed custom sizes.
 
-For postgres, mysql, redis, kafka, and clickhouse, the installed plugin
-receives --as, --follow, --runtime, and --replication. MongoDB rejects
---follow; add a replica-set member with mongodb:nodes:add. The platform
+For postgres, mysql, redis, kafka, mongodb, and clickhouse, the installed plugin
+receives --as, --follow, --runtime, and --replication. Postgres, mysql, and redis
+--follow creates a replica resource of that instance. Kafka and mongodb --follow
+adds a node to that existing cluster (any member name works). ClickHouse --follow
+still copies onto a separate resource. The platform
 postgres appliance at postgres-api.discoverd is not used. --as ANALYTICS
 sets only ANALYTICS_URL. The default name DATABASE sets only DATABASE_URL.
 
 Options:
 	--as=<name>              attachment env name (default DATABASE)
-	--follow=<resource>      read-only follower of an existing resource (app name or id)
+	--follow=<resource>      replica resource (postgres/mysql/redis/clickhouse) or extra cluster node (kafka/mongodb)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     streaming (same major) or logical (major upgrade)
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
