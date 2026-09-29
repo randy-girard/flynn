@@ -306,7 +306,8 @@ func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Rele
 // applyNamedResource points console placeholders at the instance named on the
 // command line. Host keys from the app's default attachment are dropped so
 // manifests fall back to leader.<name>.discoverd, then the instance release
-// env (password, URL) is copied in.
+// env (password, URL) is copied in. MYSQL_PWD on a live mysql job is the
+// superuser; MYSQL_APP_PASSWORD is the resource:add user console needs.
 func applyNamedResource(app map[string]string, resource string, env map[string]string) {
 	if app == nil {
 		return
@@ -321,6 +322,11 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 		if val != "" {
 			app[key] = val
 		}
+	}
+	// Isolated mysql jobs keep MYSQL_PWD as the superuser/repl password.
+	// Console/dump interpolate MYSQL_USER + MYSQL_PWD, so prefer the app user.
+	if pwd := app["MYSQL_APP_PASSWORD"]; pwd != "" {
+		app["MYSQL_PWD"] = pwd
 	}
 	if resource != "" {
 		host := "leader." + resource + ".discoverd"

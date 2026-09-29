@@ -139,6 +139,9 @@ func TestPluginJobConfigAndIO(t *testing.T) {
 	if cfg.App != "demo" || cfg.Release != "redis-rel" || !cfg.DisableLog || !cfg.Exit {
 		t.Fatalf("%+v", cfg)
 	}
+	if cfg.App == redisApp {
+		t.Fatal("native redis-cli must run on the user app, not the database appliance")
+	}
 	if cfg.Partition != ct.PartitionTypeSystem {
 		t.Fatalf("plugin CLI jobs must use the system partition so they can resolve plugin APIs, got %q", cfg.Partition)
 	}
@@ -410,6 +413,25 @@ func TestPluginInterpNamedResource(t *testing.T) {
 	}
 	if args[1] != in.App["POSTGRES_URL"] {
 		t.Fatalf("psql %q", args)
+	}
+}
+
+func TestApplyNamedResourcePrefersMysqlAppPassword(t *testing.T) {
+	app := map[string]string{
+		"MYSQL_HOST": "leader.mysql-orchid-aaaaaa.discoverd",
+		"MYSQL_USER": "app_leader",
+		"MYSQL_PWD":  "apppw_leader",
+	}
+	applyNamedResource(app, "mysql-fjord-bbbbbb", map[string]string{
+		"MYSQL_USER":         "app_leader",
+		"MYSQL_PWD":          "supw_secret",
+		"MYSQL_APP_PASSWORD": "apppw_leader",
+	})
+	if app["MYSQL_PWD"] != "apppw_leader" {
+		t.Fatalf("MYSQL_PWD=%q, want the app user not the superuser", app["MYSQL_PWD"])
+	}
+	if app["MYSQL_HOST"] != "leader.mysql-fjord-bbbbbb.discoverd" {
+		t.Fatalf("MYSQL_HOST=%q", app["MYSQL_HOST"])
 	}
 }
 
