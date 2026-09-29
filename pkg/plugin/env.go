@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -232,11 +233,29 @@ func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 			}
 		}
 	}
+	// flynn-host plugin:install loads host.json into the process. vagrant-dev
+	// may only have DISCOVERD_AUTH_KEY there, not on the discoverd app release.
+	if out["DISCOVERD_AUTH_KEY"] == "" {
+		if v := os.Getenv("DISCOVERD_AUTH_KEY"); v != "" {
+			out["DISCOVERD_AUTH_KEY"] = v
+		}
+	}
 	if out["CONTROLLER_KEY"] == "" {
 		return nil, fmt.Errorf("unable to find CONTROLLER_KEY in controller or postgres release")
 	}
 	if out["SINGLETON"] == "" {
 		out["SINGLETON"] = "false"
+	}
+	// Flynn bootstrap never sets GIT_URL / IMAGE_URL on core apps. Derive the
+	// public gitreceive and tarreceive URLs from CLUSTER_DOMAIN so plugins
+	// (dashboard Cluster settings) are not installed with empty values.
+	if domain := strings.TrimSpace(out["CLUSTER_DOMAIN"]); domain != "" {
+		if strings.TrimSpace(out["GIT_URL"]) == "" {
+			out["GIT_URL"] = "https://git." + domain
+		}
+		if strings.TrimSpace(out["IMAGE_URL"]) == "" {
+			out["IMAGE_URL"] = "https://images." + domain
+		}
 	}
 	return out, nil
 }

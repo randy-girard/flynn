@@ -94,6 +94,31 @@ func TestClusterEnvCopiesDiscoverdAuthKey(t *testing.T) {
 	}
 }
 
+func TestClusterEnvFallsBackToProcessDiscoverdAuthKey(t *testing.T) {
+	t.Setenv("DISCOVERD_AUTH_KEY", "from-host-json")
+	env, err := ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{"CONTROLLER_KEY": "ck"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["DISCOVERD_AUTH_KEY"] != "from-host-json" {
+		t.Fatalf("DISCOVERD_AUTH_KEY=%q", env["DISCOVERD_AUTH_KEY"])
+	}
+
+	t.Setenv("DISCOVERD_AUTH_KEY", "from-env-ignored")
+	env, err = ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{"CONTROLLER_KEY": "ck"}},
+		"discoverd":  {Env: map[string]string{"DISCOVERD_AUTH_KEY": "from-discoverd"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["DISCOVERD_AUTH_KEY"] != "from-discoverd" {
+		t.Fatalf("app release must win over process env, got %q", env["DISCOVERD_AUTH_KEY"])
+	}
+}
+
 func TestClusterEnvCopiesGitreceiveAccessTokens(t *testing.T) {
 	env, err := ClusterEnv(releaseMap{
 		"controller": {Env: map[string]string{
@@ -121,6 +146,24 @@ func TestClusterEnvCopiesGitreceiveAccessTokens(t *testing.T) {
 	}
 	if env["GIT_URL"] != "https://git.ex.local" || env["IMAGE_URL"] != "https://images.ex.local" {
 		t.Fatalf("urls %+v", env)
+	}
+}
+
+func TestClusterEnvDerivesGitAndImageURLsFromDomain(t *testing.T) {
+	env, err := ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{
+			"CONTROLLER_KEY":       "ck",
+			"DEFAULT_ROUTE_DOMAIN": "demo.localflynn.com",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["GIT_URL"] != "https://git.demo.localflynn.com" {
+		t.Fatalf("GIT_URL=%q", env["GIT_URL"])
+	}
+	if env["IMAGE_URL"] != "https://images.demo.localflynn.com" {
+		t.Fatalf("IMAGE_URL=%q", env["IMAGE_URL"])
 	}
 }
 

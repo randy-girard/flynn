@@ -89,7 +89,7 @@ Development layout (relative to the Flynn repo):
 |-------|--------------------|----------------------------------|
 | `postgres` | `../flynn-plugin-postgres` | `postgres` (tenant instances; not the platform appliance) |
 | `redis` | `../flynn-plugin-redis` | `redis` |
-| `mysql` / `mariadb` | `../flynn-plugin-mariadb` | `mysql` |
+| `mysql` / `mariadb` | `../flynn-plugin-mysql` | `mysql` |
 | `mongodb` | `../flynn-plugin-mongodb` | `mongodb` |
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
@@ -398,9 +398,12 @@ Omit `--ref` on a single update to use that same compatible calver
 operator command once the plugin app exists: it deploys a new release,
 scales the previous release to zero, copies missing cluster secrets
 (`CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, access-token keys) from
-controller/postgres/gitreceive, runs **`hooks.upgrade`** when declared
-(not **`hooks.install`**), and does not re-ask setup prompts. Re-running
-**`plugin:install`** on an existing app does the same in-place update.
+controller/postgres/gitreceive, fills `GIT_URL` / `IMAGE_URL` from
+`CLUSTER_DOMAIN` (`https://git.{domain}` / `https://images.{domain}`) when
+those keys are missing on core apps, runs **`hooks.upgrade`** when declared
+(not **`hooks.install`**), and does not re-ask setup prompts. Dashboard Cluster
+settings shows those git and blobstore/images URLs, or **Not configured**.
+Re-running **`plugin:install`** on an existing app does the same in-place update.
 The default org is `randy-girard` from `official-plugins.json`; override with `--github-org`,
 `FLYNN_PLUGIN_GITHUB_ORG`, or `/etc/flynn/plugins.json`:
 
