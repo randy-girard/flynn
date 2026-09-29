@@ -1860,6 +1860,12 @@ tenant_mysql_ping() {
   echo "${out}" | grep -q 1
 }
 
+tenant_mongodb_ping() {
+  local out
+  out="$(flynn_ds mongodb mongo -- --quiet --eval 'db.runCommand({ping:1}).ok' 2>/dev/null || true)"
+  echo "${out}" | grep -q 1
+}
+
 restored_mysql_probe() {
   local out count payload rows="${SMOKE_SEED_ROWS}"
   out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT data FROM smoke_probe WHERE data='pre-upgrade'" 2>/dev/null || true)"
@@ -1932,7 +1938,11 @@ wait_datastores_ready() {
         fi
         ;;
       mongodb)
-        wait_for "mongodb read-write ${suffix}" 900 mongodb_is_read_write || return 1
+        if app_has_identity_env FLYNN_MONGO; then
+          wait_for "tenant mongodb ping ${suffix}" 900 tenant_mongodb_ping || return 1
+        else
+          wait_for "mongodb read-write ${suffix}" 900 mongodb_is_read_write || return 1
+        fi
         ;;
       redis)
         wait_for "redis PING ${suffix}" 180 redis_is_ready || return 1
@@ -2197,9 +2207,14 @@ wait_follower_url() {
 
 add_mongodb_replica() {
   local app=$1
-  info "adding mongodb replica-set member on ${app}"
+  local resource
+  resource="$(flynn1 -a "${app}" env get FLYNN_MONGO 2>/dev/null | tr -d '[:space:]' || true)"
+  MONGODB_REPLICA_SERVICE="${resource:-mongodb}"
+  info "adding mongodb replica-set member on ${app} (${MONGODB_REPLICA_SERVICE})"
   if flynn1 -a "${app}" mongodb:nodes:add; then
     echo "mongodb:nodes:add on ${app}"
+  elif [[ -n "${resource}" && "${resource}" != "mongodb" && "${resource}" != "mongodb-plugin" ]] && flynn1 -a "${resource}" scale mongodb=2; then
+    echo "scaled ${resource} mongodb=2"
   elif flynn1 -a mongodb-plugin scale mongodb=2; then
     echo "scaled mongodb-plugin mongodb=2"
   else
@@ -2213,8 +2228,8 @@ add_mongodb_replica() {
 }
 
 mongodb_replica_ready() {
-  local n
-  n="$(sirenia_peer_count mongodb 2>/dev/null || echo 0)"
+  local n svc="${MONGODB_REPLICA_SERVICE:-mongodb}"
+  n="$(sirenia_peer_count "${svc}" 2>/dev/null || echo 0)"
   [[ "${n}" -ge 2 ]]
 }
 

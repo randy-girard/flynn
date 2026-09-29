@@ -49,6 +49,10 @@ need "${example}" 'topologies: "1,3"' \
   "datastores must run 1-node and 3-node clusters"
 need "${smoke}" 'tenant_mysql_ping' \
   "throwaway mysql must ping via mysql console, not only legacy mariadb sirenia"
+need "${smoke}" 'tenant_mongodb_ping' \
+  "throwaway mongodb must ping the isolated instance, not only leader.mongodb.discoverd"
+need "${smoke}" 'MONGODB_REPLICA_SERVICE' \
+  "mongodb replica wait must count discoverd peers on the tenant service, not the plugin app"
 need "${smoke}" 'app_has_identity_env' \
   "wait_datastores_ready must use tenant CLI pings when FLYNN_POSTGRES/FLYNN_MYSQL is set"
 need "${smoke}" 'Provision datastore plugins' \

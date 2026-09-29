@@ -323,10 +323,13 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 			app[key] = val
 		}
 	}
-	// Isolated mysql jobs keep MYSQL_PWD as the superuser/repl password.
-	// Console/dump interpolate MYSQL_USER + MYSQL_PWD, so prefer the app user.
+	// Isolated mysql/mongodb jobs keep *_PWD as the superuser for replication.
+	// Console interpolates the app user + *_PWD, so prefer the app password.
 	if pwd := app["MYSQL_APP_PASSWORD"]; pwd != "" {
 		app["MYSQL_PWD"] = pwd
+	}
+	if pwd := app["MONGO_APP_PASSWORD"]; pwd != "" {
+		app["MONGO_PWD"] = pwd
 	}
 	if resource != "" {
 		host := "leader." + resource + ".discoverd"

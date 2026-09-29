@@ -435,6 +435,22 @@ func TestApplyNamedResourcePrefersMysqlAppPassword(t *testing.T) {
 	}
 }
 
+func TestApplyNamedResourcePrefersMongoAppPassword(t *testing.T) {
+	app := map[string]string{
+		"MONGO_HOST": "leader.mongodb-orchid-aaaaaa.discoverd",
+		"MONGO_USER": "app_leader",
+		"MONGO_PWD":  "apppw_leader",
+	}
+	applyNamedResource(app, "mongodb-fjord-bbbbbb", map[string]string{
+		"MONGO_USER":         "app_leader",
+		"MONGO_PWD":          "supw_secret",
+		"MONGO_APP_PASSWORD": "apppw_leader",
+	})
+	if app["MONGO_PWD"] != "apppw_leader" {
+		t.Fatalf("MONGO_PWD=%q, want the app user not the superuser", app["MONGO_PWD"])
+	}
+}
+
 func TestPluginInterpClusterCreateNameIsNotResource(t *testing.T) {
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
 		"pipeline": {ID: "pipeline-release"},
