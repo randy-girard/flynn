@@ -471,7 +471,7 @@ smoke_identity_env_keys() {
 selected_wait_services() {
   local mode=${1:-0}
   datastore_wanted postgres && echo postgres
-  datastore_wanted mysql && echo mariadb
+  datastore_wanted mysql && echo mysql
   datastore_wanted mongodb && echo mongodb
   datastore_wanted redis && echo redis
   case "${mode}" in
@@ -1230,10 +1230,11 @@ node_ssh_exec() {
     cache_node_ssh_config "${node}"
     cfg="$(node_ssh_config_path "${node}")"
   fi
+  # accept-new + throwaway known_hosts: never prompt, never fail after a VM recreate.
   if [[ "${NODE_SSH_FORCE_TTY:-0}" == "1" ]]; then
-    ssh -F "${cfg}" -o BatchMode=yes -tt "${node}" -- "$@"
+    ssh -F "${cfg}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null -tt "${node}" -- "$@"
   else
-    ssh -F "${cfg}" -o BatchMode=yes "${node}" -- "$@"
+    ssh -F "${cfg}" -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null "${node}" -- "$@"
   fi
 }
 
@@ -1791,7 +1792,13 @@ EOF
 }
 
 postgres_is_read_write() { sirenia_primary_read_write postgres; }
-mariadb_is_read_write() { sirenia_primary_read_write mariadb; }
+# flynn-plugin-mysql registers discoverd service "mysql". Older clusters used
+# "mariadb". Probe both so wait_datastores_ready does not sit 900s on a name
+# the plugin no longer publishes.
+mysql_is_read_write() {
+  sirenia_primary_read_write mysql || sirenia_primary_read_write mariadb
+}
+mariadb_is_read_write() { mysql_is_read_write; }
 mongodb_is_read_write() { sirenia_primary_read_write mongodb; }
 
 redis_is_ready() {
@@ -1829,12 +1836,27 @@ clickhouse_ping() {
   [[ "$(echo "${out}" | tr -d '[:space:]')" == "1" ]]
 }
 
+# True when the current APP_NAME has a tenant resource identity env. Used to
+# pick tenant CLI pings over platform sirenia (postgres-plugin is not the
+# cluster appliance named "postgres").
+app_has_identity_env() {
+  local key=$1 val
+  val="$(flynn1 -a "${APP_NAME}" env get "${key}" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ -n "${val}" ]]
+}
+
 # Platform postgres_is_read_write is the cluster appliance. Tenant pg:psql is a
 # plugin instance; HA restore can leave it unqueryable for tens of seconds after
 # sirenia is already read-write (3-node post-restore failed in 3s, 2026-09-27).
 tenant_postgres_ping() {
   local out
   out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1" 2>/dev/null || true)"
+  echo "${out}" | grep -q 1
+}
+
+tenant_mysql_ping() {
+  local out
+  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT 1" 2>/dev/null || true)"
   echo "${out}" | grep -q 1
 }
 
@@ -1880,9 +1902,10 @@ clickhouse_seed_ready() {
   [[ -n "${count}" && "${count}" -ge "${SMOKE_SEED_ROWS}" ]]
 }
 
-# Sirenia appliances that exist as discoverd services. postgres is scaled during
-# bootstrap; mariadb/mongodb stay at 0 processes until the first resource add.
-# Redis is not sirenia — PING via the app's REDIS_URL after it is provisioned.
+# Sirenia appliances that exist as discoverd services. Platform postgres is
+# scaled during bootstrap. Tenant mysql/mongodb stay at 0 until resource add.
+# Tenant postgres and redis are not that appliance — ping via plugin CLI after
+# the throwaway (or upgrade-smoke) app has identity env.
 wait_datastores_ready() {
   local suffix=$1
   shift
@@ -1895,10 +1918,18 @@ wait_datastores_ready() {
   for svc in "${services[@]}"; do
     case "${svc}" in
       postgres)
-        wait_for "postgres read-write ${suffix}" 900 postgres_is_read_write || return 1
+        if app_has_identity_env FLYNN_POSTGRES; then
+          wait_for "tenant postgres SELECT 1 ${suffix}" 900 tenant_postgres_ping || return 1
+        else
+          wait_for "postgres read-write ${suffix}" 900 postgres_is_read_write || return 1
+        fi
         ;;
       mariadb|mysql)
-        wait_for "mariadb read-write ${suffix}" 900 mariadb_is_read_write || return 1
+        if app_has_identity_env FLYNN_MYSQL; then
+          wait_for "tenant mysql SELECT 1 ${suffix}" 900 tenant_mysql_ping || return 1
+        else
+          wait_for "mysql read-write ${suffix}" 900 mysql_is_read_write || return 1
+        fi
         ;;
       mongodb)
         wait_for "mongodb read-write ${suffix}" 900 mongodb_is_read_write || return 1
@@ -2008,8 +2039,8 @@ add_app_resource() {
   echo "ready: ${provider} resource add"
 }
 
-# mysql is the install/provision name. The sibling checkout may still be
-# flynn-plugin-mariadb (rename in flight). Prefer mysql, then mariadb.
+# mysql is the install/provision name. The sibling checkout is
+# flynn-plugin-mysql. Prefer mysql, then the deprecated mariadb alias.
 resource_add_candidates() {
   case "$1" in
     mysql)
@@ -4617,7 +4648,9 @@ EOF
   done
   local saved_app="${APP_NAME}"
   APP_NAME="${app}"
-  if ! wait_selected_datastores_ready "after throwaway resource add" 0; then
+  # Mode 1: engine-up (kafka-ping / clickhouse-ping). Mode 0 skips those and
+  # would pass kafka/clickhouse after resource:add without waiting.
+  if ! wait_selected_datastores_ready "after throwaway resource add" 1; then
     APP_NAME="${saved_app}"
     return 1
   fi

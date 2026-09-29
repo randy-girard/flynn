@@ -33,8 +33,12 @@ need "${smoke}" 'add_throwaway_resource' \
   "each engine must be resource:added on the throwaway app"
 need "${smoke}" 'throwaway_resource_ok' \
   "provision must accept env URL or a listed resource"
-need "${smoke}" 'wait_selected_datastores_ready "after throwaway resource add"' \
-  "after throwaway resource:add, smoke must wait for selected engines"
+need "${smoke}" 'wait_selected_datastores_ready "after throwaway resource add" 1' \
+  "after throwaway resource:add, smoke must wait for selected engines including kafka/clickhouse pings"
+need "${smoke}" 'tenant_mysql_ping' \
+  "throwaway mysql must ping via mysql console, not only legacy mariadb sirenia"
+need "${smoke}" 'app_has_identity_env' \
+  "wait_datastores_ready must use tenant CLI pings when FLYNN_POSTGRES/FLYNN_MYSQL is set"
 need "${smoke}" 'Provision datastore plugins' \
   "the topology loop must run the throwaway provision step"
 need "${smoke}" 'run_smoke_topologies' \

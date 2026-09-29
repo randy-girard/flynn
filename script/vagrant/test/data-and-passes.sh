@@ -235,6 +235,10 @@ need 'plugin_flynn_compile_id' \
   "plugin dist stamp must hash Flynn packages plugins compile against, not every Flynn commit"
 need 'go mod edit -replace' \
   "plugin-build must compile against this Flynn checkout so plugin APIs send DISCOVERD_AUTH_KEY (SEC-003)"
+if ! grep -q 'replacePluginFlynnModule' "${ROOT}/pkg/plugin/install.go" "${ROOT}/pkg/plugin/replace.go"; then
+  echo "plugin:install must rewrite plugin go.mod to this Flynn so Auth-Key is sent without a smoke-only replace" >&2
+  exit 1
+fi
 need '.flynn-module-id' \
   "plugin dist must be rebuilt when Flynn compile inputs or the plugin checkout change"
 need 'dump_plugin_install_diagnostics' \
@@ -253,8 +257,14 @@ if grep -q 'wait_for "${provider} resource add"' "${smoke}"; then
   echo "resource add must not use wait_for; add_app_resource waits for deploy idle then adds once" >&2
   exit 1
 fi
-need '900 mariadb_is_read_write' \
-  "HA mariadb formation can exceed 10 minutes; wait_datastores_ready must allow 900s"
+need '900 mysql_is_read_write' \
+  "HA mysql formation can exceed 10 minutes; wait_datastores_ready must allow 900s"
+need 'sirenia_primary_read_write mysql' \
+  "mysql wait must probe discoverd service mysql (current plugin)"
+need 'sirenia_primary_read_write mariadb' \
+  "mysql wait must still accept legacy mariadb discoverd service"
+need 'tenant postgres SELECT 1' \
+  "tenant postgres-plugin must ping via pg:psql, not platform sirenia postgres"
 if awk '/^wait_selected_sirenia_ha\(\)/,/^}/' "${smoke}" | grep -q 'args+=(mariadb)'; then
   echo "mysql/mongodb plugins stay singleton until a replica is added; HA wait is postgres only" >&2
   exit 1
