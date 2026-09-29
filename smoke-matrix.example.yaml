@@ -129,8 +129,8 @@ items:
     enabled: false
 
   - id: datastores
-    description: 1-node — install every datastore plugin and resource:add each on a throwaway app
-    topologies: "1"
+    description: 1-node and 3-node — install every datastore plugin, resource:add, seed, follow, teardown
+    topologies: "1,3"
     skip_upgrade: true
     skip_backup: true
     skip_cli: true

@@ -24,6 +24,34 @@ func (p postgresProviderClient) GetProvider(string) (*ct.Provider, error) {
 	return p.provider, p.err
 }
 
+func TestCreatedResourceMessage(t *testing.T) {
+	res := &ct.Resource{
+		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
+		ExternalID: "deadbeefdeadbeef",
+		Env:        map[string]string{"FLYNN_MYSQL": "mysql-harbor-kxmnpq"},
+	}
+	got := createdResourceMessage(res, "")
+	if got != "Created resource mysql-harbor-kxmnpq and a new release." {
+		t.Fatalf("name: %q", got)
+	}
+	got = createdResourceMessage(res, "analytics")
+	if got != "Created resource mysql-harbor-kxmnpq (as ANALYTICS) and a new release." {
+		t.Fatalf("as: %q", got)
+	}
+	got = createdResourceMessage(&ct.Resource{ID: res.ID, ExternalID: res.ExternalID}, "CACHE")
+	if got != "Created resource CACHE and a new release." {
+		t.Fatalf("as without env: %q", got)
+	}
+	got = createdResourceMessage(&ct.Resource{ID: res.ID, ExternalID: "mysql-fjord-abcxyz"}, "")
+	if got != "Created resource mysql-fjord-abcxyz and a new release." {
+		t.Fatalf("external id: %q", got)
+	}
+	got = createdResourceMessage(&ct.Resource{ID: res.ID}, "")
+	if got != "Created resource 919a764d-863d-4629-aa23-76248728dcbc and a new release." {
+		t.Fatalf("id fallback: %q", got)
+	}
+}
+
 func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
 	err := rejectPlatformPostgresAdd("postgres", postgresProviderClient{err: controller.ErrNotFound})
 	if !errors.Is(err, pgappliance.ErrTenantProvision) {
@@ -115,6 +143,10 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	pgSmall, _ := cat.Find(dbruntime.EnginePostgres, "small")
 	if pg.Disk != pgSmall.Disk || pg.Disk <= redis.Disk {
 		t.Fatalf("postgres disk %d redis disk %d", pg.Disk, redis.Disk)
+	}
+	got, err = databaseProvisionConfig("mysql", "REPLICA", "mysql-harbor-kxmnpq", "", "", "", "", "", cat)
+	if err != nil || got == nil || !strings.Contains(string(*got), `"follow":"mysql-harbor-kxmnpq"`) {
+		t.Fatalf("mysql follow %s %v", got, err)
 	}
 	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "medium", "logical", "", "", "", cat)
 	if err != nil || got == nil || !strings.Contains(string(*got), `"as":"ANALYTICS"`) || !strings.Contains(string(*got), `"follow":"leader"`) {

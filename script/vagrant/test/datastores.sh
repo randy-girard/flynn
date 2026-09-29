@@ -35,6 +35,18 @@ need "${smoke}" 'throwaway_resource_ok' \
   "provision must accept env URL or a listed resource"
 need "${smoke}" 'wait_selected_datastores_ready "after throwaway resource add" 1' \
   "after throwaway resource:add, smoke must wait for selected engines including kafka/clickhouse pings"
+need "${smoke}" 'seed_datastores' \
+  "throwaway provision must seed each engine after resource:add"
+need "${smoke}" 'exercise_datastore_followers' \
+  "throwaway provision must create followers and verify seed on them"
+need "${smoke}" 'teardown_throwaway_datastores' \
+  "throwaway provision must resource:remove after seed and follow"
+need "${smoke}" '--follow' \
+  "followers must be provisioned with resource:add --follow"
+need "${smoke}" 'mongodb:nodes:add' \
+  "mongodb has no --follow; smoke must add a replica-set member"
+need "${example}" 'topologies: "1,3"' \
+  "datastores must run 1-node and 3-node clusters"
 need "${smoke}" 'tenant_mysql_ping' \
   "throwaway mysql must ping via mysql console, not only legacy mariadb sirenia"
 need "${smoke}" 'app_has_identity_env' \
@@ -74,9 +86,26 @@ if awk '/^apply_resume_at_skips\(/,/^}/' "${smoke}" | grep -q 'SMOKE_DATASTORE_P
   exit 1
 fi
 
+if awk '/^exercise_datastore_followers\(/,/^}/' "${smoke}" | grep -q 'APP_NAME="${fol}"'; then
+  echo "follower ping must not flynn -a the database app (cannot run a job there)" >&2
+  exit 1
+fi
+need "${smoke}" 'DATASTORE_RESOURCE_APP' \
+  "follower verify must name the instance on the throwaway app (flynn pg:psql pg-xxx)"
+need "${smoke}" 'attempt ${attempt}/20' \
+  "resource:add must retry; 3-node controller db-runtimes are in-memory per web job"
+
+# skip_deploy is set so git-push is skipped, but throwaway provision still
+# boots both 1-node and 3-node clusters. The single-topology SKIP_DEPLOY
+# guard must not apply when SMOKE_DATASTORE_PROVISION=1.
+if ! awk '/^parse_smoke_topologies\(/,/^}/' "${smoke}" | grep -q 'SMOKE_DATASTORE_PROVISION'; then
+  echo "parse_smoke_topologies must allow SKIP_DEPLOY with topologies 1,3 when throwing away datastores" >&2
+  exit 1
+fi
+
 if grep -q 'script/test-vagrant-smoke' "${smoke}" "${entry}"; then
   echo "datastores must use script/vagrant/, not restored deleted test-vagrant-smoke scripts" >&2
   exit 1
 fi
 
-echo "ok --item datastores provisions every datastore plugin on a throwaway app"
+echo "ok --item datastores provisions, seeds, follows, and tears down every datastore plugin on 1- and 3-node clusters"

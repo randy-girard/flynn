@@ -34,14 +34,15 @@ is sized from a database runtime (flynn-host db-runtime). Those are not app
 process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
 are rejected unless a cluster admin has allowed custom sizes.
 
-For postgres, the installed plugin (provider postgres at postgres-plugin.discoverd)
-receives --as, --follow, --runtime, and --replication. The platform appliance
-at postgres-api.discoverd is not used. --as ANALYTICS sets only ANALYTICS_URL.
-The default name DATABASE sets only DATABASE_URL.
+For postgres, mysql, redis, kafka, and clickhouse, the installed plugin
+receives --as, --follow, --runtime, and --replication. MongoDB rejects
+--follow; add a replica-set member with mongodb:nodes:add. The platform
+postgres appliance at postgres-api.discoverd is not used. --as ANALYTICS
+sets only ANALYTICS_URL. The default name DATABASE sets only DATABASE_URL.
 
 Options:
 	--as=<name>              attachment env name (default DATABASE)
-	--follow=<resource>      read-only follower of an existing postgres resource
+	--follow=<resource>      read-only follower of an existing resource (app name or id)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     streaming (same major) or logical (major upgrade)
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
@@ -131,7 +132,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	}
 
 	req := &ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}}
-	cat, err := dbruntime.Load(dbruntime.Path())
+	cat, err := databaseRuntimeCatalog(client)
 	if err != nil {
 		return err
 	}
@@ -147,14 +148,59 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 
 	env := appliedAttachmentEnv(client, res.Env, args.String["--as"])
 
-	releaseID, err := setEnv(client, "", env)
-	if err != nil {
+	if _, err := setEnv(client, "", env); err != nil {
 		return err
 	}
 
-	log.Printf("Created resource %s and release %s.", res.ID, releaseID)
+	log.Println(createdResourceMessage(res, args.String["--as"]))
 
 	return nil
+}
+
+func databaseRuntimeCatalog(client controller.Client) (dbruntime.Catalog, error) {
+	file, fileErr := dbruntime.Load(dbruntime.Path())
+	if client != nil {
+		got, err := client.ListDBRuntimes()
+		// An empty in-memory replica on a 3-node controller must not hide the
+		// host file that flynn-host plugin:install already wrote.
+		if err == nil && got != nil && len(got.Runtimes) > 0 {
+			return *got, nil
+		}
+	}
+	if fileErr != nil {
+		return dbruntime.Catalog{}, fileErr
+	}
+	return file, nil
+}
+
+// createdResourceMessage is the resource:add success line. Operators grep the
+// resource app name (pg-harbor-kxmnpq), not controller UUIDs. --as is shown
+// when it was set and differs from that name.
+func createdResourceMessage(res *ct.Resource, as string) string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	name := ""
+	if res != nil {
+		name, _ = resname.Identity(res.Env)
+		if name == "" && as != "" {
+			name = as
+		}
+		if name == "" {
+			name = strings.TrimSpace(res.ExternalID)
+		}
+		if name == "" {
+			name = res.ID
+		}
+	}
+	if name == "" {
+		name = as
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	if as != "" && !strings.EqualFold(as, name) {
+		return fmt.Sprintf("Created resource %s (as %s) and a new release.", name, as)
+	}
+	return fmt.Sprintf("Created resource %s and a new release.", name)
 }
 
 // rejectPlatformPostgresAdd stops `flynn resource:add postgres` from creating
@@ -226,15 +272,13 @@ func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw,
 		return nil, err
 	}
 	body := databaseProvisionBody{
-		As:      as,
-		Runtime: name,
-		CPU:     sz.CPU,
-		Memory:  sz.Memory,
-		Disk:    sz.Disk,
-	}
-	if provider == "postgres" {
-		body.Follow = follow
-		body.Replication = replication
+		As:          as,
+		Follow:      follow,
+		Runtime:     name,
+		Replication: replication,
+		CPU:         sz.CPU,
+		Memory:      sz.Memory,
+		Disk:        sz.Disk,
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {

@@ -68,10 +68,10 @@
 #   --item pipeline            1-node pipeline create/add/promote into an
 #                               undeployed production app. Disabled in the
 #                               example matrix. --item still runs it.
-#   --item datastores          1-node: install every datastore plugin
-#                               (postgres redis mysql mongodb kafka
-#                               clickhouse) and flynn resource:add each
-#                               onto a throwaway app. mysql falls back to
+#   --item datastores          1-node then 3-node: install every datastore
+#                               plugin, resource:add each onto a throwaway app,
+#                               seed, follow (mongodb:nodes:add), verify
+#                               replicas, and teardown. mysql falls back to
 #                               mariadb if that is still the provider
 #                               name. Skips upgrade, backup, CLI, docker,
 #                               and buildpack. Disabled in the example
@@ -1802,7 +1802,7 @@ mariadb_is_read_write() { mysql_is_read_write; }
 mongodb_is_read_write() { sirenia_primary_read_write mongodb; }
 
 redis_is_ready() {
-  flynn1 -a "${APP_NAME}" redis redis-cli PING | grep -qi PONG
+  flynn_ds redis redis-cli PING | grep -qi PONG
 }
 
 # Kafka/ClickHouse volume data is not in flynn cluster backup. After restore
@@ -1810,7 +1810,7 @@ redis_is_ready() {
 # old password). topics CLI needs those tenants; engine-up only checks the
 # restored cluster app is running.
 kafka_is_ready() {
-  flynn1 -a "${APP_NAME}" kafka topics >/dev/null 2>&1
+  flynn_ds kafka topics >/dev/null 2>&1
 }
 
 kafka_engine_ready() {
@@ -1823,7 +1823,7 @@ kafka_engine_ready() {
 # Plugin CLI jobs can return Flynn's generic "unknown_error: Something went
 # wrong" while controller/discoverd settle. Do not let that abort set -e.
 kafka_topics() {
-  flynn1 -a "${APP_NAME}" kafka topics 2>/dev/null || true
+  flynn_ds kafka topics 2>/dev/null || true
 }
 
 kafka_has_smoke_probe() {
@@ -1832,7 +1832,7 @@ kafka_has_smoke_probe() {
 
 clickhouse_ping() {
   local out
-  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
+  out="$(flynn_ds clickhouse client -- --query "SELECT 1" 2>/dev/null || true)"
   [[ "$(echo "${out}" | tr -d '[:space:]')" == "1" ]]
 }
 
@@ -1850,13 +1850,13 @@ app_has_identity_env() {
 # sirenia is already read-write (3-node post-restore failed in 3s, 2026-09-27).
 tenant_postgres_ping() {
   local out
-  out="$(flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT 1" 2>/dev/null || true)"
+  out="$(flynn_ds pg:psql -- -tAc "SELECT 1" 2>/dev/null || true)"
   echo "${out}" | grep -q 1
 }
 
 tenant_mysql_ping() {
   local out
-  out="$(flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT 1" 2>/dev/null || true)"
+  out="$(flynn_ds mysql console -- -N -e "SELECT 1" 2>/dev/null || true)"
   echo "${out}" | grep -q 1
 }
 
@@ -1892,7 +1892,7 @@ clickhouse_rows_table() {
 clickhouse_row_count() {
   local out table
   table="$(clickhouse_rows_table)"
-  out="$(flynn1 -a "${APP_NAME}" clickhouse client -- --query "SELECT count() FROM ${table}" 2>/dev/null || true)"
+  out="$(flynn_ds clickhouse client -- --query "SELECT count() FROM ${table}" 2>/dev/null || true)"
   numeric_count "${out}"
 }
 
@@ -2117,7 +2117,7 @@ throwaway_resource_ok() {
 
 add_throwaway_resource() {
   local app=$1 provider=$2
-  local cand added=0 i
+  local cand added=0 i attempt
   if throwaway_resource_ok "${app}" "${provider}"; then
     echo "ready: ${provider} already attached on ${app}"
     return 0
@@ -2125,9 +2125,18 @@ add_throwaway_resource() {
   info "adding ${provider} resource on throwaway app ${app}"
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
-    if flynn1 -a "${app}" resource add "${cand}"; then
-      added=1
-      echo "resource:add ${cand} on ${app}"
+    # Controller db-runtimes are in-memory per web job. On 3-node the CLI may
+    # hit a replica that has not received flynn-host's publish yet.
+    for attempt in $(seq 1 20); do
+      if flynn1 -a "${app}" resource add "${cand}"; then
+        added=1
+        echo "resource:add ${cand} on ${app}"
+        break
+      fi
+      echo "resource:add ${cand} failed (attempt ${attempt}/20); retrying" >&2
+      sleep 1
+    done
+    if [[ "${added}" == "1" ]]; then
       break
     fi
     echo "resource:add ${cand} failed; trying next candidate" >&2
@@ -2147,6 +2156,181 @@ add_throwaway_resource() {
   flynn1 -a "${app}" env || true
   flynn1 -a "${app}" resource || true
   return 1
+}
+
+# Isolated resource app name from a connection URL (leader.pg-harbor-xxxxxx.discoverd).
+url_resource_app() {
+  python3 -c '
+import sys
+from urllib.parse import urlparse
+u = urlparse(sys.argv[1].strip())
+host = u.hostname or ""
+parts = host.split(".")
+if len(parts) >= 3 and parts[0] == "leader" and parts[-1] == "discoverd":
+    print(".".join(parts[1:-1]))
+elif host:
+    print(host.split(".")[0])
+' "${1:-}"
+}
+
+datastore_leader_app() {
+  local app=$1 provider=$2 key
+  key="$(resource_identity_key "${provider}")"
+  [[ -n "${key}" ]] || return 1
+  flynn1 -a "${app}" env get "${key}" 2>/dev/null | tr -d '[:space:]'
+}
+
+wait_follower_url() {
+  local app=$1 i url
+  for i in $(seq 1 90); do
+    url="$(flynn1 -a "${app}" env get FOLLOWER_URL 2>/dev/null | tr -d '[:space:]' || true)"
+    if [[ -n "${url}" ]]; then
+      echo "${url}"
+      return 0
+    fi
+    sleep "${WAIT_FOR_INTERVAL:-2}"
+  done
+  echo "FOLLOWER_URL was not set on ${app}" >&2
+  flynn1 -a "${app}" env || true
+  return 1
+}
+
+add_mongodb_replica() {
+  local app=$1
+  info "adding mongodb replica-set member on ${app}"
+  if flynn1 -a "${app}" mongodb:nodes:add; then
+    echo "mongodb:nodes:add on ${app}"
+  elif flynn1 -a mongodb-plugin scale mongodb=2; then
+    echo "scaled mongodb-plugin mongodb=2"
+  else
+    echo "mongodb replica add failed" >&2
+    return 1
+  fi
+  wait_for "mongodb replica discoverd" 300 mongodb_replica_ready || {
+    echo "mongodb replica did not register a second discoverd member" >&2
+    return 1
+  }
+}
+
+mongodb_replica_ready() {
+  local n
+  n="$(sirenia_peer_count mongodb 2>/dev/null || echo 0)"
+  [[ "${n}" -ge 2 ]]
+}
+
+add_throwaway_follower() {
+  local app=$1 provider=$2
+  local cand leader added=0 attempt
+  if [[ "${provider}" == mongodb ]]; then
+    add_mongodb_replica "${app}"
+    return
+  fi
+  leader="$(datastore_leader_app "${app}" "${provider}")"
+  if [[ -z "${leader}" ]]; then
+    echo "${provider} has no leader app on ${app}" >&2
+    return 1
+  fi
+  info "adding ${provider} follower of ${leader} on ${app}"
+  while read -r cand; do
+    [[ -z "${cand}" ]] && continue
+    for attempt in $(seq 1 20); do
+      if flynn1 -a "${app}" resource add "${cand}" --follow "${leader}" --as FOLLOWER; then
+        added=1
+        echo "resource:add ${cand} --follow ${leader} --as FOLLOWER on ${app}"
+        break
+      fi
+      echo "resource:add ${cand} --follow failed (attempt ${attempt}/20); retrying" >&2
+      sleep 1
+    done
+    if [[ "${added}" == "1" ]]; then
+      break
+    fi
+    echo "resource:add ${cand} --follow failed; trying next candidate" >&2
+  done < <(resource_add_candidates "${provider}")
+  if [[ "${added}" != "1" ]]; then
+    echo "${provider} follower add failed on ${app}" >&2
+    return 1
+  fi
+  wait_follower_url "${app}" >/dev/null
+}
+
+teardown_throwaway_datastores() {
+  local app=$1
+  local provider id
+  info "tearing down datastore resources on ${app}"
+  for provider in "${DATASTORE_PROVIDERS[@]}"; do
+    while read -r id; do
+      [[ -z "${id}" || "${id}" == ID ]] && continue
+      flynn1 -a "${app}" resource remove "${provider}" "${id}" || \
+        flynn1 -a "${app}" resource remove "${provider}" "${id}" --yes || true
+    done < <(flynn1 -a "${app}" resource 2>/dev/null | awk -v p="${provider}" 'NR>1 && tolower($NF)==tolower(p) {print $1}')
+  done
+}
+
+exercise_datastore_followers() {
+  local app=$1
+  local provider url fol saved phase_ok
+  local saved_providers=("${DATASTORE_PROVIDERS[@]}")
+  info "provisioning followers and verifying seeded data on ${app}"
+  for provider in "${saved_providers[@]}"; do
+    if ! add_throwaway_follower "${app}" "${provider}"; then
+      record_check "follower" "${provider}" "FAIL" "follow failed"
+      return 1
+    fi
+    saved="${APP_NAME}"
+    APP_NAME="${app}"
+    DATASTORE_RESOURCE_APP=""
+    if [[ "${provider}" != mongodb ]]; then
+      url="$(flynn1 -a "${app}" env get FOLLOWER_URL 2>/dev/null | tr -d '[:space:]' || true)"
+      fol="$(url_resource_app "${url}")"
+      if [[ -z "${fol}" ]]; then
+        record_check "follower" "${provider}" "FAIL" "could not parse follower app from FOLLOWER_URL"
+        APP_NAME="${saved}"
+        return 1
+      fi
+      # Name the follower on the throwaway app. flynn -a <database-app> pg:psql
+      # tries to run a job on the datastore and is rejected.
+      DATASTORE_RESOURCE_APP="${fol}"
+      phase_ok=1
+      case "${provider}" in
+        postgres) wait_for "${provider} follower ping" 300 tenant_postgres_ping || phase_ok=0 ;;
+        mysql) wait_for "${provider} follower ping" 300 tenant_mysql_ping || phase_ok=0 ;;
+        redis) wait_for "${provider} follower ping" 300 redis_follower_ping || phase_ok=0 ;;
+        kafka) wait_for "${provider} follower topic" 300 kafka_has_smoke_probe || phase_ok=0 ;;
+        clickhouse) wait_for "${provider} follower ping" 300 clickhouse_ping || phase_ok=0 ;;
+        *) phase_ok=0 ;;
+      esac
+      if [[ "${phase_ok}" != "1" ]]; then
+        APP_NAME="${saved}"
+        DATASTORE_RESOURCE_APP=""
+        DATASTORE_PROVIDERS=("${saved_providers[@]}")
+        echo "${provider} follower ${fol} did not become ready" >&2
+        record_check "follower" "${provider}" "FAIL" "not ready"
+        return 1
+      fi
+    fi
+    DATASTORE_PROVIDERS=("${provider}")
+    RECORD_PHASE=follower
+    if ! record_seed_counts; then
+      APP_NAME="${saved}"
+      DATASTORE_RESOURCE_APP=""
+      DATASTORE_PROVIDERS=("${saved_providers[@]}")
+      RECORD_PHASE=seed
+      echo "${provider} follower seed missing" >&2
+      return 1
+    fi
+    APP_NAME="${saved}"
+    DATASTORE_RESOURCE_APP=""
+    DATASTORE_PROVIDERS=("${saved_providers[@]}")
+    RECORD_PHASE=seed
+    flynn1 -a "${app}" env unset FOLLOWER_URL >/dev/null 2>&1 || true
+  done
+}
+
+redis_follower_ping() {
+  local out
+  out="$(flynn_ds redis redis-cli PING 2>/dev/null || true)"
+  echo "${out}" | grep -q PONG
 }
 
 # discoverd GET /services/:name/instances is a JSON array of peers.
@@ -2376,6 +2560,28 @@ flynn1() {
   # FLYNN_SKIP_UPDATE_CHECK: smoke builds are older than GitHub latest; the
   # notice on stderr breaks exact stdout matches when callers use 2>&1.
   node_ssh node1 "sudo -H FLYNN_SKIP_UPDATE_CHECK=1 flynn ${args_q}" </dev/null
+}
+
+# Database apps refuse flynn run (DatastoreJobExecMessage). Target a follower
+# by naming it on the throwaway app: flynn -a smoke-datastores pg:psql pg-xxx.
+# DATASTORE_RESOURCE_APP is inserted before `--`, or appended when there is no `--`.
+flynn_ds() {
+  local args=() a inserted=0
+  if [[ -n "${DATASTORE_RESOURCE_APP:-}" ]]; then
+    for a in "$@"; do
+      if [[ "${inserted}" == "0" && "${a}" == "--" ]]; then
+        args+=("${DATASTORE_RESOURCE_APP}")
+        inserted=1
+      fi
+      args+=("${a}")
+    done
+    if [[ "${inserted}" == "0" ]]; then
+      args+=("${DATASTORE_RESOURCE_APP}")
+    fi
+    flynn1 -a "${APP_NAME}" "${args[@]}"
+  else
+    flynn1 -a "${APP_NAME}" "$@"
+  fi
 }
 
 cluster_host_count() {
@@ -4654,8 +4860,25 @@ EOF
     APP_NAME="${saved_app}"
     return 1
   fi
+  SMOKE_SKIP_PG_EXTENSIONS=1
+  if ! seed_datastores; then
+    APP_NAME="${saved_app}"
+    return 1
+  fi
+  if ! record_seed_counts; then
+    APP_NAME="${saved_app}"
+    return 1
+  fi
+  if ! exercise_datastore_followers "${app}"; then
+    APP_NAME="${saved_app}"
+    return 1
+  fi
+  if ! teardown_throwaway_datastores "${app}"; then
+    APP_NAME="${saved_app}"
+    return 1
+  fi
   APP_NAME="${saved_app}"
-  echo "throwaway app ${app} provisioned with $(joined_datastores)"
+  echo "throwaway app ${app} provisioned, seeded, followed, and torn down ($(joined_datastores))"
 }
 
 # git-push an app whose .buildpacks file names heroku-buildpack-inline. That
@@ -4822,6 +5045,7 @@ INSERT INTO smoke_payload (id, payload) SELECT g, repeat('A', 1024) FROM generat
   sleep 2
 done
 test "\$ok" = 1
+if [[ "${SMOKE_SKIP_PG_EXTENSIONS:-0}" != "1" ]]; then
 ok=0
 for i in \$(seq 1 12); do
   exts="\$(flynn -a "\${APP}" pg:psql -- -tAc "SELECT name FROM pg_available_extensions WHERE name IN ('postgis','pgrouting','timescaledb') ORDER BY 1" 2>/dev/null || true)"
@@ -4833,6 +5057,7 @@ for i in \$(seq 1 12); do
 done
 test "\$ok" = 1
 echo "postgres extensions available: \${exts}"
+fi
 fi
 
 if [[ "${seed_mysql}" == "1" ]]; then
@@ -5279,55 +5504,56 @@ record_seed_counts() {
   local rows="${SMOKE_SEED_ROWS}"
   local failed=0
   local count payload topics
+  local phase="${RECORD_PHASE:-seed}"
 
   if datastore_wanted postgres; then
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
+  count="$(numeric_count "$(smoke_cli_retry flynn_ds pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn_ds pg:psql -- -tAc "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
-    record_check "seed" "postgres" "PASS" "rows=${count} payload=${payload}"
+    record_check "${phase}" "postgres" "PASS" "rows=${count} payload=${payload}"
   else
-    record_check "seed" "postgres" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    record_check "${phase}" "postgres" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
     failed=1
   fi
   fi
 
   if datastore_wanted mysql; then
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
-  payload="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
+  count="$(numeric_count "$(smoke_cli_retry flynn_ds mysql console -- -N -e "SELECT COUNT(*) FROM smoke_rows")")"
+  payload="$(numeric_count "$(smoke_cli_retry flynn_ds mysql console -- -N -e "SELECT COUNT(*) FROM smoke_payload")")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" && -n "${payload}" && "${payload}" -ge "${rows}" ]]; then
-    record_check "seed" "mysql" "PASS" "rows=${count} payload=${payload}"
+    record_check "${phase}" "mysql" "PASS" "rows=${count} payload=${payload}"
   else
-    record_check "seed" "mysql" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
+    record_check "${phase}" "mysql" "FAIL" "rows=${count:-?} payload=${payload:-?} want>=${rows}"
     failed=1
   fi
   fi
 
   if datastore_wanted mongodb; then
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
+  count="$(numeric_count "$(smoke_cli_retry flynn_ds mongodb mongo -- --quiet --eval 'db.smoke_rows.count()')")"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
-    record_check "seed" "mongodb" "PASS" "docs=${count}"
+    record_check "${phase}" "mongodb" "PASS" "docs=${count}"
   else
-    record_check "seed" "mongodb" "FAIL" "docs=${count:-?} want>=${rows}"
+    record_check "${phase}" "mongodb" "FAIL" "docs=${count:-?} want>=${rows}"
     failed=1
   fi
   fi
 
   if datastore_wanted redis; then
-  count="$(numeric_count "$(smoke_cli_retry flynn1 -a "${APP_NAME}" redis redis-cli DBSIZE)")"
+  count="$(numeric_count "$(smoke_cli_retry flynn_ds redis redis-cli DBSIZE)")"
   if [[ -n "${count}" && "${count}" -ge $((rows + 1)) ]]; then
-    record_check "seed" "redis" "PASS" "dbsize=${count}"
+    record_check "${phase}" "redis" "PASS" "dbsize=${count}"
   else
-    record_check "seed" "redis" "FAIL" "dbsize=${count:-?} want>=$((rows + 1))"
+    record_check "${phase}" "redis" "FAIL" "dbsize=${count:-?} want>=$((rows + 1))"
     failed=1
   fi
   fi
 
   if datastore_wanted kafka; then
   if wait_for "kafka seed topic" 180 kafka_has_smoke_probe; then
-    record_check "seed" "kafka" "PASS" "topic=smoke_probe"
+    record_check "${phase}" "kafka" "PASS" "topic=smoke_probe"
   else
     topics="$(kafka_topics)"
-    record_check "seed" "kafka" "FAIL" "missing smoke_probe: ${topics}"
+    record_check "${phase}" "kafka" "FAIL" "missing smoke_probe: ${topics}"
     failed=1
   fi
   fi
@@ -5335,18 +5561,18 @@ record_seed_counts() {
   if datastore_wanted clickhouse; then
   count="$(clickhouse_row_count)"
   if [[ -n "${count}" && "${count}" -ge "${rows}" ]]; then
-    record_check "seed" "clickhouse" "PASS" "rows=${count}"
+    record_check "${phase}" "clickhouse" "PASS" "rows=${count}"
   else
-    record_check "seed" "clickhouse" "FAIL" "rows=${count:-?} want>=${rows}"
+    record_check "${phase}" "clickhouse" "FAIL" "rows=${count:-?} want>=${rows}"
     failed=1
   fi
   fi
 
   if [[ "${failed}" -ne 0 ]]; then
-    echo "seed count verification failed" >&2
+    echo "${phase} count verification failed" >&2
     return 1
   fi
-  echo "seed verified: $(joined_datastores) rows>=${rows}"
+  echo "${phase} verified: $(joined_datastores) rows>=${rows}"
 }
 
 # Require seeded dummy data (and any earlier verify-pass markers) to still be
@@ -7242,9 +7468,13 @@ parse_smoke_topologies() {
       echo "SKIP_INSTALL requires a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
       return 1
     fi
+    # Throwaway datastore provision skips git-push deploy but still needs to
+    # boot both 1-node and 3-node clusters (SMOKE_TOPOLOGIES=1,3).
     if [[ "${SKIP_DEPLOY}" == "1" || "${SKIP_VERIFY_BEFORE}" == "1" ]]; then
-      echo "SKIP_DEPLOY/SKIP_VERIFY_BEFORE require a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
-      return 1
+      if [[ "${SMOKE_DATASTORE_PROVISION}" != "1" ]]; then
+        echo "SKIP_DEPLOY/SKIP_VERIFY_BEFORE require a single SMOKE_TOPOLOGIES value (got ${SMOKE_TOPOLOGIES})" >&2
+        return 1
+      fi
     fi
   fi
   expand_cluster_inventory

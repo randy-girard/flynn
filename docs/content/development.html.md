@@ -415,7 +415,7 @@ set in the environment):
 | `--item quick` | Contributor smoke: 1-node boot + git-push + docker-push. No tenant database on the platform Postgres appliance |
 | `--item minio` | 1-node S3-compatible blobstore (MinIO sidecar) + mysql plugin backup/restore. Extra RAM; disabled in the example matrix. |
 | `--item pipeline` | 1-node pipeline create/add/promote into an undeployed production app. Disabled in the example matrix. |
-| `--item datastores` | 1-node: install every datastore plugin and `resource:add` each on a throwaway app (no upgrade/backup/docker). Disabled in the example matrix. |
+| `--item datastores` | 1-node then 3-node: install every datastore plugin, `resource:add`, seed, follow, teardown (no upgrade/backup/docker). Disabled in the example matrix. |
 | `--item singleton` | Run one matrix row (even if `enabled: false`) |
 | `--list` | Print matrix items and exit |
 | `--matrix PATH` / `SMOKE_MATRIX` | Use a different matrix file |

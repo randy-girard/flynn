@@ -208,8 +208,9 @@ if echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1'; then
 fi
 
 out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item datastores apply-item)"
-echo "${out}" | grep -q 'SMOKE_TOPOLOGIES=1' \
-  || { echo "datastores must set topologies=1" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SMOKE_TOPOLOGIES=1,3' \
+  || echo "${out}" | grep -q "SMOKE_TOPOLOGIES='1,3'" \
+  || { echo "datastores must set topologies=1,3" >&2; echo "${out}" >&2; exit 1; }
 echo "${out}" | grep -q 'SKIP_UPGRADE=1' \
   || { echo "datastores must set SKIP_UPGRADE=1" >&2; echo "${out}" >&2; exit 1; }
 echo "${out}" | grep -q 'SKIP_BACKUP=1' \

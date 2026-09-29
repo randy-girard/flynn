@@ -16,7 +16,7 @@
 #   script/vagrant-smoke.sh --item quick       # contributor default (boot + git/docker; no tenant postgres)
 #   script/vagrant-smoke.sh --item minio       # S3-compatible blobstore (MinIO) + mysql backup
 #   script/vagrant-smoke.sh --item pipeline    # pipeline create/add/promote into an empty prod app
-#   script/vagrant-smoke.sh --item datastores  # install every datastore plugin and resource:add each
+#   script/vagrant-smoke.sh --item datastores  # 1-node then 3-node: plugins, resource:add, seed, follow, teardown
 #   script/vagrant-smoke.sh --item singleton   # one named configuration
 #   SMOKE_TOPOLOGIES=3 script/vagrant-smoke.sh # env still overrides topologies
 #   SKIP_BUILD=1 script/vagrant-smoke.sh       # reuse the last tarball
