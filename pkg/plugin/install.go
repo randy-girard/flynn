@@ -293,7 +293,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 		if app.Meta == nil {
 			app.Meta = map[string]string{}
 		}
-		m.AnnotateInstall(app.Meta, resolved.Input, resolved.Ref)
+		m.AnnotateInstall(app.Meta, resolved.StampSource(), resolved.Ref)
 		if err := in.Client.UpdateAppMeta(app); err != nil {
 			return fmt.Errorf("update plugin meta on %s: %w", app.Name, err)
 		}
@@ -691,7 +691,7 @@ func (in *Installer) uploadArtifact(pluginName string, dist *DistArtifact) (*ct.
 func (in *Installer) createApp(m *Manifest, resolved *Resolved) (*ct.App, error) {
 	source, ref := "", ""
 	if resolved != nil {
-		source = resolved.Input
+		source = resolved.StampSource()
 		ref = resolved.Ref
 	}
 	app := &ct.App{

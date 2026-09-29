@@ -33,6 +33,21 @@ func (r *Resolved) RefOr(def string) string {
 	return def
 }
 
+// StampSource is stored as flynn-plugin-source. Local checkouts record the
+// directory (even when the operator passed an alias) so cluster UIs skip
+// GitHub release checks. GitHub installs keep the operator argument.
+func (r *Resolved) StampSource() string {
+	if r == nil {
+		return ""
+	}
+	if r.GitHub == nil {
+		if dir := strings.TrimSpace(r.Dir); dir != "" {
+			return dir
+		}
+	}
+	return r.Input
+}
+
 func looksLikeGitURL(s string) bool {
 	s = strings.TrimSpace(s)
 	if s == "" {
