@@ -220,6 +220,55 @@ func TestWaitHTTPRetriesThenOK(t *testing.T) {
 	}
 }
 
+func TestWaitHTTPPerRequestTimeoutRetriesPastHungPeer(t *testing.T) {
+	oldProbe, oldDelay := waitHTTPProbeTimeout, waitHTTPRetryDelay
+	waitHTTPProbeTimeout = 50 * time.Millisecond
+	waitHTTPRetryDelay = time.Millisecond
+	defer func() {
+		waitHTTPProbeTimeout = oldProbe
+		waitHTTPRetryDelay = oldDelay
+	}()
+
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	if err := waitHTTP(srv.Client(), srv.URL, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("hung GET burned too much of the wait: %s", elapsed)
+	}
+	if n < 2 {
+		t.Fatalf("retries=%d", n)
+	}
+}
+
+func TestWaitHTTPDoesNotSetClientTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	c := srv.Client()
+	if c.Timeout != 0 {
+		t.Fatalf("httptest client Timeout=%s", c.Timeout)
+	}
+	if err := waitHTTP(c, srv.URL, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if c.Timeout != 0 {
+		t.Fatalf("waitHTTP must not set Client.Timeout (blobstore PUTs share the client), got %s", c.Timeout)
+	}
+}
+
 func TestPutFileMissingAndRunHookSecrets(t *testing.T) {
 	if err := putFile(http.DefaultClient, "http://127.0.0.1/x", filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("missing file must fail")
@@ -288,6 +337,41 @@ func TestPluginScaleNoWaitWhenWaitURL(t *testing.T) {
 	m := &Manifest{Wait: "http://dashboard.discoverd/.well-known/status"}
 	if !pluginScaleNoWait(m) {
 		t.Fatal("dashboard wait URL must skip the scale event-stream wait")
+	}
+}
+
+func TestPluginAppLookupNamesPrefersManifestApp(t *testing.T) {
+	m := &Manifest{
+		Name: "dashboard",
+		App:  AppSpec{Name: "dashboard-plugin"},
+	}
+	got := pluginAppLookupNames(m)
+	if len(got) < 2 || got[0] != "dashboard-plugin" {
+		t.Fatalf("prefer app name first, got %v", got)
+	}
+	seen := map[string]int{}
+	for _, n := range got {
+		seen[n]++
+		if seen[n] > 1 {
+			t.Fatalf("duplicate %q in %v", n, got)
+		}
+	}
+	if seen["dashboard"] != 1 {
+		t.Fatalf("aliases should include plugin name, got %v", got)
+	}
+}
+
+func TestAcceptPluginAppIgnoresPlatformPostgres(t *testing.T) {
+	platform := &ct.App{Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}}
+	if acceptPluginApp(platform) != nil {
+		t.Fatal("platform postgres must not count as the tenant plugin")
+	}
+	plugin := &ct.App{Name: "postgres-plugin", Meta: map[string]string{"flynn-plugin": "true", "flynn-system-app": "true"}}
+	if acceptPluginApp(plugin) != plugin {
+		t.Fatal("postgres-plugin")
+	}
+	if acceptPluginApp(nil) != nil {
+		t.Fatal("nil")
 	}
 }
 

@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -29,6 +30,13 @@ const (
 	deployTimeout   = 5 * time.Minute
 	pingTimeout     = 2 * time.Minute
 )
+
+// waitHTTPProbeTimeout bounds one GET inside waitHTTP so a hung discoverd
+// instance cannot consume the whole ping/deploy deadline. Do not set
+// Client.Timeout on Installer.HTTP; blobstore PUTs share that client.
+var waitHTTPProbeTimeout = 5 * time.Second
+var waitHTTPRetryDelay = 2 * time.Second
+var waitHTTPLogInterval = 15 * time.Second
 
 // provisionResourceAttempts retries postgres-api (and other provider) 500s.
 // A long plugin image upload can race a brief postgres/controller blip, and
@@ -224,7 +232,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 
 	alreadyInstalled := false
 	if in.Client != nil {
-		if app, err := in.Client.GetApp(m.App.Name); err == nil && app != nil {
+		if app, err := in.getInstalledPluginApp(m); err == nil && app != nil {
 			alreadyInstalled = true
 		} else if err != nil && err != controller.ErrNotFound {
 			return err
@@ -273,7 +281,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 		return fmt.Errorf("cluster credentials: %w", err)
 	}
 
-	app, err := in.Client.GetApp(m.App.Name)
+	app, err := in.getInstalledPluginApp(m)
 	updating := opts.Update
 	switch {
 	case err == nil:
@@ -281,13 +289,13 @@ func (in *Installer) apply(opts InstallOptions) error {
 			in.logf("plugin %s already installed; updating in place", m.Name)
 			updating = true
 		}
-		in.logf("app %s already exists; deploying a new release from uploaded layers", m.App.Name)
+		in.logf("app %s already exists; deploying a new release from uploaded layers", app.Name)
 		if app.Meta == nil {
 			app.Meta = map[string]string{}
 		}
 		m.AnnotateInstall(app.Meta, resolved.Input, resolved.Ref)
 		if err := in.Client.UpdateAppMeta(app); err != nil {
-			return fmt.Errorf("update plugin meta on %s: %w", m.App.Name, err)
+			return fmt.Errorf("update plugin meta on %s: %w", app.Name, err)
 		}
 		if prev, err := in.Client.GetAppRelease(app.ID); err == nil && prev != nil {
 			PreservePreviousEnv(cluster, prev.Env)
@@ -336,7 +344,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 			waitFor = dep.timeout
 		}
 		in.logf("waiting for %s (timeout %s)", ping, waitFor)
-		if err := waitHTTP(in.http(), ping, waitFor); err != nil {
+		if err := waitHTTPLog(in.http(), ping, waitFor, in.logf); err != nil {
 			in.restorePreviousRelease(app, dep)
 			return fmt.Errorf("plugin %s did not become ready: %w", m.Name, err)
 		}
@@ -351,6 +359,8 @@ func (in *Installer) apply(opts InstallOptions) error {
 	if err := in.runHook(root, m, m.readyHook(), cluster); err != nil {
 		return err
 	}
+
+	in.ensureManifestDBRuntimes(m)
 
 	if err := in.ensureWebhooks(m, cluster); err != nil {
 		return err
@@ -428,6 +438,15 @@ func (in *Installer) runBuild(root string) error {
 	if in.Build != nil {
 		return in.Build(root)
 	}
+	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
+		restore, err := replacePluginFlynnModule(root, flynnRoot)
+		if err != nil {
+			return fmt.Errorf("plugin-build: compile against Flynn: %w", err)
+		}
+		if restore != nil {
+			defer restore()
+		}
+	}
 	script := filepath.Join(root, "script", "plugin-build")
 	if _, err := os.Stat(script); err != nil {
 		return fmt.Errorf("missing %s", script)
@@ -440,6 +459,9 @@ func (in *Installer) runBuild(root string) error {
 		cmd.Stderr = os.Stderr
 	}
 	cmd.Env = mergeGoBinPath(append(os.Environ(), in.localFlynnImageEnv()...), "/usr/local/go/bin")
+	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
+		cmd.Env = append(cmd.Env, "FLYNN_ROOT="+flynnRoot)
+	}
 	return cmd.Run()
 }
 
@@ -682,6 +704,76 @@ func (in *Installer) createApp(m *Manifest, resolved *Resolved) (*ct.App, error)
 		return nil, fmt.Errorf("create app %s: %w", m.App.Name, err)
 	}
 	return app, nil
+}
+
+// pluginAppLookupNames prefers the current manifest app name so a renamed
+// install (dashboard-plugin) wins over a leftover app still named dashboard.
+func pluginAppLookupNames(m *Manifest) []string {
+	if m == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	add(m.App.Name)
+	for _, name := range m.aliasNames() {
+		add(name)
+	}
+	return out
+}
+
+// acceptPluginApp is true for apps installed by plugin:install. GetApp("postgres")
+// hits the platform appliance on a new cluster; that must not count as the
+// tenant postgres plugin (postgres-plugin).
+func acceptPluginApp(app *ct.App) *ct.App {
+	if app == nil || !app.Plugin() {
+		return nil
+	}
+	return app
+}
+
+func (in *Installer) getInstalledPluginApp(m *Manifest) (*ct.App, error) {
+	if in == nil || in.Client == nil || m == nil {
+		return nil, controller.ErrNotFound
+	}
+	var lastErr error
+	for _, name := range pluginAppLookupNames(m) {
+		app, err := in.Client.GetApp(name)
+		if err == nil && acceptPluginApp(app) != nil {
+			return app, nil
+		}
+		if err != nil && err != controller.ErrNotFound {
+			return nil, err
+		}
+		lastErr = err
+	}
+	apps, err := in.Client.AppList()
+	if err != nil {
+		if lastErr != nil {
+			return nil, lastErr
+		}
+		return nil, err
+	}
+	for _, name := range pluginAppLookupNames(m) {
+		app, err := LookupPluginApp(apps, name)
+		if err == nil && app != nil {
+			return app, nil
+		}
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, controller.ErrNotFound
 }
 
 type pluginDeploy struct {
@@ -1443,15 +1535,35 @@ func putBytes(httpClient *http.Client, url string, body []byte) error {
 	return nil
 }
 
-func waitHTTP(httpClient *http.Client, url string, timeout time.Duration) error {
+func waitHTTP(httpClient *http.Client, rawURL string, timeout time.Duration) error {
+	return waitHTTPLog(httpClient, rawURL, timeout, nil)
+}
+
+func waitHTTPLog(httpClient *http.Client, rawURL string, timeout time.Duration, logf func(string, ...interface{})) error {
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
 	deadline := time.Now().Add(timeout)
 	var last error
+	var lastLog time.Time
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 		if err != nil {
 			return err
 		}
+		probe := waitHTTPProbeTimeout
+		if remaining := time.Until(deadline); remaining < probe {
+			probe = remaining
+		}
+		if probe <= 0 {
+			break
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), probe)
+		// Close each probe so keep-alive cannot pin a draining discoverd IP.
+		req = req.WithContext(ctx)
+		req.Close = true
 		res, err := httpClient.Do(req)
+		cancel()
 		if err == nil {
 			res.Body.Close()
 			if res.StatusCode >= 200 && res.StatusCode < 300 {
@@ -1461,7 +1573,11 @@ func waitHTTP(httpClient *http.Client, url string, timeout time.Duration) error 
 		} else {
 			last = err
 		}
-		time.Sleep(2 * time.Second)
+		if logf != nil && (lastLog.IsZero() || time.Since(lastLog) >= waitHTTPLogInterval) {
+			lastLog = time.Now()
+			logf("still waiting for %s: %v", rawURL, last)
+		}
+		time.Sleep(waitHTTPRetryDelay)
 	}
 	if last == nil {
 		last = fmt.Errorf("timeout")
