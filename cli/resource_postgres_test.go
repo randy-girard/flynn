@@ -116,11 +116,11 @@ func TestSingleAttachmentEnv(t *testing.T) {
 
 func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	cat := dbruntime.BuiltinCatalog()
-	got, err := databaseProvisionConfig("scheduler", "ANALYTICS", "res", "perf-l", "logical", "", "", "", cat)
+	got, err := databaseProvisionConfig("scheduler", "ANALYTICS", "res", "", "perf-l", "logical", "", "", "", cat)
 	if err != nil || got != nil {
 		t.Fatalf("non-database config %s %v", got, err)
 	}
-	got, err = databaseProvisionConfig("redis", "", "", "", "", "", "", "", cat)
+	got, err = databaseProvisionConfig("redis", "", "", "", "", "", "", "", "", cat)
 	if err != nil || got == nil {
 		t.Fatalf("redis default %s %v", got, err)
 	}
@@ -132,7 +132,7 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	if redis.Runtime != "small" || redis.Disk != small.Disk || redis.CPU != small.CPU || redis.Memory != small.Memory {
 		t.Fatalf("redis small %#v", redis)
 	}
-	got, err = databaseProvisionConfig("postgres", "", "", "", "", "", "", "", cat)
+	got, err = databaseProvisionConfig("postgres", "", "", "", "", "", "", "", "", cat)
 	if err != nil || got == nil {
 		t.Fatal(err)
 	}
@@ -144,11 +144,30 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	if pg.Disk != pgSmall.Disk || pg.Disk <= redis.Disk {
 		t.Fatalf("postgres disk %d redis disk %d", pg.Disk, redis.Disk)
 	}
-	got, err = databaseProvisionConfig("mysql", "REPLICA", "mysql-harbor-kxmnpq", "", "", "", "", "", cat)
+	got, err = databaseProvisionConfig("mysql", "REPLICA", "mysql-harbor-kxmnpq", "", "", "", "", "", "", cat)
 	if err != nil || got == nil || !strings.Contains(string(*got), `"follow":"mysql-harbor-kxmnpq"`) {
 		t.Fatalf("mysql follow %s %v", got, err)
 	}
-	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "medium", "logical", "", "", "", cat)
+	if strings.Contains(string(*got), `"join"`) {
+		t.Fatalf("mysql must not send join %s", *got)
+	}
+	got, err = databaseProvisionConfig("kafka", "", "", "kafka-harbor-aaaaaa", "", "", "", "", "", cat)
+	if err != nil || got == nil || !strings.Contains(string(*got), `"join":"kafka-harbor-aaaaaa"`) || !strings.Contains(string(*got), `"follow":"kafka-harbor-aaaaaa"`) {
+		t.Fatalf("kafka join %s %v", got, err)
+	}
+	got, err = databaseProvisionConfig("mongodb", "", "mongodb-cedar-azkmls", "", "", "", "", "", "", cat)
+	if err != nil || got == nil || !strings.Contains(string(*got), `"join":"mongodb-cedar-azkmls"`) {
+		t.Fatalf("mongodb follow alias %s %v", got, err)
+	}
+	_, err = databaseProvisionConfig("postgres", "", "", "pg-harbor-aaaaaa", "", "", "", "", "", cat)
+	if err == nil || !strings.Contains(err.Error(), "--join") {
+		t.Fatalf("postgres join: %v", err)
+	}
+	_, err = databaseProvisionConfig("kafka", "", "a", "b", "", "", "", "", "", cat)
+	if err == nil || !strings.Contains(err.Error(), "cannot both") {
+		t.Fatalf("join and follow: %v", err)
+	}
+	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "", "medium", "logical", "", "", "", cat)
 	if err != nil || got == nil || !strings.Contains(string(*got), `"as":"ANALYTICS"`) || !strings.Contains(string(*got), `"follow":"leader"`) {
 		t.Fatalf("config %s %v", got, err)
 	}
@@ -160,17 +179,17 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	if sized.Runtime != "medium" || sized.Disk != med.Disk || sized.Replication != "logical" {
 		t.Fatalf("medium %#v", sized)
 	}
-	_, err = databaseProvisionConfig("mysql", "", "", "cache", "", "", "", "", cat)
+	_, err = databaseProvisionConfig("mysql", "", "", "", "cache", "", "", "", "", cat)
 	var unpublished *dbruntime.UnpublishedError
 	if !errors.As(err, &unpublished) {
 		t.Fatalf("unpublished runtime: %v", err)
 	}
-	_, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
+	_, err = databaseProvisionConfig("redis", "", "", "", "", "", "100", "128MB", "1GB", cat)
 	if !errors.Is(err, dbruntime.ErrCustomSizesDisabled) {
 		t.Fatalf("raw size: %v", err)
 	}
 	cat.AllowCustomSizes = true
-	got, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
+	got, err = databaseProvisionConfig("redis", "", "", "", "", "", "100", "128MB", "1GB", cat)
 	if err != nil || got == nil {
 		t.Fatal(err)
 	}

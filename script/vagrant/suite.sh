@@ -2245,28 +2245,29 @@ mongodb_replica_ready() {
 
 add_throwaway_follower() {
   local app=$1 provider=$2
-  local cand leader added=0 attempt
+  local cand leader added=0 attempt flag
   leader="$(datastore_leader_app "${app}" "${provider}")"
   if [[ -z "${leader}" ]]; then
     echo "${provider} has no leader app on ${app}" >&2
     return 1
   fi
-  info "adding ${provider} follower of ${leader} on ${app}"
+  flag="$(datastore_extra_node_flag "${provider}")"
+  info "adding ${provider} node of ${leader} on ${app} (${flag})"
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
     for attempt in $(seq 1 20); do
-      if flynn1 -a "${app}" resource add "${cand}" --follow "${leader}" --as FOLLOWER; then
+      if flynn1 -a "${app}" resource add "${cand}" "${flag}" "${leader}" --as FOLLOWER; then
         added=1
-        echo "resource:add ${cand} --follow ${leader} --as FOLLOWER on ${app}"
+        echo "resource:add ${cand} ${flag} ${leader} --as FOLLOWER on ${app}"
         break
       fi
-      echo "resource:add ${cand} --follow failed (attempt ${attempt}/20); retrying" >&2
+      echo "resource:add ${cand} ${flag} failed (attempt ${attempt}/20); retrying" >&2
       sleep 1
     done
     if [[ "${added}" == "1" ]]; then
       break
     fi
-    echo "resource:add ${cand} --follow failed; trying next candidate" >&2
+    echo "resource:add ${cand} ${flag} failed; trying next candidate" >&2
   done < <(resource_add_candidates "${provider}")
   if [[ "${added}" != "1" ]]; then
     if [[ "${provider}" == mongodb ]]; then
@@ -2277,6 +2278,13 @@ add_throwaway_follower() {
     return 1
   fi
   wait_follower_url "${app}" >/dev/null
+}
+
+datastore_extra_node_flag() {
+  case "${1}" in
+    kafka|mongodb) echo --join ;;
+    *) echo --follow ;;
+  esac
 }
 
 teardown_throwaway_datastores() {

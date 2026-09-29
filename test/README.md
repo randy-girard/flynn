@@ -194,8 +194,9 @@ the multi-hour release gate.
 
 `--item datastores` is the focused path: 1-node then 3-node, install only the
 datastore plugins, create a throwaway app, `flynn resource:add <provider>` for
-each engine, seed rows, provision a follower (`--follow`, or
-`mongodb:nodes:add`), verify the seed on the replica, and `resource:remove`.
+each engine, seed rows, provision a replica (`--follow`) or extra cluster node
+(`--join` for kafka/mongodb, or `mongodb:nodes:add`), verify the seed on that
+node, and `resource:remove`.
 It asserts an env URL (`FLYNN_*` or `*_URL`) or that `flynn resource`
 lists the provider. `mysql` tries that name first and falls back to `mariadb`
 (the sibling checkout is `flynn-plugin-mysql`). Tenant postgres is

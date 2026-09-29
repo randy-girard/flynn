@@ -25,7 +25,7 @@ usage: flynn resource
 List resources for the app.
 `)
 	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
+usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--join <resource>] [--runtime <name>] [--replication <mode>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
 
 Provision a new resource for the app using <provider>.
 
@@ -35,16 +35,18 @@ process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
 are rejected unless a cluster admin has allowed custom sizes.
 
 For postgres, mysql, redis, kafka, mongodb, and clickhouse, the installed plugin
-receives --as, --follow, --runtime, and --replication. Postgres, mysql, and redis
---follow creates a replica resource of that instance. Kafka and mongodb --follow
-adds a node to that existing cluster (any member name works). ClickHouse --follow
-still copies onto a separate resource. The platform
-postgres appliance at postgres-api.discoverd is not used. --as ANALYTICS
-sets only ANALYTICS_URL. The default name DATABASE sets only DATABASE_URL.
+receives --as, --follow, --join, --runtime, and --replication. Postgres, mysql,
+and redis --follow creates a replica resource of that instance. Kafka and
+mongodb --join starts another Flynn job on that existing cluster (any member
+name works; --follow is accepted as an alias). ClickHouse --follow still copies
+onto a separate resource. The platform postgres appliance at
+postgres-api.discoverd is not used. --as ANALYTICS sets only ANALYTICS_URL.
+The default name DATABASE sets only DATABASE_URL.
 
 Options:
 	--as=<name>              attachment env name (default DATABASE)
-	--follow=<resource>      replica resource (postgres/mysql/redis/clickhouse) or extra cluster node (kafka/mongodb)
+	--follow=<resource>      replica resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
+	--join=<resource>        extra kafka or mongodb cluster node (new container on that cluster)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     streaming (same major) or logical (major upgrade)
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
@@ -138,7 +140,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	cfg, err := databaseProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
+	cfg, err := databaseProvisionConfig(provider, args.String["--as"], args.String["--follow"], args.String["--join"], args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
 	if err != nil {
 		return err
 	}
@@ -228,6 +230,7 @@ func rejectPlatformPostgresAdd(provider string, client controller.Client) error 
 type databaseProvisionBody struct {
 	As          string `json:"as,omitempty"`
 	Follow      string `json:"follow,omitempty"`
+	Join        string `json:"join,omitempty"`
 	Runtime     string `json:"runtime,omitempty"`
 	Replication string `json:"replication,omitempty"`
 	CPU         int64  `json:"cpu,omitempty"`
@@ -235,12 +238,46 @@ type databaseProvisionBody struct {
 	Disk        int64  `json:"disk,omitempty"`
 }
 
+func isClusterJoinProvider(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "kafka", "mongodb":
+		return true
+	default:
+		return false
+	}
+}
+
+// provisionJoinFollow maps CLI --follow/--join onto the provider JSON.
+// Kafka and mongodb send join (and follow as a compatibility alias). Replica
+// engines send follow only; --join is rejected there.
+func provisionJoinFollow(provider, follow, join string) (followJSON, joinJSON string, err error) {
+	follow = strings.TrimSpace(follow)
+	join = strings.TrimSpace(join)
+	if follow != "" && join != "" && follow != join {
+		return "", "", fmt.Errorf("--follow and --join cannot both be set")
+	}
+	target := join
+	if target == "" {
+		target = follow
+	}
+	if target == "" {
+		return "", "", nil
+	}
+	if isClusterJoinProvider(provider) {
+		return target, target, nil
+	}
+	if join != "" && follow == "" {
+		return "", "", fmt.Errorf("%s uses --follow for a replica resource; --join adds a kafka or mongodb cluster node", provider)
+	}
+	return target, "", nil
+}
+
 // databaseProvisionConfig sizes postgres, mysql, redis, mongodb, kafka, and
 // clickhouse from the database-runtime catalog. Other providers are unchanged.
 // Omitting runtime uses small. Raw cpu, memory, or disk is rejected unless
 // the catalog allows custom sizes. The size is fixed on this request;
 // later edits to the runtime definition do not resize this instance.
-func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
+func databaseProvisionConfig(provider, as, follow, join, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
 	if _, ok := dbruntime.ProviderEngine(provider); !ok {
 		if cpuRaw != "" || memRaw != "" || diskRaw != "" {
 			return nil, fmt.Errorf("cpu, memory, and disk apply to database providers (postgres, mysql, redis, mongodb, kafka, clickhouse)")
@@ -273,9 +310,14 @@ func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw,
 	if err != nil {
 		return nil, err
 	}
+	followJSON, joinJSON, err := provisionJoinFollow(provider, follow, join)
+	if err != nil {
+		return nil, err
+	}
 	body := databaseProvisionBody{
 		As:          as,
-		Follow:      follow,
+		Follow:      followJSON,
+		Join:        joinJSON,
 		Runtime:     name,
 		Replication: replication,
 		CPU:         sz.CPU,

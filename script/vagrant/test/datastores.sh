@@ -42,9 +42,11 @@ need "${smoke}" 'exercise_datastore_followers' \
 need "${smoke}" 'teardown_throwaway_datastores' \
   "throwaway provision must resource:remove after seed and follow"
 need "${smoke}" '--follow' \
-  "followers must be provisioned with resource:add --follow"
+  "replica engines must be provisioned with resource:add --follow"
+need "${smoke}" 'datastore_extra_node_flag' \
+  "kafka/mongodb must use --join; replica engines keep --follow"
 need "${smoke}" 'mongodb:nodes:add' \
-  "mongodb --follow adds a replica-set member; nodes:add remains the fallback"
+  "mongodb --join adds a replica-set member; nodes:add remains the fallback"
 need "${example}" 'topologies: "1,3"' \
   "datastores must run 1-node and 3-node clusters"
 need "${smoke}" 'tenant_mysql_ping' \
@@ -101,7 +103,7 @@ need "${smoke}" 'flynn_ds' \
 need "${smoke}" 'attempt ${attempt}/20' \
   "resource:add must retry; 3-node controller db-runtimes are in-memory per web job"
 need "${smoke}" 'kafka_cluster_ready' \
-  "kafka --follow must wait for a second broker in the same cluster"
+  "kafka --join must wait for a second broker in the same cluster"
 need "${smoke}" 'redis_follower_seeded' \
   "redis follower verify must wait for replicaof to copy seeded keys, not only PING"
 
