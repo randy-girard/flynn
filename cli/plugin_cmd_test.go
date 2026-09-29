@@ -451,6 +451,33 @@ func TestApplyNamedResourcePrefersMongoAppPassword(t *testing.T) {
 	}
 }
 
+func TestApplyNamedResourceClickhouseUsesFollowerAdmin(t *testing.T) {
+	app := map[string]string{
+		"CLICKHOUSE_HOST":         "leader.clickhouse-quartz-aaaaaa.discoverd",
+		"CLICKHOUSE_USER":         "u_clickhouse-quartz-aaaaaa",
+		"CLICKHOUSE_PASSWORD":     "tenant-leader",
+		"CLICKHOUSE_TRUSTED_CERT": "leader-ca",
+		"CLICKHOUSE_URL":          "clickhouses://u_leader@leader.clickhouse-quartz-aaaaaa.discoverd:9440",
+	}
+	applyNamedResource(app, "clickhouse-willow-bbbbbb", map[string]string{
+		"CLICKHOUSE_PASSWORD":     "admin-follower",
+		"CLICKHOUSE_TRUSTED_CERT": "follower-ca",
+		"FLYNN_CLICKHOUSE":        "clickhouse-willow-bbbbbb",
+	})
+	if app["CLICKHOUSE_HOST"] != "leader.clickhouse-willow-bbbbbb.discoverd" {
+		t.Fatalf("host %q", app["CLICKHOUSE_HOST"])
+	}
+	if app["CLICKHOUSE_USER"] != "" {
+		t.Fatalf("user %q, want default interpolation", app["CLICKHOUSE_USER"])
+	}
+	if app["CLICKHOUSE_PASSWORD"] != "admin-follower" {
+		t.Fatalf("password %q", app["CLICKHOUSE_PASSWORD"])
+	}
+	if app["CLICKHOUSE_TRUSTED_CERT"] != "follower-ca" {
+		t.Fatalf("tls ca %q", app["CLICKHOUSE_TRUSTED_CERT"])
+	}
+}
+
 func TestApplyNamedResourceKafkaUsesFollowerBootstrap(t *testing.T) {
 	app := map[string]string{
 		"KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-quartz-aaaaaa.discoverd:9092",
