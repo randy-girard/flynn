@@ -314,7 +314,10 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 	}
 	for _, key := range []string{
 		"REDIS_HOST", "POSTGRES_URL", "DATABASE_URL", "MYSQL_HOST", "MONGO_HOST",
-		"CLICKHOUSE_HOST", "KAFKA_HOST", "KAFKA_URL",
+		"CLICKHOUSE_HOST", "KAFKA_HOST", "KAFKA_URL", "KAFKA_BOOTSTRAP_SERVERS",
+		"KAFKA_BROKER_URLS", "KAFKA_TRUSTED_CERT", "KAFKA_CLIENT_CERT",
+		"KAFKA_CLIENT_CERT_KEY", "KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD",
+		"KAFKA_SASL_MECHANISM", "KAFKA_TOPIC_PREFIX",
 	} {
 		delete(app, key)
 	}
@@ -331,12 +334,20 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 	if pwd := app["MONGO_APP_PASSWORD"]; pwd != "" {
 		app["MONGO_PWD"] = pwd
 	}
+	if su := app["KAFKA_SUPERUSER_PASSWORD"]; su != "" {
+		app["KAFKA_SASL_PASSWORD"] = su
+		app["KAFKA_SASL_USERNAME"] = "flynn-admin"
+		app["KAFKA_SASL_MECHANISM"] = "SCRAM-SHA-256"
+	}
 	if resource != "" {
 		host := "leader." + resource + ".discoverd"
 		for _, key := range []string{"REDIS_HOST", "MYSQL_HOST", "MONGO_HOST", "CLICKHOUSE_HOST", "KAFKA_HOST"} {
 			if app[key] == "" {
 				app[key] = host
 			}
+		}
+		if app["KAFKA_BOOTSTRAP_SERVERS"] == "" {
+			app["KAFKA_BOOTSTRAP_SERVERS"] = host + ":9092"
 		}
 	}
 }

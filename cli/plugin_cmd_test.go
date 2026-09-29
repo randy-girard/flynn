@@ -451,6 +451,30 @@ func TestApplyNamedResourcePrefersMongoAppPassword(t *testing.T) {
 	}
 }
 
+func TestApplyNamedResourceKafkaUsesFollowerBootstrap(t *testing.T) {
+	app := map[string]string{
+		"KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-quartz-aaaaaa.discoverd:9092",
+		"KAFKA_TRUSTED_CERT":      "leader-ca",
+		"KAFKA_SASL_USERNAME":     "u-leader",
+		"KAFKA_SASL_PASSWORD":     "leader-pw",
+	}
+	applyNamedResource(app, "kafka-willow-bbbbbb", map[string]string{
+		"KAFKA_SUPERUSER_PASSWORD": "super-secret",
+		"KAFKA_TRUSTED_CERT":       "follower-ca",
+		"KAFKA_CLIENT_CERT":        "follower-cert",
+		"KAFKA_CLIENT_CERT_KEY":    "follower-key",
+	})
+	if app["KAFKA_BOOTSTRAP_SERVERS"] != "leader.kafka-willow-bbbbbb.discoverd:9092" {
+		t.Fatalf("bootstrap %q", app["KAFKA_BOOTSTRAP_SERVERS"])
+	}
+	if app["KAFKA_TRUSTED_CERT"] != "follower-ca" {
+		t.Fatalf("tls ca %q", app["KAFKA_TRUSTED_CERT"])
+	}
+	if app["KAFKA_SASL_USERNAME"] != "flynn-admin" || app["KAFKA_SASL_PASSWORD"] != "super-secret" {
+		t.Fatalf("sasl user=%q pass=%q", app["KAFKA_SASL_USERNAME"], app["KAFKA_SASL_PASSWORD"])
+	}
+}
+
 func TestPluginInterpClusterCreateNameIsNotResource(t *testing.T) {
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
 		"pipeline": {ID: "pipeline-release"},
