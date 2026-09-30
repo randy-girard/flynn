@@ -239,8 +239,9 @@ func (c *controllerAPI) DeleteResource(ctx context.Context, w http.ResponseWrite
 			return
 		}
 	}
-	logger.Info("deprovisioning", "url", p.URL, "external.id", res.ExternalID)
-	if err := resource.Deprovision(p.URL, res.ExternalID); err != nil {
+	ids := resource.DeprovisionIDs(res.ExternalID, res.Env)
+	logger.Info("deprovisioning", "url", p.URL, "external.id", res.ExternalID, "ids", ids)
+	if err := resource.DeprovisionAny(p.URL, ids...); err != nil {
 		logger.Error("error deprovisioning", "err", err)
 		respondWithError(w, err)
 		return

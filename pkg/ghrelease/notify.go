@@ -41,10 +41,11 @@ type NotifyOptions struct {
 // It runs on every flynn / flynn-host command except:
 //   - FLYNN_SKIP_UPDATE_CHECK is set (tests and scripted installs)
 //   - CurrentVersion is empty
+//   - CurrentVersion is "dev" (unstamped local / vagrant-cli builds)
 //   - CurrentVersion contains "-smoke" (Vagrant smoke tarballs)
 //   - GitHub latest is missing or not newer (already up to date)
 //
-// "dev" (unstamped local builds) is treated as older than any published tag.
+// `flynn update --check` still treats "dev" as older than a published tag.
 // Lookups are cached on disk (see DefaultUpdateCheckCachePath) for
 // DefaultUpdateCheckTTL; a cached newer tag is still printed on every call.
 // Network and parse errors are ignored so CLI startup never fails.
@@ -53,7 +54,7 @@ func MaybeNotify(opts NotifyOptions) {
 		return
 	}
 	current := strings.TrimSpace(opts.CurrentVersion)
-	if current == "" || strings.Contains(current, "-smoke") {
+	if current == "" || current == "dev" || strings.Contains(current, "-smoke") {
 		return
 	}
 	w := opts.Writer

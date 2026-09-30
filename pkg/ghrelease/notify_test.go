@@ -180,9 +180,11 @@ func TestMaybeNotifyFailedFetchKeepsCachedLatest(t *testing.T) {
 	}
 }
 
-func TestMaybeNotifyPrintsForDevVersion(t *testing.T) {
+func TestMaybeNotifyIgnoresDevVersion(t *testing.T) {
 	t.Setenv(SkipUpdateCheckEnv, "")
+	var hits int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
 		_ = json.NewEncoder(w).Encode(Release{TagName: "v20260917.2"})
 	}))
 	defer srv.Close()
@@ -194,11 +196,8 @@ func TestMaybeNotifyPrintsForDevVersion(t *testing.T) {
 		APIBase:        srv.URL,
 		CheckFile:      filepath.Join(t.TempDir(), "cktime"),
 	})
-	if !strings.Contains(buf.String(), "this is dev") {
-		t.Fatalf("got %q", buf.String())
-	}
-	if !strings.Contains(buf.String(), "v20260917.2") {
-		t.Fatalf("got %q", buf.String())
+	if hits != 0 || buf.Len() != 0 {
+		t.Fatalf("hits=%d buf=%q", hits, buf.String())
 	}
 }
 
