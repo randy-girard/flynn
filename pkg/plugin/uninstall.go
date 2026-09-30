@@ -77,6 +77,7 @@ func (in *Installer) Uninstall(opts UninstallOptions) error {
 	if err := in.runUninstallHook(rec, opts); err != nil {
 		return err
 	}
+	in.removeInstalledDBRuntimes(rec)
 	if err := in.removePluginWebhooks(rec.Name); err != nil {
 		return err
 	}

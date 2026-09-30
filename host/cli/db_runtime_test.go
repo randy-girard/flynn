@@ -11,7 +11,8 @@ import (
 func TestDBRuntimeCommandsRegistered(t *testing.T) {
 	for _, name := range []string{
 		"db-runtime", "db-runtime:create", "db-runtime:update",
-		"db-runtime:remove", "db-runtime:allow-custom",
+		"db-runtime:remove", "db-runtime:ensure", "db-runtime:drop-engine",
+		"db-runtime:allow-custom",
 	} {
 		if commands[name] == nil {
 			t.Errorf("missing %s", name)
@@ -21,7 +22,7 @@ func TestDBRuntimeCommandsRegistered(t *testing.T) {
 		t.Fatal("app runtime commands missing")
 	}
 	help := FormatHelp("db-runtime")
-	for _, want := range []string{"db-runtime:create", "db-runtime:update", "db-runtime:remove", "db-runtime:allow-custom", "not app process"} {
+	for _, want := range []string{"db-runtime:create", "db-runtime:update", "db-runtime:remove", "db-runtime:ensure", "db-runtime:drop-engine", "db-runtime:allow-custom", "not app process"} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("help missing %q:\n%s", want, help)
 		}
@@ -36,6 +37,10 @@ func TestDBRuntimeCLIFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db-runtimes.json")
 	t.Setenv(dbruntime.EnvFile, path)
 
+	ensure := parseHostCLI(t, "db-runtime:ensure", []string{"db-runtime:ensure", "redis"})
+	if err := runDBRuntimeEnsure(ensure); err != nil {
+		t.Fatal(err)
+	}
 	create := parseHostCLI(t, "db-runtime:create", []string{
 		"db-runtime:create", "--memory", "128MB", "--cpu", "100", "--disk", "1GB", "redis", "cache",
 	})
@@ -89,6 +94,16 @@ func TestDBRuntimeCLIFileRoundTrip(t *testing.T) {
 	}
 	if _, ok := cat.Find("redis", "cache"); ok {
 		t.Fatal("cache still in file")
+	}
+	if err := runDBRuntimeDropEngine(parseHostCLI(t, "db-runtime:drop-engine", []string{"db-runtime:drop-engine", "redis"})); err != nil {
+		t.Fatal(err)
+	}
+	cat, err = dbruntime.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cat.Find("redis", "small"); ok {
+		t.Fatal("drop-engine left redis runtimes")
 	}
 	if dbruntime.Path() != path {
 		t.Fatalf("path %s", dbruntime.Path())

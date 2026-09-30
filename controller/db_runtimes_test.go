@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -32,16 +33,20 @@ func TestCanManageDBRuntimes(t *testing.T) {
 func TestDBRuntimeCreateKeepsBuiltin(t *testing.T) {
 	resetDBRuntimes()
 	t.Cleanup(resetDBRuntimes)
-	dbRuntimeMu.Lock()
-	err := dbRuntimeCat.Create(dbruntime.Runtime{Engine: "redis", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30})
-	dbRuntimeMu.Unlock()
+	api := &controllerAPI{}
+	_, err := api.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		if err := cat.EnsureEngine("redis"); err != nil {
+			return err
+		}
+		return cat.Create(dbruntime.Runtime{Engine: "redis", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30})
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := dbRuntimeCat.Find("redis", "small"); !ok {
+	if _, ok := memDBRuntimes.Find("redis", "small"); !ok {
 		t.Fatal("builtin small missing")
 	}
-	if _, ok := dbRuntimeCat.Find("redis", "cache"); !ok {
+	if _, ok := memDBRuntimes.Find("redis", "cache"); !ok {
 		t.Fatal("custom runtime missing")
 	}
 }
@@ -52,31 +57,42 @@ func TestDBRuntimeUpdateAndRemove(t *testing.T) {
 	cpu := int64(750)
 	mem := int64(512 << 20)
 	disk := int64(2 << 30)
-	dbRuntimeMu.Lock()
-	updated, err := dbRuntimeCat.Update("redis", "small", dbruntime.UpdateFields{CPU: &cpu, Memory: &mem, Disk: &disk})
-	dbRuntimeMu.Unlock()
+	api := &controllerAPI{}
+	var updated dbruntime.Runtime
+	_, err := api.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		if err := cat.EnsureEngine("redis"); err != nil {
+			return err
+		}
+		got, err := cat.Update("redis", "small", dbruntime.UpdateFields{CPU: &cpu, Memory: &mem, Disk: &disk})
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if updated.CPU != cpu || updated.Memory != mem || updated.Disk != disk {
 		t.Fatalf("builtin update: %+v", updated)
 	}
-	dbRuntimeMu.Lock()
-	if err := dbRuntimeCat.Create(dbruntime.Runtime{Engine: "redis", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30}); err != nil {
-		dbRuntimeMu.Unlock()
+	_, err = api.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		if err := cat.Create(dbruntime.Runtime{Engine: "redis", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30}); err != nil {
+			return err
+		}
+		if err := cat.Remove("redis", "cache"); err != nil {
+			return err
+		}
+		if err := cat.Remove("redis", "small"); err == nil {
+			return errors.New("builtin remove must fail")
+		}
+		cat.AllowCustomSizes = true
+		return nil
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dbRuntimeCat.Remove("redis", "cache"); err != nil {
-		dbRuntimeMu.Unlock()
-		t.Fatal(err)
-	}
-	if err := dbRuntimeCat.Remove("redis", "small"); err == nil {
-		dbRuntimeMu.Unlock()
-		t.Fatal("builtin remove must fail")
-	}
-	dbRuntimeCat.AllowCustomSizes = true
-	dbRuntimeMu.Unlock()
-	if !dbRuntimeCat.AllowCustomSizes {
+	if !memDBRuntimes.AllowCustomSizes {
 		t.Fatal("allow custom sizes not set")
 	}
 }

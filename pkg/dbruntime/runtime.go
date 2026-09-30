@@ -2,13 +2,15 @@
 // and disk) per engine. It is separate from app process runtimes
 // (host/cli/runtime_profile.go).
 //
-// Each engine ships small, medium, and large presets. Those numbers are
-// independent: Redis small disk is smaller than Postgres small disk.
-// flynn-host writes /etc/flynn/db-runtimes.json and publishes the same catalog
-// to the controller. Plugin jobs started by flynn-host carry the cluster
-// controller key, so they may create runtimes too. The dashboard may create
-// them only for a cluster admin. Updating a definition does not resize
-// instances already created from it; there is no in-place resize.
+// Each database plugin install publishes small, medium, and large for that
+// engine. Those numbers are independent: Redis small disk is smaller than
+// Postgres small disk. The cluster controller stores the catalog in postgres
+// (db_runtimes). flynn-host keeps /etc/flynn/db-runtimes.json as a cache and
+// seeds an empty controller catalog after an update. Plugin jobs started by
+// flynn-host carry the cluster controller key, so they may create runtimes
+// too. The dashboard may create them only for a cluster admin. Updating a
+// definition does not resize instances already created from it; there is no
+// in-place resize.
 package dbruntime
 
 import (
@@ -119,19 +121,47 @@ func init() {
 	}
 }
 
-// BuiltinCatalog is the in-memory default list. Disk differs per engine.
-func BuiltinCatalog() Catalog {
-	return Catalog{Runtimes: builtinRuntimes()}
+// EmptyCatalog is the published catalog before any database plugin is installed.
+func EmptyCatalog() Catalog {
+	return Catalog{}
 }
 
-func builtinRuntimes() []Runtime {
-	type row struct {
-		engine              string
-		cpuS, cpuM, cpuL    int64
-		memS, memM, memL    int64
-		diskS, diskM, diskL int64
+// MergeLiveAndFile prefers the controller catalog. When the controller is
+// reachable but empty and the host file still has rows (typical after a
+// controller deploy), return the file and seed=true so the caller can PUT.
+func MergeLiveAndFile(live *Catalog, file Catalog) (Catalog, bool) {
+	if live != nil && len(live.Runtimes) > 0 {
+		return *live, false
 	}
-	rows := []row{
+	if live != nil && len(file.Runtimes) > 0 {
+		return file, true
+	}
+	if live != nil {
+		return *live, false
+	}
+	return file, false
+}
+
+// BuiltinCatalog is every engine's small/medium/large presets. Tests use this
+// as a complete size table. Clusters start empty and call EnsureEngine when a
+// database plugin is installed.
+func BuiltinCatalog() Catalog {
+	var cat Catalog
+	for _, e := range Engines {
+		_ = cat.EnsureEngine(e)
+	}
+	return cat
+}
+
+type builtinRow struct {
+	engine              string
+	cpuS, cpuM, cpuL    int64
+	memS, memM, memL    int64
+	diskS, diskM, diskL int64
+}
+
+func builtinRows() []builtinRow {
+	return []builtinRow{
 		{EnginePostgres, 500, 1000, 2000, 512 * mib, 1 * gib, 2 * gib, 10 * gib, 50 * gib, 100 * gib},
 		{EngineRedis, 250, 500, 1000, 256 * mib, 512 * mib, 1 * gib, 1 * gib, 5 * gib, 10 * gib},
 		{EngineMySQL, 500, 1000, 2000, 512 * mib, 1 * gib, 2 * gib, 8 * gib, 32 * gib, 80 * gib},
@@ -139,15 +169,59 @@ func builtinRuntimes() []Runtime {
 		{EngineKafka, 1000, 2000, 4000, 1 * gib, 2 * gib, 4 * gib, 20 * gib, 100 * gib, 500 * gib},
 		{EngineClickHouse, 1000, 2000, 4000, 2 * gib, 4 * gib, 8 * gib, 32 * gib, 128 * gib, 500 * gib},
 	}
-	out := make([]Runtime, 0, len(rows)*3)
-	for _, r := range rows {
-		out = append(out,
-			Runtime{Name: "small", Engine: r.engine, CPU: r.cpuS, Memory: r.memS, Disk: r.diskS, Builtin: true},
-			Runtime{Name: "medium", Engine: r.engine, CPU: r.cpuM, Memory: r.memM, Disk: r.diskM, Builtin: true},
-			Runtime{Name: "large", Engine: r.engine, CPU: r.cpuL, Memory: r.memL, Disk: r.diskL, Builtin: true},
-		)
+}
+
+// EngineBuiltins is small, medium, and large for one engine.
+func EngineBuiltins(engine string) ([]Runtime, error) {
+	eng, err := NormalizeEngine(engine)
+	if err != nil {
+		return nil, err
 	}
-	return out
+	for _, r := range builtinRows() {
+		if r.engine != eng {
+			continue
+		}
+		return []Runtime{
+			{Name: "small", Engine: eng, CPU: r.cpuS, Memory: r.memS, Disk: r.diskS, Builtin: true},
+			{Name: "medium", Engine: eng, CPU: r.cpuM, Memory: r.memM, Disk: r.diskM, Builtin: true},
+			{Name: "large", Engine: eng, CPU: r.cpuL, Memory: r.memL, Disk: r.diskL, Builtin: true},
+		}, nil
+	}
+	return nil, fmt.Errorf("no builtin sizes for engine %s", eng)
+}
+
+// EnsureEngine publishes small/medium/large for engine if they are missing.
+// Existing rows (including admin-edited builtins) are left as-is.
+func (c *Catalog) EnsureEngine(engine string) error {
+	presets, err := EngineBuiltins(engine)
+	if err != nil {
+		return err
+	}
+	for _, preset := range presets {
+		if indexOf(c.Runtimes, preset.Engine, preset.Name) >= 0 {
+			continue
+		}
+		c.Runtimes = append(c.Runtimes, preset)
+	}
+	return nil
+}
+
+// RemoveEngine drops every runtime for that engine, including builtins.
+// Database plugin uninstall uses this so the dashboard only lists installed engines.
+func (c *Catalog) RemoveEngine(engine string) error {
+	eng, err := NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
+	kept := make([]Runtime, 0, len(c.Runtimes))
+	for _, r := range c.Runtimes {
+		if storedEngineMatches(r.Engine, eng) {
+			continue
+		}
+		kept = append(kept, r)
+	}
+	c.Runtimes = kept
+	return nil
 }
 
 // storedEngineMatches is true when a catalog row's engine is the canonical

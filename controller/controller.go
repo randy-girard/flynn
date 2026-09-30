@@ -197,6 +197,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
 	acmeConfigRepo := data.NewACMEConfigRepo(c.db)
 	runtimeProfileRepo := data.NewRuntimeProfileRepo(c.db)
+	dbRuntimeRepo := data.NewDBRuntimeRepo(c.db)
 	githubAppRepo := data.NewGitHubAppRepo(c.db)
 
 	api := controllerAPI{
@@ -217,6 +218,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		managedCertificateRepo: managedCertificateRepo,
 		acmeConfigRepo:         acmeConfigRepo,
 		runtimeProfileRepo:     runtimeProfileRepo,
+		dbRuntimeRepo:          dbRuntimeRepo,
 		tenancy:                data.NewTenancyRepo(c.db),
 		githubStore:            githubAppRepo,
 		githubHTTP:             c.githubHTTP,
@@ -489,6 +491,7 @@ type controllerAPI struct {
 	managedCertificateRepo *data.ManagedCertificateRepo
 	acmeConfigRepo         *data.ACMEConfigRepo
 	runtimeProfileRepo     *data.RuntimeProfileRepo
+	dbRuntimeRepo          *data.DBRuntimeRepo
 	tenancy                *data.TenancyRepo
 	githubStore            githubStore
 	githubAPI              githubAPI

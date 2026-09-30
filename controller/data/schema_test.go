@@ -4,6 +4,7 @@ import (
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	pgtestutils "github.com/randy-girard/flynn/pkg/testutils/postgres"
 )
@@ -365,6 +366,41 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(blobs.BlobGCKeep, Equals, 5)
 	c.Assert(blobs.BlobGCMaxAge, Equals, "720h")
 	c.Assert(blobs.AllowCustomLimits, Equals, true)
+}
+
+func (s *S) TestDBRuntimesPersist(c *C) {
+	repo := NewDBRuntimeRepo(s.db)
+	empty, err := repo.Load()
+	c.Assert(err, IsNil)
+	c.Assert(len(empty.Runtimes), Equals, 0)
+	c.Assert(empty.AllowCustomSizes, Equals, false)
+
+	var cat dbruntime.Catalog
+	c.Assert(cat.EnsureEngine("postgres"), IsNil)
+	c.Assert(cat.Create(dbruntime.Runtime{Engine: "postgres", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30}), IsNil)
+	cat.AllowCustomSizes = true
+	c.Assert(repo.Replace(cat), IsNil)
+
+	got, err := repo.Load()
+	c.Assert(err, IsNil)
+	c.Assert(got.AllowCustomSizes, Equals, true)
+	if _, ok := got.Find("postgres", "small"); !ok {
+		c.Fatal("builtin small missing")
+	}
+	if _, ok := got.Find("postgres", "cache"); !ok {
+		c.Fatal("custom runtime missing")
+	}
+
+	updated, err := repo.Mutate(func(next *dbruntime.Catalog) error {
+		return next.RemoveEngine("postgres")
+	})
+	c.Assert(err, IsNil)
+	if _, ok := updated.Find("postgres", "small"); ok {
+		c.Fatal("remove engine left postgres runtimes")
+	}
+	again, err := repo.Load()
+	c.Assert(err, IsNil)
+	c.Assert(len(again.Runtimes), Equals, 0)
 }
 
 // Scheduler job fires record object_type "scheduler". events.object_type is a

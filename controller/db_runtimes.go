@@ -13,18 +13,17 @@ import (
 	"golang.org/x/net/context"
 )
 
-// dbRuntimeCatalog is the cluster copy of database runtimes. flynn-host
-// publishes its file here. Plugin jobs use the cluster controller key.
-// The web UI writes here only for a cluster admin.
+// memDBRuntimes is the in-process catalog used when the controller is
+// constructed without postgres (unit tests). The live API uses dbRuntimeRepo.
 var (
-	dbRuntimeMu  sync.Mutex
-	dbRuntimeCat = dbruntime.BuiltinCatalog()
+	memDBRuntimeMu sync.Mutex
+	memDBRuntimes  = dbruntime.EmptyCatalog()
 )
 
 func resetDBRuntimes() {
-	dbRuntimeMu.Lock()
-	dbRuntimeCat = dbruntime.BuiltinCatalog()
-	dbRuntimeMu.Unlock()
+	memDBRuntimeMu.Lock()
+	memDBRuntimes = dbruntime.EmptyCatalog()
+	memDBRuntimeMu.Unlock()
 }
 
 func canManageDBRuntimes(ctx context.Context) bool {
@@ -37,10 +36,43 @@ func canManageDBRuntimes(ctx context.Context) bool {
 	return dbruntime.CanManage(tok.ClusterKey, tok.HasClusterAdmin() && !tok.ClusterKey) || tok.ClusterKey
 }
 
+func (c *controllerAPI) loadDBRuntimes() (dbruntime.Catalog, error) {
+	if c != nil && c.dbRuntimeRepo != nil {
+		return c.dbRuntimeRepo.Load()
+	}
+	memDBRuntimeMu.Lock()
+	defer memDBRuntimeMu.Unlock()
+	return memDBRuntimes, nil
+}
+
+func (c *controllerAPI) replaceDBRuntimes(cat dbruntime.Catalog) error {
+	if c != nil && c.dbRuntimeRepo != nil {
+		return c.dbRuntimeRepo.Replace(cat)
+	}
+	memDBRuntimeMu.Lock()
+	memDBRuntimes = cat
+	memDBRuntimeMu.Unlock()
+	return nil
+}
+
+func (c *controllerAPI) mutateDBRuntimes(fn func(*dbruntime.Catalog) error) (dbruntime.Catalog, error) {
+	if c != nil && c.dbRuntimeRepo != nil {
+		return c.dbRuntimeRepo.Mutate(fn)
+	}
+	memDBRuntimeMu.Lock()
+	defer memDBRuntimeMu.Unlock()
+	if err := fn(&memDBRuntimes); err != nil {
+		return dbruntime.Catalog{}, err
+	}
+	return memDBRuntimes, nil
+}
+
 func (c *controllerAPI) ListDBRuntimes(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	dbRuntimeMu.Lock()
-	cat := dbRuntimeCat
-	dbRuntimeMu.Unlock()
+	cat, err := c.loadDBRuntimes()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
 	httphelper.JSON(w, 200, cat)
 }
 
@@ -54,13 +86,15 @@ func (c *controllerAPI) CreateDBRuntime(ctx context.Context, w http.ResponseWrit
 		respondWithError(w, err)
 		return
 	}
-	dbRuntimeMu.Lock()
-	defer dbRuntimeMu.Unlock()
-	if err := dbRuntimeCat.Create(r); err != nil {
+	cat, err := c.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		return cat.Create(r)
+	})
+	if err != nil {
 		respondWithError(w, ct.ValidationError{Field: "runtime", Message: err.Error()})
 		return
 	}
-	httphelper.JSON(w, 201, r)
+	created, _ := cat.Find(r.Engine, r.Name)
+	httphelper.JSON(w, 201, created)
 }
 
 func (c *controllerAPI) ReplaceDBRuntimes(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -73,13 +107,10 @@ func (c *controllerAPI) ReplaceDBRuntimes(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
-	if len(cat.Runtimes) == 0 {
-		respondWithError(w, ct.ValidationError{Field: "runtimes", Message: "catalog is empty"})
+	if err := c.replaceDBRuntimes(cat); err != nil {
+		respondWithError(w, err)
 		return
 	}
-	dbRuntimeMu.Lock()
-	dbRuntimeCat = cat
-	dbRuntimeMu.Unlock()
 	httphelper.JSON(w, 200, cat)
 }
 
@@ -98,9 +129,15 @@ func (c *controllerAPI) UpdateDBRuntime(ctx context.Context, w http.ResponseWrit
 	if n := strings.TrimSpace(body.Name); n != "" {
 		fields.Name = &n
 	}
-	dbRuntimeMu.Lock()
-	defer dbRuntimeMu.Unlock()
-	updated, err := dbRuntimeCat.Update(params.ByName("engine"), params.ByName("name"), fields)
+	var updated dbruntime.Runtime
+	_, err := c.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		got, err := cat.Update(params.ByName("engine"), params.ByName("name"), fields)
+		if err != nil {
+			return err
+		}
+		updated = got
+		return nil
+	})
 	if err != nil {
 		respondWithError(w, ct.ValidationError{Field: "runtime", Message: err.Error()})
 		return
@@ -114,9 +151,10 @@ func (c *controllerAPI) DeleteDBRuntime(ctx context.Context, w http.ResponseWrit
 		return
 	}
 	params, _ := ctxhelper.ParamsFromContext(ctx)
-	dbRuntimeMu.Lock()
-	defer dbRuntimeMu.Unlock()
-	if err := dbRuntimeCat.Remove(params.ByName("engine"), params.ByName("name")); err != nil {
+	_, err := c.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		return cat.Remove(params.ByName("engine"), params.ByName("name"))
+	})
+	if err != nil {
 		respondWithError(w, ct.ValidationError{Field: "runtime", Message: err.Error()})
 		return
 	}
@@ -135,9 +173,13 @@ func (c *controllerAPI) UpdateDBRuntimeSettings(ctx context.Context, w http.Resp
 		respondWithError(w, err)
 		return
 	}
-	dbRuntimeMu.Lock()
-	dbRuntimeCat.AllowCustomSizes = body.AllowCustomSizes
-	cat := dbRuntimeCat
-	dbRuntimeMu.Unlock()
+	cat, err := c.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		cat.AllowCustomSizes = body.AllowCustomSizes
+		return nil
+	})
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
 	httphelper.JSON(w, 200, cat)
 }

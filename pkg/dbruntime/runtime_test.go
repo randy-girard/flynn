@@ -19,6 +19,46 @@ func TestCanManageAllowsHostAndClusterAdmin(t *testing.T) {
 	}
 }
 
+func TestEnsureAndRemoveEngine(t *testing.T) {
+	var cat Catalog
+	if err := cat.EnsureEngine(EnginePostgres); err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Runtimes) != 3 {
+		t.Fatalf("postgres only: %d", len(cat.Runtimes))
+	}
+	if _, ok := cat.Find(EngineRedis, "small"); ok {
+		t.Fatal("redis must not appear until that plugin is installed")
+	}
+	small, _ := cat.Find(EnginePostgres, "small")
+	if !small.Builtin || small.Disk <= 0 {
+		t.Fatalf("postgres small %#v", small)
+	}
+	cpu := int64(999)
+	if _, err := cat.Update(EnginePostgres, "small", UpdateFields{CPU: &cpu}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.EnsureEngine(EnginePostgres); err != nil {
+		t.Fatal(err)
+	}
+	again, _ := cat.Find(EnginePostgres, "small")
+	if again.CPU != 999 {
+		t.Fatalf("ensure must not overwrite edited builtin: %+v", again)
+	}
+	if err := cat.EnsureEngine(EngineRedis); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.RemoveEngine(EnginePostgres); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cat.Find(EnginePostgres, "small"); ok {
+		t.Fatal("postgres still present")
+	}
+	if _, ok := cat.Find(EngineRedis, "small"); !ok {
+		t.Fatal("redis removed with postgres")
+	}
+}
+
 func TestBuiltinsDifferByEngine(t *testing.T) {
 	cat := BuiltinCatalog()
 	if len(cat.Runtimes) != len(Engines)*3 {
@@ -185,8 +225,14 @@ func TestCustomRuntimeFileRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cat.Runtimes) != len(Engines)*3 || cat.AllowCustomSizes {
-		t.Fatalf("missing file catalog %+v len %d", cat.AllowCustomSizes, len(cat.Runtimes))
+	if len(cat.Runtimes) != 0 || cat.AllowCustomSizes {
+		t.Fatalf("missing file must be empty, got %d runtimes custom=%t", len(cat.Runtimes), cat.AllowCustomSizes)
+	}
+	if err := cat.EnsureEngine(EngineMySQL); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.EnsureEngine(EngineRedis); err != nil {
+		t.Fatal(err)
 	}
 	if err := cat.Create(Runtime{Name: "cache", Engine: "mysql", CPU: 100, Memory: mib, Disk: gib}); err != nil {
 		t.Fatal(err)
@@ -262,5 +308,37 @@ func TestLoadRewritesLegacyMariaDBEngine(t *testing.T) {
 	cache, ok := cat.Find("mysql", "cache")
 	if !ok || cache.CPU != 10 || cache.Engine != EngineMySQL {
 		t.Fatalf("legacy cache %#v %v", cache, ok)
+	}
+}
+
+func TestMergeLiveAndFile(t *testing.T) {
+	file := Catalog{Runtimes: []Runtime{{Engine: EnginePostgres, Name: "small", CPU: 1, Memory: 1, Disk: 1, Builtin: true}}}
+	live := &Catalog{Runtimes: []Runtime{{Engine: EngineRedis, Name: "small", CPU: 1, Memory: 1, Disk: 1, Builtin: true}}}
+	got, seed := MergeLiveAndFile(live, file)
+	if seed {
+		t.Fatal("non-empty controller must not seed from file")
+	}
+	if _, ok := got.Find(EngineRedis, "small"); !ok {
+		t.Fatal("live catalog missing redis")
+	}
+	if _, ok := got.Find(EnginePostgres, "small"); ok {
+		t.Fatal("stale file must not replace live catalog")
+	}
+
+	empty := &Catalog{}
+	got, seed = MergeLiveAndFile(empty, file)
+	if !seed {
+		t.Fatal("empty controller must seed from host file")
+	}
+	if _, ok := got.Find(EnginePostgres, "small"); !ok {
+		t.Fatal("seed catalog missing postgres")
+	}
+
+	got, seed = MergeLiveAndFile(nil, file)
+	if seed {
+		t.Fatal("unreachable controller must not seed")
+	}
+	if _, ok := got.Find(EnginePostgres, "small"); !ok {
+		t.Fatal("file fallback missing postgres")
 	}
 }

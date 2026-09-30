@@ -135,6 +135,12 @@ var preparedStatements = map[string]string{
 	"runtime_profile_delete":                   runtimeProfileDeleteQuery,
 	"runtime_settings_select":                  runtimeSettingsSelectQuery,
 	"runtime_settings_update":                  runtimeSettingsUpdateQuery,
+	"db_runtime_list":                          dbRuntimeListQuery,
+	"db_runtime_insert":                        dbRuntimeInsertQuery,
+	"db_runtime_delete_all":                    dbRuntimeDeleteAllQuery,
+	"db_runtime_settings_select":               dbRuntimeSettingsSelectQuery,
+	"db_runtime_settings_lock":                 dbRuntimeSettingsLockQuery,
+	"db_runtime_settings_update":               dbRuntimeSettingsUpdateQuery,
 	"app_sync_gc_keep":                         appSyncGCKeepQuery,
 	"github_app_config_select":                 githubAppConfigSelectQuery,
 	"github_app_config_update":                 githubAppConfigUpdateQuery,
@@ -829,6 +835,18 @@ SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob
 	runtimeSettingsUpdateQuery = `
 UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
+	dbRuntimeListQuery = `
+SELECT engine, name, cpu, memory, disk, builtin FROM db_runtimes ORDER BY engine, name`
+	dbRuntimeInsertQuery = `
+INSERT INTO db_runtimes (engine, name, cpu, memory, disk, builtin)
+VALUES ($1, $2, $3, $4, $5, $6)`
+	dbRuntimeDeleteAllQuery      = `DELETE FROM db_runtimes`
+	dbRuntimeSettingsSelectQuery = `
+SELECT allow_custom_sizes FROM db_runtime_settings WHERE id = 1`
+	dbRuntimeSettingsLockQuery = `
+SELECT allow_custom_sizes FROM db_runtime_settings WHERE id = 1 FOR UPDATE`
+	dbRuntimeSettingsUpdateQuery = `
+UPDATE db_runtime_settings SET allow_custom_sizes = $1, updated_at = now() WHERE id = 1`
 	appSyncGCKeepQuery = `
 UPDATE apps SET meta = jsonb_set(
 	CASE WHEN meta = 'null' OR meta IS NULL THEN '{}'::jsonb ELSE meta END,

@@ -21,16 +21,18 @@ List database runtimes (CPU, memory, and disk per engine).
 These are not app process runtimes. App processes use flynn-host runtime
 and flynn limit:runtime. Database runtimes size a new resource:add instance.
 
-Presets live in memory. Creates, updates, and the custom-size flag are
-stored in /etc/flynn/db-runtimes.json (override with FLYNN_DB_RUNTIMES).
-A missing file uses builtin small, medium, and large. Changing a definition
-does not resize instances already created from it. There is no in-place resize.
+Presets are published when a database plugin is installed
+(flynn-host db-runtime:ensure). Creates, updates, and the custom-size flag
+live in the cluster controller database. /etc/flynn/db-runtimes.json
+(override with FLYNN_DB_RUNTIMES) is a host cache used to seed an empty
+controller catalog after an update. Changing a definition does not resize
+instances already created from it. There is no in-place resize.
 `
 	dbRuntimeCreateUsage = `
 usage: flynn-host db-runtime:create --memory <bytes> --cpu <milli> --disk <bytes> <engine> <name>
 
-Create a database runtime for one engine (postgres, redis, mariadb, mongodb, kafka, clickhouse).
-mysql is accepted as mariadb. Memory and disk are bytes or a size like 512MB or 10GB.
+Create a database runtime for one engine (postgres, redis, mysql, mongodb, kafka, clickhouse).
+mariadb is accepted as mysql. Memory and disk are bytes or a size like 512MB or 10GB.
 CPU is milliCPU.
 
 Options:
@@ -57,7 +59,20 @@ Options:
 	dbRuntimeRemoveUsage = `
 usage: flynn-host db-runtime:remove <engine> <name>
 
-Remove a custom database runtime. Builtin small, medium, and large cannot be removed.
+Remove a custom database runtime. Builtin small, medium, and large cannot be removed this way; uninstall the database plugin or use db-runtime:drop-engine.
+`
+	dbRuntimeEnsureUsage = `
+usage: flynn-host db-runtime:ensure <engine>
+
+Publish small, medium, and large for one database engine (postgres, redis,
+mysql, mongodb, kafka, clickhouse). Database plugin install hooks call this.
+Existing sizes for that engine are left as-is.
+`
+	dbRuntimeDropEngineUsage = `
+usage: flynn-host db-runtime:drop-engine <engine>
+
+Remove every database runtime for one engine, including builtins. Database
+plugin uninstall hooks call this.
 `
 	dbRuntimeAllowCustomUsage = `
 usage: flynn-host db-runtime:allow-custom [--disable]
@@ -73,13 +88,47 @@ func init() {
 	Register("db-runtime:create", runDBRuntimeCreate, dbRuntimeCreateUsage)
 	Register("db-runtime:update", runDBRuntimeUpdate, dbRuntimeUpdateUsage)
 	Register("db-runtime:remove", runDBRuntimeRemove, dbRuntimeRemoveUsage)
+	Register("db-runtime:ensure", runDBRuntimeEnsure, dbRuntimeEnsureUsage)
+	Register("db-runtime:drop-engine", runDBRuntimeDropEngine, dbRuntimeDropEngineUsage)
 	Register("db-runtime:allow-custom", runDBRuntimeAllowCustom, dbRuntimeAllowCustomUsage)
 }
 
 func dbRuntimeCatalog() (dbruntime.Catalog, string, error) {
 	path := dbruntime.Path()
-	cat, err := dbruntime.Load(path)
-	return cat, path, err
+	file, err := dbruntime.Load(path)
+	if err != nil {
+		return dbruntime.Catalog{}, path, err
+	}
+	cat, seed := dbruntime.MergeLiveAndFile(liveControllerDBRuntimes(), file)
+	if seed {
+		publishDBRuntimes(cat)
+	}
+	return cat, path, nil
+}
+
+func liveControllerDBRuntimes() *dbruntime.Catalog {
+	client, err := controllerClient()
+	if err != nil {
+		return nil
+	}
+	cat, err := client.ListDBRuntimes()
+	if err != nil || cat == nil {
+		return nil
+	}
+	return cat
+}
+
+func seedControllerDBRuntimesFromHostFile() {
+	path := dbruntime.Path()
+	file, err := dbruntime.Load(path)
+	if err != nil || len(file.Runtimes) == 0 {
+		return
+	}
+	live := liveControllerDBRuntimes()
+	if live == nil || len(live.Runtimes) > 0 {
+		return
+	}
+	publishDBRuntimes(file)
 }
 
 func runDBRuntimeList(_ *docopt.Args) error {
@@ -136,6 +185,48 @@ func runDBRuntimeCreate(args *docopt.Args) error {
 		return err
 	}
 	fmt.Printf("%s/%s\n", eng, r.Name)
+	return nil
+}
+
+func runDBRuntimeEnsure(args *docopt.Args) error {
+	engine := args.String["<engine>"]
+	cat, path, err := dbRuntimeCatalog()
+	if err != nil {
+		return err
+	}
+	if err := cat.EnsureEngine(engine); err != nil {
+		return err
+	}
+	if err := dbruntime.Save(path, cat); err != nil {
+		return err
+	}
+	publishDBRuntimes(cat)
+	eng, err := dbruntime.NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("ensured %s small, medium, large\n", eng)
+	return nil
+}
+
+func runDBRuntimeDropEngine(args *docopt.Args) error {
+	engine := args.String["<engine>"]
+	cat, path, err := dbRuntimeCatalog()
+	if err != nil {
+		return err
+	}
+	if err := cat.RemoveEngine(engine); err != nil {
+		return err
+	}
+	if err := dbruntime.Save(path, cat); err != nil {
+		return err
+	}
+	publishDBRuntimes(cat)
+	eng, err := dbruntime.NormalizeEngine(engine)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("removed %s database runtimes\n", eng)
 	return nil
 }
 
@@ -210,10 +301,10 @@ func runDBRuntimeAllowCustom(args *docopt.Args) error {
 	return nil
 }
 
-// publishDBRuntimes copies the host catalog to the controller. flynn-host is
-// on the cluster and uses the controller key, so this is allowed. Plugin jobs
-// started by flynn-host use that same key against POST /db-runtimes. A missing
-// controller (unit tests, a host that is not bootstrapped) keeps the file.
+// publishDBRuntimes copies the catalog to the controller database. flynn-host
+// is on the cluster and uses the controller key, so this is allowed. Plugin
+// jobs started by flynn-host use that same key. A missing controller (unit
+// tests, a host that is not bootstrapped) keeps the host file cache.
 func publishDBRuntimes(cat dbruntime.Catalog) {
 	client, err := controllerClient()
 	if err != nil {

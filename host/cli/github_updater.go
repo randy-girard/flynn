@@ -1618,6 +1618,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	} else {
 		fmt.Println("System apps and container images updated successfully")
 	}
+	seedControllerDBRuntimesFromHostFile()
 	return nil
 }
 

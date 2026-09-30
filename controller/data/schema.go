@@ -1225,6 +1225,33 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		)`,
 		`INSERT INTO cluster_settings (id) VALUES (1)`,
 	)
+	migrations.Add(67,
+		`CREATE TABLE db_runtimes (
+			runtime_id uuid PRIMARY KEY DEFAULT uuid_generate_v4(),
+			engine text NOT NULL,
+			name text NOT NULL,
+			cpu bigint NOT NULL CHECK (cpu > 0),
+			memory bigint NOT NULL CHECK (memory > 0),
+			disk bigint NOT NULL CHECK (disk > 0),
+			builtin boolean NOT NULL DEFAULT false,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE UNIQUE INDEX db_runtimes_engine_name_key ON db_runtimes (engine, name)`,
+		`CREATE TRIGGER set_updated_at_db_runtimes
+			BEFORE UPDATE ON db_runtimes FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		`CREATE TABLE db_runtime_settings (
+			id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			allow_custom_sizes boolean NOT NULL DEFAULT false,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+		`CREATE TRIGGER set_updated_at_db_runtime_settings
+			BEFORE UPDATE ON db_runtime_settings FOR EACH ROW
+			EXECUTE PROCEDURE set_updated_at_column()`,
+		`INSERT INTO db_runtime_settings (id, allow_custom_sizes) VALUES (1, false)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

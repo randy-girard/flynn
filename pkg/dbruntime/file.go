@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	// DefaultPath is the host catalog. It is not a controller table.
-	// A missing file means the builtin presets and custom sizes disabled.
+	// DefaultPath is the host catalog cache. The controller table is the
+	// cluster source of truth. A missing file is an empty catalog.
 	DefaultPath = "/etc/flynn/db-runtimes.json"
 
 	// EnvFile overrides DefaultPath for the host CLI and for flynn resource:add.
@@ -25,14 +25,14 @@ func Path() string {
 	return DefaultPath
 }
 
-// Load reads a catalog file. A missing file returns BuiltinCatalog.
-// Builtin small/medium/large stay present; file entries override their
-// CPU, memory, and disk. Other entries are custom runtimes.
+// Load reads a catalog file. A missing file is empty: database plugins add
+// their engine presets on install. File rows keep builtin when they are the
+// small/medium/large names for that engine.
 func Load(path string) (Catalog, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return BuiltinCatalog(), nil
+			return EmptyCatalog(), nil
 		}
 		return Catalog{}, err
 	}
@@ -40,8 +40,7 @@ func Load(path string) (Catalog, error) {
 	if err := json.Unmarshal(raw, &file); err != nil {
 		return Catalog{}, err
 	}
-	out := BuiltinCatalog()
-	out.AllowCustomSizes = file.AllowCustomSizes
+	out := Catalog{AllowCustomSizes: file.AllowCustomSizes}
 	for _, r := range file.Runtimes {
 		eng, err := NormalizeEngine(r.Engine)
 		if err != nil {
@@ -52,19 +51,23 @@ func Load(path string) (Catalog, error) {
 		if err := Validate(r); err != nil {
 			return Catalog{}, err
 		}
-		if i := indexOf(out.Runtimes, r.Engine, r.Name); i >= 0 && out.Runtimes[i].Builtin {
-			out.Runtimes[i].CPU = r.CPU
-			out.Runtimes[i].Memory = r.Memory
-			out.Runtimes[i].Disk = r.Disk
-			continue
-		}
-		r.Builtin = false
 		if indexOf(out.Runtimes, r.Engine, r.Name) >= 0 {
 			return Catalog{}, errors.New("duplicate database runtime " + r.Engine + "/" + r.Name)
+		}
+		if isBuiltinName(r.Name) {
+			r.Builtin = true
 		}
 		out.Runtimes = append(out.Runtimes, r)
 	}
 	return out, nil
+}
+
+func isBuiltinName(name string) bool {
+	switch name {
+	case "small", "medium", "large":
+		return true
+	}
+	return false
 }
 
 // Save writes the full catalog, including builtins, so the next Load is stable.
