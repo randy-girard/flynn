@@ -78,8 +78,24 @@ func TestResolveCommandPluginSpaceAlias(t *testing.T) {
 		t.Fatalf("plugin --check got %q %q from=%q", name, args, from)
 	}
 	name, args, from = ResolveCommand("plugin", []string{"list", "--check"})
-	if name != "plugin:list" || from != "plugin list" || !reflect.DeepEqual(args, []string{"--check"}) {
+	if name != "plugin" || from != "plugin list" || !reflect.DeepEqual(args, []string{"--check"}) {
 		t.Fatalf("plugin list --check got %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin:help", nil)
+	if name != "plugin:list" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("plugin:help %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("plugin:list", []string{"--check"})
+	if name != "plugin:list" || !reflect.DeepEqual(args, []string{"--check"}) {
+		t.Fatalf("plugin:list %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("volume:help", nil)
+	if name != "volume:list" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("volume:help %q %q from=%q", name, args, from)
+	}
+	name, args, from = ResolveCommand("volume:list", nil)
+	if name != "volume:list" || len(args) != 0 {
+		t.Fatalf("volume:list %q %q from=%q", name, args, from)
 	}
 }
 
@@ -108,11 +124,11 @@ func TestHostCommandNamesHaveNoSpaces(t *testing.T) {
 
 func TestHostNestedCommandsAreRegistered(t *testing.T) {
 	want := []string{
-		"volume:list", "volume:create", "volume:delete", "volume:gc",
+		"volume", "volume:list", "volume:create", "volume:delete", "volume:gc",
 		"disk:reclaim",
 		"log-sink", "log-sink:add", "log-sink:list", "log-sink:remove",
 		"otel", "otel:add", "otel:remove",
-		"plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",
+		"plugin", "plugin:install", "plugin:list", "plugin:update", "plugin:update-all", "plugin:uninstall",
 		"plugin:credentials", "plugin:credentials:set", "plugin:credentials:unset", "plugin:credentials:show",
 		"plugin:credentials-set", "plugin:credentials-unset", "plugin:credentials-show",
 		"plugin:route",
@@ -127,7 +143,8 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"runtime", "runtime:create", "runtime:update",
 		"runtime:remove", "runtime:allow-custom", "runtime:reserve",
 		"db-runtime", "db-runtime:create", "db-runtime:update",
-		"db-runtime:remove", "db-runtime:allow-custom",
+		"db-runtime:remove", "db-runtime:ensure", "db-runtime:drop-engine",
+		"db-runtime:allow-custom",
 		"events", "events:visible",
 		"route:add",
 		"firewall", "firewall:sync", "firewall:peer:add", "firewall:peer:remove",

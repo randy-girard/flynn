@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/randy-girard/flynn/pkg/clihelp"
 )
 
 // topAliases rewrites a single-token command (flynn-host plugin → plugin:list).
@@ -31,7 +33,7 @@ var hyphenAliases = map[string]string{
 // subAliases rewrites flynn-host <noun> <verb> to flynn-host <noun>:<verb>.
 var subAliases = map[string]map[string]string{
 	"volume": {
-		"list":    "volume:list",
+		"list":    "volume",
 		"create":  "volume:create",
 		"delete":  "volume:delete",
 		"destroy": "volume:delete",
@@ -69,7 +71,7 @@ var subAliases = map[string]map[string]string{
 		"update":     "plugin:update",
 		"update-all": "plugin:update-all",
 		"uninstall":  "plugin:uninstall",
-		"list":       "plugin:list",
+		"list":       "plugin",
 	},
 	"plugin:credentials": {
 		"set":   "plugin:credentials:set",
@@ -124,6 +126,8 @@ var subAliases = map[string]map[string]string{
 		"update":       "db-runtime:update",
 		"remove":       "db-runtime:remove",
 		"delete":       "db-runtime:remove",
+		"ensure":       "db-runtime:ensure",
+		"drop-engine":  "db-runtime:drop-engine",
 		"allow-custom": "db-runtime:allow-custom",
 	},
 	"blobstore": {
@@ -166,6 +170,7 @@ func ResolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
+	name, args = clihelp.RewriteHelpList(name, args)
 	if len(args) >= 2 {
 		if subs, ok := subAliases[name+":"+args[0]]; ok {
 			if target, ok := subs[args[1]]; ok {

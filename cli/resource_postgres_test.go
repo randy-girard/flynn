@@ -77,8 +77,11 @@ type resourceLookupClient struct {
 	allList  []*ct.Resource
 }
 
-func (c resourceLookupClient) GetProvider(string) (*ct.Provider, error) {
-	return c.provider, nil
+func (c resourceLookupClient) GetProvider(id string) (*ct.Provider, error) {
+	if c.provider != nil && (id == c.provider.ID || id == c.provider.Name) {
+		return c.provider, nil
+	}
+	return nil, controller.ErrNotFound
 }
 
 func (c resourceLookupClient) AppResourceList(string) ([]*ct.Resource, error) {
@@ -109,6 +112,44 @@ func TestLookupProviderResourceByName(t *testing.T) {
 	}
 	if _, err := lookupProviderResource(c, "shop", "postgres", "missing"); err == nil {
 		t.Fatal("missing must fail")
+	}
+}
+
+func TestResolveRemoveTargetByNameOnly(t *testing.T) {
+	res := &ct.Resource{
+		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
+		ProviderID: "prov-1",
+		Env:        map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp"},
+	}
+	c := resourceLookupClient{
+		provider: &ct.Provider{ID: "prov-1", Name: "postgres"},
+		appList:  []*ct.Resource{res},
+	}
+	got, provider, err := resolveRemoveTarget(c, "shop", "pg-orchid-xkhthp", "")
+	if err != nil || got == nil || got.ID != res.ID || provider != "postgres" {
+		t.Fatalf("name only: %+v %q %v", got, provider, err)
+	}
+	got, provider, err = resolveRemoveTarget(c, "shop", "postgres", "pg-orchid-xkhthp")
+	if err != nil || got == nil || got.ID != res.ID || provider != "postgres" {
+		t.Fatalf("provider+name: %+v %q %v", got, provider, err)
+	}
+}
+
+func TestResourceFollowerNamesBlockLeader(t *testing.T) {
+	leader := &ct.Resource{
+		ID:  "leader",
+		Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp", "POSTGRES_ROLE": "primary"},
+	}
+	follower := &ct.Resource{
+		ID:  "follower",
+		Env: map[string]string{"FLYNN_POSTGRES": "pg-lagoon-abcdef", "POSTGRES_ROLE": "follower", "POSTGRES_LEADER": "pg-orchid-xkhthp"},
+	}
+	names := resourceFollowerNames(leader, []*ct.Resource{leader, follower})
+	if len(names) != 1 || names[0] != "pg-lagoon-abcdef" {
+		t.Fatalf("followers %q", names)
+	}
+	if names := resourceFollowerNames(follower, []*ct.Resource{leader, follower}); len(names) != 0 {
+		t.Fatalf("follower itself %q", names)
 	}
 }
 

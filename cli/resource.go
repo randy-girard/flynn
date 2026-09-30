@@ -76,11 +76,13 @@ Detach a resource from this app and remove the attachment env var.
 <resource> is the NAME or ID from flynn resource.
 `)
 	register("resource:remove", runResourceRemove, `
-usage: flynn resource:remove <provider> [<resource>]
+usage: flynn resource:remove [<provider>] [<resource>]
 
-Remove the existing <resource> provided by <provider>. <resource> is the NAME
-or ID from flynn resource. Resolves automatically if the app has exactly one
-resource for <provider>.
+Remove a resource. <resource> is the NAME or ID from flynn resource
+(pg-orchid-xkhthp). flynn resource:remove pg-orchid-xkhthp is enough when
+that name is unique on the app. With only <provider>, removes the unique
+resource for that provider. A leader cannot be removed while followers are
+still linked; unfollow or remove those replicas first.
 `)
 	register("resource:expose", runResourceExpose, `
 usage: flynn resource:expose <provider> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
@@ -537,24 +539,17 @@ func runResourceDetach(args *docopt.Args, client controller.Client) error {
 }
 
 func runResourceRemove(args *docopt.Args, client controller.Client) error {
-	provider := args.String["<provider>"]
-	resource := args.String["<resource>"]
-
-	var err error
-	if resource == "" {
-		resource, err = resolveResource(provider, client)
-		if err != nil {
-			return err
-		}
-	} else {
-		resRef, err := lookupProviderResource(client, mustApp(), provider, resource)
-		if err != nil {
-			return err
-		}
-		resource = resRef.ID
+	providerArg := strings.TrimSpace(args.String["<provider>"])
+	resourceArg := strings.TrimSpace(args.String["<resource>"])
+	resRef, providerName, err := resolveRemoveTarget(client, mustApp(), providerArg, resourceArg)
+	if err != nil {
+		return err
+	}
+	if names := resourceFollowerNames(resRef, appResourcesOrNil(client, mustApp())); len(names) > 0 {
+		return fmt.Errorf("cannot remove %s while followers are still linked (%s); unfollow or remove those resources first", resourceDisplayName(resRef), strings.Join(names, ", "))
 	}
 
-	res, err := client.DeleteResource(provider, resource)
+	res, err := client.DeleteResource(providerName, resRef.ID)
 	if err != nil {
 		return err
 	}
@@ -582,6 +577,134 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 	log.Printf("Deleted resource %s, created release %s.", resourceDisplayName(res), releaseID)
 
 	return nil
+}
+
+func appResourcesOrNil(client controller.Client, app string) []*ct.Resource {
+	if client == nil || strings.TrimSpace(app) == "" {
+		return nil
+	}
+	list, err := client.AppResourceList(app)
+	if err != nil {
+		return nil
+	}
+	return list
+}
+
+// resolveRemoveTarget accepts provider+NAME/ID, a unique provider, or a unique
+// resource NAME/ID with no provider (flynn resource:remove pg-orchid-xkhthp).
+func resolveRemoveTarget(client controller.Client, app, provider, resource string) (*ct.Resource, string, error) {
+	provider = strings.TrimSpace(provider)
+	resource = strings.TrimSpace(resource)
+	if provider == "" && resource == "" {
+		return nil, "", fmt.Errorf("resource NAME or ID is required; see flynn resource")
+	}
+	if resource != "" {
+		if provider == "" {
+			res, err := lookupAppResource(client, app, resource)
+			if err != nil {
+				return nil, "", err
+			}
+			p, err := client.GetProvider(res.ProviderID)
+			if err != nil {
+				return nil, "", err
+			}
+			return res, p.Name, nil
+		}
+		res, err := lookupProviderResource(client, app, provider, resource)
+		if err != nil {
+			return nil, "", err
+		}
+		return res, provider, nil
+	}
+	if p, err := client.GetProvider(provider); err == nil && p != nil {
+		id, err := resolveResource(provider, client)
+		if err != nil {
+			return nil, "", err
+		}
+		res, err := lookupProviderResource(client, app, provider, id)
+		if err != nil {
+			return nil, "", err
+		}
+		return res, provider, nil
+	}
+	res, err := lookupAppResource(client, app, provider)
+	if err != nil {
+		return nil, "", err
+	}
+	p, err := client.GetProvider(res.ProviderID)
+	if err != nil {
+		return nil, "", err
+	}
+	return res, p.Name, nil
+}
+
+func lookupAppResource(client controller.Client, app, ref string) (*ct.Resource, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("resource is required")
+	}
+	list, err := client.AppResourceList(app)
+	if err != nil {
+		return nil, err
+	}
+	var got []*ct.Resource
+	for _, r := range list {
+		if resourceMatchesRef(r, ref) {
+			got = append(got, r)
+		}
+	}
+	if len(got) == 1 {
+		return got[0], nil
+	}
+	if len(got) > 1 {
+		return nil, fmt.Errorf("multiple resources match %q; use the ID from flynn resource", ref)
+	}
+	return nil, fmt.Errorf("resource %q not found; see flynn resource", ref)
+}
+
+func resourceFollowerNames(leader *ct.Resource, list []*ct.Resource) []string {
+	if leader == nil {
+		return nil
+	}
+	name := resourceDisplayName(leader)
+	var out []string
+	seen := map[string]bool{}
+	for _, r := range list {
+		if r == nil || r.ID == leader.ID || !resourceFollowsLeader(r, leader, name) {
+			continue
+		}
+		n := resourceDisplayName(r)
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	return out
+}
+
+func resourceFollowsLeader(res, leader *ct.Resource, leaderName string) bool {
+	if res == nil || res.Env == nil || leaderName == "" {
+		return false
+	}
+	env := res.Env
+	for _, k := range []string{"POSTGRES_LEADER", "MYSQL_LEADER", "REDIS_LEADER", "CLICKHOUSE_LEADER", "KAFKA_LEADER"} {
+		if strings.EqualFold(strings.TrimSpace(env[k]), leaderName) {
+			return true
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(env["POSTGRES_ROLE"]), "follower") && strings.EqualFold(strings.TrimSpace(env["POSTGRES_LEADER"]), leaderName) {
+		return true
+	}
+	for k, v := range env {
+		if !strings.Contains(k, "PRIMARY") {
+			continue
+		}
+		if strings.Contains(v, leaderName) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveResource(provider string, client controller.Client) (string, error) {

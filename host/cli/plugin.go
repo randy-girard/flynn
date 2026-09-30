@@ -133,6 +133,7 @@ usage: flynn-host plugin:list [--known] [--check]
 List plugins installed on this cluster, including the installed VERSION
 (GitHub tag). --check queries GitHub for the highest compatible tag for
 this Flynn version and shows UPDATE and STATUS (current, update, or -).
+The same as flynn-host plugin. plugin:help is the same as plugin --help.
 
 Options:
 	--known            List the first-party catalog Flynn can plugin:install (including enterprise).
@@ -140,6 +141,27 @@ Options:
 
 Examples:
 
+    $ flynn-host plugin
+    $ flynn-host plugin:list
+    $ flynn-host plugin:list --check
+    $ flynn-host plugin:list --known
+`
+
+const pluginBareListUsage = `
+usage: flynn-host plugin [--known] [--check]
+
+List plugins installed on this cluster, including the installed VERSION
+(GitHub tag). --check queries GitHub for the highest compatible tag for
+this Flynn version and shows UPDATE and STATUS (current, update, or -).
+plugin:list is the same command. plugin:help is the same as plugin --help.
+
+Options:
+	--known            List the first-party catalog Flynn can plugin:install (including enterprise).
+	--check            Compare installed versions to published GitHub releases
+
+Examples:
+
+    $ flynn-host plugin
     $ flynn-host plugin:list
     $ flynn-host plugin:list --check
     $ flynn-host plugin:list --known
@@ -234,6 +256,7 @@ func init() {
 	Register("plugin:update", runPluginUpdate, pluginUpdateUsage)
 	Register("plugin:update-all", runPluginUpdateAll, pluginUpdateAllUsage)
 	Register("plugin:uninstall", runPluginUninstall, pluginUninstallUsage)
+	Register("plugin", runPluginList, pluginBareListUsage)
 	Register("plugin:list", runPluginList, pluginListUsage)
 	Register("plugin:credentials", runPluginCredentials, pluginCredentialsUsage)
 	Register("plugin:credentials:set", runPluginCredentialsSet, pluginCredentialsSetUsage)

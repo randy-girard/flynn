@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -75,6 +76,7 @@ var subAliases = map[string]map[string]string{
 		"remove": "route:remove",
 	},
 	"resource": {
+		"list":     "resource",
 		"add":      "resource:add",
 		"remove":   "resource:remove",
 		"expose":   "resource:expose",
@@ -153,7 +155,7 @@ var subAliases = map[string]map[string]string{
 		"add": "git:remote",
 	},
 	"plugin": {
-		"list": "plugin:list",
+		"list": "plugin",
 	},
 	"log-sink": {
 		"add":    "log-sink:add",
@@ -182,6 +184,7 @@ func resolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
+	name, args = clihelp.RewriteHelpList(name, args)
 	if len(args) > 0 {
 		if subs, ok := subAliases[name]; ok {
 			if target, ok := subs[args[0]]; ok {

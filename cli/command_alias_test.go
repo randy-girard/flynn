@@ -138,3 +138,26 @@ func TestPluginColonName(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestResolveCommandHelpAndList(t *testing.T) {
+	name, args, from := resolveCommand("resource:help", nil)
+	if name != "resource" || from != "" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("resource:help %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("resource:list", []string{"--json"})
+	if name != "resource" || from != "" || !reflect.DeepEqual(args, []string{"--json"}) {
+		t.Fatalf("resource:list %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("plugin:help", nil)
+	if name != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("plugin:help %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("plugin:list", []string{"--check"})
+	if name != "plugin" || from != "" || !reflect.DeepEqual(args, []string{"--check"}) {
+		t.Fatalf("plugin:list %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("token:list", nil)
+	if name != "token" || from != "" || len(args) != 0 {
+		t.Fatalf("token:list %q %q from=%q", name, args, from)
+	}
+}

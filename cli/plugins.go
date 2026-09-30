@@ -11,12 +11,31 @@ import (
 )
 
 func init() {
-	register("plugin:list", runPlugins, `
-usage: flynn plugin:list [--known] [--check]
+	pluginListUsage := `
+usage: flynn plugin [--known] [--check]
 
 List plugins installed on the current cluster, including the installed VERSION
 (GitHub tag). --check queries GitHub for the highest compatible tag for this
-Flynn version and shows UPDATE and STATUS (current, update, or -).
+Flynn version and shows UPDATE and STATUS (current, update, or -). plugin:list
+is the same command. plugin:help is the same as plugin --help.
+
+--known prints the first-party catalog Flynn knows how to install (name,
+GitHub repo, description) without talking to the cluster. Operators install
+those names with flynn-host plugin:install, including enterprise. flynn-host
+plugin:list --known is the same output.
+
+The installed list comes from the controller (plugin apps the credential can
+see), not from a local checkout. After install, plugin CLI commands also
+appear in flynn help when the plugin is a resource provider (or sets
+cli.user). kind: app system plugins are listed here but are not user flynn
+commands.
+`
+	register("plugin", runPlugins, pluginListUsage)
+	register("plugin:list", runPlugins, `
+usage: flynn plugin:list [--known] [--check]
+
+List plugins installed on the current cluster. The same as flynn plugin.
+plugin:help is the same as plugin --help.
 
 --known prints the first-party catalog Flynn knows how to install (name,
 GitHub repo, description) without talking to the cluster. Operators install

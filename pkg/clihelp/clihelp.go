@@ -14,6 +14,25 @@ type Item struct {
 	Desc string
 }
 
+// RewriteHelpList turns noun:help into noun --help and noun:list into noun
+// (the bare command). flynn resource:list is flynn resource; flynn pg:help
+// is flynn pg --help. Nested names keep the prefix (kafka:topics:help).
+func RewriteHelpList(name string, args []string) (string, []string) {
+	if name == "" {
+		return name, args
+	}
+	if base, ok := strings.CutSuffix(name, ":help"); ok && base != "" {
+		out := make([]string, 0, 1+len(args))
+		out = append(out, "--help")
+		out = append(out, args...)
+		return base, out
+	}
+	if base, ok := strings.CutSuffix(name, ":list"); ok && base != "" {
+		return base, args
+	}
+	return name, args
+}
+
 // StripHelp returns args without -h / --help. "--" stops scanning.
 func StripHelp(args []string) []string {
 	out := make([]string, 0, len(args))

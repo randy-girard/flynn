@@ -20,10 +20,22 @@ import (
 )
 
 func init() {
+	Register("volume", runVolumeList, `
+usage: flynn-host volume
+
+Display a list of all volumes of known Flynn hosts. volume:list is the same
+command. volume:help is the same as volume --help.
+
+Examples:
+
+    $ flynn-host volume
+    $ flynn-host volume:list
+`)
 	Register("volume:list", runVolumeList, `
 usage: flynn-host volume:list
 
-Display a list of all volumes of known Flynn hosts.
+Display a list of all volumes of known Flynn hosts. The same as flynn-host
+volume. volume:list:help is the same as volume:list --help.
 
 Examples:
 

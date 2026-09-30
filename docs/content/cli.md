@@ -81,7 +81,7 @@ flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
 
 `-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
 
-Run `flynn` or `flynn --help` for parent commands (including installed plugins under **Plugins:**). `flynn help env` or `flynn env --help` lists that command and its subcommands. The same shape applies to plugins: `flynn help redis` / `flynn redis --help` lists `dump`, `cli`, and `restore`. `flynn plugin:list` shows what the current cluster credential can see.
+Run `flynn` or `flynn --help` for parent commands (including installed plugins under **Plugins:**). `flynn help env` or `flynn env --help` lists that command and its subcommands. Every command also accepts `:help` as `--help` (`flynn env:help`) and `:list` as the bare command (`flynn env:list` is `flynn env`). The same shape applies to plugins: `flynn help redis` / `flynn redis --help` / `flynn redis:help` lists `dump`, `cli`, and `restore`; `flynn redis` and `flynn redis:list` list that app's redis resources. `flynn plugin` / `flynn plugin:list` shows what the current cluster credential can see.
 
 ### Apps and deploys
 
@@ -112,15 +112,15 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `route` / `route:add http\|tcp` / `route:update` / `route:remove` | HTTP and TCP(/TLS) routes, `--tls-mode`, `--leader`; path-based HTTP routes need `flynn-host route:add` |
 | `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:status` | Automatic HTTPS for a hostname or HTTP route id (requires the Let's Encrypt plugin) |
-| `resource` / `resource:add <provider>` / `resource:remove <provider> [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse. `postgres` is the tenant plugin (`flynn-host plugin:install postgres`), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom` |
+| `resource` / `resource:add <provider>` / `resource:remove [<provider>] [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse. `resource:remove` accepts the NAME from `flynn resource` (`pg-orchid-xkhthp`) with or without the provider. A leader cannot be removed while followers are still linked. `postgres` is the tenant plugin (`flynn-host plugin:install postgres`), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom` |
 | `resource:attach` / `resource:detach` | Attach or detach an existing resource (`--as` sets the env name for postgres) |
 | `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
-| `pg:info` / `pg:follow` / `pg:wait` / `pg:promote` / `pg:unfollow` / `pg:psql` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. There is no user `flynn pg:dump`. The platform database is `flynn-host pg:psql` |
+| `pg` / `pg:list` / `pg:info` / `pg:follow` / `pg:wait` / `pg:promote` / `pg:unfollow` / `pg:psql` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. `pg` and `pg:list` list that app's postgres resources. `pg:help` is `pg --help`. There is no user `flynn pg:dump`. The platform database is `flynn-host pg:psql` |
 | `autoscale` / `autoscale:enable` / `autoscale:disable` / `autoscale:set` / `autoscale:info` | Web-dyno scale on router HTTP p95 (after `flynn-host plugin:install autoscale`) |
 | `mysql:cli` / `mongodb:cli` / `redis:cli` (+ `:dump` / `:restore`) | Consoles, dump, restore (plugin commands after install) |
 | `kafka:topics` / `kafka:topics:create` / `kafka:consumer-groups` / `kafka:consumer-groups:create` | Topics and consumer groups (after plugin install; see [Kafka](databases/kafka.md#managing-consumer-groups)) |
 | `clickhouse:cli` / `clickhouse:databases` / `clickhouse:databases:create` | Databases and client (after plugin install) |
-| `scheduler:list` / `scheduler:add` / `scheduler:remove` / … | Cron and interval jobs for an app (after the scheduler plugin is installed) |
+| `scheduler` / `scheduler:list` / `scheduler:add` / `scheduler:remove` / … | Cron and interval jobs for an app (after the scheduler plugin is installed). `scheduler` and `scheduler:list` are the same; `scheduler:help` is `scheduler --help` |
 | `log-sink` / `log-sink:add` / `log-sink:remove` | Per-app syslog sinks (`flynn-host log-sink` for cluster logs; `flynn-host otel` after installing the otel plugin). `logsink` is an alias. |
 | `volume` / `volume:show` / `volume:decommission` | Persistent volumes attached to the app |
 | `provider` / `provider:add <name> <url>` | Resource providers (`provider:add` is how plugins register themselves; rarely typed by hand) |
@@ -131,7 +131,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `cluster` / `cluster:add` / `cluster:default` / `cluster:remove` / `cluster:refresh` / `cluster:ca` | Registered clusters in `~/.flynnrc`. `cluster:add` stores a TLS pin and the Flynn CA (`~/.flynn/ca-certs/<name>.pem`); git uses `http.<git-url>.sslCAInfo` so `git push` does not need `--insecure`. `cluster:ca` prints that PEM. After Let's Encrypt on system routes, `cluster:refresh --clear` uses public Web PKI. |
 | `cluster:backup` / `cluster:migrate-domain` / `cluster:log-sink` | Hidden compatibility commands; they still run but print that the operation moved to `flynn-host backup`, `flynn-host migrate-domain`, and `flynn-host log-sink` |
-| `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`, plus a footer for private plugins such as `billing`; `plugins` is an alias) |
+| `plugin` / `plugin:list` | Plugins installed on this cluster (`VERSION` is the installed GitHub tag; `--check` compares to the newest compatible published tag and shows `UPDATE`/`STATUS`; `--known` lists the first-party catalog and GitHub repos, including `enterprise`, plus a footer for private plugins such as `billing`; `plugins` is an alias). `plugin:list` is the same as `plugin`; `plugin:help` is `plugin --help` |
 | `whoami` | Print the authenticated user, personal account, and whether the credential is a cluster admin |
 | `token` / `token:create` / `token:list` / `token:revoke` | Personal access tokens. Create prints the secret once |
 | `context` / `context:list` / `context:use <handle>` | Remember a default owner handle per cluster in `~/.flynnrc`. Not an access check |
@@ -213,7 +213,7 @@ The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).
 
 ## flynn-host
 
-Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` and `flynn-host --help` list parent commands; `flynn-host help plugin` or `flynn-host plugin --help` lists `install`, `list`, `credentials`, and the rest. Bare `flynn-host plugin` is `plugin:list`; bare `flynn-host volume` is `volume:list`.
+Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` and `flynn-host --help` list parent commands; `flynn-host help plugin` or `flynn-host plugin --help` or `flynn-host plugin:help` lists `install`, `list`, `credentials`, and the rest. Bare `flynn-host plugin` and `flynn-host plugin:list` list plugins; bare `flynn-host volume` and `flynn-host volume:list` list volumes. Every command accepts `:help` as `--help` and `:list` as the bare command.
 
 | Command | Purpose |
 | --- | --- |
@@ -240,7 +240,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `blobstore` / `blobstore:status` / `blobstore:set` / `blobstore:credentials` / `blobstore:migrate` | Inspect the blobstore backend, switch to S3-compatible storage, rotate access keys, migrate objects (`--delete` removes them from the old backend). Writes `BACKEND_<name>` and `DEFAULT_BACKEND` on the blobstore app. |
 | `github` / `github:setup` / `github:configure` / `github:status` / `github:disable` | Cluster GitHub App credentials (dashboard and `flynn github:*` need `plugin:install github`) |
 | `runtime` / `runtime:create` / `runtime:update` / `runtime:remove` / `runtime:allow-custom` / `runtime:reserve` | Named CPU/memory runtimes for **app processes** (`small`/`medium`/`large` plus custom). New runtimes share host capacity (caps only). `runtime:create --reserve` or `runtime:reserve <id>` guarantees Request on the host for that runtime. This is not the database instance catalog. |
-| `db-runtime` / `db-runtime:create` / `db-runtime:update` / `db-runtime:remove` / `db-runtime:allow-custom` | CPU, memory, and disk presets per database engine. Not app process runtimes. flynn-host is allowed because it is on the cluster. Plugin jobs it starts use the same cluster key against `POST /db-runtimes`. The dashboard can create one only for a cluster admin. |
+| `db-runtime` / `db-runtime:create` / `db-runtime:update` / `db-runtime:remove` / `db-runtime:ensure` / `db-runtime:drop-engine` / `db-runtime:allow-custom` | CPU, memory, and disk presets per database engine, published when that database plugin is installed. Not app process runtimes. flynn-host is allowed because it is on the cluster. Plugin install/uninstall hooks call `ensure` / `drop-engine`. The dashboard can create a custom runtime only for a cluster admin. |
 | `firewall` / `firewall:sync` / `firewall:peer:add` / `firewall:peer:remove` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |
 | `route:add http --app <app> <domain>[/path]` | Cluster-admin HTTP routes, including path-based routes |
 | `domain` / `domain:apex <app>` | Cluster domain and which app serves the apex (root) hostname (`--clear` resets) |

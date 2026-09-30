@@ -18,7 +18,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"alert", "alert:add", "alert:enable", "alert:disable", "alert:remove",
 		"metrics",
 		"env:get", "env:set", "env:unset",
-		"plugin:list",
+		"plugin", "plugin:list",
 		"log-sink", "log-sink:add", "log-sink:remove",
 		"apps:create", "apps:destroy",
 		"docker:push", "docker:set-push-url",

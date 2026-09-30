@@ -121,6 +121,15 @@ func TestCLIMatchActionFallsBackToShow(t *testing.T) {
 	if got == nil || got.Name != "show" {
 		t.Fatalf("empty bools should use show, got %+v", got)
 	}
+	cli = &CLI{Actions: []CLIAction{
+		{Name: "connect"},
+		{Name: "list"},
+		{Name: "show"},
+	}}
+	got = cli.MatchAction(map[string]bool{})
+	if got == nil || got.Name != "list" {
+		t.Fatalf("empty bools should prefer list, got %+v", got)
+	}
 }
 
 func TestInterpolateRejectsInvalidIdentAndInterpolateAll(t *testing.T) {

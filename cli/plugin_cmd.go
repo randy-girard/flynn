@@ -38,6 +38,11 @@ func runPluginCommand(name string, args []string) error {
 		return fmt.Errorf("%s is installed but does not define CLI actions; upgrade the plugin with flynn-host plugin:install %s", name, name)
 	}
 
+	args = pluginDefaultArgs(spec, args)
+	if pluginWantsResourceList(spec, args) {
+		return listPluginResources(client, spec)
+	}
+
 	if action, rest, ok := spec.MatchFlynnDelegate(args); ok {
 		return runPluginFlynnCommand(client, spec, action, rest)
 	}
@@ -178,6 +183,85 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 	}
 	defer cleanup()
 	return runJob(client, *config)
+}
+
+func pluginDefaultArgs(spec *plugin.CLI, args []string) []string {
+	if spec == nil || len(args) > 0 {
+		return args
+	}
+	if spec.Action("list") != nil {
+		return []string{"list"}
+	}
+	return args
+}
+
+func pluginWantsResourceList(spec *plugin.CLI, args []string) bool {
+	if spec == nil || strings.TrimSpace(spec.ResourceEnv) == "" {
+		return false
+	}
+	if spec.Action("list") != nil {
+		return false
+	}
+	if len(args) == 0 {
+		return true
+	}
+	return len(args) == 1 && args[0] == "list"
+}
+
+func listPluginResources(client controller.Client, spec *plugin.CLI) error {
+	if spec == nil {
+		return fmt.Errorf("missing plugin CLI")
+	}
+	resources, err := client.AppResourceList(mustApp())
+	if err != nil {
+		return err
+	}
+	w := tabWriter()
+	defer w.Flush()
+	listRec(w, "NAME", "PROVIDER", "ID", "ROLE")
+	for _, r := range resources {
+		if r == nil || !pluginResourceMatches(spec, r) {
+			continue
+		}
+		providerName := r.ProviderID
+		if p, err := client.GetProvider(r.ProviderID); err == nil && p != nil && p.Name != "" {
+			providerName = p.Name
+		}
+		role := strings.TrimSpace(r.Env["POSTGRES_ROLE"])
+		if role == "" {
+			role = strings.TrimSpace(r.Env["MYSQL_ROLE"])
+		}
+		if role == "" {
+			role = strings.TrimSpace(r.Env["REDIS_ROLE"])
+		}
+		if role == "" {
+			role = strings.TrimSpace(r.Env["CLICKHOUSE_ROLE"])
+		}
+		if role == "" {
+			role = "-"
+		}
+		listRec(w, resourceDisplayName(r), providerName, r.ID, role)
+	}
+	return nil
+}
+
+func pluginResourceMatches(spec *plugin.CLI, res *ct.Resource) bool {
+	if spec == nil || res == nil {
+		return false
+	}
+	key := strings.TrimSpace(spec.ResourceEnv)
+	if key != "" && res.Env != nil && strings.TrimSpace(res.Env[key]) != "" {
+		return true
+	}
+	cmd := strings.ToLower(strings.TrimSpace(spec.Command))
+	switch cmd {
+	case "pg":
+		cmd = "postgres"
+	}
+	if p, ok := res.Env["FLYNN_POSTGRES"]; ok && cmd == "postgres" && strings.TrimSpace(p) != "" {
+		return true
+	}
+	return false
 }
 
 func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {

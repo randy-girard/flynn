@@ -538,6 +538,23 @@ func TestCopyAppPGEnvFillsPlatformConsole(t *testing.T) {
 	}
 }
 
+func TestPluginWantsResourceList(t *testing.T) {
+	redis := redisPluginCLI()
+	if !pluginWantsResourceList(redis, nil) || !pluginWantsResourceList(redis, []string{"list"}) {
+		t.Fatal("redis bare and :list must list resources")
+	}
+	if pluginWantsResourceList(redis, []string{"redis-cli"}) {
+		t.Fatal("redis-cli is not list")
+	}
+	sched := &plugin.CLI{Command: "scheduler", ResourceEnv: "", Actions: []plugin.CLIAction{{Name: "list"}}}
+	if pluginWantsResourceList(sched, nil) {
+		t.Fatal("scheduler has a list action")
+	}
+	if got := pluginDefaultArgs(sched, nil); len(got) != 1 || got[0] != "list" {
+		t.Fatalf("inject list %q", got)
+	}
+}
+
 func containsArgPair(args []string, flag, value string) bool {
 	for i := 0; i < len(args)-1; i++ {
 		if args[i] == flag && args[i+1] == value {

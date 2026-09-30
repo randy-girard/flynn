@@ -218,7 +218,10 @@ func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
 	if best != nil {
 		return best
 	}
-	// `flynn <plugin>` with no subcommand: use a show action when present.
+	// flynn <plugin> with no subcommand: list, then show.
+	if a := c.Action("list"); a != nil {
+		return a
+	}
 	return c.Action("show")
 }
 

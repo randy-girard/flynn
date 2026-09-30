@@ -17,6 +17,7 @@ import (
 	cfg "github.com/randy-girard/flynn/cli/config"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
@@ -61,6 +62,7 @@ func main() {
 
 	cmd, cmdArgs := positionalArgs(args)
 	help := helpFlag(args)
+	cmd, cmdArgs = clihelp.RewriteHelpList(cmd, cmdArgs)
 
 	if cmd == "" || (cmd == "help" && len(cmdArgs) == 0) {
 		fmt.Print(formatRootHelp())

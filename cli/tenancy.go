@@ -20,10 +20,12 @@ usage: flynn whoami
 
 Print the authenticated user. The cluster key prints as the operator.
 `)
-	register("token", func(_ *docopt.Args) error { fmt.Print(formatHelp("token")); return nil }, `
+	register("token", runTokenList, `
 usage: flynn token
+       flynn token:list
 
-Create, list, and revoke personal access tokens.
+List personal access tokens. Secrets are not shown. token:list is the same
+command. token:help is the same as token --help.
 `)
 	register("token:create", runTokenCreate, `
 usage: flynn token:create [--scope <scope>] [--expires <time>] [<name>]
@@ -65,10 +67,13 @@ usage: flynn apps:transfer <app> <handle>
 
 Transfer <app> to the account named by <handle>. Requires admin on both sides.
 `)
-	register("collaborator", func(_ *docopt.Args) error { fmt.Print(formatHelp("collaborator")); return nil }, `
+	register("collaborator", runCollabList, `
 usage: flynn collaborator
+       flynn collaborator:list
 
-Manage account collaborators, or app collaborators when -a is set.
+List collaborators on the current context account, or on -a <app>.
+collaborator:list is the same command. collaborator:help is the same as
+collaborator --help.
 `)
 	register("collaborator:list", runCollabList, `
 usage: flynn collaborator:list
@@ -86,10 +91,12 @@ Options:
 	register("collaborator:remove", runCollabRemove, `
 usage: flynn collaborator:remove <handle>
 `)
-	register("user", func(_ *docopt.Args) error { fmt.Print(formatHelp("user")); return nil }, `
+	register("user", runUserList, `
 usage: flynn user
+       flynn user:list
 
-Operator commands for controller users. Requires the cluster key or a cluster admin.
+List controller users. user:list is the same command. user:help is the same
+as user --help. Requires the cluster key or a cluster admin.
 `)
 	register("user:list", runUserList, `usage: flynn user:list`)
 	register("user:info", runUserInfo, `usage: flynn user:info <handle>`)

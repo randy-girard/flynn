@@ -56,6 +56,25 @@ func TestStripHelp(t *testing.T) {
 	}
 }
 
+func TestRewriteHelpList(t *testing.T) {
+	name, args := RewriteHelpList("resource:help", nil)
+	if name != "resource" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("help %q %q", name, args)
+	}
+	name, args = RewriteHelpList("kafka:topics:help", []string{"create"})
+	if name != "kafka:topics" || !reflect.DeepEqual(args, []string{"--help", "create"}) {
+		t.Fatalf("nested help %q %q", name, args)
+	}
+	name, args = RewriteHelpList("resource:list", []string{"--json"})
+	if name != "resource" || !reflect.DeepEqual(args, []string{"--json"}) {
+		t.Fatalf("list %q %q", name, args)
+	}
+	name, args = RewriteHelpList("env", []string{"set", "FOO=bar"})
+	if name != "env" || !reflect.DeepEqual(args, []string{"set", "FOO=bar"}) {
+		t.Fatalf("unchanged %q %q", name, args)
+	}
+}
+
 func TestShortDescription(t *testing.T) {
 	got := ShortDescription("usage: flynn env:set\n\nSet app environment variables.\n\nOptions:\n")
 	if got != "Set app environment variables" {
