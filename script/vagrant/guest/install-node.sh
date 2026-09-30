@@ -55,6 +55,23 @@ if [[ "${CLEAN:-}" == "1" ]] || { [[ "${AUTO_CLEAN:-1}" == "1" ]] && [[ -e /usr/
 fi
 
 bash "${install_script}" --yes --no-ntp "${extra_args[@]}" --tarball "${tarball}"
+
+# install-flynn ships flynn-host, not the operator CLI. Put flynn on PATH so
+# probe / flynn apps work on the node when laptop sudo cannot cluster:add.
+cli_gz=""
+case "$(uname -m)" in
+  aarch64|arm64) cli_gz="flynn-linux-arm64.gz" ;;
+  x86_64|amd64) cli_gz="flynn-linux-amd64.gz" ;;
+esac
+if [[ -n "${cli_gz}" ]]; then
+  cli_src="$(find "${tmpdir}" -maxdepth 2 -type f -name "${cli_gz}" | head -1 || true)"
+  if [[ -n "${cli_src}" ]]; then
+    gzip -dc "${cli_src}" > /usr/local/bin/flynn
+    chmod 0755 /usr/local/bin/flynn
+    echo "installed Flynn CLI from ${cli_src}"
+  fi
+fi
+
 if ! command -v ipset >/dev/null 2>&1; then
   echo "installing ipset (required for flynn-host job isolation)"
   export DEBIAN_FRONTEND=noninteractive

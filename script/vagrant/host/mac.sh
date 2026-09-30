@@ -18,6 +18,11 @@ line="${IP} ${names} ${mark}"
 export GOFLAGS="${GOFLAGS:--mod=vendor}"
 "${FLYNN_VAGRANT_HOST}/cli.sh"
 
+sudo_cmd=(sudo)
+if [[ "${FLYNN_VAGRANT_YES:-}" == "1" ]]; then
+  sudo_cmd=(sudo -n)
+fi
+
 hosts_tmp="$(mktemp)"
 if [[ -f /etc/hosts ]]; then
   grep -v 'flynn-vagrant-dev' /etc/hosts > "${hosts_tmp}" || true
@@ -27,10 +32,18 @@ fi
 printf '%s\n' "${line}" >> "${hosts_tmp}"
 
 echo "sudo is needed once to point ${DOMAIN} at ${IP}"
-sudo install -m 644 "${hosts_tmp}" /etc/hosts
+if ! "${sudo_cmd[@]}" install -m 644 "${hosts_tmp}" /etc/hosts; then
+  rm -f "${hosts_tmp}"
+  if [[ "${FLYNN_VAGRANT_YES:-}" == "1" ]]; then
+    echo "sudo -n could not write /etc/hosts; skip laptop cluster:add and probe from the node" >&2
+    exit 0
+  fi
+  exit 1
+fi
 rm -f "${hosts_tmp}"
 
 export FLYNN_SKIP_UPDATE_CHECK=1
+PATH="${ROOT}/build-dev/bin:${PATH}"
 flynn cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
 if ! flynn -c local apps >/dev/null; then
   echo "controller rejected the cluster key on GET /apps (cluster:add only checks TLS/CA)." >&2
@@ -42,7 +55,7 @@ ca="${HOME}/.flynn/ca-certs/local.pem"
 if [[ -f "${ca}" ]]; then
   echo "trusting the cluster CA for this Mac user"
   security add-trusted-cert -r trustRoot -p ssl -k "${HOME}/Library/Keychains/login.keychain-db" "${ca}" || true
-  sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${ca}" || true
+  "${sudo_cmd[@]}" security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "${ca}" || true
 fi
 
 echo "ready: flynn -c local apps"

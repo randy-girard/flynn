@@ -39,6 +39,8 @@ for want in \
   "guest/bootstrap-node.sh" \
   "guest/update-cluster.sh" \
   "guest/start-node.sh" \
+  "guest/probe-cluster.sh" \
+  "probe_live_cluster" \
   "restore_or_build_layers" \
   "build_images" \
   "host/mac.sh" \
@@ -74,6 +76,14 @@ if grep -Fq 'vagrant up builder' "${script}"; then
 fi
 if ! grep -Fq -e 'flynn-host update --all-nodes' "${mod}/guest/update-cluster.sh"; then
   echo "guest/update-cluster.sh must run flynn-host update --all-nodes on cluster nodes" >&2
+  exit 1
+fi
+if ! grep -Fq 'flynn-linux-arm64.gz' "${mod}/guest/install-node.sh"; then
+  echo "install-node.sh must install the Flynn CLI from the tarball so probe can run flynn apps" >&2
+  exit 1
+fi
+if ! grep -Fq 'flynn apps --all' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh must list system apps with flynn apps --all (GET /apps hides them)" >&2
   exit 1
 fi
 if grep -Fq 'flynn-host update' "${mod}/guest/update.sh"; then
@@ -122,6 +132,14 @@ if ! grep -Fq 'FLYNN_VAGRANT_NODE_PREFIX=dev-node' "${mod}/lib/env.sh"; then
 fi
 if ! grep -Fq 'export FLYNN_DEV_NODES=1' "${mod}/lib/env.sh"; then
   echo "laptop loop must default FLYNN_DEV_NODES=1 (dev-builder + dev-node1)" >&2
+  exit 1
+fi
+if grep -Fq 'if [[ -n "$(flynn_vagrant_get_nodes)" ]]; then' "${mod}/lib/lifecycle.sh"; then
+  echo "pin_nodes must discover extra hosts even when FLYNN_DEV_NODES defaults to 1" >&2
+  exit 1
+fi
+if ! grep -Fq 'if [[ -z "${cur}" || "${n}" -gt "${cur}" ]]' "${mod}/lib/lifecycle.sh"; then
+  echo "pin_nodes must raise the node count to VMs already in .vagrant-dev" >&2
   exit 1
 fi
 if ! grep -Fq 'not_created|unknown' "${mod}/lib/lifecycle.sh"; then
@@ -244,8 +262,20 @@ if ! grep -Fq 'discoverd.DefaultClient = discoverd.NewClient()' "${ROOT}/host/ho
   echo "flynn-host CLI must recreate DefaultClient after loading host.json DISCOVERD" >&2
   exit 1
 fi
-if ! grep -Fq 'FLYNN_SKIP_UPDATE_CHECK' "${mod}/host/mac.sh"; then
-  echo "host/mac.sh must skip the CLI update nag during cluster:add" >&2
+if ! grep -Fq 'sudo -n' "${mod}/host/mac.sh"; then
+  echo "host/mac.sh must use sudo -n when FLYNN_VAGRANT_YES=1" >&2
+  exit 1
+fi
+if ! grep -Fq 'FLYNN_VAGRANT_FORCE_BUILD' "${mod}/guest/build-needed.sh"; then
+  echo "build-needed.sh must honor FLYNN_VAGRANT_FORCE_BUILD=1" >&2
+  exit 1
+fi
+if ! grep -Fq -- '--yes|-y)' "${script}"; then
+  echo "vagrant.sh must accept --yes" >&2
+  exit 1
+fi
+if ! grep -Fq 'probe)' "${script}"; then
+  echo "vagrant.sh must have a probe command" >&2
   exit 1
 fi
 if ! grep -Fq '192.168.57.20' "${mod}/host/mac.sh"; then
@@ -267,7 +297,8 @@ for s in \
   "${mod}/guest/bootstrap-node.sh" \
   "${mod}/guest/update-cluster.sh" \
   "${mod}/guest/node-dns.sh" \
-  "${mod}/guest/start-node.sh"; do
+  "${mod}/guest/start-node.sh" \
+  "${mod}/guest/probe-cluster.sh"; do
   if ! bash -n "${s}"; then
     echo "${s} failed bash -n" >&2
     exit 1
@@ -379,7 +410,7 @@ fi
 bash "${ROOT}/script/vagrant/test/clean-flynn.sh"
 bash "${ROOT}/script/vagrant/test/update-build.sh"
 help="$(bash "${entry}" help)"
-for want in "setup" "cli" "bootstrap" "update" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only"; do
+for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes"; do
   if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1

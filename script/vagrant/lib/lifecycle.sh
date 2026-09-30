@@ -4,11 +4,11 @@
 
 FLYNN_VAGRANT_TARGETS=()
 
+# Raise FLYNN_DEV_NODES (or FLYNN_MAX_NODES) to match VMs already in this
+# env's machine index. env.sh defaults the laptop loop to 1; without this,
+# status/probe/destroy/update miss extra hosts after NODES=3 setup.
 flynn_vagrant_pin_nodes() {
-  if [[ -n "$(flynn_vagrant_get_nodes)" ]]; then
-    return
-  fi
-  local n=0 i
+  local n=0 i cur
   local dir="${VAGRANT_DOTFILE_PATH}/machines"
   if [[ "${FLYNN_VAGRANT_PIN_STYLE}" == "consecutive" ]]; then
     for i in $(seq 1 32); do
@@ -31,7 +31,10 @@ flynn_vagrant_pin_nodes() {
   if [[ "${n}" -lt "${FLYNN_VAGRANT_PIN_MIN}" ]]; then
     n="${FLYNN_VAGRANT_PIN_MIN}"
   fi
-  flynn_vagrant_set_nodes "${n}"
+  cur="$(flynn_vagrant_get_nodes)"
+  if [[ -z "${cur}" || "${n}" -gt "${cur}" ]]; then
+    flynn_vagrant_set_nodes "${n}"
+  fi
 }
 
 flynn_vagrant_list_machines() {

@@ -85,15 +85,21 @@ VAGRANT_SMOKE ?= script/vagrant-smoke.sh
 VM ?=
 ITEM ?= quick
 ARGS ?=
+YES ?=
+FORCE_BUILD ?=
+NODES ?=
+VAGRANT_YES := $(if $(filter 1,$(YES)),--yes,)
+VAGRANT_FORCE := $(if $(filter 1,$(FORCE_BUILD)),--force-build,)
+VAGRANT_NODES := $(if $(NODES),FLYNN_DEV_NODES=$(NODES),)
 
 vagrant: ## Laptop Vagrant loop help (script/vagrant.sh)
 	@$(VAGRANT) help
 
-vagrant-setup: ## Boot VMs, build images if needed, bootstrap, connect
-	$(VAGRANT) setup $(ARGS)
+vagrant-setup: ## Boot VMs, build images if needed, bootstrap cluster nodes, connect (YES=1 NODES=N)
+	$(VAGRANT_NODES) $(VAGRANT) setup $(VAGRANT_YES) $(ARGS)
 
 vagrant-up: ## Boot laptop-loop VMs (dev-builder + cluster nodes)
-	$(VAGRANT) up $(VM) $(ARGS)
+	$(VAGRANT_NODES) $(VAGRANT) up $(VM) $(VAGRANT_YES) $(ARGS)
 
 vagrant-status: ## Status of laptop-loop VMs
 	$(VAGRANT) status $(ARGS)
@@ -102,25 +108,28 @@ vagrant-ssh: ## SSH into a laptop-loop VM (VM=dev-builder or VM=dev-node1)
 	$(VAGRANT) ssh $(VM)
 
 vagrant-build: ## Boot builder if needed; build images (works before setup)
-	$(VAGRANT) build $(ARGS)
+	$(VAGRANT) build $(VAGRANT_YES) $(ARGS)
 
 vagrant-cli: ## Build the laptop flynn CLI into /usr/local/bin
-	$(VAGRANT) cli $(ARGS)
+	$(VAGRANT) cli $(VAGRANT_YES) $(ARGS)
 
 vagrant-bootstrap: ## Install tarball and bootstrap the live cluster on cluster nodes
-	$(VAGRANT) bootstrap $(ARGS)
+	$(VAGRANT_NODES) $(VAGRANT) bootstrap $(VAGRANT_YES) $(ARGS)
 
-vagrant-update: ## Build on the builder, then flynn-host update on running cluster nodes
-	$(VAGRANT) update $(ARGS)
+vagrant-update: ## Build on the builder, then flynn-host update on running cluster nodes (FORCE_BUILD=1)
+	$(VAGRANT) update $(VAGRANT_YES) $(VAGRANT_FORCE) $(ARGS)
+
+vagrant-probe: ## Check the live cluster from node1 (non-interactive)
+	$(VAGRANT_NODES) $(VAGRANT) probe $(VAGRANT_YES) $(ARGS)
 
 vagrant-reload: ## Reboot laptop-loop VMs and start flynn-host
-	$(VAGRANT) reload $(VM) $(ARGS)
+	$(VAGRANT) reload $(VM) $(VAGRANT_YES) $(ARGS)
 
 vagrant-stop: ## Halt laptop-loop VMs (disks stay)
-	$(VAGRANT) stop $(VM) $(ARGS)
+	$(VAGRANT) stop $(VM) $(VAGRANT_YES) $(ARGS)
 
 vagrant-destroy: ## Delete laptop-loop VMs (./build-dev stays)
-	$(VAGRANT) destroy $(VM) $(ARGS)
+	$(VAGRANT) destroy $(VM) $(VAGRANT_YES) $(ARGS)
 
 vagrant-smoke: ## Acceptance suite (--item ITEM, default quick)
 	$(VAGRANT_SMOKE) --item $(ITEM) $(ARGS)
@@ -162,9 +171,12 @@ help: ## Show this help
 	@printf "  %-24s %s\n" "ITEM" "vagrant-smoke matrix item (default: quick)"
 	@printf "  %-24s %s\n" "VM" "vagrant / vagrant-smoke machine name"
 	@printf "  %-24s %s\n" "ARGS" "extra args forwarded to script/vagrant.sh or vagrant-smoke.sh"
+	@printf "  %-24s %s\n" "YES" "set to 1 to pass --yes (non-interactive sudo -n)"
+	@printf "  %-24s %s\n" "FORCE_BUILD" "set to 1 so vagrant-update rebuilds cluster images"
+	@printf "  %-24s %s\n" "NODES" "FLYNN_DEV_NODES for setup/up/bootstrap/probe (e.g. NODES=3)"
 	@printf "  %-24s %s\n" "SKIP_INTEGRATION_TESTS" "set to 1 to skip test-integration"
 
 .PHONY: help build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration install-git-hooks \
 	vagrant vagrant-setup vagrant-up vagrant-status vagrant-ssh vagrant-build vagrant-cli vagrant-bootstrap vagrant-update \
-	vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
+	vagrant-probe vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
 	vagrant-smoke-up vagrant-smoke-reload vagrant-smoke-stop vagrant-smoke-destroy test-vagrant

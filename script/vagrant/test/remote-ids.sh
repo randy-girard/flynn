@@ -71,5 +71,10 @@ if ! grep -q 'ssh -F "${cfg}"' "${ROOT}/script/vagrant/suite.sh"; then
   echo "smoke script must ssh via cached vagrant ssh-config (ssh -F)" >&2
   exit 1
 fi
+if ! grep -Fq 'StrictHostKeyChecking=accept-new' "${ROOT}/script/vagrant/suite.sh" \
+  || ! grep -Fq 'UserKnownHostsFile=/dev/null' "${ROOT}/script/vagrant/suite.sh"; then
+  echo "smoke ssh must auto-accept guest host keys (no authenticity prompt after destroy/up)" >&2
+  exit 1
+fi
 
 echo "ok remote script id uniqueness + direct ssh (no vagrant machine lock)"

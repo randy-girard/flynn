@@ -38,6 +38,8 @@ need "${vagrant}" '192\.168\.56\.\#\{19 \+ i\}' \
   "cluster node N must be 192.168.56.(19+N) (node1=.20)"
 need "${vagrant}" 'FLYNN_VAGRANT_ENV' \
   "Vagrantfile must keep smoke and dev machines in separate environments"
+need "${vagrant}" 'verify_host_key = :never' \
+  "Vagrantfile must skip SSH host-key prompts so setup/vagrant ssh is non-interactive"
 need "${vagrant}" '192\.168\.57\.10' \
   "dev-builder must use 192.168.57.10 so it can run beside smoke builder .10"
 need "${vagrant}" './build-dev' \

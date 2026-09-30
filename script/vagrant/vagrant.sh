@@ -21,13 +21,40 @@ source "${VAGRANT_DIR}/lib/cluster.sh"
 cd "${ROOT}"
 flynn_vagrant_use dev
 
+FLYNN_VAGRANT_YES="${FLYNN_VAGRANT_YES:-0}"
+FLYNN_VAGRANT_FORCE_BUILD="${FLYNN_VAGRANT_FORCE_BUILD:-0}"
+FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT="${FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT:-0}"
+parsed=()
+for arg in "$@"; do
+  case "${arg}" in
+    --yes|-y) FLYNN_VAGRANT_YES=1 ;;
+    --force-build) FLYNN_VAGRANT_FORCE_BUILD=1 ;;
+    --skip-laptop-connect) FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT=1 ;;
+    *) parsed+=("${arg}") ;;
+  esac
+done
+if [[ ${#parsed[@]} -gt 0 ]]; then
+  set -- "${parsed[@]}"
+else
+  set --
+fi
+export FLYNN_VAGRANT_YES FLYNN_VAGRANT_FORCE_BUILD FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT
+if [[ "${FLYNN_VAGRANT_YES}" == "1" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  export FLYNN_SKIP_UPDATE_CHECK=1
+fi
+
 DEV_MACHINE="${FLYNN_VAGRANT_BUILDER}"
 DEV_MEMORY="${BUILDER_MEMORY}"
 DEV_CPUS="${BUILDER_CPUS}"
 
 usage() {
   cat <<EOF
-usage: script/vagrant.sh <setup|up|status|ssh|build|cli|bootstrap|update|reload|restart|stop|halt|destroy|teardown> [vm...]
+usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|up|status|ssh|build|cli|bootstrap|update|probe|reload|restart|stop|halt|destroy|teardown> [vm...]
+
+  --yes, -y              Non-interactive: sudo -n, no TTY prompts (also FLYNN_VAGRANT_YES=1)
+  --force-build          Rebuild cluster images on update even if the stamp matches
+  --skip-laptop-connect  Do not write /etc/hosts or flynn cluster:add on this laptop
 
   setup      Boot VMs, build images if none exist, bootstrap cluster nodes, connect this laptop
   up         Boot dev-builder and extra nodes (default FLYNN_DEV_NODES=1 → dev-node1)
@@ -37,6 +64,7 @@ usage: script/vagrant.sh <setup|up|status|ssh|build|cli|bootstrap|update|reload|
   cli        Build the laptop flynn CLI and install it to /usr/local/bin
   bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
   update     Build on the builder if Flynn source changed, then flynn-host update on running cluster nodes
+  probe      Check the live cluster from node1 (hosts, controller, flynn-host list)
   reload     Reboot VMs (vagrant reload --no-provision) and start flynn-host on cluster nodes
   restart    Same as reload
   stop       Halt VMs (vagrant halt); disks and ./build-dev stay
@@ -44,9 +72,8 @@ usage: script/vagrant.sh <setup|up|status|ssh|build|cli|bootstrap|update|reload|
   destroy    Delete VMs (vagrant destroy -f); does not delete ./build-dev
   teardown   Same as destroy
 
-Make (from the repo root): make vagrant-setup, vagrant-up, vagrant-status,
-vagrant-ssh, vagrant-build, vagrant-cli, vagrant-bootstrap, vagrant-update,
-vagrant-reload, vagrant-stop, vagrant-destroy. make vagrant prints this help.
+Make (from the repo root): make vagrant-setup YES=1, vagrant-update YES=1 FORCE_BUILD=1,
+vagrant-ssh VM=dev-node1, vagrant-setup NODES=3 YES=1. make vagrant prints this help.
 
 reload/restart/stop/destroy take optional VM names (dev-builder, dev-node1, …).
 With no names they act on every machine already in .vagrant-dev.
@@ -298,13 +325,29 @@ connect_laptop() {
   node="${FLYNN_VAGRANT_NODE_PREFIX}1"
   domain="$(flynn_vagrant_cluster_domain)"
   ip="$(flynn_vagrant_cluster_ip)"
+  probe_live_cluster
+  if [[ "${FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT}" == "1" ]]; then
+    echo "skipping laptop /etc/hosts and cluster:add (--skip-laptop-connect)"
+    return 0
+  fi
   creds="$(run_as_root_on "${node}" "cd ${SRC} && FLYNN_CLUSTER_IP=${ip} FLYNN_CLUSTER_DOMAIN=${domain} script/vagrant/guest/creds.sh")"
   parse_dev_creds "${creds}"
   if [[ -z "${pin}" || -z "${key}" ]]; then
     echo "could not read the cluster pin and key from ${node}" >&2
     exit 1
   fi
-  CLUSTER_PIN="${pin}" CLUSTER_KEY="${key}" FLYNN_DEV_CLUSTER_IP="${ip}" FLYNN_DEV_DOMAIN="${domain}" "${ROOT}/script/vagrant/host/mac.sh"
+  CLUSTER_PIN="${pin}" CLUSTER_KEY="${key}" FLYNN_DEV_CLUSTER_IP="${ip}" FLYNN_DEV_DOMAIN="${domain}" FLYNN_VAGRANT_YES="${FLYNN_VAGRANT_YES}" "${ROOT}/script/vagrant/host/mac.sh"
+}
+
+probe_live_cluster() {
+  local node domain ip min_hosts
+  require_cluster_nodes
+  node="${FLYNN_VAGRANT_NODE_PREFIX}1"
+  domain="$(flynn_vagrant_cluster_domain)"
+  ip="$(flynn_vagrant_cluster_ip)"
+  min_hosts="$(flynn_vagrant_get_nodes)"
+  echo "probing live cluster on ${node} (${ip}, min-hosts=${min_hosts})"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} script/vagrant/guest/probe-cluster.sh"
 }
 
 update_running_cluster() {
@@ -355,8 +398,12 @@ case "${cmd}" in
     connect_laptop
     ;;
   update)
-    run_as_root "cd ${SRC} && script/vagrant/guest/update.sh"
+    run_as_root "cd ${SRC} && FLYNN_VAGRANT_FORCE_BUILD=${FLYNN_VAGRANT_FORCE_BUILD} script/vagrant/guest/update.sh"
     update_running_cluster
+    probe_live_cluster
+    ;;
+  probe)
+    probe_live_cluster
     ;;
   reload|restart)
     reload_dev_machines "${@:2}"

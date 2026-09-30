@@ -89,7 +89,9 @@ make vagrant                 # help
 
 The source tree and `ubuntu_ports_cache` are shared, but Flynn **build outputs** and running VMs are not. Inside the VM they still look like `build/`; on the laptop they land in `./build-dev` (binaries, `images.json`, release tarballs). Smoke keeps `./build`. After this mount is added, run `make vagrant-reload` so the overlay attaches. If you already built on the shared `./build`, copy what you need (`cp -a build/. build-dev/`) or run `make vagrant-build` again.
 
-If an older laptop loop already bootstrapped Flynn on **dev-builder**, run `make vagrant-bootstrap` (or `setup`) so the operator cluster moves onto **dev-node1**. Do not keep using the builder as `flynn -c local`.
+If an older laptop loop already bootstrapped Flynn on **dev-builder**, run `make vagrant-bootstrap YES=1` (or `setup`) so the operator cluster moves onto **dev-node1**. Do not keep using the builder as `flynn -c local`.
+
+Non-interactive (no sudo password prompt): `make vagrant-setup YES=1`, `make vagrant-update YES=1 FORCE_BUILD=1`, `make vagrant-destroy YES=1`. That passes `--yes` so `sudo -n` is used; if this laptop cannot write `/etc/hosts` without a password, setup still bootstraps the VMs and `make vagrant-probe` checks the cluster from **dev-node1**. Three-node cluster: `make vagrant-setup YES=1 NODES=3`.
 
 See [Development](../development.html.md).
 
