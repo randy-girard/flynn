@@ -34,6 +34,7 @@ flynn_vagrant_use() {
       if [[ -z "${FLYNN_DEV_NODES:-}" ]]; then
         export FLYNN_DEV_NODES=1
       fi
+      export FLYNN_DEV_DOMAIN="${FLYNN_DEV_DOMAIN:-1.localflynn.com}"
       BUILDER_MEMORY="${VAGRANT_DEV_MEMORY:-30000}"
       BUILDER_CPUS="${VAGRANT_DEV_CPUS:-4}"
       NODE_MEMORY="${VAGRANT_NODE_MEMORY:-6144}"

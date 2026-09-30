@@ -1,6 +1,8 @@
 #!/bin/bash
 # Run on the laptop. Writes /etc/hosts, installs the flynn CLI, and adds the
-# cluster. Requires sudo once. CLUSTER_PIN and CLUSTER_KEY come from the builder.
+# cluster. Requires sudo once. CLUSTER_PIN and CLUSTER_KEY come from node1.
+# The live cluster is on cluster nodes (default dev-node1 at 192.168.57.20),
+# not the builder.
 set -euo pipefail
 # shellcheck source=../lib/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
@@ -8,7 +10,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 : "${CLUSTER_KEY:?}"
 
 DOMAIN="${FLYNN_DEV_DOMAIN:-1.localflynn.com}"
-IP="${FLYNN_DEV_IP:-192.168.57.10}"
+IP="${FLYNN_DEV_CLUSTER_IP:-192.168.57.20}"
 names="controller.${DOMAIN} status.${DOMAIN} git.${DOMAIN} dashboard.${DOMAIN} images.${DOMAIN} ${DOMAIN}"
 mark="# flynn-vagrant-dev"
 line="${IP} ${names} ${mark}"

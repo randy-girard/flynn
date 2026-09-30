@@ -31,9 +31,14 @@ for want in \
   "dev-builder" \
   "ensure_dev_vm" \
   "sudo -n bash -lc" \
-  "script/bootstrap-flynn" \
+  "lib/cluster.sh" \
   "guest/restore-layers.sh" \
   "guest/build-images.sh" \
+  "guest/install-node.sh" \
+  "guest/init-node.sh" \
+  "guest/bootstrap-node.sh" \
+  "guest/update-cluster.sh" \
+  "guest/start-node.sh" \
   "restore_or_build_layers" \
   "build_images" \
   "host/mac.sh" \
@@ -47,6 +52,18 @@ for want in \
     exit 1
   fi
 done
+if grep -Fq 'script/bootstrap-flynn' "${script}"; then
+  echo "vagrant.sh must not bootstrap a live cluster on the builder (script/bootstrap-flynn)" >&2
+  exit 1
+fi
+if grep -Fq 'guest/publish.sh' "${script}"; then
+  echo "vagrant.sh must not DNAT a nested builder cluster onto the laptop" >&2
+  exit 1
+fi
+if grep -Fq 'guest/ensure-cluster.sh' "${script}"; then
+  echo "vagrant.sh must not start the live cluster on the builder via ensure-cluster.sh" >&2
+  exit 1
+fi
 if ! grep -Fq 'FLYNN_VAGRANT_ENV=dev' "${mod}/lib/env.sh"; then
   echo "lib/env.sh must set FLYNN_VAGRANT_ENV=dev for the laptop loop" >&2
   exit 1
@@ -55,8 +72,20 @@ if grep -Fq 'vagrant up builder' "${script}"; then
   echo "vagrant.sh must not boot the smoke builder" >&2
   exit 1
 fi
-if ! grep -Fq "flynn-host update" "${mod}/guest/update.sh"; then
-  echo "guest/update.sh must run flynn-host update" >&2
+if ! grep -Fq -e 'flynn-host update --all-nodes' "${mod}/guest/update-cluster.sh"; then
+  echo "guest/update-cluster.sh must run flynn-host update --all-nodes on cluster nodes" >&2
+  exit 1
+fi
+if grep -Fq 'flynn-host update' "${mod}/guest/update.sh"; then
+  echo "guest/update.sh must only build/pack on the builder; cluster update is update-cluster.sh" >&2
+  exit 1
+fi
+if ! grep -Fq 'flynn_vagrant_cluster_build_needed' "${mod}/guest/update.sh"; then
+  echo "guest/update.sh must rebuild cluster images when Flynn source changed" >&2
+  exit 1
+fi
+if ! grep -Fq 'flynn_vagrant_write_build_stamp' "${mod}/guest/build-images.sh"; then
+  echo "build-images.sh must record a stamp so update can skip a no-op rebuild" >&2
   exit 1
 fi
 if ! grep -Fq 'build-dev/bin' "${mod}/host/cli.sh"; then
@@ -73,6 +102,10 @@ if ! grep -Fq 'flynn_vagrant_up_or_create' "${script}"; then
 fi
 if ! grep -Fq 'boot_dev_cluster' "${script}"; then
   echo "vagrant.sh must boot the default laptop cluster, not only the builder" >&2
+  exit 1
+fi
+if ! grep -Fq 'verify_host_key = :never' "${ROOT}/Vagrantfile"; then
+  echo "Vagrantfile must auto-accept SSH host keys so setup is non-interactive" >&2
   exit 1
 fi
 if ! in_mod 'vagrant reload --no-provision'; then
@@ -101,6 +134,10 @@ if grep -Fq 'flynn_vagrant_unknown_machine' "${mod}/lib/lifecycle.sh"; then
 fi
 if ! grep -Fq 'start_existing_cluster' "${script}"; then
   echo "vagrant.sh reload must start an existing cluster without bootstrapping" >&2
+  exit 1
+fi
+if ! grep -Fq 'guest/start-node.sh' "${script}"; then
+  echo "reload must start flynn-host.service on cluster nodes, not nested bootstrap on the builder" >&2
   exit 1
 fi
 if ! in_mod 'vagrant halt'; then
@@ -156,7 +193,7 @@ if ! grep -Fq 'start-stop-daemon' "${ROOT}/script/start-flynn-host"; then
   exit 1
 fi
 if ! grep -Fq 'FLANNEL_BACKEND="alloc"' "${ROOT}/script/bootstrap-flynn"; then
-  echo "bootstrap-flynn must use the alloc flannel backend on the laptop loop (no vxlan device)" >&2
+  echo "bootstrap-flynn (single-machine nested cluster) must use the alloc flannel backend" >&2
   exit 1
 fi
 if grep -Fq 'Lease().Network.IP.String()' "${ROOT}/flannel/main.go"; then
@@ -211,6 +248,31 @@ if ! grep -Fq 'FLYNN_SKIP_UPDATE_CHECK' "${mod}/host/mac.sh"; then
   echo "host/mac.sh must skip the CLI update nag during cluster:add" >&2
   exit 1
 fi
+if ! grep -Fq '192.168.57.20' "${mod}/host/mac.sh"; then
+  echo "host/mac.sh must point the laptop at cluster node1 (192.168.57.20), not the builder" >&2
+  exit 1
+fi
+if grep -Fq '192.168.57.10' "${mod}/host/mac.sh"; then
+  echo "host/mac.sh must not use the builder IP for the live cluster" >&2
+  exit 1
+fi
+if ! grep -Fq 'FLYNN_CLUSTER_IP' "${mod}/guest/creds.sh"; then
+  echo "guest/creds.sh must resolve the controller on the cluster node IP" >&2
+  exit 1
+fi
+for s in \
+  "${mod}/lib/cluster.sh" \
+  "${mod}/guest/install-node.sh" \
+  "${mod}/guest/init-node.sh" \
+  "${mod}/guest/bootstrap-node.sh" \
+  "${mod}/guest/update-cluster.sh" \
+  "${mod}/guest/node-dns.sh" \
+  "${mod}/guest/start-node.sh"; do
+  if ! bash -n "${s}"; then
+    echo "${s} failed bash -n" >&2
+    exit 1
+  fi
+done
 if ! grep -Fq './build.sh cluster' "${mod}/guest/build-images.sh"; then
   echo "guest/build-images.sh must run ./build.sh cluster when the base layer exists" >&2
   exit 1
@@ -219,12 +281,8 @@ if ! grep -Fq 'pack-release.sh' "${mod}/guest/build-images.sh"; then
   echo "guest/build-images.sh must pack a release tarball so setup can restore layers" >&2
   exit 1
 fi
-if ! grep -Fq 'if [[ -f /etc/flynn/host.json ]]; then' "${mod}/guest/build-images.sh"; then
-  echo "build must set FLYNN_KEEP_CLUSTER only when host.json exists (fresh builder has none)" >&2
-  exit 1
-fi
-if ! grep -Fq 'FLYNN_KEEP_CLUSTER=1' "${mod}/guest/build-images.sh"; then
-  echo "build-images must keep a bootstrapped cluster (build.sh cluster stop-all kills discoverd)" >&2
+if grep -Fq 'FLYNN_KEEP_CLUSTER=1' "${mod}/guest/build-images.sh"; then
+  echo "build-images must not keep a live operator cluster on the builder" >&2
   exit 1
 fi
 if grep -Fq 'export FLYNN_KEEP_CLUSTER=1 FLYNN_ROOT' "${script}"; then
@@ -271,12 +329,36 @@ if ! grep -Fq 'export_host_json_secrets' "${ROOT}/build.sh"; then
   echo "KEEP_CLUSTER builds must export DISCOVERD_AUTH_KEY from host.json for flynn-builder" >&2
   exit 1
 fi
-if ! grep -Fq 'startStopDaemonRestartScript' "${ROOT}/host/cli/github_updater.go"; then
-  echo "flynn-host update must restart start-stop-daemon on vagrant-dev" >&2
+if ! grep -Fq 'wait_for_flynn_host' "${ROOT}/build.sh"; then
+  echo "build.sh start must wait for flynn-host in discoverd, not only /ping" >&2
   exit 1
 fi
-if ! grep -Fq -e '--bin-dir=' "${mod}/guest/update.sh"; then
-  echo "guest/update.sh must install the tarball into build/bin for start-flynn-host" >&2
+if ! grep -Fq '/services/flynn-host/instances' "${ROOT}/build.sh"; then
+  echo "flynn_host_registered must probe discoverd flynn-host instances" >&2
+  exit 1
+fi
+if ! grep -Fq 'busy (image layer), skipping' "${ROOT}/host/cli/destroy-volumes.go"; then
+  echo "destroy-volumes must skip busy ext2/squashfs layers so start-all can launch the daemon" >&2
+  exit 1
+fi
+if ! grep -Fq 'destroy-volumes did not finish' "${ROOT}/script/start-flynn-host"; then
+  echo "start-flynn-host must start the daemon if destroy-volumes fails" >&2
+  exit 1
+fi
+if ! grep -Fq 'unmounting leftover Flynn volumes' "${ROOT}/script/kill-flynn"; then
+  echo "kill-flynn must unmount leftover zfs/overlay mounts before start-all destroy-volumes" >&2
+  exit 1
+fi
+if ! grep -Fq 'startStopDaemonRestartScript' "${ROOT}/host/cli/github_updater.go"; then
+  echo "flynn-host update must restart start-stop-daemon when the builder runs start-all" >&2
+  exit 1
+fi
+if grep -Fq -e '--bin-dir=' "${mod}/guest/update.sh"; then
+  echo "guest/update.sh must not apply the tarball on the builder" >&2
+  exit 1
+fi
+if ! grep -Fq 'update_running_cluster' "${script}"; then
+  echo "vagrant.sh update must apply the tarball on running cluster nodes" >&2
   exit 1
 fi
 if ! grep -Fq 'treating as not bootstrapped' "${mod}/guest/ensure-cluster.sh"; then
@@ -295,9 +377,10 @@ if [[ "${pin}" != "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" || "${key}" != 
   exit 1
 fi
 bash "${ROOT}/script/vagrant/test/clean-flynn.sh"
+bash "${ROOT}/script/vagrant/test/update-build.sh"
 help="$(bash "${entry}" help)"
-for want in "setup" "cli" "bootstrap" "update" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required"; do
-  if ! grep -Fq "${want}" <<<"${help}"; then
+for want in "setup" "cli" "bootstrap" "update" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only"; do
+  if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1
   fi

@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run on the builder as root. Prints labeled TLS pin and controller key so
+# Run on cluster node1 as root. Prints labeled TLS pin and controller key so
 # vagrant ssh motd/login banners cannot shift line 1/2 parsing.
 #
 # Prefer flynn-host cli-add-command (AUTH_KEY on the running controller job).
@@ -11,11 +11,39 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 export FLYNN_ROOT="${ROOT}"
 python3 - <<'PY'
-import base64, hashlib, json, os, re, subprocess, sys
+import base64, hashlib, json, os, re, subprocess
 
 ROOT = os.environ["FLYNN_ROOT"]
-CONTROLLER = "https://controller.1.localflynn.com/apps"
-RESOLVE = "controller.1.localflynn.com:443:192.0.2.200"
+DOMAIN = (os.environ.get("FLYNN_CLUSTER_DOMAIN") or "1.localflynn.com").strip()
+CONTROLLER = "https://controller.%s/apps" % DOMAIN
+
+
+def host_only_ip():
+    env_ip = (os.environ.get("FLYNN_CLUSTER_IP") or "").strip()
+    if env_ip:
+        return env_ip
+    try:
+        data = json.load(open("/etc/flynn/host.json")) or {}
+    except Exception:
+        data = {}
+    env = data.get("env") or {}
+    for key in ("EXTERNAL_IP", "FLYNN_EXTERNAL_IP"):
+        v = str(env.get(key) or "").strip()
+        if v:
+            return v
+    for prefix in ("192.168.57.", "192.168.56."):
+        try:
+            out = subprocess.check_output(["hostname", "-I"], text=True)
+        except Exception:
+            out = ""
+        for tok in out.split():
+            if tok.startswith(prefix):
+                return tok
+    return "127.0.0.1"
+
+
+IP = host_only_ip()
+RESOLVE = "controller.%s:443:%s" % (DOMAIN, IP)
 
 
 def host_env():
@@ -28,7 +56,8 @@ def host_env():
 
 def openssl_pin():
     raw = subprocess.check_output(
-        "echo | openssl s_client -connect 192.0.2.200:443 -servername controller.1.localflynn.com 2>/dev/null | openssl x509 -outform DER",
+        "echo | openssl s_client -connect %s:443 -servername controller.%s 2>/dev/null | openssl x509 -outform DER"
+        % (IP, DOMAIN),
         shell=True,
     )
     return base64.b64encode(hashlib.sha256(raw).digest()).decode()
@@ -58,12 +87,10 @@ def cli_add_creds():
     disc = str(host_env().get("DISCOVERD") or "").strip()
     if disc and disc != "none":
         env["DISCOVERD"] = disc
-    else:
-        env["DISCOVERD"] = "192.0.2.200:1111"
     bins = [
+        "/usr/local/bin/flynn-host",
         os.path.join(ROOT, "build/bin/flynn-host"),
         "/usr/local/libexec/flynn-host",
-        "/usr/local/bin/flynn-host",
     ]
     last = None
     for bin_path in bins:

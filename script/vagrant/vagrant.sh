@@ -1,8 +1,8 @@
 #!/bin/bash
-# Laptop loop: dev-builder plus dev-node1 by default, source synced from this
-# checkout, cluster bootstrapped on the builder. This is a different Vagrant
-# env from smoke (.vagrant-dev, 192.168.57.10 / .20). Do not use a bare
-# `vagrant up` (that boots the smoke builder and cluster nodes).
+# Laptop loop: dev-builder compiles Flynn; dev-node1 (default) runs the live
+# cluster. This is a different Vagrant env from smoke (.vagrant-dev,
+# 192.168.57.10 builder / .20 node1). Do not use a bare `vagrant up` (that
+# boots the smoke builder and cluster nodes).
 #
 # Public entry: script/vagrant.sh  (make vagrant-setup, make vagrant-up, …)
 # Smoke stays on script/vagrant-smoke.sh so the two running envs never mix.
@@ -15,6 +15,8 @@ source "${VAGRANT_DIR}/lib/common.sh"
 source "${VAGRANT_DIR}/lib/env.sh"
 # shellcheck source=lib/lifecycle.sh
 source "${VAGRANT_DIR}/lib/lifecycle.sh"
+# shellcheck source=lib/cluster.sh
+source "${VAGRANT_DIR}/lib/cluster.sh"
 
 cd "${ROOT}"
 flynn_vagrant_use dev
@@ -27,15 +29,15 @@ usage() {
   cat <<EOF
 usage: script/vagrant.sh <setup|up|status|ssh|build|cli|bootstrap|update|reload|restart|stop|halt|destroy|teardown> [vm...]
 
-  setup      Boot VMs, build images if none exist, bootstrap, and connect this laptop
+  setup      Boot VMs, build images if none exist, bootstrap cluster nodes, connect this laptop
   up         Boot dev-builder and extra nodes (default FLYNN_DEV_NODES=1 → dev-node1)
   status     vagrant status of every VM in this env
-  ssh        Shell on dev-builder
-  build      Boot the builder if needed and build images (no cluster required)
+  ssh        Shell on a VM (default dev-builder; VM=dev-node1 for the live cluster)
+  build      Boot the builder if needed and build images (no cluster required; builder Flynn is compile-only)
   cli        Build the laptop flynn CLI and install it to /usr/local/bin
-  bootstrap  First cluster on dev-builder (script/bootstrap-flynn)
-  update     flynn-host update from the newest build/release tarball
-  reload     Reboot VMs (vagrant reload --no-provision) and start the cluster
+  bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
+  update     Build on the builder if Flynn source changed, then flynn-host update on running cluster nodes
+  reload     Reboot VMs (vagrant reload --no-provision) and start flynn-host on cluster nodes
   restart    Same as reload
   stop       Halt VMs (vagrant halt); disks and ./build-dev stay
   halt       Same as stop
@@ -49,9 +51,11 @@ vagrant-reload, vagrant-stop, vagrant-destroy. make vagrant prints this help.
 reload/restart/stop/destroy take optional VM names (dev-builder, dev-node1, …).
 With no names they act on every machine already in .vagrant-dev.
 
-setup is the one-time command. It builds images when none exist, then
-bootstraps. You can also run build first, then setup, to bootstrap that
-tarball.
+The builder only starts Flynn so flynn-builder can compile images. The live
+cluster is on cluster nodes (default FLYNN_DEV_NODES=1 → dev-node1).
+FLYNN_DEV_NODES=0 is builder-only (no live cluster). setup/bootstrap need at
+least one node. update applies flynn-host update --all-nodes --tarball --force
+on the running nodes so you exercise the same path as production.
 
   flynn -c local apps
   open https://status.1.localflynn.com
@@ -68,8 +72,9 @@ builder. GOMEMLIMIT in script/flynn-builder is also capped to guest RAM.
 The repo is mounted at ${SRC}. Flynn artifacts (binaries, images, tarballs)
 sync to ./build-dev so they do not overwrite smoke's ./build. Sibling plugin
 checkouts are mounted under /opt/flynn-plugins. Logs sync to
-./flynn-logs/dev-builder. Source tree and ubuntu_ports_cache are shared with
-smoke; running VMs, host-only IPs, and build outputs are not.
+./flynn-logs/dev-builder and ./flynn-logs/dev-nodeN. Source tree and
+ubuntu_ports_cache are shared with smoke; running VMs, host-only IPs, and
+build outputs are not.
 EOF
 }
 
@@ -94,23 +99,6 @@ stop_dev_machines() {
 
 destroy_dev_machines() {
   flynn_vagrant_destroy "$@"
-}
-
-# start_existing_cluster brings flynn-host back after a reboot. Nested
-# bootstrap on the builder does not install a systemd unit, so a VM reload
-# leaves the daemon down. Do not bootstrap a new cluster from here; exit 2
-# from ensure-cluster means host.json is missing or the controller never
-# answered (run script/vagrant.sh bootstrap / setup).
-start_existing_cluster() {
-  set +e
-  run_as_root "cd ${SRC} && script/vagrant/guest/ensure-cluster.sh"
-  local st=$?
-  set -e
-  if [[ "${st}" -eq 2 ]]; then
-    echo "VMs reloaded; cluster is not bootstrapped yet (script/vagrant.sh bootstrap)"
-    return 0
-  fi
-  return "${st}"
 }
 
 # ensure_dev_vm makes dev-builder reachable. A missing VM is not created here:
@@ -141,6 +129,19 @@ run_as_root() {
   vagrant ssh "${DEV_MACHINE}" -c "sudo -n bash -lc $(printf '%q' "$1")"
 }
 
+run_as_root_on() {
+  local vm="$1"
+  local cmd="$2"
+  need_vagrant
+  local state
+  state="$(machine_state "${vm}")"
+  if [[ "${state}" != "running" ]]; then
+    echo "${vm} is not running (${state})" >&2
+    exit 1
+  fi
+  vagrant ssh "${vm}" -c "sudo -n bash -lc $(printf '%q' "${cmd}")"
+}
+
 # restore_layers copies squashfs blobs from the newest local tarball into the
 # layer cache. bootstrap-flynn reads /var/lib/flynn/layer-cache, and a release
 # tarball does not leave those files there. Exit 2 means there is nothing to
@@ -150,7 +151,7 @@ restore_layers() {
 }
 
 # build_images boots the builder if needed and runs flynn-builder. Does not
-# require a bootstrapped cluster.
+# require a bootstrapped cluster. Builder Flynn is compile-only.
 build_images() {
   boot_builder
   run_as_root "cd ${SRC} && script/vagrant/guest/build-images.sh"
@@ -174,10 +175,6 @@ restore_or_build_layers() {
   restore_layers
 }
 
-publish_cluster() {
-  run_as_root "cd ${SRC} && script/vagrant/guest/publish.sh"
-}
-
 # boot_dev_cluster creates/starts every machine this env lists (builder plus
 # FLYNN_DEV_NODES extra hosts, default one).
 boot_dev_cluster() {
@@ -188,23 +185,93 @@ boot_builder() {
   boot_dev_cluster "${DEV_MACHINE}"
 }
 
-# ensure_cluster starts an existing cluster or bootstraps a new one.
-# ensure-cluster.sh exits 2 when host.json is missing, is a DISCOVERD-only
-# stub, or flynn-host came back without a controller (build.sh used to wipe
-# volumes and leave host.json behind).
-ensure_cluster() {
-  set +e
-  run_as_root "cd ${SRC} && script/vagrant/guest/ensure-cluster.sh"
-  local st=$?
-  set -e
-  if [[ "${st}" -eq 0 ]]; then
+require_cluster_nodes() {
+  local n
+  n="$(flynn_vagrant_get_nodes)"
+  if [[ -z "${n}" || "${n}" -lt 1 ]]; then
+    echo "no cluster nodes (FLYNN_DEV_NODES=${n:-0})." >&2
+    echo "The builder only compiles Flynn. Set FLYNN_DEV_NODES=1 (default) so setup bootstraps dev-node1." >&2
+    exit 1
+  fi
+}
+
+live_cluster_up() {
+  local ip domain code
+  ip="$(flynn_vagrant_cluster_ip)" || return 1
+  domain="$(flynn_vagrant_cluster_domain)"
+  code="$(curl -sk --max-time 3 -o /dev/null -w '%{http_code}' \
+    --resolve "controller.${domain}:443:${ip}" \
+    "https://controller.${domain}/" || true)"
+  if [[ "${code}" == "200" || "${code}" == "401" ]]; then
     return 0
   fi
-  if [[ "${st}" -ne 2 ]]; then
-    exit "${st}"
+  code="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' \
+    --resolve "controller.${domain}:80:${ip}" \
+    "http://controller.${domain}/" || true)"
+  [[ "${code}" == "200" || "${code}" == "401" ]]
+}
+
+install_and_bootstrap_nodes() {
+  local nodes=() name ip peers min_hosts domain cluster_ip
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    nodes+=("${name}")
+  done < <(flynn_vagrant_running_cluster_nodes)
+  if [[ ${#nodes[@]} -eq 0 ]]; then
+    echo "no running cluster nodes. Boot them with script/vagrant.sh up (default dev-node1)." >&2
+    exit 1
+  fi
+  peers="$(flynn_vagrant_peer_ips)"
+  min_hosts="${#nodes[@]}"
+  domain="$(flynn_vagrant_cluster_domain)"
+  cluster_ip="$(flynn_vagrant_cluster_ip)"
+  echo "installing Flynn on cluster nodes ${nodes[*]} (peer-ips=${peers})"
+  for name in "${nodes[@]}"; do
+    ip="$(flynn_vagrant_node_ip "${name}")"
+    run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/install-node.sh"
+    run_as_root_on "${name}" "cd ${SRC} && CLUSTER_IP=${cluster_ip} CLUSTER_DOMAIN=${domain} script/vagrant/guest/node-dns.sh"
+    run_as_root_on "${name}" "cd ${SRC} && PEER_IPS=${peers} EXTERNAL_IP=${ip} script/vagrant/guest/init-node.sh"
+  done
+  echo "bootstrapping Layer 1 on ${nodes[0]} (min-hosts=${min_hosts})"
+  run_as_root_on "${nodes[0]}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} MIN_HOSTS=${min_hosts} PEER_IPS=${peers} script/vagrant/guest/bootstrap-node.sh"
+}
+
+# ensure_live_cluster installs and bootstraps Flynn on cluster nodes. The
+# builder is never the operator cluster.
+ensure_live_cluster() {
+  require_cluster_nodes
+  if live_cluster_up; then
+    echo "cluster already up on $(flynn_vagrant_cluster_ip)"
+    return 0
   fi
   restore_or_build_layers
-  run_as_root "cd ${SRC} && script/bootstrap-flynn"
+  install_and_bootstrap_nodes
+}
+
+# start_existing_cluster brings flynn-host back after a reboot. Cluster nodes
+# use systemd (install-flynn). The builder is not started as a live cluster.
+start_existing_cluster() {
+  local name st=0 any=0
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    any=1
+    set +e
+    run_as_root_on "${name}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=$(flynn_vagrant_cluster_ip) script/vagrant/guest/start-node.sh"
+    st=$?
+    set -e
+    if [[ "${st}" -eq 2 ]]; then
+      echo "${name}: cluster is not bootstrapped yet (script/vagrant.sh bootstrap)"
+      return 0
+    fi
+    if [[ "${st}" -ne 0 ]]; then
+      return "${st}"
+    fi
+  done < <(flynn_vagrant_running_cluster_nodes)
+  if [[ "${any}" -eq 0 ]]; then
+    echo "VMs reloaded; no running cluster nodes (the builder does not host the live cluster)"
+    return 0
+  fi
+  return 0
 }
 
 # parse_dev_creds reads labeled FLYNN_DEV_PIN=/FLYNN_DEV_KEY= lines so a
@@ -226,14 +293,33 @@ parse_dev_creds() {
 }
 
 connect_laptop() {
-  local creds pin key
-  creds="$(run_as_root "cd ${SRC} && script/vagrant/guest/creds.sh")"
+  local creds pin key node domain ip
+  require_cluster_nodes
+  node="${FLYNN_VAGRANT_NODE_PREFIX}1"
+  domain="$(flynn_vagrant_cluster_domain)"
+  ip="$(flynn_vagrant_cluster_ip)"
+  creds="$(run_as_root_on "${node}" "cd ${SRC} && FLYNN_CLUSTER_IP=${ip} FLYNN_CLUSTER_DOMAIN=${domain} script/vagrant/guest/creds.sh")"
   parse_dev_creds "${creds}"
   if [[ -z "${pin}" || -z "${key}" ]]; then
-    echo "could not read the cluster pin and key" >&2
+    echo "could not read the cluster pin and key from ${node}" >&2
     exit 1
   fi
-  CLUSTER_PIN="${pin}" CLUSTER_KEY="${key}" "${ROOT}/script/vagrant/host/mac.sh"
+  CLUSTER_PIN="${pin}" CLUSTER_KEY="${key}" FLYNN_DEV_CLUSTER_IP="${ip}" FLYNN_DEV_DOMAIN="${domain}" "${ROOT}/script/vagrant/host/mac.sh"
+}
+
+update_running_cluster() {
+  local nodes=() name
+  while IFS= read -r name; do
+    [[ -n "${name}" ]] || continue
+    nodes+=("${name}")
+  done < <(flynn_vagrant_running_cluster_nodes)
+  if [[ ${#nodes[@]} -eq 0 ]]; then
+    echo "no running cluster nodes to update." >&2
+    echo "The builder is compile-only. Start the cluster with script/vagrant.sh up, then retry, or run script/vagrant.sh setup." >&2
+    exit 1
+  fi
+  echo "updating live cluster on ${nodes[*]} (flynn-host update --all-nodes)"
+  run_as_root_on "${nodes[0]}" "cd ${SRC} && script/vagrant/guest/update-cluster.sh"
 }
 
 cmd="${1:-}"
@@ -243,19 +329,17 @@ case "${cmd}" in
     ;;
   setup)
     boot_dev_cluster
-    ensure_cluster
-    publish_cluster
+    ensure_live_cluster
     connect_laptop
     ;;
   up)
     boot_dev_cluster "${@:2}"
-    publish_cluster || true
     ;;
   status)
     flynn_vagrant_status
     ;;
   ssh)
-    flynn_vagrant_ssh "${DEV_MACHINE}"
+    flynn_vagrant_ssh "${2:-${DEV_MACHINE}}"
     ;;
   build)
     build_images
@@ -264,18 +348,19 @@ case "${cmd}" in
     "${ROOT}/script/vagrant/host/cli.sh"
     ;;
   bootstrap)
+    boot_dev_cluster
+    require_cluster_nodes
     restore_or_build_layers
-    run_as_root "cd ${SRC} && script/bootstrap-flynn"
-    publish_cluster
+    install_and_bootstrap_nodes
     connect_laptop
     ;;
   update)
     run_as_root "cd ${SRC} && script/vagrant/guest/update.sh"
+    update_running_cluster
     ;;
   reload|restart)
     reload_dev_machines "${@:2}"
     start_existing_cluster
-    publish_cluster || true
     ;;
   stop|halt)
     stop_dev_machines "${@:2}"

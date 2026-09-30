@@ -16,6 +16,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
   config.vm.box = "bento/ubuntu-24.04"
 
   config.ssh.forward_agent = true
+  # Guest sshd host keys are new on every destroy/up. :never (StrictHostKeyChecking=no,
+  # UserKnownHostsFile=/dev/null) so setup/vagrant ssh never asks to accept the key.
+  config.ssh.verify_host_key = :never
 
   # Sync all project directories to the VM (owned by root)
   config.vm.synced_folder ".", "/root/go/src/github.com/flynn/flynn", create: true, group: "root", owner: "root"
@@ -81,8 +84,9 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       dev.vm.network "private_network", ip: "192.168.57.10"
     end
 
-    # Extra hosts for the laptop cluster. Default is one (dev-node1 at
-    # 192.168.57.20). FLYNN_DEV_NODES=0 is builder-only; 3 adds dev-node1..3
+    # Extra hosts for the live laptop cluster. Default is one (dev-node1 at
+    # 192.168.57.20). The builder is compile-only; these VMs run Flynn.
+    # FLYNN_DEV_NODES=0 is builder-only; 3 adds dev-node1..3
     # at 192.168.57.(19+N), the same offset smoke uses on 192.168.56.0/24.
     dev_nodes = Integer(ENV.fetch("FLYNN_DEV_NODES", "1"))
     raise "FLYNN_DEV_NODES must be >= 0 (got #{dev_nodes})" if dev_nodes < 0

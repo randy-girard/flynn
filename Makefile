@@ -92,13 +92,13 @@ vagrant: ## Laptop Vagrant loop help (script/vagrant.sh)
 vagrant-setup: ## Boot VMs, build images if needed, bootstrap, connect
 	$(VAGRANT) setup $(ARGS)
 
-vagrant-up: ## Boot laptop-loop VMs (dev-builder + dev-node1)
+vagrant-up: ## Boot laptop-loop VMs (dev-builder + cluster nodes)
 	$(VAGRANT) up $(VM) $(ARGS)
 
 vagrant-status: ## Status of laptop-loop VMs
 	$(VAGRANT) status $(ARGS)
 
-vagrant-ssh: ## SSH into a laptop-loop VM (VM=dev-builder)
+vagrant-ssh: ## SSH into a laptop-loop VM (VM=dev-builder or VM=dev-node1)
 	$(VAGRANT) ssh $(VM)
 
 vagrant-build: ## Boot builder if needed; build images (works before setup)
@@ -107,10 +107,10 @@ vagrant-build: ## Boot builder if needed; build images (works before setup)
 vagrant-cli: ## Build the laptop flynn CLI into /usr/local/bin
 	$(VAGRANT) cli $(ARGS)
 
-vagrant-bootstrap: ## Bootstrap the first cluster on dev-builder
+vagrant-bootstrap: ## Install tarball and bootstrap the live cluster on cluster nodes
 	$(VAGRANT) bootstrap $(ARGS)
 
-vagrant-update: ## flynn-host update from the new tarball
+vagrant-update: ## Build on the builder, then flynn-host update on running cluster nodes
 	$(VAGRANT) update $(ARGS)
 
 vagrant-reload: ## Reboot laptop-loop VMs and start flynn-host
@@ -153,7 +153,7 @@ test-vagrant: ## Run script/vagrant/test/*.sh (no VMs)
 help: ## Show this help
 	@awk 'BEGIN { \
 		FS = ":.*##"; \
-		printf "Usage:\n  make <target>\n  make vagrant-smoke ITEM=datastores\n  make vagrant-ssh VM=dev-builder\n\nTargets:\n"; \
+		printf "Usage:\n  make <target>\n  make vagrant-smoke ITEM=datastores\n  make vagrant-ssh VM=dev-node1\n\nTargets:\n"; \
 	} \
 	/^[a-zA-Z0-9_.-]+:.*?##/ { \
 		printf "  %-24s %s\n", $$1, $$2; \

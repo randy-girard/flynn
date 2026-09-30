@@ -22,13 +22,15 @@ and the `vagrant-disksize` plugin.
 Do **not** run a bare `vagrant up`. That boots the builder and every cluster
 node (heavy). See [Vagrant](installation/vagrant.md). For a laptop cluster that
 can sit beside smoke, use `script/vagrant.sh` / `make vagrant-setup`
-(`.vagrant-dev`, **dev-builder** at `192.168.57.10` and **dev-node1** at
-`192.168.57.20`). `make vagrant-reload`
-(alias `restart`) reboots those VMs and starts `flynn-host` again.
+(`.vagrant-dev`, **dev-builder** at `192.168.57.10` compiles images;
+**dev-node1** at `192.168.57.20` runs the live cluster). `make vagrant-reload`
+(alias `restart`) reboots those VMs and starts `flynn-host` on cluster nodes.
 `make vagrant-stop` (alias `halt`) powers them off; `make vagrant-destroy`
 (alias `teardown`) deletes the VMs without touching smoke or `./build-dev`.
 Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
 keeps `./build`. Implementation lives in `script/vagrant/`.
+`make vagrant-update` builds on the builder, then runs `flynn-host update`
+on the running cluster nodes.
 
 Clone this fork, then start only the smoke builder (not the laptop loop):
 
@@ -171,19 +173,25 @@ tarball`).
 
 ## Running a local cluster
 
-After a binary (and, for a real cluster, image) build:
+The laptop Vagrant loop (`make vagrant-setup`) installs Flynn on **cluster
+nodes** (`dev-node1` by default), not on the builder. That is
+`install-flynn` + `flynn-host init --peer-ips` + `flynn-host bootstrap`,
+the same path as smoke. The builder only starts Flynn so `flynn-builder`
+can compile images.
+
+On a single Linux machine (not the laptop Vagrant loop):
 
 ```
 $ script/bootstrap-flynn
 ```
 
-That stops any previous `flynn-host`, starts it again, and bootstraps Layer 1.
-`--size N` creates extra virtual interfaces on one machine for a multi-node
-layout. See `script/bootstrap-flynn -h`.
+That stops any previous `flynn-host`, starts it again, and bootstraps Layer 1
+on TEST-NET interfaces. `--size N` creates extra virtual interfaces on one
+machine for a multi-node layout. See `script/bootstrap-flynn -h`.
 
-The last bootstrap lines include `flynn cluster:add …`. On Vagrant, host daemon
-logs are `/var/log/flynn/flynn-host.log`, synced to `./flynn-logs/builder` on
-the laptop.
+The last bootstrap lines include `flynn cluster:add …`. On the laptop loop,
+host daemon logs are `/var/log/flynn/flynn-host.log` on **dev-node1**, synced
+to `./flynn-logs/dev-node1` on the laptop.
 
 ## Debugging
 
