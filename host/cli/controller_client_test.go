@@ -36,6 +36,16 @@ func TestControllerClientUsesDiscoverdNameNotInstanceIP(t *testing.T) {
 	}
 }
 
+func TestControllerClientUsesHostAuthKeyFromEnv(t *testing.T) {
+	src, err := os.ReadFile("../../controller/client/client.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), `HostAuthKey: os.Getenv("FLYNN_HOST_AUTH_KEY")`) {
+		t.Fatal("flynn-host controller client must send X-Flynn-Host-Auth so datastore RunJob (backup, pg:psql) still works")
+	}
+}
+
 func TestControllerClientUsesAPIKeyHelperAfterSEC028(t *testing.T) {
 	for _, path := range []string{"controller_client.go", "github_updater.go", "acme.go", "events.go"} {
 		src, err := os.ReadFile(path)

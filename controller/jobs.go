@@ -162,6 +162,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	}
 
 	app := c.getApp(ctx)
+	if err := refuseDatastoreRunJob(app, req); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	if err := sanitizeOneOffJob(app, &newJob, authz.TokenFromContext(ctx)); err != nil {
 		respondWithError(w, err)
 		return

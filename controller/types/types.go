@@ -80,6 +80,52 @@ func (a *App) Plugin() bool {
 	return ok && v == "true"
 }
 
+// DatastoreJobExecMessage is returned when Flynn CLI (or any caller without
+// the host auth header) tries to run a one-off on a database app. That would
+// be a shell in the database image. Native clients stay on the user app
+// (`flynn pg psql`, `flynn mysql console`, `flynn redis redis-cli`,
+// `flynn mongodb mongo`, …). Inspecting the running job is flynn-host only.
+const DatastoreJobExecMessage = "cannot run a job on a database app; use the native client (flynn pg psql, flynn mysql console, flynn redis redis-cli, flynn mongodb mongo, …) or flynn-host"
+
+// DatastoreKinds are Flynn database engines. System and plugin apps with these
+// names, a -plugin suffix, or UniqueApp prefixes (mysql-amber-xxxxxx) are
+// datastores even on clusters that predate flynn-datastore meta.
+var DatastoreKinds = []string{
+	"postgres", "mysql", "mariadb", "mongodb", "redis", "kafka", "clickhouse",
+}
+
+// Datastore reports whether this app is a database: flynn-datastore meta,
+// isolated plugin instances, redis appliances, shared/plugin appliances
+// (postgres, mysql, mongodb, redis, kafka, clickhouse), or platform postgres.
+func (a *App) Datastore() bool {
+	if a == nil {
+		return false
+	}
+	if v, ok := a.Meta["flynn-datastore"]; ok && v == "true" {
+		return true
+	}
+	if !a.System() && !a.Plugin() {
+		return false
+	}
+	return datastoreAppName(a.Name)
+}
+
+func datastoreAppName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	if n == "pg" || strings.HasPrefix(n, "pg-") {
+		return true
+	}
+	for _, kind := range DatastoreKinds {
+		if n == kind || strings.HasPrefix(n, kind+"-") {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) RedisAppliance() bool {
 	return a.System() && strings.HasPrefix(a.Name, "redis-")
 }
@@ -95,8 +141,11 @@ const RedisApplianceStrategy = "one-down-one-up"
 // the data volume is reused across updates.
 func NewRedisApplianceApp(name string) *App {
 	return &App{
-		Name:     name,
-		Meta:     map[string]string{"flynn-system-app": "true"},
+		Name: name,
+		Meta: map[string]string{
+			"flynn-system-app": "true",
+			"flynn-datastore":  "true",
+		},
 		Strategy: RedisApplianceStrategy,
 	}
 }

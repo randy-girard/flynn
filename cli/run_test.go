@@ -69,3 +69,25 @@ func TestRunJobArgs(t *testing.T) {
 		}
 	}
 }
+
+func TestErrIfDatastoreApp(t *testing.T) {
+	if err := errIfDatastoreApp(&ct.App{Name: "shop"}); err != nil {
+		t.Fatalf("user app: %v", err)
+	}
+	err := errIfDatastoreApp(&ct.App{Name: "pg-x", Meta: map[string]string{"flynn-datastore": "true"}})
+	if err == nil || err.Error() != ct.DatastoreJobExecMessage {
+		t.Fatalf("datastore: %v", err)
+	}
+	if err := errIfDatastoreApp(&ct.App{Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}}); err == nil {
+		t.Fatal("platform postgres")
+	}
+	system := map[string]string{"flynn-system-app": "true"}
+	for _, name := range []string{"mysql-plugin", "mongodb-grove-xyzxyz", "kafka-delta-abcdef", "clickhouse-plugin"} {
+		if err := errIfDatastoreApp(&ct.App{Name: name, Meta: system}); err == nil {
+			t.Fatalf("%s", name)
+		}
+	}
+	if err := errIfDatastoreApp(nil); err != nil {
+		t.Fatalf("nil: %v", err)
+	}
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -40,12 +41,22 @@ func rotateDiscoverdAddrs(addrs []string) []string {
 }
 
 func discoverdDial(network, addr string) (net.Conn, error) {
+	return discoverdDialContext(context.Background(), network, addr)
+}
+
+func discoverdDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.HasSuffix(host, ".discoverd") {
-		return dialer.Default.Dial(network, addr)
+		return dialer.Default.DialContext(ctx, network, addr)
 	}
 	service := strings.TrimSuffix(host, ".discoverd")
 	addrs, err := lookupDiscoverdAddrs(service)
@@ -57,7 +68,10 @@ func discoverdDial(network, addr string) (net.Conn, error) {
 	}
 	var firstErr error
 	for _, candidate := range rotateDiscoverdAddrs(addrs) {
-		conn, err := dialer.Default.Dial(network, candidate)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		conn, err := dialer.Default.DialContext(ctx, network, candidate)
 		if err == nil {
 			return conn, nil
 		}
@@ -84,7 +98,7 @@ func controllerClient() (controller.Client, error) {
 	}
 	httpClient := discoverdHTTPClient()
 	// Use the discoverd DNS name, not a pinned instance IP. HTTP and Hijack
-	// share Transport.Dial (discoverdDial), so systemd-resolved not knowing
+	// share Transport.DialContext (discoverdDial), so systemd-resolved not knowing
 	// *.discoverd is fine. Pinning would stick to a dead controller after a
 	// deploy; the updater already uses this URL for ResumingStream.
 	key := controllerAPIKey(instances[0].Meta)

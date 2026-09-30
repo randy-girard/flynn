@@ -118,7 +118,28 @@ type runConfig struct {
 	DeprecatedArtifact string
 }
 
+func refuseDatastoreAppJob(client controller.Client, appID string) error {
+	if client == nil || appID == "" {
+		return nil
+	}
+	app, err := client.GetApp(appID)
+	if err != nil {
+		return nil
+	}
+	return errIfDatastoreApp(app)
+}
+
+func errIfDatastoreApp(app *ct.App) error {
+	if app != nil && app.Datastore() {
+		return errors.New(ct.DatastoreJobExecMessage)
+	}
+	return nil
+}
+
 func runJob(client controller.Client, config runConfig) error {
+	if err := refuseDatastoreAppJob(client, config.App); err != nil {
+		return err
+	}
 	req := &ct.NewJob{
 		Args:               config.Args,
 		TTY:                config.Stdin == nil && config.Stdout == nil && term.IsTerminal(os.Stdin.Fd()) && term.IsTerminal(os.Stdout.Fd()) && !config.Detached,

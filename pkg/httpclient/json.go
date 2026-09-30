@@ -48,6 +48,9 @@ type Client struct {
 	Host       string
 	HTTP       *http.Client
 	HijackDial DialFunc
+	// HostAuthKey, when set, is sent as X-Flynn-Host-Auth so the controller
+	// can allow flynn-host one-offs on datastore apps (backup, pg:psql).
+	HostAuthKey string
 }
 
 func ToJSON(v interface{}) (io.Reader, error) {
@@ -91,6 +94,9 @@ func (c *Client) prepareReqContext(ctx context.Context, method, rawurl string, h
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	} else if c.Key != "" {
 		req.SetBasicAuth("", c.Key)
+	}
+	if c.HostAuthKey != "" {
+		req.Header.Set(httphelper.HeaderFlynnHostAuth, c.HostAuthKey)
 	}
 	if c.Host != "" {
 		req.Host = c.Host

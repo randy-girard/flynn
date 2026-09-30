@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"time"
 
 	. "github.com/flynn/go-check"
@@ -15,6 +16,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
 	"golang.org/x/net/context"
 )
@@ -576,6 +578,49 @@ func (s *S) TestRunJobClusterAdminCanSetSystemTrust(c *C) {
 		c.Assert(job.Metadata["flynn-system-app"], Equals, "true")
 		c.Assert(job.Profiles, DeepEquals, []host.JobProfile{host.JobProfileZFS})
 	}
+}
+
+func (s *S) runJobWithHostAuth(c *C, app *ct.App, tok *authorizer.Token, newJob *ct.NewJob, hostKey string) *httptest.ResponseRecorder {
+	body, err := json.Marshal(newJob)
+	c.Assert(err, IsNil)
+	req, err := http.NewRequest("POST", "/apps/"+app.ID+"/jobs", bytes.NewReader(body))
+	c.Assert(err, IsNil)
+	req.Header.Set("Content-Type", "application/json")
+	if hostKey != "" {
+		req.Header.Set(httphelper.HeaderFlynnHostAuth, hostKey)
+	}
+	rec := httptest.NewRecorder()
+	ctx := context.WithValue(context.Background(), "app", app)
+	ctx = context.WithValue(ctx, authz.TokenContextKey, tok)
+	s.api.RunJob(ctx, rec, req)
+	return rec
+}
+
+func (s *S) TestRunJobDatastoreRequiresHostAuth(c *C) {
+	prev := os.Getenv("FLYNN_HOST_AUTH_KEY")
+	c.Assert(os.Setenv("FLYNN_HOST_AUTH_KEY", "host-secret"), IsNil)
+	defer os.Setenv("FLYNN_HOST_AUTH_KEY", prev)
+
+	app := s.createTestApp(c, &ct.App{
+		Name: "run-datastore",
+		Meta: map[string]string{"flynn-system-app": "true", "flynn-datastore": "true"},
+	})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+	job := &ct.NewJob{ReleaseID: release.ID, Args: []string{"bash"}}
+	admin := &authorizer.Token{ClusterKey: true}
+
+	rec := s.runJobWithHostAuth(c, app, admin, job, "")
+	c.Assert(rec.Code, Equals, 400)
+
+	rec = s.runJobWithHostAuth(c, app, admin, job, "host-secret")
+	c.Assert(rec.Code, Equals, 200)
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 1)
 }
 
 func (s *S) TestRunJobRejectsForeignRelease(c *C) {

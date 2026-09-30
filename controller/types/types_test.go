@@ -72,10 +72,48 @@ func TestPluginMeta(t *testing.T) {
 	}
 }
 
+func TestDatastore(t *testing.T) {
+	system := map[string]string{"flynn-system-app": "true"}
+	if !(&App{Name: "pg-x", Meta: map[string]string{"flynn-datastore": "true"}}).Datastore() {
+		t.Fatal("flynn-datastore meta")
+	}
+	for _, name := range []string{
+		"postgres", "postgres-plugin", "pg-amber-abcdef",
+		"mysql", "mysql-plugin", "mysql-amber-abcdef", "mariadb",
+		"mongodb", "mongodb-plugin", "mongodb-grove-xyzxyz",
+		"redis", "redis-plugin", "redis-11111111-2222-3333-4444-555555555555", "redis-harbor-abcdef",
+		"kafka", "kafka-plugin", "kafka-delta-abcdef",
+		"clickhouse", "clickhouse-plugin", "clickhouse-fjord-abcdef",
+	} {
+		if !(&App{Name: name, Meta: system}).Datastore() {
+			t.Fatalf("%s system app must be a datastore without flynn-datastore meta", name)
+		}
+	}
+	if !NewRedisApplianceApp("redis-deadbeef-0000-0000-0000-000000000000").Datastore() {
+		t.Fatal("redis appliance")
+	}
+	if (&App{Name: "mysql-reports"}).Datastore() {
+		t.Fatal("user app named like a store prefix is not a datastore")
+	}
+	if (&App{Name: "shop"}).Datastore() {
+		t.Fatal("user app")
+	}
+	if (&App{Name: "controller", Meta: system}).Datastore() {
+		t.Fatal("controller is not a datastore")
+	}
+	if (&App{Name: "dashboard", Meta: map[string]string{"flynn-system-app": "true", "flynn-plugin": "true"}}).Datastore() {
+		t.Fatal("non-store plugin is not a datastore")
+	}
+	var nilApp *App
+	if nilApp.Datastore() {
+		t.Fatal("nil app")
+	}
+}
+
 func TestNewRedisApplianceAppMetaAndStrategy(t *testing.T) {
 	app := NewRedisApplianceApp("redis-deadbeef-0000-0000-0000-000000000000")
-	if app.Meta["flynn-system-app"] != "true" {
-		t.Fatalf("Meta = %v, want flynn-system-app=true", app.Meta)
+	if app.Meta["flynn-system-app"] != "true" || app.Meta["flynn-datastore"] != "true" {
+		t.Fatalf("Meta = %v, want flynn-system-app and flynn-datastore", app.Meta)
 	}
 	if RedisApplianceStrategy != "one-down-one-up" {
 		t.Fatalf("RedisApplianceStrategy = %q, want one-down-one-up", RedisApplianceStrategy)

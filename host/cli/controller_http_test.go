@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"net"
 	"net/http"
 	"testing"
@@ -21,8 +23,8 @@ func TestNewControllerHTTPClientStreamingHasNoTimeout(t *testing.T) {
 	if tr.ResponseHeaderTimeout != controllerResponseHeaderTimeout {
 		t.Fatalf("ResponseHeaderTimeout=%s", tr.ResponseHeaderTimeout)
 	}
-	if tr.Dial == nil {
-		t.Fatal("Dial must be set")
+	if tr.DialContext == nil {
+		t.Fatal("DialContext must be set so waitHTTP can cancel a draining discoverd peer")
 	}
 }
 
@@ -38,8 +40,8 @@ func TestDiscoverdHTTPClientHasResponseHeaderTimeout(t *testing.T) {
 	if tr.ResponseHeaderTimeout != controllerResponseHeaderTimeout {
 		t.Fatalf("ResponseHeaderTimeout=%s", tr.ResponseHeaderTimeout)
 	}
-	if tr.Dial == nil {
-		t.Fatal("Dial must be set")
+	if tr.DialContext == nil {
+		t.Fatal("DialContext must be set so waitHTTP can cancel a draining discoverd peer")
 	}
 }
 
@@ -50,5 +52,25 @@ func TestNewControllerHTTPClientRepairHasTimeout(t *testing.T) {
 	}
 	if c.Timeout == 0 {
 		t.Fatal("repair client must bound JobList/VolumeList")
+	}
+}
+
+func TestContextDialHonorsCancel(t *testing.T) {
+	started := make(chan struct{})
+	dial := func(network, addr string) (net.Conn, error) {
+		close(started)
+		select {}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-started
+		cancel()
+	}()
+	c, err := contextDial(dial)(ctx, "tcp", "127.0.0.1:1")
+	if err == nil || !errors.Is(err, context.Canceled) {
+		if c != nil {
+			c.Close()
+		}
+		t.Fatalf("canceled dial: conn=%v err=%v", c, err)
 	}
 }

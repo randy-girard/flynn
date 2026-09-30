@@ -41,6 +41,25 @@ func TestPrepareReqTokenTakesPrecedenceOverKey(t *testing.T) {
 	}
 }
 
+func TestPrepareReqHostAuthHeader(t *testing.T) {
+	c := &Client{Key: "cluster-key", HostAuthKey: "host-secret"}
+	req, err := c.prepareReq("POST", "http://example/apps/pg/jobs", nil, map[string]string{"a": "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get(httphelper.HeaderFlynnHostAuth); got != "host-secret" {
+		t.Fatalf("X-Flynn-Host-Auth=%q", got)
+	}
+	c = &Client{Key: "cluster-key"}
+	req, err = c.prepareReq("GET", "http://example/x", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := req.Header.Get(httphelper.HeaderFlynnHostAuth); got != "" {
+		t.Fatalf("empty HostAuthKey sent %q", got)
+	}
+}
+
 func TestPostWithHostAuth(t *testing.T) {
 	var gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
