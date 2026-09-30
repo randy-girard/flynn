@@ -82,11 +82,19 @@ func dropInternalCatalogApps(apps []*ct.App) []*ct.App {
 	return out
 }
 
+// catalogInternalApp is true for bootstrap/platform apps that cluster-admin
+// GET /apps hides. Only plugins Flynn has already installed stay listed:
+// flynn-host plugin:install sets flynn-plugin=true on that app. Known catalog
+// names with no such app do not appear. Remaining system apps still need
+// ?all=true / ?system=true.
 func catalogInternalApp(app *ct.App) bool {
 	if app == nil {
 		return false
 	}
-	return app.System() || app.Plugin() || authz.IsPlatformAppName(app.Name)
+	if app.Plugin() {
+		return false
+	}
+	return app.System() || authz.IsPlatformAppName(app.Name)
 }
 
 func wantCatalogAll(req *http.Request) bool {

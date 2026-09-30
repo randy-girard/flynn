@@ -60,13 +60,14 @@ usage: flynn apps [--all]
 List apps visible to the current credential.
 
 A user token lists only apps you own or are a collaborator on. The cluster
-key and other cluster-admin credentials omit platform, system, and plugin
-apps by default so a shared key does not advertise cluster internals.
-Pass --all (cluster-admin) for the full catalog. flynn-host and other
-operator tools still request that catalog themselves.
+key and other cluster-admin credentials list user apps and installed
+plugins (flynn-plugin meta from flynn-host plugin:install) and omit
+bootstrap platform/system apps. Pass --all (cluster-admin) for the full
+catalog. flynn-host and other operator tools still request that catalog
+themselves.
 
 Options:
-	--all  Include platform, system, and plugin apps (cluster-admin)
+	--all  Include platform and system apps (cluster-admin)
 
 Examples:
 

@@ -45,15 +45,62 @@ func TestWantCatalogAll(t *testing.T) {
 	}
 }
 
+func pluginInstallMeta() map[string]string {
+	return map[string]string{"flynn-system-app": "true", "flynn-plugin": "true"}
+}
+
+func TestCatalogInternalApp(t *testing.T) {
+	// Only apps Flynn already installed (flynn-plugin=true) stay on GET /apps.
+	installed := []string{
+		"dashboard-plugin", "postgres-plugin", "redis-plugin", "mysql-plugin",
+		"mongodb-plugin", "kafka-plugin", "clickhouse-plugin", "github-plugin",
+		"widget-plugin",
+	}
+	for _, name := range installed {
+		app := &ct.App{Name: name, Meta: pluginInstallMeta()}
+		if catalogInternalApp(app) {
+			t.Errorf("%s: installed plugin must stay on GET /apps", name)
+		}
+	}
+	for _, name := range []string{"controller", "postgres", "blobstore", "gitreceive", "router"} {
+		app := &ct.App{Name: name, Meta: map[string]string{"flynn-system-app": "true"}}
+		if !catalogInternalApp(app) {
+			t.Errorf("%s: bootstrap system app must stay off GET /apps", name)
+		}
+	}
+	if catalogInternalApp(&ct.App{Name: "myapp"}) {
+		t.Fatal("user app is not internal")
+	}
+	if catalogInternalApp(&ct.App{Name: "widget", Meta: map[string]string{"flynn-plugin": "true"}}) {
+		t.Fatal("plugin meta without system meta is still a plugin")
+	}
+	// A known plugin name with no install meta is not an installed plugin.
+	if !catalogInternalApp(&ct.App{Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}}) {
+		t.Fatal("platform postgres without flynn-plugin is still a system app")
+	}
+}
+
 func TestFilterVisibleApps(t *testing.T) {
 	userApp := &ct.App{ID: "user-1", Name: "myapp", OwnerAccount: "user:u1"}
 	otherApp := &ct.App{ID: "user-2", Name: "other", OwnerAccount: "user:u2"}
 	unowned := &ct.App{ID: "op-1", Name: "ops-app"}
 	controllerApp := &ct.App{ID: "sys-1", Name: "controller", Meta: map[string]string{"flynn-system-app": "true"}}
 	postgresApp := &ct.App{ID: "sys-2", Name: "postgres", Meta: map[string]string{"flynn-system-app": "true"}}
-	pluginApp := &ct.App{ID: "plug-1", Name: "dashboard", Meta: map[string]string{"flynn-plugin": "true"}}
+	pluginApp := &ct.App{ID: "plug-1", Name: "dashboard", Meta: pluginInstallMeta()}
+	postgresPlugin := &ct.App{ID: "plug-pg", Name: "postgres-plugin", Meta: pluginInstallMeta()}
+	redisPlugin := &ct.App{ID: "plug-redis", Name: "redis-plugin", Meta: pluginInstallMeta()}
+	mysqlPlugin := &ct.App{ID: "plug-mysql", Name: "mysql-plugin", Meta: pluginInstallMeta()}
+	mongoPlugin := &ct.App{ID: "plug-mongo", Name: "mongodb-plugin", Meta: pluginInstallMeta()}
+	kafkaPlugin := &ct.App{ID: "plug-kafka", Name: "kafka-plugin", Meta: pluginInstallMeta()}
+	clickhousePlugin := &ct.App{ID: "plug-ch", Name: "clickhouse-plugin", Meta: pluginInstallMeta()}
+	githubPlugin := &ct.App{ID: "plug-gh", Name: "github-plugin", Meta: pluginInstallMeta()}
+	futurePlugin := &ct.App{ID: "plug-widget", Name: "widget-plugin", Meta: pluginInstallMeta()}
 	collabApp := &ct.App{ID: "col-1", Name: "shared", OwnerAccount: "user:u2"}
-	all := []*ct.App{userApp, otherApp, unowned, controllerApp, postgresApp, pluginApp, collabApp}
+	all := []*ct.App{
+		userApp, otherApp, unowned, controllerApp, postgresApp, pluginApp,
+		postgresPlugin, redisPlugin, mysqlPlugin, mongoPlugin, kafkaPlugin,
+		clickhousePlugin, githubPlugin, futurePlugin, collabApp,
+	}
 
 	api := &controllerAPI{}
 	names := func(list interface{}) []string {
@@ -114,18 +161,23 @@ func TestFilterVisibleApps(t *testing.T) {
 		}
 	})
 
-	t.Run("cluster_admin_default_hides_system_and_plugin", func(t *testing.T) {
+	t.Run("cluster_admin_default_lists_plugins_hides_system", func(t *testing.T) {
 		tok := &authorizer.Token{ClusterKey: true}
 		ctx := context.WithValue(context.Background(), authz.TokenContextKey, tok)
 		got := names(api.filterVisibleApps(ctx, false, all))
-		for _, want := range []string{"myapp", "other", "ops-app", "shared"} {
+		for _, want := range []string{
+			"myapp", "other", "ops-app", "shared",
+			"dashboard", "postgres-plugin", "redis-plugin", "mysql-plugin",
+			"mongodb-plugin", "kafka-plugin", "clickhouse-plugin", "github-plugin",
+			"widget-plugin",
+		} {
 			if !has(got, want) {
-				t.Fatalf("admin default list = %v, missing user app %q", got, want)
+				t.Fatalf("admin default list = %v, missing %q", got, want)
 			}
 		}
-		for _, banned := range []string{"controller", "postgres", "dashboard"} {
+		for _, banned := range []string{"controller", "postgres"} {
 			if has(got, banned) {
-				t.Fatalf("admin default list = %v must hide %q", got, banned)
+				t.Fatalf("admin default list = %v must hide bootstrap system app %q", got, banned)
 			}
 		}
 	})
@@ -177,6 +229,10 @@ func TestAppVisible(t *testing.T) {
 		t.Fatal("grants must not expose system apps on the catalog")
 	}
 	if appVisible(&authorizer.Token{UserID: "u1"}, plugin) {
-		t.Fatal("user must not see plugin apps")
+		t.Fatal("user must not see plugin apps they were not granted")
+	}
+	pluginGrant := &authorizer.Token{UserID: "u1", AppGrants: []authorizer.AppGrant{{AppID: "p1", Permissions: []string{"app:read"}}}}
+	if !appVisible(pluginGrant, plugin) {
+		t.Fatal("collaborator grant must list a Flynn-installed plugin")
 	}
 }

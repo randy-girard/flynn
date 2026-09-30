@@ -6,11 +6,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	v1controller "github.com/randy-girard/flynn/controller/client/v1"
 	ct "github.com/randy-girard/flynn/controller/types"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/pinned"
@@ -113,6 +115,12 @@ type Client interface {
 	GetACMEConfig() (*ct.ACMEConfig, error)
 	GetACMEConfigInternal() (*ct.ACMEConfig, error)
 	UpdateACMEConfig(config *ct.ACMEConfig) error
+	ListDBRuntimes() (*dbruntime.Catalog, error)
+	CreateDBRuntime(runtime *dbruntime.Runtime) error
+	ReplaceDBRuntimes(catalog *dbruntime.Catalog) error
+	UpdateDBRuntime(engine, name string, runtime *dbruntime.Runtime) error
+	DeleteDBRuntime(engine, name string) error
+	UpdateDBRuntimeSettings(allowCustomSizes bool) (*dbruntime.Catalog, error)
 	ListRuntimeProfiles() ([]*ct.RuntimeProfile, error)
 	GetRuntimeProfile(id string) (*ct.RuntimeProfile, error)
 	CreateRuntimeProfile(profile *ct.RuntimeProfile) error
@@ -146,6 +154,7 @@ func newClient(key string, url string, http *http.Client) *v1controller.Client {
 			Key:         key,
 			URL:         url,
 			HTTP:        http,
+			HostAuthKey: os.Getenv("FLYNN_HOST_AUTH_KEY"),
 		},
 	}
 	return c

@@ -50,3 +50,22 @@ func TestNewClientDefaultsAndToken(t *testing.T) {
 		t.Fatalf("invalid URI: %v", err)
 	}
 }
+
+func TestNewClientCopiesHostAuthKey(t *testing.T) {
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "from-env")
+	c, err := NewClient("http://controller.discoverd", "cluster-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.(*v1controller.Client).HostAuthKey != "from-env" {
+		t.Fatalf("HostAuthKey=%q", c.(*v1controller.Client).HostAuthKey)
+	}
+	t.Setenv("FLYNN_HOST_AUTH_KEY", "")
+	c, err = NewClient("http://controller.discoverd", "cluster-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.(*v1controller.Client).HostAuthKey != "" {
+		t.Fatalf("empty env HostAuthKey=%q", c.(*v1controller.Client).HostAuthKey)
+	}
+}

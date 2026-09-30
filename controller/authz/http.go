@@ -39,7 +39,8 @@ const (
 	// keeps GET /apps a 403 for dashboard grants that only list one app.
 	// User tokens that pass this check still must not receive the full app
 	// catalog: GET /apps filters to owned/collaborator apps. Cluster-admin
-	// GET /apps omits system/plugin apps unless ?all=true.
+	// GET /apps includes flynn-plugin apps (installed via flynn-host) and
+	// omits bootstrap system apps unless ?all=true.
 	rkUserSession
 	// rkManageProvider is resource provision, attach, and delete. A user id
 	// or an app:write / app:admin grant may reach the handler, which checks

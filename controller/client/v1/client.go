@@ -882,7 +882,9 @@ func (c *Client) AppList() ([]*ct.App, error) {
 }
 
 // AppListVisible returns GET /apps without the operator catalog. Cluster
-// admins see user apps only. User tokens see apps they own or collaborate on.
+// admins see user apps and flynn-plugin apps (installed via flynn-host).
+// Bootstrap system apps stay hidden. User tokens see apps they own or
+// collaborate on.
 func (c *Client) AppListVisible() ([]*ct.App, error) {
 	var apps []*ct.App
 	return apps, c.Get("/apps", &apps)
