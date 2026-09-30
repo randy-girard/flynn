@@ -9,6 +9,25 @@ import (
 
 var flynnReplaceLine = regexp.MustCompile(`(?m)^replace github.com/randy-girard/flynn\s+=>\s+\S+`)
 
+// flynnRootForPlugin is the Flynn checkout plugin-build must compile against
+// so discoverd clients send Auth-Key (SEC-003). GitHub-pinned go.mod versions
+// predate that. Order: FlynnSourceRoot, then a flynn/ sibling of the plugin
+// (FlynnWorkspace layout).
+func flynnRootForPlugin(pluginRoot string) string {
+	if r := FlynnSourceRoot(); r != "" {
+		return r
+	}
+	pluginRoot = strings.TrimSpace(pluginRoot)
+	if pluginRoot == "" {
+		return ""
+	}
+	sib := filepath.Clean(filepath.Join(pluginRoot, "..", "flynn"))
+	if isFlynnModule(sib) {
+		return sib
+	}
+	return ""
+}
+
 // replacePluginFlynnModule points the plugin go.mod at this Flynn checkout
 // so plugin APIs send DISCOVERD_AUTH_KEY (SEC-003). GitHub-pinned plugins
 // otherwise compile the pre-auth discoverd client. Restore after plugin-build

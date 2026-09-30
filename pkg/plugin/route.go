@@ -16,6 +16,7 @@ func LookupPluginApp(apps []*ct.App, name string) (*ct.App, error) {
 	if name == "" {
 		return nil, fmt.Errorf("plugin name is required")
 	}
+	var byAlias *ct.App
 	var byCLI *ct.App
 	for _, app := range apps {
 		if app == nil || !app.Plugin() {
@@ -24,9 +25,15 @@ func LookupPluginApp(apps []*ct.App, name string) (*ct.App, error) {
 		if app.Name == name {
 			return app, nil
 		}
+		if byAlias == nil && RecordFromApp(app).MatchesName(name) {
+			byAlias = app
+		}
 		if c := CLIFromApp(app); c != nil && c.Command == name && byCLI == nil {
 			byCLI = app
 		}
+	}
+	if byAlias != nil {
+		return byAlias, nil
 	}
 	if byCLI != nil {
 		return byCLI, nil

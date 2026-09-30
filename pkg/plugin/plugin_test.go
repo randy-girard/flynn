@@ -610,6 +610,25 @@ func TestManifestValidateErrorsAndWait(t *testing.T) {
 	if (*Manifest)(nil).PingURL() != "" {
 		t.Fatal("nil manifest ping")
 	}
+	if (*Manifest)(nil).ClusterUpgradesURL() != "" {
+		t.Fatal("nil manifest cluster upgrades")
+	}
+
+	pg := &Manifest{
+		Name: "postgres",
+		Kind: KindResourceProvider,
+		Provider: &Provider{
+			Name: "postgres",
+			URL:  "http://postgres-plugin.discoverd/databases",
+		},
+		App: AppSpec{Processes: map[string]ct.ProcessType{"web": {}}},
+	}
+	if got := pg.ClusterUpgradesURL(); got != "http://postgres-plugin.discoverd/cluster/upgrades" {
+		t.Fatalf("ClusterUpgradesURL=%q", got)
+	}
+	if (&Manifest{Name: "dashboard", Kind: KindApp}).ClusterUpgradesURL() != "" {
+		t.Fatal("app plugins have no cluster upgrades URL")
+	}
 
 	if (&Manifest{GitHubRepo: " acme/plug "}).githubRepo() != "acme/plug" {
 		t.Fatal("explicit github_repo")

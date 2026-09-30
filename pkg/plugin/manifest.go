@@ -608,6 +608,26 @@ func (m *Manifest) PingURL() string {
 	return u.String()
 }
 
+// ClusterUpgradesURL is POSTed after ping using the installer's discoverd-capable
+// HTTP client. Host hook scripts cannot resolve *.discoverd.
+func (m *Manifest) ClusterUpgradesURL() string {
+	if m == nil || m.Kind != KindResourceProvider {
+		return ""
+	}
+	ping := m.PingURL()
+	if ping == "" {
+		return ""
+	}
+	u, err := url.Parse(ping)
+	if err != nil || u.Host == "" || !httpOrHTTPS(u.Scheme) {
+		return ""
+	}
+	u.Path = "/cluster/upgrades"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
+}
+
 func (m *Manifest) validateDashboard() error {
 	if m == nil || m.Dashboard == nil {
 		return nil

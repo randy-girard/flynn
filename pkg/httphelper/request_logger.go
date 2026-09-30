@@ -27,9 +27,26 @@ func defaultLoggerFn(handler http.Handler, logger log.Logger, clientIP string, r
 	logger.Info("request completed", "status", rw.Status(), "duration", time.Since(start))
 }
 
+func skipRequestLog(path string) bool {
+	switch path {
+	case "/ping", "/.well-known/status":
+		return true
+	default:
+		return false
+	}
+}
+
 func newRequestLogger(handler http.Handler, loggerFn RequestLoggerFn) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		rw := w.(*ResponseWriter)
+
+		// /ping and /.well-known/status must not log. logger.Info writes the
+		// job stdout pipe; a full pipe (vboxsf) wedges healthchecks the way
+		// the controller used to before it short-circuited /ping.
+		if skipRequestLog(req.URL.Path) {
+			handler.ServeHTTP(rw, req)
+			return
+		}
 
 		reqID, _ := ctxhelper.RequestIDFromContext(rw.Context())
 		componentName, _ := ctxhelper.ComponentNameFromContext(rw.Context())

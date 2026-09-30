@@ -143,6 +143,69 @@ func TestWaitHTTP(t *testing.T) {
 	}
 }
 
+func TestRunBuildRequiresFlynnCheckout(t *testing.T) {
+	t.Setenv("FLYNN_ROOT", "")
+	t.Setenv(EnvImagesJSON, "")
+	in := &Installer{Stdout: io.Discard, Stderr: io.Discard}
+	err := in.runBuild(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "DISCOVERD_AUTH_KEY") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestStartClusterUpgradesPostsAfterPing(t *testing.T) {
+	posted := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/cluster/upgrades", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method %s", r.Method)
+		}
+		posted = true
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"tasks":[],"skipped":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	var log bytes.Buffer
+	in := &Installer{HTTP: srv.Client(), Stdout: &log}
+	m := &Manifest{
+		Kind: KindResourceProvider,
+		Wait: srv.URL + "/ping",
+		Provider: &Provider{
+			Name: "postgres",
+			URL:  srv.URL + "/databases",
+		},
+	}
+	in.startClusterUpgrades(m)
+	if !posted {
+		t.Fatalf("expected POST /cluster/upgrades, log=%q", log.String())
+	}
+}
+
+func TestStartClusterUpgradesIgnores404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/cluster/upgrades" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	var log bytes.Buffer
+	in := &Installer{HTTP: srv.Client(), Stdout: &log}
+	m := &Manifest{
+		Kind: KindResourceProvider,
+		Wait: srv.URL + "/ping",
+	}
+	in.startClusterUpgrades(m)
+	if strings.Contains(log.String(), "instance upgrades:") {
+		t.Fatalf("404 must be silent, log=%q", log.String())
+	}
+}
+
 func TestPutFileAndBytes(t *testing.T) {
 	var got []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -249,6 +312,73 @@ func TestWaitHTTPPerRequestTimeoutRetriesPastHungPeer(t *testing.T) {
 	}
 	if n < 2 {
 		t.Fatalf("retries=%d", n)
+	}
+}
+
+func TestWaitHTTPLogSkipsFirstFailure(t *testing.T) {
+	oldDelay, oldInterval := waitHTTPRetryDelay, waitHTTPLogInterval
+	waitHTTPRetryDelay = time.Millisecond
+	waitHTTPLogInterval = time.Hour
+	defer func() {
+		waitHTTPRetryDelay = oldDelay
+		waitHTTPLogInterval = oldInterval
+	}()
+
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		if n == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var logs []string
+	if err := waitHTTPLog(srv.Client(), srv.URL, time.Second, func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("first miss must not log, got %v", logs)
+	}
+}
+
+func TestWaitHTTPLogAfterInterval(t *testing.T) {
+	oldDelay, oldInterval := waitHTTPRetryDelay, waitHTTPLogInterval
+	waitHTTPRetryDelay = time.Millisecond
+	waitHTTPLogInterval = 15 * time.Millisecond
+	defer func() {
+		waitHTTPRetryDelay = oldDelay
+		waitHTTPLogInterval = oldInterval
+	}()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	var logs []string
+	err := waitHTTPLog(srv.Client(), srv.URL, 40*time.Millisecond, func(format string, args ...interface{}) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+	if err == nil {
+		t.Fatal("must keep failing")
+	}
+	if len(logs) == 0 {
+		t.Fatal("expected a still-waiting log after the interval")
+	}
+}
+
+func TestWaitHTTPProgressDiscoverdServiceMissing(t *testing.T) {
+	dialErr := fmt.Errorf(`Get "http://dashboard.discoverd/.well-known/status": object_not_found: service not found: "dashboard"`)
+	if got := waitHTTPProgress(dialErr); got != "discoverd service not registered yet (web job still starting)" {
+		t.Fatalf("progress=%q", got)
+	}
+	if got := waitHTTPProgress(fmt.Errorf("status 503 Service Unavailable")); got != "status 503 Service Unavailable" {
+		t.Fatalf("other=%q", got)
 	}
 }
 

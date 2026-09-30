@@ -862,8 +862,8 @@ func TestLoadConfigMissingFileAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mariadb.git" {
-		t.Fatalf("official catalog must map mysql to flynn-plugin-mariadb: %s", cfg.GitHubURL("mysql"))
+	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mysql.git" {
+		t.Fatalf("official catalog must map mysql to flynn-plugin-mysql: %s", cfg.GitHubURL("mysql"))
 	}
 	if cfg.GitHubURL("redis") != "https://github.com/randy-girard/flynn-plugin-redis.git" {
 		t.Fatalf("official catalog redis: %s", cfg.GitHubURL("redis"))
@@ -963,7 +963,7 @@ func TestResolveEmptySourceAndOverrides(t *testing.T) {
 	if err := WriteInstalled(inst, []Installed{{
 		Name:       "mariadb",
 		Aliases:    []string{"mysql"},
-		GitHubRepo: "flynn-plugin-mariadb",
+		GitHubRepo: "flynn-plugin-mysql",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -980,7 +980,7 @@ func TestResolveEmptySourceAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GitHub == nil || got.GitHub.Owner != "other-org" || got.GitHub.Repo != "flynn-plugin-mariadb" || got.Ref != "v2" {
+	if got.GitHub == nil || got.GitHub.Owner != "other-org" || got.GitHub.Repo != "flynn-plugin-mysql" || got.Ref != "v2" {
 		t.Fatalf("mysql github fallback: %+v", got)
 	}
 

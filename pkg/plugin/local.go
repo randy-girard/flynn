@@ -97,6 +97,66 @@ func localImagesJSONPath() string {
 	return ""
 }
 
+// FlynnSourceRoot is the Flynn checkout plugin-build should compile against
+// (SEC-003 Auth-Key). Order: FLYNN_ROOT, images.json next to this tree, then
+// walk up from the flynn-host binary (vagrant /vagrant/build/bin/flynn-host).
+func FlynnSourceRoot() string {
+	if r := strings.TrimSpace(os.Getenv("FLYNN_ROOT")); r != "" && isFlynnModule(r) {
+		return r
+	}
+	if p := localImagesJSONPath(); p != "" {
+		if r := flynnRootFromImagesJSON(p); r != "" {
+			return r
+		}
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(exe)
+	for i := 0; i < 8; i++ {
+		if isFlynnModule(dir) {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return ""
+}
+
+func flynnRootFromImagesJSON(p string) string {
+	dir := filepath.Dir(p)
+	if filepath.Base(dir) == "manifests" {
+		dir = filepath.Dir(dir)
+	}
+	if filepath.Base(dir) != "build" {
+		return ""
+	}
+	root := filepath.Dir(dir)
+	if isFlynnModule(root) {
+		return root
+	}
+	return ""
+}
+
+func isFlynnModule(dir string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "//") {
+			continue
+		}
+		return line == "module github.com/randy-girard/flynn"
+	}
+	return false
+}
+
 // LocalFlynnImageEnv is FLYNN_IMAGES_JSON / FLYNN_LAYERS_DIR for plugin-build
 // when this host already has Flynn images, so the builder does not re-download
 // ubuntu-noble from GitHub.

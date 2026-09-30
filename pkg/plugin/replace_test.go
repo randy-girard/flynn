@@ -60,6 +60,26 @@ func TestReplacePluginFlynnModuleRestores(t *testing.T) {
 	}
 }
 
+func TestFlynnRootForPluginSibling(t *testing.T) {
+	ws := t.TempDir()
+	flynn := filepath.Join(ws, "flynn")
+	plugin := filepath.Join(ws, "flynn-plugin-postgres")
+	if err := os.MkdirAll(flynn, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(plugin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(flynn, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLYNN_ROOT", "")
+	t.Setenv(EnvImagesJSON, "")
+	if got := flynnRootForPlugin(plugin); got != flynn {
+		t.Fatalf("got %q want %q", got, flynn)
+	}
+}
+
 func TestFlynnSourceRootFromEnv(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {

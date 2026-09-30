@@ -86,6 +86,10 @@ var ProvisionClient = &http.Client{
 	},
 }
 
+// HeaderFlynnHostAuth is sent by flynn-host on controller requests so the
+// controller can tell a host operator apart from Flynn CLI (same cluster key).
+const HeaderFlynnHostAuth = "X-Flynn-Host-Auth"
+
 const (
 	NotFoundErrorCode           ErrorCode = "not_found"
 	ObjectNotFoundErrorCode     ErrorCode = "object_not_found"

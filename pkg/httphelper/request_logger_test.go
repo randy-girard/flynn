@@ -67,6 +67,47 @@ func TestNewRequestLoggerCompletes(t *testing.T) {
 	}
 }
 
+func TestRequestLoggerSkipsHealthCheckPaths(t *testing.T) {
+	for _, path := range []string{"/ping", "/.well-known/status"} {
+		t.Run(path, func(t *testing.T) {
+			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			h := NewRequestLoggerCustom(inner, func(handler http.Handler, logger log.Logger, clientIP string, rw *ResponseWriter, req *http.Request) {
+				t.Fatal("health checks must not log")
+			})
+			rec := httptest.NewRecorder()
+			rw := NewResponseWriter(rec, context.Background())
+			req := httptest.NewRequest("GET", path, nil)
+			h.ServeHTTP(rw, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d", rec.Code)
+			}
+		})
+	}
+}
+
+func TestRequestLoggerStillLogsOtherPaths(t *testing.T) {
+	logged := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+	})
+	h := NewRequestLoggerCustom(inner, func(handler http.Handler, logger log.Logger, clientIP string, rw *ResponseWriter, req *http.Request) {
+		logged = true
+		handler.ServeHTTP(rw, req)
+	})
+	rec := httptest.NewRecorder()
+	rw := NewResponseWriter(rec, context.Background())
+	req := httptest.NewRequest("GET", "/clusters", nil)
+	h.ServeHTTP(rw, req)
+	if !logged {
+		t.Fatal("non-health paths must still log")
+	}
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d", rec.Code)
+	}
+}
+
 func TestResponseWriterStatusFlushAndHijack(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rw := NewResponseWriter(rec, context.Background())

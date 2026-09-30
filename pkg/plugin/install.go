@@ -31,6 +31,10 @@ const (
 	pingTimeout     = 2 * time.Minute
 )
 
+// clusterUpgradesTimeout bounds the POST after ping. The plugin starts the
+// work in the background and returns; this must not stall install.
+var clusterUpgradesTimeout = 15 * time.Second
+
 // waitHTTPProbeTimeout bounds one GET inside waitHTTP so a hung discoverd
 // instance cannot consume the whole ping/deploy deadline. Do not set
 // Client.Timeout on Installer.HTTP; blobstore PUTs share that client.
@@ -78,6 +82,9 @@ type Installer struct {
 	FlynnVersion string
 	// LayerCacheDir overrides /var/lib/flynn/layer-cache for tests.
 	LayerCacheDir string
+	// dbRuntimeAPI, if set, is the catalog GET/PUT used by plugin install.
+	// Tests replace this; the default is Client.
+	dbRuntimeAPI dbRuntimeAPI
 	// BlobstorePrefix overrides http://blobstore.discoverd/plugins for tests.
 	BlobstorePrefix string
 	// AllowExternalLayers fetches image.json LayerURL hosts that are not
@@ -343,11 +350,12 @@ func (in *Installer) apply(opts InstallOptions) error {
 		if dep != nil && dep.timeout > waitFor {
 			waitFor = dep.timeout
 		}
-		in.logf("waiting for %s (timeout %s)", ping, waitFor)
+		in.logf("waiting for %s (timeout %s; discoverd has no service until the web job starts)", ping, waitFor)
 		if err := waitHTTPLog(in.http(), ping, waitFor, in.logf); err != nil {
 			in.restorePreviousRelease(app, dep)
 			return fmt.Errorf("plugin %s did not become ready: %w", m.Name, err)
 		}
+		in.startClusterUpgrades(m)
 	}
 
 	// hooks.install (or upgrade) after the app is up so operator logs are not
@@ -438,14 +446,17 @@ func (in *Installer) runBuild(root string) error {
 	if in.Build != nil {
 		return in.Build(root)
 	}
-	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
-		restore, err := replacePluginFlynnModule(root, flynnRoot)
-		if err != nil {
-			return fmt.Errorf("plugin-build: compile against Flynn: %w", err)
-		}
-		if restore != nil {
-			defer restore()
-		}
+	flynnRoot := flynnRootForPlugin(root)
+	if flynnRoot == "" {
+		return fmt.Errorf("plugin-build: Flynn checkout not found (set FLYNN_ROOT or keep a flynn/ sibling of this plugin) so the image sends DISCOVERD_AUTH_KEY")
+	}
+	in.logf("compiling against Flynn %s", flynnRoot)
+	restore, err := replacePluginFlynnModule(root, flynnRoot)
+	if err != nil {
+		return fmt.Errorf("plugin-build: compile against Flynn: %w", err)
+	}
+	if restore != nil {
+		defer restore()
 	}
 	script := filepath.Join(root, "script", "plugin-build")
 	if _, err := os.Stat(script); err != nil {
@@ -462,7 +473,7 @@ func (in *Installer) runBuild(root string) error {
 	if err != nil {
 		return err
 	}
-	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
+	if flynnRoot != "" {
 		env = append(env, "FLYNN_ROOT="+flynnRoot)
 	}
 	cmd.Env = env
@@ -1457,6 +1468,40 @@ func (in *Installer) http() *http.Client {
 	return http.DefaultClient
 }
 
+// startClusterUpgrades POSTs /cluster/upgrades after ping. flynn-host runs
+// install hooks on the host OS, which cannot resolve *.discoverd; this uses
+// the same HTTP client as waitHTTP. 404 means the plugin has no upgrade API.
+func (in *Installer) startClusterUpgrades(m *Manifest) {
+	u := m.ClusterUpgradesURL()
+	if u == "" {
+		return
+	}
+	in.logf("starting background instance upgrades if needed")
+	ctx, cancel := context.WithTimeout(context.Background(), clusterUpgradesTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u, nil)
+	if err != nil {
+		in.logf("instance upgrades: %v", err)
+		return
+	}
+	req.Close = true
+	res, err := in.http().Do(req)
+	if err != nil {
+		in.logf("instance upgrades: %v", err)
+		return
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+	switch {
+	case res.StatusCode == http.StatusNotFound, res.StatusCode == http.StatusMethodNotAllowed:
+		return
+	case res.StatusCode >= 200 && res.StatusCode < 300:
+		in.logf("started background instance upgrades")
+	default:
+		in.logf("instance upgrades: %s", res.Status)
+	}
+}
+
 func ensureProvider(client providerClient, name, url string, tenantSafe bool) error {
 	providers, err := client.ProviderList()
 	if err != nil {
@@ -1615,7 +1660,9 @@ func waitHTTPLog(httpClient *http.Client, rawURL string, timeout time.Duration, 
 	}
 	deadline := time.Now().Add(timeout)
 	var last error
-	var lastLog time.Time
+	// Skip the first miss. Scale is NoWait, so discoverd has no service until
+	// the job heartbeats; logging object_not_found looks like a failed install.
+	lastLog := time.Now()
 	for time.Now().Before(deadline) {
 		req, err := http.NewRequest(http.MethodGet, rawURL, nil)
 		if err != nil {
@@ -1643,9 +1690,9 @@ func waitHTTPLog(httpClient *http.Client, rawURL string, timeout time.Duration, 
 		} else {
 			last = err
 		}
-		if logf != nil && (lastLog.IsZero() || time.Since(lastLog) >= waitHTTPLogInterval) {
+		if logf != nil && time.Since(lastLog) >= waitHTTPLogInterval {
 			lastLog = time.Now()
-			logf("still waiting for %s: %v", rawURL, last)
+			logf("still waiting for %s: %s", rawURL, waitHTTPProgress(last))
 		}
 		time.Sleep(waitHTTPRetryDelay)
 	}
@@ -1653,6 +1700,17 @@ func waitHTTPLog(httpClient *http.Client, rawURL string, timeout time.Duration, 
 		last = fmt.Errorf("timeout")
 	}
 	return last
+}
+
+func waitHTTPProgress(err error) string {
+	if err == nil {
+		return "not ready"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "service not found") {
+		return "discoverd service not registered yet (web job still starting)"
+	}
+	return msg
 }
 
 func displaySource(r *Resolved, root string) string {

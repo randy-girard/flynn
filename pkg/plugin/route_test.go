@@ -42,6 +42,19 @@ func TestLookupPluginApp(t *testing.T) {
 	if _, err := LookupPluginApp(apps, ""); err == nil || !strings.Contains(err.Error(), "required") {
 		t.Fatalf("empty: %v", err)
 	}
+
+	renamed := &ct.App{
+		ID:   "dash-plugin-id",
+		Name: "dashboard-plugin",
+		Meta: map[string]string{
+			MetaPlugin:       "true",
+			MetaPluginRecord: `{"name":"dashboard-plugin","aliases":["dashboard","dashboard-plugin"]}`,
+		},
+	}
+	got, err = LookupPluginApp([]*ct.App{renamed}, "dashboard")
+	if err != nil || got != renamed {
+		t.Fatalf("by alias: %v %v", got, err)
+	}
 }
 
 func TestDefaultRouteService(t *testing.T) {
