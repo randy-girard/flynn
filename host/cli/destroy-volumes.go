@@ -126,6 +126,8 @@ func destroyVolumes(vman *volumemanager.Manager, keepSystemImages bool) error {
 			fmt.Println("success")
 		} else if zfs.IsDatasetHasChildrenError(err) {
 			fmt.Println("has children, coming back to it later")
+		} else if skipBusyImageLayer(vol, err) {
+			fmt.Println("busy (image layer), skipping")
 		} else {
 			fmt.Printf("error: %s\n", err)
 			someVolumesNotDestroyed = true
@@ -138,6 +140,8 @@ func destroyVolumes(vman *volumemanager.Manager, keepSystemImages bool) error {
 		fmt.Printf("removing volume id=%q... ", id)
 		if err := vman.DestroyVolume(id); err == nil {
 			fmt.Println("success")
+		} else if skipBusyImageLayer(vol, err) {
+			fmt.Println("busy (image layer), skipping")
 		} else {
 			fmt.Printf("error: %s\n", err)
 			someVolumesNotDestroyed = true
@@ -148,4 +152,22 @@ func destroyVolumes(vman *volumemanager.Manager, keepSystemImages bool) error {
 		return fmt.Errorf("some volumes were not destroyed successfully")
 	}
 	return nil
+}
+
+// skipBusyImageLayer is true for leftover ext2/squashfs layers that zfs cannot
+// destroy because a previous host still has them mounted. start-all must still
+// launch the daemon; those datasets stay until a later GC.
+func skipBusyImageLayer(vol volume.Volume, err error) bool {
+	if vol == nil || !zfs.IsDatasetBusyError(err) {
+		return false
+	}
+	info := vol.Info()
+	if info == nil {
+		return false
+	}
+	switch info.Type {
+	case volume.VolumeTypeExt2, volume.VolumeTypeSquashfs:
+		return true
+	}
+	return false
 }

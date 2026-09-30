@@ -21,16 +21,16 @@ usage: flynn-host log [--init] [-f|--follow] [--lines=<number>] [--split-stderr]
 
 Get logs of a job, or of every job for an app.
 
-ID is a job ID (from flynn-host ps) or a controller app name (for example
-dashboard or postgres). When more than one job matches, each line is prefixed
-with app.type.job.
+ID is a job ID (from flynn-host ps), a process name (web.5154), or a
+controller app name (for example dashboard or postgres). When more than
+one job matches, each line is prefixed with app.type.job.
 
 Options:
   -f, --follow         stream new lines
   --lines=<number>     show only the last n lines
   --split-stderr       send stderr to stderr
   --init               include containerinit logs
-  -a, --all            include jobs that are not running (app name only)
+  -a, --all            include jobs that are not running
 `)
 }
 
@@ -136,28 +136,6 @@ func jobHostID(job host.ActiveJob) string {
 		return ""
 	}
 	return hostID
-}
-
-func lookupLogJobs(client *cluster.Client, name string, all bool) (sortJobs, error) {
-	if hostID, err := cluster.ExtractHostID(name); err == nil {
-		if hc, err := client.Host(hostID); err == nil {
-			if job, err := hc.GetJob(name); err == nil && job != nil && job.Job != nil {
-				return sortJobs{*job}, nil
-			}
-		}
-	}
-	jobs, err := jobList(client, all)
-	if err != nil {
-		return nil, err
-	}
-	matched := jobsMatchingApp(jobs, name)
-	if len(matched) == 0 {
-		if all {
-			return nil, fmt.Errorf("no jobs found for %q (not a job ID or app name)", name)
-		}
-		return nil, fmt.Errorf("no running jobs for %q (try flynn-host log --all %s)", name, name)
-	}
-	return matched, nil
 }
 
 func runningLogJobs(jobs sortJobs) sortJobs {

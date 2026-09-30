@@ -13,13 +13,25 @@ func init() {
 	Register("stop", runStop, `
 usage: flynn-host stop ID...
 
-Stop running jobs`)
+Stop running jobs. ID is a job ID or process name (web.5154).`)
 }
 
 func runStop(args *docopt.Args, client *cluster.Client) error {
 	success := true
 	clients := make(map[string]*cluster.Host)
 	for _, id := range cliutil.List(args, "ID") {
+		job, err := resolveOneJob(client, id, false)
+		if err != nil {
+			fmt.Printf("could not find %s: %s\n", id, err)
+			success = false
+			continue
+		}
+		if job == nil || job.Job == nil {
+			fmt.Printf("could not find %s: no job\n", id)
+			success = false
+			continue
+		}
+		id = job.Job.ID
 		hostID, err := cluster.ExtractHostID(id)
 		if err != nil {
 			fmt.Printf("could not parse %s: %s", id, err)

@@ -20,6 +20,8 @@ usage: flynn-host inspect [options] ID
 
 Get low-level information about a job.
 
+ID is a job ID, process name (web.5154), or app.web.5154 from flynn-host ps.
+
 options:
   --omit-env         don't include the job environment, which may be sensitive
   --redact-env ENVS  don't print the specified comma-separated env values
@@ -27,18 +29,9 @@ options:
 }
 
 func runInspect(args *docopt.Args, client *cluster.Client) error {
-	jobID := args.String["ID"]
-	hostID, err := cluster.ExtractHostID(jobID)
+	job, err := resolveOneJob(client, args.String["ID"], true)
 	if err != nil {
 		return err
-	}
-	hostClient, err := client.Host(hostID)
-	if err != nil {
-		return fmt.Errorf("could not connect to host %s: %s", hostID, err)
-	}
-	job, err := hostClient.GetJob(jobID)
-	if err != nil {
-		return fmt.Errorf("no such job")
 	}
 
 	printJobDesc(job, os.Stdout, !args.Bool["--omit-env"], strings.Split(args.String["--redact-env"], ","))

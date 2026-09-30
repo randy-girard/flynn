@@ -41,6 +41,20 @@ main() {
     --retry 15 \
     --name ".containerinit"
 
+  # Overlay/squashfs/ext2 mounts survive the daemon. start-all then hits
+  # "dataset is busy" in destroy-volumes and never registers flynn-host.
+  if [[ -r /proc/mounts ]]; then
+    info "unmounting leftover Flynn volumes"
+    while read -r mp; do
+      [[ -z "${mp}" ]] && continue
+      sudo umount -l "${mp}" 2>/dev/null || sudo umount "${mp}" 2>/dev/null || true
+    done < <(awk '$2 ~ /^\/var\/lib\/flynn(\/|$)/ { print $2 }' /proc/mounts | sort -r) || true
+    while read -r mp; do
+      [[ -z "${mp}" ]] && continue
+      sudo umount -l "${mp}" 2>/dev/null || sudo umount "${mp}" 2>/dev/null || true
+    done < <(awk '$3 == "zfs" { print $2 }' /proc/mounts | sort -r) || true
+  fi
+
   info "done!"
 }
 

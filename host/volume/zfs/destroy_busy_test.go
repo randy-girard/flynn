@@ -1,6 +1,7 @@
 package zfs
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -32,5 +33,17 @@ func TestVolumeEnsureMounted(t *testing.T) {
 	}
 	if !strings.Contains(string(src), "func (v *zfsVolume) EnsureMounted()") {
 		t.Fatal("squashfs volumes must expose EnsureMounted after a failed GC unmount")
+	}
+}
+
+func TestIsDatasetBusyError(t *testing.T) {
+	if !IsDatasetBusyError(fmt.Errorf("cannot destroy x: dataset is busy")) {
+		t.Fatal("busy without newline")
+	}
+	if !IsDatasetBusyError(fmt.Errorf("cannot destroy x: dataset is busy\n")) {
+		t.Fatal("busy with newline")
+	}
+	if IsDatasetBusyError(fmt.Errorf("dataset does not exist")) {
+		t.Fatal("other error")
 	}
 }

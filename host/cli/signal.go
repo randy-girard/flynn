@@ -12,16 +12,21 @@ func init() {
 	Register("signal", runSignal, `
 usage: flynn-host signal ID SIGNAL
 
-Signal a job`)
+Signal a job. ID is a job ID or process name (web.5154).`)
 }
 
 func runSignal(args *docopt.Args, client *cluster.Client) error {
-	id := args.String["ID"]
 	sig, err := strconv.Atoi(args.String["SIGNAL"])
 	if err != nil {
 		fmt.Println("invalid value for SIGNAL")
 		return err
 	}
+	job, err := resolveOneJob(client, args.String["ID"], false)
+	if err != nil {
+		fmt.Println("could not find", args.String["ID"])
+		return err
+	}
+	id := job.Job.ID
 	hostID, err := cluster.ExtractHostID(id)
 	if err != nil {
 		fmt.Println("could not parse", id)

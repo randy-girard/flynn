@@ -8,6 +8,29 @@ import (
 	"github.com/randy-girard/flynn/host/types"
 )
 
+func TestJobMatchesProcessName(t *testing.T) {
+	job := host.ActiveJob{Job: &host.Job{Metadata: map[string]string{
+		"flynn-controller.app_name": "dashboard-plugin",
+		"flynn-controller.type":     "web",
+		host.MetaControllerName:     "web.5154",
+	}}}
+	if !jobMatchesProcessName(job, "web.5154") {
+		t.Fatal("process name")
+	}
+	if !jobMatchesProcessName(job, "dashboard-plugin.web.5154") {
+		t.Fatal("app.process name")
+	}
+	if jobMatchesProcessName(job, "web.1") {
+		t.Fatal("other process")
+	}
+	if !jobMatchesLookup(job, "web.5154") {
+		t.Fatal("lookup process name")
+	}
+	if !jobMatchesLookup(job, "dashboard-plugin") {
+		t.Fatal("lookup still matches app name")
+	}
+}
+
 func TestJobMatchesApp(t *testing.T) {
 	job := host.ActiveJob{Job: &host.Job{Metadata: map[string]string{
 		"flynn-controller.app_name": "dashboard",
@@ -37,6 +60,15 @@ func TestJobsMatchingApp(t *testing.T) {
 	got := jobsMatchingApp(jobs, "dashboard")
 	if len(got) != 2 || got[0].Job.ID != "h-1" || got[1].Job.ID != "h-3" {
 		t.Fatalf("%+v", got)
+	}
+
+	named := []host.ActiveJob{
+		{Job: &host.Job{ID: "h-4", Metadata: map[string]string{host.MetaControllerName: "web.5154", "flynn-controller.app_name": "dashboard-plugin"}}},
+		{Job: &host.Job{ID: "h-5", Metadata: map[string]string{host.MetaControllerName: "web.1", "flynn-controller.app_name": "dashboard-plugin"}}},
+	}
+	got = jobsMatching(named, "web.5154")
+	if len(got) != 1 || got[0].Job.ID != "h-4" {
+		t.Fatalf("process name %+v", got)
 	}
 }
 
