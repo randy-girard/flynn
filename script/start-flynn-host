@@ -109,7 +109,12 @@ main() {
         --keep-system-images
       )
     fi
-    sudo "${flynn_host}" destroy-volumes ${args[@]}
+    # Busy leftover ext2/squashfs layers must not block the daemon. flynn-builder
+    # waits for the flynn-host service; a failed destroy-volumes used to exit
+    # here and leave discoverd up with no host registered.
+    if ! sudo "${flynn_host}" destroy-volumes ${args[@]}; then
+      warn "destroy-volumes did not finish; starting flynn-host anyway"
+    fi
   fi
 
   # create IP on enp or lo interface

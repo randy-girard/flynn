@@ -97,7 +97,7 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	if len(incoming) == 0 {
 		return out
 	}
-	name, conv := resourceIdentity(incoming)
+	name, conv := Identity(incoming)
 	url := connectionURL(incoming, conv)
 	if url == "" || name == "" {
 		for k, v := range incoming {
@@ -147,7 +147,14 @@ func connectionURL(incoming map[string]string, conv string) string {
 	return ""
 }
 
-func resourceIdentity(env map[string]string) (name, urlKey string) {
+// Identity is the resource app name and conventional URL key from a provision
+// env (FLYNN_POSTGRES, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_KAFKA, FLYNN_CLICKHOUSE,
+// FLYNN_MONGO, FLYNN_MONGODB). The name is what operators grep, for example
+// pg-harbor-kxmnpq.
+func Identity(env map[string]string) (name, urlKey string) {
+	if env == nil {
+		return "", ""
+	}
 	for _, id := range identityEnv {
 		if v := strings.TrimSpace(env[id.name]); v != "" {
 			return v, id.url

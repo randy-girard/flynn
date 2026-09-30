@@ -61,6 +61,9 @@ func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 	if strings.Count(s, `"name":"platform-postgres"`) != 2 {
 		t.Fatalf("controller and blobstore must use the platform-postgres provider, got %d", strings.Count(s, `"name":"platform-postgres"`))
 	}
+	if strings.Count(s, `"flynn-datastore": "true"`) < 2 {
+		t.Fatal("platform postgres must be marked flynn-datastore so Flynn CLI cannot run a shell on it")
+	}
 	if strings.Contains(s, `"name":"postgres"`) {
 		t.Fatal("bootstrap must not register the built-in appliance as the postgres resource provider")
 	}

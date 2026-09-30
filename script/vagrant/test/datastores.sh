@@ -105,7 +105,7 @@ need "${smoke}" 'DATASTORE_RESOURCE_APP' \
 need "${smoke}" 'flynn_ds' \
   "datastore CLI helper must insert the named resource before --"
 need "${smoke}" 'attempt ${attempt}/20' \
-  "resource:add must retry; 3-node controller db-runtimes are in-memory per web job"
+  "resource:add must retry; provider may not be ready yet after plugin install"
 need "${smoke}" 'kafka_cluster_ready' \
   "kafka --join must wait for a second broker in the same cluster"
 need "${smoke}" 'redis_follower_seeded' \

@@ -7,7 +7,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
-// MySQL console/dump/restore live on flynn-plugin-mariadb. These helpers remain
+// MySQL console/dump/restore live on flynn-plugin-mysql. These helpers remain
 // so `flynn export` / `flynn import` can dump and restore a provisioned database
 // without a compiled `flynn mysql` command.
 

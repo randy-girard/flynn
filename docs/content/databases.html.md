@@ -60,8 +60,10 @@ These are **not** app process runtimes. `flynn-host runtime` and
 `flynn limit:runtime` size app processes only. Database runtimes are listed
 and edited with `flynn-host db-runtime`.
 
-Each engine ships `small`, `medium`, and `large`. The numbers are per engine.
-Redis `small` disk is 1GB; Postgres `small` disk is 10GB.
+Each engine's `small`, `medium`, and `large` sizes are published when that
+database plugin is installed (`flynn-host plugin:install postgres`, and the
+same for mysql, mongodb, redis, kafka, clickhouse). Uninstalling the plugin
+removes those runtimes. Redis `small` disk is 1GB; Postgres `small` disk is 10GB.
 
 | Engine | small | medium | large |
 | --- | --- | --- | --- |
@@ -82,11 +84,12 @@ sudo flynn-host db-runtime:remove redis cache
 ```
 
 Omitting `--runtime` uses `small`. There is no controller table for these
-definitions. Builtins are in memory. Admin creates, updates, removals, and
-the custom-size switch are stored in `/etc/flynn/db-runtimes.json`
-(`FLYNN_DB_RUNTIMES` overrides the path). `flynn resource:add` reads that
-same file. On a machine without it, only the builtins above are published
-and custom sizes stay off.
+definitions. Plugin install writes builtins into `/etc/flynn/db-runtimes.json`
+(`FLYNN_DB_RUNTIMES` overrides the path) and the controller catalog. Plugin
+uninstall drops that engine's runtimes, including builtins. Admin
+creates, updates, removals, and the custom-size switch use that same file.
+`flynn resource:add` reads the controller catalog. On a cluster with no
+database plugins installed, no database runtimes are published.
 
 Changing a definition does not resize instances already created from it.
 There is no in-place resize; provision a new resource to get a new size.

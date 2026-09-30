@@ -1,6 +1,6 @@
 package main
 
-// The MySQL plugin (flynn-plugin-mariadb) is installed as mysql; mariadb is a
+// The MySQL plugin (flynn-plugin-mysql) is installed as mysql; mariadb is a
 // deprecated alias. Plugin app is mysql-plugin, data service is mysql.
 // This file name is historical.
 

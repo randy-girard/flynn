@@ -94,6 +94,44 @@ func TestExtraDatabaseURLUsesSuffixWhenTheWordIsTaken(t *testing.T) {
 	}
 }
 
+func TestIdentity(t *testing.T) {
+	if name, key := Identity(nil); name != "" || key != "" {
+		t.Fatalf("nil: %q %q", name, key)
+	}
+	name, key := Identity(map[string]string{"FLYNN_POSTGRES": "pg-harbor-kxmnpq"})
+	if name != "pg-harbor-kxmnpq" || key != "DATABASE_URL" {
+		t.Fatalf("postgres: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_MYSQL": "mysql-fjord-abcxyz"})
+	if name != "mysql-fjord-abcxyz" || key != "DATABASE_URL" {
+		t.Fatalf("mysql: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_REDIS": "redis-ember-xefywh"})
+	if name != "redis-ember-xefywh" || key != "REDIS_URL" {
+		t.Fatalf("redis: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_KAFKA": "kafka-grove-aaaaaa"})
+	if name != "kafka-grove-aaaaaa" || key != "KAFKA_URL" {
+		t.Fatalf("kafka: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_CLICKHOUSE": "clickhouse-meadow-wawpuf"})
+	if name != "clickhouse-meadow-wawpuf" || key != "CLICKHOUSE_URL" {
+		t.Fatalf("clickhouse: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_MONGO": "mongo-basin-bbbbbb"})
+	if name != "mongo-basin-bbbbbb" || key != "DATABASE_URL" {
+		t.Fatalf("mongo: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"FLYNN_MONGODB": "mongodb-cedar-cccccc"})
+	if name != "mongodb-cedar-cccccc" || key != "DATABASE_URL" {
+		t.Fatalf("mongodb: %q %q", name, key)
+	}
+	name, key = Identity(map[string]string{"DATABASE_URL": "postgres://x"})
+	if name != "" || key != "" {
+		t.Fatalf("no flynn key: %q %q", name, key)
+	}
+}
+
 func TestCanonical(t *testing.T) {
 	if got := Canonical("pg", "harbor-kxmnpq"); got != "pg-harbor-kxmnpq" {
 		t.Fatalf("bare name: %q", got)

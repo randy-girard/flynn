@@ -6,6 +6,7 @@ __pycache__/
 *$py.class
 .vbox_version
 .vagrant-upgrade-smoke-tmp/
+.vagrant-upgrade-smoke/
 .vagrant-upgrade-smoke-last-failure.log
 .vagrant-upgrade-smoke-last-results.txt
 /smoke-matrix.yaml

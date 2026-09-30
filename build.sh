@@ -391,6 +391,37 @@ wait_for_discoverd() {
   return 1
 }
 
+# flynn-builder lists hosts via discoverd service flynn-host. /ping can succeed
+# while start-flynn-host is still in destroy-volumes and has not registered.
+flynn_host_registered() {
+  local out
+  local curl_args=(-sf --max-time 2)
+  if [[ -n "${DISCOVERD_AUTH_KEY:-}" ]]; then
+    curl_args+=(-H "Auth-Key: ${DISCOVERD_AUTH_KEY}")
+  fi
+  out="$(curl "${curl_args[@]}" "http://192.0.2.200:1111/services/flynn-host/instances" 2>/dev/null)" || return 1
+  python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,list) and len(d)>0 else 1)' <<<"${out}"
+}
+
+wait_for_flynn_host() {
+  local i
+  for i in $(seq 1 60); do
+    if flynn_host_registered; then
+      echo "===> flynn-host is registered in discoverd"
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+wait_for_builder_stack() {
+  if ! wait_for_discoverd; then
+    return 1
+  fi
+  wait_for_flynn_host
+}
+
 # --- Phase: start (local Flynn stack for flynn-builder jobs) ---
 run_phase_start() {
   require_base_squashfs
@@ -401,8 +432,8 @@ run_phase_start() {
   if keep_bootstrapped_cluster; then
     echo "===> [start] Reusing bootstrapped cluster (not start-all; that would wipe job state)"
     ./script/start-flynn-host --no-destroy-vols --no-destroy-state 0 || true
-    if wait_for_discoverd; then
-      export_host_json_secrets
+    export_host_json_secrets
+    if wait_for_builder_stack; then
       echo "===> [start] Complete."
       return 0
     fi
@@ -419,9 +450,10 @@ run_phase_start() {
   zfs set sync=disabled flynn-default
   zfs set reservation=512M flynn-default
   zfs set refreservation=512M flynn-default
-  if ! wait_for_discoverd; then
-    echo "ERROR: discoverd did not answer on 192.0.2.200:1111; flynn-builder cannot list hosts" >&2
+  if ! wait_for_builder_stack; then
+    echo "ERROR: flynn-host did not register in discoverd; flynn-builder cannot list hosts" >&2
     echo "hint: check /tmp/discoverd.log and /tmp/flynn-host-0.log, or script/vagrant.sh bootstrap" >&2
+    echo "hint: destroy-volumes 'dataset is busy' during start-all delays the host daemon" >&2
     exit 1
   fi
 

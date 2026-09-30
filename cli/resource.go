@@ -182,8 +182,9 @@ func databaseRuntimeCatalog(client controller.Client) (dbruntime.Catalog, error)
 	file, fileErr := dbruntime.Load(dbruntime.Path())
 	if client != nil {
 		got, err := client.ListDBRuntimes()
-		// An empty in-memory replica on a 3-node controller must not hide the
-		// host file that flynn-host plugin:install already wrote.
+		// Prefer the controller catalog. Fall back to a host file only when
+		// the cluster copy is empty (for example right after a controller
+		// deploy, before flynn-host seeds postgres from the cache).
 		if err == nil && got != nil && len(got.Runtimes) > 0 {
 			return *got, nil
 		}

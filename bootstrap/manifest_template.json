@@ -111,7 +111,8 @@
       "name": "postgres",
       "meta": {
         "flynn-system-app": "true",
-        "flynn-system-critical": "true"
+        "flynn-system-critical": "true",
+        "flynn-datastore": "true"
       }
     },
     "action": "run-app",
@@ -255,7 +256,8 @@
       "name": "postgres",
       "meta": {
         "flynn-system-app": "true",
-        "flynn-system-critical": "true"
+        "flynn-system-critical": "true",
+        "flynn-datastore": "true"
       },
       "strategy": "sirenia",
       "deploy_timeout": 300

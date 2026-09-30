@@ -161,14 +161,14 @@ elif [[ -f "${ROOT}/appliance/redis/img/packages.sh" ]]; then
   exit 1
 fi
 
-mariadb_pkg="${ROOT}/../flynn-plugin-mariadb/img/packages.sh"
-if [[ -f "${mariadb_pkg}" ]]; then
-  need "${mariadb_pkg}" '--no-install-recommends' \
-    "mariadb plugin packages must pass --no-install-recommends"
-  need "${mariadb_pkg}" 'apt-slim-finish.sh' \
-    "mariadb plugin packages must run the shared apt/docs cleanup helper"
+mysql_pkg="${ROOT}/../flynn-plugin-mysql/img/packages.sh"
+if [[ -f "${mysql_pkg}" ]]; then
+  need "${mysql_pkg}" '--no-install-recommends' \
+    "mysql plugin packages must pass --no-install-recommends"
+  need "${mysql_pkg}" 'apt-slim-finish.sh' \
+    "mysql plugin packages must run the shared apt/docs cleanup helper"
 elif [[ -f "${ROOT}/appliance/mariadb/img/packages.sh" ]]; then
-  echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mariadb" >&2
+  echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mysql" >&2
   exit 1
 fi
 

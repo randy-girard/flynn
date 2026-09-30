@@ -14,8 +14,8 @@ deprecated alias. The plugin app is `mysql-plugin` (provider
 ```text
 sudo flynn-host plugin:install mysql --ref vX
 sudo flynn-host plugin:install mariadb --ref vX
-sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mariadb.git --ref vX
-sudo flynn-host plugin:install ../flynn-plugin-mariadb
+sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mysql.git --ref vX
+sudo flynn-host plugin:install ../flynn-plugin-mysql
 flynn resource:add mysql
 ```
 

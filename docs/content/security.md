@@ -209,8 +209,12 @@ HTTP backends with discoverd; the job never receives a `DISCOVERD` URL.
 
 `flynn-host pg:psql` opens the platform database and requires the cluster
 controller key on the host. Dashboard tokens scoped to user apps cannot open
-that console. Tenant consoles are `flynn pg:psql` from the postgres plugin.
-Treat the key from `flynn cluster:add` as root.
+that console. Tenant consoles are `flynn pg psql` from the postgres plugin
+(a one-off on the **user** app that speaks the native protocol). Flynn CLI
+cannot `flynn run` / attach a shell on a database app (postgres, mysql,
+mongodb, redis, kafka, clickhouse — plugin apps, isolated instances, and
+platform postgres). That one-off path is flynn-host only
+(`X-Flynn-Host-Auth`). Treat the key from `flynn cluster:add` as root.
 
 `git push` to gitreceive requires the cluster controller key, `cluster:admin`,
 or `app:deploy` on that app (or a coarser grant that expands to it, such as

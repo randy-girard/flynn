@@ -594,8 +594,7 @@ func (s *CLISuite) TestProvider(t *c.C) {
 func (s *CLISuite) TestResource(t *c.C) {
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
-	matchExp := fmt.Sprintf("Created resource %s and release %s.", UUIDRegex, UUIDRegex)
-	t.Assert(app.flynn("resource", "add", "postgres").Output, Matches, matchExp)
+	t.Assert(app.flynn("resource", "add", "postgres").Output, Matches, `Created resource \S+ and a new release\.`)
 
 	res, err := s.controllerClient(t).AppResourceList(app.name)
 	t.Assert(err, c.IsNil)
@@ -620,14 +619,17 @@ func (s *CLISuite) TestResourceRemove(t *c.C) {
 
 	add := app.flynn("resource", "add", "postgres")
 	t.Assert(add, Succeeds)
+	t.Assert(add.Output, Matches, `Created resource \S+ and a new release\.`)
 	t.Assert(app.flynn("resource").Output, Matches, "postgres")
 	t.Assert(app.flynn("env").Output, Matches, "FLYNN_POSTGRES")
-	id := strings.Split(add.Output, " ")[2]
+	listed, err := s.controllerClient(t).AppResourceList(app.name)
+	t.Assert(err, c.IsNil)
+	t.Assert(listed, c.HasLen, 1)
 
 	// change one of the env vars provided by the resource
 	t.Assert(app.flynn("env", "set", "PGUSER=testuser"), Succeeds)
 
-	remove := app.flynn("resource", "remove", "postgres", id)
+	remove := app.flynn("resource", "remove", "postgres", listed[0].ID)
 	t.Assert(remove, Succeeds)
 
 	t.Assert(app.flynn("resource").Output, c.Not(Matches), "postgres")

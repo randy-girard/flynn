@@ -2145,8 +2145,8 @@ add_throwaway_resource() {
   info "adding ${provider} resource on throwaway app ${app}"
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
-    # Controller db-runtimes are in-memory per web job. On 3-node the CLI may
-    # hit a replica that has not received flynn-host's publish yet.
+    # Database runtimes live in controller postgres. Retry resource:add for
+    # provision races (provider not ready yet).
     for attempt in $(seq 1 20); do
       if flynn1 -a "${app}" resource add "${cand}"; then
         added=1
