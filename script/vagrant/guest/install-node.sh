@@ -77,6 +77,10 @@ if ! command -v ipset >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y ipset
 fi
+# Local plugin:install compiles on this node (sibling checkouts under
+# /opt/flynn-plugins). The builder has Go from setup.sh; cluster nodes do not.
+bash "${FLYNN_VAGRANT_GUEST}/ensure-go.sh"
 command -v flynn-host >/dev/null
 command -v ipset >/dev/null
+command -v go >/dev/null
 echo "installed Flynn from ${tarball}"

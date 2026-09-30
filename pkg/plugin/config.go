@@ -47,11 +47,13 @@ func DefaultGitHubOrg() string {
 }
 
 func pluginRepoRoot() string {
-	root := os.Getenv(EnvPluginRepoRoot)
-	if root == "" {
-		root = ".."
+	if root := strings.TrimSpace(os.Getenv(EnvPluginRepoRoot)); root != "" {
+		return root
 	}
-	return root
+	if st, err := os.Stat("/opt/flynn-plugins"); err == nil && st.IsDir() {
+		return "/opt/flynn-plugins"
+	}
+	return ".."
 }
 
 func defaultConfig() *Config {

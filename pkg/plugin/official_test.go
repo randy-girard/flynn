@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestPluginRepoRootUsesEnv(t *testing.T) {
+	t.Setenv(EnvPluginRepoRoot, "/tmp/custom-plugins")
+	if pluginRepoRoot() != "/tmp/custom-plugins" {
+		t.Fatalf("got %q", pluginRepoRoot())
+	}
+}
+
 func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	t.Setenv(EnvGitHubOrg, "")
 	t.Setenv(EnvFlynnRepo, "")
@@ -27,10 +34,10 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 			t.Fatalf("official catalog missing %s", name)
 		}
 	}
-	if got["mysql"].Name != "mysql" || got["mysql"].Repo != "flynn-plugin-mariadb" {
+	if got["mysql"].Name != "mysql" || got["mysql"].Repo != "flynn-plugin-mysql" {
 		t.Fatalf("mysql must be canonical: %+v", got["mysql"])
 	}
-	if got["mariadb"].Name != "mysql" || got["mariadb"].Repo != "flynn-plugin-mariadb" {
+	if got["mariadb"].Name != "mysql" || got["mariadb"].Repo != "flynn-plugin-mysql" {
 		t.Fatalf("mariadb must alias mysql: %+v", got["mariadb"])
 	}
 	if _, ok := got["example"]; ok {
@@ -41,7 +48,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mariadb.git" {
+	if cfg.GitHubURL("mysql") != "https://github.com/randy-girard/flynn-plugin-mysql.git" {
 		t.Fatalf("mysql: %s", cfg.GitHubURL("mysql"))
 	}
 	if cfg.GitHubURL("otel") != "https://github.com/randy-girard/flynn-plugin-otel.git" {
@@ -58,7 +65,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.GitHub == nil || r.GitHub.Owner != "randy-girard" || r.GitHub.Repo != "flynn-plugin-mariadb" {
+	if r.GitHub == nil || r.GitHub.Owner != "randy-girard" || r.GitHub.Repo != "flynn-plugin-mysql" {
 		t.Fatalf("resolve mysql: %+v", r.GitHub)
 	}
 
@@ -66,7 +73,7 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if over.GitHub == nil || over.GitHub.Owner != "acme" || over.GitHub.Repo != "flynn-plugin-mariadb" {
+	if over.GitHub == nil || over.GitHub.Owner != "acme" || over.GitHub.Repo != "flynn-plugin-mysql" {
 		t.Fatalf("--github-org must override catalog owner: %+v", over.GitHub)
 	}
 }
@@ -134,7 +141,7 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mariadb", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "autoscale", "flynn-plugin-autoscale", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mysql", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "autoscale", "flynn-plugin-autoscale", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}

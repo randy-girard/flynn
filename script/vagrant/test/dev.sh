@@ -82,6 +82,14 @@ if ! grep -Fq 'flynn-linux-arm64.gz' "${mod}/guest/install-node.sh"; then
   echo "install-node.sh must install the Flynn CLI from the tarball so probe can run flynn apps" >&2
   exit 1
 fi
+if ! grep -Fq 'ensure-go.sh' "${mod}/guest/install-node.sh"; then
+  echo "install-node.sh must install Go so plugin:install can compile on cluster nodes" >&2
+  exit 1
+fi
+if ! grep -Fq 'builder/img/go.sh' "${mod}/guest/ensure-go.sh"; then
+  echo "ensure-go.sh must pin Go from builder/img/go.sh" >&2
+  exit 1
+fi
 if ! grep -Fq 'flynn apps --all' "${mod}/guest/probe-cluster.sh"; then
   echo "probe-cluster.sh must list system apps with flynn apps --all (GET /apps hides them)" >&2
   exit 1
@@ -298,7 +306,8 @@ for s in \
   "${mod}/guest/update-cluster.sh" \
   "${mod}/guest/node-dns.sh" \
   "${mod}/guest/start-node.sh" \
-  "${mod}/guest/probe-cluster.sh"; do
+  "${mod}/guest/probe-cluster.sh" \
+  "${mod}/guest/ensure-go.sh"; do
   if ! bash -n "${s}"; then
     echo "${s} failed bash -n" >&2
     exit 1

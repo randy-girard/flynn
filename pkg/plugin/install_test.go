@@ -448,6 +448,34 @@ func TestMergeGoBinPath(t *testing.T) {
 	}
 }
 
+func TestGoOnPATH(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !goOnPATH([]string{"PATH=" + dir}) {
+		t.Fatal("expected to find go on PATH")
+	}
+	if goOnPATH([]string{"PATH=/no/such/dir"}) {
+		t.Fatal("missing go must be false")
+	}
+}
+
+func TestEnsurePluginBuildGoKeepsExisting(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	in := &Installer{}
+	env, err := in.ensurePluginBuildGo([]string{"PATH=" + dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !goOnPATH(env) {
+		t.Fatal("go should stay on PATH")
+	}
+}
+
 func TestInstallerHTTPAndRunBuildMissing(t *testing.T) {
 	in := &Installer{}
 	if in.http() != http.DefaultClient {

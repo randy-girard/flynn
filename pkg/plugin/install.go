@@ -458,11 +458,81 @@ func (in *Installer) runBuild(root string) error {
 	if cmd.Stderr == nil {
 		cmd.Stderr = os.Stderr
 	}
-	cmd.Env = mergeGoBinPath(append(os.Environ(), in.localFlynnImageEnv()...), "/usr/local/go/bin")
-	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
-		cmd.Env = append(cmd.Env, "FLYNN_ROOT="+flynnRoot)
+	env, err := in.ensurePluginBuildGo(append(os.Environ(), in.localFlynnImageEnv()...))
+	if err != nil {
+		return err
 	}
+	if flynnRoot := FlynnSourceRoot(); flynnRoot != "" {
+		env = append(env, "FLYNN_ROOT="+flynnRoot)
+	}
+	cmd.Env = env
 	return cmd.Run()
+}
+
+func envPATH(env []string) string {
+	for _, e := range env {
+		k, v, ok := strings.Cut(e, "=")
+		if ok && k == "PATH" {
+			return v
+		}
+	}
+	return os.Getenv("PATH")
+}
+
+func goOnPATH(env []string) bool {
+	for _, dir := range filepath.SplitList(envPATH(env)) {
+		if dir == "" {
+			continue
+		}
+		p := filepath.Join(dir, "go")
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// ensurePluginBuildGo prepends /usr/local/go/bin and, on vagrant-dev cluster
+// nodes, installs that toolchain so sudo plugin:install can compile a checkout.
+func (in *Installer) ensurePluginBuildGo(env []string) ([]string, error) {
+	env = mergeGoBinPath(env, "/usr/local/go/bin")
+	if goOnPATH(env) {
+		return env, nil
+	}
+	root := FlynnSourceRoot()
+	candidates := make([]string, 0, 2)
+	if root != "" {
+		candidates = append(candidates, filepath.Join(root, "script", "vagrant", "guest", "ensure-go.sh"))
+	}
+	candidates = append(candidates, "/root/go/src/github.com/flynn/flynn/script/vagrant/guest/ensure-go.sh")
+	script := ""
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			script = p
+			if root == "" {
+				root = filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(p))))
+			}
+			break
+		}
+	}
+	if script == "" {
+		return env, fmt.Errorf("plugin-build: go not found on PATH (sudo secure_path often omits /usr/local/go/bin). On vagrant-dev cluster nodes run: sudo bash /root/go/src/github.com/flynn/flynn/script/vagrant/guest/ensure-go.sh")
+	}
+	cmd := exec.Command("bash", script)
+	cmd.Dir = root
+	cmd.Stdout = in.Stdout
+	cmd.Stderr = in.Stderr
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
+	}
+	if err := cmd.Run(); err != nil {
+		return env, fmt.Errorf("plugin-build: install Go via %s: %w", script, err)
+	}
+	env = mergeGoBinPath(env, "/usr/local/go/bin")
+	if !goOnPATH(env) {
+		return env, fmt.Errorf("plugin-build: go still missing after %s", script)
+	}
+	return env, nil
 }
 
 func pathListContains(path, dir string) bool {
