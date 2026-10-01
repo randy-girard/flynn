@@ -70,6 +70,36 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	}
 }
 
+func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
+	first := ResourceEnv(nil, map[string]string{
+		"FLYNN_POSTGRES": "pg-delta-pclpez",
+		"DATABASE_URL":   "postgres://first",
+		"POSTGRES_URL":   "postgres://first",
+		"POSTGRES_ROLE":  "primary",
+		"PGDATABASE":     "db_first",
+	}, "")
+	if first["FLYNN_POSTGRES"] != "pg-delta-pclpez" || first["POSTGRES_ROLE"] != "primary" {
+		t.Fatalf("first resource: %#v", first)
+	}
+	second := ResourceEnv(first, map[string]string{
+		"FLYNN_POSTGRES":  "pg-harbor-kxmnpq",
+		"DATABASE_URL":    "postgres://second",
+		"POSTGRES_URL":    "postgres://second",
+		"POSTGRES_ROLE":   "follower",
+		"POSTGRES_LEADER": "pg-delta-pclpez",
+		"PGDATABASE":      "db_first",
+	}, "")
+	if second["DATABASE_URL"] != "" || second["POSTGRES_URL"] != "" {
+		t.Fatalf("second must not steal the app URL: %#v", second)
+	}
+	if second["FLYNN_POSTGRES"] != "pg-harbor-kxmnpq" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "pg-delta-pclpez" {
+		t.Fatalf("second resource must keep its instance identity: %#v", second)
+	}
+	if second["PG_HARBOR_DATABASE_URL"] != "postgres://second" {
+		t.Fatalf("named url: %#v", second)
+	}
+}
+
 func TestMergeAttachmentHonorsAs(t *testing.T) {
 	got := MergeAttachment(nil, map[string]string{
 		"FLYNN_POSTGRES": "pg-harbor-kxmnpq",

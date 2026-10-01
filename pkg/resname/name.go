@@ -132,6 +132,28 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	return out
 }
 
+// ResourceEnv is the env stored on the controller resource record.
+// MergeAttachment is for the app release (a second postgres must not steal
+// DATABASE_URL or FLYNN_POSTGRES). The resource itself still keeps this
+// instance's name, role, and database keys so the dashboard can list it.
+func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
+	merged := MergeAttachment(existing, incoming, as)
+	if len(incoming) == 0 {
+		return merged
+	}
+	out := map[string]string{}
+	for k, v := range merged {
+		out[k] = v
+	}
+	for k, v := range incoming {
+		if strings.HasSuffix(k, "_URL") || strings.TrimSpace(v) == "" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
 func connectionURL(incoming map[string]string, conv string) string {
 	if conv != "" && strings.TrimSpace(incoming[conv]) != "" {
 		return incoming[conv]

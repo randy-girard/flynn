@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/randy-girard/flynn/controller/access"
@@ -10,6 +11,7 @@ import (
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
+	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
@@ -73,6 +75,9 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	} else {
 		config = []byte(`{}`)
 	}
+	if _, ok := dbruntime.ProviderEngine(p.Name); ok {
+		config = provisionConfigWithApp(config, target)
+	}
 	// The built-in appliance is the platform database. Bootstrap still creates
 	// the controller and blobstore databases (system apps, platform marker).
 	// A tenant app never reaches the appliance, so no tenant role is created.
@@ -89,7 +94,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
-	data.Env = resname.MergeAttachment(c.appReleaseEnv(target), data.Env, provisionAs(config))
+	data.Env = resname.ResourceEnv(c.appReleaseEnv(target), data.Env, provisionAs(config))
 	env, err := c.stampInstancePort(p, data.ID, data.Env)
 	if err != nil {
 		respondWithError(w, err)
@@ -125,6 +130,31 @@ func provisionAs(config []byte) string {
 		return ""
 	}
 	return body.As
+}
+
+// provisionConfigWithApp stamps the tenant app name so database plugins attach
+// the same way as `flynn resource:add` (name, role, DATABASE_URL).
+func provisionConfigWithApp(config []byte, app *ct.App) []byte {
+	if app == nil || strings.TrimSpace(app.Name) == "" {
+		return config
+	}
+	var obj map[string]any
+	if len(config) == 0 {
+		obj = map[string]any{}
+	} else if err := json.Unmarshal(config, &obj); err != nil || obj == nil {
+		return config
+	}
+	if v, ok := obj["app"]; ok {
+		if s, _ := v.(string); strings.TrimSpace(s) != "" {
+			return config
+		}
+	}
+	obj["app"] = app.Name
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return config
+	}
+	return out
 }
 
 func (c *controllerAPI) appReleaseEnv(app *ct.App) map[string]string {
