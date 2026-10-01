@@ -218,27 +218,9 @@ func splitColonCommand(name string) (base, suffix string, ok bool) {
 	return name[:i], name[i+1:], true
 }
 
-// pluginColonName maps a plugin action to a colon command.
-// Two tokens become a nested noun:verb (kafka:topics:create). A hyphenated
-// noun stays hyphenated (kafka:consumer-groups:create). Three-or-more-token
-// actions stay hyphenated verbs (disable-system-routes).
+// pluginColonName is the canonical flynn <command>:<verb> spelling.
 func pluginColonName(command, actionName string) string {
-	parts := strings.Fields(actionName)
-	suffix := strings.Join(parts, "-")
-	if len(parts) == 2 {
-		suffix = parts[0] + ":" + parts[1]
-	}
-	switch {
-	case command == "redis" && actionName == "redis-cli":
-		suffix = "cli"
-	case command == "mysql" && actionName == "console":
-		suffix = "cli"
-	case command == "mongodb" && actionName == "mongo":
-		suffix = "cli"
-	case command == "clickhouse" && actionName == "client":
-		suffix = "cli"
-	}
-	return command + ":" + suffix
+	return plugin.ColonName(command, actionName)
 }
 
 func pluginSpaceAlias(name string, args []string) (to, from string) {

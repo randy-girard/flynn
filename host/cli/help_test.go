@@ -129,6 +129,21 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 	if !strings.Contains(reclaim, "volume:gc") || !strings.Contains(reclaim, "TRIM") {
 		t.Fatalf("disk:reclaim help should describe GC and TRIM:\n%s", reclaim)
 	}
+	pg := FormatHelp("pg")
+	for _, want := range []string{"usage: flynn-host pg", "Commands:", "pg:psql", "pg:dump", "pg:restore", "postgres plugin"} {
+		if !strings.Contains(pg, want) {
+			t.Fatalf("pg help missing %q:\n%s", want, pg)
+		}
+	}
+	user := FormatHelp("user")
+	for _, want := range []string{"usage: flynn-host user", "Commands:", "user:bootstrap-admin", "cluster admin"} {
+		if !strings.Contains(user, want) {
+			t.Fatalf("user help missing %q:\n%s", want, user)
+		}
+	}
+	if !strings.Contains(FormatHelp("user:bootstrap-admin"), "--handle") {
+		t.Fatal("user:bootstrap-admin help missing --handle")
+	}
 }
 
 func TestRootHelpListsParentsOnly(t *testing.T) {
@@ -231,6 +246,12 @@ func TestHelpTopicKeepsNamespaceRoots(t *testing.T) {
 	}
 	if got := HelpTopic("disk", []string{"reclaim", "--help"}); got != "disk:reclaim" {
 		t.Fatalf("disk reclaim --help: %q", got)
+	}
+	if got := HelpTopic("pg", nil); got != "pg" {
+		t.Fatalf("pg: %q", got)
+	}
+	if got := HelpTopic("user", []string{"--help"}); got != "user" {
+		t.Fatalf("user --help: %q", got)
 	}
 }
 

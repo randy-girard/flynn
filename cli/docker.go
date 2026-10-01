@@ -43,9 +43,13 @@ usage: flynn docker:set-push-url [<url>]
 `)
 	register("docker:login", runDockerLoginCmd, `
 usage: flynn docker:login
+
+Deprecated. Docker registry login is no longer required; use flynn docker:push.
 `)
 	register("docker:logout", runDockerLogoutCmd, `
 usage: flynn docker:logout
+
+Deprecated. Docker registry logout is no longer required.
 `)
 }
 

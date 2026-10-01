@@ -16,6 +16,13 @@ import (
 )
 
 func init() {
+	Register("user", runHostUser, `
+usage: flynn-host user
+       flynn-host user <command> [<args>...]
+
+Operator user commands on this host. user:bootstrap-admin creates or resets
+a cluster admin with the local cluster key.
+`)
 	Register("tenancy:mode", runTenancyMode, `
 usage: flynn-host tenancy:mode [<mode>]
 
@@ -43,6 +50,15 @@ usage: flynn-host user:bootstrap-admin [--handle <handle>] [--password <password
 
 Create or reset a cluster_admin user with the local cluster key. A generated
 password is printed once when --password is omitted and stdin is not a TTY.
+
+Options:
+	--handle=<handle>      login handle (default: email local part)
+	--password=<password>  password (prompt on a TTY; generate otherwise)
+
+Examples:
+
+	$ flynn-host user:bootstrap-admin admin@example.com
+	$ flynn-host user:bootstrap-admin --handle admin --password secret admin@example.com
 `)
 }
 
@@ -56,6 +72,11 @@ func hostV1() (*v1.Client, error) {
 		return nil, fmt.Errorf("controller client cannot call the tenancy API")
 	}
 	return v, nil
+}
+
+func runHostUser(_ *docopt.Args) error {
+	fmt.Print(FormatHelp("user"))
+	return nil
 }
 
 func runTenancyMode(args *docopt.Args) error {

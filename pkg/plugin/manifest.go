@@ -152,6 +152,8 @@ type CLI struct {
 	User bool `json:"user,omitempty"`
 
 	// Doc is the full docopt usage string (including "usage:" lines).
+	// Colon form (flynn pg:psql) is canonical. Space form (flynn pg psql)
+	// is a fallback. DocoptUsage lists both before parse so either argv works.
 	Doc string `json:"doc,omitempty"`
 
 	// ResourceEnv, when set, is an env key on the current app release whose

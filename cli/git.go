@@ -171,7 +171,11 @@ func isNotFound(err error) bool {
 }
 
 func init() {
-	register("git-credentials", runGitCredentials, "usage: flynn git-credentials <operation>")
+	register("git-credentials", runGitCredentials, `
+usage: flynn git-credentials <operation>
+
+Git credential helper installed into git config by flynn cluster:add. Not typed by hand.
+`)
 }
 
 func runGitCredentials(args *docopt.Args) error {

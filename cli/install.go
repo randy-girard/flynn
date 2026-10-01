@@ -7,7 +7,11 @@ import (
 )
 
 func init() {
-	register("install", runInstaller, `usage: flynn install`)
+	register("install", runInstaller, `
+usage: flynn install
+
+Deprecated cluster installer stub. Use the manual installation script instead.
+`)
 }
 
 func runInstaller(args *docopt.Args) error {

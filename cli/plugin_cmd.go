@@ -53,13 +53,17 @@ func runPluginCommand(name string, args []string) error {
 	// the docopt usage, so redis-cli PING stays a redis argument.
 	resourceName, args := peelResourceName(name, args)
 
+	// DocoptUsage lists colon form first (canonical) and space form as a
+	// fallback. Flynn still passes argv as ["pg", "psql"] after expanding
+	// pg:psql; both patterns must parse.
 	argv := make([]string, 1, 1+len(args))
 	argv[0] = name
 	argv = append(argv, args...)
-	parsed, err := docopt.Parse(spec.Doc, argv, true, "", false)
+	parsed, err := docopt.Parse(spec.DocoptUsage(), argv, true, "", false)
 	if err != nil {
 		return err
 	}
+	plugin.FoldColonBools(spec, parsed.Bool)
 	if resourceName != "" {
 		if parsed.String == nil {
 			parsed.String = map[string]string{}
@@ -91,7 +95,11 @@ func peelResourceName(command string, args []string) (string, []string) {
 			continue
 		}
 		token := strings.ToLower(arg)
-		if !re.MatchString(token) {
+		match := re.MatchString(token)
+		if !match && command == "pg" && strings.HasPrefix(token, "postgresql-") && resname.IsolatedService(token) {
+			match = true
+		}
+		if !match {
 			continue
 		}
 		rest := make([]string, 0, len(args)-1)
@@ -544,8 +552,11 @@ func instanceNamesFromEnv(spec *plugin.CLI, env map[string]string) []string {
 }
 
 func instanceDiscoverdRe(command string) *regexp.Regexp {
+	if command == "pg" {
+		return regexp.MustCompile(`(?:leader\.)?(postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|pg-[a-z]+-[a-z]{6,8})\.discoverd`)
+	}
 	if command == "" {
-		return regexp.MustCompile(`(?:leader\.)?([a-z]+-[a-z]+-[a-z]{6,8})\.discoverd`)
+		return regexp.MustCompile(`(?:leader\.)?([a-z]+-[a-z]+-[a-z]{6,8}|postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8})\.discoverd`)
 	}
 	return regexp.MustCompile(`(?:leader\.)?(` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8})\.discoverd`)
 }
@@ -593,7 +604,13 @@ func envForNamedInstance(env map[string]string, name string) map[string]string {
 	pick := func(v string) bool {
 		return v != "" && strings.Contains(v, name)
 	}
-	keys := []string{prefix + "_DATABASE_URL", prefix + "_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL"}
+	keys := []string{}
+	for k := range env {
+		if strings.HasPrefix(k, "FLYNN_POSTGRESQL_") && strings.HasSuffix(k, "_URL") {
+			keys = append(keys, k)
+		}
+	}
+	keys = append(keys, prefix+"_DATABASE_URL", prefix+"_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL")
 	for _, k := range keys {
 		if pick(env[k]) {
 			out["POSTGRES_URL"] = env[k]

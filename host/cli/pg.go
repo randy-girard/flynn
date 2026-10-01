@@ -19,6 +19,13 @@ import (
 )
 
 func init() {
+	Register("pg", runHostPg, `
+usage: flynn-host pg
+       flynn-host pg <command> [<args>...]
+
+Platform Postgres appliance (controller database). Tenant instances use
+flynn pg from the postgres plugin.
+`)
 	Register("pg:psql", runHostPgPsql, `
 usage: flynn-host pg:psql [--] [<argument>...]
 
@@ -49,6 +56,11 @@ Options:
 	-q, --quiet        don't print progress
 	-j, --jobs=<jobs>  number of pg_restore jobs to use [default: 1]
 `)
+}
+
+func runHostPg(_ *docopt.Args) error {
+	fmt.Print(FormatHelp("pg"))
+	return nil
 }
 
 type platformPgClient interface {

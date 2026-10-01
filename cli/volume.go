@@ -24,6 +24,9 @@ List cluster volumes.
 usage: flynn volume:show [--json] <id>
 
 Show information about a volume.
+
+Options:
+	--json  print the volume as JSON
 `)
 	register("volume:decommission", runVolumeDecommission, `
 usage: flynn volume:decommission <id>

@@ -25,5 +25,11 @@ Options:
 	-f --force                            force creation of cluster even if the name already exists
 	-p --prompt                           prompt for selection of controller cluster from the OAuth audience list
 	--oob-code                            do not attempt to use a browser and local HTTP listener for OAuth
+
+Examples:
+
+	$ flynn login
+	$ flynn login --oob-code
+	$ flynn login https://dashboard.example.com
 `)
 }

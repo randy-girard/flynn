@@ -86,6 +86,17 @@ func TestShortDescription(t *testing.T) {
 	}
 }
 
+func TestCommandDescriptions(t *testing.T) {
+	doc := "usage: flynn pg\n\nCommands:\n\tcreate    Create a logical database on this instance.\n\tpsql      Open psql against this instance\n\nExamples:\n\n    $ flynn pg:psql\n"
+	got := CommandDescriptions(doc)
+	if got["create"] != "Create a logical database on this instance" {
+		t.Fatalf("create: %#v", got)
+	}
+	if got["psql"] != "Open psql against this instance" {
+		t.Fatalf("psql: %#v", got)
+	}
+}
+
 func TestFormatItems(t *testing.T) {
 	got := FormatItems([]Item{{Name: "set", Desc: "Set env"}, {Name: "unset", Desc: "Unset env"}})
 	for _, want := range []string{"set", "Set env", "unset"} {

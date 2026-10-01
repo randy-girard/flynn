@@ -35,6 +35,11 @@ Mint a personal access token. The token is printed once.
 Options:
 	--scope=<scope>    Space-separated scopes stored on the token
 	--expires=<time>   RFC3339 expiry
+
+Examples:
+
+	$ flynn token:create laptop
+	$ flynn token:create --scope "app:read app:deploy" ci
 `)
 	register("token:list", runTokenList, `
 usage: flynn token:list
@@ -61,6 +66,10 @@ List the stored context handle for each cluster in ~/.flynnrc.
 usage: flynn context:use <handle>
 
 Remember <handle> as the context for the current cluster.
+
+Examples:
+
+	$ flynn context:use ada
 `)
 	register("apps:transfer", runAppsTransfer, `
 usage: flynn apps:transfer <app> <handle>
@@ -90,6 +99,8 @@ Options:
 `)
 	register("collaborator:remove", runCollabRemove, `
 usage: flynn collaborator:remove <handle>
+
+Remove a collaborator from the current context account, or from -a <app>.
 `)
 	register("user", runUserList, `
 usage: flynn user
@@ -98,28 +109,78 @@ usage: flynn user
 List controller users. user:list is the same command. user:help is the same
 as user --help. Requires the cluster key or a cluster admin.
 `)
-	register("user:list", runUserList, `usage: flynn user:list`)
-	register("user:info", runUserInfo, `usage: flynn user:info <handle>`)
+	register("user:list", runUserList, `
+usage: flynn user:list
+
+List controller users. Requires the cluster key or a cluster admin.
+`)
+	register("user:info", runUserInfo, `
+usage: flynn user:info <handle>
+
+Show a controller user by handle or email.
+`)
 	register("user:create", runUserCreate, `
 usage: flynn user:create [--handle <handle>] [--password <password>] [--admin] <email>
 
-Create a user and print nothing about the password except what you passed in.
+Create a user. The handle defaults to the email local part. Print nothing
+about the password except what you passed in.
+
+Options:
+	--handle=<handle>      login handle (default: email local part)
+	--password=<password>  password (omit to leave unset)
+	--admin                grant cluster administrator
+
+Examples:
+
+	$ flynn user:create ada@example.com
+	$ flynn user:create --handle ada --admin ada@example.com
 `)
-	register("user:disable", runUserFlag("disabled", true), `usage: flynn user:disable <handle>`)
-	register("user:enable", runUserFlag("disabled", false), `usage: flynn user:enable <handle>`)
-	register("user:admin", runUserAdmin, `usage: flynn user:admin <handle>`)
+	register("user:disable", runUserFlag("disabled", true), `
+usage: flynn user:disable <handle>
+
+Disable a controller user so they cannot sign in.
+`)
+	register("user:enable", runUserFlag("disabled", false), `
+usage: flynn user:enable <handle>
+
+Enable a disabled controller user.
+`)
+	register("user:admin", runUserAdmin, `
+usage: flynn user:admin <handle>
+
+Grant cluster administrator on a controller user.
+`)
 	register("user:token", runUserToken, `
 usage: flynn user:token <handle>
 
 Mint a personal access token for <handle> and print it once.
 `)
-	register("account:suspend", runAccountSuspend(true), `usage: flynn account:suspend <handle>`)
-	register("account:unsuspend", runAccountSuspend(false), `usage: flynn account:unsuspend <handle>`)
+	register("account:suspend", runAccountSuspend(true), `
+usage: flynn account:suspend <handle>
+
+Suspend an account so it cannot create or run apps.
+`)
+	register("account:unsuspend", runAccountSuspend(false), `
+usage: flynn account:unsuspend <handle>
+
+Unsuspend an account.
+`)
 	register("account:quota:set", runQuotaSet, `
 usage: flynn account:quota:set [--apps=<apps>] [--processes=<processes>] [--memory=<mb>] [--resources=<resources>] [--collaborators=<collaborators>] <handle>
 
 Set explicit quota limits. Omit a flag to leave that limit unlimited. Zero and
 negative values are rejected by the controller.
+
+Options:
+	--apps=<apps>                    max apps
+	--processes=<processes>          max processes
+	--memory=<mb>                    max memory in MB
+	--resources=<resources>          max resources
+	--collaborators=<collaborators>  max collaborators
+
+Examples:
+
+	$ flynn account:quota:set --apps=5 ada
 `)
 }
 

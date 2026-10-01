@@ -29,6 +29,10 @@ see), not from a local checkout. After install, plugin CLI commands also
 appear in flynn help when the plugin is a resource provider (or sets
 cli.user). kind: app system plugins are listed here but are not user flynn
 commands.
+
+Options:
+	--known  print the first-party catalog without talking to the cluster
+	--check  compare installed plugins to the newest compatible GitHub tag
 `
 	register("plugin", runPlugins, pluginListUsage)
 	register("plugin:list", runPlugins, `
@@ -47,6 +51,10 @@ see), not from a local checkout. After install, plugin CLI commands also
 appear in flynn help when the plugin is a resource provider (or sets
 cli.user). kind: app system plugins are listed here but are not user flynn
 commands.
+
+Options:
+	--known  print the first-party catalog without talking to the cluster
+	--check  compare installed plugins to the newest compatible GitHub tag
 `)
 }
 

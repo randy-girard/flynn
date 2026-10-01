@@ -139,6 +139,46 @@ func ShortDescription(usage string) string {
 	return ""
 }
 
+// CommandDescriptions maps a Commands: verb to its prose in a plugin cli.doc
+// string. Lines look like "\tcreate    CREATE DATABASE on this instance".
+func CommandDescriptions(doc string) map[string]string {
+	out := map[string]string{}
+	in := false
+	for _, line := range strings.Split(doc, "\n") {
+		trim := strings.TrimSpace(line)
+		lower := strings.ToLower(trim)
+		if lower == "commands:" {
+			in = true
+			continue
+		}
+		if !in {
+			continue
+		}
+		if trim == "" {
+			continue
+		}
+		if strings.HasSuffix(lower, ":") && !strings.Contains(trim, " ") {
+			break
+		}
+		fields := strings.Fields(trim)
+		if len(fields) < 2 {
+			continue
+		}
+		verb := fields[0]
+		if i := strings.LastIndex(verb, ":"); i >= 0 {
+			verb = verb[i+1:]
+		}
+		desc := strings.TrimSpace(strings.TrimPrefix(trim, fields[0]))
+		if i := strings.IndexByte(desc, '.'); i > 0 {
+			desc = desc[:i]
+		}
+		if verb != "" && desc != "" {
+			out[verb] = desc
+		}
+	}
+	return out
+}
+
 // FormatItems renders an aligned two-column command list.
 func FormatItems(items []Item) string {
 	if len(items) == 0 {

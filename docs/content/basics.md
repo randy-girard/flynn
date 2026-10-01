@@ -61,7 +61,8 @@ starts for the controller:
 $ flynn resource:add postgres
 ```
 
-That creates one isolated instance and sets `DATABASE_URL` only. It does not
+That creates one isolated instance named `postgresql-<word>-<5 digits>` and
+sets `FLYNN_POSTGRESQL_<COLOR>_URL` on the app. It does not
 create a role on the platform server, and the URL is not the platform
 appliance superuser. Install the plugin with `flynn-host plugin:install postgres`
 first. Until then the command fails.

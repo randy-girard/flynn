@@ -60,6 +60,34 @@ func pgPluginCLI() *plugin.CLI {
 	}
 }
 
+func TestPluginDocoptAllowsColonAndSpaceForm(t *testing.T) {
+	spec := &plugin.CLI{
+		Command: "pg",
+		Doc:     "usage: flynn pg\n       flynn pg:psql [--] [<argument>...]\n       flynn pg:create <database>\n",
+		Actions: []plugin.CLIAction{{Name: "psql"}, {Name: "create"}},
+	}
+	doc := spec.DocoptUsage()
+	if i, j := strings.Index(doc, "flynn pg:psql"), strings.Index(doc, "flynn pg psql"); i < 0 || j < 0 || i > j {
+		t.Fatalf("colon form must parse and be listed before space fallback:\n%s", doc)
+	}
+	colon, err := docopt.Parse(doc, []string{"pg:psql", "--", "-c", "SELECT 1"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin.FoldColonBools(spec, colon.Bool)
+	if got := spec.MatchAction(colon.Bool); got == nil || got.Name != "psql" {
+		t.Fatalf("colon argv MatchAction: %#v bools=%#v", got, colon.Bool)
+	}
+	space, err := docopt.Parse(doc, []string{"pg", "psql", "--", "-c", "SELECT 1"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin.FoldColonBools(spec, space.Bool)
+	if got := spec.MatchAction(space.Bool); got == nil || got.Name != "psql" {
+		t.Fatalf("space argv MatchAction: %#v bools=%#v", got, space.Bool)
+	}
+}
+
 func TestPluginInterpRedisDialsLeaderDiscoverd(t *testing.T) {
 	redisApp := "redis-11111111-2222-3333-4444-555555555555"
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
@@ -398,6 +426,10 @@ func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	name, rest = peelResourceName("pg", []string{"psql", "pg-harbor-kxmnpq", "--", "-c", "SELECT 1"})
 	if name != "pg-harbor-kxmnpq" || strings.Join(rest, " ") != "psql -- -c SELECT 1" {
 		t.Fatalf("name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("pg", []string{"psql", "postgresql-concave-48291", "--", "-c", "SELECT 1"})
+	if name != "postgresql-concave-48291" || strings.Join(rest, " ") != "psql -- -c SELECT 1" {
+		t.Fatalf("postgresql name %q rest %#v", name, rest)
 	}
 	name, rest = peelResourceName("pg", []string{"psql", "--", "pg-harbor-kxmnpq"})
 	if name != "" {

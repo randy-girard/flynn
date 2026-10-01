@@ -166,9 +166,14 @@ func formatHelpWith(name string, cat *plugin.Catalog) string {
 			b.WriteString(spec.Usage)
 			b.WriteByte('\n')
 		}
-	} else if spec := owningPlugin(cat, name); spec != nil && spec.Doc != "" && !clihelp.HasChildren(all, name) {
-		b.WriteString(strings.TrimRight(spec.Doc, "\n"))
-		b.WriteByte('\n')
+	} else if spec := owningPlugin(cat, name); spec != nil && !clihelp.HasChildren(all, name) {
+		help := spec.ActionHelp(name)
+		if help == "" {
+			fmt.Fprintf(&b, "usage: flynn %s\n", name)
+		} else {
+			b.WriteString(strings.TrimRight(help, "\n"))
+			b.WriteByte('\n')
+		}
 		return b.String()
 	} else {
 		fmt.Fprintf(&b, "usage: flynn %s\n", name)
@@ -203,7 +208,7 @@ func helpChildrenWith(name string, cat *plugin.Catalog) []helpChild {
 		full := name + ":" + verb
 		desc := clihelp.ShortDescription(commandUsage(full))
 		if desc == "" {
-			if spec := catalogLookupIn(cat, full); spec != nil {
+			if spec := catalogLookupIn(cat, full); spec != nil && spec.Usage != "" {
 				desc = spec.Usage
 			} else if spec := owningPlugin(cat, full); spec != nil {
 				desc = pluginActionDesc(spec, full)
@@ -245,9 +250,20 @@ func pluginActionDesc(spec *plugin.CLI, full string) string {
 	if spec == nil {
 		return ""
 	}
+	descs := clihelp.CommandDescriptions(spec.Doc)
+	verb := full
+	if i := strings.LastIndex(full, ":"); i >= 0 {
+		verb = full[i+1:]
+	}
+	if d := descs[verb]; d != "" {
+		return d
+	}
 	for _, a := range spec.Actions {
-		if pluginColonName(spec.Command, a.Name) == full {
-			return a.Name
+		if pluginColonName(spec.Command, a.Name) != full {
+			continue
+		}
+		if d := descs[a.Name]; d != "" {
+			return d
 		}
 	}
 	return ""
