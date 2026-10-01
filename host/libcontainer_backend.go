@@ -474,7 +474,12 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	log := l.Logger.New("fn", "run", "job.id", job.ID)
 
 	// if the job has been stopped, just return
-	if l.State.GetJob(job.ID).ForceStop {
+	active := l.State.GetJob(job.ID)
+	if active == nil {
+		log.Error("skipping start of unknown job")
+		return fmt.Errorf("job %s not found", job.ID)
+	}
+	if active.ForceStop {
 		log.Info("skipping start of stopped job")
 		return nil
 	}
@@ -2093,7 +2098,14 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 		container.MuxConfig.HostID = l.State.id
 		c, err := l.factory.Load(container.ID)
 		if err != nil {
-			return fmt.Errorf("error loading container state: %s", err)
+			// After a hard reboot the runc state files are often empty or
+			// gone. Skip them so the host daemon can start; persistent jobs
+			// (discoverd, flannel) resurrect once Restore sees JobExists=false.
+			log.Error("skipping container after restore; state missing or corrupt", "container.id", container.ID, "job.id", k, "err", err)
+			if j, ok := jobs[k]; ok {
+				l.State.SetStatusFailed(j.Job.ID, fmt.Errorf("error loading container state: %s", err))
+			}
+			continue
 		}
 		container.container = c
 		containers[k] = container
@@ -2145,8 +2157,11 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 					log.Info("using stored network config", "job.id", cfg.JobID)
 					go l.host.ConfigureNetworking(&cfg)
 				} else {
-					log.Info("got stored network config, but associated job isn't running", "job.id", cfg.JobID)
-					l.host.SetStatusNetwork(&cfg)
+					// After a reboot the flannel container is gone; still bring
+					// the bridge up so overlay jobs can start while flannel
+					// itself is being resurrected.
+					log.Info("re-applying stored network config; flannel job isn't running", "job.id", cfg.JobID, "subnet", cfg.Subnet)
+					go l.host.ConfigureNetworking(&cfg)
 				}
 			} else {
 				// Subnet is persisted but the flannel job id was not (common after
@@ -2162,11 +2177,21 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 			if cfg.JobID == "" {
 				cfg.JobID = runningSystemJobID(jobs, "discoverd", "app")
 			}
-			log.Info("using stored discoverd config", "job.id", cfg.JobID)
-			// run ConfigureDiscoverd in a goroutine to avoid deadlock
-			// between state.Restore and PersistGlobalState which both
-			// access the state database
-			go l.host.ConfigureDiscoverd(&cfg)
+			// Connect only if the discoverd container actually came back.
+			// After a reboot it is gone; ConfigureDiscoverd Fatals on
+			// connection-refused and kills the host before resurrect()
+			// can start a new discoverd. The resurrected job POSTs
+			// /host/discoverd when it is ready.
+			if cfg.JobID != "" {
+				if _, ok := readySignals[cfg.JobID]; ok {
+					log.Info("using stored discoverd config", "job.id", cfg.JobID)
+					go l.host.ConfigureDiscoverd(&cfg)
+				} else {
+					log.Info("got stored discoverd config, but associated job isn't running", "job.id", cfg.JobID)
+				}
+			} else {
+				log.Info("got stored discoverd config, but no discoverd job is running")
+			}
 		}
 	} else {
 		log.Info("no stored global backend config")

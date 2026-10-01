@@ -594,13 +594,17 @@ func runDaemon(args *docopt.Args) {
 	startHostFirewall(hostID, externalIP, peerIPs, log, func() []instanceport.Job {
 		return instanceJobsFromActive(hostID, state.GetActive())
 	})
-	if err := discoverdManager.ConnectPeer(peerIPs); err != nil {
-		log.Info("no cluster peers available")
-	}
 
+	// Resurrect discoverd/flannel before ConnectPeer. After a reboot the only
+	// peer is this host and discoverd is down; waiting on :1111 first delays
+	// (or used to Fatal) resurrection by the discoverd client retry window.
 	if !args.Bool["--no-resurrect"] {
 		log.Info("resurrecting jobs")
 		resurrect()
+	}
+
+	if err := discoverdManager.ConnectPeer(peerIPs); err != nil {
+		log.Info("no cluster peers available")
 	}
 
 	monitor := NewMonitor(host.discMan, externalIP, logger)

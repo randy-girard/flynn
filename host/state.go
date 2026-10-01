@@ -164,6 +164,19 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 		return nil, fmt.Errorf("could not restore from host persistence db: %s", err)
 	}
 
+	// Jobs persisted as starting/running whose containers did not come back
+	// (reboot, corrupt runc state) must be failed so they do not hold
+	// volumes. Otherwise persistent resurrection AddJob returns
+	// ErrVolumesInUse and Run panics on a missing GetJob.
+	for id, job := range s.jobs {
+		if job == nil || statusDown(job.Status) {
+			continue
+		}
+		if !backend.JobExists(id) {
+			s.SetStatusFailed(id, fmt.Errorf("container missing after host restore"))
+		}
+	}
+
 	return func() {
 		if len(resurrect) == 0 {
 			return
@@ -179,7 +192,11 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 					newJob.Config.Env["FLYNN_JOB_ID"] = newJob.ID
 				}
 				log.Printf("resurrecting %s as %s", job.ID, newJob.ID)
-				s.AddJob(newJob)
+				if err := s.AddJob(newJob); err != nil {
+					log.Printf("error resurrecting %s as %s: %s", job.ID, newJob.ID, err)
+					wg.Done()
+					return
+				}
 				backend.Run(newJob, nil, nil)
 				wg.Done()
 			}(job)
