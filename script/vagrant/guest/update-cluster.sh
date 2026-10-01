@@ -29,4 +29,5 @@ fi
 
 echo "updating cluster from ${tarball} using $(command -v flynn-host)"
 flynn-host update --all-nodes --tarball "${tarball}" --force
+bash "${FLYNN_VAGRANT_GUEST}/ensure-flynn-root.sh"
 echo "cluster update complete"

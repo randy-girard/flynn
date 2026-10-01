@@ -363,6 +363,9 @@ update_running_cluster() {
   fi
   echo "updating live cluster on ${nodes[*]} (flynn-host update --all-nodes)"
   run_as_root_on "${nodes[0]}" "cd ${SRC} && script/vagrant/guest/update-cluster.sh"
+  for name in "${nodes[@]}"; do
+    run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-flynn-root.sh"
+  done
 }
 
 cmd="${1:-}"

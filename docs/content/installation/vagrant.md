@@ -93,7 +93,7 @@ If an older laptop loop already bootstrapped Flynn on **dev-builder**, run `make
 
 Non-interactive (no sudo password prompt): `make vagrant-setup YES=1`, `make vagrant-update YES=1 FORCE_BUILD=1`, `make vagrant-destroy YES=1`. That passes `--yes` so `sudo -n` is used; if this laptop cannot write `/etc/hosts` without a password, setup still bootstraps the VMs and `make vagrant-probe` checks the cluster from **dev-node1**. Three-node cluster: `make vagrant-setup YES=1 NODES=3`.
 
-`flynn-host plugin:install` for a sibling checkout compiles on the cluster node (not the builder). `setup` installs the same pinned Go as the builder at `/usr/local/go`. On an already-running node: `sudo bash script/vagrant/guest/ensure-go.sh`.
+`flynn-host plugin:install` / `plugin:update --rebuild` for a sibling checkout compiles on the cluster node (not the builder). `setup` installs the same pinned Go as the builder at `/usr/local/go` and sets `FLYNN_ROOT=/root/go/src/github.com/flynn/flynn` in `/etc/profile.d/flynn-root.sh`, `/etc/environment`, and `/etc/flynn/source-root` so plugin-build finds this Flynn even when `flynn-host` is `/usr/bin`. On an already-running node: `sudo bash script/vagrant/guest/ensure-go.sh` (or `sudo bash script/vagrant/guest/ensure-flynn-root.sh` if Go is already installed).
 
 See [Development](../development.html.md).
 

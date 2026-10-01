@@ -86,6 +86,30 @@ if ! grep -Fq 'ensure-go.sh' "${mod}/guest/install-node.sh"; then
   echo "install-node.sh must install Go so plugin:install can compile on cluster nodes" >&2
   exit 1
 fi
+if ! grep -Fq 'ensure-flynn-root.sh' "${mod}/guest/ensure-go.sh"; then
+  echo "ensure-go.sh must persist FLYNN_ROOT for plugin-build Auth-Key" >&2
+  exit 1
+fi
+if ! grep -Fq 'ensure-flynn-root.sh' "${mod}/guest/update-cluster.sh"; then
+  echo "update-cluster.sh must persist FLYNN_ROOT on vagrant-update" >&2
+  exit 1
+fi
+if ! grep -Fq 'ensure-flynn-root.sh' "${script}"; then
+  echo "vagrant.sh must persist FLYNN_ROOT on every cluster node" >&2
+  exit 1
+fi
+if ! grep -Fq 'ensure-flynn-root.sh' "${mod}/guest/start-node.sh"; then
+  echo "start-node.sh must persist FLYNN_ROOT after reload" >&2
+  exit 1
+fi
+if ! grep -Fq '/etc/flynn/source-root' "${mod}/guest/ensure-flynn-root.sh"; then
+  echo "ensure-flynn-root.sh must write /etc/flynn/source-root" >&2
+  exit 1
+fi
+if ! grep -Fq 'FLYNN_ROOT=' "${mod}/guest/ensure-flynn-root.sh"; then
+  echo "ensure-flynn-root.sh must export FLYNN_ROOT" >&2
+  exit 1
+fi
 if ! grep -Fq 'builder/img/go.sh' "${mod}/guest/ensure-go.sh"; then
   echo "ensure-go.sh must pin Go from builder/img/go.sh" >&2
   exit 1
@@ -307,7 +331,8 @@ for s in \
   "${mod}/guest/node-dns.sh" \
   "${mod}/guest/start-node.sh" \
   "${mod}/guest/probe-cluster.sh" \
-  "${mod}/guest/ensure-go.sh"; do
+  "${mod}/guest/ensure-go.sh" \
+  "${mod}/guest/ensure-flynn-root.sh"; do
   if ! bash -n "${s}"; then
     echo "${s} failed bash -n" >&2
     exit 1

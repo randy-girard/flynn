@@ -14,6 +14,9 @@ if ! systemctl list-unit-files flynn-host.service >/dev/null 2>&1; then
   exit 2
 fi
 
+# plugin:update compiles against the mounted Flynn tree (SEC-003 Auth-Key).
+bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-flynn-root.sh"
+
 systemctl enable flynn-host.service >/dev/null 2>&1 || true
 systemctl start flynn-host.service
 

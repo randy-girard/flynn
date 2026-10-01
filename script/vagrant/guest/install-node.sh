@@ -78,7 +78,9 @@ if ! command -v ipset >/dev/null 2>&1; then
   apt-get install -y ipset
 fi
 # Local plugin:install compiles on this node (sibling checkouts under
-# /opt/flynn-plugins). The builder has Go from setup.sh; cluster nodes do not.
+# /opt/flynn-plugins). ensure-go.sh also persists FLYNN_ROOT so plugin-build
+# compiles against this Flynn (DISCOVERD_AUTH_KEY). The builder has Go from
+# setup.sh; cluster nodes do not.
 bash "${FLYNN_VAGRANT_GUEST}/ensure-go.sh"
 command -v flynn-host >/dev/null
 command -v ipset >/dev/null

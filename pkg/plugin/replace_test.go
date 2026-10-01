@@ -73,11 +73,25 @@ func TestFlynnRootForPluginSibling(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(flynn, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("FLYNN_ROOT", "")
-	t.Setenv(EnvImagesJSON, "")
+	isolateFlynnSourceRoot(t)
 	if got := flynnRootForPlugin(plugin); got != flynn {
 		t.Fatalf("got %q want %q", got, flynn)
 	}
+}
+
+func isolateFlynnSourceRoot(t *testing.T) {
+	t.Helper()
+	t.Setenv("FLYNN_ROOT", "")
+	t.Setenv(EnvImagesJSON, filepath.Join(t.TempDir(), "missing-images.json"))
+	origFile := flynnSourceRootFile
+	origChecks := defaultFlynnCheckouts
+	flynnSourceRootFile = filepath.Join(t.TempDir(), "missing-source-root")
+	defaultFlynnCheckouts = nil
+	t.Chdir(t.TempDir())
+	t.Cleanup(func() {
+		flynnSourceRootFile = origFile
+		defaultFlynnCheckouts = origChecks
+	})
 }
 
 func TestFlynnSourceRootFromEnv(t *testing.T) {
@@ -91,11 +105,59 @@ func TestFlynnSourceRootFromEnv(t *testing.T) {
 		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
 	}
 
+	isolateFlynnSourceRoot(t)
 	bogus := t.TempDir()
 	t.Setenv("FLYNN_ROOT", bogus)
 	got := FlynnSourceRoot()
 	if got == bogus {
 		t.Fatal("non-Flynn FLYNN_ROOT must be ignored")
+	}
+	if got != "" {
+		t.Fatalf("expected empty FlynnSourceRoot, got %q", got)
+	}
+}
+
+func TestFlynnSourceRootFromFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	isolateFlynnSourceRoot(t)
+	f := filepath.Join(t.TempDir(), "source-root")
+	if err := os.WriteFile(f, []byte(root+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	flynnSourceRootFile = f
+	if FlynnSourceRoot() != root {
+		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
+	}
+}
+
+func TestFlynnSourceRootFromCwd(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "pkg", "plugin")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+	isolateFlynnSourceRoot(t)
+	t.Chdir(sub)
+	if FlynnSourceRoot() != root {
+		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
+	}
+}
+
+func TestFlynnSourceRootFromDefaultCheckout(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	isolateFlynnSourceRoot(t)
+	defaultFlynnCheckouts = []string{root}
+	if FlynnSourceRoot() != root {
+		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
 	}
 }
 

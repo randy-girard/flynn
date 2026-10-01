@@ -23,6 +23,17 @@ var defaultImagesJSONPaths = []string{
 	"/etc/flynn/images.json.gz",
 }
 
+// flynnSourceRootFile is written on Vagrant cluster nodes so plugin-build
+// finds Flynn when flynn-host is /usr/bin (not inside the checkout).
+var flynnSourceRootFile = "/etc/flynn/source-root"
+
+// defaultFlynnCheckouts are Vagrant / GOPATH layouts used when FLYNN_ROOT is unset.
+var defaultFlynnCheckouts = []string{
+	"/root/go/src/github.com/flynn/flynn",
+	"/root/go/src/github.com/randy-girard/flynn",
+	"/vagrant",
+}
+
 func localImagesJSONCandidates() []string {
 	out := append([]string{}, defaultImagesJSONPaths...)
 	if root := strings.TrimSpace(os.Getenv("FLYNN_ROOT")); root != "" {
@@ -98,10 +109,14 @@ func localImagesJSONPath() string {
 }
 
 // FlynnSourceRoot is the Flynn checkout plugin-build should compile against
-// (SEC-003 Auth-Key). Order: FLYNN_ROOT, images.json next to this tree, then
-// walk up from the flynn-host binary (vagrant /vagrant/build/bin/flynn-host).
+// (SEC-003 Auth-Key). Order: FLYNN_ROOT, /etc/flynn/source-root (Vagrant
+// nodes), images.json next to this tree, walk up from the flynn-host binary
+// or cwd, then well-known Vagrant checkouts.
 func FlynnSourceRoot() string {
 	if r := strings.TrimSpace(os.Getenv("FLYNN_ROOT")); r != "" && isFlynnModule(r) {
+		return r
+	}
+	if r := flynnSourceRootFromFile(flynnSourceRootFile); r != "" {
 		return r
 	}
 	if p := localImagesJSONPath(); p != "" {
@@ -109,11 +124,38 @@ func FlynnSourceRoot() string {
 			return r
 		}
 	}
-	exe, err := os.Executable()
+	if exe, err := os.Executable(); err == nil {
+		if r := walkFlynnModule(filepath.Dir(exe)); r != "" {
+			return r
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		if r := walkFlynnModule(wd); r != "" {
+			return r
+		}
+	}
+	for _, p := range defaultFlynnCheckouts {
+		if isFlynnModule(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func flynnSourceRootFromFile(path string) string {
+	b, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Dir(exe)
+	dir := strings.TrimSpace(string(b))
+	if isFlynnModule(dir) {
+		return dir
+	}
+	return ""
+}
+
+func walkFlynnModule(start string) string {
+	dir := filepath.Clean(start)
 	for i := 0; i < 8; i++ {
 		if isFlynnModule(dir) {
 			return dir

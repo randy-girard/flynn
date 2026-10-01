@@ -68,10 +68,13 @@ mkdir -p /etc/profile.d
 printf '%s\n' 'export PATH=/usr/local/go/bin:$PATH' > /etc/profile.d/flynn-go.sh
 chmod 644 /etc/profile.d/flynn-go.sh
 
+bash "${FLYNN_VAGRANT_GUEST}/ensure-flynn-root.sh"
+
 # sudo flynn-host plugin:install uses secure_path, which omits /usr/local/go/bin.
 mkdir -p /etc/sudoers.d
 sudoers="/etc/sudoers.d/flynn-go"
 cat > "${sudoers}" <<'EOF'
+Defaults env_keep += "FLYNN_ROOT"
 Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/usr/local/go/bin"
 EOF
 chmod 440 "${sudoers}"

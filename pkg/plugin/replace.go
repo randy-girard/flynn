@@ -11,21 +11,17 @@ var flynnReplaceLine = regexp.MustCompile(`(?m)^replace github.com/randy-girard/
 
 // flynnRootForPlugin is the Flynn checkout plugin-build must compile against
 // so discoverd clients send Auth-Key (SEC-003). GitHub-pinned go.mod versions
-// predate that. Order: FlynnSourceRoot, then a flynn/ sibling of the plugin
-// (FlynnWorkspace layout).
+// predate that. Order: a flynn/ sibling of the plugin (FlynnWorkspace), then
+// FlynnSourceRoot (FLYNN_ROOT, Vagrant /etc/flynn/source-root, cwd, well-known paths).
 func flynnRootForPlugin(pluginRoot string) string {
-	if r := FlynnSourceRoot(); r != "" {
-		return r
-	}
 	pluginRoot = strings.TrimSpace(pluginRoot)
-	if pluginRoot == "" {
-		return ""
+	if pluginRoot != "" {
+		sib := filepath.Clean(filepath.Join(pluginRoot, "..", "flynn"))
+		if isFlynnModule(sib) {
+			return sib
+		}
 	}
-	sib := filepath.Clean(filepath.Join(pluginRoot, "..", "flynn"))
-	if isFlynnModule(sib) {
-		return sib
-	}
-	return ""
+	return FlynnSourceRoot()
 }
 
 // replacePluginFlynnModule points the plugin go.mod at this Flynn checkout

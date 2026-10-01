@@ -144,8 +144,7 @@ func TestWaitHTTP(t *testing.T) {
 }
 
 func TestRunBuildRequiresFlynnCheckout(t *testing.T) {
-	t.Setenv("FLYNN_ROOT", "")
-	t.Setenv(EnvImagesJSON, "")
+	isolateFlynnSourceRoot(t)
 	in := &Installer{Stdout: io.Discard, Stderr: io.Discard}
 	err := in.runBuild(t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "DISCOVERD_AUTH_KEY") {

@@ -75,7 +75,9 @@ usage: flynn-host plugin:update [--no-build] [--rebuild] [--ref=REF] [--github-o
 Deploy a new release of an already-installed plugin. update requires the
 plugin app to already exist. A local checkout runs script/plugin-build
 unless --no-build; otherwise dist/ is reused and source changes never
-ship. GitHub updates use the published image. Update runs hooks.upgrade
+ship. Rebuilds compile against FLYNN_ROOT (set on Vagrant cluster nodes)
+or a flynn/ sibling of the plugin so discoverd clients send Auth-Key.
+GitHub updates use the published image. Update runs hooks.upgrade
 when declared (not hooks.install) and does not re-ask setup prompts.
 --yes accepts cluster-secret injection without a prompt (needed for
 third-party plugins on a non-TTY). --ref is a plugin GitHub tag
