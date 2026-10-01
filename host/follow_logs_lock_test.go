@@ -31,3 +31,23 @@ func TestFollowLogsUnlocksBeforeGetStreams(t *testing.T) {
 		t.Fatal("followLogs must release logStreamMtx before GetStreams")
 	}
 }
+
+func TestAttachTTYTeesIntoLogMuxWhenLoggingEnabled(t *testing.T) {
+	src, err := os.ReadFile("libcontainer_backend.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	start := strings.Index(body, "if req.Job.Job.Config.TTY {")
+	if start < 0 {
+		t.Fatal("TTY attach not found")
+	}
+	fn := body[start:]
+	end := strings.Index(fn, "client.Stop()")
+	if end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "DisableLog") || !strings.Contains(fn, "LineWriter") || !strings.Contains(fn, "io.MultiWriter") {
+		t.Fatal("TTY attach must copy PTY output into logmux when disable_log is false")
+	}
+}

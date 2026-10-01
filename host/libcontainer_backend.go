@@ -1943,8 +1943,20 @@ func (l *LibcontainerBackend) Attach(req *AttachRequest) (err error) {
 			}()
 		}
 		if req.Stdout != nil {
+			out := io.Writer(req.Stdout)
+			var ttyLog *logmux.LineWriter
+			if !req.Job.Job.Config.DisableLog && l.LogMux != nil && client.MuxConfig != nil {
+				cfg := client.MuxConfig
+				ttyLog = &logmux.LineWriter{WriteLine: func(line string) {
+					l.LogMux.Write(logagg.MsgIDStdout, cfg, line)
+				}}
+				out = io.MultiWriter(req.Stdout, ttyLog)
+			}
 			go func() {
-				io.Copy(req.Stdout, pty)
+				io.Copy(out, pty)
+				if ttyLog != nil {
+					ttyLog.Flush()
+				}
 				done <- struct{}{}
 			}()
 		}
