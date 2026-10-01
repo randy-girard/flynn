@@ -30,6 +30,7 @@ require (
 	github.com/golang/protobuf v1.5.3
 	github.com/google/go-cmp v0.6.0
 	github.com/grpc-ecosystem/go-grpc-middleware v1.1.0
+	github.com/hashicorp/go-msgpack v0.0.0-20150518234257-fa3f63826f7c
 	github.com/hashicorp/raft v0.0.0-20160603202243-4bcac2adb069
 	github.com/hashicorp/raft-boltdb v0.0.0-20150201200839-d1e82c1ec3f1
 	github.com/improbable-eng/grpc-web v0.11.0
@@ -88,7 +89,6 @@ require (
 	github.com/googleapis/enterprise-certificate-proxy v0.2.3 // indirect
 	github.com/googleapis/gax-go/v2 v2.7.1 // indirect
 	github.com/gorilla/websocket v1.4.1 // indirect
-	github.com/hashicorp/go-msgpack v0.0.0-20150518234257-fa3f63826f7c // indirect
 	github.com/howeyc/fsnotify v0.0.0-20140711012604-6b1ef893dc11 // indirect
 	github.com/jackc/fake v0.0.0-20150926172116-812a484cc733 // indirect
 	github.com/jmespath/go-jmespath v0.0.0-20160202185014-0b12d6b521d8 // indirect
