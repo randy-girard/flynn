@@ -85,13 +85,19 @@ var identityEnv = []struct{ name, url string }{
 	{"FLYNN_POSTGRES", "DATABASE_URL"},
 }
 
+func conventionalURL(k string) bool {
+	switch k {
+	case "DATABASE_URL", "REDIS_URL", "KAFKA_URL", "CLICKHOUSE_URL":
+		return true
+	}
+	return false
+}
+
 // MergeAttachment copies a provision response onto an app.
-// The resource always gets PREFIX_WORD_DATABASE_URL (pg-harbor-kxmnpq →
-// PG_HARBOR_DATABASE_URL). --as NAME adds NAME_URL as well. When the app does
-// not already have the engine's usual variable (DATABASE_URL, REDIS_URL,
-// KAFKA_URL, CLICKHOUSE_URL), that variable is set to the same URL. Existing
-// values are left alone. Every *_URL returned here is an attachment and must
-// not be changed with env:set.
+// The app gets PREFIX_WORD_SUFFIX_DATABASE_URL always (pg-harbor-kxmnpq →
+// PG_HARBOR_KXMNPQ_DATABASE_URL), the engine's usual URL (DATABASE_URL,
+// REDIS_URL, …) when that key is unused, and --as NAME_URL. Host, user,
+// password, and FLYNN_* keys stay on the resource record, not the app.
 func MergeAttachment(existing, incoming map[string]string, as string) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
@@ -100,9 +106,6 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	name, conv := Identity(incoming)
 	url := connectionURL(incoming, conv)
 	if url == "" || name == "" {
-		for k, v := range incoming {
-			out[k] = v
-		}
 		return out
 	}
 	taken := func(k string) bool {
@@ -120,22 +123,81 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	if conv != "" && !taken(conv) {
 		out[conv] = url
 	}
-	if strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != "" && !taken("POSTGRES_URL") {
-		out["POSTGRES_URL"] = url
-	}
-	for k, v := range incoming {
-		if strings.HasSuffix(k, "_URL") || taken(k) {
-			continue
-		}
-		out[k] = v
-	}
 	return out
 }
 
+// EnvPrefix is the env stem for a resource app name (pg-willow-acmaos →
+// PG_WILLOW_ACMAOS).
+func EnvPrefix(resourceApp string) string {
+	prefix, word, suffix, ok := splitAppName(resourceApp)
+	if !ok {
+		name := strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(resourceApp), "-", "_"))
+		return strings.Trim(name, "_")
+	}
+	return strings.ToUpper(prefix + "_" + word + "_" + suffix)
+}
+
+// UnsetAttachment is the env:unset map for removing a resource from an app.
+// Keys still matching the resource record, any *_URL with the same connection
+// string, and PREFIX_* keys for this resource name are cleared.
+func UnsetAttachment(release, resource map[string]string) map[string]*string {
+	env := map[string]*string{}
+	if release == nil || resource == nil {
+		return env
+	}
+	for k, v := range resource {
+		if release[k] == v {
+			env[k] = nil
+		}
+	}
+	for k, v := range release {
+		if !strings.HasSuffix(k, "_URL") || !strings.Contains(v, "://") {
+			continue
+		}
+		for _, rv := range resource {
+			if v == rv {
+				env[k] = nil
+				break
+			}
+		}
+	}
+	name, _ := Identity(resource)
+	if prefix := EnvPrefix(name); prefix != "" {
+		p := prefix + "_"
+		for k := range release {
+			if strings.HasPrefix(k, p) {
+				env[k] = nil
+			}
+		}
+	}
+	return env
+}
+
+// LockedKeys are release env vars currently owned by a resource attachment.
+// Only *_URL keys are locked (DATABASE_URL, PG_HARBOR_KXMNPQ_DATABASE_URL, …).
+func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) map[string]string {
+	locked := map[string]string{}
+	if release == nil {
+		return locked
+	}
+	for _, re := range resourceEnvs {
+		for k, v := range re {
+			if !strings.HasSuffix(k, "_URL") || v == "" {
+				continue
+			}
+			if release[k] == v {
+				locked[k] = v
+			}
+		}
+	}
+	return locked
+}
+
 // ResourceEnv is the env stored on the controller resource record.
-// MergeAttachment is for the app release (a second postgres must not steal
-// DATABASE_URL or FLYNN_POSTGRES). The resource itself still keeps this
-// instance's name, role, and database keys so the dashboard can list it.
+// MergeAttachment is what the app release gets (DATABASE_URL when unused, plus
+// the scoped *_DATABASE_URL). The resource itself keeps instance identity
+// (FLYNN_POSTGRES, POSTGRES_URL, role, host) so the dashboard and pg:psql can
+// find it. Conventional app URLs are not copied onto a later resource.
 func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
 	merged := MergeAttachment(existing, incoming, as)
 	if len(incoming) == 0 {
@@ -146,7 +208,7 @@ func ResourceEnv(existing, incoming map[string]string, as string) map[string]str
 		out[k] = v
 	}
 	for k, v := range incoming {
-		if strings.HasSuffix(k, "_URL") || strings.TrimSpace(v) == "" {
+		if strings.TrimSpace(v) == "" || conventionalURL(k) {
 			continue
 		}
 		out[k] = v
@@ -185,16 +247,17 @@ func Identity(env map[string]string) (name, urlKey string) {
 	return "", ""
 }
 
-// ExtraDatabaseURL is PREFIX_WORD_DATABASE_URL. If that key is taken, the
-// six-letter suffix is included so two resources that share a word stay distinct.
+// ExtraDatabaseURL is PREFIX_WORD_SUFFIX_DATABASE_URL so the key matches the
+// resource name (pg-harbor-kxmnpq → PG_HARBOR_KXMNPQ_DATABASE_URL). If that
+// key is taken, an extra marker keeps the second resource distinct.
 func ExtraDatabaseURL(resourceApp string, taken func(string) bool) string {
-	prefix, word, suffix, ok := splitAppName(resourceApp)
-	if !ok {
+	prefix := EnvPrefix(resourceApp)
+	if prefix == "" {
 		return ""
 	}
-	key := strings.ToUpper(prefix+"_"+word) + "_DATABASE_URL"
+	key := prefix + "_DATABASE_URL"
 	if taken != nil && taken(key) {
-		key = strings.ToUpper(prefix+"_"+word+"_"+suffix) + "_DATABASE_URL"
+		return prefix + "_X_DATABASE_URL"
 	}
 	return key
 }

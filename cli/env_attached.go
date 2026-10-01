@@ -7,20 +7,16 @@ import (
 	"strings"
 
 	"github.com/randy-girard/flynn/controller/client"
-	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/resname"
 )
 
-// rejectAttachedURLSet matches flynn-plugin-postgres RejectAttachedURLSet.
-// attached maps env names currently injected by a resource attachment.
-// A nil update is env:unset and is allowed. After detach the key is gone,
-// so a later env:set is allowed.
-func rejectAttachedURLSet(attached map[string]string, updates map[string]*string) error {
+// rejectLockedSet blocks env:set and env:unset of keys currently injected by a
+// resource attachment. After the resource is removed those keys are gone, so a
+// later env:set is allowed.
+func rejectLockedSet(locked map[string]string, updates map[string]*string) error {
 	var blocked []string
-	for k, v := range updates {
-		if v == nil || !strings.HasSuffix(k, "_URL") {
-			continue
-		}
-		if _, ok := attached[k]; ok {
+	for k := range updates {
+		if _, ok := locked[k]; ok {
 			blocked = append(blocked, k)
 		}
 	}
@@ -28,22 +24,7 @@ func rejectAttachedURLSet(attached map[string]string, updates map[string]*string
 		return nil
 	}
 	sort.Strings(blocked)
-	return fmt.Errorf("cannot env:set an attached URL while the resource is attached: %s", strings.Join(blocked, ", "))
-}
-
-func attachedURLKeys(resources []*ct.Resource) map[string]string {
-	attached := map[string]string{}
-	for _, r := range resources {
-		if r == nil {
-			continue
-		}
-		for k, v := range r.Env {
-			if strings.HasSuffix(k, "_URL") && v != "" {
-				attached[k] = v
-			}
-		}
-	}
-	return attached
+	return fmt.Errorf("cannot change an attached env var while the resource is attached: %s", strings.Join(blocked, ", "))
 }
 
 func rejectEnvSetAttachedURLs(client controller.Client, app string, env map[string]*string) error {
@@ -54,5 +35,17 @@ func rejectEnvSetAttachedURLs(client controller.Client, app string, env map[stri
 		}
 		return err
 	}
-	return rejectAttachedURLSet(attachedURLKeys(resources), env)
+	releaseEnv := map[string]string{}
+	if release, err := client.GetAppRelease(app); err == nil && release != nil && release.Env != nil {
+		releaseEnv = release.Env
+	} else if err != nil && !errors.Is(err, controller.ErrNotFound) {
+		return err
+	}
+	var envs []map[string]string
+	for _, r := range resources {
+		if r != nil && r.Env != nil {
+			envs = append(envs, r.Env)
+		}
+	}
+	return rejectLockedSet(resname.LockedKeys(releaseEnv, envs...), env)
 }

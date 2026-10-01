@@ -136,6 +136,9 @@ func runEnvUnset(args *docopt.Args, client controller.Client) error {
 	for _, s := range vars {
 		env[s] = nil
 	}
+	if err := rejectEnvSetAttachedURLs(client, mustApp(), env); err != nil {
+		return err
+	}
 	id, err := setEnv(client, envProc, env)
 	if err != nil {
 		return err

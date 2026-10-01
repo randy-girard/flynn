@@ -1,10 +1,12 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/cheggaaa/pb"
@@ -165,6 +167,11 @@ type appReleaseGetter interface {
 	GetAppRelease(appID string) (*ct.Release, error)
 }
 
+type pluginJobClient interface {
+	GetAppRelease(appID string) (*ct.Release, error)
+	AppResourceList(appID string) ([]*ct.Resource, error)
+}
+
 func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.Args, extra []string) error {
 	action := spec.MatchAction(args.Bool)
 	if action == nil {
@@ -270,17 +277,30 @@ func pluginResourceMatches(spec *plugin.CLI, res *ct.Resource) bool {
 	return false
 }
 
-func pluginJobConfig(client appReleaseGetter, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
+func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
 	appName := strings.TrimSpace(spec.App)
 	if action == nil || !action.Cluster || appName == "" {
 		appName = mustApp()
 	}
 	appRelease, err := client.GetAppRelease(appName)
 	if err != nil {
-		return nil, fmt.Errorf("error getting app release: %s", err)
+		if action != nil && action.Cluster {
+			return nil, fmt.Errorf("error getting app release: %s", err)
+		}
+		if !isReleaseMissing(err) {
+			return nil, fmt.Errorf("error getting app release: %s", err)
+		}
+		appRelease = &ct.Release{}
 	}
 
-	in, resourceRelease, err := pluginInterp(client, spec, appRelease, resourceNameArg(args))
+	var resources []*ct.Resource
+	if action == nil || !action.Cluster {
+		if list, lerr := client.AppResourceList(mustApp()); lerr == nil {
+			resources = list
+		}
+	}
+
+	in, resourceRelease, err := pluginInterp(client, spec, appRelease, resources, resourceNameArg(args))
 	if err != nil {
 		return nil, err
 	}
@@ -354,48 +374,269 @@ func resourceNameArg(args *docopt.Args) string {
 	return ""
 }
 
-func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Release, resourceName string) (plugin.Interp, *ct.Release, error) {
+func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Release, resources []*ct.Resource, resourceName string) (plugin.Interp, *ct.Release, error) {
 	in := plugin.Interp{App: map[string]string{}}
 	if appRelease != nil && appRelease.Env != nil {
-		in.App = appRelease.Env
+		in.App = cloneEnv(appRelease.Env)
 	}
 
+	var selected *ct.Resource
 	switch {
-	case spec.ResourceEnv != "" && strings.TrimSpace(resourceName) != "":
-		// pg:psql pg-harbor-kxmnpq. pipeline:create <name> also has <name>
-		// in docopt; that is the pipeline name, not a datastore instance.
-		in.Resource = resname.Canonical(spec.Command, resourceName)
 	case spec.ResourceEnv != "":
-		in.Resource = in.App[spec.ResourceEnv]
-		if in.Resource == "" {
-			msg := spec.ResourceMissing
-			if msg == "" {
-				msg = fmt.Sprintf("No %s resource found. Provision one with `flynn resource:add %s`", spec.Command, spec.Command)
-			}
-			return in, nil, fmt.Errorf("%s", msg)
+		name, res, err := resolvePluginInstance(spec, in.App, resources, resourceName)
+		if err != nil {
+			return in, nil, err
 		}
+		in.Resource = name
+		selected = res
 	case spec.App != "":
 		in.Resource = spec.App
 	default:
 		return in, nil, fmt.Errorf("%s plugin CLI does not declare a resource", spec.Command)
 	}
 
-	resRelease, err := client.GetAppRelease(in.Resource)
+	instanceRelease, err := client.GetAppRelease(in.Resource)
 	if err != nil {
-		return in, nil, fmt.Errorf("error getting %s release: %s", spec.Command, err)
+		if spec.ResourceEnv == "" || !isReleaseMissing(err) {
+			return in, nil, fmt.Errorf("error getting %s release: %s", spec.Command, err)
+		}
+		instanceRelease = nil
 	}
+	resRelease := instanceRelease
 	if resRelease != nil {
 		in.ResourceEnv = resRelease.Env
 	}
-	if strings.TrimSpace(resourceName) != "" && resRelease != nil {
-		copied := make(map[string]string, len(in.App)+len(resRelease.Env))
-		for key, val := range in.App {
-			copied[key] = val
+
+	src := connectionEnvForInstance(in.App, in.Resource, selected, instanceRelease)
+	if selected == nil && strings.TrimSpace(resourceName) != "" && instanceRelease == nil && len(src) == 0 {
+		return in, nil, fmt.Errorf("no %s resource named %s", spec.Command, in.Resource)
+	}
+	if selected != nil && selected.Env != nil {
+		applyNamedResource(in.App, in.Resource, selected.Env)
+	} else if strings.TrimSpace(resourceName) != "" && len(src) > 0 {
+		applyNamedResource(in.App, in.Resource, src)
+	}
+
+	if (resRelease == nil || resRelease.ID == "") && spec.App != "" && spec.App != in.Resource {
+		pluginRel, perr := client.GetAppRelease(spec.App)
+		if perr == nil && pluginRel != nil && pluginRel.ID != "" {
+			resRelease = pluginRel
 		}
-		in.App = copied
-		applyNamedResource(in.App, in.Resource, resRelease.Env)
+	}
+	if resRelease == nil || resRelease.ID == "" {
+		if err != nil {
+			return in, nil, fmt.Errorf("error getting %s release: %s", spec.Command, err)
+		}
+		return in, nil, fmt.Errorf("error getting %s release", spec.Command)
 	}
 	return in, resRelease, nil
+}
+
+func resolvePluginInstance(spec *plugin.CLI, env map[string]string, resources []*ct.Resource, resourceName string) (string, *ct.Resource, error) {
+	matched := pluginMatchingResources(spec, resources)
+	names := pluginInstanceNames(spec, env, matched)
+	want := strings.TrimSpace(resourceName)
+	if want != "" {
+		want = resname.Canonical(spec.Command, want)
+		if res := lookupPluginResource(matched, want, resourceName); res != nil {
+			if name := resourceDisplayName(res); name != "" {
+				return name, res, nil
+			}
+			return want, res, nil
+		}
+		for _, n := range names {
+			if strings.EqualFold(n, want) || strings.EqualFold(n, strings.TrimSpace(resourceName)) {
+				return n, lookupPluginResource(matched, n, ""), nil
+			}
+		}
+		return want, nil, nil
+	}
+	if len(matched) == 1 {
+		if name := resourceDisplayName(matched[0]); name != "" {
+			return name, matched[0], nil
+		}
+	}
+	if len(matched) > 1 {
+		return "", nil, pluginMultipleInstances(spec, pluginInstanceNames(spec, nil, matched))
+	}
+	if len(names) == 1 {
+		return names[0], lookupPluginResource(matched, names[0], ""), nil
+	}
+	if len(names) > 1 {
+		return "", nil, pluginMultipleInstances(spec, names)
+	}
+	return "", nil, pluginResourceMissingErr(spec)
+}
+
+func pluginMatchingResources(spec *plugin.CLI, list []*ct.Resource) []*ct.Resource {
+	var out []*ct.Resource
+	for _, r := range list {
+		if pluginResourceMatches(spec, r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func lookupPluginResource(list []*ct.Resource, names ...string) *ct.Resource {
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		for _, r := range list {
+			if resourceMatchesRef(r, name) {
+				return r
+			}
+		}
+	}
+	return nil
+}
+
+func pluginInstanceNames(spec *plugin.CLI, env map[string]string, resources []*ct.Resource) []string {
+	seen := map[string]struct{}{}
+	var names []string
+	add := func(n string) {
+		n = strings.TrimSpace(n)
+		if n == "" {
+			return
+		}
+		if spec != nil && spec.ResourceEnv != "" {
+			n = resname.Canonical(spec.Command, n)
+		}
+		if _, ok := seen[n]; ok {
+			return
+		}
+		seen[n] = struct{}{}
+		names = append(names, n)
+	}
+	for _, r := range resources {
+		add(resourceDisplayName(r))
+	}
+	if spec != nil && spec.ResourceEnv != "" && env != nil {
+		add(env[spec.ResourceEnv])
+	}
+	for _, n := range instanceNamesFromEnv(spec, env) {
+		add(n)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func instanceNamesFromEnv(spec *plugin.CLI, env map[string]string) []string {
+	if env == nil {
+		return nil
+	}
+	cmd := ""
+	if spec != nil {
+		cmd = strings.ToLower(strings.TrimSpace(spec.Command))
+	}
+	re := instanceDiscoverdRe(cmd)
+	var names []string
+	for _, v := range env {
+		for _, m := range re.FindAllStringSubmatch(v, -1) {
+			if len(m) > 1 {
+				names = append(names, m[1])
+			}
+		}
+	}
+	return names
+}
+
+func instanceDiscoverdRe(command string) *regexp.Regexp {
+	if command == "" {
+		return regexp.MustCompile(`(?:leader\.)?([a-z]+-[a-z]+-[a-z]{6,8})\.discoverd`)
+	}
+	return regexp.MustCompile(`(?:leader\.)?(` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8})\.discoverd`)
+}
+
+func pluginResourceMissingErr(spec *plugin.CLI) error {
+	msg := ""
+	if spec != nil {
+		msg = spec.ResourceMissing
+		if msg == "" {
+			msg = fmt.Sprintf("No %s resource found. Provision one with `flynn resource:add %s`", spec.Command, spec.Command)
+		}
+	}
+	return fmt.Errorf("%s", msg)
+}
+
+func pluginMultipleInstances(spec *plugin.CLI, names []string) error {
+	cmd := "resource"
+	if spec != nil && spec.Command != "" {
+		cmd = spec.Command
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "multiple %s resources; specify the name:\n", cmd)
+	for _, n := range names {
+		fmt.Fprintf(&b, "  %s\n", n)
+	}
+	return fmt.Errorf("%s", strings.TrimRight(b.String(), "\n"))
+}
+
+func connectionEnvForInstance(app map[string]string, name string, res *ct.Resource, release *ct.Release) map[string]string {
+	if res != nil && res.Env != nil {
+		return res.Env
+	}
+	if release != nil && release.Env != nil {
+		return release.Env
+	}
+	return envForNamedInstance(app, name)
+}
+
+func envForNamedInstance(env map[string]string, name string) map[string]string {
+	out := map[string]string{}
+	if name == "" || env == nil {
+		return out
+	}
+	prefix := resname.EnvPrefix(name)
+	pick := func(v string) bool {
+		return v != "" && strings.Contains(v, name)
+	}
+	keys := []string{prefix + "_DATABASE_URL", prefix + "_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL"}
+	for _, k := range keys {
+		if pick(env[k]) {
+			out["POSTGRES_URL"] = env[k]
+			out["DATABASE_URL"] = env[k]
+			break
+		}
+	}
+	if out["POSTGRES_URL"] == "" {
+		for _, v := range env {
+			if strings.Contains(v, "://") && strings.Contains(v, name) {
+				out["POSTGRES_URL"] = v
+				out["DATABASE_URL"] = v
+				break
+			}
+		}
+	}
+	if prefix != "" {
+		for _, k := range []string{"PGHOST", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGPORT", "PGSSLMODE", "POSTGRES_PASSWORD"} {
+			if v := env[prefix+"_"+k]; v != "" {
+				out[k] = v
+			}
+		}
+	}
+	return out
+}
+
+func cloneEnv(env map[string]string) map[string]string {
+	out := make(map[string]string, len(env))
+	for k, v := range env {
+		out[k] = v
+	}
+	return out
+}
+
+func isReleaseMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, controller.ErrNotFound) || errors.Is(err, ct.ErrNotFound) {
+		return true
+	}
+	s := strings.ToLower(err.Error())
+	return strings.Contains(s, "resource not found") || strings.Contains(s, "no release for")
 }
 
 // applyNamedResource points console placeholders at the instance named on the

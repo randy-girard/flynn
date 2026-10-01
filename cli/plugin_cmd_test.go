@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,14 +28,36 @@ func redisPluginCLI() *plugin.CLI {
 }
 
 type fakeRedisReleaseClient struct {
-	releases map[string]*ct.Release
+	releases  map[string]*ct.Release
+	resources map[string][]*ct.Resource
 }
 
 func (f fakeRedisReleaseClient) GetAppRelease(appID string) (*ct.Release, error) {
 	if r, ok := f.releases[appID]; ok {
 		return r, nil
 	}
-	return nil, fmt.Errorf("no release for %s", appID)
+	return nil, ct.ErrNotFound
+}
+
+func (f fakeRedisReleaseClient) AppResourceList(appID string) ([]*ct.Resource, error) {
+	if f.resources == nil {
+		return nil, nil
+	}
+	return f.resources[appID], nil
+}
+
+func pgPluginCLI() *plugin.CLI {
+	return &plugin.CLI{
+		Command:         "pg",
+		App:             "postgres-plugin",
+		ResourceEnv:     "FLYNN_POSTGRES",
+		ResourceMissing: "No postgres database found. Provision one with `flynn resource:add postgres`",
+		Actions: []plugin.CLIAction{{
+			Name:   "psql",
+			Args:   []string{"psql", "${app.POSTGRES_URL}"},
+			Append: "<argument>",
+		}},
+	}
 }
 
 func TestPluginInterpRedisDialsLeaderDiscoverd(t *testing.T) {
@@ -49,7 +70,7 @@ func TestPluginInterpRedisDialsLeaderDiscoverd(t *testing.T) {
 			"FLYNN_REDIS":    redisApp,
 			"REDIS_PASSWORD": "s3cret",
 		},
-	}, "")
+	}, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +105,7 @@ func TestPluginInterpRedisUsesREDISHost(t *testing.T) {
 			"REDIS_HOST":     host,
 			"REDIS_PASSWORD": "s3cret",
 		},
-	}, "")
+	}, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,18 +119,18 @@ func TestPluginInterpRedisUsesREDISHost(t *testing.T) {
 }
 
 func TestPluginInterpRequiresResource(t *testing.T) {
-	_, _, err := pluginInterp(fakeRedisReleaseClient{}, redisPluginCLI(), &ct.Release{Env: map[string]string{}}, "")
+	_, _, err := pluginInterp(fakeRedisReleaseClient{}, redisPluginCLI(), &ct.Release{Env: map[string]string{}}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "No redis server found") {
 		t.Fatalf("got %v", err)
 	}
 
-	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "widget"}, &ct.Release{}, "")
+	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "widget"}, &ct.Release{}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "does not declare a resource") {
 		t.Fatalf("got %v", err)
 	}
 
 	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{"widget": {ID: "rel"}}}
-	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "widget", App: "widget"}, &ct.Release{}, "")
+	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "widget", App: "widget"}, &ct.Release{}, nil, "")
 	if err != nil || in.Resource != "widget" || rel.ID != "rel" {
 		t.Fatalf("app-named plugin: %+v %v %v", in, rel, err)
 	}
@@ -272,7 +293,7 @@ func TestPluginJobConfigErrors(t *testing.T) {
 	spec := redisPluginCLI()
 	args := &docopt.Args{Bool: map[string]bool{"redis-cli": true}, All: map[string]interface{}{}}
 
-	if _, err := pluginJobConfig(fakeRedisReleaseClient{}, spec, spec.Action("redis-cli"), args); err == nil || !strings.Contains(err.Error(), "error getting app release") {
+	if _, err := pluginJobConfig(fakeRedisReleaseClient{}, spec, spec.Action("redis-cli"), args); err == nil || !strings.Contains(err.Error(), "No redis server found") {
 		t.Fatalf("missing app release: %v", err)
 	}
 
@@ -297,12 +318,12 @@ func TestPluginJobConfigErrors(t *testing.T) {
 
 func TestPluginInterpDefaultMissingAndReleaseError(t *testing.T) {
 	spec := &plugin.CLI{Command: "cache", ResourceEnv: "FLYNN_CACHE"}
-	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}}, "")
+	_, _, err := pluginInterp(fakeRedisReleaseClient{}, spec, &ct.Release{Env: map[string]string{}}, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "flynn resource:add cache") {
 		t.Fatalf("default missing: %v", err)
 	}
 
-	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "cache", App: "cache"}, nil, "")
+	_, _, err = pluginInterp(fakeRedisReleaseClient{}, &plugin.CLI{Command: "cache", App: "cache"}, nil, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "error getting cache release") {
 		t.Fatalf("release lookup: %v", err)
 	}
@@ -336,7 +357,7 @@ func TestPluginInterpPasswordNotRescanned(t *testing.T) {
 			"FLYNN_REDIS":    redisApp,
 			"REDIS_PASSWORD": "x${resource}y",
 		},
-	}, "")
+	}, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -418,7 +439,7 @@ func TestPluginInterpNamedResource(t *testing.T) {
 			"FLYNN_POSTGRES": "pg-other-aaaaaa",
 			"POSTGRES_URL":   "postgres://wrong",
 		},
-	}, "harbor-kxmnpq")
+	}, nil, "harbor-kxmnpq")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,6 +455,115 @@ func TestPluginInterpNamedResource(t *testing.T) {
 	}
 	if args[1] != in.App["POSTGRES_URL"] {
 		t.Fatalf("psql %q", args)
+	}
+}
+
+func TestPluginInterpUsesControllerResourceWithoutAppRelease(t *testing.T) {
+	leader := "pg-prairie-uctdxy"
+	url := "postgres://app:pw@leader." + leader + ".discoverd:5432/db?sslmode=require"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"postgres-plugin": {ID: "plugin-rel"},
+		},
+	}
+	in, rel, err := pluginInterp(client, pgPluginCLI(), nil, []*ct.Resource{{
+		Env: map[string]string{"FLYNN_POSTGRES": leader, "POSTGRES_URL": url},
+	}}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != leader || rel.ID != "plugin-rel" {
+		t.Fatalf("resource %q release %v", in.Resource, rel)
+	}
+	if in.App["POSTGRES_URL"] != url {
+		t.Fatalf("url %q", in.App["POSTGRES_URL"])
+	}
+}
+
+func TestPluginInterpRequiresNameWhenMultiple(t *testing.T) {
+	primary := "pg-prairie-uctdxy"
+	follower := "pg-juniper-iipvbw"
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"postgres-plugin": {ID: "plugin-rel"},
+		primary:           {ID: "primary-rel", Env: map[string]string{"POSTGRES_URL": "postgres://p@leader." + primary + ".discoverd:5432/db"}},
+		follower:          {ID: "follower-rel", Env: map[string]string{"POSTGRES_URL": "postgres://f@leader." + follower + ".discoverd:5432/db"}},
+	}}
+	env := &ct.Release{Env: map[string]string{
+		"FLYNN_POSTGRES":                 primary,
+		"POSTGRES_URL":                   "postgres://p@leader." + primary + ".discoverd:5432/db",
+		"PG_JUNIPER_IIPVBW_DATABASE_URL": "postgres://f@leader." + follower + ".discoverd:5432/db",
+	}}
+	_, _, err := pluginInterp(client, pgPluginCLI(), env, nil, "")
+	if err == nil || !strings.Contains(err.Error(), "multiple pg resources") || !strings.Contains(err.Error(), primary) || !strings.Contains(err.Error(), follower) {
+		t.Fatalf("multiple: %v", err)
+	}
+
+	in, rel, err := pluginInterp(client, pgPluginCLI(), env, nil, follower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != follower || rel.ID != "follower-rel" {
+		t.Fatalf("named follower %q %v", in.Resource, rel)
+	}
+	if !strings.Contains(in.App["POSTGRES_URL"], follower) {
+		t.Fatalf("follower url %q", in.App["POSTGRES_URL"])
+	}
+}
+
+func TestPluginInterpNamedEnvWithoutInstanceApp(t *testing.T) {
+	primary := "pg-prairie-uctdxy"
+	follower := "pg-juniper-iipvbw"
+	followerURL := "postgres://f:pw@leader." + follower + ".discoverd:5432/db?sslmode=require"
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"postgres-plugin": {ID: "plugin-rel"},
+	}}
+	in, rel, err := pluginInterp(client, pgPluginCLI(), &ct.Release{Env: map[string]string{
+		"FLYNN_POSTGRES":                 primary,
+		"POSTGRES_URL":                   "postgres://p@leader." + primary + ".discoverd:5432/db",
+		"PG_JUNIPER_IIPVBW_DATABASE_URL": followerURL,
+	}}, nil, follower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != follower || rel.ID != "plugin-rel" {
+		t.Fatalf("resource %q release %v", in.Resource, rel)
+	}
+	if in.App["POSTGRES_URL"] != followerURL {
+		t.Fatalf("url %q", in.App["POSTGRES_URL"])
+	}
+}
+
+func TestPluginJobConfigNoTenantReleaseUsesPluginImage(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "demo"
+
+	leader := "pg-prairie-uctdxy"
+	url := "postgres://app:pw@leader." + leader + ".discoverd:5432/db?sslmode=require"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"postgres-plugin": {ID: "plugin-rel"},
+		},
+		resources: map[string][]*ct.Resource{
+			"demo": {{Env: map[string]string{"FLYNN_POSTGRES": leader, "POSTGRES_URL": url, "PGHOST": "leader." + leader + ".discoverd"}}},
+		},
+	}
+	spec := pgPluginCLI()
+	cfg, err := pluginJobConfig(client, spec, spec.Action("psql"), &docopt.Args{
+		Bool: map[string]bool{"psql": true},
+		All:  map[string]interface{}{"<argument>": []string{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "demo" || cfg.Release != "plugin-rel" {
+		t.Fatalf("%+v", cfg)
+	}
+	if got := strings.Join(cfg.Args, " "); !strings.Contains(got, url) {
+		t.Fatalf("psql args %q", cfg.Args)
+	}
+	if cfg.Env["PGHOST"] != "leader."+leader+".discoverd" {
+		t.Fatalf("pghost %q", cfg.Env["PGHOST"])
 	}
 }
 
@@ -529,7 +659,7 @@ func TestPluginInterpClusterCreateNameIsNotResource(t *testing.T) {
 	}}
 	in, rel, err := pluginInterp(client, &plugin.CLI{Command: "pipeline", App: "pipeline"}, &ct.Release{
 		Env: map[string]string{"DATABASE_URL": "postgres://leader.postgres.discoverd/db"},
-	}, "smoke-pipe")
+	}, nil, "smoke-pipe")
 	if err != nil {
 		t.Fatal(err)
 	}

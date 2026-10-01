@@ -463,22 +463,6 @@ func appliedAttachmentEnv(client controller.Client, incoming map[string]string, 
 	return env
 }
 
-func unsetMatchingURLs(env map[string]*string, release, resource map[string]string) {
-	if release == nil || resource == nil {
-		return
-	}
-	for k, v := range release {
-		if !strings.HasSuffix(k, "_URL") || !strings.Contains(v, "://") {
-			continue
-		}
-		for _, rv := range resource {
-			if v == rv {
-				env[k] = nil
-			}
-		}
-	}
-}
-
 func singleAttachmentEnv(resourceEnv map[string]string, as string) (map[string]string, error) {
 	var key, val string
 	n := 0
@@ -531,13 +515,7 @@ func runResourceDetach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	env := make(map[string]*string)
-	for k, v := range res.Env {
-		if release.Env[k] == v {
-			env[k] = nil
-		}
-	}
-	unsetMatchingURLs(env, release.Env, res.Env)
+	env := resname.UnsetAttachment(release.Env, res.Env)
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err
@@ -566,17 +544,7 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-
-	// Unset all the keys associated with this resource
-	env := make(map[string]*string)
-	for k := range res.Env {
-		// Only unset the key if it hasn't been modified
-		if release.Env[k] == res.Env[k] {
-			env[k] = nil
-		}
-	}
-	unsetMatchingURLs(env, release.Env, res.Env)
-
+	env := resname.UnsetAttachment(release.Env, res.Env)
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err
