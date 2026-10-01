@@ -138,8 +138,11 @@ func TestDatastoreServiceAndOptionalSirenia(t *testing.T) {
 	if !DatastoreService("postgres") || !DatastoreService("mariadb") || !DatastoreService("mysql") {
 		t.Fatal("datastore allow")
 	}
-	if DatastoreService("shop") || DatastoreService("mariadb-api") || DatastoreService("cache") {
+	if DatastoreService("shop") || DatastoreService("mariadb-api") || DatastoreService("cache") || DatastoreService("postgres-plugin") {
 		t.Fatal("datastore deny")
+	}
+	if !DatastoreService("pg-ridge-ffpade") || !DatastoreService("redis-harbor-kxmnpq") {
+		t.Fatal("isolated instance names are datastore services")
 	}
 	if !OptionalSirenia("mariadb") || OptionalSirenia("cache") || OptionalSirenia("postgres") {
 		t.Fatal("optional sirenia")

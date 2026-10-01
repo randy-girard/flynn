@@ -179,8 +179,11 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	if UserMayResolveDiscoverd(false, "postgres") {
 		t.Fatal("user jobs must not resolve internal discoverd names")
 	}
-	if !UserMayResolveDiscoverd(true, "postgres") {
-		t.Fatal("user jobs may resolve leader.postgres.discoverd")
+	if !UserMayResolveDiscoverd(true, "pg-ridge-ffpade") {
+		t.Fatal("user jobs may resolve leader.pg-<word>-<6>.discoverd")
+	}
+	if !UserMayResolveDiscoverd(true, "mysql-harbor-kxmnpq") {
+		t.Fatal("user jobs may resolve isolated mysql instance leaders")
 	}
 	if !UserMayResolveDiscoverd(true, "redis-11111111-2222-3333-4444-555555555555") {
 		t.Fatal("user jobs may resolve leader.redis-<uuid>.discoverd")

@@ -284,3 +284,16 @@ func TestCanonical(t *testing.T) {
 		t.Fatalf("empty: %q", got)
 	}
 }
+
+func TestIsolatedService(t *testing.T) {
+	for _, name := range []string{"pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef"} {
+		if !IsolatedService(name) {
+			t.Fatalf("%q should be an isolated datastore", name)
+		}
+	}
+	for _, name := range []string{"postgres", "postgres-plugin", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1"} {
+		if IsolatedService(name) {
+			t.Fatalf("%q must not look like an isolated datastore", name)
+		}
+	}
+}

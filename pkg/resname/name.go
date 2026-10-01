@@ -35,6 +35,45 @@ func Name(prefix string, taken func(string) bool) string {
 	return prefix + "-" + words[index(len(words))] + "-" + letters(8)
 }
 
+// IsolatedService is a provisioned datastore app (pg-harbor-kxmnpq). User
+// jobs resolve leader.<name>.discoverd for these; other discoverd names stay
+// internal.
+func IsolatedService(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	i := strings.IndexByte(name, '-')
+	if i <= 0 || i == len(name)-1 {
+		return false
+	}
+	switch name[:i] {
+	case "pg", "mysql", "redis", "mongodb", "mongo", "kafka", "clickhouse":
+	default:
+		return false
+	}
+	j := strings.LastIndexByte(name, '-')
+	if j <= i {
+		return false
+	}
+	suffix := name[j+1:]
+	if n := len(suffix); n < 6 || n > 8 {
+		return false
+	}
+	for _, c := range suffix {
+		if c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	word := name[i+1 : j]
+	if word == "" {
+		return false
+	}
+	for _, c := range word {
+		if c < 'a' || c > 'z' {
+			return false
+		}
+	}
+	return true
+}
+
 // Canonical turns the argument of `pg:psql <name>` into the resource app name.
 // A bare word-xxxxxx is prefixed with the plugin command. A name that already
 // starts with that prefix is kept, including older redis-<uuid> apps.

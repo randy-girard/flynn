@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/resname"
 )
 
 const (
@@ -204,7 +205,7 @@ func SireniaServiceNamesFrom(installed []Installed) []string {
 
 // DatastoreService reports whether user jobs may resolve leader.<name>.discoverd.
 func DatastoreService(name string) bool {
-	if name == "postgres" {
+	if name == "postgres" || resname.IsolatedService(name) {
 		return true
 	}
 	for _, p := range ReadInstalled("") {

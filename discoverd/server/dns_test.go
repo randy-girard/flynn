@@ -649,6 +649,7 @@ func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
 
 	leader, _ := fakeStaticInstance("tcp", "10.0.0.5", 5432)
 	redisLeader, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
+	isolated, _ := fakeStaticInstance("tcp", "10.0.0.8", 5432)
 	appWeb, _ := fakeStaticInstance("tcp", "10.0.0.9", 8080)
 	userInst, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
 	redisApp := "redis-11111111-2222-3333-4444-555555555555"
@@ -666,6 +667,8 @@ func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
 				return []*discoverd.Instance{leader}, nil
 			case redisApp:
 				return []*discoverd.Instance{redisLeader}, nil
+			case "pg-ridge-ffpade":
+				return []*discoverd.Instance{isolated}, nil
 			default:
 				return nil, nil
 			}
@@ -678,6 +681,8 @@ func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
 				return redisLeader, nil
 			case "mariadb":
 				return leader, nil
+			case "pg-ridge-ffpade":
+				return isolated, nil
 			default:
 				return nil, nil
 			}
@@ -712,6 +717,10 @@ func (s *DNSSuite) TestUserDiscoverdDNSRestricted(c *C) {
 	redisOK := lookup("leader." + redisApp + ".discoverd.")
 	c.Assert(redisOK.Rcode, Equals, dns.RcodeSuccess)
 	c.Assert(redisOK.Answer, Not(HasLen), 0)
+
+	pgOK := lookup("leader.pg-ridge-ffpade.discoverd.")
+	c.Assert(pgOK.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(pgOK.Answer, Not(HasLen), 0)
 
 	mariadbOK := lookup("leader.mariadb.discoverd.")
 	c.Assert(mariadbOK.Rcode, Equals, dns.RcodeSuccess)
