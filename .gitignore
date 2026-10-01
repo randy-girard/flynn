@@ -26,6 +26,7 @@ flynn-plugin-discovery/flynn-plugin-discovery
 sha512_256_binary
 go-flynn-example
 ubuntu_ports_cache
+/flynn-logs/
 *.tar.gz
 builder/manifest.json
 docs/local/

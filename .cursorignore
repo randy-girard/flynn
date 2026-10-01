@@ -1,0 +1,37 @@
+# Extra exclusions beyond .gitignore. Cursor already respects gitignore and
+# its default list (.git, node_modules, *.iso, archives). vendor/ is tracked
+# in git (~3k third-party files) and must be listed here to stay out of
+# Agent/Tab/@ context. Terminal can still read these paths.
+
+# Vendored Go modules
+vendor/
+
+# Local builder / cluster / Vagrant
+build/
+build-dev/
+bin/
+ubuntu_ports_cache/
+flynn-logs/
+.vagrant/
+.vagrant-dev/
+.vagrant-upgrade-smoke/
+.vagrant-upgrade-smoke-tmp/
+.vagrant-upgrade-smoke-last-failure.log
+.vagrant-upgrade-smoke-last-results.txt
+.kilo/
+coverage/
+tmp/
+docs/local/
+docs/reviews/
+docs/plans/
+sha512_256_binary
+logaggregator/testdata/*.dat
+demo/*.log
+*.test
+script/custom-vagrant
+script/docker/unit-tests/.image-built
+
+# Secrets
+.env
+.env.*
+*.key
