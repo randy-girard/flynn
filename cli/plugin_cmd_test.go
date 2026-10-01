@@ -382,6 +382,27 @@ func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	if name != "" {
 		t.Fatalf("tokens after -- are arguments: %q", name)
 	}
+	name, rest = peelResourceName("pg", []string{"wait", "pg-timber-bdwoby"})
+	if name != "" || strings.Join(rest, " ") != "wait pg-timber-bdwoby" {
+		t.Fatalf("pg wait must keep <resource>, got name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("pg", []string{"promote", "pg-timber-bdwoby"})
+	if name != "" || rest[1] != "pg-timber-bdwoby" {
+		t.Fatalf("pg promote must keep <follower>, got name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("pg", []string{"unfollow", "pg-timber-bdwoby"})
+	if name != "" || rest[1] != "pg-timber-bdwoby" {
+		t.Fatalf("pg unfollow must keep <follower>, got name %q rest %#v", name, rest)
+	}
+}
+
+func TestResourceNameArgUsesResourceAndFollower(t *testing.T) {
+	if got := resourceNameArg(&docopt.Args{String: map[string]string{"<resource>": "pg-timber-bdwoby"}}); got != "pg-timber-bdwoby" {
+		t.Fatalf("resource %q", got)
+	}
+	if got := resourceNameArg(&docopt.Args{String: map[string]string{"<follower>": "pg-willow-abcdef"}}); got != "pg-willow-abcdef" {
+		t.Fatalf("follower %q", got)
+	}
 }
 
 func TestPluginInterpNamedResource(t *testing.T) {

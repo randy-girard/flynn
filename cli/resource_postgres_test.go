@@ -268,7 +268,7 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "cannot both") {
 		t.Fatalf("join and follow: %v", err)
 	}
-	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "", "medium", "logical", "", "", "", cat)
+	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "", "medium", "streaming", "", "", "", cat)
 	if err != nil || got == nil || !strings.Contains(string(*got), `"as":"ANALYTICS"`) || !strings.Contains(string(*got), `"follow":"leader"`) {
 		t.Fatalf("config %s %v", got, err)
 	}
@@ -277,8 +277,11 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	if err := json.Unmarshal(*got, &sized); err != nil {
 		t.Fatal(err)
 	}
-	if sized.Runtime != "medium" || sized.Disk != med.Disk || sized.Replication != "logical" {
+	if sized.Runtime != "medium" || sized.Disk != med.Disk || sized.Replication != "streaming" {
 		t.Fatalf("medium %#v", sized)
+	}
+	if _, err = databaseProvisionConfig("postgres", "", "leader", "", "", "logical", "", "", "", cat); err == nil || !strings.Contains(err.Error(), "pg:upgrade") {
+		t.Fatalf("logical follow: %v", err)
 	}
 	_, err = databaseProvisionConfig("mysql", "", "", "", "cache", "", "", "", "", cat)
 	var unpublished *dbruntime.UnpublishedError

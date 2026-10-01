@@ -74,6 +74,12 @@ func peelResourceName(command string, args []string) (string, []string) {
 	if command == "" || len(args) == 0 {
 		return "", args
 	}
+	// Usage already has <resource>/<follower>. Peeling pg-word-xxxxxx out
+	// leaves `pg wait` with no operand, so docopt prints usage and exits 1.
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "wait", "promote", "unfollow":
+		return "", args
+	}
 	re := regexp.MustCompile(`^` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8}$`)
 	for i, arg := range args {
 		if arg == "--" {
@@ -340,7 +346,12 @@ func resourceNameArg(args *docopt.Args) string {
 	if args == nil || args.String == nil {
 		return ""
 	}
-	return strings.TrimSpace(args.String["<name>"])
+	for _, k := range []string{"<name>", "<resource>", "<follower>"} {
+		if v := strings.TrimSpace(args.String[k]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func pluginInterp(client appReleaseGetter, spec *plugin.CLI, appRelease *ct.Release, resourceName string) (plugin.Interp, *ct.Release, error) {

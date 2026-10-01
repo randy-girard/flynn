@@ -51,7 +51,7 @@ Options:
 	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
 	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
-	--replication=<mode>     streaming (same major) or logical (major upgrade)
+	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
 	--memory=<bytes>         raw memory (only when custom sizes are allowed)
 	--disk=<bytes>           raw disk (only when custom sizes are allowed)
@@ -423,6 +423,13 @@ func databaseProvisionConfig(provider, as, follow, join, runtime, replication, c
 	followJSON, joinJSON, err := provisionJoinFollow(provider, follow, join)
 	if err != nil {
 		return nil, err
+	}
+	if followJSON != "" && strings.EqualFold(strings.TrimSpace(provider), "postgres") {
+		mode := strings.ToLower(strings.TrimSpace(replication))
+		if mode != "" && mode != "streaming" {
+			return nil, fmt.Errorf("postgres followers use streaming replication; run flynn pg:upgrade for a major-version swap")
+		}
+		replication = "streaming"
 	}
 	body := databaseProvisionBody{
 		As:          as,
