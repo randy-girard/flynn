@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"bufio"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -9,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/go-msgpack/codec"
+	"github.com/hashicorp/raft"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/discoverd/server"
 	"github.com/randy-girard/flynn/pkg/keepalive"
@@ -746,6 +749,88 @@ func TestStore_RestoreSnapshot(t *testing.T) {
 	if !reflect.DeepEqual(s.ServiceNames(), serviceNames) {
 		t.Fatalf("expected service names %v, got %v", serviceNames, s.ServiceNames())
 	}
+}
+
+// A singleton that steps down must re-elect itself. hashicorp/raft disables
+// EnableSingleNode after the first win; without keeping bootstrap mode the
+// follower then has no peers and aborts elections, leaving "no known leader".
+func TestStore_SingleNodeReelectsAfterStepDown(t *testing.T) {
+	s := MustOpenStore()
+	defer s.Close()
+
+	if !s.IsLeader() {
+		t.Fatal("expected single-node store to be leader")
+	}
+	leader := s.Leader()
+
+	if err := injectAppendEntries(s.Listener.Addr().String(), 100, "203.0.113.1:1111"); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.Leader() != leader {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if s.Leader() == leader && s.IsLeader() {
+		t.Fatal("expected injected heartbeat to force a step-down")
+	}
+
+	deadline = time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if s.IsLeader() && s.Leader() == leader {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("single-node store did not re-elect after step-down, leader=%q", s.Leader())
+}
+
+func TestStore_SetPeersAfterElection(t *testing.T) {
+	s := MustOpenStore()
+	defer s.Close()
+
+	if err := s.SetPeers([]string{s.Advertise.String()}); err != nil {
+		t.Fatalf("SetPeers after election: %s", err)
+	}
+	if !s.IsLeader() {
+		t.Fatal("expected to remain leader after SetPeers")
+	}
+}
+
+// injectAppendEntries sends a raft AppendEntries RPC (header byte 0) with a
+// high term so the recipient steps down. StoreHdr is required by raftLayer.
+func injectAppendEntries(addr string, term uint64, leader string) error {
+	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	if _, err := conn.Write([]byte{server.StoreHdr}); err != nil {
+		return err
+	}
+	w := bufio.NewWriter(conn)
+	if err := w.WriteByte(0); err != nil { // rpcAppendEntries
+		return err
+	}
+	enc := codec.NewEncoder(w, &codec.MsgpackHandle{})
+	req := raft.AppendEntriesRequest{
+		Term:   term,
+		Leader: []byte(leader),
+	}
+	if err := enc.Encode(&req); err != nil {
+		return err
+	}
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	time.Sleep(50 * time.Millisecond)
+	return nil
 }
 
 func BenchmarkStore_AddInstance(b *testing.B) {

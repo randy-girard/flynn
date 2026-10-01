@@ -168,6 +168,13 @@ func (s *Store) Open() error {
 	config.LogOutput = s.LogOutput
 	config.EnableSingleNode = s.EnableSingleNode
 	config.ShutdownOnRemove = false
+	// Hashicorp raft turns EnableSingleNode off after the first election
+	// (DisableBootstrapAfterElect defaults true). A singleton then has no
+	// other peers, so a later step-down aborts elections forever and the
+	// store reports "no known leader" until the process is recycled.
+	if s.EnableSingleNode {
+		config.DisableBootstrapAfterElect = false
+	}
 
 	// Create multiplexing transport layer.
 	raftLayer := newRaftLayer(s.Listener, s.Advertise)
@@ -357,7 +364,13 @@ func (s *Store) GetPeers() ([]string, error) {
 
 // SetPeers sets a list of peers in the raft cluster. Panic if store is not open yet.
 func (s *Store) SetPeers(peers []string) error {
-	return s.raft.SetPeers(peers).Error()
+	err := s.raft.SetPeers(peers).Error()
+	// Open() elects a single node before the caller can SetPeers; the
+	// bootstrap LogAddPeer already recorded ourselves as the peer set.
+	if err == raft.ErrLeader {
+		return nil
+	}
+	return err
 }
 
 // ServiceNames returns a sorted list of existing service names.
