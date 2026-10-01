@@ -110,18 +110,23 @@ func printJobs(jobs sortJobs, out io.Writer) {
 		if job.Error != nil {
 			jobError = *job.Error
 		}
-		name := ""
-		if job.Job != nil && job.Job.Metadata != nil {
-			name = job.Job.Metadata[host.MetaControllerName]
+		name := host.JobDisplayName(job.Job)
+		app, typ, id := "", "", ""
+		if job.Job != nil {
+			id = job.Job.ID
+			if job.Job.Metadata != nil {
+				app = job.Job.Metadata["flynn-controller.app_name"]
+				typ = job.Job.Metadata["flynn-controller.type"]
+			}
 		}
 
 		listRec(w,
 			name,
-			job.Job.ID,
+			id,
 			job.Status,
 			created,
-			job.Job.Metadata["flynn-controller.app_name"],
-			job.Job.Metadata["flynn-controller.type"],
+			app,
+			typ,
 			jobError,
 		)
 	}

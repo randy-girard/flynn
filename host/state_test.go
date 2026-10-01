@@ -27,6 +27,28 @@ func (S) TestStateHostID(c *C) {
 	}
 }
 
+func (S) TestStateAddJobStampsProcessName(c *C) {
+	workdir := c.MkDir()
+	state := NewState("abc123", filepath.Join(workdir, "host-state-db"))
+	c.Assert(state.OpenDB(), IsNil)
+	defer state.CloseDB()
+	id := "abc123-97100ccb-1b45-4af1-9c71-78e1d3571042"
+	c.Assert(state.AddJob(&host.Job{
+		ID: id,
+		Metadata: map[string]string{
+			"flynn-controller.type":     "postgres",
+			"flynn-controller.app_name": "postgres",
+		},
+	}), IsNil)
+	job := state.GetJob(id)
+	if job.Job.Metadata[host.MetaControllerName] != "postgres.8676" {
+		c.Fatalf("name=%q", job.Job.Metadata[host.MetaControllerName])
+	}
+	if job.Job.Config.Env["FLYNN_JOB_NAME"] != "postgres.8676" {
+		c.Fatalf("env=%q", job.Job.Config.Env["FLYNN_JOB_NAME"])
+	}
+}
+
 func (S) TestStatePersistRestore(c *C) {
 	workdir := c.MkDir()
 	hostID := "abc123"

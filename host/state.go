@@ -418,6 +418,8 @@ func (s *State) AddJob(j *host.Job) error {
 		return ErrVolumesInUse{volsInUse}
 	}
 
+	host.EnsureJobProcessName(j)
+
 	job := &host.ActiveJob{
 		Job:       j,
 		HostID:    s.id,

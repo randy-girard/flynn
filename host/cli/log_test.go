@@ -31,6 +31,22 @@ func TestJobMatchesProcessName(t *testing.T) {
 	}
 }
 
+func TestJobMatchesFallbackProcessName(t *testing.T) {
+	job := host.ActiveJob{Job: &host.Job{
+		ID: "devnode1-97100ccb-1b45-4af1-9c71-78e1d3571042",
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "controller",
+			"flynn-controller.type":     "scheduler",
+		},
+	}}
+	if !jobMatchesProcessName(job, "scheduler.8676") {
+		t.Fatal("bootstrap jobs must match the display name")
+	}
+	if !jobMatchesProcessName(job, "controller.scheduler.8676") {
+		t.Fatal("app.display name")
+	}
+}
+
 func TestJobMatchesApp(t *testing.T) {
 	job := host.ActiveJob{Job: &host.Job{Metadata: map[string]string{
 		"flynn-controller.app_name": "dashboard",
@@ -81,7 +97,7 @@ func TestLogLinePrefix(t *testing.T) {
 		},
 	}}
 	got := logLinePrefix(job)
-	if got != "dashboard.web.6e007458 | " {
+	if got != "dashboard.web.8163 | " {
 		t.Fatalf("%q", got)
 	}
 

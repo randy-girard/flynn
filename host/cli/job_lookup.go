@@ -74,7 +74,7 @@ func jobMatchesProcessName(job host.ActiveJob, name string) bool {
 	if name == "" || job.Job == nil {
 		return false
 	}
-	short := host.JobShortName(job.Job)
+	short := host.JobDisplayName(job.Job)
 	if short != "" && short == name {
 		return true
 	}

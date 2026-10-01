@@ -2,6 +2,7 @@ package host
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -32,18 +33,121 @@ const (
 	CodeJobScaleDown = "H19" // stopped because the formation scaled down
 )
 
+const jobNameMax = 9999
+
 // JobShortName is the allocated process name (web.1), from metadata or FLYNN_JOB_NAME.
 func JobShortName(job *Job) string {
 	if job == nil {
 		return ""
 	}
-	if n := strings.TrimSpace(job.Metadata[MetaControllerName]); n != "" {
-		return n
+	if job.Metadata != nil {
+		if n := strings.TrimSpace(job.Metadata[MetaControllerName]); n != "" {
+			return n
+		}
 	}
 	if job.Config.Env != nil {
 		return strings.TrimSpace(job.Config.Env["FLYNN_JOB_NAME"])
 	}
 	return ""
+}
+
+// JobDisplayName is the process name shown in flynn-host ps. Prefers the
+// allocated name; otherwise typ.<digits from the job UUID> so bootstrap jobs
+// that started before the scheduler still have a stable label.
+func JobDisplayName(job *Job) string {
+	if job == nil {
+		return ""
+	}
+	if n := JobShortName(job); n != "" {
+		return n
+	}
+	return jobTypeLabel(job) + "." + digitsFromJobID(job.ID)
+}
+
+// EnsureJobProcessName writes flynn-controller.name and FLYNN_JOB_NAME when
+// missing so host ps, logs, and inspect share one label.
+func EnsureJobProcessName(job *Job) string {
+	if job == nil {
+		return ""
+	}
+	name := JobDisplayName(job)
+	if name == "" {
+		return ""
+	}
+	if job.Metadata == nil {
+		job.Metadata = map[string]string{}
+	}
+	job.Metadata[MetaControllerName] = name
+	if job.Config.Env == nil {
+		job.Config.Env = map[string]string{}
+	}
+	job.Config.Env["FLYNN_JOB_NAME"] = name
+	return name
+}
+
+func jobTypeLabel(job *Job) string {
+	if job == nil {
+		return "process"
+	}
+	if job.Metadata != nil {
+		if t := strings.TrimSpace(job.Metadata[MetaControllerType]); t != "" {
+			return sanitizeJobType(t)
+		}
+	}
+	if job.Config.Env != nil {
+		if t := strings.TrimSpace(job.Config.Env["FLYNN_PROCESS_TYPE"]); t != "" {
+			return sanitizeJobType(t)
+		}
+	}
+	return "process"
+}
+
+func sanitizeJobType(typ string) string {
+	typ = strings.TrimSpace(typ)
+	if typ == "" {
+		return "process"
+	}
+	var b strings.Builder
+	for i, r := range typ {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+			b.WriteRune(r)
+		case (r >= '0' && r <= '9') || r == '_' || r == '-':
+			if i == 0 {
+				b.WriteByte('j')
+			}
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+		if b.Len() >= 32 {
+			break
+		}
+	}
+	if b.Len() == 0 {
+		return "process"
+	}
+	return b.String()
+}
+
+func digitsFromJobID(id string) string {
+	seed := id
+	if i := strings.IndexByte(id, '-'); i >= 0 && i+1 < len(id) {
+		seed = id[i+1:]
+	}
+	hex := strings.Map(func(r rune) rune {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			return r
+		}
+		return -1
+	}, seed)
+	if len(hex) >= 4 {
+		n, err := strconv.ParseUint(hex[:4], 16, 32)
+		if err == nil {
+			return strconv.FormatUint(n%jobNameMax+1, 10)
+		}
+	}
+	return "1"
 }
 
 // JobProcessType is the formation process type (web, worker, …).

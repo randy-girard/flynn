@@ -133,6 +133,12 @@ func TestJobConfigSystemPartitionEnvAndDeprecatedArgs(t *testing.T) {
 	if job.Config.Env["FLYNN_APP_ID"] != "app-1" || job.Config.Env["FLYNN_JOB_ID"] != job.ID {
 		t.Fatalf("flynn env: %+v", job.Config.Env)
 	}
+	if job.Metadata[host.MetaControllerName] == "" || job.Config.Env["FLYNN_JOB_NAME"] == "" {
+		t.Fatal("JobConfig must stamp a process name so flynn-host ps is never blank")
+	}
+	if job.Metadata[host.MetaControllerName] != job.Config.Env["FLYNN_JOB_NAME"] {
+		t.Fatalf("name meta=%q env=%q", job.Metadata[host.MetaControllerName], job.Config.Env["FLYNN_JOB_NAME"])
+	}
 	if job.Metadata["keep"] != "me" || job.Metadata["flynn-controller.app"] != "app-1" {
 		t.Fatalf("metadata: %+v", job.Metadata)
 	}

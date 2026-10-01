@@ -90,6 +90,30 @@ func TestJobShortName(t *testing.T) {
 	}
 }
 
+func TestJobDisplayNameFallsBackToTypeAndUUID(t *testing.T) {
+	job := &Job{
+		ID:       "devnode1-97100ccb-1b45-4af1-9c71-78e1d3571042",
+		Metadata: map[string]string{MetaControllerType: "scheduler"},
+	}
+	got := JobDisplayName(job)
+	if got != "scheduler.8676" {
+		t.Fatalf("display=%q", got)
+	}
+	if JobShortName(job) != "" {
+		t.Fatal("unallocated jobs have no short name until EnsureJobProcessName")
+	}
+	if EnsureJobProcessName(job) != "scheduler.8676" {
+		t.Fatalf("ensure=%q", JobShortName(job))
+	}
+	if job.Metadata[MetaControllerName] != "scheduler.8676" || job.Config.Env["FLYNN_JOB_NAME"] != "scheduler.8676" {
+		t.Fatalf("stamped meta=%v env=%v", job.Metadata, job.Config.Env)
+	}
+	job.Metadata[MetaControllerName] = "web.5600"
+	if JobDisplayName(job) != "web.5600" {
+		t.Fatalf("allocated name must win: %q", JobDisplayName(job))
+	}
+}
+
 func TestJobLifecycleWebhookCodes(t *testing.T) {
 	code, desc, sev := JobLifecycleWebhook(JobEventCreate, sampleJob(JobReasonRestart, "", "web"))
 	if code != CodeJobRestart || sev != SeverityInfo || desc != "Restarting web process" {

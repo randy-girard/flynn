@@ -174,9 +174,9 @@ func logLinePrefix(job host.ActiveJob) string {
 		if job.Job.Metadata != nil {
 			app = job.Job.Metadata["flynn-controller.app_name"]
 			ptype = job.Job.Metadata["flynn-controller.type"]
-			if n := job.Job.Metadata[host.MetaControllerName]; n != "" {
-				id = n
-			}
+		}
+		if n := host.JobDisplayName(job.Job); n != "" {
+			id = n
 		}
 		if id == job.Job.ID {
 			if u, err := cluster.ExtractUUID(id); err == nil && len(u) >= 8 {

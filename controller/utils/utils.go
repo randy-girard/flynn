@@ -24,7 +24,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		entrypoint = *e
 	}
 
-	env := make(map[string]string, len(entrypoint.Env)+len(f.Release.Env)+len(t.Env)+5)
+	env := make(map[string]string, len(entrypoint.Env)+len(f.Release.Env)+len(t.Env)+6)
 	for k, v := range entrypoint.Env {
 		env[k] = v
 	}
@@ -40,7 +40,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 	env["FLYNN_RELEASE_ID"] = f.Release.ID
 	env["FLYNN_PROCESS_TYPE"] = name
 	env["FLYNN_JOB_ID"] = id
-	metadata := make(map[string]string, len(f.App.Meta)+5)
+	metadata := make(map[string]string, len(f.App.Meta)+6)
 	for k, v := range f.App.Meta {
 		metadata[k] = v
 	}
@@ -87,6 +87,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 	if f.App.Meta["flynn-system-app"] == "true" {
 		job.Partition = "system"
 	}
+	host.EnsureJobProcessName(job)
 	job.Config.Ports = make([]host.Port, len(t.Ports))
 	for i, p := range t.Ports {
 		job.Config.Ports[i].Proto = p.Proto
