@@ -72,13 +72,18 @@ bash "${FLYNN_VAGRANT_GUEST}/ensure-flynn-root.sh"
 
 # sudo flynn-host plugin:install uses secure_path, which omits /usr/local/go/bin.
 mkdir -p /etc/sudoers.d
+# The Ubuntu Vagrant box ships /etc/sudoers.d/vagrant as 0644. visudo -c then
+# fails the whole tree, which used to delete a valid flynn-go fragment.
+if [[ -f /etc/sudoers.d/vagrant ]]; then
+  chmod 440 /etc/sudoers.d/vagrant
+fi
 sudoers="/etc/sudoers.d/flynn-go"
 cat > "${sudoers}" <<'EOF'
 Defaults env_keep += "FLYNN_ROOT"
 Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/usr/local/go/bin"
 EOF
 chmod 440 "${sudoers}"
-if command -v visudo >/dev/null 2>&1 && ! visudo -c >/dev/null 2>&1; then
+if command -v visudo >/dev/null 2>&1 && ! visudo -cf "${sudoers}" >/dev/null 2>&1; then
   rm -f "${sudoers}"
   echo "sudoers fragment rejected; relying on PATH in plugin-build env" >&2
 fi

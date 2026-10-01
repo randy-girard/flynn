@@ -82,6 +82,9 @@ fi
 # compiles against this Flynn (DISCOVERD_AUTH_KEY). The builder has Go from
 # setup.sh; cluster nodes do not.
 bash "${FLYNN_VAGRANT_GUEST}/ensure-go.sh"
+# ensure-go.sh exports PATH in its own process. This login shell started
+# before /etc/profile.d/flynn-go.sh existed, so pick Go up here too.
+export PATH="/usr/local/go/bin:${PATH}"
 command -v flynn-host >/dev/null
 command -v ipset >/dev/null
 command -v go >/dev/null

@@ -114,6 +114,22 @@ if ! grep -Fq 'builder/img/go.sh' "${mod}/guest/ensure-go.sh"; then
   echo "ensure-go.sh must pin Go from builder/img/go.sh" >&2
   exit 1
 fi
+if ! grep -Fq 'visudo -cf' "${mod}/guest/ensure-go.sh"; then
+  echo "ensure-go.sh must lint only flynn-go with visudo -cf (global visudo -c fails on Vagrant 0644 sudoers.d/vagrant)" >&2
+  exit 1
+fi
+if grep -Eq 'visudo -c >/dev/null' "${mod}/guest/ensure-go.sh"; then
+  echo "ensure-go.sh must not treat an unrelated visudo -c failure as a bad flynn-go fragment" >&2
+  exit 1
+fi
+if ! grep -Fq 'chmod 440 /etc/sudoers.d/vagrant' "${mod}/guest/ensure-go.sh"; then
+  echo "ensure-go.sh must chmod Vagrant sudoers.d/vagrant to 0440 so visudo -c can pass" >&2
+  exit 1
+fi
+if ! grep -Fq 'export PATH="/usr/local/go/bin:${PATH}"' "${mod}/guest/install-node.sh"; then
+  echo "install-node.sh must put /usr/local/go/bin on PATH after ensure-go.sh (child export does not apply)" >&2
+  exit 1
+fi
 if ! grep -Fq 'flynn apps --all' "${mod}/guest/probe-cluster.sh"; then
   echo "probe-cluster.sh must list system apps with flynn apps --all (GET /apps hides them)" >&2
   exit 1
