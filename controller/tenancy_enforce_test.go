@@ -236,3 +236,15 @@ func TestAppVisible(t *testing.T) {
 		t.Fatal("collaborator grant must list a Flynn-installed plugin")
 	}
 }
+
+func TestValidUserUUID(t *testing.T) {
+	if validUserUUID("11111111-1111-4111-8111-111111111111") != true {
+		t.Fatal("want valid uuid")
+	}
+	if validUserUUID("user:11111111-1111-4111-8111-111111111111") {
+		t.Fatal("prefix must be stripped before validUserUUID")
+	}
+	if validUserUUID("not-a-uuid") {
+		t.Fatal("dashboard base64 ids are not uuids")
+	}
+}

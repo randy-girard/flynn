@@ -16,12 +16,27 @@ import (
 )
 
 func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
-	if c == nil || c.tenancy == nil || app == nil {
+	if c == nil || app == nil {
 		return nil
 	}
 	tok := authz.TokenFromContext(ctx)
 	if tok != nil && tok.UserID != "" && app.CreatedBy == "" {
 		app.CreatedBy = tok.UserID
+	}
+	app.CreatedBy = strings.TrimPrefix(strings.TrimSpace(app.CreatedBy), "user:")
+	if app.CreatedBy != "" && !validUserUUID(app.CreatedBy) {
+		// Dashboard user ids are random base64. Putting them in created_by
+		// makes Postgres reject the UUID and httphelper maps that to 500
+		// "no rows in result set".
+		app.CreatedBy = ""
+	}
+	if c.tenancy == nil {
+		return nil
+	}
+	if app.CreatedBy != "" {
+		if _, err := c.tenancy.GetUser(app.CreatedBy); err != nil {
+			app.CreatedBy = ""
+		}
 	}
 	if app.OwnerAccount == "" && tok != nil && !tok.ClusterKey && tok.UserID != "" {
 		app.OwnerAccount = "user:" + tok.UserID
@@ -166,6 +181,28 @@ func splitUserAccount(account string) (string, bool) {
 		return account[len(prefix):], true
 	}
 	return "", false
+}
+
+func validUserUUID(id string) bool {
+	id = strings.TrimSpace(id)
+	if len(id) != 36 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
 }
 
 func (c *controllerAPI) quotaAllows(account string, apps, procs, memoryMB, resources, collaborators int) error {
