@@ -101,8 +101,11 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if first["FLYNN_POSTGRES"] != "pg-delta-pclpez" || first["POSTGRES_ROLE"] != "primary" {
 		t.Fatalf("first resource: %#v", first)
 	}
-	if first["DATABASE_URL"] != "postgres://first" || first["POSTGRES_URL"] != "postgres://first" {
+	if first["DATABASE_URL"] != "postgres://first" || first["POSTGRES_URL"] != "" {
 		t.Fatalf("first resource URLs: %#v", first)
+	}
+	if _, ok := first["PGDATABASE"]; ok || first["PGHOST"] != "" || first["PGUSER"] != "" {
+		t.Fatalf("resource must not keep split PG keys: %#v", first)
 	}
 	second := ResourceEnv(first, map[string]string{
 		"FLYNN_POSTGRES":  "pg-harbor-kxmnpq",
@@ -115,14 +118,17 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if second["DATABASE_URL"] != "" {
 		t.Fatalf("second must not steal the app DATABASE_URL: %#v", second)
 	}
-	if second["POSTGRES_URL"] != "postgres://second" {
-		t.Fatalf("resource record keeps this instance POSTGRES_URL: %#v", second)
+	if second["POSTGRES_URL"] != "" {
+		t.Fatalf("resource must not store POSTGRES_URL: %#v", second)
 	}
 	if second["FLYNN_POSTGRES"] != "pg-harbor-kxmnpq" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "pg-delta-pclpez" {
 		t.Fatalf("second resource must keep its instance identity: %#v", second)
 	}
 	if second["PG_HARBOR_KXMNPQ_DATABASE_URL"] != "postgres://second" {
 		t.Fatalf("named url: %#v", second)
+	}
+	if _, ok := second["PGDATABASE"]; ok {
+		t.Fatalf("second must not keep PGDATABASE: %#v", second)
 	}
 }
 

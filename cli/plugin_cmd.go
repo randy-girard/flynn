@@ -664,6 +664,21 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 			app[key] = val
 		}
 	}
+	if resource != "" {
+		named := envForNamedInstance(app, resource)
+		if app["DATABASE_URL"] == "" && named["DATABASE_URL"] != "" {
+			app["DATABASE_URL"] = named["DATABASE_URL"]
+		}
+		if app["POSTGRES_URL"] == "" && named["POSTGRES_URL"] != "" {
+			app["POSTGRES_URL"] = named["POSTGRES_URL"]
+		}
+	}
+	if app["POSTGRES_URL"] == "" && strings.Contains(strings.ToLower(app["DATABASE_URL"]), "postgres") {
+		app["POSTGRES_URL"] = app["DATABASE_URL"]
+	}
+	if app["DATABASE_URL"] == "" && app["POSTGRES_URL"] != "" {
+		app["DATABASE_URL"] = app["POSTGRES_URL"]
+	}
 	// Isolated mysql/mongodb jobs keep *_PWD as the superuser for replication.
 	// Console interpolates the app user + *_PWD, so prefer the app password.
 	if pwd := app["MYSQL_APP_PASSWORD"]; pwd != "" {

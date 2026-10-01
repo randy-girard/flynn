@@ -235,8 +235,9 @@ func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) ma
 // ResourceEnv is the env stored on the controller resource record.
 // MergeAttachment is what the app release gets (DATABASE_URL when unused, plus
 // the scoped *_DATABASE_URL). The resource itself keeps instance identity
-// (FLYNN_POSTGRES, POSTGRES_URL, role, host) so the dashboard and pg:psql can
-// find it. Conventional app URLs are not copied onto a later resource.
+// (FLYNN_POSTGRES, role) so the dashboard and pg:psql can find it. Split
+// PGHOST/PGUSER/PGPASSWORD/PGDATABASE keys and POSTGRES_URL stay off the
+// resource; conventional app URLs are not copied onto a later resource.
 func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
 	merged := MergeAttachment(existing, incoming, as)
 	if len(incoming) == 0 {
@@ -247,12 +248,23 @@ func ResourceEnv(existing, incoming map[string]string, as string) map[string]str
 		out[k] = v
 	}
 	for k, v := range incoming {
-		if strings.TrimSpace(v) == "" || conventionalURL(k) {
+		if strings.TrimSpace(v) == "" || conventionalURL(k) || splitCredentialKey(k) || k == "POSTGRES_URL" {
 			continue
 		}
 		out[k] = v
 	}
 	return out
+}
+
+// splitCredentialKey is a libpq/POSTGRES_* piece that belongs on the isolated
+// instance, not the tenant resource. Connection info stays in *_URL values.
+func splitCredentialKey(k string) bool {
+	switch k {
+	case "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE",
+		"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT":
+		return true
+	}
+	return false
 }
 
 func connectionURL(incoming map[string]string, conv string) string {
