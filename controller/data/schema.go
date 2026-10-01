@@ -1252,6 +1252,14 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 			EXECUTE PROCEDURE set_updated_at_column()`,
 		`INSERT INTO db_runtime_settings (id, allow_custom_sizes) VALUES (1, false)`,
 	)
+	migrations.Add(68,
+		`ALTER TABLE resources ADD COLUMN owner_app text`,
+		`UPDATE resources r SET owner_app = (
+			SELECT a.app_id::text FROM app_resources a
+			WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
+			ORDER BY a.created_at ASC LIMIT 1
+		) WHERE owner_app IS NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

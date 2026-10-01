@@ -108,6 +108,9 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		Apps:         rr.Apps,
 		OwnerAccount: owner,
 	}
+	if target != nil {
+		res.OwnerApp = target.ID
+	}
 
 	if err := schema.Validate(res); err != nil {
 		respondWithError(w, err)
@@ -133,7 +136,7 @@ func provisionAs(config []byte) string {
 }
 
 // provisionConfigWithApp stamps the tenant app name so database plugins attach
-// the same way as `flynn resource:add` (name, role, DATABASE_URL).
+// the same way as `flynn resource:add` (name, role, FLYNN_POSTGRESQL_<COLOR>_URL).
 func provisionConfigWithApp(config []byte, app *ct.App) []byte {
 	if app == nil || strings.TrimSpace(app.Name) == "" {
 		return config
@@ -193,7 +196,7 @@ func (c *controllerAPI) GetResources(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
-	httphelper.JSON(w, 200, res)
+	httphelper.JSON(w, 200, c.filterResources(ctx, res))
 }
 
 func (c *controllerAPI) GetResource(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -269,6 +272,18 @@ func (c *controllerAPI) DeleteResource(ctx context.Context, w http.ResponseWrite
 			return
 		}
 	}
+	if appID := strings.TrimSpace(req.URL.Query().Get("app_id")); appID != "" {
+		appRaw, err := c.appRepo.Get(appID)
+		if err != nil {
+			respondWithError(w, err)
+			return
+		}
+		app := appRaw.(*ct.App)
+		if !res.OwnedByApp(app) {
+			httphelper.ValidationError(w, "resource", "this app is attached to the resource but does not own it; detach it instead")
+			return
+		}
+	}
 	ids := resource.DeprovisionIDs(res.ExternalID, res.Env)
 	logger.Info("deprovisioning", "url", p.URL, "external.id", res.ExternalID, "ids", ids)
 	if err := resource.DeprovisionAny(p.URL, ids...); err != nil {
@@ -321,7 +336,13 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 			return
 		}
 	}
-	resource, err = c.resourceRepo.AddApp(params.ByName("resources_id"), params.ByName("app_id"))
+	if resource.OwnerApp == "" {
+		if err := c.resourceRepo.SetOwnerApp(resource.ID, app.ID); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	}
+	resource, err = c.resourceRepo.AddApp(params.ByName("resources_id"), app.ID)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -344,10 +365,20 @@ func (c *controllerAPI) DeleteResourceApp(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
-	if existing.OwnerAccount != "" && !c.canAdminAccount(ctx, w, existing.OwnerAccount) {
+	appRaw, err := c.appRepo.Get(params.ByName("app_id"))
+	if err != nil {
+		respondWithError(w, err)
 		return
 	}
-	resource, err := c.resourceRepo.RemoveApp(params.ByName("resources_id"), params.ByName("app_id"))
+	app := appRaw.(*ct.App)
+	if existing.OwnerAccount != "" && app.OwnerAccount != existing.OwnerAccount {
+		httphelper.Forbidden(w, "a resource can only be detached from an app with the same owner_account")
+		return
+	}
+	if !c.requireAppManage(ctx, w, app) {
+		return
+	}
+	resource, err := c.resourceRepo.RemoveApp(params.ByName("resources_id"), app.ID)
 	if err != nil {
 		respondWithError(w, err)
 		return

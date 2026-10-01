@@ -33,6 +33,10 @@
       "description": "Account that owns this resource, copied from the app it was first attached to.",
       "type": "string"
     },
+    "owner_app": {
+      "description": "App the resource was provisioned on. Other apps in the same owner_account may attach it; only this app may delete it.",
+      "type": "string"
+    },
     "created_at": {
       "$ref": "/schema/controller/common#/definitions/created_at"
     }

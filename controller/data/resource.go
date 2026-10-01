@@ -27,7 +27,11 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 	if r.OwnerAccount != "" {
 		owner = &r.OwnerAccount
 	}
-	err = tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env, owner).Scan(&r.CreatedAt)
+	var ownerApp *string
+	if r.OwnerApp != "" {
+		ownerApp = &r.OwnerApp
+	}
+	err = tx.QueryRow("resource_insert", r.ID, r.ProviderID, r.ExternalID, r.Env, owner, ownerApp).Scan(&r.CreatedAt)
 	if err != nil {
 		tx.Rollback()
 		return err
@@ -40,6 +44,13 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 			row = tx.QueryRow("app_resource_insert_app_by_name", appID, r.ID)
 		}
 		if err := row.Scan(&r.Apps[i]); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	if r.OwnerApp == "" && len(r.Apps) > 0 {
+		r.OwnerApp = r.Apps[0]
+		if err := tx.Exec("resource_set_owner_app", r.ID, r.OwnerApp); err != nil {
 			tx.Rollback()
 			return err
 		}
@@ -118,15 +129,7 @@ func (rr *ResourceRepo) RemoveApp(resourceID, appID string) (*ct.Resource, error
 		return nil, err
 	}
 
-	apps := make([]string, 0, len(r.Apps))
-	for _, id := range r.Apps {
-		if id != appID {
-			apps = append(apps, id)
-		}
-	}
-	r.Apps = apps
-
-	if err := tx.Exec("app_resource_delete_by_app", appID); err != nil {
+	if err := tx.Exec("app_resource_delete_by_resource_and_app", resourceID, appID, appID); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
@@ -138,16 +141,23 @@ func (rr *ResourceRepo) RemoveApp(resourceID, appID string) (*ct.Resource, error
 		tx.Rollback()
 		return nil, err
 	}
-	return r, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return rr.Get(resourceID)
 }
 
 func scanResource(s postgres.Scanner) (*ct.Resource, error) {
 	r := &ct.Resource{}
 	var appIDs string
 	var owner *string
-	err := s.Scan(&r.ID, &r.ProviderID, &r.ExternalID, &r.Env, &appIDs, &r.CreatedAt, &owner)
+	var ownerApp *string
+	err := s.Scan(&r.ID, &r.ProviderID, &r.ExternalID, &r.Env, &appIDs, &r.CreatedAt, &owner, &ownerApp)
 	if owner != nil {
 		r.OwnerAccount = *owner
+	}
+	if ownerApp != nil {
+		r.OwnerApp = *ownerApp
 	}
 	if err == pgx.ErrNoRows {
 		return nil, ErrNotFound
@@ -202,6 +212,10 @@ func (r *ResourceRepo) AppList(appID string) ([]*ct.Resource, error) {
 	}
 	defer rows.Close()
 	return resourceList(rows)
+}
+
+func (rr *ResourceRepo) SetOwnerApp(resourceID, appID string) error {
+	return rr.db.Exec("resource_set_owner_app", resourceID, appID)
 }
 
 func (rr *ResourceRepo) Remove(r *ct.Resource) error {

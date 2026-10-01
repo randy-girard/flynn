@@ -82,6 +82,8 @@ var preparedStatements = map[string]string{
 	"app_resource_insert_app_by_name_or_id":    appResourceInsertAppByNameOrIDQuery,
 	"app_resource_delete_by_app":               appResourceDeleteByAppQuery,
 	"app_resource_delete_by_resource":          appResourceDeleteByResourceQuery,
+	"app_resource_delete_by_resource_and_app":  appResourceDeleteByResourceAndAppQuery,
+	"resource_set_owner_app":                   resourceSetOwnerAppQuery,
 	"domain_migration_insert":                  domainMigrationInsert,
 	"backup_insert":                            backupInsert,
 	"backup_update":                            backupUpdate,
@@ -580,7 +582,7 @@ SELECT resource_id, provider_id, external_id, env,
     FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at, owner_account
+  ), created_at, owner_account, owner_app
 FROM resources r
 WHERE deleted_at IS NULL
 ORDER BY created_at DESC`
@@ -591,7 +593,7 @@ SELECT resource_id, provider_id, external_id, env,
     FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at, owner_account
+  ), created_at, owner_account, owner_app
 FROM resources r
 WHERE provider_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC`
@@ -602,7 +604,7 @@ SELECT DISTINCT(r.resource_id), r.provider_id, r.external_id, r.env,
 	FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), r.created_at, r.owner_account
+  ), r.created_at, r.owner_account, r.owner_app
 FROM resources r
 JOIN app_resources a USING (resource_id)
 WHERE a.app_id = $1 AND r.deleted_at IS NULL AND a.deleted_at IS NULL
@@ -614,12 +616,14 @@ SELECT resource_id, provider_id, external_id, env,
 	FROM app_resources a
 	WHERE a.resource_id = r.resource_id AND a.deleted_at IS NULL
 	ORDER BY a.created_at DESC
-  ), created_at, owner_account
+  ), created_at, owner_account, owner_app
 FROM resources r
 WHERE resource_id = $1 AND deleted_at IS NULL`
 	resourceInsertQuery = `
-INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account)
-VALUES ($1, $2, $3, $4, $5) RETURNING created_at`
+INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account, owner_app)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING created_at`
+	resourceSetOwnerAppQuery = `
+UPDATE resources SET owner_app=$2 WHERE resource_id=$1 AND deleted_at IS NULL AND (owner_app IS NULL OR owner_app='')`
 	resourceDeleteQuery = `
 UPDATE resources SET deleted_at = now() WHERE resource_id = $1 AND deleted_at IS NULL`
 	appResourceInsertAppByNameQuery = `
@@ -634,6 +638,10 @@ RETURNING app_id`
 DELETE FROM app_resources WHERE app_id = $1`
 	appResourceDeleteByResourceQuery = `
 DELETE FROM app_resources WHERE resource_id = $1`
+	appResourceDeleteByResourceAndAppQuery = `
+DELETE FROM app_resources WHERE resource_id = $1 AND app_id = (
+	SELECT app_id FROM apps WHERE (app_id = $2 OR name = $3) AND deleted_at IS NULL
+)`
 	domainMigrationInsert = `
 INSERT INTO domain_migrations (old_domain, domain, old_tls_cert, tls_cert) VALUES ($1, $2, $3, $4) RETURNING migration_id, created_at`
 	backupInsert = `

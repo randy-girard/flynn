@@ -720,7 +720,31 @@ type Resource struct {
 	Env          map[string]string `json:"env,omitempty"`
 	Apps         []string          `json:"apps,omitempty"`
 	OwnerAccount string            `json:"owner_account,omitempty"`
-	CreatedAt    *time.Time        `json:"created_at,omitempty"`
+	// OwnerApp is the app the resource was provisioned on. Other apps in the
+	// same owner_account may attach it; only this app may delete it.
+	OwnerApp  string     `json:"owner_app,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+}
+
+// OwnedByApp reports whether app may deprovision this resource. owner_app is
+// the provisioning app. If it is empty, the oldest attached app (last in Apps,
+// which the controller lists newest-first) is treated as owner so an attached
+// copy cannot delete the instance.
+func (r *Resource) OwnedByApp(app *App) bool {
+	if r == nil || app == nil {
+		return false
+	}
+	owner := strings.TrimSpace(r.OwnerApp)
+	if owner == "" && len(r.Apps) > 0 {
+		owner = strings.TrimSpace(r.Apps[len(r.Apps)-1])
+	}
+	if owner == "" {
+		return true
+	}
+	if app.ID != "" && strings.EqualFold(owner, app.ID) {
+		return true
+	}
+	return app.Name != "" && strings.EqualFold(owner, app.Name)
 }
 
 type ResourceReq struct {
