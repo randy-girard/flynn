@@ -609,14 +609,21 @@ type Options struct {
 }
 
 // TrimSpaceSlice returns a new slice of trimmed strings.
-// Empty strings are removed entirely.
+// Empty strings are removed entirely. Duplicates are dropped so a
+// bootstrap template like "ip:1111," or "ip:1111,ip:1111" still counts
+// as a single peer for EnableSingleNode.
 func TrimSpaceSlice(a []string) []string {
 	other := make([]string, 0, len(a))
+	seen := make(map[string]struct{}, len(a))
 	for _, s := range a {
 		s = strings.TrimSpace(s)
 		if s == "" {
 			continue
 		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
 		other = append(other, s)
 	}
 	return other
