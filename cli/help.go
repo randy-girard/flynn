@@ -36,6 +36,9 @@ func helpTopic(name string, args []string) string {
 	if to, _ := pluginSpaceAlias(name, args); to != "" {
 		return to
 	}
+	if to, _ := pluginColonRename(name); to != "" {
+		return to
+	}
 	resolved, _, _ := resolveCommand(name, args)
 	return resolved
 }
@@ -43,6 +46,9 @@ func helpTopic(name string, args []string) string {
 func knownHelpTopic(name string) bool {
 	if name == "" {
 		return false
+	}
+	if to, _ := pluginColonRename(name); to != "" {
+		name = to
 	}
 	if commands[name] != nil {
 		return true

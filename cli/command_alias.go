@@ -237,8 +237,6 @@ func pluginColonName(command, actionName string) string {
 		suffix = "cli"
 	case command == "clickhouse" && actionName == "client":
 		suffix = "cli"
-	case command == "pg" && actionName == "psql":
-		suffix = "cli"
 	}
 	return command + ":" + suffix
 }
@@ -282,7 +280,7 @@ func pluginSpaceAlias(name string, args []string) (to, from string) {
 
 func pluginColonRename(name string) (to, from string) {
 	base, suffix, ok := splitColonCommand(name)
-	if !ok || strings.Contains(suffix, ":") || !strings.Contains(suffix, "-") {
+	if !ok {
 		return "", ""
 	}
 	cat, err := clusterPluginCatalog()
@@ -293,14 +291,13 @@ func pluginColonRename(name string) (to, from string) {
 	if spec == nil {
 		return "", ""
 	}
-	for _, a := range spec.Actions {
-		if strings.Join(strings.Fields(a.Name), "-") != suffix {
-			continue
-		}
-		canonical := pluginColonName(base, a.Name)
-		if canonical != name {
-			return canonical, name
-		}
+	tokens := expandColonSuffixWith(base, suffix, spec)
+	if len(tokens) == 0 {
+		return "", ""
+	}
+	canonical := pluginColonName(base, strings.Join(tokens, " "))
+	if canonical != name {
+		return canonical, name
 	}
 	return "", ""
 }

@@ -37,6 +37,7 @@ func TestFormatHelpListsPluginChildren(t *testing.T) {
 		{"mysql", []string{"usage: flynn mysql", "manage mysql databases", "Commands:", "mysql:dump", "mysql:restore", "mysql:cli"}, []string{"dump dump"}},
 		{"mongodb", []string{"usage: flynn mongodb", "manage mongodb databases", "Commands:", "mongodb:dump", "mongodb:restore", "mongodb:cli"}, []string{"dump dump"}},
 		{"clickhouse", []string{"usage: flynn clickhouse", "manage clickhouse clusters", "Commands:", "clickhouse:cli", "clickhouse:databases"}, []string{"clickhouse:databases:create"}},
+		{"pg", []string{"usage: flynn pg", "manage an isolated postgres instance", "Commands:", "pg:psql", "pg:info", "pg:dump"}, []string{"pg:cli"}},
 		{"scheduler", []string{"usage: flynn scheduler", "manage scheduled jobs for an app", "Commands:", "scheduler:list", "scheduler:add", "scheduler:remove", "scheduler:enable", "scheduler:disable", "scheduler:info"}, nil},
 		{"kafka", []string{"kafka:topics", "kafka:consumer-groups:create"}, []string{"kafka:topics:create"}},
 		{"kafka:topics", []string{"kafka:topics:create"}, nil},
@@ -122,6 +123,16 @@ func datastorePluginCatalog() *plugin.Catalog {
 				{Name: "topics", Args: []string{"topics"}},
 				{Name: "topics create", Args: []string{"topics", "create"}},
 				{Name: "consumer-groups create", Args: []string{"consumer-groups", "create"}},
+			},
+		},
+		{
+			Command: "pg",
+			Usage:   "manage an isolated postgres instance",
+			Doc:     "usage: flynn pg psql",
+			Actions: []plugin.CLIAction{
+				{Name: "psql", Args: []string{"psql"}},
+				{Name: "info", Args: []string{"info"}},
+				{Name: "dump", Args: []string{"dump"}},
 			},
 		},
 		{

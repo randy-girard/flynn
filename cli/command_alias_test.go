@@ -62,6 +62,12 @@ func TestExpandColonSuffix(t *testing.T) {
 	if got := expandColonSuffixWith("redis", "dump", nil); !reflect.DeepEqual(got, []string{"dump"}) {
 		t.Fatalf("redis:dump %q", got)
 	}
+	if got := expandColonSuffixWith("pg", "cli", nil); !reflect.DeepEqual(got, []string{"psql"}) {
+		t.Fatalf("pg:cli alias %q", got)
+	}
+	if got := expandColonSuffixWith("pg", "psql", nil); !reflect.DeepEqual(got, []string{"psql"}) {
+		t.Fatalf("pg:psql %q", got)
+	}
 }
 
 // Hyphenated plugin nouns must not be split on "-" when the catalog declares
@@ -136,6 +142,9 @@ func TestPluginColonName(t *testing.T) {
 	}
 	if got := pluginColonName("mysql", "console"); got != "mysql:cli" {
 		t.Fatalf("got %q", got)
+	}
+	if got := pluginColonName("pg", "psql"); got != "pg:psql" {
+		t.Fatalf("pg psql must stay pg:psql, got %q", got)
 	}
 }
 
