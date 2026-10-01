@@ -343,7 +343,11 @@ func lookupProviderResource(client controller.Client, app, provider, ref string)
 // a role on the built-in appliance. When the postgres plugin is installed it
 // registers provider postgres at postgres-plugin.discoverd, and that URL is allowed.
 func rejectPlatformPostgresAdd(provider string, client controller.Client) error {
-	if provider != "postgres" {
+	name := strings.ToLower(strings.TrimSpace(provider))
+	if name == "platform-postgres" {
+		return pgappliance.ErrTenantProvision
+	}
+	if name != "postgres" {
 		return nil
 	}
 	p, err := client.GetProvider(provider)

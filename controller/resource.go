@@ -82,7 +82,11 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	// the controller and blobstore databases (system apps, platform marker).
 	// A tenant app never reaches the appliance, so no tenant role is created.
 	if pgappliance.IsPlatformApplianceURL(p.URL) {
-		body, err := pgappliance.SystemProvisionBody(target != nil && target.System())
+		if !pgappliance.AllowPlatformApp(target != nil && target.System(), target != nil && target.Plugin()) {
+			respondWithError(w, ct.ValidationError{Field: "provider", Message: pgappliance.ErrTenantProvision.Error()})
+			return
+		}
+		body, err := pgappliance.SystemProvisionBody(true)
 		if err != nil {
 			respondWithError(w, ct.ValidationError{Field: "provider", Message: err.Error()})
 			return
@@ -306,7 +310,7 @@ func (c *controllerAPI) DeleteResource(ctx context.Context, w http.ResponseWrite
 func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	params, _ := ctxhelper.ParamsFromContext(ctx)
 
-	_, err := c.getProvider(ctx)
+	p, err := c.getProvider(ctx)
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -323,6 +327,10 @@ func (c *controllerAPI) AddResourceApp(ctx context.Context, w http.ResponseWrite
 		return
 	}
 	app := appRaw.(*ct.App)
+	if pgappliance.IsPlatformApplianceURL(p.URL) && !pgappliance.AllowPlatformApp(app.System(), app.Plugin()) {
+		respondWithError(w, ct.ValidationError{Field: "provider", Message: pgappliance.ErrTenantProvision.Error()})
+		return
+	}
 	if resource.OwnerAccount != "" && app.OwnerAccount != resource.OwnerAccount {
 		httphelper.Forbidden(w, "a resource can only be attached to an app with the same owner_account")
 		return

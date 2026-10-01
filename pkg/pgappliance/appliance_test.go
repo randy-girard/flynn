@@ -41,6 +41,15 @@ func TestSystemProvisionBody(t *testing.T) {
 	}
 }
 
+func TestAllowPlatformApp(t *testing.T) {
+	if !AllowPlatformApp(true, false) || !AllowPlatformApp(false, true) || !AllowPlatformApp(true, true) {
+		t.Fatal("system and plugin apps may use the appliance")
+	}
+	if AllowPlatformApp(false, false) {
+		t.Fatal("user apps must not use the appliance")
+	}
+}
+
 func TestIsPlatformApplianceURL(t *testing.T) {
 	if !IsPlatformApplianceURL("http://postgres-api.discoverd/databases") {
 		t.Fatal("platform URL")

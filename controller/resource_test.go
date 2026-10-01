@@ -207,6 +207,37 @@ func (s *S) TestAddResourceAppRequiresSameOwnerAccount(c *C) {
 	c.Assert(err, NotNil)
 }
 
+func (s *S) TestProvisionPlatformPostgresRejectsUserApp(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "user-appliance-pg"})
+	p := s.createTestProvider(c, &ct.Provider{URL: "http://postgres-api.discoverd/databases?suite=provision", Name: "platform-postgres-user"})
+	_, err := s.c.ProvisionResource(&ct.ResourceReq{ProviderID: p.ID, Apps: []string{app.ID}})
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Matches, ".*flynn-plugin-postgres.*")
+}
+
+func (s *S) TestAddResourceAppRejectsPlatformPostgresUserApp(c *C) {
+	sys := s.createTestApp(c, &ct.App{Name: "sys-appliance-pg", Meta: map[string]string{"flynn-system-app": "true"}})
+	plugin := s.createTestApp(c, &ct.App{Name: "plugin-appliance-pg", Meta: map[string]string{"flynn-plugin": "true"}})
+	user := s.createTestApp(c, &ct.App{Name: "user-attach-pg"})
+	p := s.createTestProvider(c, &ct.Provider{URL: "http://postgres-api.discoverd/databases?suite=attach", Name: "platform-postgres-attach"})
+	res := &ct.Resource{
+		ID:         random.UUID(),
+		ProviderID: p.ID,
+		ExternalID: "/appliance/sys",
+		Env:        map[string]string{"PGDATABASE": "sys"},
+		Apps:       []string{sys.ID},
+	}
+	c.Assert(s.c.PutResource(res), IsNil)
+
+	_, err := s.c.AddResourceApp(p.ID, res.ID, user.ID)
+	c.Assert(err, NotNil)
+	c.Assert(err.Error(), Matches, ".*flynn-plugin-postgres.*")
+
+	got, err := s.c.AddResourceApp(p.ID, res.ID, plugin.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Apps, HasLen, 2)
+}
+
 func (s *S) TestDeleteResourceRejectsNonOwnerApp(c *C) {
 	app1 := s.createTestApp(c, &ct.App{Name: "own-del-a", OwnerAccount: "user:ada"})
 	app2 := s.createTestApp(c, &ct.App{Name: "own-del-b", OwnerAccount: "user:ada"})

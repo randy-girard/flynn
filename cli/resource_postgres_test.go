@@ -180,8 +180,9 @@ func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
 	err = rejectPlatformPostgresAdd("postgres", postgresProviderClient{
 		provider: &ct.Provider{Name: "postgres", URL: "http://postgres-api.discoverd/databases"},
 	})
+	err = rejectPlatformPostgresAdd("platform-postgres", postgresProviderClient{})
 	if !errors.Is(err, pgappliance.ErrTenantProvision) {
-		t.Fatalf("platform provider: %v", err)
+		t.Fatalf("platform-postgres name: %v", err)
 	}
 }
 
