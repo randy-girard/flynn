@@ -1,6 +1,8 @@
 // Package resname builds database resource app names.
 //
-// A name is <prefix>-<word>-<6 letters>, for example pg-harbor-kxmnpq.
+// MySQL, Redis, and the other engines use <prefix>-<word>-<6 letters>,
+// for example mysql-harbor-kxmnpq. Postgres instances are
+// postgresql-<word>-<5 digits>, for example postgresql-concave-48291.
 // Callers retry when the name is already taken so two resources never share it.
 package resname
 
@@ -12,12 +14,27 @@ import (
 // words are short readable names. The six-letter suffix is what makes the
 // full name unique.
 var words = []string{
-	"amber", "basin", "cedar", "delta", "ember", "fjord", "grove", "harbor",
+	"amber", "basin", "cedar", "concave", "delta", "ember", "fjord", "grove", "harbor",
 	"inlet", "juniper", "kelp", "lagoon", "meadow", "north", "orchid", "prairie",
 	"quartz", "ridge", "spruce", "timber", "upland", "valley", "willow", "yarrow",
 }
 
 const alphabet = "abcdefghijklmnopqrstuvwxyz"
+
+const digitAlphabet = "0123456789"
+
+const postgresAttachPrefix = "FLYNN_POSTGRESQL_"
+
+var attachmentColors = []string{
+	"AMBER", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE", "BRASS", "BRONZE",
+	"BROWN", "BURGUNDY", "COBALT", "COPPER", "CORAL", "CREAM", "CRIMSON",
+	"CYAN", "EMERALD", "FUCHSIA", "GOLD", "GRAY", "GREEN", "INDIGO", "IVORY",
+	"JADE", "LAVENDER", "LIME", "MAGENTA", "MAROON", "MINT", "NAVY", "OLIVE",
+	"ORANGE", "PEACH", "PEARL", "PINK", "PLATINUM", "PLUM", "PURPLE", "RED",
+	"ROSE", "RUBY", "RUST", "SAGE", "SALMON", "SAND", "SCARLET", "SILVER",
+	"SLATE", "TAN", "TEAL", "TOMATO", "TURQUOISE", "VIOLET", "WHITE", "WINE",
+	"YELLOW",
+}
 
 // Name returns prefix-word-xxxxxx. taken reports names already in use.
 // A nil taken accepts the first name.
@@ -35,11 +52,15 @@ func Name(prefix string, taken func(string) bool) string {
 	return prefix + "-" + words[index(len(words))] + "-" + letters(8)
 }
 
-// IsolatedService is a provisioned datastore app (pg-harbor-kxmnpq). User
+// IsolatedService is a provisioned datastore app (postgresql-concave-48291
+// or the older pg-harbor-kxmnpq / postgresql-<owner>-<digits> forms). User
 // jobs resolve leader.<name>.discoverd for these; other discoverd names stay
 // internal.
 func IsolatedService(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
+	if postgresInstanceName(name) {
+		return true
+	}
 	i := strings.IndexByte(name, '-')
 	if i <= 0 || i == len(name)-1 {
 		return false
@@ -86,17 +107,60 @@ func Canonical(command, name string) string {
 	if name == prefix || strings.HasPrefix(name, prefix+"-") {
 		return name
 	}
+	if prefix == "pg" && strings.HasPrefix(name, "postgresql-") {
+		return name
+	}
 	return prefix + "-" + name
 }
 
+func postgresInstanceName(name string) bool {
+	const p = "postgresql-"
+	if !strings.HasPrefix(name, p) {
+		return false
+	}
+	rest := name[len(p):]
+	j := strings.LastIndexByte(rest, '-')
+	if j <= 0 || j == len(rest)-1 {
+		return false
+	}
+	suffix := rest[j+1:]
+	if n := len(suffix); n < 5 || n > 8 {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	owner := rest[:j]
+	if owner == "" {
+		return false
+	}
+	for _, c := range owner {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return owner[0] != '-' && owner[len(owner)-1] != '-'
+}
+
 func letters(n int) string {
+	return fromAlphabet(alphabet, n)
+}
+
+func digits(n int) string {
+	return fromAlphabet(digitAlphabet, n)
+}
+
+func fromAlphabet(set string, n int) string {
 	buf := make([]byte, n)
 	raw := make([]byte, n)
 	if _, err := rand.Read(raw); err != nil {
 		panic(err)
 	}
 	for i := range buf {
-		buf[i] = alphabet[int(raw[i])%len(alphabet)]
+		buf[i] = set[int(raw[i])%len(set)]
 	}
 	return string(buf)
 }
@@ -133,10 +197,12 @@ func conventionalURL(k string) bool {
 }
 
 // MergeAttachment copies a provision response onto an app.
-// The app gets PREFIX_WORD_SUFFIX_DATABASE_URL always (pg-harbor-kxmnpq →
-// PG_HARBOR_KXMNPQ_DATABASE_URL), the engine's usual URL (DATABASE_URL,
-// REDIS_URL, …) when that key is unused, and --as NAME_URL. Host, user,
-// password, and FLYNN_* keys stay on the resource record, not the app.
+// Postgres gets FLYNN_POSTGRESQL_<COLOR>_URL (a color not already taken
+// on the app), or --as NAME which becomes NAME_URL (a color short name
+// becomes FLYNN_POSTGRESQL_<COLOR>_URL). Other engines get
+// PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's usual URL when unused,
+// plus --as NAME_URL. Host, user, password, and FLYNN_* identity keys stay
+// on the resource record, not the app.
 func MergeAttachment(existing, incoming map[string]string, as string) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
@@ -150,17 +216,21 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	taken := func(k string) bool {
 		return strings.TrimSpace(existing[k]) != "" || out[k] != ""
 	}
-	if key := ExtraDatabaseURL(name, taken); key != "" {
-		out[key] = url
-	}
-	if as = strings.ToUpper(strings.TrimSpace(as)); as != "" {
-		key := as + "_URL"
-		if !taken(key) {
+	postgres := strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != ""
+	if postgres {
+		if key := PostgresAttachmentURLKey(as, taken); key != "" {
 			out[key] = url
 		}
-	}
-	if conv != "" && !taken(conv) {
-		out[conv] = url
+	} else {
+		if key := ExtraDatabaseURL(name, taken); key != "" {
+			out[key] = url
+		}
+		if key := AsURLKey(as); key != "" && !taken(key) {
+			out[key] = url
+		}
+		if conv != "" && !taken(conv) {
+			out[conv] = url
+		}
 	}
 	return out
 }
@@ -213,29 +283,46 @@ func UnsetAttachment(release, resource map[string]string) map[string]*string {
 }
 
 // LockedKeys are release env vars currently owned by a resource attachment.
-// Only *_URL keys are locked (DATABASE_URL, PG_HARBOR_KXMNPQ_DATABASE_URL, …).
+// Any *_URL whose value still matches a resource connection string is locked
+// (FLYNN_POSTGRESQL_AMBER_URL, ANALYTICS_URL, …).
 func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) map[string]string {
 	locked := map[string]string{}
 	if release == nil {
 		return locked
 	}
+	urls := map[string]bool{}
+	same := map[string]string{}
 	for _, re := range resourceEnvs {
+		if re == nil {
+			continue
+		}
+		if u := connectionURL(re, ""); u != "" {
+			urls[u] = true
+		}
 		for k, v := range re {
 			if !strings.HasSuffix(k, "_URL") || v == "" {
 				continue
 			}
-			if release[k] == v {
-				locked[k] = v
-			}
+			urls[v] = true
+			same[k] = v
+		}
+	}
+	for k, v := range release {
+		if !strings.HasSuffix(k, "_URL") || v == "" {
+			continue
+		}
+		if urls[v] || same[k] == v {
+			locked[k] = v
 		}
 	}
 	return locked
 }
 
 // ResourceEnv is the env stored on the controller resource record.
-// MergeAttachment is what the app release gets (DATABASE_URL when unused, plus
-// the scoped *_DATABASE_URL). The resource itself keeps instance identity
-// (FLYNN_POSTGRES, role) so the dashboard and pg:psql can find it. Split
+// MergeAttachment is what the app release gets (FLYNN_POSTGRESQL_<COLOR>_URL
+// for postgres, or scoped *_DATABASE_URL plus the conventional URL for other
+// engines). The resource itself keeps instance identity (FLYNN_POSTGRES, role)
+// so the dashboard and pg:psql can find it. Split
 // PGHOST/PGUSER/PGPASSWORD/PGDATABASE keys and POSTGRES_URL stay off the
 // resource; conventional app URLs are not copied onto a later resource.
 func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
@@ -311,6 +398,100 @@ func ExtraDatabaseURL(resourceApp string, taken func(string) bool) string {
 		return prefix + "_X_DATABASE_URL"
 	}
 	return key
+}
+
+// AsURLKey is the env var for --as NAME: NAME_URL. A trailing _URL on NAME
+// is not doubled.
+func AsURLKey(as string) string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	as = strings.TrimSuffix(as, "_URL")
+	as = strings.Trim(as, "_")
+	if as == "" {
+		return ""
+	}
+	return as + "_URL"
+}
+
+// ColorDatabaseURL is FLYNN_POSTGRESQL_<COLOR>_URL for a color that taken
+// does not already report.
+func ColorDatabaseURL(taken func(string) bool) string {
+	if len(attachmentColors) == 0 {
+		return postgresAttachPrefix + "AMBER_URL"
+	}
+	start := index(len(attachmentColors))
+	for i := 0; i < len(attachmentColors); i++ {
+		color := attachmentColors[(start+i)%len(attachmentColors)]
+		key := postgresAttachPrefix + color + "_URL"
+		if taken == nil || !taken(key) {
+			return key
+		}
+	}
+	return postgresAttachPrefix + attachmentColors[start] + "_X_URL"
+}
+
+// PostgresAttachmentURLKey is the env var for one postgres attach. --as uses
+// the same short name and appends _URL. A color (AMBER) or
+// FLYNN_POSTGRESQL_AMBER becomes FLYNN_POSTGRESQL_AMBER_URL. Other names
+// become NAME_URL. With no --as, a free color is chosen.
+func PostgresAttachmentURLKey(as string, taken func(string) bool) string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	as = strings.TrimSuffix(as, "_URL")
+	as = strings.Trim(as, "_")
+	if as == "" {
+		return ColorDatabaseURL(taken)
+	}
+	if strings.HasPrefix(as, postgresAttachPrefix) {
+		return as + "_URL"
+	}
+	if isAttachmentColor(as) {
+		return postgresAttachPrefix + as + "_URL"
+	}
+	return as + "_URL"
+}
+
+// PostgresColorURLKey is FLYNN_POSTGRESQL_<COLOR>_URL (and the _X_ fallback).
+func PostgresColorURLKey(k string) bool {
+	k = strings.TrimSpace(k)
+	if !strings.HasPrefix(k, postgresAttachPrefix) || !strings.HasSuffix(k, "_URL") {
+		return false
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(k, postgresAttachPrefix), "_URL")
+	if mid == "" {
+		return false
+	}
+	for _, c := range mid {
+		if c >= 'A' && c <= 'Z' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isAttachmentColor(name string) bool {
+	name = strings.ToUpper(strings.TrimSpace(name))
+	for _, c := range attachmentColors {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+// PostgresInstanceName is postgresql-<word>-<5 digits>, for example
+// postgresql-concave-48291. taken reports names already in use.
+func PostgresInstanceName(taken func(string) bool) string {
+	const head = "postgresql-"
+	if len(words) == 0 {
+		return head + "app-" + digits(5)
+	}
+	for i := 0; i < 32; i++ {
+		name := head + words[index(len(words))] + "-" + digits(5)
+		if taken == nil || !taken(name) {
+			return name
+		}
+	}
+	return head + words[index(len(words))] + "-" + digits(8)
 }
 
 func splitAppName(resourceApp string) (prefix, word, suffix string, ok bool) {

@@ -26,16 +26,20 @@ func TestNameShapeAndUniqueness(t *testing.T) {
 
 func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	firstIn := map[string]string{
-		"FLYNN_POSTGRES": "pg-delta-pclpez",
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://first",
 		"POSTGRES_URL":   "postgres://first",
-		"PGHOST":         "leader.pg-delta-pclpez.discoverd",
+		"PGHOST":         "leader.postgresql-concave-48291.discoverd",
 		"PGUSER":         "app",
 		"PGPASSWORD":     "secret",
 	}
 	first := MergeAttachment(nil, firstIn, "")
-	if first["DATABASE_URL"] != "postgres://first" || first["PG_DELTA_PCLPEZ_DATABASE_URL"] != "postgres://first" {
+	firstKey := postgresColorKey(first)
+	if firstKey == "" || first[firstKey] != "postgres://first" {
 		t.Fatalf("first postgres: %#v", first)
+	}
+	if first["DATABASE_URL"] != "" {
+		t.Fatalf("postgres must not set DATABASE_URL: %#v", first)
 	}
 	if _, ok := first["POSTGRES_URL"]; ok {
 		t.Fatalf("app must not get POSTGRES_URL: %#v", first)
@@ -43,23 +47,18 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	if _, ok := first["PGHOST"]; ok || first["FLYNN_POSTGRES"] != "" || first["PGUSER"] != "" {
 		t.Fatalf("app must not get PG/POSTGRES/FLYNN keys: %#v", first)
 	}
-	if _, ok := first["PG_DELTA_PCLPEZ_PGHOST"]; ok {
-		t.Fatalf("app must not get scoped PGHOST: %#v", first)
-	}
 	second := MergeAttachment(first, map[string]string{
-		"FLYNN_POSTGRES": "pg-harbor-kxmnpq",
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://second",
 		"POSTGRES_URL":   "postgres://second",
-		"PGHOST":         "leader.pg-harbor-kxmnpq.discoverd",
+		"PGHOST":         "leader.postgresql-concave-48291.discoverd",
 	}, "")
+	secondKey := postgresColorKey(second)
 	if second["DATABASE_URL"] != "" || second["POSTGRES_URL"] != "" || second["FLYNN_POSTGRES"] != "" || second["PGHOST"] != "" {
 		t.Fatalf("second postgres must not replace the first attachment: %#v", second)
 	}
-	if second["PG_HARBOR_KXMNPQ_DATABASE_URL"] != "postgres://second" {
-		t.Fatalf("named url: %#v", second)
-	}
-	if _, ok := second["PG_HARBOR_KXMNPQ_PGHOST"]; ok {
-		t.Fatalf("second must not set scoped PGHOST: %#v", second)
+	if secondKey == "" || secondKey == firstKey || second[secondKey] != "postgres://second" {
+		t.Fatalf("named url: first %s second %#v", firstKey, second)
 	}
 
 	redis := MergeAttachment(map[string]string{"DATABASE_URL": "postgres://app"}, map[string]string{
@@ -92,27 +91,30 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 
 func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	first := ResourceEnv(nil, map[string]string{
-		"FLYNN_POSTGRES": "pg-delta-pclpez",
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://first",
 		"POSTGRES_URL":   "postgres://first",
 		"POSTGRES_ROLE":  "primary",
 		"PGDATABASE":     "db_first",
 	}, "")
-	if first["FLYNN_POSTGRES"] != "pg-delta-pclpez" || first["POSTGRES_ROLE"] != "primary" {
+	if first["FLYNN_POSTGRES"] != "postgresql-concave-48291" || first["POSTGRES_ROLE"] != "primary" {
 		t.Fatalf("first resource: %#v", first)
 	}
-	if first["DATABASE_URL"] != "postgres://first" || first["POSTGRES_URL"] != "" {
+	if first["DATABASE_URL"] != "" || first["POSTGRES_URL"] != "" {
 		t.Fatalf("first resource URLs: %#v", first)
+	}
+	if postgresColorKey(first) == "" {
+		t.Fatalf("first resource missing color URL: %#v", first)
 	}
 	if _, ok := first["PGDATABASE"]; ok || first["PGHOST"] != "" || first["PGUSER"] != "" {
 		t.Fatalf("resource must not keep split PG keys: %#v", first)
 	}
 	second := ResourceEnv(first, map[string]string{
-		"FLYNN_POSTGRES":  "pg-harbor-kxmnpq",
+		"FLYNN_POSTGRES":  "postgresql-fjord-99112",
 		"DATABASE_URL":    "postgres://second",
 		"POSTGRES_URL":    "postgres://second",
 		"POSTGRES_ROLE":   "follower",
-		"POSTGRES_LEADER": "pg-delta-pclpez",
+		"POSTGRES_LEADER": "postgresql-concave-48291",
 		"PGDATABASE":      "db_first",
 	}, "")
 	if second["DATABASE_URL"] != "" {
@@ -121,11 +123,11 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if second["POSTGRES_URL"] != "" {
 		t.Fatalf("resource must not store POSTGRES_URL: %#v", second)
 	}
-	if second["FLYNN_POSTGRES"] != "pg-harbor-kxmnpq" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "pg-delta-pclpez" {
+	if second["FLYNN_POSTGRES"] != "postgresql-fjord-99112" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "postgresql-concave-48291" {
 		t.Fatalf("second resource must keep its instance identity: %#v", second)
 	}
-	if second["PG_HARBOR_KXMNPQ_DATABASE_URL"] != "postgres://second" {
-		t.Fatalf("named url: %#v", second)
+	if postgresColorKey(second) == "" || postgresColorKey(second) == postgresColorKey(first) {
+		t.Fatalf("named url: %#v vs %#v", first, second)
 	}
 	if _, ok := second["PGDATABASE"]; ok {
 		t.Fatalf("second must not keep PGDATABASE: %#v", second)
@@ -134,18 +136,28 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 
 func TestMergeAttachmentHonorsAs(t *testing.T) {
 	got := MergeAttachment(nil, map[string]string{
-		"FLYNN_POSTGRES": "pg-harbor-kxmnpq",
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://db",
 	}, "analytics")
-	if got["ANALYTICS_URL"] != "postgres://db" || got["PG_HARBOR_KXMNPQ_DATABASE_URL"] != "postgres://db" || got["DATABASE_URL"] != "postgres://db" {
-		t.Fatalf("as + named + conventional: %#v", got)
+	if got["ANALYTICS_URL"] != "postgres://db" || got["DATABASE_URL"] != "" || postgresColorKey(got) != "" {
+		t.Fatalf("--as analytics is ANALYTICS_URL only: %#v", got)
 	}
-	taken := MergeAttachment(map[string]string{"DATABASE_URL": "postgres://old"}, map[string]string{
-		"FLYNN_POSTGRES": "pg-harbor-kxmnpq",
+	if AsURLKey("ANALYTICS_URL") != "ANALYTICS_URL" || AsURLKey("analytics") != "ANALYTICS_URL" {
+		t.Fatalf("AsURLKey: %q %q", AsURLKey("ANALYTICS_URL"), AsURLKey("analytics"))
+	}
+	color := MergeAttachment(nil, map[string]string{
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://db",
-	}, "analytics")
-	if taken["DATABASE_URL"] != "" || taken["ANALYTICS_URL"] != "postgres://db" || taken["PG_HARBOR_KXMNPQ_DATABASE_URL"] != "postgres://db" {
-		t.Fatalf("as must not replace DATABASE_URL: %#v", taken)
+	}, "amber")
+	if color["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || color["AMBER_URL"] != "" || color["DATABASE_URL"] != "" {
+		t.Fatalf("--as amber: %#v", color)
+	}
+	full := MergeAttachment(map[string]string{"FLYNN_POSTGRESQL_AMBER_URL": "postgres://old"}, map[string]string{
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
+		"DATABASE_URL":   "postgres://db",
+	}, "FLYNN_POSTGRESQL_BLUE")
+	if full["FLYNN_POSTGRESQL_BLUE_URL"] != "postgres://db" || full["FLYNN_POSTGRESQL_AMBER_URL"] != "" {
+		t.Fatalf("--as FLYNN_POSTGRESQL_BLUE: %#v", full)
 	}
 }
 
@@ -212,22 +224,20 @@ func TestUnsetAttachmentURLOnlyApp(t *testing.T) {
 
 func TestLockedKeysMatchReleaseValues(t *testing.T) {
 	release := map[string]string{
-		"DATABASE_URL":                 "postgres://first",
-		"PG_DELTA_PCLPEZ_DATABASE_URL": "postgres://first",
-		"PGHOST":                       "leader.pg-delta-pclpez.discoverd",
-		"NOTES":                        "x",
+		"FLYNN_POSTGRESQL_AMBER_URL": "postgres://first",
+		"PGHOST":                     "leader.postgresql-concave-48291.discoverd",
+		"NOTES":                      "x",
 	}
 	locked := LockedKeys(release, map[string]string{
-		"FLYNN_POSTGRES":               "pg-delta-pclpez",
-		"DATABASE_URL":                 "postgres://first",
-		"POSTGRES_URL":                 "postgres://first",
-		"PGHOST":                       "leader.pg-delta-pclpez.discoverd",
-		"PG_DELTA_PCLPEZ_DATABASE_URL": "postgres://first",
+		"FLYNN_POSTGRES":             "postgresql-concave-48291",
+		"POSTGRES_URL":               "postgres://first",
+		"PGHOST":                     "leader.postgresql-concave-48291.discoverd",
+		"FLYNN_POSTGRESQL_AMBER_URL": "postgres://first",
 	}, map[string]string{
-		"FLYNN_POSTGRES": "pg-harbor-kxmnpq",
-		"PGHOST":         "leader.pg-harbor-kxmnpq.discoverd",
+		"FLYNN_POSTGRES": "postgresql-fjord-99112",
+		"PGHOST":         "leader.postgresql-fjord-99112.discoverd",
 	})
-	if locked["DATABASE_URL"] != "postgres://first" || locked["PG_DELTA_PCLPEZ_DATABASE_URL"] != "postgres://first" {
+	if locked["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://first" {
 		t.Fatalf("attachment URLs: %#v", locked)
 	}
 	if _, ok := locked["PGHOST"]; ok {
@@ -235,6 +245,14 @@ func TestLockedKeysMatchReleaseValues(t *testing.T) {
 	}
 	if _, ok := locked["NOTES"]; ok {
 		t.Fatalf("unrelated: %#v", locked)
+	}
+	peer := map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://first"}
+	peerLocked := LockedKeys(peer, map[string]string{
+		"FLYNN_POSTGRES":             "postgresql-concave-48291",
+		"FLYNN_POSTGRESQL_AMBER_URL": "postgres://first",
+	})
+	if peerLocked["FLYNN_POSTGRESQL_BLUE_URL"] != "postgres://first" {
+		t.Fatalf("peer color URL must lock by connection string: %#v", peerLocked)
 	}
 }
 
@@ -283,6 +301,9 @@ func TestCanonical(t *testing.T) {
 	if got := Canonical("pg", "pg-harbor-kxmnpq"); got != "pg-harbor-kxmnpq" {
 		t.Fatalf("full name: %q", got)
 	}
+	if got := Canonical("pg", "postgresql-concave-48291"); got != "postgresql-concave-48291" {
+		t.Fatalf("postgresql instance: %q", got)
+	}
 	if got := Canonical("redis", "redis-6f0e1c2a-uuid"); got != "redis-6f0e1c2a-uuid" {
 		t.Fatalf("existing app: %q", got)
 	}
@@ -292,14 +313,35 @@ func TestCanonical(t *testing.T) {
 }
 
 func TestIsolatedService(t *testing.T) {
-	for _, name := range []string{"pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef"} {
+	for _, name := range []string{"postgresql-concave-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef"} {
 		if !IsolatedService(name) {
 			t.Fatalf("%q should be an isolated datastore", name)
 		}
 	}
-	for _, name := range []string{"postgres", "postgres-plugin", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1"} {
+	for _, name := range []string{"postgres", "postgres-plugin", "postgresql", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1", "postgresql-shop-abc123", "postgresql-concave-4829"} {
 		if IsolatedService(name) {
 			t.Fatalf("%q must not look like an isolated datastore", name)
 		}
 	}
+}
+
+func TestPostgresInstanceName(t *testing.T) {
+	re := regexp.MustCompile(`^postgresql-[a-z]+-[0-9]{5}$`)
+	seen := map[string]bool{}
+	for i := 0; i < 20; i++ {
+		name := PostgresInstanceName(func(n string) bool { return seen[n] })
+		if !re.MatchString(name) {
+			t.Fatalf("name %q", name)
+		}
+		seen[name] = true
+	}
+}
+
+func postgresColorKey(env map[string]string) string {
+	for k := range env {
+		if PostgresColorURLKey(k) {
+			return k
+		}
+	}
+	return ""
 }

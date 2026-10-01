@@ -115,6 +115,25 @@ func TestLookupProviderResourceByName(t *testing.T) {
 	}
 }
 
+func TestLookupProviderResourceFromAccountList(t *testing.T) {
+	res := &ct.Resource{
+		ID:           "919a764d-863d-4629-aa23-76248728dcbc",
+		ProviderID:   "prov-1",
+		OwnerAccount: "user:ada",
+		OwnerApp:     "home",
+		Env:          map[string]string{"FLYNN_POSTGRES": "pg-harbor-kxmnpq"},
+	}
+	c := resourceLookupClient{
+		provider: &ct.Provider{ID: "prov-1", Name: "postgres"},
+		appList:  nil,
+		allList:  []*ct.Resource{res},
+	}
+	got, err := lookupProviderResource(c, "shop", "postgres", "pg-harbor-kxmnpq")
+	if err != nil || got == nil || got.ID != res.ID {
+		t.Fatalf("attach looks up a resource not yet on this app: %+v %v", got, err)
+	}
+}
+
 func TestResolveRemoveTargetByNameOnly(t *testing.T) {
 	res := &ct.Resource{
 		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
@@ -213,6 +232,10 @@ func TestSingleAttachmentEnv(t *testing.T) {
 	if err != nil || env["DATABASE_URL"] != "postgres://db" || len(env) != 1 {
 		t.Fatalf("default %#v %v", env, err)
 	}
+	env, err = singleAttachmentEnv(map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://db"}, "AMBER")
+	if err != nil || env["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || env["AMBER_URL"] != "" {
+		t.Fatalf("color --as %#v %v", env, err)
+	}
 }
 
 func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
@@ -303,5 +326,29 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	}
 	if custom.Runtime != "custom" || custom.CPU != 100 || custom.Disk != 1<<30 {
 		t.Fatalf("custom %#v", custom)
+	}
+}
+
+func TestResourceOwnedByApp(t *testing.T) {
+	res := &ct.Resource{OwnerApp: "app-owner"}
+	if res.OwnedByApp(&ct.App{ID: "app-other", Name: "shop"}) {
+		t.Fatal("attached app must not own the resource")
+	}
+	if !res.OwnedByApp(&ct.App{ID: "app-owner", Name: "home"}) {
+		t.Fatal("provisioning app owns the resource")
+	}
+	if !res.OwnedByApp(&ct.App{ID: "other", Name: "app-owner"}) {
+		t.Fatal("owner_app may be the app name")
+	}
+	legacy := &ct.Resource{}
+	if !legacy.OwnedByApp(&ct.App{ID: "any"}) {
+		t.Fatal("empty owner_app is legacy-owned")
+	}
+	shared := &ct.Resource{Apps: []string{"app-peer", "app-owner"}}
+	if shared.OwnedByApp(&ct.App{ID: "app-peer", Name: "shop"}) {
+		t.Fatal("newest attached app must not own a legacy resource")
+	}
+	if !shared.OwnedByApp(&ct.App{ID: "app-owner", Name: "home"}) {
+		t.Fatal("oldest attached app owns a legacy resource")
 	}
 }

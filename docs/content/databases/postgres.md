@@ -59,8 +59,10 @@ read the other instance. Sirenia is not started. The command waits until the
 new instance has finished `initdb` and registered in discoverd (up to five
 minutes on a new volume).
 
-`--as ANALYTICS` sets only `ANALYTICS_URL`. The default name `DATABASE` sets
-only `DATABASE_URL`. `flynn resource:attach` / `flynn resource:detach` add and
+`--as ANALYTICS` sets only `ANALYTICS_URL`. The default attachment is
+`FLYNN_POSTGRESQL_<COLOR>_URL` (a color not already taken on the app).
+`--as AMBER` sets `FLYNN_POSTGRESQL_AMBER_URL`. `flynn resource:attach` /
+`flynn resource:detach` add and
 remove that variable. The same resource can attach to several apps under
 different names. `flynn env:set` of an attached `*_URL` is rejected while it
 is attached.
@@ -74,7 +76,7 @@ There is no in-place resize or upgrade. Create a follower, wait until it is
 caught up, then promote:
 
 ```text
-flynn resource:add postgres --follow <resource> --replication streaming
+flynn pg:follow
 flynn pg:wait <follower>
 flynn pg:promote <follower>
 ```
@@ -86,18 +88,21 @@ rewrites the primary attachment `*_URL`. The old leader remains its own
 resource. `flynn pg:unfollow <follower>` stops replication and leaves a
 standalone writable copy.
 
-`--replication streaming` is same-major. `--replication logical` is the
-major-upgrade path. A follower may use a different `--runtime` name. Runtime
-sizing itself lands in a later ticket.
+Followers always stream on the same engine version. `flynn pg:upgrade` uses
+logical replication, promotes a new primary, then recreates followers. A
+follower may use a different `--runtime` name.
 
-`flynn pg:info` shows the leader, followers, and lag. `flynn pg:psql` opens a
-console for this instance's URL only. Those commands come from the postgres
-plugin. They are not built into the `flynn` CLI.
+`flynn pg:info` shows the leader, followers, and lag. `flynn pg:create`
+creates a logical database on this instance. `flynn pg:psql` opens a console
+for this instance's URL only. Those commands come from the postgres plugin.
+They are not built into the `flynn` CLI.
 
 ### Connecting to the database
 
 A provisioned plugin database adds one environment variable to the app
-release: `DATABASE_URL`, or `<NAME>_URL` when you pass `--as <NAME>`. That
+release: `FLYNN_POSTGRESQL_<COLOR>_URL`, or `<NAME>_URL` when you pass
+`--as <NAME>` (a color short name such as `AMBER` becomes
+`FLYNN_POSTGRESQL_AMBER_URL`). That
 URL is a role on this instance, not the platform appliance superuser. New
 URLs use `sslmode=require`. The platform appliance enables
 `ssl=on` with a cluster-generated server certificate (SANs include
@@ -153,10 +158,9 @@ pg:dump`, or `flynn-host pg:restore`. See
 
 ### Dumping and restoring
 
-There is no user `flynn pg:dump` / `flynn pg:restore`. Those are not in the
-postgres plugin CLI (`pg:info`, `pg:follow`, `pg:wait`, `pg:promote`,
-`pg:unfollow`, `pg:psql`). The plugin dashboard has a Backup page for an
-instance.
+`flynn pg:dump` / `flynn pg:restore` dump this app's tenant instance in
+Postgres custom format. They are plugin commands (`flynn pg --help`). The
+plugin dashboard Backup page is the same operation.
 
 `flynn-host pg:dump` / `flynn-host pg:restore` dump the **platform** appliance
 (controller, blobstore, plugin metadata on `platform-postgres`). They do not

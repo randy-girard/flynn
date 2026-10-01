@@ -24,7 +24,7 @@ usage: flynn resource
 
 List resources for the app.
 
-NAME is the isolated instance (pg-harbor-kxmnpq). Use it with pg:psql,
+NAME is the isolated instance (postgresql-concave-48291). Use it with pg:psql,
 redis-cli, --follow, --join, resource:attach, and resource:remove.
 `)
 	register("resource:add", runResourceAdd, `
@@ -43,11 +43,12 @@ and redis --follow creates a replica resource of that instance. Kafka and
 mongodb --join starts another Flynn job on that existing cluster (any member
 name works; --follow is accepted as an alias). ClickHouse --follow still copies
 onto a separate resource. The platform postgres appliance at
-postgres-api.discoverd is not used. --as ANALYTICS sets only ANALYTICS_URL.
-The default name DATABASE sets only DATABASE_URL.
+postgres-api.discoverd is not used. Postgres attaches as FLYNN_POSTGRESQL_<COLOR>_URL
+(a color not already taken on the app). --as ANALYTICS sets only ANALYTICS_URL.
+--as AMBER (or FLYNN_POSTGRESQL_AMBER) sets FLYNN_POSTGRESQL_AMBER_URL.
 
 Options:
-	--as=<name>              attachment env name (default DATABASE)
+	--as=<name>              attachment env name (postgres adds _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL)
 	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
 	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
@@ -55,34 +56,52 @@ Options:
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
 	--memory=<bytes>         raw memory (only when custom sizes are allowed)
 	--disk=<bytes>           raw disk (only when custom sizes are allowed)
+
+Examples:
+
+	$ flynn resource:add postgres
+	$ flynn resource:add postgres --as ANALYTICS
+	$ flynn resource:add postgres --as AMBER
 `)
 	register("resource:attach", runResourceAttach, `
 usage: flynn resource:attach <provider> <resource> [--as <name>]
 
-Attach an existing resource to this app.
+Attach an existing resource to this app. The resource must already exist on
+another app in the same account. Postgres attaches as FLYNN_POSTGRESQL_<COLOR>_URL
+(a color not already taken on this app). --as NAME becomes NAME_URL; a color
+short name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL.
 
-<resource> is the NAME or ID from flynn resource. For postgres, --as sets one
-env var (<NAME>_URL). The default name is the resource's existing *_URL key.
-The same resource can attach to several apps with different names.
+<resource> is the NAME or ID from flynn resource. The same resource can attach
+to several apps. Only the app that provisioned it may delete it; this app
+can detach.
 
 Options:
-	--as=<name>  attachment env name
+	--as=<name>  attachment env name (postgres adds _URL)
+
+Examples:
+
+	$ flynn -a shop resource:attach postgres postgresql-concave-48291
+	$ flynn -a shop resource:attach postgres postgresql-concave-48291 --as ANALYTICS
+	$ flynn -a shop resource:attach postgres postgresql-concave-48291 --as AMBER
 `)
 	register("resource:detach", runResourceDetach, `
 usage: flynn resource:detach <provider> <resource>
 
-Detach a resource from this app and remove the attachment env var.
+Detach a resource from this app and remove the attachment env var. This does
+not delete the instance. Use it when this app is attached but does not own
+the resource.
 
 <resource> is the NAME or ID from flynn resource.
 `)
 	register("resource:remove", runResourceRemove, `
 usage: flynn resource:remove [<provider>] [<resource>]
 
-Remove a resource. <resource> is the NAME or ID from flynn resource
-(pg-orchid-xkhthp). flynn resource:remove pg-orchid-xkhthp is enough when
-that name is unique on the app. With only <provider>, removes the unique
+Delete a resource this app owns. <resource> is the NAME or ID from flynn
+resource (postgresql-concave-48291). flynn resource:remove postgresql-concave-48291 is enough
+when that name is unique on the app. With only <provider>, removes the unique
 resource for that provider. A leader cannot be removed while followers are
-still linked; unfollow or remove those replicas first.
+still linked; unfollow or remove those replicas first. An app that is only
+attached must use resource:detach; it cannot delete the instance.
 `)
 	register("resource:expose", runResourceExpose, `
 usage: flynn resource:expose <provider> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
@@ -111,6 +130,9 @@ usage: flynn resource:unexpose <provider> [--domain <host>]
 
 Remove the TCP export route for <provider> and print the matching
 flynn-host firewall:unexpose command.
+
+Options:
+	--domain=<host>  hostname of the route to remove (default: the first TCP export)
 `)
 }
 
@@ -196,7 +218,7 @@ func databaseRuntimeCatalog(client controller.Client) (dbruntime.Catalog, error)
 }
 
 // createdResourceMessage is the resource:add success line. Operators grep the
-// resource app name (pg-harbor-kxmnpq), not controller UUIDs. --as is shown
+// resource app name (postgresql-concave-48291), not controller UUIDs. --as is shown
 // when it was set and differs from that name.
 func createdResourceMessage(res *ct.Resource, as string) string {
 	as = strings.ToUpper(strings.TrimSpace(as))
@@ -226,7 +248,7 @@ func createdResourceMessage(res *ct.Resource, as string) string {
 }
 
 // resourceDisplayName is the isolated instance operators copy from flynn
-// resource (pg-harbor-kxmnpq). It is what pg:psql and --follow/--join take.
+// resource (postgresql-concave-48291). It is what pg:psql and --follow/--join take.
 func resourceDisplayName(res *ct.Resource) string {
 	if res == nil {
 		return ""
@@ -475,20 +497,34 @@ func singleAttachmentEnv(resourceEnv map[string]string, as string) (map[string]s
 	if n != 1 {
 		return nil, fmt.Errorf("postgres attachment expects exactly one *_URL, found %d", n)
 	}
-	name := key[:len(key)-len("_URL")]
 	if strings.TrimSpace(as) != "" {
-		name = strings.ToUpper(strings.TrimSpace(as))
+		return map[string]string{resname.PostgresAttachmentURLKey(as, nil): val}, nil
 	}
-	return map[string]string{name + "_URL": val}, nil
+	return map[string]string{key: val}, nil
+}
+
+func resolvedAppID(client controller.Client) (string, error) {
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return "", err
+	}
+	if id := strings.TrimSpace(app.ID); id != "" {
+		return id, nil
+	}
+	return mustApp(), nil
 }
 
 func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	provider := args.String["<provider>"]
+	appID, err := resolvedAppID(client)
+	if err != nil {
+		return err
+	}
 	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
 	if err != nil {
 		return err
 	}
-	res, err := client.AddResourceApp(provider, resRef.ID, mustApp())
+	res, err := client.AddResourceApp(provider, resRef.ID, appID)
 	if err != nil {
 		return err
 	}
@@ -503,11 +539,15 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 
 func runResourceDetach(args *docopt.Args, client controller.Client) error {
 	provider := args.String["<provider>"]
+	appID, err := resolvedAppID(client)
+	if err != nil {
+		return err
+	}
 	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
 	if err != nil {
 		return err
 	}
-	res, err := client.DeleteResourceApp(provider, resRef.ID, mustApp())
+	res, err := client.DeleteResourceApp(provider, resRef.ID, appID)
 	if err != nil {
 		return err
 	}
@@ -533,6 +573,13 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 	}
 	if names := resourceFollowerNames(resRef, appResourcesOrNil(client, mustApp())); len(names) > 0 {
 		return fmt.Errorf("cannot remove %s while followers are still linked (%s); unfollow or remove those resources first", resourceDisplayName(resRef), strings.Join(names, ", "))
+	}
+	app, err := client.GetApp(mustApp())
+	if err != nil {
+		return err
+	}
+	if !resRef.OwnedByApp(app) {
+		return fmt.Errorf("cannot delete %s from %s; this app is attached but does not own the resource. Use flynn resource:detach %s %s", resourceDisplayName(resRef), app.Name, providerName, resourceDisplayName(resRef))
 	}
 
 	res, err := client.DeleteResource(providerName, resRef.ID)
@@ -567,7 +614,7 @@ func appResourcesOrNil(client controller.Client, app string) []*ct.Resource {
 }
 
 // resolveRemoveTarget accepts provider+NAME/ID, a unique provider, or a unique
-// resource NAME/ID with no provider (flynn resource:remove pg-orchid-xkhthp).
+// resource NAME/ID with no provider (flynn resource:remove postgresql-concave-48291).
 func resolveRemoveTarget(client controller.Client, app, provider, resource string) (*ct.Resource, string, error) {
 	provider = strings.TrimSpace(provider)
 	resource = strings.TrimSpace(resource)
