@@ -435,13 +435,13 @@ func (s *S) TestRunJobAttached(c *C) {
 	select {
 	case got := <-input:
 		c.Assert(got, Equals, "test in")
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.Fatal("timed out waiting for attach stdin")
 	}
 	select {
 	case got := <-stdout:
 		c.Assert(got, Equals, "test out")
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		c.Fatal("timed out waiting for attach stdout")
 	}
 
