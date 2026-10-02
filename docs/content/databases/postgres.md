@@ -84,6 +84,9 @@ flynn pg:wait <follower>
 flynn pg:promote <follower>
 ```
 
+`flynn pg:wait` prints live copy progress (basebackup percent, then WAL catch-up)
+until lag is zero. The dashboard Follow and Upgrade pages poll the same progress.
+
 A follower is a separate resource, not an extra node. It is read-only. It
 cannot follow another follower. Its own `--as` does not replace the leader
 URL until promote. Promote makes the follower writable, ends the follow, and
