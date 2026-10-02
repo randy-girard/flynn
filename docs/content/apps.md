@@ -216,8 +216,11 @@ skipped after one second rather than stalling the host, so a saturated follower
 may miss lines while other clients and the on-disk log still receive them.
 
 `flynn metrics` prints the latest stored app snapshot the dashboard uses for
-alerts. Add rules with `flynn alert:add` (email or webhook). Cluster-wide
-thresholds and live host samples use `flynn-host alert` and `flynn-host metrics`.
+alerts. Add rules with `flynn alert:add` (email or webhook), or from **Add alert**
+on the dashboard Alerts tab and metrics charts. The dashboard Alerts
+tab lists each firing window (newest first), and the same windows shade the
+matching metric charts. Cluster-wide thresholds and live host samples use
+`flynn-host alert` and `flynn-host metrics`.
 See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring).
 
 ### External Logs

@@ -474,7 +474,8 @@ The dashboard still shows live metrics for operators who are already logged in.
 `flynn-host metrics` prints a live host snapshot without the dashboard.
 `flynn-host alert` stores cluster rules (CPU, memory, disk, load, running jobs)
 in the dashboard plugin; `flynn alert` and `flynn metrics` are the app-scoped
-equivalents.
+equivalents. The dashboard Alerts tab logs each firing window (newest first) and
+shades those periods on the matching metric charts.
 
 ## Debugging
 
