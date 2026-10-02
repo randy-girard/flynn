@@ -533,6 +533,14 @@ func TestLoadCatalog(t *testing.T) {
 		t.Fatalf("kind: app must stay off the user CLI: %+v", cat.Commands)
 	}
 
+	hostCat, err := LoadHostCatalog(stubCatalogClient{apps: apps, provErr: errors.New("no providers")})
+	if err != nil || !hostCat.HasCommand("control-ui") || !hostCat.HasCommand("redis") {
+		t.Fatalf("host catalog must include kind: app plugins: %+v %v", hostCat, err)
+	}
+	if hostCat.HasCommand("postgres") {
+		t.Fatalf("host catalog must not invent provider stubs: %+v", hostCat.Commands)
+	}
+
 	cat, err = LoadCatalog(stubCatalogClient{
 		apps:      apps,
 		providers: []*ct.Provider{{Name: "postgres"}},

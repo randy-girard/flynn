@@ -47,8 +47,8 @@ The **enterprise** plugin (`../flynn-plugin-enterprise`) is in that catalog.
 Install it with `flynn-host plugin:install enterprise`. After install it
 advertises `http://enterprise.discoverd/`, which unlocks dashboard granular
 RBAC, and serves **Cluster → Enterprise** pages (roles, OIDC SSO, audit,
-policy, license). Catalog CLI: `flynn enterprise`, `enterprise:role-add`,
-`enterprise:sso-set`, `enterprise:audit`. Uninstalling it returns the cluster
+policy, license). Catalog CLI: `flynn enterprise org` / `team` / `list` (account-scoped) and
+`flynn-host enterprise license` / `sso` / `roles` / `audit` / `policy`. Uninstalling it returns the cluster
 to the four built-in app roles. On Flynn **hosted**, a paid billing plan that
 includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
 (enterprise probes `http://billing.discoverd/entitlements`).
@@ -287,10 +287,12 @@ Those commands appear only after `flynn-host plugin:install` stamps
   Flynn’s route CLI on a cluster host use
   `flynn-host plugin:route <name> add http --auto-tls`).
   A `kind: app` plugin only appears on `flynn help` when `"user": true`.
+- `scope` — `app` (default; honours `flynn -a` / `-r`), `account` (stays on
+  `flynn`, rejects `-a` / `-r`), or `cluster` (served by `flynn-host` under the
+  same command name). The legacy `cluster: true` flag is treated as
+  `scope: cluster` when `scope` is omitted.
 - `passthrough` — append the user argv after the plugin command (nested CLIs)
 - `release_env` — copy the appliance release env into the job (TLS material)
-- `cluster` — run the job against the plugin system app (no `flynn -a` on the
-  caller's current app). Used by enterprise and pipeline.
 
 `flynn` and `args` are mutually exclusive on one action. Web system plugins
 should not ship a user `flynn` command; operators manage HTTP/TCP routes with

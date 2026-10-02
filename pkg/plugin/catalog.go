@@ -48,20 +48,36 @@ func (c *Catalog) HasProvider(name string) bool {
 	return false
 }
 
-// LoadCatalog lists plugin apps and providers on the cluster.
+// LoadCatalog lists plugin apps and providers on the cluster for the laptop
+// flynn CLI (UserVisible plugins).
 func LoadCatalog(client catalogSource) (*Catalog, error) {
+	return loadCatalog(client, false)
+}
+
+// LoadHostCatalog lists every plugin CLI, including kind: app system plugins
+// that are not on the user flynn CLI. flynn-host uses this for cluster-scoped
+// operator commands.
+func LoadHostCatalog(client catalogSource) (*Catalog, error) {
+	return loadCatalog(client, true)
+}
+
+func loadCatalog(client catalogSource, allPlugins bool) (*Catalog, error) {
 	apps, err := client.AppList()
 	if err != nil {
 		return nil, err
 	}
 	providers, err := client.ProviderList()
 	if err != nil {
-		return catalogFrom(apps, nil), nil
+		return catalogFromOpts(apps, nil, allPlugins), nil
 	}
-	return catalogFrom(apps, providers), nil
+	return catalogFromOpts(apps, providers, allPlugins), nil
 }
 
 func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
+	return catalogFromOpts(apps, providers, false)
+}
+
+func catalogFromOpts(apps []*ct.App, providers []*ct.Provider, allPlugins bool) *Catalog {
 	cat := &Catalog{}
 	seen := map[string]struct{}{}
 
@@ -81,7 +97,7 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 		if kind == "" {
 			kind = RecordFromApp(app).Kind
 		}
-		if !cli.UserVisible(kind) {
+		if !allPlugins && !cli.UserVisible(kind) {
 			continue
 		}
 		if _, ok := seen[cli.Command]; ok {
@@ -90,6 +106,10 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 		seen[cli.Command] = struct{}{}
 		cli.App = app.Name
 		cat.Commands = append(cat.Commands, cli)
+	}
+
+	if allPlugins {
+		return cat
 	}
 
 	for _, p := range providers {

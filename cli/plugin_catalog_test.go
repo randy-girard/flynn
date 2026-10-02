@@ -69,6 +69,36 @@ func TestMergePluginUsageAddsCatalogCommands(t *testing.T) {
 	assertPluginHelpSection(t, got, "redis")
 }
 
+func TestMergePluginUsageOmitsClusterOnlyPlugins(t *testing.T) {
+	usage := strings.Join([]string{
+		"Commands:",
+		"   ps          list jobs",
+		"",
+		"See 'flynn help <command>' for more information on a specific command.",
+	}, "\n")
+	cat := &plugin.Catalog{Commands: []plugin.CLI{
+		{
+			Command: "billing",
+			Usage:   "hosted billing",
+			Doc:     "usage: flynn billing plans",
+			Actions: []plugin.CLIAction{{Name: "plans", Args: []string{"/bin/billing-cli"}, Scope: plugin.CLIScopeCluster}},
+		},
+		{
+			Command: "pipeline",
+			Usage:   "environments and promotion",
+			Doc:     "usage: flynn pipeline create",
+			Actions: []plugin.CLIAction{{Name: "create", Args: []string{"/bin/pipeline-cli"}, Scope: plugin.CLIScopeAccount}},
+		},
+	}}
+	got := mergePluginUsage(usage, cat, nil)
+	if strings.Contains(got, "billing") {
+		t.Fatalf("cluster-only plugin must not appear on flynn help:\n%s", got)
+	}
+	if !strings.Contains(got, "pipeline") {
+		t.Fatalf("account-scoped plugin must appear:\n%s", got)
+	}
+}
+
 func TestPluginHelpNamesUseNestedColons(t *testing.T) {
 	cmd := plugin.CLI{
 		Command: "kafka",
@@ -92,6 +122,18 @@ func TestPluginHelpNamesUseNestedColons(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q want %q", got, want)
+	}
+
+	mixed := plugin.CLI{
+		Command: "enterprise",
+		Actions: []plugin.CLIAction{
+			{Name: "org list", Scope: plugin.CLIScopeAccount},
+			{Name: "license", Scope: plugin.CLIScopeCluster},
+		},
+	}
+	got = pluginActionNames(mixed)
+	if !reflect.DeepEqual(got, []string{"enterprise:org:list"}) {
+		t.Fatalf("flynn help must omit cluster-scoped actions: %q", got)
 	}
 }
 

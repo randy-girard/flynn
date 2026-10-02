@@ -43,5 +43,35 @@ func hostPluginForParent(name string) (pluginName string, ok bool) {
 		parent = name[:i]
 	}
 	pluginName, ok = hostPluginCommand[parent]
-	return pluginName, ok
+	if ok {
+		return pluginName, true
+	}
+	if spec := installedHostPluginCLI(parent); spec != nil && spec.HasClusterActions() {
+		return spec.Command, true
+	}
+	return "", false
+}
+
+func installedClusterPluginCLIs() []*plugin.CLI {
+	var out []*plugin.CLI
+	seen := map[string]struct{}{}
+	for _, p := range plugin.ReadInstalled("") {
+		if p.CLI == nil || !p.CLI.HasClusterActions() {
+			continue
+		}
+		cmd := strings.TrimSpace(p.CLI.Command)
+		if cmd == "" {
+			continue
+		}
+		if _, ok := seen[cmd]; ok {
+			continue
+		}
+		seen[cmd] = struct{}{}
+		cli := *p.CLI
+		if cli.App == "" {
+			cli.App = p.Name
+		}
+		out = append(out, &cli)
+	}
+	return out
 }

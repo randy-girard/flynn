@@ -72,4 +72,13 @@ func TestManifestValidateCLIFlynn(t *testing.T) {
 	if fill.CLI.Actions[0].Name != "route" {
 		t.Fatalf("default name=%q", fill.CLI.Actions[0].Name)
 	}
+	if fill.CLI.Actions[0].Scope != CLIScopeApp {
+		t.Fatalf("default scope=%q", fill.CLI.Actions[0].Scope)
+	}
+
+	badScope := *ok
+	badScope.CLI = &CLI{Command: "widget", Actions: []CLIAction{{Name: "ping", Scope: "host"}}}
+	if err := badScope.Validate(); err == nil || !strings.Contains(err.Error(), "scope") {
+		t.Fatalf("bad scope: %v", err)
+	}
 }

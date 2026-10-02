@@ -66,7 +66,10 @@ func knownHelpTopic(name string) bool {
 		}
 	}
 	cat, err := clusterPluginCatalog()
-	return err == nil && cat != nil && cat.Lookup(name) != nil
+	if err != nil || cat == nil {
+		return false
+	}
+	return cat.Lookup(name) != nil || owningPlugin(cat, name) != nil
 }
 
 func wantsHelp(args []string) bool {
@@ -157,6 +160,9 @@ func formatHelpWith(name string, cat *plugin.Catalog) string {
 		b.WriteString(strings.TrimRight(cmd.usage, "\n"))
 		b.WriteByte('\n')
 	} else if spec := catalogLookupIn(cat, name); spec != nil && spec.Command == name {
+		if !spec.HasFlynnVisibleActions() && spec.HasClusterActions() {
+			return spec.Command + " is a flynn-host command; run `" + spec.HostRedirect(nil) + "`\n"
+		}
 		fmt.Fprintf(&b, "usage: flynn %s\n", name)
 		if clihelp.HasChildren(all, name) {
 			fmt.Fprintf(&b, "       flynn %s <command> [<args>...]\n", name)
@@ -167,6 +173,9 @@ func formatHelpWith(name string, cat *plugin.Catalog) string {
 			b.WriteByte('\n')
 		}
 	} else if spec := owningPlugin(cat, name); spec != nil && !clihelp.HasChildren(all, name) {
+		if a := spec.ActionByName(pluginActionVerb(spec, name)); a != nil && a.EffectiveScope() == plugin.CLIScopeCluster {
+			return name + " is a flynn-host command; run `" + spec.HostRedirect(a) + "`\n"
+		}
 		help := spec.ActionHelp(name)
 		if help == "" {
 			fmt.Fprintf(&b, "usage: flynn %s\n", name)
@@ -238,12 +247,23 @@ func owningPlugin(cat *plugin.Catalog, name string) *plugin.CLI {
 	if spec == nil {
 		return nil
 	}
-	for _, n := range pluginActionNames(*spec) {
-		if n == name || strings.HasPrefix(name, n+":") {
+	for _, a := range spec.Actions {
+		if pluginColonName(spec.Command, a.Name) == name || strings.HasPrefix(name, pluginColonName(spec.Command, a.Name)+":") {
 			return spec
 		}
 	}
 	return nil
+}
+
+func pluginActionVerb(spec *plugin.CLI, full string) string {
+	if spec == nil {
+		return full
+	}
+	prefix := spec.Command + ":"
+	if strings.HasPrefix(full, prefix) {
+		return strings.ReplaceAll(strings.TrimPrefix(full, prefix), ":", " ")
+	}
+	return full
 }
 
 func pluginActionDesc(spec *plugin.CLI, full string) string {

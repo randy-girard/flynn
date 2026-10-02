@@ -46,6 +46,9 @@ func runPluginCommand(name string, args []string) error {
 	}
 
 	if action, rest, ok := spec.MatchFlynnDelegate(args); ok {
+		if err := checkPluginActionScope(spec, action); err != nil {
+			return err
+		}
 		return runPluginFlynnCommand(client, spec, action, rest)
 	}
 
@@ -185,6 +188,9 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 	if action == nil {
 		return fmt.Errorf("%s: no matching plugin CLI action", spec.Command)
 	}
+	if err := checkPluginActionScope(spec, action); err != nil {
+		return err
+	}
 	if strings.TrimSpace(action.Flynn) != "" {
 		return runPluginFlynnCommand(client, spec, action, extra)
 	}
@@ -204,6 +210,24 @@ func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.A
 	}
 	defer cleanup()
 	return runJob(client, *config)
+}
+
+// checkPluginActionScope enforces global -a / -r against the action's scope.
+// Cluster-wide actions have moved to flynn-host (no aliases). Account-scoped
+// actions reject -a / -r so nobody thinks they selected an app.
+func checkPluginActionScope(spec *plugin.CLI, action *plugin.CLIAction) error {
+	if spec == nil || action == nil {
+		return nil
+	}
+	switch action.EffectiveScope() {
+	case plugin.CLIScopeCluster:
+		return fmt.Errorf("%s is a flynn-host command; run `%s`", plugin.ColonName(spec.Command, action.Name), spec.HostRedirect(action))
+	case plugin.CLIScopeAccount:
+		if strings.TrimSpace(flagApp) != "" || strings.TrimSpace(flagRemote) != "" {
+			return fmt.Errorf("%s does not use an app", spec.Command)
+		}
+	}
+	return nil
 }
 
 func pluginDefaultArgs(spec *plugin.CLI, args []string) []string {
@@ -287,12 +311,13 @@ func pluginResourceMatches(spec *plugin.CLI, res *ct.Resource) bool {
 
 func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
 	appName := strings.TrimSpace(spec.App)
-	if action == nil || !action.Cluster || appName == "" {
+	system := action != nil && action.UsesSystemApp()
+	if !system || appName == "" {
 		appName = mustApp()
 	}
 	appRelease, err := client.GetAppRelease(appName)
 	if err != nil {
-		if action != nil && action.Cluster {
+		if system {
 			return nil, fmt.Errorf("error getting app release: %s", err)
 		}
 		if !isReleaseMissing(err) {
@@ -302,7 +327,7 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 	}
 
 	var resources []*ct.Resource
-	if action == nil || !action.Cluster {
+	if !system {
 		if list, lerr := client.AppResourceList(mustApp()); lerr == nil {
 			resources = list
 		}

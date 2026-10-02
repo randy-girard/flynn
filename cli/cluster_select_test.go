@@ -10,11 +10,11 @@ import (
 
 func resetCLIClusterState(t *testing.T) {
 	t.Helper()
-	prevConfig, prevCluster, prevFlagC, prevFlagA := config, clusterConf, flagCluster, flagApp
+	prevConfig, prevCluster, prevFlagC, prevFlagA, prevFlagR := config, clusterConf, flagCluster, flagApp, flagRemote
 	t.Cleanup(func() {
-		config, clusterConf, flagCluster, flagApp = prevConfig, prevCluster, prevFlagC, prevFlagA
+		config, clusterConf, flagCluster, flagApp, flagRemote = prevConfig, prevCluster, prevFlagC, prevFlagA, prevFlagR
 	})
-	config, clusterConf, flagCluster, flagApp = nil, nil, "", ""
+	config, clusterConf, flagCluster, flagApp, flagRemote = nil, nil, "", "", ""
 }
 
 func testClusters() (cloud, local *cfg.Cluster, conf *cfg.Config) {

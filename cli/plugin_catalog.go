@@ -81,6 +81,9 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		if !cmd.Runnable() {
 			continue
 		}
+		if !cmd.HasFlynnVisibleActions() {
+			continue
+		}
 		desc := cmd.Usage
 		if desc == "" {
 			desc = "plugin command"
@@ -150,6 +153,9 @@ func pluginActionNames(cmd plugin.CLI) []string {
 	seen := map[string]struct{}{}
 	for _, a := range cmd.Actions {
 		if strings.TrimSpace(a.Name) == "" {
+			continue
+		}
+		if a.EffectiveScope() == plugin.CLIScopeCluster {
 			continue
 		}
 		name := pluginColonName(cmd.Command, a.Name)

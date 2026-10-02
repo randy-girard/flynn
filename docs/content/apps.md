@@ -117,9 +117,11 @@ same git repository but with different remotes:
 
 ```
 flynn apps:create myapp-staging --remote staging
-flynn -a staging env:set FOO=bar
+flynn -r staging env:set FOO=bar
 git push staging staging:master
 ```
+
+`-a` still accepts a remote name when `-r` is omitted (`flynn -a staging env:set FOO=bar`). If both are given they must name the same app.
 
 ### GitHub deploys
 

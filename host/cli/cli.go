@@ -46,7 +46,7 @@ func Run(name string, args []string) error {
 
 	cmd, ok := commands[name]
 	if !ok {
-		return ErrInvalidCommand
+		return runHostPluginCommand(name, args)
 	}
 	if WantsHelp(args) {
 		fmt.Fprint(os.Stdout, FormatHelp(name))

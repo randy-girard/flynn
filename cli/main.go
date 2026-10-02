@@ -26,17 +26,23 @@ import (
 var (
 	flagCluster = os.Getenv("FLYNN_CLUSTER")
 	flagApp     string
+	flagRemote  string
 )
+
+// lookupGitRemoteApp resolves a git remote name to a Flynn app. Tests replace
+// this so precedence checks do not need a real repo.
+var lookupGitRemoteApp = appFromGitRemote
 
 // cliUsage is the root flynn parse string. Command is optional so `flynn`,
 // `flynn -h`, and `flynn --help` reach formatRootHelp instead of docopt
 // printing this string and exiting (which omitted installed plugin CLIs).
 // The Commands list is generated from registered parent commands.
 var cliUsage = `
-usage: flynn [-h] [-a <app>] [-c <cluster>] [<command>] [<args>...]
+usage: flynn [-h] [-a <app>] [-r <remote>] [-c <cluster>] [<command>] [<args>...]
 
 Options:
 	-a <app>
+	-r <remote>
 	-c <cluster>
 	-h, --help
 `[1:]
@@ -129,17 +135,42 @@ func applyGlobalFlags(args *docopt.Args) error {
 	if args.String["-c"] != "" {
 		flagCluster = args.String["-c"]
 	}
-	flagApp = args.String["-a"]
-	if flagApp == "" {
+	flagApp = strings.TrimSpace(args.String["-a"])
+	flagRemote = strings.TrimSpace(args.String["-r"])
+	if flagApp == "" && flagRemote == "" {
 		return nil
 	}
 	if err := readConfig(); err != nil {
 		return err
 	}
-	if ra, err := appFromGitRemote(flagApp); err == nil {
-		if err := bindGitRemoteApp(ra); err != nil {
+	return bindFlagAppAndRemote()
+}
+
+// bindFlagAppAndRemote applies -a / -r. -a is an app name; -r is a git remote
+// in the current repo. If both are set they must name the same app (and its
+// cluster must match -c). -a still accepts a remote name when -r is omitted,
+// matching the historical flynn -a <remote> shortcut.
+func bindFlagAppAndRemote() error {
+	appName := strings.TrimSpace(flagApp)
+	remoteName := strings.TrimSpace(flagRemote)
+	if remoteName != "" {
+		ra, err := lookupGitRemoteApp(remoteName)
+		if err != nil {
 			return err
 		}
+		if ra == nil {
+			return fmt.Errorf("could not find app from git remote %q", remoteName)
+		}
+		if appName != "" && ra.Name != appName {
+			return fmt.Errorf("git remote %q is app %q, not %q", remoteName, ra.Name, appName)
+		}
+		return bindGitRemoteApp(ra)
+	}
+	if appName == "" {
+		return nil
+	}
+	if ra, err := lookupGitRemoteApp(appName); err == nil && ra != nil {
+		return bindGitRemoteApp(ra)
 	}
 	return nil
 }
@@ -418,15 +449,61 @@ func app() (string, error) {
 	if flagApp != "" {
 		return flagApp, nil
 	}
-	if app := os.Getenv("FLYNN_APP"); app != "" {
-		flagApp = app
-		return app, nil
+	if strings.TrimSpace(flagRemote) != "" {
+		if err := readConfig(); err != nil {
+			return "", err
+		}
+		if err := bindFlagAppAndRemote(); err != nil {
+			return "", err
+		}
+		if flagApp != "" {
+			return flagApp, nil
+		}
+	}
+	envApp := strings.TrimSpace(os.Getenv("FLYNN_APP"))
+	envRemote := strings.TrimSpace(os.Getenv("FLYNN_REMOTE"))
+	if envApp != "" && envRemote != "" {
+		if err := readConfig(); err != nil {
+			return "", err
+		}
+		ra, err := lookupGitRemoteApp(envRemote)
+		if err != nil {
+			return "", err
+		}
+		if ra != nil && ra.Name != envApp {
+			return "", fmt.Errorf("git remote %q is app %q, not %q", envRemote, ra.Name, envApp)
+		}
+		if ra != nil {
+			if err := bindGitRemoteApp(ra); err != nil {
+				return "", err
+			}
+			return flagApp, nil
+		}
+		flagApp = envApp
+		return envApp, nil
+	}
+	if envApp != "" {
+		flagApp = envApp
+		return envApp, nil
+	}
+	if envRemote != "" {
+		if err := readConfig(); err != nil {
+			return "", err
+		}
+		ra, err := lookupGitRemoteApp(envRemote)
+		if err != nil {
+			return "", err
+		}
+		if err := bindGitRemoteApp(ra); err != nil {
+			return "", err
+		}
+		return flagApp, nil
 	}
 	if err := readConfig(); err != nil {
 		return "", err
 	}
 
-	ra, err := appFromGitRemote(remoteFromGitConfig())
+	ra, err := lookupGitRemoteApp(remoteFromGitConfig())
 	if err != nil {
 		return "", err
 	}

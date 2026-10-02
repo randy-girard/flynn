@@ -76,10 +76,18 @@ List and switch clusters with `flynn cluster` and `flynn cluster:default <name>`
 ## Usage
 
 ```text
-flynn [-a <app>] [-c <cluster>] [<command>] [<args>...]
+flynn [-a <app>] [-r <remote>] [-c <cluster>] [<command>] [<args>...]
 ```
 
-`-a` selects an app. Many commands also read the `flynn` git remote in the current directory.
+Global options go **before** the command. After the command they belong to that command (`flynn ps -a` lists all jobs, `flynn scale -r <release>` is a release, `flynn log -r` is raw output).
+
+| Option | Meaning |
+| --- | --- |
+| `-a <app>` | App name for this invocation |
+| `-r <remote>` | Git remote in the current repo; app and cluster come from that remote's URL |
+| `-c <cluster>` | Cluster in `~/.flynnrc` |
+
+Precedence (highest first): `-a`, `-r`, `FLYNN_APP`, `FLYNN_REMOTE`, `git config flynn.remote`, the single Flynn remote in the working repo. Flags beat environment, and for each pair the app name beats the remote. If `-a` and `-r` disagree (or `FLYNN_APP` and `FLYNN_REMOTE` disagree), the command fails. `-r` supplies the cluster when `-c` is not given. App-scoped plugin commands (`pg:psql`, `redis`, `scheduler`, …) honour the same overrides. Account-scoped commands (`pipeline`, `enterprise org`, …) reject `-a` / `-r`. Cluster-wide plugin commands (`billing`, `enterprise license`, …) live on `flynn-host`.
 
 Run `flynn` or `flynn --help` for parent commands (including installed plugins under **Plugins:**). `flynn help env` or `flynn env --help` lists that command and its subcommands. Every command also accepts `:help` as `--help` (`flynn env:help`) and `:list` as the bare command (`flynn env:list` is `flynn env`). The same shape applies to plugins: `flynn help redis` / `flynn redis --help` / `flynn redis:help` lists `dump`, `cli`, and `restore`; `flynn redis` and `flynn redis:list` list that app's redis resources. `flynn plugin` / `flynn plugin:list` shows what the current cluster credential can see.
 
@@ -91,7 +99,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `stack` / `stack:set heroku-24\|container` | Buildpack vs Dockerfile `git push` |
 | `git:remote` | Add or replace the `flynn` git remote for the current app |
 | `github` / `github:connect` / `github:deploy` / `github:set` / `github:disconnect` | Connect a GitHub repo and deploy through taffy (requires `flynn-host plugin:install github`) |
-| `pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:remove` / `pipeline:info` / `pipeline:delete` / `pipeline:set` / `pipeline:promotions` / `pipeline:preview` / `pipeline:promote` | Environments and artifact promotion (requires `flynn-host plugin:install pipeline`). Cluster commands take a pipeline name or id; `pipeline:promote` uses `-a` for the source app. |
+| `pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:remove` / `pipeline:info` / `pipeline:delete` / `pipeline:set` / `pipeline:promotions` / `pipeline:preview` / `pipeline:promote` | Environments and artifact promotion (requires `flynn-host plugin:install pipeline`). Account-scoped commands take a pipeline name or id and reject `-a` / `-r`; `pipeline:promote` uses `-a` for the source app. |
 | `docker:push` / `docker:login` / `docker:logout` / `docker:set-push-url` | Deploy a local Docker image through tarreceive; manage the push URL and its credentials |
 | `release` / `release:show` / `release:add` / `release:update` / `release:rollback` / `release:destroy` | Release history, inspect or edit release JSON, roll back, delete |
 | `deploy` / `deploy:timeout` / `deploy:batch-size` | Deploy history and per-app deploy settings (`deployment` is an alias) |
@@ -164,17 +172,18 @@ aliases and are still enforced on tokens; composing new bundles is an
 enterprise-plugin feature. Install it from the catalog
 (`sudo flynn-host plugin:install enterprise`) or a checkout
 (`sudo flynn-host plugin:install ../flynn-plugin-enterprise`). After install,
-`flynn enterprise`, `enterprise:role-add`, `enterprise:sso-set`, and
-`enterprise:audit` manage custom roles, OIDC, and the audit log. The dashboard
+`flynn enterprise org` / `team` / `list` manage organizations and Enterprise
+accounts (account-scoped; they reject `-a` / `-r`). License, SSO, custom roles,
+audit, and policy are `flynn-host enterprise` commands. The dashboard
 **Cluster → Enterprise** pages host that UI. On Flynn hosted, a paid **billing**
 plan that includes `rbac`/`sso` can unlock those features without pasting a
 `flynn-ent` key. `cluster:admin` (the controller
 key, or a dashboard cluster administrator) is not an app role; it bypasses app
 grants.
 
-Hosted billing (`flynn billing`, **Cluster → Billing**) is a private plugin.
+Hosted billing (`flynn-host billing`, **Cluster → Billing**) is a private plugin.
 It is not in `plugin:install billing`; install `../flynn-plugin-billing` on
-company-operated clusters only.
+company-operated clusters only. `flynn billing` prints the `flynn-host` equivalent.
 
 ### Logs
 
@@ -239,6 +248,8 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `letsencrypt` / `letsencrypt:configure` / `letsencrypt:status` / `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:enable-system-routes` / `letsencrypt:disable-system-routes` | Let's Encrypt account, cluster ACME on/off, and system-route TLS (`acme:*` remains as an alias) |
 | `blobstore` / `blobstore:status` / `blobstore:set` / `blobstore:credentials` / `blobstore:migrate` | Inspect the blobstore backend, switch to S3-compatible storage, rotate access keys, migrate objects (`--delete` removes them from the old backend). Writes `BACKEND_<name>` and `DEFAULT_BACKEND` on the blobstore app. |
 | `github` / `github:setup` / `github:configure` / `github:status` / `github:disable` | Cluster GitHub App credentials (dashboard and `flynn github:*` need `plugin:install github`) |
+| `enterprise` / `enterprise:license` / `enterprise:sso` / `enterprise:roles` / `enterprise:audit` / `enterprise:policy` / `enterprise:support` | Cluster license, SSO, custom roles, audit, and policy (requires `plugin:install enterprise`). Organizations and Enterprise accounts stay on `flynn enterprise org` / `team`. |
+| `billing` / `billing:processor` / `billing:plans` / `billing:catalog` / `billing:subscribe` / `billing:usage` | Hosted Stripe billing (private plugin; install from a path). `flynn billing` is not an alias. |
 | `runtime` / `runtime:create` / `runtime:update` / `runtime:remove` / `runtime:allow-custom` / `runtime:reserve` | Named CPU/memory runtimes for **app processes** (`small`/`medium`/`large` plus custom). New runtimes share host capacity (caps only). `runtime:create --reserve` or `runtime:reserve <id>` guarantees Request on the host for that runtime. This is not the database instance catalog. |
 | `db-runtime` / `db-runtime:create` / `db-runtime:update` / `db-runtime:remove` / `db-runtime:ensure` / `db-runtime:drop-engine` / `db-runtime:allow-custom` | CPU, memory, and disk presets per database engine, published when that database plugin is installed. Not app process runtimes. flynn-host is allowed because it is on the cluster. Plugin install/uninstall hooks call `ensure` / `drop-engine`. The dashboard can create a custom runtime only for a cluster admin. |
 | `firewall` / `firewall:sync` / `firewall:peer:add` / `firewall:peer:remove` / `firewall:expose` / `firewall:unexpose` | Host UFW peer IPs and extra TCP ports (datastore exports) |

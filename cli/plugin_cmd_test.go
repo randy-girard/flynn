@@ -312,6 +312,59 @@ func TestPluginJobConfigClusterUsesPluginApp(t *testing.T) {
 	if cfg.App != "enterprise" || cfg.Release != "ent-rel" {
 		t.Fatalf("%+v", cfg)
 	}
+
+	account := &plugin.CLI{
+		Command: "pipeline",
+		App:     "pipeline-plugin",
+		Actions: []plugin.CLIAction{{
+			Name:  "create",
+			Args:  []string{"/bin/pipeline-cli"},
+			Scope: plugin.CLIScopeAccount,
+		}},
+	}
+	cfg, err = pluginJobConfig(fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"pipeline-plugin": {ID: "pipe-rel"},
+	}}, account, account.Action("create"), &docopt.Args{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "pipeline-plugin" || cfg.Release != "pipe-rel" {
+		t.Fatalf("account scope must use plugin app: %+v", cfg)
+	}
+}
+
+func TestCheckPluginActionScope(t *testing.T) {
+	oldApp, oldRemote := flagApp, flagRemote
+	t.Cleanup(func() { flagApp, flagRemote = oldApp, oldRemote })
+
+	pipe := &plugin.CLI{Command: "pipeline", Actions: []plugin.CLIAction{{Name: "create", Scope: plugin.CLIScopeAccount}}}
+	flagApp, flagRemote = "", ""
+	if err := checkPluginActionScope(pipe, pipe.Action("create")); err != nil {
+		t.Fatal(err)
+	}
+	flagApp = "shop"
+	err := checkPluginActionScope(pipe, pipe.Action("create"))
+	if err == nil || !strings.Contains(err.Error(), "pipeline does not use an app") {
+		t.Fatalf("account -a: %v", err)
+	}
+	flagApp, flagRemote = "", "staging"
+	err = checkPluginActionScope(pipe, pipe.Action("create"))
+	if err == nil || !strings.Contains(err.Error(), "pipeline does not use an app") {
+		t.Fatalf("account -r: %v", err)
+	}
+
+	ent := &plugin.CLI{Command: "enterprise", Actions: []plugin.CLIAction{{Name: "license", Scope: plugin.CLIScopeCluster}}}
+	flagApp, flagRemote = "", ""
+	err = checkPluginActionScope(ent, ent.Action("license"))
+	if err == nil || !strings.Contains(err.Error(), "flynn-host enterprise license") {
+		t.Fatalf("cluster redirect: %v", err)
+	}
+
+	redis := redisPluginCLI()
+	flagApp = "shop"
+	if err := checkPluginActionScope(redis, redis.Action("redis-cli")); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPluginJobConfigErrors(t *testing.T) {

@@ -186,8 +186,11 @@ type CLIAction struct {
 	// Flynn, if set, runs that built-in flynn command against the plugin
 	// app instead of starting a cluster job. Mutually exclusive with Args.
 	Flynn string `json:"flynn,omitempty"`
-	// Cluster runs the catalog job against the plugin system app instead of
-	// requiring flynn -a on the user's current app (enterprise, pipeline).
+	// Scope is app, account, or cluster. Empty defaults to app, or to
+	// cluster when the legacy Cluster flag is true.
+	Scope CLIScope `json:"scope,omitempty"`
+	// Cluster is the legacy flag for system-app jobs. Prefer Scope.
+	// cluster:true with no scope is treated as scope:cluster.
 	Cluster bool `json:"cluster,omitempty"`
 }
 
@@ -434,6 +437,9 @@ func (m *Manifest) Validate() error {
 	}
 	if m.CLI != nil {
 		for i, a := range m.CLI.Actions {
+			if err := m.CLI.Actions[i].normalizeScope(); err != nil {
+				return fmt.Errorf("%s: cli.actions[%d]: %w", ManifestName, i, err)
+			}
 			flynnCmd := strings.TrimSpace(a.Flynn)
 			if flynnCmd == "" {
 				continue

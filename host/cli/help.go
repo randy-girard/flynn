@@ -84,7 +84,10 @@ func KnownHelpTopic(name string) bool {
 	if _, ok := hyphenAliases[name]; ok {
 		return true
 	}
-	return clihelp.HasChildren(registeredHelpNames(), name)
+	if clihelp.HasChildren(registeredHelpNames(), name) {
+		return true
+	}
+	return formatHostPluginHelp(name) != ""
 }
 
 // RootHelp is printed for `flynn-host`, `flynn-host help`, and `flynn-host --help`.
@@ -117,6 +120,22 @@ func RootHelp() string {
 			continue
 		}
 		add(&core, name, clihelp.ShortDescription(commandUsage(name)))
+	}
+	for _, spec := range installedClusterPluginCLIs() {
+		if spec == nil || spec.Command == "" {
+			continue
+		}
+		if _, ok := hostPluginCommand[spec.Command]; ok {
+			continue
+		}
+		if commands[spec.Command] != nil {
+			continue
+		}
+		desc := spec.Usage
+		if desc == "" {
+			desc = spec.Command + " plugin"
+		}
+		add(&plug, spec.Command, desc)
 	}
 	sort.Slice(core, func(i, j int) bool { return core[i].Name < core[j].Name })
 	sort.Slice(plug, func(i, j int) bool { return plug[i].Name < plug[j].Name })
@@ -154,6 +173,8 @@ func FormatHelp(name string) string {
 	if cmd := commands[name]; cmd != nil {
 		b.WriteString(strings.TrimRight(cmd.usage, "\n"))
 		b.WriteByte('\n')
+	} else if pluginHelp := formatHostPluginHelp(name); pluginHelp != "" {
+		return pluginHelp
 	} else {
 		fmt.Fprintf(&b, "usage: flynn-host %s\n", name)
 		if clihelp.HasChildren(registeredHelpNames(), name) {
