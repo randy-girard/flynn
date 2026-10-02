@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -205,12 +206,7 @@ func New(connPool *pgx.ConnPool, conf *Conf) *DB {
 
 func Wait(conf *Conf, afterConn func(*pgx.Conn) error) *DB {
 	if conf == nil {
-		conf = &Conf{
-			Service:  os.Getenv("FLYNN_POSTGRES"),
-			User:     os.Getenv("PGUSER"),
-			Password: os.Getenv("PGPASSWORD"),
-			Database: os.Getenv("PGDATABASE"),
-		}
+		conf = confFromEnv()
 	}
 	if conf.Discoverd == nil {
 		conf.Discoverd = discoverd.DefaultClient
@@ -386,6 +382,67 @@ func IsPostgresCode(err error, code string) bool {
 		return true
 	}
 	return false
+}
+
+// confFromEnv is Wait(nil): libpq PG* vars, then DATABASE_URL. Resource
+// attachments no longer copy PGUSER onto the app (MergeAttachment keeps
+// connection info in *_URL), so blobstore/controller must read DATABASE_URL
+// or they connect as the container user (root) and panic on 28P01.
+func confFromEnv() *Conf {
+	conf := &Conf{
+		Service:  os.Getenv("FLYNN_POSTGRES"),
+		User:     os.Getenv("PGUSER"),
+		Password: os.Getenv("PGPASSWORD"),
+		Database: os.Getenv("PGDATABASE"),
+	}
+	fillConfFromDatabaseURL(conf, envDatabaseURL())
+	return conf
+}
+
+func envDatabaseURL() string {
+	for _, k := range []string{"DATABASE_URL", "POSTGRES_URL"} {
+		if v := strings.TrimSpace(os.Getenv(k)); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func fillConfFromDatabaseURL(conf *Conf, raw string) {
+	if conf == nil {
+		return
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return
+	}
+	if conf.User == "" {
+		conf.User = u.User.Username()
+	}
+	if conf.Password == "" {
+		if p, ok := u.User.Password(); ok {
+			conf.Password = p
+		}
+	}
+	if conf.Database == "" {
+		db := strings.TrimPrefix(u.Path, "/")
+		if i := strings.IndexByte(db, '/'); i >= 0 {
+			db = db[:i]
+		}
+		conf.Database = db
+	}
+	if conf.Service == "" {
+		conf.Service = serviceFromPostgresHost(u.Hostname())
+	}
+}
+
+func serviceFromPostgresHost(host string) string {
+	host = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(host)), ".discoverd")
+	return strings.TrimPrefix(host, "leader.")
 }
 
 // sireniaMetaReady reports whether discoverd postgres service metadata indicates
