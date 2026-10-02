@@ -104,4 +104,8 @@ func TestFormatItems(t *testing.T) {
 			t.Fatalf("missing %q:\n%s", want, got)
 		}
 	}
+	wide := strings.TrimRight(FormatItemsWidth([]Item{{Name: "pg", Desc: "manage postgres"}}, 13), "\n")
+	if col := strings.Index(wide, "manage"); col != 2+13+2 {
+		t.Fatalf("desc column %d want %d: %q", col, 2+13+2, wide)
+	}
 }

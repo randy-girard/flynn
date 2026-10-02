@@ -101,7 +101,7 @@ func appendCatalogCommands(usage string, cat *plugin.Catalog, catErr error) stri
 		return usage
 	}
 	sort.Slice(extra, func(i, j int) bool { return extra[i].Name < extra[j].Name })
-	formatted := strings.TrimRight(clihelp.FormatItems(extra), "\n")
+	formatted := strings.TrimRight(clihelp.FormatItemsWidth(extra, usageNameColumnWidth(usage)), "\n")
 	section := []string{"", "Plugins:"}
 	section = append(section, strings.Split(formatted, "\n")...)
 	section = append(section, "")
@@ -191,4 +191,16 @@ func usageCommandNames(usage string) map[string]struct{} {
 		}
 	}
 	return present
+}
+
+// usageNameColumnWidth is the Commands list name pad so Plugins rows line
+// up with whoami / collaborator instead of shrinking to "pg".
+func usageNameColumnWidth(usage string) int {
+	width := 8
+	for name := range usageCommandNames(usage) {
+		if n := len(name); n > width {
+			width = n
+		}
+	}
+	return width
 }

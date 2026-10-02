@@ -273,6 +273,38 @@ func TestMergePluginUsageAddsRedisToRootUsage(t *testing.T) {
 	}
 }
 
+func TestMergePluginUsageAlignsPgWithCommands(t *testing.T) {
+	cat := &plugin.Catalog{Commands: []plugin.CLI{
+		{
+			Command: "pg",
+			Usage:   "manage an isolated postgres instance",
+			Doc:     "usage: flynn pg psql",
+			Actions: []plugin.CLIAction{{Name: "psql", Args: []string{"psql"}}},
+		},
+	}}
+	got := mergePluginUsage(formatCoreRootHelp(), cat, nil)
+	assertPluginHelpSection(t, got, "pg")
+	whoami := helpDescColumn(got, "whoami")
+	pg := helpDescColumn(got, "pg")
+	if whoami < 0 || pg < 0 {
+		t.Fatalf("missing whoami or pg rows:\n%s", got)
+	}
+	if whoami != pg {
+		t.Fatalf("pg description column %d, whoami %d (must match Commands):\n%s", pg, whoami, got)
+	}
+}
+
+func helpDescColumn(help, cmd string) int {
+	for _, line := range strings.Split(help, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != cmd {
+			continue
+		}
+		return strings.Index(line, fields[1])
+	}
+	return -1
+}
+
 func assertPluginHelpSection(t *testing.T, got, cmd string) {
 	t.Helper()
 	idxCommands := strings.Index(got, "Commands:")

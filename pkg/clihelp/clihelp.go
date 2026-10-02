@@ -181,14 +181,29 @@ func CommandDescriptions(doc string) map[string]string {
 
 // FormatItems renders an aligned two-column command list.
 func FormatItems(items []Item) string {
-	if len(items) == 0 {
-		return ""
-	}
+	return FormatItemsWidth(items, 8)
+}
+
+// NameColumnWidth is the name pad used by FormatItems (at least 8).
+func NameColumnWidth(items []Item) int {
 	width := 8
 	for _, it := range items {
 		if n := len(it.Name); n > width {
 			width = n
 		}
+	}
+	return width
+}
+
+// FormatItemsWidth is FormatItems with a minimum name column so a short
+// list (Plugins: pg) can line up with a longer Commands list (whoami).
+func FormatItemsWidth(items []Item, minWidth int) string {
+	if len(items) == 0 {
+		return ""
+	}
+	width := NameColumnWidth(items)
+	if minWidth > width {
+		width = minWidth
 	}
 	var b strings.Builder
 	for _, it := range items {
