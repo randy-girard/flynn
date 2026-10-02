@@ -62,7 +62,10 @@ $ flynn resource:add postgres
 ```
 
 That creates one isolated instance named `postgresql-<word>-<5 digits>` and
-sets `FLYNN_POSTGRESQL_<COLOR>_URL` on the app. It does not
+one logical database with a random alphanumeric name. The provision sets
+`FLYNN_POSTGRESQL_<COLOR>_URL` and also `DATABASE_URL` when the app does not
+already have it. Attaching an existing resource to another app sets only the
+color URL (or `--as NAME_URL`). It does not
 create a role on the platform server, and the URL is not the platform
 appliance superuser. Install the plugin with `flynn-host plugin:install postgres`
 first. Until then the command fails.

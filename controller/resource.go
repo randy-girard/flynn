@@ -140,7 +140,7 @@ func provisionAs(config []byte) string {
 }
 
 // provisionConfigWithApp stamps the tenant app name so database plugins attach
-// the same way as `flynn resource:add` (name, role, FLYNN_POSTGRESQL_<COLOR>_URL).
+// the same way as `flynn resource:add` (name, role, FLYNN_POSTGRESQL_<COLOR>_URL, and DATABASE_URL when free).
 func provisionConfigWithApp(config []byte, app *ct.App) []byte {
 	if app == nil || strings.TrimSpace(app.Name) == "" {
 		return config

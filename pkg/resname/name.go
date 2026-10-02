@@ -8,6 +8,7 @@ package resname
 
 import (
 	"crypto/rand"
+	"sort"
 	"strings"
 )
 
@@ -197,13 +198,15 @@ func conventionalURL(k string) bool {
 }
 
 // MergeAttachment copies a provision response onto an app.
-// Postgres gets FLYNN_POSTGRESQL_<COLOR>_URL (a color not already taken
-// on the app), or --as NAME which becomes NAME_URL (a color short name
-// becomes FLYNN_POSTGRESQL_<COLOR>_URL). Other engines get
-// PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's usual URL when unused,
-// plus --as NAME_URL. Host, user, password, and FLYNN_* identity keys stay
-// on the resource record, not the app.
-func MergeAttachment(existing, incoming map[string]string, as string) map[string]string {
+// Every postgres provision and attach sets FLYNN_POSTGRESQL_<COLOR>_URL unless
+// --as names the attachment (NAME_URL, or FLYNN_POSTGRESQL_<COLOR>_URL when
+// --as is a color). A new provision also sets DATABASE_URL when that key is
+// free. Attaching an existing resource never sets DATABASE_URL. Incoming color
+// URLs are reused so the resource record and app release share one color key.
+// Other engines get PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's usual URL
+// when unused, plus --as NAME_URL. Host, user, password, and FLYNN_* identity
+// keys stay on the resource record, not the app.
+func MergeAttachment(existing, incoming map[string]string, as string, newProvision bool) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
 		return out
@@ -218,8 +221,19 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 	}
 	postgres := strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != ""
 	if postgres {
-		if key := PostgresAttachmentURLKey(as, taken); key != "" {
+		if strings.TrimSpace(as) != "" {
+			if key := PostgresAttachmentURLKey(as, taken); key != "" {
+				out[key] = url
+			}
+		} else if !postgresColorAlreadySet(existing, url) {
+			key := reuseIncomingPostgresColor(incoming, taken)
+			if key == "" {
+				key = ColorDatabaseURL(taken)
+			}
 			out[key] = url
+		}
+		if newProvision && !taken("DATABASE_URL") {
+			out["DATABASE_URL"] = url
 		}
 	} else {
 		if key := ExtraDatabaseURL(name, taken); key != "" {
@@ -233,6 +247,29 @@ func MergeAttachment(existing, incoming map[string]string, as string) map[string
 		}
 	}
 	return out
+}
+
+func postgresColorAlreadySet(existing map[string]string, url string) bool {
+	for k, v := range existing {
+		if v == url && PostgresColorURLKey(k) {
+			return true
+		}
+	}
+	return false
+}
+
+func reuseIncomingPostgresColor(incoming map[string]string, taken func(string) bool) string {
+	var keys []string
+	for k := range incoming {
+		if PostgresColorURLKey(k) && (taken == nil || !taken(k)) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
 }
 
 // EnvPrefix is the env stem for a resource app name (pg-willow-acmaos →
@@ -319,14 +356,15 @@ func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) ma
 }
 
 // ResourceEnv is the env stored on the controller resource record.
-// MergeAttachment is what the app release gets (FLYNN_POSTGRESQL_<COLOR>_URL
-// for postgres, or scoped *_DATABASE_URL plus the conventional URL for other
-// engines). The resource itself keeps instance identity (FLYNN_POSTGRES, role)
-// so the dashboard and pg:psql can find it. Split
-// PGHOST/PGUSER/PGPASSWORD/PGDATABASE keys and POSTGRES_URL stay off the
-// resource; conventional app URLs are not copied onto a later resource.
+// MergeAttachment is what the app release gets (the attachment color or --as
+// URL, plus DATABASE_URL on a new provision when that key is free). The
+// resource itself keeps instance identity (FLYNN_POSTGRES, role) so the
+// dashboard and pg:psql can find it. Extra incoming *_URL keys that the app
+// did not receive are dropped so the resource page and env page show the same
+// attachment. Split PGHOST/PGUSER/PGPASSWORD/PGDATABASE keys and POSTGRES_URL
+// stay off the resource.
 func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
-	merged := MergeAttachment(existing, incoming, as)
+	merged := MergeAttachment(existing, incoming, as, true)
 	if len(incoming) == 0 {
 		return merged
 	}
@@ -337,6 +375,11 @@ func ResourceEnv(existing, incoming map[string]string, as string) map[string]str
 	for k, v := range incoming {
 		if strings.TrimSpace(v) == "" || conventionalURL(k) || splitCredentialKey(k) || k == "POSTGRES_URL" {
 			continue
+		}
+		if strings.HasSuffix(k, "_URL") {
+			if _, ok := merged[k]; !ok {
+				continue
+			}
 		}
 		out[k] = v
 	}
@@ -429,8 +472,24 @@ func ColorDatabaseURL(taken func(string) bool) string {
 	return postgresAttachPrefix + attachmentColors[start] + "_X_URL"
 }
 
-// PostgresAttachmentURLKey is the env var for one postgres attach. --as uses
-// the same short name and appends _URL. A color (AMBER) or
+// PostgresAppURLKey is the attachment env var for one postgres attach onto an
+// app. With no --as, that is FLYNN_POSTGRESQL_<COLOR>_URL (reusing an incoming
+// color when unused). --as NAME is NAME_URL (a color short name becomes
+// FLYNN_POSTGRESQL_<COLOR>_URL). DATABASE_URL is added separately by
+// MergeAttachment on a new provision when that key is free.
+func PostgresAppURLKey(as string, incoming map[string]string, taken func(string) bool) string {
+	as = strings.TrimSpace(as)
+	if as != "" {
+		return PostgresAttachmentURLKey(as, taken)
+	}
+	if key := reuseIncomingPostgresColor(incoming, taken); key != "" {
+		return key
+	}
+	return ColorDatabaseURL(taken)
+}
+
+// PostgresAttachmentURLKey is the env var for one postgres --as attach. --as
+// uses the same short name and appends _URL. A color (AMBER) or
 // FLYNN_POSTGRESQL_AMBER becomes FLYNN_POSTGRESQL_AMBER_URL. Other names
 // become NAME_URL. With no --as, a free color is chosen.
 func PostgresAttachmentURLKey(as string, taken func(string) bool) string {

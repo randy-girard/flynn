@@ -43,9 +43,10 @@ and redis --follow creates a replica resource of that instance. Kafka and
 mongodb --join starts another Flynn job on that existing cluster (any member
 name works; --follow is accepted as an alias). ClickHouse --follow still copies
 onto a separate resource. The platform postgres appliance at
-postgres-api.discoverd is not used. Postgres attaches as FLYNN_POSTGRESQL_<COLOR>_URL
-(a color not already taken on the app). --as ANALYTICS sets only ANALYTICS_URL.
---as AMBER (or FLYNN_POSTGRESQL_AMBER) sets FLYNN_POSTGRESQL_AMBER_URL.
+postgres-api.discoverd is not used. Every postgres provision sets
+FLYNN_POSTGRESQL_<COLOR>_URL unless --as names the attachment
+(--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_POSTGRESQL_AMBER_URL).
+A new provision also sets DATABASE_URL when that key is free.
 
 Options:
 	--as=<name>              attachment env name (postgres adds _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL)
@@ -67,9 +68,10 @@ Examples:
 usage: flynn resource:attach <provider> <resource> [--as <name>]
 
 Attach an existing resource to this app. The resource must already exist on
-another app in the same account. Postgres attaches as FLYNN_POSTGRESQL_<COLOR>_URL
-(a color not already taken on this app). --as NAME becomes NAME_URL; a color
-short name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL.
+another app in the same account. Postgres sets FLYNN_POSTGRESQL_<COLOR>_URL
+unless --as names the attachment (--as NAME becomes NAME_URL; a color short
+name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL). Attaching an existing
+resource does not set DATABASE_URL.
 
 <resource> is the NAME or ID from flynn resource. The same resource can attach
 to several apps. Only the app that provisioned it may delete it; this app
@@ -189,7 +191,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 
-	env := appliedAttachmentEnv(client, res.Env, args.String["--as"])
+	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], true)
 
 	if _, err := setEnv(client, "", env); err != nil {
 		return err
@@ -475,12 +477,12 @@ func databaseProvisionConfig(provider, as, follow, join, runtime, replication, c
 	return &msg, nil
 }
 
-func appliedAttachmentEnv(client controller.Client, incoming map[string]string, as string) map[string]*string {
+func appliedAttachmentEnv(client controller.Client, incoming map[string]string, as string, newProvision bool) map[string]*string {
 	existing := map[string]string{}
 	if release, err := client.GetAppRelease(mustApp()); err == nil && release != nil && release.Env != nil {
 		existing = release.Env
 	}
-	merged := resname.MergeAttachment(existing, incoming, as)
+	merged := resname.MergeAttachment(existing, incoming, as, newProvision)
 	env := make(map[string]*string, len(merged))
 	for k, v := range merged {
 		s := v
@@ -532,7 +534,7 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	env := appliedAttachmentEnv(client, res.Env, args.String["--as"])
+	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], false)
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err

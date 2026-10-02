@@ -59,9 +59,12 @@ read the other instance. Sirenia is not started. The command waits until the
 new instance has finished `initdb` and registered in discoverd (up to five
 minutes on a new volume).
 
-`--as ANALYTICS` sets only `ANALYTICS_URL`. The default attachment is
-`FLYNN_POSTGRESQL_<COLOR>_URL` (a color not already taken on the app).
-`--as AMBER` sets `FLYNN_POSTGRESQL_AMBER_URL`. `flynn resource:attach` /
+`--as ANALYTICS` sets `ANALYTICS_URL`. A new provision also sets
+`DATABASE_URL` when the app does not already have it. Every provision and
+attach sets `FLYNN_POSTGRESQL_<COLOR>_URL` unless `--as` names the attachment.
+`--as AMBER` sets `FLYNN_POSTGRESQL_AMBER_URL`. Attaching an existing resource
+does not set `DATABASE_URL`. The first logical database on
+a new instance is a random alphanumeric name. `flynn resource:attach` /
 `flynn resource:detach` add and
 remove that variable. The same resource can attach to several apps under
 different names. `flynn env:set` of an attached `*_URL` is rejected while it
@@ -99,10 +102,12 @@ They are not built into the `flynn` CLI.
 
 ### Connecting to the database
 
-A provisioned plugin database adds one environment variable to the app
-release: `FLYNN_POSTGRESQL_<COLOR>_URL`, or `<NAME>_URL` when you pass
-`--as <NAME>` (a color short name such as `AMBER` becomes
-`FLYNN_POSTGRESQL_AMBER_URL`). That
+A provisioned plugin database adds environment variables to the app
+release: `FLYNN_POSTGRESQL_<COLOR>_URL` unless `--as <NAME>` names the
+attachment (`<NAME>_URL`, or `FLYNN_POSTGRESQL_<COLOR>_URL` when `--as` is a
+color short name such as `AMBER`). A new provision also sets `DATABASE_URL`
+when the app does not already have it. Attaching an existing resource does
+not set `DATABASE_URL`. That
 URL is a role on this instance, not the platform appliance superuser. New
 URLs use `sslmode=require`. The platform appliance enables
 `ssl=on` with a cluster-generated server certificate (SANs include

@@ -2,6 +2,7 @@ package resname
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -33,13 +34,12 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 		"PGUSER":         "app",
 		"PGPASSWORD":     "secret",
 	}
-	first := MergeAttachment(nil, firstIn, "")
-	firstKey := postgresColorKey(first)
-	if firstKey == "" || first[firstKey] != "postgres://first" {
-		t.Fatalf("first postgres: %#v", first)
+	first := MergeAttachment(nil, firstIn, "", true)
+	if first["DATABASE_URL"] != "postgres://first" {
+		t.Fatalf("new provision must set DATABASE_URL: %#v", first)
 	}
-	if first["DATABASE_URL"] != "" {
-		t.Fatalf("postgres must not set DATABASE_URL: %#v", first)
+	if postgresColorKey(first) == "" {
+		t.Fatalf("provision must also set a color URL: %#v", first)
 	}
 	if _, ok := first["POSTGRES_URL"]; ok {
 		t.Fatalf("app must not get POSTGRES_URL: %#v", first)
@@ -52,20 +52,38 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 		"DATABASE_URL":   "postgres://second",
 		"POSTGRES_URL":   "postgres://second",
 		"PGHOST":         "leader.postgresql-concave-48291.discoverd",
-	}, "")
+	}, "", true)
 	secondKey := postgresColorKey(second)
 	if second["DATABASE_URL"] != "" || second["POSTGRES_URL"] != "" || second["FLYNN_POSTGRES"] != "" || second["PGHOST"] != "" {
 		t.Fatalf("second postgres must not replace the first attachment: %#v", second)
 	}
-	if secondKey == "" || secondKey == firstKey || second[secondKey] != "postgres://second" {
-		t.Fatalf("named url: first %s second %#v", firstKey, second)
+	if secondKey == "" || second[secondKey] != "postgres://second" {
+		t.Fatalf("named url: first DATABASE_URL second %#v", second)
+	}
+	same := MergeAttachment(first, firstIn, "", true)
+	if len(same) != 0 {
+		t.Fatalf("reattach of the same URL must not add another key: %#v", same)
+	}
+	attachIn := map[string]string{
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
+		"DATABASE_URL":   "postgres://first",
+	}
+	if k := postgresColorKey(first); k != "" {
+		attachIn[k] = first[k]
+	}
+	peer := MergeAttachment(nil, attachIn, "", false)
+	if peer["DATABASE_URL"] != "" {
+		t.Fatalf("attach of an existing resource must not set DATABASE_URL: %#v", peer)
+	}
+	if postgresColorKey(peer) == "" || peer[postgresColorKey(peer)] != "postgres://first" {
+		t.Fatalf("attach must set the color URL: %#v", peer)
 	}
 
 	redis := MergeAttachment(map[string]string{"DATABASE_URL": "postgres://app"}, map[string]string{
 		"FLYNN_REDIS": "redis-ember-xefywh",
 		"REDIS_URL":   "rediss://cache",
 		"REDIS_HOST":  "leader.redis-ember-xefywh.discoverd",
-	}, "")
+	}, "", false)
 	if redis["REDIS_URL"] != "rediss://cache" || redis["REDIS_EMBER_XEFYWH_DATABASE_URL"] != "rediss://cache" {
 		t.Fatalf("first redis keeps REDIS_URL and its own name: %#v", redis)
 	}
@@ -75,7 +93,7 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	again := MergeAttachment(map[string]string{"REDIS_URL": "rediss://first"}, map[string]string{
 		"FLYNN_REDIS": "redis-ember-xefywh",
 		"REDIS_URL":   "rediss://second",
-	}, "")
+	}, "", false)
 	if again["REDIS_URL"] != "" || again["REDIS_EMBER_XEFYWH_DATABASE_URL"] != "rediss://second" {
 		t.Fatalf("second redis: %#v", again)
 	}
@@ -83,7 +101,7 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	ch := MergeAttachment(map[string]string{"CLICKHOUSE_URL": "clickhouses://old"}, map[string]string{
 		"FLYNN_CLICKHOUSE": "clickhouse-meadow-wawpuf",
 		"CLICKHOUSE_URL":   "clickhouses://new",
-	}, "")
+	}, "", false)
 	if ch["CLICKHOUSE_MEADOW_WAWPUF_DATABASE_URL"] != "clickhouses://new" || ch["CLICKHOUSE_URL"] != "" {
 		t.Fatalf("clickhouse: %#v", ch)
 	}
@@ -100,11 +118,14 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if first["FLYNN_POSTGRES"] != "postgresql-concave-48291" || first["POSTGRES_ROLE"] != "primary" {
 		t.Fatalf("first resource: %#v", first)
 	}
-	if first["DATABASE_URL"] != "" || first["POSTGRES_URL"] != "" {
+	if first["DATABASE_URL"] != "postgres://first" {
+		t.Fatalf("first resource must keep DATABASE_URL: %#v", first)
+	}
+	if first["POSTGRES_URL"] != "" {
 		t.Fatalf("first resource URLs: %#v", first)
 	}
 	if postgresColorKey(first) == "" {
-		t.Fatalf("first resource missing color URL: %#v", first)
+		t.Fatalf("first resource must also keep a color URL: %#v", first)
 	}
 	if _, ok := first["PGDATABASE"]; ok || first["PGHOST"] != "" || first["PGUSER"] != "" {
 		t.Fatalf("resource must not keep split PG keys: %#v", first)
@@ -126,7 +147,7 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if second["FLYNN_POSTGRES"] != "postgresql-fjord-99112" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "postgresql-concave-48291" {
 		t.Fatalf("second resource must keep its instance identity: %#v", second)
 	}
-	if postgresColorKey(second) == "" || postgresColorKey(second) == postgresColorKey(first) {
+	if postgresColorKey(second) == "" {
 		t.Fatalf("named url: %#v vs %#v", first, second)
 	}
 	if _, ok := second["PGDATABASE"]; ok {
@@ -134,13 +155,48 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	}
 }
 
+func TestResourceEnvDropsExtraPostgresColors(t *testing.T) {
+	got := ResourceEnv(nil, map[string]string{
+		"FLYNN_POSTGRES":               "postgresql-concave-48291",
+		"DATABASE_URL":                 "postgres://first",
+		"FLYNN_POSTGRESQL_CRIMSON_URL": "postgres://first",
+		"FLYNN_POSTGRESQL_SAGE_URL":    "postgres://first",
+		"POSTGRES_ROLE":                "primary",
+	}, "")
+	if got["DATABASE_URL"] != "postgres://first" {
+		t.Fatalf("DATABASE_URL: %#v", got)
+	}
+	if postgresColorKey(got) != "FLYNN_POSTGRESQL_CRIMSON_URL" {
+		t.Fatalf("resource must keep one reused color URL: %#v", got)
+	}
+	if got["FLYNN_POSTGRESQL_SAGE_URL"] != "" {
+		t.Fatalf("resource must drop extra incoming colors: %#v", got)
+	}
+	n := 0
+	for k := range got {
+		if strings.HasSuffix(k, "_URL") {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("DATABASE_URL plus one color: %#v", got)
+	}
+}
+
 func TestMergeAttachmentHonorsAs(t *testing.T) {
 	got := MergeAttachment(nil, map[string]string{
 		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://db",
-	}, "analytics")
-	if got["ANALYTICS_URL"] != "postgres://db" || got["DATABASE_URL"] != "" || postgresColorKey(got) != "" {
-		t.Fatalf("--as analytics is ANALYTICS_URL only: %#v", got)
+	}, "analytics", true)
+	if got["ANALYTICS_URL"] != "postgres://db" || got["DATABASE_URL"] != "postgres://db" || postgresColorKey(got) != "" {
+		t.Fatalf("provision --as analytics is ANALYTICS_URL plus DATABASE_URL: %#v", got)
+	}
+	attachAs := MergeAttachment(nil, map[string]string{
+		"FLYNN_POSTGRES": "postgresql-concave-48291",
+		"DATABASE_URL":   "postgres://db",
+	}, "analytics", false)
+	if attachAs["ANALYTICS_URL"] != "postgres://db" || attachAs["DATABASE_URL"] != "" || postgresColorKey(attachAs) != "" {
+		t.Fatalf("attach --as analytics is ANALYTICS_URL only: %#v", attachAs)
 	}
 	if AsURLKey("ANALYTICS_URL") != "ANALYTICS_URL" || AsURLKey("analytics") != "ANALYTICS_URL" {
 		t.Fatalf("AsURLKey: %q %q", AsURLKey("ANALYTICS_URL"), AsURLKey("analytics"))
@@ -148,14 +204,14 @@ func TestMergeAttachmentHonorsAs(t *testing.T) {
 	color := MergeAttachment(nil, map[string]string{
 		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://db",
-	}, "amber")
-	if color["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || color["AMBER_URL"] != "" || color["DATABASE_URL"] != "" {
-		t.Fatalf("--as amber: %#v", color)
+	}, "amber", true)
+	if color["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || color["AMBER_URL"] != "" || color["DATABASE_URL"] != "postgres://db" {
+		t.Fatalf("provision --as amber: %#v", color)
 	}
 	full := MergeAttachment(map[string]string{"FLYNN_POSTGRESQL_AMBER_URL": "postgres://old"}, map[string]string{
 		"FLYNN_POSTGRES": "postgresql-concave-48291",
 		"DATABASE_URL":   "postgres://db",
-	}, "FLYNN_POSTGRESQL_BLUE")
+	}, "FLYNN_POSTGRESQL_BLUE", true)
 	if full["FLYNN_POSTGRESQL_BLUE_URL"] != "postgres://db" || full["FLYNN_POSTGRESQL_AMBER_URL"] != "" {
 		t.Fatalf("--as FLYNN_POSTGRESQL_BLUE: %#v", full)
 	}
