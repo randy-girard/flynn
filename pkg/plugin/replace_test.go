@@ -82,15 +82,30 @@ func TestFlynnRootForPluginSibling(t *testing.T) {
 func isolateFlynnSourceRoot(t *testing.T) {
 	t.Helper()
 	t.Setenv("FLYNN_ROOT", "")
-	t.Setenv(EnvImagesJSON, filepath.Join(t.TempDir(), "missing-images.json"))
+	img := filepath.Join(t.TempDir(), "images.json")
+	if err := os.WriteFile(img, []byte("[]\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvImagesJSON, img)
 	origFile := flynnSourceRootFile
 	origChecks := defaultFlynnCheckouts
+	origExe := flynnSourceRootExecutable
+	origDefaultImgs := defaultImagesJSONPaths
+	origExtraImgs := extraImagesJSONPaths
 	flynnSourceRootFile = filepath.Join(t.TempDir(), "missing-source-root")
 	defaultFlynnCheckouts = nil
+	defaultImagesJSONPaths = nil
+	extraImagesJSONPaths = nil
+	flynnSourceRootExecutable = func() (string, error) {
+		return "", os.ErrNotExist
+	}
 	t.Chdir(t.TempDir())
 	t.Cleanup(func() {
 		flynnSourceRootFile = origFile
 		defaultFlynnCheckouts = origChecks
+		flynnSourceRootExecutable = origExe
+		defaultImagesJSONPaths = origDefaultImgs
+		extraImagesJSONPaths = origExtraImgs
 	})
 }
 
@@ -156,6 +171,22 @@ func TestFlynnSourceRootFromDefaultCheckout(t *testing.T) {
 	}
 	isolateFlynnSourceRoot(t)
 	defaultFlynnCheckouts = []string{root}
+	if FlynnSourceRoot() != root {
+		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
+	}
+}
+
+func TestFlynnSourceRootFromExecutable(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module github.com/randy-girard/flynn\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	isolateFlynnSourceRoot(t)
+	bin := filepath.Join(root, "pkg", "plugin", "plugin.test")
+	if err := os.MkdirAll(filepath.Dir(bin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	flynnSourceRootExecutable = func() (string, error) { return bin, nil }
 	if FlynnSourceRoot() != root {
 		t.Fatalf("got %q want %q", FlynnSourceRoot(), root)
 	}

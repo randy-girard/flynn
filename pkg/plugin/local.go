@@ -23,9 +23,22 @@ var defaultImagesJSONPaths = []string{
 	"/etc/flynn/images.json.gz",
 }
 
+// extraImagesJSONPaths are GOPATH builder checkouts; tests nil this so a
+// laptop/builder images.json cannot leak into FlynnSourceRoot isolation.
+var extraImagesJSONPaths = []string{
+	"/root/go/src/github.com/flynn/flynn/build/images.json",
+	"/root/go/src/github.com/flynn/flynn/build/manifests/images.json",
+	"/root/go/src/github.com/randy-girard/flynn/build/images.json",
+	"/root/go/src/github.com/randy-girard/flynn/build/manifests/images.json",
+}
+
 // flynnSourceRootFile is written on Vagrant cluster nodes so plugin-build
 // finds Flynn when flynn-host is /usr/bin (not inside the checkout).
 var flynnSourceRootFile = "/etc/flynn/source-root"
+
+// flynnSourceRootExecutable is os.Executable; GOPATH `go test` binaries live
+// under the Flynn checkout, so tests replace this to hide that walk.
+var flynnSourceRootExecutable = os.Executable
 
 // defaultFlynnCheckouts are Vagrant / GOPATH layouts used when FLYNN_ROOT is unset.
 var defaultFlynnCheckouts = []string{
@@ -42,12 +55,7 @@ func localImagesJSONCandidates() []string {
 			filepath.Join(root, "build", "manifests", "images.json"),
 		}, out...)
 	}
-	out = append(out,
-		"/root/go/src/github.com/flynn/flynn/build/images.json",
-		"/root/go/src/github.com/flynn/flynn/build/manifests/images.json",
-		"/root/go/src/github.com/randy-girard/flynn/build/images.json",
-		"/root/go/src/github.com/randy-girard/flynn/build/manifests/images.json",
-	)
+	out = append(out, extraImagesJSONPaths...)
 	return out
 }
 
@@ -124,7 +132,7 @@ func FlynnSourceRoot() string {
 			return r
 		}
 	}
-	if exe, err := os.Executable(); err == nil {
+	if exe, err := flynnSourceRootExecutable(); err == nil {
 		if r := walkFlynnModule(filepath.Dir(exe)); r != "" {
 			return r
 		}
