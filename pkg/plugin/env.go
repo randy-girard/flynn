@@ -192,7 +192,9 @@ func previousReleaseScaleDown(prev *ct.Release, formation *ct.Formation) map[str
 }
 
 // ClusterEnv reads well-known secrets from already-running core apps
-// (controller/postgres). It does not assume any plugin is installed.
+// (controller/postgres). Dashboard webhook credentials are copied when the
+// dashboard plugin is already installed so other plugins can post metrics;
+// DATABASE_URL is never copied from dashboard.
 func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 	out := map[string]string{}
 	for _, app := range []string{"controller", "postgres", "gitreceive", "discoverd"} {
@@ -257,7 +259,45 @@ func ClusterEnv(client appReleaseGetter) (map[string]string, error) {
 			out["IMAGE_URL"] = "https://images." + domain
 		}
 	}
+	mergeDashboardPluginEnv(out, client)
 	return out, nil
+}
+
+// mergeDashboardPluginEnv copies the dashboard webhook secret onto cluster env
+// so other plugins can POST plugin-metrics. It never copies DATABASE_URL:
+// that belongs only to the dashboard app (metrics history lives there).
+func mergeDashboardPluginEnv(out map[string]string, client appReleaseGetter) {
+	if out == nil || client == nil {
+		return
+	}
+	for _, name := range []string{"dashboard-plugin", "dashboard"} {
+		release, err := client.GetAppRelease(name)
+		if err != nil || release == nil || len(release.Env) == 0 {
+			continue
+		}
+		secret := strings.TrimSpace(release.Env["WEBHOOK_INGEST_SECRET"])
+		if secret == "" {
+			secret = strings.TrimSpace(release.Env["DASHBOARD_METRICS_SECRET"])
+		}
+		if secret != "" && out["DASHBOARD_METRICS_SECRET"] == "" {
+			out["DASHBOARD_METRICS_SECRET"] = secret
+		}
+		if out["DASHBOARD_METRICS_URL"] == "" {
+			if v := strings.TrimSpace(release.Env["DASHBOARD_METRICS_URL"]); v != "" {
+				out["DASHBOARD_METRICS_URL"] = v
+			} else {
+				out["DASHBOARD_METRICS_URL"] = "http://dashboard.discoverd/webhooks/plugin-metrics"
+			}
+		}
+		if out["DASHBOARD_SSO_JWKS_URL"] == "" {
+			if v := strings.TrimSpace(release.Env["DASHBOARD_SSO_JWKS_URL"]); v != "" {
+				out["DASHBOARD_SSO_JWKS_URL"] = v
+			} else {
+				out["DASHBOARD_SSO_JWKS_URL"] = "http://dashboard.discoverd/.well-known/jwks.json"
+			}
+		}
+		return
+	}
 }
 
 func SingletonWebCount(cluster map[string]string) int {

@@ -1071,7 +1071,7 @@ func TestApplyProvisionedResourcesProvisionsWhenOnlyStaleDatabaseURL(t *testing.
 				"DATABASE_URL":   "postgres://new-user:new-pass@leader.postgres.discoverd:5432/newdb",
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1080,6 +1080,30 @@ func TestApplyProvisionedResourcesProvisionsWhenOnlyStaleDatabaseURL(t *testing.
 	}
 	if cluster["DATABASE_URL"] != "postgres://new-user:new-pass@leader.postgres.discoverd:5432/newdb" {
 		t.Fatalf("stale DATABASE_URL must be replaced, got %q", cluster["DATABASE_URL"])
+	}
+}
+
+func TestApplyProvisionedResourcesUpdateKeepsPreviousDatabaseURL(t *testing.T) {
+	cluster := map[string]string{
+		"DATABASE_URL": "postgres://dashboard:secret@leader.postgres.discoverd:5432/metrics",
+	}
+	var provisioned int
+	err := applyProvisionedResources(nil, nil, []string{"platform-postgres"}, cluster, func(string) (*ct.Resource, error) {
+		provisioned++
+		return &ct.Resource{
+			Env: map[string]string{"DATABASE_URL": "postgres://new-empty/db"},
+		}, nil
+	}, nil, func(name string) bool {
+		return pluginResourceProvider(name) == "platform-postgres" && cluster["DATABASE_URL"] != ""
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provisioned != 0 {
+		t.Fatal("plugin update must not provision a new database over an existing DATABASE_URL")
+	}
+	if cluster["DATABASE_URL"] != "postgres://dashboard:secret@leader.postgres.discoverd:5432/metrics" {
+		t.Fatalf("DATABASE_URL=%q", cluster["DATABASE_URL"])
 	}
 }
 
@@ -1096,7 +1120,7 @@ func TestApplyProvisionedResourcesSkipsAttachedProviderUUID(t *testing.T) {
 	}}, aliases, []string{"postgres"}, cluster, func(string) (*ct.Resource, error) {
 		provisioned++
 		return nil, fmt.Errorf("must not provision")
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1132,7 +1156,7 @@ func TestApplyProvisionedResourcesIgnoresTenantPostgresPlugin(t *testing.T) {
 				"DATABASE_URL":   "postgres://appliance",
 			},
 		}, nil
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1169,7 +1193,7 @@ func TestApplyProvisionedResourcesSkipsFLYNNPostgres(t *testing.T) {
 	}}, nil, []string{"postgres"}, cluster, func(string) (*ct.Resource, error) {
 		provisioned++
 		return nil, fmt.Errorf("must not provision")
-	}, nil)
+	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

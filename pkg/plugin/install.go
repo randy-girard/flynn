@@ -325,7 +325,7 @@ func (in *Installer) apply(opts InstallOptions) error {
 		}
 	}
 
-	if err := in.provisionResources(app, m, cluster); err != nil {
+	if err := in.provisionResources(app, m, cluster, updating); err != nil {
 		return err
 	}
 
@@ -983,7 +983,7 @@ func (in *Installer) runHook(root string, m *Manifest, rel string, cluster map[s
 	return nil
 }
 
-func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[string]string) error {
+func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[string]string, updating bool) error {
 	if m == nil || len(m.Resources) == 0 || in.Client == nil || app == nil {
 		return nil
 	}
@@ -996,6 +996,18 @@ func (in *Installer) provisionResources(app *ct.App, m *Manifest, cluster map[st
 		return in.provisionResourceWithRetry(app, name)
 	}, func(name string) {
 		in.logf("resource %s already attached to %s", name, app.Name)
+	}, func(name string) bool {
+		if !updating {
+			return false
+		}
+		if pluginResourceProvider(name) != "platform-postgres" {
+			return false
+		}
+		if strings.TrimSpace(cluster["DATABASE_URL"]) == "" {
+			return false
+		}
+		in.logf("keeping DATABASE_URL on %s; not provisioning a new %s database (metrics and sessions live there)", app.Name, name)
+		return true
 	})
 }
 
@@ -1054,8 +1066,10 @@ func retryableResourceProvision(err error) bool {
 }
 
 // applyProvisionedResources attaches missing providers. A leftover DATABASE_URL
-// in cluster env is not proof a resource is still attached: uninstall can drop
-// the Postgres role while PreservePreviousEnv keeps the dead URL.
+// in cluster env is not proof a resource is still attached on first install:
+// uninstall can drop the Postgres role while PreservePreviousEnv keeps the
+// dead URL. On update, keepExisting skips provisioning platform-postgres when
+// DATABASE_URL is already set so metrics and sessions are not wiped.
 func applyProvisionedResources(
 	existing []*ct.Resource,
 	aliases map[string]string,
@@ -1063,6 +1077,7 @@ func applyProvisionedResources(
 	cluster map[string]string,
 	provision func(name string) (*ct.Resource, error),
 	already func(name string),
+	keepExisting func(name string) bool,
 ) error {
 	have := map[string]bool{}
 	for _, res := range existing {
@@ -1083,6 +1098,9 @@ func applyProvisionedResources(
 			if already != nil {
 				already(name)
 			}
+			continue
+		}
+		if keepExisting != nil && keepExisting(name) {
 			continue
 		}
 		if provision == nil {

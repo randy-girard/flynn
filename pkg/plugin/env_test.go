@@ -167,6 +167,28 @@ func TestClusterEnvDerivesGitAndImageURLsFromDomain(t *testing.T) {
 	}
 }
 
+func TestClusterEnvCopiesDashboardMetricsSecret(t *testing.T) {
+	env, err := ClusterEnv(releaseMap{
+		"controller": {Env: map[string]string{"CONTROLLER_KEY": "ck", "CLUSTER_DOMAIN": "x.local"}},
+		"dashboard-plugin": {Env: map[string]string{
+			"WEBHOOK_INGEST_SECRET": "ingest",
+			"DATABASE_URL":          "postgres://dashboard-only",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env["DASHBOARD_METRICS_SECRET"] != "ingest" {
+		t.Fatalf("DASHBOARD_METRICS_SECRET=%q", env["DASHBOARD_METRICS_SECRET"])
+	}
+	if env["DASHBOARD_METRICS_URL"] != "http://dashboard.discoverd/webhooks/plugin-metrics" {
+		t.Fatalf("DASHBOARD_METRICS_URL=%q", env["DASHBOARD_METRICS_URL"])
+	}
+	if env["DATABASE_URL"] != "" {
+		t.Fatalf("must not copy dashboard DATABASE_URL onto other plugins: %q", env["DATABASE_URL"])
+	}
+}
+
 func TestEnsureClusterAuthEnvFillsMissingKeys(t *testing.T) {
 	env := map[string]string{"CONTROLLER_KEY": ""}
 	cluster := map[string]string{
