@@ -93,7 +93,7 @@ Development layout (relative to the Flynn repo):
 | `mongodb` | `../flynn-plugin-mongodb` | `mongodb` |
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
-| `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`) |
+| `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`; workspace **Datastores** after a tenant database plugin is installed) |
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 | `www` | `../flynn-plugin-www` | (none; `kind: app`) |
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |
@@ -316,7 +316,9 @@ hidden on `flynn help` until the matching plugin is installed on the cluster.
 
 The dashboard plugin is a host/shell. Plugin UIs live on each plugin’s
 cluster-level `web` process (Heroku add-on style): the dashboard shows a
-resource card, and opening it renders pages the plugin serves.
+resource card, and opening it renders pages the plugin serves. After any
+tenant datastore plugin is installed, Workspace also lists **Datastores**
+(cluster-wide database resources, with Add to provision onto an existing app).
 
 `flynn-plugin.json` may include a `dashboard` block. Install stamps it on the
 plugin app as `flynn-plugin-dashboard` meta (and inside `flynn-plugin-record`)
