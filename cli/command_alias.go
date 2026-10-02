@@ -82,9 +82,6 @@ var subAliases = map[string]map[string]string{
 		"expose":   "resource:expose",
 		"unexpose": "resource:unexpose",
 	},
-	"provider": {
-		"add": "provider:add",
-	},
 	"volume": {
 		"show":         "volume:show",
 		"decommission": "volume:decommission",
