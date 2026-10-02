@@ -2,7 +2,7 @@
 # Regression: flynn-host plugin:uninstall must reverse install generically
 # (app, routes via DeleteApp, webhooks, optional hooks.uninstall) without a
 # plugin-name switch. Resource providers with leftover resources refuse unless
-# --force.
+# --force. Exclusive platform-postgres databases require --yes or a TTY confirm.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
@@ -42,14 +42,20 @@ need_in "${cli}" 'plugin:update' \
   "flynn-host plugin must expose update"
 need_in "${cli}" '--force' \
   "uninstall must expose --force for resource providers still in use"
+need_in "${cli}" '--yes' \
+  "uninstall must expose --yes to confirm deleting an exclusive platform-postgres database"
 need_in "${cli_test}" 'TestPluginUninstallUsage' \
   "docopt tests must cover flynn-host plugin:uninstall"
+need_in "${cli_test}" 'uninstall --yes' \
+  "docopt tests must cover plugin:uninstall --yes"
 need_in "${cli_test}" 'TestPluginUpdateUsage' \
   "docopt tests must cover flynn-host plugin:update"
 need_in "${uninstall}" 'func \(in \*Installer\) Uninstall' \
   "Installer.Uninstall must exist"
 need_in "${uninstall}" 'ensureProviderUnused' \
   "uninstall must refuse resource providers with leftover resources"
+need_in "${uninstall}" 'confirmPluginDatabaseDeletion' \
+  "uninstall must confirm before dropping an exclusive platform-postgres database"
 need_in "${uninstall}" 'runUninstallHook' \
   "uninstall must run optional hooks.uninstall"
 need_in "${uninstall}" 'removePluginWebhooks' \
@@ -60,6 +66,8 @@ need_in "${uninstall_test}" 'TestUninstallDeletesPluginApp' \
   "unit tests must delete the plugin app"
 need_in "${uninstall_test}" 'TestUninstallRefusesProviderWithResources' \
   "unit tests must refuse resource-provider uninstall while resources remain"
+need_in "${uninstall_test}" 'TestUninstallConfirmsExclusiveDatabase' \
+  "unit tests must require confirm before deleting an exclusive plugin database"
 need_in "${uninstall_test}" 'TestUninstallRunsHook' \
   "unit tests must run hooks.uninstall"
 need_in "${uninstall_test}" 'TestUninstallHookMissingFails' \
@@ -68,6 +76,8 @@ need_in "${uninstall_test}" 'TestUninstallRemovesPluginWebhooks' \
   "unit tests must remove plugin webhooks by ID prefix"
 need_in "${install}" 'uninstallHook' \
   "manifest must expose hooks.uninstall"
+need_in "${install}" 'keeping DATABASE_URL' \
+  "plugin update must keep an existing platform-postgres DATABASE_URL"
 need_in "${install}" 'previousReleaseScaleDown' \
   "plugin reinstall must scale the previous release to zero"
 need_in "${install}" 'so the new job can be placed' \
@@ -78,6 +88,8 @@ need_in "${install}" 'after the app is up so operator logs' \
   "install hooks must run after deploy and wait, not before scale"
 need_in "${docs}" 'plugin:uninstall' \
   "plugin docs must describe flynn-host plugin:uninstall"
+need_in "${docs}" '--yes' \
+  "plugin docs must say uninstall confirms exclusive platform-postgres deletion"
 need_in "${docs}" 'dashboard lists them for cluster administrators' \
   "plugin docs must say the dashboard lists plugin system apps for cluster admins only"
 

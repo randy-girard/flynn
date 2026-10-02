@@ -220,11 +220,15 @@ sudo flynn-host plugin:uninstall redis --force
 
 It runs optional **`hooks.uninstall`**, removes host webhooks whose IDs were
 created for that plugin, then deletes the plugin app. `DeleteApp` already
-drops HTTP/TCP routes and exclusive resources. Resource-provider plugins
-with provisioned resources still attached to other apps refuse unless
-`--force`. The controller has no delete-provider API, so the provider row
-may remain. A declared uninstall hook that is missing fails; if the original
-source cannot be resolved, uninstall logs a warning and continues.
+drops HTTP/TCP routes and exclusive resources. An exclusive
+**platform-postgres** database (dashboard metrics and sessions) is only
+dropped after you confirm on a TTY or pass `--yes`. Plugin **update**
+never provisions a replacement database over an existing `DATABASE_URL`.
+Resource-provider plugins with provisioned resources still attached to
+other apps refuse unless `--force`. The controller has no delete-provider
+API, so the provider row may remain. A declared uninstall hook that is
+missing fails; if the original source cannot be resolved, uninstall logs a
+warning and continues.
 
 If `dist/image.json` (and layers) are missing, install runs that repo’s
 `script/plugin-build` first. Already-built `dist/` is reused unless `--rebuild`.

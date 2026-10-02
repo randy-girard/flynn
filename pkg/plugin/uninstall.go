@@ -1,8 +1,10 @@
 package plugin
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -21,14 +23,17 @@ var (
 type uninstallAPI interface {
 	AppList() ([]*ct.App, error)
 	GetApp(id string) (*ct.App, error)
+	GetAppRelease(appID string) (*ct.Release, error)
 	DeleteApp(appID string) (*ct.AppDeletion, error)
 	ResourceList(providerID string) ([]*ct.Resource, error)
+	AppResourceList(appID string) ([]*ct.Resource, error)
 }
 
 // UninstallOptions is flynn-host plugin:uninstall.
 type UninstallOptions struct {
 	Name        string
 	Force       bool
+	Yes         bool
 	Cwd         string
 	GitHubOrg   string
 	PluginsFile string
@@ -48,9 +53,11 @@ func (in *Installer) uninstallAPI() uninstallAPI {
 // Uninstall removes an installed plugin app, its host webhooks, and optional
 // uninstall hook. Flynn does not special-case plugin names. Resource-provider
 // plugins with provisioned resources still in use refuse unless Force is set.
-// DeleteApp drops the plugin's HTTP/TCP routes and exclusive resources.
-// waitAppGone then polls until the app is gone so a reinstall cannot reuse a
-// release DATABASE_URL after the Postgres role has been dropped.
+// Exclusive platform-postgres databases (metrics, sessions) are only dropped
+// after --yes or an interactive confirm. DeleteApp then drops HTTP/TCP routes
+// and those exclusive resources. waitAppGone polls until the app is gone so a
+// reinstall cannot reuse a release DATABASE_URL after the Postgres role has
+// been dropped.
 func (in *Installer) Uninstall(opts UninstallOptions) error {
 	api := in.uninstallAPI()
 	if api == nil {
@@ -72,6 +79,9 @@ func (in *Installer) Uninstall(opts UninstallOptions) error {
 	in.logf("uninstalling plugin %s (kind %s)", rec.Name, rec.Kind)
 
 	if err := in.ensureProviderUnused(rec, app.ID, opts.Force); err != nil {
+		return err
+	}
+	if err := in.confirmPluginDatabaseDeletion(api, rec, app, opts); err != nil {
 		return err
 	}
 	if err := in.runUninstallHook(rec, opts); err != nil {
@@ -167,6 +177,79 @@ func (in *Installer) ensureProviderUnused(rec Installed, pluginAppID string, for
 	}
 	in.logf("warning: uninstalling %s with %d provisioned resource(s) still in use (--force)", provider, n)
 	return nil
+}
+
+func pluginDatabaseDeletionError(name string) error {
+	return fmt.Errorf("uninstalling %s would delete its platform-postgres database. Re-run with --yes to confirm, or confirm on a TTY", strings.TrimSpace(name))
+}
+
+// confirmPluginDatabaseDeletion asks before DeleteApp deprovisions an exclusive
+// platform-postgres database. Plugin update must not reach this path.
+func (in *Installer) confirmPluginDatabaseDeletion(api uninstallAPI, rec Installed, app *ct.App, opts UninstallOptions) error {
+	if app == nil {
+		return nil
+	}
+	var resources []*ct.Resource
+	if api != nil {
+		listed, err := api.AppResourceList(app.ID)
+		if err != nil {
+			in.logf("warning: could not list resources for %s: %s", app.Name, err)
+		} else {
+			resources = listed
+		}
+	}
+	var release *ct.Release
+	if api != nil {
+		if r, err := api.GetAppRelease(app.ID); err == nil {
+			release = r
+		}
+	}
+	if !pluginWouldDropDatabase(resources, release) {
+		return nil
+	}
+	in.logf("uninstalling %s will delete its exclusive platform-postgres database", rec.Name)
+	if opts.Yes {
+		in.logf("accepted database deletion via --yes")
+		return nil
+	}
+	if !in.interactive() {
+		return pluginDatabaseDeletionError(rec.Name)
+	}
+	fmt.Fprintf(in.writer(), "Delete the platform-postgres database for %s? This cannot be undone. [y/N]: ", rec.Name)
+	line, err := bufio.NewReader(in.reader()).ReadString('\n')
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("confirm database deletion: %w", err)
+	}
+	ans := strings.ToLower(strings.TrimSpace(line))
+	if ans == "y" || ans == "yes" {
+		return nil
+	}
+	return fmt.Errorf("uninstall of %s declined", rec.Name)
+}
+
+func pluginWouldDropDatabase(resources []*ct.Resource, release *ct.Release) bool {
+	for _, r := range resources {
+		if resourceIsExclusivePluginDatabase(r) {
+			return true
+		}
+	}
+	if release != nil && release.Env != nil && strings.TrimSpace(release.Env["DATABASE_URL"]) != "" {
+		return true
+	}
+	return false
+}
+
+func resourceIsExclusivePluginDatabase(r *ct.Resource) bool {
+	if r == nil || len(r.Apps) > 1 {
+		return false
+	}
+	if r.Env == nil {
+		return false
+	}
+	if strings.TrimSpace(r.Env["DATABASE_URL"]) != "" {
+		return true
+	}
+	return strings.TrimSpace(r.Env["FLYNN_POSTGRES"]) != ""
 }
 
 func (in *Installer) runUninstallHook(rec Installed, opts UninstallOptions) error {

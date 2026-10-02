@@ -113,19 +113,23 @@ Examples:
 `
 
 const pluginUninstallUsage = `
-usage: flynn-host plugin:uninstall [--force] [--github-org=ORG] <plugin>
+usage: flynn-host plugin:uninstall [--force] [--yes] [--github-org=ORG] <plugin>
 
 Remove an installed plugin app, webhooks, and optional uninstall hook.
 Resource-provider plugins with provisioned resources still in use refuse
-unless --force.
+unless --force. An exclusive platform-postgres database (metrics and
+sessions) is only deleted after --yes or an interactive confirm.
+Plugin update never replaces that database.
 
 Options:
 	--force            Uninstall a resource-provider even if other apps still use it
+	--yes              Confirm deleting the plugin's exclusive platform-postgres database
 	--github-org=ORG   GitHub org for aliases
 
 Examples:
 
     $ flynn-host plugin:uninstall dashboard
+    $ flynn-host plugin:uninstall dashboard --yes
     $ flynn-host plugin:uninstall redis --force
 `
 
@@ -380,6 +384,7 @@ func runPluginUninstall(args *docopt.Args) error {
 	return in.Uninstall(plugin.UninstallOptions{
 		Name:      args.String["<plugin>"],
 		Force:     args.Bool["--force"],
+		Yes:       args.Bool["--yes"],
 		Cwd:       cwd,
 		GitHubOrg: args.String["--github-org"],
 	})

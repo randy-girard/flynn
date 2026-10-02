@@ -15,14 +15,17 @@ import (
 )
 
 type uninstallStub struct {
-	apps        []*ct.App
-	deleted     []string
-	deleteErr   error
-	removeOnErr bool
-	listErr     error
-	resources   map[string][]*ct.Resource
-	resErr      error
-	getApp      func(id string) (*ct.App, error)
+	apps         []*ct.App
+	deleted      []string
+	deleteErr    error
+	removeOnErr  bool
+	listErr      error
+	resources    map[string][]*ct.Resource
+	resErr       error
+	appResources map[string][]*ct.Resource
+	appResErr    error
+	releases     map[string]*ct.Release
+	getApp       func(id string) (*ct.App, error)
 }
 
 func (s *uninstallStub) AppList() ([]*ct.App, error) {
@@ -70,6 +73,25 @@ func (s *uninstallStub) ResourceList(providerID string) ([]*ct.Resource, error) 
 		return nil, nil
 	}
 	return s.resources[providerID], nil
+}
+
+func (s *uninstallStub) AppResourceList(appID string) ([]*ct.Resource, error) {
+	if s.appResErr != nil {
+		return nil, s.appResErr
+	}
+	if s.appResources == nil {
+		return nil, nil
+	}
+	return s.appResources[appID], nil
+}
+
+func (s *uninstallStub) GetAppRelease(appID string) (*ct.Release, error) {
+	if s.releases != nil {
+		if r, ok := s.releases[appID]; ok {
+			return r, nil
+		}
+	}
+	return nil, ct.ErrNotFound
 }
 
 func uninstallPluginApp(name string) *ct.App {
@@ -348,5 +370,134 @@ func TestUninstallFailsWhenWebhookListErrors(t *testing.T) {
 	}
 	if len(stub.deleted) != 0 {
 		t.Fatal("must not delete after webhook list failure")
+	}
+}
+
+func TestUninstallConfirmsExclusiveDatabase(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	db := &ct.Resource{
+		ID:         "db1",
+		ProviderID: "uuid-postgres",
+		Apps:       []string{app.ID},
+		Env:        map[string]string{"DATABASE_URL": "postgres://widget/db", "FLYNN_POSTGRES": "postgres"},
+	}
+	stub := &uninstallStub{
+		apps:         []*ct.App{app},
+		appResources: map[string][]*ct.Resource{app.ID: {db}},
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub, Interactive: func() bool { return false }}
+
+	err := in.Uninstall(UninstallOptions{Name: "widget"})
+	if err == nil || !strings.Contains(err.Error(), "--yes") {
+		t.Fatalf("non-interactive must require --yes, got %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("must not delete the app or database without confirm")
+	}
+
+	if err := in.Uninstall(UninstallOptions{Name: "widget", Yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatalf("yes deleted=%v", stub.deleted)
+	}
+}
+
+func TestUninstallConfirmsDatabaseFromReleaseURL(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		releases: map[string]*ct.Release{
+			app.ID: {Env: map[string]string{"DATABASE_URL": "postgres://widget/db"}},
+		},
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub, Interactive: func() bool { return false }}
+	err := in.Uninstall(UninstallOptions{Name: "widget"})
+	if err == nil || !strings.Contains(err.Error(), "platform-postgres") {
+		t.Fatalf("release DATABASE_URL must require confirm, got %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("must not delete")
+	}
+}
+
+func TestUninstallInteractiveDatabaseDecline(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		appResources: map[string][]*ct.Resource{
+			app.ID: {{ID: "db1", Apps: []string{app.ID}, Env: map[string]string{"DATABASE_URL": "postgres://widget/db"}}},
+		},
+	}
+	in := &Installer{
+		Stdout:          io.Discard,
+		Stdin:           strings.NewReader("n\n"),
+		UninstallClient: stub,
+		Interactive:     func() bool { return true },
+	}
+	err := in.Uninstall(UninstallOptions{Name: "widget"})
+	if err == nil || !strings.Contains(err.Error(), "declined") {
+		t.Fatalf("got %v", err)
+	}
+	if len(stub.deleted) != 0 {
+		t.Fatal("decline must keep the database")
+	}
+}
+
+func TestUninstallInteractiveDatabaseAccept(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		appResources: map[string][]*ct.Resource{
+			app.ID: {{ID: "db1", Apps: []string{app.ID}, Env: map[string]string{"DATABASE_URL": "postgres://widget/db"}}},
+		},
+	}
+	in := &Installer{
+		Stdout:          io.Discard,
+		Stdin:           strings.NewReader("yes\n"),
+		UninstallClient: stub,
+		Interactive:     func() bool { return true },
+	}
+	if err := in.Uninstall(UninstallOptions{Name: "widget"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatalf("deleted=%v", stub.deleted)
+	}
+}
+
+func TestUninstallSkipsSharedDatabaseConfirm(t *testing.T) {
+	app := uninstallPluginApp("widget")
+	stub := &uninstallStub{
+		apps: []*ct.App{app},
+		appResources: map[string][]*ct.Resource{
+			app.ID: {{
+				ID:   "shared",
+				Apps: []string{app.ID, "other-app"},
+				Env:  map[string]string{"DATABASE_URL": "postgres://shared/db"},
+			}},
+		},
+	}
+	in := &Installer{Stdout: io.Discard, UninstallClient: stub}
+	if err := in.Uninstall(UninstallOptions{Name: "widget"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatalf("shared database is not dropped by DeleteApp, deleted=%v", stub.deleted)
+	}
+}
+
+func TestPluginWouldDropDatabase(t *testing.T) {
+	if pluginWouldDropDatabase(nil, nil) {
+		t.Fatal("empty")
+	}
+	if !pluginWouldDropDatabase(nil, &ct.Release{Env: map[string]string{"DATABASE_URL": "postgres://x"}}) {
+		t.Fatal("release URL")
+	}
+	if pluginWouldDropDatabase([]*ct.Resource{{
+		Apps: []string{"a", "b"},
+		Env:  map[string]string{"DATABASE_URL": "postgres://x"},
+	}}, nil) {
+		t.Fatal("shared")
 	}
 }

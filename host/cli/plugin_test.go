@@ -109,6 +109,11 @@ func TestPluginUninstallUsage(t *testing.T) {
 	if args.String["<plugin>"] != "dashboard" {
 		t.Fatalf("dashboard uninstall must not parse as route: %+v", args)
 	}
+
+	args = parsePluginCmd(t, "plugin:uninstall", "plugin:uninstall", "--yes", "dashboard")
+	if !args.Bool["--yes"] || args.String["<plugin>"] != "dashboard" {
+		t.Fatalf("uninstall --yes: %+v", args)
+	}
 }
 
 func TestPluginUpdateUsage(t *testing.T) {
