@@ -178,6 +178,11 @@ echo "${out}" | grep -q "SMOKE_DATASTORES='postgres mysql'" \
 echo "${out}" | grep -q "PLUGIN_SMOKE_APPS='mysql'" \
   || echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=mysql' \
   || { echo "minio must install the mysql plugin" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1'; then
+  echo "minio must install the mysql plugin" >&2
+  echo "${out}" >&2
+  exit 1
+fi
 if echo "${out}" | grep -q 'SKIP_BACKUP=1'; then
   echo "minio must run backup/restore" >&2
   echo "${out}" >&2
@@ -240,9 +245,33 @@ out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item quick apply
 echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1' \
   || { echo "quick apply-run must skip plugin image builds" >&2; echo "${out}" >&2; exit 1; }
 
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item singleton apply-item)"
+echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1' \
+  || { echo "core singleton must skip plugin install" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'SMOKE_DATASTORES=none' \
+  || { echo "core singleton must set SMOKE_DATASTORES=none" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q 'UPGRADE_PASSES=2' \
+  || { echo "core singleton must run two update passes" >&2; echo "${out}" >&2; exit 1; }
+
 out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" apply-run)"
+echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1' \
+  || { echo "enabled core items must skip plugin image builds" >&2; echo "${out}" >&2; exit 1; }
+echo "${out}" | grep -q "PLUGIN_SMOKE_APPS=''" \
+  || { echo "enabled core items must not build plugin images" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -qE "PLUGIN_SMOKE_APPS=.*(postgres|redis|mysql|dashboard)"; then
+  echo "core apply-run must not include plugin names" >&2
+  echo "${out}" >&2
+  exit 1
+fi
+
+out="$(python3 "${py}" --root "${ROOT}" --matrix "${example}" --item datastores apply-run)"
 echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=.*postgres' \
-  || { echo "apply-run must build the union of item plugins, including postgres" >&2; echo "${out}" >&2; exit 1; }
+  || { echo "datastores apply-run must build datastore plugin images" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1'; then
+  echo "datastores apply-run must not skip plugin image builds" >&2
+  echo "${out}" >&2
+  exit 1
+fi
 
 out="$(SMOKE_MATRIX_EXPLICIT='{"SKIP_UPGRADE":"0"}' python3 "${py}" --root "${ROOT}" --matrix "${example}" --item install-only apply-item)"
 if echo "${out}" | grep -q 'SKIP_UPGRADE='; then
@@ -294,6 +323,11 @@ need "${entry}" '--datastore postgres' \
 out="$(SMOKE_MATRIX_EXPLICIT='{"SMOKE_DATASTORES":"postgres"}' python3 "${py}" --root "${ROOT}" --matrix "${example}" --item singleton apply-item)"
 echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=postgres' \
   || { echo "one datastore must build only that plugin" >&2; echo "${out}" >&2; exit 1; }
+if echo "${out}" | grep -q 'SKIP_PLUGIN_INSTALL=1'; then
+  echo "--datastore postgres on singleton must install that plugin" >&2
+  echo "${out}" >&2
+  exit 1
+fi
 if echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=.*redis'; then
   echo "postgres-only smoke must not build redis" >&2
   echo "${out}" >&2

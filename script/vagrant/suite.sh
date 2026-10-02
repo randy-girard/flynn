@@ -13,19 +13,18 @@
 #      repo's build/release/ (shared with nodes via Vagrant synced folder)
 #   4. For each topology in SMOKE_TOPOLOGIES (default: 1-node singleton, then
 #      3-node HA): boot those VMs, install the tarball, bootstrap
-#      (--min-hosts N --peer-ips …), deploy test/apps/upgrade-smoke with every
-#      datastore provider, git-push test/apps/upgrade-smoke-buildpack with a
-#      custom .buildpacks file (heroku-buildpack-inline + bin/compile), git-push
+#      (--min-hosts N --peer-ips …), git-push test/apps/upgrade-smoke (Go
+#      slug), git-push test/apps/upgrade-smoke-buildpack with a custom
+#      .buildpacks file (heroku-buildpack-inline + bin/compile), git-push
 #      test/apps/upgrade-smoke-docker on the container stack (dockerbuilder-24),
-#      flynn docker push a pre-built image of the same Dockerfile, verify HTTP/status/rows, exercise flynn /
-#      flynn-host, add/write/read/remove a persistent volume, run flynn-host update --all-nodes --tarball --force twice,
-#      re-verify, then flynn cluster backup, wipe Flynn (--clean), bootstrap
-#      --from-backup, and re-verify apps plus postgres/mysql/mongodb. Plugin
-#      apps restore with postgres (no second flynn-host plugin:install). Redis,
-#      Kafka, and ClickHouse volumes are not in the cluster backup; those
-#      engines must come back empty. Then destroy the cluster nodes (builder
-#      is kept) before the next topology. Sizes are 1 (singleton) or >=3 (HA);
-#      2 is invalid.
+#      flynn docker push a pre-built image of the same Dockerfile, verify HTTP,
+#      exercise flynn / flynn-host, add/write/read/remove a persistent volume,
+#      run flynn-host update --all-nodes --tarball --force twice, re-verify,
+#      then flynn cluster backup, wipe Flynn (--clean), bootstrap
+#      --from-backup, and re-verify apps plus platform postgres. Plugin
+#      install and tenant datastore e2e are opt-in matrix items
+#      (datastores, pipeline, minio, discovery); plugin apps restore with
+#      postgres when those items run (no second flynn-host plugin:install).
 #      Named topologies: add (stable 3-node, then join node4 and upgrade),
 #      remove (stable 3-node, then drain node3; HTTP/DBs/deploys must
 #      keep working), and discovery (singleton, install the discovery
@@ -501,16 +500,12 @@ wait_selected_datastores_ready() {
 
 wait_selected_sirenia_ha() {
   local suffix=$1
-  local args=()
-  # Platform postgres still env-flips to 3-peer sirenia on a 3-node cluster.
+  # Platform postgres env-flips to 3-peer sirenia on a 3-node cluster even
+  # when smoke skips tenant datastore plugins (core Flynn gate).
   # mysql/mongodb plugins ScaleUp(..., "true"): one appliance node until the
   # user adds a replica. Waiting for mariadb/mongodb HA here hung 900s
   # (3 jobs registered, discoverd meta still singleton — HA 2026-09-27).
-  datastore_wanted postgres && args+=(postgres)
-  if [[ ${#args[@]} -eq 0 ]]; then
-    return 0
-  fi
-  wait_sirenia_ha_if_cluster "${suffix}" "${args[@]}"
+  wait_sirenia_ha_if_cluster "${suffix}" postgres
 }
 
 sync_datastore_providers

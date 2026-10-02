@@ -337,8 +337,11 @@ release: it needs real VMs, so it cannot run in GitHub Actions. Run it from the
 For most day-to-day changes, use the **quick** matrix row (about half the time
 of a full 1-node upgrade smoke): one node, git-push + docker-push, no tenant
 database on the platform Postgres appliance, no plugin install, no custom
-buildpack, no CLI/volume sweep, no upgrade, no backup. Keep `singleton` and
-`ha` for upgrade/HA/plugin work and as the pre-release gate.
+buildpack, no CLI/volume sweep, no upgrade, no backup. The default
+(`script/vagrant-smoke.sh` with no `--item`) is core Flynn only: `singleton`
+then `ha` — install, git/docker deploys, CLI, volumes, two `--force` updates,
+and backup/restore. Plugin e2e lives in each plugin repo (`--item datastores`,
+`pipeline`, `minio`, `discovery`).
 
 ```
 $ script/vagrant-smoke.sh --item quick
@@ -388,26 +391,25 @@ Default flow:
 4. **Matrix items** — enabled rows in the matrix (example default: `singleton`
    then `ha`, i.e. 1-node then 3-node HA). Size `2` is invalid. Named
    topologies: `add` (join `node4` then upgrade), `remove` (drain `node3`
-   while HTTP and DBs keep working), and `discovery` (singleton, install the
+   while HTTP keeps working), and `discovery` (singleton, install the
    discovery plugin, join `node2`+`node3` via the in-cluster discovery API,
-   wait for postgres/MariaDB/MongoDB to promote to HA, then deploy). Enable
+   wait for platform postgres to promote to HA, then deploy). Enable
    those in your local `smoke-matrix.yaml` or pass `--item add-node`. After
    upgrades, every topology including `discovery` takes a cluster backup and
    restores with `--from-backup`.
 5. On each topology: install the tarball with `--peer-ips` (or `--discovery`
    on extra nodes in the `discovery` topology), bootstrap with `/etc/hosts` for `CLUSTER_DOMAIN`,
-   install every first-party plugin (`PLUGIN_SMOKE_APPS`: redis, mysql,
-   mongodb, kafka, clickhouse, dashboard, www, discovery, otel, scheduler, pipeline), start a dummy
-   OTLP/HTTP sink on the host and confirm the otel plugin POSTs `/v1/metrics`,
    deploy
-   `test/apps/upgrade-smoke` against every datastore provider, `git push`
+   `test/apps/upgrade-smoke`, `git push`
    `test/apps/upgrade-smoke-docker` on the **container** stack, `flynn
-   docker:push` a pre-built image of the same Dockerfile, probe HTTP and
-   rows, exercise `flynn` / `flynn-host`, create a persistent volume, write a
+   docker:push` a pre-built image of the same Dockerfile, probe HTTP,
+   exercise `flynn` / `flynn-host`, create a persistent volume, write a
    file, read it after a job restart, and delete the volume, then `flynn-host update --all-nodes
    --tarball --force` twice and re-verify. After that, `flynn-host backup`,
    wipe Flynn (`install --clean`), `flynn-host bootstrap --from-backup`, and
-   re-verify the slug/Dockerfile git-push/docker-push apps plus postgres/mysql/mongodb data. Installed
+   re-verify the slug/Dockerfile git-push/docker-push apps plus platform postgres.
+   Plugin install (`PLUGIN_SMOKE_APPS`) is opt-in via `--item datastores`,
+   `pipeline`, `minio`, or `discovery`. When those items run, installed
    plugins restore with postgres (`plugins.json` is the inventory; do not
    `plugin:install` again). Redis, Kafka, ClickHouse, and tenant Postgres
    instance volumes are not in the cluster backup; those engines must come

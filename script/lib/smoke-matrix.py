@@ -494,24 +494,29 @@ def cmd_apply_run(args: argparse.Namespace) -> int:
     fields = dict(RUN_FIELDS)
     items = select_items(matrix, _wanted(args))
     # Plugin images are built once before the item loop. If every selected
-    # row skips install, skip that whole-run rebuild too (quick smoke).
-    if items and all(
+    # row skips install, skip that whole-run rebuild too (core / quick smoke).
+    datastore_plugins = []
+    if "SMOKE_DATASTORES" in expl:
+        datastore_plugins = [p for p in expl["SMOKE_DATASTORES"].split() if p and p != "none"]
+    all_skip_plugins = bool(items) and all(
         _as_bool(merge_item(matrix, it).get("skip_plugin_install", False))
         for it in items
-    ):
+    )
+    if datastore_plugins:
+        all_skip_plugins = False
+    if all_skip_plugins:
         run_values["skip_plugin_install"] = True
         fields["skip_plugin_install"] = "SKIP_PLUGIN_INSTALL"
     lines = assignments(fields, run_values, expl)
     # Images are built once, before any item applies its own plugin list.
     # --datastore / SMOKE_DATASTORES builds only those engine images.
-    if "PLUGIN_SMOKE_APPS" not in expl and "SMOKE_DATASTORES" in expl:
-        only = [p for p in expl["SMOKE_DATASTORES"].split() if p and p != "none"]
-        if only:
-            lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(only))}")
+    if "PLUGIN_SMOKE_APPS" not in expl and datastore_plugins:
+        lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(datastore_plugins))}")
     elif "PLUGIN_SMOKE_APPS" not in expl:
         names = union_plugins(matrix, items)
-        if names:
-            lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(names))}")
+        # Always export so suite.sh's default plugin list cannot leak into a
+        # core-only run (empty plugins + skip_plugin_install).
+        lines.append(f"PLUGIN_SMOKE_APPS={shlex.quote(' '.join(names))}")
     lines.append(f"SMOKE_MATRIX_FILE={shlex.quote(path)}")
     sys.stdout.write("\n".join(lines) + ("\n" if lines else ""))
     return 0
@@ -531,6 +536,9 @@ def cmd_apply_item(args: argparse.Namespace) -> int:
     assign_from = dict(merged)
     if "SMOKE_DATASTORES" in expl and "PLUGIN_SMOKE_APPS" not in expl:
         assign_from.pop("plugins", None)
+        only = [p for p in expl["SMOKE_DATASTORES"].split() if p and p != "none"]
+        if only:
+            assign_from["skip_plugin_install"] = False
     lines = assignments(ITEM_FIELDS, assign_from, expl)
     lines.append(f"SMOKE_MATRIX_ITEM={shlex.quote(str(item['id']))}")
     if "PLUGIN_SMOKE_APPS" not in expl and "SMOKE_DATASTORES" in expl:

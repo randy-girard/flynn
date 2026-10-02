@@ -7,6 +7,10 @@
 # file. Each enabled item is a cluster configuration (topologies + skip flags +
 # plugins). The builder/build happens once; items run in order.
 #
+# The default (enabled) gate is core Flynn only: install, git/docker deploys,
+# CLI, volumes, two --force updates, backup/restore. Plugin e2e lives in each
+# plugin repo; opt in with --item datastores|pipeline|minio|discovery.
+#
 #   script/vagrant-smoke.sh                  # every enabled item
 #   script/vagrant-smoke.sh --list           # show ids without booting VMs
 #   script/vagrant-smoke.sh --item quick     # contributor default (boot + git/docker + postgres)
@@ -30,32 +34,22 @@ defaults:
   skip_backup: false
   skip_cli: false
   skip_volume: false
-  skip_plugin_install: false
+  skip_plugin_install: true
   skip_buildpack: false
   upgrade_passes: 2
   seed_rows: 200
   blob_count: 100
-  plugins:
-    - postgres
-    - redis
-    - mysql
-    - mongodb
-    - kafka
-    - clickhouse
-    - dashboard
-    - www
-    - discovery
-    - otel
-    - scheduler
-    - pipeline
+  plugins: []
+  datastores:
+    - none
 
 items:
   - id: singleton
-    description: 1-node full path (install, plugins, deploys, upgrade, backup)
+    description: 1-node core Flynn (install, git/docker deploys, CLI, volumes, two updates, backup)
     topologies: "1"
 
   - id: ha
-    description: 3-node HA full path
+    description: 3-node HA core Flynn (install, git/docker deploys, CLI, volumes, two updates, backup)
     topologies: "3"
 
   - id: add-node
@@ -71,6 +65,9 @@ items:
   - id: discovery
     description: singleton, then join node2 and node3 via the discovery plugin
     topologies: discovery
+    skip_plugin_install: false
+    plugins:
+      - discovery
     enabled: false
 
   - id: install-only
@@ -103,6 +100,7 @@ items:
     skip_cli: true
     skip_volume: true
     skip_buildpack: true
+    skip_plugin_install: false
     seed_rows: 20
     blob_count: 10
     plugins:
@@ -120,6 +118,7 @@ items:
     skip_backup: true
     skip_volume: true
     skip_buildpack: true
+    skip_plugin_install: false
     seed_rows: 20
     blob_count: 10
     plugins:
@@ -136,6 +135,7 @@ items:
     skip_cli: true
     skip_volume: true
     skip_buildpack: true
+    skip_plugin_install: false
     skip_deploy: true
     skip_verify_before: true
     seed_rows: 1

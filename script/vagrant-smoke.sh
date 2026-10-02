@@ -2,10 +2,11 @@
 #
 # Vagrant Flynn smoke test. This is the pre-release gate: it builds Flynn on a
 # Vagrant builder VM, then boots real clusters in every requested topology and
-# exercises deploys, datastores, CLI, volumes, upgrades, membership changes and
-# backup/restore. It cannot run in GitHub Actions (needs nested VMs), and by the
-# time production would tell us it is too late, so run it locally before
-# cutting a release.
+# exercises deploys, CLI, volumes, upgrades, membership changes and
+# backup/restore. Plugin e2e lives in each plugin repo; opt in with
+# --item datastores, pipeline, minio, or discovery. It cannot run in GitHub
+# Actions (needs nested VMs), and by the time production would tell us it is
+# too late, so run it locally before cutting a release.
 #
 # The implementation still lives in script/vagrant/suite.sh (the name
 # predates the test growing past upgrades); every option, environment variable
