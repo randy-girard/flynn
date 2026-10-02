@@ -53,7 +53,9 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		return err
 	}
 
-	events := make(chan ct.DeploymentEvent)
+	// Buffer job events so a hung event_insert (postgres primary restart
+	// during a sirenia deploy) cannot stall Perform on an unbuffered send.
+	events := make(chan ct.DeploymentEvent, 32)
 	defer close(events)
 	go func() {
 		log.Info("watching deployment events")

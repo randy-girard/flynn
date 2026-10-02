@@ -8,6 +8,16 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
+func TestHandleDeploymentBuffersDeployEvents(t *testing.T) {
+	src, err := os.ReadFile("context.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(src), "make(chan ct.DeploymentEvent, 32)") {
+		t.Fatal("deploy event channel must be buffered so postgres event_insert cannot deadlock Perform")
+	}
+}
+
 func TestSireniaOldReleaseActive(t *testing.T) {
 	d := &DeployJob{
 		Deployment: &ct.Deployment{

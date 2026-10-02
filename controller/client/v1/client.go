@@ -642,63 +642,80 @@ func (c *Client) DeployAppRelease(appID, releaseID string, stopWait <-chan struc
 	}
 	defer stream.Close()
 
-outer:
+	err = waitAppRelease(events, func() (*ct.Deployment, error) {
+		return c.GetDeployment(d.ID)
+	}, func() error {
+		return c.deploymentFailedMessage(d)
+	}, stopWait, deployWaitPollInterval)
+	if err != nil && stream.Err() != nil {
+		return fmt.Errorf("%w (event stream ended: %s)", err, stream.Err())
+	}
+	return err
+}
+
+// deployWaitPollInterval is how often DeployAppRelease asks the controller
+// whether a deployment finished. Postgres sirenia HA kills the primary mid-
+// wait; the SSE stream can stay open without ever delivering "complete".
+const deployWaitPollInterval = time.Second
+
+// deploymentFinished reports whether GetDeployment shows a successful
+// terminal deploy. deployment_status() is the latest event's status field,
+// so after a postgres failover the row often still says "running" even
+// though the worker already wrote finished_at.
+func deploymentFinished(d *ct.Deployment) bool {
+	if d == nil || d.Status == "failed" {
+		return false
+	}
+	if d.Status == "complete" {
+		return true
+	}
+	return d.FinishedAt != nil
+}
+
+// waitAppRelease waits for a deployment to finish. It watches the event
+// stream and also polls GetDeployment so a stalled SSE connection after a
+// postgres restart cannot hang flynn-host update until stopWait (30m).
+func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deployment, error), onFailed func() error, stopWait <-chan struct{}, interval time.Duration) error {
+	if interval <= 0 {
+		interval = deployWaitPollInterval
+	}
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	failed := func() error {
+		if onFailed != nil {
+			return onFailed()
+		}
+		return errors.New("deployment failed")
+	}
 	for {
 		select {
 		case e, ok := <-events:
 			if !ok {
-				// The event stream can end while the deploy still runs (transient HTTP/SSE
-				// errors, reconnect limits, or controller load). Fall back to polling
-				// deployment status until the deploy finishes.
-				if err := c.waitDeploymentTerminal(d, stopWait); err != nil {
-					if se := stream.Err(); se != nil {
-						return fmt.Errorf("%w (event stream ended: %s)", err, se)
-					}
-					return err
-				}
-				break outer
+				events = nil
+				continue
 			}
 			switch e.Status {
 			case "complete":
-				break outer
+				return nil
 			case "failed":
-				return e.Err()
+				if err := e.Err(); err != nil {
+					return err
+				}
+				return failed()
 			}
-		case <-stopWait:
-			return errors.New("deploy wait cancelled")
-
-		}
-	}
-	return nil
-}
-
-// waitDeploymentTerminal blocks until the deployment reaches a terminal state.
-func (c *Client) waitDeploymentTerminal(d *ct.Deployment, stopWait <-chan struct{}) error {
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-stopWait:
-			return errors.New("deploy wait cancelled")
 		case <-tick.C:
-			dep, err := c.GetDeployment(d.ID)
+			dep, err := get()
 			if err != nil {
 				continue
 			}
-			switch dep.Status {
-			case "complete":
+			if dep.Status == "failed" {
+				return failed()
+			}
+			if deploymentFinished(dep) {
 				return nil
-			case "failed":
-				return c.deploymentFailedMessage(d)
 			}
-			if dep.FinishedAt != nil {
-				switch dep.Status {
-				case "complete":
-					return nil
-				case "failed":
-					return c.deploymentFailedMessage(d)
-				}
-			}
+		case <-stopWait:
+			return errors.New("deploy wait cancelled")
 		}
 	}
 }
