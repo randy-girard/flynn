@@ -365,6 +365,7 @@ update_running_cluster() {
   run_as_root_on "${nodes[0]}" "cd ${SRC} && script/vagrant/guest/update-cluster.sh"
   for name in "${nodes[@]}"; do
     run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-flynn-root.sh"
+    run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-qemu-binfmt.sh"
   done
 }
 

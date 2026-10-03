@@ -379,6 +379,9 @@
       "layers": [
         {
           "script": "builder/img/heroku-24.sh",
+          "inputs": [
+            "builder/img/amd64-qemu-userland.sh"
+          ],
           "limits": {
             "temp_disk": "2G"
           }
@@ -409,7 +412,9 @@
             "slugbuilder/builder/install-buildpack",
             "slugbuilder/builder/common_tools.flynn.sh",
             "slugbuilder/builder/flynn-heroku-go-common-overrides.sh",
-            "slugbuilder/builder/patch-heroku-go-multiarch.sh"
+            "slugbuilder/builder/patch-heroku-go-multiarch.sh",
+            "slugbuilder/builder/flynn-python-sqlite3.sh",
+            "slugbuilder/builder/patch-heroku-python-sqlite.sh"
           ]
         },
         {

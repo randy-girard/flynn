@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha512"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/docker/go-units"
@@ -151,7 +153,8 @@ func run(dir string, uid, gid int) error {
 		return err
 	}
 
-	processTypes := determineProcessTypes(dir)
+	processCommands := determineProcessCommands(dir)
+	processTypes := processTypeNames(processCommands)
 
 	artifact := &ct.Artifact{
 		ID:   os.Getenv("SLUG_IMAGE_ID"),
@@ -165,6 +168,11 @@ func run(dir string, uid, gid int) error {
 		Hashes:           manifest.Hashes(),
 		Size:             int64(len(rawManifest)),
 		LayerURLTemplate: "http://blobstore.discoverd/slugs/layers/{id}.squashfs",
+	}
+	if len(processCommands) > 0 {
+		if raw, err := json.Marshal(processCommands); err == nil {
+			artifact.Meta["slugbuilder.process_commands"] = string(raw)
+		}
 	}
 
 	// create artifact
@@ -224,15 +232,28 @@ func upload(data io.Reader, url string) error {
 	return nil
 }
 
-func determineProcessTypes(dir string) []string {
-	types := loadProcfileTypes(dir)
-	if len(types) == 0 {
-		types = loadDefaultTypes(dir)
+func determineProcessCommands(dir string) map[string]string {
+	cmds := loadProcfileCommands(dir)
+	if len(cmds) == 0 {
+		cmds = loadDefaultCommands(dir)
 	}
+	return cmds
+}
+
+func processTypeNames(cmds map[string]string) []string {
+	types := make([]string, 0, len(cmds))
+	for typ := range cmds {
+		typ = strings.TrimSpace(typ)
+		if typ == "" {
+			continue
+		}
+		types = append(types, typ)
+	}
+	sort.Strings(types)
 	return types
 }
 
-func loadProcfileTypes(dir string) []string {
+func loadProcfileCommands(dir string) map[string]string {
 	data, err := ioutil.ReadFile(filepath.Join(dir, "app", "Procfile"))
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -245,14 +266,10 @@ func loadProcfileTypes(dir string) []string {
 		fmt.Fprintln(os.Stderr, "WARN: error parsing Procfile:", err)
 		return nil
 	}
-	types := make([]string, 0, len(procfile))
-	for typ := range procfile {
-		types = append(types, typ)
-	}
-	return types
+	return trimProcessCommands(procfile)
 }
 
-func loadDefaultTypes(dir string) []string {
+func loadDefaultCommands(dir string) map[string]string {
 	data, err := ioutil.ReadFile(filepath.Join(dir, "app", ".release"))
 	if err != nil {
 		if !os.IsNotExist(err) {
@@ -267,9 +284,23 @@ func loadDefaultTypes(dir string) []string {
 		fmt.Fprintln(os.Stderr, "WARN: error parsing .release:", err)
 		return nil
 	}
-	types := make([]string, 0, len(release.DefaultProcessTypes))
-	for typ := range release.DefaultProcessTypes {
-		types = append(types, typ)
+	return trimProcessCommands(release.DefaultProcessTypes)
+}
+
+func trimProcessCommands(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
 	}
-	return types
+	out := make(map[string]string, len(in))
+	for typ, cmd := range in {
+		typ = strings.TrimSpace(typ)
+		if typ == "" {
+			continue
+		}
+		out[typ] = strings.TrimSpace(cmd)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

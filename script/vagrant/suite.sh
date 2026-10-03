@@ -3262,6 +3262,7 @@ if ! command -v ipset >/dev/null 2>&1; then
   apt-get install -y ipset
 fi
 command -v ipset >/dev/null
+bash "${REPO_IN_VM}/script/vagrant/guest/ensure-qemu-binfmt.sh"
 src="${REPO_IN_VM}/build/bin/flynn-host"
 if [[ -x "\${src}" && "\$(head -c 4 "\${src}")" == $'\x7fELF' ]]; then
   echo "overlaying \${src} onto flynn-host-overlay (CLI restore/bootstrap fixes; daemon stays tarball)"

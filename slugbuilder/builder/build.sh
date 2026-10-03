@@ -23,6 +23,12 @@ echo_title() {
   echo $'\e[1G----->' $*
 }
 
+case "$(uname -m)" in
+  aarch64 | arm64)
+    echo_title "Notice: qemu-user is translating x86_64 Heroku buildpack/Node binaries on this arm64 host"
+    ;;
+esac
+
 echo_normal() {
   echo $'\e[1G      ' $*
 }
@@ -251,6 +257,12 @@ fi
 
 if [[ -n "${selected_buildpack}" ]]; then
   echo_title "${buildpack_name} app detected"
+  # Custom BUILDPACK_URL / .buildpacks clone an unpatched python tree. The
+  # image-build patch only covers vendored packs; re-apply on the selected pack.
+  if [[ -x /builder/patch-heroku-python-sqlite.sh && -f /builder/flynn-python-sqlite3.sh ]]; then
+    /builder/patch-heroku-python-sqlite.sh /builder/flynn-python-sqlite3.sh "${selected_buildpack}" || true
+    /builder/patch-heroku-python-sqlite.sh /builder/flynn-python-sqlite3.sh "${buildpack_root}" || true
+  fi
 else
   echo_title "Unable to select a buildpack"
   echo_normal "No bundled buildpack matched this app."

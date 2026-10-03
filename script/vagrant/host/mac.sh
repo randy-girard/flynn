@@ -43,9 +43,19 @@ fi
 rm -f "${hosts_tmp}"
 
 export FLYNN_SKIP_UPDATE_CHECK=1
-PATH="${ROOT}/build-dev/bin:${PATH}"
-flynn cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
-if ! flynn -c local apps >/dev/null; then
+# build-dev/bin/flynn is a Linux symlink after image builds on the shared mount.
+if [[ -x /usr/local/bin/flynn ]]; then
+  flynn_bin=/usr/local/bin/flynn
+else
+  native="${ROOT}/build-dev/bin/flynn-$(go env GOOS)-$(go env GOARCH)"
+  if [[ -x "${native}" ]]; then
+    flynn_bin="${native}"
+  else
+    flynn_bin="${ROOT}/build-dev/bin/flynn"
+  fi
+fi
+"${flynn_bin}" cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
+if ! "${flynn_bin}" -c local apps >/dev/null; then
   echo "controller rejected the cluster key on GET /apps (cluster:add only checks TLS/CA)." >&2
   echo "Re-run setup after pulling the latest script/vagrant/guest/creds.sh, or from the VM: sudo flynn-host cli-add-command" >&2
   exit 1

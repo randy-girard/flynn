@@ -65,6 +65,10 @@ Scripts live under `script/vagrant/` (shared `lib/`, smoke lifecycle in `smoke-e
 
 `script/vagrant.sh` is the laptop loop (the default Vagrant script). Smoke keeps the `-smoke` suffix so both can be up without sharing running VMs. The laptop env uses `.vagrant-dev`, **dev-builder** at `192.168.57.10` (compile only), and **dev-node1** at `192.168.57.20` as the live cluster by default (`FLYNN_DEV_NODES=1`). Set `FLYNN_DEV_NODES=0` for builder-only, or `N` for `dev-node1` … `dev-nodeN` on `192.168.57.(19+N)`. Do not run a bare `vagrant up` for this loop either; that still boots smoke.
 
+On **aarch64** VMs (Apple Silicon), cluster nodes install `qemu-user-static` **9+** during install, reload, and update so x86_64 Heroku buildpack binaries (including Node 24) can run inside slugbuilder. Ubuntu 24.04's qemu 8.2 crashes Node (`QEMU internal SIGSEGV {code=MAPERR, addr=0x20}`). The heroku-24 image on that architecture also installs amd64 glibc. Rebuild images after pulling the glibc change, then `script/vagrant.sh update` (or `bootstrap` on a new cluster). After a qemu-user upgrade, re-register binfmt on every node (`ensure-qemu-binfmt.sh`); `git push` prints a qemu-mode notice on arm64 hosts.
+
+Laptop `git push` authenticates with `flynn git-credentials`. `cluster:add` records a **native** Flynn CLI (`/usr/local/bin/flynn` after `make vagrant-cli`). Do not point git at `build-dev/bin/flynn`: Vagrant image builds replace that path with a Linux `flynn-linux-*` symlink, which macOS cannot execute.
+
 ```text
 make vagrant-setup           # first time: boot, build images if needed, bootstrap cluster nodes, connect
 make vagrant-up              # boot dev-builder and dev-node1

@@ -162,6 +162,18 @@ worker: bundle exec sidekiq
 worker: bundle exec delayed_job start
 ```
 
+### release
+
+The `release` process type runs once after each deploy, before traffic is
+swapped to the new release, then exits. Use it for migrations:
+
+```
+release: bundle exec rake db:migrate
+```
+
+See [Apps — Release phase](../apps.md#release-phase). Output from `git push`
+includes this command's logs. It is not a scaled process.
+
 ### clock
 
 The `clock` process type is commonly used to start a cron-like process to execute

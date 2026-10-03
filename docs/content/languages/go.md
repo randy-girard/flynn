@@ -43,7 +43,9 @@ web: myserver
 ```
 
 The `web` process type has an HTTP route by default and a corresponding `PORT`
-environment variable that the server should listen on.
+environment variable that the server should listen on. A `release` process
+type runs once after deploy, before traffic is swapped; see
+[Apps — Release phase](../apps.md#release-phase).
 
 ## Building a frontend before `go install`
 

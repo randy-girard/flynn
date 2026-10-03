@@ -77,6 +77,8 @@ if ! command -v ipset >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get install -y ipset
 fi
+# aarch64: host binfmt so slugbuilder can exec x86_64 Heroku Node binaries.
+bash "${FLYNN_VAGRANT_GUEST}/ensure-qemu-binfmt.sh"
 # Local plugin:install compiles on this node (sibling checkouts under
 # /opt/flynn-plugins). ensure-go.sh also persists FLYNN_ROOT so plugin-build
 # compiles against this Flynn (DISCOVERD_AUTH_KEY). The builder has Go from

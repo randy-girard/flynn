@@ -30,4 +30,7 @@ fi
 echo "updating cluster from ${tarball} using $(command -v flynn-host)"
 flynn-host update --all-nodes --tarball "${tarball}" --force
 bash "${FLYNN_VAGRANT_GUEST}/ensure-flynn-root.sh"
+# This script runs on node1; vagrant.sh also runs ensure-qemu-binfmt on every
+# cluster node. Keep it here so a direct guest invoke still registers binfmt.
+bash "${FLYNN_VAGRANT_GUEST}/ensure-qemu-binfmt.sh"
 echo "cluster update complete"

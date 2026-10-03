@@ -111,6 +111,7 @@ packages=(
   libxslt1.1 # Used by the PHP runtime.
   libyaml-0-2 # Used by the Ruby runtime.
   libzip4 # Used by the PHP runtime.
+  libsqlite3-0 # Python stdlib sqlite3; classic python buildpack links against the stack copy.
   locales
   lsb-release
   media-types # Provides /etc/mime.types, used by Python's `mimetypes` stdlib module.
@@ -134,6 +135,11 @@ packages=(
 )
 
 apt-get install -y --no-install-recommends "${packages[@]}"
+
+# aarch64: amd64 glibc so host qemu-user can run x86_64 Node/buildpack binaries.
+# The helper is a no-op on amd64. Declared as a layer input in the manifest.
+# shellcheck source=amd64-qemu-userland.sh
+source "$(dirname "$0")/amd64-qemu-userland.sh"
 
 # Generate locale data for "en_US.UTF-8" too, since the upstream Ubuntu image
 # only ships with the "C", "C.utf8" and "POSIX" locales:

@@ -213,6 +213,21 @@ need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'purge' \
 need "${ROOT}/builder/img/go.sh" 'go/test' \
   "Go toolchain image must drop GOROOT test/doc trees"
 
+need "${ROOT}/builder/img/heroku-24.sh" 'libsqlite3-0' \
+  "heroku-24 must include libsqlite3-0 for Python sqlite3"
+need "${ROOT}/builder/img/heroku-24-build.sh" 'libsqlite3-dev' \
+  "heroku-24-build must include libsqlite3-dev for Python builds"
+need "${ROOT}/builder/img/heroku-24.sh" 'amd64-qemu-userland.sh' \
+  "heroku-24 must source the aarch64 amd64-glibc helper (x86_64 Node under qemu)"
+need "${ROOT}/builder/img/amd64-qemu-userland.sh" 'libc6:amd64' \
+  "aarch64 heroku-24 must install libc6:amd64, not a full amd64 ubuntu"
+need "${ROOT}/builder/img/amd64-qemu-userland.sh" 'skipping' \
+  "amd64 heroku-24 builds must skip the extra glibc (image size)"
+if grep -qE '^[^#]*qemu-user-static' "${ROOT}/builder/img/amd64-qemu-userland.sh"; then
+  echo "heroku-24 must not vendor qemu-user-static; that belongs on the Vagrant host" >&2
+  exit 1
+fi
+
 # Live smoke must exercise the slimmed runtime, not only static package lists.
 need "${smoke}" 'pg_available_extensions' \
   "smoke must verify postgres still ships postgis/pgrouting/timescaledb"

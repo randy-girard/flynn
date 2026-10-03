@@ -42,6 +42,7 @@ packages=(
   librabbitmq-dev
   librtmp-dev
   libsodium-dev
+  libsqlite3-dev # Python extensions (pysqlite3) and classic python buildpack sqlite vendor step.
   libssl-dev
   libtool
   libuv1-dev

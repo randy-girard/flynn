@@ -21,5 +21,10 @@ if [[ -x /builder/patch-heroku-go-multiarch.sh ]]; then
   /builder/patch-heroku-go-multiarch.sh /builder/flynn-heroku-go-common-overrides.sh
 fi
 
+chmod +x /builder/patch-heroku-python-sqlite.sh /builder/flynn-python-sqlite3.sh 2>/dev/null || true
+if [[ -x /builder/patch-heroku-python-sqlite.sh ]]; then
+  /builder/patch-heroku-python-sqlite.sh /builder/flynn-python-sqlite3.sh
+fi
+
 # allow custom buildpack install by unprivileged user
 chmod ugo+w /builder/buildpacks

@@ -27,6 +27,10 @@ where `APPNAME` is the name of an existing Flynn app and `IMAGE` is a reference
 to a Docker image which is available to the local `docker` CLI (in other words,
 an image which appears in the output of `docker images`).
 
+The release process type is the image `ENTRYPOINT` plus `CMD` (the same argv
+used to start the container). The dashboard Resources tab shows that command
+for each process.
+
 ## Container stack
 
 To build from a `Dockerfile` on the server instead of using buildpacks, switch
@@ -53,9 +57,9 @@ Optional configuration:
 
 ## Routing
 
-Flynn automatically registers the HTTP route `http://APPNAME.$CLUSTER_DOMAIN`
-for the app. In order to receive HTTP traffic for this route, the app needs to
-listen on the port which is set in the `PORT` environment variable.
+Flynn automatically registers `https://APPNAME.$CLUSTER_DOMAIN` (and HTTP on
+the same hostname). Listen on `$PORT`. The default `web` process gets
+`PORT=8080`.
 
 ## Example (pre-built image)
 
@@ -147,9 +151,10 @@ Hello from Flynn on port 8080 from container 4a7319af-af2c-4fe1-9a9a-2dd4d5bd376
 ```
 
 Datastore connections from the app still use the URLs Flynn injected
-(`DATABASE_URL` → `leader.postgres.discoverd`, and so on). Internal names such
-as `postgres.discoverd` or `postgres-api.discoverd` are not resolvable from
-user jobs.
+(`REDIS_URL` → `leader.<redis-app>.discoverd`, tenant `DATABASE_URL` →
+`leader.<postgres-app>.discoverd`, and so on). Only those attached leader
+names resolve. Internal names such as `postgres.discoverd` or
+`postgres-api.discoverd` are not resolvable from user jobs.
 
 The app can also be reached externally via the automatically registered route
 `http://APPNAME.$CLUSTER_DOMAIN`.
@@ -166,5 +171,8 @@ $ git push flynn master
 -----> Uploading image...
 -----> Creating release...
 =====> Application deployed
+=====> URLs
+       https://myapp.demo.localflynn.com
+       http://myapp.demo.localflynn.com
 $ flynn scale app=1
 ```

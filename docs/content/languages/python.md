@@ -39,6 +39,16 @@ python-3.12.8
 See the [Python buildpack](https://github.com/heroku/heroku-buildpack-python)
 for the current list of supported versions. Python 2 is not available.
 
+On **arm64** Flynn hosts, the classic Python buildpack's "Installing SQLite3"
+step uses `arch` (`aarch64-linux-gnu`) and an apt `sources.list` override that
+is empty on Ubuntu 24.04, so `mv`/`sed` fail. Flynn heroku-24 ships
+`libsqlite3-0` (and `libsqlite3-dev` on the build image). Slugbuilder replaces
+that sqlite vendor step at **image build and again at compile time** (so a
+custom `BUILDPACK_URL` is patched too) with a copy of the stack's libsqlite3.
+Those `mv: missing destination file operand` / `sed: can't read … sqlite3.pc`
+lines should not appear after `script/vagrant.sh update`. Python's stdlib
+`sqlite3` module does not need the vendor step.
+
 ## Default Process Types
 
 No default process types are defined for this buildpack, so a `Procfile` is

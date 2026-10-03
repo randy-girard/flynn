@@ -11,6 +11,8 @@ Node.js is supported by the [Node.js buildpack](https://github.com/heroku/heroku
 
 The Node.js buildpack is used if the repository contains a [`package.json`](https://www.npmjs.org/doc/files/package.json.html) file.
 
+On **arm64** Flynn hosts (Apple Silicon Vagrant nodes), classic `heroku-buildpack-nodejs` still ships x86_64 helpers and linux-x64 Node. The cluster nodes register `qemu-user-static` binfmt (qemu **9+**; Ubuntu 24.04's qemu 8.2 crashes Node with `QEMU internal SIGSEGV {code=MAPERR, addr=0x20}`), and the heroku-24 slug image includes an amd64 glibc userland so those binaries can run. `git push` prints a notice when that translation is in use. Rebuild heroku-24/slugbuilder after pulling the glibc change (`script/vagrant.sh update`). Re-run `ensure-qemu-binfmt.sh` on each node after pulling the qemu 9 upgrade. Native arm64 Node is not used; expect slower builds than on amd64.
+
 ## Dependencies
 
 Dependencies are managed using `npm`. `npm` expects dependencies specified under the [`dependencies` attribute](https://www.npmjs.org/doc/files/package.json.html#dependencies) inside the `package.json` file, which is just a simple object, with package names as the keys, mapping to version ranges.

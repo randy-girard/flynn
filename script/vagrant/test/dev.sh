@@ -102,6 +102,18 @@ if ! grep -Fq 'ensure-flynn-root.sh' "${mod}/guest/start-node.sh"; then
   echo "start-node.sh must persist FLYNN_ROOT after reload" >&2
   exit 1
 fi
+if ! grep -Fq 'ensure-qemu-binfmt.sh' "${mod}/guest/install-node.sh"; then
+  echo "install-node.sh must register qemu-user binfmt on aarch64 cluster nodes" >&2
+  exit 1
+fi
+if ! grep -Fq 'ensure-qemu-binfmt.sh' "${mod}/guest/start-node.sh"; then
+  echo "start-node.sh must register qemu-user binfmt after reload" >&2
+  exit 1
+fi
+if ! grep -Fq 'ensure-qemu-binfmt.sh' "${script}"; then
+  echo "vagrant.sh update must register qemu-user binfmt on every cluster node" >&2
+  exit 1
+fi
 if ! grep -Fq '/etc/flynn/source-root' "${mod}/guest/ensure-flynn-root.sh"; then
   echo "ensure-flynn-root.sh must write /etc/flynn/source-root" >&2
   exit 1
@@ -348,7 +360,8 @@ for s in \
   "${mod}/guest/start-node.sh" \
   "${mod}/guest/probe-cluster.sh" \
   "${mod}/guest/ensure-go.sh" \
-  "${mod}/guest/ensure-flynn-root.sh"; do
+  "${mod}/guest/ensure-flynn-root.sh" \
+  "${mod}/guest/ensure-qemu-binfmt.sh"; do
   if ! bash -n "${s}"; then
     echo "${s} failed bash -n" >&2
     exit 1
