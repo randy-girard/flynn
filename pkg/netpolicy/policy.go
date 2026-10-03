@@ -110,10 +110,9 @@ func ClassifyJob(job *host.Job) Class {
 	return ClassSystem
 }
 
-// UserMayResolveDiscoverd reports whether a user-class resolver may receive
-// records for a parsed discoverd name. Provisioned datastore URLs use only
-// leader.<service>.discoverd — never the service's internal name, APIs, or
-// other apps.
+// UserMayResolveDiscoverd reports whether a name is a datastore leader a user
+// job is allowed to resolve at all (isolated instances, UUID appliances, or
+// installed datastore plugins). Per-app attachment is UserMayResolveAttached.
 func UserMayResolveDiscoverd(leader bool, service string) bool {
 	if !leader {
 		return false

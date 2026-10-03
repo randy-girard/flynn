@@ -63,7 +63,7 @@ need "${ROOT}/build.sh" 'ensure_builder_isolation_tools' \
   "build.sh must install ipset before start-all (existing builders skip setup.sh)"
 need "${ROOT}/script/start-all" 'error configuring network' \
   "start-all must fail if flynn-host ConfigureNetworking failed"
-need "${ROOT}/discoverd/server/dns.go" 'clientIsUser' \
+need "${ROOT}/discoverd/server/dns.go" 'userNetInstance' \
   "discoverd DNS must hide internal names from user jobs"
 need "${smoke}" 'net-isolate-peer' \
   "smoke must try (and fail) user→user overlay discoverd"

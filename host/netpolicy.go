@@ -98,7 +98,7 @@ func (p *netPolicy) register(job *host.Job, ip net.IP) {
 	inst := &discoverd.Instance{
 		Addr:  net.JoinHostPort(ip.String(), netpolicy.DummyPort),
 		Proto: "tcp",
-		Meta:  map[string]string{"class": class.String(), "job.id": job.ID},
+		Meta:  netpolicy.OverlayInstanceMeta(job),
 	}
 	hb, err := client.AddServiceAndRegisterInstance(svc, inst)
 	if err != nil {

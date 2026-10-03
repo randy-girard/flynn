@@ -942,21 +942,17 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	if job.Config.Env == nil {
 		job.Config.Env = make(map[string]string)
 	}
-	for i, p := range job.Config.Ports {
+	for _, p := range job.Config.Ports {
 		if p.Proto != "tcp" && p.Proto != "udp" {
 			err := fmt.Errorf("unknown port proto %q", p.Proto)
 			log.Error("error allocating port", "proto", p.Proto, "err", err)
 			l.State.mtx.Unlock()
 			return err
 		}
-
-		if p.Port == 0 {
-			job.Config.Ports[i].Port = 5000 + i
-		}
-		if i == 0 {
-			job.Config.Env["PORT"] = strconv.Itoa(job.Config.Ports[i].Port)
-		}
-		job.Config.Env[fmt.Sprintf("PORT_%d", i)] = strconv.Itoa(job.Config.Ports[i].Port)
+	}
+	host.ApplyListenPorts(job.Config.Ports)
+	for k, v := range host.ListenPortEnv(job.Config.Ports) {
+		job.Config.Env[k] = v
 	}
 
 	if container.IP != nil {

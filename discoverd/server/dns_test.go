@@ -16,6 +16,7 @@ import (
 	. "github.com/flynn/go-check"
 	"github.com/miekg/dns"
 	"github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -778,6 +779,94 @@ func (s *DNSSuite) TestUserDiscoverdDNSDatastoreInstanceMeta(c *C) {
 
 	blocked := lookup("leader.mongodb.discoverd.")
 	c.Assert(blocked.Rcode, Equals, dns.RcodeNameError)
+}
+
+func (s *DNSSuite) TestUserDiscoverdDNSAttachedOnly(c *C) {
+	attached := "redis-lagoon-59415"
+	other := "pg-ridge-ffpade"
+	redisLeader, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
+	pgLeader, _ := fakeStaticInstance("tcp", "10.0.0.8", 5432)
+	userInst, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+	userInst.Meta = map[string]string{netpolicy.MetaDiscoverdAllow: attached}
+
+	srv := s.newServer(c, nil)
+	defer srv.Close()
+	srv.SetStore(&DNSServerStore{
+		InstancesFn: func(service string) ([]*discoverd.Instance, error) {
+			switch service {
+			case "flynn-net-user":
+				return []*discoverd.Instance{userInst}, nil
+			case attached:
+				return []*discoverd.Instance{redisLeader}, nil
+			case other:
+				return []*discoverd.Instance{pgLeader}, nil
+			default:
+				return nil, nil
+			}
+		},
+		ServiceLeaderFn: func(service string) (*discoverd.Instance, error) {
+			switch service {
+			case attached:
+				return redisLeader, nil
+			case other:
+				return pgLeader, nil
+			default:
+				return nil, nil
+			}
+		},
+	})
+
+	client := &dns.Client{Net: "udp"}
+	lookup := func(name string) *dns.Msg {
+		req := &dns.Msg{}
+		req.SetQuestion(name, dns.TypeA)
+		res, _, err := client.Exchange(req, srv.UDPAddr)
+		c.Assert(err, IsNil)
+		return res
+	}
+
+	ok := lookup("leader." + attached + ".discoverd.")
+	c.Assert(ok.Rcode, Equals, dns.RcodeSuccess)
+	c.Assert(ok.Answer, Not(HasLen), 0)
+
+	c.Assert(lookup("leader."+other+".discoverd.").Rcode, Equals, dns.RcodeNameError)
+	c.Assert(lookup(attached+".discoverd.").Rcode, Equals, dns.RcodeNameError)
+	c.Assert(lookup("app-one-web.discoverd.").Rcode, Equals, dns.RcodeNameError)
+	c.Assert(lookup("postgres.discoverd.").Rcode, Equals, dns.RcodeNameError)
+}
+
+func (s *DNSSuite) TestUserDiscoverdDNSEmptyAllow(c *C) {
+	attached := "redis-lagoon-59415"
+	redisLeader, _ := fakeStaticInstance("tcp", "10.0.0.6", 6379)
+	userInst, _ := fakeStaticInstance("tcp", "127.0.0.1", 1)
+	userInst.Meta = map[string]string{netpolicy.MetaDiscoverdAllow: ""}
+
+	srv := s.newServer(c, nil)
+	defer srv.Close()
+	srv.SetStore(&DNSServerStore{
+		InstancesFn: func(service string) ([]*discoverd.Instance, error) {
+			switch service {
+			case "flynn-net-user":
+				return []*discoverd.Instance{userInst}, nil
+			case attached:
+				return []*discoverd.Instance{redisLeader}, nil
+			default:
+				return nil, nil
+			}
+		},
+		ServiceLeaderFn: func(service string) (*discoverd.Instance, error) {
+			if service == attached {
+				return redisLeader, nil
+			}
+			return nil, nil
+		},
+	})
+
+	req := &dns.Msg{}
+	req.SetQuestion("leader."+attached+".discoverd.", dns.TypeA)
+	res, _, err := (&dns.Client{Net: "udp"}).Exchange(req, srv.UDPAddr)
+	c.Assert(err, IsNil)
+	c.Assert(res.Rcode, Equals, dns.RcodeNameError)
 }
 
 func assertSOA(c *C, rrs []dns.RR) {

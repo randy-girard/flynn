@@ -219,9 +219,17 @@ func (d dnsAPI) ServiceLookup(w dns.ResponseWriter, req *dns.Msg) {
 		return
 	}
 
-	if d.clientIsUser(w.RemoteAddr()) && !d.userMayResolveDiscoverd(leader, service) {
-		nxdomain()
-		return
+	if inst := d.userNetInstance(w.RemoteAddr()); inst != nil {
+		allowed, restrict := netpolicy.ParseDiscoverdAllow(inst.Meta)
+		if restrict {
+			if !netpolicy.UserMayResolveAttached(leader, service, allowed) {
+				nxdomain()
+				return
+			}
+		} else if !d.userMayResolveDiscoverd(leader, service) {
+			nxdomain()
+			return
+		}
 	}
 
 	var instances []*discoverd.Instance
@@ -482,23 +490,26 @@ func (d dnsAPI) userMayResolveDiscoverd(leader bool, service string) bool {
 	return false
 }
 
-func (d dnsAPI) clientIsUser(addr net.Addr) bool {
+func (d dnsAPI) userNetInstance(addr net.Addr) *discoverd.Instance {
 	ip := remoteIP(addr)
 	if ip == nil {
-		return false
+		return nil
 	}
 	insts, err := d.GetStore().Instances(netpolicy.ServiceUser)
 	if err != nil || len(insts) == 0 {
-		return false
+		return nil
 	}
 	for _, inst := range insts {
+		if inst == nil {
+			continue
+		}
 		host, _, err := net.SplitHostPort(inst.Addr)
 		if err != nil {
 			host = inst.Addr
 		}
 		if parsed := net.ParseIP(host); parsed != nil && parsed.Equal(ip) {
-			return true
+			return inst
 		}
 	}
-	return false
+	return nil
 }

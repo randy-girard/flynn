@@ -185,6 +185,9 @@ func TestUserMayResolveDiscoverd(t *testing.T) {
 	if !UserMayResolveDiscoverd(true, "mysql-harbor-kxmnpq") {
 		t.Fatal("user jobs may resolve isolated mysql instance leaders")
 	}
+	if !UserMayResolveDiscoverd(true, "redis-lagoon-59415") {
+		t.Fatal("user jobs may resolve leader.redis-<word>-<5 digits>.discoverd")
+	}
 	if !UserMayResolveDiscoverd(true, "redis-11111111-2222-3333-4444-555555555555") {
 		t.Fatal("user jobs may resolve leader.redis-<uuid>.discoverd")
 	}
