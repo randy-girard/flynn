@@ -67,6 +67,59 @@ type App struct {
 	CreatedBy string     `json:"created_by,omitempty"`
 	CreatedAt *time.Time `json:"created_at,omitempty"`
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+	// Building is computed on GET: git receive has started (app meta) or a
+	// slugbuilder/dockerbuilder job is running. Not stored. Env-only
+	// (resource attach) deploys do not set this.
+	Building bool `json:"building,omitempty"`
+}
+
+// MetaAppBuilding is set on the app at the start of gitreceive and cleared
+// when that push finishes (success or fail). Value is RFC3339 start time.
+const MetaAppBuilding = "flynn-controller.building"
+
+// AppBuildingMetaTTL is how long a git-push building mark stays valid if
+// gitreceive is killed before it can clear the key.
+const AppBuildingMetaTTL = 30 * time.Minute
+
+func MarkAppBuildingMeta(meta map[string]string) map[string]string {
+	if meta == nil {
+		meta = make(map[string]string, 1)
+	}
+	meta[MetaAppBuilding] = time.Now().UTC().Format(time.RFC3339)
+	return meta
+}
+
+func ClearAppBuildingMeta(meta map[string]string) map[string]string {
+	if meta == nil {
+		return meta
+	}
+	delete(meta, MetaAppBuilding)
+	return meta
+}
+
+func AppMetaIsBuilding(meta map[string]string, now time.Time) bool {
+	if meta == nil {
+		return false
+	}
+	raw := strings.TrimSpace(meta[MetaAppBuilding])
+	if raw == "" {
+		return false
+	}
+	if raw == "1" || strings.EqualFold(raw, "true") {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, raw)
+	}
+	if err != nil {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	age := now.Sub(t)
+	return age >= 0 && age < AppBuildingMetaTTL
 }
 
 func (a *App) System() bool {
@@ -310,6 +363,43 @@ func IsInternalProcessType(name string) bool {
 	return false
 }
 
+// IsBuilderProcessType is a git-push compile job (slugbuilder or dockerbuilder).
+func IsBuilderProcessType(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "" {
+		return false
+	}
+	for _, prefix := range []string{"slugbuilder", "dockerbuilder"} {
+		if n == prefix || strings.HasPrefix(n, prefix+"-") {
+			return true
+		}
+	}
+	return false
+}
+
+func JobIsRunning(j *Job) bool {
+	if j == nil {
+		return false
+	}
+	switch j.State {
+	case JobStatePending, JobStateStarting, JobStateUp:
+		return true
+	default:
+		return false
+	}
+}
+
+// AppIsBuilding reports a running git-push compile job. Procfile `release`
+// jobs and stopping leftovers must not pin the dashboard banner.
+func AppIsBuilding(jobs []*Job) bool {
+	for _, j := range jobs {
+		if JobIsRunning(j) && IsBuilderProcessType(j.Type) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsSirenia reports whether the release is for a sirenia-managed database
 // (postgres and sirenia plugins) by checking for the SIRENIA_PROCESS env var
 // that the sirenia deployment strategy uses to identify the database process
@@ -327,7 +417,11 @@ func (r *Release) IsSireniaSingleton() bool {
 }
 
 type ProcessType struct {
-	Args              []string           `json:"args,omitempty"`
+	Args []string `json:"args,omitempty"`
+	// Command is the Procfile line (git/buildpack) or the container command
+	// (docker push / Dockerfile). Args remain the runtime argv (slugrunner
+	// `/runner/init start <type>`, or the image entrypoint+cmd).
+	Command           string             `json:"command,omitempty"`
 	Env               map[string]string  `json:"env,omitempty"`
 	Ports             []Port             `json:"ports,omitempty"`
 	Volumes           []VolumeReq        `json:"volumes,omitempty"`
@@ -605,6 +699,7 @@ const (
 const (
 	ProcessTypeRunner  = "runner"  // detached one-off (`flynn run -d`, dashboard Run command)
 	ProcessTypeConsole = "console" // attached TTY (`flynn run`, dashboard Console)
+	ProcessTypeRelease = "release" // Procfile release phase (migrations); one-shot per deploy
 )
 
 type NewJob struct {
@@ -652,11 +747,23 @@ func NewJobProcessType(j NewJob, attach bool) string {
 
 const DefaultDeployTimeout = 120 // seconds
 
+// DeployInProgressMessage is returned only if two running deploys race the
+// isolate_deploys unique index. New deploys otherwise queue and run in order.
+const DeployInProgressMessage = "Cannot create deploy, there is already one in progress for this app."
+
+func IsDeployInProgress(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "already one in progress")
+}
+
 type Deployment struct {
 	ID              string                       `json:"id,omitempty"`
 	AppID           string                       `json:"app,omitempty"`
 	OldReleaseID    string                       `json:"old_release,omitempty"`
 	NewReleaseID    string                       `json:"new_release,omitempty"`
+	Type            ReleaseType                  `json:"type,omitempty"`
 	Strategy        string                       `json:"strategy,omitempty"`
 	Status          string                       `json:"status,omitempty"`
 	Processes       map[string]int               `json:"processes,omitempty"`

@@ -90,6 +90,9 @@ func TestNewAppRelease(t *testing.T) {
 	if proc.Args[0] != "/bin/sh" {
 		t.Fatalf("Args = %#v", proc.Args)
 	}
+	if proc.Command != "/bin/sh -c app" {
+		t.Fatalf("Command = %q", proc.Command)
+	}
 	if proc.Ports[0].Port != 3000 {
 		t.Fatalf("Port = %d", proc.Ports[0].Port)
 	}

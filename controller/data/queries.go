@@ -41,8 +41,12 @@ var preparedStatements = map[string]string{
 	"deployment_list":                          deploymentListQuery,
 	"deployment_list_page":                     deploymentListPageQuery,
 	"deployment_select":                        deploymentSelectQuery,
+	"deployment_select_open":                   deploymentSelectOpenQuery,
+	"deployment_que_job":                       deploymentQueJobQuery,
 	"deployment_select_expanded":               deploymentSelectExpandedQuery,
 	"deployment_insert":                        deploymentInsertQuery,
+	"deployment_select_latest_unfinished":      deploymentSelectLatestUnfinishedQuery,
+	"deployment_start_next":                    deploymentStartNextQuery,
 	"deployment_update_finished_at":            deploymentUpdateFinishedAtQuery,
 	"deployment_update_finished_at_now":        deploymentUpdateFinishedAtNowQuery,
 	"deployment_delete":                        deploymentDeleteQuery,
@@ -303,8 +307,31 @@ SELECT COUNT(*) FROM (
   WHERE deleted_at IS NULL
 ) AS l WHERE l.layer_id = $1`
 	deploymentInsertQuery = `
-INSERT INTO deployments (deployment_id, app_id, old_release_id, new_release_id, type, strategy, processes, tags, deploy_timeout, deploy_batch_size)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING created_at`
+INSERT INTO deployments (deployment_id, app_id, old_release_id, new_release_id, type, strategy, processes, tags, deploy_timeout, deploy_batch_size, started_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING created_at`
+	deploymentSelectLatestUnfinishedQuery = `
+SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployment_status(deployment_id),
+  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
+FROM deployments
+WHERE app_id = $1 AND finished_at IS NULL
+ORDER BY created_at DESC
+LIMIT 1`
+	deploymentStartNextQuery = `
+WITH next AS (
+  SELECT deployment_id FROM deployments
+  WHERE app_id = $1 AND finished_at IS NULL AND started_at IS NULL
+  ORDER BY created_at ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1
+)
+UPDATE deployments d SET started_at = now()
+FROM next
+WHERE d.deployment_id = next.deployment_id
+AND NOT EXISTS (
+  SELECT 1 FROM deployments r
+  WHERE r.app_id = $1 AND r.finished_at IS NULL AND r.started_at IS NOT NULL
+)
+RETURNING d.deployment_id`
 	deploymentUpdateFinishedAtQuery = `
 UPDATE deployments SET finished_at = $2 WHERE deployment_id = $1`
 	deploymentUpdateFinishedAtNowQuery = `
@@ -313,9 +340,19 @@ UPDATE deployments SET finished_at = now() WHERE deployment_id = $1`
 DELETE FROM deployments WHERE deployment_id = $1`
 	deploymentSelectQuery = `
 SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployment_status(deployment_id),
-  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at
+  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
 FROM deployments
 WHERE deployment_id = $1`
+	deploymentSelectOpenQuery = `
+SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployment_status(deployment_id),
+  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
+FROM deployments
+WHERE app_id = $1 AND finished_at IS NULL AND started_at IS NOT NULL
+LIMIT 1`
+	deploymentQueJobQuery = `
+SELECT locked_until FROM que_jobs
+WHERE job_class = 'deployment' AND args->>'ID' = $1
+LIMIT 1`
 	deploymentSelectExpandedQuery = `
 SELECT d.deployment_id, d.app_id, d.old_release_id, d.new_release_id, d.strategy, deployment_status(d.deployment_id),
   d.processes, d.tags, d.deploy_timeout, d.deploy_batch_size, d.created_at, d.finished_at,
@@ -342,7 +379,7 @@ LIMIT 1
 `
 	deploymentListQuery = `
 SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployment_status(deployment_id),
-  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at
+  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
 FROM deployments
 WHERE app_id = $1 ORDER BY created_at DESC`
 	deploymentListPageQuery = `

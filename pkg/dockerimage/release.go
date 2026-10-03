@@ -2,6 +2,7 @@ package dockerimage
 
 import (
 	"strconv"
+	"strings"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
@@ -58,6 +59,7 @@ func NewAppRelease(appName string, prev *ct.Release, artifactID string, build *B
 	}
 	if build != nil && len(build.Args) > 0 {
 		proc.Args = append([]string{}, build.Args...)
+		proc.Command = strings.Join(proc.Args, " ")
 	}
 	if len(proc.Ports) == 0 {
 		port := 8080
@@ -109,6 +111,9 @@ func NewAppRelease(appName string, prev *ct.Release, artifactID string, build *B
 	procs := make(map[string]ct.ProcessType, 1+len(opts.ExtraProcesses))
 	procs[processName] = proc
 	for name, p := range opts.ExtraProcesses {
+		if strings.TrimSpace(p.Command) == "" && len(p.Args) > 0 {
+			p.Command = strings.Join(p.Args, " ")
+		}
 		procs[name] = p
 	}
 	release.Processes = procs

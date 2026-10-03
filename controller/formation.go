@@ -350,6 +350,12 @@ func (c *controllerAPI) validateFormationScale(processes map[string]int) error {
 		if ct.IsInternalProcessType(name) {
 			continue
 		}
+		if ct.IsReleaseProcessType(name) && n > 0 {
+			return ct.ValidationError{
+				Field:   "processes." + name,
+				Message: "release process runs once per deploy and cannot be scaled",
+			}
+		}
 		if n > max {
 			return ct.ValidationError{
 				Field:   "processes." + name,

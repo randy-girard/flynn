@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRedisApplianceStrategy(t *testing.T) {
@@ -318,10 +319,130 @@ func TestIsInternalProcessType(t *testing.T) {
 			t.Fatalf("%q must be an internal process type", name)
 		}
 	}
-	for _, name := range []string{"web", "worker", "run", "runner", "console", "postgres", ""} {
+	for _, name := range []string{"web", "worker", "run", "runner", "console", "release", "postgres", ""} {
 		if IsInternalProcessType(name) {
 			t.Fatalf("%q must not be an internal process type", name)
 		}
+	}
+}
+
+func TestAppIsBuilding(t *testing.T) {
+	if AppIsBuilding([]*Job{{Type: "web", State: JobStateUp}}) {
+		t.Fatal("user jobs are not a git-push build")
+	}
+	if !AppIsBuilding([]*Job{{Type: "slugbuilder", State: JobStateUp}}) {
+		t.Fatal("running slugbuilder is a git-push build")
+	}
+	if !AppIsBuilding([]*Job{{Type: "dockerbuilder", State: JobStateStarting}}) {
+		t.Fatal("starting dockerbuilder is a git-push build")
+	}
+	if AppIsBuilding([]*Job{{Type: "release", State: JobStateUp}}) {
+		t.Fatal("release jobs must not pin building after the command exits")
+	}
+	if AppIsBuilding([]*Job{{Type: "slugbuilder", State: JobStateStopping}}) {
+		t.Fatal("stopping builder must not pin building")
+	}
+	if AppIsBuilding([]*Job{{Type: "slugbuilder", State: JobStateDown}}) {
+		t.Fatal("finished builder is not building")
+	}
+	if IsBuilderProcessType("slugrunner") || IsBuilderProcessType("web") {
+		t.Fatal("slugrunner/web are not builder jobs")
+	}
+}
+
+func TestAppMetaIsBuilding(t *testing.T) {
+	now := time.Date(2026, 10, 3, 15, 0, 0, 0, time.UTC)
+	if AppMetaIsBuilding(nil, now) {
+		t.Fatal("empty meta is not building")
+	}
+	if !AppMetaIsBuilding(map[string]string{MetaAppBuilding: now.Add(-time.Minute).Format(time.RFC3339)}, now) {
+		t.Fatal("fresh git-push mark is building")
+	}
+	if AppMetaIsBuilding(map[string]string{MetaAppBuilding: now.Add(-31 * time.Minute).Format(time.RFC3339)}, now) {
+		t.Fatal("stale git-push mark expired")
+	}
+	if !AppMetaIsBuilding(map[string]string{MetaAppBuilding: "true"}, now) {
+		t.Fatal("true is building")
+	}
+	meta := MarkAppBuildingMeta(nil)
+	if !AppMetaIsBuilding(meta, time.Now()) {
+		t.Fatal("MarkAppBuildingMeta must be readable")
+	}
+	if AppMetaIsBuilding(ClearAppBuildingMeta(meta), time.Now()) {
+		t.Fatal("cleared mark is not building")
+	}
+}
+
+func TestIsReleaseProcessType(t *testing.T) {
+	if !IsReleaseProcessType("release") || !IsReleaseProcessType("Release") {
+		t.Fatal("release must match")
+	}
+	if IsReleaseProcessType("web") || IsReleaseProcessType("release-web") || IsReleaseProcessType("") {
+		t.Fatal("non-release types must not match")
+	}
+}
+
+func TestProcessDisplayCommand(t *testing.T) {
+	if got := ProcessDisplayCommand(ProcessType{Command: "rake db:migrate", Args: []string{"/runner/init", "start", "release"}}); got != "rake db:migrate" {
+		t.Fatalf("procfile = %q", got)
+	}
+	if got := ProcessDisplayCommand(ProcessType{Args: []string{"/bin/app", "serve"}}); got != "/bin/app serve" {
+		t.Fatalf("docker args = %q", got)
+	}
+	if got := ProcessDisplayCommand(ProcessType{Args: []string{"/runner/init", "start", "web"}}); got != "web" {
+		t.Fatalf("slug wrapper fallback = %q", got)
+	}
+}
+
+func TestWithoutReleaseProcessCounts(t *testing.T) {
+	got := WithoutReleaseProcessCounts(map[string]int{"web": 2, "release": 1, "worker": 3})
+	if _, ok := got["release"]; ok {
+		t.Fatalf("release still present: %#v", got)
+	}
+	if got["web"] != 2 || got["worker"] != 3 {
+		t.Fatalf("got %#v", got)
+	}
+	if WithoutReleaseProcessCounts(nil) != nil {
+		t.Fatal("nil in must stay nil")
+	}
+}
+
+func TestReleasePhaseNewJob(t *testing.T) {
+	if ReleasePhaseNewJob(nil) != nil {
+		t.Fatal("nil release")
+	}
+	if ReleasePhaseNewJob(&Release{Processes: map[string]ProcessType{"web": {}}}) != nil {
+		t.Fatal("no release type")
+	}
+	rel := &Release{
+		ID: "rel-1",
+		Processes: map[string]ProcessType{
+			ProcessTypeRelease: {Args: []string{"/runner/init", "start", "release"}, Command: "rake db:migrate"},
+		},
+	}
+	job := ReleasePhaseNewJob(rel)
+	if job == nil || job.Type != ProcessTypeRelease || job.ReleaseID != "rel-1" {
+		t.Fatalf("job = %#v", job)
+	}
+	if len(job.Args) != 3 || job.Args[2] != "release" {
+		t.Fatalf("args = %#v", job.Args)
+	}
+}
+
+func TestReleasePhaseCompleted(t *testing.T) {
+	zero := int32(0)
+	fail := int32(1)
+	jobs := []*Job{
+		{ReleaseID: "rel-1", Type: ProcessTypeRelease, State: JobStateDown, ExitStatus: &zero},
+	}
+	if !ReleasePhaseCompleted(jobs, "rel-1") {
+		t.Fatal("successful release job should complete the phase")
+	}
+	if ReleasePhaseCompleted(jobs, "rel-2") {
+		t.Fatal("other release must not count")
+	}
+	if ReleasePhaseCompleted([]*Job{{ReleaseID: "rel-1", Type: ProcessTypeRelease, State: JobStateDown, ExitStatus: &fail}}, "rel-1") {
+		t.Fatal("failed exit must not complete the phase")
 	}
 }
 

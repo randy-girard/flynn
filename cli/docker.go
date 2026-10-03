@@ -203,7 +203,7 @@ func runDockerPushLegacy(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	prevRelease, err := client.GetAppRelease(app.ID)
+	prevRelease, err := controller.HeadRelease(client, app.ID)
 	if err == controller.ErrNotFound {
 		prevRelease = &ct.Release{}
 	} else if err != nil {
@@ -359,7 +359,7 @@ func runDockerPushTar(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	prevRelease, err := client.GetAppRelease(app.ID)
+	prevRelease, err := controller.HeadRelease(client, app.ID)
 	if err == controller.ErrNotFound {
 		prevRelease = &ct.Release{}
 	} else if err != nil {

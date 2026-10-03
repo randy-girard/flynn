@@ -40,6 +40,9 @@ Examples:
 
 	$ flynn env:set FOO=bar BAZ=foobar
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb.
+
+The command returns after the new release is created. If another deploy is
+already running, this one is queued and runs next.
 `)
 	register("env:unset", runEnvUnset, `
 usage: flynn env:unset [-t <proc>] <var>...
@@ -53,6 +56,9 @@ Examples:
 
 	$ flynn env:unset FOO
 	Created release b1bbd9bc76d6436ea2fd245300bce72e.
+
+The command returns after the new release is created. If another deploy is
+already running, this one is queued and runs next.
 `)
 	register("env:get", runEnvGet, `
 usage: flynn env:get [-t <proc>] <var>
@@ -183,7 +189,7 @@ func setEnv(client controller.Client, proc string, env map[string]*string) (stri
 	if err != nil {
 		return "", err
 	}
-	release, err := client.GetAppRelease(app.ID)
+	release, err := controller.HeadRelease(client, app.ID)
 	if err == controller.ErrNotFound {
 		release = &ct.Release{}
 		if proc != "" {
@@ -223,8 +229,16 @@ func setEnv(client controller.Client, proc string, env map[string]*string) (stri
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return "", err
 	}
-	if err := client.DeployAppRelease(app.ID, release.ID, nil); err != nil {
+	d, err := client.CreateDeployment(app.ID, release.ID)
+	if err != nil {
 		return "", err
+	}
+	if d != nil && d.FinishedAt == nil {
+		if d.Status == "queued" {
+			log.Println("Deploy queued behind the in-progress deploy.")
+		} else {
+			log.Println("The release is deploying in the background.")
+		}
 	}
 	return release.ID, nil
 }

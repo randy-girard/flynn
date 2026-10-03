@@ -3,11 +3,13 @@ package main
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"path"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -27,11 +29,49 @@ import (
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
+	router "github.com/randy-girard/flynn/router/types"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func init() {
 	log.SetFlags(0)
+}
+
+const qemuTranslationNotice = "-----> Notice: qemu-user is translating x86_64 Heroku buildpack/Node binaries on this arm64 host (slower than native amd64)\n"
+
+func printQemuTranslationNotice(w io.Writer) {
+	if runtime.GOARCH != "arm64" {
+		return
+	}
+	fmt.Fprint(w, qemuTranslationNotice)
+}
+
+type appBuildingStore interface {
+	GetApp(string) (*ct.App, error)
+	UpdateAppMeta(*ct.App) error
+}
+
+func markAppBuilding(store appBuildingStore, app *ct.App) error {
+	if store == nil || app == nil {
+		return nil
+	}
+	app.Meta = ct.MarkAppBuildingMeta(app.Meta)
+	return store.UpdateAppMeta(app)
+}
+
+func clearAppBuilding(store appBuildingStore, app *ct.App) error {
+	if store == nil || app == nil || app.ID == "" {
+		return nil
+	}
+	current, err := store.GetApp(app.ID)
+	if err != nil {
+		current = app
+	}
+	if current == nil || current.Meta == nil || current.Meta[ct.MetaAppBuilding] == "" {
+		return nil
+	}
+	current.Meta = ct.ClearAppBuildingMeta(current.Meta)
+	return store.UpdateAppMeta(current)
 }
 
 const (
@@ -222,7 +262,15 @@ Options:
 	} else if err != nil {
 		return fmt.Errorf("Error retrieving app: %s", err)
 	}
-	prevRelease, err := client.GetAppRelease(app.Name)
+	defer func() {
+		if err := clearAppBuilding(client, app); err != nil {
+			fmt.Printf("-----> WARN: could not clear building status: %s\n", err)
+		}
+	}()
+	if err := markAppBuilding(client, app); err != nil {
+		fmt.Printf("-----> WARN: could not mark app as building: %s\n", err)
+	}
+	prevRelease, err := controller.HeadRelease(client, app.Name)
 	if err == controller.ErrNotFound {
 		prevRelease = &ct.Release{}
 	} else if err != nil {
@@ -267,21 +315,53 @@ func resolveStack(releaseEnv map[string]string) (string, error) {
 	}
 }
 
+// processCommandsFromMeta reads Procfile commands stored on the slug artifact.
+// Older slugs only have process type names; those get empty command strings.
+func processCommandsFromMeta(meta map[string]string) map[string]string {
+	cmds := map[string]string{}
+	if meta == nil {
+		return cmds
+	}
+	if raw := strings.TrimSpace(meta["slugbuilder.process_commands"]); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &cmds); err != nil {
+			cmds = map[string]string{}
+		}
+	}
+	if cmds == nil {
+		cmds = map[string]string{}
+	}
+	if types := meta["slugbuilder.process_types"]; types != "" {
+		for _, t := range strings.Split(types, ",") {
+			t = strings.TrimSpace(t)
+			if t == "" {
+				continue
+			}
+			if _, ok := cmds[t]; !ok {
+				cmds[t] = ""
+			}
+		}
+	}
+	return cmds
+}
+
 // slugReleaseProcesses copies existing process types from the previous release
 // and stamps first-seen types with the small runtime.
-func slugReleaseProcesses(processTypes []string, prev *ct.Release, appName string) map[string]ct.ProcessType {
+func slugReleaseProcesses(commands map[string]string, prev *ct.Release, appName string) map[string]ct.ProcessType {
 	var prevProcs map[string]ct.ProcessType
 	if prev != nil {
 		prevProcs = prev.Processes
 	}
 	procs := make(map[string]ct.ProcessType)
-	for _, t := range processTypes {
+	for t, cmd := range commands {
 		t = strings.TrimSpace(t)
 		if t == "" {
 			continue
 		}
 		proc, existed := prevProcs[t]
 		proc.Args = []string{"/runner/init", "start", t}
+		if c := strings.TrimSpace(cmd); c != "" {
+			proc.Command = c
+		}
 		if !existed {
 			proc.RuntimeProfile = resource.ProfileSmall
 		}
@@ -321,6 +401,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 
 	fmt.Printf("-----> Building %s...\n", app.Name)
+	printQemuTranslationNotice(os.Stdout)
 
 	slugImageID := random.UUID()
 	jobEnv := map[string]string{
@@ -372,11 +453,6 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	if err != nil {
 		return fmt.Errorf("Error getting slug image: %s", err)
 	}
-	var processTypes []string
-	if metaVal, ok := artifact.Meta["slugbuilder.process_types"]; ok {
-		processTypes = strings.Split(metaVal, ",")
-	}
-
 	fmt.Printf("-----> Creating release...\n")
 
 	release := &ct.Release{
@@ -392,7 +468,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 	release.Meta["slugrunner.stack"] = stackName
 
-	procs := slugReleaseProcesses(processTypes, prevRelease, app.Name)
+	procs := slugReleaseProcesses(processCommandsFromMeta(artifact.Meta), prevRelease, app.Name)
 	release.Processes = procs
 
 	return finishDeploy(client, app, prevRelease, release, procs)
@@ -410,6 +486,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 
 	fmt.Printf("-----> Building %s from Dockerfile...\n", app.Name)
+	printQemuTranslationNotice(os.Stdout)
 
 	imageArtifactID := random.UUID()
 	jobEnv := dockerBuildJobEnv(os.Getenv("CONTROLLER_KEY"), imageArtifactID, args.String["<rev>"], releaseEnv, app.ID)
@@ -582,6 +659,9 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return fmt.Errorf("Error creating release: %s", err)
 	}
+	if err := runReleasePhase(client, app, release); err != nil {
+		return err
+	}
 	if err := client.DeployAppRelease(app.ID, release.ID, nil); err != nil {
 		return fmt.Errorf("Error deploying app release: %s", err)
 	}
@@ -607,7 +687,74 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	}
 
 	fmt.Println("=====> Application deployed")
+	printDeployURLs(client, app)
 	return nil
+}
+
+func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release) error {
+	req := ct.ReleasePhaseNewJob(release)
+	if req == nil {
+		return nil
+	}
+	proc := release.Processes[ct.ProcessTypeRelease]
+	fmt.Println("-----> Running release command")
+	if cmd := ct.ProcessDisplayCommand(proc); cmd != "" {
+		fmt.Printf("       %s\n", cmd)
+	}
+	rwc, err := client.RunJobAttached(app.ID, req)
+	if err != nil {
+		return fmt.Errorf("Error running release command: %s", err)
+	}
+	defer rwc.Close()
+	attachClient := cluster.NewAttachClient(rwc)
+	_ = attachClient.CloseWrite()
+	// pre-receive only pipes flynn-receiver stdout to `git push`.
+	exitStatus, err := attachClient.Receive(os.Stdout, os.Stdout)
+	if err != nil {
+		return fmt.Errorf("Error running release command: %s", err)
+	}
+	if exitStatus != 0 {
+		return ct.ReleasePhaseExitError(exitStatus)
+	}
+	fmt.Println("-----> Release command complete")
+	return nil
+}
+
+func printDeployURLs(client controller.Client, app *ct.App) {
+	if client == nil || app == nil {
+		return
+	}
+	id := app.ID
+	if id == "" {
+		id = app.Name
+	}
+	routes, err := client.AppRouteList(id)
+	if err != nil {
+		fmt.Println("-----> WARN: could not list app URLs:", err)
+		return
+	}
+	printRouteURLs(os.Stdout, routes, os.Getenv("DEFAULT_ROUTE_DOMAIN"))
+}
+
+func printRouteURLs(w io.Writer, routes []*router.Route, clusterDomain string) {
+	var urls []string
+	seen := map[string]struct{}{}
+	for _, r := range routes {
+		for _, u := range r.PublicURLs(clusterDomain) {
+			if _, ok := seen[u]; ok {
+				continue
+			}
+			seen[u] = struct{}{}
+			urls = append(urls, u)
+		}
+	}
+	if len(urls) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "=====> URLs")
+	for _, u := range urls {
+		fmt.Fprintf(w, "       %s\n", u)
+	}
 }
 
 // initialJobDownThreshold matches controller deploy scale-up: a first web

@@ -80,6 +80,12 @@ The [multi buildpack](https://github.com/heroku/heroku-buildpack-multi) is
 included in Flynn and can be used to specify a custom buildpack in addition to
 allowing the use of multiple buildpacks during a single deploy.
 
+On **arm64** hosts, classic Heroku Node (and some ffmpeg) packs ship x86_64
+binaries. Apple Silicon Vagrant nodes install `qemu-user-static` 9+, and the
+heroku-24 image adds amd64 glibc, so those binaries can run. `git push` prints
+a notice when qemu translation is in use. See
+[Node.js](languages/nodejs.md) and [Vagrant](installation/vagrant.md).
+
 To specify a custom buildpack, create and commit a `.buildpacks` file with one
 or more URLs of buildpacks to use:
 
@@ -103,6 +109,43 @@ release is started and the old release is only stopped if the new one comes up
 correctly. If the new release does not come back up or something else goes
 wrong, the deploy is automatically rolled back and the old release stays
 running.
+
+### Release phase
+
+A Procfile `release` process type is not scaled. After the new release is
+created and **before** traffic is swapped to it, Flynn runs that command once
+(typical use: database migrations) and waits for it to exit. On `git push`,
+the command's stdout and stderr are printed in the push output. A non-zero
+exit fails the deploy and leaves the previous release serving traffic.
+
+```
+release: bundle exec rake db:migrate
+```
+
+The dashboard Resources tab shows the Procfile command (or, for Docker
+deploys, the container command) for each process type. `release` is listed as
+running once per deploy. Provisioning a datastore from that tab closes the
+side panel and keeps the new instance on the list with a provisioning status
+until it is live; the instance page is linked after that.
+
+While a **git push** or dashboard/CLI **code** deploy is in progress, every app
+tab shows **Deploy in progress**. That banner appears as soon as `git push`
+starts (compile) and stays through the Procfile `release` command and traffic
+swap. It clears when the deployer finishes. The dashboard paints that banner
+as an info alert. Overview shows a Deployment card with **deploying** (or
+**compiling** during git push). Activity marks the release card **deploying**
+(or **queued**). The Deploy tab card lists kind, strategy, old → new release,
+and scale. **Config deploys** (env changes, `resource:add` / attaching a
+database) do not show this header. `flynn apps:info` prints a **Build** line
+during compile and a **Deploy** line while a code deployer is running.
+`flynn deploy` lists `running` until the deployer finishes (`complete` or
+`failed`). The dashboard Deploy tab polls the same status, including `git
+push` deploys started elsewhere. Env changes and
+resource attach/remove still create a config deploy (jobs restart with the new
+env). Deploys stack: a second `env:unset` (or git push) is queued and runs
+when the previous deploy finishes, instead of failing with "already one in
+progress". Only one deploy rolls at a time. `env:set` / `env:unset` return
+after the release is created; the deploy continues in the background.
 
 ### Cancelling Deploys
 
@@ -201,6 +244,8 @@ output and standard error streams. These logs can be retrieved with `flynn log`,
 and can be followed in real time with `flynn log -f`. Each line is prefixed with
 the source and short job name, for example `app[web.4821]` or `flynn[web.1]`
 for system lines. Filter a process with `flynn log -j web.4821` (or the job UUID).
+The dashboard Logs tab's process dropdown lists Procfile types only (not
+console TTY sessions).
 
 About every 30 seconds each running container also writes a system line of
 cgroup usage in `metric=value` form, prefixed with `metrics`:
@@ -219,9 +264,13 @@ may miss lines while other clients and the on-disk log still receive them.
 
 `flynn metrics` prints the latest stored app snapshot the dashboard uses for
 alerts. Add rules with `flynn alert:add` (email or webhook), or from **Add alert**
-on the dashboard Alerts tab and metrics charts. The dashboard Alerts
+on the dashboard Alerts tab and metrics charts (app, cluster, and, when those
+plugins are installed, Redis and Postgres). The dashboard stores every Redis
+and Postgres series those plugins post so alert threshold charts and the
+add-on Metrics pages share the same history. The dashboard Alerts
 tab lists each firing window (newest first), and the same windows shade the
-matching metric charts. Cluster-wide thresholds and live host samples use
+matching metric charts. Redis and Postgres add-on pages also keep a Slow
+commands / Slow queries tab next to Metrics. Cluster-wide thresholds and live host samples use
 `flynn-host alert` and `flynn-host metrics`.
 See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring).
 
@@ -245,8 +294,10 @@ after installing the **otel** plugin. See
 
 Flynn automatically configures a `https://$APPNAME.$CLUSTERDOMAIN` route that
 points at instances of the `web` process type for each app. Apps must bind to
-and accept HTTP requests at the port provided in the `PORT` environment variable
-to receive traffic.
+and accept HTTP requests at the port in the `PORT` environment variable.
+Flynn injects `PORT` (and `PORT_0`, `PORT_1`, …) from the process type's
+TCP ports. The default `web` process uses **8080**, not a random Heroku-style
+port. `git push` prints the app's URLs when the release is deployed.
 
 ### Custom Domains
 
@@ -418,11 +469,12 @@ same app — unless they go through a route you have added (`flynn route`).
 
 Provisioned datastore URLs use the **leader** hostname Flynn put in
 `DATABASE_URL` / `REDIS_URL` / similar (often `leader.<service>.discoverd`).
-User jobs may resolve those leader names only. Internal names such as
-`postgres.discoverd`, `postgres-api.discoverd`, `postgres-plugin.discoverd`,
-`blobstore.discoverd`, and `$APP-$TYPE.discoverd` do not resolve for user
-jobs. Tenant Postgres is the postgres plugin; its URL is not the platform
-appliance.
+User jobs may resolve **only the leader names attached to that app** — the
+hosts in its own env, not another app's Redis or Postgres. Internal names
+such as `postgres.discoverd`, `postgres-api.discoverd`,
+`postgres-plugin.discoverd`, `blobstore.discoverd`, and
+`$APP-$TYPE.discoverd` do not resolve for user jobs. Tenant Postgres is the
+postgres plugin; its URL is not the platform appliance.
 
 System apps keep a full overlay mesh so appliances, the controller, and the
 router can operate.

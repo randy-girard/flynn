@@ -5,6 +5,7 @@ import (
 	"log"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/flynn/go-docopt"
 	controller "github.com/randy-girard/flynn/controller/client"
@@ -34,6 +35,8 @@ Examples:
 
 	$ flynn apps:create
 	Created turkeys-stupefy-perry
+	https://turkeys-stupefy-perry.1.localflynn.com
+	http://turkeys-stupefy-perry.1.localflynn.com
 `)
 
 	register("apps:destroy", runDelete, `
@@ -91,11 +94,15 @@ Examples:
 	$ flynn apps:info
 	=== example
 	Git URL:  https://git.dev.localflynn.com/example.git
+	Web URL:  https://example.dev.localflynn.com
 	Web URL:  http://example.dev.localflynn.com
+	Build:    running
+	Deploy:   running  a6d470d6-9638-4d74-ae71-91c3d9887714  (4 seconds ago)
 
 	$ flynn -a example apps:info
 	=== example
 	Git URL:  https://git.dev.localflynn.com/example.git
+	Web URL:  https://example.dev.localflynn.com
 	Web URL:  http://example.dev.localflynn.com
 `)
 }
@@ -138,7 +145,28 @@ func runCreate(args *docopt.Args, client controller.Client) error {
 		exec.Command("git", "remote", "add", "--", remote, gitURL(clusterConf, app.Name)).Run()
 	}
 	log.Printf("Created %s", app.Name)
+	printAppRouteURLs(client, app.ID)
 	return nil
+}
+
+func printAppRouteURLs(client controller.Client, appID string) {
+	if client == nil || appID == "" {
+		return
+	}
+	routes, err := client.AppRouteList(appID)
+	if err != nil {
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, r := range routes {
+		for _, u := range r.PublicURLs(clusterRouteDomain(client)) {
+			if _, ok := seen[u]; ok {
+				continue
+			}
+			seen[u] = struct{}{}
+			log.Println(u)
+		}
+	}
 }
 
 func runDelete(args *docopt.Args, client controller.Client) error {
@@ -214,16 +242,33 @@ func runInfo(_ *docopt.Args, client controller.Client) error {
 	}
 
 	if routes, err := client.AppRouteList(appName); err == nil {
+		seen := map[string]struct{}{}
 		for _, k := range routes {
-			if k.Type == "http" {
-				route := k.HTTPRoute()
-				protocol := "https"
-				if route.Certificate == nil && route.LegacyTLSCert == "" {
-					protocol = "http"
-				}
-				listRec(w, "Web URL:", protocol+"://"+route.Domain)
-				break
+			label := "Web URL:"
+			if k.Type == "tcp" {
+				label = "TCP:"
 			}
+			for _, u := range k.PublicURLs(clusterRouteDomain(client)) {
+				if _, ok := seen[u]; ok {
+					continue
+				}
+				seen[u] = struct{}{}
+				listRec(w, label, u)
+			}
+		}
+	}
+
+	if app, err := client.GetApp(appName); err == nil && (app.Building || ct.AppMetaIsBuilding(app.Meta, time.Now())) {
+		listRec(w, "Build:", "running")
+	}
+
+	if deps, err := client.DeploymentList(appName); err == nil {
+		if d := inProgressDeployment(deps); d != nil {
+			status := d.Status
+			if status == "" {
+				status = "running"
+			}
+			listRec(w, "Deploy:", status, d.ID, "("+humanTime(d.CreatedAt)+")")
 		}
 	}
 

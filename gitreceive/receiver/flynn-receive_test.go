@@ -10,6 +10,8 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
 	host "github.com/randy-girard/flynn/host/types"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func TestBuildJob(t *testing.T) {
@@ -109,7 +112,7 @@ func TestSlugReleaseProcessesDefaultsNewTypesToSmall(t *testing.T) {
 		"web":         {RuntimeProfile: "medium", Service: "myapp-web"},
 		"slugbuilder": {RuntimeProfile: "large"},
 	}}
-	procs := slugReleaseProcesses([]string{"web", "worker", ""}, prev, "myapp")
+	procs := slugReleaseProcesses(map[string]string{"web": "bin/web", "worker": "bin/worker", "": "ignored"}, prev, "myapp")
 	if procs["web"].RuntimeProfile != "medium" {
 		t.Fatalf("existing web = %q, want medium", procs["web"].RuntimeProfile)
 	}
@@ -122,12 +125,47 @@ func TestSlugReleaseProcessesDefaultsNewTypesToSmall(t *testing.T) {
 	if procs["slugbuilder"].RuntimeProfile != "large" {
 		t.Fatalf("slugbuilder = %q", procs["slugbuilder"].RuntimeProfile)
 	}
-	first := slugReleaseProcesses([]string{"web"}, nil, "myapp")
+	if procs["web"].Command != "bin/web" || procs["worker"].Command != "bin/worker" {
+		t.Fatalf("commands web=%q worker=%q", procs["web"].Command, procs["worker"].Command)
+	}
+	first := slugReleaseProcesses(map[string]string{"web": "bin/http"}, nil, "myapp")
 	if first["web"].RuntimeProfile != "small" {
 		t.Fatalf("first web = %q, want small", first["web"].RuntimeProfile)
 	}
 	if first["web"].Service != "myapp-web" {
 		t.Fatalf("first web service = %q", first["web"].Service)
+	}
+	if len(first["web"].Ports) != 1 || first["web"].Ports[0].Port != 8080 {
+		t.Fatalf("web PORT must be 8080, got %#v", first["web"].Ports)
+	}
+	if first["web"].Command != "bin/http" {
+		t.Fatalf("first web command = %q", first["web"].Command)
+	}
+}
+
+func TestProcessCommandsFromMeta(t *testing.T) {
+	got := processCommandsFromMeta(map[string]string{
+		"slugbuilder.process_types":    "web,release,worker",
+		"slugbuilder.process_commands": `{"web":"bin/web","release":"rake db:migrate","worker":"sidekiq"}`,
+	})
+	if got["web"] != "bin/web" || got["release"] != "rake db:migrate" || got["worker"] != "sidekiq" {
+		t.Fatalf("got %#v", got)
+	}
+	namesOnly := processCommandsFromMeta(map[string]string{"slugbuilder.process_types": "web, worker"})
+	if _, ok := namesOnly["web"]; !ok {
+		t.Fatalf("names-only = %#v", namesOnly)
+	}
+	if namesOnly["worker"] != "" {
+		t.Fatalf("empty command want \"\", got %#v", namesOnly)
+	}
+}
+
+func TestDefaultScaleProcessIgnoresRelease(t *testing.T) {
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"release": {}}); got != "" {
+		t.Fatalf("release-only = %q", got)
+	}
+	if got := defaultScaleProcess(map[string]ct.ProcessType{"release": {}, "web": {}}); got != "web" {
+		t.Fatalf("web+release = %q", got)
 	}
 }
 
@@ -425,5 +463,106 @@ func TestWatchInitialScaleFailsAfterRepeatedDown(t *testing.T) {
 	}
 	if err := cb(&ct.Job{State: ct.JobStateDown}); err == nil {
 		t.Fatal("repeated downs must fail the initial scale")
+	}
+}
+
+func TestPrintQemuTranslationNotice(t *testing.T) {
+	var buf bytes.Buffer
+	printQemuTranslationNotice(&buf)
+	got := buf.String()
+	if runtime.GOARCH == "arm64" {
+		if !strings.Contains(got, "qemu-user is translating x86_64") {
+			t.Fatalf("arm64 git push must notice qemu mode: %q", got)
+		}
+		return
+	}
+	if got != "" {
+		t.Fatalf("native amd64 git push must not print qemu notice: %q", got)
+	}
+}
+
+func TestPrintRouteURLs(t *testing.T) {
+	var buf bytes.Buffer
+	printRouteURLs(&buf, []*router.Route{
+		{Type: "http", Domain: "app-one.1.localflynn.com"},
+		{Type: "http", Domain: "www.example.com"},
+	}, "1.localflynn.com")
+	got := buf.String()
+	for _, want := range []string{
+		"=====> URLs",
+		"https://app-one.1.localflynn.com",
+		"http://app-one.1.localflynn.com",
+		"http://www.example.com",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %q", want, got)
+		}
+	}
+	if strings.Contains(got, "https://www.example.com") {
+		t.Fatalf("custom domain without cert must not list https: %q", got)
+	}
+}
+
+type fakeBuildingStore struct {
+	app *ct.App
+	err error
+}
+
+func (f *fakeBuildingStore) GetApp(string) (*ct.App, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.app, nil
+}
+
+func (f *fakeBuildingStore) UpdateAppMeta(app *ct.App) error {
+	if f.err != nil {
+		return f.err
+	}
+	meta := map[string]string{}
+	for k, v := range app.Meta {
+		meta[k] = v
+	}
+	f.app = &ct.App{ID: app.ID, Name: app.Name, Meta: meta}
+	return nil
+}
+
+func TestRunMarksBuildingBeforeCompile(t *testing.T) {
+	body, err := os.ReadFile("flynn-receive.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(body)
+	mark := strings.Index(src, "markAppBuilding(client, app)")
+	pack := strings.Index(src, "return deployBuildpack")
+	container := strings.Index(src, "return deployContainer")
+	if mark < 0 || pack < 0 || container < 0 {
+		t.Fatal("missing markAppBuilding or deploy calls")
+	}
+	if mark > pack || mark > container {
+		t.Fatal("building mark must run before compile")
+	}
+}
+
+func TestMarkAndClearAppBuilding(t *testing.T) {
+	store := &fakeBuildingStore{app: &ct.App{ID: "app-1", Name: "app-1", Meta: map[string]string{"keep": "me"}}}
+	app := &ct.App{ID: "app-1", Name: "app-1", Meta: map[string]string{"keep": "me"}}
+	if err := markAppBuilding(store, app); err != nil {
+		t.Fatal(err)
+	}
+	if store.app.Meta["keep"] != "me" {
+		t.Fatal("existing meta must stay")
+	}
+	if !ct.AppMetaIsBuilding(store.app.Meta, time.Now()) {
+		t.Fatalf("expected building meta, got %#v", store.app.Meta)
+	}
+	if err := clearAppBuilding(store, app); err != nil {
+		t.Fatal(err)
+	}
+	if ct.AppMetaIsBuilding(store.app.Meta, time.Now()) {
+		t.Fatal("cleared building meta")
+	}
+	if store.app.Meta["keep"] != "me" {
+		t.Fatal("existing meta must stay after clear")
 	}
 }

@@ -64,6 +64,28 @@ func runDeployList(_ *docopt.Args, client controller.Client) error {
 	return nil
 }
 
+// inProgressDeployment is the newest deployer job that has not finished.
+// Status "running" means in progress (not a live app process).
+func inProgressDeployment(ds []*ct.Deployment) *ct.Deployment {
+	var found *ct.Deployment
+	for _, d := range ds {
+		if d == nil || d.FinishedAt != nil {
+			continue
+		}
+		if d.Type == ct.ReleaseTypeConfig {
+			continue
+		}
+		switch d.Status {
+		case "complete", "failed":
+			continue
+		}
+		if found == nil || (d.CreatedAt != nil && (found.CreatedAt == nil || d.CreatedAt.After(*found.CreatedAt))) {
+			found = d
+		}
+	}
+	return found
+}
+
 func runDeployTimeout(args *docopt.Args, client controller.Client) error {
 	if args.String["<timeout>"] != "" {
 		return runSetDeployTimeout(args, client)

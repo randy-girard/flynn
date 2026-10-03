@@ -79,6 +79,11 @@ func (d *DeployJob) Perform() error {
 	if d.newFormation.Processes == nil {
 		d.newFormation.Processes = make(map[string]int)
 	}
+	d.Processes = ct.WithoutReleaseProcessCounts(d.Processes)
+	if d.oldFormation != nil {
+		d.oldFormation.Processes = ct.WithoutReleaseProcessCounts(d.oldFormation.Processes)
+	}
+	d.newFormation.Processes = ct.WithoutReleaseProcessCounts(d.newFormation.Processes)
 
 	if processesEqual(d.newFormation.Processes, d.Processes) {
 		if d.Strategy == "sirenia" && d.sireniaOldReleaseActive() {
@@ -103,6 +108,9 @@ func (d *DeployJob) Perform() error {
 		"old_release", d.oldFormation.Processes,
 		"new_release", d.newFormation.Processes,
 	)
+	if err := d.runReleasePhase(log); err != nil {
+		return err
+	}
 	return deployFunc()
 }
 

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"time"
 
 	"github.com/randy-girard/flynn/controller/authz"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -135,6 +136,19 @@ func redactJobs(jobs []*ct.Job) []*ct.Job {
 		out = append(out, j)
 	}
 	return out
+}
+
+func (c *controllerAPI) annotateAppBuilding(app *ct.App) {
+	if app == nil {
+		return
+	}
+	building := ct.AppMetaIsBuilding(app.Meta, time.Now())
+	if c != nil && c.jobRepo != nil && app.ID != "" {
+		if list, err := c.jobRepo.List(app.ID); err == nil {
+			building = building || ct.AppIsBuilding(list)
+		}
+	}
+	app.Building = building
 }
 
 func redactRelease(r *ct.Release) *ct.Release {

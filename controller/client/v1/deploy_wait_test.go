@@ -156,3 +156,17 @@ func TestWaitAppReleaseKeepsPollingAfterStreamEnds(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDeployAppReleaseRetriesIsolateDeploys(t *testing.T) {
+	src, err := os.ReadFile("client.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "ct.IsDeployInProgress(err)") {
+		t.Fatal("DeployAppRelease must retry isolate_deploys so resource:remove is not stuck behind a finished lock")
+	}
+	if !strings.Contains(body, "time.After(deployWaitPollInterval)") {
+		t.Fatal("isolate_deploys retry must poll so a leftover row can be released")
+	}
+}

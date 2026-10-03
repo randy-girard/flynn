@@ -8,6 +8,28 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
+func TestHandleDeploymentClearsBuildingMeta(t *testing.T) {
+	src, err := os.ReadFile("context.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "c.clearAppBuilding(deployment.AppID)") {
+		t.Fatal("finished deploys must clear git-push building meta so the dashboard header drops")
+	}
+	if !strings.Contains(body, "StartNextQueuedDeployment") {
+		t.Fatal("finished deploys must start the next queued deploy")
+	}
+	if !strings.Contains(body, "if deployment.FinishedAt != nil") {
+		t.Fatal("HandleDeployment must no-op when finished_at is already set")
+	}
+	doneAt := strings.Index(body, "defer func()")
+	formAt := strings.Index(body, "getting old formation")
+	if doneAt < 0 || formAt < 0 || doneAt > formAt {
+		t.Fatal("finished_at must be deferred before GetFormation so a missing formation cannot hold isolate_deploys")
+	}
+}
+
 func TestHandleDeploymentBuffersDeployEvents(t *testing.T) {
 	src, err := os.ReadFile("context.go")
 	if err != nil {
@@ -96,6 +118,12 @@ func TestOneDownOneUpIsAKnownStrategy(t *testing.T) {
 	}
 	if !strings.Contains(string(src), `case "one-down-one-up":`) {
 		t.Fatal("Perform must dispatch one-down-one-up (redis appliance strategy)")
+	}
+	if !strings.Contains(string(src), "runReleasePhase") {
+		t.Fatal("Perform must run the release process type before swapping traffic")
+	}
+	if !strings.Contains(string(src), "WithoutReleaseProcessCounts") {
+		t.Fatal("Perform must not scale a Procfile release process")
 	}
 }
 

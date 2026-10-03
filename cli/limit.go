@@ -117,7 +117,7 @@ func runLimitSet(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	release, err := client.GetAppRelease(app.ID)
+	release, err := controller.HeadRelease(client, app.ID)
 	if err == controller.ErrNotFound {
 		release = &ct.Release{}
 	} else if err != nil {
@@ -188,7 +188,7 @@ func runLimitProfile(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
-	release, err := client.GetAppRelease(app.ID)
+	release, err := controller.HeadRelease(client, app.ID)
 	if err == controller.ErrNotFound {
 		release = &ct.Release{}
 	} else if err != nil {

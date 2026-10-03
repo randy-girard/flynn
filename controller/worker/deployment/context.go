@@ -7,6 +7,7 @@ import (
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/worker/types"
 	"github.com/randy-girard/flynn/pkg/attempt"
@@ -37,7 +38,14 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 	deployment, err := c.client.GetDeployment(args.ID)
 	if err != nil {
 		log.Error("error getting deployment record", "deployment_id", args.ID, "err", err)
+		if args.ID != "" {
+			_ = c.setDeploymentDone(args.ID)
+		}
 		return err
+	}
+	if deployment.FinishedAt != nil {
+		log.Info("deployment already finished")
+		return nil
 	}
 
 	log = log.New(
@@ -45,13 +53,6 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		"app_id", deployment.AppID,
 		"strategy", deployment.Strategy,
 	)
-	// for recovery purposes, fetch old formation
-	log.Info("getting old formation")
-	f, err := c.client.GetFormation(deployment.AppID, deployment.OldReleaseID)
-	if err != nil {
-		log.Error("error getting old formation", "release_id", deployment.OldReleaseID, "err", err)
-		return err
-	}
 
 	// Buffer job events so a hung event_insert (postgres primary restart
 	// during a sirenia deploy) cannot stall Perform on an unbuffered send.
@@ -69,6 +70,8 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 		}
 		log.Info("stopped watching deployment events")
 	}()
+
+	var f *ct.Formation
 	defer func() {
 		if e == worker.ErrStopped {
 			return
@@ -85,6 +88,10 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 			}
 			return
 		}
+		if err := data.StartNextQueuedDeployment(c.db, deployment.AppID); err != nil {
+			log.Error("error starting the next queued deployment", "err", err)
+		}
+		c.clearAppBuilding(deployment.AppID)
 
 		if e == nil {
 			// signal success
@@ -100,9 +107,11 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 				// but no further action should be taken, so set the error
 				// to nil to avoid retrying the deploy
 				e = nil
-			} else {
+			} else if f != nil {
 				log.Warn("rolling back deployment due to error", "err", e)
 				e = c.rollback(log, deployment, f, job.Stop)
+			} else {
+				e = nil
 			}
 			events <- ct.DeploymentEvent{
 				ReleaseID: deployment.NewReleaseID,
@@ -111,6 +120,14 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 			}
 		}
 	}()
+
+	// for recovery purposes, fetch old formation
+	log.Info("getting old formation")
+	f, err = c.client.GetFormation(deployment.AppID, deployment.OldReleaseID)
+	if err != nil {
+		log.Error("error getting old formation", "release_id", deployment.OldReleaseID, "err", err)
+		return err
+	}
 
 	j := &DeployJob{
 		Deployment:   deployment,
@@ -174,6 +191,20 @@ func (c *context) setDeploymentDone(id string) error {
 	return doneAttempts.Run(func() error {
 		return c.db.Exec("deployment_update_finished_at_now", id)
 	})
+}
+
+func (c *context) clearAppBuilding(appID string) {
+	if c == nil || c.client == nil || appID == "" {
+		return
+	}
+	app, err := c.client.GetApp(appID)
+	if err != nil || app == nil || app.Meta == nil || app.Meta[ct.MetaAppBuilding] == "" {
+		return
+	}
+	app.Meta = ct.ClearAppBuildingMeta(app.Meta)
+	if err := c.client.UpdateAppMeta(app); err != nil && c.logger != nil {
+		c.logger.Error("error clearing building status", "app_id", appID, "err", err)
+	}
 }
 
 func (c *context) createDeploymentEvent(e ct.DeploymentEvent) error {

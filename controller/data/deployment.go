@@ -40,6 +40,7 @@ func (r *DeploymentRepo) Add(appID, releaseID string) (*ct.Deployment, error) {
 		AppID:         ed.AppID,
 		OldReleaseID:  oldReleaseID,
 		NewReleaseID:  ed.NewRelease.ID,
+		Type:          ed.Type,
 		Strategy:      ed.Strategy,
 		Status:        ed.Status,
 		Processes:     ed.Processes,
@@ -51,12 +52,16 @@ func (r *DeploymentRepo) Add(appID, releaseID string) (*ct.Deployment, error) {
 }
 
 func (r *DeploymentRepo) AddExpanded(appID, releaseID string) (*ct.ExpandedDeployment, error) {
+	return r.addExpanded(appID, releaseID, false)
+}
+
+func (r *DeploymentRepo) addExpanded(appID, releaseID string, retried bool) (*ct.ExpandedDeployment, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 
-	app, err := r.appRepo.TxGet(tx, appID)
+	app, err := selectApp(tx, appID, true)
 	if err != nil {
 		if err == ErrNotFound {
 			err = ct.ValidationError{
@@ -94,6 +99,27 @@ func (r *DeploymentRepo) AddExpanded(appID, releaseID string) (*ct.ExpandedDeplo
 		} else if err != ErrNotFound {
 			tx.Rollback()
 			return nil, err
+		}
+	}
+	head, err := r.txLatestUnfinished(tx, app.ID)
+	if err != nil {
+		tx.Rollback()
+		return nil, err
+	}
+	if head != nil {
+		headRelease, err := r.releaseRepo.TxGet(tx, head.NewReleaseID)
+		if err != nil && err != ErrNotFound {
+			tx.Rollback()
+			return nil, err
+		}
+		if headRelease != nil {
+			oldRelease = headRelease
+		}
+		if len(head.Processes) > 0 {
+			oldFormation.Processes = head.Processes
+		}
+		if len(head.Tags) > 0 && oldFormation.Tags == nil {
+			oldFormation.Tags = head.Tags
 		}
 	}
 	procCount := 0
@@ -138,7 +164,7 @@ func (r *DeploymentRepo) AddExpanded(appID, releaseID string) (*ct.ExpandedDeplo
 		tx.Rollback()
 		return nil, err
 	}
-	if procCount == 0 {
+	if procCount == 0 && head == nil {
 		// immediately set app release
 		if err := r.appRepo.TxSetRelease(tx, app, release.ID); err != nil {
 			tx.Rollback()
@@ -157,10 +183,20 @@ func (r *DeploymentRepo) AddExpanded(appID, releaseID string) (*ct.ExpandedDeplo
 		d.ID = random.UUID()
 	}
 	ed.ID = d.ID
-	if err := tx.QueryRow("deployment_insert", d.ID, d.AppID, oldReleaseID, d.NewReleaseID, string(releaseType), d.Strategy, d.Processes, d.Tags, d.DeployTimeout, d.DeployBatchSize).Scan(&d.CreatedAt); err != nil {
+	queue := head != nil && d.FinishedAt == nil
+	var startedAt *time.Time
+	if !queue && d.FinishedAt == nil {
+		now := time.Now()
+		startedAt = &now
+	}
+	if err := tx.QueryRow("deployment_insert", d.ID, d.AppID, oldReleaseID, d.NewReleaseID, string(releaseType), d.Strategy, d.Processes, d.Tags, d.DeployTimeout, d.DeployBatchSize, startedAt).Scan(&d.CreatedAt); err != nil {
 		tx.Rollback()
 		if postgres.IsUniquenessError(err, "isolate_deploys") {
-			return nil, ct.ValidationError{Message: "Cannot create deploy, there is already one in progress for this app."}
+			if !retried {
+				_ = r.releaseStaleOpenDeploy(appID)
+				return r.addExpanded(appID, releaseID, true)
+			}
+			return nil, ct.ValidationError{Message: ct.DeployInProgressMessage}
 		}
 		return nil, err
 	}
@@ -186,11 +222,18 @@ func (r *DeploymentRepo) AddExpanded(appID, releaseID string) (*ct.ExpandedDeplo
 		return nil, err
 	}
 
-	if err = createDeploymentEvent(tx.Exec, d, "pending"); err != nil {
+	status := "pending"
+	if queue {
+		status = "queued"
+	}
+	if err = createDeploymentEvent(tx.Exec, d, status); err != nil {
 		tx.Rollback()
 		return nil, err
 	}
-	ed.Status = "pending"
+	ed.Status = status
+	if queue {
+		return ed, tx.Commit()
+	}
 
 	job := &que.Job{Type: "deployment", Args: args}
 	if err := r.q.EnqueueInTx(job, tx.Tx); err != nil {
@@ -322,7 +365,8 @@ func scanDeployment(s postgres.Scanner) (*ct.Deployment, error) {
 	d := &ct.Deployment{}
 	var oldReleaseID *string
 	var status *string
-	err := s.Scan(&d.ID, &d.AppID, &oldReleaseID, &d.NewReleaseID, &d.Strategy, &status, &d.Processes, &d.Tags, &d.DeployTimeout, &d.DeployBatchSize, &d.CreatedAt, &d.FinishedAt)
+	var relType *string
+	err := s.Scan(&d.ID, &d.AppID, &oldReleaseID, &d.NewReleaseID, &d.Strategy, &status, &d.Processes, &d.Tags, &d.DeployTimeout, &d.DeployBatchSize, &d.CreatedAt, &d.FinishedAt, &relType)
 	if err == pgx.ErrNoRows {
 		err = ErrNotFound
 	}
@@ -331,6 +375,9 @@ func scanDeployment(s postgres.Scanner) (*ct.Deployment, error) {
 	}
 	if status != nil {
 		d.Status = *status
+	}
+	if relType != nil {
+		d.Type = ct.ReleaseType(*relType)
 	}
 	return d, err
 }

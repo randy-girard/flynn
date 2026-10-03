@@ -1260,6 +1260,13 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 			ORDER BY a.created_at ASC LIMIT 1
 		) WHERE owner_app IS NULL`,
 	)
+	migrations.Add(69,
+		`ALTER TABLE deployments ADD COLUMN started_at timestamptz`,
+		`UPDATE deployments SET started_at = created_at WHERE finished_at IS NULL`,
+		`DROP INDEX isolate_deploys`,
+		`CREATE UNIQUE INDEX isolate_deploys ON deployments (app_id)
+    WHERE finished_at IS NULL AND started_at IS NOT NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

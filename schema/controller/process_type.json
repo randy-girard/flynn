@@ -38,6 +38,10 @@
     "runtime_profile": {
       "type": "string"
     },
+    "command": {
+      "description": "Procfile command or Docker container command shown in the dashboard",
+      "type": "string"
+    },
     "omni": {
       "type": "boolean"
     }

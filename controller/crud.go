@@ -79,6 +79,13 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 			respondWithError(rw, err)
 			return
 		}
+		if resource == "apps" {
+			if app, ok := thing.(*ct.App); ok {
+				if api := apiFromContext(ctx); api != nil {
+					api.annotateAppBuilding(app)
+				}
+			}
+		}
 		httphelper.JSON(rw, 200, thing)
 	}))
 

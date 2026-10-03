@@ -62,6 +62,10 @@
     },
     "updated_at": {
       "$ref": "/schema/controller/common#/definitions/updated_at"
+    },
+    "building": {
+      "description": "true from git push start through compile, release command, and traffic swap",
+      "type": "boolean"
     }
   }
 }

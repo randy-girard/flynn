@@ -226,7 +226,7 @@ func runReleaseUpdate(args *docopt.Args, client controller.Client) error {
 	if args.String["<id>"] != "" {
 		release, err = client.GetRelease(args.String["<id>"])
 	} else {
-		release, err = client.GetAppRelease(app.ID)
+		release, err = controller.HeadRelease(client, app.ID)
 	}
 	if err != nil {
 		return err

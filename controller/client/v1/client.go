@@ -625,9 +625,21 @@ func (c *Client) StreamDeployment(d *ct.Deployment, output chan *ct.DeploymentEv
 }
 
 func (c *Client) DeployAppRelease(appID, releaseID string, stopWait <-chan struct{}) error {
-	d, err := c.CreateDeployment(appID, releaseID)
-	if err != nil {
-		return err
+	var d *ct.Deployment
+	for {
+		var err error
+		d, err = c.CreateDeployment(appID, releaseID)
+		if !ct.IsDeployInProgress(err) {
+			if err != nil {
+				return err
+			}
+			break
+		}
+		select {
+		case <-time.After(deployWaitPollInterval):
+		case <-stopWait:
+			return errors.New("deploy wait cancelled")
+		}
 	}
 
 	// if initial deploy, just stop here
