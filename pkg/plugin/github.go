@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	githubUserAgent = "flynn-host-plugin"
-	githubTimeout   = 5 * time.Minute
+	githubUserAgent        = "flynn-host-plugin"
+	githubTimeout          = 5 * time.Minute
+	githubRepoProbeTimeout = 8 * time.Second
 )
 
 type githubRelease struct {
@@ -283,6 +284,61 @@ func (in *Installer) getRelease(src *GitHubSource, token string) (*githubRelease
 
 func (in *Installer) githubAPI(src *GitHubSource) string {
 	return strings.TrimRight(src.API, "/")
+}
+
+// gitHubRepoAccessible is true when GET /repos/owner/repo succeeds with the
+// current plugin GitHub credentials (public repo, or a private repo the token
+// can read). 404/401/403 and transport errors are treated as no access.
+func gitHubRepoAccessible(slug string) bool {
+	owner, repo, ok := splitRepoSlug(slug)
+	if !ok {
+		return false
+	}
+	token, api, err := TokenForHost(DefaultGitHubHost, "")
+	if err != nil {
+		return false
+	}
+	src := &GitHubSource{Host: DefaultGitHubHost, Owner: owner, Repo: repo, API: api}
+	if src.API == "" {
+		src.API = "https://api.github.com"
+	}
+	return (&Installer{}).repoAccessible(src, token)
+}
+
+func splitRepoSlug(slug string) (owner, repo string, ok bool) {
+	slug = strings.TrimSuffix(strings.TrimSpace(slug), ".git")
+	parts := strings.Split(slug, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
+
+func (in *Installer) repoAccessible(src *GitHubSource, token string) bool {
+	if src == nil || src.Owner == "" || src.Repo == "" {
+		return false
+	}
+	client := in.GitHubHTTP
+	if client == nil {
+		client = &http.Client{Timeout: githubRepoProbeTimeout}
+	}
+	api := in.githubAPI(src)
+	if api == "" {
+		return false
+	}
+	u := api + fmt.Sprintf("/repos/%s/%s", src.Owner, src.Repo)
+	req, err := http.NewRequest(http.MethodGet, u, nil)
+	if err != nil {
+		return false
+	}
+	in.githubHeaders(req, token, "application/vnd.github+json")
+	res, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 1<<20))
+	return res.StatusCode == http.StatusOK
 }
 
 // latestCalVerRelease picks the highest published vYYYYMMDD.N.B that matches

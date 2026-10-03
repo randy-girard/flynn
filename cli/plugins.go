@@ -21,8 +21,10 @@ is the same command. plugin:help is the same as plugin --help.
 
 --known prints the first-party catalog Flynn knows how to install (name,
 GitHub repo, description) without talking to the cluster. Operators install
-those names with flynn-host plugin:install, including enterprise. flynn-host
-plugin:list --known is the same output.
+those names with flynn-host plugin:install, including enterprise. Private
+first-party plugins stay in the official list but are printed only when
+GitHub credentials can read that repo. flynn-host plugin:list --known is
+the same output.
 
 The installed list comes from the controller (plugin apps the credential can
 see), not from a local checkout. After install, plugin CLI commands also
@@ -31,7 +33,7 @@ cli.user). kind: app system plugins are listed here but are not user flynn
 commands.
 
 Options:
-	--known  print the first-party catalog without talking to the cluster
+	--known  print the first-party catalog; private plugins only if GitHub can read that repo
 	--check  compare installed plugins to the newest compatible GitHub tag
 `
 	register("plugin", runPlugins, pluginListUsage)
@@ -43,8 +45,10 @@ plugin:help is the same as plugin --help.
 
 --known prints the first-party catalog Flynn knows how to install (name,
 GitHub repo, description) without talking to the cluster. Operators install
-those names with flynn-host plugin:install, including enterprise. flynn-host
-plugin:list --known is the same output.
+those names with flynn-host plugin:install, including enterprise. Private
+first-party plugins stay in the official list but are printed only when
+GitHub credentials can read that repo. flynn-host plugin:list --known is
+the same output.
 
 The installed list comes from the controller (plugin apps the credential can
 see), not from a local checkout. After install, plugin CLI commands also
@@ -53,7 +57,7 @@ cli.user). kind: app system plugins are listed here but are not user flynn
 commands.
 
 Options:
-	--known  print the first-party catalog without talking to the cluster
+	--known  print the first-party catalog; private plugins only if GitHub can read that repo
 	--check  compare installed plugins to the newest compatible GitHub tag
 `)
 }

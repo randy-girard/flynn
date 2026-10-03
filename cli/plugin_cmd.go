@@ -67,6 +67,9 @@ func runPluginCommand(name string, args []string) error {
 		return err
 	}
 	plugin.FoldColonBools(spec, parsed.Bool)
+	if resourceName == "" {
+		resourceName = takePluginInstanceArg(name, parsed)
+	}
 	if resourceName != "" {
 		if parsed.String == nil {
 			parsed.String = map[string]string{}
@@ -76,8 +79,9 @@ func runPluginCommand(name string, args []string) error {
 	return executePluginCLI(client, spec, parsed, args)
 }
 
-// peelResourceName removes one full resource app name (prefix-word-xxxxxx)
-// from the plugin argv. A token that is not that shape is left alone.
+// peelResourceName removes one full resource app name (redis-kelp-20218,
+// postgresql-concave-48291, or the older prefix-word-xxxxxx form) from the
+// plugin argv. A token that is not that shape is left alone.
 func peelResourceName(command string, args []string) (string, []string) {
 	command = strings.ToLower(strings.TrimSpace(command))
 	if command == "" || len(args) == 0 {
@@ -89,7 +93,6 @@ func peelResourceName(command string, args []string) (string, []string) {
 	case "wait", "promote", "unfollow":
 		return "", args
 	}
-	re := regexp.MustCompile(`^` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8}$`)
 	for i, arg := range args {
 		if arg == "--" {
 			return "", args
@@ -98,11 +101,7 @@ func peelResourceName(command string, args []string) (string, []string) {
 			continue
 		}
 		token := strings.ToLower(arg)
-		match := re.MatchString(token)
-		if !match && command == "pg" && strings.HasPrefix(token, "postgresql-") && resname.IsolatedService(token) {
-			match = true
-		}
-		if !match {
+		if !pluginInstanceToken(command, token) {
 			continue
 		}
 		rest := make([]string, 0, len(args)-1)
@@ -111,6 +110,72 @@ func peelResourceName(command string, args []string) (string, []string) {
 		return token, rest
 	}
 	return "", args
+}
+
+// takePluginInstanceArg pulls redis-kelp-20218 out of redis:cli's leftover
+// <argument> list when peel missed it. Without this, the name is a legal
+// redis-cli argument and multiple attached instances look unspecified.
+func takePluginInstanceArg(command string, parsed *docopt.Args) string {
+	if parsed == nil {
+		return ""
+	}
+	list := cliutil.List(parsed, "<argument>")
+	for i, a := range list {
+		token := strings.ToLower(strings.TrimSpace(a))
+		if !pluginInstanceToken(command, token) {
+			continue
+		}
+		rest := make([]string, 0, len(list)-1)
+		rest = append(rest, list[:i]...)
+		rest = append(rest, list[i+1:]...)
+		if parsed.All == nil {
+			parsed.All = map[string]interface{}{}
+		}
+		parsed.All["<argument>"] = rest
+		return token
+	}
+	return ""
+}
+
+func pluginInstanceToken(command, token string) bool {
+	token = strings.ToLower(strings.TrimSpace(token))
+	command = strings.ToLower(strings.TrimSpace(command))
+	if token == "" {
+		return false
+	}
+	if instanceNameRe(command).MatchString(token) {
+		return true
+	}
+	if !resname.IsolatedService(token) {
+		return false
+	}
+	switch command {
+	case "pg", "postgres":
+		return strings.HasPrefix(token, "pg-") || strings.HasPrefix(token, "postgresql-")
+	case "redis":
+		return strings.HasPrefix(token, "redis-")
+	case "":
+		return true
+	default:
+		return strings.HasPrefix(token, command+"-")
+	}
+}
+
+func instanceNamePattern(command string) string {
+	switch command {
+	case "pg", "postgres":
+		return `postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|pg-[a-z]+-[a-z]{6,8}`
+	case "redis":
+		return `redis-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z]+-[a-z]{6,8}`
+	case "":
+		return `[a-z]+-[a-z]+-[a-z]{6,8}|postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}`
+	default:
+		return regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8}`
+	}
+}
+
+func instanceNameRe(command string) *regexp.Regexp {
+	return regexp.MustCompile(`^(?:` + instanceNamePattern(command) + `)$`)
 }
 
 func runPluginFlynnCommand(client controller.Client, spec *plugin.CLI, action *plugin.CLIAction, extra []string) error {
@@ -360,6 +425,10 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 		env[k] = s
 	}
 	copyAppPGEnv(env, in.App)
+	if env["REDISCLI_AUTH"] == "" && in.App["REDIS_PASSWORD"] != "" {
+		env["REDISCLI_AUTH"] = in.App["REDIS_PASSWORD"]
+	}
+	jobArgs, env = quietRedisCLIAuth(jobArgs, env)
 
 	return &runConfig{
 		App:        appName,
@@ -382,6 +451,35 @@ func compactPluginArgs(args []string) []string {
 		}
 	}
 	return out
+}
+
+// quietRedisCLIAuth moves redis-cli -a/--pass off argv onto REDISCLI_AUTH.
+// redis-cli prints "Using a password with '-a' or '-u' may not be safe" when
+// the password is a flag; the env var is the supported quiet path.
+func quietRedisCLIAuth(args []string, env map[string]string) ([]string, map[string]string) {
+	if env == nil {
+		env = map[string]string{}
+	}
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		switch {
+		case (args[i] == "-a" || args[i] == "--pass") && i+1 < len(args):
+			if env["REDISCLI_AUTH"] == "" {
+				env["REDISCLI_AUTH"] = args[i+1]
+			}
+			i++
+		case strings.HasPrefix(args[i], "--pass="):
+			if env["REDISCLI_AUTH"] == "" {
+				env["REDISCLI_AUTH"] = strings.TrimPrefix(args[i], "--pass=")
+			}
+		default:
+			out = append(out, args[i])
+		}
+	}
+	if env["REDISCLI_AUTH"] == "" && env["REDIS_PASSWORD"] != "" {
+		env["REDISCLI_AUTH"] = env["REDIS_PASSWORD"]
+	}
+	return out, env
 }
 
 func copyAppPGEnv(env, app map[string]string) {
@@ -577,13 +675,7 @@ func instanceNamesFromEnv(spec *plugin.CLI, env map[string]string) []string {
 }
 
 func instanceDiscoverdRe(command string) *regexp.Regexp {
-	if command == "pg" {
-		return regexp.MustCompile(`(?:leader\.)?(postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|pg-[a-z]+-[a-z]{6,8})\.discoverd`)
-	}
-	if command == "" {
-		return regexp.MustCompile(`(?:leader\.)?([a-z]+-[a-z]+-[a-z]{6,8}|postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8})\.discoverd`)
-	}
-	return regexp.MustCompile(`(?:leader\.)?(` + regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8})\.discoverd`)
+	return regexp.MustCompile(`(?:leader\.)?(` + instanceNamePattern(command) + `)\.discoverd`)
 }
 
 func pluginResourceMissingErr(spec *plugin.CLI) error {
@@ -634,12 +726,18 @@ func envForNamedInstance(env map[string]string, name string) map[string]string {
 		if strings.HasPrefix(k, "FLYNN_POSTGRESQL_") && strings.HasSuffix(k, "_URL") {
 			keys = append(keys, k)
 		}
+		if strings.HasPrefix(k, "FLYNN_REDIS_") && strings.HasSuffix(k, "_URL") {
+			keys = append(keys, k)
+		}
 	}
-	keys = append(keys, prefix+"_DATABASE_URL", prefix+"_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL")
+	keys = append(keys, prefix+"_DATABASE_URL", prefix+"_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL", "REDIS_URL")
 	for _, k := range keys {
 		if pick(env[k]) {
 			out["POSTGRES_URL"] = env[k]
 			out["DATABASE_URL"] = env[k]
+			if strings.HasPrefix(strings.ToLower(env[k]), "redis") {
+				out["REDIS_URL"] = env[k]
+			}
 			break
 		}
 	}
@@ -713,6 +811,9 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 		}
 		if app["POSTGRES_URL"] == "" && named["POSTGRES_URL"] != "" {
 			app["POSTGRES_URL"] = named["POSTGRES_URL"]
+		}
+		if app["REDIS_URL"] == "" && named["REDIS_URL"] != "" {
+			app["REDIS_URL"] = named["REDIS_URL"]
 		}
 	}
 	if app["POSTGRES_URL"] == "" && strings.Contains(strings.ToLower(app["DATABASE_URL"]), "postgres") {

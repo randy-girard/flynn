@@ -1391,3 +1391,47 @@ func TestFetchGitHubLayerURLDoesNotExfilToken(t *testing.T) {
 		t.Fatalf("external layer %q %v", got, err)
 	}
 }
+
+func TestRepoAccessible(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/acme/public-plug", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "" {
+			t.Errorf("public probe sent Authorization")
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"private":false}`))
+	})
+	mux.HandleFunc("/repos/acme/secret-plug", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer tok" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"private":true}`))
+	})
+	mux.HandleFunc("/repos/acme/missing", func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	in := &Installer{GitHubHTTP: srv.Client()}
+	src := func(repo string) *GitHubSource {
+		return &GitHubSource{Owner: "acme", Repo: repo, API: srv.URL}
+	}
+	if !in.repoAccessible(src("public-plug"), "") {
+		t.Fatal("public repo must be visible without a token")
+	}
+	if in.repoAccessible(src("secret-plug"), "") {
+		t.Fatal("private repo must stay hidden without a token")
+	}
+	if !in.repoAccessible(src("secret-plug"), "tok") {
+		t.Fatal("private repo must be visible with a token that can read it")
+	}
+	if in.repoAccessible(src("missing"), "tok") {
+		t.Fatal("missing repo must stay hidden")
+	}
+	if gitHubRepoAccessible("") || gitHubRepoAccessible("nopath") {
+		t.Fatal("invalid slugs are not accessible")
+	}
+}

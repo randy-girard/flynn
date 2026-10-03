@@ -142,7 +142,7 @@ this Flynn version and shows UPDATE and STATUS (current, update, or -).
 The same as flynn-host plugin. plugin:help is the same as plugin --help.
 
 Options:
-	--known            List the first-party catalog Flynn can plugin:install (including enterprise).
+	--known            List the first-party catalog Flynn can plugin:install (including enterprise). Private first-party plugins appear only when GitHub credentials can read that repo.
 	--check            Compare installed versions to published GitHub releases
 
 Examples:
@@ -162,7 +162,7 @@ this Flynn version and shows UPDATE and STATUS (current, update, or -).
 plugin:list is the same command. plugin:help is the same as plugin --help.
 
 Options:
-	--known            List the first-party catalog Flynn can plugin:install (including enterprise).
+	--known            List the first-party catalog Flynn can plugin:install (including enterprise). Private first-party plugins appear only when GitHub credentials can read that repo.
 	--check            Compare installed versions to published GitHub releases
 
 Examples:

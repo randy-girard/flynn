@@ -42,10 +42,12 @@ type officialFile struct {
 }
 
 // PrivatePlugin is a first-party plugin that exists but is not in the public
-// install catalog. It is listed for operators so they know the name, but
-// plugin:install <name> will not resolve it.
+// install catalog. plugin:install <name> will not resolve it. plugin:list
+// --known prints it only when the current GitHub credentials can read Repo
+// (a public repo, or a private repo the operator can access).
 type PrivatePlugin struct {
 	Name        string `json:"name"`
+	Repo        string `json:"repo"`
 	Description string `json:"description"`
 }
 
@@ -111,9 +113,13 @@ func parseOfficial(data []byte) (officialFile, error) {
 	for i := range f.PrivatePlugins {
 		p := &f.PrivatePlugins[i]
 		p.Name = strings.TrimSpace(p.Name)
+		p.Repo = strings.TrimSpace(strings.TrimSuffix(p.Repo, ".git"))
 		p.Description = strings.TrimSpace(p.Description)
 		if p.Name == "" {
 			return f, fmt.Errorf("private_plugins[%d]: name is required", i)
+		}
+		if p.Repo == "" {
+			return f, fmt.Errorf("private plugin %s: repo is required", p.Name)
 		}
 		if p.Description == "" {
 			return f, fmt.Errorf("private plugin %s: description is required", p.Name)
@@ -208,7 +214,16 @@ func (p KnownPlugin) Names() []string {
 
 // RepoSlug is owner/name for display and clone URLs.
 func (p KnownPlugin) RepoSlug(org string) string {
-	repo := strings.TrimSpace(p.Repo)
+	return repoSlug(p.Repo, org)
+}
+
+// RepoSlug is owner/name for the private plugin GitHub repo.
+func (p PrivatePlugin) RepoSlug(org string) string {
+	return repoSlug(p.Repo, org)
+}
+
+func repoSlug(repo, org string) string {
+	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return ""
 	}
@@ -280,7 +295,29 @@ func officialAliases() map[string]Alias {
 	return out
 }
 
+// knownRepoAccessible is whether owner/repo is visible with the current GitHub
+// credentials. Tests replace this so --known does not call GitHub.
+var knownRepoAccessible = gitHubRepoAccessible
+
+func visiblePrivatePlugins(org string) []PrivatePlugin {
+	priv := PrivatePlugins()
+	out := make([]PrivatePlugin, 0, len(priv))
+	for _, p := range priv {
+		slug := p.RepoSlug(org)
+		if slug == "" {
+			continue
+		}
+		if knownRepoAccessible(slug) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // WriteKnownPlugins prints the official catalog (flynn-host plugin:list --known).
+// Private first-party plugins stay in official-plugins.json but are listed only
+// when the current GitHub token (or unauthenticated public access) can read
+// that repo.
 func WriteKnownPlugins(w io.Writer, org string, plugins []KnownPlugin) error {
 	tw := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
 	fmt.Fprintln(tw, "NAME\tALIASES\tKIND\tREPO\tDESCRIPTION")
@@ -290,16 +327,16 @@ func WriteKnownPlugins(w io.Writer, org string, plugins []KnownPlugin) error {
 	if err := tw.Flush(); err != nil {
 		return err
 	}
-	priv := PrivatePlugins()
+	priv := visiblePrivatePlugins(org)
 	if len(priv) == 0 {
 		return nil
 	}
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Private first-party plugins (not in this catalog; plugin:install <name> will not resolve them):")
+	fmt.Fprintln(w, "Private first-party plugins (visible with current GitHub access; plugin:install <name> will not resolve them):")
 	pt := tabwriter.NewWriter(w, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(pt, "NAME\tDESCRIPTION")
+	fmt.Fprintln(pt, "NAME\tREPO\tDESCRIPTION")
 	for _, p := range priv {
-		fmt.Fprintf(pt, "%s\t%s\n", p.Name, p.Description)
+		fmt.Fprintf(pt, "%s\t%s\t%s\n", p.Name, p.RepoSlug(org), p.Description)
 	}
 	return pt.Flush()
 }

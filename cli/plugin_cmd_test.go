@@ -9,6 +9,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -21,8 +22,9 @@ func redisPluginCLI() *plugin.CLI {
 		Doc:             "usage: flynn redis redis-cli [--] [<argument>...]",
 		Actions: []plugin.CLIAction{{
 			Name:   "redis-cli",
-			Args:   []string{"redis-cli", "-h", "${app.REDIS_HOST|leader.${resource}.discoverd}", "-a", "${app.REDIS_PASSWORD}"},
+			Args:   []string{"redis-cli", "-h", "${app.REDIS_HOST|leader.${resource}.discoverd}"},
 			Append: "<argument>",
+			Env:    map[string]string{"REDISCLI_AUTH": "${app.REDIS_PASSWORD}"},
 		}},
 	}
 }
@@ -116,8 +118,12 @@ func TestPluginInterpRedisDialsLeaderDiscoverd(t *testing.T) {
 	if strings.Contains(strings.Join(args, " "), " "+redisApp+".discoverd") {
 		t.Fatalf("must not dial %s.discoverd: %q", redisApp, args)
 	}
-	if !containsArgPair(args, "-a", "s3cret") {
-		t.Fatalf("password: %q", args)
+	if containsArgPair(args, "-a", "s3cret") {
+		t.Fatalf("password must not be on argv: %q", args)
+	}
+	auth, err := plugin.Interpolate(redisPluginCLI().Action("redis-cli").Env["REDISCLI_AUTH"], in)
+	if err != nil || auth != "s3cret" {
+		t.Fatalf("REDISCLI_AUTH: %q %v", auth, err)
 	}
 }
 
@@ -194,8 +200,11 @@ func TestPluginJobConfigAndIO(t *testing.T) {
 	if cfg.Partition != ct.PartitionTypeSystem {
 		t.Fatalf("plugin CLI jobs must use the system partition so they can resolve plugin APIs, got %q", cfg.Partition)
 	}
-	if !containsArgPair(cfg.Args, "-a", "s3cret") {
-		t.Fatalf("args=%q", cfg.Args)
+	if containsArgPair(cfg.Args, "-a", "s3cret") {
+		t.Fatalf("password must not be on argv: %q", cfg.Args)
+	}
+	if cfg.Env["REDISCLI_AUTH"] != "s3cret" {
+		t.Fatalf("REDISCLI_AUTH=%q env=%v", cfg.Env["REDISCLI_AUTH"], cfg.Env)
 	}
 	if cfg.Args[len(cfg.Args)-1] != "PING" {
 		t.Fatalf("append: %q", cfg.Args)
@@ -442,12 +451,54 @@ func TestPluginInterpPasswordNotRescanned(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args, err := plugin.InterpolateAll(redisPluginCLI().Action("redis-cli").Args, in)
+	auth, err := plugin.Interpolate(redisPluginCLI().Action("redis-cli").Env["REDISCLI_AUTH"], in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsArgPair(args, "-a", "x${resource}y") {
-		t.Fatalf("password re-expanded: %q", args)
+	if auth != "x${resource}y" {
+		t.Fatalf("password re-expanded: %q", auth)
+	}
+}
+
+func TestQuietRedisCLIAuthMovesPasswordOffArgv(t *testing.T) {
+	args, env := quietRedisCLIAuth([]string{"redis-cli", "-h", "leader.x.discoverd", "-a", "s3cret", "PING"}, nil)
+	if containsArgPair(args, "-a", "s3cret") || strings.Contains(strings.Join(args, " "), "s3cret") {
+		t.Fatalf("password still on argv: %q", args)
+	}
+	if env["REDISCLI_AUTH"] != "s3cret" {
+		t.Fatalf("REDISCLI_AUTH=%q", env["REDISCLI_AUTH"])
+	}
+	args, env = quietRedisCLIAuth([]string{"redis-cli", "--pass=hidden", "PING"}, map[string]string{})
+	if strings.Contains(strings.Join(args, " "), "hidden") {
+		t.Fatalf(" --pass still on argv: %q", args)
+	}
+	if env["REDISCLI_AUTH"] != "hidden" {
+		t.Fatalf("REDISCLI_AUTH=%q", env["REDISCLI_AUTH"])
+	}
+
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "demo"
+	redisApp := "redis-abc"
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		"demo":   {Env: map[string]string{"FLYNN_REDIS": redisApp, "REDIS_PASSWORD": "s3cret"}},
+		redisApp: {ID: "redis-rel"},
+	}}
+	spec := redisPluginCLI()
+	spec.Actions[0].Args = []string{"redis-cli", "-h", "${app.REDIS_HOST|leader.${resource}.discoverd}", "-a", "${app.REDIS_PASSWORD}"}
+	spec.Actions[0].Env = nil
+	cfg, err := pluginJobConfig(client, spec, spec.Action("redis-cli"), &docopt.Args{
+		Bool: map[string]bool{"redis-cli": true},
+		All:  map[string]interface{}{"<argument>": []string{"PING"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsArgPair(cfg.Args, "-a", "s3cret") {
+		t.Fatalf("old catalog -a must be stripped: %q", cfg.Args)
+	}
+	if cfg.Env["REDISCLI_AUTH"] != "s3cret" {
+		t.Fatalf("REDISCLI_AUTH=%q", cfg.Env["REDISCLI_AUTH"])
 	}
 }
 
@@ -484,6 +535,38 @@ func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	if name != "postgresql-concave-48291" || strings.Join(rest, " ") != "psql -- -c SELECT 1" {
 		t.Fatalf("postgresql name %q rest %#v", name, rest)
 	}
+	name, rest = peelResourceName("redis", []string{"redis-cli", "redis-harbor-48291", "--", "PING"})
+	if name != "redis-harbor-48291" || strings.Join(rest, " ") != "redis-cli -- PING" {
+		t.Fatalf("redis digit name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"redis-cli", "redis-kelp-20218"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "redis-cli" {
+		t.Fatalf("redis:cli NAME without --: name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"redis-cli", "redis-kelp-20218", "PING"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "redis-cli PING" {
+		t.Fatalf("redis:cli NAME PING: name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"redis-cli", "redis-harbor-abcdef", "--", "PING"})
+	if name != "redis-harbor-abcdef" || strings.Join(rest, " ") != "redis-cli -- PING" {
+		t.Fatalf("redis letter name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"info", "redis-kelp-20218"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "info" {
+		t.Fatalf("redis:info NAME: name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"dump", "redis-kelp-20218", "-q", "-f", "db.dump"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "dump -q -f db.dump" {
+		t.Fatalf("redis:dump NAME: name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"restore", "redis-lagoon-59415", "-q", "-f", "db.dump"})
+	if name != "redis-lagoon-59415" || strings.Join(rest, " ") != "restore -q -f db.dump" {
+		t.Fatalf("redis:restore NAME: name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"follow", "redis-kelp-20218"})
+	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "follow" {
+		t.Fatalf("redis:follow NAME: name %q rest %#v", name, rest)
+	}
 	name, rest = peelResourceName("pg", []string{"psql", "--", "pg-harbor-kxmnpq"})
 	if name != "" {
 		t.Fatalf("tokens after -- are arguments: %q", name)
@@ -492,13 +575,119 @@ func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	if name != "" || strings.Join(rest, " ") != "wait pg-timber-bdwoby" {
 		t.Fatalf("pg wait must keep <resource>, got name %q rest %#v", name, rest)
 	}
+	name, rest = peelResourceName("redis", []string{"wait", "redis-kelp-20218"})
+	if name != "" || strings.Join(rest, " ") != "wait redis-kelp-20218" {
+		t.Fatalf("redis wait must keep <resource>, got name %q rest %#v", name, rest)
+	}
 	name, rest = peelResourceName("pg", []string{"promote", "pg-timber-bdwoby"})
 	if name != "" || rest[1] != "pg-timber-bdwoby" {
 		t.Fatalf("pg promote must keep <follower>, got name %q rest %#v", name, rest)
 	}
+	name, rest = peelResourceName("redis", []string{"promote", "redis-lagoon-59415"})
+	if name != "" || rest[1] != "redis-lagoon-59415" {
+		t.Fatalf("redis promote must keep <follower>, got name %q rest %#v", name, rest)
+	}
 	name, rest = peelResourceName("pg", []string{"unfollow", "pg-timber-bdwoby"})
 	if name != "" || rest[1] != "pg-timber-bdwoby" {
 		t.Fatalf("pg unfollow must keep <follower>, got name %q rest %#v", name, rest)
+	}
+	name, rest = peelResourceName("redis", []string{"unfollow", "redis-lagoon-59415"})
+	if name != "" || rest[1] != "redis-lagoon-59415" {
+		t.Fatalf("redis unfollow must keep <follower>, got name %q rest %#v", name, rest)
+	}
+}
+
+func TestRedisCLINamedArgSelectsInstance(t *testing.T) {
+	spec := redisPluginCLI()
+	spec.Doc = "usage: flynn redis redis-cli [--] [<argument>...]\n       flynn redis info\n       flynn redis wait <resource>\n       flynn redis dump [-q] [-f <file>]\n"
+	resourceName, args := peelResourceName("redis", []string{"redis-cli", "redis-kelp-20218", "PING"})
+	if resourceName != "redis-kelp-20218" {
+		t.Fatalf("peel %q rest %#v", resourceName, args)
+	}
+	argv := append([]string{"redis"}, args...)
+	parsed, err := docopt.Parse(spec.DocoptUsage(), argv, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin.FoldColonBools(spec, parsed.Bool)
+	if parsed.String == nil {
+		parsed.String = map[string]string{}
+	}
+	parsed.String["<name>"] = resourceName
+	if resourceNameArg(parsed) != "redis-kelp-20218" {
+		t.Fatalf("resourceNameArg %q", resourceNameArg(parsed))
+	}
+	got := cliutil.List(parsed, "<argument>")
+	if len(got) != 1 || got[0] != "PING" {
+		t.Fatalf("redis-cli arguments %#v", got)
+	}
+	if act := spec.MatchAction(parsed.Bool); act == nil || act.Name != "redis-cli" {
+		t.Fatalf("MatchAction %#v bools=%#v", act, parsed.Bool)
+	}
+
+	parsed, err = docopt.Parse(spec.DocoptUsage(), []string{"redis", "redis-cli", "redis-kelp-20218", "PING"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if takePluginInstanceArg("redis", parsed) != "redis-kelp-20218" {
+		t.Fatalf("takePluginInstanceArg missed digit name")
+	}
+	got = cliutil.List(parsed, "<argument>")
+	if len(got) != 1 || got[0] != "PING" {
+		t.Fatalf("must strip instance from redis-cli args, got %#v", got)
+	}
+
+	waitArgs, err := docopt.Parse(spec.DocoptUsage(), []string{"redis", "wait", "redis-kelp-20218"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin.FoldColonBools(spec, waitArgs.Bool)
+	if resourceNameArg(waitArgs) != "redis-kelp-20218" {
+		t.Fatalf("redis:wait <resource> %q", resourceNameArg(waitArgs))
+	}
+}
+
+func TestPluginInterpRedisRequiresNameWhenMultiple(t *testing.T) {
+	primary := "redis-kelp-20218"
+	follower := "redis-lagoon-59415"
+	client := fakeRedisReleaseClient{releases: map[string]*ct.Release{
+		primary:  {ID: "primary-rel", Env: map[string]string{"REDIS_URL": "rediss://:pw@leader." + primary + ".discoverd:6379", "REDIS_PASSWORD": "pw"}},
+		follower: {ID: "follower-rel", Env: map[string]string{"REDIS_URL": "rediss://:pw@leader." + follower + ".discoverd:6379", "REDIS_PASSWORD": "pw"}},
+	}}
+	env := &ct.Release{Env: map[string]string{
+		"FLYNN_REDIS":          primary,
+		"REDIS_URL":            "rediss://:pw@leader." + primary + ".discoverd:6379",
+		"FLYNN_REDIS_TEAL_URL": "rediss://:pw@leader." + follower + ".discoverd:6379",
+	}}
+	resources := []*ct.Resource{
+		{Env: map[string]string{"FLYNN_REDIS": primary, "REDIS_URL": env.Env["REDIS_URL"], "REDIS_PASSWORD": "pw"}},
+		{Env: map[string]string{"FLYNN_REDIS": follower, "REDIS_URL": env.Env["FLYNN_REDIS_TEAL_URL"], "REDIS_PASSWORD": "pw"}},
+	}
+	_, _, err := pluginInterp(client, redisPluginCLI(), env, resources, "")
+	if err == nil || !strings.Contains(err.Error(), "multiple redis resources") || !strings.Contains(err.Error(), primary) || !strings.Contains(err.Error(), follower) {
+		t.Fatalf("multiple: %v", err)
+	}
+
+	in, rel, err := pluginInterp(client, redisPluginCLI(), env, resources, primary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != primary || rel.ID != "primary-rel" {
+		t.Fatalf("named primary %q %v", in.Resource, rel)
+	}
+	if !strings.Contains(in.App["REDIS_URL"], primary) {
+		t.Fatalf("primary url %q", in.App["REDIS_URL"])
+	}
+
+	in, rel, err = pluginInterp(client, redisPluginCLI(), env, resources, follower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in.Resource != follower || rel.ID != "follower-rel" {
+		t.Fatalf("named follower %q %v", in.Resource, rel)
+	}
+	if !strings.Contains(in.App["REDIS_URL"], follower) {
+		t.Fatalf("follower url %q", in.App["REDIS_URL"])
 	}
 }
 

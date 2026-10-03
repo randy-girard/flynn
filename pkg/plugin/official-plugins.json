@@ -104,6 +104,7 @@
   "private_plugins": [
     {
       "name": "billing",
+      "repo": "flynn-plugin-billing",
       "description": "Hosted Stripe billing, plans, dyno metering, and feature paywalls. Not installable with plugin:install billing; company-operated clusters only."
     }
   ],

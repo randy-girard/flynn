@@ -41,7 +41,11 @@ still works.
 (`redis`, `dashboard`, `enterprise`, …) are what
 `flynn-host plugin:install <name>` resolves. A path, git URL,
 `--github-org`, or `/etc/flynn/plugins.json` override can still point at a
-different source.
+different source. The public catalog is listed without talking to GitHub.
+Private first-party plugins stay in `official-plugins.json` but
+`plugin:list --known` prints them only when the current GitHub credentials
+(`plugin:credentials`, `FLYNN_PLUGIN_GITHUB_TOKEN`, or `GITHUB_TOKEN`) can
+read that repo — or when the repo is public.
 
 The **enterprise** plugin (`../flynn-plugin-enterprise`) is in that catalog.
 Install it with `flynn-host plugin:install enterprise`. After install it
@@ -57,7 +61,9 @@ includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
 
 `private_plugins` in `official-plugins.json` are first-party plugins that exist
 but are **not** installable with `flynn-host plugin:install <name>`.
-`plugin:list --known` prints them in a footer. Install from a path, private git
+`plugin:list --known` prints them only when this process can access that
+GitHub repo (public, or private with a token that can read it). Without
+access, the name is omitted from the list. Install from a path, private git
 URL, or `/etc/flynn/plugins.json` override. That list is for Flynn’s hosted
 control plane, not self-hosted OSS.
 
@@ -272,7 +278,7 @@ sudo flynn-host plugin:list --check
 sudo flynn-host plugin:list --known
 ```
 
-`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`. `--known` is the first-party catalog `plugin:install <name>` resolves (including `enterprise`).
+`plugin:list` prints the installed `VERSION` (the GitHub tag stamped at install). `--check` asks GitHub for the highest tag compatible with this Flynn release and adds `UPDATE` (that tag) and `STATUS` (`current`, `update`, or `-` when the plugin has no GitHub source). Plugins with `STATUS=update` can be upgraded with `flynn-host plugin:update <name>` or `flynn-host plugin:update-all`. `--known` is the first-party catalog `plugin:install <name>` resolves (including `enterprise`). Private first-party plugins such as `billing` stay in that JSON but appear in `--known` only when GitHub credentials can read the private repo.
 
 ## User CLI
 
@@ -322,7 +328,9 @@ hidden on `flynn help` until the matching plugin is installed on the cluster.
 
 The dashboard plugin is a host/shell. Plugin UIs live on each plugin’s
 cluster-level `web` process (Heroku add-on style): the dashboard shows a
-resource card, and opening it renders pages the plugin serves. After any
+resource card, and opening it renders pages the plugin serves. While an app
+deploy is in progress, the app page shows a banner on every tab and the Deploy
+tab polls deployer status (`running` / `pending`, including `git push`). After any
 tenant datastore plugin is installed, Workspace also lists **Datastores**
 (cluster-wide database resources, with Add to provision onto an existing app).
 
@@ -363,9 +371,18 @@ compiled-in list.
 - Uninstalled plugins do not appear as a broken iframe; the dashboard shows
   an install hint (`sudo flynn-host plugin:install <name>`).
 - Datastore plugins emit **per-app process metrics as events** (app id,
-  resource id, timestamp, series). The dashboard stores them on the same path
-  as app metrics swimlanes so a plugin Metrics page can chart that app’s
-  resource. Metric names belong in the plugin README so alerts can hook them.
+  resource id, timestamp, series) on a background loop (about every 20s), not
+  only when someone opens the Metrics page. The dashboard stores each series
+  historically on `POST /webhooks/plugin-metrics` (canonical plugin names
+  `postgres` and `redis`) so a plugin Metrics page can chart that app’s
+  resource and the Alerts catalog can threshold the same keys. Postgres and
+  Redis also write Heroku-style `sample#` log
+  lines (`heroku-postgres` / `heroku-redis`) and expose live diagnostics plus
+  slow queries/commands at `/dashboard/api/diagnostics`. Metric names belong
+  in the plugin README so alerts can hook them. The dashboard Alerts catalog
+  lists Redis and Postgres series only when that plugin is installed; those
+  add-on Metrics pages use the same timeframe, chart rules, and **Add alert**
+  control as app metrics, with Slow commands / Slow queries on a sibling tab.
 
 Tenant Postgres is `flynn-plugin-postgres` and stamps its own `dashboard`
 block (`base_url` on `postgres-plugin.discoverd`). The dashboard also keeps a

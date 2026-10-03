@@ -127,15 +127,23 @@ func TestParseOfficialRejectsBadCatalog(t *testing.T) {
 	]}`)); err == nil {
 		t.Fatal("duplicate alias")
 	}
-	if _, err := parseOfficial([]byte(`{"plugins":[{"name":"redis","kind":"app","repo":"r","description":"one"}],"private_plugins":[{"name":"redis","description":"hidden"}]}`)); err == nil {
+	if _, err := parseOfficial([]byte(`{"plugins":[{"name":"redis","kind":"app","repo":"r","description":"one"}],"private_plugins":[{"name":"redis","repo":"hidden","description":"hidden"}]}`)); err == nil {
 		t.Fatal("private name colliding with catalog")
 	}
 	if _, err := parseOfficial([]byte(`{"private_plugins":[{"name":"enterprise"}]}`)); err == nil {
 		t.Fatal("private description required")
 	}
+	if _, err := parseOfficial([]byte(`{"private_plugins":[{"name":"billing","description":"pay"}]}`)); err == nil {
+		t.Fatal("private repo required")
+	}
 }
 
 func TestWriteKnownPlugins(t *testing.T) {
+	prev := knownRepoAccessible
+	t.Cleanup(func() { knownRepoAccessible = prev })
+	knownRepoAccessible = func(slug string) bool {
+		return slug == "randy-girard/flynn-plugin-billing"
+	}
 	var b strings.Builder
 	if err := WriteKnownPlugins(&b, "randy-girard", KnownPlugins()); err != nil {
 		t.Fatal(err)
@@ -146,8 +154,25 @@ func TestWriteKnownPlugins(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}
 	}
-	if !strings.Contains(out, "Private first-party plugins") || !strings.Contains(out, "billing") {
-		t.Fatalf("private catalog must list billing:\n%s", out)
+	if !strings.Contains(out, "Private first-party plugins") || !strings.Contains(out, "billing") || !strings.Contains(out, "randy-girard/flynn-plugin-billing") {
+		t.Fatalf("private catalog must list billing when the repo is accessible:\n%s", out)
+	}
+}
+
+func TestWriteKnownPluginsHidesPrivateReposWithoutAccess(t *testing.T) {
+	prev := knownRepoAccessible
+	t.Cleanup(func() { knownRepoAccessible = prev })
+	knownRepoAccessible = func(string) bool { return false }
+	var b strings.Builder
+	if err := WriteKnownPlugins(&b, "randy-girard", KnownPlugins()); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "enterprise") {
+		t.Fatalf("public catalog must still list enterprise:\n%s", out)
+	}
+	if strings.Contains(out, "billing") || strings.Contains(out, "Private first-party") {
+		t.Fatalf("private plugins must stay hidden without repo access:\n%s", out)
 	}
 }
 
@@ -222,5 +247,9 @@ func TestKnownPluginRepoSlug(t *testing.T) {
 	p.Repo = "other/custom.git"
 	if p.RepoSlug("acme") != "other/custom" {
 		t.Fatalf("owner/name must keep catalog owner: %s", p.RepoSlug("acme"))
+	}
+	priv := PrivatePlugin{Repo: "flynn-plugin-billing"}
+	if priv.RepoSlug("randy-girard") != "randy-girard/flynn-plugin-billing" {
+		t.Fatalf("%s", priv.RepoSlug("randy-girard"))
 	}
 }
