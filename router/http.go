@@ -373,7 +373,12 @@ func (s *HTTPListener) listenAndServeTLS() error {
 			if r == nil {
 				return nil, errMissingTLS
 			}
-			return r.keypair, nil
+			if r.keypair != nil {
+				return r.keypair, nil
+			}
+			// Included app routes often have no cert of their own. The
+			// bootstrap cert is *.$CLUSTER_DOMAIN, so HTTPS still works.
+			return &s.keypair, nil
 		}
 		tlsConfig := tlsconfig.SecureCiphers(&tls.Config{
 			GetCertificate: certForHandshake,

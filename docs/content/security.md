@@ -155,8 +155,9 @@ not a public catalog.
 Applications run in their own network namespace on the overlay. User jobs
 cannot open connections to other user jobs or to internal Flynn services
 (`controller`, `blobstore`, `postgres-api`, …). They may reach provisioned
-datastores only at the leader host Flynn put in `DATABASE_URL` /
-`REDIS_URL` / etc., and only on the database protocol ports (Postgres
+datastores only at the leader host Flynn put in **that app's**
+`DATABASE_URL` / `REDIS_URL` / etc. (not another app's datastore), and only
+on the database protocol ports (Postgres
 5432, MariaDB 3306, MongoDB 27017, Redis 6379, Kafka 9092, ClickHouse
 9440/8443/8123/9000). Appliance admin HTTP on those same IPs (Postgres
 5433, MariaDB 3307, MongoDB 27018, Redis 6380, Kafka 9095, ClickHouse

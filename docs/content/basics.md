@@ -82,6 +82,9 @@ $ git push flynn master
        Procfile declares types -> web
 -----> Creating release...
 =====> Application deployed
+=====> URLs
+       https://example.demo.localflynn.com
+       http://example.demo.localflynn.com
 To https://git.demo.localflynn.com/example.git
  * [new branch]      master -> master
 ```
@@ -105,6 +108,10 @@ The example application declares a single `web` process type which executes
 $ cat Procfile
 web: go-flynn-example
 ```
+
+A `release` process type (for example `release: rake db:migrate`) is run once
+after the new slug is created and before traffic is swapped; it is not kept
+running. See [Apps — Release phase](apps.md#release-phase).
 
 New applications with a `web` process type are initially scaled to run one web
 process, as can be seen with the `ps` command:

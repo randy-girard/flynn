@@ -539,10 +539,13 @@ built-in appliance.
   They cannot open a console on `controller`, `blobstore`, `postgres`, or other
   system apps. Those consoles are `flynn-host pg`, which uses the cluster key.
 * **Application jobs** cannot reach `postgres-api`, `controller`, or
-  `blobstore` on the overlay. They may TCP to `leader.postgres.discoverd` only
-  to use the `DATABASE_URL` Flynn provisioned. Each Postgres role can CONNECT
-  only to its own database; `PUBLIC` CONNECT is revoked, so one app's user
-  cannot open another app's (or the controller's) database.
+  `blobstore` on the overlay. They may resolve and TCP to the **leader**
+  host Flynn put in that app's `DATABASE_URL` / `REDIS_URL` (an isolated
+  instance such as `leader.redis-lagoon-59415.discoverd`), not another
+  app's datastore and not internal names like `postgres.discoverd`. Each
+  Postgres role can CONNECT only to its own database; `PUBLIC` CONNECT is
+  revoked, so one app's user cannot open another app's (or the
+  controller's) database.
 
 User-app consoles: `flynn -a myapp pg:psql` from the postgres plugin. Platform
 database: `flynn-host pg:psql` on a cluster host.

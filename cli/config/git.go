@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -41,19 +42,100 @@ func WriteGlobalGitConfig(gitURL, caFile string) error {
 		}
 	}
 
-	self, err := osext.Executable()
+	self, err := gitCredentialHelperPath()
 	if err != nil {
 		return err
 	}
-
-	// Ensure the path uses `/`s
-	// Git on windows can't handle `\`s
-	self = filepath.ToSlash(self)
 
 	if err := gitConfig(fmt.Sprintf("credential.%s.helper", gitURL), self+" git-credentials"); err != nil {
 		return err
 	}
 	return nil
+}
+
+// gitCredentialHelperPath is a Flynn CLI git can exec on this machine.
+// Vagrant image builds replace build-dev/bin/flynn with a Linux symlink
+// (flynn-linux-*), so cluster:add must not record that path on macOS.
+func gitCredentialHelperPath() (string, error) {
+	self, err := osext.Executable()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(self)
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		dir = filepath.Dir(resolved)
+		self = resolved
+	}
+	nativeName := "flynn-" + runtime.GOOS + "-" + runtime.GOARCH
+	if runtime.GOOS == "windows" {
+		nativeName += ".exe"
+	}
+	candidates := []string{
+		self,
+		filepath.Join(dir, nativeName),
+		"/usr/local/bin/flynn",
+	}
+	if p, err := exec.LookPath("flynn"); err == nil {
+		candidates = append(candidates, p)
+	}
+	seen := map[string]bool{}
+	for _, c := range candidates {
+		c = strings.TrimSpace(c)
+		if c == "" || seen[c] {
+			continue
+		}
+		seen[c] = true
+		if !nativeCLI(c) {
+			continue
+		}
+		return filepath.ToSlash(c), nil
+	}
+	return "", fmt.Errorf("no native flynn CLI for git-credentials (build-dev/bin/flynn is often a Linux cluster binary after vagrant builds; install with make vagrant-cli and use /usr/local/bin/flynn)")
+}
+
+func nativeCLI(path string) bool {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		resolved = path
+	}
+	fi, err := os.Stat(resolved)
+	if err != nil || fi.IsDir() {
+		return false
+	}
+	f, err := os.Open(resolved)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var magic [4]byte
+	if _, err := io.ReadFull(f, magic[:]); err != nil {
+		return false
+	}
+	switch runtime.GOOS {
+	case "darwin":
+		return isMachO(magic)
+	case "linux":
+		return magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F'
+	case "windows":
+		return magic[0] == 'M' && magic[1] == 'Z'
+	default:
+		return true
+	}
+}
+
+func isMachO(magic [4]byte) bool {
+	switch {
+	case magic[0] == 0xcf && magic[1] == 0xfa && magic[2] == 0xed && magic[3] == 0xfe:
+		return true
+	case magic[0] == 0xce && magic[1] == 0xfa && magic[2] == 0xed && magic[3] == 0xfe:
+		return true
+	case magic[0] == 0xfe && magic[1] == 0xed && magic[2] == 0xfa && magic[3] == 0xcf:
+		return true
+	case magic[0] == 0xca && magic[1] == 0xfe && magic[2] == 0xba && magic[3] == 0xbe:
+		return true
+	default:
+		return false
+	}
 }
 
 func RemoveGlobalGitConfig(gitURL string) {

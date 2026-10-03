@@ -138,7 +138,8 @@ flynn -a myapp docker:push myimage:tag
 flynn -a myapp scale app=1
 ```
 
-Apps bind HTTP on `$PORT`. Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, named runtimes (`flynn limit:runtime`), and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
+Apps bind HTTP on `$PORT` (8080 for the default `web` process, not a random
+port). Flynn adds `https://$APP.$CLUSTER_DOMAIN` automatically. Custom domains, process types, logs, named runtimes (`flynn limit:runtime`), and Let's Encrypt are covered in [Apps](docs/content/apps.md) and [Basics](docs/content/basics.md).
 
 ### Buildpacks (heroku-24)
 
@@ -166,7 +167,7 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote. Instance volumes are not in `flynn-host backup` |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
-| `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. No replicas and not in `flynn-host backup`; caching and development |
+| `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. Followers via `flynn redis:follow`. Not in `flynn-host backup`; caching and development |
 | `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka` |
 | `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse` |
 
