@@ -20,8 +20,9 @@ Provider name stays `redis`.
 
 The plugin provides Redis from the Ubuntu 24.04 package set in a
 single process configuration. Redis writes an append-only file on a persistent
-volume, so data survives job restarts and `flynn-host update`, but there are no
-replicas and the volume is **not** part of `flynn-host backup`. Treat the data
+volume, so data survives job restarts and `flynn-host update`. A follower is a
+separate resource (`flynn redis:follow` or `flynn resource:add redis --follow`).
+The volume is **not** part of `flynn-host backup`. Treat the data
 as ephemeral: caching, development, and test use.
 
 Each resource is its own Redis instance and must have a password (`requirepass`).
@@ -40,27 +41,49 @@ flynn resource:add redis
 ```
 
 This will provision a Redis server as a Flynn app and configure your application
-to connect to it.
+to connect to it. The command returns after the instance is scheduled; Redis
+finishes starting in the background. Check later with `flynn redis:wait` or the
+dashboard, which live-updates while it starts.
 
 ### Connecting to the database
 
-Provisioning the database will add a few environment variables to your app
-release. `REDIS_HOST`, `REDIS_PORT`, and `REDIS_PASSWORD` provide connection
-details for the database. `FLYNN_REDIS` is the name of the Redis app.
-
-Flynn will also create the `REDIS_URL` environment variable which is utilized
-by some libraries to configure connections. TLS on 6379 is on by default
-(`REDIS_TLS_ENABLED=true`), so `REDIS_URL` uses the `rediss://` scheme and the
-appliance CA is in `REDIS_TRUSTED_CERT`. The plaintext port is disabled while
-TLS is on; use `rediss://` or `redis-cli --tls`.
+Provisioning the database will add environment variables to your app
+release. A new provision sets `REDIS_URL` when that key is free, plus
+`FLYNN_REDIS_<COLOR>_URL`. `--as CACHE` sets `CACHE_URL`. `--as AMBER`
+sets `FLYNN_REDIS_AMBER_URL`. Attaching an existing resource does not set
+`REDIS_URL`. `FLYNN_REDIS` (the Redis app name) and `REDIS_ROLE` stay on the
+resource record. TLS for `resource:expose` is on 16379 by default, so
+external clients use `rediss://` and `REDIS_TRUSTED_CERT`. In-cluster
+`REDIS_URL` is `redis://` on 6379 so Sidekiq and redis-rb do not need to
+trust Flynn's private CA. After a plugin update, leftover in-cluster
+`rediss://` URLs on attached apps are rewritten to `redis://`.
 
 ### Connecting to a console
 
 To connect to a console for the database, run `flynn redis:cli` (alias
 `flynn redis redis-cli`). This does not require the Redis client to be installed
 locally or firewall/security changes, as it runs in a container on the Flynn
-cluster using the Redis appliance image. The console uses `REDIS_HOST` (`leader.<redis-app>.discoverd`), the
-same host as `REDIS_URL`.
+cluster using the Redis appliance image. The console uses
+`leader.<redis-app>.discoverd`, the same host as `REDIS_URL`. User jobs
+resolve that leader name only when Redis is attached to that app.
+
+### Followers
+
+A follower is a new Redis resource, not a second process on the leader. It
+copies the leader with `REPLICAOF` and stays read-only until you promote or
+unfollow it. With TLS (the default) the replica talks to the primary
+`tls-port` **16379**, not plaintext 6379.
+
+```text
+flynn redis:follow
+flynn redis:wait <follower>
+flynn redis:promote <follower>
+flynn redis:unfollow <follower>
+```
+
+`redis:wait` prints live copy progress (full resync, then streaming catch-up).
+The dashboard Followers tab has **Add follower** and the same progress. A
+primary cannot be deleted while it still has followers.
 
 ### Dumping and restoring
 
@@ -82,15 +105,13 @@ sudo flynn-host firewall:expose PORT   # on every host
 ```
 
 The default hostname is the Redis app name on the cluster domain (from
-`FLYNN_REDIS`). Default TLS mode is passthrough: the appliance already speaks
-TLS on 6379, so external clients connect with TLS and trust
-`REDIS_TRUSTED_CERT` (skip hostname verification if the route hostname is not
-on the certificate).
+`flynn redis`). Default TLS mode is passthrough: the appliance speaks
+TLS on 16379, so external clients connect with TLS.
 
 You can still create the route yourself:
 
 ```text
-flynn -a $(flynn env:get FLYNN_REDIS) route:add tcp --service $(flynn env:get FLYNN_REDIS) --leader --domain redis.example.com --tls-mode passthrough
+flynn -a redis-harbor-48291 route:add tcp --service redis-harbor-48291 --leader --domain redis.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 

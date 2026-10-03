@@ -1,8 +1,8 @@
 // Package resname builds database resource app names.
 //
-// MySQL, Redis, and the other engines use <prefix>-<word>-<6 letters>,
-// for example mysql-harbor-kxmnpq. Postgres instances are
-// postgresql-<word>-<5 digits>, for example postgresql-concave-48291.
+// MySQL and the other engines use <prefix>-<word>-<6 letters>, for example
+// mysql-harbor-kxmnpq. Postgres and Redis instances use <engine>-<word>-<5
+// digits>, for example postgresql-concave-48291 and redis-harbor-48291.
 // Callers retry when the name is already taken so two resources never share it.
 package resname
 
@@ -25,6 +25,8 @@ const alphabet = "abcdefghijklmnopqrstuvwxyz"
 const digitAlphabet = "0123456789"
 
 const postgresAttachPrefix = "FLYNN_POSTGRESQL_"
+
+const redisAttachPrefix = "FLYNN_REDIS_"
 
 var attachmentColors = []string{
 	"AMBER", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE", "BRASS", "BRONZE",
@@ -53,13 +55,13 @@ func Name(prefix string, taken func(string) bool) string {
 	return prefix + "-" + words[index(len(words))] + "-" + letters(8)
 }
 
-// IsolatedService is a provisioned datastore app (postgresql-concave-48291
-// or the older pg-harbor-kxmnpq / postgresql-<owner>-<digits> forms). User
-// jobs resolve leader.<name>.discoverd for these; other discoverd names stay
-// internal.
+// IsolatedService is a provisioned datastore app (postgresql-concave-48291,
+// redis-harbor-48291, or the older pg-harbor-kxmnpq / redis-harbor-abcdef
+// forms). User jobs resolve leader.<name>.discoverd for these; other
+// discoverd names stay internal.
 func IsolatedService(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if postgresInstanceName(name) {
+	if postgresInstanceName(name) || redisInstanceName(name) {
 		return true
 	}
 	i := strings.IndexByte(name, '-')
@@ -146,6 +148,38 @@ func postgresInstanceName(name string) bool {
 	return owner[0] != '-' && owner[len(owner)-1] != '-'
 }
 
+func redisInstanceName(name string) bool {
+	const p = "redis-"
+	if !strings.HasPrefix(name, p) {
+		return false
+	}
+	rest := name[len(p):]
+	j := strings.LastIndexByte(rest, '-')
+	if j <= 0 || j == len(rest)-1 {
+		return false
+	}
+	suffix := rest[j+1:]
+	if n := len(suffix); n < 5 || n > 8 {
+		return false
+	}
+	for _, c := range suffix {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	owner := rest[:j]
+	if owner == "" {
+		return false
+	}
+	for _, c := range owner {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
+			continue
+		}
+		return false
+	}
+	return owner[0] != '-' && owner[len(owner)-1] != '-'
+}
+
 func letters(n int) string {
 	return fromAlphabet(alphabet, n)
 }
@@ -201,11 +235,12 @@ func conventionalURL(k string) bool {
 // Every postgres provision and attach sets FLYNN_POSTGRESQL_<COLOR>_URL unless
 // --as names the attachment (NAME_URL, or FLYNN_POSTGRESQL_<COLOR>_URL when
 // --as is a color). A new provision also sets DATABASE_URL when that key is
-// free. Attaching an existing resource never sets DATABASE_URL. Incoming color
-// URLs are reused so the resource record and app release share one color key.
-// Other engines get PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's usual URL
-// when unused, plus --as NAME_URL. Host, user, password, and FLYNN_* identity
-// keys stay on the resource record, not the app.
+// free. Redis is the same with FLYNN_REDIS_<COLOR>_URL and REDIS_URL.
+// Attaching an existing resource never sets the conventional URL. Incoming
+// color URLs are reused so the resource record and app release share one color
+// key. Other engines get PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's
+// usual URL when unused, plus --as NAME_URL. Host, user, password, and
+// FLYNN_* identity keys stay on the resource record, not the app.
 func MergeAttachment(existing, incoming map[string]string, as string, newProvision bool) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
@@ -220,7 +255,9 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 		return strings.TrimSpace(existing[k]) != "" || out[k] != ""
 	}
 	postgres := strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != ""
-	if postgres {
+	redis := strings.TrimSpace(incoming["FLYNN_REDIS"]) != ""
+	switch {
+	case postgres:
 		if strings.TrimSpace(as) != "" {
 			if key := PostgresAttachmentURLKey(as, taken); key != "" {
 				out[key] = url
@@ -235,7 +272,22 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 		if newProvision && !taken("DATABASE_URL") {
 			out["DATABASE_URL"] = url
 		}
-	} else {
+	case redis:
+		if strings.TrimSpace(as) != "" {
+			if key := RedisAttachmentURLKey(as, taken); key != "" {
+				out[key] = url
+			}
+		} else if !redisColorAlreadySet(existing, url) {
+			key := reuseIncomingRedisColor(incoming, taken)
+			if key == "" {
+				key = ColorRedisURL(taken)
+			}
+			out[key] = url
+		}
+		if newProvision && !taken("REDIS_URL") {
+			out["REDIS_URL"] = url
+		}
+	default:
 		if key := ExtraDatabaseURL(name, taken); key != "" {
 			out[key] = url
 		}
@@ -258,10 +310,33 @@ func postgresColorAlreadySet(existing map[string]string, url string) bool {
 	return false
 }
 
+func redisColorAlreadySet(existing map[string]string, url string) bool {
+	for k, v := range existing {
+		if v == url && RedisColorURLKey(k) {
+			return true
+		}
+	}
+	return false
+}
+
 func reuseIncomingPostgresColor(incoming map[string]string, taken func(string) bool) string {
 	var keys []string
 	for k := range incoming {
 		if PostgresColorURLKey(k) && (taken == nil || !taken(k)) {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return ""
+	}
+	return keys[0]
+}
+
+func reuseIncomingRedisColor(incoming map[string]string, taken func(string) bool) string {
+	var keys []string
+	for k := range incoming {
+		if RedisColorURLKey(k) && (taken == nil || !taken(k)) {
 			keys = append(keys, k)
 		}
 	}
@@ -357,12 +432,12 @@ func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) ma
 
 // ResourceEnv is the env stored on the controller resource record.
 // MergeAttachment is what the app release gets (the attachment color or --as
-// URL, plus DATABASE_URL on a new provision when that key is free). The
-// resource itself keeps instance identity (FLYNN_POSTGRES, role) so the
-// dashboard and pg:psql can find it. Extra incoming *_URL keys that the app
-// did not receive are dropped so the resource page and env page show the same
-// attachment. Split PGHOST/PGUSER/PGPASSWORD/PGDATABASE keys and POSTGRES_URL
-// stay off the resource.
+// URL, plus DATABASE_URL / REDIS_URL on a new provision when that key is
+// free). The resource itself keeps instance identity (FLYNN_POSTGRES /
+// FLYNN_REDIS, role) so the dashboard and plugin CLI can find it. Extra
+// incoming *_URL keys that the app did not receive are dropped so the
+// resource page and env page show the same attachment. Split PGHOST/PGUSER
+// keys stay off the resource.
 func ResourceEnv(existing, incoming map[string]string, as string) map[string]string {
 	merged := MergeAttachment(existing, incoming, as, true)
 	if len(incoming) == 0 {
@@ -391,7 +466,9 @@ func ResourceEnv(existing, incoming map[string]string, as string) map[string]str
 func splitCredentialKey(k string) bool {
 	switch k {
 	case "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE",
-		"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT":
+		"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT",
+		"REDIS_HOST", "REDIS_PORT", "REDIS_TLS_ENABLED", "REDIS_TRUSTED_CERT",
+		"REDIS_MASTER_HOST", "REDIS_MASTER_PORT", "REDIS_MASTER_PASSWORD", "REDIS_MASTER_CA":
 		return true
 	}
 	return false
@@ -472,6 +549,23 @@ func ColorDatabaseURL(taken func(string) bool) string {
 	return postgresAttachPrefix + attachmentColors[start] + "_X_URL"
 }
 
+// ColorRedisURL is FLYNN_REDIS_<COLOR>_URL for a color that taken does not
+// already report.
+func ColorRedisURL(taken func(string) bool) string {
+	if len(attachmentColors) == 0 {
+		return redisAttachPrefix + "AMBER_URL"
+	}
+	start := index(len(attachmentColors))
+	for i := 0; i < len(attachmentColors); i++ {
+		color := attachmentColors[(start+i)%len(attachmentColors)]
+		key := redisAttachPrefix + color + "_URL"
+		if taken == nil || !taken(key) {
+			return key
+		}
+	}
+	return redisAttachPrefix + attachmentColors[start] + "_X_URL"
+}
+
 // PostgresAppURLKey is the attachment env var for one postgres attach onto an
 // app. With no --as, that is FLYNN_POSTGRESQL_<COLOR>_URL (reusing an incoming
 // color when unused). --as NAME is NAME_URL (a color short name becomes
@@ -527,6 +621,45 @@ func PostgresColorURLKey(k string) bool {
 	return true
 }
 
+// RedisAttachmentURLKey is the env var for one redis --as attach. --as uses
+// the same short name and appends _URL. A color (AMBER) or FLYNN_REDIS_AMBER
+// becomes FLYNN_REDIS_AMBER_URL. Other names become NAME_URL. With no --as,
+// a free color is chosen.
+func RedisAttachmentURLKey(as string, taken func(string) bool) string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	as = strings.TrimSuffix(as, "_URL")
+	as = strings.Trim(as, "_")
+	if as == "" {
+		return ColorRedisURL(taken)
+	}
+	if strings.HasPrefix(as, redisAttachPrefix) {
+		return as + "_URL"
+	}
+	if isAttachmentColor(as) {
+		return redisAttachPrefix + as + "_URL"
+	}
+	return as + "_URL"
+}
+
+// RedisColorURLKey is FLYNN_REDIS_<COLOR>_URL (and the _X_ fallback).
+func RedisColorURLKey(k string) bool {
+	k = strings.TrimSpace(k)
+	if !strings.HasPrefix(k, redisAttachPrefix) || !strings.HasSuffix(k, "_URL") {
+		return false
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(k, redisAttachPrefix), "_URL")
+	if mid == "" {
+		return false
+	}
+	for _, c := range mid {
+		if c >= 'A' && c <= 'Z' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 func isAttachmentColor(name string) bool {
 	name = strings.ToUpper(strings.TrimSpace(name))
 	for _, c := range attachmentColors {
@@ -541,6 +674,22 @@ func isAttachmentColor(name string) bool {
 // postgresql-concave-48291. taken reports names already in use.
 func PostgresInstanceName(taken func(string) bool) string {
 	const head = "postgresql-"
+	if len(words) == 0 {
+		return head + "app-" + digits(5)
+	}
+	for i := 0; i < 32; i++ {
+		name := head + words[index(len(words))] + "-" + digits(5)
+		if taken == nil || !taken(name) {
+			return name
+		}
+	}
+	return head + words[index(len(words))] + "-" + digits(8)
+}
+
+// RedisInstanceName is redis-<word>-<5 digits>, for example redis-harbor-48291.
+// taken reports names already in use.
+func RedisInstanceName(taken func(string) bool) string {
+	const head = "redis-"
 	if len(words) == 0 {
 		return head + "app-" + digits(5)
 	}

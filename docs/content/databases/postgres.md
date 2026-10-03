@@ -55,9 +55,10 @@ flynn resource:add postgres --as ANALYTICS
 That command does not provision a database on the platform appliance. It
 creates a new Flynn app with one volume and exactly one Postgres node. Two
 resources do not share an app, volume, superuser, or any credential that can
-read the other instance. Sirenia is not started. The command waits until the
-new instance has finished `initdb` and registered in discoverd (up to five
-minutes on a new volume).
+read the other instance. Sirenia is not started. The command returns after the instance is scheduled.
+The new volume still runs `initdb` and registers in discoverd in the
+background (up to five minutes). Check later with `flynn pg:wait` or the
+dashboard overview, which live-updates while it starts.
 
 `--as ANALYTICS` sets `ANALYTICS_URL`. A new provision also sets
 `DATABASE_URL` when the app does not already have it. Every provision and

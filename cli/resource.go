@@ -46,10 +46,15 @@ onto a separate resource. The platform postgres appliance at
 postgres-api.discoverd is not used. Every postgres provision sets
 FLYNN_POSTGRESQL_<COLOR>_URL unless --as names the attachment
 (--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_POSTGRESQL_AMBER_URL).
-A new provision also sets DATABASE_URL when that key is free.
+A new provision also sets DATABASE_URL when that key is free. Redis is the
+same with FLYNN_REDIS_<COLOR>_URL and REDIS_URL.
+
+The command returns after the instance is scheduled. The datastore keeps
+starting in the background; check later with flynn resource or the plugin
+wait command (pg:wait, redis:wait, mysql:wait).
 
 Options:
-	--as=<name>              attachment env name (postgres adds _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL)
+	--as=<name>              attachment env name (postgres/redis add _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL or FLYNN_REDIS_<COLOR>_URL)
 	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
 	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
@@ -70,8 +75,9 @@ usage: flynn resource:attach <provider> <resource> [--as <name>]
 Attach an existing resource to this app. The resource must already exist on
 another app in the same account. Postgres sets FLYNN_POSTGRESQL_<COLOR>_URL
 unless --as names the attachment (--as NAME becomes NAME_URL; a color short
-name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL). Attaching an existing
-resource does not set DATABASE_URL.
+name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL). Redis is the same with
+FLYNN_REDIS_<COLOR>_URL. Attaching an existing resource does not set
+DATABASE_URL or REDIS_URL.
 
 <resource> is the NAME or ID from flynn resource. The same resource can attach
 to several apps. Only the app that provisioned it may delete it; this app
@@ -104,6 +110,9 @@ when that name is unique on the app. With only <provider>, removes the unique
 resource for that provider. A leader cannot be removed while followers are
 still linked; unfollow or remove those replicas first. An app that is only
 attached must use resource:detach; it cannot delete the instance.
+
+The command returns after the resource is detached from the app. The isolated
+instance is destroyed in the background.
 `)
 	register("resource:expose", runResourceExpose, `
 usage: flynn resource:expose <provider> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
@@ -198,6 +207,7 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	}
 
 	log.Println(createdResourceMessage(res, args.String["--as"]))
+	log.Println(resourceStartingMessage(res))
 
 	return nil
 }
@@ -247,6 +257,29 @@ func createdResourceMessage(res *ct.Resource, as string) string {
 		return fmt.Sprintf("Created resource %s (as %s) and a new release.", name, as)
 	}
 	return fmt.Sprintf("Created resource %s and a new release.", name)
+}
+
+// resourceStartingMessage is the second resource:add line. Provision returns
+// after the job is scheduled; redis:wait / pg:wait / mysql:wait poll ready.
+func resourceStartingMessage(res *ct.Resource) string {
+	name := resourceDisplayName(res)
+	if name == "" {
+		name = "the instance"
+	}
+	env := map[string]string{}
+	if res != nil && res.Env != nil {
+		env = res.Env
+	}
+	wait := "flynn resource"
+	switch {
+	case strings.TrimSpace(env["FLYNN_REDIS"]) != "":
+		wait = "flynn redis:wait " + name
+	case strings.TrimSpace(env["FLYNN_POSTGRES"]) != "":
+		wait = "flynn pg:wait " + name
+	case strings.TrimSpace(env["FLYNN_MYSQL"]) != "":
+		wait = "flynn mysql:wait " + name
+	}
+	return fmt.Sprintf("The instance is starting; check later with %s.", wait)
 }
 
 // resourceDisplayName is the isolated instance operators copy from flynn
@@ -604,6 +637,7 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 	}
 
 	log.Printf("Deleted resource %s, created release %s.", resourceDisplayName(res), releaseID)
+	log.Println("The instance is being removed in the background.")
 
 	return nil
 }

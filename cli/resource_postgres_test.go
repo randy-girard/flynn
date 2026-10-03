@@ -52,6 +52,25 @@ func TestCreatedResourceMessage(t *testing.T) {
 	}
 }
 
+func TestResourceStartingMessage(t *testing.T) {
+	got := resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_REDIS": "redis-harbor-kxmnpq"}})
+	if got != "The instance is starting; check later with flynn redis:wait redis-harbor-kxmnpq." {
+		t.Fatalf("redis: %q", got)
+	}
+	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp"}})
+	if got != "The instance is starting; check later with flynn pg:wait pg-orchid-xkhthp." {
+		t.Fatalf("postgres: %q", got)
+	}
+	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_MYSQL": "mysql-harbor-kxmnpq"}})
+	if got != "The instance is starting; check later with flynn mysql:wait mysql-harbor-kxmnpq." {
+		t.Fatalf("mysql: %q", got)
+	}
+	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_KAFKA": "kafka-fjord-abcxyz"}})
+	if got != "The instance is starting; check later with flynn resource." {
+		t.Fatalf("other: %q", got)
+	}
+}
+
 func TestResourceDisplayNameAndMatch(t *testing.T) {
 	res := &ct.Resource{
 		ID:         "919a764d-863d-4629-aa23-76248728dcbc",

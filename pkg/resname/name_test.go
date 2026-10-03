@@ -80,22 +80,39 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 	}
 
 	redis := MergeAttachment(map[string]string{"DATABASE_URL": "postgres://app"}, map[string]string{
-		"FLYNN_REDIS": "redis-ember-xefywh",
+		"FLYNN_REDIS": "redis-ember-48291",
 		"REDIS_URL":   "rediss://cache",
-		"REDIS_HOST":  "leader.redis-ember-xefywh.discoverd",
-	}, "", false)
-	if redis["REDIS_URL"] != "rediss://cache" || redis["REDIS_EMBER_XEFYWH_DATABASE_URL"] != "rediss://cache" {
-		t.Fatalf("first redis keeps REDIS_URL and its own name: %#v", redis)
+		"REDIS_HOST":  "leader.redis-ember-48291.discoverd",
+	}, "", true)
+	if redis["REDIS_URL"] != "rediss://cache" {
+		t.Fatalf("new redis provision must set REDIS_URL: %#v", redis)
 	}
-	if redis["REDIS_HOST"] != "" {
-		t.Fatalf("redis must not set REDIS_HOST on the app: %#v", redis)
+	if redis["REDIS_EMBER_48291_DATABASE_URL"] != "" || redis["FLYNN_REDIS"] != "" || redis["REDIS_HOST"] != "" {
+		t.Fatalf("redis must not set instance-named URL or identity on the app: %#v", redis)
+	}
+	if redisColorKey(redis) == "" {
+		t.Fatalf("redis provision must also set a color URL: %#v", redis)
 	}
 	again := MergeAttachment(map[string]string{"REDIS_URL": "rediss://first"}, map[string]string{
-		"FLYNN_REDIS": "redis-ember-xefywh",
+		"FLYNN_REDIS": "redis-ember-48291",
 		"REDIS_URL":   "rediss://second",
-	}, "", false)
-	if again["REDIS_URL"] != "" || again["REDIS_EMBER_XEFYWH_DATABASE_URL"] != "rediss://second" {
+	}, "", true)
+	if again["REDIS_URL"] != "" {
+		t.Fatalf("second redis must not steal REDIS_URL: %#v", again)
+	}
+	if redisColorKey(again) == "" || again[redisColorKey(again)] != "rediss://second" {
 		t.Fatalf("second redis: %#v", again)
+	}
+	redisPeer := MergeAttachment(nil, map[string]string{
+		"FLYNN_REDIS":          "redis-ember-48291",
+		"REDIS_URL":            "rediss://cache",
+		"FLYNN_REDIS_TEAL_URL": "rediss://cache",
+	}, "", false)
+	if redisPeer["REDIS_URL"] != "" {
+		t.Fatalf("attach of existing redis must not set REDIS_URL: %#v", redisPeer)
+	}
+	if redisPeer["FLYNN_REDIS_TEAL_URL"] != "rediss://cache" {
+		t.Fatalf("attach must reuse incoming redis color: %#v", redisPeer)
 	}
 
 	ch := MergeAttachment(map[string]string{"CLICKHOUSE_URL": "clickhouses://old"}, map[string]string{
@@ -369,12 +386,12 @@ func TestCanonical(t *testing.T) {
 }
 
 func TestIsolatedService(t *testing.T) {
-	for _, name := range []string{"postgresql-concave-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef"} {
+	for _, name := range []string{"postgresql-concave-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef", "redis-harbor-48291", "redis-shop-482913"} {
 		if !IsolatedService(name) {
 			t.Fatalf("%q should be an isolated datastore", name)
 		}
 	}
-	for _, name := range []string{"postgres", "postgres-plugin", "postgresql", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1", "postgresql-shop-abc123", "postgresql-concave-4829"} {
+	for _, name := range []string{"postgres", "postgres-plugin", "postgresql", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1", "postgresql-shop-abc123", "postgresql-concave-4829", "redis", "redis-plugin", "redis-harbor-4829"} {
 		if IsolatedService(name) {
 			t.Fatalf("%q must not look like an isolated datastore", name)
 		}
@@ -393,9 +410,30 @@ func TestPostgresInstanceName(t *testing.T) {
 	}
 }
 
+func TestRedisInstanceName(t *testing.T) {
+	re := regexp.MustCompile(`^redis-[a-z]+-[0-9]{5}$`)
+	seen := map[string]bool{}
+	for i := 0; i < 20; i++ {
+		name := RedisInstanceName(func(n string) bool { return seen[n] })
+		if !re.MatchString(name) {
+			t.Fatalf("name %q", name)
+		}
+		seen[name] = true
+	}
+}
+
 func postgresColorKey(env map[string]string) string {
 	for k := range env {
 		if PostgresColorURLKey(k) {
+			return k
+		}
+	}
+	return ""
+}
+
+func redisColorKey(env map[string]string) string {
+	for k := range env {
+		if RedisColorURLKey(k) {
 			return k
 		}
 	}
