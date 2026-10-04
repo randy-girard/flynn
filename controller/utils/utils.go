@@ -70,6 +70,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		Resources: t.Resources,
 		Profiles:  t.Profiles,
 	}
+	host.StampJobCommand(job, t.Command)
 	if len(t.LinuxCapabilities) > 0 {
 		job.Config.LinuxCapabilities = &t.LinuxCapabilities
 	}

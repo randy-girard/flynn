@@ -23,6 +23,7 @@ const (
 	MetaControllerRuntime        = "flynn-controller.runtime"
 	MetaControllerRuntimeProfile = "flynn-controller.runtime_profile" // legacy job metadata
 	MetaControllerApp            = "flynn-controller.app"
+	MetaControllerCommand        = "flynn-controller.command" // Procfile / Docker command, not slugrunner argv
 )
 
 // Additional H-codes for why a process was created (H10 remains a generic create).
@@ -312,20 +313,57 @@ func lifecycleExtra(job *ActiveJob) string {
 	return strings.Join(parts, ", ")
 }
 
-// JobCommand is the container argv, for start/scale log lines.
-func JobCommand(job *ActiveJob) string {
+// StampJobCommand records the Procfile or Docker command on the host job so
+// scale/start logs can show it next to the runtime argv (/runner/init start web).
+func StampJobCommand(job *Job, command string) {
+	command = strings.TrimSpace(command)
+	if job == nil || command == "" {
+		return
+	}
+	if job.Metadata == nil {
+		job.Metadata = map[string]string{}
+	}
+	job.Metadata[MetaControllerCommand] = command
+}
+
+// JobProcfileCommand is the process type Command (Procfile line or Docker CMD).
+func JobProcfileCommand(job *ActiveJob) string {
+	if job == nil || job.Job == nil || job.Job.Metadata == nil {
+		return ""
+	}
+	return strings.TrimSpace(job.Job.Metadata[MetaControllerCommand])
+}
+
+// JobArgvCommand is the container argv, usually slugrunner `/runner/init start web`.
+func JobArgvCommand(job *ActiveJob) string {
 	if job == nil || job.Job == nil || len(job.Job.Config.Args) == 0 {
 		return ""
 	}
 	return strings.Join(job.Job.Config.Args, " ")
 }
 
+// JobCommand is the command shown in start/scale log lines: Procfile when set,
+// otherwise the container argv.
+func JobCommand(job *ActiveJob) string {
+	if c := JobProcfileCommand(job); c != "" {
+		return c
+	}
+	return JobArgvCommand(job)
+}
+
 func withCommand(msg string, job *ActiveJob) string {
-	cmd := JobCommand(job)
-	if cmd == "" {
+	proc := JobProcfileCommand(job)
+	argv := JobArgvCommand(job)
+	switch {
+	case proc != "" && argv != "" && proc != argv:
+		return msg + " with command `" + proc + "` (`" + argv + "`)"
+	case proc != "":
+		return msg + " with command `" + proc + "`"
+	case argv != "":
+		return msg + " with command `" + argv + "`"
+	default:
 		return msg
 	}
-	return msg + " with command `" + cmd + "`"
 }
 
 func joinLifecycle(msg, extra string) string {

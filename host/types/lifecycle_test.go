@@ -60,19 +60,43 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 
 func TestFormatJobLifecycleLogIncludesCommand(t *testing.T) {
 	job := sampleJob(JobReasonScale, "", "web")
-	job.Job.Config.Args = []string{"/runner/init", "web"}
+	job.Job.Config.Args = []string{"/runner/init", "start", "web"}
 	got := FormatJobLifecycleLog(JobEventCreate, job)
-	want := "Scaling up web process with command `/runner/init web`"
+	want := "Scaling up web process with command `/runner/init start web`"
 	if got != want {
 		t.Fatalf("create: %q want %q", got, want)
 	}
 	got = FormatJobLifecycleLog(JobEventStart, job)
-	want = "web process started with command `/runner/init web`"
+	want = "web process started with command `/runner/init start web`"
 	if got != want {
 		t.Fatalf("start: %q want %q", got, want)
 	}
 	if JobCommand(nil) != "" || JobCommand(&ActiveJob{}) != "" {
 		t.Fatal("empty job must have no command")
+	}
+}
+
+func TestFormatJobLifecycleLogIncludesProcfileCommand(t *testing.T) {
+	job := sampleJob(JobReasonScale, "small", "web")
+	job.Job.Metadata[MetaControllerName] = "web.4530"
+	job.Job.Config.Args = []string{"/runner/init", "start", "web"}
+	StampJobCommand(job.Job, "bundle exec puma -C config/puma.rb")
+	got := FormatJobLifecycleLog(JobEventCreate, job)
+	want := "Scaling up web process with command `bundle exec puma -C config/puma.rb` (`/runner/init start web`) (web.4530, runtime small)"
+	if got != want {
+		t.Fatalf("create: %q want %q", got, want)
+	}
+	got = FormatJobLifecycleLog(JobEventStart, job)
+	want = "web process started with command `bundle exec puma -C config/puma.rb` (`/runner/init start web`) (web.4530, runtime small)"
+	if got != want {
+		t.Fatalf("start: %q want %q", got, want)
+	}
+	docker := sampleJob(JobReasonScale, "", "web")
+	docker.Job.Config.Args = []string{"/bin/app", "serve"}
+	StampJobCommand(docker.Job, "/bin/app serve")
+	got = FormatJobLifecycleLog(JobEventStart, docker)
+	if got != "web process started with command `/bin/app serve`" {
+		t.Fatalf("docker command must not be duplicated: %q", got)
 	}
 }
 

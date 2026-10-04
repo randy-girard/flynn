@@ -147,11 +147,15 @@ func TestJobConfigSystemPartitionEnvAndDeprecatedArgs(t *testing.T) {
 	}
 	f.Release.Processes["web"] = ct.ProcessType{
 		RuntimeProfile: "large",
-		Args:           []string{"web"},
+		Args:           []string{"/runner/init", "start", "web"},
+		Command:        "bundle exec puma -C config/puma.rb",
 	}
 	profiled := JobConfig(f, "web", "host1", "job-uuid")
 	if profiled.Metadata["flynn-controller.runtime"] != "large" {
 		t.Fatalf("runtime metadata=%v", profiled.Metadata)
+	}
+	if profiled.Metadata[host.MetaControllerCommand] != "bundle exec puma -C config/puma.rb" {
+		t.Fatalf("procfile command metadata=%v", profiled.Metadata)
 	}
 	if !job.Config.HostNetwork || len(job.Config.Ports) != 1 || job.Config.Ports[0].Port != 8080 {
 		t.Fatalf("ports/host network: %+v", job.Config)

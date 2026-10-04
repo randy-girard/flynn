@@ -271,12 +271,10 @@ func runJob(client controller.Client, config runConfig) error {
 // runJobArgs prepends /runner/init for slugrunner git deploys. Container-stack
 // and docker-receive releases already run the image entrypoint as-is.
 func runJobArgs(release *ct.Release, args []string) []string {
-	if release.IsSlugDeploy() && (len(args) == 0 || args[0] != "/runner/init") {
-		out := make([]string, 0, len(args)+1)
-		out = append(out, "/runner/init")
-		return append(out, args...)
+	if release == nil {
+		return args
 	}
-	return args
+	return release.RunJobArgs(args)
 }
 
 type RunExitError int

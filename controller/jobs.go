@@ -290,12 +290,15 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		Partition: string(newJob.Partition),
 		Profiles:  newJob.Profiles,
 	}
+	if p, ok := release.Processes[procType]; ok {
+		host.StampJobCommand(job, p.Command)
+	}
 	if app.Meta["flynn-system-app"] == "true" {
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
 	if len(newJob.Args) > 0 {
-		job.Config.Args = newJob.Args
+		job.Config.Args = release.RunJobArgs(newJob.Args)
 	}
 	if typ := newJob.MountsFrom; typ != "" {
 		job.Config.Mounts = release.Processes[typ].Mounts
@@ -321,7 +324,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		}
 		attachClient, err = client.Attach(attachReq, true)
 		if err != nil {
-			respondWithError(w, fmt.Errorf("attach failed: %s", err.Error()))
+			respondWithError(w, httphelper.JSONError{
+				Code:    httphelper.UnknownErrorCode,
+				Message: fmt.Sprintf("attach failed: %s", err.Error()),
+			})
 			return
 		}
 		defer attachClient.Close()
@@ -331,7 +337,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		return client.AddJob(job)
 	}, httphelper.IsRetryableError)
 	if err != nil {
-		respondWithError(w, fmt.Errorf("schedule failed: %s", err.Error()))
+		respondWithError(w, httphelper.JSONError{
+			Code:    httphelper.UnknownErrorCode,
+			Message: fmt.Sprintf("schedule failed: %s", err.Error()),
+		})
 		return
 	}
 
@@ -340,7 +349,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		// wrong, a context should be threaded in that cancels if the client
 		// goes away.
 		if err := attachClient.Wait(); err != nil {
-			respondWithError(w, fmt.Errorf("attach wait failed: %s", err.Error()))
+			respondWithError(w, httphelper.JSONError{
+				Code:    httphelper.UnknownErrorCode,
+				Message: fmt.Sprintf("attach wait failed: %s", err.Error()),
+			})
 			return
 		}
 		w.Header().Set("Connection", "upgrade")
@@ -467,12 +479,15 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		Partition: string(newJob.Partition),
 		Profiles:  newJob.Profiles,
 	}
+	if p, ok := release.Processes[procType]; ok {
+		host.StampJobCommand(job, p.Command)
+	}
 	if app.Meta["flynn-system-app"] == "true" {
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
 	if len(newJob.Args) > 0 {
-		job.Config.Args = newJob.Args
+		job.Config.Args = release.RunJobArgs(newJob.Args)
 	}
 	utils.SetupMountspecs(job, artifacts)
 	if err := runJobAttempts.RunWithValidator(func() error {
