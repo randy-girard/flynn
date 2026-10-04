@@ -26,6 +26,7 @@ var preparedStatements = map[string]string{
 	"release_select":                           releaseSelectQuery,
 	"release_insert":                           releaseInsertQuery,
 	"release_update_processes":                 releaseUpdateProcessesQuery,
+	"release_mark_blob_reaped":                 releaseMarkBlobReapedQuery,
 	"release_app_list":                         releaseAppListQuery,
 	"release_artifacts_insert":                 releaseArtifactsInsertQuery,
 	"release_artifacts_delete":                 releaseArtifactsDeleteQuery,
@@ -268,6 +269,11 @@ INSERT INTO releases (release_id, app_id, env, processes, meta)
 VALUES ($1, $2, $3, $4, $5) RETURNING created_at`
 	releaseUpdateProcessesQuery = `
 UPDATE releases SET processes = $1 WHERE release_id = $2 AND deleted_at IS NULL`
+	releaseMarkBlobReapedQuery = `
+UPDATE releases SET meta = jsonb_merge(
+	CASE WHEN meta = 'null' OR meta IS NULL THEN '{}'::jsonb ELSE meta END,
+	jsonb_build_object('gc.blob_reaped', 'true')
+) WHERE release_id = $1 AND deleted_at IS NULL`
 	releaseAppListQuery = `
 SELECT r.release_id, r.app_id,
   ARRAY(
@@ -893,14 +899,12 @@ SELECT allow_custom_sizes FROM db_runtime_settings WHERE id = 1 FOR UPDATE`
 	dbRuntimeSettingsUpdateQuery = `
 UPDATE db_runtime_settings SET allow_custom_sizes = $1, updated_at = now() WHERE id = 1`
 	appSyncGCKeepQuery = `
-UPDATE apps SET meta = jsonb_set(
+UPDATE apps SET meta = jsonb_merge(
 	CASE WHEN meta = 'null' OR meta IS NULL THEN '{}'::jsonb ELSE meta END,
-	'{gc.max_inactive_slug_releases}',
-	to_jsonb($1::text),
-	true
+	jsonb_build_object('gc.max_inactive_slug_releases', $1::text)
 ), updated_at = now()
 WHERE deleted_at IS NULL
-AND COALESCE(meta->>'gc.max_inactive_slug_releases', '') = $2`
+AND COALESCE(meta->>'gc.max_inactive_slug_releases', '') IS DISTINCT FROM 'false'`
 
 	githubAppConfigSelectQuery = `
 SELECT app_id, slug, private_key, webhook_secret, client_id, client_secret, api_url, created_at, updated_at

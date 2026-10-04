@@ -144,6 +144,9 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		respondWithError(w, err)
 		return
 	}
+	if body.BlobGCKeep != nil || body.BlobGCMaxAge != nil {
+		c.scheduleAllAppGarbageCollection()
+	}
 	httphelper.JSON(w, 200, &s)
 }
 

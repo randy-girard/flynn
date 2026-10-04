@@ -4,22 +4,29 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
 type context struct {
-	db     *postgres.DB
-	client controller.Client
-	logger log15.Logger
+	db           *postgres.DB
+	client       controller.Client
+	logger       log15.Logger
+	artifactRepo *data.ArtifactRepo
+	releaseRepo  *data.ReleaseRepo
 }
 
 func JobHandler(db *postgres.DB, client controller.Client, logger log15.Logger) func(*que.Job) error {
-	return (&context{db, client, logger}).HandleAppGarbageCollection
+	artifacts := data.NewArtifactRepo(db)
+	releases := data.NewReleaseRepo(db, artifacts, que.NewClient(db.ConnPool))
+	return (&context{db, client, logger, artifacts, releases}).HandleAppGarbageCollection
 }
 
 func (c *context) HandleAppGarbageCollection(job *que.Job) (err error) {
@@ -47,18 +54,27 @@ func (c *context) HandleAppGarbageCollection(job *que.Job) (err error) {
 		return err
 	}
 
-	log.Info("deleting old slug releases")
-	meta, ok := app.Meta["gc.max_inactive_slug_releases"]
-	if !ok || meta == "false" {
-		log.Info(fmt.Sprintf("skipping old slug release deletion since gc.max_inactive_slug_releases=%q", meta))
+	keep := ct.DefaultBlobGCKeep
+	var maxAge time.Duration
+	if s, err := data.NewRuntimeProfileRepo(c.db).Settings(); err == nil {
+		keep = s.BlobGCKeepOrDefault()
+		if age := strings.TrimSpace(s.BlobGCMaxAge); age != "" && age != "0" {
+			if d, err := time.ParseDuration(age); err == nil {
+				maxAge = d
+			}
+		}
+	}
+	meta, ok := app.Meta[ct.MetaGCMaxInactiveSlugReleases]
+	if ok && meta == "false" {
+		log.Info("skipping blob GC because gc.max_inactive_slug_releases=false")
 		return nil
 	}
-	maxInactiveSlugReleases, err := strconv.Atoi(meta)
-	if err != nil {
-		log.Error("error parsing gc.max_inactive_slug_releases", "err", err)
-		return err
+	if ok {
+		if n, err := strconv.Atoi(meta); err == nil && n >= 0 {
+			keep = n
+		}
 	}
-	log.Info(fmt.Sprintf("gc.max_inactive_slug_releases is set to %d", maxInactiveSlugReleases))
+	log.Info(fmt.Sprintf("blob GC keep=%d max_age=%s", keep, maxAge))
 
 	log.Info("getting app releases")
 	releases, err := c.client.AppReleaseList(app.ID)
@@ -73,64 +89,41 @@ func (c *context) HandleAppGarbageCollection(job *que.Job) (err error) {
 		return err
 	}
 
-	// determine which releases are active so we don't delete them
-	activeReleases := make(map[string]struct{}, len(formations))
-outer:
-	for _, formation := range formations {
-		for _, n := range formation.Processes {
-			if n > 0 {
-				activeReleases[formation.ReleaseID] = struct{}{}
-				continue outer
-			}
-		}
+	ids := make([]string, 0)
+	for _, rel := range releases {
+		ids = append(ids, rel.ArtifactIDs...)
+	}
+	arts, err := c.artifactRepo.ListIDs(ids...)
+	if err != nil {
+		log.Error("error listing artifacts", "err", err)
+		return err
 	}
 
-	// iterate over the releases (which are in reverse chronological order)
-	// and mark them for deletion once we have seen more than the
-	// configured maximum count of slugs with distinct URIs
-	oldReleases := make([]*ct.Release, 0, len(releases))
-	distinctSlugs := make(map[string]struct{}, len(releases))
-	for _, release := range releases {
-		// ignore active or non-slug releases
-		if _, ok := activeReleases[release.ID]; ok || !release.IsGitDeploy() {
-			continue
-		}
-
-		if len(distinctSlugs) >= maxInactiveSlugReleases {
-			oldReleases = append(oldReleases, release)
-		}
-
-		if len(release.ArtifactIDs) < 2 {
-			continue
-		}
-		id := release.ArtifactIDs[1]
-		artifact, err := c.client.GetArtifact(id)
-		if err != nil {
-			log.Error("error getting slug artifact for release", "release.id", release.ID, "artifact.id", id, "err", err)
-			return err
-		}
-		if artifact.Blobstore() {
-			distinctSlugs[artifact.URI] = struct{}{}
-		}
-	}
-	log.Info(fmt.Sprintf("app has %d releases (%d with distinct slugs)", len(releases), len(distinctSlugs)))
-
-	if len(oldReleases) == 0 {
-		log.Info("no old releases to delete")
+	reapIDs := SelectReapReleaseIDs(releases, formations, keep, maxAge, time.Now(), func(rel *ct.Release) (string, bool) {
+		return BlobstoreAppURI(rel, arts)
+	})
+	if len(reapIDs) == 0 {
+		log.Info("no old blobs to reap")
 		return nil
 	}
 
-	log.Info(fmt.Sprintf("deleting %d old releases", len(oldReleases)))
-	gc.DeletedReleases = make([]string, 0, len(oldReleases))
-	for _, release := range oldReleases {
-		log.Info("deleting release", "release.id", release.ID)
-		if _, err := c.client.DeleteRelease(app.ID, release.ID); err != nil {
-			// ignore releases which fail to delete, the next gc cycle
-			// will try again
-			log.Error("error deleting release", "release.id", release.ID, "err", err)
+	relByID := make(map[string]*ct.Release, len(releases))
+	for _, rel := range releases {
+		relByID[rel.ID] = rel
+	}
+	log.Info(fmt.Sprintf("reaping %d old release blobs", len(reapIDs)))
+	gc.DeletedReleases = make([]string, 0, len(reapIDs))
+	for _, id := range reapIDs {
+		rel := relByID[id]
+		if rel == nil {
 			continue
 		}
-		gc.DeletedReleases = append(gc.DeletedReleases, release.ID)
+		log.Info("reaping release blob", "release.id", rel.ID)
+		if err := c.releaseRepo.ReapBlobs(app, rel); err != nil {
+			log.Error("error reaping release blob", "release.id", rel.ID, "err", err)
+			continue
+		}
+		gc.DeletedReleases = append(gc.DeletedReleases, rel.ID)
 	}
 
 	return nil

@@ -42,6 +42,10 @@
     },
     "created_at": {
       "$ref": "/schema/controller/common#/definitions/created_at"
+    },
+    "blob_available": {
+      "type": "boolean",
+      "description": "False when the git slug or docker image was garbage-collected"
     }
   }
 }

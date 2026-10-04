@@ -45,6 +45,7 @@ func scanRelease(s postgres.Scanner) (*ct.Release, error) {
 	if len(release.ArtifactIDs) > 0 {
 		release.LegacyArtifactID = release.ArtifactIDs[0]
 	}
+	release.StampBlobAvailable()
 	return release, err
 }
 
@@ -123,6 +124,7 @@ func (r *ReleaseRepo) Add(data interface{}) error {
 		}
 	}
 
+	release.StampBlobAvailable()
 	if err := CreateEvent(tx.Exec, &ct.Event{
 		AppID:      release.AppID,
 		ObjectID:   release.ID,
@@ -375,5 +377,110 @@ func (r *ReleaseRepo) Delete(app *ct.App, release *ct.Release) error {
 		return err
 	}
 
+	return tx.Commit()
+}
+
+// ReapBlobs deletes blobstore files for this release but keeps the release row
+// so activity history stays. Deploy this is blocked via gc.blob_reaped meta.
+func (r *ReleaseRepo) ReapBlobs(app *ct.App, release *ct.Release) error {
+	if app == nil || release == nil {
+		return fmt.Errorf("missing app or release")
+	}
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+
+	artifacts, err := r.artifacts.ListIDs(release.ArtifactIDs...)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+
+	fileURIs := make([]string, 0, len(artifacts))
+	seen := make(map[string]struct{}, len(release.ArtifactIDs))
+	for _, artifact := range artifacts {
+		seen[artifact.ID] = struct{}{}
+		if err := tx.Exec("release_artifacts_delete", release.ID, artifact.ID); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if artifact.Meta["flynn.system-image"] == "true" || artifact.IsSlugrunner() {
+			continue
+		}
+		var count int64
+		if err := tx.QueryRow("artifact_release_count", artifact.ID).Scan(&count); err != nil {
+			tx.Rollback()
+			return err
+		}
+		if count > 0 {
+			continue
+		}
+		if artifact.Blobstore() {
+			fileURIs = append(fileURIs, artifact.URI)
+			for _, rootfs := range artifact.Manifest().Rootfs {
+				for _, layer := range rootfs.Layers {
+					var n int64
+					id, _ := json.Marshal(layer.ID)
+					if err := tx.QueryRow("artifact_layer_count", id).Scan(&n); err != nil {
+						tx.Rollback()
+						return err
+					}
+					if n > 1 {
+						continue
+					}
+					fileURIs = append(fileURIs, artifact.LayerURL(layer))
+					if layerID, ok := layer.Meta["tar.layer_id"]; ok {
+						fileURIs = append(fileURIs, tarreceive.ConfigURL(layerID))
+					}
+				}
+			}
+		}
+		if err := tx.Exec("artifact_delete", artifact.ID); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	for _, id := range release.ArtifactIDs {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if err := tx.Exec("release_artifacts_delete", release.ID, id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	if err := tx.Exec("release_mark_blob_reaped", release.ID); err != nil {
+		tx.Rollback()
+		return err
+	}
+	if release.Meta == nil {
+		release.Meta = map[string]string{}
+	}
+	release.Meta[ct.MetaGCBlobReaped] = "true"
+	release.ArtifactIDs = nil
+	release.StampBlobAvailable()
+
+	if len(fileURIs) == 0 {
+		return tx.Commit()
+	}
+	cleanupArgs, err := json.Marshal(struct {
+		AppID     string
+		ReleaseID string
+		FileURIs  []string
+	}{
+		app.ID,
+		release.ID,
+		fileURIs,
+	})
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	if err := r.que.EnqueueInTx(&que.Job{Type: "release_cleanup", Args: cleanupArgs}, tx.Tx); err != nil {
+		tx.Rollback()
+		return err
+	}
 	return tx.Commit()
 }

@@ -298,6 +298,7 @@ func scanExpandedFormation(s postgres.Scanner) (*ct.ExpandedFormation, error) {
 		}
 	}
 	f.Release.AppID = f.App.ID
+	f.Release.StampBlobAvailable()
 	return f, nil
 }
 

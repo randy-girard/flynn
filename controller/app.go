@@ -91,6 +91,24 @@ func (c *controllerAPI) ScheduleAppGarbageCollection(ctx context.Context, w http
 	w.WriteHeader(200)
 }
 
+func (c *controllerAPI) scheduleAllAppGarbageCollection() {
+	list, err := c.appRepo.List()
+	if err != nil {
+		return
+	}
+	apps, _ := list.([]*ct.App)
+	for _, app := range apps {
+		if app == nil {
+			continue
+		}
+		args, err := json.Marshal(&ct.AppGarbageCollection{AppID: app.ID})
+		if err != nil {
+			continue
+		}
+		_ = c.que.Enqueue(&que.Job{Type: "app_garbage_collection", Args: args})
+	}
+}
+
 func (c *controllerAPI) AppLog(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	ctx, cancel := context.WithCancel(ctx)
 

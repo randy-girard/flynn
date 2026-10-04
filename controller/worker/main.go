@@ -20,7 +20,10 @@ import (
 	"github.com/randy-girard/flynn/pkg/status"
 )
 
-const workerCount = 10
+// workerCount must stay at or below postgres.MaxPoolConnections. Each
+// worker holds a pool connection while a job runs; extra lock-loopers
+// then fail with "All connections in pool are busy" and starve deployments.
+const workerCount = 4
 
 var logger = log15.New("app", "worker")
 
@@ -73,5 +76,33 @@ func main() {
 	workers.Start()
 	shutdown.BeforeExit(func() { workers.Shutdown() })
 
+	go scheduleDailyBlobGC(client, logger)
+
 	select {} // block and keep running
+}
+
+func scheduleDailyBlobGC(client controller.Client, log log15.Logger) {
+	run := func() {
+		apps, err := client.AppList()
+		if err != nil {
+			log.Error("daily blob gc: list apps", "err", err)
+			return
+		}
+		for _, app := range apps {
+			if app == nil {
+				continue
+			}
+			if err := client.ScheduleAppGarbageCollection(app.ID); err != nil {
+				log.Error("daily blob gc: schedule", "app.id", app.ID, "err", err)
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}
+	// Do not enqueue every app on worker boot. Cluster updates restart
+	// controller-worker and would stampede postgres / starve deployments.
+	ticker := time.NewTicker(24 * time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		run()
+	}
 }

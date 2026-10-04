@@ -328,7 +328,15 @@ type Release struct {
 	// LegacyArtifactID is to support old clients which expect releases
 	// to have a single ArtifactID
 	LegacyArtifactID string `json:"artifact,omitempty"`
+
+	// BlobAvailable is false after blob GC reaps this release's image/slug.
+	BlobAvailable bool `json:"blob_available"`
 }
+
+const (
+	MetaGCMaxInactiveSlugReleases = "gc.max_inactive_slug_releases"
+	MetaGCBlobReaped              = "gc.blob_reaped"
+)
 
 func (r *Release) IsGitDeploy() bool {
 	return r != nil && r.Meta["git"] == "true"
@@ -345,6 +353,38 @@ func (r *Release) IsSlugDeploy() bool {
 		return false
 	}
 	return r.Meta["slugrunner.stack"] != "container"
+}
+
+func (r *Release) StampBlobAvailable() {
+	if r == nil {
+		return
+	}
+	r.BlobAvailable = r.HasDeployableBlob()
+}
+
+// HasDeployableBlob is false when blob GC reaped this release's image/slug.
+func (r *Release) HasDeployableBlob() bool {
+	if r == nil {
+		return false
+	}
+	if r.Meta[MetaGCBlobReaped] == "true" {
+		return false
+	}
+	if (r.IsGitDeploy() || r.IsDockerReceiveDeploy()) && len(r.ArtifactIDs) == 0 {
+		return false
+	}
+	return true
+}
+
+// RunJobArgs prepends /runner/init for slugrunner git deploys. Container-stack
+// and docker-receive releases already run the image entrypoint as-is.
+func (r *Release) RunJobArgs(args []string) []string {
+	if r != nil && r.IsSlugDeploy() && (len(args) == 0 || args[0] != "/runner/init") {
+		out := make([]string, 0, len(args)+1)
+		out = append(out, "/runner/init")
+		return append(out, args...)
+	}
+	return args
 }
 
 // IsInternalProcessType reports git-deploy machinery that is not a user

@@ -82,6 +82,10 @@ func (r *DeploymentRepo) addExpanded(appID, releaseID string, retried bool) (*ct
 		tx.Rollback()
 		return nil, err
 	}
+	if !release.HasDeployableBlob() {
+		tx.Rollback()
+		return nil, ct.ValidationError{Message: "release blob was garbage-collected"}
+	}
 
 	oldRelease, err := r.appRepo.TxGetRelease(tx, app.ID)
 	if err == ErrNotFound {

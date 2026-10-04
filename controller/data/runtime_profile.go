@@ -119,14 +119,11 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 	if s.BlobGCKeep < 0 {
 		s.BlobGCKeep = cur.BlobGCKeepOrDefault()
 	}
-	oldKeep := cur.BlobGCKeepOrDefault()
 	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
-	if s.BlobGCKeep != oldKeep {
-		if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep), strconv.Itoa(oldKeep)); err != nil {
-			return err
-		}
+	if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep)); err != nil {
+		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{
 		ObjectID:   "runtime-settings",
