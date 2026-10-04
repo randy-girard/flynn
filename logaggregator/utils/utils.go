@@ -56,6 +56,15 @@ func (c HostCursor) After(other HostCursor) bool {
 }
 
 func StreamType(msg *rfc5424.Message) logagg.StreamType {
+	if msg == nil {
+		return logagg.StreamTypeUnknown
+	}
+	// Plugin sample# lines are Flynn metrics, same as host "metrics cpu_percent=…".
+	// Jobs print them on stdout/stderr; treat them as system so CLI/dashboard
+	// show flynn[postgres.N] in white instead of app[] in red.
+	if logagg.MsgID(msg.MsgID) != logagg.MsgIDInit && IsPluginMetricsLine(msg.Msg) {
+		return logagg.StreamTypeSystem
+	}
 	switch logagg.MsgID(msg.MsgID) {
 	case logagg.MsgIDStdout:
 		return logagg.StreamTypeStdout
@@ -68,4 +77,26 @@ func StreamType(msg *rfc5424.Message) logagg.StreamType {
 	default:
 		return logagg.StreamTypeUnknown
 	}
+}
+
+var pluginMetricsPrefixes = [][]byte{
+	[]byte("flynn-postgres "),
+	[]byte("flynn-redis "),
+	[]byte("heroku-postgres "),
+	[]byte("heroku-redis "),
+}
+
+// IsPluginMetricsLine reports whether a job log line is a Flynn addon sample#
+// (flynn-postgres / flynn-redis). Host logmux promotes these to MsgIDSystem.
+func IsPluginMetricsLine(msg []byte) bool {
+	line := bytes.TrimSpace(msg)
+	if len(line) == 0 {
+		return false
+	}
+	for _, p := range pluginMetricsPrefixes {
+		if bytes.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return false
 }

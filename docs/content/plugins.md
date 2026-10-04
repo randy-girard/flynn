@@ -376,8 +376,8 @@ compiled-in list.
   historically on `POST /webhooks/plugin-metrics` (canonical plugin names
   `postgres` and `redis`) so a plugin Metrics page can chart that app’s
   resource and the Alerts catalog can threshold the same keys. Postgres and
-  Redis also write Heroku-style `sample#` log
-  lines (`heroku-postgres` / `heroku-redis`) and expose live diagnostics plus
+  Redis also write `sample#` log
+  lines (`flynn-postgres` / `flynn-redis`) and expose live diagnostics plus
   slow queries/commands at `/dashboard/api/diagnostics`. Metric names belong
   in the plugin README so alerts can hook them. The dashboard Alerts catalog
   lists Redis and Postgres series only when that plugin is installed; those

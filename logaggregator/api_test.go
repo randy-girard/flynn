@@ -235,6 +235,20 @@ func (s *LogAggregatorTestSuite) TestFilterJobIDHostUUID(c *C) {
 	c.Assert(filterJobID("other").Match(msg), Equals, false)
 }
 
+func (s *LogAggregatorTestSuite) TestNewMessageFromSyslogPluginSampleLooksLikeHostMetrics(c *C) {
+	m := NewMessageFromSyslog(rfc5424.NewMessage(
+		&rfc5424.Header{
+			Hostname: []byte("host1"),
+			ProcID:   []byte("postgres.host1-abc"),
+			MsgID:    []byte("ID2"),
+		},
+		[]byte("flynn-postgres source=postgresql-basin-73690 sample#service-available=1"),
+	))
+	c.Assert(m.Source, Equals, "flynn")
+	c.Assert(m.Stream, Equals, logagg.StreamTypeSystem)
+	c.Assert(m.ProcessType, Equals, "postgres")
+}
+
 func (s *LogAggregatorTestSuite) TestNewMessageFromSyslogSystemSource(c *C) {
 	m := NewMessageFromSyslog(rfc5424.NewMessage(
 		&rfc5424.Header{

@@ -162,6 +162,55 @@ func TestMuxWriteDoesNotBlockOnStuckDisk(t *testing.T) {
 	}
 }
 
+func TestMuxFollowPromotesPluginSampleToSystem(t *testing.T) {
+	m := New("host1", t.TempDir(), log15.New())
+	ch := make(chan message, 4)
+	unsub := m.subscribe("app-1", ch)
+	defer unsub()
+	r, w := io.Pipe()
+	stream := m.Follow(r, "", logagg.MsgIDStderr, &Config{
+		AppID:   "app-1",
+		HostID:  "host1",
+		JobType: "postgres",
+		JobID:   "host1-abc",
+		JobName: "postgres.5426",
+	})
+	defer stream.Close()
+	if _, err := w.Write([]byte("ERROR:  relation foo does not exist\nflynn-postgres source=postgresql-basin-73690 sample#tables=11\n")); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	var errLine, sample message
+	for i := 0; i < 2; i++ {
+		select {
+		case msg := <-ch:
+			if string(msg.MsgID) == string(logagg.MsgIDSystem) {
+				sample = msg
+			} else {
+				errLine = msg
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for log lines")
+		}
+	}
+	if string(errLine.MsgID) != string(logagg.MsgIDStderr) {
+		t.Fatalf("engine log msgid=%s", errLine.MsgID)
+	}
+	if utils.StreamType(errLine.Message) != logagg.StreamTypeStderr {
+		t.Fatalf("engine stream=%s", utils.StreamType(errLine.Message))
+	}
+	if string(sample.MsgID) != string(logagg.MsgIDSystem) {
+		t.Fatalf("sample msgid=%s", sample.MsgID)
+	}
+	if utils.StreamType(sample.Message) != logagg.StreamTypeSystem {
+		t.Fatalf("sample stream=%s", utils.StreamType(sample.Message))
+	}
+	if string(sample.Msg) != "flynn-postgres source=postgresql-basin-73690 sample#tables=11" {
+		t.Fatalf("msg=%q", sample.Msg)
+	}
+}
+
 func TestMuxFollowDoesNotStallWhenDiskIsStuck(t *testing.T) {
 	m := New("host1", t.TempDir(), log15.New())
 	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }

@@ -440,7 +440,11 @@ func (s *LogStream) follow(r io.Reader, buffer, appID string, h *rfc5424.Header,
 			line = line[:len(line)-1]
 		}
 
-		msg := rfc5424.NewMessage(h, line)
+		hdr := *h
+		if logagg.MsgID(h.MsgID) != logagg.MsgIDInit && utils.IsPluginMetricsLine(line) {
+			hdr.MsgID = []byte(logagg.MsgIDSystem)
+		}
+		msg := rfc5424.NewMessage(&hdr, line)
 		cursor := &utils.HostCursor{
 			Time: msg.Timestamp,
 			Seq:  uint64(atomic.AddUint32(&s.m.msgSeq, 1)),
