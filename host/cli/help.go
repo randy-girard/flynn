@@ -139,13 +139,17 @@ func RootHelp() string {
 	}
 	sort.Slice(core, func(i, j int) bool { return core[i].Name < core[j].Name })
 	sort.Slice(plug, func(i, j int) bool { return plug[i].Name < plug[j].Name })
+	width := clihelp.NameColumnWidth(core)
+	if w := clihelp.NameColumnWidth(plug); w > width {
+		width = w
+	}
 	var b strings.Builder
 	b.WriteString(rootHelpHeader)
 	b.WriteString("\nCommands:\n")
-	b.WriteString(clihelp.FormatItems(core))
+	b.WriteString(clihelp.FormatItemsWidth(core, width))
 	if len(plug) > 0 {
 		b.WriteString("\nPlugins:\n")
-		b.WriteString(clihelp.FormatItems(plug))
+		b.WriteString(clihelp.FormatItemsWidth(plug, width))
 	}
 	b.WriteString(rootHelpFooter)
 	return b.String()

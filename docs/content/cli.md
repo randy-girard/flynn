@@ -221,7 +221,7 @@ The CLI is a descendant of Heroku's [hk](https://github.com/heroku/hk).
 
 ## flynn-host
 
-Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` and `flynn-host --help` list parent commands; `flynn-host help plugin` or `flynn-host plugin --help` or `flynn-host plugin:help` lists `install`, `list`, `credentials`, and the rest. Bare `flynn-host plugin` and `flynn-host plugin:list` list plugins; bare `flynn-host volume` and `flynn-host volume:list` list volumes. Every command accepts `:help` as `--help` and `:list` as the bare command.
+Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` and `flynn-host --help` list parent commands; installed plugin commands appear under **Plugins:** with the same name column as **Commands:**. `flynn-host help plugin` or `flynn-host plugin --help` or `flynn-host plugin:help` lists `install`, `list`, `credentials`, and the rest. Bare `flynn-host plugin` and `flynn-host plugin:list` list plugins; bare `flynn-host volume` and `flynn-host volume:list` list volumes. Every command accepts `:help` as `--help` and `:list` as the bare command.
 
 | Command | Purpose |
 | --- | --- |

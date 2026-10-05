@@ -217,6 +217,38 @@ func TestRootHelpPluginsSection(t *testing.T) {
 	}
 }
 
+func helpDescColumn(help, cmd string) int {
+	for _, line := range strings.Split(help, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 || fields[0] != cmd {
+			continue
+		}
+		return strings.Index(line, fields[1])
+	}
+	return -1
+}
+
+func TestRootHelpPluginsAlignWithCommands(t *testing.T) {
+	isolateInstalledPlugins(t, []plugin.Installed{
+		{Name: "dashboard"},
+		{Name: "letsencrypt"},
+	})
+	got := RootHelp()
+	volume := helpDescColumn(got, "volume")
+	webhooks := helpDescColumn(got, "webhooks")
+	alert := helpDescColumn(got, "alert")
+	letsencrypt := helpDescColumn(got, "letsencrypt")
+	if volume < 0 || webhooks < 0 || alert < 0 || letsencrypt < 0 {
+		t.Fatalf("missing volume/webhooks/alert/letsencrypt rows:\n%s", got)
+	}
+	if volume != webhooks {
+		t.Fatalf("Commands description column volume %d webhooks %d:\n%s", volume, webhooks, got)
+	}
+	if alert != volume || letsencrypt != volume {
+		t.Fatalf("Plugins description column alert %d letsencrypt %d, Commands %d:\n%s", alert, letsencrypt, volume, got)
+	}
+}
+
 func TestRootHelpDashboardPluginCommands(t *testing.T) {
 	isolateInstalledPlugins(t, []plugin.Installed{{Name: "dashboard"}})
 	got := RootHelp()
