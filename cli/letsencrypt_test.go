@@ -13,6 +13,9 @@ func TestLetsEncryptPluginInstalled(t *testing.T) {
 	if letsEncryptPluginInstalled(nil) {
 		t.Fatal("empty list")
 	}
+	if !letsEncryptPluginInstalled([]*ct.App{{Name: "letsencrypt-plugin", Meta: map[string]string{plugin.MetaPlugin: "true"}}}) {
+		t.Fatal("letsencrypt-plugin app")
+	}
 	if !letsEncryptPluginInstalled([]*ct.App{{Name: "letsencrypt", Meta: map[string]string{plugin.MetaPlugin: "true"}}}) {
 		t.Fatal("plugin app")
 	}
@@ -36,6 +39,10 @@ func TestLetsEncryptCommandsParse(t *testing.T) {
 	status := parseCLI(t, []string{"letsencrypt:status"})
 	if status.String["<hostname-or-route-id>"] != "" {
 		t.Fatalf("status optional: %+v", status.String)
+	}
+	list := parseCLI(t, []string{"letsencrypt:list"})
+	if list == nil {
+		t.Fatal("list")
 	}
 }
 

@@ -20,7 +20,7 @@ func TestFormatHelpListsCoreChildren(t *testing.T) {
 		t.Fatalf("env:get is a leaf:\n%s", leaf)
 	}
 	le := formatHelp("letsencrypt")
-	for _, want := range []string{"usage: flynn letsencrypt", "Commands:", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status"} {
+	for _, want := range []string{"usage: flynn letsencrypt", "Commands:", "letsencrypt:list", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status"} {
 		if !strings.Contains(le, want) {
 			t.Fatalf("letsencrypt help missing %q:\n%s", want, le)
 		}

@@ -154,6 +154,7 @@ var subAliases = map[string]map[string]string{
 		"remove": "log-sink:remove",
 	},
 	"letsencrypt": {
+		"list":    "letsencrypt:list",
 		"enable":  "letsencrypt:enable",
 		"disable": "letsencrypt:disable",
 		"status":  "letsencrypt:status",
@@ -172,7 +173,7 @@ func resolveCommand(name string, args []string) (string, []string, string) {
 	if name == "" {
 		return name, args, ""
 	}
-	name, args = clihelp.RewriteHelpList(name, args)
+	name, args = applyHelpListRewrite(name, args)
 	if len(args) > 0 {
 		if subs, ok := subAliases[name]; ok {
 			if target, ok := subs[args[0]]; ok {
@@ -185,6 +186,20 @@ func resolveCommand(name string, args []string) (string, []string, string) {
 		return target, args, name
 	}
 	return name, args, ""
+}
+
+// applyHelpListRewrite maps noun:help → noun --help and unregistered noun:list
+// → noun (resource:list is flynn resource). Registered commands such as
+// letsencrypt:list and plugin:list keep their names.
+func applyHelpListRewrite(cmd string, cmdArgs []string) (string, []string) {
+	rewritten, rewrittenArgs := clihelp.RewriteHelpList(cmd, cmdArgs)
+	if rewritten == cmd {
+		return cmd, cmdArgs
+	}
+	if commands[cmd] != nil && !strings.HasSuffix(cmd, ":help") {
+		return cmd, cmdArgs
+	}
+	return rewritten, rewrittenArgs
 }
 
 func printCommandRename(from, to string) {

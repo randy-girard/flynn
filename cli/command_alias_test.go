@@ -162,11 +162,15 @@ func TestResolveCommandHelpAndList(t *testing.T) {
 		t.Fatalf("plugin:help %q %q from=%q", name, args, from)
 	}
 	name, args, from = resolveCommand("plugin:list", []string{"--check"})
-	if name != "plugin" || from != "" || !reflect.DeepEqual(args, []string{"--check"}) {
+	if name != "plugin:list" || from != "" || !reflect.DeepEqual(args, []string{"--check"}) {
 		t.Fatalf("plugin:list %q %q from=%q", name, args, from)
 	}
 	name, args, from = resolveCommand("token:list", nil)
-	if name != "token" || from != "" || len(args) != 0 {
+	if name != "token:list" || from != "" || len(args) != 0 {
 		t.Fatalf("token:list %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("letsencrypt:list", nil)
+	if name != "letsencrypt:list" || from != "" || len(args) != 0 {
+		t.Fatalf("letsencrypt:list %q %q from=%q", name, args, from)
 	}
 }

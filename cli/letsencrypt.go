@@ -19,6 +19,11 @@ usage: flynn letsencrypt
 
 Show Let's Encrypt status for a hostname, or cluster ACME config with no argument.
 `)
+	register("letsencrypt:list", runLetsEncryptList, `
+usage: flynn letsencrypt:list
+
+List HTTP routes and whether Let's Encrypt HTTPS is on.
+`)
 	register("letsencrypt:enable", runLetsEncryptEnable, `
 usage: flynn letsencrypt:enable <hostname-or-route-id>
 
@@ -43,6 +48,43 @@ usage: flynn letsencrypt:status [<hostname-or-route-id>]
 
 Show Let's Encrypt status for a hostname, or cluster ACME config with no argument.
 `)
+}
+
+func runLetsEncryptList(_ *docopt.Args, client controller.Client) error {
+	if err := requireLetsEncryptPlugin(client); err != nil {
+		return err
+	}
+	apps, err := client.AppList()
+	if err != nil {
+		return err
+	}
+	appByID := make(map[string]*ct.App, len(apps))
+	for _, a := range apps {
+		if a != nil {
+			appByID[a.ID] = a
+		}
+	}
+	routes, err := client.RouteList()
+	if err != nil {
+		return err
+	}
+	w := tabWriter()
+	defer w.Flush()
+	fmt.Fprintln(w, "DOMAIN\tHTTPS\tAPP\tROUTE")
+	for _, rt := range routes {
+		if rt == nil || rt.Type != "http" {
+			continue
+		}
+		https := rt.ManagedCertificateDomain != nil && *rt.ManagedCertificateDomain != ""
+		appName := ""
+		if strings.HasPrefix(rt.ParentRef, ct.RouteParentRefPrefix) {
+			if app := appByID[strings.TrimPrefix(rt.ParentRef, ct.RouteParentRefPrefix)]; app != nil {
+				appName = app.Name
+			}
+		}
+		fmt.Fprintf(w, "%s\t%t\t%s\t%s/%s\n", rt.Domain, https, appName, rt.Type, rt.ID)
+	}
+	return nil
 }
 
 func runLetsEncryptEnable(args *docopt.Args, client controller.Client) error {
@@ -149,10 +191,11 @@ func letsEncryptPluginInstalled(apps []*ct.App) bool {
 		if a == nil {
 			continue
 		}
-		if a.Name == "letsencrypt" && a.Plugin() {
+		name := strings.TrimSuffix(a.Name, "-plugin")
+		if name == "letsencrypt" && a.Plugin() {
 			return true
 		}
-		if a.Name == "acme" && a.System() {
+		if name == "acme" && (a.Plugin() || a.System()) {
 			return true
 		}
 	}
