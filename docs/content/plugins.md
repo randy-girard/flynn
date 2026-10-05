@@ -257,8 +257,12 @@ handler). Nested plugin verbs (`redis:dump`, `kafka:topics:create`) show up on
 system plugins are installed and listed by `flynn plugin:list`
 but do not add a user `flynn` command unless they set `cli.user`. `flynn
 resource:add <provider>` works for `kind: resource-provider`. After the scheduler plugin
-is installed, `flynn -a <app> scheduler` lists, adds, and removes cron/interval
-jobs for that app. Upgrade smoke schedules `echo scheduler-smoke` every 10s on
+is installed, add it to an app from dashboard Resources (**Provision resource** →
+Scheduler) or by creating a job (`flynn -a <app> scheduler:add`). Then
+`flynn -a <app> scheduler` lists, adds, and removes cron/interval
+jobs for that app. Installing the plugin does not put Scheduler on every app. Each scheduled occurrence is claimed so only one scheduler
+replica fires it, even when more than one web process is running. Upgrade smoke
+schedules `echo scheduler-smoke` every 10s on
 the uploaded `upgrade-smoke` app and waits for `last_run_at` / `last_job_id`.
 After the autoscale plugin is installed, `flynn -a <app> autoscale` shows the
 web-dyno policy. `autoscale:enable` turns it on, `autoscale:disable` turns it
@@ -330,7 +334,9 @@ The dashboard plugin is a host/shell. Plugin UIs live on each plugin’s
 cluster-level `web` process (Heroku add-on style): the dashboard shows a
 resource card, and opening it renders pages the plugin serves. While an app
 deploy is in progress, the app page shows a banner on every tab and the Deploy
-tab polls deployer status (`running` / `pending`, including `git push`). After any
+tab polls deployer status (`running` / `pending`, including `git push`). Deleting
+an app from Settings returns to Apps immediately without listing that app
+(controller `DeleteApp` only queues `app_deletion`). After any
 tenant datastore plugin is installed, Workspace also lists **Datastores**
 (cluster-wide database resources, with Add to provision onto an existing app).
 
