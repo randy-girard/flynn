@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"time"
 
 	c "github.com/flynn/go-check"
@@ -381,7 +382,7 @@ func (s *DeployerSuite) TestRollbackNoService(t *c.C) {
 	t.Assert(err, c.IsNil)
 	defer stream.Close()
 	event := s.waitForDeploymentStatus(t, events, "failed")
-	t.Assert(event.Error, c.Equals, "printer job failed to start: got down job event")
+	t.Assert(strings.HasPrefix(event.Error, "printer job failed to start:"), c.Equals, true)
 
 	s.assertRolledBack(t, deployment, map[string]int{"printer": 2})
 

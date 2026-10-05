@@ -202,3 +202,66 @@ func TestAllAtOnceStartsNewBeforeStoppingOld(t *testing.T) {
 		t.Fatal("all-at-once must start new jobs while old jobs still run")
 	}
 }
+
+func TestJobStartFailureSurfacesAppArmorApply(t *testing.T) {
+	hostErr := `container_linux.go:346: starting container process caused "process_linux.go:480: container init caused \"apply apparmor profile: apparmor failed to apply profile: write /proc/self/attr/exec: permission denied\""`
+	err := jobStartFailure(&ct.Job{Type: "worker", HostError: &hostErr})
+	want := "worker job failed to start: " + hostErr
+	if err == nil || err.Error() != want {
+		t.Fatalf("got %v", err)
+	}
+	if err := jobStartFailure(&ct.Job{Type: "web"}); err == nil || err.Error() != "web job failed to start: got down job event" {
+		t.Fatalf("empty host error: %v", err)
+	}
+}
+
+func TestJobStartFailureIncludesExitStatus(t *testing.T) {
+	exit := int32(1)
+	restarts := int32(5)
+	err := jobStartFailure(&ct.Job{Type: "web", Name: "web.1", ExitStatus: &exit, Restarts: &restarts})
+	got := ""
+	if err != nil {
+		got = err.Error()
+	}
+	if !strings.Contains(got, "web job failed to start: exit 1") || !strings.Contains(got, "restarts 5") || !strings.Contains(got, "web.1") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestJobStartFailureIncludesCrashHint(t *testing.T) {
+	exit := int32(1)
+	err := jobStartFailure(&ct.Job{Type: "web", Name: "web.5511", ExitStatus: &exit}, `Unable to load application: RuntimeError: Missing service adapter for "WebDav"`)
+	got := ""
+	if err != nil {
+		got = err.Error()
+	}
+	if !strings.Contains(got, "exit 1") || !strings.Contains(got, "web.5511") || !strings.Contains(got, `Missing service adapter for "WebDav"`) {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestCrashHintFromLogLinesPrefersUnableToLoad(t *testing.T) {
+	got := crashHintFromLogLines([]string{
+		"Puma starting in single mode...",
+		`! Unable to load application: RuntimeError: Missing service adapter for "WebDav"`,
+		`/app/vendor/bundle/ruby/3.3.0/gems/activestorage-8.1.3/lib/active_storage/service/configurator.rb:39:in ` + "`rescue in resolve'" + `: Missing service adapter for "WebDav" (RuntimeError)`,
+		"\tfrom /app/vendor/bundle/ruby/3.3.0/gems/puma-8.0.2/lib/puma/cli.rb:73:in `run'",
+		`cannot load such file -- rexml/document (LoadError)`,
+		`t=2026-10-05T13:57:22+0000 lvl=info msg="job exited" component=containerinit status=1`,
+		"web process crashed (exit 1)",
+		"metrics cpu_percent=0.03 memory_bytes=194359296",
+	})
+	if got != `Unable to load application: RuntimeError: Missing service adapter for "WebDav"` {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestCrashHintFromLogLinesLoadError(t *testing.T) {
+	got := crashHintFromLogLines([]string{
+		`cannot load such file -- rexml/document (LoadError)`,
+		"web process crashed (exit 1)",
+	})
+	if got != `cannot load such file -- rexml/document (LoadError)` {
+		t.Fatalf("%q", got)
+	}
+}

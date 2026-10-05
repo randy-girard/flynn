@@ -1,13 +1,17 @@
 package deployment
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 	"time"
 
 	"github.com/inconshreveable/log15"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	worker "github.com/randy-girard/flynn/controller/worker/types"
+	logagg "github.com/randy-girard/flynn/logaggregator/types"
 )
 
 type DeployJob struct {
@@ -157,11 +161,7 @@ func (d *DeployJob) scaleNewReleaseWait(wait bool) error {
 					d.logger.Warn("ignoring down job event for new release", "count", failures, "err", job.HostError)
 					return nil
 				}
-				msg := "got down job event"
-				if job.HostError != nil {
-					msg = *job.HostError
-				}
-				return fmt.Errorf("%s job failed to start: %s", job.Type, msg)
+				return d.jobStartFailure(job)
 			}
 			return nil
 		},
@@ -171,6 +171,154 @@ func (d *DeployJob) scaleNewReleaseWait(wait bool) error {
 		err = worker.ErrStopped
 	}
 	return err
+}
+
+func (d *DeployJob) jobStartFailure(job *ct.Job) error {
+	hint := ""
+	if job == nil || job.HostError == nil || strings.TrimSpace(*job.HostError) == "" {
+		hint = d.jobCrashHint(job)
+	}
+	return jobStartFailure(job, hint)
+}
+
+func jobStartFailure(job *ct.Job, extras ...string) error {
+	typ := "app"
+	if job != nil && job.Type != "" {
+		typ = job.Type
+	}
+	var parts []string
+	if job != nil {
+		if job.HostError != nil && strings.TrimSpace(*job.HostError) != "" {
+			parts = append(parts, strings.TrimSpace(*job.HostError))
+		}
+		if job.ExitStatus != nil {
+			parts = append(parts, fmt.Sprintf("exit %d", *job.ExitStatus))
+		}
+		if job.Restarts != nil && *job.Restarts > 0 {
+			parts = append(parts, fmt.Sprintf("restarts %d", *job.Restarts))
+		}
+		if name := strings.TrimSpace(job.Name); name != "" {
+			parts = append(parts, name)
+		} else if id := strings.TrimSpace(job.ID); id != "" {
+			parts = append(parts, id)
+		}
+	}
+	for _, extra := range extras {
+		if s := strings.TrimSpace(extra); s != "" {
+			parts = append(parts, s)
+		}
+	}
+	msg := "got down job event"
+	if len(parts) > 0 {
+		msg = strings.Join(parts, "; ")
+	}
+	return fmt.Errorf("%s job failed to start: %s", typ, msg)
+}
+
+const jobCrashHintTimeout = 2 * time.Second
+
+func (d *DeployJob) jobCrashHint(job *ct.Job) string {
+	if d == nil || d.client == nil || job == nil {
+		return ""
+	}
+	jobID := strings.TrimSpace(job.ID)
+	if jobID == "" {
+		jobID = strings.TrimSpace(job.UUID)
+	}
+	if jobID == "" {
+		return ""
+	}
+	appID := d.AppID
+	if appID == "" && job.AppID != "" {
+		appID = job.AppID
+	}
+	if appID == "" {
+		return ""
+	}
+	done := make(chan string, 1)
+	go func() {
+		done <- fetchJobCrashHint(d.client, appID, jobID)
+	}()
+	select {
+	case hint := <-done:
+		return hint
+	case <-time.After(jobCrashHintTimeout):
+		return ""
+	}
+}
+
+func fetchJobCrashHint(client controller.Client, appID, jobID string) string {
+	if client == nil {
+		return ""
+	}
+	lines := 50
+	rc, err := client.GetAppLog(appID, &logagg.LogOpts{
+		JobID: jobID,
+		Lines: &lines,
+		StreamTypes: []logagg.StreamType{
+			logagg.StreamTypeStdout,
+			logagg.StreamTypeStderr,
+			logagg.StreamTypeSystem,
+			logagg.StreamTypeInit,
+		},
+	})
+	if err != nil {
+		return ""
+	}
+	defer rc.Close()
+	var msgs []string
+	dec := json.NewDecoder(rc)
+	for {
+		var msg struct {
+			Msg string `json:"msg"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return crashHintFromLogLines(msgs)
+		}
+		if strings.TrimSpace(msg.Msg) != "" {
+			msgs = append(msgs, msg.Msg)
+		}
+	}
+	return crashHintFromLogLines(msgs)
+}
+
+func crashHintFromLogLines(msgs []string) string {
+	var load, typed, crashed string
+	for _, m := range msgs {
+		s := strings.TrimSpace(m)
+		if s == "" || strings.HasPrefix(s, "from ") {
+			continue
+		}
+		if strings.Contains(s, "cpu_percent=") {
+			continue
+		}
+		low := strings.ToLower(s)
+		switch {
+		case strings.Contains(low, "unable to load"):
+			load = strings.TrimPrefix(s, "! ")
+		case strings.Contains(s, "(LoadError)") || strings.Contains(s, "(RuntimeError)") || strings.Contains(s, "(NameError)") || strings.Contains(low, "fatal:") || strings.Contains(low, "panic:"):
+			typed = s
+		case strings.Contains(low, "process crashed") || strings.Contains(low, "job exited"):
+			crashed = s
+		}
+	}
+	hint := load
+	if hint == "" {
+		hint = typed
+	}
+	if hint == "" {
+		hint = crashed
+	}
+	if hint == "" {
+		return ""
+	}
+	if len(hint) > 240 {
+		return hint[:240]
+	}
+	return hint
 }
 
 func (d *DeployJob) logJobEvent(job *ct.Job) error {
