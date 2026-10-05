@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 )
 
 // IsEnabled returns true if apparmor is enabled for the host.
@@ -43,12 +44,28 @@ func changeOnExec(name string) error {
 	return nil
 }
 
-// ApplyProfile will apply the profile with the specified name to the process after
-// the next exec.
+func queuedChangeOnExec(name string) bool {
+	data, err := ioutil.ReadFile("/proc/self/attr/exec")
+	if err != nil {
+		return false
+	}
+	want := "exec " + name
+	got := strings.TrimSpace(string(data))
+	return got == want || strings.HasPrefix(got, want)
+}
+
+// ApplyProfile queues the named profile for the next exec (change_onexec).
 func ApplyProfile(name string) error {
 	if name == "" {
 		return nil
 	}
-
-	return changeOnExec(name)
+	if err := changeOnExec(name); err != nil {
+		// nsexec queues change_onexec before NEWUSER; this write is EPERM
+		// afterwards but the next exec still uses the queued profile.
+		if queuedChangeOnExec(name) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }

@@ -367,6 +367,40 @@ static int initpipe(void)
 	return pipenum;
 }
 
+
+/*
+ * AppArmor change_onexec must run while we still have credentials in the
+ * initial user namespace. After unshare(CLONE_NEWUSER) + uid_map, writing
+ * /proc/self/attr/exec is EPERM (mapped root is not CAP_MAC_ADMIN in the
+ * init userns). The queued profile still applies to the later exec of
+ * containerinit. Flynn user jobs always enter NEWUSER.
+ */
+static void apparmor_change_onexec(void)
+{
+	char *profile;
+	int fd;
+	char buf[256];
+	int n;
+
+	profile = getenv("_LIBCONTAINER_APPARMOR_PROFILE");
+	if (profile == NULL || *profile == '\0')
+		return;
+
+	fd = open("/proc/self/attr/exec", O_WRONLY);
+	if (fd < 0)
+		bail("failed to apply apparmor profile before user namespace");
+	n = snprintf(buf, sizeof(buf), "exec %s", profile);
+	if (n < 0 || n >= (int)sizeof(buf)) {
+		close(fd);
+		bail("failed to apply apparmor profile before user namespace");
+	}
+	if (write(fd, buf, n) != n) {
+		close(fd);
+		bail("failed to apply apparmor profile before user namespace");
+	}
+	close(fd);
+}
+
 static void setup_logpipe(void)
 {
 	char *logpipe, *endptr;
@@ -864,6 +898,7 @@ void nsexec(void)
 			 * in some scenarios. This also mirrors how LXC deals with this
 			 * problem.
 			 */
+			apparmor_change_onexec();
 			if (config.cloneflags & CLONE_NEWUSER) {
 				if (unshare(CLONE_NEWUSER) < 0)
 					bail("failed to unshare user namespace");

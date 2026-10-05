@@ -32,6 +32,7 @@ import (
 	"github.com/opencontainers/runc/libcontainer/seccomp"
 	"github.com/rancher/sparse-tools/sparse"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	"github.com/randy-girard/flynn/host/apparmorpolicy"
 	"github.com/randy-girard/flynn/host/containerinit"
 	"github.com/randy-girard/flynn/host/logmux"
 	"github.com/randy-girard/flynn/host/resource"
@@ -785,16 +786,12 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		}
 	}
 
-	// SEC-007: set AppArmor profile for additional mandatory access control,
-	// but only if AppArmor is fully available AND the flynn-default profile
-	// is actually loaded in the kernel. Build jobs are excluded because they
-	// need broad filesystem access (e.g., installing kernel packages to /lib/modules).
-	if !isBuildJob(job) && apparmor.IsEnabled() {
-		if profileData, err := ioutil.ReadFile("/sys/kernel/security/apparmor/profiles"); err == nil {
-			if strings.Contains(string(profileData), "flynn-default") {
-				config.AppArmorProfile = "flynn-default"
-			}
-		}
+	// SEC-007: AppArmor flynn-default when the kernel LSM is on and the
+	// profile is loaded. User jobs keep this profile; runc queues
+	// change_onexec before NEWUSER so attach is not EPERM.
+	if apparmor.IsEnabled() {
+		profileData, _ := ioutil.ReadFile("/sys/kernel/security/apparmor/profiles")
+		config.AppArmorProfile = apparmorpolicy.ProfileForJob(isBuildJob(job), true, string(profileData))
 	}
 
 	if !job.Config.HostPIDNamespace {
@@ -1164,99 +1161,34 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 		NoNewPrivileges: &noNewPriv, // SEC-005: prevent privilege escalation via setuid/setgid binaries
 	}
 	if err := c.Run(process); err != nil {
-		// Transient EPERM writing /proc/self/attr/exec is observed ~9s
-		// after each flynn-host (re)start while jobs launch. setup-apparmor.sh
-		// loads flynn-default only at image build (build.sh), not on daemon
-		// start, so this is not a profile reload race; the LSM occasionally
-		// refuses change_onexec until it settles. Retry the confined start
-		// for every job class before fail-closed / unconfined fallback.
-		if config.AppArmorProfile != "" && isAppArmorApplyErr(err) {
-			for attempt := 1; attempt < confinedStartAttempts; attempt++ {
-				delay, ok := nextConfinedStartDelay(attempt, confinedStartAttempts)
-				if !ok {
-					break
-				}
-				log.Warn("confined start failed, retrying with AppArmor", "attempt", attempt, "delay", delay, "err", err)
-				confinedStartSleep(delay)
-				c.Destroy()
-				if rerr := regenerateVethHostNames(config); rerr != nil {
-					return rerr
-				}
-				c, err = l.factory.Create(job.ID, config)
-				if err != nil {
-					return err
-				}
-				process = &libcontainer.Process{
-					Init:            true,
-					Args:            []string{"/.containerinit", job.ID},
-					User:            "0:0",
-					NoNewPrivileges: &noNewPriv,
-				}
-				err = c.Run(process)
-				if err == nil {
-					break
-				}
-				if !isAppArmorApplyErr(err) {
-					c.Destroy()
-					return err
-				}
-			}
-		}
-		if err != nil {
-			errMsg := err.Error()
-			if config.AppArmorProfile != "" && (strings.Contains(errMsg, "apparmor") || strings.Contains(errMsg, "apply apparmor")) {
-				// User jobs fail closed: retrying unconfined would drop the
-				// LSM that blocked unshare/mount in the isolation assessment.
-				if !isSystemJob(job) && !isBuildJob(job) {
-					c.Destroy()
-					return err
-				}
-				log.Error("AppArmor profile application failed, retrying without AppArmor", "err", err, "profile", config.AppArmorProfile)
-				c.Destroy()
-				config.AppArmorProfile = ""
-				if err := regenerateVethHostNames(config); err != nil {
-					return err
-				}
-				c, err = l.factory.Create(job.ID, config)
-				if err != nil {
-					return err
-				}
-				process = &libcontainer.Process{
-					Init:            true,
-					Args:            []string{"/.containerinit", job.ID},
-					User:            "0:0",
-					NoNewPrivileges: &noNewPriv,
-				}
-				if err := c.Run(process); err != nil {
-					if isNetworkIfaceExistsErr(err) {
-						log.Error("veth still existed after AppArmor retry, regenerating", "err", err)
-						c.Destroy()
-						if rerr := regenerateVethHostNames(config); rerr != nil {
-							return rerr
-						}
-						c, err = l.factory.Create(job.ID, config)
-						if err != nil {
-							return err
-						}
-						process = &libcontainer.Process{
-							Init:            true,
-							Args:            []string{"/.containerinit", job.ID},
-							User:            "0:0",
-							NoNewPrivileges: &noNewPriv,
-						}
-						if err := c.Run(process); err != nil {
-							c.Destroy()
-							return err
-						}
-					} else {
-						c.Destroy()
-						return err
-					}
-				}
-			} else {
+		// change_onexec EPERM is either the post-restart LSM window or a
+		// write after NEWUSER. nsexec queues the profile before unshare;
+		// retry confined starts until attach works. Never drop the profile.
+		confinedFailures := 0
+		for err != nil {
+			confinedFailures++
+			if apparmorpolicy.DecideStart(config.AppArmorProfile, err, confinedFailures, apparmorpolicy.ConfinedStartAttempts) != apparmorpolicy.StartRetryConfined {
 				c.Destroy()
 				return err
 			}
+			delay, _ := apparmorpolicy.NextConfinedStartDelay(confinedFailures, apparmorpolicy.ConfinedStartAttempts)
+			log.Warn("confined start failed, retrying with AppArmor", "attempt", confinedFailures, "delay", delay, "err", err)
+			confinedStartSleep(delay)
+			c.Destroy()
+			if rerr := regenerateVethHostNames(config); rerr != nil {
+				return rerr
+			}
+			c, err = l.factory.Create(job.ID, config)
+			if err != nil {
+				return err
+			}
+			process = &libcontainer.Process{
+				Init:            true,
+				Args:            []string{"/.containerinit", job.ID},
+				User:            "0:0",
+				NoNewPrivileges: &noNewPriv,
+			}
+			err = c.Run(process)
 		}
 	}
 	go process.Wait()

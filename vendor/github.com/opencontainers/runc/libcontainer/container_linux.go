@@ -493,6 +493,9 @@ func (c *linuxContainer) commandTemplate(p *Process, childInitPipe *os.File, chi
 		fmt.Sprintf("_LIBCONTAINER_INITPIPE=%d", stdioFdCount+len(cmd.ExtraFiles)-1),
 		fmt.Sprintf("_LIBCONTAINER_STATEDIR=%s", c.root),
 	)
+	if c.config.AppArmorProfile != "" {
+		cmd.Env = append(cmd.Env, "_LIBCONTAINER_APPARMOR_PROFILE="+c.config.AppArmorProfile)
+	}
 
 	cmd.ExtraFiles = append(cmd.ExtraFiles, childLogPipe)
 	cmd.Env = append(cmd.Env,

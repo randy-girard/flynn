@@ -81,6 +81,9 @@ func (s userNSSpec) HostIDFor(containerID int) (int, bool) {
 }
 
 func applyUserNSConfig(config *configs.Config, spec userNSSpec) {
+	// NEWUSER first is required for idmapped overlay. AppArmor change_onexec
+	// is queued in nsexec before this unshare; writing attr/exec afterwards
+	// is EPERM for mapped root.
 	if config.Namespaces.Contains(configs.NEWUSER) {
 		config.Namespaces.Remove(configs.NEWUSER)
 	}
