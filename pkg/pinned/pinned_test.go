@@ -4,8 +4,10 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestPin(t *testing.T) {
@@ -26,10 +28,46 @@ func TestPin(t *testing.T) {
 	}
 	conn.Close()
 
-	config.Pin[0] = 0
+	bad := append([]byte(nil), pin...)
+	bad[0] = 0
+	config.Pin = bad
 	conn, err = config.Dial("tcp", addr)
 	if err != ErrPinFailure || conn != nil {
 		t.Fatalf("Expected to get (nil, ErrPinFailure), got (%v, %v)", conn, err)
+	}
+
+	config.Pin = pin
+	conn, err = config.DialOnce("tcp", addr)
+	if err != nil {
+		t.Fatalf("DialOnce matching pin: %v", err)
+	}
+	conn.Close()
+}
+
+func TestDialOnceFailsFastOnUnreachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := ln.Addr().String()
+	ln.Close()
+
+	start := time.Now()
+	_, err = (&Config{Pin: make([]byte, 32)}).DialOnce("tcp", addr)
+	if err == nil {
+		t.Fatal("closed port must fail")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("DialOnce hung for %s (want a fast connect error)", d)
+	}
+}
+
+func TestCloseWriteUnsupportedWire(t *testing.T) {
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	if err := (Conn{Wire: a}).CloseWrite(); err == nil {
+		t.Fatal("net.Pipe must not support CloseWrite")
 	}
 }
 

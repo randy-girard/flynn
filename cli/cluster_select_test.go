@@ -158,3 +158,12 @@ func TestAppFromGitURLFindsAppOnOtherCluster(t *testing.T) {
 		t.Fatalf("got %+v", ra)
 	}
 }
+
+func TestFirstNonEmpty(t *testing.T) {
+	if firstNonEmpty(" ", " ada@example.com ") != "ada@example.com" {
+		t.Fatal("trim")
+	}
+	if firstNonEmpty("", "  ") != "" {
+		t.Fatal("empty")
+	}
+}

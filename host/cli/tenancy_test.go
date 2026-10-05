@@ -30,3 +30,10 @@ func TestNetworkPolicyDryRunDeniesForeignOwner(t *testing.T) {
 		t.Fatalf("self_hosted rules %q err %v", self, err)
 	}
 }
+
+func TestHostReadPasswordUsesFlag(t *testing.T) {
+	got, generated, err := hostReadPassword("s3cret")
+	if err != nil || generated || got != "s3cret" {
+		t.Fatalf("%q generated=%v err=%v", got, generated, err)
+	}
+}

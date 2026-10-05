@@ -87,6 +87,9 @@ func dashboardHTTPClient(cluster *cfg.Cluster) (*http.Client, error) {
 }
 
 func dashboardTLSServerName(cluster *cfg.Cluster) string {
+	if cluster == nil {
+		return ""
+	}
 	for _, raw := range []string{cluster.DashboardURL, cluster.OAuthURL, cluster.ControllerURL} {
 		u, err := url.Parse(strings.TrimSpace(raw))
 		if err == nil && u.Hostname() != "" {

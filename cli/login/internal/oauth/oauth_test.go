@@ -167,6 +167,9 @@ func TestPasswordToken(t *testing.T) {
 	if tok.AccessToken != "a1" || tok.RefreshToken != "r1" {
 		t.Fatalf("%+v", tok)
 	}
+	if _, err := PasswordToken(nil, srv.URL, "flynn-cli", "ada@example.com", "wrong", ""); err == nil {
+		t.Fatal("bad password must fail")
+	}
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

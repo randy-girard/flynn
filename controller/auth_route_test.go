@@ -39,3 +39,37 @@ func TestAuthRouteNeedsUpdateEmptyPath(t *testing.T) {
 		t.Fatal("healthy route")
 	}
 }
+
+func TestAuthHTTPRouteOmitsIncompleteCert(t *testing.T) {
+	got := authHTTPRoute(&router.Route{
+		ParentRef:   "controller/abc",
+		Service:     "controller",
+		Certificate: &router.Certificate{Cert: "CERT"},
+	}, "auth.example")
+	if got.Certificate != nil {
+		t.Fatalf("incomplete cert %+v", got.Certificate)
+	}
+	if got.Path != "/" || got.Domain != "auth.example" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestAuthRouteNeedsUpdateNilOrMissingCert(t *testing.T) {
+	want := &router.Route{Path: "/", Certificate: &router.Certificate{Cert: "c", Key: "k"}}
+	if !authRouteNeedsUpdate(nil, want) {
+		t.Fatal("nil existing")
+	}
+	if !authRouteNeedsUpdate(&router.Route{Path: "/", Certificate: nil}, want) {
+		t.Fatal("missing cert")
+	}
+}
+
+func TestEnsureAuthRouteNotReady(t *testing.T) {
+	var api *controllerAPI
+	if err := api.ensureAuthRoute(); err == nil {
+		t.Fatal("nil api")
+	}
+	if err := (&controllerAPI{}).ensureAuthRoute(); err == nil {
+		t.Fatal("missing repos")
+	}
+}

@@ -58,3 +58,58 @@ func TestWriteAlertTableApp(t *testing.T) {
 		t.Fatalf("%s", b.String())
 	}
 }
+
+func TestAppAlertCreateBodyErrorsAndNotify(t *testing.T) {
+	if _, err := appAlertCreateBody(&docopt.Args{String: map[string]string{
+		"--metric": "cpu_percent", "--op": "gt", "--threshold": "nope",
+	}}); err == nil || !strings.Contains(err.Error(), "threshold") {
+		t.Fatalf("threshold: %v", err)
+	}
+	if _, err := appAlertCreateBody(&docopt.Args{String: map[string]string{
+		"--metric": "cpu_percent", "--op": "gt", "--threshold": "80",
+	}}); err == nil || !strings.Contains(err.Error(), "--email") {
+		t.Fatalf("notify: %v", err)
+	}
+	if _, err := appAlertCreateBody(&docopt.Args{String: map[string]string{
+		"--metric": "cpu_percent", "--op": "gt", "--threshold": "80", "--email": "ops@example.com", "--cooldown": "-1",
+	}}); err == nil || !strings.Contains(err.Error(), "cooldown") {
+		t.Fatalf("cooldown: %v", err)
+	}
+	body, err := appAlertCreateBody(&docopt.Args{String: map[string]string{
+		"--metric": "memory_bytes", "--op": "GTE", "--threshold": "1", "--name": "hot",
+		"--webhook": "https://hooks.example/x", "--process-type": "web", "--cooldown": "10",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["name"] != "hot" || body["operator"] != "gte" || body["process_type"] != "web" || body["cooldown_seconds"] != 10 {
+		t.Fatalf("%v", body)
+	}
+	if body["notify_webhook"] != true || body["webhook_url"] != "https://hooks.example/x" {
+		t.Fatalf("webhook %v", body)
+	}
+}
+
+func TestAlertTableCells(t *testing.T) {
+	if got := alertMetricCell(dashboardMetricAlert{Metric: "cpu", HostID: "host1"}); got != "cpu@host1" {
+		t.Fatalf("%s", got)
+	}
+	if got := alertMetricCell(dashboardMetricAlert{Metric: "cpu", ProcessType: "all"}); got != "cpu" {
+		t.Fatalf("%s", got)
+	}
+	if got := alertNotifyCell(dashboardMetricAlert{NotifyEmail: true, EmailTo: "ops@example.com", NotifyWebhook: true}); got != "ops@example.com,webhook" {
+		t.Fatalf("%s", got)
+	}
+	if alertStateCell(dashboardMetricAlert{}) != "disabled" {
+		t.Fatal("disabled")
+	}
+	if alertStateCell(dashboardMetricAlert{Enabled: true, Firing: true}) != "firing" {
+		t.Fatal("firing")
+	}
+}
+
+func TestDashboardURLFromNestedControllerHost(t *testing.T) {
+	if got := dashboardURLFromController("https://region.controller.example.com"); got != "https://region.dashboard.example.com" {
+		t.Fatalf("%s", got)
+	}
+}

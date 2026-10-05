@@ -42,6 +42,16 @@ func TestCliAddCommandOmitsClusterKey(t *testing.T) {
 	}
 }
 
+func TestReadBootstrapAdminRejectsNonEmail(t *testing.T) {
+	_, err := readBootstrapAdminMode(&docopt.Args{String: map[string]string{
+		"--admin-email":    "ops",
+		"--admin-password": "s3cret",
+	}}, false)
+	if err == nil || !strings.Contains(err.Error(), "email") {
+		t.Fatalf("%v", err)
+	}
+}
+
 func runCliAddCommandSource(t *testing.T) string {
 	t.Helper()
 	// FormatHelp is the public contract; the printf lives in runCliAddCommand.
