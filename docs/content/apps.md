@@ -437,6 +437,7 @@ plugin:
 
 ```text
 flynn route:add http www.example.com
+flynn letsencrypt:list
 flynn letsencrypt:enable www.example.com
 ```
 

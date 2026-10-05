@@ -170,9 +170,9 @@ Core Flynn plugins attach **`platform-postgres`** (the built-in appliance),
 not the tenant **`postgres`** plugin. **`routes`** creates HTTP routes (`${CLUSTER_DOMAIN}`
 is expanded). If cluster ACME is already enabled (`flynn-host letsencrypt:configure`
 and `flynn-host letsencrypt:enable`), HTTP plugin routes get Let's Encrypt at install
-automatically. Operators can also turn HTTPS on later with
-`flynn letsencrypt:enable <hostname>` (same as the old `flynn route:add http --auto-tls`
-flag, which remains as a hidden alias). That covers the
+automatically. Operators can also list HTTP routes and turn HTTPS on later with
+`flynn letsencrypt:list` and `flynn letsencrypt:enable <hostname>` (same as the old
+`flynn route:add http --auto-tls` flag, which remains as a hidden alias). That covers the
 dashboard plugin and any other HTTP plugin; Flynn does not special-case a
 name. Set **`auto_tls`** on an HTTP route to request TLS even when you are
 not passing `--auto-tls`: without ACME, install logs a warning and leaves
