@@ -381,7 +381,7 @@ func init() {
 	for _, name := range []string{
 		// dashboard paths and chrome
 		"account", "activity", "admin", "alerts", "apps", "console", "deploy",
-		"env", "events", "invite", "jobs", "login", "signup", "sign-up", "logs", "metrics", "new",
+		"env", "events", "invite", "jobs", "auth", "login", "signup", "sign-up", "logs", "metrics", "new",
 		"plugin", "plugins", "releases", "resources", "roles", "runtime",
 		"scale", "settings", "system", "team", "users",
 		// bootstrap / updater system apps and internals

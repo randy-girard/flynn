@@ -13,5 +13,13 @@ if [[ ! -f "${manifest}" ]]; then
   exit 1
 fi
 
-flynn-host bootstrap --min-hosts "${MIN_HOSTS}" --peer-ips "${PEER_IPS}" "${manifest}"
+flynn-host bootstrap --min-hosts "${MIN_HOSTS}" --peer-ips "${PEER_IPS}" \
+  --admin-email "${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}" \
+  --admin-password "${FLYNN_ADMIN_PASSWORD:-flynn-dev}" \
+  "${manifest}"
+umask 077
+cat > /etc/flynn/admin.env <<EOF
+FLYNN_ADMIN_EMAIL=${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}
+FLYNN_ADMIN_PASSWORD=${FLYNN_ADMIN_PASSWORD:-flynn-dev}
+EOF
 echo "bootstrapped ${DOMAIN} min-hosts=${MIN_HOSTS} peer-ips=${PEER_IPS}"

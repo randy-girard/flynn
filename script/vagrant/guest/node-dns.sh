@@ -6,7 +6,7 @@ set -euo pipefail
 DOMAIN="${CLUSTER_DOMAIN:-1.localflynn.com}"
 begin="# flynn-vagrant-dev-begin"
 end="# flynn-vagrant-dev-end"
-body="${CLUSTER_IP} ${DOMAIN} controller.${DOMAIN} git.${DOMAIN} images.${DOMAIN} dashboard.${DOMAIN} www.${DOMAIN} discovery.${DOMAIN} status.${DOMAIN}"
+body="${CLUSTER_IP} ${DOMAIN} controller.${DOMAIN} auth.${DOMAIN} git.${DOMAIN} images.${DOMAIN} dashboard.${DOMAIN} www.${DOMAIN} discovery.${DOMAIN} status.${DOMAIN}"
 
 export FLYNN_HOSTS_BEGIN="${begin}"
 export FLYNN_HOSTS_END="${end}"

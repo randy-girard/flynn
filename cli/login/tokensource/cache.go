@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/randy-girard/flynn/cli/login/internal/oauth"
@@ -15,8 +15,8 @@ import (
 )
 
 type Cache interface {
-	GetToken(issuer, clientID, audience string) (*oauth2.Token, error)
-	SetToken(issuer, clientID string, t *oauth2.Token) error
+	GetToken(clusterName, clientID, audience string) (*oauth2.Token, error)
+	SetToken(clusterName, clientID string, t *oauth2.Token) error
 }
 
 func NewTokenCache(dir string) Cache {
@@ -41,12 +41,26 @@ type accessToken struct {
 	TokenType   string    `json:"token_type"`
 }
 
-func (c *cache) filepath(issuer, clientID string) (string, string, error) {
-	issuerURL, err := url.Parse(issuer)
-	if err != nil {
-		return "", "", fmt.Errorf("invalid issuer URL: %s", err)
+func clusterCacheName(clusterName string) (string, error) {
+	name := strings.TrimSpace(clusterName)
+	if name == "" {
+		return "", ErrTokenNotFound
 	}
-	return filepath.Join(c.baseDir, issuerURL.Host), clientID + ".json", nil
+	if strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid cluster name for token cache")
+	}
+	return name, nil
+}
+
+func (c *cache) filepath(clusterName, clientID string) (string, string, error) {
+	name, err := clusterCacheName(clusterName)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(clientID) == "" {
+		return "", "", fmt.Errorf("invalid OAuth client id")
+	}
+	return filepath.Join(c.baseDir, name), clientID + ".json", nil
 }
 
 var ErrTokenNotFound = errors.New("cached token not found")
@@ -66,8 +80,8 @@ func (c *cache) readCache(path string) (*tokenCache, error) {
 	return res, nil
 }
 
-func (c *cache) GetToken(issuer, clientID, audience string) (*oauth2.Token, error) {
-	dir, filename, err := c.filepath(issuer, clientID)
+func (c *cache) GetToken(clusterName, clientID, audience string) (*oauth2.Token, error) {
+	dir, filename, err := c.filepath(clusterName, clientID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +119,8 @@ func (c *cache) GetToken(issuer, clientID, audience string) (*oauth2.Token, erro
 	return t, nil
 }
 
-func (c *cache) SetToken(issuer, clientID string, t *oauth2.Token) error {
-	dir, filename, err := c.filepath(issuer, clientID)
+func (c *cache) SetToken(clusterName, clientID string, t *oauth2.Token) error {
+	dir, filename, err := c.filepath(clusterName, clientID)
 	if err != nil {
 		return err
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	cfg "github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/cli/login/tokensource"
 	"github.com/randy-girard/flynn/pkg/pinned"
 )
 
@@ -24,9 +25,9 @@ func dashboardAPI() (*http.Client, string, string, error) {
 	if err != nil {
 		return nil, "", "", err
 	}
-	key := strings.TrimSpace(cluster.Key)
-	if key == "" {
-		return nil, "", "", fmt.Errorf("cluster controller key is required to call the dashboard from the CLI (use flynn cluster:add)")
+	key, err := dashboardCredential(cluster)
+	if err != nil {
+		return nil, "", "", err
 	}
 	hc, err := dashboardHTTPClient(cluster)
 	if err != nil {
@@ -111,7 +112,7 @@ func dashboardDoJSON(client *http.Client, method, rawURL, key string, body any, 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	req.SetBasicAuth("", key)
+	setDashboardAuth(req, key)
 	res, err := client.Do(req)
 	if err != nil {
 		return err
@@ -135,4 +136,69 @@ func dashboardDoJSON(client *http.Client, method, rawURL, key string, body any, 
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+func dashboardCredential(cluster *cfg.Cluster) (string, error) {
+	if cluster == nil {
+		return "", fmt.Errorf("no cluster configured")
+	}
+	key := strings.TrimSpace(cluster.Key)
+	if cfg.IsPersonalAccessToken(key) || isControllerAuthKey(key) {
+		return key, nil
+	}
+	issuer := cluster.OAuthURL
+	if issuer == "" {
+		issuer = cluster.ControllerURL
+	}
+	if issuer == "" {
+		return "", fmt.Errorf("not logged in to cluster %q; run flynn login", cluster.Name)
+	}
+	hc, err := cluster.HTTPClient()
+	if err != nil {
+		return "", err
+	}
+	ts, err := tokensource.New(cluster.Name, issuer, cluster.ControllerURL, cfg.TokenCache(), hc)
+	if err != nil {
+		return "", err
+	}
+	t, err := ts.Token()
+	if err != nil {
+		return "", err
+	}
+	key = strings.TrimSpace(t.AccessToken)
+	if key == "" {
+		return "", fmt.Errorf("not logged in to cluster %q; run flynn login", cluster.Name)
+	}
+	return key, nil
+}
+
+func isControllerAuthKey(key string) bool {
+	n := len(key)
+	if n < 16 || n > 64 {
+		return false
+	}
+	for i := 0; i < n; i++ {
+		c := key[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			return false
+		}
+	}
+	return true
+}
+
+func setDashboardAuth(req *http.Request, key string) {
+	if req == nil {
+		return
+	}
+	key = strings.TrimSpace(key)
+	if cfg.IsPersonalAccessToken(key) {
+		req.SetBasicAuth("", key)
+		return
+	}
+	if isControllerAuthKey(key) {
+		req.SetBasicAuth("", key)
+		req.Header.Set("X-Controller-Key", key)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
 }

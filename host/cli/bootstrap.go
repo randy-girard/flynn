@@ -44,8 +44,12 @@ Options:
   --peer-ips=IPLIST    use IP address list to connect to cluster
   --steps=STEPS        only run the given STEPS (comma separated)
   --job-timeout=SECS   seconds to wait for jobs to start [default: 120]
+  --admin-email=EMAIL  first cluster administrator email
+  --admin-password=PW  first cluster administrator password
 
-Bootstrap layer 1 using the provided manifest`)
+Bootstrap layer 1 using the provided manifest. After a fresh bootstrap, creates
+the first cluster_admin user. --from-backup does not create a new admin.
+`)
 }
 
 func readBootstrapManifest(name string) ([]byte, error) {
@@ -127,6 +131,14 @@ func runBootstrap(args *docopt.Args) error {
 		close(done)
 	}()
 
+	var admin *bootstrapAdmin
+	if args.String["--from-backup"] == "" && args.String["--steps"] == "" {
+		admin, err = readBootstrapAdmin(args)
+		if err != nil {
+			return err
+		}
+	}
+
 	cfg.ClusterURL = args.String["--discovery"]
 	if bf := args.String["--from-backup"]; bf != "" {
 		err = runBootstrapBackup(manifest, bf, ch, cfg)
@@ -138,7 +150,10 @@ func runBootstrap(args *docopt.Args) error {
 	if err != nil && last != nil && err.Error() == last.Error() {
 		return ErrAlreadyLogged{err}
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return createBootstrapAdmin(admin)
 }
 
 func runBootstrapBackup(manifest []byte, backupFile string, ch chan *bootstrap.StepInfo, cfg bootstrap.Config) error {

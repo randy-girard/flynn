@@ -106,9 +106,9 @@ def cli_add_creds():
         except (subprocess.CalledProcessError, OSError) as err:
             last = err
             continue
-        pin, key = parse_cli_add(out)
-        if pin and key:
-            return pin, key
+        pin, _domain = parse_cli_add(out)
+        if pin:
+            return pin, host_json_key(host_env()) or host_json_key(env)
         last = RuntimeError("could not parse flynn-host cli-add-command output")
     if last:
         raise last

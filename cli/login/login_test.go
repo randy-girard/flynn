@@ -5,60 +5,87 @@ import (
 	"testing"
 
 	"github.com/flynn/go-docopt"
-	"github.com/randy-girard/flynn/cli/config"
-	"golang.org/x/oauth2"
 )
 
-func TestLooksLikeIssuerURL(t *testing.T) {
-	if looksLikeIssuerURL("") || looksLikeIssuerURL("default") {
-		t.Fatal("cluster names are not issuer URLs")
+func TestCredentialsFillMissingRequiresFlagsWhenNonInteractive(t *testing.T) {
+	c := Credentials{}
+	if err := c.FillMissing(false); err == nil {
+		t.Fatal("expected error")
 	}
-	if !looksLikeIssuerURL("https://id.example") || !looksLikeIssuerURL("http://id.example") {
-		t.Fatal("scheme URLs")
+	c.Email = "ada@example.com"
+	if err := c.FillMissing(false); err == nil {
+		t.Fatal("password required")
 	}
-	if !looksLikeIssuerURL("http:legacy") {
-		t.Fatal("http: prefix without slashes")
+	c.Password = "secret"
+	if err := c.FillMissing(false); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestIssuerFromCluster(t *testing.T) {
-	c := &config.Cluster{DashboardURL: " https://dash.example "}
-	if issuerFromCluster(c) != "https://dash.example" {
-		t.Fatalf("%q", issuerFromCluster(c))
-	}
-	c.OAuthURL = "https://id.example"
-	if issuerFromCluster(c) != "https://id.example" {
-		t.Fatal("OAuthURL takes precedence")
+	c.Email = "ada"
+	if err := c.FillMissing(false); err == nil {
+		t.Fatal("handle is not an email")
 	}
 }
 
-func TestUseOOBFlag(t *testing.T) {
-	args := &docopt.Args{Bool: map[string]bool{"--oob-code": true}}
-	if !useOOB(args) {
-		t.Fatal("--oob-code")
+func TestUseOAuthFlag(t *testing.T) {
+	if useOOB(&docopt.Args{Bool: map[string]bool{}}) {
+		t.Fatal("password grant is the default")
+	}
+	if !useOOB(&docopt.Args{Bool: map[string]bool{"--oauth": true}}) {
+		t.Fatal("--oauth")
+	}
+	if !useOOB(&docopt.Args{Bool: map[string]bool{"--oob-code": true}}) {
+		t.Fatal("--oob-code alias")
 	}
 }
 
-func TestBuildAuthCodeURLPKCE(t *testing.T) {
-	cfg := &oauth2.Config{
-		ClientID:    "flynn-cli",
-		RedirectURL: "http://127.0.0.1:8085/callback",
-		Endpoint:    oauth2.Endpoint{AuthURL: "https://id.example/auth"},
+func TestOAuthIssuerCandidatesPrefersAuth(t *testing.T) {
+	got := oauthIssuerCandidates("https://controller.demo.local", "https://controller.demo.local")
+	if len(got) != 2 || got[0] != "https://auth.demo.local" || got[1] != "https://controller.demo.local" {
+		t.Fatalf("%v", got)
 	}
-	info := buildAuthCodeURL(cfg)
-	if info.Verifier == "" || info.Nonce == "" || info.State == "" {
-		t.Fatalf("%+v", info)
+	deduped := oauthIssuerCandidates("https://auth.demo.local", "https://controller.demo.local")
+	if len(deduped) != 2 || deduped[0] != "https://auth.demo.local" || deduped[1] != "https://controller.demo.local" {
+		t.Fatalf("%v", deduped)
 	}
-	if !strings.Contains(info.URL, "code_challenge_method=S256") {
-		t.Fatalf("pkce missing: %s", info.URL)
-	}
-	if !strings.Contains(info.URL, "code_challenge=") {
-		t.Fatal("code_challenge")
-	}
+}
 
-	cfg.RedirectURL = oobRedirectURI
-	oob := buildAuthCodeURL(cfg)
-	if oob.State != "" {
-		t.Fatal("OOB flow must not set CSRF state")
+func TestFlynnAuthIssuer(t *testing.T) {
+	if got := flynnAuthIssuer("https://controller.1.localflynn.com", "https://controller.1.localflynn.com"); got != "https://auth.1.localflynn.com" {
+		t.Fatalf("got %q", got)
+	}
+	if got := flynnAuthIssuer("https://auth.1.localflynn.com", "https://controller.1.localflynn.com"); got != "https://auth.1.localflynn.com" {
+		t.Fatalf("got %q", got)
+	}
+	if got := flynnAuthIssuer("https://login.example.com", "https://login.example.com"); got != "" {
+		t.Fatalf("external issuer %q", got)
+	}
+	if got := flynnControllerIssuer("https://controller.1.localflynn.com", "https://auth.1.localflynn.com"); got != "https://controller.1.localflynn.com" {
+		t.Fatalf("controller %q", got)
+	}
+}
+
+func TestFlynnControllerIssuer(t *testing.T) {
+	if got := flynnControllerIssuer("https://controller.1.localflynn.com", "https://auth.1.localflynn.com"); got != "https://controller.1.localflynn.com" {
+		t.Fatalf("controller %q", got)
+	}
+}
+
+func TestAuthHostsHintWhenAuthDoesNotResolve(t *testing.T) {
+	got := AuthHostsHint("https://auth.this-name-should-not-resolve.invalid", "https://controller.this-name-should-not-resolve.invalid")
+	if !strings.Contains(got, "auth.this-name-should-not-resolve.invalid") || !strings.Contains(got, "/etc/hosts") {
+		t.Fatalf("%q", got)
+	}
+}
+
+func TestRewriteOAuthEndpointsMovesControllerHost(t *testing.T) {
+	meta := syntheticFlynnMetadata("https://auth.1.localflynn.com")
+	meta.AuthorizationEndpoint = "https://controller.1.localflynn.com/oauth/authorize"
+	meta.TokenEndpoint = "https://controller.1.localflynn.com/oauth/token"
+	rewriteOAuthEndpoints(meta, "https://auth.1.localflynn.com")
+	if meta.AuthorizationEndpoint != "https://auth.1.localflynn.com/oauth/authorize" {
+		t.Fatalf("authorize %q", meta.AuthorizationEndpoint)
+	}
+	if meta.TokenEndpoint != "https://auth.1.localflynn.com/oauth/token" {
+		t.Fatalf("token %q", meta.TokenEndpoint)
 	}
 }

@@ -11,6 +11,7 @@ main() {
     echo "${ROUTER_IP}" \
       "${DOMAIN}" \
       "controller.${DOMAIN}" \
+      "auth.${DOMAIN}" \
       "git.${DOMAIN}" \
       "images.${DOMAIN}" \
       >> /etc/hosts

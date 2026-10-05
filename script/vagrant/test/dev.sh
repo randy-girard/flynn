@@ -290,17 +290,19 @@ if ! grep -Fq 'FLYNN_DEV_PIN=' "${mod}/guest/creds.sh"; then
   echo "guest/creds.sh must print labeled FLYNN_DEV_PIN so ssh banners cannot steal line 1" >&2
   exit 1
 fi
-if ! grep -Fq 'rejected cluster key' "${ROOT}/cli/cluster.go"; then
-  echo "cluster:add must fail on GET /apps 401 so setup does not store a leftover host.json key" >&2
+if ! grep -Fq 'Log in with' "${ROOT}/cli/cluster.go"; then
+  echo "cluster:add must remind the operator to flynn login" >&2
   exit 1
 fi
-sample_add=$'Install the Flynn CLI\n\nflynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default 1.localflynn.com e09dc5301d72be755a3d666f617c4600\n'
+sample_add=$'Install the Flynn CLI\n\nflynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default 1.localflynn.com\nflynn login --email <admin@1.localflynn.com>\n'
 python3 - <<PY
 import re
 text = """${sample_add}"""
-m = re.search(r"flynn cluster:add -p (\S+) \S+ \S+ (\S+)\s*$", text, re.M)
-if not m or m.group(2) != "e09dc5301d72be755a3d666f617c4600":
+m = re.search(r"flynn cluster:add -p (\S+) \S+ (\S+)\s*$", text, re.M)
+if not m or m.group(2) != "1.localflynn.com":
     raise SystemExit("cli-add-command parse failed")
+if "flynn login --email" not in text:
+    raise SystemExit("cli-add-command must print flynn login")
 PY
 if ! grep -Fq 'parse_dev_creds' "${script}"; then
   echo "vagrant.sh must parse labeled creds, not ssh stdout line 1/2" >&2
@@ -344,6 +346,14 @@ if ! grep -Fq '192.168.57.20' "${mod}/host/mac.sh"; then
 fi
 if grep -Fq '192.168.57.10' "${mod}/host/mac.sh"; then
   echo "host/mac.sh must not use the builder IP for the live cluster" >&2
+  exit 1
+fi
+if ! grep -Fq 'auth.${DOMAIN}' "${mod}/host/mac.sh"; then
+  echo "host/mac.sh must map auth.<domain> for controller-owned cluster login" >&2
+  exit 1
+fi
+if ! grep -Fq 'auth.${DOMAIN}' "${mod}/guest/node-dns.sh"; then
+  echo "node-dns.sh must map auth.<domain> for in-guest cluster login" >&2
   exit 1
 fi
 if ! grep -Fq 'FLYNN_CLUSTER_IP' "${mod}/guest/creds.sh"; then

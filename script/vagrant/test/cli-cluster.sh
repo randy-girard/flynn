@@ -53,5 +53,13 @@ if ! grep -q 'flynn apps' "${smoke}"; then
   echo "smoke script must probe the controller after cluster add to catch a stale pin" >&2
   exit 1
 fi
+if ! grep -q 'flynn login --email' "${smoke}"; then
+  echo "smoke must log in with email/password after cluster:add" >&2
+  exit 1
+fi
+if ! grep -q 'flynn whoami' "${smoke}"; then
+  echo "smoke must probe flynn whoami after login" >&2
+  exit 1
+fi
 
 echo "ok CLI cluster force-add + stale-pin probe"

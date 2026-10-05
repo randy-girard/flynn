@@ -78,8 +78,8 @@ TOFU on `POST /host/auth-key` only.
 
 Access to the controller is available via HTTPS over port 443, and
 a randomly generated bearer token is used for authentication. Cluster
-administrator access is the install key (`ClusterKey`), a dashboard JWT
-with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
+administrator access is the install key (`ClusterKey`, on hosts and system
+jobs), a user JWT with scope `cluster:admin`, or scope `*`. A JWT with empty scopes and
 empty app grants is not an administrator; it has no controller access.
 The TLS certificate used for communication is generated during installation
 (self-signed). Operators should not pass `--insecure` or skip-verify to talk
@@ -145,10 +145,10 @@ found on a job, `flynn-host` also writes it to `/etc/flynn/host.json`.
 * **App-scoped token** (dashboard grant, build token). `GET /apps` is
   `403`. The token may only `GET /apps/:id` for apps it was granted.
 
-`flynn cluster:add` after bootstrap stores the cluster key, which is why
-`flynn apps` on a new cluster used to print `gitreceive`, `router`,
-`blobstore`, `postgres`, and `controller`. That was superuser listing,
-not a public catalog.
+`flynn cluster:add` after bootstrap does not store the cluster key. `flynn login`
+creates a user session. A cluster-admin user listing `GET /apps` used to print
+`gitreceive`, `router`, `blobstore`, `postgres`, and `controller`. That was
+superuser listing, not a public catalog.
 
 ## Applications
 
@@ -215,7 +215,7 @@ that console. Tenant consoles are `flynn pg psql` from the postgres plugin
 cannot `flynn run` / attach a shell on a database app (postgres, mysql,
 mongodb, redis, kafka, clickhouse — plugin apps, isolated instances, and
 platform postgres). That one-off path is flynn-host only
-(`X-Flynn-Host-Auth`). Treat the key from `flynn cluster:add` as root.
+(`X-Flynn-Host-Auth`). Treat the host cluster key as root; it is not a laptop login.
 
 `git push` to gitreceive requires the cluster controller key, `cluster:admin`,
 or `app:deploy` on that app (or a coarser grant that expands to it, such as

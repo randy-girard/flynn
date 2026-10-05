@@ -136,13 +136,16 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 		}
 	}
 	user := FormatHelp("user")
-	for _, want := range []string{"usage: flynn-host user", "Commands:", "user:bootstrap-admin", "cluster admin"} {
+	for _, want := range []string{"usage: flynn-host user", "Commands:", "user:bootstrap-admin", "user:create", "user:list", "user:admin", "cluster admin"} {
 		if !strings.Contains(user, want) {
 			t.Fatalf("user help missing %q:\n%s", want, user)
 		}
 	}
-	if !strings.Contains(FormatHelp("user:bootstrap-admin"), "--handle") {
-		t.Fatal("user:bootstrap-admin help missing --handle")
+	if !strings.Contains(FormatHelp("user:bootstrap-admin"), "<email>") {
+		t.Fatal("user:bootstrap-admin help missing email")
+	}
+	if !strings.Contains(FormatHelp("user:create"), "--admin") {
+		t.Fatal("user:create help missing --admin")
 	}
 }
 

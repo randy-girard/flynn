@@ -103,8 +103,9 @@ bootstrap a Flynn cluster. Example:
 curl -fsSL -o install-flynn https://github.com/randy-girard/flynn/releases/latest/download/install-flynn
 sudo bash install-flynn
 sudo systemctl start flynn-host
-CLUSTER_DOMAIN=ci.example.com flynn-host bootstrap
-flynn cluster:add -p <tls-pin> default ci.example.com <controller-key>
+CLUSTER_DOMAIN=ci.example.com flynn-host bootstrap --admin-email admin@ci.example.com --admin-password flynn-ci
+flynn cluster:add -p <tls-pin> default ci.example.com
+flynn login --email admin@ci.example.com
 ```
 
 Create a directory to store CI build images (this should be on a fast disk to

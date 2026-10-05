@@ -219,8 +219,21 @@ func runGitCredentials(args *docopt.Args) error {
 	}
 	user := "user"
 	password := cluster.Key
-	if cluster.OAuthURL != "" {
-		ts, err := tokensource.New(cluster.OAuthURL, cluster.ControllerURL, cfg.TokenCache())
+	if cfg.IsPersonalAccessToken(cluster.Key) {
+		password = cluster.Key
+	} else {
+		issuer := cluster.OAuthURL
+		if issuer == "" {
+			issuer = cluster.ControllerURL
+		}
+		if issuer == "" {
+			return fmt.Errorf("not logged in to cluster %q; run flynn login", cluster.Name)
+		}
+		hc, err := cluster.HTTPClient()
+		if err != nil {
+			return err
+		}
+		ts, err := tokensource.New(cluster.Name, issuer, cluster.ControllerURL, cfg.TokenCache(), hc)
 		if err != nil {
 			return fmt.Errorf("error getting access token source: %s", err)
 		}

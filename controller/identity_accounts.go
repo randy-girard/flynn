@@ -396,7 +396,7 @@ func (c *controllerAPI) AddAccountCollaborator(ctx context.Context, w http.Respo
 		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "collaborator.add", account, "", map[string]string{"user_id": user.ID, "role": body.Role})
-	httphelper.JSON(w, 200, ct.Collaborator{UserID: user.ID, Handle: user.Handle, Role: body.Role})
+	httphelper.JSON(w, 200, ct.Collaborator{UserID: user.ID, Email: user.Email, Handle: user.Handle, Role: body.Role})
 }
 
 func (c *controllerAPI) DeleteAccountCollaborator(ctx context.Context, w http.ResponseWriter, _ *http.Request) {
@@ -432,10 +432,10 @@ func (c *controllerAPI) readCollaborator(w http.ResponseWriter, req *http.Reques
 	var err error
 	if body.UserID != "" {
 		user, err = c.tenancy.GetUser(body.UserID)
-	} else if body.Handle != "" {
-		user, err = c.tenancy.GetUserByHandle(strings.ToLower(body.Handle))
+	} else if strings.Contains(body.Email, "@") {
+		user, err = c.tenancy.GetUserByEmail(strings.ToLower(strings.TrimSpace(body.Email)))
 	} else {
-		httphelper.ValidationError(w, "user_id", "user_id or handle is required")
+		httphelper.ValidationError(w, "email", "email is required")
 		return body, nil, false
 	}
 	if err != nil {
@@ -481,7 +481,7 @@ func (c *controllerAPI) AddAppCollaborator(ctx context.Context, w http.ResponseW
 		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "app_collaborator.add", app.OwnerAccount, app.ID, map[string]string{"user_id": user.ID, "role": body.Role})
-	httphelper.JSON(w, 200, ct.Collaborator{UserID: user.ID, Handle: user.Handle, Role: body.Role})
+	httphelper.JSON(w, 200, ct.Collaborator{UserID: user.ID, Email: user.Email, Handle: user.Handle, Role: body.Role})
 }
 
 func (c *controllerAPI) DeleteAppCollaborator(ctx context.Context, w http.ResponseWriter, _ *http.Request) {

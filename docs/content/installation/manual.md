@@ -170,10 +170,14 @@ $ sudo \
     CLUSTER_DOMAIN=demo.example.com \
     flynn-host bootstrap \
     --min-hosts 3 \
-    --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22
+    --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 \
+    --admin-email admin@demo.example.com \
+    --admin-password 'choose-a-password'
 ```
 
-The last bootstrap log line is the `flynn cluster:add` command for the [CLI](../cli.md). You can also run `sudo flynn-host cli-add-command` on a host.
+Non-interactive bootstrap requires `--admin-email` and `--admin-password`. On a TTY, bootstrap prompts for them. `--from-backup` does not create a new admin.
+
+Then run `sudo flynn-host cli-add-command` on a host and `flynn login` on your laptop.
 
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and
 `veth*` interfaces, then open a GitHub issue.

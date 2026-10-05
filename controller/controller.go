@@ -22,6 +22,7 @@ import (
 	"github.com/randy-girard/flynn/controller/data"
 	"github.com/randy-girard/flynn/controller/name"
 	"github.com/randy-girard/flynn/controller/schema"
+	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -90,6 +91,11 @@ func main() {
 	db := data.OpenAndMigrateDB(nil)
 	shutdown.BeforeExit(func() { db.Close() })
 
+	tokenSigner, err := tokenSignerFromEnvAndDB(db)
+	if err != nil {
+		log.Fatalln("error decoding ACCESS_TOKEN_SIGNING_KEY:", err)
+	}
+
 	lc, err := logaggc.New("")
 	if err != nil {
 		shutdown.Fatal(err)
@@ -125,16 +131,18 @@ func main() {
 		grpcService.Close()
 	})
 
-	handler, grpcServer, _ := appHandler(handlerConfig{
+	handler, grpcServer, api := appHandler(handlerConfig{
 		db:               db,
 		cc:               utils.ClusterClientWrapper(cluster.NewClient()),
 		lc:               lc,
 		keys:             strings.Split(os.Getenv("AUTH_KEY"), ","),
 		keyIDs:           strings.Split(os.Getenv("AUTH_KEY_IDS"), ","),
 		tokenKey:         tokenKey,
+		tokenSigner:      tokenSigner,
 		tokenMaxValidity: tokenMaxValidity,
 		caCert:           []byte(os.Getenv("CA_CERT")),
 	})
+	go api.ensureAuthRouteLoop()
 	go grpcServer.Serve(grpcListener)
 	shutdown.Fatal(http.ListenAndServe(httpAddr, handler))
 }
@@ -150,6 +158,7 @@ type handlerConfig struct {
 	keys             []string
 	keyIDs           []string
 	tokenKey         *ecdsa.PublicKey
+	tokenSigner      *tokensigner.Signer
 	tokenMaxValidity time.Duration
 	caCert           []byte
 	githubHTTP       *http.Client
@@ -232,6 +241,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		caCert:                 c.caCert,
 		config:                 c,
 		authorizer:             authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
+		tokenSigner:            c.tokenSigner,
 	}
 	if strings.TrimSpace(api.githubPluginURL) == "" {
 		api.githubPluginURL = "http://github.discoverd"
@@ -254,6 +264,11 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	}))
 
 	httpRouter.GET("/ca-cert", httphelper.WrapHandler(api.GetCACert))
+	httpRouter.GET("/.well-known/oauth-authorization-server", httphelper.WrapHandler(api.OAuthMetadata))
+	httpRouter.GET("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
+	httpRouter.POST("/oauth/authorize", httphelper.WrapHandler(api.OAuthAuthorize))
+	httpRouter.POST("/oauth/token", httphelper.WrapHandler(api.OAuthToken))
+	httpRouter.GET("/oauth/audiences", httphelper.WrapHandler(api.OAuthAudiences))
 
 	httpRouter.GET("/backup", httphelper.WrapHandler(api.GetBackup))
 
@@ -438,6 +453,10 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			main.ServeHTTP(w, r)
 			return
 		}
+		if oauthPublicPath(r.Method, r.URL.Path) {
+			main.ServeHTTP(w, r)
+			return
+		}
 		auth, err := authorizer.AuthorizeRequest(r)
 		if err != nil && api != nil {
 			auth, err = api.authenticatePAT(r)
@@ -505,6 +524,7 @@ type controllerAPI struct {
 	caCert                 []byte
 	config                 handlerConfig
 	authorizer             *authorizer.Authorizer
+	tokenSigner            *tokensigner.Signer
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

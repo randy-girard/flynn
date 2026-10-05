@@ -20,6 +20,17 @@ func (f *fakeSecretController) GetAppRelease(appID string) (*ct.Release, error) 
 	return nil, controller.ErrNotFound
 }
 
+func TestEnsureReleaseAuthEnvControllerGetsSigningKey(t *testing.T) {
+	env := map[string]string{}
+	s := ClusterSecrets{ControllerKey: "ck", AccessTokenKey: "pub", AccessTokenSigningKey: "priv", HostAuthKey: "hk"}
+	if !EnsureReleaseAuthEnv("controller", env, s) {
+		t.Fatal("expected change")
+	}
+	if env["AUTH_KEY"] != "ck" || env["ACCESS_TOKEN_KEY"] != "pub" || env["ACCESS_TOKEN_SIGNING_KEY"] != "priv" || env["FLYNN_HOST_AUTH_KEY"] != "hk" {
+		t.Fatalf("%v", env)
+	}
+}
+
 func TestEnsureReleaseAuthEnvBlobstoreGetsClusterKeys(t *testing.T) {
 	env := map[string]string{}
 	s := ClusterSecrets{ControllerKey: "ck", DiscoverdAuthKey: "dk", AccessTokenKey: "tok"}
@@ -77,6 +88,7 @@ func TestLoadClusterSecretsFromControllerAndFallback(t *testing.T) {
 	t.Setenv("FLYNN_HOST_AUTH_KEY", "")
 	client := &fakeSecretController{releases: map[string]*ct.Release{
 		"controller": {Env: map[string]string{"AUTH_KEY": "cluster", "ACCESS_TOKEN_KEY": "pub"}},
+		"gitreceive": {Env: map[string]string{"ACCESS_TOKEN_SIGNING_KEY": "priv"}},
 		"discoverd":  {Env: map[string]string{"DISCOVERD_AUTH_KEY": "from-discoverd"}},
 	}}
 	s := LoadClusterSecrets(client)
@@ -88,6 +100,9 @@ func TestLoadClusterSecretsFromControllerAndFallback(t *testing.T) {
 	}
 	if s.AccessTokenKey != "pub" {
 		t.Fatalf("AccessTokenKey=%q", s.AccessTokenKey)
+	}
+	if s.AccessTokenSigningKey != "priv" {
+		t.Fatalf("AccessTokenSigningKey=%q", s.AccessTokenSigningKey)
 	}
 
 	s = LoadClusterSecrets(&fakeSecretController{})

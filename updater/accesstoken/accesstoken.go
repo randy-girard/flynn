@@ -55,7 +55,9 @@ func Update(appName string, env map[string]string) (bool, error) {
 	switch appName {
 	case "gitreceive":
 		return updateGitreceive(env)
-	case "controller", "tarreceive", "blobstore":
+	case "controller":
+		return updateController(env)
+	case "tarreceive", "blobstore":
 		return updateVerifier(env)
 	default:
 		return false, nil
@@ -96,4 +98,16 @@ func updateVerifier(env map[string]string) (bool, error) {
 	}
 	env["ACCESS_TOKEN_KEY"] = publicKey
 	return true, nil
+}
+
+func updateController(env map[string]string) (bool, error) {
+	changed, err := updateVerifier(env)
+	if err != nil {
+		return false, err
+	}
+	if pair.ok && env["ACCESS_TOKEN_SIGNING_KEY"] != pair.private {
+		env["ACCESS_TOKEN_SIGNING_KEY"] = pair.private
+		changed = true
+	}
+	return changed, nil
 }

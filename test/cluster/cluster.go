@@ -467,8 +467,8 @@ func (c *Cluster) bootstrapLayer1(instances []*Instance) error {
 	var cmdErr error
 	go func() {
 		command := fmt.Sprintf(
-			"CLUSTER_DOMAIN=%s CONTROLLER_KEY=%s DISCOVERD=%s:1111 FLANNEL_NETWORK=100.65.0.0/16 flynn-host bootstrap --json --min-hosts=%d --peer-ips=%s --job-timeout=120 /etc/flynn-bootstrap.json",
-			c.ClusterDomain, c.ControllerKey, inst.IP, len(instances), strings.Join(ips, ","),
+			"CLUSTER_DOMAIN=%s CONTROLLER_KEY=%s DISCOVERD=%s:1111 FLANNEL_NETWORK=100.65.0.0/16 flynn-host bootstrap --json --min-hosts=%d --peer-ips=%s --job-timeout=120 --admin-email admin@%s --admin-password flynn-dev /etc/flynn-bootstrap.json",
+			c.ClusterDomain, c.ControllerKey, inst.IP, len(instances), strings.Join(ips, ","), c.ClusterDomain,
 		)
 		cmdErr = inst.Run(command, &Streams{Stdout: wr, Stderr: c.out})
 		wr.Close()

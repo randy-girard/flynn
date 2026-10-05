@@ -12,10 +12,11 @@ import (
 // releases during flynn-host update so older clusters pick up AUTH_KEY /
 // CONTROLLER_KEY / DISCOVERD_AUTH_KEY without a manual env:set.
 type ClusterSecrets struct {
-	ControllerKey    string
-	DiscoverdAuthKey string
-	AccessTokenKey   string
-	HostAuthKey      string
+	ControllerKey         string
+	DiscoverdAuthKey      string
+	AccessTokenKey        string
+	AccessTokenSigningKey string
+	HostAuthKey           string
 }
 
 // SeedAccessTokenPair loads gitreceive's access-token keypair into the
@@ -53,6 +54,9 @@ func LoadClusterSecrets(client controller.Client) ClusterSecrets {
 			}
 			if s.AccessTokenKey == "" {
 				s.AccessTokenKey = rel.Env["ACCESS_TOKEN_KEY"]
+			}
+			if s.AccessTokenSigningKey == "" {
+				s.AccessTokenSigningKey = firstNonEmpty(rel.Env["ACCESS_TOKEN_SIGNING_KEY"], rel.Env["ACCESS_TOKEN_PRIVATE_KEY"])
 			}
 			if s.HostAuthKey == "" {
 				s.HostAuthKey = rel.Env["FLYNN_HOST_AUTH_KEY"]
@@ -107,6 +111,7 @@ func EnsureReleaseAuthEnv(appName string, env map[string]string, s ClusterSecret
 	case "controller":
 		changed = setIfEmpty(env, "AUTH_KEY", s.ControllerKey) || changed
 		changed = setIfEmpty(env, "ACCESS_TOKEN_KEY", s.AccessTokenKey) || changed
+		changed = setIfEmpty(env, "ACCESS_TOKEN_SIGNING_KEY", s.AccessTokenSigningKey) || changed
 		changed = setIfEmpty(env, "FLYNN_HOST_AUTH_KEY", s.HostAuthKey) || changed
 		return changed
 	case "blobstore", "tarreceive":

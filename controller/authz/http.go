@@ -252,6 +252,11 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		return rkCluster, "", ""
 	case "whoami", "tokens", "domains":
 		return rkUserSession, "", ""
+	case "users":
+		if len(parts) == 1 && m == http.MethodPost {
+			return rkUserSession, "", ""
+		}
+		return rkCluster, "", ""
 	case "handles":
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkUserSession, "", ""

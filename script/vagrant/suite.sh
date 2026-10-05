@@ -1392,7 +1392,7 @@ configure_node_dns() {
   for i in "${!NODE_IPS[@]}"; do
     ip="${NODE_IPS[$i]}"
     if [[ "${i}" -eq 0 ]]; then
-      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} www.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${BUILDPACK_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
+      hosts_body+="${ip} ${CLUSTER_DOMAIN} controller.${CLUSTER_DOMAIN} auth.${CLUSTER_DOMAIN} git.${CLUSTER_DOMAIN} images.${CLUSTER_DOMAIN} dashboard.${CLUSTER_DOMAIN} www.${CLUSTER_DOMAIN} discovery.${CLUSTER_DOMAIN} status.${CLUSTER_DOMAIN} ${APP_NAME}.${CLUSTER_DOMAIN} ${BUILDPACK_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_APP_NAME}.${CLUSTER_DOMAIN} ${DOCKER_PUSH_APP_NAME}.${CLUSTER_DOMAIN}"$'\n'
     else
       hosts_body+="${ip} ${CLUSTER_DOMAIN}"$'\n'
     fi
@@ -2577,16 +2577,26 @@ flynn-host cli-add-command
 EOF
   )"
   if [[ -z "${add_cmd}" && -f "${WORK_DIR}/bootstrap.log" ]]; then
-    add_cmd="$(grep -Eo 'flynn cluster(:add| add).*' "${WORK_DIR}/bootstrap.log" | tail -1 || true)"
+    add_cmd="$(grep -Eo 'flynn cluster(:add| add) [^$]+' "${WORK_DIR}/bootstrap.log" | grep -v login | tail -1 || true)"
   fi
   if [[ -z "${add_cmd}" ]]; then
     echo "could not find 'flynn cluster:add' command after bootstrap" >&2
     return 1
   fi
   add_cmd="$(force_cluster_add_cmd "${add_cmd}")"
+  local admin_email="${FLYNN_ADMIN_EMAIL:-admin@${CLUSTER_DOMAIN}}"
+  local admin_password="${FLYNN_ADMIN_PASSWORD:-flynn-dev}"
   node_root_script node1 <<EOF
 set -euo pipefail
 ${add_cmd}
+if [[ -f /etc/flynn/admin.env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source /etc/flynn/admin.env
+  set +a
+fi
+flynn login --email "${admin_email}" --password "${admin_password}"
+flynn whoami | grep -qi '^email:'
 flynn cluster | grep -q '^default[[:space:]]'
 # Controller TLS pin must match; a stale pin from a prior bootstrap fails here.
 flynn apps >/dev/null
@@ -3402,7 +3412,14 @@ fi
   --peer-ips "${PEER_IPS}" \
   --timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
   --job-timeout "${BOOTSTRAP_JOB_TIMEOUT}" \
+  --admin-email "${FLYNN_ADMIN_EMAIL:-admin@${CLUSTER_DOMAIN}}" \
+  --admin-password "${FLYNN_ADMIN_PASSWORD:-flynn-dev}" \
   ${extra_args}
+umask 077
+cat > /etc/flynn/admin.env <<ADMEOF
+FLYNN_ADMIN_EMAIL=${FLYNN_ADMIN_EMAIL:-admin@${CLUSTER_DOMAIN}}
+FLYNN_ADMIN_PASSWORD=${FLYNN_ADMIN_PASSWORD:-flynn-dev}
+ADMEOF
 EOF
   local boot_rc=$?
   set -e
@@ -6093,6 +6110,8 @@ step_cli_functions() {
 
   cli_probe "${label}" "cli-apps" "${APP_NAME}" \
     flynn1 apps || failed=1
+  cli_probe "${label}" "cli-whoami" "@|email:" \
+    flynn1 whoami || failed=1
   cli_probe "${label}" "cli-info" "${APP_NAME}|Git URL|Web URL" \
     flynn1 -a "${APP_NAME}" info || failed=1
   cli_probe "${label}" "cli-ps" "web" \

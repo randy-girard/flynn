@@ -33,6 +33,12 @@ need 'unknown_error|connection refused' \
   "cli_probe and cli_run_job must retry Flynn unknown_error from plugin dump/topics jobs"
 need 'flynn1 apps' \
   "CLI step must list apps through the controller"
+need 'cli-whoami' \
+  "CLI step must print the logged-in identity"
+need 'flynn1 whoami' \
+  "CLI step must call flynn whoami"
+need 'auth\.\$\{CLUSTER_DOMAIN\}' \
+  "smoke /etc/hosts must include auth.<domain> for cluster login"
 need 'cli-ps' \
   "CLI step must list jobs"
 need 'cli-scale' \

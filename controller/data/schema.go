@@ -1267,6 +1267,35 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`CREATE UNIQUE INDEX isolate_deploys ON deployments (app_id)
     WHERE finished_at IS NULL AND started_at IS NOT NULL`,
 	)
+	migrations.Add(70,
+		`CREATE TABLE oauth_codes (
+			code text PRIMARY KEY,
+			client_id text NOT NULL DEFAULT '',
+			redirect_uri text NOT NULL,
+			code_challenge text NOT NULL DEFAULT '',
+			user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			expires_at timestamptz NOT NULL,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			nonce text,
+			scopes text
+		)`,
+		`CREATE INDEX oauth_codes_expires_idx ON oauth_codes (expires_at)`,
+		`CREATE TABLE oauth_refresh_tokens (
+			token text PRIMARY KEY,
+			user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			client_id text NOT NULL DEFAULT '',
+			created_at timestamptz NOT NULL DEFAULT now(),
+			expires_at timestamptz NOT NULL
+		)`,
+		`CREATE INDEX oauth_refresh_tokens_expires_idx ON oauth_refresh_tokens (expires_at)`,
+		`CREATE TABLE oauth_sessions (
+			token text PRIMARY KEY,
+			user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			expires_at timestamptz NOT NULL
+		)`,
+		`CREATE INDEX oauth_sessions_expires_idx ON oauth_sessions (expires_at)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

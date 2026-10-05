@@ -58,6 +58,45 @@ func ValidateHandle(handle string) error {
 	return nil
 }
 
+// HandleFromEmail derives the internal slug stored for a user. Sign-in is
+// email-only; this value is not a login identifier.
+func HandleFromEmail(email string) string {
+	email = strings.ToLower(strings.TrimSpace(email))
+	local, domain, _ := strings.Cut(email, "@")
+	s := slugHandlePart(local)
+	if err := ValidateHandle(s); err == nil {
+		return s
+	}
+	s = slugHandlePart(local + "-" + domain)
+	if err := ValidateHandle(s); err == nil {
+		return s
+	}
+	return "user"
+}
+
+func slugHandlePart(s string) string {
+	var b strings.Builder
+	lastDash := true
+	for i := 0; i < len(s) && b.Len() < 39; i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
+			b.WriteByte(c)
+			lastDash = false
+		case c == '.' || c == '_' || c == '-' || c == '+':
+			if !lastDash && b.Len() > 0 {
+				b.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if len(out) > 39 {
+		out = strings.Trim(out[:39], "-")
+	}
+	return out
+}
+
 // EffectiveLimits applies an explicit row, otherwise hosted free-tier defaults
 // or self-hosted unlimited. Zero or negative explicit values are errors.
 func EffectiveLimits(mode string, explicit *Limits) (Limits, error) {
@@ -153,6 +192,7 @@ func CheckPassword(hash, password string) bool {
 var reservedLabels = map[string]struct{}{
 	"dashboard":  {},
 	"controller": {},
+	"auth":       {},
 	"status":     {},
 	"blobstore":  {},
 	"git":        {},

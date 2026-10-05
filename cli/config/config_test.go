@@ -1,13 +1,17 @@
 package config
 
 import (
+	"encoding/base64"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	v1controller "github.com/randy-girard/flynn/controller/client/v1"
+	"golang.org/x/oauth2"
 )
 
 func TestDefaultPathHonorsFLYNNRC(t *testing.T) {
@@ -144,6 +148,12 @@ func TestDockerPushHostAndTLSPin(t *testing.T) {
 		t.Fatalf("%q %v", host, err)
 	}
 
+	c.Name = "prod"
+	c.ControllerURL = "https://controller.example"
+	if _, err := c.Client(); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("missing login: %v", err)
+	}
+	c.Key = "flynn_pat_abc"
 	c.TLSPin = "not-base64!!!"
 	if _, err := c.Client(); err == nil || !strings.Contains(err.Error(), "tls pin") {
 		t.Fatalf("bad pin: %v", err)
@@ -180,6 +190,10 @@ func TestCAClientOmitsKey(t *testing.T) {
 	if v1.Key != "" {
 		t.Fatalf("CAClient must not send the cluster key, got %q", v1.Key)
 	}
+	if _, err := c.Client(); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("cluster key must not authenticate Client(): %v", err)
+	}
+	c.Key = "flynn_pat_abc"
 	cli, err := c.Client()
 	if err != nil {
 		t.Fatal(err)
@@ -188,11 +202,63 @@ func TestCAClientOmitsKey(t *testing.T) {
 	if !ok {
 		t.Fatalf("%T", cli)
 	}
-	if v1c.Key != "cluster-secret" {
+	if v1c.Key != "flynn_pat_abc" {
 		t.Fatalf("Client key=%q", v1c.Key)
 	}
 	if _, err := (&Cluster{ControllerURL: "https://c", TLSPin: "not-base64"}).CAClient(); err == nil {
 		t.Fatal("invalid pin must fail")
+	}
+}
+
+func TestClientUsesPerClusterCachedTokens(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	issued := time.Now().UTC()
+	makeTok := func(access, audience string) *oauth2.Token {
+		return (&oauth2.Token{
+			AccessToken:  access,
+			RefreshToken: "r-" + access,
+			TokenType:    "Bearer",
+			Expiry:       issued.Add(time.Hour),
+		}).WithExtra(map[string]interface{}{
+			"refresh_token_expiry":     issued.Add(24 * time.Hour),
+			"refresh_token_issue_time": issued,
+			"audience":                 audience,
+		})
+	}
+	cache := TokenCache()
+	if err := cache.SetToken("alpha", "flynn-cli", makeTok("a-tok", "https://controller.a")); err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.SetToken("beta", "flynn-cli", makeTok("b-tok", "https://controller.b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&Cluster{Name: "alpha", ControllerURL: "https://controller.a"}).Client(); err != nil {
+		t.Fatalf("alpha: %v", err)
+	}
+	if _, err := (&Cluster{Name: "beta", ControllerURL: "https://controller.b"}).Client(); err != nil {
+		t.Fatalf("beta: %v", err)
+	}
+	if _, err := (&Cluster{Name: "gamma", ControllerURL: "https://controller.g"}).Client(); err == nil || !strings.Contains(err.Error(), "not logged in") {
+		t.Fatalf("gamma must require login: %v", err)
+	}
+}
+
+func TestHTTPClientUsesTLSPin(t *testing.T) {
+	hc, err := (&Cluster{}).HTTPClient()
+	if err != nil || hc != http.DefaultClient {
+		t.Fatalf("no pin: %v %v", hc, err)
+	}
+	c := &Cluster{TLSPin: "not-base64!!!", ControllerURL: "https://controller.example"}
+	if _, err := c.HTTPClient(); err == nil || !strings.Contains(err.Error(), "tls pin") {
+		t.Fatalf("bad pin: %v", err)
+	}
+	c.TLSPin = base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+	hc, err = c.HTTPClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hc == http.DefaultClient {
+		t.Fatal("pin must not use DefaultClient")
 	}
 }
 
@@ -210,5 +276,20 @@ func TestMarshalRoundTrip(t *testing.T) {
 	st, err := os.Stat(path)
 	if err != nil || st.Size() != 0 {
 		t.Fatalf("empty config must write an empty file: %v %v", st, err)
+	}
+}
+
+func TestAuthURL(t *testing.T) {
+	if got := AuthURL("demo.localflynn.com"); got != "https://auth.demo.localflynn.com" {
+		t.Fatalf("%s", got)
+	}
+	if AuthURL("  ") != "" || AuthURL("") != "" {
+		t.Fatal("empty domain")
+	}
+	if got := AuthURLFromController("https://controller.demo.localflynn.com"); got != "https://auth.demo.localflynn.com" {
+		t.Fatalf("%s", got)
+	}
+	if got := AuthURLFromController("https://auth.demo.localflynn.com"); got != "https://auth.demo.localflynn.com" {
+		t.Fatalf("passthrough %s", got)
 	}
 }

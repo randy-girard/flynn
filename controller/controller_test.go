@@ -105,6 +105,7 @@ func (s *S) SetUpSuite(c *C) {
 		lc:               s.flac,
 		keys:             []string{authKey},
 		tokenKey:         &priv.PublicKey,
+		tokenSigner:      s.tokenSigner,
 		tokenMaxValidity: time.Hour,
 		caCert:           s.caCert,
 	}

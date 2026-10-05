@@ -41,7 +41,14 @@ type tokenJSON struct {
 	RefreshTokenIssueTime time.Time `json:"refresh_token_issue_time"`
 }
 
-func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.Token, error) {
+func httpDoer(c *http.Client) *http.Client {
+	if c != nil {
+		return c
+	}
+	return http.DefaultClient
+}
+
+func RefreshToken(hc *http.Client, c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.Token, error) {
 	v := make(url.Values)
 	v.Set("client_id", c.ClientID)
 	v.Set("grant_type", "refresh_token")
@@ -49,12 +56,28 @@ func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.T
 	if audience != "" {
 		v.Set("audience", audience)
 	}
-	req, err := http.NewRequest("POST", c.Endpoint.TokenURL, strings.NewReader(v.Encode()))
+	return postToken(hc, c.Endpoint.TokenURL, v, audience)
+}
+
+func PasswordToken(hc *http.Client, tokenURL, clientID, username, password, audience string) (*oauth2.Token, error) {
+	v := make(url.Values)
+	v.Set("grant_type", "password")
+	v.Set("client_id", clientID)
+	v.Set("username", username)
+	v.Set("password", password)
+	if audience != "" {
+		v.Set("audience", audience)
+	}
+	return postToken(hc, tokenURL, v, audience)
+}
+
+func postToken(hc *http.Client, tokenURL string, v url.Values, audience string) (*oauth2.Token, error) {
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(v.Encode()))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	res, err := http.DefaultClient.Do(req)
+	res, err := httpDoer(hc).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -63,7 +86,7 @@ func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.T
 	if err != nil {
 		return nil, &url.Error{
 			Op:  "POST",
-			URL: c.Endpoint.TokenURL,
+			URL: tokenURL,
 			Err: fmt.Errorf("error reading body: %s", err),
 		}
 	}
@@ -77,7 +100,7 @@ func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.T
 		}
 		return nil, &url.Error{
 			Op:  "POST",
-			URL: c.Endpoint.TokenURL,
+			URL: tokenURL,
 			Err: fmt.Errorf("unexpected status %d", res.StatusCode),
 		}
 	}
@@ -86,7 +109,7 @@ func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.T
 	if err := json.Unmarshal(body, &tj); err != nil {
 		return nil, &url.Error{
 			Op:  "POST",
-			URL: c.Endpoint.TokenURL,
+			URL: tokenURL,
 			Err: fmt.Errorf("error decoding token JSON: %s", err),
 		}
 	}
@@ -102,7 +125,7 @@ func RefreshToken(c *oauth2.Config, t *oauth2.Token, audience string) (*oauth2.T
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, &url.Error{
 			Op:  "POST",
-			URL: c.Endpoint.TokenURL,
+			URL: tokenURL,
 			Err: fmt.Errorf("error decoding raw token JSON: %s", err),
 		}
 	}
@@ -123,8 +146,14 @@ type IssuerMetadata struct {
 	AudiencesEndpoint     string `json:"audiences_endpoint"`
 }
 
-func GetMetadata(u string) (*IssuerMetadata, error) {
-	res, err := http.Get(u)
+func GetMetadata(hc *http.Client, u string) (*IssuerMetadata, error) {
+	c := httpDoer(hc)
+	if c.Timeout == 0 || c.Timeout > time.Second {
+		clone := *c
+		clone.Timeout = time.Second
+		c = &clone
+	}
+	res, err := c.Get(u)
 	if err != nil {
 		return nil, err
 	}

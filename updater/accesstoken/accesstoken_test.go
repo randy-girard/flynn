@@ -66,6 +66,9 @@ func TestUpdateControllerAddsPublicKey(t *testing.T) {
 	if env["ACCESS_TOKEN_KEY"] == "" {
 		t.Fatal("expected public key")
 	}
+	if env["ACCESS_TOKEN_SIGNING_KEY"] == "" {
+		t.Fatal("expected signing key on controller")
+	}
 }
 
 func TestUpdateRepairsMismatchedGitreceiveKeypair(t *testing.T) {
@@ -100,7 +103,7 @@ func TestUpdateNoChangeWhenConfigured(t *testing.T) {
 	if updated, err := Update("gitreceive", env); err != nil || updated {
 		t.Fatalf("gitreceive: updated=%v err=%v", updated, err)
 	}
-	if updated, err := Update("controller", map[string]string{"ACCESS_TOKEN_KEY": pub}); err != nil || updated {
+	if updated, err := Update("controller", map[string]string{"ACCESS_TOKEN_KEY": pub, "ACCESS_TOKEN_SIGNING_KEY": priv}); err != nil || updated {
 		t.Fatalf("controller: updated=%v err=%v", updated, err)
 	}
 }
@@ -121,5 +124,8 @@ func TestUpdateControllerSyncsToGitreceivePair(t *testing.T) {
 	}
 	if env["ACCESS_TOKEN_KEY"] != wantPub {
 		t.Fatalf("controller key = %q, want %q", env["ACCESS_TOKEN_KEY"], wantPub)
+	}
+	if env["ACCESS_TOKEN_SIGNING_KEY"] != pair.private {
+		t.Fatalf("controller signing key missing")
 	}
 }

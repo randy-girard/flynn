@@ -6,15 +6,18 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/mitchellh/go-homedir"
 	"github.com/randy-girard/flynn/cli/login/tokensource"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/pinned"
 	tarclient "github.com/randy-girard/flynn/tarreceive/client"
 	"golang.org/x/oauth2"
 )
@@ -48,19 +51,101 @@ func (c *Cluster) pinnedControllerConfig() (controller.Config, error) {
 	return controller.Config{Pin: pin}, nil
 }
 
+func IsPersonalAccessToken(key string) bool {
+	return strings.HasPrefix(strings.TrimSpace(key), "flynn_pat_")
+}
+
+func (c *Cluster) issuerURL() string {
+	if strings.TrimSpace(c.OAuthURL) != "" {
+		return strings.TrimSpace(c.OAuthURL)
+	}
+	return strings.TrimSpace(c.ControllerURL)
+}
+
+// HTTPClient returns an HTTP client that trusts this cluster's TLS pin, the
+// same way controller API calls do. Login and token refresh must use this;
+// macOS rejects the Flynn CA as "not standards compliant" on DefaultClient.
+func (c *Cluster) HTTPClient() (*http.Client, error) {
+	if c == nil || strings.TrimSpace(c.TLSPin) == "" {
+		return http.DefaultClient, nil
+	}
+	pin, err := base64.StdEncoding.DecodeString(c.TLSPin)
+	if err != nil {
+		return nil, fmt.Errorf("error decoding tls pin: %s", err)
+	}
+	d := &pinned.Config{Pin: pin}
+	return &http.Client{Transport: &http.Transport{DialTLS: d.DialOnce}}, nil
+}
+
+func hostnameFromURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
+// AuthURL is the cluster login issuer (OAuth), https://auth.<domain>.
+func AuthURL(domain string) string {
+	domain = strings.TrimSpace(domain)
+	if domain == "" {
+		return ""
+	}
+	return "https://auth." + domain
+}
+
+// AuthURLFromController maps https://controller.<domain> to https://auth.<domain>.
+func AuthURLFromController(controllerURL string) string {
+	host := hostnameFromURL(controllerURL)
+	if strings.HasPrefix(host, "controller.") {
+		return "https://auth." + strings.TrimPrefix(host, "controller.")
+	}
+	if host != "" {
+		return "https://" + host
+	}
+	return strings.TrimSpace(controllerURL)
+}
+
+func (c *Cluster) oauthContext() (context.Context, *http.Client, error) {
+	hc, err := c.HTTPClient()
+	if err != nil {
+		return nil, nil, err
+	}
+	return context.WithValue(context.Background(), oauth2.HTTPClient, hc), hc, nil
+}
+
+func (c *Cluster) notLoggedIn() error {
+	name := strings.TrimSpace(c.Name)
+	if name == "" {
+		name = c.ControllerURL
+	}
+	return fmt.Errorf("not logged in to cluster %q; run flynn login", name)
+}
+
 func (c *Cluster) Client() (controller.Client, error) {
-	if c.OAuthURL != "" {
-		ts, err := tokensource.New(c.OAuthURL, c.ControllerURL, TokenCache())
+	if IsPersonalAccessToken(c.Key) {
+		cfg, err := c.pinnedControllerConfig()
 		if err != nil {
 			return nil, err
 		}
-		return controller.NewClientWithHTTP(c.ControllerURL, "", oauth2.NewClient(context.Background(), ts))
+		return controller.NewClientWithConfig(c.ControllerURL, c.Key, cfg)
 	}
-	cfg, err := c.pinnedControllerConfig()
+	issuer := c.issuerURL()
+	if issuer == "" {
+		return nil, c.notLoggedIn()
+	}
+	ctx, hc, err := c.oauthContext()
 	if err != nil {
 		return nil, err
 	}
-	return controller.NewClientWithConfig(c.ControllerURL, c.Key, cfg)
+	ts, err := tokensource.New(c.Name, issuer, c.ControllerURL, TokenCache(), hc)
+	if err != nil {
+		if errors.Is(err, tokensource.ErrTokenNotFound) {
+			return nil, c.notLoggedIn()
+		}
+		return nil, err
+	}
+	return controller.NewClientWithHTTP(c.ControllerURL, "", oauth2.NewClient(ctx, ts))
 }
 
 // CAClient is an unauthenticated controller client for GET /ca-cert. That
@@ -78,23 +163,33 @@ func (c *Cluster) TarClient() (*tarclient.Client, error) {
 	if c.ImageURL == "" {
 		return nil, errors.New("cluster: missing ImageURL .flynnrc config")
 	}
-	if c.OAuthURL != "" {
-		ts, err := tokensource.New(c.OAuthURL, c.ControllerURL, TokenCache())
-		if err != nil {
-			return nil, err
+	if IsPersonalAccessToken(c.Key) {
+		var pin []byte
+		if c.TLSPin != "" {
+			var err error
+			pin, err = base64.StdEncoding.DecodeString(c.TLSPin)
+			if err != nil {
+				return nil, fmt.Errorf("error decoding tls pin: %s", err)
+			}
 		}
-		return tarclient.NewClientWithHTTP(c.ImageURL, oauth2.NewClient(context.Background(), ts)), nil
+		return tarclient.NewClientWithConfig(c.ImageURL, c.Key, tarclient.Config{Pin: pin}), nil
 	}
-
-	var pin []byte
-	if c.TLSPin != "" {
-		var err error
-		pin, err = base64.StdEncoding.DecodeString(c.TLSPin)
-		if err != nil {
-			return nil, fmt.Errorf("error decoding tls pin: %s", err)
+	issuer := c.issuerURL()
+	if issuer == "" {
+		return nil, c.notLoggedIn()
+	}
+	ctx, hc, err := c.oauthContext()
+	if err != nil {
+		return nil, err
+	}
+	ts, err := tokensource.New(c.Name, issuer, c.ControllerURL, TokenCache(), hc)
+	if err != nil {
+		if errors.Is(err, tokensource.ErrTokenNotFound) {
+			return nil, c.notLoggedIn()
 		}
+		return nil, err
 	}
-	return tarclient.NewClientWithConfig(c.ImageURL, c.Key, tarclient.Config{Pin: pin}), nil
+	return tarclient.NewClientWithHTTP(c.ImageURL, oauth2.NewClient(ctx, ts)), nil
 }
 
 func (c *Cluster) DockerPushHost() (string, error) {
@@ -226,7 +321,7 @@ func (c *Config) SetDefault(name string) bool {
 }
 
 func (c *Config) SaveTo(path string) error {
-	// SEC-022: ~/.flynnrc holds cluster keys; never inherit the process umask
+	// SEC-022: ~/.flynnrc holds TLS pins and optional PATs; never inherit the process umask
 	// (os.Create is 0666 → typically 0644). OpenFile 0600 covers new files;
 	// chmod tightens an existing world-readable config on the next save.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)

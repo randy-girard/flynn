@@ -26,15 +26,15 @@ those apps as system or plugin apps.
 
 `flynn apps` is not a dump of every app on the cluster.
 
-The default `flynn cluster:add` line uses the controller cluster key. That
-key is **cluster-admin**. A cluster-admin `GET /apps` used to return the full catalog, including bootstrap apps (`controller`,
+A logged-in cluster administrator (`flynn login`) listing `GET /apps` used to
+return the full catalog, including bootstrap apps (`controller`,
 `postgres`, `router`, `gitreceive`, `blobstore`, …) and plugin apps. The
-default listing now hides those so a leaked or casually shared cluster key
+default listing now hides those so a leaked or casually shared credential
 does not advertise cluster internals. Operators who need the catalog pass
 `flynn apps --all` (the controller query is `GET /apps?all=true`).
 `flynn-host` and other operator tools still request that full catalog.
 
-A **user token** (`flynn login`, `flynn token:create`, `user:token`) may
+A **user token** (`flynn login`, `flynn token:create`) may
 call `GET /apps`, but the handler returns only apps the user owns
 (`owner_account=user:<id>`) or is a collaborator on. App-scoped dashboard
 grants cannot list apps at all (`403`). `--all` does not expand a user

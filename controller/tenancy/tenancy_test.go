@@ -19,6 +19,18 @@ func TestHandleRules(t *testing.T) {
 	}
 }
 
+func TestHandleFromEmail(t *testing.T) {
+	if got := HandleFromEmail("Ada@Example.com"); got != "ada" {
+		t.Fatalf("%s", got)
+	}
+	if got := HandleFromEmail("grace.hopper@example.com"); got != "grace-hopper" {
+		t.Fatalf("%s", got)
+	}
+	if err := ValidateHandle(HandleFromEmail("a@example.com")); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestQuotas(t *testing.T) {
 	hosted, err := EffectiveLimits(ModeHosted, nil)
 	if err != nil || *hosted.MaxApps != 5 || *hosted.MaxMemoryMB != 512 || *hosted.MaxCollaborators != 2 {
@@ -64,7 +76,7 @@ func TestHostnamesAndTXT(t *testing.T) {
 	if err := HostnameAllowed(ModeHosted, "myapp.cluster.test", "myapp", "cluster.test", nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, reserved := range []string{"dashboard.cluster.test", "controller.cluster.test", "status.cluster.test", "blobstore.cluster.test", "git.cluster.test", "www.cluster.test", "cluster.test"} {
+	for _, reserved := range []string{"dashboard.cluster.test", "controller.cluster.test", "auth.cluster.test", "status.cluster.test", "blobstore.cluster.test", "git.cluster.test", "www.cluster.test", "cluster.test"} {
 		if err := HostnameAllowed(ModeHosted, reserved, "myapp", "cluster.test", verified); err == nil {
 			t.Fatalf("reserved %s", reserved)
 		}

@@ -64,6 +64,13 @@ var subAliases = map[string]map[string]string{
 		"network-policy": "tenancy:network-policy",
 	},
 	"user": {
+		"list":            "user:list",
+		"info":            "user:info",
+		"create":          "user:create",
+		"disable":         "user:disable",
+		"enable":          "user:enable",
+		"admin":           "user:admin",
+		"token":           "user:token",
 		"bootstrap-admin": "user:bootstrap-admin",
 	},
 	"plugin": {

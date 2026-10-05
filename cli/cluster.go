@@ -20,10 +20,10 @@ import (
 	"github.com/cheggaaa/pb"
 	"github.com/flynn/go-docopt"
 	cfg "github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/cli/login"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/backup"
-	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/term"
 )
@@ -39,9 +39,9 @@ it does not contact a controller.
 	register("cluster", runClusterList, clusterListUsage)
 	register("cluster:list", runClusterList, clusterListUsage)
 	register("cluster:add", runClusterAdd, `
-usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] <cluster-name> <domain> [<key>]
+usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] [--email <email>] [--password <password>] <cluster-name> <domain>
 
-Add <cluster-name> to the ~/.flynnrc configuration file.
+Add <cluster-name> to the ~/.flynnrc configuration file. This stores the domain, TLS pin, and URLs. It does not store a cluster key. Log in with flynn login before talking to the controller, or pass --email/--password (or --token for a personal access token).
 
 Options:
 	-f, --force               force add cluster
@@ -53,12 +53,15 @@ Options:
 	--docker-push-url=<url>   [DEPRECATED] Docker push URL
 	--docker                  [DEPRECATED] configure Docker to push to the cluster
 	-p, --tls-pin=<tlspin>    SHA256 of the cluster's TLS cert
-	--token=<token>           Personal access token to use instead of the cluster key
+	--token=<token>           Personal access token (optional; for CI)
+	--email=<email>           log in as this user after adding the cluster
+	--password=<password>     password for --email (or FLYNN_PASSWORD)
 
 Examples:
 
-	$ flynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default dev.localflynn.com e09dc5301d72be755a3d666f617c4600
+	$ flynn cluster:add -p KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs= default dev.localflynn.com
 	Cluster "default" added.
+	$ flynn login --email ada@example.com
 `)
 	register("cluster:remove", runClusterRemove, `
 usage: flynn cluster:remove <cluster-name>
@@ -180,20 +183,15 @@ func runClusterAdd(args *docopt.Args) error {
 	if err := readConfig(); err != nil {
 		return err
 	}
-	key := strings.TrimSpace(args.String["<key>"])
-	if tok := strings.TrimSpace(args.String["--token"]); tok != "" {
-		key = tok
-	}
-	if key == "" {
-		return errors.New("cluster:add requires a cluster key or --token")
-	}
 	s := &cfg.Cluster{
 		Name:          args.String["<cluster-name>"],
-		Key:           key,
 		GitURL:        args.String["--git-url"],
 		ImageURL:      args.String["--image-url"],
 		DockerPushURL: args.String["--docker-push-url"],
 		TLSPin:        args.String["--tls-pin"],
+	}
+	if tok := strings.TrimSpace(args.String["--token"]); tok != "" {
+		s.Key = tok
 	}
 	dash := strings.TrimSpace(args.String["--dashboard-url"])
 	if dash != "" {
@@ -205,6 +203,7 @@ func runClusterAdd(args *docopt.Args) error {
 	domain = strings.TrimPrefix(domain, "https://controller.")
 
 	s.ControllerURL = "https://controller." + domain
+	s.OAuthURL = cfg.AuthURL(domain)
 	if s.DashboardURL == "" {
 		s.DashboardURL = "https://dashboard." + domain
 	}
@@ -268,17 +267,23 @@ func runClusterAdd(args *docopt.Args) error {
 		}
 	}
 
-	// GET /ca-cert is unauthenticated. Prove a cluster key before writing
-	// ~/.flynnrc so setup does not print "Cluster added" and then 401 on
-	// flynn apps. Personal access tokens are scoped and may not list apps.
-	if args.String["--token"] == "" {
-		if err := verifyClusterKey(s); err != nil {
-			return err
-		}
-	}
-
 	if err := config.SaveTo(configPath()); err != nil {
 		return err
+	}
+
+	email := firstNonEmpty(strings.TrimSpace(args.String["--email"]), strings.TrimSpace(os.Getenv("FLYNN_EMAIL")))
+	password := firstNonEmpty(strings.TrimSpace(args.String["--password"]), os.Getenv("FLYNN_PASSWORD"))
+	if email != "" || password != "" {
+		creds := login.Credentials{Email: email, Password: password}
+		if err := creds.FillMissing(term.IsTerminal(os.Stdin.Fd())); err != nil {
+			return err
+		}
+		if err := login.LoginCluster(s, creds, false); err != nil {
+			return err
+		}
+		if err := config.SaveTo(configPath()); err != nil {
+			return err
+		}
 	}
 
 	if setDefault {
@@ -286,21 +291,22 @@ func runClusterAdd(args *docopt.Args) error {
 	} else {
 		log.Printf("Cluster %q added.", s.Name)
 	}
+	if s.Key == "" && email == "" {
+		log.Printf("Log in with: flynn -c %s login", s.Name)
+	}
+	if hint := login.AuthHostsHint(s.OAuthURL, s.ControllerURL); hint != "" {
+		log.Print(hint)
+	}
 	return nil
 }
 
-func verifyClusterKey(s *cfg.Cluster) error {
-	client, err := s.Client()
-	if err != nil {
-		return err
-	}
-	if _, err := client.AppList(); err != nil {
-		if httpclient.IsUnauthorized(err) {
-			return fmt.Errorf("controller rejected cluster key (HTTP 401) on GET /apps. GET /ca-cert does not check the key. Use AUTH_KEY from the running controller job (flynn-host cli-add-command), not a leftover /etc/flynn/host.json secret")
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
 		}
-		log.Printf("warning: could not list apps after cluster:add: %v", err)
 	}
-	return nil
+	return ""
 }
 
 func writeCACert(c controller.Client, name string) (string, error) {
@@ -479,8 +485,8 @@ func runClusterMigrateDomain(args *docopt.Args) error {
 				if cluster.DashboardURL == fmt.Sprintf("https://dashboard.%s", dm.OldDomain) {
 					cluster.DashboardURL = fmt.Sprintf("https://dashboard.%s", dm.Domain)
 				}
-				if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", dm.OldDomain) {
-					cluster.OAuthURL = fmt.Sprintf("https://dashboard.%s", dm.Domain)
+				if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", dm.OldDomain) || cluster.OAuthURL == fmt.Sprintf("https://controller.%s", dm.OldDomain) || cluster.OAuthURL == fmt.Sprintf("https://auth.%s", dm.OldDomain) || cluster.OAuthURL == "" {
+					cluster.OAuthURL = cfg.AuthURL(dm.Domain)
 				}
 				if err := config.SaveTo(configPath()); err != nil {
 					return fmt.Errorf("Error saving config: %s", err)
@@ -576,8 +582,8 @@ func refreshClusterLocalURLs(cluster *cfg.Cluster) error {
 	if cluster.DashboardURL == fmt.Sprintf("https://dashboard.%s", oldDomain) {
 		cluster.DashboardURL = fmt.Sprintf("https://dashboard.%s", domain)
 	}
-	if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", oldDomain) {
-		cluster.OAuthURL = fmt.Sprintf("https://dashboard.%s", domain)
+	if cluster.OAuthURL == fmt.Sprintf("https://dashboard.%s", oldDomain) || cluster.OAuthURL == fmt.Sprintf("https://controller.%s", oldDomain) || cluster.OAuthURL == fmt.Sprintf("https://auth.%s", oldDomain) || cluster.OAuthURL == "" {
+		cluster.OAuthURL = cfg.AuthURL(domain)
 	}
 	if err := config.SaveTo(configPath()); err != nil {
 		return fmt.Errorf("Error saving config: %s", err)

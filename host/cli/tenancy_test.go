@@ -8,7 +8,7 @@ import (
 )
 
 func TestTenancyHostCommandsRegistered(t *testing.T) {
-	for _, name := range []string{"tenancy:mode", "tenancy:network-policy", "user:bootstrap-admin"} {
+	for _, name := range []string{"tenancy:mode", "tenancy:network-policy", "user:bootstrap-admin", "user:create", "user:list", "user:admin"} {
 		if commands[name] == nil {
 			t.Fatalf("missing %s", name)
 		}

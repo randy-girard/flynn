@@ -7,11 +7,10 @@ set -euo pipefail
 # shellcheck source=../lib/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/common.sh"
 : "${CLUSTER_PIN:?}"
-: "${CLUSTER_KEY:?}"
 
 DOMAIN="${FLYNN_DEV_DOMAIN:-1.localflynn.com}"
 IP="${FLYNN_DEV_CLUSTER_IP:-192.168.57.20}"
-names="controller.${DOMAIN} status.${DOMAIN} git.${DOMAIN} dashboard.${DOMAIN} images.${DOMAIN} ${DOMAIN}"
+names="controller.${DOMAIN} auth.${DOMAIN} status.${DOMAIN} git.${DOMAIN} dashboard.${DOMAIN} images.${DOMAIN} ${DOMAIN}"
 mark="# flynn-vagrant-dev"
 line="${IP} ${names} ${mark}"
 
@@ -54,10 +53,13 @@ else
     flynn_bin="${ROOT}/build-dev/bin/flynn"
   fi
 fi
-"${flynn_bin}" cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}" "${CLUSTER_KEY}"
+"${flynn_bin}" cluster:add --force --default -p "${CLUSTER_PIN}" local "${DOMAIN}"
+admin_email="${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}"
+admin_password="${FLYNN_ADMIN_PASSWORD:-flynn-dev}"
+"${flynn_bin}" -c local login --email "${admin_email}" --password "${admin_password}"
 if ! "${flynn_bin}" -c local apps >/dev/null; then
-  echo "controller rejected the cluster key on GET /apps (cluster:add only checks TLS/CA)." >&2
-  echo "Re-run setup after pulling the latest script/vagrant/guest/creds.sh, or from the VM: sudo flynn-host cli-add-command" >&2
+  echo "controller rejected login on GET /apps." >&2
+  echo "Re-run setup after pulling the latest bootstrap admin flags, or from the VM: sudo flynn-host cli-add-command && flynn login" >&2
   exit 1
 fi
 

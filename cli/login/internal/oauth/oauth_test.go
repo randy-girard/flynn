@@ -62,17 +62,17 @@ func TestGetMetadata(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	meta, err := GetMetadata(srv.URL + "/ok")
+	meta, err := GetMetadata(nil, srv.URL+"/ok")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if meta.TokenEndpoint != "https://issuer.example/token" {
 		t.Fatalf("%+v", meta)
 	}
-	if _, err := GetMetadata(srv.URL + "/missing"); err == nil {
+	if _, err := GetMetadata(nil, srv.URL+"/missing"); err == nil {
 		t.Fatal("404 must fail")
 	}
-	if _, err := GetMetadata(srv.URL + "/bad-json"); err == nil {
+	if _, err := GetMetadata(nil, srv.URL+"/bad-json"); err == nil {
 		t.Fatal("invalid JSON must fail")
 	}
 }
@@ -110,7 +110,7 @@ func TestRefreshTokenSuccessAndErrors(t *testing.T) {
 	defer srv.Close()
 
 	cfg := &oauth2.Config{ClientID: "flynn-cli", Endpoint: oauth2.Endpoint{TokenURL: srv.URL + "/token"}}
-	tok, err := RefreshToken(cfg, &oauth2.Token{RefreshToken: "r1"}, "https://controller.example")
+	tok, err := RefreshToken(nil, cfg, &oauth2.Token{RefreshToken: "r1"}, "https://controller.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,14 +119,14 @@ func TestRefreshTokenSuccessAndErrors(t *testing.T) {
 	}
 
 	cfg.Endpoint.TokenURL = srv.URL + "/oauth-error"
-	_, err = RefreshToken(cfg, &oauth2.Token{RefreshToken: "r1"}, "")
+	_, err = RefreshToken(nil, cfg, &oauth2.Token{RefreshToken: "r1"}, "")
 	oauthErr, ok := err.(*Error)
 	if !ok || oauthErr.Code != "invalid_grant" {
 		t.Fatalf("oauth error: %v", err)
 	}
 
 	cfg.Endpoint.TokenURL = srv.URL + "/fail"
-	if _, err := RefreshToken(cfg, &oauth2.Token{RefreshToken: "r1"}, ""); err == nil {
+	if _, err := RefreshToken(nil, cfg, &oauth2.Token{RefreshToken: "r1"}, ""); err == nil {
 		t.Fatal("non-JSON error body must fail")
 	}
 }
@@ -138,5 +138,46 @@ func TestOAuthErrorString(t *testing.T) {
 	got := (Error{Code: "invalid_grant", Description: "revoked"}).Error()
 	if got != "invalid_grant: revoked" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPasswordToken(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Fatal(err)
+		}
+		if r.Form.Get("grant_type") != "password" || r.Form.Get("username") != "ada@example.com" || r.Form.Get("password") != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"access_token":             "a1",
+			"token_type":               "Bearer",
+			"refresh_token":            "r1",
+			"expires_in":               60,
+			"refresh_token_expires_in": 3600,
+			"audience":                 r.Form.Get("audience"),
+		})
+	}))
+	defer srv.Close()
+	tok, err := PasswordToken(nil, srv.URL, "flynn-cli", "ada@example.com", "secret", "https://controller.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tok.AccessToken != "a1" || tok.RefreshToken != "r1" {
+		t.Fatalf("%+v", tok)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestGetMetadataUsesProvidedClient(t *testing.T) {
+	hc := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, io.ErrUnexpectedEOF
+	})}
+	if _, err := GetMetadata(hc, "https://issuer.example/.well-known/oauth-authorization-server"); err == nil {
+		t.Fatal("custom client error must surface")
 	}
 }

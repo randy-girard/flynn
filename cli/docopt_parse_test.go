@@ -50,7 +50,7 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"resource:unexpose", "mysql"}, "<provider>", []string{"mysql"}},
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
-		{[]string{"cluster:add", "n", "d", "k"}, "<cluster-name>", []string{"n"}},
+		{[]string{"cluster:add", "n", "d"}, "<cluster-name>", []string{"n"}},
 		{[]string{"cluster:add", "--token", "flynn_pat_abc", "n", "d"}, "<cluster-name>", []string{"n"}},
 		{[]string{"apps:transfer", "myapp", "ada"}, "<app>", []string{"myapp"}},
 		{[]string{"account:quota:set", "--apps=5", "ada"}, "<handle>", []string{"ada"}},

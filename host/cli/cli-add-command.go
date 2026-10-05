@@ -72,8 +72,9 @@ func runCliAddCommand(args *docopt.Args, client *cluster.Client) error {
 		return err
 	}
 
-	fmt.Printf("Install the Flynn CLI (see https://flynn.io/docs/cli for instructions) and paste the line below into a terminal window:\n\n")
-	fmt.Printf("flynn cluster:add -p %v default %v %v\n", pin, domain, key)
+	fmt.Printf("Install the Flynn CLI (see https://flynn.io/docs/cli for instructions) and paste the lines below into a terminal window:\n\n")
+	fmt.Printf("flynn cluster:add -p %v default %v\n", pin, domain)
+	fmt.Printf("flynn login --email <admin@%v>\n", domain)
 
 	return nil
 }

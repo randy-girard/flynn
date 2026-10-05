@@ -8,6 +8,7 @@ import (
 	"errors"
 	"hash"
 	"net"
+	"time"
 
 	"github.com/randy-girard/flynn/pkg/dialer"
 )
@@ -32,15 +33,27 @@ var ErrPinFailure = errors.New("pinned: the peer leaf certificate did not match 
 
 // Dial establishes a TLS connection to addr and checks the peer leaf
 // certificate against the configured pin. The underlying type of the returned
-// net.Conn is a Conn.
+// net.Conn is a Conn. Hosts that do not resolve are retried for up to 30s.
 func (c *Config) Dial(network, addr string) (net.Conn, error) {
+	return c.dial(dialer.Retry.Dial, network, addr)
+}
+
+// DialOnce is Dial without the 30s retry loop. The Flynn CLI uses this so a
+// missing auth.<domain> /etc/hosts entry fails in a couple of seconds instead
+// of hanging flynn ps / flynn login.
+func (c *Config) DialOnce(network, addr string) (net.Conn, error) {
+	d := net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
+	return c.dial(d.Dial, network, addr)
+}
+
+func (c *Config) dial(dial func(network, addr string) (net.Conn, error), network, addr string) (net.Conn, error) {
 	var conf tls.Config
 	if c.Config != nil {
 		conf = *c.Config
 	}
 	conf.InsecureSkipVerify = true
 
-	cn, err := dialer.Retry.Dial(network, addr)
+	cn, err := dial(network, addr)
 	if err != nil {
 		return nil, err
 	}

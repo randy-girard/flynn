@@ -210,13 +210,13 @@ func (c *controllerAPI) CreateUser(ctx context.Context, w http.ResponseWriter, r
 		return
 	}
 	body.Email = strings.TrimSpace(strings.ToLower(body.Email))
-	body.Handle = strings.TrimSpace(strings.ToLower(body.Handle))
 	if body.Email == "" || !strings.Contains(body.Email, "@") {
 		httphelper.ValidationError(w, "email", "must be an email address")
 		return
 	}
+	body.Handle = tenancy.HandleFromEmail(body.Email)
 	if err := tenancy.ValidateHandle(body.Handle); err != nil {
-		httphelper.ValidationError(w, "handle", err.Error())
+		httphelper.ValidationError(w, "email", err.Error())
 		return
 	}
 	if body.ClusterAdmin && !c.requireClusterKey(ctx, w) {
@@ -290,25 +290,8 @@ func (c *controllerAPI) PatchUser(ctx context.Context, w http.ResponseWriter, re
 		return
 	}
 	if body.Handle != nil {
-		h := strings.TrimSpace(strings.ToLower(*body.Handle))
-		if err := tenancy.ValidateHandle(h); err != nil {
-			httphelper.ValidationError(w, "handle", err.Error())
-			return
-		}
-		if err := c.tenancy.DeleteHandle(u.Handle); err != nil {
-			respondWithError(w, err)
-			return
-		}
-		if err := c.tenancy.ReserveHandle(&ct.Handle{Handle: h, Account: "user:" + u.ID, Kind: "user"}); err != nil {
-			_ = c.tenancy.ReserveHandle(&ct.Handle{Handle: u.Handle, Account: "user:" + u.ID, Kind: "user"})
-			if err == data.ErrConflict {
-				httphelper.ConflictError(w, "handle is already taken")
-				return
-			}
-			respondWithError(w, err)
-			return
-		}
-		u.Handle = h
+		httphelper.ValidationError(w, "handle", "user handles are not used; sign in with email")
+		return
 	}
 	if body.Email != nil {
 		u.Email = strings.TrimSpace(strings.ToLower(*body.Email))

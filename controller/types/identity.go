@@ -94,14 +94,16 @@ type AccountQuota struct {
 // Collaborator is an account or app collaborator.
 type Collaborator struct {
 	UserID string `json:"user_id"`
+	Email  string `json:"email,omitempty"`
 	Handle string `json:"handle,omitempty"`
 	Role   string `json:"role"`
 }
 
-// CollaboratorCreate accepts a user id or handle.
+// CollaboratorCreate accepts a user id or email.
 type CollaboratorCreate struct {
 	UserID string `json:"user_id"`
-	Handle string `json:"handle"`
+	Email  string `json:"email,omitempty"`
+	Handle string `json:"handle,omitempty"`
 	Role   string `json:"role"`
 }
 

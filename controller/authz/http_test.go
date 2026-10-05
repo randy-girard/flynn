@@ -134,6 +134,11 @@ func TestHTTPAllowed(t *testing.T) {
 		{"stranger_grant_cannot_get_other_app", wrongApp, http.MethodGet, "/apps/app-1", false},
 		{"user_can_whoami", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/whoami", true},
 		{"app_read_cannot_whoami", appRead, http.MethodGet, "/whoami", false},
+		{"user_can_create_non_admin_user", &authorizer.Token{UserID: "u1"}, http.MethodPost, "/users", true},
+		{"user_cannot_list_users", &authorizer.Token{UserID: "u1"}, http.MethodGet, "/users", false},
+		{"user_cannot_patch_user", &authorizer.Token{UserID: "u1"}, http.MethodPatch, "/users/u2", false},
+		{"cluster_key_can_patch_user", clusterKey, http.MethodPatch, "/users/u2", true},
+		{"app_read_cannot_create_user", appRead, http.MethodPost, "/users", false},
 	}
 
 	for _, tc := range cases {

@@ -50,12 +50,13 @@ Pin a version with `--version`, or set `FLYNN_GITHUB_REPO` / `--repo` if you are
 After you bootstrap a cluster, add it:
 
 ```bash
-flynn cluster:add <name> <domain> <key>
+flynn cluster:add -p <tls-pin> <name> <domain>
+flynn login --email <admin@domain>
 # or, on a host in the cluster:
 sudo flynn-host cli-add-command
 ```
 
-You can also sign in through the dashboard with `flynn login`. Run `flynn help` for the full command list.
+Log in with the administrator created at bootstrap (`--admin-email` / `--admin-password`, or a TTY prompt). Run `flynn help` for the full command list.
 
 ## Install a cluster
 

@@ -127,6 +127,15 @@ func (r *TenancyRepo) UpdateUser(u *ct.User) error {
 }
 
 func (r *TenancyRepo) DeleteUser(id string) error {
+	if err := r.db.Exec(`DELETE FROM oauth_codes WHERE user_id=$1`, id); err != nil {
+		return err
+	}
+	if err := r.db.Exec(`DELETE FROM oauth_refresh_tokens WHERE user_id=$1`, id); err != nil {
+		return err
+	}
+	if err := r.db.Exec(`DELETE FROM oauth_sessions WHERE user_id=$1`, id); err != nil {
+		return err
+	}
 	if err := r.db.Exec(`DELETE FROM personal_access_tokens WHERE user_id=$1`, id); err != nil {
 		return err
 	}
@@ -324,9 +333,9 @@ func (r *TenancyRepo) DeleteAccountCollaborator(account, userID string) error {
 
 func (r *TenancyRepo) ListAccountCollaborators(account string) ([]ct.Collaborator, error) {
 	return r.listCollaborators(`
-		SELECT c.user_id, u.handle, c.role
+		SELECT c.user_id, u.handle, u.email, c.role
 		FROM account_collaborators c JOIN users u ON u.id=c.user_id
-		WHERE c.account=$1 ORDER BY u.handle`, account)
+		WHERE c.account=$1 ORDER BY u.email`, account)
 }
 
 func (r *TenancyRepo) UpsertAppCollaborator(appID, userID, role string) error {
@@ -341,9 +350,9 @@ func (r *TenancyRepo) DeleteAppCollaborator(appID, userID string) error {
 
 func (r *TenancyRepo) ListAppCollaborators(appID string) ([]ct.Collaborator, error) {
 	return r.listCollaborators(`
-		SELECT c.user_id, u.handle, c.role
+		SELECT c.user_id, u.handle, u.email, c.role
 		FROM app_collaborators c JOIN users u ON u.id=c.user_id
-		WHERE c.app_id=$1 ORDER BY u.handle`, appID)
+		WHERE c.app_id=$1 ORDER BY u.email`, appID)
 }
 
 func (r *TenancyRepo) listCollaborators(sql, arg string) ([]ct.Collaborator, error) {
@@ -355,7 +364,7 @@ func (r *TenancyRepo) listCollaborators(sql, arg string) ([]ct.Collaborator, err
 	var out []ct.Collaborator
 	for rows.Next() {
 		var c ct.Collaborator
-		if err := rows.Scan(&c.UserID, &c.Handle, &c.Role); err != nil {
+		if err := rows.Scan(&c.UserID, &c.Handle, &c.Email, &c.Role); err != nil {
 			return nil, err
 		}
 		out = append(out, c)

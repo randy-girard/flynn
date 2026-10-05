@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -24,12 +22,14 @@ import (
 	"github.com/randy-girard/flynn/cli/login/tokensource"
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/term"
 	"golang.org/x/oauth2"
 )
 
 const (
 	oauthHostPort  = "127.0.0.1:8085"
 	oobRedirectURI = "urn:ietf:wg:oauth:2.0:oob"
+	cliClientID    = "flynn-cli"
 )
 
 func looksLikeIssuerURL(s string) bool {
@@ -41,10 +41,16 @@ func looksLikeIssuerURL(s string) bool {
 }
 
 func issuerFromCluster(c *config.Cluster) string {
-	if c.OAuthURL != "" {
-		return c.OAuthURL
+	if c == nil {
+		return ""
 	}
-	return strings.TrimSpace(c.DashboardURL)
+	if auth := flynnAuthIssuer(c.OAuthURL, c.ControllerURL); auth != "" {
+		return auth
+	}
+	if strings.TrimSpace(c.OAuthURL) != "" {
+		return strings.TrimSpace(c.OAuthURL)
+	}
+	return strings.TrimSpace(c.ControllerURL)
 }
 
 func Run(args *docopt.Args, globalCluster string) error {
@@ -53,21 +59,18 @@ func Run(args *docopt.Args, globalCluster string) error {
 		return fmt.Errorf("error reading flynnrc: %s", err)
 	}
 
-	existingIssuers := make(map[string][]string)
 	existingClusters := make(map[string]*config.Cluster)
 	for _, c := range flynnrc.Clusters {
-		if iss := issuerFromCluster(c); iss != "" {
-			existingIssuers[iss] = append(existingIssuers[iss], c.Name)
-		}
 		existingClusters[c.Name] = c
 	}
 
 	oob := useOOB(args)
 	positional := strings.TrimSpace(args.String["<issuer-or-cluster>"])
-	prompt := args.Bool["--prompt"]
 	force := args.Bool["--force"]
 	clusterNameArg := strings.TrimSpace(args.String["--cluster-name"])
 	controllerURL := strings.TrimSpace(args.String["--controller-url"])
+	email := firstNonEmpty(strings.TrimSpace(args.String["--email"]), strings.TrimSpace(os.Getenv("FLYNN_EMAIL")))
+	password := firstNonEmpty(strings.TrimSpace(args.String["--password"]), os.Getenv("FLYNN_PASSWORD"))
 	var issuer string
 
 	clusterName := clusterNameArg
@@ -95,17 +98,7 @@ func Run(args *docopt.Args, globalCluster string) error {
 		if selected == nil {
 			return fmt.Errorf("unknown cluster %q in %s", clusterName, config.DefaultPath())
 		}
-		if issuer == "" {
-			if iss := issuerFromCluster(selected); iss != "" {
-				issuer = iss
-			}
-		}
-		if controllerURL == "" {
-			controllerURL = selected.ControllerURL
-		}
-	}
-
-	if issuer == "" {
+	} else {
 		def := strings.TrimSpace(flynnrc.Default)
 		if def != "" {
 			selected = existingClusters[def]
@@ -113,74 +106,344 @@ func Run(args *docopt.Args, globalCluster string) error {
 		if selected == nil && len(flynnrc.Clusters) == 1 {
 			selected = flynnrc.Clusters[0]
 		}
-		if selected != nil {
-			if iss := issuerFromCluster(selected); iss != "" {
-				issuer = iss
-			}
-			if controllerURL == "" {
-				controllerURL = selected.ControllerURL
-			}
-			if clusterName == "" {
-				clusterName = selected.Name
-			}
+	}
+	if selected != nil {
+		if clusterName == "" {
+			clusterName = selected.Name
 		}
-	}
-
-	if issuer == "" && len(existingIssuers) == 1 {
-		for k := range existingIssuers {
-			issuer = k
+		if controllerURL == "" {
+			controllerURL = selected.ControllerURL
 		}
-	}
-
-	reauth := false
-	if !prompt && clusterName != "" && existingClusters[clusterName] != nil {
-		reauth = true
-	} else if !prompt && clusterName == "" && controllerURL == "" && issuer != "" && len(existingIssuers[issuer]) > 0 {
-		reauth = true
-		if len(existingIssuers[issuer]) == 1 {
-			clusterName = existingIssuers[issuer][0]
-			controllerURL = existingClusters[clusterName].ControllerURL
+		if issuer == "" {
+			issuer = issuerFromCluster(selected)
 		}
-	}
-
-	if reauth && clusterName == "" && len(existingIssuers[issuer]) > 1 {
-		return fmt.Errorf("multiple clusters use this issuer; pick one with: flynn -c <name> login or flynn login <name>")
-	}
-	if reauth && controllerURL == "" && clusterName != "" {
-		controllerURL = existingClusters[clusterName].ControllerURL
 	}
 
 	if issuer == "" {
-		return fmt.Errorf("no OAuth issuer: pass the dashboard URL, run `flynn cluster:add` (stores dashboard URL), or set a default cluster in %s", config.DefaultPath())
+		issuer = controllerURL
 	}
-	if !reauth && !prompt && controllerURL == "" {
-		return fmt.Errorf("--prompt or --controller-url must be specified to add a new cluster")
+	if issuer == "" {
+		return fmt.Errorf("no cluster to log in to: run `flynn cluster:add` first, or pass a controller URL")
+	}
+	if clusterName == "" {
+		clusterName = "default"
+	}
+	if controllerURL == "" {
+		controllerURL = issuer
 	}
 
-	metadataURL, clientID, err := oauth.BuildMetadataURL(issuer)
+	creds := Credentials{Email: email, Password: password}
+	if !oob {
+		if err := creds.FillMissing(term.IsTerminal(os.Stdin.Fd())); err != nil {
+			return err
+		}
+	}
+
+	var hc *http.Client
+	if selected != nil {
+		hc, err = selected.HTTPClient()
+		if err != nil {
+			return err
+		}
+	}
+	usedIssuer, err := Authenticate(clusterName, issuer, controllerURL, creds, oob, hc)
 	if err != nil {
 		return err
 	}
-	if clientID == "" {
-		clientID = "flynn-cli"
-		fmt.Printf("Issuer URL has no client_id; using %q.\n", clientID)
+
+	clusterConfig := &config.Cluster{
+		Name:          clusterName,
+		OAuthURL:      usedIssuer,
+		DashboardURL:  "",
+		ControllerURL: controllerURL,
 	}
-	metadata, err := oauth.GetMetadata(metadataURL)
+	if selected != nil {
+		clusterConfig = selected
+		clusterConfig.OAuthURL = usedIssuer
+		if clusterConfig.ControllerURL == "" {
+			clusterConfig.ControllerURL = controllerURL
+		}
+	} else {
+		domain := strings.TrimPrefix(controllerURL, "https://controller.")
+		clusterConfig.GitURL = "https://git." + domain
+		clusterConfig.ImageURL = "https://images." + domain
+		clusterConfig.DashboardURL = "https://dashboard." + domain
+		mergeForce := force || existingClusters[clusterName] != nil
+		if err := flynnrc.Add(clusterConfig, mergeForce); err != nil {
+			return fmt.Errorf("error saving config: %s", err)
+		}
+		if flynnrc.Default == "" {
+			flynnrc.SetDefault(clusterConfig.Name)
+		}
+	}
+	if err := flynnrc.SaveTo(config.DefaultPath()); err != nil {
+		return fmt.Errorf("error writing flynnrc: %s", err)
+	}
+	fmt.Printf("Logged in to cluster %q.\n", clusterName)
+	return nil
+}
+
+// Credentials is a controller password-grant login.
+type Credentials struct {
+	Email    string
+	Password string
+}
+
+func (c *Credentials) FillMissing(interactive bool) error {
+	if strings.TrimSpace(c.Email) == "" {
+		if !interactive {
+			return fmt.Errorf("email is required: pass --email or set FLYNN_EMAIL")
+		}
+		fmt.Fprint(os.Stderr, "Email: ")
+		s, err := readLine()
+		if err != nil {
+			return err
+		}
+		c.Email = s
+	}
+	c.Email = strings.ToLower(strings.TrimSpace(c.Email))
+	if !strings.Contains(c.Email, "@") {
+		return fmt.Errorf("email is required")
+	}
+	if c.Password == "" {
+		if !interactive {
+			return fmt.Errorf("password is required: pass --password or set FLYNN_PASSWORD")
+		}
+		s, err := readPassword("Password: ")
+		if err != nil {
+			return err
+		}
+		c.Password = s
+	}
+	if strings.TrimSpace(c.Email) == "" || c.Password == "" {
+		return fmt.Errorf("email and password are required")
+	}
+	return nil
+}
+
+// LoginCluster authenticates against a configured cluster and stores tokens
+// under ~/.flynn/tokens/<cluster>/flynn-cli.json.
+func LoginCluster(c *config.Cluster, creds Credentials, oob bool) error {
+	if c == nil {
+		return fmt.Errorf("cluster is required")
+	}
+	issuer := issuerFromCluster(c)
+	if issuer == "" {
+		return fmt.Errorf("cluster %q has no controller URL", c.Name)
+	}
+	hc, err := c.HTTPClient()
 	if err != nil {
 		return err
 	}
+	usedIssuer, err := Authenticate(c.Name, issuer, c.ControllerURL, creds, oob, hc)
+	if err != nil {
+		return err
+	}
+	c.OAuthURL = usedIssuer
+	return nil
+}
 
-	cache := config.TokenCache()
-	var clusters []*cluster
-	var t *oauth2.Token
-	if !reauth {
-		t, _ = cache.GetToken(issuer, clientID, "")
-		if t != nil {
-			clusters, err = getClusterList(metadata.AudiencesEndpoint, t)
-			if err != nil {
-				t = nil
+func oauthIssuerCandidates(issuer, controllerURL string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return
+		}
+		if _, ok := seen[s]; ok {
+			return
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	add(config.AuthURLFromController(controllerURL))
+	add(issuer)
+	add(controllerURL)
+	return out
+}
+
+func flynnAuthIssuer(issuer, controllerURL string) string {
+	for _, raw := range []string{controllerURL, issuer} {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		if strings.HasPrefix(host, "controller.") {
+			return "https://auth." + strings.TrimPrefix(host, "controller.")
+		}
+		if strings.HasPrefix(host, "auth.") {
+			scheme := u.Scheme
+			if scheme == "" {
+				scheme = "https"
+			}
+			return scheme + "://" + host
+		}
+	}
+	return ""
+}
+
+func flynnControllerIssuer(controllerURL, issuer string) string {
+	for _, raw := range []string{controllerURL, issuer} {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		if strings.HasPrefix(host, "controller.") {
+			scheme := u.Scheme
+			if scheme == "" {
+				scheme = "https"
+			}
+			return scheme + "://" + host
+		}
+	}
+	return ""
+}
+
+func oauthIssuerReachable(hc *http.Client, issuer string) bool {
+	metadataURL, _, err := oauth.BuildMetadataURL(issuer)
+	if err != nil {
+		return false
+	}
+	_, err = oauth.GetMetadata(hc, metadataURL)
+	return err == nil
+}
+
+// AuthHostsHint is printed when auth.<domain> does not resolve. macOS
+// /etc/hosts has no wildcards, so controller.1.localflynn.com can work while
+// auth.1.localflynn.com does not.
+func AuthHostsHint(authURL, controllerURL string) string {
+	u, err := url.Parse(strings.TrimSpace(authURL))
+	if err != nil {
+		return ""
+	}
+	authHost := u.Hostname()
+	if authHost == "" || !strings.HasPrefix(authHost, "auth.") {
+		return ""
+	}
+	if hostResolves(authHost) {
+		return ""
+	}
+	ip := "127.0.0.1"
+	if cu, err := url.Parse(strings.TrimSpace(controllerURL)); err == nil {
+		if addrs := lookupHostFast(cu.Hostname()); len(addrs) > 0 {
+			ip = addrs[0]
+		}
+	}
+	return fmt.Sprintf("%s did not resolve. /etc/hosts has no wildcards; add the same address as controller:\n  %s %s\n", authHost, ip, authHost)
+}
+
+func hostResolves(host string) bool {
+	return len(lookupHostFast(host)) > 0
+}
+
+func lookupHostFast(host string) []string {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return nil
+	}
+	return addrs
+}
+
+func syntheticFlynnMetadata(auth string) *oauth.IssuerMetadata {
+	base := strings.TrimRight(auth, "/")
+	return &oauth.IssuerMetadata{
+		AuthorizationEndpoint: base + "/oauth/authorize",
+		TokenEndpoint:         base + "/oauth/token",
+		AudiencesEndpoint:     base + "/oauth/audiences",
+	}
+}
+
+func rewriteOAuthEndpoints(meta *oauth.IssuerMetadata, authBase string) {
+	if meta == nil || strings.TrimSpace(authBase) == "" {
+		return
+	}
+	meta.AuthorizationEndpoint = rewriteOAuthURL(meta.AuthorizationEndpoint, authBase)
+	meta.TokenEndpoint = rewriteOAuthURL(meta.TokenEndpoint, authBase)
+	if meta.AudiencesEndpoint != "" {
+		meta.AudiencesEndpoint = rewriteOAuthURL(meta.AudiencesEndpoint, authBase)
+	}
+}
+
+func rewriteOAuthURL(raw, authBase string) string {
+	raw = strings.TrimSpace(raw)
+	base := strings.TrimRight(authBase, "/")
+	if raw == "" {
+		return base
+	}
+	if strings.HasPrefix(raw, "/") {
+		return base + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	host := u.Hostname()
+	if strings.HasPrefix(host, "controller.") || strings.HasPrefix(host, "dashboard.") {
+		b, err := url.Parse(base)
+		if err != nil {
+			return raw
+		}
+		u.Scheme = b.Scheme
+		u.Host = b.Host
+		return u.String()
+	}
+	return raw
+}
+
+func Authenticate(clusterName, issuer, controllerURL string, creds Credentials, oob bool, hc *http.Client) (string, error) {
+	var (
+		metadata *oauth.IssuerMetadata
+		used     string
+		clientID string
+		lastErr  error
+	)
+	if auth := flynnAuthIssuer(issuer, controllerURL); auth != "" {
+		used = auth
+		if !oauthIssuerReachable(hc, auth) {
+			if hint := AuthHostsHint(auth, controllerURL); hint != "" {
+				fmt.Fprint(os.Stderr, hint)
+			}
+			if ctrl := flynnControllerIssuer(controllerURL, issuer); ctrl != "" {
+				used = ctrl
 			}
 		}
+		metadata = syntheticFlynnMetadata(used)
+		clientID = cliClientID
+	} else {
+		for _, iss := range oauthIssuerCandidates(issuer, controllerURL) {
+			metadataURL, cid, err := oauth.BuildMetadataURL(iss)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if cid == "" {
+				cid = cliClientID
+			}
+			meta, err := oauth.GetMetadata(hc, metadataURL)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			metadata = meta
+			used = iss
+			clientID = cid
+			break
+		}
+	}
+	if metadata == nil {
+		if lastErr != nil {
+			return "", lastErr
+		}
+		return "", fmt.Errorf("no cluster to log in to")
 	}
 
 	cfg := &oauth2.Config{
@@ -192,244 +455,85 @@ func Run(args *docopt.Args, globalCluster string) error {
 		},
 	}
 
-	if t == nil {
-		var code *codeInfo
-		if oob {
-			code, err = loginOOB(cfg)
-		} else {
-			code, err = loginAuto(cfg)
-		}
+	ctx := context.Background()
+	if hc != nil {
+		ctx = context.WithValue(ctx, oauth2.HTTPClient, hc)
+	}
+
+	var t *oauth2.Token
+	if oob {
+		code, err := loginAuto(cfg)
 		if err != nil {
-			return err
+			return "", err
 		}
-
-		t, err = exchangeAuthCode(context.Background(), cfg, code, controllerURL)
+		t, err = exchangeAuthCode(ctx, cfg, code, controllerURL)
 		if err != nil {
-			return fmt.Errorf("error exchanging code for auth token: %s", err)
-		}
-
-		if err := cache.SetToken(issuer, clientID, t); err != nil {
-			return fmt.Errorf("error saving initial token: %s", err)
-		}
-	}
-
-	if reauth {
-		if clusterName != "" {
-			if c := existingClusters[clusterName]; c != nil {
-				updated := false
-				if c.OAuthURL == "" && issuer != "" {
-					c.OAuthURL = issuer
-					updated = true
-				}
-				if c.DashboardURL == "" && issuer != "" {
-					c.DashboardURL = issuer
-					updated = true
-				}
-				if updated {
-					if err := flynnrc.SaveTo(config.DefaultPath()); err != nil {
-						return fmt.Errorf("error writing flynnrc: %s", err)
-					}
-				}
-			}
-		}
-		return nil
-	}
-
-	if prompt {
-		if clusters == nil {
-			clusters, err = getClusterList(metadata.AudiencesEndpoint, t)
-			if err != nil {
-				return fmt.Errorf("error retrieving audiences: %s", err)
-			}
-		}
-
-		s := bufio.NewScanner(os.Stdin)
-		if len(clusters) == 0 {
-			return fmt.Errorf("authentication successful, but user is not authorized for any clusters")
-		} else if len(clusters) == 1 {
-			controllerURL = clusters[0].ControllerURL
-		} else {
-			fmt.Printf("Authentication successful. Available clusters:\n\n")
-			for i, c := range clusters {
-				fmt.Printf("%d: %s - %s\n", i, c.DisplayName, c.ControllerURL)
-			}
-			fmt.Printf("Which cluster would you like to add? ")
-
-			var input string
-			if s.Scan() {
-				input = strings.TrimSpace(s.Text())
-			} else {
-				return fmt.Errorf("error reading cluster: %s", s.Err())
-			}
-
-			var selectedIdx *int
-			if i, err := strconv.Atoi(input); err == nil {
-				selectedIdx = &i
-			}
-
-			if selectedIdx != nil {
-				if *selectedIdx > len(clusters)-1 {
-					return fmt.Errorf("invalid cluster index %d", selectedIdx)
-				}
-				controllerURL = clusters[*selectedIdx].ControllerURL
-			}
-			if controllerURL == "" {
-				for i, c := range clusters {
-					if strings.Contains(fmt.Sprintf("%d: %s - %s\n", i, c.DisplayName, c.ControllerURL), input) {
-						controllerURL = c.ControllerURL
-						break
-					}
-				}
-				if controllerURL == "" {
-					return fmt.Errorf("unknown cluster %q", input)
-				}
-			}
-		}
-
-		if clusterName == "" {
-			fmt.Printf("What should the cluster name be? ")
-			if s.Scan() {
-				clusterName = strings.TrimSpace(s.Text())
-			} else {
-				return fmt.Errorf("error reading cluster name: %s", s.Err())
-			}
-			force = true
-		}
-	}
-	if clusterName == "" {
-		clusterName = "default"
-	}
-
-	if !strings.HasPrefix(controllerURL, "https://controller.") {
-		return fmt.Errorf("unexpected controller URL format: %q", controllerURL)
-	}
-
-	t, err = oauth.RefreshToken(cfg, t, controllerURL)
-	if err != nil {
-		return err
-	}
-	if err := cache.SetToken(issuer, clientID, t); err != nil {
-		return fmt.Errorf("error saving access token: %s", err)
-	}
-
-	ts, err := tokensource.New(issuer, controllerURL, cache)
-	if err != nil {
-		return fmt.Errorf("error creating tokensource: %s", err)
-	}
-
-	cc, err := controller.NewClientWithHTTP(controllerURL, "", oauth2.NewClient(context.Background(), ts))
-	if err != nil {
-		return fmt.Errorf("error creating controller client: %s", err)
-	}
-	// check credentials by requesting status endpoint
-	_, err = cc.Status()
-	if err != nil {
-		return fmt.Errorf("error getting controller status: %s", err)
-	}
-
-	domain := strings.TrimPrefix(controllerURL, "https://controller.")
-	clusterConfig := &config.Cluster{
-		Name:          clusterName,
-		OAuthURL:      issuer,
-		DashboardURL:  issuer,
-		ControllerURL: controllerURL,
-		GitURL:        "https://git." + domain,
-		ImageURL:      "https://images." + domain,
-	}
-	if prev := existingClusters[clusterName]; prev != nil {
-		clusterConfig.Key = prev.Key
-		clusterConfig.TLSPin = prev.TLSPin
-		if prev.GitURL != "" {
-			clusterConfig.GitURL = prev.GitURL
-		}
-		if prev.ImageURL != "" {
-			clusterConfig.ImageURL = prev.ImageURL
-		}
-		if prev.DockerPushURL != "" {
-			clusterConfig.DockerPushURL = prev.DockerPushURL
-		}
-		if prev.DashboardURL != "" {
-			clusterConfig.DashboardURL = prev.DashboardURL
-		}
-	}
-	mergeForce := force || existingClusters[clusterName] != nil
-	if err := flynnrc.Add(clusterConfig, mergeForce); err != nil {
-		return fmt.Errorf("error saving config: %s", err)
-	}
-	if flynnrc.Default == "" {
-		flynnrc.SetDefault(clusterConfig.Name)
-	}
-	if err := flynnrc.SaveTo(config.DefaultPath()); err != nil {
-		return fmt.Errorf("error writing flynnrc: %s", err)
-	}
-
-	if _, err := exec.LookPath("git"); err != nil {
-		if serr, ok := err.(*exec.Error); ok && serr.Err == exec.ErrNotFound {
-			fmt.Println("git was not found. Skipping git configuration.")
-		} else {
-			return fmt.Errorf("error looking up git path: %s", err)
+			return "", fmt.Errorf("error exchanging code for auth token: %s", err)
 		}
 	} else {
-		config.RemoveGlobalGitConfig(clusterConfig.GitURL)
-		if err := config.WriteGlobalGitConfig(clusterConfig.GitURL, ""); err != nil {
-			return fmt.Errorf("error writing git config: %s", err)
+		var err error
+		t, err = oauth.PasswordToken(hc, metadata.TokenEndpoint, clientID, creds.Email, creds.Password, controllerURL)
+		if err != nil {
+			return "", fmt.Errorf("login failed: %s", err)
 		}
-		config.ClearSystemCredentials(clusterConfig.GitURL)
 	}
 
-	return nil
+	cache := config.TokenCache()
+	if err := cache.SetToken(clusterName, clientID, t); err != nil {
+		return "", fmt.Errorf("error saving access token: %s", err)
+	}
+
+	ts, err := tokensource.New(clusterName, used, controllerURL, cache, hc)
+	if err != nil {
+		return "", fmt.Errorf("error creating tokensource: %s", err)
+	}
+	cc, err := controller.NewClientWithHTTP(controllerURL, "", oauth2.NewClient(ctx, ts))
+	if err != nil {
+		return "", fmt.Errorf("error creating controller client: %s", err)
+	}
+	if _, err := cc.Status(); err != nil {
+		return "", fmt.Errorf("error getting controller status: %s", err)
+	}
+	return used, nil
 }
 
-type cluster struct {
-	ControllerURL string
-	DisplayName   string
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
-func getClusterList(audiencesURL string, t *oauth2.Token) ([]*cluster, error) {
-	req, err := http.NewRequest("GET", audiencesURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "RefreshToken "+t.RefreshToken)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return nil, &url.Error{
-			Op:  "GET",
-			URL: audiencesURL,
-			Err: fmt.Errorf("unexpected status %d", res.StatusCode),
+func readLine() (string, error) {
+	s := bufio.NewScanner(os.Stdin)
+	if !s.Scan() {
+		if err := s.Err(); err != nil {
+			return "", err
 		}
+		return "", fmt.Errorf("no input")
 	}
+	return strings.TrimSpace(s.Text()), nil
+}
 
-	var data struct {
-		Audiences []struct {
-			URL  string
-			Name string
-			Type string
-		}
+func readPassword(prompt string) (string, error) {
+	fmt.Fprint(os.Stderr, prompt)
+	fd, isTerm := term.GetFdInfo(os.Stdin)
+	if !isTerm {
+		return readLine()
 	}
-	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
-		return nil, &url.Error{
-			Op:  "GET",
-			URL: audiencesURL,
-			Err: fmt.Errorf("error parsing audiences JSON: %s", err),
-		}
+	state, err := term.SaveState(fd)
+	if err != nil {
+		return readLine()
 	}
-
-	clusters := make([]*cluster, len(data.Audiences))
-	for i, a := range data.Audiences {
-		if a.Type != "flynn_controller" {
-			continue
-		}
-		clusters[i] = &cluster{
-			ControllerURL: a.URL,
-			DisplayName:   a.Name,
-		}
+	if err := term.DisableEcho(fd, state); err != nil {
+		return readLine()
 	}
-	return clusters, nil
+	defer term.RestoreTerminal(fd, state)
+	s, err := readLine()
+	fmt.Fprintln(os.Stderr)
+	return s, err
 }
 
 func loginOOB(config *oauth2.Config) (*codeInfo, error) {
@@ -465,7 +569,7 @@ func loginAuto(config *oauth2.Config) (*codeInfo, error) {
 	}()
 
 	if err := openURL(info.URL); err != nil {
-		fmt.Printf("Unable to open browser, open this URL or re-run this command with --oob-fallback\n  %s\n\n", info.URL)
+		fmt.Printf("Unable to open browser, open this URL or re-run this command with --oauth\n  %s\n\n", info.URL)
 	} else {
 		fmt.Printf("Your browser has been opened to this URL, waiting for authentication to complete...\n  %s\n\n", info.URL)
 	}
@@ -549,15 +653,7 @@ func openURL(url string) error {
 var oauthErrFallback = errors.New("oob fallback")
 
 func useOOB(args *docopt.Args) bool {
-	if args.Bool["--oob-code"] {
-		return true
-	}
-	if runtime.GOOS == "linux" {
-		if _, err := exec.LookPath("xdg-open"); err != nil {
-			return true
-		}
-	}
-	return false
+	return args.Bool["--oauth"] || args.Bool["--oob-code"]
 }
 
 func listenForCode(state string) (func() (string, error), error) {

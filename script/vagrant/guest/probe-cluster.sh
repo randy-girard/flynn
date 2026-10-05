@@ -50,6 +50,13 @@ if command -v flynn >/dev/null 2>&1; then
     # shellcheck disable=SC2086
     eval "${add/flynn cluster:add /flynn cluster:add --force }" >/dev/null 2>&1 || true
   fi
+  if [[ -f /etc/flynn/admin.env ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source /etc/flynn/admin.env
+    set +a
+  fi
+  flynn login --email "${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}" --password "${FLYNN_ADMIN_PASSWORD:-flynn-dev}" >/dev/null 2>&1 || true
   flynn apps --all || echo "flynn apps skipped (CLI not configured on this node)"
 fi
 echo "cluster probe ok"

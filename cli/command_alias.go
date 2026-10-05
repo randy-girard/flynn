@@ -112,15 +112,6 @@ var subAliases = map[string]map[string]string{
 		"add":    "collaborator:add",
 		"remove": "collaborator:remove",
 	},
-	"user": {
-		"list":    "user:list",
-		"info":    "user:info",
-		"create":  "user:create",
-		"disable": "user:disable",
-		"enable":  "user:enable",
-		"admin":   "user:admin",
-		"token":   "user:token",
-	},
 	"account": {
 		"suspend":   "account:suspend",
 		"unsuspend": "account:unsuspend",

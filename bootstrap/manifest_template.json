@@ -200,7 +200,8 @@
         "TELEMETRY_CLUSTER_ID": "{{ (index .StepData \"bootstrap-id\").Data }}",
         "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
         "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
-        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}"
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
+        "ACCESS_TOKEN_SIGNING_KEY": "{{ (index .StepData \"access-token-key\").PrivateKey }}"
       },
       "processes": {
         "web": {
@@ -510,10 +511,27 @@
     "drain_backends": false
   },
   {
+    "id": "auth-route",
+    "action": "add-route",
+    "app_step": "controller-inception",
+    "cert_step": "controller-cert",
+    "type": "http",
+    "service": "controller",
+    "domain": "auth.{{ getenv \"CLUSTER_DOMAIN\" }}",
+    "drain_backends": false
+  },
+  {
     "id": "controller-route-wait",
     "action": "wait",
     "url": "http://router-http.discoverd",
     "host": "controller.{{ getenv \"CLUSTER_DOMAIN\" }}",
+    "status": 401
+  },
+  {
+    "id": "auth-route-wait",
+    "action": "wait",
+    "url": "http://router-http.discoverd",
+    "host": "auth.{{ getenv \"CLUSTER_DOMAIN\" }}",
     "status": 401
   },
   {

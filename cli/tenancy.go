@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"net/url"
 	"os"
@@ -18,7 +20,7 @@ func init() {
 	register("whoami", runWhoAmI, `
 usage: flynn whoami
 
-Print the authenticated user. The cluster key prints as the operator.
+Print the authenticated user.
 `)
 	register("token", runTokenList, `
 usage: flynn token
@@ -90,70 +92,19 @@ usage: flynn collaborator:list
 List collaborators on the current context account, or on -a <app>.
 `)
 	register("collaborator:add", runCollabAdd, `
-usage: flynn collaborator:add [--role <role>] <handle>
+usage: flynn collaborator:add [--role <role>] [--password <password>] <email>
 
-Add a collaborator. Roles: view, deploy, manage, admin.
+Add a collaborator by email. Roles: view, deploy, manage, admin. If the email
+does not exist, a non-admin user is created (optional --password).
 
 Options:
-	--role=<role>  view, deploy, manage, or admin [default: view]
+	--role=<role>          view, deploy, manage, or admin [default: view]
+	--password=<password>  password for a newly created user
 `)
 	register("collaborator:remove", runCollabRemove, `
-usage: flynn collaborator:remove <handle>
+usage: flynn collaborator:remove <email>
 
 Remove a collaborator from the current context account, or from -a <app>.
-`)
-	register("user", runUserList, `
-usage: flynn user
-       flynn user:list
-
-List controller users. user:list is the same command. user:help is the same
-as user --help. Requires the cluster key or a cluster admin.
-`)
-	register("user:list", runUserList, `
-usage: flynn user:list
-
-List controller users. Requires the cluster key or a cluster admin.
-`)
-	register("user:info", runUserInfo, `
-usage: flynn user:info <handle>
-
-Show a controller user by handle or email.
-`)
-	register("user:create", runUserCreate, `
-usage: flynn user:create [--handle <handle>] [--password <password>] [--admin] <email>
-
-Create a user. The handle defaults to the email local part. Print nothing
-about the password except what you passed in.
-
-Options:
-	--handle=<handle>      login handle (default: email local part)
-	--password=<password>  password (omit to leave unset)
-	--admin                grant cluster administrator
-
-Examples:
-
-	$ flynn user:create ada@example.com
-	$ flynn user:create --handle ada --admin ada@example.com
-`)
-	register("user:disable", runUserFlag("disabled", true), `
-usage: flynn user:disable <handle>
-
-Disable a controller user so they cannot sign in.
-`)
-	register("user:enable", runUserFlag("disabled", false), `
-usage: flynn user:enable <handle>
-
-Enable a disabled controller user.
-`)
-	register("user:admin", runUserAdmin, `
-usage: flynn user:admin <handle>
-
-Grant cluster administrator on a controller user.
-`)
-	register("user:token", runUserToken, `
-usage: flynn user:token <handle>
-
-Mint a personal access token for <handle> and print it once.
 `)
 	register("account:suspend", runAccountSuspend(true), `
 usage: flynn account:suspend <handle>
@@ -197,6 +148,13 @@ func resolveOwner(c controller.Client, handleOrAccount string) (string, error) {
 	if strings.Contains(handleOrAccount, ":") {
 		return handleOrAccount, nil
 	}
+	if strings.Contains(handleOrAccount, "@") {
+		u, err := userByEmail(c, handleOrAccount)
+		if err != nil {
+			return "", err
+		}
+		return "user:" + u.ID, nil
+	}
 	v, err := apiV1(c)
 	if err != nil {
 		return "", err
@@ -235,7 +193,7 @@ func runWhoAmI(_ *docopt.Args, c controller.Client) error {
 	if err := v.Get("/whoami", &me); err != nil {
 		return err
 	}
-	fmt.Printf("handle: %s\nemail: %s\naccount: %s\ncluster_admin: %v\n", me.Handle, me.Email, me.Account, me.ClusterAdmin)
+	fmt.Printf("email: %s\naccount: %s\ncluster_admin: %v\n", me.Email, me.Account, me.ClusterAdmin)
 	return nil
 }
 
@@ -377,9 +335,13 @@ func runCollabList(_ *docopt.Args, c controller.Client) error {
 		return err
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "HANDLE\tUSER\tROLE")
+	fmt.Fprintln(w, "EMAIL\tUSER\tROLE")
 	for _, row := range rows {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", row.Handle, row.UserID, row.Role)
+		label := row.Email
+		if label == "" {
+			label = row.Handle
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\n", label, row.UserID, row.Role)
 	}
 	return w.Flush()
 }
@@ -389,11 +351,37 @@ func runCollabAdd(args *docopt.Args, c controller.Client) error {
 	if err != nil {
 		return err
 	}
+	email := strings.ToLower(strings.TrimSpace(firstNonEmpty(args.String["<email>"], args.String["--email"])))
+	if !strings.Contains(email, "@") {
+		return fmt.Errorf("email is required")
+	}
+	if _, err := userByEmail(c, email); err != nil {
+		password := args.String["--password"]
+		generated := false
+		if password == "" {
+			buf := make([]byte, 12)
+			if _, err := rand.Read(buf); err != nil {
+				return err
+			}
+			password = hex.EncodeToString(buf)
+			generated = true
+		}
+		body := ct.UserCreate{
+			Email:    email,
+			Password: password,
+		}
+		if err := v.Post("/users", body, &ct.User{}); err != nil {
+			return fmt.Errorf("create user %s: %w", email, err)
+		}
+		if generated {
+			fmt.Printf("created user %s password: %s\n", email, password)
+		}
+	}
 	base, err := collabBase(c)
 	if err != nil {
 		return err
 	}
-	body := ct.CollaboratorCreate{Handle: args.String["<handle>"], Role: args.String["--role"]}
+	body := ct.CollaboratorCreate{Email: email, Role: args.String["--role"]}
 	if body.Role == "" {
 		body.Role = "view"
 	}
@@ -410,7 +398,7 @@ func runCollabRemove(args *docopt.Args, c controller.Client) error {
 	if err != nil {
 		return err
 	}
-	accountUser, err := resolveOwner(c, args.String["<handle>"])
+	accountUser, err := resolveOwner(c, firstNonEmpty(args.String["<email>"], args.String["<handle>"]))
 	if err != nil {
 		return err
 	}
@@ -418,113 +406,22 @@ func runCollabRemove(args *docopt.Args, c controller.Client) error {
 	return v.Delete(base+"/"+url.PathEscape(id), nil)
 }
 
-func runUserList(_ *docopt.Args, c controller.Client) error {
+func userByEmail(c controller.Client, email string) (*ct.User, error) {
 	v, err := apiV1(c)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	email = strings.ToLower(strings.TrimSpace(email))
 	var users []*ct.User
 	if err := v.Get("/users", &users); err != nil {
-		return err
+		return nil, err
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 8, 2, ' ', 0)
-	fmt.Fprintln(w, "HANDLE\tEMAIL\tADMIN\tDISABLED\tSUSPENDED")
 	for _, u := range users {
-		fmt.Fprintf(w, "%s\t%s\t%v\t%v\t%v\n", u.Handle, u.Email, u.ClusterAdmin, u.Disabled, u.Suspended)
-	}
-	return w.Flush()
-}
-
-func userByHandle(c controller.Client, handle string) (*ct.User, error) {
-	v, err := apiV1(c)
-	if err != nil {
-		return nil, err
-	}
-	var h ct.Handle
-	if err := v.Get("/handles/"+url.PathEscape(handle), &h); err != nil {
-		return nil, err
-	}
-	id := strings.TrimPrefix(h.Account, "user:")
-	var u ct.User
-	if err := v.Get("/users/"+url.PathEscape(id), &u); err != nil {
-		return nil, err
-	}
-	return &u, nil
-}
-
-func runUserInfo(args *docopt.Args, c controller.Client) error {
-	u, err := userByHandle(c, args.String["<handle>"])
-	if err != nil {
-		return err
-	}
-	fmt.Printf("id: %s\nhandle: %s\nemail: %s\ncluster_admin: %v\ndisabled: %v\nsuspended: %v\n", u.ID, u.Handle, u.Email, u.ClusterAdmin, u.Disabled, u.Suspended)
-	return nil
-}
-
-func runUserCreate(args *docopt.Args, c controller.Client) error {
-	v, err := apiV1(c)
-	if err != nil {
-		return err
-	}
-	body := ct.UserCreate{
-		Email:        args.String["<email>"],
-		Handle:       args.String["--handle"],
-		Password:     args.String["--password"],
-		ClusterAdmin: args.Bool["--admin"],
-	}
-	if body.Handle == "" {
-		body.Handle = strings.Split(body.Email, "@")[0]
-	}
-	var u ct.User
-	return v.Post("/users", body, &u)
-}
-
-func runUserFlag(field string, value bool) func(*docopt.Args, controller.Client) error {
-	return func(args *docopt.Args, c controller.Client) error {
-		u, err := userByHandle(c, args.String["<handle>"])
-		if err != nil {
-			return err
+		if u != nil && strings.EqualFold(u.Email, email) {
+			return u, nil
 		}
-		v, err := apiV1(c)
-		if err != nil {
-			return err
-		}
-		body := ct.UserPatch{}
-		if field == "disabled" {
-			body.Disabled = &value
-		}
-		return v.Send("PATCH", "/users/"+url.PathEscape(u.ID), body, &ct.User{})
 	}
-}
-
-func runUserAdmin(args *docopt.Args, c controller.Client) error {
-	u, err := userByHandle(c, args.String["<handle>"])
-	if err != nil {
-		return err
-	}
-	v, err := apiV1(c)
-	if err != nil {
-		return err
-	}
-	yes := true
-	return v.Send("PATCH", "/users/"+url.PathEscape(u.ID), ct.UserPatch{ClusterAdmin: &yes}, &ct.User{})
-}
-
-func runUserToken(args *docopt.Args, c controller.Client) error {
-	u, err := userByHandle(c, args.String["<handle>"])
-	if err != nil {
-		return err
-	}
-	v, err := apiV1(c)
-	if err != nil {
-		return err
-	}
-	var rec ct.AccessTokenRecord
-	if err := v.Post("/users/"+url.PathEscape(u.ID)+"/bootstrap-token", nil, &rec); err != nil {
-		return err
-	}
-	fmt.Println(rec.Token)
-	return nil
+	return nil, fmt.Errorf("user %s not found", email)
 }
 
 func runAccountSuspend(suspend bool) func(*docopt.Args, controller.Client) error {

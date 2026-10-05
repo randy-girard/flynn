@@ -167,42 +167,32 @@ Options:
 	}}
 }
 
-func TestFormatHelpLoginMentionsDashboard(t *testing.T) {
+func TestFormatHelpLoginMentionsController(t *testing.T) {
 	got := formatHelp("login")
-	for _, want := range []string{"Authenticate with the Flynn dashboard", "OAuth", "Examples:", "--oob-code"} {
+	for _, want := range []string{"Log in to a Flynn cluster", "password", "Examples:", "--oauth", "--email", "127.0.0.1", "/etc/hosts"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("login help missing %q:\n%s", want, got)
 		}
 	}
 }
 
-func TestFormatHelpUserCreateDocumentsFlags(t *testing.T) {
-	got := formatHelp("user:create")
-	for _, want := range []string{"Options:", "--handle", "--password", "--admin", "Examples:"} {
+func TestFormatHelpClusterAddOmitsKey(t *testing.T) {
+	got := formatHelp("cluster:add")
+	if strings.Contains(got, "<key>") {
+		t.Fatalf("cluster:add must not require a cluster key:\n%s", got)
+	}
+	for _, want := range []string{"<cluster-name>", "<domain>", "--token", "--email", "--password"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("user:create help missing %q:\n%s", want, got)
+			t.Fatalf("cluster:add help missing %q:\n%s", want, got)
 		}
 	}
 }
 
-func TestFormatHelpUserChildrenHaveDescriptions(t *testing.T) {
-	got := formatHelp("user")
-	for _, want := range []string{
-		"usage: flynn user",
-		"Commands:",
-		"user:list",
-		"List controller users",
-		"user:info",
-		"Show a controller user",
-		"user:disable",
-		"Disable a controller user",
-		"user:enable",
-		"Enable a disabled controller user",
-		"user:admin",
-		"Grant cluster administrator",
-	} {
+func TestFormatHelpCollaboratorAddCanCreateUser(t *testing.T) {
+	got := formatHelp("collaborator:add")
+	for _, want := range []string{"--password", "<email>"} {
 		if !strings.Contains(got, want) {
-			t.Fatalf("user help missing %q:\n%s", want, got)
+			t.Fatalf("collaborator:add help missing %q:\n%s", want, got)
 		}
 	}
 }

@@ -37,6 +37,17 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 	if commands["upgrade"] != nil {
 		t.Error("upgrade must not be a root command; keep flynn update only")
 	}
+	for _, name := range []string{"user:create", "user:admin", "user:list", "user:bootstrap-admin"} {
+		if commands[name] != nil {
+			t.Errorf("%s belongs on flynn-host, not the laptop CLI", name)
+		}
+	}
+	if commands["collaborator:add"] == nil {
+		t.Error("missing collaborator:add")
+	}
+	if commands["login"] == nil {
+		t.Error("missing login")
+	}
 }
 
 func TestCLIHyphenatedVerbsStayHyphenated(t *testing.T) {

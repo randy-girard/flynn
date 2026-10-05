@@ -3,7 +3,6 @@ package shutdown
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"sync"
@@ -69,7 +68,7 @@ func (h *handler) exit(err error, code int, serious interface{}) {
 		panic(serious)
 	}
 	if err != nil {
-		log.New(os.Stderr, "", log.Lshortfile|log.Lmicroseconds).Output(3, err.Error())
+		fmt.Fprintln(os.Stderr, err.Error())
 	}
 	os.Exit(code)
 }
