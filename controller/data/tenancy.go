@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx"
@@ -87,7 +88,8 @@ func (r *TenancyRepo) GetUser(id string) (*ct.User, error) {
 }
 
 func (r *TenancyRepo) GetUserByEmail(email string) (*ct.User, error) {
-	return scanUser(r.db.QueryRow(`SELECT `+userCols+` FROM users WHERE email = $1`, email))
+	email = strings.ToLower(strings.TrimSpace(email))
+	return scanUser(r.db.QueryRow(`SELECT `+userCols+` FROM users WHERE LOWER(email) = $1`, email))
 }
 
 func (r *TenancyRepo) GetUserByHandle(handle string) (*ct.User, error) {
