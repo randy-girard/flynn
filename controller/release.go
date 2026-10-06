@@ -75,7 +75,17 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 
 func (c *controllerAPI) GetAppReleases(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	app := c.getApp(ctx)
-	list, err := c.releaseRepo.AppList(app.ID)
+	page, err := parseListPage(req)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	var list []*ct.Release
+	if page.paged() {
+		list, err = c.releaseRepo.AppListPage(app.ID, page.Before, page.BeforeID, page.Count)
+	} else {
+		list, err = c.releaseRepo.AppList(app.ID)
+	}
 	if err != nil {
 		respondWithError(w, err)
 		return

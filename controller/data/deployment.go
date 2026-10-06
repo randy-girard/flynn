@@ -274,6 +274,27 @@ func (r *DeploymentRepo) List(appID string) ([]*ct.Deployment, error) {
 	return deployments, rows.Err()
 }
 
+func (r *DeploymentRepo) ListCount(appID string, before *time.Time, beforeID string, count int) ([]*ct.Deployment, error) {
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	rows, err := r.db.Query("deployment_list_count", appID, ts, beforeID, count)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var deployments []*ct.Deployment
+	for rows.Next() {
+		deployment, err := scanDeployment(rows)
+		if err != nil {
+			return nil, err
+		}
+		deployments = append(deployments, deployment)
+	}
+	return deployments, rows.Err()
+}
+
 type ListDeploymentOptions struct {
 	PageToken     PageToken
 	AppIDs        []string

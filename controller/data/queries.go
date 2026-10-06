@@ -28,6 +28,7 @@ var preparedStatements = map[string]string{
 	"release_update_processes":                 releaseUpdateProcessesQuery,
 	"release_mark_blob_reaped":                 releaseMarkBlobReapedQuery,
 	"release_app_list":                         releaseAppListQuery,
+	"release_app_list_page":                    releaseAppListPageQuery,
 	"release_artifacts_insert":                 releaseArtifactsInsertQuery,
 	"release_artifacts_delete":                 releaseArtifactsDeleteQuery,
 	"release_delete":                           releaseDeleteQuery,
@@ -40,6 +41,7 @@ var preparedStatements = map[string]string{
 	"artifact_release_count":                   artifactReleaseCountQuery,
 	"artifact_layer_count":                     artifactLayerCountQuery,
 	"deployment_list":                          deploymentListQuery,
+	"deployment_list_count":                    deploymentListCountQuery,
 	"deployment_list_page":                     deploymentListPageQuery,
 	"deployment_select":                        deploymentSelectQuery,
 	"deployment_select_open":                   deploymentSelectOpenQuery,
@@ -69,7 +71,9 @@ var preparedStatements = map[string]string{
 	"scale_request_update":                     scaleRequestUpdateQuery,
 	"scale_request_list":                       scaleRequestListQuery,
 	"job_list":                                 jobListQuery,
+	"job_list_page":                            jobListPageQuery,
 	"job_list_active":                          jobListActiveQuery,
+	"job_list_active_app":                      jobListActiveAppQuery,
 	"job_select":                               jobSelectQuery,
 	"job_insert":                               jobInsertQuery,
 	"job_volume_insert":                        jobVolumeInsertQuery,
@@ -283,6 +287,23 @@ SELECT r.release_id, r.app_id,
 	ORDER BY a.index
   ), r.env, r.processes, r.meta, r.created_at
 FROM releases r WHERE r.app_id = $1 AND r.deleted_at IS NULL ORDER BY r.created_at DESC`
+	releaseAppListPageQuery = `
+SELECT r.release_id, r.app_id,
+  ARRAY(
+	SELECT a.artifact_id
+	FROM release_artifacts a
+	WHERE a.release_id = r.release_id AND a.deleted_at IS NULL
+	ORDER BY a.index
+  ), r.env, r.processes, r.meta, r.created_at
+FROM releases r
+WHERE r.app_id = $1 AND r.deleted_at IS NULL
+AND (
+  $2::timestamptz IS NULL
+  OR r.created_at < $2::timestamptz
+  OR ($3::text <> '' AND r.created_at = $2::timestamptz AND r.release_id::text < $3::text)
+)
+ORDER BY r.created_at DESC, r.release_id DESC
+LIMIT $4`
 	releaseArtifactsInsertQuery = `
 INSERT INTO release_artifacts (release_id, artifact_id, index) VALUES ($1, $2, $3)`
 	releaseArtifactsDeleteQuery = `
@@ -388,6 +409,18 @@ SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployme
   processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
 FROM deployments
 WHERE app_id = $1 ORDER BY created_at DESC`
+	deploymentListCountQuery = `
+SELECT deployment_id, app_id, old_release_id, new_release_id, strategy, deployment_status(deployment_id),
+  processes, tags, deploy_timeout, deploy_batch_size, created_at, finished_at, type
+FROM deployments
+WHERE app_id = $1
+AND (
+  $2::timestamptz IS NULL
+  OR created_at < $2::timestamptz
+  OR ($3::text <> '' AND created_at = $2::timestamptz AND deployment_id::text < $3::text)
+)
+ORDER BY created_at DESC, deployment_id DESC
+LIMIT $4`
 	deploymentListPageQuery = `
 SELECT d.deployment_id, d.app_id, d.old_release_id, d.new_release_id, d.strategy, deployment_status(d.deployment_id),
   d.processes, d.tags, d.deploy_timeout, d.deploy_batch_size, d.created_at, d.finished_at,
@@ -575,6 +608,49 @@ SELECT
     ORDER BY job_volumes.index
   )
 FROM job_cache WHERE app_id = $1 ORDER BY created_at DESC`
+	jobListPageQuery = `
+SELECT
+  cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,
+  exit_status, host_error, run_at, restarts, created_at, updated_at, args,
+  ARRAY(
+    SELECT job_volumes.volume_id
+    FROM job_volumes
+    WHERE job_volumes.job_id = job_cache.job_id
+    ORDER BY job_volumes.index
+  )
+FROM job_cache
+WHERE app_id = $1
+AND (
+  $2::timestamptz IS NULL
+  OR created_at < $2::timestamptz
+  OR ($3::text <> '' AND created_at = $2::timestamptz AND job_id::text < $3::text)
+)
+AND (
+  NOT $5::bool
+  OR (
+    process_type IS NULL
+    OR (
+      process_type <> 'slugbuilder' AND process_type NOT LIKE 'slugbuilder-%'
+      AND process_type <> 'dockerbuilder' AND process_type NOT LIKE 'dockerbuilder-%'
+      AND process_type <> 'slugrunner' AND process_type NOT LIKE 'slugrunner-%'
+    )
+  )
+)
+ORDER BY created_at DESC, job_id DESC
+LIMIT $4`
+	jobListActiveAppQuery = `
+SELECT
+  cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,
+  exit_status, host_error, run_at, restarts, created_at, updated_at, args,
+  ARRAY(
+    SELECT job_volumes.volume_id
+    FROM job_volumes
+    WHERE job_volumes.job_id = job_cache.job_id
+    ORDER BY job_volumes.index
+  )
+FROM job_cache
+WHERE app_id = $1 AND (state = 'pending' OR state = 'starting' OR state = 'up' OR state = 'stopping')
+ORDER BY created_at DESC, job_id DESC`
 	jobListActiveQuery = `
 SELECT
   cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,

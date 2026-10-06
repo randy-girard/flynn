@@ -24,7 +24,20 @@ import (
 
 func (c *controllerAPI) ListJobs(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	app := c.getApp(ctx)
-	list, err := c.jobRepo.List(app.ID)
+	page, err := parseListPage(req)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	var list []*ct.Job
+	switch {
+	case page.State == "active":
+		list, err = c.jobRepo.ListActiveForApp(app.ID)
+	case page.paged():
+		list, err = c.jobRepo.ListPage(app.ID, page.Before, page.BeforeID, page.Count, hideInternal(ctx, app) || page.ExcludeInternal)
+	default:
+		list, err = c.jobRepo.List(app.ID)
+	}
 	if err != nil {
 		respondWithError(w, err)
 		return

@@ -156,3 +156,32 @@ func (s *S) TestDeploymentList(c *C) {
 	c.Assert(deployments[1].ID, Equals, initial.ID)
 	c.Assert(deployments[0].ID, Equals, second.ID)
 }
+
+func (s *S) TestDeploymentListPage(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "list-deployment-page"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": {}},
+	})
+	c.Assert(s.c.PutFormation(&ct.Formation{
+		AppID:     app.ID,
+		ReleaseID: release.ID,
+		Processes: map[string]int{"web": 1},
+	}), IsNil)
+	defer s.c.DeleteFormation(app.ID, release.ID)
+
+	initial, err := s.c.CreateDeployment(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	newRelease := s.createTestRelease(c, app.ID, &ct.Release{})
+	second, err := s.c.CreateDeployment(app.ID, newRelease.ID)
+	c.Assert(err, IsNil)
+
+	var page []*ct.Deployment
+	s.getJSON(c, "/apps/"+app.ID+"/deployments?count=1", &page)
+	c.Assert(page, HasLen, 1)
+	c.Assert(page[0].ID, Equals, second.ID)
+	c.Assert(page[0].CreatedAt, NotNil)
+	q := "?count=1&before=" + page[0].CreatedAt.UTC().Format(time.RFC3339Nano) + "&before_id=" + page[0].ID
+	s.getJSON(c, "/apps/"+app.ID+"/deployments"+q, &page)
+	c.Assert(page, HasLen, 1)
+	c.Assert(page[0].ID, Equals, initial.ID)
+}

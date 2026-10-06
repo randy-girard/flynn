@@ -151,6 +151,17 @@ func (s *S) deleteExpectEmpty200(c *C, path string) {
 	c.Assert(string(body), Equals, "")
 }
 
+func (s *S) getJSON(c *C, path string, out interface{}) {
+	req, err := http.NewRequest("GET", s.srv.URL+path, nil)
+	c.Assert(err, IsNil)
+	req.SetBasicAuth("", authKey)
+	res, err := http.DefaultClient.Do(req)
+	c.Assert(err, IsNil)
+	defer res.Body.Close()
+	c.Assert(res.StatusCode, Equals, 200)
+	c.Assert(json.NewDecoder(res.Body).Decode(out), IsNil)
+}
+
 func (s *S) TestDeleteAppEmptyBody(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "delete-app-empty-body"})
 	s.deleteExpectEmpty200(c, "/apps/"+app.ID)
@@ -635,6 +646,25 @@ func (s *S) TestAppReleaseList(c *C) {
 	c.Assert(list, HasLen, len(releases))
 	c.Assert(list[0], DeepEquals, releases[1])
 	c.Assert(list[1], DeepEquals, releases[0])
+}
+
+func (s *S) TestAppReleaseListPage(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "app-release-list-page"})
+	created := make([]*ct.Release, 3)
+	for i := range created {
+		created[i] = s.createTestRelease(c, app.ID, &ct.Release{})
+		time.Sleep(2 * time.Millisecond)
+	}
+	var page []*ct.Release
+	s.getJSON(c, "/apps/"+app.ID+"/releases?count=2", &page)
+	c.Assert(page, HasLen, 2)
+	c.Assert(page[0].ID, Equals, created[2].ID)
+	c.Assert(page[1].ID, Equals, created[1].ID)
+	c.Assert(page[1].CreatedAt, NotNil)
+	q := "?count=2&before=" + page[1].CreatedAt.UTC().Format(time.RFC3339Nano) + "&before_id=" + page[1].ID
+	s.getJSON(c, "/apps/"+app.ID+"/releases"+q, &page)
+	c.Assert(page, HasLen, 1)
+	c.Assert(page[0].ID, Equals, created[0].ID)
 }
 
 func (s *S) TestArtifactList(c *C) {

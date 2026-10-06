@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"golang.org/x/net/context"
@@ -42,7 +43,17 @@ func (c *controllerAPI) CreateDeployment(ctx context.Context, w http.ResponseWri
 
 func (c *controllerAPI) ListDeployments(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	app := c.getApp(ctx)
-	list, err := c.deploymentRepo.List(app.ID)
+	page, err := parseListPage(req)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	var list []*ct.Deployment
+	if page.paged() {
+		list, err = c.deploymentRepo.ListCount(app.ID, page.Before, page.BeforeID, page.Count)
+	} else {
+		list, err = c.deploymentRepo.List(app.ID)
+	}
 	if err != nil {
 		respondWithError(w, err)
 		return

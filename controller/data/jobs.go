@@ -2,6 +2,7 @@ package data
 
 import (
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -191,12 +192,7 @@ func scanJob(s postgres.Scanner) (*ct.Job, error) {
 	return job, nil
 }
 
-func (r *JobRepo) List(appID string) ([]*ct.Job, error) {
-	rows, err := r.db.Query("job_list", appID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+func scanJobRows(rows *pgx.Rows) ([]*ct.Job, error) {
 	var jobs []*ct.Job
 	for rows.Next() {
 		job, err := scanJob(rows)
@@ -208,19 +204,42 @@ func (r *JobRepo) List(appID string) ([]*ct.Job, error) {
 	return jobs, rows.Err()
 }
 
+func (r *JobRepo) List(appID string) ([]*ct.Job, error) {
+	rows, err := r.db.Query("job_list", appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanJobRows(rows)
+}
+
+func (r *JobRepo) ListPage(appID string, before *time.Time, beforeID string, count int, excludeInternal bool) ([]*ct.Job, error) {
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	rows, err := r.db.Query("job_list_page", appID, ts, beforeID, count, excludeInternal)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanJobRows(rows)
+}
+
+func (r *JobRepo) ListActiveForApp(appID string) ([]*ct.Job, error) {
+	rows, err := r.db.Query("job_list_active_app", appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanJobRows(rows)
+}
+
 func (r *JobRepo) ListActive() ([]*ct.Job, error) {
 	rows, err := r.db.Query("job_list_active")
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var jobs []*ct.Job
-	for rows.Next() {
-		job, err := scanJob(rows)
-		if err != nil {
-			return nil, err
-		}
-		jobs = append(jobs, job)
-	}
-	return jobs, rows.Err()
+	return scanJobRows(rows)
 }

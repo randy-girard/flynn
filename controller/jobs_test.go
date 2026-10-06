@@ -43,6 +43,91 @@ func (s *S) TestJobList(c *C) {
 	c.Assert(job.Meta, DeepEquals, map[string]string{"some": "info"})
 }
 
+func (s *S) TestJobListPage(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "job-list-page"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	s.createTestFormation(c, &ct.Formation{ReleaseID: release.ID, AppID: app.ID})
+	created := make([]*ct.Job, 5)
+	for i := range created {
+		created[i] = s.createTestJob(c, &ct.Job{
+			UUID:      random.UUID(),
+			AppID:     app.ID,
+			ReleaseID: release.ID,
+			Type:      "web",
+			State:     ct.JobStateDown,
+		})
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	var page []*ct.Job
+	s.getJSON(c, "/apps/"+app.ID+"/jobs?count=2", &page)
+	c.Assert(page, HasLen, 2)
+	c.Assert(page[0].UUID, Equals, created[4].UUID)
+	c.Assert(page[1].UUID, Equals, created[3].UUID)
+
+	c.Assert(page[1].CreatedAt, NotNil)
+	q := "?count=2&before=" + page[1].CreatedAt.UTC().Format(time.RFC3339Nano) + "&before_id=" + page[1].UUID
+	s.getJSON(c, "/apps/"+app.ID+"/jobs"+q, &page)
+	c.Assert(page, HasLen, 2)
+	c.Assert(page[0].UUID, Equals, created[2].UUID)
+	c.Assert(page[1].UUID, Equals, created[1].UUID)
+
+	s.createTestJob(c, &ct.Job{
+		UUID: random.UUID(), AppID: app.ID, ReleaseID: release.ID, Type: "web", State: ct.JobStateUp,
+	})
+	var active []*ct.Job
+	s.getJSON(c, "/apps/"+app.ID+"/jobs?state=active", &active)
+	c.Assert(len(active) >= 1, Equals, true)
+	for _, j := range active {
+		switch j.State {
+		case ct.JobStatePending, ct.JobStateStarting, ct.JobStateUp, ct.JobStateStopping:
+		default:
+			c.Fatalf("active list included state %s", j.State)
+		}
+	}
+}
+
+func (s *S) TestJobListPageExcludeInternal(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "job-list-exclude-internal"})
+	release := s.createTestRelease(c, app.ID, &ct.Release{})
+	s.createTestFormation(c, &ct.Formation{ReleaseID: release.ID, AppID: app.ID})
+	var created []*ct.Job
+	for i := 0; i < 3; i++ {
+		created = append(created, s.createTestJob(c, &ct.Job{
+			UUID:      random.UUID(),
+			AppID:     app.ID,
+			ReleaseID: release.ID,
+			Type:      "slugbuilder",
+			State:     ct.JobStateDown,
+		}))
+		time.Sleep(2 * time.Millisecond)
+		created = append(created, s.createTestJob(c, &ct.Job{
+			UUID:      random.UUID(),
+			AppID:     app.ID,
+			ReleaseID: release.ID,
+			Type:      "web",
+			State:     ct.JobStateDown,
+		}))
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	var page []*ct.Job
+	s.getJSON(c, "/apps/"+app.ID+"/jobs?count=3", &page)
+	c.Assert(page, HasLen, 3)
+	c.Assert(page[0].Type, Equals, "web")
+	c.Assert(page[1].Type, Equals, "slugbuilder")
+	c.Assert(page[2].Type, Equals, "web")
+
+	s.getJSON(c, "/apps/"+app.ID+"/jobs?count=3&exclude_internal=1", &page)
+	c.Assert(page, HasLen, 3)
+	for _, j := range page {
+		c.Assert(j.Type, Equals, "web")
+	}
+	c.Assert(page[0].UUID, Equals, created[5].UUID)
+	c.Assert(page[1].UUID, Equals, created[3].UUID)
+	c.Assert(page[2].UUID, Equals, created[1].UUID)
+}
+
 func (s *S) TestJobListActive(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "job-list-active"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{})

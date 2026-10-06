@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flynn/que-go"
 	"github.com/jackc/pgx"
@@ -211,6 +212,19 @@ func (r *ReleaseRepo) ListPage(opts ListReleaseOptions) ([]*ct.Release, *PageTok
 
 func (r *ReleaseRepo) AppList(appID string) ([]*ct.Release, error) {
 	rows, err := r.db.Query(`release_app_list`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return releaseList(rows)
+}
+
+func (r *ReleaseRepo) AppListPage(appID string, before *time.Time, beforeID string, count int) ([]*ct.Release, error) {
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	rows, err := r.db.Query("release_app_list_page", appID, ts, beforeID, count)
 	if err != nil {
 		return nil, err
 	}
