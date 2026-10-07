@@ -82,6 +82,17 @@ func (s *S) TestPutResource(c *C) {
 	c.Assert(gotResource, DeepEquals, resource)
 }
 
+func (s *S) TestPutResourceUpdatesExisting(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "put-resource-update"})
+	resource, provider := s.provisionTestResource(c, "put-resource-update", []string{app.ID})
+	resource.Env = map[string]string{"FLYNN_POSTGRES": "postgresql-next-1", "FOO": "BAZ"}
+	c.Assert(s.c.PutResource(resource), IsNil)
+	got, err := s.c.GetResource(provider.ID, resource.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Env["FLYNN_POSTGRES"], Equals, "postgresql-next-1")
+	c.Assert(got.Env["FOO"], Equals, "BAZ")
+}
+
 func (s *S) TestAddResourceApp(c *C) {
 	app1 := s.createTestApp(c, &ct.App{Name: "add-resource-app1"})
 	app2 := s.createTestApp(c, &ct.App{Name: "add-resource-app2"})

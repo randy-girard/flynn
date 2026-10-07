@@ -78,6 +78,17 @@ func (rr *ResourceRepo) Add(r *ct.Resource) error {
 	return tx.Commit()
 }
 
+func (rr *ResourceRepo) Update(r *ct.Resource) error {
+	if r == nil || r.ID == "" {
+		return ErrNotFound
+	}
+	err := rr.db.QueryRow("resource_update", r.ID, r.Env, r.ExternalID).Scan(&r.CreatedAt)
+	if err == pgx.ErrNoRows {
+		return ErrNotFound
+	}
+	return err
+}
+
 func (rr *ResourceRepo) AddApp(resourceID, appID string) (*ct.Resource, error) {
 	tx, err := rr.db.Begin()
 	if err != nil {

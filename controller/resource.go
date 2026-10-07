@@ -243,7 +243,17 @@ func (c *controllerAPI) PutResource(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	if err := c.resourceRepo.Add(&resource); err != nil {
+	if _, err := c.resourceRepo.Get(resource.ID); err == nil {
+		if err := c.resourceRepo.Update(&resource); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	} else if err == ErrNotFound {
+		if err := c.resourceRepo.Add(&resource); err != nil {
+			respondWithError(w, err)
+			return
+		}
+	} else {
 		respondWithError(w, err)
 		return
 	}

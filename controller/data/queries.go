@@ -86,6 +86,7 @@ var preparedStatements = map[string]string{
 	"resource_list_by_app":                     resourceListByAppQuery,
 	"resource_select":                          resourceSelectQuery,
 	"resource_insert":                          resourceInsertQuery,
+	"resource_update":                          resourceUpdateQuery,
 	"resource_delete":                          resourceDeleteQuery,
 	"app_resource_insert_app_by_name":          appResourceInsertAppByNameQuery,
 	"app_resource_insert_app_by_name_or_id":    appResourceInsertAppByNameOrIDQuery,
@@ -741,6 +742,10 @@ WHERE resource_id = $1 AND deleted_at IS NULL`
 	resourceInsertQuery = `
 INSERT INTO resources (resource_id, provider_id, external_id, env, owner_account, owner_app)
 VALUES ($1, $2, $3, $4, $5, $6) RETURNING created_at`
+	resourceUpdateQuery = `
+UPDATE resources SET env = $2, external_id = $3
+WHERE resource_id = $1 AND deleted_at IS NULL
+RETURNING created_at`
 	resourceSetOwnerAppQuery = `
 UPDATE resources SET owner_app=$2 WHERE resource_id=$1 AND deleted_at IS NULL AND (owner_app IS NULL OR owner_app='')`
 	resourceDeleteQuery = `
