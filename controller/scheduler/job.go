@@ -138,8 +138,11 @@ func (j *Job) TagsMatchHost(host *Host) bool {
 	if !ct.HostIDsTagMatches(tags, host.ID) {
 		return false
 	}
+	if !ct.AvoidHostIDsTagMatches(tags, host.ID) {
+		return false
+	}
 	for k, v := range tags {
-		if k == ct.FormationHostIDsTag {
+		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag {
 			continue
 		}
 		if w, ok := host.Tags[k]; !ok || v != w {

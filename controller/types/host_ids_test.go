@@ -30,3 +30,19 @@ func TestHostIDsTagMatches(t *testing.T) {
 		t.Fatal("empty flynn-host-ids must match no hosts")
 	}
 }
+
+func TestAvoidHostIDsTagMatches(t *testing.T) {
+	if !AvoidHostIDsTagMatches(nil, "host1") {
+		t.Fatal("nil tags match every host")
+	}
+	if !AvoidHostIDsTagMatches(map[string]string{FormationAvoidHostIDsTag: ""}, "host1") {
+		t.Fatal("empty avoid list matches every host")
+	}
+	deny := map[string]string{FormationAvoidHostIDsTag: "host1"}
+	if AvoidHostIDsTagMatches(deny, "host1") {
+		t.Fatal("listed host must be excluded")
+	}
+	if !AvoidHostIDsTagMatches(deny, "host2") {
+		t.Fatal("other hosts must still match")
+	}
+}

@@ -28,6 +28,21 @@ func TestTagsMatchHostIDsTag(t *testing.T) {
 	}
 }
 
+func TestTagsMatchHostAvoidHostIDsTag(t *testing.T) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		Tags: map[string]map[string]string{
+			"postgres": {ct.FormationAvoidHostIDsTag: "host1"},
+		},
+	})
+	job := &Job{Type: "postgres", Formation: formation}
+	if job.TagsMatchHost(&Host{ID: "host1"}) {
+		t.Fatal("leader host must be avoided")
+	}
+	if !job.TagsMatchHost(&Host{ID: "host2"}) {
+		t.Fatal("other hosts must match")
+	}
+}
+
 func TestMatchingOmniHostCountHonorsHostIDs(t *testing.T) {
 	s := &Scheduler{
 		hosts: map[string]*Host{

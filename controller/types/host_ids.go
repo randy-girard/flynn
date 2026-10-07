@@ -8,6 +8,11 @@ import "strings"
 // means no hosts.
 const FormationHostIDsTag = "flynn-host-ids"
 
+// FormationAvoidHostIDsTag excludes the listed host IDs. Auto-failover
+// followers use it so a replica is never placed on the primary's host.
+// Missing or empty means no hosts are excluded.
+const FormationAvoidHostIDsTag = "flynn-avoid-host-ids"
+
 // EncodeHostIDsTag joins host IDs for FormationHostIDsTag.
 func EncodeHostIDsTag(ids []string) string {
 	cleaned := uniqueHostIDs(ids)
@@ -47,6 +52,24 @@ func HostIDsTagMatches(tags map[string]string, hostID string) bool {
 		}
 	}
 	return false
+}
+
+// AvoidHostIDsTagMatches reports whether hostID is allowed by the denylist.
+// A missing or empty flynn-avoid-host-ids key matches every host.
+func AvoidHostIDsTagMatches(tags map[string]string, hostID string) bool {
+	if tags == nil {
+		return true
+	}
+	raw, ok := tags[FormationAvoidHostIDsTag]
+	if !ok || strings.TrimSpace(raw) == "" {
+		return true
+	}
+	for _, id := range ParseHostIDsTag(raw) {
+		if id == hostID {
+			return false
+		}
+	}
+	return true
 }
 
 func uniqueHostIDs(ids []string) []string {

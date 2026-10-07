@@ -231,3 +231,22 @@ func TestHostReservedIgnoresStoppedJobs(t *testing.T) {
 		t.Fatalf("stopped jobs must not reserve: mem=%d cpu=%d", mem, cpu)
 	}
 }
+
+func TestPickHostAvoidsListedHost(t *testing.T) {
+	h1 := &Host{ID: "h1"}
+	h2 := &Host{ID: "h2"}
+	job := persistSingletonTestJob("redis")
+	job.Formation.Tags = map[string]map[string]string{
+		"redis": {ct.FormationAvoidHostIDsTag: "h1"},
+	}
+	s := &Scheduler{
+		jobs:  Jobs{},
+		hosts: map[string]*Host{"h1": h1, "h2": h2},
+	}
+	for i := 0; i < 20; i++ {
+		got := s.pickHost(job, map[string]int{})
+		if got == nil || got.ID != "h2" {
+			t.Fatalf("attempt %d: placed on %v, want h2 (avoid h1)", i, got)
+		}
+	}
+}
