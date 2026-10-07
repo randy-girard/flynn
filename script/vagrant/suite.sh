@@ -528,6 +528,7 @@ SMOKE_UNIT_PACKAGES=(
   ./pkg/squashfs/
   ./pkg/dockerimage/
   ./pkg/plugin/
+  ./pkg/resname/
   ./pkg/postgres/
   ./pkg/rpcplus/fdrpc/
   ./host/fixer/
@@ -2295,6 +2296,59 @@ teardown_throwaway_datastores() {
   done
 }
 
+# Follower env must name the isolated instance app (postgresql-chaparral-48291),
+# not a controller resource UUID. Add-follower used to post the UUID and the
+# replica never showed up under the leader.
+assert_isolated_follower_app() {
+  local name=$1 provider=$2
+  if [[ -z "${name}" ]]; then
+    echo "empty follower name for ${provider}" >&2
+    return 1
+  fi
+  if [[ "${name}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    echo "${provider} follower must be an isolated instance name, not a controller UUID: ${name}" >&2
+    return 1
+  fi
+  case "${provider}" in
+    postgres)
+      if [[ ! "${name}" =~ ^(postgresql-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{5,8}|pg-[a-z]+-[a-z]{6,8})$ ]]; then
+        echo "postgres follower ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+    mysql)
+      if [[ ! "${name}" =~ ^mysql-[a-z]+-[a-z]{6,8}$ ]]; then
+        echo "mysql follower ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+    redis)
+      if [[ ! "${name}" =~ ^(redis-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z]+-[a-z]{6,8})$ ]]; then
+        echo "redis follower ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+    kafka)
+      if [[ ! "${name}" =~ ^kafka-[a-z]+-[a-z]{6,8}$ ]]; then
+        echo "kafka extra node ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+    mongodb)
+      if [[ ! "${name}" =~ ^mongodb-[a-z]+-[a-z]{6,8}$ ]]; then
+        echo "mongodb replica ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+    clickhouse)
+      if [[ ! "${name}" =~ ^clickhouse-[a-z]+-[a-z]{6,8}$ ]]; then
+        echo "clickhouse follower ${name} is not an isolated instance app" >&2
+        return 1
+      fi
+      ;;
+  esac
+}
+
 exercise_datastore_followers() {
   local app=$1
   local provider url fol saved phase_ok
@@ -2316,6 +2370,11 @@ exercise_datastore_followers() {
     fi
     if [[ -z "${fol}" ]]; then
       record_check "follower" "${provider}" "FAIL" "could not parse follower app from FOLLOWER_URL"
+      APP_NAME="${saved}"
+      return 1
+    fi
+    if ! assert_isolated_follower_app "${fol}" "${provider}"; then
+      record_check "follower" "${provider}" "FAIL" "follower ${fol} is not an isolated instance"
       APP_NAME="${saved}"
       return 1
     fi

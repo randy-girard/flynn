@@ -104,6 +104,12 @@ need "${smoke}" 'DATASTORE_RESOURCE_APP' \
   "follower verify must name the instance on the throwaway app (flynn pg:psql pg-xxx)"
 need "${smoke}" 'flynn_ds' \
   "datastore CLI helper must insert the named resource before --"
+need "${smoke}" 'assert_isolated_follower_app' \
+  "follower verify must reject controller resource UUIDs and require isolated instance names"
+need "${smoke}" 'postgresql-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{5,8}' \
+  "postgres follower names must accept expanded word stems such as chaparral"
+need "${smoke}" './pkg/resname/' \
+  "host unit-test gate must compile pkg/resname (expanded words and colors)"
 need "${smoke}" 'attempt ${attempt}/20' \
   "resource:add must retry; provider may not be ready yet after plugin install"
 need "${smoke}" 'kafka_cluster_ready' \
