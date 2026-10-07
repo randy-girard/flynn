@@ -331,7 +331,7 @@ func postgresHelpCLI() plugin.CLI {
 		Doc: `usage: flynn pg
        flynn pg:create <database>
        flynn pg:info
-       flynn pg:follow [--runtime <name>]
+       flynn pg:follow [--runtime <name>] [--auto-failover]
        flynn pg:wait <resource>
        flynn pg:promote <follower>
        flynn pg:unfollow <follower>

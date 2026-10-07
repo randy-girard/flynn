@@ -22,7 +22,10 @@ The plugin provides Redis from the Ubuntu 24.04 package set in a
 single process configuration. Redis writes an append-only file on a persistent
 volume, so data survives job restarts and `flynn-host update`. A follower is a
 separate resource (`flynn redis:follow` or `flynn resource:add redis --follow`).
-The volume is **not** part of `flynn-host backup`. Treat the data
+`flynn resource:add redis --follow <primary> --auto-failover` places that
+replica on another host and promotes it if the primary job is lost, then
+creates a replacement replica. Failover is asynchronous (RPO is replication
+lag). A single-node cluster cannot use auto-failover. The volume is **not** part of `flynn-host backup`. Treat the data
 as ephemeral: caching, development, and test use.
 
 Each resource is its own Redis instance and must have a password (`requirepass`).
@@ -79,11 +82,13 @@ flynn redis:follow
 flynn redis:wait <follower>
 flynn redis:promote <follower>
 flynn redis:unfollow <follower>
+flynn resource:add redis --follow <primary> --auto-failover
 ```
 
 `redis:wait` prints live copy progress (full resync, then streaming catch-up).
-The dashboard Followers tab has **Add follower** and the same progress. A
-primary cannot be deleted while it still has followers.
+The dashboard Followers tab has **Add follower** and the same progress. Auto-failover
+places the replica on another host, promotes it if the primary job is gone, then
+recreates a replica. A primary cannot be deleted while it still has followers.
 
 ### Dumping and restoring
 

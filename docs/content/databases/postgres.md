@@ -95,11 +95,20 @@ rewrites the primary attachment `*_URL`. The old leader remains its own
 resource. `flynn pg:unfollow <follower>` stops replication and leaves a
 standalone writable copy.
 
+`flynn resource:add postgres --follow <primary> --auto-failover` (or
+`flynn pg:follow --auto-failover`) places the replica on a different host.
+If the primary job is gone for about 30 seconds, Flynn promotes the replica,
+fences the old primary, and starts a new replica so the pair remains. Failover
+is asynchronous, so any unreplicated writes are lost (RPO is replication lag).
+A single-node cluster cannot use auto-failover. Default `--follow` stays
+manual.
+
 Followers always stream on the same engine version. `flynn pg:upgrade` uses
 logical replication, promotes a new primary, then recreates followers. A
 follower may use a different `--runtime` name.
 
-`flynn pg:info` shows the leader, followers, and lag. `flynn pg:create`
+`flynn pg:info` shows the role, who follows whom, auto-failover, replica
+pending, host, and lag. `flynn pg:create`
 creates a logical database on this instance. `flynn pg:psql` opens a console
 for this instance's URL only. Those commands come from the postgres plugin.
 They are not built into the `flynn` CLI.

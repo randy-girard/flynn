@@ -256,6 +256,10 @@ func TestSingleAttachmentEnv(t *testing.T) {
 	if err != nil || env["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || env["AMBER_URL"] != "" {
 		t.Fatalf("color --as %#v %v", env, err)
 	}
+	env, err = singleAttachmentEnv(map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://db"}, "CHARTREUSE")
+	if err != nil || env["FLYNN_POSTGRESQL_CHARTREUSE_URL"] != "postgres://db" || env["CHARTREUSE_URL"] != "" {
+		t.Fatalf("extended color --as %#v %v", env, err)
+	}
 }
 
 func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
@@ -346,6 +350,25 @@ func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
 	}
 	if custom.Runtime != "custom" || custom.CPU != 100 || custom.Disk != 1<<30 {
 		t.Fatalf("custom %#v", custom)
+	}
+}
+
+func TestWithAutoFailover(t *testing.T) {
+	cat := dbruntime.BuiltinCatalog()
+	got, err := databaseProvisionConfig("postgres", "", "leader", "", "", "", "", "", "", cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = withAutoFailover(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body databaseProvisionBody
+	if err := json.Unmarshal(*got, &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.AutoFailover || body.Follow == "" {
+		t.Fatalf("auto-failover body %#v", body)
 	}
 }
 

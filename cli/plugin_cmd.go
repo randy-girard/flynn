@@ -415,6 +415,9 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 	if action.Append != "" {
 		jobArgs = append(jobArgs, cliutil.List(args, action.Append)...)
 	}
+	if args != nil && args.Bool["--auto-failover"] {
+		jobArgs = append(jobArgs, "--auto-failover")
+	}
 
 	env := make(map[string]string, len(action.Env)+6)
 	for k, v := range action.Env {

@@ -28,7 +28,7 @@ NAME is the isolated instance (postgresql-concave-48291). Use it with pg:psql,
 redis-cli, --follow, --join, resource:attach, and resource:remove.
 `)
 	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--join <resource>] [--runtime <name>] [--replication <mode>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
+usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--join <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
 
 Provision a new resource for the app using <provider>.
 
@@ -38,11 +38,14 @@ process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
 are rejected unless a cluster admin has allowed custom sizes.
 
 For postgres, mysql, redis, kafka, mongodb, and clickhouse, the installed plugin
-receives --as, --follow, --join, --runtime, and --replication. Postgres, mysql,
+receives --as, --follow, --join, --runtime, --replication, and --auto-failover.
+Postgres, mysql,
 and redis --follow creates a replica resource of that instance. Kafka and
 mongodb --join starts another Flynn job on that existing cluster (any member
 name works; --follow is accepted as an alias). ClickHouse --follow still copies
-onto a separate resource. The platform postgres appliance at
+onto a separate resource. Postgres and redis --auto-failover with --follow
+places the replica on another host and promotes it if the primary job is lost,
+then recreates a replica so the pair remains. The platform postgres appliance at
 postgres-api.discoverd is not used. Every postgres provision sets
 FLYNN_POSTGRESQL_<COLOR>_URL unless --as names the attachment
 (--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_POSTGRESQL_AMBER_URL).
@@ -59,6 +62,7 @@ Options:
 	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
+	--auto-failover          with --follow on postgres/redis: place off the primary host and fail over automatically
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
 	--memory=<bytes>         raw memory (only when custom sizes are allowed)
 	--disk=<bytes>           raw disk (only when custom sizes are allowed)
@@ -193,6 +197,20 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	cfg, err := databaseProvisionConfig(provider, args.String["--as"], follow, join, args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
 	if err != nil {
 		return err
+	}
+	if args.Bool["--auto-failover"] {
+		if follow == "" {
+			return fmt.Errorf("--auto-failover requires --follow")
+		}
+		switch strings.ToLower(strings.TrimSpace(provider)) {
+		case "postgres", "redis":
+		default:
+			return fmt.Errorf("--auto-failover is only supported for postgres and redis")
+		}
+		cfg, err = withAutoFailover(cfg)
+		if err != nil {
+			return err
+		}
 	}
 	req.Config = cfg
 	res, err := client.ProvisionResource(req)
@@ -399,14 +417,15 @@ func rejectPlatformPostgresAdd(provider string, client controller.Client) error 
 }
 
 type databaseProvisionBody struct {
-	As          string `json:"as,omitempty"`
-	Follow      string `json:"follow,omitempty"`
-	Join        string `json:"join,omitempty"`
-	Runtime     string `json:"runtime,omitempty"`
-	Replication string `json:"replication,omitempty"`
-	CPU         int64  `json:"cpu,omitempty"`
-	Memory      int64  `json:"memory,omitempty"`
-	Disk        int64  `json:"disk,omitempty"`
+	As           string `json:"as,omitempty"`
+	Follow       string `json:"follow,omitempty"`
+	Join         string `json:"join,omitempty"`
+	Runtime      string `json:"runtime,omitempty"`
+	Replication  string `json:"replication,omitempty"`
+	AutoFailover bool   `json:"auto_failover,omitempty"`
+	CPU          int64  `json:"cpu,omitempty"`
+	Memory       int64  `json:"memory,omitempty"`
+	Disk         int64  `json:"disk,omitempty"`
 }
 
 func isClusterJoinProvider(provider string) bool {
@@ -502,6 +521,29 @@ func databaseProvisionConfig(provider, as, follow, join, runtime, replication, c
 		Memory:      sz.Memory,
 		Disk:        sz.Disk,
 	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	msg := json.RawMessage(raw)
+	return &msg, nil
+}
+
+func withAutoFailover(cfg *json.RawMessage) (*json.RawMessage, error) {
+	if cfg == nil {
+		body := databaseProvisionBody{AutoFailover: true}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		msg := json.RawMessage(raw)
+		return &msg, nil
+	}
+	var body databaseProvisionBody
+	if err := json.Unmarshal(*cfg, &body); err != nil {
+		return nil, err
+	}
+	body.AutoFailover = true
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
