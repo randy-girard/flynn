@@ -15,9 +15,17 @@ import (
 // words are short readable names. The six-letter suffix is what makes the
 // full name unique.
 var words = []string{
-	"amber", "basin", "cedar", "concave", "delta", "ember", "fjord", "grove", "harbor",
-	"inlet", "juniper", "kelp", "lagoon", "meadow", "north", "orchid", "prairie",
-	"quartz", "ridge", "spruce", "timber", "upland", "valley", "willow", "yarrow",
+	"alder", "alpine", "amber", "arroyo", "aspen", "atoll", "basin", "bayou",
+	"bluff", "boulder", "brook", "canyon", "cape", "cay", "cedar", "chaparral",
+	"cliff", "comet", "concave", "cove", "creek", "delta", "dune", "ember",
+	"estuary", "fen", "fjord", "glacier", "glen", "gorge", "granite", "grove",
+	"harbor", "heath", "highland", "horizon", "inlet", "island", "juniper",
+	"kelp", "knoll", "lagoon", "lake", "ledge", "marsh", "meadow", "mesa",
+	"mist", "moraine", "north", "orchid", "oxbow", "peak", "pebble", "pine",
+	"plateau", "pond", "prairie", "quartz", "range", "reef", "ridge", "river",
+	"rock", "savanna", "shore", "sierra", "spruce", "summit", "swamp", "tide",
+	"timber", "tundra", "upland", "valley", "vista", "willow", "woodland",
+	"yarrow",
 }
 
 const alphabet = "abcdefghijklmnopqrstuvwxyz"
@@ -29,14 +37,19 @@ const postgresAttachPrefix = "FLYNN_POSTGRESQL_"
 const redisAttachPrefix = "FLYNN_REDIS_"
 
 var attachmentColors = []string{
-	"AMBER", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE", "BRASS", "BRONZE",
-	"BROWN", "BURGUNDY", "COBALT", "COPPER", "CORAL", "CREAM", "CRIMSON",
-	"CYAN", "EMERALD", "FUCHSIA", "GOLD", "GRAY", "GREEN", "INDIGO", "IVORY",
-	"JADE", "LAVENDER", "LIME", "MAGENTA", "MAROON", "MINT", "NAVY", "OLIVE",
-	"ORANGE", "PEACH", "PEARL", "PINK", "PLATINUM", "PLUM", "PURPLE", "RED",
-	"ROSE", "RUBY", "RUST", "SAGE", "SALMON", "SAND", "SCARLET", "SILVER",
-	"SLATE", "TAN", "TEAL", "TOMATO", "TURQUOISE", "VIOLET", "WHITE", "WINE",
-	"YELLOW",
+	"ALABASTER", "AMBER", "APRICOT", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE",
+	"BONE", "BRASS", "BRONZE", "BROWN", "BURGUNDY", "CARMINE", "CELADON",
+	"CERULEAN", "CHARTREUSE", "CHESTNUT", "CINNAMON", "CITRINE", "COBALT",
+	"COPPER", "CORAL", "CREAM", "CRIMSON", "CYAN", "DENIM", "EBONY", "EMERALD",
+	"FLAX", "FOREST", "FUCHSIA", "GARNET", "GINGER", "GOLD", "GRAPHITE", "GRAY",
+	"GREEN", "HAZEL", "HONEY", "ICE", "INDIGO", "IVORY", "JADE", "KHAKI",
+	"LAVENDER", "LEMON", "LILAC", "LIME", "MAGENTA", "MAHOGANY", "MAROON",
+	"MAUVE", "MINT", "MOSS", "MUSTARD", "NAVY", "OCHRE", "OLIVE", "ONYX",
+	"OPAL", "ORANGE", "PEACH", "PEARL", "PERIWINKLE", "PINK", "PISTACHIO",
+	"PLATINUM", "PLUM", "PURPLE", "RED", "ROSE", "RUBY", "RUST", "SAFFRON",
+	"SAGE", "SALMON", "SAND", "SCARLET", "SEPIA", "SIENNA", "SILVER", "SLATE",
+	"STEEL", "TAN", "TAUPE", "TEAL", "TOMATO", "TURQUOISE", "UMBER",
+	"VERMILION", "VIOLET", "WALNUT", "WHEAT", "WHITE", "WINE", "YELLOW",
 }
 
 // Name returns prefix-word-xxxxxx. taken reports names already in use.

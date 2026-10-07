@@ -386,7 +386,7 @@ func TestCanonical(t *testing.T) {
 }
 
 func TestIsolatedService(t *testing.T) {
-	for _, name := range []string{"postgresql-concave-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "redis-juniper-abcdef", "redis-harbor-48291", "redis-shop-482913"} {
+	for _, name := range []string{"postgresql-concave-48291", "postgresql-chaparral-48291", "postgresql-woodland-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "mysql-yarrow-aaaaaa", "redis-juniper-abcdef", "redis-harbor-48291", "redis-woodland-48291", "redis-shop-482913"} {
 		if !IsolatedService(name) {
 			t.Fatalf("%q should be an isolated datastore", name)
 		}
@@ -395,6 +395,63 @@ func TestIsolatedService(t *testing.T) {
 		if IsolatedService(name) {
 			t.Fatalf("%q must not look like an isolated datastore", name)
 		}
+	}
+}
+
+func TestWordAndColorListsUniqueSorted(t *testing.T) {
+	seen := map[string]bool{}
+	for i, w := range words {
+		if w == "" || w != strings.ToLower(w) {
+			t.Fatalf("word %q", w)
+		}
+		for _, c := range w {
+			if c < 'a' || c > 'z' {
+				t.Fatalf("word %q must be a-z", w)
+			}
+		}
+		if i > 0 && w <= words[i-1] {
+			t.Fatalf("words must be sorted unique: %q after %q", w, words[i-1])
+		}
+		if seen[w] {
+			t.Fatalf("duplicate word %q", w)
+		}
+		seen[w] = true
+	}
+	if len(words) < 50 {
+		t.Fatalf("want a larger word list, got %d", len(words))
+	}
+	seenColor := map[string]bool{}
+	for i, c := range attachmentColors {
+		if c == "" || c != strings.ToUpper(c) {
+			t.Fatalf("color %q", c)
+		}
+		for _, r := range c {
+			if r < 'A' || r > 'Z' {
+				t.Fatalf("color %q must be A-Z", c)
+			}
+		}
+		if i > 0 && c <= attachmentColors[i-1] {
+			t.Fatalf("colors must be sorted unique: %q after %q", c, attachmentColors[i-1])
+		}
+		if seenColor[c] {
+			t.Fatalf("duplicate color %q", c)
+		}
+		seenColor[c] = true
+	}
+	if len(attachmentColors) < 70 {
+		t.Fatalf("want a larger color list, got %d", len(attachmentColors))
+	}
+}
+
+func TestPostgresAttachmentURLKeyRecognizesExtendedColor(t *testing.T) {
+	if got := PostgresAttachmentURLKey("chartreuse", nil); got != "FLYNN_POSTGRESQL_CHARTREUSE_URL" {
+		t.Fatalf("got %q", got)
+	}
+	if got := RedisAttachmentURLKey("periwinkle", nil); got != "FLYNN_REDIS_PERIWINKLE_URL" {
+		t.Fatalf("got %q", got)
+	}
+	if !IsolatedService("postgresql-alder-48291") || !IsolatedService("redis-glacier-48291") {
+		t.Fatal("new word stems must still be isolated instance names")
 	}
 }
 
