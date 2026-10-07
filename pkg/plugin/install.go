@@ -355,6 +355,10 @@ func (in *Installer) apply(opts InstallOptions) error {
 			in.restorePreviousRelease(app, dep)
 			return fmt.Errorf("plugin %s did not become ready: %w", m.Name, err)
 		}
+		if dep != nil && dep.retireAfterReady {
+			in.retirePreviousRelease(app, dep)
+			dep.retireAfterReady = false
+		}
 		in.startClusterUpgrades(m)
 	}
 
@@ -858,9 +862,11 @@ func (in *Installer) getInstalledPluginApp(m *Manifest) (*ct.App, error) {
 }
 
 type pluginDeploy struct {
-	prev     *ct.Release
-	prevForm *ct.Formation
-	timeout  time.Duration
+	prev             *ct.Release
+	prevForm         *ct.Formation
+	timeout          time.Duration
+	newID            string
+	retireAfterReady bool
 }
 
 // pluginScaleNoWait is true when install already polls PingURL. Waiting on
@@ -882,6 +888,30 @@ func (in *Installer) restorePreviousRelease(app *ct.App, dep *pluginDeploy) {
 		NoWait:    true,
 	})
 	_ = in.Client.SetAppRelease(app.ID, dep.prev.ID)
+	if zeros := previousReleaseScaleDown(dep.prev, dep.prevForm); dep.newID != "" && len(zeros) > 0 {
+		_ = in.Client.ScaleAppRelease(app.ID, dep.newID, ct.ScaleOptions{
+			Processes: zeros,
+			Timeout:   &timeout,
+			NoWait:    true,
+		})
+	}
+}
+
+func (in *Installer) retirePreviousRelease(app *ct.App, dep *pluginDeploy) {
+	if in == nil || in.Client == nil || app == nil || dep == nil || dep.prev == nil {
+		return
+	}
+	zeros := previousReleaseScaleDown(dep.prev, dep.prevForm)
+	if len(zeros) == 0 {
+		return
+	}
+	in.logf("retiring previous %s release %s after new jobs are ready", app.Name, dep.prev.ID)
+	timeout := dep.timeout
+	_ = in.Client.ScaleAppRelease(app.ID, dep.prev.ID, ct.ScaleOptions{
+		Processes: zeros,
+		Timeout:   &timeout,
+		NoWait:    true,
+	})
 }
 
 func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact, cluster map[string]string) (*pluginDeploy, error) {
@@ -908,20 +938,25 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 	if m.App.DeployTimeout > 0 {
 		timeout = time.Duration(m.App.DeployTimeout) * time.Second
 	}
-	dep := &pluginDeploy{prev: prev, timeout: timeout}
+	dep := &pluginDeploy{prev: prev, timeout: timeout, newID: release.ID}
 
 	if prev != nil && prev.ID != release.ID {
 		if f, err := in.Client.GetFormation(app.ID, prev.ID); err == nil {
 			dep.prevForm = f
 		}
-		if zeros := previousReleaseScaleDown(prev, dep.prevForm); len(zeros) > 0 {
-			in.logf("stopping previous %s release %s so the new job can be placed", app.Name, prev.ID)
-			if err := in.Client.ScaleAppRelease(app.ID, prev.ID, ct.ScaleOptions{
-				Processes: zeros,
-				Timeout:   &timeout,
-			}); err != nil {
-				return dep, fmt.Errorf("scale down previous %s release: %w", app.Name, err)
+		if pluginMustStopPreviousFirst(m, cluster, dep.prevForm) {
+			if zeros := previousReleaseScaleDown(prev, dep.prevForm); len(zeros) > 0 {
+				in.logf("stopping previous %s release %s so the new job can be placed", app.Name, prev.ID)
+				if err := in.Client.ScaleAppRelease(app.ID, prev.ID, ct.ScaleOptions{
+					Processes: zeros,
+					Timeout:   &timeout,
+				}); err != nil {
+					return dep, fmt.Errorf("scale down previous %s release: %w", app.Name, err)
+				}
 			}
+		} else {
+			dep.retireAfterReady = true
+			in.logf("keeping previous %s release %s up until the new jobs pass readiness", app.Name, prev.ID)
 		}
 	}
 
@@ -941,6 +976,10 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 	}
 	if err := in.Client.SetAppRelease(app.ID, release.ID); err != nil {
 		return dep, fmt.Errorf("set release: %w", err)
+	}
+	if dep.retireAfterReady && !pluginScaleNoWait(m) {
+		in.retirePreviousRelease(app, dep)
+		dep.retireAfterReady = false
 	}
 	for k, v := range env {
 		if v != "" {

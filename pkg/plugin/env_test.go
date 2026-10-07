@@ -240,6 +240,21 @@ func TestFormationScaleAndGeneratedEnv(t *testing.T) {
 		t.Fatalf("ha web=%v", scale)
 	}
 
+	dash := &Manifest{App: AppSpec{Processes: map[string]ct.ProcessType{"web": {}}}}
+	if !pluginMustStopPreviousFirst(dash, map[string]string{"SINGLETON": "true"}, &ct.Formation{Processes: map[string]int{"web": 2}}) {
+		t.Fatal("singleton must stop previous web before placing a replacement")
+	}
+	if !pluginMustStopPreviousFirst(dash, nil, &ct.Formation{Processes: map[string]int{"web": 1}}) {
+		t.Fatal("web=1 must stop previous so the host can place the new job")
+	}
+	if pluginMustStopPreviousFirst(dash, map[string]string{"SINGLETON": "false"}, &ct.Formation{Processes: map[string]int{"web": 2}}) {
+		t.Fatal("HA dashboard web=2 must keep old jobs up during plugin:update")
+	}
+	vol := &Manifest{App: AppSpec{Processes: map[string]ct.ProcessType{"web": {Volumes: []ct.VolumeReq{{Path: "/data"}}}}}}
+	if !pluginMustStopPreviousFirst(vol, map[string]string{"SINGLETON": "false"}, &ct.Formation{Processes: map[string]int{"web": 2}}) {
+		t.Fatal("volume plugins must stop the old job before starting the replacement")
+	}
+
 	zeros := previousReleaseScaleDown(
 		&ct.Release{Processes: map[string]ct.ProcessType{"web": {}, "worker": {}}},
 		&ct.Formation{Processes: map[string]int{"web": 1}},

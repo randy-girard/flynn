@@ -167,15 +167,42 @@ func FormationScale(m *Manifest, cluster map[string]string) map[string]int {
 	return procs
 }
 
+// pluginMustStopPreviousFirst is true when the old plugin jobs have to
+// exit before the replacement can start: exclusive volumes, omni/host-network
+// processes, or a singleton / web=1 formation that cannot place a second job.
+// HA plugin apps (dashboard web=2) scale the new release first so the
+// router keeps backends during plugin:update.
+func pluginMustStopPreviousFirst(m *Manifest, cluster map[string]string, prevForm *ct.Formation) bool {
+	if m != nil {
+		for _, p := range m.App.Processes {
+			if len(p.Volumes) > 0 || p.Omni || p.HostNetwork || p.DeprecatedData {
+				return true
+			}
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(cluster["SINGLETON"]), "true") {
+		return true
+	}
+	if prevForm == nil || len(prevForm.Processes) == 0 {
+		return true
+	}
+	max := 0
+	for _, n := range prevForm.Processes {
+		if n > max {
+			max = n
+		}
+	}
+	return max <= 1
+}
+
 // previousReleaseScaleDown is the formation used to stop jobs from the
 // release that plugin install just replaced. ScaleAppRelease only updates
 // the new release; without this, the old formation stays at web=1 and
 // discoverd keeps both backends (HTML from vN, JS from vN-1 → 404s).
 //
-// Plugin updates apply this *before* scaling the new release. A singleton
-// host cannot place a second dashboard (or similar) web job while the old
-// web=1 job still holds RAM; waiting on the new formation looks hung after
-// "resource postgres already attached".
+// Singleton / volume plugins apply this *before* scaling the new release so
+// a second job can be placed. HA plugins (web>=2) apply it after the new
+// release is ready so the site stays up.
 func previousReleaseScaleDown(prev *ct.Release, formation *ct.Formation) map[string]int {
 	zeros := map[string]int{}
 	if formation != nil {
