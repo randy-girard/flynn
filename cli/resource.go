@@ -43,7 +43,7 @@ Postgres, mysql,
 and redis --follow creates a replica resource of that instance. Kafka and
 mongodb --join starts another Flynn job on that existing cluster (any member
 name works; --follow is accepted as an alias). ClickHouse --follow still copies
-onto a separate resource. Postgres and redis --auto-failover with --follow
+onto a separate resource. Postgres, mysql, and redis --auto-failover with --follow
 places the replica on another host and promotes it if the primary job is lost,
 then recreates a replica so the pair remains. The platform postgres appliance at
 postgres-api.discoverd is not used. Every postgres provision sets
@@ -62,7 +62,7 @@ Options:
 	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
-	--auto-failover          with --follow on postgres/redis: place off the primary host and fail over automatically
+	--auto-failover          with --follow on postgres/mysql/redis: place off the primary host and fail over automatically
 	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
 	--memory=<bytes>         raw memory (only when custom sizes are allowed)
 	--disk=<bytes>           raw disk (only when custom sizes are allowed)
@@ -203,9 +203,9 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 			return fmt.Errorf("--auto-failover requires --follow")
 		}
 		switch strings.ToLower(strings.TrimSpace(provider)) {
-		case "postgres", "redis":
+		case "postgres", "redis", "mysql", "mariadb":
 		default:
-			return fmt.Errorf("--auto-failover is only supported for postgres and redis")
+			return fmt.Errorf("--auto-failover is only supported for postgres, redis, and mysql")
 		}
 		cfg, err = withAutoFailover(cfg)
 		if err != nil {
