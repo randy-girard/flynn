@@ -46,8 +46,8 @@ func TestTagsMatchHostAvoidHostIDsTag(t *testing.T) {
 func TestMatchingOmniHostCountHonorsHostIDs(t *testing.T) {
 	s := &Scheduler{
 		hosts: map[string]*Host{
-			"host1": {ID: "host1"},
-			"host2": {ID: "host2"},
+			"host1": {ID: "host1", Healthy: true},
+			"host2": {ID: "host2", Healthy: true},
 			"host3": {ID: "host3", Shutdown: true},
 		},
 	}

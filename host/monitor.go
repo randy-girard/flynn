@@ -7,6 +7,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/fixer"
+	"github.com/randy-girard/flynn/host/monitorcheck"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
@@ -152,9 +153,17 @@ func (m *Monitor) checkCluster() {
 	log := monitorLogger.New("fn", "checkCluster")
 	var faulted bool
 	hosts, err := m.c.Hosts()
-	if err != nil || len(hosts) < m.hostCount {
-		log.Info("waiting for hosts", "current", len(hosts), "want", m.hostCount)
+	if err != nil {
+		log.Info("waiting for hosts", "err", err)
 		return
+	}
+	want := m.hostCount
+	if !monitorcheck.HaveQuorum(len(hosts), want) {
+		log.Info("waiting for host quorum", "current", len(hosts), "want", want)
+		return
+	}
+	if len(hosts) < want {
+		log.Info("host missing, checking remaining cluster", "current", len(hosts), "want", want)
 	}
 
 	controllerInstances, _ := discoverd.NewService("controller").Instances()
@@ -163,16 +172,22 @@ func (m *Monitor) checkCluster() {
 		faulted = true
 	}
 
+	schedulerDown := false
 	if _, err := discoverd.NewService("controller-scheduler").Leader(); err != nil && !discoverd.IsNotFound(err) {
 		log.Error("error getting scheduler leader, can't determine health")
 	} else if err != nil {
 		log.Error("scheduler is not up")
 		faulted = true
+		schedulerDown = true
 	}
 
+	delay := monitorcheck.FaultDeadline(len(hosts), want, schedulerDown, checkInterval, deadlineLength)
 	if faulted && m.deadline.IsZero() {
 		log.Error("cluster is unhealthy, setting fault")
-		m.deadline = time.Now().Add(deadlineLength)
+		m.deadline = time.Now().Add(delay)
+	} else if faulted && !m.deadline.IsZero() && time.Until(m.deadline) > delay {
+		log.Error("shortening fault deadline after node loss")
+		m.deadline = time.Now().Add(delay)
 	} else if !faulted && !m.deadline.IsZero() {
 		log.Info("cluster currently healthy, clearing fault")
 		m.deadline = time.Time{}

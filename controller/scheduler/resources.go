@@ -124,12 +124,19 @@ func (s *Scheduler) hostHasCapacity(h *Host, job *Job) bool {
 	return true
 }
 
+// hostCanPlace is whether the scheduler may start jobs on this host.
+// Shutdown is a graceful drain. Healthy=false is a crash (discoverd down)
+// still in the map until PerformHostChecks unfollows.
+func hostCanPlace(h *Host) bool {
+	return h != nil && !h.Shutdown && h.Healthy
+}
+
 func (s *Scheduler) anyHostMatchesTags(job *Job) bool {
 	if s == nil || job == nil {
 		return false
 	}
 	for _, h := range s.hosts {
-		if h == nil || h.Shutdown {
+		if !hostCanPlace(h) {
 			continue
 		}
 		if job.TagsMatchHost(h) {
@@ -219,7 +226,7 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	var fitCount int
 	var fitPack int
 	for _, h := range s.ShuffledHosts() {
-		if h == nil || h.Shutdown || !job.TagsMatchHost(h) {
+		if !hostCanPlace(h) || !job.TagsMatchHost(h) {
 			continue
 		}
 		if needReserve && !s.hostHasCapacity(h, job) {

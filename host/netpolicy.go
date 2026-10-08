@@ -149,6 +149,11 @@ func (p *netPolicy) watch(service string) {
 		// local redis/postgres IP, and nothing adds it back (3-node
 		// upgrade-2 redis PING timeout). Apply Up/Down incrementally;
 		// only Current does a full replace, unioned with local jobs.
+		// After a crash-style VM reboot, Current can fire before
+		// appliances re-register; missed Ups leave tenant postgres/redis
+		// IPs out of flynn-net-data and user jobs time out on :5432/:6379.
+		stop := make(chan struct{})
+		go p.resyncLoop(client, service, stop)
 		for ev := range events {
 			if ev == nil {
 				continue
@@ -170,8 +175,24 @@ func (p *netPolicy) watch(service string) {
 				}
 			}
 		}
+		close(stop)
 		stream.Close()
 		time.Sleep(time.Second)
+	}
+}
+
+func (p *netPolicy) resyncLoop(client *discoverd.Client, service string, stop <-chan struct{}) {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			if err := p.syncSet(client, service); err != nil {
+				p.log.Error("periodic sync ipset", "service", service, "err", err)
+			}
+		}
 	}
 }
 

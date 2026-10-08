@@ -117,6 +117,20 @@ func TestFixControllerLoadsKeyFromJobs(t *testing.T) {
 	}
 }
 
+func TestFixControllerTriesEveryInstance(t *testing.T) {
+	src, err := os.ReadFile("controller.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "for _, inst := range instances") {
+		t.Fatal("FixController must try every controller instance; the first overlay IP may be on a dead host")
+	}
+	if !strings.Contains(body, "controller instance unreachable, trying next") {
+		t.Fatal("FixController must skip a stale overlay IP and try the next replica")
+	}
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }

@@ -46,7 +46,7 @@ func TestJobResourceRequest(t *testing.T) {
 
 func TestHostHasCapacityUnknownHostAllows(t *testing.T) {
 	s := &Scheduler{jobs: Jobs{}, hosts: map[string]*Host{}, profileReserve: map[string]bool{}}
-	h := &Host{ID: "h1"}
+	h := &Host{ID: "h1", Healthy: true}
 	job := testJobWithRequest(1<<30, 1000)
 	if !s.hostHasCapacity(h, job) {
 		t.Fatal("unknown host capacity must not block placement")
@@ -67,7 +67,7 @@ func TestHostHasCapacityRejectsOvercommit(t *testing.T) {
 		hosts:          map[string]*Host{},
 		profileReserve: map[string]bool{"guaranteed": true},
 	}
-	h := &Host{ID: "h1", MemoryTotalBytes: 3 << 30, CPUMilli: 2000}
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 3 << 30, CPUMilli: 2000}
 	next := testJobWithProfile("guaranteed", 2<<30, 1000, 2<<30, 1000)
 	if s.hostHasCapacity(h, next) {
 		t.Fatal("expected overcommit reject")
@@ -79,7 +79,7 @@ func TestHostHasCapacityRejectsOvercommit(t *testing.T) {
 }
 
 func TestPickHostIgnoresCapacityWhenRuntimeIsShared(t *testing.T) {
-	h := &Host{ID: "h1", MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
 	s := &Scheduler{
 		jobs: Jobs{
 			"running": {
@@ -101,7 +101,7 @@ func TestPickHostIgnoresCapacityWhenRuntimeIsShared(t *testing.T) {
 }
 
 func TestPickHostUsesCapacityWhenRuntimeGuarantees(t *testing.T) {
-	h := &Host{ID: "h1", MemoryTotalBytes: 2 << 30, CPUMilli: 2000}
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 2 << 30, CPUMilli: 2000}
 	s := &Scheduler{
 		jobs:           Jobs{},
 		hosts:          map[string]*Host{"h1": h},
@@ -130,7 +130,7 @@ func TestPickHostUsesCapacityWhenRuntimeGuarantees(t *testing.T) {
 }
 
 func TestSharedJobsDoNotConsumeReservedCapacity(t *testing.T) {
-	h := &Host{ID: "h1", MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
 	s := &Scheduler{
 		jobs: Jobs{
 			"shared": {
@@ -167,9 +167,9 @@ func persistSingletonTestJob(typ string) *Job {
 }
 
 func TestPickHostPacksPersistentSingletons(t *testing.T) {
-	h1 := &Host{ID: "h1"}
-	h2 := &Host{ID: "h2"}
-	h3 := &Host{ID: "h3"}
+	h1 := &Host{ID: "h1", Healthy: true}
+	h2 := &Host{ID: "h2", Healthy: true}
+	h3 := &Host{ID: "h3", Healthy: true}
 	redisJob := persistSingletonTestJob("redis")
 	redisJob.ID = "redis-1"
 	redisJob.HostID = "h1"
@@ -188,9 +188,9 @@ func TestPickHostPacksPersistentSingletons(t *testing.T) {
 }
 
 func TestPickHostSpreadsPersistentHA(t *testing.T) {
-	h1 := &Host{ID: "h1"}
-	h2 := &Host{ID: "h2"}
-	h3 := &Host{ID: "h3"}
+	h1 := &Host{ID: "h1", Healthy: true}
+	h2 := &Host{ID: "h2", Healthy: true}
+	h3 := &Host{ID: "h3", Healthy: true}
 	peer := persistSingletonTestJob("postgres")
 	peer.Formation.OriginalProcesses["postgres"] = 3
 	peer.ID = "pg-1"
@@ -232,9 +232,28 @@ func TestHostReservedIgnoresStoppedJobs(t *testing.T) {
 	}
 }
 
+func TestPickHostSkipsUnhealthyHost(t *testing.T) {
+	dead := &Host{ID: "dead", Healthy: false}
+	live := &Host{ID: "live", Healthy: true}
+	job := testJobWithRequest(1<<20, 100)
+	s := &Scheduler{
+		jobs:  Jobs{},
+		hosts: map[string]*Host{"dead": dead, "live": live},
+	}
+	for i := 0; i < 20; i++ {
+		got := s.pickHost(job, map[string]int{})
+		if got == nil || got.ID != "live" {
+			t.Fatalf("attempt %d: placed on %v, want live (dead host crashed)", i, got)
+		}
+	}
+	if hostCanPlace(dead) {
+		t.Fatal("crashed host must not be schedulable")
+	}
+}
+
 func TestPickHostAvoidsListedHost(t *testing.T) {
-	h1 := &Host{ID: "h1"}
-	h2 := &Host{ID: "h2"}
+	h1 := &Host{ID: "h1", Healthy: true}
+	h2 := &Host{ID: "h2", Healthy: true}
 	job := persistSingletonTestJob("redis")
 	job.Formation.Tags = map[string]map[string]string{
 		"redis": {ct.FormationAvoidHostIDsTag: "h1"},

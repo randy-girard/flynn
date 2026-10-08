@@ -681,9 +681,9 @@ func (TestSuite) TestJobPlacementTags(c *C) {
 		isLeader: typeconv.BoolPtr(true),
 		jobs:     make(Jobs),
 		hosts: map[string]*Host{
-			"host1": {ID: "host1", Tags: map[string]string{"disk": "mag", "cpu": "fast"}},
-			"host2": {ID: "host2", Tags: map[string]string{"disk": "ssd", "cpu": "slow"}},
-			"host3": {ID: "host3", Tags: map[string]string{"disk": "ssd", "cpu": "fast"}},
+			"host1": {ID: "host1", Healthy: true, Tags: map[string]string{"disk": "mag", "cpu": "fast"}},
+			"host2": {ID: "host2", Healthy: true, Tags: map[string]string{"disk": "ssd", "cpu": "slow"}},
+			"host3": {ID: "host3", Healthy: true, Tags: map[string]string{"disk": "ssd", "cpu": "fast"}},
 		},
 		logger: log15.New(),
 	}

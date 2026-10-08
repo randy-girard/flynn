@@ -102,14 +102,17 @@ var httpClient = &http.Client{Timeout: 2 * time.Second}
 type ReqFn func() (*http.Request, error)
 
 type Service struct {
-	Name     string
-	ReqFn    func() (*http.Request, error)
+	Name  string
+	ReqFn func() (*http.Request, error)
+	// ReqFns, when set, is tried in order until one instance is healthy.
+	// After a host reboot the first discoverd address is often a stale
+	// overlay IP; using only instances[0] left status.unhealthy forever.
+	ReqFns   func() ([]*http.Request, error)
 	Optional bool
 }
 
-func (s Service) Status() status.Status {
-	req, err := s.ReqFn()
-	if err != nil {
+func probeStatus(req *http.Request) status.Status {
+	if req == nil {
 		return status.Unhealthy
 	}
 	res, err := httpClient.Do(req)
@@ -117,6 +120,9 @@ func (s Service) Status() status.Status {
 		return status.Unhealthy
 	}
 	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return status.Unhealthy
+	}
 
 	var data struct {
 		Data status.Status
@@ -127,9 +133,39 @@ func (s Service) Status() status.Status {
 	return data.Data
 }
 
+func (s Service) requests() ([]*http.Request, error) {
+	if s.ReqFns != nil {
+		return s.ReqFns()
+	}
+	if s.ReqFn == nil {
+		return nil, errors.New("no request")
+	}
+	req, err := s.ReqFn()
+	if err != nil {
+		return nil, err
+	}
+	return []*http.Request{req}, nil
+}
+
+func (s Service) Status() status.Status {
+	reqs, err := s.requests()
+	if err != nil || len(reqs) == 0 {
+		return status.Unhealthy
+	}
+	last := status.Unhealthy
+	for _, req := range reqs {
+		st := probeStatus(req)
+		if st.Status == status.CodeHealthy {
+			return st
+		}
+		last = st
+	}
+	return last
+}
+
 var services = []Service{
 	{Name: "blobstore"},
-	{Name: "controller", ReqFn: controllerReqFn},
+	{Name: "controller", ReqFns: controllerRequestsFromDiscoverd},
 	{Name: "controller-scheduler", ReqFn: lazyReqFn(func() ReqFn { return LeaderReqFn("controller-scheduler", "") })},
 	{Name: "controller-worker"},
 	{Name: "discoverd"},
@@ -141,27 +177,49 @@ var services = []Service{
 	{Name: "router", ReqFn: lazyReqFn(func() ReqFn { return RandomReqFn("router-api") })},
 }
 
-func controllerReqFn() (*http.Request, error) {
+func controllerRequestsFromDiscoverd() ([]*http.Request, error) {
 	instances, err := discoverd.GetInstances("controller", 1*time.Second)
 	if err != nil {
 		return nil, err
 	}
-	if len(instances) == 0 {
-		return nil, errors.New("no controller instances")
-	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s%s", instances[0].Addr, status.Path), nil)
+	return controllerRequests(instances, strings.TrimSpace(os.Getenv("CONTROLLER_KEY")))
+}
+
+func controllerReqFn() (*http.Request, error) {
+	reqs, err := controllerRequestsFromDiscoverd()
 	if err != nil {
 		return nil, err
 	}
-	// AUTH_KEY in this app is the status API key, not the cluster controller
-	// key. Prefer CONTROLLER_KEY; fall back to discoverd instance meta for
-	// mixed-version rolling updates (SEC-028).
-	key := strings.TrimSpace(os.Getenv("CONTROLLER_KEY"))
-	if key == "" && instances[0].Meta != nil {
-		key = strings.TrimSpace(instances[0].Meta["AUTH_KEY"])
+	return reqs[0], nil
+}
+
+func controllerRequests(instances []*discoverd.Instance, clusterKey string) ([]*http.Request, error) {
+	if len(instances) == 0 {
+		return nil, errors.New("no controller instances")
 	}
-	req.SetBasicAuth("", key)
-	return req, nil
+	reqs := make([]*http.Request, 0, len(instances))
+	for _, inst := range instances {
+		if inst == nil || inst.Addr == "" {
+			continue
+		}
+		req, err := http.NewRequest("GET", fmt.Sprintf("http://%s%s", inst.Addr, status.Path), nil)
+		if err != nil {
+			continue
+		}
+		// AUTH_KEY in this app is the status API key, not the cluster controller
+		// key. Prefer CONTROLLER_KEY; fall back to discoverd instance meta for
+		// mixed-version rolling updates (SEC-028).
+		key := clusterKey
+		if key == "" && inst.Meta != nil {
+			key = strings.TrimSpace(inst.Meta["AUTH_KEY"])
+		}
+		req.SetBasicAuth("", key)
+		reqs = append(reqs, req)
+	}
+	if len(reqs) == 0 {
+		return nil, errors.New("no controller instances")
+	}
+	return reqs, nil
 }
 
 func lazyReqFn(makeFn func() ReqFn) ReqFn {
@@ -222,7 +280,7 @@ var serviceReqOnce sync.Once
 func ensureServiceReqFns() {
 	serviceReqOnce.Do(func() {
 		for i, s := range services {
-			if s.ReqFn != nil {
+			if s.ReqFn != nil || s.ReqFns != nil {
 				continue
 			}
 			name := s.Name

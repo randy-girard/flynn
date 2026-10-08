@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/status"
 )
 
@@ -133,6 +134,85 @@ func TestServiceStatusDecodesHealthyJSON(t *testing.T) {
 func TestControllerReqFnWithoutDiscoverd(t *testing.T) {
 	if _, err := controllerReqFn(); err == nil {
 		t.Fatal("expected error without discoverd")
+	}
+}
+
+func TestServiceStatusRejectsNon2xxEvenWithHealthyJSON(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]string{"status": "healthy"},
+		})
+	}))
+	defer srv.Close()
+	svc := Service{Name: "auth", ReqFn: func() (*http.Request, error) {
+		return http.NewRequest("GET", srv.URL, nil)
+	}}
+	if got := svc.Status(); got.Status != status.CodeUnhealthy {
+		t.Fatalf("401 must not count as healthy: %+v", got)
+	}
+}
+
+func TestServiceStatusTriesNextInstance(t *testing.T) {
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGatewayTimeout)
+	}))
+	defer dead.Close()
+	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]string{"status": "healthy", "version": "ok"},
+		})
+	}))
+	defer live.Close()
+	svc := Service{Name: "controller", ReqFns: func() ([]*http.Request, error) {
+		r1, err := http.NewRequest("GET", dead.URL, nil)
+		if err != nil {
+			return nil, err
+		}
+		r2, err := http.NewRequest("GET", live.URL, nil)
+		if err != nil {
+			return nil, err
+		}
+		return []*http.Request{r1, r2}, nil
+	}}
+	got := svc.Status()
+	if got.Status != status.CodeHealthy {
+		t.Fatalf("second controller instance must make the service healthy: %+v", got)
+	}
+}
+
+func TestControllerRequestsOnePerInstance(t *testing.T) {
+	if _, err := controllerRequests(nil, "key"); err == nil {
+		t.Fatal("expected error with no instances")
+	}
+	reqs, err := controllerRequests([]*discoverd.Instance{
+		{Addr: "10.0.0.1:80"},
+		{Addr: "10.0.0.2:80", Meta: map[string]string{"AUTH_KEY": "from-meta"}},
+		{Addr: ""},
+	}, "env-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("len=%d", len(reqs))
+	}
+	if got := reqs[0].URL.Host; got != "10.0.0.1:80" {
+		t.Fatalf("first host %s", got)
+	}
+	if got := reqs[1].URL.Host; got != "10.0.0.2:80" {
+		t.Fatalf("second host %s", got)
+	}
+	if _, pass, ok := reqs[0].BasicAuth(); !ok || pass != "env-key" {
+		t.Fatalf("env CONTROLLER_KEY must authenticate every instance, got %q", pass)
+	}
+	reqs, err = controllerRequests([]*discoverd.Instance{
+		{Addr: "10.0.0.2:80", Meta: map[string]string{"AUTH_KEY": "from-meta"}},
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, pass, ok := reqs[0].BasicAuth(); !ok || pass != "from-meta" {
+		t.Fatalf("empty CONTROLLER_KEY must fall back to instance AUTH_KEY, got %q", pass)
 	}
 }
 

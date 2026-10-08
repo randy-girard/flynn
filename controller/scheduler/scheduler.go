@@ -2296,7 +2296,7 @@ func (s *Scheduler) matchingOmniHostCount(formation *Formation, typ string) int 
 	job := &Job{Type: typ, Formation: formation}
 	n := 0
 	for _, host := range s.hosts {
-		if host == nil || host.Shutdown {
+		if !hostCanPlace(host) {
 			continue
 		}
 		if job.TagsMatchHost(host) {

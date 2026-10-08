@@ -14,19 +14,63 @@ import (
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
-func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startScheduler bool) error {
-	f.l.Info("found controller instance, checking critical formations")
-	inst := instances[0]
-	key := controller.KeyFromEnvOrMeta(inst.Meta)
+// controllerClientFromInstances tries every discoverd controller instance.
+// After a node crash the first overlay IP is often stale while another
+// replica still answers.
+func (f *ClusterFixer) controllerClientFromInstances(instances []*discoverd.Instance) (controller.Client, error) {
+	key := ""
+	for _, inst := range instances {
+		if inst == nil {
+			continue
+		}
+		if k := controller.KeyFromEnvOrMeta(inst.Meta); k != "" {
+			key = k
+			break
+		}
+	}
 	if key == "" {
 		key = controllerkey.FromHosts(f.hosts)
 	}
 	if key == "" {
-		return fmt.Errorf("controller AUTH_KEY is unavailable (discoverd no longer publishes it; set AUTH_KEY or CONTROLLER_KEY, or keep a running controller job)")
+		return nil, fmt.Errorf("controller AUTH_KEY is unavailable (discoverd no longer publishes it; set AUTH_KEY or CONTROLLER_KEY, or keep a running controller job)")
 	}
-	client, err := controller.NewClient("http://"+inst.Addr, key)
+	var last error
+	for _, inst := range instances {
+		if inst == nil || inst.Addr == "" {
+			continue
+		}
+		if k := controller.KeyFromEnvOrMeta(inst.Meta); k != "" {
+			key = k
+		}
+		c, err := controller.NewClient("http://"+inst.Addr, key)
+		if err != nil {
+			last = err
+			continue
+		}
+		if _, err := c.GetAppRelease("controller"); err != nil {
+			if f.l != nil {
+				f.l.Error("controller instance unreachable, trying next", "addr", inst.Addr, "err", err)
+			}
+			last = err
+			continue
+		}
+		return c, nil
+	}
+	if last == nil {
+		last = fmt.Errorf("no reachable controller instances")
+	}
+	return nil, last
+}
+
+func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startScheduler bool) error {
+	f.l.Info("found controller instance, checking critical formations")
+	client, err := f.controllerClientFromInstances(instances)
 	if err != nil {
-		return fmt.Errorf("unexpected error creating controller client: %s", err)
+		f.l.Error("controller API unreachable", "err", err)
+		if startScheduler {
+			return f.StartScheduler(nil, nil)
+		}
+		return err
 	}
 
 	// check that formations for critical components are expected
@@ -161,7 +205,7 @@ func (f *ClusterFixer) StartScheduler(client controller.Client, cf *ct.Formation
 
 	// start scheduler
 	var schedulerJob *host.Job
-	if cf != nil {
+	if cf != nil && client != nil {
 		ef, err := utils.ExpandFormation(client, cf)
 		if err != nil {
 			f.l.Error("error expanding controller formation, using job template", "err", err)

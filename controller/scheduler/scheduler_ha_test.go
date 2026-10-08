@@ -28,7 +28,7 @@ func (TestSuite) TestMaybePromoteSireniaHA(c *C) {
 		Processes: procs,
 	}))
 	for _, id := range []string{"h1", "h2", "h3"} {
-		s.hosts[id] = &Host{ID: id}
+		s.hosts[id] = &Host{ID: id, Healthy: true}
 	}
 
 	s.maybePromoteSireniaHA()
@@ -89,7 +89,7 @@ func (TestSuite) TestMaybePromoteSireniaHASkipsRollingDeploy(c *C) {
 	s.formations.Add(NewFormation(&ct.ExpandedFormation{App: app, Release: oldRel, Processes: oldProcs}))
 	s.formations.Add(NewFormation(&ct.ExpandedFormation{App: app, Release: newRel, Processes: newProcs}))
 	for _, id := range []string{"h1", "h2", "h3"} {
-		s.hosts[id] = &Host{ID: id}
+		s.hosts[id] = &Host{ID: id, Healthy: true}
 	}
 	s.jobs["pg-new"] = &Job{
 		AppID:     app.ID,
@@ -128,8 +128,8 @@ func (TestSuite) TestMaybePromoteSireniaHARequiresThreeHosts(c *C) {
 		Release:   release,
 		Processes: procs,
 	}))
-	s.hosts["h1"] = &Host{ID: "h1"}
-	s.hosts["h2"] = &Host{ID: "h2"}
+	s.hosts["h1"] = &Host{ID: "h1", Healthy: true}
+	s.hosts["h2"] = &Host{ID: "h2", Healthy: true}
 
 	s.maybePromoteSireniaHA()
 	active, err := cc.FormationListActive()
@@ -159,7 +159,7 @@ func (TestSuite) TestMaybePromoteSireniaHARequiresLeader(c *C) {
 		Processes: procs,
 	}))
 	for _, id := range []string{"h1", "h2", "h3"} {
-		s.hosts[id] = &Host{ID: id}
+		s.hosts[id] = &Host{ID: id, Healthy: true}
 	}
 
 	s.maybePromoteSireniaHA()
@@ -194,7 +194,7 @@ func (TestSuite) TestMaybePromoteSireniaHASkipsPluginApps(c *C) {
 		Processes: procs,
 	}))
 	for _, id := range []string{"h1", "h2", "h3"} {
-		s.hosts[id] = &Host{ID: id}
+		s.hosts[id] = &Host{ID: id, Healthy: true}
 	}
 	s.jobs["mongo-1"] = &Job{
 		AppID:     app.ID,

@@ -39,6 +39,8 @@ need "${ROOT}/host/netpolicy.go" 'ServiceForClass' \
   "flynn-host must register user overlay IPs"
 need "${ROOT}/host/netpolicy.go" 'EventKindCurrent' \
   "ipset watch must not flush on every EventUp (drops local datastore IPs)"
+need "${ROOT}/host/netpolicy.go" 'resyncLoop' \
+  "ipset watch must periodically resync after a node crash misses EventUp"
 need "${ROOT}/pkg/iptables/ipset.go" 'UnionIPs' \
   "ipset Current sync must union local overlay IPs with the discoverd snapshot"
 need "${ROOT}/host/libcontainer_backend.go" 'EnableJobIsolation' \
