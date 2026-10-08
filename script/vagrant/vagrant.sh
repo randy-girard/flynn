@@ -363,7 +363,11 @@ update_running_cluster() {
   fi
   echo "updating live cluster on ${nodes[*]} (flynn-host update --all-nodes)"
   run_as_root_on "${nodes[0]}" "cd ${SRC} && script/vagrant/guest/update-cluster.sh"
+  local domain ip
+  domain="$(flynn_vagrant_cluster_domain)"
+  ip="$(flynn_vagrant_cluster_ip)"
   for name in "${nodes[@]}"; do
+    run_as_root_on "${name}" "cd ${SRC} && CLUSTER_IP=${ip} CLUSTER_DOMAIN=${domain} script/vagrant/guest/node-dns.sh"
     run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-flynn-root.sh"
     run_as_root_on "${name}" "cd ${SRC} && script/vagrant/guest/ensure-qemu-binfmt.sh"
   done

@@ -56,7 +56,8 @@ if command -v flynn >/dev/null 2>&1; then
     source /etc/flynn/admin.env
     set +a
   fi
-  flynn login --email "${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}" --password "${FLYNN_ADMIN_PASSWORD:-flynn-dev}" >/dev/null 2>&1 || true
+  # Missing auth.<domain> in /etc/hosts used to hang here on systemd-resolved.
+  timeout 20 flynn login --email "${FLYNN_ADMIN_EMAIL:-admin@${DOMAIN}}" --password "${FLYNN_ADMIN_PASSWORD:-flynn-dev}" >/dev/null 2>&1 || true
   flynn apps --all || echo "flynn apps skipped (CLI not configured on this node)"
 fi
 echo "cluster probe ok"

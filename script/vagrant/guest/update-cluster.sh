@@ -30,6 +30,15 @@ fi
 echo "updating cluster from ${tarball} using $(command -v flynn-host)"
 flynn-host update --all-nodes --tarball "${tarball}" --force
 bash "${FLYNN_VAGRANT_GUEST}/ensure-flynn-root.sh"
+# Older node-dns.sh omitted auth.<domain>. flynn login then waits on
+# systemd-resolved for auth.1.localflynn.com instead of /etc/hosts.
+if [[ -z "${CLUSTER_IP:-}" ]]; then
+  CLUSTER_IP="$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^192\.168\.57\.' | head -1 || true)"
+fi
+if [[ -n "${CLUSTER_IP:-}" ]]; then
+  CLUSTER_IP="${CLUSTER_IP}" CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-1.localflynn.com}" \
+    bash "${FLYNN_VAGRANT_GUEST}/node-dns.sh"
+fi
 # This script runs on node1; vagrant.sh also runs ensure-qemu-binfmt on every
 # cluster node. Keep it here so a direct guest invoke still registers binfmt.
 bash "${FLYNN_VAGRANT_GUEST}/ensure-qemu-binfmt.sh"

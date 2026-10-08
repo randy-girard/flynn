@@ -481,6 +481,14 @@ if ! grep -Fq 'update_running_cluster' "${script}"; then
   echo "vagrant.sh update must apply the tarball on running cluster nodes" >&2
   exit 1
 fi
+if ! grep -Fq 'node-dns.sh' "${mod}/guest/update-cluster.sh"; then
+  echo "update-cluster.sh must refresh /etc/hosts so auth.<domain> exists after tarball apply" >&2
+  exit 1
+fi
+if ! grep -Fq 'timeout 20 flynn login' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster must not hang flynn login when auth.<domain> DNS fails" >&2
+  exit 1
+fi
 if ! grep -Fq 'treating as not bootstrapped' "${mod}/guest/ensure-cluster.sh"; then
   echo "ensure-cluster must exit 2 when leftover host.json has no controller so setup bootstraps" >&2
   exit 1
