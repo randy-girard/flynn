@@ -393,14 +393,18 @@ wait_for_discoverd() {
 
 # flynn-builder lists hosts via discoverd service flynn-host. /ping can succeed
 # while start-flynn-host is still in destroy-volumes and has not registered.
+# A leftover raft snapshot can also list a dead flynn-host instance; the current
+# daemon only has discoverd.url after POST /host/discoverd succeeds.
 flynn_host_registered() {
-  local out
+  local out status
   local curl_args=(-sf --max-time 2)
   if [[ -n "${DISCOVERD_AUTH_KEY:-}" ]]; then
     curl_args+=(-H "Auth-Key: ${DISCOVERD_AUTH_KEY}")
   fi
   out="$(curl "${curl_args[@]}" "http://192.0.2.200:1111/services/flynn-host/instances" 2>/dev/null)" || return 1
-  python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,list) and len(d)>0 else 1)' <<<"${out}"
+  python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,list) and len(d)>0 else 1)' <<<"${out}" || return 1
+  status="$(curl -sf --max-time 2 "http://192.0.2.200:1113/host/status" 2>/dev/null)" || return 1
+  python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,dict) and (d.get("discoverd") or {}).get("url") else 1)' <<<"${status}"
 }
 
 wait_for_flynn_host() {

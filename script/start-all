@@ -7,11 +7,32 @@ mkdir -p /var/run/flynn-local
 rm -f /tmp/discoverd.log /tmp/flanneld.log /tmp/flanneld-wrapper.log
 rm -rf /var/log/flynn || true
 
+wait_for_host_http() {
+  local i
+  echo "===> waiting for flynn-host HTTP on 192.0.2.200:1113"
+  for i in $(seq 1 60); do
+    if curl -sf --max-time 2 -o /dev/null "http://192.0.2.200:1113/host/status"; then
+      echo "===> flynn-host HTTP is up on 192.0.2.200:1113"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "ERROR: flynn-host HTTP did not come up; discoverd notify would get connection refused" >&2
+  return 1
+}
+
 # Start flynn-host
 ./script/start-flynn-host 0 &
 echo $! > /var/run/flynn-local/flynn-host.pid
 
-sleep 3
+# destroy-volumes can take longer than a fixed sleep. Discoverd's one-shot
+# notify used to POST /host/discoverd before this listener existed.
+wait_for_host_http
+
+# Leftover raft restores a stale flynn-host instance. wait_for_flynn_host then
+# treated that as registered and flynn-builder timed out after expiry.
+killall discoverd 2>/dev/null || true
+rm -rf /tmp/discoverd-data
 
 # Start discoverd
 ./script/start-discoverd.sh &

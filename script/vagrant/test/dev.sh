@@ -441,6 +441,22 @@ if ! grep -Fq '/services/flynn-host/instances' "${ROOT}/build.sh"; then
   echo "flynn_host_registered must probe discoverd flynn-host instances" >&2
   exit 1
 fi
+if ! grep -Fq 'd.get("discoverd")' "${ROOT}/build.sh"; then
+  echo "flynn_host_registered must require the current daemon's discoverd.url, not a stale raft instance" >&2
+  exit 1
+fi
+if ! grep -Fq 'wait_for_host_http' "${ROOT}/script/start-all"; then
+  echo "start-all must wait for flynn-host HTTP before starting discoverd" >&2
+  exit 1
+fi
+if ! grep -Fq 'rm -rf /tmp/discoverd-data' "${ROOT}/script/start-all"; then
+  echo "start-all must drop leftover discoverd raft so wait_for_flynn_host cannot see a dead flynn-host instance" >&2
+  exit 1
+fi
+if ! grep -Fq 'failed to notify: %s; retrying' "${ROOT}/discoverd/main.go"; then
+  echo "discoverd Notify must retry when flynn-host HTTP is not listening yet" >&2
+  exit 1
+fi
 if ! grep -Fq 'busy (image layer), skipping' "${ROOT}/host/cli/destroy-volumes.go"; then
   echo "destroy-volumes must skip busy ext2/squashfs layers so start-all can launch the daemon" >&2
   exit 1

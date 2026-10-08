@@ -32,6 +32,14 @@ const (
 	IndefiniteTimeout = time.Duration(-1)
 )
 
+// Notify retries when flynn-host HTTP is not listening yet. start-all used to
+// sleep 3s then start discoverd; destroy-volumes often takes longer, the POST
+// got connection refused, and a one-shot notify never registered flynn-host.
+var (
+	notifyRetryInterval = 500 * time.Millisecond
+	notifyRetryTimeout  = 2 * time.Minute
+)
+
 func main() {
 	defer shutdown.Exit()
 
@@ -250,7 +258,9 @@ func (m *Main) Run(args ...string) error {
 	if host == "0.0.0.0" {
 		httpAddr = net.JoinHostPort(os.Getenv("EXTERNAL_IP"), port)
 	}
-	m.Notify(opt.Notify, opt.DNSAddr)
+	if opt.Notify != "" {
+		m.Notify(opt.Notify, opt.DNSAddr)
+	}
 	go func() {
 		for {
 			hb, err := discoverd.AddServiceAndRegister("discoverd", httpAddr)
@@ -511,7 +521,12 @@ func (m *Main) openHTTPServer() error {
 }
 
 // Notify sends a POST to notifyURL to let it know that addr is accessible.
+// It retries until flynn-host accepts the request or notifyRetryTimeout elapses.
 func (m *Main) Notify(notifyURL, dnsAddr string) {
+	if notifyURL == "" {
+		return
+	}
+
 	m.mu.Lock()
 	m.status.URL = strings.Join(m.peers, ",")
 	if dnsAddr != "" {
@@ -520,12 +535,33 @@ func (m *Main) Notify(notifyURL, dnsAddr string) {
 	payload, _ := json.Marshal(m.status)
 	m.mu.Unlock()
 
-	res, err := httpclient.PostWithHostAuth(notifyURL, "application/json", bytes.NewReader(payload))
-	if err != nil {
-		m.logger.Printf("failed to notify: %s", err)
-	} else {
-		res.Body.Close()
+	deadline := time.Now().Add(notifyRetryTimeout)
+	var lastErr error
+	for {
+		res, err := httpclient.PostWithHostAuth(notifyURL, "application/json", bytes.NewReader(payload))
+		if err == nil {
+			res.Body.Close()
+			if res.StatusCode >= 200 && res.StatusCode < 300 {
+				return
+			}
+			lastErr = fmt.Errorf("unexpected status %d", res.StatusCode)
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			m.notifyLog("failed to notify after %s: %s", notifyRetryTimeout, lastErr)
+			return
+		}
+		m.notifyLog("failed to notify: %s; retrying", lastErr)
+		time.Sleep(notifyRetryInterval)
 	}
+}
+
+func (m *Main) notifyLog(format string, args ...interface{}) {
+	if m.logger == nil {
+		return
+	}
+	m.logger.Printf(format, args...)
 }
 
 // MergeHostPort joins host to the port in portAddr.
