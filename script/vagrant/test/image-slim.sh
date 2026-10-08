@@ -156,6 +156,16 @@ if [[ -f "${redis_pkg}" ]]; then
     "redis plugin packages must pass --no-install-recommends"
   need "${redis_pkg}" 'apt-slim-finish.sh' \
     "redis plugin packages must run the shared apt/docs cleanup helper"
+  need "${redis_pkg}" 'aarch64' \
+    "redis plugin must compile the vendored tarball on arm64 as well as amd64"
+  need "${ROOT}/../flynn-plugin-redis/img/fetch-engine.sh" 'redis-7.2.7.tar.gz' \
+    "redis plugin must pin Redis via a source tarball"
+  need_file "${ROOT}/../flynn-plugin-redis/img/redis-7.2.7.tar.gz" \
+    "redis plugin must vendor redis-7.2.7.tar.gz in img/"
+  if grep -qE '[[:space:]]redis-server[[:space:]]*\\$' "${redis_pkg}"; then
+    echo "redis plugin must compile Redis from the vendored tarball, not apt redis-server" >&2
+    exit 1
+  fi
 elif [[ -f "${ROOT}/appliance/redis/img/packages.sh" ]]; then
   echo "redis still lives in Flynn; extract it or point this check at ../flynn-plugin-redis" >&2
   exit 1
@@ -167,9 +177,56 @@ if [[ -f "${mysql_pkg}" ]]; then
     "mysql plugin packages must pass --no-install-recommends"
   need "${mysql_pkg}" 'apt-slim-finish.sh' \
     "mysql plugin packages must run the shared apt/docs cleanup helper"
+  need "${mysql_pkg}" 'aarch64' \
+    "mysql plugin must compile MariaDB from source on arm64 (no 10.11 linux-systemd aarch64 bintar)"
+  need "${ROOT}/../flynn-plugin-mysql/img/fetch-engine.sh" 'mariadb-10.11.11.tar.gz' \
+    "mysql plugin must pin MariaDB via a source tarball"
+  if [[ ! -s "${ROOT}/../flynn-plugin-mysql/img/mariadb-10.11.11.tar.gz" ]] &&
+     [[ ! -s "${ROOT}/../flynn-plugin-mysql/img/mariadb-10.11.11.tar.gz.0" ]]; then
+    echo "mysql plugin must vendor mariadb-10.11.11.tar.gz (or .0 + .1 split) in img/" >&2
+    exit 1
+  fi
+  if grep -qE 'mirror.mariadb.org|mariadb.org/mariadb_release_signing_key' "${mysql_pkg}"; then
+    echo "mysql plugin must not install MariaDB from apt" >&2
+    exit 1
+  fi
 elif [[ -f "${ROOT}/appliance/mariadb/img/packages.sh" ]]; then
   echo "mariadb still lives in Flynn; extract it or point this check at ../flynn-plugin-mysql" >&2
   exit 1
+fi
+
+postgres_plugin_pkg="${ROOT}/../flynn-plugin-postgres/img/packages.sh"
+if [[ -f "${postgres_plugin_pkg}" ]]; then
+  need "${postgres_plugin_pkg}" '--no-install-recommends' \
+    "postgres plugin packages must pass --no-install-recommends"
+  need "${postgres_plugin_pkg}" 'apt-slim-finish.sh' \
+    "postgres plugin packages must run the shared apt/docs cleanup helper"
+  need "${postgres_plugin_pkg}" 'postgis.control' \
+    "postgres plugin must keep PostGIS"
+  need "${postgres_plugin_pkg}" 'pgrouting.control' \
+    "postgres plugin must keep pgRouting"
+  need "${postgres_plugin_pkg}" 'timescaledb.control' \
+    "postgres plugin must keep TimescaleDB"
+  need "${postgres_plugin_pkg}" 'aarch64' \
+    "postgres plugin must compile PostgreSQL and extensions on arm64 as well as amd64"
+  need "${ROOT}/../flynn-plugin-postgres/img/fetch-engine.sh" 'timescaledb-2.17.2.tar.gz' \
+    "postgres plugin must pin TimescaleDB from source"
+  need_file "${ROOT}/../flynn-plugin-postgres/img/postgresql-16.9.tar.gz" \
+    "postgres plugin must vendor postgresql-16.9.tar.gz in img/"
+  need_file "${ROOT}/../flynn-plugin-postgres/img/postgis-3.5.2.tar.gz" \
+    "postgres plugin must vendor PostGIS source in img/"
+  need_file "${ROOT}/../flynn-plugin-postgres/img/pgrouting-3.7.3.tar.gz" \
+    "postgres plugin must vendor pgRouting source in img/"
+  need_file "${ROOT}/../flynn-plugin-postgres/img/timescaledb-2.17.2.tar.gz" \
+    "postgres plugin must vendor TimescaleDB source in img/"
+  if grep -qE 'timescaledb-tune --yes' "${postgres_plugin_pkg}"; then
+    echo "postgres plugin must not run timescaledb-tune (Flynn writes postgresql.conf)" >&2
+    exit 1
+  fi
+  if grep -qE 'apt.postgresql.org|packagecloud.io/timescale' "${postgres_plugin_pkg}"; then
+    echo "postgres plugin must build from vendored tarballs, not PGDG/Timescale apt" >&2
+    exit 1
+  fi
 fi
 
 mongodb_pkg="${ROOT}/../flynn-plugin-mongodb/img/packages.sh"
