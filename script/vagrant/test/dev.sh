@@ -218,6 +218,30 @@ if ! grep -Fq 'guest/start-node.sh' "${script}"; then
   echo "reload must start flynn-host.service on cluster nodes, not nested bootstrap on the builder" >&2
   exit 1
 fi
+if ! grep -Fq 'reload_cluster_rolling' "${script}"; then
+  echo "reload must reboot cluster nodes one at a time" >&2
+  exit 1
+fi
+if ! grep -Fq 'wait_cluster_stable' "${script}"; then
+  echo "reload must wait for Flynn to settle after each cluster node" >&2
+  exit 1
+fi
+if ! grep -Fq 'start_one_cluster_node' "${script}"; then
+  echo "rolling reload must start flynn-host on the node that just rebooted before probing" >&2
+  exit 1
+fi
+if grep -E 'reload\|restart\)' -A5 "${script}" | grep -Fq 'start_existing_cluster'; then
+  echo "reload must not start every node only after all VMs reboot" >&2
+  exit 1
+fi
+if ! grep -Fq 'status.${DOMAIN}' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh must check status.<domain> so rolling reload waits for a healthy cluster" >&2
+  exit 1
+fi
+if ! grep -Fq '"healthy"' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh must require an overall healthy status payload" >&2
+  exit 1
+fi
 if ! in_mod 'vagrant halt'; then
   echo "stop must use vagrant halt" >&2
   exit 1
@@ -507,7 +531,7 @@ fi
 bash "${ROOT}/script/vagrant/test/clean-flynn.sh"
 bash "${ROOT}/script/vagrant/test/update-build.sh"
 help="$(bash "${entry}" help)"
-for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes"; do
+for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status"; do
   if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1

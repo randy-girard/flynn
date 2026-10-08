@@ -122,7 +122,7 @@ vagrant-update: ## Build on the builder, then flynn-host update on running clust
 vagrant-probe: ## Check the live cluster from node1 (non-interactive)
 	$(VAGRANT_NODES) $(VAGRANT) probe $(VAGRANT_YES) $(ARGS)
 
-vagrant-reload: ## Reboot laptop-loop VMs and start flynn-host
+vagrant-reload: ## Rolling reboot of laptop-loop VMs; wait for Flynn to settle after each cluster node
 	$(VAGRANT) reload $(VM) $(VAGRANT_YES) $(ARGS)
 
 vagrant-stop: ## Halt laptop-loop VMs (disks stay)

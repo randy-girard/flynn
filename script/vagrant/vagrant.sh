@@ -65,7 +65,9 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
   bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
   update     Build on the builder if Flynn source changed, then flynn-host update on running cluster nodes
   probe      Check the live cluster from node1 (hosts, controller, flynn-host list)
-  reload     Reboot VMs (vagrant reload --no-provision) and start flynn-host on cluster nodes
+  reload     Reboot VMs one at a time (vagrant reload --no-provision). Cluster
+             nodes start flynn-host and wait until Flynn is stable (hosts,
+             controller, status) before the next node
   restart    Same as reload
   stop       Halt VMs (vagrant halt); disks and ./build-dev stay
   halt       Same as stop
@@ -118,6 +120,81 @@ list_dev_machines() { flynn_vagrant_list_machines; }
 # missing machines (that would look like a smoke `vagrant up`).
 reload_dev_machines() {
   flynn_vagrant_reload "$@"
+}
+
+# start_one_cluster_node brings flynn-host back on one node after a reboot.
+# Exit 2 means Flynn is not installed/bootstrapped on that node yet.
+start_one_cluster_node() {
+  local name="$1"
+  local st=0
+  set +e
+  run_as_root_on "${name}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=$(flynn_vagrant_cluster_ip) script/vagrant/guest/start-node.sh"
+  st=$?
+  set -e
+  return "${st}"
+}
+
+# wait_cluster_stable retries probe_live_cluster until hosts, controller, and
+# status.<domain> are healthy. Used between rolling node reloads.
+wait_cluster_stable() {
+  local label="${1:-cluster}"
+  local tries="${2:-60}"
+  local i st=0
+  for i in $(seq 1 "${tries}"); do
+    set +e
+    probe_live_cluster
+    st=$?
+    set -e
+    if [[ "${st}" -eq 0 ]]; then
+      echo "cluster is stable after ${label}"
+      return 0
+    fi
+    echo "waiting for Flynn to settle after ${label} (${i}/${tries})"
+    sleep 5
+  done
+  echo "cluster did not return to a stable state after ${label}" >&2
+  return 1
+}
+
+# reload_cluster_rolling reboots one VM at a time. The builder is compile-only
+# so it reloads first (no Flynn wait). Each cluster node is reloaded, flynn-host
+# is started, and probe must pass before the next node.
+reload_cluster_rolling() {
+  flynn_vagrant_collect_existing "$@"
+  if [[ ${#FLYNN_VAGRANT_TARGETS[@]} -eq 0 ]]; then
+    echo "no VMs to reload." >&2
+    echo "Create this env with: ${FLYNN_VAGRANT_EMPTY_HINT}" >&2
+    exit 1
+  fi
+  local name builders=() nodes=()
+  for name in "${FLYNN_VAGRANT_TARGETS[@]}"; do
+    if [[ "${name}" == "${FLYNN_VAGRANT_BUILDER}" ]]; then
+      builders+=("${name}")
+    else
+      nodes+=("${name}")
+    fi
+  done
+  for name in "${builders[@]}"; do
+    flynn_vagrant_reload_one "${name}"
+  done
+  local i=0 n="${#nodes[@]}" st=0
+  for name in "${nodes[@]}"; do
+    i=$((i + 1))
+    echo "rolling reload ${name} (${i}/${n})"
+    flynn_vagrant_reload_one "${name}"
+    set +e
+    start_one_cluster_node "${name}"
+    st=$?
+    set -e
+    if [[ "${st}" -eq 2 ]]; then
+      echo "${name}: cluster is not bootstrapped yet (script/vagrant.sh bootstrap)"
+      continue
+    fi
+    if [[ "${st}" -ne 0 ]]; then
+      return "${st}"
+    fi
+    wait_cluster_stable "${name}"
+  done
 }
 
 stop_dev_machines() {
@@ -275,15 +352,16 @@ ensure_live_cluster() {
   install_and_bootstrap_nodes
 }
 
-# start_existing_cluster brings flynn-host back after a reboot. Cluster nodes
-# use systemd (install-flynn). The builder is not started as a live cluster.
+# start_existing_cluster brings flynn-host back on every running cluster node
+# without a reboot (used if VMs are already up). Rolling reload starts one
+# node at a time via start_one_cluster_node instead.
 start_existing_cluster() {
   local name st=0 any=0
   while IFS= read -r name; do
     [[ -n "${name}" ]] || continue
     any=1
     set +e
-    run_as_root_on "${name}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=$(flynn_vagrant_cluster_ip) script/vagrant/guest/start-node.sh"
+    start_one_cluster_node "${name}"
     st=$?
     set -e
     if [[ "${st}" -eq 2 ]]; then
@@ -414,8 +492,7 @@ case "${cmd}" in
     probe_live_cluster
     ;;
   reload|restart)
-    reload_dev_machines "${@:2}"
-    start_existing_cluster
+    reload_cluster_rolling "${@:2}"
     ;;
   stop|halt)
     stop_dev_machines "${@:2}"

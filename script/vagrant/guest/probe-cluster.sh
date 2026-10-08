@@ -44,6 +44,42 @@ if [[ "${code}" != "200" && "${code}" != "401" ]]; then
 fi
 echo "controller HTTP ${code} hosts=${count} domain=${DOMAIN}"
 
+# Cluster status app (status.<domain>). LAN clients are on the whitelist.
+# Require an overall healthy payload so a rolling reload does not continue
+# while Layer 1 services are still coming back.
+status_json="$(mktemp)"
+trap 'rm -f "${status_json}"' EXIT
+scode=""
+if [[ -n "${IP}" ]]; then
+  scode="$(curl -sk --max-time 5 -o "${status_json}" -w '%{http_code}' \
+    -H 'Accept: application/json' \
+    --resolve "status.${DOMAIN}:443:${IP}" \
+    "https://status.${DOMAIN}/" || true)"
+fi
+if [[ "${scode}" != "200" ]]; then
+  scode="$(curl -sk --max-time 5 -o "${status_json}" -w '%{http_code}' \
+    -H 'Accept: application/json' \
+    "https://status.${DOMAIN}/" || true)"
+fi
+if [[ "${scode}" != "200" ]]; then
+  echo "status.${DOMAIN} did not answer (HTTP ${scode:-none})" >&2
+  exit 1
+fi
+if ! python3 - "${status_json}" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path, encoding="utf-8") as f:
+    raw = json.load(f)
+data = raw.get("data") or raw
+if data.get("status") != "healthy":
+    raise SystemExit("cluster status is %s" % (data.get("status") or "unknown",))
+PY
+then
+  echo "status.${DOMAIN} is not healthy" >&2
+  exit 1
+fi
+echo "status.${DOMAIN} healthy"
+
 if command -v flynn >/dev/null 2>&1; then
   add="$(flynn-host cli-add-command 2>/dev/null | grep -E 'flynn cluster(:add| add) ' | tail -1 || true)"
   if [[ -n "${add}" ]]; then
