@@ -62,6 +62,10 @@ if grep -q 'already enabled' "${qemu}" && grep -q 'exit 0' "${qemu}"; then
   echo "ensure-qemu-binfmt.sh must not skip when qemu 8.2 is already registered" >&2
   exit 1
 fi
+need "${qemu}" 'already on PATH; skipping apt' \
+  "ensure-qemu-binfmt.sh must skip apt-get when qemu >= 9 is already installed"
+need "${qemu}" 'timeout 45 apt-get update' \
+  "ensure-qemu-binfmt.sh must not hang cluster update on apt-get DNS"
 
 need "${mod}/guest/install-node.sh" 'ensure-qemu-binfmt.sh' \
   "install-node.sh must register qemu binfmt on cluster install"

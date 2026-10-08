@@ -58,15 +58,20 @@ qemu_new_enough() {
 
 install_qemu_apt() {
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y --no-install-recommends qemu-user-static binfmt-support curl ca-certificates
+  # Cluster updates must not hang forever when archive DNS is down (common on
+  # the Vagrant host-only NIC). qemu >= 9 is already on these nodes after setup.
+  if ! timeout 45 apt-get update -qq; then
+    echo "ensure-qemu-binfmt: apt-get update timed out or failed; skipping apt qemu install" >&2
+    return 1
+  fi
+  timeout 90 apt-get install -y --no-install-recommends qemu-user-static binfmt-support curl ca-certificates
 }
 
 install_qemu_from_deb() {
   local tmp bin wrap
   tmp="$(mktemp -d)"
   echo "ensure-qemu-binfmt: Ubuntu qemu $(qemu_major) is too old for Node; installing >= ${QEMU_MIN_MAJOR} from ${QEMU_DEB_URL}"
-  curl -fsSL --retry 5 --retry-delay 3 -o "${tmp}/qemu.deb" "${QEMU_DEB_URL}"
+  curl -fsSL --connect-timeout 10 --max-time 60 --retry 5 --retry-delay 3 -o "${tmp}/qemu.deb" "${QEMU_DEB_URL}"
   dpkg-deb -x "${tmp}/qemu.deb" "${tmp}/root"
   bin="$(find "${tmp}/root" -name 'qemu-x86_64-static' -type f | head -n1)"
   if [[ -z "${bin}" ]]; then
@@ -114,14 +119,18 @@ register_binfmt() {
   fi
 }
 
-install_qemu_apt
-if ! qemu_new_enough; then
-  install_qemu_from_deb
-fi
-if ! qemu_new_enough; then
-  echo "ensure-qemu-binfmt: qemu-x86_64-static is still older than ${QEMU_MIN_MAJOR}" >&2
-  qemu-x86_64-static --version >&2 || true
-  exit 1
+if qemu_new_enough; then
+  echo "ensure-qemu-binfmt: qemu $(qemu_major).x already on PATH; skipping apt"
+else
+  install_qemu_apt || true
+  if ! qemu_new_enough; then
+    install_qemu_from_deb
+  fi
+  if ! qemu_new_enough; then
+    echo "ensure-qemu-binfmt: qemu-x86_64-static is still older than ${QEMU_MIN_MAJOR}" >&2
+    qemu-x86_64-static --version >&2 || true
+    exit 1
+  fi
 fi
 register_binfmt
 
