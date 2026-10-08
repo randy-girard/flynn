@@ -98,9 +98,13 @@
 #   VAGRANT_CPUS         Cluster node CPUs [default: 2]
 #   BUILDER_MEMORY       Builder RAM MB [default: 30000]
 #   BUILDER_CPUS         Builder CPUs [default: 8]
-#   KEEP_VMS=1           Do not destroy any VMs at the end (success or failure)
-#   KEEP_BUILDER=1       On success, keep builder when tearing down nodes [default: 1]
-#   KEEP_VMS_ON_FAIL=1   On failure, keep VMs for debugging (default: destroy all)
+#   KEEP_VMS=1           Do not halt or destroy any VMs at the end (success or failure)
+#   KEEP_BUILDER=1       On success, keep the builder disk when tearing down
+#                        nodes; halt it after compile so it does not sit on
+#                        ~30GB RAM. A later compile step starts it again.
+#                        KEEP_BUILDER=0 destroys the builder at the end.
+#                        [default: 1]
+#   KEEP_VMS_ON_FAIL=1   On failure, keep VMs for debugging (default: destroy cluster; halt builder)
 #   KEEP_LOGS=1          Do not clear ./flynn-logs/{builder,node*}
 #                        at start (default: clear so each run has fresh logs)
 #   SKIP_UNIT_TESTS=1            Skip host + builder Linux pre-cluster unit gates
@@ -1101,7 +1105,8 @@ fail_shutdown() {
   elif [[ "${CLUSTER_STARTED}" == "1" ]]; then
     destroy_all_vms
   elif [[ "${BUILDER_STARTED}" == "1" ]]; then
-    info "builder unit-test/pre-cluster failure: keeping builder, not destroying cluster nodes (none started)"
+    info "pre-cluster failure: halting builder (disk stays; KEEP_VMS_ON_FAIL=1 to leave it running)"
+    halt_builder || true
   else
     info "pre-cluster failure: not destroying VMs"
   fi
@@ -3065,6 +3070,7 @@ step_host_unit_tests() {
 # smoke Linux gate — not script/run-unit-tests in Docker.
 step_builder_unit_tests() {
   local start elapsed rc
+  ensure_builder_running
   echo "builder unit-test gate: native Linux suite via script/run-unit-tests"
   echo "builder provides redis, postgresql, mariadb, mongodb, zfsutils, netlink"
   echo "failures abort before booting node1/2/3"
@@ -3142,6 +3148,40 @@ step_vagrant_up_builder() {
   echo "builder up"
 }
 
+# ensure_builder_running starts the compile VM if a later step needs it
+# (plugin rebuild, skipped-then-needed build). No-op when it is already up.
+ensure_builder_running() {
+  if vagrant_vm_running builder; then
+    BUILDER_STARTED=1
+    if [[ ! -s "$(node_ssh_config_path builder)" ]]; then
+      cache_node_ssh_config builder
+    fi
+    return 0
+  fi
+  info "starting builder (needed for compile)"
+  step_vagrant_up_builder
+  cache_node_ssh_config builder
+  BUILDER_STARTED=1
+}
+
+# halt_builder powers off the compile VM. Disk and image cache stay.
+# Cluster tests do not need this ~30GB VM. KEEP_VMS=1 leaves it running.
+halt_builder() {
+  if [[ "${KEEP_VMS}" == "1" ]]; then
+    echo "keeping builder running (KEEP_VMS=1)"
+    return 0
+  fi
+  if ! vagrant_vm_running builder; then
+    echo "builder already stopped"
+    BUILDER_STARTED=0
+    return 0
+  fi
+  info "halting builder (compile done; disk stays)"
+  vagrant halt builder
+  BUILDER_STARTED=0
+  echo "builder halted"
+}
+
 step_vagrant_up_nodes() {
   local node_mem="${VAGRANT_MEMORY:-6144}"
   local node_cpus="${VAGRANT_CPUS:-2}"
@@ -3171,6 +3211,7 @@ EOF
 }
 
 step_build_on_builder() {
+  ensure_builder_running
   local phase="${BUILD_PHASE}"
   if [[ "${phase}" == "auto" ]]; then
     if builder_has_base_squashfs; then
@@ -3676,11 +3717,15 @@ plugin_checkout() {
 
 # Long-lived builders (KEEP_BUILDER=1) may predate sibling plugin folders.
 # Vagrantfile mounts every sibling with flynn-plugin.json at `vagrant up`;
-# reload to attach new mounts.
+# reload to attach new mounts. Skip a halted builder so cluster-node mount
+# sync does not boot the 30GB compile VM.
 ensure_plugin_vm_mounts() {
   local name dir vm_path vm n
-  local vms="builder"
+  local vms=""
   local reload_list=" "
+  if vagrant_vm_running builder; then
+    vms="builder"
+  fi
   for n in "${NODES[@]}"; do
     if vagrant_vm_running "${n}"; then
       vms="${vms} ${n}"
@@ -3910,6 +3955,7 @@ step_build_plugin_images() {
     echo "SKIP_PLUGIN_INSTALL=1"
     return 0
   fi
+  ensure_builder_running
   ensure_plugin_vm_mounts || return 1
   local name dir
   local -a pending=()
@@ -7423,7 +7469,7 @@ teardown_vms() {
   if [[ "${KEEP_BUILDER}" != "1" ]]; then
     teardown_builder
   else
-    echo "keeping builder (KEEP_BUILDER=1)"
+    halt_builder
   fi
   echo "teardown done"
 }
@@ -8050,6 +8096,8 @@ main() {
     run_step "Build plugin images" step_build_plugin_images
   fi
 
+  run_step "Halt builder" halt_builder
+
   if [[ "${SMOKE_MATRIX_USE_ITEMS}" == "1" ]]; then
     local item_idx item_id item_is_last saved_keep_vms
     item_idx=0
@@ -8089,7 +8137,7 @@ main() {
   if [[ "${KEEP_VMS}" == "1" ]]; then
     record "Teardown builder" "SKIP" 0 "KEEP_VMS=1"
   elif [[ "${KEEP_BUILDER}" == "1" ]]; then
-    record "Teardown builder" "SKIP" 0 "KEEP_BUILDER=1"
+    run_step "Halt builder (end)" halt_builder
   else
     run_step "Teardown builder" teardown_builder
   fi

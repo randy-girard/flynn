@@ -1,6 +1,7 @@
 #!/bin/bash
-# Run on a cluster node as root after vagrant reload. install-flynn ships
-# flynn-host.service; nested bootstrap-flynn on the builder does not.
+# Run on a cluster node as root after vagrant reload (a node crash). Starting
+# flynn-host.service restores discoverd/flannel and ConnectPeer rejoins raft.
+# install-flynn ships the unit; nested bootstrap-flynn on the builder does not.
 set -euo pipefail
 DOMAIN="${CLUSTER_DOMAIN:-1.localflynn.com}"
 IP="${CLUSTER_IP:-}"

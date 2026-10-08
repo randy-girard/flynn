@@ -60,14 +60,17 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
   up         Boot dev-builder and extra nodes (default FLYNN_DEV_NODES=1 → dev-node1)
   status     vagrant status of every VM in this env
   ssh        Shell on a VM (default dev-builder; VM=dev-node1 for the live cluster)
-  build      Boot the builder if needed and build images (no cluster required; builder Flynn is compile-only)
+  build      Boot the builder if needed, build images, then halt the builder
+             (no cluster required; builder Flynn is compile-only)
   cli        Build the laptop flynn CLI and install it to /usr/local/bin
   bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
-  update     Build on the builder if Flynn source changed, then flynn-host update on running cluster nodes
+  update     Build on the builder if Flynn source changed, halt the builder,
+             then flynn-host update on running cluster nodes
   probe      Check the live cluster from node1 (hosts, controller, flynn-host list)
-  reload     Reboot VMs one at a time (vagrant reload --no-provision). Cluster
-             nodes start flynn-host and wait until Flynn is stable (hosts,
-             controller, status) before the next node
+  reload     Reboot VMs one at a time like a node failure (vagrant reload
+             --no-provision). Remaining hosts recover jobs; the node rejoins
+             when flynn-host starts. Wait until Flynn is stable (hosts,
+             controller, scheduler, status, tenant HTTP) before the next node
   restart    Same as reload
   stop       Halt VMs (vagrant halt); disks and ./build-dev stay
   halt       Same as stop
@@ -142,7 +145,7 @@ wait_cluster_stable() {
   local i st=0
   for i in $(seq 1 "${tries}"); do
     set +e
-    probe_live_cluster
+    PROBE_QUICK=1 probe_live_cluster
     st=$?
     set -e
     if [[ "${st}" -eq 0 ]]; then
@@ -156,9 +159,29 @@ wait_cluster_stable() {
   return 1
 }
 
-# reload_cluster_rolling reboots one VM at a time. The builder is compile-only
-# so it reloads first (no Flynn wait). Each cluster node is reloaded, flynn-host
-# is started, and probe must pass before the next node.
+list_tenant_apps() {
+  local node domain ip
+  node="${FLYNN_VAGRANT_NODE_PREFIX}1"
+  domain="$(flynn_vagrant_cluster_domain)"
+  ip="$(flynn_vagrant_cluster_ip)"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} LIST_ONLY=1 script/vagrant/guest/wait-tenant-http.sh" || true
+}
+
+wait_tenant_http() {
+  local label="${1:-cluster}"
+  local apps="${2:-}"
+  local node domain ip
+  node="${FLYNN_VAGRANT_NODE_PREFIX}1"
+  domain="$(flynn_vagrant_cluster_domain)"
+  ip="$(flynn_vagrant_cluster_ip)"
+  echo "waiting for tenant HTTP after ${label}"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} TENANT_APPS=$(printf '%q' "${apps}") TRIES=60 script/vagrant/guest/wait-tenant-http.sh"
+}
+
+# reload_cluster_rolling reboots one VM at a time like a node crash. The
+# builder is compile-only so it reloads first (no Flynn wait). Each cluster
+# node is killed without draining; remaining hosts plus cluster-monitor
+# recover jobs. After the VM is back, flynn-host starts and the node rejoins.
 reload_cluster_rolling() {
   flynn_vagrant_collect_existing "$@"
   if [[ ${#FLYNN_VAGRANT_TARGETS[@]} -eq 0 ]]; then
@@ -178,9 +201,11 @@ reload_cluster_rolling() {
     flynn_vagrant_reload_one "${name}"
   done
   local i=0 n="${#nodes[@]}" st=0
+  local TENANT_APPS=""
+  TENANT_APPS="$(list_tenant_apps 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   for name in "${nodes[@]}"; do
     i=$((i + 1))
-    echo "rolling reload ${name} (${i}/${n})"
+    echo "rolling reload ${name} (${i}/${n}) (node failure; remaining hosts recover)"
     flynn_vagrant_reload_one "${name}"
     set +e
     start_one_cluster_node "${name}"
@@ -194,6 +219,7 @@ reload_cluster_rolling() {
       return "${st}"
     fi
     wait_cluster_stable "${name}"
+    wait_tenant_http "${name}" "${TENANT_APPS}"
   done
 }
 
@@ -287,6 +313,22 @@ boot_dev_cluster() {
 
 boot_builder() {
   boot_dev_cluster "${DEV_MACHINE}"
+}
+
+# halt_builder powers off the compile VM. Disk and ./build-dev stay. Cluster
+# nodes are not touched. A later build/update/ssh starts it again.
+halt_builder() {
+  local state
+  state="$(dev_vm_state)"
+  case "${state}" in
+    running)
+      echo "halting ${DEV_MACHINE} (compile done; disk stays)"
+      vagrant halt "${DEV_MACHINE}"
+      ;;
+    *)
+      echo "${DEV_MACHINE} already ${state}"
+      ;;
+  esac
 }
 
 require_cluster_nodes() {
@@ -425,7 +467,7 @@ probe_live_cluster() {
   ip="$(flynn_vagrant_cluster_ip)"
   min_hosts="$(flynn_vagrant_get_nodes)"
   echo "probing live cluster on ${node} (${ip}, min-hosts=${min_hosts})"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} script/vagrant/guest/probe-cluster.sh"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} script/vagrant/guest/probe-cluster.sh"
 }
 
 update_running_cluster() {
@@ -459,6 +501,7 @@ case "${cmd}" in
   setup)
     boot_dev_cluster
     ensure_live_cluster
+    halt_builder
     connect_laptop
     ;;
   up)
@@ -472,6 +515,7 @@ case "${cmd}" in
     ;;
   build)
     build_images
+    halt_builder
     ;;
   cli)
     "${ROOT}/script/vagrant/host/cli.sh"
@@ -480,11 +524,13 @@ case "${cmd}" in
     boot_dev_cluster
     require_cluster_nodes
     restore_or_build_layers
+    halt_builder
     install_and_bootstrap_nodes
     connect_laptop
     ;;
   update)
     run_as_root "cd ${SRC} && FLYNN_VAGRANT_FORCE_BUILD=${FLYNN_VAGRANT_FORCE_BUILD} script/vagrant/guest/update.sh"
+    halt_builder
     update_running_cluster
     probe_live_cluster
     ;;

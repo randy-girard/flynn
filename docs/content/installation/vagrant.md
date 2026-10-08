@@ -72,7 +72,7 @@ Laptop `git push` authenticates with `flynn git-credentials`. `cluster:add` reco
 ```text
 make vagrant-setup           # first time: boot, build images if needed, bootstrap cluster nodes, connect
 make vagrant-up              # boot dev-builder and dev-node1
-make vagrant-reload          # reboot VMs and start flynn-host on cluster nodes
+make vagrant-reload          # rolling node-failure reboot; remaining hosts recover, node rejoins
 make vagrant-stop            # halt VMs (disks stay)
 make vagrant-destroy         # delete VMs; ./build-dev stays
 make vagrant-status
@@ -85,7 +85,7 @@ make vagrant                 # help
 # same commands: script/vagrant.sh setup|up|reload|stop|destroy|status|ssh|build|cli|bootstrap|update
 ```
 
-`reload` / `restart` run `vagrant reload --no-provision` on every machine already in `.vagrant-dev` (or the names you pass, e.g. `make vagrant-reload VM=dev-node1`). They do not create missing VMs. Cluster nodes use `flynn-host.service` (from `install-flynn`); after a reboot the script starts that unit if the cluster was already bootstrapped. The builder is not started as an operator cluster.
+`reload` / `restart` reboot one VM at a time (`vagrant reload --no-provision`) for every machine already in `.vagrant-dev` (or the names you pass, e.g. `make vagrant-reload VM=dev-node1`). They do not create missing VMs. A reboot is treated as a node failure: jobs are not drained first. Remaining hosts (and cluster-monitor) recover scheduler/controller/tenant HTTP; when the VM is back, `flynn-host.service` starts and the node rejoins via `--peer-ips`. Tenant HTTP is waited for after Flynn is stable. A single-node cluster is down until that VM is back. Cluster nodes use `flynn-host.service` (from `install-flynn`); after a reboot the script starts that unit if the cluster was already bootstrapped. The builder is not started as an operator cluster.
 
 `setup` bootstraps from the layer cache. If there is no tarball and the cache is empty, it builds images on **dev-builder** instead of failing with “run build then setup again.” `build` can run first on a fresh builder (it boots `dev-builder` if needed). Builder Flynn is only the compile toolchain (`build.sh` start-all / stop-all around flynn-builder). The live cluster is `install-flynn` + `flynn-host init --peer-ips` + `flynn-host bootstrap` on **dev-nodeN**, the same path smoke tests. `update` rebuilds cluster images on the builder when Flynn source (not docs) is newer than the last tarball, then runs `flynn-host update --all-nodes --tarball --force` on the running cluster nodes so you exercise a real rolling update. Laptop `cluster:add` talks to **dev-node1** (`192.168.57.20`); it reads the controller job `AUTH_KEY` (`flynn-host cli-add-command`), not a stale `host.json` secret.
 

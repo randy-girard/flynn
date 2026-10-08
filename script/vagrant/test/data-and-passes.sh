@@ -175,6 +175,8 @@ if ! grep -Fq 'for dir in "${root}"/*' "${smoke}"; then
 fi
 need 'ensure_plugin_vm_mounts' \
   "plugin install must reload VMs when sibling plugin folders are not synced"
+need 'Skip a halted builder' \
+  "plugin mount sync must not boot a halted builder during cluster tests"
 need 'Sync plugin VM mounts' \
   "plugin synced_folders must attach before Flynn install so a reload cannot drop flynnbr0"
 need 'already in CLI catalog; skipping hidden-CLI probe' \
@@ -362,6 +364,24 @@ need 'step_builder_unit_tests' \
   "smoke must run Linux unit tests on the builder VM before booting cluster nodes"
 need 'step_vagrant_up_builder' \
   "builder must come up before cluster nodes so unit tests can gate the 3-node boot"
+need 'ensure_builder_running' \
+  "smoke must start the builder again if a later compile step needs it"
+need 'needed for compile' \
+  "ensure_builder_running must vagrant up a halted builder"
+need 'halt_builder' \
+  "smoke must halt the builder after compile so cluster tests do not hold ~30GB RAM"
+need 'Halt builder' \
+  "smoke must record a Halt builder step after plugin images"
+need 'compile done; disk stays' \
+  "builder halt must keep the disk and image cache"
+if grep -Fq 'Teardown builder" "SKIP" 0 "KEEP_BUILDER=1"' "${smoke}"; then
+  echo "KEEP_BUILDER=1 must halt the builder, not leave it running after smoke" >&2
+  exit 1
+fi
+if ! grep -Fq 'vagrant halt builder' "${smoke}"; then
+  echo "smoke must vagrant halt builder after it is done compiling" >&2
+  exit 1
+fi
 need 'step_vagrant_up_nodes' \
   "cluster nodes must boot only after builder unit tests pass"
 need 'SKIP_BUILDER_UNIT_TESTS' \

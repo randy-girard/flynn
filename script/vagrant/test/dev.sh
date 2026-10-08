@@ -40,6 +40,7 @@ for want in \
   "guest/update-cluster.sh" \
   "guest/start-node.sh" \
   "guest/probe-cluster.sh" \
+  "guest/wait-tenant-http.sh" \
   "probe_live_cluster" \
   "restore_or_build_layers" \
   "build_images" \
@@ -230,6 +231,42 @@ if ! grep -Fq 'start_one_cluster_node' "${script}"; then
   echo "rolling reload must start flynn-host on the node that just rebooted before probing" >&2
   exit 1
 fi
+if grep -Fq 'drain_one_cluster_node' "${script}"; then
+  echo "rolling reload must not drain; a reboot is a node failure and remaining hosts recover" >&2
+  exit 1
+fi
+if ! grep -Fq 'node failure' "${script}"; then
+  echo "rolling reload must treat a VM reboot as a node failure" >&2
+  exit 1
+fi
+if ! grep -Fq 'wait_tenant_http' "${script}"; then
+  echo "rolling reload must wait for tenant HTTP after Flynn recovers from the node reboot" >&2
+  exit 1
+fi
+if ! grep -Fq 'list_tenant_apps' "${script}"; then
+  echo "rolling reload must snapshot tenant apps before a crash so wait still covers them" >&2
+  exit 1
+fi
+if ! grep -Fq 'TENANT_APPS' "${mod}/guest/wait-tenant-http.sh"; then
+  echo "wait-tenant-http.sh must accept a pre-crash tenant app list" >&2
+  exit 1
+fi
+if ! grep -Fq 'monitorcheck.HaveQuorum' "${ROOT}/host/monitor.go"; then
+  echo "cluster-monitor must repair with remaining hosts instead of waiting for a dead node" >&2
+  exit 1
+fi
+if ! grep -Fq 'code not in ("502", "503")' "${mod}/guest/wait-tenant-http.sh"; then
+  echo "wait-tenant-http.sh must treat HTTP 502/503 as down (no router backends)" >&2
+  exit 1
+fi
+if ! grep -Fq 'controller-scheduler' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh must require controller-scheduler or tenant apps stay 503" >&2
+  exit 1
+fi
+if ! grep -Fq '"controller-scheduler" in unhealthy' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe must not settle when controller-scheduler is unhealthy" >&2
+  exit 1
+fi
 if grep -E 'reload\|restart\)' -A5 "${script}" | grep -Fq 'start_existing_cluster'; then
   echo "reload must not start every node only after all VMs reboot" >&2
   exit 1
@@ -240,6 +277,22 @@ if ! grep -Fq 'status.${DOMAIN}' "${mod}/guest/probe-cluster.sh"; then
 fi
 if ! grep -Fq '"healthy"' "${mod}/guest/probe-cluster.sh"; then
   echo "probe-cluster.sh must require an overall healthy status payload" >&2
+  exit 1
+fi
+if ! grep -Fq 'scode}" != "200" && "${scode}" != "500"' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe must parse status HTTP 500 JSON (overall unhealthy is 500, not a missing app)" >&2
+  exit 1
+fi
+if ! grep -Fq 'unhealthy == ["controller"]' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe must settle when only status.detail.controller is down and controller.<domain> answers" >&2
+  exit 1
+fi
+if ! grep -Fq 'PROBE_QUICK' "${script}"; then
+  echo "rolling reload must skip flynn login/apps while waiting for the cluster to settle" >&2
+  exit 1
+fi
+if ! grep -Fq 'PROBE_QUICK=${PROBE_QUICK:-}' "${script}"; then
+  echo "probe_live_cluster must pass PROBE_QUICK into the guest script" >&2
   exit 1
 fi
 if ! in_mod 'vagrant halt'; then
@@ -393,6 +446,8 @@ for s in \
   "${mod}/guest/node-dns.sh" \
   "${mod}/guest/start-node.sh" \
   "${mod}/guest/probe-cluster.sh" \
+  "${mod}/guest/drain-node.sh" \
+  "${mod}/guest/wait-tenant-http.sh" \
   "${mod}/guest/ensure-go.sh" \
   "${mod}/guest/ensure-flynn-root.sh" \
   "${mod}/guest/ensure-qemu-binfmt.sh"; do
@@ -419,6 +474,18 @@ if grep -Fq 'export FLYNN_KEEP_CLUSTER=1 FLYNN_ROOT' "${script}"; then
 fi
 if ! grep -Fq 'boot_builder' "${script}"; then
   echo "vagrant.sh build must boot the builder so it works before setup" >&2
+  exit 1
+fi
+if ! grep -Fq 'halt_builder' "${script}"; then
+  echo "vagrant.sh must halt the builder after compile so it does not sit on ~30GB RAM" >&2
+  exit 1
+fi
+if grep -E 'build\)' -A3 "${script}" | grep -Fq 'build_images' && ! grep -E 'build\)' -A4 "${script}" | grep -Fq 'halt_builder'; then
+  echo "vagrant.sh build must halt the builder after images are built" >&2
+  exit 1
+fi
+if grep -E 'update\)' -A4 "${script}" | grep -Fq 'update_running_cluster' && ! grep -E 'update\)' -A5 "${script}" | grep -Fq 'halt_builder'; then
+  echo "vagrant.sh update must halt the builder after compile before cluster update" >&2
   exit 1
 fi
 if ! grep -Fq 'exit 2' "${mod}/guest/restore-layers.sh"; then
@@ -513,6 +580,10 @@ if ! grep -Fq 'timeout 20 flynn login' "${mod}/guest/probe-cluster.sh"; then
   echo "probe-cluster must not hang flynn login when auth.<domain> DNS fails" >&2
   exit 1
 fi
+if ! grep -Fq 'timeout 20 flynn apps' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster must not hang flynn apps while waiting for a rolling reload" >&2
+  exit 1
+fi
 if ! grep -Fq 'treating as not bootstrapped' "${mod}/guest/ensure-cluster.sh"; then
   echo "ensure-cluster must exit 2 when leftover host.json has no controller so setup bootstraps" >&2
   exit 1
@@ -531,7 +602,7 @@ fi
 bash "${ROOT}/script/vagrant/test/clean-flynn.sh"
 bash "${ROOT}/script/vagrant/test/update-build.sh"
 help="$(bash "${entry}" help)"
-for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status"; do
+for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status" "halt the builder" "node failure" "tenant HTTP" "scheduler"; do
   if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1

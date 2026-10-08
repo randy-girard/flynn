@@ -24,7 +24,10 @@ node (heavy). See [Vagrant](installation/vagrant.md). For a laptop cluster that
 can sit beside smoke, use `script/vagrant.sh` / `make vagrant-setup`
 (`.vagrant-dev`, **dev-builder** at `192.168.57.10` compiles images;
 **dev-node1** at `192.168.57.20` runs the live cluster). `make vagrant-reload`
-(alias `restart`) reboots those VMs and starts `flynn-host` on cluster nodes.
+(alias `restart`) reboots those VMs one at a time like a node failure: remaining
+hosts recover jobs (cluster-monitor restarts a missing scheduler), then
+`flynn-host` starts so the node rejoins. Wait for cluster status and tenant HTTP
+before the next node. A single-node cluster is down until that VM is back.
 `make vagrant-stop` (alias `halt`) powers them off; `make vagrant-destroy`
 (alias `teardown`) deletes the VMs without touching smoke or `./build-dev`.
 Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
@@ -387,7 +390,12 @@ Default flow:
 2. **Builder gate** — `vagrant up builder`, then the full native Linux unit
    suite via `script/run-unit-tests` on the VM (Redis, Postgres, MariaDB,
    MongoDB, ZFS). Failures stop before cluster nodes.
-3. **Build** — cluster images on the builder, tarball in `build/release/`.
+3. **Build** — cluster images on the builder, tarball in `build/release/`, then
+   plugin images if the selected items need them. The builder is **halted**
+   after compile (`vagrant halt builder`) so cluster tests do not hold ~30GB
+   RAM. Disk and the image layer cache stay. A later compile step starts it
+   again (`KEEP_VMS=1` leaves it running; `KEEP_BUILDER=0` destroys it at the
+   end).
 4. **Matrix items** — enabled rows in the matrix (example default: `singleton`
    then `ha`, i.e. 1-node then 3-node HA). Size `2` is invalid. Named
    topologies: `add` (join `node4` then upgrade), `remove` (drain `node3`
@@ -439,6 +447,7 @@ set in the environment):
 | `SMOKE_DATASTORES` | Space-separated providers to attach (default: all six) |
 | `SMOKE_BLOBSTORE_BACKEND=minio` | Point blobstore at a MinIO sidecar on node1 (`--item minio`) |
 | `KEEP_VMS=1` / `KEEP_VMS_ON_FAIL=1` | Leave VMs up |
+| `KEEP_BUILDER=1` (default) | Keep the builder disk after smoke; halt it after compile. `KEEP_BUILDER=0` destroys it |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |
 | `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline). Tenant `postgres` is a catalog plugin; it is not in that suite.sh default. |
