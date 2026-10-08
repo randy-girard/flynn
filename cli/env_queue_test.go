@@ -18,4 +18,7 @@ func TestSetEnvQueuesDeployWithoutWaiting(t *testing.T) {
 	if !strings.Contains(src, "CreateDeployment") || !strings.Contains(src, "HeadRelease") {
 		t.Fatal("env changes must fork the queued head release and create a stacked deploy")
 	}
+	if !strings.Contains(src, "SetAppRelease") || !strings.Contains(src, "len(release.ArtifactIDs) == 0") {
+		t.Fatal("env-only releases must SetAppRelease so resource attach works before the first deploy")
+	}
 }

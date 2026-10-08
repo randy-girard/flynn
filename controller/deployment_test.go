@@ -8,6 +8,24 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
+func (s *S) TestCreateDeploymentEnvOnlyBeforeFirstDeploy(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "env-only-attach"})
+	release := &ct.Release{Env: map[string]string{"DATABASE_URL": "postgres://db"}}
+	c.Assert(s.c.CreateRelease(app.ID, release), IsNil)
+	c.Assert(release.ArtifactIDs, HasLen, 0)
+
+	d, err := s.c.CreateDeployment(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(d.FinishedAt, NotNil)
+	c.Assert(d.Type, Equals, ct.ReleaseTypeConfig)
+
+	got, err := s.c.GetAppRelease(app.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.ID, Equals, release.ID)
+	c.Assert(got.Env["DATABASE_URL"], Equals, "postgres://db")
+	c.Assert(got.ArtifactIDs, HasLen, 0)
+}
+
 func (s *S) TestCreateDeployment(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "create-deployment"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{

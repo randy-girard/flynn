@@ -229,7 +229,7 @@ func setEnv(client controller.Client, proc string, env map[string]*string) (stri
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return "", err
 	}
-	d, err := client.CreateDeployment(app.ID, release.ID)
+	d, err := rollOutEnvRelease(client, app.ID, release)
 	if err != nil {
 		return "", err
 	}
@@ -241,4 +241,17 @@ func setEnv(client controller.Client, proc string, env map[string]*string) (stri
 		}
 	}
 	return release.ID, nil
+}
+
+// rollOutEnvRelease makes release current. Env-only releases (no image/slug)
+// are stored with SetAppRelease so resource:add / env:set work before the first
+// git push and do not start tenant jobs. Releases with artifacts deploy.
+func rollOutEnvRelease(client controller.Client, appID string, release *ct.Release) (*ct.Deployment, error) {
+	if release == nil || release.ID == "" {
+		return nil, fmt.Errorf("missing release")
+	}
+	if len(release.ArtifactIDs) == 0 {
+		return nil, client.SetAppRelease(appID, release.ID)
+	}
+	return client.CreateDeployment(appID, release.ID)
 }

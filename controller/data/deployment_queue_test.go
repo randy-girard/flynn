@@ -26,3 +26,17 @@ func TestQueuedDeploysReplaceIsolateDeploysBlock(t *testing.T) {
 		t.Fatal("finishing a deploy must start the next queued job")
 	}
 }
+
+func TestEnvOnlyReleaseCanDeployBeforeFirstGitPush(t *testing.T) {
+	b, err := os.ReadFile("deployment.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if !strings.Contains(src, "len(release.ArtifactIDs) > 0 && !release.HasDeployableBlob()") {
+		t.Fatal("env-only attach (no artifacts) must not be treated as a garbage-collected blob")
+	}
+	if !strings.Contains(src, `len(release.ArtifactIDs) == 0`) {
+		t.Fatal("a release with no artifacts is a config deploy so resource attach works before git push")
+	}
+}

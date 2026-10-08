@@ -82,7 +82,9 @@ func (r *DeploymentRepo) addExpanded(appID, releaseID string, retried bool) (*ct
 		tx.Rollback()
 		return nil, err
 	}
-	if !release.HasDeployableBlob() {
+	// Env-only releases (resource attach / env:set before the first git push)
+	// have no artifacts. Reject only when a slug/image existed and blob GC reaped it.
+	if len(release.ArtifactIDs) > 0 && !release.HasDeployableBlob() {
 		tx.Rollback()
 		return nil, ct.ValidationError{Message: "release blob was garbage-collected"}
 	}
