@@ -995,9 +995,23 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 			break
 		}
 	}
+	// After a crash-style node reboot the replacement jobs register in
+	// discoverd but stay unassigned: only the primary writes membership, and
+	// the primary is the peer that just disappeared. Without a fallback the
+	// sync logs "no async peers present" forever even though live replicas
+	// exist.
+	usedUnassigned := false
+	if newSync == nil {
+		newSync = p.presentUnassignedTakeoverPeer()
+		usedUnassigned = newSync != nil
+	}
 	if newSync == nil {
 		log.Warn("would takeover but no async peers present")
 		return false
+	}
+	if usedUnassigned {
+		log.Info("no listed async present, using unassigned peer as new sync",
+			"peer.id", peerApplianceID(p.idKey, newSync), "addr", newSync.Addr)
 	}
 
 	log.Debug("preparing for new generation")
@@ -1008,6 +1022,34 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 		}
 		if cur := p.presentPeer(a); cur != nil {
 			newAsync = append(newAsync, cur)
+		}
+	}
+	if usedUnassigned {
+		newSyncID := peerApplianceID(p.idKey, newSync)
+		primaryID := peerApplianceID(p.idKey, p.Info().State.Primary)
+		seen := make(map[string]struct{}, len(newAsync)+2)
+		seen[p.id] = struct{}{}
+		if newSyncID != "" {
+			seen[newSyncID] = struct{}{}
+		}
+		if primaryID != "" {
+			seen[primaryID] = struct{}{}
+		}
+		for _, a := range newAsync {
+			if id := peerApplianceID(p.idKey, a); id != "" {
+				seen[id] = struct{}{}
+			}
+		}
+		for _, peer := range p.Info().Peers {
+			id := peerApplianceID(p.idKey, peer)
+			if id == "" {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			newAsync = append(newAsync, peer)
+			seen[id] = struct{}{}
 		}
 	}
 
@@ -1022,6 +1064,48 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 		Deposed: newDeposed,
 	})
 	return true
+}
+
+// presentUnassignedTakeoverPeer returns a live discoverd peer that can become
+// the new sync when every recorded async is gone. Prefer a peer that is not
+// currently deposed (a deposed volume may have diverged from the surviving
+// sync); fall back to a present deposed peer only if that is all that remains.
+func (p *Peer) presentUnassignedTakeoverPeer() *discoverd.Instance {
+	info := p.Info()
+	if info.State == nil {
+		return nil
+	}
+	listed := make(map[string]struct{})
+	for _, a := range info.State.Async {
+		if id := peerApplianceID(p.idKey, a); id != "" {
+			listed[id] = struct{}{}
+		}
+	}
+	deposed := make(map[string]struct{})
+	for _, d := range info.State.Deposed {
+		if id := peerApplianceID(p.idKey, d); id != "" {
+			deposed[id] = struct{}{}
+		}
+	}
+	primaryID := peerApplianceID(p.idKey, info.State.Primary)
+	var fallback *discoverd.Instance
+	for _, peer := range info.Peers {
+		id := peerApplianceID(p.idKey, peer)
+		if id == "" || id == p.id || id == primaryID {
+			continue
+		}
+		if _, ok := listed[id]; ok {
+			continue
+		}
+		if _, ok := deposed[id]; ok {
+			if fallback == nil {
+				fallback = peer
+			}
+			continue
+		}
+		return peer
+	}
+	return fallback
 }
 
 var (
