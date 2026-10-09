@@ -20,6 +20,13 @@ const (
 	registerRetries = 10
 	subnetTTL       = 24 * 3600
 	renewMargin     = time.Hour
+	// discoverd service meta has no lease TTL (newResponse uses a 10-year
+	// placeholder). After a crash-style host reboot pruneExpiredSubnets can
+	// drop this host's /24 while its flannel instance is missing; when the
+	// instance returns, AcquireLease writes the lease once and the renewer
+	// would otherwise sleep until that fake expiry, so peers never learn the
+	// new VTEP MAC and overlay to this host blackholes. Republish often.
+	discoverdRepublishInterval = 30 * time.Second
 )
 
 const (
@@ -414,9 +421,20 @@ func (sm *SubnetManager) parseSubnetWatchResponse(resp *Response) (batch *EventB
 	return
 }
 
+func leaseRepublishWait(exp, now time.Time) time.Duration {
+	wait := exp.Sub(now) - renewMargin
+	if wait > discoverdRepublishInterval {
+		wait = discoverdRepublishInterval
+	}
+	if wait < time.Second {
+		wait = time.Second
+	}
+	return wait
+}
+
 func (sm *SubnetManager) LeaseRenewer(cancel chan bool) {
 	for {
-		dur := sm.leaseExp.Sub(time.Now()) - renewMargin
+		dur := leaseRepublishWait(sm.leaseExp, time.Now())
 
 		select {
 		case <-time.After(dur):

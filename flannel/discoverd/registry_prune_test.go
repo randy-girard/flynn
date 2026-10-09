@@ -84,6 +84,34 @@ func TestPruneExpiredSubnetsEmpty(t *testing.T) {
 	}
 }
 
+func TestReturningHostLeaseIsKeptAfterPrune(t *testing.T) {
+	returning := rawLease(t, "192.168.57.20")
+	peer := rawLease(t, "192.168.57.21")
+	subnets := map[string]*json.RawMessage{
+		"100.100.15.0-24": returning,
+		"100.100.16.0-24": peer,
+	}
+	kept, removed := pruneExpiredSubnets(subnets, map[string]struct{}{"192.168.57.21": {}})
+	if !reflect.DeepEqual(removed, []string{"100.100.15.0-24"}) {
+		t.Fatalf("crash-rebooting host must be pruned while its flannel instance is down, removed=%v", removed)
+	}
+	if _, ok := kept["100.100.15.0-24"]; ok {
+		t.Fatal("returning host lease must be gone until UpdateSubnet re-inserts it")
+	}
+	// LeaseRenewer UpdateSubnet writes the /24 back even after prune dropped it.
+	kept["100.100.15.0-24"] = returning
+	kept, removed = pruneExpiredSubnets(kept, map[string]struct{}{
+		"192.168.57.20": {},
+		"192.168.57.21": {},
+	})
+	if len(removed) != 0 {
+		t.Fatalf("live returning host must not be pruned again, removed=%v", removed)
+	}
+	if _, ok := kept["100.100.15.0-24"]; !ok {
+		t.Fatal("UpdateSubnet re-insert must survive the next prune")
+	}
+}
+
 func TestPruneExpiredSubnetsAllDead(t *testing.T) {
 	subnets := map[string]*json.RawMessage{
 		"10.3.1.0-24": rawLease(t, "1.2.3.4"),

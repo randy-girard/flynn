@@ -305,3 +305,21 @@ func TestRenewLease(t *testing.T) {
 
 	t.Fatalf("Failed to find acquired lease")
 }
+
+func TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		name string
+		exp  time.Time
+		want time.Duration
+	}{
+		{"discoverd 10-year placeholder", now.AddDate(10, 0, 0), discoverdRepublishInterval},
+		{"2h etcd-style remaining", now.Add(2 * time.Hour), discoverdRepublishInterval},
+		{"already due", now.Add(2 * time.Second), time.Second},
+	}
+	for _, tc := range cases {
+		if got := leaseRepublishWait(tc.exp, now); got != tc.want {
+			t.Fatalf("%s: wait = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

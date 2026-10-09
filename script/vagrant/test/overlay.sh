@@ -64,6 +64,16 @@ need "${smoke}" 'vbox_id_for_node' \
   "NIC promisc check must wait for the Vagrant id file (parallel vagrant up can lag)"
 need "${smoke}" 'VBoxManage list vms' \
   "NIC promisc check must fall back to VBoxManage list vms if the id file is missing"
+need "${ROOT}/flannel/subnet/subnet.go" 'discoverdRepublishInterval' \
+  "flannel LeaseRenewer must republish often; discoverd meta has no TTL and prune can drop a reboot host's /24"
+need "${ROOT}/flannel/subnet/subnet.go" 'leaseRepublishWait' \
+  "flannel must cap renew wait so a 10-year discoverd placeholder expiry cannot skip republish"
+need "${ROOT}/flannel/subnet/subnet_test.go" 'TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry' \
+  "flannel must test that discoverd placeholder expiry republishes on a short interval"
+need "${ROOT}/flannel/discoverd/registry.go" 'net.Subnets\[sn\] = rawJSON' \
+  "flannel UpdateSubnet must re-insert a lease after prune dropped a returning host"
+need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestReturningHostLeaseIsKeptAfterPrune' \
+  "flannel must test that a crash-rebooted host's /24 is pruned while down and kept after UpdateSubnet"
 need "${smoke}" 'VTEP MAC' "smoke script must diagnose device vs lease VTEP MAC"
 need "${smoke}" 'extra_args\+=\(--clean\)' "smoke reinstall on existing VMs must pass --clean"
 need "${smoke}" 'for link in flannel.1 flynnbr0' "smoke --clean must delete stale overlay devices"
