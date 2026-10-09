@@ -231,6 +231,54 @@ if ! grep -Fq 'start_one_cluster_node' "${script}"; then
   echo "rolling reload must start flynn-host on the node that just rebooted before probing" >&2
   exit 1
 fi
+if ! grep -Fq 'TRIES="${TRIES:-180}"' "${mod}/guest/start-node.sh"; then
+  echo "start-node.sh must wait long enough for router/controller after a crash-style reboot" >&2
+  exit 1
+fi
+if ! grep -Fq 'no listed async present, using unassigned peer as new sync' "${ROOT}/pkg/sirenia/state/state.go"; then
+  echo "sirenia sync takeover must use unassigned live peers after a crash-style node loss" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPostgresSyncTakesOverWhenPrimaryGoneWithUnassignedPeer' "${ROOT}/pkg/sirenia/state/applyconfig_test.go"; then
+  echo "sirenia must test takeover when the listed async is gone and an unassigned peer is live" >&2
+  exit 1
+fi
+if ! grep -Fq 'controller wait timed out' "${script}"; then
+  echo "rolling reload must keep waiting for Flynn after start-node controller timeout" >&2
+  exit 1
+fi
+if ! awk '/^start_one_cluster_node\(\)/,/^}/' "${script}" | grep -Fq 'if [[ "${st}" -ne 0 ]]; then'; then
+  echo "start_one_cluster_node must return non-zero from if so bash 3.2 + set -e cannot abort rolling reload" >&2
+  exit 1
+fi
+if ! grep -Fq 'UnmarshalState reconnects to containers' "${ROOT}/host/state.go"; then
+  echo "host Restore must UnmarshalState outside the bolt View so SetStatusFailed cannot deadlock after a crash reboot" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestRestoreUnmarshalStateOutsideBoltView' "${ROOT}/host/state_test.go"; then
+  echo "host Restore must test that UnmarshalState/SetStatusFailed does not deadlock on bolt View" >&2
+  exit 1
+fi
+if ! grep -Fq 'discoverdRepublishInterval' "${ROOT}/flannel/subnet/subnet.go"; then
+  echo "flannel LeaseRenewer must republish often after prune drops a reboot host's subnet lease" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry' "${ROOT}/flannel/subnet/subnet_test.go"; then
+  echo "flannel must test that discoverd placeholder expiry cannot skip lease republish" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestReturningHostLeaseIsKeptAfterPrune' "${ROOT}/flannel/discoverd/registry_prune_test.go"; then
+  echo "flannel must test prune-then-UpdateSubnet keeps a returning host lease" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestDeprovisionAnyRetriesAfterObjectNotFoundJSON' "${ROOT}/pkg/resource/resource_test.go"; then
+  echo "resource.DeprovisionAny must retry FLYNN_* name after plugin UUID 404" >&2
+  exit 1
+fi
+if ! grep -Fq '${#builders[@]} -gt 0' "${script}"; then
+  echo "rolling reload must not expand empty builders[@] under set -u (node-only VM=)" >&2
+  exit 1
+fi
 if grep -Fq 'drain_one_cluster_node' "${script}"; then
   echo "rolling reload must not drain; a reboot is a node failure and remaining hosts recover" >&2
   exit 1

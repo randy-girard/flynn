@@ -188,6 +188,39 @@ func TestDeprovisionAnyRetriesNameAfterNotFound(t *testing.T) {
 	}
 }
 
+func TestDeprovisionAnyRetriesAfterObjectNotFoundJSON(t *testing.T) {
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.URL.Query().Get("id")
+		seen = append(seen, id)
+		if id == "e555a78d-689c-44ca-a514-21d300d6fde4" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(hh.JSONError{
+				Code:    hh.ObjectNotFoundErrorCode,
+				Message: "redis instance not found",
+			})
+			return
+		}
+		if id == "redis-reef-42402" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	err := DeprovisionAny(srv.URL+"/clusters", DeprovisionIDs("e555a78d-689c-44ca-a514-21d300d6fde4", map[string]string{
+		"FLYNN_REDIS": "redis-reef-42402",
+	})...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != "e555a78d-689c-44ca-a514-21d300d6fde4" || seen[1] != "redis-reef-42402" {
+		t.Fatalf("UUID 404 must retry FLYNN_REDIS name, seen %v", seen)
+	}
+}
+
 func TestDeprovisionAnyDoesNotRetryFollowers(t *testing.T) {
 	var seen []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
