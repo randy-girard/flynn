@@ -134,7 +134,12 @@ start_one_cluster_node() {
   run_as_root_on "${name}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=$(flynn_vagrant_cluster_ip) script/vagrant/guest/start-node.sh"
   st=$?
   set -e
-  return "${st}"
+  # bash 3.2 + set -e: a bare `return 1` aborts the whole script even when the
+  # caller wrapped this function in set +e. Return from `if` so rolling reload
+  # can keep waiting for Flynn after start-node's controller timeout.
+  if [[ "${st}" -ne 0 ]]; then
+    return "${st}"
+  fi
 }
 
 # wait_cluster_stable retries probe_live_cluster until hosts, controller, and
@@ -197,12 +202,18 @@ reload_cluster_rolling() {
       nodes+=("${name}")
     fi
   done
-  for name in "${builders[@]}"; do
-    flynn_vagrant_reload_one "${name}"
-  done
+  # bash 3.2 + set -u: empty "${arr[@]}" is unbound (make vagrant-reload VM=dev-node2).
+  if [[ ${#builders[@]} -gt 0 ]]; then
+    for name in "${builders[@]}"; do
+      flynn_vagrant_reload_one "${name}"
+    done
+  fi
   local i=0 n="${#nodes[@]}" st=0
   local TENANT_APPS=""
   TENANT_APPS="$(list_tenant_apps 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
+  if [[ ${#nodes[@]} -eq 0 ]]; then
+    return 0
+  fi
   for name in "${nodes[@]}"; do
     i=$((i + 1))
     echo "rolling reload ${name} (${i}/${n}) (node failure; remaining hosts recover)"
@@ -216,7 +227,7 @@ reload_cluster_rolling() {
       continue
     fi
     if [[ "${st}" -ne 0 ]]; then
-      return "${st}"
+      echo "${name}: flynn-host is up but controller wait timed out; waiting for the cluster to settle"
     fi
     wait_cluster_stable "${name}"
     wait_tenant_http "${name}" "${TENANT_APPS}"

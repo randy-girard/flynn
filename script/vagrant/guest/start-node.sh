@@ -44,7 +44,10 @@ controller_code() {
     "https://controller.${DOMAIN}/" || true
 }
 
-for _ in $(seq 1 60); do
+# Router/controller jobs often take >2m after a crash-style reboot on a
+# multi-node laptop cluster (raft rejoin, then place router on this host).
+TRIES="${TRIES:-180}"
+for _ in $(seq 1 "${TRIES}"); do
   code="$(controller_code)"
   if [[ "${code}" == "200" || "${code}" == "401" ]]; then
     echo "cluster is up"
