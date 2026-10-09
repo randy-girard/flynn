@@ -106,6 +106,9 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 	s.backend = backend
 
 	var resurrect []*host.Job
+	var backendJobsBlobs map[string][]byte
+	var backendGlobalBlob []byte
+	var persistentJobIDs []string
 	if err := s.stateDB.View(func(tx *bolt.Tx) error {
 		jobsBucket := tx.Bucket([]byte("jobs"))
 		backendJobsBucket := tx.Bucket([]byte("backend-jobs"))
@@ -134,26 +137,22 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 			return err
 		}
 
-		// hand opaque blobs back to backend so it can do its restore
-		backendJobsBlobs := make(map[string][]byte)
+		// Copy blobs out of the View. UnmarshalState reconnects to containers
+		// and calls SetStatusFailed, which persists via a bolt Update. Doing
+		// that while this View is open deadlocks (crash-style reboot: runc
+		// state is gone, flynn-host listens on :1113 but never ServeHTTP).
+		backendJobsBlobs = make(map[string][]byte)
 		if err := backendJobsBucket.ForEach(func(k, v []byte) error {
-			backendJobsBlobs[string(k)] = v
+			backendJobsBlobs[string(k)] = append([]byte(nil), v...)
 			return nil
 		}); err != nil {
 			return err
 		}
-		backendGlobalBlob := backendGlobalBucket.Get([]byte("backend"))
-		if err := backend.UnmarshalState(s.jobs, backendJobsBlobs, backendGlobalBlob, buffers); err != nil {
-			return err
+		if g := backendGlobalBucket.Get([]byte("backend")); len(g) > 0 {
+			backendGlobalBlob = append([]byte(nil), g...)
 		}
-
-		// resurrect any persistent jobs which are not running
 		if err := persistentBucket.ForEach(func(k, v []byte) error {
-			for _, job := range s.jobs {
-				if job.Job.ID == string(v) && !backend.JobExists(job.Job.ID) {
-					resurrect = append(resurrect, job.Job)
-				}
-			}
+			persistentJobIDs = append(persistentJobIDs, string(v))
 			return nil
 		}); err != nil {
 			return err
@@ -162,6 +161,17 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 		return nil
 	}); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("could not restore from host persistence db: %s", err)
+	}
+
+	if err := backend.UnmarshalState(s.jobs, backendJobsBlobs, backendGlobalBlob, buffers); err != nil {
+		return nil, err
+	}
+	for _, jobID := range persistentJobIDs {
+		for _, job := range s.jobs {
+			if job != nil && job.Job != nil && job.Job.ID == jobID && !backend.JobExists(job.Job.ID) {
+				resurrect = append(resurrect, job.Job)
+			}
+		}
 	}
 
 	// Jobs persisted as starting/running whose containers did not come back

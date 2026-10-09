@@ -2064,7 +2064,7 @@ func (l *LibcontainerBackend) UnmarshalState(jobs map[string]*host.ActiveJob, jo
 		container.MuxConfig.JobType = j.Job.Metadata["flynn-controller.type"]
 		container.MuxConfig.JobID = j.Job.ID
 		container.MuxConfig.JobName = host.JobShortName(j.Job)
-		readySignals[j.Job.ID] = make(chan error)
+		readySignals[j.Job.ID] = make(chan error, 1)
 		go container.watch(readySignals[j.Job.ID], buffers[j.Job.ID])
 	}
 	// gather connection attempts and finish reconstruction if success.  failures will time out.

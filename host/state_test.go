@@ -1,8 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/flynn/go-check"
 	"github.com/randy-girard/flynn/host/types"
@@ -68,6 +70,47 @@ func (S) TestStatePersistRestore(c *C) {
 	job := state.GetJob("a")
 	if job.HostID != hostID {
 		c.Errorf("expected job.HostID to equal %s, got %s", hostID, job.HostID)
+	}
+}
+
+type failOnRestoreBackend struct {
+	MockBackend
+	state *State
+}
+
+func (b *failOnRestoreBackend) UnmarshalState(jobs map[string]*host.ActiveJob, _ map[string][]byte, _ []byte, _ host.LogBuffers) error {
+	for id := range jobs {
+		b.state.SetStatusFailed(id, fmt.Errorf("container missing after host restore"))
+	}
+	return nil
+}
+
+func (S) TestRestoreUnmarshalStateOutsideBoltView(c *C) {
+	workdir := c.MkDir()
+	hostID := "abc123"
+	state := NewState(hostID, filepath.Join(workdir, "host-state-db"))
+	c.Assert(state.OpenDB(), IsNil)
+	c.Assert(state.AddJob(&host.Job{ID: "a"}), IsNil)
+	state.CloseDB()
+
+	state = NewState(hostID, filepath.Join(workdir, "host-state-db"))
+	c.Assert(state.OpenDB(), IsNil)
+	defer state.CloseDB()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := state.Restore(&failOnRestoreBackend{state: state}, nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		c.Assert(err, IsNil)
+	case <-time.After(5 * time.Second):
+		c.Fatal("Restore deadlocked: UnmarshalState/SetStatusFailed ran inside an open bolt View")
+	}
+	job := state.GetJob("a")
+	if job == nil || job.Status != host.StatusFailed {
+		c.Fatalf("expected job failed after restore UnmarshalState, got %+v", job)
 	}
 }
 
