@@ -219,7 +219,7 @@ func (s *ReleaseSuite) TestReleaseImages(t *c.C) {
 			continue // we don't deploy ImageOnly updates
 		}
 		if app.Name == "discoverd" || app.Name == "flannel" {
-			continue // managed by host daemon, not deployed via controller
+			continue // host-daemon persistent jobs; ReplaceHostInfraJobs after image pull
 		}
 		debugf(t, "checking new %s release is using image %s", app.Name, images[app.Name].URI)
 		expected := fmt.Sprintf(`"finished deploy of system app" name=%s`, app.Name)

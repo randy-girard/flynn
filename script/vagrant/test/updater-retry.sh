@@ -40,6 +40,8 @@ need_file "${incluster}" "in-cluster updater must exist"
 
 need_in "${unsettled}" 'timed out waiting for new instance to come up' \
   "HA sirenia instance wait must be a retryable scale timeout"
+need_in "${unsettled}" 'timeout waiting for expected status' \
+  "sirenia WaitForReplSync/WaitForReadWrite timeout must be a retryable scale timeout"
 need_in "${unsettled}" 'MaxTransientDeployAttempts' \
   "retry budget must depend on the error (long waits vs NXDOMAIN)"
 need_in "${unsettled}" 'maxScaleTimeoutDeployAttempts' \
@@ -50,10 +52,20 @@ need_in "${unsettled_test}" 'HA sirenia new-instance timeout must retry' \
   "retry budget tests must name the HA timeout case"
 need_in "${sirenia_health}" 'lookupSireniaPeer' \
   "sirenia must poll discoverd for a new-release peer"
+need_in "${sirenia_health}" 'sireniaClusterShouldWaitForReady' \
+  "HA postgres with too few asyncs must wait for a replacement replica, not fail immediately"
+need_in "${ROOT}/controller/worker/deployment/sirenia_health_test.go" 'HA cluster missing an async must wait' \
+  "unit tests must cover waiting for a missing sirenia async before deploy"
 need_in "${sirenia_health}" 'excludeIDs' \
   "HA startInstance poll must skip already-started new peers"
 need_in "${sirenia}" 'lookupSireniaPeer\(svc, d.NewReleaseID, processType, idKey, exclude' \
   "HA startInstance wait must poll discoverd excluding known new peers"
+need_in "${sirenia}" 'waitSireniaProgress' \
+  "sirenia deploy must emit base-backup/WAL progress while waiting"
+need_in "${ROOT}/pkg/sirenia/client/progress.go" 'pg_basebackup' \
+  "replication progress must name pg_basebackup so flynn-host update is not silent"
+need_in "${ROOT}/controller/client/v1/client.go" 'deployment progress' \
+  "DeployAppRelease must log sirenia Progress events during flynn-host update"
 need_in "${unsettled}" ': eof' \
   "controller HTTP Put .../release: EOF must retry as unavailable"
 need_in "${unsettled_test}" 'controller.discoverd/apps' \
@@ -88,6 +100,32 @@ need_in "${github_updater}" 'EnsureRouterStrategy' \
   "flynn-host update must stop the old host-network router before starting the replacement"
 need_in "${incluster}" 'EnsureRouterStrategy' \
   "in-cluster updater must stop the old host-network router before starting the replacement"
+need_in "${github_updater}" 'ReplaceHostInfraJobs' \
+  "flynn-host update must replace persistent discoverd/flannel jobs one host at a time"
+need_in "${ROOT}/host/cli/host_restart_settle.go" 'AllowDatastoreUnhealthy' \
+  "flynn-host update must not abort on pre-existing postgres unhealth before image pull"
+need_in "${ROOT}/host/cli/host_restart_settle.go" 'updateStartAllowsUnhealthy' \
+  "a recycled-WAL replica must not block flynn-host update from deploying the reseed"
+need_in "${ROOT}/host/cli/github_updater.go" 'clusterHasRepairableDatastoreUnhealth' \
+  "remote flynn-host restarts must snapshot pre-existing postgres unhealth before waiting"
+need_in "${ROOT}/host/cli/github_updater.go" 'AllowDatastoreUnhealthy: allowDatastores' \
+  "remote host settle must not loop 10m on postgres before images are pulled"
+need_in "${ROOT}/host/cli/github_updater.go" 'waiting for cluster to be ready after daemon restart' \
+  "image rollout must wait for host-infra after ReplaceHostInfraJobs"
+if ! grep -F 'waiting for cluster to be ready after daemon restart' -A6 "${github_updater}" | grep -Fq 'waitForClusterHealthyExcept'; then
+  echo "post-image health wait must skip pre-existing postgres unhealth so system-app deploys can run" >&2
+  exit 1
+fi
+need_in "${ROOT}/host/cli/host_restart_settle_test.go" 'TestAllowRemoteRestartDatastoreUnhealth' \
+  "unit tests must cover remote restarts skipping postgres wait only when it was already down"
+need_in "${ROOT}/host/cli/github_updater.go" 'waitForClusterHealthyExcept' \
+  "start-of-update health wait must return once status-web is up and only datastores are down"
+need_in "${ROOT}/host/cli/host_restart_settle_test.go" 'TestUpdateStartAllowsUnhealthy' \
+  "unit tests must cover postgres-only unhealth not aborting flynn-host update"
+need_in "${github_updater}" 'FLYNN_UPDATE_REEXEC is the only gate' \
+  "same-version tarball overwrite must re-exec so the new updater replaces host-infra jobs"
+need_in "${incluster}" 'ReplaceHostInfraJobs' \
+  "in-cluster updater must replace persistent discoverd/flannel jobs one host at a time"
 need_in "${github_updater}" 'clusterHostCount' \
   "flynn-host update must size controller strategy from cluster host count"
 need_in "${incluster}" 'cluster.NewClient\(\).Hosts\(\)' \

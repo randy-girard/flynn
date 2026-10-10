@@ -22,6 +22,25 @@ func TestUpdaterSetsRedisApplianceStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestUpdaterReplacesHostInfraAfterImages(t *testing.T) {
+	src, err := os.ReadFile("updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	replace := strings.Index(body, "ReplaceHostInfraJobs")
+	loop := strings.Index(body, "for _, appInfo := range updater.SystemApps")
+	if replace < 0 || loop < 0 {
+		t.Fatal("updater must replace persistent flannel/discoverd jobs using pulled images")
+	}
+	if replace > loop {
+		t.Fatal("ReplaceHostInfraJobs must run before the controller system-app deploy loop")
+	}
+	if !strings.Contains(body, "skipping controller deploy of host-infra app") {
+		t.Fatal("controller deploy must still skip discoverd/flannel (host ports, persistent jobs)")
+	}
+}
+
 func TestUpdaterSetsRouterStrategyBeforeDeploy(t *testing.T) {
 	src, err := os.ReadFile("updater.go")
 	if err != nil {

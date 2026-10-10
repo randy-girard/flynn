@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/status"
 )
 
 func TestRollingRestartTimingDefaults(t *testing.T) {
@@ -88,6 +89,54 @@ func TestHostRestartSettleOptionsDefaults(t *testing.T) {
 	}
 	if opts.InterHostDelay {
 		t.Fatal("InterHostDelay should default to false")
+	}
+	if opts.AllowDatastoreUnhealthy {
+		t.Fatal("AllowDatastoreUnhealthy should default to false so mid-roll host restarts still require postgres")
+	}
+}
+
+func TestUpdateStartAllowsUnhealthy(t *testing.T) {
+	tests := []struct {
+		name      string
+		unhealthy []string
+		want      bool
+	}{
+		{"empty detail on 500 must keep waiting", nil, false},
+		{"postgres only must not block image pull", []string{"postgres"}, true},
+		{"sirenia datastores only", []string{"postgres", "mariadb"}, true},
+		{"controller plus postgres must keep waiting", []string{"postgres", "controller"}, false},
+		{"discoverd unhealth must block", []string{"discoverd"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := updateStartAllowsUnhealthy(tc.unhealthy); got != tc.want {
+				t.Fatalf("updateStartAllowsUnhealthy(%v)=%v, want %v", tc.unhealthy, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAllowRemoteRestartDatastoreUnhealth(t *testing.T) {
+	// Snapshot at the start of updateRemoteBinaries: only a pre-existing
+	// postgres outage may skip the per-host health wait. A healthy cluster
+	// still requires HTTP 200 between remote restarts so HA does not collapse.
+	if allowRemoteRestartDatastoreUnhealth(false) {
+		t.Fatal("healthy cluster must still wait for postgres between remote flynn-host restarts")
+	}
+	if !allowRemoteRestartDatastoreUnhealth(true) {
+		t.Fatal("pre-existing postgres unhealth must not block remote binary restarts before image pull")
+	}
+}
+
+func TestClusterIsFullyHealthy(t *testing.T) {
+	if clusterIsFullyHealthy(nil) {
+		t.Fatal("empty status map is not healthy")
+	}
+	if clusterIsFullyHealthy(map[string]status.Status{"postgres": {Status: status.CodeUnhealthy}}) {
+		t.Fatal("unhealthy postgres is not fully healthy")
+	}
+	if !clusterIsFullyHealthy(map[string]status.Status{"postgres": status.Healthy, "controller": status.Healthy}) {
+		t.Fatal("all-healthy detail must be fully healthy")
 	}
 }
 

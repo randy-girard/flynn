@@ -170,18 +170,25 @@ func run() error {
 		}
 	}
 
+	if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
+		if err := updaterdeploy.ReplaceHostInfraJobs(hosts, images, false, log); err != nil {
+			log.Error("error replacing host-infra jobs", "err", err)
+			return err
+		}
+	}
+
 	// deploy system apps in order first
 	for _, appInfo := range updater.SystemApps {
 		if appInfo.ImageOnly {
 			continue // skip ImageOnly updates
 		}
-		// Skip discoverd and flannel — their lifecycle is managed by the
-		// host daemon's resurrection logic.  Redeploying them through the
-		// controller uses an all-at-once strategy that kills every instance
-		// simultaneously, which takes down DNS and overlay networking
-		// cluster-wide and causes cascading failures in all other services.
+		// discoverd/flannel are persistent host-daemon jobs. Controller
+		// all-at-once cannot bind :1111/:53/:5002 on every node at once.
+		// Image pull only fills layer-cache; resurrection Dup()s the old
+		// Mountspecs. ReplaceHostInfraJobs (above) swaps those jobs
+		// one host at a time after layers are on disk.
 		if appInfo.Name == "discoverd" || appInfo.Name == "flannel" {
-			log.Info("skipping deploy of infrastructure app (managed by host daemon)", "name", appInfo.Name)
+			log.Info("skipping controller deploy of host-infra app", "name", appInfo.Name)
 			continue
 		}
 		log := log.New("name", appInfo.Name)

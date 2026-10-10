@@ -10,6 +10,7 @@ import (
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
+	"github.com/randy-girard/flynn/pkg/status"
 	"github.com/randy-girard/flynn/pkg/updaterdeploy"
 )
 
@@ -41,6 +42,11 @@ type hostRestartSettleOptions struct {
 	// settle after all hosts are done treats a short count as a warning only.
 	FatalClusterSize bool
 	InterHostDelay   bool
+	// AllowDatastoreUnhealthy continues when status-web reports only sirenia
+	// datastores unhealthy. Used at the start of flynn-host update so a
+	// recycled-WAL postgres replica cannot block image pull and the deploy
+	// that reseeds it.
+	AllowDatastoreUnhealthy bool
 }
 
 // settleAfterHostRestart waits for cluster health, sirenia leader DNS, and
@@ -55,8 +61,20 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 	}
 
 	log.Info("waiting for cluster to be healthy after host restart", "timeout", updateHealthTimeout)
-	if _, err := waitForClusterHealthy(updateHealthTimeout, log); err != nil {
+	var allow func([]string) bool
+	if opts.AllowDatastoreUnhealthy {
+		allow = updateStartAllowsUnhealthy
+	}
+	statuses, err := waitForClusterHealthyExcept(updateHealthTimeout, log, allow)
+	if err != nil {
 		return err
+	}
+
+	if clusterIsFullyHealthy(statuses) {
+		updaterdeploy.WaitSireniaApplianceLeadersStable(log)
+	} else {
+		log.Warn("cluster datastores are unhealthy; continuing so the update can deploy replacements",
+			"unhealthy", unhealthyServiceNames(statuses))
 	}
 
 	if opts.ExpectedHostCount > 1 && opts.ClusterClient != nil {
@@ -64,7 +82,7 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 		if err != nil && opts.FatalClusterSize {
 			// One more health pass before aborting — discoverd can lag
 			// status-web briefly after a host rejoins raft.
-			_, healthErr := waitForClusterHealthy(updateHealthTimeout, log)
+			_, healthErr := waitForClusterHealthyExcept(updateHealthTimeout, log, allow)
 			var retryErr error
 			if healthErr == nil {
 				retryErr = waitForClusterSize(opts.ClusterClient, opts.ExpectedHostCount, updateClusterSizeTimeout/4, log)
@@ -79,7 +97,6 @@ func settleAfterHostRestart(opts hostRestartSettleOptions) error {
 		}
 	}
 
-	updaterdeploy.WaitSireniaApplianceLeadersStable(log)
 	// Deposed clearing runs once after the full rolling restart / image
 	// rollout, not between every host restart.
 
@@ -169,13 +186,79 @@ func settleLocalRestartBeforeRemotes(noRestart bool, log log15.Logger) error {
 	clusterClient := cluster.NewClient()
 	expectedHosts := expectedClusterHostCount(log)
 	if err := settleAfterHostRestart(hostRestartSettleOptions{
-		Log:               log,
-		ClusterClient:     clusterClient,
-		RestartedHost:     localClusterHost(log),
-		ExpectedHostCount: expectedHosts,
-		FatalClusterSize:  expectedHosts > 1,
+		Log:                     log,
+		ClusterClient:           clusterClient,
+		RestartedHost:           localClusterHost(log),
+		ExpectedHostCount:       expectedHosts,
+		FatalClusterSize:        expectedHosts > 1,
+		AllowDatastoreUnhealthy: true,
 	}); err != nil {
 		return fmt.Errorf("cluster did not recover after local restart: %w", err)
 	}
 	return nil
+}
+
+// updateStartAllowsUnhealthy is true when every unhealthy status-web service
+// is a sirenia datastore the rest of flynn-host update will redeploy. A
+// recycled-WAL postgres replica must not abort image pull.
+func updateStartAllowsUnhealthy(unhealthy []string) bool {
+	if len(unhealthy) == 0 {
+		// HTTP 500 with an empty detail map is not "only postgres".
+		return false
+	}
+	for _, name := range unhealthy {
+		if !isUpdateRepairableDatastore(name) {
+			return false
+		}
+	}
+	return true
+}
+
+func isUpdateRepairableDatastore(name string) bool {
+	switch name {
+	case "postgres", "mariadb", "mongodb", "redis":
+		return true
+	default:
+		return false
+	}
+}
+
+func unhealthyServiceNames(statuses map[string]status.Status) []string {
+	var names []string
+	for name, svc := range statuses {
+		if svc.Status != status.CodeHealthy {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func clusterIsFullyHealthy(statuses map[string]status.Status) bool {
+	if len(statuses) == 0 {
+		return false
+	}
+	return len(unhealthyServiceNames(statuses)) == 0
+}
+
+// allowRemoteRestartDatastoreUnhealth reports whether settleAfterHostRestart
+// during updateRemoteBinaries may skip postgres. Only a snapshot of
+// pre-existing datastore unhealth may skip; a healthy cluster still waits
+// for HTTP 200 between hosts so HA does not collapse.
+func allowRemoteRestartDatastoreUnhealth(preexisting bool) bool {
+	return preexisting
+}
+
+// clusterHasRepairableDatastoreUnhealth is a one-shot status-web probe used
+// before rolling remote flynn-host restarts. True means postgres (or another
+// sirenia datastore) is already down, so settleAfterHostRestart must not wait
+// 10 minutes for it before image pull.
+func clusterHasRepairableDatastoreUnhealth(log log15.Logger) bool {
+	if log == nil {
+		log = log15.New()
+	}
+	statuses, err := waitForClusterHealthyExcept(time.Millisecond, log, updateStartAllowsUnhealthy)
+	if err != nil {
+		return false
+	}
+	return !clusterIsFullyHealthy(statuses)
 }

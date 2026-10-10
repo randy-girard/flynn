@@ -449,6 +449,15 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, chec
 
 	log.Info("updating remote hosts", "total_hosts", len(hosts), "local_host", localHostID)
 
+	// If postgres (or another sirenia datastore) is already unhealthy,
+	// waiting for it after every remote flynn-host restart deadlocks the
+	// update: images have not been pulled and the repair deploy has not
+	// run. A healthy cluster still waits for HTTP 200 between hosts.
+	allowDatastores := allowRemoteRestartDatastoreUnhealth(clusterHasRepairableDatastoreUnhealth(log))
+	if allowDatastores {
+		log.Warn("pre-existing datastore unhealth; remote host restarts will not wait for postgres")
+	}
+
 	for _, h := range hosts {
 		if h.ID() == localHostID {
 			continue
@@ -495,12 +504,13 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, chec
 			}
 
 			if err := settleAfterHostRestart(hostRestartSettleOptions{
-				Log:               hostLog,
-				ClusterClient:     clusterClient,
-				RestartedHost:     h,
-				ExpectedHostCount: expectedHostCount,
-				FatalClusterSize:  true,
-				InterHostDelay:    true,
+				Log:                     hostLog,
+				ClusterClient:           clusterClient,
+				RestartedHost:           h,
+				ExpectedHostCount:       expectedHostCount,
+				FatalClusterSize:        true,
+				InterHostDelay:          true,
+				AllowDatastoreUnhealthy: allowDatastores,
 			}); err != nil {
 				return expectedHostCount, fmt.Errorf("cluster did not recover after restarting %s: %w\nResume after the cluster settles with: flynn-host update --all-nodes --images-only --version %s", h.ID(), err, version)
 			}
@@ -510,10 +520,11 @@ func updateRemoteBinaries(repo, binDir, configDir, version, baseURL string, chec
 	if !noRestart && expectedHostCount > 1 {
 		log.Info("final cluster settle after all host restarts")
 		if err := settleAfterHostRestart(hostRestartSettleOptions{
-			Log:               log,
-			ClusterClient:     clusterClient,
-			ExpectedHostCount: expectedHostCount,
-			FatalClusterSize:  false,
+			Log:                     log,
+			ClusterClient:           clusterClient,
+			ExpectedHostCount:       expectedHostCount,
+			FatalClusterSize:        false,
+			AllowDatastoreUnhealthy: allowDatastores,
 		}); err != nil {
 			return expectedHostCount, err
 		}
@@ -639,6 +650,14 @@ func waitForJobsPlacedOnHost(h *cluster.Host, timeout time.Duration, log log15.L
 // On success returns the latest service status map. On timeout returns
 // an error describing which services are still unhealthy.
 func waitForClusterHealthy(timeout time.Duration, log log15.Logger) (map[string]status.Status, error) {
+	return waitForClusterHealthyExcept(timeout, log, nil)
+}
+
+// waitForClusterHealthyExcept is waitForClusterHealthy, but if allow reports
+// the current unhealthy set is acceptable (start-of-update datastore
+// unhealth), it returns success as soon as status-web is reachable instead
+// of waiting the full timeout for postgres to heal itself.
+func waitForClusterHealthyExcept(timeout time.Duration, log log15.Logger, allow func([]string) bool) (map[string]status.Status, error) {
 	const retryDelay = 5 * time.Second
 	deadline := time.Now().Add(timeout)
 	var statuses map[string]status.Status
@@ -695,21 +714,16 @@ func waitForClusterHealthy(timeout time.Duration, log log15.Logger) (map[string]
 			return statuses, nil
 		}
 
-		var unhealthyServices []string
-		for name, svc := range statuses {
-			if svc.Status != status.CodeHealthy {
-				unhealthyServices = append(unhealthyServices, name)
-			}
-		}
+		unhealthyServices := unhealthyServiceNames(statuses)
 		log.Debug("cluster not yet healthy", "attempt", attempt, "code", res.StatusCode, "unhealthy", unhealthyServices)
+		if allow != nil && allow(unhealthyServices) {
+			log.Warn("cluster is reachable with only repairable datastore unhealth; continuing update",
+				"unhealthy", unhealthyServices, "attempts", attempt)
+			return statuses, nil
+		}
 	}
 
-	var unhealthyServices []string
-	for name, svc := range statuses {
-		if svc.Status != status.CodeHealthy {
-			unhealthyServices = append(unhealthyServices, name)
-		}
-	}
+	unhealthyServices := unhealthyServiceNames(statuses)
 	return statuses, fmt.Errorf("cluster did not become healthy within %s (unhealthy services: %v)", timeout, unhealthyServices)
 }
 
@@ -1033,21 +1047,9 @@ func reexecUpdateBinary(binDir, version string, args []string, log log15.Logger)
 		return nil
 	}
 	newBin := filepath.Join(binDir, "flynn-host")
-	current, err := os.Executable()
-	if err != nil {
-		return nil
-	}
-	current, err = filepath.EvalSymlinks(current)
-	if err != nil {
-		return nil
-	}
-	newPath, err := filepath.EvalSymlinks(newBin)
-	if err != nil {
-		newPath = newBin
-	}
-	if current == newPath {
-		return nil
-	}
+	// Same-version tarball rebuilds overwrite flynn-host.vYYYYMMDD.N in
+	// place. Path equality is not a reason to skip: this process still
+	// has the old text until Exec. FLYNN_UPDATE_REEXEC is the only gate.
 	log.Info("re-executing update with new flynn-host binary", "version", version)
 	env := append(os.Environ(), updateReexecEnv+"="+version)
 	return syscall.Exec(newBin, args, env)
@@ -1373,9 +1375,22 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 
 	log.Info("finished downloading image layers on all nodes")
 
-	// Wait for cluster to be ready after daemon restart.
+	// Layers are on disk. Persistent flannel/discoverd jobs still have the
+	// old Mountspecs (daemon restart leaves the container running;
+	// resurrection Dup()s the persisted spec). Replace them one host at a
+	// time so overlay and DNS stay up on the other nodes.
+	if err := updaterdeploy.ReplaceHostInfraJobs(hosts, images, force, log); err != nil {
+		log.Error("error replacing host-infra jobs", "err", err)
+		return err
+	}
+
+	// Wait for cluster to be ready after host-infra replace. Pre-existing
+	// postgres unhealth must not burn the 10m timeout here: system-app
+	// deploys (including the postgres reseed) have not run yet. The wait
+	// already continues on timeout; skip immediately when only datastores
+	// are down.
 	log.Info("waiting for cluster to be ready after daemon restart")
-	statuses, err := waitForClusterHealthy(10*time.Minute, log)
+	statuses, err := waitForClusterHealthyExcept(10*time.Minute, log, updateStartAllowsUnhealthy)
 	if err != nil {
 		log.Warn("cluster health check did not pass after retries, continuing with update", "err", err)
 		fmt.Printf("Warning: %s. The update will continue.\n", err)
@@ -1491,13 +1506,12 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 		if appInfo.ImageOnly {
 			continue // skip ImageOnly updates
 		}
-		// Skip discoverd and flannel — their lifecycle is managed by the
-		// host daemon's resurrection logic.  Redeploying them through the
-		// controller uses an all-at-once strategy that kills every instance
-		// simultaneously, which takes down DNS and overlay networking
-		// cluster-wide and causes cascading failures in all other services.
+		// discoverd/flannel are persistent host-daemon jobs. Controller
+		// all-at-once cannot bind :1111/:53/:5002 on every node at once.
+		// ReplaceHostInfraJobs (after image pull) swaps those jobs one
+		// host at a time. Resurrection alone Dup()s the old Mountspecs.
 		if appInfo.Name == "discoverd" || appInfo.Name == "flannel" {
-			log.Info("skipping deploy of infrastructure app (managed by host daemon)", "name", appInfo.Name)
+			log.Info("skipping controller deploy of host-infra app", "name", appInfo.Name)
 			continue
 		}
 		appLog := log.New("name", appInfo.Name)

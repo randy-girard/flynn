@@ -46,6 +46,46 @@ func TestTarballUpdaterSetsRedisApplianceStrategyBeforeDeploy(t *testing.T) {
 	}
 }
 
+func TestSameVersionTarballMustReexecUpdater(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	fn := strings.Index(body, "func reexecUpdateBinary(")
+	end := strings.Index(body[fn:], "func ensureSystemDeployTimeout(")
+	if fn < 0 || end < 0 {
+		t.Fatal("reexecUpdateBinary must exist")
+	}
+	fnBody := body[fn : fn+end]
+	if strings.Contains(fnBody, "current == newPath") {
+		t.Fatal("same-version tarball overwrite must re-exec; path equality skips the new updater")
+	}
+	if !strings.Contains(fnBody, "syscall.Exec(newBin") {
+		t.Fatal("reexecUpdateBinary must Exec the installed flynn-host")
+	}
+}
+
+func TestTarballUpdaterReplacesHostInfraAfterImagePull(t *testing.T) {
+	src, err := os.ReadFile("github_updater.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	pull := strings.Index(body, "finished downloading image layers on all nodes")
+	replace := strings.Index(body, "ReplaceHostInfraJobs")
+	deploy := strings.Index(body, "deploying system apps")
+	if pull < 0 || replace < 0 || deploy < 0 {
+		t.Fatal("tarball updater must replace persistent flannel/discoverd jobs after image pull")
+	}
+	if replace < pull || deploy < replace {
+		t.Fatal("ReplaceHostInfraJobs must run after layer download and before controller deploys")
+	}
+	if !strings.Contains(body, "skipping controller deploy of host-infra app") {
+		t.Fatal("controller deploy must still skip discoverd/flannel (host ports, persistent jobs)")
+	}
+}
+
 func TestTarballUpdaterSetsRouterStrategyBeforeDeploy(t *testing.T) {
 	src, err := os.ReadFile("github_updater.go")
 	if err != nil {
