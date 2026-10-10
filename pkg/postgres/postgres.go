@@ -176,7 +176,7 @@ func postgresLeaderHost(conf *Conf) string {
 // on every attempt (FQDN or singleton discoverd IP) and retries transient DNS /
 // TCP failures. The address pgx passes through is only used for the port.
 func retryingLeaderDial(conf *Conf) pgx.DialFunc {
-	d := &net.Dialer{KeepAlive: 5 * time.Minute}
+	d := leaderDialer()
 	return func(network, addr string) (net.Conn, error) {
 		_, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -197,6 +197,24 @@ func retryingLeaderDial(conf *Conf) pgx.DialFunc {
 			return nil, dialErr
 		}
 		return conn, nil
+	}
+}
+
+// leaderDeadPeerTimeout bounds how long a pooled connection survives after the
+// primary's host disappears without sending a RST (VM reboot, network loss).
+// Kernel defaults keep such connections for 15+ minutes, which exhausts the
+// pool and takes the controller API down after a failover.
+const leaderDeadPeerTimeout = 30 * time.Second
+
+func leaderDialer() *net.Dialer {
+	return &net.Dialer{
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     15 * time.Second,
+			Interval: 5 * time.Second,
+			Count:    3,
+		},
+		Control: setTCPUserTimeout(leaderDeadPeerTimeout),
 	}
 }
 
