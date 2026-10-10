@@ -143,3 +143,30 @@ func TestErrScaleJobListHung(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+func TestScaleSatisfied(t *testing.T) {
+	jobs := []*Job{
+		{ID: "a", ReleaseID: "old", Type: "web", State: JobStateUp},
+		{ID: "b", ReleaseID: "old", Type: "web", State: JobStateDown},
+		{ID: "c", ReleaseID: "new", Type: "web", State: JobStateUp},
+	}
+	if !ScaleSatisfied(jobs, "old", map[string]int{"web": 1}) {
+		t.Fatal("one up old web job must satisfy web=1")
+	}
+	if ScaleSatisfied(jobs, "old", map[string]int{"web": 0}) {
+		t.Fatal("an up job must not satisfy web=0")
+	}
+	if ScaleSatisfied(jobs, "old", map[string]int{"web": 1, "worker": 1}) {
+		t.Fatal("missing worker job must not satisfy worker=1")
+	}
+	if ScaleSatisfied(jobs, "old", map[string]int{}) {
+		t.Fatal("an up job of an omitted type must not satisfy")
+	}
+	starting := append(jobs, &Job{ID: "d", ReleaseID: "old", Type: "worker", State: JobStateStarting})
+	if ScaleSatisfied(starting, "old", map[string]int{"web": 1}) {
+		t.Fatal("a starting job must not satisfy")
+	}
+	if ScaleSatisfied(jobs, "old", nil) {
+		t.Fatal("nil processes must not satisfy")
+	}
+}

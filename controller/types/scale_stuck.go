@@ -98,6 +98,39 @@ func ErrJobsStuckStarting(jobs []*Job, releaseID string, now time.Time, seen map
 	return fmt.Errorf("scale failed: jobs stuck in starting for >%s (not waiting for the deploy timeout): %s", ScaleStartingStuckTimeout, strings.Join(parts, "; "))
 }
 
+// ScaleSatisfied reports whether the up jobs of releaseID match processes
+// exactly. ScaleAppRelease uses it to finish when the scale request's
+// completion event was lost, e.g. because the controller instance serving
+// the event stream was stopped by the same deploy.
+func ScaleSatisfied(jobs []*Job, releaseID string, processes map[string]int) bool {
+	if processes == nil {
+		return false
+	}
+	up := make(map[string]int)
+	for _, j := range jobs {
+		if j == nil || j.ReleaseID != releaseID {
+			continue
+		}
+		if j.State == JobStateStarting || j.State == JobStatePending {
+			return false
+		}
+		if j.State == JobStateUp {
+			up[j.Type]++
+		}
+	}
+	for typ, n := range up {
+		if processes[typ] != n {
+			return false
+		}
+	}
+	for typ, n := range processes {
+		if up[typ] != n {
+			return false
+		}
+	}
+	return true
+}
+
 // ErrScaleJobListHung is returned when JobList does not return in time
 // during stall detection.
 func ErrScaleJobListHung(waited time.Duration) error {

@@ -86,6 +86,8 @@ func ShouldRetryTransientSystemDeploy(err error) bool {
 // restart when the scheduler is still placing jobs. The HA sirenia wait
 // error is "timed out waiting for new instance to come up" (no "sirenia"
 // substring), so it is not covered by ShouldRetryAfterUnsettledDiscoverdLeader.
+// Sirenia WaitForReplSync / WaitForReadWrite surfaces as
+// "timeout waiting for expected status" (pkg/sirenia/client.ErrTimeout).
 // Fail-fast stuck-starting and hung JobList errors are not matched: retrying
 // them as scale timeouts would restore the 10m wait.
 func ShouldRetryAfterScaleTimeout(err error) bool {
@@ -99,6 +101,8 @@ func ShouldRetryAfterScaleTimeout(err error) bool {
 	case strings.Contains(msg, "timed out waiting for new instance to come up"):
 		return true
 	case strings.Contains(msg, "timed out waiting for new sirenia peer to come up"):
+		return true
+	case strings.Contains(msg, "timeout waiting for expected status"):
 		return true
 	case strings.Contains(msg, "timed out waiting for old") && strings.Contains(msg, "jobs to stop"):
 		return true

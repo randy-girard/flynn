@@ -842,6 +842,9 @@ type DeploymentEvent struct {
 	JobType      string   `json:"job_type,omitempty"`
 	JobState     JobState `json:"job_state,omitempty"`
 	Error        string   `json:"error,omitempty"`
+	// Progress is a non-fatal status line (pg_basebackup / WAL catch-up)
+	// so flynn-host update can log what a long sirenia wait is doing.
+	Progress string `json:"progress,omitempty"`
 }
 
 func (e *DeploymentEvent) Err() error {

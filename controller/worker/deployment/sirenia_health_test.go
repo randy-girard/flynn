@@ -38,6 +38,16 @@ func TestSireniaClusterDeployReady(t *testing.T) {
 	if sireniaClusterDeployReady(haMissingAsync, 3) {
 		t.Fatal("expected HA cluster without asyncs to be not deploy-ready")
 	}
+	if !sireniaClusterShouldWaitForReady(haMissingAsync, 3) {
+		t.Fatal("HA cluster missing an async must wait for the scheduler to place it")
+	}
+	if sireniaClusterShouldWaitForReady(threeNode, 3) {
+		t.Fatal("ready 3-node cluster must not wait")
+	}
+	twoNode := &state.State{Primary: &discoverd.Instance{}, Sync: &discoverd.Instance{}}
+	if sireniaClusterShouldWaitForReady(twoNode, 2) {
+		t.Fatal("2-process cluster cannot grow an async by waiting")
+	}
 
 	singleton := &state.State{Singleton: true}
 	if !sireniaClusterDeployReady(singleton, 1) {
@@ -98,5 +108,11 @@ func TestFindSireniaPeerByRelease(t *testing.T) {
 	got = findSireniaPeerByRelease([]*discoverd.Instance{old, rereg, second}, "rel-new", "postgres", "POSTGRES_ID", first)
 	if got != second {
 		t.Fatalf("want second peer when first re-registered with a new discoverd ID, got %#v", got)
+	}
+}
+
+func TestSireniaProgressMessageWithoutAddrs(t *testing.T) {
+	if got := sireniaProgressMessage("replication sync", nil); got != "replication sync" {
+		t.Fatalf("got %q", got)
 	}
 }

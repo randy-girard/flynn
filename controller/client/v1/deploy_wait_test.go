@@ -53,7 +53,7 @@ func TestWaitAppReleaseUnblocksWhenSSEStallsAfterPostgresRestart(t *testing.T) {
 			return &ct.Deployment{Status: "running", FinishedAt: &now}, nil
 		}, func() error {
 			return errors.New("deployment failed")
-		}, stop, 15*time.Millisecond)
+		}, stop, 15*time.Millisecond, nil)
 	}()
 
 	select {
@@ -74,7 +74,7 @@ func TestWaitAppReleaseCompleteEvent(t *testing.T) {
 	if err := waitAppRelease(events, func() (*ct.Deployment, error) {
 		t.Fatal("complete event should not need a status poll")
 		return nil, nil
-	}, nil, stop, time.Hour); err != nil {
+	}, nil, stop, time.Hour, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -85,7 +85,7 @@ func TestWaitAppReleaseFailedEvent(t *testing.T) {
 	stop := make(chan struct{})
 	err := waitAppRelease(events, func() (*ct.Deployment, error) {
 		return &ct.Deployment{Status: "pending"}, nil
-	}, nil, stop, time.Hour)
+	}, nil, stop, time.Hour, nil)
 	if err == nil || err.Error() != "sirenia cluster in unhealthy state" {
 		t.Fatalf("got %v", err)
 	}
@@ -100,7 +100,7 @@ func TestWaitAppReleasePollsCompleteWhileStreamOpen(t *testing.T) {
 			return &ct.Deployment{Status: "pending"}, nil
 		}
 		return &ct.Deployment{Status: "complete"}, nil
-	}, nil, stop, 10*time.Millisecond)
+	}, nil, stop, 10*time.Millisecond, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +115,7 @@ func TestWaitAppReleaseCancelled(t *testing.T) {
 	time.AfterFunc(20*time.Millisecond, func() { close(stop) })
 	err := waitAppRelease(events, func() (*ct.Deployment, error) {
 		return &ct.Deployment{Status: "pending"}, nil
-	}, nil, stop, time.Hour)
+	}, nil, stop, time.Hour, nil)
 	if err == nil || err.Error() != "deploy wait cancelled" {
 		t.Fatalf("got %v", err)
 	}
@@ -138,6 +138,9 @@ func TestDeployAppReleasePollsWhileStreamOpen(t *testing.T) {
 	if !strings.Contains(body[fn:wait], "waitAppRelease(") {
 		t.Fatal("DeployAppRelease must call waitAppRelease")
 	}
+	if !strings.Contains(body, "logDeployProgress") {
+		t.Fatal("DeployAppRelease must log Progress events so postgres HA waits are visible")
+	}
 }
 
 func TestWaitAppReleaseKeepsPollingAfterStreamEnds(t *testing.T) {
@@ -151,9 +154,29 @@ func TestWaitAppReleaseKeepsPollingAfterStreamEnds(t *testing.T) {
 		}
 		now := time.Now()
 		return &ct.Deployment{Status: "running", FinishedAt: &now}, nil
-	}, nil, stop, 10*time.Millisecond)
+	}, nil, stop, 10*time.Millisecond, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWaitAppReleaseReportsProgress(t *testing.T) {
+	events := make(chan *ct.DeploymentEvent, 2)
+	events <- &ct.DeploymentEvent{Status: "running", JobType: "postgres", Progress: "replication sync: WAL caught up"}
+	events <- &ct.DeploymentEvent{Status: "complete"}
+	stop := make(chan struct{})
+	var got string
+	err := waitAppRelease(events, func() (*ct.Deployment, error) {
+		t.Fatal("complete should arrive from the event stream")
+		return nil, nil
+	}, nil, stop, time.Hour, func(e *ct.DeploymentEvent) {
+		got = e.Progress
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "replication sync: WAL caught up" {
+		t.Fatalf("progress not forwarded to flynn-host update logs, got %q", got)
 	}
 }
 

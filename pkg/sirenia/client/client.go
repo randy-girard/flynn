@@ -117,7 +117,8 @@ func IsRecoverableStopError(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "context deadline exceeded") ||
 		strings.Contains(msg, "Client.Timeout exceeded") ||
-		strings.Contains(msg, "timeout awaiting headers")
+		strings.Contains(msg, "timeout awaiting headers") ||
+		strings.Contains(msg, "timeout awaiting response headers")
 }
 
 // IsPeerUnreachableError reports whether a request to a sirenia peer's HTTP API
@@ -175,6 +176,11 @@ func IsTailAsync(s *state.State, peer *discoverd.Instance, idKey string) bool {
 func ReplicaOf(upstream *discoverd.Instance, idKey string) func(*Status) bool {
 	return func(status *Status) bool {
 		if status == nil || status.Database == nil || !status.Database.Running || status.Database.Config == nil {
+			return false
+		}
+		// Discoverd + HTTP come up before pg_basebackup finishes. A zero
+		// xlog means postgres has not replayed backup WAL yet.
+		if status.Database.XLog == "" || status.Database.XLog == "0/00000000" {
 			return false
 		}
 		return SamePeer(idKey, status.Database.Config.Upstream, upstream)
@@ -244,10 +250,7 @@ func SyncReplaceTopologyReady(oldSync, firstAsync, newPeer *discoverd.Instance, 
 // job is still waiting for a basebackup; requiring Database.Running on both
 // sides prevents the sirenia deploy from stopping the next peer too early.
 func replSyncCaughtUp(up *Status, downstreamClient *Client, expected *discoverd.Instance, idKey string) bool {
-	if up == nil || up.Database == nil || !up.Database.Running || up.Database.SyncedDownstream == nil {
-		return false
-	}
-	if !SamePeer(idKey, expected, up.Database.SyncedDownstream) {
+	if up == nil || up.Database == nil || !up.Database.Running {
 		return false
 	}
 	if downstreamClient == nil {
@@ -260,7 +263,20 @@ func replSyncCaughtUp(up *Status, downstreamClient *Client, expected *discoverd.
 	if !downstreamFollowsUpstream(up, down, idKey) {
 		return false
 	}
-	return true
+	if up.Database.SyncedDownstream != nil && SamePeer(idKey, expected, up.Database.SyncedDownstream) {
+		return true
+	}
+	// The upstream appliance's waitForSync can expire during pg_basebackup
+	// (the replica is invisible in pg_stat_replication until streaming
+	// starts) and never set SyncedDownstream. If both sides are running,
+	// the replica follows this upstream, and WAL positions match, the
+	// deploy can proceed.
+	if up.Database.XLog != "" && down.Database.XLog != "" &&
+		up.Database.XLog == down.Database.XLog &&
+		up.Database.XLog != "0/00000000" {
+		return true
+	}
+	return false
 }
 
 // downstreamFollowsUpstream reports whether down is configured to replicate

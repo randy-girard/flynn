@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/inconshreveable/log15"
+	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
@@ -263,5 +265,52 @@ func TestCrashHintFromLogLinesLoadError(t *testing.T) {
 	})
 	if got != `cannot load such file -- rexml/document (LoadError)` {
 		t.Fatalf("%q", got)
+	}
+}
+
+type deleteJobRecorder struct {
+	controller.Client
+	appID  string
+	killed []string
+}
+
+func (c *deleteJobRecorder) DeleteJob(appID, jobID string) error {
+	c.appID = appID
+	c.killed = append(c.killed, jobID)
+	return nil
+}
+
+func TestKillStoppedSireniaPeersKillsEachStoppedJob(t *testing.T) {
+	c := &deleteJobRecorder{}
+	killStoppedSireniaPeers(c, "app-1", []string{"host1-a", "", "host2-b"}, log15.New())
+	if c.appID != "app-1" {
+		t.Fatalf("app id = %q", c.appID)
+	}
+	if strings.Join(c.killed, ",") != "host1-a,host2-b" {
+		t.Fatalf("killed = %v, want stopped jobs only (empty ids skipped)", c.killed)
+	}
+}
+
+func TestDeploySireniaKillsStoppedPeersOnFailure(t *testing.T) {
+	src, err := os.ReadFile("sirenia.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const marker = "func (d *DeployJob) deploySirenia()"
+	start := strings.Index(string(src), marker)
+	if start < 0 {
+		t.Fatal("deploySirenia missing")
+	}
+	fn := string(src[start:])
+	if end := strings.Index(fn, "\nfunc "); end > 0 {
+		fn = fn[:end]
+	}
+	if !strings.Contains(fn, "killStoppedSireniaPeers(d.client, d.AppID, stoppedJobs, log)") {
+		t.Fatal("a failed sirenia deploy must kill old jobs it sent /stop, else rollback leaves a stopped peer counted in the formation")
+	}
+	record := strings.Index(fn, "stoppedJobs = append(stoppedJobs")
+	stop := strings.Index(fn, "peer.Stop()")
+	if record < 0 || stop < 0 || record > stop {
+		t.Fatal("stopInstance must record the job before sending /stop (a timed-out stop can still take effect)")
 	}
 }

@@ -17,6 +17,7 @@ func TestShouldRetryAfterScaleTimeout(t *testing.T) {
 		{errors.New("Timed Out Waiting For Scale To Complete"), true},
 		{errors.New("timed out waiting for new instance to come up"), true},
 		{errors.New("timed out waiting for new sirenia peer to come up"), true},
+		{errors.New("timeout waiting for expected status"), true},
 		{fmt.Errorf("timed out waiting for old scheduler jobs to stop on [node1]"), true},
 		{errors.New("timed out waiting for old app jobs to stop on [node2 node3]"), true},
 		{errors.New("scale failed: jobs stuck in starting for >30s (not waiting for the deploy timeout): app node1-abc host=node1"), false},
@@ -100,6 +101,13 @@ func TestTransientDeployRetryBudget(t *testing.T) {
 	peerWait := errors.New("timed out waiting for new sirenia peer to come up")
 	if got := MaxTransientDeployAttempts(peerWait); got != MaxScaleTimeoutDeployAttempts() {
 		t.Fatalf("singleton sirenia peer timeout attempts=%d want %d", got, MaxScaleTimeoutDeployAttempts())
+	}
+	replWait := errors.New("timeout waiting for expected status")
+	if !ShouldRetryTransientSystemDeploy(replWait) {
+		t.Fatal("sirenia WaitForReplSync timeout must retry")
+	}
+	if got := MaxTransientDeployAttempts(replWait); got != MaxScaleTimeoutDeployAttempts() {
+		t.Fatalf("repl-sync timeout attempts=%d want %d", got, MaxScaleTimeoutDeployAttempts())
 	}
 	omniWait := errors.New("timed out waiting for old scheduler jobs to stop on [node1]")
 	if !ShouldRetryTransientSystemDeploy(omniWait) {

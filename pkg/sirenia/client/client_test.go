@@ -158,6 +158,44 @@ func TestWaitForReplSyncRequiresDownstreamRunning(t *testing.T) {
 	}
 }
 
+func TestWaitForReplSyncSucceedsWhenXLogMatchesWithoutSyncedDownstream(t *testing.T) {
+	downSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(Status{
+			Database: &DatabaseInfo{
+				Running: true,
+				XLog:    "5/75E4D18",
+				Config: &state.Config{
+					Role:     state.RoleAsync,
+					Upstream: &discoverd.Instance{Meta: map[string]string{"POSTGRES_ID": "sync-1"}},
+				},
+			},
+		})
+	}))
+	defer downSrv.Close()
+	_, downPortStr, err := net.SplitHostPort(downSrv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	downPort, _ := strconv.Atoi(downPortStr)
+	peer := mkInst(net.JoinHostPort("127.0.0.1", strconv.Itoa(downPort-1)), "new-async")
+
+	upSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(Status{
+			Peer: &state.PeerInfo{ID: "sync-1"},
+			Database: &DatabaseInfo{
+				Running: true,
+				XLog:    "5/75E4D18",
+			},
+		})
+	}))
+	defer upSrv.Close()
+
+	up := sireniaTestClient(t, upSrv)
+	if err := up.WaitForReplSync(peer, "POSTGRES_ID", 2*time.Second); err != nil {
+		t.Fatalf("caught-up replica must pass even if waitForSync never set SyncedDownstream: %v", err)
+	}
+}
+
 func TestIsTailAsync(t *testing.T) {
 	sync := mkInst("10.0.0.2:5432", "sync")
 	first := mkInst("10.0.0.3:5432", "async-0")
@@ -222,9 +260,17 @@ func TestReplicaOf(t *testing.T) {
 	check := ReplicaOf(upstream, "POSTGRES_ID")
 	if !check(&Status{Database: &DatabaseInfo{
 		Running: true,
+		XLog:    "0/100",
 		Config:  &state.Config{Upstream: mkInst("10.0.0.2:5432", "async-0")},
 	}}) {
 		t.Fatal("expected true when running database follows upstream")
+	}
+	if check(&Status{Database: &DatabaseInfo{
+		Running: true,
+		XLog:    "0/00000000",
+		Config:  &state.Config{Upstream: mkInst("10.0.0.2:5432", "async-0")},
+	}}) {
+		t.Fatal("must wait until the replica has replayed backup WAL")
 	}
 	if check(&Status{Database: &DatabaseInfo{
 		Running: false,
@@ -405,6 +451,9 @@ func TestIsRecoverableStopError(t *testing.T) {
 	}
 	if !IsRecoverableStopError(fmt.Errorf("Client.Timeout exceeded while awaiting headers")) {
 		t.Fatal("expected client timeout to be recoverable")
+	}
+	if !IsRecoverableStopError(fmt.Errorf(`Post "http://100.100.15.23:5433/stop": net/http: timeout awaiting response headers`)) {
+		t.Fatal("hung postgres /stop during waitForUpstream must not abort the sirenia deploy")
 	}
 	if IsRecoverableStopError(fmt.Errorf("connection refused")) {
 		t.Fatal("connection refused should not be recoverable")

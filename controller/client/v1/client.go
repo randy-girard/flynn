@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
@@ -354,6 +355,7 @@ func (c *Client) ScaleAppRelease(appID, releaseID string, opts ct.ScaleOptions) 
 		stall = tick.C
 	}
 	seenStarting := make(map[string]time.Time)
+	satisfiedPolls := 0
 	for {
 		select {
 		case event, ok := <-events:
@@ -404,6 +406,13 @@ func (c *Client) ScaleAppRelease(appID, releaseID string, opts ct.ScaleOptions) 
 			}
 			if err := ct.ErrJobsStuckStarting(jobs, releaseID, time.Now(), seenStarting); err != nil {
 				return err
+			}
+			if !ct.ScaleSatisfied(jobs, releaseID, opts.Processes) {
+				satisfiedPolls = 0
+				continue
+			}
+			if satisfiedPolls++; satisfiedPolls >= 2 {
+				return nil
 			}
 		}
 	}
@@ -658,7 +667,7 @@ func (c *Client) DeployAppRelease(appID, releaseID string, stopWait <-chan struc
 		return c.GetDeployment(d.ID)
 	}, func() error {
 		return c.deploymentFailedMessage(d)
-	}, stopWait, deployWaitPollInterval)
+	}, stopWait, deployWaitPollInterval, logDeployProgress)
 	if err != nil && stream.Err() != nil {
 		return fmt.Errorf("%w (event stream ended: %s)", err, stream.Err())
 	}
@@ -687,7 +696,20 @@ func deploymentFinished(d *ct.Deployment) bool {
 // waitAppRelease waits for a deployment to finish. It watches the event
 // stream and also polls GetDeployment so a stalled SSE connection after a
 // postgres restart cannot hang flynn-host update until stopWait (30m).
-func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deployment, error), onFailed func() error, stopWait <-chan struct{}, interval time.Duration) error {
+func logDeployProgress(e *ct.DeploymentEvent) {
+	if e == nil {
+		return
+	}
+	if e.Progress != "" {
+		log15.Info("deployment progress", "progress", e.Progress, "job.type", e.JobType)
+		return
+	}
+	if e.JobState != "" {
+		log15.Info("deployment job event", "job.type", e.JobType, "job.state", e.JobState, "status", e.Status)
+	}
+}
+
+func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deployment, error), onFailed func() error, stopWait <-chan struct{}, interval time.Duration, onProgress func(*ct.DeploymentEvent)) error {
 	if interval <= 0 {
 		interval = deployWaitPollInterval
 	}
@@ -714,6 +736,10 @@ func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deploymen
 					return err
 				}
 				return failed()
+			default:
+				if onProgress != nil {
+					onProgress(e)
+				}
 			}
 		case <-tick.C:
 			dep, err := get()

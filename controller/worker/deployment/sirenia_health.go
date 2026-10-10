@@ -71,15 +71,28 @@ func sireniaClusterDeployReady(s *state.State, processCount int) bool {
 	return len(s.Async) > 0 && 2+len(s.Async) == processCount
 }
 
+// sireniaClusterShouldWaitForReady is whether a not-yet-ready HA cluster
+// might still grow an async if we wait (scheduler placing a replacement).
+func sireniaClusterShouldWaitForReady(s *state.State, processCount int) bool {
+	if s == nil || s.Singleton || processCount <= 2 {
+		return false
+	}
+	return !sireniaClusterDeployReady(s, processCount)
+}
+
 func (d *DeployJob) waitForSireniaClusterReady(service, processType string, initial *state.State, events <-chan *discoverd.Event, stream interface{ Err() error }, log log15.Logger) (*state.State, error) {
 	cluster := *initial
 	if sireniaClusterDeployReady(&cluster, d.Processes[processType]) {
 		return &cluster, nil
 	}
-	if len(cluster.Deposed) == 0 && len(cluster.Async) == 0 && d.Processes[processType] <= 2 {
-		return nil, errors.New("sirenia cluster in unhealthy state (has no asyncs)")
-	}
-	if len(cluster.Deposed) == 0 && 2+len(cluster.Async) != d.Processes[processType] {
+	// HA postgres can drop to primary+sync after a partial deploy (the
+	// async's postgres is stopped but a replacement has not registered
+	// yet). Wait for the scheduler to place the missing replica instead
+	// of failing immediately — retries would just create more releases.
+	if !sireniaClusterShouldWaitForReady(&cluster, d.Processes[processType]) {
+		if len(cluster.Async) == 0 {
+			return nil, errors.New("sirenia cluster in unhealthy state (has no asyncs)")
+		}
 		return nil, errors.New("sirenia cluster in unhealthy state (too few asyncs)")
 	}
 
