@@ -28,10 +28,22 @@ var (
 	errCanceled   = errors.New("router: backend connection canceled")
 
 	dialer backendDialer = &net.Dialer{
-		Timeout:   1 * time.Second,
-		KeepAlive: 30 * time.Second,
+		Timeout: 1 * time.Second,
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     5 * time.Second,
+			Interval: 5 * time.Second,
+			Count:    3,
+		},
+		Control: setTCPUserTimeout(backendDeadPeerTimeout),
 	}
 )
+
+// backendDeadPeerTimeout bounds how long a backend connection survives after
+// the backend's host disappears without sending a RST (VM crash, network
+// loss). Without it a request on such a connection hangs until the client
+// gives up instead of failing over to another backend.
+const backendDeadPeerTimeout = 5 * time.Second
 
 // maxBackendAttempts is the maximum number of backends to attempt to proxy
 // a given request to
@@ -108,11 +120,15 @@ func (t *transport) eachBackend(stickyBackend string, backends []*router.Backend
 			return nil, false
 		}
 		t.trackRequestEnd(backend)
-		if _, ok := err.(dialErr); !ok {
+		switch err.(type) {
+		case dialErr:
+			l.Error("retriable dial error", "job.id", backend.JobID, "addr", backend.Addr, "err", err, "attempt", attempt)
+		case reusedConnErr:
+			l.Error("retriable error on reused connection", "job.id", backend.JobID, "addr", backend.Addr, "err", err, "attempt", attempt)
+		default:
 			l.Error("unretriable request error", "status", httpErrStatus(err), "job.id", backend.JobID, "addr", backend.Addr, "err", err, "attempt", attempt)
 			return err, false
 		}
-		l.Error("retriable dial error", "job.id", backend.JobID, "addr", backend.Addr, "err", err, "attempt", attempt)
 		// remove the backend now that we've tried it
 		backends = append(backends[:index], backends[index+1:]...)
 		attempt++
@@ -217,12 +233,25 @@ func (t *transport) RoundTrip(req *http.Request, l log15.Logger) (*http.Response
 			return
 		}
 		rt.TrackRequestDone(backend.Addr)
+		if _, ok := err.(dialErr); !ok && trace.reusedWithoutResponse() && replayable(req) && req.Context().Err() == nil {
+			err = reusedConnErr{err}
+		}
 		return
 	})
 	if err == nil {
 		return res, trace, nil
 	}
 	return nil, nil, err
+}
+
+// replayable reports whether req can safely be sent to another backend after
+// it may already have reached one.
+func replayable(req *http.Request) bool {
+	switch req.Method {
+	case "GET", "HEAD", "OPTIONS", "TRACE":
+		return req.ContentLength == 0 && len(req.TransferEncoding) == 0
+	}
+	return false
 }
 
 func (t *transport) Connect(ctx context.Context, l log15.Logger) (net.Conn, error) {
@@ -286,6 +315,12 @@ func customDial(network, addr string) (net.Conn, error) {
 }
 
 type dialErr struct {
+	error
+}
+
+// reusedConnErr is a failure on a pooled backend connection before any
+// response arrived, for a request that is safe to replay.
+type reusedConnErr struct {
 	error
 }
 
@@ -386,6 +421,14 @@ func (r *RequestTrace) Finalize(backend *router.Backend) {
 	r.final = true
 	r.Backend = backend
 	r.mtx.Unlock()
+}
+
+// reusedWithoutResponse reports whether the last attempt used a pooled
+// connection and received no response bytes.
+func (r *RequestTrace) reusedWithoutResponse() bool {
+	r.mtx.Lock()
+	defer r.mtx.Unlock()
+	return r.ReusedConn && r.FirstByte.IsZero()
 }
 
 // traceRequest sets up request tracing and returns the modified

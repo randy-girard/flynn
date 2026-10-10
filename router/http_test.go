@@ -1216,6 +1216,93 @@ func (s *S) TestClosedBackendRetriesAnotherBackend(c *C) {
 	}
 }
 
+// A backend whose host disappears leaves the router holding an idle
+// keep-alive connection to it. A request sent on that connection fails
+// without a response and must move to another backend if it is safe to
+// replay, rather than returning 503.
+func (s *S) TestReusedConnFailureRetriesAnotherBackend(c *C) {
+	srv1, err := net.Listen("tcp", "127.0.0.1:0")
+	c.Assert(err, IsNil)
+	defer srv1.Close()
+	go func() {
+		for {
+			conn, err := srv1.Accept()
+			if err != nil {
+				return
+			}
+			go func(conn net.Conn) {
+				br := bufio.NewReader(conn)
+				for n := 0; ; n++ {
+					req, err := http.ReadRequest(br)
+					if err != nil {
+						conn.Close()
+						return
+					}
+					io.Copy(ioutil.Discard, req.Body)
+					if n > 0 {
+						conn.(*net.TCPConn).SetLinger(0)
+						conn.Close()
+						return
+					}
+					io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\n1")
+				}
+			}(conn)
+		}
+	}()
+	srv2 := httptest.NewServer(httpTestHandler("2"))
+	defer srv2.Close()
+
+	l := s.newHTTPListener(c)
+	defer l.Close()
+	s.addRoute(c, l, router.HTTPRoute{
+		Domain:  "example.com",
+		Service: "example-com",
+		Sticky:  true,
+	}.ToRoute())
+	discoverdRegisterHTTPService(c, l, "example-com", srv1.Addr().String())
+	discoverdRegisterHTTPService(c, l, "example-com", srv2.Listener.Addr().String())
+
+	for _, test := range []struct {
+		method string
+		status int
+		body   string
+	}{
+		{method: "GET", status: 200, body: "2"},
+		{method: "POST", status: 503, body: "Service Unavailable\n"},
+	} {
+		c.Log("method:", test.method)
+		// stick to srv1 so the router holds an idle connection to it
+		var cookies []*http.Cookie
+		for i := 0; i < 20 && cookies == nil; i++ {
+			res, err := newHTTPClient("example.com").Do(newReq("http://"+l.Addrs[0], "example.com"))
+			c.Assert(err, IsNil)
+			data, _ := ioutil.ReadAll(res.Body)
+			res.Body.Close()
+			if string(data) == "1" {
+				cookies = res.Cookies()
+			}
+		}
+		c.Assert(cookies, NotNil)
+
+		var body io.Reader
+		if test.method == "POST" {
+			body = strings.NewReader("not safe to replay")
+		}
+		req, _ := http.NewRequest(test.method, "http://"+l.Addrs[0], body)
+		req.Host = "example.com"
+		for _, cookie := range cookies {
+			req.AddCookie(cookie)
+		}
+		res, err := newHTTPClient("example.com").Do(req)
+		c.Assert(err, IsNil)
+		data, err := ioutil.ReadAll(res.Body)
+		res.Body.Close()
+		c.Assert(err, IsNil)
+		c.Assert(res.StatusCode, Equals, test.status)
+		c.Assert(string(data), Equals, test.body)
+	}
+}
+
 // Note: this behavior may change if the following issue is fixed, in which case
 // this behavior would only apply to non-idempotent requests (i.e. POST):
 // https://golang.org/issue/4677
