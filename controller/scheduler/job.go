@@ -331,6 +331,75 @@ func (j Jobs) GetHostJobCounts(key utils.FormationKey, typ string) map[string]in
 	return counts
 }
 
+// GetHostJobCountsByAppType counts running/starting jobs of typ for an app
+// across releases. Sirenia HA must spread peers even when an old release
+// still holds a host.
+func (j Jobs) GetHostJobCountsByAppType(appID, typ string) map[string]int {
+	counts := make(map[string]int)
+	for _, job := range j {
+		if job == nil || job.HostID == "" || job.AppID != appID || job.Type != typ {
+			continue
+		}
+		if job.State == JobStateStopped || job.State == JobStateStopping {
+			continue
+		}
+		counts[job.HostID]++
+	}
+	return counts
+}
+
+// spreadsAcrossHosts reports whether peers of this job's type must land on
+// distinct hosts: multi-process formations and HA sirenia releases, which a
+// rolling deploy scales up from 1.
+func (j *Job) spreadsAcrossHosts() bool {
+	f := j.Formation
+	if f == nil {
+		return false
+	}
+	if f.OriginalProcesses[j.Type] > 1 {
+		return true
+	}
+	return f.ExpandedFormation != nil && f.Release.IsSirenia() && !f.Release.IsSireniaSingleton()
+}
+
+// formationHasPeerOnHost reports whether another running job of the same
+// formation and type is on hostID.
+func (s *Scheduler) formationHasPeerOnHost(job *Job, hostID string) bool {
+	if job.Formation == nil || job.Formation.ExpandedFormation == nil {
+		return false
+	}
+	key := job.Formation.key()
+	for _, other := range s.jobs {
+		if other == nil || other.ID == job.ID || other.HostID != hostID || other.Type != job.Type {
+			continue
+		}
+		if other.IsInFormation(key) {
+			return true
+		}
+	}
+	return false
+}
+
+// spreadFormationWeight makes one peer of the placing formation outrank any
+// number of peers from other releases of the same app.
+const spreadFormationWeight = 1000
+
+// GetHostSpreadCounts ranks hosts by running jobs of typ in the formation
+// first, then by the app's jobs of typ across releases. A sirenia rolling
+// deploy places each new peer while old peers that are about to stop still
+// hold hosts; counting all releases equally let two new peers tie onto the
+// same host and left a third host with no peer after the deploy.
+func (j Jobs) GetHostSpreadCounts(key utils.FormationKey, typ string) map[string]int {
+	counts := j.GetHostJobCountsByAppType(key.AppID, typ)
+	for _, job := range j {
+		if job == nil || job.HostID == "" || job.Type != typ || !job.IsInFormation(key) {
+			continue
+		}
+		counts[job.HostID] += spreadFormationWeight
+	}
+	return counts
+}
+
 func (js Jobs) GetProcesses(key utils.FormationKey) Processes {
 	procs := make(Processes)
 	for _, j := range js {

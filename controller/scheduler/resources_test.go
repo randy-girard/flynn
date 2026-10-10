@@ -213,6 +213,35 @@ func TestPickHostSpreadsPersistentHA(t *testing.T) {
 	}
 }
 
+func TestPickHostSpreadsHAAcrossReleases(t *testing.T) {
+	h1 := &Host{ID: "h1", Healthy: true}
+	h2 := &Host{ID: "h2", Healthy: true}
+	h3 := &Host{ID: "h3", Healthy: true}
+	old := persistSingletonTestJob("postgres")
+	old.AppID = "pg"
+	old.Formation.OriginalProcesses["postgres"] = 3
+	old.ID = "pg-old"
+	old.HostID = "h1"
+	old.State = JobStateRunning
+	s := &Scheduler{
+		jobs:  Jobs{"pg-old": old},
+		hosts: map[string]*Host{"h1": h1, "h2": h2, "h3": h3},
+	}
+	next := persistSingletonTestJob("postgres")
+	next.AppID = "pg"
+	next.Formation.OriginalProcesses["postgres"] = 3
+	counts := s.jobs.GetHostJobCountsByAppType("pg", "postgres")
+	for i := 0; i < 20; i++ {
+		got := s.pickHost(next, counts)
+		if got == nil {
+			t.Fatal("HA postgres peer must still place")
+		}
+		if got.ID == "h1" {
+			t.Fatalf("attempt %d: packed onto old-release host h1", i)
+		}
+	}
+}
+
 func TestHostReservedIgnoresStoppedJobs(t *testing.T) {
 	s := &Scheduler{
 		jobs: Jobs{

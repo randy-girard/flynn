@@ -1183,6 +1183,12 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
+		// skip free volumes on a host that already runs a peer of this
+		// formation: adopting one pins a second HA peer to that host
+		if job.spreadsAcrossHosts() && vol.HostID != "" && s.formationHasPeerOnHost(job, vol.HostID) {
+			continue
+		}
+
 		// return the matching volume
 		return vol
 	}
@@ -1484,6 +1490,9 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	if req.Host == nil {
 		formation := req.Job.Formation
 		counts := s.jobs.GetHostJobCounts(formation.key(), req.Job.Type)
+		if req.Job.spreadsAcrossHosts() {
+			counts = s.jobs.GetHostSpreadCounts(formation.key(), req.Job.Type)
+		}
 		req.Host = s.pickHost(req.Job, counts)
 
 		if req.Host == nil {
@@ -2288,7 +2297,9 @@ func (s *Scheduler) activeHostCount() int {
 }
 
 // matchingOmniHostCount is the number of active hosts that may run this omni
-// process type, honoring formation tags including flynn-host-ids.
+// process type, honoring formation tags including flynn-host-ids. Unhealthy
+// hosts still count: their jobs stay tracked as running until the host is
+// unfollowed, so dropping them here would stop an omni job on a live host.
 func (s *Scheduler) matchingOmniHostCount(formation *Formation, typ string) int {
 	if formation == nil {
 		return 0
@@ -2296,7 +2307,7 @@ func (s *Scheduler) matchingOmniHostCount(formation *Formation, typ string) int 
 	job := &Job{Type: typ, Formation: formation}
 	n := 0
 	for _, host := range s.hosts {
-		if !hostCanPlace(host) {
+		if host == nil || host.Shutdown {
 			continue
 		}
 		if job.TagsMatchHost(host) {
@@ -2551,6 +2562,12 @@ func (s *Scheduler) handleJobStatus(job *Job, status host.JobStatus) {
 
 	// ensure jobs started as part of a formation change have a known formation
 	if job.metadata["flynn-controller.formation"] == "true" && job.Formation == nil {
+		// Initial host replay happens before Register(). HTTP formation
+		// lookups for already-stopped jobs delay discoverd registration
+		// and trip the host-monitor repair loop.
+		if s.isLeader == nil && job.State == JobStateStopped {
+			return
+		}
 		formation := s.formations.Get(job.AppID, job.ReleaseID)
 		if formation == nil {
 			ef, err := s.GetExpandedFormation(job.AppID, job.ReleaseID)
@@ -2631,6 +2648,13 @@ func (s *Scheduler) persistVolume(vol *Volume) {
 // is the current leader to avoid states jumping back and forward in the
 // database
 func (s *Scheduler) persistControllerJob(job *ct.Job) {
+	// isLeader is nil until Register(). followHost then queues every
+	// historical job into controllerPersist (buffer 1000). On a cluster with
+	// a large job log that blocks startup past the host-monitor repair
+	// deadline, which kills the scheduler before it can register.
+	if s.isLeader == nil && job.State == ct.JobStateDown {
+		return
+	}
 	if s.isLeader == nil || *s.isLeader {
 		s.controllerPersist <- job
 	}

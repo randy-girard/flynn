@@ -69,3 +69,23 @@ func TestMatchingOmniHostCountHonorsHostIDs(t *testing.T) {
 		t.Fatalf("Processes[app] = %d, want 1", formation.Processes["app"])
 	}
 }
+
+// A crashed host is only marked unhealthy and its omni jobs stay tracked as
+// running, so the omni count must keep it or a live host's discoverd is
+// stopped as surplus.
+func TestMatchingOmniHostCountKeepsUnhealthyHost(t *testing.T) {
+	s := &Scheduler{
+		hosts: map[string]*Host{
+			"host1": {ID: "host1", Healthy: true},
+			"host2": {ID: "host2", Healthy: false},
+			"host3": {ID: "host3", Healthy: true},
+		},
+	}
+	formation := NewFormation(&ct.ExpandedFormation{
+		Release:   &ct.Release{Processes: map[string]ct.ProcessType{"app": {Omni: true}}},
+		Processes: Processes{"app": 1},
+	})
+	if got := s.matchingOmniHostCount(formation, "app"); got != 3 {
+		t.Fatalf("matchingOmniHostCount = %d, want 3 (unhealthy host2 still runs its job)", got)
+	}
+}

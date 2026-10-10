@@ -63,3 +63,30 @@ func TestIsPersistentSingleton(t *testing.T) {
 		t.Fatal("ephemeral volumes must not pack as persistent singletons")
 	}
 }
+
+func TestGetHostJobCountsByAppType(t *testing.T) {
+	jobs := Jobs{
+		"a": {ID: "a", AppID: "pg", Type: "postgres", HostID: "h1", State: JobStateRunning},
+		"b": {ID: "b", AppID: "pg", Type: "postgres", HostID: "h1", State: JobStateStopped},
+		"c": {ID: "c", AppID: "other", Type: "postgres", HostID: "h2", State: JobStateRunning},
+	}
+	got := jobs.GetHostJobCountsByAppType("pg", "postgres")
+	if got["h1"] != 1 || got["h2"] != 0 {
+		t.Fatalf("got %v, want h1=1 (stopped and other app ignored)", got)
+	}
+}
+
+func TestGetHostSpreadCountsPrefersHostsWithoutNewReleasePeer(t *testing.T) {
+	app := &ct.App{ID: "pg"}
+	oldF := &Formation{ExpandedFormation: &ct.ExpandedFormation{App: app, Release: &ct.Release{ID: "old"}}}
+	newF := &Formation{ExpandedFormation: &ct.ExpandedFormation{App: app, Release: &ct.Release{ID: "new"}}}
+	jobs := Jobs{
+		"old-primary": {ID: "old-primary", AppID: "pg", Type: "postgres", HostID: "h3", State: JobStateRunning, Formation: oldF},
+		"old-sync":    {ID: "old-sync", AppID: "pg", Type: "postgres", HostID: "h2", State: JobStateRunning, Formation: oldF},
+		"new-1":       {ID: "new-1", AppID: "pg", Type: "postgres", HostID: "h1", State: JobStateRunning, Formation: newF},
+	}
+	got := jobs.GetHostSpreadCounts(newF.key(), "postgres")
+	if got["h1"] <= got["h2"] || got["h1"] <= got["h3"] {
+		t.Fatalf("got %v: h1 already has a new-release peer and must rank last", got)
+	}
+}

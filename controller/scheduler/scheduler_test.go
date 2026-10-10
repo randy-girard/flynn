@@ -1162,6 +1162,38 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	c.Assert(got.ID, Equals, "vol-stale")
 }
 
+// TestFindVolumeSkipsHostWithFormationPeer covers a sirenia rolling deploy:
+// a free volume left by an earlier peer must not pin a second new-release
+// peer onto a host that already runs one.
+func (TestSuite) TestFindVolumeSkipsHostWithFormationPeer(c *C) {
+	ef := &ct.ExpandedFormation{
+		App:     &ct.App{ID: testAppID},
+		Release: &ct.Release{ID: "release-new", Env: map[string]string{"SIRENIA_PROCESS": "postgres"}},
+	}
+	f := NewFormation(ef)
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+	s.formations.Add(f)
+	s.volumes["vol-h1"] = &Volume{Volume: ct.Volume{
+		VolumeReq: ct.VolumeReq{Path: "/data"}, ID: "vol-h1", AppID: testAppID,
+		ReleaseID: "release-new", JobType: "postgres", HostID: "h1", State: ct.VolumeStateCreated,
+	}}
+	s.jobs["peer-1"] = &Job{ID: "peer-1", AppID: testAppID, ReleaseID: "release-new", Type: "postgres", HostID: "h1", State: JobStateRunning, Formation: f}
+	next := &Job{ID: "peer-2", AppID: testAppID, ReleaseID: "release-new", Type: "postgres", Formation: f}
+
+	c.Assert(s.findVolume(next, &ct.VolumeReq{Path: "/data"}), IsNil)
+
+	// the peer on h1 is gone (host reboot): its replacement adopts the volume
+	s.jobs["peer-1"].State = JobStateStopped
+	got := s.findVolume(next, &ct.VolumeReq{Path: "/data"})
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-h1")
+}
+
 // TestFindVolumeRedisHeldByRunningJob is the redis all-at-once data-loss
 // path: the replacement job is placed while the old redis still holds /data,
 // so findVolume must not adopt it (a fresh empty volume would be allocated).
