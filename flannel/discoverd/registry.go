@@ -50,7 +50,7 @@ func (r *registry) GetConfig() ([]byte, error) {
 // GetSubnets hides leases of hosts without a live flannel instance but does
 // not persist that prune: a freshly booted host's discoverd view can miss a
 // live peer, and persisting deleted that peer's /24 (dev-node2 reboot dropped
-// dev-node1's lease). Down events (pruneHost) remain the persisted path.
+// dev-node1's lease). Down events (pruneDownHost) remain the persisted path.
 func (r *registry) GetSubnets() (*subnet.Response, error) {
 	net, err := r.getNetwork()
 	if err != nil {
@@ -119,12 +119,10 @@ func (r *registry) WatchSubnets(since uint64, stop chan bool) (*subnet.Response,
 				return nil, errors.New("unexpected close of discoverd event stream")
 			}
 			if event.Kind == discoverd.EventKindDown {
-				if net, err := r.getNetwork(); err == nil {
-					if event.Instance != nil {
-						r.pruneHost(net, event.Instance.Host())
-					} else {
-						r.pruneOrphans(net)
-					}
+				if event.Instance != nil {
+					go r.pruneDownHost(event.Instance.Host())
+				} else if net, err := r.getNetwork(); err == nil {
+					r.pruneOrphans(net)
 				}
 				continue
 			}
@@ -186,6 +184,33 @@ func (r *registry) pruneOrphans(net *Network) {
 		return
 	}
 	log.Infof("pruned %d expired flannel subnet lease(s): %v", len(removed), removed)
+}
+
+// downPruneGrace is how long a Down event waits before its lease is pruned,
+// so a host whose flannel instance re-registers after a discoverd reconnect
+// keeps its /24.
+var downPruneGrace = 30 * time.Second
+
+// pruneDownHost prunes host's leases after downPruneGrace unless that host
+// has a live flannel instance. A discoverd reconnect sends Down for every
+// instance missing from the new server's first snapshot, which can include
+// live hosts (and this host) right after a node reboot.
+func (r *registry) pruneDownHost(host string) {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return
+	}
+	time.Sleep(downPruneGrace)
+	instances, err := discoverd.InstancesOrEmpty(r.service)
+	if err != nil || len(instances) == 0 {
+		return
+	}
+	if _, live := liveInstanceHosts(instances)[host]; live {
+		return
+	}
+	if net, err := r.getNetwork(); err == nil {
+		r.pruneHost(net, host)
+	}
 }
 
 func (r *registry) pruneHost(net *Network, host string) {

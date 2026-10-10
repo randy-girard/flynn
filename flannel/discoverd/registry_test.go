@@ -174,6 +174,43 @@ func TestGetSubnetsPrunesDeadHosts(t *testing.T) {
 	}
 }
 
+// A discoverd reconnect sends Down for every instance missing from the new
+// server's first snapshot, including hosts whose flannel is still alive.
+func TestDownEventKeepsLeaseOfLiveHost(t *testing.T) {
+	s := newTest(t)
+	defer s.cleanup()
+
+	defer func(d time.Duration) { downPruneGrace = d }(downPruneGrace)
+	downPruneGrace = 100 * time.Millisecond
+
+	if _, err := s.registry.CreateSubnet("10.3.1.0-24", `{"PublicIP":"1.2.3.4"}`, 0); err != nil {
+		t.Fatalf("error creating live subnet: %s", err)
+	}
+	if _, err := s.registry.CreateSubnet("10.3.2.0-24", `{"PublicIP":"5.6.7.8"}`, 0); err != nil {
+		t.Fatalf("error creating dead subnet: %s", err)
+	}
+	hb, err := s.client.Register("flannel-test", "1.2.3.4:5001")
+	if err != nil {
+		t.Fatalf("error registering instance: %s", err)
+	}
+	defer hb.Close()
+
+	r := s.registry.(*registry)
+	r.pruneDownHost("1.2.3.4")
+	r.pruneDownHost("5.6.7.8")
+
+	net, err := r.getNetwork()
+	if err != nil {
+		t.Fatalf("error reading network: %s", err)
+	}
+	if _, ok := net.Subnets["10.3.1.0-24"]; !ok {
+		t.Fatalf("Down event pruned the lease of a host with a live flannel instance: %v", net.Subnets)
+	}
+	if _, ok := net.Subnets["10.3.2.0-24"]; ok {
+		t.Fatalf("Down event did not prune the lease of a dead host: %v", net.Subnets)
+	}
+}
+
 func TestWatchSubnets(t *testing.T) {
 	s := newTest(t)
 	defer s.cleanup()

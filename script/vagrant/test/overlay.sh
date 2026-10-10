@@ -82,6 +82,10 @@ need "${ROOT}/flannel/discoverd/registry.go" 'pruneHost' \
   "flannel Down events must prune that host only, not every missing instance"
 need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestPruneLeasesForHostOnlyDropsThatHost' \
   "flannel must test Down-host prune keeps other peer leases"
+need "${ROOT}/flannel/discoverd/registry.go" 'go r.pruneDownHost' \
+  "flannel Down events must not prune a host whose flannel re-registers after a discoverd reconnect"
+need "${ROOT}/flannel/discoverd/registry_test.go" 'TestDownEventKeepsLeaseOfLiveHost' \
+  "flannel must test a reconnect Down event keeps a live host's lease"
 need "${ROOT}/flannel/subnet/subnet.go" 'var events EventBatch' \
   "flannel Watch must emit every peer lease, not overwrite the batch with the last event"
 need "${ROOT}/flannel/subnet/subnet_test.go" 'TestParseSubnetWatchResponseEmitsEveryPeer' \
@@ -142,7 +146,7 @@ need "${ROOT}/appliance/postgresql/process.go" 'reseedAfterWALRecycle' \
   "unexpected standby exit after WAL recycle must reseed instead of crash-looping"
 need "${ROOT}/appliance/postgresql/process.go" 'standbyReplicationStableFor' \
   "two streaming samples must not skip reseed before the walreceiver can FATAL"
-need "${ROOT}/appliance/postgresql/process.go" 'waiting for wal to become available' \
+need "${ROOT}/appliance/postgresql/process.go" 'reusedHang := p.reusedStandbyStartup()' \
   "reused standby hung in crash recovery must reseed, not wait 5m for connections"
 need "${ROOT}/appliance/postgresql/process.go" 'standbyReuseStartupTimeout' \
   "reused standby start must abort well under opTimeout when WAL is gone"
