@@ -187,6 +187,13 @@ type Database interface {
 	Ready() <-chan DatabaseEvent
 }
 
+// UpstreamWaitCanceler is implemented by databases whose Reconfigure can
+// block waiting for an upstream. The peer cancels that wait when discoverd
+// reports the upstream is gone or no longer ours.
+type UpstreamWaitCanceler interface {
+	CancelUpstreamWait()
+}
+
 type Discoverd interface {
 	SetState(*DiscoverdState) error
 	Events() <-chan *DiscoverdEvent
@@ -248,6 +255,8 @@ type Peer struct {
 	upstream   *discoverd.Instance // upstream replication target
 	downstream *discoverd.Instance // downstream replication target
 
+	discoverdCh <-chan *DiscoverdEvent
+
 	evalStateCh chan struct{}
 	applyConfCh chan struct{}
 	restCh      chan struct{}
@@ -282,6 +291,7 @@ func (p *Peer) SetDebugChannels(restCh, retryCh chan struct{}) {
 
 func (p *Peer) Run() {
 	discoverdCh := p.discoverd.Events()
+	p.discoverdCh = discoverdCh
 	dbCh := p.db.Ready()
 	for {
 		select {
@@ -610,18 +620,29 @@ func (p *Peer) evalClusterState() {
 	}
 
 	if p.Info().Role == RoleAsync {
-		if whichAsync := p.whichAsync(); whichAsync == -1 {
+		whichAsync := p.whichAsync()
+		if whichAsync == -1 {
 			p.assumeUnassigned()
-		} else {
-			// Compare whole instances (peersEqual), not just identities: a
-			// neighbour replaced at a new address keeps its identity but
-			// replication must be re-pointed at the new address.
-			upstream := p.lookupUpstream(whichAsync)
-			downstream := p.lookupDownstream(whichAsync)
-			if !peersEqual(upstream, p.upstream) ||
-				downstream != nil && !peersEqual(downstream, p.downstream) {
-				p.assumeAsync(whichAsync)
-			}
+			return
+		}
+		// Only the sync normally takes over when the primary disappears. If
+		// primary and sync were on the same host, a reboot takes both down
+		// and the first async is the only caught-up replica left.
+		if whichAsync == 0 && p.Info().State != nil &&
+			p.Info().State.Primary != nil &&
+			!p.peerIsPresent(p.Info().State.Primary) &&
+			(p.Info().State.Sync == nil || !p.peerIsPresent(p.Info().State.Sync)) {
+			p.startTakeover("primary and sync gone", p.Info().State.InitWAL)
+			return
+		}
+		// Compare whole instances (peersEqual), not just identities: a
+		// neighbour replaced at a new address keeps its identity but
+		// replication must be re-pointed at the new address.
+		upstream := p.lookupUpstream(whichAsync)
+		downstream := p.lookupDownstream(whichAsync)
+		if !peersEqual(upstream, p.upstream) ||
+			downstream != nil && !peersEqual(downstream, p.downstream) {
+			p.assumeAsync(whichAsync)
 		}
 		return
 	}
@@ -707,7 +728,7 @@ func (p *Peer) evalClusterState() {
 	// consider a takeover the next time around. If we update this to handle
 	// both operations at once, we can get rid of the goofy boolean returned by
 	// startTakeover.
-	if !p.peerIsPresent(p.Info().State.Sync) &&
+	if p.Info().State.Sync != nil && !p.peerIsPresent(p.Info().State.Sync) &&
 		p.startTakeover("sync gone", p.Info().State.InitWAL) {
 		return
 	}
@@ -990,6 +1011,10 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 	// one recorded in state: see presentPeer.
 	var newSync *discoverd.Instance
 	for _, a := range p.Info().State.Async {
+		// An async promoting itself must not pick itself as the new sync.
+		if peerApplianceID(p.idKey, a) == p.id {
+			continue
+		}
 		if cur := p.presentPeer(a); cur != nil {
 			newSync = cur
 			break
@@ -1006,8 +1031,15 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 		usedUnassigned = newSync != nil
 	}
 	if newSync == nil {
-		log.Warn("would takeover but no async peers present")
-		return false
+		// A primary replacing a missing sync, and a sync whose primary
+		// disappeared with no remaining async, must wait (no flap).
+		// Only an async whose primary and sync both died may become the
+		// sole primary until the scheduler places a replica.
+		if p.Info().Role != RoleAsync {
+			log.Warn("would takeover but no async peers present")
+			return false
+		}
+		log.Warn("no remaining peer for new sync; taking over as sole primary")
 	}
 	if usedUnassigned {
 		log.Info("no listed async present, using unassigned peer as new sync",
@@ -1016,8 +1048,13 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 
 	log.Debug("preparing for new generation")
 	newAsync := make([]*discoverd.Instance, 0, len(p.Info().State.Async))
+	newSyncID := ""
+	if newSync != nil {
+		newSyncID = peerApplianceID(p.idKey, newSync)
+	}
 	for _, a := range p.Info().State.Async {
-		if a.Meta[p.idKey] == newSync.Meta[p.idKey] {
+		id := peerApplianceID(p.idKey, a)
+		if id == p.id || (newSyncID != "" && id == newSyncID) {
 			continue
 		}
 		if cur := p.presentPeer(a); cur != nil {
@@ -1025,7 +1062,6 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 		}
 	}
 	if usedUnassigned {
-		newSyncID := peerApplianceID(p.idKey, newSync)
 		primaryID := peerApplianceID(p.idKey, p.Info().State.Primary)
 		seen := make(map[string]struct{}, len(newAsync)+2)
 		seen[p.id] = struct{}{}
@@ -1053,9 +1089,12 @@ func (p *Peer) startTakeover(reason string, minWAL xlog.Position) bool {
 		}
 	}
 
-	newDeposed := append(make([]*discoverd.Instance, 0, len(p.Info().State.Deposed)+1), p.Info().State.Deposed...)
-	if p.Info().State.Primary.Meta[p.idKey] != p.id {
+	newDeposed := append(make([]*discoverd.Instance, 0, len(p.Info().State.Deposed)+2), p.Info().State.Deposed...)
+	if p.Info().State.Primary != nil && p.Info().State.Primary.Meta[p.idKey] != p.id {
 		newDeposed = append(newDeposed, p.Info().State.Primary)
+	}
+	if p.Info().Role == RoleAsync && p.Info().State.Sync != nil && p.Info().State.Sync.Meta[p.idKey] != p.id {
+		newDeposed = append(newDeposed, p.Info().State.Sync)
 	}
 
 	p.startTakeoverWithPeer(reason, minWAL, &State{
@@ -1108,6 +1147,10 @@ func (p *Peer) presentUnassignedTakeoverPeer() *discoverd.Instance {
 	return fallback
 }
 
+// databaseOfflineRetryDelay spaces out takeover attempts while the local
+// database is not running.
+var databaseOfflineRetryDelay = time.Second
+
 var (
 	ErrClusterFrozen   = errors.New("cluster is frozen")
 	ErrDatabaseOffline = errors.New("database is offline")
@@ -1138,9 +1181,15 @@ func (p *Peer) startTakeoverWithPeer(reason string, minWAL xlog.Position, newSta
 		switch err {
 		case ErrDatabaseOffline:
 			// If database is offline, it's because we haven't started yet, so
-			// trigger another state evaluation after we start it.
+			// trigger another state evaluation after we start it. Retrying
+			// immediately spun the run loop and wrote ~150MB of logs in five
+			// minutes when the local database could not start.
 			log.Error("failed to declare new generation, trying later", "err", err)
-			p.triggerEval()
+			if p.retryCh != nil {
+				p.triggerEval()
+			} else {
+				time.AfterFunc(databaseOfflineRetryDelay, p.triggerEval)
+			}
 		case ErrClusterFrozen:
 			log.Error("failed to declare new generation", "err", err)
 		default:
@@ -1318,7 +1367,12 @@ func (p *Peer) applyConfig() (err error) {
 	}()
 
 	log.Info("reconfiguring database")
-	if err := p.db.Reconfigure(config); err != nil {
+	stopWatch := p.watchUpstreamDuringReconfigure(config.Upstream)
+	err = p.db.Reconfigure(config)
+	for _, e := range stopWatch() {
+		p.handleDiscoverdEvent(e)
+	}
+	if err != nil {
 		return err
 	}
 
@@ -1374,6 +1428,99 @@ func (p *Peer) whichAsync() int {
 	return -1
 }
 
+// watchUpstreamDuringReconfigure consumes discoverd events while Reconfigure
+// blocks and cancels the database's upstream wait once upstream leaves the
+// peer list or a newer state assigns this peer a different upstream. The
+// returned func stops the watch and returns the buffered events, in order,
+// for the caller to handle.
+func (p *Peer) watchUpstreamDuringReconfigure(upstream *discoverd.Instance) func() []*DiscoverdEvent {
+	canceler, ok := p.db.(UpstreamWaitCanceler)
+	if !ok || upstream == nil || p.discoverdCh == nil {
+		return func() []*DiscoverdEvent { return nil }
+	}
+	upstreamID := upstream.Meta[p.idKey]
+	index := p.stateIndex
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	var events []*DiscoverdEvent
+	stale := !p.peerIsPresent(upstream)
+	go func() {
+		defer close(done)
+		// Cancel repeatedly: the wait may not have started when staleness is
+		// first seen.
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		if stale {
+			p.log.Info("upstream not present, canceling upstream wait", "fn", "applyConfig", "upstream", upstream.Addr)
+			canceler.CancelUpstreamWait()
+		}
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				if stale {
+					canceler.CancelUpstreamWait()
+				}
+			case e := <-p.discoverdCh:
+				events = append(events, e)
+				if stale || !p.upstreamStale(e, upstreamID, index) {
+					continue
+				}
+				p.log.Info("upstream changed during reconfigure, canceling upstream wait", "fn", "applyConfig", "upstream", upstream.Addr)
+				canceler.CancelUpstreamWait()
+				stale = true
+			}
+		}
+	}()
+	return func() []*DiscoverdEvent {
+		close(stop)
+		<-done
+		return events
+	}
+}
+
+// upstreamStale reports whether e shows that upstreamID is no longer this
+// peer's live upstream.
+func (p *Peer) upstreamStale(e *DiscoverdEvent, upstreamID string, index uint64) bool {
+	switch e.Kind {
+	case DiscoverdEventPeers:
+		for _, i := range e.Peers {
+			if i.Meta[p.idKey] == upstreamID {
+				return false
+			}
+		}
+		return true
+	case DiscoverdEventState:
+		if e.State == nil || e.State.Index <= index {
+			return false
+		}
+		u := p.upstreamInState(e.State.State)
+		return u == nil || u.Meta[p.idKey] != upstreamID
+	}
+	return false
+}
+
+// upstreamInState returns the upstream s assigns to this peer, or nil.
+func (p *Peer) upstreamInState(s *State) *discoverd.Instance {
+	if s == nil {
+		return nil
+	}
+	if s.Sync != nil && s.Sync.Meta[p.idKey] == p.id {
+		return s.Primary
+	}
+	for i, a := range s.Async {
+		if a.Meta[p.idKey] != p.id {
+			continue
+		}
+		if i == 0 {
+			return s.Sync
+		}
+		return s.Async[i-1]
+	}
+	return nil
+}
+
 // Return the upstream peer for a given one of the async peers
 func (p *Peer) lookupUpstream(whichAsync int) *discoverd.Instance {
 	if whichAsync == 0 {
@@ -1402,6 +1549,9 @@ func (p *Peer) peerIsPresent(other *discoverd.Instance) bool {
 // The returned instance may differ from other in Addr/ID when the peer's job
 // was replaced (data volume, and thus identity, reused at a new address).
 func (p *Peer) presentPeer(other *discoverd.Instance) *discoverd.Instance {
+	if other == nil {
+		return nil
+	}
 	// We should never even be asking whether we're present. If we need to do
 	// this at some point in the future, we need to consider we should always
 	// consider ourselves present or whether we should check the list.
