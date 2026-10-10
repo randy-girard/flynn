@@ -306,6 +306,63 @@ func TestRenewLease(t *testing.T) {
 	t.Fatalf("Failed to find acquired lease")
 }
 
+func TestParseSubnetWatchResponseEmitsEveryPeer(t *testing.T) {
+	self, err := parseSubnetKey("100.100.15.0-24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := &SubnetManager{myLease: SubnetLease{Network: self}}
+	batch, err := sm.parseSubnetWatchResponse(&Response{
+		Index: 9,
+		Subnets: map[string][]byte{
+			"100.100.15.0-24": []byte(`{"PublicIP":"192.168.57.20"}`),
+			"100.100.31.0-24": []byte(`{"PublicIP":"192.168.57.21"}`),
+			"100.100.70.0-24": []byte(`{"PublicIP":"192.168.57.22"}`),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch == nil || len(*batch) != 2 {
+		t.Fatalf("got %v, want both peer leases (Watch used to keep only the last event)", batch)
+	}
+	seen := map[string]bool{}
+	for _, evt := range *batch {
+		if evt.Type != SubnetAdded {
+			t.Fatalf("type=%v", evt.Type)
+		}
+		seen[evt.Lease.Network.StringSep(".", "-")] = true
+	}
+	if !seen["100.100.31.0-24"] || !seen["100.100.70.0-24"] {
+		t.Fatalf("peers=%v", seen)
+	}
+	if seen["100.100.15.0-24"] {
+		t.Fatal("own lease must be skipped")
+	}
+}
+
+func TestPeerLeasesOmitsSelf(t *testing.T) {
+	self, err := parseSubnetKey("100.100.15.0-24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := parseSubnetKey("100.100.31.0-24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sm := &SubnetManager{
+		myLease: SubnetLease{Network: self},
+		leases: []SubnetLease{
+			{Network: self},
+			{Network: peer},
+		},
+	}
+	got := sm.PeerLeases()
+	if len(got) != 1 || !got[0].Network.Equal(peer) {
+		t.Fatalf("PeerLeases=%v, want only the other host", got)
+	}
+}
+
 func TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry(t *testing.T) {
 	now := time.Now()
 	cases := []struct {
@@ -320,6 +377,91 @@ func TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry(t *testing.T) {
 	for _, tc := range cases {
 		if got := leaseRepublishWait(tc.exp, now); got != tc.want {
 			t.Fatalf("%s: wait = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// blockingUpdateRegistry parks every UpdateSubnet until release is closed so
+// a test can observe what else can run while the renewer is mid-request.
+type blockingUpdateRegistry struct {
+	*mockSubnetRegistry
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingUpdateRegistry) UpdateSubnet(sn, data string, ttl uint64) (*Response, error) {
+	select {
+	case r.entered <- struct{}{}:
+	default:
+	}
+	<-r.release
+	return r.mockSubnetRegistry.UpdateSubnet(sn, data, ttl)
+}
+
+func TestLeaseRenewerDoesNotHoldLockDuringUpdate(t *testing.T) {
+	reg := &blockingUpdateRegistry{
+		mockSubnetRegistry: newMockSubnetRegistry(0),
+		entered:            make(chan struct{}, 1),
+		release:            make(chan struct{}),
+	}
+	defer close(reg.release)
+	sm, err := NewSubnetManager(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extIP, _ := ip.ParseIP4("1.2.3.4")
+	cancel := make(chan bool)
+	defer close(cancel)
+	if _, err := sm.AcquireLease(&LeaseAttrs{PublicIP: extIP}, cancel); err != nil {
+		t.Fatal(err)
+	}
+	sm.leaseExp = time.Now()
+	go sm.LeaseRenewer(cancel)
+
+	select {
+	case <-reg.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("renewer never called UpdateSubnet")
+	}
+	if sm.RenewerAlive().IsZero() {
+		t.Fatal("RenewerAlive must be set once the renewer runs")
+	}
+
+	peer, _ := parseSubnetKey("10.3.9.0-24")
+	done := make(chan struct{})
+	go func() {
+		if _, err := sm.applySubnetChange("add", peer, []byte(`{"PublicIP":"5.6.7.8"}`)); err != nil {
+			t.Error(err)
+		}
+		sm.PeerLeases()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("applySubnetChange/PeerLeases blocked while the renewer was in UpdateSubnet; a slow registry would stall the VXLAN loop")
+	}
+}
+
+func TestApplySubnetChangeDeleteRemovesLease(t *testing.T) {
+	a, _ := parseSubnetKey("10.3.1.0-24")
+	b, _ := parseSubnetKey("10.3.2.0-24")
+	c, _ := parseSubnetKey("10.3.3.0-24")
+	sm := &SubnetManager{leases: []SubnetLease{{Network: a}, {Network: b}, {Network: c}}}
+	evt, err := sm.applySubnetChange("expire", b, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evt.Type != SubnetRemoved || !evt.Lease.Network.Equal(b) {
+		t.Fatalf("event=%v", evt)
+	}
+	got := sm.Leases()
+	if len(got) != 2 {
+		t.Fatalf("leases=%v, want 2 after delete (result of deleteLease was discarded)", got)
+	}
+	for _, l := range got {
+		if l.Network.Equal(b) {
+			t.Fatalf("deleted lease still present: %v", got)
 		}
 	}
 }

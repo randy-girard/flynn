@@ -21,4 +21,7 @@ func TestHTTPServerBindsBridgeIPNotNetworkAddress(t *testing.T) {
 	if !strings.Contains(body, "publicListener") {
 		t.Fatal("HTTP must still listen on the host EXTERNAL_IP")
 	}
+	if !strings.Contains(body, "pingLeaseURLs") {
+		t.Fatal("flannel status must ping PublicIP before overlay FirstUsable so update/reload is not blocked")
+	}
 }

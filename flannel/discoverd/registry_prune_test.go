@@ -2,7 +2,9 @@ package discoverd
 
 import (
 	"encoding/json"
+	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/randy-girard/flynn/discoverd/client"
@@ -122,5 +124,151 @@ func TestPruneExpiredSubnetsAllDead(t *testing.T) {
 	}
 	if len(kept) != 0 {
 		t.Fatalf("kept %d leases of dead hosts", len(kept))
+	}
+}
+
+func TestCreateAndUpdateSubnetDoNotPrunePeers(t *testing.T) {
+	src, err := os.ReadFile("registry.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	create := funcBody(body, "func (r *registry) CreateSubnet")
+	update := funcBody(body, "func (r *registry) UpdateSubnet")
+	if create == "" || update == "" {
+		t.Fatal("could not find CreateSubnet/UpdateSubnet")
+	}
+	if strings.Contains(create, "pruneOrphans") || strings.Contains(update, "pruneOrphans") {
+		t.Fatal("Create/UpdateSubnet must not prune: a returning host would persist-drop a peer that is still registering")
+	}
+	if !strings.Contains(create, "getNetwork()") || !strings.Contains(update, "getNetwork()") {
+		t.Fatal("Create/UpdateSubnet must load the full lease map")
+	}
+}
+
+func funcBody(src, sig string) string {
+	i := strings.Index(src, sig)
+	if i < 0 {
+		return ""
+	}
+	rest := src[i:]
+	brace := strings.Index(rest, "{")
+	if brace < 0 {
+		return ""
+	}
+	depth := 0
+	for j, r := range rest[brace:] {
+		switch r {
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return rest[:brace+j+1]
+			}
+		}
+	}
+	return rest
+}
+
+func TestIncompleteFlannelView(t *testing.T) {
+	subnets := map[string]*json.RawMessage{
+		"100.100.15.0-24": rawLease(t, "192.168.57.20"),
+		"100.100.31.0-24": rawLease(t, "192.168.57.21"),
+		"100.100.70.0-24": rawLease(t, "192.168.57.22"),
+	}
+	if !incompleteFlannelView(subnets, map[string]struct{}{"192.168.57.20": {}, "192.168.57.22": {}}) {
+		t.Fatal("two live instances and three lease IPs is an incomplete view; Create/Update must not prune")
+	}
+	if incompleteFlannelView(subnets, map[string]struct{}{
+		"192.168.57.20": {},
+		"192.168.57.21": {},
+		"192.168.57.22": {},
+	}) {
+		t.Fatal("all lease IPs live is a complete view")
+	}
+	if incompleteFlannelView(subnets, map[string]struct{}{
+		"192.168.57.20": {},
+		"192.168.57.21": {},
+		"192.168.57.22": {},
+		"192.168.57.23": {},
+	}) {
+		t.Fatal("more instances than leases is not incomplete")
+	}
+}
+
+func TestPruneLeasesForHostOnlyDropsThatHost(t *testing.T) {
+	subnets := map[string]*json.RawMessage{
+		"100.100.15.0-24": rawLease(t, "192.168.57.20"),
+		"100.100.31.0-24": rawLease(t, "192.168.57.21"),
+		"100.100.70.0-24": rawLease(t, "192.168.57.22"),
+	}
+	kept, removed := pruneLeasesForHost(subnets, "192.168.57.21")
+	if !reflect.DeepEqual(removed, []string{"100.100.31.0-24"}) {
+		t.Fatalf("removed=%v, want only the down host", removed)
+	}
+	if _, ok := kept["100.100.15.0-24"]; !ok {
+		t.Fatal("peer 15 was dropped with the down host")
+	}
+	if _, ok := kept["100.100.70.0-24"]; !ok {
+		t.Fatal("peer 70 was dropped with the down host")
+	}
+}
+
+func TestDecodeNetworkAcceptsDiscoverdStringData(t *testing.T) {
+	inner := `{"config":{"Network":"100.100.0.0/16","Backend":{"Type":"vxlan"}},"subnets":{"100.100.15.0-24":{"PublicIP":"192.168.57.20"}}}`
+	wrapped, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	net, err := decodeNetwork(wrapped)
+	if err != nil {
+		t.Fatalf("discoverd stores ServiceMeta.Data as a JSON string; decodeNetwork must unwrap it: %v", err)
+	}
+	if _, ok := net.Subnets["100.100.15.0-24"]; !ok {
+		t.Fatalf("subnets=%v, want the wrapped /24", net.Subnets)
+	}
+	obj, err := decodeNetwork([]byte(inner))
+	if err != nil {
+		t.Fatalf("object form: %v", err)
+	}
+	if _, ok := obj.Subnets["100.100.15.0-24"]; !ok {
+		t.Fatal("object form dropped subnets")
+	}
+}
+
+func TestDecodeNetworkFromDiscoverdServiceMeta(t *testing.T) {
+	// Exact GET /services/flannel/meta body from the laptop cluster when
+	// status.flannel was unhealthy: Data is a JSON string, not an object.
+	body := []byte(`{"data":"{\"config\": {\"Network\": \"100.100.0.0/16\", \"Backend\": {\"Type\": \"vxlan\"}}, \"subnets\": {\"100.100.15.0-24\": {\"PublicIP\": \"192.168.57.20\"}}}","index":25104}`)
+	var meta struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &meta); err != nil {
+		t.Fatal(err)
+	}
+	net, err := decodeNetwork(meta.Data)
+	if err != nil {
+		t.Fatalf("GetMeta path Data=%s: %v", meta.Data, err)
+	}
+	if _, ok := net.Subnets["100.100.15.0-24"]; !ok {
+		t.Fatalf("subnets=%v", net.Subnets)
+	}
+
+	inner := `{"config":{"Network":"100.100.0.0/16","Backend":{"Type":"vxlan"}},"subnets":{"100.100.15.0-24":{"PublicIP":"192.168.57.20"}}}`
+	once, err := json.Marshal(inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	twice, err := json.Marshal(string(once))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dup, err := decodeNetwork(twice)
+	if err != nil {
+		t.Fatalf("double-wrapped ServiceMeta.Data must unwrap: %v", err)
+	}
+	if _, ok := dup.Subnets["100.100.15.0-24"]; !ok {
+		t.Fatalf("double-wrapped subnets=%v", dup.Subnets)
 	}
 }

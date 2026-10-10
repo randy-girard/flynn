@@ -246,3 +246,65 @@ func TestAddL2BuildsCorrectNeigh(t *testing.T) {
 		t.Errorf("HardwareAddr = %v, want %v", captured.HardwareAddr, mac)
 	}
 }
+
+func TestAddL3SetsPermanentNeigh(t *testing.T) {
+	orig := l3Set
+	defer func() { l3Set = orig }()
+
+	var captured *netlink.Neigh
+	l3Set = func(n *netlink.Neigh) error {
+		captured = n
+		return nil
+	}
+
+	dev := &vxlanDevice{link: &netlink.Vxlan{LinkAttrs: netlink.LinkAttrs{Index: 7}}}
+	gw, err := ip.ParseIP4("100.100.31.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac, err := net.ParseMAC("32:5a:0b:7c:05:a4")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.AddL3(neigh{IP: gw, MAC: mac}); err != nil {
+		t.Fatalf("AddL3: %v", err)
+	}
+	if captured == nil {
+		t.Fatal("AddL3 did not call l3Set")
+	}
+	if captured.State != netlink.NUD_PERMANENT {
+		t.Errorf("State=%d, want NUD_PERMANENT", captured.State)
+	}
+	if captured.Type != syscall.RTN_UNICAST {
+		t.Errorf("Type=%d, want RTN_UNICAST", captured.Type)
+	}
+	if captured.Family == syscall.AF_BRIDGE {
+		t.Fatal("L3 neigh must not be an FDB (AF_BRIDGE) entry")
+	}
+	if !captured.IP.Equal(gw.ToIP()) {
+		t.Errorf("IP=%v, want overlay next-hop %v", captured.IP, gw)
+	}
+	if captured.HardwareAddr.String() != mac.String() {
+		t.Errorf("HardwareAddr=%v, want %v", captured.HardwareAddr, mac)
+	}
+}
+
+func TestAddRouteIgnoresEEXIST(t *testing.T) {
+	orig := routeAdd
+	defer func() { routeAdd = orig }()
+
+	routeAdd = func(*netlink.Route) error { return syscall.EEXIST }
+	dev := &vxlanDevice{link: &netlink.Vxlan{LinkAttrs: netlink.LinkAttrs{Index: 7}}}
+	gw, err := ip.ParseIP4("100.100.31.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dev.AddRoute(ip.IP4Net{IP: gw, PrefixLen: 24}); err != nil {
+		t.Fatalf("AddRoute EEXIST must be ignored so reconcile can re-apply after reload: %v", err)
+	}
+
+	routeAdd = func(*netlink.Route) error { return syscall.EINVAL }
+	if err := dev.AddRoute(ip.IP4Net{IP: gw, PrefixLen: 24}); err == nil {
+		t.Fatal("AddRoute must still surface real errors")
+	}
+}

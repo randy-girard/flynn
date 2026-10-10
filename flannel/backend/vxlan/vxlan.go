@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"os"
+	"runtime/pprof"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/golang/glog"
@@ -35,6 +38,16 @@ type VXLANBackend struct {
 // macCheckInterval bounds how long a udev-rewritten VTEP MAC can blackhole the
 // overlay before EnsureMAC restores it.
 const macCheckInterval = 10 * time.Second
+
+// stallTimeout bounds how long the overlay loop or the lease renewer may make
+// no progress before flanneld dumps every goroutine and exits so flynn-host
+// restarts it. A wedged dev-node1 flanneld once stopped republishing its
+// lease and reconciling peers for 20 minutes, blackholing overlay to it.
+var (
+	stallTimeout       = 3 * time.Minute
+	stallCheckInterval = 30 * time.Second
+	onStall            = dumpGoroutinesAndExit
+)
 
 func New(sm *subnet.SubnetManager, config json.RawMessage) backend.Backend {
 	vb := &VXLANBackend{
@@ -135,6 +148,14 @@ func (vb *VXLANBackend) Run() {
 
 	defer vb.wg.Wait()
 
+	var loopAlive atomic.Int64
+	loopAlive.Store(time.Now().UnixNano())
+	vb.wg.Add(1)
+	go func() {
+		vb.watchStalls(&loopAlive)
+		vb.wg.Done()
+	}()
+
 	macCheck := time.NewTicker(macCheckInterval)
 	defer macCheck.Stop()
 
@@ -146,10 +167,66 @@ func (vb *VXLANBackend) Run() {
 			if _, err := vb.dev.EnsureMAC(vb.vtepMAC); err != nil {
 				log.Error("Error verifying VTEP MAC: ", err)
 			}
+			vb.reconcilePeerOverlay()
 		case <-vb.stop:
 			return
 		}
+		loopAlive.Store(time.Now().UnixNano())
 	}
+}
+
+func unixNanoTime(n int64) time.Time {
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
+}
+
+// stallReason is non-empty when the overlay loop or lease renewer has not
+// made progress within timeout. A zero time means "not started" and is
+// never a stall.
+func stallReason(now, loopAlive, renewerAlive time.Time, timeout time.Duration) string {
+	if !loopAlive.IsZero() && now.Sub(loopAlive) > timeout {
+		return fmt.Sprintf("VXLAN loop made no progress for %s", now.Sub(loopAlive).Round(time.Second))
+	}
+	if !renewerAlive.IsZero() && now.Sub(renewerAlive) > timeout {
+		return fmt.Sprintf("lease renewer made no progress for %s", now.Sub(renewerAlive).Round(time.Second))
+	}
+	return ""
+}
+
+func (vb *VXLANBackend) watchStalls(loopAlive *atomic.Int64) {
+	t := time.NewTicker(stallCheckInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-vb.stop:
+			return
+		case now := <-t.C:
+			if r := stallReason(now, unixNanoTime(loopAlive.Load()), vb.sm.RenewerAlive(), stallTimeout); r != "" {
+				onStall(r)
+				return
+			}
+		}
+	}
+}
+
+// dumpGoroutinesAndExit writes straight to stderr rather than through glog,
+// whose global lock may be what is wedged, then exits non-zero.
+func dumpGoroutinesAndExit(reason string) {
+	done := make(chan struct{})
+	go func() {
+		fmt.Fprintf(os.Stderr, "flannel stalled: %s; dumping goroutines and exiting\n", reason)
+		pprof.Lookup("goroutine").WriteTo(os.Stderr, 2)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+	}
+	// let flynn-host drain stderr before the job exits
+	time.Sleep(2 * time.Second)
+	os.Exit(1)
 }
 
 func (vb *VXLANBackend) Stop() {
@@ -185,6 +262,25 @@ func (hw *hardwareAddr) UnmarshalJSON(b []byte) error {
 
 type vxlanLeaseAttrs struct {
 	VtepMAC hardwareAddr
+}
+
+// reconcilePeerOverlay re-applies FDB, L3 neigh, and overlay routes for every
+// known peer. After a crash-style reload Watch can miss a lease (or AddL3 can
+// fail once); without this the next-hop stays INCOMPLETE and overlay to that
+// /24 is Destination Host Unreachable until flanneld is restarted.
+func (vb *VXLANBackend) reconcilePeerOverlay() {
+	if vb.sm == nil || vb.dev == nil {
+		return
+	}
+	leases := vb.sm.PeerLeases()
+	if len(leases) == 0 {
+		return
+	}
+	batch := make(subnet.EventBatch, 0, len(leases))
+	for _, l := range leases {
+		batch = append(batch, subnet.Event{Type: subnet.SubnetAdded, Lease: l})
+	}
+	vb.handleSubnetEvents(batch)
 }
 
 func (vb *VXLANBackend) handleSubnetEvents(batch subnet.EventBatch) {

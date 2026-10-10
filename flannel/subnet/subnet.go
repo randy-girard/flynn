@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	log "github.com/golang/glog"
@@ -60,6 +61,20 @@ type SubnetManager struct {
 	myLease         SubnetLease
 	leases          []SubnetLease
 	preferredSubnet *ip.IP4Net
+
+	// renewerAlive is the UnixNano time LeaseRenewer last finished an
+	// iteration; zero until the renewer starts.
+	renewerAlive atomic.Int64
+}
+
+// RenewerAlive reports when LeaseRenewer last made progress (zero if it has
+// not started), so a stalled renewer can be detected.
+func (sm *SubnetManager) RenewerAlive() time.Time {
+	n := sm.renewerAlive.Load()
+	if n == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, n)
 }
 
 type EventType int
@@ -259,6 +274,21 @@ func (sm *SubnetManager) GetConfig() *Config {
 	return sm.config
 }
 
+// PeerLeases is the current overlay view of every host except this one. The
+// VXLAN backend re-applies FDB/L3/route for these so a missed Watch event or
+// missing ARP neigh after crash-reload cannot blackhole a peer /24.
+func (sm *SubnetManager) PeerLeases() []SubnetLease {
+	sm.mtx.RLock()
+	defer sm.mtx.RUnlock()
+	out := make([]SubnetLease, 0, len(sm.leases))
+	for _, l := range sm.leases {
+		if !sm.myLease.Network.Equal(l.Network) {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // / Implementation
 func parseSubnetKey(s string) (ip.IP4Net, error) {
 	if parts := subnetRegex.FindStringSubmatch(s); len(parts) == 3 {
@@ -305,7 +335,7 @@ func (sm *SubnetManager) applySubnetChange(action string, ipn ip.IP4Net, data []
 	case "delete", "expire":
 		for i, l := range sm.leases {
 			if l.Network.Equal(ipn) {
-				deleteLease(sm.leases, i)
+				sm.leases = deleteLease(sm.leases, i)
 				return Event{SubnetRemoved, l}, nil
 			}
 		}
@@ -402,6 +432,7 @@ func (sm *SubnetManager) WatchLeases(receiver chan EventBatch, cancel chan bool)
 func (sm *SubnetManager) parseSubnetWatchResponse(resp *Response) (batch *EventBatch, err error) {
 	sm.lastIndex = resp.Index
 
+	var events EventBatch
 	for subnet, rawLeaseAttrs := range resp.Subnets {
 		sn, err := parseSubnetKey(subnet)
 		if err != nil {
@@ -409,16 +440,19 @@ func (sm *SubnetManager) parseSubnetWatchResponse(resp *Response) (batch *EventB
 		}
 
 		// Don't process our own changes
-		if !sm.myLease.Network.Equal(sn) {
-			evt, err := sm.applySubnetChange(resp.Action, sn, rawLeaseAttrs)
-			if err != nil {
-				return nil, err
-			}
-			batch = &EventBatch{evt}
+		if sm.myLease.Network.Equal(sn) {
+			continue
 		}
+		evt, err := sm.applySubnetChange(resp.Action, sn, rawLeaseAttrs)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, evt)
 	}
-
-	return
+	if len(events) == 0 {
+		return nil, nil
+	}
+	return &events, nil
 }
 
 func leaseRepublishWait(exp, now time.Time) time.Duration {
@@ -434,12 +468,17 @@ func leaseRepublishWait(exp, now time.Time) time.Duration {
 
 func (sm *SubnetManager) LeaseRenewer(cancel chan bool) {
 	for {
+		sm.renewerAlive.Store(time.Now().UnixNano())
 		dur := leaseRepublishWait(sm.leaseExp, time.Now())
 
 		select {
 		case <-time.After(dur):
+			// Never hold sm.mtx across registry I/O: a pending writer
+			// (applySubnetChange) would then block PeerLeases and stall the
+			// VXLAN loop for as long as the request takes.
 			sm.mtx.RLock()
 			attrBytes, err := json.Marshal(&sm.myLease.Attrs)
+			network := sm.myLease.Network
 			sm.mtx.RUnlock()
 			if err != nil {
 				log.Error("Error renewing lease (trying again in 1 min): ", err)
@@ -447,9 +486,7 @@ func (sm *SubnetManager) LeaseRenewer(cancel chan bool) {
 				continue
 			}
 
-			sm.mtx.RLock()
-			resp, err := sm.registry.UpdateSubnet(sm.myLease.Network.StringSep(".", "-"), string(attrBytes), subnetTTL)
-			sm.mtx.RUnlock()
+			resp, err := sm.registry.UpdateSubnet(network.StringSep(".", "-"), string(attrBytes), subnetTTL)
 			if err != nil {
 				log.Error("Error renewing lease (trying again in 1 min): ", err)
 				dur = time.Minute

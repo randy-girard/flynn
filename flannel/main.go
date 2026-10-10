@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -215,7 +214,7 @@ func newBackend() (backend.Backend, *subnet.SubnetManager, error) {
 func httpServer(sn *subnet.SubnetManager, publicIP, port string) error {
 	http.HandleFunc("/ping", func(http.ResponseWriter, *http.Request) {})
 	status.AddHandler(status.SimpleHandler(func() error {
-		return pingLeases(sn.Leases())
+		return pingLeases(sn.Leases(), sn.Lease())
 	}))
 
 	// Public IP first: this is always assigned (EXTERNAL_IP / lo:0). Overlay
@@ -238,65 +237,66 @@ func httpServer(sn *subnet.SubnetManager, publicIP, port string) error {
 	return nil
 }
 
-// ping neighbor leases five at a time, timeout 1 second, returning as soon as
-// one returns success.
-func pingLeases(leases []subnet.SubnetLease) error {
-	const workers = 5
-	const timeout = 1 * time.Second
-
-	if len(leases) == 0 {
-		return nil
+func leaseHTTPPort(l subnet.SubnetLease) string {
+	if l.Attrs.HTTPPort != "" {
+		return l.Attrs.HTTPPort
 	}
+	return "5001"
+}
 
-	// Single-node clusters only register our own lease; mesh ping targets the overlay
-	// subnet IP or EXTERNAL_IP, neither of which is reliably reachable from the
-	// flannel job's network namespace. With no peers, there is nothing to verify.
-	if len(leases) == 1 {
-		return nil
+// pingLeaseURLs is the status probe order for a flannel lease. PublicIP is
+// first: httpServer always binds EXTERNAL_IP, while overlay FirstUsable (the
+// bridge .1) is not assigned on flannel.1 (we put a /32 of the network
+// address there). Pinging only FirstUsable marked every multi-node cluster
+// unhealthy and blocked flynn-host update / rolling reload for 10 minutes.
+func pingLeaseURLs(l subnet.SubnetLease) []string {
+	port := leaseHTTPPort(l)
+	var urls []string
+	if l.Attrs.PublicIP != 0 {
+		urls = append(urls, fmt.Sprintf("http://%s:%s/ping", l.Attrs.PublicIP, port))
 	}
-
-	work := make(chan subnet.SubnetLease)
-	results := make(chan bool, workers)
-	client := http.Client{Timeout: timeout}
-
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		go func() {
-			for l := range work {
-				res, err := client.Get(fmt.Sprintf("http://%s:%s/ping", l.Network.FirstUsable(), l.Attrs.HTTPPort))
-				if err == nil {
-					res.Body.Close()
-				}
-				results <- err == nil && res.StatusCode == 200
-			}
-			wg.Done()
-		}()
+	if first := l.Network.FirstUsable(); first != 0 {
+		urls = append(urls, fmt.Sprintf("http://%s:%s/ping", first, port))
 	}
+	return urls
+}
 
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	for _, l := range leases {
-		select {
-		case work <- l:
-		case success := <-results:
-			if success {
-				close(work)
-				return nil
-			}
+func pingOneLease(client *http.Client, l subnet.SubnetLease) bool {
+	for _, u := range pingLeaseURLs(l) {
+		res, err := client.Get(u)
+		if err != nil {
+			continue
+		}
+		code := res.StatusCode
+		res.Body.Close()
+		if code == 200 {
+			return true
 		}
 	}
-	close(work)
+	return false
+}
 
-	for success := range results {
-		if success {
+// pingLeases reports flannel healthy when this host's public /ping answers, or
+// any peer does. Overlay-only pings are a fallback; they must not be required
+// for cluster update/reload, or a missing L3 neigh after crash-reboot leaves
+// the cluster stuck ReadOnly-healthy except flannel.
+func pingLeases(leases []subnet.SubnetLease, self subnet.SubnetLease) error {
+	const timeout = 1 * time.Second
+	if len(leases) <= 1 {
+		return nil
+	}
+	client := &http.Client{Timeout: timeout}
+	if pingOneLease(client, self) {
+		return nil
+	}
+	for _, l := range leases {
+		if l.Network.Equal(self.Network) {
+			continue
+		}
+		if pingOneLease(client, l) {
 			return nil
 		}
 	}
-
 	return errors.New("failed to successfully ping a neighbor")
 }
 

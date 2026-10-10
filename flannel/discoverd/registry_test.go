@@ -162,6 +162,16 @@ func TestGetSubnetsPrunesDeadHosts(t *testing.T) {
 	if !reflect.DeepEqual(res.Subnets, expected) {
 		t.Fatalf("unexpected subnets, expected %s, got %s", expected, res.Subnets)
 	}
+
+	// A booting host's discoverd view may miss a live peer; GetSubnets must
+	// not delete that peer's lease from the shared service meta.
+	net, err := s.registry.(*registry).getNetwork()
+	if err != nil {
+		t.Fatalf("error reading network: %s", err)
+	}
+	if _, ok := net.Subnets["10.3.2.0-24"]; !ok {
+		t.Fatalf("GetSubnets persisted a prune of 10.3.2.0-24: %v", net.Subnets)
+	}
 }
 
 func TestWatchSubnets(t *testing.T) {

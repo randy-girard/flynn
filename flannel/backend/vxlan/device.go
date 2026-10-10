@@ -273,9 +273,15 @@ func (dev *vxlanDevice) DelL2(n neigh) error {
 	})
 }
 
+// l3Set installs (or replaces) a permanent L3 neigh for the overlay next-hop
+// (the peer /24 network address). Routes are installed via that address; if
+// the neigh is missing the kernel leaves it INCOMPLETE and pings fail with
+// Destination Host Unreachable even when the FDB entry is present.
+var l3Set = netlink.NeighSet
+
 func (dev *vxlanDevice) AddL3(n neigh) error {
 	log.Infof("calling NeighSet: %v, %v", n.IP, n.MAC)
-	return netlink.NeighSet(&netlink.Neigh{
+	return l3Set(&netlink.Neigh{
 		LinkIndex:    dev.link.Index,
 		State:        netlink.NUD_PERMANENT,
 		Type:         syscall.RTN_UNICAST,
@@ -295,6 +301,8 @@ func (dev *vxlanDevice) DelL3(n neigh) error {
 	})
 }
 
+var routeAdd = netlink.RouteAdd
+
 func (dev *vxlanDevice) AddRoute(subnet ip.IP4Net) error {
 	route := &netlink.Route{
 		LinkIndex: dev.link.Index,
@@ -304,7 +312,11 @@ func (dev *vxlanDevice) AddRoute(subnet ip.IP4Net) error {
 	}
 
 	log.Infof("calling RouteAdd: %s", subnet)
-	return netlink.RouteAdd(route)
+	err := routeAdd(route)
+	if err != nil && err != syscall.EEXIST {
+		return err
+	}
+	return nil
 }
 
 func (dev *vxlanDevice) DelRoute(subnet ip.IP4Net) error {

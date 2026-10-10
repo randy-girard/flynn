@@ -74,6 +74,98 @@ need "${ROOT}/flannel/discoverd/registry.go" 'net.Subnets\[sn\] = rawJSON' \
   "flannel UpdateSubnet must re-insert a lease after prune dropped a returning host"
 need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestReturningHostLeaseIsKeptAfterPrune' \
   "flannel must test that a crash-rebooted host's /24 is pruned while down and kept after UpdateSubnet"
+need "${ROOT}/flannel/discoverd/registry.go" 'getNetwork()' \
+  "flannel Create/UpdateSubnet must not prune peers on write"
+need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestCreateAndUpdateSubnetDoNotPrunePeers' \
+  "flannel must test Create/UpdateSubnet do not persist-drop a registering peer"
+need "${ROOT}/flannel/discoverd/registry.go" 'pruneHost' \
+  "flannel Down events must prune that host only, not every missing instance"
+need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestPruneLeasesForHostOnlyDropsThatHost' \
+  "flannel must test Down-host prune keeps other peer leases"
+need "${ROOT}/flannel/subnet/subnet.go" 'var events EventBatch' \
+  "flannel Watch must emit every peer lease, not overwrite the batch with the last event"
+need "${ROOT}/flannel/subnet/subnet_test.go" 'TestParseSubnetWatchResponseEmitsEveryPeer' \
+  "flannel must test Watch applies every peer /24 after reload"
+need "${ROOT}/flannel/backend/vxlan/device.go" 'err != syscall.EEXIST' \
+  "flannel AddRoute must ignore EEXIST so reconcile can re-apply overlay routes"
+need "${ROOT}/flannel/backend/vxlan/device_test.go" 'TestAddL3SetsPermanentNeigh' \
+  "flannel must test AddL3 installs a permanent overlay next-hop neigh"
+need "${ROOT}/flannel/backend/vxlan/vxlan.go" 'reconcilePeerOverlay' \
+  "flannel must periodically re-apply peer FDB/L3/route after crash-reload"
+need "${ROOT}/flannel/discoverd/registry.go" 'decodeNetwork' \
+  "flannel must decode discoverd ServiceMeta.Data whether it is a JSON object or a JSON string"
+need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestDecodeNetworkAcceptsDiscoverdStringData' \
+  "flannel must test ServiceMeta.Data string unwrap so a new flanneld can start after update"
+need "${ROOT}/flannel/discoverd/registry.go" 'func \(n \*Network\) UnmarshalJSON' \
+  "Network must UnmarshalJSON so GetMeta string Data cannot block SubnetManager"
+need "${ROOT}/flannel/discoverd/registry_prune_test.go" 'TestDecodeNetworkFromDiscoverdServiceMeta' \
+  "flannel must test the live GET /services/flannel/meta string-Data path"
+need "${ROOT}/flannel/main.go" 'pingLeaseURLs' \
+  "flannel status must ping PublicIP so flynn-host update/reload is not blocked by overlay mesh pings"
+need "${ROOT}/flannel/ping_test.go" 'TestPingLeasesHealthyOnPublicIPWhenOverlayDown' \
+  "flannel must test that PublicIP /ping keeps the cluster healthy when overlay ping fails"
+need "${ROOT}/host/state.go" 'resurrectAttempts' \
+  "host restore must retry persistent discoverd/flannel when overlay mount races zvol"
+need "${ROOT}/host/state.go" 'error running resurrected' \
+  "resurrect must check backend.Run so overlay ENOENT is retried locally without a scheduler"
+need "${ROOT}/pkg/updaterdeploy/host_infra_jobs.go" 'ReplaceHostInfraJobs' \
+  "update must replace persistent flannel/discoverd jobs after image pull (host-daemon, not controller)"
+need "${ROOT}/pkg/updaterdeploy/host_infra_jobs.go" 'SetupMountspecs' \
+  "host-infra replace must rewrite Mountspecs from the pulled image so reload does not Dup the bootstrap layers"
+need "${ROOT}/updater/updater.go" 'ReplaceHostInfraJobs' \
+  "in-cluster updater must replace flannel/discoverd jobs one host at a time after images are on disk"
+need "${ROOT}/host/cli/github_updater.go" 'ReplaceHostInfraJobs' \
+  "tarball updater must replace flannel/discoverd jobs after image pull and before controller deploys"
+need "${ROOT}/updater/updater.go" 'skipping controller deploy of host-infra app' \
+  "controller must not all-at-once discoverd/flannel (exclusive host ports); ReplaceHostInfraJobs rolls them"
+need "${ROOT}/host/cli/github_updater.go" 'skipping controller deploy of host-infra app' \
+  "controller must not all-at-once discoverd/flannel (exclusive host ports); ReplaceHostInfraJobs rolls them"
+if grep -F 'func reexecUpdateBinary' -A 30 "${ROOT}/host/cli/github_updater.go" | grep -Fq 'current == newPath'; then
+  echo "same-version tarball overwrite must re-exec; path equality skips ReplaceHostInfraJobs" >&2
+  exit 1
+fi
+need "${ROOT}/host/cli/github_updater.go" 'FLYNN_UPDATE_REEXEC is the only gate' \
+  "tarball update must re-exec after overwriting flynn-host.vYYYYMMDD.N in place"
+if grep -Fq 'skipping deploy of infrastructure app' "${ROOT}/updater/updater.go" "${ROOT}/host/cli/github_updater.go"; then
+  echo "old skip without ReplaceHostInfraJobs leaves bootstrap Mountspecs forever" >&2
+  exit 1
+fi
+need "${ROOT}/appliance/postgresql/process.go" 'waitForSyncResetDeadline' \
+  "postgres waitForSync must not reset the catch-up timer when pg_stat_replication is empty"
+need "${ROOT}/appliance/postgresql/process.go" 'enablePrimaryWrites' \
+  "postgres waitForSync timeout must enable writes so a recycled-WAL replica cannot stall the primary"
+need "${ROOT}/appliance/postgresql/process.go" 'Keep watching' \
+  "waitForSync timeout must keep watching so a late-streaming replica can still become SyncedDownstream"
+need "${ROOT}/appliance/postgresql/process.go" 'postgresWALSegmentRemoved' \
+  "standby must detect FATAL requested WAL segment has already been removed"
+need "${ROOT}/appliance/postgresql/process.go" 'reseedAfterWALRecycle' \
+  "unexpected standby exit after WAL recycle must reseed instead of crash-looping"
+need "${ROOT}/appliance/postgresql/process.go" 'standbyReplicationStableFor' \
+  "two streaming samples must not skip reseed before the walreceiver can FATAL"
+need "${ROOT}/appliance/postgresql/process.go" 'waiting for wal to become available' \
+  "reused standby hung in crash recovery must reseed, not wait 5m for connections"
+need "${ROOT}/appliance/postgresql/process.go" 'standbyReuseStartupTimeout' \
+  "reused standby start must abort well under opTimeout when WAL is gone"
+need "${ROOT}/appliance/postgresql/process.go" 'startupTimeoutNeedsReseed' \
+  "reused standby startup timeout must reseed instead of retrying the hung datadir"
+need "${ROOT}/appliance/postgresql/process.go" 'postgres start canceled by stop' \
+  "postgres start must release /stop while a reused standby is still starting up"
+need "${ROOT}/appliance/postgresql/process.go" 'pg_basebackup and initdb run while p.mtx is held' \
+  "pg_basebackup must die when /stop arrives so a deploy is not stuck behind the process lock"
+need "${ROOT}/pkg/sirenia/client/client.go" 'timeout awaiting response headers' \
+  "sirenia /stop must treat the 10s client timeout as recoverable"
+need "${ROOT}/appliance/postgresql/process.go" 'standbyWALRecycleShouldReseed' \
+  "a standby that stays up after recycled WAL must reseed, not skip because it is running"
+need "${ROOT}/appliance/postgresql/process_health_test.go" 'TestStartupTimeoutNeedsReseed' \
+  "postgres must test the reused-standby startup hang that left the cluster unhealthy after node reload"
+need "${ROOT}/appliance/postgresql/process.go" 'wal_keep_size = 4096MB' \
+  "primary must keep enough WAL for a node to come back after rolling reload"
+need "${ROOT}/appliance/postgresql/process_health_test.go" 'TestPostgresWALSegmentRemoved' \
+  "postgres must test the WAL-segment-removed FATAL that killed postgres.5052"
+need "${ROOT}/appliance/postgresql/process_health_test.go" 'TestWaitForSyncResetDeadline' \
+  "postgres must test missing replication status does not reset waitForSync"
+need "${ROOT}/appliance/postgresql/process.go" 'waitForSyncAppearanceTimeout' \
+  "sync waitForSync must wait through pg_basebackup before the 1m stall timer"
 need "${smoke}" 'VTEP MAC' "smoke script must diagnose device vs lease VTEP MAC"
 need "${smoke}" 'extra_args\+=\(--clean\)' "smoke reinstall on existing VMs must pass --clean"
 need "${smoke}" 'for link in flannel.1 flynnbr0' "smoke --clean must delete stale overlay devices"
