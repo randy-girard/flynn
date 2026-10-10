@@ -214,18 +214,30 @@ outer:
 			return fmt.Errorf("error starting primary job on %s: %s", primaryHost.ID(), err)
 		}
 	}
-	if !state.Singleton && !isRunning(state.Sync.Meta["FLYNN_JOB_ID"]) {
-		if syncHost == nil {
-			for _, h := range f.hosts {
-				if h.ID() != primaryHost.ID() {
-					syncHost = h
-					break
-				}
-			}
-			if syncHost == nil {
-				// if there are no other hosts, use the same one we put the primary on
-				syncHost = primaryHost
-			}
+	if !state.Singleton && state.Sync != nil && !isRunning(state.Sync.Meta["FLYNN_JOB_ID"]) {
+		primaryID := ""
+		if primaryHost != nil {
+			primaryID = primaryHost.ID()
+		}
+		preferredID := ""
+		if syncHost != nil {
+			preferredID = syncHost.ID()
+		}
+		hostIDs := make([]string, 0, len(f.hosts))
+		byID := make(map[string]*cluster.Host, len(f.hosts))
+		for _, h := range f.hosts {
+			hostIDs = append(hostIDs, h.ID())
+			byID[h.ID()] = h
+		}
+		want := pickSireniaSyncHostID(primaryID, preferredID, hostIDs)
+		if want != preferredID {
+			log.Info("placing sirenia sync on a different host than primary",
+				"primary.host", primaryID, "sync.host", want)
+		}
+		if h := byID[want]; h != nil {
+			syncHost = h
+		} else if syncHost == nil {
+			syncHost = primaryHost
 		}
 		// if we don't have a sync job then copy the primary job
 		if syncJob == nil {
@@ -265,6 +277,23 @@ outer:
 		return sirenia.NewClient(addr).WaitForReadWrite(5 * time.Minute)
 	}
 	return nil
+}
+
+// pickSireniaSyncHostID chooses a host for a replacement sync peer.
+// Primary and sync must not share a host when another host is available.
+func pickSireniaSyncHostID(primaryID, preferredID string, hostIDs []string) string {
+	if preferredID != "" && preferredID != primaryID {
+		return preferredID
+	}
+	for _, id := range hostIDs {
+		if id != "" && id != primaryID {
+			return id
+		}
+	}
+	if preferredID != "" {
+		return preferredID
+	}
+	return primaryID
 }
 
 func cloneJob(job *host.Job) *host.Job {

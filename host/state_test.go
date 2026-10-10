@@ -162,3 +162,58 @@ func (S) TestStateExclusiveVolumes(c *C) {
 	c.Assert(addJob("job4", "vol1", "vol2"), ErrorMatches, "volumes in use: vol1")
 	c.Assert(addJob("job4", "vol2", "vol3"), IsNil)
 }
+
+type flakyRunBackend struct {
+	MockBackend
+	fails int
+	runs  int
+}
+
+func (b *flakyRunBackend) Run(*host.Job, *RunConfig, *RateLimitBucket) error {
+	b.runs++
+	if b.runs <= b.fails {
+		return fmt.Errorf("mounting root overlay: no such file or directory")
+	}
+	return nil
+}
+
+func (S) TestRestoreRetriesPersistentJobRun(c *C) {
+	workdir := c.MkDir()
+	hostID := "devnode2"
+	state := NewState(hostID, filepath.Join(workdir, "host-state-db"))
+	c.Assert(state.OpenDB(), IsNil)
+	oldID := "devnode2-old-discoverd"
+	c.Assert(state.AddJob(&host.Job{
+		ID: oldID,
+		Metadata: map[string]string{
+			"flynn-controller.app_name": "discoverd",
+			"flynn-system-app":          "true",
+		},
+		Config: host.ContainerConfig{
+			HostNetwork: true,
+			Env:         map[string]string{"FLYNN_JOB_ID": oldID, "DISCOVERD": "http://127.0.0.1:1111"},
+		},
+	}), IsNil)
+	c.Assert(state.SetPersistentSlot("discoverd", oldID), IsNil)
+	state.CloseDB()
+
+	state = NewState(hostID, filepath.Join(workdir, "host-state-db"))
+	c.Assert(state.OpenDB(), IsNil)
+	defer state.CloseDB()
+	backend := &flakyRunBackend{fails: 2}
+	resurrect, err := state.Restore(backend, nil)
+	c.Assert(err, IsNil)
+	resurrect()
+	if backend.runs != 3 {
+		c.Fatalf("want 3 Run attempts after 2 overlay ENOENT failures, got %d", backend.runs)
+	}
+	var running int
+	for _, job := range state.Get() {
+		if job.Job != nil && job.Job.ID != oldID && job.Job.Metadata["flynn-controller.app_name"] == "discoverd" {
+			running++
+		}
+	}
+	if running < 1 {
+		c.Fatal("discoverd must be resurrected locally after overlay ENOENT; scheduler is gone on the second rolling-reboot node")
+	}
+}

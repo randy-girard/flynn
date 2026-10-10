@@ -31,10 +31,10 @@ func TestFaultDeadlineNodeCrash(t *testing.T) {
 	check := 10 * time.Second
 	generic := 60 * time.Second
 	if d := FaultDeadline(2, 3, true, check, generic); d != check {
-		t.Fatalf("missing host + down scheduler: got %s, want %s", d, check)
+		t.Fatalf("missing host + down scheduler/postgres: got %s, want %s", d, check)
 	}
 	if d := FaultDeadline(3, 3, true, check, generic); d != generic {
-		t.Fatalf("full cluster + down scheduler: got %s, want %s", d, generic)
+		t.Fatalf("full cluster + down scheduler/postgres: got %s, want %s", d, generic)
 	}
 	if d := FaultDeadline(2, 3, false, check, generic); d != generic {
 		t.Fatalf("missing host + scheduler up: got %s, want %s", d, generic)

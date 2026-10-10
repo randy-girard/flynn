@@ -181,7 +181,19 @@ func (m *Monitor) checkCluster() {
 		schedulerDown = true
 	}
 
-	delay := monitorcheck.FaultDeadline(len(hosts), want, schedulerDown, checkInterval, deadlineLength)
+	// Scheduler and controller can stay up while sirenia has no leader (the
+	// postgres primary and sync were both on the rebooted host). Repair
+	// already runs FixSirenia; without this fault it never starts.
+	postgresDown := false
+	if _, err := discoverd.NewService("postgres").Leader(); err != nil && !discoverd.IsNotFound(err) {
+		log.Error("error getting postgres leader, can't determine health")
+	} else if err != nil {
+		log.Error("postgres has no leader")
+		faulted = true
+		postgresDown = true
+	}
+
+	delay := monitorcheck.FaultDeadline(len(hosts), want, schedulerDown || postgresDown, checkInterval, deadlineLength)
 	if faulted && m.deadline.IsZero() {
 		log.Error("cluster is unhealthy, setting fault")
 		m.deadline = time.Now().Add(delay)
@@ -210,8 +222,13 @@ func (m *Monitor) repairCluster() error {
 		return err
 	}
 	f := fixer.NewClusterFixer(hosts, m.c, log)
-	// killing the schedulers to prevent interference
-	f.KillSchedulers()
+	// A scheduler that is still replaying host jobs has not registered in
+	// discoverd yet. Killing it here restarts that wait and never converges.
+	if f.HasRunningScheduler() {
+		log.Info("scheduler process already running; skipping kill so it can finish discoverd registration")
+	} else {
+		f.KillSchedulers()
+	}
 
 	log.Info("checking status of sirenia databases")
 	for _, db := range plugin.SireniaServiceNames() {

@@ -185,9 +185,31 @@ func (f *ClusterFixer) FixController(instances []*discoverd.Instance, startSched
 	return formationErr
 }
 
+// schedulerRegisterTimeout is how long StartScheduler waits for the
+// controller-scheduler service after a job is already running or newly
+// started. followHost replays every historical job before Register(), so a
+// laptop cluster with a large job log can exceed the old 2-minute window.
+const schedulerRegisterTimeout = 5 * time.Minute
+
+func (f *ClusterFixer) waitForSchedulerRegister() error {
+	if _, err := discoverd.GetInstances("controller-scheduler", schedulerRegisterTimeout); err != nil {
+		return fmt.Errorf("scheduler did not register in discoverd: %s", err)
+	}
+	return nil
+}
+
+// HasRunningScheduler reports a scheduler container that is starting or
+// running, even if it has not registered in discoverd yet.
+func (f *ClusterFixer) HasRunningScheduler() bool {
+	return f.hasRunningScheduler()
+}
+
 func (f *ClusterFixer) StartScheduler(client controller.Client, cf *ct.Formation) error {
 	if f.hasRunningScheduler() {
-		f.l.Info("scheduler job is running")
+		f.l.Info("scheduler job is running, waiting for discoverd registration")
+		if err := f.waitForSchedulerRegister(); err != nil {
+			return err
+		}
 		return f.ensureSingleScheduler()
 	}
 
@@ -229,8 +251,8 @@ func (f *ClusterFixer) StartScheduler(client controller.Client, cf *ct.Formation
 		return fmt.Errorf("error starting scheduler job on %s: %s", f.hosts[0].ID(), err)
 	}
 	f.l.Info("started scheduler job")
-	if _, err := discoverd.GetInstances("controller-scheduler", 2*time.Minute); err != nil {
-		return fmt.Errorf("scheduler did not register in discoverd: %s", err)
+	if err := f.waitForSchedulerRegister(); err != nil {
+		return err
 	}
 	return f.ensureSingleScheduler()
 }

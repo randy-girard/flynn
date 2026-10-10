@@ -131,6 +131,43 @@ func TestFixControllerTriesEveryInstance(t *testing.T) {
 	}
 }
 
+func TestStartSchedulerWaitsForRunningJob(t *testing.T) {
+	src, err := os.ReadFile("controller.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	if !strings.Contains(body, "scheduler job is running, waiting for discoverd registration") {
+		t.Fatal("StartScheduler must wait for an already-running scheduler to register instead of returning immediately")
+	}
+	if !strings.Contains(body, "schedulerRegisterTimeout = 5 * time.Minute") {
+		t.Fatal("scheduler registration wait must be 5 minutes so large job history can finish followHost")
+	}
+}
+
+func TestHasRunningSchedulerEmpty(t *testing.T) {
+	f := &ClusterFixer{}
+	if f.HasRunningScheduler() {
+		t.Fatal("expected false with no hosts")
+	}
+}
+
+func TestPickSireniaSyncHostID(t *testing.T) {
+	hosts := []string{"devnode1", "devnode2", "devnode3"}
+	if got := pickSireniaSyncHostID("devnode3", "devnode3", hosts); got == "devnode3" {
+		t.Fatal("sync must not restart on the primary host when another host exists")
+	}
+	if got := pickSireniaSyncHostID("devnode1", "devnode2", hosts); got != "devnode2" {
+		t.Fatalf("preferred other host: got %s want devnode2", got)
+	}
+	if got := pickSireniaSyncHostID("only", "only", []string{"only"}); got != "only" {
+		t.Fatalf("single host cluster: got %s", got)
+	}
+	if got := pickSireniaSyncHostID("devnode3", "", hosts); got == "" || got == "devnode3" {
+		t.Fatalf("empty preferred must still pick a different host, got %s", got)
+	}
+}
+
 type discard struct{}
 
 func (discard) Write(p []byte) (int, error) { return len(p), nil }

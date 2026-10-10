@@ -134,8 +134,27 @@ func buildOverlayLowerdir(lowers []string, scratch string) (string, error) {
 }
 
 func mountOverlay(lowerdir, upperdir, workdir, mountPoint string) error {
+	for _, p := range []string{upperdir, workdir, mountPoint} {
+		if err := os.MkdirAll(p, 0755); err != nil {
+			return err
+		}
+	}
+	for _, p := range strings.Split(lowerdir, ":") {
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("overlay lowerdir %s: %w", p, err)
+		}
+	}
 	opts := fmt.Sprintf("lowerdir=%s,upperdir=%s,workdir=%s", lowerdir, upperdir, workdir)
-	return syscall.Mount("overlay", mountPoint, "overlay", 0, opts)
+	err := syscall.Mount("overlay", mountPoint, "overlay", 0, opts)
+	if err == syscall.ENOENT {
+		if mkdirErr := os.MkdirAll(mountPoint, 0755); mkdirErr == nil {
+			err = syscall.Mount("overlay", mountPoint, "overlay", 0, opts)
+		}
+	}
+	return err
 }
 
 func unmountOverlay(mountPoint string) error {

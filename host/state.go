@@ -195,25 +195,46 @@ func (s *State) Restore(backend Backend, buffers host.LogBuffers) (func(), error
 		wg.Add(len(resurrect))
 		for _, job := range resurrect {
 			go func(job *host.Job) {
-				// generate a new job id, this is a new job
-				newJob := job.Dup()
-				newJob.ID = cluster.GenerateJobID(s.id, "")
-				if _, ok := newJob.Config.Env["FLYNN_JOB_ID"]; ok {
-					newJob.Config.Env["FLYNN_JOB_ID"] = newJob.ID
+				defer wg.Done()
+				// After a crash reboot, squashfs/zvol mounts can still be
+				// coming up. The first overlay mount then fails ENOENT; a
+				// healthy peer's scheduler may start a replacement, but the
+				// second rolling-reboot node has no quorum and stays dead
+				// unless we retry locally.
+				var lastErr error
+				for attempt := 1; attempt <= resurrectAttempts; attempt++ {
+					newJob := job.Dup()
+					newJob.ID = cluster.GenerateJobID(s.id, "")
+					if newJob.Config.Env != nil {
+						if _, ok := newJob.Config.Env["FLYNN_JOB_ID"]; ok {
+							newJob.Config.Env["FLYNN_JOB_ID"] = newJob.ID
+						}
+					}
+					log.Printf("resurrecting %s as %s (attempt %d/%d)", job.ID, newJob.ID, attempt, resurrectAttempts)
+					if err := s.AddJob(newJob); err != nil {
+						lastErr = err
+						log.Printf("error resurrecting %s as %s: %s", job.ID, newJob.ID, err)
+					} else if err := backend.Run(newJob, nil, nil); err != nil {
+						lastErr = err
+						log.Printf("error running resurrected %s as %s: %s", job.ID, newJob.ID, err)
+					} else {
+						return
+					}
+					if attempt < resurrectAttempts {
+						time.Sleep(resurrectRetryWait)
+					}
 				}
-				log.Printf("resurrecting %s as %s", job.ID, newJob.ID)
-				if err := s.AddJob(newJob); err != nil {
-					log.Printf("error resurrecting %s as %s: %s", job.ID, newJob.ID, err)
-					wg.Done()
-					return
+				if lastErr != nil {
+					log.Printf("giving up resurrecting %s: %s", job.ID, lastErr)
 				}
-				backend.Run(newJob, nil, nil)
-				wg.Done()
 			}(job)
 		}
 		wg.Wait()
 	}, nil
 }
+
+const resurrectAttempts = 8
+const resurrectRetryWait = 500 * time.Millisecond
 
 // OpenDB opens and initialises the persistence DB, if not already open.
 func (s *State) OpenDB() error {

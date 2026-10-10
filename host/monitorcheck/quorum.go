@@ -16,13 +16,13 @@ func HaveQuorum(have, want int) bool {
 }
 
 // FaultDeadline is how long the cluster may stay unhealthy before repair.
-// A missing host plus a down scheduler is a node crash: repair on remaining
-// hosts without waiting a full minute.
-func FaultDeadline(have, want int, schedulerDown bool, check, generic time.Duration) time.Duration {
+// A missing host plus a down scheduler or postgres leader is a node crash:
+// repair on remaining hosts without waiting a full minute.
+func FaultDeadline(have, want int, serviceDown bool, check, generic time.Duration) time.Duration {
 	if want < 1 {
 		want = 1
 	}
-	if schedulerDown && have < want {
+	if serviceDown && have < want {
 		return check
 	}
 	return generic

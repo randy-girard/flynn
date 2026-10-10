@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestMountOverlayMissingLowerdir(t *testing.T) {
+	dir := t.TempDir()
+	err := mountOverlay(
+		filepath.Join(dir, "missing-layer"),
+		filepath.Join(dir, "upper"),
+		filepath.Join(dir, "work"),
+		filepath.Join(dir, "mnt"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "overlay lowerdir") {
+		t.Fatalf("missing squashfs layer must fail before mount, got %v", err)
+	}
+}
+
 func TestCollapseConsecutiveLowerDirs(t *testing.T) {
 	in := []string{"/a", "/b", "/b", "/c", "/c", "/c", "/d"}
 	got := collapseConsecutiveLowerDirs(in)
