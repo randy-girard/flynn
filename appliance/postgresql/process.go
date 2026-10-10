@@ -1,13 +1,16 @@
 package postgresql
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -36,6 +39,14 @@ const (
 var (
 	standbyReplicationHealthTimeout = 30 * time.Second
 	standbyReplicationCheckInterval = 500 * time.Millisecond
+	// After a crash-reload the walreceiver can report "streaming" for a
+	// second, then FATAL: requested WAL segment has already been removed.
+	// Two samples are not enough; require it to stay up this long.
+	standbyReplicationStableFor = 5 * time.Second
+	// A reused standby whose restart LSN is gone hangs in "starting up" /
+	// "waiting for WAL to become available" instead of FATAling. Do not
+	// burn opTimeout (5m) before reseeding.
+	standbyReuseStartupTimeout = 45 * time.Second
 )
 
 type Config struct {
@@ -95,10 +106,32 @@ type Process struct {
 	expectExit atomic.Value
 	// daemonExit is closed when the daemon exits
 	daemonExit chan struct{}
+	// walRecycledVal is true when postgres stderr reported a recycled WAL
+	// segment (FATAL: requested WAL segment ... has already been removed).
+	walRecycledVal atomic.Value
+	// needsReseedVal is true after a WAL-recycle FATAL so the next standby
+	// start reseeds from the upstream instead of replaying a dead replica.
+	needsReseedVal atomic.Value
+	// justBasebackup is set after a successful pg_basebackup so the following
+	// start uses opTimeout. A reused datadir (no fresh backup) uses the short
+	// hang budget instead.
+	justBasebackup bool
+	// inStart is true while start() is waiting for postgres to accept
+	// connections. The WAL detector reseeds itself only after start has
+	// returned; during start the wait loop owns the reseed.
+	inStart atomic.Bool
+	// reseedScheduled keeps a single reseed goroutine when WAL recycle is
+	// logged after start() already returned success.
+	reseedScheduled atomic.Bool
 
 	// cancelSyncWait cancels the goroutine that is waiting for the downstream to
 	// catch up, if running
 	cancelSyncWait func()
+	// cancelUpstreamWait cancels waitForUpstream so /stop is not blocked
+	// behind a 90s poll of a hung replica.
+	cancelUpstreamWait func()
+	upstreamWaitMtx    sync.Mutex
+	stoppedVal         atomic.Value // bool
 
 	// mtx ensures that only one operation happens at a time
 	mtx sync.Mutex
@@ -108,27 +141,31 @@ const checkInterval = 100 * time.Millisecond
 
 func NewProcess(c Config) *Process {
 	p := &Process{
-		id:             c.ID,
-		log:            c.Logger,
-		singleton:      c.Singleton,
-		port:           c.Port,
-		binDir:         c.BinDir,
-		dataDir:        c.DataDir,
-		password:       c.Password,
-		opTimeout:      c.OpTimeout,
-		stopTimeout:    c.StopTimeout,
-		replTimeout:    c.ReplTimeout,
-		timescaleDB:    c.TimescaleDB,
-		extWhitelist:   c.ExtWhitelist,
-		shmType:        c.SHMType,
-		waitUpstream:   c.WaitUpstream,
-		tlsHosts:       c.TLSHosts,
-		events:         make(chan state.DatabaseEvent, 1),
-		cancelSyncWait: func() {},
+		id:                 c.ID,
+		log:                c.Logger,
+		singleton:          c.Singleton,
+		port:               c.Port,
+		binDir:             c.BinDir,
+		dataDir:            c.DataDir,
+		password:           c.Password,
+		opTimeout:          c.OpTimeout,
+		stopTimeout:        c.StopTimeout,
+		replTimeout:        c.ReplTimeout,
+		timescaleDB:        c.TimescaleDB,
+		extWhitelist:       c.ExtWhitelist,
+		shmType:            c.SHMType,
+		waitUpstream:       c.WaitUpstream,
+		tlsHosts:           c.TLSHosts,
+		events:             make(chan state.DatabaseEvent, 1),
+		cancelSyncWait:     func() {},
+		cancelUpstreamWait: func() {},
 	}
 	p.setRunning(false)
 	p.setConfig(nil)
 	p.setSyncedDownstream(nil)
+	p.setWALRecycled(false)
+	p.setNeedsReseed(false)
+	p.setStopped(false)
 	if p.log == nil {
 		p.log = log15.New("app", "postgres", "id", p.id)
 	}
@@ -185,6 +222,42 @@ func (p *Process) setSyncedDownstream(inst *discoverd.Instance) {
 	p.syncedDownstreamVal.Store(inst)
 }
 
+func (p *Process) walRecycled() bool {
+	v := p.walRecycledVal.Load()
+	if v == nil {
+		return false
+	}
+	return v.(bool)
+}
+
+func (p *Process) setWALRecycled(v bool) {
+	p.walRecycledVal.Store(v)
+}
+
+func (p *Process) needsReseed() bool {
+	v := p.needsReseedVal.Load()
+	if v == nil {
+		return false
+	}
+	return v.(bool)
+}
+
+func (p *Process) setNeedsReseed(v bool) {
+	p.needsReseedVal.Store(v)
+}
+
+func (p *Process) stopped() bool {
+	v := p.stoppedVal.Load()
+	if v == nil {
+		return false
+	}
+	return v.(bool)
+}
+
+func (p *Process) setStopped(v bool) {
+	p.stoppedVal.Store(v)
+}
+
 func (p *Process) Info() (*client.DatabaseInfo, error) {
 	res := &client.DatabaseInfo{
 		Config:           p.config(),
@@ -239,6 +312,7 @@ func (p *Process) Reconfigure(config *state.Config) error {
 func (p *Process) Start() error {
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
+	p.setStopped(false)
 
 	if p.running() {
 		return errors.New("postgres is already running")
@@ -254,6 +328,8 @@ func (p *Process) Start() error {
 }
 
 func (p *Process) Stop() error {
+	p.setStopped(true)
+	p.CancelUpstreamWait()
 	p.mtx.Lock()
 	defer p.mtx.Unlock()
 
@@ -504,8 +580,17 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 		reused = true
 	} else {
 		if p.waitUpstream {
-			if err := p.waitForUpstream(upstream); err != nil {
+			// Do not hold mtx while polling a possibly hung upstream: /stop
+			// (sirenia deploy) needs the lock, and a 90s waitForUpstream
+			// deadlocked postgres.3787 so DeployAppRelease timed out.
+			p.mtx.Unlock()
+			err := p.waitForUpstream(upstream)
+			p.mtx.Lock()
+			if err != nil {
 				return err
+			}
+			if p.stopped() {
+				return errors.New("stopped")
 			}
 		}
 		if err := p.pullBasebackup(log, upstream); err != nil {
@@ -538,6 +623,21 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	}
 
 	if err := p.start(); err != nil {
+		if p.stopped() {
+			return err
+		}
+		if startErrorNeedsReseed(reused, p.walRecycled(), p.needsReseed()) {
+			log.Warn("postgres died on reused data dir after WAL recycle, re-seeding from upstream", "err", err)
+			if err := p.reseedStandbyFromUpstream(log, upstream); err != nil {
+				return err
+			}
+			p.setNeedsReseed(false)
+			p.setWALRecycled(false)
+			if downstream != nil {
+				p.waitForSync(downstream, false)
+			}
+			return nil
+		}
 		return err
 	}
 
@@ -554,19 +654,25 @@ func (p *Process) assumeStandby(upstream, downstream *discoverd.Instance) error 
 	return nil
 }
 
+// pullBasebackup copies the upstream into a staging directory and only
+// replaces the data directory once pg_basebackup succeeds. Clearing first
+// destroyed every standby's only copy when a rolling deploy stopped the
+// upstream mid-reseed.
 func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance) error {
-	if entries, err := ioutil.ReadDir(p.dataDir); err == nil && len(entries) > 0 {
-		log.Info("clearing non-empty data directory before basebackup")
-		if err := p.clearDataDir(); err != nil {
-			log.Error("error clearing data directory before basebackup", "err", err)
-			return err
-		}
+	staging := p.basebackupStagingDir()
+	if err := os.RemoveAll(staging); err != nil {
+		log.Error("error removing stale basebackup staging directory", "path", staging, "err", err)
+		return err
+	}
+	if err := p.mkBasebackupStagingDir(staging); err != nil {
+		log.Error("error creating basebackup staging directory", "path", staging, "err", err)
+		return err
 	}
 
-	log.Info("pulling basebackup")
+	log.Info("pulling basebackup", "staging", staging)
 	err := p.runCmd(exec.Command(
 		p.binPath("pg_basebackup"),
-		"--pgdata", p.dataDir,
+		"--pgdata", staging,
 		"--dbname", fmt.Sprintf(
 			"host=%s port=%s user=flynn password=%s application_name=%s",
 			upstream.Host(), upstream.Port(), p.password, upstream.Meta[IDKey],
@@ -583,15 +689,22 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 	))
 	if err != nil {
 		log.Error("error pulling basebackup", "err", err)
-		if clearErr := p.clearDataDir(); clearErr != nil {
-			log.Error("error clearing data directory after failed basebackup", "err", clearErr)
+		if rmErr := os.RemoveAll(staging); rmErr != nil {
+			log.Error("error removing basebackup staging directory", "path", staging, "err", rmErr)
 		}
+		return err
+	}
+	if err := p.replaceDataDir(staging); err != nil {
+		log.Error("error installing basebackup into data directory", "err", err)
 		return err
 	}
 	// the upstream could be performing a takeover, so we need to
 	// remove the trigger file if we have synced it across so we
 	// don't also start a takeover.
 	os.Remove(p.triggerPath())
+	// The next start() is a fresh copy, not a reused datadir that may be
+	// missing WAL. A short hang budget here would wipe a slow-but-valid backup.
+	p.justBasebackup = true
 	return nil
 }
 
@@ -601,15 +714,30 @@ func (p *Process) verifyOrReseedStandby(log log15.Logger, upstream *discoverd.In
 		log.Warn("upstream unreachable, skipping standby replication health check", "err", err)
 		return nil
 	}
+	if p.needsReseed() || p.walRecycled() {
+		log.Warn("standby needs reseed after requested WAL segment was removed on upstream")
+		if err := p.reseedStandbyFromUpstream(log, upstream); err != nil {
+			return err
+		}
+		p.setNeedsReseed(false)
+		p.setWALRecycled(false)
+		return nil
+	}
 	ok, err := p.standbyReplicationHealthy()
+	reseed, err := verifyStandbyReuseResult(p.running(), p.walRecycled() || p.needsReseed(), ok, err)
 	if err != nil {
 		return err
 	}
-	if ok {
+	if !reseed {
 		return nil
 	}
 	log.Warn("standby replication unhealthy after reusing initialized data dir, re-seeding from upstream")
-	return p.reseedStandbyFromUpstream(log, upstream)
+	if err := p.reseedStandbyFromUpstream(log, upstream); err != nil {
+		return err
+	}
+	p.setNeedsReseed(false)
+	p.setWALRecycled(false)
+	return nil
 }
 
 func (p *Process) reseedStandbyFromUpstream(log log15.Logger, upstream *discoverd.Instance) error {
@@ -617,6 +745,16 @@ func (p *Process) reseedStandbyFromUpstream(log log15.Logger, upstream *discover
 		return err
 	}
 	if err := p.pullBasebackup(log, upstream); err != nil {
+		// pullBasebackup leaves the existing datadir untouched on failure.
+		// Restart on it so a sync can still take over when its upstream is
+		// the peer that just went away.
+		if p.dataDirInitialized() && !p.stopped() {
+			if startErr := p.start(); startErr != nil {
+				log.Error("error restarting on existing data after failed reseed", "err", startErr)
+			} else {
+				log.Warn("reseed failed, restarted on existing data directory", "err", err)
+			}
+		}
 		return err
 	}
 	cfg := configData{
@@ -639,6 +777,61 @@ func (p *Process) reseedStandbyFromUpstream(log log15.Logger, upstream *discover
 	return p.start()
 }
 
+func (p *Process) reseedAfterWALRecycle() {
+	p.mtx.Lock()
+	defer p.mtx.Unlock()
+	cfg := p.config()
+	if !standbyWALRecycleShouldReseed(cfg, p.stopped(), p.walRecycled() || p.needsReseed()) {
+		return
+	}
+	log := p.log.New("fn", "reseedAfterWALRecycle")
+	log.Warn("reseeding standby after requested WAL segment was removed on upstream")
+	// start() can return success, then the walreceiver hits a missing timeline
+	// and postgres stays up but stops accepting connections ("starting up").
+	// Leaving running==true used to skip this reseed entirely.
+	if p.running() {
+		if err := p.stop(); err != nil {
+			log.Error("error stopping postgres before WAL reseed", "err", err)
+			return
+		}
+	}
+	if err := p.reseedStandbyFromUpstream(log, cfg.Upstream); err != nil {
+		log.Error("reseed after WAL recycle failed", "err", err)
+		return
+	}
+	p.setNeedsReseed(false)
+	p.setWALRecycled(false)
+}
+
+// standbyWALRecycleShouldReseed is true for a live sync or async whose
+// datadir cannot replay (recycled WAL or a timeline the primary no longer
+// has). A running postmaster is not a reason to skip: the hang leaves it up.
+func standbyWALRecycleShouldReseed(cfg *state.Config, stopped, walRecycled bool) bool {
+	if stopped || !walRecycled || cfg == nil || cfg.Upstream == nil {
+		return false
+	}
+	return cfg.Role == state.RoleSync || cfg.Role == state.RoleAsync
+}
+
+// scheduleReseedAfterWALRecycle starts one reseed when postgres logs a
+// recycled WAL after start() has already returned. During start(), the wait
+// loop reseeds itself; scheduling here would deadlock on p.mtx.
+func (p *Process) scheduleReseedAfterWALRecycle() {
+	if p.inStart.Load() || p.stopped() {
+		return
+	}
+	if !standbyWALRecycleShouldReseed(p.config(), false, true) {
+		return
+	}
+	if !p.reseedScheduled.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		defer p.reseedScheduled.Store(false)
+		p.reseedAfterWALRecycle()
+	}()
+}
+
 // standbyReplicationHealthy reports whether the local standby is streaming or
 // advancing WAL replay. Being behind the upstream is fine; a timeline mismatch
 // or dead receiver that never progresses is not and triggers a reseed.
@@ -646,26 +839,53 @@ func (p *Process) standbyReplicationHealthy() (bool, error) {
 	p.dbMtx.RLock()
 	defer p.dbMtx.RUnlock()
 	if !p.running() || p.db == nil {
-		return false, errors.New("postgres is not running")
+		// Not an error: the caller reseeds. Returning an error here used to
+		// skip reseed after a WAL-recycle FATAL during the health window.
+		return false, nil
 	}
 
 	var startLSN string
 	_ = p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&startLSN)
 
 	deadline := time.Now().Add(standbyReplicationHealthTimeout)
+	consecutiveStreaming := 0
+	var healthySince time.Time
 	for time.Now().Before(deadline) {
+		if !p.running() || p.walRecycled() {
+			return false, nil
+		}
 		var status *string
-		err := p.db.QueryRow("SELECT status FROM pg_stat_wal_receiver").Scan(&status)
+		var lastErr string
+		err := p.db.QueryRow("SELECT status, COALESCE(last_error, '') FROM pg_stat_wal_receiver").Scan(&status, &lastErr)
 		receiver := ""
 		if err == nil && status != nil {
 			receiver = *status
+		}
+		if postgresWALSegmentRemoved(lastErr) {
+			p.setWALRecycled(true)
+			p.setNeedsReseed(true)
+			return false, nil
 		}
 		var lsn string
 		if err := p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&lsn); err != nil {
 			lsn = ""
 		}
-		if postgresStandbyLooksHealthy(receiver, startLSN, lsn) {
-			return true, nil
+		if receiver == "streaming" {
+			consecutiveStreaming++
+		} else {
+			consecutiveStreaming = 0
+		}
+		live := postgresStandbyStreamingConfirmed(consecutiveStreaming) ||
+			postgresStandbyLooksHealthy(receiver, startLSN, lsn)
+		if live {
+			if healthySince.IsZero() {
+				healthySince = time.Now()
+			}
+			if time.Since(healthySince) >= standbyReplicationStableFor && p.running() && !p.walRecycled() {
+				return true, nil
+			}
+		} else {
+			healthySince = time.Time{}
 		}
 		if startLSN == "" && lsn != "" {
 			startLSN = lsn
@@ -683,13 +903,174 @@ func skipStandbyHealthWhenUpstreamDown(status *client.Status, err error) bool {
 	return err != nil || status == nil || status.Database == nil || !status.Database.Running
 }
 
-// postgresStandbyLooksHealthy reports streaming or advancing WAL replay.
-// Being behind the upstream is fine; a dead receiver that never progresses is not.
+// postgresStandbyLooksHealthy reports advancing WAL replay through a live
+// walreceiver. Local replay without streaming can look like progress after a
+// crash, then FATAL when the next segment is already gone on the primary.
 func postgresStandbyLooksHealthy(receiverStatus, startLSN, currentLSN string) bool {
-	if receiverStatus == "streaming" {
-		return true
+	if receiverStatus != "streaming" {
+		return false
 	}
 	return startLSN != "" && currentLSN != "" && currentLSN != startLSN
+}
+
+// postgresStandbyStreamingConfirmed is true after two consecutive "streaming"
+// samples so a fleeting status cannot skip reseed, while an idle but live
+// receiver (LSN not moving) still counts as healthy. The caller must still
+// wait standbyReplicationStableFor so a recycled-WAL FATAL can surface.
+func postgresStandbyStreamingConfirmed(consecutive int) bool {
+	return consecutive >= 2
+}
+
+// postgresWALSegmentRemoved is true for the postgres FATAL that leaves a
+// replica dead after the primary recycled WAL (or moved timeline) while this
+// peer was down:
+//
+//	could not receive data from WAL stream: ERROR:  requested WAL segment
+//	0000001E000000050000000B has already been removed
+func postgresWALSegmentRemoved(msg string) bool {
+	s := strings.ToLower(msg)
+	if strings.Contains(s, "already been removed") {
+		return true
+	}
+	if strings.Contains(s, "requested wal segment") && strings.Contains(s, "removed") {
+		return true
+	}
+	// "waiting for WAL to become available" is deliberately not matched:
+	// every standby logs it when its upstream disconnects, and treating it
+	// as recycled WAL reseeded (and wiped) the whole chain during a rolling
+	// deploy. A reused standby that hangs in recovery is caught by
+	// standbyReuseStartupTimeout instead.
+	if strings.Contains(s, "invalid resource manager id") {
+		return true
+	}
+	// The upstream lacks a history file this datadir needs to follow its
+	// timeline; postgres retries forever without replicating.
+	if strings.Contains(s, "could not receive timeline history file") {
+		return true
+	}
+	return false
+}
+
+// ensureTimelineHistory writes missing ancestor timeline history files using
+// the newest one, which lists every ancestor in order. pg_basebackup copies
+// only the current timeline's history, and a standby restarting on an older
+// timeline fetches every history file between its timeline and ours.
+func ensureTimelineHistory(walDir string) error {
+	entries, err := os.ReadDir(walDir)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	have := make(map[uint64]bool)
+	var newest uint64
+	for _, e := range entries {
+		name := e.Name()
+		if len(name) != 16 || !strings.HasSuffix(name, ".history") {
+			continue
+		}
+		tli, err := strconv.ParseUint(name[:8], 16, 32)
+		if err != nil {
+			continue
+		}
+		have[tli] = true
+		if tli > newest {
+			newest = tli
+		}
+	}
+	if newest == 0 {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(walDir, fmt.Sprintf("%08X.history", newest)))
+	if err != nil {
+		return err
+	}
+	var prefix strings.Builder
+	for _, line := range strings.SplitAfter(string(data), "\n") {
+		if f := strings.Fields(line); len(f) > 0 && !strings.HasPrefix(f[0], "#") {
+			if tli, err := strconv.ParseUint(f[0], 10, 32); err == nil && tli > 1 && tli < newest && !have[tli] {
+				path := filepath.Join(walDir, fmt.Sprintf("%08X.history", tli))
+				if err := ioutil.WriteFile(path+".tmp", []byte(prefix.String()), 0600); err != nil {
+					return err
+				}
+				if err := os.Rename(path+".tmp", path); err != nil {
+					return err
+				}
+				have[tli] = true
+			}
+		}
+		prefix.WriteString(line)
+	}
+	return nil
+}
+
+// verifyStandbyReuseResult decides whether a reused data directory must be
+// thrown away. A WAL-recycle FATAL, a dead postmaster, or a health check that
+// never saw stable streaming all reseed. A query error while postgres is still
+// running is returned to the caller unless it is itself a WAL-recycle error.
+func verifyStandbyReuseResult(running, walRecycled, healthy bool, healthErr error) (reseed bool, err error) {
+	if walRecycled || !running {
+		return true, nil
+	}
+	if healthErr != nil {
+		if postgresWALSegmentRemoved(healthErr.Error()) {
+			return true, nil
+		}
+		return false, healthErr
+	}
+	if !healthy {
+		return true, nil
+	}
+	return false, nil
+}
+
+// startErrorNeedsReseed is true when postgres died during start() on a reused
+// data directory because the upstream had already recycled the WAL the replica
+// asked for. Returning that start error used to leave the replica down.
+func startErrorNeedsReseed(reused, walRecycled, needsReseed bool) bool {
+	return reused && (walRecycled || needsReseed)
+}
+
+// walRecycleDetector watches postgres stderr for a recycled-WAL FATAL so
+// verifyOrReseedStandby and the unexpected-exit path can reseed instead of
+// crash-looping on a datadir whose restart LSN is gone.
+type walRecycleDetector struct {
+	p   *Process
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (w *walRecycleDetector) noteWALRecycle() {
+	if w == nil || w.p == nil {
+		return
+	}
+	w.p.setWALRecycled(true)
+	w.p.setNeedsReseed(true)
+	w.p.scheduleReseedAfterWALRecycle()
+}
+
+func (w *walRecycleDetector) Write(b []byte) (int, error) {
+	if w == nil || w.p == nil {
+		return len(b), nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, b...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			if postgresWALSegmentRemoved(string(w.buf)) {
+				w.noteWALRecycle()
+			}
+			break
+		}
+		line := string(w.buf[:i])
+		w.buf = w.buf[i+1:]
+		if postgresWALSegmentRemoved(line) {
+			w.noteWALRecycle()
+		}
+	}
+	return len(b), nil
 }
 
 func (p *Process) dataDirInitialized() bool {
@@ -723,6 +1104,51 @@ func (p *Process) clearDataDir() error {
 	return nil
 }
 
+func (p *Process) basebackupStagingDir() string {
+	return filepath.Join(filepath.Dir(p.dataDir), "."+filepath.Base(p.dataDir)+".basebackup")
+}
+
+// mkBasebackupStagingDir creates staging with the data directory's owner so
+// pg_basebackup (which accepts an existing empty directory) does not need
+// write access to the data directory's parent.
+func (p *Process) mkBasebackupStagingDir(staging string) error {
+	fi, err := os.Stat(p.dataDir)
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if err := os.Mkdir(staging, 0700); err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && os.Geteuid() == 0 {
+		return os.Chown(staging, int(st.Uid), int(st.Gid))
+	}
+	return nil
+}
+
+// replaceDataDir swaps the contents of staging into the data directory and
+// removes staging. The data directory itself is kept so its mode and owner
+// do not change.
+func (p *Process) replaceDataDir(staging string) error {
+	if err := p.clearDataDir(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(p.dataDir, 0700); err != nil {
+		return err
+	}
+	entries, err := ioutil.ReadDir(staging)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if err := os.Rename(filepath.Join(staging, e.Name()), filepath.Join(p.dataDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return os.RemoveAll(staging)
+}
+
 func (p *Process) sireniaIDMarkerPath() string {
 	return p.dataPath(sireniaIDMarker)
 }
@@ -735,11 +1161,38 @@ var upstreamTimeout = 90 * time.Second
 func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 	log := p.log.New("fn", "waitForUpstream", "upstream", upstream.Addr)
 	log.Info("waiting for upstream to come online")
-	client := client.NewClient(upstream.Addr)
+	upstreamClient := client.NewClient(upstream.Addr)
 
+	stop := make(chan struct{})
+	var stopOnce sync.Once
+	p.upstreamWaitMtx.Lock()
+	p.cancelUpstreamWait = func() { stopOnce.Do(func() { close(stop) }) }
+	p.upstreamWaitMtx.Unlock()
+	defer func() {
+		p.upstreamWaitMtx.Lock()
+		p.cancelUpstreamWait = func() {}
+		p.upstreamWaitMtx.Unlock()
+	}()
+
+	type statusResult struct {
+		status *client.Status
+		err    error
+	}
 	timeout := time.After(upstreamTimeout)
 	for {
-		status, err := client.Status()
+		resCh := make(chan statusResult, 1)
+		go func() {
+			s, err := upstreamClient.Status()
+			resCh <- statusResult{s, err}
+		}()
+		var res statusResult
+		select {
+		case res = <-resCh:
+		case <-stop:
+			log.Info("waitForUpstream canceled")
+			return errors.New("upstream wait canceled")
+		}
+		status, err := res.status, res.err
 		if err != nil {
 			log.Error("error getting upstream status", "err", err)
 		} else if status.Database != nil && status.Database.Running && status.Database.XLog != "" && status.Database.UserExists {
@@ -747,12 +1200,23 @@ func (p *Process) waitForUpstream(upstream *discoverd.Instance) error {
 			return nil
 		}
 		select {
+		case <-stop:
+			log.Info("waitForUpstream canceled")
+			return errors.New("upstream wait canceled")
 		case <-timeout:
 			log.Error("upstream did not come online in time")
 			return errors.New("upstream is offline")
 		case <-time.After(checkInterval):
 		}
 	}
+}
+
+// CancelUpstreamWait aborts an in-progress waitForUpstream.
+func (p *Process) CancelUpstreamWait() {
+	p.upstreamWaitMtx.Lock()
+	cancel := p.cancelUpstreamWait
+	p.upstreamWaitMtx.Unlock()
+	cancel()
 }
 
 func (p *Process) updateSync(downstream *discoverd.Instance) error {
@@ -795,16 +1259,28 @@ func (p *Process) updateSync(downstream *discoverd.Instance) error {
 func (p *Process) start() error {
 	log := p.log.New("fn", "start", "data_dir", p.dataDir, "bin_dir", p.binDir)
 	log.Info("starting postgres")
+	// A fresh basebackup must be allowed opTimeout. Capturing this before the
+	// defer so a failed start of that backup is not treated as a reused hang.
+	reusedHang := p.reusedStandbyStartup()
+	defer func() { p.justBasebackup = false }()
+	p.inStart.Store(true)
+	defer p.inStart.Store(false)
 
 	// clear stale pid if it exists
 	os.Remove(filepath.Join(p.dataDir, "postmaster.pid"))
 
 	p.expectExit.Store(false)
 	p.daemonExit = make(chan struct{})
+	p.setWALRecycled(false)
+	p.setNeedsReseed(false)
+
+	if err := ensureTimelineHistory(p.dataPath("pg_wal")); err != nil {
+		log.Error("error restoring ancestor timeline history files", "err", err)
+	}
 
 	cmd := exec.Command(p.binPath("postgres"), "-D", p.dataDir)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = io.MultiWriter(os.Stderr, &walRecycleDetector{p: p})
 	if err := cmd.Start(); err != nil {
 		log.Error("failed to start postgres", "err", err)
 		return err
@@ -814,8 +1290,14 @@ func (p *Process) start() error {
 
 	go func() {
 		err := cmd.Wait()
-		if !p.expectExit.Load().(bool) {
-			log.Error("postgres exited unexpectedly", "err", err)
+		unexpected := !p.expectExit.Load().(bool)
+		if unexpected {
+			if p.walRecycled() {
+				log.Error("postgres exited unexpectedly: requested WAL segment already removed", "err", err)
+				p.setNeedsReseed(true)
+			} else {
+				log.Error("postgres exited unexpectedly", "err", err)
+			}
 			p.setRunning(false)
 			p.dbMtx.Lock()
 			if p.db != nil {
@@ -825,38 +1307,49 @@ func (p *Process) start() error {
 			p.dbMtx.Unlock()
 		}
 		close(p.daemonExit)
+		if unexpected && p.needsReseed() {
+			go p.reseedAfterWALRecycle()
+		}
 	}()
 
 	log.Debug("waiting for postgres to start")
-	timeout := time.After(p.opTimeout)
+	timeout := time.After(p.standbyStartupWait())
 	var err error
 	for {
-		port, _ := strconv.Atoi(p.port)
-		c := pgx.ConnPoolConfig{
-			ConnConfig: pgx.ConnConfig{
-				Host: "127.0.0.1",
-				User: "postgres",
-				Port: uint16(port),
-			},
-			MaxConnections: 1,
-		}
-		p.dbMtx.Lock()
-		p.db, err = pgx.NewConnPool(c)
-		p.dbMtx.Unlock()
-		if err == nil {
-			_, err = p.db.Exec("SELECT 1")
-			if err == nil {
-				log.Info("postgres started")
-				return nil
-			}
+		if err = p.connectDB(); err == nil {
+			log.Info("postgres started")
+			return nil
 		}
 
 		log.Debug("ignoring error connecting to postgres", "err", err)
+		if p.stopped() {
+			// /stop sets this flag before it takes p.mtx. Abort immediately
+			// so a deploy is not stuck behind a 5m "starting up" wait.
+			log.Info("postgres start canceled by stop")
+			p.killDaemon()
+			return errors.New("stopped")
+		}
+		if p.walRecycled() {
+			log.Error("postgres startup requested recycled WAL, aborting so we can reseed")
+			if stopErr := p.stop(); stopErr != nil {
+				log.Error("error stopping postgres after WAL recycle", "err", stopErr)
+			}
+			p.setNeedsReseed(true)
+			return errors.New("postgres startup requested WAL that has already been removed")
+		}
 		select {
 		case <-timeout:
 			log.Error("timed out waiting for postgres to start", "err", err)
-			if err := p.stop(); err != nil {
-				log.Error("error stopping postgres", "err", err)
+			if stopErr := p.stop(); stopErr != nil {
+				log.Error("error stopping postgres", "err", stopErr)
+			}
+			if startupTimeoutNeedsReseed(reusedHang, p.walRecycled()) {
+				// postgres.6770 on dev-node1 after node2's reboot: five-minute
+				// "the database system is starting up" loops, never a reseed,
+				// so the primary's sync never appeared in pg_stat_replication.
+				p.setNeedsReseed(true)
+				p.setWALRecycled(true)
+				return errors.New("postgres startup hung on a reused standby")
 			}
 			return err
 		case <-p.daemonExit:
@@ -869,6 +1362,109 @@ func (p *Process) start() error {
 		case <-time.After(checkInterval):
 		}
 	}
+}
+
+// dbAcquireTimeout bounds how long a caller waits for the single local pool
+// connection, so a /status request can never hold dbMtx.RLock forever.
+const dbAcquireTimeout = 10 * time.Second
+
+// newLocalPool connects to the local postgres and returns a pool only once it
+// has answered a query. pgx.NewConnPool returns a non-nil, zero-connection
+// pool on a failed connect; concurrent Acquire calls on such a pool can wait
+// forever because a failed reconnect never wakes the other waiters.
+func newLocalPool(port string) (*pgx.ConnPool, error) {
+	portNum, _ := strconv.Atoi(port)
+	pool, err := pgx.NewConnPool(pgx.ConnPoolConfig{
+		ConnConfig: pgx.ConnConfig{
+			Host: "127.0.0.1",
+			User: "postgres",
+			Port: uint16(portNum),
+		},
+		MaxConnections: 1,
+		AcquireTimeout: dbAcquireTimeout,
+	})
+	if err != nil {
+		if pool != nil {
+			pool.Close()
+		}
+		return nil, err
+	}
+	if _, err := pool.Exec("SELECT 1"); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
+}
+
+// connectDB publishes a working pool into p.db. p.db is left untouched on
+// failure so readers never see a broken pool.
+func (p *Process) connectDB() error {
+	pool, err := newLocalPool(p.port)
+	if err != nil {
+		return err
+	}
+	p.dbMtx.Lock()
+	old := p.db
+	p.db = pool
+	p.dbMtx.Unlock()
+	if old != nil {
+		old.Close()
+	}
+	return nil
+}
+
+// reusedStandbyStartup reports whether this start is replaying an existing
+// sync/async datadir. A just-finished basebackup is not a reuse: it needs
+// the full opTimeout to reach "postgres started".
+func (p *Process) reusedStandbyStartup() bool {
+	if p.justBasebackup {
+		return false
+	}
+	cfg := p.config()
+	if cfg == nil || (cfg.Role != state.RoleSync && cfg.Role != state.RoleAsync) {
+		return false
+	}
+	return p.dataDirInitialized()
+}
+
+// standbyStartupWait is how long start() waits for postgres to accept
+// connections. A reused standby with recycled WAL hangs in crash recovery
+// ("waiting for WAL to become available") well past a healthy boot.
+func (p *Process) standbyStartupWait() time.Duration {
+	if p.reusedStandbyStartup() {
+		return standbyReuseStartupTimeout
+	}
+	return p.opTimeout
+}
+
+// startupTimeoutNeedsReseed is true when a reused standby's start budget
+// expired. That is the "database system is starting up" hang after a node
+// reboot, not a fresh basebackup that is still recovering.
+func startupTimeoutNeedsReseed(reusedStandby, walRecycled bool) bool {
+	return reusedStandby || walRecycled
+}
+
+// killDaemon SIGKILLs postgres without the graceful shutdown ladder. Used when
+// /stop arrives during start(); the hung recovery does not answer SIGINT and
+// the deploy client only waits 10s for /stop.
+func (p *Process) killDaemon() {
+	p.expectExit.Store(true)
+	if p.daemon != nil && p.daemon.Process != nil {
+		_ = p.daemon.Process.Signal(syscall.SIGKILL)
+	}
+	if p.daemonExit != nil {
+		select {
+		case <-p.daemonExit:
+		case <-time.After(5 * time.Second):
+		}
+	}
+	p.dbMtx.Lock()
+	if p.db != nil {
+		p.db.Close()
+		p.db = nil
+	}
+	p.dbMtx.Unlock()
+	p.setRunning(false)
 }
 
 func (p *Process) stop() error {
@@ -942,8 +1538,11 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 		defer close(doneCh)
 
 		startTime := time.Now().UTC()
+		appearanceTimeout := waitForSyncAppearanceTimeout(enableWrites, p.replTimeout)
+		appearanceDeadline := startTime.Add(appearanceTimeout)
 		replTimeout := time.NewTimer(p.replTimeout)
 		defer replTimeout.Stop()
+		seenRepl := false
 		lastFlushed := p.XLog().Zero()
 		log := p.log.New(
 			"fn", "waitForSync",
@@ -974,25 +1573,66 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 
 		log.Info("waiting for downstream replication to catch up")
 
+		writesEnabled := false
+		enableWritesNow := func() {
+			if !enableWrites || writesEnabled {
+				return
+			}
+			if err := p.enablePrimaryWrites(log); err != nil {
+				log.Error("error enabling writes after sync timeout", "err", err)
+				return
+			}
+			writesEnabled = true
+		}
+
 		for {
 			if shouldStop() {
 				return
 			}
 
+			if seenRepl {
+				select {
+				case <-replTimeout.C:
+					log.Error("error checking replication status", "err", "downstream unable to make forward progress")
+					enableWritesNow()
+					// Keep watching: after a rolling reboot the replica often
+					// starts streaming just after this timer. Returning here
+					// leaves SyncedDownstream unset and status.postgres down.
+				default:
+				}
+			}
+
 			sent, flushed, err := p.checkReplStatus(inst.Meta[IDKey])
 			if err != nil {
-				// If we can't query the replication state, we just keep trying.
-				// We do not count this as part of the replication timeout.
-				// Generally this means the standby hasn't started or is unable
-				// to start. This means that the standby will eventually time
-				// itself out and we will exit the loop since a new event will
-				// be emitted when the standby leaves the cluster.
-				startTime = time.Now().UTC()
-				replTimeout.Reset(p.replTimeout)
+				// Primary (enableWrites): a replica in discoverd that never
+				// appears in pg_stat_replication (WAL recycled after a crash)
+				// must still count toward the 1m timer so we enable writes.
+				// Sync waiting on a new async: pg_basebackup uses the
+				// upstream's application_name, so the replica is invisible
+				// until streaming starts; wait the appearance budget first.
+				if !seenRepl {
+					if time.Now().UTC().After(appearanceDeadline) {
+						log.Error("error checking replication status", "err", "downstream never appeared in pg_stat_replication")
+						enableWritesNow()
+					}
+					if !sleep() {
+						return
+					}
+					continue
+				}
+				if waitForSyncResetDeadline(false, false) {
+					startTime = time.Now().UTC()
+					replTimeout.Reset(p.replTimeout)
+				}
 				if !sleep() {
 					return
 				}
 				continue
+			}
+			if !seenRepl {
+				seenRepl = true
+				startTime = time.Now().UTC()
+				replTimeout.Reset(p.replTimeout)
 			}
 			log := log.New("sent", sent, "flushed", flushed, "elapsed", time.Now().Sub(startTime))
 
@@ -1000,9 +1640,11 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 				log.Error("error parsing log locations", "err", err)
 				return
 			} else if lastFlushed == p.XLog().Zero() || cmp == -1 {
-				log.Debug("flushed row incremented, resetting timeout")
-				startTime = time.Now().UTC()
-				replTimeout.Reset(p.replTimeout)
+				if waitForSyncResetDeadline(true, true) {
+					log.Debug("flushed row incremented, resetting timeout")
+					startTime = time.Now().UTC()
+					replTimeout.Reset(p.replTimeout)
+				}
 				lastFlushed = flushed
 			}
 
@@ -1010,13 +1652,6 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 				log.Info("downstream caught up")
 				p.setSyncedDownstream(inst)
 				break
-			}
-
-			select {
-			case <-replTimeout.C:
-				log.Error("error checking replication status", "err", "downstream unable to make forward progress")
-				return
-			default:
 			}
 
 			log.Debug("continuing replication check")
@@ -1038,6 +1673,38 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 			}
 		}
 	}()
+}
+
+// waitForSyncResetDeadline reports whether the catch-up timer should restart.
+// Missing pg_stat_replication must not reset it: after a crash reload the
+// replica can stay in discoverd while WAL has already been recycled, so
+// last_flushed never advances and resetting would leave the primary ReadOnly.
+func waitForSyncResetDeadline(hasReplStatus, flushedAdvanced bool) bool {
+	return hasReplStatus && flushedAdvanced
+}
+
+// waitForSyncAppearanceTimeout is how long waitForSync may wait for the
+// first pg_stat_replication row. A primary must fail fast (replTimeout) so
+// crash-reboot WAL-recycle cannot leave it ReadOnly. A sync waiting on a
+// new async must cover pg_basebackup, which does not show the replica's
+// application_name until streaming starts.
+func waitForSyncAppearanceTimeout(enableWrites bool, replTimeout time.Duration) time.Duration {
+	if enableWrites {
+		return replTimeout
+	}
+	const backup = 15 * time.Minute
+	if replTimeout > backup {
+		return replTimeout
+	}
+	return backup
+}
+
+func (p *Process) enablePrimaryWrites(log log15.Logger) error {
+	log.Warn("enabling primary writes after sync wait timeout")
+	if err := p.writeConfig(configData{ReadOnly: false}); err != nil {
+		return err
+	}
+	return p.sighup()
 }
 
 var ErrNoReplicationStatus = errors.New("no replication status")
@@ -1102,7 +1769,31 @@ func (p *Process) runCmd(cmd *exec.Cmd) error {
 	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	// pg_basebackup and initdb run while p.mtx is held. /stop sets stopped
+	// before it takes the lock; kill the child so Stop can proceed instead of
+	// waiting out a basebackup the deploy client will abandon after 10s.
+	tick := time.NewTicker(checkInterval)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case <-tick.C:
+			if p.stopped() && cmd.Process != nil {
+				_ = cmd.Process.Kill()
+				err := <-done
+				if err == nil {
+					err = errors.New("stopped")
+				}
+				return err
+			}
+		}
+	}
 }
 
 func (p *Process) writeConfig(d configData) error {
@@ -1228,7 +1919,7 @@ shared_buffers = 32MB
 wal_level = logical
 fsync = on
 max_wal_senders = 15
-wal_keep_size = 1024MB
+wal_keep_size = 4096MB
 max_wal_size = 256MB
 checkpoint_timeout = 30s
 checkpoint_completion_target = 0.5
