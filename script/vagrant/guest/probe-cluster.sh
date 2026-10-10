@@ -72,6 +72,40 @@ then
 fi
 echo "controller-scheduler instances ok"
 
+# Rolling reloads must not reboot the next node until every postgres peer is
+# back and healthy. A primary is only healthy with a caught-up sync, so this
+# keeps two copies of committed data before the next node goes down.
+if [[ "${PROBE_SIRENIA:-}" == "1" ]]; then
+  pg_want=1
+  if [[ "${MIN_HOSTS}" -ge 3 ]]; then
+    pg_want=3
+  fi
+  pg_json="$(mktemp)"
+  trap 'rm -f "${status_json}" "${sched_json}" "${pg_json}"' EXIT
+  pg_code="$(curl -sf --max-time 3 -o "${pg_json}" -w '%{http_code}' \
+    -H "Auth-Key: ${discoverd_key}" \
+    "http://127.0.0.1:1111/services/postgres/instances" || true)"
+  if [[ "${pg_code}" != "200" ]]; then
+    echo "postgres service is not registered (HTTP ${pg_code:-none})" >&2
+    exit 1
+  fi
+  pg_addrs="$(python3 -c 'import json,sys; [print(i["addr"].rsplit(":",1)[0]) for i in json.load(open(sys.argv[1])) or []]' "${pg_json}")"
+  pg_have=0
+  for pg_ip in ${pg_addrs}; do
+    pg_st="$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://${pg_ip}:5433/.well-known/status" || true)"
+    if [[ "${pg_st}" != "200" ]]; then
+      echo "postgres peer ${pg_ip} is not healthy (HTTP ${pg_st:-none})" >&2
+      exit 1
+    fi
+    pg_have=$((pg_have + 1))
+  done
+  if [[ "${pg_have}" -lt "${pg_want}" ]]; then
+    echo "postgres has ${pg_have} healthy peers, want ${pg_want}" >&2
+    exit 1
+  fi
+  echo "postgres peers healthy (${pg_have})"
+fi
+
 # Cluster status app (status.<domain>). LAN clients are on the whitelist.
 # Require an overall healthy payload so a rolling reload does not continue
 # while Layer 1 services are still coming back.

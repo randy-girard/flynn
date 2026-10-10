@@ -43,7 +43,24 @@ if ! flynn_vagrant_cluster_build_needed; then
   echo "dirty Go source must need a rebuild" >&2
   exit 1
 fi
+flynn_vagrant_write_build_stamp
+echo 'package host // dirty again' > "${TMP}/host/main.go"
+if ! flynn_vagrant_cluster_build_needed; then
+  echo "editing an already-dirty Go file must need a rebuild" >&2
+  exit 1
+fi
 git -C "${TMP}" checkout -q -- host/main.go
+
+flynn_vagrant_write_build_stamp
+echo 'package host' > "${TMP}/host/new.go"
+flynn_vagrant_write_build_stamp
+echo 'package host // changed' > "${TMP}/host/new.go"
+if ! flynn_vagrant_cluster_build_needed; then
+  echo "editing an untracked Go file must need a rebuild" >&2
+  exit 1
+fi
+rm -f "${TMP}/host/new.go"
+flynn_vagrant_write_build_stamp
 
 echo 'more docs' >> "${TMP}/docs/index.md"
 if flynn_vagrant_cluster_build_needed; then

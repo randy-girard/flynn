@@ -48,13 +48,28 @@ flynn_vagrant_digest() {
   fi
 }
 
+flynn_vagrant_digest_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    openssl dgst -sha256 | awk '{print $NF}'
+  fi
+}
+
 flynn_vagrant_build_stamp() {
   local rev dirty digest
   rev="$(git -C "${ROOT}" log -1 --format=%H -- . "${flynn_vagrant_build_excludes[@]}" 2>/dev/null || true)"
   if [[ -z "${rev}" ]]; then
     rev="$(git -C "${ROOT}" rev-parse HEAD 2>/dev/null || echo none)"
   fi
+  # Hash dirty file contents, not just their status: editing a file that is
+  # already modified leaves `git status --porcelain` unchanged.
   dirty="$(git -C "${ROOT}" status --porcelain --untracked-files=all -- . "${flynn_vagrant_build_excludes[@]}" 2>/dev/null || true)"
+  dirty="${dirty}
+$(git -C "${ROOT}" diff HEAD --binary -- . "${flynn_vagrant_build_excludes[@]}" 2>/dev/null | flynn_vagrant_digest_stdin)
+$(git -C "${ROOT}" ls-files -z --others --exclude-standard -- . "${flynn_vagrant_build_excludes[@]}" 2>/dev/null | (cd "${ROOT}" && xargs -0 git hash-object -- 2>/dev/null) || true)"
   digest="$(flynn_vagrant_digest "${dirty}")"
   printf '%s\n%s\n' "${rev}" "${digest}"
 }

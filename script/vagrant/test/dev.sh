@@ -227,6 +227,18 @@ if ! grep -Fq 'wait_cluster_stable' "${script}"; then
   echo "reload must wait for Flynn to settle after each cluster node" >&2
   exit 1
 fi
+if ! grep -Fq 'wait_cluster_stable "${name}" 180 1' "${script}"; then
+  echo "rolling reload must wait for every postgres peer to be healthy before the next node" >&2
+  exit 1
+fi
+if ! grep -Fq 'PROBE_SIRENIA' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh must support PROBE_SIRENIA postgres peer checks" >&2
+  exit 1
+fi
+if ! grep -E '^  update\)' -A20 "${script}" | grep -Fq 'wait_cluster_stable'; then
+  echo "vagrant-update must wait for cluster status after flynn-host update (blobstore can be briefly unhealthy)" >&2
+  exit 1
+fi
 if ! grep -Fq 'start_one_cluster_node' "${script}"; then
   echo "rolling reload must start flynn-host on the node that just rebooted before probing" >&2
   exit 1
@@ -241,6 +253,38 @@ if ! grep -Fq 'no listed async present, using unassigned peer as new sync' "${RO
 fi
 if ! grep -Fq 'TestPostgresSyncTakesOverWhenPrimaryGoneWithUnassignedPeer' "${ROOT}/pkg/sirenia/state/applyconfig_test.go"; then
   echo "sirenia must test takeover when the listed async is gone and an unassigned peer is live" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPostgresAsyncTakesOverWhenPrimaryAndSyncGone' "${ROOT}/pkg/sirenia/state/applyconfig_test.go"; then
+  echo "sirenia async must take over when primary and sync die together (same-host reboot)" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPostgresAsyncTakesOverAsSolePrimaryWhenNoOtherPeers' "${ROOT}/pkg/sirenia/state/applyconfig_test.go"; then
+  echo "sirenia async must promote as sole primary when it is the only remaining replica" >&2
+  exit 1
+fi
+if ! grep -Fq 'primary and sync gone' "${ROOT}/pkg/sirenia/state/state.go"; then
+  echo "first async must startTakeover when primary and sync are both absent" >&2
+  exit 1
+fi
+if ! grep -Fq 'placing sirenia sync on a different host than primary' "${ROOT}/host/fixer/sirenia.go"; then
+  echo "FixSirenia must not restart primary and sync on the same host" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPickSireniaSyncHostID' "${ROOT}/host/fixer/fixer_test.go"; then
+  echo "FixSirenia must test that sync is placed off the primary host" >&2
+  exit 1
+fi
+if ! grep -Fq 'GetHostSpreadCounts' "${ROOT}/controller/scheduler/scheduler.go"; then
+  echo "HA sirenia placement must spread across hosts using release-first job counts" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPickHostSpreadsHAAcrossReleases' "${ROOT}/controller/scheduler/resources_test.go"; then
+  echo "scheduler must test HA postgres peers spread across releases/hosts" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestGetHostJobCountsByAppType' "${ROOT}/controller/scheduler/job_test.go"; then
+  echo "scheduler must test app-wide host counts so HA placement ignores old releases" >&2
   exit 1
 fi
 if ! grep -Fq 'controller wait timed out' "${script}"; then
@@ -269,6 +313,62 @@ if ! grep -Fq 'TestLeaseRepublishWaitCapsDiscoverdPlaceholderExpiry' "${ROOT}/fl
 fi
 if ! grep -Fq 'TestReturningHostLeaseIsKeptAfterPrune' "${ROOT}/flannel/discoverd/registry_prune_test.go"; then
   echo "flannel must test prune-then-UpdateSubnet keeps a returning host lease" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestCreateAndUpdateSubnetDoNotPrunePeers' "${ROOT}/flannel/discoverd/registry_prune_test.go"; then
+  echo "flannel Create/UpdateSubnet must not prune a registering peer" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestParseSubnetWatchResponseEmitsEveryPeer' "${ROOT}/flannel/subnet/subnet_test.go"; then
+  echo "flannel Watch must emit every peer lease after reload" >&2
+  exit 1
+fi
+if ! grep -Fq 'reconcilePeerOverlay' "${ROOT}/flannel/backend/vxlan/vxlan.go"; then
+  echo "flannel must re-apply peer overlay neigh/routes after crash-reload" >&2
+  exit 1
+fi
+if ! grep -Fq 'waitForSyncResetDeadline' "${ROOT}/appliance/postgresql/process.go"; then
+  echo "postgres waitForSync must not reset timeout when replication status is missing" >&2
+  exit 1
+fi
+if ! grep -Fq 'enablePrimaryWrites' "${ROOT}/appliance/postgresql/process.go"; then
+  echo "postgres waitForSync timeout must enable primary writes" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestWaitForSyncResetDeadline' "${ROOT}/appliance/postgresql/process_health_test.go"; then
+  echo "postgres must test waitForSync timeout policy" >&2
+  exit 1
+fi
+if ! grep -Fq 'waitForSyncAppearanceTimeout' "${ROOT}/appliance/postgresql/process.go"; then
+  echo "sync waitForSync must wait through pg_basebackup before the 1m stall timer" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestWaitForReplSyncSucceedsWhenXLogMatchesWithoutSyncedDownstream' "${ROOT}/pkg/sirenia/client/client_test.go"; then
+  echo "WaitForReplSync must succeed when WAL matches even if SyncedDownstream was never set" >&2
+  exit 1
+fi
+if ! grep -Fq 'pingLeaseURLs' "${ROOT}/flannel/main.go"; then
+  echo "flannel status must ping PublicIP so update/reload is not blocked by overlay mesh pings" >&2
+  exit 1
+fi
+if ! grep -Fq 'decodeNetwork' "${ROOT}/flannel/discoverd/registry.go"; then
+  echo "flannel must decode discoverd ServiceMeta.Data JSON strings or new flanneld cannot start after update" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestDecodeNetworkAcceptsDiscoverdStringData' "${ROOT}/flannel/discoverd/registry_prune_test.go"; then
+  echo "flannel must test ServiceMeta.Data string unwrap" >&2
+  exit 1
+fi
+if ! grep -Fq 'func (n *Network) UnmarshalJSON' "${ROOT}/flannel/discoverd/registry.go"; then
+  echo "Network must UnmarshalJSON so GetMeta string Data cannot block SubnetManager" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestDecodeNetworkFromDiscoverdServiceMeta' "${ROOT}/flannel/discoverd/registry_prune_test.go"; then
+  echo "flannel must test the live GET /services/flannel/meta string-Data path" >&2
+  exit 1
+fi
+if ! grep -Fq 'TestPingLeasesHealthyOnPublicIPWhenOverlayDown' "${ROOT}/flannel/ping_test.go"; then
+  echo "flannel must test PublicIP /ping keeps the cluster healthy when overlay ping fails" >&2
   exit 1
 fi
 if ! grep -Fq 'TestDeprovisionAnyRetriesAfterObjectNotFoundJSON' "${ROOT}/pkg/resource/resource_test.go"; then
@@ -301,6 +401,10 @@ if ! grep -Fq 'TENANT_APPS' "${mod}/guest/wait-tenant-http.sh"; then
 fi
 if ! grep -Fq 'monitorcheck.HaveQuorum' "${ROOT}/host/monitor.go"; then
   echo "cluster-monitor must repair with remaining hosts instead of waiting for a dead node" >&2
+  exit 1
+fi
+if ! grep -Fq 'postgres has no leader' "${ROOT}/host/monitor.go"; then
+  echo "cluster-monitor must repair when postgres has no sirenia leader after a node crash" >&2
   exit 1
 fi
 if ! grep -Fq 'code not in ("502", "503")' "${mod}/guest/wait-tenant-http.sh"; then

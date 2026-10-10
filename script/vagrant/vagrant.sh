@@ -147,10 +147,11 @@ start_one_cluster_node() {
 wait_cluster_stable() {
   local label="${1:-cluster}"
   local tries="${2:-60}"
+  local sirenia="${3:-}"
   local i st=0
   for i in $(seq 1 "${tries}"); do
     set +e
-    PROBE_QUICK=1 probe_live_cluster
+    PROBE_QUICK=1 PROBE_SIRENIA="${sirenia}" probe_live_cluster
     st=$?
     set -e
     if [[ "${st}" -eq 0 ]]; then
@@ -229,7 +230,9 @@ reload_cluster_rolling() {
     if [[ "${st}" -ne 0 ]]; then
       echo "${name}: flynn-host is up but controller wait timed out; waiting for the cluster to settle"
     fi
-    wait_cluster_stable "${name}"
+    # 180 tries: a rebooted postgres peer may need a full basebackup before
+    # the primary reports a caught-up sync again.
+    wait_cluster_stable "${name}" 180 1
     wait_tenant_http "${name}" "${TENANT_APPS}"
   done
 }
@@ -478,7 +481,7 @@ probe_live_cluster() {
   ip="$(flynn_vagrant_cluster_ip)"
   min_hosts="$(flynn_vagrant_get_nodes)"
   echo "probing live cluster on ${node} (${ip}, min-hosts=${min_hosts})"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} script/vagrant/guest/probe-cluster.sh"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} script/vagrant/guest/probe-cluster.sh"
 }
 
 update_running_cluster() {
@@ -543,6 +546,9 @@ case "${cmd}" in
     run_as_root "cd ${SRC} && FLYNN_VAGRANT_FORCE_BUILD=${FLYNN_VAGRANT_FORCE_BUILD} script/vagrant/guest/update.sh"
     halt_builder
     update_running_cluster
+    # Blobstore (and other Layer 1 apps) can be briefly unhealthy after the
+    # rolling deploy even though flynn-host update already printed success.
+    wait_cluster_stable "update"
     probe_live_cluster
     ;;
   probe)
