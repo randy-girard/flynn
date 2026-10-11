@@ -622,6 +622,12 @@ func (PostgresSuite) TestAssumeStandbyResumesStreamingOnReuse(c *C) {
 	})
 	c.Assert(err, IsNil)
 	c.Assert(status, Equals, "streaming")
+
+	// A streaming reused standby must pass the health check, or
+	// verifyOrReseedStandby replaces it with a full pg_basebackup.
+	healthy, err := standby.standbyReplicationHealthy()
+	c.Assert(err, IsNil)
+	c.Assert(healthy, Equals, true)
 }
 
 func (PostgresSuite) TestRemoveNodes(c *C) {

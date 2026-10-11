@@ -854,17 +854,13 @@ func (p *Process) standbyReplicationHealthy() (bool, error) {
 		if !p.running() || p.walRecycled() {
 			return false, nil
 		}
+		// pg_stat_wal_receiver has no error column; a recycled-WAL FATAL is
+		// detected from the postgres log and surfaces via walRecycled().
 		var status *string
-		var lastErr string
-		err := p.db.QueryRow("SELECT status, COALESCE(last_error, '') FROM pg_stat_wal_receiver").Scan(&status, &lastErr)
+		err := p.db.QueryRow("SELECT status FROM pg_stat_wal_receiver").Scan(&status)
 		receiver := ""
 		if err == nil && status != nil {
 			receiver = *status
-		}
-		if postgresWALSegmentRemoved(lastErr) {
-			p.setWALRecycled(true)
-			p.setNeedsReseed(true)
-			return false, nil
 		}
 		var lsn string
 		if err := p.db.QueryRow("SELECT COALESCE(pg_last_wal_replay_lsn()::text, '')").Scan(&lsn); err != nil {
