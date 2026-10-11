@@ -1113,7 +1113,10 @@ func (s *Scheduler) HandleSinkChange(sink *ct.Sink) {
 // release of the same app are adopted as long as the scheduler still knows
 // about that release, so that a `flynn-host update` (which mints a new
 // release ID) reuses the existing data instead of allocating a fresh dataset.
+// When several volumes match, the most recently used one is returned so a
+// replacement job gets the newest data rather than an older leftover dataset.
 func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
+	var best *Volume
 	for _, vol := range s.volumes {
 		// skip destroyed or decommissioned volumes
 		if vol.GetState() == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
@@ -1189,10 +1192,11 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
-		// return the matching volume
-		return vol
+		if best == nil || vol.usedAt().After(best.usedAt()) {
+			best = vol
+		}
 	}
-	return nil
+	return best
 }
 
 // shouldDeferVolumeAllocation reports whether placing this job would create a
@@ -1476,6 +1480,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 
 			log.Info("assigning volume", "vol.id", vol.ID, "vol.path", vol.Path)
 			vol.JobID = &req.Job.ID
+			vol.noteUsed(time.Now())
 			req.Job.Volumes[i] = vol
 		}
 
@@ -2475,9 +2480,12 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 			previousJobID := vol.JobID
 			if activeJob.Status == host.StatusStarting || activeJob.Status == host.StatusRunning {
 				vol.JobID = &job.ID
+				vol.noteUsed(time.Now())
 			} else if !vol.DeleteOnStop && vol.JobID != nil && *vol.JobID == job.ID {
 				vol.JobID = nil
 			}
+			vol.noteUsed(activeJob.StartedAt)
+			vol.noteUsed(activeJob.EndedAt)
 
 			// persist the volume if the job ID changed
 			if previousJobID != vol.JobID {

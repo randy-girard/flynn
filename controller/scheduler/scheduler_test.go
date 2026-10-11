@@ -989,6 +989,71 @@ func (TestSuite) TestActiveJobSync(c *C) {
 	assertJob("job2", JobStateStopped)
 }
 
+// TestFindVolumePrefersMostRecentlyUsed ensures a replacement job adopts the
+// dataset a job used last, not an arbitrary older one, so a rejoining
+// sirenia peer resumes from its newest data instead of reseeding.
+func (TestSuite) TestFindVolumePrefersMostRecentlyUsed(c *C) {
+	const releaseID = "release-1"
+	s := &Scheduler{
+		volumes:    make(map[string]*Volume),
+		formations: make(Formations),
+		jobs:       make(Jobs),
+		logger:     log15.New(),
+	}
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{
+		App:     &ct.App{ID: testAppID},
+		Release: &ct.Release{ID: releaseID, ArtifactIDs: []string{testArtifactId}},
+	}))
+
+	base := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
+	at := func(h int) *time.Time { t := base.Add(time.Duration(h) * time.Hour); return &t }
+	addVolume := func(id string, created *time.Time) *Volume {
+		vol := &Volume{Volume: ct.Volume{
+			VolumeReq: ct.VolumeReq{Path: "/data"},
+			ID:        id,
+			HostID:    "host-3",
+			AppID:     testAppID,
+			ReleaseID: releaseID,
+			JobType:   "postgres",
+			State:     ct.VolumeStateCreated,
+			CreatedAt: created,
+		}}
+		s.volumes[id] = vol
+		return vol
+	}
+	job := &Job{AppID: testAppID, ReleaseID: releaseID, Type: "postgres"}
+	req := &ct.VolumeReq{Path: "/data"}
+	assertPicks := func(id string) {
+		for i := 0; i < 50; i++ {
+			got := s.findVolume(job, req)
+			c.Assert(got, NotNil)
+			c.Assert(got.ID, Equals, id)
+		}
+	}
+
+	// the oldest dataset was the last one a job used; the newest-created
+	// dataset holds data last written hours earlier
+	live := addVolume("vol-live", at(0))
+	stale := addVolume("vol-stale", at(1))
+	newest := addVolume("vol-newest", at(10))
+	newest.noteUsed(*at(15))
+	stale.noteUsed(*at(18))
+	live.noteUsed(*at(19))
+	live.noteUsed(*at(20))
+	assertPicks("vol-live")
+
+	// older or zero times never move lastUsedAt backwards
+	live.noteUsed(*at(1))
+	live.noteUsed(time.Time{})
+	assertPicks("vol-live")
+
+	// with no recorded use, the most recently created volume wins
+	for _, v := range []*Volume{live, stale, newest} {
+		v.lastUsedAt = time.Time{}
+	}
+	assertPicks("vol-newest")
+}
+
 // TestFindVolumeCrossRelease covers the singleton-sirenia volume-reuse
 // path: by default the scheduler must adopt an existing /data volume
 // belonging to a different release of the same app, but only if that

@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/volume"
@@ -14,6 +15,29 @@ type Volume struct {
 	// the main scheduler loop and the StartJob goroutine which is
 	// potentially creating the volume on the host
 	stateMtx sync.RWMutex
+
+	// lastUsedAt is the most recent time a job was seen holding the
+	// volume, rebuilt from host job events when the scheduler starts
+	lastUsedAt time.Time
+}
+
+// noteUsed records that a job held the volume at t.
+func (v *Volume) noteUsed(t time.Time) {
+	if t.After(v.lastUsedAt) {
+		v.lastUsedAt = t
+	}
+}
+
+// usedAt returns when the volume last held data written by a job, falling
+// back to its creation time if no job has been seen using it.
+func (v *Volume) usedAt() time.Time {
+	if !v.lastUsedAt.IsZero() {
+		return v.lastUsedAt
+	}
+	if v.CreatedAt != nil {
+		return *v.CreatedAt
+	}
+	return time.Time{}
 }
 
 func (v *Volume) GetState() ct.VolumeState {
