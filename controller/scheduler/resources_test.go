@@ -298,3 +298,40 @@ func TestPickHostAvoidsListedHost(t *testing.T) {
 		}
 	}
 }
+
+// A rebooting host is only marked unhealthy, so its stopped omni job gets a
+// restart. That restart must not land on a live host that already runs one:
+// the doubled flannel there was stopped as surplus and took the live host's
+// original down with it.
+func TestPickHostSkipsHostsRunningTheirOmniShare(t *testing.T) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		App:       &ct.App{ID: "flannel"},
+		Release:   &ct.Release{ID: "r1", Processes: map[string]ct.ProcessType{"app": {Omni: true}}},
+		Processes: Processes{"app": 1},
+	})
+	formation.RectifyOmni(3)
+	running := func(id, hostID string) *Job {
+		return &Job{ID: id, HostID: hostID, Type: "app", State: JobStateRunning, Formation: formation}
+	}
+	h1 := &Host{ID: "h1", Healthy: true}
+	h2 := &Host{ID: "h2", Healthy: false}
+	h3 := &Host{ID: "h3", Healthy: true}
+	s := &Scheduler{
+		jobs:  Jobs{"j1": running("j1", "h1"), "j3": running("j3", "h3")},
+		hosts: map[string]*Host{"h1": h1, "h2": h2, "h3": h3},
+	}
+	restart := &Job{ID: "restart", Type: "app", State: JobStatePending, Formation: formation}
+	counts := s.jobs.GetHostJobCounts(formation.key(), "app")
+	for i := 0; i < 20; i++ {
+		if got := s.pickHost(restart, counts); got != nil {
+			t.Fatalf("attempt %d: placed omni restart on %s, which already runs one", i, got.ID)
+		}
+	}
+
+	h2.Healthy = true
+	for i := 0; i < 20; i++ {
+		if got := s.pickHost(restart, counts); got != h2 {
+			t.Fatalf("attempt %d: placed omni job on %v, want h2 (the only host without one)", i, got)
+		}
+	}
+}

@@ -216,17 +216,30 @@ func (s *Scheduler) hostPersistentSingletonCount(hostID string) int {
 // first shuffled host with zero jobs of *this* type, which scattered redis,
 // kafka, and clickhouse across HA nodes so a drain of any one host destroyed
 // tenant data.
+//
+// Omni jobs (discoverd, flannel) run a fixed count on every host. A host
+// that already runs its share is skipped: restarting a lost host's omni job
+// on a live host doubled it there, and the surplus stop could then take
+// down the live host's original.
 func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	if s == nil || job == nil {
 		return nil
 	}
 	needReserve := s.jobReservesResources(job)
 	packPersist := job.isPersistentSingleton()
+	omniPerHost, omni := job.omniPerHost()
+	var omniCounts map[string]int
+	if omni {
+		omniCounts = s.jobs.GetHostJobCounts(job.Formation.key(), job.Type)
+	}
 	var fit *Host
 	var fitCount int
 	var fitPack int
 	for _, h := range s.ShuffledHosts() {
 		if !hostCanPlace(h) || !job.TagsMatchHost(h) {
+			continue
+		}
+		if omni && hostJobCount(omniCounts, h.ID) >= omniPerHost {
 			continue
 		}
 		if needReserve && !s.hostHasCapacity(h, job) {

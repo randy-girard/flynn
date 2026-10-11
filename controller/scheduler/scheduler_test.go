@@ -663,6 +663,14 @@ func (TestSuite) TestStopJob(c *C) {
 			},
 			shouldStop: "job1",
 		},
+		{
+			desc: "one running and one blocked, stops blocked job",
+			jobs: Jobs{
+				"job1": &Job{ID: "job1", Formation: formation, Type: "web", State: JobStateBlocked, StartedAt: recent.Add(-5 * time.Minute)},
+				"job2": &Job{ID: "job2", Formation: formation, Type: "web", State: JobStateRunning, StartedAt: recent},
+			},
+			shouldStop: "job1",
+		},
 	} {
 		s.jobs = t.jobs
 		job, err := s.findJobToStop(formation, "web")
@@ -673,6 +681,20 @@ func (TestSuite) TestStopJob(c *C) {
 		}
 		c.Assert(job.ID, Equals, t.shouldStop, Commentf(t.desc))
 	}
+}
+
+// A blocked job was never placed on a host (HostID is empty), so stopping
+// it must not look up a host.
+func (TestSuite) TestStopBlockedJob(c *C) {
+	s := &Scheduler{controllerPersist: make(chan interface{}), hosts: map[string]*Host{}, logger: log15.New()}
+	defer close(s.controllerPersist)
+	go func() {
+		for range s.controllerPersist {
+		}
+	}()
+	job := &Job{ID: "job1", Type: "app", State: JobStateBlocked}
+	c.Assert(s.stopJobReason(job, host.JobReasonScaleDown), IsNil)
+	c.Assert(job.State, Equals, JobStateStopped)
 }
 
 func (TestSuite) TestJobPlacementTags(c *C) {

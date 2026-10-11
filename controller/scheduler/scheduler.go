@@ -2873,6 +2873,13 @@ func (s *Scheduler) stopJobReason(job *Job, reason string) error {
 			job.restartTimer.Stop()
 		}
 		return nil
+	case JobStateBlocked:
+		// A blocked job never reached a host, so there is nothing to
+		// stop there.
+		log.Info("stopping blocked job", "job.id", job.ID)
+		job.State = JobStateStopped
+		s.persistJob(job)
+		return nil
 	case JobStateStopped:
 		// job already stopped, nothing to do
 		return nil
@@ -2922,13 +2929,13 @@ func (s *Scheduler) stopJobReason(job *Job, reason string) error {
 }
 
 // findJobToStop finds a job from the given formation and type which should be
-// stopped, choosing pending jobs if present, and the most recently started job
-// otherwise
+// stopped, choosing pending or blocked jobs if present, and the most recently
+// started job otherwise
 func (s *Scheduler) findJobToStop(f *Formation, typ string) (*Job, error) {
 	var found *Job
 	for _, job := range s.jobs.WithFormationAndType(f, typ) {
 		switch job.State {
-		case JobStatePending:
+		case JobStatePending, JobStateBlocked:
 			return job, nil
 		case JobStateStarting, JobStateRunning:
 			// if the job is on a host which is shutting down,

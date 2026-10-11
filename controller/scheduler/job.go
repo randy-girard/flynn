@@ -170,6 +170,16 @@ func (j *Job) processType() (ct.ProcessType, bool) {
 	return proc, ok
 }
 
+// omniPerHost returns how many jobs of this omni type each host runs, and
+// false when the type is not omni.
+func (j *Job) omniPerHost() (int, bool) {
+	proc, ok := j.processType()
+	if !ok || !proc.Omni {
+		return 0, false
+	}
+	return j.Formation.OriginalProcesses[j.Type], true
+}
+
 // isPersistentSingleton is a one-process job whose /data (or other) volume
 // stays on the host. Redis, Kafka, ClickHouse, and plugin mysql/mongo are
 // this shape. Sirenia HA (OriginalProcesses > 1) and omni jobs are not:
