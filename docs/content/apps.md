@@ -247,12 +247,16 @@ for system lines. Filter a process with `flynn log -j web.4821` (or the job UUID
 The dashboard Logs tab's process dropdown lists Procfile types only (not
 console TTY sessions).
 
-About every 30 seconds each running container also writes a system line of
-cgroup usage in `metric=value` form, prefixed with `metrics`:
+Once a minute, on the minute boundary, each running container also writes one
+system line of cgroup usage in `metric=value` form, prefixed with `metrics`:
 
 ```text
 metrics cpu_percent=12.35 memory_bytes=67108864 memory_limit_bytes=536870912 memory_percent=12.5 net_rx_bytes=10 net_tx_bytes=20 io_read_bytes=3 io_write_bytes=4 pids=7
 ```
+
+Database resource jobs append their engine samples to the same line (see
+[Plugins](plugins.md#resource-metrics-line)), for example
+`metrics cpu_percent=0.44 … pids=29 flynn-postgres source=postgresql-swamp-20980 addon=d656964b37dc4e69 sample#tables=11 …`.
 
 Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
 (`Scaling up web process with command \`bin/web\``, `Scaling down web process`)

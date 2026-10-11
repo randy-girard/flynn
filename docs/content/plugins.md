@@ -376,14 +376,15 @@ compiled-in list.
   user, and permissions.
 - Uninstalled plugins do not appear as a broken iframe; the dashboard shows
   an install hint (`sudo flynn-host plugin:install <name>`).
-- Datastore plugins emit **per-app process metrics as events** (app id,
-  resource id, timestamp, series) on a background loop (about every 20s), not
-  only when someone opens the Metrics page. The dashboard stores each series
-  historically on `POST /webhooks/plugin-metrics` (canonical plugin names
-  `postgres` and `redis`) so a plugin Metrics page can chart that app’s
-  resource and the Alerts catalog can threshold the same keys. Postgres and
-  Redis also write `sample#` log
-  lines (`flynn-postgres` / `flynn-redis`) and expose live diagnostics plus
+- Datastore plugins emit **per-app resource metrics as events** (app id,
+  resource id, timestamp, series) once a minute on the minute boundary, not
+  only when someone opens the Metrics page. Each sample goes to every app the
+  resource is attached to, keyed by the controller resource id. The dashboard
+  stores at most one sample per app, plugin, resource, and minute on
+  `POST /webhooks/plugin-metrics` (canonical plugin names `postgres`, `redis`,
+  and `mysql`) so a plugin Metrics page can chart that app’s resource and the
+  Alerts catalog can threshold the same keys. Counters such as `xact_commit`
+  are charted as change per minute. The plugins expose live diagnostics plus
   slow queries/commands at `/dashboard/api/diagnostics`. Metric names belong
   in the plugin README so alerts can hook them. The dashboard Alerts catalog
   lists Redis and Postgres series only when that plugin is installed; those
@@ -395,6 +396,23 @@ block (`base_url` on `postgres-plugin.discoverd`). The dashboard also keeps a
 first-party module for the **platform** `platform-postgres` appliance (system
 apps only). Uninstalled tenant Postgres shows the same install hint as other
 plugins (`sudo flynn-host plugin:install postgres`).
+
+### Resource metrics line
+
+A resource instance job reports engine samples through flynn-host instead of
+writing its own log line. The plugin API sets `FLYNN_METRICS_PORT` on the
+instance release, and the instance serves `GET /metrics/log` on that port with
+one `text/plain` line of fields:
+
+```text
+flynn-postgres source=postgresql-swamp-20980 addon=d656964b37dc4e69 sample#service-available=1 sample#tables=11
+```
+
+On every minute boundary flynn-host reads that line (2 s timeout) and writes a
+single system line to the job's log: the container `metrics` fields followed
+by the plugin fields. If the request fails, the line has container fields
+only. Postgres, Redis, and MySQL use the `flynn-postgres`, `flynn-redis`, and
+`flynn-mysql` prefixes.
 
 ## Production
 
