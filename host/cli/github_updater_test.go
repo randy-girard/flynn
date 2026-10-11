@@ -73,13 +73,17 @@ func TestTarballUpdaterReplacesHostInfraAfterImagePull(t *testing.T) {
 	}
 	body := string(src)
 	pull := strings.Index(body, "finished downloading image layers on all nodes")
-	replace := strings.Index(body, "ReplaceHostInfraJobs")
+	connect := strings.Index(body, "controller.NewClientWithHTTP(")
+	replace := strings.Index(body, "updaterdeploy.ReplaceHostInfraJobs(client,")
 	deploy := strings.Index(body, "deploying system apps")
-	if pull < 0 || replace < 0 || deploy < 0 {
+	if pull < 0 || connect < 0 || replace < 0 || deploy < 0 {
 		t.Fatal("tarball updater must replace persistent flannel/discoverd jobs after image pull")
 	}
 	if replace < pull || deploy < replace {
 		t.Fatal("ReplaceHostInfraJobs must run after layer download and before controller deploys")
+	}
+	if replace < connect {
+		t.Fatal("ReplaceHostInfraJobs needs the controller client to move discoverd/flannel to the pulled image release")
 	}
 	if !strings.Contains(body, "skipping controller deploy of host-infra app") {
 		t.Fatal("controller deploy must still skip discoverd/flannel (host ports, persistent jobs)")

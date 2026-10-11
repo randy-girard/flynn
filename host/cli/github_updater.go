@@ -1375,16 +1375,7 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 
 	log.Info("finished downloading image layers on all nodes")
 
-	// Layers are on disk. Persistent flannel/discoverd jobs still have the
-	// old Mountspecs (daemon restart leaves the container running;
-	// resurrection Dup()s the persisted spec). Replace them one host at a
-	// time so overlay and DNS stay up on the other nodes.
-	if err := updaterdeploy.ReplaceHostInfraJobs(hosts, images, force, log); err != nil {
-		log.Error("error replacing host-infra jobs", "err", err)
-		return err
-	}
-
-	// Wait for cluster to be ready after host-infra replace. Pre-existing
+	// Wait for cluster to be ready after the daemon restart. Pre-existing
 	// postgres unhealth must not burn the 10m timeout here: system-app
 	// deploys (including the postgres reseed) have not run yet. The wait
 	// already continues on timeout; skip immediately when only datastores
@@ -1497,6 +1488,22 @@ func updateImages(repo, configDir, targetVersion, baseURL string, force, restart
 	dockerBuilder := images["dockerbuilder"]
 	if err := updaterdeploy.CreateArtifactWithRetry(client, "dockerbuilder", dockerBuilder, log); err != nil {
 		log.Error(err.Error())
+		return err
+	}
+
+	// Layers are on disk. Persistent flannel/discoverd jobs still have the
+	// old Mountspecs (daemon restart leaves the container running;
+	// resurrection Dup()s the persisted spec). Replace them one host at a
+	// time so overlay and DNS stay up on the other nodes, and move each app
+	// to a release with the pulled image so the scheduler does not restart
+	// the old image after a reboot.
+	infraHosts, err := clusterClient.Hosts()
+	if err != nil {
+		log.Error("error listing hosts for host-infra replace", "err", err)
+		return err
+	}
+	if err := updaterdeploy.ReplaceHostInfraJobs(client, infraHosts, images, force, log); err != nil {
+		log.Error("error replacing host-infra jobs", "err", err)
 		return err
 	}
 

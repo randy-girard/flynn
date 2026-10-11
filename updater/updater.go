@@ -171,7 +171,7 @@ func run() error {
 	}
 
 	if hosts, herr := cluster.NewClient().Hosts(); herr == nil {
-		if err := updaterdeploy.ReplaceHostInfraJobs(hosts, images, false, log); err != nil {
+		if err := updaterdeploy.ReplaceHostInfraJobs(client, hosts, images, false, log); err != nil {
 			log.Error("error replacing host-infra jobs", "err", err)
 			return err
 		}
@@ -186,7 +186,8 @@ func run() error {
 		// all-at-once cannot bind :1111/:53/:5002 on every node at once.
 		// Image pull only fills layer-cache; resurrection Dup()s the old
 		// Mountspecs. ReplaceHostInfraJobs (above) swaps those jobs
-		// one host at a time after layers are on disk.
+		// one host at a time after layers are on disk and moves the app
+		// to a release with the pulled image.
 		if appInfo.Name == "discoverd" || appInfo.Name == "flannel" {
 			log.Info("skipping controller deploy of host-infra app", "name", appInfo.Name)
 			continue
