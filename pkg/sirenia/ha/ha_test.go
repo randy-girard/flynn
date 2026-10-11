@@ -38,6 +38,10 @@ func TestNeedsScale(t *testing.T) {
 	if NeedsScale(single, map[string]int{"mongodb": 1}) {
 		t.Fatal("singleton must env-flip before scale-up")
 	}
+	unset := &ct.Release{Env: map[string]string{"SIRENIA_PROCESS": "mysql"}}
+	if NeedsScale(unset, map[string]int{"mysql": 1}) {
+		t.Fatal("a release without SINGLETON=false (plugin resource instance) must not be scaled to HA")
+	}
 }
 
 func TestHAProcesses(t *testing.T) {

@@ -64,6 +64,51 @@ func (TestSuite) TestMaybePromoteSireniaHA(c *C) {
 	c.Assert(active[0].Processes["web"], Equals, 2)
 }
 
+// Plugin resource instances (isolated mysql-<word>-<digits> apps) set
+// SIRENIA_PROCESS but not SINGLETON and are not plugin apps. Scaling them to 3
+// started empty singleton peers that took over with no data on primary loss.
+func (TestSuite) TestMaybePromoteSireniaHASkipsResourceInstances(c *C) {
+	cc := NewFakeControllerClient()
+	app := &ct.App{
+		ID:   "mysql-chaparral-39761",
+		Name: "mysql-chaparral-39761",
+		Meta: map[string]string{"flynn-datastore": "true", "flynn-system-app": "true"},
+	}
+	release := &ct.Release{
+		ID:  "mysql-inst",
+		Env: map[string]string{"SIRENIA_PROCESS": "mysql", "MYSQL_ROLE": "primary"},
+	}
+	c.Assert(cc.CreateApp(app), IsNil)
+	c.Assert(cc.CreateRelease(app.ID, release), IsNil)
+	procs := map[string]int{"mysql": 1}
+	c.Assert(cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: procs}), IsNil)
+
+	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), log15.New())
+	leader := true
+	s.isLeader = &leader
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{
+		App:       app,
+		Release:   release,
+		Processes: procs,
+	}))
+	for _, id := range []string{"h1", "h2", "h3"} {
+		s.hosts[id] = &Host{ID: id, Healthy: true}
+	}
+	s.jobs["mysql-1"] = &Job{
+		AppID:     app.ID,
+		ReleaseID: release.ID,
+		Type:      "mysql",
+		State:     JobStateRunning,
+	}
+
+	s.maybePromoteSireniaHA()
+	active, err := cc.FormationListActive()
+	c.Assert(err, IsNil)
+	c.Assert(active, HasLen, 1)
+	c.Assert(active[0].Release.ID, Equals, release.ID)
+	c.Assert(active[0].Processes["mysql"], Equals, 1)
+}
+
 func (TestSuite) TestMaybePromoteSireniaHASkipsRollingDeploy(c *C) {
 	cc := NewFakeControllerClient()
 	app := &ct.App{ID: "postgres", Name: "postgres"}

@@ -29,9 +29,13 @@ func NeedsEnvFlip(r *ct.Release, procs map[string]int) bool {
 }
 
 // NeedsScale reports whether a non-singleton sirenia appliance is still
-// below HA data-process count (typically 1 after an env flip).
+// below HA data-process count (typically 1 after an env flip). Only releases
+// that set SINGLETON=false qualify: plugin resource instances (for example
+// isolated mysql apps) carry SIRENIA_PROCESS without SINGLETON and run every
+// process as its own singleton peer, so extra processes are empty peers that
+// take over with no data when the primary stops.
 func NeedsScale(r *ct.Release, procs map[string]int) bool {
-	if r == nil || !r.IsSirenia() || r.IsSireniaSingleton() {
+	if r == nil || !r.IsSirenia() || r.Env["SINGLETON"] != "false" {
 		return false
 	}
 	n := procs[DataProcess(r)]

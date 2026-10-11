@@ -384,7 +384,9 @@ leader during wait/dump. After controller is up, the scheduler promotes those
 appliances to HA (new `SINGLETON=false` release at scale 1, then data process
 scale 3) once three hosts are active. Restoring onto a single host still
 forces singleton scale. Growing a live singleton cluster to three hosts uses
-the same promotion path.
+the same promotion path. Only releases with `SINGLETON=false` are scaled to 3;
+plugin resource instances (for example `mysql-<word>-<digits>` apps) stay at the
+process count their plugin set.
 
 ### App Export
 
