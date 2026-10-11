@@ -764,7 +764,62 @@ fi
 bash "${ROOT}/script/vagrant/test/clean-flynn.sh"
 bash "${ROOT}/script/vagrant/test/update-build.sh"
 help="$(bash "${entry}" help)"
-for want in "setup" "cli" "bootstrap" "update" "probe" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status" "halt the builder" "node failure" "tenant HTTP" "scheduler"; do
+for want in "monitor)" "chaos)" "lib/chaos.sh"; do
+  if ! grep -Fq "${want}" "${script}"; then
+    echo "script/vagrant/vagrant.sh missing ${want}" >&2
+    exit 1
+  fi
+done
+for f in guest/check-health.sh guest/chaos-fault.sh lib/chaos.sh; do
+  if ! bash -n "${mod}/${f}"; then
+    echo "script/vagrant/${f} failed bash -n" >&2
+    exit 1
+  fi
+done
+for f in guest/check-health.sh guest/chaos-fault.sh; do
+  if [[ ! -x "${mod}/${f}" ]]; then
+    echo "script/vagrant/${f} must be executable" >&2
+    exit 1
+  fi
+done
+# The health sample must cover every layer the chaos loop can break.
+for want in "PROBE_FULL_STRENGTH=1" "PROBE_SIRENIA=1" "wait-tenant-http.sh" "-plugin" "dashboard." "/providers" "/leader" "create_connection"; do
+  if ! grep -Fq -e "${want}" "${mod}/guest/check-health.sh"; then
+    echo "guest/check-health.sh missing ${want}" >&2
+    exit 1
+  fi
+done
+for want in system-job plugin-job datastore-primary datastore-replica tenant-job host-restart node-reboot; do
+  if ! grep -Fq "${want}" "${mod}/lib/chaos.sh"; then
+    echo "lib/chaos.sh missing fault ${want}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq 'flynn-host", "stop"' "${mod}/guest/chaos-fault.sh"; then
+  echo "guest/chaos-fault.sh must stop jobs with flynn-host stop (no drain)" >&2
+  exit 1
+fi
+if ! grep -Fq 'vagrant halt --force' "${mod}/lib/chaos.sh"; then
+  echo "chaos node-reboot must hard power off the VM (vagrant halt --force)" >&2
+  exit 1
+fi
+if grep -Eq 'print\([^)]*(env\[|val\b|DATABASE_URL)' "${mod}/guest/check-health.sh" "${mod}/guest/chaos-fault.sh"; then
+  echo "monitor/chaos guest scripts must not print resource env values" >&2
+  exit 1
+fi
+for want in "vagrant-monitor:" "vagrant-chaos:"; do
+  if ! grep -Fq "${want}" "${ROOT}/Makefile"; then
+    echo "Makefile missing ${want}" >&2
+    exit 1
+  fi
+done
+for want in "make vagrant-monitor" "make vagrant-chaos" "CHAOS_FAULTS" "CHAOS_SEED"; do
+  if ! grep -Fq "${want}" "${ROOT}/docs/content/installation/vagrant.md"; then
+    echo "docs/content/installation/vagrant.md missing ${want}" >&2
+    exit 1
+  fi
+done
+for want in "setup" "cli" "bootstrap" "update" "probe" "monitor" "chaos" "CHAOS_ROUNDS" "MONITOR_INTERVAL" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status" "halt the builder" "node failure" "tenant HTTP" "scheduler"; do
   if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1

@@ -17,6 +17,8 @@ source "${VAGRANT_DIR}/lib/env.sh"
 source "${VAGRANT_DIR}/lib/lifecycle.sh"
 # shellcheck source=lib/cluster.sh
 source "${VAGRANT_DIR}/lib/cluster.sh"
+# shellcheck source=lib/chaos.sh
+source "${VAGRANT_DIR}/lib/chaos.sh"
 
 cd "${ROOT}"
 flynn_vagrant_use dev
@@ -50,7 +52,7 @@ DEV_CPUS="${BUILDER_CPUS}"
 
 usage() {
   cat <<EOF
-usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|up|status|ssh|build|cli|bootstrap|update|probe|reload|restart|stop|halt|destroy|teardown> [vm...]
+usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|up|status|ssh|build|cli|bootstrap|update|probe|monitor|chaos|reload|restart|stop|halt|destroy|teardown> [vm...]
 
   --yes, -y              Non-interactive: sudo -n, no TTY prompts (also FLYNN_VAGRANT_YES=1)
   --force-build          Rebuild cluster images on update even if the stamp matches
@@ -67,6 +69,18 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
   update     Build on the builder if Flynn source changed, halt the builder,
              then flynn-host update on running cluster nodes
   probe      Check the live cluster from node1 (hosts, controller, flynn-host list)
+  monitor    Print a health sample every MONITOR_INTERVAL seconds (default 30)
+             until Ctrl-C or MONITOR_COUNT samples: cluster probe, every
+             service at its formation count, tenant HTTP, plugin APIs, the
+             dashboard, and every provider resource's endpoint
+  chaos      Inject CHAOS_ROUNDS faults (default 10), cycling through a
+             shuffled CHAOS_FAULTS list (default: system-job plugin-job
+             datastore-primary datastore-replica tenant-job host-restart
+             node-reboot). After each fault, wait up to CHAOS_TIMEOUT seconds
+             (default 900) for every monitor check to pass; stop at the first
+             round that does not recover. CHAOS_SEED repeats a run,
+             CHAOS_SETTLE (default 20) and CHAOS_NODE_DOWN (default 60) are
+             seconds
   reload     Reboot VMs one at a time like a node failure (vagrant reload
              --no-provision). Remaining hosts recover jobs; the node rejoins
              when flynn-host starts. Wait until Flynn is stable (hosts,
@@ -555,6 +569,12 @@ case "${cmd}" in
     ;;
   probe)
     probe_live_cluster
+    ;;
+  monitor)
+    monitor_cluster
+    ;;
+  chaos)
+    chaos_cluster
     ;;
   reload|restart)
     reload_cluster_rolling "${@:2}"

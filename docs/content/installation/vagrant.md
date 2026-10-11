@@ -73,6 +73,8 @@ Laptop `git push` authenticates with `flynn git-credentials`. `cluster:add` reco
 make vagrant-setup           # first time: boot, build images if needed, bootstrap cluster nodes, connect
 make vagrant-up              # boot dev-builder and dev-node1
 make vagrant-reload          # rolling node-failure reboot; remaining hosts recover, node rejoins
+make vagrant-monitor         # health sample every 30s: Flynn, dashboard, tenant apps, plugin resources
+make vagrant-chaos           # inject random faults and fail if the cluster does not recover
 make vagrant-stop            # halt VMs (disks stay)
 make vagrant-destroy         # delete VMs; ./build-dev stays
 make vagrant-status
@@ -82,8 +84,24 @@ make vagrant-cli             # build the laptop flynn CLI and install it to /usr
 make vagrant-bootstrap       # install the tarball and flynn-host bootstrap on cluster nodes
 make vagrant-update          # build on the builder if Flynn source changed, then flynn-host update --all-nodes on running cluster nodes
 make vagrant                 # help
-# same commands: script/vagrant.sh setup|up|reload|stop|destroy|status|ssh|build|cli|bootstrap|update
+# same commands: script/vagrant.sh setup|up|reload|monitor|chaos|stop|destroy|status|ssh|build|cli|bootstrap|update
 ```
+
+`monitor` prints one health sample every `MONITOR_INTERVAL` seconds (default 30) until Ctrl-C, or `MONITOR_COUNT` samples (its exit status is the last sample's). Each sample runs `guest/check-health.sh` on the first running cluster node and covers: the cluster probe (hosts, controller, scheduler, every postgres peer, every service at its formation count, `status.<domain>`); tenant HTTP; every `*-plugin` service instance answering HTTP; `dashboard.<domain>/.well-known/status`; and a TCP connect to the discoverd leader behind every provider resource URL (platform postgres, redis, postgres, mysql primaries and followers). It never prints credentials or resource env values.
+
+`chaos` waits for a healthy baseline, then injects `CHAOS_ROUNDS` faults (default 10). It shuffles `CHAOS_FAULTS` once and cycles through that order. The default list is every kind:
+
+| Fault | What happens |
+|---|---|
+| `system-job` | `flynn-host stop` a random Layer 1 job (controller, router, discoverd, flannel, status, blobstore, …) |
+| `plugin-job` | stop a random `*-plugin` job (dashboard, datastore APIs, …) |
+| `datastore-primary` | stop the leader job of a random provider resource, forcing a failover |
+| `datastore-replica` | stop a non-leader job of a provider resource |
+| `tenant-job` | stop a random job of a user app |
+| `host-restart` | `systemctl restart flynn-host` on a random node |
+| `node-reboot` | `vagrant halt --force` a random node, wait `CHAOS_NODE_DOWN` seconds (default 60), boot it and start `flynn-host` |
+
+After each fault it waits `CHAOS_SETTLE` seconds (default 20), then up to `CHAOS_TIMEOUT` seconds (default 900) for every monitor check to pass. It stops at the first round that does not recover, prints the failing checks and a summary table, and exits 1. A kind with nothing running (for example no tenant jobs) is skipped. The run prints its `CHAOS_SEED`; set it to repeat the same order and targets, e.g. `make vagrant-chaos CHAOS_ROUNDS=3 CHAOS_FAULTS="datastore-primary node-reboot" CHAOS_SEED=42`.
 
 `reload` / `restart` reboot one VM at a time (`vagrant reload --no-provision`) for every machine already in `.vagrant-dev` (or the names you pass, e.g. `make vagrant-reload VM=dev-node1`). They do not create missing VMs. A reboot is treated as a node failure: jobs are not drained first. Remaining hosts (and cluster-monitor) recover scheduler/controller/tenant HTTP; when the VM is back, `flynn-host.service` starts and the node rejoins via `--peer-ips`. Tenant HTTP is waited for after Flynn is stable. A single-node cluster is down until that VM is back. Cluster nodes use `flynn-host.service` (from `install-flynn`); after a reboot the script starts that unit if the cluster was already bootstrapped. The builder is not started as an operator cluster.
 

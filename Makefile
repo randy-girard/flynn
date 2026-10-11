@@ -122,6 +122,12 @@ vagrant-update: ## Build on the builder, then flynn-host update on running clust
 vagrant-probe: ## Check the live cluster from node1 (non-interactive)
 	$(VAGRANT_NODES) $(VAGRANT) probe $(VAGRANT_YES) $(ARGS)
 
+vagrant-monitor: ## Health sample every MONITOR_INTERVAL s: Flynn, dashboard, tenant apps, plugin resources
+	$(VAGRANT_NODES) $(VAGRANT) monitor $(VAGRANT_YES) $(ARGS)
+
+vagrant-chaos: ## Inject CHAOS_ROUNDS faults (jobs, flynn-host, node power-off); fail if one does not recover
+	$(VAGRANT_NODES) $(VAGRANT) chaos $(VAGRANT_YES) $(ARGS)
+
 vagrant-reload: ## Rolling reboot of laptop-loop VMs; wait for Flynn to settle after each cluster node
 	$(VAGRANT) reload $(VM) $(VAGRANT_YES) $(ARGS)
 
@@ -178,5 +184,5 @@ help: ## Show this help
 
 .PHONY: help build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration install-git-hooks \
 	vagrant vagrant-setup vagrant-up vagrant-status vagrant-ssh vagrant-build vagrant-cli vagrant-bootstrap vagrant-update \
-	vagrant-probe vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
+	vagrant-probe vagrant-monitor vagrant-chaos vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
 	vagrant-smoke-up vagrant-smoke-reload vagrant-smoke-stop vagrant-smoke-destroy test-vagrant

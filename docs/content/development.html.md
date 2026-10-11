@@ -29,7 +29,11 @@ hosts recover jobs (cluster-monitor restarts a missing scheduler), then
 `flynn-host` starts so the node rejoins. Before the next node it waits for
 cluster status, every postgres peer, every service back at its formation count
 (discoverd instances per active process), and tenant HTTP. A single-node
-cluster is down until that VM is back.
+cluster is down until that VM is back. `make vagrant-monitor` prints a health
+sample (Flynn components, dashboard, tenant apps, plugin resources) every 30s;
+`make vagrant-chaos` stops random jobs, restarts `flynn-host`, and powers off
+nodes, and fails if the cluster does not recover (see
+[Vagrant](installation/vagrant.md)).
 `make vagrant-stop` (alias `halt`) powers them off; `make vagrant-destroy`
 (alias `teardown`) deletes the VMs without touching smoke or `./build-dev`.
 Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
