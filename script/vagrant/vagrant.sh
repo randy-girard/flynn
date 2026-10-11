@@ -80,7 +80,10 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
              (default 900) for every monitor check to pass; stop at the first
              round that does not recover. CHAOS_SEED repeats a run,
              CHAOS_SETTLE (default 20) and CHAOS_NODE_DOWN (default 60) are
-             seconds
+             seconds. The monitor runs in the background for the whole run
+             (every CHAOS_MONITOR_INTERVAL seconds, default 15) and a report
+             is written to ./flynn-logs/chaos/<UTC time>/report.txt
+             (CHAOS_REPORT_DIR overrides the directory)
   reload     Reboot VMs one at a time like a node failure (vagrant reload
              --no-provision). Remaining hosts recover jobs; the node rejoins
              when flynn-host starts. Wait until Flynn is stable (hosts,

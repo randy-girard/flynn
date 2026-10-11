@@ -115,14 +115,85 @@ chaos_inject() {
   esac
 }
 
+# chaos_monitor_loop runs in the background for the whole chaos run. Every
+# CHAOS_MONITOR_INTERVAL seconds (default 15) it appends one health sample to
+# $1/samples.tsv: epoch, UTC time, phase (from $1/phase), healthy|UNHEALTHY,
+# failing sections, and the FAIL lines joined by " ;; ".
+chaos_monitor_loop() {
+  local dir="$1" interval="${CHAOS_MONITOR_INTERVAL:-15}" phase status sections fails
+  while [[ -f "${dir}/phase" ]]; do
+    phase="$(cat "${dir}/phase" 2>/dev/null || true)"
+    if chaos_health; then status=healthy; else status=UNHEALTHY; fi
+    sections="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^FAIL \([^:]*\):.*/\1/p' | paste -sd ',' - || true)"
+    fails="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^FAIL //p' | tr '\t' ' ' | awk 'NR > 1 { printf " ;; " } { printf "%s", $0 }' || true)"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%s)" "$(chaos_now)" "${phase}" "${status}" "${sections:--}" "${fails:--}" >> "${dir}/samples.tsv"
+    sleep "${interval}"
+  done
+}
+
+chaos_stop_monitor() {
+  if [[ -n "${CHAOS_MONITOR_PID:-}" ]]; then
+    rm -f "${CHAOS_RUN_DIR}/phase"
+    kill "${CHAOS_MONITOR_PID}" 2>/dev/null || true
+    wait "${CHAOS_MONITOR_PID}" 2>/dev/null || true
+    CHAOS_MONITOR_PID=""
+  fi
+}
+
+# chaos_write_report renders $1/report.txt from rounds.tsv and samples.tsv.
+chaos_write_report() {
+  local dir="$1" seed="$2" rounds="$3" order="$4" started="$5" verdict="$6"
+  {
+    echo "Flynn chaos report"
+    echo "  started   ${started}"
+    echo "  finished  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  result    ${verdict}"
+    echo "  seed      ${seed} (CHAOS_SEED=${seed} repeats this run)"
+    echo "  rounds    ${rounds}, order: ${order}"
+    echo "  nodes     $(flynn_vagrant_get_nodes), tenant apps: ${CHAOS_TENANT_APPS:-none}"
+    echo
+    echo "Rounds"
+    printf '  %-5s %-18s %-14s %-9s %-24s %s\n' ROUND FAULT RESULT RECOVERY "CHECKS FAILED" TARGET
+    awk -F'\t' '
+      FILENAME == ARGV[1] { if ($3 ~ /^round /) { split($3, p, " "); n = p[2]; ns = split($5, s, ","); for (k = 1; k <= ns; k++) if (s[k] != "-" && !seen[n, s[k]]++) secs[n] = secs[n] (secs[n] ? "," : "") s[k] }; next }
+      { printf "  %-5s %-18s %-14s %-9s %-24s %s\n", $1, $2, $6, $7, (secs[$1] ? secs[$1] : "-"), $3 }
+    ' "${dir}/samples.tsv" "${dir}/rounds.tsv"
+    echo
+    awk -F'\t' -v interval="${CHAOS_MONITOR_INTERVAL:-15}" '
+      { total++; if ($4 == "healthy") ok++
+        n = split($5, s, ","); delete now
+        for (k = 1; k <= n; k++) if (s[k] != "-") { now[s[k]] = 1; if (!(s[k] in fails)) { order[++m] = s[k]; first[s[k]] = $2 }; fails[s[k]]++; if (!run[s[k]]) outages[s[k]]++; run[s[k]]++; if (run[s[k]] > longest[s[k]]) longest[s[k]] = run[s[k]] }
+        for (c in run) if (!(c in now)) run[c] = 0
+        if ($6 != "-") { c2 = split($6, f, " ;; "); for (k = 1; k <= c2; k++) { msg = substr(f[k], 1, 150); if (!(msg in msgs)) morder[++mm] = msg; msgs[msg]++ } } }
+      END {
+        printf "Monitor: %d samples every %ss, %d healthy (%d%%)\n", total, interval, ok, (total ? ok * 100 / total : 0)
+        if (m == 0) { print "  every check passed in every sample"; exit }
+        printf "  %-10s %-14s %-8s %-18s %s\n", "CHECK", "FAILED", "OUTAGES", "LONGEST", "FIRST FAILED"
+        for (k = 1; k <= m; k++) { c = order[k]; printf "  %-10s %-14s %-8d ~%-17s %s\n", c, fails[c] "/" total, outages[c], longest[c] * interval "s", first[c] }
+        print ""; print "Failure messages (samples seen)"
+        for (k = 1; k <= mm; k++) printf "  %4d  %s\n", msgs[morder[k]], morder[k]
+      }' "${dir}/samples.tsv"
+    echo
+    echo "Raw data: ${dir}/samples.tsv, ${dir}/rounds.tsv"
+  } > "${dir}/report.txt"
+}
+
 # chaos_cluster runs CHAOS_ROUNDS faults (default 10) cycling through a
 # shuffled CHAOS_FAULTS list. After each fault it waits CHAOS_SETTLE seconds,
 # then up to CHAOS_TIMEOUT seconds for every health section to pass. Stops at
-# the first round that does not recover. CHAOS_SEED repeats a run.
+# the first round that does not recover. CHAOS_SEED repeats a run. A
+# background monitor samples health for the whole run, and a report is
+# written to CHAOS_REPORT_DIR (default ./flynn-logs/chaos/<UTC time>).
 chaos_cluster() {
   require_cluster_nodes
   local rounds="${CHAOS_ROUNDS:-10}" timeout="${CHAOS_TIMEOUT:-900}" settle="${CHAOS_SETTLE:-20}"
-  local seed="${CHAOS_SEED:-$(date +%s)}" kinds=() results=() i j tmp kind start st
+  local seed="${CHAOS_SEED:-$(date +%s)}" kinds=() i j tmp kind start st inject_at
+  local started verdict
+  started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  CHAOS_RUN_DIR="${CHAOS_REPORT_DIR:-${ROOT}/flynn-logs/chaos/$(date -u +%Y%m%dT%H%M%SZ)}"
+  mkdir -p "${CHAOS_RUN_DIR}"
+  : > "${CHAOS_RUN_DIR}/samples.tsv"
+  : > "${CHAOS_RUN_DIR}/rounds.tsv"
   read -r -a kinds <<< "${CHAOS_FAULTS:-${CHAOS_ALL_FAULTS}}"
   RANDOM="${seed}"
   for ((i = ${#kinds[@]} - 1; i > 0; i--)); do
@@ -132,23 +203,33 @@ chaos_cluster() {
   CHAOS_TENANT_APPS="$(list_tenant_apps 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]*$//' || true)"
   echo "chaos: rounds=${rounds} seed=${seed} timeout=${timeout}s order=${kinds[*]}"
   echo "tenant apps: ${CHAOS_TENANT_APPS:-none}"
+  echo "report: ${CHAOS_RUN_DIR}/report.txt"
   if ! chaos_wait_healthy "baseline" 300; then
     echo "cluster is not healthy before chaos; fix that first" >&2
     return 1
   fi
   echo "$(chaos_now) baseline healthy"
+  echo "baseline" > "${CHAOS_RUN_DIR}/phase"
+  chaos_monitor_loop "${CHAOS_RUN_DIR}" < /dev/null &
+  CHAOS_MONITOR_PID=$!
+  trap 'chaos_stop_monitor' EXIT
+  trap 'chaos_stop_monitor; exit 130' INT TERM
+  verdict=""
   for ((i = 1; i <= rounds; i++)); do
     kind="${kinds[$(((i - 1) % ${#kinds[@]}))]}"
     CHAOS_TARGET=""
     st=0
+    echo "round ${i} ${kind}" > "${CHAOS_RUN_DIR}/phase"
+    inject_at="$(date -u +%s)"
     chaos_inject "${kind}" "${seed}-${i}" || st=$?
     if [[ "${st}" -eq 3 ]]; then
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: skipped (${CHAOS_TARGET})"
-      results+=("${i} ${kind} skipped -")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" skipped - >> "${CHAOS_RUN_DIR}/rounds.tsv"
       continue
     elif [[ "${st}" -ne 0 ]]; then
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: fault failed: ${CHAOS_TARGET}" >&2
-      results+=("${i} ${kind} inject-failed -")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" inject-failed - >> "${CHAOS_RUN_DIR}/rounds.tsv"
+      verdict="FAILED: round ${i} ${kind} could not inject the fault"
       break
     fi
     echo "$(chaos_now) round ${i}/${rounds} ${kind}: ${CHAOS_TARGET}"
@@ -156,23 +237,24 @@ chaos_cluster() {
     sleep "${settle}"
     if chaos_wait_healthy "round ${i}" "${timeout}"; then
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: recovered in $((SECONDS - start))s"
-      results+=("${i} ${kind} recovered $((SECONDS - start))s")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" recovered "$((SECONDS - start))s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
     else
-      results+=("${i} ${kind} FAILED >${timeout}s")
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" FAILED ">${timeout}s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
+      verdict="FAILED: round ${i} ${kind} did not recover within ${timeout}s"
       break
     fi
+    echo "between rounds" > "${CHAOS_RUN_DIR}/phase"
   done
-  echo
-  echo "chaos summary (seed ${seed}):"
-  printf '  %-6s %-18s %-14s %s\n' ROUND FAULT RESULT TIME
+  chaos_stop_monitor
+  trap - EXIT INT TERM
   st=0
-  # bash 3.2 + set -u: an empty "${results[@]}" is unbound (CHAOS_ROUNDS=0).
-  if [[ ${#results[@]} -gt 0 ]]; then
-    for tmp in "${results[@]}"; do
-      # shellcheck disable=SC2086
-      printf '  %-6s %-18s %-14s %s\n' ${tmp}
-      case "${tmp}" in *FAILED*|*inject-failed*) st=1 ;; esac
-    done
+  if [[ -n "${verdict}" ]]; then
+    st=1
+  else
+    verdict="PASSED: $(awk -F'\t' '$6 == "recovered"' "${CHAOS_RUN_DIR}/rounds.tsv" | wc -l | tr -d ' ') recovered, $(awk -F'\t' '$6 == "skipped"' "${CHAOS_RUN_DIR}/rounds.tsv" | wc -l | tr -d ' ') skipped"
   fi
+  chaos_write_report "${CHAOS_RUN_DIR}" "${seed}" "${rounds}" "${kinds[*]}" "${started}" "${verdict}"
+  echo
+  cat "${CHAOS_RUN_DIR}/report.txt"
   return "${st}"
 }
