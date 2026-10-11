@@ -61,7 +61,16 @@ var (
 	ErrLeaderWait = errors.New("discoverd: new leader, waiting for 2x TTL")
 
 	ErrShutdown = errors.New("discoverd: shutting down")
+
+	// ErrCatchingUp is returned to subscribers while a restarted store is
+	// still re-applying raft log entries it had before the restart.
+	ErrCatchingUp = errors.New("discoverd: store is catching up, retry")
 )
+
+// DefaultCatchUpTimeout bounds how long subscriptions are refused after Open
+// if the store never re-applies its pre-restart log (e.g. the new leader
+// truncated an uncommitted tail).
+const DefaultCatchUpTimeout = 30 * time.Second
 
 // Store represents a storage backend using the raft protocol.
 type Store struct {
@@ -79,6 +88,15 @@ type Store struct {
 	leaderCh   chan bool                 // channel for notifying when leadership changes
 	leaderTime time.Time                 // time when leadership was established
 	heartbeats map[instanceKey]time.Time // heartbeat recv time for each instance
+
+	// Entries up to replayIndex were in the local log before Open and are
+	// re-applied without broadcasting; subscriptions are refused until
+	// appliedIndex reaches replayIndex.
+	openedAt     time.Time
+	replayIndex  uint64
+	appliedIndex uint64
+	caughtUp     bool
+	replaying    bool
 
 	// Goroutine management
 	wg      sync.WaitGroup
@@ -106,6 +124,10 @@ type Store struct {
 	// The interval between checks for instance expiry on the leader.
 	ExpiryCheckInterval time.Duration
 
+	// The maximum time after Open that subscriptions are refused while the
+	// store re-applies its pre-restart log.
+	CatchUpTimeout time.Duration
+
 	// Returns the current time.
 	// This defaults to time.Now and can be changed for mocking.
 	Now func() time.Time
@@ -130,6 +152,7 @@ func NewStore(path string) *Store {
 
 		InstanceTTL:         DefaultInstanceTTL,
 		ExpiryCheckInterval: DefaultExpiryCheckInterval,
+		CatchUpTimeout:      DefaultCatchUpTimeout,
 
 		LogOutput: os.Stderr,
 		Now:       time.Now,
@@ -203,6 +226,14 @@ func (s *Store) Open() error {
 		return fmt.Errorf("snapshot store: %s", err)
 	}
 
+	replayIndex, err := cacheStore.LastIndex()
+	if err != nil {
+		stableStore.Close()
+		return fmt.Errorf("last log index: %s", err)
+	}
+	s.replayIndex = replayIndex
+	s.caughtUp = false
+
 	// Create raft log.
 	//
 	// The mutex must be unlocked as initializing the raft store may
@@ -222,6 +253,10 @@ func (s *Store) Open() error {
 	}
 
 	s.raft = r
+	s.openedAt = s.Now()
+	if idx := r.AppliedIndex(); idx > s.appliedIndex {
+		s.appliedIndex = idx
+	}
 
 	// Start goroutine to monitor leadership changes.
 	s.wg.Add(1)
@@ -995,6 +1030,16 @@ func (s *Store) Apply(l *raft.Log) interface{} {
 	// Extract the command type and data.
 	typ, cmd := l.Data[0], l.Data[1:]
 
+	// Entries already in the local log before Open are history; applying
+	// them must not look like live changes to subscribers.
+	s.replaying = !s.caughtUp && l.Index <= s.replayIndex
+	defer func() {
+		s.replaying = false
+		if l.Index > s.appliedIndex {
+			s.appliedIndex = l.Index
+		}
+	}()
+
 	// Determine the command type by the first byte.
 	switch typ {
 	case addServiceCommandType:
@@ -1041,10 +1086,37 @@ func (s *Store) Restore(r io.ReadCloser) error {
 	return nil
 }
 
+// catchingUp reports whether the store is still re-applying the raft log it
+// had before Open. Once caught up it stays caught up. Requires s.mu.
+func (s *Store) catchingUp() bool {
+	if s.caughtUp {
+		return false
+	}
+	if s.raft == nil {
+		return true
+	}
+	if s.appliedIndex >= s.replayIndex {
+		s.caughtUp = true
+		return false
+	}
+	if s.CatchUpTimeout > 0 && s.Now().Sub(s.openedAt) > s.CatchUpTimeout {
+		logger.Warn("store did not re-apply its log before the catch-up timeout, serving subscriptions anyway",
+			"fn", "catchingUp", "applied_index", s.appliedIndex, "replay_index", s.replayIndex)
+		s.caughtUp = true
+		return false
+	}
+	return true
+}
+
 // Subscribe creates a subscription to events on a given service.
 func (s *Store) Subscribe(service string, sendCurrent bool, kinds discoverd.EventKind, ch chan *discoverd.Event) stream.Stream {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.catchingUp() {
+		close(ch)
+		return &subscription{ch: ch, err: ErrCatchingUp, closed: true}
+	}
 
 	// Create service subscription list if it doesn't exist yet.
 	if _, ok := s.subscribers[service]; !ok {
@@ -1104,6 +1176,9 @@ func (s *Store) Subscribe(service string, sendCurrent bool, kinds discoverd.Even
 // broadcast sends an event to all subscribers.
 // Requires the mu lock to be obtained.
 func (s *Store) broadcast(event *discoverd.Event) {
+	if s.replaying {
+		return
+	}
 	logBroadcast(event)
 
 	// Retrieve list of subscribers for the service.

@@ -751,6 +751,72 @@ func TestStore_RestoreSnapshot(t *testing.T) {
 	}
 }
 
+// Ensure a restarted store does not replay pre-restart log entries to
+// subscribers as live events: subscriptions are refused until the log is
+// re-applied, then only the current state is sent.
+func TestStore_RestartDoesNotReplayHistory(t *testing.T) {
+	s := MustOpenStore()
+	if err := s.AddService("service0", nil); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	var index uint64
+	for i := 1; i <= 5; i++ {
+		meta := &discoverd.ServiceMeta{Data: []byte(fmt.Sprintf(`"v%d"`, i)), Index: index}
+		if err := s.SetServiceMeta("service0", meta); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		index = meta.Index
+	}
+	s.Store.Close()
+
+	_, port, _ := net.SplitHostPort(s.Listener.Addr().String())
+	ln, err := keepalive.ReusableListen("tcp4", "127.0.0.1:"+port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s = NewStoreWithConfig(StoreConfig{Path: s.Path(), Listener: ln})
+	defer s.Close()
+	if err := s.Open(); err != nil {
+		t.Fatal(err)
+	}
+
+	ch := make(chan *discoverd.Event, 64)
+	if stream := s.Subscribe("service0", true, discoverd.EventKindServiceMeta, ch); stream.Err() != server.ErrCatchingUp {
+		t.Fatalf("expected subscription to be refused while catching up, got err=%v", stream.Err())
+	}
+
+	var sub stream.Stream
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		ch = make(chan *discoverd.Event, 64)
+		sub = s.Subscribe("service0", true, discoverd.EventKindServiceMeta, ch)
+		if sub.Err() == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("store did not catch up: %v", sub.Err())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer sub.Close()
+
+	select {
+	case e := <-ch:
+		if string(e.ServiceMeta.Data) != `"v5"` || e.ServiceMeta.Index != index {
+			t.Fatalf("expected current meta v5@%d, got %s@%d", index, e.ServiceMeta.Data, e.ServiceMeta.Index)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for current meta")
+	}
+	select {
+	case e := <-ch:
+		t.Fatalf("unexpected replayed event: %s@%d", e.ServiceMeta.Data, e.ServiceMeta.Index)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 // A singleton that steps down must re-elect itself. hashicorp/raft disables
 // EnableSingleNode after the first win; without keeping bootstrap mode the
 // follower then has no peers and aborts elections, leaving "no known leader".

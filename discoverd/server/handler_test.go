@@ -691,6 +691,24 @@ func TestHandler_GetLeader_Stream(t *testing.T) {
 	}
 }
 
+// Ensure a stream refused while the store catches up is a 503, so clients
+// back off and retry instead of reconnecting to an empty stream in a loop.
+func TestHandler_Stream_CatchingUp(t *testing.T) {
+	h := NewHandler()
+	h.Store.SubscribeFn = func(service string, sendCurrent bool, kinds discoverd.EventKind, ch chan *discoverd.Event) stream.Stream {
+		close(ch)
+		return catchingUpStream(ch)
+	}
+
+	w := httptest.NewRecorder()
+	r := MustNewHTTPRequest("GET", "/services/abc", nil)
+	r.Header.Set("Accept", "text/event-stream")
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status code: %d", w.Code)
+	}
+}
+
 // Ensure the handler returns an error if there is not a current leader.
 func TestHandler_GetLeader_ErrNoLeader(t *testing.T) {
 	h := NewHandler()
@@ -838,3 +856,10 @@ type erroringChanStream chan *discoverd.Event
 
 func (erroringChanStream) Err() error   { return errors.New("stream marker error") }
 func (erroringChanStream) Close() error { return nil }
+
+// catchingUpStream implements stream.Stream for a subscription the store
+// refused while catching up.
+type catchingUpStream chan *discoverd.Event
+
+func (catchingUpStream) Err() error   { return server.ErrCatchingUp }
+func (catchingUpStream) Close() error { return nil }

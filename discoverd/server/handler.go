@@ -439,6 +439,10 @@ func (h *Handler) serveStream(w http.ResponseWriter, params httprouter.Params, k
 	// Subscribe to events on the store.
 	service := params.ByName("service")
 	stream := h.Store.Subscribe(service, true, kind, ch)
+	if err := stream.Err(); err == ErrCatchingUp {
+		hh.ServiceUnavailableError(w, err.Error())
+		return
+	}
 
 	redacted := make(chan *discoverd.Event, StreamBufferSize)
 	done := make(chan struct{})
