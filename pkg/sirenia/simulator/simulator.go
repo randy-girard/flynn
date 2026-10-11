@@ -494,10 +494,14 @@ func (s *Simulator) SetClusterState(args []string) {
 		return
 	}
 	cs := s.discoverd.ClusterState()
-	if err := json.Unmarshal([]byte(args[0]), &cs.State); err != nil {
+	// Decode into a fresh State: unmarshalling into cs.State would rewrite
+	// instances the peer still references (for example its upstream).
+	var newState *state.State
+	if err := json.Unmarshal([]byte(args[0]), &newState); err != nil {
 		s.log.Error("error decoding state", "err", err)
 		return
 	}
+	cs.State = newState
 	s.discoverd.SetClusterState(cs, false)
 }
 
@@ -783,10 +787,19 @@ func (p *databaseSimulatorClient) Reconfigure(conf *state.Config) error {
 		return nil // nothing to apply, Upstream/Downstreams match - just state update
 	}
 
+	prev := p.Config
 	p.XLogWaiting = ""
 	p.p.log.Info("reconfiguring database")
 	time.Sleep(opLag)
 	p.Config = conf
+	// A caught-up sync re-pointed within the same generation (an upstream or
+	// downstream moved to a new address) keeps its replication position.
+	if prev != nil && prev.Role == state.RoleSync && conf.Role == state.RoleSync &&
+		prev.State != nil && conf.State != nil && prev.State.Generation == conf.State.Generation {
+		if cmp, err := dxlog.Compare(s.State.InitWAL, p.CurXLog); err == nil && cmp < 0 {
+			return nil
+		}
+	}
 	p.updateXlog(s)
 
 	return nil

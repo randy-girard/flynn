@@ -2532,6 +2532,84 @@ func TestSyncRepointsDownstreamWhenAsyncMoves(t *testing.T) {
 	})
 }
 
+// TestSyncRepointsUpstreamWhenPrimaryMoves covers a primary job replaced at a
+// new address that reuses its data volume (same identity). The primary
+// rewrites State.Primary without a generation change; the sync must re-point
+// its upstream, or it streams from the dead address while the primary waits
+// for it in waitForSync (observed with platform postgres on 2026-10-11).
+func TestSyncRepointsUpstreamWhenPrimaryMoves(t *testing.T) {
+	node2Moved := movedNode(4, "node2", 4)
+
+	gen1 := &state.State{
+		Generation: 1,
+		Primary:    node(2, 1),
+		Sync:       node(1, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	gen1Moved := &state.State{
+		Generation: 1,
+		Primary:    node2Moved,
+		Sync:       node(1, 2),
+		Async:      []*discoverd.Instance{node(3, 3)},
+		InitWAL:    xlog.Zero(),
+	}
+	pgSync := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RoleSync,
+			Upstream:   node(2, 1),
+			Downstream: node(3, 3),
+		},
+		CurXLog: "0/0000000A",
+	}
+	pgSyncMoved := &simulator.DbInfo{
+		Online: true,
+		Config: &state.Config{
+			Role:       state.RoleSync,
+			Upstream:   node2Moved,
+			Downstream: node(3, 3),
+		},
+		CurXLog: "0/0000000A",
+	}
+
+	runSteps(t, false, []step{
+		{Cmd: "addpeer"},
+		{Cmd: "addpeer node1"},
+		{Cmd: "addpeer"},
+		{Cmd: "bootstrap node2 node1"},
+		{Cmd: "startPeer"},
+		{Cmd: "catchUp"},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RoleSync,
+					State: gen1,
+					Peers: []*discoverd.Instance{node(2, 1), node(1, 2), node(3, 3)},
+				},
+				Db: pgSync,
+			},
+		},
+		{Cmd: "echo test: primary publishes itself at its new address"},
+		{Cmd: "movepeer node2"},
+		{Cmd: "setClusterState", JSON: gen1Moved},
+		{
+			Cmd: "peer",
+			Check: &simulator.PeerSimInfo{
+				Peer: &state.PeerInfo{
+					ID:    node1ID,
+					Role:  state.RoleSync,
+					State: gen1Moved,
+					Peers: []*discoverd.Instance{node2Moved, node(1, 2), node(3, 3)},
+				},
+				Db: pgSyncMoved,
+			},
+		},
+	})
+}
+
 // TestDeposedPeerAutoRejoin verifies that when a deposed peer re-registers in
 // discoverd the primary removes it from Deposed and adds it as an async, so
 // clusters recover after rolling restarts without updater-side repair.
@@ -2628,8 +2706,9 @@ func TestPrimaryRefreshDownstreamOnSyncReplacement(t *testing.T) {
 		Async:      []*discoverd.Instance{node(3, 3)},
 		InitWAL:    xlog.Zero(),
 	}
+	// Only cluster state changes; the simulated discoverd peer list keeps
+	// the original sync instance.
 	peersGen1 := []*discoverd.Instance{node(1, 1), oldSync, node(3, 3)}
-	peersGen2 := []*discoverd.Instance{node(1, 1), newSync, node(3, 3)}
 
 	pgPrimary := &simulator.DbInfo{
 		Online: true,
@@ -2645,7 +2724,9 @@ func TestPrimaryRefreshDownstreamOnSyncReplacement(t *testing.T) {
 			Role:       state.RolePrimary,
 			Downstream: newSync,
 		},
-		CurXLog: "0/0000000A",
+		// The simulated database advances xlog on the reconfigure that
+		// re-points synchronous replication at the replacement.
+		CurXLog: "0/00000014",
 	}
 
 	runSteps(t, false, []step{
@@ -2676,7 +2757,7 @@ func TestPrimaryRefreshDownstreamOnSyncReplacement(t *testing.T) {
 					ID:    node1ID,
 					Role:  state.RolePrimary,
 					State: gen2,
-					Peers: peersGen2,
+					Peers: peersGen1,
 				},
 				Db: pgPrimaryUpdated,
 			},

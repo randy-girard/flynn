@@ -653,10 +653,11 @@ func (p *Peer) evalClusterState() {
 	if p.Info().Role == RoleSync {
 		if !p.peerIsPresent(p.Info().State.Primary) {
 			p.startTakeover("primary gone", p.Info().State.InitWAL)
-		} else if len(p.Info().State.Async) > 0 && !peersEqual(p.downstream, p.Info().State.Async[0]) {
-			// peersEqual (not identity-only) so an async replaced at a new
-			// address gets replication re-pointed; see evalClusterState's
-			// primary reconciliation.
+		} else if !peersEqual(p.upstream, p.Info().State.Primary) ||
+			len(p.Info().State.Async) > 0 && !peersEqual(p.downstream, p.Info().State.Async[0]) {
+			// peersEqual (not identity-only) so a primary or async replaced at
+			// a new address gets replication re-pointed; see
+			// evalClusterState's primary reconciliation.
 			p.assumeSync()
 		}
 		return
