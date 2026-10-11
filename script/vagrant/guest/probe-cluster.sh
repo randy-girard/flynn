@@ -106,6 +106,69 @@ if [[ "${PROBE_SIRENIA:-}" == "1" ]]; then
   echo "postgres peers healthy (${pg_have})"
 fi
 
+# Rolling reloads must not reboot the next node while any service is below its
+# formation count: a two-instance app whose replacement is still starting would
+# have no ready backend left when the next node goes down. Compare each active
+# formation's discoverd instances with its process count (omni x hosts).
+if [[ "${PROBE_FULL_STRENGTH:-}" == "1" ]]; then
+  if ! python3 - "${count}" <<'PY'
+import base64, json, sys, urllib.request
+
+hosts = int(sys.argv[1])
+env = json.load(open("/etc/flynn/host.json")).get("env") or {}
+ckey, dkey = env.get("CONTROLLER_KEY") or "", env.get("DISCOVERD_AUTH_KEY") or ""
+
+
+def get(url, headers):
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=5) as r:
+        return json.load(r)
+
+
+def instances(service):
+    return get("http://127.0.0.1:1111/services/%s/instances" % service, {"Auth-Key": dkey}) or []
+
+
+auth = "Basic " + base64.b64encode((":" + ckey).encode()).decode()
+forms = None
+for inst in instances("controller"):
+    try:
+        forms = get("http://%s/formations?active=true" % inst["addr"],
+                    {"Authorization": auth, "Accept": "application/json"}) or []
+        break
+    except Exception:
+        continue
+if forms is None:
+    raise SystemExit("controller formations unavailable")
+want = {}
+for f in forms:
+    procs = (f.get("release") or {}).get("processes") or {}
+    for name, n in (f.get("processes") or {}).items():
+        if n <= 0:
+            continue
+        p = procs.get(name) or {}
+        n = n * hosts if p.get("omni") else n
+        names = [(pt.get("service") or {}).get("name") for pt in p.get("ports") or []]
+        names = [s for s in names if s] or ([p["service"]] if p.get("service") else [])
+        for s in names:
+            want[s] = want.get(s, 0) + n
+short = []
+for s, n in sorted(want.items()):
+    try:
+        have = len(instances(s))
+    except Exception:
+        have = 0
+    if have < n:
+        short.append("%s %d/%d" % (s, have, n))
+if short:
+    raise SystemExit("services below formation count: " + ", ".join(short))
+print("services at formation count (%d)" % len(want))
+PY
+  then
+    exit 1
+  fi
+fi
+
 # Cluster status app (status.<domain>). LAN clients are on the whitelist.
 # Require an overall healthy payload so a rolling reload does not continue
 # while Layer 1 services are still coming back.

@@ -235,6 +235,16 @@ if ! grep -Fq 'PROBE_SIRENIA' "${mod}/guest/probe-cluster.sh"; then
   echo "probe-cluster.sh must support PROBE_SIRENIA postgres peer checks" >&2
   exit 1
 fi
+if ! grep -Fq 'PROBE_FULL_STRENGTH="${sirenia}" probe_live_cluster' "${script}" \
+  || ! grep -Fq 'PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-}' "${script}"; then
+  echo "rolling reload must wait for every service to reach its formation count before the next node" >&2
+  exit 1
+fi
+if ! grep -Fq 'formations?active=true' "${mod}/guest/probe-cluster.sh" \
+  || ! grep -Fq 'services below formation count' "${mod}/guest/probe-cluster.sh"; then
+  echo "probe-cluster.sh PROBE_FULL_STRENGTH must compare discoverd instances with active formations" >&2
+  exit 1
+fi
 if ! grep -E '^  update\)' -A20 "${script}" | grep -Fq 'wait_cluster_stable'; then
   echo "vagrant-update must wait for cluster status after flynn-host update (blobstore can be briefly unhealthy)" >&2
   exit 1

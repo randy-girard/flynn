@@ -143,7 +143,9 @@ start_one_cluster_node() {
 }
 
 # wait_cluster_stable retries probe_live_cluster until hosts, controller, and
-# status.<domain> are healthy. Used between rolling node reloads.
+# status.<domain> are healthy. Used between rolling node reloads. A third
+# argument of 1 also waits for postgres peers and for every service to be back
+# at its formation count.
 wait_cluster_stable() {
   local label="${1:-cluster}"
   local tries="${2:-60}"
@@ -151,7 +153,7 @@ wait_cluster_stable() {
   local i st=0
   for i in $(seq 1 "${tries}"); do
     set +e
-    PROBE_QUICK=1 PROBE_SIRENIA="${sirenia}" probe_live_cluster
+    PROBE_QUICK=1 PROBE_SIRENIA="${sirenia}" PROBE_FULL_STRENGTH="${sirenia}" probe_live_cluster
     st=$?
     set -e
     if [[ "${st}" -eq 0 ]]; then
@@ -481,7 +483,7 @@ probe_live_cluster() {
   ip="$(flynn_vagrant_cluster_ip)"
   min_hosts="$(flynn_vagrant_get_nodes)"
   echo "probing live cluster on ${node} (${ip}, min-hosts=${min_hosts})"
-  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} script/vagrant/guest/probe-cluster.sh"
+  run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-} script/vagrant/guest/probe-cluster.sh"
 }
 
 update_running_cluster() {

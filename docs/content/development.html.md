@@ -26,8 +26,10 @@ can sit beside smoke, use `script/vagrant.sh` / `make vagrant-setup`
 **dev-node1** at `192.168.57.20` runs the live cluster). `make vagrant-reload`
 (alias `restart`) reboots those VMs one at a time like a node failure: remaining
 hosts recover jobs (cluster-monitor restarts a missing scheduler), then
-`flynn-host` starts so the node rejoins. Wait for cluster status and tenant HTTP
-before the next node. A single-node cluster is down until that VM is back.
+`flynn-host` starts so the node rejoins. Before the next node it waits for
+cluster status, every postgres peer, every service back at its formation count
+(discoverd instances per active process), and tenant HTTP. A single-node
+cluster is down until that VM is back.
 `make vagrant-stop` (alias `halt`) powers them off; `make vagrant-destroy`
 (alias `teardown`) deletes the VMs without touching smoke or `./build-dev`.
 Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
