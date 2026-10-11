@@ -1,8 +1,9 @@
 // Package resname builds database resource app names.
 //
-// MySQL and the other engines use <prefix>-<word>-<6 letters>, for example
-// mysql-harbor-kxmnpq. Postgres and Redis instances use <engine>-<word>-<5
-// digits>, for example postgresql-concave-48291 and redis-harbor-48291.
+// Postgres, Redis and MySQL instances use <engine>-<word>-<5 digits>, for
+// example postgresql-concave-48291, redis-harbor-48291 and mysql-inlet-48291.
+// The other engines use <prefix>-<word>-<6 letters>, for example
+// mongodb-harbor-kxmnpq.
 // Callers retry when the name is already taken so two resources never share it.
 package resname
 
@@ -69,12 +70,12 @@ func Name(prefix string, taken func(string) bool) string {
 }
 
 // IsolatedService is a provisioned datastore app (postgresql-concave-48291,
-// redis-harbor-48291, or the older pg-harbor-kxmnpq / redis-harbor-abcdef
-// forms). User jobs resolve leader.<name>.discoverd for these; other
-// discoverd names stay internal.
+// redis-harbor-48291, mysql-inlet-48291, or the older pg-harbor-kxmnpq /
+// redis-harbor-abcdef / mysql-harbor-kxmnpq forms). User jobs resolve
+// leader.<name>.discoverd for these; other discoverd names stay internal.
 func IsolatedService(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if postgresInstanceName(name) || redisInstanceName(name) {
+	if postgresInstanceName(name) || redisInstanceName(name) || mysqlInstanceName(name) {
 		return true
 	}
 	i := strings.IndexByte(name, '-')
@@ -130,39 +131,19 @@ func Canonical(command, name string) string {
 }
 
 func postgresInstanceName(name string) bool {
-	const p = "postgresql-"
-	if !strings.HasPrefix(name, p) {
-		return false
-	}
-	rest := name[len(p):]
-	j := strings.LastIndexByte(rest, '-')
-	if j <= 0 || j == len(rest)-1 {
-		return false
-	}
-	suffix := rest[j+1:]
-	if n := len(suffix); n < 5 || n > 8 {
-		return false
-	}
-	for _, c := range suffix {
-		if c < '0' || c > '9' {
-			return false
-		}
-	}
-	owner := rest[:j]
-	if owner == "" {
-		return false
-	}
-	for _, c := range owner {
-		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' {
-			continue
-		}
-		return false
-	}
-	return owner[0] != '-' && owner[len(owner)-1] != '-'
+	return digitInstanceName("postgresql-", name)
 }
 
 func redisInstanceName(name string) bool {
-	const p = "redis-"
+	return digitInstanceName("redis-", name)
+}
+
+func mysqlInstanceName(name string) bool {
+	return digitInstanceName("mysql-", name)
+}
+
+// digitInstanceName matches <p><owner>-<5 to 8 digits>.
+func digitInstanceName(p, name string) bool {
 	if !strings.HasPrefix(name, p) {
 		return false
 	}

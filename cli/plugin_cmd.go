@@ -167,8 +167,10 @@ func instanceNamePattern(command string) string {
 		return `postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|pg-[a-z]+-[a-z]{6,8}`
 	case "redis":
 		return `redis-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z]+-[a-z]{6,8}`
+	case "mysql":
+		return `mysql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|mysql-[a-z]+-[a-z]{6,8}`
 	case "":
-		return `[a-z]+-[a-z]+-[a-z]{6,8}|postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}`
+		return `[a-z]+-[a-z]+-[a-z]{6,8}|postgresql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|redis-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}|mysql-[a-z0-9]+(?:-[a-z0-9]+)*-[0-9]{5,8}`
 	default:
 		return regexp.QuoteMeta(command) + `-[a-z]+-[a-z]{6,8}`
 	}

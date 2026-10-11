@@ -539,6 +539,10 @@ func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	if name != "redis-harbor-48291" || strings.Join(rest, " ") != "redis-cli -- PING" {
 		t.Fatalf("redis digit name %q rest %#v", name, rest)
 	}
+	name, rest = peelResourceName("mysql", []string{"mysql", "mysql-inlet-48291", "--", "-e", "SELECT 1"})
+	if name != "mysql-inlet-48291" || strings.Join(rest, " ") != "mysql -- -e SELECT 1" {
+		t.Fatalf("mysql digit name %q rest %#v", name, rest)
+	}
 	name, rest = peelResourceName("redis", []string{"redis-cli", "redis-kelp-20218"})
 	if name != "redis-kelp-20218" || strings.Join(rest, " ") != "redis-cli" {
 		t.Fatalf("redis:cli NAME without --: name %q rest %#v", name, rest)
