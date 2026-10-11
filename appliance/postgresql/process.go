@@ -1543,6 +1543,8 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 		replTimeout := time.NewTimer(p.replTimeout)
 		defer replTimeout.Stop()
 		seenRepl := false
+		replState := ""
+		var lastProgressLog time.Time
 		lastFlushed := p.XLog().Zero()
 		log := p.log.New(
 			"fn", "waitForSync",
@@ -1603,6 +1605,17 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 			}
 
 			sent, flushed, err := p.checkReplStatus(inst.Meta[IDKey])
+			if err != nil && err.Error() != replState {
+				replState = err.Error()
+				if err == ErrNoReplicationStatus {
+					log.Debug("downstream not in pg_stat_replication yet")
+				} else {
+					log.Error("error checking replication status", "err", err)
+				}
+			} else if err == nil && replState != "streaming" {
+				replState = "streaming"
+				log.Info("downstream replication streaming", "sent", sent, "flushed", flushed)
+			}
 			if err != nil {
 				// Primary (enableWrites): a replica in discoverd that never
 				// appears in pg_stat_replication (WAL recycled after a crash)
@@ -1654,7 +1667,10 @@ func (p *Process) waitForSync(inst *discoverd.Instance, enableWrites bool) {
 				break
 			}
 
-			log.Debug("continuing replication check")
+			if time.Since(lastProgressLog) >= replProgressLogInterval {
+				lastProgressLog = time.Now()
+				log.Debug("continuing replication check")
+			}
 			if !sleep() {
 				return
 			}
@@ -1709,26 +1725,25 @@ func (p *Process) enablePrimaryWrites(log log15.Logger) error {
 
 var ErrNoReplicationStatus = errors.New("no replication status")
 
-func (p *Process) checkReplStatus(name string) (sent, flushed xlog.Position, err error) {
-	log := p.log.New("fn", "checkReplStatus", "name", name)
-	log.Debug("checking replication status")
+// replProgressLogInterval limits how often waitForSync logs catch-up progress.
+const replProgressLogInterval = 30 * time.Second
 
+// checkReplStatus does not log: waitForSync calls it every checkInterval and
+// logs only when the result changes.
+func (p *Process) checkReplStatus(name string) (sent, flushed xlog.Position, err error) {
 	var s, f pgx.NullString
 	err = p.db.QueryRow(`
 SELECT sent_lsn, flush_lsn
 FROM pg_stat_replication
 WHERE application_name = $1`, name).Scan(&s, &f)
 	if err != nil && err != pgx.ErrNoRows {
-		log.Error("error checking replication status", "err", err)
 		return
 	}
 	sent, flushed = xlog.Position(s.String), xlog.Position(f.String)
 	if err == pgx.ErrNoRows || sent == "" || flushed == "" {
 		err = ErrNoReplicationStatus
-		log.Debug("no replication status")
 		return
 	}
-	log.Debug("got replication status", "sent_location", sent, "flush_location", flushed)
 	return
 }
 

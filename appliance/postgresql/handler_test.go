@@ -3,6 +3,7 @@ package postgresql
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -82,5 +83,44 @@ func TestHandlerAdminHTTPRequiresAuth(t *testing.T) {
 	h.ServeHTTP(bearerRec, bearer)
 	if bearerRec.Code != 200 {
 		t.Fatalf("bearer status=%d", bearerRec.Code)
+	}
+}
+
+// /status is polled every few seconds; while postgres is offline the same
+// Info error must be logged once, not on every poll.
+func TestHandlerStatusLogsInfoErrorOnce(t *testing.T) {
+	var mu sync.Mutex
+	var msgs []string
+	h := NewHandler()
+	h.Logger = log15.New()
+	h.Logger.SetHandler(log15.FuncHandler(func(r *log15.Record) error {
+		mu.Lock()
+		msgs = append(msgs, r.Msg)
+		mu.Unlock()
+		return nil
+	}))
+	h.AuthKey = "test-appliance-key"
+	h.Process = NewProcess(Config{Logger: log15.New()})
+
+	for i := 0; i < 5; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/status", nil)
+		req.SetBasicAuth("", h.AuthKey)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("status=%d", rec.Code)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, m := range msgs {
+		if m == "error getting postgres info" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 info error log, got %d (%v)", n, msgs)
 	}
 }

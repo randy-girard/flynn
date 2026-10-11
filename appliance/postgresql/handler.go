@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
@@ -24,6 +25,9 @@ type Handler struct {
 	// AuthKey is the cluster secret required on every route except
 	// /.well-known/status. Empty denies those routes (fail closed).
 	AuthKey string
+
+	infoErrMtx sync.Mutex
+	infoErr    string
 }
 
 // NewHandler returns a new instance of Handler.
@@ -83,13 +87,32 @@ func (h *Handler) handleGetStatus(w http.ResponseWriter, req *http.Request, _ ht
 	if h.Process != nil {
 		var err error
 		status.Database, err = h.Process.Info()
-		if err != nil {
-			// Log the error, but don't return a 500. We will always have some
-			// information to return, but postgres may not be online.
-			logger.Error("error getting postgres info", "err", err)
-		}
+		// Log the error, but don't return a 500. We will always have some
+		// information to return, but postgres may not be online.
+		h.logInfoErr(logger, err)
 	}
 	httphelper.JSON(w, 200, status)
+}
+
+// logInfoErr logs Info errors only when they change: /status is polled every
+// few seconds and postgres is routinely offline while a peer rejoins.
+func (h *Handler) logInfoErr(logger log15.Logger, err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	h.infoErrMtx.Lock()
+	prev := h.infoErr
+	h.infoErr = msg
+	h.infoErrMtx.Unlock()
+	if msg == prev {
+		return
+	}
+	if err != nil {
+		logger.Error("error getting postgres info", "err", err)
+	} else {
+		logger.Info("postgres info available again", "previous_err", prev)
+	}
 }
 
 func (h *Handler) handlePostStop(w http.ResponseWriter, req *http.Request, _ httprouter.Params) {
