@@ -83,7 +83,7 @@ chaos_wait_healthy() {
 
 # chaos_inject applies one fault and sets CHAOS_TARGET. Exit 3 = nothing to hit.
 chaos_inject() {
-  local kind="$1" seed="$2" nodes=() name node out st=0
+  local kind="$1" seed="$2" nodes=() name node out st=0 attempt
   while IFS= read -r name; do
     [[ -n "${name}" ]] && nodes+=("${name}")
   done < <(flynn_vagrant_running_cluster_nodes)
@@ -102,13 +102,25 @@ chaos_inject() {
       start_one_cluster_node "${node}" || true
       ;;
     *)
-      set +e
-      out="$(run_as_root_on "${nodes[0]}" "cd ${SRC} && FAULT=${kind} SEED=${seed} script/vagrant/guest/chaos-fault.sh" 2>&1)"
-      st=$?
-      set -e
-      CHAOS_TARGET="$(printf '%s\n' "${out}" | sed -n 's/^target //p' | tail -1)"
+      # A vagrant ssh that fails before the guest script prints a target
+      # (for example right after a node boots) is retried; the fault itself
+      # has not run yet.
+      for attempt in 1 2 3; do
+        set +e
+        out="$(run_as_root_on "${nodes[0]}" "cd ${SRC} && FAULT=${kind} SEED=${seed} script/vagrant/guest/chaos-fault.sh" 2>&1)"
+        st=$?
+        set -e
+        CHAOS_TARGET="$(printf '%s\n' "${out}" | sed -n 's/^target //p' | tail -1)"
+        if [[ "${st}" -eq 0 || "${st}" -eq 3 || -n "${CHAOS_TARGET}" ]]; then
+          break
+        fi
+        sleep 10
+      done
       if [[ "${st}" -ne 0 ]]; then
-        [[ -n "${CHAOS_TARGET}" ]] || CHAOS_TARGET="$(printf '%s\n' "${out}" | tail -1)"
+        if [[ -n "${CHAOS_RUN_DIR:-}" ]]; then
+          printf '%s\n' "${out}" > "${CHAOS_RUN_DIR}/inject-${kind}.log"
+        fi
+        [[ -n "${CHAOS_TARGET}" ]] || CHAOS_TARGET="$(printf '%s\n' "${out}" | grep -v '^[[:space:]]*$' | tail -3 | paste -sd ';' -)"
         return "${st}"
       fi
       ;;
