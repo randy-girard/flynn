@@ -322,14 +322,21 @@ func (j Jobs) WithFormationAndType(f *Formation, typ string) sortJobs {
 	return jobs
 }
 
-// sortJobs sorts Jobs in reverse chronological order based on their StartedAt time
+// sortJobs sorts Jobs in reverse chronological order based on their StartedAt
+// time. A job the host has created but not started yet has no StartedAt and
+// sorts as the newest, so surplus stops pick it over a job already running.
 type sortJobs []*Job
 
-func (s sortJobs) Len() int           { return len(s) }
-func (s sortJobs) Less(i, j int) bool { return s[i].StartedAt.Sub(s[j].StartedAt) > 0 }
-func (s sortJobs) Swap(i, j int)      { s[i], s[j] = s[j], s[i] }
-func (s sortJobs) Sort()              { sort.Sort(s) }
-func (s sortJobs) SortReverse()       { sort.Sort(sort.Reverse(s)) }
+func (s sortJobs) Len() int { return len(s) }
+func (s sortJobs) Less(i, j int) bool {
+	if iz, jz := s[i].StartedAt.IsZero(), s[j].StartedAt.IsZero(); iz != jz {
+		return iz
+	}
+	return s[i].StartedAt.Sub(s[j].StartedAt) > 0
+}
+func (s sortJobs) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
+func (s sortJobs) Sort()         { sort.Sort(s) }
+func (s sortJobs) SortReverse()  { sort.Sort(sort.Reverse(s)) }
 
 func (j Jobs) GetHostJobCounts(key utils.FormationKey, typ string) map[string]int {
 	counts := make(map[string]int)

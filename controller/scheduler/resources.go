@@ -206,6 +206,22 @@ func (s *Scheduler) hostPersistentSingletonCount(hostID string) int {
 	return n
 }
 
+// omniHostAvailable reports whether a placeable, tag-matching host still
+// lacks its share of the job's omni type. Non-omni jobs always report true.
+func (s *Scheduler) omniHostAvailable(job *Job) bool {
+	perHost, omni := job.omniPerHost()
+	if !omni {
+		return true
+	}
+	counts := s.jobs.GetHostJobCounts(job.Formation.key(), job.Type)
+	for _, h := range s.hosts {
+		if hostCanPlace(h) && job.TagsMatchHost(h) && hostJobCount(counts, h.ID) < perHost {
+			return true
+		}
+	}
+	return false
+}
+
 // pickHost chooses a tag-matching host. Jobs whose runtime guarantees
 // resources only land on hosts with remaining requested CPU/memory (they stay
 // pending if nothing fits). Shared runtimes pack onto the least-loaded host

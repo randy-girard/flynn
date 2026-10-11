@@ -788,6 +788,91 @@ func (TestSuite) TestJobPlacementTags(c *C) {
 	}
 }
 
+// When a rebooted host reports its old discoverd job as stopped, the restart
+// races the host's own resurrection. discoverd's /data volume pins the
+// restart to that host, so the omni check must run before volume placement
+// or the host ends up with two discoverd jobs.
+func (TestSuite) TestOmniPlacementWithVolumeBlocksWhenEveryHostHasOne(c *C) {
+	s := &Scheduler{
+		isLeader:          typeconv.BoolPtr(true),
+		jobs:              make(Jobs),
+		volumes:           make(map[string]*Volume),
+		hostVolumeIDs:     map[string]map[string]struct{}{"host3": {"vol3": {}}},
+		controllerPersist: make(chan interface{}),
+		hosts: map[string]*Host{
+			"host1": {ID: "host1", Healthy: true},
+			"host2": {ID: "host2", Healthy: true},
+			"host3": {ID: "host3", Healthy: true},
+		},
+		logger: log15.New(),
+	}
+	defer close(s.controllerPersist)
+	go func() {
+		for range s.controllerPersist {
+		}
+	}()
+	formation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: "discoverd"},
+		Release: &ct.Release{ID: "release", Processes: map[string]ct.ProcessType{
+			"app": {Omni: true, Volumes: []ct.VolumeReq{{Path: "/data"}}},
+		}},
+		Artifacts: []*ct.Artifact{{}},
+		Processes: Processes{"app": 1},
+	})
+	formation.RectifyOmni(3)
+	newJob := func(id, hostID string, state JobState) *Job {
+		return s.jobs.Add(&Job{ID: id, AppID: "discoverd", ReleaseID: "release", HostID: hostID, Formation: formation, Type: "app", State: state})
+	}
+	for _, h := range []string{"host1", "host2", "host3"} {
+		newJob("running-"+h, h, JobStateStarting)
+	}
+	s.volumes["vol3"] = &Volume{Volume: ct.Volume{
+		ID:        "vol3",
+		HostID:    "host3",
+		AppID:     "discoverd",
+		ReleaseID: "release",
+		JobType:   "app",
+		State:     ct.VolumeStateCreated,
+		VolumeReq: ct.VolumeReq{Path: "/data"},
+	}}
+
+	job := newJob("restart", "", JobStatePending)
+	req := &PlacementRequest{Job: job, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	c.Assert(<-req.Err, Equals, ErrOmniHostsFull)
+	c.Assert(job.State, Equals, JobStateBlocked)
+	c.Assert(job.Volumes, HasLen, 0)
+	c.Assert(s.volumes["vol3"].JobID, IsNil)
+
+	s.jobs["running-host3"].State = JobStateStopped
+	job.State = JobStatePending
+	req = &PlacementRequest{Job: job, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	c.Assert(<-req.Err, IsNil)
+	c.Assert(req.Host.ID, Equals, "host3")
+	c.Assert(job.Volumes, HasLen, 1)
+	c.Assert(job.Volumes[0].ID, Equals, "vol3")
+}
+
+// The host reports a just-created job with no StartedAt. It must sort as the
+// newest so a surplus stop does not take down the job that is already up.
+func (TestSuite) TestWithFormationAndTypeSortsUnstartedJobNewest(c *C) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		App:     &ct.App{ID: "app"},
+		Release: &ct.Release{ID: "release"},
+	})
+	jobs := Jobs{
+		"up":      {ID: "up", Formation: formation, Type: "app", State: JobStateStarting, StartedAt: time.Now()},
+		"created": {ID: "created", Formation: formation, Type: "app", State: JobStateStarting},
+		"older":   {ID: "older", Formation: formation, Type: "app", State: JobStateRunning, StartedAt: time.Now().Add(-time.Minute)},
+	}
+	sorted := jobs.WithFormationAndType(formation, "app")
+	c.Assert(sorted, HasLen, 3)
+	c.Assert(sorted[0].ID, Equals, "created")
+	c.Assert(sorted[1].ID, Equals, "up")
+	c.Assert(sorted[2].ID, Equals, "older")
+}
+
 func (TestSuite) TestScaleCriticalApp(c *C) {
 	s := runTestScheduler(c, nil, true)
 	defer s.Stop()

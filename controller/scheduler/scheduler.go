@@ -49,6 +49,9 @@ var (
 	// retries until the old job is stopping so we never allocate a second
 	// empty dataset (which would look like a successful deploy of a blank DB).
 	ErrVolumeInUse = errors.New("matching persistent volume is still in use")
+	// ErrOmniHostsFull is returned when every host that may run an omni job
+	// already runs its share, e.g. a restart for a host that is rebooting.
+	ErrOmniHostsFull = errors.New("every matching host already runs its omni jobs")
 )
 
 type Scheduler struct {
@@ -1401,6 +1404,15 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	// start
 	req.Job.HostID = ""
 
+	// checked before volumes too: discoverd's volume pins it to a host
+	// without going through pickHost
+	if !s.omniHostAvailable(req.Job) {
+		req.Job.State = JobStateBlocked
+		s.persistJob(req.Job)
+		req.Error(ErrOmniHostsFull)
+		return
+	}
+
 	// if the job has volume requests, assign existing volumes if
 	// possible (which will lead to the job being scheduled on the
 	// same host as the volumes) or initialize new ones
@@ -1892,6 +1904,9 @@ outer:
 			return
 		} else if err == ErrNoHostsMatchTags {
 			log.Warn("unable to place job as tags don't match any hosts")
+			return
+		} else if err == ErrOmniHostsFull {
+			log.Info("not placing omni job as every matching host already runs one")
 			return
 		} else if err == ErrNoHostCapacity {
 			log.Warn("unable to place job as no host has enough reserved CPU or memory")
