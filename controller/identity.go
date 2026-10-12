@@ -27,7 +27,10 @@ func apiFromContext(ctx context.Context) *controllerAPI {
 }
 
 func (c *controllerAPI) actor(ctx context.Context) string {
-	tok := authz.TokenFromContext(ctx)
+	return actorFromToken(authz.TokenFromContext(ctx))
+}
+
+func actorFromToken(tok *authorizer.Token) string {
 	if tok == nil || tok.ClusterKey {
 		return "cluster-key"
 	}

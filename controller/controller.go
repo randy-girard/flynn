@@ -361,6 +361,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 	httpRouter.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
 	httpRouter.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
+	httpRouter.GET("/cluster/audit", httphelper.WrapHandler(api.ListClusterAudit))
+	httpRouter.DELETE("/cluster/audit", httphelper.WrapHandler(api.PruneClusterAudit))
 
 	httpRouter.GET("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GetGitHubApp)))
 	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.UpdateGitHubApp)))
@@ -481,7 +483,8 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			httphelper.Forbidden(w, "this credential is not allowed to perform this operation on the controller")
 			return
 		}
-		if rw, ok := w.(*httphelper.ResponseWriter); ok {
+		rw, isRW := w.(*httphelper.ResponseWriter)
+		if isRW {
 			ctx := context.WithValue(rw.Context(), authz.TokenContextKey, auth)
 			ctx = context.WithValue(ctx, apiContextKey{}, api)
 			rw.SetContext(ctx)
@@ -491,6 +494,9 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			r.Header.Set("Flynn-Auth-User", auth.User)
 		}
 		main.ServeHTTP(w, r)
+		if isRW && api != nil && api.tenancy != nil {
+			api.auditRequest(auth, r, rw.Status())
+		}
 	}))
 }
 

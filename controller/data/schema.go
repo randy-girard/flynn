@@ -1307,6 +1307,9 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)`,
 	)
+	migrations.Add(73,
+		`CREATE INDEX core_audit_at_idx ON core_audit (at)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

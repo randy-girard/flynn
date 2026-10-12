@@ -488,6 +488,43 @@ func (r *TenancyRepo) Audit(actor, action, account, appID string, data interface
 		actor, action, acct, app, raw)
 }
 
+// ListAudit returns up to limit core_audit rows with id > afterID, oldest first.
+func (r *TenancyRepo) ListAudit(afterID int64, limit int) ([]*ct.AuditEntry, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	rows, err := r.db.Query(`
+		SELECT id, at, actor, action, COALESCE(account, ''), COALESCE(app_id::text, ''), data
+		FROM core_audit WHERE id > $1 ORDER BY id LIMIT $2`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*ct.AuditEntry{}
+	for rows.Next() {
+		e := &ct.AuditEntry{}
+		var raw []byte
+		if err := rows.Scan(&e.ID, &e.At, &e.Actor, &e.Action, &e.Account, &e.AppID, &raw); err != nil {
+			return nil, err
+		}
+		if len(raw) > 0 {
+			e.Data = json.RawMessage(raw)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// PruneAudit deletes core_audit rows older than before with id <= maxID and
+// returns how many were removed.
+func (r *TenancyRepo) PruneAudit(before time.Time, maxID int64) (int64, error) {
+	var n int64
+	err := r.db.QueryRow(`
+		WITH d AS (DELETE FROM core_audit WHERE at < $1 AND id <= $2 RETURNING 1)
+		SELECT count(*) FROM d`, before, maxID).Scan(&n)
+	return n, err
+}
+
 func (r *TenancyRepo) AccessibleApps(userID string) ([]AppAccess, error) {
 	rows, err := r.db.Query(`
 		SELECT a.app_id, a.name, COALESCE(a.owner_account, ''),

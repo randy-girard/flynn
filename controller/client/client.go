@@ -129,6 +129,7 @@ type Client interface {
 	GetRuntimeSettings() (*ct.RuntimeSettings, error)
 	UpdateRuntimeSettings(settings *ct.RuntimeSettings) error
 	GetClusterPolicy() (*ct.ClusterPolicy, error)
+	ListClusterAudit(after int64, limit int) ([]*ct.AuditEntry, error)
 	GetGitHubApp() (*ct.GitHubAppConfig, error)
 	UpdateGitHubApp(config *ct.GitHubAppConfig) error
 	ListGitHubInstallations() ([]*ct.GitHubInstallation, error)

@@ -1259,6 +1259,11 @@ func (c *Client) GetClusterPolicy() (*ct.ClusterPolicy, error) {
 	return p, c.Get("/cluster/policy", p)
 }
 
+func (c *Client) ListClusterAudit(after int64, limit int) ([]*ct.AuditEntry, error) {
+	var list []*ct.AuditEntry
+	return list, c.Get(fmt.Sprintf("/cluster/audit?after=%d&limit=%d", after, limit), &list)
+}
+
 func (c *Client) GetGitHubApp() (*ct.GitHubAppConfig, error) {
 	var wrap struct {
 		Config *ct.GitHubAppConfig `json:"config"`

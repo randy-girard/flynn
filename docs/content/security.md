@@ -269,6 +269,27 @@ There may be other unknown security flaws in Flynn. For the time being we do not
 recommend running Flynn in environments where there is access to sensitive data
 or services.
 
+## Controller audit log
+
+The controller records privileged actions in its `core_audit` table: who
+(`cluster-key`, `user:<id>`, or the token's user), what (for example
+`app.create`, `app.delete`, `release.create`, `app.release.set`,
+`deployment.create`, `formation.set`, `scale.request`, `job.run`,
+`job.kill`, `route.create`, `resource.create`, `token.create`,
+`cluster.runtime_settings.set`, `policy.set`, `collaborator.add`), the
+app it touched, and when. Only successful requests are recorded, from
+both the HTTP API and the gRPC API.
+Request bodies are not stored, so env values and keys never land in the
+log; entries keep the method, path, and status.
+
+Cluster-key or cluster-admin credentials can read it with
+`GET /cluster/audit?after=<id>&limit=<n>` (oldest first, at most 1000
+rows) and prune it with `DELETE /cluster/audit?before=<RFC3339>&max_id=<id>`,
+which is itself recorded as `audit.prune`. The controller never prunes on
+its own. The enterprise plugin copies these entries into its audit log and
+applies its retention setting to both copies; see
+[Plugins](plugins.md).
+
 ## Reporting Issues
 
 This fork does not operate the historical `security@flynn.io` mailbox. If you

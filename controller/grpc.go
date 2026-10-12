@@ -170,7 +170,28 @@ func (g *grpcAPI) streamInterceptor(srv interface{}, stream grpc.ServerStream, i
 
 	wrappedStream := middleware.WrapServerStream(stream)
 	wrappedStream.WrappedContext = ctx
-	return handler(srv, wrappedStream)
+	if _, ok := auditGRPCActions[info.FullMethod]; !ok {
+		return handler(srv, wrappedStream)
+	}
+	audited := &auditServerStream{ServerStream: wrappedStream}
+	if err = handler(srv, audited); err == nil && audited.first != nil {
+		g.auditGRPC(tok, info.FullMethod, audited.first)
+	}
+	return err
+}
+
+// auditServerStream keeps the first request message for auditGRPC.
+type auditServerStream struct {
+	grpc.ServerStream
+	first interface{}
+}
+
+func (s *auditServerStream) RecvMsg(m interface{}) error {
+	err := s.ServerStream.RecvMsg(m)
+	if err == nil && s.first == nil {
+		s.first = m
+	}
+	return err
 }
 
 func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (res interface{}, err error) {
@@ -187,7 +208,11 @@ func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *g
 		return nil, status.Error(codes.PermissionDenied, "insufficient scopes for this gRPC method (dashboard app-scoped tokens use controller HTTP)")
 	}
 
-	return handler(ctx, req)
+	res, err = handler(ctx, req)
+	if err == nil {
+		g.auditGRPC(tok, info.FullMethod, req)
+	}
+	return res, err
 }
 
 func (g *grpcAPI) Status(context.Context, *emptypb.Empty) (*api.StatusResponse, error) {

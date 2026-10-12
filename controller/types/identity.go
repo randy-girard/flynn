@@ -1,6 +1,9 @@
 package types
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // TenancySettings is the cluster tenancy mode. SignupEnabled stays false
 // unless an operator sets it; switching to hosted does not enable signup.
@@ -21,6 +24,17 @@ type ClusterPolicy struct {
 	ImageAllowlist      []string   `json:"image_allowlist,omitempty"`
 	Enforced            bool       `json:"enforced"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+}
+
+// AuditEntry is one core_audit row: a privileged controller action.
+type AuditEntry struct {
+	ID      int64           `json:"id"`
+	At      time.Time       `json:"at"`
+	Actor   string          `json:"actor"`
+	Action  string          `json:"action"`
+	Account string          `json:"account,omitempty"`
+	AppID   string          `json:"app_id,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // User is a controller identity. PasswordHash is never serialized.
