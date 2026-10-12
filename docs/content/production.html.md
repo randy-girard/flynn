@@ -525,8 +525,9 @@ PostgreSQL cluster managed by Flynn.
 `flynn pg:psql` is the postgres plugin, for an app's own database. It is not a
 public console, and it is not how you open the platform database. The platform
 database is `flynn-host pg:psql` (and `pg:dump` / `pg:restore`) on a cluster
-host. That host command runs `psql` against the controller database on the
-built-in appliance.
+host. That host command runs `psql` as the appliance superuser, starting in
+the controller database; `\l` lists every platform database and `\c <name>`
+switches to one.
 
 * **Cluster operators** who registered with `flynn cluster:add` / `flynn-host
   cli-add-command` have the controller key. That key is cluster-admin (treat it

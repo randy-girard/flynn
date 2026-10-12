@@ -19,8 +19,11 @@ type Job struct {
 }
 
 // FromController builds a psql, dump, or restore job from the controller
-// release env. pgReleaseID is the current release of the FLYNN_POSTGRES app.
-func FromController(controllerEnv map[string]string, pgReleaseID, kind string, psqlArgs []string, jobs int) (Job, error) {
+// release env. pgReleaseID and pgEnv are the current release ID and env of the
+// FLYNN_POSTGRES app. psql logs in as the platform superuser from pgEnv so the
+// console can list and \c into every database; dump and restore keep the
+// controller role.
+func FromController(controllerEnv map[string]string, pgReleaseID string, pgEnv map[string]string, kind string, psqlArgs []string, jobs int) (Job, error) {
 	if controllerEnv == nil {
 		return Job{}, fmt.Errorf("platform controller release has no env")
 	}
@@ -42,6 +45,13 @@ func FromController(controllerEnv map[string]string, pgReleaseID, kind string, p
 	job := Job{App: app, ReleaseID: pgReleaseID, Env: env}
 	switch kind {
 	case "psql":
+		for _, k := range []string{"PGUSER", "PGPASSWORD"} {
+			v := pgEnv[k]
+			if v == "" {
+				return Job{}, fmt.Errorf("platform postgres release is missing %s", k)
+			}
+			env[k] = v
+		}
 		env["PAGER"] = "less"
 		env["LESS"] = "--ignore-case --LONG-PROMPT --SILENT --tabs=4 --quit-if-one-screen --no-init --quit-at-eof"
 		job.Args = append([]string{"psql"}, psqlArgs...)

@@ -29,13 +29,15 @@ flynn pg from the postgres plugin.
 	Register("pg:psql", runHostPgPsql, `
 usage: flynn-host pg:psql [--] [<argument>...]
 
-Open a psql console to the platform Postgres database (the controller database
-on the built-in appliance). Tenant databases use flynn pg from the postgres plugin.
+Open a psql console to the platform Postgres appliance as its superuser,
+starting in the controller database. Use \l to list every platform database
+and \c <name> to switch. Tenant databases use flynn pg from the postgres plugin.
 
 Examples:
 
     $ flynn-host pg:psql
     $ flynn-host pg:psql -- -c "SELECT 1"
+    $ flynn-host pg:psql -- -c '\l'
 `)
 	Register("pg:dump", runHostPgDump, `
 usage: flynn-host pg:dump [-q] [-f <file>]
@@ -124,14 +126,16 @@ func platformJob(client platformPgClient, kind string, psqlArgs []string, jobs i
 		app = ctrl.Env["FLYNN_POSTGRES"]
 	}
 	var pgReleaseID string
+	var pgEnv map[string]string
 	if app != "" {
 		pgRel, err := client.GetAppRelease(app)
 		if err != nil {
 			return platformpg.Job{}, fmt.Errorf("error getting platform postgres release: %s", err)
 		}
 		pgReleaseID = pgRel.ID
+		pgEnv = pgRel.Env
 	}
-	return platformpg.FromController(ctrl.Env, pgReleaseID, kind, psqlArgs, jobs)
+	return platformpg.FromController(ctrl.Env, pgReleaseID, pgEnv, kind, psqlArgs, jobs)
 }
 
 func hostPgPsql(client platformPgClient, psqlArgs []string, stdin io.Reader, stdout, stderr io.Writer) error {
