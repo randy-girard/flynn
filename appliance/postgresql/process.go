@@ -935,10 +935,10 @@ func postgresWALSegmentRemoved(msg string) bool {
 	// every standby logs it when its upstream disconnects, and treating it
 	// as recycled WAL reseeded (and wiped) the whole chain during a rolling
 	// deploy. A reused standby that hangs in recovery is caught by
-	// standbyReuseStartupTimeout instead.
-	if strings.Contains(s, "invalid resource manager id") {
-		return true
-	}
+	// standbyReuseStartupTimeout instead. "invalid resource manager ID" and
+	// "invalid record length" are likewise not matched: they are the LOG
+	// lines replay prints at the end of local WAL before streaming resumes,
+	// and matching them reseeded a healthy standby on every restart.
 	// The upstream lacks a history file this datadir needs to follow its
 	// timeline; postgres retries forever without replicating.
 	if strings.Contains(s, "could not receive timeline history file") {

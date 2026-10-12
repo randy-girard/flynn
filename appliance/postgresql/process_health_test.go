@@ -99,8 +99,11 @@ func TestPostgresWALSegmentRemoved(t *testing.T) {
 	if postgresWALSegmentRemoved("LOG:  waiting for WAL to become available at 5/13002000") {
 		t.Fatal("a standby whose upstream disconnected must not be treated as recycled WAL")
 	}
-	if !postgresWALSegmentRemoved("LOG:  invalid resource manager ID 127 at 5/1316C120") {
-		t.Fatal("invalid resource manager ID during startup is a recycled-WAL datadir")
+	if postgresWALSegmentRemoved("9ce78903-8eca-4bea-984b-06188a59933e 2026-10-12 01:42:44.288 UTC LOG:  invalid resource manager ID 99 at 6/E56104B8") {
+		t.Fatal("end of local WAL during standby startup must not reseed a healthy standby")
+	}
+	if postgresWALSegmentRemoved("LOG:  invalid record length at 6/E56104B8: expected at least 24, got 0") {
+		t.Fatal("end of local WAL during standby startup must not reseed a healthy standby")
 	}
 	if !postgresWALSegmentRemoved(`FATAL:  could not receive timeline history file from the primary server: ERROR:  could not open file "pg_wal/00000024.history": No such file or directory`) {
 		t.Fatal("a standby that cannot fetch an ancestor timeline history must reseed")
@@ -339,6 +342,26 @@ func TestWalRecycleDetectorIgnoresUpstreamDisconnect(t *testing.T) {
 	}
 	if p.walRecycled() || p.needsReseed() || p.reseedScheduled.Load() {
 		t.Fatal("upstream disconnect must not trigger a reseed")
+	}
+}
+
+// A chaos kill of the async peer restarted it on its intact datadir; replay
+// logged the end of local WAL and streaming resumed, but the detector flagged
+// it and an 11 GB basebackup kept the peer unhealthy for over a minute.
+func TestWalRecycleDetectorIgnoresEndOfLocalWAL(t *testing.T) {
+	p := NewProcess(Config{ID: "9ce78903", DataDir: t.TempDir(), Port: "6506"})
+	p.setConfig(&state.Config{Role: state.RoleAsync, Upstream: &discoverd.Instance{Addr: "127.0.0.1:5432"}})
+	d := &walRecycleDetector{p: p}
+	lines := "LOG:  redo starts at 6/E55CD940\n" +
+		"LOG:  consistent recovery state reached at 6/E56104B8\n" +
+		"LOG:  invalid resource manager ID 99 at 6/E56104B8\n" +
+		"LOG:  database system is ready to accept read-only connections\n" +
+		"LOG:  started streaming WAL from primary at 6/E5000000 on timeline 68\n"
+	if _, err := d.Write([]byte(lines)); err != nil {
+		t.Fatal(err)
+	}
+	if p.walRecycled() || p.needsReseed() || p.reseedScheduled.Load() {
+		t.Fatal("end of local WAL followed by streaming must not trigger a reseed")
 	}
 }
 
