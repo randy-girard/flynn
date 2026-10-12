@@ -56,6 +56,9 @@ policy, license). Catalog CLI: `flynn enterprise org` / `team` / `list` (account
 to the four built-in app roles. On Flynn **hosted**, a paid billing plan that
 includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
 (enterprise probes `http://billing.discoverd/entitlements`).
+An expired `flynn-ent` key keeps working for a 14-day grace period. During
+the grace period, and after it ends, the plugin's dashboard pages show a
+warning banner and `flynn-host enterprise` / `license` print a warning.
 The plugin pushes its policy to the controller (`PUT /cluster/policy`), and
 the controller enforces it on new releases; see
 [Apps → Cluster policy](apps.md#cluster-policy). Uninstalling the plugin
