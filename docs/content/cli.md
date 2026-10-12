@@ -231,6 +231,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `rollback` | Restore a previous GitHub tag (`--version` required; implies `--all-nodes --force`). Does not undo user deploys, volumes, or plugin data. |
 | `backup` / `migrate-domain` / `cli-add-command` | Cluster backup tarball, domain rename, print the `flynn cluster:add` line for this cluster |
 | `pg:psql` / `pg:dump` / `pg:restore` | Platform Postgres appliance (controller database). `pg:psql` logs in as the appliance superuser, so `\l` and `\c <name>` reach every platform database. Tenant instances use `flynn pg` from the postgres plugin |
+| `pg:status` / `pg:wait` | Platform Postgres replication: each peer's role, `pg_basebackup` percent, and WAL lag behind the primary. `pg:wait [--timeout=30m]` repeats every 2 seconds until every replica is within 16 MB of the primary |
 | `list` / `promote` / `demote` / `discover` | Raft membership (`peer` vs `proxy`), promote a node to a peer, demote one (`demote -f` / `--force` when the node is already gone), resolve discoverd services |
 | `ps` / `inspect` / `log` / `stop` / `signal` / `run` | Jobs on this host (`ps -a` includes finished jobs; `log <app>` aggregates every job of an app) |
 | `volume:list` / `volume:create` / `volume:delete` / `volume:gc` / `destroy-volumes` | ZFS volumes (`gc` removes datasets no job or controller record uses; `destroy-volumes` wipes the local volume store, `--include-data` to destroy backend data) |
