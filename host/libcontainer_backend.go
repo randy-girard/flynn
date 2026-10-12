@@ -55,6 +55,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/term"
 	"github.com/randy-girard/flynn/pkg/verify"
 	"github.com/vishvananda/netlink"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -140,9 +141,7 @@ func NewLibcontainerBackend(config *LibcontainerConfig) (Backend, error) {
 	}
 	l.netpol = newNetPolicy(config.Logger)
 	l.httpClient = &http.Client{Transport: &blobstoreauth.Transport{
-		Base: &http.Transport{
-			Dial: dialer.RetryDial(l.discoverdDial),
-		},
+		Base: newLayerTransport(l.discoverdDial),
 	}}
 	return l, nil
 }
@@ -1476,7 +1475,48 @@ func (l *LibcontainerBackend) discoverdDial(network, addr string) (net.Conn, err
 		}
 		addr = addrs[random.Math.Intn(len(addrs))]
 	}
-	return dialer.Default.Dial(network, addr)
+	return newLayerDialer(layerTCPUserTimeout).Dial(network, addr)
+}
+
+// Layer downloads must fail fast when the serving host vanishes. Without
+// these, a GET written to a pooled connection to a rebooted host sits in TCP
+// retransmission (~15 minutes with tcp_retries2=15) before the transport
+// retries it on a fresh connection, stalling the job start for that long.
+var (
+	layerTCPUserTimeout        = 30 * time.Second
+	layerResponseHeaderTimeout = 60 * time.Second
+	layerIdleConnTimeout       = 90 * time.Second
+)
+
+func newLayerTransport(dial dialer.DialFunc) *http.Transport {
+	return &http.Transport{
+		Dial:                  dialer.RetryDial(dial),
+		ResponseHeaderTimeout: layerResponseHeaderTimeout,
+		IdleConnTimeout:       layerIdleConnTimeout,
+	}
+}
+
+func newLayerDialer(userTimeout time.Duration) *net.Dialer {
+	return &net.Dialer{
+		Timeout:   dialer.Default.Timeout,
+		KeepAlive: dialer.Default.KeepAlive,
+		Control:   setTCPUserTimeout(userTimeout),
+	}
+}
+
+// setTCPUserTimeout fails a connection whose sent data stays unacknowledged
+// for d; it also bounds keepalive probing of an idle connection.
+func setTCPUserTimeout(d time.Duration) func(network, address string, c syscall.RawConn) error {
+	return func(network, address string, c syscall.RawConn) error {
+		var sockErr error
+		err := c.Control(func(fd uintptr) {
+			sockErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_USER_TIMEOUT, int(d.Milliseconds()))
+		})
+		if err != nil {
+			return err
+		}
+		return sockErr
+	}
 }
 
 var containerDestroyAttempts = attempt.Strategy{
