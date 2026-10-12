@@ -132,6 +132,7 @@
         "postgres": {
           "ports": [{"port": 5432, "proto": "tcp"}],
           "volumes": [{"path": "/data"}],
+          "env": {"FLYNN_METRICS_PORT": "9180"},
           "args": ["/bin/start-flynn-postgres", "postgres"],
           "service": "postgres"
         },

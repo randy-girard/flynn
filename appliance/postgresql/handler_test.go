@@ -1,14 +1,17 @@
 package postgresql
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/status"
 )
 
@@ -122,5 +125,64 @@ func TestHandlerStatusLogsInfoErrorOnce(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("expected 1 info error log, got %d (%v)", n, msgs)
+	}
+}
+
+func TestParseMetricsSnapshot(t *testing.T) {
+	got, ok := ParseMetricsSnapshot("8192|3|2|0|100|0.99|0.98|42|4096|777|0.5|128|1\n")
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	for k, want := range map[string]float64{
+		"db_size_bytes": 8192, "tables": 3, "active_connections": 2, "max_connections": 100,
+		"xact_commit": 42, "current_transaction": 777, "follower_lag_bytes": 128, "slow_query_count": 1,
+	} {
+		if got[k] != want {
+			t.Fatalf("%s=%v want %v", k, got[k], want)
+		}
+	}
+	for _, bad := range []string{"", "1|2|3", "x|3|2|0|100|0.99|0.98|42|4096|777|0.5|128|1"} {
+		if _, ok := ParseMetricsSnapshot(bad); ok {
+			t.Fatalf("%q must not parse", bad)
+		}
+	}
+}
+
+func TestFormatMetricsLineOmitsMissingSamples(t *testing.T) {
+	line := FormatMetricsLine("postgres", map[string]float64{"service_available": 0})
+	if line != "flynn-postgres source=postgres addon=postgres sample#service-available=0" {
+		t.Fatalf("line=%q", line)
+	}
+}
+
+// flynn-host appends this fragment to the platform postgres job's minute
+// metrics line, the same as for isolated postgres resources.
+func TestMetricsHandlerServesFragmentToFlynnHost(t *testing.T) {
+	srv := httptest.NewServer(MetricsHandler("postgres", func() map[string]float64 {
+		return map[string]float64{"service_available": 1, "db_size_bytes": 8192, "tables": 3, "replay_lag_seconds": 0.25}
+	}))
+	defer srv.Close()
+	ip, port, _ := net.SplitHostPort(strings.TrimPrefix(srv.URL, "http://"))
+	got := host.FetchMetricsFragment(srv.Client(), ip, port)
+	want := "flynn-postgres source=postgres addon=postgres sample#service-available=1 sample#db_size=8192bytes sample#tables=3 sample#replay-lag-seconds=0.250"
+	if got != want {
+		t.Fatalf("fragment\n got %q\nwant %q", got, want)
+	}
+
+	res, err := http.Post(srv.URL+host.MetricsLogPath, "text/plain", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status=%d", res.StatusCode)
+	}
+	res, err = http.Get(srv.URL + "/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("metrics listener must not expose /status, got %d", res.StatusCode)
 	}
 }

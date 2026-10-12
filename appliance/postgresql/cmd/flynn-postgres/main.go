@@ -6,10 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/appliance/postgresql"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
+	host "github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/shutdown"
@@ -87,6 +89,17 @@ func main() {
 	handler.Peer = peer
 	handler.Heartbeater = hb
 	handler.Logger = log.New("component", "http")
+
+	if port := os.Getenv(host.MetricsPortEnv); port != "" {
+		go func() {
+			srv := &http.Server{
+				Addr:              ":" + port,
+				Handler:           postgresql.MetricsHandler(serviceName, process.MetricsSeries),
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			log.Error("metrics listener stopped", "addr", srv.Addr, "err", srv.ListenAndServe())
+		}()
+	}
 
 	shutdown.Fatal(http.ListenAndServe(":"+httpPort, handler))
 }

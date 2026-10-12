@@ -2,7 +2,11 @@ package updater
 
 import (
 	ct "github.com/randy-girard/flynn/controller/types"
+	host "github.com/randy-girard/flynn/host/types"
 )
+
+// PostgresMetricsPort is where platform postgres peers serve GET /metrics/log.
+const PostgresMetricsPort = "9180"
 
 type SystemApp struct {
 	Name          string
@@ -31,6 +35,15 @@ var SystemApps = []SystemApp{
 		Name: "postgres",
 		UpdateRelease: func(r *ct.Release) {
 			r.Env["SIRENIA_PROCESS"] = "postgres"
+			if proc, ok := r.Processes["postgres"]; ok && proc.Env[host.MetricsPortEnv] == "" {
+				env := make(map[string]string, len(proc.Env)+1)
+				for k, v := range proc.Env {
+					env[k] = v
+				}
+				env[host.MetricsPortEnv] = PostgresMetricsPort
+				proc.Env = env
+				r.Processes["postgres"] = proc
+			}
 		},
 	},
 	{Name: "status"},

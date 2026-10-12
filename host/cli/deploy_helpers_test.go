@@ -72,6 +72,23 @@ func TestShouldSkipUnchangedDeploy(t *testing.T) {
 	if skip || migration {
 		t.Fatalf("skipDeploy=false must never skip, got skip=%v migration=%v", skip, migration)
 	}
+
+	noMetrics := &ct.Release{
+		Env:       map[string]string{"SIRENIA_PROCESS": "postgres"},
+		Processes: map[string]ct.ProcessType{"postgres": {}},
+	}
+	skip, migration = shouldSkipUnchangedDeploy(true, false, noMetrics, postgresUpdate)
+	if skip || !migration {
+		t.Fatalf("postgres peers without FLYNN_METRICS_PORT must redeploy, got skip=%v migration=%v", skip, migration)
+	}
+	withMetrics := &ct.Release{
+		Env:       map[string]string{"SIRENIA_PROCESS": "postgres"},
+		Processes: map[string]ct.ProcessType{"postgres": {Env: map[string]string{"FLYNN_METRICS_PORT": "9180"}}},
+	}
+	skip, migration = shouldSkipUnchangedDeploy(true, false, withMetrics, postgresUpdate)
+	if !skip || migration {
+		t.Fatalf("migrated postgres release should skip, got skip=%v migration=%v", skip, migration)
+	}
 }
 
 func TestReleaseConfigChangedProcesses(t *testing.T) {

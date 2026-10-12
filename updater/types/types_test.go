@@ -60,3 +60,36 @@ func TestPostgresUpdateReleaseSetsSireniaProcess(t *testing.T) {
 		t.Fatalf("SIRENIA_PROCESS=%q", r.Env["SIRENIA_PROCESS"])
 	}
 }
+
+func TestPostgresUpdateReleaseAddsMetricsPortToPeersOnly(t *testing.T) {
+	var fn UpdateReleaseFn
+	for _, app := range SystemApps {
+		if app.Name == "postgres" {
+			fn = app.UpdateRelease
+		}
+	}
+	oldEnv := map[string]string{"KEEP": "1"}
+	r := &ct.Release{
+		Env: map[string]string{},
+		Processes: map[string]ct.ProcessType{
+			"postgres": {Env: oldEnv},
+			"web":      {},
+		},
+	}
+	fn(r)
+	if got := r.Processes["postgres"].Env["FLYNN_METRICS_PORT"]; got != PostgresMetricsPort {
+		t.Fatalf("postgres FLYNN_METRICS_PORT=%q", got)
+	}
+	if r.Processes["postgres"].Env["KEEP"] != "1" {
+		t.Fatalf("lost existing env: %v", r.Processes["postgres"].Env)
+	}
+	if _, ok := oldEnv["FLYNN_METRICS_PORT"]; ok {
+		t.Fatal("must not mutate the previous release's process env")
+	}
+	if _, ok := r.Processes["web"].Env["FLYNN_METRICS_PORT"]; ok {
+		t.Fatal("web does not serve metrics")
+	}
+	if _, ok := r.Env["FLYNN_METRICS_PORT"]; ok {
+		t.Fatal("metrics port must be process env, not release env")
+	}
+}

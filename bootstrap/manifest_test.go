@@ -67,6 +67,10 @@ func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 	if strings.Contains(s, `"name":"postgres"`) {
 		t.Fatal("bootstrap must not register the built-in appliance as the postgres resource provider")
 	}
+	if !strings.Contains(s, `"env": {"FLYNN_METRICS_PORT": "9180"},
+          "args": ["/bin/start-flynn-postgres", "postgres"]`) {
+		t.Fatal("platform postgres peers must set FLYNN_METRICS_PORT so flynn-host scrapes their samples")
+	}
 	if strings.Count(s, `(index .StepData \"discoverd-key\").Data`) < 11 {
 		t.Fatalf("discoverd-key not referenced enough times: %d", strings.Count(s, `(index .StepData \"discoverd-key\").Data`))
 	}

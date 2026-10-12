@@ -414,6 +414,11 @@ by the plugin fields. If the request fails, the line has container fields
 only. Postgres, Redis, and MySQL use the `flynn-postgres`, `flynn-redis`, and
 `flynn-mysql` prefixes.
 
+The platform `postgres` system app does the same: its `postgres` peers set
+`FLYNN_METRICS_PORT=9180` and report `flynn-postgres source=postgres
+addon=postgres …`. `flynn-host update` adds the variable to clusters
+bootstrapped before this change and redeploys the peers.
+
 ## Production
 
 With no local checkout, an alias pulls the plugin’s published GitHub Release
