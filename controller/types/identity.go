@@ -9,6 +9,17 @@ type TenancySettings struct {
 	SignupEnabled bool   `json:"signup_enabled"`
 }
 
+// ClusterPolicy is the deploy policy pushed by the enterprise plugin. The
+// zero value applies no restrictions. Only non-system apps are checked.
+type ClusterPolicy struct {
+	DefaultRuntime      string     `json:"default_runtime,omitempty"`
+	RequireGitHubChecks bool       `json:"require_github_checks"`
+	DisableCustomCPU    bool       `json:"disable_custom_cpu"`
+	AllowedBuildpacks   []string   `json:"allowed_buildpacks,omitempty"`
+	ImageAllowlist      []string   `json:"image_allowlist,omitempty"`
+	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
+}
+
 // User is a controller identity. PasswordHash is never serialized.
 type User struct {
 	ID            string     `json:"id"`

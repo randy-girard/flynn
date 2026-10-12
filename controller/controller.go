@@ -359,6 +359,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.DELETE("/runtimes/:runtimes_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
 	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
+	httpRouter.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
+	httpRouter.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
 
 	httpRouter.GET("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.GetGitHubApp)))
 	httpRouter.PUT("/github/app", httphelper.WrapHandler(api.maybeGitHubPlugin(api.UpdateGitHubApp)))

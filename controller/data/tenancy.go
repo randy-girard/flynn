@@ -303,6 +303,46 @@ func (r *TenancyRepo) SetQuota(q *ct.AccountQuota) error {
 		q.Account, q.MaxApps, q.MaxProcesses, q.MaxMemoryMB, q.MaxResources, q.MaxCollaborators)
 }
 
+// GetClusterPolicy returns the stored deploy policy (zero value when unset).
+func (r *TenancyRepo) GetClusterPolicy() (*ct.ClusterPolicy, error) {
+	var raw []byte
+	var updatedAt time.Time
+	err := r.db.QueryRow(`SELECT policy, updated_at FROM cluster_policy WHERE id = 1`).Scan(&raw, &updatedAt)
+	if err == pgx.ErrNoRows {
+		return &ct.ClusterPolicy{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	p := &ct.ClusterPolicy{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, p); err != nil {
+			return nil, err
+		}
+	}
+	p.UpdatedAt = &updatedAt
+	return p, nil
+}
+
+// SetClusterPolicy replaces the stored deploy policy.
+func (r *TenancyRepo) SetClusterPolicy(p *ct.ClusterPolicy) error {
+	stored := *p
+	stored.UpdatedAt = nil
+	raw, err := json.Marshal(&stored)
+	if err != nil {
+		return err
+	}
+	var updatedAt time.Time
+	if err := r.db.QueryRow(`
+		INSERT INTO cluster_policy (id, policy, updated_at) VALUES (1, $1, now())
+		ON CONFLICT (id) DO UPDATE SET policy = EXCLUDED.policy, updated_at = now()
+		RETURNING updated_at`, raw).Scan(&updatedAt); err != nil {
+		return err
+	}
+	p.UpdatedAt = &updatedAt
+	return nil
+}
+
 func (r *TenancyRepo) SetAccountSuspended(account string, suspended bool) error {
 	if suspended {
 		return r.db.Exec(`

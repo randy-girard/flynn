@@ -708,6 +708,15 @@ func (g *grpcAPI) StreamReleases(req *api.StreamReleasesRequest, stream api.Cont
 func (g *grpcAPI) CreateRelease(ctx context.Context, req *api.CreateReleaseRequest) (*api.Release, error) {
 	ctRelease := req.Release.ControllerType()
 	ctRelease.AppID = api.ParseIDFromName(req.Parent, "apps")
+	if ctRelease.AppID != "" {
+		a, err := g.appRepo.Get(ctRelease.AppID)
+		if err != nil {
+			return nil, api.NewError(err, "%s", err.Error())
+		}
+		if err := g.enforceClusterPolicy(a.(*ct.App), ctRelease); err != nil {
+			return nil, api.NewError(err, "%s", err.Error())
+		}
+	}
 	if err := g.releaseRepo.Add(ctRelease); err != nil {
 		return nil, api.NewError(err, "%s", err.Error())
 	}

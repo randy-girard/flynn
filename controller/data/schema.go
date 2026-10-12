@@ -1300,6 +1300,13 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE runtime_settings ADD COLUMN max_restarts integer NOT NULL DEFAULT 0`,
 		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_max_restarts_check CHECK (max_restarts >= 0)`,
 	)
+	migrations.Add(72,
+		`CREATE TABLE cluster_policy (
+			id integer PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+			policy jsonb NOT NULL DEFAULT '{}'::jsonb,
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

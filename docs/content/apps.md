@@ -155,7 +155,7 @@ immediately and the code will not be deployed.
 
 ### Building specific Git branches
 
-To deploy a different branch of the same repository, create a new app using the 
+To deploy a different branch of the same repository, create a new app using the
 same git repository but with different remotes:
 
 ```
@@ -363,7 +363,7 @@ ALIAS), the same way you already do for `$CLUSTERDOMAIN`.
 ### Additional Process Types
 
 Flynn supports serving web traffic from multiple process types. These additional
-process types must be defined in the `Procfile` and end in `-web`. For example, 
+process types must be defined in the `Procfile` and end in `-web`. For example,
 this Procfile:
 
 ```text
@@ -546,6 +546,22 @@ use `limit:set`:
 ```text
 flynn limit:set web max_fd=12000 temp_disk=200MB
 ```
+
+#### Cluster policy
+
+The controller stores a cluster deploy policy at `GET/PUT /cluster/policy`
+(cluster key or cluster admin). The enterprise plugin writes it. Every new
+release for a non-system app is checked against it:
+
+| Field | Effect |
+| --- | --- |
+| `default_runtime` | Runtime given to a new process type that has no runtime and no CPU/memory set, instead of `small`. Must name an existing runtime. |
+| `disable_custom_cpu` | Rejects a release when a process type has CPU/memory limits but no runtime. Apply one with `flynn limit:runtime <type> <runtime>`. Older releases without a runtime need this before their next deploy. |
+| `image_allowlist` | Rejects a release whose runtime image is not listed. Entries match the build stack (`heroku-24`, `container`), the image name (`slugrunner-24` or `slugrunner`), or the `flynn docker:push` repository. An empty list allows every image. |
+
+The stack and image names come from release and artifact metadata set by the
+deploy tools, so the allowlist limits which deploy paths are used; it is not a
+signature check on image contents.
 
 Host-level CPU/memory reservation is off per runtime. Enable it on the
 runtimes that must wait until a host has that much free Request; other

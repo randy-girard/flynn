@@ -62,6 +62,10 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 		respondWithError(w, err)
 		return
 	}
+	if err := c.enforceClusterPolicy(app, release); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	if err := c.releaseRepo.Add(release); err != nil {
 		respondWithError(w, err)
 		return
