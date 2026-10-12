@@ -215,7 +215,9 @@ flynn -a myapp github:set --auto-deploy=on --wait-checks=on
 
 `--wait-checks` is Heroku-style: Flynn records the pushed SHA and deploys only
 after GitHub Checks and commit statuses succeed. Repos without CI should leave
-wait-for-checks off.
+wait-for-checks off. When the enforced [cluster policy](#cluster-policy) sets
+`require_github_checks`, every GitHub deploy waits for checks regardless of
+this setting.
 
 The dashboard Cluster → GitHub page has the same setup steps and credential
 form. The app Deploy page connects a repo and starts a deploy.
@@ -561,6 +563,7 @@ stored policy for a later reinstall but stops enforcing it.
 | `disable_custom_cpu` | Rejects a release when a process type has CPU/memory limits but no runtime. Apply one with `flynn limit:runtime <type> <runtime>`. Older releases without a runtime need this before their next deploy. |
 | `image_allowlist` | Rejects a release whose runtime image is not listed. Entries match the build stack (`heroku-24`, `container`), the image name (`slugrunner-24` or `slugrunner`), or the `flynn docker:push` repository. An empty list allows every image. |
 | `allowed_buildpacks` | Limits which buildpacks a `git push` build may use. Entries are bundled buildpack names (`multi`, `static`, `ruby`, `nodejs`, `clojure`, `python`, `java`, `gradle`, `scala`, `php`, `go`), `inline` for a `bin/detect` + `bin/compile` in the app, or a buildpack git URL for `BUILDPACK_URL` / `.buildpacks` (matched as given or without its `#ref`). Detection only tries allowed bundled buildpacks; a disallowed URL or inline buildpack fails the build. Allowing `multi` allows any URL listed in `.buildpacks`. An empty list allows every buildpack. |
+| `require_github_checks` | GitHub plugin deploys need passing GitHub Checks and commit statuses. Auto-deploys wait for checks as if `--wait-checks` were on; `flynn github:deploy` and the dashboard Deploy button fail unless checks for the commit have passed. `git push` and `flynn docker:push` deploys are not affected. |
 
 The stack and image names come from release and artifact metadata set by the
 deploy tools, so the allowlist limits which deploy paths are used; it is not a
