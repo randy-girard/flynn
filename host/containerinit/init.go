@@ -28,6 +28,7 @@ import (
 	"path/filepath"
 	"runtime/pprof"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -206,6 +207,10 @@ type ContainerInit struct {
 
 	deregister     chan struct{}
 	deregisterOnce sync.Once
+
+	// signalForwarded is set once init delivers a signal to the app (stop,
+	// flynn-host signal). A signal death without one is a crash.
+	signalForwarded atomic.Bool
 }
 
 func (c *ContainerInit) GetState(arg *struct{}, status *State) error {
@@ -224,6 +229,7 @@ func (c *ContainerInit) Signal(sig int, res *struct{}) error {
 	c.mtx.Lock()
 	defer c.mtx.Unlock()
 	logger.Info("forwarding signal to job", "type", syscall.Signal(sig))
+	c.signalForwarded.Store(true)
 	if err := c.process.Signal(syscall.Signal(sig)); err != nil {
 		return err
 	}
@@ -566,6 +572,7 @@ func babySit(init *ContainerInit, hbs []discoverd.Heartbeater) int {
 				shutdownOnce.Do(closeHBs)
 			}
 			log.Info("forwarding signal to job", "type", sig)
+			init.signalForwarded.Store(true)
 			init.process.Signal(sig)
 		}
 	}()
@@ -589,11 +596,22 @@ func babySit(init *ContainerInit, hbs []discoverd.Heartbeater) int {
 	}
 
 	if wstatus.Signaled() {
-		log.Debug("job exited due to signal")
-		return 0
+		log.Debug("job exited due to signal", "signal", wstatus.Signal(), "forwarded", init.signalForwarded.Load())
 	}
+	return appExitStatus(wstatus, init.signalForwarded.Load())
+}
 
-	return wstatus.ExitStatus()
+// appExitStatus is 0 when the app died from a signal init forwarded (a
+// requested stop) and 128+signal when it was killed some other way (kill from
+// outside the container, kernel OOM killer), so the job is reported crashed.
+func appExitStatus(ws syscall.WaitStatus, forwarded bool) int {
+	if ws.Signaled() {
+		if forwarded {
+			return 0
+		}
+		return 128 + int(ws.Signal())
+	}
+	return ws.ExitStatus()
 }
 
 // Run as pid 1 and monitor the contained process to return its exit code.

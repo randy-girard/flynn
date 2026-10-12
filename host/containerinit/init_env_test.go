@@ -5,8 +5,32 @@ package containerinit
 import (
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestAppExitStatus(t *testing.T) {
+	exited := func(code int) syscall.WaitStatus { return syscall.WaitStatus(code << 8) }
+	killed := func(sig syscall.Signal) syscall.WaitStatus { return syscall.WaitStatus(sig) }
+	for _, tc := range []struct {
+		name      string
+		ws        syscall.WaitStatus
+		forwarded bool
+		want      int
+	}{
+		{"clean exit", exited(0), false, 0},
+		{"non-zero exit", exited(3), false, 3},
+		{"non-zero exit after stop", exited(1), true, 1},
+		{"stopped by forwarded SIGTERM", killed(syscall.SIGTERM), true, 0},
+		{"stopped by forwarded SIGKILL", killed(syscall.SIGKILL), true, 0},
+		{"killed from outside", killed(syscall.SIGKILL), false, 137},
+		{"segfault", killed(syscall.SIGSEGV), false, 139},
+	} {
+		if got := appExitStatus(tc.ws, tc.forwarded); got != tc.want {
+			t.Errorf("%s: appExitStatus = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
 
 func TestChildEnvHidesDiscoverdForUserJobs(t *testing.T) {
 	got := childEnv(map[string]string{

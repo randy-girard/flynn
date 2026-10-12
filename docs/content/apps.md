@@ -279,7 +279,11 @@ commands / Slow queries tab next to Metrics. Cluster-wide thresholds and live ho
 
 Event alerts notify when something happens instead of when a value crosses a
 threshold. `flynn alert:add --event H13 -t web --email ops@example.com` emails
-when a web process crashes; `--event A10` fires on each finished deployment
+when a web process crashes. A process has crashed when it exits non-zero or is
+killed by a signal Flynn did not send (for example `kill -9` on the host or the
+kernel OOM killer), and its job exit status is then 128 plus the signal number.
+Stops Flynn requests (deploys, scale-down, `flynn-host stop`) are not crashes.
+`--event A10` fires on each finished deployment
 (complete or failed), `H21` on an OOM kill, `H14` when a process fails to
 start, and `P13` on a datastore auto-failover. The codes are the ones on the
 dashboard event chart; the dashboard alert editor lists them as **Event ·**
