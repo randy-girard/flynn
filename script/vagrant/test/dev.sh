@@ -799,6 +799,10 @@ if ! grep -Fq 'flynn-host", "stop"' "${mod}/guest/chaos-fault.sh"; then
   echo "guest/chaos-fault.sh must stop jobs with flynn-host stop (no drain)" >&2
   exit 1
 fi
+if ! grep -Fq 'print(stop.stdout.strip())' "${mod}/guest/chaos-fault.sh"; then
+  echo "guest/chaos-fault.sh must print why flynn-host stop failed (inject-*.log)" >&2
+  exit 1
+fi
 # chaos runs the monitor itself and writes a report; render one from fixtures.
 report_dir="$(mktemp -d)"
 printf '1\t19:00:00\tbaseline\thealthy\t-\t-\n2\t19:00:15\tround 1 node-reboot\tUNHEALTHY\tcluster,plugins\tcluster: below formation x 1/3 ;; plugins: dashboard=502\n3\t19:00:30\tround 1 node-reboot\tUNHEALTHY\tcluster\tcluster: below formation x 2/3 <db> & more\n' > "${report_dir}/samples.tsv"

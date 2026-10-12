@@ -90,5 +90,9 @@ if not pool:
 t = random.choice(sorted(pool, key=lambda j: j["id"]))
 print("target kind=%s app=%s type=%s host=%s job=%s" % (kind, t["app"], t["type"], t["host"], t["id"]))
 sys.stdout.flush()
-subprocess.run(["flynn-host", "stop", t["id"]], check=True, stdout=subprocess.DEVNULL)
+stop = subprocess.run(["flynn-host", "stop", t["id"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+if stop.returncode != 0:
+    # runStop prints the per-job reason on stdout; keep it for inject-*.log.
+    print(stop.stdout.strip())
+    raise SystemExit(stop.returncode)
 PY
