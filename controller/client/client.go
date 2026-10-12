@@ -128,6 +128,7 @@ type Client interface {
 	DeleteRuntimeProfile(id string) error
 	GetRuntimeSettings() (*ct.RuntimeSettings, error)
 	UpdateRuntimeSettings(settings *ct.RuntimeSettings) error
+	GetClusterPolicy() (*ct.ClusterPolicy, error)
 	GetGitHubApp() (*ct.GitHubAppConfig, error)
 	UpdateGitHubApp(config *ct.GitHubAppConfig) error
 	ListGitHubInstallations() ([]*ct.GitHubInstallation, error)

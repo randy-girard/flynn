@@ -1254,6 +1254,11 @@ func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
 	return c.Put("/cluster/runtime-settings", settings, settings)
 }
 
+func (c *Client) GetClusterPolicy() (*ct.ClusterPolicy, error) {
+	p := &ct.ClusterPolicy{}
+	return p, c.Get("/cluster/policy", p)
+}
+
 func (c *Client) GetGitHubApp() (*ct.GitHubAppConfig, error) {
 	var wrap struct {
 		Config *ct.GitHubAppConfig `json:"config"`
