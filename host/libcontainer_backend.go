@@ -1790,13 +1790,27 @@ func (c *Container) WaitStop(timeout time.Duration) error {
 }
 
 func (c *Container) Stop() error {
-	if err := c.Signal(int(syscall.SIGTERM)); err != nil {
+	return stopContainer(c.Signal, c.WaitStop, 30*time.Second)
+}
+
+// stopContainer sends SIGTERM, waits up to grace, then sends SIGKILL. The
+// SIGKILL RPC often fails because containerinit exits before replying once
+// the app dies; that is a successful stop when the job ends shortly after.
+func stopContainer(signal func(int) error, waitStop func(time.Duration) error, grace time.Duration) error {
+	if err := signal(int(syscall.SIGTERM)); err != nil {
 		return err
 	}
-	if err := c.WaitStop(30 * time.Second); err != nil {
-		return c.Signal(int(syscall.SIGKILL))
+	if err := waitStop(grace); err == nil {
+		return nil
 	}
-	return nil
+	err := signal(int(syscall.SIGKILL))
+	if err == nil {
+		return nil
+	}
+	if waitStop(5*time.Second) == nil {
+		return nil
+	}
+	return err
 }
 
 func (l *LibcontainerBackend) Stop(id string) error {

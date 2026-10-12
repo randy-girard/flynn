@@ -1,10 +1,58 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
+
+func TestStopContainer(t *testing.T) {
+	errRPC := errors.New("unexpected EOF")
+	errTimeout := errors.New("Timed out")
+	for _, tc := range []struct {
+		name    string
+		sigErr  map[syscall.Signal]error
+		waits   []error // results of successive waitStop calls
+		want    error
+		signals []syscall.Signal
+	}{
+		{name: "exits on SIGTERM", waits: []error{nil}, signals: []syscall.Signal{syscall.SIGTERM}},
+		{name: "SIGTERM RPC fails", sigErr: map[syscall.Signal]error{syscall.SIGTERM: errRPC}, want: errRPC, signals: []syscall.Signal{syscall.SIGTERM}},
+		{name: "SIGKILL after grace", waits: []error{errTimeout}, signals: []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}},
+		{name: "SIGKILL reply lost but job ended", sigErr: map[syscall.Signal]error{syscall.SIGKILL: errRPC}, waits: []error{errTimeout, nil}, signals: []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}},
+		{name: "SIGKILL failed and job still running", sigErr: map[syscall.Signal]error{syscall.SIGKILL: errRPC}, waits: []error{errTimeout, errTimeout}, want: errRPC, signals: []syscall.Signal{syscall.SIGTERM, syscall.SIGKILL}},
+	} {
+		var sent []syscall.Signal
+		waits := tc.waits
+		signal := func(sig int) error {
+			sent = append(sent, syscall.Signal(sig))
+			return tc.sigErr[syscall.Signal(sig)]
+		}
+		waitStop := func(time.Duration) error {
+			if len(waits) == 0 {
+				t.Fatalf("%s: unexpected waitStop", tc.name)
+			}
+			err := waits[0]
+			waits = waits[1:]
+			return err
+		}
+		if err := stopContainer(signal, waitStop, time.Second); err != tc.want {
+			t.Errorf("%s: err = %v, want %v", tc.name, err, tc.want)
+		}
+		if len(sent) != len(tc.signals) {
+			t.Errorf("%s: signals = %v, want %v", tc.name, sent, tc.signals)
+			continue
+		}
+		for i := range sent {
+			if sent[i] != tc.signals[i] {
+				t.Errorf("%s: signals = %v, want %v", tc.name, sent, tc.signals)
+			}
+		}
+	}
+}
 
 func TestFollowLogsUnlocksBeforeGetStreams(t *testing.T) {
 	src, err := os.ReadFile("libcontainer_backend.go")
