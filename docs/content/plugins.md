@@ -50,7 +50,7 @@ read that repo — or when the repo is public.
 The **enterprise** plugin (`../flynn-plugin-enterprise`) is in that catalog.
 Install it with `flynn-host plugin:install enterprise`. After install it
 advertises `http://enterprise.discoverd/`, which unlocks dashboard granular
-RBAC, and serves **Cluster → Enterprise** pages (roles, OIDC SSO, audit,
+RBAC, and serves **Cluster → Enterprise** pages (roles, OIDC or SAML 2.0 SSO, audit,
 policy, license). Catalog CLI: `flynn enterprise org` / `team` / `list` (account-scoped) and
 `flynn-host enterprise license` / `sso` / `roles` / `audit` / `policy`. Uninstalling it returns the cluster
 to the four built-in app roles. On Flynn **hosted**, a paid billing plan that
