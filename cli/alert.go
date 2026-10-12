@@ -17,26 +17,32 @@ func init() {
 	register("alert", runAppAlertList, `
 usage: flynn alert
 
-List metric alerts for the app.
+List metric and event alerts for the app.
 
 Requires the dashboard plugin. Cluster alerts use flynn-host alert.
 `)
 	register("alert:add", runAppAlertAdd, `
-usage: flynn alert:add --metric <metric> --op <op> --threshold <n> [-t <proc>] [--name <name>] [--cooldown <sec>] [--email <addr>] [--webhook <url>]
+usage: flynn alert:add (--metric <metric> --op <op> --threshold <n> | --event <code>) [-t <proc>] [--name <name>] [--cooldown <sec>] [--email <addr>] [--webhook <url>]
 
-Create an app metric alert. At least one of --email or --webhook is required.
+Create an app metric or event alert. At least one of --email or --webhook is required.
 
 Metrics: cpu_percent, memory_percent, memory_bytes, containers, host_load_1,
 host_load_5, host_load_15, response_p50_ms, response_p95_ms, response_p99_ms.
 
 Operators: gt, gte, lt, lte.
 
+Events notify each time the event happens for the app (one notification per
+cooldown): H13 job crashed, H14 start failed, H21 OOM kill, A10 deployment,
+P13 datastore auto-failover, and the other H, R, and P codes on the dashboard
+event chart.
+
 Options:
     -t, --process-type=<proc>  Process type (defaults to all)
     --metric=<metric>          App metric id
     --op=<op>                  gt, gte, lt, or lte
     --threshold=<n>            Threshold value
-    --name=<name>              Display name (defaults to metric + operator + threshold)
+    --event=<code>             Event code to notify on instead of a metric
+    --name=<name>              Display name (defaults to metric + operator + threshold, or "on <code>")
     --cooldown=<sec>           Repeat notify cooldown [default: 300]
     --email=<addr>             Email when the rule fires
     --webhook=<url>            HTTP webhook when the rule fires
@@ -44,6 +50,7 @@ Options:
 Examples:
 
     $ flynn -a demo alert:add --metric cpu_percent --op gt --threshold 80 --email ops@example.com
+    $ flynn -a demo alert:add --event H13 -t web --webhook https://hooks.example.com/flynn
 `)
 	register("alert:enable", runAppAlertEnable, `
 usage: flynn alert:enable <id>
@@ -167,15 +174,9 @@ func patchAppAlert(client controller.Client, id string, body map[string]any) err
 }
 
 func appAlertCreateBody(args *docopt.Args) (map[string]any, error) {
-	metric := strings.TrimSpace(args.String["--metric"])
-	op := strings.ToLower(strings.TrimSpace(args.String["--op"]))
-	threshold, err := strconv.ParseFloat(strings.TrimSpace(args.String["--threshold"]), 64)
+	metric, op, threshold, name, err := alertRuleFields(args)
 	if err != nil {
-		return nil, fmt.Errorf("threshold must be a number")
-	}
-	name := strings.TrimSpace(args.String["--name"])
-	if name == "" {
-		name = fmt.Sprintf("%s %s %g", metric, op, threshold)
+		return nil, err
 	}
 	email := strings.TrimSpace(args.String["--email"])
 	webhook := strings.TrimSpace(args.String["--webhook"])
@@ -234,7 +235,32 @@ func alertMetricCell(a dashboardMetricAlert) string {
 	return a.Metric
 }
 
+// alertRuleFields reads --event, or --metric/--op/--threshold. Event rules
+// are sent as metric event:<CODE> with gte 1; the dashboard ignores both.
+func alertRuleFields(args *docopt.Args) (metric, op string, threshold float64, name string, err error) {
+	name = strings.TrimSpace(args.String["--name"])
+	if code := strings.ToUpper(strings.TrimSpace(args.String["--event"])); code != "" {
+		if name == "" {
+			name = "on " + code
+		}
+		return "event:" + code, "gte", 1, name, nil
+	}
+	metric = strings.TrimSpace(args.String["--metric"])
+	op = strings.ToLower(strings.TrimSpace(args.String["--op"]))
+	threshold, err = strconv.ParseFloat(strings.TrimSpace(args.String["--threshold"]), 64)
+	if err != nil {
+		return "", "", 0, "", fmt.Errorf("threshold must be a number")
+	}
+	if name == "" {
+		name = fmt.Sprintf("%s %s %g", metric, op, threshold)
+	}
+	return metric, op, threshold, name, nil
+}
+
 func alertWhenCell(a dashboardMetricAlert) string {
+	if strings.HasPrefix(a.Metric, "event:") {
+		return "on event"
+	}
 	return fmt.Sprintf("%s %g", strings.ToUpper(a.Operator), a.Threshold)
 }
 

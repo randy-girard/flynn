@@ -108,6 +108,24 @@ func TestAlertTableCells(t *testing.T) {
 	}
 }
 
+func TestAppAlertCreateBodyEvent(t *testing.T) {
+	args := parseCLI(t, []string{"alert:add", "--event", "h13", "-t", "web", "--webhook", "https://hooks.example/x"})
+	body, err := appAlertCreateBody(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["metric"] != "event:H13" || body["operator"] != "gte" || body["threshold"] != 1.0 || body["name"] != "on H13" || body["process_type"] != "web" {
+		t.Fatalf("%v", body)
+	}
+	if got := alertWhenCell(dashboardMetricAlert{Metric: "event:H13", Operator: "gte", Threshold: 1}); got != "on event" {
+		t.Fatalf("when %q", got)
+	}
+	metricArgs := parseCLI(t, []string{"alert:add", "--metric", "cpu_percent", "--op", "gt", "--threshold", "80", "--email", "ops@example.com"})
+	if body, err := appAlertCreateBody(metricArgs); err != nil || body["metric"] != "cpu_percent" {
+		t.Fatalf("metric form %v %v", body, err)
+	}
+}
+
 func TestDashboardURLFromNestedControllerHost(t *testing.T) {
 	if got := dashboardURLFromController("https://region.controller.example.com"); got != "https://region.dashboard.example.com" {
 		t.Fatalf("%s", got)

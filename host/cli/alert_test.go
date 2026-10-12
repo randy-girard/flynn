@@ -32,6 +32,26 @@ func TestAlertCreateBodyDefaultsName(t *testing.T) {
 	}
 }
 
+func TestAlertCreateBodyEvent(t *testing.T) {
+	args, err := docopt.Parse(commands["alert:add"].usage, []string{"alert:add", "--event", "a10", "--webhook", "https://hooks.example/x"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := alertCreateBody(args, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["metric"] != "event:A10" || body["operator"] != "gte" || body["threshold"] != 1.0 || body["name"] != "on A10" {
+		t.Fatalf("%v", body)
+	}
+	if got := alertWhenCell(dashboardMetricAlert{Metric: "event:A10"}); got != "on event" {
+		t.Fatalf("when %q", got)
+	}
+	if _, err := docopt.Parse(commands["alert:add"].usage, []string{"alert:add", "--metric", "disk_percent", "--op", "gte", "--threshold", "90"}, true, "", false); err != nil {
+		t.Fatalf("metric form: %v", err)
+	}
+}
+
 func TestWriteAlertTable(t *testing.T) {
 	var b strings.Builder
 	err := writeAlertTable(&b, []dashboardMetricAlert{{

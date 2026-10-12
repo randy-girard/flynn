@@ -276,6 +276,18 @@ tab lists each firing window (newest first), and the same windows shade the
 matching metric charts. Redis and Postgres add-on pages also keep a Slow
 commands / Slow queries tab next to Metrics. Cluster-wide thresholds and live host samples use
 `flynn-host alert` and `flynn-host metrics`.
+
+Event alerts notify when something happens instead of when a value crosses a
+threshold. `flynn alert:add --event H13 -t web --email ops@example.com` emails
+when a web process crashes; `--event A10` fires on each finished deployment
+(complete or failed), `H21` on an OOM kill, `H14` when a process fails to
+start, and `P13` on a datastore auto-failover. The codes are the ones on the
+dashboard event chart; the dashboard alert editor lists them as **Event ·**
+entries. Each matching event notifies once, and further matches inside the
+cooldown (default 300s) are skipped, so a crash loop sends one notification per
+cooldown. `flynn-host alert:add --event <code>` creates the same rule for every
+app (optionally `--host <id>`), including host-only codes such as `D20` (disk
+out of space).
 See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring).
 
 ### External Logs

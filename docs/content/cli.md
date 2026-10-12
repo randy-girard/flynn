@@ -107,7 +107,7 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | `scale` / `ps:scale` | Formation (process counts and tags) |
 | `ps` / `ps:kill` / `run` / `ps:run` | Jobs (`<process type>.<number>` short names; UUID still works; `kill` is an alias) |
 | `metrics` | Latest stored app metrics snapshot (dashboard plugin) |
-| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | App metric alerts (dashboard plugin) |
+| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | App metric alerts, or event alerts with `alert:add --event <code>` (for example `H13` crash, `A10` deploy) (dashboard plugin) |
 | `log` | Aggregated stdout/stderr, prefixed `source[web.1]` (`-j` takes a short name or UUID) |
 | `env` / `env:get` / `env:set` / `env:unset` | App config (`-t <proc>` scopes to one process type). `env:set` / `env:unset` return after creating the release; if a deploy is already running, the new one is queued and runs next |
 | `limit` / `limit:profiles` / `limit:runtime` / `limit:set` | Named runtimes; raw `limit:set` for numeric CPU/memory (when allowed), `max_fd`, `temp_disk`. |
@@ -242,7 +242,7 @@ Host-level commands run on cluster nodes (`sudo flynn-host …`). `flynn-host` a
 | `plugin:credentials:set` / `plugin:credentials:show` / `plugin:credentials:unset` | GitHub token for private/draft plugin releases. Host is `github` (github.com) or a GitHub Enterprise hostname. `set` reads a paste on a TTY, `--token-file`, or piped stdin (never argv). `show` prints set/unset and a stored API URL, never the token. |
 | `log-sink` / `log-sink:add` / `log-sink:list` / `log-sink:remove` | Cluster syslog sinks (`--scope system\|apps\|all`, `--app`) |
 | `metrics` | Live host CPU/memory/disk/load snapshot (`--host` for one node) |
-| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts (dashboard plugin) |
+| `alert` / `alert:add` / `alert:enable` / `alert:disable` / `alert:remove` | Cluster metric alerts, or event alerts across every app with `alert:add --event <code>` (dashboard plugin) |
 | `otel` / `otel:add` / `otel:remove` | OpenTelemetry metrics exporters (requires `flynn-host plugin:install otel`) |
 | `letsencrypt` / `letsencrypt:configure` / `letsencrypt:status` / `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:enable-system-routes` / `letsencrypt:disable-system-routes` | Let's Encrypt account, cluster ACME on/off, and system-route TLS (`acme:*` remains as an alias) |
 | `blobstore` / `blobstore:status` / `blobstore:set` / `blobstore:credentials` / `blobstore:migrate` | Inspect the blobstore backend, switch to S3-compatible storage, rotate access keys, migrate objects (`--delete` removes them from the old backend). Writes `BACKEND_<name>` and `DEFAULT_BACKEND` on the blobstore app. |

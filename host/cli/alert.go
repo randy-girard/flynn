@@ -18,25 +18,31 @@ func init() {
 	Register("alert", runHostAlertList, `
 usage: flynn-host alert
 
-List cluster metric alerts stored by the dashboard.
+List cluster metric and event alerts stored by the dashboard.
 
 Requires the dashboard plugin. App alerts use flynn alert.
 `)
 	Register("alert:add", runHostAlertAdd, `
-usage: flynn-host alert:add --metric <metric> --op <op> --threshold <n> [--name <name>] [--host <id>] [--cooldown <sec>] [--email <addr>] [--webhook <url>]
+usage: flynn-host alert:add (--metric <metric> --op <op> --threshold <n> | --event <code>) [--name <name>] [--host <id>] [--cooldown <sec>] [--email <addr>] [--webhook <url>]
 
-Create a cluster metric alert. At least one of --email or --webhook is required.
+Create a cluster metric or event alert. At least one of --email or --webhook is required.
 
 Metrics: cpu_percent, memory_percent, disk_percent, host_load_1, host_load_5,
 host_load_15, running_jobs, job_containers.
 
 Operators: gt, gte, lt, lte.
 
+Events notify each time the event happens on any app or host (one notification
+per cooldown): H13 job crashed, H21 OOM kill, A10 deployment, D20 disk out of
+space, P13 datastore auto-failover, and the other codes on the dashboard event
+chart.
+
 Options:
     --metric=<metric>      Cluster metric id
     --op=<op>              gt, gte, lt, or lte
     --threshold=<n>        Threshold value
-    --name=<name>          Display name (defaults to metric + operator + threshold)
+    --event=<code>         Event code to notify on instead of a metric
+    --name=<name>          Display name (defaults to metric + operator + threshold, or "on <code>")
     --host=<id>            Limit the rule to one host id
     --cooldown=<sec>       Repeat notify cooldown [default: 300]
     --email=<addr>         Email when the rule fires
@@ -45,6 +51,7 @@ Options:
 Examples:
 
     $ flynn-host alert:add --metric disk_percent --op gte --threshold 90 --email ops@example.com
+    $ flynn-host alert:add --event A10 --webhook https://hooks.example.com/flynn
 `)
 	Register("alert:enable", runHostAlertEnable, `
 usage: flynn-host alert:enable <id>
@@ -152,15 +159,25 @@ func patchHostAlert(id string, body map[string]any) error {
 }
 
 func alertCreateBody(args *docopt.Args, processType string) (map[string]any, error) {
-	metric := strings.TrimSpace(args.String["--metric"])
-	op := strings.ToLower(strings.TrimSpace(args.String["--op"]))
-	threshold, err := strconv.ParseFloat(strings.TrimSpace(args.String["--threshold"]), 64)
-	if err != nil {
-		return nil, fmt.Errorf("threshold must be a number")
-	}
 	name := strings.TrimSpace(args.String["--name"])
-	if name == "" {
-		name = fmt.Sprintf("%s %s %g", metric, op, threshold)
+	var metric, op string
+	var threshold float64
+	if code := strings.ToUpper(strings.TrimSpace(args.String["--event"])); code != "" {
+		metric, op, threshold = "event:"+code, "gte", 1
+		if name == "" {
+			name = "on " + code
+		}
+	} else {
+		metric = strings.TrimSpace(args.String["--metric"])
+		op = strings.ToLower(strings.TrimSpace(args.String["--op"]))
+		var err error
+		threshold, err = strconv.ParseFloat(strings.TrimSpace(args.String["--threshold"]), 64)
+		if err != nil {
+			return nil, fmt.Errorf("threshold must be a number")
+		}
+		if name == "" {
+			name = fmt.Sprintf("%s %s %g", metric, op, threshold)
+		}
 	}
 	email := strings.TrimSpace(args.String["--email"])
 	webhook := strings.TrimSpace(args.String["--webhook"])
@@ -221,6 +238,9 @@ func alertMetricCell(a dashboardMetricAlert) string {
 }
 
 func alertWhenCell(a dashboardMetricAlert) string {
+	if strings.HasPrefix(a.Metric, "event:") {
+		return "on event"
+	}
 	return fmt.Sprintf("%s %g", strings.ToUpper(a.Operator), a.Threshold)
 }
 
