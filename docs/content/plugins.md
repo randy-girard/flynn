@@ -396,6 +396,9 @@ compiled-in list.
   manifest `routes` use: Overview, Metrics, Slow queries, Databases, Users,
   plugin-specific pages (Kafka topics, consumer groups), Backup, Followers,
   Settings.
+- Metrics charts mark each deployment with a dashed line. Hovering the line
+  shows the deploy (app, time, status, Code/Config type, short release id),
+  and clicking it opens that release's page in the app.
 
 Tenant Postgres is `flynn-plugin-postgres` and stamps its own `dashboard`
 block (`base_url` on `postgres-plugin.discoverd`). The dashboard also keeps a
