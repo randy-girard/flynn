@@ -29,7 +29,9 @@ func BlobstoreAppURI(rel *ct.Release, arts map[string]*ct.Artifact) (string, boo
 
 // SelectReapReleaseIDs returns inactive blob releases beyond `keep` distinct
 // URIs (newest first) and any that are older than maxAge. Current/active
-// formations are never selected. already-reaped rows are skipped.
+// formations are never selected. already-reaped rows are skipped. Releases
+// that share a URI with an active or kept release are never selected, since
+// that blob stays in the blobstore.
 func SelectReapReleaseIDs(
 	releases []*ct.Release,
 	formations []*ct.Formation,
@@ -54,6 +56,19 @@ func SelectReapReleaseIDs(
 		}
 	}
 
+	activeURIs := make(map[string]struct{}, len(active))
+	for _, rel := range releases {
+		if rel == nil {
+			continue
+		}
+		if _, ok := active[rel.ID]; !ok {
+			continue
+		}
+		if uri, ok := blobURI(rel); ok {
+			activeURIs[uri] = struct{}{}
+		}
+	}
+
 	seen := make(map[string]struct{}, len(releases))
 	reap := make([]string, 0)
 	for _, rel := range releases {
@@ -68,6 +83,12 @@ func SelectReapReleaseIDs(
 		}
 		uri, ok := blobURI(rel)
 		if !ok {
+			continue
+		}
+		if _, ok := activeURIs[uri]; ok {
+			continue
+		}
+		if _, ok := seen[uri]; ok {
 			continue
 		}
 		tooOld := maxAge > 0 && rel.CreatedAt != nil && now.Sub(*rel.CreatedAt) > maxAge

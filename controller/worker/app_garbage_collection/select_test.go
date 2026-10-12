@@ -85,6 +85,38 @@ func TestSelectReapSkipsAlreadyReaped(t *testing.T) {
 	}
 }
 
+func TestSelectReapKeepsReleasesSharingKeptURI(t *testing.T) {
+	uri := func(rel *ct.Release) (string, bool) { return rel.Meta["uri"], true }
+	releases := []*ct.Release{
+		{ID: "live", Meta: map[string]string{"uri": "slug://a"}},
+		{ID: "env-change", Meta: map[string]string{"uri": "slug://a"}},
+		{ID: "prev", Meta: map[string]string{"uri": "slug://b"}},
+		{ID: "prev-env", Meta: map[string]string{"uri": "slug://b"}},
+		{ID: "old", Meta: map[string]string{"uri": "slug://c"}},
+		{ID: "older-live", Meta: map[string]string{"uri": "slug://a"}},
+	}
+	formations := []*ct.Formation{{ReleaseID: "live", Processes: map[string]int{"web": 1}}}
+	got := SelectReapReleaseIDs(releases, formations, 1, 0, time.Now(), uri)
+	if len(got) != 1 || got[0] != "old" {
+		t.Fatalf("got %v, want [old]", got)
+	}
+}
+
+func TestSelectReapKeepsAgedReleaseSharingLiveURI(t *testing.T) {
+	now := time.Date(2026, 5, 20, 12, 0, 0, 0, time.UTC)
+	uri := func(rel *ct.Release) (string, bool) { return rel.Meta["uri"], true }
+	releases := []*ct.Release{
+		{ID: "live", Meta: map[string]string{"uri": "slug://a"}, CreatedAt: ts(1)},
+		{ID: "ancient-same", Meta: map[string]string{"uri": "slug://a"}, CreatedAt: ts(48)},
+		{ID: "ancient", Meta: map[string]string{"uri": "slug://b"}, CreatedAt: ts(49)},
+	}
+	formations := []*ct.Formation{{ReleaseID: "live", Processes: map[string]int{"web": 1}}}
+	got := SelectReapReleaseIDs(releases, formations, 10, 24*time.Hour, now, uri)
+	if len(got) != 1 || got[0] != "ancient" {
+		t.Fatalf("got %v, want [ancient]", got)
+	}
+}
+
 func TestBlobstoreAppURISkipsSlugrunner(t *testing.T) {
 	rel := &ct.Release{ArtifactIDs: []string{"runner", "slug"}}
 	arts := map[string]*ct.Artifact{
