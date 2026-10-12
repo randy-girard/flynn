@@ -1419,12 +1419,15 @@ const DefaultBlobGCKeep = 10
 // ReserveResources on this struct is unused for scheduling; guarantees are
 // per runtime profile (RuntimeProfile.ReserveResources).
 type RuntimeSettings struct {
-	AllowCustomLimits bool       `json:"allow_custom_limits"`
-	MaxProcesses      int        `json:"max_processes"`
-	ReserveResources  bool       `json:"reserve_resources"`
-	BlobGCKeep        int        `json:"blob_gc_keep"`
-	BlobGCMaxAge      string     `json:"blob_gc_max_age"`
-	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+	AllowCustomLimits bool   `json:"allow_custom_limits"`
+	MaxProcesses      int    `json:"max_processes"`
+	ReserveResources  bool   `json:"reserve_resources"`
+	BlobGCKeep        int    `json:"blob_gc_keep"`
+	BlobGCMaxAge      string `json:"blob_gc_max_age"`
+	// MaxRestarts is how many consecutive crashes the scheduler restarts
+	// before it leaves an app process stopped. 0 means unlimited.
+	MaxRestarts int        `json:"max_restarts"`
+	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 // MaxProcessesOrDefault returns the cluster scale cap, falling back to DefaultMaxProcesses.

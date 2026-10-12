@@ -554,6 +554,25 @@ runtimes keep sharing leftover capacity under the same maxes.
 CPU shares are relative: when a host is under load, a job with 2000 milliCPU
 gets twice the CPU time as a job with 1000.
 
+### Restart limit
+
+The scheduler restarts a crashed process, waiting longer between attempts as
+crashes repeat. By default it keeps trying forever. Operators can set a
+cluster-wide limit on consecutive restarts (`max_restarts`):
+
+```text
+sudo flynn-host runtime:max-restarts 10
+sudo flynn-host runtime:max-restarts unlimited
+sudo flynn-host runtime:max-restarts
+```
+
+Once a process has been restarted that many times in a row and crashes again,
+the scheduler leaves it stopped. A process that runs for 5 minutes resets its
+count. Scaling the process type (`flynn scale`), deploying a new release, or
+changing the limit starts stopped processes again. A scheduler leader change
+also retries them, because the count is kept in memory. System apps always
+restart.
+
 ### Builder process limits
 
 `git push` copies `slugbuilder` (buildpack stack) or `dockerbuilder` (container

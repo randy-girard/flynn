@@ -5,6 +5,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/host/resource"
 )
 
@@ -185,6 +186,55 @@ func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
 		next[strings.ToLower(strings.TrimSpace(p.Name))] = p.ReserveResources
 	}
 	s.profileReserve = next
+}
+
+type runtimeSettingsGetter interface {
+	GetRuntimeSettings() (*ct.RuntimeSettings, error)
+}
+
+// syncRuntimeSettings loads the cluster restart limit. A changed limit
+// clears exhausted processes so they get a fresh set of restarts.
+func (s *Scheduler) syncRuntimeSettings(log log15.Logger) {
+	if s == nil {
+		return
+	}
+	g, ok := s.ControllerClient.(runtimeSettingsGetter)
+	if !ok {
+		return
+	}
+	settings, err := g.GetRuntimeSettings()
+	if err != nil {
+		log.Error("error getting runtime settings", "err", err)
+		return
+	}
+	s.setMaxRestarts(settings.MaxRestarts)
+}
+
+func (s *Scheduler) setMaxRestarts(n int) {
+	if n < 0 {
+		n = 0
+	}
+	if n == s.maxRestarts {
+		return
+	}
+	s.logger.Info("cluster restart limit changed", "fn", "setMaxRestarts", "from", s.maxRestarts, "to", n)
+	s.maxRestarts = n
+	for key := range s.restartsExhausted {
+		s.triggerRectify(key)
+	}
+	s.restartsExhausted = make(map[utils.FormationKey]Processes)
+}
+
+// restartLimitReached reports whether a crashed formation job has used its
+// restarts. System apps always restart so the cluster can recover.
+func (s *Scheduler) restartLimitReached(job *Job, restarts uint) bool {
+	if s.maxRestarts <= 0 || job == nil || job.Formation == nil {
+		return false
+	}
+	if app := job.Formation.App; app != nil && app.System() {
+		return false
+	}
+	return restarts >= uint(s.maxRestarts)
 }
 
 func (s *Scheduler) hostPersistentSingletonCount(hostID string) int {

@@ -101,7 +101,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +119,10 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 	if s.BlobGCKeep < 0 {
 		s.BlobGCKeep = cur.BlobGCKeepOrDefault()
 	}
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge).Scan(&s.UpdatedAt); err != nil {
+	if s.MaxRestarts < 0 {
+		s.MaxRestarts = cur.MaxRestarts
+	}
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
 	if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep)); err != nil {

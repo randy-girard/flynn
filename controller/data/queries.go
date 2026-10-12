@@ -963,9 +963,9 @@ RETURNING builtin, created_at, updated_at`
 UPDATE runtime_profiles SET deleted_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL AND builtin = false`
 	runtimeSettingsSelectQuery = `
-SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, updated_at FROM runtime_settings WHERE id = 1`
+SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, max_restarts, updated_at FROM runtime_settings WHERE id = 1`
 	runtimeSettingsUpdateQuery = `
-UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, updated_at = now()
+UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, max_restarts = $6, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
 	dbRuntimeListQuery = `
 SELECT engine, name, cpu, memory, disk, builtin FROM db_runtimes ORDER BY engine, name`

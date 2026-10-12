@@ -58,6 +58,20 @@ usage: flynn-host runtime:reserve [--disable] <id>
 Guarantee this runtime's CPU and memory when placing jobs (off by default).
 Shared runtimes keep the same CPU/memory maxes but do not hold a reservation.
 `
+	runtimeMaxRestartsUsage = `
+usage: flynn-host runtime:max-restarts [<count>]
+
+Show or set how many times in a row the scheduler restarts an app process
+that crashes before leaving it stopped. <count> is a number of restarts or
+"unlimited" (the default). A process that runs for 5 minutes resets its count.
+Scaling the process type, deploying a new release, or changing this setting
+starts stopped processes again. System apps always restart.
+
+Examples:
+
+    $ flynn-host runtime:max-restarts 10
+    $ flynn-host runtime:max-restarts unlimited
+`
 )
 
 func init() {
@@ -67,6 +81,28 @@ func init() {
 	Register("runtime:remove", runRuntimeProfileRemove, runtimeRemoveUsage)
 	Register("runtime:allow-custom", runRuntimeProfileAllowCustom, runtimeAllowCustomUsage)
 	Register("runtime:reserve", runRuntimeReserve, runtimeReserveUsage)
+	Register("runtime:max-restarts", runRuntimeMaxRestarts, runtimeMaxRestartsUsage)
+}
+
+// formatMaxRestarts renders RuntimeSettings.MaxRestarts, where 0 is unlimited.
+func formatMaxRestarts(n int) string {
+	if n <= 0 {
+		return "unlimited"
+	}
+	return strconv.Itoa(n)
+}
+
+// parseMaxRestarts accepts a restart count or "unlimited" (stored as 0).
+func parseMaxRestarts(s string) (int, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "unlimited" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("max restarts must be a positive number or \"unlimited\", got %q", s)
+	}
+	return n, nil
 }
 
 func runRuntimeProfileList(_ *docopt.Args) error {
@@ -82,7 +118,7 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault())
+	fmt.Printf("allow_custom_limits=%t max_processes=%d max_restarts=%s\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts))
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tRESERVE\tBUILTIN")
 	for _, p := range list {
@@ -208,11 +244,45 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 		ReserveResources:  cur.ReserveResources,
 		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
 		BlobGCMaxAge:      cur.BlobGCMaxAge,
+		MaxRestarts:       cur.MaxRestarts,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
 	}
 	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", s.AllowCustomLimits, s.MaxProcessesOrDefault())
+	return nil
+}
+
+func runRuntimeMaxRestarts(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	arg := args.String["<count>"]
+	if arg == "" {
+		fmt.Printf("max_restarts=%s\n", formatMaxRestarts(cur.MaxRestarts))
+		return nil
+	}
+	n, err := parseMaxRestarts(arg)
+	if err != nil {
+		return err
+	}
+	s := &ct.RuntimeSettings{
+		AllowCustomLimits: cur.AllowCustomLimits,
+		MaxProcesses:      cur.MaxProcessesOrDefault(),
+		ReserveResources:  cur.ReserveResources,
+		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:      cur.BlobGCMaxAge,
+		MaxRestarts:       n,
+	}
+	if err := client.UpdateRuntimeSettings(s); err != nil {
+		return err
+	}
+	fmt.Printf("max_restarts=%s\n", formatMaxRestarts(s.MaxRestarts))
 	return nil
 }
 

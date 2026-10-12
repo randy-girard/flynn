@@ -106,6 +106,7 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		ReserveResources  bool    `json:"reserve_resources"`
 		BlobGCKeep        *int    `json:"blob_gc_keep"`
 		BlobGCMaxAge      *string `json:"blob_gc_max_age"`
+		MaxRestarts       *int    `json:"max_restarts"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
@@ -122,6 +123,14 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		ReserveResources:  body.ReserveResources,
 		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
 		BlobGCMaxAge:      cur.BlobGCMaxAge,
+		MaxRestarts:       cur.MaxRestarts,
+	}
+	if body.MaxRestarts != nil {
+		if *body.MaxRestarts < 0 {
+			respondWithError(w, ct.ValidationError{Field: "max_restarts", Message: "must be 0 (unlimited) or more"})
+			return
+		}
+		s.MaxRestarts = *body.MaxRestarts
 	}
 	if body.BlobGCKeep != nil {
 		if *body.BlobGCKeep < 0 {

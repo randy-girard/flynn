@@ -132,6 +132,15 @@ type Scheduler struct {
 	// that runtime on a host that still has the requested CPU and memory
 	// free. Off by default per runtime.
 	profileReserve map[string]bool
+
+	// maxRestarts is RuntimeSettings.MaxRestarts: how many consecutive
+	// crashes are restarted before a process is left stopped. 0 is unlimited.
+	maxRestarts int
+
+	// restartsExhausted counts, per formation and process type, the
+	// processes left stopped after reaching maxRestarts. formationDiff
+	// subtracts them so rectify does not start replacements.
+	restartsExhausted map[utils.FormationKey]Processes
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -142,6 +151,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		logger:                l,
 		maxHostChecks:         defaultMaxHostChecks,
 		profileReserve:        make(map[string]bool),
+		restartsExhausted:     make(map[utils.FormationKey]Processes),
 		hosts:                 make(map[string]*Host),
 		routers:               make(map[string]*Router),
 		jobs:                  make(map[string]*Job),
@@ -758,6 +768,7 @@ func (s *Scheduler) SyncFormations() {
 	}
 
 	s.syncRuntimeProfiles(log)
+	s.syncRuntimeSettings(log)
 
 	// check that all formations we think are active are still active
 	for _, f := range s.formations {
@@ -1092,6 +1103,14 @@ func (s *Scheduler) formationDiff(formation *Formation) Processes {
 	key := formation.key()
 	actual := s.jobs.GetProcesses(key)
 	diff := formation.Diff(actual)
+	for typ, n := range s.restartsExhausted[key] {
+		if diff[typ] > 0 {
+			diff[typ] -= n
+			if diff[typ] < 0 {
+				diff[typ] = 0
+			}
+		}
+	}
 	if !diff.IsEmpty() {
 		log := s.logger.New("fn", "formationDiff", "app.id", key.AppID, "release.id", key.ReleaseID)
 		log.Info("expected different from actual", "expected", formation.Processes, "actual", actual, "diff", diff)
@@ -2766,6 +2785,7 @@ func (s *Scheduler) handleFormation(ef *ct.ExpandedFormation) (formation *Format
 		log.Info("updating processes and tags of existing formation", "processes", ef.Processes, "tags", ef.Tags)
 		formation.Tags = ef.Tags
 		formation.SetProcesses(ef.Processes)
+		delete(s.restartsExhausted, formation.key())
 	}
 	s.triggerRectify(formation.key())
 	return
@@ -3039,6 +3059,17 @@ func (s *Scheduler) restartJob(job *Job) {
 	// reset the restart count if it has been running for more than 5 minutes
 	if !job.StartedAt.IsZero() && job.StartedAt.Before(time.Now().Add(-5*time.Minute)) {
 		restarts = 0
+	}
+	if s.restartLimitReached(job, restarts) {
+		key := job.Formation.key()
+		exhausted, ok := s.restartsExhausted[key]
+		if !ok {
+			exhausted = make(Processes)
+			s.restartsExhausted[key] = exhausted
+		}
+		exhausted[job.Type]++
+		s.logger.Warn("process reached the cluster restart limit, leaving it stopped", "fn", "restartJob", "app.id", job.AppID, "release.id", job.ReleaseID, "job.type", job.Type, "job.id", job.ID, "restarts", restarts, "max_restarts", s.maxRestarts)
+		return
 	}
 	backoff := s.getBackoffDuration(restarts)
 

@@ -1296,6 +1296,10 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		)`,
 		`CREATE INDEX oauth_sessions_expires_idx ON oauth_sessions (expires_at)`,
 	)
+	migrations.Add(71,
+		`ALTER TABLE runtime_settings ADD COLUMN max_restarts integer NOT NULL DEFAULT 0`,
+		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_max_restarts_check CHECK (max_restarts >= 0)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

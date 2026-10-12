@@ -18,7 +18,7 @@ func TestDBRuntimeCommandsRegistered(t *testing.T) {
 			t.Errorf("missing %s", name)
 		}
 	}
-	if commands["runtime"] == nil || commands["runtime:create"] == nil {
+	if commands["runtime"] == nil || commands["runtime:create"] == nil || commands["runtime:max-restarts"] == nil {
 		t.Fatal("app runtime commands missing")
 	}
 	help := FormatHelp("db-runtime")
@@ -30,6 +30,23 @@ func TestDBRuntimeCommandsRegistered(t *testing.T) {
 	name, args, from := ResolveCommand("db-runtime", []string{"create", "--cpu", "100", "--memory", "128MB", "--disk", "1GB", "redis", "cache"})
 	if name != "db-runtime:create" || from != "db-runtime create" {
 		t.Fatalf("alias %q from=%q args=%q", name, from, args)
+	}
+}
+
+func TestParseMaxRestarts(t *testing.T) {
+	for in, want := range map[string]int{"unlimited": 0, "Unlimited": 0, "1": 1, " 10 ": 10} {
+		got, err := parseMaxRestarts(in)
+		if err != nil || got != want {
+			t.Errorf("parseMaxRestarts(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"0", "-1", "ten", ""} {
+		if _, err := parseMaxRestarts(in); err == nil {
+			t.Errorf("parseMaxRestarts(%q) accepted", in)
+		}
+	}
+	if formatMaxRestarts(0) != "unlimited" || formatMaxRestarts(5) != "5" {
+		t.Fatal("formatMaxRestarts")
 	}
 }
 
