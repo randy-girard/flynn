@@ -374,6 +374,10 @@ compiled-in list.
 - The plugin authenticates a short-lived dashboard SSO JWT (ES256, JWKS at
   `http://dashboard.discoverd/.well-known/jwks.json`) that carries app id,
   user, and permissions.
+- `cluster.nav` pages get app id `cluster` for every signed-in user. Only
+  cluster-wide users get `*` in permissions, so admin-only pages must check
+  for `*`, not just app id `cluster`. `cluster.settings` is already limited
+  to cluster-wide users by the dashboard.
 - Uninstalled plugins do not appear as a broken iframe; the dashboard shows
   an install hint (`sudo flynn-host plugin:install <name>`).
 - Datastore plugins emit **per-app resource metrics as events** (app id,
