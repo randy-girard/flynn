@@ -389,7 +389,13 @@ compiled-in list.
   in the plugin README so alerts can hook them. The dashboard Alerts catalog
   lists Redis and Postgres series only when that plugin is installed; those
   add-on Metrics pages use the same timeframe, chart rules, and **Add alert**
-  control as app metrics, with Slow commands / Slow queries on a sibling tab.
+  control as app metrics, with Slow commands / Slow queries on a sibling tab
+  (Redis `SLOWLOG`, Postgres `pg_stat_statements`, MySQL `performance_schema`
+  statement digests).
+- Every data source page shows its tabs in one order, whatever order the
+  manifest `routes` use: Overview, Metrics, Slow queries, Databases, Users,
+  plugin-specific pages (Kafka topics, consumer groups), Backup, Followers,
+  Settings.
 
 Tenant Postgres is `flynn-plugin-postgres` and stamps its own `dashboard`
 block (`base_url` on `postgres-plugin.discoverd`). The dashboard also keeps a

@@ -32,6 +32,11 @@ Each resource user is created with `MAX_USER_CONNECTIONS` (default 20, override
 with `MYSQL_MAX_USER_CONNECTIONS` on the API). The provider sets `tenant_safe`.
 See [Plugins](../plugins.md).
 
+Instances run with `performance_schema` on. The dashboard resource page has a
+**Slow queries** tab listing the statement digests with the highest mean
+latency (or, when `performance_schema` is off, queries running longer than
+500 ms). Instances created earlier enable it on their next restart.
+
 ## Usage
 
 ### Adding a database to an app
