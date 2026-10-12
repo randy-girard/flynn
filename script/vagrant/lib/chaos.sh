@@ -152,13 +152,150 @@ chaos_stop_monitor() {
   fi
 }
 
-# chaos_write_report renders $1/report.txt from rounds.tsv and samples.tsv.
+# chaos_write_html renders $1/report.html, a self-contained page with the
+# same data as report.txt plus a per-sample health timeline.
+chaos_write_html() {
+  local dir="$1" seed="$2" rounds="$3" order="$4" started="$5" verdict="$6" finished="$7"
+  {
+    cat <<'EOF'
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flynn chaos report</title>
+<style>
+:root{--ok:#1f9d55;--okbg:#e3f6ea;--bad:#d64545;--badbg:#fde8e8;--warn:#b7791f;--warnbg:#fdf3dc;--mute:#6b7280;--line:#e5e7eb;--ink:#111827}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:var(--ink);background:#f6f7f9}
+main{max-width:1100px;margin:0 auto;padding:32px 24px 48px}
+h1{font-size:24px;margin:0 0 4px}
+h2{font-size:16px;margin:32px 0 12px}
+.meta{color:var(--mute);margin:0 0 20px}
+.meta code{color:var(--ink)}
+code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef0f3;padding:1px 5px;border-radius:4px}
+.verdict{display:inline-block;font-weight:600;padding:6px 14px;border-radius:999px;margin:8px 0 4px}
+.verdict.pass{background:var(--okbg);color:var(--ok)}
+.verdict.fail{background:var(--badbg);color:var(--bad)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.card .k{color:var(--mute);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+.card .v{font-size:22px;font-weight:600;margin-top:2px}
+.card .s{color:var(--mute);font-size:12px}
+table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:#f9fafb;font-size:12px;color:var(--mute);text-transform:uppercase;letter-spacing:.04em}
+tr:last-child td{border-bottom:0}
+td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.badge{display:inline-block;padding:1px 9px;border-radius:999px;font-size:12px;font-weight:600}
+.badge.ok{background:var(--okbg);color:var(--ok)}
+.badge.bad{background:var(--badbg);color:var(--bad)}
+.badge.skip{background:var(--warnbg);color:var(--warn)}
+.tag{display:inline-block;background:#eef0f3;border-radius:4px;padding:0 6px;margin:0 4px 2px 0;font-size:12px}
+.timeline{background:#fff;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto}
+.tl-row{display:flex;align-items:center;gap:0;margin:2px 0}
+.tl-label{flex:0 0 90px;font-size:12px;color:var(--mute);position:sticky;left:0;background:#fff}
+.tl-cells{display:flex;gap:2px}
+.c{width:12px;height:18px;border-radius:2px;background:var(--okbg);border:1px solid #c6ecd4}
+.c.f{background:var(--bad);border-color:var(--bad)}
+.c.p0{background:#eef0f3;border-color:#eef0f3}
+.c.p1{background:#c7d2fe;border-color:#c7d2fe}
+.c.p2{background:#a5b4fc;border-color:#a5b4fc}
+.legend{color:var(--mute);font-size:12px;margin-top:8px}
+.legend span{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 12px;vertical-align:-1px}
+.msg{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
+footer{color:var(--mute);font-size:12px;margin-top:32px}
+</style></head><body><main>
+EOF
+    awk -F'\t' -v seed="${seed}" -v rounds="${rounds}" -v order="${order}" -v started="${started}" \
+      -v finished="${finished}" -v verdict="${verdict}" -v nodes="$(flynn_vagrant_get_nodes)" \
+      -v tenants="${CHAOS_TENANT_APPS:-none}" -v interval="${CHAOS_MONITOR_INTERVAL:-15}" '
+      function esc(s) { gsub(/&/, "\\&amp;", s); gsub(/</, "\\&lt;", s); gsub(/>/, "\\&gt;", s); gsub(/"/, "\\&quot;", s); return s }
+      FILENAME == ARGV[1] {
+        total++; t[total] = $2; ph[total] = $3; st[total] = $4; fl[total] = $6
+        if ($4 == "healthy") ok++
+        n = split($5, s, ","); delete now
+        for (k = 1; k <= n; k++) if (s[k] != "-") {
+          now[s[k]] = 1; bad[total, s[k]] = 1
+          if (!(s[k] in fails)) { corder[++m] = s[k]; first[s[k]] = $2 }
+          fails[s[k]]++; if (!run[s[k]]) outages[s[k]]++; run[s[k]]++
+          if (run[s[k]] > longest[s[k]]) longest[s[k]] = run[s[k]]
+        }
+        for (c in run) if (!(c in now)) run[c] = 0
+        if ($3 ~ /^round /) { split($3, p, " "); r = p[2]; for (k = 1; k <= n; k++) if (s[k] != "-" && !rs[r, s[k]]++) secs[r] = secs[r] "<span class=\"tag\">" esc(s[k]) "</span>" }
+        if ($6 != "-") { c2 = split($6, f, " ;; "); for (k = 1; k <= c2; k++) { msg = substr(f[k], 1, 300); if (!(msg in msgs)) morder[++mm] = msg; msgs[msg]++ } }
+        next
+      }
+      {
+        nr++; rr[nr] = $1; rk[nr] = $2; rt[nr] = $3; rres[nr] = $6; rrec[nr] = $7
+        if ($6 == "recovered") { rec++; v = $7; sub(/s$/, "", v); if (v + 0 > maxrec) { maxrec = v + 0; maxround = $1 } }
+        else if ($6 == "skipped") skp++
+        else failed++
+      }
+      END {
+        pass = (verdict ~ /^PASSED/)
+        print "<h1>Flynn chaos report</h1>"
+        printf "<div class=\"verdict %s\">%s</div>\n", (pass ? "pass" : "fail"), esc(verdict)
+        printf "<p class=\"meta\">%s &rarr; %s &middot; seed <code>%s</code> (<code>CHAOS_SEED=%s</code> repeats this run) &middot; %s nodes &middot; tenant apps: %s<br>fault order: %s</p>\n", esc(started), esc(finished), esc(seed), esc(seed), esc(nodes), esc(tenants), esc(order)
+        print "<div class=\"cards\">"
+        printf "<div class=\"card\"><div class=\"k\">Rounds</div><div class=\"v\">%d / %d</div><div class=\"s\">recovered of %s planned</div></div>\n", rec, nr, esc(rounds)
+        printf "<div class=\"card\"><div class=\"k\">Skipped / failed</div><div class=\"v\">%d / %d</div><div class=\"s\">rounds</div></div>\n", skp, failed
+        printf "<div class=\"card\"><div class=\"k\">Slowest recovery</div><div class=\"v\">%s</div><div class=\"s\">%s</div></div>\n", (rec ? maxrec "s" : "-"), (rec ? "round " maxround : "no recovered rounds")
+        printf "<div class=\"card\"><div class=\"k\">Healthy samples</div><div class=\"v\">%d%%</div><div class=\"s\">%d of %d, every %ss</div></div>\n", (total ? int(ok * 100 / total) : 0), ok, total, esc(interval)
+        print "</div>"
+
+        print "<h2>Rounds</h2><table><tr><th>Round</th><th>Fault</th><th>Result</th><th>Recovery</th><th>Checks failed</th><th>Target</th></tr>"
+        for (i = 1; i <= nr; i++) {
+          cls = (rres[i] == "recovered" ? "ok" : (rres[i] == "skipped" ? "skip" : "bad"))
+          printf "<tr><td class=\"num\">%s</td><td>%s</td><td><span class=\"badge %s\">%s</span></td><td class=\"num\">%s</td><td>%s</td><td class=\"msg\">%s</td></tr>\n", esc(rr[i]), esc(rk[i]), cls, esc(rres[i]), esc(rrec[i]), (secs[rr[i]] ? secs[rr[i]] : "-"), esc(rt[i])
+        }
+        print "</table>"
+
+        print "<h2>Health timeline</h2><div class=\"timeline\">"
+        printf "<div class=\"tl-row\"><div class=\"tl-label\">phase</div><div class=\"tl-cells\">"
+        for (i = 1; i <= total; i++) {
+          pc = "p0"; if (ph[i] ~ /^round /) { split(ph[i], p, " "); pc = (p[2] % 2 ? "p1" : "p2") }
+          printf "<div class=\"c %s\" title=\"%s %s\"></div>", pc, esc(t[i]), esc(ph[i])
+        }
+        print "</div></div>"
+        printf "<div class=\"tl-row\"><div class=\"tl-label\">overall</div><div class=\"tl-cells\">"
+        for (i = 1; i <= total; i++) printf "<div class=\"c%s\" title=\"%s %s: %s\"></div>", (st[i] == "healthy" ? "" : " f"), esc(t[i]), esc(ph[i]), esc(st[i])
+        print "</div></div>"
+        for (k = 1; k <= m; k++) {
+          c = corder[k]
+          printf "<div class=\"tl-row\"><div class=\"tl-label\">%s</div><div class=\"tl-cells\">", esc(c)
+          for (i = 1; i <= total; i++) {
+            tip = t[i] " " ph[i] ": " ((i, c) in bad ? "FAIL" : "ok")
+            if ((i, c) in bad) { c2 = split(fl[i], f, " ;; "); for (j = 1; j <= c2; j++) if (index(f[j], c ":") == 1) tip = tip "\n" substr(f[j], 1, 300) }
+            printf "<div class=\"c%s\" title=\"%s\"></div>", ((i, c) in bad ? " f" : ""), esc(tip)
+          }
+          print "</div></div>"
+        }
+        print "<div class=\"legend\">one cell per sample; hover for time and failures<span style=\"background:var(--okbg);border:1px solid #c6ecd4\"></span>passing<span style=\"background:var(--bad)\"></span>failing<span style=\"background:#c7d2fe\"></span>fault round<span style=\"background:#eef0f3\"></span>baseline / between rounds</div></div>"
+
+        print "<h2>Checks</h2>"
+        if (m == 0) print "<p>Every check passed in every sample.</p>"
+        else {
+          print "<table><tr><th>Check</th><th>Failed samples</th><th>Outages</th><th>Longest outage</th><th>First failed</th></tr>"
+          for (k = 1; k <= m; k++) { c = corder[k]; printf "<tr><td>%s</td><td class=\"num\">%d / %d</td><td class=\"num\">%d</td><td class=\"num\">~%ds</td><td>%s</td></tr>\n", esc(c), fails[c], total, outages[c], longest[c] * interval, esc(first[c]) }
+          print "</table>"
+          print "<h2>Failure messages</h2><table><tr><th>Samples</th><th>Message</th></tr>"
+          for (k = 1; k <= mm; k++) printf "<tr><td class=\"num\">%d</td><td class=\"msg\">%s</td></tr>\n", msgs[morder[k]], esc(morder[k])
+          print "</table>"
+        }
+        print "<footer>Raw data: <a href=\"samples.tsv\">samples.tsv</a> (one line per health sample), <a href=\"rounds.tsv\">rounds.tsv</a> (one line per fault), <a href=\"report.txt\">report.txt</a></footer>"
+      }' "${dir}/samples.tsv" "${dir}/rounds.tsv"
+    echo "</main></body></html>"
+  } > "${dir}/report.html"
+}
+
+# chaos_write_report renders $1/report.txt and $1/report.html from
+# rounds.tsv and samples.tsv.
 chaos_write_report() {
-  local dir="$1" seed="$2" rounds="$3" order="$4" started="$5" verdict="$6"
+  local dir="$1" seed="$2" rounds="$3" order="$4" started="$5" verdict="$6" finished
+  finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  chaos_write_html "${dir}" "${seed}" "${rounds}" "${order}" "${started}" "${verdict}" "${finished}"
   {
     echo "Flynn chaos report"
     echo "  started   ${started}"
-    echo "  finished  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "  finished  ${finished}"
     echo "  result    ${verdict}"
     echo "  seed      ${seed} (CHAOS_SEED=${seed} repeats this run)"
     echo "  rounds    ${rounds}, order: ${order}"
@@ -187,6 +324,7 @@ chaos_write_report() {
       }' "${dir}/samples.tsv"
     echo
     echo "Raw data: ${dir}/samples.tsv, ${dir}/rounds.tsv"
+    echo "HTML report: ${dir}/report.html"
   } > "${dir}/report.txt"
 }
 

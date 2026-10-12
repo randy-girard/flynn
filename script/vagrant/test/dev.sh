@@ -801,17 +801,28 @@ if ! grep -Fq 'flynn-host", "stop"' "${mod}/guest/chaos-fault.sh"; then
 fi
 # chaos runs the monitor itself and writes a report; render one from fixtures.
 report_dir="$(mktemp -d)"
-printf '1\t19:00:00\tbaseline\thealthy\t-\t-\n2\t19:00:15\tround 1 node-reboot\tUNHEALTHY\tcluster,plugins\tcluster: below formation x 1/3 ;; plugins: dashboard=502\n3\t19:00:30\tround 1 node-reboot\tUNHEALTHY\tcluster\tcluster: below formation x 2/3\n' > "${report_dir}/samples.tsv"
+printf '1\t19:00:00\tbaseline\thealthy\t-\t-\n2\t19:00:15\tround 1 node-reboot\tUNHEALTHY\tcluster,plugins\tcluster: below formation x 1/3 ;; plugins: dashboard=502\n3\t19:00:30\tround 1 node-reboot\tUNHEALTHY\tcluster\tcluster: below formation x 2/3 <db> & more\n' > "${report_dir}/samples.tsv"
 printf '1\tnode-reboot\tnode=dev-node2\t0\t0\trecovered\t75s\n2\ttenant-job\t-\t0\t0\tskipped\t-\n' > "${report_dir}/rounds.tsv"
 report="$(bash -c 'set -euo pipefail; flynn_vagrant_get_nodes() { echo 3; }; source "$1"; chaos_write_report "$2" 42 2 "node-reboot tenant-job" start "PASSED: 1 recovered, 1 skipped"; cat "$2/report.txt"' _ "${mod}/lib/chaos.sh" "${report_dir}")"
+html="$(cat "${report_dir}/report.html")"
 rm -rf "${report_dir}"
-for want in "PASSED: 1 recovered, 1 skipped" "CHAOS_SEED=42" "node-reboot        recovered      75s       cluster,plugins" "3 samples every 15s, 1 healthy (33%)" "cluster    2/3            1        ~30s" "plugins: dashboard=502"; do
+for want in "PASSED: 1 recovered, 1 skipped" "CHAOS_SEED=42" "node-reboot        recovered      75s       cluster,plugins" "3 samples every 15s, 1 healthy (33%)" "cluster    2/3            1        ~30s" "plugins: dashboard=502" "report.html"; do
   if ! grep -Fq -e "${want}" <<<"${report}"; then
     echo "chaos report missing: ${want}" >&2
     printf '%s\n' "${report}" >&2
     exit 1
   fi
 done
+for want in "<!DOCTYPE html>" "</html>" "PASSED: 1 recovered, 1 skipped" "CHAOS_SEED=42" '<span class="badge ok">recovered</span>' '<span class="badge skip">skipped</span>' "75s" ">33%<" "<td>cluster</td><td class=\"num\">2 / 3</td>" "plugins: dashboard=502" "below formation x 2/3 &lt;db&gt; &amp; more"; do
+  if ! grep -Fq -e "${want}" <<<"${html}"; then
+    echo "chaos HTML report missing: ${want}" >&2
+    exit 1
+  fi
+done
+if grep -Fq "<db>" <<<"${html}"; then
+  echo "chaos HTML report must escape failure messages" >&2
+  exit 1
+fi
 for want in "chaos_monitor_loop" "chaos_stop_monitor" "flynn-logs/chaos" "report.txt"; do
   if ! grep -Fq "${want}" "${mod}/lib/chaos.sh"; then
     echo "lib/chaos.sh missing ${want}" >&2
