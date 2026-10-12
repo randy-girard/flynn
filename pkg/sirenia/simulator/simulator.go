@@ -260,10 +260,10 @@ func (s *Simulator) AddPeer(args []string) {
 	if peer == nil {
 		peer = s.newPeerIdent(name)
 	}
-	s.discoverd.PeerJoined(peer)
-
 	// If the primary is one of the simulated peers, then simulate the behavior
-	// where the primary adds new peers to the async list.
+	// where the primary adds new peers to the async list. Write it before the
+	// join: a sync whose primary is gone takes over as soon as it sees the new
+	// peer, and its state write would race this one.
 	cs := s.discoverd.ClusterState()
 	if cs.State != nil && cs.State.Primary.ID != s.peer.Self.ID &&
 		peer.ID != cs.State.Primary.ID &&
@@ -271,6 +271,7 @@ func (s *Simulator) AddPeer(args []string) {
 		cs.State.Async = append(cs.State.Async, peer)
 		s.discoverd.SetClusterState(cs, false)
 	}
+	s.discoverd.PeerJoined(peer)
 
 	s.jsonDump(s.discoverd.Peers())
 }
