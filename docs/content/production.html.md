@@ -587,6 +587,8 @@ To update **every host**—push new `flynn-host` binaries to all peers, pull ima
 
 When the update will pull container images, it first garbage-collects unused volumes (the same keep rules as `flynn-host volume:gc`: running jobs, controller-tracked volumes, and system images) and leftover image cache, then requires at least 5 GiB free on each host. Persistent database volumes the scheduler still tracks are not deleted. If the controller volume list cannot be loaded (for example the cluster key is missing after discoverd stopped publishing `AUTH_KEY`), volume GC skips deletes rather than removing datasets the scheduler still tracks. If a host is still short of space after that, the update stops before changing binaries so the cluster is not left half-upgraded.
 
+While platform postgres peers are replaced, the update logs a `deployment progress` line every 10 seconds with each peer's replication state. A replica copying from its upstream shows `pg_basebackup 45% (5.1 GB of 11.3 GB)`. Once it streams WAL it shows `streaming WAL, catching up 80%, 12.0 MB behind`, where the percent is measured against the largest lag seen during that wait, until `WAL caught up`.
+
 ### Rollback after a bad upgrade
 
 In-place rollback is the same updater pointed at an **older published GitHub

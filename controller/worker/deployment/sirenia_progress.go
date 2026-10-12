@@ -15,7 +15,8 @@ const sireniaProgressEvery = 10 * time.Second
 // waitSireniaProgress runs fn while emitting a replication snapshot every
 // 10s so flynn-host update is not silent during pg_basebackup / WAL catch-up.
 func (d *DeployJob) waitSireniaProgress(log log15.Logger, processType, what string, addrs []string, fn func() error) error {
-	d.emitSireniaProgress(log, processType, what, addrs)
+	tracker := &sireniaclient.CatchupTracker{}
+	d.emitSireniaProgress(log, processType, what, addrs, tracker)
 	done := make(chan error, 1)
 	go func() { done <- fn() }()
 	tick := time.NewTicker(sireniaProgressEvery)
@@ -25,15 +26,15 @@ func (d *DeployJob) waitSireniaProgress(log log15.Logger, processType, what stri
 		case err := <-done:
 			return err
 		case <-tick.C:
-			d.emitSireniaProgress(log, processType, what, addrs)
+			d.emitSireniaProgress(log, processType, what, addrs, tracker)
 		case <-d.stop:
 			return worker.ErrStopped
 		}
 	}
 }
 
-func (d *DeployJob) emitSireniaProgress(log log15.Logger, processType, what string, addrs []string) {
-	msg := sireniaProgressMessage(what, addrs)
+func (d *DeployJob) emitSireniaProgress(log log15.Logger, processType, what string, addrs []string, tracker *sireniaclient.CatchupTracker) {
+	msg := sireniaProgressMessage(what, addrs, tracker)
 	log.Info("sirenia wait progress", "what", what, "status", msg)
 	if d.deployEvents == nil {
 		return
@@ -49,11 +50,11 @@ func (d *DeployJob) emitSireniaProgress(log log15.Logger, processType, what stri
 	}
 }
 
-func sireniaProgressMessage(what string, addrs []string) string {
+func sireniaProgressMessage(what string, addrs []string, tracker *sireniaclient.CatchupTracker) string {
 	if len(addrs) == 2 && addrs[0] != "" && addrs[1] != "" {
 		up, upErr := sireniaclient.NewClient(addrs[0]).Status()
 		down, downErr := sireniaclient.NewClient(addrs[1]).Status()
-		return what + ": " + sireniaclient.FormatReplSyncProgress(up, down, upErr, downErr)
+		return what + ": " + tracker.FormatReplSync(up, down, upErr, downErr)
 	}
 	parts := make([]string, 0, len(addrs))
 	for _, addr := range addrs {

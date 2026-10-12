@@ -1,9 +1,16 @@
 package deployment
 
 import (
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/randy-girard/flynn/discoverd/client"
+	sireniaclient "github.com/randy-girard/flynn/pkg/sirenia/client"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
@@ -112,7 +119,49 @@ func TestFindSireniaPeerByRelease(t *testing.T) {
 }
 
 func TestSireniaProgressMessageWithoutAddrs(t *testing.T) {
-	if got := sireniaProgressMessage("replication sync", nil); got != "replication sync" {
+	if got := sireniaProgressMessage("replication sync", nil, nil); got != "replication sync" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// fakeSireniaPeer serves /status and returns the postgres addr whose
+// sirenia API (port+1) is the test server.
+func fakeSireniaPeer(t *testing.T, status func() *sireniaclient.Status) string {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(status())
+	}))
+	t.Cleanup(srv.Close)
+	host, p, _ := net.SplitHostPort(srv.Listener.Addr().String())
+	port, _ := strconv.Atoi(p)
+	return net.JoinHostPort(host, strconv.Itoa(port-1))
+}
+
+func TestSireniaProgressMessagePercent(t *testing.T) {
+	up := fakeSireniaPeer(t, func() *sireniaclient.Status {
+		return &sireniaclient.Status{
+			Peer:     &state.PeerInfo{Role: state.RoleSync},
+			Database: &sireniaclient.DatabaseInfo{Running: true, XLog: "0/1000"},
+		}
+	})
+	downXLog := ""
+	down := fakeSireniaPeer(t, func() *sireniaclient.Status {
+		db := &sireniaclient.DatabaseInfo{Running: downXLog != "", XLog: downXLog}
+		if downXLog == "" {
+			db.Basebackup = &sireniaclient.BasebackupProgress{DoneBytes: 4 << 30, TotalBytes: 10 << 30, Percent: 40}
+		}
+		return &sireniaclient.Status{Peer: &state.PeerInfo{ID: "async-1", Role: state.RoleAsync}, Database: db}
+	})
+	tracker := &sireniaclient.CatchupTracker{}
+	got := sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	if !strings.Contains(got, "async: pg_basebackup 40% (4.0 GB of 10.0 GB)") {
+		t.Fatalf("basebackup: %q", got)
+	}
+	downXLog = "0/0800"
+	sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	downXLog = "0/0C00"
+	got = sireniaProgressMessage("replication sync", []string{up, down}, tracker)
+	if !strings.Contains(got, "catching up 50%, 1.0 KB behind") {
+		t.Fatalf("catch-up: %q", got)
 	}
 }

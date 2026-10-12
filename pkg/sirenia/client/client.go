@@ -48,6 +48,16 @@ type DatabaseInfo struct {
 	XLog             string              `json:"xlog"`
 	UserExists       bool                `json:"user_exists"`
 	ReadWrite        bool                `json:"read_write"`
+	// Basebackup is set while this peer pulls pg_basebackup from its upstream.
+	Basebackup *BasebackupProgress `json:"basebackup,omitempty"`
+}
+
+// BasebackupProgress is the latest pg_basebackup --progress report.
+type BasebackupProgress struct {
+	DoneBytes  int64     `json:"done_bytes"`
+	TotalBytes int64     `json:"total_bytes"`
+	Percent    int       `json:"percent"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type Status struct {

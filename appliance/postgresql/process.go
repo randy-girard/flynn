@@ -116,6 +116,8 @@ type Process struct {
 	// start uses opTimeout. A reused datadir (no fresh backup) uses the short
 	// hang budget instead.
 	justBasebackup bool
+	// basebackup is the latest pg_basebackup progress while one is running.
+	basebackup atomic.Pointer[client.BasebackupProgress]
 	// inStart is true while start() is waiting for postgres to accept
 	// connections. The WAL detector reseeds itself only after start has
 	// returned; during start the wait loop owns the reseed.
@@ -263,6 +265,7 @@ func (p *Process) Info() (*client.DatabaseInfo, error) {
 		Config:           p.config(),
 		Running:          p.running(),
 		SyncedDownstream: p.syncedDownstream(),
+		Basebackup:       p.basebackup.Load(),
 	}
 	xlog, err := p.XLogPosition()
 	res.XLog = string(xlog)
@@ -670,7 +673,9 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 	}
 
 	log.Info("pulling basebackup", "staging", staging)
-	err := p.runCmd(exec.Command(
+	p.basebackup.Store(&client.BasebackupProgress{UpdatedAt: time.Now().UTC()})
+	defer p.basebackup.Store(nil)
+	cmd := exec.Command(
 		p.binPath("pg_basebackup"),
 		"--pgdata", staging,
 		"--dbname", fmt.Sprintf(
@@ -686,7 +691,9 @@ func (p *Process) pullBasebackup(log log15.Logger, upstream *discoverd.Instance)
 		"--checkpoint=fast",
 		"--progress",
 		"--verbose",
-	))
+	)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &basebackupProgressWriter{dst: &p.basebackup})
+	err := p.runCmd(cmd)
 	if err != nil {
 		log.Error("error pulling basebackup", "err", err)
 		if rmErr := os.RemoveAll(staging); rmErr != nil {
@@ -1779,7 +1786,9 @@ func (p *Process) clusterAlreadyInitialized() bool {
 func (p *Process) runCmd(cmd *exec.Cmd) error {
 	p.log.Debug("running command", "fn", "runCmd", "cmd", cmd.Args)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	if cmd.Stderr == nil {
+		cmd.Stderr = os.Stderr
+	}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
