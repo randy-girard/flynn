@@ -60,6 +60,11 @@ The plugin pushes its policy to the controller (`PUT /cluster/policy`), and
 the controller enforces it on new releases; see
 [Apps → Cluster policy](apps.md#cluster-policy). Uninstalling the plugin
 keeps the last pushed policy for a reinstall but stops enforcing it.
+The plugin also copies the controller's audit log (`GET /cluster/audit`; see
+[Security → Controller audit log](security.md#controller-audit-log)) into its
+own every minute, exports it as CSV, POSTs new events to an optional signed
+webhook, and applies an optional retention period to both copies
+(`flynn-host enterprise audit-set`).
 
 ## Private plugins
 
