@@ -56,6 +56,11 @@ policy, license). Catalog CLI: `flynn enterprise org` / `team` / `list` (account
 to the four built-in app roles. On Flynn **hosted**, a paid billing plan that
 includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
 (enterprise probes `http://billing.discoverd/entitlements`).
+The plugin pushes its policy to the controller (`PUT /cluster/policy`), and
+the controller enforces it on new releases; see
+[Apps → Cluster policy](apps.md#cluster-policy). Uninstalling the plugin
+leaves the last pushed policy in place; clear it with
+`PUT /cluster/policy` and an empty body (`{}`).
 
 ## Private plugins
 
