@@ -560,6 +560,7 @@ stored policy for a later reinstall but stops enforcing it.
 | `default_runtime` | Runtime given to a new process type that has no runtime and no CPU/memory set, instead of `small`. Must name an existing runtime. |
 | `disable_custom_cpu` | Rejects a release when a process type has CPU/memory limits but no runtime. Apply one with `flynn limit:runtime <type> <runtime>`. Older releases without a runtime need this before their next deploy. |
 | `image_allowlist` | Rejects a release whose runtime image is not listed. Entries match the build stack (`heroku-24`, `container`), the image name (`slugrunner-24` or `slugrunner`), or the `flynn docker:push` repository. An empty list allows every image. |
+| `allowed_buildpacks` | Limits which buildpacks a `git push` build may use. Entries are bundled buildpack names (`multi`, `static`, `ruby`, `nodejs`, `clojure`, `python`, `java`, `gradle`, `scala`, `php`, `go`), `inline` for a `bin/detect` + `bin/compile` in the app, or a buildpack git URL for `BUILDPACK_URL` / `.buildpacks` (matched as given or without its `#ref`). Detection only tries allowed bundled buildpacks; a disallowed URL or inline buildpack fails the build. Allowing `multi` allows any URL listed in `.buildpacks`. An empty list allows every buildpack. |
 
 The stack and image names come from release and artifact metadata set by the
 deploy tools, so the allowlist limits which deploy paths are used; it is not a

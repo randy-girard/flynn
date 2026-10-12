@@ -162,8 +162,19 @@ fi
 
 ## Buildpack detection
 
+source /builder/buildpack-policy.sh
+
+deny_buildpack() {
+  echo_title "Buildpack $1 is not allowed by cluster policy"
+  echo_normal "Allowed buildpacks: ${FLYNN_ALLOWED_BUILDPACKS}"
+  exit 1
+}
+
 # Ordering here is in line number order from buildpacks.txt
 buildpacks=(${buildpack_root}/*)
+if buildpack_policy_active; then
+  mapfile -t buildpacks < <(buildpack_policy_filter "${buildpacks[@]}")
+fi
 selected_buildpack=
 
 try_inline_buildpack() {
@@ -172,6 +183,7 @@ try_inline_buildpack() {
   if [[ ! -f "${detect}" || ! -f "${compile}" ]]; then
     return 1
   fi
+  buildpack_allowed inline || deny_buildpack inline
   chmod +x "${detect}" "${compile}" "${build_dir}/bin/release" 2>/dev/null || true
   local name
   if name=$(run_unprivileged "${detect}" "${build_dir}" 2>/dev/null); then
@@ -193,6 +205,7 @@ try_buildpacks_file() {
   if [[ -z "${url}" ]]; then
     return 1
   fi
+  buildpack_url_allowed "${url}" || deny_buildpack "${url}"
   echo_title "Fetching buildpack from .buildpacks"
   rm -rf "${buildpack_root}"/custom_*
   bash /builder/install-buildpack \
@@ -219,6 +232,7 @@ try_buildpacks_file() {
 }
 
 if [[ -n "${BUILDPACK_URL}" ]]; then
+  buildpack_url_allowed "${BUILDPACK_URL}" || deny_buildpack "${BUILDPACK_URL}"
   echo_title "Fetching custom buildpack"
 
   # Clone as root: setuidgid exec of /builder/install-buildpack exits 111 when
@@ -269,6 +283,9 @@ else
   echo_normal "Add language files (requirements.txt, Gemfile, package.json, …),"
   echo_normal "a .buildpacks URL, BUILDPACK_URL, or bin/detect + bin/compile"
   echo_normal "for an inline buildpack. For a Dockerfile: flynn stack:set container"
+  if buildpack_policy_active; then
+    echo_normal "Cluster policy allows only: ${FLYNN_ALLOWED_BUILDPACKS}"
+  fi
   exit 1
 fi
 

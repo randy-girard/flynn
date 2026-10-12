@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"os"
 	"runtime"
 	"strings"
@@ -564,5 +565,39 @@ func TestMarkAndClearAppBuilding(t *testing.T) {
 	}
 	if store.app.Meta["keep"] != "me" {
 		t.Fatal("existing meta must stay after clear")
+	}
+}
+
+type fakePolicyStore struct {
+	pol   *ct.ClusterPolicy
+	err   error
+	calls int
+}
+
+func (f *fakePolicyStore) GetClusterPolicy() (*ct.ClusterPolicy, error) {
+	f.calls++
+	return f.pol, f.err
+}
+
+func TestAllowedBuildpacks(t *testing.T) {
+	app := &ct.App{Name: "myapp"}
+	pol := &ct.ClusterPolicy{AllowedBuildpacks: []string{"go", "nodejs"}, Enforced: true}
+	got, err := allowedBuildpacks(&fakePolicyStore{pol: pol}, app)
+	if err != nil || got != "go nodejs" {
+		t.Fatalf("enforced: got %q, %v", got, err)
+	}
+
+	stored := &ct.ClusterPolicy{AllowedBuildpacks: []string{"go"}}
+	if got, err := allowedBuildpacks(&fakePolicyStore{pol: stored}, app); err != nil || got != "" {
+		t.Fatalf("not enforced (plugin uninstalled): got %q, %v", got, err)
+	}
+
+	sys := &fakePolicyStore{pol: pol}
+	if got, err := allowedBuildpacks(sys, &ct.App{Name: "router", Meta: map[string]string{"flynn-system-app": "true"}}); err != nil || got != "" || sys.calls != 0 {
+		t.Fatalf("system app: got %q, %v, calls=%d", got, err, sys.calls)
+	}
+
+	if _, err := allowedBuildpacks(&fakePolicyStore{err: errors.New("down")}, app); err == nil {
+		t.Fatal("controller error must fail the build")
 	}
 }

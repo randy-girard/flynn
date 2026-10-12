@@ -315,6 +315,27 @@ func resolveStack(releaseEnv map[string]string) (string, error) {
 	}
 }
 
+type clusterPolicyStore interface {
+	GetClusterPolicy() (*ct.ClusterPolicy, error)
+}
+
+// allowedBuildpacks returns the cluster policy's buildpack allowlist as the
+// space-separated FLYNN_ALLOWED_BUILDPACKS value for slugbuilder. It is empty
+// (no restriction) for system apps or when the policy is not enforced.
+func allowedBuildpacks(store clusterPolicyStore, app *ct.App) (string, error) {
+	if app == nil || app.System() {
+		return "", nil
+	}
+	pol, err := store.GetClusterPolicy()
+	if err != nil {
+		return "", err
+	}
+	if !pol.Enforced {
+		return "", nil
+	}
+	return strings.Join(pol.AllowedBuildpacks, " "), nil
+}
+
 // processCommandsFromMeta reads Procfile commands stored on the slug artifact.
 // Older slugs only have process type names; those get empty command strings.
 func processCommandsFromMeta(meta map[string]string) map[string]string {
@@ -414,6 +435,13 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 	if buildpackURL, ok := releaseEnv["BUILDPACK_URL"]; ok {
 		jobEnv["BUILDPACK_URL"] = buildpackURL
+	}
+	allowed, err := allowedBuildpacks(client, app)
+	if err != nil {
+		return fmt.Errorf("Error getting cluster policy: %s", err)
+	}
+	if allowed != "" {
+		jobEnv["FLYNN_ALLOWED_BUILDPACKS"] = allowed
 	}
 	for _, k := range []string{"SSH_CLIENT_KEY", "SSH_CLIENT_HOSTS"} {
 		if v := os.Getenv(k); v != "" {
