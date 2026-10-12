@@ -823,6 +823,47 @@ if grep -Fq "<db>" <<<"${html}"; then
   echo "chaos HTML report must escape failure messages" >&2
   exit 1
 fi
+# The background monitor must not sample from a node under host-restart or
+# node-reboot: its local discoverd and router are down, so every check fails.
+chaos_stubs='set -euo pipefail; SRC=/src
+flynn_vagrant_running_cluster_nodes() { printf "dev-node1\ndev-node2\n"; }
+flynn_vagrant_node_ip() { echo 10.0.0.1; }; flynn_vagrant_cluster_domain() { echo d; }; flynn_vagrant_get_nodes() { echo 2; }
+vagrant() { :; }; sleep() { :; }; flynn_vagrant_up_one() { :; }; start_one_cluster_node() { :; }
+source "$1"'
+mon_dir="$(mktemp -d)"
+echo dev-node1 > "${mon_dir}/avoid"
+echo "round 1 node-reboot" > "${mon_dir}/phase"
+MON_DIR="${mon_dir}" bash -c "${chaos_stubs}"'
+run_as_root_on() { echo "$1" >> "${MON_DIR}/used"; rm -f "${MON_DIR}/phase"; echo "ok cluster: x"; echo healthy; }
+CHAOS_MONITOR_INTERVAL=0 chaos_monitor_loop "${MON_DIR}"' _ "${mod}/lib/chaos.sh"
+if [[ "$(cat "${mon_dir}/used")" != "dev-node2" ]] || ! grep -q $'\thealthy\t' "${mon_dir}/samples.tsv"; then
+  echo "chaos monitor must sample from a node other than the one in avoid" >&2
+  exit 1
+fi
+for kind in node-reboot host-restart; do
+  rm -f "${mon_dir}/avoid"
+  CHAOS_RUN_DIR="${mon_dir}" bash -c "${chaos_stubs}"'
+run_as_root_on() { :; }
+chaos_inject "$2" 1' _ "${mod}/lib/chaos.sh" "${kind}"
+  if ! grep -Eq '^dev-node[12]$' "${mon_dir}/avoid" 2>/dev/null; then
+    echo "chaos ${kind} must write the faulted node to \$CHAOS_RUN_DIR/avoid" >&2
+    exit 1
+  fi
+done
+rm -rf "${mon_dir}"
+if [[ "$(grep -cF 'rm -f "${CHAOS_RUN_DIR}/avoid"' "${mod}/lib/chaos.sh")" -lt 2 ]]; then
+  echo "chaos_cluster must clear the avoid file at each round start and on recovery" >&2
+  exit 1
+fi
+# A check that cannot run (node unreachable) must still say why.
+health="$(bash -c "${chaos_stubs}"'
+run_as_root_on() { echo "ssh: connect to host dev-node1 port 22: Connection refused"; return 255; }
+chaos_health || true; printf "%s\n" "${CHAOS_HEALTH_OUT}"' _ "${mod}/lib/chaos.sh")"
+if ! grep -Fq "FAIL monitor: health check on dev-node1 exited 255 without a result: ssh: connect to host dev-node1 port 22: Connection refused" <<<"${health}"; then
+  echo "chaos_health must report a FAIL monitor line when the check prints none" >&2
+  printf '%s\n' "${health}" >&2
+  exit 1
+fi
 for want in "chaos_monitor_loop" "chaos_stop_monitor" "flynn-logs/chaos" "report.txt"; do
   if ! grep -Fq "${want}" "${mod}/lib/chaos.sh"; then
     echo "lib/chaos.sh missing ${want}" >&2

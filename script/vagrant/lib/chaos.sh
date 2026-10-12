@@ -33,6 +33,9 @@ chaos_health() {
   st=$?
   set -e
   if [[ "${st}" -ne 0 ]]; then
+    if ! grep -q '^FAIL ' <<<"${CHAOS_HEALTH_OUT}"; then
+      CHAOS_HEALTH_OUT="FAIL monitor: health check on ${node} exited ${st} without a result: $(printf '%s\n' "${CHAOS_HEALTH_OUT}" | grep -v '^[[:space:]]*$' | tail -2 | paste -sd ';' - | cut -c1-200 || true)"
+    fi
     return 1
   fi
 }
@@ -82,12 +85,21 @@ chaos_wait_healthy() {
 }
 
 # chaos_inject applies one fault and sets CHAOS_TARGET. Exit 3 = nothing to hit.
+# A host-restart or node-reboot writes the node to $CHAOS_RUN_DIR/avoid so the
+# background monitor samples from another node until the round ends.
 chaos_inject() {
   local kind="$1" seed="$2" nodes=() name node out st=0 attempt
   while IFS= read -r name; do
     [[ -n "${name}" ]] && nodes+=("${name}")
   done < <(flynn_vagrant_running_cluster_nodes)
   node="${nodes[$((RANDOM % ${#nodes[@]}))]}"
+  case "${kind}" in
+    host-restart|node-reboot)
+      if [[ -n "${CHAOS_RUN_DIR:-}" ]]; then
+        echo "${node}" > "${CHAOS_RUN_DIR}/avoid"
+      fi
+      ;;
+  esac
   case "${kind}" in
     host-restart)
       CHAOS_TARGET="node=${node} systemctl restart flynn-host"
@@ -130,12 +142,13 @@ chaos_inject() {
 # chaos_monitor_loop runs in the background for the whole chaos run. Every
 # CHAOS_MONITOR_INTERVAL seconds (default 15) it appends one health sample to
 # $1/samples.tsv: epoch, UTC time, phase (from $1/phase), healthy|UNHEALTHY,
-# failing sections, and the FAIL lines joined by " ;; ".
+# failing sections, and the FAIL lines joined by " ;; ". It does not sample
+# from the node named in $1/avoid, whose local discoverd and router are down.
 chaos_monitor_loop() {
   local dir="$1" interval="${CHAOS_MONITOR_INTERVAL:-15}" phase status sections fails
   while [[ -f "${dir}/phase" ]]; do
     phase="$(cat "${dir}/phase" 2>/dev/null || true)"
-    if chaos_health; then status=healthy; else status=UNHEALTHY; fi
+    if chaos_health "$(cat "${dir}/avoid" 2>/dev/null || true)"; then status=healthy; else status=UNHEALTHY; fi
     sections="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^FAIL \([^:]*\):.*/\1/p' | paste -sd ',' - || true)"
     fails="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^FAIL //p' | tr '\t' ' ' | awk 'NR > 1 { printf " ;; " } { printf "%s", $0 }' || true)"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date -u +%s)" "$(chaos_now)" "${phase}" "${status}" "${sections:--}" "${fails:--}" >> "${dir}/samples.tsv"
@@ -369,6 +382,7 @@ chaos_cluster() {
     kind="${kinds[$(((i - 1) % ${#kinds[@]}))]}"
     CHAOS_TARGET=""
     st=0
+    rm -f "${CHAOS_RUN_DIR}/avoid"
     echo "round ${i} ${kind}" > "${CHAOS_RUN_DIR}/phase"
     inject_at="$(date -u +%s)"
     chaos_inject "${kind}" "${seed}-${i}" || st=$?
@@ -386,6 +400,7 @@ chaos_cluster() {
     start=${SECONDS}
     sleep "${settle}"
     if chaos_wait_healthy "round ${i}" "${timeout}"; then
+      rm -f "${CHAOS_RUN_DIR}/avoid"
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: recovered in $((SECONDS - start))s"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" recovered "$((SECONDS - start))s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
     else
