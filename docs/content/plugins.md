@@ -59,8 +59,7 @@ includes `rbac` / `sso` / `audit` / `policy` also unlocks those features
 The plugin pushes its policy to the controller (`PUT /cluster/policy`), and
 the controller enforces it on new releases; see
 [Apps → Cluster policy](apps.md#cluster-policy). Uninstalling the plugin
-leaves the last pushed policy in place; clear it with
-`PUT /cluster/policy` and an empty body (`{}`).
+keeps the last pushed policy for a reinstall but stops enforcing it.
 
 ## Private plugins
 

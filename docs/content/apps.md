@@ -550,8 +550,10 @@ flynn limit:set web max_fd=12000 temp_disk=200MB
 #### Cluster policy
 
 The controller stores a cluster deploy policy at `GET/PUT /cluster/policy`
-(cluster key or cluster admin). The enterprise plugin writes it. Every new
-release for a non-system app is checked against it:
+(cluster key or cluster admin). The enterprise plugin writes it. While the
+plugin is installed (`enforced: true` on `GET`), every new release for a
+non-system app is checked against it. Uninstalling the plugin keeps the
+stored policy for a later reinstall but stops enforcing it.
 
 | Field | Effect |
 | --- | --- |

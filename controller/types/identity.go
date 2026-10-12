@@ -11,12 +11,15 @@ type TenancySettings struct {
 
 // ClusterPolicy is the deploy policy pushed by the enterprise plugin. The
 // zero value applies no restrictions. Only non-system apps are checked.
+// Enforced is set by the controller on reads: the stored policy only applies
+// while the enterprise plugin is installed.
 type ClusterPolicy struct {
 	DefaultRuntime      string     `json:"default_runtime,omitempty"`
 	RequireGitHubChecks bool       `json:"require_github_checks"`
 	DisableCustomCPU    bool       `json:"disable_custom_cpu"`
 	AllowedBuildpacks   []string   `json:"allowed_buildpacks,omitempty"`
 	ImageAllowlist      []string   `json:"image_allowlist,omitempty"`
+	Enforced            bool       `json:"enforced"`
 	UpdatedAt           *time.Time `json:"updated_at,omitempty"`
 }
 

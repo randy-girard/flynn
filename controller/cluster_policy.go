@@ -12,8 +12,11 @@ import (
 	"golang.org/x/net/context"
 )
 
+// enterprisePluginApp is the app flynn-host plugin:install enterprise creates.
+const enterprisePluginApp = "enterprise-plugin"
+
 func (c *controllerAPI) GetClusterPolicy(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	p, err := c.tenancy.GetClusterPolicy()
+	p, err := c.loadClusterPolicy()
 	if err != nil {
 		respondWithError(w, err)
 		return
@@ -44,13 +47,47 @@ func (c *controllerAPI) PutClusterPolicy(ctx context.Context, w http.ResponseWri
 		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "policy.set", "", "", body)
+	installed, err := c.enterprisePluginInstalled()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	body.Enforced = installed
 	httphelper.JSON(w, 200, &body)
+}
+
+// loadClusterPolicy returns the stored policy with Enforced set. The policy
+// is kept when the enterprise plugin is uninstalled so a reinstall restores
+// it, but it is not enforced in the meantime.
+func (c *controllerAPI) loadClusterPolicy() (*ct.ClusterPolicy, error) {
+	p, err := c.tenancy.GetClusterPolicy()
+	if err != nil {
+		return nil, err
+	}
+	if p.Enforced, err = c.enterprisePluginInstalled(); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (c *controllerAPI) enterprisePluginInstalled() (bool, error) {
+	if c.appRepo == nil {
+		return false, nil
+	}
+	app, err := c.appRepo.Get(enterprisePluginApp)
+	if err == data.ErrNotFound {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return app.(*ct.App).Plugin(), nil
 }
 
 func normalizeClusterPolicy(p *ct.ClusterPolicy) {
 	p.DefaultRuntime = strings.ToLower(strings.TrimSpace(p.DefaultRuntime))
 	p.AllowedBuildpacks = normalizePolicyList(p.AllowedBuildpacks)
 	p.ImageAllowlist = normalizePolicyList(p.ImageAllowlist)
+	p.Enforced = false
 	p.UpdatedAt = nil
 }
 
@@ -77,9 +114,12 @@ func (c *controllerAPI) enforceClusterPolicy(app *ct.App, release *ct.Release) e
 	if app == nil || app.System() || release == nil {
 		return nil
 	}
-	pol, err := c.tenancy.GetClusterPolicy()
+	pol, err := c.loadClusterPolicy()
 	if err != nil {
 		return err
+	}
+	if !pol.Enforced {
+		return nil
 	}
 	var image *ct.Artifact
 	if len(pol.ImageAllowlist) > 0 {

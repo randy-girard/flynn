@@ -129,12 +129,28 @@ func (s *S) TestClusterPolicy(c *C) {
 	c.Assert(out.DefaultRuntime, Equals, "medium")
 	c.Assert(out.ImageAllowlist, DeepEquals, []string{"heroku-24"})
 	c.Assert(out.UpdatedAt, NotNil)
+	c.Assert(out.Enforced, Equals, false)
 	s.getJSON(c, "/cluster/policy", &got)
 	c.Assert(got.DisableCustomCPU, Equals, true)
+	c.Assert(got.Enforced, Equals, false)
 
 	app := s.createTestApp(c, &ct.App{Name: "cluster-policy-app"})
 	slug := s.createTestArtifact(c, &ct.Artifact{Meta: map[string]string{"flynn.component": "slugrunner-24"}})
-	rel := &ct.Release{ArtifactIDs: []string{slug.ID}, Processes: map[string]ct.ProcessType{"web": {}}}
+
+	// Without the enterprise plugin the stored policy is kept but not enforced.
+	rel := &ct.Release{ArtifactIDs: []string{slug.ID}, Processes: map[string]ct.ProcessType{"web": {Resources: customCPU()}}}
+	c.Assert(s.c.CreateRelease(app.ID, rel), IsNil)
+
+	plugin := s.createTestApp(c, &ct.App{Name: enterprisePluginApp, Meta: map[string]string{"flynn-system-app": "true", "flynn-plugin": "true"}})
+	// Uninstall deletes the plugin app (app_deletion sets deleted_at).
+	uninstall := func() {
+		c.Assert(s.hc.db.Exec(`UPDATE apps SET deleted_at = now() WHERE app_id = $1`, plugin.ID), IsNil)
+	}
+	defer uninstall()
+	s.getJSON(c, "/cluster/policy", &got)
+	c.Assert(got.Enforced, Equals, true)
+
+	rel = &ct.Release{ArtifactIDs: []string{slug.ID}, Processes: map[string]ct.ProcessType{"web": {}}}
 	c.Assert(s.c.CreateRelease(app.ID, rel), IsNil)
 	c.Assert(rel.Processes["web"].RuntimeProfile, Equals, "medium")
 
@@ -144,4 +160,10 @@ func (s *S) TestClusterPolicy(c *C) {
 	other := s.createTestArtifact(c, &ct.Artifact{})
 	rel = &ct.Release{ArtifactIDs: []string{other.ID}, Processes: map[string]ct.ProcessType{"web": {}}}
 	c.Assert(hh.IsValidationError(s.c.CreateRelease(app.ID, rel)), Equals, true)
+
+	uninstall()
+	s.getJSON(c, "/cluster/policy", &got)
+	c.Assert(got.Enforced, Equals, false)
+	c.Assert(got.DisableCustomCPU, Equals, true)
+	c.Assert(s.c.CreateRelease(app.ID, rel), IsNil)
 }
