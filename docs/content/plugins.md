@@ -68,6 +68,8 @@ The plugin also copies the controller's audit log (`GET /cluster/audit`; see
 own every minute, exports it as CSV, POSTs new events to an optional signed
 webhook, and applies an optional retention period to both copies
 (`flynn-host enterprise audit-set`).
+Organization and Enterprise account invites are emailed when an SMTP server
+is set with `flynn-host enterprise mailer-set`.
 
 ## Private plugins
 
