@@ -882,19 +882,61 @@ if grep -Eq 'print\([^)]*(env\[|val\b|DATABASE_URL)' "${mod}/guest/check-health.
   echo "monitor/chaos guest scripts must not print resource env values" >&2
   exit 1
 fi
-for want in "vagrant-monitor:" "vagrant-chaos:"; do
+# vagrant-plugin installs a sibling checkout, or updates it when the manifest's
+# app is already in plugin:list. Both rebuild so source changes ship.
+plug_dir="$(mktemp -d)"
+mkdir -p "${plug_dir}/bin" "${plug_dir}/flynn-plugin-widget"
+echo '{"name":"widget","app":{"name":"widget-plugin"}}' > "${plug_dir}/flynn-plugin-widget/flynn-plugin.json"
+cat > "${plug_dir}/bin/flynn-host" <<'EOF'
+#!/bin/bash
+if [[ "$1" == "plugin:list" ]]; then
+  echo "NAME  KIND  CLI  SOURCE  VERSION"
+  cat "${PLUG_LIST}"
+  exit 0
+fi
+echo "$*" > "${PLUG_CALL}"
+EOF
+chmod +x "${plug_dir}/bin/flynn-host"
+plug_run() {
+  PATH="${plug_dir}/bin:${PATH}" PLUG_LIST="${plug_dir}/list" PLUG_CALL="${plug_dir}/call" \
+    FLYNN_VAGRANT_YES="$1" bash "${mod}/guest/plugin.sh" "${plug_dir}/flynn-plugin-widget" >/dev/null
+}
+echo "other-plugin app - /x -" > "${plug_dir}/list"
+plug_run 0
+if [[ "$(cat "${plug_dir}/call")" != "plugin:install --rebuild ${plug_dir}/flynn-plugin-widget" ]]; then
+  echo "guest/plugin.sh must plugin:install --rebuild a plugin that is not installed" >&2
+  exit 1
+fi
+echo "widget-plugin app - /x -" > "${plug_dir}/list"
+plug_run 1
+if [[ "$(cat "${plug_dir}/call")" != "plugin:update --rebuild --yes ${plug_dir}/flynn-plugin-widget" ]]; then
+  echo "guest/plugin.sh must plugin:update --rebuild an installed plugin (and pass --yes with YES=1)" >&2
+  exit 1
+fi
+if bash "${mod}/guest/plugin.sh" "${plug_dir}/missing" >/dev/null 2>&1; then
+  echo "guest/plugin.sh must fail when the checkout has no flynn-plugin.json" >&2
+  exit 1
+fi
+rm -rf "${plug_dir}"
+for want in "plugin)" "guest/plugin.sh" "/opt/flynn-plugins/"; do
+  if ! grep -Fq "${want}" "${script}"; then
+    echo "script/vagrant/vagrant.sh missing ${want}" >&2
+    exit 1
+  fi
+done
+for want in "vagrant-monitor:" "vagrant-chaos:" "vagrant-plugin:"; do
   if ! grep -Fq "${want}" "${ROOT}/Makefile"; then
     echo "Makefile missing ${want}" >&2
     exit 1
   fi
 done
-for want in "make vagrant-monitor" "make vagrant-chaos" "CHAOS_FAULTS" "CHAOS_SEED" "CHAOS_MONITOR_INTERVAL" "flynn-logs/chaos" "report.txt"; do
+for want in "make vagrant-monitor" "make vagrant-chaos" "make vagrant-plugin" "CHAOS_FAULTS" "CHAOS_SEED" "CHAOS_MONITOR_INTERVAL" "flynn-logs/chaos" "report.txt"; do
   if ! grep -Fq "${want}" "${ROOT}/docs/content/installation/vagrant.md"; then
     echo "docs/content/installation/vagrant.md missing ${want}" >&2
     exit 1
   fi
 done
-for want in "setup" "cli" "bootstrap" "update" "probe" "monitor" "chaos" "CHAOS_ROUNDS" "MONITOR_INTERVAL" "CHAOS_MONITOR_INTERVAL" "report.txt" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status" "halt the builder" "node failure" "tenant HTTP" "scheduler"; do
+for want in "setup" "cli" "bootstrap" "update" "plugin" "probe" "monitor" "chaos" "CHAOS_ROUNDS" "MONITOR_INTERVAL" "CHAOS_MONITOR_INTERVAL" "report.txt" "reload" "restart" "stop" "destroy" "teardown" "build-dev" "flynn -c local apps" "make vagrant-setup" "dev-node1" "build images if none exist" "no cluster required" "if Flynn source changed" "--all-nodes" "compile-only" "--yes" "one at a time" "status" "halt the builder" "node failure" "tenant HTTP" "scheduler"; do
   if ! grep -Fq -e "${want}" <<<"${help}"; then
     echo "help missing ${want}" >&2
     exit 1

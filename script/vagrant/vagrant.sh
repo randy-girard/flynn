@@ -52,7 +52,7 @@ DEV_CPUS="${BUILDER_CPUS}"
 
 usage() {
   cat <<EOF
-usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|up|status|ssh|build|cli|bootstrap|update|probe|monitor|chaos|reload|restart|stop|halt|destroy|teardown> [vm...]
+usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|up|status|ssh|build|cli|bootstrap|update|plugin|probe|monitor|chaos|reload|restart|stop|halt|destroy|teardown> [vm...]
 
   --yes, -y              Non-interactive: sudo -n, no TTY prompts (also FLYNN_VAGRANT_YES=1)
   --force-build          Rebuild cluster images on update even if the stamp matches
@@ -68,6 +68,9 @@ usage: script/vagrant.sh [--yes] [--force-build] [--skip-laptop-connect] <setup|
   bootstrap  Install the tarball and flynn-host bootstrap on cluster nodes (not the builder)
   update     Build on the builder if Flynn source changed, halt the builder,
              then flynn-host update on running cluster nodes
+  plugin     plugin <name>: build a sibling ../flynn-plugin-<name> checkout and
+             plugin:install it, or plugin:update it when it is already
+             installed (name, flynn-plugin-<name>, or a path to the checkout)
   probe      Check the live cluster from node1 (hosts, controller, flynn-host list)
   monitor    Print a health sample every MONITOR_INTERVAL seconds (default 30)
              until Ctrl-C or MONITOR_COUNT samples: cluster probe, every
@@ -503,6 +506,31 @@ probe_live_cluster() {
   run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-} script/vagrant/guest/probe-cluster.sh"
 }
 
+# plugin_install_or_update builds a sibling plugin checkout on the first
+# running cluster node, then installs it or updates the installed app.
+plugin_install_or_update() {
+  local arg="${1:-}" name node
+  if [[ -z "${arg}" ]]; then
+    echo "usage: script/vagrant.sh plugin <name|flynn-plugin-name|path>" >&2
+    exit 1
+  fi
+  name="$(basename "${arg%/}")"
+  if [[ "${name}" != flynn-plugin-* ]]; then
+    name="flynn-plugin-${name}"
+  fi
+  if [[ ! -f "${ROOT}/../${name}/flynn-plugin.json" ]]; then
+    echo "no sibling checkout ../${name} with flynn-plugin.json" >&2
+    exit 1
+  fi
+  node="$(flynn_vagrant_running_cluster_nodes | head -1)"
+  if [[ -z "${node}" ]]; then
+    echo "no running cluster nodes. Start the cluster with script/vagrant.sh up, then retry." >&2
+    exit 1
+  fi
+  echo "installing or updating ${name} from ${node}"
+  run_as_root_on "${node}" "cd ${SRC} && FLYNN_VAGRANT_YES=${FLYNN_VAGRANT_YES} script/vagrant/guest/plugin.sh /opt/flynn-plugins/${name}"
+}
+
 update_running_cluster() {
   local nodes=() name
   while IFS= read -r name; do
@@ -569,6 +597,9 @@ case "${cmd}" in
     # rolling deploy even though flynn-host update already printed success.
     wait_cluster_stable "update"
     probe_live_cluster
+    ;;
+  plugin)
+    plugin_install_or_update "${2:-}"
     ;;
   probe)
     probe_live_cluster

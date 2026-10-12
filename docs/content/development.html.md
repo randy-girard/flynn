@@ -39,7 +39,9 @@ nodes, and fails if the cluster does not recover (see
 Flynn artifacts from that loop land in `./build-dev` on the laptop; smoke
 keeps `./build`. Implementation lives in `script/vagrant/`.
 `make vagrant-update` builds on the builder, then runs `flynn-host update`
-on the running cluster nodes.
+on the running cluster nodes. `make vagrant-plugin PLUGIN=dashboard` builds
+the sibling `../flynn-plugin-dashboard` checkout and runs `plugin:install`,
+or `plugin:update` when that plugin is already installed.
 
 Clone this fork, then start only the smoke builder (not the laptop loop):
 

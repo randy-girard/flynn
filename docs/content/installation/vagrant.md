@@ -83,8 +83,9 @@ make vagrant-build           # boot builder if needed and build images (works be
 make vagrant-cli             # build the laptop flynn CLI and install it to /usr/local/bin
 make vagrant-bootstrap       # install the tarball and flynn-host bootstrap on cluster nodes
 make vagrant-update          # build on the builder if Flynn source changed, then flynn-host update --all-nodes on running cluster nodes
+make vagrant-plugin PLUGIN=dashboard  # build ../flynn-plugin-dashboard and install it, or update it if already installed
 make vagrant                 # help
-# same commands: script/vagrant.sh setup|up|reload|monitor|chaos|stop|destroy|status|ssh|build|cli|bootstrap|update
+# same commands: script/vagrant.sh setup|up|reload|monitor|chaos|stop|destroy|status|ssh|build|cli|bootstrap|update|plugin
 ```
 
 `monitor` prints one health sample every `MONITOR_INTERVAL` seconds (default 30) until Ctrl-C, or `MONITOR_COUNT` samples (its exit status is the last sample's). Each sample runs `guest/check-health.sh` on the first running cluster node and covers: the cluster probe (hosts, controller, scheduler, every postgres peer, every service at its formation count, `status.<domain>`); tenant HTTP; every `*-plugin` service instance answering HTTP; `dashboard.<domain>/.well-known/status`; and a TCP connect to the discoverd leader behind every provider resource URL (platform postgres, redis, postgres, mysql primaries and followers). It never prints credentials or resource env values.
@@ -116,6 +117,8 @@ The source tree and `ubuntu_ports_cache` are shared, but Flynn **build outputs**
 If an older laptop loop already bootstrapped Flynn on **dev-builder**, run `make vagrant-bootstrap YES=1` (or `setup`) so the operator cluster moves onto **dev-node1**. Do not keep using the builder as `flynn -c local`.
 
 Non-interactive (no sudo password prompt): `make vagrant-setup YES=1`, `make vagrant-update YES=1 FORCE_BUILD=1`, `make vagrant-destroy YES=1`. That passes `--yes` so `sudo -n` is used; if this laptop cannot write `/etc/hosts` without a password, setup still bootstraps the VMs and `make vagrant-probe` checks the cluster from **dev-node1**. Three-node cluster: `make vagrant-setup YES=1 NODES=3`.
+
+`make vagrant-plugin PLUGIN=<name>` (`script/vagrant.sh plugin <name>`) takes `dashboard`, `flynn-plugin-dashboard`, or a path to the checkout. On the first running cluster node it reads `app.name` from that checkout's `flynn-plugin.json` and checks `flynn-host plugin:list`: an installed app gets `plugin:update --rebuild`, otherwise `plugin:install --rebuild`. Either way dist/ is rebuilt, so local source changes ship. `YES=1` also passes `--yes`, which third-party plugins need because `vagrant ssh` has no TTY. Checkouts are synced to `/opt/flynn-plugins/<checkout>` when the VMs boot; after cloning a new one, run `make vagrant-reload`.
 
 `flynn-host plugin:install` / `plugin:update --rebuild` for a sibling checkout compiles on the cluster node (not the builder). `setup` installs the same pinned Go as the builder at `/usr/local/go` and sets `FLYNN_ROOT=/root/go/src/github.com/flynn/flynn` in `/etc/profile.d/flynn-root.sh`, `/etc/environment`, and `/etc/flynn/source-root` so plugin-build finds this Flynn even when `flynn-host` is `/usr/bin`. On an already-running node: `sudo bash script/vagrant/guest/ensure-go.sh` (or `sudo bash script/vagrant/guest/ensure-flynn-root.sh` if Go is already installed).
 

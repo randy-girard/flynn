@@ -88,6 +88,7 @@ ARGS ?=
 YES ?=
 FORCE_BUILD ?=
 NODES ?=
+PLUGIN ?=
 VAGRANT_YES := $(if $(filter 1,$(YES)),--yes,)
 VAGRANT_FORCE := $(if $(filter 1,$(FORCE_BUILD)),--force-build,)
 VAGRANT_NODES := $(if $(NODES),FLYNN_DEV_NODES=$(NODES),)
@@ -118,6 +119,9 @@ vagrant-bootstrap: ## Install tarball and bootstrap the live cluster on cluster 
 
 vagrant-update: ## Build on the builder, then flynn-host update on running cluster nodes (FORCE_BUILD=1)
 	$(VAGRANT) update $(VAGRANT_YES) $(VAGRANT_FORCE) $(ARGS)
+
+vagrant-plugin: ## Build a sibling plugin checkout and install it, or update it if installed (PLUGIN=dashboard)
+	$(VAGRANT) plugin $(PLUGIN) $(VAGRANT_YES) $(ARGS)
 
 vagrant-probe: ## Check the live cluster from node1 (non-interactive)
 	$(VAGRANT_NODES) $(VAGRANT) probe $(VAGRANT_YES) $(ARGS)
@@ -180,9 +184,10 @@ help: ## Show this help
 	@printf "  %-24s %s\n" "YES" "set to 1 to pass --yes (non-interactive sudo -n)"
 	@printf "  %-24s %s\n" "FORCE_BUILD" "set to 1 so vagrant-update rebuilds cluster images"
 	@printf "  %-24s %s\n" "NODES" "FLYNN_DEV_NODES for setup/up/bootstrap/probe (e.g. NODES=3)"
+	@printf "  %-24s %s\n" "PLUGIN" "vagrant-plugin checkout: dashboard, flynn-plugin-dashboard, or a path"
 	@printf "  %-24s %s\n" "SKIP_INTEGRATION_TESTS" "set to 1 to skip test-integration"
 
 .PHONY: help build release clean test test-unit test-unit-root test-unit-native test-unit-root-native test-integration install-git-hooks \
-	vagrant vagrant-setup vagrant-up vagrant-status vagrant-ssh vagrant-build vagrant-cli vagrant-bootstrap vagrant-update \
+	vagrant vagrant-setup vagrant-up vagrant-status vagrant-ssh vagrant-build vagrant-cli vagrant-bootstrap vagrant-update vagrant-plugin \
 	vagrant-probe vagrant-monitor vagrant-chaos vagrant-reload vagrant-stop vagrant-destroy vagrant-smoke vagrant-smoke-list vagrant-smoke-status vagrant-smoke-ssh \
 	vagrant-smoke-up vagrant-smoke-reload vagrant-smoke-stop vagrant-smoke-destroy test-vagrant
