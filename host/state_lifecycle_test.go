@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,7 +20,15 @@ import (
 // off the lock; AddJob and GetJob must return promptly even while a follower
 // is stalled, and the line must still reach a healthy follower.
 func TestAddJobDoesNotBlockOnStalledLogFollower(t *testing.T) {
-	mux := logmux.New("host1", t.TempDir(), log15.New())
+	// Not t.TempDir: the lifecycle worker may still be finishing its last
+	// write (1s per stalled follower) when the test returns, and TempDir
+	// fails the test if RemoveAll races with that write.
+	logDir, err := os.MkdirTemp("", "lifecycle-logmux-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(logDir) })
+	mux := logmux.New("host1", logDir, log15.New())
 	// Block the writer: the mux waits its broadcast timeout (1s) on this
 	// subscriber for every line. The state lock must not be held meanwhile.
 	stalled := make(chan *rfc5424.Message)
