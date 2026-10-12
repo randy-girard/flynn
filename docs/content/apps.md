@@ -566,6 +566,8 @@ sudo flynn-host runtime:max-restarts unlimited
 sudo flynn-host runtime:max-restarts
 ```
 
+The dashboard sets the same value under Cluster → Runtime → Restart limit.
+
 Once a process has been restarted that many times in a row and crashes again,
 the scheduler leaves it stopped. A process that runs for 5 minutes resets its
 count. Scaling the process type (`flynn scale`), deploying a new release, or
