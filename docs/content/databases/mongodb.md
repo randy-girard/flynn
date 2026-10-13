@@ -21,10 +21,10 @@ API is `http://mongodb-plugin.discoverd/databases`. Provision with
 
 The plugin provides MongoDB 7.0 in a highly-available configuration with
 automatic provisioning. Replication is implemented using MongoDB's replica set
-feature. A single-host (`SINGLETON`) cluster runs one peer; when a third host
-joins, the scheduler promotes the appliance to a three-peer replica set
-automatically. The image includes `mongod`, database tools, and `mongosh` (not the
-legacy `mongo` shell).
+feature. Each resource is one replica set; change its node count with
+`flynn mongodb:scale` (see [Scaling the cluster](#scaling-the-cluster)). The
+image includes `mongod`, database tools, and `mongosh` (not the legacy `mongo`
+shell).
 
 Each resource gets a user with `dbOwner` on its own database. Provision stores a
 connection budget (default 20) and rejects `max_connections` above
@@ -62,6 +62,22 @@ by some frameworks to configure database connections. TLS is on by default
 (`MONGO_TLS_ENABLED=true`, `DATABASE_URL` carries `tls=true`); the appliance
 CA is in `MONGO_TRUSTED_CERT`. `mongod` runs in `preferTLS` mode, so
 replication and older in-cluster clients can still connect without TLS.
+
+### Scaling the cluster
+
+MongoDB has no followers or joined resources. Each resource is one cluster, and
+`flynn resource:add mongodb --follow` is rejected. Change the number of nodes
+with:
+
+```text
+flynn mongodb:scale <n> [<resource>]
+```
+
+`<n>` must be at least 1. Scaling down drains each removed node first: it is
+taken out of the replica set with `replSetReconfig` before it stops. A node
+rejoins automatically when its Flynn host returns or its job is rescheduled.
+The dashboard records these changes as topology events `P19` (node added),
+`P20` (node removed), `P21` (node rejoined), and `P22` (primary elected).
 
 ### Connecting to a console
 

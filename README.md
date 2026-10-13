@@ -167,10 +167,10 @@ appliances at the **leader** hostname Flynn put in those URLs, not at internal
 | platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `resource:add postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
 | `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote. Instance volumes are not in `flynn-host backup` |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
-| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb` |
+| `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb`. Resize with `flynn mongodb:scale <n>` (no followers) |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. Followers via `flynn redis:follow`. Not in `flynn-host backup`; caching and development |
-| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka` |
-| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse` |
+| `kafka` | Apache Kafka **3.9** (KRaft, no ZooKeeper) | 3 brokers (1 on singleton) | **Plugin.** `flynn-host plugin:install kafka`. Resize with `flynn kafka:scale <n>` (no followers) |
+| `clickhouse` | ClickHouse + Keeper | 3 replicas (1 on singleton) | **Plugin.** `flynn-host plugin:install clickhouse`. Resize with `flynn clickhouse:scale <n>` (no followers) |
 
 The platform Postgres appliance, MariaDB, and MongoDB use the sirenia/replica-set state machines so a primary failure can promote a replica without split-brain. Tenant Postgres from the plugin is one node (follow, wait, promote). Redis does not replicate. Details: [Databases](docs/content/databases.html.md).
 

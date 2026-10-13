@@ -413,7 +413,13 @@ compiled-in list.
 - Every data source page shows its tabs in one order, whatever order the
   manifest `routes` use: Overview, Metrics, Slow queries, Databases, Users,
   plugin-specific pages (Kafka topics, consumer groups), Backup, Followers,
-  Settings.
+  Settings. Followers apply to Postgres, MySQL, and Redis only. MongoDB,
+  ClickHouse, and Kafka have no followers: each resource is one cluster whose
+  node count changes with `flynn mongodb:scale`, `flynn clickhouse:scale`, or
+  `flynn kafka:scale` (scale-down drains the node first; nodes rejoin
+  automatically when a host returns or the job is rescheduled). Their topology
+  changes appear as events `P19` (node added), `P20` (node removed), `P21`
+  (node rejoined), and `P22` (primary elected).
 - Metrics charts mark each deployment with a dashed line. Hovering the line
   shows the deploy (app, time, status, Code/Config type, short release id),
   and clicking it opens that release's page in the app.

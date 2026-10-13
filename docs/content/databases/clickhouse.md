@@ -22,7 +22,8 @@ The plugin provisions a [ClickHouse](https://clickhouse.com) cluster with
 [ClickHouse Keeper](https://clickhouse.com/docs/en/guides/sre/keeper/clickhouse-keeper)
 for replication coordination. A cluster is spread across the nodes of your Flynn
 install with three replicas on multi-node installs (or a single replica on
-single-node/`SINGLETON` installs).
+single-node/`SINGLETON` installs). Change the replica count with
+`flynn clickhouse:scale` (see [Scaling the cluster](#scaling-the-cluster)).
 
 User databases must be created with the `flynn clickhouse` CLI so they are
 provisioned with `ON CLUSTER` DDL and replicated to every replica.
@@ -64,6 +65,22 @@ Provisioning adds several environment variables to your app release:
   appliance CA (PEM). Replication between replicas uses the plaintext
   `interserver_http_port` 9009 on the overlay network; the plaintext client
   ports 9000/8123 remain open next to the TLS ports.
+
+### Scaling the cluster
+
+ClickHouse has no followers. Each resource is one cluster, and
+`flynn resource:add clickhouse --follow` is rejected; there is no promote,
+unfollow, or wait step. Change the number of nodes with:
+
+```text
+flynn clickhouse:scale <n> [<resource>]
+```
+
+`<n>` must be at least 1. Scaling down drains each removed node first: its
+replica is removed with `SYSTEM DROP REPLICA` before it stops. A node rejoins
+automatically when its Flynn host returns or its job is rescheduled. The
+dashboard records these changes as topology events `P19` (node added), `P20`
+(node removed), and `P21` (node rejoined).
 
 ### Connecting to a console
 

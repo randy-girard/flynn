@@ -49,6 +49,23 @@ This provisions a Kafka cluster as a Flynn app (three brokers, or a single
 broker on a single-node/`SINGLETON` install) and configures your application to
 connect to it.
 
+### Scaling the cluster
+
+Kafka has no followers, joined resources, or MirrorMaker copies. Each resource
+is one cluster, and `flynn resource:add kafka --follow` is rejected. Change the
+number of brokers with:
+
+```text
+flynn kafka:scale <n> [<resource>]
+```
+
+`<n>` must be at least 1. Scaling down drains each removed broker first: its
+partitions are reassigned to the remaining brokers and the broker is
+unregistered before it stops. A broker rejoins automatically when its Flynn
+host returns or its job is rescheduled. The dashboard records these changes as
+topology events `P19` (node added), `P20` (node removed), and `P21` (node
+rejoined).
+
 ### Connecting to the cluster
 
 Provisioning adds several environment variables to your app release:
