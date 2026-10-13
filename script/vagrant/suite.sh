@@ -2334,19 +2334,19 @@ assert_isolated_follower_app() {
       fi
       ;;
     kafka)
-      if [[ ! "${name}" =~ ^kafka-[a-z]+-[a-z]{6,8}$ ]]; then
+      if [[ ! "${name}" =~ ^(kafka-[a-z]+-[0-9]{5,8}|kafka-[a-z]+-[a-z]{6,8})$ ]]; then
         echo "kafka extra node ${name} is not an isolated instance app" >&2
         return 1
       fi
       ;;
     mongodb)
-      if [[ ! "${name}" =~ ^mongodb-[a-z]+-[a-z]{6,8}$ ]]; then
+      if [[ ! "${name}" =~ ^(mongodb-[a-z]+-[0-9]{5,8}|mongodb-[a-z]+-[a-z]{6,8})$ ]]; then
         echo "mongodb replica ${name} is not an isolated instance app" >&2
         return 1
       fi
       ;;
     clickhouse)
-      if [[ ! "${name}" =~ ^clickhouse-[a-z]+-[a-z]{6,8}$ ]]; then
+      if [[ ! "${name}" =~ ^(clickhouse-[a-z]+-[0-9]{5,8}|clickhouse-[a-z]+-[a-z]{6,8})$ ]]; then
         echo "clickhouse follower ${name} is not an isolated instance app" >&2
         return 1
       fi
