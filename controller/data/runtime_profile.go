@@ -101,7 +101,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.JobRestartInterval, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -122,7 +122,17 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 	if s.MaxRestarts < 0 {
 		s.MaxRestarts = cur.MaxRestarts
 	}
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts).Scan(&s.UpdatedAt); err != nil {
+	// an empty interval (an older client that does not know the field) keeps
+	// the current value rather than resetting it
+	if strings.TrimSpace(s.JobRestartInterval) == "" {
+		s.JobRestartInterval = cur.JobRestartInterval
+	}
+	interval, _, err := ct.ParseJobRestartInterval(s.JobRestartInterval)
+	if err != nil {
+		return ct.ValidationError{Field: "job_restart_interval", Message: err.Error()}
+	}
+	s.JobRestartInterval = interval
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts, s.JobRestartInterval).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
 	if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep)); err != nil {

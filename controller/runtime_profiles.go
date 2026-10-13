@@ -107,6 +107,8 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		BlobGCKeep        *int    `json:"blob_gc_keep"`
 		BlobGCMaxAge      *string `json:"blob_gc_max_age"`
 		MaxRestarts       *int    `json:"max_restarts"`
+
+		JobRestartInterval *string `json:"job_restart_interval"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
@@ -124,6 +126,16 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
 		BlobGCMaxAge:      cur.BlobGCMaxAge,
 		MaxRestarts:       cur.MaxRestarts,
+
+		JobRestartInterval: cur.JobRestartInterval,
+	}
+	if body.JobRestartInterval != nil && strings.TrimSpace(*body.JobRestartInterval) != "" {
+		interval, _, err := ct.ParseJobRestartInterval(*body.JobRestartInterval)
+		if err != nil {
+			respondWithError(w, ct.ValidationError{Field: "job_restart_interval", Message: err.Error()})
+			return
+		}
+		s.JobRestartInterval = interval
 	}
 	if body.MaxRestarts != nil {
 		if *body.MaxRestarts < 0 {

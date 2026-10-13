@@ -326,6 +326,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.GET("/events", httphelper.WrapHandler(api.Events))
 	httpRouter.GET("/events/:id", httphelper.WrapHandler(api.GetEvent))
 	httpRouter.POST("/apps/:apps_id/scheduler-events", httphelper.WrapHandler(api.appLookup(api.CreateSchedulerEvent)))
+	httpRouter.POST("/apps/:apps_id/job-restart-events", httphelper.WrapHandler(api.appLookup(api.CreateJobRestartEvent)))
 
 	httpRouter.GET("/volumes", httphelper.WrapHandler(api.GetVolumes))
 	httpRouter.PUT("/volumes/:volume_id", httphelper.WrapHandler(api.PutVolume))

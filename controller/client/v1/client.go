@@ -870,6 +870,12 @@ func (c *Client) CreateSchedulerEvent(appID string, ev *ct.SchedulerEvent) error
 	return c.Post(fmt.Sprintf("/apps/%s/scheduler-events", appID), ev, ev)
 }
 
+// CreateJobRestartEvent records that the scheduler restarted a job because it
+// exceeded the cluster job restart interval.
+func (c *Client) CreateJobRestartEvent(appID string, ev *ct.JobRestartEvent) error {
+	return c.Post(fmt.Sprintf("/apps/%s/job-restart-events", appID), ev, ev)
+}
+
 func (c *Client) GetEvent(id int64) (*ct.Event, error) {
 	var event *ct.Event
 	return event, c.Get(fmt.Sprintf("/events/%d", id), &event)

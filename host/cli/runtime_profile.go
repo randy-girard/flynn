@@ -72,6 +72,21 @@ Examples:
     $ flynn-host runtime:max-restarts 10
     $ flynn-host runtime:max-restarts unlimited
 `
+	runtimeJobRestartIntervalUsage = `
+usage: flynn-host runtime:job-restart-interval [<interval>]
+
+Show or set how long a job may run before the scheduler restarts it to
+release leaked memory. <interval> is a Go duration of at least 1h (default
+24h) or "off" (also "0") to disable. Jobs are restarted one at a time per
+app, and only while the app is at its full process count. Process types
+with a single instance are skipped, since restarting them would cause
+downtime. Database and system app jobs are included, keeping quorum.
+
+Examples:
+
+    $ flynn-host runtime:job-restart-interval 72h
+    $ flynn-host runtime:job-restart-interval off
+`
 )
 
 func init() {
@@ -82,6 +97,7 @@ func init() {
 	Register("runtime:allow-custom", runRuntimeProfileAllowCustom, runtimeAllowCustomUsage)
 	Register("runtime:reserve", runRuntimeReserve, runtimeReserveUsage)
 	Register("runtime:max-restarts", runRuntimeMaxRestarts, runtimeMaxRestartsUsage)
+	Register("runtime:job-restart-interval", runRuntimeJobRestartInterval, runtimeJobRestartIntervalUsage)
 }
 
 // formatMaxRestarts renders RuntimeSettings.MaxRestarts, where 0 is unlimited.
@@ -118,7 +134,7 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d max_restarts=%s\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts))
+	fmt.Printf("allow_custom_limits=%t max_processes=%d max_restarts=%s job_restart_interval=%s\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts), formatJobRestartInterval(settings.JobRestartInterval))
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tRESERVE\tBUILTIN")
 	for _, p := range list {
@@ -283,6 +299,50 @@ func runRuntimeMaxRestarts(args *docopt.Args) error {
 		return err
 	}
 	fmt.Printf("max_restarts=%s\n", formatMaxRestarts(s.MaxRestarts))
+	return nil
+}
+
+// formatJobRestartInterval renders RuntimeSettings.JobRestartInterval, where
+// an empty value means the default.
+func formatJobRestartInterval(v string) string {
+	canon, _, err := ct.ParseJobRestartInterval(v)
+	if err != nil {
+		return ct.DefaultJobRestartInterval
+	}
+	return canon
+}
+
+func runRuntimeJobRestartInterval(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	arg := args.String["<interval>"]
+	if arg == "" {
+		fmt.Printf("job_restart_interval=%s\n", formatJobRestartInterval(cur.JobRestartInterval))
+		return nil
+	}
+	interval, _, err := ct.ParseJobRestartInterval(arg)
+	if err != nil {
+		return fmt.Errorf("job restart interval: %s", err)
+	}
+	s := &ct.RuntimeSettings{
+		AllowCustomLimits:  cur.AllowCustomLimits,
+		MaxProcesses:       cur.MaxProcessesOrDefault(),
+		ReserveResources:   cur.ReserveResources,
+		BlobGCKeep:         cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:       cur.BlobGCMaxAge,
+		MaxRestarts:        cur.MaxRestarts,
+		JobRestartInterval: interval,
+	}
+	if err := client.UpdateRuntimeSettings(s); err != nil {
+		return err
+	}
+	fmt.Printf("job_restart_interval=%s\n", formatJobRestartInterval(s.JobRestartInterval))
 	return nil
 }
 

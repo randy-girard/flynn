@@ -141,6 +141,12 @@ type Scheduler struct {
 	// processes left stopped after reaching maxRestarts. formationDiff
 	// subtracts them so rectify does not start replacements.
 	restartsExhausted map[utils.FormationKey]Processes
+
+	// jobRestartInterval is RuntimeSettings.JobRestartInterval: running jobs
+	// older than this are restarted one at a time (see restartAgedJobs).
+	// 0 disables periodic restarts, which is also the state until the
+	// cluster setting has been loaded.
+	jobRestartInterval time.Duration
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -746,6 +752,8 @@ func (s *Scheduler) SyncJobs() (err error) {
 			s.stopJob(job)
 		}
 	}
+
+	s.restartAgedJobs(time.Now())
 
 	return nil
 }
@@ -3060,7 +3068,13 @@ func (s *Scheduler) restartJob(job *Job) {
 	if !job.StartedAt.IsZero() && job.StartedAt.Before(time.Now().Add(-5*time.Minute)) {
 		restarts = 0
 	}
-	if s.restartLimitReached(job, restarts) {
+	// a planned restart (job exceeded the job restart interval) is not a
+	// crash: it never counts toward the restart limit or crash loop backoff
+	planned := job.plannedRestart
+	if planned {
+		restarts = 0
+	}
+	if !planned && s.restartLimitReached(job, restarts) {
 		key := job.Formation.key()
 		exhausted, ok := s.restartsExhausted[key]
 		if !ok {
@@ -3087,6 +3101,9 @@ func (s *Scheduler) restartJob(job *Job) {
 		Restarts:  restarts + 1,
 		Args:      job.Args,
 		Reason:    host.JobReasonRestart,
+	}
+	if planned {
+		newJob.Restarts = 0
 	}
 	s.jobs.Add(newJob)
 

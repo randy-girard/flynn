@@ -958,6 +958,7 @@ const (
 	EventTypeRuntimeProfile          EventType = "runtime"
 	EventTypeRuntimeSettings         EventType = "runtime_settings"
 	EventTypeScheduler               EventType = "scheduler"
+	EventTypeJobRestart              EventType = "job_restart"
 
 	// EventTypeDeprecatedScale is a deprecated event which is emitted for
 	// old clients waiting for formations to be scaled (new clients should
@@ -985,6 +986,25 @@ type Event struct {
 	Data       json.RawMessage `json:"data,omitempty"`
 	Op         EventOp         `json:"-"`
 	CreatedAt  *time.Time      `json:"created_at,omitempty"`
+}
+
+// JobRestartReasonMaxAge is the reason for a restart triggered by the cluster
+// job restart interval.
+const JobRestartReasonMaxAge = "max_age"
+
+// JobRestartEvent is posted by the scheduler when it restarts a running job
+// because it exceeded the cluster job restart interval.
+type JobRestartEvent struct {
+	AppID       string    `json:"app_id"`
+	AppName     string    `json:"app_name,omitempty"`
+	ProcessType string    `json:"process_type"`
+	JobID       string    `json:"job_id"`
+	JobUUID     string    `json:"job_uuid,omitempty"`
+	Age         string    `json:"age"`
+	AgeSeconds  int64     `json:"age_seconds"`
+	Interval    string    `json:"interval,omitempty"`
+	Reason      string    `json:"reason"`
+	RestartedAt time.Time `json:"restarted_at"`
 }
 
 // SchedulerEvent is posted by the scheduler plugin when a cron/interval job fires.
@@ -1426,8 +1446,66 @@ type RuntimeSettings struct {
 	BlobGCMaxAge      string `json:"blob_gc_max_age"`
 	// MaxRestarts is how many consecutive crashes the scheduler restarts
 	// before it leaves an app process stopped. 0 means unlimited.
-	MaxRestarts int        `json:"max_restarts"`
-	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
+	MaxRestarts int `json:"max_restarts"`
+	// JobRestartInterval is how long a job may run before the scheduler
+	// restarts it (one at a time) to release leaked memory. A Go duration
+	// such as "24h", or "off" to disable. Empty means DefaultJobRestartInterval.
+	JobRestartInterval string     `json:"job_restart_interval"`
+	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+}
+
+// DefaultJobRestartInterval is the cluster default age at which running jobs
+// are restarted.
+const DefaultJobRestartInterval = "24h"
+
+// JobRestartIntervalOff is the canonical stored value for "never restart".
+const JobRestartIntervalOff = "off"
+
+// MinJobRestartInterval is the shortest interval accepted, so a typo cannot
+// make the scheduler restart the whole cluster in a tight loop.
+const MinJobRestartInterval = time.Hour
+
+// ParseJobRestartInterval validates a job restart interval and returns the
+// canonical string to store plus its duration. "" selects the default;
+// "0", "off", "disabled", "none" and "false" disable restarts (duration 0).
+func ParseJobRestartInterval(v string) (string, time.Duration, error) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "":
+		v = DefaultJobRestartInterval
+	case "0", "off", "disabled", "disable", "none", "false":
+		return JobRestartIntervalOff, 0, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return "", 0, fmt.Errorf("must be a Go duration such as 24h, or off")
+	}
+	if d == 0 {
+		return JobRestartIntervalOff, 0, nil
+	}
+	if d < MinJobRestartInterval {
+		return "", 0, fmt.Errorf("must be at least %s, or off", MinJobRestartInterval)
+	}
+	return v, d, nil
+}
+
+// JobRestartIntervalDuration is the age after which running jobs are
+// restarted. Zero means disabled. Empty or invalid values fall back to the
+// default so a bad row can never silently turn restarts off.
+func (s *RuntimeSettings) JobRestartIntervalDuration() time.Duration {
+	if s == nil {
+		return mustJobRestartDefault()
+	}
+	_, d, err := ParseJobRestartInterval(s.JobRestartInterval)
+	if err != nil {
+		return mustJobRestartDefault()
+	}
+	return d
+}
+
+func mustJobRestartDefault() time.Duration {
+	d, _ := time.ParseDuration(DefaultJobRestartInterval)
+	return d
 }
 
 // MaxProcessesOrDefault returns the cluster scale cap, falling back to DefaultMaxProcesses.

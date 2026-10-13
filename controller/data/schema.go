@@ -1310,6 +1310,12 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(73,
 		`CREATE INDEX core_audit_at_idx ON core_audit (at)`,
 	)
+	// Periodic job restarts are on by default (24h) so existing clusters get
+	// the memory-bloat protection after upgrade. "off" disables them.
+	migrations.Add(74,
+		`ALTER TABLE runtime_settings ADD COLUMN job_restart_interval text NOT NULL DEFAULT '24h'`,
+		`INSERT INTO event_types (name) VALUES ('job_restart')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

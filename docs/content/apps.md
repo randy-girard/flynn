@@ -597,6 +597,35 @@ changing the limit starts stopped processes again. A scheduler leader change
 also retries them, because the count is kept in memory. System apps always
 restart.
 
+### Periodic job restart
+
+Long-running processes can accumulate memory. The scheduler therefore
+restarts any job that has been running longer than a cluster-wide interval
+(`job_restart_interval`, default `24h`, minimum `1h`). Set `off` (or `0`) to
+disable it:
+
+```text
+sudo flynn-host runtime:job-restart-interval 72h
+sudo flynn-host runtime:job-restart-interval off
+sudo flynn-host runtime:job-restart-interval
+```
+
+Restarts are staggered:
+
+- Only one job per app is replaced at a time, oldest first. The next one waits
+  until the app is back at its full process count with nothing starting or
+  stopping, so web capacity and database quorum drop by at most one.
+- Process types with a single instance are skipped, because replacing them
+  would cause downtime. Scale such a process to 2 or more to have it restarted.
+- At most 5 jobs are restarted per scheduler pass cluster-wide, so enabling the
+  setting on an old cluster rolls through apps gradually.
+- Database, provider, and system app jobs are included under the same rules.
+- A planned restart is not counted as a crash, so it never trips the
+  [restart limit](#restart-limit) or backoff.
+
+Each restart records a `job_restart` controller event with the app, process
+type, job id, job age, and reason (`max_age`).
+
 ### Builder process limits
 
 `git push` copies `slugbuilder` (buildpack stack) or `dockerbuilder` (container

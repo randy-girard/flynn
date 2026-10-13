@@ -1,6 +1,8 @@
 package data
 
 import (
+	"time"
+
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -331,6 +333,7 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(settings.ReserveResources, Equals, false)
 	c.Assert(settings.BlobGCKeep, Equals, 10)
 	c.Assert(settings.BlobGCMaxAge, Equals, "")
+	c.Assert(settings.JobRestartInterval, Equals, ct.DefaultJobRestartInterval)
 
 	custom := &ct.RuntimeProfile{Name: "xlarge", Memory: 4 * 1024 * 1024 * 1024, CPU: 4000}
 	c.Assert(repo.Add(custom), IsNil)
@@ -366,6 +369,24 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(blobs.BlobGCKeep, Equals, 5)
 	c.Assert(blobs.BlobGCMaxAge, Equals, "720h")
 	c.Assert(blobs.AllowCustomLimits, Equals, true)
+	c.Assert(blobs.JobRestartInterval, Equals, "24h")
+
+	// an empty interval keeps the stored value; "0" turns restarts off
+	blobs.JobRestartInterval = ""
+	c.Assert(repo.UpdateSettings(blobs), IsNil)
+	kept, err := repo.Settings()
+	c.Assert(err, IsNil)
+	c.Assert(kept.JobRestartInterval, Equals, "24h")
+
+	kept.JobRestartInterval = "0"
+	c.Assert(repo.UpdateSettings(kept), IsNil)
+	off, err := repo.Settings()
+	c.Assert(err, IsNil)
+	c.Assert(off.JobRestartInterval, Equals, ct.JobRestartIntervalOff)
+	c.Assert(off.JobRestartIntervalDuration(), Equals, time.Duration(0))
+
+	off.JobRestartInterval = "5m"
+	c.Assert(repo.UpdateSettings(off), NotNil)
 }
 
 func (s *S) TestDBRuntimesPersist(c *C) {

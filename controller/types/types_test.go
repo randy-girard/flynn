@@ -7,6 +7,55 @@ import (
 	"time"
 )
 
+func TestParseJobRestartInterval(t *testing.T) {
+	cases := []struct {
+		in      string
+		want    string
+		wantDur time.Duration
+		wantErr bool
+	}{
+		{"", "24h", 24 * time.Hour, false},
+		{"  24H ", "24h", 24 * time.Hour, false},
+		{"72h", "72h", 72 * time.Hour, false},
+		{"1h", "1h", time.Hour, false},
+		{"0", "off", 0, false},
+		{"0s", "off", 0, false},
+		{"off", "off", 0, false},
+		{"Disabled", "off", 0, false},
+		{"59m", "", 0, true},
+		{"-24h", "", 0, true},
+		{"soon", "", 0, true},
+	}
+	for _, tc := range cases {
+		got, dur, err := ParseJobRestartInterval(tc.in)
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("%q: err=%v wantErr=%t", tc.in, err, tc.wantErr)
+		}
+		if got != tc.want || dur != tc.wantDur {
+			t.Fatalf("%q: got (%q, %s), want (%q, %s)", tc.in, got, dur, tc.want, tc.wantDur)
+		}
+	}
+}
+
+func TestJobRestartIntervalDurationDefaultsOn(t *testing.T) {
+	var nilSettings *RuntimeSettings
+	for name, s := range map[string]*RuntimeSettings{
+		"nil":     nilSettings,
+		"empty":   {},
+		"invalid": {JobRestartInterval: "bogus"},
+	} {
+		if got := s.JobRestartIntervalDuration(); got != 24*time.Hour {
+			t.Fatalf("%s: got %s, want 24h (enabled by default)", name, got)
+		}
+	}
+	if got := (&RuntimeSettings{JobRestartInterval: "off"}).JobRestartIntervalDuration(); got != 0 {
+		t.Fatalf("off: got %s, want 0", got)
+	}
+	if got := (&RuntimeSettings{JobRestartInterval: "48h"}).JobRestartIntervalDuration(); got != 48*time.Hour {
+		t.Fatalf("48h: got %s", got)
+	}
+}
+
 func TestRedisApplianceStrategy(t *testing.T) {
 	app := NewRedisApplianceApp("redis-11111111-2222-3333-4444-555555555555")
 	if !app.RedisAppliance() {

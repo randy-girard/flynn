@@ -208,6 +208,7 @@ func (s *Scheduler) syncRuntimeSettings(log log15.Logger) {
 		return
 	}
 	s.setMaxRestarts(settings.MaxRestarts)
+	s.setJobRestartInterval(settings.JobRestartIntervalDuration())
 }
 
 func (s *Scheduler) setMaxRestarts(n int) {

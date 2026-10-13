@@ -50,6 +50,17 @@ func TestParseMaxRestarts(t *testing.T) {
 	}
 }
 
+func TestFormatJobRestartInterval(t *testing.T) {
+	for in, want := range map[string]string{"": "24h", "72h": "72h", "0": "off", "off": "off", "bogus": "24h"} {
+		if got := formatJobRestartInterval(in); got != want {
+			t.Errorf("formatJobRestartInterval(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if commands["runtime:job-restart-interval"] == nil {
+		t.Fatal("runtime:job-restart-interval not registered")
+	}
+}
+
 func TestDBRuntimeCLIFileRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db-runtimes.json")
 	t.Setenv(dbruntime.EnvFile, path)

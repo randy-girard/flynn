@@ -116,6 +116,11 @@ type Job struct {
 	hostError *string
 
 	serviceFirstSeen *time.Time
+
+	// plannedRestart is set when the scheduler stops this job on purpose
+	// because it exceeded the cluster job restart interval, so restartJob
+	// replaces it without counting a crash
+	plannedRestart bool
 }
 
 // Tags returns the tags for the job's process type from the formation
