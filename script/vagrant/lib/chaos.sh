@@ -29,7 +29,7 @@ chaos_health() {
   fi
   ip="$(flynn_vagrant_node_ip "${node}")"
   set +e
-  CHAOS_HEALTH_OUT="$(run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed')"
+  CHAOS_HEALTH_OUT="$(run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") EXPECT_RESOURCES=$(printf '%q' "${CHAOS_EXPECT_RESOURCES:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed')"
   st=$?
   set -e
   if [[ "${st}" -ne 0 ]]; then
@@ -372,6 +372,11 @@ chaos_cluster() {
     return 1
   fi
   echo "$(chaos_now) baseline healthy"
+  # Every resource (id:app:nodes) seen at baseline must still exist at the
+  # same size in every later sample; the health check's resources section
+  # enforces that.
+  CHAOS_EXPECT_RESOURCES="$(printf '%s\n' "${CHAOS_HEALTH_OUT}" | sed -n 's/^ok resources:.*inventory=//p' | head -1)"
+  echo "resources at baseline: ${CHAOS_EXPECT_RESOURCES:-none}"
   echo "baseline" > "${CHAOS_RUN_DIR}/phase"
   chaos_monitor_loop "${CHAOS_RUN_DIR}" < /dev/null &
   CHAOS_MONITOR_PID=$!

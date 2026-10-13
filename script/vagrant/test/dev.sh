@@ -789,6 +789,33 @@ for want in "PROBE_FULL_STRENGTH=1" "PROBE_SIRENIA=1" "wait-tenant-http.sh" "-pl
     exit 1
   fi
 done
+# Resource accounting covers the cluster datastores: the baseline inventory
+# is passed back to every sample, and each cluster engine job is checked on
+# its /metrics/log.
+for want in "section resources" "EXPECT_RESOURCES" ":9180/metrics/log" "live_brokers" "healthy_members" "readonly_replicas" "inventory="; do
+  if ! grep -Fq -e "${want}" "${mod}/guest/check-health.sh"; then
+    echo "guest/check-health.sh resources section missing ${want}" >&2
+    exit 1
+  fi
+done
+for want in "CHAOS_EXPECT_RESOURCES" "inventory="; do
+  if ! grep -Fq -e "${want}" "${mod}/lib/chaos.sh"; then
+    echo "lib/chaos.sh missing ${want}" >&2
+    exit 1
+  fi
+done
+if ! grep -Fq 'host.endswith(".discoverd")' "${mod}/guest/chaos-fault.sh"; then
+  echo "guest/chaos-fault.sh must treat <app>.discoverd (clickhouse, kafka) resources as datastores" >&2
+  exit 1
+fi
+# The embedded python in the health sample and fault scripts must compile.
+for f in guest/check-health.sh guest/chaos-fault.sh; do
+  awk '/<<.?PY.?$/ { on = 1; n++; next } /^PY$/ { on = 0; next } on { print > ("'"${TMPDIR:-/tmp}"'/py-check-" n ".py") }' "${mod}/${f}"
+  for py in "${TMPDIR:-/tmp}"/py-check-*.py; do
+    python3 -m py_compile "${py}" || { echo "${f}: embedded python does not compile (${py})" >&2; exit 1; }
+  done
+  rm -f "${TMPDIR:-/tmp}"/py-check-*.py
+done
 for want in system-job plugin-job datastore-primary datastore-replica tenant-job host-restart node-reboot; do
   if ! grep -Fq "${want}" "${mod}/lib/chaos.sh"; then
     echo "lib/chaos.sh missing fault ${want}" >&2

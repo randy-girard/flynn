@@ -45,8 +45,10 @@ for inst in get("http://127.0.0.1:1111/services/controller/instances", D) or []:
                 for key, val in (res.get("env") or {}).items():
                     if key.endswith("_URL") and "://" in (val or ""):
                         host = urllib.parse.urlsplit(val).hostname or ""
-                        if host.startswith("leader.") and host.endswith(".discoverd"):
-                            datastores.add(host[len("leader."):-len(".discoverd")])
+                        # leader.<app>.discoverd (mysql, postgres, redis,
+                        # mongodb) or <app>.discoverd (clickhouse, kafka).
+                        if host.endswith(".discoverd"):
+                            datastores.add(host[:-len(".discoverd")].removeprefix("leader."))
         break
     except Exception:
         continue
