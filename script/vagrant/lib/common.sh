@@ -27,7 +27,7 @@ need_vagrant() {
 machine_state() {
   local m="$1"
   local line
-  line="$(vagrant status --machine-readable "${m}" 2>/dev/null | awk -F, -v m="${m}" '$2==m && $3=="state" {print $4; exit}')"
+  line="$(vagrant status --machine-readable "${m}" 2>/dev/null | awk -F, -v m="${m}" '$2==m && $3=="state" && !seen {print $4; seen=1}')"
   if [[ -z "${line}" ]]; then
     echo "unknown"
     return

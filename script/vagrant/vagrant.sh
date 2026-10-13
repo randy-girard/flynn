@@ -522,7 +522,7 @@ plugin_install_or_update() {
     echo "no sibling checkout ../${name} with flynn-plugin.json" >&2
     exit 1
   fi
-  node="$(flynn_vagrant_running_cluster_nodes | head -1)"
+  node="$(flynn_vagrant_running_cluster_nodes | sed -n 1p)"
   if [[ -z "${node}" ]]; then
     echo "no running cluster nodes. Start the cluster with script/vagrant.sh up, then retry." >&2
     exit 1
