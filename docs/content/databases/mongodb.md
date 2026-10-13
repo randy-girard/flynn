@@ -175,6 +175,8 @@ Every instance release sets `FLYNN_METRICS_PORT=9180`. Each `mongod` job serves
 `GET /metrics/log` on that port with these `sample#` series:
 `service_available`, `connections`, `ops_per_sec`, `members`,
 `healthy_members`, `replica_lag_seconds`, `mem_bytes`, and `wiredtiger_bytes`.
+The dashboard sample also carries `db_size_bytes` and `index_size_bytes`, summed
+from `dbStats` over user databases.
 A key that fails to read is omitted. An unreachable `mongod` reports
 `service_available=0 errors=1`. Dashboard samples are posted once per UTC
 minute per controller resource. See
