@@ -23,8 +23,10 @@ The plugin provides MongoDB 7.0 in a highly-available configuration with
 automatic provisioning. Replication is implemented using MongoDB's replica set
 feature. Each resource is one replica set; change its node count with
 `flynn mongodb:scale` (see [Scaling the cluster](#scaling-the-cluster)). The
-image includes `mongod`, database tools, and `mongosh` (not the legacy `mongo`
-shell).
+image includes `mongod` 7.0.43 (ubuntu2204 build), database tools 100.19.1, and
+`mongosh` 2.13.0 (not the legacy `mongo` shell). They are installed from
+official tarballs vendored in the plugin repo and checked against SHA-256
+sums; image builds do not use `repo.mongodb.org`.
 
 Each resource gets a user with `dbOwner` on its own database. Provision stores a
 connection budget (default 20) and rejects `max_connections` above
@@ -57,8 +59,10 @@ release. `MONGO_HOST`, `MONGO_PORT`, `MONGO_USER`, `MONGO_PWD`, and
 automatically by many MongoDB clients. `FLYNN_MONGO` is the name of the
 MongoDB app.
 
-Flynn will also create the `DATABASE_URL` environment variable which is utilized
-by some frameworks to configure database connections. TLS is on by default
+Flynn will also create the `DATABASE_URL` and `MONGO_URL` environment variables,
+which are utilized by some frameworks to configure database connections. Both
+point at `leader.<app>.discoverd` and stay the same across scaling and
+failover. TLS is on by default
 (`MONGO_TLS_ENABLED=true`, `DATABASE_URL` carries `tls=true`); the appliance
 CA is in `MONGO_TRUSTED_CERT`. `mongod` runs in `preferTLS` mode, so
 replication and older in-cluster clients can still connect without TLS.
@@ -73,11 +77,22 @@ with:
 flynn mongodb:scale <n> [<resource>]
 ```
 
-`<n>` must be at least 1. Scaling down drains each removed node first: it is
-taken out of the replica set with `replSetReconfig` before it stops. A node
-rejoins automatically when its Flynn host returns or its job is rescheduled.
-The dashboard records these changes as topology events `P19` (node added),
-`P20` (node removed), `P21` (node rejoined), and `P22` (primary elected).
+`<n>` is 1 to 7. An even count is accepted with a warning.
+
+* Scaling up from one node first deploys a release with `SINGLETON=false`,
+  which briefly restarts the primary.
+* Scaling from more than one node back to 1 is rejected.
+* Scaling down removes only async peers, never the primary or the sync peer.
+  Each removed node is taken out of the replica set with `replSetReconfig`
+  before it stops.
+
+`DATABASE_URL` and `MONGO_URL` do not change when you scale.
+
+The plugin checks each replica set every 30 seconds and records topology
+changes as dashboard events `P19` (node added), `P20` (node removed), `P21`
+(node rejoined), and `P22` (primary elected). Drift correction adds a missing
+live peer back without a vote (`P21`) and removes at most one stale member per
+pass (`P20`).
 
 ### Connecting to a console
 
@@ -153,6 +168,27 @@ sudo flynn-host firewall:expose PORT
 Remove with `flynn resource:unexpose mongodb` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
+
+## Metrics
+
+Every instance release sets `FLYNN_METRICS_PORT=9180`. Each `mongod` job serves
+`GET /metrics/log` on that port with these `sample#` series:
+`service_available`, `connections`, `ops_per_sec`, `members`,
+`healthy_members`, `replica_lag_seconds`, `mem_bytes`, and `wiredtiger_bytes`.
+A key that fails to read is omitted. An unreachable `mongod` reports
+`service_available=0 errors=1`. Dashboard samples are posted once per UTC
+minute per controller resource. See
+[Plugins — Resource metrics line](../plugins.md#resource-metrics-line).
+
+## Upgrades
+
+A plugin update rolls the replica set members one at a time, primary last,
+through the sirenia deploy strategy. One-node resources have brief downtime.
+
+## Dashboard
+
+The MongoDB data source page has the tabs Overview (attached apps and Nodes),
+Metrics, Databases, Users, and Backup.
 
 ## Safety
 

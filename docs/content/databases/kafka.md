@@ -20,9 +20,14 @@ Provider name stays `kafka`.
 
 The plugin provisions an [Apache Kafka](https://kafka.apache.org) cluster that
 runs in [KRaft mode](https://kafka.apache.org/documentation/#kraft) (no
-ZooKeeper). A cluster is spread across the nodes of your Flynn install, with
-each broker acting as both a broker and a KRaft controller so the quorum forms
-automatically.
+ZooKeeper). A cluster is spread across the nodes of your Flynn install. The
+KRaft controller quorum has one voter below three brokers and three voters from
+three brokers on; the other brokers are observers. With two brokers, losing the
+single voter stops metadata changes until it returns.
+
+The image installs Kafka 3.9.0 (Scala 2.13) from
+`img/kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz`, vendored in the plugin repo
+in split parts and checked against a SHA-512 sum.
 
 Topics are **not** created automatically. Auto topic creation is disabled on the
 brokers, so a topic must be created with the `flynn kafka` CLI before any
@@ -45,9 +50,8 @@ app, provision a cluster with:
 flynn resource:add kafka
 ```
 
-This provisions a Kafka cluster as a Flynn app (three brokers, or a single
-broker on a single-node/`SINGLETON` install) and configures your application to
-connect to it.
+This provisions a Kafka cluster as a Flynn app and configures your application
+to connect to it.
 
 ### Scaling the cluster
 
@@ -59,12 +63,13 @@ number of brokers with:
 flynn kafka:scale <n> [<resource>]
 ```
 
-`<n>` must be at least 1. Scaling down drains each removed broker first: its
+`<n>` is 1 to 9. Scaling down drains each removed broker first: its
 partitions are reassigned to the remaining brokers and the broker is
-unregistered before it stops. A broker rejoins automatically when its Flynn
-host returns or its job is rescheduled. The dashboard records these changes as
-topology events `P19` (node added), `P20` (node removed), and `P21` (node
-rejoined).
+unregistered before it stops. A scale finishes with a one-at-a-time broker
+roll; each broker keeps its volume and node id. A broker rejoins automatically
+when its Flynn host returns or its job is rescheduled. The dashboard records
+topology changes as events `P19` (node added), `P20` (node removed), `P21`
+(node rejoined), and `P22` (active controller changed).
 
 ### Connecting to the cluster
 
@@ -74,6 +79,12 @@ Provisioning adds several environment variables to your app release:
   scheme is `kafka+ssl://` when TLS is enabled and `kafka://` otherwise.
 * `KAFKA_BOOTSTRAP_SERVERS` — `host:port` bootstrap list for Kafka clients.
 * `KAFKA_HOST`, `KAFKA_PORT` — the discoverd host and client port.
+
+New provisions use `kafka+ssl://<cluster>.discoverd:9092` for `KAFKA_URL`,
+`KAFKA_BROKER_URLS`, and `KAFKA_BOOTSTRAP_SERVERS`, and `<cluster>.discoverd`
+for `KAFKA_HOST`. That name resolves to every broker, and the broker
+certificate covers it. Resources created earlier keep
+`leader.<cluster>.discoverd` until they are re-attached.
 
 When TLS is enabled (the default), the following are also injected so your app
 can authenticate with mutual TLS:
@@ -198,11 +209,31 @@ Remove with `flynn resource:unexpose kafka` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 
+## Metrics
+
+Broker releases set `FLYNN_METRICS_PORT=9180`. Each broker serves
+`GET /metrics/log` on that port with these `sample#` series:
+`service_available`, `errors`, `controller_leader`, `brokers`, `live_brokers`,
+`voters`, `under_replicated_partitions`, and `offline_partitions`. An
+unreachable broker reports `service_available=0 errors=1`. Dashboard samples
+are posted once per UTC minute per resource per attached app. See
+[Plugins — Resource metrics line](../plugins.md#resource-metrics-line).
+
+## Upgrades
+
+A plugin update rolls the cluster one broker at a time. Each step waits until
+all brokers are live with zero under-replicated partitions. The first plugin
+start after this update rolls every existing cluster once.
+
+## Dashboard
+
+The Kafka data source page has the tabs Overview (attached apps and Brokers),
+Metrics, Topics, Groups, and Backup. There is no followers or MirrorMaker page.
+
 ## Safety
 
 The Kafka appliance stores its log segments on a persistent volume attached to
 each broker. Replication (with `min.insync.replicas`) provides durability across
-brokers on multi-node installs. On single-node/`SINGLETON` installs the cluster
-runs a single broker with a replication factor of one and provides no
-availability or durability guarantees; treat that configuration as suitable for
-development and testing only.
+brokers in a multi-broker cluster. A one-broker cluster runs with a replication
+factor of one and provides no availability or durability guarantees; treat
+that configuration as suitable for development and testing only.

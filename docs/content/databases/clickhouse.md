@@ -18,15 +18,16 @@ flynn resource:add clickhouse
 The controller app is `clickhouse-plugin` (`flynn-host ps`, `flynn -a clickhouse-plugin`).
 Provider name stays `clickhouse`.
 
-The plugin provisions a [ClickHouse](https://clickhouse.com) cluster with
+The plugin provisions a [ClickHouse](https://clickhouse.com) cluster running
+ClickHouse 24.8.14.39 LTS (amd64 and arm64), installed from official tarballs
+vendored in the plugin repo. Every node runs
 [ClickHouse Keeper](https://clickhouse.com/docs/en/guides/sre/keeper/clickhouse-keeper)
-for replication coordination. A cluster is spread across the nodes of your Flynn
-install with three replicas on multi-node installs (or a single replica on
-single-node/`SINGLETON` installs). Change the replica count with
-`flynn clickhouse:scale` (see [Scaling the cluster](#scaling-the-cluster)).
+inside the server for replication coordination and is a Keeper voter with its
+own volume. Change the node count with `flynn clickhouse:scale` (see
+[Scaling the cluster](#scaling-the-cluster)).
 
 User databases must be created with the `flynn clickhouse` CLI so they are
-provisioned with `ON CLUSTER` DDL and replicated to every replica.
+provisioned with `ON CLUSTER` DDL and the `Replicated` database engine.
 
 `flynn resource:add clickhouse` creates a database and a user granted only that
 database, with a memory and query quota. The app receives that user, not the
@@ -48,7 +49,9 @@ application to connect to it.
 
 ### Connecting to the cluster
 
-Provisioning adds several environment variables to your app release:
+Provisioning adds several environment variables to your app release. The
+default attachment name is `CLICKHOUSE` (`CLICKHOUSE_URL`);
+`flynn resource:add clickhouse --as NAME` sets `NAME_URL` instead.
 
 * `FLYNN_CLICKHOUSE` — the name of the ClickHouse app.
 * `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients
@@ -69,18 +72,23 @@ Provisioning adds several environment variables to your app release:
 ### Scaling the cluster
 
 ClickHouse has no followers. Each resource is one cluster, and
-`flynn resource:add clickhouse --follow` is rejected; there is no promote,
-unfollow, or wait step. Change the number of nodes with:
+`flynn resource:add clickhouse --follow` is rejected. The follow, wait,
+promote, and unfollow commands and the dashboard Follow page are gone. Change
+the number of nodes with:
 
 ```text
-flynn clickhouse:scale <n> [<resource>]
+flynn clickhouse:scale <nodes> [<resource>]
 ```
 
-`<n>` must be at least 1. Scaling down drains each removed node first: its
-replica is removed with `SYSTEM DROP REPLICA` before it stops. A node rejoins
-automatically when its Flynn host returns or its job is rescheduled. The
-dashboard records these changes as topology events `P19` (node added), `P20`
-(node removed), and `P21` (node rejoined).
+`<nodes>` is 1 to 9; an odd count is recommended because every node is a
+Keeper voter. Scaling down drains the highest node ids and drops their
+replicas with `SYSTEM DROP REPLICA` before they stop. A node whose job is lost
+comes back with the same id and volume. Resources created before embedded
+Keeper cannot scale; `clickhouse:scale` returns an error for them.
+
+The plugin reconciles every 30 seconds and removes Keeper voters that stay
+missing. The dashboard records topology changes as events `P19` (node added),
+`P20` (node removed), and `P21` (node rejoined).
 
 ### Connecting to a console
 
@@ -110,10 +118,10 @@ flynn clickhouse:databases:info analytics
 flynn clickhouse:databases:destroy analytics
 ```
 
-Database DDL is executed with `ON CLUSTER flynn` so schema changes are applied
-consistently across replicas. When creating tables inside a replicated database,
-use a `ReplicatedMergeTree` (or other replicated) table engine so data is
-replicated through Keeper.
+Database DDL is executed with `ON CLUSTER flynn` and the `Replicated` database
+engine so schema changes are applied consistently across replicas. Create
+tables with `ReplicatedMergeTree` so data is replicated through Keeper; plain
+`MergeTree` tables do not replicate.
 
 All `flynn clickhouse` commands run inside a container on the Flynn cluster.
 
@@ -143,10 +151,25 @@ Remove with `flynn resource:unexpose clickhouse` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 
+## Metrics
+
+Each node serves `GET /metrics/log` on `FLYNN_METRICS_PORT=9180`. The dashboard
+samples once per minute. See
+[Plugins — Resource metrics line](../plugins.md#resource-metrics-line).
+
+## Upgrades
+
+A plugin update rolls the cluster one node at a time and refuses to start while
+any node is unhealthy.
+
+## Dashboard
+
+The ClickHouse data source page has the tabs Overview (with the Nodes
+control), Metrics, Databases, and Backup.
+
 ## Safety
 
 The ClickHouse appliance stores data on a persistent volume attached to each
-replica. Replication through Keeper provides durability across replicas on
-multi-node installs. On single-node/`SINGLETON` installs the cluster runs a
-single replica with no availability guarantees; treat that configuration as
-suitable for development and testing only.
+node. Replication through Keeper provides durability across nodes in a
+multi-node cluster. A one-node cluster has no availability guarantees; treat
+that configuration as suitable for development and testing only.

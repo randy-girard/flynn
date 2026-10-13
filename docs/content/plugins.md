@@ -415,11 +415,14 @@ compiled-in list.
   plugin-specific pages (Kafka topics, consumer groups), Backup, Followers,
   Settings. Followers apply to Postgres, MySQL, and Redis only. MongoDB,
   ClickHouse, and Kafka have no followers: each resource is one cluster whose
-  node count changes with `flynn mongodb:scale`, `flynn clickhouse:scale`, or
-  `flynn kafka:scale` (scale-down drains the node first; nodes rejoin
-  automatically when a host returns or the job is rescheduled). Their topology
-  changes appear as events `P19` (node added), `P20` (node removed), `P21`
-  (node rejoined), and `P22` (primary elected).
+  node count changes with `flynn mongodb:scale` (1–7), `flynn clickhouse:scale`
+  (1–9), or `flynn kafka:scale` (1–9). Scale-down drains the node first; nodes
+  rejoin automatically when a host returns or the job is rescheduled. Their
+  topology changes appear as events `P19` (node added), `P20` (node removed),
+  and `P21` (node rejoined); MongoDB adds `P22` (primary elected) and Kafka
+  adds `P22` (active controller changed). Their pages show Overview (with
+  Nodes or Brokers), Metrics, Databases or Topics/Groups, Users (MongoDB
+  only), and Backup.
 - Metrics charts mark each deployment with a dashed line. Hovering the line
   shows the deploy (app, time, status, Code/Config type, short release id),
   and clicking it opens that release's page in the app.
@@ -446,6 +449,12 @@ single system line to the job's log: the container `metrics` fields followed
 by the plugin fields. If the request fails, the line has container fields
 only. Postgres, Redis, and MySQL use the `flynn-postgres`, `flynn-redis`, and
 `flynn-mysql` prefixes.
+
+MongoDB, ClickHouse, and Kafka instance jobs also serve `GET /metrics/log` on
+`FLYNN_METRICS_PORT=9180`; an unreachable MongoDB or Kafka node reports
+`service_available=0 errors=1`. Their series are listed in
+[MongoDB](databases/mongodb.md#metrics), [ClickHouse](databases/clickhouse.md#metrics),
+and [Kafka](databases/kafka.md#metrics).
 
 The platform `postgres` system app does the same: its `postgres` peers set
 `FLYNN_METRICS_PORT=9180` and report `flynn-postgres source=postgres
