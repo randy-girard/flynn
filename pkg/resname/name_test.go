@@ -386,12 +386,12 @@ func TestCanonical(t *testing.T) {
 }
 
 func TestIsolatedService(t *testing.T) {
-	for _, name := range []string{"postgresql-concave-48291", "postgresql-chaparral-48291", "postgresql-woodland-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "mysql-yarrow-aaaaaa", "mysql-inlet-48291", "mysql-woodland-48291", "redis-juniper-abcdef", "redis-harbor-48291", "redis-woodland-48291", "redis-shop-482913"} {
+	for _, name := range []string{"postgresql-concave-48291", "postgresql-chaparral-48291", "postgresql-woodland-48291", "postgresql-shop-482913", "postgresql-resource-demo-100001", "pg-ridge-ffpade", "pg-harbor-kxmnpq", "mysql-orchid-aaaaaa", "mysql-yarrow-aaaaaa", "mysql-inlet-48291", "mysql-woodland-48291", "redis-juniper-abcdef", "redis-harbor-48291", "redis-woodland-48291", "redis-shop-482913", "mongodb-harbor-48291", "clickhouse-reef-48291", "kafka-inlet-48291"} {
 		if !IsolatedService(name) {
 			t.Fatalf("%q should be an isolated datastore", name)
 		}
 	}
-	for _, name := range []string{"postgres", "postgres-plugin", "postgresql", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1", "postgresql-shop-abc123", "postgresql-concave-4829", "redis", "redis-plugin", "redis-harbor-4829", "mysql", "mysql-plugin", "mysql-inlet-4829"} {
+	for _, name := range []string{"postgres", "postgres-plugin", "postgresql", "pg-api", "shop-web", "leader.pg-ridge-ffpade", "pg--ffpade", "pg-ridge-ffpade1", "postgresql-shop-abc123", "postgresql-concave-4829", "redis", "redis-plugin", "redis-harbor-4829", "mysql", "mysql-plugin", "mysql-inlet-4829", "mongodb-harbor-4829", "kafka-plugin", "clickhouse-api"} {
 		if IsolatedService(name) {
 			t.Fatalf("%q must not look like an isolated datastore", name)
 		}

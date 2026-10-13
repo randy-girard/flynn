@@ -1,9 +1,10 @@
 // Package resname builds database resource app names.
 //
-// Postgres, Redis and MySQL instances use <engine>-<word>-<5 digits>, for
-// example postgresql-concave-48291, redis-harbor-48291 and mysql-inlet-48291.
-// The other engines use <prefix>-<word>-<6 letters>, for example
-// mongodb-harbor-kxmnpq.
+// Postgres, Redis, MySQL, MongoDB, ClickHouse and Kafka instances use
+// <engine>-<word>-<5 digits>, for example postgresql-concave-48291,
+// redis-harbor-48291, mongodb-harbor-48291 and kafka-inlet-48291. Older
+// <prefix>-<word>-<6 letters> names (mongodb-harbor-kxmnpq) are still
+// recognized.
 // Callers retry when the name is already taken so two resources never share it.
 package resname
 
@@ -53,7 +54,7 @@ var attachmentColors = []string{
 	"VERMILION", "VIOLET", "WALNUT", "WHEAT", "WHITE", "WINE", "YELLOW",
 }
 
-// Name returns prefix-word-xxxxxx. taken reports names already in use.
+// Name returns prefix-word-xxxxxx (older letter form; new engines use digits). taken reports names already in use.
 // A nil taken accepts the first name.
 func Name(prefix string, taken func(string) bool) string {
 	prefix = strings.ToLower(strings.Trim(strings.TrimSpace(prefix), "-"))
@@ -75,7 +76,9 @@ func Name(prefix string, taken func(string) bool) string {
 // leader.<name>.discoverd for these; other discoverd names stay internal.
 func IsolatedService(name string) bool {
 	name = strings.ToLower(strings.TrimSpace(name))
-	if postgresInstanceName(name) || redisInstanceName(name) || mysqlInstanceName(name) {
+	if postgresInstanceName(name) || redisInstanceName(name) || mysqlInstanceName(name) ||
+		digitInstanceName("mongodb-", name) || digitInstanceName("clickhouse-", name) ||
+		digitInstanceName("kafka-", name) {
 		return true
 	}
 	i := strings.IndexByte(name, '-')
