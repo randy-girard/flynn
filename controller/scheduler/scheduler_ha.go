@@ -10,8 +10,8 @@ import (
 // SINGLETON=false is a new release at scale 1 (volume handoff), then a later
 // pass scales the data process to 3 once that primary is running.
 //
-// Plugin mysql/mongodb stay singleton until the operator adds a replica
-// (mysql:nodes:add / mongodb:nodes:add). Auto-promoting them on a 3-host
+// Plugin mysql/mongodb stay singleton until the operator adds nodes
+// (mysql:nodes:add / mongodb:scale). Auto-promoting them on a 3-host
 // Flynn cluster races the first resource:add: ScaleUp sees a primary, then
 // the env flip elects a new replica set and create-user hits
 // NotWritablePrimary.
