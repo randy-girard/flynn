@@ -6,15 +6,16 @@
 #   datastore-primary  the leader job of a provider resource (forces failover)
 #   datastore-replica  a non-leader job of a provider resource
 #   tenant-job         a job of a user app
-# SEED makes the pick repeatable. Prints "target ..." and exits 3 when no job
+# APP_MATCH (optional) limits the datastore kinds to apps whose name contains
+# it, e.g. kafka. SEED makes the pick repeatable. Prints "target ..." and exits 3 when no job
 # of that kind is running.
 set -euo pipefail
 export FLYNN_SKIP_UPDATE_CHECK=1
 
-python3 - "${FAULT:?FAULT is required}" "${SEED:-}" <<'PY'
+python3 - "${FAULT:?FAULT is required}" "${SEED:-}" "${APP_MATCH:-}" <<'PY'
 import base64, json, random, subprocess, sys, urllib.parse, urllib.request
 
-kind, seed = sys.argv[1], sys.argv[2]
+kind, seed, app_match = sys.argv[1], sys.argv[2], sys.argv[3]
 if seed:
     random.seed(seed)
 env = json.load(open("/etc/flynn/host.json")).get("env") or {}
@@ -86,6 +87,8 @@ elif kind == "tenant-job":
 else:
     raise SystemExit("unknown FAULT %s" % kind)
 pool = [j for j in pool if j["id"]]
+if app_match and kind.startswith("datastore-"):
+    pool = [j for j in pool if app_match in j["app"]]
 if not pool:
     print("target kind=%s none running" % kind)
     raise SystemExit(3)

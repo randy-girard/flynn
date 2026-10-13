@@ -119,7 +119,7 @@ chaos_inject() {
       # has not run yet.
       for attempt in 1 2 3; do
         set +e
-        out="$(run_as_root_on "${nodes[0]}" "cd ${SRC} && FAULT=${kind} SEED=${seed} script/vagrant/guest/chaos-fault.sh" 2>&1)"
+        out="$(run_as_root_on "${nodes[0]}" "cd ${SRC} && FAULT=${kind} SEED=${seed} APP_MATCH='${CHAOS_APP:-}' script/vagrant/guest/chaos-fault.sh" 2>&1)"
         st=$?
         set -e
         CHAOS_TARGET="$(printf '%s\n' "${out}" | sed -n 's/^target //p' | tail -1)"
