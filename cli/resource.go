@@ -25,10 +25,10 @@ usage: flynn resource
 List resources for the app.
 
 NAME is the isolated instance (postgresql-concave-48291). Use it with pg:psql,
-redis-cli, --follow, --join, resource:attach, and resource:remove.
+redis-cli, --follow, resource:attach, and resource:remove.
 `)
 	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--join <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
+usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
 
 Provision a new resource for the app using <provider>.
 
@@ -38,15 +38,15 @@ process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
 are rejected unless a cluster admin has allowed custom sizes.
 
 For postgres, mysql, redis, kafka, mongodb, and clickhouse, the installed plugin
-receives --as, --follow, --join, --runtime, --replication, and --auto-failover.
-Postgres, mysql,
-and redis --follow creates a replica resource of that instance. Kafka and
-mongodb --join starts another Flynn job on that existing cluster (any member
-name works; --follow is accepted as an alias). ClickHouse --follow still copies
-onto a separate resource. Postgres, mysql, and redis --auto-failover with --follow
-places the replica on another host and promotes it if the primary job is lost,
-then recreates a replica so the pair remains. The platform postgres appliance at
-postgres-api.discoverd is not used. Every postgres provision sets
+receives --as, --follow, --runtime, --replication, and --auto-failover.
+Postgres, mysql, and redis --follow creates a replica resource of that
+instance. Mongodb, clickhouse, and kafka have no followers: each resource is
+one cluster, and flynn mongodb:scale, flynn clickhouse:scale, or flynn
+kafka:scale changes its node count. Postgres, mysql, and redis --auto-failover
+with --follow places the replica on another host and promotes it if the
+primary job is lost, then recreates a replica so the pair remains. The
+platform postgres appliance at postgres-api.discoverd is not used. Every
+postgres provision sets
 FLYNN_POSTGRESQL_<COLOR>_URL unless --as names the attachment
 (--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_POSTGRESQL_AMBER_URL).
 A new provision also sets DATABASE_URL when that key is free. Redis is the
@@ -58,8 +58,7 @@ wait command (pg:wait, redis:wait, mysql:wait).
 
 Options:
 	--as=<name>              attachment env name (postgres/redis add _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL or FLYNN_REDIS_<COLOR>_URL)
-	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis/clickhouse); alias of --join on kafka/mongodb
-	--join=<resource>        extra kafka or mongodb cluster node (NAME or ID from flynn resource)
+	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis only)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
 	--auto-failover          with --follow on postgres/mysql/redis: place off the primary host and fail over automatically
@@ -186,15 +185,14 @@ func runResourceAdd(args *docopt.Args, client controller.Client) error {
 	if err != nil {
 		return err
 	}
+	if err := rejectClusterFollow(provider, args.String["--follow"]); err != nil {
+		return err
+	}
 	follow, err := resolvePeerRef(client, mustApp(), provider, args.String["--follow"])
 	if err != nil {
 		return err
 	}
-	join, err := resolvePeerRef(client, mustApp(), provider, args.String["--join"])
-	if err != nil {
-		return err
-	}
-	cfg, err := databaseProvisionConfig(provider, args.String["--as"], follow, join, args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
+	cfg, err := databaseProvisionConfig(provider, args.String["--as"], follow, args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
 	if err != nil {
 		return err
 	}
@@ -301,7 +299,7 @@ func resourceStartingMessage(res *ct.Resource) string {
 }
 
 // resourceDisplayName is the isolated instance operators copy from flynn
-// resource (postgresql-concave-48291). It is what pg:psql and --follow/--join take.
+// resource (postgresql-concave-48291). It is what pg:psql and --follow take.
 func resourceDisplayName(res *ct.Resource) string {
 	if res == nil {
 		return ""
@@ -330,7 +328,7 @@ func resourceMatchesRef(res *ct.Resource, ref string) bool {
 }
 
 // resolvePeerRef turns a flynn resource NAME or ID into the isolated app name
-// plugins expect for --follow/--join. Empty ref is unchanged.
+// plugins expect for --follow. Empty ref is unchanged.
 func resolvePeerRef(client controller.Client, app, provider, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -419,7 +417,6 @@ func rejectPlatformPostgresAdd(provider string, client controller.Client) error 
 type databaseProvisionBody struct {
 	As           string `json:"as,omitempty"`
 	Follow       string `json:"follow,omitempty"`
-	Join         string `json:"join,omitempty"`
 	Runtime      string `json:"runtime,omitempty"`
 	Replication  string `json:"replication,omitempty"`
 	AutoFailover bool   `json:"auto_failover,omitempty"`
@@ -428,38 +425,25 @@ type databaseProvisionBody struct {
 	Disk         int64  `json:"disk,omitempty"`
 }
 
-func isClusterJoinProvider(provider string) bool {
+// isScaledClusterProvider reports providers whose resource is one cluster
+// resized with <provider>:scale instead of follower resources.
+func isScaledClusterProvider(provider string) bool {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "kafka", "mongodb":
+	case "mongodb", "clickhouse", "kafka":
 		return true
 	default:
 		return false
 	}
 }
 
-// provisionJoinFollow maps CLI --follow/--join onto the provider JSON.
-// Kafka and mongodb send join (and follow as a compatibility alias). Replica
-// engines send follow only; --join is rejected there.
-func provisionJoinFollow(provider, follow, join string) (followJSON, joinJSON string, err error) {
-	follow = strings.TrimSpace(follow)
-	join = strings.TrimSpace(join)
-	if follow != "" && join != "" && follow != join {
-		return "", "", fmt.Errorf("--follow and --join cannot both be set")
+// rejectClusterFollow refuses --follow for mongodb, clickhouse, and kafka
+// before any controller lookup.
+func rejectClusterFollow(provider, follow string) error {
+	if strings.TrimSpace(follow) == "" || !isScaledClusterProvider(provider) {
+		return nil
 	}
-	target := join
-	if target == "" {
-		target = follow
-	}
-	if target == "" {
-		return "", "", nil
-	}
-	if isClusterJoinProvider(provider) {
-		return target, target, nil
-	}
-	if join != "" && follow == "" {
-		return "", "", fmt.Errorf("%s uses --follow for a replica resource; --join adds a kafka or mongodb cluster node", provider)
-	}
-	return target, "", nil
+	name := strings.ToLower(strings.TrimSpace(provider))
+	return fmt.Errorf("%s has no followers; use flynn %s:scale <n> to change the node count", name, name)
 }
 
 // databaseProvisionConfig sizes postgres, mysql, redis, mongodb, kafka, and
@@ -467,7 +451,7 @@ func provisionJoinFollow(provider, follow, join string) (followJSON, joinJSON st
 // Omitting runtime uses small. Raw cpu, memory, or disk is rejected unless
 // the catalog allows custom sizes. The size is fixed on this request;
 // later edits to the runtime definition do not resize this instance.
-func databaseProvisionConfig(provider, as, follow, join, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
+func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
 	if _, ok := dbruntime.ProviderEngine(provider); !ok {
 		if cpuRaw != "" || memRaw != "" || diskRaw != "" {
 			return nil, fmt.Errorf("cpu, memory, and disk apply to database providers (postgres, mysql, redis, mongodb, kafka, clickhouse)")
@@ -500,10 +484,10 @@ func databaseProvisionConfig(provider, as, follow, join, runtime, replication, c
 	if err != nil {
 		return nil, err
 	}
-	followJSON, joinJSON, err := provisionJoinFollow(provider, follow, join)
-	if err != nil {
+	if err := rejectClusterFollow(provider, follow); err != nil {
 		return nil, err
 	}
+	followJSON := strings.TrimSpace(follow)
 	if followJSON != "" && strings.EqualFold(strings.TrimSpace(provider), "postgres") {
 		mode := strings.ToLower(strings.TrimSpace(replication))
 		if mode != "" && mode != "streaming" {
@@ -514,7 +498,6 @@ func databaseProvisionConfig(provider, as, follow, join, runtime, replication, c
 	body := databaseProvisionBody{
 		As:          as,
 		Follow:      followJSON,
-		Join:        joinJSON,
 		Runtime:     name,
 		Replication: replication,
 		CPU:         sz.CPU,
