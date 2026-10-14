@@ -107,6 +107,29 @@ func TestRestartAgedJobsSkipsYoungJobs(t *testing.T) {
 	}
 }
 
+func TestJobRestartThresholdIsJitteredPerJob(t *testing.T) {
+	interval := 24 * time.Hour
+	min := interval - interval/100*jobRestartJitterPercent
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 50; i++ {
+		id := "host-app-job-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
+		got := jobRestartThreshold(interval, id)
+		if got < min || got > interval {
+			t.Fatalf("threshold %s for %s outside [%s, %s]", got, id, min, interval)
+		}
+		if again := jobRestartThreshold(interval, id); again != got {
+			t.Fatalf("threshold for %s not stable: %s then %s", id, got, again)
+		}
+		seen[got] = true
+	}
+	if len(seen) < 10 {
+		t.Fatalf("only %d distinct thresholds for 50 jobs, want them spread out", len(seen))
+	}
+	if got := jobRestartThreshold(0, "x"); got != 0 {
+		t.Fatalf("zero interval gave %s", got)
+	}
+}
+
 func TestRestartAgedJobsDisabled(t *testing.T) {
 	s, cc := ageTestScheduler(map[string]int{"app-1": 3}, 100*time.Hour)
 	s.setJobRestartInterval(0)
@@ -158,6 +181,38 @@ func TestRestartAgedJobsSkipsSingleInstance(t *testing.T) {
 	s.restartAgedJobs(time.Now())
 	if n := countState(s, "app-1", JobStateStopping); n != 0 || len(cc.events) != 0 {
 		t.Fatalf("restarted a single instance process (would cause downtime): stopping=%d", n)
+	}
+}
+
+func TestRestartAgedJobsRestartsSingleInstanceWhenEnabled(t *testing.T) {
+	s, _ := ageTestScheduler(map[string]int{"app-1": 1}, 100*time.Hour)
+	s.setSingleInstanceRestart(true)
+	s.restartAgedJobs(time.Now())
+	if n := countState(s, "app-1", JobStateStopping); n != 1 {
+		t.Fatalf("stopping=%d with single_instance_restart on, want 1", n)
+	}
+}
+
+func TestRestartAgedJobsSkipsSystemPluginAndDatastoreApps(t *testing.T) {
+	cases := map[string]map[string]string{
+		"controller":     {"flynn-system-app": "true"},
+		"router":         {"flynn-system-app": "true"},
+		"letsencrypt":    {"flynn-system-app": "true", "flynn-plugin": "true"},
+		"mysql-oxbow":    {"flynn-system-app": "true", "flynn-plugin": "true"},
+		"postgres":       {"flynn-system-app": "true"},
+		"redis-woodland": {"flynn-system-app": "true"},
+	}
+	for name, meta := range cases {
+		s, cc := ageTestScheduler(map[string]int{name: 3}, 100*time.Hour)
+		for _, job := range s.jobs {
+			if job.AppID == name {
+				job.Formation.App.Meta = meta
+			}
+		}
+		s.restartAgedJobs(time.Now())
+		if n := countState(s, name, JobStateStopping); n != 0 || len(cc.events) != 0 {
+			t.Fatalf("restarted %s (meta %v): stopping=%d events=%d", name, meta, n, len(cc.events))
+		}
 	}
 }
 

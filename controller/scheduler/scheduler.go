@@ -147,6 +147,11 @@ type Scheduler struct {
 	// 0 disables periodic restarts, which is also the state until the
 	// cluster setting has been loaded.
 	jobRestartInterval time.Duration
+
+	// singleInstanceRestart is RuntimeSettings.SingleInstanceRestart: when
+	// true, periodic restarts may also replace the only instance of a user
+	// app process type (see eligibleForAgeRestart).
+	singleInstanceRestart bool
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {

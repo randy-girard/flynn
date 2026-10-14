@@ -1316,6 +1316,11 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE runtime_settings ADD COLUMN job_restart_interval text NOT NULL DEFAULT '24h'`,
 		`INSERT INTO event_types (name) VALUES ('job_restart')`,
 	)
+	// Off by default: replacing the only instance of a process type causes
+	// downtime, so the cluster owner opts in to it.
+	migrations.Add(75,
+		`ALTER TABLE runtime_settings ADD COLUMN single_instance_restart boolean NOT NULL DEFAULT false`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

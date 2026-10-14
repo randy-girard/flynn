@@ -1,6 +1,7 @@
 package main
 
 import (
+	"hash/fnv"
 	"sort"
 	"time"
 
@@ -33,6 +34,16 @@ func (s *Scheduler) setJobRestartInterval(d time.Duration) {
 	s.jobRestartInterval = d
 }
 
+// setSingleInstanceRestart sets whether periodic restarts may replace the only
+// instance of a user app process type.
+func (s *Scheduler) setSingleInstanceRestart(on bool) {
+	if on == s.singleInstanceRestart {
+		return
+	}
+	s.logger.Info("cluster single instance restart changed", "fn", "setSingleInstanceRestart", "from", s.singleInstanceRestart, "to", on)
+	s.singleInstanceRestart = on
+}
+
 // restartAgedJobs restarts running jobs that have been up longer than the
 // cluster job restart interval, to release memory the process has accumulated.
 //
@@ -41,9 +52,14 @@ func (s *Scheduler) setJobRestartInterval(d time.Duration) {
 //     starts once every formation of the app is back at its full process
 //     count with no job pending, starting or stopping (so datastore quorums
 //     and web capacity are never reduced by more than one);
-//   - process types with a single instance are skipped, since the scheduler
-//     stops the old job before starting its replacement and that would be
-//     downtime;
+//   - only user apps are restarted; system apps, plugin apps and datastores
+//     (postgres, mysql, redis, mongodb, kafka, clickhouse) are never restarted
+//     by this rule;
+//   - process types with a single instance are skipped unless the cluster
+//     single_instance_restart option is on, since the scheduler stops the old
+//     job before starting its replacement and that would be downtime;
+//   - a job is due between 80% and 100% of the interval, at a point fixed per
+//     job (see jobRestartThreshold);
 //   - the oldest job of an app goes first;
 //   - at most maxAgeRestartsPerSync jobs are restarted per pass.
 func (s *Scheduler) restartAgedJobs(now time.Time) {
@@ -92,10 +108,42 @@ func (s *Scheduler) eligibleForAgeRestart(job *Job, now time.Time) bool {
 	if job.Formation == nil || job.Formation.ExpandedFormation == nil || job.Formation.App == nil {
 		return false
 	}
-	if now.Sub(job.StartedAt) < s.jobRestartInterval {
+	if !isUserApp(job.Formation.App) {
 		return false
 	}
+	if now.Sub(job.StartedAt) < jobRestartThreshold(s.jobRestartInterval, job.JobID) {
+		return false
+	}
+	if s.singleInstanceRestart {
+		return true
+	}
 	return job.Formation.Processes[job.Type] >= 2
+}
+
+// isUserApp reports whether the app is a user app (web, worker, other process
+// types). System apps, plugin apps and datastores (postgres, mysql, redis,
+// mongodb, kafka, clickhouse) are never restarted by the age rule.
+func isUserApp(app *ct.App) bool {
+	return app != nil && !app.System() && !app.Plugin() && !app.Datastore()
+}
+
+// jobRestartJitterPercent is how much earlier than the interval a job may be
+// restarted. Each job gets its own fixed point in that window so instances
+// started together (a scaled app, a deploy) do not all come due at once.
+const jobRestartJitterPercent = 20
+
+// jobRestartThreshold is the age at which a job becomes due for restart: the
+// cluster interval minus a per-job offset of up to jobRestartJitterPercent.
+// The offset is derived from the job ID, so it is stable across scheduler
+// passes and leader changes, and no job ever runs longer than the interval.
+func jobRestartThreshold(interval time.Duration, jobID string) time.Duration {
+	window := interval / 100 * jobRestartJitterPercent
+	if window <= 0 {
+		return interval
+	}
+	h := fnv.New32a()
+	h.Write([]byte(jobID))
+	return interval - time.Duration(int64(h.Sum32())%int64(window))
 }
 
 // appSettled reports whether the app is at its full process count with no

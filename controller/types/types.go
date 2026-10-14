@@ -1450,8 +1450,13 @@ type RuntimeSettings struct {
 	// JobRestartInterval is how long a job may run before the scheduler
 	// restarts it (one at a time) to release leaked memory. A Go duration
 	// such as "24h", or "off" to disable. Empty means DefaultJobRestartInterval.
-	JobRestartInterval string     `json:"job_restart_interval"`
-	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+	JobRestartInterval string `json:"job_restart_interval"`
+	// SingleInstanceRestart, when true, lets the periodic job restart also
+	// replace the only instance of a user app process type. The old job is
+	// stopped before its replacement starts, so this causes brief downtime.
+	// Off by default; datastores and system apps are never restarted.
+	SingleInstanceRestart bool       `json:"single_instance_restart"`
+	UpdatedAt             *time.Time `json:"updated_at,omitempty"`
 }
 
 // DefaultJobRestartInterval is the cluster default age at which running jobs

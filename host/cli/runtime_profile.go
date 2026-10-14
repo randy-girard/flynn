@@ -78,14 +78,29 @@ usage: flynn-host runtime:job-restart-interval [<interval>]
 Show or set how long a job may run before the scheduler restarts it to
 release leaked memory. <interval> is a Go duration of at least 1h (default
 24h) or "off" (also "0") to disable. Jobs are restarted one at a time per
-app, and only while the app is at its full process count. Process types
-with a single instance are skipped, since restarting them would cause
-downtime. Database and system app jobs are included, keeping quorum.
+app, and only while the app is at its full process count. Only user apps
+(web, worker, other) are restarted; system apps, plugins and datastores
+are never restarted by this rule. Process types with a single instance are
+skipped unless runtime:single-instance-restart is on.
 
 Examples:
 
     $ flynn-host runtime:job-restart-interval 72h
     $ flynn-host runtime:job-restart-interval off
+`
+	runtimeSingleInstanceRestartUsage = `
+usage: flynn-host runtime:single-instance-restart [<state>]
+
+Show or set whether the periodic job restart (runtime:job-restart-interval)
+also restarts a user app process type that has only one instance. <state>
+is "on" or "off" (default off). With it on, that single job is stopped
+before its replacement starts, so the app has brief downtime. Datastores
+and system apps are never restarted.
+
+Examples:
+
+    $ flynn-host runtime:single-instance-restart on
+    $ flynn-host runtime:single-instance-restart off
 `
 )
 
@@ -98,6 +113,7 @@ func init() {
 	Register("runtime:reserve", runRuntimeReserve, runtimeReserveUsage)
 	Register("runtime:max-restarts", runRuntimeMaxRestarts, runtimeMaxRestartsUsage)
 	Register("runtime:job-restart-interval", runRuntimeJobRestartInterval, runtimeJobRestartIntervalUsage)
+	Register("runtime:single-instance-restart", runRuntimeSingleInstanceRestart, runtimeSingleInstanceRestartUsage)
 }
 
 // formatMaxRestarts renders RuntimeSettings.MaxRestarts, where 0 is unlimited.
@@ -255,12 +271,14 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 		return err
 	}
 	s := &ct.RuntimeSettings{
-		AllowCustomLimits: !args.Bool["--disable"],
-		MaxProcesses:      cur.MaxProcessesOrDefault(),
-		ReserveResources:  cur.ReserveResources,
-		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:      cur.BlobGCMaxAge,
-		MaxRestarts:       cur.MaxRestarts,
+		AllowCustomLimits:     !args.Bool["--disable"],
+		MaxProcesses:          cur.MaxProcessesOrDefault(),
+		ReserveResources:      cur.ReserveResources,
+		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:          cur.BlobGCMaxAge,
+		MaxRestarts:           cur.MaxRestarts,
+		JobRestartInterval:    cur.JobRestartInterval,
+		SingleInstanceRestart: cur.SingleInstanceRestart,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
@@ -288,12 +306,14 @@ func runRuntimeMaxRestarts(args *docopt.Args) error {
 		return err
 	}
 	s := &ct.RuntimeSettings{
-		AllowCustomLimits: cur.AllowCustomLimits,
-		MaxProcesses:      cur.MaxProcessesOrDefault(),
-		ReserveResources:  cur.ReserveResources,
-		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:      cur.BlobGCMaxAge,
-		MaxRestarts:       n,
+		AllowCustomLimits:     cur.AllowCustomLimits,
+		MaxProcesses:          cur.MaxProcessesOrDefault(),
+		ReserveResources:      cur.ReserveResources,
+		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:          cur.BlobGCMaxAge,
+		MaxRestarts:           n,
+		JobRestartInterval:    cur.JobRestartInterval,
+		SingleInstanceRestart: cur.SingleInstanceRestart,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
@@ -331,19 +351,74 @@ func runRuntimeJobRestartInterval(args *docopt.Args) error {
 		return fmt.Errorf("job restart interval: %s", err)
 	}
 	s := &ct.RuntimeSettings{
-		AllowCustomLimits:  cur.AllowCustomLimits,
-		MaxProcesses:       cur.MaxProcessesOrDefault(),
-		ReserveResources:   cur.ReserveResources,
-		BlobGCKeep:         cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:       cur.BlobGCMaxAge,
-		MaxRestarts:        cur.MaxRestarts,
-		JobRestartInterval: interval,
+		AllowCustomLimits:     cur.AllowCustomLimits,
+		MaxProcesses:          cur.MaxProcessesOrDefault(),
+		ReserveResources:      cur.ReserveResources,
+		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:          cur.BlobGCMaxAge,
+		MaxRestarts:           cur.MaxRestarts,
+		JobRestartInterval:    interval,
+		SingleInstanceRestart: cur.SingleInstanceRestart,
 	}
 	if err := client.UpdateRuntimeSettings(s); err != nil {
 		return err
 	}
 	fmt.Printf("job_restart_interval=%s\n", formatJobRestartInterval(s.JobRestartInterval))
 	return nil
+}
+
+// runRuntimeSingleInstanceRestart shows or sets the cluster-wide
+// single_instance_restart option.
+func runRuntimeSingleInstanceRestart(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	arg := args.String["<on|off>"]
+	if arg == "" {
+		fmt.Printf("single_instance_restart=%s\n", formatOnOff(cur.SingleInstanceRestart))
+		return nil
+	}
+	on, err := parseOnOff(arg)
+	if err != nil {
+		return err
+	}
+	s := &ct.RuntimeSettings{
+		AllowCustomLimits:     cur.AllowCustomLimits,
+		MaxProcesses:          cur.MaxProcessesOrDefault(),
+		ReserveResources:      cur.ReserveResources,
+		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
+		BlobGCMaxAge:          cur.BlobGCMaxAge,
+		MaxRestarts:           cur.MaxRestarts,
+		JobRestartInterval:    cur.JobRestartInterval,
+		SingleInstanceRestart: on,
+	}
+	if err := client.UpdateRuntimeSettings(s); err != nil {
+		return err
+	}
+	fmt.Printf("single_instance_restart=%s\n", formatOnOff(s.SingleInstanceRestart))
+	return nil
+}
+
+func formatOnOff(v bool) string {
+	if v {
+		return "on"
+	}
+	return "off"
+}
+
+func parseOnOff(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true", "yes", "1":
+		return true, nil
+	case "off", "false", "no", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("single instance restart: must be on or off")
 }
 
 func runRuntimeReserve(args *docopt.Args) error {

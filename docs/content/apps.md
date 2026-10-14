@@ -610,16 +610,32 @@ sudo flynn-host runtime:job-restart-interval off
 sudo flynn-host runtime:job-restart-interval
 ```
 
+To also restart a user app process type that has only one instance, turn on the
+cluster-wide single instance option. The old job is stopped before its
+replacement starts, so that app has brief downtime:
+
+```text
+sudo flynn-host runtime:single-instance-restart on
+sudo flynn-host runtime:single-instance-restart off
+```
+
 Restarts are staggered:
 
+- Each job comes due at a random point between 80% and 100% of the interval,
+  fixed per job, so instances of a scaled app that started together are not
+  restarted together. No job runs longer than the interval.
 - Only one job per app is replaced at a time, oldest first. The next one waits
   until the app is back at its full process count with nothing starting or
   stopping, so web capacity and database quorum drop by at most one.
-- Process types with a single instance are skipped, because replacing them
-  would cause downtime. Scale such a process to 2 or more to have it restarted.
+- Process types with a single instance are skipped by default, because replacing
+  them would cause downtime. Scale such a process to 2 or more to have it
+  restarted, or turn on the cluster-wide option described below.
 - At most 5 jobs are restarted per scheduler pass cluster-wide, so enabling the
   setting on an old cluster rolls through apps gradually.
-- Database, provider, and system app jobs are included under the same rules.
+- Only user apps are restarted (web, worker, and other process types). System
+  apps, plugin apps, and datastores (postgres, mysql, mariadb, redis, mongodb,
+  kafka, clickhouse) are never restarted by this rule, even when scaled to 2 or
+  more instances.
 - A planned restart is not counted as a crash, so it never trips the
   [restart limit](#restart-limit) or backoff.
 
