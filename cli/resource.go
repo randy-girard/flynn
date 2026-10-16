@@ -45,19 +45,21 @@ one cluster, and flynn mongodb:scale, flynn clickhouse:scale, or flynn
 kafka:scale changes its node count. Postgres, mysql, and redis --auto-failover
 with --follow places the replica on another host and promotes it if the
 primary job is lost, then recreates a replica so the pair remains. The
-platform postgres appliance at postgres-api.discoverd is not used. Every
-postgres provision sets
-FLYNN_POSTGRESQL_<COLOR>_URL unless --as names the attachment
-(--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_POSTGRESQL_AMBER_URL).
-A new provision also sets DATABASE_URL when that key is free. Redis is the
-same with FLYNN_REDIS_<COLOR>_URL and REDIS_URL.
+platform postgres appliance at postgres-api.discoverd is not used. Every provision sets
+FLYNN_<ENGINE>_<COLOR>_URL unless --as names the attachment
+(--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_<ENGINE>_AMBER_URL). The
+engine prefix is FLYNN_POSTGRESQL, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_MONGODB,
+FLYNN_CLICKHOUSE or FLYNN_KAFKA, and COLOR comes from a 96-color palette. A new
+provision also sets the engine's conventional key when that key is free
+(DATABASE_URL for postgres, mysql and mongodb; REDIS_URL, CLICKHOUSE_URL or
+KAFKA_URL for the others).
 
 The command returns after the instance is scheduled. The datastore keeps
 starting in the background; check later with flynn resource or the plugin
 wait command (pg:wait, redis:wait, mysql:wait).
 
 Options:
-	--as=<name>              attachment env name (postgres/redis add _URL; color short names become FLYNN_POSTGRESQL_<COLOR>_URL or FLYNN_REDIS_<COLOR>_URL)
+	--as=<name>              attachment env name (NAME becomes NAME_URL; a color short name becomes FLYNN_<ENGINE>_<COLOR>_URL; with no --as the attachment gets a random FLYNN_<ENGINE>_<COLOR>_URL)
 	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis only)
 	--runtime=<name>         database runtime name (default small)
 	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
@@ -76,18 +78,19 @@ Examples:
 usage: flynn resource:attach <provider> <resource> [--as <name>]
 
 Attach an existing resource to this app. The resource must already exist on
-another app in the same account. Postgres sets FLYNN_POSTGRESQL_<COLOR>_URL
-unless --as names the attachment (--as NAME becomes NAME_URL; a color short
-name such as AMBER becomes FLYNN_POSTGRESQL_AMBER_URL). Redis is the same with
-FLYNN_REDIS_<COLOR>_URL. Attaching an existing resource does not set
-DATABASE_URL or REDIS_URL.
+another app in the same account. Every engine sets FLYNN_<ENGINE>_<COLOR>_URL
+unless --as names the attachment (--as NAME becomes NAME_URL; a color short name
+such as AMBER becomes FLYNN_<ENGINE>_AMBER_URL). The engine prefix is
+FLYNN_POSTGRESQL, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_MONGODB, FLYNN_CLICKHOUSE or
+FLYNN_KAFKA. Attaching an existing resource does not set the conventional key
+(DATABASE_URL, REDIS_URL, CLICKHOUSE_URL or KAFKA_URL).
 
 <resource> is the NAME or ID from flynn resource. The same resource can attach
 to several apps. Only the app that provisioned it may delete it; this app
 can detach.
 
 Options:
-	--as=<name>  attachment env name (postgres adds _URL)
+	--as=<name>  attachment env name (NAME becomes NAME_URL; a color short name becomes FLYNN_<ENGINE>_<COLOR>_URL)
 
 Examples:
 

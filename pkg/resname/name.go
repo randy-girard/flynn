@@ -38,6 +38,14 @@ const postgresAttachPrefix = "FLYNN_POSTGRESQL_"
 
 const redisAttachPrefix = "FLYNN_REDIS_"
 
+const mysqlAttachPrefix = "FLYNN_MYSQL_"
+
+const mongodbAttachPrefix = "FLYNN_MONGODB_"
+
+const clickhouseAttachPrefix = "FLYNN_CLICKHOUSE_"
+
+const kafkaAttachPrefix = "FLYNN_KAFKA_"
+
 var attachmentColors = []string{
 	"ALABASTER", "AMBER", "APRICOT", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE",
 	"BONE", "BRASS", "BRONZE", "BROWN", "BURGUNDY", "CARMINE", "CELADON",
@@ -208,16 +216,32 @@ func index(n int) int {
 	return int(b[0]) % n
 }
 
-// identityEnv is the resource app name on a provision response, and the URL
-// variable that engine uses for the first attachment on an app.
-var identityEnv = []struct{ name, url string }{
-	{"FLYNN_REDIS", "REDIS_URL"},
-	{"FLYNN_KAFKA", "KAFKA_URL"},
-	{"FLYNN_CLICKHOUSE", "CLICKHOUSE_URL"},
-	{"FLYNN_MYSQL", "DATABASE_URL"},
-	{"FLYNN_MONGO", "DATABASE_URL"},
-	{"FLYNN_MONGODB", "DATABASE_URL"},
-	{"FLYNN_POSTGRES", "DATABASE_URL"},
+// identityEnv is the resource app name on a provision response, the URL
+// variable that engine uses for the first attachment on an app, and the color
+// attachment prefix (FLYNN_<RESOURCE>_<COLOR>_URL) that engine uses for every
+// provision and attach.
+var identityEnv = []struct{ name, url, attach string }{
+	{"FLYNN_REDIS", "REDIS_URL", redisAttachPrefix},
+	{"FLYNN_KAFKA", "KAFKA_URL", kafkaAttachPrefix},
+	{"FLYNN_CLICKHOUSE", "CLICKHOUSE_URL", clickhouseAttachPrefix},
+	{"FLYNN_MYSQL", "DATABASE_URL", mysqlAttachPrefix},
+	{"FLYNN_MONGO", "DATABASE_URL", mongodbAttachPrefix},
+	{"FLYNN_MONGODB", "DATABASE_URL", mongodbAttachPrefix},
+	{"FLYNN_POSTGRES", "DATABASE_URL", postgresAttachPrefix},
+}
+
+// attachPrefix is the color attachment prefix (FLYNN_<RESOURCE>_) for the
+// engine identified in a provision env, or "" when the engine is unknown.
+func attachPrefix(incoming map[string]string) string {
+	if incoming == nil {
+		return ""
+	}
+	for _, id := range identityEnv {
+		if strings.TrimSpace(incoming[id.name]) != "" {
+			return id.attach
+		}
+	}
+	return ""
 }
 
 func conventionalURL(k string) bool {
@@ -229,15 +253,17 @@ func conventionalURL(k string) bool {
 }
 
 // MergeAttachment copies a provision response onto an app.
-// Every postgres provision and attach sets FLYNN_POSTGRESQL_<COLOR>_URL unless
-// --as names the attachment (NAME_URL, or FLYNN_POSTGRESQL_<COLOR>_URL when
-// --as is a color). A new provision also sets DATABASE_URL when that key is
-// free. Redis is the same with FLYNN_REDIS_<COLOR>_URL and REDIS_URL.
-// Attaching an existing resource never sets the conventional URL. Incoming
-// color URLs are reused so the resource record and app release share one color
-// key. Other engines get PREFIX_WORD_SUFFIX_DATABASE_URL and the engine's
-// usual URL when unused, plus --as NAME_URL. Host, user, password, and
-// FLYNN_* identity keys stay on the resource record, not the app.
+// Every provision and attach sets FLYNN_<RESOURCE>_<COLOR>_URL (Postgres,
+// Redis, MySQL, MongoDB, ClickHouse and Kafka) unless --as names the
+// attachment (NAME_URL, or FLYNN_<RESOURCE>_<COLOR>_URL when --as is a color).
+// A new provision also sets the engine's conventional URL when that key is
+// free (DATABASE_URL for Postgres/MySQL/MongoDB, REDIS_URL, CLICKHOUSE_URL, or
+// KAFKA_URL). Attaching an existing resource never sets the conventional URL.
+// Incoming color URLs are reused so the resource record and app release share
+// one color key. An engine with no known color prefix falls back to
+// PREFIX_WORD_SUFFIX_DATABASE_URL plus the engine's usual URL when unused, and
+// --as NAME_URL. Host, user, password, and FLYNN_* identity keys stay on the
+// resource record, not the app.
 func MergeAttachment(existing, incoming map[string]string, as string, newProvision bool) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
@@ -251,40 +277,8 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 	taken := func(k string) bool {
 		return strings.TrimSpace(existing[k]) != "" || out[k] != ""
 	}
-	postgres := strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != ""
-	redis := strings.TrimSpace(incoming["FLYNN_REDIS"]) != ""
-	switch {
-	case postgres:
-		if strings.TrimSpace(as) != "" {
-			if key := PostgresAttachmentURLKey(as, taken); key != "" {
-				out[key] = url
-			}
-		} else if !postgresColorAlreadySet(existing, url) {
-			key := reuseIncomingPostgresColor(incoming, taken)
-			if key == "" {
-				key = ColorDatabaseURL(taken)
-			}
-			out[key] = url
-		}
-		if newProvision && !taken("DATABASE_URL") {
-			out["DATABASE_URL"] = url
-		}
-	case redis:
-		if strings.TrimSpace(as) != "" {
-			if key := RedisAttachmentURLKey(as, taken); key != "" {
-				out[key] = url
-			}
-		} else if !redisColorAlreadySet(existing, url) {
-			key := reuseIncomingRedisColor(incoming, taken)
-			if key == "" {
-				key = ColorRedisURL(taken)
-			}
-			out[key] = url
-		}
-		if newProvision && !taken("REDIS_URL") {
-			out["REDIS_URL"] = url
-		}
-	default:
+	prefix := attachPrefix(incoming)
+	if prefix == "" {
 		if key := ExtraDatabaseURL(name, taken); key != "" {
 			out[key] = url
 		}
@@ -294,46 +288,38 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 		if conv != "" && !taken(conv) {
 			out[conv] = url
 		}
+		return out
+	}
+	if strings.TrimSpace(as) != "" {
+		if key := attachmentURLKey(prefix, as, taken); key != "" {
+			out[key] = url
+		}
+	} else if !colorAlreadySet(prefix, existing, url) {
+		key := reuseIncomingColor(prefix, incoming, taken)
+		if key == "" {
+			key = colorURL(prefix, taken)
+		}
+		out[key] = url
+	}
+	if newProvision && conv != "" && !taken(conv) {
+		out[conv] = url
 	}
 	return out
 }
 
-func postgresColorAlreadySet(existing map[string]string, url string) bool {
+func colorAlreadySet(prefix string, existing map[string]string, url string) bool {
 	for k, v := range existing {
-		if v == url && PostgresColorURLKey(k) {
+		if v == url && colorURLKey(prefix, k) {
 			return true
 		}
 	}
 	return false
 }
 
-func redisColorAlreadySet(existing map[string]string, url string) bool {
-	for k, v := range existing {
-		if v == url && RedisColorURLKey(k) {
-			return true
-		}
-	}
-	return false
-}
-
-func reuseIncomingPostgresColor(incoming map[string]string, taken func(string) bool) string {
+func reuseIncomingColor(prefix string, incoming map[string]string, taken func(string) bool) string {
 	var keys []string
 	for k := range incoming {
-		if PostgresColorURLKey(k) && (taken == nil || !taken(k)) {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	if len(keys) == 0 {
-		return ""
-	}
-	return keys[0]
-}
-
-func reuseIncomingRedisColor(incoming map[string]string, taken func(string) bool) string {
-	var keys []string
-	for k := range incoming {
-		if RedisColorURLKey(k) && (taken == nil || !taken(k)) {
+		if colorURLKey(prefix, k) && (taken == nil || !taken(k)) {
 			keys = append(keys, k)
 		}
 	}
@@ -458,8 +444,11 @@ func ResourceEnv(existing, incoming map[string]string, as string) map[string]str
 	return out
 }
 
-// splitCredentialKey is a libpq/POSTGRES_* piece that belongs on the isolated
-// instance, not the tenant resource. Connection info stays in *_URL values.
+// splitCredentialKey is a libpq/POSTGRES_* or Redis client piece that belongs
+// on the isolated instance, not the tenant resource. Connection info stays in
+// *_URL values. MYSQL_*, MONGO_*, CLICKHOUSE_* and KAFKA_* host/user keys are
+// deliberately NOT listed: the console commands and plugin dashboards read them
+// from the resource record, so ResourceEnv keeps copying them there.
 func splitCredentialKey(k string) bool {
 	switch k {
 	case "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE",
@@ -529,38 +518,97 @@ func AsURLKey(as string) string {
 	return as + "_URL"
 }
 
-// ColorDatabaseURL is FLYNN_POSTGRESQL_<COLOR>_URL for a color that taken
-// does not already report.
-func ColorDatabaseURL(taken func(string) bool) string {
+// colorURL is FLYNN_<RESOURCE>_<COLOR>_URL for the given engine prefix and a
+// color that taken does not already report.
+func colorURL(prefix string, taken func(string) bool) string {
 	if len(attachmentColors) == 0 {
-		return postgresAttachPrefix + "AMBER_URL"
+		return prefix + "AMBER_URL"
 	}
 	start := index(len(attachmentColors))
 	for i := 0; i < len(attachmentColors); i++ {
 		color := attachmentColors[(start+i)%len(attachmentColors)]
-		key := postgresAttachPrefix + color + "_URL"
+		key := prefix + color + "_URL"
 		if taken == nil || !taken(key) {
 			return key
 		}
 	}
-	return postgresAttachPrefix + attachmentColors[start] + "_X_URL"
+	return prefix + attachmentColors[start] + "_X_URL"
+}
+
+// attachmentURLKey is the env var for one --as attach onto an app. --as uses
+// the same short name and appends _URL. A color (AMBER) or FLYNN_<RESOURCE>_AMBER
+// becomes FLYNN_<RESOURCE>_AMBER_URL. Other names become NAME_URL. With no
+// --as, a free color is chosen.
+func attachmentURLKey(prefix, as string, taken func(string) bool) string {
+	as = strings.ToUpper(strings.TrimSpace(as))
+	as = strings.TrimSuffix(as, "_URL")
+	as = strings.Trim(as, "_")
+	if as == "" {
+		return colorURL(prefix, taken)
+	}
+	if strings.HasPrefix(as, prefix) {
+		return as + "_URL"
+	}
+	if isAttachmentColor(as) {
+		return prefix + as + "_URL"
+	}
+	return as + "_URL"
+}
+
+// colorURLKey is FLYNN_<RESOURCE>_<COLOR>_URL (and the _X_ fallback) for the
+// given engine prefix.
+func colorURLKey(prefix, k string) bool {
+	k = strings.TrimSpace(k)
+	if !strings.HasPrefix(k, prefix) || !strings.HasSuffix(k, "_URL") {
+		return false
+	}
+	mid := strings.TrimSuffix(strings.TrimPrefix(k, prefix), "_URL")
+	if mid == "" {
+		return false
+	}
+	for _, c := range mid {
+		if c >= 'A' && c <= 'Z' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// ColorDatabaseURL is FLYNN_POSTGRESQL_<COLOR>_URL for a color that taken
+// does not already report.
+func ColorDatabaseURL(taken func(string) bool) string {
+	return colorURL(postgresAttachPrefix, taken)
 }
 
 // ColorRedisURL is FLYNN_REDIS_<COLOR>_URL for a color that taken does not
 // already report.
 func ColorRedisURL(taken func(string) bool) string {
-	if len(attachmentColors) == 0 {
-		return redisAttachPrefix + "AMBER_URL"
-	}
-	start := index(len(attachmentColors))
-	for i := 0; i < len(attachmentColors); i++ {
-		color := attachmentColors[(start+i)%len(attachmentColors)]
-		key := redisAttachPrefix + color + "_URL"
-		if taken == nil || !taken(key) {
-			return key
-		}
-	}
-	return redisAttachPrefix + attachmentColors[start] + "_X_URL"
+	return colorURL(redisAttachPrefix, taken)
+}
+
+// ColorMySQLURL is FLYNN_MYSQL_<COLOR>_URL for a color that taken does not
+// already report.
+func ColorMySQLURL(taken func(string) bool) string {
+	return colorURL(mysqlAttachPrefix, taken)
+}
+
+// ColorMongoDBURL is FLYNN_MONGODB_<COLOR>_URL for a color that taken does not
+// already report.
+func ColorMongoDBURL(taken func(string) bool) string {
+	return colorURL(mongodbAttachPrefix, taken)
+}
+
+// ColorClickHouseURL is FLYNN_CLICKHOUSE_<COLOR>_URL for a color that taken
+// does not already report.
+func ColorClickHouseURL(taken func(string) bool) string {
+	return colorURL(clickhouseAttachPrefix, taken)
+}
+
+// ColorKafkaURL is FLYNN_KAFKA_<COLOR>_URL for a color that taken does not
+// already report.
+func ColorKafkaURL(taken func(string) bool) string {
+	return colorURL(kafkaAttachPrefix, taken)
 }
 
 // PostgresAppURLKey is the attachment env var for one postgres attach onto an
@@ -573,7 +621,7 @@ func PostgresAppURLKey(as string, incoming map[string]string, taken func(string)
 	if as != "" {
 		return PostgresAttachmentURLKey(as, taken)
 	}
-	if key := reuseIncomingPostgresColor(incoming, taken); key != "" {
+	if key := reuseIncomingColor(postgresAttachPrefix, incoming, taken); key != "" {
 		return key
 	}
 	return ColorDatabaseURL(taken)
@@ -584,38 +632,12 @@ func PostgresAppURLKey(as string, incoming map[string]string, taken func(string)
 // FLYNN_POSTGRESQL_AMBER becomes FLYNN_POSTGRESQL_AMBER_URL. Other names
 // become NAME_URL. With no --as, a free color is chosen.
 func PostgresAttachmentURLKey(as string, taken func(string) bool) string {
-	as = strings.ToUpper(strings.TrimSpace(as))
-	as = strings.TrimSuffix(as, "_URL")
-	as = strings.Trim(as, "_")
-	if as == "" {
-		return ColorDatabaseURL(taken)
-	}
-	if strings.HasPrefix(as, postgresAttachPrefix) {
-		return as + "_URL"
-	}
-	if isAttachmentColor(as) {
-		return postgresAttachPrefix + as + "_URL"
-	}
-	return as + "_URL"
+	return attachmentURLKey(postgresAttachPrefix, as, taken)
 }
 
 // PostgresColorURLKey is FLYNN_POSTGRESQL_<COLOR>_URL (and the _X_ fallback).
 func PostgresColorURLKey(k string) bool {
-	k = strings.TrimSpace(k)
-	if !strings.HasPrefix(k, postgresAttachPrefix) || !strings.HasSuffix(k, "_URL") {
-		return false
-	}
-	mid := strings.TrimSuffix(strings.TrimPrefix(k, postgresAttachPrefix), "_URL")
-	if mid == "" {
-		return false
-	}
-	for _, c := range mid {
-		if c >= 'A' && c <= 'Z' || c == '_' {
-			continue
-		}
-		return false
-	}
-	return true
+	return colorURLKey(postgresAttachPrefix, k)
 }
 
 // RedisAttachmentURLKey is the env var for one redis --as attach. --as uses
@@ -623,38 +645,32 @@ func PostgresColorURLKey(k string) bool {
 // becomes FLYNN_REDIS_AMBER_URL. Other names become NAME_URL. With no --as,
 // a free color is chosen.
 func RedisAttachmentURLKey(as string, taken func(string) bool) string {
-	as = strings.ToUpper(strings.TrimSpace(as))
-	as = strings.TrimSuffix(as, "_URL")
-	as = strings.Trim(as, "_")
-	if as == "" {
-		return ColorRedisURL(taken)
-	}
-	if strings.HasPrefix(as, redisAttachPrefix) {
-		return as + "_URL"
-	}
-	if isAttachmentColor(as) {
-		return redisAttachPrefix + as + "_URL"
-	}
-	return as + "_URL"
+	return attachmentURLKey(redisAttachPrefix, as, taken)
 }
 
 // RedisColorURLKey is FLYNN_REDIS_<COLOR>_URL (and the _X_ fallback).
 func RedisColorURLKey(k string) bool {
-	k = strings.TrimSpace(k)
-	if !strings.HasPrefix(k, redisAttachPrefix) || !strings.HasSuffix(k, "_URL") {
-		return false
-	}
-	mid := strings.TrimSuffix(strings.TrimPrefix(k, redisAttachPrefix), "_URL")
-	if mid == "" {
-		return false
-	}
-	for _, c := range mid {
-		if c >= 'A' && c <= 'Z' || c == '_' {
-			continue
-		}
-		return false
-	}
-	return true
+	return colorURLKey(redisAttachPrefix, k)
+}
+
+// MySQLColorURLKey is FLYNN_MYSQL_<COLOR>_URL (and the _X_ fallback).
+func MySQLColorURLKey(k string) bool {
+	return colorURLKey(mysqlAttachPrefix, k)
+}
+
+// MongoDBColorURLKey is FLYNN_MONGODB_<COLOR>_URL (and the _X_ fallback).
+func MongoDBColorURLKey(k string) bool {
+	return colorURLKey(mongodbAttachPrefix, k)
+}
+
+// ClickHouseColorURLKey is FLYNN_CLICKHOUSE_<COLOR>_URL (and the _X_ fallback).
+func ClickHouseColorURLKey(k string) bool {
+	return colorURLKey(clickhouseAttachPrefix, k)
+}
+
+// KafkaColorURLKey is FLYNN_KAFKA_<COLOR>_URL (and the _X_ fallback).
+func KafkaColorURLKey(k string) bool {
+	return colorURLKey(kafkaAttachPrefix, k)
 }
 
 func isAttachmentColor(name string) bool {

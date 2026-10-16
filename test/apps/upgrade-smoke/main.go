@@ -39,14 +39,20 @@ func blobCount(fsys embed.FS) int {
 	return n
 }
 
+// resourceFlags reports which datastores the app has an attachment for. The
+// older check looked only at the FLYNN_<ENGINE> identity key; the color scheme
+// (flynn/pkg/resname) puts FLYNN_<ENGINE>_<COLOR>_URL plus the engine's
+// conventional URL on the release, and this app is its own module so it cannot
+// import the palette to enumerate color keys. The conventional keys are the
+// practical stand-in: every new provision sets one alongside the color key.
 func resourceFlags(getenv func(string) string) map[string]bool {
 	return map[string]bool{
 		"postgres":   getenv("FLYNN_POSTGRES") != "" || getenv("DATABASE_URL") != "",
-		"mysql":      getenv("FLYNN_MYSQL") != "",
-		"mongodb":    getenv("FLYNN_MONGO") != "",
+		"mysql":      getenv("FLYNN_MYSQL") != "" || getenv("DATABASE_URL") != "",
+		"mongodb":    getenv("FLYNN_MONGO") != "" || getenv("DATABASE_URL") != "",
 		"redis":      getenv("FLYNN_REDIS") != "" || getenv("REDIS_URL") != "",
-		"kafka":      getenv("FLYNN_KAFKA") != "",
-		"clickhouse": getenv("FLYNN_CLICKHOUSE") != "",
+		"kafka":      getenv("FLYNN_KAFKA") != "" || getenv("KAFKA_URL") != "",
+		"clickhouse": getenv("FLYNN_CLICKHOUSE") != "" || getenv("CLICKHOUSE_URL") != "",
 	}
 }
 

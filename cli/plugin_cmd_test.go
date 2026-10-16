@@ -992,3 +992,42 @@ func containsArgPair(args []string, flag, value string) bool {
 	}
 	return false
 }
+
+func TestEnvForNamedInstanceFindsColorKeys(t *testing.T) {
+	env := map[string]string{
+		"FLYNN_POSTGRESQL_SAGE_URL": "postgres://u:p@leader.postgresql-glen-33110.discoverd/db",
+		"FLYNN_MYSQL_AMBER_URL":     "mysql://u:p@leader.mysql-valley-77924.discoverd:3306/db",
+		"FLYNN_MONGODB_WHEAT_URL":   "mongodb://u:p@leader.mongodb-lake-18489.discoverd/?tls=true",
+		"FLYNN_CLICKHOUSE_JADE_URL": "clickhouse://u:p@leader.clickhouse-hill-41027.discoverd:9440/db",
+		"FLYNN_KAFKA_OLIVE_URL":     "kafka://u:p@leader.kafka-reef-55210.discoverd:9092",
+		"FLYNN_REDIS_IVORY_URL":     "redis://u:p@leader.redis-wood-22001.discoverd:6379",
+	}
+	aliases := map[string]string{
+		"postgresql-glen-33110": "POSTGRES_URL",
+		"redis-wood-22001":      "REDIS_URL",
+		"mysql-valley-77924":    "MYSQL_URL",
+		"mongodb-lake-18489":    "MONGO_URL",
+		"clickhouse-hill-41027": "CLICKHOUSE_URL",
+		"kafka-reef-55210":      "KAFKA_URL",
+	}
+	for name, alias := range aliases {
+		out := envForNamedInstance(env, name)
+		if !strings.Contains(out["DATABASE_URL"], name) {
+			t.Fatalf("%s: DATABASE_URL = %q", name, out["DATABASE_URL"])
+		}
+		if !strings.Contains(out[alias], name) {
+			t.Fatalf("%s: %s = %q", name, alias, out[alias])
+		}
+	}
+	// A color key belonging to another instance must not be picked.
+	if out := envForNamedInstance(env, "mysql-unknown-00000"); out["DATABASE_URL"] != "" {
+		t.Fatalf("wrong instance picked: %#v", out)
+	}
+	// The older instance-named key still resolves.
+	legacy := map[string]string{
+		"MYSQL_VALLEY_77924_DATABASE_URL": "mysql://u:p@leader.mysql-valley-77924.discoverd:3306/db",
+	}
+	if out := envForNamedInstance(legacy, "mysql-valley-77924"); !strings.Contains(out["DATABASE_URL"], "mysql-valley-77924") {
+		t.Fatalf("legacy key not honored: %#v", out)
+	}
+}

@@ -49,17 +49,26 @@ application to connect to it.
 
 ### Connecting to the cluster
 
-Provisioning adds several environment variables to your app release. The
-default attachment name is `CLICKHOUSE` (`CLICKHOUSE_URL`);
-`flynn resource:add clickhouse --as NAME` sets `NAME_URL` instead.
+Provisioning adds the attachment URL to your app release. Every provision and
+attach sets `FLYNN_CLICKHOUSE_<COLOR>_URL` unless `--as NAME` names the
+attachment (`NAME_URL`, or `FLYNN_CLICKHOUSE_<COLOR>_URL` when `--as` is a color
+short name such as `AMBER`). A new provision also sets `CLICKHOUSE_URL` when
+that key is free; attaching an existing resource does not. Colors are assigned
+per app and instance and are not reused while the instance exists, and
+`flynn env set` / `env unset` of an attached key is rejected while attached.
+
+The names below live on the ClickHouse resource record — the dashboard and the
+appliance's own jobs read them there — and are not copied into your app release:
 
 * `FLYNN_CLICKHOUSE` — the name of the ClickHouse app.
 * `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients
   (`clickhouses://` when TLS is on, the default).
-* `CLICKHOUSE_HTTP_URL` — HTTP interface URL (`https://` when TLS is on).
 * `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT` — the discoverd host and native port
   (9440 with TLS; 9000 when `CLICKHOUSE_TLS_ENABLED=false`).
-* `CLICKHOUSE_HTTP_PORT` — the HTTP port (8443 with TLS; 8123 without).
+* `CLICKHOUSE_HTTP_PORT` — the HTTP port (8443 with TLS; 8123 without). The HTTP
+  interface URL is derived from `CLICKHOUSE_HOST` and `CLICKHOUSE_HTTP_PORT`;
+  there is no `CLICKHOUSE_HTTP_URL` variable, because the controller keeps only
+  the attachment `*_URL` keys on a resource record.
 * `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD` — credentials for the `default` user.
 * `CLICKHOUSE_DATABASE` — the built-in `default` database.
 * `CLICKHOUSE_CLUSTER` — the cluster name (`flynn`) used for `ON CLUSTER` DDL.

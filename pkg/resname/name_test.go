@@ -1,6 +1,8 @@
 package resname
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 	"testing"
@@ -119,8 +121,72 @@ func TestMergeAttachmentKeepsTheFirstURL(t *testing.T) {
 		"FLYNN_CLICKHOUSE": "clickhouse-meadow-wawpuf",
 		"CLICKHOUSE_URL":   "clickhouses://new",
 	}, "", false)
-	if ch["CLICKHOUSE_MEADOW_WAWPUF_DATABASE_URL"] != "clickhouses://new" || ch["CLICKHOUSE_URL"] != "" {
+	if clickhouseColorKey(ch) == "" || ch[clickhouseColorKey(ch)] != "clickhouses://new" || ch["CLICKHOUSE_URL"] != "" {
 		t.Fatalf("clickhouse: %#v", ch)
+	}
+	if ch["CLICKHOUSE_MEADOW_WAWPUF_DATABASE_URL"] != "" {
+		t.Fatalf("clickhouse must not use the instance-named URL: %#v", ch)
+	}
+}
+
+func TestMergeAttachmentColorSchemeForAllEngines(t *testing.T) {
+	type engine struct {
+		identity string
+		conv     string
+		prefix   string
+	}
+	engines := []engine{
+		{"FLYNN_MYSQL", "DATABASE_URL", "FLYNN_MYSQL_"},
+		{"FLYNN_MONGODB", "DATABASE_URL", "FLYNN_MONGODB_"},
+		{"FLYNN_CLICKHOUSE", "CLICKHOUSE_URL", "FLYNN_CLICKHOUSE_"},
+		{"FLYNN_KAFKA", "KAFKA_URL", "FLYNN_KAFKA_"},
+	}
+	for _, e := range engines {
+		in := map[string]string{e.identity: "x", e.conv: "scheme://db"}
+		prov := MergeAttachment(nil, in, "", true)
+		if prov[e.conv] != "scheme://db" {
+			t.Fatalf("%s new provision must set %s: %#v", e.identity, e.conv, prov)
+		}
+		if colorKeyForPrefix(prov, e.prefix) == "" {
+			t.Fatalf("%s provision must also set a color URL: %#v", e.identity, prov)
+		}
+		if prov[e.identity] != "" {
+			t.Fatalf("%s identity must stay on the resource, not the app: %#v", e.identity, prov)
+		}
+		// Second provision must not steal the conventional URL, but still gets a color.
+		second := MergeAttachment(prov, map[string]string{e.identity: "y", e.conv: "scheme://db2"}, "", true)
+		if second[e.conv] != "" {
+			t.Fatalf("%s second provision must not steal %s: %#v", e.identity, e.conv, second)
+		}
+		if colorKeyForPrefix(second, e.prefix) == "" || second[colorKeyForPrefix(second, e.prefix)] != "scheme://db2" {
+			t.Fatalf("%s second provision must pick a color: %#v", e.identity, second)
+		}
+		// Attach of an existing resource never sets the conventional URL.
+		attach := MergeAttachment(nil, in, "", false)
+		if attach[e.conv] != "" {
+			t.Fatalf("%s attach must not set %s: %#v", e.identity, e.conv, attach)
+		}
+		if colorKeyForPrefix(attach, e.prefix) == "" {
+			t.Fatalf("%s attach must set a color URL: %#v", e.identity, attach)
+		}
+		// --as NAME is NAME_URL; --as COLOR is the color URL.
+		asName := MergeAttachment(nil, in, "analytics", true)
+		if asName["ANALYTICS_URL"] != "scheme://db" || colorKeyForPrefix(asName, e.prefix) != "" {
+			t.Fatalf("%s --as analytics: %#v", e.identity, asName)
+		}
+		asColor := MergeAttachment(nil, in, "amber", true)
+		if asColor[e.prefix+"AMBER_URL"] != "scheme://db" || asColor["AMBER_URL"] != "" {
+			t.Fatalf("%s --as amber: %#v", e.identity, asColor)
+		}
+		// Incoming color is reused so record and release share one key.
+		reuse := MergeAttachment(nil, map[string]string{
+			e.identity:            "z",
+			e.conv:                "scheme://db",
+			e.prefix + "TEAL_URL": "scheme://db",
+		}, "", false)
+		if reuse[e.prefix+"TEAL_URL"] != "scheme://db" || colorKeyForPrefix(reuse, e.prefix) != e.prefix+"TEAL_URL" {
+			t.Fatalf("%s must reuse incoming color: %#v", e.identity, reuse)
+		}
 	}
 }
 
@@ -495,4 +561,36 @@ func redisColorKey(env map[string]string) string {
 		}
 	}
 	return ""
+}
+
+func clickhouseColorKey(env map[string]string) string {
+	for k := range env {
+		if ClickHouseColorURLKey(k) {
+			return k
+		}
+	}
+	return ""
+}
+
+func colorKeyForPrefix(env map[string]string, prefix string) string {
+	for k := range env {
+		if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, "_URL") &&
+			strings.TrimSuffix(strings.TrimPrefix(k, prefix), "_URL") != "" {
+			return k
+		}
+	}
+	return ""
+}
+
+// attachmentColors is duplicated in the engine plugins and in
+// flynn/pkg/resname. The digest freezes the list so a copy cannot drift
+// silently; when a color is added or removed, update the digest in all seven
+// places at once.
+const attachmentColorsDigest = "b0218b7a13cd7c31089282b23cf4bc6f4039194e44563fbd419844ea04f1a6d3"
+
+func TestAttachmentColorsFrozen(t *testing.T) {
+	sum := sha256.Sum256([]byte(strings.Join(attachmentColors, ",")))
+	if got := hex.EncodeToString(sum[:]); got != attachmentColorsDigest {
+		t.Fatalf("attachment palette changed (%d colors): digest %s != %s; update this digest in flynn/pkg/resname and every engine plugin", len(attachmentColors), got, attachmentColorsDigest)
+	}
 }

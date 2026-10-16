@@ -62,8 +62,14 @@ release. `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PWD`, and
 automatically by many MySQL clients. `FLYNN_MYSQL` is the name of the MySQL
 discoverd service (`mysql`).
 
-Flynn will also create the `DATABASE_URL` environment variable which is utilized
-by some frameworks to configure database connections. TLS on 3306 is on by
+Every provision and attach sets `FLYNN_MYSQL_<COLOR>_URL` unless `--as NAME` names
+the attachment (`NAME_URL`, or `FLYNN_MYSQL_<COLOR>_URL` when `--as` is a color
+short name such as `AMBER`). A new provision also sets `DATABASE_URL` when the
+app does not already have it; attaching an existing resource does not. `DATABASE_URL`
+is utilized by some frameworks to configure database connections. Colors are assigned
+per app and instance and are not reused while the instance exists, so two apps on one
+instance never share a key. While the app is attached, the controller rejects
+`flynn env set` / `env unset` for that key. TLS on 3306 is on by
 default (`MYSQL_TLS_ENABLED=true`); the appliance CA is in
 `MYSQL_TRUSTED_CERT`, and `DATABASE_URL` carries `tls=skip-verify` so Go
 clients work with the private CA (pin `MYSQL_TRUSTED_CERT` to verify).

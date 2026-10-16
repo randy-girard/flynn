@@ -728,29 +728,23 @@ func envForNamedInstance(env map[string]string, name string) map[string]string {
 	}
 	keys := []string{}
 	for k := range env {
-		if strings.HasPrefix(k, "FLYNN_POSTGRESQL_") && strings.HasSuffix(k, "_URL") {
-			keys = append(keys, k)
-		}
-		if strings.HasPrefix(k, "FLYNN_REDIS_") && strings.HasSuffix(k, "_URL") {
+		if resname.PostgresColorURLKey(k) || resname.RedisColorURLKey(k) ||
+			resname.MySQLColorURLKey(k) || resname.MongoDBColorURLKey(k) ||
+			resname.ClickHouseColorURLKey(k) || resname.KafkaColorURLKey(k) {
 			keys = append(keys, k)
 		}
 	}
 	keys = append(keys, prefix+"_DATABASE_URL", prefix+"_POSTGRES_URL", "POSTGRES_URL", "DATABASE_URL", "REDIS_URL")
 	for _, k := range keys {
 		if pick(env[k]) {
-			out["POSTGRES_URL"] = env[k]
-			out["DATABASE_URL"] = env[k]
-			if strings.HasPrefix(strings.ToLower(env[k]), "redis") {
-				out["REDIS_URL"] = env[k]
-			}
+			setConnectionURLs(out, env[k])
 			break
 		}
 	}
 	if out["POSTGRES_URL"] == "" {
 		for _, v := range env {
 			if strings.Contains(v, "://") && strings.Contains(v, name) {
-				out["POSTGRES_URL"] = v
-				out["DATABASE_URL"] = v
+				setConnectionURLs(out, v)
 				break
 			}
 		}
@@ -763,6 +757,28 @@ func envForNamedInstance(env map[string]string, name string) map[string]string {
 		}
 	}
 	return out
+}
+
+// setConnectionURLs files one connection URL under every alias a console
+// manifest might read. POSTGRES_URL/DATABASE_URL stay the generic slots (that
+// is what the postgres console and the fallbacks in applyNamedResource look
+// at); the scheme-specific alias is what the newer engine consoles read.
+func setConnectionURLs(out map[string]string, v string) {
+	out["POSTGRES_URL"] = v
+	out["DATABASE_URL"] = v
+	lower := strings.ToLower(v)
+	switch {
+	case strings.HasPrefix(lower, "redis"):
+		out["REDIS_URL"] = v
+	case strings.HasPrefix(lower, "mysql"), strings.HasPrefix(lower, "mariadb"):
+		out["MYSQL_URL"] = v
+	case strings.HasPrefix(lower, "mongodb"):
+		out["MONGO_URL"] = v
+	case strings.HasPrefix(lower, "clickhouse"):
+		out["CLICKHOUSE_URL"] = v
+	case strings.HasPrefix(lower, "kafka"):
+		out["KAFKA_URL"] = v
+	}
 }
 
 func cloneEnv(env map[string]string) map[string]string {
@@ -794,8 +810,8 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 		return
 	}
 	for _, key := range []string{
-		"REDIS_HOST", "POSTGRES_URL", "DATABASE_URL", "MYSQL_HOST", "MONGO_HOST",
-		"CLICKHOUSE_HOST", "CLICKHOUSE_URL", "CLICKHOUSE_HTTP_URL",
+		"REDIS_HOST", "POSTGRES_URL", "DATABASE_URL", "MYSQL_HOST", "MYSQL_URL", "MONGO_HOST",
+		"MONGO_URL", "CLICKHOUSE_HOST", "CLICKHOUSE_URL", "CLICKHOUSE_HTTP_URL",
 		"CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "CLICKHOUSE_TRUSTED_CERT",
 		"KAFKA_HOST", "KAFKA_URL", "KAFKA_BOOTSTRAP_SERVERS",
 		"KAFKA_BROKER_URLS", "KAFKA_TRUSTED_CERT", "KAFKA_CLIENT_CERT",

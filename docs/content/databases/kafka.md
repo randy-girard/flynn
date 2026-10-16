@@ -73,7 +73,11 @@ topology changes as events `P19` (node added), `P20` (node removed), `P21`
 
 ### Connecting to the cluster
 
-Provisioning adds several environment variables to your app release:
+Provisioning adds several environment variables to your app release. Every
+provision and attach also sets `FLYNN_KAFKA_<COLOR>_URL` unless `--as NAME` names
+the attachment (`NAME_URL`, or `FLYNN_KAFKA_<COLOR>_URL` when `--as` is a color
+short name such as `AMBER`). A new provision also sets `KAFKA_URL` when that key
+is free; attaching an existing resource does not.
 
 * `KAFKA_URL` / `KAFKA_BROKER_URLS` — connection URL(s) for the cluster. The
   scheme is `kafka+ssl://` when TLS is enabled and `kafka://` otherwise.

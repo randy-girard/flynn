@@ -65,7 +65,10 @@ That creates one isolated instance named `postgresql-<word>-<5 digits>` and
 one logical database with a random alphanumeric name. The provision sets
 `FLYNN_POSTGRESQL_<COLOR>_URL` and also `DATABASE_URL` when the app does not
 already have it. Attaching an existing resource to another app sets only the
-color URL (or `--as NAME_URL`). It does not
+color URL (or `--as NAME_URL`). Every data resource uses the same scheme with
+its own prefix — `FLYNN_<RESOURCE>_<COLOR>_URL` for `POSTGRESQL`, `MYSQL`,
+`REDIS`, `MONGODB`, `CLICKHOUSE` and `KAFKA`, drawn from one shared 96-color
+palette — and each engine page lists its conventional key. It does not
 create a role on the platform server, and the URL is not the platform
 appliance superuser. Install the plugin with `flynn-host plugin:install postgres`
 first. Until then the command fails.

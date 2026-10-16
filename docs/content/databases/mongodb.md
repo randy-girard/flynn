@@ -59,9 +59,12 @@ release. `MONGO_HOST`, `MONGO_PORT`, `MONGO_USER`, `MONGO_PWD`, and
 automatically by many MongoDB clients. `FLYNN_MONGO` is the name of the
 MongoDB app.
 
-Flynn will also create the `DATABASE_URL` and `MONGO_URL` environment variables,
-which are utilized by some frameworks to configure database connections. Both
-point at `leader.<app>.discoverd` and stay the same across scaling and
+Every provision and attach sets `FLYNN_MONGODB_<COLOR>_URL` unless `--as NAME`
+names the attachment (`NAME_URL`, or `FLYNN_MONGODB_<COLOR>_URL` when `--as` is a
+color short name such as `AMBER`). A new provision also sets `DATABASE_URL`
+when that key is free; attaching an existing resource does not. It is utilized
+by some frameworks to configure database connections. It
+points at `leader.<app>.discoverd` and stays the same across scaling and
 failover. TLS is on by default
 (`MONGO_TLS_ENABLED=true`, `DATABASE_URL` carries `tls=true`); the appliance
 CA is in `MONGO_TRUSTED_CERT`. `mongod` runs in `preferTLS` mode, so
@@ -86,7 +89,7 @@ flynn mongodb:scale <n> [<resource>]
   Each removed node is taken out of the replica set with `replSetReconfig`
   before it stops.
 
-`DATABASE_URL` and `MONGO_URL` do not change when you scale.
+`DATABASE_URL` does not change when you scale.
 
 The plugin checks each replica set every 30 seconds and records topology
 changes as dashboard events `P19` (node added), `P20` (node removed), `P21`
