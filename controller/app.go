@@ -136,7 +136,7 @@ func (c *controllerAPI) AppLog(ctx context.Context, w http.ResponseWriter, req *
 	}
 	app := c.getApp(ctx)
 	hide := hideInternal(ctx, app)
-	if hide && opts.ProcessType != nil && ct.IsInternalProcessType(*opts.ProcessType) {
+	if hide && opts.ProcessType != nil && hideProcessFromUser(*opts.ProcessType) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(200)
 		return

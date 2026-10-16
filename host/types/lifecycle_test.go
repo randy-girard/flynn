@@ -58,6 +58,30 @@ func TestFormatJobLifecycleLog(t *testing.T) {
 	}
 }
 
+func TestSuppressBuilderCleanStopLog(t *testing.T) {
+	exit0 := 0
+	exit1 := 1
+	clean := sampleJob("", "", "slugbuilder")
+	clean.ExitStatus = &exit0
+	if !SuppressBuilderCleanStopLog(JobEventStop, clean) {
+		t.Fatal("clean slugbuilder stop must stay off the git push output")
+	}
+	docker := sampleJob("", "", "dockerbuilder")
+	if !SuppressBuilderCleanStopLog(JobEventStop, docker) {
+		t.Fatal("clean dockerbuilder stop must stay off the git push output")
+	}
+	failed := sampleJob("", "", "slugbuilder")
+	failed.ExitStatus = &exit1
+	if SuppressBuilderCleanStopLog(JobEventStop, failed) {
+		t.Fatal("failed builder stop must still be logged")
+	}
+	web := sampleJob("", "", "web")
+	web.ExitStatus = &exit0
+	if SuppressBuilderCleanStopLog(JobEventStop, web) {
+		t.Fatal("web stop must still be logged")
+	}
+}
+
 func TestFormatJobLifecycleLogIncludesCommand(t *testing.T) {
 	job := sampleJob(JobReasonScale, "", "web")
 	job.Job.Config.Args = []string{"/runner/init", "start", "web"}

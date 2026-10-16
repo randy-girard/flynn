@@ -72,7 +72,7 @@ func (c *controllerAPI) GetJob(ctx context.Context, w http.ResponseWriter, req *
 		respondWithError(w, err)
 		return
 	}
-	if ct.IsInternalProcessType(job.Type) {
+	if hideProcessFromUser(job.Type) {
 		hide := hideInternalToken(ctx)
 		if app, err := c.appRepo.Get(job.AppID); err == nil {
 			hide = hideInternal(ctx, app.(*ct.App))

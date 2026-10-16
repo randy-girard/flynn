@@ -124,13 +124,19 @@ func stripPrivilegedProcessTypes(procs map[string]ct.ProcessType) map[string]ct.
 	return out
 }
 
+// hideProcessFromUser is slugrunner. slugbuilder and dockerbuilder stay
+// visible: their stdout is the git-push log the dashboard shows.
+func hideProcessFromUser(name string) bool {
+	return ct.IsInternalProcessType(name) && !ct.IsBuilderProcessType(name)
+}
+
 func redactJobs(jobs []*ct.Job) []*ct.Job {
 	if len(jobs) == 0 {
 		return jobs
 	}
 	out := make([]*ct.Job, 0, len(jobs))
 	for _, j := range jobs {
-		if j == nil || ct.IsInternalProcessType(j.Type) {
+		if j == nil || hideProcessFromUser(j.Type) {
 			continue
 		}
 		out = append(out, j)
@@ -320,7 +326,7 @@ func logLineInternalProcess(raw []byte) bool {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return false
 	}
-	return ct.IsInternalProcessType(m.ProcessType)
+	return hideProcessFromUser(m.ProcessType)
 }
 
 func filterInternalProcessLogs(r io.ReadCloser) io.ReadCloser {

@@ -775,7 +775,7 @@ func (s *State) dispatchLifecycle(job *host.ActiveJob, event host.JobEventType) 
 			})
 		}
 	}
-	if line := host.FormatJobLifecycleLog(event, job); line != "" {
+	if line := host.FormatJobLifecycleLog(event, job); line != "" && !host.SuppressBuilderCleanStopLog(event, job) {
 		s.writeLifecycleLog(job, line)
 	}
 }

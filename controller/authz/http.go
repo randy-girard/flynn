@@ -122,10 +122,11 @@ func SystemAppAllowed(tok *authorizer.Token, systemApp bool) bool {
 }
 
 // HideInternalProcesses is true when a user-app API response must omit
-// git-deploy internals (slugbuilder/dockerbuilder/slugrunner) from jobs,
-// logs, formations, metrics, and release process maps. The cluster
-// controller key still sees them. Dashboard JWTs do not; operators inspect
-// those jobs with flynn-host and set builder limits with `flynn limit:set`.
+// git-deploy internals from formations, metrics, and release process maps.
+// slugrunner jobs stay hidden. slugbuilder and dockerbuilder jobs and their
+// logs stay visible so the dashboard can show git-push output. The cluster
+// controller key still sees everything. Builder limits stay on
+// `flynn limit:set`.
 func HideInternalProcesses(tok *authorizer.Token, systemApp bool) bool {
 	if systemApp {
 		return false

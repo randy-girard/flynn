@@ -19,9 +19,10 @@ func TestRedactJobsAndRelease(t *testing.T) {
 		{UUID: "2", Type: "slugbuilder"},
 		{UUID: "3", Type: "dockerbuilder"},
 		{UUID: "4", Type: "worker"},
+		{UUID: "5", Type: "slugrunner"},
 	}
 	got := redactJobs(jobs)
-	if len(got) != 2 || got[0].Type != "web" || got[1].Type != "worker" {
+	if len(got) != 4 || got[0].Type != "web" || got[1].Type != "slugbuilder" || got[2].Type != "dockerbuilder" || got[3].Type != "worker" {
 		t.Fatalf("redactJobs = %+v", got)
 	}
 
@@ -68,8 +69,11 @@ func TestLockInternalProcessCounts(t *testing.T) {
 }
 
 func TestLogLineInternalProcess(t *testing.T) {
-	if !logLineInternalProcess([]byte(`{"process_type":"slugbuilder","msg":"build"}`)) {
-		t.Fatal("slugbuilder log line must be hidden")
+	if logLineInternalProcess([]byte(`{"process_type":"slugbuilder","msg":"build"}`)) {
+		t.Fatal("slugbuilder log line is the git-push output and must stay visible")
+	}
+	if !logLineInternalProcess([]byte(`{"process_type":"slugrunner","msg":"boot"}`)) {
+		t.Fatal("slugrunner log line must be hidden")
 	}
 	if logLineInternalProcess([]byte(`{"process_type":"web","msg":"hello"}`)) {
 		t.Fatal("web log line must stay visible")
@@ -80,6 +84,7 @@ func TestFilterInternalProcessLogs(t *testing.T) {
 	in := io.NopCloser(strings.NewReader(
 		`{"process_type":"web","msg":"hello"}` + "\n" +
 			`{"process_type":"slugbuilder","msg":"build"}` + "\n" +
+			`{"process_type":"slugrunner","msg":"boot"}` + "\n" +
 			`{"process_type":"worker","msg":"ok"}` + "\n",
 	))
 	out, err := io.ReadAll(filterInternalProcessLogs(in))
@@ -87,11 +92,11 @@ func TestFilterInternalProcessLogs(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := string(out)
-	if !strings.Contains(got, `"process_type":"web"`) || !strings.Contains(got, `"process_type":"worker"`) {
-		t.Fatalf("user logs missing: %s", got)
+	if !strings.Contains(got, `"process_type":"web"`) || !strings.Contains(got, `"process_type":"worker"`) || !strings.Contains(got, `"msg":"build"`) {
+		t.Fatalf("user and build logs missing: %s", got)
 	}
-	if strings.Contains(got, "slugbuilder") {
-		t.Fatalf("slugbuilder leaked: %s", got)
+	if strings.Contains(got, "slugrunner") {
+		t.Fatalf("slugrunner leaked: %s", got)
 	}
 }
 
