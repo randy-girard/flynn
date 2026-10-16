@@ -67,12 +67,14 @@ def tenant_apps(env):
 
 def curl_app(app):
     url = "https://%s.%s/" % (app, domain)
-    cmd = ["curl", "-sk", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}"]
+    # Tenant homepages can run a datastore check per attached resource before
+    # the first byte. Five seconds marks a healthy demo as down.
+    cmd = ["curl", "-sk", "--max-time", "20", "-o", "/dev/null", "-w", "%{http_code}"]
     if cluster_ip:
         cmd += ["--resolve", "%s.%s:443:%s" % (app, domain, cluster_ip)]
     cmd.append(url)
     try:
-        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=8)
+        out = subprocess.check_output(cmd, stderr=subprocess.DEVNULL, timeout=25)
         code = out.decode().strip()
     except Exception:
         return False, "000"
