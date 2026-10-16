@@ -81,6 +81,11 @@ const MetaAppBuilding = "flynn-controller.building"
 // gitreceive is killed before it can clear the key.
 const AppBuildingMetaTTL = 30 * time.Minute
 
+// AppBuildingStartGrace is how long a building mark counts before a
+// slugbuilder or dockerbuilder job is running. After that, a mark with no
+// builder job means the push was cancelled or the receiver died.
+const AppBuildingStartGrace = 20 * time.Second
+
 func MarkAppBuildingMeta(meta map[string]string) map[string]string {
 	if meta == nil {
 		meta = make(map[string]string, 1)
@@ -120,6 +125,37 @@ func AppMetaIsBuilding(meta map[string]string, now time.Time) bool {
 	}
 	age := now.Sub(t)
 	return age >= 0 && age < AppBuildingMetaTTL
+}
+
+// AppBuildingShown is the dashboard compiling flag. A running builder job
+// wins. A mark with no builder only covers the gap before that job is
+// scheduled, so cancelling a push drops the flag once the job is gone.
+func AppBuildingShown(meta map[string]string, jobs []*Job, now time.Time) bool {
+	if AppIsBuilding(jobs) {
+		return true
+	}
+	if !AppMetaIsBuilding(meta, now) {
+		return false
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	raw := ""
+	if meta != nil {
+		raw = strings.TrimSpace(meta[MetaAppBuilding])
+	}
+	if raw == "1" || strings.EqualFold(raw, "true") {
+		return true
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t, err = time.Parse(time.RFC3339Nano, raw)
+	}
+	if err != nil {
+		return false
+	}
+	age := now.Sub(t)
+	return age >= 0 && age < AppBuildingStartGrace
 }
 
 func (a *App) System() bool {

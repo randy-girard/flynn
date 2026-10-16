@@ -75,7 +75,7 @@ Examples:
 	$ flynn resource:add postgres --as AMBER
 `)
 	register("resource:attach", runResourceAttach, `
-usage: flynn resource:attach <provider> <resource> [--as <name>]
+usage: flynn resource:attach [<provider>] <resource> [--as <name>]
 
 Attach an existing resource to this app. The resource must already exist on
 another app in the same account. Every engine sets FLYNN_<ENGINE>_<COLOR>_URL
@@ -85,27 +85,29 @@ FLYNN_POSTGRESQL, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_MONGODB, FLYNN_CLICKHOUSE or
 FLYNN_KAFKA. Attaching an existing resource does not set the conventional key
 (DATABASE_URL, REDIS_URL, CLICKHOUSE_URL or KAFKA_URL).
 
-<resource> is the NAME or ID from flynn resource. The same resource can attach
-to several apps. Only the app that provisioned it may delete it; this app
-can detach.
+<resource> is the NAME or ID from flynn resource. The provider is optional when
+that name is unique (flynn resource:attach mysql-valley-77924). The same
+resource can attach to several apps, or again to this app with --as to add
+another name. Only the app that provisioned it may delete it; this app can detach.
 
 Options:
 	--as=<name>  attachment env name (NAME becomes NAME_URL; a color short name becomes FLYNN_<ENGINE>_<COLOR>_URL)
 
 Examples:
 
-	$ flynn -a shop resource:attach postgres postgresql-concave-48291
+	$ flynn -a shop resource:attach postgresql-concave-48291
 	$ flynn -a shop resource:attach postgres postgresql-concave-48291 --as ANALYTICS
-	$ flynn -a shop resource:attach postgres postgresql-concave-48291 --as AMBER
+	$ flynn -a shop resource:attach postgresql-concave-48291 --as AMBER
 `)
 	register("resource:detach", runResourceDetach, `
-usage: flynn resource:detach <provider> <resource>
+usage: flynn resource:detach [<provider>] <resource>
 
 Detach a resource from this app and remove the attachment env var. This does
 not delete the instance. Use it when this app is attached but does not own
 the resource.
 
-<resource> is the NAME or ID from flynn resource.
+<resource> is the NAME or ID from flynn resource. The provider is optional
+when that name is unique.
 `)
 	register("resource:remove", runResourceRemove, `
 usage: flynn resource:remove [<provider>] [<resource>]
@@ -582,20 +584,26 @@ func resolvedAppID(client controller.Client) (string, error) {
 }
 
 func runResourceAttach(args *docopt.Args, client controller.Client) error {
-	provider := args.String["<provider>"]
 	appID, err := resolvedAppID(client)
 	if err != nil {
 		return err
 	}
-	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
+	resRef, provider, err := resolveNamedResource(client, mustApp(), args.String["<provider>"], args.String["<resource>"])
 	if err != nil {
 		return err
 	}
 	res, err := client.AddResourceApp(provider, resRef.ID, appID)
 	if err != nil {
-		return err
+		if !alreadyAttachedError(err) {
+			return err
+		}
+		// The app already has this resource. --as still adds another env name.
+		res = resRef
 	}
 	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], false)
+	if len(env) == 0 {
+		return fmt.Errorf("%s is already attached to this app; use --as to attach it under another name", resourceDisplayName(resRef))
+	}
 	releaseID, err := setEnv(client, "", env)
 	if err != nil {
 		return err
@@ -604,13 +612,20 @@ func runResourceAttach(args *docopt.Args, client controller.Client) error {
 	return nil
 }
 
+func alreadyAttachedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") || strings.Contains(msg, "already attached")
+}
+
 func runResourceDetach(args *docopt.Args, client controller.Client) error {
-	provider := args.String["<provider>"]
 	appID, err := resolvedAppID(client)
 	if err != nil {
 		return err
 	}
-	resRef, err := lookupProviderResource(client, mustApp(), provider, args.String["<resource>"])
+	resRef, provider, err := resolveNamedResource(client, mustApp(), args.String["<provider>"], args.String["<resource>"])
 	if err != nil {
 		return err
 	}
@@ -727,6 +742,74 @@ func resolveRemoveTarget(client controller.Client, app, provider, resource strin
 		return nil, "", err
 	}
 	return res, p.Name, nil
+}
+
+// normalizeResourceArgs treats a single positional as the resource NAME or ID.
+// docopt assigns that token to <provider> when <resource> is empty.
+func normalizeResourceArgs(provider, resource string) (string, string, error) {
+	provider = strings.TrimSpace(provider)
+	resource = strings.TrimSpace(resource)
+	if provider != "" && resource == "" {
+		resource = provider
+		provider = ""
+	}
+	if resource == "" {
+		return "", "", fmt.Errorf("resource NAME or ID is required; see flynn resource")
+	}
+	return provider, resource, nil
+}
+
+// resolveNamedResource finds a resource by provider plus NAME/ID, or by a
+// unique NAME/ID alone (flynn resource:attach mysql-valley-77924).
+func resolveNamedResource(client controller.Client, app, provider, resource string) (*ct.Resource, string, error) {
+	provider, resource, err := normalizeResourceArgs(provider, resource)
+	if err != nil {
+		return nil, "", err
+	}
+	if provider != "" {
+		res, err := lookupProviderResource(client, app, provider, resource)
+		if err != nil {
+			return nil, "", err
+		}
+		return res, provider, nil
+	}
+	res, err := lookupResourceByRef(client, resource)
+	if err != nil {
+		return nil, "", err
+	}
+	p, err := client.GetProvider(res.ProviderID)
+	if err != nil {
+		return nil, "", err
+	}
+	name := strings.TrimSpace(p.Name)
+	if name == "" {
+		name = p.ID
+	}
+	return res, name, nil
+}
+
+func lookupResourceByRef(client controller.Client, ref string) (*ct.Resource, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("resource is required")
+	}
+	list, err := client.ResourceListAll()
+	if err != nil {
+		return nil, err
+	}
+	var got []*ct.Resource
+	for _, r := range list {
+		if resourceMatchesRef(r, ref) {
+			got = append(got, r)
+		}
+	}
+	if len(got) == 1 {
+		return got[0], nil
+	}
+	if len(got) > 1 {
+		return nil, fmt.Errorf("multiple resources match %q; pass the provider and the ID from flynn resource", ref)
+	}
+	return nil, fmt.Errorf("resource %q not found; see flynn resource", ref)
 }
 
 func lookupAppResource(client controller.Client, app, ref string) (*ct.Resource, error) {

@@ -142,13 +142,17 @@ func (c *controllerAPI) annotateAppBuilding(app *ct.App) {
 	if app == nil {
 		return
 	}
-	building := ct.AppMetaIsBuilding(app.Meta, time.Now())
-	if c != nil && c.jobRepo != nil && app.ID != "" {
-		if list, err := c.jobRepo.List(app.ID); err == nil {
-			building = building || ct.AppIsBuilding(list)
-		}
+	now := time.Now()
+	if c == nil || c.jobRepo == nil || app.ID == "" {
+		app.Building = ct.AppMetaIsBuilding(app.Meta, now)
+		return
 	}
-	app.Building = building
+	list, err := c.jobRepo.List(app.ID)
+	if err != nil {
+		app.Building = ct.AppMetaIsBuilding(app.Meta, now)
+		return
+	}
+	app.Building = ct.AppBuildingShown(app.Meta, list, now)
 }
 
 func redactRelease(r *ct.Release) *ct.Release {

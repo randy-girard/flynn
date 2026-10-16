@@ -113,6 +113,11 @@ func (rr *ResourceRepo) AddApp(resourceID, appID string) (*ct.Resource, error) {
 		}
 		if err := row.Scan(&r.Apps[len(r.Apps)-1]); err != nil {
 			tx.Rollback()
+			// Attaching again (another --as name on an app that already has
+			// this resource) is not a second membership row.
+			if postgres.IsUniquenessError(err, "") {
+				return rr.Get(resourceID)
+			}
 			return nil, err
 		}
 	}

@@ -422,6 +422,25 @@ func TestAppMetaIsBuilding(t *testing.T) {
 	}
 }
 
+func TestAppBuildingShownDropsACancelledPush(t *testing.T) {
+	now := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
+	fresh := map[string]string{MetaAppBuilding: now.Add(-5 * time.Second).Format(time.RFC3339)}
+	old := map[string]string{MetaAppBuilding: now.Add(-2 * time.Minute).Format(time.RFC3339)}
+	if !AppBuildingShown(fresh, nil, now) {
+		t.Fatal("a new mark with no job yet is still compiling")
+	}
+	if AppBuildingShown(old, nil, now) {
+		t.Fatal("a mark with no builder job is a cancelled push")
+	}
+	running := []*Job{{Type: "slugbuilder", State: JobStateUp}}
+	if !AppBuildingShown(old, running, now) {
+		t.Fatal("a running builder is compiling even when the mark is old")
+	}
+	if AppBuildingShown(old, []*Job{{Type: "slugbuilder", State: JobStateDown}}, now) {
+		t.Fatal("a finished builder must not keep the compiling flag")
+	}
+}
+
 func TestIsReleaseProcessType(t *testing.T) {
 	if !IsReleaseProcessType("release") || !IsReleaseProcessType("Release") {
 		t.Fatal("release must match")

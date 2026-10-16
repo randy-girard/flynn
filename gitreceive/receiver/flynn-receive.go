@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/flynn/go-docopt"
@@ -49,6 +51,19 @@ func printQemuTranslationNotice(w io.Writer) {
 type appBuildingStore interface {
 	GetApp(string) (*ct.App, error)
 	UpdateAppMeta(*ct.App) error
+}
+
+// watchGitHangup ends the receive process when the git client's session
+// drops. sshd delivers SIGHUP; the default action skips defers and would
+// leave the app marked building until the meta TTL.
+func watchGitHangup() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP)
+	go func() {
+		<-ch
+		fmt.Println("-----> Build cancelled")
+		shutdown.Exit()
+	}()
 }
 
 func markAppBuilding(store appBuildingStore, app *ct.App) error {
@@ -262,6 +277,14 @@ Options:
 	} else if err != nil {
 		return fmt.Errorf("Error retrieving app: %s", err)
 	}
+	// os.Exit from a signal skips defers. BeforeExit still runs, including when
+	// the git client hangs up (Ctrl+C), so the dashboard drops "compiling".
+	shutdown.BeforeExit(func() {
+		if err := clearAppBuilding(client, app); err != nil {
+			fmt.Printf("-----> WARN: could not clear building status: %s\n", err)
+		}
+	})
+	watchGitHangup()
 	defer func() {
 		if err := clearAppBuilding(client, app); err != nil {
 			fmt.Printf("-----> WARN: could not clear building status: %s\n", err)
@@ -630,10 +653,12 @@ func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, rel
 func buildJob(artifact *ct.Artifact, app *ct.App, prevRelease *ct.Release, jobEnv map[string]string, jobType, script string) *host.Job {
 	return &host.Job{
 		Config: host.ContainerConfig{
-			Args:       []string{script},
-			Env:        jobEnv,
-			Stdin:      true,
-			DisableLog: true,
+			Args:  []string{script},
+			Env:   jobEnv,
+			Stdin: true,
+			// Logs stay on so the dashboard deploy page can stream the same
+			// lines the git client sees. Attach reads them back from the log
+			// mux when DisableLog is false.
 		},
 		Partition: "background",
 		Metadata: map[string]string{

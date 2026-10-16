@@ -35,8 +35,11 @@ func TestBuildJob(t *testing.T) {
 	if len(job.Config.Args) != 1 || job.Config.Args[0] != "/builder/build.sh" {
 		t.Fatalf("unexpected args: %v", job.Config.Args)
 	}
-	if !job.Config.Stdin || !job.Config.DisableLog {
-		t.Fatal("expected Stdin and DisableLog to be set")
+	if !job.Config.Stdin {
+		t.Fatal("expected Stdin to be set")
+	}
+	if job.Config.DisableLog {
+		t.Fatal("build logs must reach the log aggregator so the dashboard can stream them")
 	}
 	if job.Config.Env["FOO"] != "bar" {
 		t.Fatal("job env not passed through")
