@@ -263,7 +263,9 @@ func conventionalURL(k string) bool {
 // one color key. An engine with no known color prefix falls back to
 // PREFIX_WORD_SUFFIX_DATABASE_URL plus the engine's usual URL when unused, and
 // --as NAME_URL. Host, user, password, and FLYNN_* identity keys stay on the
-// resource record, not the app.
+// resource record, not the app. Kafka is the exception: the CLIENT listener
+// requires the tenant certificate and SCRAM password, so those keys are copied
+// with the URL.
 func MergeAttachment(existing, incoming map[string]string, as string, newProvision bool) map[string]string {
 	out := map[string]string{}
 	if len(incoming) == 0 {
@@ -288,6 +290,7 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 		if conv != "" && !taken(conv) {
 			out[conv] = url
 		}
+		copyKafkaClientEnv(out, incoming)
 		return out
 	}
 	if strings.TrimSpace(as) != "" {
@@ -304,7 +307,38 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 	if newProvision && conv != "" && !taken(conv) {
 		out[conv] = url
 	}
+	copyKafkaClientEnv(out, incoming)
 	return out
+}
+
+// kafkaClientEnvKeys are required to open the CLIENT listener. Mutual TLS
+// and SCRAM cannot be reconstructed from KAFKA_URL, and discoverd does not
+// give user jobs the broker certificate. They are copied onto the app release
+// with the attachment URL.
+var kafkaClientEnvKeys = []string{
+	"KAFKA_TLS_ENABLED",
+	"KAFKA_TRUSTED_CERT",
+	"KAFKA_CLIENT_CERT",
+	"KAFKA_CLIENT_CERT_KEY",
+	"KAFKA_SASL_MECHANISM",
+	"KAFKA_SASL_USERNAME",
+	"KAFKA_SASL_PASSWORD",
+	"KAFKA_TOPIC_PREFIX",
+	"KAFKA_BOOTSTRAP_SERVERS",
+	// Private CAs for verified TLS. The URL cannot carry a PEM.
+	"MONGO_TRUSTED_CERT",
+	"CLICKHOUSE_TRUSTED_CERT",
+}
+
+func copyKafkaClientEnv(out, incoming map[string]string) {
+	if len(out) == 0 || incoming == nil {
+		return
+	}
+	for _, k := range kafkaClientEnvKeys {
+		if strings.TrimSpace(incoming[k]) != "" {
+			out[k] = incoming[k]
+		}
+	}
 }
 
 func colorAlreadySet(prefix string, existing map[string]string, url string) bool {

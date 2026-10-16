@@ -66,9 +66,11 @@ when that key is free; attaching an existing resource does not. It is utilized
 by some frameworks to configure database connections. It
 points at `leader.<app>.discoverd` and stays the same across scaling and
 failover. TLS is on by default
-(`MONGO_TLS_ENABLED=true`, `DATABASE_URL` carries `tls=true`); the appliance
-CA is in `MONGO_TRUSTED_CERT`. `mongod` runs in `preferTLS` mode, so
-replication and older in-cluster clients can still connect without TLS.
+(`MONGO_TLS_ENABLED=true`). The URL carries `tls=true` and
+`directConnection=true`. The app release also receives `MONGO_TRUSTED_CERT`,
+the appliance CA, and clients must use it to verify the server certificate.
+`leader.<app>.discoverd` is on that certificate. `mongod` runs in `preferTLS`
+mode, so replication and older in-cluster clients can still connect without TLS.
 
 ### Scaling the cluster
 

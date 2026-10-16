@@ -84,11 +84,18 @@ is free; attaching an existing resource does not.
 * `KAFKA_BOOTSTRAP_SERVERS` — `host:port` bootstrap list for Kafka clients.
 * `KAFKA_HOST`, `KAFKA_PORT` — the discoverd host and client port.
 
-New provisions use `kafka+ssl://<cluster>.discoverd:9092` for `KAFKA_URL`,
-`KAFKA_BROKER_URLS`, and `KAFKA_BOOTSTRAP_SERVERS`, and `<cluster>.discoverd`
-for `KAFKA_HOST`. That name resolves to every broker, and the broker
-certificate covers it. Resources created earlier keep
-`leader.<cluster>.discoverd` until they are re-attached.
+New provisions use `kafka+ssl://leader.<cluster>.discoverd:9092` for
+`KAFKA_URL`, `KAFKA_BROKER_URLS`, and `KAFKA_BOOTSTRAP_SERVERS`, and
+`leader.<cluster>.discoverd` for `KAFKA_HOST`. User jobs cannot resolve the
+bare `<cluster>.discoverd` name (discoverd returns NXDOMAIN). One leader is
+enough to bootstrap; clients learn the other brokers from metadata. The broker
+certificate covers `leader.<cluster>.discoverd`.
+
+The app release also receives `KAFKA_TLS_ENABLED`, `KAFKA_TRUSTED_CERT`,
+`KAFKA_CLIENT_CERT`, `KAFKA_CLIENT_CERT_KEY`, `KAFKA_SASL_MECHANISM`,
+`KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, and `KAFKA_TOPIC_PREFIX`. The
+CLIENT listener is mutual TLS plus SCRAM, so a URL alone cannot connect.
+Topics and consumer groups must stay under `KAFKA_TOPIC_PREFIX`.
 
 When TLS is enabled (the default), the following are also injected so your app
 can authenticate with mutual TLS:

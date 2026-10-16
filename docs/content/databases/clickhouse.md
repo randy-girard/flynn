@@ -58,11 +58,17 @@ per app and instance and are not reused while the instance exists, and
 `flynn env set` / `env unset` of an attached key is rejected while attached.
 
 The names below live on the ClickHouse resource record — the dashboard and the
-appliance's own jobs read them there — and are not copied into your app release:
+appliance's own jobs read them there. `CLICKHOUSE_URL` and
+`CLICKHOUSE_TRUSTED_CERT` are also copied onto the app release so a client can
+open a verified TLS connection. The other names stay on the resource:
 
 * `FLYNN_CLICKHOUSE` — the name of the ClickHouse app.
-* `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients
-  (`clickhouses://` when TLS is on, the default).
+* `CLICKHOUSE_URL` — native protocol connection URL for ClickHouse clients.
+  With TLS (the default) this is a clickhouse-go DSN:
+  `clickhouse://<user>:<pass>@leader.<app>.discoverd:9440/<database>?secure=true`.
+  The `clickhouses` scheme is not treated as TLS by clickhouse-go (the client
+  then fails the handshake with `unexpected packet [21]`). Verify the server
+  with `CLICKHOUSE_TRUSTED_CERT`. `leader.<app>.discoverd` is on the certificate.
 * `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT` — the discoverd host and native port
   (9440 with TLS; 9000 when `CLICKHOUSE_TLS_ENABLED=false`).
 * `CLICKHOUSE_HTTP_PORT` — the HTTP port (8443 with TLS; 8123 without). The HTTP

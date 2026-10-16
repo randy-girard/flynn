@@ -266,6 +266,43 @@ func TestResourceEnvDropsExtraPostgresColors(t *testing.T) {
 	}
 }
 
+func TestMergeAttachmentCopiesKafkaClientEnv(t *testing.T) {
+	in := map[string]string{
+		"FLYNN_KAFKA":             "kafka-meadow-29864",
+		"KAFKA_URL":               "kafka+ssl://leader.kafka-meadow-29864.discoverd:9092",
+		"KAFKA_TLS_ENABLED":       "true",
+		"KAFKA_TRUSTED_CERT":      "CA",
+		"KAFKA_CLIENT_CERT":       "CERT",
+		"KAFKA_CLIENT_CERT_KEY":   "KEY",
+		"KAFKA_SASL_MECHANISM":    "SCRAM-SHA-256",
+		"KAFKA_SASL_USERNAME":     "u-tenant",
+		"KAFKA_SASL_PASSWORD":     "pw",
+		"KAFKA_TOPIC_PREFIX":      "flynn.abc.",
+		"KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-meadow-29864.discoverd:9092",
+		"KAFKA_TLS_SERVER_KEY":    "broker-secret",
+	}
+	got := MergeAttachment(nil, in, "", true)
+	for _, k := range []string{"KAFKA_TLS_ENABLED", "KAFKA_TRUSTED_CERT", "KAFKA_CLIENT_CERT", "KAFKA_CLIENT_CERT_KEY", "KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD", "KAFKA_TOPIC_PREFIX", "KAFKA_BOOTSTRAP_SERVERS"} {
+		if got[k] != in[k] {
+			t.Fatalf("%s: %#v", k, got)
+		}
+	}
+	if got["KAFKA_TLS_SERVER_KEY"] != "" || got["FLYNN_KAFKA"] != "" {
+		t.Fatalf("broker key and identity must stay off the app: %#v", got)
+	}
+	withCA := MergeAttachment(nil, map[string]string{
+		"FLYNN_MONGODB":      "mongodb-pebble-50574",
+		"DATABASE_URL":       "mongodb://leader.mongodb-pebble-50574.discoverd/db?tls=true",
+		"MONGO_TRUSTED_CERT": "CA",
+	}, "", true)
+	if withCA["MONGO_TRUSTED_CERT"] != "CA" {
+		t.Fatalf("mongo ca: %#v", withCA)
+	}
+	if got["KAFKA_URL"] == "" {
+		t.Fatal(got)
+	}
+}
+
 func TestMergeAttachmentHonorsAs(t *testing.T) {
 	got := MergeAttachment(nil, map[string]string{
 		"FLYNN_POSTGRES": "postgresql-concave-48291",
