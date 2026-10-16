@@ -59,7 +59,7 @@ per app and instance and are not reused while the instance exists, and
 
 The names below live on the ClickHouse resource record — the dashboard and the
 appliance's own jobs read them there. `CLICKHOUSE_URL` and
-`CLICKHOUSE_TRUSTED_CERT` are also copied onto the app release so a client can
+`FLYNN_CLICKHOUSE_TRUSTED_CERT` are also copied onto the app release so a client can
 open a verified TLS connection. The other names stay on the resource:
 
 * `FLYNN_CLICKHOUSE` — the name of the ClickHouse app.
@@ -68,7 +68,7 @@ open a verified TLS connection. The other names stay on the resource:
   `clickhouse://<user>:<pass>@leader.<app>.discoverd:9440/<database>?secure=true`.
   The `clickhouses` scheme is not treated as TLS by clickhouse-go (the client
   then fails the handshake with `unexpected packet [21]`). Verify the server
-  with `CLICKHOUSE_TRUSTED_CERT`. `leader.<app>.discoverd` is on the certificate.
+  with `FLYNN_CLICKHOUSE_TRUSTED_CERT`. `leader.<app>.discoverd` is on the certificate.
 * `CLICKHOUSE_HOST`, `CLICKHOUSE_PORT` — the discoverd host and native port
   (9440 with TLS; 9000 when `CLICKHOUSE_TLS_ENABLED=false`).
 * `CLICKHOUSE_HTTP_PORT` — the HTTP port (8443 with TLS; 8123 without). The HTTP
@@ -79,7 +79,7 @@ open a verified TLS connection. The other names stay on the resource:
 * `CLICKHOUSE_DATABASE` — the built-in `default` database.
 * `CLICKHOUSE_CLUSTER` — the cluster name (`flynn`) used for `ON CLUSTER` DDL.
 * `CLICKHOUSE_REPLICA_COUNT` — the number of replicas in the cluster.
-* `CLICKHOUSE_TLS_ENABLED`, `CLICKHOUSE_TRUSTED_CERT` — TLS flag and the
+* `FLYNN_CLICKHOUSE_TLS_ENABLED`, `FLYNN_CLICKHOUSE_TRUSTED_CERT` — TLS flag and the
   appliance CA (PEM). Replication between replicas uses the plaintext
   `interserver_http_port` 9009 on the overlay network; the plaintext client
   ports 9000/8123 remain open next to the TLS ports.
@@ -113,7 +113,7 @@ does not require the ClickHouse client to be installed locally or firewall or
 security changes, as it runs in a container on the Flynn cluster. The CLI uses
 `--secure` against **9440** and accepts the Flynn-minted appliance certificate
 (the private CA is not in the image trust store). External clients should
-still pass `CLICKHOUSE_TRUSTED_CERT`.
+still pass `FLYNN_CLICKHOUSE_TRUSTED_CERT`.
 
 ## Managing databases
 
@@ -152,7 +152,7 @@ sudo flynn-host firewall:expose PORT   # on every host
 
 Default TLS mode is passthrough: the appliance serves TLS on the native port
 9440, so external clients use `clickhouse-client --secure --port PORT` and trust
-`CLICKHOUSE_TRUSTED_CERT` (skip hostname verification if the route hostname is
+`FLYNN_CLICKHOUSE_TRUSTED_CERT` (skip hostname verification if the route hostname is
 not on the certificate).
 
 You can still create the route yourself:

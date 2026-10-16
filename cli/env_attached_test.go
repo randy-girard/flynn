@@ -23,6 +23,20 @@ func TestRejectLockedSet(t *testing.T) {
 	if err := rejectLockedSet(locked, map[string]*string{"DATABASE_URL": nil}); err == nil {
 		t.Fatal("unset of a locked key must fail")
 	}
+	role := resname.LockedKeys(map[string]string{
+		"FLYNN_POSTGRES_ROLE": "primary",
+		"POSTGRES_ROLE":       "primary",
+		"NOTES":               "x",
+	}, map[string]string{"FLYNN_POSTGRES_ROLE": "primary", "POSTGRES_ROLE": "primary"})
+	if err := rejectLockedSet(role, map[string]*string{"FLYNN_POSTGRES_ROLE": nil}); err == nil || !strings.Contains(err.Error(), "FLYNN_POSTGRES_ROLE") {
+		t.Fatalf("unset role: %v", err)
+	}
+	if err := rejectLockedSet(role, map[string]*string{"POSTGRES_ROLE": nil}); err == nil || !strings.Contains(err.Error(), "POSTGRES_ROLE") {
+		t.Fatalf("unset legacy role: %v", err)
+	}
+	if err := rejectLockedSet(role, map[string]*string{"NOTES": nil}); err != nil {
+		t.Fatalf("unset notes: %v", err)
+	}
 	foo := "ok"
 	if err := rejectLockedSet(locked, map[string]*string{"FOO": &foo}); err != nil {
 		t.Fatal(err)

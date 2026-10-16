@@ -67,7 +67,7 @@ by some frameworks to configure database connections. It
 points at `leader.<app>.discoverd` and stays the same across scaling and
 failover. TLS is on by default
 (`MONGO_TLS_ENABLED=true`). The URL carries `tls=true` and
-`directConnection=true`. The app release also receives `MONGO_TRUSTED_CERT`,
+`directConnection=true`. The app release also receives `FLYNN_MONGODB_TRUSTED_CERT`,
 the appliance CA, and clients must use it to verify the server certificate.
 `leader.<app>.discoverd` is on that certificate. `mongod` runs in `preferTLS`
 mode, so replication and older in-cluster clients can still connect without TLS.
@@ -160,7 +160,7 @@ sudo flynn-host firewall:expose PORT   # on every host
 
 Default TLS mode is passthrough so `mongod` completes the TLS handshake
 itself. External clients connect with `tls=true` and trust
-`MONGO_TRUSTED_CERT` (skip hostname verification if the route hostname is not
+`FLYNN_MONGODB_TRUSTED_CERT` (skip hostname verification if the route hostname is not
 on the certificate).
 
 You can still create the route yourself:

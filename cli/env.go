@@ -41,6 +41,9 @@ Examples:
 	$ flynn env:set FOO=bar BAZ=foobar
 	Created release 5058ae7964f74c399a240bdd6e7d1bcb.
 
+Variables owned by an attached resource, including FLYNN_<RESOURCE>_* keys,
+cannot be changed while that resource is attached.
+
 The command returns after the new release is created. If another deploy is
 already running, this one is queued and runs next.
 `)
@@ -56,6 +59,9 @@ Examples:
 
 	$ flynn env:unset FOO
 	Created release b1bbd9bc76d6436ea2fd245300bce72e.
+
+Variables owned by an attached resource, including FLYNN_<RESOURCE>_* keys,
+cannot be removed while that resource is attached.
 
 The command returns after the new release is created. If another deploy is
 already running, this one is queued and runs next.

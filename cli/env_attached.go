@@ -36,8 +36,17 @@ func rejectEnvSetAttachedURLs(client controller.Client, app string, env map[stri
 		return err
 	}
 	releaseEnv := map[string]string{}
-	if release, err := client.GetAppRelease(app); err == nil && release != nil && release.Env != nil {
-		releaseEnv = release.Env
+	if release, err := client.GetAppRelease(app); err == nil && release != nil {
+		for k, v := range release.Env {
+			releaseEnv[k] = v
+		}
+		if envProc != "" {
+			if proc, ok := release.Processes[envProc]; ok {
+				for k, v := range proc.Env {
+					releaseEnv[k] = v
+				}
+			}
+		}
 	} else if err != nil && !errors.Is(err, controller.ErrNotFound) {
 		return err
 	}

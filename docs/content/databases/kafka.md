@@ -81,30 +81,30 @@ is free; attaching an existing resource does not.
 
 * `KAFKA_URL` / `KAFKA_BROKER_URLS` — connection URL(s) for the cluster. The
   scheme is `kafka+ssl://` when TLS is enabled and `kafka://` otherwise.
-* `KAFKA_BOOTSTRAP_SERVERS` — `host:port` bootstrap list for Kafka clients.
+* `FLYNN_KAFKA_BOOTSTRAP_SERVERS` — `host:port` bootstrap list for Kafka clients.
 * `KAFKA_HOST`, `KAFKA_PORT` — the discoverd host and client port.
 
 New provisions use `kafka+ssl://leader.<cluster>.discoverd:9092` for
-`KAFKA_URL`, `KAFKA_BROKER_URLS`, and `KAFKA_BOOTSTRAP_SERVERS`, and
+`KAFKA_URL`, `KAFKA_BROKER_URLS`, and `FLYNN_KAFKA_BOOTSTRAP_SERVERS`, and
 `leader.<cluster>.discoverd` for `KAFKA_HOST`. User jobs cannot resolve the
 bare `<cluster>.discoverd` name (discoverd returns NXDOMAIN). One leader is
 enough to bootstrap; clients learn the other brokers from metadata. The broker
 certificate covers `leader.<cluster>.discoverd`.
 
-The app release also receives `KAFKA_TLS_ENABLED`, `KAFKA_TRUSTED_CERT`,
-`KAFKA_CLIENT_CERT`, `KAFKA_CLIENT_CERT_KEY`, `KAFKA_SASL_MECHANISM`,
-`KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, and `KAFKA_TOPIC_PREFIX`. The
+The app release also receives `FLYNN_KAFKA_TLS_ENABLED`, `FLYNN_KAFKA_TRUSTED_CERT`,
+`FLYNN_KAFKA_CLIENT_CERT`, `FLYNN_KAFKA_CLIENT_CERT_KEY`, `FLYNN_KAFKA_SASL_MECHANISM`,
+`FLYNN_KAFKA_SASL_USERNAME`, `FLYNN_KAFKA_SASL_PASSWORD`, and `FLYNN_KAFKA_TOPIC_PREFIX`. The
 CLIENT listener is mutual TLS plus SCRAM, so a URL alone cannot connect.
-Topics and consumer groups must stay under `KAFKA_TOPIC_PREFIX`.
+Topics and consumer groups must stay under `FLYNN_KAFKA_TOPIC_PREFIX`.
 
 When TLS is enabled (the default), the following are also injected so your app
 can authenticate with mutual TLS:
 
-* `KAFKA_TRUSTED_CERT` — the cluster CA certificate (PEM). Use this as your
+* `FLYNN_KAFKA_TRUSTED_CERT` — the cluster CA certificate (PEM). Use this as your
   client's trust store.
-* `KAFKA_CLIENT_CERT`, `KAFKA_CLIENT_CERT_KEY` — the client certificate and
+* `FLYNN_KAFKA_CLIENT_CERT`, `FLYNN_KAFKA_CLIENT_CERT_KEY` — the client certificate and
   private key (PEM) presented to the brokers.
-* `KAFKA_TLS_ENABLED` — set to `true`.
+* `FLYNN_KAFKA_TLS_ENABLED` — set to `true`.
 
 Because brokers advertise dynamic per-node IP addresses, clients validate the
 broker certificate against the cluster CA rather than by hostname. Set
@@ -205,8 +205,8 @@ sudo flynn-host firewall:expose PORT   # on every host
 ```
 
 Keep **passthrough** (the default): brokers already speak TLS on the client
-listener, and clients must present `KAFKA_CLIENT_CERT` /
-`KAFKA_CLIENT_CERT_KEY` and trust `KAFKA_TRUSTED_CERT`. Router terminate would
+listener, and clients must present `FLYNN_KAFKA_CLIENT_CERT` /
+`FLYNN_KAFKA_CLIENT_CERT_KEY` and trust `FLYNN_KAFKA_TRUSTED_CERT`. Router terminate would
 break that mutual TLS.
 
 You can still create the route yourself:

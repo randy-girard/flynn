@@ -779,12 +779,20 @@ func resourceFollowsLeader(res, leader *ct.Resource, leaderName string) bool {
 		return false
 	}
 	env := res.Env
-	for _, k := range []string{"POSTGRES_LEADER", "MYSQL_LEADER", "REDIS_LEADER", "CLICKHOUSE_LEADER", "KAFKA_LEADER"} {
+	for _, k := range []string{"FLYNN_POSTGRES_LEADER", "POSTGRES_LEADER", "FLYNN_MYSQL_LEADER", "MYSQL_LEADER", "FLYNN_REDIS_LEADER", "REDIS_LEADER", "CLICKHOUSE_LEADER", "KAFKA_LEADER"} {
 		if strings.EqualFold(strings.TrimSpace(env[k]), leaderName) {
 			return true
 		}
 	}
-	if strings.EqualFold(strings.TrimSpace(env["POSTGRES_ROLE"]), "follower") && strings.EqualFold(strings.TrimSpace(env["POSTGRES_LEADER"]), leaderName) {
+	role := strings.TrimSpace(env["FLYNN_POSTGRES_ROLE"])
+	if role == "" {
+		role = strings.TrimSpace(env["POSTGRES_ROLE"])
+	}
+	followed := strings.TrimSpace(env["FLYNN_POSTGRES_LEADER"])
+	if followed == "" {
+		followed = strings.TrimSpace(env["POSTGRES_LEADER"])
+	}
+	if strings.EqualFold(role, "follower") && strings.EqualFold(followed, leaderName) {
 		return true
 	}
 	for k, v := range env {

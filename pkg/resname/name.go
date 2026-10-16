@@ -315,29 +315,83 @@ func MergeAttachment(existing, incoming map[string]string, as string, newProvisi
 // and SCRAM cannot be reconstructed from KAFKA_URL, and discoverd does not
 // give user jobs the broker certificate. They are copied onto the app release
 // with the attachment URL.
-var kafkaClientEnvKeys = []string{
-	"KAFKA_TLS_ENABLED",
-	"KAFKA_TRUSTED_CERT",
-	"KAFKA_CLIENT_CERT",
-	"KAFKA_CLIENT_CERT_KEY",
-	"KAFKA_SASL_MECHANISM",
-	"KAFKA_SASL_USERNAME",
-	"KAFKA_SASL_PASSWORD",
-	"KAFKA_TOPIC_PREFIX",
-	"KAFKA_BOOTSTRAP_SERVERS",
-	// Private CAs for verified TLS. The URL cannot carry a PEM.
-	"MONGO_TRUSTED_CERT",
-	"CLICKHOUSE_TRUSTED_CERT",
+// attachmentEnvKeys are Flynn-defined attachment variables. They are stored
+// as FLYNN_<RESOURCE>_* and copied onto the app with the URL. legacy is the
+// name plugins used before that prefix; a provision that still sends it is
+// copied under the prefixed name. Server private keys are not in this list.
+var attachmentEnvKeys = []struct{ key, legacy string }{
+	{"FLYNN_KAFKA_TLS_ENABLED", "KAFKA_TLS_ENABLED"},
+	{"FLYNN_KAFKA_TRUSTED_CERT", "KAFKA_TRUSTED_CERT"},
+	{"FLYNN_KAFKA_CLIENT_CERT", "KAFKA_CLIENT_CERT"},
+	{"FLYNN_KAFKA_CLIENT_CERT_KEY", "KAFKA_CLIENT_CERT_KEY"},
+	{"FLYNN_KAFKA_SASL_MECHANISM", "KAFKA_SASL_MECHANISM"},
+	{"FLYNN_KAFKA_SASL_USERNAME", "KAFKA_SASL_USERNAME"},
+	{"FLYNN_KAFKA_SASL_PASSWORD", "KAFKA_SASL_PASSWORD"},
+	{"FLYNN_KAFKA_TOPIC_PREFIX", "KAFKA_TOPIC_PREFIX"},
+	{"FLYNN_KAFKA_BOOTSTRAP_SERVERS", "KAFKA_BOOTSTRAP_SERVERS"},
+	{"FLYNN_MONGODB_TRUSTED_CERT", "MONGO_TRUSTED_CERT"},
+	{"FLYNN_MONGODB_TLS_ENABLED", "MONGO_TLS_ENABLED"},
+	{"FLYNN_CLICKHOUSE_TRUSTED_CERT", "CLICKHOUSE_TRUSTED_CERT"},
+	{"FLYNN_CLICKHOUSE_TLS_ENABLED", "CLICKHOUSE_TLS_ENABLED"},
+	{"FLYNN_REDIS_TRUSTED_CERT", "REDIS_TRUSTED_CERT"},
+	{"FLYNN_REDIS_TLS_ENABLED", "REDIS_TLS_ENABLED"},
+	{"FLYNN_MYSQL_TRUSTED_CERT", "MYSQL_TRUSTED_CERT"},
+	{"FLYNN_MYSQL_TLS_ENABLED", "MYSQL_TLS_ENABLED"},
+	{"FLYNN_POSTGRES_ROLE", "POSTGRES_ROLE"},
+	{"FLYNN_POSTGRES_LEADER", "POSTGRES_LEADER"},
+	{"FLYNN_POSTGRES_PRIMARY_URL", "POSTGRES_PRIMARY_URL"},
+	{"FLYNN_POSTGRES_REPLICA_PENDING", "REPLICA_PENDING"},
+	{"FLYNN_POSTGRES_AUTO_FAILOVER", "AUTO_FAILOVER"},
+	{"FLYNN_REDIS_ROLE", "REDIS_ROLE"},
+	{"FLYNN_REDIS_LEADER", "REDIS_LEADER"},
+	{"FLYNN_REDIS_REPLICA_PENDING", "REPLICA_PENDING"},
+	{"FLYNN_REDIS_AUTO_FAILOVER", "AUTO_FAILOVER"},
+	{"FLYNN_MYSQL_ROLE", "MYSQL_ROLE"},
+	{"FLYNN_MYSQL_LEADER", "MYSQL_LEADER"},
+	{"FLYNN_MYSQL_PRIMARY_HOST", "MYSQL_PRIMARY_HOST"},
+	{"FLYNN_MYSQL_REPLICA_PENDING", "REPLICA_PENDING"},
+	{"FLYNN_MYSQL_AUTO_FAILOVER", "AUTO_FAILOVER"},
 }
 
 func copyKafkaClientEnv(out, incoming map[string]string) {
 	if len(out) == 0 || incoming == nil {
 		return
 	}
-	for _, k := range kafkaClientEnvKeys {
-		if strings.TrimSpace(incoming[k]) != "" {
-			out[k] = incoming[k]
+	engine := attachmentEnginePrefix(incoming)
+	for _, item := range attachmentEnvKeys {
+		if engine != "" && !strings.HasPrefix(item.key, engine) {
+			continue
 		}
+		if engine == "" && strings.TrimSpace(incoming[item.key]) == "" {
+			continue
+		}
+		v := strings.TrimSpace(incoming[item.key])
+		if v == "" && item.legacy != "" {
+			v = strings.TrimSpace(incoming[item.legacy])
+		}
+		if v != "" {
+			out[item.key] = v
+		}
+	}
+}
+
+// attachmentEnginePrefix is the FLYNN_<RESOURCE>_ stem for a provision env.
+func attachmentEnginePrefix(incoming map[string]string) string {
+	switch {
+	case strings.TrimSpace(incoming["FLYNN_POSTGRES"]) != "":
+		return "FLYNN_POSTGRES_"
+	case strings.TrimSpace(incoming["FLYNN_REDIS"]) != "":
+		return "FLYNN_REDIS_"
+	case strings.TrimSpace(incoming["FLYNN_MYSQL"]) != "":
+		return "FLYNN_MYSQL_"
+	case strings.TrimSpace(incoming["FLYNN_MONGODB"]) != "" || strings.TrimSpace(incoming["FLYNN_MONGO"]) != "":
+		return "FLYNN_MONGODB_"
+	case strings.TrimSpace(incoming["FLYNN_KAFKA"]) != "":
+		return "FLYNN_KAFKA_"
+	case strings.TrimSpace(incoming["FLYNN_CLICKHOUSE"]) != "":
+		return "FLYNN_CLICKHOUSE_"
+	default:
+		return ""
 	}
 }
 
@@ -411,7 +465,32 @@ func UnsetAttachment(release, resource map[string]string) map[string]*string {
 	return env
 }
 
+// attachmentEnvPrefixes are the FLYNN_<RESOURCE>_ stems copied onto an app.
+// FLYNN_POSTGRES_ does not match FLYNN_POSTGRESQL_, and FLYNN_MONGO_ does not
+// match FLYNN_MONGODB_.
+var attachmentEnvPrefixes = []string{
+	"FLYNN_POSTGRESQL_",
+	"FLYNN_POSTGRES_",
+	"FLYNN_REDIS_",
+	"FLYNN_MYSQL_",
+	"FLYNN_MONGODB_",
+	"FLYNN_MONGO_",
+	"FLYNN_KAFKA_",
+	"FLYNN_CLICKHOUSE_",
+}
+
+func isAttachmentEnvKey(key string) bool {
+	for _, prefix := range attachmentEnvPrefixes {
+		if strings.HasPrefix(key, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // LockedKeys are release env vars currently owned by a resource attachment.
+// FLYNN_<RESOURCE>_* keys are always locked. Legacy names (POSTGRES_ROLE, …)
+// are locked while a resource still defines that name or its prefixed form.
 // Any *_URL whose value still matches a resource connection string is locked
 // (FLYNN_POSTGRESQL_AMBER_URL, ANALYTICS_URL, …).
 func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) map[string]string {
@@ -421,6 +500,7 @@ func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) ma
 	}
 	urls := map[string]bool{}
 	same := map[string]string{}
+	legacyOwned := map[string]bool{}
 	for _, re := range resourceEnvs {
 		if re == nil {
 			continue
@@ -429,15 +509,30 @@ func LockedKeys(release map[string]string, resourceEnvs ...map[string]string) ma
 			urls[u] = true
 		}
 		for k, v := range re {
-			if !strings.HasSuffix(k, "_URL") || v == "" {
+			if strings.HasSuffix(k, "_URL") && v != "" {
+				urls[v] = true
+				same[k] = v
+			}
+		}
+		for _, item := range attachmentEnvKeys {
+			if strings.TrimSpace(re[item.key]) == "" && strings.TrimSpace(re[item.legacy]) == "" {
 				continue
 			}
-			urls[v] = true
-			same[k] = v
+			legacyOwned[item.key] = true
+			if item.legacy != "" {
+				legacyOwned[item.legacy] = true
+			}
 		}
 	}
 	for k, v := range release {
-		if !strings.HasSuffix(k, "_URL") || v == "" {
+		if v == "" {
+			continue
+		}
+		if isAttachmentEnvKey(k) || legacyOwned[k] {
+			locked[k] = v
+			continue
+		}
+		if !strings.HasSuffix(k, "_URL") {
 			continue
 		}
 		if urls[v] || same[k] == v {
@@ -487,7 +582,7 @@ func splitCredentialKey(k string) bool {
 	switch k {
 	case "PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE",
 		"POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_DB", "POSTGRES_HOST", "POSTGRES_PORT",
-		"REDIS_HOST", "REDIS_PORT", "REDIS_TLS_ENABLED", "REDIS_TRUSTED_CERT",
+		"REDIS_HOST", "REDIS_PORT", "FLYNN_REDIS_TLS_ENABLED", "FLYNN_REDIS_TRUSTED_CERT",
 		"REDIS_MASTER_HOST", "REDIS_MASTER_PORT", "REDIS_MASTER_PASSWORD", "REDIS_MASTER_CA":
 		return true
 	}

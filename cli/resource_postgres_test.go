@@ -176,11 +176,11 @@ func TestResolveRemoveTargetByNameOnly(t *testing.T) {
 func TestResourceFollowerNamesBlockLeader(t *testing.T) {
 	leader := &ct.Resource{
 		ID:  "leader",
-		Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp", "POSTGRES_ROLE": "primary"},
+		Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp", "FLYNN_POSTGRES_ROLE": "primary"},
 	}
 	follower := &ct.Resource{
 		ID:  "follower",
-		Env: map[string]string{"FLYNN_POSTGRES": "pg-lagoon-abcdef", "POSTGRES_ROLE": "follower", "POSTGRES_LEADER": "pg-orchid-xkhthp"},
+		Env: map[string]string{"FLYNN_POSTGRES": "pg-lagoon-abcdef", "FLYNN_POSTGRES_ROLE": "follower", "FLYNN_POSTGRES_LEADER": "pg-orchid-xkhthp"},
 	}
 	names := resourceFollowerNames(leader, []*ct.Resource{leader, follower})
 	if len(names) != 1 || names[0] != "pg-lagoon-abcdef" {

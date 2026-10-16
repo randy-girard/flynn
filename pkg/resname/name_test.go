@@ -192,13 +192,13 @@ func TestMergeAttachmentColorSchemeForAllEngines(t *testing.T) {
 
 func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	first := ResourceEnv(nil, map[string]string{
-		"FLYNN_POSTGRES": "postgresql-concave-48291",
-		"DATABASE_URL":   "postgres://first",
-		"POSTGRES_URL":   "postgres://first",
-		"POSTGRES_ROLE":  "primary",
-		"PGDATABASE":     "db_first",
+		"FLYNN_POSTGRES":      "postgresql-concave-48291",
+		"DATABASE_URL":        "postgres://first",
+		"POSTGRES_URL":        "postgres://first",
+		"FLYNN_POSTGRES_ROLE": "primary",
+		"PGDATABASE":          "db_first",
 	}, "")
-	if first["FLYNN_POSTGRES"] != "postgresql-concave-48291" || first["POSTGRES_ROLE"] != "primary" {
+	if first["FLYNN_POSTGRES"] != "postgresql-concave-48291" || first["FLYNN_POSTGRES_ROLE"] != "primary" {
 		t.Fatalf("first resource: %#v", first)
 	}
 	if first["DATABASE_URL"] != "postgres://first" {
@@ -214,12 +214,12 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 		t.Fatalf("resource must not keep split PG keys: %#v", first)
 	}
 	second := ResourceEnv(first, map[string]string{
-		"FLYNN_POSTGRES":  "postgresql-fjord-99112",
-		"DATABASE_URL":    "postgres://second",
-		"POSTGRES_URL":    "postgres://second",
-		"POSTGRES_ROLE":   "follower",
-		"POSTGRES_LEADER": "postgresql-concave-48291",
-		"PGDATABASE":      "db_first",
+		"FLYNN_POSTGRES":        "postgresql-fjord-99112",
+		"DATABASE_URL":          "postgres://second",
+		"POSTGRES_URL":          "postgres://second",
+		"FLYNN_POSTGRES_ROLE":   "follower",
+		"FLYNN_POSTGRES_LEADER": "postgresql-concave-48291",
+		"PGDATABASE":            "db_first",
 	}, "")
 	if second["DATABASE_URL"] != "" {
 		t.Fatalf("second must not steal the app DATABASE_URL: %#v", second)
@@ -227,7 +227,7 @@ func TestResourceEnvKeepsIdentityOnSecond(t *testing.T) {
 	if second["POSTGRES_URL"] != "" {
 		t.Fatalf("resource must not store POSTGRES_URL: %#v", second)
 	}
-	if second["FLYNN_POSTGRES"] != "postgresql-fjord-99112" || second["POSTGRES_ROLE"] != "follower" || second["POSTGRES_LEADER"] != "postgresql-concave-48291" {
+	if second["FLYNN_POSTGRES"] != "postgresql-fjord-99112" || second["FLYNN_POSTGRES_ROLE"] != "follower" || second["FLYNN_POSTGRES_LEADER"] != "postgresql-concave-48291" {
 		t.Fatalf("second resource must keep its instance identity: %#v", second)
 	}
 	if postgresColorKey(second) == "" {
@@ -244,7 +244,7 @@ func TestResourceEnvDropsExtraPostgresColors(t *testing.T) {
 		"DATABASE_URL":                 "postgres://first",
 		"FLYNN_POSTGRESQL_CRIMSON_URL": "postgres://first",
 		"FLYNN_POSTGRESQL_SAGE_URL":    "postgres://first",
-		"POSTGRES_ROLE":                "primary",
+		"FLYNN_POSTGRES_ROLE":          "primary",
 	}, "")
 	if got["DATABASE_URL"] != "postgres://first" {
 		t.Fatalf("DATABASE_URL: %#v", got)
@@ -268,21 +268,21 @@ func TestResourceEnvDropsExtraPostgresColors(t *testing.T) {
 
 func TestMergeAttachmentCopiesKafkaClientEnv(t *testing.T) {
 	in := map[string]string{
-		"FLYNN_KAFKA":             "kafka-meadow-29864",
-		"KAFKA_URL":               "kafka+ssl://leader.kafka-meadow-29864.discoverd:9092",
-		"KAFKA_TLS_ENABLED":       "true",
-		"KAFKA_TRUSTED_CERT":      "CA",
-		"KAFKA_CLIENT_CERT":       "CERT",
-		"KAFKA_CLIENT_CERT_KEY":   "KEY",
-		"KAFKA_SASL_MECHANISM":    "SCRAM-SHA-256",
-		"KAFKA_SASL_USERNAME":     "u-tenant",
-		"KAFKA_SASL_PASSWORD":     "pw",
-		"KAFKA_TOPIC_PREFIX":      "flynn.abc.",
-		"KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-meadow-29864.discoverd:9092",
-		"KAFKA_TLS_SERVER_KEY":    "broker-secret",
+		"FLYNN_KAFKA":                   "kafka-meadow-29864",
+		"KAFKA_URL":                     "kafka+ssl://leader.kafka-meadow-29864.discoverd:9092",
+		"FLYNN_KAFKA_TLS_ENABLED":       "true",
+		"FLYNN_KAFKA_TRUSTED_CERT":      "CA",
+		"FLYNN_KAFKA_CLIENT_CERT":       "CERT",
+		"FLYNN_KAFKA_CLIENT_CERT_KEY":   "KEY",
+		"FLYNN_KAFKA_SASL_MECHANISM":    "SCRAM-SHA-256",
+		"FLYNN_KAFKA_SASL_USERNAME":     "u-tenant",
+		"FLYNN_KAFKA_SASL_PASSWORD":     "pw",
+		"FLYNN_KAFKA_TOPIC_PREFIX":      "flynn.abc.",
+		"FLYNN_KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-meadow-29864.discoverd:9092",
+		"KAFKA_TLS_SERVER_KEY":          "broker-secret",
 	}
 	got := MergeAttachment(nil, in, "", true)
-	for _, k := range []string{"KAFKA_TLS_ENABLED", "KAFKA_TRUSTED_CERT", "KAFKA_CLIENT_CERT", "KAFKA_CLIENT_CERT_KEY", "KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD", "KAFKA_TOPIC_PREFIX", "KAFKA_BOOTSTRAP_SERVERS"} {
+	for _, k := range []string{"FLYNN_KAFKA_TLS_ENABLED", "FLYNN_KAFKA_TRUSTED_CERT", "FLYNN_KAFKA_CLIENT_CERT", "FLYNN_KAFKA_CLIENT_CERT_KEY", "FLYNN_KAFKA_SASL_USERNAME", "FLYNN_KAFKA_SASL_PASSWORD", "FLYNN_KAFKA_TOPIC_PREFIX", "FLYNN_KAFKA_BOOTSTRAP_SERVERS"} {
 		if got[k] != in[k] {
 			t.Fatalf("%s: %#v", k, got)
 		}
@@ -291,11 +291,11 @@ func TestMergeAttachmentCopiesKafkaClientEnv(t *testing.T) {
 		t.Fatalf("broker key and identity must stay off the app: %#v", got)
 	}
 	withCA := MergeAttachment(nil, map[string]string{
-		"FLYNN_MONGODB":      "mongodb-pebble-50574",
-		"DATABASE_URL":       "mongodb://leader.mongodb-pebble-50574.discoverd/db?tls=true",
-		"MONGO_TRUSTED_CERT": "CA",
+		"FLYNN_MONGODB":              "mongodb-pebble-50574",
+		"DATABASE_URL":               "mongodb://leader.mongodb-pebble-50574.discoverd/db?tls=true",
+		"FLYNN_MONGODB_TRUSTED_CERT": "CA",
 	}, "", true)
-	if withCA["MONGO_TRUSTED_CERT"] != "CA" {
+	if withCA["FLYNN_MONGODB_TRUSTED_CERT"] != "CA" {
 		t.Fatalf("mongo ca: %#v", withCA)
 	}
 	if got["KAFKA_URL"] == "" {
@@ -429,6 +429,46 @@ func TestLockedKeysMatchReleaseValues(t *testing.T) {
 	})
 	if peerLocked["FLYNN_POSTGRESQL_BLUE_URL"] != "postgres://first" {
 		t.Fatalf("peer color URL must lock by connection string: %#v", peerLocked)
+	}
+}
+
+func TestLockedKeysAttachmentVars(t *testing.T) {
+	release := map[string]string{
+		"FLYNN_POSTGRES_ROLE":      "primary",
+		"POSTGRES_ROLE":            "primary",
+		"FLYNN_KAFKA_TRUSTED_CERT": "ca",
+		"NOTES":                    "x",
+		"PGHOST":                   "leader.example",
+	}
+	locked := LockedKeys(release, map[string]string{
+		"FLYNN_POSTGRES":      "postgresql-concave-48291",
+		"FLYNN_POSTGRES_ROLE": "primary",
+		"POSTGRES_ROLE":       "primary",
+		"PGHOST":              "leader.example",
+	})
+	for _, key := range []string{"FLYNN_POSTGRES_ROLE", "POSTGRES_ROLE", "FLYNN_KAFKA_TRUSTED_CERT"} {
+		if locked[key] == "" {
+			t.Fatalf("missing %s: %#v", key, locked)
+		}
+	}
+	if _, ok := locked["NOTES"]; ok {
+		t.Fatalf("unrelated: %#v", locked)
+	}
+	if _, ok := locked["PGHOST"]; ok {
+		t.Fatalf("PGHOST must stay writable: %#v", locked)
+	}
+
+	only := LockedKeys(map[string]string{"FLYNN_REDIS_ROLE": "primary", "FOO": "bar"})
+	if only["FLYNN_REDIS_ROLE"] != "primary" {
+		t.Fatalf("prefixed key stays locked: %#v", only)
+	}
+	if _, ok := only["FOO"]; ok {
+		t.Fatalf("unrelated: %#v", only)
+	}
+
+	legacy := LockedKeys(map[string]string{"POSTGRES_ROLE": "primary"})
+	if _, ok := legacy["POSTGRES_ROLE"]; ok {
+		t.Fatalf("legacy name is writable once no resource owns it: %#v", legacy)
 	}
 }
 

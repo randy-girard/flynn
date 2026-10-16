@@ -339,12 +339,15 @@ func listPluginResources(client controller.Client, spec *plugin.CLI) error {
 		if p, err := client.GetProvider(r.ProviderID); err == nil && p != nil && p.Name != "" {
 			providerName = p.Name
 		}
-		role := strings.TrimSpace(r.Env["POSTGRES_ROLE"])
+		role := strings.TrimSpace(r.Env["FLYNN_POSTGRES_ROLE"])
 		if role == "" {
-			role = strings.TrimSpace(r.Env["MYSQL_ROLE"])
+			role = strings.TrimSpace(r.Env["POSTGRES_ROLE"])
 		}
 		if role == "" {
-			role = strings.TrimSpace(r.Env["REDIS_ROLE"])
+			role = strings.TrimSpace(r.Env["FLYNN_MYSQL_ROLE"])
+		}
+		if role == "" {
+			role = strings.TrimSpace(r.Env["FLYNN_REDIS_ROLE"])
 		}
 		if role == "" {
 			role = strings.TrimSpace(r.Env["CLICKHOUSE_ROLE"])
@@ -812,11 +815,11 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 	for _, key := range []string{
 		"REDIS_HOST", "POSTGRES_URL", "DATABASE_URL", "MYSQL_HOST", "MYSQL_URL", "MONGO_HOST",
 		"MONGO_URL", "CLICKHOUSE_HOST", "CLICKHOUSE_URL", "CLICKHOUSE_HTTP_URL",
-		"CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "CLICKHOUSE_TRUSTED_CERT",
-		"KAFKA_HOST", "KAFKA_URL", "KAFKA_BOOTSTRAP_SERVERS",
-		"KAFKA_BROKER_URLS", "KAFKA_TRUSTED_CERT", "KAFKA_CLIENT_CERT",
-		"KAFKA_CLIENT_CERT_KEY", "KAFKA_SASL_USERNAME", "KAFKA_SASL_PASSWORD",
-		"KAFKA_SASL_MECHANISM", "KAFKA_TOPIC_PREFIX",
+		"CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "FLYNN_CLICKHOUSE_TRUSTED_CERT",
+		"KAFKA_HOST", "KAFKA_URL", "FLYNN_KAFKA_BOOTSTRAP_SERVERS",
+		"KAFKA_BROKER_URLS", "FLYNN_KAFKA_TRUSTED_CERT", "FLYNN_KAFKA_CLIENT_CERT",
+		"FLYNN_KAFKA_CLIENT_CERT_KEY", "FLYNN_KAFKA_SASL_USERNAME", "FLYNN_KAFKA_SASL_PASSWORD",
+		"FLYNN_KAFKA_SASL_MECHANISM", "FLYNN_KAFKA_TOPIC_PREFIX",
 	} {
 		delete(app, key)
 	}
@@ -852,9 +855,9 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 		app["MONGO_PWD"] = pwd
 	}
 	if su := app["KAFKA_SUPERUSER_PASSWORD"]; su != "" {
-		app["KAFKA_SASL_PASSWORD"] = su
-		app["KAFKA_SASL_USERNAME"] = "flynn-admin"
-		app["KAFKA_SASL_MECHANISM"] = "SCRAM-SHA-256"
+		app["FLYNN_KAFKA_SASL_PASSWORD"] = su
+		app["FLYNN_KAFKA_SASL_USERNAME"] = "flynn-admin"
+		app["FLYNN_KAFKA_SASL_MECHANISM"] = "SCRAM-SHA-256"
 	}
 	if resource != "" {
 		host := "leader." + resource + ".discoverd"
@@ -863,8 +866,8 @@ func applyNamedResource(app map[string]string, resource string, env map[string]s
 				app[key] = host
 			}
 		}
-		if app["KAFKA_BOOTSTRAP_SERVERS"] == "" {
-			app["KAFKA_BOOTSTRAP_SERVERS"] = host + ":9092"
+		if app["FLYNN_KAFKA_BOOTSTRAP_SERVERS"] == "" {
+			app["FLYNN_KAFKA_BOOTSTRAP_SERVERS"] = host + ":9092"
 		}
 	}
 }

@@ -882,16 +882,16 @@ func TestApplyNamedResourcePrefersMongoAppPassword(t *testing.T) {
 
 func TestApplyNamedResourceClickhouseUsesFollowerAdmin(t *testing.T) {
 	app := map[string]string{
-		"CLICKHOUSE_HOST":         "leader.clickhouse-quartz-aaaaaa.discoverd",
-		"CLICKHOUSE_USER":         "u_clickhouse-quartz-aaaaaa",
-		"CLICKHOUSE_PASSWORD":     "tenant-leader",
-		"CLICKHOUSE_TRUSTED_CERT": "leader-ca",
-		"CLICKHOUSE_URL":          "clickhouses://u_leader@leader.clickhouse-quartz-aaaaaa.discoverd:9440",
+		"CLICKHOUSE_HOST":               "leader.clickhouse-quartz-aaaaaa.discoverd",
+		"CLICKHOUSE_USER":               "u_clickhouse-quartz-aaaaaa",
+		"CLICKHOUSE_PASSWORD":           "tenant-leader",
+		"FLYNN_CLICKHOUSE_TRUSTED_CERT": "leader-ca",
+		"CLICKHOUSE_URL":                "clickhouses://u_leader@leader.clickhouse-quartz-aaaaaa.discoverd:9440",
 	}
 	applyNamedResource(app, "clickhouse-willow-bbbbbb", map[string]string{
-		"CLICKHOUSE_PASSWORD":     "admin-follower",
-		"CLICKHOUSE_TRUSTED_CERT": "follower-ca",
-		"FLYNN_CLICKHOUSE":        "clickhouse-willow-bbbbbb",
+		"CLICKHOUSE_PASSWORD":           "admin-follower",
+		"FLYNN_CLICKHOUSE_TRUSTED_CERT": "follower-ca",
+		"FLYNN_CLICKHOUSE":              "clickhouse-willow-bbbbbb",
 	})
 	if app["CLICKHOUSE_HOST"] != "leader.clickhouse-willow-bbbbbb.discoverd" {
 		t.Fatalf("host %q", app["CLICKHOUSE_HOST"])
@@ -902,32 +902,32 @@ func TestApplyNamedResourceClickhouseUsesFollowerAdmin(t *testing.T) {
 	if app["CLICKHOUSE_PASSWORD"] != "admin-follower" {
 		t.Fatalf("password %q", app["CLICKHOUSE_PASSWORD"])
 	}
-	if app["CLICKHOUSE_TRUSTED_CERT"] != "follower-ca" {
-		t.Fatalf("tls ca %q", app["CLICKHOUSE_TRUSTED_CERT"])
+	if app["FLYNN_CLICKHOUSE_TRUSTED_CERT"] != "follower-ca" {
+		t.Fatalf("tls ca %q", app["FLYNN_CLICKHOUSE_TRUSTED_CERT"])
 	}
 }
 
 func TestApplyNamedResourceKafkaUsesFollowerBootstrap(t *testing.T) {
 	app := map[string]string{
-		"KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-quartz-aaaaaa.discoverd:9092",
-		"KAFKA_TRUSTED_CERT":      "leader-ca",
-		"KAFKA_SASL_USERNAME":     "u-leader",
-		"KAFKA_SASL_PASSWORD":     "leader-pw",
+		"FLYNN_KAFKA_BOOTSTRAP_SERVERS": "leader.kafka-quartz-aaaaaa.discoverd:9092",
+		"FLYNN_KAFKA_TRUSTED_CERT":      "leader-ca",
+		"FLYNN_KAFKA_SASL_USERNAME":     "u-leader",
+		"FLYNN_KAFKA_SASL_PASSWORD":     "leader-pw",
 	}
 	applyNamedResource(app, "kafka-willow-bbbbbb", map[string]string{
-		"KAFKA_SUPERUSER_PASSWORD": "super-secret",
-		"KAFKA_TRUSTED_CERT":       "follower-ca",
-		"KAFKA_CLIENT_CERT":        "follower-cert",
-		"KAFKA_CLIENT_CERT_KEY":    "follower-key",
+		"KAFKA_SUPERUSER_PASSWORD":    "super-secret",
+		"FLYNN_KAFKA_TRUSTED_CERT":    "follower-ca",
+		"FLYNN_KAFKA_CLIENT_CERT":     "follower-cert",
+		"FLYNN_KAFKA_CLIENT_CERT_KEY": "follower-key",
 	})
-	if app["KAFKA_BOOTSTRAP_SERVERS"] != "leader.kafka-willow-bbbbbb.discoverd:9092" {
-		t.Fatalf("bootstrap %q", app["KAFKA_BOOTSTRAP_SERVERS"])
+	if app["FLYNN_KAFKA_BOOTSTRAP_SERVERS"] != "leader.kafka-willow-bbbbbb.discoverd:9092" {
+		t.Fatalf("bootstrap %q", app["FLYNN_KAFKA_BOOTSTRAP_SERVERS"])
 	}
-	if app["KAFKA_TRUSTED_CERT"] != "follower-ca" {
-		t.Fatalf("tls ca %q", app["KAFKA_TRUSTED_CERT"])
+	if app["FLYNN_KAFKA_TRUSTED_CERT"] != "follower-ca" {
+		t.Fatalf("tls ca %q", app["FLYNN_KAFKA_TRUSTED_CERT"])
 	}
-	if app["KAFKA_SASL_USERNAME"] != "flynn-admin" || app["KAFKA_SASL_PASSWORD"] != "super-secret" {
-		t.Fatalf("sasl user=%q pass=%q", app["KAFKA_SASL_USERNAME"], app["KAFKA_SASL_PASSWORD"])
+	if app["FLYNN_KAFKA_SASL_USERNAME"] != "flynn-admin" || app["FLYNN_KAFKA_SASL_PASSWORD"] != "super-secret" {
+		t.Fatalf("sasl user=%q pass=%q", app["FLYNN_KAFKA_SASL_USERNAME"], app["FLYNN_KAFKA_SASL_PASSWORD"])
 	}
 }
 

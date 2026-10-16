@@ -71,8 +71,8 @@ per app and instance and are not reused while the instance exists, so two apps o
 instance never share a key. While the app is attached, the controller rejects
 `flynn env set` / `env unset` for that key. TLS on 3306 is on by
 default (`MYSQL_TLS_ENABLED=true`); the appliance CA is in
-`MYSQL_TRUSTED_CERT`, and `DATABASE_URL` carries `tls=skip-verify` so Go
-clients work with the private CA (pin `MYSQL_TRUSTED_CERT` to verify).
+`FLYNN_MYSQL_TRUSTED_CERT`, and `DATABASE_URL` carries `tls=skip-verify` so Go
+clients work with the private CA (pin `FLYNN_MYSQL_TRUSTED_CERT` to verify).
 Plaintext is still accepted inside the cluster for replication and older
 clients.
 
@@ -141,7 +141,7 @@ flynn -a mysql-plugin route:add tcp --service mysql --leader --domain mysql.exam
 sudo flynn-host firewall:expose PORT
 ```
 
-External clients must use TLS and trust `MYSQL_TRUSTED_CERT`; in-cluster
+External clients must use TLS and trust `FLYNN_MYSQL_TRUSTED_CERT`; in-cluster
 clients keep using the discoverd host in `DATABASE_URL`.
 Remove with `flynn resource:unexpose mysql` then
 `sudo flynn-host firewall:unexpose PORT`. See

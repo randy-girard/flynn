@@ -54,9 +54,9 @@ Provisioning the database will add environment variables to your app
 release. A new provision sets `REDIS_URL` when that key is free, plus
 `FLYNN_REDIS_<COLOR>_URL`. `--as CACHE` sets `CACHE_URL`. `--as AMBER`
 sets `FLYNN_REDIS_AMBER_URL`. Attaching an existing resource does not set
-`REDIS_URL`. `FLYNN_REDIS` (the Redis app name) and `REDIS_ROLE` stay on the
+`REDIS_URL`. `FLYNN_REDIS` (the Redis app name) and `FLYNN_REDIS_ROLE` stay on the
 resource record. TLS for `resource:expose` is on 16379 by default, so
-external clients use `rediss://` and `REDIS_TRUSTED_CERT`. In-cluster
+external clients use `rediss://` and `FLYNN_REDIS_TRUSTED_CERT`. In-cluster
 `REDIS_URL` is `redis://` on 6379 so Sidekiq and redis-rb do not need to
 trust Flynn's private CA. After a plugin update, leftover in-cluster
 `rediss://` URLs on attached apps are rewritten to `redis://`.

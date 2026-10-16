@@ -76,7 +76,7 @@ func (TestSuite) TestMaybePromoteSireniaHASkipsResourceInstances(c *C) {
 	}
 	release := &ct.Release{
 		ID:  "mysql-inst",
-		Env: map[string]string{"SIRENIA_PROCESS": "mysql", "MYSQL_ROLE": "primary"},
+		Env: map[string]string{"SIRENIA_PROCESS": "mysql", "FLYNN_MYSQL_ROLE": "primary"},
 	}
 	c.Assert(cc.CreateApp(app), IsNil)
 	c.Assert(cc.CreateRelease(app.ID, release), IsNil)
