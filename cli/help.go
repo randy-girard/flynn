@@ -151,6 +151,9 @@ func formatHelp(name string) string {
 }
 
 func formatHelpWith(name string, cat *plugin.Catalog) string {
+	if msg := hostOnlyCommandError(name); msg != nil {
+		return msg.Error() + "\n"
+	}
 	all := append(registeredHelpNames(), catalogActionNames(cat)...)
 	if target, ok := topAliases[name]; ok && !clihelp.HasChildren(all, name) {
 		name = target

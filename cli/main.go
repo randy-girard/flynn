@@ -266,6 +266,10 @@ func runCommand(name string, args []string) (err error) {
 	argv[0] = name
 	argv = append(argv, args...)
 
+	if err := hostOnlyCommandError(name); err != nil {
+		return err
+	}
+
 	cmd, ok := commands[name]
 	if !ok {
 		if base, suffix, ok := splitColonCommand(name); ok {

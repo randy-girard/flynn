@@ -174,3 +174,15 @@ func TestResolveCommandHelpAndList(t *testing.T) {
 		t.Fatalf("letsencrypt:list %q %q from=%q", name, args, from)
 	}
 }
+
+func TestFirewallStaysOnFlynnHost(t *testing.T) {
+	if err := hostOnlyCommandError("firewall"); err == nil || err.Error() != "firewall is a flynn-host command; run `flynn-host firewall`" {
+		t.Fatalf("firewall: %v", err)
+	}
+	if err := hostOnlyCommandError("firewall:expose"); err == nil || err.Error() != "firewall:expose is a flynn-host command; run `flynn-host firewall expose`" {
+		t.Fatalf("firewall:expose: %v", err)
+	}
+	if err := hostOnlyCommandError("resource:expose"); err != nil {
+		t.Fatal(err)
+	}
+}

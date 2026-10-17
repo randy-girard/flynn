@@ -46,8 +46,8 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"run", "bash"}, "<command>", []string{"bash"}},
 		{[]string{"run", "bash", "-c", "true"}, "<argument>", []string{"-c", "true"}},
 		{[]string{"resource:add", "redis"}, "<provider>", []string{"redis"}},
-		{[]string{"resource:expose", "postgres"}, "<provider>", []string{"postgres"}},
-		{[]string{"resource:unexpose", "mysql"}, "<provider>", []string{"mysql"}},
+		{[]string{"resource:expose", "mysql-arroyo-64597"}, "<resource>", []string{"mysql-arroyo-64597"}},
+		{[]string{"resource:unexpose", "mysql-arroyo-64597"}, "<resource>", []string{"mysql-arroyo-64597"}},
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
 		{[]string{"cluster:add", "n", "d"}, "<cluster-name>", []string{"n"}},
@@ -129,8 +129,8 @@ func TestRouteAddTCPTLSFlags(t *testing.T) {
 	if args.String["--domain"] != "postgres.example.com" || args.String["--tls-mode"] != "passthrough" {
 		t.Fatalf("tls flags: %+v", args.String)
 	}
-	expose := parseCLI(t, []string{"resource:expose", "redis", "--domain", "redis.example.com", "--auto-tls"})
-	if expose.String["<provider>"] != "redis" || expose.String["--domain"] != "redis.example.com" || !expose.Bool["--auto-tls"] {
+	expose := parseCLI(t, []string{"resource:expose", "redis-basin-45047", "--domain", "redis.example.com", "--auto-tls"})
+	if expose.String["<resource>"] != "redis-basin-45047" || expose.String["--domain"] != "redis.example.com" || !expose.Bool["--auto-tls"] {
 		t.Fatalf("resource expose: %+v %+v", expose.String, expose.Bool)
 	}
 }

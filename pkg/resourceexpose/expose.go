@@ -32,6 +32,47 @@ var specs = []Spec{
 	{Provider: "clickhouse", EnvKey: "FLYNN_CLICKHOUSE", DefaultApp: "clickhouse", DefaultService: "clickhouse", Leader: true},
 }
 
+// ServiceForResource returns the expose spec and discoverd service for one
+// attached resource. The service comes from that resource's env, so a second
+// database on the same app is not included.
+func ServiceForResource(env map[string]string) (Spec, string, error) {
+	if len(env) == 0 {
+		return Spec{}, "", fmt.Errorf("resource has no env")
+	}
+	var found []Spec
+	var services []string
+	for _, s := range specs {
+		if s.Provider == "mariadb" {
+			continue
+		}
+		if strings.TrimSpace(env[s.EnvKey]) == "" {
+			continue
+		}
+		_, service := s.ResolveAppService(env)
+		if service == "" {
+			continue
+		}
+		found = append(found, s)
+		services = append(services, service)
+	}
+	if len(found) == 1 {
+		return found[0], services[0], nil
+	}
+	if len(found) > 1 {
+		return Spec{}, "", fmt.Errorf("resource env matches more than one datastore")
+	}
+	return Spec{}, "", fmt.Errorf("resource is not an exposable datastore")
+}
+
+// FirewallFollowsRoute is the operator message after a TCP export is created
+// or removed. Hosts open and close the port from the live route list.
+func FirewallFollowsRoute(port int, open bool) string {
+	if open {
+		return fmt.Sprintf("The cluster firewall will open TCP %d. No separate firewall command is required.", port)
+	}
+	return fmt.Sprintf("The cluster firewall will close TCP %d. No separate firewall command is required.", port)
+}
+
 // Lookup returns the expose spec for a provider name or alias.
 func Lookup(provider string) (Spec, error) {
 	name := strings.ToLower(strings.TrimSpace(provider))

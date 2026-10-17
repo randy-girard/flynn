@@ -13,6 +13,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/pkg/resourceexpose"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -234,7 +235,7 @@ func runRouteAddTCP(args *docopt.Args, client controller.Client) error {
 	if hr.Domain != "" {
 		fmt.Printf("hostname %s tls_mode=%s\n", hr.Domain, displayTLSMode(hr.TLSMode))
 	}
-	fmt.Printf("On each host run: sudo flynn-host firewall:expose %d\n", hr.Port)
+	fmt.Println(resourceexpose.FirewallFollowsRoute(int(hr.Port), true))
 	return nil
 }
 

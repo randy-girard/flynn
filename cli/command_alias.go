@@ -350,3 +350,16 @@ func expandColonSuffixWith(pluginName, suffix string, spec *plugin.CLI) []string
 	}
 	return strings.Split(suffix, "-")
 }
+
+// hostOnlyCommandError rejects flynn firewall*. Those commands exist only on flynn-host.
+func hostOnlyCommandError(name string) error {
+	base := name
+	if i := strings.IndexByte(name, ':'); i > 0 {
+		base = name[:i]
+	}
+	if base != "firewall" {
+		return nil
+	}
+	shown := strings.ReplaceAll(name, ":", " ")
+	return fmt.Errorf("%s is a flynn-host command; run `flynn-host %s`", name, shown)
+}

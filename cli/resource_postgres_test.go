@@ -111,6 +111,32 @@ func (c resourceLookupClient) ResourceList(string) ([]*ct.Resource, error) {
 	return c.allList, nil
 }
 
+func TestLookupAttachedResourceByNameNotProvider(t *testing.T) {
+	arroyo := &ct.Resource{
+		ID:         "c50874e7-8bec-4844-a51d-9a1d7ee9b87a",
+		ProviderID: "prov-mysql",
+		Env:        map[string]string{"FLYNN_MYSQL": "mysql-arroyo-64597"},
+	}
+	other := &ct.Resource{
+		ID:         "11111111-1111-1111-1111-111111111111",
+		ProviderID: "prov-mysql",
+		Env:        map[string]string{"FLYNN_MYSQL": "mysql-basin-11111"},
+	}
+	c := resourceLookupClient{appList: []*ct.Resource{arroyo, other}}
+	got, err := lookupAttachedResource(c, "demo", "mysql-arroyo-64597")
+	if err != nil || got == nil || got.ID != arroyo.ID {
+		t.Fatalf("name: %+v %v", got, err)
+	}
+	got, err = lookupAttachedResource(c, "demo", arroyo.ID)
+	if err != nil || got == nil || got.ID != arroyo.ID {
+		t.Fatalf("id: %+v %v", got, err)
+	}
+	_, err = lookupAttachedResource(c, "demo", "mysql")
+	if err == nil || !strings.Contains(err.Error(), "not the provider") {
+		t.Fatalf("provider name must be rejected: %v", err)
+	}
+}
+
 func TestLookupProviderResourceByName(t *testing.T) {
 	res := &ct.Resource{
 		ID:         "919a764d-863d-4629-aa23-76248728dcbc",
@@ -257,8 +283,8 @@ func TestSingleAttachmentEnv(t *testing.T) {
 		t.Fatalf("color --as %#v %v", env, err)
 	}
 	env, err = singleAttachmentEnv(map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://db"}, "CHARTREUSE")
-	if err != nil || env["FLYNN_POSTGRESQL_CHARTREUSE_URL"] != "postgres://db" || env["CHARTREUSE_URL"] != "" {
-		t.Fatalf("extended color --as %#v %v", env, err)
+	if err != nil || env["CHARTREUSE_URL"] != "postgres://db" || env["FLYNN_POSTGRESQL_CHARTREUSE_URL"] != "" {
+		t.Fatalf("non-palette --as %#v %v", env, err)
 	}
 }
 

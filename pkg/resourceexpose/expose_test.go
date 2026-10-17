@@ -103,6 +103,32 @@ func TestFindTCPRoute(t *testing.T) {
 	}
 }
 
+func TestServiceForResourceUsesThatInstanceOnly(t *testing.T) {
+	spec, service, err := ServiceForResource(map[string]string{
+		"FLYNN_MYSQL":             "mysql-arroyo-64597",
+		"MYSQL_HOST":              "leader.mysql-arroyo-64597.discoverd",
+		"FLYNN_MYSQL_APRICOT_URL": "mysql://u:p@leader.mysql-arroyo-64597.discoverd:3306/db",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if spec.Provider != "mysql" || service != "mysql-arroyo-64597" || !spec.Leader {
+		t.Fatalf("spec=%+v service=%s", spec, service)
+	}
+	if _, _, err := ServiceForResource(map[string]string{"FOO": "bar"}); err == nil {
+		t.Fatal("non-datastore resource must fail")
+	}
+}
+
+func TestFirewallFollowsRoute(t *testing.T) {
+	if got := FirewallFollowsRoute(3306, true); got != "The cluster firewall will open TCP 3306. No separate firewall command is required." {
+		t.Fatal(got)
+	}
+	if got := FirewallFollowsRoute(3306, false); got != "The cluster firewall will close TCP 3306. No separate firewall command is required." {
+		t.Fatal(got)
+	}
+}
+
 func TestFirewallCommands(t *testing.T) {
 	if FirewallExposeCommand(3001) != "sudo flynn-host firewall:expose 3001" {
 		t.Fatal(FirewallExposeCommand(3001))

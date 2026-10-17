@@ -123,11 +123,11 @@ The command returns after the resource is detached from the app. The isolated
 instance is destroyed in the background.
 `)
 	register("resource:expose", runResourceExpose, `
-usage: flynn resource:expose <provider> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
+usage: flynn resource:expose <resource> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
 
-Export a datastore (postgres, mysql, mongodb, redis, kafka, clickhouse)
-on a TCP route with a stable hostname, then open the host port with
-flynn-host firewall:expose.
+Export one datastore resource on a TCP route. <resource> is the NAME or ID
+from flynn resource (mysql-arroyo-64597), not the provider. Only that
+instance is exposed. The cluster firewall opens the route port on its own.
 
 Options:
 	--domain=<host>        hostname (default: SERVICE.CLUSTERDOMAIN)
@@ -139,19 +139,16 @@ Options:
 
 passthrough is the default so postgres/mysql native SSL still works. Use
 terminate for TLS-first protocols (Redis TLS, Kafka, MongoDB, ClickHouse)
-when the backend is plaintext. flynn-host also opens TCP route ports on
-its 15s firewall sync; pin the port on every node:
-
-    sudo flynn-host firewall:expose PORT
+when the backend is plaintext.
 `)
 	register("resource:unexpose", runResourceUnexpose, `
-usage: flynn resource:unexpose <provider> [--domain <host>]
+usage: flynn resource:unexpose <resource> [--domain <host>]
 
-Remove the TCP export route for <provider> and print the matching
-flynn-host firewall:unexpose command.
+Remove the TCP export route for one resource. <resource> is the NAME or ID
+from flynn resource. The cluster firewall closes that port on its own.
 
 Options:
-	--domain=<host>  hostname of the route to remove (default: the first TCP export)
+	--domain=<host>  hostname of the route to remove (default: the resource hostname)
 `)
 }
 
@@ -910,18 +907,41 @@ func resolveResource(provider string, client controller.Client) (string, error) 
 	return matched[0].ID, nil
 }
 
+func lookupAttachedResource(client controller.Client, app, ref string) (*ct.Resource, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, fmt.Errorf("resource is required; use the NAME or ID from flynn resource")
+	}
+	list, err := client.AppResourceList(app)
+	if err != nil {
+		return nil, err
+	}
+	var matched []*ct.Resource
+	for _, r := range list {
+		if resourceMatchesRef(r, ref) {
+			matched = append(matched, r)
+		}
+	}
+	if len(matched) == 1 {
+		return matched[0], nil
+	}
+	if len(matched) > 1 {
+		return nil, fmt.Errorf("multiple resources match %q; use the ID from flynn resource", ref)
+	}
+	return nil, fmt.Errorf("resource %q not found on this app; use the NAME or ID from flynn resource, not the provider", ref)
+}
+
 func runResourceExpose(args *docopt.Args, client controller.Client) error {
-	spec, err := resourceexpose.Lookup(args.String["<provider>"])
+	res, err := lookupAttachedResource(client, mustApp(), args.String["<resource>"])
 	if err != nil {
 		return err
 	}
-	appRelease, err := client.GetAppRelease(mustApp())
+	spec, service, err := resourceexpose.ServiceForResource(res.Env)
 	if err != nil {
 		return err
 	}
-	appliance, service := spec.ResolveAppService(appRelease.Env)
-	if appliance == "" {
-		return fmt.Errorf("no %s resource on this app; provision with flynn resource:add %s", spec.Provider, spec.Provider)
+	if service == "" {
+		return fmt.Errorf("resource %s has no discoverd service", resourceDisplayName(res))
 	}
 
 	domain := strings.TrimSpace(args.String["--domain"])
@@ -975,8 +995,8 @@ func runResourceExpose(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	if prev := resourceexpose.FindTCPRoute(existing, service, domain); prev != nil {
-		fmt.Printf("%s already exposed as %s on port %d (%s)\n", spec.Provider, prev.Domain, prev.Port, prev.FormattedID())
-		fmt.Printf("On each host: %s\n", resourceexpose.FirewallExposeCommand(int(prev.Port)))
+		fmt.Printf("%s already exposed as %s on port %d (%s)\n", resourceDisplayName(res), prev.Domain, prev.Port, prev.FormattedID())
+		fmt.Println(resourceexpose.FirewallFollowsRoute(int(prev.Port), true))
 		return nil
 	}
 
@@ -987,23 +1007,18 @@ func runResourceExpose(args *docopt.Args, client controller.Client) error {
 	if route.Domain != "" {
 		fmt.Printf("hostname %s tls_mode=%s\n", route.Domain, displayTLSMode(route.TLSMode))
 	}
-	fmt.Printf("On each host run: %s\n", resourceexpose.FirewallExposeCommand(int(route.Port)))
-	fmt.Printf("flynn-host also opens TCP route ports on its firewall sync.\n")
+	fmt.Println(resourceexpose.FirewallFollowsRoute(int(route.Port), true))
 	return nil
 }
 
 func runResourceUnexpose(args *docopt.Args, client controller.Client) error {
-	spec, err := resourceexpose.Lookup(args.String["<provider>"])
+	res, err := lookupAttachedResource(client, mustApp(), args.String["<resource>"])
 	if err != nil {
 		return err
 	}
-	appRelease, err := client.GetAppRelease(mustApp())
+	_, service, err := resourceexpose.ServiceForResource(res.Env)
 	if err != nil {
 		return err
-	}
-	_, service := spec.ResolveAppService(appRelease.Env)
-	if service == "" {
-		return fmt.Errorf("no %s resource on this app", spec.Provider)
 	}
 	routes, err := client.AppRouteList(mustApp())
 	if err != nil {
@@ -1011,13 +1026,13 @@ func runResourceUnexpose(args *docopt.Args, client controller.Client) error {
 	}
 	route := resourceexpose.FindTCPRoute(routes, service, strings.TrimSpace(args.String["--domain"]))
 	if route == nil {
-		return fmt.Errorf("no TCP export route for %s", spec.Provider)
+		return fmt.Errorf("no TCP export route for %s", resourceDisplayName(res))
 	}
 	if err := client.DeleteRoute(mustApp(), route.FormattedID()); err != nil {
 		return err
 	}
 	fmt.Printf("Route %s removed.\n", route.FormattedID())
-	fmt.Printf("On each host run: %s\n", resourceexpose.FirewallUnexposeCommand(int(route.Port)))
+	fmt.Println(resourceexpose.FirewallFollowsRoute(int(route.Port), false))
 	return nil
 }
 

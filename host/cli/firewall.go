@@ -51,10 +51,10 @@ Options:
 	Register("firewall:expose", runFirewallExpose, `
 usage: flynn-host firewall:expose <port>
 
-Open a TCP port on the host (for example a TCP route or an exported datastore).
-22/80/443 stay installer-owned. flynn resource:expose prints this command after
-it creates the TCP(/TLS) route. flynn-host also opens live TCP route ports on
-its periodic firewall sync.
+Open a TCP port on this host and keep it across firewall syncs.
+22/80/443 stay installer-owned. flynn resource:expose does not need this:
+hosts already open and close TCP route ports from the live route list.
+Use this only to pin a port that is not a route.
 `)
 	Register("firewall:unexpose", runFirewallUnexpose, `
 usage: flynn-host firewall:unexpose <port>
