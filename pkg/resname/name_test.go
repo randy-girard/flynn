@@ -581,16 +581,22 @@ func TestWordAndColorListsUniqueSorted(t *testing.T) {
 		}
 		seenColor[c] = true
 	}
-	if len(attachmentColors) < 70 {
-		t.Fatalf("want a larger color list, got %d", len(attachmentColors))
+	if len(attachmentColors) < 16 {
+		t.Fatalf("want the core color list, got %d", len(attachmentColors))
 	}
 }
 
 func TestPostgresAttachmentURLKeyRecognizesExtendedColor(t *testing.T) {
-	if got := PostgresAttachmentURLKey("chartreuse", nil); got != "FLYNN_POSTGRESQL_CHARTREUSE_URL" {
+	if got := PostgresAttachmentURLKey("amber", nil); got != "FLYNN_POSTGRESQL_AMBER_URL" {
 		t.Fatalf("got %q", got)
 	}
-	if got := RedisAttachmentURLKey("periwinkle", nil); got != "FLYNN_REDIS_PERIWINKLE_URL" {
+	if got := PostgresAttachmentURLKey("chartreuse", nil); got != "CHARTREUSE_URL" {
+		t.Fatalf("got %q", got)
+	}
+	if !PostgresColorURLKey("FLYNN_POSTGRESQL_CHARTREUSE_URL") {
+		t.Fatal("an existing extended color URL stays attached")
+	}
+	if got := RedisAttachmentURLKey("blue", nil); got != "FLYNN_REDIS_BLUE_URL" {
 		t.Fatalf("got %q", got)
 	}
 	if !IsolatedService("postgresql-alder-48291") || !IsolatedService("redis-glacier-48291") {
@@ -663,7 +669,7 @@ func colorKeyForPrefix(env map[string]string, prefix string) string {
 // flynn/pkg/resname. The digest freezes the list so a copy cannot drift
 // silently; when a color is added or removed, update the digest in all seven
 // places at once.
-const attachmentColorsDigest = "b0218b7a13cd7c31089282b23cf4bc6f4039194e44563fbd419844ea04f1a6d3"
+const attachmentColorsDigest = "66cf0e3f123af773c2080403799064d0957d8df68ec028e915de613f87da63a4"
 
 func TestAttachmentColorsFrozen(t *testing.T) {
 	sum := sha256.Sum256([]byte(strings.Join(attachmentColors, ",")))

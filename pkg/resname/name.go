@@ -47,19 +47,9 @@ const clickhouseAttachPrefix = "FLYNN_CLICKHOUSE_"
 const kafkaAttachPrefix = "FLYNN_KAFKA_"
 
 var attachmentColors = []string{
-	"ALABASTER", "AMBER", "APRICOT", "AQUA", "AZURE", "BEIGE", "BLACK", "BLUE",
-	"BONE", "BRASS", "BRONZE", "BROWN", "BURGUNDY", "CARMINE", "CELADON",
-	"CERULEAN", "CHARTREUSE", "CHESTNUT", "CINNAMON", "CITRINE", "COBALT",
-	"COPPER", "CORAL", "CREAM", "CRIMSON", "CYAN", "DENIM", "EBONY", "EMERALD",
-	"FLAX", "FOREST", "FUCHSIA", "GARNET", "GINGER", "GOLD", "GRAPHITE", "GRAY",
-	"GREEN", "HAZEL", "HONEY", "ICE", "INDIGO", "IVORY", "JADE", "KHAKI",
-	"LAVENDER", "LEMON", "LILAC", "LIME", "MAGENTA", "MAHOGANY", "MAROON",
-	"MAUVE", "MINT", "MOSS", "MUSTARD", "NAVY", "OCHRE", "OLIVE", "ONYX",
-	"OPAL", "ORANGE", "PEACH", "PEARL", "PERIWINKLE", "PINK", "PISTACHIO",
-	"PLATINUM", "PLUM", "PURPLE", "RED", "ROSE", "RUBY", "RUST", "SAFFRON",
-	"SAGE", "SALMON", "SAND", "SCARLET", "SEPIA", "SIENNA", "SILVER", "SLATE",
-	"STEEL", "TAN", "TAUPE", "TEAL", "TOMATO", "TURQUOISE", "UMBER",
-	"VERMILION", "VIOLET", "WALNUT", "WHEAT", "WHITE", "WINE", "YELLOW",
+	"AMBER", "BLACK", "BLUE", "BROWN", "CYAN", "GOLD", "GRAY", "GREEN",
+	"INDIGO", "LIME", "MAGENTA", "NAVY", "ORANGE", "PINK", "PURPLE", "RED",
+	"TEAL", "VIOLET", "WHITE", "YELLOW",
 }
 
 // Name returns prefix-word-xxxxxx (older letter form; new engines use digits). taken reports names already in use.
