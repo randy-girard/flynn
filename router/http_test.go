@@ -1105,7 +1105,7 @@ func (s *S) TestNoBackends(c *C) {
 	c.Assert(res.StatusCode, Equals, 503)
 	data, err := ioutil.ReadAll(res.Body)
 	c.Assert(err, IsNil)
-	c.Assert(string(data), Equals, "Service Unavailable\n")
+	c.Assert(strings.Contains(string(data), "Service unavailable"), Equals, true)
 }
 
 func (s *S) TestNoResponsiveBackends(c *C) {
@@ -1145,7 +1145,7 @@ func (s *S) TestNoResponsiveBackends(c *C) {
 		c.Assert(res.StatusCode, Equals, 503)
 		data, err := ioutil.ReadAll(res.Body)
 		c.Assert(err, IsNil)
-		c.Assert(string(data), Equals, "Service Unavailable\n")
+		c.Assert(strings.Contains(string(data), "Service unavailable"), Equals, true)
 	}
 
 	for _, test := range tests {
@@ -1299,7 +1299,11 @@ func (s *S) TestReusedConnFailureRetriesAnotherBackend(c *C) {
 		res.Body.Close()
 		c.Assert(err, IsNil)
 		c.Assert(res.StatusCode, Equals, test.status)
-		c.Assert(string(data), Equals, test.body)
+		if test.status == 503 {
+			c.Assert(strings.Contains(string(data), "Service unavailable"), Equals, true)
+		} else {
+			c.Assert(string(data), Equals, test.body)
+		}
 	}
 }
 
@@ -1372,7 +1376,7 @@ func (s *S) runTestErrorAfterConnOnlyHitsOneBackend(c *C, upgrade bool) {
 	c.Assert(res.StatusCode, Equals, 503)
 	data, err := ioutil.ReadAll(res.Body)
 	c.Assert(err, IsNil)
-	c.Assert(string(data), Equals, "Service Unavailable\n")
+	c.Assert(strings.Contains(string(data), "Service unavailable"), Equals, true)
 }
 
 // issue #152

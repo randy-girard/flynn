@@ -38,7 +38,7 @@ var (
 		"Transfer-Encoding",
 	}
 
-	serviceUnavailable = []byte("Service Unavailable\n")
+	serviceUnavailable = []byte(serviceUnavailablePage)
 )
 
 // ReverseProxy is an HTTP Handler that takes an incoming request and
@@ -228,16 +228,56 @@ func (p *ReverseProxy) errResponse(err error, rw http.ResponseWriter) int {
 		rw.WriteHeader(499)
 		return 499
 	}
+	page := serviceUnavailable
 	if len(p.Error503Page) > 0 {
-		rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-		rw.WriteHeader(http.StatusServiceUnavailable)
-		rw.Write(p.Error503Page)
-		return 503
+		page = p.Error503Page
 	}
+	rw.Header().Set("Content-Type", "text/html; charset=utf-8")
 	rw.WriteHeader(http.StatusServiceUnavailable)
-	rw.Write(serviceUnavailable)
+	rw.Write(page)
 	return 503
 }
+
+const serviceUnavailablePage = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Service unavailable</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #121018;
+    color: #f4f1ea;
+    font-family: Georgia, "Iowan Old Style", Palatino, serif;
+  }
+  main { max-width: 28rem; padding: 2.5rem 1.5rem; text-align: center; }
+  .kicker {
+    margin: 0 0 0.75rem;
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #c4b8a5;
+  }
+  h1 { margin: 0 0 0.75rem; font-size: 2rem; font-weight: 500; }
+  p { margin: 0; line-height: 1.5; color: #d9d0c3; }
+</style>
+</head>
+<body>
+<main>
+  <p class="kicker">503</p>
+  <h1>Service unavailable</h1>
+  <p>This application is not accepting requests right now. Try again in a moment.</p>
+</main>
+</body>
+</html>
+`
 
 func clientError(err error) bool {
 	_, ok := err.(requestErr)
