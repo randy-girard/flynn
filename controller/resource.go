@@ -98,9 +98,18 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		respondWithError(w, err)
 		return
 	}
+	rollbackProvision := func() {
+		ids := resource.DeprovisionIDs(data.ID, data.Env)
+		if err := resource.DeprovisionAny(p.URL, ids...); err != nil {
+			if l, ok := ctxhelper.LoggerFromContext(ctx); ok {
+				l.Error("rollback provision failed", "err", err, "id", data.ID)
+			}
+		}
+	}
 	data.Env = resname.ResourceEnv(c.appReleaseEnv(target), data.Env, provisionAs(config))
 	env, err := c.stampInstancePort(p, data.ID, data.Env)
 	if err != nil {
+		rollbackProvision()
 		respondWithError(w, err)
 		return
 	}
@@ -117,12 +126,13 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	}
 
 	if err := schema.Validate(res); err != nil {
+		rollbackProvision()
 		respondWithError(w, err)
 		return
 	}
 
 	if err := c.resourceRepo.Add(res); err != nil {
-		// TODO: attempt to "rollback" provisioning
+		rollbackProvision()
 		respondWithError(w, err)
 		return
 	}
