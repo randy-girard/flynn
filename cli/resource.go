@@ -990,25 +990,76 @@ func runResourceExpose(args *docopt.Args, client controller.Client) error {
 		}
 	}
 
+	appName, _ := spec.ResolveAppService(res.Env)
 	existing, err := client.AppRouteList(mustApp())
 	if err != nil {
 		return err
 	}
 	if prev := resourceexpose.FindTCPRoute(existing, service, domain); prev != nil {
-		fmt.Printf("%s already exposed as %s on port %d (%s)\n", resourceDisplayName(res), prev.Domain, prev.Port, prev.FormattedID())
-		fmt.Println(resourceexpose.FirewallFollowsRoute(int(prev.Port), true))
+		fmt.Println(exposedResourceURL(client, res, appName, prev))
 		return nil
 	}
 
 	if err := client.CreateRoute(mustApp(), route); err != nil {
 		return err
 	}
-	fmt.Printf("%s listening on port %d\n", route.FormattedID(), route.Port)
-	if route.Domain != "" {
-		fmt.Printf("hostname %s tls_mode=%s\n", route.Domain, displayTLSMode(route.TLSMode))
-	}
-	fmt.Println(resourceexpose.FirewallFollowsRoute(int(route.Port), true))
+	fmt.Println(exposedResourceURL(client, res, appName, route))
 	return nil
+}
+
+func exposedResourceURL(client controller.Client, res *ct.Resource, appName string, route *router.Route) string {
+	if route == nil {
+		return ""
+	}
+	host := exposeNodeIP(client, appName)
+	if host == "" {
+		host = strings.TrimSpace(route.Domain)
+	}
+	env := map[string]string{}
+	if res != nil && res.Env != nil {
+		env = res.Env
+	}
+	return resourceexpose.ExposedURL(env, host, int(route.Port))
+}
+
+type hostAPI interface {
+	Get(path string, out interface{}) error
+}
+
+func exposeNodeIP(client controller.Client, appName string) string {
+	appName = strings.TrimSpace(appName)
+	getter, ok := client.(hostAPI)
+	if !ok || client == nil || appName == "" {
+		return ""
+	}
+	jobs, err := client.JobList(appName)
+	if err != nil {
+		return ""
+	}
+	hostID := ""
+	for _, job := range jobs {
+		if job == nil || job.HostID == "" || job.State != ct.JobStateUp {
+			continue
+		}
+		hostID = job.HostID
+		break
+	}
+	if hostID == "" {
+		return ""
+	}
+	var hosts []struct {
+		ID   string `json:"id"`
+		Addr string `json:"addr"`
+	}
+	if err := getter.Get("/hosts", &hosts); err != nil {
+		return ""
+	}
+	for _, h := range hosts {
+		if h.ID == hostID {
+			return resourceexpose.HostAddrIP(h.Addr)
+		}
+	}
+	return ""
 }
 
 func runResourceUnexpose(args *docopt.Args, client controller.Client) error {

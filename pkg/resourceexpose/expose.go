@@ -2,7 +2,9 @@ package resourceexpose
 
 import (
 	"fmt"
+	"net"
 	"net/url"
+	"strconv"
 	"strings"
 
 	router "github.com/randy-girard/flynn/router/types"
@@ -68,9 +70,56 @@ func ServiceForResource(env map[string]string) (Spec, string, error) {
 // or removed. Hosts open and close the port from the live route list.
 func FirewallFollowsRoute(port int, open bool) string {
 	if open {
-		return fmt.Sprintf("The cluster firewall will open TCP %d. No separate firewall command is required.", port)
+		return fmt.Sprintf("The cluster firewall will open TCP %d.", port)
 	}
-	return fmt.Sprintf("The cluster firewall will close TCP %d. No separate firewall command is required.", port)
+	return fmt.Sprintf("The cluster firewall will close TCP %d.", port)
+}
+
+// HostAddrIP returns the IP or hostname from a controller host address
+// (192.168.57.20:1113 or http://192.168.57.20:1113).
+func HostAddrIP(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+	if u, err := url.Parse(addr); err == nil && u.Host != "" {
+		addr = u.Host
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
+}
+
+// ExposedURL rewrites the resource connection URL onto the node address and
+// TCP route port. Credentials, database, and query string stay as they are.
+func ExposedURL(env map[string]string, host string, port int) string {
+	host = strings.TrimSpace(host)
+	raw := connectionURL(env)
+	if host == "" || port <= 0 {
+		return raw
+	}
+	if raw == "" {
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	u.Host = net.JoinHostPort(host, strconv.Itoa(port))
+	return u.String()
+}
+
+func connectionURL(env map[string]string) string {
+	if len(env) == 0 {
+		return ""
+	}
+	for _, key := range []string{"DATABASE_URL", "REDIS_URL", "CLICKHOUSE_URL", "KAFKA_URL", "POSTGRES_DATABASE_URL"} {
+		if v := strings.TrimSpace(env[key]); v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Lookup returns the expose spec for a provider name or alias.
@@ -112,6 +161,11 @@ func (s Spec) ResolveAppService(appEnv map[string]string) (app, service string) 
 		app = s.DefaultApp
 	}
 	service = s.DefaultService
+	// Shared appliances (app "postgres") keep their discoverd service.
+	// An isolated instance is its own service, which is also the app name.
+	if service == "" || (app != "" && s.DefaultApp != "" && app != s.DefaultApp) {
+		service = app
+	}
 	if service == "" {
 		service = app
 	}

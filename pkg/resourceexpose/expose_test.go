@@ -16,6 +16,10 @@ func TestLookupAndResolve(t *testing.T) {
 	if app != "postgres" || svc != "postgres" {
 		t.Fatalf("resolve postgres %s %s", app, svc)
 	}
+	app, svc = s.ResolveAppService(map[string]string{"FLYNN_POSTGRES": "postgresql-canyon-28550"})
+	if app != "postgresql-canyon-28550" || svc != "postgresql-canyon-28550" {
+		t.Fatalf("isolated postgres %s %s", app, svc)
+	}
 
 	mysql, err := Lookup("mysql")
 	if err != nil {
@@ -121,11 +125,41 @@ func TestServiceForResourceUsesThatInstanceOnly(t *testing.T) {
 }
 
 func TestFirewallFollowsRoute(t *testing.T) {
-	if got := FirewallFollowsRoute(3306, true); got != "The cluster firewall will open TCP 3306. No separate firewall command is required." {
+	if got := FirewallFollowsRoute(3306, true); got != "The cluster firewall will open TCP 3306." {
 		t.Fatal(got)
 	}
-	if got := FirewallFollowsRoute(3306, false); got != "The cluster firewall will close TCP 3306. No separate firewall command is required." {
+	if got := FirewallFollowsRoute(3306, false); got != "The cluster firewall will close TCP 3306." {
 		t.Fatal(got)
+	}
+}
+
+func TestHostAddrIP(t *testing.T) {
+	if got := HostAddrIP("192.168.57.20:1113"); got != "192.168.57.20" {
+		t.Fatal(got)
+	}
+	if got := HostAddrIP("http://192.168.57.21:1113"); got != "192.168.57.21" {
+		t.Fatal(got)
+	}
+}
+
+func TestExposedURLRewritesHostAndPort(t *testing.T) {
+	env := map[string]string{
+		"DATABASE_URL": "postgres://app:pw@leader.postgresql-canyon-28550.discoverd:5432/db?sslmode=require",
+	}
+	got := ExposedURL(env, "192.168.57.20", 3001)
+	want := "postgres://app:pw@192.168.57.20:3001/db?sslmode=require"
+	if got != want {
+		t.Fatalf("got %s", got)
+	}
+	redis := ExposedURL(map[string]string{
+		"REDIS_URL": "redis://:secret@leader.redis-basin-45047.discoverd:6379",
+	}, "192.168.57.21", 3004)
+	if redis != "redis://:secret@192.168.57.21:3004" {
+		t.Fatal(redis)
+	}
+	kafka := ExposedURL(map[string]string{"KAFKA_URL": "10.0.0.8:9092"}, "192.168.57.22", 3008)
+	if kafka != "192.168.57.22:3008" {
+		t.Fatal(kafka)
 	}
 }
 
