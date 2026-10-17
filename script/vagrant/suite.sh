@@ -2149,9 +2149,16 @@ add_throwaway_resource() {
     # Database runtimes live in controller postgres. Retry resource:add for
     # provision races (provider not ready yet).
     for attempt in $(seq 1 20); do
+      before="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
       if flynn1 -a "${app}" resource add "${cand}"; then
         added=1
         echo "resource:add ${cand} on ${app}"
+        break
+      fi
+      after="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      if [[ "${before}" != "${after}" ]]; then
+        echo "resource:add ${cand} created an instance but did not finish; not provisioning another" >&2
+        added=1
         break
       fi
       echo "resource:add ${cand} failed (attempt ${attempt}/20); retrying" >&2
@@ -2257,9 +2264,16 @@ add_throwaway_follower() {
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
     for attempt in $(seq 1 20); do
+      before="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
       if flynn1 -a "${app}" resource add "${cand}" "${flag}" "${leader}" --as FOLLOWER; then
         added=1
         echo "resource:add ${cand} ${flag} ${leader} --as FOLLOWER on ${app}"
+        break
+      fi
+      after="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      if [[ "${before}" != "${after}" ]]; then
+        echo "resource:add ${cand} ${flag} created an instance but did not finish; not provisioning another" >&2
+        added=1
         break
       fi
       echo "resource:add ${cand} ${flag} failed (attempt ${attempt}/20); retrying" >&2

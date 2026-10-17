@@ -31,6 +31,8 @@ need "${smoke}" 'resource_add_candidates' \
   "mysql resource:add must try mysql then fall back to mariadb"
 need "${smoke}" 'add_throwaway_resource' \
   "each engine must be resource:added on the throwaway app"
+need "${smoke}" 'created an instance but did not finish; not provisioning another' \
+  "a failed resource:add that already created an instance must not be retried"
 need "${smoke}" 'throwaway_resource_ok' \
   "provision must accept env URL or a listed resource"
 need "${smoke}" 'wait_selected_datastores_ready "after throwaway resource add" 1' \
