@@ -34,6 +34,7 @@ import (
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/apparmorpolicy"
 	"github.com/randy-girard/flynn/host/containerinit"
+	"github.com/randy-girard/flynn/host/jobenv"
 	"github.com/randy-girard/flynn/host/logmux"
 	"github.com/randy-girard/flynn/host/resource"
 	host "github.com/randy-girard/flynn/host/types"
@@ -228,12 +229,7 @@ func writeContainerConfig(path string, c *containerinit.Config, envs ...map[stri
 	}
 	defer f.Close()
 
-	c.Env = make(map[string]string)
-	for _, e := range envs {
-		for k, v := range e {
-			c.Env[k] = v
-		}
-	}
+	c.Env = jobenv.Merge(envs...)
 
 	return json.NewEncoder(f).Encode(c)
 }
