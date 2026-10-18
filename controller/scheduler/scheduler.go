@@ -1167,17 +1167,11 @@ func (s *Scheduler) findVolume(job *Job, req *ct.VolumeReq) *Volume {
 			continue
 		}
 
-		// skip if the app, type or path do not match
+		// skip if the app, type or path do not match. A different release of
+		// the same app still owns this data: dropping that formation must
+		// not make the next job allocate an empty volume.
 		if vol.AppID != job.AppID {
 			continue
-		}
-		if vol.ReleaseID != job.ReleaseID {
-			// only adopt volumes from a release that the scheduler still
-			// knows belongs to this app, to avoid picking up a stale
-			// volume left behind for an unrelated app
-			if !s.releaseKnownForApp(vol.AppID, vol.ReleaseID) {
-				continue
-			}
 		}
 		if vol.JobType != job.Type {
 			continue
@@ -1292,9 +1286,6 @@ func (s *Scheduler) busyMatchingPersistentVolume(job *Job, req *ct.VolumeReq) *V
 		if vol.AppID != job.AppID || vol.JobType != job.Type || vol.Path != req.Path {
 			continue
 		}
-		if vol.ReleaseID != job.ReleaseID && !s.releaseKnownForApp(vol.AppID, vol.ReleaseID) {
-			continue
-		}
 		if vol.JobID == nil || *vol.JobID == job.ID {
 			continue
 		}
@@ -1308,13 +1299,6 @@ func (s *Scheduler) busyMatchingPersistentVolume(job *Job, req *ct.VolumeReq) *V
 		return vol
 	}
 	return nil
-}
-
-// releaseKnownForApp reports whether the scheduler currently has a formation
-// recorded for the given (appID, releaseID) pair, which it does for every
-// release with a (possibly zero) formation that the controller has loaded.
-func (s *Scheduler) releaseKnownForApp(appID, releaseID string) bool {
-	return s.formations.Get(appID, releaseID) != nil
 }
 
 func (s *Scheduler) volumeHeldByLiveJob(vol *Volume) bool {
@@ -2570,17 +2554,33 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 		s.assignJobName(job)
 	}
 
-	// if the host job is running but has a service, wait for either
-	// service or router events before marking the job as running
+	// A placement that is still pending or starting waits for its discoverd
+	// registration before it counts as running. A job this scheduler already
+	// stopped, or one it is no longer tracking, will not get that event
+	// again. Leaving it unmarked keeps the volume claimed, so the
+	// replacement stays pending and the set never returns to formation.
 	if activeJob.Status == host.StatusRunning && job.Service() != "" {
-		// TODO: consider adding a hard timeout to mark the job
-		//	 as running in case we never get any events
+		if !serviceReplayNeedsRunning(job.State) {
+			return job
+		}
+		s.handleJobStatus(job, host.StatusRunning)
 		return job
 	}
 
 	s.handleJobStatus(job, activeJob.Status)
 
 	return job
+}
+
+// serviceReplayNeedsRunning is true when a host job that is already running
+// should be marked running without waiting for a discoverd event.
+func serviceReplayNeedsRunning(state JobState) bool {
+	switch state {
+	case JobStatePending, JobStateStarting, JobStateStopping:
+		return false
+	default:
+		return true
+	}
 }
 
 func (s *Scheduler) markAsStopped(job *Job) {

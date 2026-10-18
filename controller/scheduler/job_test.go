@@ -3,8 +3,94 @@ package main
 import (
 	"testing"
 
+	"github.com/inconshreveable/log15"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/types"
 )
+
+func TestServiceReplayNeedsRunning(t *testing.T) {
+	if serviceReplayNeedsRunning(JobStatePending) || serviceReplayNeedsRunning(JobStateStarting) || serviceReplayNeedsRunning(JobStateStopping) {
+		t.Fatal("a placement still starting, or a stop in progress, must wait")
+	}
+	if !serviceReplayNeedsRunning(JobStateStopped) || !serviceReplayNeedsRunning("") || !serviceReplayNeedsRunning(JobStateRunning) {
+		t.Fatal("a stopped or untracked service job that is still running on the host must be marked running")
+	}
+}
+
+func TestReplayedServiceJobIsMarkedRunning(t *testing.T) {
+	persist := make(chan interface{}, 2)
+	formation := &Formation{
+		ExpandedFormation: &ct.ExpandedFormation{
+			Release: &ct.Release{
+				Processes: map[string]ct.ProcessType{
+					"mongodb": {Service: "mongodb-tide"},
+				},
+			},
+		},
+	}
+	job := &Job{
+		ID:        "abc",
+		JobID:     "devnode1-abc",
+		Type:      "mongodb",
+		AppID:     "app",
+		ReleaseID: "rel",
+		HostID:    "devnode1",
+		State:     JobStateStopped,
+		Formation: formation,
+	}
+	s := &Scheduler{
+		logger:            log15.New(),
+		jobs:              Jobs{"abc": job},
+		controllerPersist: persist,
+	}
+	got := s.handleActiveJob(&host.ActiveJob{
+		HostID: "devnode1",
+		Status: host.StatusRunning,
+		Job: &host.Job{
+			ID: "devnode1-abc",
+			Metadata: map[string]string{
+				host.MetaControllerApp:     "app",
+				host.MetaControllerType:    "mongodb",
+				"flynn-controller.release": "rel",
+			},
+		},
+	})
+	if got == nil || got.State != JobStateRunning {
+		t.Fatalf("state=%q, want running", job.State)
+	}
+	select {
+	case <-persist:
+	default:
+		t.Fatal("replayed service job was not persisted as running")
+	}
+
+	pending := &Job{
+		ID:        "new",
+		JobID:     "devnode1-new",
+		Type:      "mongodb",
+		AppID:     "app",
+		ReleaseID: "rel",
+		HostID:    "devnode1",
+		State:     JobStatePending,
+		Formation: formation,
+	}
+	s.jobs["new"] = pending
+	s.handleActiveJob(&host.ActiveJob{
+		HostID: "devnode1",
+		Status: host.StatusRunning,
+		Job: &host.Job{
+			ID: "devnode1-new",
+			Metadata: map[string]string{
+				host.MetaControllerApp:     "app",
+				host.MetaControllerType:    "mongodb",
+				"flynn-controller.release": "rel",
+			},
+		},
+	})
+	if pending.State != JobStatePending {
+		t.Fatalf("pending placement state=%q, want pending until discoverd registers it", pending.State)
+	}
+}
 
 func TestControllerJobSkipsNilVolumes(t *testing.T) {
 	j := &Job{

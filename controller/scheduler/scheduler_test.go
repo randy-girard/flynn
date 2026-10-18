@@ -1162,10 +1162,9 @@ func (TestSuite) TestFindVolumePrefersMostRecentlyUsed(c *C) {
 }
 
 // TestFindVolumeCrossRelease covers the singleton-sirenia volume-reuse
-// path: by default the scheduler must adopt an existing /data volume
-// belonging to a different release of the same app, but only if that
-// release is still recorded as a known formation (to avoid picking up a
-// stale volume left behind for an unrelated app).
+// path: the scheduler must adopt an existing /data volume belonging to
+// the same app, including one whose release formation is already gone.
+// A different app's volume is never adopted.
 func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	const (
 		oldReleaseID = "release-old"
@@ -1226,11 +1225,12 @@ func (TestSuite) TestFindVolumeCrossRelease(c *C) {
 	c.Assert(got, NotNil)
 	c.Assert(got.ID, Equals, "vol-old")
 
-	// the volume's release is no longer known to the scheduler: fall
-	// through and create a new one (findVolume returns nil)
+	// the volume's release formation is gone. The dataset is still this
+	// app's data; adopting it is required. A new empty volume would lose it.
 	delete(s.formations, utils.FormationKey{AppID: testAppID, ReleaseID: oldReleaseID})
 	got = s.findVolume(jobFor(testAppID, newReleaseID, "postgres"), &ct.VolumeReq{Path: "/data"})
-	c.Assert(got, IsNil)
+	c.Assert(got, NotNil)
+	c.Assert(got.ID, Equals, "vol-old")
 	addFormation(testAppID, oldReleaseID) // restore for following assertions
 
 	// app mismatch is rejected
