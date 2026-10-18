@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/flynn/que-go"
 	"github.com/inconshreveable/log15"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
+	"github.com/randy-girard/flynn/pkg/datastoreguard"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
 
@@ -34,6 +36,22 @@ func (c *context) HandleAppDeletion(job *que.Job) (err error) {
 		return err
 	}
 	log = log.New("app_id", app.ID)
+
+	name := strings.TrimSpace(app.Name)
+	if name == "" && app.ID != "" {
+		got, getErr := c.client.GetApp(app.ID)
+		if getErr != nil {
+			log.Error("error loading app before deletion", "err", getErr)
+			return getErr
+		}
+		if got != nil {
+			name = strings.TrimSpace(got.Name)
+		}
+	}
+	if err := datastoreguard.RefuseIfReferenced(c.client, name); err != nil {
+		log.Error("refusing to delete referenced datastore", "err", err)
+		return err
+	}
 
 	a := ct.AppDeletion{AppID: app.ID}
 	defer func() { c.createEvent(&a, err) }()

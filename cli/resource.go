@@ -661,17 +661,19 @@ func runResourceRemove(args *docopt.Args, client controller.Client) error {
 		return fmt.Errorf("cannot delete %s from %s; this app is attached but does not own the resource. Use flynn resource:detach %s %s", resourceDisplayName(resRef), app.Name, providerName, resourceDisplayName(resRef))
 	}
 
-	res, err := client.DeleteResource(providerName, resRef.ID)
-	if err != nil {
-		return err
-	}
-
+	// Drop the attachment from the app before the datastore is destroyed.
+	// The controller refuses to delete an app another release still references.
 	release, err := client.GetAppRelease(mustApp())
 	if err != nil {
 		return err
 	}
-	env := resname.UnsetAttachment(release.Env, res.Env)
+	env := resname.UnsetAttachment(release.Env, resRef.Env)
 	releaseID, err := setEnv(client, "", env)
+	if err != nil {
+		return err
+	}
+
+	res, err := client.DeleteResource(providerName, resRef.ID)
 	if err != nil {
 		return err
 	}
