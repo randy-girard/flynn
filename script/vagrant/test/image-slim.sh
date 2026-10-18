@@ -106,11 +106,11 @@ if grep -q 'libseccomp-dev' "${ROOT}/host/img/packages.sh"; then
   exit 1
 fi
 
-need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-org-server' \
-  "mongodb plugin must install mongod, not the full mongodb-org metapackage"
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongod' \
+  "mongodb plugin must install the mongod binary, not the full mongodb-org metapackage"
 need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-database-tools' \
   "mongodb plugin must keep mongodump/mongorestore"
-need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" 'mongodb-mongosh' \
+need "${ROOT}/../flynn-plugin-mongodb/img/packages.sh" '/usr/bin/mongosh' \
   "mongodb plugin must keep mongosh"
 if grep -qE 'apt-get install -y mongodb-org[^-]' "${ROOT}/../flynn-plugin-mongodb/img/packages.sh"; then
   echo "mongodb plugin must not install the mongodb-org metapackage" >&2
@@ -262,10 +262,14 @@ elif [[ -f "${ROOT}/appliance/clickhouse/img/packages.sh" ]]; then
   exit 1
 fi
 
-need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'libcap2-bin' \
-  "clickhouse plugin must still install libcap2-bin long enough to clear file caps"
-need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'purge' \
-  "clickhouse plugin must purge libcap2-bin after setcap"
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" '/usr/bin/clickhouse' \
+  "clickhouse plugin must install the clickhouse binary from the vendored tarball"
+need "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh" 'bounding set' \
+  "clickhouse plugin must not rely on file capabilities under the container bounding set"
+if grep -qE 'apt-get install.*clickhouse' "${ROOT}/../flynn-plugin-clickhouse/img/packages.sh"; then
+  echo "clickhouse plugin must not install ClickHouse from apt" >&2
+  exit 1
+fi
 
 need "${ROOT}/builder/img/go.sh" 'go/test' \
   "Go toolchain image must drop GOROOT test/doc trees"
