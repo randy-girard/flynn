@@ -260,6 +260,8 @@ print("resources=%d expected=%d cluster-engines=%d inventory=%s" % (
     ",".join("%s:%s:%d" % (rid, v[1], v[2]) for rid, v in sorted(found.items()) if v[1])))
 PY
 
+section orphans python3 "${here}/orphan-replicas.py"
+
 if [[ ${#failed[@]} -gt 0 ]]; then
   echo "unhealthy: ${failed[*]}"
   exit 1

@@ -792,7 +792,7 @@ done
 # Resource accounting covers the cluster datastores: the baseline inventory
 # is passed back to every sample, and each cluster engine job is checked on
 # its /metrics/log.
-for want in "section resources" "EXPECT_RESOURCES" ":9180/metrics/log" "live_brokers" "healthy_members" "readonly_replicas" "inventory="; do
+for want in "section resources" "EXPECT_RESOURCES" ":9180/metrics/log" "live_brokers" "healthy_members" "readonly_replicas" "inventory=" "section orphans" "orphan-replicas.py"; do
   if ! grep -Fq -e "${want}" "${mod}/guest/check-health.sh"; then
     echo "guest/check-health.sh resources section missing ${want}" >&2
     exit 1
@@ -809,6 +809,10 @@ if ! grep -Fq 'host.endswith(".discoverd")' "${mod}/guest/chaos-fault.sh"; then
   exit 1
 fi
 # The embedded python in the health sample and fault scripts must compile.
+if ! ORPHAN_REPLICA_SELFTEST=1 python3 "${mod}/guest/orphan-replicas.py"; then
+  echo "orphan-replicas.py selftest failed" >&2
+  exit 1
+fi
 for f in guest/check-health.sh guest/chaos-fault.sh; do
   awk '/<<.?PY.?$/ { on = 1; n++; next } /^PY$/ { on = 0; next } on { print > ("'"${TMPDIR:-/tmp}"'/py-check-" n ".py") }' "${mod}/${f}"
   for py in "${TMPDIR:-/tmp}"/py-check-*.py; do

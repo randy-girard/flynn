@@ -3111,10 +3111,7 @@ flynn_git_safe_directory "${REPO_IN_VM}"
 # discoverd/flynn-host so script/build-flynn rebuilds them locally.
 rm -f "${REPO_IN_VM}/build/bin/discoverd" "${REPO_IN_VM}/build/bin/flynn-host" "${REPO_IN_VM}/build/bin/flynn-init"
 
-if [[ ! -x /usr/local/go/bin/go ]]; then
-  echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
-  exit 1
-fi
+bash "${REPO_IN_VM}/script/vagrant/guest/repair-builder-gate.sh"
 
 echo "==> Starting PostgreSQL"
 pg_version="\$(ls /usr/lib/postgresql 2>/dev/null | sort -V | tail -n1 || true)"
@@ -3251,10 +3248,7 @@ cd "${REPO_IN_VM}"
 # shellcheck disable=SC1091
 source "${REPO_IN_VM}/script/lib/git-safe-dir.sh"
 flynn_git_safe_directory "${REPO_IN_VM}"
-if [[ ! -x /usr/local/go/bin/go ]]; then
-  echo "Go toolchain missing on builder; run: vagrant provision builder" >&2
-  exit 1
-fi
+bash "${REPO_IN_VM}/script/vagrant/guest/repair-builder-gate.sh"
 
 # Job isolation (EnableJobIsolation) needs ipset on this VM, not only in the
 # cluster host squashfs. Existing builders skipped the setup.sh package add.
@@ -5056,6 +5050,10 @@ EOF
     APP_NAME="${saved_app}"
     return 1
   fi
+  if ! assert_no_orphan_replicas "datastores"; then
+    APP_NAME="${saved_app}"
+    return 1
+  fi
   APP_NAME="${saved_app}"
   echo "throwaway app ${app} provisioned, seeded, followed, and torn down ($(joined_datastores))"
 }
@@ -6716,6 +6714,28 @@ run_volume_step() {
   run_step "${vol_title}" step_volume "${label}"
 }
 
+# A finished image refresh or follower replace must not leave an isolated
+# datastore app that no resource points at. One young follower of a live
+# primary is the copy still in progress.
+assert_no_orphan_replicas() {
+  local label=$1
+  local out rc=0
+  out="$(node_root_script node1 <<EOF
+set -euo pipefail
+python3 "${REPO_IN_VM}/script/vagrant/guest/orphan-replicas.py"
+EOF
+)" || rc=$?
+  out="$(printf '%s' "${out}" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+  if [[ "${rc}" -eq 0 ]]; then
+    record_check "${label}" "orphan-replicas" "PASS" "${out:-orphan replicas=0}"
+    echo "orphan-replicas ${label}: PASS ${out}"
+    return 0
+  fi
+  record_check "${label}" "orphan-replicas" "FAIL" "${out}"
+  echo "orphan-replicas ${label}: FAIL ${out}" >&2
+  return 1
+}
+
 step_verify_before() {
   wait_for "app HTTP pre-upgrade" 180 probe_app_http
   assert_app_http pre-upgrade
@@ -6726,6 +6746,7 @@ step_verify_before() {
   wait_and_assert_docker_apps pre-upgrade
   assert_databases pre-upgrade
   wait_selected_sirenia_ha "before upgrade" || return 1
+  assert_no_orphan_replicas pre-upgrade || return 1
 }
 
 step_upgrade() {
@@ -6759,6 +6780,7 @@ step_verify_after() {
   wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   assert_databases "${label}"
+  assert_no_orphan_replicas "${label}" || return 1
   node_ssh node1 'sudo flynn-host version' || true
 }
 
@@ -6772,6 +6794,7 @@ step_verify_after_restore() {
   wait_and_assert_buildpack_app "${label}"
   wait_and_assert_docker_apps "${label}"
   assert_restored_datastores
+  assert_no_orphan_replicas "${label}" || return 1
   node_ssh node1 'sudo flynn-host version' || true
 }
 

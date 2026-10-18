@@ -362,6 +362,8 @@ need 'CLUSTER_STARTED' \
   "pre-cluster unit-test failures must not destroy existing cluster nodes"
 need 'step_builder_unit_tests' \
   "smoke must run Linux unit tests on the builder VM before booting cluster nodes"
+need 'repair-builder-gate.sh' \
+  "smoke must repair a hollow builder Go toolchain and empty snakeoil cert before the Linux gate"
 need 'step_vagrant_up_builder' \
   "builder must come up before cluster nodes so unit tests can gate the 3-node boot"
 need 'ensure_builder_running' \

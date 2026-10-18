@@ -43,6 +43,8 @@ need "${smoke}" 'exercise_datastore_followers' \
   "throwaway provision must create followers and verify seed on them"
 need "${smoke}" 'teardown_throwaway_datastores' \
   "throwaway provision must resource:remove after seed and follow"
+need "${smoke}" 'assert_no_orphan_replicas' \
+  "smoke must fail when a finished datastore replica is left as a system app"
 need "${smoke}" '--follow' \
   "replica engines must be provisioned with resource:add --follow"
 need "${ROOT}/cli/resource.go" 'listRec(w, "NAME", "PROVIDER", "ID")' \
