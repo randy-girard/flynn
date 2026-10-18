@@ -6271,8 +6271,16 @@ step_cli_functions() {
     echo "cli ${label} resource: FAIL rc=${rc}" >&2
     failed=1
   fi
-  cli_probe "${label}" "cli-provider" "postgres" \
-    flynn1 provider || failed=1
+  rc=0
+  out="$(flynn1 provider 2>&1)" || rc=$?
+  if [[ "${rc}" -ne 0 ]] && printf '%s' "${out}" | grep -q 'not a flynn command'; then
+    record_check "${label}" "cli-provider" "PASS" "plugins register providers"
+    echo "cli ${label} cli-provider: PASS"
+  else
+    record_check "${label}" "cli-provider" "FAIL" "rc=${rc} $(printf '%s' "${out}" | tr '\n' ' ' | cut -c1-80)"
+    echo "cli ${label} cli-provider: FAIL rc=${rc} ${out}" >&2
+    failed=1
+  fi
   cli_probe "${label}" "cli-route" "http|${APP_NAME}" \
     flynn1 -a "${APP_NAME}" route || failed=1
   cli_probe "${label}" "cli-release" "." \
@@ -6336,8 +6344,11 @@ step_cli_functions() {
     flynn1 -a "${DOCKER_PUSH_APP_NAME}" log -n 20 || failed=1
   cli_run_job "${label}" "docker-push-run" "${DOCKER_PUSH_APP_NAME}" "docker-push-cli" \
     echo docker-push-cli || failed=1
+  # An app with no postgres attachment is denied leader.postgres.discoverd.
+  if datastore_wanted postgres; then
   cli_run_job "${label}" "net-db-leader" "${APP_NAME}" "db-leader-ok" \
     bash -c 'echo >/dev/tcp/leader.postgres.discoverd/5432 && echo db-leader-ok' || failed=1
+  fi
 
   flynn1 -a "${APP_NAME}" meta set "smoke_cli=${label}" >/dev/null || true
   cli_probe "${label}" "cli-meta" "smoke_cli" \

@@ -103,6 +103,10 @@ need 'net-isolate-api' \
   "CLI step must prove user jobs cannot reach postgres-api"
 need 'leader.postgres.discoverd' \
   "CLI step must prove user jobs can still reach the provisioned DATABASE_URL host"
+need 'not a flynn command' \
+  "CLI step must reject flynn provider; plugins register providers"
+need 'datastore_wanted postgres' \
+  "CLI step must dial leader.postgres.discoverd only when postgres is provisioned"
 need 'docker-cli-ps' \
   "CLI step must list the Dockerfile app jobs"
 need 'docker-cli-ps" "web"' \
