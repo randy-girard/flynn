@@ -11,8 +11,15 @@ import (
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
 
-func TestMuxWriteSystemLine(t *testing.T) {
+func newTestMux(t *testing.T) *Mux {
+	t.Helper()
 	m := New("host1", t.TempDir(), log15.New())
+	t.Cleanup(m.waitIdle)
+	return m
+}
+
+func TestMuxWriteSystemLine(t *testing.T) {
+	m := newTestMux(t)
 	ch := make(chan message, 1)
 	unsub := m.subscribe("app-1", ch)
 	defer unsub()
@@ -50,7 +57,7 @@ func TestMuxWriteSystemLine(t *testing.T) {
 }
 
 func TestMuxFollowKeepsJobIDInProcID(t *testing.T) {
-	m := New("host1", t.TempDir(), log15.New())
+	m := newTestMux(t)
 	ch := make(chan message, 1)
 	unsub := m.subscribe("app-1", ch)
 	defer unsub()
@@ -100,7 +107,7 @@ func sdParam(sd *rfc5424.StructuredData, name string) string {
 }
 
 func TestMuxWriteSkipsEmptyApp(t *testing.T) {
-	m := New("host1", t.TempDir(), log15.New())
+	m := newTestMux(t)
 	ch := make(chan message, 1)
 	unsub := m.subscribe("", ch)
 	defer unsub()
@@ -120,7 +127,7 @@ func TestMuxWriteDoesNotBlockOnStalledFollower(t *testing.T) {
 	broadcastTimeout = 50 * time.Millisecond
 	defer func() { broadcastTimeout = old }()
 
-	m := New("host1", t.TempDir(), log15.New())
+	m := newTestMux(t)
 	stalled := make(chan message) // unbuffered and never read
 	unsub := m.subscribe("app-1", stalled)
 	defer unsub()
@@ -146,6 +153,7 @@ func TestMuxWriteDoesNotBlockOnStalledFollower(t *testing.T) {
 }
 
 func TestMuxWriteDoesNotBlockOnStuckDisk(t *testing.T) {
+	// The disk writer is blocked on purpose, so this test must not wait for it.
 	m := New("host1", t.TempDir(), log15.New())
 	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }
 	done := make(chan struct{})
@@ -163,7 +171,7 @@ func TestMuxWriteDoesNotBlockOnStuckDisk(t *testing.T) {
 }
 
 func TestMuxFollowPromotesPluginSampleToSystem(t *testing.T) {
-	m := New("host1", t.TempDir(), log15.New())
+	m := newTestMux(t)
 	ch := make(chan message, 4)
 	unsub := m.subscribe("app-1", ch)
 	defer unsub()
@@ -212,6 +220,7 @@ func TestMuxFollowPromotesPluginSampleToSystem(t *testing.T) {
 }
 
 func TestMuxFollowDoesNotStallWhenDiskIsStuck(t *testing.T) {
+	// The disk writer is blocked on purpose, so this test must not wait for it.
 	m := New("host1", t.TempDir(), log15.New())
 	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }
 	ch := make(chan message, 8)

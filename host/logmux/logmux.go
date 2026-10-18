@@ -51,6 +51,9 @@ type Mux struct {
 
 	appLogsMtx sync.Mutex
 	appLogs    map[string]*appLog
+	// diskWG counts in-flight log file writers. Tests wait for it before
+	// removing the temp log directory; production callers do not.
+	diskWG sync.WaitGroup
 
 	// diskWriter, if set, replaces lumberjack so tests can stall disk I/O.
 	diskWriter func(path string) io.WriteCloser
@@ -749,9 +752,14 @@ func (m *Mux) appLog(id string) *appLog {
 		diskCh: make(chan []byte, appLogDiskQueue),
 		w:      w,
 	}
+	m.diskWG.Add(1)
 	go l.writeDisk()
 	m.appLogs[id] = l
 	return l
+}
+
+func (m *Mux) waitIdle() {
+	m.diskWG.Wait()
 }
 
 // appLogDiskQueue is how many lines Follow may have in flight to disk. A
@@ -770,6 +778,7 @@ type appLog struct {
 }
 
 func (l *appLog) writeDisk() {
+	defer l.m.diskWG.Done()
 	defer l.w.Close()
 	for b := range l.diskCh {
 		if _, err := l.w.Write(b); err != nil {
