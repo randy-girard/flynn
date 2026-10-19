@@ -14,14 +14,14 @@ import (
 
 func init() {
 	Register("init", runInit, `
-usage: flynn-host init [options]
+usage: flynn-host init [--init-discovery] [--discovery=TOKEN] [--peer-ips=IPLIST] [--external-ip=IP] [--tag <tag>]... [--max-processes=N] [--file=NAME]
 
 options:
   --init-discovery    create a discovery token (requires DISCOVERY_SERVER, e.g. https://discovery.example.com)
   --discovery=TOKEN   join cluster with discovery token
   --peer-ips=IPLIST   join cluster using host IPs (must be already bootstrapped)
   --external-ip=IP    external IP address of host, defaults to the first IPv4 address of eth0
-  --tag=<tag>...      placement tag (KEY or KEY=VAL) written into host.json for the daemon
+  --tag=<tag>         placement tag (KEY or KEY=VAL) written into host.json for the daemon
   --max-processes=N   tenant job cap on this node (omit or 0 = unlimited)
   --file=NAME         file to write to [default: /etc/flynn/host.json]
   `)

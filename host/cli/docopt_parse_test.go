@@ -15,7 +15,7 @@ func parseHostCLI(t *testing.T, name string, argv []string) *docopt.Args {
 	if cmd == nil {
 		t.Fatalf("unknown flynn-host command %q", name)
 	}
-	parsed, err := docopt.Parse(cmd.usage, argv, true, "", strings.Contains(cmd.usage, "[--]"))
+	parsed, err := docopt.Parse(cmd.usage, argv, true, "", strings.Contains(cmd.usage, "[--]"), false)
 	if err != nil {
 		t.Fatalf("parse %v: %v", argv, err)
 	}
