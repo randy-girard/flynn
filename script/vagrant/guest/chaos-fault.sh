@@ -13,7 +13,7 @@ set -euo pipefail
 export FLYNN_SKIP_UPDATE_CHECK=1
 
 python3 - "${FAULT:?FAULT is required}" "${SEED:-}" "${APP_MATCH:-}" <<'PY'
-import base64, json, random, subprocess, sys, urllib.parse, urllib.request
+import base64, json, random, subprocess, sys, time, urllib.parse, urllib.request
 
 kind, seed, app_match = sys.argv[1], sys.argv[2], sys.argv[3]
 if seed:
@@ -95,9 +95,19 @@ if not pool:
 t = random.choice(sorted(pool, key=lambda j: j["id"]))
 print("target kind=%s app=%s type=%s host=%s job=%s" % (kind, t["app"], t["type"], t["host"], t["id"]))
 sys.stdout.flush()
-stop = subprocess.run(["flynn-host", "stop", t["id"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-if stop.returncode != 0:
-    # runStop prints the per-job reason on stdout; keep it for inject-*.log.
+# Stop can sit behind the host state lock, and the cluster client gives up
+# after 10s of waiting for headers. Retry, and treat "already stopped" as
+# success when the first request stopped the job but the client timed out.
+rc = 1
+for _ in range(3):
+    stop = subprocess.run(["flynn-host", "stop", t["id"]], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    text = stop.stdout.strip()
+    if stop.returncode == 0 or "already stopped" in text:
+        rc = 0
+        break
     print(stop.stdout.strip())
-    raise SystemExit(stop.returncode)
+    rc = stop.returncode
+    time.sleep(2)
+if rc != 0:
+    raise SystemExit(rc)
 PY

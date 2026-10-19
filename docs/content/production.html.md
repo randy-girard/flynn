@@ -303,12 +303,12 @@ HTTP apps get a stable hostname on the cluster domain. Datastores use the same
 idea on a TCP port in 3000–3500:
 
 ```text
-flynn -a myapp resource:expose postgres
+flynn -a myapp addons:expose postgres
 # prints: sudo flynn-host firewall:expose PORT
 sudo flynn-host firewall:expose 3001   # on every host
 ```
 
-`resource:expose` creates a leader TCP route (default hostname
+`addons:expose` creates a leader TCP route (default hostname
 `<service>.<cluster-domain>`, for example `postgres.example.com`) with TLS
 passthrough so Postgres/MySQL native SSL still works. `--auto-tls` switches the
 route to TLS terminate and attaches a Let's Encrypt cert (HTTP-01 still uses
@@ -316,7 +316,7 @@ ports 80/443). See [Databases](databases.html.md) and each engine page.
 
 `flynn-host` also opens live TCP route ports on its 15s firewall sync (same
 UFW `flynn-expose` rules). `firewall:expose` pins the port in Extra.Ports so it
-stays open if the controller is unreachable. After `resource:unexpose`, run
+stays open if the controller is unreachable. After `addons:unexpose`, run
 `sudo flynn-host firewall:unexpose PORT` on each host.
 
 Treat an exported datastore port as public. Prefer TLS, restrict who can reach

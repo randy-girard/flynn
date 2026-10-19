@@ -691,7 +691,7 @@ func pluginResourceMissingErr(spec *plugin.CLI) error {
 	if spec != nil {
 		msg = spec.ResourceMissing
 		if msg == "" {
-			msg = fmt.Sprintf("No %s resource found. Provision one with `flynn resource:add %s`", spec.Command, spec.Command)
+			msg = fmt.Sprintf("No %s add-on found. Provision one with `flynn addons:create %s`", spec.Command, spec.Command)
 		}
 	}
 	return fmt.Errorf("%s", msg)

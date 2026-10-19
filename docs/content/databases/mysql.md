@@ -16,7 +16,7 @@ sudo flynn-host plugin:install mysql --ref vX
 sudo flynn-host plugin:install mariadb --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mysql.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-mysql
-flynn resource:add mysql
+flynn addons:create mysql
 ```
 
 The plugin provides MySQL-compatible databases in a highly-available
@@ -45,7 +45,7 @@ MySQL is available after the operator installs the plugin. After you create
 an app, provision a database with:
 
 ```text
-flynn resource:add mysql
+flynn addons:create mysql
 ```
 
 This will provision a database on the MySQL cluster and configure your
@@ -124,7 +124,7 @@ Export the database on a TCP route with a stable hostname, then open the host
 port:
 
 ```text
-flynn resource:expose mysql
+flynn addons:expose mysql
 # default hostname mysql.<cluster-domain>, tls_mode=passthrough
 sudo flynn-host firewall:expose PORT   # on every host
 ```
@@ -143,7 +143,7 @@ sudo flynn-host firewall:expose PORT
 
 External clients must use TLS and trust `FLYNN_MYSQL_TRUSTED_CERT`; in-cluster
 clients keep using the discoverd host in `DATABASE_URL`.
-Remove with `flynn resource:unexpose mysql` then
+Remove with `flynn addons:unexpose mysql` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 

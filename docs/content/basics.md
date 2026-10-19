@@ -58,7 +58,7 @@ The app depends on Postgres. Tenant databases come from the postgres plugin
 starts for the controller:
 
 ```
-$ flynn resource:add postgres
+$ flynn addons:create postgres
 ```
 
 That creates one isolated instance named `postgresql-<word>-<5 digits>` and

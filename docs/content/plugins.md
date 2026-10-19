@@ -25,15 +25,78 @@ catalog. The built-in Postgres appliance (`appliance/postgresql`, system app
 `postgres`) stays in Flynn. It is the platform database for the controller
 and other system apps, not a catalog plugin and not the tenant Postgres
 product. Tenant Postgres is `flynn-plugin-postgres` (provider `postgres` at
-`postgres-plugin.discoverd`). `flynn resource:add postgres` provisions one
+`postgres-plugin.discoverd`). `flynn addons:create postgres` provisions one
 isolated instance on that plugin. It does not provision a database on the
 platform appliance.
 
 Plugin controller apps are named `<plugin>-plugin` (`dashboard-plugin`,
 `mongodb-plugin`, …). That is what `flynn-host ps` prints
 (`flynn-controller.app_name`). The catalog install name stays `dashboard` /
-`mongodb`. Resource provider names stay `mongodb` so `flynn resource:add mongodb`
+`mongodb`. Resource provider names stay `mongodb` so `flynn addons:create mongodb`
 still works.
+
+## Add-on types
+
+`flynn addons:*` is the user lifecycle for anything an installed plugin offers
+as an add-on. Prose says "add-ons". The dashboard tab stays **Resources**.
+Core owns listing, ownership, attach, detach, `--as` env naming, destroy
+confirmation, and `addons:types`. The plugin owns the type: verbs, create
+options, runtimes, expose defaults, and destroy rules.
+
+Declare one type in `flynn-plugin.json` under `addon`. Install stamps it on
+the plugin app as `flynn-plugin-addon`, which is what `flynn addons:types`
+and `flynn addons:create --help` read. Official plugins that are not installed
+are not listed. `addons:create <type>` for a missing type tells the operator
+to run `flynn-host plugin:install <type>`.
+
+```json
+{
+  "addon": {
+    "type": "postgres",
+    "description": "Isolated Postgres instance",
+    "aliases": [],
+    "verbs": ["create", "destroy", "attach", "detach", "expose"],
+    "backend": "resource",
+    "create": "[--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+    "wait": "pg:wait",
+    "env": {"prefix": "FLYNN_POSTGRESQL_", "conventional": "DATABASE_URL"},
+    "runtimes": {"source": "catalog", "engine": "postgres", "default": "small", "custom_sizing": true},
+    "expose": {"protocol": "tcp", "tls_modes": ["off", "passthrough", "terminate"], "default_tls": "passthrough", "hostname": "SERVICE.CLUSTERDOMAIN"},
+    "destroy": {"follower_env": ["FLYNN_POSTGRES_LEADER", "POSTGRES_LEADER"]},
+    "requires": [{"flag": "--auto-failover", "needs": "--follow", "message": "--auto-failover requires --follow"}],
+    "instance_port": true
+  }
+}
+```
+
+`backend` is `resource` (controller provider provision) or `plugin` (the
+plugin's own HTTP API). Scheduler is `plugin` at `http://scheduler.discoverd`
+with verbs `create` and `destroy` only. It keeps its `scheduled_apps` rows.
+Core proxies `GET`/`PUT`/`DELETE /apps/{app}/addon` and does not store a
+second copy. A third-party plugin uses the same block. No flynn binary change
+is required.
+
+`create` is a docopt options fragment. Flags the type rejects (`--follow` on
+mongodb, kafka, and clickhouse) go in `reject` with the plugin's message.
+`--runtime` is recognized by core only when `runtimes` is set. `source:
+catalog` uses the cluster database-runtime catalog (`flynn-host db-runtime`).
+`source: list` is the plugin's own names. Custom `--cpu` / `--memory` /
+`--disk` stay admin-gated and only for types with `custom_sizing`.
+
+`expose` opts the type into `addons:expose` / `addons:unexpose`. The route
+port is the lowest free port in 3000–3500 unless `-p` is set. The printed URL
+is the client URL on the node IP and that port, including when the add-on is
+already exposed. The cluster firewall opens and closes that TCP route port on
+every host (the existing 15-second route reconcile). This command does not
+follow the job onto one node.
+
+Attachment names (`--as ANALYTICS`, or the color `AMBER`) are stored on the
+app as `flynn-addon-attachments`. `addons:detach` takes that name, not the
+add-on name and not the env var. `addons:destroy` takes the add-on name and
+is owner-only.
+
+Space form (`flynn addons create postgres`) stays an alias. `resource:*` is
+gone.
 
 ## First-party catalog
 
@@ -105,7 +168,7 @@ TLS skip-verify as the normal way to talk to plugin or controller endpoints.
 
 Development layout (relative to the Flynn repo):
 
-| Alias | Path from `flynn/` | Provider (`flynn resource:add`) |
+| Alias | Path from `flynn/` | Provider (`flynn addons:create`) |
 |-------|--------------------|----------------------------------|
 | `postgres` | `../flynn-plugin-postgres` | `postgres` (tenant instances; not the platform appliance) |
 | `redis` | `../flynn-plugin-redis` | `redis` |
@@ -270,7 +333,7 @@ handler). Nested plugin verbs (`redis:dump`, `kafka:topics:create`) show up on
 `flynn help <plugin>` / `flynn <plugin> --help`, not on the root list. `kind: app`
 system plugins are installed and listed by `flynn plugin:list`
 but do not add a user `flynn` command unless they set `cli.user`. `flynn
-resource:add <provider>` works for `kind: resource-provider`. After the scheduler plugin
+addons:create <provider>` works for `kind: resource-provider`. After the scheduler plugin
 is installed, add it to an app from dashboard Resources (**Provision resource** →
 Scheduler) or by creating a job (`flynn -a <app> scheduler:add`). Then
 `flynn -a <app> scheduler` lists, adds, and removes cron/interval

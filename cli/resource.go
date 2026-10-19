@@ -1,10 +1,8 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strconv"
 	"strings"
 
@@ -12,223 +10,10 @@ import (
 	"github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
-	"github.com/randy-girard/flynn/pkg/pgappliance"
 	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
 	router "github.com/randy-girard/flynn/router/types"
 )
-
-func init() {
-	register("resource", runResourceList, `
-usage: flynn resource
-
-List resources for the app.
-
-NAME is the isolated instance (postgresql-concave-48291). Use it with pg:psql,
-redis-cli, --follow, resource:attach, and resource:remove.
-`)
-	register("resource:add", runResourceAdd, `
-usage: flynn resource:add <provider> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
-
-Provision a new resource for the app using <provider>.
-
-For postgres, mysql, redis, mongodb, kafka, and clickhouse, the new instance
-is sized from a database runtime (flynn-host db-runtime). Those are not app
-process runtimes. Omitting --runtime uses small. --cpu, --memory, and --disk
-are rejected unless a cluster admin has allowed custom sizes.
-
-For postgres, mysql, redis, kafka, mongodb, and clickhouse, the installed plugin
-receives --as, --follow, --runtime, --replication, and --auto-failover.
-Postgres, mysql, and redis --follow creates a replica resource of that
-instance. Mongodb, clickhouse, and kafka have no followers: each resource is
-one cluster, and flynn mongodb:scale, flynn clickhouse:scale, or flynn
-kafka:scale changes its node count. Postgres, mysql, and redis --auto-failover
-with --follow places the replica on another host and promotes it if the
-primary job is lost, then recreates a replica so the pair remains. The
-platform postgres appliance at postgres-api.discoverd is not used. Every provision sets
-FLYNN_<ENGINE>_<COLOR>_URL unless --as names the attachment
-(--as ANALYTICS → ANALYTICS_URL; --as AMBER → FLYNN_<ENGINE>_AMBER_URL). The
-engine prefix is FLYNN_POSTGRESQL, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_MONGODB,
-FLYNN_CLICKHOUSE or FLYNN_KAFKA, and COLOR comes from a 96-color palette. A new
-provision also sets the engine's conventional key when that key is free
-(DATABASE_URL for postgres, mysql and mongodb; REDIS_URL, CLICKHOUSE_URL or
-KAFKA_URL for the others).
-
-The command returns after the instance is scheduled. The datastore keeps
-starting in the background; check later with flynn resource or the plugin
-wait command (pg:wait, redis:wait, mysql:wait).
-
-Options:
-	--as=<name>              attachment env name (NAME becomes NAME_URL; a color short name becomes FLYNN_<ENGINE>_<COLOR>_URL; with no --as the attachment gets a random FLYNN_<ENGINE>_<COLOR>_URL)
-	--follow=<resource>      replica NAME or ID from flynn resource (postgres/mysql/redis only)
-	--runtime=<name>         database runtime name (default small)
-	--replication=<mode>     postgres followers ignore this and always stream; pg:upgrade uses logical
-	--auto-failover          with --follow on postgres/mysql/redis: place off the primary host and fail over automatically
-	--cpu=<milli>            raw milliCPU (only when custom sizes are allowed)
-	--memory=<bytes>         raw memory (only when custom sizes are allowed)
-	--disk=<bytes>           raw disk (only when custom sizes are allowed)
-
-Examples:
-
-	$ flynn resource:add postgres
-	$ flynn resource:add postgres --as ANALYTICS
-	$ flynn resource:add postgres --as AMBER
-`)
-	register("resource:attach", runResourceAttach, `
-usage: flynn resource:attach [<provider>] <resource> [--as <name>]
-
-Attach an existing resource to this app. The resource must already exist on
-another app in the same account. Every engine sets FLYNN_<ENGINE>_<COLOR>_URL
-unless --as names the attachment (--as NAME becomes NAME_URL; a color short name
-such as AMBER becomes FLYNN_<ENGINE>_AMBER_URL). The engine prefix is
-FLYNN_POSTGRESQL, FLYNN_MYSQL, FLYNN_REDIS, FLYNN_MONGODB, FLYNN_CLICKHOUSE or
-FLYNN_KAFKA. Attaching an existing resource does not set the conventional key
-(DATABASE_URL, REDIS_URL, CLICKHOUSE_URL or KAFKA_URL).
-
-<resource> is the NAME or ID from flynn resource. The provider is optional when
-that name is unique (flynn resource:attach mysql-valley-77924). The same
-resource can attach to several apps, or again to this app with --as to add
-another name. Only the app that provisioned it may delete it; this app can detach.
-
-Options:
-	--as=<name>  attachment env name (NAME becomes NAME_URL; a color short name becomes FLYNN_<ENGINE>_<COLOR>_URL)
-
-Examples:
-
-	$ flynn -a shop resource:attach postgresql-concave-48291
-	$ flynn -a shop resource:attach postgres postgresql-concave-48291 --as ANALYTICS
-	$ flynn -a shop resource:attach postgresql-concave-48291 --as AMBER
-`)
-	register("resource:detach", runResourceDetach, `
-usage: flynn resource:detach [<provider>] <resource>
-
-Detach a resource from this app and remove the attachment env var. This does
-not delete the instance. Use it when this app is attached but does not own
-the resource.
-
-<resource> is the NAME or ID from flynn resource. The provider is optional
-when that name is unique.
-`)
-	register("resource:remove", runResourceRemove, `
-usage: flynn resource:remove [<provider>] [<resource>]
-
-Delete a resource this app owns. <resource> is the NAME or ID from flynn
-resource (postgresql-concave-48291). flynn resource:remove postgresql-concave-48291 is enough
-when that name is unique on the app. With only <provider>, removes the unique
-resource for that provider. A leader cannot be removed while followers are
-still linked; unfollow or remove those replicas first. An app that is only
-attached must use resource:detach; it cannot delete the instance.
-
-The command returns after the resource is detached from the app. The isolated
-instance is destroyed in the background.
-`)
-	register("resource:expose", runResourceExpose, `
-usage: flynn resource:expose <resource> [--domain <host>] [-p <port>] [--tls-mode <mode>] [--auto-tls] [-c <tls-cert> -k <tls-key>]
-
-Export one datastore resource on a TCP route. <resource> is the NAME or ID
-from flynn resource (mysql-arroyo-64597), not the provider. Only that
-instance is exposed. The cluster firewall opens the route port on its own.
-
-Options:
-	--domain=<host>        hostname (default: SERVICE.CLUSTERDOMAIN)
-	-p, --port=<port>      TCP port (assigned from 3000-3500 if omitted)
-	--tls-mode=<mode>      off, passthrough (default), or terminate
-	--auto-tls             Let's Encrypt on a terminate route (requires ACME)
-	-c, --tls-cert=<tls-cert>  PEM cert for tls_mode=terminate, - for stdin
-	-k, --tls-key=<tls-key>    PEM key for tls_mode=terminate, - for stdin
-
-passthrough is the default so postgres/mysql native SSL still works. Use
-terminate for TLS-first protocols (Redis TLS, Kafka, MongoDB, ClickHouse)
-when the backend is plaintext.
-`)
-	register("resource:unexpose", runResourceUnexpose, `
-usage: flynn resource:unexpose <resource> [--domain <host>]
-
-Remove the TCP export route for one resource. <resource> is the NAME or ID
-from flynn resource. The cluster firewall closes that port on its own.
-
-Options:
-	--domain=<host>  hostname of the route to remove (default: the resource hostname)
-`)
-}
-
-func runResourceList(args *docopt.Args, client controller.Client) error {
-
-	resources, err := client.AppResourceList(mustApp())
-	if err != nil {
-		return err
-	}
-
-	w := tabWriter()
-	defer w.Flush()
-
-	var provider *ct.Provider
-
-	listRec(w, "NAME", "PROVIDER", "ID")
-	for _, j := range resources {
-		provider, err = client.GetProvider(j.ProviderID)
-		if err != nil {
-			return err
-		}
-		listRec(w, resourceDisplayName(j), provider.Name, j.ID)
-	}
-
-	return err
-}
-
-func runResourceAdd(args *docopt.Args, client controller.Client) error {
-	provider := args.String["<provider>"]
-	if err := rejectPlatformPostgresAdd(provider, client); err != nil {
-		return err
-	}
-
-	req := &ct.ResourceReq{ProviderID: provider, Apps: []string{mustApp()}}
-	cat, err := databaseRuntimeCatalog(client)
-	if err != nil {
-		return err
-	}
-	if err := rejectClusterFollow(provider, args.String["--follow"]); err != nil {
-		return err
-	}
-	follow, err := resolvePeerRef(client, mustApp(), provider, args.String["--follow"])
-	if err != nil {
-		return err
-	}
-	cfg, err := databaseProvisionConfig(provider, args.String["--as"], follow, args.String["--runtime"], args.String["--replication"], args.String["--cpu"], args.String["--memory"], args.String["--disk"], cat)
-	if err != nil {
-		return err
-	}
-	if args.Bool["--auto-failover"] {
-		if follow == "" {
-			return fmt.Errorf("--auto-failover requires --follow")
-		}
-		switch strings.ToLower(strings.TrimSpace(provider)) {
-		case "postgres", "redis", "mysql", "mariadb":
-		default:
-			return fmt.Errorf("--auto-failover is only supported for postgres, redis, and mysql")
-		}
-		cfg, err = withAutoFailover(cfg)
-		if err != nil {
-			return err
-		}
-	}
-	req.Config = cfg
-	res, err := client.ProvisionResource(req)
-	if err != nil {
-		return err
-	}
-
-	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], true)
-
-	if _, err := setEnv(client, "", env); err != nil {
-		return err
-	}
-
-	log.Println(createdResourceMessage(res, args.String["--as"]))
-	log.Println(resourceStartingMessage(res))
-
-	return nil
-}
 
 func databaseRuntimeCatalog(client controller.Client) (dbruntime.Catalog, error) {
 	file, fileErr := dbruntime.Load(dbruntime.Path())
@@ -272,30 +57,21 @@ func createdResourceMessage(res *ct.Resource, as string) string {
 		name = "unknown"
 	}
 	if as != "" && !strings.EqualFold(as, name) {
-		return fmt.Sprintf("Created resource %s (as %s) and a new release.", name, as)
+		return fmt.Sprintf("Created add-on %s (as %s) and a new release.", name, as)
 	}
-	return fmt.Sprintf("Created resource %s and a new release.", name)
+	return fmt.Sprintf("Created add-on %s and a new release.", name)
 }
 
-// resourceStartingMessage is the second resource:add line. Provision returns
-// after the job is scheduled; redis:wait / pg:wait / mysql:wait poll ready.
-func resourceStartingMessage(res *ct.Resource) string {
+// resourceStartingMessage is the second addons:create line. Provision returns
+// after the job is scheduled. waitCmd is the plugin's wait command (pg:wait).
+func resourceStartingMessage(res *ct.Resource, waitCmd string) string {
 	name := resourceDisplayName(res)
 	if name == "" {
 		name = "the instance"
 	}
-	env := map[string]string{}
-	if res != nil && res.Env != nil {
-		env = res.Env
-	}
-	wait := "flynn resource"
-	switch {
-	case strings.TrimSpace(env["FLYNN_REDIS"]) != "":
-		wait = "flynn redis:wait " + name
-	case strings.TrimSpace(env["FLYNN_POSTGRES"]) != "":
-		wait = "flynn pg:wait " + name
-	case strings.TrimSpace(env["FLYNN_MYSQL"]) != "":
-		wait = "flynn mysql:wait " + name
+	wait := "flynn addons"
+	if cmd := strings.TrimSpace(waitCmd); cmd != "" {
+		wait = "flynn " + cmd + " " + name
 	}
 	return fmt.Sprintf("The instance is starting; check later with %s.", wait)
 }
@@ -392,149 +168,12 @@ func lookupProviderResource(client controller.Client, app, provider, ref string)
 	return nil, fmt.Errorf("resource %q not found for %s; see flynn resource", ref, provider)
 }
 
-// rejectPlatformPostgresAdd stops `flynn resource:add postgres` from creating
-// a role on the built-in appliance. When the postgres plugin is installed it
-// registers provider postgres at postgres-plugin.discoverd, and that URL is allowed.
-func rejectPlatformPostgresAdd(provider string, client controller.Client) error {
-	name := strings.ToLower(strings.TrimSpace(provider))
-	if name == "platform-postgres" {
-		return pgappliance.ErrTenantProvision
-	}
-	if name != "postgres" {
-		return nil
-	}
-	p, err := client.GetProvider(provider)
-	if err != nil {
-		if errors.Is(err, controller.ErrNotFound) {
-			return pgappliance.ErrTenantProvision
-		}
-		return err
-	}
-	if p == nil || pgappliance.IsPlatformApplianceURL(p.URL) {
-		return pgappliance.ErrTenantProvision
-	}
-	return nil
-}
-
-type databaseProvisionBody struct {
-	As           string `json:"as,omitempty"`
-	Follow       string `json:"follow,omitempty"`
-	Runtime      string `json:"runtime,omitempty"`
-	Replication  string `json:"replication,omitempty"`
-	AutoFailover bool   `json:"auto_failover,omitempty"`
-	CPU          int64  `json:"cpu,omitempty"`
-	Memory       int64  `json:"memory,omitempty"`
-	Disk         int64  `json:"disk,omitempty"`
-}
-
-// isScaledClusterProvider reports providers whose resource is one cluster
-// resized with <provider>:scale instead of follower resources.
-func isScaledClusterProvider(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "mongodb", "clickhouse", "kafka":
-		return true
-	default:
+func alreadyAttachedError(err error) bool {
+	if err == nil {
 		return false
 	}
-}
-
-// rejectClusterFollow refuses --follow for mongodb, clickhouse, and kafka
-// before any controller lookup.
-func rejectClusterFollow(provider, follow string) error {
-	if strings.TrimSpace(follow) == "" || !isScaledClusterProvider(provider) {
-		return nil
-	}
-	name := strings.ToLower(strings.TrimSpace(provider))
-	return fmt.Errorf("%s has no followers; use flynn %s:scale <n> to change the node count", name, name)
-}
-
-// databaseProvisionConfig sizes postgres, mysql, redis, mongodb, kafka, and
-// clickhouse from the database-runtime catalog. Other providers are unchanged.
-// Omitting runtime uses small. Raw cpu, memory, or disk is rejected unless
-// the catalog allows custom sizes. The size is fixed on this request;
-// later edits to the runtime definition do not resize this instance.
-func databaseProvisionConfig(provider, as, follow, runtime, replication, cpuRaw, memRaw, diskRaw string, cat dbruntime.Catalog) (*json.RawMessage, error) {
-	if _, ok := dbruntime.ProviderEngine(provider); !ok {
-		if cpuRaw != "" || memRaw != "" || diskRaw != "" {
-			return nil, fmt.Errorf("cpu, memory, and disk apply to database providers (postgres, mysql, redis, mongodb, kafka, clickhouse)")
-		}
-		return nil, nil
-	}
-	var custom dbruntime.Size
-	if cpuRaw != "" {
-		n, err := dbruntime.ParseCPU(cpuRaw)
-		if err != nil {
-			return nil, err
-		}
-		custom.CPU = n
-	}
-	if memRaw != "" {
-		n, err := dbruntime.ParseBytes(memRaw)
-		if err != nil {
-			return nil, err
-		}
-		custom.Memory = n
-	}
-	if diskRaw != "" {
-		n, err := dbruntime.ParseBytes(diskRaw)
-		if err != nil {
-			return nil, err
-		}
-		custom.Disk = n
-	}
-	sz, name, err := dbruntime.ResolveProvision(provider, runtime, custom, cat, cat.AllowCustomSizes)
-	if err != nil {
-		return nil, err
-	}
-	if err := rejectClusterFollow(provider, follow); err != nil {
-		return nil, err
-	}
-	followJSON := strings.TrimSpace(follow)
-	if followJSON != "" && strings.EqualFold(strings.TrimSpace(provider), "postgres") {
-		mode := strings.ToLower(strings.TrimSpace(replication))
-		if mode != "" && mode != "streaming" {
-			return nil, fmt.Errorf("postgres followers use streaming replication; run flynn pg:upgrade for a major-version swap")
-		}
-		replication = "streaming"
-	}
-	body := databaseProvisionBody{
-		As:          as,
-		Follow:      followJSON,
-		Runtime:     name,
-		Replication: replication,
-		CPU:         sz.CPU,
-		Memory:      sz.Memory,
-		Disk:        sz.Disk,
-	}
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	msg := json.RawMessage(raw)
-	return &msg, nil
-}
-
-func withAutoFailover(cfg *json.RawMessage) (*json.RawMessage, error) {
-	if cfg == nil {
-		body := databaseProvisionBody{AutoFailover: true}
-		raw, err := json.Marshal(body)
-		if err != nil {
-			return nil, err
-		}
-		msg := json.RawMessage(raw)
-		return &msg, nil
-	}
-	var body databaseProvisionBody
-	if err := json.Unmarshal(*cfg, &body); err != nil {
-		return nil, err
-	}
-	body.AutoFailover = true
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
-	}
-	msg := json.RawMessage(raw)
-	return &msg, nil
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") || strings.Contains(msg, "already attached")
 }
 
 func appliedAttachmentEnv(client controller.Client, incoming map[string]string, as string, newProvision bool) map[string]*string {
@@ -578,110 +217,6 @@ func resolvedAppID(client controller.Client) (string, error) {
 		return id, nil
 	}
 	return mustApp(), nil
-}
-
-func runResourceAttach(args *docopt.Args, client controller.Client) error {
-	appID, err := resolvedAppID(client)
-	if err != nil {
-		return err
-	}
-	resRef, provider, err := resolveNamedResource(client, mustApp(), args.String["<provider>"], args.String["<resource>"])
-	if err != nil {
-		return err
-	}
-	res, err := client.AddResourceApp(provider, resRef.ID, appID)
-	if err != nil {
-		if !alreadyAttachedError(err) {
-			return err
-		}
-		// The app already has this resource. --as still adds another env name.
-		res = resRef
-	}
-	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], false)
-	if len(env) == 0 {
-		return fmt.Errorf("%s is already attached to this app; use --as to attach it under another name", resourceDisplayName(resRef))
-	}
-	releaseID, err := setEnv(client, "", env)
-	if err != nil {
-		return err
-	}
-	log.Printf("Attached resource %s and release %s.", resourceDisplayName(res), releaseID)
-	return nil
-}
-
-func alreadyAttachedError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint") || strings.Contains(msg, "already attached")
-}
-
-func runResourceDetach(args *docopt.Args, client controller.Client) error {
-	appID, err := resolvedAppID(client)
-	if err != nil {
-		return err
-	}
-	resRef, provider, err := resolveNamedResource(client, mustApp(), args.String["<provider>"], args.String["<resource>"])
-	if err != nil {
-		return err
-	}
-	res, err := client.DeleteResourceApp(provider, resRef.ID, appID)
-	if err != nil {
-		return err
-	}
-	release, err := client.GetAppRelease(mustApp())
-	if err != nil {
-		return err
-	}
-	env := resname.UnsetAttachment(release.Env, res.Env)
-	releaseID, err := setEnv(client, "", env)
-	if err != nil {
-		return err
-	}
-	log.Printf("Detached resource %s and release %s.", resourceDisplayName(res), releaseID)
-	return nil
-}
-
-func runResourceRemove(args *docopt.Args, client controller.Client) error {
-	providerArg := strings.TrimSpace(args.String["<provider>"])
-	resourceArg := strings.TrimSpace(args.String["<resource>"])
-	resRef, providerName, err := resolveRemoveTarget(client, mustApp(), providerArg, resourceArg)
-	if err != nil {
-		return err
-	}
-	if names := resourceFollowerNames(resRef, appResourcesOrNil(client, mustApp())); len(names) > 0 {
-		return fmt.Errorf("cannot remove %s while followers are still linked (%s); unfollow or remove those resources first", resourceDisplayName(resRef), strings.Join(names, ", "))
-	}
-	app, err := client.GetApp(mustApp())
-	if err != nil {
-		return err
-	}
-	if !resRef.OwnedByApp(app) {
-		return fmt.Errorf("cannot delete %s from %s; this app is attached but does not own the resource. Use flynn resource:detach %s %s", resourceDisplayName(resRef), app.Name, providerName, resourceDisplayName(resRef))
-	}
-
-	// Drop the attachment from the app before the datastore is destroyed.
-	// The controller refuses to delete an app another release still references.
-	release, err := client.GetAppRelease(mustApp())
-	if err != nil {
-		return err
-	}
-	env := resname.UnsetAttachment(release.Env, resRef.Env)
-	releaseID, err := setEnv(client, "", env)
-	if err != nil {
-		return err
-	}
-
-	res, err := client.DeleteResource(providerName, resRef.ID)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Deleted resource %s, created release %s.", resourceDisplayName(res), releaseID)
-	log.Println("The instance is being removed in the background.")
-
-	return nil
 }
 
 func appResourcesOrNil(client controller.Client, app string) []*ct.Resource {
@@ -835,15 +370,15 @@ func lookupAppResource(client controller.Client, app, ref string) (*ct.Resource,
 	return nil, fmt.Errorf("resource %q not found; see flynn resource", ref)
 }
 
-func resourceFollowerNames(leader *ct.Resource, list []*ct.Resource) []string {
-	if leader == nil {
+func resourceFollowerNames(leader *ct.Resource, list []*ct.Resource, keys []string) []string {
+	if leader == nil || len(keys) == 0 {
 		return nil
 	}
 	name := resourceDisplayName(leader)
 	var out []string
 	seen := map[string]bool{}
 	for _, r := range list {
-		if r == nil || r.ID == leader.ID || !resourceFollowsLeader(r, leader, name) {
+		if r == nil || r.ID == leader.ID || !resourceFollowsLeader(r, name, keys) {
 			continue
 		}
 		n := resourceDisplayName(r)
@@ -856,32 +391,13 @@ func resourceFollowerNames(leader *ct.Resource, list []*ct.Resource) []string {
 	return out
 }
 
-func resourceFollowsLeader(res, leader *ct.Resource, leaderName string) bool {
+func resourceFollowsLeader(res *ct.Resource, leaderName string, keys []string) bool {
 	if res == nil || res.Env == nil || leaderName == "" {
 		return false
 	}
 	env := res.Env
-	for _, k := range []string{"FLYNN_POSTGRES_LEADER", "POSTGRES_LEADER", "FLYNN_MYSQL_LEADER", "MYSQL_LEADER", "FLYNN_REDIS_LEADER", "REDIS_LEADER", "CLICKHOUSE_LEADER", "KAFKA_LEADER"} {
+	for _, k := range keys {
 		if strings.EqualFold(strings.TrimSpace(env[k]), leaderName) {
-			return true
-		}
-	}
-	role := strings.TrimSpace(env["FLYNN_POSTGRES_ROLE"])
-	if role == "" {
-		role = strings.TrimSpace(env["POSTGRES_ROLE"])
-	}
-	followed := strings.TrimSpace(env["FLYNN_POSTGRES_LEADER"])
-	if followed == "" {
-		followed = strings.TrimSpace(env["POSTGRES_LEADER"])
-	}
-	if strings.EqualFold(role, "follower") && strings.EqualFold(followed, leaderName) {
-		return true
-	}
-	for k, v := range env {
-		if !strings.Contains(k, "PRIMARY") {
-			continue
-		}
-		if strings.Contains(v, leaderName) {
 			return true
 		}
 	}

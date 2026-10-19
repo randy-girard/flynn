@@ -19,7 +19,7 @@ usage: flynn-host db-runtime
 List database runtimes (CPU, memory, and disk per engine).
 
 These are not app process runtimes. App processes use flynn-host runtime
-and flynn limit:runtime. Database runtimes size a new resource:add instance.
+and flynn limit:runtime. Database runtimes size a new addons:create instance.
 
 Presets are published when a database plugin is installed
 (flynn-host db-runtime:ensure). Creates, updates, and the custom-size flag
@@ -77,8 +77,8 @@ plugin uninstall hooks call this.
 	dbRuntimeAllowCustomUsage = `
 usage: flynn-host db-runtime:allow-custom [--disable]
 
-Allow tenants to set raw CPU, memory, and disk on flynn resource:add.
-Without this, resource:add only accepts a published runtime name (default small).
+Allow tenants to set raw CPU, memory, and disk on flynn addons:create.
+Without this, addons:create only accepts a published runtime name (default small).
 --disable turns custom sizes back off.
 `
 )

@@ -38,6 +38,7 @@ type Installed struct {
 	Restore         *RestoreSpec   `json:"restore,omitempty"`
 	Status          *StatusSpec    `json:"status,omitempty"`
 	Dashboard       *DashboardSpec `json:"dashboard,omitempty"`
+	Addon           *AddonSpec     `json:"addon,omitempty"`
 }
 
 // BackupSpec is a cluster-backup dump produced by a plugin appliance.

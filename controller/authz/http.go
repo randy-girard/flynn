@@ -397,7 +397,7 @@ func appSubPerm(method string, rest []string) string {
 			return PermAppWrite
 		}
 		return PermAppActivityRead
-	case "resources":
+	case "resources", "plugin-addons":
 		if write {
 			return PermAppResourcesWrite
 		}

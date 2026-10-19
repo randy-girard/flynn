@@ -23,11 +23,11 @@ func TestNormalizeResourceArgsTreatsOneTokenAsTheName(t *testing.T) {
 }
 
 func TestResourceAttachHelpAllowsNameOnly(t *testing.T) {
-	cmd := commands["resource:attach"]
+	cmd := commands["addons:attach"]
 	if cmd == nil {
-		t.Fatal("resource:attach is not registered")
+		t.Fatal("addons:attach is not registered")
 	}
-	for _, part := range []string{"[<provider>]", "mysql-valley-77924", "postgresql-concave-48291"} {
+	for _, part := range []string{"<addon>", "postgresql-concave-48291", "--as ANALYTICS"} {
 		if !strings.Contains(cmd.usage, part) {
 			t.Fatalf("usage missing %q:\n%s", part, cmd.usage)
 		}

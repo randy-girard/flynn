@@ -41,6 +41,9 @@ type Client interface {
 	AddResourceApp(providerID, resourceID, appID string) (*ct.Resource, error)
 	DeleteResourceApp(providerID, resourceID, appID string) (*ct.Resource, error)
 	AppResourceList(appID string) ([]*ct.Resource, error)
+	ListPluginAddons(appID string) ([]*ct.PluginAddon, error)
+	PutPluginAddon(appID, addonType string) (*ct.PluginAddon, error)
+	DeletePluginAddon(appID, addonType string) error
 	PutResource(resource *ct.Resource) error
 	DeleteResource(providerID, resourceID string) (*ct.Resource, error)
 	PutFormation(formation *ct.Formation) error

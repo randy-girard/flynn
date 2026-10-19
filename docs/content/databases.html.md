@@ -11,7 +11,7 @@ not a tenant database.
 
 **Tenant Postgres** is the catalog plugin `flynn-plugin-postgres`. Install it
 with `flynn-host plugin:install postgres`, then provision with
-`flynn resource:add postgres`. That command does not create a role on the
+`flynn addons:create postgres`. That command does not create a role on the
 platform appliance.
 
 Other engines (Redis, MariaDB, MongoDB, Kafka, ClickHouse) are also
@@ -33,7 +33,7 @@ all use cases, including high volume, large dataset workloads.
 
 ## Appliances
 
-Provision from an app with `flynn resource:add <provider>`. Connection details
+Provision from an app with `flynn addons:create <provider>`. Connection details
 are injected as environment variables. User jobs may resolve the **leader**
 hostname Flynn puts in *that app's* URLs (`REDIS_URL`, `DATABASE_URL`, …).
 Another app's isolated datastore, internal names such as `postgres.discoverd`,
@@ -41,8 +41,8 @@ and `$APP-$TYPE.discoverd` do not resolve from user jobs.
 
 | Provider | Engine | Topology |
 | --- | --- | --- |
-| platform `postgres` app | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain. **Not** `resource:add postgres`. System apps only |
-| [`postgres`](databases/postgres.md) | PostgreSQL 16 (plugin) | One node, own app and volume. `flynn resource:add postgres` after `flynn-host plugin:install postgres`. Not sirenia |
+| platform `postgres` app | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain. **Not** `addons:create postgres`. System apps only |
+| [`postgres`](databases/postgres.md) | PostgreSQL 16 (plugin) | One node, own app and volume. `flynn addons:create postgres` after `flynn-host plugin:install postgres`. Not sirenia |
 | [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
 | [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
 | [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process; AOF on a volume, no replicas, not in cluster backup |
@@ -56,7 +56,7 @@ sirenia state machine described below. See each page for safety notes.
 
 A database runtime is a name plus CPU, memory, and disk for one engine
 (`postgres`, `redis`, `mysql`, `mongodb`, `kafka`, `clickhouse`). The
-MySQL provider on `resource:add` is `mysql` (`mariadb` is an install alias).
+MySQL provider on `addons:create` is `mysql` (`mariadb` is an install alias).
 These are **not** app process runtimes. `flynn-host runtime` and
 `flynn limit:runtime` size app processes only. Database runtimes are listed
 and edited with `flynn-host db-runtime`.
@@ -76,8 +76,8 @@ removes those runtimes. Redis `small` disk is 1GB; Postgres `small` disk is 10GB
 | clickhouse | 1000 milliCPU, 2GB, 32GB | 2000 milliCPU, 4GB, 128GB | 4000 milliCPU, 8GB, 500GB |
 
 ```text
-flynn resource:add redis
-flynn resource:add redis --runtime medium
+flynn addons:create redis
+flynn addons:create redis --runtime medium
 sudo flynn-host db-runtime
 sudo flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB redis cache
 sudo flynn-host db-runtime:update --disk 2GB redis small
@@ -89,7 +89,7 @@ definitions. Plugin install writes builtins into `/etc/flynn/db-runtimes.json`
 (`FLYNN_DB_RUNTIMES` overrides the path) and the controller catalog. Plugin
 uninstall drops that engine's runtimes, including builtins. Admin
 creates, updates, removals, and the custom-size switch use that same file.
-`flynn resource:add` reads the controller catalog. On a cluster with no
+`flynn addons:create` reads the controller catalog. On a cluster with no
 database plugins installed, no database runtimes are published.
 
 Changing a definition does not resize instances already created from it.
@@ -111,7 +111,7 @@ HTTP apps get a hostname on the cluster domain. Datastores use the same idea on
 a TCP port in 3000–3500. From the app that owns the resource:
 
 ```text
-flynn resource:expose postgres
+flynn addons:expose postgres
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
@@ -126,13 +126,13 @@ In-cluster jobs keep using the `*.discoverd` names in `DATABASE_URL` /
 Postgres URLs use `sslmode=require`; plaintext `sslmode=disable` still works
 inside the overlay.
 
-Remove the route with `flynn resource:unexpose <provider>`, then
+Remove the route with `flynn addons:unexpose <provider>`, then
 `sudo flynn-host firewall:unexpose PORT`. Details are on each engine page and
 in [Production — Firewalling](production.html.md#firewalling).
 
 ## Per-instance ports
 
-`flynn resource:add` for the tenant Postgres plugin, Redis, MariaDB (`mysql`),
+`flynn addons:create` for the tenant Postgres plugin, Redis, MariaDB (`mysql`),
 MongoDB, Kafka, and ClickHouse stores a TCP port from 3000–3500 on that
 resource. Allocation refuses a port another resource already owns. The
 platform Postgres appliance does not get one. The port is

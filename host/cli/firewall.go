@@ -52,7 +52,7 @@ Options:
 usage: flynn-host firewall:expose <port>
 
 Open a TCP port on this host and keep it across firewall syncs.
-22/80/443 stay installer-owned. flynn resource:expose does not need this:
+22/80/443 stay installer-owned. flynn addons:expose does not need this:
 hosts already open and close TCP route ports from the live route list.
 Use this only to pin a port that is not a route.
 `)

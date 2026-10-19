@@ -12,7 +12,7 @@ on a cluster host, then provision from an app. See [Plugins](../plugins.md).
 sudo flynn-host plugin:install clickhouse --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-clickhouse.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-clickhouse
-flynn resource:add clickhouse
+flynn addons:create clickhouse
 ```
 
 The controller app is `clickhouse-plugin` (`flynn-host ps`, `flynn -a clickhouse-plugin`).
@@ -29,7 +29,7 @@ own volume. Change the node count with `flynn clickhouse:scale` (see
 User databases must be created with the `flynn clickhouse` CLI so they are
 provisioned with `ON CLUSTER` DDL and the `Replicated` database engine.
 
-`flynn resource:add clickhouse` creates a database and a user granted only that
+`flynn addons:create clickhouse` creates a database and a user granted only that
 database, with a memory and query quota. The app receives that user, not the
 cluster `default` user. The provider sets `tenant_safe`. See [Plugins](../plugins.md).
 
@@ -41,7 +41,7 @@ ClickHouse is available after the operator installs the plugin. After you create
 an app, provision a cluster with:
 
 ```text
-flynn resource:add clickhouse
+flynn addons:create clickhouse
 ```
 
 This provisions a ClickHouse cluster as a Flynn app and configures your
@@ -87,7 +87,7 @@ open a verified TLS connection. The other names stay on the resource:
 ### Scaling the cluster
 
 ClickHouse has no followers. Each resource is one cluster, and
-`flynn resource:add clickhouse --follow` is rejected. The follow, wait,
+`flynn addons:create clickhouse --follow` is rejected. The follow, wait,
 promote, and unfollow commands and the dashboard Follow page are gone. Change
 the number of nodes with:
 
@@ -146,7 +146,7 @@ Export ClickHouse on a TCP route with a stable hostname, then open the host
 port:
 
 ```text
-flynn resource:expose clickhouse
+flynn addons:expose clickhouse
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
@@ -162,7 +162,7 @@ flynn -a $(flynn env:get FLYNN_CLICKHOUSE) route:add tcp --service $(flynn env:g
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn resource:unexpose clickhouse` then
+Remove with `flynn addons:unexpose clickhouse` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 

@@ -217,6 +217,9 @@ func helpChildrenWith(name string, cat *plugin.Catalog) []helpChild {
 	verbs := clihelp.Children(all, name)
 	out := make([]helpChild, 0, len(verbs))
 	for _, verb := range verbs {
+		if name == "addons" && !addonVerbVisible(cat, verb) {
+			continue
+		}
 		full := name + ":" + verb
 		desc := clihelp.ShortDescription(commandUsage(full))
 		if desc == "" {

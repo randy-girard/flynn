@@ -270,6 +270,23 @@ func (c *Client) DeleteResourceApp(providerID, resourceID, appID string) (*ct.Re
 	return resource, c.Delete(fmt.Sprintf("/providers/%s/resources/%s/apps/%s", providerID, resourceID, appID), &resource)
 }
 
+// ListPluginAddons returns plugin-owned add-ons on appID (scheduler).
+func (c *Client) ListPluginAddons(appID string) ([]*ct.PluginAddon, error) {
+	var addons []*ct.PluginAddon
+	return addons, c.Get(fmt.Sprintf("/apps/%s/plugin-addons", appID), &addons)
+}
+
+// PutPluginAddon adds a plugin-owned add-on such as scheduler.
+func (c *Client) PutPluginAddon(appID, addonType string) (*ct.PluginAddon, error) {
+	var addon *ct.PluginAddon
+	return addon, c.Put(fmt.Sprintf("/apps/%s/plugin-addons/%s", appID, addonType), nil, &addon)
+}
+
+// DeletePluginAddon removes a plugin-owned add-on.
+func (c *Client) DeletePluginAddon(appID, addonType string) error {
+	return c.Delete(fmt.Sprintf("/apps/%s/plugin-addons/%s", appID, addonType), nil)
+}
+
 // AppResourceList returns a list of all resources under appID.
 func (c *Client) AppResourceList(appID string) ([]*ct.Resource, error) {
 	var resources []*ct.Resource

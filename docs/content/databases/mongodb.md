@@ -12,12 +12,12 @@ cluster host, then provision from an app. See [Plugins](../plugins.md).
 sudo flynn-host plugin:install mongodb --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-mongodb.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-mongodb
-flynn resource:add mongodb
+flynn addons:create mongodb
 ```
 
 The plugin controller app is `mongodb-plugin` (`flynn-host ps`). The provider
 API is `http://mongodb-plugin.discoverd/databases`. Provision with
-`flynn resource:add mongodb`.
+`flynn addons:create mongodb`.
 
 The plugin provides MongoDB 7.0 in a highly-available configuration with
 automatic provisioning. Replication is implemented using MongoDB's replica set
@@ -42,7 +42,7 @@ MongoDB is available after the operator installs the plugin. After you create
 an app, provision a database with:
 
 ```text
-flynn resource:add mongodb
+flynn addons:create mongodb
 ```
 
 This will provision a database on the MongoDB cluster and configure your
@@ -75,7 +75,7 @@ mode, so replication and older in-cluster clients can still connect without TLS.
 ### Scaling the cluster
 
 MongoDB has no followers or joined resources. Each resource is one cluster, and
-`flynn resource:add mongodb --follow` is rejected. Change the number of nodes
+`flynn addons:create mongodb --follow` is rejected. Change the number of nodes
 with:
 
 ```text
@@ -154,7 +154,7 @@ Export the database on a TCP route with a stable hostname, then open the host
 port:
 
 ```text
-flynn resource:expose mongodb
+flynn addons:expose mongodb
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
@@ -170,7 +170,7 @@ flynn -a mongodb route:add tcp --service mongodb --leader --domain mongodb.examp
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn resource:unexpose mongodb` then
+Remove with `flynn addons:unexpose mongodb` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 

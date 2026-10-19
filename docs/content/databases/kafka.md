@@ -12,7 +12,7 @@ cluster host, then provision from an app. See [Plugins](../plugins.md).
 sudo flynn-host plugin:install kafka --ref vX
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-kafka.git --ref vX
 sudo flynn-host plugin:install ../flynn-plugin-kafka
-flynn resource:add kafka
+flynn addons:create kafka
 ```
 
 The controller app is `kafka-plugin` (`flynn-host ps`, `flynn -a kafka-plugin`).
@@ -47,7 +47,7 @@ Kafka is available after the operator installs the plugin. After you create an
 app, provision a cluster with:
 
 ```text
-flynn resource:add kafka
+flynn addons:create kafka
 ```
 
 This provisions a Kafka cluster as a Flynn app and configures your application
@@ -56,7 +56,7 @@ to connect to it.
 ### Scaling the cluster
 
 Kafka has no followers, joined resources, or MirrorMaker copies. Each resource
-is one cluster, and `flynn resource:add kafka --follow` is rejected. Change the
+is one cluster, and `flynn addons:create kafka --follow` is rejected. Change the
 number of brokers with:
 
 ```text
@@ -200,7 +200,7 @@ TLS is enabled they transparently use the cluster's client certificate.
 Export Kafka on a TCP route with a stable hostname, then open the host port:
 
 ```text
-flynn resource:expose kafka
+flynn addons:expose kafka
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
@@ -216,7 +216,7 @@ flynn -a $(flynn env:get FLYNN_KAFKA) route:add tcp --service $(flynn env:get FL
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn resource:unexpose kafka` then
+Remove with `flynn addons:unexpose kafka` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 

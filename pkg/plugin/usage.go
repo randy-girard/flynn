@@ -16,7 +16,7 @@ func (c *CLI) DocoptUsage() string {
 
 // ExpandCLIUsage rewrites a plugin usage block so each command pattern exists
 // in colon form (canonical) and space form (fallback). Existing lines that
-// are not this plugin's command (for example `flynn resource:add`) are kept.
+// are not this plugin's command (for example `flynn addons:create`) are kept.
 func ExpandCLIUsage(c *CLI) string {
 	if c == nil || strings.TrimSpace(c.Doc) == "" {
 		return ""

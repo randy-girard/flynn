@@ -75,6 +75,7 @@ type Manifest struct {
 	ClusterRestore *RestoreSpec    `json:"cluster_restore,omitempty"`
 	Status         *StatusSpec     `json:"status,omitempty"`
 	Dashboard      *DashboardSpec  `json:"dashboard,omitempty"`
+	Addon          *AddonSpec      `json:"addon,omitempty"`
 	Build          json.RawMessage `json:"build,omitempty"`
 	Artifacts      *Artifacts      `json:"artifacts,omitempty"`
 }
@@ -435,6 +436,15 @@ func (m *Manifest) Validate() error {
 	if err := m.validateDashboard(); err != nil {
 		return err
 	}
+	if m.Addon != nil {
+		m.Addon.Normalize()
+		if m.Provider != nil && m.Addon.Provider == m.Addon.Type && m.Provider.Name != "" {
+			m.Addon.Provider = m.Provider.Name
+		}
+		if err := m.Addon.Validate(); err != nil {
+			return err
+		}
+	}
 	if m.CLI != nil {
 		for i, a := range m.CLI.Actions {
 			if err := m.CLI.Actions[i].normalizeScope(); err != nil {
@@ -484,6 +494,11 @@ func (m *Manifest) AppMeta() map[string]string {
 			meta[MetaPluginDashboard] = string(raw)
 		}
 	}
+	if m.Addon != nil {
+		if raw, err := json.Marshal(m.Addon); err == nil {
+			meta[MetaPluginAddon] = string(raw)
+		}
+	}
 	return meta
 }
 
@@ -506,6 +521,7 @@ func (m *Manifest) Record() Installed {
 		Wait:            m.PingURL(),
 		CLI:             m.CLI,
 		Dashboard:       m.Dashboard,
+		Addon:           m.Addon,
 	}
 	if rec.Name == "" {
 		rec.Name = m.Name

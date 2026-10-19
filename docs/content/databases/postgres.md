@@ -10,12 +10,12 @@ Flynn has two different Postgres roles. They are not interchangeable.
 The **platform appliance** (`appliance/postgresql`, system app `postgres`) is
 the database bootstrap starts for the controller and other system apps
 (blobstore). It stays in Flynn, uses sirenia, and is not a catalog plugin.
-`flynn resource:add postgres` does not create a role or database on it, and
+`flynn addons:create postgres` does not create a role or database on it, and
 tenant apps never receive its superuser password.
 
 **Tenant Postgres** is the `flynn-plugin-postgres` plugin. Install it with
 `flynn-host plugin:install postgres`. It registers provider `postgres` at
-`postgres-plugin.discoverd`. `flynn resource:add postgres` provisions on that
+`postgres-plugin.discoverd`. `flynn addons:create postgres` provisions on that
 plugin. It does not create a role on the platform appliance, and it does not
 dial `postgres-api.discoverd`.
 
@@ -48,8 +48,8 @@ system apps. To give an app its own database, install the postgres plugin
 and then run:
 
 ```text
-flynn resource:add postgres
-flynn resource:add postgres --as ANALYTICS
+flynn addons:create postgres
+flynn addons:create postgres --as ANALYTICS
 ```
 
 That command does not provision a database on the platform appliance. It
@@ -65,8 +65,8 @@ dashboard overview, which live-updates while it starts.
 attach sets `FLYNN_POSTGRESQL_<COLOR>_URL` unless `--as` names the attachment.
 `--as AMBER` sets `FLYNN_POSTGRESQL_AMBER_URL`. Attaching an existing resource
 does not set `DATABASE_URL`. The first logical database on
-a new instance is a random alphanumeric name. `flynn resource:attach` /
-`flynn resource:detach` add and
+a new instance is a random alphanumeric name. `flynn addons:attach` /
+`flynn addons:detach` add and
 remove that variable. The same resource can attach to several apps under
 different names. `flynn env:set` of an attached `*_URL` is rejected while it
 is attached.
@@ -95,7 +95,7 @@ rewrites the primary attachment `*_URL`. The old leader remains its own
 resource. `flynn pg:unfollow <follower>` stops replication and leaves a
 standalone writable copy.
 
-`flynn resource:add postgres --follow <primary> --auto-failover` (or
+`flynn addons:create postgres --follow <primary> --auto-failover` (or
 `flynn pg:follow --auto-failover`) places the replica on a different host.
 If the primary job is gone for about 30 seconds, Flynn promotes the replica,
 fences the old primary, and starts a new replica so the pair remains. Failover
@@ -134,12 +134,12 @@ API on :5433 (`/status`, `/stop`) requires the cluster controller key; `GET
 
 ### External access
 
-`flynn resource:expose postgres` exports **this app's tenant instance** (the
+`flynn addons:expose postgres` exports **this app's tenant instance** (the
 plugin resource), not the platform appliance. It creates a leader TCP route
 and prints the host command that opens the port:
 
 ```text
-flynn resource:expose postgres
+flynn addons:expose postgres
 # default hostname <service>.<cluster-domain>, tls_mode=passthrough
 sudo flynn-host firewall:expose PORT   # on every host
 ```
@@ -157,7 +157,7 @@ flynn route:add tcp --service postgres --leader --domain postgres.example.com --
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove a tenant export with `flynn resource:unexpose postgres` then
+Remove a tenant export with `flynn addons:unexpose postgres` then
 `sudo flynn-host firewall:unexpose PORT`. Treat the exported port as public;
 prefer a VPN when you can. See
 [Production — Firewalling](../production.html.md#firewalling).

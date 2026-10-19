@@ -5,38 +5,313 @@
       "name": "redis",
       "kind": "resource-provider",
       "repo": "flynn-plugin-redis",
-      "description": "Redis. Provision with flynn resource:add redis."
+      "description": "Redis. Provision with flynn addons:create redis.",
+      "addon": {
+        "type": "redis",
+        "description": "Isolated Redis instance",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_REDIS_",
+          "conventional": "REDIS_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "redis",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "wait": "redis:wait",
+        "requires": [
+          {
+            "flag": "--auto-failover",
+            "needs": "--follow",
+            "message": "--auto-failover requires --follow"
+          }
+        ],
+        "destroy": {
+          "follower_env": [
+            "FLYNN_REDIS_LEADER",
+            "REDIS_LEADER"
+          ]
+        },
+        "pass_app": true
+      }
     },
     {
       "name": "postgres",
       "kind": "resource-provider",
       "repo": "flynn-plugin-postgres",
-      "description": "Tenant Postgres. One isolated instance per resource. Provision with flynn resource:add postgres. Not the platform appliance."
+      "description": "Tenant Postgres. One isolated instance per resource. Provision with flynn addons:create postgres. Not the platform appliance.",
+      "addon": {
+        "type": "postgres",
+        "description": "Isolated Postgres instance",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_POSTGRESQL_",
+          "conventional": "DATABASE_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "postgres",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "wait": "pg:wait",
+        "requires": [
+          {
+            "flag": "--auto-failover",
+            "needs": "--follow",
+            "message": "--auto-failover requires --follow"
+          }
+        ],
+        "destroy": {
+          "follower_env": [
+            "FLYNN_POSTGRES_LEADER",
+            "POSTGRES_LEADER"
+          ]
+        },
+        "pass_app": true
+      }
     },
     {
       "name": "mysql",
-      "aliases": ["mariadb"],
+      "aliases": [
+        "mariadb"
+      ],
       "kind": "resource-provider",
       "repo": "flynn-plugin-mysql",
-      "description": "MySQL-compatible databases (MariaDB 10.11 engine). Install as mysql or mariadb; provision with flynn resource:add mysql."
+      "description": "MySQL-compatible databases (MariaDB 10.11 engine). Install as mysql or mariadb; provision with flynn addons:create mysql.",
+      "addon": {
+        "type": "mysql",
+        "description": "Isolated MariaDB / MySQL instance",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_MYSQL_",
+          "conventional": "DATABASE_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "mysql",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "wait": "mysql:wait",
+        "requires": [
+          {
+            "flag": "--auto-failover",
+            "needs": "--follow",
+            "message": "--auto-failover requires --follow"
+          }
+        ],
+        "destroy": {
+          "follower_env": [
+            "FLYNN_MYSQL_LEADER",
+            "MYSQL_LEADER"
+          ]
+        },
+        "aliases": [
+          "mariadb"
+        ],
+        "pass_app": true
+      }
     },
     {
       "name": "mongodb",
       "kind": "resource-provider",
       "repo": "flynn-plugin-mongodb",
-      "description": "MongoDB 7.0 replica set. Provision with flynn resource:add mongodb."
+      "description": "MongoDB 7.0 replica set. Provision with flynn addons:create mongodb.",
+      "addon": {
+        "type": "mongodb",
+        "description": "Isolated MongoDB replica set",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--runtime <name>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_MONGODB_",
+          "conventional": "DATABASE_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "mongodb",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "reject": [
+          {
+            "flag": "--follow",
+            "message": "mongodb has no followers; use flynn mongodb:scale <n> to change the node count"
+          }
+        ],
+        "pass_app": true
+      }
     },
     {
       "name": "kafka",
       "kind": "resource-provider",
       "repo": "flynn-plugin-kafka",
-      "description": "Apache Kafka 3.9 (KRaft). Provision with flynn resource:add kafka."
+      "description": "Apache Kafka 3.9 (KRaft). Provision with flynn addons:create kafka.",
+      "addon": {
+        "type": "kafka",
+        "description": "Isolated Kafka cluster",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--runtime <name>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_KAFKA_",
+          "conventional": "KAFKA_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "kafka",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "reject": [
+          {
+            "flag": "--follow",
+            "message": "kafka has no followers; use flynn kafka:scale <n> to change the node count"
+          }
+        ],
+        "pass_app": true
+      }
     },
     {
       "name": "clickhouse",
       "kind": "resource-provider",
       "repo": "flynn-plugin-clickhouse",
-      "description": "ClickHouse analytics database. Provision with flynn resource:add clickhouse."
+      "description": "ClickHouse analytics database. Provision with flynn addons:create clickhouse.",
+      "addon": {
+        "type": "clickhouse",
+        "description": "Isolated ClickHouse instance",
+        "verbs": [
+          "create",
+          "destroy",
+          "attach",
+          "detach",
+          "expose"
+        ],
+        "backend": "resource",
+        "create": "[--runtime <name>] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]",
+        "env": {
+          "prefix": "FLYNN_CLICKHOUSE_",
+          "conventional": "CLICKHOUSE_URL"
+        },
+        "runtimes": {
+          "source": "catalog",
+          "engine": "clickhouse",
+          "default": "small",
+          "custom_sizing": true
+        },
+        "expose": {
+          "protocol": "tcp",
+          "tls_modes": [
+            "off",
+            "passthrough",
+            "terminate"
+          ],
+          "default_tls": "passthrough",
+          "hostname": "SERVICE.CLUSTERDOMAIN"
+        },
+        "instance_port": true,
+        "reject": [
+          {
+            "flag": "--follow",
+            "message": "clickhouse has no followers; use flynn clickhouse:scale <n> to change the node count"
+          }
+        ],
+        "pass_app": true
+      }
     },
     {
       "name": "dashboard",
@@ -58,14 +333,19 @@
     },
     {
       "name": "otel",
-      "aliases": ["opentelemetry"],
+      "aliases": [
+        "opentelemetry"
+      ],
       "kind": "app",
       "repo": "flynn-plugin-otel",
       "description": "Forward cluster metrics to an OpenTelemetry collector (OTLP/HTTP)."
     },
     {
       "name": "letsencrypt",
-      "aliases": ["acme", "le"],
+      "aliases": [
+        "acme",
+        "le"
+      ],
       "kind": "app",
       "repo": "flynn-plugin-letsencrypt",
       "description": "Let's Encrypt / ACME certificates. Enable HTTPS with flynn letsencrypt:enable <hostname>."
@@ -74,7 +354,17 @@
       "name": "scheduler",
       "kind": "scheduler",
       "repo": "flynn-plugin-scheduler",
-      "description": "Cron and interval jobs for apps. Manage with flynn scheduler."
+      "description": "Cron and interval jobs for apps. Manage with flynn scheduler.",
+      "addon": {
+        "type": "scheduler",
+        "description": "Cron and interval jobs for an app",
+        "verbs": [
+          "create",
+          "destroy"
+        ],
+        "backend": "plugin",
+        "api": "http://scheduler.discoverd"
+      }
     },
     {
       "name": "autoscale",
@@ -111,7 +401,11 @@
   "plugin_groups": [
     {
       "name": "hosted",
-      "plugins": ["dashboard", "enterprise", "billing"],
+      "plugins": [
+        "dashboard",
+        "enterprise",
+        "billing"
+      ],
       "tenancy_mode": "hosted"
     }
   ]

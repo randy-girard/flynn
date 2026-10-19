@@ -45,9 +45,9 @@ func TestColonCommandsParsePositionalArgs(t *testing.T) {
 		{[]string{"ps:scale", "web=1"}, "<type>=<spec>", []string{"web=1"}},
 		{[]string{"run", "bash"}, "<command>", []string{"bash"}},
 		{[]string{"run", "bash", "-c", "true"}, "<argument>", []string{"-c", "true"}},
-		{[]string{"resource:add", "redis"}, "<provider>", []string{"redis"}},
-		{[]string{"resource:expose", "mysql-arroyo-64597"}, "<resource>", []string{"mysql-arroyo-64597"}},
-		{[]string{"resource:unexpose", "mysql-arroyo-64597"}, "<resource>", []string{"mysql-arroyo-64597"}},
+		{[]string{"addons:create", "redis"}, "<type>", []string{"redis"}},
+		{[]string{"addons:expose", "mysql-arroyo-64597"}, "<addon>", []string{"mysql-arroyo-64597"}},
+		{[]string{"addons:unexpose", "mysql-arroyo-64597"}, "<addon>", []string{"mysql-arroyo-64597"}},
 		{[]string{"route:remove", "http/abc"}, "<id>", []string{"http/abc"}},
 		{[]string{"volume:show", "vol-1"}, "<id>", []string{"vol-1"}},
 		{[]string{"cluster:add", "n", "d"}, "<cluster-name>", []string{"n"}},
@@ -129,9 +129,9 @@ func TestRouteAddTCPTLSFlags(t *testing.T) {
 	if args.String["--domain"] != "postgres.example.com" || args.String["--tls-mode"] != "passthrough" {
 		t.Fatalf("tls flags: %+v", args.String)
 	}
-	expose := parseCLI(t, []string{"resource:expose", "redis-basin-45047", "--domain", "redis.example.com", "--auto-tls"})
-	if expose.String["<resource>"] != "redis-basin-45047" || expose.String["--domain"] != "redis.example.com" || !expose.Bool["--auto-tls"] {
-		t.Fatalf("resource expose: %+v %+v", expose.String, expose.Bool)
+	expose := parseCLI(t, []string{"addons:expose", "redis-basin-45047", "--domain", "redis.example.com", "--auto-tls"})
+	if expose.String["<addon>"] != "redis-basin-45047" || expose.String["--domain"] != "redis.example.com" || !expose.Bool["--auto-tls"] {
+		t.Fatalf("addon expose: %+v %+v", expose.String, expose.Bool)
 	}
 }
 

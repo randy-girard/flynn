@@ -121,9 +121,9 @@ Run `flynn` or `flynn --help` for parent commands (including installed plugins u
 | --- | --- |
 | `route` / `route:add http\|tcp` / `route:update` / `route:remove` | HTTP and TCP(/TLS) routes, `--tls-mode`, `--leader`; path-based HTTP routes need `flynn-host route:add` |
 | `letsencrypt:list` / `letsencrypt:enable` / `letsencrypt:disable` / `letsencrypt:status` | List HTTP routes and their Let's Encrypt HTTPS flag, or turn HTTPS on/off for a hostname or HTTP route id (requires the Let's Encrypt plugin) |
-| `resource` / `resource:add <provider>` / `resource:remove [<provider>] [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse. `resource:add` returns after the instance is scheduled; the datastore keeps starting in the background (`flynn redis:wait`, `pg:wait`, `mysql:wait`, or `flynn resource`). `resource:remove` detaches the resource and returns; the isolated instance is destroyed in the background. `resource:remove` accepts the NAME from `flynn resource` (`pg-orchid-xkhthp`) with or without the provider. A leader cannot be removed while followers are still linked. Provider errors (instance not found, still has followers) are returned as-is instead of `unknown_error`. `postgres` is the tenant plugin (`flynn-host plugin:install postgres`), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom`. `--follow` creates a replica for postgres, mysql, and redis only; mongodb, clickhouse, and kafka have no followers and the CLI rejects `--follow` for them (use `<provider>:scale`) |
-| `resource:attach` / `resource:detach` | Attach or detach an existing resource (`--as` sets the env name for postgres) |
-| `resource:expose` / `resource:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
+| `resource` / `addons:create <provider>` / `addons:destroy [<provider>] [<resource>]` | Provision or remove postgres, mysql, mongodb, redis, kafka, clickhouse. `addons:create` returns after the instance is scheduled; the datastore keeps starting in the background (`flynn redis:wait`, `pg:wait`, `mysql:wait`, or `flynn resource`). `addons:destroy` detaches the resource and returns; the isolated instance is destroyed in the background. `addons:destroy` accepts the NAME from `flynn resource` (`pg-orchid-xkhthp`) with or without the provider. A leader cannot be removed while followers are still linked. Provider errors (instance not found, still has followers) are returned as-is instead of `unknown_error`. `postgres` is the tenant plugin (`flynn-host plugin:install postgres`), not the platform appliance. `--runtime` sizes the new instance from a database runtime (`flynn-host db-runtime`, default `small`). Those are not app process runtimes. Raw `--cpu`, `--memory`, and `--disk` work only after `flynn-host db-runtime:allow-custom`. `--follow` creates a replica for postgres, mysql, and redis only; mongodb, clickhouse, and kafka have no followers and the CLI rejects `--follow` for them (use `<provider>:scale`) |
+| `addons:attach` / `addons:detach` | Attach or detach an existing resource (`--as` sets the env name for postgres) |
+| `addons:expose` / `addons:unexpose` | Export a datastore on a TCP(/TLS) route; prints `flynn-host firewall:expose` |
 | `pg` / `pg:list` / `pg:info` / `pg:create` / `pg:follow` / `pg:wait` / `pg:promote` / `pg:unfollow` / `pg:upgrade` / `pg:dump` / `pg:restore` / `pg:psql` | Tenant Postgres, after `flynn-host plugin:install postgres`. Not built into this CLI. `pg` and `pg:list` list that app's postgres resources. `pg:help` is `pg --help`. `pg:wait` prints live replica copy progress. `pg:upgrade` shows the same while it follows, waits, and promotes. `pg:dump` / `pg:restore` dump that instance. The platform database is `flynn-host pg:psql` |
 | `autoscale` / `autoscale:enable` / `autoscale:disable` / `autoscale:set` / `autoscale:info` | Web-dyno scale on router HTTP p95 (after `flynn-host plugin:install autoscale`) |
 | `mysql:cli` / `mongodb:cli` / `redis:cli` (+ `:dump` / `:restore`) | Consoles, dump, restore (plugin commands after install) |
@@ -196,14 +196,14 @@ the display name.
 
 ### Datastore export
 
-`flynn resource:expose <provider>` (alias `flynn resource expose`) creates a
+`flynn addons:expose <provider>` (alias `flynn resource expose`) creates a
 leader TCP route for postgres, mysql, mongodb, redis, kafka, or clickhouse and
 prints the host command that opens the port:
 
 ```text
-flynn resource:expose postgres
-flynn resource:expose redis --domain redis.example.com --auto-tls
-flynn resource:unexpose postgres
+flynn addons:expose postgres
+flynn addons:expose redis --domain redis.example.com --auto-tls
+flynn addons:unexpose postgres
 ```
 
 Default TLS mode is **passthrough** (the backend speaks TLS). `--auto-tls` or

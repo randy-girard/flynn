@@ -939,6 +939,14 @@ type ResourceReq struct {
 	Config     *json.RawMessage `json:"config"`
 }
 
+// PluginAddon is a non-resource add-on owned by an installed plugin
+// (scheduler). The plugin keeps the row; the controller only proxies.
+type PluginAddon struct {
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
 type ValidationError struct {
 	Field   string `json:"field,omitempty"`
 	Message string `json:"message"`

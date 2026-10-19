@@ -1,8 +1,6 @@
 package main
 
 import (
-	"encoding/json"
-	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -10,19 +8,8 @@ import (
 
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
-	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
 )
-
-type postgresProviderClient struct {
-	controller.Client
-	provider *ct.Provider
-	err      error
-}
-
-func (p postgresProviderClient) GetProvider(string) (*ct.Provider, error) {
-	return p.provider, p.err
-}
 
 func TestCreatedResourceMessage(t *testing.T) {
 	res := &ct.Resource{
@@ -31,42 +18,39 @@ func TestCreatedResourceMessage(t *testing.T) {
 		Env:        map[string]string{"FLYNN_MYSQL": "mysql-harbor-kxmnpq"},
 	}
 	got := createdResourceMessage(res, "")
-	if got != "Created resource mysql-harbor-kxmnpq and a new release." {
+	if got != "Created add-on mysql-harbor-kxmnpq and a new release." {
 		t.Fatalf("name: %q", got)
 	}
 	got = createdResourceMessage(res, "analytics")
-	if got != "Created resource mysql-harbor-kxmnpq (as ANALYTICS) and a new release." {
+	if got != "Created add-on mysql-harbor-kxmnpq (as ANALYTICS) and a new release." {
 		t.Fatalf("as: %q", got)
 	}
 	got = createdResourceMessage(&ct.Resource{ID: res.ID, ExternalID: res.ExternalID}, "CACHE")
-	if got != "Created resource CACHE and a new release." {
+	if got != "Created add-on CACHE and a new release." {
 		t.Fatalf("as without env: %q", got)
 	}
 	got = createdResourceMessage(&ct.Resource{ID: res.ID, ExternalID: "mysql-fjord-abcxyz"}, "")
-	if got != "Created resource mysql-fjord-abcxyz and a new release." {
+	if got != "Created add-on mysql-fjord-abcxyz and a new release." {
 		t.Fatalf("external id: %q", got)
 	}
 	got = createdResourceMessage(&ct.Resource{ID: res.ID}, "")
-	if got != "Created resource 919a764d-863d-4629-aa23-76248728dcbc and a new release." {
+	if got != "Created add-on 919a764d-863d-4629-aa23-76248728dcbc and a new release." {
 		t.Fatalf("id fallback: %q", got)
 	}
 }
 
 func TestResourceStartingMessage(t *testing.T) {
-	got := resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_REDIS": "redis-harbor-kxmnpq"}})
+	res := &ct.Resource{Env: map[string]string{"FLYNN_REDIS": "redis-harbor-kxmnpq"}}
+	got := resourceStartingMessage(res, "redis:wait")
 	if got != "The instance is starting; check later with flynn redis:wait redis-harbor-kxmnpq." {
 		t.Fatalf("redis: %q", got)
 	}
-	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp"}})
+	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_POSTGRES": "pg-orchid-xkhthp"}}, "pg:wait")
 	if got != "The instance is starting; check later with flynn pg:wait pg-orchid-xkhthp." {
 		t.Fatalf("postgres: %q", got)
 	}
-	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_MYSQL": "mysql-harbor-kxmnpq"}})
-	if got != "The instance is starting; check later with flynn mysql:wait mysql-harbor-kxmnpq." {
-		t.Fatalf("mysql: %q", got)
-	}
-	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_KAFKA": "kafka-fjord-abcxyz"}})
-	if got != "The instance is starting; check later with flynn resource." {
+	got = resourceStartingMessage(&ct.Resource{Env: map[string]string{"FLYNN_KAFKA": "kafka-fjord-abcxyz"}}, "")
+	if got != "The instance is starting; check later with flynn addons." {
 		t.Fatalf("other: %q", got)
 	}
 }
@@ -208,197 +192,41 @@ func TestResourceFollowerNamesBlockLeader(t *testing.T) {
 		ID:  "follower",
 		Env: map[string]string{"FLYNN_POSTGRES": "pg-lagoon-abcdef", "FLYNN_POSTGRES_ROLE": "follower", "FLYNN_POSTGRES_LEADER": "pg-orchid-xkhthp"},
 	}
-	names := resourceFollowerNames(leader, []*ct.Resource{leader, follower})
+	keys := []string{"FLYNN_POSTGRES_LEADER", "POSTGRES_LEADER"}
+	names := resourceFollowerNames(leader, []*ct.Resource{leader, follower}, keys)
 	if len(names) != 1 || names[0] != "pg-lagoon-abcdef" {
 		t.Fatalf("followers %q", names)
 	}
-	if names := resourceFollowerNames(follower, []*ct.Resource{leader, follower}); len(names) != 0 {
+	if names := resourceFollowerNames(follower, []*ct.Resource{leader, follower}, keys); len(names) != 0 {
 		t.Fatalf("follower itself %q", names)
 	}
 }
 
 func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
-	err := rejectPlatformPostgresAdd("postgres", postgresProviderClient{err: controller.ErrNotFound})
-	if !errors.Is(err, pgappliance.ErrTenantProvision) {
-		t.Fatalf("missing provider: %v", err)
+	if !pgappliance.IsPlatformApplianceURL("http://postgres-api.discoverd/databases") {
+		t.Fatal("platform appliance URL must stay rejected by the controller")
 	}
-	err = rejectPlatformPostgresAdd("postgres", postgresProviderClient{
-		provider: &ct.Provider{Name: "postgres", URL: "http://postgres-api.discoverd/databases"},
-	})
-	err = rejectPlatformPostgresAdd("platform-postgres", postgresProviderClient{})
-	if !errors.Is(err, pgappliance.ErrTenantProvision) {
-		t.Fatalf("platform-postgres name: %v", err)
+	if pgappliance.IsPlatformApplianceURL("http://postgres-plugin.discoverd/databases") {
+		t.Fatal("tenant plugin URL must stay allowed")
 	}
 }
 
 func TestResourceAddPostgresDoesNotScaleTheInstance(t *testing.T) {
-	src, err := os.ReadFile("resource.go")
+	src, err := os.ReadFile("addons.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(src), "ScaleAppRelease") {
-		t.Fatal("resource:add must ProvisionResource on postgres-plugin; the plugin starts the instance")
+		t.Fatal("addons:create must ProvisionResource on postgres-plugin; the plugin starts the instance")
 	}
 	if !strings.Contains(string(src), "ProvisionResource") {
-		t.Fatal("resource:add must call ProvisionResource")
+		t.Fatal("addons:create must call ProvisionResource")
 	}
 	if !ct.ShouldProbeScaleStall(5 * time.Minute) {
 		t.Fatal("a 5m ScaleAppRelease wait enables stall probes; the plugin must NoWait and poll discoverd")
 	}
 	if ct.ScaleStartingStuckTimeout >= time.Minute {
 		t.Fatal("initdb typically exceeds ScaleStartingStuckTimeout")
-	}
-}
-
-func TestResourceAddPostgresAllowsPluginProvider(t *testing.T) {
-	err := rejectPlatformPostgresAdd("postgres", postgresProviderClient{
-		provider: &ct.Provider{Name: "postgres", URL: "http://postgres-plugin.discoverd/databases"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = rejectPlatformPostgresAdd("postgres", postgresProviderClient{
-		provider: &ct.Provider{Name: "postgres", URL: "http://plugin-postgres-api.discoverd/databases"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = rejectPlatformPostgresAdd("mysql", postgresProviderClient{err: controller.ErrNotFound})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSingleAttachmentEnv(t *testing.T) {
-	env, err := singleAttachmentEnv(map[string]string{"DATABASE_URL": "postgres://db"}, "ANALYTICS")
-	if err != nil || len(env) != 1 || env["ANALYTICS_URL"] != "postgres://db" {
-		t.Fatalf("env %#v %v", env, err)
-	}
-	env, err = singleAttachmentEnv(map[string]string{"DATABASE_URL": "postgres://db"}, "")
-	if err != nil || env["DATABASE_URL"] != "postgres://db" || len(env) != 1 {
-		t.Fatalf("default %#v %v", env, err)
-	}
-	env, err = singleAttachmentEnv(map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://db"}, "AMBER")
-	if err != nil || env["FLYNN_POSTGRESQL_AMBER_URL"] != "postgres://db" || env["AMBER_URL"] != "" {
-		t.Fatalf("color --as %#v %v", env, err)
-	}
-	env, err = singleAttachmentEnv(map[string]string{"FLYNN_POSTGRESQL_BLUE_URL": "postgres://db"}, "CHARTREUSE")
-	if err != nil || env["CHARTREUSE_URL"] != "postgres://db" || env["FLYNN_POSTGRESQL_CHARTREUSE_URL"] != "" {
-		t.Fatalf("non-palette --as %#v %v", env, err)
-	}
-}
-
-func TestDatabaseProvisionConfigUsesRuntime(t *testing.T) {
-	cat := dbruntime.BuiltinCatalog()
-	got, err := databaseProvisionConfig("scheduler", "ANALYTICS", "res", "perf-l", "logical", "", "", "", cat)
-	if err != nil || got != nil {
-		t.Fatalf("non-database config %s %v", got, err)
-	}
-	got, err = databaseProvisionConfig("redis", "", "", "", "", "", "", "", cat)
-	if err != nil || got == nil {
-		t.Fatalf("redis default %s %v", got, err)
-	}
-	var redis databaseProvisionBody
-	if err := json.Unmarshal(*got, &redis); err != nil {
-		t.Fatal(err)
-	}
-	small, _ := cat.Find(dbruntime.EngineRedis, "small")
-	if redis.Runtime != "small" || redis.Disk != small.Disk || redis.CPU != small.CPU || redis.Memory != small.Memory {
-		t.Fatalf("redis small %#v", redis)
-	}
-	got, err = databaseProvisionConfig("postgres", "", "", "", "", "", "", "", cat)
-	if err != nil || got == nil {
-		t.Fatal(err)
-	}
-	var pg databaseProvisionBody
-	if err := json.Unmarshal(*got, &pg); err != nil {
-		t.Fatal(err)
-	}
-	pgSmall, _ := cat.Find(dbruntime.EnginePostgres, "small")
-	if pg.Disk != pgSmall.Disk || pg.Disk <= redis.Disk {
-		t.Fatalf("postgres disk %d redis disk %d", pg.Disk, redis.Disk)
-	}
-	got, err = databaseProvisionConfig("mysql", "REPLICA", "mysql-harbor-kxmnpq", "", "", "", "", "", cat)
-	if err != nil || got == nil || !strings.Contains(string(*got), `"follow":"mysql-harbor-kxmnpq"`) {
-		t.Fatalf("mysql follow %s %v", got, err)
-	}
-	if strings.Contains(string(*got), `"join"`) {
-		t.Fatalf("mysql must not send join %s", *got)
-	}
-	for _, p := range []string{"mongodb", "clickhouse", "kafka"} {
-		_, err = databaseProvisionConfig(p, "", p+"-harbor-aaaaaa", "", "", "", "", "", cat)
-		want := p + " has no followers; use flynn " + p + ":scale <n> to change the node count"
-		if err == nil || err.Error() != want {
-			t.Fatalf("%s follow: %v", p, err)
-		}
-		got, err = databaseProvisionConfig(p, "", "", "", "", "", "", "", cat)
-		if err != nil || got == nil || strings.Contains(string(*got), `"follow"`) || strings.Contains(string(*got), `"join"`) {
-			t.Fatalf("%s plain %s %v", p, got, err)
-		}
-	}
-	if err := rejectClusterFollow(" Kafka ", "kafka-harbor-aaaaaa"); err == nil || !strings.Contains(err.Error(), "flynn kafka:scale <n>") {
-		t.Fatalf("kafka follow casing: %v", err)
-	}
-	if err := rejectClusterFollow("mongodb", " "); err != nil {
-		t.Fatalf("empty follow: %v", err)
-	}
-	if err := rejectClusterFollow("redis", "redis-harbor-aaaaaa"); err != nil {
-		t.Fatalf("redis follow: %v", err)
-	}
-	got, err = databaseProvisionConfig("postgres", "ANALYTICS", "leader", "medium", "streaming", "", "", "", cat)
-	if err != nil || got == nil || !strings.Contains(string(*got), `"as":"ANALYTICS"`) || !strings.Contains(string(*got), `"follow":"leader"`) {
-		t.Fatalf("config %s %v", got, err)
-	}
-	med, _ := cat.Find(dbruntime.EnginePostgres, "medium")
-	var sized databaseProvisionBody
-	if err := json.Unmarshal(*got, &sized); err != nil {
-		t.Fatal(err)
-	}
-	if sized.Runtime != "medium" || sized.Disk != med.Disk || sized.Replication != "streaming" {
-		t.Fatalf("medium %#v", sized)
-	}
-	if _, err = databaseProvisionConfig("postgres", "", "leader", "", "logical", "", "", "", cat); err == nil || !strings.Contains(err.Error(), "pg:upgrade") {
-		t.Fatalf("logical follow: %v", err)
-	}
-	_, err = databaseProvisionConfig("mysql", "", "", "cache", "", "", "", "", cat)
-	var unpublished *dbruntime.UnpublishedError
-	if !errors.As(err, &unpublished) {
-		t.Fatalf("unpublished runtime: %v", err)
-	}
-	_, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
-	if !errors.Is(err, dbruntime.ErrCustomSizesDisabled) {
-		t.Fatalf("raw size: %v", err)
-	}
-	cat.AllowCustomSizes = true
-	got, err = databaseProvisionConfig("redis", "", "", "", "", "100", "128MB", "1GB", cat)
-	if err != nil || got == nil {
-		t.Fatal(err)
-	}
-	var custom databaseProvisionBody
-	if err := json.Unmarshal(*got, &custom); err != nil {
-		t.Fatal(err)
-	}
-	if custom.Runtime != "custom" || custom.CPU != 100 || custom.Disk != 1<<30 {
-		t.Fatalf("custom %#v", custom)
-	}
-}
-
-func TestWithAutoFailover(t *testing.T) {
-	cat := dbruntime.BuiltinCatalog()
-	got, err := databaseProvisionConfig("postgres", "", "leader", "", "", "", "", "", cat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err = withAutoFailover(got)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var body databaseProvisionBody
-	if err := json.Unmarshal(*got, &body); err != nil {
-		t.Fatal(err)
-	}
-	if !body.AutoFailover || body.Follow == "" {
-		t.Fatalf("auto-failover body %#v", body)
 	}
 }
 

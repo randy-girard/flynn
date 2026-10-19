@@ -135,7 +135,7 @@ swap. It clears when the deployer finishes. The dashboard paints that banner
 as an info alert. Overview shows a Deployment card with **deploying** (or
 **compiling** during git push). Activity marks the release card **deploying**
 (or **queued**). The Deploy tab card lists kind, strategy, old → new release,
-and scale. **Config deploys** (env changes, `resource:add` / attaching a
+and scale. **Config deploys** (env changes, `addons:create` / attaching a
 database) do not show this header. `flynn apps:info` prints a **Build** line
 during compile and a **Deploy** line while a code deployer is running.
 `flynn deploy` lists `running` until the deployer finishes (`complete` or
@@ -394,7 +394,7 @@ key are specified with the `--tls-cert` and `--tls-key` flags when creating or
 updating the route. Enabling HTTPS for a route also enables HTTP/2
 automatically.
 
-Datastores use TCP routes instead of HTTP. `flynn resource:expose postgres`
+Datastores use TCP routes instead of HTTP. `flynn addons:expose postgres`
 creates a TLS-capable TCP route (default **passthrough**) and prints
 `sudo flynn-host firewall:expose PORT`. `--auto-tls` on a TCP route sets
 **terminate** and attaches a Let's Encrypt cert (HTTP-01 still uses 80/443).

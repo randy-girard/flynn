@@ -121,7 +121,7 @@ See [Vagrant](docs/content/installation/vagrant.md) and [Development](docs/conte
 flynn apps:create myapp
 # after: sudo flynn-host plugin:install postgres
 # this does not provision on the platform appliance
-flynn resource:add postgres
+flynn addons:create postgres
 git push flynn main            # or: master
 ```
 
@@ -153,19 +153,19 @@ Language notes live under [docs/content/languages](docs/content/languages).
 ## Datastores
 
 The built-in Postgres appliance is the platform database (controller,
-blobstore). Tenant databases do not live on it. `flynn resource:add postgres`
+blobstore). Tenant databases do not live on it. `flynn addons:create postgres`
 uses `flynn-plugin-postgres` (one app, one volume, one node per resource) and
 does not create a role on the platform appliance. Other engines are plugins (`flynn-host plugin:install`;
 see [Plugins](docs/content/plugins.md)). Provision those from an app with
-`flynn resource:add <provider>`. Connection URLs are injected as environment
+`flynn addons:create <provider>`. Connection URLs are injected as environment
 variables (`DATABASE_URL`, `REDIS_URL`, `KAFKA_URL`, …). User jobs reach
 appliances at the **leader** hostname Flynn put in those URLs, not at internal
 `*.discoverd` names.
 
 | Provider | Engine | Default topology | Notes |
 | --- | --- | --- | --- |
-| platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `resource:add postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
-| `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn resource:add postgres`. Not the platform appliance. Resize by follow, wait, promote. Instance volumes are not in `flynn-host backup` |
+| platform `postgres` app | PostgreSQL **16** | HA (primary + sync + async) | **Platform appliance.** Not `addons:create postgres`. PostGIS, pgRouting, TimescaleDB. System apps only |
+| `postgres` | PostgreSQL **16** | One node, own app and volume | **Plugin** `flynn-plugin-postgres`. `flynn addons:create postgres`. Not the platform appliance. Resize by follow, wait, promote. Instance volumes are not in `flynn-host backup` |
 | `mysql` | MariaDB **10.11** | HA, started on first provision | **Plugin.** `flynn-host plugin:install mysql` |
 | `mongodb` | MongoDB **7.0** | Replica set, started on first provision | **Plugin.** `flynn-host plugin:install mongodb`. Resize with `flynn mongodb:scale <n>` (no followers) |
 | `redis` | Redis (Ubuntu 24.04 package) | Single process, AOF on a volume | **Plugin.** `flynn-host plugin:install redis`. Followers via `flynn redis:follow`. Not in `flynn-host backup`; caching and development |

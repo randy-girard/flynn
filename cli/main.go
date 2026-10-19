@@ -287,7 +287,13 @@ func runCommand(name string, args []string) (err error) {
 	if err := requirePluginCommand(name); err != nil {
 		return err
 	}
-	parsedArgs, err := docopt.Parse(cmd.usage, argv, true, "", cmd.optsFirst)
+	usage := cmd.usage
+	if u, err := addonsArgUsage(name, args); err != nil {
+		return err
+	} else if u != "" {
+		usage = u
+	}
+	parsedArgs, err := docopt.Parse(usage, argv, true, "", cmd.optsFirst)
 	if err != nil {
 		return err
 	}

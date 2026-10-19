@@ -17,11 +17,12 @@ var officialPluginsJSON []byte
 // flynn-host plugin:install <name> uses Repo unless the operator passes a
 // path, git URL, --github-org, or /etc/flynn/plugins.json override.
 type KnownPlugin struct {
-	Name        string   `json:"name"`
-	Aliases     []string `json:"aliases,omitempty"`
-	Kind        string   `json:"kind"`
-	Repo        string   `json:"repo"`
-	Description string   `json:"description"`
+	Name        string     `json:"name"`
+	Aliases     []string   `json:"aliases,omitempty"`
+	Kind        string     `json:"kind"`
+	Repo        string     `json:"repo"`
+	Description string     `json:"description"`
+	Addon       *AddonSpec `json:"addon,omitempty"`
 }
 
 // PluginGroup is a named set of plugins installed together.
@@ -108,6 +109,15 @@ func parseOfficial(data []byte) (officialFile, error) {
 				return f, fmt.Errorf("duplicate plugin name %q (%s and %s)", name, owner, p.Name)
 			}
 			seen[name] = p.Name
+		}
+		if p.Addon != nil {
+			p.Addon.Normalize()
+			if p.Addon.Type == "" {
+				p.Addon.Type = p.Name
+			}
+			if err := p.Addon.Validate(); err != nil {
+				return f, fmt.Errorf("plugin %s: %w", p.Name, err)
+			}
 		}
 	}
 	for i := range f.PrivatePlugins {

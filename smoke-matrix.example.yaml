@@ -15,7 +15,7 @@
 #   script/vagrant-smoke.sh --list           # show ids without booting VMs
 #   script/vagrant-smoke.sh --item quick     # contributor default (boot + git/docker + postgres)
 #   script/vagrant-smoke.sh --item singleton # one item (runs even if disabled)
-#   script/vagrant-smoke.sh --item datastores # every datastore plugin + resource:add
+#   script/vagrant-smoke.sh --item datastores # every datastore plugin + addons:create
 #   script/vagrant-smoke.sh --item ha,add-node
 #
 # Environment variables override matching fields for the selected run
@@ -128,7 +128,7 @@ items:
     enabled: false
 
   - id: datastores
-    description: 1-node and 3-node — install every datastore plugin, resource:add, seed, follow, teardown
+    description: 1-node and 3-node — install every datastore plugin, addons:create, seed, follow, teardown
     topologies: "1,3"
     skip_upgrade: true
     skip_backup: true

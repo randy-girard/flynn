@@ -75,12 +75,15 @@ var subAliases = map[string]map[string]string{
 		"update": "route:update",
 		"remove": "route:remove",
 	},
-	"resource": {
-		"list":     "resource",
-		"add":      "resource:add",
-		"remove":   "resource:remove",
-		"expose":   "resource:expose",
-		"unexpose": "resource:unexpose",
+	"addons": {
+		"list":     "addons",
+		"create":   "addons:create",
+		"destroy":  "addons:destroy",
+		"attach":   "addons:attach",
+		"detach":   "addons:detach",
+		"expose":   "addons:expose",
+		"unexpose": "addons:unexpose",
+		"types":    "addons:types",
 	},
 	"volume": {
 		"show":         "volume:show",

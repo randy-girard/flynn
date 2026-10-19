@@ -41,7 +41,7 @@ need "${smoke}" '--item' \
 need "${smoke}" '--item quick' \
   "smoke header must document the contributor quick item"
 need "${smoke}" '[[ "${raw}" == "none" ]]' \
-  "quick smoke must treat SMOKE_DATASTORES=none as no tenant resource:add"
+  "quick smoke must treat SMOKE_DATASTORES=none as no tenant addons:create"
 need "${smoke}" '--item minio' \
   "smoke header must document the MinIO blobstore item"
 need "${smoke}" '--item pipeline' \
@@ -158,7 +158,7 @@ echo "${out}" | grep -q 'SKIP_BUILDPACK=1' \
 echo "${out}" | grep -q 'SMOKE_DATASTORES=none' \
   || { echo "quick must set SMOKE_DATASTORES=none (no tenant database on the platform appliance)" >&2; echo "${out}" >&2; exit 1; }
 if echo "${out}" | grep -q 'SMOKE_DATASTORES=postgres'; then
-  echo "quick must not resource:add postgres on the platform appliance" >&2
+  echo "quick must not addons:create postgres on the platform appliance" >&2
   echo "${out}" >&2
   exit 1
 fi
@@ -233,7 +233,7 @@ for engine in postgres redis mysql mongodb kafka clickhouse; do
   echo "${out}" | grep -q "PLUGIN_SMOKE_APPS=.*${engine}" \
     || { echo "datastores must install the ${engine} plugin" >&2; echo "${out}" >&2; exit 1; }
   echo "${out}" | grep -q "SMOKE_DATASTORES=.*${engine}" \
-    || { echo "datastores must resource:add ${engine}" >&2; echo "${out}" >&2; exit 1; }
+    || { echo "datastores must addons:create ${engine}" >&2; echo "${out}" >&2; exit 1; }
 done
 if echo "${out}" | grep -q 'PLUGIN_SMOKE_APPS=.*dashboard'; then
   echo "datastores must not install non-datastore plugins" >&2

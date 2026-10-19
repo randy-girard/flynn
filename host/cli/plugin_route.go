@@ -108,7 +108,7 @@ func runPluginRouteAddTCP(args *docopt.Args, app *ct.App, rt *plugin.PluginRoute
 	if hr.Domain != "" {
 		fmt.Printf("hostname %s tls_mode=%s\n", hr.Domain, hr.TLSMode)
 	}
-	fmt.Printf("On each host run: sudo flynn-host firewall:expose %d\n", hr.Port)
+	fmt.Printf("The cluster firewall opens TCP port %d on every host within 15 seconds.\n", hr.Port)
 	return nil
 }
 

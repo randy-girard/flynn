@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"encoding/json"
+	"strings"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
@@ -17,7 +18,8 @@ type catalogSource interface {
 // user flynn CLI. Resource-provider and scheduler plugins are included;
 // kind: app system plugins are not unless cli.user is true.
 type Catalog struct {
-	Commands []CLI `json:"commands"`
+	Commands []CLI       `json:"commands"`
+	Addons   []AddonSpec `json:"addons,omitempty"`
 }
 
 func (c *Catalog) HasCommand(name string) bool {
@@ -34,6 +36,47 @@ func (c *Catalog) Lookup(name string) *CLI {
 		}
 	}
 	return nil
+}
+
+// AddonByType returns the installed add-on type, including aliases.
+func (c *Catalog) AddonByType(name string) *AddonSpec {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Addons {
+		if c.Addons[i].MatchesType(name) {
+			return &c.Addons[i]
+		}
+	}
+	return nil
+}
+
+// AddonByProvider returns the resource-backend add-on for a provider name.
+func (c *Catalog) AddonByProvider(name string) *AddonSpec {
+	if c == nil {
+		return nil
+	}
+	name = strings.ToLower(strings.TrimSpace(name))
+	for i := range c.Addons {
+		a := &c.Addons[i]
+		if a.Backend == BackendResource && (a.Provider == name || a.MatchesType(name)) {
+			return a
+		}
+	}
+	return nil
+}
+
+// SupportsVerb reports whether any installed add-on declares verb.
+func (c *Catalog) SupportsVerb(verb string) bool {
+	if c == nil {
+		return false
+	}
+	for i := range c.Addons {
+		if c.Addons[i].Supports(verb) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Catalog) HasProvider(name string) bool {
@@ -80,10 +123,17 @@ func catalogFrom(apps []*ct.App, providers []*ct.Provider) *Catalog {
 func catalogFromOpts(apps []*ct.App, providers []*ct.Provider, allPlugins bool) *Catalog {
 	cat := &Catalog{}
 	seen := map[string]struct{}{}
+	seenAddon := map[string]struct{}{}
 
 	for _, app := range apps {
 		if app == nil || !app.Plugin() {
 			continue
+		}
+		if spec := AddonFromApp(app); spec != nil {
+			if _, ok := seenAddon[spec.Type]; !ok {
+				seenAddon[spec.Type] = struct{}{}
+				cat.Addons = append(cat.Addons, *spec)
+			}
 		}
 		raw := app.Meta[MetaPluginCLI]
 		if raw == "" {

@@ -12,7 +12,7 @@ cluster host, then provision from an app. See [Plugins](../plugins.md).
 sudo flynn-host plugin:install redis --ref v20260914.0.0
 sudo flynn-host plugin:install https://github.com/randy-girard/flynn-plugin-redis.git --ref v20260914.0.0
 sudo flynn-host plugin:install ../flynn-plugin-redis
-flynn resource:add redis
+flynn addons:create redis
 ```
 
 The controller app is `redis-plugin` (`flynn-host ps`, `flynn -a redis-plugin`).
@@ -21,8 +21,8 @@ Provider name stays `redis`.
 The plugin provides Redis from the Ubuntu 24.04 package set in a
 single process configuration. Redis writes an append-only file on a persistent
 volume, so data survives job restarts and `flynn-host update`. A follower is a
-separate resource (`flynn redis:follow` or `flynn resource:add redis --follow`).
-`flynn resource:add redis --follow <primary> --auto-failover` places that
+separate resource (`flynn redis:follow` or `flynn addons:create redis --follow`).
+`flynn addons:create redis --follow <primary> --auto-failover` places that
 replica on another host and promotes it if the primary job is lost, then
 creates a replacement replica. Failover is asynchronous (RPO is replication
 lag). A single-node cluster cannot use auto-failover. The volume is **not** part of `flynn-host backup`. Treat the data
@@ -40,7 +40,7 @@ Redis is available after the operator installs the plugin. After you create
 an app, provision a server with:
 
 ```text
-flynn resource:add redis
+flynn addons:create redis
 ```
 
 This will provision a Redis server as a Flynn app and configure your application
@@ -55,7 +55,7 @@ release. A new provision sets `REDIS_URL` when that key is free, plus
 `FLYNN_REDIS_<COLOR>_URL`. `--as CACHE` sets `CACHE_URL`. `--as AMBER`
 sets `FLYNN_REDIS_AMBER_URL`. Attaching an existing resource does not set
 `REDIS_URL`. `FLYNN_REDIS` (the Redis app name) and `FLYNN_REDIS_ROLE` stay on the
-resource record. TLS for `resource:expose` is on 16379 by default, so
+resource record. TLS for `addons:expose` is on 16379 by default, so
 external clients use `rediss://` and `FLYNN_REDIS_TRUSTED_CERT`. In-cluster
 `REDIS_URL` is `redis://` on 6379 so Sidekiq and redis-rb do not need to
 trust Flynn's private CA. After a plugin update, leftover in-cluster
@@ -82,7 +82,7 @@ flynn redis:follow
 flynn redis:wait <follower>
 flynn redis:promote <follower>
 flynn redis:unfollow <follower>
-flynn resource:add redis --follow <primary> --auto-failover
+flynn addons:create redis --follow <primary> --auto-failover
 ```
 
 `redis:wait` prints live copy progress (full resync, then streaming catch-up).
@@ -105,7 +105,7 @@ flynn redis:restore -f db.dump
 Export Redis on a TCP route with a stable hostname, then open the host port:
 
 ```text
-flynn resource:expose redis
+flynn addons:expose redis
 sudo flynn-host firewall:expose PORT   # on every host
 ```
 
@@ -120,7 +120,7 @@ flynn -a redis-harbor-48291 route:add tcp --service redis-harbor-48291 --leader 
 sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn resource:unexpose redis` then
+Remove with `flynn addons:unexpose redis` then
 `sudo flynn-host firewall:unexpose PORT`. See
 [Production — Firewalling](../production.html.md#firewalling).
 

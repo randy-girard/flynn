@@ -23,7 +23,7 @@ func TestCLINestedCommandsAreRegistered(t *testing.T) {
 		"apps:create", "apps:destroy",
 		"docker:push", "docker:set-push-url",
 		"volume:show", "volume:decommission",
-		"route:add", "resource:add", "resource:expose", "resource:unexpose",
+		"route:add", "addons:create", "addons:expose", "addons:unexpose",
 		"letsencrypt", "letsencrypt:list", "letsencrypt:enable", "letsencrypt:disable", "letsencrypt:status",
 		"cluster:add", "cluster:migrate-domain", "cluster:ca",
 		"limit:set", "limit:profiles", "limit:runtime",

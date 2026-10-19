@@ -149,13 +149,13 @@ func TestPluginColonName(t *testing.T) {
 }
 
 func TestResolveCommandHelpAndList(t *testing.T) {
-	name, args, from := resolveCommand("resource:help", nil)
-	if name != "resource" || from != "" || !reflect.DeepEqual(args, []string{"--help"}) {
-		t.Fatalf("resource:help %q %q from=%q", name, args, from)
+	name, args, from := resolveCommand("addons:help", nil)
+	if name != "addons" || from != "" || !reflect.DeepEqual(args, []string{"--help"}) {
+		t.Fatalf("addons:help %q %q from=%q", name, args, from)
 	}
-	name, args, from = resolveCommand("resource:list", []string{"--json"})
-	if name != "resource" || from != "" || !reflect.DeepEqual(args, []string{"--json"}) {
-		t.Fatalf("resource:list %q %q from=%q", name, args, from)
+	name, args, from = resolveCommand("addons:list", []string{"--json"})
+	if name != "addons:list" || from != "" || !reflect.DeepEqual(args, []string{"--json"}) {
+		t.Fatalf("addons:list %q %q from=%q", name, args, from)
 	}
 	name, args, from = resolveCommand("plugin:help", nil)
 	if name != "plugin" || !reflect.DeepEqual(args, []string{"--help"}) {
@@ -182,7 +182,7 @@ func TestFirewallStaysOnFlynnHost(t *testing.T) {
 	if err := hostOnlyCommandError("firewall:expose"); err == nil || err.Error() != "firewall:expose is a flynn-host command; run `flynn-host firewall expose`" {
 		t.Fatalf("firewall:expose: %v", err)
 	}
-	if err := hostOnlyCommandError("resource:expose"); err != nil {
+	if err := hostOnlyCommandError("addons:expose"); err != nil {
 		t.Fatal(err)
 	}
 }

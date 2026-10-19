@@ -189,15 +189,15 @@ Cluster acceptance lives in `script/vagrant-smoke.sh` (implementation:
 (builder + `nodeN` in `.vagrant`); it does not invent a second harness.
 
 The full `singleton` / `ha` rows already `plugin:install` first-party plugins
-and `resource:add` every datastore (postgres, redis, mysql, mongodb, kafka,
+and `addons:create` every datastore (postgres, redis, mysql, mongodb, kafka,
 clickhouse) onto `test/apps/upgrade-smoke`, then upgrade and backup. That is
 the multi-hour release gate.
 
 `--item datastores` is the focused path: 1-node then 3-node, install only the
-datastore plugins, create a throwaway app, `flynn resource:add <provider>` for
+datastore plugins, create a throwaway app, `flynn addons:create <provider>` for
 each engine, seed rows, provision a replica (`--follow`) or extra cluster node
 (`--join` for kafka/mongodb, or `mongodb:nodes:add`), verify the seed on that
-node, and `resource:remove`.
+node, and `addons:destroy`.
 It asserts an env URL (`FLYNN_*` or `*_URL`) or that `flynn resource`
 lists the provider. `mysql` tries that name first and falls back to `mariadb`
 (the sibling checkout is `flynn-plugin-mysql`). Tenant postgres is

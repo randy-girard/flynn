@@ -277,17 +277,17 @@ func TestFormatHelpDocumentsFlagsAndExamples(t *testing.T) {
 			t.Fatalf("plugin help missing %q:\n%s", want, plug)
 		}
 	}
-	unexpose := formatHelp("resource:unexpose")
+	unexpose := formatHelp("addons:unexpose")
 	if !strings.Contains(unexpose, "Options:") || !strings.Contains(unexpose, "--domain") {
-		t.Fatalf("resource:unexpose help missing --domain Options:\n%s", unexpose)
+		t.Fatalf("addons:unexpose help missing --domain Options:\n%s", unexpose)
 	}
 	vol := formatHelp("volume:show")
 	if !strings.Contains(vol, "Options:") || !strings.Contains(vol, "--json") {
 		t.Fatalf("volume:show help missing --json Options:\n%s", vol)
 	}
-	add := formatHelp("resource:add")
-	if !strings.Contains(add, "Examples:") || !strings.Contains(add, "resource:add postgres") {
-		t.Fatalf("resource:add help missing postgres example:\n%s", add)
+	add := formatHelp("addons:create")
+	if !strings.Contains(add, "Examples:") || !strings.Contains(add, "addons:create postgres") {
+		t.Fatalf("addons:create help missing postgres example:\n%s", add)
 	}
 	token := formatHelp("token:create")
 	if !strings.Contains(token, "Examples:") || !strings.Contains(token, "token:create") {

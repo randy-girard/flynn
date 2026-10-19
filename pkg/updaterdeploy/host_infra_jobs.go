@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/inconshreveable/log15"
@@ -138,9 +139,13 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 		}
 		return nil
 	}
+	source := old
+	if source == nil {
+		source = anyHostInfraJob(jobs, name)
+	}
 	var template *host.Job
-	if old != nil {
-		template = hostInfraReplacementJob(old, h.ID(), image, release)
+	if source != nil {
+		template = hostInfraReplacementJob(source, h.ID(), image, release)
 	}
 	if switching {
 		if err := r.releaseHost(h.ID(), log); err != nil {
@@ -196,17 +201,68 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 				continue
 			}
 		}
+		if msg := templateVolumeMissing(template, jobs, name); msg != "" {
+			return fmt.Errorf("%s on %s: data volume is missing (%s)", name, h.ID(), msg)
+		}
 		job := hostInfraReplacementJob(template, h.ID(), image, release)
 		if log != nil {
 			log.Info("starting host-infra job", "host", h.ID(), "app", name, "job", job.ID)
 		}
 		if err := h.AddJob(job); err != nil {
+			if volumeMissing(err) {
+				return fmt.Errorf("%s on %s: %w", name, h.ID(), err)
+			}
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("%s on %s did not become running on pulled image after %s", name, h.ID(), hostInfraReplaceTimeout)
+}
+
+func anyHostInfraJob(jobs map[string]host.ActiveJob, appName string) *host.Job {
+	var found *host.Job
+	for _, j := range jobs {
+		if j.Job == nil || j.Job.Metadata["flynn-controller.app_name"] != appName {
+			continue
+		}
+		found = j.Job
+		if j.Status == host.StatusRunning || j.Status == host.StatusStarting {
+			return j.Job
+		}
+	}
+	return found
+}
+
+func volumeMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "volume") && strings.Contains(msg, "does not exist")
+}
+
+// templateVolumeMissing reports when the job we are about to start pins a
+// volume that a previous start already found missing. Older failures for a
+// different volume must not block a healthy replacement.
+func templateVolumeMissing(template *host.Job, jobs map[string]host.ActiveJob, appName string) string {
+	if template == nil || len(template.Config.Volumes) == 0 {
+		return ""
+	}
+	for _, j := range jobs {
+		if j.Job == nil || j.Error == nil || j.Status != host.StatusFailed {
+			continue
+		}
+		if j.Job.Metadata["flynn-controller.app_name"] != appName || !volumeMissing(fmt.Errorf("%s", *j.Error)) {
+			continue
+		}
+		for _, v := range template.Config.Volumes {
+			if v.VolumeID != "" && strings.Contains(*j.Error, v.VolumeID) {
+				return *j.Error
+			}
+		}
+	}
+	return ""
 }
 
 func hostInfraReplacementJob(old *host.Job, hostID string, image *ct.Artifact, releaseID string) *host.Job {

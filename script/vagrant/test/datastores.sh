@@ -1,6 +1,6 @@
 #!/bin/bash
 # Regression: --item datastores stands up the existing smoke cluster, installs
-# every datastore plugin, and resource:adds each onto a throwaway app. It must
+# every datastore plugin, and addons:creates each onto a throwaway app. It must
 # not invent a second cluster harness or require the multi-hour singleton path.
 set -euo pipefail
 
@@ -28,31 +28,31 @@ need "${smoke}" 'DATASTORE_SMOKE_APP' \
 need "${smoke}" 'smoke-datastores' \
   "default throwaway app must be smoke-datastores"
 need "${smoke}" 'resource_add_candidates' \
-  "mysql resource:add must try mysql then fall back to mariadb"
+  "mysql addons:create must try mysql then fall back to mariadb"
 need "${smoke}" 'add_throwaway_resource' \
-  "each engine must be resource:added on the throwaway app"
+  "each engine must be addons:createed on the throwaway app"
 need "${smoke}" 'created an instance but did not finish; not provisioning another' \
-  "a failed resource:add that already created an instance must not be retried"
+  "a failed addons:create that already created an instance must not be retried"
 need "${smoke}" 'throwaway_resource_ok' \
   "provision must accept env URL or a listed resource"
 need "${smoke}" 'wait_selected_datastores_ready "after throwaway resource add" 1' \
-  "after throwaway resource:add, smoke must wait for selected engines including kafka/clickhouse pings"
+  "after throwaway addons:create, smoke must wait for selected engines including kafka/clickhouse pings"
 need "${smoke}" 'seed_datastores' \
-  "throwaway provision must seed each engine after resource:add"
+  "throwaway provision must seed each engine after addons:create"
 need "${smoke}" 'exercise_datastore_followers' \
   "throwaway provision must create followers and verify seed on them"
 need "${smoke}" 'teardown_throwaway_datastores' \
-  "throwaway provision must resource:remove after seed and follow"
+  "throwaway provision must addons:destroy after seed and follow"
 need "${smoke}" 'assert_no_orphan_replicas' \
   "smoke must fail when a finished datastore replica is left as a system app"
 need "${smoke}" '--follow' \
-  "replica engines must be provisioned with resource:add --follow"
-need "${ROOT}/cli/resource.go" 'listRec(w, "NAME", "PROVIDER", "ID")' \
-  "flynn resource must print NAME for pg:psql, --follow, and --join"
+  "replica engines must be provisioned with addons:create --follow"
+need "${ROOT}/cli/addons.go" 'listRec(w, "NAME", "TYPE", "ATTACHMENT")' \
+  "flynn addons must print NAME, type, and attachment"
 need "${smoke}" 'tolower($2)==tolower(p)' \
   "resource teardown must match PROVIDER (column 2) now that NAME is first"
 need "${smoke}" 'datastore_extra_node_flag' \
-  "kafka/mongodb must use --join; replica engines keep --follow"
+  "kafka/mongodb/clickhouse scale instead of --follow; replica engines keep --follow"
 need "${smoke}" 'mongodb:nodes:add' \
   "mongodb --join adds a replica-set member; nodes:add remains the fallback"
 need "${example}" 'topologies: "1,3"' \
@@ -115,7 +115,7 @@ need "${smoke}" 'postgresql-[a-z0-9]+(-[a-z0-9]+)*-[0-9]{5,8}' \
 need "${smoke}" './pkg/resname/' \
   "host unit-test gate must compile pkg/resname (expanded words and colors)"
 need "${smoke}" 'attempt ${attempt}/20' \
-  "resource:add must retry; provider may not be ready yet after plugin install"
+  "addons:create must retry; provider may not be ready yet after plugin install"
 need "${smoke}" 'kafka_cluster_ready' \
   "kafka --join must wait for a second broker in the same cluster"
 need "${smoke}" 'redis_follower_seeded' \

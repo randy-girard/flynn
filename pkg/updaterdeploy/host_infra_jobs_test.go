@@ -489,6 +489,58 @@ func TestReplaceHostInfraJobsMovesJobOnNewLayersButOldRelease(t *testing.T) {
 	assertHostRunsRelease(t, h, c.created[0].ID)
 }
 
+func TestReplaceHostInfraJobsRefusesMissingDataVolume(t *testing.T) {
+	c := newFakeInfraController(t, "layer-old")
+	dead := infraJob("dead", "rel-old", "layer-old")
+	dead.Status = host.StatusFailed
+	msg := "job dead required volume gone, but that volume does not exist"
+	dead.Error = &msg
+	dead.Job.Config.Volumes = []host.VolumeBinding{{Target: "/data", VolumeID: "gone"}}
+	h := &fakeInfraHost{
+		id:   "n1",
+		jobs: map[string]host.ActiveJob{"dead": dead},
+	}
+	grace, delay := hostInfraSchedulerGrace, hostInfraFormationRetryDelay
+	hostInfraSchedulerGrace, hostInfraFormationRetryDelay = 0, 0
+	t.Cleanup(func() { hostInfraSchedulerGrace, hostInfraFormationRetryDelay = grace, delay })
+
+	img := newInfraImage(t)
+	r, err := prepareHostInfraRollout(c, "flannel", img, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": img}, map[string]*hostInfraRollout{"flannel": r}, false, nil)
+	if err == nil || !volumeMissing(err) {
+		t.Fatalf("err=%v, want a missing-volume failure", err)
+	}
+	if len(h.added) != 0 {
+		t.Fatalf("added %d jobs with a missing data volume", len(h.added))
+	}
+}
+
+func TestReplaceHostInfraJobsIgnoresStaleMissingVolume(t *testing.T) {
+	c := newFakeInfraController(t, "layer-old")
+	dead := infraJob("dead", "rel-old", "layer-old")
+	dead.Status = host.StatusFailed
+	msg := "job dead required volume gone, but that volume does not exist"
+	dead.Error = &msg
+	live := infraJob("live", "rel-old", "layer-old")
+	live.Job.Config.Volumes = []host.VolumeBinding{{Target: "/data", VolumeID: "kept"}}
+	h := &fakeInfraHost{
+		id:   "n1",
+		jobs: map[string]host.ActiveJob{"dead": dead, "live": live},
+	}
+
+	runHostInfraRollout(t, c, []hostInfraHost{h}, newInfraImage(t))
+
+	if len(h.added) != 1 {
+		t.Fatalf("added %d jobs, want the healthy volume reused", len(h.added))
+	}
+	if got := h.added[0].Config.Volumes; len(got) != 1 || got[0].VolumeID != "kept" {
+		t.Fatalf("volumes=%v, want kept", got)
+	}
+}
+
 // If the scheduler does not start the new job, the updater starts it itself
 // under the new release.
 func TestReplaceHostInfraJobsStartsNewReleaseJobWithoutScheduler(t *testing.T) {

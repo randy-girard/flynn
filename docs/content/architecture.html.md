@@ -112,7 +112,7 @@ ensure that no data is lost.
 
 All persistent data stored by Flynn **system** components is in this
 appliance. Tenant databases are the `postgres` catalog plugin
-(`flynn resource:add postgres` after `flynn-host plugin:install postgres`),
+(`flynn addons:create postgres` after `flynn-host plugin:install postgres`),
 not roles on this cluster. The appliance provides a great combination of
 features, performance, and reliability that we have not found in any other
 database systems.
@@ -168,11 +168,11 @@ route, or enable ACME/Let's Encrypt (`flynn-host letsencrypt` and `flynn letsenc
 TCP routes have three TLS modes:
 
 * **off** — plaintext proxy (historical default for `flynn route:add tcp`)
-* **passthrough** — the backend speaks TLS (default for `flynn resource:expose`;
+* **passthrough** — the backend speaks TLS (default for `flynn addons:expose`;
   required for Postgres/MySQL SSLRequest)
 * **terminate** — the router wraps the listener (`--auto-tls` or a manual cert)
 
-`flynn resource:expose` creates the TCP route and prints
+`flynn addons:expose` creates the TCP route and prints
 `sudo flynn-host firewall:expose PORT` so the host port is opened like HTTP
 routes on 80/443. See [Production — Firewalling](production.html.md#firewalling).
 

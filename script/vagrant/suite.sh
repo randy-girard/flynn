@@ -68,7 +68,7 @@
 #                               undeployed production app. Disabled in the
 #                               example matrix. --item still runs it.
 #   --item datastores          1-node then 3-node: install every datastore
-#                               plugin, resource:add each onto a throwaway app,
+#                               plugin, addons:create each onto a throwaway app,
 #                               seed, follow (mongodb:nodes:add), verify
 #                               replicas, and teardown. mysql falls back to
 #                               mariadb if that is still the provider
@@ -138,10 +138,10 @@
 #                        verify (default: postgres mysql mongodb redis kafka
 #                        clickhouse). "none" attaches nothing: the platform
 #                        Postgres appliance still boots, but the smoke app does
-#                        not resource:add postgres onto it. Tenant postgres is
+#                        not addons:create postgres onto it. Tenant postgres is
 #                        the postgres plugin (not the platform appliance);
 #                        --item datastores installs that plugin and
-#                        resource:adds every engine on a throwaway app.
+#                        addons:creates every engine on a throwaway app.
 #                        Matrix field: datastores.
 #   --datastore ENGINE   Smoke one engine (repeatable). Same as
 #                        SMOKE_DATASTORES="postgres" and only that plugin image
@@ -174,7 +174,7 @@
 #                        without echoing ^R)
 #   SKIP_TEARDOWN=1      Alias for KEEP_VMS=1
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
-#                        after bootstrap, before resource add (default: redis
+#                        after bootstrap, before addons create (default: redis
 #                        mysql mongodb kafka clickhouse dashboard www
 #                        discovery otel scheduler pipeline). mysql resolves to
 #                        the mariadb checkout via flynn-plugin.json. Restore
@@ -412,7 +412,7 @@ PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-6}"
 # Set by --item datastores: skip the upgrade-smoke/docker deploys and
-# resource:add every selected engine on a throwaway app instead.
+# addons:create every selected engine on a throwaway app instead.
 SMOKE_DATASTORE_PROVISION="${SMOKE_DATASTORE_PROVISION:-0}"
 DATASTORE_SMOKE_APP="${DATASTORE_SMOKE_APP:-smoke-datastores}"
 SMOKE_BLOBSTORE_BACKEND="${SMOKE_BLOBSTORE_BACKEND:-}"
@@ -424,7 +424,7 @@ SMOKE_MINIO_BUCKET="${SMOKE_MINIO_BUCKET:-flynnblobstore}"
 
 sync_datastore_providers() {
   local raw="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
-  # "none" means no tenant resource:add. The platform Postgres appliance still
+  # "none" means no tenant addons:create. The platform Postgres appliance still
   # starts at bootstrap; quick smoke must not provision a tenant database on it.
   if [[ "${raw}" == "none" ]]; then
     DATASTORE_PROVIDERS=()
@@ -460,7 +460,7 @@ datastore_wanted() {
   return 1
 }
 
-# Tenant identity env attached on resource:add. Used by cli-env when smoke
+# Tenant identity env attached on addons:create. Used by cli-env when smoke
 # runs a subset of engines (--datastore clickhouse must not require FLYNN_POSTGRES).
 smoke_identity_env_keys() {
   datastore_wanted postgres && echo FLYNN_POSTGRES
@@ -1978,7 +1978,7 @@ wait_datastores_ready() {
   done
 }
 
-# Tenant identity env injected by resource add (same keys as cli-env).
+# Tenant identity env injected by addons create (same keys as cli-env).
 resource_identity_key() {
   case "$1" in
     postgres) echo FLYNN_POSTGRES ;;
@@ -2033,7 +2033,7 @@ wait_app_deploy_idle() {
   wait_for "app deploy idle ${suffix}" 300 app_deploy_idle
 }
 
-# Do not wrap resource add in wait_for: retries re-provision while setEnv
+# Do not wrap addons create in wait_for: retries re-provision while setEnv
 # deploys. Wait for the smoke app deploy to finish, then add once.
 add_app_resource() {
   local provider=$1
@@ -2043,18 +2043,18 @@ add_app_resource() {
   fi
   wait_app_deploy_idle "before ${provider}" || return 1
   info "adding ${provider} resource"
-  if ! flynn1 -a "${APP_NAME}" resource add "${provider}"; then
-    echo "${provider} resource add failed; waiting for in-progress deploy then retrying once" >&2
+  if ! flynn1 -a "${APP_NAME}" addons create "${provider}"; then
+    echo "${provider} addons create failed; waiting for in-progress deploy then retrying once" >&2
     wait_app_deploy_idle "retry ${provider}" || return 1
     if resource_env_ready "${provider}"; then
       echo "ready: ${provider} resource env present after wait"
       return 0
     fi
-    flynn1 -a "${APP_NAME}" resource add "${provider}" || return 1
+    flynn1 -a "${APP_NAME}" addons create "${provider}" || return 1
   fi
   wait_app_deploy_idle "after ${provider}" || return 1
   if ! resource_env_ready "${provider}"; then
-    echo "${provider} resource add did not set $(resource_identity_key "${provider}")" >&2
+    echo "${provider} addons create did not set $(resource_identity_key "${provider}")" >&2
     return 1
   fi
   echo "ready: ${provider} resource add"
@@ -2079,7 +2079,7 @@ resource_add_candidates() {
 throwaway_resource_listed() {
   local app=$1 provider=$2
   local listed
-  listed="$(flynn1 -a "${app}" resource 2>/dev/null || true)"
+  listed="$(flynn1 -a "${app}" addons 2>/dev/null || true)"
   echo "${listed}" | grep -qiE "(^|[[:space:]])${provider}([[:space:]]|$)" && return 0
   if [[ "${provider}" == "mysql" ]]; then
     echo "${listed}" | grep -qiE '(^|[[:space:]])mariadb([[:space:]]|$)' && return 0
@@ -2146,31 +2146,31 @@ add_throwaway_resource() {
   info "adding ${provider} resource on throwaway app ${app}"
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
-    # Database runtimes live in controller postgres. Retry resource:add for
+    # Database runtimes live in controller postgres. Retry addons:create for
     # provision races (provider not ready yet).
     for attempt in $(seq 1 20); do
-      before="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
-      if flynn1 -a "${app}" resource add "${cand}"; then
+      before="$(flynn1 -a "${app}" addons 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      if flynn1 -a "${app}" addons create "${cand}"; then
         added=1
-        echo "resource:add ${cand} on ${app}"
+        echo "addons:create ${cand} on ${app}"
         break
       fi
-      after="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      after="$(flynn1 -a "${app}" addons 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
       if [[ "${before}" != "${after}" ]]; then
-        echo "resource:add ${cand} created an instance but did not finish; not provisioning another" >&2
+        echo "addons:create ${cand} created an instance but did not finish; not provisioning another" >&2
         added=1
         break
       fi
-      echo "resource:add ${cand} failed (attempt ${attempt}/20); retrying" >&2
+      echo "addons:create ${cand} failed (attempt ${attempt}/20); retrying" >&2
       sleep 1
     done
     if [[ "${added}" == "1" ]]; then
       break
     fi
-    echo "resource:add ${cand} failed; trying next candidate" >&2
+    echo "addons:create ${cand} failed; trying next candidate" >&2
   done < <(resource_add_candidates "${provider}")
   if [[ "${added}" != "1" ]]; then
-    echo "${provider} resource add failed on ${app} (tried $(resource_add_candidates "${provider}" | tr '\n' ' '))" >&2
+    echo "${provider} addons create failed on ${app} (tried $(resource_add_candidates "${provider}" | tr '\n' ' '))" >&2
     return 1
   fi
   for i in $(seq 1 90); do
@@ -2180,9 +2180,9 @@ add_throwaway_resource() {
     fi
     sleep "${WAIT_FOR_INTERVAL:-2}"
   done
-  echo "${provider} resource add did not set env URL or list the resource on ${app}" >&2
+  echo "${provider} addons create did not set env URL or list the resource on ${app}" >&2
   flynn1 -a "${app}" env || true
-  flynn1 -a "${app}" resource || true
+  flynn1 -a "${app}" addons || true
   return 1
 }
 
@@ -2260,29 +2260,34 @@ add_throwaway_follower() {
     return 1
   fi
   flag="$(datastore_extra_node_flag "${provider}")"
+  if [[ -z "${flag}" ]]; then
+    info "scaling ${provider} to 2 nodes on ${app}"
+    flynn1 -a "${app}" "${provider}:scale" 2 || return 1
+    return 0
+  fi
   info "adding ${provider} node of ${leader} on ${app} (${flag})"
   while read -r cand; do
     [[ -z "${cand}" ]] && continue
     for attempt in $(seq 1 20); do
-      before="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
-      if flynn1 -a "${app}" resource add "${cand}" "${flag}" "${leader}" --as FOLLOWER; then
+      before="$(flynn1 -a "${app}" addons 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      if flynn1 -a "${app}" addons create "${cand}" "${flag}" "${leader}" --as FOLLOWER; then
         added=1
-        echo "resource:add ${cand} ${flag} ${leader} --as FOLLOWER on ${app}"
+        echo "addons:create ${cand} ${flag} ${leader} --as FOLLOWER on ${app}"
         break
       fi
-      after="$(flynn1 -a "${app}" resource 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
+      after="$(flynn1 -a "${app}" addons 2>/dev/null | awk 'NR>1 {print $1}' | sort)"
       if [[ "${before}" != "${after}" ]]; then
-        echo "resource:add ${cand} ${flag} created an instance but did not finish; not provisioning another" >&2
+        echo "addons:create ${cand} ${flag} created an instance but did not finish; not provisioning another" >&2
         added=1
         break
       fi
-      echo "resource:add ${cand} ${flag} failed (attempt ${attempt}/20); retrying" >&2
+      echo "addons:create ${cand} ${flag} failed (attempt ${attempt}/20); retrying" >&2
       sleep 1
     done
     if [[ "${added}" == "1" ]]; then
       break
     fi
-    echo "resource:add ${cand} ${flag} failed; trying next candidate" >&2
+    echo "addons:create ${cand} ${flag} failed; trying next candidate" >&2
   done < <(resource_add_candidates "${provider}")
   if [[ "${added}" != "1" ]]; then
     if [[ "${provider}" == mongodb ]]; then
@@ -2297,7 +2302,7 @@ add_throwaway_follower() {
 
 datastore_extra_node_flag() {
   case "${1}" in
-    kafka|mongodb) echo --join ;;
+    kafka|mongodb|clickhouse) echo "" ;;
     *) echo --follow ;;
   esac
 }
@@ -2309,9 +2314,9 @@ teardown_throwaway_datastores() {
   for provider in "${DATASTORE_PROVIDERS[@]}"; do
     while read -r id; do
       [[ -z "${id}" || "${id}" == ID || "${id}" == NAME ]] && continue
-      flynn1 -a "${app}" resource remove "${provider}" "${id}" || \
-        flynn1 -a "${app}" resource remove "${provider}" "${id}" --yes || true
-    done < <(flynn1 -a "${app}" resource 2>/dev/null | awk -v p="${provider}" 'NR>1 && tolower($2)==tolower(p) {print $1}')
+      flynn1 -a "${app}" addons destroy "${id}" || \
+        flynn1 -a "${app}" addons destroy "${id}" --yes || true
+    done < <(flynn1 -a "${app}" addons 2>/dev/null | awk -v p="${provider}" 'NR>1 && tolower($2)==tolower(p) {print $1}')
   done
 }
 
@@ -4997,7 +5002,7 @@ EOF
   echo "app ${APP_NAME} deployed from test/apps/upgrade-smoke with $(joined_datastores) (${SMOKE_SEED_ROWS} rows, ${blobs} slug blobs)"
 }
 
-# --item datastores: create a throwaway app (no git-push) and resource:add
+# --item datastores: create a throwaway app (no git-push) and addons:create
 # every selected engine. Reuses the same cluster as the rest of the suite.
 step_provision_datastores() {
   ensure_flynn_cli_on_node1
@@ -5008,7 +5013,7 @@ step_provision_datastores() {
   fi
   local app="${DATASTORE_SMOKE_APP:-smoke-datastores}"
   local provider
-  info "creating throwaway app ${app} for datastore resource:add"
+  info "creating throwaway app ${app} for datastore addons:create"
   node_root_script node1 <<EOF
 set -euo pipefail
 if flynn apps | grep -qE "(^|\\s)${app}(\\s|\$)"; then
@@ -5028,7 +5033,7 @@ EOF
   local saved_app="${APP_NAME}"
   APP_NAME="${app}"
   # Mode 1: engine-up (kafka-ping / clickhouse-ping). Mode 0 skips those and
-  # would pass kafka/clickhouse after resource:add without waiting.
+  # would pass kafka/clickhouse after addons:create without waiting.
   if ! wait_selected_datastores_ready "after throwaway resource add" 1; then
     APP_NAME="${saved_app}"
     return 1
@@ -6245,7 +6250,7 @@ step_cli_functions() {
       flynn1 -a "${APP_NAME}" env get "${ident}" || failed=1
   fi
   rc=0
-  out="$(flynn1 -a "${APP_NAME}" resource 2>&1)" || rc=$?
+  out="$(flynn1 -a "${APP_NAME}" addons 2>&1)" || rc=$?
   if [[ "${rc}" -eq 0 ]]; then
     local missing=()
     local provider

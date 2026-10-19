@@ -313,6 +313,9 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.AddResourceApp))
 	httpRouter.DELETE("/providers/:providers_id/resources/:resources_id/apps/:app_id", httphelper.WrapHandler(api.DeleteResourceApp))
 	httpRouter.GET("/apps/:apps_id/resources", httphelper.WrapHandler(api.appLookup(api.GetAppResources)))
+	httpRouter.GET("/apps/:apps_id/plugin-addons", httphelper.WrapHandler(api.appLookup(api.GetPluginAddons)))
+	httpRouter.PUT("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.PutPluginAddon)))
+	httpRouter.DELETE("/apps/:apps_id/plugin-addons/:addon_type", httphelper.WrapHandler(api.appLookup(api.DeletePluginAddon)))
 
 	httpRouter.GET("/routes", httphelper.WrapHandler(api.GetRouteList))
 	httpRouter.POST("/apps/:apps_id/routes", httphelper.WrapHandler(api.appLookup(api.CreateRoute)))

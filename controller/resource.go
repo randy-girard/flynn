@@ -11,10 +11,10 @@ import (
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
-	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/instanceport"
 	"github.com/randy-girard/flynn/pkg/pgappliance"
+	"github.com/randy-girard/flynn/pkg/plugin"
 	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/resource"
 	"golang.org/x/net/context"
@@ -75,7 +75,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 	} else {
 		config = []byte(`{}`)
 	}
-	if _, ok := dbruntime.ProviderEngine(p.Name); ok {
+	if c.providerPassesApp(p) {
 		config = provisionConfigWithApp(config, target)
 	}
 	// The built-in appliance is the platform database. Bootstrap still creates
@@ -443,7 +443,7 @@ func (c *controllerAPI) canAdminOwner(ctx context.Context, account string) bool 
 var instancePortAssign sync.Mutex
 
 func (c *controllerAPI) stampInstancePort(p *ct.Provider, externalID string, env map[string]string) (map[string]string, error) {
-	if p == nil || c.resourceRepo == nil || !instanceport.IsDatastore(p.Name) || pgappliance.IsPlatformApplianceURL(p.URL) {
+	if p == nil || c.resourceRepo == nil || !c.providerStampsInstancePort(p) {
 		return env, nil
 	}
 	instancePortAssign.Lock()
@@ -472,6 +472,43 @@ func (c *controllerAPI) stampInstancePort(p *ct.Provider, externalID string, env
 		return nil, ct.ValidationError{Field: "env", Message: err.Error()}
 	}
 	return assigned, nil
+}
+
+// providerPassesApp is true when the installed add-on asks for the tenant
+// app name in the provision body. Other providers receive the config unchanged.
+func (c *controllerAPI) providerPassesApp(p *ct.Provider) bool {
+	spec := c.addonForProvider(p)
+	return spec != nil && spec.PassApp
+}
+
+// providerStampsInstancePort is true when the installed plugin asks for a
+// per-instance port. The platform appliance never gets one. Provider names
+// are not special-cased here.
+func (c *controllerAPI) providerStampsInstancePort(p *ct.Provider) bool {
+	if p == nil || pgappliance.IsPlatformApplianceURL(p.URL) {
+		return false
+	}
+	spec := c.addonForProvider(p)
+	return spec != nil && spec.InstancePort
+}
+
+func (c *controllerAPI) addonForProvider(p *ct.Provider) *plugin.AddonSpec {
+	if p == nil || c == nil || c.appRepo == nil {
+		return nil
+	}
+	raw, err := c.appRepo.List()
+	if err != nil {
+		return nil
+	}
+	apps, _ := raw.([]*ct.App)
+	for _, app := range apps {
+		spec := plugin.AddonFromApp(app)
+		if spec == nil || !spec.MatchesType(p.Name) {
+			continue
+		}
+		return spec
+	}
+	return nil
 }
 
 func (c *controllerAPI) GetAppResources(ctx context.Context, w http.ResponseWriter, req *http.Request) {
