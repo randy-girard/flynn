@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sync"
 	"time"
 
 	. "github.com/flynn/go-check"
@@ -458,28 +459,16 @@ func (s *S) TestRunJobAttached(c *C) {
 			Width:  10,
 		})
 		jobID = req.JobID
-		inPipeR, inPipeW := io.Pipe()
-		go func() {
-			// jobs.go copies via Conn() as raw bytes; read the full stdin
-			// payload (a single Read can return short under -race).
-			buf := make([]byte, len("test in"))
-			_, err := io.ReadFull(inPipeR, buf)
-			if err != nil {
-				input <- err.Error()
-				return
-			}
-			input <- string(buf)
-		}()
-		outPipeR, outPipeW := io.Pipe()
-		go func() {
-			// Do not Close the writer here: jobs.go treats EOF on either
-			// attach direction as "done" and tears down the session.
-			outPipeW.Write([]byte("test out"))
-		}()
+		// Avoid io.Pipe: a short Write/Read pair plus GC of the unused
+		// pipe end can EOF one copy under -race/cover, and jobs.go then
+		// tears the hijacked session down before stdin arrives.
 		return &rawAttachClient{rwc: struct {
 			io.Reader
 			io.WriteCloser
-		}{outPipeR, inPipeW}}, nil
+		}{
+			&prefixThenStall{rem: []byte("test out")},
+			&attachStdinCapture{want: "test in", done: input},
+		}}, nil
 	})
 
 	artifact := s.createTestArtifact(c, &ct.Artifact{})
@@ -502,9 +491,8 @@ func (s *S) TestRunJobAttached(c *C) {
 	c.Assert(err, IsNil)
 	defer rwc.Close()
 
-	// Read stdout while writing stdin. jobs.go copies both directions on the
-	// hijacked conn; waiting for stdin before reading can stall the session
-	// under -race/cover (CI hung here for the full 10m package timeout).
+	// Read and write on the hijacked conn at the same time. jobs.go copies
+	// both directions; doing them sequentially can stall under -race/cover.
 	stdout := make(chan string, 1)
 	go func() {
 		buf := make([]byte, 10)
@@ -515,11 +503,22 @@ func (s *S) TestRunJobAttached(c *C) {
 		}
 		stdout <- string(buf[:n])
 	}()
-	_, err = rwc.Write([]byte("test in"))
-	c.Assert(err, IsNil)
+	writeErr := make(chan error, 1)
+	go func() {
+		_, err := rwc.Write([]byte("test in"))
+		writeErr <- err
+	}()
 	select {
 	case got := <-input:
 		c.Assert(got, Equals, "test in")
+	case err := <-writeErr:
+		c.Assert(err, IsNil)
+		select {
+		case got := <-input:
+			c.Assert(got, Equals, "test in")
+		case <-time.After(30 * time.Second):
+			c.Fatal("timed out waiting for attach stdin")
+		}
 	case <-time.After(30 * time.Second):
 		c.Fatal("timed out waiting for attach stdin")
 	}
@@ -561,6 +560,48 @@ func (s *S) TestRunJobAttached(c *C) {
 		c.Assert(job.Config.Stdin, Equals, true)
 	}
 }
+
+// prefixThenStall returns rem once, then blocks so jobs.go does not see EOF
+// and tear down the attach session.
+type prefixThenStall struct {
+	mu  sync.Mutex
+	rem []byte
+}
+
+func (r *prefixThenStall) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	if len(r.rem) > 0 {
+		n := copy(p, r.rem)
+		r.rem = r.rem[n:]
+		r.mu.Unlock()
+		return n, nil
+	}
+	r.mu.Unlock()
+	select {}
+}
+
+// attachStdinCapture records hijacked stdin without blocking the copy goroutine.
+type attachStdinCapture struct {
+	mu   sync.Mutex
+	got  []byte
+	want string
+	done chan string
+}
+
+func (w *attachStdinCapture) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.got = append(w.got, p...)
+	if string(w.got) == w.want {
+		select {
+		case w.done <- w.want:
+		default:
+		}
+	}
+	return len(p), nil
+}
+
+func (w *attachStdinCapture) Close() error { return nil }
 
 // rawAttachClient is a minimal AttachClient for tests that use jobs.go's raw
 // Conn() copy path (not framed AttachClient.Write).
