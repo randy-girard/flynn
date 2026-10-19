@@ -110,6 +110,8 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 
 		JobRestartInterval    *string `json:"job_restart_interval"`
 		SingleInstanceRestart *bool   `json:"single_instance_restart"`
+		AllowUserScale        *bool   `json:"allow_user_scale"`
+		AllowUserScaleTags    *bool   `json:"allow_user_scale_tags"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
@@ -130,6 +132,14 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 
 		JobRestartInterval:    cur.JobRestartInterval,
 		SingleInstanceRestart: cur.SingleInstanceRestart,
+		AllowUserScale:        cur.AllowUserScale,
+		AllowUserScaleTags:    cur.AllowUserScaleTags,
+	}
+	if body.AllowUserScale != nil {
+		s.AllowUserScale = *body.AllowUserScale
+	}
+	if body.AllowUserScaleTags != nil {
+		s.AllowUserScaleTags = *body.AllowUserScaleTags
 	}
 	if body.SingleInstanceRestart != nil {
 		s.SingleInstanceRestart = *body.SingleInstanceRestart

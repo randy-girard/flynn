@@ -75,13 +75,34 @@ func TestDBRuntimeCLIFileRoundTrip(t *testing.T) {
 	if err := runDBRuntimeCreate(create); err != nil {
 		t.Fatal(err)
 	}
+	dedicated := parseHostCLI(t, "db-runtime:create", []string{
+		"db-runtime:create", "--memory", "1GB", "--cpu", "500", "--disk", "10GB", "--dedicated", "--tag", "size=small", "redis", "db-small",
+	})
+	if err := runDBRuntimeCreate(dedicated); err != nil {
+		t.Fatal(err)
+	}
 	cat, err := dbruntime.Load(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	rt, ok := cat.Find("redis", "cache")
-	if !ok || rt.CPU != 100 || rt.Builtin {
+	if !ok || rt.CPU != 100 || rt.Builtin || rt.Dedicated {
 		t.Fatalf("created %#v %v", rt, ok)
+	}
+	rt, ok = cat.Find("redis", "db-small")
+	if !ok || !rt.Dedicated || rt.Tags["size"] != "small" {
+		t.Fatalf("dedicated %#v %v", rt, ok)
+	}
+	if err := runDBRuntimeUpdate(parseHostCLI(t, "db-runtime:update", []string{"db-runtime:update", "--shared", "redis", "db-small"})); err != nil {
+		t.Fatal(err)
+	}
+	cat, err = dbruntime.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, _ = cat.Find("redis", "db-small")
+	if rt.Dedicated {
+		t.Fatal("shared did not clear dedicated")
 	}
 	before, err := dbruntime.Resolve("redis", "small", cat, false)
 	if err != nil {

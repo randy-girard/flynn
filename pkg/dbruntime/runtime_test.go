@@ -342,3 +342,62 @@ func TestMergeLiveAndFile(t *testing.T) {
 		t.Fatal("file fallback missing postgres")
 	}
 }
+
+func TestCreateAndUpdateTags(t *testing.T) {
+	var cat Catalog
+	if err := cat.Create(Runtime{Name: "db-small", Engine: EnginePostgres, CPU: 500, Memory: 1 << 30, Disk: 20 << 30, Dedicated: true, Tags: map[string]string{"role": "database"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := PlacementTags(cat, EnginePostgres, "db-small"); got["role"] != "database" {
+		t.Fatalf("%v", got)
+	}
+	next := map[string]string{"role": "database", "disk": "ssd"}
+	if _, err := cat.Update(EnginePostgres, "db-small", UpdateFields{Tags: &next}); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := CatalogProcessTags(&cat, EnginePostgres, "db-small", "postgres")
+	if wrapped["postgres"]["disk"] != "ssd" {
+		t.Fatalf("%v", wrapped)
+	}
+}
+
+func TestDedicatedIsASettingNotAName(t *testing.T) {
+	var cat Catalog
+	small := Runtime{Name: "db-small", Engine: EnginePostgres, CPU: 500, Memory: 1 << 30, Disk: 10 << 30, Dedicated: true, Tags: map[string]string{"size": "small"}}
+	large := Runtime{Name: "db-large", Engine: EnginePostgres, CPU: 2000, Memory: 8 << 30, Disk: 100 << 30, Dedicated: true, Tags: map[string]string{"size": "large"}}
+	if err := cat.Create(small); err != nil {
+		t.Fatal(err)
+	}
+	if err := cat.Create(large); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := cat.Find(EnginePostgres, "db-small")
+	if !ok || !got.Dedicated || got.Tags["size"] != "small" {
+		t.Fatalf("small %#v %v", got, ok)
+	}
+	got, ok = cat.Find(EnginePostgres, "db-large")
+	if !ok || !got.Dedicated || got.Tags["size"] != "large" {
+		t.Fatalf("large %#v %v", got, ok)
+	}
+	off := false
+	got, err := cat.Update(EnginePostgres, "db-small", UpdateFields{Dedicated: &off})
+	if err != nil || got.Dedicated {
+		t.Fatalf("clear dedicated %#v %v", got, err)
+	}
+	named := Runtime{Name: "dedicated", Engine: EnginePostgres, CPU: 500, Memory: 1 << 30, Disk: 10 << 30}
+	if err := cat.Create(named); err != nil {
+		t.Fatal(err)
+	}
+	got, ok = cat.Find(EnginePostgres, "dedicated")
+	if !ok || got.Dedicated {
+		t.Fatalf("name dedicated must not imply the flag %#v %v", got, ok)
+	}
+	res := ProcessResources(&cat, EnginePostgres, "db-large")
+	if res == nil || res["memory"].Request == nil || *res["memory"].Request != large.Memory {
+		t.Fatalf("dedicated must reserve memory %#v", res)
+	}
+	shared := ProcessResources(&cat, EnginePostgres, "dedicated")
+	if shared == nil || shared["memory"].Request == nil || *shared["memory"].Request != 0 {
+		t.Fatalf("non-dedicated must share capacity %#v", shared)
+	}
+}

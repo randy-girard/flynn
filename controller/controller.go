@@ -381,6 +381,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 
 	// Host and stats endpoints
 	httpRouter.GET("/hosts", httphelper.WrapHandler(api.GetHosts))
+	httpRouter.PUT("/hosts/:host_id", httphelper.WrapHandler(api.UpdateHost))
 	httpRouter.GET("/hosts/:host_id/stats", httphelper.WrapHandler(api.GetHostStats))
 	httpRouter.GET("/cluster/stats", httphelper.WrapHandler(api.GetClusterStats))
 	httpRouter.GET("/cluster/jobs-stats", httphelper.WrapHandler(api.GetClusterJobsStats))

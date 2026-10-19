@@ -58,6 +58,16 @@ func (a *AddonSpec) ProvisionConfig(in CreateInput, cat dbruntime.Catalog) (json
 	}
 	if name != "" {
 		body["runtime"] = name
+		engine := a.Runtimes.Engine
+		if engine == "" {
+			engine = a.Type
+		}
+		if tags := dbruntime.PlacementTags(cat, engine, name); len(tags) > 0 {
+			body["tags"] = tags
+		}
+		if rt, ok := cat.Find(engine, name); ok && rt.Dedicated {
+			body["dedicated"] = true
+		}
 	}
 	if size.CPU > 0 {
 		body["cpu"] = size.CPU

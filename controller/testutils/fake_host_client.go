@@ -41,11 +41,35 @@ type FakeHostClient struct {
 	jobsMtx          sync.RWMutex
 	Healthy          bool
 	TestEventHook    chan struct{}
+	tags             map[string]string
 }
 
 func (c *FakeHostClient) ID() string { return c.hostID }
 
-func (c *FakeHostClient) Tags() map[string]string { return nil }
+func (c *FakeHostClient) Tags() map[string]string {
+	if len(c.tags) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(c.tags))
+	for k, v := range c.tags {
+		out[k] = v
+	}
+	return out
+}
+
+func (c *FakeHostClient) UpdateTags(tags map[string]string) error {
+	if c.tags == nil {
+		c.tags = map[string]string{}
+	}
+	for k, v := range tags {
+		if v == "" {
+			delete(c.tags, k)
+		} else {
+			c.tags[k] = v
+		}
+	}
+	return nil
+}
 
 func (c *FakeHostClient) Addr() string { return "127.0.0.1:1113" }
 

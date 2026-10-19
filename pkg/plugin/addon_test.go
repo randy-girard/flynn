@@ -64,6 +64,16 @@ func TestOfficialDatastoreAddonContracts(t *testing.T) {
 	if !strings.Contains(string(raw), `"runtime":"custom"`) {
 		t.Fatalf("custom %s", raw)
 	}
+	if err := cat.Create(dbruntime.Runtime{Engine: dbruntime.EnginePostgres, Name: "db-small", CPU: 500, Memory: 1 << 30, Disk: 10 << 30, Dedicated: true, Tags: map[string]string{"size": "small"}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = pg.ProvisionConfig(CreateInput{Runtime: "db-small"}, cat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"dedicated":true`) || !strings.Contains(string(raw), `"size":"small"`) {
+		t.Fatalf("dedicated %s", raw)
+	}
 	sched := OfficialAddon("scheduler")
 	if sched == nil || sched.Backend != BackendPlugin || sched.Supports(VerbAttach) || strings.Contains(sched.CreateUsage(), "--as") {
 		t.Fatalf("scheduler %#v %s", sched, sched.CreateUsage())

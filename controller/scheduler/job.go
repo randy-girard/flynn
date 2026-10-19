@@ -136,10 +136,13 @@ func (j *Job) Tags() map[string]string {
 // so omni rolling can pin a process to specific hosts without mutating
 // discoverd host metadata.
 func (j *Job) TagsMatchHost(host *Host) bool {
+	return tagsMatchHost(j.Tags(), host)
+}
+
+func tagsMatchHost(tags map[string]string, host *Host) bool {
 	if host == nil {
 		return false
 	}
-	tags := j.Tags()
 	if !ct.HostIDsTagMatches(tags, host.ID) {
 		return false
 	}
@@ -147,7 +150,7 @@ func (j *Job) TagsMatchHost(host *Host) bool {
 		return false
 	}
 	for k, v := range tags {
-		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag {
+		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag {
 			continue
 		}
 		if w, ok := host.Tags[k]; !ok || v != w {
@@ -155,6 +158,21 @@ func (j *Job) TagsMatchHost(host *Host) bool {
 		}
 	}
 	return true
+}
+
+func (s *Scheduler) placementTags(j *Job) map[string]string {
+	var runtime map[string]string
+	if s != nil && s.profileTags != nil {
+		runtime = s.profileTags[jobRuntimeProfileName(j)]
+	}
+	return ct.MergePlacementTags(j.Tags(), runtime)
+}
+
+func (s *Scheduler) jobMatchesHost(j *Job, host *Host) bool {
+	if j == nil {
+		return false
+	}
+	return tagsMatchHost(s.placementTags(j), host)
 }
 
 func (j *Job) VolumeRequests() []ct.VolumeReq {

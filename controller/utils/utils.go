@@ -312,6 +312,7 @@ type HostClient interface {
 	GetSinks() ([]*ct.Sink, error)
 	AddSink(*ct.Sink) error
 	RemoveSink(string) error
+	UpdateTags(map[string]string) error
 }
 
 type ClusterClient interface {

@@ -6,6 +6,25 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 )
 
+func TestJobMatchesHostMergesRuntimeTags(t *testing.T) {
+	s := &Scheduler{
+		profileTags: map[string]map[string]string{
+			"dedicated": {"role": "database"},
+		},
+	}
+	formation := NewFormation(&ct.ExpandedFormation{
+		Release: &ct.Release{Processes: map[string]ct.ProcessType{"web": {RuntimeProfile: "dedicated"}}},
+		Tags:    map[string]map[string]string{"web": {"disk": "ssd"}},
+	})
+	job := &Job{Type: "web", Formation: formation}
+	if !s.jobMatchesHost(job, &Host{ID: "h1", Tags: map[string]string{"role": "database", "disk": "ssd"}}) {
+		t.Fatal("runtime and formation tags must both match")
+	}
+	if s.jobMatchesHost(job, &Host{ID: "h1", Tags: map[string]string{"disk": "ssd"}}) {
+		t.Fatal("missing runtime tag must not match")
+	}
+}
+
 func TestTagsMatchHostIDsTag(t *testing.T) {
 	formation := NewFormation(&ct.ExpandedFormation{
 		Tags: map[string]map[string]string{

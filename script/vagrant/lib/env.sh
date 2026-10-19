@@ -18,6 +18,29 @@ flynn_vagrant_set_nodes() {
   esac
 }
 
+# Named extra VM for tagged database placement (role=database, max-processes=1).
+# Smoke: db-node at 192.168.56.50. Dev: dev-db-node at 192.168.57.50.
+flynn_vagrant_db_node_enabled() {
+  case "${FLYNN_VAGRANT_ENV:-}" in
+    dev) [[ "${FLYNN_DEV_DB_NODE:-1}" != "0" ]] ;;
+    *) [[ "${FLYNN_DB_NODE:-1}" != "0" ]] ;;
+  esac
+}
+
+flynn_vagrant_db_node_name() {
+  case "${FLYNN_VAGRANT_ENV:-}" in
+    dev) echo "dev-db-node" ;;
+    *) echo "db-node" ;;
+  esac
+}
+
+flynn_vagrant_db_node_ip() {
+  case "${FLYNN_VAGRANT_ENV:-}" in
+    dev) echo "192.168.57.50" ;;
+    *) echo "192.168.56.50" ;;
+  esac
+}
+
 flynn_vagrant_use() {
   local env="${1:?flynn_vagrant_use needs smoke or dev}"
   case "${env}" in

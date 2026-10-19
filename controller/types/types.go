@@ -1468,9 +1468,13 @@ type RuntimeProfile struct {
 	// ReserveResources, when true, guarantees this runtime's CPU and memory
 	// on the host at schedule time. Off by default: the process still has
 	// those values as caps (limits) but shares unused host capacity.
-	ReserveResources bool       `json:"reserve_resources"`
-	CreatedAt        *time.Time `json:"created_at,omitempty"`
-	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+	ReserveResources bool `json:"reserve_resources"`
+	// Tags are host placement constraints copied onto jobs that use this
+	// runtime. The scheduler matches them against host tags (and
+	// flynn-host-ids against host.ID).
+	Tags      map[string]string `json:"tags,omitempty"`
+	CreatedAt *time.Time        `json:"created_at,omitempty"`
+	UpdatedAt *time.Time        `json:"updated_at,omitempty"`
 }
 
 // DefaultMaxProcesses is the cluster default for how many jobs a process type may run.
@@ -1499,8 +1503,16 @@ type RuntimeSettings struct {
 	// replace the only instance of a user app process type. The old job is
 	// stopped before its replacement starts, so this causes brief downtime.
 	// Off by default; datastores and system apps are never restarted.
-	SingleInstanceRestart bool       `json:"single_instance_restart"`
-	UpdatedAt             *time.Time `json:"updated_at,omitempty"`
+	SingleInstanceRestart bool `json:"single_instance_restart"`
+	// AllowUserScale, when false, rejects non-admin scale count changes.
+	// Cluster key, plugin jobs, and cluster admins are never blocked.
+	// Default true.
+	AllowUserScale bool `json:"allow_user_scale"`
+	// AllowUserScaleTags, when false, rejects non-admin formation tag
+	// changes on scale. Default false: tenants pick a tagged runtime
+	// instead of writing host constraints themselves.
+	AllowUserScaleTags bool       `json:"allow_user_scale_tags"`
+	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
 }
 
 // DefaultJobRestartInterval is the cluster default age at which running jobs
@@ -1571,6 +1583,19 @@ func (s *RuntimeSettings) BlobGCKeepOrDefault() int {
 		return DefaultBlobGCKeep
 	}
 	return s.BlobGCKeep
+}
+
+// Copy returns a value copy. A nil receiver yields defaults that match a
+// fresh cluster (user scale on, user scale tags off).
+func (s *RuntimeSettings) Copy() RuntimeSettings {
+	if s == nil {
+		return RuntimeSettings{
+			MaxProcesses:   DefaultMaxProcesses,
+			BlobGCKeep:     DefaultBlobGCKeep,
+			AllowUserScale: true,
+		}
+	}
+	return *s
 }
 
 // GitHubAppConfig is the cluster-wide GitHub App used for Heroku-style deploys.

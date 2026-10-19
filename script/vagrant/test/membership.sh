@@ -94,23 +94,29 @@ need 'no drainable host' \
   "remove-node must refuse when singleton volumes occupy every HA node"
 need 'host-local /data' \
   "remove-node must refuse drain of host-local plugin volumes"
-if ! grep -Fq 'split($NF' "${smoke}"; then
+if ! grep -Fq 'id=$NF' "${smoke}"; then
   echo "plugin host parse must use the last column; NAME is redis.1234 and never matches node3" >&2
-  echo '  missing split($NF) in smoke' >&2
+  echo '  missing $NF host-id parse in smoke' >&2
   exit 1
 fi
 
 # CREATED is "8 minutes ago"; NAME redis.1138 has no hyphen. A $1 split
 # always "finds" a host that is not a node, so drain of node3 kills redis.
+eval "$(sed -n '/^job_host_from_ps()/,/^}/p' "${smoke}")"
 got_host="$(printf '%s\n' \
   'NAME TYPE STATE CREATED ID' \
   'redis.1138 redis up 8 minutes ago node3-22980b90-5e70-471a-9c31-78c1aa871211' \
-  | awk 'NR>1 && $2=="redis" && tolower($3) ~ /up|running/ {
-    split($NF, a, "-")
-    if (a[1] ~ /^node[0-9]+$/) { print a[1]; exit }
-  }')"
+  | job_host_from_ps redis)"
 if [[ "${got_host}" != "node3" ]]; then
   echo "redis_job_host_from_ps fixture must yield node3, got '${got_host}'" >&2
+  exit 1
+fi
+db_host="$(printf '%s\n' \
+  'NAME TYPE STATE CREATED ID' \
+  'postgres.1 postgres up 1 minute ago db-node-22980b90-5e70-471a-9c31-78c1aa871211' \
+  | job_host_from_ps postgres)"
+if [[ "${db_host}" != "db-node" ]]; then
+  echo "job_host_from_ps postgres fixture must yield db-node, got '${db_host}'" >&2
   exit 1
 fi
 wrong_host="$(printf '%s\n' \
@@ -128,10 +134,7 @@ fi
 kafka_host="$(printf '%s\n' \
   'NAME TYPE STATE CREATED ID' \
   'kafka.4 kafka up 8 minutes ago node2-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' \
-  | awk -v typ=kafka 'NR>1 && $2==typ && tolower($3) ~ /up|running/ {
-    split($NF, a, "-")
-    if (a[1] ~ /^node[0-9]+$/) { print a[1]; exit }
-  }')"
+  | job_host_from_ps kafka)"
 if [[ "${kafka_host}" != "node2" ]]; then
   echo "job_host_from_ps kafka fixture must yield node2, got '${kafka_host}'" >&2
   exit 1

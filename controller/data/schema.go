@@ -1321,6 +1321,20 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(75,
 		`ALTER TABLE runtime_settings ADD COLUMN single_instance_restart boolean NOT NULL DEFAULT false`,
 	)
+	// Placement: named runtimes and hosts share tag maps. User scale tags
+	// default off so tenants cannot pin jobs unless an admin allows it.
+	migrations.Add(76,
+		`ALTER TABLE runtime_profiles ADD COLUMN tags jsonb NOT NULL DEFAULT '{}'::jsonb`,
+		`ALTER TABLE db_runtimes ADD COLUMN tags jsonb NOT NULL DEFAULT '{}'::jsonb`,
+		`ALTER TABLE runtime_settings ADD COLUMN allow_user_scale boolean NOT NULL DEFAULT true`,
+		`ALTER TABLE runtime_settings ADD COLUMN allow_user_scale_tags boolean NOT NULL DEFAULT false`,
+	)
+	// Dedicated is a per-runtime flag, not the runtime name. Existing
+	// rows named "dedicated" were the previous convention.
+	migrations.Add(77,
+		`ALTER TABLE db_runtimes ADD COLUMN dedicated boolean NOT NULL DEFAULT false`,
+		`UPDATE db_runtimes SET dedicated = true WHERE name = 'dedicated'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

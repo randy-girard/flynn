@@ -8,6 +8,7 @@ import (
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/bootstrap/discovery"
 	"github.com/randy-girard/flynn/host/config"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/hostfw"
 )
 
@@ -20,6 +21,8 @@ options:
   --discovery=TOKEN   join cluster with discovery token
   --peer-ips=IPLIST   join cluster using host IPs (must be already bootstrapped)
   --external-ip=IP    external IP address of host, defaults to the first IPv4 address of eth0
+  --tag=<tag>...      placement tag (KEY or KEY=VAL) written into host.json for the daemon
+  --max-processes=N   tenant job cap on this node (omit or 0 = unlimited)
   --file=NAME         file to write to [default: /etc/flynn/host.json]
   `)
 }
@@ -49,6 +52,13 @@ func runInit(args *docopt.Args) error {
 		if err := hostfw.ApplySeedPeers(strings.Split(ips, ",")); err != nil {
 			fmt.Fprintf(os.Stderr, "warn: firewall peer seed: %v\n", err)
 		}
+	}
+	tagsArg, err := formatDaemonTagsArg(cliutil.List(args, "--tag"), args.String["--max-processes"])
+	if err != nil {
+		return err
+	}
+	if tagsArg != "" {
+		c.Args = append(c.Args, "--tags", tagsArg)
 	}
 
 	file := args.String["--file"]

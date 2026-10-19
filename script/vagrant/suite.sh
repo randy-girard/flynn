@@ -164,6 +164,11 @@
 #                        [default: 1,3]
 #                        CLUSTER_SIZE=N is a shortcut for one topology.
 #                        Example: SMOKE_TOPOLOGIES=1,3,5,add,remove,discovery
+#   FLYNN_DB_NODE        Set to 0 to omit the dedicated database VM (db-node
+#                        at 192.168.56.50). Default is 1: Vagrantfile defines
+#                        it, --item datastores joins it, tags role=database
+#                        with max-processes=1, and provisions a tagged
+#                        postgres dedicated runtime onto that node only.
 #   SMOKE_MAX_NODES      Optional ceiling on N (host-only /24 already caps
 #                        node IPs at 192.168.56.254). Unset = no extra cap.
 #   UPGRADE_PASSES=N     How many --force tarball updates to run [default: 2]
@@ -2947,16 +2952,23 @@ sync_peer_ips_from_nodes() {
   IFS="${saved_ifs}"
 }
 
+cluster_host_ip() {
+  local name=$1
+  case "${name}" in
+    db-node) echo "${CLUSTER_NET_PREFIX}.50" ;;
+    *) cluster_node_ip "${name#node}" ;;
+  esac
+}
+
 append_live_node() {
   local node=$1
-  local n="${node#node}"
   local ip i
   for i in "${!NODES[@]}"; do
     if [[ "${NODES[$i]}" == "${node}" ]]; then
       return 0
     fi
   done
-  ip="$(cluster_node_ip "${n}")"
+  ip="$(cluster_host_ip "${node}")"
   NODES+=("${node}")
   NODE_IPS+=("${ip}")
   sync_peer_ips_from_nodes
@@ -7197,18 +7209,157 @@ EOF
   sync_cluster_monitor_hosts
 }
 
+host_id_for_addr() {
+  local ip=$1
+  node_ssh node1 'sudo flynn-host list' </dev/null | awk -v ip="${ip}" 'NR>1 && index($2, ip) {print $1; exit}'
+}
+
+# Join the dedicated database VM (192.168.56.50) after bootstrap. It is not
+# in the initial PEER_IPS list so topology sizes stay valid.
+step_join_db_node() {
+  local extra="db-node"
+  local extra_ip="${CLUSTER_NET_PREFIX}.50"
+  local join_ips="${PEER_IPS}"
+  if [[ "${FLYNN_DB_NODE:-1}" == "0" ]]; then
+    echo "FLYNN_DB_NODE=0; skipping db-node join"
+    return 0
+  fi
+  remember_teardown_node "${extra}"
+  info "adding ${extra} (${extra_ip}) to cluster peer-ips=${join_ips}"
+  local node_mem="${VAGRANT_DB_NODE_MEMORY:-${VAGRANT_MEMORY:-4096}}"
+  local node_cpus="${VAGRANT_DB_NODE_CPUS:-${VAGRANT_CPUS:-2}}"
+  VAGRANT_MEMORY="${node_mem}" VAGRANT_CPUS="${node_cpus}" vagrant up "${extra}"
+  cache_node_ssh_config "${extra}"
+  local saved_nodes=("${NODES[@]}")
+  NODES=("${extra}")
+  verify_nic_promisc
+  NODES=("${saved_nodes[@]}")
+  resolve_built_tarball
+  install_flynn_on_node "${extra}"
+  info "joining ${extra} with flynn-host init --peer-ips ${join_ips}"
+  node_root_script "${extra}" <<EOF
+set -euo pipefail
+flynn-host init --peer-ips "${join_ips}" --external-ip "${extra_ip}"
+systemctl enable flynn-host.service
+EOF
+  seed_joining_host_secrets "${extra}" || return 1
+  node_root_script "${extra}" <<EOF
+set -euo pipefail
+systemctl restart flynn-host.service
+EOF
+  if ! wait_for "flynn-host HTTP API on ${extra_ip}" 180 host_api_up "${extra_ip}"; then
+    dump_layer0_diagnostics
+    return 1
+  fi
+  append_live_node "${extra}"
+  local n
+  for n in "${NODES[@]}"; do
+    configure_node_dns "${n}"
+  done
+  if ! wait_for "flynn-host list includes ${extra_ip}" 180 node_addr_listed "${extra_ip}"; then
+    echo "new host ${extra} (${extra_ip}) did not appear in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  echo "joined ${extra} (${extra_ip}); cluster hosts=${#NODES[@]} peer-ips=${PEER_IPS}"
+  sync_cluster_monitor_hosts
+}
+
+# Tag db-node role=database max-processes=1, publish a tagged postgres
+# dedicated runtime, provision one instance, and assert it landed there.
+step_provision_tagged_database() {
+  local extra="db-node"
+  local extra_ip="${CLUSTER_NET_PREFIX}.50"
+  local app="${DATASTORE_PLACEMENT_APP:-smoke-db-placement}"
+  local hid inst_app out host i p has_pg=0
+  if [[ "${FLYNN_DB_NODE:-1}" == "0" ]]; then
+    echo "FLYNN_DB_NODE=0; skipping tagged database placement"
+    return 0
+  fi
+  for p in "${DATASTORE_PROVIDERS[@]}"; do
+    if [[ "${p}" == "postgres" ]]; then
+      has_pg=1
+    fi
+  done
+  if [[ "${has_pg}" != "1" ]]; then
+    echo "postgres not in SMOKE_DATASTORES; skipping tagged placement"
+    return 0
+  fi
+  ensure_flynn_cli_on_node1
+  configure_node_dns node1
+  hid="$(host_id_for_addr "${extra_ip}")"
+  if [[ -z "${hid}" ]]; then
+    echo "db-node ${extra_ip} is not in flynn-host list" >&2
+    node_ssh node1 'sudo flynn-host list' || true
+    return 1
+  fi
+  info "tagging ${hid} role=database max-processes=1"
+  node_root_script node1 <<EOF
+set -euo pipefail
+flynn-host tags:set "${hid}" role=database
+flynn-host tags:max-processes "${hid}" 1
+flynn-host tags | grep -E "${hid}|role=database" || true
+if ! flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 10GB --tag role=database postgres dedicated; then
+  flynn-host db-runtime:update --tag role=database postgres dedicated
+fi
+flynn-host db-runtime | grep -E "dedicated|role=database" || true
+EOF
+  info "creating throwaway app ${app} for tagged postgres dedicated"
+  node_root_script node1 <<EOF
+set -euo pipefail
+if flynn apps | grep -qE "(^|\\s)${app}(\\s|\$)"; then
+  flynn -a "${app}" delete --yes || true
+fi
+flynn create --remote '' "${app}"
+flynn -a "${app}" addons create postgres --runtime dedicated
+EOF
+  inst_app=""
+  for i in $(seq 1 90); do
+    inst_app="$(flynn1 -a "${app}" env get FLYNN_POSTGRES 2>/dev/null | tr -d '[:space:]')" || true
+    if [[ -n "${inst_app}" ]]; then
+      break
+    fi
+    sleep "${WAIT_FOR_INTERVAL:-2}"
+  done
+  if [[ -z "${inst_app}" ]]; then
+    echo "tagged postgres did not set FLYNN_POSTGRES on ${app}" >&2
+    flynn1 -a "${app}" env || true
+    flynn1 -a "${app}" addons || true
+    return 1
+  fi
+  host=""
+  for i in $(seq 1 90); do
+    out="$(flynn1 -a "${inst_app}" ps 2>/dev/null)" || true
+    host="$(echo "${out}" | job_host_from_ps postgres)"
+    if [[ "${host}" == "${extra}" || "${host}" == "${hid}" ]]; then
+      echo "tagged postgres ${inst_app} landed on ${host}"
+      record_check "placement" "postgres-dedicated" "PASS" "host=${host}"
+      flynn1 -a "${app}" delete --yes || true
+      return 0
+    fi
+    sleep "${WAIT_FOR_INTERVAL:-2}"
+  done
+  echo "tagged postgres ${inst_app} landed on '${host}', want ${extra} (${hid})" >&2
+  flynn1 -a "${inst_app}" ps || true
+  node_ssh node1 'sudo flynn-host tags' || true
+  record_check "placement" "postgres-dedicated" "FAIL" "host=${host:-none}"
+  flynn1 -a "${app}" delete --yes || true
+  return 1
+}
+
 # Flynn redis/kafka/clickhouse and plugin mysql/mongo are singletons with a
 # host-local /data volume. Draining that host cannot reattach the dataset, so
 # pick a different HA node when any of them live on the default drain target.
 #
-# flynn ps ID is nodeN-<job-uuid> when placed. NAME is redis.1234 (no host).
-# CREATED is "8 minutes ago", so only $1/$2/$3/$NF are stable field numbers.
+# flynn ps ID is nodeN-<job-uuid> or db-node-<job-uuid> when placed.
+# NAME is redis.1234 (no host). CREATED is "8 minutes ago", so only
+# $1/$2/$3/$NF are stable field numbers.
 job_host_from_ps() {
   local typ=$1
   awk -v typ="${typ}" 'NR>1 && $2==typ && tolower($3) ~ /up|running/ {
-    split($NF, a, "-")
-    if (a[1] ~ /^node[0-9]+$/) {
-      print a[1]
+    id=$NF
+    if (match(id, /^(dev-db-node|db-node|dev-node[0-9]+|node[0-9]+)-/)) {
+      print substr(id, RSTART, RLENGTH-1)
       exit
     }
   }'
@@ -7650,6 +7801,10 @@ expand_cluster_inventory() {
     ALL_CLUSTER_NODES+=("node${i}")
     ALL_CLUSTER_IPS+=("$(cluster_node_ip "${i}")")
   done
+  if [[ "${FLYNN_DB_NODE:-1}" != "0" ]]; then
+    ALL_CLUSTER_NODES+=("db-node")
+    ALL_CLUSTER_IPS+=("${CLUSTER_NET_PREFIX}.50")
+  fi
   NODE1_IP="$(cluster_node_ip 1)"
   SHARED_LOG_DIRS=(builder "${ALL_CLUSTER_NODES[@]}")
 }
@@ -7893,6 +8048,10 @@ run_one_topology() {
     record "Deploy Dockerfile app (${TOPOLOGY_LABEL})" "SKIP" 0 "throwaway datastore provision"
     record "Deploy docker-push app (${TOPOLOGY_LABEL})" "SKIP" 0 "throwaway datastore provision"
     run_step "Provision datastore plugins (${TOPOLOGY_LABEL})" step_provision_datastores
+    if [[ "${FLYNN_DB_NODE:-1}" != "0" ]]; then
+      run_step "Join tagged database node (${TOPOLOGY_LABEL})" step_join_db_node
+      run_step "Provision tagged database runtime (${TOPOLOGY_LABEL})" step_provision_tagged_database
+    fi
   elif [[ "${SKIP_DEPLOY}" == "1" ]]; then
     record "Deploy app + DB resources (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"
     record "Deploy custom-buildpack app (${TOPOLOGY_LABEL})" "SKIP" 0 "SKIP_DEPLOY=1"

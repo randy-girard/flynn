@@ -50,12 +50,21 @@ flynn_vagrant_list_machines() {
         echo "${name}"
       fi
     done
+    if flynn_vagrant_db_node_enabled; then
+      name="$(flynn_vagrant_db_node_name)"
+      if [[ -f "${VAGRANT_DOTFILE_PATH}/machines/${name}/virtualbox/id" ]]; then
+        echo "${name}"
+      fi
+    fi
     return
   fi
   echo "${FLYNN_VAGRANT_BUILDER}"
   for i in $(seq 1 "$(flynn_vagrant_get_nodes)"); do
     echo "${FLYNN_VAGRANT_NODE_PREFIX}${i}"
   done
+  if flynn_vagrant_db_node_enabled; then
+    flynn_vagrant_db_node_name
+  fi
 }
 
 # flynn_vagrant_define_named_nodes raises the node count so a requested extra

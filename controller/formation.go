@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -50,6 +52,11 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 	if err = c.validateFormationScale(formation.Processes); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	cur := existingFormation(c, app.ID, release.ID)
+	if err = c.enforceUserScalePolicy(ctx, cur, formation.Processes, formation.Tags); err != nil {
 		respondWithError(w, err)
 		return
 	}
@@ -100,6 +107,7 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 		respondWithError(w, err)
 		return
 	}
+	cur := existingFormation(c, app.ID, release.ID)
 	if req.NewProcesses != nil {
 		if err := c.validateFormationScale(*req.NewProcesses); err != nil {
 			respondWithError(w, err)
@@ -109,6 +117,18 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 			respondWithError(w, err)
 			return
 		}
+	}
+	var newProcs map[string]int
+	if req.NewProcesses != nil {
+		newProcs = *req.NewProcesses
+	}
+	var newTags map[string]map[string]string
+	if req.NewTags != nil {
+		newTags = *req.NewTags
+	}
+	if err := c.enforceUserScalePolicy(ctx, cur, newProcs, newTags); err != nil {
+		respondWithError(w, err)
+		return
 	}
 
 	if req.State == ct.ScaleRequestStatePending {
@@ -335,6 +355,60 @@ func scaleRequestAsFormation(sr *ct.ScaleRequest) *ct.Formation {
 		CreatedAt: sr.CreatedAt,
 		UpdatedAt: sr.UpdatedAt,
 	}
+}
+
+func (c *controllerAPI) enforceUserScalePolicy(ctx context.Context, cur *ct.Formation, newProcs map[string]int, newTags map[string]map[string]string) error {
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
+		return nil
+	}
+	if c == nil || c.runtimeProfileRepo == nil {
+		return nil
+	}
+	s, err := c.runtimeProfileRepo.Settings()
+	if err != nil {
+		return err
+	}
+	return userScalePolicyError(tok, s, cur, newProcs, newTags)
+}
+
+func userScalePolicyError(tok *authorizer.Token, s *ct.RuntimeSettings, cur *ct.Formation, newProcs map[string]int, newTags map[string]map[string]string) error {
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || s == nil {
+		return nil
+	}
+	var oldProcs map[string]int
+	var oldTags map[string]map[string]string
+	if cur != nil {
+		oldProcs = cur.Processes
+		oldTags = cur.Tags
+	}
+	if newProcs != nil && !s.AllowUserScale && ct.ProcessesChanged(oldProcs, newProcs) {
+		return ct.ValidationError{Field: "processes", Message: "user scale is disabled; ask a cluster admin"}
+	}
+	if !s.AllowUserScaleTags && scaleTagsRequested(newTags) && ct.FormationTagsChanged(oldTags, newTags) {
+		return ct.ValidationError{Field: "tags", Message: "user process tags are disabled; ask a cluster admin"}
+	}
+	return nil
+}
+
+func scaleTagsRequested(tags map[string]map[string]string) bool {
+	for _, inner := range tags {
+		if len(inner) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func existingFormation(c *controllerAPI, appID, releaseID string) *ct.Formation {
+	if c == nil || c.formationRepo == nil {
+		return nil
+	}
+	f, err := c.formationRepo.Get(appID, releaseID)
+	if err != nil {
+		return nil
+	}
+	return f
 }
 
 func (c *controllerAPI) validateFormationScale(processes map[string]int) error {

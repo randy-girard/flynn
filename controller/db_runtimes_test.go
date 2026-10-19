@@ -96,3 +96,36 @@ func TestDBRuntimeUpdateAndRemove(t *testing.T) {
 		t.Fatal("allow custom sizes not set")
 	}
 }
+
+func TestDBRuntimeDedicatedIsIndependentOfName(t *testing.T) {
+	resetDBRuntimes()
+	t.Cleanup(resetDBRuntimes)
+	api := &controllerAPI{}
+	_, err := api.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		return cat.Create(dbruntime.Runtime{
+			Engine: "postgres", Name: "db-small", CPU: 500, Memory: 1 << 30, Disk: 10 << 30, Dedicated: true,
+			Tags: map[string]string{"size": "small"},
+		})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := memDBRuntimes.Find("postgres", "db-small")
+	if !ok || !got.Dedicated || got.Tags["size"] != "small" {
+		t.Fatalf("%#v %v", got, ok)
+	}
+	off := false
+	_, err = api.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {
+		updated, err := cat.Update("postgres", "db-small", dbruntime.UpdateFields{Dedicated: &off})
+		if err != nil {
+			return err
+		}
+		if updated.Dedicated {
+			return errors.New("dedicated still set")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

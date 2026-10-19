@@ -132,6 +132,7 @@ type Scheduler struct {
 	// that runtime on a host that still has the requested CPU and memory
 	// free. Off by default per runtime.
 	profileReserve map[string]bool
+	profileTags    map[string]map[string]string
 
 	// maxRestarts is RuntimeSettings.MaxRestarts: how many consecutive
 	// crashes are restarted before a process is left stopped. 0 is unlimited.
@@ -162,6 +163,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		logger:                l,
 		maxHostChecks:         defaultMaxHostChecks,
 		profileReserve:        make(map[string]bool),
+		profileTags:           make(map[string]map[string]string),
 		restartsExhausted:     make(map[utils.FormationKey]Processes),
 		hosts:                 make(map[string]*Host),
 		routers:               make(map[string]*Router),
@@ -1089,7 +1091,7 @@ func (s *Scheduler) stopJobsWithMismatchedTags(formation *Formation) {
 		if !ok {
 			continue
 		}
-		if job.TagsMatchHost(host) {
+		if s.jobMatchesHost(job, host) {
 			continue
 		}
 		log.Info("job has mismatched tags, stopping", "job.id", job.ID, "job.tags", job.Tags(), "host.id", host.ID, "host.tags", host.Tags)
@@ -1102,7 +1104,7 @@ func (s *Scheduler) stopJobsWithMismatchedTags(formation *Formation) {
 // either a new host or a host whose tags have just changed
 func (s *Scheduler) maybeStartBlockedJobs(host *Host) {
 	for _, job := range s.jobs {
-		if job.State == JobStateBlocked && job.TagsMatchHost(host) {
+		if job.State == JobStateBlocked && s.jobMatchesHost(job, host) {
 			job.State = JobStatePending
 			go s.StartJob(job)
 		}
@@ -1497,7 +1499,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 					s.persistJob(req.Job)
 					req.Error(ErrHostIsDown)
 					return
-				} else if !req.Job.TagsMatchHost(host) {
+				} else if !s.jobMatchesHost(req.Job, host) {
 					req.Job.State = JobStateBlocked
 					s.persistJob(req.Job)
 					req.Error(ErrNoHostsMatchTags)
@@ -2346,7 +2348,7 @@ func (s *Scheduler) matchingOmniHostCount(formation *Formation, typ string) int 
 		if host == nil || host.Shutdown {
 			continue
 		}
-		if job.TagsMatchHost(host) {
+		if s.jobMatchesHost(job, host) {
 			n++
 		}
 	}

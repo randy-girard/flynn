@@ -86,8 +86,9 @@ var subAliases = map[string]map[string]string{
 		"show":  "plugin:credentials:show",
 	},
 	"tags": {
-		"set": "tags:set",
-		"del": "tags:del",
+		"set":           "tags:set",
+		"del":           "tags:del",
+		"max-processes": "tags:max-processes",
 	},
 	"webhooks": {
 		"add":    "webhooks:add",
@@ -116,12 +117,14 @@ var subAliases = map[string]map[string]string{
 		"disable":   "github:disable",
 	},
 	"runtime": {
-		"create":       "runtime:create",
-		"update":       "runtime:update",
-		"remove":       "runtime:remove",
-		"delete":       "runtime:remove",
-		"allow-custom": "runtime:allow-custom",
-		"reserve":      "runtime:reserve",
+		"create":                "runtime:create",
+		"update":                "runtime:update",
+		"remove":                "runtime:remove",
+		"delete":                "runtime:remove",
+		"allow-custom":          "runtime:allow-custom",
+		"reserve":               "runtime:reserve",
+		"allow-user-scale":      "runtime:allow-user-scale",
+		"allow-user-scale-tags": "runtime:allow-user-scale-tags",
 	},
 	"pg": {
 		"psql":    "pg:psql",

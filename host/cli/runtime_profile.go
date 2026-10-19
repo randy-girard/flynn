@@ -10,6 +10,7 @@ import (
 	"github.com/flynn/go-docopt"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 )
 
 const (
@@ -19,27 +20,31 @@ usage: flynn-host runtime
 List cluster runtimes (CPU/memory presets).
 `
 	runtimeCreateUsage = `
-usage: flynn-host runtime:create [--memory <bytes>] [--cpu <milli>] [--reserve] <name>
+usage: flynn-host runtime:create [--memory <bytes>] [--cpu <milli>] [--reserve] [--tag <tag>]... <name>
 
 Create a runtime. Memory is bytes (or 512MB / 1GB). CPU is milliCPU.
 Without --reserve the runtime shares host capacity and only the CPU/memory
 maxes apply. --reserve guarantees that much Request on the host.
+--tag KEY=VAL (repeatable) pins jobs using this runtime to matching hosts.
 
 Options:
     --memory=<bytes>  Memory cap (default 512MB)
     --cpu=<milli>     milliCPU cap (default 500)
     --reserve         Guarantee CPU and memory when placing jobs (off by default)
+    --tag=<tag>       Host placement tag (KEY or KEY=VAL)
 
 Examples:
 
     $ flynn-host runtime:create --memory 512MB --cpu 500 xlarge
     $ flynn-host runtime:create --reserve --memory 1GB --cpu 1000 isolated
+    $ flynn-host runtime:create --tag role=database dedicated
 `
 	runtimeUpdateUsage = `
-usage: flynn-host runtime:update [--name <name>] [--memory <bytes>] [--cpu <milli>] [--reserve] [--shared] <id>
+usage: flynn-host runtime:update [--name <name>] [--memory <bytes>] [--cpu <milli>] [--reserve] [--shared] [--tag <tag>]... <id>
 
 Update a runtime by id, including builtin small/medium/large.
 --reserve guarantees CPU/memory; --shared turns the guarantee off (default for new runtimes).
+--tag KEY=VAL replaces placement tags when given.
 `
 	runtimeRemoveUsage = `
 usage: flynn-host runtime:remove <id>
@@ -88,6 +93,19 @@ Examples:
     $ flynn-host runtime:job-restart-interval 72h
     $ flynn-host runtime:job-restart-interval off
 `
+	runtimeAllowUserScaleUsage = `
+usage: flynn-host runtime:allow-user-scale [--disable]
+
+Allow (or --disable) tenants to change process counts with flynn scale.
+Cluster admins and flynn-host are never blocked. Default is on.
+`
+	runtimeAllowUserScaleTagsUsage = `
+usage: flynn-host runtime:allow-user-scale-tags [--disable]
+
+Allow (or --disable) tenants to set formation tags on flynn scale
+(for example web=1,role=database). Default is off: tenants pick a
+tagged runtime instead of writing host constraints themselves.
+`
 	runtimeSingleInstanceRestartUsage = `
 usage: flynn-host runtime:single-instance-restart [<state>]
 
@@ -114,6 +132,15 @@ func init() {
 	Register("runtime:max-restarts", runRuntimeMaxRestarts, runtimeMaxRestartsUsage)
 	Register("runtime:job-restart-interval", runRuntimeJobRestartInterval, runtimeJobRestartIntervalUsage)
 	Register("runtime:single-instance-restart", runRuntimeSingleInstanceRestart, runtimeSingleInstanceRestartUsage)
+	Register("runtime:allow-user-scale", runRuntimeAllowUserScale, runtimeAllowUserScaleUsage)
+	Register("runtime:allow-user-scale-tags", runRuntimeAllowUserScaleTags, runtimeAllowUserScaleTagsUsage)
+}
+
+func runtimeSettingsFrom(cur *ct.RuntimeSettings) ct.RuntimeSettings {
+	s := cur.Copy()
+	s.MaxProcesses = cur.MaxProcessesOrDefault()
+	s.BlobGCKeep = cur.BlobGCKeepOrDefault()
+	return s
 }
 
 // formatMaxRestarts renders RuntimeSettings.MaxRestarts, where 0 is unlimited.
@@ -150,11 +177,11 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d max_restarts=%s job_restart_interval=%s\n", settings.AllowCustomLimits, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts), formatJobRestartInterval(settings.JobRestartInterval))
+	fmt.Printf("allow_custom_limits=%t allow_user_scale=%t allow_user_scale_tags=%t max_processes=%d max_restarts=%s job_restart_interval=%s\n", settings.AllowCustomLimits, settings.AllowUserScale, settings.AllowUserScaleTags, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts), formatJobRestartInterval(settings.JobRestartInterval))
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tRESERVE\tBUILTIN")
+	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tRESERVE\tTAGS\tBUILTIN")
 	for _, p := range list {
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%t\t%t\n", p.ID, p.Name, resource.FormatLimit(resource.TypeMemory, p.Memory), p.CPU, p.ReserveResources, p.Builtin)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%t\t%s\t%t\n", p.ID, p.Name, resource.FormatLimit(resource.TypeMemory, p.Memory), p.CPU, p.ReserveResources, formatTags(p.Tags), p.Builtin)
 	}
 	return w.Flush()
 }
@@ -193,6 +220,7 @@ func runRuntimeProfileCreate(args *docopt.Args) error {
 		Memory:           mem,
 		CPU:              cpu,
 		ReserveResources: args.Bool["--reserve"],
+		Tags:             parseTagPairs(cliutil.List(args, "--tag")),
 	}
 	if err := client.CreateRuntimeProfile(p); err != nil {
 		return err
@@ -246,6 +274,9 @@ func runRuntimeProfileUpdate(args *docopt.Args) error {
 	if args.Bool["--shared"] {
 		p.ReserveResources = false
 	}
+	if tags := parseTagPairs(cliutil.List(args, "--tag")); len(tags) > 0 {
+		p.Tags = tags
+	}
 	if err := client.UpdateRuntimeProfile(p); err != nil {
 		return err
 	}
@@ -270,17 +301,9 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	s := &ct.RuntimeSettings{
-		AllowCustomLimits:     !args.Bool["--disable"],
-		MaxProcesses:          cur.MaxProcessesOrDefault(),
-		ReserveResources:      cur.ReserveResources,
-		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:          cur.BlobGCMaxAge,
-		MaxRestarts:           cur.MaxRestarts,
-		JobRestartInterval:    cur.JobRestartInterval,
-		SingleInstanceRestart: cur.SingleInstanceRestart,
-	}
-	if err := client.UpdateRuntimeSettings(s); err != nil {
+	s := runtimeSettingsFrom(cur)
+	s.AllowCustomLimits = !args.Bool["--disable"]
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
 		return err
 	}
 	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", s.AllowCustomLimits, s.MaxProcessesOrDefault())
@@ -305,17 +328,9 @@ func runRuntimeMaxRestarts(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	s := &ct.RuntimeSettings{
-		AllowCustomLimits:     cur.AllowCustomLimits,
-		MaxProcesses:          cur.MaxProcessesOrDefault(),
-		ReserveResources:      cur.ReserveResources,
-		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:          cur.BlobGCMaxAge,
-		MaxRestarts:           n,
-		JobRestartInterval:    cur.JobRestartInterval,
-		SingleInstanceRestart: cur.SingleInstanceRestart,
-	}
-	if err := client.UpdateRuntimeSettings(s); err != nil {
+	s := runtimeSettingsFrom(cur)
+	s.MaxRestarts = n
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
 		return err
 	}
 	fmt.Printf("max_restarts=%s\n", formatMaxRestarts(s.MaxRestarts))
@@ -350,17 +365,9 @@ func runRuntimeJobRestartInterval(args *docopt.Args) error {
 	if err != nil {
 		return fmt.Errorf("job restart interval: %s", err)
 	}
-	s := &ct.RuntimeSettings{
-		AllowCustomLimits:     cur.AllowCustomLimits,
-		MaxProcesses:          cur.MaxProcessesOrDefault(),
-		ReserveResources:      cur.ReserveResources,
-		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:          cur.BlobGCMaxAge,
-		MaxRestarts:           cur.MaxRestarts,
-		JobRestartInterval:    interval,
-		SingleInstanceRestart: cur.SingleInstanceRestart,
-	}
-	if err := client.UpdateRuntimeSettings(s); err != nil {
+	s := runtimeSettingsFrom(cur)
+	s.JobRestartInterval = interval
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
 		return err
 	}
 	fmt.Printf("job_restart_interval=%s\n", formatJobRestartInterval(s.JobRestartInterval))
@@ -387,17 +394,9 @@ func runRuntimeSingleInstanceRestart(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	s := &ct.RuntimeSettings{
-		AllowCustomLimits:     cur.AllowCustomLimits,
-		MaxProcesses:          cur.MaxProcessesOrDefault(),
-		ReserveResources:      cur.ReserveResources,
-		BlobGCKeep:            cur.BlobGCKeepOrDefault(),
-		BlobGCMaxAge:          cur.BlobGCMaxAge,
-		MaxRestarts:           cur.MaxRestarts,
-		JobRestartInterval:    cur.JobRestartInterval,
-		SingleInstanceRestart: on,
-	}
-	if err := client.UpdateRuntimeSettings(s); err != nil {
+	s := runtimeSettingsFrom(cur)
+	s.SingleInstanceRestart = on
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
 		return err
 	}
 	fmt.Printf("single_instance_restart=%s\n", formatOnOff(s.SingleInstanceRestart))
@@ -435,5 +434,50 @@ func runRuntimeReserve(args *docopt.Args) error {
 		return err
 	}
 	fmt.Printf("%s reserve_resources=%t\n", p.Name, p.ReserveResources)
+	return nil
+}
+
+func formatTags(tags map[string]string) string {
+	if len(tags) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(tags))
+	for k, v := range tags {
+		parts = append(parts, k+"="+v)
+	}
+	return strings.Join(parts, ",")
+}
+
+func runRuntimeAllowUserScale(args *docopt.Args) error {
+	return updateRuntimeBoolSetting(args, func(s *ct.RuntimeSettings, on bool) {
+		s.AllowUserScale = on
+	}, func(s ct.RuntimeSettings) string {
+		return fmt.Sprintf("allow_user_scale=%t", s.AllowUserScale)
+	})
+}
+
+func runRuntimeAllowUserScaleTags(args *docopt.Args) error {
+	return updateRuntimeBoolSetting(args, func(s *ct.RuntimeSettings, on bool) {
+		s.AllowUserScaleTags = on
+	}, func(s ct.RuntimeSettings) string {
+		return fmt.Sprintf("allow_user_scale_tags=%t", s.AllowUserScaleTags)
+	})
+}
+
+func updateRuntimeBoolSetting(args *docopt.Args, set func(*ct.RuntimeSettings, bool), format func(ct.RuntimeSettings) string) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	s := runtimeSettingsFrom(cur)
+	set(&s, !args.Bool["--disable"])
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
+		return err
+	}
+	fmt.Println(format(s))
 	return nil
 }

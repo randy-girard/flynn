@@ -115,6 +115,29 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
         SHELL
       end
     end
+    # Dedicated database node. Not in the bootstrap peer list; join after
+    # cluster-init so tagged database runtimes can pin isolated instances here.
+    if ENV.fetch("FLYNN_DEV_DB_NODE", "1") != "0"
+      config.vm.define "dev-db-node" do |runner|
+        runner.vm.hostname = "dev-db-node"
+        runner.vm.synced_folder "./flynn-logs/dev-db-node", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+        runner.disksize.size = "100GB"
+        runner.vm.provider "virtualbox" do |v, override|
+          v.memory = ENV["VAGRANT_DB_NODE_MEMORY"] || ENV["VAGRANT_MEMORY"] || 4096
+          v.cpus = ENV["VAGRANT_DB_NODE_CPUS"] || ENV["VAGRANT_CPUS"] || 2
+          v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+          v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+        end
+        runner.vm.network "private_network", ip: "192.168.57.50"
+        runner.vm.provision "shell", privileged: true, inline: <<-SHELL
+          sudo su -l
+          apt-get update
+          growpart /dev/sda 3
+          pvresize /dev/sda3
+          lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
+        SHELL
+      end
+    end
   elsif vagrant_env != "smoke"
     raise "FLYNN_VAGRANT_ENV must be smoke or dev (got #{vagrant_env})"
   else
@@ -205,6 +228,29 @@ Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
       SHELL
     end
   end
+    # Dedicated database node at 192.168.56.50. Smoke joins it after bootstrap
+    # and pins a tagged postgres runtime here (role=database, max-processes=1).
+    if ENV.fetch("FLYNN_DB_NODE", "1") != "0"
+      config.vm.define "db-node" do |runner|
+        runner.vm.hostname = "db-node"
+        runner.vm.synced_folder "./flynn-logs/db-node", "/var/log/flynn", create: true, group: "vagrant", owner: "vagrant"
+        runner.disksize.size = "100GB"
+        runner.vm.provider "virtualbox" do |v, override|
+          v.memory = ENV["VAGRANT_DB_NODE_MEMORY"] || ENV["VAGRANT_MEMORY"] || 4096
+          v.cpus = ENV["VAGRANT_DB_NODE_CPUS"] || ENV["VAGRANT_CPUS"] || 2
+          v.customize ["modifyvm", :id, "--nested-hw-virt", "on"]
+          v.customize ["modifyvm", :id, "--nicpromisc2", "allow-all"]
+        end
+        runner.vm.network "private_network", ip: "192.168.56.50"
+        runner.vm.provision "shell", privileged: true, inline: <<-SHELL
+          sudo su -l
+          apt-get update
+          growpart /dev/sda 3
+          pvresize /dev/sda3
+          lvextend -l +100%FREE -r /dev/ubuntu-vg/ubuntu-lv
+        SHELL
+      end
+    end
   end
 
 end

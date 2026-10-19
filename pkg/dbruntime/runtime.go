@@ -22,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/docker/go-units"
+	"github.com/randy-girard/flynn/host/resource"
 )
 
 const (
@@ -68,6 +69,12 @@ type Runtime struct {
 	Memory  int64  `json:"memory"`
 	Disk    int64  `json:"disk"`
 	Builtin bool   `json:"builtin"`
+	// Dedicated reserves CPU and memory on the host for new instances.
+	// Use this for node-sized isolated databases. The runtime name is
+	// only a label; mark more than one runtime dedicated when nodes
+	// have different sizes.
+	Dedicated bool              `json:"dedicated"`
+	Tags      map[string]string `json:"tags,omitempty"`
 }
 
 // Size returns the provision-time dimensions of r.
@@ -439,10 +446,12 @@ func (c *Catalog) Create(r Runtime) error {
 
 // UpdateFields are the optional edits for Update. Nil leaves the field as-is.
 type UpdateFields struct {
-	Name   *string
-	CPU    *int64
-	Memory *int64
-	Disk   *int64
+	Name      *string
+	CPU       *int64
+	Memory    *int64
+	Disk      *int64
+	Dedicated *bool
+	Tags      *map[string]string
 }
 
 // Update edits a published runtime. Builtin small/medium/large can change
@@ -490,6 +499,12 @@ func (c *Catalog) Update(engine, name string, f UpdateFields) (Runtime, error) {
 	if f.Disk != nil {
 		r.Disk = *f.Disk
 	}
+	if f.Dedicated != nil {
+		r.Dedicated = *f.Dedicated
+	}
+	if f.Tags != nil {
+		r.Tags = copyTags(*f.Tags)
+	}
 	if err := Validate(r); err != nil {
 		return Runtime{}, err
 	}
@@ -519,4 +534,92 @@ func (c *Catalog) Remove(engine, name string) error {
 	}
 	c.Runtimes = append(c.Runtimes[:idx], c.Runtimes[idx+1:]...)
 	return nil
+}
+
+// CatalogProcessTags wraps PlacementTags for one isolated-instance process type.
+func CatalogProcessTags(cat *Catalog, engine, name, process string) map[string]map[string]string {
+	if cat == nil {
+		return nil
+	}
+	return ProcessPlacementTags(process, PlacementTags(*cat, engine, name))
+}
+
+// ProcessResources is CPU and memory for a published runtime. Dedicated
+// runtimes reserve that capacity on the host. Nil if the runtime is unpublished.
+func ProcessResources(cat *Catalog, engine, name string) resource.Resources {
+	if cat == nil {
+		return nil
+	}
+	rt, ok := cat.Find(engine, name)
+	if !ok {
+		return nil
+	}
+	r := make(resource.Resources)
+	resource.ApplyNamedLimitsWithReserve(r, rt.Memory, rt.CPU, rt.Dedicated)
+	return r
+}
+
+// PlacementTags returns host-match tags for a published runtime.
+func PlacementTags(cat Catalog, engine, name string) map[string]string {
+	rt, ok := cat.Find(engine, name)
+	if !ok {
+		return nil
+	}
+	return copyTags(rt.Tags)
+}
+
+func copyTags(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ProcessPlacementTags wraps tags for one process type's formation.
+func ProcessPlacementTags(process string, tags map[string]string) map[string]map[string]string {
+	tags = copyTags(tags)
+	if process == "" || len(tags) == 0 {
+		return nil
+	}
+	return map[string]map[string]string{process: tags}
+}
+
+// MergeProcessTags overlays src onto dst. src wins on key conflict.
+func MergeProcessTags(dst, src map[string]map[string]string) map[string]map[string]string {
+	if len(dst) == 0 && len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]map[string]string, len(dst)+len(src))
+	for typ, tags := range dst {
+		if copied := copyTags(tags); copied != nil {
+			out[typ] = copied
+		}
+	}
+	for typ, tags := range src {
+		if out[typ] == nil {
+			out[typ] = copyTags(tags)
+			continue
+		}
+		for k, v := range tags {
+			if k == "" {
+				continue
+			}
+			out[typ][k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

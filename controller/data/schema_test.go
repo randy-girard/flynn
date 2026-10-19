@@ -334,6 +334,8 @@ func (s *S) TestRuntimeProfilesBootstrapped(c *C) {
 	c.Assert(settings.BlobGCKeep, Equals, 10)
 	c.Assert(settings.BlobGCMaxAge, Equals, "")
 	c.Assert(settings.JobRestartInterval, Equals, ct.DefaultJobRestartInterval)
+	c.Assert(settings.AllowUserScale, Equals, true)
+	c.Assert(settings.AllowUserScaleTags, Equals, false)
 
 	custom := &ct.RuntimeProfile{Name: "xlarge", Memory: 4 * 1024 * 1024 * 1024, CPU: 4000}
 	c.Assert(repo.Add(custom), IsNil)
@@ -399,6 +401,7 @@ func (s *S) TestDBRuntimesPersist(c *C) {
 	var cat dbruntime.Catalog
 	c.Assert(cat.EnsureEngine("postgres"), IsNil)
 	c.Assert(cat.Create(dbruntime.Runtime{Engine: "postgres", Name: "cache", CPU: 100, Memory: 128 << 20, Disk: 1 << 30}), IsNil)
+	c.Assert(cat.Create(dbruntime.Runtime{Engine: "postgres", Name: "db-small", CPU: 500, Memory: 1 << 30, Disk: 10 << 30, Dedicated: true}), IsNil)
 	cat.AllowCustomSizes = true
 	c.Assert(repo.Replace(cat), IsNil)
 
@@ -410,6 +413,10 @@ func (s *S) TestDBRuntimesPersist(c *C) {
 	}
 	if _, ok := got.Find("postgres", "cache"); !ok {
 		c.Fatal("custom runtime missing")
+	}
+	dedicated, ok := got.Find("postgres", "db-small")
+	if !ok || !dedicated.Dedicated {
+		c.Fatal("dedicated runtime missing")
 	}
 
 	updated, err := repo.Mutate(func(next *dbruntime.Catalog) error {

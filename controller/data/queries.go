@@ -942,36 +942,36 @@ WHERE id = 1
 RETURNING updated_at`
 
 	runtimeProfileListQuery = `
-SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, tags, created_at, updated_at
 FROM runtime_profiles WHERE deleted_at IS NULL
 ORDER BY builtin DESC, name`
 	runtimeProfileSelectQuery = `
-SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, tags, created_at, updated_at
 FROM runtime_profiles WHERE profile_id = $1 AND deleted_at IS NULL`
 	runtimeProfileSelectByNameQuery = `
-SELECT profile_id, name, memory, cpu, builtin, reserve_resources, created_at, updated_at
+SELECT profile_id, name, memory, cpu, builtin, reserve_resources, tags, created_at, updated_at
 FROM runtime_profiles WHERE name = $1 AND deleted_at IS NULL`
 	runtimeProfileInsertQuery = `
-INSERT INTO runtime_profiles (profile_id, name, memory, cpu, builtin, reserve_resources)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO runtime_profiles (profile_id, name, memory, cpu, builtin, reserve_resources, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at, updated_at`
 	runtimeProfileUpdateQuery = `
-UPDATE runtime_profiles SET name = $2, memory = $3, cpu = $4, reserve_resources = $5, updated_at = now()
+UPDATE runtime_profiles SET name = $2, memory = $3, cpu = $4, reserve_resources = $5, tags = $6, updated_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL
 RETURNING builtin, created_at, updated_at`
 	runtimeProfileDeleteQuery = `
 UPDATE runtime_profiles SET deleted_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL AND builtin = false`
 	runtimeSettingsSelectQuery = `
-SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, max_restarts, job_restart_interval, single_instance_restart, updated_at FROM runtime_settings WHERE id = 1`
+SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, max_restarts, job_restart_interval, single_instance_restart, allow_user_scale, allow_user_scale_tags, updated_at FROM runtime_settings WHERE id = 1`
 	runtimeSettingsUpdateQuery = `
-UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, max_restarts = $6, job_restart_interval = $7, single_instance_restart = $8, updated_at = now()
+UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, max_restarts = $6, job_restart_interval = $7, single_instance_restart = $8, allow_user_scale = $9, allow_user_scale_tags = $10, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
 	dbRuntimeListQuery = `
-SELECT engine, name, cpu, memory, disk, builtin FROM db_runtimes ORDER BY engine, name`
+SELECT engine, name, cpu, memory, disk, builtin, dedicated, tags FROM db_runtimes ORDER BY engine, name`
 	dbRuntimeInsertQuery = `
-INSERT INTO db_runtimes (engine, name, cpu, memory, disk, builtin)
-VALUES ($1, $2, $3, $4, $5, $6)`
+INSERT INTO db_runtimes (engine, name, cpu, memory, disk, builtin, dedicated, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 	dbRuntimeDeleteAllQuery      = `DELETE FROM db_runtimes`
 	dbRuntimeSettingsSelectQuery = `
 SELECT allow_custom_sizes FROM db_runtime_settings WHERE id = 1`

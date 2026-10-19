@@ -281,6 +281,11 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkUserSession, "", ""
 		}
 		return rkCluster, "", ""
+	case "hosts":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkAnyAuth, "", ""
+		}
+		return rkCluster, "", ""
 	case "runtimes":
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkAnyAuth, "", ""

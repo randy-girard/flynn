@@ -80,10 +80,15 @@ flynn addons:create redis
 flynn addons:create redis --runtime medium
 sudo flynn-host db-runtime
 sudo flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB redis cache
+sudo flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB --dedicated --tag role=database,size=small postgres db-small
+sudo flynn-host db-runtime:create --memory 8GB --cpu 2000 --disk 100GB --dedicated --tag role=database,size=large postgres db-large
 sudo flynn-host db-runtime:update --disk 2GB redis small
 sudo flynn-host db-runtime:remove redis cache
 ```
 
+`--dedicated` marks a runtime as a reserved, node-sized instance. The
+name is only a label, so you can publish more than one dedicated size
+(`db-small`, `db-large`) and pin each with `--tag` to a different node.
 Omitting `--runtime` uses `small`. There is no controller table for these
 definitions. Plugin install writes builtins into `/etc/flynn/db-runtimes.json`
 (`FLYNN_DB_RUNTIMES` overrides the path) and the controller catalog. Plugin

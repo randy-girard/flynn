@@ -124,6 +124,16 @@ If you already know the node addresses, skip discovery:
 $ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --external-ip 192.168.56.20
 ```
 
+To pin a dedicated database node at install time:
+
+```
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 \
+    --external-ip 192.168.56.50 --tag role=database --max-processes 1
+```
+
+That writes `--tags role=database,flynn-max-processes=1` into `/etc/flynn/host.json`.
+Change tags later with `flynn-host tags:set` / `tags:max-processes`.
+
 Use each node's own address as `--external-ip`. After the cluster is running,
 `--peer-ips` is also how you join an additional host.
 

@@ -335,3 +335,24 @@ func TestPickHostSkipsHostsRunningTheirOmniShare(t *testing.T) {
 		}
 	}
 }
+
+func TestPickHostHonorsMaxProcesses(t *testing.T) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		App:       &ct.App{ID: "shop"},
+		Release:   &ct.Release{Processes: map[string]ct.ProcessType{"web": {}}},
+		Processes: Processes{"web": 1},
+		Tags:      map[string]map[string]string{"web": {"role": "database"}},
+	})
+	full := &Host{ID: "db1", Healthy: true, Tags: map[string]string{"role": "database", ct.FormationMaxProcessesTag: "1"}}
+	free := &Host{ID: "db2", Healthy: true, Tags: map[string]string{"role": "database"}}
+	s := &Scheduler{
+		jobs:  Jobs{"j1": {ID: "j1", HostID: "db1", Type: "web", State: JobStateRunning, Formation: formation}},
+		hosts: map[string]*Host{"db1": full, "db2": free},
+	}
+	next := &Job{Type: "web", State: JobStatePending, Formation: formation}
+	for i := 0; i < 10; i++ {
+		if got := s.pickHost(next, map[string]int{"db1": 1}); got != free {
+			t.Fatalf("attempt %d: placed on %v, want db2 (db1 is at max_processes=1)", i, got)
+		}
+	}
+}

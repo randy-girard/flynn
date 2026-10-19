@@ -31,6 +31,14 @@ if ! grep -Fq 'FLYNN_VAGRANT_ENV=smoke' "${mod}/lib/env.sh"; then
   echo "lib/env.sh must set FLYNN_VAGRANT_ENV=smoke" >&2
   exit 1
 fi
+if ! grep -Fq '192.168.56.50' "${mod}/lib/env.sh"; then
+  echo "lib/env.sh must define smoke db-node at 192.168.56.50" >&2
+  exit 1
+fi
+if ! grep -Fq 'db-node' "${ROOT}/Vagrantfile"; then
+  echo "Vagrantfile must define db-node" >&2
+  exit 1
+fi
 if ! grep -Fq 'VAGRANT_DOTFILE_PATH="${ROOT}/.vagrant"' "${mod}/lib/env.sh"; then
   echo "smoke must use .vagrant" >&2
   exit 1

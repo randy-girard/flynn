@@ -125,9 +125,12 @@ func (c *controllerAPI) UpdateDBRuntime(ctx context.Context, w http.ResponseWrit
 		respondWithError(w, err)
 		return
 	}
-	fields := dbruntime.UpdateFields{CPU: &body.CPU, Memory: &body.Memory, Disk: &body.Disk}
+	fields := dbruntime.UpdateFields{CPU: &body.CPU, Memory: &body.Memory, Disk: &body.Disk, Dedicated: &body.Dedicated}
 	if n := strings.TrimSpace(body.Name); n != "" {
 		fields.Name = &n
+	}
+	if body.Tags != nil {
+		fields.Tags = &body.Tags
 	}
 	var updated dbruntime.Runtime
 	_, err := c.mutateDBRuntimes(func(cat *dbruntime.Catalog) error {

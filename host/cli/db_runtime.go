@@ -9,6 +9,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/host/resource"
+	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 )
 
@@ -29,32 +30,42 @@ controller catalog after an update. Changing a definition does not resize
 instances already created from it. There is no in-place resize.
 `
 	dbRuntimeCreateUsage = `
-usage: flynn-host db-runtime:create --memory <bytes> --cpu <milli> --disk <bytes> <engine> <name>
+usage: flynn-host db-runtime:create --memory <bytes> --cpu <milli> --disk <bytes> [--dedicated] [--tag <tag>]... <engine> <name>
 
 Create a database runtime for one engine (postgres, redis, mysql, mongodb, kafka, clickhouse).
 mariadb is accepted as mysql. Memory and disk are bytes or a size like 512MB or 10GB.
-CPU is milliCPU.
+CPU is milliCPU. --dedicated reserves that CPU and memory on the host so more
+than one node-sized runtime can exist (the name is only a label). --tag KEY=VAL
+pins new instances to matching hosts.
 
 Options:
     --memory=<bytes>  memory cap
     --cpu=<milli>     milliCPU cap
     --disk=<bytes>    disk cap
+    --dedicated       Reserve CPU and memory on the host
+    --tag=<tag>       Host placement tag (KEY or KEY=VAL)
 
 Examples:
 
     $ flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB redis cache
+    $ flynn-host db-runtime:create --memory 1GB --cpu 500 --disk 20GB --dedicated --tag role=database,size=small postgres db-small
 `
 	dbRuntimeUpdateUsage = `
-usage: flynn-host db-runtime:update [--rename <new-name>] [--memory <bytes>] [--cpu <milli>] [--disk <bytes>] <engine> <name>
+usage: flynn-host db-runtime:update [--rename <new-name>] [--memory <bytes>] [--cpu <milli>] [--disk <bytes>] [--dedicated|--shared] [--tag <tag>]... <engine> <name>
 
 Update a database runtime. Builtin small, medium, and large can change
 CPU, memory, and disk. Existing instances keep the size they were created with.
+--dedicated / --shared sets whether new instances reserve host capacity.
+--tag KEY=VAL replaces placement tags when given.
 
 Options:
     --rename=<new-name>  new name for a custom runtime
     --memory=<bytes>     memory cap
     --cpu=<milli>        milliCPU cap
     --disk=<bytes>       disk cap
+    --dedicated          Reserve CPU and memory on the host
+    --shared             Share host capacity (do not reserve)
+    --tag=<tag>          Host placement tag (KEY or KEY=VAL)
 `
 	dbRuntimeRemoveUsage = `
 usage: flynn-host db-runtime:remove <engine> <name>
@@ -138,12 +149,14 @@ func runDBRuntimeList(_ *docopt.Args) error {
 	}
 	fmt.Printf("allow_custom_sizes=%t file=%s\n", cat.AllowCustomSizes, path)
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "ENGINE\tNAME\tCPU\tMEMORY\tDISK\tBUILTIN")
+	fmt.Fprintln(w, "ENGINE\tNAME\tCPU\tMEMORY\tDISK\tDEDICATED\tTAGS\tBUILTIN")
 	for _, r := range cat.List() {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%t\n",
+		fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%s\t%t\t%s\t%t\n",
 			r.Engine, r.Name, r.CPU,
 			resource.FormatLimit(resource.TypeMemory, r.Memory),
 			resource.FormatLimit(resource.TypeTempDisk, r.Disk),
+			r.Dedicated,
+			formatTags(r.Tags),
 			r.Builtin)
 	}
 	return w.Flush()
@@ -167,11 +180,13 @@ func runDBRuntimeCreate(args *docopt.Args) error {
 		return err
 	}
 	r := dbruntime.Runtime{
-		Name:   strings.ToLower(strings.TrimSpace(args.String["<name>"])),
-		Engine: args.String["<engine>"],
-		CPU:    cpu,
-		Memory: mem,
-		Disk:   disk,
+		Name:      strings.ToLower(strings.TrimSpace(args.String["<name>"])),
+		Engine:    args.String["<engine>"],
+		CPU:       cpu,
+		Memory:    mem,
+		Disk:      disk,
+		Dedicated: args.Bool["--dedicated"],
+		Tags:      parseTagPairs(cliutil.List(args, "--tag")),
 	}
 	if err := cat.Create(r); err != nil {
 		return err
@@ -259,6 +274,16 @@ func runDBRuntimeUpdate(args *docopt.Args) error {
 			return err
 		}
 		fields.Disk = &n
+	}
+	if args.Bool["--dedicated"] {
+		on := true
+		fields.Dedicated = &on
+	} else if args.Bool["--shared"] {
+		off := false
+		fields.Dedicated = &off
+	}
+	if tags := parseTagPairs(cliutil.List(args, "--tag")); len(tags) > 0 {
+		fields.Tags = &tags
 	}
 	r, err := cat.Update(args.String["<engine>"], args.String["<name>"], fields)
 	if err != nil {

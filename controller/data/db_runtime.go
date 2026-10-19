@@ -28,7 +28,7 @@ func (r *DBRuntimeRepo) Load() (dbruntime.Catalog, error) {
 	defer rows.Close()
 	for rows.Next() {
 		var rt dbruntime.Runtime
-		if err := rows.Scan(&rt.Engine, &rt.Name, &rt.CPU, &rt.Memory, &rt.Disk, &rt.Builtin); err != nil {
+		if err := rows.Scan(&rt.Engine, &rt.Name, &rt.CPU, &rt.Memory, &rt.Disk, &rt.Builtin, &rt.Dedicated, &rt.Tags); err != nil {
 			return dbruntime.Catalog{}, err
 		}
 		cat.Runtimes = append(cat.Runtimes, rt)
@@ -73,7 +73,7 @@ func (r *DBRuntimeRepo) mutate(fn func(*dbruntime.Catalog) error, replace *dbrun
 		}
 		for rows.Next() {
 			var rt dbruntime.Runtime
-			if err := rows.Scan(&rt.Engine, &rt.Name, &rt.CPU, &rt.Memory, &rt.Disk, &rt.Builtin); err != nil {
+			if err := rows.Scan(&rt.Engine, &rt.Name, &rt.CPU, &rt.Memory, &rt.Disk, &rt.Builtin, &rt.Dedicated, &rt.Tags); err != nil {
 				rows.Close()
 				return dbruntime.Catalog{}, err
 			}
@@ -95,7 +95,7 @@ func (r *DBRuntimeRepo) mutate(fn func(*dbruntime.Catalog) error, replace *dbrun
 		return dbruntime.Catalog{}, err
 	}
 	for _, rt := range cat.Runtimes {
-		if err := tx.Exec("db_runtime_insert", rt.Engine, rt.Name, rt.CPU, rt.Memory, rt.Disk, rt.Builtin); err != nil {
+		if err := tx.Exec("db_runtime_insert", rt.Engine, rt.Name, rt.CPU, rt.Memory, rt.Disk, rt.Builtin, rt.Dedicated, tagsOrEmpty(rt.Tags)); err != nil {
 			return dbruntime.Catalog{}, err
 		}
 	}

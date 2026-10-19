@@ -27,9 +27,13 @@ flynn_vagrant_running_cluster_nodes() {
 }
 
 # flynn_vagrant_node_ip is the host-only address for a cluster node VM.
-# Dev: 192.168.57.(19+N). Smoke: 192.168.56.(19+N).
+# Dev: 192.168.57.(19+N). Smoke: 192.168.56.(19+N). Named db-node is .50.
 flynn_vagrant_node_ip() {
   local name="$1"
+  if [[ "${name}" == "$(flynn_vagrant_db_node_name)" ]]; then
+    flynn_vagrant_db_node_ip
+    return 0
+  fi
   local n="${name#${FLYNN_VAGRANT_NODE_PREFIX}}"
   if [[ ! "${n}" =~ ^[0-9]+$ ]]; then
     echo "not a cluster node: ${name}" >&2

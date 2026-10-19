@@ -6,7 +6,17 @@ set -euo pipefail
 : "${PEER_IPS:?PEER_IPS is required}"
 : "${EXTERNAL_IP:?EXTERNAL_IP is required}"
 
-flynn-host init --peer-ips "${PEER_IPS}" --external-ip "${EXTERNAL_IP}"
+init_flags=()
+if [[ -n "${FLYNN_HOST_TAGS:-}" ]]; then
+  IFS=',' read -r -a _tags <<< "${FLYNN_HOST_TAGS}"
+  for tag in "${_tags[@]}"; do
+    [[ -n "${tag}" ]] && init_flags+=(--tag "${tag}")
+  done
+fi
+if [[ -n "${FLYNN_MAX_PROCESSES:-}" ]]; then
+  init_flags+=(--max-processes "${FLYNN_MAX_PROCESSES}")
+fi
+flynn-host init --peer-ips "${PEER_IPS}" --external-ip "${EXTERNAL_IP}" "${init_flags[@]}"
 systemctl enable flynn-host.service
 systemctl restart flynn-host.service
 

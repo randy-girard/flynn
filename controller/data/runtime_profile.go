@@ -20,7 +20,7 @@ func NewRuntimeProfileRepo(db *postgres.DB) *RuntimeProfileRepo {
 
 func scanRuntimeProfile(s postgres.Scanner) (*ct.RuntimeProfile, error) {
 	p := &ct.RuntimeProfile{}
-	err := s.Scan(&p.ID, &p.Name, &p.Memory, &p.CPU, &p.Builtin, &p.ReserveResources, &p.CreatedAt, &p.UpdatedAt)
+	err := s.Scan(&p.ID, &p.Name, &p.Memory, &p.CPU, &p.Builtin, &p.ReserveResources, &p.Tags, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			err = ErrNotFound
@@ -28,6 +28,13 @@ func scanRuntimeProfile(s postgres.Scanner) (*ct.RuntimeProfile, error) {
 		return nil, err
 	}
 	return p, nil
+}
+
+func tagsOrEmpty(tags map[string]string) map[string]string {
+	if tags == nil {
+		return map[string]string{}
+	}
+	return tags
 }
 
 func (r *RuntimeProfileRepo) List() ([]*ct.RuntimeProfile, error) {
@@ -60,7 +67,7 @@ func (r *RuntimeProfileRepo) Add(p *ct.RuntimeProfile) error {
 		p.ID = random.UUID()
 	}
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	if err := r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin, p.ReserveResources).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := r.db.QueryRow("runtime_profile_insert", p.ID, p.Name, p.Memory, p.CPU, p.Builtin, p.ReserveResources, tagsOrEmpty(p.Tags)).Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
 		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{
@@ -72,7 +79,7 @@ func (r *RuntimeProfileRepo) Add(p *ct.RuntimeProfile) error {
 
 func (r *RuntimeProfileRepo) Update(p *ct.RuntimeProfile) error {
 	p.Name = strings.ToLower(strings.TrimSpace(p.Name))
-	if err := r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU, p.ReserveResources).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt); err != nil {
+	if err := r.db.QueryRow("runtime_profile_update", p.ID, p.Name, p.Memory, p.CPU, p.ReserveResources, tagsOrEmpty(p.Tags)).Scan(&p.Builtin, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return err
 	}
 	return CreateEvent(r.db.Exec, &ct.Event{
@@ -101,7 +108,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.JobRestartInterval, &s.SingleInstanceRestart, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.JobRestartInterval, &s.SingleInstanceRestart, &s.AllowUserScale, &s.AllowUserScaleTags, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +139,7 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 		return ct.ValidationError{Field: "job_restart_interval", Message: err.Error()}
 	}
 	s.JobRestartInterval = interval
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts, s.JobRestartInterval, s.SingleInstanceRestart).Scan(&s.UpdatedAt); err != nil {
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts, s.JobRestartInterval, s.SingleInstanceRestart, s.AllowUserScale, s.AllowUserScaleTags).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
 	if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep)); err != nil {

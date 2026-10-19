@@ -9,6 +9,7 @@ smoke="${ROOT}/script/vagrant/suite.sh"
 entry="${ROOT}/script/vagrant-smoke.sh"
 example="${ROOT}/smoke-matrix.example.yaml"
 readme="${ROOT}/test/README.md"
+vagrant="${ROOT}/Vagrantfile"
 
 need() {
   local file=$1 needle=$2 msg=$3
@@ -67,6 +68,18 @@ need "${smoke}" 'app_has_identity_env' \
   "wait_datastores_ready must use tenant CLI pings when FLYNN_POSTGRES/FLYNN_MYSQL is set"
 need "${smoke}" 'Provision datastore plugins' \
   "the topology loop must run the throwaway provision step"
+need "${smoke}" 'step_join_db_node' \
+  "datastores must join the dedicated db-node after bootstrap"
+need "${smoke}" 'step_provision_tagged_database' \
+  "datastores must create a tagged postgres dedicated runtime and pin it to db-node"
+need "${smoke}" 'role=database' \
+  "tagged placement must set host and runtime tag role=database"
+need "${smoke}" 'tags:max-processes' \
+  "tagged placement must cap db-node at one tenant process"
+need "${vagrant}" 'db-node' \
+  "Vagrantfile must define the smoke database node"
+need "${ROOT}/script/vagrant/lib/env.sh" '192.168.56.50' \
+  "smoke db-node must be 192.168.56.50"
 need "${smoke}" 'run_smoke_topologies' \
   "datastores must reuse the existing topology/cluster harness"
 need "${smoke}" 'item_id}" == "datastores"' \

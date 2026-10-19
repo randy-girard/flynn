@@ -140,7 +140,7 @@ func (s *Scheduler) anyHostMatchesTags(job *Job) bool {
 		if !hostCanPlace(h) {
 			continue
 		}
-		if job.TagsMatchHost(h) {
+		if s.jobMatchesHost(job, h) {
 			return true
 		}
 	}
@@ -179,13 +179,75 @@ func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
 		return
 	}
 	next := make(map[string]bool, len(list))
+	tags := make(map[string]map[string]string, len(list))
 	for _, p := range list {
 		if p == nil {
 			continue
 		}
-		next[strings.ToLower(strings.TrimSpace(p.Name))] = p.ReserveResources
+		name := strings.ToLower(strings.TrimSpace(p.Name))
+		next[name] = p.ReserveResources
+		if len(p.Tags) > 0 {
+			copied := make(map[string]string, len(p.Tags))
+			for k, v := range p.Tags {
+				copied[k] = v
+			}
+			tags[name] = copied
+		}
 	}
 	s.profileReserve = next
+	s.profileTags = tags
+}
+
+func (j *Job) countsTowardHostProcessCap() bool {
+	if j == nil || j.Formation == nil || j.Formation.App == nil {
+		return false
+	}
+	if _, omni := j.omniPerHost(); omni {
+		return false
+	}
+	switch j.State {
+	case JobStatePending, JobStateStarting, JobStateRunning, JobStateStopping:
+	default:
+		return false
+	}
+	meta := j.Formation.App.Meta
+	if meta["flynn-datastore"] == "true" {
+		return true
+	}
+	return meta["flynn-system-app"] != "true"
+}
+
+func (s *Scheduler) hostTenantProcessCount(hostID string) int {
+	if s == nil {
+		return 0
+	}
+	n := 0
+	for _, job := range s.jobs {
+		if job == nil || job.HostID != hostID || !job.countsTowardHostProcessCap() {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func (s *Scheduler) hostAtProcessCap(h *Host, placing *Job) bool {
+	if h == nil {
+		return true
+	}
+	max, ok := ct.ParseHostMaxProcesses(h.Tags)
+	if !ok {
+		return false
+	}
+	n := s.hostTenantProcessCount(h.ID)
+	if placing != nil && placing.HostID == h.ID && placing.countsTowardHostProcessCap() {
+		// already counted
+		return n > max
+	}
+	if placing != nil && placing.countsTowardHostProcessCap() {
+		return n >= max
+	}
+	return n >= max
 }
 
 type runtimeSettingsGetter interface {
@@ -267,7 +329,7 @@ func (s *Scheduler) omniHostAvailable(job *Job) bool {
 	}
 	counts := s.jobs.GetHostJobCounts(job.Formation.key(), job.Type)
 	for _, h := range s.hosts {
-		if hostCanPlace(h) && job.TagsMatchHost(h) && hostJobCount(counts, h.ID) < perHost {
+		if hostCanPlace(h) && s.jobMatchesHost(job, h) && hostJobCount(counts, h.ID) < perHost {
 			return true
 		}
 	}
@@ -304,7 +366,10 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	var fitCount int
 	var fitPack int
 	for _, h := range s.ShuffledHosts() {
-		if !hostCanPlace(h) || !job.TagsMatchHost(h) {
+		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) {
+			continue
+		}
+		if s.hostAtProcessCap(h, job) {
 			continue
 		}
 		if omni && hostJobCount(omniCounts, h.ID) >= omniPerHost {

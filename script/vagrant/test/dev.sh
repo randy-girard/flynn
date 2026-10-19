@@ -71,6 +71,14 @@ if ! grep -Fq 'FLYNN_VAGRANT_ENV=dev' "${mod}/lib/env.sh"; then
   echo "lib/env.sh must set FLYNN_VAGRANT_ENV=dev for the laptop loop" >&2
   exit 1
 fi
+if ! grep -Fq 'dev-db-node' "${ROOT}/Vagrantfile"; then
+  echo "Vagrantfile must define dev-db-node for the laptop loop" >&2
+  exit 1
+fi
+if ! grep -Fq '192.168.57.50' "${mod}/lib/env.sh"; then
+  echo "lib/env.sh must define laptop db-node at 192.168.57.50" >&2
+  exit 1
+fi
 if grep -Fq 'vagrant up builder' "${script}"; then
   echo "vagrant.sh must not boot the smoke builder" >&2
   exit 1
