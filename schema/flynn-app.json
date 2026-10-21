@@ -1,0 +1,211 @@
+{
+  "$schema": "http://json-schema.org/draft-04/schema#",
+  "id": "https://flynn.io/schema/flynn-app#",
+  "title": "flynn-app.json",
+  "description": "App manifest. Applied by apps:create --manifest and on the first code deploy of an untouched app. v1 apply ignores catalog.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Manifest version. Omitted means 1. Any other value fails apply.",
+      "type": "integer",
+      "enum": [1]
+    },
+    "name": {
+      "description": "Template title, display only. The cluster app name is chosen at create time.",
+      "type": "string",
+      "maxLength": 30
+    },
+    "description": {
+      "description": "Stored as app metadata.",
+      "type": "string"
+    },
+    "catalog": {
+      "description": "Deploy-button metadata. v1 apply ignores this object.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "keywords": { "type": "array", "items": { "type": "string" } },
+        "website": { "type": "string" },
+        "logo": { "type": "string" },
+        "success_url": { "type": "string" }
+      }
+    },
+    "repository": { "type": "string" },
+    "stack": { "type": "string", "enum": ["heroku-24", "container"] },
+    "buildpacks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["url"],
+        "properties": { "url": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "image": {
+      "description": "Prebuilt image for stack container when apps:create --manifest is not followed by a git build. Invalid on heroku-24. A git deploy ignores it.",
+      "type": "string"
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "description": { "type": "string" },
+              "value": { "type": "string" },
+              "required": { "type": "boolean" },
+              "generator": { "type": "string", "enum": ["secret"] }
+            }
+          }
+        ]
+      }
+    },
+    "formation": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/process" }
+    },
+    "addons": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "type": "string", "minLength": 1 },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "minLength": 1 },
+              "as": { "type": "string" },
+              "options": { "type": "object" }
+            }
+          }
+        ]
+      }
+    },
+    "scripts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "postdeploy": { "$ref": "#/definitions/script" },
+        "preview_destroy": { "$ref": "#/definitions/script" }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/route" }
+    },
+    "github": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "branch": { "type": "string" },
+        "auto_deploy": { "type": "boolean" },
+        "wait_checks": { "type": "boolean" }
+      }
+    },
+    "strategy": {
+      "type": "string",
+      "enum": ["all-at-once", "one-by-one", "one-down-one-up", "in-batches"]
+    },
+    "deploy_timeout": { "type": "integer", "minimum": 1 },
+    "protected": { "type": "boolean" },
+    "environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "development": { "$ref": "#/definitions/overlay" },
+        "staging": { "$ref": "#/definitions/overlay" },
+        "production": { "$ref": "#/definitions/overlay" },
+        "preview": { "$ref": "#/definitions/overlay" },
+        "review": { "$ref": "#/definitions/overlay" }
+      }
+    }
+  },
+  "definitions": {
+    "script": {
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "command": { "type": "string" },
+            "runtime": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "process": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quantity": { "type": "integer", "minimum": 0 },
+        "runtime": { "type": "string" },
+        "tags": { "type": "object", "additionalProperties": { "type": "string" } },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "cpu": { "type": "string" },
+            "memory": { "type": "string" },
+            "max_fd": { "type": "string" },
+            "temp_disk": { "type": "string" }
+          }
+        },
+        "volumes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "delete_on_stop": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["http", "tcp"] },
+        "domain": { "type": "string" },
+        "service": { "type": "string" },
+        "port": { "type": "integer" },
+        "sticky": { "type": "boolean" },
+        "leader": { "type": "boolean" },
+        "https": { "type": "boolean" },
+        "tls_mode": { "type": "string", "enum": ["passthrough", "terminate"] },
+        "drain_backends": { "type": "boolean" },
+        "disable_keep_alives": { "type": "boolean" }
+      }
+    },
+    "overlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Replaces whole root keys that are present. Keys that are absent stay at the root. This is not a deep merge.",
+      "properties": {
+        "env": { "type": "object" },
+        "formation": { "type": "object" },
+        "addons": { "type": "array" },
+        "routes": { "type": "array" },
+        "scripts": { "type": "object" },
+        "stack": { "type": "string" },
+        "buildpacks": { "type": "array" },
+        "image": { "type": "string" },
+        "github": { "type": "object" },
+        "strategy": { "type": "string" },
+        "deploy_timeout": { "type": "integer" },
+        "protected": { "type": "boolean" }
+      }
+    }
+  }
+}

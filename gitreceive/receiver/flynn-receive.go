@@ -66,26 +66,43 @@ func watchGitHangup() {
 	}()
 }
 
+// metaAppBuildFailed is set when a git push ends without a deploy and cleared
+// when the next push starts or succeeds. The pipeline card reads it because
+// slugbuilder jobs started on the host are not stored in the controller.
+const metaAppBuildFailed = "flynn-controller.build-failed"
+
 func markAppBuilding(store appBuildingStore, app *ct.App) error {
 	if store == nil || app == nil {
 		return nil
 	}
 	app.Meta = ct.MarkAppBuildingMeta(app.Meta)
+	delete(app.Meta, metaAppBuildFailed)
 	return store.UpdateAppMeta(app)
 }
 
 func clearAppBuilding(store appBuildingStore, app *ct.App) error {
+	return finishAppBuild(store, app, false)
+}
+
+func finishAppBuild(store appBuildingStore, app *ct.App, failed bool) error {
 	if store == nil || app == nil || app.ID == "" {
 		return nil
 	}
 	current, err := store.GetApp(app.ID)
-	if err != nil {
+	if err != nil || current == nil {
 		current = app
 	}
-	if current == nil || current.Meta == nil || current.Meta[ct.MetaAppBuilding] == "" {
-		return nil
+	if current.Meta == nil {
+		current.Meta = map[string]string{}
 	}
-	current.Meta = ct.ClearAppBuildingMeta(current.Meta)
+	delete(current.Meta, ct.MetaAppBuilding)
+	if failed {
+		if strings.TrimSpace(current.Meta[metaAppBuildFailed]) == "" {
+			current.Meta[metaAppBuildFailed] = time.Now().UTC().Format(time.RFC3339)
+		}
+	} else {
+		delete(current.Meta, metaAppBuildFailed)
+	}
 	return store.UpdateAppMeta(current)
 }
 
@@ -279,17 +296,16 @@ Options:
 	}
 	// os.Exit from a signal skips defers. BeforeExit still runs, including when
 	// the git client hangs up (Ctrl+C), so the dashboard drops "compiling".
-	shutdown.BeforeExit(func() {
-		if err := clearAppBuilding(client, app); err != nil {
-			fmt.Printf("-----> WARN: could not clear building status: %s\n", err)
+	// A push that does not deploy leaves a failed timestamp for the card.
+	buildOK := false
+	finishBuild := func() {
+		if err := finishAppBuild(client, app, !buildOK); err != nil {
+			fmt.Printf("-----> WARN: could not update build status: %s\n", err)
 		}
-	})
+	}
+	shutdown.BeforeExit(finishBuild)
 	watchGitHangup()
-	defer func() {
-		if err := clearAppBuilding(client, app); err != nil {
-			fmt.Printf("-----> WARN: could not clear building status: %s\n", err)
-		}
-	}()
+	defer finishBuild()
 	if err := markAppBuilding(client, app); err != nil {
 		fmt.Printf("-----> WARN: could not mark app as building: %s\n", err)
 	}
@@ -310,17 +326,46 @@ Options:
 		releaseEnv[k] = v
 	}
 
+	buildInput = nil
+	skipDefaultScale = false
+	afterDeploy = nil
+	if err := prepareReceiveManifest(client, app, releaseEnv); err != nil {
+		cleanupBuildInput()
+		return err
+	}
+	defer cleanupBuildInput()
+	if skipDefaultScale || afterDeploy != nil {
+		// prepareReceiveManifest may have written a release. Rebuild the env
+		// the slug will copy so add-on URLs and generated secrets are present,
+		// then re-apply -e from this push.
+		if head, err := controller.HeadRelease(client, app.ID); err == nil && head != nil {
+			prevRelease = head
+			releaseEnv = map[string]string{}
+			for k, v := range head.Env {
+				releaseEnv[k] = v
+			}
+			for k, v := range env {
+				releaseEnv[k] = v
+			}
+		}
+	}
+
 	stack, err := resolveStack(releaseEnv)
 	if err != nil {
 		return err
 	}
 
+	var deployErr error
 	switch stack {
 	case stackContainer:
-		return deployContainer(client, app, prevRelease, args, releaseEnv, meta)
+		deployErr = deployContainer(client, app, prevRelease, args, releaseEnv, meta)
 	default:
-		return deployBuildpack(client, app, prevRelease, args, releaseEnv, meta, stack)
+		deployErr = deployBuildpack(client, app, prevRelease, args, releaseEnv, meta, stack)
 	}
+	if deployErr == nil {
+		buildOK = true
+	}
+	return deployErr
 }
 
 // resolveStack returns the build stack for a release, defaulting to heroku-24
@@ -492,13 +537,16 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	cmd := buildJobCmd(slugBuilder, job)
 	cmd.Volumes = []*ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
 	var output bytes.Buffer
-	out := syncStdout(io.MultiWriter(os.Stdout, &output))
+	gitOut := newGitPushFilter(syncStdout(os.Stdout))
+	out := io.MultiWriter(gitOut, &output)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
 	if err := runBuildCmd(cmd, releaseEnv); err != nil {
+		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
+	gitOut.flush()
 
 	artifact, err := client.GetArtifact(slugImageID)
 	if err != nil {
@@ -569,13 +617,15 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	cmd.Volumes = []*ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
 	// Merge stderr into stdout so build output goes through the git hook pipe
 	// (pre-receive only pipes flynn-receiver stdout to the client).
-	out := syncStdout(os.Stdout)
-	cmd.Stdout = out
-	cmd.Stderr = out
+	gitOut := newGitPushFilter(syncStdout(os.Stdout))
+	cmd.Stdout = gitOut
+	cmd.Stderr = gitOut
 
 	if err := runBuildCmd(cmd, releaseEnv); err != nil {
+		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
+	gitOut.flush()
 
 	artifact, err := client.GetArtifact(imageArtifactID)
 	if err != nil {
@@ -678,12 +728,12 @@ func runBuildCmd(cmd *exec.Cmd, releaseEnv map[string]string) error {
 			return err
 		}
 		go func() {
-			if err := appendEnvDir(os.Stdin, stdin, releaseEnv); err != nil {
+			if err := appendEnvDir(archiveReader(), stdin, releaseEnv); err != nil {
 				log.Fatalln("ERROR:", err)
 			}
 		}()
 	} else {
-		cmd.Stdin = os.Stdin
+		cmd.Stdin = archiveReader()
 	}
 
 	shutdown.BeforeExit(func() { cmd.Kill() })
@@ -719,7 +769,7 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 		return fmt.Errorf("Error deploying app release: %s", err)
 	}
 
-	if needsDefaultScale(app.ID, prevRelease.ID, procs, client) {
+	if !skipDefaultScale && needsDefaultScale(app.ID, prevRelease.ID, procs, client) {
 		procName := defaultScaleProcess(procs)
 		fmt.Printf("=====> Scaling initial release to %s=1\n", procName)
 
@@ -735,6 +785,11 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 			if err := client.DeleteFormation(app.ID, release.ID); err != nil {
 				fmt.Println("-----> WARN: could not scale the initial release down (it may continue to run):", err)
 			}
+			return err
+		}
+	}
+	if afterDeploy != nil {
+		if err := afterDeploy(release, procs); err != nil {
 			return err
 		}
 	}
@@ -762,7 +817,9 @@ func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release)
 	attachClient := cluster.NewAttachClient(rwc)
 	_ = attachClient.CloseWrite()
 	// pre-receive only pipes flynn-receiver stdout to `git push`.
-	exitStatus, err := attachClient.Receive(os.Stdout, os.Stdout)
+	gitOut := newGitPushFilter(syncStdout(os.Stdout))
+	exitStatus, err := attachClient.Receive(gitOut, gitOut)
+	gitOut.flush()
 	if err != nil {
 		return fmt.Errorf("Error running release command: %s", err)
 	}
@@ -922,4 +979,96 @@ func (w *flushWriter) Write(p []byte) (int, error) {
 		_ = w.f.Sync()
 	}
 	return n, err
+}
+
+// gitPushFilter drops host minute metrics lines from the git client stream.
+// The same lines stay in the job log, so `flynn log` and the logs tab still
+// show them.
+type gitPushFilter struct {
+	mu  sync.Mutex
+	dst io.Writer
+	buf []byte
+}
+
+func newGitPushFilter(dst io.Writer) *gitPushFilter {
+	return &gitPushFilter{dst: dst}
+}
+
+func (w *gitPushFilter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	for {
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			if len(w.buf) > 64*1024 {
+				if err := w.writeRaw(w.buf); err != nil {
+					return len(p), err
+				}
+				w.buf = nil
+			}
+			return len(p), nil
+		}
+		line := w.buf[:i+1]
+		rest := append([]byte(nil), w.buf[i+1:]...)
+		if !gitPushDropLine(line) {
+			if err := w.writeRaw(line); err != nil {
+				return len(p), err
+			}
+		}
+		w.buf = rest
+	}
+}
+
+func (w *gitPushFilter) flush() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.buf) == 0 {
+		return
+	}
+	if !gitPushDropLine(w.buf) {
+		_ = w.writeRaw(w.buf)
+	}
+	w.buf = nil
+}
+
+func (w *gitPushFilter) writeRaw(p []byte) error {
+	_, err := w.dst.Write(p)
+	return err
+}
+
+func gitPushMetricsLine(line []byte) bool {
+	s := bytes.TrimSpace(line)
+	return bytes.HasPrefix(s, []byte("metrics ")) && bytes.Contains(s, []byte("cpu_percent="))
+}
+
+// gitPushDropLine hides host noise from the git client. Metrics stay in the
+// job log. Builder start lines only repeat `/builder/build.sh`.
+func gitPushDropLine(line []byte) bool {
+	if gitPushMetricsLine(line) {
+		return true
+	}
+	return gitPushBuilderStart(bytes.TrimSpace(line))
+}
+
+func gitPushBuilderStart(s []byte) bool {
+	for _, kind := range [][]byte{[]byte("slugbuilder"), []byte("dockerbuilder")} {
+		if bytes.HasPrefix(s, append(append([]byte("Starting "), kind...), ' ')) {
+			return true
+		}
+		if !bytes.HasPrefix(s, kind) {
+			continue
+		}
+		rest := s[len(kind):]
+		if bytes.HasPrefix(rest, []byte(" process started")) {
+			return true
+		}
+		if len(rest) > 0 && rest[0] == '-' && bytes.Contains(rest, []byte(" process started")) {
+			return true
+		}
+	}
+	return false
 }

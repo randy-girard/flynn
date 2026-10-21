@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"runtime"
 	"strings"
@@ -417,6 +418,64 @@ func TestSyncStdoutPassthrough(t *testing.T) {
 	}
 }
 
+func TestGitPushFilterDropsMetricsLines(t *testing.T) {
+	var buf bytes.Buffer
+	w := newGitPushFilter(&buf)
+	chunk := "-----> Building app...\nmetrics cpu_percent=1.5 memory_bytes=10 flynn-postgres sample#tables=1\n       go build\nmetrics dashboard ready\n"
+	if _, err := io.WriteString(w, chunk); err != nil {
+		t.Fatal(err)
+	}
+	w.flush()
+	got := buf.String()
+	if strings.Contains(got, "cpu_percent=") || strings.Contains(got, "sample#") {
+		t.Fatalf("metrics leaked: %q", got)
+	}
+	if !strings.Contains(got, "-----> Building app...\n") || !strings.Contains(got, "       go build\n") {
+		t.Fatalf("build output dropped: %q", got)
+	}
+	if !strings.Contains(got, "metrics dashboard ready\n") {
+		t.Fatalf("app line that mentions metrics was dropped: %q", got)
+	}
+}
+
+func TestGitPushFilterDropsBuilderStart(t *testing.T) {
+	var buf bytes.Buffer
+	w := newGitPushFilter(&buf)
+	chunk := "-----> Building app...\nslugbuilder process started with command `/builder/build.sh` (slugbuilder.2270)\nStarting slugbuilder process with command `/builder/build.sh`\n       go build\nweb process started with command `/runner/init start web`\n"
+	if _, err := io.WriteString(w, chunk); err != nil {
+		t.Fatal(err)
+	}
+	w.flush()
+	got := buf.String()
+	if strings.Contains(got, "slugbuilder process started") || strings.Contains(got, "Starting slugbuilder process") {
+		t.Fatalf("builder start leaked: %q", got)
+	}
+	if !strings.Contains(got, "-----> Building app...\n") || !strings.Contains(got, "       go build\n") {
+		t.Fatalf("build output dropped: %q", got)
+	}
+	if !strings.Contains(got, "web process started") {
+		t.Fatalf("app process start was dropped: %q", got)
+	}
+}
+
+func TestGitPushFilterSplitsChunks(t *testing.T) {
+	var buf bytes.Buffer
+	w := newGitPushFilter(&buf)
+	if _, err := w.Write([]byte("hello\nmetr")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("ics cpu_percent=0 memory_bytes=1\nworld")); err != nil {
+		t.Fatal(err)
+	}
+	if buf.String() != "hello\n" {
+		t.Fatalf("before flush: %q", buf.String())
+	}
+	w.flush()
+	if buf.String() != "hello\nworld" {
+		t.Fatalf("after flush: %q", buf.String())
+	}
+}
+
 func TestSignedBuildCacheURLHMAC(t *testing.T) {
 	mac := hmac.New(sha256.New, []byte("cluster-key"))
 	mac.Write([]byte("app-1"))
@@ -538,8 +597,8 @@ func TestRunMarksBuildingBeforeCompile(t *testing.T) {
 	}
 	src := string(body)
 	mark := strings.Index(src, "markAppBuilding(client, app)")
-	pack := strings.Index(src, "return deployBuildpack")
-	container := strings.Index(src, "return deployContainer")
+	pack := strings.Index(src, "deployBuildpack(")
+	container := strings.Index(src, "deployContainer(")
 	if mark < 0 || pack < 0 || container < 0 {
 		t.Fatal("missing markAppBuilding or deploy calls")
 	}
@@ -568,6 +627,44 @@ func TestMarkAndClearAppBuilding(t *testing.T) {
 	}
 	if store.app.Meta["keep"] != "me" {
 		t.Fatal("existing meta must stay after clear")
+	}
+	if store.app.Meta[metaAppBuildFailed] != "" {
+		t.Fatal("a successful finish must not leave a failed timestamp")
+	}
+}
+
+func TestFinishAppBuildRecordsFailure(t *testing.T) {
+	meta := map[string]string{
+		"keep":             "me",
+		metaAppBuildFailed: "2026-10-20T23:00:00Z",
+		ct.MetaAppBuilding: "2026-10-20T23:04:00Z",
+	}
+	store := &fakeBuildingStore{app: &ct.App{ID: "app-1", Name: "app-1", Meta: meta}}
+	app := &ct.App{ID: "app-1", Name: "app-1", Meta: meta}
+	if err := markAppBuilding(store, app); err != nil {
+		t.Fatal(err)
+	}
+	if store.app.Meta[metaAppBuildFailed] != "" {
+		t.Fatal("a new push clears the previous failure")
+	}
+	if err := finishAppBuild(store, app, true); err != nil {
+		t.Fatal(err)
+	}
+	if ct.AppMetaIsBuilding(store.app.Meta, time.Now()) {
+		t.Fatal("failed finish must clear compiling")
+	}
+	if store.app.Meta[metaAppBuildFailed] == "" {
+		t.Fatal("failed finish must record a timestamp")
+	}
+	if store.app.Meta["keep"] != "me" {
+		t.Fatal("existing meta must stay")
+	}
+	first := store.app.Meta[metaAppBuildFailed]
+	if err := finishAppBuild(store, app, true); err != nil {
+		t.Fatal(err)
+	}
+	if store.app.Meta[metaAppBuildFailed] != first {
+		t.Fatal("a second finish must keep the first failure time")
 	}
 }
 

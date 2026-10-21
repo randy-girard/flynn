@@ -14,11 +14,14 @@ import (
 
 func init() {
 	register("apps:create", runCreate, `
-usage: flynn apps:create [-r <remote>] [-y] [--owner <owner>] [<name>]
+usage: flynn apps:create [-r <remote>] [-y] [--owner <owner>] [--manifest=<file>] [<name>]
 
 Create an application in Flynn. --owner sets owner_account from a handle
 (user or org). Without it, the current context handle is used when one is
 set. The cluster key with no owner leaves the app unowned (operator/system).
+
+--manifest reads flynn-app.json (a path, or - for stdin) and applies it.
+See the app manifest docs. A failure before postdeploy deletes the new app.
 
 If a name is not provided, a random name will be generated.
 Dashboard paths, Flynn system apps, plugins, planned plugins, and public-site hosts are reserved.
@@ -30,6 +33,7 @@ Options:
 	-r, --remote=<remote>  Name of git remote to create, empty string for none. [default: flynn]
 	-y, --yes              Skip the confirmation prompt if the git remote already exists.
 	--owner=<owner>        Handle that owns the new app (defaults to the current context)
+	--manifest=<file>      Apply flynn-app.json (path, or - for stdin) before the app is left in place
 
 Examples:
 
@@ -138,6 +142,11 @@ func runCreate(args *docopt.Args, client controller.Client) error {
 	if err := client.CreateApp(app); err != nil {
 		return err
 	}
+	if manifest := strings.TrimSpace(args.String["--manifest"]); manifest != "" {
+		if err := applyCreateManifest(client, app, manifest); err != nil {
+			return err
+		}
+	}
 
 	// Register git remote
 	if inGitRepo() && remote != "" {
@@ -179,6 +188,9 @@ func runDelete(args *docopt.Args, client controller.Client) error {
 		}
 	}
 
+	if appIsProtected(client, appName) {
+		return fmt.Errorf("app is protected and cannot be deleted")
+	}
 	res, err := client.DeleteApp(appName)
 	if err != nil {
 		return err

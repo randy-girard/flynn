@@ -117,6 +117,11 @@ func runScale(args *docopt.Args, client controller.Client) error {
 	if len(invalid) > 0 {
 		return fmt.Errorf("ERROR: unknown process types: %s", strings.Join(invalid, ", "))
 	}
+	if appIsProtected(client, app) {
+		if err := protectedScaleError(processes); err != nil {
+			return err
+		}
+	}
 
 	opts := ct.ScaleOptions{
 		Processes: processes,
