@@ -16,6 +16,7 @@ package state
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -210,6 +211,10 @@ const (
 	DiscoverdEventInit DiscoverdEventKind = iota
 	DiscoverdEventState
 	DiscoverdEventPeers
+	// DiscoverdEventMetaGone means the service is back but its cluster meta
+	// is gone. The recorded primary republishes the in-memory state, which
+	// also restores the discoverd leader.
+	DiscoverdEventMetaGone
 )
 
 type DiscoverdState struct {
@@ -406,6 +411,8 @@ func (p *Peer) handleDiscoverdEvent(e *DiscoverdEvent) {
 		p.handleDiscoverdState(e)
 	case DiscoverdEventPeers:
 		p.handleDiscoverdPeers(e)
+	case DiscoverdEventMetaGone:
+		p.republishClusterState(p.log.New("fn", "republishClusterState"))
 	}
 }
 
@@ -632,6 +639,10 @@ func (p *Peer) evalClusterState() {
 			p.Info().State.Primary != nil &&
 			!p.peerIsPresent(p.Info().State.Primary) &&
 			(p.Info().State.Sync == nil || !p.peerIsPresent(p.Info().State.Sync)) {
+			if holdTakeoverForUnknownWAL(p.Info().State.InitWAL) {
+				log.Warn("primary and sync missing from discoverd view and init_wal is empty; waiting for peer resync")
+				return
+			}
 			p.startTakeover("primary and sync gone", p.Info().State.InitWAL)
 			return
 		}
@@ -652,6 +663,10 @@ func (p *Peer) evalClusterState() {
 	// takeover as primary.
 	if p.Info().Role == RoleSync {
 		if !p.peerIsPresent(p.Info().State.Primary) {
+			if holdTakeoverForUnknownWAL(p.Info().State.InitWAL) {
+				log.Warn("primary missing from discoverd view and init_wal is empty; waiting for peer resync")
+				return
+			}
 			p.startTakeover("primary gone", p.Info().State.InitWAL)
 		} else if !peersEqual(p.upstream, p.Info().State.Primary) ||
 			len(p.Info().State.Async) > 0 && !peersEqual(p.downstream, p.Info().State.Async[0]) {
@@ -729,9 +744,17 @@ func (p *Peer) evalClusterState() {
 	// consider a takeover the next time around. If we update this to handle
 	// both operations at once, we can get rid of the goofy boolean returned by
 	// startTakeover.
-	if p.Info().State.Sync != nil && !p.peerIsPresent(p.Info().State.Sync) &&
-		p.startTakeover("sync gone", p.Info().State.InitWAL) {
+	if p.repairEmptyInitWAL(log) {
 		return
+	}
+	if p.Info().State.Sync != nil && !p.peerIsPresent(p.Info().State.Sync) {
+		if holdTakeoverForUnknownWAL(p.Info().State.InitWAL) {
+			log.Warn("sync missing from discoverd view and init_wal is empty; waiting for peer resync")
+			return
+		}
+		if p.startTakeover("sync gone", p.Info().State.InitWAL) {
+			return
+		}
 	}
 
 	// Peers are identified by their appliance ID (Meta[idKey]), which lives in
@@ -1566,6 +1589,65 @@ func (p *Peer) presentPeer(other *discoverd.Instance) *discoverd.Instance {
 	}
 
 	return nil
+}
+
+// holdTakeoverForUnknownWAL reports that a failover must wait. An empty
+// init_wal cannot be compared, and using a zero position would let a peer
+// with a stale discoverd view promote an unassigned replica over a live sync.
+func holdTakeoverForUnknownWAL(pos xlog.Position) bool {
+	return strings.TrimSpace(string(pos)) == ""
+}
+
+// repairEmptyInitWAL records the running primary's WAL once the sync is
+// visible again. That is the position a later, real failover needs; it is
+// not written while the sync is missing from the local peer view.
+func (p *Peer) repairEmptyInitWAL(log log15.Logger) bool {
+	st := p.Info().State
+	if st == nil || !holdTakeoverForUnknownWAL(st.InitWAL) {
+		return false
+	}
+	if st.Sync == nil || !p.peerIsPresent(st.Sync) || p.db == nil || !p.db.Running() {
+		return false
+	}
+	wal, err := p.db.XLogPosition()
+	if err != nil || holdTakeoverForUnknownWAL(wal) {
+		if err != nil {
+			log.Error("error reading wal to repair init_wal", "err", err)
+		}
+		return false
+	}
+	log.Info("recording init_wal from the running primary", "init_wal", wal)
+	p.updatingState = st.Clone()
+	p.updatingState.InitWAL = wal
+	if err := p.putClusterState(); err != nil {
+		log.Error("error recording init_wal", "err", err)
+		p.updatingState = nil
+		return false
+	}
+	p.setState(p.updatingState)
+	p.updatingState = nil
+	return true
+}
+
+// republishClusterState writes the in-memory cluster state back when discoverd
+// lost the service meta. Only the recorded primary does this. The write uses
+// index 0 because a recreated service has no meta yet.
+func (p *Peer) republishClusterState(log log15.Logger) bool {
+	st := p.Info().State
+	if st == nil || st.Primary == nil || st.Primary.Meta[p.idKey] != p.id {
+		return false
+	}
+	log.Info("republishing cluster state", "generation", st.Generation)
+	p.updatingState = st.Clone()
+	p.stateIndex = 0
+	if err := p.putClusterState(); err != nil {
+		log.Error("error republishing cluster state", "err", err)
+		p.updatingState = nil
+		return false
+	}
+	p.setState(p.updatingState)
+	p.updatingState = nil
+	return true
 }
 
 func (p *Peer) putClusterState() error {
