@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 
@@ -36,6 +37,14 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-ensure-preview" {
+		if err := runEnsurePreview(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	key := os.Getenv("CONTROLLER_KEY")
 	if key == "" {
 		log.Fatal("missing CONTROLLER_KEY env var")
@@ -67,6 +76,7 @@ type appLookup interface {
 type gitHandler struct {
 	controller appLookup
 	auth       *authorizer.Authorizer
+	preview    previewLookup
 	webhookURL string
 	httpClient *http.Client
 	prepare    func(cacheKey string) (string, error)
@@ -80,7 +90,8 @@ type gitService struct {
 }
 
 type gitEnv struct {
-	App string
+	App      string
+	Pipeline string
 }
 
 // Routing table
@@ -98,6 +109,7 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 	return &gitHandler{
 		controller: controller,
 		auth:       auth,
+		preview:    newPipelinePreviewClient(),
 		webhookURL: strings.TrimRight(url, "/") + "/github/webhook",
 		httpClient: http.DefaultClient,
 		prepare:    prepareRepo,
@@ -132,11 +144,21 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
-	name := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, g.suffix), "/"), ".git")
-	if !foundService || !utils.AppNamePattern.MatchString(name) {
+	kind, name := parseGitRepoPath(r.URL.Path, g.suffix)
+	if !foundService || kind == "" || (kind == "app" && !utils.AppNamePattern.MatchString(name)) {
 		// The protocol spec in git/Documentation/technical/http-protocol.txt
 		// says we must return 403 if no matching service is found.
 		http.Error(w, "Forbidden", 403)
+		return
+	}
+
+	rpc := g.rpc
+	if rpc == "" {
+		rpc = r.URL.Query().Get("service")
+	}
+
+	if kind == "preview" {
+		h.servePreview(w, r, tok, g, name, rpc)
 		return
 	}
 
@@ -152,10 +174,6 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rpc := g.rpc
-	if rpc == "" {
-		rpc = r.URL.Query().Get("service")
-	}
 	if rpc == "git-receive-pack" {
 		if !authz.GitPushAllowed(tok, app.ID, app.Name) {
 			http.Error(w, "Forbidden", 403)
@@ -183,6 +201,89 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			logError(w, "uploadRepo", err)
 		}
 	}
+}
+
+func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *authorizer.Token, g gitService, pipeline, rpc string) {
+	if h.preview == nil {
+		http.Error(w, "preview remotes require the pipelines plugin", 404)
+		return
+	}
+	info, err := h.preview.PreviewRemote(pipeline)
+	if err != nil {
+		if strings.Contains(err.Error(), "not available") || strings.Contains(err.Error(), "not enabled") || strings.Contains(err.Error(), "not found") {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		fail500(w, "previewRemote", err)
+		return
+	}
+	if info == nil || !info.Available {
+		reason := "preview remote is not available"
+		if info != nil && strings.TrimSpace(info.Reason) != "" {
+			reason = info.Reason
+		}
+		http.Error(w, reason, 404)
+		return
+	}
+
+	if rpc == "git-receive-pack" {
+		if !previewGitAllowed(tok, info, authz.GitPushAllowed) {
+			http.Error(w, "Forbidden", 403)
+			return
+		}
+	} else if !previewGitAllowed(tok, info, authz.GitFetchAllowed) {
+		http.Error(w, "Forbidden", 403)
+		return
+	}
+
+	cacheKey := "preview-" + pipeline
+	prepare := h.prepare
+	if prepare == nil {
+		prepare = prepareRepo
+	}
+	repoPath, err := prepare(cacheKey)
+	if err != nil {
+		fail500(w, "prepareRepo", err)
+		return
+	}
+	defer os.RemoveAll(repoPath)
+	if err := writeRepoHookBytes(repoPath, previewPrereceiveHook); err != nil {
+		fail500(w, "writePreviewHook", err)
+		return
+	}
+
+	success := g.handleFunc(gitEnv{Pipeline: pipeline}, g.rpc, repoPath, w, r)
+	if success && g.rpc == "git-receive-pack" {
+		if err := uploadRepo(repoPath, cacheKey); err != nil {
+			logError(w, "uploadRepo", err)
+		}
+	}
+}
+
+func previewGitAllowed(tok *authorizer.Token, info *previewRemoteInfo, allow func(*authorizer.Token, string, string) bool) bool {
+	if tok != nil && tok.HasClusterAdmin() {
+		return true
+	}
+	if info == nil {
+		return false
+	}
+	n := len(info.AppIDs)
+	if len(info.AppNames) > n {
+		n = len(info.AppNames)
+	}
+	for i := 0; i < n; i++ {
+		id, name := "", ""
+		if i < len(info.AppIDs) {
+			id = info.AppIDs[i]
+		}
+		if i < len(info.AppNames) {
+			name = info.AppNames[i]
+		}
+		if allow(tok, id, name) {
+			return true
+		}
+	}
+	return false
 }
 
 func handleGetInfoRefs(env gitEnv, _ string, path string, w http.ResponseWriter, r *http.Request) bool {
@@ -299,6 +400,7 @@ func gitCommand(env gitEnv, name string, args ...string) (*exec.Cmd, io.Reader) 
 	// Explicitly set the environment for the Git command
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("RECEIVE_APP=%s", env.App),
+		fmt.Sprintf("RECEIVE_PIPELINE=%s", env.Pipeline),
 	)
 
 	r, _ := cmd.StdoutPipe()
@@ -352,18 +454,40 @@ func (w writeFlusher) Write(p []byte) (int, error) {
 	return w.wf.Write(p)
 }
 
+// archiveTreeFunc prints a tar of rev on stdout. It must not checkout into
+// this repository. receive-pack keeps the pushed objects in a quarantine
+// directory until the hook exits 0, and checkout rewrites HEAD to that SHA.
+// A failed deploy then discards the object, and the next push dies with
+// "bad object HEAD" before this hook can run.
+const archiveTreeFunc = `git-archive-all() {
+	rev="$1"
+	work="$(mktemp -d)"
+	cleanup() { rm -rf "$work"; }
+	trap cleanup RETURN
+	git archive --format=tar "$rev" | tar -x -C "$work"
+	if [ -f "$work/.gitmodules" ]; then
+		links="$(mktemp)"
+		git ls-tree -r "$rev" > "$links"
+		while read -r mode type sha path; do
+			[ "$mode" = "160000" ] || continue
+			url="$(git config -f "$work/.gitmodules" --get "submodule.${path}.url" || true)"
+			[ -n "$url" ] || continue
+			dest="$work/$path"
+			rm -rf "$dest"
+			mkdir -p "$(dirname "$dest")"
+			GIT_QUARANTINE_PATH= git clone --quiet "$url" "$dest"
+			GIT_QUARANTINE_PATH= git -C "$dest" checkout --force --quiet "$sha"
+		done < "$links"
+		rm -f "$links"
+	fi
+	tar --create --exclude-vcs -C "$work" .
+}
+`
+
 var prereceiveHook = []byte(`#!/bin/bash
 set -eo pipefail;
 
-unset GIT_QUARANTINE_PATH
-
-git-archive-all() {
-	GIT_DIR="$(pwd)"
-	cd ..
-	git checkout --force --quiet $1
-	git submodule --quiet update --force --init --checkout --recursive
-	tar --create --exclude-vcs .
-}
+` + archiveTreeFunc + `
 
 while read oldrev newrev refname; do
 	if [[ $refname = "refs/heads/master" ]] || [[ $refname = "refs/heads/main" ]]; then
@@ -416,6 +540,9 @@ func prepareRepo(cacheKey string) (string, error) {
 	if err := writeRepoHook(path); err != nil {
 		return "", err
 	}
+	if err := repairDanglingHEAD(path); err != nil {
+		return "", err
+	}
 
 	return path, nil
 }
@@ -433,7 +560,11 @@ func initRepo(path string) error {
 }
 
 func writeRepoHook(path string) error {
-	return ioutil.WriteFile(filepath.Join(path, ".git", "hooks", "pre-receive"), prereceiveHook, 0755)
+	return writeRepoHookBytes(path, prereceiveHook)
+}
+
+func writeRepoHookBytes(path string, hook []byte) error {
+	return ioutil.WriteFile(filepath.Join(path, ".git", "hooks", "pre-receive"), hook, 0755)
 }
 
 func setGitConfig(path string) error {
@@ -443,7 +574,39 @@ func setGitConfig(path string) error {
 	return cmd.Run()
 }
 
+var detachedObject = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)
+
+// repairDanglingHEAD rewrites a detached HEAD whose object is missing back to
+// an unborn symbolic ref. receive-pack refuses to start when HEAD is a SHA
+// that is not in the object store ("bad object HEAD"). A symbolic ref is fine
+// even when that branch does not exist yet.
+func repairDanglingHEAD(path string) error {
+	headPath := filepath.Join(path, ".git", "HEAD")
+	raw, err := ioutil.ReadFile(headPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	head := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(head, "ref:") || !detachedObject.MatchString(head) {
+		return nil
+	}
+	cmd := exec.Command("git", "cat-file", "-e", head)
+	cmd.Dir = path
+	if err := cmd.Run(); err == nil {
+		return nil
+	}
+	return ioutil.WriteFile(headPath, []byte("ref: refs/heads/main\n"), 0644)
+}
+
 func uploadRepo(path, cacheKey string) error {
+	// A failed hook can leave HEAD pointing at a quarantined SHA. Never
+	// store that; the next push would die before the hook runs.
+	if err := repairDanglingHEAD(path); err != nil {
+		return err
+	}
 	r, w := io.Pipe()
 	tw := tar.NewWriter(w)
 

@@ -1,11 +1,15 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os/exec"
+	"strings"
 
 	"github.com/flynn/go-docopt"
+	cfg "github.com/randy-girard/flynn/cli/config"
 	"github.com/randy-girard/flynn/controller/client"
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 func init() {
@@ -14,6 +18,9 @@ usage: flynn git:remote [<remote>] [-y]
 
 Create a git remote that allows deploying the application via git.
 If a name for the remote is not provided 'flynn' will be used.
+The reserved name preview adds the pipeline preview remote (when
+preview apps are enabled) so git push preview <branch> creates a
+preview app.
 
 Note that the -a <app> option must be given so the remote to add is known.
 
@@ -41,6 +48,15 @@ func runRemote(args *docopt.Args, client controller.Client) error {
 		remote = "flynn"
 	}
 
+	url := gitURL(clusterConf, app.Name)
+	if remote == previewRemoteName {
+		previewURL, err := previewRemoteURL(clusterConf, app)
+		if err != nil {
+			return err
+		}
+		url = previewURL
+	}
+
 	if !inGitRepo() {
 		log.Print("Must be executed within a git repository.")
 		return nil
@@ -57,10 +73,36 @@ func runRemote(args *docopt.Args, client controller.Client) error {
 	}
 
 	// Register git remote
-	url := gitURL(clusterConf, app.Name)
 	exec.Command("git", "remote", "remove", remote).Run()
 	exec.Command("git", "remote", "add", "--", remote, url).Run()
 
 	log.Printf("Created remote %s with url %s.", remote, url)
 	return nil
+}
+
+const (
+	appMetaPipeline      = "flynn-pipeline"
+	appMetaPreviewRemote = "flynn-preview-remote"
+)
+
+func previewRemoteURL(conf *cfg.Cluster, app *ct.App) (string, error) {
+	if app == nil {
+		return "", fmt.Errorf("app is required")
+	}
+	pipeline := ""
+	enabled := ""
+	if app.Meta != nil {
+		pipeline = strings.TrimSpace(app.Meta[appMetaPipeline])
+		enabled = strings.TrimSpace(app.Meta[appMetaPreviewRemote])
+	}
+	if pipeline == "" {
+		return "", fmt.Errorf("app %s is not in a pipeline; the preview remote is not available", app.Name)
+	}
+	if enabled != "true" {
+		return "", fmt.Errorf("preview apps are not enabled on pipeline %s; the preview remote is not available", pipeline)
+	}
+	if conf == nil || strings.TrimSpace(conf.GitURL) == "" {
+		return "", fmt.Errorf("cluster git URL is not configured")
+	}
+	return gitPreviewURL(conf, pipeline), nil
 }

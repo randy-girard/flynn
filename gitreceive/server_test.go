@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +83,85 @@ func TestGitHandlerAuthAndRouting(t *testing.T) {
 	}
 	if got := authed("/Bad_Name.git/info/refs"); got.Code != 403 {
 		t.Fatalf("invalid app name=%d", got.Code)
+	}
+}
+
+func TestParseGitRepoPath(t *testing.T) {
+	kind, name := parseGitRepoPath("/myapp.git/info/refs", "/info/refs")
+	if kind != "app" || name != "myapp" {
+		t.Fatalf("app %s %s", kind, name)
+	}
+	kind, name = parseGitRepoPath("/_preview/shop.git/info/refs", "/info/refs")
+	if kind != "preview" || name != "shop" {
+		t.Fatalf("preview %s %s", kind, name)
+	}
+	kind, name = parseGitRepoPath("/_preview/shop/git-receive-pack", "/git-receive-pack")
+	if kind != "preview" || name != "shop" {
+		t.Fatalf("preview receive %s %s", kind, name)
+	}
+	if kind, name = parseGitRepoPath("/_preview/Bad_Name.git/info/refs", "/info/refs"); kind != "" || name != "" {
+		t.Fatalf("invalid preview %s %s", kind, name)
+	}
+}
+
+type fakePreview struct {
+	info *previewRemoteInfo
+	err  error
+}
+
+func (f *fakePreview) PreviewRemote(string) (*previewRemoteInfo, error) {
+	if f == nil {
+		return nil, fmt.Errorf("preview remotes require the pipelines plugin")
+	}
+	return f.info, f.err
+}
+
+func (f *fakePreview) EnsurePreview(string, string, string) (*previewEnsureResult, error) {
+	return &previewEnsureResult{AppName: "shop-feat"}, nil
+}
+
+func TestGitHandlerPreviewRemote(t *testing.T) {
+	auth := authorizer.New([]string{"cluster-secret"}, nil, nil, 0)
+	apps := &fakeApps{apps: map[string]*ct.App{"myapp": {ID: "uuid-1", Name: "myapp"}}}
+	h := newGitHandler(apps, auth)
+	h.preview = &fakePreview{info: &previewRemoteInfo{Available: false, Reason: "preview apps are not enabled on this pipeline"}}
+	h.prepare = func(cacheKey string) (string, error) {
+		return "", fmt.Errorf("prepare should not run")
+	}
+
+	do := func(path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.SetBasicAuth("", "cluster-secret")
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	if got := do("/_preview/shop.git/info/refs?service=git-receive-pack"); got.Code != 404 || !strings.Contains(got.Body.String(), "not enabled") {
+		t.Fatalf("disabled=%d %s", got.Code, got.Body.String())
+	}
+
+	var prepared string
+	h.preview = &fakePreview{info: &previewRemoteInfo{Available: true, Pipeline: "shop", AppIDs: []string{"uuid-1"}, AppNames: []string{"myapp"}}}
+	h.prepare = func(cacheKey string) (string, error) {
+		prepared = cacheKey
+		dir := t.TempDir()
+		cmd := exec.Command("git", "init", dir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("git init: %s: %s", err, out)
+		}
+		return dir, nil
+	}
+	if got := do("/_preview/shop.git/info/refs?service=git-receive-pack"); got.Code != 200 {
+		t.Fatalf("enabled=%d %s", got.Code, got.Body.String())
+	}
+	if prepared != "preview-shop" {
+		t.Fatalf("prepare cacheKey=%q", prepared)
+	}
+
+	h.preview = nil
+	if got := do("/_preview/shop.git/info/refs?service=git-receive-pack"); got.Code != 404 {
+		t.Fatalf("no plugin=%d", got.Code)
 	}
 }
 
@@ -252,5 +333,152 @@ func TestGitHandlerTokenGrants(t *testing.T) {
 				t.Fatalf("prepare cacheKey=%q, want %q", prepared, tc.wantPrep)
 			}
 		})
+	}
+}
+
+func TestRepairDanglingHEAD(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "-q")
+	cmd.Dir = dir
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	head := filepath.Join(dir, ".git", "HEAD")
+	missing := "fde5360677540c4e27a73aad4be3d7baf7727231"
+	if err := os.WriteFile(head, []byte(missing+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairDanglingHEAD(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != "ref: refs/heads/main" {
+		t.Fatalf("HEAD = %q", got)
+	}
+
+	// A detached HEAD whose object exists is a valid repo and must be kept.
+	write := exec.Command("git", "config", "user.email", "t@example.com")
+	write.Dir = dir
+	if err := write.Run(); err != nil {
+		t.Fatal(err)
+	}
+	write = exec.Command("git", "config", "user.name", "t")
+	write.Dir = dir
+	if err := write.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "f.txt"), []byte("hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "f.txt")
+	add.Dir = dir
+	if err := add.Run(); err != nil {
+		t.Fatal(err)
+	}
+	commit := exec.Command("git", "commit", "-q", "-m", "init")
+	commit.Dir = dir
+	if err := commit.Run(); err != nil {
+		t.Fatal(err)
+	}
+	rev := exec.Command("git", "rev-parse", "HEAD")
+	rev.Dir = dir
+	out, err := rev.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.TrimSpace(string(out))
+	if err := os.WriteFile(head, []byte(sha+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := repairDanglingHEAD(dir); err != nil {
+		t.Fatal(err)
+	}
+	got, err = os.ReadFile(head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(got)) != sha {
+		t.Fatalf("existing object HEAD changed to %q", got)
+	}
+}
+
+func TestArchiveTreeLeavesHEADAlone(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	if strings.Contains(archiveTreeFunc, "git checkout --force --quiet $1") || strings.Contains(string(previewPrereceiveHook), "unset GIT_QUARANTINE_PATH") {
+		t.Fatal("preview hook still checks out into the receive repository")
+	}
+	dir := t.TempDir()
+	script := []struct {
+		name string
+		args []string
+	}{
+		{"init", []string{"init", "-q"}},
+		{"email", []string{"config", "user.email", "t@example.com"}},
+		{"name", []string{"config", "user.name", "t"}},
+	}
+	for _, step := range script {
+		cmd := exec.Command("git", step.args...)
+		cmd.Dir = dir
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("%s: %v", step.name, err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "app"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "app", "file.txt"), []byte("hi\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	add := exec.Command("git", "add", "app/file.txt")
+	add.Dir = dir
+	if err := add.Run(); err != nil {
+		t.Fatal(err)
+	}
+	commit := exec.Command("git", "commit", "-q", "-m", "init")
+	commit.Dir = dir
+	if err := commit.Run(); err != nil {
+		t.Fatal(err)
+	}
+	revCmd := exec.Command("git", "rev-parse", "HEAD")
+	revCmd.Dir = dir
+	revOut, err := revCmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := strings.TrimSpace(string(revOut))
+	before, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tarPath := filepath.Join(dir, "out.tar")
+	hook := exec.Command("bash", "-c", archiveTreeFunc+`
+git-archive-all "$1" > "$2"
+`, "bash", rev, tarPath)
+	hook.Dir = filepath.Join(dir, ".git")
+	if out, err := hook.CombinedOutput(); err != nil {
+		t.Fatalf("archive: %v\n%s", err, out)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("HEAD changed from %q to %q", before, after)
+	}
+	list := exec.Command("tar", "-tf", tarPath)
+	listed, err := list.Output()
+	if err != nil {
+		t.Fatalf("tar: %v", err)
+	}
+	if !strings.Contains(string(listed), "app/file.txt") {
+		t.Fatalf("archive missing file: %s", listed)
 	}
 }

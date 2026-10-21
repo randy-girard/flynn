@@ -27,9 +27,15 @@ func inGitRepo() bool {
 }
 
 const gitURLSuffix = ".git"
+const previewRemoteName = "preview"
+const previewGitPathPrefix = "_preview/"
 
 func gitURL(conf *cfg.Cluster, app string) string {
 	return gitHTTPURLPre(conf.GitURL) + app + gitURLSuffix
+}
+
+func gitPreviewURL(conf *cfg.Cluster, pipeline string) string {
+	return gitHTTPURLPre(conf.GitURL) + previewGitPathPrefix + pipeline + gitURLSuffix
 }
 
 func gitHTTPURLPre(url string) string {
@@ -79,7 +85,11 @@ func appFromGitURL(remote string) *remoteApp {
 	for _, s := range config.Clusters {
 		prefix := gitHTTPURLPre(s.GitURL)
 		if strings.HasPrefix(remote, prefix) && strings.HasSuffix(remote, gitURLSuffix) {
-			return &remoteApp{s, remote[len(prefix) : len(remote)-len(gitURLSuffix)]}
+			name := remote[len(prefix) : len(remote)-len(gitURLSuffix)]
+			if strings.HasPrefix(name, previewGitPathPrefix) {
+				return nil
+			}
+			return &remoteApp{s, name}
 		}
 	}
 	return nil
