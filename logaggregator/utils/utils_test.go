@@ -17,6 +17,16 @@ func TestIsPluginMetricsLine(t *testing.T) {
 	if !IsPluginMetricsLine([]byte("heroku-postgres source=old sample#tables=1")) {
 		t.Fatal("legacy heroku-postgres")
 	}
+	for _, line := range []string{
+		"flynn-mysql source=mysql-basin-1 addon=res sample#queries_total=1",
+		"flynn-mongodb source=mongodb-harbor-1 addon=res sample#db_size_bytes=1",
+		"flynn-kafka source=kafka-inlet-1 addon=res sample#topics=1",
+		"flynn-clickhouse source=clickhouse-river-1 addon=res sample#queries_total=1",
+	} {
+		if !IsPluginMetricsLine([]byte(line)) {
+			t.Fatalf("sample line %s", line)
+		}
+	}
 	if IsPluginMetricsLine([]byte("LOG:  statement: SELECT 1")) {
 		t.Fatal("engine log is not a sample")
 	}

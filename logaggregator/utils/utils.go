@@ -82,12 +82,16 @@ func StreamType(msg *rfc5424.Message) logagg.StreamType {
 var pluginMetricsPrefixes = [][]byte{
 	[]byte("flynn-postgres "),
 	[]byte("flynn-redis "),
+	[]byte("flynn-mysql "),
+	[]byte("flynn-mongodb "),
+	[]byte("flynn-kafka "),
+	[]byte("flynn-clickhouse "),
 	[]byte("heroku-postgres "),
 	[]byte("heroku-redis "),
 }
 
 // IsPluginMetricsLine reports whether a job log line is a Flynn addon sample#
-// (flynn-postgres / flynn-redis). Host logmux promotes these to MsgIDSystem.
+// or topology line. Host logmux promotes these to MsgIDSystem.
 func IsPluginMetricsLine(msg []byte) bool {
 	line := bytes.TrimSpace(msg)
 	if len(line) == 0 {
