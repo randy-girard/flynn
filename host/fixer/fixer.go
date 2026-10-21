@@ -451,11 +451,10 @@ func jobIPOnSubnet(ipAddr, subnet string) bool {
 }
 
 // FindAppReleaseJobs returns a slice with one map of host id to job for each
-// known release of the given app and type, most recent first
+// known release of the given app and type. Running releases rank first so a
+// leftover formation that started more recently cannot beat the live one.
 func (f *ClusterFixer) FindAppReleaseJobs(app, typ string) []map[string]*host.Job {
-	var sortReleases ReleasesByCreate
-	releases := make(map[string]map[string]*host.ActiveJob) // map of releaseID -> hostID -> job ordered
-	// connect to each host, list jobs, find distinct releases
+	releases := make(map[string]map[string]*host.ActiveJob) // map of releaseID -> hostID -> job
 	for _, h := range f.hosts {
 		jobs, err := h.ListJobs()
 		if err != nil {
@@ -463,6 +462,9 @@ func (f *ClusterFixer) FindAppReleaseJobs(app, typ string) []map[string]*host.Jo
 			continue
 		}
 		for _, j := range jobs {
+			if j.Job == nil {
+				continue
+			}
 			if j.Job.Metadata["flynn-controller.app_name"] != app || j.Job.Metadata["flynn-controller.type"] != typ {
 				continue
 			}
@@ -472,23 +474,73 @@ func (f *ClusterFixer) FindAppReleaseJobs(app, typ string) []map[string]*host.Jo
 			}
 			m, ok := releases[id]
 			if !ok {
-				sortReleases = append(sortReleases, SortableRelease{id, j.StartedAt})
 				m = make(map[string]*host.ActiveJob)
 				releases[id] = m
 			}
-			if curr, ok := m[h.ID()]; ok && curr.StartedAt.Before(j.StartedAt) {
+			if curr, ok := m[h.ID()]; ok && !preferActiveJob(&j, curr) {
 				continue
 			}
 			jobCopy := j
 			m[h.ID()] = &jobCopy
 		}
 	}
-	sort.Sort(sortReleases)
-	res := make([]map[string]*host.Job, len(sortReleases))
-	for i, r := range sortReleases {
+	return rankAppReleaseJobs(releases)
+}
+
+func jobIsActive(j *host.ActiveJob) bool {
+	return j != nil && (j.Status == host.StatusRunning || j.Status == host.StatusStarting)
+}
+
+func preferActiveJob(a, b *host.ActiveJob) bool {
+	if a == nil {
+		return false
+	}
+	if b == nil {
+		return true
+	}
+	aRun := jobIsActive(a)
+	bRun := jobIsActive(b)
+	if aRun != bRun {
+		return aRun
+	}
+	return a.StartedAt.After(b.StartedAt)
+}
+
+func rankAppReleaseJobs(releases map[string]map[string]*host.ActiveJob) []map[string]*host.Job {
+	type ranked struct {
+		id         string
+		hasRunning bool
+		latest     time.Time
+	}
+	order := make([]ranked, 0, len(releases))
+	for id, m := range releases {
+		r := ranked{id: id}
+		for _, j := range m {
+			if j == nil {
+				continue
+			}
+			if jobIsActive(j) {
+				r.hasRunning = true
+			}
+			if j.StartedAt.After(r.latest) {
+				r.latest = j.StartedAt
+			}
+		}
+		order = append(order, r)
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		if order[i].hasRunning != order[j].hasRunning {
+			return order[i].hasRunning
+		}
+		return order[i].latest.After(order[j].latest)
+	})
+	res := make([]map[string]*host.Job, len(order))
+	for i, r := range order {
 		res[i] = make(map[string]*host.Job, len(releases[r.id]))
 		for k, v := range releases[r.id] {
-			res[i][k] = v.Job
+			if v != nil {
+				res[i][k] = v.Job
+			}
 		}
 	}
 	return res

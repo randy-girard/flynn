@@ -588,6 +588,12 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	if err := job.Config.ValidateVolumes(); err != nil {
+		log.Warn("rejecting job with invalid volume binding", "err", err)
+		httphelper.ValidationError(w, "volumes", err.Error())
+		h.addJobRateLimitBucket.Put()
+		return
+	}
 
 	log.Info("acquiring state database")
 	if err := h.host.state.Acquire(); err != nil {
