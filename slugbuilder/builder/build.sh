@@ -91,8 +91,11 @@ cat | tar -xm
 
 if [[ -d "${env_cookie}" ]]; then
   mv "${env_cookie}" "${env_dir}"
-  envdir="true"
 fi
+# Heroku buildpack API always passes ENV_DIR, including when the app has no
+# config vars. An omitted third argument crashes buildpacks that use `set -u`
+# (`ENV_DIR="${3}"` → "3: unbound variable"), such as heroku-buildpack-python v281.
+mkdir -p "${env_dir}"
 
 if [[ -n "${BUILD_CACHE_URL}" ]]; then
   curl --location "${BUILD_CACHE_URL}" | tar --extract --gunzip --directory "${cache_root}" &>/dev/null || true
@@ -290,18 +293,14 @@ else
 fi
 
 ## Buildpack compile
-if [[ -n "${envdir}" ]]; then
-  run_unprivileged ${selected_buildpack}/bin/compile \
-    "${build_dir}" \
-    "${cache_root}" \
-    "${env_dir}" \
-    | ensure_indent
-else
-  run_unprivileged ${selected_buildpack}/bin/compile \
-    "${build_dir}" \
-    "${cache_root}" \
-    | ensure_indent
-fi
+# slugbuilder-24 is the heroku-24 image. Python and other current buildpacks
+# reject the build when STACK is unset.
+export STACK="${STACK:-heroku-24}"
+run_unprivileged ${selected_buildpack}/bin/compile \
+  "${build_dir}" \
+  "${cache_root}" \
+  "${env_dir}" \
+  | ensure_indent
 
 run_unprivileged ${selected_buildpack}/bin/release \
   "${build_dir}" \
