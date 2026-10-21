@@ -1096,6 +1096,57 @@ func (TestSuite) TestActiveJobSync(c *C) {
 	assertJob("job2", JobStateStopped)
 }
 
+// TestSyncJobsMarksFinishedStoppingJobDown is the gorge leftover: the
+// formation is already 0, the controller job is stopping, and the host has
+// finished the container. Sync must mark it down. A job the host still lists
+// as running stays stopping.
+func (TestSuite) TestSyncJobsMarksFinishedStoppingJobDown(c *C) {
+	h := NewFakeHostClient("host1", false)
+	testCluster := newTestCluster(map[string]utils.HostClient{h.ID(): h})
+	s := newTestScheduler(c, testCluster, true, nil)
+	s.hosts[h.ID()] = NewHost(h, s.logger)
+
+	addJob := func(id string) *host.Job {
+		job := &host.Job{
+			ID: cluster.GenerateJobID(h.ID(), id),
+			Metadata: map[string]string{
+				"flynn-controller.app":     testAppID,
+				"flynn-controller.release": testReleaseID,
+			},
+		}
+		h.AddJob(job)
+		return job
+	}
+	assertJob := func(id string, state JobState) {
+		job, ok := s.jobs[id]
+		if !ok {
+			c.Fatalf("job not found: %q", id)
+		}
+		c.Assert(job.State, Equals, state, Commentf("checking %s = %s", id, state))
+	}
+
+	finished := addJob("finished")
+	missing := addJob("missing")
+	live := addJob("live")
+	c.Assert(s.SyncJobs(), IsNil)
+	s.jobs["finished"].State = JobStateStopping
+	s.jobs["missing"].State = JobStateStopping
+	s.jobs["live"].State = JobStateStopping
+
+	done := h.Jobs[finished.ID]
+	done.Status = host.StatusDone
+	h.Jobs[finished.ID] = done
+	delete(h.Jobs, missing.ID)
+	running := h.Jobs[live.ID]
+	running.Status = host.StatusRunning
+	h.Jobs[live.ID] = running
+
+	c.Assert(s.SyncJobs(), IsNil)
+	assertJob("finished", JobStateStopped)
+	assertJob("missing", JobStateStopped)
+	assertJob("live", JobStateStopping)
+}
+
 // TestFindVolumePrefersMostRecentlyUsed ensures a replacement job adopts the
 // dataset a job used last, not an arbitrary older one, so a rejoining
 // sirenia peer resumes from its newest data instead of reseeding.

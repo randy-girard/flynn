@@ -244,8 +244,10 @@ func (h *Host) StopJobWithReason(id, reason string) error {
 		log.Info("stopping job")
 		return h.backend.Stop(id)
 	default:
-		log.Warn("job already stopped")
-		return errors.New("host: job is already stopped")
+		// Terminal already. A second stop is success so DeleteJob does not
+		// surface a 500 and leave the controller job stuck in stopping.
+		log.Info("job already stopped")
+		return nil
 	}
 }
 
@@ -396,6 +398,10 @@ func (h *jobAPI) GetJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 func (h *jobAPI) StopJob(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	id := ps.ByName("id")
 	if err := h.host.StopJobWithReason(id, r.URL.Query().Get("reason")); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			httphelper.ObjectNotFoundError(w, err.Error())
+			return
+		}
 		httphelper.Error(w, err)
 		return
 	}

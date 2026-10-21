@@ -147,14 +147,39 @@ func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req 
 	}
 
 	if err = client.StopJob(job.ID); err != nil {
-		if _, ok := err.(ct.NotFoundError); ok {
-			err = ErrNotFound
+		// The host has already finished this job, or never had it. Persist
+		// down so a stopping row does not stay active after DeleteJob.
+		if hostStopFinished(err) {
+			job.State = ct.JobStateDown
+			if err := c.jobRepo.Add(job); err != nil {
+				respondWithError(w, err)
+				return
+			}
+			w.WriteHeader(200)
+			return
 		}
 		respondWithError(w, err)
 		return
 	}
 	// HTTP 200 with an empty body (same as DeleteApp / DeleteRoute).
 	w.WriteHeader(200)
+}
+
+// hostStopFinished reports that a host stop failed because the job is already
+// gone. A generic host failure is not finished: the container may still be running.
+func hostStopFinished(err error) bool {
+	if err == nil {
+		return false
+	}
+	var gone ct.NotFoundError
+	if errors.As(err, &gone) {
+		return true
+	}
+	if httphelper.IsObjectNotFoundError(err) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unknown job") || strings.Contains(msg, "already stopped")
 }
 
 var runJobAttempts = attempt.Strategy{
@@ -280,7 +305,7 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		metadata[k] = v
 	}
 	metadata["flynn-controller.app"] = app.ID
-	metadata["flynn-controller.app_name"] = app.Name
+	metadata[host.MetaControllerAppName] = app.Name
 	metadata["flynn-controller.release"] = release.ID
 	metadata["flynn-controller.type"] = procType
 	if name != "" {
@@ -475,7 +500,7 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		metadata[k] = v
 	}
 	metadata["flynn-controller.app"] = app.ID
-	metadata["flynn-controller.app_name"] = app.Name
+	metadata[host.MetaControllerAppName] = app.Name
 	metadata["flynn-controller.release"] = release.ID
 	metadata["flynn-controller.type"] = procType
 	job := &host.Job{

@@ -669,9 +669,14 @@ func (s *Scheduler) SyncJobs() (err error) {
 	}
 
 	// ensure any jobs we think are active are still active (in case we
-	// missed the event which marked the job as down)
+	// missed the event which marked the job as down). Stopping is included:
+	// once the host no longer lists the job as starting or running it will
+	// not emit another stop event, and leaving the in-memory job in
+	// stopping keeps the controller row there forever. Scale-down ignores
+	// an already-stopping job, and DeleteJob then fails because the host
+	// says the job is already gone.
 	for _, job := range s.jobs {
-		if job.State != JobStateStarting && job.State != JobStateRunning {
+		if job.State != JobStateStarting && job.State != JobStateRunning && job.State != JobStateStopping {
 			continue
 		}
 		if _, ok := activeHostJobs[job.JobID]; ok {
