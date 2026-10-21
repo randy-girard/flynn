@@ -21,6 +21,8 @@ A Flynn cluster is a set of Ubuntu hosts. You deploy apps with `git push` or Doc
 | Ops | Dashboard, CLI, ZFS volumes, clustered log aggregation, app export/import, host firewall (`flynn-host firewall`) |
 | Isolation | User jobs cannot reach other jobs or internal APIs on the overlay; they use routes and injected datastore URLs |
 
+A feature comparison with Heroku, Vercel, Fly.io, Render, Canine, and Railway is in [docs/content/comparison.md](docs/content/comparison.md).
+
 Flynn components (controller, router, scheduler, appliances, …) are themselves apps on the cluster. You scale and update the platform with the same APIs you use for your own software.
 
 ## Status

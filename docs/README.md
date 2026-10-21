@@ -17,7 +17,9 @@ Start at the [root README](../README.md) or pick a page. Agent notes (keep docs 
 ## Using
 
 - [Basics](content/basics.md)
+- [Compare platforms](content/comparison.md)
 - [Apps](content/apps.md)
+- [App manifest](content/app-manifest.md)
 - [Docker](content/docker.md)
 - [Databases](content/databases.html.md)
   - [PostgreSQL](content/databases/postgres.md)

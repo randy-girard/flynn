@@ -6,7 +6,9 @@
   ] },
   { "title": "Using", "children": [
     { "title": "Basics", "path": "content/basics.md" },
+    { "title": "Compare platforms", "path": "content/comparison.md" },
     { "title": "Apps", "path": "content/apps.md" },
+    { "title": "App manifest", "path": "content/app-manifest.md" },
     { "title": "Databases", "path": "content/databases.html.md", "children": [
           { "title": "PostgreSQL", "path": "content/databases/postgres.md" },
           { "title": "MySQL", "path": "content/databases/mysql.md" },
