@@ -35,9 +35,11 @@ producer or consumer can use it. Topic and group names must stay under the
 resource prefix.
 
 Each resource gets its own SCRAM-SHA-256 user and ACLs limited to
-`flynn.<resource-id>.`. The client listener requires SASL. The broker admin
-principal is not returned to the app. The provider sets `tenant_safe`, so
-hosted tenants may provision it. See [Plugins](../plugins.md).
+`flynn.<name>.`, where `<name>` is chosen at random from a word list when the
+resource is provisioned (for example `flynn.harbor.`). The client listener
+requires SASL. The broker admin principal is not returned to the app. The
+provider sets `tenant_safe`, so hosted tenants may provision it. See
+[Plugins](../plugins.md).
 
 ## Usage
 
