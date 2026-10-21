@@ -238,15 +238,30 @@ func FormatJobLifecycleLog(event JobEventType, job *ActiveJob) string {
 	}
 }
 
-// SuppressBuilderCleanStopLog reports a successful slugbuilder or dockerbuilder
-// exit. That line is noise on git push, which copies system log lines to the client.
+// SuppressBuilderCleanStopLog reports slugbuilder and dockerbuilder lifecycle
+// lines that only repeat the build command. Git push copies those system log
+// lines to the client. A failed exit is still logged.
 func SuppressBuilderCleanStopLog(event JobEventType, job *ActiveJob) bool {
-	if event != JobEventStop || job == nil || job.Status == StatusCrashed {
+	if !builderProcess(job) {
 		return false
 	}
-	if job.ExitStatus != nil && *job.ExitStatus != 0 {
+	switch event {
+	case JobEventCreate, JobEventStart:
+		return true
+	case JobEventStop:
+		if job.Status == StatusCrashed {
+			return false
+		}
+		if job.ExitStatus != nil && *job.ExitStatus != 0 {
+			return false
+		}
+		return true
+	default:
 		return false
 	}
+}
+
+func builderProcess(job *ActiveJob) bool {
 	n := strings.ToLower(strings.TrimSpace(JobProcessType(job)))
 	return n == "slugbuilder" || n == "dockerbuilder" || strings.HasPrefix(n, "slugbuilder-") || strings.HasPrefix(n, "dockerbuilder-")
 }

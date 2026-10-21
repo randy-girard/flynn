@@ -80,6 +80,21 @@ func TestSuppressBuilderCleanStopLog(t *testing.T) {
 	if SuppressBuilderCleanStopLog(JobEventStop, web) {
 		t.Fatal("web stop must still be logged")
 	}
+	started := sampleJob("", "", "slugbuilder")
+	started.Job.Config.Args = []string{"/builder/build.sh"}
+	started.Job.Metadata[MetaControllerName] = "slugbuilder.2270"
+	if !SuppressBuilderCleanStopLog(JobEventStart, started) {
+		t.Fatal("slugbuilder start must stay off the git push output")
+	}
+	if !SuppressBuilderCleanStopLog(JobEventCreate, sampleJob("", "", "dockerbuilder")) {
+		t.Fatal("dockerbuilder start must stay off the git push output")
+	}
+	if SuppressBuilderCleanStopLog(JobEventStart, sampleJob("", "", "web")) {
+		t.Fatal("web start must still be logged")
+	}
+	if SuppressBuilderCleanStopLog(JobEventError, sampleJob("", "", "slugbuilder")) {
+		t.Fatal("failed builder start must still be logged")
+	}
 }
 
 func TestFormatJobLifecycleLogIncludesCommand(t *testing.T) {
