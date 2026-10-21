@@ -16,11 +16,36 @@ func init() {
 	Register("domain", runDomainShow, `
 usage: flynn-host domain
 
-Show the cluster domain and which app serves the apex (root) hostname.
+Show the cluster domain, the app domain, and which app serves the apex.
 
-Apps are normally reached at <app>.<cluster-domain> (for example
-www.flynncluster.com). The apex is the cluster domain itself
-(flynncluster.com) with no subdomain. Only one app can own it.
+Flynn itself (dashboard, git, controller) stays on the cluster domain.
+App hostnames are <app>.<app-domain>. Those match unless you set a
+different app domain:
+
+    $ flynn-host domain:apps flynnapps.com
+
+The apex is the cluster domain itself (flynndashboard.com) with no
+subdomain. Only one app can own it.
+`)
+	Register("domain:apps", runDomainApps, `
+usage: flynn-host domain:apps [<domain>]
+       flynn-host domain:apps --reset
+
+Set the domain used for every app hostname, including preview apps.
+
+Flynn can run on flynndashboard.com while apps are served at
+<app>.flynnapps.com. With no argument, print the current app domain.
+--reset uses the cluster domain again. Existing routes are left as they are;
+new apps and preview apps use the new domain.
+
+Examples:
+
+    $ flynn-host domain:apps
+    $ flynn-host domain:apps flynnapps.com
+    $ flynn-host domain:apps --reset
+
+Options:
+    --reset  Use the cluster domain for new app hostnames
 `)
 	Register("domain:apex", runDomainApex, `
 usage: flynn-host domain:apex [<app>]
@@ -50,6 +75,36 @@ func runDomainShow(_ *docopt.Args) error {
 		return err
 	}
 	return printApex(client, domain)
+}
+
+func runDomainApps(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	if args.Bool["--reset"] {
+		if err := client.SetAppDomain(""); err != nil {
+			return err
+		}
+	} else if domain := strings.TrimSpace(args.String["<domain>"]); domain != "" {
+		if err := client.SetAppDomain(domain); err != nil {
+			return err
+		}
+	}
+	view, err := client.GetAppDomain()
+	if err != nil {
+		return err
+	}
+	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
+	defer w.Flush()
+	listRec(w, "CLUSTER DOMAIN", view.ClusterDomain)
+	listRec(w, "APP DOMAIN", view.Effective)
+	if strings.TrimSpace(view.Domain) == "" {
+		listRec(w, "APP DOMAIN SET", "cluster default")
+	} else {
+		listRec(w, "APP DOMAIN SET", view.Domain)
+	}
+	return nil
 }
 
 func runDomainApex(args *docopt.Args) error {
@@ -109,6 +164,9 @@ func printApex(client controller.Client, domain string) error {
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	defer w.Flush()
 	listRec(w, "CLUSTER DOMAIN", domain)
+	if view, err := client.GetAppDomain(); err == nil && view != nil {
+		listRec(w, "APP DOMAIN", view.Effective)
+	}
 	if info == nil || info.App == nil {
 		listRec(w, "APEX APP", "(none)")
 		fmt.Fprintf(os.Stdout, "Assign with: flynn-host domain:apex <app>\n")

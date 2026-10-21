@@ -139,7 +139,7 @@ func TestHostNestedCommandsAreRegistered(t *testing.T) {
 		"acme", "acme:configure", "acme:enable", "acme:disable", "acme:status",
 		"acme:enable-system-routes", "acme:disable-system-routes",
 		"github", "github:configure", "github:status", "github:setup", "github:disable",
-		"domain", "domain:apex",
+		"domain", "domain:apps", "domain:apex",
 		"runtime", "runtime:create", "runtime:update",
 		"runtime:remove", "runtime:allow-custom", "runtime:reserve",
 		"runtime:allow-user-scale", "runtime:allow-user-scale-tags",
