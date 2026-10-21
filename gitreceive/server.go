@@ -80,6 +80,7 @@ type gitHandler struct {
 	webhookURL string
 	httpClient *http.Client
 	prepare    func(cacheKey string) (string, error)
+	upload     func(path, cacheKey string) error
 }
 
 type gitService struct {
@@ -113,6 +114,7 @@ func newGitHandler(controller appLookup, auth *authorizer.Authorizer) *gitHandle
 		webhookURL: strings.TrimRight(url, "/") + "/github/webhook",
 		httpClient: http.DefaultClient,
 		prepare:    prepareRepo,
+		upload:     uploadRepo,
 	}
 }
 
@@ -250,6 +252,26 @@ func (h *gitHandler) servePreview(w http.ResponseWriter, r *http.Request, tok *a
 	if err := writeRepoHookBytes(repoPath, previewPrereceiveHook); err != nil {
 		fail500(w, "writePreviewHook", err)
 		return
+	}
+	// A deleted preview app leaves refs/heads/<branch> in this repo. Git then
+	// reports the next push of that commit as already up to date and never
+	// runs the hook, so the app is not created again.
+	if info.Branches != nil {
+		pruned, err := dropStalePreviewHeads(repoPath, info.Branches)
+		if err != nil {
+			fail500(w, "dropPreviewBranch", err)
+			return
+		}
+		if pruned {
+			upload := h.upload
+			if upload == nil {
+				upload = uploadRepo
+			}
+			if err := upload(repoPath, cacheKey); err != nil {
+				fail500(w, "uploadRepo", err)
+				return
+			}
+		}
 	}
 
 	success := g.handleFunc(gitEnv{Pipeline: pipeline}, g.rpc, repoPath, w, r)
@@ -599,6 +621,71 @@ func repairDanglingHEAD(path string) error {
 		return nil
 	}
 	return ioutil.WriteFile(headPath, []byte("ref: refs/heads/main\n"), 0644)
+}
+
+// dropStalePreviewHeads deletes branch refs that no longer have a preview
+// app. live == nil means the caller does not know, and nothing is deleted.
+func dropStalePreviewHeads(repo string, live []string) (bool, error) {
+	if live == nil {
+		return false, nil
+	}
+	keep := make(map[string]struct{}, len(live))
+	for _, branch := range live {
+		branch = strings.TrimSpace(branch)
+		if branch != "" {
+			keep[branch] = struct{}{}
+		}
+	}
+	list := exec.Command("git", "for-each-ref", "--format=%(refname)", "refs/heads")
+	list.Dir = repo
+	out, err := list.Output()
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for _, line := range strings.Split(string(out), "\n") {
+		ref := strings.TrimSpace(line)
+		if !strings.HasPrefix(ref, "refs/heads/") {
+			continue
+		}
+		branch := strings.TrimPrefix(ref, "refs/heads/")
+		if _, ok := keep[branch]; ok {
+			continue
+		}
+		del := exec.Command("git", "update-ref", "-d", ref)
+		del.Dir = repo
+		if err := del.Run(); err != nil {
+			return changed, err
+		}
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	return true, retargetDeletedHEAD(repo)
+}
+
+// retargetDeletedHEAD points HEAD at main when it still names a branch ref
+// that was just deleted. A symbolic ref is valid even if that branch is absent.
+func retargetDeletedHEAD(repo string) error {
+	cmd := exec.Command("git", "symbolic-ref", "HEAD")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	ref := strings.TrimSpace(string(out))
+	if ref == "" || !strings.HasPrefix(ref, "refs/heads/") {
+		return nil
+	}
+	check := exec.Command("git", "show-ref", "--verify", "--quiet", ref)
+	check.Dir = repo
+	if check.Run() == nil {
+		return nil
+	}
+	set := exec.Command("git", "symbolic-ref", "HEAD", "refs/heads/main")
+	set.Dir = repo
+	return set.Run()
 }
 
 func uploadRepo(path, cacheKey string) error {

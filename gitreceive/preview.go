@@ -19,6 +19,10 @@ type previewRemoteInfo struct {
 	Reason    string   `json:"reason,omitempty"`
 	AppIDs    []string `json:"app_ids,omitempty"`
 	AppNames  []string `json:"app_names,omitempty"`
+	// Branches are the preview branches that still have an app. A missing
+	// field means an older pipeline plugin; an empty list means every
+	// preview app is gone and leftover branch refs should be deleted.
+	Branches []string `json:"branches"`
 }
 
 type previewEnsureResult struct {

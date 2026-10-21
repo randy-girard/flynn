@@ -165,6 +165,93 @@ func TestGitHandlerPreviewRemote(t *testing.T) {
 	}
 }
 
+func TestGitHandlerDropsDeletedPreviewBranch(t *testing.T) {
+	auth := authorizer.New([]string{"cluster-secret"}, nil, nil, 0)
+	h := newGitHandler(&fakeApps{apps: map[string]*ct.App{}}, auth)
+	template := t.TempDir()
+	gitIn := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = template
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %s", args, out)
+		}
+	}
+	gitIn("init", "-b", "main")
+	gitIn("config", "user.email", "t@example.com")
+	gitIn("config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(template, "a"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitIn("add", "a")
+	gitIn("commit", "-m", "a")
+	gitIn("branch", "test")
+	gitIn("branch", "keep")
+
+	h.prepare = func(cacheKey string) (string, error) {
+		if cacheKey != "preview-shop" {
+			t.Fatalf("cacheKey=%q", cacheKey)
+		}
+		dest := t.TempDir()
+		cmd := exec.Command("cp", "-a", template+"/.", dest)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("cp: %s: %s", err, out)
+		}
+		return dest, nil
+	}
+	var uploaded []string
+	expectKeep := true
+	h.upload = func(path, cacheKey string) error {
+		uploaded = append(uploaded, cacheKey)
+		testRef := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/test")
+		testRef.Dir = path
+		keepRef := exec.Command("git", "show-ref", "--verify", "--quiet", "refs/heads/keep")
+		keepRef.Dir = path
+		if testRef.Run() == nil || (expectKeep && keepRef.Run() != nil) || (!expectKeep && keepRef.Run() == nil) {
+			t.Errorf("uploaded refs did not match live branches")
+		}
+		return nil
+	}
+	do := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", "/_preview/shop.git/info/refs?service=git-receive-pack", nil)
+		req.SetBasicAuth("", "cluster-secret")
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// An older pipeline plugin omits branches. Leftover refs stay advertised.
+	h.preview = &fakePreview{info: &previewRemoteInfo{Available: true, Pipeline: "shop"}}
+	if got := do(); got.Code != 200 || !strings.Contains(got.Body.String(), "refs/heads/test") || len(uploaded) != 0 {
+		t.Fatalf("unknown branches=%d uploads=%v\n%s", got.Code, uploaded, got.Body.String())
+	}
+
+	h.preview = &fakePreview{info: &previewRemoteInfo{Available: true, Pipeline: "shop", Branches: []string{"keep"}}}
+	got := do()
+	if got.Code != 200 {
+		t.Fatalf("prune=%d %s", got.Code, got.Body.String())
+	}
+	if strings.Contains(got.Body.String(), "refs/heads/test") || !strings.Contains(got.Body.String(), "refs/heads/keep") {
+		t.Fatalf("advertisement:\n%s", got.Body.String())
+	}
+	if len(uploaded) != 1 || uploaded[0] != "preview-shop" {
+		t.Fatalf("uploads=%v", uploaded)
+	}
+
+	expectKeep = false
+	h.preview = &fakePreview{info: &previewRemoteInfo{Available: true, Pipeline: "shop", Branches: []string{}}}
+	got = do()
+	if got.Code != 200 {
+		t.Fatalf("empty=%d %s", got.Code, got.Body.String())
+	}
+	if strings.Contains(got.Body.String(), "refs/heads/") {
+		t.Fatalf("advertised a branch after every preview app was deleted:\n%s", got.Body.String())
+	}
+	if len(uploaded) != 2 {
+		t.Fatalf("uploads=%v", uploaded)
+	}
+}
+
 func TestGitPktLineAndSubCommand(t *testing.T) {
 	if subCommand("git-receive-pack") != "receive-pack" || subCommand("git-upload-pack") != "upload-pack" {
 		t.Fatal("subCommand")
