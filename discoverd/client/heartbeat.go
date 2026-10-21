@@ -62,7 +62,20 @@ func (c *Client) Register(service, addr string) (Heartbeater, error) {
 	return c.RegisterInstance(service, &Instance{Addr: addr})
 }
 
+// HeartbeatOptions controls how a registration is repaired after discoverd
+// drops the service. Service is the leader type to recreate; nil means
+// oldest, matching AddService(nil). ClaimLeader makes this instance the
+// leader again, for a one-node manual service that does not run sirenia.
+type HeartbeatOptions struct {
+	Service     *ServiceConfig
+	ClaimLeader bool
+}
+
 func (c *Client) RegisterInstance(service string, inst *Instance) (Heartbeater, error) {
+	return c.RegisterInstanceOptions(service, inst, HeartbeatOptions{})
+}
+
+func (c *Client) RegisterInstanceOptions(service string, inst *Instance, opts HeartbeatOptions) (Heartbeater, error) {
 	inst.Addr = expandAddr(inst.Addr)
 	if inst.Proto == "" {
 		inst.Proto = "tcp"
@@ -80,6 +93,8 @@ func (c *Client) RegisterInstance(service string, inst *Instance) (Heartbeater, 
 		inst.Meta[kv[0]] = kv[1]
 	}
 	h := newHeartbeater(c, service, inst)
+	h.serviceConfig = opts.Service
+	h.claimLeader = opts.ClaimLeader
 	err := runAttempts.Run(func() error {
 		firstErr := make(chan error)
 		go h.run(firstErr)
@@ -113,8 +128,10 @@ type heartbeater struct {
 	sync.Mutex
 	inst *Instance
 
-	service   string
-	closeOnce sync.Once
+	service       string
+	serviceConfig *ServiceConfig
+	claimLeader   bool
+	closeOnce     sync.Once
 }
 
 func (h *heartbeater) Close() error {
@@ -151,11 +168,8 @@ const (
 )
 
 func (h *heartbeater) run(firstErr chan<- error) {
-	path := fmt.Sprintf("/services/%s/instances/%s", h.service, h.inst.ID)
 	register := func() error {
-		h.Lock()
-		defer h.Unlock()
-		return h.client().Put(path, h.inst, nil)
+		return h.registerInstance()
 	}
 
 	err := register()
@@ -174,11 +188,59 @@ func (h *heartbeater) run(firstErr chan<- error) {
 			}
 			timer.Reset(nextHeartbeat())
 		case <-h.stop:
-			h.client().Delete(path)
+			h.client().Delete(h.instancePath())
 			close(h.done)
 			return
 		}
 	}
+}
+
+func (h *heartbeater) instancePath() string {
+	h.Lock()
+	id := h.inst.ID
+	h.Unlock()
+	return fmt.Sprintf("/services/%s/instances/%s", h.service, id)
+}
+
+// missingService reports a discoverd 404 for the service itself. An instance
+// 404 is a different failure and must not create a new service.
+func missingService(err error) bool {
+	if err == nil || !hh.IsObjectNotFoundError(err) {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "service") && !strings.Contains(msg, "instance")
+}
+
+// registerInstance heartbeats this instance. If discoverd no longer has the
+// service, it is created again with the leader type from registration, then
+// the instance is put back. A one-node manual service that claimed leadership
+// at start claims it again so leader.<service>.discoverd resolves.
+func (h *heartbeater) registerInstance() error {
+	h.Lock()
+	inst := h.inst
+	h.Unlock()
+	path := fmt.Sprintf("/services/%s/instances/%s", h.service, inst.ID)
+	err := h.client().Put(path, inst, nil)
+	if !missingService(err) {
+		return err
+	}
+	h.client().Logger.Warn("discoverd service missing; recreating", "service", h.service)
+	if addErr := h.client().AddService(h.service, h.serviceConfig); addErr != nil && !hh.IsObjectExistsError(addErr) {
+		return err
+	}
+	h.Lock()
+	inst = h.inst
+	h.Unlock()
+	if err = h.client().Put(path, inst, nil); err != nil {
+		return err
+	}
+	if h.claimLeader {
+		if leadErr := h.client().Service(h.service).SetLeader(inst.ID); leadErr != nil {
+			h.client().Logger.Error("error restoring discoverd leader", "service", h.service, "err", leadErr)
+		}
+	}
+	return nil
 }
 
 func expandAddr(addr string) string {

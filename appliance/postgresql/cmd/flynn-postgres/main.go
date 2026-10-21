@@ -55,7 +55,9 @@ func main() {
 		Addr: ":5432",
 		Meta: map[string]string{postgresql.IDKey: id},
 	}
-	hb, err := discoverd.DefaultClient.RegisterInstance(serviceName, inst)
+	hb, err := discoverd.DefaultClient.RegisterInstanceOptions(serviceName, inst, discoverd.HeartbeatOptions{
+		Service: &discoverd.ServiceConfig{LeaderType: discoverd.LeaderTypeManual},
+	})
 	if err != nil {
 		shutdown.Fatal(err)
 	}
