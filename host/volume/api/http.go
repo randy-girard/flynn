@@ -25,6 +25,10 @@ type HTTPAPI struct {
 	vman *volumemanager.Manager
 
 	cluster atomic.Value // *cluster.Client
+
+	// PrepareDestroy runs before a volume is removed. A non-nil error skips
+	// the destroy so a live container is not unmounted out from under a job.
+	PrepareDestroy func(volumeID string) error
 }
 
 func NewHTTPAPI(vman *volumemanager.Manager) *HTTPAPI {
@@ -145,6 +149,12 @@ func (api *HTTPAPI) Inspect(w http.ResponseWriter, r *http.Request, ps httproute
 
 func (api *HTTPAPI) Destroy(w http.ResponseWriter, r *http.Request, ps httprouter.Params) {
 	volumeID := ps.ByName("volume_id")
+	if api.PrepareDestroy != nil {
+		if err := api.PrepareDestroy(volumeID); err != nil {
+			httphelper.Error(w, err)
+			return
+		}
+	}
 	err := api.vman.DestroyVolume(volumeID)
 	if err != nil {
 		switch err {
@@ -152,7 +162,9 @@ func (api *HTTPAPI) Destroy(w http.ResponseWriter, r *http.Request, ps httproute
 			httphelper.ObjectNotFoundError(w, fmt.Sprintf("no volume with id %q", volumeID))
 			return
 		default:
-			httphelper.Error(w, err)
+			// Preserve the ZFS text. A bare error becomes
+			// "unknown_error: Something went wrong" and hides "dataset is busy".
+			httphelper.Error(w, httphelper.JSONError{Code: httphelper.UnknownErrorCode, Message: err.Error()})
 			return
 		}
 	}

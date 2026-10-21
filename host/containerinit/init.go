@@ -538,12 +538,27 @@ func babySit(init *ContainerInit, hbs []discoverd.Heartbeater) int {
 	var shutdownOnce sync.Once
 	hbDone := make(chan struct{})
 	closeHBs := func() {
-		for _, hb := range hbs {
-			if err := hb.Close(); err != nil {
-				log.Error("error deregistering service", "addr", hb.Addr(), "err", err)
-			} else {
-				log.Info("service deregistered", "addr", hb.Addr())
+		// Heartbeat Close waits on its goroutine. If discoverd is gone that
+		// wait never finishes, containerinit stays up, and the job's ext2
+		// zvol stays mounted ("dataset is busy"). Bound the wait so init exits.
+		finished := make(chan struct{})
+		go func() {
+			defer close(finished)
+			for _, hb := range hbs {
+				if hb == nil {
+					continue
+				}
+				if err := hb.Close(); err != nil {
+					log.Error("error deregistering service", "addr", hb.Addr(), "err", err)
+				} else {
+					log.Info("service deregistered", "addr", hb.Addr())
+				}
 			}
+		}()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			log.Error("timed out closing service heartbeats")
 		}
 		close(hbDone)
 	}

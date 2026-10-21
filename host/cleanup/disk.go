@@ -35,6 +35,9 @@ func ImageData(hostID string, jobs map[string]host.ActiveJob, vols []*volume.Inf
 		}
 		for _, name := range orphanImageDirs(entries, keepJobs, hostID) {
 			path := filepath.Join(base, name)
+			// A leaked job leaves its overlay mounted here. That mount holds
+			// the ext2 zvol open, so ZFS reports "dataset is busy".
+			unmountTree(path)
 			if err := os.RemoveAll(path); err != nil {
 				return err
 			}

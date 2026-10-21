@@ -396,6 +396,7 @@ func runDaemon(args *docopt.Args) {
 		zpoolName:         zpoolName,
 	}
 	backend.SetHost(host)
+	host.volAPI.PrepareDestroy = host.prepareVolumeDestroy
 
 	// restore the host status if set in the environment
 	if statusEnv := os.Getenv("FLYNN_HOST_STATUS"); statusEnv != "" {
@@ -492,6 +493,7 @@ func runDaemon(args *docopt.Args) {
 		log.Error("error restoring state", "err", err)
 		shutdown.Fatal(err)
 	}
+	host.reapOrphanContainers()
 	// Intentionally do NOT stop jobs or unregister from discoverd on exit.
 	// Job containers are independent processes (no Pdeathsig) and the systemd
 	// unit uses KillMode=process, so they survive the daemon exiting. Leaving
