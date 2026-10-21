@@ -23,6 +23,7 @@ const (
 	MetaControllerRuntime        = "flynn-controller.runtime"
 	MetaControllerRuntimeProfile = "flynn-controller.runtime_profile" // legacy job metadata
 	MetaControllerApp            = "flynn-controller.app"
+	MetaControllerAppName        = "flynn-controller.app_name"
 	MetaControllerCommand        = "flynn-controller.command" // Procfile / Docker command, not slugrunner argv
 )
 

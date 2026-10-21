@@ -45,7 +45,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		metadata[k] = v
 	}
 	metadata["flynn-controller.app"] = f.App.ID
-	metadata["flynn-controller.app_name"] = f.App.Name
+	metadata[host.MetaControllerAppName] = f.App.Name
 	metadata["flynn-controller.release"] = f.Release.ID
 	metadata["flynn-controller.formation"] = "true"
 	metadata["flynn-controller.type"] = name

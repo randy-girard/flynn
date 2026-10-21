@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"strings"
+
 	"github.com/inconshreveable/log15"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/types"
@@ -92,23 +94,66 @@ func (d *WebhookDispatcher) Send(code, description, severity string, jobID strin
 		JobID:       jobID,
 		Metadata:    metadata,
 	}
+	if job == nil {
+		job = d.state.runningJob(jobID)
+	}
 	if job != nil {
 		event.Job = sanitizeJobForWebhook(job)
-		if job.Job != nil {
-			env := job.Job.Config.Env
-			event.AppID = env["FLYNN_APP_ID"]
-			event.ProcessType = env["FLYNN_PROCESS_TYPE"]
-			event.ReleaseID = env["FLYNN_RELEASE_ID"]
-			if event.JobID == "" {
-				event.JobID = job.Job.ID
-			}
-		}
+		applyWebhookJobIdentity(event, job)
 	}
 	select {
 	case d.events <- event:
 	default:
 		d.log.Warn("webhook event buffer full, dropping event", "code", code, "event_id", event.EventID)
 	}
+}
+
+// runningJob returns the in-memory job for id. Memory events are emitted with
+// a job id and a nil ActiveJob; without this lookup the webhook has a host
+// and no app, so the app events page cannot see it.
+func (s *State) runningJob(id string) *host.ActiveJob {
+	if s == nil || id == "" || s.jobs == nil {
+		return nil
+	}
+	s.mtx.RLock()
+	job := s.jobs[id]
+	s.mtx.RUnlock()
+	if job == nil || job.Job == nil {
+		return nil
+	}
+	return job.Dup()
+}
+
+func applyWebhookJobIdentity(event *host.WebhookEvent, job *host.ActiveJob) {
+	if event == nil || job == nil || job.Job == nil {
+		return
+	}
+	env := job.Job.Config.Env
+	meta := job.Job.Metadata
+	if event.JobID == "" {
+		event.JobID = job.Job.ID
+	}
+	if event.AppID == "" {
+		event.AppID = firstNonEmpty(env["FLYNN_APP_ID"], meta[host.MetaControllerApp])
+	}
+	if event.AppName == "" {
+		event.AppName = firstNonEmpty(env["FLYNN_APP_NAME"], meta[host.MetaControllerAppName])
+	}
+	if event.ProcessType == "" {
+		event.ProcessType = firstNonEmpty(env["FLYNN_PROCESS_TYPE"], meta[host.MetaControllerType])
+	}
+	if event.ReleaseID == "" {
+		event.ReleaseID = firstNonEmpty(env["FLYNN_RELEASE_ID"], meta["flynn-controller.release"])
+	}
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SendDiskFull emits D20 at most once per diskFullCooldown so a full disk

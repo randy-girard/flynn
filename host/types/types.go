@@ -539,6 +539,7 @@ type WebhookEvent struct {
 	Severity    string            `json:"severity"` // "info", "warning", "error", "critical"
 	JobID       string            `json:"job_id,omitempty"`
 	AppID       string            `json:"app_id,omitempty"`
+	AppName     string            `json:"app_name,omitempty"`
 	ProcessType string            `json:"process_type,omitempty"`
 	ReleaseID   string            `json:"release_id,omitempty"`
 	Job         *WebhookJob       `json:"job,omitempty"`
