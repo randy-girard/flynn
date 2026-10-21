@@ -17,6 +17,8 @@ type fakeInfraHost struct {
 	stopped     []string
 	added       []*host.Job
 	restartOnce *host.ActiveJob
+	stopErr     error
+	stopErrOnce bool
 }
 
 func (f *fakeInfraHost) ID() string { return f.id }
@@ -27,6 +29,14 @@ func (f *fakeInfraHost) ListJobs() (map[string]host.ActiveJob, error) {
 
 func (f *fakeInfraHost) StopJob(id string) error {
 	f.stopped = append(f.stopped, id)
+	if f.stopErr != nil {
+		err := f.stopErr
+		if f.stopErrOnce {
+			f.stopErr = nil
+			delete(f.jobs, id)
+		}
+		return err
+	}
 	j := f.jobs[id]
 	j.Status = host.StatusDone
 	f.jobs[id] = j
@@ -66,6 +76,72 @@ func squashArtifact(t *testing.T, layerID string) *ct.Artifact {
 		t.Fatal(err)
 	}
 	return &ct.Artifact{Type: ct.ArtifactTypeFlynn, RawManifest: raw}
+}
+
+func TestReplaceHostInfraJobsStopTimeoutThenGoneIsSuccess(t *testing.T) {
+	prev := hostInfraStopRetryWait
+	hostInfraStopRetryWait = 0
+	t.Cleanup(func() { hostInfraStopRetryWait = prev })
+
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id: "devnode1",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "flannel",
+					},
+					Config: host.ContainerConfig{
+						Env: map[string]string{"FLYNN_JOB_ID": "old"},
+					},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+		stopErr:     fmt.Errorf("Delete http://192.168.57.20:1113/host/jobs/old: net/http: timeout awaiting response headers"),
+		stopErrOnce: true,
+	}
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.stopped) == 0 || h.stopped[0] != "old" {
+		t.Fatalf("stopped=%v", h.stopped)
+	}
+	if len(h.added) != 1 || h.added[0].Mountspecs[0].ID != "layer-new" {
+		t.Fatalf("added=%+v", h.added)
+	}
+}
+
+func TestReplaceHostInfraJobsDedupsDuplicateHostIDs(t *testing.T) {
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id: "devnode1",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "flannel",
+					},
+					Config: host.ContainerConfig{
+						Env: map[string]string{"FLYNN_JOB_ID": "old"},
+					},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+	}
+	dup := h
+	if err := replaceHostInfraJobs([]hostInfraHost{h, dup}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.stopped) != 1 || len(h.added) != 1 {
+		t.Fatalf("duplicate host IDs must replace once, stopped=%v added=%d", h.stopped, len(h.added))
+	}
 }
 
 func TestReplaceHostInfraJobsSkipsMatchingLayers(t *testing.T) {

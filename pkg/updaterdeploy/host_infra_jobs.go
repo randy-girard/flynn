@@ -36,7 +36,10 @@ const hostInfraReleaseKey = "flynn-controller.release"
 var (
 	hostInfraSchedulerGrace      = 20 * time.Second
 	hostInfraFormationRetryDelay = 2 * time.Second
+	hostInfraStopRetryWait       = 200 * time.Millisecond
 )
+
+const hostInfraStopAttempts = 3
 
 // HostInfraController is the controller API used to move discoverd/flannel
 // onto a release that carries the pulled image.
@@ -62,6 +65,7 @@ type HostInfraController interface {
 // formation picks it up (flynn-host-ids), so the two releases never share a
 // host port.
 func ReplaceHostInfraJobs(client HostInfraController, hosts []*cluster.Host, images map[string]*ct.Artifact, force bool, log log15.Logger) error {
+	hosts = cluster.UniqueHosts(hosts)
 	list := make([]hostInfraHost, 0, len(hosts))
 	for _, h := range hosts {
 		if h != nil {
@@ -86,6 +90,7 @@ func ReplaceHostInfraJobs(client HostInfraController, hosts []*cluster.Host, ima
 }
 
 func replaceHostInfraJobs(hosts []hostInfraHost, images map[string]*ct.Artifact, rollouts map[string]*hostInfraRollout, force bool, log log15.Logger) error {
+	hosts = uniqueInfraHosts(hosts)
 	if log != nil {
 		log.Info("replacing persistent host-infra jobs", "hosts", len(hosts), "force", force)
 	}
@@ -156,8 +161,8 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 		if log != nil {
 			log.Info("replacing host-infra job", "host", h.ID(), "app", name, "old", old.ID)
 		}
-		if err := h.StopJob(old.ID); err != nil {
-			return fmt.Errorf("stop %s on %s: %w", name, h.ID(), err)
+		if err := stopHostInfraJob(h, old.ID, name); err != nil {
+			return err
 		}
 	}
 	adopted := false
@@ -179,7 +184,7 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 			if log != nil {
 				log.Info("stopping scheduler restart on old host-infra image", "host", h.ID(), "app", name, "job", stale.ID)
 			}
-			_ = h.StopJob(stale.ID)
+			_ = stopHostInfraJob(h, stale.ID, name)
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
@@ -232,6 +237,75 @@ func anyHostInfraJob(jobs map[string]host.ActiveJob, appName string) *host.Job {
 		}
 	}
 	return found
+}
+
+func uniqueInfraHosts(hosts []hostInfraHost) []hostInfraHost {
+	seen := make(map[string]bool, len(hosts))
+	out := make([]hostInfraHost, 0, len(hosts))
+	for _, h := range hosts {
+		if h == nil {
+			continue
+		}
+		id := h.ID()
+		if id != "" && seen[id] {
+			continue
+		}
+		if id != "" {
+			seen[id] = true
+		}
+		out = append(out, h)
+	}
+	return out
+}
+
+func jobStillActive(jobs map[string]host.ActiveJob, id string) bool {
+	j, ok := jobs[id]
+	if !ok || j.Job == nil {
+		return false
+	}
+	return j.Status == host.StatusRunning || j.Status == host.StatusStarting
+}
+
+func isTransientHostStop(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "use of closed") ||
+		strings.Contains(msg, "eof")
+}
+
+// stopHostInfraJob retries StopJob on transient HTTP errors. A timeout
+// after the job is already gone (Delete hung, then the container exited)
+// is treated as success so one slow host does not abort the whole update.
+func stopHostInfraJob(h hostInfraHost, id, name string) error {
+	var last error
+	for attempt := 1; attempt <= hostInfraStopAttempts; attempt++ {
+		err := h.StopJob(id)
+		if err == nil {
+			return nil
+		}
+		last = err
+		jobs, listErr := h.ListJobs()
+		if listErr == nil && !jobStillActive(jobs, id) {
+			return nil
+		}
+		if !isTransientHostStop(err) {
+			return fmt.Errorf("stop %s on %s: %w", name, h.ID(), err)
+		}
+		if attempt < hostInfraStopAttempts {
+			time.Sleep(hostInfraStopRetryWait)
+		}
+	}
+	if jobs, listErr := h.ListJobs(); listErr == nil && !jobStillActive(jobs, id) {
+		return nil
+	}
+	return fmt.Errorf("stop %s on %s: %w", name, h.ID(), last)
 }
 
 func volumeMissing(err error) bool {
