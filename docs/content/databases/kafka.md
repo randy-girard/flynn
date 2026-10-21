@@ -31,14 +31,12 @@ in split parts and checked against a SHA-512 sum.
 
 Topics are **not** created automatically. Auto topic creation is disabled on the
 brokers, so a topic must be created with the `flynn kafka` CLI before any
-producer or consumer can use it. Topic and group names must stay under the
-resource prefix.
+producer or consumer can use it.
 
-Each resource gets its own SCRAM-SHA-256 user and ACLs limited to
-`flynn.<name>.`, where `<name>` is chosen at random from a word list when the
-resource is provisioned (for example `flynn.harbor.`). The client listener
-requires SASL. The broker admin principal is not returned to the app. The
-provider sets `tenant_safe`, so hosted tenants may provision it. See
+Each resource is its own cluster and gets its own SCRAM-SHA-256 user. That
+user may create any topic or consumer group on the cluster. The client
+listener requires SASL. The broker admin principal is not returned to the app.
+The provider sets `tenant_safe`, so hosted tenants may provision it. See
 [Plugins](../plugins.md).
 
 ## Usage
@@ -95,9 +93,9 @@ certificate covers `leader.<cluster>.discoverd`.
 
 The app release also receives `FLYNN_KAFKA_TLS_ENABLED`, `FLYNN_KAFKA_TRUSTED_CERT`,
 `FLYNN_KAFKA_CLIENT_CERT`, `FLYNN_KAFKA_CLIENT_CERT_KEY`, `FLYNN_KAFKA_SASL_MECHANISM`,
-`FLYNN_KAFKA_SASL_USERNAME`, `FLYNN_KAFKA_SASL_PASSWORD`, and `FLYNN_KAFKA_TOPIC_PREFIX`. The
-CLIENT listener is mutual TLS plus SCRAM, so a URL alone cannot connect.
-Topics and consumer groups must stay under `FLYNN_KAFKA_TOPIC_PREFIX`.
+`FLYNN_KAFKA_SASL_USERNAME`, and `FLYNN_KAFKA_SASL_PASSWORD`. The CLIENT listener
+is mutual TLS plus SCRAM, so a URL alone cannot connect. Topic and group names
+are not prefixed.
 
 When TLS is enabled (the default), the following are also injected so your app
 can authenticate with mutual TLS:
