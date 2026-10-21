@@ -1335,6 +1335,11 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE db_runtimes ADD COLUMN dedicated boolean NOT NULL DEFAULT false`,
 		`UPDATE db_runtimes SET dedicated = true WHERE name = 'dedicated'`,
 	)
+	// App hostnames (<app>.<app domain>) can differ from the domain Flynn
+	// itself is served on. Empty means use DEFAULT_ROUTE_DOMAIN.
+	migrations.Add(78,
+		`ALTER TABLE cluster_settings ADD COLUMN app_domain text NOT NULL DEFAULT ''`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

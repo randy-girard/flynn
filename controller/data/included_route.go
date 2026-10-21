@@ -58,8 +58,22 @@ func MarkIncludedRoutes(app *ct.App, defaultDomain string, routes ...*router.Rou
 	}
 }
 
-// DefaultDomain is DEFAULT_ROUTE_DOMAIN for this controller.
+// DefaultDomain is the hostname suffix for new app routes. An operator override
+// in cluster_settings wins; otherwise this is DEFAULT_ROUTE_DOMAIN from the
+// controller environment, which defaults to the Flynn cluster domain.
 func (r *AppRepo) DefaultDomain() string {
+	if r == nil {
+		return ""
+	}
+	if r.db != nil {
+		var override string
+		err := r.db.QueryRow(`SELECT app_domain FROM cluster_settings WHERE id = 1`).Scan(&override)
+		if err == nil {
+			if d := strings.TrimSpace(override); d != "" {
+				return d
+			}
+		}
+	}
 	return r.defaultDomain
 }
 

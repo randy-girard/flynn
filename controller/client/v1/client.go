@@ -1277,6 +1277,16 @@ func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
 	return c.Put("/cluster/runtime-settings", settings, settings)
 }
 
+func (c *Client) GetAppDomain() (*ct.AppDomain, error) {
+	d := &ct.AppDomain{}
+	return d, c.Get("/cluster/app-domain", d)
+}
+
+func (c *Client) SetAppDomain(domain string) error {
+	body := &ct.AppDomain{Domain: domain}
+	return c.Put("/cluster/app-domain", body, body)
+}
+
 func (c *Client) GetClusterPolicy() (*ct.ClusterPolicy, error) {
 	p := &ct.ClusterPolicy{}
 	return p, c.Get("/cluster/policy", p)

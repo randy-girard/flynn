@@ -12,6 +12,15 @@ type TenancySettings struct {
 	SignupEnabled bool   `json:"signup_enabled"`
 }
 
+// AppDomain is the hostname suffix for apps. Domain is the operator override;
+// empty means new apps use ClusterDomain (the domain Flynn itself runs on).
+// Effective is the suffix actually appended to app names.
+type AppDomain struct {
+	Domain        string `json:"domain"`
+	Effective     string `json:"effective"`
+	ClusterDomain string `json:"cluster_domain"`
+}
+
 // ClusterPolicy is the deploy policy pushed by the enterprise plugin. The
 // zero value applies no restrictions. Only non-system apps are checked.
 // Enforced is set by the controller on reads: the stored policy only applies

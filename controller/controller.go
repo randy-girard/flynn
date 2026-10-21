@@ -363,6 +363,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.DELETE("/runtimes/:runtimes_id", httphelper.WrapHandler(api.DeleteRuntimeProfile))
 	httpRouter.GET("/cluster/runtime-settings", httphelper.WrapHandler(api.GetRuntimeSettings))
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
+	httpRouter.GET("/cluster/app-domain", httphelper.WrapHandler(api.GetAppDomain))
+	httpRouter.PUT("/cluster/app-domain", httphelper.WrapHandler(api.PutAppDomain))
 	httpRouter.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
 	httpRouter.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
 	httpRouter.GET("/cluster/audit", httphelper.WrapHandler(api.ListClusterAudit))

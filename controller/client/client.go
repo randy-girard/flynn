@@ -131,6 +131,8 @@ type Client interface {
 	DeleteRuntimeProfile(id string) error
 	GetRuntimeSettings() (*ct.RuntimeSettings, error)
 	UpdateRuntimeSettings(settings *ct.RuntimeSettings) error
+	GetAppDomain() (*ct.AppDomain, error)
+	SetAppDomain(domain string) error
 	GetClusterPolicy() (*ct.ClusterPolicy, error)
 	ListClusterAudit(after int64, limit int) ([]*ct.AuditEntry, error)
 	GetGitHubApp() (*ct.GitHubAppConfig, error)
