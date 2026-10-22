@@ -15,6 +15,7 @@ var preparedStatements = map[string]string{
 	"app_select_by_name_or_id_for_update":      appSelectByNameOrIDForUpdateQuery,
 	"app_insert":                               appInsertQuery,
 	"app_update_strategy":                      appUpdateStrategyQuery,
+	"app_update_name":                          appUpdateNameQuery,
 	"app_update_meta":                          appUpdateMetaQuery,
 	"app_update_release":                       appUpdateReleaseQuery,
 	"app_update_deploy_timeout":                appUpdateDeployTimeoutQuery,
@@ -210,6 +211,8 @@ FROM apps WHERE deleted_at IS NULL AND (app_id = $1 OR name = $2) LIMIT 1 FOR UP
 INSERT INTO apps (app_id, name, meta, strategy, deploy_timeout, owner_account, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING created_at, updated_at`
 	appUpdateStrategyQuery = `
 UPDATE apps SET strategy = $2, updated_at = now() WHERE app_id = $1`
+	appUpdateNameQuery = `
+UPDATE apps SET name = $2, updated_at = now() WHERE app_id = $1`
 	appUpdateMetaQuery = `
 UPDATE apps SET meta = $2, updated_at = now() WHERE app_id = $1`
 	appUpdateReleaseQuery = `

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"strings"
 
 	"github.com/jackc/pgx"
 	"github.com/randy-girard/flynn/controller/name"
@@ -158,6 +159,28 @@ func (r *AppRepo) Update(id string, data map[string]interface{}) (interface{}, e
 
 	for k, v := range data {
 		switch k {
+		case "name":
+			next, ok := v.(string)
+			if !ok {
+				tx.Rollback()
+				return nil, fmt.Errorf("controller: expected string, got %T", v)
+			}
+			next = strings.TrimSpace(next)
+			if next == "" || next == app.Name {
+				continue
+			}
+			if err := utils.ValidateAppName(next, app.System() || app.Plugin()); err != nil {
+				tx.Rollback()
+				return nil, err
+			}
+			app.Name = next
+			if err := tx.Exec("app_update_name", app.ID, app.Name); err != nil {
+				tx.Rollback()
+				if postgres.IsUniquenessError(err, "apps_name_idx") {
+					return nil, httphelper.ObjectExistsErr(fmt.Sprintf("application %q already exists", next))
+				}
+				return nil, err
+			}
 		case "strategy":
 			strategy, ok := v.(string)
 			if !ok {
