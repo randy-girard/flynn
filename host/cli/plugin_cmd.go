@@ -82,7 +82,7 @@ func runHostPluginCommand(name string, args []string) error {
 		return err
 	}
 	plugin.FoldColonBools(spec, parsed.Bool)
-	action := spec.MatchAction(parsed.Bool)
+	action := spec.MatchScopedAction(parsed.Bool, plugin.CLIScopeCluster)
 	if action == nil {
 		return fmt.Errorf("%s: no matching plugin CLI action", spec.Command)
 	}

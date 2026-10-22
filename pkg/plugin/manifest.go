@@ -193,25 +193,54 @@ type CLIAction struct {
 	// Cluster is the legacy flag for system-app jobs. Prefer Scope.
 	// cluster:true with no scope is treated as scope:cluster.
 	Cluster bool `json:"cluster,omitempty"`
+	// Owned limits an app-scoped action to resources attached to the current
+	// app. The job still runs in the plugin image.
+	Owned bool `json:"owned,omitempty"`
 }
 
 // MatchAction returns the action whose Name tokens are all true in docopt
 // bools, preferring the longest match (`topics create` over `topics`).
 func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
+	return c.matchAction(bools, nil)
+}
+
+// MatchScopedAction prefers actions in scopes. When none of those scopes
+// match, it falls back to MatchAction so a cluster-only command still reaches
+// the flynn-host redirect.
+func (c *CLI) MatchScopedAction(bools map[string]bool, scopes ...CLIScope) *CLIAction {
+	if len(scopes) == 0 {
+		return c.MatchAction(bools)
+	}
+	if a := c.matchAction(bools, scopes); a != nil {
+		return a
+	}
+	return c.matchAction(bools, nil)
+}
+
+func (c *CLI) matchAction(bools map[string]bool, scopes []CLIScope) *CLIAction {
 	if c == nil {
 		return nil
+	}
+	allow := map[CLIScope]struct{}{}
+	for _, s := range scopes {
+		allow[s] = struct{}{}
 	}
 	var best *CLIAction
 	bestN := -1
 	for i := range c.Actions {
 		a := &c.Actions[i]
+		if len(allow) > 0 {
+			if _, ok := allow[a.EffectiveScope()]; !ok {
+				continue
+			}
+		}
 		parts := strings.Fields(a.Name)
 		if len(parts) == 0 {
 			continue
 		}
 		ok := true
 		for _, p := range parts {
-			if !bools[p] {
+			if bools == nil || !bools[p] {
 				ok = false
 				break
 			}
@@ -221,7 +250,7 @@ func (c *CLI) MatchAction(bools map[string]bool) *CLIAction {
 			bestN = len(parts)
 		}
 	}
-	if best != nil {
+	if best != nil || len(scopes) > 0 {
 		return best
 	}
 	// flynn <plugin> with no subcommand: list, then show.

@@ -811,6 +811,65 @@ func TestPluginInterpNamedEnvWithoutInstanceApp(t *testing.T) {
 	}
 }
 
+func TestOwnedMaintenanceStaysOnAttachedResources(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "shop"
+
+	primary := "postgresql-harbor-12345"
+	other := "postgresql-other-99999"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"shop":            {Env: map[string]string{"FLYNN_POSTGRES": primary}},
+			"postgres-plugin": {ID: "plugin-rel"},
+		},
+		resources: map[string][]*ct.Resource{
+			"shop": {
+				{Env: map[string]string{"FLYNN_POSTGRES": primary}},
+				{Env: map[string]string{"FLYNN_POSTGRES": "postgresql-meadow-10001"}},
+			},
+		},
+	}
+	spec := &plugin.CLI{
+		Command:         "pg",
+		App:             "postgres-plugin",
+		ResourceEnv:     "FLYNN_POSTGRES",
+		ResourceMissing: "missing",
+		Actions: []plugin.CLIAction{{
+			Name:  "maintenance",
+			Args:  []string{"/bin/flynn-postgres-api", "task", "maintenance"},
+			Owned: true,
+			Scope: plugin.CLIScopeApp,
+		}},
+	}
+	action := spec.MatchScopedAction(map[string]bool{"maintenance": true}, plugin.CLIScopeApp, plugin.CLIScopeAccount)
+	cfg, err := pluginJobConfig(client, spec, action, &docopt.Args{Bool: map[string]bool{}, String: map[string]string{}})
+	if err == nil || !strings.Contains(err.Error(), "multiple pg resources") || !strings.Contains(err.Error(), "--all") {
+		t.Fatalf("multiple: %v", err)
+	}
+	cfg, err = pluginJobConfig(client, spec, action, &docopt.Args{Bool: map[string]bool{"--all": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "postgres-plugin" || cfg.Release != "plugin-rel" {
+		t.Fatalf("job must run in the plugin image: %+v", cfg)
+	}
+	if got := cfg.Args[len(cfg.Args)-1]; got != primary+","+"postgresql-meadow-10001" && got != "postgresql-meadow-10001,"+primary {
+		t.Fatalf("owned list %q args %q", got, cfg.Args)
+	}
+	_, err = pluginJobConfig(client, spec, action, &docopt.Args{String: map[string]string{"<instances>": other}})
+	if err == nil || !strings.Contains(err.Error(), "not attached") {
+		t.Fatalf("foreign: %v", err)
+	}
+	cfg, err = pluginJobConfig(client, spec, action, &docopt.Args{String: map[string]string{"<name>": primary}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Args[len(cfg.Args)-1] != primary {
+		t.Fatalf("named %q", cfg.Args)
+	}
+}
+
 func TestPluginJobConfigNoTenantReleaseUsesPluginImage(t *testing.T) {
 	old := flagApp
 	t.Cleanup(func() { flagApp = old })

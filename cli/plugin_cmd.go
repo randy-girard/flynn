@@ -251,7 +251,7 @@ type pluginJobClient interface {
 }
 
 func executePluginCLI(client controller.Client, spec *plugin.CLI, args *docopt.Args, extra []string) error {
-	action := spec.MatchAction(args.Bool)
+	action := spec.MatchScopedAction(args.Bool, plugin.CLIScopeApp, plugin.CLIScopeAccount)
 	if action == nil {
 		return fmt.Errorf("%s: no matching plugin CLI action", spec.Command)
 	}
@@ -380,6 +380,9 @@ func pluginResourceMatches(spec *plugin.CLI, res *ct.Resource) bool {
 }
 
 func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
+	if action != nil && action.Owned {
+		return ownedPluginJobConfig(client, spec, action, args)
+	}
 	appName := strings.TrimSpace(spec.App)
 	system := action != nil && action.UsesSystemApp()
 	if !system || appName == "" {
@@ -499,6 +502,141 @@ func copyAppPGEnv(env, app map[string]string) {
 			env[k] = app[k]
 		}
 	}
+}
+
+func ownedPluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
+	if spec == nil || action == nil {
+		return nil, fmt.Errorf("missing plugin CLI action")
+	}
+	pluginApp := strings.TrimSpace(spec.App)
+	if pluginApp == "" {
+		return nil, fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
+	}
+	appRelease, err := client.GetAppRelease(mustApp())
+	if err != nil && !isReleaseMissing(err) {
+		return nil, fmt.Errorf("error getting app release: %s", err)
+	}
+	var resources []*ct.Resource
+	if list, lerr := client.AppResourceList(mustApp()); lerr == nil {
+		resources = list
+	}
+	names, err := ownedInstanceNames(spec, appRelease, resources, args)
+	if err != nil {
+		return nil, err
+	}
+	pluginRel, err := client.GetAppRelease(pluginApp)
+	if err != nil || pluginRel == nil || pluginRel.ID == "" {
+		return nil, fmt.Errorf("error getting %s release", spec.Command)
+	}
+	jobArgs, err := plugin.InterpolateAll(action.Args, plugin.Interp{AppName: pluginApp})
+	if err != nil {
+		return nil, err
+	}
+	jobArgs = compactPluginArgs(jobArgs)
+	jobArgs = append(jobArgs, strings.Join(names, ","))
+	return &runConfig{
+		App:        pluginApp,
+		Release:    pluginRel.ID,
+		Args:       jobArgs,
+		DisableLog: true,
+		Exit:       true,
+		Partition:  ct.PartitionTypeSystem,
+	}, nil
+}
+
+// ownedInstanceNames is the resource apps attached to the current app.
+// --all means every one of those. A name or comma-separated list must be
+// among them. One attached resource is the default.
+func ownedInstanceNames(spec *plugin.CLI, appRelease *ct.Release, resources []*ct.Resource, args *docopt.Args) ([]string, error) {
+	env := map[string]string{}
+	if appRelease != nil && appRelease.Env != nil {
+		env = appRelease.Env
+	}
+	owned := pluginInstanceNames(spec, env, pluginMatchingResources(spec, resources))
+	if len(owned) == 0 {
+		return nil, pluginResourceMissingErr(spec)
+	}
+	if args != nil && args.Bool["--all"] {
+		return owned, nil
+	}
+	var requested []string
+	if name := resourceNameArg(args); name != "" {
+		requested = append(requested, name)
+	}
+	if raw := maintenanceInstancesArg(args); raw != "" {
+		requested = append(requested, splitInstanceList(raw)...)
+	}
+	if len(requested) == 0 {
+		if len(owned) == 1 {
+			return owned, nil
+		}
+		return nil, fmt.Errorf("%w\nOr pass --all to maintain every %s resource on this app", pluginMultipleInstances(spec, owned), spec.Command)
+	}
+	have := map[string]string{}
+	for _, n := range owned {
+		have[strings.ToLower(n)] = n
+	}
+	var out []string
+	seen := map[string]struct{}{}
+	for _, raw := range requested {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		canon := raw
+		if spec != nil {
+			canon = resname.Canonical(spec.Command, raw)
+		}
+		name, ok := have[strings.ToLower(canon)]
+		if !ok {
+			name, ok = have[strings.ToLower(raw)]
+		}
+		if !ok {
+			return nil, fmt.Errorf("%s is not attached to this app", raw)
+		}
+		if _, dup := seen[name]; dup {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("pass a resource attached to this app, a comma-separated list, or --all")
+	}
+	return out, nil
+}
+
+func maintenanceInstancesArg(args *docopt.Args) string {
+	if args == nil {
+		return ""
+	}
+	if args.String != nil {
+		if v := strings.TrimSpace(args.String["<instances>"]); v != "" {
+			return v
+		}
+	}
+	if args.All == nil {
+		return ""
+	}
+	switch v := args.All["<instances>"].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []string:
+		return strings.Join(v, ",")
+	default:
+		return ""
+	}
+}
+
+func splitInstanceList(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func resourceNameArg(args *docopt.Args) string {

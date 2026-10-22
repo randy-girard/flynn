@@ -80,6 +80,27 @@ func TestCLIRedirects(t *testing.T) {
 	}
 }
 
+func TestMatchScopedActionPrefersCaller(t *testing.T) {
+	c := &CLI{Command: "pg", Actions: []CLIAction{
+		{Name: "maintenance", Scope: CLIScopeApp, Owned: true},
+		{Name: "maintenance", Scope: CLIScopeCluster},
+	}}
+	bools := map[string]bool{"maintenance": true}
+	app := c.MatchScopedAction(bools, CLIScopeApp, CLIScopeAccount)
+	if app == nil || !app.Owned || app.EffectiveScope() != CLIScopeApp {
+		t.Fatalf("flynn action %#v", app)
+	}
+	cluster := c.MatchScopedAction(bools, CLIScopeCluster)
+	if cluster == nil || cluster.EffectiveScope() != CLIScopeCluster {
+		t.Fatalf("host action %#v", cluster)
+	}
+	onlyHost := &CLI{Command: "pg", Actions: []CLIAction{{Name: "maintenance", Scope: CLIScopeCluster}}}
+	got := onlyHost.MatchScopedAction(bools, CLIScopeApp, CLIScopeAccount)
+	if got == nil || got.EffectiveScope() != CLIScopeCluster {
+		t.Fatalf("cluster-only command must still match so flynn can redirect: %#v", got)
+	}
+}
+
 func TestCLIActionByName(t *testing.T) {
 	c := &CLI{Command: "enterprise", Actions: []CLIAction{
 		{Name: "org list"},

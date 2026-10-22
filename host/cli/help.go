@@ -128,7 +128,7 @@ func RootHelp() string {
 		if _, ok := hostPluginCommand[spec.Command]; ok {
 			continue
 		}
-		if commands[spec.Command] != nil {
+		if commands[spec.Command] != nil || parentHasBuiltin(spec.Command) {
 			continue
 		}
 		desc := spec.Usage
@@ -195,6 +195,7 @@ func FormatHelp(name string) string {
 	for _, s := range children {
 		items = append(items, clihelp.Item{Name: s.name, Desc: s.desc})
 	}
+	items = append(items, pluginClusterHelpItems(name)...)
 	b.WriteString(clihelp.FormatItems(items))
 	return b.String()
 }

@@ -3,6 +3,7 @@ package cli
 import (
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/clihelp"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -46,10 +47,26 @@ func hostPluginForParent(name string) (pluginName string, ok bool) {
 	if ok {
 		return pluginName, true
 	}
+	if parentHasBuiltin(parent) {
+		return "", false
+	}
 	if spec := installedHostPluginCLI(parent); spec != nil && spec.HasClusterActions() {
 		return spec.Command, true
 	}
 	return "", false
+}
+
+// parentHasBuiltin is true when flynn-host already owns this command parent
+// (pg:psql, for example). A plugin cluster action must not take that parent
+// out of the core command list.
+func parentHasBuiltin(parent string) bool {
+	prefix := parent + ":"
+	for name := range commands {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func installedClusterPluginCLIs() []*plugin.CLI {
@@ -74,4 +91,25 @@ func installedClusterPluginCLIs() []*plugin.CLI {
 		out = append(out, &cli)
 	}
 	return out
+}
+
+// pluginClusterHelpItems lists flynn-host actions a plugin adds under a
+// parent that already has built-in commands, such as pg:maintenance.
+func pluginClusterHelpItems(parent string) []clihelp.Item {
+	spec := installedHostPluginCLI(parent)
+	if spec == nil {
+		return nil
+	}
+	var items []clihelp.Item
+	for i := range spec.Actions {
+		a := &spec.Actions[i]
+		if a.EffectiveScope() != plugin.CLIScopeCluster {
+			continue
+		}
+		items = append(items, clihelp.Item{
+			Name: plugin.ColonName(spec.Command, a.Name),
+			Desc: "Run maintenance on resource instances",
+		})
+	}
+	return items
 }
