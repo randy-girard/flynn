@@ -309,6 +309,11 @@ Options:
 	if err := markAppBuilding(client, app); err != nil {
 		fmt.Printf("-----> WARN: could not mark app as building: %s\n", err)
 	}
+	progress := openAppProgressLog(app.ID, os.Stdout)
+	defer progress.Close()
+	prevOut := receiveOut
+	receiveOut = progress
+	defer func() { receiveOut = prevOut }()
 	prevRelease, err := controller.HeadRelease(client, app.Name)
 	if err == controller.ErrNotFound {
 		prevRelease = &ct.Release{}
@@ -552,7 +557,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	if err != nil {
 		return fmt.Errorf("Error getting slug image: %s", err)
 	}
-	fmt.Printf("-----> Creating release...\n")
+	receivePrintf("-----> Creating release...\n")
 
 	release := &ct.Release{
 		ArtifactIDs: []string{slugRunnerID, slugImageID},
@@ -632,7 +637,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 		return fmt.Errorf("Error getting image artifact: %s", err)
 	}
 
-	fmt.Printf("-----> Creating release...\n")
+	receivePrintf("-----> Creating release...\n")
 
 	releaseMeta := prevRelease.Meta
 	if releaseMeta == nil {
@@ -771,7 +776,7 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 
 	if !skipDefaultScale && needsDefaultScale(app.ID, prevRelease.ID, procs, client) {
 		procName := defaultScaleProcess(procs)
-		fmt.Printf("=====> Scaling initial release to %s=1\n", procName)
+		receivePrintf("=====> Scaling initial release to %s=1\n", procName)
 
 		timeout := time.Duration(app.DeployTimeout) * time.Second
 		opts := ct.ScaleOptions{
@@ -779,7 +784,7 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 			Timeout:          &timeout,
 			JobEventCallback: watchInitialScale(procName),
 		}
-		fmt.Printf("-----> Waiting for initial %s job to start...\n", procName)
+		receivePrintf("-----> Waiting for initial %s job to start...\n", procName)
 		if err := client.ScaleAppRelease(app.ID, release.ID, opts); err != nil {
 			fmt.Printf("-----> WARN: scaling initial release down to %s=0 due to error\n", procName)
 			if err := client.DeleteFormation(app.ID, release.ID); err != nil {
@@ -794,7 +799,7 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 		}
 	}
 
-	fmt.Println("=====> Application deployed")
+	receivePrintln("=====> Application deployed")
 	printDeployURLs(client, app)
 	return nil
 }
@@ -805,9 +810,9 @@ func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release)
 		return nil
 	}
 	proc := release.Processes[ct.ProcessTypeRelease]
-	fmt.Println("-----> Running release command")
+	receivePrintln("-----> Running release command")
 	if cmd := ct.ProcessDisplayCommand(proc); cmd != "" {
-		fmt.Printf("       %s\n", cmd)
+		receivePrintf("       %s\n", cmd)
 	}
 	rwc, err := client.RunJobAttached(app.ID, req)
 	if err != nil {
@@ -817,7 +822,7 @@ func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release)
 	attachClient := cluster.NewAttachClient(rwc)
 	_ = attachClient.CloseWrite()
 	// pre-receive only pipes flynn-receiver stdout to `git push`.
-	gitOut := newGitPushFilter(syncStdout(os.Stdout))
+	gitOut := newGitPushFilter(syncStdout(receiveWriter()))
 	exitStatus, err := attachClient.Receive(gitOut, gitOut)
 	gitOut.flush()
 	if err != nil {
@@ -826,7 +831,7 @@ func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release)
 	if exitStatus != 0 {
 		return ct.ReleasePhaseExitError(exitStatus)
 	}
-	fmt.Println("-----> Release command complete")
+	receivePrintln("-----> Release command complete")
 	return nil
 }
 
@@ -843,7 +848,7 @@ func printDeployURLs(client controller.Client, app *ct.App) {
 		fmt.Println("-----> WARN: could not list app URLs:", err)
 		return
 	}
-	printRouteURLs(os.Stdout, routes, os.Getenv("DEFAULT_ROUTE_DOMAIN"))
+	printRouteURLs(receiveWriter(), routes, os.Getenv("DEFAULT_ROUTE_DOMAIN"))
 }
 
 func printRouteURLs(w io.Writer, routes []*router.Route, clusterDomain string) {

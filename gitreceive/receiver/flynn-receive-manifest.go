@@ -72,7 +72,10 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 		return nil
 	}
 
-	ap, err := appmanifest.New(client, os.Stdout, true)
+	// receiveOut is the git client and the app log for this whole push.
+	logw := receiveWriter()
+
+	ap, err := appmanifest.New(client, logw, true)
 	if err != nil {
 		return err
 	}
@@ -91,7 +94,7 @@ func prepareReceiveManifest(client controller.Client, app *ct.App, releaseEnv ma
 	case appmanifest.ActionNone:
 		return nil
 	case appmanifest.ActionSkip:
-		fmt.Println(appmanifest.SkipLine)
+		fmt.Fprintln(logw, appmanifest.SkipLine)
 		return nil
 	case appmanifest.ActionResume:
 		if len(bytes.TrimSpace(manifest)) == 0 {
