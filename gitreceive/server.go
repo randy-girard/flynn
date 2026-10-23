@@ -590,10 +590,23 @@ func writeRepoHookBytes(path string, hook []byte) error {
 }
 
 func setGitConfig(path string) error {
-	// autoDetach defaults to true, which runs git gc --auto in a forked process, corrupting uploads
-	cmd := exec.Command("git", "config", "--bool", "gc.autoDetach", "false")
-	cmd.Dir = path
-	return cmd.Run()
+	// autoDetach defaults to true, which runs git gc --auto in a forked process, corrupting uploads.
+	// The receive repo is non-bare and HEAD names the default branch, but nothing
+	// reads that work tree (the hook archives the pushed SHA). Git 2.50 refuses
+	// the push, including the first one, unless denyCurrentBranch is ignore.
+	// updateInstead would checkout into this repo and bring back the
+	// quarantined-HEAD failure.
+	for _, args := range [][]string{
+		{"config", "--bool", "gc.autoDetach", "false"},
+		{"config", "receive.denyCurrentBranch", "ignore"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = path
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s: %s", strings.Join(args, " "), out)
+		}
+	}
+	return nil
 }
 
 var detachedObject = regexp.MustCompile(`^[0-9a-fA-F]{40}([0-9a-fA-F]{24})?$`)

@@ -569,3 +569,56 @@ git-archive-all "$1" > "$2"
 		t.Fatalf("archive missing file: %s", listed)
 	}
 }
+
+// Git 2.50 refuses a push to the symbolic HEAD of a non-bare repo even when
+// that branch does not exist yet. initRepo is non-bare; the work tree is unused.
+func TestInitRepoAcceptsPushToCheckedOutBranch(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	if err := initRepo(repo); err != nil {
+		t.Fatal(err)
+	}
+	// The shipped hook execs flynn-receiver. This test only checks the ref update.
+	hook := filepath.Join(repo, ".git", "hooks", "pre-receive")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	branchCmd := exec.Command("git", "symbolic-ref", "--short", "HEAD")
+	branchCmd.Dir = repo
+	branchOut, err := branchCmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	branch := strings.TrimSpace(string(branchOut))
+	if branch == "" {
+		t.Fatal("empty HEAD branch")
+	}
+
+	src := t.TempDir()
+	run := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run(src, "init", "-q", "-b", branch)
+	run(src, "config", "user.email", "smoke@flynn.test")
+	run(src, "config", "user.name", "smoke")
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("a\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run(src, "add", "a.txt")
+	run(src, "commit", "-q", "-m", "init")
+	run(src, "remote", "add", "dest", repo)
+	run(src, "push", "dest", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("b\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run(src, "commit", "-q", "-am", "second")
+	run(src, "push", "dest", "HEAD")
+}
