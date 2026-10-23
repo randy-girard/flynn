@@ -265,6 +265,10 @@ if ! grep -Fq 'TRIES="${TRIES:-180}"' "${mod}/guest/start-node.sh"; then
   echo "start-node.sh must wait long enough for router/controller after a crash-style reboot" >&2
   exit 1
 fi
+if ! grep -Fq 'flynn-host.service is masked; leaving this node out of the cluster' "${mod}/guest/start-node.sh"; then
+  echo "start-node.sh must skip a masked flynn-host instead of failing the rolling reload" >&2
+  exit 1
+fi
 if ! grep -Fq 'no listed async present, using unassigned peer as new sync' "${ROOT}/pkg/sirenia/state/state.go"; then
   echo "sirenia sync takeover must use unassigned live peers after a crash-style node loss" >&2
   exit 1

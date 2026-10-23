@@ -20,6 +20,13 @@ bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-flynn-root.sh"
 # aarch64: keep qemu-user binfmt registered after reload (no Flynn reinstall).
 bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ensure-qemu-binfmt.sh"
 
+# A masked unit is intentional (the dev db-node is not a raft member).
+# Leave it masked and let the rolling reload probe the real cluster.
+if [[ "$(systemctl is-enabled flynn-host.service 2>/dev/null || true)" == "masked" ]]; then
+  echo "flynn-host.service is masked; leaving this node out of the cluster"
+  exit 0
+fi
+
 systemctl enable flynn-host.service >/dev/null 2>&1 || true
 systemctl start flynn-host.service
 
