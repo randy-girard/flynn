@@ -93,7 +93,9 @@ cannot follow another follower. Its own `--as` does not replace the leader
 URL until promote. Promote makes the follower writable, ends the follow, and
 rewrites the primary attachment `*_URL`. The old leader remains its own
 resource. `flynn pg:unfollow <follower>` stops replication and leaves a
-standalone writable copy.
+standalone writable copy. The dashboard Followers tab can also remove a
+follower while it is still replicating. Remove stops replication and deletes
+the replica.
 
 `flynn addons:create postgres --follow <primary> --auto-failover` (or
 `flynn pg:follow --auto-failover`) places the replica on a different host.

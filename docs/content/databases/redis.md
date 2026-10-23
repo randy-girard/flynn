@@ -86,7 +86,9 @@ flynn addons:create redis --follow <primary> --auto-failover
 ```
 
 `redis:wait` prints live copy progress (full resync, then streaming catch-up).
-The dashboard Followers tab has **Add follower** and the same progress. Auto-failover
+The dashboard Followers tab has **Add follower** and the same progress.
+**Remove** stops replication and deletes the replica, including while it is
+still copying. Unfollow still leaves a standalone copy. Auto-failover
 places the replica on another host, promotes it if the primary job is gone, then
 recreates a replica. A primary cannot be deleted while it still has followers.
 

@@ -54,6 +54,12 @@ application to connect to it.
 By default, MySQL is not running in the Flynn cluster. The first time you
 provision a database, MySQL will be started and configured.
 
+### Followers
+
+A follower is a separate read-only instance. The dashboard Followers tab can
+remove it while it is still replicating. Remove stops replication and deletes
+the replica. Unfollow leaves a standalone writable copy.
+
 ### Connecting to the database
 
 Provisioning the database will add a few environment variables to your app
