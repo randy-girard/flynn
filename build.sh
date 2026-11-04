@@ -403,7 +403,13 @@ flynn_host_registered() {
   fi
   out="$(curl "${curl_args[@]}" "http://192.0.2.200:1111/services/flynn-host/instances" 2>/dev/null)" || return 1
   python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,list) and len(d)>0 else 1)' <<<"${out}" || return 1
-  status="$(curl -sf --max-time 2 "http://192.0.2.200:1113/host/status" 2>/dev/null)" || return 1
+  # Once FLYNN_HOST_AUTH_KEY is set, unauthenticated /host/status omits
+  # discoverd. The builder already exported the key from host.json.
+  local status_args=(-sf --max-time 2)
+  if [[ -n "${FLYNN_HOST_AUTH_KEY:-}" ]]; then
+    status_args+=(-H "Auth-Key: ${FLYNN_HOST_AUTH_KEY}")
+  fi
+  status="$(curl "${status_args[@]}" "http://192.0.2.200:1113/host/status" 2>/dev/null)" || return 1
   python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d,dict) and (d.get("discoverd") or {}).get("url") else 1)' <<<"${status}"
 }
 

@@ -772,6 +772,49 @@ func TestHandler_AuthAllowsStatusAndPing(t *testing.T) {
 	}
 }
 
+func TestPingOmitsPeersWithoutAuth(t *testing.T) {
+	h := NewHandler()
+	h.AuthKey = "cluster-discoverd-secret"
+	h.Store.GetPeersFn = func() ([]string, error) {
+		return []string{"10.0.0.8:1111", "10.0.0.9:1111"}, nil
+	}
+
+	for _, path := range []string{"/ping", "/.well-known/status"} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, MustNewHTTPRequest("GET", path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s status=%d", path, w.Code)
+		}
+		if peers := w.Header().Get("Discoverd-Peers"); peers != "" {
+			t.Fatalf("%s leaked Discoverd-Peers %q", path, peers)
+		}
+		if strings.Contains(w.Body.String(), "10.0.0.8") {
+			t.Fatalf("%s body leaked peers %s", path, w.Body.String())
+		}
+	}
+
+	req := MustNewHTTPRequest("GET", "/ping", nil)
+	req.Header.Set("Auth-Key", "cluster-discoverd-secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("authenticated ping status=%d", w.Code)
+	}
+	if !strings.Contains(w.Header().Get("Discoverd-Peers"), "10.0.0.8:1111") {
+		t.Fatalf("authenticated ping missing peers %q", w.Header().Get("Discoverd-Peers"))
+	}
+
+	open := NewHandler()
+	open.Store.GetPeersFn = func() ([]string, error) {
+		return []string{"10.0.0.8:1111"}, nil
+	}
+	w = httptest.NewRecorder()
+	open.ServeHTTP(w, MustNewHTTPRequest("GET", "/ping", nil))
+	if w.Code != http.StatusOK || w.Header().Get("Discoverd-Peers") != "" {
+		t.Fatalf("unkeyed ping status=%d peers=%q", w.Code, w.Header().Get("Discoverd-Peers"))
+	}
+}
+
 func TestHandler_AuthAcceptsHeaderAndBasic(t *testing.T) {
 	h := NewHandler()
 	h.AuthKey = "cluster-discoverd-secret"

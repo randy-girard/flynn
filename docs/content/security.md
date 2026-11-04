@@ -53,7 +53,12 @@ When no key is configured (fresh host, missing `host.json`, or before
 bootstrap) the API **fails closed**, with these exceptions:
 
 * `GET /host/status` stays unauthenticated (health checks and bootstrap host
-  discovery).
+  discovery). Before a key is configured the body is the full status, so
+  bootstrap can read the host id, URL, and discoverd address without sending
+  a secret to a discovery URL. After the key is set, a request that does not
+  present it is liveness only: host id, advertised URL, version, flags, and
+  `auth`. The discoverd job id and address, and the flannel job id and overlay
+  subnet, are returned only when the request presents `FLYNN_HOST_AUTH_KEY`.
 * First-time `POST /host/auth-key` is trust-on-first-use from any peer,
   including advertised subnet IPs. Multi-node bootstrap runs
   `configure-host-auth` on one coordinator and must reach every host's
@@ -118,7 +123,10 @@ system-class containers. `flynn-host bootstrap --from-backup` writes that
 key onto each host and restarts the daemon before starting discoverd, so
 the host can register and `wait-hosts` can finish. The client sends it as an `Auth-Key` header
 (or HTTP basic password). `/ping` and `/.well-known/status` stay
-unauthenticated so health checks work. DNS on `:53` is unauthenticated
+unauthenticated so health checks work. Those responses omit `Discoverd-Peers`
+and the raft index unless the request presents `DISCOVERD_AUTH_KEY`.
+Authenticated clients still receive the peer list on those paths and on
+`GET /raft/peers`. DNS on `:53` is unauthenticated
 because user jobs need it. User and build jobs still cannot open
 `:1111` (host iptables). Do not bind discoverd only to loopback; hosts
 need peer HTTP.

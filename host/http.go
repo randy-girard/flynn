@@ -95,6 +95,9 @@ func writeHostUnauthorized(w http.ResponseWriter) {
 // or Basic auth password matching the host's authKey.
 //
 // GET /host/status is always unauthenticated (health and bootstrap discovery).
+// Once a key is set, GetStatus omits discoverd and flannel topology unless
+// the request presents that key. With no key configured the full status is
+// returned so bootstrap can still read it.
 // When no authKey is configured:
 //   - POST /host/auth-key is trust-on-first-use from any peer (multi-node
 //     bootstrap's configure-host-auth dials advertised IPs, not loopback)
@@ -668,8 +671,16 @@ func (h *jobAPI) ConfigureNetworking(w http.ResponseWriter, r *http.Request, _ h
 
 func (h *jobAPI) GetStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	h.host.statusMtx.RLock()
-	defer h.host.statusMtx.RUnlock()
-	httphelper.JSON(w, 200, &h.host.status)
+	status := h.host.status
+	h.host.statusMtx.RUnlock()
+	// No key yet: full status, including discoverd, for bootstrap and the
+	// image builder. After the key is set, unauthenticated callers get
+	// liveness only (id and URL stay so host discovery can match the dialed
+	// peer). A valid Auth-Key or Basic password still receives the topology.
+	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(r)) {
+		status = status.Liveness()
+	}
+	httphelper.JSON(w, 200, status)
 }
 
 // GetJobStats returns runtime resource usage stats for a specific job/container.

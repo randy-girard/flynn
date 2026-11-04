@@ -126,22 +126,39 @@ func proxyWhitelisted(r *http.Request) bool {
 	return false
 }
 
+// requestAuthenticated reports whether r presents the configured Auth-Key
+// header or Basic password. An empty AuthKey is never authenticated.
+func (h *Handler) requestAuthenticated(r *http.Request) bool {
+	if h.AuthKey == "" {
+		return false
+	}
+	var token string
+	if v := r.Header.Get("Auth-Key"); v != "" {
+		token = v
+	} else if _, password, ok := r.BasicAuth(); ok {
+		token = password
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(h.AuthKey)) == 1
+}
+
+// publishTopology reports whether this response may include the raft peer
+// list. /ping and /.well-known/status stay reachable without a key, so they
+// carry Discoverd-Peers only when the request authenticated.
+func (h *Handler) publishTopology(r *http.Request) bool {
+	if r.URL.Path != status.Path && r.URL.Path != "/ping" {
+		return true
+	}
+	return h.requestAuthenticated(r)
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// SEC-009: authenticate requests if an auth key is configured
-	if h.AuthKey != "" && r.URL.Path != status.Path && r.URL.Path != "/ping" {
-		var token string
-		if v := r.Header.Get("Auth-Key"); v != "" {
-			token = v
-		} else if _, password, ok := r.BasicAuth(); ok {
-			token = password
-		}
-		if subtle.ConstantTimeCompare([]byte(token), []byte(h.AuthKey)) != 1 {
-			hh.Error(w, hh.JSONError{
-				Code:    hh.UnauthorizedErrorCode,
-				Message: "valid Auth-Key header or Basic auth password required",
-			})
-			return
-		}
+	if h.AuthKey != "" && r.URL.Path != status.Path && r.URL.Path != "/ping" && !h.requestAuthenticated(r) {
+		hh.Error(w, hh.JSONError{
+			Code:    hh.UnauthorizedErrorCode,
+			Message: "valid Auth-Key header or Basic auth password required",
+		})
+		return
 	}
 
 	if h.Shutdown.Load().(bool) {
@@ -156,9 +173,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			redirectToHost(w, r, host)
 			return
 		}
-	} else {
+	} else if h.publishTopology(r) {
 		// Send current peer list and index to the client so it can keep the list of
-		// peers in sync with the cluster.
+		// peers in sync with the cluster. Unauthenticated /ping and
+		// /.well-known/status stay 200 without this header.
 		peers, err := h.Store.GetPeers()
 		if err == nil {
 			w.Header().Set("Discoverd-Peers", strings.Join(peers, ","))
