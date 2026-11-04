@@ -201,6 +201,23 @@ func GitFetchAllowed(tok *authorizer.Token, appID, appName string) bool {
 	return gitAppAllowed(tok, appID, appName, PermAppRead)
 }
 
+// MayReadAppEnv reports whether tok may see release env and per-process env.
+// A nil token is an internal caller and is allowed. Cluster-admin and the
+// cluster key are allowed. app:read, app:write, app:admin, and app:env:write
+// expand to app:env:read. A logs-only or scale-only grant does not.
+func MayReadAppEnv(tok *authorizer.Token, appID, appName string) bool {
+	if tok == nil || tok.HasClusterAdmin() {
+		return true
+	}
+	if HasAppPermission(permissionsForApp(tok, appID), PermAppEnvRead) {
+		return true
+	}
+	if appName != "" && appName != appID {
+		return HasAppPermission(permissionsForApp(tok, appName), PermAppEnvRead)
+	}
+	return false
+}
+
 func gitAppAllowed(tok *authorizer.Token, appID, appName, need string) bool {
 	if tok == nil {
 		return false

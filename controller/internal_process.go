@@ -161,6 +161,136 @@ func (c *controllerAPI) annotateAppBuilding(app *ct.App) {
 	app.Building = ct.AppBuildingShown(app.Meta, list, now)
 }
 
+// presentRelease is the release returned to an HTTP caller. Builder process
+// types stay stripped for non-controller-key callers. Release env and
+// per-process env are omitted unless the caller has app:env:read (or a grant
+// that expands to it, or cluster-admin).
+func presentRelease(ctx context.Context, app *ct.App, r *ct.Release) *ct.Release {
+	if r == nil {
+		return nil
+	}
+	if hideInternalLimits(ctx, app) {
+		r = redactRelease(r)
+	}
+	if !mayReadReleaseEnv(ctx, app) {
+		r = redactReleaseEnv(r)
+	}
+	return r
+}
+
+func mayReadReleaseEnv(ctx context.Context, app *ct.App) bool {
+	id, name := "", ""
+	if app != nil {
+		id, name = app.ID, app.Name
+	}
+	return authz.MayReadAppEnv(authz.TokenFromContext(ctx), id, name)
+}
+
+// redactReleaseEnv copies r with release env and per-process env removed.
+// Process commands, artifacts, and other metadata stay. The stored release
+// is not modified.
+func redactReleaseEnv(r *ct.Release) *ct.Release {
+	if r == nil {
+		return nil
+	}
+	cp := *r
+	cp.Env = nil
+	if r.Processes == nil {
+		return &cp
+	}
+	procs := make(map[string]ct.ProcessType, len(r.Processes))
+	for k, v := range r.Processes {
+		v.Env = nil
+		procs[k] = v
+	}
+	cp.Processes = procs
+	return &cp
+}
+
+func presentExpandedFormation(ctx context.Context, ef *ct.ExpandedFormation) *ct.ExpandedFormation {
+	if ef == nil {
+		return nil
+	}
+	app := ef.App
+	if hideInternal(ctx, app) && (app == nil || !app.System()) {
+		ef = redactExpandedFormation(ef)
+	}
+	if ef == nil || ef.Release == nil || mayReadReleaseEnv(ctx, app) {
+		return ef
+	}
+	cp := *ef
+	cp.Release = redactReleaseEnv(ef.Release)
+	return &cp
+}
+
+func presentExpandedFormations(ctx context.Context, list []*ct.ExpandedFormation) []*ct.ExpandedFormation {
+	if len(list) == 0 {
+		return list
+	}
+	out := make([]*ct.ExpandedFormation, len(list))
+	for i, ef := range list {
+		out[i] = presentExpandedFormation(ctx, ef)
+	}
+	return out
+}
+
+func presentEvent(ctx context.Context, app *ct.App, e *ct.Event) *ct.Event {
+	if e == nil {
+		return nil
+	}
+	hide := hideInternalToken(ctx)
+	if app != nil {
+		hide = hideInternal(ctx, app)
+	}
+	if hide {
+		e = redactEvent(e)
+	}
+	if e == nil || e.ObjectType != ct.EventTypeRelease {
+		return e
+	}
+	evApp := app
+	if evApp == nil || (e.AppID != "" && evApp.ID != e.AppID) {
+		evApp = &ct.App{ID: e.AppID}
+	}
+	if mayReadReleaseEnv(ctx, evApp) {
+		return e
+	}
+	return redactEventReleaseEnv(e)
+}
+
+func presentEvents(ctx context.Context, app *ct.App, list []*ct.Event) []*ct.Event {
+	if len(list) == 0 {
+		return list
+	}
+	out := make([]*ct.Event, 0, len(list))
+	for _, e := range list {
+		if hideInternal(ctx, app) || (app == nil && hideInternalToken(ctx)) {
+			if dropInternalEvent(e) {
+				continue
+			}
+		}
+		out = append(out, presentEvent(ctx, app, e))
+	}
+	return out
+}
+
+func redactEventReleaseEnv(e *ct.Event) *ct.Event {
+	if e == nil || e.ObjectType != ct.EventTypeRelease {
+		return e
+	}
+	var rel ct.Release
+	if json.Unmarshal(e.Data, &rel) != nil {
+		return e
+	}
+	b, err := json.Marshal(redactReleaseEnv(&rel))
+	if err != nil {
+		return e
+	}
+	cp := *e
+	cp.Data = b
+	return &cp
+}
+
 func redactRelease(r *ct.Release) *ct.Release {
 	if r == nil || r.Processes == nil {
 		return r
@@ -168,6 +298,17 @@ func redactRelease(r *ct.Release) *ct.Release {
 	cp := *r
 	cp.Processes = redactProcessTypes(r.Processes)
 	return &cp
+}
+
+func presentReleases(ctx context.Context, app *ct.App, list []*ct.Release) []*ct.Release {
+	if len(list) == 0 {
+		return list
+	}
+	out := make([]*ct.Release, len(list))
+	for i, r := range list {
+		out[i] = presentRelease(ctx, app, r)
+	}
+	return out
 }
 
 func redactReleases(list []*ct.Release) []*ct.Release {

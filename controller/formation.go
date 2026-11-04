@@ -157,10 +157,7 @@ func (c *controllerAPI) GetFormation(ctx context.Context, w http.ResponseWriter,
 			respondWithError(w, err)
 			return
 		}
-		if hideInternal(ctx, app) {
-			formation = redactExpandedFormation(formation)
-		}
-		httphelper.JSON(w, 200, formation)
+		httphelper.JSON(w, 200, presentExpandedFormation(ctx, formation))
 		return
 	}
 
@@ -221,10 +218,7 @@ func (c *controllerAPI) GetFormations(ctx context.Context, w http.ResponseWriter
 			respondWithError(w, err)
 			return
 		}
-		if hideInternalToken(ctx) {
-			list = redactExpandedFormations(list)
-		}
-		httphelper.JSON(w, 200, list)
+		httphelper.JSON(w, 200, presentExpandedFormations(ctx, list))
 		return
 	}
 
@@ -268,11 +262,8 @@ func (c *controllerAPI) streamFormations(ctx context.Context, w http.ResponseWri
 		return err
 	}
 	currentUpdatedAt := since
-	hide := hideInternalToken(ctx)
 	for _, formation := range formations {
-		if hide && formation != nil && (formation.App == nil || !formation.App.System()) {
-			formation = redactExpandedFormation(formation)
-		}
+		formation = presentExpandedFormation(ctx, formation)
 		select {
 		case <-stream.Done:
 			return nil
@@ -310,9 +301,7 @@ func (c *controllerAPI) streamFormations(ctx context.Context, w http.ResponseWri
 			if formation.UpdatedAt.Before(currentUpdatedAt) {
 				continue
 			}
-			if hide && (formation.App == nil || !formation.App.System()) {
-				formation = redactExpandedFormation(formation)
-			}
+			formation = presentExpandedFormation(ctx, formation)
 			select {
 			case <-stream.Done:
 				return nil

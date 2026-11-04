@@ -271,7 +271,12 @@ attaches a release; a cluster-admin or controller key can still create
 privileged releases for system apps. `POST /releases` requires `app_id`
 for app-scoped tokens, and minting a release needs `app:env:write` (the
 Manage and Admin roles include it). `app:scale:write` alone cannot mint
-a release. A release minted for one app cannot be attached to
+a release. `GET /apps/:id/release` and release lists stay available to any
+grant on the app, but `env` and per-process `env` are omitted unless the
+caller has `app:env:read` (View, Deploy, Manage, and Admin include it;
+`app:logs:read` and `app:scale:read` alone do not). The same omission
+applies to expanded formations and release events. The cluster key and
+cluster-admin tokens still receive env. A release minted for one app cannot be attached to
 another. One-off jobs (`POST /apps/:id/jobs`) may still *run* another
 app's release when the caller is cluster-admin, or when that release is
 the image of a resource attached to this app (`flynn redis:cli` and the

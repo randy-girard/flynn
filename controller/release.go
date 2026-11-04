@@ -70,11 +70,7 @@ func (c *controllerAPI) CreateRelease(ctx context.Context, w http.ResponseWriter
 		respondWithError(w, err)
 		return
 	}
-	if hideInternalLimits(ctx, app) {
-		httphelper.JSON(w, 200, redactRelease(release))
-		return
-	}
-	httphelper.JSON(w, 200, release)
+	httphelper.JSON(w, 200, presentRelease(ctx, app, release))
 }
 
 func (c *controllerAPI) GetAppReleases(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -94,10 +90,7 @@ func (c *controllerAPI) GetAppReleases(ctx context.Context, w http.ResponseWrite
 		respondWithError(w, err)
 		return
 	}
-	if hideInternalLimits(ctx, app) {
-		list = redactReleases(list)
-	}
-	httphelper.JSON(w, 200, list)
+	httphelper.JSON(w, 200, presentReleases(ctx, app, list))
 }
 
 func (c *controllerAPI) SetAppRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -136,10 +129,7 @@ func (c *controllerAPI) SetAppRelease(ctx context.Context, w http.ResponseWriter
 		}
 	}
 	c.appRepo.SetRelease(app, release.ID)
-	if hideInternalLimits(ctx, app) {
-		release = redactRelease(release)
-	}
-	httphelper.JSON(w, 200, release)
+	httphelper.JSON(w, 200, presentRelease(ctx, app, release))
 }
 
 func (c *controllerAPI) GetAppRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -149,10 +139,7 @@ func (c *controllerAPI) GetAppRelease(ctx context.Context, w http.ResponseWriter
 		respondWithError(w, err)
 		return
 	}
-	if hideInternalLimits(ctx, app) {
-		release = redactRelease(release)
-	}
-	httphelper.JSON(w, 200, release)
+	httphelper.JSON(w, 200, presentRelease(ctx, app, release))
 }
 
 func (c *controllerAPI) DeleteRelease(ctx context.Context, w http.ResponseWriter, req *http.Request) {

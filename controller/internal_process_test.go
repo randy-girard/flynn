@@ -172,6 +172,63 @@ func TestPreserveInternalProcessTypes(t *testing.T) {
 	}
 }
 
+func TestPresentReleaseHidesEnvWithoutEnvRead(t *testing.T) {
+	app := &ct.App{ID: "app-1", Name: "shop"}
+	rel := &ct.Release{
+		ID:  "rel-1",
+		Env: map[string]string{"DATABASE_URL": "postgres://secret", "PLAIN": "ok"},
+		Processes: map[string]ct.ProcessType{
+			"web": {Args: []string{"bin/web"}, Env: map[string]string{"TOKEN": "sekret"}},
+		},
+	}
+	with := func(perms ...string) context.Context {
+		return context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{
+			AppGrants: []authorizer.AppGrant{{AppID: app.ID, Permissions: perms}},
+		})
+	}
+
+	got := presentRelease(with("app:logs:read"), app, rel)
+	if len(got.Env) != 0 {
+		t.Fatalf("logs-only release env = %v, want omitted", got.Env)
+	}
+	if len(got.Processes["web"].Env) != 0 {
+		t.Fatalf("logs-only process env = %v, want omitted", got.Processes["web"].Env)
+	}
+	if len(got.Processes["web"].Args) != 1 || got.Processes["web"].Args[0] != "bin/web" {
+		t.Fatalf("process command must stay, got %+v", got.Processes["web"])
+	}
+	if rel.Env["DATABASE_URL"] != "postgres://secret" || rel.Processes["web"].Env["TOKEN"] != "sekret" {
+		t.Fatal("presentRelease must not mutate the stored release")
+	}
+
+	for _, perms := range [][]string{
+		{"app:env:read"},
+		{"app:env:write"},
+		{"app:read"},
+		{"app:write"},
+		{"app:admin"},
+	} {
+		got = presentRelease(with(perms...), app, rel)
+		if got.Env["DATABASE_URL"] != "postgres://secret" {
+			t.Fatalf("perms %v release env = %v, want DATABASE_URL", perms, got.Env)
+		}
+		if got.Processes["web"].Env["TOKEN"] != "sekret" {
+			t.Fatalf("perms %v process env = %v", perms, got.Processes["web"].Env)
+		}
+	}
+
+	scale := presentRelease(with("app:scale:read"), app, rel)
+	if len(scale.Env) != 0 || len(scale.Processes["web"].Env) != 0 {
+		t.Fatalf("scale:read must not receive env: release=%v process=%v", scale.Env, scale.Processes["web"].Env)
+	}
+
+	admin := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{ClusterKey: true})
+	got = presentRelease(admin, app, rel)
+	if got.Env["DATABASE_URL"] != "postgres://secret" {
+		t.Fatalf("cluster key env = %v", got.Env)
+	}
+}
+
 func TestHideInternalLimits(t *testing.T) {
 	app := &ct.App{ID: "app-1", Name: "demo", Meta: map[string]string{}}
 	jwt := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{Scopes: []string{"cluster:admin"}})

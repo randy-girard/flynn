@@ -35,14 +35,11 @@ func (c *controllerAPI) GetEvent(ctx context.Context, w http.ResponseWriter, req
 		respondWithError(w, err)
 		return
 	}
-	if hideInternalToken(ctx) {
-		if dropInternalEvent(event) {
-			respondWithError(w, ErrNotFound)
-			return
-		}
-		event = redactEvent(event)
+	if hideInternalToken(ctx) && dropInternalEvent(event) {
+		respondWithError(w, ErrNotFound)
+		return
 	}
-	httphelper.JSON(w, 200, event)
+	httphelper.JSON(w, 200, presentEvent(ctx, nil, event))
 }
 
 func (c *controllerAPI) Events(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -123,10 +120,7 @@ func listEvents(ctx context.Context, w http.ResponseWriter, req *http.Request, a
 	if err != nil {
 		return err
 	}
-	if hideInternal(ctx, app) || (app == nil && hideInternalToken(ctx)) {
-		list = redactEvents(list)
-	}
-	httphelper.JSON(w, 200, list)
+	httphelper.JSON(w, 200, presentEvents(ctx, app, list))
 	return nil
 }
 
@@ -191,12 +185,10 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 		// events are in ID DESC order, so iterate in reverse
 		for i := len(list) - 1; i >= 0; i-- {
 			e := list[i]
-			if hide {
-				if dropInternalEvent(e) {
-					continue
-				}
-				e = redactEvent(e)
+			if hide && dropInternalEvent(e) {
+				continue
 			}
+			e = presentEvent(ctx, app, e)
 			ch <- e
 			currID = e.ID
 		}
@@ -213,13 +205,10 @@ func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request,
 			if event.ID <= currID {
 				continue
 			}
-			if hide {
-				if dropInternalEvent(event) {
-					continue
-				}
-				event = redactEvent(event)
+			if hide && dropInternalEvent(event) {
+				continue
 			}
-			ch <- event
+			ch <- presentEvent(ctx, app, event)
 		}
 	}
 }
