@@ -92,11 +92,11 @@ On the first node, point `--init-discovery` at a discovery API you run
 (`DISCOVERY_SERVER` is required; there is no public hosted service):
 
 ```
-$ sudo DISCOVERY_SERVER=https://discovery.example.com flynn-host init --init-discovery
+$ sudo DISCOVERY_SERVER=https://discovery.example.com CONTROLLER_KEY=<controller key> flynn-host init --init-discovery
 https://discovery.example.com/clusters/<id>
 ```
 
-`POST /clusters` still returns that token URL. The token is the join capability: `flynn-host` presents the cluster id as `Authorization: Bearer` when it registers and lists instances. `GET /.well-known/cluster` on the discovery plugin is not a public join URL (it requires `CONTROLLER_KEY` on a cluster install).
+`POST /clusters` requires `CONTROLLER_KEY` and returns that token URL only to an authorized caller. The token is the join capability: `flynn-host` presents the cluster id as `Authorization: Bearer` when it registers and lists instances. `GET /.well-known/cluster` on the discovery plugin requires the same key.
 
 On the other nodes:
 
@@ -106,8 +106,8 @@ $ sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>
 
 To run discovery **on the cluster**, bootstrap a single node with `--peer-ips`,
 then install the discovery plugin (`sudo flynn-host plugin:install discovery`).
-The installer prints a join token (also `/etc/flynn/discovery-token`). Additional
-nodes use that token:
+The installer writes the join token to `/etc/flynn/discovery-token` (mode 0600)
+and does not print it. Additional nodes use that token:
 
 ```
 $ sudo flynn-host init --discovery https://discovery.example.com/clusters/<id>

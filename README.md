@@ -70,11 +70,11 @@ curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/instal
 
 That installs `flynn-host`, container images, and a systemd unit.
 
-**Three-node cluster** using a discovery API you run (there is no public hosted service). `--init-discovery` requires `DISCOVERY_SERVER`:
+**Three-node cluster** using a discovery API you run (there is no public hosted service). `--init-discovery` requires `DISCOVERY_SERVER` and `CONTROLLER_KEY`:
 
 ```bash
 # first node (example URL; use your own discovery API)
-sudo DISCOVERY_SERVER=https://discovery.example.com flynn-host init --init-discovery
+sudo DISCOVERY_SERVER=https://discovery.example.com CONTROLLER_KEY=<controller key> flynn-host init --init-discovery
 # prints https://discovery.example.com/clusters/<id>
 
 # other nodes

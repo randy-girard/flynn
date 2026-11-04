@@ -84,15 +84,28 @@ func TestNewTokenUsesDiscoveryServer(t *testing.T) {
 		if r.Header.Get("User-Agent") == "" {
 			t.Error("missing User-Agent")
 		}
+		if r.Header.Get("Authorization") != "Bearer controller-secret" {
+			t.Errorf("auth=%q", r.Header.Get("Authorization"))
+		}
 		w.Header().Set("Location", "/clusters/tok-1")
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
 	t.Setenv("DISCOVERY_SERVER", srv.URL)
+	t.Setenv("CONTROLLER_KEY", "controller-secret")
 
 	got, err := NewToken()
 	if err != nil || !strings.HasSuffix(got, "/clusters/tok-1") {
 		t.Fatalf("%q %v", got, err)
+	}
+}
+
+func TestNewTokenRequiresControllerKey(t *testing.T) {
+	t.Setenv("DISCOVERY_SERVER", "https://discovery.example.com")
+	t.Setenv("CONTROLLER_KEY", "")
+	_, err := NewToken()
+	if err == nil || !strings.Contains(err.Error(), "CONTROLLER_KEY") {
+		t.Fatalf("got %v", err)
 	}
 }
 

@@ -17,7 +17,7 @@ func init() {
 usage: flynn-host init [--init-discovery] [--discovery=TOKEN] [--peer-ips=IPLIST] [--external-ip=IP] [--tag <tag>]... [--max-processes=N] [--file=NAME]
 
 options:
-  --init-discovery    create a discovery token (requires DISCOVERY_SERVER, e.g. https://discovery.example.com)
+  --init-discovery    create a discovery token (requires DISCOVERY_SERVER and CONTROLLER_KEY)
   --discovery=TOKEN   join cluster with discovery token
   --peer-ips=IPLIST   join cluster using host IPs (must be already bootstrapped)
   --external-ip=IP    external IP address of host, defaults to the first IPv4 address of eth0

@@ -141,6 +141,10 @@ func NewToken() (string, error) {
 	if server == "" {
 		return "", fmt.Errorf("DISCOVERY_SERVER is not set; point it at a discovery API (example: DISCOVERY_SERVER=%s flynn-host init --init-discovery)", ExampleServer)
 	}
+	key := strings.TrimSpace(os.Getenv("CONTROLLER_KEY"))
+	if key == "" {
+		return "", fmt.Errorf("CONTROLLER_KEY is not set; POST /clusters requires it")
+	}
 	uri := server + "/clusters"
 
 	req, err := http.NewRequest("POST", uri, nil)
@@ -148,6 +152,7 @@ func NewToken() (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", fmt.Sprintf("flynn-host/%s %s-%s", version.String(), runtime.GOOS, runtime.GOARCH))
+	req.Header.Set("Authorization", "Bearer "+key)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
