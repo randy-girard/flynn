@@ -57,44 +57,74 @@ func mustParseCIDR(s string) *net.IPNet {
 }
 
 func (s *statusHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if s.k != "" {
-		var addr string
-		if fwdFor := r.Header.Get("X-Forwarded-For"); fwdFor != "" {
-			if v := strings.Split(fwdFor, ", "); len(v) > 0 {
-				addr = strings.TrimSpace(v[len(v)-1])
-			}
-		}
-		if addr == "" {
-			if clientIP, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-				addr = clientIP
-			}
-		}
+	if s.k != "" && !s.authorized(r) {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	s.h.ServeHTTP(w, r)
+}
 
-		var authed bool
-		if ip := net.ParseIP(addr); ip != nil {
-			for _, v := range s.whitelist {
-				if v.Contains(ip) {
-					authed = true
-					break
-				}
+// authorized reports whether r may skip or satisfy AUTH_KEY. The TCP peer
+// (RemoteAddr) is the only address that can whitelist-bypass the key.
+// X-Forwarded-For is trusted only when that peer is already private, which
+// is how Flynn's router presents the original client. A public socket with a
+// forged private XFF still needs the key. X-Real-IP is ignored.
+func (s *statusHandler) authorized(r *http.Request) bool {
+	socketIP := requestRemoteIP(r)
+	if s.ipTrusted(socketIP) {
+		if hop := lastForwardedFor(r); hop != "" {
+			if s.ipTrusted(hop) {
+				return true
 			}
+			return s.keyMatches(r)
 		}
+		return true
+	}
+	return s.keyMatches(r)
+}
 
-		if !authed {
-			_, password, _ := r.BasicAuth()
-			if password == "" {
-				password = r.URL.Query().Get("key")
-			}
-			authed = len(password) == len(s.k) && subtle.ConstantTimeCompare([]byte(password), []byte(s.k)) == 1
-		}
-
-		if !authed {
-			w.WriteHeader(401)
-			return
+func (s *statusHandler) ipTrusted(addr string) bool {
+	ip := net.ParseIP(addr)
+	if ip == nil {
+		return false
+	}
+	for _, n := range s.whitelist {
+		if n.Contains(ip) {
+			return true
 		}
 	}
+	return false
+}
 
-	s.h.ServeHTTP(w, r)
+func (s *statusHandler) keyMatches(r *http.Request) bool {
+	_, password, _ := r.BasicAuth()
+	if password == "" {
+		password = r.URL.Query().Get("key")
+	}
+	return len(password) == len(s.k) && subtle.ConstantTimeCompare([]byte(password), []byte(s.k)) == 1
+}
+
+func requestRemoteIP(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+func lastForwardedFor(r *http.Request) string {
+	if r == nil {
+		return ""
+	}
+	raw := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if raw == "" {
+		return ""
+	}
+	parts := strings.Split(raw, ",")
+	return strings.TrimSpace(parts[len(parts)-1])
 }
 
 var httpClient = &http.Client{Timeout: 2 * time.Second}

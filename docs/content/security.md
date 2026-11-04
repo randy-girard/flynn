@@ -68,6 +68,12 @@ bootstrap) the API **fails closed**, with these exceptions:
 After a key is set, loopback is not a bypass; the request must present
 `authKey`. Forwarded headers (`X-Forwarded-For`, `X-Real-IP`) are ignored.
 
+The cluster status app (`status.$CLUSTER_DOMAIN`) uses a separate
+`AUTH_KEY`. Private overlay, loopback, and RFC1918 TCP peers may skip
+the key so in-cluster health checks work. `X-Forwarded-For` is trusted
+only when that TCP peer is already private (Flynn's router). A public
+socket with a forged private `X-Forwarded-For` still requires the key.
+
 `flynn-host init` does **not** generate a unique per-host key. A random key
 at init would desynchronize multi-node bootstrap, which installs one shared
 secret. If `FLYNN_HOST_AUTH_KEY` is already in the environment, init persists

@@ -59,24 +59,91 @@ func TestStatusHandlerPublicIPRequiresKey(t *testing.T) {
 	}
 }
 
-func TestStatusHandlerUsesLastForwardedForHop(t *testing.T) {
+// TestStatusHandlerRejectsSpoofedXForwardedFor is the exploit regression for
+// status API auth. A public TCP peer must not skip AUTH_KEY by claiming a
+// private X-Forwarded-For hop. Status is routed at status.$CLUSTER_DOMAIN; if
+// the process is reachable without Flynn's router (or a proxy that does not
+// overwrite XFF), this header is attacker-controlled.
+func TestStatusHandlerRejectsSpoofedXForwardedFor(t *testing.T) {
 	h := newStatusHandler(status.HealthyHandler, "cluster-secret")
+
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", status.Path, nil)
 	req.RemoteAddr = "8.8.8.8:9"
-	req.Header.Set("X-Forwarded-For", "1.1.1.1, 100.64.9.9")
+	req.Header.Set("X-Forwarded-For", "100.64.9.9")
 	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Fatalf("last hop overlay IP should be trusted, status=%d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("public peer + spoofed overlay XFF must be 401, status=%d", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "9.9.9.9:9"
+	req.Header.Set("X-Forwarded-For", "1.1.1.1, 192.168.1.9")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("public peer + spoofed RFC1918 last hop must be 401, status=%d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "8.8.8.8:9"
+	req.Header.Set("X-Real-IP", "127.0.0.1")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("public peer + spoofed X-Real-IP must be 401, status=%d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "8.8.8.8:9"
+	req.Header.Set("X-Forwarded-For", "10.0.0.5")
+	req.Header.Set("X-Real-IP", "127.0.0.1")
+	req.SetBasicAuth("", "cluster-secret")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("public peer with spoofed XFF still succeeds with the key, status=%d", rec.Code)
+	}
+}
+
+func TestStatusHandlerTrustsXFFOnlyFromPrivatePeer(t *testing.T) {
+	h := newStatusHandler(status.HealthyHandler, "cluster-secret")
+
+	// Flynn router (overlay peer) + public client last hop still needs the key.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", status.Path, nil)
 	req.RemoteAddr = "100.64.1.1:9"
 	req.Header.Set("X-Forwarded-For", "8.8.8.8")
 	h.ServeHTTP(rec, req)
-	if rec.Code != 401 {
-		t.Fatalf("spoofed last hop must still require the key, status=%d", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("router peer + public last hop must require the key, status=%d", rec.Code)
+	}
+
+	// Router + overlay last hop (in-cluster via the router) is allowed.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "100.64.1.1:9"
+	req.Header.Set("X-Forwarded-For", "1.1.1.1, 100.64.9.9")
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("router peer + overlay last hop should be trusted, status=%d", rec.Code)
+	}
+
+	// Direct overlay probe with no XFF (bootstrap status-check) is allowed.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "100.64.1.2:9"
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("direct overlay probe status=%d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", status.Path, nil)
+	req.RemoteAddr = "127.0.0.1:9"
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("loopback probe status=%d", rec.Code)
 	}
 }
 

@@ -429,7 +429,10 @@ the HTTP status will be 500.
 
 Requests to the status endpoint require a `key` parameter (example:
 `https://status.1.localflynn.com/?key=$AUTH_KEY`) when they come from IP
-addresses that are not reserved for private use.
+addresses that are not reserved for private use. Forwarded headers
+(`X-Forwarded-For`, `X-Real-IP`) are ignored unless the TCP peer itself
+is already a private address (Flynn's router). A public client cannot
+skip the key by spoofing a private forwarded IP.
 
 The `$AUTH_KEY` may be retrieved with this command:
 
