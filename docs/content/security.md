@@ -230,6 +230,13 @@ app by name. View-only (`app:read`) tokens cannot push. GitHub webhooks at
 `POST /github/webhook` are authenticated with the webhook HMAC, not git
 credentials.
 
+One-off jobs (`flynn run`, `POST /apps/:id/jobs`) cannot set process type
+`slugbuilder` or `dockerbuilder`. Host classification treats those types as
+build jobs (no user namespace, extra capabilities for nested BuildKit). That
+exception is only for gitreceive compile jobs; app-scoped `app:jobs:run`
+callers get HTTP 400. Cluster-admin and system apps may still set those
+types.
+
 Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
 `slugrunner`) from jobs, logs, formations, and release process maps. Setting
 those process limits requires the cluster controller key (`flynn limit:set` or

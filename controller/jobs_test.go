@@ -678,6 +678,28 @@ func (s *S) TestRunJobAppScopedCannotSetSystemTrust(c *C) {
 	c.Assert(rec.Code, Equals, 400)
 }
 
+func (s *S) TestRunJobAppScopedRejectsBuilderType(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "run-builder-type"})
+	artifact := s.createTestArtifact(c, &ct.Artifact{})
+	hostID := fakeHostID()
+	hc := tu.NewFakeHostClient(hostID, false)
+	s.cc.AddHost(hc)
+	release := s.createTestRelease(c, app.ID, &ct.Release{ArtifactIDs: []string{artifact.ID}})
+
+	tok := &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: app.ID, Permissions: []string{"app:jobs:run"}}}}
+	for _, typ := range []string{"slugbuilder", "dockerbuilder"} {
+		rec := s.runJobWithToken(c, app, tok, &ct.NewJob{
+			ReleaseID: release.ID,
+			Type:      typ,
+			Args:      []string{"echo", "hi"},
+		})
+		c.Assert(rec.Code, Equals, 400, Commentf("type %q", typ))
+	}
+	jobs, err := hc.ListJobs()
+	c.Assert(err, IsNil)
+	c.Assert(jobs, HasLen, 0)
+}
+
 func (s *S) TestRunJobClusterAdminCanSetSystemTrust(c *C) {
 	app := s.createTestApp(c, &ct.App{Name: "run-admin-trust"})
 	artifact := s.createTestArtifact(c, &ct.Artifact{})

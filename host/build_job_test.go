@@ -20,6 +20,8 @@ func TestIsBuildJob(t *testing.T) {
 		{name: "slugbuilder", meta: map[string]string{"flynn-controller.type": "slugbuilder"}, want: true},
 		{name: "dockerbuilder", meta: map[string]string{"flynn-controller.type": "dockerbuilder"}, want: true},
 		{name: "regular app", meta: map[string]string{"flynn-controller.app_name": "myapp", "flynn-controller.type": "web"}, want: false},
+		{name: "user one-off runner", meta: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "runner"}, want: false},
+		{name: "user one-off console", meta: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "console"}, want: false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

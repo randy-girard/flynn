@@ -48,6 +48,45 @@ func TestSanitizeOneOffJobAppScopedCannotEscalate(t *testing.T) {
 	}
 }
 
+func TestSanitizeOneOffJobRejectsBuilderType(t *testing.T) {
+	app := &ct.App{ID: "app-1", Name: "shop"}
+	tok := scopedJobsRunToken(app.ID)
+	for _, typ := range []string{"slugbuilder", "dockerbuilder", "SLUGBUILDER", "slugbuilder-24", "dockerbuilder-24"} {
+		job := &ct.NewJob{Type: typ, Args: []string{"echo", "hi"}}
+		err := sanitizeOneOffJob(app, job, tok)
+		if err == nil {
+			t.Fatalf("type %q: expected rejection; builder types must not start as user one-offs", typ)
+		}
+		ve, ok := err.(ct.ValidationError)
+		if !ok || ve.Field != "type" {
+			t.Fatalf("type %q: err = %v, want type validation error", typ, err)
+		}
+	}
+
+	okJob := &ct.NewJob{Type: "runner", Args: []string{"echo", "hi"}}
+	if err := sanitizeOneOffJob(app, okJob, tok); err != nil {
+		t.Fatalf("runner one-off: %v", err)
+	}
+}
+
+func TestSanitizeOneOffJobTrustedAllowsBuilderType(t *testing.T) {
+	sys := &ct.App{ID: "gitreceive", Name: "gitreceive", Meta: map[string]string{"flynn-system-app": "true"}}
+	job := &ct.NewJob{Type: "slugbuilder"}
+	if err := sanitizeOneOffJob(sys, job, scopedJobsRunToken(sys.ID)); err != nil {
+		t.Fatalf("system app: %v", err)
+	}
+	if job.Type != "slugbuilder" {
+		t.Fatalf("Type = %q, want slugbuilder", job.Type)
+	}
+
+	user := &ct.App{ID: "app-1", Name: "shop"}
+	adminJob := &ct.NewJob{Type: "dockerbuilder"}
+	admin := &authorizer.Token{Scopes: []string{"cluster:admin"}}
+	if err := sanitizeOneOffJob(user, adminJob, admin); err != nil {
+		t.Fatalf("cluster-admin: %v", err)
+	}
+}
+
 func TestSanitizeOneOffJobAppScopedDropsSystemWithoutProfiles(t *testing.T) {
 	app := &ct.App{ID: "app-1", Name: "shop"}
 	job := &ct.NewJob{

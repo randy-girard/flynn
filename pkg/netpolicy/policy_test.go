@@ -26,6 +26,11 @@ func TestClassifyJob(t *testing.T) {
 			want: ClassUser,
 		},
 		{
+			name: "user one-off runner stays user class",
+			job:  &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "runner"}},
+			want: ClassUser,
+		},
+		{
 			name: "dockerbuilder is build not user",
 			job: &host.Job{Metadata: map[string]string{
 				"flynn-controller.app_name": "shop",

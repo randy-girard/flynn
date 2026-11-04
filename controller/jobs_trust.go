@@ -15,13 +15,18 @@ const (
 
 // sanitizeOneOffJob strips host-trust knobs from a one-off job request unless
 // the target app is a system app or tok is a cluster-admin credential.
-// App-scoped jobs:run callers cannot mint a system-class host job.
+// App-scoped jobs:run callers cannot mint a system-class host job, and cannot
+// select slugbuilder/dockerbuilder types (those classify as build jobs with
+// extra capabilities and no user namespace).
 func sanitizeOneOffJob(app *ct.App, newJob *ct.NewJob, tok *authorizer.Token) error {
 	if newJob == nil {
 		return nil
 	}
 	if oneOffJobTrusted(app, tok) {
 		return nil
+	}
+	if ct.IsBuilderProcessType(newJob.Type) {
+		return ct.ValidationError{Field: "type", Message: "slugbuilder and dockerbuilder are not permitted on one-off jobs"}
 	}
 	stripReservedJobMeta(newJob.Meta)
 	if newJob.Partition == ct.PartitionTypeSystem {
