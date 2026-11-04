@@ -301,3 +301,58 @@ func TestStripSystemAppMetaUnlessAdmin(t *testing.T) {
 		t.Fatal("cluster key must still be able to create system apps")
 	}
 }
+
+func TestRedactLogLineOmitsReleaseEnv(t *testing.T) {
+	rel := &ct.Release{
+		Env: map[string]string{
+			"DATABASE_URL": "postgres://user:s3cret-db@10.0.0.1/app",
+			"PLAIN":        "ok",
+			"FLAG":         "true",
+		},
+		Processes: map[string]ct.ProcessType{
+			"web": {Env: map[string]string{"TOKEN": "web-token-secret"}},
+		},
+	}
+	line := []byte(`{"process_type":"web","msg":"connecting postgres://user:s3cret-db@10.0.0.1/app token=web-token-secret flag=true status=ok"}`)
+	got := string(redactLogLine(line, releaseLogSecrets(rel)))
+	if strings.Contains(got, "s3cret-db") || strings.Contains(got, "web-token-secret") {
+		t.Fatalf("release env leaked into log line: %s", got)
+	}
+	if !strings.Contains(got, "connecting") || !strings.Contains(got, "flag=true") || !strings.Contains(got, "status=ok") {
+		t.Fatalf("non-secret log text changed: %s", got)
+	}
+	if !strings.Contains(got, logRedacted) {
+		t.Fatalf("want %s marker: %s", logRedacted, got)
+	}
+
+	// A quote in the env value is JSON-escaped inside the log line.
+	quoted := &ct.Release{Env: map[string]string{"PASS": `pass"word-secret`}}
+	escaped, err := json.Marshal(`token=pass"word-secret`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := append([]byte(`{"msg":`), escaped...)
+	raw = append(raw, '}')
+	got = string(redactLogLine(raw, releaseLogSecrets(quoted)))
+	if strings.Contains(got, "word-secret") {
+		t.Fatalf("json-escaped release env leaked: %s", got)
+	}
+}
+
+func TestRedactLogStreamOmitsReleaseEnv(t *testing.T) {
+	rel := &ct.Release{Env: map[string]string{"DATABASE_URL": "postgres://user:s3cret-db@10.0.0.1/app"}}
+	in := io.NopCloser(strings.NewReader("{\"msg\":\"postgres://user:s3cret-db@10.0.0.1/app\"}\n{\"msg\":\"hello\"}\n"))
+	rc := redactLogSecrets(in, releaseLogSecrets(rel))
+	defer rc.Close()
+	buf, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(buf)
+	if strings.Contains(got, "s3cret-db") {
+		t.Fatalf("stream leaked release env: %s", got)
+	}
+	if !strings.Contains(got, "hello") || !strings.Contains(got, logRedacted) {
+		t.Fatalf("stream = %s", got)
+	}
+}

@@ -149,6 +149,16 @@ func (c *controllerAPI) AppLog(ctx context.Context, w http.ResponseWriter, req *
 	if hide {
 		rc = filterInternalProcessLogs(rc)
 	}
+	// Logs-only callers can read the stream, but current release env values
+	// (and per-process env) are stripped. app:env:read, cluster-admin, and
+	// the cluster key still see the raw lines.
+	if !mayReadReleaseEnv(ctx, app) {
+		if rel, err := c.appRepo.GetRelease(app.ID); err == nil {
+			if secrets := releaseLogSecrets(rel); len(secrets) > 0 {
+				rc = redactLogSecrets(rc, secrets)
+			}
+		}
+	}
 
 	if cn, ok := w.(http.CloseNotifier); ok {
 		ch := cn.CloseNotify()

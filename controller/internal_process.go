@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"encoding/json"
 	"io"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/randy-girard/flynn/controller/authz"
@@ -458,6 +460,125 @@ func lockInternalProcessCounts(existing, incoming map[string]int) map[string]int
 	}
 	stripInternalProcessCounts(incoming)
 	return preserveInternalProcessCounts(incoming, existing)
+}
+
+// minLogSecretLen skips short release env values ("true", "1", "web") so
+// log redaction does not punch holes in ordinary log text. Longer values
+// are treated as secrets when the caller cannot read app env.
+const minLogSecretLen = 8
+
+const logRedacted = "[redacted]"
+
+// releaseLogSecrets is the current release and per-process env values that
+// must not appear in log lines for a caller without app:env:read.
+// Longer values come first so a short secret cannot eat a longer one.
+func releaseLogSecrets(rel *ct.Release) []string {
+	if rel == nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	add := func(v string) {
+		if len(strings.TrimSpace(v)) < minLogSecretLen {
+			return
+		}
+		seen[v] = struct{}{}
+	}
+	for _, v := range rel.Env {
+		add(v)
+	}
+	for _, p := range rel.Processes {
+		for _, v := range p.Env {
+			add(v)
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for v := range seen {
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if len(out[i]) != len(out[j]) {
+			return len(out[i]) > len(out[j])
+		}
+		return out[i] < out[j]
+	})
+	return out
+}
+
+// logSecretReplacer is built once per log request. It replaces each secret
+// and, when encoding/json would escape it inside a log line, that escaped
+// form too.
+func logSecretReplacer(secrets []string) *strings.Replacer {
+	pairs := make([]string, 0, len(secrets)*4)
+	seen := make(map[string]struct{}, len(secrets))
+	add := func(old string) {
+		if old == "" {
+			return
+		}
+		if _, ok := seen[old]; ok {
+			return
+		}
+		seen[old] = struct{}{}
+		pairs = append(pairs, old, logRedacted)
+	}
+	for _, secret := range secrets {
+		add(secret)
+		if esc := jsonStringContents(secret); esc != secret {
+			add(esc)
+		}
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+	return strings.NewReplacer(pairs...)
+}
+
+func jsonStringContents(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil || len(b) < 2 {
+		return s
+	}
+	return string(b[1 : len(b)-1])
+}
+
+func redactLogLine(line []byte, secrets []string) []byte {
+	rep := logSecretReplacer(secrets)
+	if rep == nil {
+		return append([]byte(nil), line...)
+	}
+	return []byte(rep.Replace(string(line)))
+}
+
+// redactLogSecrets filters an NDJSON log stream. The replacer is built once
+// for the request; each line is copied so the scanner buffer can be reused.
+func redactLogSecrets(r io.ReadCloser, secrets []string) io.ReadCloser {
+	rep := logSecretReplacer(secrets)
+	if rep == nil {
+		return r
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		defer r.Close()
+		sc := bufio.NewScanner(r)
+		sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		var err error
+		for sc.Scan() {
+			line := rep.Replace(sc.Text())
+			if _, err = pw.Write([]byte(line)); err != nil {
+				break
+			}
+			if _, err = pw.Write([]byte("\n")); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = sc.Err()
+		}
+		pw.CloseWithError(err)
+	}()
+	return pr
 }
 
 func logLineInternalProcess(raw []byte) bool {
