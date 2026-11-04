@@ -18,6 +18,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/types"
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
@@ -1542,6 +1543,7 @@ func (in *Installer) startClusterUpgrades(m *Manifest) {
 		return
 	}
 	req.Close = true
+	appliancehttp.SetAuth(req, appliancehttp.Key())
 	res, err := in.http().Do(req)
 	if err != nil {
 		in.logf("instance upgrades: %v", err)

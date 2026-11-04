@@ -153,6 +153,8 @@ func TestRunBuildRequiresFlynnCheckout(t *testing.T) {
 }
 
 func TestStartClusterUpgradesPostsAfterPing(t *testing.T) {
+	t.Setenv("CONTROLLER_KEY", "cluster-secret")
+	t.Setenv("AUTH_KEY", "")
 	posted := false
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ping", func(w http.ResponseWriter, _ *http.Request) {
@@ -161,6 +163,11 @@ func TestStartClusterUpgradesPostsAfterPing(t *testing.T) {
 	mux.HandleFunc("/cluster/upgrades", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("method %s", r.Method)
+		}
+		_, pass, ok := r.BasicAuth()
+		if !ok || pass != "cluster-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
 		}
 		posted = true
 		w.WriteHeader(http.StatusAccepted)
