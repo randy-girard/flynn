@@ -66,8 +66,8 @@ func TestBuildJob(t *testing.T) {
 
 func TestDockerBuildJobEnv(t *testing.T) {
 	env := dockerBuildJobEnv("secret-key", "artifact-id", "abc123", nil, "app-1")
-	if env["CONTROLLER_KEY"] != "secret-key" {
-		t.Fatalf("CONTROLLER_KEY = %q", env["CONTROLLER_KEY"])
+	if _, ok := env["CONTROLLER_KEY"]; ok {
+		t.Fatal("CONTROLLER_KEY must not be copied into dockerbuilder env")
 	}
 	if env["IMAGE_ARTIFACT_ID"] != "artifact-id" {
 		t.Fatalf("IMAGE_ARTIFACT_ID = %q", env["IMAGE_ARTIFACT_ID"])
@@ -305,19 +305,25 @@ func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	}
 }
 
-// TestApplyBuildCredentialNoSigner verifies back-compat: with no signing key the
-// job is left untouched (legacy CONTROLLER_KEY env behavior).
-func TestApplyBuildCredentialNoSigner(t *testing.T) {
+// TestApplyBuildCredentialRequiresSigner is the exploit regression: a build
+// with no ACCESS_TOKEN_SIGNING_KEY used to keep CONTROLLER_KEY in job env
+// (cluster-admin, visible in container config and /proc until build.sh
+// relocated it). That fallback is gone; the job must not start.
+func TestApplyBuildCredentialRequiresSigner(t *testing.T) {
 	app := &ct.App{ID: "app-1", Name: "myapp"}
 	job := &host.Job{Config: host.ContainerConfig{Env: map[string]string{
 		"CONTROLLER_KEY": "cluster-god-key",
 	}}}
 
-	if err := applyBuildCredential(nil, job, app, nil); err != nil {
-		t.Fatalf("applyBuildCredential(nil): %s", err)
+	err := applyBuildCredential(nil, job, app, nil)
+	if err == nil {
+		t.Fatal("expected error when no signer; CONTROLLER_KEY fallback is removed")
 	}
-	if job.Config.Env["CONTROLLER_KEY"] != "cluster-god-key" {
-		t.Fatal("legacy CONTROLLER_KEY must be preserved when no signer configured")
+	if !strings.Contains(err.Error(), "ACCESS_TOKEN_SIGNING_KEY") {
+		t.Fatalf("error = %q, want ACCESS_TOKEN_SIGNING_KEY", err)
+	}
+	if _, ok := job.Config.Env["CONTROLLER_KEY"]; ok {
+		t.Fatal("CONTROLLER_KEY must be stripped even when the build is rejected")
 	}
 	if len(job.Config.Secrets) != 0 {
 		t.Fatal("no secret should be added when no signer configured")

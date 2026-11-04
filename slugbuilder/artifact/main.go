@@ -53,10 +53,10 @@ func main() {
 
 // newControllerClient builds a controller client for create-artifact. It
 // prefers a minted, app-scoped build token delivered via a root-only secret
-// mount (authenticated with a bearer token), and falls back to the legacy
-// cluster-wide CONTROLLER_KEY for clusters not yet re-bootstrapped with a
-// signing key. Neither credential is exposed as an environment variable to
-// buildpack code (SEC-003).
+// mount (authenticated with a bearer token). A leftover CONTROLLER_KEY file
+// at /run/secrets/controller_key is accepted only as defense in depth if
+// gitreceive still relocated one. Gitreceive no longer injects CONTROLLER_KEY
+// into build job env.
 func newControllerClient() (client controller.Client, usedToken bool, err error) {
 	if token := readSecret("/run/secrets/controller_token"); token != "" {
 		c, err := controller.NewClientWithToken("", token)

@@ -188,14 +188,14 @@ app's `-cache.tgz` / `-docker-cache.tgz` objects. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
 controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
 
-When gitreceive can mint a scoped build token it mounts it at
-`/run/secrets/controller_token` and does **not** put `CONTROLLER_KEY` in
-the build job environment (it would otherwise remain in the container
-config and `/proc` environ). When `ACCESS_TOKEN_SIGNING_KEY` is unset,
-gitreceive still injects `CONTROLLER_KEY` so older hosts keep working;
-`build.sh` relocates that key to `/run/secrets/controller_key` and unsets
-the env before buildpack code runs. Treat that fallback as a temporary
-upgrade path, not a security boundary.
+Gitreceive requires `ACCESS_TOKEN_SIGNING_KEY` to mint a scoped
+`build:artifacts` token and mounts it at `/run/secrets/controller_token`.
+It does **not** put `CONTROLLER_KEY` in slugbuilder or dockerbuilder
+environment (that key would otherwise remain in the container config and
+`/proc` environ). A cluster without a signing key fails the build with a
+clear operator error instead of injecting the cluster-admin key.
+`build.sh` still relocates a leftover `CONTROLLER_KEY` to
+`/run/secrets/controller_key` and unsets the env if one is present.
 
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, postgres

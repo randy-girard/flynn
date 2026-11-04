@@ -164,13 +164,13 @@ func resolveBuildTimeout(releaseEnv map[string]string) time.Duration {
 }
 
 // buildSigner returns the token signer configured via ACCESS_TOKEN_SIGNING_KEY,
-// or nil (no error) when scoped build tokens are not fully configured, in which
-// case the receiver falls back to the legacy CONTROLLER_KEY behavior so
-// existing clusters keep working until re-bootstrapped. Both the signing key
-// and the matching public verify key (ACCESS_TOKEN_KEY, which controller and
-// tarreceive need) must be present and form a valid keypair before minting
-// tokens; a mismatched pair (e.g. after a partial cluster update) would
-// otherwise produce bearer tokens the controller rejects with 401.
+// or nil (no error) when scoped build tokens are not fully configured.
+// applyBuildCredential then fails the build; CONTROLLER_KEY is never copied
+// into slugbuilder/dockerbuilder env. Both the signing key and the matching
+// public verify key (ACCESS_TOKEN_KEY, which controller and tarreceive need)
+// must be present and form a valid keypair before minting tokens; a mismatched
+// pair (e.g. after a partial cluster update) would otherwise produce bearer
+// tokens the controller rejects with 401.
 func buildSigner() (*tokensigner.Signer, error) {
 	publicKey := os.Getenv("ACCESS_TOKEN_KEY")
 	if publicKey == "" {
@@ -203,16 +203,18 @@ func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) 
 	})
 }
 
-// applyBuildCredential delivers the build credential to a job. When a signing
-// key is configured it mints an app-scoped token and delivers it via a root-only
-// secret mount, then removes CONTROLLER_KEY from the job env (SEC-011). The
-// scoped token authenticates to the controller, tarreceive, and blobstore
-// slug/tarreceive paths. Hosts that cannot mount ContainerSecrets will fail
-// those builds until they are updated; clusters without a signing key keep
-// the legacy CONTROLLER_KEY env (still relocated by build.sh, SEC-003).
+// applyBuildCredential delivers the build credential to a job. It mints an
+// app-scoped token and mounts it at a root-only secret path, then removes
+// CONTROLLER_KEY from the job env if a caller still set it. The scoped token
+// authenticates to the controller, tarreceive, and blobstore slug/tarreceive
+// paths. A missing signing key fails the build; cluster-admin CONTROLLER_KEY
+// is never left in build job environment.
 func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App, releaseEnv map[string]string) error {
+	if job != nil && job.Config.Env != nil {
+		delete(job.Config.Env, "CONTROLLER_KEY")
+	}
 	if signer == nil {
-		return nil
+		return fmt.Errorf("ACCESS_TOKEN_SIGNING_KEY is required to mint a scoped build token; CONTROLLER_KEY is no longer placed in build job environment")
 	}
 	token, err := mintBuildToken(signer, app, resolveBuildTimeout(releaseEnv))
 	if err != nil {
@@ -222,9 +224,6 @@ func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App
 		Path: buildTokenPath,
 		Data: []byte(token),
 	})
-	if job.Config.Env != nil {
-		delete(job.Config.Env, "CONTROLLER_KEY")
-	}
 	return nil
 }
 
@@ -500,7 +499,6 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	slugImageID := random.UUID()
 	jobEnv := map[string]string{
 		"BUILD_CACHE_URL": signedBuildCacheURL(app.ID, os.Getenv("CONTROLLER_KEY")),
-		"CONTROLLER_KEY":  os.Getenv("CONTROLLER_KEY"),
 		"SLUG_IMAGE_ID":   slugImageID,
 		"SOURCE_VERSION":  args.String["<rev>"],
 		"STACK":           stackName,
@@ -689,7 +687,6 @@ func localHostID() string {
 // DOCKERFILE override is copied from the release env when present.
 func dockerBuildJobEnv(controllerKey, imageArtifactID, sourceVersion string, releaseEnv map[string]string, appID string) map[string]string {
 	jobEnv := map[string]string{
-		"CONTROLLER_KEY":    controllerKey,
 		"IMAGE_ARTIFACT_ID": imageArtifactID,
 		"SOURCE_VERSION":    sourceVersion,
 		"BUILDKITD_FLAGS":   "--root=/tmp/buildkitd --oci-worker-snapshotter=native",
