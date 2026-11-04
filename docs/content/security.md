@@ -221,6 +221,10 @@ User and build jobs cannot open the host control plane: SSH (`:22`),
 host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).
 DNS to the overlay gateway (`:53`) is allowed. flynn-host registers user
 HTTP backends with discoverd; the job never receives a `DISCOVERD` URL.
+`DISCOVERD_AUTH_KEY` is not written into user or build `/.containerconfig`
+or the workload environment, including when a release env contains it.
+System and datastore jobs still receive the key so they can register
+with discoverd.
 
 `flynn-host pg:psql` opens the platform database and requires the cluster
 controller key on the host. Dashboard tokens scoped to user apps cannot open

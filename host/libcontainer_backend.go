@@ -220,7 +220,7 @@ type Container struct {
 	*containerinit.Client
 }
 
-func writeContainerConfig(path string, c *containerinit.Config, envs ...map[string]string) error {
+func writeContainerConfig(path string, job *host.Job, c *containerinit.Config, envs ...map[string]string) error {
 	// SEC-014: create config file with restrictive permissions (0600) to
 	// prevent other processes from reading sensitive environment variables.
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
@@ -229,7 +229,7 @@ func writeContainerConfig(path string, c *containerinit.Config, envs ...map[stri
 	}
 	defer f.Close()
 
-	c.Env = jobenv.Merge(envs...)
+	c.Env = jobenv.ContainerEnv(netpolicy.ClassifyJob(job), envs...)
 
 	return json.NewEncoder(f).Encode(c)
 }
@@ -987,14 +987,16 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 			systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
 		}
 	}
-	// Every job's containerinit must authenticate to discoverd to register
-	// services. User child processes still omit the key via childEnv hide.
+	// System and datastore jobs register with discoverd from containerinit.
+	// User and build jobs do not get the key: ContainerEnv strips it from
+	// /.containerconfig even if a release env copied it in. flynn-host
+	// registers user HTTP backends.
 	if key := os.Getenv("DISCOVERD_AUTH_KEY"); key != "" {
 		systemEnv["DISCOVERD_AUTH_KEY"] = key
 	}
 	userEnv := userJobInitEnv(job)
 	l.envMtx.RLock()
-	err = writeContainerConfig(configPath, initConfig,
+	err = writeContainerConfig(configPath, job, initConfig,
 		map[string]string{
 			"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 			"TERM": "xterm",
