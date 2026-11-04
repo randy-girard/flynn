@@ -26,6 +26,13 @@ func ReleaseEnv(m *Manifest, artifactID string, cluster map[string]string) map[s
 			env[key] = v
 		}
 	}
+	if m != nil && m.Dashboard != nil && strings.TrimSpace(env["DASHBOARD_SSO_JWKS_URL"]) == "" {
+		if v := strings.TrimSpace(cluster["DASHBOARD_SSO_JWKS_URL"]); v != "" {
+			env["DASHBOARD_SSO_JWKS_URL"] = v
+		} else {
+			env["DASHBOARD_SSO_JWKS_URL"] = "http://dashboard.discoverd/.well-known/jwks.json"
+		}
+	}
 	for k, v := range m.ImageEnv {
 		if v == ImageSelf {
 			env[k] = artifactID

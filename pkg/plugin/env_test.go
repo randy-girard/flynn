@@ -184,8 +184,29 @@ func TestClusterEnvCopiesDashboardMetricsSecret(t *testing.T) {
 	if env["DASHBOARD_METRICS_URL"] != "http://dashboard.discoverd/webhooks/plugin-metrics" {
 		t.Fatalf("DASHBOARD_METRICS_URL=%q", env["DASHBOARD_METRICS_URL"])
 	}
+	if env["DASHBOARD_SSO_JWKS_URL"] != "http://dashboard.discoverd/.well-known/jwks.json" {
+		t.Fatalf("DASHBOARD_SSO_JWKS_URL=%q", env["DASHBOARD_SSO_JWKS_URL"])
+	}
 	if env["DATABASE_URL"] != "" {
 		t.Fatalf("must not copy dashboard DATABASE_URL onto other plugins: %q", env["DATABASE_URL"])
+	}
+}
+
+func TestReleaseEnvSetsDashboardJWKS(t *testing.T) {
+	env := ReleaseEnv(&Manifest{Dashboard: &DashboardSpec{}}, "art", map[string]string{})
+	if env["DASHBOARD_SSO_JWKS_URL"] != "http://dashboard.discoverd/.well-known/jwks.json" {
+		t.Fatalf("%v", env["DASHBOARD_SSO_JWKS_URL"])
+	}
+	env = ReleaseEnv(&Manifest{
+		Dashboard: &DashboardSpec{},
+		InjectEnv: []string{"DASHBOARD_SSO_JWKS_URL"},
+	}, "art", map[string]string{"DASHBOARD_SSO_JWKS_URL": "http://dashboard.discoverd/.well-known/jwks.json"})
+	if env["DASHBOARD_SSO_JWKS_URL"] != "http://dashboard.discoverd/.well-known/jwks.json" {
+		t.Fatalf("listed inject %v", env["DASHBOARD_SSO_JWKS_URL"])
+	}
+	plain := ReleaseEnv(&Manifest{}, "art", map[string]string{"DASHBOARD_SSO_JWKS_URL": "http://dashboard.discoverd/.well-known/jwks.json"})
+	if plain["DASHBOARD_SSO_JWKS_URL"] != "" {
+		t.Fatalf("plugin without a dashboard got %v", plain["DASHBOARD_SSO_JWKS_URL"])
 	}
 }
 
