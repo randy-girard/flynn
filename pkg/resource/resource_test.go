@@ -73,6 +73,39 @@ func TestProvisionIncludesNonJSONBody(t *testing.T) {
 	}
 }
 
+func TestProvisionAndDeprovisionSendControllerKey(t *testing.T) {
+	t.Setenv("CONTROLLER_KEY", "cluster-secret")
+	t.Setenv("AUTH_KEY", "other-secret")
+	var postOK, deleteOK bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, pass, ok := r.BasicAuth()
+		if !ok || pass != "cluster-secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodPost {
+			postOK = true
+			_ = json.NewEncoder(w).Encode(Resource{ID: "db"})
+			return
+		}
+		if r.Method == http.MethodDelete && r.URL.Query().Get("id") == "db" {
+			deleteOK = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	got, err := Provision(srv.URL+"/databases", []byte(`{}`))
+	if err != nil || got.ID != "db" || !postOK {
+		t.Fatalf("provision err=%v id=%v sent=%v", err, got, postOK)
+	}
+	if err := Deprovision(srv.URL+"/databases", "db"); err != nil || !deleteOK {
+		t.Fatalf("deprovision err=%v sent=%v", err, deleteOK)
+	}
+}
+
 func TestProvisionSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

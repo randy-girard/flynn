@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/randy-girard/flynn/pkg/appliancehttp"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/resname"
 )
@@ -19,7 +20,13 @@ type Resource struct {
 }
 
 func Provision(uri string, config []byte) (*Resource, error) {
-	res, err := hh.ProvisionClient.Post(uri, "application/json", bytes.NewBuffer(config))
+	req, err := http.NewRequest(http.MethodPost, uri, bytes.NewReader(config))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	appliancehttp.SetAuth(req, appliancehttp.Key())
+	res, err := hh.ProvisionClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -72,6 +79,7 @@ func Deprovision(uri, id string) error {
 	if err != nil {
 		return err
 	}
+	appliancehttp.SetAuth(req, appliancehttp.Key())
 	res, err := hh.RetryClient.Do(req)
 	if err != nil {
 		return err
