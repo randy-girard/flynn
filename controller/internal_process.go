@@ -247,6 +247,9 @@ func presentEvent(ctx context.Context, app *ct.App, e *ct.Event) *ct.Event {
 	if hide {
 		e = redactEvent(e)
 	}
+	if !mayExportRouteKey(ctx) {
+		e = omitEventRouteKey(e)
+	}
 	if e == nil || e.ObjectType != ct.EventTypeRelease {
 		return e
 	}

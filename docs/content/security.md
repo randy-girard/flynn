@@ -246,7 +246,14 @@ HTTP routes (`example.com/api`) can only be created with
 point a route at a discoverd service this app owns (`$APP-web` /
 `$APP-$TYPE`, or a `service` declared on the current release). Routing to
 system services (`controller`, `blobstore`, `postgres-api`, dashboard, www,
-discovery) requires the cluster controller key.
+discovery) requires the cluster controller key. `GET` route and route list
+responses include the public certificate and omit `certificate.key` and
+`tls_key` unless the caller is the cluster key or has `cluster:admin`.
+The same omission applies to route events. `POST` and `PUT` still accept
+a private key from `app:routes:write`. An update that repeats the stored
+certificate and leaves the key empty keeps the stored key, so reading a
+route and writing it back does not remove TLS. The router keeps using
+the stored key to terminate HTTPS.
 
 Applications run in a user namespace: container UID 0 is an unprivileged
 host UID (≥ 1_000_000). Overlay squashfs layers stay owned by host 0/5000

@@ -10,6 +10,7 @@ import (
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/data"
 	"github.com/randy-girard/flynn/controller/schema"
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	router "github.com/randy-girard/flynn/router/types"
@@ -93,7 +94,90 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	httphelper.JSON(w, 200, &route)
+	httphelper.JSON(w, 200, presentRoute(ctx, &route))
+}
+
+// mayExportRouteKey is true for internal callers, the cluster key, and
+// cluster-admin tokens. App grants, including app:routes:read and
+// app:routes:write, do not receive TLS private keys.
+func mayExportRouteKey(ctx context.Context) bool {
+	return authz.TokenFromContext(ctx).HasClusterAdmin()
+}
+
+// presentRoute copies route with certificate.key and tls_key removed when
+// the caller cannot export private keys. The public certificate stays.
+// The stored route is not modified.
+func presentRoute(ctx context.Context, route *router.Route) *router.Route {
+	if route == nil || mayExportRouteKey(ctx) {
+		return route
+	}
+	return omitRoutePrivateKey(route)
+}
+
+func presentRoutes(ctx context.Context, routes []*router.Route) []*router.Route {
+	if len(routes) == 0 || mayExportRouteKey(ctx) {
+		return routes
+	}
+	out := make([]*router.Route, len(routes))
+	for i, route := range routes {
+		out[i] = omitRoutePrivateKey(route)
+	}
+	return out
+}
+
+func omitRoutePrivateKey(route *router.Route) *router.Route {
+	if route == nil {
+		return nil
+	}
+	cp := *route
+	cp.LegacyTLSKey = ""
+	if route.Certificate != nil {
+		cert := *route.Certificate
+		cert.Key = ""
+		cp.Certificate = &cert
+	}
+	return &cp
+}
+
+// keepStoredRouteKey restores the stored private key when an update repeats
+// the public certificate and leaves the key empty. GET omits the key, so a
+// client that writes the route back must not wipe TLS. A different
+// certificate still requires a key.
+func keepStoredRouteKey(incoming, stored *router.Route) {
+	if incoming == nil || stored == nil || stored.Certificate == nil {
+		return
+	}
+	storedKey := strings.TrimSpace(stored.Certificate.Key)
+	storedCert := strings.TrimSpace(stored.Certificate.Cert)
+	if storedKey == "" || storedCert == "" {
+		return
+	}
+	if incoming.Certificate != nil &&
+		strings.TrimSpace(incoming.Certificate.Key) == "" &&
+		strings.TrimSpace(incoming.Certificate.Cert) == storedCert {
+		incoming.Certificate.Key = stored.Certificate.Key
+	}
+	if strings.TrimSpace(incoming.LegacyTLSKey) == "" &&
+		strings.TrimSpace(incoming.LegacyTLSCert) == storedCert {
+		incoming.LegacyTLSKey = stored.Certificate.Key
+	}
+}
+
+func omitEventRouteKey(e *ct.Event) *ct.Event {
+	if e == nil || (e.ObjectType != ct.EventTypeRoute && e.ObjectType != ct.EventTypeRouteDeletion) {
+		return e
+	}
+	var route router.Route
+	if json.Unmarshal(e.Data, &route) != nil {
+		return e
+	}
+	b, err := json.Marshal(omitRoutePrivateKey(&route))
+	if err != nil {
+		return e
+	}
+	cp := *e
+	cp.Data = b
+	return &cp
 }
 
 func (c *controllerAPI) GetRoute(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -103,7 +187,7 @@ func (c *controllerAPI) GetRoute(ctx context.Context, w http.ResponseWriter, req
 		return
 	}
 	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), route)
-	httphelper.JSON(w, 200, route)
+	httphelper.JSON(w, 200, presentRoute(ctx, route))
 }
 
 type sortedRoutes []*router.Route
@@ -120,7 +204,7 @@ func (c *controllerAPI) GetRouteList(ctx context.Context, w http.ResponseWriter,
 	}
 	routes = c.filterRoutes(ctx, routes)
 	sort.Sort(sortedRoutes(routes))
-	httphelper.JSON(w, 200, routes)
+	httphelper.JSON(w, 200, presentRoutes(ctx, routes))
 }
 
 func (c *controllerAPI) GetAppRouteList(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -136,7 +220,7 @@ func (c *controllerAPI) GetAppRouteList(ctx context.Context, w http.ResponseWrit
 		return
 	}
 	sort.Sort(sortedRoutes(routes))
-	httphelper.JSON(w, 200, routes)
+	httphelper.JSON(w, 200, presentRoutes(ctx, routes))
 }
 
 func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, req *http.Request) {
@@ -178,6 +262,7 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	if !c.enforceRouteServiceOwnership(ctx, w, c.getApp(ctx), route.Service) {
 		return
 	}
+	keepStoredRouteKey(&route, existing)
 
 	// Check if ACME is enabled when managed certificate is requested
 	if route.ManagedCertificateDomain != nil && *route.ManagedCertificateDomain != "" {
@@ -203,7 +288,7 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), &route)
-	httphelper.JSON(w, 200, route)
+	httphelper.JSON(w, 200, presentRoute(ctx, &route))
 }
 
 func (c *controllerAPI) DeleteRoute(ctx context.Context, w http.ResponseWriter, req *http.Request) {
