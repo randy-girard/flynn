@@ -195,6 +195,63 @@ func TestEnableJobIsolationDeletesLegacyOverlayDrop(t *testing.T) {
 	}
 }
 
+func TestDatastoreHostRulesDropSSHAndAPIOnly(t *testing.T) {
+	for _, port := range []string{"22", "1113"} {
+		in := strings.Join(DataToHostPortDropArgs(port), " ")
+		if !strings.Contains(in, "INPUT") || !strings.Contains(in, "flynn-net-data src") || !strings.Contains(in, "--dport "+port) || !strings.Contains(in, "DROP") || !strings.Contains(in, "--ctstate NEW") {
+			t.Fatalf("data INPUT drop %s = %q", port, in)
+		}
+		fwd := strings.Join(DataToNodePortDropArgs(port), " ")
+		if !strings.Contains(fwd, "FORWARD") || !strings.Contains(fwd, "flynn-net-data src") || !strings.Contains(fwd, NodeSet) || !strings.Contains(fwd, "--dport "+port) || !strings.Contains(fwd, "DROP") {
+			t.Fatalf("data node drop %s = %q", port, fwd)
+		}
+	}
+	dns := strings.Join(DataToHostDNSArgs("udp"), " ")
+	if !strings.Contains(dns, "INPUT") || !strings.Contains(dns, "flynn-net-data src") || !strings.Contains(dns, "--dport 53") || !strings.Contains(dns, "ACCEPT") {
+		t.Fatalf("data DNS allow = %q", dns)
+	}
+	disc := strings.Join(DataToHostDiscoverdArgs(), " ")
+	if !strings.Contains(disc, "INPUT") || !strings.Contains(disc, "flynn-net-data src") || !strings.Contains(disc, "--dport 1111") || !strings.Contains(disc, "ACCEPT") {
+		t.Fatalf("data discoverd allow = %q", disc)
+	}
+	src, err := os.ReadFile("iptables.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(src)
+	hostIso := body
+	if i := strings.Index(body, "func EnableHostIsolation"); i >= 0 {
+		hostIso = body[i:]
+	}
+	for _, needle := range []string{
+		`DataToHostPortDropArgs("22")`,
+		`DataToHostPortDropArgs("1113")`,
+		`DataToHostDNSArgs("udp")`,
+		`DataToHostDNSArgs("tcp")`,
+		"DataToHostDiscoverdArgs()",
+	} {
+		if !strings.Contains(hostIso, needle) {
+			t.Fatalf("EnableHostIsolation missing %s", needle)
+		}
+	}
+	jobIso := body
+	if i := strings.Index(body, "func EnableJobIsolation"); i >= 0 {
+		if j := strings.Index(body[i+1:], "\nfunc "); j >= 0 {
+			jobIso = body[i : i+1+j]
+		} else {
+			jobIso = body[i:]
+		}
+	}
+	for _, needle := range []string{
+		`DataToNodePortDropArgs("22")`,
+		`DataToNodePortDropArgs("1113")`,
+	} {
+		if !strings.Contains(jobIso, needle) {
+			t.Fatalf("EnableJobIsolation missing %s", needle)
+		}
+	}
+}
+
 func TestHostIsolationBlocksSSHAndPublicDiscoverd(t *testing.T) {
 	bridge := "100.64.57.1"
 	drop := strings.Join(UserToHostDropArgs(), " ")

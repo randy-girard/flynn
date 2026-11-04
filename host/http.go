@@ -27,6 +27,7 @@ import (
 	volumemanager "github.com/randy-girard/flynn/host/volume/manager"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/netpolicy"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/sse"
@@ -560,6 +561,10 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 		h.addJobRateLimitBucket.Put()
 		return
 	}
+	// Data-plane engines use the system partition but are not host-trusted.
+	// Drop host network, host PID, device profiles, and bind mounts before the
+	// system-job allow checks. /data volumes stay.
+	netpolicy.StripDatastoreEscape(job)
 	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system or builder job.
 	// System apps set "flynn-system-app" metadata and use the "system" partition.
 	isSystemJob := job.Metadata["flynn-system-app"] == "true" || job.Partition == "system"

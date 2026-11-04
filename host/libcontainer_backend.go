@@ -496,7 +496,8 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	}
 	if job.Config.LinuxCapabilities == nil {
 		src := host.DefaultCapabilities
-		if netpolicy.ClassifyJob(job) == netpolicy.ClassUser {
+		switch netpolicy.ClassifyJob(job) {
+		case netpolicy.ClassUser, netpolicy.ClassDatastore:
 			src = host.UserJobCapabilities
 		}
 		caps := append([]string(nil), src...)
@@ -982,7 +983,8 @@ func (l *LibcontainerBackend) Run(job *host.Job, runConfig *RunConfig, rateLimit
 	// deliberately excluded so they cannot authenticate to the host API. See
 	// isSystemJob for the full rationale.
 	systemEnv := map[string]string{}
-	if isSystemJob(job) {
+	// Data-plane engines are system apps but must not receive the host API key.
+	if netpolicy.HostTrusted(job) {
 		if l.host != nil && l.host.authKey != "" {
 			systemEnv["FLYNN_HOST_AUTH_KEY"] = l.host.authKey
 		}
@@ -2316,11 +2318,12 @@ func isSystemJob(job *host.Job) bool {
 
 // lockUntrustedJob strips host-escape knobs a tenant release can set
 // (CAP_SYS_ADMIN, host binds, device profiles, writable cgroups, host net/PID).
-// System jobs are unchanged. Build jobs keep Flynn-applied extra caps and a
-// writable cgroup, but cannot bring their own cap list, device profiles, or
-// runtime-socket binds.
+// Host-trusted jobs are unchanged. Data-plane engines are system apps but are
+// not host-trusted; their /data volume is not a bind mount and stays. Build
+// jobs keep Flynn-applied extra caps and a writable cgroup, but cannot bring
+// their own cap list, device profiles, or runtime-socket binds.
 func lockUntrustedJob(job *host.Job) {
-	if job == nil || isSystemJob(job) {
+	if job == nil || netpolicy.HostTrusted(job) {
 		return
 	}
 	job.Config.HostNetwork = false

@@ -92,6 +92,35 @@ func ServiceForClass(c Class) string {
 	}
 }
 
+// HostTrusted reports whether a job may receive the host API key and keep
+// host-escape settings. Data-plane engines are system apps, but they are not
+// host-trusted. The image builder and plugin web APIs stay trusted.
+func HostTrusted(job *host.Job) bool {
+	if job == nil {
+		return false
+	}
+	if ClassifyJob(job) == ClassDatastore {
+		return false
+	}
+	return isSystemJob(job)
+}
+
+// StripDatastoreEscape removes host-escape knobs from a data-plane job.
+// Volume bindings such as /data are left in place. Other classes are unchanged.
+func StripDatastoreEscape(job *host.Job) {
+	if job == nil || ClassifyJob(job) != ClassDatastore {
+		return
+	}
+	job.Config.HostNetwork = false
+	job.Config.HostPIDNamespace = false
+	job.Config.WriteableCgroups = false
+	job.Profiles = nil
+	job.Config.LinuxCapabilities = nil
+	job.Config.AllowedDevices = nil
+	job.Config.AutoCreatedDevices = nil
+	job.Config.Mounts = nil
+}
+
 // ClassifyJob assigns an overlay firewall class. HostNetwork jobs have no
 // overlay IP and should not be registered.
 func ClassifyJob(job *host.Job) Class {

@@ -8,6 +8,83 @@ import (
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
+func TestHostTrustedExcludesDatastoreEngines(t *testing.T) {
+	engine := &host.Job{
+		Partition: "system",
+		Metadata: map[string]string{
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "postgres",
+			"flynn-controller.type":     "postgres",
+		},
+	}
+	if HostTrusted(engine) {
+		t.Fatal("postgres engine must not be host-trusted")
+	}
+	web := &host.Job{
+		Partition: "system",
+		Metadata: map[string]string{
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "postgres",
+			"flynn-controller.type":     "web",
+		},
+	}
+	if !HostTrusted(web) {
+		t.Fatal("postgres web API stays host-trusted")
+	}
+	builder := &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}}
+	if !HostTrusted(builder) {
+		t.Fatal("image builder stays host-trusted")
+	}
+	user := &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "web"}}
+	if HostTrusted(user) {
+		t.Fatal("user jobs are not host-trusted")
+	}
+}
+
+func TestStripDatastoreEscapeKeepsDataVolume(t *testing.T) {
+	caps := []string{"CAP_SYS_ADMIN"}
+	job := &host.Job{
+		Partition: "system",
+		Metadata: map[string]string{
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "postgres",
+			"flynn-controller.type":     "postgres",
+		},
+		Profiles: []host.JobProfile{host.JobProfileZFS},
+		Config: host.ContainerConfig{
+			HostNetwork:       true,
+			HostPIDNamespace:  true,
+			WriteableCgroups:  true,
+			LinuxCapabilities: &caps,
+			Mounts:            []host.Mount{{Target: "/etc/flynn", Location: "/etc/flynn"}},
+			Volumes:           []host.VolumeBinding{{Target: "/data", VolumeID: "vol-data", Writeable: true}},
+		},
+	}
+	StripDatastoreEscape(job)
+	if job.Config.HostNetwork || job.Config.HostPIDNamespace || job.Config.WriteableCgroups {
+		t.Fatal("datastore engine must not keep host net, host pid, or writable cgroups")
+	}
+	if job.Config.LinuxCapabilities != nil || len(job.Profiles) != 0 || len(job.Config.Mounts) != 0 {
+		t.Fatal("datastore engine must drop caps, profiles, and bind mounts")
+	}
+	if len(job.Config.Volumes) != 1 || job.Config.Volumes[0].Target != "/data" {
+		t.Fatalf("datastore /data volume must stay: %+v", job.Config.Volumes)
+	}
+	web := &host.Job{
+		Partition: "system",
+		Metadata: map[string]string{
+			"flynn-system-app":          "true",
+			"flynn-controller.app_name": "postgres",
+			"flynn-controller.type":     "web",
+		},
+		Config: host.ContainerConfig{HostNetwork: true},
+	}
+	StripDatastoreEscape(web)
+	if !web.Config.HostNetwork {
+		t.Fatal("plugin web jobs are not data-plane engines")
+	}
+}
+
 func TestClassifyJob(t *testing.T) {
 	cases := []struct {
 		name string

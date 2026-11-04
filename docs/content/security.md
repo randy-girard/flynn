@@ -182,7 +182,13 @@ the cluster controller key (HTTP basic or `Authorization: Bearer`).
 Each Postgres role can CONNECT only to its own database
 (`PUBLIC` CONNECT is revoked), so a user job cannot open the controller,
 router, or blobstore databases. Cross-app HTTP still works through routes you
-add (the router). System appliances keep a full overlay mesh.
+add (the router). System jobs still reach other overlay addresses.
+Data-plane engines (the database process, not the plugin `web` API) are not
+host-trusted: they do not receive `FLYNN_HOST_AUTH_KEY`, and new connections
+from their overlay IPs to host SSH (`:22`) and the host API (`:1113`) are
+dropped. They still use discoverd (`:1111`) and DNS (`:53`), and they still
+reach other datastore peers and system overlay IPs. `/data` stays mounted.
+User jobs can still open the documented data-plane ports.
 
 Build jobs (slugbuilder / dockerbuilder) are a separate overlay class. They
 cannot reach user jobs or the host control plane, but they can still reach

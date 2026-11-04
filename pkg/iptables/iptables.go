@@ -220,6 +220,31 @@ func toHostDropArgs(set string) []string {
 	return []string{"INPUT", "-m", "set", "--match-set", set, "src", "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
 }
 
+// DataToHostPortDropArgs drops one NEW TCP port from data-plane overlay IPs
+// to a host-local address. port is "22" (SSH) or "1113" (host API). DNS and
+// discoverd are not covered by this rule.
+func DataToHostPortDropArgs(port string) []string {
+	return []string{"INPUT", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-p", "tcp", "--dport", port, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// DataToNodePortDropArgs drops that same port when the packet is forwarded
+// toward a cluster node underlay IP.
+func DataToNodePortDropArgs(port string) []string {
+	return []string{"FORWARD", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-m", "set", "--match-set", NodeSet, "dst", "-p", "tcp", "--dport", port, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"}
+}
+
+// DataToHostDNSArgs allows data-plane jobs to query host DNS.
+func DataToHostDNSArgs(proto string) []string {
+	return toHostDNSArgs(netpolicy.ServiceData, proto)
+}
+
+// DataToHostDiscoverdArgs allows data-plane jobs to register and watch
+// discoverd. Engines dial a host address; a blanket INPUT drop would break
+// leader election.
+func DataToHostDiscoverdArgs() []string {
+	return []string{"INPUT", "-m", "set", "--match-set", netpolicy.ServiceData, "src", "-p", "tcp", "--dport", netpolicy.DiscoverdHTTPPort, "-j", "ACCEPT"}
+}
+
 // NodeIPs is the underlay address list for NodeSet: this host plus peers.
 func NodeIPs(self string, peers []string) []net.IP {
 	return UnionIPs(nil, parseIPv4s(append([]string{self}, peers...)))
@@ -275,6 +300,8 @@ func EnableJobIsolation(overlay, bridgeAddr string) error {
 		UserOverlayDropArgs(overlay),
 		UserToNodeDropArgs(),
 		BuildToNodeDropArgs(),
+		DataToNodePortDropArgs("22"),
+		DataToNodePortDropArgs("1113"),
 		BuildToUserDropArgs(),
 		UserToBridgeDNSArgs(bridgeAddr, "tcp"),
 		UserToBridgeDNSArgs(bridgeAddr, "udp"),
@@ -304,10 +331,15 @@ func EnableHostIsolation(bridgeAddr string) error {
 	for _, args := range [][]string{
 		UserToHostDropArgs(),
 		BuildToHostDropArgs(),
+		DataToHostPortDropArgs("22"),
+		DataToHostPortDropArgs("1113"),
 		UserToHostDNSArgs("tcp"),
 		BuildToHostDNSArgs("tcp"),
+		DataToHostDNSArgs("tcp"),
 		UserToHostDNSArgs("udp"),
 		BuildToHostDNSArgs("udp"),
+		DataToHostDNSArgs("udp"),
+		DataToHostDiscoverdArgs(),
 	} {
 		if err := insertIfMissing("INPUT host isolation", args); err != nil {
 			return err
