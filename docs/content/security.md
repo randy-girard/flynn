@@ -214,7 +214,7 @@ clear operator error instead of injecting the cluster-admin key.
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, postgres
 `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY` on jobs that talk to discoverd,
-and the same controller key onto redis appliances, router, and acme).
+and the same controller key onto router and acme).
 `flynn-host plugin:update` / `plugin:install` do the same for plugin
 apps. Catalog plugins print that they receive cluster secrets and
 continue. Third-party plugins prompt on a TTY (cluster-admin equivalent);
@@ -222,6 +222,20 @@ pass `--yes` for non-interactive installs. You do not need to `env:set`
 those keys by hand after an upgrade.
 Rotating a key is still a separate operator step; see
 [Production — Controller Keys](production.html.md#controller-keys).
+
+New isolated Redis, MySQL, MongoDB, Kafka, and ClickHouse instances do
+not receive `CONTROLLER_KEY`, `AUTH_KEY`, or access-token signing keys.
+Each new database gets its own `APPLIANCE_KEY` for appliance admin HTTP
+(backup, restore, status, scale). The plugin API job still holds the
+cluster controller key and reads `APPLIANCE_KEY` from the instance
+release when it calls that admin API. Replicas of a new database share
+that appliance key. An instance created before this change still has
+`CONTROLLER_KEY` in its release. Adding a follower to that database does
+not copy the cluster key onto the new process, so peer admin calls
+between them fail until an operator rotates the set onto `APPLIANCE_KEY`.
+Plugin API jobs are unchanged and still receive the cluster key through
+`inject_env`. Postgres isolated instances already omitted the controller
+key; they stay that way.
 
 User and build jobs cannot open the host control plane: SSH (`:22`),
 host HTTP (`:80`/`:443`), the host API, or discoverd (`:1111`).
