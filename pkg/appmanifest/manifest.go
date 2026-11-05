@@ -1,6 +1,6 @@
-// Package appmanifest parses and applies flynn-app.json, the app manifest
-// (Heroku app.json equivalent). v1 apply ignores catalog. Container builds
-// use a separate flynn.yml; this file provisions the app.
+// Package appmanifest parses and applies flynn-app.json. v1 apply ignores
+// catalog. Container builds use a separate flynn.yml; this file provisions
+// the app.
 package appmanifest
 
 import (
@@ -253,6 +253,8 @@ var envNames = map[string]struct{}{
 	"staging":     {},
 	"production":  {},
 	"preview":     {},
+	// test is selected only when the pipeline environment is test.
+	"test": {},
 }
 
 // Parse validates flynn-app.json. schema_version defaults to 1.
@@ -350,8 +352,8 @@ func parseOverlay(raw json.RawMessage) (Overlay, error) {
 	return ov, nil
 }
 
-// canonicalEnv maps Heroku's review name to preview. Other names must be one
-// of development, staging, production, or preview.
+// canonicalEnv maps review to preview. Other names must be one of
+// development, staging, production, preview, or test.
 func canonicalEnv(name string) string {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if n == "review" {

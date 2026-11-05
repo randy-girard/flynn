@@ -128,15 +128,21 @@ running once per deploy. Provisioning a datastore from that tab closes the
 side panel and keeps the new instance on the list with a provisioning status
 until it is live; the instance page is linked after that.
 
+A new app's first `git push` reads `flynn-app.json` at the repository root
+before the build, when the app is still untouched. That provisions the root
+addons, env, formation, and `scripts.postdeploy`. A later push does not read
+the file again. See [App manifest](app-manifest.md).
+
 While a **git push** or dashboard/CLI **code** deploy is in progress, every app
 tab shows **Deploy in progress**. That banner appears as soon as `git push`
 starts (compile) and stays through the Procfile `release` command and traffic
-swap. It clears when the deployer finishes. The dashboard paints that banner
-as an info alert. Overview shows a Deployment card with **deploying** (or
-**compiling** during git push). Activity marks the release card **deploying**
-(or **queued**). The Deploy tab card lists kind, strategy, old → new release,
-and scale. **Config deploys** (env changes, `addons:create` / attaching a
-database) do not show this header. `flynn apps:info` prints a **Build** line
+swap. It clears when the rollout finishes, including while the receiver is
+still exiting. The dashboard paints that banner as an info alert. Overview
+shows a Deployment card with **deploying** (or **compiling** during git push).
+Activity adds the deployment as it is created and updates its status through
+**queued**, **deploying**, and **complete** without a reload. The Deploy tab
+card lists kind, strategy, old → new release, and scale. **Config deploys**
+(env changes, `addons:create` / attaching a database) do not show this header. `flynn apps:info` prints a **Build** line
 during compile and a **Deploy** line while a code deployer is running.
 `flynn deploy` lists `running` until the deployer finishes (`complete` or
 `failed`). The dashboard Deploy tab polls the same status, including `git

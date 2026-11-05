@@ -6,10 +6,13 @@ toc_min_level: 2
 
 # App manifest
 
-`flynn-app.json` at the repository root provisions an app the way a Heroku
-`app.json` does. The filename is `flynn-app.json`. Container image builds use
-a separate `flynn.yml` (ignored on the buildpack stack). A repository may
-contain both. Ongoing migrations stay in the Procfile `release` process.
+`flynn-app.json` at the repository root tells Flynn how to provision an app:
+addons, env, formation, routes, and one-shot scripts. The filename is
+`flynn-app.json`. Container image builds use a separate `flynn.yml` (ignored
+on the buildpack stack). A repository may contain both. Ongoing migrations
+stay in the Procfile `release` process.
+
+## When Flynn reads the file
 
 The file is applied in two places:
 
@@ -35,8 +38,9 @@ true: a release exists (other than the pipeline preview seed release), a
 resource is attached, a route exists besides the included HTTP route and the
 preview route, strategy is not `all-at-once`, deploy timeout is not 120,
 `protected` is true, meta contains anything other than controller-managed
-keys, a GitHub repo is connected (except on a preview app, which the pipeline
-connects before the first receive), or `meta["flynn-app.json"]` is `applied`.
+keys, or `meta["flynn-app.json"]` is `applied`. Connecting a GitHub
+repository does not skip the file. A normal new app uses the root manifest.
+`environments.preview` applies only when the app is a preview.
 The skip line is:
 
 ```
@@ -79,7 +83,7 @@ provisioned.
 | `addons` | String, or `{type, as, options}`. `flynn addons:create`. No plan tiers. `options` match `addons:create` (`runtime` default `small` for databases, `follow`, `replication`, `auto_failover`, and `cpu` / `memory` / `disk` only when that type allows custom sizes and a cluster admin enabled them). `as` matches `--as` (`ANALYTICS` becomes `ANALYTICS_URL`). The provider still injects `DATABASE_URL`, `REDIS_URL`, and the other default URL when `as` is omitted. Do not also set those under `env`. Order is array order. Apply returns once the instance is scheduled. |
 | `scripts.postdeploy` | One-shot after the first create. String or `{command, runtime}`. |
 | `scripts.preview_destroy` | One-shot when a pipeline preview app is destroyed, before the app is removed. No-op when the app is not a preview. `flynn pipeline:preview-destroy <pipeline> <app>` runs it. |
-| `environments` | `development`, `staging`, `production`, `preview` only. Heroku `review` maps to `preview`. Each value replaces whole root keys that are present (`env`, `formation`, `addons`, `routes`, `scripts`, `stack`, `buildpacks`, `image`, `github`, `strategy`, `deploy_timeout`, `protected`). Keys that are absent stay at the root. This is not a deep merge: a `preview` block that sets `env` and omits `WEB_CONCURRENCY` does not keep the root `WEB_CONCURRENCY`. Preview env values and script commands may use `{{pr}}`, `{{branch}}`, `{{sha}}`, `{{sha_short}}`, `{{app}}`, `{{pipeline}}`, `{{owner}}`, `{{repo}}`, `{{base}}`, `{{cluster}}`. |
+| `environments` | `development`, `staging`, `production`, `preview`, `test`. `review` is another name for `preview`. A file with no `environments` block is the normal app: the root `formation`, `addons`, `env`, and `scripts` apply on the first git push. An app whose pipeline environment has no matching block also keeps the root. `environments.preview` applies only when the app is a preview. `test` applies only when the pipeline environment is `test`. Each block replaces whole root keys that are present (`env`, `formation`, `addons`, `routes`, `scripts`, `stack`, `buildpacks`, `image`, `github`, `strategy`, `deploy_timeout`, `protected`). Keys that are absent stay at the root. This is not a deep merge: a `preview` block that sets `env` and omits `WEB_CONCURRENCY` does not keep the root `WEB_CONCURRENCY`. Preview env values and script commands may use `{{pr}}`, `{{branch}}`, `{{sha}}`, `{{sha_short}}`, `{{app}}`, `{{pipeline}}`, `{{owner}}`, `{{repo}}`, `{{base}}`, `{{cluster}}`. |
 | `routes` | Extra HTTP or TCP routes. The included app route is not listed. `type` is `http` or `tcp`. `domain` is required for HTTP. `service` defaults to the app web service. `port`, `sticky` (HTTP), `leader`, `https` (Let's Encrypt when that is enabled), `tls_mode` (`passthrough` or `terminate` for TCP), `drain_backends` (default true; false matches `--no-drain-backends`), `disable_keep_alives` (HTTP). Path-based HTTP routes are rejected. |
 | `github` | Applied only when `flynn-plugin-github` is installed. Otherwise apply fails. `repository` is `owner/repo`. `branch` defaults to the repository default, then `main`. `auto_deploy`, `wait_checks`. |
 | `strategy` | `all-at-once`, `one-by-one`, `one-down-one-up`, or `in-batches`. `sirenia` and `discoverd-meta` are rejected. Omitted leaves the strategy already on the app. `apps:create` sets `all-at-once`. |
@@ -161,8 +165,10 @@ push after `flynn env:set`, `flynn addons:create`, `flynn route:add`, or
 `flynn scale` prints the skip line and deploys the code without applying the
 file.
 
-A preview app's first receive applies `environments.preview`. The preview
-`env` replaces the root `env`, so `WEB_CONCURRENCY` is not kept.
+A normal app's first receive applies the root manifest, including when the
+repo is already connected on GitHub. A preview app's first receive applies
+`environments.preview` on top of that root. The preview `env` replaces the
+root `env`, so `WEB_CONCURRENCY` is not kept.
 `pipeline:preview-destroy` runs `scripts.preview_destroy` and then deletes
 the app. The pipeline plugin does not apply the file a second time.
 

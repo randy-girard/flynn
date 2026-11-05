@@ -89,7 +89,7 @@ func TestParseRejects(t *testing.T) {
 		`{"routes":[{"type":"http","domain":"example.com","path":"/admin"}]}`,
 		`{"schema_version":2}`,
 		`{"nope":true}`,
-		`{"environments":{"test":{}}}`,
+		`{"environments":{"ci":{}}}`,
 		`{"name":"this-name-is-longer-than-thirty"}`,
 		`{"formation":{"web":{"runtime":"small"}}}`,
 		`{"env":{"TOKEN":{"generator":"uuid"}}}`,
@@ -160,13 +160,13 @@ func TestDecide(t *testing.T) {
 	preview := base()
 	preview.GitHubConnected = true
 	preview.Environment = "preview"
-	if Decide(preview, true) != ActionApply {
-		t.Fatal("preview github connect does not skip")
+	if !preview.GitHubConnected || Decide(preview, true) != ActionApply {
+		t.Fatal("preview github connect applies the preview overlay")
 	}
 	linked := base()
 	linked.GitHubConnected = true
-	if Decide(linked, true) != ActionSkip {
-		t.Fatal("github connect skips a non-preview app")
+	if !linked.GitHubConnected || Decide(linked, true) != ActionApply {
+		t.Fatal("github connect on a normal app still applies the root manifest")
 	}
 	routed := base()
 	routed.ExtraRoutes = 1
@@ -175,6 +175,66 @@ func TestDecide(t *testing.T) {
 	}
 	if SkipLine != "-----> flynn-app.json present, app already configured; skipping" {
 		t.Fatal(SkipLine)
+	}
+	pushing := base()
+	pushing.App.Meta["flynn-controller.building"] = "2026-11-04T23:00:00Z"
+	if Decide(pushing, true) != ActionApply {
+		t.Fatal("a new app's first git push applies the root manifest while the build mark is set")
+	}
+}
+
+func TestRootManifestIsTheNormalApp(t *testing.T) {
+	raw := []byte(`{
+	  "formation": {"web": {"quantity": 1, "runtime": "small"}},
+	  "addons": ["postgres", "redis"],
+	  "scripts": {"postdeploy": "sh /app/bin/setup"}
+	}`)
+	m, err := Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"", "production", "preview", "review", "test"} {
+		got := m.WithEnvironment(name)
+		if len(got.Addons) != 2 || got.Addons[0].Type != "postgres" || got.Addons[1].Type != "redis" {
+			t.Fatalf("%q dropped root addons: %+v", name, got.Addons)
+		}
+		if got.Scripts.Postdeploy.Command != "sh /app/bin/setup" {
+			t.Fatalf("%q postdeploy: %q", name, got.Scripts.Postdeploy.Command)
+		}
+		web := got.Formation["web"]
+		if web.Quantity == nil || *web.Quantity != 1 || web.Runtime != "small" {
+			t.Fatalf("%q formation: %+v", name, web)
+		}
+	}
+
+	overlaid, err := Parse([]byte(`{
+	  "addons": ["postgres"],
+	  "scripts": {"postdeploy": "sh /app/bin/setup"},
+	  "environments": {
+	    "preview": {"addons": ["redis"], "scripts": {"postdeploy": "echo preview"}},
+	    "test": {"addons": ["mongodb"], "scripts": {"postdeploy": "echo test"}}
+	  }
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	normal := overlaid.WithEnvironment("")
+	if normal.Addons[0].Type != "postgres" || normal.Scripts.Postdeploy.Command != "sh /app/bin/setup" {
+		t.Fatalf("normal app: %+v %+v", normal.Addons, normal.Scripts)
+	}
+	prod := overlaid.WithEnvironment("production")
+	if prod.Addons[0].Type != "postgres" {
+		t.Fatal("production with no production block keeps the root")
+	}
+	preview := overlaid.WithEnvironment("preview")
+	if len(preview.Addons) != 1 || preview.Addons[0].Type != "redis" || preview.Scripts.Postdeploy.Command != "echo preview" {
+		t.Fatalf("preview overlay: %+v %q", preview.Addons, preview.Scripts.Postdeploy.Command)
+	}
+	if review := overlaid.WithEnvironment("review"); review.Addons[0].Type != "redis" || review.Scripts.Postdeploy.Command != "echo preview" {
+		t.Fatal("review maps to preview and uses that overlay")
+	}
+	if ci := overlaid.WithEnvironment("test"); ci.Addons[0].Type != "mongodb" || ci.Scripts.Postdeploy.Command != "echo test" {
+		t.Fatalf("test overlay: %+v %q", ci.Addons, ci.Scripts.Postdeploy.Command)
 	}
 }
 

@@ -9,14 +9,19 @@ import (
 // AppState is the controller view Decide uses. Pipeline membership is not
 // part of it: an app already in a pipeline still auto-applies.
 type AppState struct {
-	App             *ct.App
-	Head            *ct.Release
-	Resources       int
-	ExtraRoutes     int
+	App         *ct.App
+	Head        *ct.Release
+	Resources   int
+	ExtraRoutes int
+	// GitHubConnected is recorded for callers. Connecting a repository is how
+	// the first push arrives. It does not mark the app configured, for a
+	// normal app or a preview app.
 	GitHubConnected bool
 	Scaled          bool
 	// Environment is the pipeline environment, or empty when the app is not
-	// in a pipeline. GitHub connected alone does not skip a preview app.
+	// in a pipeline. Empty uses the root manifest. A matching environments
+	// block replaces whole root keys. review is another name for preview.
+	// test is selected only when the pipeline environment is test.
 	Environment string
 }
 
@@ -45,9 +50,6 @@ func Decide(st AppState, filePresent bool) Action {
 
 func configured(st AppState) bool {
 	if st.Resources > 0 || st.ExtraRoutes > 0 || st.Scaled {
-		return true
-	}
-	if st.GitHubConnected && !strings.EqualFold(st.Environment, "preview") {
 		return true
 	}
 	if releaseBlocks(st.Head) {
