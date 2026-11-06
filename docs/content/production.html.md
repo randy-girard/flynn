@@ -35,7 +35,7 @@ metadata, and this host's pool. It does not migrate the blobstore, set
 | --- | --- |
 | `tenancy` | `GET /tenancy` (`cluster_settings.tenancy_mode`). A controller error is `fail` and is not treated as `self_hosted`. |
 | `blobstore` | Prints the default name only, never `BACKEND_*` values. Empty `DEFAULT_BACKEND`, a `postgres` name (any case), or a parsed `backend` type that is missing or `postgres` (any case) is hosted `fail` and self-hosted `warn`. `s3`, `minio`, `gcs`, and `azure` are `ok`. The check does not migrate. A green line means that release's parsed type is not `postgres`. It is not proof bytes left Postgres. |
-| `zfs` | `zpool status -P` for this host. Hosted `fail` when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Self-hosted passes a file-backed pool. A missing pool or `zpool` error is `fail` either way. |
+| `zfs` | `zpool status -P` for this host. `fail` in either tenancy mode when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Tenancy does not change this line. A missing pool or `zpool` error is `fail` either way. A green line is this host only. |
 | `reserve` | Hosted `fail` unless `small`, `medium`, and `large` have `reserve_resources`. The scheduler reads that stored flag. It does not reserve hosted jobs while that flag is false. An empty profile does not count, and one other reserved profile does not pass. Self-hosted passes with the flags off. |
 | `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, and `none` are no cap. The check does not write the tag. |
 | `backup` | Always `warn`: tenant volumes are outside `flynn-host backup`. |
@@ -99,36 +99,60 @@ After `letsencrypt:enable-system-routes`, public CAs are enough.
 
 ## Storage
 
-Flynn uses ZFS to store data. By default, a ZFS pool is created in a sparse file
-on top of the existing filesystem at `/var/lib/flynn/volumes`. We don't
-recommend keeping this configuration in production, as it is not as reliable as
-dedicating whole disks to the ZFS pool.
+Flynn uses ZFS for database volumes. A trial install does not hand ZFS a disk.
+The installer enables `flynn-host` and does not start it. The first
+`systemctl start flynn-host`, or a reboot, creates a sparse file under
+`/var/lib/flynn/volumes` and uses that file as the pool. That is enough to try
+Flynn. It is not a production pool: the databases and the operating system
+share one disk.
 
-On a hosted cluster, [`production:check`](#production-check) fails while any
-leaf of the pool is still a regular file. A mirror that still lists the file
-fails until that file is detached. Self-hosted clusters pass a file-backed
-pool. A missing pool fails in either mode. The check does not attach, detach,
-or delete the file.
+[`production:check`](#production-check) fails in either tenancy mode while any
+leaf of this host's pool is a regular file. A mirror that still lists the file
+fails until that file is detached. A missing pool fails in either mode. The
+check does not attach, detach, or delete the file, and switching the cluster
+to hosted mode does not change this line. Run the check on every host. A green
+`zfs` line is that host only.
 
-### Custom ZFS pool
+### Dedicated disk
 
-The Flynn install script can be used to create the ZFS pool on the device of
-your choice instead of a sparse file, using the `--zpool-create-device` flag:
+Pass `--zpool-create-device` on the install command, before
+`systemctl start flynn-host` or a reboot. Use a dedicated disk, not the OS
+disk. `-f` overwrites an existing label on that device. The new pool is the
+size of that disk.
 
 ```text
-$ ./install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
+$ sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
 ```
 
-If you already have a Flynn cluster running, you can move the existing ZFS pool
-off of the sparse file by first attaching your disk as a mirror, then detaching
-the sparse file after it has been replicated to the new disk:
+The flag does not migrate an existing pool. If `flynn-default` already exists,
+`zpool create` fails and the install stops.
+
+### Moving an existing file pool
+
+Move one host at a time, with `flynn-host` left running. Volumes on that host
+stay there. Do not destroy the pool or its datasets, and do not stop the
+daemon to do this.
+
+The new disk must be at least as large as the file vdev, not the `ALLOC`
+column from `zpool list`. The default file is 70% of the total blocks of the
+filesystem that holds `/var/lib/flynn/volumes`, or `100000000000` bytes when
+that size cannot be read. That is not 70% of free space. A smaller disk cannot
+attach, and a failed attach leaves the file in the pool.
+
+Attach the disk as a mirror of the file path printed by `production:check`
+(`file=`). That path is often
+`/var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev` and may be another
+path. Do not use `zpool add`. That stripes the disk into the pool, and detach
+cannot remove the file afterward.
 
 ```text
-# Attach /dev/sdb1 (specify your disk instead of sdb1) to the flynn-default ZFS pool
+# Attach /dev/sdb1 (your disk) to the file path the check printed
 $ sudo zpool attach flynn-default /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev /dev/sdb1
 
-# Wait for the resilver to copy all data onto the newly added disk
-$ sudo zpool status flynn-default
+# Wait until the copy is finished. state: ONLINE while scan says the
+# resilver is still running is not finished. Detach then drops the only
+# complete copy.
+$ sudo zpool status -P flynn-default
   pool: flynn-default
  state: ONLINE
   scan: resilvered 59.7M in 0h0m with 0 errors on Mon Nov  2 04:02:58 2015
@@ -138,14 +162,18 @@ config:
 	flynn-default                                                 ONLINE       0     0     0
 	  mirror-0                                                    ONLINE       0     0     0
 	    /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev  ONLINE       0     0     0
-	    sdb1                                                      ONLINE       0     0     0
+	    /dev/sdb1                                                 ONLINE       0     0     0
 
 errors: No known data errors
 
-# Detach the sparse file from the ZFS pool and delete it
+# Detach only that file path, then delete it. rm before detach faults the pool.
 $ sudo zpool detach flynn-default /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev
 $ sudo rm /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev
 ```
+
+Wait until `scan: resilvered` and the new disk is not marked resilvering.
+After a successful detach, a leftover file on disk is not a failure. Rerun
+`production:check` on that host.
 
 ### Image cache
 

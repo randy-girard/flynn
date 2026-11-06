@@ -37,7 +37,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 - **Hosts:** 2 GB RAM, 40 GB disk, and 2 CPU cores per node as a minimum; more for appliances and builds
 - **HA:** three or more nodes. A single node (`SINGLETON`) is fine for trying Flynn; do not use it as production
 - **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet. After install, `flynn-host firewall` manages peer IPs and extra TCP ports on the host UFW rules.
-- **Storage:** ZFS. The installer can create a zpool on a dedicated disk (`--zpool-create-device`); a sparse file is the default and is not recommended for production
+- **Storage:** ZFS for database volumes. A trial install uses a sparse file on the host disk. Production passes `--zpool-create-device` on the install command, before `systemctl start flynn-host` or a reboot. `flynn-host production:check` fails while any piece of the pool is still a file, in either tenancy mode. See [Production — Storage](docs/content/production.html.md#storage)
 
 ## Install the CLI
 
@@ -68,7 +68,16 @@ On each Ubuntu 24.04 host:
 curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn | sudo bash
 ```
 
-That installs `flynn-host`, container images, and a systemd unit.
+That installs `flynn-host`, container images, and a systemd unit. It enables the unit and does not start it. A trial cluster can start from here. A reboot before you pass a disk creates the sparse file.
+
+For a production install, pass a dedicated disk on that same command, before `systemctl start flynn-host` or a reboot. The disk must not be the OS disk. `-f` overwrites an existing label on that device. The flag does not migrate a pool that already exists.
+
+```bash
+curl -fsSL https://github.com/randy-girard/flynn/releases/latest/download/install-flynn -o /tmp/install-flynn
+sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
+```
+
+`flynn-host production:check` fails while the pool is still a file. The move off an existing file is in [Production — Storage](docs/content/production.html.md#storage).
 
 **Three-node cluster** using a discovery API you run (there is no public hosted service). `--init-discovery` requires `DISCOVERY_SERVER` and `CONTROLLER_KEY`:
 

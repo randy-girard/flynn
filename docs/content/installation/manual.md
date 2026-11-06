@@ -48,15 +48,24 @@ The installer:
 
 Images are large (hundreds of megabytes), so step 3 can take a while.
 
-For production, create the ZFS pool on a dedicated disk instead of the default
-sparse file:
+A trial install can omit a disk. The script enables `flynn-host` and does not
+start it. The first `systemctl start flynn-host`, or a reboot, then creates a
+sparse file and uses that file as the ZFS pool.
+
+For production, pass a dedicated disk on this install command, before
+`systemctl start flynn-host` or a reboot. The disk must not be the OS disk.
+`-f` overwrites an existing label on that device. The flag does not migrate an
+existing pool. If `flynn-default` already exists, `zpool create` fails and the
+install stops.
 
 ```
 $ sudo bash /tmp/install-flynn --zpool-create-device /dev/sdb --zpool-create-options "-f"
 ```
 
-See [Production](../production.html.md) for moving an existing pool off the sparse
-file.
+`flynn-host production:check` fails while any leaf of this host's pool is a
+regular file, in either tenancy mode. Run it on every host. See
+[Production](../production.html.md#storage) for moving an existing file pool
+onto a disk.
 
 ## Repeat on every host
 
