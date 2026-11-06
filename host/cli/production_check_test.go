@@ -397,10 +397,15 @@ func TestProductionCheckUsage(t *testing.T) {
 		"never BACKEND_",
 		"does not migrate",
 		"does not detach",
+		"either tenancy mode",
+		"Tenancy does not change this line",
 	} {
 		if !strings.Contains(cmd.usage, want) {
 			t.Fatalf("usage missing %q:\n%s", want, cmd.usage)
 		}
+	}
+	if strings.Contains(cmd.usage, "Self-hosted passes a file-backed pool") {
+		t.Fatalf("usage still passes a self-hosted file pool:\n%s", cmd.usage)
 	}
 	parsed := parseHostCLI(t, "production:check", []string{"production:check"})
 	if parsed.String["--zpool-name"] != "flynn-default" {
@@ -436,7 +441,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=self_hosted", action: "flynn-host tenancy:mode hosted"},
 		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
-		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "file-backed pool"},
+		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "does not reserve hosted jobs while it is false"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
@@ -791,10 +796,10 @@ func TestProductionCheckZFS(t *testing.T) {
 		modes:     modes,
 	}
 	got, err = f.run(t)
-	assertPassed(t, err)
-	row = mustCheck(t, got, "ok", "zfs", "pool=flynn-default")
-	if !strings.Contains(row.action, "file-backed pool") {
-		t.Fatalf("self-hosted zfs action %q", row.action)
+	assertFailed(t, err)
+	row = mustCheck(t, got, "fail", "zfs", "pool=flynn-default file=/srv/custom.vdev")
+	if !strings.Contains(row.action, "does not detach") {
+		t.Fatalf("self-hosted file action %q", row.action)
 	}
 
 	f = &productionFixture{
@@ -827,6 +832,19 @@ func TestProductionCheckZFS(t *testing.T) {
 	mustCheck(t, got, "fail", "zfs", "pool=flynn-default error=cannot open 'flynn-default': no such pool")
 
 	f = &productionFixture{
+		zpoolText: zpoolStatusText(
+			"NAME STATE READ WRITE CKSUM",
+			"flynn-default ONLINE 0 0 0",
+			"  /dev/char0 ONLINE 0 0 0",
+		),
+		modes: map[string]os.FileMode{"/dev/char0": os.ModeDevice | os.ModeCharDevice},
+	}
+	got, err = f.run(t)
+	assertFailed(t, err)
+	mustCheck(t, got, "fail", "zfs", "pool=flynn-default not-block=/dev/char0")
+
+	f = &productionFixture{
+		tenancy: ct.TenancySettings{Mode: "self_hosted"},
 		zpoolText: zpoolStatusText(
 			"NAME STATE READ WRITE CKSUM",
 			"flynn-default ONLINE 0 0 0",

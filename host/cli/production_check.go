@@ -47,11 +47,11 @@ whose parsed type is missing or postgres, in any case, fails when hosted and war
 when self-hosted. The line prints that default name only, never BACKEND_*
 values. The check does not migrate.
 
-ZFS runs zpool status -P for --zpool-name on this host. A hosted cluster
-fails when any leaf is a regular file, including a mirror that still lists
-the file. A block device passes. Self-hosted passes a file-backed pool. A
-missing pool or zpool error fails in either mode. The check does not detach
-or destroy vdevs and does not create a pool.
+ZFS runs zpool status -P for --zpool-name on this host. A regular-file
+leaf fails in either tenancy mode, including a mirror that still lists the
+file. A block device passes. Tenancy does not change this line. A missing
+pool or zpool error fails in either mode. The check does not detach or
+destroy vdevs and does not create a pool.
 
 Reservation lists runtime profiles once. The scheduler reads RuntimeProfile.ReserveResources. It does not reserve hosted jobs while that flag is false. Hosted mode fails unless small, medium, and large all reserve. An empty runtime profile does not reserve. One other profile with the flag does not pass. Database runtimes are not read.
 
@@ -259,7 +259,7 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	}
 
 	addBlobstoreLine(add, mode, release, releaseErr)
-	addZFSLine(add, mode, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
+	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
 	addReserveLine(add, mode, profiles, profileErr)
 	addHostCapLine(add, hosts, hostsErr)
 	add(productionRow{
@@ -339,7 +339,7 @@ func blobstoreDefaultIsPostgres(name string, backends map[string]map[string]stri
 	return kind == "" || strings.EqualFold(kind, "postgres")
 }
 
-func addZFSLine(add func(productionRow), mode, pool string, ran bool, out []byte, zerr error, stat func(string) (os.FileInfo, error)) {
+func addZFSLine(add func(productionRow), pool string, ran bool, out []byte, zerr error, stat func(string) (os.FileInfo, error)) {
 	if !ran {
 		add(productionRow{
 			status: "fail", check: "zfs", detail: "pool=" + pool + " error=invalid zpool name",
@@ -397,13 +397,6 @@ func addZFSLine(add func(productionRow), mode, pool string, ran bool, out []byte
 	}
 	sort.Strings(files)
 	sort.Strings(notBlock)
-	if mode == tenancy.ModeSelfHosted {
-		add(productionRow{
-			status: "ok", check: "zfs", detail: "pool=" + pool,
-			action: "A file-backed pool is allowed.",
-		})
-		return
-	}
 	if len(files) > 0 {
 		add(productionRow{
 			status: "fail", check: "zfs", detail: "pool=" + pool + " file=" + strings.Join(files, ","),
