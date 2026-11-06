@@ -41,9 +41,11 @@ print plain text. The process exits 1 when any status is fail.
 Tenancy comes from GET /tenancy. A controller error is a fail. It is not
 treated as self_hosted. GetSettings maps only a missing row to self_hosted.
 
-Blobstore reads the blobstore release once and parses DEFAULT_BACKEND.
-Empty DEFAULT_BACKEND is postgres. The line prints that default name only.
-Hosted postgres fails. Self-hosted postgres warns. The check does not migrate.
+Blobstore reads the blobstore release once and parses DEFAULT_BACKEND
+and that name's backend type. Empty DEFAULT_BACKEND is postgres. A name
+whose parsed type is missing or postgres, in any case, fails when hosted and warns
+when self-hosted. The line prints that default name only, never BACKEND_*
+values. The check does not migrate.
 
 ZFS runs zpool status -P for --zpool-name on this host. A hosted cluster
 fails when any leaf is a regular file, including a mirror that still lists
@@ -290,7 +292,7 @@ func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release,
 		})
 		return
 	}
-	name, _, err := data.BackendsFromEnv(data.EnvMapToSlice(release.Env))
+	name, backends, err := data.BackendsFromEnv(data.EnvMapToSlice(release.Env))
 	if err != nil {
 		add(productionRow{
 			status: "fail", check: "blobstore", detail: "error=" + err.Error(),
@@ -298,17 +300,21 @@ func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release,
 		})
 		return
 	}
-	if name == "" || strings.EqualFold(name, "postgres") {
+	if blobstoreDefaultIsPostgres(name, backends) {
+		detail := "default=" + name
+		if name == "" || strings.EqualFold(name, "postgres") {
+			detail = "default=postgres"
+		}
 		if mode == tenancy.ModeSelfHosted {
 			add(productionRow{
-				status: "warn", check: "blobstore", detail: "default=postgres",
-				action: "Postgres is allowed. Hosted needs flynn-host blobstore:set --migrate.",
+				status: "warn", check: "blobstore", detail: detail,
+				action: "Postgres is allowed. Hosted needs flynn-host blobstore:set --migrate --delete. This check does not migrate.",
 			})
 			return
 		}
 		add(productionRow{
-			status: "fail", check: "blobstore", detail: "default=postgres",
-			action: "Run flynn-host blobstore:set --migrate. This check does not migrate.",
+			status: "fail", check: "blobstore", detail: detail,
+			action: "Run flynn-host blobstore:set --migrate --delete. This check does not migrate.",
 		})
 		return
 	}
@@ -316,6 +322,21 @@ func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release,
 		status: "ok", check: "blobstore", detail: "default=" + name,
 		action: "No blobstore change.",
 	})
+}
+
+// blobstoreDefaultIsPostgres is true when the default name is empty or
+// postgres, or when that name's parsed backend type is missing or postgres.
+// BackendsFromEnv lowercases BACKEND_* names and always inserts a postgres entry.
+func blobstoreDefaultIsPostgres(name string, backends map[string]map[string]string) bool {
+	if name == "" || strings.EqualFold(name, "postgres") {
+		return true
+	}
+	info, ok := backends[strings.ToLower(name)]
+	if !ok || info == nil {
+		return true
+	}
+	kind := info["backend"]
+	return kind == "" || strings.EqualFold(kind, "postgres")
 }
 
 func addZFSLine(add func(productionRow), mode, pool string, ran bool, out []byte, zerr error, stat func(string) (os.FileInfo, error)) {

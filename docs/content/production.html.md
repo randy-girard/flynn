@@ -34,7 +34,7 @@ metadata, and this host's pool. It does not migrate the blobstore, set
 | Line | Meaning |
 | --- | --- |
 | `tenancy` | `GET /tenancy` (`cluster_settings.tenancy_mode`). A controller error is `fail` and is not treated as `self_hosted`. |
-| `blobstore` | Default backend name only. Empty `DEFAULT_BACKEND` is `postgres`. Hosted `postgres` is `fail`. Self-hosted `postgres` is `warn`. `BACKEND_*` values are not printed. |
+| `blobstore` | Prints the default name only, never `BACKEND_*` values. Empty `DEFAULT_BACKEND`, a `postgres` name (any case), or a parsed `backend` type that is missing or `postgres` (any case) is hosted `fail` and self-hosted `warn`. `s3`, `minio`, `gcs`, and `azure` are `ok`. The check does not migrate. A green line means that release's parsed type is not `postgres`. It is not proof bytes left Postgres. |
 | `zfs` | `zpool status -P` for this host. Hosted `fail` when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Self-hosted passes a file-backed pool. A missing pool or `zpool` error is `fail` either way. |
 | `reserve` | Hosted `fail` unless `small`, `medium`, and `large` have `reserve_resources`. The scheduler reads that stored flag. It does not reserve hosted jobs while that flag is false. An empty profile does not count, and one other reserved profile does not pass. Self-hosted passes with the flags off. |
 | `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, and `none` are no cap. The check does not write the tag. |
@@ -46,8 +46,10 @@ except `host-cap`, which lists only the hosts currently registered in discoverd.
 
 Set a cap with `flynn-host init --max-processes` or
 `flynn-host tags:max-processes`. Turn reservation on with
-`flynn-host runtime:reserve`. Move the blobstore with
-`flynn-host blobstore:set --migrate` (or `blobstore:migrate`). The file-backed
+`flynn-host runtime:reserve`. For S3 and MinIO, move the blobstore with
+`flynn-host blobstore:set --migrate --delete`. GCS and Azure use `env:set`
+plus `flynn-host blobstore:migrate --delete` under
+[Blobstore Backend](#blobstore-backend). The file-backed
 pool migration is the mirror-and-detach procedure under
 [Storage](#storage).
 
@@ -178,10 +180,13 @@ We recommend using one of the external blobstore backends listed below for
 production, as they are more reliable than the Postgres backend and have
 predictable performance without consuming disk space on the Flynn hosts.
 
-[`production:check`](#production-check) fails a hosted cluster while the
-default backend is still Postgres, and warns on a self-hosted cluster. Empty
-`DEFAULT_BACKEND` counts as Postgres. The check prints the default backend
-name only and does not run the migrate.
+[`production:check`](#production-check) fails a hosted cluster, and warns on
+a self-hosted cluster, when the default backend is Postgres. That is an empty
+`DEFAULT_BACKEND`, the name `postgres` (any case), or a parsed `backend` type
+that is missing or `postgres` (any case). The check prints the default backend name only,
+never `BACKEND_*` values, and does not run the migrate. A green line means the
+current blobstore release's default has a parsed backend type other than
+`postgres`. It is not proof the bytes left Postgres.
 
 ### Amazon S3
 
@@ -422,7 +427,9 @@ backend are restored from that dump. If blobstore was switched to S3,
 MinIO, GCS, or Azure (`flynn-host blobstore:set` / `DEFAULT_BACKEND`),
 object bytes stay in that bucket; the backup still includes controller env
 so restore reconnects to the same backend. Keep the bucket (and
-credentials) when you restore.
+credentials) when you restore. Leftover blobstore large objects stay in
+that platform dump. A green `production:check` blobstore line does not
+prove they were removed.
 
 The Vagrant upgrade smoke (`script/vagrant/suite.sh`) exercises this
 path after the in-place `--force` updates: backup, `install --clean`, then

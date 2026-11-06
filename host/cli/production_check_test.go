@@ -117,7 +117,12 @@ func (f *productionFixture) init() {
 		f.tenancy.Mode = "hosted"
 	}
 	if f.env == nil && f.releaseErr == nil {
-		f.env = map[string]string{"DEFAULT_BACKEND": "s3main"}
+		// A default name with no parsed type is a Postgres result. This
+		// stands in for a hosted cluster already on s3.
+		f.env = map[string]string{
+			"DEFAULT_BACKEND": "s3main",
+			"BACKEND_S3MAIN":  "backend=s3",
+		}
 	}
 	if f.profiles == nil && f.profileErr == nil {
 		f.profiles = []*ct.RuntimeProfile{
@@ -335,6 +340,44 @@ func assertPassed(t *testing.T, err error) {
 	}
 }
 
+func blobstoreAction(t *testing.T, got string) string {
+	t.Helper()
+	for _, row := range productionRows(t, got) {
+		if row.check == "blobstore" {
+			return row.action
+		}
+	}
+	t.Fatalf("missing blobstore row:\n%s", got)
+	return ""
+}
+
+// assertBlobstoreMigrateAction fails when the operator action says --migrate
+// without --delete. --migrate --delete still contains the substring --migrate,
+// so that shorter check is not enough.
+func assertBlobstoreMigrateAction(t *testing.T, action string) {
+	t.Helper()
+	const want = "flynn-host blobstore:set --migrate --delete"
+	if !strings.Contains(action, want) {
+		t.Fatalf("action %q missing %q", action, want)
+	}
+	if !strings.Contains(action, "does not migrate") {
+		t.Fatalf("action %q does not say the check does not migrate", action)
+	}
+	if strings.Contains(strings.ReplaceAll(action, "--migrate --delete", ""), "--migrate") {
+		t.Fatalf("action has --migrate without --delete: %q", action)
+	}
+}
+
+func assertProductionWidth(t *testing.T, got string) {
+	t.Helper()
+	plain := productionANSI.ReplaceAllString(got, "")
+	for _, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
+		if n := len([]rune(line)); n > 96 {
+			t.Fatalf("line is %d columns, want at most 96:\n%s", n, line)
+		}
+	}
+}
+
 func TestProductionCheckUsage(t *testing.T) {
 	cmd := commands["production:check"]
 	if cmd == nil {
@@ -350,6 +393,8 @@ func TestProductionCheckUsage(t *testing.T) {
 		"RuntimeProfile.ReserveResources",
 		"does not reserve hosted jobs while that flag is false",
 		"does not set flynn-max-processes",
+		"parsed type is missing or postgres",
+		"never BACKEND_",
 		"does not migrate",
 		"does not detach",
 	} {
@@ -390,7 +435,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	assertPassed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=self_hosted", action: "flynn-host tenancy:mode hosted"},
-		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate"},
+		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "file-backed pool"},
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "does not reserve hosted jobs while it is false"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
@@ -400,6 +445,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if strings.Contains(got, "secret.example") || strings.Contains(got, "AKIASECRET") || strings.Contains(got, "BACKEND_") || strings.Contains(got, "bucket=") {
 		t.Fatalf("blobstore line leaked backend env:\n%s", got)
 	}
+	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
 	if f.api.settingsReads != 0 || f.api.dbReads != 0 {
 		t.Fatalf("settings reads %d db reads %d", f.api.settingsReads, f.api.dbReads)
 	}
@@ -412,11 +458,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
 		t.Fatalf("zpool pools %v", f.zpoolPools)
 	}
-	for _, line := range strings.Split(strings.TrimSuffix(got, "\n"), "\n") {
-		if n := len([]rune(line)); n > 96 {
-			t.Fatalf("line is %d columns, want at most 96:\n%s", n, line)
-		}
-	}
+	assertProductionWidth(t, got)
 }
 
 func TestProductionCheckHostedPostgresFails(t *testing.T) {
@@ -428,13 +470,147 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 	assertFailed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=hosted", action: "Hosted mode is on"},
-		{status: "fail", check: "blobstore", detail: "default=postgres", action: "This check does not migrate"},
+		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=profile_flag", action: "No reservation change"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
+	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
+}
+
+func TestProductionCheckHostedExternalBackendsPass(t *testing.T) {
+	cases := []struct {
+		name    string
+		detail  string
+		env     map[string]string
+		secrets []string
+	}{
+		{
+			name:   "gcsmain",
+			detail: "default=gcsmain",
+			env: map[string]string{
+				"DEFAULT_BACKEND":     "gcsmain",
+				"BACKEND_GCSMAIN":     "backend=gcs bucket=flynnblobstore",
+				"BACKEND_GCSMAIN_KEY": "secret-gcs-json-key",
+			},
+			secrets: []string{"secret-gcs-json-key", "flynnblobstore"},
+		},
+		{
+			name:   "azuremain",
+			detail: "default=azuremain",
+			env: map[string]string{
+				"DEFAULT_BACKEND":   "azuremain",
+				"BACKEND_AZUREMAIN": "backend=azure account_key=secret-azure-key account_name=yyy container=flynnblobstore",
+			},
+			secrets: []string{"secret-azure-key", "flynnblobstore"},
+		},
+		{
+			name:   "minio",
+			detail: "default=minio",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "minio",
+				"BACKEND_MINIO":   "backend=minio endpoint=secret.example access_key_id=AKIASECRET bucket=flynnblobstore",
+			},
+			secrets: []string{"secret.example", "AKIASECRET", "flynnblobstore"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &productionFixture{tenancy: ct.TenancySettings{Mode: "hosted"}, env: tc.env}
+			got, err := f.run(t)
+			assertPassed(t, err)
+			row := mustCheck(t, got, "ok", "blobstore", tc.detail)
+			if !strings.Contains(row.action, "No blobstore change") {
+				t.Fatalf("action %q", row.action)
+			}
+			for _, secret := range append([]string{"BACKEND_", "bucket=", "account_key="}, tc.secrets...) {
+				if strings.Contains(got, secret) {
+					t.Fatalf("leaked %q:\n%s", secret, got)
+				}
+			}
+			assertProductionWidth(t, got)
+		})
+	}
+}
+
+func TestProductionCheckPostgresTypeFailsOrWarns(t *testing.T) {
+	cases := []struct {
+		name   string
+		detail string
+		env    map[string]string
+	}{
+		{
+			name:   "local postgres type",
+			detail: "default=local",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "local",
+				"BACKEND_LOCAL":   "backend=postgres endpoint=secret.example access_key_id=AKIASECRET bucket=flynnblobstore",
+			},
+		},
+		{
+			name:   "postgres type casing",
+			detail: "default=local",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "local",
+				"BACKEND_LOCAL":   "backend=Postgres",
+			},
+		},
+		{
+			name:   "missing backend type",
+			detail: "default=s3main",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "s3main",
+			},
+		},
+		{
+			name:   "empty backend type",
+			detail: "default=local",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "local",
+				"BACKEND_LOCAL":   "bucket=flynnblobstore",
+			},
+		},
+		{
+			name:   "postgres name casing",
+			detail: "default=postgres",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "Postgres",
+			},
+		},
+		{
+			name:   "empty default",
+			detail: "default=postgres",
+			env: map[string]string{
+				"DEFAULT_BACKEND": "",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run("hosted/"+tc.name, func(t *testing.T) {
+			f := &productionFixture{tenancy: ct.TenancySettings{Mode: "hosted"}, env: tc.env}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			row := mustCheck(t, got, "fail", "blobstore", tc.detail)
+			assertBlobstoreMigrateAction(t, row.action)
+			if strings.Contains(got, "secret.example") || strings.Contains(got, "AKIASECRET") || strings.Contains(got, "BACKEND_") || strings.Contains(got, "bucket=") {
+				t.Fatalf("leaked backend env:\n%s", got)
+			}
+			assertProductionWidth(t, got)
+		})
+		t.Run("self_hosted/"+tc.name, func(t *testing.T) {
+			f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}, env: tc.env}
+			got, err := f.run(t)
+			assertPassed(t, err)
+			row := mustCheck(t, got, "warn", "blobstore", tc.detail)
+			assertBlobstoreMigrateAction(t, row.action)
+			if strings.Contains(got, "secret.example") || strings.Contains(got, "AKIASECRET") || strings.Contains(got, "BACKEND_") || strings.Contains(got, "bucket=") {
+				t.Fatalf("leaked backend env:\n%s", got)
+			}
+			assertProductionWidth(t, got)
+		})
+	}
 }
 
 func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
@@ -480,7 +656,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 	assertFailed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "fail", check: "tenancy", detail: "error=controller down", action: "not self-hosted"},
-		{status: "fail", check: "blobstore", detail: "default=postgres", action: "does not migrate"},
+		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "fail", check: "zfs", detail: "pool=flynn-default file=/srv/custom.vdev", action: "zpool detach"},
 		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=profile_flag", action: "flynn-host runtime:reserve"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
@@ -490,6 +666,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 	if f.api.profileReads != 1 || len(f.api.releases) != 1 || f.zpoolCalls != 1 || f.metaCalls != 1 || f.hostCalls != 1 {
 		t.Fatalf("short-circuited after tenancy error: profiles=%d releases=%v zpool=%d meta=%d hosts=%d", f.api.profileReads, f.api.releases, f.zpoolCalls, f.metaCalls, f.hostCalls)
 	}
+	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
 }
 
 func TestProductionCheckReservationRequiresBuiltinProfiles(t *testing.T) {
@@ -783,9 +960,7 @@ func requireColoredRows(t *testing.T, got string) {
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
 		t.Fatalf("colored blobstore row %+v", rows[1])
 	}
-	if !strings.Contains(rows[1].action, "does not migrate") {
-		t.Fatalf("colored action lost by wrapping: %q", rows[1].action)
-	}
+	assertBlobstoreMigrateAction(t, rows[1].action)
 }
 
 func copyTags(in map[string]string) map[string]string {
