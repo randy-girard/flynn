@@ -10,6 +10,53 @@ We've designed Flynn to be very easy to get up and running with quickly.
 However, there are a variety of things that should be considered as you start
 using Flynn more.
 
+## Production check
+
+`flynn-host production:check` prints a bordered table and exits 1 when any
+status is `fail`. A `warn` does not fail the command. Columns are status,
+check, detail, and what to do. Long cells wrap inside the border. On a
+terminal the status is green for `ok`, yellow for `warn`, and red for
+`fail`. Set `NO_COLOR` to print plain text. Run it on a cluster host:
+
+```text
+$ sudo flynn-host production:check
+$ sudo flynn-host production:check --zpool-name=flynn-default
+```
+
+`WHAT TO DO` names the command or operator step for that row. `NO_COLOR`
+turns the status colors off.
+
+`--zpool-name` defaults to `flynn-default`. The command reads tenancy, the
+blobstore release, runtime profiles, discoverd host tags, flannel service
+metadata, and this host's pool. It does not migrate the blobstore, set
+`flynn-max-processes`, create or move volumes, or detach a vdev.
+
+| Line | Meaning |
+| --- | --- |
+| `tenancy` | `GET /tenancy` (`cluster_settings.tenancy_mode`). A controller error is `fail` and is not treated as `self_hosted`. |
+| `blobstore` | Default backend name only. Empty `DEFAULT_BACKEND` is `postgres`. Hosted `postgres` is `fail`. Self-hosted `postgres` is `warn`. `BACKEND_*` values are not printed. |
+| `zfs` | `zpool status -P` for this host. Hosted `fail` when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Self-hosted passes a file-backed pool. A missing pool or `zpool` error is `fail` either way. |
+| `reserve` | Hosted `fail` unless `small`, `medium`, and `large` have `reserve_resources`. The scheduler reads that stored flag. It does not reserve hosted jobs while that flag is false. An empty profile does not count, and one other reserved profile does not pass. Self-hosted passes with the flags off. |
+| `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, and `none` are no cap. The check does not write the tag. |
+| `backup` | Always `warn`: tenant volumes are outside `flynn-host backup`. |
+| `overlay` | Informational. Prints the live flannel network and subnet length. |
+
+ZFS is local, so run the check on each host. The other lines are cluster state,
+except `host-cap`, which lists only the hosts currently registered in discoverd.
+
+Set a cap with `flynn-host init --max-processes` or
+`flynn-host tags:max-processes`. Turn reservation on with
+`flynn-host runtime:reserve`. Move the blobstore with
+`flynn-host blobstore:set --migrate` (or `blobstore:migrate`). The file-backed
+pool migration is the mirror-and-detach procedure under
+[Storage](#storage).
+
+An empty flannel `NETWORK` is `100.100.0.0/16`. When subnet length is unset,
+flannel uses 24 if the network is wider than `/24`, and one bit narrower when
+the network is `/24` or smaller. `100.64.0.0/16` is the Vagrant network. The
+overlay line prints whatever flannel metadata stores. It does not substitute
+a fixed size.
+
 ## Cluster Requirements
 
 At least three hosts are required to deploy Flynn in a highly available
@@ -54,6 +101,12 @@ Flynn uses ZFS to store data. By default, a ZFS pool is created in a sparse file
 on top of the existing filesystem at `/var/lib/flynn/volumes`. We don't
 recommend keeping this configuration in production, as it is not as reliable as
 dedicating whole disks to the ZFS pool.
+
+On a hosted cluster, [`production:check`](#production-check) fails while any
+leaf of the pool is still a regular file. A mirror that still lists the file
+fails until that file is detached. Self-hosted clusters pass a file-backed
+pool. A missing pool fails in either mode. The check does not attach, detach,
+or delete the file.
 
 ### Custom ZFS pool
 
@@ -124,6 +177,11 @@ dependencies.
 We recommend using one of the external blobstore backends listed below for
 production, as they are more reliable than the Postgres backend and have
 predictable performance without consuming disk space on the Flynn hosts.
+
+[`production:check`](#production-check) fails a hosted cluster while the
+default backend is still Postgres, and warns on a self-hosted cluster. Empty
+`DEFAULT_BACKEND` counts as Postgres. The check prints the default backend
+name only and does not run the migrate.
 
 ### Amazon S3
 
@@ -352,7 +410,8 @@ a full `pg_dumpall` of the **platform** Postgres appliance (controller,
 blobstore files including plugin image layers, and plugin metadata databases
 attached to `platform-postgres`), and MariaDB/MongoDB dumps when those
 plugin appliances are scaled above zero. Tenant Postgres instance volumes
-are not in that dump. If the current postgres release has no formation row
+are not in that dump. [`production:check`](#production-check) always warns
+that tenant volumes are outside `flynn-host backup`. If the current postgres release has no formation row
 yet (seen after an updater deploy), backup copies process counts from
 another scaled formation on that app instead of failing. Restore does
 **not** re-run `flynn-host plugin:install`; plugin apps come back with
