@@ -170,6 +170,12 @@ type LibcontainerBackend struct {
 	cpuSampleMtx sync.Mutex
 	cpuSamples   map[string]cpuSample
 
+	// Previous aggregate /proc/stat reading. The first GetHostStats call
+	// stores it and reports 0%; the next call reports busy time since then.
+	hostCPUMtx  sync.Mutex
+	hostCPUPrev hostCPUTimes
+	hostCPUHave bool
+
 	envMtx     sync.RWMutex
 	defaultEnv map[string]string
 
@@ -2832,6 +2838,11 @@ func (l *LibcontainerBackend) GetHostStats() (*host.HostResourceStats, error) {
 
 	// CPU count
 	result.CPUCount = runtime.NumCPU()
+
+	// Host CPU% from /proc/stat. The first sample is a baseline and reports 0.
+	if err := l.readHostCPU(result); err != nil && l.Logger != nil {
+		l.Logger.Warn("error reading host cpu stats", "err", err)
+	}
 
 	// Memory stats from /proc/meminfo
 	if err := l.readMemInfo(result); err != nil {
