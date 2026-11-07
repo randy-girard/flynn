@@ -154,10 +154,10 @@ start_one_cluster_node() {
   set +e
   run_as_root_on "${name}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=$(flynn_vagrant_cluster_ip) script/vagrant/guest/start-node.sh"
   st=$?
-  set -e
-  # bash 3.2 + set -e: a bare `return 1` aborts the whole script even when the
-  # caller wrapped this function in set +e. Return from `if` so rolling reload
-  # can keep waiting for Flynn after start-node's controller timeout.
+  # Do not re-enable set -e here. On bash 3.2 and 5.3, `return 2` under set -e
+  # exits the whole script, even from an if body and even when the caller used
+  # set +e. dev-db-node is not bootstrapped; that exit 2 must reach rolling
+  # reload so it can continue. A controller-timeout exit 1 must do the same.
   if [[ "${st}" -ne 0 ]]; then
     return "${st}"
   fi

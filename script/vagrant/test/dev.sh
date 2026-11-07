@@ -314,7 +314,32 @@ if ! grep -Fq 'controller wait timed out' "${script}"; then
   exit 1
 fi
 if ! awk '/^start_one_cluster_node\(\)/,/^}/' "${script}" | grep -Fq 'if [[ "${st}" -ne 0 ]]; then'; then
-  echo "start_one_cluster_node must return non-zero from if so bash 3.2 + set -e cannot abort rolling reload" >&2
+  echo "start_one_cluster_node must return non-zero from if so the caller can tell exit 2 from a controller timeout" >&2
+  exit 1
+fi
+# bash 5.3 still exits the whole script on `return 2` when the function has
+# re-enabled set -e, even from an if body and even when the caller used set +e.
+# dev-db-node is not a raft member; that exit 2 must come back to rolling reload.
+if awk '/^start_one_cluster_node\(\)/,/^}/' "${script}" | grep -Eq '^[[:space:]]*set -e([[:space:]]|$)'; then
+  echo "start_one_cluster_node must not set -e before returning; a non-zero return then aborts rolling reload" >&2
+  exit 1
+fi
+if ! bash -c '
+set -e
+f() {
+  local st=0
+  set +e
+  (exit 2)
+  st=$?
+  if [[ "${st}" -ne 0 ]]; then
+    return "${st}"
+  fi
+}
+set +e
+f
+[[ $? -eq 2 ]]
+'; then
+  echo "a start-node exit 2 must reach the caller while set -e is on in the script" >&2
   exit 1
 fi
 if ! grep -Fq 'UnmarshalState reconnects to containers' "${ROOT}/host/state.go"; then
