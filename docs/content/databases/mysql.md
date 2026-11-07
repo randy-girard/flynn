@@ -19,14 +19,19 @@ sudo flynn-host plugin:install ../flynn-plugin-mysql
 flynn addons:create mysql
 ```
 
-The plugin provides MySQL-compatible databases in a highly-available
-configuration with automatic provisioning. It automatically fails over to a
-synchronous replica with no loss of data if the primary server goes down. A
-rolling update starts each replacement replica and waits for it to catch up
-before stopping the peer it replaces, so the three-peer set stays intact
-during the new job's base backup. A single-host (`SINGLETON`) cluster runs one
-peer; when a third host joins, the scheduler promotes the appliance to a
-three-peer replica set automatically.
+Each `flynn addons:create mysql` starts a new instance: its own app, one
+volume, and one process. The app strategy is `one-down-one-up`. One node does
+not fail over, and a third Flynn host does not add peers. There is no
+`mysql:scale`.
+
+A follower is another resource (`flynn mysql:follow` or
+`flynn addons:create mysql --follow`). It is an async read-only replica of
+that leader, and it copies the leader's users and passwords. It does not
+follow another follower. `--auto-failover` requires `--follow`. After the
+primary job has been down for 30 seconds, that follower is promoted, the old
+primary is fenced, and a replacement replica is started. Replication is
+asynchronous, so the latest writes can be lost. There is no synchronous
+replica.
 
 Each resource user is created with `MAX_USER_CONNECTIONS` (default 20, override
 with `MYSQL_MAX_USER_CONNECTIONS` on the API). The provider sets `tenant_safe`.
@@ -48,25 +53,40 @@ an app, provision a database with:
 flynn addons:create mysql
 ```
 
-This will provision a database on the MySQL cluster and configure your
-application to connect to it.
-
-By default, MySQL is not running in the Flynn cluster. The first time you
-provision a database, MySQL will be started and configured.
+This starts a new MySQL instance for the app and configures the app to
+connect to it. The command returns after the instance is scheduled; MySQL
+finishes starting in the background.
 
 ### Followers
 
-A follower is a separate read-only instance. The dashboard Followers tab can
-remove it while it is still replicating. Remove stops replication and deletes
-the replica. Unfollow leaves a standalone writable copy.
+A follower is a separate read-only instance, not a second process on the
+leader. It copies the leader's users and passwords and stays caught up
+asynchronously.
+
+```text
+flynn addons:create mysql --follow <resource>
+flynn mysql:follow <resource>
+flynn mysql:follow <resource> --auto-failover
+flynn mysql:wait <follower>
+flynn mysql:promote <follower>
+flynn mysql:unfollow <follower>
+```
+
+`--auto-failover` places the replica on another host. If the primary job
+stays down for 30 seconds, Flynn promotes that follower, fences the old
+primary, and starts a replacement replica. One node, with no follower, does
+not fail over. The dashboard Followers tab can remove a follower while it is
+still replicating. Remove stops replication and deletes the replica. Unfollow
+leaves a standalone writable copy.
 
 ### Connecting to the database
 
 Provisioning the database will add a few environment variables to your app
 release. `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PWD`, and
 `MYSQL_DATABASE` provide connection details for the database and are used
-automatically by many MySQL clients. `FLYNN_MYSQL` is the name of the MySQL
-discoverd service (`mysql`).
+automatically by many MySQL clients. `FLYNN_MYSQL` is the instance app
+name. `MYSQL_HOST` is `leader.<that-app>.discoverd`. Do not use
+`leader.mysql.discoverd`.
 
 Every provision and attach sets `FLYNN_MYSQL_<COLOR>_URL` unless `--as NAME` names
 the attachment (`NAME_URL`, or `FLYNN_MYSQL_<COLOR>_URL` when `--as` is a color
@@ -140,10 +160,11 @@ plaintext handshake, so router TLS terminate breaks those clients. Point DNS
 (or the cluster wildcard) at the hosts and connect with TLS to
 `mysql.<cluster-domain>:PORT`.
 
-You can still create the route yourself:
+You can still create the route yourself, on the instance app (the value of
+`FLYNN_MYSQL`), not on `mysql-plugin`:
 
 ```text
-flynn -a mysql-plugin route:add tcp --service mysql --leader --domain mysql.example.com --tls-mode passthrough
+flynn -a <instance-app> route:add tcp --service <instance-app> --leader --domain mysql.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 
@@ -155,10 +176,9 @@ Remove with `flynn addons:unexpose mysql` then
 
 ## Safety
 
-This appliance is designed to provide full consistency and partition tolerance
-for all operations that are committed to the binlog. However, the semi-sync
-replication configuration is not as well tested as our Postgres appliance, so
-we do not have full confidence in the system yet.
+A single node has no replica. Writes acknowledged by that node are on that
+volume only. A follower replicates asynchronously, so a failover can lose
+writes that had not reached it yet. This is not a synchronous three-peer set.
 
 There is currently no support for tuning, and data transfer during recovery is
 not optimized, so we do not recommend using the appliance for applications that

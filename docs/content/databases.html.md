@@ -43,14 +43,15 @@ and `$APP-$TYPE.discoverd` do not resolve from user jobs.
 | --- | --- | --- |
 | platform `postgres` app | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain. **Not** `addons:create postgres`. System apps only |
 | [`postgres`](databases/postgres.md) | PostgreSQL 16 (plugin) | One node, own app and volume. `flynn addons:create postgres` after `flynn-host plugin:install postgres`. Not sirenia |
-| [`mysql`](databases/mysql.md) | MariaDB 10.11 | Same HA state machine; scaled up on first provision |
-| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | Replica set; scaled up on first provision |
+| [`mysql`](databases/mysql.md) | MariaDB 10.11 | One node, own app and volume. Optional async follower. A third host does not add peers |
+| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | One node, own app and volume. `mongodb:scale` grows that set (1–7). Three peers when the cluster has three hosts |
 | [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process; AOF on a volume, no replicas, not in cluster backup |
 | [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
 | [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
 
-The tenant Postgres plugin, Redis, Kafka, and ClickHouse do not use the
-sirenia state machine described below. See each page for safety notes.
+The tenant Postgres plugin, MySQL, Redis, Kafka, and ClickHouse do not use the
+sirenia state machine described below. MongoDB runs sirenia inside each
+resource, which is not that platform appliance. See each page for safety notes.
 
 ## Database runtimes
 
@@ -104,11 +105,13 @@ Tenants cannot set raw `--cpu`, `--memory`, or `--disk`, and they cannot
 request a runtime name that is not published. A cluster admin allows raw
 sizes with `sudo flynn-host db-runtime:allow-custom`.
 
-On a single-host cluster, the **platform** Postgres appliance, MariaDB, and
-MongoDB run one peer (`SINGLETON=true`). When a third host joins, the
-scheduler promotes those sirenia/replica-set appliances to a three-peer
-set automatically. Tenant Postgres from the plugin stays one node per
-resource; resize is follow, wait, promote.
+On a single-host cluster, the **platform** Postgres appliance runs one peer
+(`SINGLETON=true`). When a third host joins, the scheduler promotes that
+appliance to a three-peer set. Tenant MySQL stays one node per resource; a
+follower is a separate async replica. Each tenant MongoDB resource stays one
+node until `mongodb:scale`, except on three or more hosts, where the scheduler
+promotes that resource to three peers. Tenant Postgres from the plugin stays
+one node per resource; resize is follow, wait, promote.
 
 ## External TLS access
 

@@ -19,10 +19,10 @@ The plugin controller app is `mongodb-plugin` (`flynn-host ps`). The provider
 API is `http://mongodb-plugin.discoverd/databases`. Provision with
 `flynn addons:create mongodb`.
 
-The plugin provides MongoDB 7.0 in a highly-available configuration with
-automatic provisioning. Replication is implemented using MongoDB's replica set
-feature. Each resource is one replica set; change its node count with
-`flynn mongodb:scale` (see [Scaling the cluster](#scaling-the-cluster)). The
+Each `flynn addons:create mongodb` starts a new instance: its own app, one
+volume, and one node (a one-member replica set). It does not join another
+tenant's set. `flynn mongodb:scale` grows that resource (see
+[Scaling the cluster](#scaling-the-cluster)). The engine is MongoDB 7.0. The
 image includes `mongod` 7.0.43 (ubuntu2204 build), database tools 100.19.1, and
 `mongosh` 2.13.0 (not the legacy `mongo` shell). They are installed from
 official tarballs vendored in the plugin repo and checked against SHA-256
@@ -45,11 +45,8 @@ an app, provision a database with:
 flynn addons:create mongodb
 ```
 
-This will provision a database on the MongoDB cluster and configure your
-application to connect to it.
-
-By default, MongoDB is not running in the Flynn cluster. The first time you
-provision a database, MongoDB will be started and configured.
+This starts a new one-node replica set for the app and configures the app to
+connect to it. The command returns after the instance is scheduled.
 
 ### Connecting to the database
 
@@ -82,7 +79,17 @@ with:
 flynn mongodb:scale <n> [<resource>]
 ```
 
-`<n>` is 1 to 7. An even count is accepted with a warning.
+`<n>` is 1 to 7. An even count is accepted with a warning: it tolerates no
+more failures than the odd count below it.
+
+On a Flynn cluster with fewer than three hosts, a one-node resource does not
+fail over. On three or more hosts, the scheduler promotes each resource to
+three peers (a new release with `SINGLETON=false`, then a scale to 3). That
+is this resource's replica set, not a shared set other tenants join. Creating
+a resource on a cluster that already has three hosts can overlap that
+promotion, so the first writes can land while the primary is restarting.
+`mongodb:scale` is how you grow the set when the cluster has fewer than three
+hosts.
 
 * Scaling up from one node first deploys a release with `SINGLETON=false`,
   which briefly restarts the primary.
@@ -163,10 +170,11 @@ itself. External clients connect with `tls=true` and trust
 `FLYNN_MONGODB_TRUSTED_CERT` (skip hostname verification if the route hostname is not
 on the certificate).
 
-You can still create the route yourself:
+You can still create the route yourself, on the instance app (the value of
+`FLYNN_MONGO`), not on an app named `mongodb`:
 
 ```text
-flynn -a mongodb route:add tcp --service mongodb --leader --domain mongodb.example.com --tls-mode passthrough
+flynn -a <instance-app> route:add tcp --service <instance-app> --leader --domain mongodb.example.com --tls-mode passthrough
 sudo flynn-host firewall:expose PORT
 ```
 
@@ -199,9 +207,11 @@ Metrics, Databases, Users, and Backup.
 
 ## Safety
 
-The MongoDB appliance uses a [replica
-set](https://docs.mongodb.com/manual/replication/) for replication and is unsafe
-by default, as all operations are replicated asynchronously.
+A one-node resource does not fail over. After `mongodb:scale` above 1, or
+after the scheduler has promoted the resource on a three-host cluster, loss of
+the primary can elect another member. The replica
+set is [asynchronous](https://docs.mongodb.com/manual/replication/) by
+default.
 
 To guarantee durability of writes, the [majority write
 concern](https://docs.mongodb.com/manual/reference/write-concern/) should be

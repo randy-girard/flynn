@@ -473,14 +473,17 @@ flag should be specified. The `CLUSTER_DOMAIN` variable is ignored, the domain
 of the previous cluster will be used.
 
 Restoring a singleton backup onto `--min-hosts 3` keeps the backup's
-`SINGLETON` flag and process counts so Postgres/MariaDB/MongoDB can elect a
-leader during wait/dump. After controller is up, the scheduler promotes those
-appliances to HA (new `SINGLETON=false` release at scale 1, then data process
-scale 3) once three hosts are active. Restoring onto a single host still
-forces singleton scale. Growing a live singleton cluster to three hosts uses
-the same promotion path. Only releases with `SINGLETON=false` are scaled to 3;
-plugin resource instances (for example `mysql-<word>-<digits>` apps) stay at the
-process count their plugin set.
+`SINGLETON` flag and process counts so the platform Postgres appliance can
+elect a leader during wait/dump. After the controller is up, the scheduler
+promotes that appliance to HA (new `SINGLETON=false` release at scale 1, then
+data process scale 3) once three hosts are active. Restoring onto a single
+host still forces singleton scale. Growing a live singleton cluster to three
+hosts uses the same path for platform Postgres. Only releases that already
+have `SINGLETON=false` are scaled to 3.
+
+MySQL instances (`mysql-<word>-<digits>`) do not set `SINGLETON`, so they stay
+at one process. MongoDB instances set `SINGLETON=true` and are not plugin
+apps, so the same promotion grows each of them to three peers.
 
 ### App Export
 

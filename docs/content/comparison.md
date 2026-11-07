@@ -63,8 +63,8 @@ Flynn's engines suit development, staging, and small production. They are not tu
 | Postgres | **Partial.** Plugin. One node. Optional follower, not automatic failover unless you add one. Not in the cluster backup | **Yes.** HA, forks, and point-in-time rollback on higher plans | **Partial.** Marketplace | **Yes.** Managed, HA, backups | **Partial.** HA and recovery on larger paid plans. Free expires | **Partial.** Add-on or Helm chart. You operate it | **Yes.** Managed |
 | Redis | **Partial.** No automatic failover. Not in the cluster backup | **Yes.** HA on higher plans | **Partial.** Marketplace | **Partial.** Upstash | **Yes.** Key Value | **Yes.** Add-on | **Yes.** |
 | Kafka | **Partial.** Three brokers. Topic data is not in the cluster backup | **Yes.** Managed | **No.** | **No.** | **No.** | **Partial.** Helm chart, not a managed service | **No.** |
-| MySQL-compatible | **Yes.** MariaDB 10.11, automatic failover | **Partial.** Marketplace | **Partial.** Marketplace | **No.** | **No.** | **Partial.** Helm or add-on | **No.** |
-| MongoDB | **Yes.** Replica set, automatic failover | **Partial.** Marketplace | **Partial.** Marketplace | **No.** | **No.** | **Partial.** Helm or add-on | **Yes.** Template |
+| MySQL-compatible | **Partial.** MariaDB 10.11. One node. Optional async follower, not automatic failover unless you add one | **Partial.** Marketplace | **Partial.** Marketplace | **No.** | **No.** | **Partial.** Helm or add-on | **No.** |
+| MongoDB | **Partial.** One member. Replica set after scale, or three members when the cluster has three hosts | **Partial.** Marketplace | **Partial.** Marketplace | **No.** | **No.** | **Partial.** Helm or add-on | **Yes.** Template |
 | ClickHouse | **Partial.** Three replicas. Tables are not in the cluster backup | **No.** | **No.** | **No.** | **Partial.** Run it as a private service | **Partial.** Helm chart | **Yes.** Template |
 | Third-party catalog | **No.** First-party plugins only | **Yes.** Elements | **Yes.** Marketplace | **Partial.** Partners such as Upstash and Tigris | **No.** | **Yes.** Helm charts | **Partial.** Templates, not a partner store |
 | Salesforce sync | **No.** | **Yes.** Heroku Connect. Not on review or CI apps | **No.** | **No.** | **No.** | **No.** | **No.** |
@@ -79,7 +79,7 @@ Flynn's engines suit development, staging, and small production. They are not tu
 
 ## What the matrix leaves out
 
-The Postgres your apps use is a plugin: one node and one volume. A follower is optional, and automatic failover stays off until you add one. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MariaDB and MongoDB do fail over on their own.
+The Postgres your apps use is a plugin: one node and one volume. A follower is optional, and automatic failover stays off until you add one. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MariaDB is the same shape: one node, and failover only if you add an async follower. MongoDB starts as one member of its own replica set. `mongodb:scale` grows that set, and on three or more hosts Flynn grows each resource to three members.
 
 Review Apps can be created for every pull request. Heroku CI and the Container Registry are Cedar-generation features and are not on Fir. Heroku Connect syncs Postgres with Salesforce and opts out of review and CI apps.
 
