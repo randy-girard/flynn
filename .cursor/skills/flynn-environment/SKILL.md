@@ -12,6 +12,8 @@ description: >-
 
 The workspace is a folder of separate git repos, not one repo. Read the current repo's `AGENTS.md` for product rules. Use this skill for how to run things.
 
+A behavior change or bug fix starts with a test that fails for the missing behavior. Run that failure, then change the code, then rerun until the repo's unit tests are green.
+
 Command details and the project-board ids are in [reference.md](reference.md).
 
 ## Pick the right check
