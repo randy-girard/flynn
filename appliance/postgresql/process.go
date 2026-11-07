@@ -924,9 +924,11 @@ func postgresStandbyStreamingConfirmed(consecutive int) bool {
 	return consecutive >= 2
 }
 
-// postgresWALSegmentRemoved is true for the postgres FATAL that leaves a
-// replica dead after the primary recycled WAL (or moved timeline) while this
-// peer was down:
+// postgresWALSegmentRemoved is true for a postgres FATAL that leaves a
+// replica unable to follow the upstream: recycled WAL, a missing timeline
+// history file, or a timeline this datadir is not a child of. The last one
+// is what dev-node3 hit after dev-node2 rebooted onto timeline 8 while this
+// standby's checkpoint was still on timeline 7.
 //
 //	could not receive data from WAL stream: ERROR:  requested WAL segment
 //	0000001E000000050000000B has already been removed
@@ -949,6 +951,17 @@ func postgresWALSegmentRemoved(msg string) bool {
 	// The upstream lacks a history file this datadir needs to follow its
 	// timeline; postgres retries forever without replicating.
 	if strings.Contains(s, "could not receive timeline history file") {
+		return true
+	}
+	// recovery_target_timeline=latest points at a timeline this datadir
+	// cannot enter. Postgres exits in well under a second, so the reused
+	// standby startup timeout never fires and the peer retries the same
+	// datadir forever. The DETAIL line mentions "requested timeline" without
+	// either phrase and must not match: it is context, not the FATAL.
+	if strings.Contains(s, "not a child of this server's history") {
+		return true
+	}
+	if strings.Contains(s, "does not contain minimum recovery point") {
 		return true
 	}
 	return false

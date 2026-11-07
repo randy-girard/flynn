@@ -108,6 +108,22 @@ func TestPostgresWALSegmentRemoved(t *testing.T) {
 	if !postgresWALSegmentRemoved(`FATAL:  could not receive timeline history file from the primary server: ERROR:  could not open file "pg_wal/00000024.history": No such file or directory`) {
 		t.Fatal("a standby that cannot fetch an ancestor timeline history must reseed")
 	}
+	// dev-node3 postgres.3841 after dev-node2's reboot: the standby's
+	// checkpoint is on timeline 7 and the primary has moved to timeline 8,
+	// which forked off that history. Postgres exits immediately, so the
+	// reused-datadir startup timeout never fires and the peer crash-loops
+	// instead of taking a basebackup.
+	fork := "eb4c92ea-d2b1-4aeb-81f7-a6481daa3f83 2026-11-07 14:27:42.046 UTC FATAL:  requested timeline 8 is not a child of this server's history"
+	if !postgresWALSegmentRemoved(fork) {
+		t.Fatal("a standby whose timeline diverged from the primary must reseed")
+	}
+	if !postgresWALSegmentRemoved("FATAL:  requested timeline 8 does not contain minimum recovery point 2/95F5E1C8 on timeline 7") {
+		t.Fatal("a standby that cannot reach the primary timeline from its restart point must reseed")
+	}
+	detail := "DETAIL:  Latest checkpoint is at 2/95F5E1C8 on timeline 7, but in the history of the requested timeline, the server forked off from that timeline at 2/8F000000."
+	if postgresWALSegmentRemoved(detail) {
+		t.Fatal("the timeline DETAIL line must not by itself force a reseed")
+	}
 }
 
 // A sync promoted from a basebackup only had its own timeline's history, so
@@ -209,6 +225,24 @@ func TestWalRecycleDetector(t *testing.T) {
 	}
 	if !p.walRecycled() || !p.needsReseed() {
 		t.Fatalf("detector must flag WAL recycle from postgres.5052 logs: recycled=%v reseed=%v", p.walRecycled(), p.needsReseed())
+	}
+}
+
+func TestWalRecycleDetectorTimelineDivergence(t *testing.T) {
+	p := NewProcess(Config{ID: "eb4c92ea-d2b1-4aeb-81f7-a6481daa3f83", DataDir: t.TempDir(), Port: "6507"})
+	p.setConfig(&state.Config{Role: state.RoleSync, Upstream: &discoverd.Instance{Addr: "100.100.83.15:5432"}})
+	p.inStart.Store(true)
+	d := &walRecycleDetector{p: p}
+	msg := "eb4c92ea-d2b1-4aeb-81f7-a6481daa3f83 2026-11-07 14:27:42.046 UTC FATAL:  requested timeline 8 is not a child of this server's history\n" +
+		"DETAIL:  Latest checkpoint is at 2/95F5E1C8 on timeline 7, but in the history of the requested timeline, the server forked off from that timeline at 2/8F000000.\n"
+	if _, err := d.Write([]byte(msg)); err != nil {
+		t.Fatal(err)
+	}
+	if !p.walRecycled() || !p.needsReseed() {
+		t.Fatalf("timeline divergence must flag a reseed: recycled=%v reseed=%v", p.walRecycled(), p.needsReseed())
+	}
+	if p.reseedScheduled.Load() {
+		t.Fatal("detector must not schedule reseed while start() holds the process lock")
 	}
 }
 
