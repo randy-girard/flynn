@@ -6,6 +6,7 @@ import (
 	. "github.com/flynn/go-check"
 	"github.com/jackc/pgx"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/resource"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	pgtestutils "github.com/randy-girard/flynn/pkg/testutils/postgres"
@@ -444,4 +445,73 @@ func (s *S) TestRuntimeEventTypeExists(c *C) {
 	var n int
 	c.Assert(s.db.QueryRow("SELECT count(*) FROM event_types WHERE name = $1", "runtime").Scan(&n), IsNil)
 	c.Assert(n, Equals, 1)
+}
+
+func (s *S) TestRunnableFormationsIncludeOldRelease(c *C) {
+	apps := NewAppRepo(s.db, "example.com", NewRouteRepo(s.db))
+	artifacts := NewArtifactRepo(s.db)
+	releases := NewReleaseRepo(s.db, artifacts, nil)
+	formations := NewFormationRepo(s.db, apps, releases, artifacts)
+	tenancy := NewTenancyRepo(s.db)
+
+	owner := &ct.App{Name: "quota-owner", OwnerAccount: "user:quota-owner"}
+	other := &ct.App{Name: "quota-other", OwnerAccount: "user:quota-other"}
+	c.Assert(apps.Add(owner), IsNil)
+	c.Assert(apps.Add(other), IsNil)
+
+	limit := int64(256 * 1024 * 1024)
+	procs := map[string]ct.ProcessType{
+		"web": {Resources: resource.Resources{
+			resource.TypeMemory: {Limit: &limit},
+		}},
+	}
+	current := &ct.Release{AppID: owner.ID, Processes: procs}
+	old := &ct.Release{AppID: owner.ID, Processes: procs}
+	zero := &ct.Release{AppID: owner.ID, Processes: procs}
+	foreign := &ct.Release{AppID: other.ID, Processes: procs}
+	c.Assert(releases.Add(current), IsNil)
+	c.Assert(releases.Add(old), IsNil)
+	c.Assert(releases.Add(zero), IsNil)
+	c.Assert(releases.Add(foreign), IsNil)
+	c.Assert(apps.SetRelease(owner, current.ID), IsNil)
+
+	scale := func(appID, releaseID string, n int) {
+		counts := map[string]int{"web": n}
+		_, err := formations.AddScaleRequest(&ct.ScaleRequest{
+			AppID:        appID,
+			ReleaseID:    releaseID,
+			NewProcesses: &counts,
+		}, false)
+		c.Assert(err, IsNil)
+	}
+	scale(owner.ID, current.ID, 1)
+	scale(owner.ID, old.ID, 2)
+	scale(owner.ID, zero.ID, 0)
+	scale(other.ID, foreign.ID, 4)
+
+	rows, err := tenancy.RunnableFormations("user:quota-owner")
+	c.Assert(err, IsNil)
+	got := map[string]int{}
+	for _, row := range rows {
+		c.Assert(row.Owner, Equals, "user:quota-owner")
+		got[row.ReleaseID] = row.Processes["web"]
+		spec := row.Types["web"].Resources[resource.TypeMemory]
+		c.Assert(spec.Limit, NotNil)
+		c.Assert(*spec.Limit, Equals, limit)
+	}
+	c.Assert(got, HasLen, 2)
+	c.Assert(got[current.ID], Equals, 1)
+	c.Assert(got[old.ID], Equals, 2)
+
+	zeros := map[string]int{"web": 0}
+	_, err = formations.AddScaleRequest(&ct.ScaleRequest{
+		AppID:        owner.ID,
+		ReleaseID:    old.ID,
+		NewProcesses: &zeros,
+	}, true)
+	c.Assert(err, IsNil)
+	rows, err = tenancy.RunnableFormations("user:quota-owner")
+	c.Assert(err, IsNil)
+	c.Assert(rows, HasLen, 1)
+	c.Assert(rows[0].ReleaseID, Equals, current.ID)
 }

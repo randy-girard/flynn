@@ -335,6 +335,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
+	if err := c.enforceOneOffMemory(app, procType, job.Resources); err != nil {
+		respondWithError(w, err)
+		return
+	}
 	if len(newJob.Args) > 0 {
 		job.Config.Args = release.RunJobArgs(newJob.Args)
 	}
@@ -524,6 +528,9 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 		job.Partition = "system"
 	}
 	resource.SetDefaults(&job.Resources)
+	if err := c.enforceOneOffMemory(app, procType, job.Resources); err != nil {
+		return nil, err
+	}
 	if len(newJob.Args) > 0 {
 		job.Config.Args = release.RunJobArgs(newJob.Args)
 	}

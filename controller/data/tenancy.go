@@ -658,3 +658,67 @@ func usageFromFormation(procRaw, formRaw []byte) (procs, memoryMB int) {
 	}
 	return procs, memoryMB
 }
+
+// RunnableFormation is a non-deleted formation whose process counts sum to
+// more than zero. Release is the formation's own release, not apps.release_id,
+// so an old release still being scheduled is included.
+type RunnableFormation struct {
+	AppID     string
+	ReleaseID string
+	Owner     string
+	Processes map[string]int
+	Tags      map[string]map[string]string
+	Types     map[string]ct.ProcessType
+}
+
+// RunnableFormations lists the formations the scheduler can run for account.
+// The inclusion predicate matches formation_list_active.
+func (r *TenancyRepo) RunnableFormations(account string) ([]RunnableFormation, error) {
+	if r == nil || r.db == nil || account == "" {
+		return nil, nil
+	}
+	rows, err := r.db.Query(`
+		SELECT f.app_id::text, f.release_id::text, COALESCE(a.owner_account, ''),
+		       f.processes, f.tags, r.processes
+		FROM formations f
+		JOIN apps a ON a.app_id = f.app_id
+		JOIN releases r ON r.release_id = f.release_id
+		WHERE f.deleted_at IS NULL
+		  AND COALESCE(a.owner_account, '') = $1
+		  AND (f.app_id, f.release_id) IN (
+		    SELECT app_id, release_id
+		    FROM formations, json_each_text(formations.processes::json)
+		    WHERE processes != 'null'
+		    GROUP BY app_id, release_id
+		    HAVING SUM(value::int) > 0
+		  )`, account)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RunnableFormation
+	for rows.Next() {
+		var procRaw, tagRaw, typeRaw []byte
+		var row RunnableFormation
+		if err := rows.Scan(&row.AppID, &row.ReleaseID, &row.Owner, &procRaw, &tagRaw, &typeRaw); err != nil {
+			return nil, err
+		}
+		if len(procRaw) > 0 {
+			if err := json.Unmarshal(procRaw, &row.Processes); err != nil {
+				return nil, err
+			}
+		}
+		if len(tagRaw) > 0 {
+			if err := json.Unmarshal(tagRaw, &row.Tags); err != nil {
+				return nil, err
+			}
+		}
+		if len(typeRaw) > 0 {
+			if err := json.Unmarshal(typeRaw, &row.Types); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

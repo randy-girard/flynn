@@ -405,6 +405,14 @@ func (g *grpcAPI) createScale(req *api.CreateScaleRequest) (*api.ScaleRequest, e
 	releaseID := api.ParseIDFromName(req.Parent, "releases")
 	processes := parseDeploymentProcesses(req.Processes)
 	tags := parseDeploymentTags(req.Tags)
+	// An empty process map stores the existing counts. Only a real process
+	// change goes through the same quota check as PutScaleRequest.
+	// CreateDeployment calls createScale again after the deploy completes.
+	if len(req.Processes) > 0 {
+		if err := g.enforceCreateScale(appID, releaseID, processes, tags, req.Tags != nil); err != nil {
+			return nil, api.NewError(err, "%s", err.Error())
+		}
+	}
 
 	sub, err := g.subscribeEvents([]string{appID}, []ct.EventType{ct.EventTypeScaleRequest, ct.EventTypeScaleRequestCancelation}, nil)
 	if err != nil {
@@ -902,6 +910,31 @@ func parseDeploymentTags(from map[string]*api.DeploymentProcessTags) map[string]
 		to[k] = v.Tags
 	}
 	return to
+}
+
+// enforceCreateScale applies the memory quota before AddScaleRequest.
+// Suspension to zero does not come through here.
+func (g *grpcAPI) enforceCreateScale(appID, releaseID string, processes map[string]int, tags map[string]map[string]string, applyTags bool) error {
+	if g == nil || g.controllerAPI == nil || g.tenancy == nil || g.appRepo == nil || g.releaseRepo == nil {
+		return nil
+	}
+	raw, err := g.appRepo.Get(appID)
+	if err != nil {
+		return err
+	}
+	app, _ := raw.(*ct.App)
+	if app == nil || app.OwnerAccount == "" {
+		return nil
+	}
+	rawRel, err := g.releaseRepo.Get(releaseID)
+	if err != nil {
+		return err
+	}
+	release, _ := rawRel.(*ct.Release)
+	if release == nil {
+		return ct.ValidationError{Field: "release", Message: "release is required"}
+	}
+	return g.enforceScale(context.Background(), app, release, existingProcesses(g.controllerAPI, appID, releaseID), processes, tags, applyTags)
 }
 
 func parseDeploymentProcesses(from map[string]int32) map[string]int {

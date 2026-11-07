@@ -527,19 +527,22 @@ type controllerAPI struct {
 	runtimeProfileRepo     *data.RuntimeProfileRepo
 	dbRuntimeRepo          *data.DBRuntimeRepo
 	tenancy                *data.TenancyRepo
-	githubStore            githubStore
-	githubAPI              githubAPI
-	githubHTTP             *http.Client
-	taffy                  taffyLauncher
-	githubDomain           string
-	githubPluginURL        string
-	clusterClient          utils.ClusterClient
-	logaggc                logClient
-	que                    *que.Client
-	caCert                 []byte
-	config                 handlerConfig
-	authorizer             *authorizer.Authorizer
-	tokenSigner            *tokensigner.Signer
+	// buildJobMemoryLimits overrides the shipped host default for one-off
+	// build jobs. Nil counts 12 GiB. False rejects the job.
+	buildJobMemoryLimits *bool
+	githubStore          githubStore
+	githubAPI            githubAPI
+	githubHTTP           *http.Client
+	taffy                taffyLauncher
+	githubDomain         string
+	githubPluginURL      string
+	clusterClient        utils.ClusterClient
+	logaggc              logClient
+	que                  *que.Client
+	caCert               []byte
+	config               handlerConfig
+	authorizer           *authorizer.Authorizer
+	tokenSigner          *tokensigner.Signer
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

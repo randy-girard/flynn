@@ -237,6 +237,12 @@ func (c *controllerAPI) quotaAllows(account string, apps, procs, memoryMB, resou
 		{"max_collaborators", limits.MaxCollaborators, collaborators},
 	}
 	for _, check := range checks {
+		if check.name == "max_memory_mb" {
+			if err := memoryAllows(check.limit, int64(check.used)); err != nil {
+				return err
+			}
+			continue
+		}
 		if check.used == 0 {
 			continue
 		}
@@ -357,10 +363,14 @@ func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route
 	return out
 }
 
-func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, oldCounts, newCounts map[string]int) error {
-	if c == nil || c.tenancy == nil || app == nil || app.OwnerAccount == "" {
+func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *ct.Release, oldCounts, newCounts map[string]int, newTags map[string]map[string]string, applyTags bool) error {
+	if !scaleQuotaApplies(c, app) {
 		return nil
 	}
+	// ScaleIncreases gates suspension only. Memory is checked on the
+	// formation that will be stored, including a scale-down that is still
+	// over max_memory_mb. Process arithmetic below stays on the unmerged
+	// request counts.
 	if tenancy.ScaleIncreases(oldCounts, newCounts) {
 		if err := c.rejectIfSuspended(app.OwnerAccount); err != nil {
 			return err
@@ -385,5 +395,13 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, oldCounts
 	if procs < 0 {
 		procs = 0
 	}
-	return c.quotaAllows(app.OwnerAccount, 0, procs, 0, 0, 0)
+	mem, err := c.projectedScaleMemory(app, release, newCounts, newTags, applyTags)
+	if err != nil {
+		return err
+	}
+	memArg, err := memoryQuotaArg(mem)
+	if err != nil {
+		return err
+	}
+	return c.quotaAllows(app.OwnerAccount, 0, procs, memArg, 0, 0)
 }

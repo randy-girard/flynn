@@ -60,7 +60,16 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
-	if err = c.enforceScale(ctx, app, existingProcesses(c, app.ID, release.ID), formation.Processes); err != nil {
+	// A nil process map is stored as every release type at 0. Do that before
+	// the quota check so memory sees the formation that will be saved.
+	// lockInternalProcessCounts already ran only when the client sent counts.
+	if formation.Processes == nil {
+		formation.Processes = make(map[string]int, len(release.Processes))
+		for typ := range release.Processes {
+			formation.Processes[typ] = 0
+		}
+	}
+	if err = c.enforceScale(ctx, app, release, existingProcesses(c, app.ID, release.ID), formation.Processes, formation.Tags, true); err != nil {
 		respondWithError(w, err)
 		return
 	}
@@ -113,7 +122,12 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 			respondWithError(w, err)
 			return
 		}
-		if err := c.enforceScale(ctx, app, existingProcesses(c, app.ID, release.ID), *req.NewProcesses); err != nil {
+		var tagOverlay map[string]map[string]string
+		applyTags := req.NewTags != nil
+		if applyTags {
+			tagOverlay = *req.NewTags
+		}
+		if err := c.enforceScale(ctx, app, release, existingProcesses(c, app.ID, release.ID), *req.NewProcesses, tagOverlay, applyTags); err != nil {
 			respondWithError(w, err)
 			return
 		}
