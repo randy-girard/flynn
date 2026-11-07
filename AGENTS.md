@@ -73,3 +73,7 @@ Format: `<type>(<scope>): <summary>`
 Examples: `feat(cli): load plugin commands from cluster catalog`, `fix(host): ignore missing volumes on destroy`, `test(router): cover ACME HTTP-01 challenge serving`
 
 See [Development](docs/content/development.html.md) and [Contributing](CONTRIBUTING.md).
+
+## Environment
+
+Cluster, test, and CI steps are the `flynn-environment` skill: `.cursor/skills/flynn-environment/SKILL.md`. Read it before booting VMs, running e2e, or pushing. This file stays the repo-specific contract.
