@@ -364,6 +364,7 @@ func runDaemon(args *docopt.Args) {
 		log.Warn("host HTTP API auth key unset; non-status requests fail closed except loopback/unix")
 	}
 
+	tags = resolveStartupMaxProcesses(log, tags)
 	discoverdManager := NewDiscoverdManager(backend, sman, hostID, publishAddr, tags)
 	publishURL := "http://" + publishAddr
 	webhookDisp := NewWebhookDispatcher(hostID, state, logger)
@@ -405,7 +406,9 @@ func runDaemon(args *docopt.Args) {
 			log.Error("error restoring host status from parent", "err", err)
 			shutdown.Fatal(err)
 		}
-		// keep the same tags as the parent
+		// keep the same tags as the parent, resolving an unresolved auto cap
+		// the same way a cold start does
+		host.status.Tags = resolveStartupMaxProcesses(log, host.status.Tags)
 		discoverdManager.UpdateTags(host.status.Tags)
 	}
 	pid := os.Getpid()
@@ -507,6 +510,7 @@ func runDaemon(args *docopt.Args) {
 
 	log.Info("serving HTTP requests")
 	host.ServeHTTP()
+	go host.maintainAutoMaxProcesses()
 	webhookDisp.Send("D10", "Daemon started", "info", "", nil, nil)
 	host.startDiskWatch()
 	host.startContainerMetricsLogs()

@@ -11,26 +11,27 @@ import (
 )
 
 func TestFormatDaemonTagsArg(t *testing.T) {
-	got, err := formatDaemonTagsArg([]string{"role=database", "zone"}, "1")
+	got, err := formatDaemonTagsArg([]string{"role=database", "zone"}, "1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := ct.FormationMaxProcessesTag + "=1,role=database,zone"
+	want := ct.FormationMaxProcessesTag + "=1," + ct.FormationMaxProcessesSourceTag + "=operator,role=database,zone"
 	if got != want {
 		t.Fatalf("got %q want %q", got, want)
 	}
 
-	empty, err := formatDaemonTagsArg(nil, "")
-	if err != nil || empty != "" {
-		t.Fatalf("empty: %q %v", empty, err)
+	fresh, err := formatDaemonTagsArg(nil, "", nil)
+	wantFresh := ct.FormationMaxProcessesTag + "=" + ct.HostMaxProcessesAuto + "," + ct.FormationMaxProcessesSourceTag + "=" + ct.HostMaxProcessesSourceAuto
+	if err != nil || fresh != wantFresh {
+		t.Fatalf("fresh: %q %v", fresh, err)
 	}
 
-	cleared, err := formatDaemonTagsArg([]string{ct.FormationMaxProcessesTag + "=4"}, "unlimited")
+	cleared, err := formatDaemonTagsArg([]string{ct.FormationMaxProcessesTag + "=4"}, "unlimited", nil)
 	if err != nil || cleared != "" {
 		t.Fatalf("unlimited should drop cap: %q %v", cleared, err)
 	}
 
-	if _, err := formatDaemonTagsArg(nil, "nope"); err == nil {
+	if _, err := formatDaemonTagsArg(nil, "nope", nil); err == nil {
 		t.Fatal("expected invalid --max-processes")
 	}
 }
@@ -69,7 +70,7 @@ func TestRunInitWritesDaemonTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--tags", ct.FormationMaxProcessesTag + "=1,role=database"}
+	want := []string{"--tags", ct.FormationMaxProcessesTag + "=1," + ct.FormationMaxProcessesSourceTag + "=operator,role=database"}
 	if !reflect.DeepEqual(c.Args, want) {
 		t.Fatalf("args=%v want %v", c.Args, want)
 	}

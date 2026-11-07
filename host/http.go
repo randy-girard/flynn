@@ -19,6 +19,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/host/cli"
 	"github.com/randy-girard/flynn/host/config"
 	"github.com/randy-girard/flynn/host/downloader"
 	"github.com/randy-girard/flynn/host/logmux"
@@ -745,12 +746,17 @@ func (h *jobAPI) UpdateTags(w http.ResponseWriter, r *http.Request, _ httprouter
 }
 
 func (h *Host) UpdateTags(tags map[string]string) error {
-	h.statusMtx.RLock()
-	defer h.statusMtx.RUnlock()
+	h.statusMtx.Lock()
+	defer h.statusMtx.Unlock()
 	if err := h.discMan.UpdateTags(tags); err != nil {
 		return err
 	}
-	h.status.Tags = tags
+	h.status.Tags = mergeTagMap(h.status.Tags, tags)
+	if tagUpdateTouchesCap(tags) {
+		if err := cli.WriteDaemonTags(hostConfigPath(), h.status.Tags); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

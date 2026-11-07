@@ -140,8 +140,10 @@ $ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 \
     --external-ip 192.168.56.50 --tag role=database --max-processes 1
 ```
 
-That writes `--tags role=database,flynn-max-processes=1` into `/etc/flynn/host.json`.
+That writes `--tags flynn-max-processes=1,flynn-max-processes-source=operator,role=database` into `/etc/flynn/host.json`.
 Change tags later with `flynn-host tags:set` / `tags:max-processes`.
+
+Omitting `--max-processes` on a new `host.json` writes `flynn-max-processes=auto`. After the daemon starts, the cap is how many jobs of the smallest published runtime fit in `MemTotal`, and not more than the overlay addresses on the host. Hosted and self-hosted clusters use the same rule. An existing file keeps whatever cap it already has, including no cap. `tags:max-processes <host> --auto` opts a running host in. An explicit number stays put.
 
 Use each node's own address as `--external-ip`. After the cluster is running,
 `--peer-ips` is also how you join an additional host.

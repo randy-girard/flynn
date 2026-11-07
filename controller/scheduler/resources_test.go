@@ -341,6 +341,56 @@ func TestPickHostSkipsHostsRunningTheirOmniShare(t *testing.T) {
 	}
 }
 
+func TestPickHostAtProcessCapSkipsUnpinnedOmni(t *testing.T) {
+	tenant := NewFormation(&ct.ExpandedFormation{
+		App:       &ct.App{ID: "shop"},
+		Release:   &ct.Release{ID: "rt", Processes: map[string]ct.ProcessType{"web": {}}},
+		Processes: Processes{"web": 1},
+	})
+	omni := NewFormation(&ct.ExpandedFormation{
+		App:       &ct.App{ID: "router", Meta: map[string]string{"flynn-system-app": "true"}},
+		Release:   &ct.Release{ID: "rr", Processes: map[string]ct.ProcessType{"app": {Omni: true}}},
+		Processes: Processes{"app": 1},
+	})
+	h := &Host{ID: "h1", Healthy: true, Tags: map[string]string{ct.FormationMaxProcessesTag: "1"}}
+	running := &Job{ID: "web", HostID: "h1", Type: "web", State: JobStateRunning, Formation: tenant}
+	s := &Scheduler{jobs: Jobs{"web": running}, hosts: map[string]*Host{"h1": h}}
+	next := &Job{ID: "router", Type: "app", State: JobStatePending, Formation: omni}
+	if got := s.pickHost(next, map[string]int{}); got != nil {
+		t.Fatalf("placed unpinned omni job on %s while the host is at the cap", got.ID)
+	}
+}
+
+func TestCountsTowardHostProcessCapUsesDatastoreMetaOnly(t *testing.T) {
+	job := func(meta map[string]string, omni bool) *Job {
+		return &Job{
+			Type:  "web",
+			State: JobStateRunning,
+			Formation: NewFormation(&ct.ExpandedFormation{
+				App:     &ct.App{ID: "a", Name: "postgres", Meta: meta},
+				Release: &ct.Release{ID: "r", Processes: map[string]ct.ProcessType{"web": {Omni: omni}}},
+			}),
+		}
+	}
+	if job(map[string]string{"flynn-system-app": "true", "flynn-datastore": "true"}, false).countsTowardHostProcessCap() != true {
+		t.Fatal("datastore system app counts")
+	}
+	if job(map[string]string{"flynn-system-app": "true"}, false).countsTowardHostProcessCap() {
+		t.Fatal("non-datastore system app does not count")
+	}
+	if job(nil, false).countsTowardHostProcessCap() != true {
+		t.Fatal("user app counts")
+	}
+	if job(map[string]string{"flynn-datastore": "true"}, true).countsTowardHostProcessCap() {
+		t.Fatal("omni does not count")
+	}
+	// Name fallback in App.Datastore is not used. postgres without the meta is a user app here
+	// only when it is not marked system. A system app named postgres without the meta does not count.
+	if job(map[string]string{"flynn-system-app": "true"}, false).countsTowardHostProcessCap() {
+		t.Fatal("system postgres name without flynn-datastore does not count")
+	}
+}
+
 func TestPickHostHonorsMaxProcesses(t *testing.T) {
 	formation := NewFormation(&ct.ExpandedFormation{
 		App:       &ct.App{ID: "shop"},

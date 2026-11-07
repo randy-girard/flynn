@@ -7,8 +7,24 @@ import (
 
 // FormationMaxProcessesTag is a host tag that caps how many tenant jobs
 // (user apps and datastore instances) may run on that node. Omni and other
-// system jobs are not counted. Missing, empty, 0, or "unlimited" means no cap.
+// system jobs are not counted. Missing, empty, 0, "unlimited", or "auto"
+// means no cap. "auto" is the unresolved default written by flynn-host init;
+// the daemon replaces it with a number before the host registers.
 const FormationMaxProcessesTag = "flynn-max-processes"
+
+// FormationMaxProcessesSourceTag records who chose FormationMaxProcessesTag.
+// "auto" is refreshed from the live runtime catalog. "operator" is not.
+// A numeric cap with no source is treated as operator.
+const FormationMaxProcessesSourceTag = "flynn-max-processes-source"
+
+const (
+	// HostMaxProcessesAuto is the unresolved cap value.
+	HostMaxProcessesAuto = "auto"
+	// HostMaxProcessesSourceAuto is refreshed by the host daemon.
+	HostMaxProcessesSourceAuto = "auto"
+	// HostMaxProcessesSourceOperator is an explicit cap.
+	HostMaxProcessesSourceOperator = "operator"
+)
 
 // ParseHostMaxProcesses reads FormationMaxProcessesTag from host tags.
 // ok is false when the host has no cap.

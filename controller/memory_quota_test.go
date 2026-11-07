@@ -34,6 +34,22 @@ func memFormation(owner, appID, releaseID string, procs map[string]int, types ma
 	}
 }
 
+func TestMemoryHostMatchesIgnoresProcessCapSource(t *testing.T) {
+	tags := map[string]string{
+		"disk":                            "ssd",
+		ct.FormationMaxProcessesTag:       "9",
+		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceOperator,
+	}
+	host := memoryHost{ID: "h1", Tags: map[string]string{
+		"disk":                            "ssd",
+		ct.FormationMaxProcessesTag:       "4",
+		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceAuto,
+	}}
+	if !memoryHostMatches(tags, host) {
+		t.Fatal("process cap tags must not change which hosts count")
+	}
+}
+
 func TestQuotaEmptyOwnerSkips(t *testing.T) {
 	api := &controllerAPI{tenancy: &data.TenancyRepo{}}
 	if scaleQuotaApplies(api, &ct.App{}) {

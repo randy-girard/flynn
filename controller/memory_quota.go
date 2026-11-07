@@ -204,7 +204,7 @@ func memoryHostMatches(tags map[string]string, host memoryHost) bool {
 		return false
 	}
 	for k, v := range tags {
-		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag {
+		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag || k == ct.FormationMaxProcessesSourceTag {
 			continue
 		}
 		if host.Tags[k] != v {

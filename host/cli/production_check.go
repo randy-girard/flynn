@@ -123,7 +123,9 @@ func runProductionCheck(args *docopt.Args, client *cluster.Client) error {
 			}
 			// Hosts lists discoverd flynn-host registrations only. On
 			// object_not_found it retries for about 45s. Tags are read,
-			// never written. Q3 sets flynn-max-processes from flynn-host init.
+			// never written. Q3 writes flynn-max-processes=auto from flynn-host init
+			// on a new host.json. The daemon resolves it from host memory and
+			// the published runtime sizes. This check still does not set it.
 			return client.Hosts()
 		},
 		FlannelMeta: readFlannelMeta,
@@ -596,7 +598,7 @@ func addHostCapLine(add func(productionRow), hosts []*cluster.Host, err error) {
 	action := "Every registered host has a numeric flynn-max-processes cap."
 	if !allOK {
 		status = "fail"
-		action = "Run flynn-host tags:max-processes <host> <n>. This check does not set the tag."
+		action = "Run flynn-host tags:max-processes <host> <n>, or the same command with --auto to follow runtime sizes. This check does not set the tag."
 	}
 	add(productionRow{status: status, check: "host-cap", detail: strings.Join(parts, " "), action: action})
 }

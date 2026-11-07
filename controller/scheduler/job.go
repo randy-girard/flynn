@@ -150,7 +150,7 @@ func tagsMatchHost(tags map[string]string, host *Host) bool {
 		return false
 	}
 	for k, v := range tags {
-		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag {
+		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag || k == ct.FormationMaxProcessesSourceTag {
 			continue
 		}
 		if w, ok := host.Tags[k]; !ok || v != w {

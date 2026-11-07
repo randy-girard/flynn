@@ -25,6 +25,27 @@ func TestJobMatchesHostMergesRuntimeTags(t *testing.T) {
 	}
 }
 
+func TestTagsMatchHostIgnoresProcessCapSource(t *testing.T) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		Tags: map[string]map[string]string{
+			"web": {
+				"disk":                            "ssd",
+				ct.FormationMaxProcessesTag:       "9",
+				ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceOperator,
+			},
+		},
+	})
+	job := &Job{Type: "web", Formation: formation}
+	host := &Host{ID: "h1", Tags: map[string]string{
+		"disk":                            "ssd",
+		ct.FormationMaxProcessesTag:       "4",
+		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceAuto,
+	}}
+	if !job.TagsMatchHost(host) {
+		t.Fatal("process cap tags must not stop a job when the numbers differ")
+	}
+}
+
 func TestTagsMatchHostIDsTag(t *testing.T) {
 	formation := NewFormation(&ct.ExpandedFormation{
 		Tags: map[string]map[string]string{

@@ -22,7 +22,7 @@ options:
   --peer-ips=IPLIST   join cluster using host IPs (must be already bootstrapped)
   --external-ip=IP    external IP address of host, defaults to the first IPv4 address of eth0
   --tag=<tag>         placement tag (KEY or KEY=VAL) written into host.json for the daemon
-  --max-processes=N   tenant job cap on this node (omit or 0 = unlimited)
+  --max-processes=N   tenant job cap (omit on a new host.json = from runtime sizes; 0 = unlimited)
   --file=NAME         file to write to [default: /etc/flynn/host.json]
   `)
 }
@@ -53,7 +53,15 @@ func runInit(args *docopt.Args) error {
 			fmt.Fprintf(os.Stderr, "warn: firewall peer seed: %v\n", err)
 		}
 	}
-	tagsArg, err := formatDaemonTagsArg(cliutil.List(args, "--tag"), args.String["--max-processes"])
+	file := args.String["--file"]
+	var existing map[string]string
+	if prev, err := config.Open(file); err == nil {
+		existing, _ = tagsFromDaemonArgs(prev.Args)
+		if existing == nil {
+			existing = map[string]string{}
+		}
+	}
+	tagsArg, err := formatDaemonTagsArg(cliutil.List(args, "--tag"), args.String["--max-processes"], existing)
 	if err != nil {
 		return err
 	}
@@ -61,7 +69,6 @@ func runInit(args *docopt.Args) error {
 		c.Args = append(c.Args, "--tags", tagsArg)
 	}
 
-	file := args.String["--file"]
 	if err := c.WriteTo(file); err != nil {
 		return err
 	}

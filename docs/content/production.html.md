@@ -37,7 +37,7 @@ metadata, and this host's pool. It does not migrate the blobstore, set
 | `blobstore` | Prints the default name only, never `BACKEND_*` values. Empty `DEFAULT_BACKEND`, a `postgres` name (any case), or a parsed `backend` type that is missing or `postgres` (any case) is hosted `fail` and self-hosted `warn`. `s3`, `minio`, `gcs`, and `azure` are `ok`. The check does not migrate. A green line means that release's parsed type is not `postgres`. It is not proof bytes left Postgres. |
 | `zfs` | `zpool status -P` for this host. `fail` in either tenancy mode when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Tenancy does not change this line. A missing pool or `zpool` error is `fail` either way. A green line is this host only. |
 | `reserve` | Hosted is `ok` when the profile list can be read. The scheduler reserves builtin `small`, `medium`, and `large` even when `reserve_resources` is false (`scheduler=hosted_builtin`). `runtime:reserve` only stores the flag. Unknown tenancy is `fail` and is not treated as self-hosted. Self-hosted is `ok` with the flags off. The action tells a large cluster to run `flynn-host runtime:reserve` on profiles that must fit. An empty name does not reserve. One other profile does not stand in for the three builtins. Database runtimes are not read. |
-| `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, and `none` are no cap. The check does not write the tag. |
+| `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, `none`, and `auto` are no cap. The check does not write the tag. The same rule applies in hosted and self-hosted mode. |
 | `backup` | Always `warn`: tenant volumes are outside `flynn-host backup`. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
@@ -45,9 +45,20 @@ ZFS is local, so run the check on each host. The other lines are cluster state,
 except `host-cap`, which lists only the hosts currently registered in discoverd.
 
 Set a cap with `flynn-host init --max-processes` or
-`flynn-host tags:max-processes`. Hosted mode already reserves builtin
-`small`, `medium`, and `large`. A large self-hosted cluster turns the same
-rule on with `flynn-host runtime:reserve`. For S3 and MinIO, move the blobstore with
+`flynn-host tags:max-processes`. On a new `host.json`, omitting
+`--max-processes` writes `flynn-max-processes=auto`. The host daemon
+replaces that with `floor(MemTotal / smallest published runtime memory)`,
+at least 1 when both are positive, and not more than the overlay addresses
+on the host (253 on a `/24`). The sizes are the live app runtimes and the
+database runtimes that are actually stored, for a hosted cluster and a
+self-hosted one. Builtin small/medium/large are used only while the value
+is still `auto` and the controller is not up yet. A number passed to
+`init` or `tags:max-processes` stays put. `tags:max-processes <host> --auto`
+opts an existing host into the same refresh. `unlimited` or `0` removes
+the cap. The count is not a memory reservation. Hosted mode already
+reserves builtin `small`, `medium`, and `large`. A large self-hosted
+cluster turns that reservation on with `flynn-host runtime:reserve`. For
+S3 and MinIO, move the blobstore with
 `flynn-host blobstore:set --migrate --delete`. GCS and Azure use `env:set`
 plus `flynn-host blobstore:migrate --delete` under
 [Blobstore Backend](#blobstore-backend). The file-backed
