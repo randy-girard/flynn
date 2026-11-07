@@ -512,10 +512,38 @@ router can operate.
 
 Process types use named runtimes for CPU and memory. Database instance sizes are a separate catalog, `flynn-host db-runtime` (see [Databases](databases.html.md#database-runtimes)). Each app runtime's CPU and
 memory values are applied as the process **cap** (the max it may use). A
-runtime does **not** guarantee that capacity on the host unless you turn
-reservation on for that runtime. Shared runtimes pack onto nodes and keep
-those maxes; a guaranteed runtime stays pending until a host has that much
-free Request.
+runtime does **not** hold that capacity on the host unless reservation is on
+for that runtime.
+
+Reservation is the production placement rule for a large cluster, hosted or
+self-hosted. The scheduler places a reserving app process only when a host
+has that much free CPU and memory left among other reserving jobs. A process
+that does not fit is **blocked**. It is not left pending, and it does not
+start and then get killed. Shared runtimes still pack onto the least-loaded
+host and do not consume the reserved sum.
+
+Self-hosted clusters leave reservation off unless an operator turns it on.
+A large self-hosted cluster runs `flynn-host runtime:reserve` on each app
+runtime that must fit. Hosted mode reserves the builtin `small`, `medium`,
+and `large` runtimes even when that stored flag is off. A custom runtime
+reserves in hosted mode only when its flag is on. `tenancy:mode` does not
+change the stored flag. Switching back to self-hosted drops the builtin
+override and leaves the flags as they are.
+
+An empty runtime name does not reserve. Database jobs use the database
+runtime catalog and leave the app runtime empty, so this rule does not place
+them. A job that already has a volume on a host stays on that host. Hosts
+that have not reported CPU and memory totals are still eligible.
+
+This is not a guarantee the host cannot run out of memory. The scheduler
+counts the runtime request, or the limit when the request is 0, once. The
+cgroup hard limit is twice the runtime memory. CPU is a weight, not a quota.
+Turning reservation on does not rewrite existing releases: the scheduler
+reads the live decision and, when the request is 0, the stored limit.
+
+A blocked job counts toward the formation and does not hold a reservation.
+It is tried again when host sync runs (about every 10 seconds), when a host
+is added, or when a host's tags change.
 
 Enable a guarantee when creating or updating a runtime:
 

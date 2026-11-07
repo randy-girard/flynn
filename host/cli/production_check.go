@@ -53,7 +53,7 @@ file. A block device passes. Tenancy does not change this line. A missing
 pool or zpool error fails in either mode. The check does not detach or
 destroy vdevs and does not create a pool.
 
-Reservation lists runtime profiles once. The scheduler reads RuntimeProfile.ReserveResources. It does not reserve hosted jobs while that flag is false. Hosted mode fails unless small, medium, and large all reserve. An empty runtime profile does not reserve. One other profile with the flag does not pass. Database runtimes are not read.
+Reservation lists runtime profiles once. Self-hosted placement reads RuntimeProfile.ReserveResources. Hosted mode reserves builtin small, medium, and large even when that flag is false, so this line does not fail a hosted cluster for a false flag. Unknown tenancy fails and is not treated as self-hosted. An empty runtime profile does not reserve. One other profile with the flag does not change the three builtin flags. Database runtimes are not read.
 
 Host cap fails unless every discoverd-registered host has a numeric
 flynn-max-processes tag. unlimited, 0, empty, off, and none are no cap.
@@ -507,8 +507,8 @@ func addReserveLine(add func(productionRow), mode string, profiles []*ct.Runtime
 		return
 	}
 	// Same name rule as scheduler.syncRuntimeProfiles: lowercased, trimmed.
-	// An empty name does not reserve. The stored flag is what the scheduler
-	// reads. There is no hosted-mode override.
+	// An empty name does not reserve. Hosted placement reserves builtin
+	// small, medium, and large even when the stored flag is off.
 	flags := map[string]bool{}
 	for _, p := range profiles {
 		if p == nil {
@@ -523,19 +523,36 @@ func addReserveLine(add func(productionRow), mode string, profiles []*ct.Runtime
 	small := flags["small"]
 	medium := flags["medium"]
 	large := flags["large"]
-	detail := fmt.Sprintf("mode=%s small=%t medium=%t large=%t scheduler=profile_flag", mode, small, medium, large)
-	if mode != tenancy.ModeSelfHosted && !(small && medium && large) {
+	detail := fmt.Sprintf("mode=%s small=%t medium=%t large=%t scheduler=%s", mode, small, medium, large, reserveSchedulerLabel(mode))
+	switch mode {
+	case tenancy.ModeHosted:
+		add(productionRow{
+			status: "ok", check: "reserve", detail: detail,
+			action: "Hosted placement reserves small, medium, and large. runtime:reserve only stores the flag.",
+		})
+	case tenancy.ModeSelfHosted:
+		action := "Flags may stay off. A large cluster runs runtime:reserve on profiles that must fit."
+		if small || medium || large {
+			action = "Flagged profiles place only when a host has free reserved CPU and memory."
+		}
+		add(productionRow{status: "ok", check: "reserve", detail: detail, action: action})
+	default:
 		add(productionRow{
 			status: "fail", check: "reserve", detail: detail,
-			action: "Run flynn-host runtime:reserve on small, medium, and large. The scheduler does not reserve hosted jobs while it is false.",
+			action: "Fix the tenancy read, then rerun. Unknown mode is not self-hosted.",
 		})
-		return
 	}
-	action := "No reservation change."
-	if mode == tenancy.ModeSelfHosted {
-		action = "Flags may stay off. The scheduler does not reserve hosted jobs while it is false."
+}
+
+func reserveSchedulerLabel(mode string) string {
+	switch mode {
+	case tenancy.ModeHosted:
+		return "hosted_builtin"
+	case tenancy.ModeSelfHosted:
+		return "profile_flag"
+	default:
+		return "unknown"
 	}
-	add(productionRow{status: "ok", check: "reserve", detail: detail, action: action})
 }
 
 func addHostCapLine(add func(productionRow), hosts []*cluster.Host, err error) {

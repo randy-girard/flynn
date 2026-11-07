@@ -134,6 +134,11 @@ type Scheduler struct {
 	profileReserve map[string]bool
 	profileTags    map[string]map[string]string
 
+	// tenancyMode is cluster_settings.tenancy_mode. Empty until the first
+	// successful GET /tenancy. Hosted reserves builtin small, medium, and
+	// large even when the stored flag is off. Self-hosted uses the flag.
+	tenancyMode string
+
 	// maxRestarts is RuntimeSettings.MaxRestarts: how many consecutive
 	// crashes are restarted before a process is left stopped. 0 is unlimited.
 	maxRestarts int
@@ -788,6 +793,7 @@ func (s *Scheduler) SyncFormations() {
 	}
 
 	s.syncRuntimeProfiles(log)
+	s.syncTenancy(log)
 	s.syncRuntimeSettings(log)
 
 	// check that all formations we think are active are still active

@@ -60,8 +60,19 @@ limits instead of only named runtimes.
 	runtimeReserveUsage = `
 usage: flynn-host runtime:reserve [--disable] <id>
 
-Guarantee this runtime's CPU and memory when placing jobs (off by default).
-Shared runtimes keep the same CPU/memory maxes but do not hold a reservation.
+Turn reservation on or off for one app runtime. When it is on, the scheduler
+places a process that uses this runtime only when a host has that much free
+CPU and memory. A process that does not fit is blocked. It is not left
+pending, and it does not start and then die.
+
+Self-hosted clusters use this flag. Leave it off to keep shared packing. A
+large self-hosted cluster turns it on for each runtime that must fit. Hosted
+mode already reserves builtin small, medium, and large even when this flag
+is off. This command still stores the flag. It does not change tenancy.
+
+Database runtimes are a different catalog and are not affected. Reservation
+is not a host OOM guarantee: the cgroup hard limit is twice the runtime
+memory, and CPU is a weight.
 `
 	runtimeMaxRestartsUsage = `
 usage: flynn-host runtime:max-restarts [<count>]

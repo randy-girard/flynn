@@ -49,6 +49,19 @@ func jobHoldsReservation(job *Job) bool {
 	}
 }
 
+// schedulerTenancyHosted matches controller/tenancy.ModeHosted. This package
+// does not import tenancy; that package pulls scrypt into the scheduler binary.
+const schedulerTenancyHosted = "hosted"
+
+func hostedBuiltinProfile(name string) bool {
+	switch name {
+	case resource.ProfileSmall, resource.ProfileMedium, resource.ProfileLarge:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Scheduler) jobReservesResources(job *Job) bool {
 	if s == nil {
 		return false
@@ -57,7 +70,10 @@ func (s *Scheduler) jobReservesResources(job *Job) bool {
 	if name == "" {
 		return false
 	}
-	return s.profileReserve[name]
+	if s.profileReserve[name] {
+		return true
+	}
+	return s.tenancyMode == schedulerTenancyHosted && hostedBuiltinProfile(name)
 }
 
 func (s *Scheduler) hostReservedResources(hostID string) (mem, cpu int64) {
@@ -198,6 +214,29 @@ func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
 	s.profileTags = tags
 }
 
+type tenancyGetter interface {
+	GetTenancy() (*ct.TenancySettings, error)
+}
+
+// syncTenancy loads cluster_settings.tenancy_mode. A failed read keeps the
+// last mode. Before the first success the mode stays empty, so only the
+// stored runtime flag reserves.
+func (s *Scheduler) syncTenancy(log log15.Logger) {
+	if s == nil {
+		return
+	}
+	g, ok := s.ControllerClient.(tenancyGetter)
+	if !ok {
+		return
+	}
+	settings, err := g.GetTenancy()
+	if err != nil || settings == nil {
+		log.Error("error getting tenancy", "err", err)
+		return
+	}
+	s.tenancyMode = strings.TrimSpace(settings.Mode)
+}
+
 func (j *Job) countsTowardHostProcessCap() bool {
 	if j == nil || j.Formation == nil || j.Formation.App == nil {
 		return false
@@ -336,10 +375,10 @@ func (s *Scheduler) omniHostAvailable(job *Job) bool {
 	return false
 }
 
-// pickHost chooses a tag-matching host. Jobs whose runtime guarantees
-// resources only land on hosts with remaining requested CPU/memory (they stay
-// pending if nothing fits). Shared runtimes pack onto the least-loaded host
-// and keep their CPU/memory as caps only.
+// pickHost chooses a tag-matching host. Jobs whose runtime reserves
+// resources only land on hosts with remaining requested CPU/memory. Nothing
+// that fits leaves the job blocked. Shared runtimes pack onto the
+// least-loaded host and keep their CPU/memory as caps only.
 //
 // Persistent singletons (one broker/volume per resource) pack onto a host
 // that already has other persistent singletons. pickHost used to return the

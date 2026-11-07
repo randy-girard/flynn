@@ -391,7 +391,7 @@ func TestProductionCheckUsage(t *testing.T) {
 		"--zpool-name=<name>",
 		"[default: flynn-default]",
 		"RuntimeProfile.ReserveResources",
-		"does not reserve hosted jobs while that flag is false",
+		"even when that flag is false",
 		"does not set flynn-max-processes",
 		"parsed type is missing or postgres",
 		"never BACKEND_",
@@ -442,7 +442,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=self_hosted", action: "flynn-host tenancy:mode hosted"},
 		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
-		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "does not reserve hosted jobs while it is false"},
+		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "A large cluster runs runtime:reserve"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
@@ -477,7 +477,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=hosted", action: "Hosted mode is on"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
-		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=profile_flag", action: "No reservation change"},
+		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin", action: "Hosted placement reserves"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
@@ -631,7 +631,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "tenancy", detail: "mode=hosted"},
 		{status: "ok", check: "blobstore", detail: "default=s3main", action: "No blobstore change"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default"},
-		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=profile_flag"},
+		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
@@ -663,7 +663,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "fail", check: "tenancy", detail: "error=controller down", action: "not self-hosted"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "fail", check: "zfs", detail: "pool=flynn-default file=/srv/custom.vdev", action: "zpool detach"},
-		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=profile_flag", action: "flynn-host runtime:reserve"},
+		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=unknown", action: "not self-hosted"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
@@ -674,7 +674,42 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
 }
 
-func TestProductionCheckReservationRequiresBuiltinProfiles(t *testing.T) {
+func TestProductionCheckHostedReservesWhenFlagsOff(t *testing.T) {
+	f := &productionFixture{
+		profiles: []*ct.RuntimeProfile{
+			{Name: "small"},
+			{Name: "medium"},
+			{Name: "large"},
+		},
+	}
+	got, err := f.run(t)
+	assertPassed(t, err)
+	row := mustCheck(t, got, "ok", "reserve", "mode=hosted small=false medium=false large=false scheduler=hosted_builtin")
+	if !strings.Contains(row.action, "runtime:reserve") || !strings.Contains(row.action, "stores the flag") {
+		t.Fatalf("reserve action %q", row.action)
+	}
+	assertProductionWidth(t, got)
+}
+
+func TestProductionCheckSelfHostedPartialReserve(t *testing.T) {
+	f := &productionFixture{
+		tenancy: ct.TenancySettings{Mode: "self_hosted"},
+		profiles: []*ct.RuntimeProfile{
+			{Name: "small", ReserveResources: true},
+			{Name: "medium"},
+			{Name: "large"},
+			{Name: "xlarge", ReserveResources: true},
+		},
+	}
+	got, err := f.run(t)
+	assertPassed(t, err)
+	row := mustCheck(t, got, "ok", "reserve", "mode=self_hosted small=true medium=false large=false scheduler=profile_flag")
+	if !strings.Contains(row.action, "free reserved CPU and memory") {
+		t.Fatalf("reserve action %q", row.action)
+	}
+}
+
+func TestProductionCheckReservationIgnoresMissingLarge(t *testing.T) {
 	f := &productionFixture{
 		profiles: []*ct.RuntimeProfile{
 			{Name: "Small", ReserveResources: true},
@@ -684,9 +719,9 @@ func TestProductionCheckReservationRequiresBuiltinProfiles(t *testing.T) {
 		},
 	}
 	got, err := f.run(t)
-	assertFailed(t, err)
-	row := mustCheck(t, got, "fail", "reserve", "mode=hosted small=true medium=true large=false scheduler=profile_flag")
-	if !strings.Contains(row.action, "flynn-host runtime:reserve") || !strings.Contains(row.action, "does not reserve hosted jobs while it is false") {
+	assertPassed(t, err)
+	row := mustCheck(t, got, "ok", "reserve", "mode=hosted small=true medium=true large=false scheduler=hosted_builtin")
+	if !strings.Contains(row.action, "runtime:reserve") || !strings.Contains(row.action, "stores the flag") {
 		t.Fatalf("reserve action %q", row.action)
 	}
 }

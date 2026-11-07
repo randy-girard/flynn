@@ -19,6 +19,8 @@ type FakeControllerClient struct {
 	formationStreams map[chan<- *ct.ExpandedFormation]struct{}
 	jobs             map[string]*ct.Job
 	apps             map[string]*ct.App
+	Tenancy          *ct.TenancySettings
+	TenancyErr       error
 	mtx              sync.Mutex
 }
 
@@ -31,6 +33,19 @@ func NewFakeControllerClient() *FakeControllerClient {
 		apps:             make(map[string]*ct.App),
 		jobs:             make(map[string]*ct.Job),
 	}
+}
+
+func (c *FakeControllerClient) GetTenancy() (*ct.TenancySettings, error) {
+	c.mtx.Lock()
+	defer c.mtx.Unlock()
+	if c.TenancyErr != nil {
+		return nil, c.TenancyErr
+	}
+	if c.Tenancy == nil {
+		return &ct.TenancySettings{Mode: "self_hosted"}, nil
+	}
+	cp := *c.Tenancy
+	return &cp, nil
 }
 
 func (c *FakeControllerClient) GetRelease(releaseID string) (*ct.Release, error) {

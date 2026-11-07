@@ -1273,6 +1273,11 @@ func (c *Client) GetRuntimeSettings() (*ct.RuntimeSettings, error) {
 	return s, c.Get("/cluster/runtime-settings", s)
 }
 
+func (c *Client) GetTenancy() (*ct.TenancySettings, error) {
+	s := &ct.TenancySettings{}
+	return s, c.Get("/tenancy", s)
+}
+
 func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
 	return c.Put("/cluster/runtime-settings", settings, settings)
 }

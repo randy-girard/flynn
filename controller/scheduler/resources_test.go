@@ -1,8 +1,13 @@
 package main
 
 import (
+	"errors"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/controller/testutils"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
 	"github.com/randy-girard/flynn/pkg/typeconv"
@@ -354,5 +359,271 @@ func TestPickHostHonorsMaxProcesses(t *testing.T) {
 		if got := s.pickHost(next, map[string]int{"db1": 1}); got != free {
 			t.Fatalf("attempt %d: placed on %v, want db2 (db1 is at max_processes=1)", i, got)
 		}
+	}
+}
+
+func markPlaceable(job *Job) {
+	if job.Formation.App == nil {
+		job.Formation.App = &ct.App{ID: "app"}
+	}
+	if job.Formation.Release.ID == "" {
+		job.Formation.Release.ID = "rel"
+	}
+	job.AppID = job.Formation.App.ID
+	job.ReleaseID = job.Formation.Release.ID
+}
+
+func newCapacityScheduler(mode string, reserve map[string]bool, host *Host, jobs Jobs) *Scheduler {
+	leader := true
+	if jobs == nil {
+		jobs = Jobs{}
+	}
+	if reserve == nil {
+		reserve = map[string]bool{}
+	}
+	s := &Scheduler{
+		isLeader:          &leader,
+		logger:            log15.New(),
+		jobs:              jobs,
+		hosts:             map[string]*Host{host.ID: host},
+		profileReserve:    reserve,
+		tenancyMode:       mode,
+		controllerPersist: make(chan interface{}, 16),
+	}
+	go func() {
+		for range s.controllerPersist {
+		}
+	}()
+	return s
+}
+
+func runningReserved(profile string, mem, cpu int64) *Job {
+	job := testJobWithProfile(profile, mem, cpu, mem, cpu)
+	job.ID = "running"
+	job.HostID = "h1"
+	job.State = JobStateRunning
+	markPlaceable(job)
+	return job
+}
+
+func TestHostedBuiltinReservesWhenFlagOff(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := runningReserved("small", 1<<30, 1000)
+	s := newCapacityScheduler("hosted", map[string]bool{"small": false}, h, Jobs{"running": running})
+	next := testJobWithProfile("Small", 1<<30, 1000, 1<<30, 1000)
+	if !s.jobReservesResources(next) {
+		t.Fatal("hosted small must reserve when the stored flag is off")
+	}
+	if got := s.pickHost(next, map[string]int{"h1": 1}); got != nil {
+		t.Fatal("second hosted small job must stay unplaced")
+	}
+}
+
+func TestHostedBuiltinLimitFallbackBlocksSecondJob(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := testJobWithProfile("small", 0, 0, 1<<30, 1000)
+	running.ID = "running"
+	running.HostID = "h1"
+	running.State = JobStateRunning
+	markPlaceable(running)
+	s := newCapacityScheduler("hosted", map[string]bool{"small": false}, h, Jobs{"running": running})
+	next := testJobWithProfile("small", 0, 0, 1<<30, 1000)
+	markPlaceable(next)
+	next.ID = "next"
+	next.State = JobStatePending
+	req := &PlacementRequest{Job: next, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	if err := <-req.Err; err != ErrNoHostCapacity {
+		t.Fatalf("error %v", err)
+	}
+	if next.State != JobStateBlocked || next.HostID != "" {
+		t.Fatalf("state=%s host=%q", next.State, next.HostID)
+	}
+}
+
+func TestSelfHostedFlagOffStillPlaces(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := runningReserved("small", 1<<30, 1000)
+	s := newCapacityScheduler("self_hosted", map[string]bool{"small": false}, h, Jobs{"running": running})
+	next := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	if s.jobReservesResources(next) {
+		t.Fatal("self-hosted small must not reserve when the flag is off")
+	}
+	if got := s.pickHost(next, map[string]int{"h1": 1}); got != h {
+		t.Fatalf("placed on %v, want h1", got)
+	}
+}
+
+func TestSelfHostedFlagOnBlocksSecondJob(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := runningReserved("large", 1<<30, 1000)
+	running.Formation.App = &ct.App{ID: "other"}
+	running.AppID = "other"
+	s := newCapacityScheduler("self_hosted", map[string]bool{"large": true}, h, Jobs{"running": running})
+	next := testJobWithProfile("large", 1<<30, 1000, 1<<30, 1000)
+	markPlaceable(next)
+	next.ID = "next"
+	next.State = JobStatePending
+	s.jobs.Add(next)
+	req := &PlacementRequest{Job: next, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	if err := <-req.Err; err != ErrNoHostCapacity {
+		t.Fatalf("error %v", err)
+	}
+	if next.State != JobStateBlocked || next.HostID != "" {
+		t.Fatalf("state=%s host=%q", next.State, next.HostID)
+	}
+	if got := s.jobs.GetProcesses(next.Formation.key())["web"]; got != 1 {
+		t.Fatalf("formation count %d", got)
+	}
+	if mem, cpu := s.hostReservedResources("h1"); mem != 1<<30 || cpu != 1000 {
+		t.Fatalf("blocked job changed the reserved sum: mem=%d cpu=%d", mem, cpu)
+	}
+}
+
+func TestHostedCustomProfileFlagOffStillPlaces(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	s := newCapacityScheduler("hosted", map[string]bool{"xlarge": false}, h, nil)
+	next := testJobWithProfile("xlarge", 8<<30, 8000, 8<<30, 8000)
+	if s.jobReservesResources(next) {
+		t.Fatal("hosted must not force a custom profile")
+	}
+	if got := s.pickHost(next, nil); got != h {
+		t.Fatalf("placed on %v, want h1", got)
+	}
+}
+
+func TestEmptyProfileDoesNotReserveWhenHosted(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	s := newCapacityScheduler("hosted", map[string]bool{}, h, nil)
+	next := testJobWithProfile("", 8<<30, 8000, 8<<30, 8000)
+	if s.jobReservesResources(next) {
+		t.Fatal("empty runtime profile must not reserve")
+	}
+	if got := s.pickHost(next, nil); got != h {
+		t.Fatalf("placed on %v, want h1", got)
+	}
+}
+
+func TestStartJobDoesNotRetryWhenBlocked(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := runningReserved("small", 1<<30, 1000)
+	s := newCapacityScheduler("self_hosted", map[string]bool{"small": true}, h, Jobs{"running": running})
+	s.placementRequests = make(chan *PlacementRequest)
+	var attempts atomic.Int32
+	go func() {
+		for req := range s.placementRequests {
+			attempts.Add(1)
+			s.HandlePlacementRequest(req)
+		}
+	}()
+	defer close(s.placementRequests)
+	next := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	markPlaceable(next)
+	next.ID = "next"
+	next.State = JobStatePending
+	s.StartJob(next)
+	if attempts.Load() != 1 {
+		t.Fatalf("placement attempts %d", attempts.Load())
+	}
+	if next.State != JobStateBlocked || next.HostID != "" {
+		t.Fatalf("state=%s host=%q", next.State, next.HostID)
+	}
+}
+
+func TestPlacementKeepsPinnedVolumeWhenHostIsFull(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 1 << 30, CPUMilli: 1000}
+	running := runningReserved("small", 1<<30, 1000)
+	s := newCapacityScheduler("self_hosted", map[string]bool{"small": true}, h, Jobs{"running": running})
+	s.volumes = map[string]*Volume{}
+	s.hostVolumeIDs = map[string]map[string]struct{}{"h1": {"vol": {}}}
+	next := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	markPlaceable(next)
+	proc := next.Formation.Release.Processes["web"]
+	proc.Volumes = []ct.VolumeReq{{Path: "/data"}}
+	next.Formation.Release.Processes["web"] = proc
+	next.ID = "next"
+	next.State = JobStatePending
+	vol := &Volume{Volume: ct.Volume{
+		ID:        "vol",
+		HostID:    "h1",
+		AppID:     next.AppID,
+		ReleaseID: next.ReleaseID,
+		JobType:   "web",
+		State:     ct.VolumeStateCreated,
+		VolumeReq: ct.VolumeReq{Path: "/data"},
+	}}
+	s.volumes[vol.ID] = vol
+	req := &PlacementRequest{Job: next, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	if err := <-req.Err; err != nil {
+		t.Fatalf("pinned volume must still place: %v", err)
+	}
+	if req.Host == nil || req.Host.ID != "h1" || next.HostID != "h1" {
+		t.Fatalf("host %v job host %q", req.Host, next.HostID)
+	}
+}
+
+func TestMaybeStartBlockedJobWhenCapacityFrees(t *testing.T) {
+	h := NewHost(testutils.NewFakeHostClient("h1", false), log15.New())
+	h.Healthy = true
+	h.MemoryTotalBytes = 1 << 30
+	h.CPUMilli = 1000
+	running := runningReserved("small", 1<<30, 1000)
+	blocked := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	markPlaceable(blocked)
+	blocked.ID = "blocked"
+	blocked.State = JobStateBlocked
+	s := newCapacityScheduler("self_hosted", map[string]bool{"small": true}, h, Jobs{"running": running, "blocked": blocked})
+	s.placementRequests = make(chan *PlacementRequest)
+	done := make(chan struct{})
+	go func() {
+		req := <-s.placementRequests
+		s.HandlePlacementRequest(req)
+		close(done)
+	}()
+	running.State = JobStateStopped
+	s.maybeStartBlockedJobs(h)
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("capacity-blocked job was not retried")
+	}
+	if blocked.State == JobStateBlocked || blocked.HostID != "h1" {
+		t.Fatalf("state=%s host=%q", blocked.State, blocked.HostID)
+	}
+}
+
+func TestSyncTenancyKeepsLastModeOnError(t *testing.T) {
+	fake := testutils.NewFakeControllerClient()
+	fake.Tenancy = &ct.TenancySettings{Mode: "  hosted  "}
+	s := &Scheduler{ControllerClient: fake}
+	s.syncTenancy(log15.New())
+	if s.tenancyMode != "hosted" {
+		t.Fatalf("mode %q", s.tenancyMode)
+	}
+	fake.TenancyErr = errors.New("down")
+	s.syncTenancy(log15.New())
+	if s.tenancyMode != "hosted" {
+		t.Fatalf("error cleared mode %q", s.tenancyMode)
+	}
+	fake.TenancyErr = nil
+	fake.Tenancy = &ct.TenancySettings{Mode: "self_hosted"}
+	s.syncTenancy(log15.New())
+	if s.tenancyMode != "self_hosted" {
+		t.Fatalf("mode %q", s.tenancyMode)
+	}
+}
+
+func TestSyncTenancyErrorBeforeFirstReadStaysEmpty(t *testing.T) {
+	fake := testutils.NewFakeControllerClient()
+	fake.TenancyErr = errors.New("down")
+	s := &Scheduler{ControllerClient: fake}
+	s.syncTenancy(log15.New())
+	if s.tenancyMode != "" {
+		t.Fatalf("mode %q", s.tenancyMode)
+	}
+	if s.jobReservesResources(testJobWithProfile("small", 1, 1, 1, 1)) {
+		t.Fatal("empty tenancy must not reserve a builtin")
 	}
 }
