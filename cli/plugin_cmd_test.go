@@ -1090,3 +1090,68 @@ func TestEnvForNamedInstanceFindsColorKeys(t *testing.T) {
 		t.Fatalf("legacy key not honored: %#v", out)
 	}
 }
+
+func TestPluginAPITaskCopiesControllerKey(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "shop"
+
+	instance := "postgresql-rock-59699"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"shop": {Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			instance: {ID: "inst-rel", Env: map[string]string{
+				"PGHOST": "leader." + instance + ".discoverd",
+			}},
+			"postgres-plugin": {ID: "plugin-rel", Env: map[string]string{
+				"CONTROLLER_KEY": "cluster-secret",
+			}},
+		},
+		resources: map[string][]*ct.Resource{
+			"shop": {{Env: map[string]string{"FLYNN_POSTGRES": instance}}},
+		},
+	}
+	spec := &plugin.CLI{
+		Command:         "pg",
+		App:             "postgres-plugin",
+		ResourceEnv:     "FLYNN_POSTGRES",
+		ResourceMissing: "missing",
+		Actions: []plugin.CLIAction{
+			{
+				Name: "wait",
+				Args: []string{"/bin/flynn-postgres-api", "task", "wait", "${resource}"},
+			},
+			{
+				Name: "psql",
+				Args: []string{"psql", "${app.POSTGRES_URL}"},
+			},
+		},
+	}
+	cfg, err := pluginJobConfig(client, spec, spec.Action("wait"), &docopt.Args{
+		Bool:   map[string]bool{"wait": true},
+		String: map[string]string{"<resource>": instance},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "shop" {
+		t.Fatalf("task must stay on the user app, got %s", cfg.App)
+	}
+	if cfg.Env["CONTROLLER_KEY"] != "cluster-secret" {
+		t.Fatalf("controller key not copied: %#v", cfg.Env)
+	}
+	if _, ok := cfg.Env["PGHOST"]; ok {
+		t.Fatal("instance env must not be copied with the controller key")
+	}
+
+	psql, err := pluginJobConfig(client, spec, spec.Action("psql"), &docopt.Args{
+		Bool: map[string]bool{"psql": true},
+		All:  map[string]interface{}{"<argument>": []string{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := psql.Env["CONTROLLER_KEY"]; ok {
+		t.Fatal("psql must not receive the controller key")
+	}
+}

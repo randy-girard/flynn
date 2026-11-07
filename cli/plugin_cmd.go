@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -440,6 +441,12 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 		env["REDISCLI_AUTH"] = in.App["REDIS_PASSWORD"]
 	}
 	jobArgs, env = quietRedisCLIAuth(jobArgs, env)
+	// Appliance admin routes require CONTROLLER_KEY. Isolated database
+	// releases deliberately do not have it, and the task job runs on the
+	// user app (a shell on the plugin app is refused). Copy the plugin
+	// app's key into this one task so pg:wait and the other API tasks
+	// can authenticate. redis-cli and psql do not.
+	copyPluginAPIAuth(client, spec, jobArgs, env)
 
 	return &runConfig{
 		App:        appName,
@@ -452,6 +459,41 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 		// User-partition jobs only resolve leader.<datastore>.discoverd.
 		Partition: ct.PartitionTypeSystem,
 	}, nil
+}
+
+// pluginAPITask is a job whose argv is `/bin/flynn-*-api task ...`.
+func pluginAPITask(args []string) bool {
+	for i, arg := range args {
+		base := path.Base(arg)
+		if strings.HasPrefix(base, "flynn-") && strings.HasSuffix(base, "-api") {
+			return i+1 < len(args) && args[i+1] == "task"
+		}
+	}
+	return false
+}
+
+// copyPluginAPIAuth adds the plugin release's controller key to an API
+// task job. Missing plugin env is left alone; the task then fails closed.
+func copyPluginAPIAuth(client pluginJobClient, spec *plugin.CLI, args []string, env map[string]string) {
+	if client == nil || spec == nil || env == nil || !pluginAPITask(args) {
+		return
+	}
+	if strings.TrimSpace(env["CONTROLLER_KEY"]) != "" || strings.TrimSpace(env["AUTH_KEY"]) != "" {
+		return
+	}
+	app := strings.TrimSpace(spec.App)
+	if app == "" {
+		return
+	}
+	rel, err := client.GetAppRelease(app)
+	if err != nil || rel == nil || rel.Env == nil {
+		return
+	}
+	for _, key := range []string{"CONTROLLER_KEY", "AUTH_KEY"} {
+		if v := strings.TrimSpace(rel.Env[key]); v != "" {
+			env[key] = v
+		}
+	}
 }
 
 func compactPluginArgs(args []string) []string {
