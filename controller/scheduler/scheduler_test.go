@@ -349,13 +349,17 @@ func (TestSuite) TestMultipleHosts(c *C) {
 	defer s.Stop()
 
 	// assertJobs checks that hosts have expected jobs based on their type
-	// and current state
+	// and current state. Stopped jobs leave the map after the down write,
+	// so they are not part of this comparison.
 	type hostJobs map[utils.HostClient][]*Job
 	assertJobs := func(expected hostJobs) {
 		// get a sorted list of scheduler jobs per host to compare
 		// against the expected list
 		actual := make(map[string]sortJobs)
 		for _, job := range s.InternalState().Jobs {
+			if job.State == JobStateStopped {
+				continue
+			}
 			actual[job.HostID] = append(actual[job.HostID], job)
 		}
 		for _, jobs := range actual {
@@ -448,7 +452,6 @@ func (TestSuite) TestMultipleHosts(c *C) {
 			{Type: "omni", State: JobStateStarting},
 		},
 		host3: {
-			{Type: "omni", State: JobStateStopped},
 			{Type: "omni", State: JobStateStarting},
 		},
 	})
@@ -488,13 +491,10 @@ func (TestSuite) TestMultipleHosts(c *C) {
 			{Type: "omni", State: JobStateStarting},
 		},
 		host2: {
-			{Type: "omni", State: JobStateStopped},
 			{Type: "omni", State: JobStateStarting},
 		},
 		host3: {
-			{Type: "omni", State: JobStateStopped},
 			{Type: "omni", State: JobStateStarting},
-			{Type: "omni", State: JobStateStopped},
 		},
 	})
 
@@ -509,14 +509,9 @@ func (TestSuite) TestMultipleHosts(c *C) {
 			{Type: "omni", State: JobStateStarting},
 		},
 		host2: {
-			{Type: "omni", State: JobStateStopped},
 			{Type: "omni", State: JobStateStarting},
 		},
-		host3: {
-			{Type: "omni", State: JobStateStopped},
-			{Type: "omni", State: JobStateStopped},
-			{Type: "omni", State: JobStateStopped},
-		},
+		host3: {},
 	})
 
 	c.Logf("Remove another host. Ensure the cluster recovers correctly (hosts=%v)", hosts)
@@ -525,20 +520,12 @@ func (TestSuite) TestMultipleHosts(c *C) {
 	s.waitFormationSync()
 	s.waitJobStart()
 	assertJobs(hostJobs{
-		host1: {
-			{Type: "web", State: JobStateStopped},
-			{Type: "omni", State: JobStateStopped},
-		},
+		host1: {},
 		host2: {
-			{Type: "omni", State: JobStateStopped},
 			{Type: "omni", State: JobStateStarting},
 			{Type: "web", State: JobStateStarting},
 		},
-		host3: {
-			{Type: "omni", State: JobStateStopped},
-			{Type: "omni", State: JobStateStopped},
-			{Type: "omni", State: JobStateStopped},
-		},
+		host3: {},
 	})
 }
 
@@ -1088,12 +1075,21 @@ func (TestSuite) TestActiveJobSync(c *C) {
 	assertJob("job1", JobStateRunning)
 	assertJob("job2", JobStateStarting)
 
-	// sync a stopped job
+	// sync a stopped job. isLeader is nil and the controller has no active
+	// row, so the stopped object is not an in-flight down write. It leaves
+	// the map. The running job stays, and the next start of the stopped
+	// type is still a scale.
 	setStatus(job2.ID, host.StatusDone)
+	s.jobs["job2"].Type = "worker"
 	c.Assert(s.SyncJobs(), IsNil)
-	c.Assert(s.jobs, HasLen, 2)
+	c.Assert(s.jobs, HasLen, 1)
 	assertJob("job1", JobStateRunning)
-	assertJob("job2", JobStateStopped)
+	if _, ok := s.jobs["job2"]; ok {
+		c.Fatal("stopped job remains in the scheduler map")
+	}
+	if got := startReasonForScheduler(s.Scheduler, testAppID, testReleaseID, "worker"); got != host.JobReasonScale {
+		c.Fatalf("next worker start is %s, want scale", got)
+	}
 }
 
 // TestSyncJobsMarksFinishedStoppingJobDown is the gorge leftover: the
@@ -1142,8 +1138,12 @@ func (TestSuite) TestSyncJobsMarksFinishedStoppingJobDown(c *C) {
 	h.Jobs[live.ID] = running
 
 	c.Assert(s.SyncJobs(), IsNil)
-	assertJob("finished", JobStateStopped)
-	assertJob("missing", JobStateStopped)
+	if _, ok := s.jobs["finished"]; ok {
+		c.Fatal("finished stopping job remains after the host reports it done")
+	}
+	if _, ok := s.jobs["missing"]; ok {
+		c.Fatal("stopping job the host no longer lists remains in the map")
+	}
 	assertJob("live", JobStateStopping)
 }
 

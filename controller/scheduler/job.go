@@ -298,11 +298,25 @@ func (j *Job) ControllerJob() *ct.Job {
 
 type Jobs map[string]*Job
 
+// processTypeKey is an app and process type that has already had a
+// non-blocked job. It replaces keeping every stopped job in memory so a
+// later start is still a scale. Blocked jobs are not recorded.
+type processTypeKey struct {
+	appID string
+	typ   string
+}
+
 // startReason is why the scheduler is adding jobs of this type: a first start,
 // a scale-up of an existing formation, or a replacement for another release.
 // Stopped/stopping jobs still count: one-down-one-up drains the old release
 // before the new job is created, and that must be a scale-up, not a first start.
 func (j Jobs) startReason(appID, releaseID, typ string) string {
+	return j.startReasonSeen(appID, releaseID, typ, nil)
+}
+
+// startReasonSeen is startReason plus types whose stopped jobs have already
+// been dropped from the map. A missing set behaves like startReason.
+func (j Jobs) startReasonSeen(appID, releaseID, typ string, seen map[processTypeKey]struct{}) string {
 	liveSame, liveOther := 0, 0
 	knownType := false
 	for _, job := range j {
@@ -320,6 +334,11 @@ func (j Jobs) startReason(appID, releaseID, typ string) string {
 			}
 		} else if live {
 			liveOther++
+		}
+	}
+	if !knownType {
+		if _, ok := seen[processTypeKey{appID, typ}]; ok {
+			knownType = true
 		}
 	}
 	if liveOther > 0 && liveSame == 0 {

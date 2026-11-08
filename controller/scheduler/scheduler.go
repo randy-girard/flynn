@@ -70,9 +70,19 @@ type Scheduler struct {
 	hosts      map[string]*Host
 	routers    map[string]*Router
 	jobs       Jobs
-	volumes    map[string]*Volume
-	routes     map[string]map[string]struct{}
-	services   map[string]*Service
+	// seenProcessTypes records app+type pairs that have already run as
+	// something other than blocked. Stopped jobs are removed from jobs;
+	// this set is what keeps the next start a scale. It is in-memory only.
+	seenProcessTypes map[processTypeKey]struct{}
+	// downInFlight counts down PUTs queued for a job UUID and not yet
+	// finished. downPersistFailed keeps a stopped job when the last down
+	// PUT failed and the controller may still not have that row.
+	downInFlight       map[string]int
+	downPersistFailed  map[string]struct{}
+	downPersistResults chan downPersistResult
+	volumes            map[string]*Volume
+	routes             map[string]map[string]struct{}
+	services           map[string]*Service
 
 	jobEvents    chan *host.Event
 	volumeEvents chan *VolumeEvent
@@ -173,6 +183,10 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		hosts:                 make(map[string]*Host),
 		routers:               make(map[string]*Router),
 		jobs:                  make(map[string]*Job),
+		seenProcessTypes:      make(map[processTypeKey]struct{}),
+		downInFlight:          make(map[string]int),
+		downPersistFailed:     make(map[string]struct{}),
+		downPersistResults:    make(chan downPersistResult, eventBufferSize),
 		volumes:               make(map[string]*Volume),
 		hostVolumeIDs:         make(map[string]map[string]struct{}),
 		volumeMisses:          make(map[string]int),
@@ -531,9 +545,11 @@ func (s *Scheduler) Run() {
 	s.tickSendTelemetry()
 
 	for {
+		s.drainDownPersistResults()
 		select {
 		case <-s.stop:
 			log.Info("stopping scheduler loop")
+			s.drainDownPersistResults()
 			return
 		case isLeader := <-leaderCh:
 			s.HandleLeaderChange(isLeader)
@@ -600,6 +616,7 @@ func (s *Scheduler) Run() {
 			s.HandleRectify()
 		case <-s.stop:
 			log.Info("stopping scheduler loop")
+			s.drainDownPersistResults()
 			return
 		case isLeader := <-leaderCh:
 			s.HandleLeaderChange(isLeader)
@@ -637,6 +654,8 @@ func (s *Scheduler) Run() {
 			s.SendTelemetry()
 		case <-s.syncSinks:
 			s.SyncSinks()
+		case res := <-s.downPersistResults:
+			s.finishDownPersist(res.id, res.err)
 		case <-s.pause:
 			<-s.resume
 		}
@@ -650,6 +669,7 @@ func (s *Scheduler) IsLeader() bool {
 func (s *Scheduler) SyncJobs() (err error) {
 	log := s.logger.New("fn", "SyncJobs")
 	log.Info("syncing jobs")
+	s.drainDownPersistResults()
 
 	defer func() {
 		if err != nil {
@@ -770,9 +790,138 @@ func (s *Scheduler) SyncJobs() (err error) {
 		}
 	}
 
+	// Stopped jobs the controller no longer lists, and that this process is
+	// not still trying to write, are history. Pending, blocked, and stopping
+	// jobs are not in this sweep.
+	s.forgetDurableStoppedJobs(activeControllerJobs)
+
 	s.restartAgedJobs(time.Now())
 
 	return nil
+}
+
+type downPersistResult struct {
+	id  string
+	err error
+}
+
+func (s *Scheduler) noteProcessType(appID, typ string) {
+	if s == nil {
+		return
+	}
+	if s.seenProcessTypes == nil {
+		s.seenProcessTypes = make(map[processTypeKey]struct{})
+	}
+	s.seenProcessTypes[processTypeKey{appID: appID, typ: typ}] = struct{}{}
+}
+
+// forgetStoppedJob drops a stopped job from the in-memory map and from
+// formationlessJobs. The controller row is left alone. The app+type is
+// recorded first so the next start of that type is still a scale.
+func (s *Scheduler) forgetStoppedJob(job *Job) {
+	if s == nil || job == nil || job.State != JobStateStopped {
+		return
+	}
+	s.noteProcessType(job.AppID, job.Type)
+	delete(s.jobs, job.ID)
+	for key, jobs := range s.formationlessJobs {
+		if _, ok := jobs[job.ID]; !ok {
+			continue
+		}
+		delete(jobs, job.ID)
+		if len(jobs) == 0 {
+			delete(s.formationlessJobs, key)
+		}
+	}
+}
+
+func (s *Scheduler) trackDownPersist(id string) {
+	if s == nil || id == "" {
+		return
+	}
+	if s.downInFlight == nil {
+		s.downInFlight = make(map[string]int)
+	}
+	delete(s.downPersistFailed, id)
+	s.downInFlight[id]++
+}
+
+// finishDownPersist records the result of one down PUT. A failure leaves the
+// stopped job in the map. Success drops it only when no earlier down PUT for
+// that UUID is still in flight and the in-memory job is still stopped.
+func (s *Scheduler) finishDownPersist(id string, err error) {
+	if s == nil || id == "" {
+		return
+	}
+	if s.downInFlight[id] > 0 {
+		s.downInFlight[id]--
+		if s.downInFlight[id] == 0 {
+			delete(s.downInFlight, id)
+		}
+	}
+	if err != nil {
+		if s.downPersistFailed == nil {
+			s.downPersistFailed = make(map[string]struct{})
+		}
+		s.downPersistFailed[id] = struct{}{}
+		return
+	}
+	delete(s.downPersistFailed, id)
+	job := s.jobs[id]
+	if job == nil || job.State != JobStateStopped || s.downInFlight[id] > 0 {
+		return
+	}
+	s.forgetStoppedJob(job)
+}
+
+func (s *Scheduler) reportDownPersist(id string, err error) {
+	if s == nil || s.downPersistResults == nil || id == "" {
+		return
+	}
+	res := downPersistResult{id: id, err: err}
+	select {
+	case s.downPersistResults <- res:
+	case <-s.stop:
+	}
+}
+
+func (s *Scheduler) drainDownPersistResults() {
+	if s == nil || s.downPersistResults == nil {
+		return
+	}
+	for {
+		select {
+		case res := <-s.downPersistResults:
+			s.finishDownPersist(res.id, res.err)
+		default:
+			return
+		}
+	}
+}
+
+// forgetDurableStoppedJobs removes stopped jobs whose down row is already
+// durable, or that this process did not write. A controller row that is
+// still active, an in-flight down PUT, or a failed down PUT keeps the object
+// so the retry can send the in-memory exit status.
+func (s *Scheduler) forgetDurableStoppedJobs(active map[string]struct{}) {
+	if s == nil {
+		return
+	}
+	for id, job := range s.jobs {
+		if job == nil || job.State != JobStateStopped {
+			continue
+		}
+		if s.downInFlight[id] > 0 {
+			continue
+		}
+		if _, failed := s.downPersistFailed[id]; failed {
+			continue
+		}
+		if _, ok := active[id]; ok {
+			continue
+		}
+		s.forgetStoppedJob(job)
+	}
 }
 
 func (s *Scheduler) SyncFormations() {
@@ -1746,6 +1895,11 @@ func (s *Scheduler) ControllerPersistLoop() {
 		if err != nil {
 			log.Error("error persisting job", "job.id", job.ID, "job.state", job.State, "err", err)
 		}
+		if job.State == ct.JobStateDown {
+			// jobDone is signaled on failure too. The scheduler forgets a
+			// stopped job only from this result, and only when err is nil.
+			s.reportDownPersist(job.UUID, err)
+		}
 		jobDone <- job.UUID
 	}
 
@@ -1867,7 +2021,7 @@ func (s *Scheduler) handleFormationDiff(f *Formation, diff Processes) {
 	log.Info("formation in incorrect state", "diff", diff)
 	for typ, n := range diff {
 		if n > 0 {
-			reason := s.jobs.startReason(f.App.ID, f.Release.ID, typ)
+			reason := s.jobs.startReasonSeen(f.App.ID, f.Release.ID, typ, s.seenProcessTypes)
 			log.Info(fmt.Sprintf("starting %d new %s jobs", n, typ), "reason", reason)
 			for i := 0; i < n; i++ {
 				job := &Job{
@@ -2724,6 +2878,9 @@ func (s *Scheduler) persistControllerJob(job *ct.Job) {
 		return
 	}
 	if s.isLeader == nil || *s.isLeader {
+		if job.State == ct.JobStateDown {
+			s.trackDownPersist(job.UUID)
+		}
 		s.controllerPersist <- job
 	}
 }

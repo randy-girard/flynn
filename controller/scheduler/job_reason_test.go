@@ -34,4 +34,15 @@ func TestJobsStartReason(t *testing.T) {
 	if got := jobs.startReason("app", "rel-new", "web"); got != host.JobReasonScale {
 		t.Fatalf("stopped old release: %s", got)
 	}
+	jobs = Jobs{}
+	seen := map[processTypeKey]struct{}{{appID: "app", typ: "web"}: {}}
+	if got := jobs.startReasonSeen("app", "rel-new", "web", seen); got != host.JobReasonScale {
+		t.Fatalf("forgotten stopped web: %s", got)
+	}
+	if got := jobs.startReasonSeen("app", "rel-new", "worker", seen); got != host.JobReasonStart {
+		t.Fatalf("other type: %s", got)
+	}
+	if got := jobs.startReasonSeen("app", "rel-new", "web", nil); got != host.JobReasonStart {
+		t.Fatalf("no memory of web: %s", got)
+	}
 }
