@@ -168,6 +168,42 @@ type Scheduler struct {
 	// true, periodic restarts may also replace the only instance of a user
 	// app process type (see eligibleForAgeRestart).
 	singleInstanceRestart bool
+
+	// loopApply carries host and controller read results back onto the
+	// scheduler goroutine. Workers only do I/O.
+	loopApply chan func()
+	// loopActive is set by the scheduler goroutine once the loop is
+	// running. Startup sync stays synchronous while it is false.
+	loopActive bool
+	// holdRectify delays rectify until an in-loop leader promotion has
+	// applied its host, formation, and job sync.
+	holdRectify   bool
+	leaderSeq     uint64
+	pendingLeader *leaderBarrier
+
+	jobsInFlight       bool
+	jobsAgain          bool
+	volsInFlight       bool
+	volsAgain          bool
+	formationsInFlight bool
+	formationsAgain    bool
+	sinksInFlight      bool
+	sinksAgain         bool
+	hostsInFlight      bool
+	hostsAgain         bool
+	checksInFlight     bool
+	checksAgain        bool
+
+	hostFollowInFlight map[string]struct{}
+	hostSyncWait       map[string]struct{}
+	hostSyncPending    int
+	hostSyncFailed     bool
+	hostSyncLeader     uint64
+
+	volListInFlight map[string]struct{}
+	volSnap         map[string]map[string]struct{}
+	volSnapFailed   map[string]struct{}
+	placementHolds  []*placementHold
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -220,6 +256,11 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		resume:                make(chan struct{}),
 		generateJobUUID:       random.UUID,
 		routerBackends:        make(map[string]*RouterBackend),
+		loopApply:             make(chan func(), eventBufferSize),
+		hostFollowInFlight:    make(map[string]struct{}),
+		volListInFlight:       make(map[string]struct{}),
+		volSnap:               make(map[string]map[string]struct{}),
+		volSnapFailed:         make(map[string]struct{}),
 	}
 }
 
@@ -228,10 +269,11 @@ func main() {
 	logger.SetHandler(log15.LvlFilterHandler(log15.LvlInfo, log15.StdoutHandler))
 	log := logger.New("fn", "main")
 
-	// Use a low timeout for HTTP requests to avoid blocking the main loop.
-	//
-	// TODO: make all HTTP calls asynchronous
-	//       (see https://github.com/randy-girard/flynn/issues/1920)
+	// The cluster client uses a 10s timeout. The controller client does not:
+	// formation and job streams have no total timeout. The scheduler loop
+	// does not wait on those calls. Startup, before the loop is running,
+	// may still call them synchronously. A slow host stalls that host's
+	// own call, not placement onto other hosts.
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
 	log.Info("creating cluster and controller clients")
@@ -544,6 +586,11 @@ func (s *Scheduler) Run() {
 	s.tickSyncHosts(10 * time.Second)
 	s.tickSendTelemetry()
 
+	// Startup sync above ran before this flag, on this goroutine. Later
+	// reads are started off the loop and applied through loopApply.
+	s.loopActive = true
+	defer func() { s.loopActive = false }()
+
 	for {
 		s.drainDownPersistResults()
 		select {
@@ -559,6 +606,9 @@ func (s *Scheduler) Run() {
 
 		// Handle events that reconcile scheduler state with the cluster
 		select {
+		case fn := <-s.loopApply:
+			fn()
+			continue
 		case req := <-s.placementRequests:
 			s.HandlePlacementRequest(req)
 			continue
@@ -575,7 +625,7 @@ func (s *Scheduler) Run() {
 			s.HandleRouterStreamEvent(e)
 			continue
 		case <-s.hostChecks:
-			s.PerformHostChecks()
+			s.beginAsyncHostChecks()
 			continue
 		case e := <-s.jobEvents:
 			s.HandleJobEvent(e)
@@ -591,20 +641,23 @@ func (s *Scheduler) Run() {
 
 		// Handle sync events
 		select {
+		case fn := <-s.loopApply:
+			fn()
+			continue
 		case <-s.syncFormations:
-			s.SyncFormations()
+			s.beginAsyncSyncFormations()
 			continue
 		case <-s.syncSinks:
-			s.SyncSinks()
+			s.beginAsyncSyncSinks()
 			continue
 		case <-s.syncJobs:
-			s.SyncJobs()
+			s.beginAsyncSyncJobs()
 			continue
 		case <-s.syncHosts:
-			s.SyncHosts()
+			s.beginAsyncSyncHosts()
 			continue
 		case <-s.syncVolumes:
-			s.SyncVolumes()
+			s.beginAsyncSyncVolumes()
 			continue
 		default:
 		}
@@ -612,6 +665,8 @@ func (s *Scheduler) Run() {
 		// Finally, handle triggering cluster changes.
 		// Re-select on all the channels so we don't have to sleep nor spin
 		select {
+		case fn := <-s.loopApply:
+			fn()
 		case <-s.rectify:
 			s.HandleRectify()
 		case <-s.stop:
@@ -633,7 +688,7 @@ func (s *Scheduler) Run() {
 		case e := <-s.routerStreamEvents:
 			s.HandleRouterStreamEvent(e)
 		case <-s.hostChecks:
-			s.PerformHostChecks()
+			s.beginAsyncHostChecks()
 		case e := <-s.jobEvents:
 			s.HandleJobEvent(e)
 		case e := <-s.volumeEvents:
@@ -643,17 +698,17 @@ func (s *Scheduler) Run() {
 		case e := <-s.sinkEvents:
 			s.HandleSinkChange(e)
 		case <-s.syncFormations:
-			s.SyncFormations()
+			s.beginAsyncSyncFormations()
 		case <-s.syncJobs:
-			s.SyncJobs()
+			s.beginAsyncSyncJobs()
 		case <-s.syncHosts:
-			s.SyncHosts()
+			s.beginAsyncSyncHosts()
 		case <-s.syncVolumes:
-			s.SyncVolumes()
+			s.beginAsyncSyncVolumes()
 		case <-s.sendTelemetry:
 			s.SendTelemetry()
 		case <-s.syncSinks:
-			s.SyncSinks()
+			s.beginAsyncSyncSinks()
 		case res := <-s.downPersistResults:
 			s.finishDownPersist(res.id, res.err)
 		case <-s.pause:
@@ -688,6 +743,7 @@ func (s *Scheduler) SyncJobs() (err error) {
 		}
 
 		for _, job := range jobs {
+			job := job
 			activeHostJobs[job.Job.ID] = struct{}{}
 			s.handleActiveJob(&job)
 		}
@@ -700,31 +756,7 @@ func (s *Scheduler) SyncJobs() (err error) {
 	// stopping keeps the controller row there forever. Scale-down ignores
 	// an already-stopping job, and DeleteJob then fails because the host
 	// says the job is already gone.
-	for _, job := range s.jobs {
-		if job.State != JobStateStarting && job.State != JobStateRunning && job.State != JobStateStopping {
-			continue
-		}
-		if _, ok := activeHostJobs[job.JobID]; ok {
-			continue
-		}
-		log.Warn("job no longer active", "job.id", job.JobID, "job.state", job.State)
-		// get the job from the host to determine why it is no longer active
-		host, ok := s.hosts[job.HostID]
-		if !ok {
-			// assume the job doesn't exist, mark it as stopped
-			log.Error("error getting inactive job, unknown host", "job.id", job.JobID, "host.id", job.HostID)
-			s.markAsStopped(job)
-			continue
-		}
-		j, err := host.client.GetJob(job.JobID)
-		if err != nil {
-			// assume the job doesn't exist, mark it as stopped
-			log.Error("error getting inactive job, marking as stopped", "job.id", job.JobID, "err", err)
-			s.markAsStopped(job)
-			continue
-		}
-		s.handleActiveJob(j)
-	}
+	s.resolveInactiveJobs(activeHostJobs)
 
 	// ensure that all pending / starting / up jobs in the controller are
 	// still in those states
@@ -740,63 +772,7 @@ func (s *Scheduler) SyncJobs() (err error) {
 		log.Error("error getting controller active jobs", "err", err)
 		return err
 	}
-	activeControllerJobs := make(map[string]struct{}, len(jobs))
-	for _, job := range jobs {
-		activeControllerJobs[job.UUID] = struct{}{}
-
-		j, ok := s.jobs[job.UUID]
-		if !ok {
-			// the controller job is unknown, and since we are in sync with
-			// all the hosts, it can't be running so mark it as down
-			job.State = ct.JobStateDown
-			s.persistControllerJob(job)
-			continue
-		}
-
-		// ignore jobs in the JobStateStopping state since, although a
-		// request has been made to stop the job, we don't yet know if
-		// it has actually stopped, so just leave it in whatever state
-		// it's currently in until we get the stopped event
-		if j.State == JobStateStopping {
-			continue
-		}
-
-		// persist the job if it has a different in-memory state
-		if job.State == ct.JobStatePending && j.State != JobStatePending ||
-			job.State == ct.JobStateStarting && j.State != JobStateStarting ||
-			job.State == ct.JobStateUp && j.State != JobStateRunning ||
-			job.State == ct.JobStateStopping {
-			s.persistJob(j)
-		}
-	}
-
-	for _, job := range s.jobs {
-		switch job.State {
-
-		// ensure any active in-memory jobs are also active in the
-		// controller (the two may diverge if for example a previous
-		// persistence of the job's state failed with a non-retryable
-		// error)
-		case JobStatePending, JobStateStarting, JobStateRunning:
-			if _, active := activeControllerJobs[job.ID]; !active {
-				s.persistJob(job)
-			}
-
-		// stop any jobs in the JobStateStopping state (this races with
-		// an already running stopJob call, but stopping a job multiple
-		// times isn't a big deal and avoids the need for synchronization)
-		case JobStateStopping:
-			s.stopJob(job)
-		}
-	}
-
-	// Stopped jobs the controller no longer lists, and that this process is
-	// not still trying to write, are history. Pending, blocked, and stopping
-	// jobs are not in this sweep.
-	s.forgetDurableStoppedJobs(activeControllerJobs)
-
-	s.restartAgedJobs(time.Now())
-
+	s.applyControllerJobList(jobs)
 	return nil
 }
 
@@ -925,34 +901,7 @@ func (s *Scheduler) forgetDurableStoppedJobs(active map[string]struct{}) {
 }
 
 func (s *Scheduler) SyncFormations() {
-	log := s.logger.New("fn", "SyncFormations")
-	log.Info("syncing formations")
-	defer log.Debug("formations synced")
-
-	formations, err := s.FormationListActive()
-	if err != nil {
-		log.Error("error getting active formations", "err", err)
-		return
-	}
-
-	active := make(map[utils.FormationKey]struct{}, len(formations))
-	for _, f := range formations {
-		active[utils.FormationKey{AppID: f.App.ID, ReleaseID: f.Release.ID}] = struct{}{}
-		s.handleFormation(f)
-	}
-
-	s.syncRuntimeProfiles(log)
-	s.syncTenancy(log)
-	s.syncRuntimeSettings(log)
-
-	// check that all formations we think are active are still active
-	for _, f := range s.formations {
-		if _, ok := active[f.key()]; !ok && !f.GetProcesses().IsEmpty() {
-			log.Warn("formation should not be active, scaling down", "app.id", f.App.ID, "release.id", f.Release.ID)
-			f.Processes = nil
-			s.triggerRectify(f.key())
-		}
-	}
+	s.applyFormationFetch(s.loadFormationFetch(), 0)
 }
 
 func (s *Scheduler) SyncSinks() {
@@ -1018,17 +967,15 @@ func (s *Scheduler) SyncVolumes() {
 			return
 		}
 		set := make(map[string]struct{})
+		listed := make([]*volume.Info, 0, len(volumes))
 		for _, info := range volumes {
 			if !isAppVolume(info) {
 				continue
 			}
 			set[info.ID] = struct{}{}
-			if _, ok := s.volumes[info.ID]; !ok {
-				vol := NewVolume(info, ct.VolumeStateCreated, host.ID)
-				s.volumes[info.ID] = vol
-				s.persistVolume(vol)
-			}
+			listed = append(listed, info)
 		}
+		s.importListedVolumes(host.ID, listed)
 		hostVolumeIDs[host.ID] = set
 	}
 	s.hostVolumeIDs = hostVolumeIDs
@@ -1039,48 +986,10 @@ func (s *Scheduler) SyncVolumes() {
 	// does not exist". Require two consecutive misses and no live holder:
 	// a single incomplete ListVolumes after flynn-host restart would otherwise
 	// destroy postgres data volumes and force empty replica datasets.
-	for id, vol := range s.volumes {
-		if vol.GetState() == ct.VolumeStateDestroyed || vol.DecommissionedAt != nil {
-			s.noteVolumePresentOnHost(id)
-			continue
-		}
-		if vol.HostID == "" {
-			continue
-		}
-		set, ok := hostVolumeIDs[vol.HostID]
-		if !ok {
-			continue
-		}
-		if _, exists := set[id]; exists {
-			s.noteVolumePresentOnHost(id)
-			continue
-		}
-		if s.volumeHeldByLiveJob(vol) {
-			log.Warn("volume missing on host listing but still held by a live job, not destroying",
-				"vol.id", id, "host.id", vol.HostID, "job.id", *vol.JobID)
-			s.noteVolumePresentOnHost(id)
-			continue
-		}
-		if !s.noteVolumeMissingFromHost(id) {
-			log.Warn("volume missing on host, waiting for a second miss before destroying",
-				"vol.id", id, "host.id", vol.HostID)
-			continue
-		}
-		log.Warn("volume missing on host, marking destroyed", "vol.id", id, "host.id", vol.HostID)
-		vol.SetState(ct.VolumeStateDestroyed)
-		vol.JobID = nil
-		s.persistVolume(vol)
-	}
+	s.sweepMissingVolumes(hostVolumeIDs)
 
 	// ensure we know about all decommissioned volumes
-	volumes, err := s.VolumeList()
-	if err != nil {
-		log.Error("error getting controller volumes", "err", err)
-		return
-	}
-	for _, volume := range volumes {
-		s.handleControllerVolume(volume)
-	}
+	s.importControllerVolumes()
 }
 
 func (s *Scheduler) SyncHosts() (err error) {
@@ -1109,7 +1018,7 @@ func (s *Scheduler) SyncHosts() (err error) {
 		if err == nil {
 			// make sure no jobs are blocked which needn't be
 			s.maybeStartBlockedJobs(h)
-		} else {
+		} else if err != errHostFollowStarted {
 			log.Error("error following host", "host.id", host.ID(), "err", err)
 			// finish the sync before returning the error
 			followErr = err
@@ -1139,6 +1048,11 @@ func (s *Scheduler) SyncHosts() (err error) {
 }
 
 func (s *Scheduler) HandleRectify() error {
+	// A formation sync in flight, or an in-loop leader promotion, has not
+	// applied yet. Leave the batch queued so rectify runs after that apply.
+	if s.holdRectify || s.formationsInFlight {
+		return nil
+	}
 	for key := range s.rectifyBatch {
 		s.RectifyFormation(key)
 	}
@@ -1496,36 +1410,24 @@ func (s *Scheduler) noteVolumeMissingFromHost(id string) bool {
 }
 
 func (s *Scheduler) volumeExistsOnHost(hostID, volumeID string) bool {
-	if set, ok := s.hostVolumeIDs[hostID]; ok {
-		if _, exists := set[volumeID]; exists {
-			return true
-		}
+	if exists, known := s.volumeKnown(hostID, volumeID); known {
+		return exists
 	}
-	// hostVolumeIDs is only rebuilt in SyncVolumes. A volume created since
-	// the last sync is on the host but missing from the cache; treating
-	// that as "gc'd" makes scale 0→1 allocate a new empty dataset.
-	host, ok := s.hosts[hostID]
-	if !ok || host == nil || host.client == nil {
-		return false
-	}
-	volumes, err := host.client.ListVolumes()
-	if err != nil {
+	if s.loopActive {
+		// Placement parks on a cache miss before it gets here. Trust the
+		// positive cache, otherwise treat the volume as absent for this
+		// attempt rather than listing the host on the scheduler goroutine.
+		s.logger.Error("volume list missing during placement", "fn", "volumeExistsOnHost", "host.id", hostID, "vol.id", volumeID)
 		if set, ok := s.hostVolumeIDs[hostID]; ok {
 			_, exists := set[volumeID]
 			return exists
 		}
 		return false
 	}
-	for _, info := range volumes {
-		if info != nil && info.ID == volumeID {
-			if s.hostVolumeIDs[hostID] == nil {
-				s.hostVolumeIDs[hostID] = make(map[string]struct{})
-			}
-			s.hostVolumeIDs[hostID][volumeID] = struct{}{}
-			return true
-		}
-	}
-	return false
+	// hostVolumeIDs is only rebuilt in SyncVolumes. A volume created since
+	// the last sync is on the host but missing from the cache; treating
+	// that as "gc'd" makes scale 0→1 allocate a new empty dataset.
+	return s.volumeExistsOnHostSync(hostID, volumeID)
 }
 
 func isMissingHostVolumeError(err error) bool {
@@ -1595,6 +1497,10 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	// possible (which will lead to the job being scheduled on the
 	// same host as the volumes) or initialize new ones
 	if reqs := req.Job.VolumeRequests(); len(reqs) > 0 {
+		if hostID, need := s.placementNeedsVolumeList(req.Job); need {
+			s.parkPlacement(req, hostID)
+			return
+		}
 		for _, volReq := range reqs {
 			if s.shouldDeferVolumeAllocation(req.Job, &volReq) {
 				log.Info("waiting to adopt in-use persistent volume rather than creating a new one")
@@ -1844,6 +1750,13 @@ func (s *Scheduler) ShuffledHosts() []*Host {
 	return hosts
 }
 
+// controllerPersistAttempts retries a job, volume, or scale PUT for one
+// minute. When that budget ends, the attempt is dropped from the per-UUID
+// queue. A failed down PUT is reported and the stopped job stays in memory
+// so a later sync can retry it. A failed up or pending PUT is retried only
+// when something calls persistJob again. A failed scale PUT is not retried
+// by this queue; the next formation sync can load the controller row and
+// rectify again.
 var controllerPersistAttempts = attempt.Strategy{
 	Delay: 100 * time.Millisecond,
 	Total: time.Minute,
@@ -2003,17 +1916,29 @@ func (s *Scheduler) ControllerPersistLoop() {
 func (s *Scheduler) HandleLeaderChange(isLeader bool) {
 	log := s.logger.New("fn", "HandleLeaderChange")
 	s.isLeader = &isLeader
-	if isLeader {
-		log.Info("handling leader promotion")
-		// ensure we are in sync and then rectify
+	if !isLeader {
+		log.Info("handling leader demotion")
+		s.pendingLeader = nil
+		s.holdRectify = false
+		return
+	}
+	log.Info("handling leader promotion")
+	s.triggerSendTelemetry()
+	if !s.loopActive {
+		// Startup runs before the loop. Keep this synchronous so the first
+		// rectify sees the hosts, formations, and jobs just loaded.
 		s.SyncHosts()
 		s.SyncFormations()
 		s.SyncJobs()
 		s.rectifyAll()
-		s.triggerSendTelemetry()
-	} else {
-		log.Info("handling leader demotion")
+		return
 	}
+	s.leaderSeq++
+	s.pendingLeader = &leaderBarrier{id: s.leaderSeq}
+	s.holdRectify = true
+	s.beginAsyncSyncHosts()
+	s.beginAsyncSyncFormations()
+	s.beginAsyncSyncJobs()
 }
 
 func (s *Scheduler) handleFormationDiff(f *Formation, diff Processes) {
@@ -2122,7 +2047,9 @@ outer:
 
 		log.Info("adding job to the cluster", "host.id", req.Host.ID)
 		err = req.Host.client.AddJob(req.Config)
-		if err == nil {
+		if err == nil || addJobConflict(err) {
+			// 409 means this job is already on the host. Retrying would
+			// clear HostID and place a second copy on another host.
 			return
 		}
 		if isMissingHostVolumeError(err) {
@@ -2180,35 +2107,16 @@ func (s *Scheduler) followHost(h utils.HostClient) (*Host, error) {
 	if host, ok := s.hosts[h.ID()]; ok {
 		return host, nil
 	}
-
-	host := NewHost(h, s.logger)
-	if stats, err := h.GetStats(); err == nil && stats != nil {
-		host.MemoryTotalBytes = stats.MemoryTotalBytes
-		if stats.CPUCount > 0 {
-			host.CPUMilli = int64(stats.CPUCount) * 1000
+	if s.loopActive {
+		if _, ok := s.hostFollowInFlight[h.ID()]; ok {
+			return nil, errHostFollowStarted
 		}
+		if err := s.startHostFollow(h); err != nil {
+			return nil, err
+		}
+		return nil, errHostFollowStarted
 	}
-	volumes, err := host.StreamVolumeEventsTo(s.volumeEvents)
-	if err != nil {
-		return nil, err
-	}
-	for id, vol := range volumes {
-		s.volumes[id] = vol
-		s.persistVolume(vol)
-	}
-	jobs, err := host.StreamJobEventsTo(s.jobEvents)
-	if err != nil {
-		return nil, err
-	}
-	s.hosts[host.ID] = host
-
-	for _, job := range jobs {
-		s.handleActiveJob(&job)
-	}
-
-	s.triggerSyncFormations()
-
-	return host, nil
+	return s.followHostSync(h)
 }
 
 func (s *Scheduler) unfollowHost(host *Host) {
@@ -2230,7 +2138,13 @@ func (s *Scheduler) unfollowHost(host *Host) {
 		}
 	}
 
-	s.triggerSyncFormations()
+	// Start the formation sync before returning so a rectify queued by the
+	// job removals above waits for that sync to apply.
+	if s.loopActive {
+		s.beginAsyncSyncFormations()
+	} else {
+		s.triggerSyncFormations()
+	}
 }
 
 func (s *Scheduler) markHostAsUnhealthy(host *Host) {
@@ -2327,6 +2241,7 @@ func (s *Scheduler) HandleServiceEvent(e *discoverd.Event) {
 		log.Error("error handling service event, unknown job")
 		return
 	}
+	s.bumpJobEpoch(job.HostID)
 
 	if job.serviceFirstSeen == nil {
 		now := time.Now()
@@ -2474,6 +2389,9 @@ func (s *Scheduler) handleNewHost(id string) {
 	}
 
 	host, err := s.followHost(h)
+	if err == errHostFollowStarted {
+		return
+	}
 	if err != nil {
 		// just log the error, following will be retried in SyncHosts
 		log.Error("error following host", "host.id", id, "err", err)
@@ -2566,6 +2484,9 @@ func (s *Scheduler) PerformHostChecks() {
 }
 
 func (s *Scheduler) HandleVolumeEvent(e *VolumeEvent) {
+	if e != nil && e.Volume != nil {
+		s.bumpVolEpoch(e.Volume.HostID)
+	}
 	log := s.logger.New("fn", "HandleVolumeEvent", "event.type", e.Type, "vol.type", e.Volume.Type, "vol.id", e.Volume.ID)
 
 	log.Info("handling volume event")
@@ -2609,6 +2530,9 @@ func (s *Scheduler) handleControllerVolume(volume *ct.Volume) {
 }
 
 func (s *Scheduler) HandleJobEvent(e *host.Event) {
+	if e != nil && e.Job != nil {
+		s.bumpJobEpoch(e.Job.HostID)
+	}
 	log := s.logger.New("fn", "HandleJobEvent", "job.id", e.JobID, "event.type", e.Event)
 
 	log.Info("handling job event")
@@ -2703,10 +2627,16 @@ func (s *Scheduler) handleActiveJob(activeJob *host.ActiveJob) *Job {
 	// different host.
 	if job.HostID != activeJob.HostID {
 		s.logger.Warn("stopping job with incorrect host ID", "job.id", job.ID, "expected", job.HostID, "actual", activeJob.HostID)
-		if host, ok := s.hosts[activeJob.HostID]; ok {
-			if err := host.client.StopJob(hostJob.ID); err != nil {
-				s.logger.Error("error stopping job", "job.id", job.ID, "host.id", activeJob.HostID, "err", err)
-			}
+		if host, ok := s.hosts[activeJob.HostID]; ok && host.client != nil {
+			client := host.client
+			jobID := hostJob.ID
+			hostID := activeJob.HostID
+			schedID := job.ID
+			go func() {
+				if err := client.StopJob(jobID); err != nil {
+					s.logger.Error("error stopping job", "job.id", schedID, "host.id", hostID, "err", err)
+				}
+			}()
 		}
 		return job
 	}
@@ -2751,6 +2681,9 @@ func serviceReplayNeedsRunning(state JobState) bool {
 }
 
 func (s *Scheduler) markAsStopped(job *Job) {
+	if job != nil {
+		s.bumpJobEpoch(job.HostID)
+	}
 	s.handleJobStatus(job, host.StatusDone)
 }
 
@@ -2997,25 +2930,30 @@ func (s *Scheduler) handleSink(sink *ct.Sink) {
 }
 
 func (s *Scheduler) removeSink(sink *ct.Sink) {
-	for _, host := range s.hosts {
-		if err := host.RemoveSink(sink.ID); err != nil {
+	id := sink.ID
+	delete(s.sinks, id)
+	s.fanoutHost(func(h *Host, _ map[string]*ct.Sink) {
+		if err := h.RemoveSink(id); err != nil {
 			// just log the error, SyncSinks will try removing the sink again
 			// if it still exists on the host
-			s.logger.Error("error removing sink", "host.id", host.ID, "err", err)
+			s.logger.Error("error removing sink", "host.id", h.ID, "err", err)
 		}
-	}
-	delete(s.sinks, sink.ID)
+	})
 }
 
 func (s *Scheduler) addSink(sink *ct.Sink) {
 	s.sinks[sink.ID] = sink
-	for _, host := range s.hosts {
-		if err := host.AddSink(sink); err != nil {
+	s.fanoutHost(func(h *Host, desired map[string]*ct.Sink) {
+		want, ok := desired[sink.ID]
+		if !ok {
+			return
+		}
+		if err := h.AddSink(want); err != nil {
 			// just log the error, SyncSinks will try adding the sink again
 			// if it doesn't exist on the host
-			s.logger.Error("error adding sink", "host.id", host.ID, "sink.id", sink.ID, "err", err)
+			s.logger.Error("error adding sink", "host.id", h.ID, "sink.id", sink.ID, "err", err)
 		}
-	}
+	})
 }
 
 func (s *Scheduler) triggerRectify(key utils.FormationKey) {

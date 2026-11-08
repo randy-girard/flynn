@@ -42,6 +42,15 @@ type FakeHostClient struct {
 	Healthy          bool
 	TestEventHook    chan struct{}
 	tags             map[string]string
+
+	// Hooks are test seams. They run after a snapshot is copied and
+	// without the jobs lock held, so a test can block one host RPC
+	// while another host still accepts work.
+	OnListActiveJobs func()
+	OnListVolumes    func()
+	OnGetStatus      func()
+	OnAddJob         func(*host.Job)
+	AddJobErr        error
 }
 
 func (c *FakeHostClient) ID() string { return c.hostID }
@@ -93,17 +102,26 @@ func (c *FakeHostClient) ListJobs() (map[string]host.ActiveJob, error) {
 
 func (c *FakeHostClient) ListActiveJobs() (map[string]host.ActiveJob, error) {
 	c.jobsMtx.RLock()
-	defer c.jobsMtx.RUnlock()
 	jobs := make(map[string]host.ActiveJob)
 	for id, j := range c.Jobs {
 		if j.Status == host.StatusStarting || j.Status == host.StatusRunning {
 			jobs[id] = j
 		}
 	}
+	c.jobsMtx.RUnlock()
+	if c.OnListActiveJobs != nil {
+		c.OnListActiveJobs()
+	}
 	return jobs, nil
 }
 
 func (c *FakeHostClient) AddJob(job *host.Job) error {
+	if c.OnAddJob != nil {
+		c.OnAddJob(job)
+	}
+	if c.AddJobErr != nil {
+		return c.AddJobErr
+	}
 	c.jobsMtx.Lock()
 	defer c.jobsMtx.Unlock()
 	if _, ok := c.Jobs[job.ID]; ok {
@@ -254,6 +272,9 @@ func (c *FakeHostClient) ListVolumes() ([]*volume.Info, error) {
 	for _, v := range c.volumes {
 		out = append(out, v)
 	}
+	if c.OnListVolumes != nil {
+		c.OnListVolumes()
+	}
 	return out, nil
 }
 
@@ -262,6 +283,9 @@ func (c *FakeHostClient) StreamVolumes(ch chan *volume.Event) (stream.Stream, er
 }
 
 func (c *FakeHostClient) GetStatus() (*host.HostStatus, error) {
+	if c.OnGetStatus != nil {
+		c.OnGetStatus()
+	}
 	if !c.Healthy {
 		return nil, errors.New("unhealthy")
 	}

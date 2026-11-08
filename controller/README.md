@@ -21,3 +21,11 @@ job list is the history; the in-memory map is not. A later start of a process
 type that has already run is a scale. Stopping jobs stay in memory so a
 volume and a CPU or memory reservation are not released while the job is
 still on the host.
+
+The leader loop owns that in-memory state. Listing jobs or volumes, checking
+a host, and streaming a new host all happen off the loop; the loop only
+applies the result. A slow host blocks work for that host. Placement of other
+apps continues. Controller writes are queued separately and retried for one
+minute. When that minute ends, the write is dropped. A failed down write
+keeps the stopped job in memory. A failed up, pending, or scale write is
+retried when the next sync or formation change asks for it again.

@@ -29,18 +29,49 @@ type Host struct {
 	jobsDone chan struct{}
 	volsDone chan struct{}
 	logger   log15.Logger
+
+	// jobEpoch and volEpoch increment on the scheduler loop when an event
+	// for this host is applied. A list captured at an older epoch is stale.
+	jobEpoch uint64
+	volEpoch uint64
+
+	// eventsReady is closed after the scheduler loop has applied this
+	// host's initial job and volume snapshot. Stream readers hold events
+	// until then so a follow running off the loop cannot overtake it.
+	eventsReady chan struct{}
+	eventsOnce  sync.Once
 }
 
 func NewHost(h utils.HostClient, l log15.Logger) *Host {
 	return &Host{
-		ID:       h.ID(),
-		Tags:     h.Tags(),
-		Healthy:  true,
-		client:   h,
-		stop:     make(chan struct{}),
-		jobsDone: make(chan struct{}),
-		volsDone: make(chan struct{}),
-		logger:   l,
+		ID:          h.ID(),
+		Tags:        h.Tags(),
+		Healthy:     true,
+		client:      h,
+		stop:        make(chan struct{}),
+		jobsDone:    make(chan struct{}),
+		volsDone:    make(chan struct{}),
+		logger:      l,
+		eventsReady: make(chan struct{}),
+	}
+}
+
+func (h *Host) releaseEvents() {
+	if h == nil || h.eventsReady == nil {
+		return
+	}
+	h.eventsOnce.Do(func() { close(h.eventsReady) })
+}
+
+func (h *Host) waitReleased() bool {
+	if h == nil || h.eventsReady == nil {
+		return true
+	}
+	select {
+	case <-h.eventsReady:
+		return true
+	case <-h.stop:
+		return false
 	}
 }
 
@@ -120,6 +151,12 @@ func (h *Host) StreamVolumeEventsTo(ch chan *VolumeEvent) (map[string]*Volume, e
 							Type:   VolumeEventTypeDestroy,
 						}
 					}
+					if e == nil {
+						continue
+					}
+					if !h.waitReleased() {
+						return
+					}
 					select {
 					case ch <- e:
 					case <-h.stop:
@@ -188,7 +225,14 @@ func (h *Host) StreamJobEventsTo(ch chan *host.Event) (map[string]host.ActiveJob
 					if !ok {
 						break eventLoop
 					}
-					ch <- event
+					if !h.waitReleased() {
+						return
+					}
+					select {
+					case ch <- event:
+					case <-h.stop:
+						return
+					}
 
 					// if the host is a FakeHostClient with TestEventHook
 					// set, send on the channel to synchronize with tests

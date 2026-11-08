@@ -182,36 +182,8 @@ type runtimeProfileLister interface {
 }
 
 func (s *Scheduler) syncRuntimeProfiles(log log15.Logger) {
-	if s == nil {
-		return
-	}
-	g, ok := s.ControllerClient.(runtimeProfileLister)
-	if !ok {
-		return
-	}
-	list, err := g.ListRuntimeProfiles()
-	if err != nil {
-		log.Error("error listing runtime profiles", "err", err)
-		return
-	}
-	next := make(map[string]bool, len(list))
-	tags := make(map[string]map[string]string, len(list))
-	for _, p := range list {
-		if p == nil {
-			continue
-		}
-		name := strings.ToLower(strings.TrimSpace(p.Name))
-		next[name] = p.ReserveResources
-		if len(p.Tags) > 0 {
-			copied := make(map[string]string, len(p.Tags))
-			for k, v := range p.Tags {
-				copied[k] = v
-			}
-			tags[name] = copied
-		}
-	}
-	s.profileReserve = next
-	s.profileTags = tags
+	list, ok, err := s.fetchRuntimeProfiles()
+	s.applyRuntimeProfiles(log, list, ok, err)
 }
 
 type tenancyGetter interface {
@@ -222,19 +194,8 @@ type tenancyGetter interface {
 // last mode. Before the first success the mode stays empty, so only the
 // stored runtime flag reserves.
 func (s *Scheduler) syncTenancy(log log15.Logger) {
-	if s == nil {
-		return
-	}
-	g, ok := s.ControllerClient.(tenancyGetter)
-	if !ok {
-		return
-	}
-	settings, err := g.GetTenancy()
-	if err != nil || settings == nil {
-		log.Error("error getting tenancy", "err", err)
-		return
-	}
-	s.tenancyMode = strings.TrimSpace(settings.Mode)
+	settings, ok, err := s.fetchTenancy()
+	s.applyTenancy(log, settings, ok, err)
 }
 
 func (j *Job) countsTowardHostProcessCap() bool {
@@ -296,21 +257,8 @@ type runtimeSettingsGetter interface {
 // syncRuntimeSettings loads the cluster restart limit. A changed limit
 // clears exhausted processes so they get a fresh set of restarts.
 func (s *Scheduler) syncRuntimeSettings(log log15.Logger) {
-	if s == nil {
-		return
-	}
-	g, ok := s.ControllerClient.(runtimeSettingsGetter)
-	if !ok {
-		return
-	}
-	settings, err := g.GetRuntimeSettings()
-	if err != nil {
-		log.Error("error getting runtime settings", "err", err)
-		return
-	}
-	s.setMaxRestarts(settings.MaxRestarts)
-	s.setJobRestartInterval(settings.JobRestartIntervalDuration())
-	s.setSingleInstanceRestart(settings.SingleInstanceRestart)
+	settings, ok, err := s.fetchRuntimeSettings()
+	s.applyRuntimeSettings(log, settings, ok, err)
 }
 
 func (s *Scheduler) setMaxRestarts(n int) {

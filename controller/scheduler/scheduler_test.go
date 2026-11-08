@@ -348,13 +348,11 @@ func (TestSuite) TestMultipleHosts(c *C) {
 	go s.Run()
 	defer s.Stop()
 
-	// assertJobs checks that hosts have expected jobs based on their type
+	// matchJobs checks that hosts have expected jobs based on their type
 	// and current state. Stopped jobs leave the map after the down write,
 	// so they are not part of this comparison.
 	type hostJobs map[utils.HostClient][]*Job
-	assertJobs := func(expected hostJobs) {
-		// get a sorted list of scheduler jobs per host to compare
-		// against the expected list
+	matchJobs := func(expected hostJobs) error {
 		actual := make(map[string]sortJobs)
 		for _, job := range s.InternalState().Jobs {
 			if job.State == JobStateStopped {
@@ -367,26 +365,46 @@ func (TestSuite) TestMultipleHosts(c *C) {
 		}
 
 		for host, jobs := range expected {
-			actual := actual[host.ID()]
-			if len(actual) != len(jobs) {
-				c.Fatalf("expected %s to have %d jobs, got %d", host.ID(), len(jobs), len(actual))
+			got := actual[host.ID()]
+			if len(got) != len(jobs) {
+				return fmt.Errorf("expected %s to have %d jobs, got %d", host.ID(), len(jobs), len(got))
 			}
 			for i, job := range jobs {
-				j := actual[i]
-				c.Assert(j.Type, Equals, job.Type)
-				c.Assert(j.State, Equals, job.State)
-
-				// check the host has the job if it is running (stopped
-				// jobs are removed from the host)
+				j := got[i]
+				if j.Type != job.Type || j.State != job.State {
+					return fmt.Errorf("host %s job %d: got %s %s, want %s %s", host.ID(), i, j.Type, j.State, job.Type, job.State)
+				}
 				if job.State != JobStateStarting {
 					continue
 				}
 				id := cluster.GenerateJobID(host.ID(), j.ID)
 				hostJob, err := host.GetJob(id)
-				c.Assert(err, IsNil)
-				c.Assert(hostJob.Job.ID, Equals, id)
+				if err != nil {
+					return err
+				}
+				if hostJob.Job.ID != id {
+					return fmt.Errorf("host job id %s, want %s", hostJob.Job.ID, id)
+				}
 			}
 		}
+		return nil
+	}
+	assertJobs := func(expected hostJobs) {
+		c.Assert(matchJobs(expected), IsNil)
+	}
+	// Host checks and replacement starts run outside the scheduler loop,
+	// so log lines are not a reliable order. Wait until the jobs match.
+	waitJobs := func(expected hostJobs) {
+		deadline := time.Now().Add(2 * time.Second)
+		var err error
+		for {
+			err = matchJobs(expected)
+			if err == nil || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		c.Assert(err, IsNil)
 	}
 
 	c.Log("Initialize the cluster with 1 host and wait for a job to start on it.")
@@ -501,9 +519,7 @@ func (TestSuite) TestMultipleHosts(c *C) {
 	c.Logf("Remove one of the hosts. Ensure the cluster recovers correctly (hosts=%v)", hosts)
 	host3.Healthy = false
 	fakeCluster.SetHosts(hosts)
-	s.waitFormationSync()
-	s.waitRectify()
-	assertJobs(hostJobs{
+	waitJobs(hostJobs{
 		host1: {
 			{Type: "web", State: JobStateStarting},
 			{Type: "omni", State: JobStateStarting},
@@ -517,9 +533,7 @@ func (TestSuite) TestMultipleHosts(c *C) {
 	c.Logf("Remove another host. Ensure the cluster recovers correctly (hosts=%v)", hosts)
 	host1.(*FakeHostClient).Healthy = false
 	fakeCluster.RemoveHost(host1.ID())
-	s.waitFormationSync()
-	s.waitJobStart()
-	assertJobs(hostJobs{
+	waitJobs(hostJobs{
 		host1: {},
 		host2: {
 			{Type: "omni", State: JobStateStarting},

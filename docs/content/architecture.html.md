@@ -144,7 +144,14 @@ The controller's scheduler gets updates whenever desired formations change and
 ensures that jobs are always running as required by talking to the flynn-host
 APIs on each host. A scheduler instance runs on every host in the cluster for
 fault tolerance, but only the leader elected by discoverd makes scheduling
-decisions.
+decisions. The leader's loop is the only writer of in-memory jobs, volumes,
+and placements. Host and controller calls from that loop run outside it, and
+the loop only applies the results. A slow host API stalls that host's call.
+Placement onto other hosts continues. This is the same process on a hosted
+cluster and a self-hosted one. Writes back to the controller stay on a
+separate persistence loop. A write that is still failing after one minute is
+dropped from that queue. A failed write of a stopped job keeps the job in
+memory so a later sync can retry it.
 
 Every service, including the controller, is an app in the controller and is
 scaled and updated using the same APIs that are used to manage every other app.
