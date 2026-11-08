@@ -369,8 +369,7 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *
 	}
 	// ScaleIncreases gates suspension only. Memory is checked on the
 	// formation that will be stored, including a scale-down that is still
-	// over max_memory_mb. Process arithmetic below stays on the unmerged
-	// request counts.
+	// over max_memory_mb.
 	if tenancy.ScaleIncreases(oldCounts, newCounts) {
 		if err := c.rejectIfSuspended(app.OwnerAccount); err != nil {
 			return err
@@ -380,21 +379,11 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *
 	if err != nil {
 		return err
 	}
-	oldN, newN := 0, 0
-	for _, n := range oldCounts {
-		if n > 0 {
-			oldN += n
-		}
-	}
-	for _, n := range newCounts {
-		if n > 0 {
-			newN += n
-		}
-	}
-	procs := usage.Processes - oldN + newN
-	if procs < 0 {
-		procs = 0
-	}
+	// The request map is an overlay. CLI scale names only the types it
+	// changes, and AddScaleRequest stores that overlay. Subtracting the
+	// whole stored formation and adding only the request keys drops the
+	// types the request left out.
+	procs := projectedAccountProcesses(usage.Processes, oldCounts, newCounts)
 	mem, err := c.projectedScaleMemory(app, release, newCounts, newTags, applyTags)
 	if err != nil {
 		return err

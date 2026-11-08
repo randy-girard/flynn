@@ -1487,11 +1487,14 @@ const DefaultBlobGCKeep = 10
 // ReserveResources on this struct is unused for scheduling; guarantees are
 // per runtime profile (RuntimeProfile.ReserveResources).
 type RuntimeSettings struct {
-	AllowCustomLimits bool   `json:"allow_custom_limits"`
-	MaxProcesses      int    `json:"max_processes"`
-	ReserveResources  bool   `json:"reserve_resources"`
-	BlobGCKeep        int    `json:"blob_gc_keep"`
-	BlobGCMaxAge      string `json:"blob_gc_max_age"`
+	AllowCustomLimits bool `json:"allow_custom_limits"`
+	// MaxProcesses is the per-type formation cap. Nil means unlimited.
+	// A nil RuntimeSettings value was never loaded and is the default of
+	// 10, not unlimited. Use ProcessCap to tell those apart.
+	MaxProcesses     *int   `json:"max_processes"`
+	ReserveResources bool   `json:"reserve_resources"`
+	BlobGCKeep       int    `json:"blob_gc_keep"`
+	BlobGCMaxAge     string `json:"blob_gc_max_age"`
 	// MaxRestarts is how many consecutive crashes the scheduler restarts
 	// before it leaves an app process stopped. 0 means unlimited.
 	MaxRestarts int `json:"max_restarts"`
@@ -1569,12 +1572,31 @@ func mustJobRestartDefault() time.Duration {
 	return d
 }
 
-// MaxProcessesOrDefault returns the cluster scale cap, falling back to DefaultMaxProcesses.
-func (s *RuntimeSettings) MaxProcessesOrDefault() int {
-	if s == nil || s.MaxProcesses < 1 {
-		return DefaultMaxProcesses
+// ProcessCap is the per-type formation cap.
+// A nil receiver is the default of 10. A loaded value with a nil
+// MaxProcesses is unlimited. A stored number below 1 is corrupt and falls
+// back to the default; it is not unlimited.
+func (s *RuntimeSettings) ProcessCap() (n int, unlimited bool) {
+	if s == nil {
+		return DefaultMaxProcesses, false
 	}
-	return s.MaxProcesses
+	if s.MaxProcesses == nil {
+		return 0, true
+	}
+	if *s.MaxProcesses < 1 {
+		return DefaultMaxProcesses, false
+	}
+	return *s.MaxProcesses, false
+}
+
+// MaxProcessesOrDefault returns the numeric cap. Unlimited is not a number;
+// callers that must honor a cleared cap use ProcessCap.
+func (s *RuntimeSettings) MaxProcessesOrDefault() int {
+	n, unlimited := s.ProcessCap()
+	if unlimited {
+		return 0
+	}
+	return n
 }
 
 // BlobGCKeepOrDefault is previous blobs to keep; 0 is a valid "keep none".
@@ -1589,13 +1611,19 @@ func (s *RuntimeSettings) BlobGCKeepOrDefault() int {
 // fresh cluster (user scale on, user scale tags off).
 func (s *RuntimeSettings) Copy() RuntimeSettings {
 	if s == nil {
+		n := DefaultMaxProcesses
 		return RuntimeSettings{
-			MaxProcesses:   DefaultMaxProcesses,
+			MaxProcesses:   &n,
 			BlobGCKeep:     DefaultBlobGCKeep,
 			AllowUserScale: true,
 		}
 	}
-	return *s
+	out := *s
+	if s.MaxProcesses != nil {
+		n := *s.MaxProcesses
+		out.MaxProcesses = &n
+	}
+	return out
 }
 
 // GitHubAppConfig is the cluster-wide GitHub App used for Heroku-style deploys.

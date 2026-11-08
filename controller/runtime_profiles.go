@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -99,14 +101,39 @@ func (c *controllerAPI) GetRuntimeSettings(ctx context.Context, w http.ResponseW
 	httphelper.JSON(w, 200, s)
 }
 
+// maxProcessesField tells an omitted max_processes from JSON null and from a number.
+// Omitted keeps the stored value. Null is unlimited. 0 is rejected.
+type maxProcessesField struct {
+	set       bool
+	unlimited bool
+	n         int
+}
+
+func (m *maxProcessesField) UnmarshalJSON(b []byte) error {
+	m.set = true
+	if string(b) == "null" {
+		m.unlimited = true
+		return nil
+	}
+	var n int
+	if err := json.Unmarshal(b, &n); err != nil {
+		return err
+	}
+	if n < 1 {
+		return fmt.Errorf("max_processes must be a positive integer or null")
+	}
+	m.n = n
+	return nil
+}
+
 func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.ResponseWriter, req *http.Request) {
 	var body struct {
-		AllowCustomLimits bool    `json:"allow_custom_limits"`
-		MaxProcesses      int     `json:"max_processes"`
-		ReserveResources  bool    `json:"reserve_resources"`
-		BlobGCKeep        *int    `json:"blob_gc_keep"`
-		BlobGCMaxAge      *string `json:"blob_gc_max_age"`
-		MaxRestarts       *int    `json:"max_restarts"`
+		AllowCustomLimits bool              `json:"allow_custom_limits"`
+		MaxProcesses      maxProcessesField `json:"max_processes"`
+		ReserveResources  bool              `json:"reserve_resources"`
+		BlobGCKeep        *int              `json:"blob_gc_keep"`
+		BlobGCMaxAge      *string           `json:"blob_gc_max_age"`
+		MaxRestarts       *int              `json:"max_restarts"`
 
 		JobRestartInterval    *string `json:"job_restart_interval"`
 		SingleInstanceRestart *bool   `json:"single_instance_restart"`
@@ -114,6 +141,10 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		AllowUserScaleTags    *bool   `json:"allow_user_scale_tags"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		if strings.Contains(err.Error(), "max_processes") {
+			respondWithError(w, ct.ValidationError{Field: "max_processes", Message: "must be a positive integer or null"})
+			return
+		}
 		respondWithError(w, err)
 		return
 	}
@@ -122,9 +153,19 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		respondWithError(w, err)
 		return
 	}
+	var maxProcesses *int
+	if body.MaxProcesses.set {
+		if !body.MaxProcesses.unlimited {
+			n := body.MaxProcesses.n
+			maxProcesses = &n
+		}
+	} else if cur.MaxProcesses != nil {
+		n := *cur.MaxProcesses
+		maxProcesses = &n
+	}
 	s := ct.RuntimeSettings{
 		AllowCustomLimits: body.AllowCustomLimits,
-		MaxProcesses:      body.MaxProcesses,
+		MaxProcesses:      maxProcesses,
 		ReserveResources:  body.ReserveResources,
 		BlobGCKeep:        cur.BlobGCKeepOrDefault(),
 		BlobGCMaxAge:      cur.BlobGCMaxAge,

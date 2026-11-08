@@ -245,6 +245,16 @@ $ flynn ps:kill web.4821
 Job web.4821 killed.
 ```
 
+`flynn scale web=3` sets how many jobs of that process type to run. The
+cluster default stops a type at 10. A self-hosted operator raises that, or
+clears it, with `flynn-host runtime:max-processes`. An upgraded cluster
+stays at 10 until that command is used. On a hosted cluster, an app that
+belongs to an account is limited by the account's process count and memory
+quota instead of the per-type cap. An app with no owner still uses the
+per-type cap. A `release` process runs once per deploy and cannot be scaled.
+The per-host `flynn-max-processes` tag is a separate limit on how many
+tenant jobs one machine will run.
+
 ## Logs
 
 Flynn automatically logs everything that app processes write to the standard

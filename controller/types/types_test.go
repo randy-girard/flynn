@@ -37,6 +37,45 @@ func TestParseJobRestartInterval(t *testing.T) {
 	}
 }
 
+func TestProcessCap(t *testing.T) {
+	if n, unlimited := (*RuntimeSettings)(nil).ProcessCap(); unlimited || n != DefaultMaxProcesses {
+		t.Fatalf("nil settings = %d unlimited=%t, want default 10", n, unlimited)
+	}
+	if n, unlimited := (&RuntimeSettings{}).ProcessCap(); !unlimited || n != 0 {
+		t.Fatalf("null cap = %d unlimited=%t, want unlimited", n, unlimited)
+	}
+	ten := 10
+	if n, unlimited := (&RuntimeSettings{MaxProcesses: &ten}).ProcessCap(); unlimited || n != 10 {
+		t.Fatalf("stored 10 = %d unlimited=%t", n, unlimited)
+	}
+	zero := 0
+	if n, unlimited := (&RuntimeSettings{MaxProcesses: &zero}).ProcessCap(); unlimited || n != DefaultMaxProcesses {
+		t.Fatalf("corrupt 0 = %d unlimited=%t, want default and not unlimited", n, unlimited)
+	}
+	var decoded RuntimeSettings
+	if err := json.Unmarshal([]byte(`{"max_processes":null}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, unlimited := decoded.ProcessCap(); !unlimited {
+		t.Fatal("JSON null must be unlimited")
+	}
+	if err := json.Unmarshal([]byte(`{"max_processes":10}`), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if n, unlimited := decoded.ProcessCap(); unlimited || n != 10 {
+		t.Fatalf("JSON 10 = %d unlimited=%t", n, unlimited)
+	}
+	copied := decoded.Copy()
+	*decoded.MaxProcesses = 4
+	if n, _ := copied.ProcessCap(); n != 10 {
+		t.Fatalf("copy aliased the cap: %d", n)
+	}
+	fresh := (*RuntimeSettings)(nil).Copy()
+	if n, unlimited := fresh.ProcessCap(); unlimited || n != DefaultMaxProcesses {
+		t.Fatalf("nil copy = %d unlimited=%t", n, unlimited)
+	}
+}
+
 func TestJobRestartIntervalDurationDefaultsOn(t *testing.T) {
 	var nilSettings *RuntimeSettings
 	for name, s := range map[string]*RuntimeSettings{

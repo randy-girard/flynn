@@ -915,7 +915,7 @@ func parseDeploymentTags(from map[string]*api.DeploymentProcessTags) map[string]
 // enforceCreateScale applies the memory quota before AddScaleRequest.
 // Suspension to zero does not come through here.
 func (g *grpcAPI) enforceCreateScale(appID, releaseID string, processes map[string]int, tags map[string]map[string]string, applyTags bool) error {
-	if g == nil || g.controllerAPI == nil || g.tenancy == nil || g.appRepo == nil || g.releaseRepo == nil {
+	if g == nil || g.controllerAPI == nil || g.appRepo == nil || g.releaseRepo == nil {
 		return nil
 	}
 	raw, err := g.appRepo.Get(appID)
@@ -923,7 +923,10 @@ func (g *grpcAPI) enforceCreateScale(appID, releaseID string, processes map[stri
 		return err
 	}
 	app, _ := raw.(*ct.App)
-	if app == nil || app.OwnerAccount == "" {
+	if err := g.validateFormationScale(app, processes); err != nil {
+		return err
+	}
+	if g.tenancy == nil || app == nil || app.OwnerAccount == "" {
 		return nil
 	}
 	rawRel, err := g.releaseRepo.Get(releaseID)

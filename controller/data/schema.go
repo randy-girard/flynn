@@ -1340,6 +1340,13 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 	migrations.Add(78,
 		`ALTER TABLE cluster_settings ADD COLUMN app_domain text NOT NULL DEFAULT ''`,
 	)
+	// NULL max_processes is unlimited. Existing rows stay at 10. 0 is not a
+	// sentinel and is rejected by the check.
+	migrations.Add(79,
+		`ALTER TABLE runtime_settings DROP CONSTRAINT runtime_settings_max_processes_check`,
+		`ALTER TABLE runtime_settings ALTER COLUMN max_processes DROP NOT NULL`,
+		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_max_processes_check CHECK (max_processes IS NULL OR max_processes >= 1)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -10,6 +10,7 @@ import (
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/schema"
+	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
@@ -51,7 +52,7 @@ func (c *controllerAPI) PutFormation(ctx context.Context, w http.ResponseWriter,
 		respondWithError(w, err)
 		return
 	}
-	if err = c.validateFormationScale(formation.Processes); err != nil {
+	if err = c.validateFormationScale(app, formation.Processes); err != nil {
 		respondWithError(w, err)
 		return
 	}
@@ -118,7 +119,7 @@ func (c *controllerAPI) PutScaleRequest(ctx context.Context, w http.ResponseWrit
 	}
 	cur := existingFormation(c, app.ID, release.ID)
 	if req.NewProcesses != nil {
-		if err := c.validateFormationScale(*req.NewProcesses); err != nil {
+		if err := c.validateFormationScale(app, *req.NewProcesses); err != nil {
 			respondWithError(w, err)
 			return
 		}
@@ -414,24 +415,65 @@ func existingFormation(c *controllerAPI, appID, releaseID string) *ct.Formation 
 	return f
 }
 
-func (c *controllerAPI) validateFormationScale(processes map[string]int) error {
+func (c *controllerAPI) validateFormationScale(app *ct.App, processes map[string]int) error {
 	if processes == nil {
 		return nil
+	}
+	if err := rejectReleaseProcessScale(processes); err != nil {
+		return err
+	}
+	skip, err := c.hostedOwnerSkipsProcessCap(app)
+	if err != nil {
+		return err
+	}
+	if skip {
+		return nil
+	}
+	if c == nil || c.runtimeProfileRepo == nil {
+		return ct.ValidationError{Field: "processes", Message: "runtime settings are unavailable"}
 	}
 	s, err := c.runtimeProfileRepo.Settings()
 	if err != nil {
 		return err
 	}
-	max := s.MaxProcessesOrDefault()
+	return applyFormationProcessCap(s, processes)
+}
+
+func rejectReleaseProcessScale(processes map[string]int) error {
 	for name, n := range processes {
-		if ct.IsInternalProcessType(name) {
-			continue
-		}
 		if ct.IsReleaseProcessType(name) && n > 0 {
 			return ct.ValidationError{
 				Field:   "processes." + name,
 				Message: "release process runs once per deploy and cannot be scaled",
 			}
+		}
+	}
+	return nil
+}
+
+// hostedOwnerSkipsProcessCap is true only for a hosted app that has an
+// owner. Self-hosted, an empty owner, and a missing tenancy repo keep the
+// per-type cap. A settings read error is returned so the cap is not skipped
+// by accident.
+func (c *controllerAPI) hostedOwnerSkipsProcessCap(app *ct.App) (bool, error) {
+	if c == nil || c.tenancy == nil || app == nil || app.OwnerAccount == "" {
+		return false, nil
+	}
+	settings, err := c.tenancy.GetSettings()
+	if err != nil {
+		return false, err
+	}
+	return settings.Mode == tenancy.ModeHosted, nil
+}
+
+func applyFormationProcessCap(s *ct.RuntimeSettings, processes map[string]int) error {
+	max, unlimited := s.ProcessCap()
+	if unlimited {
+		return nil
+	}
+	for name, n := range processes {
+		if ct.IsInternalProcessType(name) || ct.IsReleaseProcessType(name) {
+			continue
 		}
 		if n > max {
 			return ct.ValidationError{

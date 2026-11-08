@@ -38,6 +38,27 @@ func scaleQuotaApplies(c *controllerAPI, app *ct.App) bool {
 
 // overlayProcessCounts is the process map AddScaleRequest stores: request
 // keys replace stored keys, and omitted keys stay.
+func positiveProcessCount(counts map[string]int) int {
+	n := 0
+	for _, count := range counts {
+		if count > 0 {
+			n += count
+		}
+	}
+	return n
+}
+
+// projectedAccountProcesses is Usage.Processes with this formation replaced
+// by the overlay that will be stored. One usage total in, no second read.
+func projectedAccountProcesses(usage int, oldCounts, newCounts map[string]int) int {
+	merged := overlayProcessCounts(oldCounts, newCounts)
+	procs := usage - positiveProcessCount(oldCounts) + positiveProcessCount(merged)
+	if procs < 0 {
+		return 0
+	}
+	return procs
+}
+
 func overlayProcessCounts(stored, req map[string]int) map[string]int {
 	out := make(map[string]int, len(stored)+len(req))
 	for k, v := range stored {

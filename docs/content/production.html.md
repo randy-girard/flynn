@@ -55,7 +55,16 @@ self-hosted one. Builtin small/medium/large are used only while the value
 is still `auto` and the controller is not up yet. A number passed to
 `init` or `tags:max-processes` stays put. `tags:max-processes <host> --auto`
 opts an existing host into the same refresh. `unlimited` or `0` removes
-the cap. The count is not a memory reservation. Hosted mode already
+the cap. The count is not a memory reservation.
+
+That host tag is not the per-type formation cap. `runtime_settings.max_processes`
+defaults to 10 and stays 10 on upgrade. `flynn-host runtime:max-processes 50`
+raises how many jobs one process type may run. `runtime:max-processes unlimited`
+clears it. `0` is rejected. A self-hosted company uses this command; the cap
+still applies when an account also has a quota. On a hosted cluster, an app
+with an owner is limited by that account's process and memory quota instead,
+and an app with no owner keeps the formation cap. `production:check` does
+not change this value. Hosted mode already
 reserves builtin `small`, `medium`, and `large`. A large self-hosted
 cluster turns that reservation on with `flynn-host runtime:reserve`. For
 S3 and MinIO, move the blobstore with

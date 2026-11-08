@@ -120,8 +120,8 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 	if err != nil {
 		return err
 	}
-	if s.MaxProcesses < 1 {
-		s.MaxProcesses = cur.MaxProcessesOrDefault()
+	if s.MaxProcesses != nil && *s.MaxProcesses < 1 {
+		return ct.ValidationError{Field: "max_processes", Message: "must be a positive integer or null for unlimited"}
 	}
 	if s.BlobGCKeep < 0 {
 		s.BlobGCKeep = cur.BlobGCKeepOrDefault()
