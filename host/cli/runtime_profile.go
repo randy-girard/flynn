@@ -74,6 +74,25 @@ Database runtimes are a different catalog and are not affected. Reservation
 is not a host OOM guarantee: the cgroup hard limit is twice the runtime
 memory, and CPU is a weight.
 `
+	runtimeMaxProcessesUsage = `
+usage: flynn-host runtime:max-processes [<count>]
+
+Show or set how many jobs one process type may run. <count> is a positive
+number or "unlimited". The default is 10. Existing clusters stay at 10
+until this is changed. "unlimited" clears the cap. 0 is rejected.
+
+Hosted apps that belong to an account are limited by that account's
+process and memory quota instead of this number. Apps with no owner keep
+this cap in either tenancy mode. A self-hosted cluster keeps this cap for
+every app, including when an account quota is also set. This is not the
+per-host flynn-max-processes tag.
+
+Examples:
+
+    $ flynn-host runtime:max-processes
+    $ flynn-host runtime:max-processes 50
+    $ flynn-host runtime:max-processes unlimited
+`
 	runtimeMaxRestartsUsage = `
 usage: flynn-host runtime:max-restarts [<count>]
 
@@ -140,6 +159,7 @@ func init() {
 	Register("runtime:remove", runRuntimeProfileRemove, runtimeRemoveUsage)
 	Register("runtime:allow-custom", runRuntimeProfileAllowCustom, runtimeAllowCustomUsage)
 	Register("runtime:reserve", runRuntimeReserve, runtimeReserveUsage)
+	Register("runtime:max-processes", runRuntimeMaxProcesses, runtimeMaxProcessesUsage)
 	Register("runtime:max-restarts", runRuntimeMaxRestarts, runtimeMaxRestartsUsage)
 	Register("runtime:job-restart-interval", runRuntimeJobRestartInterval, runtimeJobRestartIntervalUsage)
 	Register("runtime:single-instance-restart", runRuntimeSingleInstanceRestart, runtimeSingleInstanceRestartUsage)
@@ -149,9 +169,30 @@ func init() {
 
 func runtimeSettingsFrom(cur *ct.RuntimeSettings) ct.RuntimeSettings {
 	s := cur.Copy()
-	s.MaxProcesses = cur.MaxProcessesOrDefault()
 	s.BlobGCKeep = cur.BlobGCKeepOrDefault()
 	return s
+}
+
+func formatProcessCap(s *ct.RuntimeSettings) string {
+	n, unlimited := s.ProcessCap()
+	if unlimited {
+		return "unlimited"
+	}
+	return strconv.Itoa(n)
+}
+
+// parseFormationMaxProcesses accepts a positive count or "unlimited".
+// A nil count with a nil error is unlimited. 0 is rejected.
+func parseFormationMaxProcesses(s string) (*int, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	if s == "unlimited" {
+		return nil, nil
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return nil, fmt.Errorf("max processes must be a positive number or \"unlimited\", got %q", s)
+	}
+	return &n, nil
 }
 
 // formatMaxRestarts renders RuntimeSettings.MaxRestarts, where 0 is unlimited.
@@ -188,7 +229,7 @@ func runRuntimeProfileList(_ *docopt.Args) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t allow_user_scale=%t allow_user_scale_tags=%t max_processes=%d max_restarts=%s job_restart_interval=%s\n", settings.AllowCustomLimits, settings.AllowUserScale, settings.AllowUserScaleTags, settings.MaxProcessesOrDefault(), formatMaxRestarts(settings.MaxRestarts), formatJobRestartInterval(settings.JobRestartInterval))
+	fmt.Printf("allow_custom_limits=%t allow_user_scale=%t allow_user_scale_tags=%t max_processes=%s max_restarts=%s job_restart_interval=%s\n", settings.AllowCustomLimits, settings.AllowUserScale, settings.AllowUserScaleTags, formatProcessCap(settings), formatMaxRestarts(settings.MaxRestarts), formatJobRestartInterval(settings.JobRestartInterval))
 	w := tabwriter.NewWriter(os.Stdout, 1, 2, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tNAME\tMEMORY\tCPU\tRESERVE\tTAGS\tBUILTIN")
 	for _, p := range list {
@@ -317,7 +358,34 @@ func runRuntimeProfileAllowCustom(args *docopt.Args) error {
 	if err := client.UpdateRuntimeSettings(&s); err != nil {
 		return err
 	}
-	fmt.Printf("allow_custom_limits=%t max_processes=%d\n", s.AllowCustomLimits, s.MaxProcessesOrDefault())
+	fmt.Printf("allow_custom_limits=%t max_processes=%s\n", s.AllowCustomLimits, formatProcessCap(&s))
+	return nil
+}
+
+func runRuntimeMaxProcesses(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	arg := args.String["<count>"]
+	if arg == "" {
+		fmt.Printf("max_processes=%s\n", formatProcessCap(cur))
+		return nil
+	}
+	n, err := parseFormationMaxProcesses(arg)
+	if err != nil {
+		return err
+	}
+	s := runtimeSettingsFrom(cur)
+	s.MaxProcesses = n
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
+		return err
+	}
+	fmt.Printf("max_processes=%s\n", formatProcessCap(&s))
 	return nil
 }
 

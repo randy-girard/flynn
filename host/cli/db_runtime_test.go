@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 )
 
@@ -18,7 +19,7 @@ func TestDBRuntimeCommandsRegistered(t *testing.T) {
 			t.Errorf("missing %s", name)
 		}
 	}
-	if commands["runtime"] == nil || commands["runtime:create"] == nil || commands["runtime:max-restarts"] == nil {
+	if commands["runtime"] == nil || commands["runtime:create"] == nil || commands["runtime:max-restarts"] == nil || commands["runtime:max-processes"] == nil {
 		t.Fatal("app runtime commands missing")
 	}
 	help := FormatHelp("db-runtime")
@@ -30,6 +31,28 @@ func TestDBRuntimeCommandsRegistered(t *testing.T) {
 	name, args, from := ResolveCommand("db-runtime", []string{"create", "--cpu", "100", "--memory", "128MB", "--disk", "1GB", "redis", "cache"})
 	if name != "db-runtime:create" || from != "db-runtime create" {
 		t.Fatalf("alias %q from=%q args=%q", name, from, args)
+	}
+}
+
+func TestParseFormationMaxProcesses(t *testing.T) {
+	n, err := parseFormationMaxProcesses("unlimited")
+	if err != nil || n != nil {
+		t.Fatalf("unlimited = %v, %v", n, err)
+	}
+	n, err = parseFormationMaxProcesses(" 50 ")
+	if err != nil || n == nil || *n != 50 {
+		t.Fatalf("50 = %v, %v", n, err)
+	}
+	for _, in := range []string{"0", "-1", "ten", ""} {
+		if _, err := parseFormationMaxProcesses(in); err == nil {
+			t.Errorf("parseFormationMaxProcesses(%q) accepted", in)
+		}
+	}
+	if formatProcessCap(nil) != "10" {
+		t.Fatal("nil settings must print the default")
+	}
+	if formatProcessCap(&ct.RuntimeSettings{}) != "unlimited" {
+		t.Fatal("null cap must print unlimited")
 	}
 }
 
