@@ -83,7 +83,17 @@ func testDeploySingleAsync(oldRelease, newRelease string) []expectedSireniaState
 
 func testSireniaDeploy(client controller.Client, disc *discoverd.Client, t *c.C, d *sireniaDeploy) {
 	// create app
-	app := &ct.App{Name: d.name, Strategy: "sirenia", DeployTimeout: 900}
+	// A copied database release registers with discoverd from inside the
+	// process. That key is only present for system datastore apps.
+	app := &ct.App{
+		Name:          d.name,
+		Strategy:      "sirenia",
+		DeployTimeout: 900,
+		Meta: map[string]string{
+			"flynn-system-app": "true",
+			"flynn-datastore":  "true",
+		},
+	}
 	t.Assert(client.CreateApp(app), c.IsNil)
 	defer client.DeleteApp(app.ID)
 

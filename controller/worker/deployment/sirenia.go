@@ -49,6 +49,33 @@ func killStoppedSireniaPeers(client controller.Client, appID string, jobIDs []st
 	}
 }
 
+// asyncBackupSource is the peer a newly started async replacement replicates
+// from while the async it replaces is still running. Sirenia appends a
+// brand-new appliance id at the tail, so the new job follows the current
+// tail. That tail is the async being replaced only when the chain has one
+// async. On a longer chain the first replacement follows the original tail,
+// and each later replacement follows the previous new job.
+func asyncBackupSource(async []*discoverd.Instance, replacedIndex int, previousReplacement *discoverd.Instance) *discoverd.Instance {
+	if previousReplacement != nil {
+		return previousReplacement
+	}
+	if len(async) == 0 || replacedIndex < 0 || replacedIndex >= len(async) {
+		return nil
+	}
+	return async[len(async)-1]
+}
+
+// syncReplacementUpstream is the peer a new sync replacement replicates from
+// while the old sync is still running. The new job is appended at the tail,
+// so it follows the last async replacement. That peer is the first new
+// instance only when the chain had a single async.
+func syncReplacementUpstream(lastAsyncReplacement, firstNewInstance *discoverd.Instance) *discoverd.Instance {
+	if lastAsyncReplacement != nil {
+		return lastAsyncReplacement
+	}
+	return firstNewInstance
+}
+
 func (d *DeployJob) deploySirenia() (err error) {
 	log := d.logger.New("fn", "deploySirenia")
 	log.Info("starting sirenia deployment")
@@ -281,8 +308,10 @@ loop:
 
 	idKey := sireniaclient.ProcessIDKey(processType)
 
-	// newPrimary is the first new instance started, newSync the second
+	// newPrimary is the first new instance started, newSync the second.
+	// started is every new peer already accepted, including later asyncs.
 	var newPrimary, newSync *discoverd.Instance
+	var started []*discoverd.Instance
 	startInstance := func() (*discoverd.Instance, error) {
 		log.Info("starting new instance")
 		d.deployEvents <- ct.DeploymentEvent{
@@ -298,13 +327,7 @@ loop:
 			return nil, err
 		}
 		log.Info("waiting for new instance to come up")
-		var exclude []*discoverd.Instance
-		if newPrimary != nil {
-			exclude = append(exclude, newPrimary)
-		}
-		if newSync != nil {
-			exclude = append(exclude, newSync)
-		}
+		exclude := sireniaStartExclude(started)
 		var inst *discoverd.Instance
 		timeout := time.After(d.timeout)
 		poll := time.NewTicker(2 * time.Second)
@@ -336,6 +359,7 @@ loop:
 		} else if newSync == nil {
 			newSync = inst
 		}
+		started = append(started, inst)
 		d.deployEvents <- ct.DeploymentEvent{
 			ReleaseID: d.NewReleaseID,
 			JobState:  ct.JobStateUp,
@@ -430,6 +454,7 @@ loop:
 	if len(state.Async) > 1 {
 		asyncUpstream = state.Async[len(state.Async)-1]
 	}
+	var previousReplacement *discoverd.Instance
 	for i := 0; i < len(state.Async); i++ {
 		log.Info("replacing an Async node")
 		oldAsync := state.Async[i]
@@ -437,14 +462,13 @@ loop:
 		if err != nil {
 			return err
 		}
-		// Discoverd registration happens before pg_basebackup. Keep the old
-		// async up until the new job is the tail of the chain and has a
-		// running database following it; stopping first killed the backup
-		// source and the replacement never joined the replica set.
+		// Discoverd registration happens before pg_basebackup. The new job
+		// is appended at the tail and replicates from the current tail, so
+		// keep that backup source up until the new database is running.
 		if err := waitForTopology(sireniaclient.AsyncReplaceTopologyReady(oldAsync, newInst, idKey), "new peer is tail async of the peer it replaces"); err != nil {
 			return err
 		}
-		if err := waitForReplica(newInst, oldAsync, "new async finished base backup"); err != nil {
+		if err := waitForReplica(newInst, asyncBackupSource(state.Async, i, previousReplacement), "new async finished base backup"); err != nil {
 			return err
 		}
 		if err := stopInstance(oldAsync); err != nil {
@@ -455,15 +479,14 @@ loop:
 		}
 		// the new instance is now the tail async
 		asyncUpstream = newInst
+		previousReplacement = newInst
 	}
 
 	log.Info("replacing the Sync node")
 	// Start the replacement *before* stopping the old sync so the replica
-	// set keeps three live peers during the new job's base backup. Wait
-	// until the cluster names that job as the tail async (still following
-	// the current first async, not the primary) and it has a running
-	// database following that actual upstream; only then stop the old sync
-	// and wait for the promoted async to follow the primary.
+	// set keeps three live peers during the new job's base backup. The new
+	// job is appended at the tail and replicates from the last async
+	// replacement, then the old sync can stop.
 	newInst, err := startInstance()
 	if err != nil {
 		return err
@@ -471,7 +494,7 @@ loop:
 	if err := waitForTopology(sireniaclient.SyncReplaceTopologyReady(state.Sync, newPrimary, newInst, idKey), "new peer is tail async"); err != nil {
 		return err
 	}
-	if err := waitForReplica(newInst, newPrimary, "sync replacement finished base backup"); err != nil {
+	if err := waitForReplica(newInst, syncReplacementUpstream(previousReplacement, newPrimary), "sync replacement finished base backup"); err != nil {
 		return err
 	}
 	if err := stopInstance(state.Sync); err != nil {

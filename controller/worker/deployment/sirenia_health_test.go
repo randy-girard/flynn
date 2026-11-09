@@ -14,6 +14,53 @@ import (
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
 
+func TestAsyncBackupSourceFollowsTheLiveTail(t *testing.T) {
+	a := &discoverd.Instance{ID: "a"}
+	b := &discoverd.Instance{ID: "b"}
+	c := &discoverd.Instance{ID: "c"}
+	n0 := &discoverd.Instance{ID: "n0"}
+	n1 := &discoverd.Instance{ID: "n1"}
+
+	// A single async is the tail, so the replacement follows that peer.
+	if got := asyncBackupSource([]*discoverd.Instance{a}, 0, nil); got != a {
+		t.Fatalf("single async backup source = %v, want that async", got.ID)
+	}
+	// A longer chain appends the new job after the current tail. The first
+	// replacement follows the tail, not the async it will replace.
+	if got := asyncBackupSource([]*discoverd.Instance{a, b, c}, 0, nil); got != c {
+		t.Fatalf("first of three backup source = %v, want tail", got.ID)
+	}
+	// Each later replacement follows the previous new job, which is now the tail.
+	if got := asyncBackupSource([]*discoverd.Instance{a, b, c}, 1, n0); got != n0 {
+		t.Fatalf("second replacement backup source = %v, want previous replacement", got.ID)
+	}
+	if got := asyncBackupSource([]*discoverd.Instance{a, b, c}, 2, n1); got != n1 {
+		t.Fatalf("third replacement backup source = %v, want previous replacement", got.ID)
+	}
+}
+
+func TestSireniaStartExcludeKeepsLaterPeers(t *testing.T) {
+	started := []*discoverd.Instance{{ID: "a"}, {ID: "b"}, {ID: "c"}}
+	got := sireniaStartExclude(started)
+	if len(got) != 3 || got[2].ID != "c" {
+		t.Fatalf("exclude has %d peers, want every started peer including the third", len(got))
+	}
+}
+
+func TestSyncReplacementFollowsTheLastAsync(t *testing.T) {
+	first := &discoverd.Instance{ID: "n0"}
+	last := &discoverd.Instance{ID: "n2"}
+	// One async replacement: that peer is the tail the new sync follows.
+	if got := syncReplacementUpstream(first, first); got != first {
+		t.Fatalf("single async upstream = %s", got.ID)
+	}
+	// Several async replacements: the new sync follows the latest tail,
+	// which is not the first async that was started.
+	if got := syncReplacementUpstream(last, first); got != last {
+		t.Fatalf("multi async upstream = %s, want last", got.ID)
+	}
+}
+
 func TestSireniaClusterDeployReady(t *testing.T) {
 	peer := func(n int) *discoverd.Instance {
 		return &discoverd.Instance{Meta: map[string]string{"ID": "p"}}

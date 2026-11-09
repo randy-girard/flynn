@@ -21,6 +21,20 @@ func sireniaPeerMatchesRelease(inst *discoverd.Instance, releaseID, processType 
 		inst.Meta["FLYNN_PROCESS_TYPE"] == processType
 }
 
+// sireniaStartExclude is the set of new-release peers startInstance must
+// ignore. A chain with three asyncs starts three peers before the sync
+// replacement, so ignoring only the first two makes the lookup return the
+// third async as if it were the new job.
+func sireniaStartExclude(started []*discoverd.Instance) []*discoverd.Instance {
+	exclude := make([]*discoverd.Instance, 0, len(started))
+	for _, inst := range started {
+		if inst != nil {
+			exclude = append(exclude, inst)
+		}
+	}
+	return exclude
+}
+
 func sireniaPeerExcluded(inst *discoverd.Instance, idKey string, excludeIDs []*discoverd.Instance) bool {
 	if inst == nil {
 		return false

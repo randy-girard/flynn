@@ -613,7 +613,13 @@ func (c *Client) GetDeployment(deploymentID string) (*ct.Deployment, error) {
 
 func (c *Client) CreateDeployment(appID, releaseID string) (*ct.Deployment, error) {
 	deployment := &ct.Deployment{}
-	return deployment, c.Post(fmt.Sprintf("/apps/%s/deploy", appID), &ct.Release{ID: releaseID}, deployment)
+	// The deploy endpoint takes a release id. Posting a full Release also
+	// sends blob_available (a bool, so it is never omitted) and the recorded
+	// example no longer matches the deployment schema.
+	body := struct {
+		ID string `json:"id"`
+	}{ID: releaseID}
+	return deployment, c.Post(fmt.Sprintf("/apps/%s/deploy", appID), &body, deployment)
 }
 
 // DeploymentList returns a list of all deployments.

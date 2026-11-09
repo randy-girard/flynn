@@ -199,9 +199,12 @@ occur.
 
 Rolling deploys of an HA appliance start each replacement peer and wait for it
 to join the async chain and catch up **before** stopping the peer it replaces.
-That keeps three live replicas during the new job's base backup; writes still
-pause for a few seconds when the old sync is stopped and sirenia promotes the
-async, which is the same window a sync failure already causes.
+A new peer is appended at the tail of that chain and replicates from the
+current tail. The deploy waits for that tail's base backup to finish, then
+stops the old peer. That keeps the backup source and the rest of the replica
+set up during the copy; writes still pause for a few seconds when the old
+sync is stopped and sirenia promotes the async, which is the same window a
+sync failure already causes.
 
 The cluster state is maintained by the primary and stored in discoverd. The
 discoverd DNS and HTTP APIs expose the current primary instance.
