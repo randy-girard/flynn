@@ -19,6 +19,18 @@ func (f fakeDirEntry) IsDir() bool                { return f.dir }
 func (f fakeDirEntry) Type() fs.FileMode          { return 0 }
 func (f fakeDirEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
+func TestJobAppearedSinceSnapshot(t *testing.T) {
+	if !jobAppearedSinceSnapshot("host0-new", func(id string) bool { return id == "host0-new" }) {
+		t.Fatal("a job created after the snapshot must not be deleted")
+	}
+	if jobAppearedSinceSnapshot("host0-old", func(string) bool { return false }) {
+		t.Fatal("a directory that is still absent from the host state is an orphan")
+	}
+	if jobAppearedSinceSnapshot("host0-old", nil) {
+		t.Fatal("a nil live check uses the snapshot only")
+	}
+}
+
 func TestKeepJobIDs(t *testing.T) {
 	jobs := map[string]host.ActiveJob{
 		"running":  {Status: host.StatusRunning},

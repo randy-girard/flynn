@@ -27,5 +27,8 @@ func (h *Host) CleanupImageData() error {
 		volList = append(volList, v.Info())
 	}
 
-	return cleanup.ImageData(h.id, jobs, volList)
+	return cleanup.ImageData(h.id, jobs, volList, func(id string) bool {
+		job := h.state.GetJob(id)
+		return job != nil && (job.Status == host.StatusStarting || job.Status == host.StatusRunning)
+	})
 }

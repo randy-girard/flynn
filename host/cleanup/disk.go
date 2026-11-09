@@ -21,7 +21,12 @@ const (
 // Only image directories for jobs owned by hostID are considered for removal.
 // Layer-cache squashfs files that have a builder .json sidecar are kept even
 // when no live job or squashfs volume references them.
-func ImageData(hostID string, jobs map[string]host.ActiveJob, vols []*volume.Info) error {
+//
+// live is checked immediately before a directory is removed. The jobs snapshot
+// is taken before the scan, and flynn-host runs that scan as soon as it starts
+// listening. A job created in that window is absent from the snapshot; deleting
+// its mount makes the following runc start fail with "rootfs does not exist".
+func ImageData(hostID string, jobs map[string]host.ActiveJob, vols []*volume.Info, live func(jobID string) bool) error {
 	keepJobs := keepJobIDs(jobs)
 	keepLayers := keepLayerIDs(jobs, vols)
 
@@ -34,6 +39,9 @@ func ImageData(hostID string, jobs map[string]host.ActiveJob, vols []*volume.Inf
 			return err
 		}
 		for _, name := range orphanImageDirs(entries, keepJobs, hostID) {
+			if jobAppearedSinceSnapshot(name, live) {
+				continue
+			}
 			path := filepath.Join(base, name)
 			// A leaked job leaves its overlay mounted here. That mount holds
 			// the ext2 zvol open, so ZFS reports "dataset is busy".
@@ -89,6 +97,12 @@ func keepLayerIDs(jobs map[string]host.ActiveJob, vols []*volume.Info) map[strin
 		}
 	}
 	return keep
+}
+
+// jobAppearedSinceSnapshot is true when id was created after the cleanup
+// snapshot. A nil live function means the caller has no newer view.
+func jobAppearedSinceSnapshot(id string, live func(jobID string) bool) bool {
+	return live != nil && live(id)
 }
 
 func orphanImageDirs(entries []os.DirEntry, keep map[string]struct{}, hostID string) []string {
