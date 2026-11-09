@@ -70,14 +70,24 @@ func ChangeOnExecValue(profile string) string {
 }
 
 // ChangeOnExecQueued reports that change_onexec already lists profile, so a
-// later EPERM write after NEWUSER is not a failed attach.
+// later EPERM or EACCES write is not a failed attach. nsexec queues the
+// profile before Go runs. Ubuntu 24.04 then reads attr/exec back as
+// "profile (enforce)" rather than "exec profile". An unqueued read fails
+// with EINVAL, so that readback means the queue is already in place.
 func ChangeOnExecQueued(attr, profile string) bool {
 	want := ChangeOnExecValue(profile)
 	if want == "" {
 		return false
 	}
 	got := strings.TrimSpace(attr)
-	return got == want || strings.HasPrefix(got, want)
+	if got == "" {
+		return false
+	}
+	if got == want || strings.HasPrefix(got, want) || got == profile {
+		return true
+	}
+	mode := strings.TrimPrefix(got, profile+" (")
+	return mode != got && strings.HasSuffix(mode, ")") && !strings.Contains(mode, " ")
 }
 
 // DecideStart retries confined starts on apply EPERM. It never falls back

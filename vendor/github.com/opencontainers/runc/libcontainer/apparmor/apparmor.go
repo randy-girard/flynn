@@ -1,3 +1,4 @@
+//go:build apparmor && linux
 // +build apparmor,linux
 
 package apparmor
@@ -6,7 +7,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
-	"strings"
+
+	"github.com/randy-girard/flynn/host/apparmorpolicy"
 )
 
 // IsEnabled returns true if apparmor is enabled for the host.
@@ -49,9 +51,7 @@ func queuedChangeOnExec(name string) bool {
 	if err != nil {
 		return false
 	}
-	want := "exec " + name
-	got := strings.TrimSpace(string(data))
-	return got == want || strings.HasPrefix(got, want)
+	return apparmorpolicy.ChangeOnExecQueued(string(data), name)
 }
 
 // ApplyProfile queues the named profile for the next exec (change_onexec).
@@ -60,8 +60,10 @@ func ApplyProfile(name string) error {
 		return nil
 	}
 	if err := changeOnExec(name); err != nil {
-		// nsexec queues change_onexec before NEWUSER; this write is EPERM
-		// afterwards but the next exec still uses the queued profile.
+		// nsexec queues change_onexec before this process is multi-threaded
+		// or enters a user namespace. A later write can return EPERM or
+		// EACCES. The queued profile still applies to the next exec.
+		// ChangeOnExecQueued accepts the kernel readback "profile (mode)".
 		if queuedChangeOnExec(name) {
 			return nil
 		}

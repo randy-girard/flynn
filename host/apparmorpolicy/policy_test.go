@@ -65,6 +65,21 @@ func TestChangeOnExecQueued(t *testing.T) {
 	if !ChangeOnExecQueued("exec flynn-default\n", ProfileName) {
 		t.Fatal("queued after nsexec write")
 	}
+	// Ubuntu 24.04 reads /proc/self/attr/exec back as "profile (mode)", not
+	// "exec profile". An unqueued read is EINVAL, so this form means nsexec
+	// already queued change_onexec.
+	for _, attr := range []string{
+		"flynn-default (enforce)\n",
+		"flynn-default (complain)",
+		"flynn-default",
+	} {
+		if !ChangeOnExecQueued(attr, ProfileName) {
+			t.Fatalf("kernel readback %q must count as queued", attr)
+		}
+	}
+	if ChangeOnExecQueued("flynn-default-other (enforce)", ProfileName) {
+		t.Fatal("a different profile is not this queue")
+	}
 	if ChangeOnExecQueued("unconfined", ProfileName) {
 		t.Fatal("wrong profile is not queued")
 	}
@@ -110,8 +125,8 @@ func TestRuncQueuesAppArmorBeforeUserNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(aa), "queuedChangeOnExec") {
-		t.Fatal("ApplyProfile after NEWUSER must accept a profile already queued by nsexec")
+	if !strings.Contains(string(aa), "apparmorpolicy.ChangeOnExecQueued") {
+		t.Fatal("ApplyProfile must use ChangeOnExecQueued so the kernel readback counts as queued")
 	}
 }
 
