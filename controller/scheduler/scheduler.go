@@ -35,6 +35,14 @@ const (
 	defaultMaxHostChecks   = 10
 	routerDrainTimeout     = 10 * time.Second
 	routerBackendUpTimeout = 10 * time.Second
+	// capacityRefreshTimeout bounds one leader GetStats. It matches the
+	// scheduler host HTTP client timeout and the controller jobs-stats
+	// host bound. The shared client timeout stays 10s because placement
+	// RPCs use that client.
+	capacityRefreshTimeout = 10 * time.Second
+	// capacityRefreshConcurrency matches the controller jobs-stats fan-out
+	// so a large cluster does not open one stats connection per host.
+	capacityRefreshConcurrency = 8
 )
 
 var (
@@ -193,6 +201,8 @@ type Scheduler struct {
 	hostsAgain         bool
 	checksInFlight     bool
 	checksAgain        bool
+	capacityInFlight   bool
+	capacityAgain      bool
 
 	hostFollowInFlight map[string]struct{}
 	hostSyncWait       map[string]struct{}

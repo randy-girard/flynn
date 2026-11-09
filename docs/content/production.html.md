@@ -66,8 +66,14 @@ with an owner is limited by that account's process and memory quota instead,
 and an app with no owner keeps the formation cap. `production:check` does
 not change this value. Hosted mode already
 reserves builtin `small`, `medium`, and `large`. A large self-hosted
-cluster turns that reservation on with `flynn-host runtime:reserve`. For
-S3 and MinIO, move the blobstore with
+cluster turns that reservation on with `flynn-host runtime:reserve`.
+
+The scheduler leader refreshes each host's CPU and memory totals about every
+10 seconds in either tenancy mode. A reserving job skips a host that has
+never reported those totals. A failed read keeps the last totals. Shared
+jobs are unchanged.
+
+For S3 and MinIO, move the blobstore with
 `flynn-host blobstore:set --migrate --delete`. GCS and Azure use `env:set`
 plus `flynn-host blobstore:migrate --delete` under
 [Blobstore Backend](#blobstore-backend). The file-backed

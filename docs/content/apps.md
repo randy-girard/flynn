@@ -542,8 +542,20 @@ override and leaves the flags as they are.
 
 An empty runtime name does not reserve. Database jobs use the database
 runtime catalog and leave the app runtime empty, so this rule does not place
-them. A job that already has a volume on a host stays on that host. Hosts
-that have not reported CPU and memory totals are still eligible.
+them. A job that already has a volume on a host stays on that host and does
+not go through this capacity check.
+
+A reserving job skips a host that has never reported both a memory total and
+a CPU total. Hosted builtin `small`, `medium`, and `large` use that rule,
+and so does any runtime with reservation on, including a self-hosted cluster.
+Shared jobs still pack onto that host. One missing total skips that dimension
+only.
+
+The scheduler leader refreshes those totals about every 10 seconds, off the
+placement loop, including after a host gains or loses CPU or memory without
+a new host id. A failed read keeps the last good totals. Followers do not
+poll. The first sample is still taken when the scheduler starts watching
+the host.
 
 This is not a guarantee the host cannot run out of memory. The scheduler
 counts the runtime request, or the limit when the request is 0, once. The
@@ -552,8 +564,9 @@ Turning reservation on does not rewrite existing releases: the scheduler
 reads the live decision and, when the request is 0, the stored limit.
 
 A blocked job counts toward the formation and does not hold a reservation.
-It is tried again when host sync runs (about every 10 seconds), when a host
-is added, or when a host's tags change.
+It is tried again when host sync runs (about every 10 seconds), when a
+refresh increases a host's totals, when a host is added, or when a host's
+tags change.
 
 Enable a guarantee when creating or updating a runtime:
 

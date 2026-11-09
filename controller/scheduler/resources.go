@@ -128,7 +128,14 @@ func (s *Scheduler) hostHasCapacity(h *Host, job *Job) bool {
 	if needMem <= 0 && needCPU <= 0 {
 		return true
 	}
+	// Both totals unset means this process has never read the host. A
+	// reserving job must not treat that as infinite capacity. Shared jobs
+	// still place. A single zero field skips that dimension below, and a
+	// failed refresh leaves the last good sample in place.
 	if h.MemoryTotalBytes == 0 && h.CPUMilli == 0 {
+		if s.jobReservesResources(job) {
+			return false
+		}
 		return true
 	}
 	usedMem, usedCPU := s.hostReservedResources(h.ID)

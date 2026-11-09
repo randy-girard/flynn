@@ -58,6 +58,57 @@ func TestHostHasCapacityUnknownHostAllows(t *testing.T) {
 	}
 }
 
+func TestPickHostSkipsReservedJobWhenHostHasNoTotals(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true}
+	job := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	selfOn := newCapacityScheduler("self_hosted", map[string]bool{"small": true}, h, nil)
+	if got := selfOn.pickHost(job, nil); got != nil {
+		t.Fatal("self-hosted reserve must not pick a host that has never reported totals")
+	}
+	hosted := newCapacityScheduler("hosted", map[string]bool{"small": false}, h, nil)
+	if got := hosted.pickHost(job, nil); got != nil {
+		t.Fatal("hosted builtin must not pick a host that has never reported totals")
+	}
+	selfOff := newCapacityScheduler("self_hosted", map[string]bool{"small": false}, h, nil)
+	if got := selfOff.pickHost(job, nil); got != h {
+		t.Fatalf("self-hosted reserve off placed on %v, want h1", got)
+	}
+	custom := newCapacityScheduler("hosted", map[string]bool{"xlarge": false}, h, nil)
+	customJob := testJobWithProfile("xlarge", 1<<30, 1000, 1<<30, 1000)
+	if got := custom.pickHost(customJob, nil); got != h {
+		t.Fatalf("hosted custom with reserve off placed on %v, want h1", got)
+	}
+}
+
+func TestHostHasCapacitySkipsZeroDimension(t *testing.T) {
+	s := newCapacityScheduler("self_hosted", map[string]bool{"small": true}, &Host{ID: "h1", Healthy: true}, nil)
+	job := testJobWithProfile("small", 1<<30, 1000, 1<<30, 1000)
+	memOnly := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 2 << 30}
+	if !s.hostHasCapacity(memOnly, job) {
+		t.Fatal("a zero CPU total skips that dimension")
+	}
+	cpuOnly := &Host{ID: "h1", Healthy: true, CPUMilli: 2000}
+	if !s.hostHasCapacity(cpuOnly, job) {
+		t.Fatal("a zero memory total skips that dimension")
+	}
+	tightMem := &Host{ID: "h1", Healthy: true, MemoryTotalBytes: 512 << 20, CPUMilli: 0}
+	if s.hostHasCapacity(tightMem, job) {
+		t.Fatal("known memory still rejects a job that does not fit")
+	}
+}
+
+func TestHostHasCapacityReservedWithoutRequestStillAllows(t *testing.T) {
+	h := &Host{ID: "h1", Healthy: true}
+	s := newCapacityScheduler("hosted", map[string]bool{"small": false}, h, nil)
+	job := testJobWithProfile("small", 0, 0, 0, 0)
+	if !s.jobReservesResources(job) {
+		t.Fatal("hosted small must reserve")
+	}
+	if !s.hostHasCapacity(h, job) {
+		t.Fatal("a reserving job with no request and no limit must still place")
+	}
+}
+
 func TestHostHasCapacityRejectsOvercommit(t *testing.T) {
 	s := &Scheduler{
 		jobs: Jobs{

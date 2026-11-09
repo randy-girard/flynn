@@ -25,7 +25,11 @@ still on the host.
 The leader loop owns that in-memory state. Listing jobs or volumes, checking
 a host, and streaming a new host all happen off the loop; the loop only
 applies the result. A slow host blocks work for that host. Placement of other
-apps continues. Controller writes are queued separately and retried for one
+apps continues. The leader also refreshes each placeable host's CPU and
+memory totals about every 10 seconds. That read stays off the loop, one
+round at a time. A failed read keeps the last totals. A reserving job,
+hosted or self-hosted, skips a host that has never reported them. The
+refresh does not reopen the host's job or volume streams. Controller writes are queued separately and retried for one
 minute. When that minute ends, the write is dropped. A failed down write
 keeps the stopped job in memory. A failed up, pending, or scale write is
 retried when the next sync or formation change asks for it again.

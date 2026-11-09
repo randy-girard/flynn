@@ -895,6 +895,12 @@ func (s *Scheduler) fanoutHost(fn func(h *Host, desired map[string]*ct.Sink)) {
 }
 
 func (s *Scheduler) beginAsyncSyncHosts() {
+	// Capacity refresh is independent of the host-list sync. A list sync
+	// that is already in flight must not skip it, and a stats error must
+	// not fail that sync. Startup still uses the sample from connectHost.
+	if s.loopActive && s.IsLeader() {
+		s.beginCapacityRefresh()
+	}
 	if !s.loopActive {
 		s.SyncHosts()
 		return
@@ -1148,6 +1154,12 @@ func (s *Scheduler) applyHostChecks(results []hostCheckResult) {
 			hlog.Info("host is now healthy")
 			host.Healthy = true
 			host.Checks = 0
+			// The host was excluded from the last sample. Refresh now so
+			// a reserving job does not wait out the rest of the 10s period
+			// on 0/0 totals.
+			if s.loopActive && s.IsLeader() {
+				s.beginCapacityRefresh()
+			}
 			continue
 		}
 		host.Checks++
