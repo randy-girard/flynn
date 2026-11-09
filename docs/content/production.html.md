@@ -514,11 +514,16 @@ a copy of all data stored in associated databases. The app export can be
 restored to the same cluster under a different name, or a different Flynn
 cluster.
 
+Slug and image layers are copied by a one-off on the blobstore app, using the
+blobstore release. That job is a system job, so it can resolve
+`blobstore.discoverd`. It authenticates with the release `AUTH_KEY`. The
+blobstore image is busybox plus `flynn-blobstore`; it does not contain curl.
+
 ### App Import
 
 To import an app, run `flynn apps:import --file app.tar`. This will create a new app
 on the cluster, import the configuration, create databases, and import the data
-from the exported app. If you'd like to provide a new name for the app, the
+from the exported app. Layer uploads use the same blobstore-app one-off as export. Layer uploads use the same blobstore-app one-off as export. If you'd like to provide a new name for the app, the
 `--name` flag may be specified. By default a new route is created based on the
 app name and the cluster domain. To import the old routes in addition to the new
 route, add the `--routes` flag.

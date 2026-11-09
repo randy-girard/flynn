@@ -22,7 +22,6 @@ import (
 	"github.com/randy-girard/flynn/pkg/backup"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/random"
-	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/term"
 	router "github.com/randy-girard/flynn/router/types"
 )
@@ -123,23 +122,17 @@ func runExport(args *docopt.Args, client controller.Client) error {
 	}
 	download := func(name, url string, release *ct.Release) error {
 		reqR, reqW := io.Pipe()
-		config := runConfig{
-			App:                mustApp(),
-			Release:            release.ID,
-			Artifacts:          release.ArtifactIDs[:1],
-			DeprecatedArtifact: release.ArtifactIDs[0],
-			DisableLog:         true,
-			Args:               []string{"curl", "--include", "--http1.1", "--location", "--raw", url},
-			Stdout:             reqW,
-			Stderr:             ioutil.Discard,
-		}
+		config := blobstoreHTTPRunConfig(release, blobstoreRawHTTPCommand("GET", url), reqW, ioutil.Discard, nil)
 		if bar != nil {
-			config.Stdout = io.MultiWriter(config.Stdout, bar)
+			config.Stdout = io.MultiWriter(reqW, bar)
 		}
 		go func() {
-			if err := runJob(client, config); err != nil {
-				shutdown.Fatalf("error downloading %s: %s", name, err)
+			err := runJob(client, config)
+			if err != nil {
+				reqW.CloseWithError(err)
+				return
 			}
+			reqW.Close()
 		}()
 		req := bufio.NewReader(reqR)
 		var res *http.Response
@@ -688,19 +681,20 @@ func runImport(args *docopt.Args, client controller.Client) error {
 			if !ok {
 				return fmt.Errorf("missing layer in export: %s", id)
 			}
-			config := runConfig{
-				App:        app.ID,
-				Release:    blobstoreRelease.ID,
-				DisableLog: true,
-				Args:       []string{"curl", "--request", "PUT", "--upload-file", "-", url},
-				Stdin:      layer,
-				Stdout:     ioutil.Discard,
-				Stderr:     ioutil.Discard,
-			}
+			var stderr strings.Builder
+			stdin := io.Reader(layer)
 			if bar != nil {
-				config.Stdin = bar.NewProxyReader(config.Stdin)
+				stdin = bar.NewProxyReader(layer)
 			}
+			// The blobstore image has to run as a blobstore-app job. A
+			// user-app one-off cannot resolve blobstore.discoverd and
+			// does not receive AUTH_KEY.
+			config := blobstoreHTTPRunConfig(blobstoreRelease, blobstoreRawHTTPCommand("PUT", url), ioutil.Discard, &stderr, stdin)
 			if err := runJob(client, config); err != nil {
+				detail := strings.TrimSpace(stderr.String())
+				if detail != "" {
+					return fmt.Errorf("error uploading layer: %s: %s", err, detail)
+				}
 				return fmt.Errorf("error uploading layer: %s", err)
 			}
 			return nil
@@ -774,20 +768,22 @@ func runImport(args *docopt.Args, client controller.Client) error {
 	}
 
 	if uploadLegacySlug {
+		blobstoreRelease, err := client.GetAppRelease("blobstore")
+		if err != nil {
+			return fmt.Errorf("unable to retrieve blobstore release: %s", err)
+		}
 		slugURI := fmt.Sprintf("http://blobstore.discoverd/%s/slug.tgz", random.UUID())
-		config := runConfig{
-			App:        app.ID,
-			Release:    release.ID,
-			DisableLog: true,
-			Args:       []string{"curl", "--request", "PUT", "--upload-file", "-", slugURI},
-			Stdin:      legacySlug,
-			Stdout:     ioutil.Discard,
-			Stderr:     ioutil.Discard,
-		}
+		var stderr strings.Builder
+		stdin := io.Reader(legacySlug)
 		if bar != nil {
-			config.Stdin = bar.NewProxyReader(config.Stdin)
+			stdin = bar.NewProxyReader(legacySlug)
 		}
+		config := blobstoreHTTPRunConfig(blobstoreRelease, blobstoreRawHTTPCommand("PUT", slugURI), ioutil.Discard, &stderr, stdin)
 		if err := runJob(client, config); err != nil {
+			detail := strings.TrimSpace(stderr.String())
+			if detail != "" {
+				return fmt.Errorf("error uploading slug: %s: %s", err, detail)
+			}
 			return fmt.Errorf("error uploading slug: %s", err)
 		}
 		slugArtifact := &ct.Artifact{
@@ -836,4 +832,91 @@ func runImport(args *docopt.Args, client controller.Client) error {
 	fmt.Printf("Imported %s (added %d routes, provisioned %d resources)\n", app.Name, numRoutes, numResources)
 
 	return nil
+}
+
+// blobstoreHTTPRunConfig runs the blobstore image as a one-off of the
+// blobstore app. A user-app job cannot resolve blobstore.discoverd. The
+// blobstore release env supplies AUTH_KEY.
+func blobstoreHTTPRunConfig(release *ct.Release, args []string, stdout, stderr io.Writer, stdin io.Reader) runConfig {
+	config := runConfig{
+		App:        "blobstore",
+		ReleaseEnv: true,
+		DisableLog: true,
+		Args:       args,
+		Stdout:     stdout,
+		Stderr:     stderr,
+		Stdin:      stdin,
+	}
+	if release == nil {
+		return config
+	}
+	config.Release = release.ID
+	if len(release.ArtifactIDs) > 0 {
+		config.Artifacts = release.ArtifactIDs[:1]
+		config.DeprecatedArtifact = release.ArtifactIDs[0]
+	}
+	return config
+}
+
+// blobstoreHTTPScript runs inside the blobstore release. That image is
+// busybox plus flynn-blobstore, so it has nc and does not have curl.
+// Object routes require Authorization: Bearer matching AUTH_KEY.
+const blobstoreHTTPScript = `set -eu
+method="$1"
+url="$2"
+key="${AUTH_KEY:-${CONTROLLER_KEY:-}}"
+rest="${url#http://}"
+rest="${rest#https://}"
+hostport="${rest%%/*}"
+case "$rest" in
+  */*) path="/${rest#*/}" ;;
+  *) path="/" ;;
+esac
+case "$hostport" in
+  *:*) host="${hostport%%:*}"; port="${hostport##*:}" ;;
+  *) host="$hostport"; port=80 ;;
+esac
+if [ "$method" = "PUT" ]; then
+  body="$(mktemp)"
+  trap 'rm -f "$body" "$body.out"' EXIT
+  cat > "$body"
+  length="$(wc -c < "$body" | tr -d '[:space:]')"
+  # nc's own exit status is not the HTTP status. Some builds return 1 after
+  # a response the server closed. The status line decides success.
+  {
+    printf 'PUT %s HTTP/1.0\r\nHost: %s\r\nAuthorization: Bearer %s\r\nContent-Length: %s\r\nContent-Type: application/octet-stream\r\nConnection: close\r\n\r\n' \
+      "$path" "$hostport" "$key" "$length"
+    cat "$body"
+  } | nc "$host" "$port" > "$body.out" || true
+  if [ ! -s "$body.out" ]; then
+    echo "blobstore PUT produced no response" >&2
+    exit 1
+  fi
+  cr="$(printf '\r')"
+  status="$(head -n 1 "$body.out")"
+  status="${status%"$cr"}"
+  case "$status" in
+    HTTP/*\ 2[0-9][0-9]*) exit 0 ;;
+    *)
+      echo "blobstore PUT failed: ${status}" >&2
+      exit 1
+      ;;
+  esac
+fi
+resp="$(mktemp)"
+trap 'rm -f "$resp"' EXIT
+printf 'GET %s HTTP/1.0\r\nHost: %s\r\nAuthorization: Bearer %s\r\nConnection: close\r\n\r\n' \
+  "$path" "$hostport" "$key" | nc "$host" "$port" > "$resp" || true
+if [ ! -s "$resp" ]; then
+  echo "blobstore GET produced no response" >&2
+  exit 1
+fi
+cat "$resp"
+`
+
+// blobstoreRawHTTPCommand speaks one HTTP/1.0 request. GET prints the raw
+// response. PUT reads stdin and exits 0 only on a 2xx status line.
+// The URL is an argument so it is not interpolated into the script.
+func blobstoreRawHTTPCommand(method, url string) []string {
+	return []string{"sh", "-c", blobstoreHTTPScript, "blobstore-http", method, url}
 }
