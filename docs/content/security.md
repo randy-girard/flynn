@@ -319,9 +319,11 @@ caller has `app:env:read` (View, Deploy, Manage, and Admin include it;
 `app:logs:read` and `app:scale:read` alone do not). The same omission
 applies to expanded formations and release events. The cluster key and
 cluster-admin tokens still receive env. `GET /apps/:id/log` stays
-available with `app:logs:read`, but the controller redacts current
+available with `app:logs:read`, as do `GET /apps/:id/jobs/:id/output` and
+`GET /apps/:id/releases/:id/output`. `PUT /apps/:id/releases/:id/output`
+requires `app:write`. The controller redacts current
 release env values and per-process env values that appear in those log
-lines when the caller does not have `app:env:read`. Values shorter than
+lines, including the stored copies, when the caller does not have `app:env:read`. Values shorter than
 8 characters are left as-is. Callers with `app:env:read` (including
 View, Deploy, Manage, and Admin), cluster-admin tokens, and the cluster
 key receive the log text unchanged. A release minted for one app cannot be attached to

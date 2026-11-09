@@ -626,6 +626,16 @@ The `flynn -a $APP_NAME log` command will retrieve up to the last 10,000 lines
 logged by all app processes and can also follow the stream as new log lines are
 emitted.
 
+When a slugbuilder, dockerbuilder, release, or postdeploy job stops, the
+controller stores that job's stdout and stderr in Postgres, gzipped, keeping
+the last 4 MiB. The git-push transcript (release creation, the release
+command, postdeploy, and the deployed line) is stored the same way on the
+release. Any controller node reads those rows, and the dashboard shows them
+for that deployment after the in-memory 10,000-line log has moved on. Deploys
+from before this was recorded still come from the live log, which only has
+recent lines. Host files under `/var/log/flynn` remain the on-disk log for
+every job.
+
 The `flynn-host log $JOB_ID` command on a server will retrieve the logs for
 a specific job. Pass an app name instead (`flynn-host log dashboard`) to get
 logs from every job of that app; `-a` includes jobs that are no longer
