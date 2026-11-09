@@ -570,6 +570,97 @@ git-archive-all "$1" > "$2"
 	}
 }
 
+func TestArchiveTreeIncludesSubmoduleDuringQuarantine(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	sub := t.TempDir()
+	runGit(t, sub, "init", "-q", "-b", "main")
+	runGit(t, sub, "config", "user.email", "t@example.com")
+	runGit(t, sub, "config", "user.name", "t")
+	if err := os.WriteFile(filepath.Join(sub, "main.go"), []byte("package main\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, sub, "add", "main.go")
+	runGit(t, sub, "commit", "-q", "-m", "sub")
+	subRev := strings.TrimSpace(string(mustGit(t, sub, "rev-parse", "HEAD")))
+
+	parent := t.TempDir()
+	runGit(t, parent, "init", "-q", "-b", "main")
+	runGit(t, parent, "config", "user.email", "t@example.com")
+	runGit(t, parent, "config", "user.name", "t")
+	modules := "[submodule \"go-flynn-example\"]\n\tpath = go-flynn-example\n\turl = " + sub + "\n"
+	if err := os.WriteFile(filepath.Join(parent, ".gitmodules"), []byte(modules), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "keep.txt"), []byte("keep\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, parent, "add", ".gitmodules", "keep.txt")
+	runGit(t, parent, "update-index", "--add", "--cacheinfo", "160000,"+subRev+",go-flynn-example")
+	runGit(t, parent, "commit", "-q", "-m", "parent")
+	rev := strings.TrimSpace(string(mustGit(t, parent, "rev-parse", "HEAD")))
+	before, err := os.ReadFile(filepath.Join(parent, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tarPath := filepath.Join(parent, "out.tar")
+	hook := exec.Command("bash", "-c", archiveTreeFunc+`
+git-archive-all "$1" > "$2"
+`, "bash", rev, tarPath)
+	hook.Dir = filepath.Join(parent, ".git")
+	hook.Env = append(os.Environ(),
+		"GIT_DIR="+filepath.Join(parent, ".git"),
+		"GIT_QUARANTINE_PATH="+t.TempDir(),
+		"GIT_CONFIG_COUNT=1",
+		"GIT_CONFIG_KEY_0=protocol.file.allow",
+		"GIT_CONFIG_VALUE_0=always",
+	)
+	if out, err := hook.CombinedOutput(); err != nil {
+		t.Fatalf("archive: %v\n%s", err, out)
+	}
+	after, err := os.ReadFile(filepath.Join(parent, ".git", "HEAD"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("HEAD changed from %q to %q", before, after)
+	}
+	listed, err := exec.Command("tar", "-tf", tarPath).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(listed), "go-flynn-example/main.go") {
+		t.Fatalf("archive missing submodule file: %s", listed)
+	}
+	if !strings.Contains(string(listed), "keep.txt") {
+		t.Fatalf("archive missing parent file: %s", listed)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	if out, err := gitCmd(dir, args...).CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func mustGit(t *testing.T, dir string, args ...string) []byte {
+	t.Helper()
+	out, err := gitCmd(dir, args...).Output()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return out
+}
+
+func gitCmd(dir string, args ...string) *exec.Cmd {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	return cmd
+}
+
 // Git 2.50 refuses a push to the symbolic HEAD of a non-bare repo even when
 // that branch does not exist yet. initRepo is non-bare; the work tree is unused.
 func TestInitRepoAcceptsPushToCheckedOutBranch(t *testing.T) {

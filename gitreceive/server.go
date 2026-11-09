@@ -486,6 +486,13 @@ const archiveTreeFunc = `git-archive-all() {
 	work="$(mktemp -d)"
 	cleanup() { rm -rf "$work"; }
 	trap cleanup RETURN
+	# Nested clone/checkout must not see receive-pack's GIT_DIR or quarantine.
+	git_outside() {
+		env -u GIT_DIR -u GIT_WORK_TREE -u GIT_QUARANTINE_PATH \
+			-u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+			-u GIT_INDEX_FILE -u GIT_PREFIX \
+			"$@"
+	}
 	git archive --format=tar "$rev" | tar -x -C "$work"
 	if [ -f "$work/.gitmodules" ]; then
 		links="$(mktemp)"
@@ -497,8 +504,11 @@ const archiveTreeFunc = `git-archive-all() {
 			dest="$work/$path"
 			rm -rf "$dest"
 			mkdir -p "$(dirname "$dest")"
-			GIT_QUARANTINE_PATH= git clone --quiet "$url" "$dest"
-			GIT_QUARANTINE_PATH= git -C "$dest" checkout --force --quiet "$sha"
+			# receive-pack exports GIT_DIR and GIT_QUARANTINE_PATH. Git 2.45+
+			# refuses ref updates in that environment, so the clone writes
+			# nothing and slugbuilder is handed an empty stream.
+			git_outside git clone --quiet "$url" "$dest"
+			git_outside git -C "$dest" checkout --force --quiet "$sha"
 		done < "$links"
 		rm -f "$links"
 	fi
