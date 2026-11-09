@@ -40,6 +40,22 @@ Example:
 `)
 }
 
+// markOperatorJob marks a flynn-host run job as a system app so host binds
+// and profiles survive lockUntrustedJob. The host API key already limits
+// who can call run.
+func markOperatorJob(job *host.Job) {
+	if job == nil {
+		return
+	}
+	job.Partition = "system"
+	if job.Metadata == nil {
+		job.Metadata = map[string]string{}
+	}
+	if job.Metadata["flynn-system-app"] == "" {
+		job.Metadata["flynn-system-app"] = "true"
+	}
+}
+
 func runRun(args *docopt.Args, client *cluster.Client) error {
 	artifact := &ct.Artifact{}
 	if err := cliutil.DecodeJSONArg(args.String["<artifact>"], artifact); err != nil {
@@ -61,6 +77,10 @@ func runRun(args *docopt.Args, client *cluster.Client) error {
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 	}
+	// flynn-host run is an operator command. Tenant releases are locked down
+	// and would drop --bind, --profiles, and --hostnet. Mark this job trusted
+	// before those flags are applied.
+	markOperatorJob(cmd.Job)
 	if hostID := args.String["--host"]; hostID != "" {
 		host, err := cluster.NewClient().Host(hostID)
 		if err != nil {
