@@ -608,3 +608,24 @@ func TestProcessTypeUnmarshalRuntime(t *testing.T) {
 		t.Fatalf("marshal still used runtime_profile: %s", raw)
 	}
 }
+
+func TestImageManifestRawManifestEscapesTabs(t *testing.T) {
+	manifest := ImageManifest{
+		Type: ImageManifestTypeV1,
+		Entrypoints: map[string]*ImageEntrypoint{
+			"_default": {Env: map[string]string{"TAB": "test\ttest"}},
+		},
+	}
+	raw := manifest.RawManifest()
+	if !json.Valid(raw) {
+		t.Fatalf("manifest is not valid JSON: %q", raw)
+	}
+	var back ImageManifest
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v\n%s", err, raw)
+	}
+	got := back.Entrypoints["_default"].Env["TAB"]
+	if got != "test\ttest" {
+		t.Fatalf("TAB = %q", got)
+	}
+}

@@ -8,10 +8,27 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
+
+func TestEntrypointEnvKeepsTabs(t *testing.T) {
+	got := entrypointEnv([]string{"TAB=test\ttest", "PLAIN=value", "EMPTY=", "novalue"})
+	if got["TAB"] != "test\ttest" {
+		t.Fatalf("tab env = %q", got["TAB"])
+	}
+	if strings.Contains(got["TAB"], `\t`) {
+		t.Fatalf("tab was escaped: %q", got["TAB"])
+	}
+	if got["PLAIN"] != "value" || got["EMPTY"] != "" {
+		t.Fatalf("env = %#v", got)
+	}
+	if _, ok := got["novalue"]; ok {
+		t.Fatal("a line without '=' was kept")
+	}
+}
 
 func TestListenPort(t *testing.T) {
 	tests := []struct {

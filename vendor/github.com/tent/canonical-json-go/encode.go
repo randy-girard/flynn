@@ -374,7 +374,10 @@ func (e *encodeState) string(s string) (int, error) {
 	start := 0
 	for i := 0; i < len(s); {
 		if b := s[i]; b < utf8.RuneSelf {
-			if b != '\\' && b != '"' {
+			// Control bytes are not legal raw inside a JSON string. A tab
+			// in an image env must stay a tab for the process and be
+			// escaped here so the manifest is valid JSON.
+			if b >= 0x20 && b != '\\' && b != '"' {
 				i++
 				continue
 			}
@@ -385,6 +388,17 @@ func (e *encodeState) string(s string) (int, error) {
 			case '\\', '"':
 				e.WriteByte('\\')
 				e.WriteByte(b)
+			case '\n':
+				e.WriteString(`\n`)
+			case '\r':
+				e.WriteString(`\r`)
+			case '\t':
+				e.WriteString(`\t`)
+			default:
+				const hex = "0123456789abcdef"
+				e.WriteString(`\u00`)
+				e.WriteByte(hex[b>>4])
+				e.WriteByte(hex[b&0x0f])
 			}
 			i++
 			start = i

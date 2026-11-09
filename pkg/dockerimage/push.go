@@ -98,16 +98,8 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 
 	entrypoint := &ct.ImageEntrypoint{
 		WorkingDir: config.Config.WorkingDir,
-		Env:        make(map[string]string, len(config.Config.Env)),
+		Env:        entrypointEnv(config.Config.Env),
 		Args:       args,
-	}
-	for _, env := range config.Config.Env {
-		keyVal := strings.SplitN(env, "=", 2)
-		if len(keyVal) != 2 {
-			continue
-		}
-		val := strings.Replace(keyVal[1], "\t", "\\t", -1)
-		entrypoint.Env[keyVal[0]] = val
 	}
 	image := &ct.ImageManifest{
 		Type:        ct.ImageManifestTypeV1,
@@ -124,6 +116,20 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 		Args:       args,
 		ListenPort: ListenPort(config.Config.ExposedPorts),
 	}, nil
+}
+
+// entrypointEnv copies Docker ENV lines. The value is everything after the
+// first '='. A tab stays a tab; escaping it changes what the process sees.
+func entrypointEnv(env []string) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, kv := range env {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) != 2 || parts[0] == "" {
+			continue
+		}
+		out[parts[0]] = parts[1]
+	}
+	return out
 }
 
 // CreateArtifact uploads the image manifest to the blobstore and registers the
