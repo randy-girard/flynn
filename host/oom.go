@@ -8,8 +8,18 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
+
+// hardMemoryLimitLog is the system-stream line operators and TestNotifyOOM
+// watch for. containerinit reports an unforwarded SIGKILL as 137; that is
+// the kernel cgroup killer, not a signal flynn-host forwarded (those exit 0).
+const hardMemoryLimitLog = "Hard memory limit exceeded; process killed (OOM)"
+
+func memoryKillExit(status int) bool {
+	return status == 128+int(syscall.SIGKILL)
+}
 
 const oomEventPollInterval = time.Second
 

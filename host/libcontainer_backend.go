@@ -219,6 +219,7 @@ type Container struct {
 	// Memory limit tracking
 	softLimitBytes  uint64 // Soft memory limit (memory.high)
 	softLimitLogged bool   // Whether we've already logged soft limit breach
+	oomOnce         sync.Once
 
 	svcMu  sync.Mutex
 	svcHBs []discoverd.Heartbeater
@@ -1606,14 +1607,7 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 	} else {
 		go func() {
 			for range notifyOOM {
-				if c.l.LogMux != nil {
-					c.l.LogMux.Write(logagg.MsgIDSystem, c.MuxConfig, "Hard memory limit exceeded; process killed (OOM)")
-				}
-				if wd := c.l.host.webhookDispatcher; wd != nil {
-					wd.Send(host.CodeMemoryHard, "Hard memory limit exceeded (OOM kill)", host.SeverityCritical, c.job.ID, nil, map[string]string{
-						"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
-					})
-				}
+				c.noteHardOOM()
 			}
 		}()
 	}
@@ -1656,6 +1650,12 @@ func (c *Container) watch(ready chan<- error, buffer host.LogBuffer) error {
 			}
 		case containerinit.StateExited:
 			log.Info("container exited", "status", change.ExitStatus)
+			// The cgroup memory.events poll often loses the race with
+			// teardown: the directory is gone before the next tick, so
+			// oom_kill is never observed. Status 137 is that kill.
+			if memoryKillExit(change.ExitStatus) {
+				c.noteHardOOM()
+			}
 			c.Client.Resume()
 			c.l.State.SetStatusDone(c.job.ID, change.ExitStatus)
 			return nil
@@ -2440,6 +2440,22 @@ func userJobInitEnv(job *host.Job) map[string]string {
 		containerinit.HideDiscoverdEnv:      "1",
 		containerinit.HostRegistersServices: "1",
 	}
+}
+
+func (c *Container) noteHardOOM() {
+	if c == nil {
+		return
+	}
+	c.oomOnce.Do(func() {
+		if c.l != nil && c.l.LogMux != nil {
+			c.l.LogMux.Write(logagg.MsgIDSystem, c.MuxConfig, hardMemoryLimitLog)
+		}
+		if c.l != nil && c.l.host != nil && c.l.host.webhookDispatcher != nil && c.job != nil {
+			c.l.host.webhookDispatcher.Send(host.CodeMemoryHard, "Hard memory limit exceeded (OOM kill)", host.SeverityCritical, c.job.ID, nil, map[string]string{
+				"soft_limit_bytes": fmt.Sprintf("%d", c.softLimitBytes),
+			})
+		}
+	})
 }
 
 // subscribeOOM watches for cgroup OOM kills. libcontainer NotifyOOM uses

@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+func TestMemoryKillExit(t *testing.T) {
+	if !memoryKillExit(137) {
+		t.Fatal("unforwarded SIGKILL is a cgroup memory kill")
+	}
+	if memoryKillExit(0) || memoryKillExit(143) || memoryKillExit(1) {
+		t.Fatal("a forwarded stop, SIGTERM, or a normal exit is not a memory kill")
+	}
+}
+
 func TestParseOOMKill(t *testing.T) {
 	n, ok := parseOOMKill([]byte("low 0\nhigh 0\nmax 0\noom 1\noom_kill 3\n"))
 	if !ok || n != 3 {

@@ -705,6 +705,12 @@ func containerInitApp(c *Config, logFile *os.File) error {
 					return nil, err
 				}
 			}
+			// slugbuilder runs compile as an unprivileged user. Bash then
+			// reopens /dev/stderr, which is this pipe. Root mode 0600
+			// returns EACCES and buildpacks die on the first warning.
+			if err := syscall.Fchmod(int(pipe.(*os.File).Fd()), 0666); err != nil {
+				return nil, err
+			}
 			sockR, sockW, err := newSocketPair(name)
 			if err != nil {
 				return nil, err
