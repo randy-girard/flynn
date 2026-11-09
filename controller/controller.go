@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flynn/que-go"
@@ -542,8 +543,9 @@ type controllerAPI struct {
 	clusterClient        utils.ClusterClient
 	logaggc              logClient
 	// archiveOutputSync stores deploy output before PutJob returns.
-	// Production leaves it false and archives in the background.
-	archiveOutputSync bool
+	// Production leaves it false and archives in the background. The
+	// background read must not race a test that turns the flag on.
+	archiveOutputSync atomic.Bool
 	que               *que.Client
 	caCert            []byte
 	config            handlerConfig

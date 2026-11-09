@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"testing"
 	"time"
 
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -58,16 +59,67 @@ func newFakeLogAggregatorClient() *fakeLogAggregatorClient {
 }
 
 type fakeLogAggregatorClient struct {
+	mu   sync.Mutex
 	logs map[string][]logaggc.Message
 	subs map[string]<-chan *logaggc.Message
 }
 
+func (f *fakeLogAggregatorClient) setLogs(id string, msgs []logaggc.Message) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs[id] = msgs
+}
+
+func (f *fakeLogAggregatorClient) setSub(id string, sub <-chan *logaggc.Message) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if sub == nil {
+		delete(f.subs, id)
+		return
+	}
+	f.subs[id] = sub
+}
+
+// TestFakeLogAggregatorConcurrentGetLog fails under -race if GetLog and
+// setLogs share the log map without a lock. A previous test's background
+// job-output archive can still be reading while the next test writes.
+func TestFakeLogAggregatorConcurrentGetLog(t *testing.T) {
+	f := newFakeLogAggregatorClient()
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 40; n++ {
+				f.setLogs("app", []logaggc.Message{{JobID: "j", Msg: "m", Stream: "stdout"}})
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for n := 0; n < 40; n++ {
+				rc, err := f.GetLog("app", nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_, _ = io.Copy(io.Discard, rc)
+				rc.Close()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
 func (f *fakeLogAggregatorClient) GetLog(channelID string, options *logagg.LogOpts) (io.ReadCloser, error) {
+	f.mu.Lock()
 	buf, ok := f.logs[channelID]
 	if !ok {
 		buf = sampleMessages
 		f.logs[channelID] = buf
 	}
+	buf = append([]logaggc.Message(nil), buf...)
+	subc := f.subs[channelID]
+	f.mu.Unlock()
 	lines := len(buf)
 	follow := false
 	jobID, processType := "", ""
@@ -106,7 +158,7 @@ func (f *fakeLogAggregatorClient) GetLog(channelID string, options *logagg.LogOp
 				return
 			}
 		}
-		if subc, ok := f.subs[channelID]; ok && follow {
+		if subc != nil && follow {
 			for msg := range subc {
 				if err := enc.Encode(msg); err != nil {
 					pw.CloseWithError(err)
@@ -184,8 +236,8 @@ func (s *S) TestGetAppLogFollow(c *C) {
 
 	subc := make(chan *logaggc.Message)
 	defer close(subc)
-	s.flac.subs[app.ID] = subc
-	defer func() { delete(s.flac.subs, app.ID) }()
+	s.flac.setSub(app.ID, subc)
+	defer func() { s.flac.setSub(app.ID, nil) }()
 
 	rc, err := s.c.GetAppLog(app.Name, &logagg.LogOpts{
 		Lines:  nil,
@@ -283,8 +335,8 @@ func (s *S) TestGetAppLogSSEFollow(c *C) {
 	subc := make(chan *logaggc.Message)
 	var closeSubc sync.Once
 	defer closeSubc.Do(func() { close(subc) })
-	s.flac.subs[app.ID] = subc
-	defer func() { delete(s.flac.subs, app.ID) }()
+	s.flac.setSub(app.ID, subc)
+	defer func() { s.flac.setSub(app.ID, nil) }()
 
 	req, err := http.NewRequest("GET", fmt.Sprintf("%s/apps/%s/log?follow=true", s.srv.URL, app.Name), nil)
 	c.Assert(err, IsNil)

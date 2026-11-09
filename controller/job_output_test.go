@@ -53,17 +53,17 @@ func (s *S) appBearer(c *C, app *ct.App, perms ...string) string {
 }
 
 func (s *S) TestJobOutputStoredWhenBuilderStops(c *C) {
-	s.api.archiveOutputSync = true
-	defer func() { s.api.archiveOutputSync = false }()
+	s.api.archiveOutputSync.Store(true)
+	defer func() { s.api.archiveOutputSync.Store(false) }()
 
 	app := s.createTestApp(c, &ct.App{Name: "job-output-builder"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{})
 	uuid := random.UUID()
 	clusterID := cluster.GenerateJobID("host1", uuid)
-	s.flac.logs[app.ID] = []logaggc.Message{
+	s.flac.setLogs(app.ID, []logaggc.Message{
 		{JobID: clusterID, Msg: "-----> Building app", ProcessType: "slugbuilder", Stream: "stdout"},
 		{JobID: clusterID, Msg: "compiled slug", ProcessType: "slugbuilder", Stream: "stdout"},
-	}
+	})
 
 	job := &ct.Job{
 		ID: clusterID, UUID: uuid, HostID: "host1",
@@ -94,9 +94,9 @@ func (s *S) TestJobOutputStoredWhenBuilderStops(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(strings.Contains(string(raw), "compiled slug"), Equals, false)
 
-	s.flac.logs[app.ID] = []logaggc.Message{
+	s.flac.setLogs(app.ID, []logaggc.Message{
 		{JobID: clusterID, Msg: "x", Stream: "stdout"},
-	}
+	})
 	c.Assert(s.c.PutJob(job), IsNil)
 	code, body = s.outputReq(c, "GET", "/apps/"+app.ID+"/jobs/"+uuid+"/output", "", "")
 	c.Assert(code, Equals, 200)
@@ -104,16 +104,16 @@ func (s *S) TestJobOutputStoredWhenBuilderStops(c *C) {
 }
 
 func (s *S) TestJobOutputUsesUUIDWhenClusterIDHasNoLines(c *C) {
-	s.api.archiveOutputSync = true
-	defer func() { s.api.archiveOutputSync = false }()
+	s.api.archiveOutputSync.Store(true)
+	defer func() { s.api.archiveOutputSync.Store(false) }()
 
 	app := s.createTestApp(c, &ct.App{Name: "job-output-uuid"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{})
 	uuid := random.UUID()
 	clusterID := cluster.GenerateJobID("host1", uuid)
-	s.flac.logs[app.ID] = []logaggc.Message{
+	s.flac.setLogs(app.ID, []logaggc.Message{
 		{JobID: uuid, Msg: "release command ok", ProcessType: "release", Stream: "stdout"},
-	}
+	})
 	c.Assert(s.c.PutJob(&ct.Job{
 		ID: clusterID, UUID: uuid, HostID: "host1",
 		AppID: app.ID, ReleaseID: release.ID,
@@ -125,15 +125,15 @@ func (s *S) TestJobOutputUsesUUIDWhenClusterIDHasNoLines(c *C) {
 }
 
 func (s *S) TestWebJobOutputIsNotStored(c *C) {
-	s.api.archiveOutputSync = true
-	defer func() { s.api.archiveOutputSync = false }()
+	s.api.archiveOutputSync.Store(true)
+	defer func() { s.api.archiveOutputSync.Store(false) }()
 
 	app := s.createTestApp(c, &ct.App{Name: "job-output-web"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{})
 	uuid := random.UUID()
-	s.flac.logs[app.ID] = []logaggc.Message{
+	s.flac.setLogs(app.ID, []logaggc.Message{
 		{JobID: uuid, Msg: "web request", ProcessType: "web", Stream: "stdout"},
-	}
+	})
 	s.createTestJob(c, &ct.Job{
 		UUID: uuid, AppID: app.ID, ReleaseID: release.ID,
 		Type: "web", State: ct.JobStateDown,
@@ -188,17 +188,17 @@ func (s *S) TestReleaseOutputRoundTrip(c *C) {
 }
 
 func (s *S) TestJobOutputRedactsReleaseEnv(c *C) {
-	s.api.archiveOutputSync = true
-	defer func() { s.api.archiveOutputSync = false }()
+	s.api.archiveOutputSync.Store(true)
+	defer func() { s.api.archiveOutputSync.Store(false) }()
 
 	app := s.createTestApp(c, &ct.App{Name: "job-output-redact"})
 	release := s.createTestRelease(c, app.ID, &ct.Release{
 		Env: map[string]string{"TOKEN": "supersecret-value"},
 	})
 	uuid := random.UUID()
-	s.flac.logs[app.ID] = []logaggc.Message{
+	s.flac.setLogs(app.ID, []logaggc.Message{
 		{JobID: uuid, Msg: "token supersecret-value", ProcessType: "postdeploy", Stream: "stdout"},
-	}
+	})
 	c.Assert(s.c.PutJob(&ct.Job{
 		UUID: uuid, AppID: app.ID, ReleaseID: release.ID,
 		Type: "postdeploy", State: ct.JobStateDown,

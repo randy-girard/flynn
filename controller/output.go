@@ -27,7 +27,7 @@ func (c *controllerAPI) maybeArchiveJobOutput(job *ct.Job) {
 		return
 	}
 	cp := *job
-	if c.archiveOutputSync {
+	if c.archiveOutputSync.Load() {
 		c.archiveJobOutput(&cp)
 		return
 	}
@@ -39,7 +39,7 @@ func (c *controllerAPI) archiveJobOutput(job *ct.Job) {
 		return
 	}
 	attempts := 5
-	if c.archiveOutputSync {
+	if c.archiveOutputSync.Load() {
 		attempts = 1
 	}
 	var last error
