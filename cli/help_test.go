@@ -181,7 +181,7 @@ func TestFormatHelpClusterAddOmitsKey(t *testing.T) {
 	if strings.Contains(got, "<key>") {
 		t.Fatalf("cluster:add must not require a cluster key:\n%s", got)
 	}
-	for _, want := range []string{"<cluster-name>", "<domain>", "--token", "--email", "--password"} {
+	for _, want := range []string{"<cluster-name>", "<domain>", "--token", "--email", "--password", "--no-ca"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("cluster:add help missing %q:\n%s", want, got)
 		}

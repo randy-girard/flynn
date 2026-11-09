@@ -22,6 +22,7 @@ var topAliases = map[string]string{
 	"logsink":        "log-sink",
 	"logsink:add":    "log-sink:add",
 	"logsink:remove": "log-sink:remove",
+	"resource":       "addons",
 }
 
 // subAliases rewrites flynn <noun> <verb> to flynn <noun>:<verb>.
@@ -84,6 +85,13 @@ var subAliases = map[string]map[string]string{
 		"expose":   "addons:expose",
 		"unexpose": "addons:unexpose",
 		"types":    "addons:types",
+	},
+	"resource": {
+		"add":      "addons:create",
+		"remove":   "addons:destroy",
+		"list":     "addons",
+		"expose":   "addons:expose",
+		"unexpose": "addons:unexpose",
 	},
 	"volume": {
 		"show":         "volume:show",

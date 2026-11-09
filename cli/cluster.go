@@ -39,7 +39,7 @@ it does not contact a controller.
 	register("cluster", runClusterList, clusterListUsage)
 	register("cluster:list", runClusterList, clusterListUsage)
 	register("cluster:add", runClusterAdd, `
-usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] [--email <email>] [--password <password>] <cluster-name> <domain>
+usage: flynn cluster:add [-f] [-d] [--git-url <giturl>] [--no-git] [--no-ca] [--dashboard-url <url>] [--image-url <url>] [--docker-push-url <url>] [--docker] [-p <tlspin>] [--token <token>] [--email <email>] [--password <password>] <cluster-name> <domain>
 
 Add <cluster-name> to the ~/.flynnrc configuration file. This stores the domain, TLS pin, and URLs. It does not store a cluster key. Log in with flynn login before talking to the controller, or pass --email/--password (or --token for a personal access token).
 
@@ -48,6 +48,7 @@ Options:
 	-d, --default             set as default cluster
 	--git-url=<giturl>        git URL
 	--no-git                  skip git configuration
+	--no-ca                   store the cluster without downloading its CA
 	--dashboard-url=<url>     public dashboard URL (defaults to https://dashboard.<domain>)
 	--image-url=<url>         image URL
 	--docker-push-url=<url>   [DEPRECATED] Docker push URL
@@ -228,13 +229,15 @@ func runClusterAdd(args *docopt.Args) error {
 	}
 
 	var caPath string
-	caClient, err := s.CAClient()
-	if err != nil {
-		return err
-	}
-	caPath, err = writeCACert(caClient, s.Name)
-	if err != nil {
-		return fmt.Errorf("Error writing CA certificate: %s", err)
+	if !args.Bool["--no-ca"] {
+		caClient, err := s.CAClient()
+		if err != nil {
+			return err
+		}
+		caPath, err = writeCACert(caClient, s.Name)
+		if err != nil {
+			return fmt.Errorf("Error writing CA certificate: %s", err)
+		}
 	}
 
 	if s.GitURL != "" {
@@ -273,7 +276,7 @@ func runClusterAdd(args *docopt.Args) error {
 
 	email := firstNonEmpty(strings.TrimSpace(args.String["--email"]), strings.TrimSpace(os.Getenv("FLYNN_EMAIL")))
 	password := firstNonEmpty(strings.TrimSpace(args.String["--password"]), os.Getenv("FLYNN_PASSWORD"))
-	if email != "" || password != "" {
+	if !args.Bool["--no-ca"] && (email != "" || password != "") {
 		creds := login.Credentials{Email: email, Password: password}
 		if err := creds.FillMissing(term.IsTerminal(os.Stdin.Fd())); err != nil {
 			return err

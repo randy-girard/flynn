@@ -78,11 +78,12 @@ Remove one attachment from this app. <attachment> is the --as name (ANALYTICS
 or AMBER), not the add-on name and not the env var. The add-on is not deleted.
 `)
 	register("addons:destroy", runAddonsDestroy, `
-usage: flynn addons:destroy <addon> [--yes]
+usage: flynn addons:destroy [<provider>] [<addon>] [--yes]
 
 Delete an add-on this app owns. <addon> is the NAME from addons:list
-(postgresql-concave-48291, or scheduler). No type argument. An app that is
-only attached uses addons:detach.
+(postgresql-concave-48291, or scheduler). flynn resource remove postgres
+<name> passes the provider and the NAME or ID. An app that is only attached
+uses addons:detach.
 
 A database leader cannot be removed while followers are still linked. The
 command returns after the add-on is detached. An isolated instance is
@@ -314,10 +315,20 @@ func runAddonsDetach(args *docopt.Args, client controller.Client) error {
 }
 
 func runAddonsDestroy(args *docopt.Args, client controller.Client) error {
-	name := strings.TrimSpace(args.String["<addon>"])
+	provider, name, err := normalizeResourceArgs(args.String["<provider>"], args.String["<addon>"])
+	if err != nil {
+		return err
+	}
 	cat, err := clusterPluginCatalog()
 	if err != nil {
 		return err
+	}
+	if provider != "" {
+		res, err := lookupProviderResource(client, mustApp(), provider, name)
+		if err != nil {
+			return err
+		}
+		return destroyResourceAddon(args, client, res, specForResource(client, cat, res))
 	}
 	if res, spec, err := lookupAppAddonByName(client, cat, name); err == nil && res != nil {
 		return destroyResourceAddon(args, client, res, spec)

@@ -178,3 +178,16 @@ func TestTenancyCommandsParse(t *testing.T) {
 		t.Fatalf("token add: %+v", args.String)
 	}
 }
+
+func TestResourceRemoveParsesProviderAndName(t *testing.T) {
+	args := parseCLI(t, []string{"resource", "remove", "postgres", "pg-orchid"})
+	provider, name, err := normalizeResourceArgs(args.String["<provider>"], args.String["<addon>"])
+	if err != nil || provider != "postgres" || name != "pg-orchid" {
+		t.Fatalf("provider=%q name=%q err=%v", provider, name, err)
+	}
+	args = parseCLI(t, []string{"addons:destroy", "pg-orchid"})
+	provider, name, err = normalizeResourceArgs(args.String["<provider>"], args.String["<addon>"])
+	if err != nil || provider != "" || name != "pg-orchid" {
+		t.Fatalf("name-only provider=%q name=%q err=%v", provider, name, err)
+	}
+}

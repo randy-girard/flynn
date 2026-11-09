@@ -186,3 +186,22 @@ func TestFirewallStaysOnFlynnHost(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestResourceCommandsResolveToAddons(t *testing.T) {
+	name, args, from := resolveCommand("resource", []string{"add", "postgres"})
+	if name != "addons:create" || from != "resource add" || !reflect.DeepEqual(args, []string{"postgres"}) {
+		t.Fatalf("add: %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("resource", nil)
+	if name != "addons" || from != "resource" || len(args) != 0 {
+		t.Fatalf("list: %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("resource", []string{"remove", "postgres", "pg-orchid"})
+	if name != "addons:destroy" || from != "resource remove" || !reflect.DeepEqual(args, []string{"postgres", "pg-orchid"}) {
+		t.Fatalf("remove: %q %q from=%q", name, args, from)
+	}
+	name, args, from = resolveCommand("resource", []string{"expose", "postgres"})
+	if name != "addons:expose" || from != "resource expose" || !reflect.DeepEqual(args, []string{"postgres"}) {
+		t.Fatalf("expose: %q %q from=%q", name, args, from)
+	}
+}
