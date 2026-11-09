@@ -11,6 +11,7 @@ import (
 
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
+	"github.com/randy-girard/flynn/pkg/joboutput"
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 	"github.com/randy-girard/flynn/pkg/syslog/rfc6587"
 )
@@ -44,6 +45,7 @@ func receivePrintln(args ...any) {
 type appProgressLog struct {
 	dst   io.Writer
 	buf   []byte
+	kept  bytes.Buffer
 	conns []net.Conn
 	appID string
 	seq   uint64
@@ -77,6 +79,7 @@ func (w *appProgressLog) Write(p []byte) (int, error) {
 			line := string(bytes.TrimRight(w.buf[:i], "\r"))
 			w.buf = append([]byte(nil), w.buf[i+1:]...)
 			if line != "" {
+				w.keep(line)
 				w.emit(line)
 			}
 		}
@@ -93,6 +96,39 @@ func (w *appProgressLog) Close() error {
 	}
 	w.conns = nil
 	return err
+}
+
+func (w *appProgressLog) keep(line string) {
+	if w == nil {
+		return
+	}
+	w.kept.WriteString(line)
+	w.kept.WriteByte('\n')
+	if w.kept.Len() <= joboutput.MaxBytes {
+		return
+	}
+	b := append([]byte(nil), w.kept.Bytes()[w.kept.Len()-joboutput.MaxBytes:]...)
+	if i := bytes.IndexByte(b, '\n'); i >= 0 && i+1 < len(b) {
+		b = b[i+1:]
+	}
+	w.kept.Reset()
+	w.kept.Write(b)
+}
+
+// Text is the git-push transcript kept for this receiver, capped at the tail.
+func (w *appProgressLog) Text() string {
+	if w == nil {
+		return ""
+	}
+	return w.kept.String()
+}
+
+func progressText() string {
+	p, ok := receiveOut.(*appProgressLog)
+	if !ok || p == nil {
+		return ""
+	}
+	return p.Text()
 }
 
 func (w *appProgressLog) emit(line string) {

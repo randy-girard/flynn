@@ -5,12 +5,41 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/randy-girard/flynn/logaggregator/utils"
+	"github.com/randy-girard/flynn/pkg/joboutput"
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
 )
+
+func TestAppProgressLogKeepsLines(t *testing.T) {
+	w := &appProgressLog{dst: io.Discard}
+	if _, err := io.WriteString(w, "-----> Creating release\n=====> Application deployed\n"); err != nil {
+		t.Fatal(err)
+	}
+	got := w.Text()
+	want := "-----> Creating release\n=====> Application deployed\n"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestAppProgressLogCapsTheTail(t *testing.T) {
+	w := &appProgressLog{dst: io.Discard}
+	head := strings.Repeat("a", joboutput.MaxBytes)
+	if _, err := io.WriteString(w, head+"\nTAIL\n"); err != nil {
+		t.Fatal(err)
+	}
+	got := w.Text()
+	if !strings.HasSuffix(got, "TAIL\n") {
+		t.Fatalf("tail missing: %q", got[len(got)-20:])
+	}
+	if len(got) > joboutput.MaxBytes {
+		t.Fatalf("len %d exceeds %d", len(got), joboutput.MaxBytes)
+	}
+}
 
 func TestAppProgressLogShipsEachLine(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -45,6 +74,9 @@ func TestAppProgressLogShipsEachLine(t *testing.T) {
 	}
 	if git.String() != "-----> Applying flynn-app.json\n-----> Provisioning addon postgres\n" {
 		t.Fatalf("git output %q", git.String())
+	}
+	if w.Text() != "-----> Applying flynn-app.json\n-----> Provisioning addon postgres\n" {
+		t.Fatalf("kept %q", w.Text())
 	}
 	var frame []byte
 	select {

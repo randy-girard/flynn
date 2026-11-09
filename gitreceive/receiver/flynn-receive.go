@@ -761,6 +761,7 @@ func runBuildCmd(cmd *exec.Cmd, releaseEnv map[string]string) error {
 }
 
 func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType) error {
+	defer saveReleaseProgress(client, app, release)
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return fmt.Errorf("Error creating release: %s", err)
 	}
@@ -799,6 +800,22 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	receivePrintln("=====> Application deployed")
 	printDeployURLs(client, app)
 	return nil
+}
+
+// saveReleaseProgress stores the git-push transcript on the release after
+// finishDeploy returns, including a failure once the release exists. A
+// failed store does not fail the push.
+func saveReleaseProgress(client controller.Client, app *ct.App, release *ct.Release) {
+	if client == nil || app == nil || release == nil || release.ID == "" {
+		return
+	}
+	text := progressText()
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	if err := client.PutReleaseOutput(app.ID, release.ID, []byte(text)); err != nil {
+		fmt.Fprintf(os.Stderr, "-----> WARN: could not store deploy output: %s\n", err)
+	}
 }
 
 func runReleasePhase(client controller.Client, app *ct.App, release *ct.Release) error {
