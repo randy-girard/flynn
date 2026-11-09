@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx"
 	"github.com/randy-girard/flynn/controller/name"
@@ -310,6 +311,46 @@ func (r *AppRepo) ListPage(opts ListAppOptions) ([]*ct.App, *PageToken, error) {
 	}
 
 	return apps, nextPageToken, nil
+}
+
+// AppVisibility is the HTTP list predicate. It matches filterVisibleApps.
+// DropInternal hides bootstrap and system apps unless flynn-plugin is set.
+// UserScope limits rows to Owner or GrantKeys. Tenancy mode is not an input.
+type AppVisibility struct {
+	DropInternal  bool
+	PlatformNames []string
+	UserScope     bool
+	Owner         string
+	GrantKeys     []string
+}
+
+func (r *AppRepo) ListVisiblePage(v AppVisibility, before *time.Time, beforeID string, count int) ([]*ct.App, error) {
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	names := v.PlatformNames
+	if names == nil {
+		names = []string{}
+	}
+	grants := v.GrantKeys
+	if grants == nil {
+		grants = []string{}
+	}
+	rows, err := r.db.Query("app_visible_list_page", v.DropInternal, names, v.UserScope, v.Owner, grants, ts, beforeID, count)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	apps := []*ct.App{}
+	for rows.Next() {
+		app, err := scanApp(rows)
+		if err != nil {
+			return nil, err
+		}
+		apps = append(apps, app)
+	}
+	return apps, rows.Err()
 }
 
 func (r *AppRepo) SetRelease(app *ct.App, releaseID string) error {

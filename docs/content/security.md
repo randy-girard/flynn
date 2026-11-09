@@ -147,17 +147,26 @@ found on a job, `flynn-host` also writes it to `/etc/flynn/host.json`.
 
 `GET /apps` is scoped to the caller:
 
-* **Cluster key / `cluster:admin`.** Default response omits platform,
-  system (`flynn-system-app`), and plugin (`flynn-plugin`) apps. Pass
-  `?all=true` (CLI: `flynn apps --all`) for the operator catalog.
-  `flynn-host`, plugin install, backup, and the updater use that full
-  list. Treat the cluster key as superuser: it can still `GET /apps/:id`
-  for system apps by name.
+* **Cluster key / `cluster:admin`.** Default response omits platform
+  and system (`flynn-system-app`) apps and keeps installed plugins
+  (`flynn-plugin=true`). Pass `?all=true` (CLI: `flynn apps --all`) for
+  the operator catalog, including bootstrap apps. `flynn-host`, plugin
+  install, backup, and the updater use that full list. Treat the cluster
+  key as superuser: it can still `GET /apps/:id` for system apps by name.
 * **User token** (`UserID` set). Returns only apps the user owns or
   collaborates on. `?all=true` does not reveal other tenants' apps or
   platform apps.
 * **App-scoped token** (dashboard grant, build token). `GET /apps` is
   `403`. The token may only `GET /apps/:id` for apps it was granted.
+
+Hosted and self-hosted clusters use the same list. `tenancy_mode` does
+not change it. Omit `count` and the response is still one JSON array of
+every app that caller can see. Pass `count` (at most 1000), `before`, and
+`before_id` to opt into a page. Visibility is applied before the limit, so
+a page shorter than `count` is the end. The next page uses the last row's
+`created_at` and `id`. `?context=` is a hint and is not a filter. The CLI,
+dashboard, backup, and updater walk pages. An old client that omits
+`count` still receives one array.
 
 `flynn cluster:add` after bootstrap does not store the cluster key. `flynn login`
 creates a user session. A cluster-admin user listing `GET /apps` used to print

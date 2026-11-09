@@ -54,6 +54,40 @@ func (c *controllerAPI) prepareNewApp(ctx context.Context, app *ct.App) error {
 	return c.quotaAllows(app.OwnerAccount, usage.Apps+1, 0, 0, 0, 0)
 }
 
+func (c *controllerAPI) listVisibleAppsPage(ctx context.Context, includeAll bool, page *listPage) ([]*ct.App, error) {
+	tok := authz.TokenFromContext(ctx)
+	vis := data.AppVisibility{PlatformNames: authz.PlatformAppNames()}
+	switch {
+	case tok == nil:
+		// filterVisibleApps leaves a nil token unchanged.
+	case tok.HasClusterAdmin():
+		vis.DropInternal = !includeAll
+	default:
+		vis.DropInternal = true
+		vis.UserScope = true
+		vis.Owner = "user:" + tok.UserID
+		vis.GrantKeys = visibleGrantKeys(tok)
+	}
+	return c.appRepo.ListVisiblePage(vis, page.Before, page.BeforeID, page.Count)
+}
+
+func visibleGrantKeys(tok *authorizer.Token) []string {
+	keys := []string{}
+	if tok == nil {
+		return keys
+	}
+	for _, g := range tok.AppGrants {
+		if !authz.HasAppPermission(g.Permissions, "") {
+			continue
+		}
+		id := strings.TrimSpace(g.AppID)
+		if id != "" {
+			keys = append(keys, id)
+		}
+	}
+	return keys
+}
+
 func (c *controllerAPI) filterVisibleApps(ctx context.Context, includeAll bool, list interface{}) interface{} {
 	apps, ok := list.([]*ct.App)
 	if !ok || c == nil {

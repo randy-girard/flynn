@@ -2,6 +2,7 @@ package authz
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
@@ -167,6 +168,17 @@ var platformAppNames = map[string]struct{}{
 func IsPlatformAppName(name string) bool {
 	_, ok := platformAppNames[name]
 	return ok
+}
+
+// PlatformAppNames is the bootstrap app names hidden from a default catalog
+// page unless the app is an installed plugin (flynn-plugin=true).
+func PlatformAppNames() []string {
+	names := make([]string, 0, len(platformAppNames))
+	for name := range platformAppNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // TarreceiveAllowed reports whether a token may push layers/artifacts to

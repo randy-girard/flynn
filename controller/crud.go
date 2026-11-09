@@ -90,6 +90,29 @@ func crudRegister(r *httprouter.Router, resource string, example interface{}, re
 	}))
 
 	r.GET(prefix, httphelper.WrapHandler(func(ctx context.Context, rw http.ResponseWriter, req *http.Request) {
+		if resource == "apps" {
+			if api := apiFromContext(ctx); api != nil {
+				page, err := parseListPage(req)
+				if err != nil {
+					respondWithError(rw, err)
+					return
+				}
+				// Omitted count stays the full array. count opts into a page
+				// whose visibility predicate runs before LIMIT.
+				if page.paged() {
+					list, err := api.listVisibleAppsPage(ctx, wantCatalogAll(req), page)
+					if err != nil {
+						respondWithError(rw, err)
+						return
+					}
+					if list == nil {
+						list = []*ct.App{}
+					}
+					httphelper.JSON(rw, 200, list)
+					return
+				}
+			}
+		}
 		list, err := repo.List()
 		if err != nil {
 			respondWithError(rw, err)

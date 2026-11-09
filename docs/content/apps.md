@@ -40,6 +40,12 @@ call `GET /apps`, but the handler returns only apps the user owns
 grants cannot list apps at all (`403`). `--all` does not expand a user
 token to the operator catalog.
 
+The same rules apply on a hosted cluster and on a large self-hosted
+cluster. Tenancy mode is not the switch. `GET /apps` without `count` is
+still one JSON array. `count` (maximum 1000), `before`, and `before_id`
+request one page, newest first, with visibility applied before the limit.
+A page shorter than `count` is the end. `flynn apps` follows those pages.
+
 See [Security](security.md#app-catalog) and [CLI — Apps](cli.md).
 
 ## Configuration

@@ -9,6 +9,7 @@ var preparedStatements = map[string]string{
 	"ping":                                     pingQuery,
 	"app_list":                                 appListQuery,
 	"app_list_page":                            appListPageQuery,
+	"app_visible_list_page":                    appVisibleListPageQuery,
 	"app_select_by_name":                       appSelectByNameQuery,
 	"app_select_by_name_for_update":            appSelectByNameForUpdateQuery,
 	"app_select_by_name_or_id":                 appSelectByNameOrIDQuery,
@@ -198,6 +199,42 @@ AND
 CASE WHEN $1::timestamptz IS NOT NULL THEN created_at <= $1::timestamptz ELSE true END
 ORDER BY created_at DESC
 LIMIT $4;
+`
+	// HTTP pages. Do not use app_list_page here: that cursor is created_at <=
+	// with no app_id, so equal timestamps repeat. gRPC StreamApps still uses it.
+	// $1 drop internal (system or platform name, unless flynn-plugin)
+	// $2 platform names
+	// $3 restrict to owner or grants
+	// $4 owner_account
+	// $5 grant ids and names
+	// $6 before
+	// $7 before_id
+	// $8 limit
+	appVisibleListPageQuery = `
+SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by
+FROM apps
+WHERE deleted_at IS NULL
+AND (
+  NOT $1::bool
+  OR COALESCE(meta->>'flynn-plugin', '') = 'true'
+  OR (
+    COALESCE(meta->>'flynn-system-app', '') <> 'true'
+    AND NOT (name = ANY($2::text[]))
+  )
+)
+AND (
+  NOT $3::bool
+  OR owner_account = $4::text
+  OR app_id::text = ANY($5::text[])
+  OR name = ANY($5::text[])
+)
+AND (
+  $6::timestamptz IS NULL
+  OR created_at < $6::timestamptz
+  OR ($7::text <> '' AND created_at = $6::timestamptz AND app_id::text < $7::text)
+)
+ORDER BY created_at DESC, app_id DESC
+LIMIT $8
 `
 	appSelectByNameQuery = `
 SELECT app_id, name, meta, strategy, release_id, deploy_timeout, created_at, updated_at, owner_account, created_by

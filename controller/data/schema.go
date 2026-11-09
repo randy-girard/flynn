@@ -1365,6 +1365,13 @@ CREATE TRIGGER notify_tcp_route_certificates_update
     created_at timestamptz NOT NULL DEFAULT now()
 )`,
 	)
+	// Keyset for GET /apps. The admin scan orders by created_at, app_id.
+	// One account orders by owner_account, then the same keyset.
+	// apps_owner_account_idx stays for owner equality lookups.
+	migrations.Add(81,
+		`CREATE INDEX apps_list_keyset_idx ON apps (created_at DESC, app_id DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX apps_owner_list_idx ON apps (owner_account, created_at DESC, app_id DESC) WHERE deleted_at IS NULL`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

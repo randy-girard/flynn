@@ -41,3 +41,29 @@ func TestParseListPageInvalidBefore(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestParseListPageCountCap(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "/apps?count=1001", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err := parseListPage(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Count != maxListPageCount {
+		t.Fatalf("count=1001: got %d, want %d", page.Count, maxListPageCount)
+	}
+
+	omitted, err := http.NewRequest(http.MethodGet, "/apps?page=2", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	page, err = parseListPage(omitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.paged() {
+		t.Fatal("omitted count must stay an unpaged list")
+	}
+}

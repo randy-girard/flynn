@@ -968,12 +968,15 @@ func (c *Client) JobListActive() ([]*ct.Job, error) {
 	return jobs, c.Get("/active-jobs", &jobs)
 }
 
+// appListPageSize is the controller maximum. A short page is the end.
+const appListPageSize = 1000
+
 // AppList returns the operator catalog (GET /apps?all=true): every app,
 // including platform, system, and plugin apps. flynn-host, plugin install,
 // backup, and other operator tools use this so they can find system apps.
+// The walk uses count so a large hosted or self-hosted catalog is not one body.
 func (c *Client) AppList() ([]*ct.App, error) {
-	var apps []*ct.App
-	return apps, c.Get("/apps?all=true", &apps)
+	return c.listAppPages(url.Values{"all": {"true"}})
 }
 
 // AppListVisible returns GET /apps without the operator catalog. Cluster
@@ -981,8 +984,55 @@ func (c *Client) AppList() ([]*ct.App, error) {
 // Bootstrap system apps stay hidden. User tokens see apps they own or
 // collaborate on.
 func (c *Client) AppListVisible() ([]*ct.App, error) {
-	var apps []*ct.App
-	return apps, c.Get("/apps", &apps)
+	return c.listAppPages(nil)
+}
+
+func (c *Client) listAppPages(extra url.Values) ([]*ct.App, error) {
+	var out []*ct.App
+	seen := map[string]struct{}{}
+	var before, beforeID string
+	for {
+		q := url.Values{}
+		for k, vs := range extra {
+			for _, v := range vs {
+				q.Add(k, v)
+			}
+		}
+		q.Set("count", strconv.Itoa(appListPageSize))
+		if before != "" {
+			q.Set("before", before)
+			q.Set("before_id", beforeID)
+		}
+		var page []*ct.App
+		if err := c.Get("/apps?"+q.Encode(), &page); err != nil {
+			return nil, err
+		}
+		if len(page) == 0 {
+			return out, nil
+		}
+		for _, app := range page {
+			if app == nil || app.ID == "" {
+				continue
+			}
+			if _, ok := seen[app.ID]; ok {
+				return nil, fmt.Errorf("controller: app list page repeated %s", app.ID)
+			}
+			seen[app.ID] = struct{}{}
+			out = append(out, app)
+		}
+		if len(page) < appListPageSize {
+			return out, nil
+		}
+		last := page[len(page)-1]
+		if last == nil || last.CreatedAt == nil || last.ID == "" {
+			return nil, errors.New("controller: app list page missing cursor")
+		}
+		nextBefore := last.CreatedAt.UTC().Format(time.RFC3339Nano)
+		if nextBefore == before && last.ID == beforeID {
+			return nil, errors.New("controller: app list cursor did not advance")
+		}
+		before, beforeID = nextBefore, last.ID
+	}
 }
 
 // ArtifactList returns a list of all artifacts
