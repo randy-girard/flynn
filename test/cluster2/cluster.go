@@ -230,6 +230,8 @@ func bootCluster(c *BootConfig, cluster *Cluster, manifest io.Reader, log log15.
 	bootstrapArgs := []string{
 		"--min-hosts", strconv.Itoa(c.Size),
 		"--peer-ips", strings.Join(peerIPs, ","),
+		"--admin-email", "admin@" + domain,
+		"--admin-password", "flynn-dev",
 	}
 	jobTimeout := 120
 	if !c.UseKVM {

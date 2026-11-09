@@ -144,9 +144,13 @@ main() {
   info "bootstrapping Flynn"
   export CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-"${size}.localflynn.com"}"
   export DISCOVERD="$(join "," ${ips[@]/%/:1111})"
+  local admin_email="${FLYNN_ADMIN_EMAIL:-admin@${CLUSTER_DOMAIN}}"
+  local admin_password="${FLYNN_ADMIN_PASSWORD:-flynn-dev}"
   local flags=(
     "--min-hosts=${size}"
     "--peer-ips=$(join "," ${ips[@]})"
+    "--admin-email=${admin_email}"
+    "--admin-password=${admin_password}"
   )
   if [[ -n "${backup}" ]]; then
     flags+=("--from-backup=${backup}")

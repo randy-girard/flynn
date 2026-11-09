@@ -759,6 +759,10 @@ if ! grep -Fq 'unmounting leftover Flynn volumes' "${ROOT}/script/kill-flynn"; t
   echo "kill-flynn must unmount leftover zfs/overlay mounts before start-all destroy-volumes" >&2
   exit 1
 fi
+if ! grep -Fq 'find "${ROOT}/host" -name '"'"'*.go'"'"' -newer "${flynn_host}"' "${ROOT}/script/build-flynn"; then
+  echo "build-flynn must rebuild flynn-host when host Go sources are newer than the binary" >&2
+  exit 1
+fi
 if ! grep -Fq 'startStopDaemonRestartScript' "${ROOT}/host/cli/github_updater.go"; then
   echo "flynn-host update must restart start-stop-daemon when the builder runs start-all" >&2
   exit 1

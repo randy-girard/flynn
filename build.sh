@@ -533,6 +533,10 @@ default_builder_max_retries() {
 run_flynn_builder_only() {
   local only="$1"
   local concurrency="$2"
+  # Standalone phases (./build.sh test) do not pass through run_phase_start,
+  # which is the other caller. The bootstrapped host rejects unauthenticated
+  # AddJob once configure-host-auth has written /etc/flynn/host.json.
+  export_host_json_secrets
   local max_retries
   max_retries="$(default_builder_max_retries)"
   local gomemlimit
