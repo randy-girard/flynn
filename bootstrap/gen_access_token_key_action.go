@@ -15,9 +15,9 @@ func init() {
 // GenAccessTokenKeyAction generates the ECDSA P-256 keypair used to sign and
 // verify build access tokens. The public half (PublicKey) is distributed to the
 // controller and tarreceive as ACCESS_TOKEN_KEY so they can verify tokens; the
-// private half (PrivateKey) is distributed only to the trusted gitreceive app
-// as ACCESS_TOKEN_SIGNING_KEY so it alone can mint short-lived, app-scoped
-// build tokens. Design notes live in the workspace file
+// private half (PrivateKey) is distributed to gitreceive and taffy as
+// ACCESS_TOKEN_SIGNING_KEY. Both exec flynn-receiver and mint short-lived,
+// app-scoped build tokens. Design notes live in the workspace file
 // .plans/scoped-build-tokens.md (outside this repo).
 type GenAccessTokenKeyAction struct {
 	ID string `json:"id"`

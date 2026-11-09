@@ -2,6 +2,25 @@ package accesstoken
 
 import "testing"
 
+func TestUpdateTaffyMintsWithTheClusterPair(t *testing.T) {
+	ResetPairForTest()
+	gitEnv := map[string]string{}
+	if _, err := Update("gitreceive", gitEnv); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{}
+	updated, err := Update("taffy", env)
+	if err != nil || !updated {
+		t.Fatalf("updated=%v err=%v", updated, err)
+	}
+	if env["ACCESS_TOKEN_KEY"] != gitEnv["ACCESS_TOKEN_KEY"] || env["ACCESS_TOKEN_SIGNING_KEY"] != gitEnv["ACCESS_TOKEN_SIGNING_KEY"] {
+		t.Fatalf("taffy keys = %#v, gitreceive = %#v", env, gitEnv)
+	}
+	if env["ACCESS_TOKEN_SIGNING_KEY"] == "" {
+		t.Fatal("taffy runs flynn-receiver and must hold the signing key")
+	}
+}
+
 func TestUpdateNilEnvAndUnknownApp(t *testing.T) {
 	updated, err := Update("gitreceive", nil)
 	if err != nil || updated {

@@ -122,8 +122,12 @@ func EnsureReleaseAuthEnv(appName string, env map[string]string, s ClusterSecret
 	case "router", "acme", "letsencrypt":
 		changed = setIfEmpty(env, "AUTH_KEY", s.ControllerKey) || changed
 		return EnsureApplianceControllerKey(env, s.ControllerKey) || changed
+	case "taffy":
+		changed = setIfEmpty(env, "ACCESS_TOKEN_KEY", s.AccessTokenKey) || changed
+		changed = setIfEmpty(env, "ACCESS_TOKEN_SIGNING_KEY", s.AccessTokenSigningKey) || changed
+		return EnsureApplianceControllerKey(env, s.ControllerKey) || changed
 	default:
-		// postgres, redis-* appliances, taffy, gitreceive, logaggregator, plugins
+		// postgres, redis-* appliances, gitreceive, logaggregator, plugins
 		return EnsureApplianceControllerKey(env, s.ControllerKey) || changed
 	}
 }

@@ -5,7 +5,7 @@ import (
 )
 
 // pair holds the cluster access-token keypair for the duration of one updater
-// run so controller, tarreceive, and gitreceive releases share the same keys.
+// run so controller, tarreceive, gitreceive, and taffy releases share the same keys.
 var pair struct {
 	public, private string
 	ok              bool
@@ -55,6 +55,8 @@ func Update(appName string, env map[string]string) (bool, error) {
 	switch appName {
 	case "gitreceive":
 		return updateGitreceive(env)
+	case "taffy":
+		return updateTaffy(env)
 	case "controller":
 		return updateController(env)
 	case "tarreceive", "blobstore":
@@ -62,6 +64,26 @@ func Update(appName string, env map[string]string) (bool, error) {
 	default:
 		return false, nil
 	}
+}
+
+// updateTaffy copies the cluster signing pair onto taffy. taffy execs
+// flynn-receiver, which mints the scoped build token, so it needs the same
+// pair as gitreceive. A pair already cached from gitreceive wins over a
+// different pair stored on taffy.
+func updateTaffy(env map[string]string) (bool, error) {
+	if pair.ok {
+		changed := false
+		if env["ACCESS_TOKEN_KEY"] != pair.public {
+			env["ACCESS_TOKEN_KEY"] = pair.public
+			changed = true
+		}
+		if env["ACCESS_TOKEN_SIGNING_KEY"] != pair.private {
+			env["ACCESS_TOKEN_SIGNING_KEY"] = pair.private
+			changed = true
+		}
+		return changed, nil
+	}
+	return updateGitreceive(env)
 }
 
 func updateGitreceive(env map[string]string) (bool, error) {

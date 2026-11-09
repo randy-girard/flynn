@@ -59,6 +59,25 @@ func TestEnsureReleaseAuthEnvStatusDoesNotStealAuthKey(t *testing.T) {
 	}
 }
 
+func TestEnsureReleaseAuthEnvTaffyCanMint(t *testing.T) {
+	s := ClusterSecrets{
+		ControllerKey:         "ck",
+		DiscoverdAuthKey:      "dk",
+		AccessTokenKey:        "pub",
+		AccessTokenSigningKey: "priv",
+	}
+	env := map[string]string{}
+	if !EnsureReleaseAuthEnv("taffy", env, s) {
+		t.Fatal("expected change")
+	}
+	if env["ACCESS_TOKEN_KEY"] != "pub" || env["ACCESS_TOKEN_SIGNING_KEY"] != "priv" || env["CONTROLLER_KEY"] != "ck" || env["DISCOVERD_AUTH_KEY"] != "dk" {
+		t.Fatalf("%v", env)
+	}
+	if _, ok := env["AUTH_KEY"]; ok {
+		t.Fatal("taffy must not get AUTH_KEY")
+	}
+}
+
 func TestEnsureReleaseAuthEnvPostgresAndRedis(t *testing.T) {
 	s := ClusterSecrets{ControllerKey: "ck", DiscoverdAuthKey: "dk"}
 	for _, name := range []string{"postgres", "redis-abc", "taffy"} {

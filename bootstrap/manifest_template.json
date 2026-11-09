@@ -573,6 +573,8 @@
       "env": {
         "CONTROLLER_KEY": "{{ (index .StepData \"controller-key\").Data }}",
         "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}",
+        "ACCESS_TOKEN_KEY": "{{ (index .StepData \"access-token-key\").PublicKey }}",
+        "ACCESS_TOKEN_SIGNING_KEY": "{{ (index .StepData \"access-token-key\").PrivateKey }}",
         "SLUGBUILDER_24_IMAGE_ID": "{{ (index .StepData \"slugbuilder-24-image\").ID }}",
         "SLUGRUNNER_24_IMAGE_ID": "{{ (index .StepData \"slugrunner-24-image\").ID }}",
         "DOCKERBUILDER_24_IMAGE_ID": "{{ (index .StepData \"dockerbuilder-24-image\").ID }}"

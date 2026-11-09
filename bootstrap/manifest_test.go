@@ -28,6 +28,27 @@ func TestGenRandomDiscoverdAuthKeySetsEnv(t *testing.T) {
 	}
 }
 
+func TestTaffyReleaseCanMintBuildTokens(t *testing.T) {
+	data, err := os.ReadFile("manifest_template.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	i := strings.Index(s, `"id": "taffy"`)
+	if i < 0 {
+		t.Fatal("missing taffy step")
+	}
+	rest := s[i:]
+	if j := strings.Index(rest[len(`"id": "taffy"`):], `"id":`); j >= 0 {
+		rest = rest[:len(`"id": "taffy"`)+j]
+	}
+	for _, key := range []string{"ACCESS_TOKEN_KEY", "ACCESS_TOKEN_SIGNING_KEY"} {
+		if !strings.Contains(rest, key) {
+			t.Fatalf("taffy runs flynn-receiver and needs %s in its release env", key)
+		}
+	}
+}
+
 func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 	data, err := os.ReadFile("manifest_template.json")
 	if err != nil {
