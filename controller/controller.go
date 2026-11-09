@@ -291,8 +291,11 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.POST("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.RunJob)))
 	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.GetJob))
 	httpRouter.PUT("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.PutJob))
+	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id/output", httphelper.WrapHandler(api.appLookup(api.GetJobOutput)))
 	httpRouter.GET("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.ListJobs)))
 	httpRouter.DELETE("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.appLookup(api.KillJob)))
+	httpRouter.GET("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.GetReleaseOutput)))
+	httpRouter.PUT("/apps/:apps_id/releases/:releases_id/output", httphelper.WrapHandler(api.appLookup(api.PutReleaseOutput)))
 	httpRouter.GET("/active-jobs", httphelper.WrapHandler(api.ListActiveJobs))
 
 	httpRouter.POST("/apps/:apps_id/deploy", httphelper.WrapHandler(api.appLookup(api.CreateDeployment)))
@@ -538,11 +541,14 @@ type controllerAPI struct {
 	githubPluginURL      string
 	clusterClient        utils.ClusterClient
 	logaggc              logClient
-	que                  *que.Client
-	caCert               []byte
-	config               handlerConfig
-	authorizer           *authorizer.Authorizer
-	tokenSigner          *tokensigner.Signer
+	// archiveOutputSync stores deploy output before PutJob returns.
+	// Production leaves it false and archives in the background.
+	archiveOutputSync bool
+	que               *que.Client
+	caCert            []byte
+	config            handlerConfig
+	authorizer        *authorizer.Authorizer
+	tokenSigner       *tokensigner.Signer
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

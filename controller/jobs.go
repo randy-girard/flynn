@@ -115,6 +115,7 @@ func (c *controllerAPI) PutJob(ctx context.Context, w http.ResponseWriter, req *
 		respondWithError(w, err)
 		return
 	}
+	c.maybeArchiveJobOutput(&job)
 	httphelper.JSON(w, 200, &job)
 }
 
@@ -155,6 +156,7 @@ func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req 
 				respondWithError(w, err)
 				return
 			}
+			c.maybeArchiveJobOutput(job)
 			w.WriteHeader(200)
 			return
 		}

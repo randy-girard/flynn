@@ -114,6 +114,13 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_read_cannot_github_deploy", appRead, http.MethodPost, "/apps/app-1/github/deploy", false},
 
 		{"logs_read_can_get_log", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:logs:read"}}}}, http.MethodGet, "/apps/app-1/log", true},
+		{"logs_read_can_get_job_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:logs:read"}}}}, http.MethodGet, "/apps/app-1/jobs/job-1/output", true},
+		{"logs_read_can_get_release_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:logs:read"}}}}, http.MethodGet, "/apps/app-1/releases/rel-1/output", true},
+		{"logs_read_cannot_put_release_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:logs:read"}}}}, http.MethodPut, "/apps/app-1/releases/rel-1/output", false},
+		{"jobs_read_cannot_get_job_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:jobs:read"}}}}, http.MethodGet, "/apps/app-1/jobs/job-1/output", false},
+		{"activity_read_cannot_get_release_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:activity:read"}}}}, http.MethodGet, "/apps/app-1/releases/rel-1/output", false},
+		{"app_write_can_put_release_output", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:write"}}}}, http.MethodPut, "/apps/app-1/releases/rel-1/output", true},
+		{"app_read_cannot_put_release_output", appRead, http.MethodPut, "/apps/app-1/releases/rel-1/output", false},
 		{"logs_read_cannot_get_metrics", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:logs:read"}}}}, http.MethodGet, "/apps/app-1/jobs-stats", false},
 		{"scale_write_can_put_formation", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:scale:write"}}}}, http.MethodPut, "/apps/app-1/formations/rel-1", true},
 		{"scale_write_cannot_deploy", &authorizer.Token{AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:scale:write"}}}}, http.MethodPost, "/apps/app-1/deploy", false},

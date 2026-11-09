@@ -1347,6 +1347,24 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE runtime_settings ALTER COLUMN max_processes DROP NOT NULL`,
 		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_max_processes_check CHECK (max_processes IS NULL OR max_processes >= 1)`,
 	)
+	// Gzipped stdout for one-shot build/release/postdeploy jobs, and the
+	// git-push transcript for a release. Kept off job_cache and releases so
+	// job list and release list do not load the blob, and off the blobstore
+	// so slug GC cannot delete it. Any controller reads the same rows.
+	migrations.Add(80,
+		`CREATE TABLE job_output (
+    job_id uuid PRIMARY KEY REFERENCES job_cache (job_id) ON DELETE CASCADE,
+    body bytea NOT NULL,
+    plain_bytes integer NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+)`,
+		`CREATE TABLE release_output (
+    release_id uuid PRIMARY KEY REFERENCES releases (release_id) ON DELETE CASCADE,
+    body bytea NOT NULL,
+    plain_bytes integer NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

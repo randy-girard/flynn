@@ -67,6 +67,9 @@ type Client interface {
 	GetArtifact(artifactID string) (*ct.Artifact, error)
 	GetApp(appID string) (*ct.App, error)
 	GetAppLog(appID string, options *logagg.LogOpts) (io.ReadCloser, error)
+	// PutReleaseOutput stores the git-push transcript for a release. The body
+	// is plain text. The controller keeps a gzipped copy any node can read.
+	PutReleaseOutput(appID, releaseID string, body []byte) error
 	StreamAppLog(appID string, options *logagg.LogOpts, output chan<- *ct.SSELogChunk) (stream.Stream, error)
 	GetDeployment(deploymentID string) (*ct.Deployment, error)
 	CreateDeployment(appID, releaseID string) (*ct.Deployment, error)

@@ -414,6 +414,19 @@ func TestIsInternalProcessType(t *testing.T) {
 	}
 }
 
+func TestArchivesJobOutput(t *testing.T) {
+	for _, name := range []string{"slugbuilder", "SlugBuilder", "slugbuilder-24", "dockerbuilder", "dockerbuilder-24", "release", "postdeploy", "Postdeploy"} {
+		if !ArchivesJobOutput(name) {
+			t.Fatalf("%q must be stored when the job stops", name)
+		}
+	}
+	for _, name := range []string{"web", "worker", "run", "runner", "console", "slugrunner", "slugrunner-24", "flynn-app-json", ""} {
+		if ArchivesJobOutput(name) {
+			t.Fatalf("%q must not be stored as deploy output", name)
+		}
+	}
+}
+
 func TestAppIsBuilding(t *testing.T) {
 	if AppIsBuilding([]*Job{{Type: "web", State: JobStateUp}}) {
 		t.Fatal("user jobs are not a git-push build")

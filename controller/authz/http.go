@@ -395,6 +395,9 @@ func appSubPerm(method string, rest []string) string {
 		}
 		return PermAppScaleRead
 	case "jobs":
+		if len(rest) >= 3 && rest[2] == "output" && (method == http.MethodGet || method == http.MethodHead) {
+			return PermAppLogsRead
+		}
 		switch method {
 		case http.MethodPost, http.MethodPut, http.MethodPatch:
 			return PermAppJobsRun
@@ -415,6 +418,12 @@ func appSubPerm(method string, rest []string) string {
 		}
 		return ""
 	case "releases":
+		if len(rest) >= 3 && rest[2] == "output" {
+			if write {
+				return PermAppWrite
+			}
+			return PermAppLogsRead
+		}
 		if write {
 			return PermAppWrite
 		}

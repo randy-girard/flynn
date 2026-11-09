@@ -78,6 +78,10 @@ var preparedStatements = map[string]string{
 	"job_select":                               jobSelectQuery,
 	"job_insert":                               jobInsertQuery,
 	"job_volume_insert":                        jobVolumeInsertQuery,
+	"job_output_upsert":                        jobOutputUpsertQuery,
+	"job_output_select":                        jobOutputSelectQuery,
+	"release_output_upsert":                    releaseOutputUpsertQuery,
+	"release_output_select":                    releaseOutputSelectQuery,
 	"provider_list":                            providerListQuery,
 	"provider_select_by_name":                  providerSelectByNameQuery,
 	"provider_select_by_name_or_id":            providerSelectByNameOrIDQuery,
@@ -686,6 +690,24 @@ RETURNING created_at, updated_at`
 INSERT INTO job_volumes (job_id, volume_id, index) VALUES ($1, $2, $3)
 ON CONFLICT ON CONSTRAINT job_volumes_pkey DO UPDATE SET index = $3
 	`
+	// A later capture replaces the row only when it has more plain text, so
+	// an empty or partial read cannot wipe a longer one.
+	jobOutputUpsertQuery = `
+INSERT INTO job_output (job_id, body, plain_bytes)
+VALUES ($1, $2, $3)
+ON CONFLICT (job_id) DO UPDATE
+SET body = EXCLUDED.body, plain_bytes = EXCLUDED.plain_bytes, created_at = now()
+WHERE job_output.plain_bytes < EXCLUDED.plain_bytes`
+	jobOutputSelectQuery = `
+SELECT body FROM job_output WHERE job_id = $1`
+	releaseOutputUpsertQuery = `
+INSERT INTO release_output (release_id, body, plain_bytes)
+VALUES ($1, $2, $3)
+ON CONFLICT (release_id) DO UPDATE
+SET body = EXCLUDED.body, plain_bytes = EXCLUDED.plain_bytes, created_at = now()
+WHERE release_output.plain_bytes < EXCLUDED.plain_bytes`
+	releaseOutputSelectQuery = `
+SELECT body FROM release_output WHERE release_id = $1`
 	providerListQuery = `
 SELECT provider_id, name, url, tenant_safe, created_at, updated_at
 FROM providers WHERE deleted_at IS NULL ORDER BY created_at DESC`

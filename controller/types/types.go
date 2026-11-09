@@ -453,6 +453,17 @@ func IsBuilderProcessType(name string) bool {
 	return false
 }
 
+// ArchivesJobOutput reports a one-shot deploy job whose stdout should be
+// kept in the controller database after the in-memory log moves on.
+// slugrunner and long-running app processes are not archived.
+func ArchivesJobOutput(name string) bool {
+	if IsBuilderProcessType(name) {
+		return true
+	}
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == ProcessTypeRelease || n == ProcessTypePostdeploy
+}
+
 func JobIsRunning(j *Job) bool {
 	if j == nil {
 		return false
@@ -773,9 +784,10 @@ const (
 
 // Process type names for one-off jobs created with POST /apps/:id/jobs.
 const (
-	ProcessTypeRunner  = "runner"  // detached one-off (`flynn run -d`, dashboard Run command)
-	ProcessTypeConsole = "console" // attached TTY (`flynn run`, dashboard Console)
-	ProcessTypeRelease = "release" // Procfile release phase (migrations); one-shot per deploy
+	ProcessTypeRunner     = "runner"     // detached one-off (`flynn run -d`, dashboard Run command)
+	ProcessTypeConsole    = "console"    // attached TTY (`flynn run`, dashboard Console)
+	ProcessTypeRelease    = "release"    // Procfile release phase (migrations); one-shot per deploy
+	ProcessTypePostdeploy = "postdeploy" // flynn-app.json postdeploy; one-shot per deploy
 )
 
 type NewJob struct {

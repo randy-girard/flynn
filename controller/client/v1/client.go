@@ -594,6 +594,17 @@ func (c *Client) GetAppLog(appID string, opts *logagg.LogOpts) (io.ReadCloser, e
 	return res.Body, nil
 }
 
+// PutReleaseOutput stores the git-push transcript for a release.
+func (c *Client) PutReleaseOutput(appID, releaseID string, body []byte) error {
+	path := fmt.Sprintf("/apps/%s/releases/%s/output", appID, releaseID)
+	header := http.Header{"Content-Type": []string{"text/plain; charset=utf-8"}}
+	res, err := c.RawReq("PUT", path, header, bytes.NewReader(body), nil)
+	if res != nil && res.Body != nil {
+		res.Body.Close()
+	}
+	return err
+}
+
 // StreamAppLog is the same as GetAppLog but returns log lines via an SSE stream
 func (c *Client) StreamAppLog(appID string, opts *logagg.LogOpts, output chan<- *ct.SSELogChunk) (stream.Stream, error) {
 	path := fmt.Sprintf("/apps/%s/log", appID)
