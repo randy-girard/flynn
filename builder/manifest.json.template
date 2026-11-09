@@ -414,7 +414,9 @@
             "slugbuilder/builder/flynn-heroku-go-common-overrides.sh",
             "slugbuilder/builder/patch-heroku-go-multiarch.sh",
             "slugbuilder/builder/flynn-python-sqlite3.sh",
-            "slugbuilder/builder/patch-heroku-python-sqlite.sh"
+            "slugbuilder/builder/patch-heroku-python-sqlite.sh",
+            "slugbuilder/builder/patch-staticfile-go-arm64.sh",
+            "slugbuilder/builder/staticfile-install-go.flynn.sh"
           ]
         },
         {

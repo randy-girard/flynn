@@ -67,6 +67,8 @@ Scripts live under `script/vagrant/` (shared `lib/`, smoke lifecycle in `smoke-e
 
 On **aarch64** VMs (Apple Silicon), cluster nodes install `qemu-user-static` **9+** during install, reload, and update so x86_64 Heroku buildpack binaries (including Node 24) can run inside slugbuilder. Ubuntu 24.04's qemu 8.2 crashes Node (`QEMU internal SIGSEGV {code=MAPERR, addr=0x20}`). The heroku-24 image on that architecture also installs amd64 glibc. Rebuild images after pulling the glibc change, then `script/vagrant.sh update` (or `bootstrap` on a new cluster). After a qemu-user upgrade, re-register binfmt on every node (`ensure-qemu-binfmt.sh`); `git push` prints a qemu-mode notice on arm64 hosts.
 
+The staticfile buildpack compiles its supply program with Go. On arm64 that compile uses the official linux-arm64 Go 1.23.4 toolchain (`GOTOOLCHAIN=local`). The upstream linux_x64 Go 1.22.5 toolchain fetches another amd64 Go, and qemu-user faults in that runtime's epoll poller. Rebuild slugbuilder after pulling this change. The nginx binary that buildpack installs is still linux-x64. The heroku-24 image installs `libpcre2-8-0:amd64` and `libcrypt1:amd64` so that binary can load under qemu-user. Rebuild slugrunner after pulling those packages.
+
 Laptop `git push` authenticates with `flynn git-credentials`. `cluster:add` records a **native** Flynn CLI (`/usr/local/bin/flynn` after `make vagrant-cli`). Do not point git at `build-dev/bin/flynn`: Vagrant image builds replace that path with a Linux `flynn-linux-*` symlink, which macOS cannot execute.
 
 ```text

@@ -29,6 +29,13 @@ case "$(uname -m)" in
     ;;
 esac
 
+# The bundled staticfile buildpack compiles a Go supply program. On arm64 that
+# program must be built with linux-arm64 Go; the upstream linux_x64 toolchain
+# faults under qemu-user.
+if [[ -x /builder/patch-staticfile-go-arm64.sh ]]; then
+  /builder/patch-staticfile-go-arm64.sh "${buildpack_root}"
+fi
+
 echo_normal() {
   echo $'\e[1G      ' $*
 }

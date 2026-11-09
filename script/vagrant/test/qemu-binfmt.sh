@@ -115,11 +115,23 @@ if grep -qE 'mv[[:space:]]+"\$\{extract_dir\}' "${ROOT}/slugbuilder/builder/flyn
 fi
 need "${ROOT}/slugbuilder/img/packages.sh" 'patch-heroku-python-sqlite.sh' \
   "slugbuilder image build must run the python sqlite3 aarch64 patch"
+need "${ROOT}/slugbuilder/builder/staticfile-install-go.flynn.sh" 'linux-arm64' \
+  "staticfile supply must compile with linux-arm64 Go on arm64"
+need "${ROOT}/slugbuilder/builder/build.sh" 'patch-staticfile-go-arm64.sh' \
+  "slugbuilder compile must install the arm64 staticfile Go toolchain"
+need "${ROOT}/slugbuilder/img/packages.sh" 'patch-staticfile-go-arm64.sh' \
+  "slugbuilder image build must patch the staticfile Go toolchain"
+need "${manifest}" 'staticfile-install-go.flynn.sh' \
+  "slugbuilder-24 layer inputs must include the staticfile Go toolchain"
 need "${ROOT}/builder/img/heroku-24.sh" 'libsqlite3-0' \
   "heroku-24 must ship libsqlite3 so Python stdlib sqlite3 works"
 need "${ROOT}/builder/img/heroku-24-build.sh" 'libsqlite3-dev' \
   "heroku-24-build must ship sqlite headers for the python buildpack vendor step"
 need "${userland}" 'libsqlite3-0:amd64' \
   "aarch64 heroku-24 must install amd64 libsqlite3 for qemu x86_64 Python"
+need "${userland}" 'libpcre2-8-0:amd64' \
+  "aarch64 heroku-24 must install amd64 libpcre2 for the staticfile nginx"
+need "${userland}" 'libcrypt1:amd64' \
+  "aarch64 heroku-24 must install amd64 libcrypt for the staticfile nginx"
 
 echo "ok aarch64 qemu-user binfmt + heroku-24 amd64 userland"

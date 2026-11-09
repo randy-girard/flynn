@@ -102,7 +102,9 @@ apt-get install -y --no-install-recommends \
   zlib1g:amd64 \
   libssl3:amd64 \
   libsqlite3-0:amd64 \
-  libsqlite3-dev:amd64
+  libsqlite3-dev:amd64 \
+  libpcre2-8-0:amd64 \
+  libcrypt1:amd64
 
 if [[ ! -e /lib64/ld-linux-x86-64.so.2 ]] && [[ ! -e /usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2 ]]; then
   echo "amd64-qemu-userland: amd64 dynamic linker missing after install" >&2

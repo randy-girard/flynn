@@ -26,5 +26,10 @@ if [[ -x /builder/patch-heroku-python-sqlite.sh ]]; then
   /builder/patch-heroku-python-sqlite.sh /builder/flynn-python-sqlite3.sh
 fi
 
+chmod +x /builder/patch-staticfile-go-arm64.sh 2>/dev/null || true
+if [[ -x /builder/patch-staticfile-go-arm64.sh ]]; then
+  /builder/patch-staticfile-go-arm64.sh /builder/buildpacks
+fi
+
 # allow custom buildpack install by unprivileged user
 chmod ugo+w /builder/buildpacks
