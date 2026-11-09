@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -19,11 +20,12 @@ var _ = c.ConcurrentSuite(&PostgresSuite{})
 
 // Check postgres config to avoid regressing on https://github.com/randy-girard/flynn/issues/101
 func (s *PostgresSuite) TestSSLRenegotiationLimit(t *c.C) {
-	query := flynn(t, "/", "-a", "controller", "pg", "psql", "--", "-c", "SHOW ssl_renegotiation_limit")
+	query := run(t, exec.Command("flynn-host", "pg:psql", "--", "-c", "SHOW ssl_renegotiation_limit"))
 	t.Assert(query, SuccessfulOutputContains, "ssl_renegotiation_limit \n-------------------------\n 0\n(1 row)")
 }
 
 func (s *PostgresSuite) TestDumpRestore(t *c.C) {
+	s.skipUnlessProvider(t, "postgres")
 	r := s.newGitRepo(t, "empty")
 	t.Assert(r.flynn("create"), Succeeds)
 

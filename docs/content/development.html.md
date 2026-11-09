@@ -105,6 +105,9 @@ is `build.sh` on the builder. Layer squashfs is written on the VM’s local disk
 still land in the Vagrant share so you can inspect them from the laptop. It does **not** build cluster-test images
 (`test`, `test-apps` including MinIO, `controller-examples`). Those are only
 for the `test/` integration suite; add `./build.sh test` if you need them.
+A previous `build/image/*.json` is not a reason to skip that image: layer IDs
+are hashes of the current inputs, and an unchanged squashfs is reused from
+`/var/lib/flynn/layer-cache`.
 First time, or after Ubuntu/base-package changes:
 
 ```
@@ -327,7 +330,12 @@ $ script/run-integration-tests
 ```
 
 That builds Flynn (including `flynn-test` host binaries), bootstraps a cluster
-(`script/bootstrap-flynn`), and runs `bin/flynn-test`. Filter:
+(`script/bootstrap-flynn`), and runs `bin/flynn-test`. Bootstrap creates the
+first administrator as `admin@<domain>` with password `flynn-dev` unless
+`FLYNN_ADMIN_EMAIL` and `FLYNN_ADMIN_PASSWORD` are set. The test job logs in
+as that administrator and receives `CONTROLLER_KEY` from the running controller
+job. When `test/apps` is newer than `build/image/test-apps.json`, the runner
+builds the cluster-test images before the suite. Filter:
 
 ```
 $ script/run-integration-tests -f 'RouterSuite\\.TestAdditionalHttpPorts'

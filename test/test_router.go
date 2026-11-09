@@ -44,7 +44,7 @@ func (s *RouterSuite) TestAdditionalHttpPorts(t *c.C) {
 	res.Body.Close()
 
 	// add a controller route on the new port
-	t.Assert(x.flynn("/", "-a", appName, "route", "add", "http", "-s", appName+"-web", "-p", "8080", appName+"."+x.Domain), Succeeds)
+	t.Assert(x.flynn("/", "-a", appName, "route:add", "http", "-s", appName+"-web", "-p", "8080", appName+"."+x.Domain), Succeeds)
 
 	// The router API does not currently give us a synchronous result on
 	// "route add", so we must pause for a moment to let it catch up. This seems
@@ -85,7 +85,7 @@ func (s *RouterSuite) TestAdditionalHttpPorts(t *c.C) {
 	t.Assert(err, c.IsNil)
 	keyPath, err := writeTemp(cert.PrivateKey, "tls-key")
 	t.Assert(err, c.IsNil)
-	certRoute := x.flynn("/", "-a", appName, "route", "add", "http", "-s", appName+"-web", "-p", "8081", "--tls-cert", certPath, "--tls-key", keyPath, appName+"."+x.Domain)
+	certRoute := x.flynn("/", "-a", appName, "route:add", "http", "-s", appName+"-web", "-p", "8081", "--tls-cert", certPath, "--tls-key", keyPath, appName+"."+x.Domain)
 	t.Assert(certRoute, Succeeds)
 
 	// pause to allow router to catch up (see above)

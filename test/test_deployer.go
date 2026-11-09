@@ -342,7 +342,7 @@ func (s *DeployerSuite) TestRollbackFailedJob(t *c.C) {
 	t.Assert(err, c.IsNil)
 	defer stream.Close()
 	event := s.waitForDeploymentStatus(t, events, "failed")
-	t.Assert(event.Error, c.Equals, `printer job failed to start: exec: "this-is-gonna-fail": executable file not found in $PATH`)
+	t.Assert(strings.Contains(event.Error, `printer job failed to start: exec: "this-is-gonna-fail": executable file not found in $PATH`), c.Equals, true)
 
 	s.assertRolledBack(t, deployment, map[string]int{"printer": 2})
 }

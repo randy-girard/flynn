@@ -47,7 +47,7 @@ func (s *CLISuite) flynn(t *c.C, args ...string) *CmdResult {
 func (s *CLISuite) TestCreateAppNoGit(t *c.C) {
 	dir := t.MkDir()
 	name := random.String(30)
-	t.Assert(flynn(t, dir, "create", name), Outputs, fmt.Sprintf("Created %s\n", name))
+	t.Assert(flynn(t, dir, "create", name), SuccessfulOutputContains, fmt.Sprintf("Created %s\n", name))
 }
 
 func testApp(s *CLISuite, t *c.C, remote string) {
@@ -56,9 +56,9 @@ func testApp(s *CLISuite, t *c.C, remote string) {
 	flynnRemote := fmt.Sprintf("%s\t%s/%s.git (push)", remote, s.clusterConf(t).GitURL, name)
 
 	if remote == "flynn" {
-		t.Assert(app.flynn("create", "-y", name), Outputs, fmt.Sprintf("Created %s\n", name))
+		t.Assert(app.flynn("create", "-y", name), SuccessfulOutputContains, fmt.Sprintf("Created %s\n", name))
 	} else {
-		t.Assert(app.flynn("create", "-r", remote, "-y", name), Outputs, fmt.Sprintf("Created %s\n", name))
+		t.Assert(app.flynn("create", "-r", remote, "-y", name), SuccessfulOutputContains, fmt.Sprintf("Created %s\n", name))
 	}
 	t.Assert(app.flynn("apps"), SuccessfulOutputContains, name)
 	t.Assert(app.flynn("-c", "default", "apps"), SuccessfulOutputContains, name)
@@ -68,9 +68,9 @@ func testApp(s *CLISuite, t *c.C, remote string) {
 		t.Assert(app.git("remote", "-v"), SuccessfulOutputContains, flynnRemote)
 	}
 
-	// make sure flynn components are listed
-	t.Assert(app.flynn("apps"), SuccessfulOutputContains, "router")
-	t.Assert(app.flynn("-c", "default", "apps"), SuccessfulOutputContains, "router")
+	// Platform apps stay off the default list. --all is the operator catalog.
+	t.Assert(app.flynn("apps", "--all"), SuccessfulOutputContains, "router")
+	t.Assert(app.flynn("-c", "default", "apps", "--all"), SuccessfulOutputContains, "router")
 
 	// flynn delete
 	if remote == "flynn" {
@@ -241,20 +241,22 @@ func (s *CLISuite) TestRun(t *c.C) {
 	// this shouldn't be logged
 	t.Assert(app.sh("echo foo"), Outputs, "foo\n")
 	// drain the events
-	app.waitFor(ct.JobEvents{"": {ct.JobStateDown: 1}})
+	app.waitFor(ct.JobEvents{ct.ProcessTypeConsole: {ct.JobStateDown: 1}})
 
 	// this should be logged due to the --enable-log flag
-	t.Assert(app.flynn("run", "--enable-log", "echo", "hello"), Outputs, "hello\n")
-	app.waitFor(ct.JobEvents{"": {ct.JobStateDown: 1}})
+	t.Assert(app.flynn("run", "--enable-log", "echo", "hello"), SuccessfulOutputContains, "hello\n")
+	app.waitFor(ct.JobEvents{ct.ProcessTypeConsole: {ct.JobStateDown: 1}})
 
 	detached := app.flynn("run", "-d", "echo", "world")
 	t.Assert(detached, Succeeds)
 	t.Assert(detached, c.Not(Outputs), "world\n")
 
 	id := strings.TrimSpace(detached.Output)
-	jobID := app.waitFor(ct.JobEvents{"": {ct.JobStateDown: 1}})
+	jobID := app.waitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateDown: 1}})
 	t.Assert(jobID, c.Equals, id)
-	t.Assert(app.flynn("log", "--raw-output"), Outputs, "hello\nworld\n")
+	runLog := app.flynn("log", "--raw-output")
+	t.Assert(runLog, SuccessfulOutputContains, "hello\n")
+	t.Assert(runLog, SuccessfulOutputContains, "world\n")
 
 	// test stdin and stderr
 	streams := app.flynnCmd("run", "sh", "-c", "cat 1>&2")
@@ -269,8 +271,8 @@ func (s *CLISuite) TestRun(t *c.C) {
 	streams.Stderr = &stderr
 	streams.Stdout = &stdout
 	t.Assert(streams.Run(), c.IsNil)
-	t.Assert(stderr.String(), c.Equals, "goto stderr")
-	t.Assert(stdout.String(), c.Equals, "")
+	t.Assert(strings.Contains(stderr.String(), "goto stderr"), c.Equals, true)
+	t.Assert(strings.Contains(stdout.String(), "goto stderr"), c.Equals, false)
 
 	// test exit code
 	exit := app.sh("exit 42")
@@ -299,10 +301,20 @@ func (s *CLISuite) TestRunSignal(t *c.C) {
 		}
 	}
 	var out bytes.Buffer
+	var errBuf bytes.Buffer
 	cmd := app.flynnCmd("run", "/bin/signal")
 	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
 	t.Assert(cmd.Start(), c.IsNil)
-	app.waitForService("signal-service")
+	// A one-off user job cannot register with discoverd. Readiness is the
+	// process reaching its signal wait.
+	deadline := time.Now().Add(30 * time.Second)
+	for !strings.Contains(out.String()+errBuf.String(), "waiting for signal") {
+		if time.Now().After(deadline) {
+			t.Fatalf("signal job did not become ready: stdout=%q stderr=%q", out.String(), errBuf.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	t.Assert(cmd.Process.Signal(syscall.SIGINT), c.IsNil)
 	t.Assert(wait(cmd), c.IsNil)
 	t.Assert(out.String(), c.Equals, "got signal: interrupt")
@@ -330,10 +342,10 @@ func (s *CLISuite) TestEnv(t *c.C) {
 	defer app.cleanup()
 	t.Assert(app.flynn("env", "set", "ENV_TEST=var", "SECOND_VAL=2"), Succeeds)
 	t.Assert(app.flynn("env"), SuccessfulOutputContains, "ENV_TEST=var\nSECOND_VAL=2")
-	t.Assert(app.flynn("env", "get", "ENV_TEST"), Outputs, "var\n")
+	t.Assert(app.flynn("env:get", "ENV_TEST"), Outputs, "var\n")
 	t.Assert(app.flynn("env", "set", "-t", "ping", "ENV_TEST=foo"), Succeeds)
-	t.Assert(app.flynn("env", "get", "-t", "ping", "ENV_TEST"), Outputs, "foo\n")
-	t.Assert(app.flynn("env", "get", "ENV_TEST"), Outputs, "var\n")
+	t.Assert(app.flynn("env:get", "-t", "ping", "ENV_TEST"), Outputs, "foo\n")
+	t.Assert(app.flynn("env:get", "ENV_TEST"), Outputs, "var\n")
 	// test that containers do contain the ENV var
 	t.Assert(app.sh("echo $ENV_TEST"), Outputs, "var\n")
 	t.Assert(app.flynn("env", "unset", "ENV_TEST"), Succeeds)
@@ -392,9 +404,9 @@ func (s *CLISuite) TestRoute(t *c.C) {
 
 	// flynn route add http
 	route := random.String(32) + ".dev"
-	newRoute := app.flynn("route", "add", "http", route)
+	newRoute := app.flynn("route:add", "http", route)
 	t.Assert(newRoute, Succeeds)
-	routeID := strings.TrimSpace(newRoute.Output)
+	routeID := firstOutputLine(newRoute.Output)
 	assertRouteContains(routeID, true)
 
 	// ensure sticky and leader flags default to not set
@@ -414,13 +426,13 @@ func (s *CLISuite) TestRoute(t *c.C) {
 
 	// flynn route add http --sticky --leader
 	route = random.String(32) + ".dev"
-	newRoute = app.flynn("route", "add", "http", "--sticky", route, "--leader")
+	newRoute = app.flynn("route:add", "http", "--sticky", route, "--leader")
 	t.Assert(newRoute, Succeeds)
-	routeID = strings.TrimSpace(newRoute.Output)
+	routeID = firstOutputLine(newRoute.Output)
 	assertRouteContains(routeID, true)
 
 	// duplicate http route
-	dupRoute := app.flynn("route", "add", "http", "--sticky", route)
+	dupRoute := app.flynn("route:add", "http", "--sticky", route)
 	t.Assert(dupRoute, c.Not(Succeeds))
 	t.Assert(dupRoute.Output, c.Equals, "conflict: Duplicate route\n")
 
@@ -439,21 +451,21 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(found, c.Equals, true, c.Commentf("didn't find route"))
 
 	// flynn route update --no-sticky
-	newRoute = app.flynn("route", "update", routeID, "--no-sticky")
+	newRoute = app.flynn("route:update", routeID, "--no-sticky")
 	t.Assert(newRoute, Succeeds)
 	r, err := client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
 	t.Assert(r.Sticky, c.Equals, false)
 
 	// flynn route update --no-leader
-	newRoute = app.flynn("route", "update", routeID, "--no-leader")
+	newRoute = app.flynn("route:update", routeID, "--no-leader")
 	t.Assert(newRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
 	t.Assert(r.Leader, c.Equals, false)
 
 	// flynn route update --service
-	newRoute = app.flynn("route", "update", routeID, "--service", "foo")
+	newRoute = app.flynn("route:update", routeID, "--service", "foo")
 	t.Assert(newRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
@@ -461,7 +473,7 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(r.Sticky, c.Equals, false)
 
 	// flynn route update --sticky
-	newRoute = app.flynn("route", "update", routeID, "--sticky")
+	newRoute = app.flynn("route:update", routeID, "--sticky")
 	t.Assert(newRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
@@ -469,67 +481,73 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(r.Service, c.Equals, "foo")
 
 	// flynn route update --leader
-	newRoute = app.flynn("route", "update", routeID, "--leader")
+	newRoute = app.flynn("route:update", routeID, "--leader")
 	t.Assert(newRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
 	t.Assert(r.Leader, c.Equals, true)
 	t.Assert(r.Service, c.Equals, "foo")
 
-	// flynn route add domain path
-	pathRoute := app.flynn("route", "add", "http", route+"/path/")
+	// Path routes are a cluster-admin operation. The Flynn CLI refuses them;
+	// flynn-host route:add is the supported command.
+	hostRouteAdd := func(domain string) *CmdResult {
+		return run(t, exec.Command("flynn-host", "route:add", "http", "--app", app.name, domain))
+	}
+	pathRoute := hostRouteAdd(route + "/path/")
 	t.Assert(pathRoute, Succeeds)
-	pathRouteID := strings.TrimSpace(pathRoute.Output)
+	pathRouteID := firstOutputLine(pathRoute.Output)
 	assertRouteContains(pathRouteID, true)
 
-	// flynn route add domain path duplicate
-	dupRoute = app.flynn("route", "add", "http", route+"/path/")
+	// flynn-host route add domain path duplicate
+	dupRoute = hostRouteAdd(route + "/path/")
 	t.Assert(dupRoute, c.Not(Succeeds))
-	t.Assert(dupRoute.Output, c.Equals, "conflict: Duplicate route\n")
+	t.Assert(dupRoute.Output, Matches, "Duplicate route")
 
-	// flynn route add domain path without trailing should correct to trailing
-	noTrailingRoute := app.flynn("route", "add", "http", route+"/path2")
+	// flynn-host route add domain path without trailing should correct to trailing
+	noTrailingRoute := hostRouteAdd(route + "/path2")
 	t.Assert(noTrailingRoute, Succeeds)
-	noTrailingRouteID := strings.TrimSpace(noTrailingRoute.Output)
+	noTrailingRouteID := firstOutputLine(noTrailingRoute.Output)
 	assertRouteContains(noTrailingRouteID, true)
 	// flynn route should show the corrected trailing path
 	assertRouteContains("/path2/", true)
 
 	// flynn route remove should fail because of dependent route
-	delFail := app.flynn("route", "remove", routeID)
+	delFail := app.flynn("route:remove", routeID)
 	t.Assert(delFail, c.Not(Succeeds))
 
 	// But removing the dependent route and then the default route should work
-	t.Assert(app.flynn("route", "remove", pathRouteID), Succeeds)
+	t.Assert(app.flynn("route:remove", pathRouteID), Succeeds)
 	assertRouteContains(pathRouteID, false)
-	t.Assert(app.flynn("route", "remove", noTrailingRouteID), Succeeds)
+	t.Assert(app.flynn("route:remove", noTrailingRouteID), Succeeds)
 	assertRouteContains(noTrailingRouteID, false)
-	t.Assert(app.flynn("route", "remove", routeID), Succeeds)
+	t.Assert(app.flynn("route:remove", routeID), Succeeds)
 	assertRouteContains(routeID, false)
 
 	// flynn route add tcp
-	tcpRoute := app.flynn("route", "add", "tcp")
+	tcpRoute := app.flynn("route:add", "tcp")
 	t.Assert(tcpRoute, Succeeds)
 	routeID = strings.Split(tcpRoute.Output, " ")[0]
 	assertRouteContains(routeID, true)
 
 	// flynn route add tcp --port
-	portRoute := app.flynn("route", "add", "tcp", "--port", "9999")
+	portRoute := app.flynn("route:add", "tcp", "--port", "9999")
 	t.Assert(portRoute, Succeeds)
-	routeID = strings.Split(portRoute.Output, " ")[0]
-	port := strings.Split(portRoute.Output, " ")[4]
-	t.Assert(port, c.Equals, "9999\n")
+	t.Assert(portRoute, SuccessfulOutputContains, "The cluster firewall will open TCP 9999.")
+	routeFields := strings.Fields(firstOutputLine(portRoute.Output))
+	t.Assert(len(routeFields) > 0, c.Equals, true)
+	routeID = routeFields[0]
+	t.Assert(tcpRoutePort(portRoute.Output), c.Equals, "9999")
 	assertRouteContains(routeID, true)
 
 	// flynn route update --service
-	portRoute = app.flynn("route", "update", routeID, "--service", "foo")
+	portRoute = app.flynn("route:update", routeID, "--service", "foo")
 	t.Assert(portRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
 	t.Assert(r.Service, c.Equals, "foo")
 
 	// flynn route remove
-	t.Assert(app.flynn("route", "remove", routeID), Succeeds)
+	t.Assert(app.flynn("route:remove", routeID), Succeeds)
 	assertRouteContains(routeID, false)
 
 	writeTemp := func(data, prefix string) (string, error) {
@@ -549,9 +567,9 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(err, c.IsNil)
 	keyPath, err := writeTemp(cert.PrivateKey, "tls-key")
 	t.Assert(err, c.IsNil)
-	certRoute := app.flynn("route", "add", "http", "--tls-cert", certPath, "--tls-key", keyPath, "example.com")
+	certRoute := app.flynn("route:add", "http", "--tls-cert", certPath, "--tls-key", keyPath, "example.com")
 	t.Assert(certRoute, Succeeds)
-	routeID = strings.TrimSpace(certRoute.Output)
+	routeID = firstOutputLine(certRoute.Output)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
 	t.Assert(r.Domain, c.Equals, "example.com")
@@ -566,7 +584,7 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(err, c.IsNil)
 	keyPath, err = writeTemp(cert.PrivateKey, "tls-key")
 	t.Assert(err, c.IsNil)
-	certRoute = app.flynn("route", "update", routeID, "--tls-cert", certPath, "--tls-key", keyPath)
+	certRoute = app.flynn("route:update", routeID, "--tls-cert", certPath, "--tls-key", keyPath)
 	t.Assert(certRoute, Succeeds)
 	r, err = client.GetRoute(app.id, routeID)
 	t.Assert(err, c.IsNil)
@@ -576,14 +594,15 @@ func (s *CLISuite) TestRoute(t *c.C) {
 	t.Assert(r.Certificate.Key, c.Equals, strings.Trim(cert.PrivateKey, "\n"))
 
 	// flynn route remove
-	t.Assert(app.flynn("route", "remove", routeID), Succeeds)
+	t.Assert(app.flynn("route:remove", routeID), Succeeds)
 	assertRouteContains(routeID, false)
 }
 
 func (s *CLISuite) TestResource(t *c.C) {
+	s.skipUnlessProvider(t, "postgres")
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
-	t.Assert(app.flynn("resource", "add", "postgres").Output, Matches, `Created resource \S+ and a new release\.`)
+	t.Assert(app.flynn("resource", "add", "postgres").Output, Matches, `Created add-on \S+ and a new release\.`)
 
 	res, err := s.controllerClient(t).AppResourceList(app.name)
 	t.Assert(err, c.IsNil)
@@ -596,6 +615,7 @@ func (s *CLISuite) TestResource(t *c.C) {
 }
 
 func (s *CLISuite) TestResourceList(t *c.C) {
+	s.skipUnlessProvider(t, "postgres")
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
 	t.Assert(app.flynn("resource", "add", "postgres"), Succeeds)
@@ -603,12 +623,13 @@ func (s *CLISuite) TestResourceList(t *c.C) {
 }
 
 func (s *CLISuite) TestResourceRemove(t *c.C) {
+	s.skipUnlessProvider(t, "postgres")
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
 
 	add := app.flynn("resource", "add", "postgres")
 	t.Assert(add, Succeeds)
-	t.Assert(add.Output, Matches, `Created resource \S+ and a new release\.`)
+	t.Assert(add.Output, Matches, `Created add-on \S+ and a new release\.`)
 	t.Assert(app.flynn("resource").Output, Matches, "postgres")
 	t.Assert(app.flynn("env").Output, Matches, "FLYNN_POSTGRES")
 	listed, err := s.controllerClient(t).AppResourceList(app.name)
@@ -632,8 +653,8 @@ func (s *CLISuite) TestLog(t *c.C) {
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
 	t.Assert(app.flynn("run", "-d", "echo", "hello", "world"), Succeeds)
-	app.waitFor(ct.JobEvents{"": {ct.JobStateUp: 1, ct.JobStateDown: 1}})
-	t.Assert(app.flynn("log", "--raw-output"), Outputs, "hello world\n")
+	app.waitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateUp: 1, ct.JobStateDown: 1}})
+	t.Assert(app.flynn("log", "--raw-output"), SuccessfulOutputContains, "hello world\n")
 }
 
 func (s *CLISuite) TestLogFilter(t *c.C) {
@@ -644,7 +665,7 @@ func (s *CLISuite) TestLogFilter(t *c.C) {
 		t.Assert(app.flynn("scale", "crasher=0"), Succeeds)
 	}
 	t.Assert(app.flynn("run", "-d", "echo", "hello", "world"), Succeeds)
-	jobID := app.waitFor(ct.JobEvents{"": {ct.JobStateUp: 1, ct.JobStateDown: 1}})
+	jobID := app.waitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateUp: 1, ct.JobStateDown: 1}})
 
 	tests := []struct {
 		args     []string
@@ -655,18 +676,18 @@ func (s *CLISuite) TestLogFilter(t *c.C) {
 			expected: "hello world\n",
 		},
 		{
-			args:     []string{"-t", "", "--raw-output"},
+			args:     []string{"-t", ct.ProcessTypeRunner, "--raw-output"},
 			expected: "hello world\n",
 		},
 		{
-			args:     []string{"-t", "crasher", "--raw-output", "-n", "1"},
+			args:     []string{"-t", "crasher", "--raw-output", "-n", "50"},
 			expected: "I like to crash\n",
 		},
 	}
 
 	for _, test := range tests {
 		args := append([]string{"log"}, test.args...)
-		t.Assert(app.flynn(args...), Outputs, test.expected)
+		t.Assert(app.flynn(args...), SuccessfulOutputContains, test.expected)
 	}
 }
 
@@ -674,7 +695,7 @@ func (s *CLISuite) TestLogStderr(t *c.C) {
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
 	t.Assert(app.flynn("run", "-d", "sh", "-c", "echo hello && echo world >&2"), Succeeds)
-	app.waitFor(ct.JobEvents{"": {ct.JobStateUp: 1, ct.JobStateDown: 1}})
+	app.waitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateUp: 1, ct.JobStateDown: 1}})
 	runLog := func(split bool) (stdout, stderr bytes.Buffer) {
 		args := []string{"log", "--raw-output"}
 		if split {
@@ -692,8 +713,8 @@ func (s *CLISuite) TestLogStderr(t *c.C) {
 	t.Assert(stdout.String(), Matches, "world")
 	t.Assert(stderr.String(), c.Equals, "")
 	stdout, stderr = runLog(true)
-	t.Assert(stdout.String(), c.Equals, "hello\n")
-	t.Assert(stderr.String(), c.Equals, "world\n")
+	t.Assert(strings.Contains(stdout.String(), "hello\n"), c.Equals, true)
+	t.Assert(strings.Contains(stderr.String(), "world\n"), c.Equals, true)
 }
 
 func (s *CLISuite) TestLogFollow(t *c.C) {
@@ -701,7 +722,7 @@ func (s *CLISuite) TestLogFollow(t *c.C) {
 	defer app.cleanup()
 
 	t.Assert(app.flynn("run", "-d", "sh", "-c", "sleep 2 && for i in 1 2 3 4 5; do echo \"line $i\"; done"), Succeeds)
-	app.waitFor(ct.JobEvents{"": {ct.JobStateUp: 1}})
+	app.waitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateUp: 1}})
 
 	log := app.flynnCmd("log", "--raw-output", "--follow")
 	logStdout, err := log.StdoutPipe()
@@ -761,14 +782,14 @@ func (s *CLISuite) TestCluster(t *c.C) {
 		return run(t, cmd)
 	}
 
-	// cluster add
-	t.Assert(flynn("cluster", "add", "--no-git", "foo", "https://controller.foo.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
+	// cluster add. Fake domains are not a running controller, so skip the CA download.
+	t.Assert(flynn("cluster:add", "--no-ca", "--no-git", "foo", "foo.example.com"), Succeeds)
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "foo")
-	t.Assert(flynn("cluster", "add", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "https://controller.test.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
+	t.Assert(flynn("cluster:add", "--no-ca", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "test.example.com"), Succeeds)
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "test")
-	t.Assert(flynn("cluster", "add", "-f", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "https://controller.test.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
+	t.Assert(flynn("cluster:add", "-f", "--no-ca", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "test.example.com"), Succeeds)
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "test")
-	t.Assert(flynn("cluster", "add", "-f", "-d", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "https://controller.test.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
+	t.Assert(flynn("cluster:add", "-f", "-d", "--no-ca", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "test.example.com"), Succeeds)
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "test")
 	// make sure the cluster is present in the config
 	cfg, err := config.ReadFile(file.Name())
@@ -778,11 +799,11 @@ func (s *CLISuite) TestCluster(t *c.C) {
 	t.Assert(cfg.Clusters[0].Name, c.Equals, "foo")
 	t.Assert(cfg.Clusters[1].Name, c.Equals, "test")
 	// overwriting with a conflicting name and a different conflicting url should error
-	conflict := flynn("cluster", "add", "-f", "--no-git", "foo", "https://controller.test.example.com", "e09dc5301d72be755a3d666f617c4600")
+	conflict := flynn("cluster:add", "-f", "--no-ca", "--no-git", "foo", "test.example.com")
 	t.Assert(conflict, c.Not(Succeeds))
 	t.Assert(conflict, OutputContains, "conflict with")
 	// overwriting (without --force) should not work
-	t.Assert(flynn("cluster", "add", "test", "foo", "bar"), c.Not(Succeeds))
+	t.Assert(flynn("cluster:add", "--no-ca", "--no-git", "test", "other.example.com"), c.Not(Succeeds))
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "test")
 	t.Assert(flynn("cluster"), SuccessfulOutputContains, "(default)")
 	// change default cluster
@@ -800,14 +821,14 @@ func (s *CLISuite) TestCluster(t *c.C) {
 	t.Assert(cfg.Clusters, c.HasLen, 1)
 	t.Assert(flynn("cluster", "remove", "foo"), Succeeds)
 	// cluster remove default and set next available
-	t.Assert(flynn("cluster", "add", "-d", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "https://controller.test.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
-	t.Assert(flynn("cluster", "add", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "next", "https://controller.next.example.com", "e09dc5301d72be755a3d666f617c4600"), Succeeds)
+	t.Assert(flynn("cluster:add", "-d", "--no-ca", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "test", "test.example.com"), Succeeds)
+	t.Assert(flynn("cluster:add", "--no-ca", "--no-git", "-p", "KGCENkp53YF5OvOKkZIry71+czFRkSw2ZdMszZ/0ljs=", "next", "next.example.com"), Succeeds)
 	t.Assert(flynn("cluster", "remove", "test"), SuccessfulOutputContains, "Cluster \"test\" removed and \"next\" is now the default cluster.")
 	t.Assert(flynn("cluster", "default"), SuccessfulOutputContains, "next")
 
 	// check GitURL is configured correctly
 	cluster := s.clusterConf(t)
-	t.Assert(flynn("cluster", "add", "--tls-pin", cluster.TLSPin, "baz", cluster.ControllerURL, cluster.Key), Succeeds)
+	t.Assert(flynn("cluster:add", "--tls-pin", cluster.TLSPin, "baz", cluster.ControllerURL), Succeeds)
 	cfg, err = config.ReadFile(file.Name())
 	t.Assert(err, c.IsNil)
 	domain := strings.TrimPrefix(cluster.ControllerURL, "https://controller.")
@@ -872,6 +893,15 @@ func (s *CLISuite) TestRelease(t *c.C) {
 	result := &ct.Release{}
 	t.Assert(json.Unmarshal(resultJSON, &result), c.IsNil)
 	for typ, proc := range result.Processes {
+		if name := resource.ProcessRuntimeProfile(proc.RuntimeProfile, proc.Resources); name != "" {
+			if p, ok := resource.ProfileByName(name); ok {
+				if proc.Resources == nil {
+					proc.Resources = make(resource.Resources)
+				}
+				resource.ApplyNamedLimits(proc.Resources, p.Memory, p.CPU)
+				proc.RuntimeProfile = p.Name
+			}
+		}
 		resource.SetDefaults(&proc.Resources)
 		result.Processes[typ] = proc
 	}
@@ -903,6 +933,18 @@ func (s *CLISuite) TestRelease(t *c.C) {
 }
 
 func (s *CLISuite) TestLimits(t *c.C) {
+	client := s.controllerClient(t)
+	settings, err := client.GetRuntimeSettings()
+	t.Assert(err, c.IsNil)
+	if !settings.AllowCustomLimits {
+		settings.AllowCustomLimits = true
+		t.Assert(client.UpdateRuntimeSettings(settings), c.IsNil)
+		defer func() {
+			settings.AllowCustomLimits = false
+			t.Assert(client.UpdateRuntimeSettings(settings), c.IsNil)
+		}()
+	}
+
 	app := s.newCliTestApp(t)
 	defer app.cleanup()
 	t.Assert(app.flynn("limit", "set", "resources", "memory=512MB", "max_fd=12k", "cpu=2000"), Succeeds)
@@ -933,15 +975,16 @@ func (s *CLISuite) TestRunLimits(t *c.C) {
 	defaults := resource.Defaults()
 	limits := strings.Split(strings.TrimSpace(cmd.Output), "\n")
 	t.Assert(limits, c.HasLen, 3)
-	t.Assert(limits[0], c.Equals, strconv.FormatInt(*defaults[resource.TypeMemory].Limit, 10))
-	t.Assert(limits[1], c.Equals, strconv.FormatInt(1024, 10))
+	// Default 1 GiB is a 2 GiB memory.max. Default 1000 milliCPU is cpu.weight 100.
+	t.Assert(limits[0], c.Equals, strconv.FormatInt(*defaults[resource.TypeMemory].Limit*2, 10))
+	t.Assert(limits[1], c.Equals, strconv.FormatInt(100, 10))
 	t.Assert(limits[2], c.Equals, strconv.FormatInt(*defaults[resource.TypeMaxFD].Limit, 10))
 	cmd = app.flynn("run", "--limits", "memory=200MB,max_fd=9000", "sh", "-c", resourceCmd)
 	t.Assert(cmd, Succeeds)
 	limits = strings.Split(strings.TrimSpace(cmd.Output), "\n")
 	t.Assert(limits, c.HasLen, 3)
-	t.Assert(limits[0], c.Equals, strconv.FormatInt(200*units.MiB, 10))
-	t.Assert(limits[1], c.Equals, strconv.FormatInt(1024, 10))
+	t.Assert(limits[0], c.Equals, strconv.FormatInt(2*200*units.MiB, 10))
+	t.Assert(limits[1], c.Equals, strconv.FormatInt(100, 10))
 	t.Assert(limits[2], c.Equals, strconv.FormatInt(9000, 10))
 }
 
@@ -970,9 +1013,12 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 
 	// release the app and provision some dbs
 	t.Assert(r.git("push", "flynn", "master"), Succeeds)
-	t.Assert(r.flynn("resource", "add", "postgres"), Succeeds)
-	t.Assert(r.flynn("pg", "psql", "--", "-c",
-		"CREATE table foos (data text); INSERT INTO foos (data) VALUES ('foobar')"), Succeeds)
+	hasPostgres := s.hasProvider(t, "postgres")
+	if hasPostgres {
+		t.Assert(r.flynn("resource", "add", "postgres"), Succeeds)
+		t.Assert(r.flynn("pg", "psql", "--", "-c",
+			"CREATE table foos (data text); INSERT INTO foos (data) VALUES ('foobar')"), Succeeds)
+	}
 	hasMysql := s.hasProvider(t, "mysql")
 	if hasMysql {
 		t.Assert(r.flynn("resource", "add", "mysql"), Succeeds)
@@ -992,7 +1038,9 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	exportFiles := []string{
 		"app.json", "routes.json", "release.json", "artifacts.json",
 		slugLayer.ID + ".layer", "formation.json",
-		"postgres.dump",
+	}
+	if hasPostgres {
+		exportFiles = append(exportFiles, "postgres.dump")
 	}
 	if hasMysql {
 		exportFiles = append(exportFiles, "mysql.dump")
@@ -1001,7 +1049,9 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	assertExportContains(t, file, exportFiles...)
 
 	// remove db tables from source app
-	t.Assert(r.flynn("pg", "psql", "--", "-c", "DROP TABLE foos"), Succeeds)
+	if hasPostgres {
+		t.Assert(r.flynn("pg", "psql", "--", "-c", "DROP TABLE foos"), Succeeds)
+	}
 	if hasMysql {
 		t.Assert(r.flynn("mysql", "console", "--", "-e", "DROP TABLE foos"), Succeeds)
 	}
@@ -1013,10 +1063,12 @@ func (s *CLISuite) TestExportImport(t *c.C) {
 	t.Assert(r.flynn("import", "--name", dstApp, "--file", file), Succeeds)
 
 	// test dbs were imported
-	query := r.flynn("-a", dstApp, "pg", "psql", "--", "-c", "SELECT * FROM foos")
-	t.Assert(query, SuccessfulOutputContains, "foobar")
+	if hasPostgres {
+		query := r.flynn("-a", dstApp, "pg", "psql", "--", "-c", "SELECT * FROM foos")
+		t.Assert(query, SuccessfulOutputContains, "foobar")
+	}
 	if hasMysql {
-		query = r.flynn("-a", dstApp, "mysql", "console", "--", "-e", "SELECT * FROM foos")
+		query := r.flynn("-a", dstApp, "mysql", "console", "--", "-e", "SELECT * FROM foos")
 		t.Assert(query, SuccessfulOutputContains, "foobar")
 	}
 
@@ -1085,12 +1137,12 @@ func (s *CLISuite) TestDeploy(t *c.C) {
 }
 
 func (s *CLISuite) TestDeployTimeout(t *c.C) {
-	timeout := flynn(t, "/", "-a", "status", "deployment", "timeout")
+	timeout := flynn(t, "/", "-a", "status", "deploy:timeout")
 	t.Assert(timeout, Succeeds)
 	t.Assert(timeout.Output, c.Equals, "120\n")
 
-	t.Assert(flynn(t, "/", "-a", "status", "deployment", "timeout", "150"), Succeeds)
-	timeout = flynn(t, "/", "-a", "status", "deployment", "timeout")
+	t.Assert(flynn(t, "/", "-a", "status", "deploy:timeout", "150"), Succeeds)
+	timeout = flynn(t, "/", "-a", "status", "deploy:timeout")
 	t.Assert(timeout, Succeeds)
 	t.Assert(timeout.Output, c.Equals, "150\n")
 }
@@ -1113,7 +1165,7 @@ func (s *CLISuite) TestReleaseDelete(t *c.C) {
 	// check the current release cannot be deleted
 	res := r.flynn("release", "delete", "--yes", releases[0].ID)
 	t.Assert(res, c.Not(Succeeds))
-	t.Assert(res.Output, c.Equals, "validation_error: cannot delete current app release\n")
+	t.Assert(commandOutput(res.Output), c.Equals, "validation_error: cannot delete current app release\n")
 
 	// associate the initial release with another app
 	otherApp := &ct.App{Name: "release-delete-" + random.String(8)}
@@ -1123,7 +1175,7 @@ func (s *CLISuite) TestReleaseDelete(t *c.C) {
 	// check deleting the initial release just deletes the formation
 	res = r.flynn("release", "delete", "--yes", releases[1].ID)
 	t.Assert(res, Succeeds)
-	t.Assert(res.Output, c.Equals, "Release scaled down for app but not fully deleted (still associated with 1 other apps)\n")
+	t.Assert(commandOutput(res.Output), c.Equals, "Release scaled down for app but not fully deleted (still associated with 1 other apps)\n")
 
 	// check the slug artifact still exists
 	slugArtifact, err := client.GetArtifact(releases[1].ArtifactIDs[1])
@@ -1135,7 +1187,7 @@ func (s *CLISuite) TestReleaseDelete(t *c.C) {
 	// check the initial release can now be deleted
 	res = r.flynn("-a", otherApp.ID, "release", "delete", "--yes", releases[1].ID)
 	t.Assert(res, Succeeds)
-	t.Assert(res.Output, c.Equals, fmt.Sprintf("Deleted release %s (deleted 2 files)\n", releases[1].ID))
+	t.Assert(commandOutput(res.Output), c.Equals, fmt.Sprintf("Deleted release %s (deleted 2 files)\n", releases[1].ID))
 
 	// check the slug artifact was deleted
 	_, err = client.GetArtifact(slugArtifact.ID)
@@ -1185,8 +1237,10 @@ func (s *CLISuite) TestReleaseRollback(t *c.C) {
 func (s *CLISuite) TestSlugReleaseGarbageCollection(t *c.C) {
 	client := s.controllerClient(t)
 
-	// create app with gc.max_inactive_slug_releases=3
-	maxInactiveSlugReleases := 3
+	// Keep two inactive slugs. The selector retains that many distinct
+	// inactive blob URIs (newest first) and leaves a release that shares
+	// its URI with a scaled-up release, because that blob is still live.
+	maxInactiveSlugReleases := 2
 	app := &ct.App{Meta: map[string]string{"gc.max_inactive_slug_releases": strconv.Itoa(maxInactiveSlugReleases)}}
 	t.Assert(client.CreateApp(app), c.IsNil)
 
@@ -1213,7 +1267,9 @@ func (s *CLISuite) TestSlugReleaseGarbageCollection(t *c.C) {
 	put := func(url string, data []byte) {
 		req, err := http.NewRequest("PUT", url, bytes.NewReader(data))
 		t.Assert(err, c.IsNil)
-		req.SetBasicAuth("", s.clusterConf(t).Key)
+		rel, err := client.GetAppRelease("blobstore")
+		t.Assert(err, c.IsNil)
+		req.SetBasicAuth("", rel.Env["AUTH_KEY"])
 		res, err := http.DefaultClient.Do(req)
 		t.Assert(err, c.IsNil)
 		res.Body.Close()
@@ -1327,34 +1383,20 @@ func (s *CLISuite) TestSlugReleaseGarbageCollection(t *c.C) {
 		t.Fatal("timed out waiting for garbage collection")
 	}
 
-	// check we have 4 distinct slug releases (so 5 in total, only 3 are
-	// inactive)
+	// Release rows stay. The oldest distinct inactive slug is reaped in
+	// place: the row is marked gc.blob_reaped and its blob is deleted.
+	// A release that shares a still-scaled slug is left alone.
 	list, err := client.AppReleaseList(app.ID)
 	t.Assert(err, c.IsNil)
-	t.Assert(list, c.HasLen, maxInactiveSlugReleases+2)
-	distinctSlugs := make(map[string]struct{}, len(list))
-	for _, release := range list {
-		t.Assert(release.ArtifactIDs, c.HasLen, 2)
-		distinctSlugs[release.ArtifactIDs[1]] = struct{}{}
+	t.Assert(list, c.HasLen, 7)
+	reaped, err := client.GetRelease(releases[0].ID)
+	t.Assert(err, c.IsNil)
+	t.Assert(reaped.Meta[ct.MetaGCBlobReaped], c.Equals, "true")
+	for _, rel := range []*ct.Release{releases[1], releases[2], releases[3], releases[4], releases[5], &newRelease} {
+		got, err := client.GetRelease(rel.ID)
+		t.Assert(err, c.IsNil)
+		t.Assert(got.Meta[ct.MetaGCBlobReaped], c.Not(c.Equals), "true")
 	}
-	t.Assert(distinctSlugs, c.HasLen, maxInactiveSlugReleases+1)
-
-	// check the first and third releases got deleted, but the rest remain
-	assertDeleted := func(release *ct.Release, deleted bool) {
-		_, err := client.GetRelease(release.ID)
-		if deleted {
-			t.Assert(err, c.Equals, controller.ErrNotFound)
-		} else {
-			t.Assert(err, c.IsNil)
-		}
-	}
-	assertDeleted(releases[0], true)
-	assertDeleted(releases[1], false)
-	assertDeleted(releases[2], true)
-	assertDeleted(releases[3], false)
-	assertDeleted(releases[4], false)
-	assertDeleted(releases[5], false)
-	assertDeleted(&newRelease, false)
 
 	// check the first slug got deleted, but the rest remain
 	s.assertURI(t, slugs[0], http.StatusNotFound)
@@ -1385,7 +1427,7 @@ func (s *CLISuite) TestDockerPush(t *c.C) {
 	if !ok {
 		t.Fatal(`release missing "app" process type`)
 	}
-	t.Assert(proc.Args, c.DeepEquals, []string{"sh", "/server.sh"})
+	t.Assert(proc.Args, c.DeepEquals, []string{"/bin/sh", "/server.sh"})
 
 	// check updated env vars are not overwritten
 	t.Assert(flynn(t, "/", "-a", app.Name, "env", "set", "FOO=BAZ"), Succeeds)
@@ -1430,7 +1472,7 @@ func (s *CLISuite) TestDockerExportImport(t *c.C) {
 
 	// check exporting to stdout works
 	file := filepath.Join(t.MkDir(), "export.tar")
-	cmd := exec.Command("sh", "-c", fmt.Sprintf("%s -a %s export > %s", args.CLI, app.Name, file))
+	cmd := exec.Command("sh", "-c", fmt.Sprintf("%s -a %s apps:export > %s", args.CLI, app.Name, file))
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if args.Stream {
@@ -1445,22 +1487,30 @@ func (s *CLISuite) TestDockerExportImport(t *c.C) {
 	assertExportContains(t, file, exportFiles...)
 
 	// export the app directly to the file
-	t.Assert(flynn(t, "/", "-a", app.Name, "export", "-f", file), Succeeds)
+	t.Assert(flynn(t, "/", "-a", app.Name, "apps:export", "-f", file), Succeeds)
 	assertExportContains(t, file, exportFiles...)
 
-	// delete the image layers from the blobstore
+	// delete the image layers from the blobstore. The blobstore image is
+	// busybox plus flynn-blobstore and has no curl, so the test process
+	// deletes the objects itself with the cluster key.
 	for _, layer := range layers {
 		for _, url := range []string{
 			utils.LayerURL(layer.ID),
 			utils.ConfigURL(layer.ID),
 		} {
-			t.Assert(flynn(t, "/", "-a", "blobstore", "run", "curl", "-fsSL", "-X", "DELETE", url), Succeeds)
+			req, err := http.NewRequest(http.MethodDelete, url, nil)
+			t.Assert(err, c.IsNil)
+			req.Header.Set("Authorization", "Bearer "+os.Getenv("CONTROLLER_KEY"))
+			res, err := http.DefaultClient.Do(req)
+			t.Assert(err, c.IsNil)
+			res.Body.Close()
+			t.Assert(res.StatusCode, c.Equals, http.StatusOK)
 		}
 	}
 
 	// import to another app
 	importApp := "cli-test-docker-import"
-	t.Assert(flynn(t, "/", "import", "--name", importApp, "--file", file), Succeeds)
+	t.Assert(flynn(t, "/", "apps:import", "--name", importApp, "--file", file), Succeeds)
 	defer flynn(t, "/", "-a", importApp, "scale", "app=0")
 
 	// wait for it to start

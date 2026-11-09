@@ -3,6 +3,7 @@ package main
 import (
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -31,11 +32,18 @@ func main() {
 	}
 	defer l.Close()
 
-	hb, err := discoverd.AddServiceAndRegister(name, addr)
-	if err != nil {
-		shutdown.Fatal(err)
+	// User jobs do not get the cluster discoverd key. flynn-host registers
+	// the port service. System jobs still register from the process.
+	if os.Getenv("DISCOVERD_AUTH_KEY") != "" {
+		hb, err := discoverd.AddServiceAndRegister(name, addr)
+		if err != nil {
+			// The listener is already up. A failed register must not exit
+			// the process; flynn-host also publishes this port.
+			log.Printf("discoverd register: %v", err)
+		} else {
+			shutdown.BeforeExit(func() { hb.Close() })
+		}
 	}
-	shutdown.BeforeExit(func() { hb.Close() })
 
 	http.HandleFunc("/ish", ish)
 	if err := http.Serve(l, nil); err != nil {

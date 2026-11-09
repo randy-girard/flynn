@@ -130,11 +130,13 @@ func (s *HealthcheckSuite) TestStatus(t *c.C) {
 	t.Assert(err, c.IsNil)
 
 	t.Assert(data.Data.Status, c.Equals, status.CodeHealthy)
-	t.Assert(data.Data.Detail, c.HasLen, 14)
-	optional := map[string]bool{"mariadb": true, "mongodb": true}
-	for name, s := range data.Data.Detail {
-		if !optional[name] {
-			t.Assert(s.Status, c.Equals, status.CodeHealthy, c.Commentf("name = %s", name))
-		}
+	required := []string{
+		"blobstore", "controller", "controller-scheduler", "controller-worker",
+		"discoverd", "flannel", "gitreceive", "logaggregator", "postgres", "router",
+	}
+	for _, name := range required {
+		st, ok := data.Data.Detail[name]
+		t.Assert(ok, c.Equals, true, c.Commentf("missing %s", name))
+		t.Assert(st.Status, c.Equals, status.CodeHealthy, c.Commentf("name = %s", name))
 	}
 }

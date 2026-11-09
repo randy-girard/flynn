@@ -19,6 +19,8 @@ import (
 	"github.com/cupcake/jsonschema"
 	c "github.com/flynn/go-check"
 	"github.com/golang/protobuf/proto"
+	"github.com/randy-girard/flynn/cli/config"
+	"github.com/randy-girard/flynn/cli/login/tokensource"
 	"github.com/randy-girard/flynn/controller/api"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -118,13 +120,18 @@ func unmarshalControllerExample(data []byte) (map[string]interface{}, error) {
 }
 
 func (s *ControllerSuite) generateControllerExamples(t *c.C) map[string]interface{} {
+	rel, err := s.controllerClient(t).GetAppRelease("controller")
+	t.Assert(err, c.IsNil)
 	cmd := exec.CommandUsingCluster(
 		s.clusterClient(t),
 		s.createArtifact(t, "controller-examples"),
 		"/bin/flynn-controller-examples",
 	)
+	// User overlay DNS does not resolve platform services such as
+	// controller.discoverd. This generator is an operator job.
+	cmd.Meta = map[string]string{"flynn-system-app": "true"}
 	cmd.Env = map[string]string{
-		"CONTROLLER_KEY":      s.clusterConf(t).Key,
+		"CONTROLLER_KEY":      rel.Env["AUTH_KEY"],
 		"SKIP_MIGRATE_DOMAIN": "true",
 	}
 
@@ -132,7 +139,7 @@ func (s *ControllerSuite) generateControllerExamples(t *c.C) map[string]interfac
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err = cmd.Run()
 	t.Logf("stdout: %q", stdout.String())
 	t.Logf("stderr: %q", stderr.String())
 	t.Assert(err, c.IsNil)
@@ -349,9 +356,9 @@ func (s *ControllerSuite) TestAppDeleteCleanup(t *c.C) {
 	routes := []string{"foo.example.com", "bar.example.com", "another.example.com"}
 	for _, route := range routes {
 		if route == "another.example.com" {
-			t.Assert(r.flynn("route", "add", "http", "-s", app+"-another-web", route), Succeeds)
+			t.Assert(r.flynn("route:add", "http", "-s", app+"-another-web", route), Succeeds)
 		} else {
-			t.Assert(r.flynn("route", "add", "http", route), Succeeds)
+			t.Assert(r.flynn("route:add", "http", route), Succeeds)
 		}
 	}
 	routeList, err := client.AppRouteList(app)
@@ -371,12 +378,16 @@ func (s *ControllerSuite) TestAppDeleteCleanup(t *c.C) {
 		assertRouteStatus(route, 200)
 	}
 
-	// provision resources
-	t.Assert(r.flynn("resource", "add", "postgres"), Succeeds)
-	resources, err := client.AppResourceList(app)
-	t.Assert(err, c.IsNil)
-	numResources := 1
-	t.Assert(resources, c.HasLen, numResources)
+	// Tenant postgres is the plugin. A cluster without it still checks route
+	// and release cleanup.
+	numResources := 0
+	if s.hasProvider(t, "postgres") {
+		t.Assert(r.flynn("resource", "add", "postgres"), Succeeds)
+		resources, err := client.AppResourceList(app)
+		t.Assert(err, c.IsNil)
+		numResources = 1
+		t.Assert(resources, c.HasLen, numResources)
+	}
 
 	// create another release
 	t.Assert(r.git("commit", "--allow-empty", "--message", "deploy"), Succeeds)
@@ -401,8 +412,9 @@ func (s *ControllerSuite) TestAppDeleteCleanup(t *c.C) {
 		t.Assert(err, c.Equals, controller.ErrNotFound)
 	}
 
-	// check resource cleanup
-	t.Assert(cmd, OutputContains, fmt.Sprintf("deprovisioned %d resources", numResources))
+	if numResources > 0 {
+		t.Assert(cmd, OutputContains, fmt.Sprintf("deprovisioned %d resources", numResources))
+	}
 
 	// check creating and pushing same app name succeeds
 	t.Assert(os.RemoveAll(r.dir), c.IsNil)
@@ -413,6 +425,7 @@ func (s *ControllerSuite) TestAppDeleteCleanup(t *c.C) {
 
 // https://github.com/randy-girard/flynn/issues/2257
 func (s *ControllerSuite) TestResourceProvisionRecreatedApp(t *c.C) {
+	s.skipUnlessProvider(t, "postgres")
 	app := "app-recreate-" + random.String(8)
 	client := s.controllerClient(t)
 
@@ -469,7 +482,7 @@ func (s *ControllerSuite) TestRouteEvents(t *c.C) {
 	// create some routes
 	routes := []string{"baz.example.com"}
 	for _, route := range routes {
-		t.Assert(r.flynn("route", "add", "http", route), Succeeds)
+		t.Assert(r.flynn("route:add", "http", route), Succeeds)
 		assertEventType(ct.EventTypeRoute)
 	}
 	routeList, err := client.AppRouteList(app)
@@ -499,13 +512,17 @@ func (s *ControllerSuite) TestAppEvents(t *c.C) {
 	defer stream.Close()
 
 	runJob := func(appID, releaseID string) {
-		rwc, err := client.RunJobAttached(appID, &ct.NewJob{
+		// Detached: an attached client that closes immediately stops the
+		// job from the controller's attach handler, which races the
+		// start/up events this watcher is counting. /bin/true exits on
+		// its own and still produces up then down.
+		_, err := client.RunJobDetached(appID, &ct.NewJob{
 			ReleaseID:  releaseID,
 			Args:       []string{"/bin/true"},
+			Type:       ct.ProcessTypeConsole,
 			DisableLog: true,
 		})
 		t.Assert(err, c.IsNil)
-		rwc.Close()
 	}
 
 	// generate events for app2 and wait for them
@@ -514,7 +531,7 @@ func (s *ControllerSuite) TestAppEvents(t *c.C) {
 	defer watcher.Close()
 	runJob(app2.ID, release2.ID)
 	t.Assert(watcher.WaitFor(
-		ct.JobEvents{"": {ct.JobStateUp: 1, ct.JobStateDown: 1}},
+		ct.JobEvents{ct.ProcessTypeConsole: {ct.JobStateUp: 1, ct.JobStateDown: 1}},
 		10*time.Second,
 		func(e *ct.Job) error {
 			debugf(t, "got %s job event for app2", e.State)
@@ -611,7 +628,7 @@ func (t *testGRPCWebClient) Invoke(method string, in, out proto.Message) error {
 		return err
 	}
 	req.Host = t.host
-	req.Header.Set("Auth-Key", t.key)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimPrefix(t.key, "Bearer "))
 	req.Header.Set("Content-Type", "application/grpc-web+proto")
 
 	// do the request
@@ -658,16 +675,27 @@ func (t *testGRPCWebClient) Invoke(method string, in, out proto.Message) error {
 // TestGRPCWeb tests that the controller's gRPC API is accessible via the
 // router using the grpc-web protocol
 func (s *ControllerSuite) TestGRPCWeb(t *c.C) {
-	// get the controller's URL and key
-	config := s.clusterConf(t)
-	controllerURL, err := url.Parse(config.ControllerURL)
+	// get the controller's URL and the logged-in access token. gRPC checks
+	// Authorization, not the legacy Auth-Key header.
+	conf := s.clusterConf(t)
+	controllerURL, err := url.Parse(conf.ControllerURL)
+	t.Assert(err, c.IsNil)
+	issuer := strings.TrimSpace(conf.OAuthURL)
+	if issuer == "" {
+		issuer = conf.ControllerURL
+	}
+	hc, err := conf.HTTPClient()
+	t.Assert(err, c.IsNil)
+	ts, err := tokensource.New(conf.Name, issuer, conf.ControllerURL, config.TokenCache(), hc)
+	t.Assert(err, c.IsNil)
+	tok, err := ts.Token()
 	t.Assert(err, c.IsNil)
 
 	// create a grpc-web client that hits the router
 	client := testGRPCWebClient{
 		url:  "http://" + routerIP,
 		host: controllerURL.Host,
-		key:  config.Key,
+		key:  tok.AccessToken,
 	}
 
 	// check we can invoke the Status method

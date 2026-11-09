@@ -352,6 +352,16 @@ func (h *Helper) controllerClient(t *c.C) controller.Client {
 	return h.controller
 }
 
+// clusterKeyClient watches events the user token hides. slugbuilder job
+// events are internal on a user app unless the caller is the cluster key.
+func (h *Helper) clusterKeyClient(t *c.C) controller.Client {
+	key := strings.TrimSpace(os.Getenv("CONTROLLER_KEY"))
+	t.Assert(key, c.Not(c.Equals), "")
+	client, err := controller.NewClient("http://controller.discoverd", key)
+	t.Assert(err, c.IsNil)
+	return client
+}
+
 func (h *Helper) skipUnlessProvider(t *c.C, name string) {
 	if !h.hasProvider(t, name) {
 		t.Skip(fmt.Sprintf("%s plugin is not installed on this cluster", name))
@@ -445,7 +455,10 @@ func (h *hostnames) Remove(t *c.C, ip string) {
 const (
 	resourceMem   int64 = 256 * units.MiB
 	resourceMaxFD int64 = 1024
-	resourceCmd         = "cat /sys/fs/cgroup/memory/memory.limit_in_bytes; cat /sys/fs/cgroup/cpu/cpu.shares; ulimit -n"
+	// cgroup v2: memory.max is twice the configured limit, cpu.weight is
+	// shares*100/1024. v1 files remain the fallback.
+	resourceCmd = "if [ -f /sys/fs/cgroup/memory.max ]; then cat /sys/fs/cgroup/memory.max; else cat /sys/fs/cgroup/memory/memory.limit_in_bytes; fi; " +
+		"if [ -f /sys/fs/cgroup/cpu.weight ]; then cat /sys/fs/cgroup/cpu.weight; else cat /sys/fs/cgroup/cpu/cpu.shares; fi; ulimit -n"
 )
 
 func testResources() resource.Resources {
@@ -459,10 +472,21 @@ func testResources() resource.Resources {
 }
 
 func assertResourceLimits(t *c.C, out string) {
-	limits := strings.Split(strings.TrimSpace(out), "\n")
+	var limits []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if _, err := strconv.ParseInt(line, 10, 64); err == nil {
+			limits = append(limits, line)
+		}
+	}
 	t.Assert(limits, c.HasLen, 3)
-	t.Assert(limits[0], c.Equals, strconv.FormatInt(resourceMem, 10))
-	t.Assert(limits[1], c.Equals, strconv.FormatInt(768, 10))
+	// memory.max is twice the configured limit. 750 milliCPU is 768 shares,
+	// which is cpu.weight 75.
+	t.Assert(limits[0], c.Equals, strconv.FormatInt(resourceMem*2, 10))
+	t.Assert(limits[1], c.Equals, strconv.FormatInt(75, 10))
 	t.Assert(limits[2], c.Equals, strconv.FormatInt(resourceMaxFD, 10))
 }
 
@@ -637,6 +661,11 @@ func (h *Helper) removeHosts(t *c.C, hosts []*tc.Instance, service string) {
 func (h *Helper) assertURI(t *c.C, uri string, status int) {
 	req, err := http.NewRequest("HEAD", uri, nil)
 	t.Assert(err, c.IsNil)
+	// Blobstore object routes require the cluster key. An unauthenticated
+	// HEAD is 401 for both a live slug and a reaped one.
+	if key := os.Getenv("CONTROLLER_KEY"); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	res, err := http.DefaultClient.Do(req)
 	t.Assert(err, c.IsNil)
 	res.Body.Close()

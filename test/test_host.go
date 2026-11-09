@@ -255,7 +255,12 @@ func (s *Helper) makeIshApp(t *c.C, a *IshApp) (*IshApp, error) {
 
 	// run a job that accepts tcp connections and performs tasks we ask of it in its container
 	a.cmd = exec.JobUsingHost(a.host, s.createArtifactWithClient(t, "test-apps", a.client), &host.Job{
-		Metadata: map[string]string{"flynn-controller.app": app.ID},
+		// System so ish keeps DISCOVERD_AUTH_KEY and registers after Listen.
+		// A user job is advertised at process start, before the port is open.
+		Metadata: map[string]string{
+			"flynn-controller.app": app.ID,
+			"flynn-system-app":     "true",
+		},
 		Config: host.ContainerConfig{
 			Args:  []string{"/bin/ish"},
 			Ports: []host.Port{{Proto: "tcp"}},
@@ -395,6 +400,8 @@ func (s *HostSuite) TestSignalJob(t *c.C) {
 
 	// start a signal-service job
 	cmd := exec.JobUsingHost(client, s.createArtifact(t, "test-apps"), &host.Job{
+		// Register from the process, after the signal handler is installed.
+		Metadata: map[string]string{"flynn-system-app": "true"},
 		Config: host.ContainerConfig{
 			Args:       []string{"/bin/signal"},
 			DisableLog: true,
@@ -513,7 +520,7 @@ func (s *HostSuite) TestNotifyOOM(t *c.C) {
 	t.Assert(err, c.IsNil)
 	opts := logagg.LogOpts{
 		Follow:      true,
-		StreamTypes: []logagg.StreamType{logagg.StreamTypeInit},
+		StreamTypes: []logagg.StreamType{logagg.StreamTypeInit, logagg.StreamTypeSystem},
 	}
 	rc, err := client.GetLog(appID, &opts)
 	t.Assert(err, c.IsNil)
@@ -554,7 +561,12 @@ func (s *HostSuite) TestNotifyOOM(t *c.C) {
 	for {
 		select {
 		case err := <-runErr:
-			t.Assert(err, c.IsNil)
+			if err != nil {
+				exit, ok := err.(exec.ExitError)
+				if !ok || int(exit) != 137 {
+					t.Fatal(err)
+				}
+			}
 		case msg, ok := <-msgs:
 			if !ok {
 				t.Fatalf("message stream closed unexpectedly: %s", stream.Err())

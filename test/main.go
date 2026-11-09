@@ -22,11 +22,25 @@ var routerIP string
 var testCluster *testcluster.Client
 
 func init() {
+	log.SetFlags(log.Lshortfile)
+	// go test passes -test.* flags. arg.Parse rejects those, and this package
+	// is still built by `go test ./...`.
+	if underGoTest() {
+		return
+	}
 	args = arg.Parse()
 	if args.Stream {
 		args.Debug = true
 	}
-	log.SetFlags(log.Lshortfile)
+}
+
+func underGoTest() bool {
+	for _, a := range os.Args {
+		if strings.HasPrefix(a, "-test.") {
+			return true
+		}
+	}
+	return false
 }
 
 func main() {
@@ -96,7 +110,7 @@ QAvAdwDIZpqRWWMcLS7zSDrzn3ZscuHCMxSOe40HbrVdDUee24/I4YQ+R8EcuzcA
 3IV9ai+Bxs6PvklhXmarYxJl62LzPLyv0XFscGRes/2yIIxNfNzFug==`
 
 	out, err := flynnCmd("/", "-a", "gitreceive", "env", "set",
-		"SSH_CLIENT_HOSTS=github.com,192.30.252.131 ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEAq2A7hRGmdnm9tUDbO9IDSwBK6TbQa+PXYPCPy6rbTrTtw7PHkccKrpp0yVhp5HdEIcKr6pLlVDBfOLX9QUsyCOV0wzfjIJNlGEYsdlLJizHhbn2mUjvSAHQqZETYP81eFzLQNnPHt4EVVUh7VfDESU84KezmD5QlWpXLmvU31/yMf+Se8xhHTvKSCZIFImWwoG6mbUoWf9nzpIoaSjB+weqqUUmpaaasXVal72J+UX2B+2RPW3RcT0eOzQgqlJL3RKrTJvdsjE3JEAvGq3lGHSZXy28G3skua2SmVi/w4yCE6gbODqnTWlg7+wC604ydGXA8VJiS5ap43JXiUFFAaQ==",
+		"SSH_CLIENT_HOSTS=github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=",
 		fmt.Sprintf("SSH_CLIENT_KEY=-----BEGIN RSA PRIVATE KEY-----\n%s\n-----END RSA PRIVATE KEY-----\n", sshKey)).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s: %q", err, string(out))
@@ -180,7 +194,47 @@ func (outputChecker) Check(params []interface{}, names []string) (bool, string) 
 	if !ok {
 		return ok, msg
 	}
-	return s == res.Output, ""
+	return s == commandOutput(res.Output), ""
+}
+
+// commandOutput drops the one-line rename notice the CLI writes when an
+// old command name is used. Exact output checks are about the command result.
+func commandOutput(s string) string {
+	trailingNL := strings.HasSuffix(s, "\n")
+	lines := strings.Split(s, "\n")
+	if trailingNL && len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.HasPrefix(line, "flynn ") && strings.Contains(line, " is now flynn ") {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	out := strings.Join(kept, "\n")
+	if trailingNL {
+		out += "\n"
+	}
+	return out
+}
+
+func firstOutputLine(s string) string {
+	s = strings.TrimSpace(commandOutput(s))
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return s
+}
+
+// tcpRoutePort is the port on the first line of `flynn route:add tcp`.
+// A later line tells the operator the cluster firewall opens that port.
+func tcpRoutePort(output string) string {
+	fields := strings.Fields(firstOutputLine(output))
+	if len(fields) == 0 {
+		return ""
+	}
+	return fields[len(fields)-1]
 }
 
 func checkCmdResult(params []interface{}, names []string) (ok bool, msg, s string, res *CmdResult) {

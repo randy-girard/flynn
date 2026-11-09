@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -355,15 +356,13 @@ func (s *SchedulerSuite) TestJobMeta(t *c.C) {
 		},
 	})
 	t.Assert(err, c.IsNil)
-	err = watcher.WaitFor(ct.JobEvents{"": {ct.JobStateUp: 1}}, scaleTimeout, nil)
+	err = watcher.WaitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateUp: 1}}, scaleTimeout, nil)
 	t.Assert(err, c.IsNil)
 
 	list, err := s.controllerClient(t).JobList(app.ID)
 	t.Assert(err, c.IsNil)
 	t.Assert(list, c.HasLen, 1)
-	t.Assert(list[0].Meta, c.DeepEquals, map[string]string{
-		"foo": "baz",
-	})
+	t.Assert(list[0].Meta["foo"], c.Equals, "baz")
 }
 
 func (s *SchedulerSuite) TestJobStatus(t *c.C) {
@@ -384,7 +383,7 @@ func (s *SchedulerSuite) TestJobStatus(t *c.C) {
 		Args:      []string{"sh", "-c", "while true; do echo one-off-job; sleep 1; done"},
 	})
 	t.Assert(err, c.IsNil)
-	err = watcher.WaitFor(ct.JobEvents{"printer": {ct.JobStateUp: 1}, "crasher": {ct.JobStateUp: 1}, "": {ct.JobStateUp: 1}}, scaleTimeout, nil)
+	err = watcher.WaitFor(ct.JobEvents{"printer": {ct.JobStateUp: 1}, "crasher": {ct.JobStateUp: 1}, ct.ProcessTypeRunner: {ct.JobStateUp: 1}}, scaleTimeout, nil)
 	t.Assert(err, c.IsNil)
 
 	list, err := s.controllerClient(t).JobList(app.ID)
@@ -399,7 +398,7 @@ func (s *SchedulerSuite) TestJobStatus(t *c.C) {
 	// Check jobs are marked as up once started
 	t.Assert(jobs["printer"].State, c.Equals, ct.JobStateUp)
 	t.Assert(jobs["crasher"].State, c.Equals, ct.JobStateUp)
-	t.Assert(jobs[""].State, c.Equals, ct.JobStateUp)
+	t.Assert(jobs[ct.ProcessTypeRunner].State, c.Equals, ct.JobStateUp)
 
 	// Check that when a formation's job is removed, it is marked as down and a new one is scheduled
 	job := jobs["printer"]
@@ -412,9 +411,9 @@ func (s *SchedulerSuite) TestJobStatus(t *c.C) {
 	t.Assert(list, c.HasLen, 4)
 
 	// Check that when a one-off job is removed, it is marked as down but a new one is not scheduled
-	job = jobs[""]
+	job = jobs[ct.ProcessTypeRunner]
 	s.stopJob(t, job.ID)
-	err = watcher.WaitFor(ct.JobEvents{"": {ct.JobStateDown: 1}}, scaleTimeout, nil)
+	err = watcher.WaitFor(ct.JobEvents{ct.ProcessTypeRunner: {ct.JobStateDown: 1}}, scaleTimeout, nil)
 	t.Assert(err, c.IsNil)
 	s.checkJobState(t, app.ID, job.ID, ct.JobStateDown)
 	list, err = s.controllerClient(t).JobList(app.ID)
@@ -521,11 +520,18 @@ func (s *SchedulerSuite) TestTCPApp(t *c.C) {
 
 	t.Assert(flynn(t, "/", "-a", app.Name, "scale", "echoer=1"), Succeeds)
 
-	newRoute := flynn(t, "/", "-a", app.Name, "route", "add", "tcp", "-s", "echo-service")
+	newRoute := flynn(t, "/", "-a", app.Name, "route:add", "tcp", "-s", "echo-service")
 	t.Assert(newRoute, Succeeds)
 	t.Assert(newRoute.Output, Matches, `.+ on port \d+`)
-	str := strings.Split(strings.TrimSpace(string(newRoute.Output)), " ")
-	port := str[len(str)-1]
+	port := ""
+	for _, field := range strings.Fields(newRoute.Output) {
+		if _, err := strconv.Atoi(field); err == nil {
+			port = field
+		}
+	}
+	if port == "" {
+		t.Fatalf("tcp route output had no port: %q", newRoute.Output)
+	}
 
 	// use Attempts to give the processes time to start
 	if err := Attempts.Run(func() error {

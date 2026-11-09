@@ -18,12 +18,16 @@ func main() {
 	log.Println("setting signal handler")
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
 	log.Println("registering service")
-	hb, err := discoverd.AddServiceAndRegister(service, ":12345")
-	if err != nil {
-		log.Fatal(err)
+	if os.Getenv("DISCOVERD_AUTH_KEY") != "" {
+		hb, err := discoverd.AddServiceAndRegister(service, ":12345")
+		if err != nil {
+			log.Printf("discoverd register: %v", err)
+		} else {
+			defer hb.Close()
+		}
 	}
-	defer hb.Close()
 	log.Println("waiting for signal")
 	sig := <-ch
 	fmt.Printf("got signal: %s", sig)
+	os.Stdout.Sync()
 }
