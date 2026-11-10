@@ -7405,17 +7405,25 @@ choose_drain_target() {
     n="${nodes[$i]}"
     [[ "${n}" == "node1" ]] && continue
     skip=0
-    for p in "${protected[@]}"; do
-      if [[ "${n}" == "${p}" ]]; then
-        skip=1
-        break
-      fi
-    done
+    # bash 3.2 with set -u treats "${protected[@]}" as unbound when the
+    # array is empty. macOS /bin/bash is 3.2, and that is what runs smoke.
+    if [[ ${#protected[@]} -gt 0 ]]; then
+      for p in "${protected[@]}"; do
+        if [[ "${n}" == "${p}" ]]; then
+          skip=1
+          break
+        fi
+      done
+    fi
     [[ "${skip}" -eq 1 ]] && continue
     printf '%s\n' "${n}"
     return 0
   done
-  echo "no drainable host: singleton volumes occupy every HA node (${protected[*]})" >&2
+  local occupied=""
+  if [[ ${#protected[@]} -gt 0 ]]; then
+    occupied="${protected[*]}"
+  fi
+  echo "no drainable host: singleton volumes occupy every HA node (${occupied})" >&2
   return 1
 }
 
@@ -7439,7 +7447,11 @@ pick_remove_node() {
     protected+=("${host}")
   done
   default_drop="${NODES[$((${#NODES[@]} - 1))]}"
-  drop="$(choose_drain_target "${NODES[@]}" -- "${protected[@]}")" || return 1
+  if [[ ${#protected[@]} -gt 0 ]]; then
+    drop="$(choose_drain_target "${NODES[@]}" -- "${protected[@]}")" || return 1
+  else
+    drop="$(choose_drain_target "${NODES[@]}" --)" || return 1
+  fi
   if [[ "${drop}" != "${default_drop}" ]]; then
     echo "singleton volume host-local /data on ${default_drop}; draining ${drop} instead" >&2
   fi
