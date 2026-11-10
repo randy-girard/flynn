@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,6 +23,33 @@ import (
 
 // Hook gocheck up to the "go test" runner
 func Test(t *testing.T) { TestingT(t) }
+
+// Client dials in these tests use an ephemeral source port. Those ports stay
+// in TIME_WAIT after the connection closes, and postgres cannot bind them.
+// Test listen ports have to stay outside that range.
+func TestNextTestPortAvoidsEphemeralRange(t *testing.T) {
+	low, high := 32768, 60999
+	if b, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range"); err == nil {
+		if _, scanErr := fmt.Sscanf(string(b), "%d %d", &low, &high); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+	}
+	for i := 0; i < 32; i++ {
+		p := nextTestPort()
+		n, err := strconv.Atoi(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n >= low && n <= high {
+			t.Fatalf("postgres test port %d is inside the ephemeral range %d-%d", n, low, high)
+		}
+		ln, err := net.Listen("tcp", "0.0.0.0:"+p)
+		if err != nil {
+			t.Fatalf("bind 0.0.0.0:%s: %v", p, err)
+		}
+		ln.Close()
+	}
+}
 
 // testPgSudoBinDir, when non-empty, points at initdb/postgres/pg_ctl/pg_basebackup
 // wrappers that run the real binaries as the postgres OS user (initdb refuses root).
@@ -224,9 +252,59 @@ func instance(p *Process) *discoverd.Instance {
 
 var newPort uint32
 
+// ephemeralPortRange is the kernel's automatic source-port span. Linux
+// publishes it in ip_local_port_range; other systems use the IANA range.
+// A postgres listen port inside that span collides with TIME_WAIT from the
+// test's own client dials (the next sequential port is often the source port
+// of the connection that just closed).
+func ephemeralPortRange() (low, high int) {
+	b, err := os.ReadFile("/proc/sys/net/ipv4/ip_local_port_range")
+	if err == nil {
+		var lo, hi int
+		if _, scanErr := fmt.Sscanf(string(b), "%d %d", &lo, &hi); scanErr == nil && lo > 1024 && hi > lo {
+			return lo, hi
+		}
+	}
+	return 32768, 60999
+}
+
 func init() {
-	// Avoid clashes with stale postgres instances from interrupted test runs.
-	newPort = uint32(40000 + os.Getpid()%12000)
+	// Stay below the ephemeral range, and vary the start by pid so a
+	// leftover postgres from an interrupted run is unlikely to own it.
+	low, _ := ephemeralPortRange()
+	floor := 10000
+	if low-floor < 1000 {
+		floor = 2048
+	}
+	span := low - floor
+	if span < 1 {
+		span = 1
+	}
+	newPort = uint32(floor + os.Getpid()%span)
+}
+
+func portInEphemeralRange(p int) bool {
+	low, high := ephemeralPortRange()
+	return p >= low && p <= high
+}
+
+func nextTestPort() string {
+	for {
+		p := int(atomic.AddUint32(&newPort, 1))
+		if p >= 65535 {
+			low, _ := ephemeralPortRange()
+			floor := 10000
+			if low-floor < 1000 {
+				floor = 2048
+			}
+			atomic.StoreUint32(&newPort, uint32(floor))
+			continue
+		}
+		if p < 1024 || portInEphemeralRange(p) {
+			continue
+		}
+		return strconv.Itoa(p)
+	}
 }
 
 func NewTestProcess(c *C, n int) *Process {
@@ -235,7 +313,7 @@ func NewTestProcess(c *C, n int) *Process {
 	cfg := Config{
 		ID:        fmt.Sprintf("node%d", n),
 		DataDir:   dir,
-		Port:      strconv.Itoa(int(atomic.AddUint32(&newPort, 1))),
+		Port:      nextTestPort(),
 		OpTimeout: 30 * time.Second,
 	}
 	if testPgSudoBinDir != "" {
