@@ -75,6 +75,7 @@ var preparedStatements = map[string]string{
 	"job_list":                                 jobListQuery,
 	"job_list_page":                            jobListPageQuery,
 	"job_list_active":                          jobListActiveQuery,
+	"job_list_active_page":                     jobListActivePageQuery,
 	"job_list_active_app":                      jobListActiveAppQuery,
 	"job_select":                               jobSelectQuery,
 	"job_insert":                               jobInsertQuery,
@@ -116,12 +117,15 @@ var preparedStatements = map[string]string{
 	"volume_insert":                            volumeInsertQuery,
 	"volume_decommission":                      volumeDecommissionQuery,
 	"http_route_list":                          httpRouteListQuery,
+	"http_route_list_by_ids":                   httpRouteListByIDsQuery,
 	"http_route_list_by_parent_ref":            httpRouteListByParentRefQuery,
 	"http_route_insert":                        httpRouteInsertQuery,
 	"http_route_select":                        httpRouteSelectQuery,
 	"http_route_update":                        httpRouteUpdateQuery,
 	"http_route_delete":                        httpRouteDeleteQuery,
+	"route_list_page":                          routeListPageQuery,
 	"tcp_route_list":                           tcpRouteListQuery,
+	"tcp_route_list_by_ids":                    tcpRouteListByIDsQuery,
 	"tcp_route_list_by_parent_ref":             tcpRouteListByParentRefQuery,
 	"tcp_route_insert":                         tcpRouteInsertQuery,
 	"tcp_route_select":                         tcpRouteSelectQuery,
@@ -707,6 +711,36 @@ SELECT
     ORDER BY job_volumes.index
   )
 FROM job_cache WHERE state = 'pending' OR state = 'starting' OR state = 'up' OR state = 'stopping' ORDER BY updated_at DESC`
+	// Paged active jobs. created_at is the cursor: updated_at moves on every
+	// persist, so a keyset on it skips jobs that are still up.
+	// $1 before, $2 before_id, $3 limit, $4 hide slugrunner (not builders).
+	jobListActivePageQuery = `
+SELECT
+  cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,
+  exit_status, host_error, run_at, restarts, created_at, updated_at, args,
+  ARRAY(
+    SELECT job_volumes.volume_id
+    FROM job_volumes
+    WHERE job_volumes.job_id = job_cache.job_id
+    ORDER BY job_volumes.index
+  )
+FROM job_cache
+WHERE (state = 'pending' OR state = 'starting' OR state = 'up' OR state = 'stopping')
+AND (
+  NOT $4::bool
+  OR process_type IS NULL
+  OR (
+    lower(btrim(process_type)) <> 'slugrunner'
+    AND lower(btrim(process_type)) NOT LIKE 'slugrunner-%'
+  )
+)
+AND (
+  $1::timestamptz IS NULL
+  OR created_at < $1::timestamptz
+  OR ($2::text <> '' AND created_at = $1::timestamptz AND job_id::text < $2::text)
+)
+ORDER BY created_at DESC, job_id DESC
+LIMIT $3`
 	jobSelectQuery = `
 SELECT
   cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,
@@ -866,6 +900,11 @@ LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.deleted_at IS NULL
 ORDER BY r.domain, r.path`
+	httpRouteListByIDsQuery = `
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
+LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
+WHERE r.deleted_at IS NULL AND r.id::text = ANY($1::text[])`
 	httpRouteListByParentRefQuery = `
 SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
@@ -894,6 +933,62 @@ SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.doma
 LEFT OUTER JOIN tcp_route_certificates AS rc on r.id = rc.tcp_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.deleted_at IS NULL`
+	tcpRouteListByIDsQuery = `
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.tls_mode, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM tcp_routes as r
+LEFT OUTER JOIN tcp_route_certificates AS rc on r.id = rc.tcp_route_id
+LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
+WHERE r.deleted_at IS NULL AND r.id::text = ANY($1::text[])`
+	// Combined route page. Visibility is applied before LIMIT.
+	// $1 before, $2 before id, $3 before type, $4 user scope,
+	// $5 platform names, $6 owner, $7 grant keys, $8 limit.
+	// Cluster-admin, the cluster key, and a nil token leave $4 false and see
+	// every route, including system apps. A user token does not.
+	routeListPageQuery = `
+WITH routes AS (
+  SELECT 'http'::text AS route_type, id, created_at, parent_ref
+  FROM http_routes
+  WHERE deleted_at IS NULL
+  UNION ALL
+  SELECT 'tcp'::text, id, created_at, parent_ref
+  FROM tcp_routes
+  WHERE deleted_at IS NULL
+)
+SELECT route_type, id::text
+FROM routes r
+WHERE (
+  NOT $4::bool
+  OR EXISTS (
+    SELECT 1 FROM apps a
+    WHERE r.parent_ref = 'controller/apps/' || a.app_id::text
+    AND a.deleted_at IS NULL
+    AND (
+      COALESCE(a.meta->>'flynn-plugin', '') = 'true'
+      OR (
+        COALESCE(a.meta->>'flynn-system-app', '') <> 'true'
+        AND NOT (a.name = ANY($5::text[]))
+      )
+    )
+    AND (
+      a.owner_account = $6::text
+      OR a.app_id::text = ANY($7::text[])
+      OR a.name = ANY($7::text[])
+    )
+  )
+)
+AND (
+  $1::timestamptz IS NULL
+  OR r.created_at < $1::timestamptz
+  OR (
+    $2::text <> ''
+    AND r.created_at = $1::timestamptz
+    AND (
+      r.id::text < $2::text
+      OR ($3::text <> '' AND r.id::text = $2::text AND r.route_type < $3::text)
+    )
+  )
+)
+ORDER BY r.created_at DESC, r.id DESC, r.route_type DESC
+LIMIT $8`
 	tcpRouteListByParentRefQuery = `
 SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.tls_mode, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM tcp_routes as r
 LEFT OUTER JOIN tcp_route_certificates AS rc on r.id = rc.tcp_route_id

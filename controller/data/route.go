@@ -535,6 +535,143 @@ func scanTCPRoute(s postgres.Scanner) (*router.Route, error) {
 	return &route, nil
 }
 
+// RouteListScope is the caller filter for a route page. UserScope false
+// returns every route, including system apps. That is what the router and
+// the host firewall need. A user token sets UserScope and only sees apps
+// they own or collaborate on, with catalog-internal apps hidden.
+type RouteListScope struct {
+	UserScope     bool
+	Owner         string
+	GrantKeys     []string
+	PlatformNames []string
+}
+
+func (r *RouteRepo) ListPage(scope RouteListScope, before *time.Time, beforeID, beforeType string, count int) ([]*router.Route, error) {
+	if count < 1 {
+		return []*router.Route{}, nil
+	}
+	names := scope.PlatformNames
+	if names == nil {
+		names = []string{}
+	}
+	grants := scope.GrantKeys
+	if grants == nil {
+		grants = []string{}
+	}
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	rows, err := r.db.Query("route_list_page", ts, beforeID, beforeType, scope.UserScope, names, scope.Owner, grants, count)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]routePageKey, 0, count)
+	for rows.Next() {
+		var key routePageKey
+		if err := rows.Scan(&key.routeType, &key.id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(keys) == 0 {
+		return []*router.Route{}, nil
+	}
+	var httpIDs, tcpIDs []string
+	for _, key := range keys {
+		switch key.routeType {
+		case "http":
+			httpIDs = append(httpIDs, key.id)
+		case "tcp":
+			tcpIDs = append(tcpIDs, key.id)
+		}
+	}
+	httpByID, err := r.listHTTPByIDs(httpIDs)
+	if err != nil {
+		return nil, err
+	}
+	tcpByID, err := r.listTCPByIDs(tcpIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*router.Route, 0, len(keys))
+	for _, key := range keys {
+		var route *router.Route
+		switch key.routeType {
+		case "http":
+			route = httpByID[key.id]
+		case "tcp":
+			route = tcpByID[key.id]
+		}
+		if route == nil {
+			return nil, errors.New("controller: route page row missing")
+		}
+		out = append(out, route)
+	}
+	return out, nil
+}
+
+type routePageKey struct {
+	routeType string
+	id        string
+}
+
+func (r *RouteRepo) listHTTPByIDs(ids []string) (map[string]*router.Route, error) {
+	out := map[string]*router.Route{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query("http_route_list_by_ids", ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		route, err := scanHTTPRoute(rows)
+		if err != nil {
+			return nil, err
+		}
+		keepRoute(out, route)
+	}
+	return out, rows.Err()
+}
+
+func (r *RouteRepo) listTCPByIDs(ids []string) (map[string]*router.Route, error) {
+	out := map[string]*router.Route{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query("tcp_route_list_by_ids", ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		route, err := scanTCPRoute(rows)
+		if err != nil {
+			return nil, err
+		}
+		keepRoute(out, route)
+	}
+	return out, rows.Err()
+}
+
+func keepRoute(dst map[string]*router.Route, route *router.Route) {
+	if route == nil || route.ID == "" {
+		return
+	}
+	prev, ok := dst[route.ID]
+	if !ok || (prev.Certificate == nil && route.Certificate != nil) {
+		dst[route.ID] = route
+	}
+}
+
 func (r *RouteRepo) List(parentRef string) ([]*router.Route, error) {
 	httpRoutes, err := r.listHTTP(parentRef)
 	if err != nil {

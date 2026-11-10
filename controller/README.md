@@ -22,6 +22,14 @@ type that has already run is a scale. Stopping jobs stay in memory so a
 volume and a CPU or memory reservation are not released while the job is
 still on the host.
 
+`GET /routes` and `GET /active-jobs` page the same way on a hosted cluster
+and a self-hosted one. Omit `count` and each response is still one JSON
+array. Pass `count` to walk pages of at most 1000. Active-job pages use
+`created_at` and the job uuid. The unpaged active-job list stays ordered
+by `updated_at`. A failed or partial read is an error, so route sync does
+not delete routes, job sync does not mark jobs down, and the host firewall
+does not drop expose rules.
+
 The leader loop owns that in-memory state. Listing jobs or volumes, checking
 a host, and streaming a new host all happen off the loop; the loop only
 applies the result. A slow host blocks work for that host. Placement of other

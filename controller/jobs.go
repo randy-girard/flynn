@@ -49,13 +49,26 @@ func (c *controllerAPI) ListJobs(ctx context.Context, w http.ResponseWriter, req
 }
 
 func (c *controllerAPI) ListActiveJobs(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	list, err := c.jobRepo.ListActive()
+	page, err := parseListPage(req)
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	var list []*ct.Job
+	if page.paged() {
+		list, err = c.jobRepo.ListActivePage(page.Before, page.BeforeID, page.Count, hideInternalToken(ctx))
+	} else {
+		list, err = c.jobRepo.ListActive()
+	}
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
 	if hideInternalToken(ctx) {
 		list = redactJobs(list)
+	}
+	if page.paged() && list == nil {
+		list = []*ct.Job{}
 	}
 	httphelper.JSON(w, 200, list)
 }

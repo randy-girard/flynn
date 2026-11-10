@@ -173,6 +173,41 @@ creates a user session. A cluster-admin user listing `GET /apps` used to print
 `gitreceive`, `router`, `blobstore`, `postgres`, and `controller`. That was
 superuser listing, not a public catalog.
 
+## Route and active job lists
+
+`GET /routes` and `GET /active-jobs` are the same on a hosted cluster and a
+self-hosted one. `tenancy_mode` does not change them.
+
+Omit `count` and the response is one JSON array. Pass `count` (at most
+1000), `before`, and `before_id` to opt into a page. A page shorter than
+`count` is the end. There is no `next` link.
+
+`GET /routes` for a user token includes only routes of apps that user owns
+or collaborates on, and hides catalog-internal apps. That filter runs
+before the limit. The cluster key, a nil internal caller, and a
+cluster-admin token see every route, including system apps. That is
+different from `GET /apps`, which hides bootstrap apps unless `?all=true`.
+The router and the host firewall need those routes. Private keys are still
+removed unless the caller may export them. The route cursor is
+`created_at` plus `type/id` (`http/<uuid>` or `tcp/<uuid>`), newest first.
+`GET /apps/:id/routes` stays one array.
+
+`GET /active-jobs` stays cluster-admin only. It does not gain an app-owner
+filter. The paged order is `created_at` then job `uuid`, not `updated_at`.
+`updated_at` changes every time a job is stored, so a cursor on it would
+skip jobs that are still up. An unpaged list stays ordered by
+`updated_at`. For every token except the cluster key, `slugrunner` jobs
+are omitted before the limit. `slugbuilder` and `dockerbuilder` stay.
+A cluster-admin user token still hides `slugrunner`. The cluster key sees
+them.
+
+An old client that omits `count` still receives one array. A new client
+that sees a first body longer than `count` treats it as the whole list.
+A later page that repeats an id or ignores the cursor is an error. A
+failed later page is an error and is not a partial list. The router, the
+scheduler, and the host firewall depend on that: a partial read must not
+delete routes, mark jobs down, or drop firewall exposes.
+
 ## Applications
 
 Applications run in their own network namespace on the overlay. User jobs

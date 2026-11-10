@@ -1372,6 +1372,14 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`CREATE INDEX apps_list_keyset_idx ON apps (created_at DESC, app_id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX apps_owner_list_idx ON apps (owner_account, created_at DESC, app_id DESC) WHERE deleted_at IS NULL`,
 	)
+	// Keyset for GET /routes and GET /active-jobs. Route pages order by
+	// created_at, id. Active-job pages order by created_at, job_id. The
+	// unpaged active-job list stays on updated_at, which moves on every write.
+	migrations.Add(82,
+		`CREATE INDEX http_routes_list_keyset_idx ON http_routes (created_at DESC, id DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX tcp_routes_list_keyset_idx ON tcp_routes (created_at DESC, id DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX job_cache_active_keyset_idx ON job_cache (created_at DESC, job_id DESC) WHERE state IN ('pending', 'starting', 'up', 'stopping')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

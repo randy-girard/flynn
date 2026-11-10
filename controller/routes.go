@@ -196,14 +196,43 @@ func (p sortedRoutes) Len() int           { return len(p) }
 func (p sortedRoutes) Less(i, j int) bool { return p[i].CreatedAt.After(p[j].CreatedAt) }
 func (p sortedRoutes) Swap(i, j int)      { p[i], p[j] = p[j], p[i] }
 
+func splitRouteCursor(beforeID string) (id, routeType string) {
+	typ, rest, ok := strings.Cut(beforeID, "/")
+	if !ok {
+		return beforeID, ""
+	}
+	switch typ {
+	case "http", "tcp":
+		return rest, typ
+	default:
+		return beforeID, ""
+	}
+}
+
 func (c *controllerAPI) GetRouteList(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	routes, err := c.routeRepo.List("")
+	page, err := parseListPage(req)
 	if err != nil {
 		respondWithError(w, err)
 		return
 	}
-	routes = c.filterRoutes(ctx, routes)
-	sort.Sort(sortedRoutes(routes))
+	var routes []*router.Route
+	if page.paged() {
+		id, routeType := splitRouteCursor(page.BeforeID)
+		routes, err = c.routeRepo.ListPage(c.routeListScope(ctx), page.Before, id, routeType, page.Count)
+		if routes == nil && err == nil {
+			routes = []*router.Route{}
+		}
+	} else {
+		routes, err = c.routeRepo.List("")
+		if err == nil {
+			routes = c.filterRoutes(ctx, routes)
+			sort.Sort(sortedRoutes(routes))
+		}
+	}
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
 	httphelper.JSON(w, 200, presentRoutes(ctx, routes))
 }
 

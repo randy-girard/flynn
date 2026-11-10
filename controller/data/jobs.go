@@ -243,3 +243,28 @@ func (r *JobRepo) ListActive() ([]*ct.Job, error) {
 	defer rows.Close()
 	return scanJobRows(rows)
 }
+
+// ListActivePage is the created_at keyset for GET /active-jobs. hideSlugrunner
+// drops slugrunner before LIMIT. Builders stay. The cluster key passes false.
+func (r *JobRepo) ListActivePage(before *time.Time, beforeID string, count int, hideSlugrunner bool) ([]*ct.Job, error) {
+	if count < 1 {
+		return []*ct.Job{}, nil
+	}
+	var ts interface{}
+	if before != nil {
+		ts = *before
+	}
+	rows, err := r.db.Query("job_list_active_page", ts, beforeID, count, hideSlugrunner)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	jobs, err := scanJobRows(rows)
+	if err != nil {
+		return nil, err
+	}
+	if jobs == nil {
+		return []*ct.Job{}, nil
+	}
+	return jobs, nil
+}

@@ -371,6 +371,19 @@ func existingProcesses(c *controllerAPI, appID, releaseID string) map[string]int
 	return f.Processes
 }
 
+func (c *controllerAPI) routeListScope(ctx context.Context) data.RouteListScope {
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || c == nil || c.appRepo == nil {
+		return data.RouteListScope{PlatformNames: []string{}, GrantKeys: []string{}}
+	}
+	return data.RouteListScope{
+		UserScope:     true,
+		Owner:         "user:" + tok.UserID,
+		GrantKeys:     visibleGrantKeys(tok),
+		PlatformNames: authz.PlatformAppNames(),
+	}
+}
+
 func (c *controllerAPI) filterRoutes(ctx context.Context, routes []*router.Route) []*router.Route {
 	tok := authz.TokenFromContext(ctx)
 	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() || c.appRepo == nil {
