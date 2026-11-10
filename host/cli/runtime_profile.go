@@ -129,6 +129,25 @@ usage: flynn-host runtime:allow-user-scale [--disable]
 Allow (or --disable) tenants to change process counts with flynn scale.
 Cluster admins and flynn-host are never blocked. Default is on.
 `
+	runtimeBuildLimitsUsage = `
+usage: flynn-host runtime:build-limits [<cluster> <account>]
+
+Show or set how many compiles may be in flight. <cluster> is the cluster
+cap (at least 2, default 8). <account> is how many of those one
+owner_account may hold (at least 1, default 3) and must be strictly below
+the cluster cap. There is no unlimited value.
+
+Pending, blocked, starting, and up slugbuilder and dockerbuilder jobs
+count, across every app of that account. An empty owner_account is one
+shared bucket, not one bucket per app. The same settings apply on a
+hosted cluster and a self-hosted cluster. A large company raises both
+numbers; one account still cannot fill the cluster cap.
+
+Examples:
+
+    $ flynn-host runtime:build-limits
+    $ flynn-host runtime:build-limits 16 4
+`
 	runtimeAllowUserScaleTagsUsage = `
 usage: flynn-host runtime:allow-user-scale-tags [--disable]
 
@@ -165,6 +184,7 @@ func init() {
 	Register("runtime:single-instance-restart", runRuntimeSingleInstanceRestart, runtimeSingleInstanceRestartUsage)
 	Register("runtime:allow-user-scale", runRuntimeAllowUserScale, runtimeAllowUserScaleUsage)
 	Register("runtime:allow-user-scale-tags", runRuntimeAllowUserScaleTags, runtimeAllowUserScaleTagsUsage)
+	Register("runtime:build-limits", runRuntimeBuildLimits, runtimeBuildLimitsUsage)
 }
 
 func runtimeSettingsFrom(cur *ct.RuntimeSettings) ct.RuntimeSettings {
@@ -558,5 +578,45 @@ func updateRuntimeBoolSetting(args *docopt.Args, set func(*ct.RuntimeSettings, b
 		return err
 	}
 	fmt.Println(format(s))
+	return nil
+}
+
+func runRuntimeBuildLimits(args *docopt.Args) error {
+	client, err := controllerClient()
+	if err != nil {
+		return err
+	}
+	cur, err := client.GetRuntimeSettings()
+	if err != nil {
+		return err
+	}
+	clusterArg := args.String["<cluster>"]
+	accountArg := args.String["<account>"]
+	clusterLimit, accountLimit := cur.BuildLimits()
+	if clusterArg == "" && accountArg == "" {
+		fmt.Printf("build_cluster_limit=%d build_account_limit=%d\n", clusterLimit, accountLimit)
+		return nil
+	}
+	if clusterArg == "" || accountArg == "" {
+		return fmt.Errorf("set both the cluster limit and the account limit")
+	}
+	clusterLimit, err = strconv.Atoi(clusterArg)
+	if err != nil {
+		return fmt.Errorf("cluster limit must be an integer")
+	}
+	accountLimit, err = strconv.Atoi(accountArg)
+	if err != nil {
+		return fmt.Errorf("account limit must be an integer")
+	}
+	if _, _, ok := ct.CheckBuildLimits(clusterLimit, accountLimit); !ok {
+		return fmt.Errorf("build_cluster_limit must be at least 2 and build_account_limit must be at least 1 and less than the cluster limit")
+	}
+	s := runtimeSettingsFrom(cur)
+	s.BuildClusterLimit = clusterLimit
+	s.BuildAccountLimit = accountLimit
+	if err := client.UpdateRuntimeSettings(&s); err != nil {
+		return err
+	}
+	fmt.Printf("build_cluster_limit=%d build_account_limit=%d\n", s.BuildClusterLimit, s.BuildAccountLimit)
 	return nil
 }
