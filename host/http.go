@@ -18,6 +18,7 @@ import (
 
 	"github.com/inconshreveable/log15"
 	"github.com/julienschmidt/httprouter"
+	"github.com/randy-girard/flynn/controller/buildadmit"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/cli"
 	"github.com/randy-girard/flynn/host/config"
@@ -559,6 +560,16 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	if err := httphelper.DecodeJSON(r, job); err != nil {
 		log.Error("error decoding job", "err", err)
 		httphelper.Error(w, err)
+		h.addJobRateLimitBucket.Put()
+		return
+	}
+	compileID := job.ID
+	if compileID == "" {
+		compileID = id
+	}
+	if buildadmit.ForeignCompile(job.Metadata["flynn-controller.type"], compileID, h.host.id) {
+		log.Warn("rejecting compile whose job id is not for this host")
+		httphelper.ValidationError(w, "id", "compile job id is not for this host")
 		h.addJobRateLimitBucket.Put()
 		return
 	}

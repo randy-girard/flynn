@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/flynn/go-docopt"
-	api "github.com/randy-girard/flynn/controller/api"
-	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/buildadmit"
+	"github.com/randy-girard/flynn/controller/buildtoken"
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
@@ -27,12 +27,10 @@ import (
 	"github.com/randy-girard/flynn/pkg/blobstoreauth"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/dockerimage"
-	"github.com/randy-girard/flynn/pkg/exec"
 	"github.com/randy-girard/flynn/pkg/random"
 	"github.com/randy-girard/flynn/pkg/shutdown"
 	"github.com/randy-girard/flynn/pkg/version"
 	router "github.com/randy-girard/flynn/router/types"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func init() {
@@ -116,7 +114,7 @@ const (
 	// (root-only, read-only) inside slug/dockerbuilder jobs. create-artifact
 	// reads it and authenticates to the controller/tarreceive with a bearer
 	// token instead of the cluster-wide CONTROLLER_KEY.
-	buildTokenPath = "/run/secrets/controller_token"
+	buildTokenPath = buildadmit.TokenPath
 
 	// defaultBuildTimeout is the build timeout used when no override is
 	// configured. It bounds how long a single build may run and also the
@@ -129,7 +127,7 @@ const (
 	// is derived from the same value, the authorizer's ACCESS_TOKEN_MAX_VALIDITY
 	// applies independently on top, so a misconfigured or malicious override can
 	// never produce a longer-lived token than policy allows.
-	maxBuildTimeout = 30 * time.Minute
+	maxBuildTimeout = buildadmit.MaxPendingWait
 
 	// buildTimeoutEnv lets an operator adjust the build timeout per app
 	// (e.g. `flynn -a gitreceive env set FLYNN_BUILD_TIMEOUT=25m` for a
@@ -191,40 +189,14 @@ func buildSigner() (*tokensigner.Signer, error) {
 // owner keeps org: so the bucket cannot collide with a user id. Anything else
 // non-empty is kept whole. With no owner, CreatedBy is the fallback.
 func buildTokenUserID(app *ct.App) string {
-	if app == nil {
-		return ""
-	}
-	owner := strings.TrimSpace(app.OwnerAccount)
-	switch {
-	case strings.HasPrefix(owner, "user:"):
-		if id := strings.TrimPrefix(owner, "user:"); id != "" {
-			return id
-		}
-	case owner != "":
-		return owner
-	}
-	return strings.TrimSpace(app.CreatedBy)
+	return buildtoken.UserID(app)
 }
 
 // mintBuildToken signs a short-lived AccessToken scoped to a single app and the
-// build:artifacts action. The token can create this build's artifact and write
-// only to this app; it is worthless for anything else and expires quickly, so a
-// buildpack/Dockerfile step that exfiltrates it cannot escalate to the cluster.
+// build:artifacts action. The controller calls the same helper when a compile
+// is about to start. gitreceive keeps this wrapper for the credential tests.
 func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, error) {
-	now := time.Now()
-	return signer.Sign(&api.AccessToken{
-		// Same account bucket as a dashboard JWT. A new signature must not
-		// reset the controller rate limit. An org owner keeps the org:
-		// prefix so it cannot collide with a user id.
-		UserId:     buildTokenUserID(app),
-		UserEmail:  "build:" + app.Name,
-		IssueTime:  timestamppb.New(now),
-		ExpireTime: timestamppb.New(now.Add(ttl)),
-		Scopes:     []string{authz.ScopeBuildArtifacts},
-		AppGrants: []*api.AppGrant{
-			{AppId: app.ID, Permissions: []string{"app:write"}},
-		},
-	})
+	return buildtoken.Mint(signer, app, ttl)
 }
 
 // applyBuildCredential delivers the build credential to a job. It mints an
@@ -544,32 +516,17 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 		}
 	}
 
-	job := buildJob(slugBuilder, app, prevRelease, jobEnv, "slugbuilder", "/builder/build.sh")
-	if sb, ok := prevRelease.Processes["slugbuilder"]; ok {
-		job.Resources = sb.Resources
+	resources := resource.Defaults()
+	if sb, ok := prevRelease.Processes["slugbuilder"]; ok && sb.Resources != nil {
+		resources = sb.Resources
 	} else if rawLimit := os.Getenv("SLUGBUILDER_DEFAULT_MEMORY_LIMIT"); rawLimit != "" {
 		if limit, err := resource.ParseLimit(resource.TypeMemory, rawLimit); err == nil {
-			job.Resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
+			resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
 		}
 	}
 
-	signer, err := buildSigner()
-	if err != nil {
-		return fmt.Errorf("error loading build signing key: %s", err)
-	}
-	if err := applyBuildCredential(signer, job, app, releaseEnv); err != nil {
-		return fmt.Errorf("error minting build token: %s", err)
-	}
-
-	cmd := buildJobCmd(slugBuilder, job)
-	cmd.Volumes = []*ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
-	var output bytes.Buffer
 	gitOut := newGitPushFilter(syncStdout(os.Stdout))
-	out := io.MultiWriter(gitOut, &output)
-	cmd.Stdout = out
-	cmd.Stderr = out
-
-	if err := runBuildCmd(cmd, releaseEnv); err != nil {
+	if err := runScheduledBuild(client, app, prevRelease, slugBuilder, jobEnv, "slugbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut); err != nil {
 		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
@@ -620,35 +577,22 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	// Build-job capabilities (CAP_SYS_ADMIN/NET_ADMIN/NET_RAW etc.) are applied
 	// centrally by flynn-host for dockerbuilder jobs; see isBuildJob in
 	// host/libcontainer_backend.go.
-	job := buildJob(dockerBuilder, app, prevRelease, jobEnv, "dockerbuilder", "/builder/build.sh")
+	resources := resource.Defaults()
 	if limit, err := resource.ParseLimit(resource.TypeTempDisk, "4G"); err == nil {
-		job.Resources[resource.TypeTempDisk] = resource.Spec{Limit: &limit, Request: &limit}
+		resources[resource.TypeTempDisk] = resource.Spec{Limit: &limit, Request: &limit}
 	}
-	if db, ok := prevRelease.Processes["dockerbuilder"]; ok {
-		job.Resources = db.Resources
+	if db, ok := prevRelease.Processes["dockerbuilder"]; ok && db.Resources != nil {
+		resources = db.Resources
 	} else if rawLimit := os.Getenv("DOCKERBUILDER_DEFAULT_MEMORY_LIMIT"); rawLimit != "" {
 		if limit, err := resource.ParseLimit(resource.TypeMemory, rawLimit); err == nil {
-			job.Resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
+			resources[resource.TypeMemory] = resource.Spec{Limit: &limit, Request: &limit}
 		}
 	}
 
-	signer, err := buildSigner()
-	if err != nil {
-		return fmt.Errorf("error loading build signing key: %s", err)
-	}
-	if err := applyBuildCredential(signer, job, app, releaseEnv); err != nil {
-		return fmt.Errorf("error minting build token: %s", err)
-	}
-
-	cmd := buildJobCmd(dockerBuilder, job)
-	cmd.Volumes = []*ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
-	// Merge stderr into stdout so build output goes through the git hook pipe
-	// (pre-receive only pipes flynn-receiver stdout to the client).
+	// Build-job capabilities are applied by flynn-host for dockerbuilder jobs.
+	// Merge stderr into stdout so build output goes through the git hook pipe.
 	gitOut := newGitPushFilter(syncStdout(os.Stdout))
-	cmd.Stdout = gitOut
-	cmd.Stderr = gitOut
-
-	if err := runBuildCmd(cmd, releaseEnv); err != nil {
+	if err := runScheduledBuild(client, app, prevRelease, dockerBuilder, jobEnv, "dockerbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut); err != nil {
 		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
@@ -686,17 +630,6 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 
 	procs := release.Processes
 	return finishDeploy(client, app, prevRelease, release, procs)
-}
-
-// buildJobCmd schedules a build job on the same host as gitreceive so attach
-// streams stay local and are less likely to drop mid-build.
-func buildJobCmd(artifact *ct.Artifact, job *host.Job) *exec.Cmd {
-	if hostID := localHostID(); hostID != "" {
-		if h, err := cluster.NewClient().Host(hostID); err == nil {
-			return exec.JobUsingHost(h, artifact, job)
-		}
-	}
-	return exec.Job(artifact, job)
 }
 
 func localHostID() string {
@@ -747,41 +680,125 @@ func buildJob(artifact *ct.Artifact, app *ct.App, prevRelease *ct.Release, jobEn
 	}
 }
 
-func runBuildCmd(cmd *exec.Cmd, releaseEnv map[string]string) error {
-	if len(releaseEnv) > 0 {
-		stdin, err := cmd.StdinPipe()
-		if err != nil {
-			return err
-		}
-		go func() {
-			if err := appendEnvDir(archiveReader(), stdin, releaseEnv); err != nil {
-				log.Fatalln("ERROR:", err)
-			}
-		}()
-	} else {
-		cmd.Stdin = archiveReader()
-	}
-
-	shutdown.BeforeExit(func() { cmd.Kill() })
-
-	timeout := resolveBuildTimeout(releaseEnv)
-	if err := cmd.Start(); err != nil {
+// runScheduledBuild asks the controller for a pending compile and waits until
+// the scheduler places it. git push stays attached for that wait and for the
+// compile. A full cap returns immediately. Receiver exit stops the job,
+// including one that is still pending.
+func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Release, artifact *ct.Artifact, jobEnv map[string]string, jobType string, args []string, resources resource.Resources, releaseEnv map[string]string, stdout, stderr io.Writer) (err error) {
+	if err = ensureBuildRelease(client, app, prevRelease, artifact); err != nil {
 		return err
 	}
+	timeout := resolveBuildTimeout(releaseEnv)
+	job, err := client.CreateBuild(app.ID, &ct.BuildRequest{
+		Type:           jobType,
+		ReleaseID:      prevRelease.ID,
+		Env:            jobEnv,
+		Artifact:       artifact,
+		Args:           args,
+		Resources:      resources,
+		TimeoutSeconds: int(timeout / time.Second),
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			client.DeleteJob(app.ID, job.UUID)
+		}
+	}()
+	shutdown.BeforeExit(func() { client.DeleteJob(app.ID, job.UUID) })
+
+	deadline := time.Now().Add(buildadmit.MaxPendingWait)
+	placed, err := buildadmit.WaitForPlacement(func() (buildadmit.PlacementJob, error) {
+		current, err := client.GetJob(app.ID, job.UUID)
+		if err != nil {
+			return buildadmit.PlacementJob{}, err
+		}
+		return buildadmit.PlacementJob{
+			ID:     current.ID,
+			HostID: current.HostID,
+			State:  string(current.State),
+			Type:   current.Type,
+		}, nil
+	}, deadline, nil, nil)
+	if err != nil {
+		return err
+	}
+	h, err := cluster.NewClient().Host(placed.HostID)
+	if err != nil {
+		return err
+	}
+	attach, err := h.Attach(&host.AttachReq{
+		JobID: placed.ID,
+		Flags: host.AttachFlagStdin | host.AttachFlagStdout | host.AttachFlagStderr | host.AttachFlagStream,
+	}, true)
+	if err != nil {
+		return err
+	}
+	defer attach.Close()
+
+	go func() {
+		stdin := attachStdin{AttachClient: attach}
+		if len(releaseEnv) > 0 {
+			if copyErr := appendEnvDir(archiveReader(), stdin, releaseEnv); copyErr != nil {
+				log.Println("ERROR:", copyErr)
+			}
+			return
+		}
+		if _, copyErr := io.Copy(attach, archiveReader()); copyErr != nil {
+			log.Println("ERROR:", copyErr)
+			return
+		}
+		if copyErr := attach.CloseWrite(); copyErr != nil {
+			log.Println("ERROR:", copyErr)
+		}
+	}()
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
+	go func() {
+		code, recvErr := attach.Receive(stdout, stderr)
+		if recvErr != nil {
+			done <- recvErr
+			return
+		}
+		if code != 0 {
+			done <- fmt.Errorf("build exited %d", code)
+			return
+		}
+		done <- nil
+	}()
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 	select {
-	case err := <-done:
+	case err = <-done:
 		return err
 	case <-timer.C:
-		cmd.Kill()
-		<-done
-		return fmt.Errorf("build exceeded timeout of %s (set %s to change, cluster max %s)", timeout, buildTimeoutEnv, maxBuildTimeout)
+		err = fmt.Errorf("build exceeded timeout of %s (set %s to change, cluster max %s)", timeout, buildTimeoutEnv, maxBuildTimeout)
+		return err
 	}
+}
+
+type attachStdin struct {
+	cluster.AttachClient
+}
+
+func (a attachStdin) Close() error { return a.CloseWrite() }
+
+// ensureBuildRelease creates a release row when this app has never had one.
+// job_cache.release_id is NOT NULL. The row is not deployed.
+func ensureBuildRelease(client controller.Client, app *ct.App, prev *ct.Release, artifact *ct.Artifact) error {
+	if prev == nil || prev.ID != "" || client == nil || app == nil {
+		return nil
+	}
+	rel := &ct.Release{Processes: map[string]ct.ProcessType{}}
+	if artifact != nil && artifact.ID != "" {
+		rel.ArtifactIDs = []string{artifact.ID}
+	}
+	if err := client.CreateRelease(app.ID, rel); err != nil {
+		return fmt.Errorf("Error creating release for build: %s", err)
+	}
+	prev.ID = rel.ID
+	return nil
 }
 
 func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType) error {

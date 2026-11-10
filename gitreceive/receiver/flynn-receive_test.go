@@ -626,6 +626,42 @@ func (f *fakeBuildingStore) UpdateAppMeta(app *ct.App) error {
 	return nil
 }
 
+func TestCompileUsesScheduledBuild(t *testing.T) {
+	body, err := os.ReadFile("flynn-receive.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(body)
+	if strings.Contains(src, "func buildJobCmd(") {
+		t.Fatal("buildJobCmd pins the compile to a host; delete it")
+	}
+	for _, name := range []string{"deployBuildpack", "deployContainer"} {
+		fn := functionBody(src, name)
+		if fn == "" {
+			t.Fatalf("missing %s", name)
+		}
+		if strings.Contains(fn, "buildJobCmd(") || strings.Contains(fn, "applyBuildCredential(") {
+			t.Fatalf("%s still starts the compile itself; call runScheduledBuild and let the controller mint the token at start", name)
+		}
+		if !strings.Contains(fn, "runScheduledBuild(") {
+			t.Fatalf("%s must call runScheduledBuild", name)
+		}
+	}
+}
+
+func functionBody(src, name string) string {
+	start := strings.Index(src, "func "+name+"(")
+	if start < 0 {
+		return ""
+	}
+	rest := src[start+1:]
+	next := strings.Index(rest, "\nfunc ")
+	if next < 0 {
+		return src[start:]
+	}
+	return src[start : start+1+next]
+}
+
 func TestRunMarksBuildingBeforeCompile(t *testing.T) {
 	body, err := os.ReadFile("flynn-receive.go")
 	if err != nil {
