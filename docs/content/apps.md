@@ -159,11 +159,29 @@ when the previous deploy finishes, instead of failing with "already one in
 progress". Only one deploy rolls at a time. `env:set` / `env:unset` return
 after the release is created; the deploy continues in the background.
 
+### Build capacity
+
+`git push` waits after the controller accepts the compile. The receiver
+stays up while the job is pending and while it runs, streams the git
+archive and config vars on stdin, and streams logs back. The pending job
+is visible on the app. If the cluster cap or that account's cap is full,
+the push fails immediately and no job is created.
+
+The caps are cluster settings, the same on a hosted cluster and a
+self-hosted one. The defaults are 8 compiles in flight for the cluster and
+3 for one `owner_account` (across that account's apps). An empty
+`owner_account` is one shared bucket. One account cannot hold every slot.
+`flynn-host runtime:build-limits` shows and sets the pair. Pending,
+blocked, starting, and up `slugbuilder` and `dockerbuilder` jobs count.
+A compile still waiting after 30 minutes is cancelled. The run timeout
+starts when the process starts and is also at most 30 minutes.
+
 ### Cancelling Deploys
 
 Deploys via `git push` can be cancelled by killing the push process with
 `Ctrl-C` or by signalling the process to terminate. The build will be cancelled
-immediately and the code will not be deployed.
+immediately, including a compile that is still pending, and the code will not
+be deployed.
 
 ### Building specific Git branches
 

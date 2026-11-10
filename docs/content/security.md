@@ -263,16 +263,17 @@ app's `-cache.tgz` / `-docker-cache.tgz` objects. A scoped
 `build:artifacts` token (the same one create-artifact uses for the
 controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
 
-Gitreceive and taffy require `ACCESS_TOKEN_SIGNING_KEY` to mint a scoped
-`build:artifacts` token and mount it at `/run/secrets/controller_token`.
-The token's user id is the app owner, so the controller rate limit for
-that build is the owner's. An app with no owner uses `created_by`.
-Taffy runs `flynn-receiver` for URL deploys, so a taffy release without
-that key fails the build the same way a git push would. Neither app puts
-`CONTROLLER_KEY` in slugbuilder or dockerbuilder environment (that key
-would otherwise remain in the container config and `/proc` environ). A
-cluster without a signing key fails the build with a clear operator error
-instead of injecting the cluster-admin key.
+The controller mints a scoped `build:artifacts` token when a compile is
+about to start, and the scheduler mounts it at `/run/secrets/controller_token`.
+The token is not stored on the job row and is not minted when the pending
+row is created, so time spent waiting for a host does not consume its
+lifetime. The lifetime is the build timeout, at most 30 minutes. The
+token's user id is the app owner, so the controller rate limit for that
+build is the owner's. An app with no owner uses `created_by`. Gitreceive
+and taffy do not put `CONTROLLER_KEY` in slugbuilder or dockerbuilder
+environment (that key would otherwise remain in the container config and
+`/proc` environ). A controller without `ACCESS_TOKEN_SIGNING_KEY` rejects
+the build before a job is inserted.
 `build.sh` still relocates a leftover `CONTROLLER_KEY` to
 `/run/secrets/controller_key` and unsets the env if one is present.
 
@@ -330,14 +331,15 @@ credentials.
 
 One-off jobs (`flynn run`, `POST /apps/:id/jobs`) cannot set process type
 `slugbuilder` or `dockerbuilder`. Host classification treats those types as
-build jobs (no user namespace, extra capabilities for nested BuildKit). That
-exception is only for gitreceive compile jobs; app-scoped `app:jobs:run`
-callers get HTTP 400. Cluster-admin and system apps may still set those
-types.
+build jobs (no user namespace, extra capabilities for nested BuildKit).
+That rule applies to every caller, including `cluster:admin`, the cluster
+key, and system apps. Compiles are `POST /apps/:id/builds`, and only the
+cluster key can call it. The scheduler places the job. It is not pinned to
+the gitreceive host.
 
-Dashboard JWTs hide builder process types (`slugbuilder`, `dockerbuilder`,
-`slugrunner`) from jobs, logs, formations, and release process maps. Setting
-those process limits requires the cluster controller key (`flynn limit:set` or
+`slugbuilder` and `dockerbuilder` jobs stay visible on the app, including
+while they are pending. `slugrunner` stays hidden. Setting builder process
+limits requires the cluster controller key (`flynn limit:set` or
 flynn-host). Path-based
 HTTP routes (`example.com/api`) can only be created with
 `flynn-host route:add`. App-scoped tokens with `app:routes:write` can only

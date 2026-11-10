@@ -68,6 +68,18 @@ not change this value. Hosted mode already
 reserves builtin `small`, `medium`, and `large`. A large self-hosted
 cluster turns that reservation on with `flynn-host runtime:reserve`.
 
+Compile capacity is a different pair of numbers, also the same in hosted
+and self-hosted mode. `runtime_settings.build_cluster_limit` defaults to 8
+and `build_account_limit` defaults to 3. The account cap is how many
+`slugbuilder` and `dockerbuilder` jobs one `owner_account` may have pending
+or running, across all of that account's apps. It must stay strictly below
+the cluster cap, so one account cannot fill every slot. An empty
+`owner_account` is one shared bucket, not unlimited and not one bucket per
+app. A company that never set owners still cannot run unbounded builds; set
+`owner_account` per team, and raise both limits with
+`flynn-host runtime:build-limits <cluster> <account>` (for example `16 4`).
+There is no unlimited value. `tenancy_mode` does not change these limits.
+
 The scheduler leader refreshes each host's CPU and memory totals about every
 10 seconds in either tenancy mode. A reserving job skips a host that has
 never reported those totals. A failed read keeps the last totals. Shared
