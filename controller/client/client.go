@@ -86,6 +86,10 @@ type Client interface {
 	ExpectedScalingEvents(actual, expected map[string]int, releaseProcesses map[string]ct.ProcessType, clusterSize int) ct.JobEvents
 	RunJobAttached(appID string, job *ct.NewJob) (httpclient.ReadWriteCloser, error)
 	RunJobDetached(appID string, req *ct.NewJob) (*ct.Job, error)
+	CreateBuild(appID string, req *ct.BuildRequest) (*ct.Job, error)
+	GetBuildSpec(appID, jobID string) (*ct.BuildSpec, error)
+	MintBuildToken(appID, jobID string) (string, error)
+	ListPendingBuilds() ([]*ct.Job, error)
 	GetJob(appID, jobID string) (*ct.Job, error)
 	JobList(appID string) ([]*ct.Job, error)
 	JobListActive() ([]*ct.Job, error)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/randy-girard/flynn/controller/buildadmit"
 	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/resource"
@@ -139,6 +140,8 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		SingleInstanceRestart *bool   `json:"single_instance_restart"`
 		AllowUserScale        *bool   `json:"allow_user_scale"`
 		AllowUserScaleTags    *bool   `json:"allow_user_scale_tags"`
+		BuildClusterLimit     *int    `json:"build_cluster_limit"`
+		BuildAccountLimit     *int    `json:"build_account_limit"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		if strings.Contains(err.Error(), "max_processes") {
@@ -176,6 +179,19 @@ func (c *controllerAPI) UpdateRuntimeSettings(ctx context.Context, w http.Respon
 		AllowUserScale:        cur.AllowUserScale,
 		AllowUserScaleTags:    cur.AllowUserScaleTags,
 	}
+	clusterLimit, accountLimit := cur.BuildLimits()
+	if body.BuildClusterLimit != nil {
+		clusterLimit = *body.BuildClusterLimit
+	}
+	if body.BuildAccountLimit != nil {
+		accountLimit = *body.BuildAccountLimit
+	}
+	if err := buildadmit.ValidLimits(buildadmit.Limits{Cluster: clusterLimit, Account: accountLimit}); err != nil {
+		respondWithError(w, ct.ValidationError{Field: "build_limits", Message: err.Error()})
+		return
+	}
+	s.BuildClusterLimit = clusterLimit
+	s.BuildAccountLimit = accountLimit
 	if body.AllowUserScale != nil {
 		s.AllowUserScale = *body.AllowUserScale
 	}

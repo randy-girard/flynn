@@ -157,6 +157,8 @@ var preparedStatements = map[string]string{
 	"runtime_profile_delete":                   runtimeProfileDeleteQuery,
 	"runtime_settings_select":                  runtimeSettingsSelectQuery,
 	"runtime_settings_update":                  runtimeSettingsUpdateQuery,
+	"build_pending_list":                       buildPendingListQuery,
+	"build_spec_select":                        buildSpecSelectQuery,
 	"db_runtime_list":                          dbRuntimeListQuery,
 	"db_runtime_insert":                        dbRuntimeInsertQuery,
 	"db_runtime_delete_all":                    dbRuntimeDeleteAllQuery,
@@ -1120,10 +1122,29 @@ RETURNING builtin, created_at, updated_at`
 UPDATE runtime_profiles SET deleted_at = now()
 WHERE profile_id = $1 AND deleted_at IS NULL AND builtin = false`
 	runtimeSettingsSelectQuery = `
-SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, max_restarts, job_restart_interval, single_instance_restart, allow_user_scale, allow_user_scale_tags, updated_at FROM runtime_settings WHERE id = 1`
+SELECT allow_custom_limits, max_processes, reserve_resources, blob_gc_keep, blob_gc_max_age, max_restarts, job_restart_interval, single_instance_restart, allow_user_scale, allow_user_scale_tags, build_cluster_limit, build_account_limit, updated_at FROM runtime_settings WHERE id = 1`
 	runtimeSettingsUpdateQuery = `
-UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, max_restarts = $6, job_restart_interval = $7, single_instance_restart = $8, allow_user_scale = $9, allow_user_scale_tags = $10, updated_at = now()
+UPDATE runtime_settings SET allow_custom_limits = $1, max_processes = $2, reserve_resources = $3, blob_gc_keep = $4, blob_gc_max_age = $5, max_restarts = $6, job_restart_interval = $7, single_instance_restart = $8, allow_user_scale = $9, allow_user_scale_tags = $10, build_cluster_limit = $11, build_account_limit = $12, updated_at = now()
 WHERE id = 1 RETURNING updated_at`
+	buildPendingListQuery = `
+SELECT
+  cluster_id, job_id, host_id, app_id, release_id, process_type, state, meta,
+  exit_status, host_error, run_at, restarts, created_at, updated_at, args,
+  ARRAY(
+    SELECT job_volumes.volume_id
+    FROM job_volumes
+    WHERE job_volumes.job_id = job_cache.job_id
+    ORDER BY job_volumes.index
+  )
+FROM job_cache
+WHERE state IN ('pending', 'blocked', 'starting', 'up')
+  AND (
+    lower(process_type) = 'slugbuilder' OR lower(process_type) = 'dockerbuilder'
+    OR lower(process_type) LIKE 'slugbuilder-%' OR lower(process_type) LIKE 'dockerbuilder-%'
+  )
+ORDER BY created_at ASC, job_id ASC`
+	buildSpecSelectQuery = `
+SELECT env::text, artifact, resources, args, app_name, timeout_seconds FROM build_specs WHERE job_id = $1`
 	dbRuntimeListQuery = `
 SELECT engine, name, cpu, memory, disk, builtin, dedicated, tags FROM db_runtimes ORDER BY engine, name`
 	dbRuntimeInsertQuery = `

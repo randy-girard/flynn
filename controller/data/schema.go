@@ -1380,6 +1380,24 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`CREATE INDEX tcp_routes_list_keyset_idx ON tcp_routes (created_at DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX job_cache_active_keyset_idx ON job_cache (created_at DESC, job_id DESC) WHERE state IN ('pending', 'starting', 'up', 'stopping')`,
 	)
+	// Compile caps are cluster settings for hosted and self-hosted alike.
+	// Account stays strictly below cluster so one owner cannot fill every slot.
+	// The build spec stays off job_cache: it can hold an SSH key and a cache URL.
+	migrations.Add(83,
+		`ALTER TABLE runtime_settings ADD COLUMN build_cluster_limit integer NOT NULL DEFAULT 8`,
+		`ALTER TABLE runtime_settings ADD COLUMN build_account_limit integer NOT NULL DEFAULT 3`,
+		`ALTER TABLE runtime_settings ADD CONSTRAINT runtime_settings_build_limits_check CHECK (build_cluster_limit >= 2 AND build_account_limit >= 1 AND build_account_limit < build_cluster_limit)`,
+		`CREATE TABLE build_specs (
+    job_id uuid PRIMARY KEY REFERENCES job_cache (job_id) ON DELETE CASCADE,
+    env jsonb NOT NULL DEFAULT '{}'::jsonb,
+    artifact text NOT NULL,
+    resources text NOT NULL DEFAULT '{}',
+    args text NOT NULL DEFAULT '[]',
+    app_name text NOT NULL DEFAULT '',
+    timeout_seconds integer NOT NULL DEFAULT 900
+)`,
+		`CREATE INDEX job_cache_inflight_builds_idx ON job_cache (app_id) WHERE state IN ('pending', 'blocked', 'starting', 'up') AND (lower(process_type) = 'slugbuilder' OR lower(process_type) = 'dockerbuilder' OR lower(process_type) LIKE 'slugbuilder-%' OR lower(process_type) LIKE 'dockerbuilder-%')`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

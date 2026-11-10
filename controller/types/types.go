@@ -73,6 +73,34 @@ type App struct {
 	Building bool `json:"building,omitempty"`
 }
 
+// MetaBuildOwner is the job meta key for the account that owns a compile.
+// It is not prefixed with flynn-controller. because job persistence drops
+// that prefix. Empty means the shared unowned bucket.
+const MetaBuildOwner = "owner_account"
+
+// DefaultBuildClusterLimit is how many compiles may be in flight at once.
+const DefaultBuildClusterLimit = 8
+
+// DefaultBuildAccountLimit is how many of those one owner_account may hold.
+// It stays below the cluster limit so one account cannot fill every slot.
+const DefaultBuildAccountLimit = 3
+
+// CheckBuildLimits reports whether cluster and account are a legal pair.
+// Account is at least 1, cluster is at least 2, and account is strictly below cluster.
+func CheckBuildLimits(cluster, account int) (int, int, bool) {
+	if account >= 1 && cluster >= 2 && account < cluster {
+		return cluster, account, true
+	}
+	return DefaultBuildClusterLimit, DefaultBuildAccountLimit, false
+}
+
+// NormalizeBuildLimits returns the stored pair, or the defaults when the
+// stored pair is missing or illegal. Illegal values are not treated as unlimited.
+func NormalizeBuildLimits(cluster, account int) (int, int) {
+	c, a, _ := CheckBuildLimits(cluster, account)
+	return c, a
+}
+
 // MetaAppBuilding is set on the app at the start of gitreceive and cleared
 // when that push finishes (success or fail). Value is RFC3339 start time.
 const MetaAppBuilding = "flynn-controller.building"
@@ -706,6 +734,30 @@ type Job struct {
 	Restarts   *int32            `json:"restarts,omitempty"`
 	CreatedAt  *time.Time        `json:"created_at,omitempty"`
 	UpdatedAt  *time.Time        `json:"updated_at,omitempty"`
+}
+
+// BuildRequest is a cluster-key request to enqueue one compile.
+// Release env is not a field. Config vars are streamed on stdin by gitreceive.
+type BuildRequest struct {
+	Type           string             `json:"type"`
+	ReleaseID      string             `json:"release"`
+	Env            map[string]string  `json:"env,omitempty"`
+	Artifact       *Artifact          `json:"artifact"`
+	Args           []string           `json:"args,omitempty"`
+	Resources      resource.Resources `json:"resources,omitempty"`
+	TimeoutSeconds int                `json:"timeout_seconds,omitempty"`
+}
+
+// BuildSpec is the private compile payload. It is not stored on the job row.
+// The cluster key is the only reader. The token is not stored here.
+type BuildSpec struct {
+	JobID          string             `json:"job_id,omitempty"`
+	AppName        string             `json:"app_name,omitempty"`
+	Env            map[string]string  `json:"env,omitempty"`
+	Artifact       *Artifact          `json:"artifact,omitempty"`
+	Args           []string           `json:"args,omitempty"`
+	Resources      resource.Resources `json:"resources,omitempty"`
+	TimeoutSeconds int                `json:"timeout_seconds,omitempty"`
 }
 
 type JobState string
@@ -1526,8 +1578,24 @@ type RuntimeSettings struct {
 	// AllowUserScaleTags, when false, rejects non-admin formation tag
 	// changes on scale. Default false: tenants pick a tagged runtime
 	// instead of writing host constraints themselves.
-	AllowUserScaleTags bool       `json:"allow_user_scale_tags"`
-	UpdatedAt          *time.Time `json:"updated_at,omitempty"`
+	AllowUserScaleTags bool `json:"allow_user_scale_tags"`
+	// BuildClusterLimit is how many slugbuilder and dockerbuilder jobs may
+	// be pending or running at once. The default is 8. There is no unlimited.
+	BuildClusterLimit int `json:"build_cluster_limit,omitempty"`
+	// BuildAccountLimit is how many of those one owner_account may hold,
+	// across that account's apps. Empty owner_account is one shared bucket.
+	// It must be at least 1 and strictly below BuildClusterLimit. The default is 3.
+	BuildAccountLimit int        `json:"build_account_limit,omitempty"`
+	UpdatedAt         *time.Time `json:"updated_at,omitempty"`
+}
+
+// BuildLimits returns the compile caps. A nil settings value and a corrupt
+// stored pair both return the defaults, not unlimited.
+func (s *RuntimeSettings) BuildLimits() (cluster, account int) {
+	if s == nil {
+		return DefaultBuildClusterLimit, DefaultBuildAccountLimit
+	}
+	return NormalizeBuildLimits(s.BuildClusterLimit, s.BuildAccountLimit)
 }
 
 // DefaultJobRestartInterval is the cluster default age at which running jobs
@@ -1625,9 +1693,11 @@ func (s *RuntimeSettings) Copy() RuntimeSettings {
 	if s == nil {
 		n := DefaultMaxProcesses
 		return RuntimeSettings{
-			MaxProcesses:   &n,
-			BlobGCKeep:     DefaultBlobGCKeep,
-			AllowUserScale: true,
+			MaxProcesses:      &n,
+			BlobGCKeep:        DefaultBlobGCKeep,
+			AllowUserScale:    true,
+			BuildClusterLimit: DefaultBuildClusterLimit,
+			BuildAccountLimit: DefaultBuildAccountLimit,
 		}
 	}
 	out := *s

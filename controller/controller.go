@@ -291,6 +291,10 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/apps/:apps_id/scale/:releases_id", httphelper.WrapHandler(api.appLookup(api.PutScaleRequest)))
 
 	httpRouter.POST("/apps/:apps_id/jobs", httphelper.WrapHandler(api.appLookup(api.RunJob)))
+	httpRouter.POST("/apps/:apps_id/builds", httphelper.WrapHandler(api.appLookup(api.CreateBuild)))
+	httpRouter.GET("/apps/:apps_id/builds/:jobs_id/spec", httphelper.WrapHandler(api.appLookup(api.GetBuildSpec)))
+	httpRouter.POST("/apps/:apps_id/builds/:jobs_id/token", httphelper.WrapHandler(api.appLookup(api.MintBuildToken)))
+	httpRouter.GET("/builds/pending", httphelper.WrapHandler(api.ListPendingBuilds))
 	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.GetJob))
 	httpRouter.PUT("/apps/:apps_id/jobs/:jobs_id", httphelper.WrapHandler(api.PutJob))
 	httpRouter.GET("/apps/:apps_id/jobs/:jobs_id/output", httphelper.WrapHandler(api.appLookup(api.GetJobOutput)))

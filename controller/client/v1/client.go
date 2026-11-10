@@ -1003,6 +1003,34 @@ func (c *Client) RunJobDetached(appID string, req *ct.NewJob) (*ct.Job, error) {
 	return job, c.Post(fmt.Sprintf("/apps/%s/jobs", appID), req, job)
 }
 
+// CreateBuild enqueues a compile. The scheduler places it. A full cap is a 429.
+func (c *Client) CreateBuild(appID string, req *ct.BuildRequest) (*ct.Job, error) {
+	job := &ct.Job{}
+	return job, c.Post(fmt.Sprintf("/apps/%s/builds", appID), req, job)
+}
+
+// GetBuildSpec returns the private compile payload. The cluster key is required.
+func (c *Client) GetBuildSpec(appID, jobID string) (*ct.BuildSpec, error) {
+	spec := &ct.BuildSpec{}
+	return spec, c.Get(fmt.Sprintf("/apps/%s/builds/%s/spec", appID, jobID), spec)
+}
+
+// MintBuildToken asks the controller for the token mounted when the compile starts.
+func (c *Client) MintBuildToken(appID, jobID string) (string, error) {
+	var out struct {
+		Token string `json:"token"`
+	}
+	err := c.Post(fmt.Sprintf("/apps/%s/builds/%s/token", appID, jobID), nil, &out)
+	return out.Token, err
+}
+
+// ListPendingBuilds returns in-flight compiles, oldest first. Pending,
+// blocked, starting, and up rows are included.
+func (c *Client) ListPendingBuilds() ([]*ct.Job, error) {
+	var jobs []*ct.Job
+	return jobs, c.Get("/builds/pending", &jobs)
+}
+
 // GetJob returns a Job for the given app and job ID
 func (c *Client) GetJob(appID, jobID string) (*ct.Job, error) {
 	job := &ct.Job{}

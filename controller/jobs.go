@@ -140,6 +140,15 @@ func (c *controllerAPI) KillJob(ctx context.Context, w http.ResponseWriter, req 
 		respondWithError(w, err)
 		return
 	} else if job.HostID == "" {
+		if ct.IsBuilderProcessType(job.Type) {
+			job.State = ct.JobStateDown
+			if err := c.jobRepo.Add(job); err != nil {
+				respondWithError(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 		httphelper.ValidationError(w, "", "cannot kill a job which has not been placed on a host")
 		return
 	}

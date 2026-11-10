@@ -539,12 +539,16 @@ func (s *S) TestHostedMemoryQuotaRejectsScale(c *C) {
 
 	build := 12 * 1024
 	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{Account: app.OwnerAccount, MaxMemoryMB: &build}), IsNil)
-	_, err = s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Type: "slugbuilder", Args: []string{"echo"}})
-	c.Assert(err, IsNil)
-	off := false
-	s.api.buildJobMemoryLimits = &off
+	// Compiles are scheduler jobs. A one-off cannot use a builder type even
+	// when the account quota would have covered the old 12 GiB build charge.
 	_, err = s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Type: "slugbuilder", Args: []string{"echo"}})
 	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "not permitted"), Equals, true)
+	off := false
+	s.api.buildJobMemoryLimits = &off
+	_, err = s.c.RunJobDetached(app.ID, &ct.NewJob{ReleaseID: release.ID, Type: "dockerbuilder", Args: []string{"echo"}})
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "not permitted"), Equals, true)
 
 	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{Account: app.OwnerAccount}), IsNil)
 	c.Assert(s.c.PutFormation(&ct.Formation{

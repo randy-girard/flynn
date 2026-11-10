@@ -372,6 +372,12 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkCluster, "", ""
 		}
 		appID := parts[1]
+		// Compiles are cluster-key only. The handler rejects cluster:admin
+		// JWTs as well, because HTTPAllowed lets every cluster admin through
+		// before this kind is consulted.
+		if len(parts) >= 3 && parts[2] == "builds" {
+			return rkCluster, "", ""
+		}
 		if len(parts) >= 3 && (parts[2] == "collaborators" || parts[2] == "transfer") {
 			return rkUserSession, appID, ""
 		}

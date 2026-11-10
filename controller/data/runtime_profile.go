@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx"
+	"github.com/randy-girard/flynn/controller/buildadmit"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/postgres"
 	"github.com/randy-girard/flynn/pkg/random"
@@ -108,7 +109,7 @@ func (r *RuntimeProfileRepo) Delete(id string) error {
 
 func (r *RuntimeProfileRepo) Settings() (*ct.RuntimeSettings, error) {
 	s := &ct.RuntimeSettings{}
-	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.JobRestartInterval, &s.SingleInstanceRestart, &s.AllowUserScale, &s.AllowUserScaleTags, &s.UpdatedAt)
+	err := r.db.QueryRow("runtime_settings_select").Scan(&s.AllowCustomLimits, &s.MaxProcesses, &s.ReserveResources, &s.BlobGCKeep, &s.BlobGCMaxAge, &s.MaxRestarts, &s.JobRestartInterval, &s.SingleInstanceRestart, &s.AllowUserScale, &s.AllowUserScaleTags, &s.BuildClusterLimit, &s.BuildAccountLimit, &s.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +140,19 @@ func (r *RuntimeProfileRepo) UpdateSettings(s *ct.RuntimeSettings) error {
 		return ct.ValidationError{Field: "job_restart_interval", Message: err.Error()}
 	}
 	s.JobRestartInterval = interval
-	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts, s.JobRestartInterval, s.SingleInstanceRestart, s.AllowUserScale, s.AllowUserScaleTags).Scan(&s.UpdatedAt); err != nil {
+	// 0,0 means the caller did not load the columns (an older in-process
+	// value). Keep the stored pair. Any other illegal pair is rejected.
+	if s.BuildClusterLimit == 0 && s.BuildAccountLimit == 0 {
+		s.BuildClusterLimit = cur.BuildClusterLimit
+		s.BuildAccountLimit = cur.BuildAccountLimit
+	}
+	clusterLimit, accountLimit := s.BuildLimits()
+	if s.BuildClusterLimit != clusterLimit || s.BuildAccountLimit != accountLimit {
+		return ct.ValidationError{Field: "build_limits", Message: buildadmit.ValidLimits(buildadmit.Limits{Cluster: s.BuildClusterLimit, Account: s.BuildAccountLimit}).Error()}
+	}
+	s.BuildClusterLimit = clusterLimit
+	s.BuildAccountLimit = accountLimit
+	if err := r.db.QueryRow("runtime_settings_update", s.AllowCustomLimits, s.MaxProcesses, s.ReserveResources, s.BlobGCKeep, s.BlobGCMaxAge, s.MaxRestarts, s.JobRestartInterval, s.SingleInstanceRestart, s.AllowUserScale, s.AllowUserScaleTags, s.BuildClusterLimit, s.BuildAccountLimit).Scan(&s.UpdatedAt); err != nil {
 		return err
 	}
 	if err := r.db.Exec("app_sync_gc_keep", strconv.Itoa(s.BlobGCKeep)); err != nil {
