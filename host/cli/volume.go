@@ -104,8 +104,24 @@ func volumeGCKeepFromJobs(jobs map[string]host.ActiveJob) map[string]struct{} {
 				keep[m.ID] = struct{}{}
 			}
 		}
+		// discoverd's raft disk and flannel state are host-local. Image-pull
+		// GC runs while those jobs are down, and the controller volume list
+		// does not cover them. The newest job can be a replacement that never
+		// bound the disk, so every remaining host-infra binding stays. User
+		// apps are unchanged: a finished job's volume is still collected.
+		if hostInfraPersistentVolume(j.Job.Metadata[host.MetaControllerAppName]) {
+			for _, vb := range j.Job.Config.Volumes {
+				if vb.VolumeID != "" {
+					keep[vb.VolumeID] = struct{}{}
+				}
+			}
+		}
 	}
 	return keep
+}
+
+func hostInfraPersistentVolume(app string) bool {
+	return app == "discoverd" || app == "flannel"
 }
 
 func addControllerVolumeKeep(keep map[string]struct{}, vols []*ct.Volume) {

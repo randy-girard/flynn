@@ -48,6 +48,61 @@ func TestVolumeGCKeepFromJobs(t *testing.T) {
 	}
 }
 
+// Discoverd's raft disk is host-local. Image-pull GC runs while that job is
+// down, and the controller volume list does not cover it. On 2026-11-09 the
+// pre-pull GC zfs-destroyed flynn-default/data/755fb5e8 on devnode2, then the
+// host-infra replace aborted because the next discoverd still named it.
+func TestVolumeGCKeepsHostInfraDataVolumeWhenJobIsDown(t *testing.T) {
+	jobs := map[string]host.ActiveJob{
+		"discoverd-down": {
+			Status: host.StatusDone,
+			Job: &host.Job{
+				ID: "discoverd-down",
+				Metadata: map[string]string{
+					host.MetaControllerAppName: "discoverd",
+				},
+				Config: host.ContainerConfig{
+					Volumes: []host.VolumeBinding{{Target: "/data", VolumeID: "755fb5e8"}},
+				},
+			},
+		},
+		"flannel-failed": {
+			Status: host.StatusFailed,
+			Job: &host.Job{
+				ID: "flannel-failed",
+				Metadata: map[string]string{
+					host.MetaControllerAppName: "flannel",
+				},
+				Config: host.ContainerConfig{
+					Volumes: []host.VolumeBinding{{Target: "/var/run/flannel", VolumeID: "flannel-state"}},
+				},
+			},
+		},
+		"user-done": {
+			Status: host.StatusDone,
+			Job: &host.Job{
+				ID: "user-done",
+				Metadata: map[string]string{
+					host.MetaControllerAppName: "app-one",
+				},
+				Config: host.ContainerConfig{
+					Volumes: []host.VolumeBinding{{VolumeID: "stale-data"}},
+				},
+			},
+		},
+	}
+	keep := volumeGCKeepFromJobs(jobs)
+	if _, ok := keep["755fb5e8"]; !ok {
+		t.Fatal("discoverd data volume must be kept while the job is down")
+	}
+	if _, ok := keep["flannel-state"]; !ok {
+		t.Fatal("flannel state volume must be kept while the job is down")
+	}
+	if _, ok := keep["stale-data"]; ok {
+		t.Fatal("finished user-app volumes stay eligible for gc")
+	}
+}
+
 func TestAddControllerVolumeKeep(t *testing.T) {
 	keep := map[string]struct{}{}
 	destroyed := ct.VolumeStateDestroyed
