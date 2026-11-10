@@ -65,6 +65,17 @@ type Job struct {
 
 	Args []string `json:"args,omitempty"`
 
+	// Owner is apps.owner_account for a compile. Empty is the shared bucket.
+	Owner string `json:"owner,omitempty"`
+
+	// createdAt is when the controller accepted the compile. Pending
+	// admission orders by it. It is not a formation start time.
+	createdAt time.Time
+
+	// explicitVolumes are volume requests that do not come from a formation.
+	// Compiles always request a new ephemeral /tmp.
+	explicitVolumes []ct.VolumeReq
+
 	// HostID is the ID of the host the job has been placed on, and is set
 	// when a StartJob goroutine makes a placement request to the scheduler
 	// loop
@@ -176,6 +187,12 @@ func (s *Scheduler) jobMatchesHost(j *Job, host *Host) bool {
 }
 
 func (j *Job) VolumeRequests() []ct.VolumeReq {
+	if j != nil && len(j.explicitVolumes) > 0 {
+		return j.explicitVolumes
+	}
+	if j == nil || j.Formation == nil || j.Formation.Release == nil {
+		return nil
+	}
 	proc := j.Formation.Release.Processes[j.Type]
 	if len(proc.Volumes) > 0 {
 		return proc.Volumes
@@ -379,6 +396,23 @@ func (s sortJobs) Less(i, j int) bool {
 func (s sortJobs) Swap(i, j int) { s[i], s[j] = s[j], s[i] }
 func (s sortJobs) Sort()         { sort.Sort(s) }
 func (s sortJobs) SortReverse()  { sort.Sort(sort.Reverse(s)) }
+
+// builderHostCounts is how many compiles each host already has. Builds have
+// no formation, so formation job counts stay empty and every compile would
+// land on the first shuffled host.
+func (j Jobs) builderHostCounts() map[string]int {
+	counts := make(map[string]int)
+	for _, job := range j {
+		if job == nil || job.HostID == "" || !ct.IsBuilderProcessType(job.Type) {
+			continue
+		}
+		if job.State == JobStateStopped || job.State == JobStateStopping {
+			continue
+		}
+		counts[job.HostID]++
+	}
+	return counts
+}
 
 func (j Jobs) GetHostJobCounts(key utils.FormationKey, typ string) map[string]int {
 	counts := make(map[string]int)

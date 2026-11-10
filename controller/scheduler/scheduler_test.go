@@ -1775,6 +1775,152 @@ func TestShouldReplaceMissingVolumes(t *testing.T) {
 	}
 }
 
+// A builder is not a formation process. Its /tmp volume is ephemeral and
+// already bound to a host that is not being placed onto. Placement clears
+// HostID and must not keep that volume, and it must request a new /tmp.
+func (TestSuite) TestBuildPlacementDropsForeignEphemeralTmp(c *C) {
+	s := &Scheduler{
+		isLeader:      typeconv.BoolPtr(true),
+		jobs:          make(Jobs),
+		volumes:       make(map[string]*Volume),
+		hostVolumeIDs: make(map[string]map[string]struct{}),
+		hosts: map[string]*Host{
+			"hostB": {ID: "hostB", Healthy: true},
+		},
+		logger: log15.New(),
+	}
+	formation := NewFormation(&ct.ExpandedFormation{
+		App: &ct.App{ID: "app", Name: "shop"},
+		Release: &ct.Release{
+			ID: "rel",
+			Env: map[string]string{
+				"CONTROLLER_KEY": "secret",
+				"DATABASE_URL":   "postgres://db",
+			},
+			Processes: map[string]ct.ProcessType{"slugbuilder": {}},
+		},
+		Artifacts: []*ct.Artifact{{ID: "artifact"}},
+		Processes: Processes{"slugbuilder": 0},
+	})
+	old := &Volume{Volume: ct.Volume{
+		ID:        "vol-a",
+		HostID:    "hostA",
+		AppID:     "app",
+		ReleaseID: "rel",
+		JobType:   "slugbuilder",
+		State:     ct.VolumeStateCreated,
+		VolumeReq: ct.VolumeReq{Path: "/tmp", DeleteOnStop: true},
+	}}
+	s.volumes[old.ID] = old
+	job := &Job{
+		ID:        "job-1",
+		Type:      "slugbuilder",
+		State:     JobStatePending,
+		AppID:     "app",
+		ReleaseID: "rel",
+		HostID:    "hostA",
+		Formation: formation,
+		Volumes:   []*Volume{old},
+	}
+	req := &PlacementRequest{Job: job, Err: make(chan error, 1)}
+	s.HandlePlacementRequest(req)
+	c.Assert(<-req.Err, IsNil)
+	if req.Host == nil || req.Host.ID != "hostB" {
+		c.Fatalf("host = %v, want hostB", req.Host)
+	}
+	for _, vol := range job.Volumes {
+		if vol != nil && vol.ID == "vol-a" {
+			c.Fatal("placement reused /tmp from hostA after HostID was cleared")
+		}
+	}
+	if len(job.Volumes) != 1 || job.Volumes[0].Path != "/tmp" || !job.Volumes[0].DeleteOnStop {
+		c.Fatalf("volumes = %+v, want one new DeleteOnStop /tmp", job.Volumes)
+	}
+	if job.Volumes[0].ID == "" || job.Volumes[0].ID == "vol-a" {
+		c.Fatalf("new volume id = %q", job.Volumes[0].ID)
+	}
+}
+
+// A pending compile is a controller job the scheduler did not create from a
+// formation. Sync must adopt it. Marking it down cancels the git push.
+func (TestSuite) TestApplyControllerJobListKeepsPendingBuilder(c *C) {
+	s := NewScheduler(nil, NewFakeControllerClient(), nil, log15.New())
+	pending := &ct.Job{
+		UUID:      "build-1",
+		Type:      "slugbuilder",
+		State:     ct.JobStatePending,
+		AppID:     "app",
+		ReleaseID: "rel",
+		Meta:      map[string]string{"owner_account": "user:a"},
+	}
+	s.applyControllerJobList([]*ct.Job{pending})
+	if pending.State != ct.JobStatePending {
+		c.Fatalf("pending builder state = %s, want pending", pending.State)
+	}
+	got := s.jobs["build-1"]
+	if got == nil {
+		c.Fatal("pending builder was not adopted")
+	}
+	if got.State != JobStatePending {
+		c.Fatalf("adopted state = %s, want pending", got.State)
+	}
+	if got.Formation != nil {
+		c.Fatal("a build is not a formation process")
+	}
+}
+
+// An adopted compile has no formation. Placement must still pick a host,
+// request a new ephemeral /tmp, and avoid a host that already runs a compile.
+// Formation.key() on a nil formation panics; an empty host-count map piles
+// every compile onto whichever host the shuffle returns first.
+func (TestSuite) TestBuildPlacementWithoutFormation(c *C) {
+	for seed := int64(1); seed <= 40; seed++ {
+		random.Math.Seed(seed)
+		s := &Scheduler{
+			isLeader:      typeconv.BoolPtr(true),
+			jobs:          make(Jobs),
+			volumes:       make(map[string]*Volume),
+			hostVolumeIDs: make(map[string]map[string]struct{}),
+			hosts: map[string]*Host{
+				"hostA": {ID: "hostA", Healthy: true},
+				"hostB": {ID: "hostB", Healthy: true},
+			},
+			logger: log15.New(),
+		}
+		s.jobs["running"] = &Job{
+			ID:     "running",
+			Type:   "dockerbuilder",
+			State:  JobStateRunning,
+			HostID: "hostA",
+			AppID:  "other",
+		}
+		job := &Job{
+			ID:        "job-1",
+			Type:      "slugbuilder",
+			State:     JobStatePending,
+			AppID:     "app",
+			ReleaseID: "rel",
+		}
+		req := &PlacementRequest{Job: job, Err: make(chan error, 1)}
+		s.HandlePlacementRequest(req)
+		if err := <-req.Err; err != nil {
+			c.Fatalf("seed %d: %v", seed, err)
+		}
+		if req.Host == nil || req.Host.ID != "hostB" {
+			c.Fatalf("seed %d: host = %v, want hostB (hostA already has a compile)", seed, req.Host)
+		}
+		if req.Config != nil {
+			c.Fatalf("seed %d: builder placement must not build a formation job config", seed)
+		}
+		if job.JobID == "" || job.JobID[:len("hostB-")] != "hostB-" {
+			c.Fatalf("seed %d: job id = %q, want hostB prefix", seed, job.JobID)
+		}
+		if len(job.Volumes) != 1 || job.Volumes[0].Path != "/tmp" || !job.Volumes[0].DeleteOnStop || job.Volumes[0].HostID != "hostB" {
+			c.Fatalf("seed %d: volumes = %+v, want one DeleteOnStop /tmp on hostB", seed, job.Volumes)
+		}
+	}
+}
+
 func TestIsMissingHostVolumeError(t *testing.T) {
 	err := errors.New("job abc required volume vol-1, but that volume does not exist")
 	if !isMissingHostVolumeError(err) {

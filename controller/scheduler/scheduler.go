@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/controller/buildadmit"
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
@@ -214,6 +215,13 @@ type Scheduler struct {
 	volSnap         map[string]map[string]struct{}
 	volSnapFailed   map[string]struct{}
 	placementHolds  []*placementHold
+
+	// buildTick wakes the leader to place pending compiles. It stays nil
+	// in tests so it never fires. The list itself runs off this loop.
+	buildTick      <-chan time.Time
+	buildStarting  map[string]struct{}
+	buildsInFlight bool
+	buildLimits    buildadmit.Limits
 }
 
 func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc Discoverd, l log15.Logger) *Scheduler {
@@ -271,6 +279,7 @@ func NewScheduler(cluster utils.ClusterClient, cc utils.ControllerClient, disc D
 		volListInFlight:       make(map[string]struct{}),
 		volSnap:               make(map[string]map[string]struct{}),
 		volSnapFailed:         make(map[string]struct{}),
+		buildStarting:         make(map[string]struct{}),
 	}
 }
 
@@ -590,6 +599,7 @@ func (s *Scheduler) Run() {
 	go s.streamSinkEvents()
 
 	s.tickSyncJobs(30 * time.Second)
+	s.tickBuilds()
 	s.tickSyncFormations(time.Minute)
 	s.tickSyncSinks(time.Minute)
 	s.tickSyncVolumes(time.Minute)
@@ -717,6 +727,10 @@ func (s *Scheduler) Run() {
 			s.beginAsyncSyncVolumes()
 		case <-s.sendTelemetry:
 			s.SendTelemetry()
+		case <-s.buildTick:
+			if s.IsLeader() {
+				s.beginAdmitBuilds()
+			}
 		case <-s.syncSinks:
 			s.beginAsyncSyncSinks()
 		case res := <-s.downPersistResults:
@@ -1493,6 +1507,10 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	// reset the job's HostID in case we already placed it but it failed to
 	// start
 	req.Job.HostID = ""
+	if ct.IsBuilderProcessType(req.Job.Type) {
+		s.dropForeignBuildVolumes(req.Job)
+		req.Job.explicitVolumes = []ct.VolumeReq{{Path: "/tmp", DeleteOnStop: true}}
+	}
 
 	// checked before volumes too: discoverd's volume pins it to a host
 	// without going through pickHost
@@ -1599,10 +1617,15 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	// the least amount of jobs running of the given type. Jobs whose
 	// runtime reserves resources skip hosts that cannot fit the Request.
 	if req.Host == nil {
-		formation := req.Job.Formation
-		counts := s.jobs.GetHostJobCounts(formation.key(), req.Job.Type)
-		if req.Job.spreadsAcrossHosts() {
-			counts = s.jobs.GetHostSpreadCounts(formation.key(), req.Job.Type)
+		var counts map[string]int
+		if ct.IsBuilderProcessType(req.Job.Type) {
+			counts = s.jobs.builderHostCounts()
+		} else {
+			formation := req.Job.Formation
+			counts = s.jobs.GetHostJobCounts(formation.key(), req.Job.Type)
+			if req.Job.spreadsAcrossHosts() {
+				counts = s.jobs.GetHostSpreadCounts(formation.key(), req.Job.Type)
+			}
 		}
 		req.Host = s.pickHost(req.Job, counts)
 
@@ -1625,9 +1648,17 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 	}
 
 	s.assignJobName(req.Job)
-	req.Config = jobConfig(req.Job, req.Host.ID)
-	req.Job.JobID = req.Config.ID
-	req.Job.HostID = req.Host.ID
+	// A compile must not use utils.JobConfig: that copies release env and can
+	// mark the job as a formation or system process. StartBuild fills the
+	// host config from the build spec after this returns.
+	if ct.IsBuilderProcessType(req.Job.Type) {
+		req.Job.JobID = cluster.GenerateJobID(req.Host.ID, req.Job.ID)
+		req.Job.HostID = req.Host.ID
+	} else {
+		req.Config = jobConfig(req.Job, req.Host.ID)
+		req.Job.JobID = req.Config.ID
+		req.Job.HostID = req.Host.ID
+	}
 	for _, vol := range req.Job.Volumes {
 		if vol.HostID == "" {
 			vol.HostID = req.Host.ID
@@ -2724,6 +2755,9 @@ func (s *Scheduler) handleJobStatus(job *Job, status host.JobStatus) {
 		log.Info("handling job status change", "from", previousState, "to", job.State)
 		s.persistJob(job)
 	}
+	if ct.IsBuilderProcessType(job.Type) && (job.State == JobStateStopped || job.State == JobStateStopping) && s.buildStarting != nil {
+		delete(s.buildStarting, job.ID)
+	}
 
 	// ensure jobs started as part of a formation change have a known formation
 	if job.metadata["flynn-controller.formation"] == "true" && job.Formation == nil {
@@ -2797,6 +2831,7 @@ func (s *Scheduler) assignJobName(job *Job) {
 }
 
 func (s *Scheduler) persistJob(job *Job) {
+	s.stampBuildMeta(job)
 	s.assignJobName(job)
 	s.persistControllerJob(job.ControllerJob())
 }

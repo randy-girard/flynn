@@ -354,9 +354,15 @@ func (s *Scheduler) applyControllerJobList(jobs []*ct.Job) {
 
 		j, ok := s.jobs[job.UUID]
 		if !ok {
+			if s.adoptControllerBuild(job) {
+				continue
+			}
 			job.State = ct.JobStateDown
 			s.persistControllerJob(job)
 			continue
+		}
+		if ct.IsBuilderProcessType(job.Type) {
+			s.noteForeignBuild(job)
 		}
 		if j.State == JobStateStopping {
 			continue
