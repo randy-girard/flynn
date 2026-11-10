@@ -34,6 +34,24 @@ type grpcAPI struct {
 	db *postgres.DB
 }
 
+// limitBearer applies the same buckets as HTTP. gRPC has no install-key
+// form, so a cluster-admin JWT uses that user's bucket. One stream open
+// counts once because this runs in the interceptor, not per message.
+func (g *grpcAPI) limitBearer(ctx context.Context, tok *authorizer.Token) error {
+	if g == nil || g.controllerAPI == nil {
+		return nil
+	}
+	decision := g.limiter.allow(tok)
+	if decision.allowed {
+		return nil
+	}
+	if decision.log {
+		logRateLimit(decision.class, decision.userID, decision.key)
+	}
+	_ = grpc.SetHeader(ctx, metadata.Pairs("retry-after", retryAfterHeader(decision.retryAfter)))
+	return status.Error(codes.ResourceExhausted, "too many requests, try again later")
+}
+
 func (g *grpcAPI) authorizeWithToken(ctx context.Context) (context.Context, *authorizer.Token, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -164,6 +182,9 @@ func (g *grpcAPI) streamInterceptor(srv interface{}, stream grpc.ServerStream, i
 	if err != nil {
 		return err
 	}
+	if err := g.limitBearer(ctx, tok); err != nil {
+		return err
+	}
 	if !authz.GRPCAllowed(tok, info.FullMethod) {
 		return status.Error(codes.PermissionDenied, "insufficient scopes for this gRPC method (dashboard app-scoped tokens use controller HTTP)")
 	}
@@ -202,6 +223,9 @@ func (g *grpcAPI) unaryInterceptor(ctx context.Context, req interface{}, info *g
 
 	ctx, tok, err := g.authorizeWithToken(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := g.limitBearer(ctx, tok); err != nil {
 		return nil, err
 	}
 	if !authz.GRPCAllowed(tok, info.FullMethod) {

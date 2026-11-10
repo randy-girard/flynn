@@ -265,6 +265,9 @@ func TestMintBuildToken(t *testing.T) {
 	if len(tok.AppGrants) != 1 || tok.AppGrants[0].AppID != "app-1" {
 		t.Fatalf("app grants = %v, want app-1", tok.AppGrants)
 	}
+	if tok.UserID != "" {
+		t.Fatalf("user id = %q, want empty when the app has no owner", tok.UserID)
+	}
 	// The token must satisfy both build routes for its own app only.
 	if !authz.HTTPAllowed(tok, "POST", "/artifacts") {
 		t.Fatal("minted token should be allowed to POST /artifacts")
@@ -275,6 +278,33 @@ func TestMintBuildToken(t *testing.T) {
 	if authz.HTTPAllowed(tok, "POST", "/apps/other/releases") {
 		t.Fatal("minted token must not write to other apps")
 	}
+}
+
+func TestMintBuildTokenSetsUserIDFromOwner(t *testing.T) {
+	signer, pubKey := newBuildKeyPair(t)
+	pk, err := authorizer.ParseTokenKey(pubKey)
+	if err != nil {
+		t.Fatalf("parse token key: %s", err)
+	}
+	auth := authorizer.New(nil, nil, pk, time.Hour)
+	check := func(app *ct.App, want string) {
+		t.Helper()
+		tokenStr, err := mintBuildToken(signer, app, defaultBuildTimeout)
+		if err != nil {
+			t.Fatalf("mint: %s", err)
+		}
+		tok, err := auth.AuthorizeToken(tokenStr)
+		if err != nil {
+			t.Fatalf("authorize: %s", err)
+		}
+		if tok.UserID != want {
+			t.Fatalf("owner %q created_by %q: user id = %q, want %q", app.OwnerAccount, app.CreatedBy, tok.UserID, want)
+		}
+	}
+	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "user:abc", CreatedBy: "old"}, "abc")
+	check(&ct.App{ID: "app-1", Name: "myapp", OwnerAccount: "org:xyz", CreatedBy: "old"}, "org:xyz")
+	check(&ct.App{ID: "app-1", Name: "myapp", CreatedBy: "creator"}, "creator")
+	check(&ct.App{ID: "app-1", Name: "myapp"}, "")
 }
 
 // TestApplyBuildCredentialWithSigner verifies that when a signer is configured

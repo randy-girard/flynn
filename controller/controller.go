@@ -243,6 +243,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		config:                 c,
 		authorizer:             authorizer.New(c.keys, c.keyIDs, c.tokenKey, c.tokenMaxValidity),
 		tokenSigner:            c.tokenSigner,
+		limiter:                limiterFromEnv(),
 	}
 	if strings.TrimSpace(api.githubPluginURL) == "" {
 		api.githubPluginURL = "http://github.discoverd"
@@ -480,6 +481,19 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			w.WriteHeader(401)
 			return
 		}
+		// Count after a credential is known and before expandToken, which
+		// reads the user and their grants. A 401 is not counted. Public
+		// routes returned above and stay unlimited.
+		if api != nil && !clusterKeyStatusExempt(r, auth) {
+			decision := api.limiter.allow(auth)
+			if !decision.allowed {
+				if decision.log {
+					logRateLimit(decision.class, decision.userID, decision.key)
+				}
+				writeRateLimited(w, decision.retryAfter)
+				return
+			}
+		}
 		if api != nil {
 			if err := api.expandToken(auth); err != nil {
 				w.WriteHeader(401)
@@ -551,6 +565,7 @@ type controllerAPI struct {
 	config            handlerConfig
 	authorizer        *authorizer.Authorizer
 	tokenSigner       *tokensigner.Signer
+	limiter           *accountLimiter
 
 	eventListener    *data.EventListener
 	eventListenerMtx sync.Mutex

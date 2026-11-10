@@ -186,6 +186,26 @@ func buildSigner() (*tokensigner.Signer, error) {
 	return signer, nil
 }
 
+// buildTokenUserID is the controller rate-limit account for a build. A user
+// owner is stored without the user: prefix, matching dashboard JWTs. An org
+// owner keeps org: so the bucket cannot collide with a user id. Anything else
+// non-empty is kept whole. With no owner, CreatedBy is the fallback.
+func buildTokenUserID(app *ct.App) string {
+	if app == nil {
+		return ""
+	}
+	owner := strings.TrimSpace(app.OwnerAccount)
+	switch {
+	case strings.HasPrefix(owner, "user:"):
+		if id := strings.TrimPrefix(owner, "user:"); id != "" {
+			return id
+		}
+	case owner != "":
+		return owner
+	}
+	return strings.TrimSpace(app.CreatedBy)
+}
+
 // mintBuildToken signs a short-lived AccessToken scoped to a single app and the
 // build:artifacts action. The token can create this build's artifact and write
 // only to this app; it is worthless for anything else and expires quickly, so a
@@ -193,6 +213,10 @@ func buildSigner() (*tokensigner.Signer, error) {
 func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, error) {
 	now := time.Now()
 	return signer.Sign(&api.AccessToken{
+		// Same account bucket as a dashboard JWT. A new signature must not
+		// reset the controller rate limit. An org owner keeps the org:
+		// prefix so it cannot collide with a user id.
+		UserId:     buildTokenUserID(app),
 		UserEmail:  "build:" + app.Name,
 		IssueTime:  timestamppb.New(now),
 		ExpireTime: timestamppb.New(now.Add(ttl)),

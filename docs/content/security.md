@@ -143,6 +143,23 @@ volume/sirenia repair, and `POST /artifacts` during `flynn-host update` do
 not 401. HTTP 401 is not retried as a transient error. When the key is
 found on a job, `flynn-host` also writes it to `/etc/flynn/host.json`.
 
+The controller limits authenticated requests per `web` process. JWTs and
+personal access tokens are bucketed by user id, not by token signature
+and not by client IP. Reminting a dashboard JWT does not reset the
+budget. The install key has a separate, higher budget so router sync,
+the scheduler, and git push keep working when a user is over theirs. A
+`cluster:admin` user JWT stays on the user budget. Build tokens carry
+the app owner (`user:<id>` stored as the id, `org:<id>` stored whole) so
+a build shares that account. Over the budget the response is HTTP 429
+with `Retry-After` and JSON `retry: false`. The Go client retries
+`retry: true` for ten seconds, which would multiply the load. gRPC,
+including grpc-web, uses the same buckets and returns `ResourceExhausted`.
+`GET /ping` is unlimited. Cluster-key `GET /.well-known/status` is
+unlimited so a full cluster budget does not flap health. Login, OAuth,
+the GitHub webhook, and `GET /ca-cert` are unlimited because they run
+before authentication. There is no per-IP limit: external clients arrive
+through the router. Hosted and self-hosted clusters use the same limits.
+
 ## App catalog
 
 `GET /apps` is scoped to the caller:
@@ -248,6 +265,8 @@ controller) may GET/PUT `/slugs/` and `/tarreceive/` paths only.
 
 Gitreceive and taffy require `ACCESS_TOKEN_SIGNING_KEY` to mint a scoped
 `build:artifacts` token and mount it at `/run/secrets/controller_token`.
+The token's user id is the app owner, so the controller rate limit for
+that build is the owner's. An app with no owner uses `created_by`.
 Taffy runs `flynn-receiver` for URL deploys, so a taffy release without
 that key fails the build the same way a git push would. Neither app puts
 `CONTROLLER_KEY` in slugbuilder or dockerbuilder environment (that key

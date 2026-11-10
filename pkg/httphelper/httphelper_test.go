@@ -27,6 +27,15 @@ func decodeJSONError(t *testing.T, rec *httptest.ResponseRecorder) JSONError {
 	return je
 }
 
+func TestCORSExposesRetryAfter(t *testing.T) {
+	for _, h := range CORSAllowAll.ExposeHeaders {
+		if h == "Retry-After" {
+			return
+		}
+	}
+	t.Fatalf("ExposeHeaders = %v, want Retry-After so browsers can read a 429", CORSAllowAll.ExposeHeaders)
+}
+
 func TestErrorStatusAndRetryMapping(t *testing.T) {
 	cases := []struct {
 		err    error

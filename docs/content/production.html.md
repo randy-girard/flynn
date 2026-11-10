@@ -806,6 +806,31 @@ DISCOVERD_PEERS=$PEER_IPS`
 At this point the host has been replaced successfully and the cluster will
 regain full fault tolerance.
 
+## Controller request limits
+
+Each controller `web` process limits authenticated API requests. The
+default is 600 per minute for one account and 100,000 per minute for the
+cluster install key. The install-key budget is shared by the router, the
+scheduler, gitreceive, and plugin jobs. It is sized so those processes
+can reconnect after a controller restart on a cluster of a few hundred
+hosts. A user over their budget receives HTTP 429 and does not consume
+the install-key budget.
+
+The limit is per process. `flynn -a controller scale web=3` triples it.
+Hosted and self-hosted clusters use the same defaults. To raise the
+install-key budget for a larger route table, set the env and deploy the
+controller:
+
+    flynn -a controller env:set CONTROLLER_RATE_LIMIT_CLUSTER=200000
+
+`CONTROLLER_RATE_LIMIT_USER` and `CONTROLLER_RATE_LIMIT_WINDOW` (a Go
+duration, default `1m`) work the same way. An empty or non-positive
+value keeps the default. There is no off switch.
+
+`GET /ping` and a cluster-key `GET /.well-known/status` stay unlimited,
+so the status app does not go unhealthy when the install-key budget is
+spent.
+
 ## Controller Keys
 
 The Flynn CLI requires a controller authentication key to interact with

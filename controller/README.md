@@ -30,6 +30,20 @@ by `updated_at`. A failed or partial read is an error, so route sync does
 not delete routes, job sync does not mark jobs down, and the host firewall
 does not drop expose rules.
 
+Authenticated requests are limited per controller `web` process. A user
+JWT, a personal access token, and a build token for that account share
+one budget of 600 requests per minute. The cluster install key has its
+own budget of 100,000 per minute, shared by the router, the scheduler,
+gitreceive, and plugin API jobs. A 429 carries `Retry-After` and
+`retry: false`. `GET /ping` is not limited. `GET /.well-known/status`
+with the cluster key is not limited, so the status app still reports
+health when the cluster budget is spent. The same path with a user
+token counts. Scaling `web` multiplies both budgets. Set
+`CONTROLLER_RATE_LIMIT_USER`, `CONTROLLER_RATE_LIMIT_CLUSTER`, or
+`CONTROLLER_RATE_LIMIT_WINDOW` on the controller release to change them.
+An empty or non-positive value keeps the default. The same limits apply
+on a hosted cluster and a self-hosted one.
+
 The leader loop owns that in-memory state. Listing jobs or volumes, checking
 a host, and streaming a new host all happen off the loop; the loop only
 applies the result. A slow host blocks work for that host. Placement of other

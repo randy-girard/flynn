@@ -175,7 +175,7 @@ func newCORSOptions() *cors.Options {
 	opts := &cors.Options{
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"},
 		AllowHeaders:     []string{"Auth-Key", "Authorization", "Accept", "Content-Type", "If-Match", "If-None-Match", "X-GRPC-Web"},
-		ExposeHeaders:    []string{"ETag", "Content-Disposition"},
+		ExposeHeaders:    []string{"ETag", "Content-Disposition", "Retry-After"},
 		AllowCredentials: true,
 		MaxAge:           time.Hour,
 	}
