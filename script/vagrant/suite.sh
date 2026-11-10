@@ -939,7 +939,7 @@ print_results_table() {
   local preserved="${ROOT}/.vagrant-upgrade-smoke-last-results.txt"
   {
     echo "overall=${overall} duration=${total}s build=${BUILD_VERSION:-n/a} app=${APP_NAME}"
-    echo "topologies=${SMOKE_TOPOLOGIES} seed_rows=${SMOKE_SEED_ROWS} blobs=${SMOKE_BLOB_COUNT} upgrade_passes=${UPGRADE_PASSES}"
+    echo "topologies=${SMOKE_TOPOLOGIES:-} seed_rows=${SMOKE_SEED_ROWS:-} blobs=${SMOKE_BLOB_COUNT:-} upgrade_passes=${UPGRADE_PASSES:-}"
     for i in "${!RESULT_NAMES[@]}"; do
       echo "step ${RESULT_STATUS[$i]} ${RESULT_SECONDS[$i]}s ${RESULT_NAMES[$i]} :: ${RESULT_DETAIL[$i]}"
     done
