@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -85,7 +86,10 @@ func (h *Host) Update(cmd *host.Command) error {
 
 	// close our listener and state DBs
 	log.Info("closing HTTP listener")
-	h.listener.Close()
+	if err := closeListener(h.listener); err != nil {
+		log.Error("error closing HTTP listener", "err", err)
+		return err
+	}
 	log.Info("closing state databases")
 	if err := h.CloseDBs(); err != nil {
 		log.Error("error closing state databases", "err", err)
@@ -135,6 +139,49 @@ func (h *Host) Update(cmd *host.Command) error {
 	}
 
 	return nil
+}
+
+// closeListener closes l. A shell child of an update clears O_NONBLOCK on
+// inherited descriptors, and that flag is shared with the listener. Accept
+// then blocks in the kernel while Go still treats the fd as nonblocking, so
+// Listener.Close waits forever for Accept to return. Connecting until Close
+// finishes wakes that Accept. Shutdown is not used: it would also kill the
+// duplicated socket the child needs.
+func closeListener(l net.Listener) error {
+	if l == nil {
+		return nil
+	}
+	addr := l.Addr()
+	if addr == nil {
+		return l.Close()
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dial := func() {
+			c, err := net.DialTimeout(addr.Network(), addr.String(), 50*time.Millisecond)
+			if err == nil {
+				c.Close()
+			}
+		}
+		dial()
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				dial()
+			}
+		}
+	}()
+	err := l.Close()
+	close(stop)
+	wg.Wait()
+	return err
 }
 
 func (h *Host) exec(cmd *host.Command, listener *os.File) (*Child, error) {
