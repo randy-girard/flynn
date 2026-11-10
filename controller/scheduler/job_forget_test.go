@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -271,6 +272,48 @@ func TestRestartLimitSurvivesForgettingStoppedJob(t *testing.T) {
 	}
 	if diff := s.formationDiff(f); diff["web"] != 0 {
 		t.Fatalf("rectify would replace the stopped process: diff=%v", diff)
+	}
+}
+
+type activePageErrorClient struct {
+	*FakeControllerClient
+}
+
+func (activePageErrorClient) JobListActive() ([]*ct.Job, error) {
+	return []*ct.Job{{
+		UUID:  "page-only",
+		AppID: "app-1",
+		State: ct.JobStateUp,
+	}}, errors.New("active jobs page 2 failed")
+}
+
+// TestSyncJobsActivePageErrorDoesNotApplyPartial is the partial-read rule:
+// a later page failure is an error, and SyncJobs must not treat the first
+// page as the full set. Unknown rows in that page would be marked down.
+func TestSyncJobsActivePageErrorDoesNotApplyPartial(t *testing.T) {
+	s := forgetTestScheduler(t)
+	leader := true
+	s.isLeader = &leader
+	s.controllerPersist = make(chan interface{}, 8)
+	s.ControllerClient = activePageErrorClient{FakeControllerClient: NewFakeControllerClient()}
+	s.jobs.Add(&Job{
+		ID:        "keep",
+		AppID:     "app-1",
+		ReleaseID: "rel-1",
+		Type:      "web",
+		State:     JobStatePending,
+	})
+	err := s.SyncJobs()
+	if err == nil || !strings.Contains(err.Error(), "page 2") {
+		t.Fatalf("err = %v", err)
+	}
+	if got := s.jobs["keep"]; got == nil || got.State != JobStatePending {
+		t.Fatalf("in-memory job = %#v", got)
+	}
+	select {
+	case got := <-s.controllerPersist:
+		t.Fatalf("applied a partial active-job page: %#v", got)
+	default:
 	}
 }
 

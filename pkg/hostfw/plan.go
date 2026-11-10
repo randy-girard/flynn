@@ -137,6 +137,31 @@ func NormalizePorts(ports []int) []int {
 	return out
 }
 
+// ExposePorts collects KindExpose ports from rules already on the host.
+func ExposePorts(rules []Rule) []int {
+	var ports []int
+	for _, rule := range rules {
+		if rule.Kind == KindExpose {
+			ports = append(ports, rule.Port)
+		}
+	}
+	return NormalizePorts(ports)
+}
+
+// FirewallExposePorts chooses the expose set for one reconcile.
+// A successful route list, including an empty one, is the desired set.
+// A failed list keeps the current expose ports. If those cannot be read,
+// reconcile is false and the caller must leave the rules alone.
+func FirewallExposePorts(live []int, liveOK bool, current []int, currentOK bool) ([]int, bool) {
+	if liveOK {
+		return live, true
+	}
+	if !currentOK {
+		return nil, false
+	}
+	return current, true
+}
+
 // TCPPortsFromRoutes returns listen ports for TCP routes (not HTTP 80/443).
 func TCPPortsFromRoutes(routes []*router.Route) []int {
 	var ports []int

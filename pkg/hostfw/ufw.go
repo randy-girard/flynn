@@ -45,9 +45,6 @@ func (b UFWBackend) List() ([]Rule, error) {
 	}
 	out, err := b.runner()("ufw", "status")
 	if err != nil {
-		if b.Run == nil {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("ufw status: %w (%s)", err, strings.TrimSpace(out))
 	}
 	return ParseUFWStatus(out), nil

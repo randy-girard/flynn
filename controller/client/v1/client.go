@@ -487,10 +487,63 @@ func (c *Client) GetAppRelease(appID string) (*ct.Release, error) {
 	return release, c.Get(fmt.Sprintf("/apps/%s/release", appID), release)
 }
 
-// RouteList returns all routes.
+// RouteList returns every route the caller can see. It walks pages of
+// controllerListPageSize. A short page is the end. The first body longer
+// than that is an old controller that ignored count, and it is the whole
+// list. A later page that repeats an id or ignores the cursor is an error.
+// An error returns no slice, so a caller cannot treat page one as complete.
 func (c *Client) RouteList() ([]*router.Route, error) {
-	var routes []*router.Route
-	return routes, c.Get("/routes", &routes)
+	var out []*router.Route
+	seen := map[string]struct{}{}
+	var before, beforeID string
+	for {
+		q := url.Values{}
+		q.Set("count", strconv.Itoa(controllerListPageSize))
+		if before != "" {
+			q.Set("before", before)
+			q.Set("before_id", beforeID)
+		}
+		var page []*router.Route
+		if err := c.Get("/routes?"+q.Encode(), &page); err != nil {
+			return nil, err
+		}
+		if before == "" && len(out) == 0 && len(page) > controllerListPageSize {
+			return page, nil
+		}
+		if before != "" && len(page) > controllerListPageSize {
+			return nil, errors.New("controller: route list page ignored cursor")
+		}
+		if len(page) == 0 {
+			if out == nil {
+				out = []*router.Route{}
+			}
+			return out, nil
+		}
+		for _, route := range page {
+			if route == nil || route.ID == "" {
+				continue
+			}
+			id := route.Type + "/" + route.ID
+			if _, ok := seen[id]; ok {
+				return nil, fmt.Errorf("controller: route list page repeated %s", id)
+			}
+			seen[id] = struct{}{}
+			out = append(out, route)
+		}
+		if len(page) < controllerListPageSize {
+			return out, nil
+		}
+		last := page[len(page)-1]
+		if last == nil || last.ID == "" || last.CreatedAt.IsZero() {
+			return nil, errors.New("controller: route list page missing cursor")
+		}
+		nextID := last.Type + "/" + last.ID
+		nextBefore := last.CreatedAt.UTC().Format(time.RFC3339Nano)
+		if nextBefore == before && nextID == beforeID {
+			return nil, errors.New("controller: route list cursor did not advance")
+		}
+		before, beforeID = nextBefore, nextID
+	}
 }
 
 // AppRouteList returns all routes for an app.
@@ -962,14 +1015,63 @@ func (c *Client) JobList(appID string) ([]*ct.Job, error) {
 	return jobs, c.Get(fmt.Sprintf("/apps/%s/jobs", appID), &jobs)
 }
 
-// JobListActive returns a list of all active jobs.
+// JobListActive returns every active job. It walks pages the same way as
+// RouteList. The cursor is created_at and the job uuid, not updated_at.
+// An error returns no slice, so job sync does not mark the first page down.
 func (c *Client) JobListActive() ([]*ct.Job, error) {
-	var jobs []*ct.Job
-	return jobs, c.Get("/active-jobs", &jobs)
+	var out []*ct.Job
+	seen := map[string]struct{}{}
+	var before, beforeID string
+	for {
+		q := url.Values{}
+		q.Set("count", strconv.Itoa(controllerListPageSize))
+		if before != "" {
+			q.Set("before", before)
+			q.Set("before_id", beforeID)
+		}
+		var page []*ct.Job
+		if err := c.Get("/active-jobs?"+q.Encode(), &page); err != nil {
+			return nil, err
+		}
+		if before == "" && len(out) == 0 && len(page) > controllerListPageSize {
+			return page, nil
+		}
+		if before != "" && len(page) > controllerListPageSize {
+			return nil, errors.New("controller: active job list page ignored cursor")
+		}
+		if len(page) == 0 {
+			if out == nil {
+				out = []*ct.Job{}
+			}
+			return out, nil
+		}
+		for _, job := range page {
+			if job == nil || job.UUID == "" {
+				continue
+			}
+			if _, ok := seen[job.UUID]; ok {
+				return nil, fmt.Errorf("controller: active job list page repeated %s", job.UUID)
+			}
+			seen[job.UUID] = struct{}{}
+			out = append(out, job)
+		}
+		if len(page) < controllerListPageSize {
+			return out, nil
+		}
+		last := page[len(page)-1]
+		if last == nil || last.UUID == "" || last.CreatedAt == nil || last.CreatedAt.IsZero() {
+			return nil, errors.New("controller: active job list page missing cursor")
+		}
+		nextBefore := last.CreatedAt.UTC().Format(time.RFC3339Nano)
+		if nextBefore == before && last.UUID == beforeID {
+			return nil, errors.New("controller: active job list cursor did not advance")
+		}
+		before, beforeID = nextBefore, last.UUID
+	}
 }
 
-// appListPageSize is the controller maximum. A short page is the end.
-const appListPageSize = 1000
+// controllerListPageSize is the controller maximum. A short page is the end.
+const controllerListPageSize = 1000
 
 // AppList returns the operator catalog (GET /apps?all=true): every app,
 // including platform, system, and plugin apps. flynn-host, plugin install,
@@ -998,7 +1100,7 @@ func (c *Client) listAppPages(extra url.Values) ([]*ct.App, error) {
 				q.Add(k, v)
 			}
 		}
-		q.Set("count", strconv.Itoa(appListPageSize))
+		q.Set("count", strconv.Itoa(controllerListPageSize))
 		if before != "" {
 			q.Set("before", before)
 			q.Set("before_id", beforeID)
@@ -1020,7 +1122,7 @@ func (c *Client) listAppPages(extra url.Values) ([]*ct.App, error) {
 			seen[app.ID] = struct{}{}
 			out = append(out, app)
 		}
-		if len(page) < appListPageSize {
+		if len(page) < controllerListPageSize {
 			return out, nil
 		}
 		last := page[len(page)-1]

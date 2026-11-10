@@ -33,9 +33,21 @@ func syncHostFirewall(hostID, selfIP string, seedPeers []string, log log15.Logge
 	if len(livePeers) == 0 {
 		livePeers = seedPeers
 	}
-	desired := hostfw.MergeDesired(selfIP, extra, livePeers, liveFirewallPorts(log))
-	if err := hostfw.Reconcile(hostfw.UFWBackend{}, desired); err != nil {
-		log.Warn("firewall reconcile", "err", err)
+	ports, ok := liveFirewallPorts(log)
+	if !ok {
+		have, err := (hostfw.UFWBackend{}).List()
+		if err != nil {
+			log.Warn("firewall keep exposes", "err", err)
+		} else {
+			ports = hostfw.ExposePorts(have)
+			ok = true
+		}
+	}
+	if ok {
+		desired := hostfw.MergeDesired(selfIP, extra, livePeers, ports)
+		if err := hostfw.Reconcile(hostfw.UFWBackend{}, desired); err != nil {
+			log.Warn("firewall reconcile", "err", err)
+		}
 	}
 	if jobs != nil {
 		ports := hostfw.InstancePorts(hostID, jobs())
@@ -85,15 +97,20 @@ func liveFirewallPeers(selfIP string) []string {
 	return hostfw.NormalizePeers(addrs, selfIP)
 }
 
-func liveFirewallPorts(log log15.Logger) []int {
+func liveFirewallPorts(log log15.Logger) ([]int, bool) {
 	client, err := cli.ClusterController()
 	if err != nil {
-		return nil
+		if log != nil {
+			log.Warn("firewall controller", "err", err)
+		}
+		return nil, false
 	}
 	routes, err := client.RouteList()
 	if err != nil {
-		log.Debug("firewall route list", "err", err)
-		return nil
+		if log != nil {
+			log.Warn("firewall route list", "err", err)
+		}
+		return nil, false
 	}
-	return hostfw.TCPPortsFromRoutes(routes)
+	return hostfw.TCPPortsFromRoutes(routes), true
 }
