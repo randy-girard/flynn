@@ -55,3 +55,18 @@ func TestMergeSecretsEmpty(t *testing.T) {
 		t.Fatalf("expected no secrets, got %#v", merged.Secrets)
 	}
 }
+
+func TestAttachWaitsForStartingContainer(t *testing.T) {
+	if !AttachWaitsForStartingContainer(StatusStarting, true) {
+		t.Fatal("a starting interactive job must wait for its container instead of failing the attach")
+	}
+	if AttachWaitsForStartingContainer(StatusRunning, true) {
+		t.Fatal("a running job with no container is not coming up")
+	}
+	if AttachWaitsForStartingContainer(StatusFailed, true) {
+		t.Fatal("a failed job must not wait")
+	}
+	if AttachWaitsForStartingContainer(StatusStarting, false) {
+		t.Fatal("a non-interactive attach keeps the log-follow path")
+	}
+}

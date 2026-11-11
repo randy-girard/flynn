@@ -357,6 +357,14 @@ const (
 	StatusFailed
 )
 
+// AttachWaitsForStartingContainer reports whether an interactive attach that
+// found the job but not its container should wait. A starting job's container
+// is still coming up. Returning "job not running" there fails a git push that
+// attaches as soon as the scheduler marks the compile starting.
+func AttachWaitsForStartingContainer(status JobStatus, interactive bool) bool {
+	return interactive && status == StatusStarting
+}
+
 const (
 	AttachSuccess byte = iota
 	AttachWaiting

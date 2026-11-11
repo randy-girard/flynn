@@ -1849,6 +1849,23 @@ func (l *LibcontainerBackend) getContainer(id string) (*Container, error) {
 	return c, nil
 }
 
+// waitStartingContainer polls until the container is connected or the job
+// leaves "starting". The job record is visible before the container client
+// connects, and an interactive attach in that window used to fail the push.
+func (l *LibcontainerBackend) waitStartingContainer(id string) (*Container, error) {
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		if c, err := l.getContainer(id); err == nil {
+			return c, nil
+		}
+		job := l.State.GetJob(id)
+		if job == nil || job.Status != host.StatusStarting || !time.Now().Before(deadline) {
+			return nil, host.ErrJobNotRunning
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func (l *LibcontainerBackend) ResizeTTY(id string, height, width uint16) error {
 	container, err := l.getContainer(id)
 	if err != nil {
@@ -1885,12 +1902,16 @@ func (l *LibcontainerBackend) DiscoverdDeregister(id string) error {
 func (l *LibcontainerBackend) Attach(req *AttachRequest) (err error) {
 	client, err := l.getContainer(req.Job.Job.ID)
 	if err != nil {
-		if req.Job.Job.Config.TTY || req.Stdin != nil {
+		interactive := req.Job.Job.Config.TTY || req.Stdin != nil
+		if host.AttachWaitsForStartingContainer(req.Job.Status, interactive) {
+			client, err = l.waitStartingContainer(req.Job.Job.ID)
+			if err != nil {
+				return err
+			}
+		} else if interactive {
 			return host.ErrJobNotRunning
-		}
-
-		// if the container has exited and logging was disabled, return EOF
-		if req.Job.Job.Config.DisableLog {
+		} else if req.Job.Job.Config.DisableLog {
+			// if the container has exited and logging was disabled, return EOF
 			if req.Attached != nil {
 				req.Attached <- struct{}{}
 			}
