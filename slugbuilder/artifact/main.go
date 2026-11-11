@@ -137,7 +137,7 @@ func run(dir string, uid, gid int) error {
 		},
 
 		Rootfs: []*ct.ImageRootfs{{
-			Platform: ct.DefaultImagePlatform,
+			Platform: ct.ImagePlatformFor(""),
 			Layers: []*ct.ImageLayer{{
 				ID:     layerSHA,
 				Type:   ct.ImageLayerTypeSquashfs,

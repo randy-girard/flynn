@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1320,10 +1321,26 @@ type ImageRootfs struct {
 	Layers   []*ImageLayer  `json:"layers,omitempty"`
 }
 
-var DefaultImagePlatform = &ImagePlatform{
-	Architecture: "amd64",
-	OS:           "linux",
+// ImagePlatformFor is the platform stamped on an image built for arch.
+// An empty arch is this process, so an arm64 builder labels arm64 and an
+// amd64 builder labels amd64. aarch64 and x86_64 are the uname names.
+func ImagePlatformFor(arch string) *ImagePlatform {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "", "local":
+		arch = runtime.GOARCH
+	case "aarch64":
+		arch = "arm64"
+	case "x86_64":
+		arch = "amd64"
+	default:
+		arch = strings.ToLower(strings.TrimSpace(arch))
+	}
+	return &ImagePlatform{Architecture: arch, OS: "linux"}
 }
+
+// DefaultImagePlatform is this build's platform. Callers that need a
+// different architecture use ImagePlatformFor.
+var DefaultImagePlatform = ImagePlatformFor("")
 
 type ImagePlatform struct {
 	Architecture string `json:"architecture,omitempty"`

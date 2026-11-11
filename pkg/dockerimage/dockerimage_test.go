@@ -8,11 +8,27 @@ import (
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	ct "github.com/randy-girard/flynn/controller/types"
 )
+
+func TestManifestPlatformUsesTheImageArch(t *testing.T) {
+	got := manifestPlatform("aarch64", "linux")
+	if got.Architecture != "arm64" || got.OS != "linux" {
+		t.Fatalf("%+v", got)
+	}
+	got = manifestPlatform("x86_64", "")
+	if got.Architecture != "amd64" || got.OS != "linux" {
+		t.Fatalf("%+v", got)
+	}
+	got = manifestPlatform("", "")
+	if got.Architecture != runtime.GOARCH {
+		t.Fatalf("empty arch %s", got.Architecture)
+	}
+}
 
 func TestEntrypointEnvKeepsTabs(t *testing.T) {
 	got := entrypointEnv([]string{"TAB=test\ttest", "PLAIN=value", "EMPTY=", "novalue"})

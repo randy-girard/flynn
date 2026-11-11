@@ -105,7 +105,7 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 		Type:        ct.ImageManifestTypeV1,
 		Entrypoints: map[string]*ct.ImageEntrypoint{"_default": entrypoint},
 		Rootfs: []*ct.ImageRootfs{{
-			Platform: ct.DefaultImagePlatform,
+			Platform: manifestPlatform(config.Architecture, config.OS),
 			Layers:   []*ct.ImageLayer{layer},
 		}},
 	}
@@ -116,6 +116,16 @@ func BuildFromSaveDir(tarClient *tarclient.Client, saveDir string) (*BuildResult
 		Args:       args,
 		ListenPort: ListenPort(config.Config.ExposedPorts),
 	}, nil
+}
+
+// manifestPlatform labels a pushed Docker image with its own architecture.
+// A missing architecture uses the process that is doing the push.
+func manifestPlatform(arch, osName string) *ct.ImagePlatform {
+	p := ct.ImagePlatformFor(arch)
+	if osName = strings.TrimSpace(osName); osName != "" {
+		p.OS = osName
+	}
+	return p
 }
 
 // entrypointEnv copies Docker ENV lines. The value is everything after the

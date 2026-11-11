@@ -1407,7 +1407,7 @@ func (b *Builder) BuildImage(image *Image) error {
 	manifest := ct.ImageManifest{
 		Type: ct.ImageManifestTypeV1,
 		Rootfs: []*ct.ImageRootfs{{
-			Platform: ct.DefaultImagePlatform,
+			Platform: ct.ImagePlatformFor(""),
 			Layers:   append(baseLayers, layers...),
 		}},
 	}

@@ -8,7 +8,9 @@ type Manifest struct {
 
 // Config is used to read image config from the output of 'docker save'.
 type Config struct {
-	Config struct {
+	Architecture string `json:"architecture"`
+	OS           string `json:"os"`
+	Config       struct {
 		Env          []string
 		Cmd          []string
 		WorkingDir   string

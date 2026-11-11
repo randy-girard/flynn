@@ -2,10 +2,32 @@ package types
 
 import (
 	"encoding/json"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestDefaultImagePlatformMatchesTheBuild(t *testing.T) {
+	if DefaultImagePlatform == nil || DefaultImagePlatform.OS != "linux" {
+		t.Fatalf("platform %+v", DefaultImagePlatform)
+	}
+	if DefaultImagePlatform.Architecture != runtime.GOARCH {
+		t.Fatalf("image platform %q does not match this build's %q", DefaultImagePlatform.Architecture, runtime.GOARCH)
+	}
+	if got := ImagePlatformFor("aarch64"); got.Architecture != "arm64" || got.OS != "linux" {
+		t.Fatalf("aarch64: %+v", got)
+	}
+	if got := ImagePlatformFor("x86_64"); got.Architecture != "amd64" || got.OS != "linux" {
+		t.Fatalf("x86_64: %+v", got)
+	}
+	amd := ImagePlatformFor("amd64")
+	other := ImagePlatformFor("amd64")
+	amd.OS = "changed"
+	if other.OS == "changed" || DefaultImagePlatform.OS == "changed" {
+		t.Fatal("image platforms must not share one struct")
+	}
+}
 
 func TestParseJobRestartInterval(t *testing.T) {
 	cases := []struct {
