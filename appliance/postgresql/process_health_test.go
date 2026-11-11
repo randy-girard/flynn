@@ -571,6 +571,61 @@ func peerInst(addr, id string) *discoverd.Instance {
 // is promoted to sync while its primary keeps POSTGRES_ID and comes back at
 // a new flannel address. Skipping the restart leaves primary_conninfo pointed
 // at the dead address, so the primary stays unhealthy.
+func TestStandbyReloadUpstreamInPlace(t *testing.T) {
+	oldPrimary := peerInst("100.100.35.6:5432", "primary")
+	movedPrimary := peerInst("100.100.35.3:5432", "primary")
+	otherPrimary := peerInst("100.100.35.3:5432", "other")
+	async := &state.Config{Role: state.RoleAsync, Upstream: oldPrimary}
+	syncMoved := &state.Config{Role: state.RoleSync, Upstream: movedPrimary}
+	syncSame := &state.Config{Role: state.RoleSync, Upstream: oldPrimary}
+	syncOther := &state.Config{Role: state.RoleSync, Upstream: otherPrimary}
+	alreadySync := &state.Config{Role: state.RoleSync, Upstream: oldPrimary}
+
+	if !standbyReloadUpstreamInPlace(async, syncMoved) {
+		t.Fatal("a promoted sync must reload primary_conninfo when the primary address changes")
+	}
+	if !standbyReloadUpstreamInPlace(alreadySync, syncMoved) {
+		t.Fatal("a sync whose primary moved must reload primary_conninfo without a restart")
+	}
+	if standbyReloadUpstreamInPlace(async, syncSame) {
+		t.Fatal("the same upstream address does not need a conninfo reload")
+	}
+	if standbyReloadUpstreamInPlace(async, syncOther) {
+		t.Fatal("a new primary identity is not an in-place address move")
+	}
+}
+
+func TestWriteStandbyUpstreamReplacesDeadPrimary(t *testing.T) {
+	p := NewProcess(Config{
+		ID:       "sync-1",
+		DataDir:  t.TempDir(),
+		Port:     "5432",
+		Password: "secret",
+	})
+	down := peerInst("100.100.21.5:5432", "async-1")
+	if err := p.writeStandbyUpstream(&state.Config{
+		Role:       state.RoleSync,
+		Upstream:   peerInst("100.100.35.3:5432", "primary"),
+		Downstream: down,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(p.configPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "host=100.100.35.3 ") {
+		t.Fatal("primary_conninfo must name the live primary")
+	}
+	if strings.Contains(text, "host=100.100.35.6 ") {
+		t.Fatal("primary_conninfo still names the dead primary")
+	}
+	if !strings.Contains(text, `synchronous_standby_names = '"async-1"'`) {
+		t.Fatal("reloading the primary address must keep the sync standby name")
+	}
+}
+
 func TestStandbyPromotionSkipsRestart(t *testing.T) {
 	oldPrimary := peerInst("100.100.35.6:5432", "primary")
 	movedPrimary := peerInst("100.100.35.3:5432", "primary")
@@ -594,5 +649,37 @@ func TestStandbyPromotionSkipsRestart(t *testing.T) {
 	}
 	if standbyPromotionSkipsRestart(nil, syncSame) {
 		t.Fatal("a missing previous config must not skip the restart")
+	}
+}
+
+// TestChooseReplicationStatusIgnoresStuckStartupSender covers a primary that
+// stays unhealthy after a rolling reload. pg_stat_replication can list the
+// sync twice: a stuck startup sender whose sent and flush positions never
+// match, and a streaming sender that is already caught up. The first row
+// must not hide the caught-up sender, or SyncedDownstream stays unset.
+func TestChooseReplicationStatusIgnoresStuckStartupSender(t *testing.T) {
+	sent, flushed, ok := chooseReplicationStatus([]replSender{
+		{State: "startup", Sent: "0/64841F0", Flushed: "0/6484268"},
+		{State: "streaming", Sent: "0/6609268", Flushed: "0/6609268"},
+	})
+	if !ok {
+		t.Fatal("a streaming sender is replication status")
+	}
+	if sent != "0/6609268" || flushed != "0/6609268" {
+		t.Fatalf("caught-up streaming sender = %s %s", sent, flushed)
+	}
+
+	_, _, ok = chooseReplicationStatus([]replSender{
+		{State: "backup", Sent: "0/6609268", Flushed: "0/6609268"},
+	})
+	if ok {
+		t.Fatal("a basebackup sender is not the sync")
+	}
+
+	sent, flushed, ok = chooseReplicationStatus([]replSender{
+		{State: "catchup", Sent: "0/100", Flushed: "0/80"},
+	})
+	if !ok || sent != "0/100" || flushed != "0/80" {
+		t.Fatalf("a catchup sender must stay visible, got %s %s ok=%v", sent, flushed, ok)
 	}
 }

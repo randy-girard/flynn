@@ -397,6 +397,28 @@ func (p *Process) Running() bool {
 // that keeps POSTGRES_ID and registers at a new flannel IP must be written
 // into primary_conninfo, or the new sync keeps streaming from the dead address
 // and the primary stays unhealthy waiting for that sync.
+// standbyReloadUpstreamInPlace reports that a running standby can keep its
+// postmaster and only reload primary_conninfo. The primary kept POSTGRES_ID
+// and registered at a new flannel address. A full restart drops the sync and
+// the primary stays unhealthy for the whole rolling reload.
+func standbyReloadUpstreamInPlace(prev, next *state.Config) bool {
+	if prev == nil || next == nil || prev.Upstream == nil || next.Upstream == nil {
+		return false
+	}
+	if !standbyRole(prev.Role) || !standbyRole(next.Role) {
+		return false
+	}
+	prevID := prev.Upstream.Meta[IDKey]
+	if prevID == "" || prevID != next.Upstream.Meta[IDKey] {
+		return false
+	}
+	return prev.Upstream.Addr != next.Upstream.Addr
+}
+
+func standbyRole(role state.Role) bool {
+	return role == state.RoleSync || role == state.RoleAsync
+}
+
 func standbyPromotionSkipsRestart(prev, next *state.Config) bool {
 	if prev == nil || next == nil || prev.Upstream == nil || next.Upstream == nil {
 		return false
@@ -439,6 +461,23 @@ func (p *Process) reconfigure(config *state.Config) (err error) {
 		if config.Downstream != nil {
 			log.Info("waiting for downstream after sync promotion", "downstream", config.Downstream.Addr)
 			p.waitForSync(config.Downstream, false)
+		}
+		return nil
+	}
+
+	// The primary kept its identity and came back at a new flannel address.
+	// primary_conninfo is reloadable. SIGHUP reconnects the walreceiver
+	// without stopping the standby, so the primary does not lose its sync
+	// for the rest of a rolling reload.
+	if p.configApplied && p.running() && p.daemon != nil && standbyReloadUpstreamInPlace(p.config(), config) {
+		log.Info("reloading primary_conninfo for moved upstream", "upstream", config.Upstream.Addr)
+		if err := p.writeStandbyUpstream(config); err != nil {
+			log.Error("error writing postgres.conf", "path", p.configPath(), "err", err)
+			return err
+		}
+		if err := p.sighup(); err != nil {
+			log.Error("error reloading daemon configuration", "err", err)
+			return err
 		}
 		return nil
 	}
@@ -1761,22 +1800,83 @@ var ErrNoReplicationStatus = errors.New("no replication status")
 // replProgressLogInterval limits how often waitForSync logs catch-up progress.
 const replProgressLogInterval = 30 * time.Second
 
+// replSender is one pg_stat_replication row for a single application_name.
+// A rolling reload can leave a stuck startup sender next to the streaming
+// sender. The startup row's positions never match, so taking the first row
+// leaves the primary unhealthy after the replica has already caught up.
+type replSender struct {
+	State   string
+	Sent    string
+	Flushed string
+}
+
+// chooseReplicationStatus picks the sender that describes the sync. A
+// streaming sender outranks a catchup or startup sender. A basebackup
+// connection is not the sync.
+func chooseReplicationStatus(rows []replSender) (sent, flushed string, ok bool) {
+	bestRank := 0
+	var best replSender
+	for _, row := range rows {
+		rank := replSenderRank(row.State, row.Sent != "" && row.Sent == row.Flushed)
+		if rank == 0 || rank < bestRank {
+			continue
+		}
+		bestRank = rank
+		best = row
+	}
+	if bestRank == 0 || best.Sent == "" || best.Flushed == "" {
+		return "", "", false
+	}
+	return best.Sent, best.Flushed, true
+}
+
+func replSenderRank(state string, caughtUp bool) int {
+	base := 0
+	switch state {
+	case "streaming":
+		base = 30
+	case "catchup":
+		base = 20
+	case "startup":
+		base = 10
+	default:
+		return 0
+	}
+	if caughtUp {
+		base += 5
+	}
+	return base
+}
+
 // checkReplStatus does not log: waitForSync calls it every checkInterval and
 // logs only when the result changes.
 func (p *Process) checkReplStatus(name string) (sent, flushed xlog.Position, err error) {
-	var s, f pgx.NullString
-	err = p.db.QueryRow(`
-SELECT sent_lsn, flush_lsn
+	rows, err := p.db.Query(`
+SELECT state, sent_lsn, flush_lsn
 FROM pg_stat_replication
-WHERE application_name = $1`, name).Scan(&s, &f)
-	if err != nil && err != pgx.ErrNoRows {
+WHERE application_name = $1`, name)
+	if err != nil {
 		return
 	}
-	sent, flushed = xlog.Position(s.String), xlog.Position(f.String)
-	if err == pgx.ErrNoRows || sent == "" || flushed == "" {
+	defer rows.Close()
+	var senders []replSender
+	for rows.Next() {
+		var state string
+		var s, f pgx.NullString
+		if err = rows.Scan(&state, &s, &f); err != nil {
+			return
+		}
+		senders = append(senders, replSender{State: state, Sent: s.String, Flushed: f.String})
+	}
+	if err = rows.Err(); err != nil {
+		return
+	}
+	chosenSent, chosenFlushed, ok := chooseReplicationStatus(senders)
+	if !ok {
 		err = ErrNoReplicationStatus
 		return
 	}
+	sent, flushed = xlog.Position(chosenSent), xlog.Position(chosenFlushed)
 	return
 }
 
@@ -1844,6 +1944,27 @@ func (p *Process) runCmd(cmd *exec.Cmd) error {
 			}
 		}
 	}
+}
+
+// writeStandbyUpstream rewrites primary_conninfo for a standby whose primary
+// moved. The downstream name stays so synchronous_standby_names is not cleared.
+func (p *Process) writeStandbyUpstream(config *state.Config) error {
+	if config == nil || config.Upstream == nil {
+		return errors.New("missing upstream")
+	}
+	up := config.Upstream
+	cfg := configData{
+		ReadOnly: true,
+		PrimaryConnInfo: fmt.Sprintf(
+			"host=%s port=%s user=flynn password=%s application_name=%s",
+			up.Host(), up.Port(), p.password, p.id,
+		),
+		RecoveryTargetTimeline: "latest",
+	}
+	if config.Downstream != nil {
+		cfg.Sync = config.Downstream.Meta[IDKey]
+	}
+	return p.writeConfig(cfg)
 }
 
 func (p *Process) writeConfig(d configData) error {
