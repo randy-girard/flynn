@@ -558,3 +558,41 @@ func TestCancelUpstreamWaitAbortsWaitForUpstream(t *testing.T) {
 	}
 	p.CancelUpstreamWait()
 }
+
+func peerInst(addr, id string) *discoverd.Instance {
+	return &discoverd.Instance{
+		Addr:  addr,
+		Proto: "tcp",
+		Meta:  map[string]string{IDKey: id},
+	}
+}
+
+// TestStandbyPromotionSkipsRestart covers a rolling reload where the async
+// is promoted to sync while its primary keeps POSTGRES_ID and comes back at
+// a new flannel address. Skipping the restart leaves primary_conninfo pointed
+// at the dead address, so the primary stays unhealthy.
+func TestStandbyPromotionSkipsRestart(t *testing.T) {
+	oldPrimary := peerInst("100.100.35.6:5432", "primary")
+	movedPrimary := peerInst("100.100.35.3:5432", "primary")
+	otherPrimary := peerInst("100.100.35.6:5432", "other")
+	async := &state.Config{Role: state.RoleAsync, Upstream: oldPrimary}
+	syncMoved := &state.Config{Role: state.RoleSync, Upstream: movedPrimary}
+	syncSame := &state.Config{Role: state.RoleSync, Upstream: oldPrimary}
+	syncOther := &state.Config{Role: state.RoleSync, Upstream: otherPrimary}
+
+	if standbyPromotionSkipsRestart(async, syncMoved) {
+		t.Fatal("promotion must rewrite primary_conninfo when the primary address changes")
+	}
+	if !standbyPromotionSkipsRestart(async, syncSame) {
+		t.Fatal("promotion with the same upstream instance can skip the restart")
+	}
+	if standbyPromotionSkipsRestart(async, syncOther) {
+		t.Fatal("a different primary identity is not the same upstream")
+	}
+	if standbyPromotionSkipsRestart(async, &state.Config{Role: state.RoleSync}) {
+		t.Fatal("a missing upstream must not skip the restart")
+	}
+	if standbyPromotionSkipsRestart(nil, syncSame) {
+		t.Fatal("a missing previous config must not skip the restart")
+	}
+}

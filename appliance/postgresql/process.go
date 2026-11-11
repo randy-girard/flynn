@@ -391,6 +391,22 @@ func (p *Process) Running() bool {
 	return p.running()
 }
 
+// standbyPromotionSkipsRestart reports whether an async peer can become the
+// sync without rewriting primary_conninfo. The upstream discoverd instance
+// must match, including its address. Identity alone is not enough: a primary
+// that keeps POSTGRES_ID and registers at a new flannel IP must be written
+// into primary_conninfo, or the new sync keeps streaming from the dead address
+// and the primary stays unhealthy waiting for that sync.
+func standbyPromotionSkipsRestart(prev, next *state.Config) bool {
+	if prev == nil || next == nil || prev.Upstream == nil || next.Upstream == nil {
+		return false
+	}
+	if prev.Role != state.RoleAsync || next.Role != state.RoleSync {
+		return false
+	}
+	return next.Upstream.Equal(prev.Upstream)
+}
+
 func (p *Process) reconfigure(config *state.Config) (err error) {
 	log := p.log.New("fn", "reconfigure")
 
@@ -412,10 +428,11 @@ func (p *Process) reconfigure(config *state.Config) (err error) {
 		return nil
 	}
 
-	// Promoting async to sync with the same upstream does not require a
-	// restart, but downstream sync tracking must be started for sirenia deploys.
-	if p.configApplied && p.running() && p.config() != nil && config != nil &&
-		p.config().Role == state.RoleAsync && config.Role == state.RoleSync && config.Upstream.Meta[IDKey] == p.config().Upstream.Meta[IDKey] {
+	// Promoting async to sync with the same upstream instance does not require
+	// a restart, but downstream sync tracking must be started for sirenia deploys.
+	// A primary that kept POSTGRES_ID and moved to a new address is not the
+	// same instance: primary_conninfo still names the dead address.
+	if p.configApplied && p.running() && standbyPromotionSkipsRestart(p.config(), config) {
 		log.Info("promoting async to sync with same upstream")
 		p.cancelSyncWait()
 		p.setSyncedDownstream(nil)
