@@ -323,6 +323,9 @@ func (a *AddonSpec) CreateUsage() string {
 	if a.Supports(VerbAttach) || (a.Env != nil && a.Env.Prefix != "") {
 		parts = append(parts, "[--as <name>]")
 	}
+	if a.Backend == BackendResource {
+		parts = append(parts, "[--unattached]", "[--owner <handle>]")
+	}
 	if a.Create != "" {
 		parts = append(parts, a.Create)
 	}

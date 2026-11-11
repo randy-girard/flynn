@@ -38,12 +38,22 @@ List add-on types installed plugins provide. Official plugins that are not
 installed are omitted. addons:create <type> uses these names.
 `)
 	register("addons:create", runAddonsCreate, `
-usage: flynn addons:create <type> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>]
+usage: flynn addons:create <type> [--as <name>] [--follow <resource>] [--runtime <name>] [--replication <mode>] [--auto-failover] [--cpu <milli>] [--memory <bytes>] [--disk <bytes>] [--unattached] [--owner <handle>]
 
 Provision an add-on of <type>. Options after <type> come from the installed
 plugin. --runtime is offered only when that type declares runtimes. Omitting
 it uses the type's default. --cpu, --memory, and --disk are rejected unless
 the type allows custom sizes and a cluster admin has allowed them.
+
+With no -a and no flynn git remote, the resource is created without an app.
+--unattached does that even when an app is selected. It is owned by --owner
+when that is set, otherwise by flynn context. Both accept a user or an
+organization handle. With neither, it is owned by your personal account.
+Attach it later with flynn -a <app> addons:attach <name>. The app must use
+the same account.
+
+Options:
+	--owner=<handle>  User or organization that owns an unattached resource
 
 The command returns after a database instance is scheduled. The datastore
 keeps starting in the background.
@@ -51,6 +61,8 @@ keeps starting in the background.
 Examples:
 
 	$ flynn addons:create postgres
+	$ flynn addons:create postgres --unattached
+	$ flynn addons:create postgres --unattached --owner acme
 	$ flynn addons:create postgres --as ANALYTICS
 	$ flynn addons:create postgres --as AMBER
 	$ flynn addons:create scheduler
@@ -197,6 +209,36 @@ func runAddonsTypes(args *docopt.Args, client controller.Client) error {
 	return nil
 }
 
+// unattachedOwnerHandle is the account to resolve for a resource created
+// with no app. --owner wins over flynn context. Empty means the personal
+// account. A handle may name a user or an organization.
+func unattachedOwnerHandle(ownerFlag, contextHandle string) string {
+	if h := strings.TrimSpace(ownerFlag); h != "" {
+		return h
+	}
+	return strings.TrimSpace(contextHandle)
+}
+
+func unattachedResourceOwner(client controller.Client, ownerFlag string) (string, error) {
+	contextHandle := ""
+	if clusterConf != nil {
+		contextHandle = clusterConf.Context
+	}
+	if handle := unattachedOwnerHandle(ownerFlag, contextHandle); handle != "" {
+		return resolveOwner(client, handle)
+	}
+	return currentAccount(client)
+}
+
+// addonCreateApps is empty when the resource should exist before any app.
+func addonCreateApps(unattached bool, appName string) []string {
+	appName = strings.TrimSpace(appName)
+	if unattached || appName == "" {
+		return nil
+	}
+	return []string{appName}
+}
+
 func runAddonsCreate(args *docopt.Args, client controller.Client) error {
 	typ := strings.TrimSpace(args.String["<type>"])
 	cat, err := clusterPluginCatalog()
@@ -217,11 +259,21 @@ func runAddonsCreate(args *docopt.Args, client controller.Client) error {
 		log.Printf("Added %s add-on to %s.", spec.Type, mustApp())
 		return nil
 	}
+	unattached := args.Bool["--unattached"]
+	appName := ""
+	if !unattached {
+		name, err := app()
+		if err != nil {
+			unattached = true
+		} else {
+			appName = name
+		}
+	}
 	rtCat, err := databaseRuntimeCatalog(client)
 	if err != nil {
 		return err
 	}
-	follow, err := resolvePeerRef(client, mustApp(), spec.Provider, args.String["--follow"])
+	follow, err := resolvePeerRef(client, appName, spec.Provider, args.String["--follow"])
 	if err != nil {
 		return err
 	}
@@ -239,9 +291,27 @@ func runAddonsCreate(args *docopt.Args, client controller.Client) error {
 		return err
 	}
 	msg := json.RawMessage(raw)
-	res, err := client.ProvisionResource(&ct.ResourceReq{ProviderID: spec.Provider, Apps: []string{mustApp()}, Config: &msg})
+	req := &ct.ResourceReq{ProviderID: spec.Provider, Apps: addonCreateApps(unattached, appName), Config: &msg}
+	ownerFlag := strings.TrimSpace(args.String["--owner"])
+	if ownerFlag != "" && !unattached {
+		return fmt.Errorf("--owner is for a resource created without an app; an attached app keeps its own account")
+	}
+	if unattached {
+		account, err := unattachedResourceOwner(client, ownerFlag)
+		if err != nil {
+			return err
+		}
+		req.OwnerAccount = account
+	}
+	res, err := client.ProvisionResource(req)
 	if err != nil {
 		return err
+	}
+	if unattached {
+		log.Println(createdResourceMessage(res, ""))
+		log.Printf("Not attached to an app. Attach it later with flynn -a <app> addons:attach %s", resourceDisplayName(res))
+		log.Println(resourceStartingMessage(res, spec.Wait))
+		return nil
 	}
 	env := appliedAttachmentEnv(client, res.Env, args.String["--as"], true)
 	if _, err := setEnv(client, "", env); err != nil {

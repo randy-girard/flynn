@@ -288,7 +288,7 @@ func TestFormatHelpDocumentsFlagsAndExamples(t *testing.T) {
 		t.Fatalf("volume:show help missing --json Options:\n%s", vol)
 	}
 	add := formatHelp("addons:create")
-	if !strings.Contains(add, "Examples:") || !strings.Contains(add, "addons:create postgres") {
+	if !strings.Contains(add, "Examples:") || !strings.Contains(add, "addons:create postgres") || !strings.Contains(add, "--unattached") || !strings.Contains(add, "--owner") {
 		t.Fatalf("addons:create help missing postgres example:\n%s", add)
 	}
 	token := formatHelp("token:create")

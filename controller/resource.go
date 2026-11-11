@@ -64,9 +64,36 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 				return
 			}
 		}
-	} else if tok := authz.TokenFromContext(ctx); tok != nil && !tok.ClusterKey && !tok.HasClusterAdmin() {
-		httphelper.Forbidden(w, "provisioning requires an app you can manage")
-		return
+	} else {
+		account, err := c.ownerForUnattachedResource(ctx, rr.OwnerAccount)
+		if err != nil {
+			respondWithError(w, err)
+			return
+		}
+		if account == "" {
+			httphelper.Forbidden(w, "provisioning without an app requires a user account")
+			return
+		}
+		if !c.allowUnattachedOwner(ctx, account) {
+			httphelper.Forbidden(w, "provisioning without an app requires an account you administer")
+			return
+		}
+		if err := c.rejectIfSuspended(account); err != nil {
+			respondWithError(w, err)
+			return
+		}
+		owner = account
+		if c.tenancy != nil {
+			n, err := c.tenancy.CountResources(owner)
+			if err != nil {
+				respondWithError(w, err)
+				return
+			}
+			if err := c.quotaAllows(owner, 0, 0, 0, n+1, 0); err != nil {
+				respondWithError(w, err)
+				return
+			}
+		}
 	}
 
 	var config []byte
@@ -137,6 +164,61 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 		return
 	}
 	httphelper.JSON(w, 200, res)
+}
+
+// defaultResourceOwner is the account for a resource created with no app.
+// An explicit user:<id> or org:<id> wins, so an organization context is not
+// replaced by the caller's personal account. Empty falls back to user:<id>.
+// A cluster key with no user stays unowned.
+func defaultResourceOwner(requested, userID string, clusterKey bool) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested != "" {
+		if !validResourceOwner(requested) {
+			return "", ct.ValidationError{Field: "owner_account", Message: "must be user:<id> or org:<id>"}
+		}
+		return requested, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if clusterKey || userID == "" {
+		return "", nil
+	}
+	return "user:" + userID, nil
+}
+
+func validResourceOwner(account string) bool {
+	prefix := ""
+	switch {
+	case strings.HasPrefix(account, "user:"):
+		prefix = "user:"
+	case strings.HasPrefix(account, "org:"):
+		prefix = "org:"
+	default:
+		return false
+	}
+	id := strings.TrimSpace(strings.TrimPrefix(account, prefix))
+	return id != "" && !strings.ContainsAny(id, " \t/")
+}
+
+func (c *controllerAPI) ownerForUnattachedResource(ctx context.Context, requested string) (string, error) {
+	tok := authz.TokenFromContext(ctx)
+	userID := ""
+	clusterKey := false
+	if tok != nil {
+		userID = tok.UserID
+		clusterKey = tok.ClusterKey
+	}
+	return defaultResourceOwner(requested, userID, clusterKey)
+}
+
+func (c *controllerAPI) allowUnattachedOwner(ctx context.Context, owner string) bool {
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || tok.ClusterKey || tok.HasClusterAdmin() {
+		return true
+	}
+	if tok.UserID != "" && owner == "user:"+tok.UserID {
+		return true
+	}
+	return c.canAdminOwner(ctx, owner)
 }
 
 func provisionAs(config []byte) string {

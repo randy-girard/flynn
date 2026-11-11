@@ -211,6 +211,37 @@ func TestResourceAddPostgresRejectsPlatformAppliance(t *testing.T) {
 	}
 }
 
+func TestUnattachedOwnerHandlePrefersTheOrganization(t *testing.T) {
+	if got := unattachedOwnerHandle("acme", "ada"); got != "acme" {
+		t.Fatalf("--owner %q", got)
+	}
+	if got := unattachedOwnerHandle("", "acme"); got != "acme" {
+		t.Fatalf("context %q", got)
+	}
+	if got := unattachedOwnerHandle(" org:acme ", "user:ada"); got != "org:acme" {
+		t.Fatalf("explicit org %q", got)
+	}
+	if got := unattachedOwnerHandle("  ", "  "); got != "" {
+		t.Fatalf("personal fallback %q", got)
+	}
+}
+
+func TestAddonCreateAppsOmitsTheAppWhenUnattached(t *testing.T) {
+	if got := addonCreateApps(true, "shop"); got != nil {
+		t.Fatalf("unattached with an app name: %v", got)
+	}
+	if got := addonCreateApps(false, ""); got != nil {
+		t.Fatalf("missing app: %v", got)
+	}
+	if got := addonCreateApps(false, "  "); got != nil {
+		t.Fatalf("blank app: %v", got)
+	}
+	got := addonCreateApps(false, "shop")
+	if len(got) != 1 || got[0] != "shop" {
+		t.Fatalf("attached: %v", got)
+	}
+}
+
 func TestResourceAddPostgresDoesNotScaleTheInstance(t *testing.T) {
 	src, err := os.ReadFile("addons.go")
 	if err != nil {

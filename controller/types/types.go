@@ -1018,9 +1018,13 @@ func (r *Resource) OwnedByApp(app *App) bool {
 }
 
 type ResourceReq struct {
-	ProviderID string           `json:"-"`
-	Apps       []string         `json:"apps,omitempty"`
-	Config     *json.RawMessage `json:"config"`
+	ProviderID string   `json:"-"`
+	Apps       []string `json:"apps,omitempty"`
+	// OwnerAccount is used when Apps is empty. It is user:<id> or org:<id>.
+	// Pass org:<id> to own the resource as an organization. Empty means the
+	// caller's personal account, not the organization they administer.
+	OwnerAccount string           `json:"owner_account,omitempty"`
+	Config       *json.RawMessage `json:"config"`
 }
 
 // PluginAddon is a non-resource add-on owned by an installed plugin

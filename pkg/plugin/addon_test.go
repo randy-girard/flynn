@@ -16,7 +16,7 @@ func TestOfficialDatastoreAddonContracts(t *testing.T) {
 	if pg == nil || !pg.Supports(VerbExpose) || pg.Env.Prefix != "FLYNN_POSTGRESQL_" {
 		t.Fatalf("postgres addon %#v", pg)
 	}
-	if !strings.Contains(pg.CreateUsage(), "--as <name>") || !strings.Contains(pg.CreateUsage(), "--follow") {
+	if !strings.Contains(pg.CreateUsage(), "--as <name>") || !strings.Contains(pg.CreateUsage(), "--follow") || !strings.Contains(pg.CreateUsage(), "--unattached") || !strings.Contains(pg.CreateUsage(), "--owner <handle>") {
 		t.Fatalf("usage %s", pg.CreateUsage())
 	}
 	raw, err := pg.ProvisionConfig(CreateInput{}, cat)
@@ -75,7 +75,7 @@ func TestOfficialDatastoreAddonContracts(t *testing.T) {
 		t.Fatalf("dedicated %s", raw)
 	}
 	sched := OfficialAddon("scheduler")
-	if sched == nil || sched.Backend != BackendPlugin || sched.Supports(VerbAttach) || strings.Contains(sched.CreateUsage(), "--as") {
+	if sched == nil || sched.Backend != BackendPlugin || sched.Supports(VerbAttach) || strings.Contains(sched.CreateUsage(), "--as") || strings.Contains(sched.CreateUsage(), "--unattached") {
 		t.Fatalf("scheduler %#v %s", sched, sched.CreateUsage())
 	}
 	if sched.VerbError(VerbAttach).Error() != "scheduler addons do not support attach" {

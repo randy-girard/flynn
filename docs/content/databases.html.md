@@ -33,8 +33,13 @@ all use cases, including high volume, large dataset workloads.
 
 ## Appliances
 
-Provision from an app with `flynn addons:create <provider>`. Connection details
-are injected as environment variables. User jobs may resolve the **leader**
+Provision with `flynn addons:create <provider>`. With no app selected, or with
+`--unattached`, the resource is created on its own. It is owned by
+`--owner <handle>` when that is set, otherwise by `flynn context`. The handle
+can be your user or an organization. With neither, it is owned by your
+personal account. Attach it later with
+`flynn -a <app> addons:attach <name>`. Connection details are injected as
+environment variables when it is attached. User jobs may resolve the **leader**
 hostname Flynn puts in *that app's* URLs (`REDIS_URL`, `DATABASE_URL`, …).
 Another app's isolated datastore, internal names such as `postgres.discoverd`,
 and `$APP-$TYPE.discoverd` do not resolve from user jobs.
