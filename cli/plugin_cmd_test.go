@@ -522,6 +522,94 @@ func TestPluginMatchActionPrefersLongestName(t *testing.T) {
 	}
 }
 
+func TestPgBackupCommandsKeepTheResourceName(t *testing.T) {
+	usage := `usage: flynn pg:dump [<resource>]
+       flynn pg dump [<resource>]
+       flynn pg:backups [<resource>]
+       flynn pg backups [<resource>]
+       flynn pg:restore [<timestamp>]
+       flynn pg restore [<timestamp>]
+`
+	parse := func(args []string) (string, *docopt.Args) {
+		t.Helper()
+		name, rest := peelResourceName("pg", args)
+		argv := append([]string{"pg"}, rest...)
+		parsed, err := docopt.Parse(usage, argv, true, "", false)
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if name != "" {
+			if parsed.String == nil {
+				parsed.String = map[string]string{}
+			}
+			parsed.String["<name>"] = name
+		}
+		return resourceNameArg(parsed), parsed
+	}
+	if got, _ := parse([]string{"dump", "postgresql-reef-55266"}); got != "postgresql-reef-55266" {
+		t.Fatalf("dump name %q", got)
+	}
+	if got, _ := parse([]string{"backups", "postgresql-reef-55266"}); got != "postgresql-reef-55266" {
+		t.Fatalf("backups name %q", got)
+	}
+	got, parsed := parse([]string{"restore", "postgresql-reef-55266", "20261111T160405Z"})
+	if got != "postgresql-reef-55266" || parsed.String["<timestamp>"] != "20261111T160405Z" {
+		t.Fatalf("restore name %q timestamp %#v", got, parsed.String)
+	}
+	got, parsed = parse([]string{"restore", "20261111T160405Z"})
+	if got != "" || parsed.String["<timestamp>"] != "20261111T160405Z" {
+		t.Fatalf("timestamp-only restore name %q timestamp %#v", got, parsed.String)
+	}
+}
+
+func TestPgRestoreAppendsOnlyTheTimestamp(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	flagApp = "shop"
+	instance := "postgresql-reef-55266"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"shop":            {Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			instance:          {ID: "inst-rel", Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			"postgres-plugin": {ID: "plugin-rel"},
+		},
+		resources: map[string][]*ct.Resource{
+			"shop": {{Env: map[string]string{"FLYNN_POSTGRES": instance}}},
+		},
+	}
+	spec := &plugin.CLI{
+		Command:     "pg",
+		App:         "postgres-plugin",
+		ResourceEnv: "FLYNN_POSTGRES",
+		Actions: []plugin.CLIAction{{
+			Name:   "restore",
+			Args:   []string{"/bin/flynn-postgres-api", "task", "restore", "${resource}"},
+			Append: "<timestamp>",
+		}},
+	}
+	usage := `usage: flynn pg:restore [<timestamp>]
+       flynn pg restore [<timestamp>]
+`
+	name, _ := peelResourceName("pg", []string{"restore", instance, "20261111T160405Z"})
+	parsed, err := docopt.Parse(usage, []string{"pg", "restore", "20261111T160405Z"}, true, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.String == nil {
+		parsed.String = map[string]string{}
+	}
+	parsed.String["<name>"] = name
+	cfg, err := pluginJobConfig(client, spec, spec.Action("restore"), parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(cfg.Args, " ")
+	want := "/bin/flynn-postgres-api task restore " + instance + " 20261111T160405Z"
+	if got != want {
+		t.Fatalf("restore args %q", got)
+	}
+}
+
 func TestPeelResourceNameLeavesConsoleArgs(t *testing.T) {
 	name, rest := peelResourceName("redis", []string{"redis-cli", "PING"})
 	if name != "" || len(rest) != 2 || rest[1] != "PING" {

@@ -179,18 +179,25 @@ pg:dump`, or `flynn-host pg:restore`. See
 ### Dumping and restoring
 
 `flynn pg:dump` writes one custom-format `pg_dump` per logical database on
-this app's primary into the platform blobstore and prints the timestamp.
+this app's primary into object storage and prints the timestamp.
 `flynn pg:backups` lists those timestamps. `flynn pg:restore` restores the
 newest, and `flynn pg:restore <timestamp>` restores a listed timestamp into
-the same database names. `-f`, `--file`, and `-q` are rejected. There is no
-dump file to download. The plugin dashboard Backup page is the same
-operation: it shows the destination, a miss when the last success is missing
-or older than 25 hours, **Back up now**, and **Restore selected**.
+the same database names. When the app has more than one Postgres resource,
+pass the instance name: `flynn pg:dump postgresql-mist-20145`,
+`flynn pg:backups postgresql-mist-20145`, and
+`flynn pg:restore postgresql-mist-20145 20261111T160405Z`. `-f`, `--file`,
+and `-q` are rejected. There is no dump file to download. The dashboard
+Backup page is the same operation: it shows where backups are stored, a
+warning when the last success is missing or older than 25 hours, **Back up
+now**, a table of timestamps, and **Restore selected**. That page does not
+show cluster-host commands.
 
 The schedule runs on the `postgres-backup` discoverd leader, once a day per
 primary, with the first dump due immediately. A postgres blobstore is refused
-in both hosted and self-hosted mode. Point the blobstore at S3, MinIO, GCS,
-or Azure with `flynn-host blobstore:set --migrate --delete` before dumping.
+in both hosted and self-hosted mode. An app user sees that backups are
+unavailable until an administrator configures object storage. Operators point
+the blobstore at S3, MinIO, GCS, or Azure with
+`flynn-host blobstore:set --migrate --delete` before dumping.
 
 `flynn-host pg:dump` / `flynn-host pg:restore` dump the **platform** appliance
 (controller, blobstore, plugin metadata on `platform-postgres`). They do not
