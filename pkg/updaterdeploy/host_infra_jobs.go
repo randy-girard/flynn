@@ -39,7 +39,11 @@ var (
 	hostInfraStopRetryWait       = 200 * time.Millisecond
 )
 
-const hostInfraStopAttempts = 3
+// hostInfraStopBudget is how long a transient StopJob may be retried.
+// Three quick tries were not enough: stopping discoverd returned
+// unknown_error for longer than that while the job was still listed,
+// and the update aborted with the node missing discoverd.
+const hostInfraStopBudget = 15 * time.Second
 
 // HostInfraController is the controller API used to move discoverd/flannel
 // onto a release that carries the pulled image.
@@ -289,28 +293,21 @@ func isTransientHostStop(err error) bool {
 // that while the job was still listed; aborting there leaves the node
 // without a replacement.
 func stopHostInfraJob(h hostInfraHost, id, name string) error {
-	var last error
-	for attempt := 1; attempt <= hostInfraStopAttempts; attempt++ {
+	deadline := time.Now().Add(hostInfraStopBudget)
+	for {
 		err := h.StopJob(id)
 		if err == nil {
 			return nil
 		}
-		last = err
 		jobs, listErr := h.ListJobs()
 		if listErr == nil && !jobStillActive(jobs, id) {
 			return nil
 		}
-		if !isTransientHostStop(err) {
+		if !isTransientHostStop(err) || !time.Now().Before(deadline) {
 			return fmt.Errorf("stop %s on %s: %w", name, h.ID(), err)
 		}
-		if attempt < hostInfraStopAttempts {
-			time.Sleep(hostInfraStopRetryWait)
-		}
+		time.Sleep(hostInfraStopRetryWait)
 	}
-	if jobs, listErr := h.ListJobs(); listErr == nil && !jobStillActive(jobs, id) {
-		return nil
-	}
-	return fmt.Errorf("stop %s on %s: %w", name, h.ID(), last)
 }
 
 func volumeMissing(err error) bool {

@@ -19,6 +19,7 @@ type fakeInfraHost struct {
 	restartOnce          *host.ActiveJob
 	stopErr              error
 	stopErrOnce          bool
+	stopErrCount         int
 	stopErrLeavesRunning bool
 }
 
@@ -30,11 +31,20 @@ func (f *fakeInfraHost) ListJobs() (map[string]host.ActiveJob, error) {
 
 func (f *fakeInfraHost) StopJob(id string) error {
 	f.stopped = append(f.stopped, id)
-	if f.stopErr != nil {
+	if f.stopErr != nil && (f.stopErrOnce || f.stopErrCount > 0) {
 		err := f.stopErr
 		if f.stopErrOnce {
 			f.stopErr = nil
+			f.stopErrOnce = false
 			if !f.stopErrLeavesRunning {
+				delete(f.jobs, id)
+			}
+		} else {
+			f.stopErrCount--
+			if f.stopErrCount == 0 {
+				f.stopErr = nil
+			}
+			if !f.stopErrLeavesRunning && f.stopErrCount == 0 {
 				delete(f.jobs, id)
 			}
 		}
@@ -150,6 +160,71 @@ func TestReplaceHostInfraJobsUnknownErrorWhileRunningRetries(t *testing.T) {
 	}
 	if len(h.stopped) < 2 {
 		t.Fatalf("unknown_error while the job is still running must retry, stopped=%v", h.stopped)
+	}
+}
+
+func TestReplaceHostInfraJobsUnknownErrorRetriesPastThree(t *testing.T) {
+	prevWait := hostInfraStopRetryWait
+	hostInfraStopRetryWait = 0
+	t.Cleanup(func() { hostInfraStopRetryWait = prevWait })
+
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id: "devnode2",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "discoverd",
+					},
+					Config: host.ContainerConfig{
+						Env: map[string]string{"FLYNN_JOB_ID": "old"},
+					},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+		stopErr:              fmt.Errorf("unknown_error: Something went wrong"),
+		stopErrCount:         6,
+		stopErrLeavesRunning: true,
+	}
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"discoverd": art}, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.stopped) < 7 {
+		t.Fatalf("discoverd stop must keep retrying a generic 500 while the job is listed, stopped=%d", len(h.stopped))
+	}
+}
+
+func TestReplaceHostInfraJobsPermanentStopErrorDoesNotRetry(t *testing.T) {
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id: "devnode2",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "discoverd",
+					},
+					Config:     host.ContainerConfig{Env: map[string]string{"FLYNN_JOB_ID": "old"}},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+		stopErr:              fmt.Errorf("validation_error: job cannot be stopped"),
+		stopErrCount:         5,
+		stopErrLeavesRunning: true,
+	}
+	err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"discoverd": art}, nil, false, nil)
+	if err == nil {
+		t.Fatal("a permanent stop error must fail the update")
+	}
+	if len(h.stopped) != 1 {
+		t.Fatalf("permanent stop errors must not be retried, stopped=%d", len(h.stopped))
 	}
 }
 
