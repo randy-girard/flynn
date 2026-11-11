@@ -32,17 +32,17 @@ load "helper"
     return 1
   fi
   grep -q 'deb http://archive.ubuntu.com/ubuntu noble main' "${dir}/keep"
+  hosts="$(flynn_ci_ubuntu_mirrors)"
+  echo "${hosts}" | grep -q 'archive.ubuntu.com'
+  if ! echo "${hosts}" | grep -q 'mirrors.edge.kernel.org'; then
+    echo "apt install must have a mirror other than archive.ubuntu.com" >&2
+    return 1
+  fi
+  grep -q 'Acquire::http::Timeout' "${ROOT}/script/lib/apt-mirror.sh"
   for wf in "${ROOT}/.github/workflows/unit-tests.yml" "${ROOT}/.github/workflows/release.yml"; do
-    if ! grep -q 'flynn_ci_use_public_ubuntu_mirror' "${wf}"; then
-      echo "${wf} must rewrite the apt mirror before install" >&2
+    if ! grep -q 'flynn_ci_apt_install' "${wf}"; then
+      echo "${wf} must install through flynn_ci_apt_install" >&2
       return 1
     fi
-    awk '
-      /flynn_ci_use_public_ubuntu_mirror/ { seen=1 }
-      /apt-get install/ {
-        if (!seen) exit 1
-        seen=0
-      }
-    ' "${wf}"
   done
 }
