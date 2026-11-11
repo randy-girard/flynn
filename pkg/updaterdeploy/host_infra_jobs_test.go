@@ -12,13 +12,14 @@ import (
 )
 
 type fakeInfraHost struct {
-	id          string
-	jobs        map[string]host.ActiveJob
-	stopped     []string
-	added       []*host.Job
-	restartOnce *host.ActiveJob
-	stopErr     error
-	stopErrOnce bool
+	id                   string
+	jobs                 map[string]host.ActiveJob
+	stopped              []string
+	added                []*host.Job
+	restartOnce          *host.ActiveJob
+	stopErr              error
+	stopErrOnce          bool
+	stopErrLeavesRunning bool
 }
 
 func (f *fakeInfraHost) ID() string { return f.id }
@@ -33,7 +34,9 @@ func (f *fakeInfraHost) StopJob(id string) error {
 		err := f.stopErr
 		if f.stopErrOnce {
 			f.stopErr = nil
-			delete(f.jobs, id)
+			if !f.stopErrLeavesRunning {
+				delete(f.jobs, id)
+			}
 		}
 		return err
 	}
@@ -112,6 +115,41 @@ func TestReplaceHostInfraJobsStopTimeoutThenGoneIsSuccess(t *testing.T) {
 	}
 	if len(h.added) != 1 || h.added[0].Mountspecs[0].ID != "layer-new" {
 		t.Fatalf("added=%+v", h.added)
+	}
+}
+
+func TestReplaceHostInfraJobsUnknownErrorWhileRunningRetries(t *testing.T) {
+	prev := hostInfraStopRetryWait
+	hostInfraStopRetryWait = 0
+	t.Cleanup(func() { hostInfraStopRetryWait = prev })
+
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id: "devnode2",
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "discoverd",
+					},
+					Config: host.ContainerConfig{
+						Env: map[string]string{"FLYNN_JOB_ID": "old"},
+					},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+		stopErr:              fmt.Errorf("unknown_error: Something went wrong"),
+		stopErrOnce:          true,
+		stopErrLeavesRunning: true,
+	}
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"discoverd": art}, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.stopped) < 2 {
+		t.Fatalf("unknown_error while the job is still running must retry, stopped=%v", h.stopped)
 	}
 }
 

@@ -273,6 +273,8 @@ func isTransientHostStop(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "temporarily unavailable") ||
+		strings.Contains(msg, "unknown_error") ||
+		strings.Contains(msg, "something went wrong") ||
 		strings.Contains(msg, "connection reset") ||
 		strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "broken pipe") ||
@@ -283,6 +285,9 @@ func isTransientHostStop(err error) bool {
 // stopHostInfraJob retries StopJob on transient HTTP errors. A timeout
 // after the job is already gone (Delete hung, then the container exited)
 // is treated as success so one slow host does not abort the whole update.
+// unknown_error is the host's generic 500. Stopping discoverd has returned
+// that while the job was still listed; aborting there leaves the node
+// without a replacement.
 func stopHostInfraJob(h hostInfraHost, id, name string) error {
 	var last error
 	for attempt := 1; attempt <= hostInfraStopAttempts; attempt++ {
