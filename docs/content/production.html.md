@@ -29,7 +29,8 @@ turns the status colors off.
 `--zpool-name` defaults to `flynn-default`. The command reads tenancy, the
 blobstore release, runtime profiles, discoverd host tags, flannel service
 metadata, and this host's pool. It does not migrate the blobstore, set
-`flynn-max-processes`, create or move volumes, or detach a vdev.
+`flynn-max-processes` or `flynn-max-persistent-singletons`, create or move
+volumes, or detach a vdev.
 
 | Line | Meaning |
 | --- | --- |
@@ -38,11 +39,12 @@ metadata, and this host's pool. It does not migrate the blobstore, set
 | `zfs` | `zpool status -P` for this host. `fail` in either tenancy mode when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Tenancy does not change this line. A missing pool or `zpool` error is `fail` either way. A green line is this host only. |
 | `reserve` | Hosted is `ok` when the profile list can be read. The scheduler reserves builtin `small`, `medium`, and `large` even when `reserve_resources` is false (`scheduler=hosted_builtin`). `runtime:reserve` only stores the flag. Unknown tenancy is `fail` and is not treated as self-hosted. Self-hosted is `ok` with the flags off. The action tells a large cluster to run `flynn-host runtime:reserve` on profiles that must fit. An empty name does not reserve. One other profile does not stand in for the three builtins. Database runtimes are not read. |
 | `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, `none`, and `auto` are no cap. The check does not write the tag. The same rule applies in hosted and self-hosted mode. |
+| `singleton-cap` | `warn` unless every host registered in discoverd has a numeric `flynn-max-persistent-singletons` tag. `unlimited`, `0`, empty, `off`, `none`, `auto`, and a non-integer are no cap. `ok` when every host has a number. Warn does not exit 1. The check does not write the tag. The same warning applies in hosted and self-hosted mode. Set it with `flynn-host tags:set <host> flynn-max-persistent-singletons=<n>`. |
 | `backup` | No Postgres primary: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A primary whose last dump is missing, or strictly older than 24h plus 1h, is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources` and, only when a primary exists, `GET /tenant-backups`. It does not dump. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
 ZFS is local, so run the check on each host. The other lines are cluster state,
-except `host-cap`, which lists only the hosts currently registered in discoverd.
+except `host-cap` and `singleton-cap`, which list only the hosts currently registered in discoverd.
 
 Set a cap with `flynn-host init --max-processes` or
 `flynn-host tags:max-processes`. On a new `host.json`, omitting

@@ -53,7 +53,8 @@ func tagUpdateTouchesCap(tags map[string]string) bool {
 	}
 	_, cap := tags[ct.FormationMaxProcessesTag]
 	_, source := tags[ct.FormationMaxProcessesSourceTag]
-	return cap || source
+	_, singleton := tags[ct.FormationMaxPersistentSingletonsTag]
+	return cap || source || singleton
 }
 
 // resolveStartupMaxProcesses turns an unresolved auto cap into a number from

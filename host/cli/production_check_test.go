@@ -413,8 +413,10 @@ func assertProductionWidth(t *testing.T, got string) {
 	t.Helper()
 	plain := productionANSI.ReplaceAllString(got, "")
 	for _, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
-		if n := len([]rune(line)); n > 96 {
-			t.Fatalf("line is %d columns, want at most 96:\n%s", n, line)
+		// singleton-cap is the widest check name (13). The previous table
+		// fit in 96; that name adds four columns.
+		if n := len([]rune(line)); n > 100 {
+			t.Fatalf("line is %d columns, want at most 100:\n%s", n, line)
 		}
 	}
 }
@@ -485,6 +487,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "A large cluster runs runtime:reserve"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
+		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
 	})
@@ -520,6 +523,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin", action: "Hosted placement reserves"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
+		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
@@ -674,6 +678,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "zfs", detail: "pool=flynn-default"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
+		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -706,6 +711,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "fail", check: "zfs", detail: "pool=flynn-default file=/srv/custom.vdev", action: "zpool detach"},
 		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=unknown", action: "not self-hosted"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
+		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -765,6 +771,38 @@ func TestProductionCheckReservationIgnoresMissingLarge(t *testing.T) {
 	if !strings.Contains(row.action, "runtime:reserve") || !strings.Contains(row.action, "stores the flag") {
 		t.Fatalf("reserve action %q", row.action)
 	}
+}
+
+func TestProductionCheckSingletonCap(t *testing.T) {
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		f := &productionFixture{tenancy: ct.TenancySettings{Mode: mode}}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		row := mustCheck(t, got, "warn", "singleton-cap", "host-a=missing")
+		if !strings.Contains(row.action, "flynn-max-persistent-singletons") {
+			t.Fatalf("mode %s action %q", mode, row.action)
+		}
+	}
+
+	host := hostCap("host-a", "4")
+	host.Tags()["flynn-max-persistent-singletons"] = "2"
+	before := copyTags(host.Tags())
+	f := &productionFixture{hosts: []*cluster.Host{host}}
+	got, err := f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "ok", "singleton-cap", "host-a=2")
+	if !sameTags(host.Tags(), before) {
+		t.Fatalf("check changed tags %v -> %v", before, host.Tags())
+	}
+
+	unlimited := hostCap("host-b", "4")
+	unlimited.Tags()["flynn-max-persistent-singletons"] = "unlimited"
+	junk := hostCap("host-a", "4")
+	junk.Tags()["flynn-max-persistent-singletons"] = "lots"
+	f = &productionFixture{hosts: []*cluster.Host{unlimited, junk}}
+	got, err = f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "warn", "singleton-cap", "host-a=lots host-b=unlimited")
 }
 
 func TestProductionCheckHostCapSentinels(t *testing.T) {
@@ -1048,7 +1086,7 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 7 {
+	if len(rows) != 8 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {

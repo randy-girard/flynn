@@ -10,6 +10,56 @@ import (
 	host "github.com/randy-girard/flynn/host/types"
 )
 
+func TestUpdateTagsPersistsPersistentSingletonCap(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "host.json")
+	conf := config.New()
+	conf.Args = []string{"--peer-ips", "10.0.0.1", "--tags", "role=database"}
+	if err := conf.WriteTo(path); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLYNN_HOST_CONFIG", path)
+
+	h := &Host{
+		status:  &host.HostStatus{Tags: map[string]string{"role": "database"}},
+		discMan: NewDiscoverdManager(nil, nil, "h1", "10.0.0.1:1113", map[string]string{"role": "database"}),
+	}
+	if err := h.UpdateTags(map[string]string{"flynn-max-persistent-singletons": "2"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := config.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Join(got.Args, " ")
+	if !strings.Contains(text, "flynn-max-persistent-singletons=2") || !strings.Contains(text, "role=database") {
+		t.Fatalf("host.json args %v", got.Args)
+	}
+	if err := h.UpdateTags(map[string]string{
+		ct.FormationMaxProcessesTag:       "4",
+		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceAuto,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = config.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text = strings.Join(got.Args, " ")
+	if !strings.Contains(text, "flynn-max-persistent-singletons=2") || !strings.Contains(text, ct.FormationMaxProcessesTag+"=4") {
+		t.Fatalf("auto process cap dropped the singleton cap: %v", got.Args)
+	}
+	if err := h.UpdateTags(map[string]string{"flynn-max-persistent-singletons": ""}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = config.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(got.Args, " "), "flynn-max-persistent-singletons") {
+		t.Fatalf("deleted cap still in host.json: %v", got.Args)
+	}
+}
+
 func TestUpdateTagsMergesCapAndPersistsHostJSON(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "host.json")
 	conf := config.New()

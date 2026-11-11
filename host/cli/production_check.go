@@ -34,10 +34,11 @@ const productionCheckUsage = `
 usage: flynn-host production:check [--zpool-name=<name>]
 
 Print a bordered table for tenancy, the blobstore backend, ZFS, runtime
-reservation, the per-host process cap, backups, and the overlay. Columns
-are status, check, detail, and what to do. Long cells wrap inside the
-border. Status is green, yellow, or red on a terminal. Set NO_COLOR to
-print plain text. The process exits 1 when any status is fail.
+reservation, the per-host process cap, the persistent-singleton cap,
+backups, and the overlay. Columns are status, check, detail, and what to
+do. Long cells wrap inside the border. Status is green, yellow, or red
+on a terminal. Set NO_COLOR to print plain text. The process exits 1
+when any status is fail. A warn does not.
 
 Tenancy comes from GET /tenancy. A controller error is a fail. It is not
 treated as self_hosted. GetSettings maps only a missing row to self_hosted.
@@ -60,6 +61,12 @@ Host cap fails unless every discoverd-registered host has a numeric
 flynn-max-processes tag. unlimited, 0, empty, off, and none are no cap.
 Hosts() sees only discoverd registrations and can sleep about 45s on
 object_not_found. The check does not set flynn-max-processes.
+
+Singleton cap warns in hosted and self-hosted mode unless every
+discoverd-registered host has a numeric flynn-max-persistent-singletons
+tag. unlimited, 0, empty, off, none, and auto are no cap. A non-integer
+is no cap and the detail prints that value. The check does not set the
+tag. A host-list error fails this line. Warn does not exit 1.
 
 Backups warn that tenant volumes are outside flynn-host backup when the
 cluster has no Postgres primary. A primary whose last dump is missing, or
@@ -273,6 +280,7 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
 	addReserveLine(add, mode, profiles, profileErr)
 	addHostCapLine(add, hosts, hostsErr)
+	addSingletonCapLine(add, hosts, hostsErr)
 	now := time.Now()
 	if cfg.Now != nil {
 		now = cfg.Now()
@@ -715,6 +723,75 @@ func addHostCapLine(add func(productionRow), hosts []*cluster.Host, err error) {
 		action = "Run flynn-host tags:max-processes <host> <n>, or the same command with --auto to follow runtime sizes. This check does not set the tag."
 	}
 	add(productionRow{status: status, check: "host-cap", detail: strings.Join(parts, " "), action: action})
+}
+
+func addSingletonCapLine(add func(productionRow), hosts []*cluster.Host, err error) {
+	if err != nil {
+		add(productionRow{
+			status: "fail", check: "singleton-cap", detail: "error=" + err.Error(),
+			action: "Register hosts in discoverd, then rerun. This check does not set flynn-max-persistent-singletons.",
+		})
+		return
+	}
+	type capRow struct {
+		id    string
+		label string
+		ok    bool
+	}
+	caps := make([]capRow, 0, len(hosts))
+	for _, h := range hosts {
+		if h == nil {
+			continue
+		}
+		label, ok := singletonCapLabel(h.Tags())
+		caps = append(caps, capRow{id: h.ID(), label: label, ok: ok})
+	}
+	if len(caps) == 0 {
+		add(productionRow{
+			status: "fail", check: "singleton-cap", detail: "error=no discoverd host registrations",
+			action: "Register hosts in discoverd, then rerun. This check does not set flynn-max-persistent-singletons.",
+		})
+		return
+	}
+	sort.Slice(caps, func(i, j int) bool { return caps[i].id < caps[j].id })
+	parts := make([]string, len(caps))
+	allOK := true
+	for i, row := range caps {
+		if !row.ok {
+			allOK = false
+		}
+		parts[i] = row.id + "=" + row.label
+	}
+	status := "ok"
+	action := "Every registered host has a numeric flynn-max-persistent-singletons cap."
+	if !allOK {
+		status = "warn"
+		action = "Run flynn-host tags:set <host> flynn-max-persistent-singletons=<n> on hosts that should limit new single-node databases. Missing, unlimited, 0, off, none, and auto are no cap. This check does not set the tag. The same warning applies in hosted and self-hosted mode."
+	}
+	add(productionRow{status: status, check: "singleton-cap", detail: strings.Join(parts, " "), action: action})
+}
+
+func singletonCapLabel(tags map[string]string) (string, bool) {
+	n, ok := ct.ParseHostPersistentSingletons(tags)
+	if ok {
+		return strconv.Itoa(n), true
+	}
+	if tags == nil {
+		return "missing", false
+	}
+	raw, present := tags[ct.FormationMaxPersistentSingletonsTag]
+	if !present {
+		return "missing", false
+	}
+	s := strings.ToLower(strings.TrimSpace(raw))
+	switch s {
+	case "":
+		return "empty", false
+	case "unlimited", "off", "none", "0", "auto":
+		return s, false
+	default:
+		return s, false
+	}
 }
 
 func hostCapLabel(tags map[string]string) (string, bool) {

@@ -17,13 +17,16 @@ func init() {
 	Register("tags", runTagsList, `
 usage: flynn-host tags
 
-List flynn-host daemon tags and the optional flynn-max-processes cap.
+List flynn-host daemon tags, the optional flynn-max-processes cap, and
+any flynn-max-persistent-singletons cap in the tag list.
 `)
 	Register("tags:set", runTagsSet, `
 usage: flynn-host tags:set <hostid> <var>=<val>...
 
 Set one or more flynn-host daemon tags. Use flynn-max-processes=N (or
-tags:max-processes) to cap tenant jobs on that node.
+tags:max-processes) to cap tenant jobs on that node. Use
+flynn-max-persistent-singletons=N to cap new single-node databases on
+that node. unlimited clears it. The value is written to host.json.
 `)
 	Register("tags:del", runTagsDel, `
 usage: flynn-host tags:del <hostid> <var>...
@@ -162,7 +165,23 @@ func runTagsSet(args *docopt.Args, client *cluster.Client) error {
 	if err := classifySetMaxProcesses(tags); err != nil {
 		return err
 	}
+	classifySetSingletonCap(tags)
 	return host.UpdateTags(tags)
+}
+
+// classifySetSingletonCap turns a sentinel into a delete. A number is stored
+// as typed. A non-integer is left so production:check can show it.
+func classifySetSingletonCap(tags map[string]string) {
+	raw, ok := tags[ct.FormationMaxPersistentSingletonsTag]
+	if !ok {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "unlimited", "off", "none", "0", "auto":
+		tags[ct.FormationMaxPersistentSingletonsTag] = ""
+	default:
+		tags[ct.FormationMaxPersistentSingletonsTag] = strings.TrimSpace(raw)
+	}
 }
 
 // classifySetMaxProcesses marks an explicit cap as operator so the daemon
