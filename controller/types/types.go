@@ -73,6 +73,25 @@ type App struct {
 	Building bool `json:"building,omitempty"`
 }
 
+// MetaBuildPlaceholder marks a release row created only so a compile job can
+// reference release_id. It is not deployed and is not a rollback target.
+const MetaBuildPlaceholder = "flynn-controller.build-placeholder"
+
+// WithoutBuildPlaceholders drops compile-only releases from app release history.
+func WithoutBuildPlaceholders(in []*Release) []*Release {
+	if len(in) == 0 {
+		return in
+	}
+	out := make([]*Release, 0, len(in))
+	for _, rel := range in {
+		if rel == nil || rel.Meta[MetaBuildPlaceholder] == "true" {
+			continue
+		}
+		out = append(out, rel)
+	}
+	return out
+}
+
 // MetaBuildOwner is the job meta key for the account that owns a compile.
 // It is not prefixed with flynn-controller. because job persistence drops
 // that prefix. Empty means the shared unowned bucket.

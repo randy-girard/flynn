@@ -165,7 +165,10 @@ after the release is created; the deploy continues in the background.
 stays up while the job is pending and while it runs, streams the git
 archive and config vars on stdin, and streams logs back. The pending job
 is visible on the app. If the cluster cap or that account's cap is full,
-the push fails immediately and no job is created.
+the push fails immediately and no job is created. The first push of an
+app creates a release row so the compile job has a release id. That row
+is removed once the real release is deployed. `flynn release` and
+`flynn release rollback` see only the deployed releases.
 
 The caps are cluster settings, the same on a hosted cluster and a
 self-hosted one. The defaults are 8 compiles in flight for the cluster and

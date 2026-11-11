@@ -626,6 +626,87 @@ func (f *fakeBuildingStore) UpdateAppMeta(app *ct.App) error {
 	return nil
 }
 
+type releaseStub struct {
+	created []*ct.Release
+	deleted []string
+}
+
+func (s *releaseStub) CreateRelease(appID string, rel *ct.Release) error {
+	rel.ID = "rel-placeholder"
+	cp := *rel
+	if rel.Meta != nil {
+		cp.Meta = map[string]string{}
+		for k, v := range rel.Meta {
+			cp.Meta[k] = v
+		}
+	}
+	cp.ArtifactIDs = append([]string{}, rel.ArtifactIDs...)
+	s.created = append(s.created, &cp)
+	return nil
+}
+
+func (s *releaseStub) DeleteRelease(appID, releaseID string) (*ct.ReleaseDeletion, error) {
+	s.deleted = append(s.deleted, releaseID)
+	return &ct.ReleaseDeletion{ReleaseID: releaseID}, nil
+}
+
+func TestEnsureBuildReleaseIsNotARollbackTarget(t *testing.T) {
+	stub := &releaseStub{}
+	app := &ct.App{ID: "app"}
+	prev := &ct.Release{}
+	id, err := ensureBuildRelease(stub, app, prev, &ct.Artifact{ID: "builder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id == "" || prev.ID != id {
+		t.Fatalf("job release = %q, placeholder = %q", prev.ID, id)
+	}
+	if prev.Meta[ct.MetaBuildPlaceholder] == "true" {
+		t.Fatal("marker must stay off the previous release so the deployed release does not inherit it")
+	}
+	if len(stub.created) != 1 || stub.created[0].Meta[ct.MetaBuildPlaceholder] != "true" {
+		t.Fatalf("created release = %#v", stub.created)
+	}
+	if len(stub.created[0].ArtifactIDs) != 0 {
+		t.Fatal("placeholder must not reference the builder image")
+	}
+	if err := dropBuildPlaceholder(stub, app, id); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 || stub.deleted[0] != id {
+		t.Fatalf("deleted %v, want %s", stub.deleted, id)
+	}
+
+	kept := &ct.Release{ID: "already"}
+	id, err = ensureBuildRelease(stub, app, kept, &ct.Artifact{ID: "builder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "" || kept.ID != "already" || len(stub.created) != 1 {
+		t.Fatal("an existing release must be left in place")
+	}
+	if err := dropBuildPlaceholder(stub, app, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(stub.deleted) != 1 {
+		t.Fatal("an empty id must not delete a release")
+	}
+}
+
+func TestFinishDeployDropsBuildPlaceholder(t *testing.T) {
+	body, err := os.ReadFile("flynn-receive.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := functionBody(string(body), "finishDeploy")
+	if fn == "" {
+		t.Fatal("missing finishDeploy")
+	}
+	if !strings.Contains(fn, "dropBuildPlaceholder(") {
+		t.Fatal("finishDeploy must delete the compile-only release after the real release is deployed so it is not a rollback target")
+	}
+}
+
 func TestCompileUsesScheduledBuild(t *testing.T) {
 	body, err := os.ReadFile("flynn-receive.go")
 	if err != nil {

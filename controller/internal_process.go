@@ -306,6 +306,7 @@ func redactRelease(r *ct.Release) *ct.Release {
 }
 
 func presentReleases(ctx context.Context, app *ct.App, list []*ct.Release) []*ct.Release {
+	list = ct.WithoutBuildPlaceholders(list)
 	if len(list) == 0 {
 		return list
 	}

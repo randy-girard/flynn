@@ -37,6 +37,16 @@ func TestParseJobRestartInterval(t *testing.T) {
 	}
 }
 
+func TestWithoutBuildPlaceholders(t *testing.T) {
+	placeholder := &Release{ID: "ph", Meta: map[string]string{MetaBuildPlaceholder: "true"}}
+	real := &Release{ID: "real"}
+	other := &Release{ID: "other", Meta: map[string]string{"git": "true"}}
+	got := WithoutBuildPlaceholders([]*Release{real, placeholder, nil, other})
+	if len(got) != 2 || got[0].ID != "real" || got[1].ID != "other" {
+		t.Fatalf("got %#v, want the real releases only", got)
+	}
+}
+
 func TestProcessCap(t *testing.T) {
 	if n, unlimited := (*RuntimeSettings)(nil).ProcessCap(); unlimited || n != DefaultMaxProcesses {
 		t.Fatalf("nil settings = %d unlimited=%t, want default 10", n, unlimited)

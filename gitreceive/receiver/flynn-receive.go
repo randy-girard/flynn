@@ -526,7 +526,8 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	}
 
 	gitOut := newGitPushFilter(syncStdout(os.Stdout))
-	if err := runScheduledBuild(client, app, prevRelease, slugBuilder, jobEnv, "slugbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut); err != nil {
+	placeholderID, err := runScheduledBuild(client, app, prevRelease, slugBuilder, jobEnv, "slugbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut)
+	if err != nil {
 		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
@@ -554,7 +555,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	procs := slugReleaseProcesses(processCommandsFromMeta(artifact.Meta), prevRelease, app.Name)
 	release.Processes = procs
 
-	return finishDeploy(client, app, prevRelease, release, procs)
+	return finishDeploy(client, app, prevRelease, release, procs, placeholderID)
 }
 
 func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string) error {
@@ -592,7 +593,8 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	// Build-job capabilities are applied by flynn-host for dockerbuilder jobs.
 	// Merge stderr into stdout so build output goes through the git hook pipe.
 	gitOut := newGitPushFilter(syncStdout(os.Stdout))
-	if err := runScheduledBuild(client, app, prevRelease, dockerBuilder, jobEnv, "dockerbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut); err != nil {
+	placeholderID, err := runScheduledBuild(client, app, prevRelease, dockerBuilder, jobEnv, "dockerbuilder", []string{"/builder/build.sh"}, resources, releaseEnv, gitOut, gitOut)
+	if err != nil {
 		gitOut.flush()
 		return fmt.Errorf("Build failed: %s", err)
 	}
@@ -629,7 +631,7 @@ func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	})
 
 	procs := release.Processes
-	return finishDeploy(client, app, prevRelease, release, procs)
+	return finishDeploy(client, app, prevRelease, release, procs, placeholderID)
 }
 
 func localHostID() string {
@@ -684,9 +686,10 @@ func buildJob(artifact *ct.Artifact, app *ct.App, prevRelease *ct.Release, jobEn
 // the scheduler places it. git push stays attached for that wait and for the
 // compile. A full cap returns immediately. Receiver exit stops the job,
 // including one that is still pending.
-func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Release, artifact *ct.Artifact, jobEnv map[string]string, jobType string, args []string, resources resource.Resources, releaseEnv map[string]string, stdout, stderr io.Writer) (err error) {
-	if err = ensureBuildRelease(client, app, prevRelease, artifact); err != nil {
-		return err
+func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Release, artifact *ct.Artifact, jobEnv map[string]string, jobType string, args []string, resources resource.Resources, releaseEnv map[string]string, stdout, stderr io.Writer) (placeholderID string, err error) {
+	placeholderID, err = ensureBuildRelease(client, app, prevRelease, artifact)
+	if err != nil {
+		return "", err
 	}
 	timeout := resolveBuildTimeout(releaseEnv)
 	job, err := client.CreateBuild(app.ID, &ct.BuildRequest{
@@ -699,14 +702,25 @@ func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Re
 		TimeoutSeconds: int(timeout / time.Second),
 	})
 	if err != nil {
-		return err
+		if dropErr := dropBuildPlaceholder(client, app, placeholderID); dropErr != nil {
+			log.Println("ERROR:", dropErr)
+		}
+		return "", err
 	}
 	defer func() {
 		if err != nil {
 			client.DeleteJob(app.ID, job.UUID)
+			if dropErr := dropBuildPlaceholder(client, app, placeholderID); dropErr != nil {
+				log.Println("ERROR:", dropErr)
+			}
 		}
 	}()
-	shutdown.BeforeExit(func() { client.DeleteJob(app.ID, job.UUID) })
+	shutdown.BeforeExit(func() {
+		client.DeleteJob(app.ID, job.UUID)
+		if dropErr := dropBuildPlaceholder(client, app, placeholderID); dropErr != nil {
+			log.Println("ERROR:", dropErr)
+		}
+	})
 
 	deadline := time.Now().Add(buildadmit.MaxPendingWait)
 	placed, err := buildadmit.WaitForPlacement(func() (buildadmit.PlacementJob, error) {
@@ -722,18 +736,18 @@ func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Re
 		}, nil
 	}, deadline, nil, nil)
 	if err != nil {
-		return err
+		return placeholderID, err
 	}
 	h, err := cluster.NewClient().Host(placed.HostID)
 	if err != nil {
-		return err
+		return placeholderID, err
 	}
 	attach, err := h.Attach(&host.AttachReq{
 		JobID: placed.ID,
 		Flags: host.AttachFlagStdin | host.AttachFlagStdout | host.AttachFlagStderr | host.AttachFlagStream,
 	}, true)
 	if err != nil {
-		return err
+		return placeholderID, err
 	}
 	defer attach.Close()
 
@@ -771,10 +785,10 @@ func runScheduledBuild(client controller.Client, app *ct.App, prevRelease *ct.Re
 	defer timer.Stop()
 	select {
 	case err = <-done:
-		return err
+		return placeholderID, err
 	case <-timer.C:
 		err = fmt.Errorf("build exceeded timeout of %s (set %s to change, cluster max %s)", timeout, buildTimeoutEnv, maxBuildTimeout)
-		return err
+		return placeholderID, err
 	}
 }
 
@@ -784,24 +798,46 @@ type attachStdin struct {
 
 func (a attachStdin) Close() error { return a.CloseWrite() }
 
+type releaseCreator interface {
+	CreateRelease(appID string, release *ct.Release) error
+}
+
+type releaseDropper interface {
+	DeleteRelease(appID, releaseID string) (*ct.ReleaseDeletion, error)
+}
+
 // ensureBuildRelease creates a release row when this app has never had one.
-// job_cache.release_id is NOT NULL. The row is not deployed.
-func ensureBuildRelease(client controller.Client, app *ct.App, prev *ct.Release, artifact *ct.Artifact) error {
+// job_cache.release_id is NOT NULL. The row is not deployed. The builder
+// image is not attached, so deleting the row cannot garbage-collect it.
+// The marker stays off prev so the deployed release, which copies prev.Meta,
+// is not hidden as a placeholder. The returned id is deleted after deploy.
+func ensureBuildRelease(client releaseCreator, app *ct.App, prev *ct.Release, artifact *ct.Artifact) (string, error) {
 	if prev == nil || prev.ID != "" || client == nil || app == nil {
-		return nil
+		return "", nil
 	}
-	rel := &ct.Release{Processes: map[string]ct.ProcessType{}}
-	if artifact != nil && artifact.ID != "" {
-		rel.ArtifactIDs = []string{artifact.ID}
+	_ = artifact
+	rel := &ct.Release{
+		Processes: map[string]ct.ProcessType{},
+		Meta:      map[string]string{ct.MetaBuildPlaceholder: "true"},
 	}
 	if err := client.CreateRelease(app.ID, rel); err != nil {
-		return fmt.Errorf("Error creating release for build: %s", err)
+		return "", fmt.Errorf("Error creating release for build: %s", err)
 	}
 	prev.ID = rel.ID
+	return rel.ID, nil
+}
+
+func dropBuildPlaceholder(client releaseDropper, app *ct.App, id string) error {
+	if client == nil || app == nil || id == "" {
+		return nil
+	}
+	if _, err := client.DeleteRelease(app.ID, id); err != nil {
+		return fmt.Errorf("Error removing build release: %s", err)
+	}
 	return nil
 }
 
-func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType) error {
+func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release, release *ct.Release, procs map[string]ct.ProcessType, placeholderID string) error {
 	defer saveReleaseProgress(client, app, release)
 	if err := client.CreateRelease(app.ID, release); err != nil {
 		return fmt.Errorf("Error creating release: %s", err)
@@ -811,6 +847,9 @@ func finishDeploy(client controller.Client, app *ct.App, prevRelease *ct.Release
 	}
 	if err := client.DeployAppRelease(app.ID, release.ID, nil); err != nil {
 		return fmt.Errorf("Error deploying app release: %s", err)
+	}
+	if err := dropBuildPlaceholder(client, app, placeholderID); err != nil {
+		return err
 	}
 
 	if !skipDefaultScale && needsDefaultScale(app.ID, prevRelease.ID, procs, client) {

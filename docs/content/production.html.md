@@ -79,6 +79,10 @@ app. A company that never set owners still cannot run unbounded builds; set
 `owner_account` per team, and raise both limits with
 `flynn-host runtime:build-limits <cluster> <account>` (for example `16 4`).
 There is no unlimited value. `tenancy_mode` does not change these limits.
+The first push of an app creates a release row so the compile job has a
+release id. That row is removed once the real release is deployed.
+Release history and rollback on a hosted or self-hosted cluster see only
+the deployed releases.
 
 The scheduler leader refreshes each host's CPU and memory totals about every
 10 seconds in either tenancy mode. A reserving job skips a host that has

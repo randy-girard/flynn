@@ -216,7 +216,11 @@ func (r *ReleaseRepo) AppList(appID string) ([]*ct.Release, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return releaseList(rows)
+	list, err := releaseList(rows)
+	if err != nil {
+		return nil, err
+	}
+	return ct.WithoutBuildPlaceholders(list), nil
 }
 
 func (r *ReleaseRepo) AppListPage(appID string, before *time.Time, beforeID string, count int) ([]*ct.Release, error) {
@@ -229,7 +233,11 @@ func (r *ReleaseRepo) AppListPage(appID string, before *time.Time, beforeID stri
 		return nil, err
 	}
 	defer rows.Close()
-	return releaseList(rows)
+	list, err := releaseList(rows)
+	if err != nil {
+		return nil, err
+	}
+	return ct.WithoutBuildPlaceholders(list), nil
 }
 
 // Delete deletes any formations for the given app and release, then deletes
