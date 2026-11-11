@@ -222,24 +222,39 @@ func persistSingletonTestJob(typ string) *Job {
 	}
 }
 
-func TestPickHostPacksPersistentSingletons(t *testing.T) {
-	h1 := &Host{ID: "h1", Healthy: true}
-	h2 := &Host{ID: "h2", Healthy: true}
-	h3 := &Host{ID: "h3", Healthy: true}
-	redisJob := persistSingletonTestJob("redis")
-	redisJob.ID = "redis-1"
-	redisJob.HostID = "h1"
-	redisJob.State = JobStateRunning
-	s := &Scheduler{
-		jobs:  Jobs{"redis-1": redisJob},
-		hosts: map[string]*Host{"h1": h1, "h2": h2, "h3": h3},
-	}
-	kafka := persistSingletonTestJob("kafka")
-	for i := 0; i < 20; i++ {
-		got := s.pickHost(kafka, map[string]int{})
-		if got == nil || got.ID != "h1" {
-			t.Fatalf("attempt %d: packed persistent singleton onto %v, want h1 (redis volume host)", i, got)
-		}
+func TestPickHostSpreadsPersistentSingletons(t *testing.T) {
+	for _, mode := range []string{"unset", "hosted", "self_hosted"} {
+		t.Run(mode, func(t *testing.T) {
+			tenancy := mode
+			if mode == "unset" {
+				tenancy = ""
+			}
+			s := &Scheduler{
+				tenancyMode: tenancy,
+				jobs:        Jobs{},
+				hosts: map[string]*Host{
+					"h1": {ID: "h1", Healthy: true},
+					"h2": {ID: "h2", Healthy: true},
+					"h3": {ID: "h3", Healthy: true},
+				},
+			}
+			seen := map[string]struct{}{}
+			for _, typ := range []string{"redis", "postgres", "mysql"} {
+				got := s.pickHost(persistSingletonTestJob(typ), map[string]int{})
+				if got == nil {
+					t.Fatalf("mode %s: %s was not placed", mode, typ)
+				}
+				if _, ok := seen[got.ID]; ok {
+					t.Fatalf("mode %s: %s landed on %s, which already has a new singleton", mode, typ, got.ID)
+				}
+				seen[got.ID] = struct{}{}
+				placed := persistSingletonTestJob(typ)
+				placed.ID = typ
+				placed.HostID = got.ID
+				placed.State = JobStateRunning
+				s.jobs[typ] = placed
+			}
+		})
 	}
 }
 

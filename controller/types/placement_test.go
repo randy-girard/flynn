@@ -23,6 +23,24 @@ func TestParseHostMaxProcesses(t *testing.T) {
 	}
 }
 
+func TestParseHostPersistentSingletons(t *testing.T) {
+	if _, ok := ParseHostPersistentSingletons(nil); ok {
+		t.Fatal("nil tags have no cap")
+	}
+	if _, ok := ParseHostPersistentSingletons(map[string]string{FormationMaxProcessesTag: "4"}); ok {
+		t.Fatal("the process cap is not the singleton cap")
+	}
+	for _, raw := range []string{"", "unlimited", "off", "none", "auto", "0", "-1", "lots"} {
+		if _, ok := ParseHostPersistentSingletons(map[string]string{FormationMaxPersistentSingletonsTag: raw}); ok {
+			t.Fatalf("%q must not be a cap", raw)
+		}
+	}
+	n, ok := ParseHostPersistentSingletons(map[string]string{FormationMaxPersistentSingletonsTag: " 2 "})
+	if !ok || n != 2 {
+		t.Fatalf("got %d ok=%t", n, ok)
+	}
+}
+
 func TestMergePlacementTagsRuntimeWins(t *testing.T) {
 	got := MergePlacementTags(
 		map[string]string{"role": "web", "disk": "ssd"},

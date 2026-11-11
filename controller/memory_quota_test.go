@@ -50,6 +50,20 @@ func TestMemoryHostMatchesIgnoresProcessCapSource(t *testing.T) {
 	}
 }
 
+func TestMemoryHostMatchesIgnoresPersistentSingletonCap(t *testing.T) {
+	tags := map[string]string{
+		"disk":                            "ssd",
+		"flynn-max-persistent-singletons": "9",
+	}
+	host := memoryHost{ID: "h1", Tags: map[string]string{
+		"disk":                            "ssd",
+		"flynn-max-persistent-singletons": "2",
+	}}
+	if !memoryHostMatches(tags, host) {
+		t.Fatal("persistent singleton cap must not change which hosts count")
+	}
+}
+
 func TestQuotaEmptyOwnerSkips(t *testing.T) {
 	api := &controllerAPI{tenancy: &data.TenancyRepo{}}
 	if scaleQuotaApplies(api, &ct.App{}) {

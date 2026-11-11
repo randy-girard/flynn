@@ -314,6 +314,108 @@ func (s *Scheduler) hostPersistentSingletonCount(hostID string) int {
 	return n
 }
 
+// hostAtPersistentSingletonCap reports whether hostID is already at
+// flynn-max-persistent-singletons. A missing or non-numeric tag is not a cap.
+// The placing job is already included in the count only when its HostID is
+// this host.
+func (s *Scheduler) hostAtPersistentSingletonCap(h *Host, placing *Job) bool {
+	if h == nil {
+		return true
+	}
+	max, ok := ct.ParseHostPersistentSingletons(h.Tags)
+	if !ok {
+		return false
+	}
+	n := s.hostPersistentSingletonCount(h.ID)
+	if placing != nil && placing.HostID == h.ID && placing.isPersistentSingleton() && !placing.spreadsAcrossHosts() {
+		return n > max
+	}
+	return n >= max
+}
+
+// persistentSingletonCapBlocked reports whether pickHost returned nil because
+// every host that otherwise fit is at the persistent-singleton cap. Tag
+// mismatch, the process cap, omni, and reserved CPU/memory stay their own errors.
+func (s *Scheduler) persistentSingletonCapBlocked(job *Job) bool {
+	if s == nil || job == nil || !job.isPersistentSingleton() || job.spreadsAcrossHosts() {
+		return false
+	}
+	_, omni := job.omniPerHost()
+	if omni {
+		return false
+	}
+	needReserve := s.jobReservesResources(job)
+	saw := false
+	for _, h := range s.hosts {
+		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) || s.hostAtProcessCap(h, job) {
+			continue
+		}
+		if needReserve && !s.hostHasCapacity(h, job) {
+			continue
+		}
+		saw = true
+		if !s.hostAtPersistentSingletonCap(h, job) {
+			return false
+		}
+	}
+	return saw
+}
+
+// wakeBlockedPersistentSingletons retries databases that were blocked because
+// every eligible host was at the singleton cap. maybeStartBlockedJobs still
+// runs on host sync and tag changes; this is the immediate path when a
+// counted job is gone and is not being replaced.
+func (s *Scheduler) wakeBlockedPersistentSingletons() {
+	if s == nil {
+		return
+	}
+	for _, job := range s.jobs {
+		if job == nil || job.State != JobStateBlocked || !job.isPersistentSingleton() || job.spreadsAcrossHosts() {
+			continue
+		}
+		job.State = JobStatePending
+		go s.StartJob(job)
+	}
+}
+
+// dropPendingVolume forgets a volume that never got past CreateVolume.
+// A created volume is left alone so its HostID keeps the data on that host.
+func (s *Scheduler) dropPendingVolume(vol *Volume) {
+	if s == nil || vol == nil || vol.GetState() != ct.VolumeStatePending {
+		return
+	}
+	if s.volumes != nil {
+		delete(s.volumes, vol.ID)
+	}
+	if set := s.hostVolumeIDs[vol.HostID]; set != nil {
+		delete(set, vol.ID)
+	}
+	vol.JobID = nil
+	vol.HostID = ""
+}
+
+// onLoop runs fn on the scheduler goroutine and waits. Tests and startup,
+// which have no loop, run it inline. StartJob uses this so a pending volume
+// is gone before the next placement reads s.volumes.
+func (s *Scheduler) onLoop(fn func()) {
+	if s == nil || fn == nil {
+		return
+	}
+	if !s.loopActive || s.loopApply == nil {
+		fn()
+		return
+	}
+	done := make(chan struct{})
+	s.deliver(func() {
+		fn()
+		close(done)
+	})
+	select {
+	case <-done:
+	case <-s.stop:
+	}
+}
+
 // omniHostAvailable reports whether a placeable, tag-matching host still
 // lacks its share of the job's omni type. Non-omni jobs always report true.
 func (s *Scheduler) omniHostAvailable(job *Job) bool {
@@ -335,11 +437,11 @@ func (s *Scheduler) omniHostAvailable(job *Job) bool {
 // that fits leaves the job blocked. Shared runtimes pack onto the
 // least-loaded host and keep their CPU/memory as caps only.
 //
-// Persistent singletons (one broker/volume per resource) pack onto a host
-// that already has other persistent singletons. pickHost used to return the
-// first shuffled host with zero jobs of *this* type, which scattered redis,
-// kafka, and clickhouse across HA nodes so a drain of any one host destroyed
-// tenant data.
+// Persistent singletons (one broker/volume per resource, and not a peer that
+// already spreads across hosts) land on the eligible host with the fewest
+// such jobs. Same-type count is only the tie-break. Deleting this branch
+// would return the first shuffled host with a zero same-type count, and a
+// fresh shuffle per job can put three new databases on one host.
 //
 // Omni jobs (discoverd, flannel) run a fixed count on every host. A host
 // that already runs its share is skipped: restarting a lost host's omni job
@@ -350,7 +452,7 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 		return nil
 	}
 	needReserve := s.jobReservesResources(job)
-	packPersist := job.isPersistentSingleton()
+	spreadPersist := job.isPersistentSingleton() && !job.spreadsAcrossHosts()
 	omniPerHost, omni := job.omniPerHost()
 	var omniCounts map[string]int
 	if omni {
@@ -373,9 +475,12 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 			continue
 		}
 		count := hostJobCount(counts, h.ID)
-		if packPersist {
+		if spreadPersist {
+			if s.hostAtPersistentSingletonCap(h, job) {
+				continue
+			}
 			pack := s.hostPersistentSingletonCount(h.ID)
-			if fit == nil || count < fitCount || (count == fitCount && pack > fitPack) {
+			if fit == nil || pack < fitPack || (pack == fitPack && count < fitCount) {
 				fit, fitCount, fitPack = h, count, pack
 			}
 			continue

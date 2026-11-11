@@ -53,6 +53,10 @@ var (
 	ErrNoHostsMatchTags = errors.New("no hosts found matching job tags")
 	ErrHostIsDown       = errors.New("host is down")
 	ErrNoHostCapacity   = errors.New("no hosts with enough reserved CPU or memory")
+	// ErrPersistentSingletonCap is returned when every eligible host is
+	// already at flynn-max-persistent-singletons. StartJob leaves the job
+	// blocked. It is not a tag mismatch and it is not the CPU/memory cap.
+	ErrPersistentSingletonCap = errors.New("every matching host is at its persistent singleton cap")
 	// ErrVolumeInUse is returned when a singleton sirenia job must adopt an
 	// existing data volume that is still held by a running peer. StartJob
 	// retries until the old job is stopping so we never allocate a second
@@ -1632,9 +1636,12 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 		if req.Host == nil {
 			req.Job.State = JobStateBlocked
 			s.persistJob(req.Job)
-			if s.jobReservesResources(req.Job) && s.anyHostMatchesTags(req.Job) {
+			switch {
+			case s.persistentSingletonCapBlocked(req.Job):
+				req.Error(ErrPersistentSingletonCap)
+			case s.jobReservesResources(req.Job) && s.anyHostMatchesTags(req.Job):
 				req.Error(ErrNoHostCapacity)
-			} else {
+			default:
 				req.Error(ErrNoHostsMatchTags)
 			}
 			return
@@ -2060,6 +2067,9 @@ outer:
 		} else if err == ErrNoHostCapacity {
 			log.Warn("unable to place job as no host has enough reserved CPU or memory")
 			return
+		} else if err == ErrPersistentSingletonCap {
+			log.Warn("unable to place job as every host is at its persistent singleton cap")
+			return
 		} else if err == ErrJobNotPending {
 			log.Warn("unable to place job as it is no longer pending")
 			return
@@ -2079,6 +2089,13 @@ outer:
 				log.Info("creating new volume", "host.id", req.Host.ID, "vol.id", vol.ID, "vol.path", vol.Path)
 				if err := req.Host.client.CreateVolume("default", vol.Info()); err != nil {
 					log.Error("error creating new volume", "vol.id", vol.ID, "err", err)
+					// HostID was stored before the create. Leaving a pending
+					// volume in place makes the retry pin this host forever.
+					// A created volume keeps its host.
+					if vol.GetState() == ct.VolumeStatePending {
+						pending := vol
+						s.onLoop(func() { s.dropPendingVolume(pending) })
+					}
 					continue outer
 				}
 				vol.SetState(ct.VolumeStateCreated)
@@ -2807,8 +2824,16 @@ func (s *Scheduler) handleJobStatus(job *Job, status host.JobStatus) {
 	// if the job has just transitioned to the stopped state, check if we
 	// expect it to be running, and if we do, restart it
 	if previousState != JobStateStopped && job.State == JobStateStopped {
+		before := len(s.jobs)
 		if diff := s.formationDiff(job.Formation); diff[job.Type] > 0 {
 			s.restartJob(job)
+		}
+		// A replacement pins back onto the existing volume, including over
+		// the singleton cap, so waking a waiter here would take the slot
+		// and then let the replacement exceed the cap. Scale-down and a
+		// restart that scheduled nothing leave the slot free.
+		if job.HostID != "" && job.isPersistentSingleton() && !job.spreadsAcrossHosts() && len(s.jobs) == before {
+			s.wakeBlockedPersistentSingletons()
 		}
 	}
 

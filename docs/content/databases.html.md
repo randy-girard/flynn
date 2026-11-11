@@ -58,6 +58,25 @@ The tenant Postgres plugin, MySQL, Redis, Kafka, and ClickHouse do not use the
 sirenia state machine described below. MongoDB runs sirenia inside each
 resource, which is not that platform appliance. See each page for safety notes.
 
+A new single-node database (one process and a volume that stays after the
+process stops) is placed on the host that already runs the fewest of those
+jobs. Hosted and self-hosted clusters use the same rule, including a large
+self-hosted cluster. `tenancy:mode` does not change it. An existing volume
+stays on the host that created it, including when that host is over the cap
+below, and lowering the cap does not move it.
+
+`flynn-host tags:set <host> flynn-max-persistent-singletons=<n>` limits how
+many of those jobs a host will accept. Omit the tag, or set `unlimited`, and
+the host has no cap. `0`, `off`, `none`, and `auto` are also no cap. The
+value is stored in `host.json`, so a host restart and a rolling update keep
+it. This is not `flynn-max-processes`, which still caps tenant processes
+first. HA peers that must land on different hosts are not counted and are
+not placed by this rule. When every eligible host is at the cap, the new
+database stays blocked until one of these jobs stops and is not replaced, a
+host is added, or the tag is raised. `flynn-host production:check` warns in
+either tenancy mode while any host has no numeric cap. The check does not
+write the tag.
+
 ## Database runtimes
 
 A database runtime is a name plus CPU, memory, and disk for one engine

@@ -46,6 +46,25 @@ func TestTagsMatchHostIgnoresProcessCapSource(t *testing.T) {
 	}
 }
 
+func TestTagsMatchHostIgnoresPersistentSingletonCap(t *testing.T) {
+	formation := NewFormation(&ct.ExpandedFormation{
+		Tags: map[string]map[string]string{
+			"web": {
+				"disk":                            "ssd",
+				"flynn-max-persistent-singletons": "9",
+			},
+		},
+	})
+	job := &Job{Type: "web", Formation: formation}
+	host := &Host{ID: "h1", Tags: map[string]string{
+		"disk":                            "ssd",
+		"flynn-max-persistent-singletons": "2",
+	}}
+	if !job.TagsMatchHost(host) {
+		t.Fatal("persistent singleton cap must not stop a job when the numbers differ")
+	}
+}
+
 func TestTagsMatchHostIDsTag(t *testing.T) {
 	formation := NewFormation(&ct.ExpandedFormation{
 		Tags: map[string]map[string]string{

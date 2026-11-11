@@ -50,6 +50,7 @@ type FakeHostClient struct {
 	OnListVolumes    func()
 	OnGetStatus      func()
 	OnAddJob         func(*host.Job)
+	OnCreateVolume   func() error
 	AddJobErr        error
 }
 
@@ -235,6 +236,11 @@ func (c *FakeHostClient) SetAttachFunc(id string, f attachFunc) {
 }
 
 func (c *FakeHostClient) CreateVolume(providerID string, info *volume.Info) error {
+	if c.OnCreateVolume != nil {
+		if err := c.OnCreateVolume(); err != nil {
+			return err
+		}
+	}
 	info.ID = random.UUID()
 	c.volumes[info.ID] = info
 	return nil

@@ -569,8 +569,11 @@ override and leaves the flags as they are.
 
 An empty runtime name does not reserve. Database jobs use the database
 runtime catalog and leave the app runtime empty, so this rule does not place
-them. A job that already has a volume on a host stays on that host and does
-not go through this capacity check.
+them. A new single-node database is placed on the host with the fewest such
+jobs, in hosted and self-hosted mode. See [Databases](databases.html.md).
+A job that already has a volume on a host stays on that host. It does not
+go through this capacity check, and it does not go through the
+`flynn-max-persistent-singletons` cap.
 
 A reserving job skips a host that has never reported both a memory total and
 a CPU total. Hosted builtin `small`, `medium`, and `large` use that rule,

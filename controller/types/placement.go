@@ -12,6 +12,13 @@ import (
 // the daemon replaces it with a number before the host registers.
 const FormationMaxProcessesTag = "flynn-max-processes"
 
+// FormationMaxPersistentSingletonsTag caps how many persistent singleton
+// jobs (one process, a volume that is not deleted on stop, not an omni job,
+// and not a peer that must spread across hosts) may run on this node.
+// Missing, empty, 0, "unlimited", "off", "none", and "auto" mean no cap.
+// It is not FormationMaxProcessesTag. Init does not write it.
+const FormationMaxPersistentSingletonsTag = "flynn-max-persistent-singletons"
+
 // FormationMaxProcessesSourceTag records who chose FormationMaxProcessesTag.
 // "auto" is refreshed from the live runtime catalog. "operator" is not.
 // A numeric cap with no source is treated as operator.
@@ -38,6 +45,27 @@ func ParseHostMaxProcesses(tags map[string]string) (n int, ok bool) {
 	}
 	s := strings.ToLower(strings.TrimSpace(raw))
 	if s == "" || s == "unlimited" || s == "off" || s == "none" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 0, false
+	}
+	return n, true
+}
+
+// ParseHostPersistentSingletons reads FormationMaxPersistentSingletonsTag.
+// ok is false when the host has no numeric cap.
+func ParseHostPersistentSingletons(tags map[string]string) (n int, ok bool) {
+	if tags == nil {
+		return 0, false
+	}
+	raw, present := tags[FormationMaxPersistentSingletonsTag]
+	if !present {
+		return 0, false
+	}
+	s := strings.ToLower(strings.TrimSpace(raw))
+	if s == "" || s == "unlimited" || s == "off" || s == "none" || s == "auto" {
 		return 0, false
 	}
 	n, err := strconv.Atoi(s)

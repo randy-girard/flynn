@@ -161,7 +161,7 @@ func tagsMatchHost(tags map[string]string, host *Host) bool {
 		return false
 	}
 	for k, v := range tags {
-		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag || k == ct.FormationMaxProcessesSourceTag {
+		if k == ct.FormationHostIDsTag || k == ct.FormationAvoidHostIDsTag || k == ct.FormationMaxProcessesTag || k == ct.FormationMaxProcessesSourceTag || k == ct.FormationMaxPersistentSingletonsTag {
 			continue
 		}
 		if w, ok := host.Tags[k]; !ok || v != w {
@@ -222,8 +222,10 @@ func (j *Job) omniPerHost() (int, bool) {
 
 // isPersistentSingleton is a one-process job whose /data (or other) volume
 // stays on the host. Redis, Kafka, ClickHouse, and plugin mysql/mongo are
-// this shape. Sirenia HA (OriginalProcesses > 1) and omni jobs are not:
-// those must keep spreading across hosts.
+// this shape. Sirenia HA (OriginalProcesses > 1) and omni jobs are not.
+// A Sirenia rolling peer can still be a persistent singleton while
+// OriginalProcesses is 1; spreadsAcrossHosts is what keeps that peer off
+// the singleton score.
 func (j *Job) isPersistentSingleton() bool {
 	proc, ok := j.processType()
 	if !ok || proc.Omni {
