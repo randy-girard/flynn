@@ -202,6 +202,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	deploymentRepo := data.NewDeploymentRepo(c.db, appRepo, releaseRepo, formationRepo)
 	eventRepo := data.NewEventRepo(c.db)
 	backupRepo := data.NewBackupRepo(c.db)
+	tenantBackupRepo := data.NewTenantBackupRepo(c.db)
 	sinkRepo := data.NewSinkRepo(c.db)
 	volumeRepo := data.NewVolumeRepo(c.db)
 	managedCertificateRepo := data.NewManagedCertificateRepo(c.db)
@@ -223,6 +224,7 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 		deploymentRepo:         deploymentRepo,
 		eventRepo:              eventRepo,
 		backupRepo:             backupRepo,
+		tenantBackupRepo:       tenantBackupRepo,
 		sinkRepo:               sinkRepo,
 		volumeRepo:             volumeRepo,
 		managedCertificateRepo: managedCertificateRepo,
@@ -401,6 +403,14 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 
 	httpRouter.GET("/tenancy", httphelper.WrapHandler(api.GetTenancy))
 	httpRouter.PUT("/tenancy", httphelper.WrapHandler(api.PutTenancy))
+	httpRouter.GET("/tenant-backups", httphelper.WrapHandler(api.ListTenantBackups))
+	httpRouter.GET("/tenant-backups/:resource_id", httphelper.WrapHandler(api.GetTenantBackup))
+	httpRouter.POST("/tenant-backups/:resource_id/begin", httphelper.WrapHandler(api.BeginTenantBackup))
+	httpRouter.POST("/tenant-backups/:resource_id/heartbeat", httphelper.WrapHandler(api.HeartbeatTenantBackup))
+	httpRouter.POST("/tenant-backups/:resource_id/finish", httphelper.WrapHandler(api.FinishTenantBackup))
+	httpRouter.POST("/tenant-backups/:resource_id/fail", httphelper.WrapHandler(api.FailTenantBackup))
+	httpRouter.GET("/tenant-backups/:resource_id/dumps", httphelper.WrapHandler(api.ListTenantBackupDumps))
+	httpRouter.DELETE("/tenant-backups/:resource_id/dumps/:timestamp", httphelper.WrapHandler(api.DeleteTenantBackupDump))
 	httpRouter.POST("/users", httphelper.WrapHandler(api.CreateUser))
 	httpRouter.GET("/users", httphelper.WrapHandler(api.ListUsers))
 	httpRouter.GET("/users/:users_id", httphelper.WrapHandler(api.GetUser))
@@ -542,6 +552,7 @@ type controllerAPI struct {
 	deploymentRepo         *data.DeploymentRepo
 	eventRepo              *data.EventRepo
 	backupRepo             *data.BackupRepo
+	tenantBackupRepo       *data.TenantBackupRepo
 	sinkRepo               *data.SinkRepo
 	volumeRepo             *data.VolumeRepo
 	managedCertificateRepo *data.ManagedCertificateRepo

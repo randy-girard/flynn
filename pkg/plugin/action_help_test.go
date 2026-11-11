@@ -12,7 +12,9 @@ func TestActionHelpIsSpecificToTheCommand(t *testing.T) {
 		Doc: `usage: flynn pg
        flynn pg:create <database>
        flynn pg:follow [--runtime <name>]
-       flynn pg:dump [-q] [-f <file>]
+       flynn pg:dump
+       flynn pg:backups
+       flynn pg:restore [<timestamp>]
        flynn pg:psql [--] [<argument>...]
 
 Each resource is its own Postgres instance.
@@ -20,26 +22,30 @@ The colon form (flynn pg:psql) is canonical. The space form (flynn pg psql) is a
 flynn pg:create adds a logical database on that server (CREATE DATABASE), not a new Flynn resource.
 
 Options:
-	-f, --file=<file>  dump file (stdout/stdin if omitted)
-	-q, --quiet        don't print progress
 	--runtime=<name>   database runtime for a new follower
 
 Commands:
 	create    Create a logical database on this instance
 	follow    Create a streaming read-only follower
-	dump      Dump this instance in custom format
+	dump      Write a custom-format dump of each database to the blobstore
+	backups   List dump timestamps for this instance
+	restore   Restore a listed timestamp into this instance
 	psql      Open psql against this instance
 
 Examples:
 
     $ flynn pg:psql
 
-    $ flynn pg:dump -f postgres.dump
+    $ flynn pg:dump
+
+    $ flynn pg:restore 20261111T160405Z
 `,
 		Actions: []CLIAction{
 			{Name: "create", Append: "<database>"},
 			{Name: "follow"},
 			{Name: "dump"},
+			{Name: "backups"},
+			{Name: "restore", Append: "[<timestamp>]"},
 			{Name: "psql"},
 		},
 	}
@@ -55,7 +61,7 @@ Examples:
 			t.Fatalf("pg:create help missing %q:\n%s", want, create)
 		}
 	}
-	for _, hide := range []string{"Open psql", "dump file", "--runtime", "flynn pg:dump", "Commands:"} {
+	for _, hide := range []string{"Open psql", "blobstore", "--runtime", "flynn pg:dump", "Commands:"} {
 		if strings.Contains(create, hide) {
 			t.Fatalf("pg:create help should not contain %q:\n%s", hide, create)
 		}
@@ -63,17 +69,15 @@ Examples:
 
 	dump := c.ActionHelp("pg:dump")
 	for _, want := range []string{
-		"usage: flynn pg:dump [-q] [-f <file>]",
-		"Dump this instance in custom format",
-		"--file",
-		"--quiet",
-		"$ flynn pg:dump -f postgres.dump",
+		"usage: flynn pg:dump",
+		"Write a custom-format dump of each database to the blobstore",
+		"$ flynn pg:dump",
 	} {
 		if !strings.Contains(dump, want) {
 			t.Fatalf("pg:dump help missing %q:\n%s", want, dump)
 		}
 	}
-	if strings.Contains(dump, "--runtime") || strings.Contains(dump, "Open psql") || strings.Contains(dump, "pg:create") {
+	if strings.Contains(dump, "--file") || strings.Contains(dump, "--quiet") || strings.Contains(dump, "--runtime") || strings.Contains(dump, "Open psql") || strings.Contains(dump, "pg:create") {
 		t.Fatalf("pg:dump help leaked sibling command:\n%s", dump)
 	}
 
@@ -83,7 +87,7 @@ Examples:
 			t.Fatalf("pg:psql help missing %q:\n%s", want, psql)
 		}
 	}
-	if strings.Contains(psql, "dump file") || strings.Contains(psql, "Create a logical database on this instance") {
+	if strings.Contains(psql, "blobstore") || strings.Contains(psql, "Create a logical database on this instance") {
 		t.Fatalf("pg:psql help leaked sibling command:\n%s", psql)
 	}
 
@@ -91,8 +95,8 @@ Examples:
 	if !strings.Contains(follow, "--runtime") {
 		t.Fatalf("pg:follow should include --runtime:\n%s", follow)
 	}
-	if strings.Contains(follow, "--file") {
-		t.Fatalf("pg:follow should not include dump --file:\n%s", follow)
+	if strings.Contains(follow, "--file") || strings.Contains(follow, "blobstore") {
+		t.Fatalf("pg:follow should not include the dump command:\n%s", follow)
 	}
 }
 

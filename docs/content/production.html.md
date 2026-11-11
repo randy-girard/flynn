@@ -38,7 +38,7 @@ metadata, and this host's pool. It does not migrate the blobstore, set
 | `zfs` | `zpool status -P` for this host. `fail` in either tenancy mode when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Tenancy does not change this line. A missing pool or `zpool` error is `fail` either way. A green line is this host only. |
 | `reserve` | Hosted is `ok` when the profile list can be read. The scheduler reserves builtin `small`, `medium`, and `large` even when `reserve_resources` is false (`scheduler=hosted_builtin`). `runtime:reserve` only stores the flag. Unknown tenancy is `fail` and is not treated as self-hosted. Self-hosted is `ok` with the flags off. The action tells a large cluster to run `flynn-host runtime:reserve` on profiles that must fit. An empty name does not reserve. One other profile does not stand in for the three builtins. Database runtimes are not read. |
 | `host-cap` | `fail` unless every host registered in discoverd has a numeric `flynn-max-processes` tag. `unlimited`, `0`, empty, `off`, `none`, and `auto` are no cap. The check does not write the tag. The same rule applies in hosted and self-hosted mode. |
-| `backup` | Always `warn`: tenant volumes are outside `flynn-host backup`. |
+| `backup` | No Postgres primary: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A primary whose last dump is missing, or strictly older than 24h plus 1h, is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources` and, only when a primary exists, `GET /tenant-backups`. It does not dump. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
 ZFS is local, so run the check on each host. The other lines are cluster state,
@@ -486,8 +486,16 @@ a full `pg_dumpall` of the **platform** Postgres appliance (controller,
 blobstore files including plugin image layers, and plugin metadata databases
 attached to `platform-postgres`), and MariaDB/MongoDB dumps when those
 plugin appliances are scaled above zero. Tenant Postgres instance volumes
-are not in that dump. [`production:check`](#production-check) always warns
-that tenant volumes are outside `flynn-host backup`. If the current postgres release has no formation row
+are not in that dump. Each tenant database dump is a custom-format `pg_dump`
+stored in the blobstore under `backups/<owner>/<resource>/<timestamp>/<database>`.
+Those objects are not applied by cluster restore. `flynn-host backup` prints
+that on stderr. [`production:check`](#production-check) warns when there is no
+Postgres primary, and fails in both hosted and self-hosted mode when a
+primary's last success is missing or strictly older than 24 hours plus one
+hour. A postgres blobstore (`DEFAULT_BACKEND` empty or type `postgres`) is
+refused for those dumps in both tenancy modes; run
+`flynn-host blobstore:set --migrate --delete` first. That refusal does not
+change the blobstore line above (hosted `fail`, self-hosted `warn`). If the current postgres release has no formation row
 yet (seen after an updater deploy), backup copies process counts from
 another scaled formation on that app instead of failing. Restore does
 **not** re-run `flynn-host plugin:install`; plugin apps come back with

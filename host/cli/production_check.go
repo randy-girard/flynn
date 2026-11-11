@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/blobstore/data"
@@ -60,7 +61,13 @@ flynn-max-processes tag. unlimited, 0, empty, off, and none are no cap.
 Hosts() sees only discoverd registrations and can sleep about 45s on
 object_not_found. The check does not set flynn-max-processes.
 
-Backups always warn that tenant volumes are outside flynn-host backup.
+Backups warn that tenant volumes are outside flynn-host backup when the
+cluster has no Postgres primary. A primary whose last dump is missing, or
+strictly older than 24h plus 1h, fails this line in hosted and self-hosted
+mode. A dump newer than that is ok, and the detail still says volumes are
+outside the tarball. Tenancy is not the switch. The check reads
+GET /providers/postgres/resources and, only when a primary exists,
+GET /tenant-backups. It does not dump.
 Overlay prints the live flannel NETWORK and subnet length. It does not
 hardcode a network. This line is informational.
 
@@ -104,6 +111,8 @@ type productionCheckConfig struct {
 	Stat        func(name string) (os.FileInfo, error)
 	// Color paints the status column. The CLI sets this from the terminal.
 	Color bool
+	// Now is the clock for the backup line. Nil uses time.Now.
+	Now func() time.Time
 }
 
 func runProductionCheck(args *docopt.Args, client *cluster.Client) error {
@@ -264,12 +273,11 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
 	addReserveLine(add, mode, profiles, profileErr)
 	addHostCapLine(add, hosts, hostsErr)
-	add(productionRow{
-		status: "warn",
-		check:  "backup",
-		detail: "tenant volumes are outside flynn-host backup",
-		action: "Back up tenant volumes separately.",
-	})
+	now := time.Now()
+	if cfg.Now != nil {
+		now = cfg.Now()
+	}
+	addBackupLine(add, api, now)
 	addOverlayLine(add, meta, metaErr)
 
 	writeProductionTable(w, rows, cfg.Color)
@@ -324,6 +332,112 @@ func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release,
 		status: "ok", check: "blobstore", detail: "default=" + name,
 		action: "No blobstore change.",
 	})
+}
+
+const (
+	tenantBackupInterval = 24 * time.Hour
+	tenantBackupGrace    = time.Hour
+)
+
+const backupVolumeDetail = "tenant volumes are outside flynn-host backup"
+const backupVolumeAction = "Back up tenant volumes separately."
+
+func addBackupLine(add func(productionRow), api productionAPI, now time.Time) {
+	var resources []*ct.Resource
+	err := api.Get("/providers/postgres/resources", &resources)
+	if err != nil {
+		if productionNotFound(err) {
+			add(productionRow{status: "warn", check: "backup", detail: backupVolumeDetail, action: backupVolumeAction})
+			return
+		}
+		add(productionRow{
+			status: "fail", check: "backup", detail: "error=" + err.Error(),
+			action: "Fix the controller, then rerun. This check does not dump.",
+		})
+		return
+	}
+	var primaries []*ct.Resource
+	for _, res := range resources {
+		if res == nil || strings.TrimSpace(res.ID) == "" || !postgresResourceIsPrimary(res.Env) {
+			continue
+		}
+		primaries = append(primaries, res)
+	}
+	if len(primaries) == 0 {
+		add(productionRow{status: "warn", check: "backup", detail: backupVolumeDetail, action: backupVolumeAction})
+		return
+	}
+	var backups []*ct.TenantBackup
+	if err := api.Get("/tenant-backups", &backups); err != nil {
+		add(productionRow{
+			status: "fail", check: "backup", detail: "error=" + err.Error(),
+			action: "Fix the controller, then rerun. This check does not dump.",
+		})
+		return
+	}
+	byID := map[string]*ct.TenantBackup{}
+	for _, st := range backups {
+		if st == nil || st.ResourceID == "" {
+			continue
+		}
+		byID[st.ResourceID] = st
+	}
+	miss := 0
+	for _, res := range primaries {
+		var last *time.Time
+		if st := byID[res.ID]; st != nil {
+			last = st.LastSuccessAt
+		}
+		if tenantBackupMiss(last, now) {
+			miss++
+		}
+	}
+	if miss > 0 {
+		add(productionRow{
+			status: "fail", check: "backup",
+			detail: fmt.Sprintf("postgres primaries missing a current dump: %d", miss),
+			action: "Run flynn pg dump, or wait for the scheduled dump. " + backupVolumeAction,
+		})
+		return
+	}
+	add(productionRow{
+		status: "ok", check: "backup",
+		detail: fmt.Sprintf("postgres dumps current (%d); %s", len(primaries), backupVolumeDetail),
+		action: backupVolumeAction,
+	})
+}
+
+func productionNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ct.ErrNotFound) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
+func postgresResourceIsPrimary(env map[string]string) bool {
+	role := ""
+	if env != nil {
+		role = strings.TrimSpace(env["FLYNN_POSTGRES_ROLE"])
+		if role == "" {
+			role = strings.TrimSpace(env["POSTGRES_ROLE"])
+		}
+	}
+	switch strings.ToLower(role) {
+	case "follower", "deposed":
+		return false
+	default:
+		return true
+	}
+}
+
+func tenantBackupMiss(last *time.Time, now time.Time) bool {
+	if last == nil || last.IsZero() {
+		return true
+	}
+	return now.UTC().Sub(last.UTC()) > tenantBackupInterval+tenantBackupGrace
 }
 
 // blobstoreDefaultIsPostgres is true when the default name is empty or

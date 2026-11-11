@@ -38,7 +38,7 @@ func TestFormatHelpListsPluginChildren(t *testing.T) {
 		{"mysql", []string{"usage: flynn mysql", "manage mysql databases", "Commands:", "mysql:dump", "mysql:restore", "mysql:cli"}, []string{"dump dump"}},
 		{"mongodb", []string{"usage: flynn mongodb", "manage mongodb databases", "Commands:", "mongodb:dump", "mongodb:restore", "mongodb:cli"}, []string{"dump dump"}},
 		{"clickhouse", []string{"usage: flynn clickhouse", "manage clickhouse clusters", "Commands:", "clickhouse:cli", "clickhouse:databases"}, []string{"clickhouse:databases:create"}},
-		{"pg", []string{"usage: flynn pg", "manage an isolated postgres instance", "Commands:", "pg:psql", "Open psql against this instance", "pg:info", "Show leader, followers, and lag", "pg:dump"}, []string{"pg:cli", "pg:psql  psql"}},
+		{"pg", []string{"usage: flynn pg", "manage an isolated postgres instance", "Commands:", "pg:psql", "Open psql against this instance", "pg:info", "Show leader, followers, and lag", "pg:dump", "pg:backups"}, []string{"pg:cli", "pg:psql  psql"}},
 		{"scheduler", []string{"usage: flynn scheduler", "manage scheduled jobs for an app", "Commands:", "scheduler:list", "scheduler:add", "scheduler:remove", "scheduler:enable", "scheduler:disable", "scheduler:info"}, nil},
 		{"kafka", []string{"kafka:topics", "kafka:consumer-groups:create"}, []string{"kafka:topics:create"}},
 		{"kafka:topics", []string{"kafka:topics:create"}, nil},
@@ -132,22 +132,24 @@ func datastorePluginCatalog() *plugin.Catalog {
 			Doc: `usage: flynn pg
        flynn pg:create <database>
        flynn pg:psql [--] [<argument>...]
-       flynn pg:dump [-q] [-f <file>]
+       flynn pg:dump
+       flynn pg:backups
+       flynn pg:restore [<timestamp>]
 
 Commands:
 	create    Create a logical database on this instance
 	psql      Open psql against this instance
 	info      Show leader, followers, and lag
-	dump      Dump this instance in custom format
-
-Options:
-	-f, --file=<file>  dump file
-	-q, --quiet        don't print progress
+	dump      Write a custom-format dump of each database to the blobstore
+	backups   List dump timestamps for this instance
+	restore   Restore a listed timestamp into this instance
 `,
 			Actions: []plugin.CLIAction{
 				{Name: "psql", Args: []string{"psql"}},
 				{Name: "info", Args: []string{"info"}},
 				{Name: "dump", Args: []string{"dump"}},
+				{Name: "backups", Args: []string{"backups"}},
+				{Name: "restore", Args: []string{"restore"}, Append: "[<timestamp>]"},
 				{Name: "create", Args: []string{"create"}, Append: "<database>"},
 			},
 		},
@@ -205,7 +207,7 @@ func TestFormatHelpPluginLeafIsSpecific(t *testing.T) {
 			t.Fatalf("pg:psql help missing %q:\n%s", want, psql)
 		}
 	}
-	for _, hide := range []string{"Show leader", "dump file", "Commands:", "pg:create", "Create a logical database"} {
+	for _, hide := range []string{"Show leader", "blobstore", "Commands:", "pg:create", "Create a logical database"} {
 		if strings.Contains(psql, hide) {
 			t.Fatalf("pg:psql help should not contain %q:\n%s", hide, psql)
 		}
@@ -217,19 +219,19 @@ func TestFormatHelpPluginLeafIsSpecific(t *testing.T) {
 			t.Fatalf("pg:create help missing %q:\n%s", want, create)
 		}
 	}
-	for _, hide := range []string{"Open psql", "dump file", "Commands:", "pg:dump"} {
+	for _, hide := range []string{"Open psql", "blobstore", "Commands:", "pg:dump"} {
 		if strings.Contains(create, hide) {
 			t.Fatalf("pg:create help should not contain %q:\n%s", hide, create)
 		}
 	}
 
 	dump := formatHelpWith("pg:dump", cat)
-	for _, want := range []string{"usage: flynn pg:dump", "--file", "--quiet", "Dump this instance in custom format"} {
+	for _, want := range []string{"usage: flynn pg:dump", "Write a custom-format dump of each database to the blobstore"} {
 		if !strings.Contains(dump, want) {
 			t.Fatalf("pg:dump help missing %q:\n%s", want, dump)
 		}
 	}
-	if strings.Contains(dump, "Open psql") || strings.Contains(dump, "pg:create") {
+	if strings.Contains(dump, "Open psql") || strings.Contains(dump, "pg:create") || strings.Contains(dump, "--file") || strings.Contains(dump, "--quiet") {
 		t.Fatalf("pg:dump help leaked sibling command:\n%s", dump)
 	}
 }
@@ -336,8 +338,9 @@ func postgresHelpCLI() plugin.CLI {
        flynn pg:promote <follower>
        flynn pg:unfollow <follower>
        flynn pg:upgrade
-       flynn pg:dump [-q] [-f <file>]
-       flynn pg:restore [-q] [-f <file>]
+       flynn pg:dump
+       flynn pg:backups
+       flynn pg:restore [<timestamp>]
        flynn pg:psql [--] [<argument>...]
 
 Commands:
@@ -348,8 +351,9 @@ Commands:
 	promote   Make a follower writable and rewrite the primary URL
 	unfollow  Stop replication and leave a standalone writable copy
 	upgrade   Follow, wait, promote, then recreate followers
-	dump      Dump this instance in custom format
-	restore   Restore a dump taken with pg dump
+	dump      Write a custom-format dump of each database to the blobstore
+	backups   List dump timestamps for this instance
+	restore   Restore a listed timestamp into this instance
 	psql      Open psql against this instance
 `,
 		Actions: []plugin.CLIAction{
@@ -361,7 +365,8 @@ Commands:
 			{Name: "unfollow", Append: "<follower>"},
 			{Name: "upgrade"},
 			{Name: "dump"},
-			{Name: "restore"},
+			{Name: "backups"},
+			{Name: "restore", Append: "[<timestamp>]"},
 			{Name: "psql"},
 		},
 	}

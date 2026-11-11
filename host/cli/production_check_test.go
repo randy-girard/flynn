@@ -31,28 +31,54 @@ type stubProductionAPI struct {
 	settingsReads int
 	dbReads       int
 
-	tenancy    ct.TenancySettings
-	tenancyErr error
-	release    *ct.Release
-	releaseErr error
-	profiles   []*ct.RuntimeProfile
-	profileErr error
+	tenancy      ct.TenancySettings
+	tenancyErr   error
+	release      *ct.Release
+	releaseErr   error
+	profiles     []*ct.RuntimeProfile
+	profileErr   error
+	resources    []*ct.Resource
+	resourcesErr error
+	backups      []*ct.TenantBackup
+	backupsErr   error
 }
 
 func (s *stubProductionAPI) Get(path string, out interface{}) error {
 	s.gets = append(s.gets, path)
-	if path != "/tenancy" {
+	switch path {
+	case "/tenancy":
+		if s.tenancyErr != nil {
+			return s.tenancyErr
+		}
+		dst, ok := out.(*ct.TenancySettings)
+		if !ok {
+			return fmtUnexpected("tenancy decode")
+		}
+		*dst = s.tenancy
+		return nil
+	case "/providers/postgres/resources":
+		if s.resourcesErr != nil {
+			return s.resourcesErr
+		}
+		dst, ok := out.(*[]*ct.Resource)
+		if !ok {
+			return fmtUnexpected("resources decode")
+		}
+		*dst = s.resources
+		return nil
+	case "/tenant-backups":
+		if s.backupsErr != nil {
+			return s.backupsErr
+		}
+		dst, ok := out.(*[]*ct.TenantBackup)
+		if !ok {
+			return fmtUnexpected("backups decode")
+		}
+		*dst = s.backups
+		return nil
+	default:
 		return fmtUnexpected("GET " + path)
 	}
-	if s.tenancyErr != nil {
-		return s.tenancyErr
-	}
-	dst, ok := out.(*ct.TenancySettings)
-	if !ok {
-		return fmtUnexpected("tenancy decode")
-	}
-	*dst = s.tenancy
-	return nil
 }
 
 func (s *stubProductionAPI) GetAppRelease(appID string) (*ct.Release, error) {
@@ -84,22 +110,27 @@ func (s *stubProductionAPI) ListDBRuntimes() (*dbruntime.Catalog, error) {
 func fmtUnexpected(msg string) error { return errors.New("unexpected " + msg) }
 
 type productionFixture struct {
-	pool       string
-	tenancy    ct.TenancySettings
-	tenancyErr error
-	env        map[string]string
-	releaseErr error
-	profiles   []*ct.RuntimeProfile
-	profileErr error
-	hosts      []*cluster.Host
-	hostsErr   error
-	meta       []byte
-	metaErr    error
-	zpoolText  string
-	zpoolErr   error
-	modes      map[string]os.FileMode
-	statErr    map[string]error
-	color      bool
+	pool         string
+	tenancy      ct.TenancySettings
+	tenancyErr   error
+	env          map[string]string
+	releaseErr   error
+	profiles     []*ct.RuntimeProfile
+	profileErr   error
+	hosts        []*cluster.Host
+	hostsErr     error
+	meta         []byte
+	metaErr      error
+	zpoolText    string
+	zpoolErr     error
+	modes        map[string]os.FileMode
+	statErr      map[string]error
+	color        bool
+	resources    []*ct.Resource
+	resourcesErr error
+	backups      []*ct.TenantBackup
+	backupsErr   error
+	now          time.Time
 
 	api        *stubProductionAPI
 	hostCalls  int
@@ -153,17 +184,27 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 	t.Helper()
 	f.init()
 	f.api = &stubProductionAPI{
-		tenancy:    f.tenancy,
-		tenancyErr: f.tenancyErr,
-		release:    &ct.Release{Env: f.env},
-		releaseErr: f.releaseErr,
-		profiles:   f.profiles,
-		profileErr: f.profileErr,
+		tenancy:      f.tenancy,
+		tenancyErr:   f.tenancyErr,
+		release:      &ct.Release{Env: f.env},
+		releaseErr:   f.releaseErr,
+		profiles:     f.profiles,
+		profileErr:   f.profileErr,
+		resources:    f.resources,
+		resourcesErr: f.resourcesErr,
+		backups:      f.backups,
+		backupsErr:   f.backupsErr,
+	}
+	var nowFn func() time.Time
+	if !f.now.IsZero() {
+		now := f.now
+		nowFn = func() time.Time { return now }
 	}
 	var buf bytes.Buffer
 	err := runProductionChecks(&buf, productionCheckConfig{
 		Pool: f.pool,
 		API:  f.api,
+		Now:  nowFn,
 		Hosts: func() ([]*cluster.Host, error) {
 			f.hostCalls++
 			return f.hosts, f.hostsErr
@@ -457,7 +498,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -1014,6 +1055,100 @@ func requireColoredRows(t *testing.T, got string) {
 		t.Fatalf("colored blobstore row %+v", rows[1])
 	}
 	assertBlobstoreMigrateAction(t, rows[1].action)
+}
+
+func TestProductionCheckBackupLine(t *testing.T) {
+	now := time.Date(2026, 11, 11, 16, 0, 0, 0, time.UTC)
+	fresh := now.Add(-time.Hour)
+	exact := now.Add(-(24*time.Hour + time.Hour))
+	stale := exact.Add(-time.Second)
+	primary := &ct.Resource{ID: "11111111-1111-1111-1111-111111111111", Env: map[string]string{"FLYNN_POSTGRES_ROLE": "primary"}}
+	emptyRole := &ct.Resource{ID: "22222222-2222-2222-2222-222222222222"}
+	follower := &ct.Resource{ID: "33333333-3333-3333-3333-333333333333", Env: map[string]string{"FLYNN_POSTGRES_ROLE": "follower"}}
+	deposed := &ct.Resource{ID: "44444444-4444-4444-4444-444444444444", Env: map[string]string{"POSTGRES_ROLE": "deposed"}}
+	s3 := map[string]string{"DEFAULT_BACKEND": "s3main", "BACKEND_S3MAIN": "backend=s3"}
+
+	t.Run("no primaries stay a warn", func(t *testing.T) {
+		f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}, env: s3, resources: []*ct.Resource{follower, deposed}}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		row := mustCheck(t, got, "warn", "backup", "tenant volumes are outside flynn-host backup")
+		if !strings.Contains(row.action, "Back up tenant volumes separately") {
+			t.Fatal(row.action)
+		}
+		if strings.Contains(strings.Join(f.api.gets, ","), "/tenant-backups") {
+			t.Fatalf("listed dumps with no primary: %v", f.api.gets)
+		}
+	})
+
+	t.Run("provider not found is no primaries", func(t *testing.T) {
+		f := &productionFixture{env: s3, resourcesErr: ct.ErrNotFound}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		mustCheck(t, got, "warn", "backup", "tenant volumes are outside flynn-host backup")
+		if strings.Contains(strings.Join(f.api.gets, ","), "/tenant-backups") {
+			t.Fatalf("gets %v", f.api.gets)
+		}
+	})
+
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		mode := mode
+		t.Run(mode+"/missing dump fails", func(t *testing.T) {
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary, follower},
+				now:       now,
+			}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
+			if strings.Join(f.api.gets, ",") != "/tenancy,/providers/postgres/resources,/tenant-backups" {
+				t.Fatalf("gets %v", f.api.gets)
+			}
+		})
+		t.Run(mode+"/fresh dump is ok", func(t *testing.T) {
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary, emptyRole},
+				backups: []*ct.TenantBackup{
+					{ResourceID: primary.ID, LastSuccessAt: &fresh},
+					{ResourceID: emptyRole.ID, LastSuccessAt: &exact},
+				},
+				now: now,
+			}
+			got, err := f.run(t)
+			assertPassed(t, err)
+			mustCheck(t, got, "ok", "backup", "postgres dumps current (2); tenant volumes are outside flynn-host backup")
+		})
+		t.Run(mode+"/past grace fails", func(t *testing.T) {
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary},
+				backups:   []*ct.TenantBackup{{ResourceID: primary.ID, LastSuccessAt: &stale}},
+				now:       now,
+			}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
+		})
+	}
+
+	t.Run("status error fails the line", func(t *testing.T) {
+		f := &productionFixture{
+			env:        s3,
+			resources:  []*ct.Resource{primary},
+			backupsErr: errors.New("controller down"),
+		}
+		got, err := f.run(t)
+		assertFailed(t, err)
+		row := mustCheck(t, got, "fail", "backup", "error=controller down")
+		if !strings.Contains(row.action, "does not dump") {
+			t.Fatal(row.action)
+		}
+	})
 }
 
 func copyTags(in map[string]string) map[string]string {

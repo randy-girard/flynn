@@ -1398,6 +1398,32 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 )`,
 		`CREATE INDEX job_cache_inflight_builds_idx ON job_cache (app_id) WHERE state IN ('pending', 'blocked', 'starting', 'up') AND (lower(process_type) = 'slugbuilder' OR lower(process_type) = 'dockerbuilder' OR lower(process_type) LIKE 'slugbuilder-%' OR lower(process_type) LIKE 'dockerbuilder-%')`,
 	)
+	// Tenant dump catalog. Bytes live in the blobstore. These rows are how
+	// production:check and restore know a primary has a current dump, including
+	// when the blobstore backend is postgres and the write was refused.
+	// The stale lock is server now() minus 2 minutes, not a client timestamp.
+	migrations.Add(84,
+		`CREATE TABLE tenant_backup_status (
+    resource_id uuid PRIMARY KEY REFERENCES resources (resource_id) ON DELETE CASCADE,
+    attempt_state text NOT NULL,
+    attempt_started_at timestamptz,
+    attempt_finished_at timestamptz,
+    attempt_error text NOT NULL DEFAULT '',
+    attempt_timestamp text NOT NULL DEFAULT '',
+    heartbeat_at timestamptz,
+    last_success_at timestamptz,
+    last_success_timestamp text NOT NULL DEFAULT '',
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT tenant_backup_status_state_check CHECK (attempt_state IN ('running', 'succeeded', 'failed'))
+)`,
+		`CREATE TABLE tenant_backup_dumps (
+    resource_id uuid NOT NULL REFERENCES resources (resource_id) ON DELETE CASCADE,
+    dump_timestamp text NOT NULL,
+    database_name text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (resource_id, dump_timestamp, database_name)
+)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

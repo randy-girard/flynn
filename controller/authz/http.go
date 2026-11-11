@@ -358,6 +358,8 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkBuildArtifact, "", ""
 		}
 		return rkCluster, "", ""
+	case "tenant-backups":
+		return rkCluster, "", ""
 	case "releases":
 		if m == http.MethodPost {
 			return rkCreateRelease, "", ""

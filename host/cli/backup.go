@@ -12,6 +12,11 @@ import (
 	"github.com/randy-girard/flynn/pkg/term"
 )
 
+// tenantDumpNotice is the one extra line on flynn-host backup. Tenant dumps
+// are a blobstore catalog. Cluster restore does not apply them. Large objects
+// inside postgres.sql.gz are already in the appliance dump and are not named here.
+const tenantDumpNotice = "Tenant database dumps are in the blobstore under backups/ and are not applied by cluster restore. Tenant volumes are not in this tarball."
+
 func init() {
 	Register("backup", runBackup, `
 usage: flynn-host backup [--file <file>]
@@ -55,6 +60,7 @@ func runBackup(args *docopt.Args, _ *cluster.Client) error {
 	}
 
 	fmt.Fprintln(os.Stderr, "Creating cluster backup...")
+	fmt.Fprintln(os.Stderr, tenantDumpNotice)
 	if err := backup.Run(client, dest, progress); err != nil {
 		return err
 	}

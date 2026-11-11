@@ -178,14 +178,25 @@ pg:dump`, or `flynn-host pg:restore`. See
 
 ### Dumping and restoring
 
-`flynn pg:dump` / `flynn pg:restore` dump this app's tenant instance in
-Postgres custom format. They are plugin commands (`flynn pg --help`). The
-plugin dashboard Backup page is the same operation.
+`flynn pg:dump` writes one custom-format `pg_dump` per logical database on
+this app's primary into the platform blobstore and prints the timestamp.
+`flynn pg:backups` lists those timestamps. `flynn pg:restore` restores the
+newest, and `flynn pg:restore <timestamp>` restores a listed timestamp into
+the same database names. `-f`, `--file`, and `-q` are rejected. There is no
+dump file to download. The plugin dashboard Backup page is the same
+operation: it shows the destination, a miss when the last success is missing
+or older than 25 hours, **Back up now**, and **Restore selected**.
+
+The schedule runs on the `postgres-backup` discoverd leader, once a day per
+primary, with the first dump due immediately. A postgres blobstore is refused
+in both hosted and self-hosted mode. Point the blobstore at S3, MinIO, GCS,
+or Azure with `flynn-host blobstore:set --migrate --delete` before dumping.
 
 `flynn-host pg:dump` / `flynn-host pg:restore` dump the **platform** appliance
 (controller, blobstore, plugin metadata on `platform-postgres`). They do not
 dump a tenant instance. Cluster `flynn-host backup` uses `pg_dumpall` on that
-same appliance; tenant instance volumes are not in the tarball.
+same appliance; tenant instance volumes are not in the tarball, and tenant
+dumps under `backups/` are not applied by cluster restore.
 
 To copy a tenant database with tools on your laptop, connect with the
 injected `DATABASE_URL` (or `flynn pg:psql`) and run `pg_dump` /
