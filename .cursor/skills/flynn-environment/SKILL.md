@@ -29,7 +29,9 @@ Command details and the project-board ids are in [reference.md](reference.md).
 | Plugin CLI against the live cluster | `FLYNN=/tmp/flynn-cli cluster/run.sh --cli-only` | that plugin |
 | GitHub Actions | `gh run list` then `gh run watch <id> --exit-status` | that repo |
 
-`make test-integration` boots a nested cluster and needs Linux, ZFS, and KVM. On macOS, smoke is the stand-in. Do not start it.
+`make test-integration` boots a nested cluster and needs Linux, ZFS, and `/dev/kvm`. On macOS, smoke is the stand-in. Do not start it.
+
+The laptop `dev-builder` (VirtualBox on Apple Silicon) has ZFS (`flynn-default`) and does not have `/dev/kvm`. `VBoxManage modifyvm --nested-hw-virt on` does not create that device. `script/run-integration-tests` on that VM still tries to boot nested hosts, and each one dies with `timed out waiting for hosts to start` after 15 minutes. Do not run that suite there. Suites that never call `bootCluster` can run with `-f` against the builder's own cluster. GitHub Actions on Ubuntu runs the ZFS unit tests.
 
 ## Two Vagrant worlds
 

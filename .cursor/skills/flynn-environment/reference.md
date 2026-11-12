@@ -29,6 +29,8 @@ make vagrant-setup YES=1 NODES=3
 
 `update` builds on `dev-builder` when source changed, halts the builder, then updates running nodes. Plugin images are a separate `plugin` subcommand.
 
+`dev-builder` has the `flynn-default` ZFS pool and no `/dev/kvm`. Nested hardware virtualization does not change that. Do not run `script/run-integration-tests` on it. A full run spends 15 minutes per nested host and ends with `timed out waiting for hosts to start`. Filter to suites that do not call `bootCluster` if you need the builder's own cluster. `make test-integration` belongs on a Linux host that has `/dev/kvm`.
+
 Chaos defaults: `CHAOS_ROUNDS=10`, `CHAOS_TIMEOUT=900`, `CHAOS_SETTLE=20`, `CHAOS_NODE_DOWN=60`. Report: `flynn-logs/chaos/<UTC>/report.txt`.
 
 Laptop CLI talks to cluster `local` (`https://controller.1.localflynn.com`). Status UI: `https://status.1.localflynn.com`.
