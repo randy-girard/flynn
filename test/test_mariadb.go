@@ -1,20 +1,18 @@
 package main
 
+import (
+	"path/filepath"
+	"time"
+
+	c "github.com/flynn/go-check"
+)
+
 // The MySQL plugin (flynn-plugin-mysql) is installed as mysql; mariadb is a
 // deprecated alias. Plugin app is mysql-plugin, data service is mysql.
 // This file name is historical.
-
-import (
-	"database/sql"
-	"fmt"
-	"path/filepath"
-	"strings"
-
-	c "github.com/flynn/go-check"
-	_ "github.com/go-sql-driver/mysql"
-	ct "github.com/randy-girard/flynn/controller/types"
-	"github.com/randy-girard/flynn/pkg/mysqlurl"
-)
+//
+// Each resource is one node. Followers are a separate resource, so this suite
+// does not scale the plugin release into a sirenia cluster.
 
 type MariaDBSuite struct {
 	Helper
@@ -26,75 +24,28 @@ func (s *MariaDBSuite) SetUpSuite(t *c.C) {
 	s.skipUnlessProvider(t, "mysql")
 }
 
-// Sirenia integration tests
-var sireniaMariaDB = sireniaDatabase{
-	appName:    "mysql-plugin",
-	serviceKey: "FLYNN_MYSQL",
-	hostKey:    "MYSQL_HOST",
-	initDb: func(t *c.C, r *ct.Release, d *sireniaDeploy) {
-		dsn := &mysqlurl.DSN{
-			Host:     fmt.Sprintf("leader.%s.discoverd", d.name) + ":3306",
-			User:     "flynn",
-			Password: r.Env["MYSQL_PWD"],
-			Database: "mysql",
-		}
-		db, err := sql.Open("mysql", dsn.String())
-		t.Assert(err, c.IsNil)
-		defer db.Close()
-		dbname := "deploy_test"
-		_, err = db.Exec(fmt.Sprintf(`CREATE DATABASE %s`, dbname))
-		t.Assert(err, c.IsNil)
-		_, err = db.Exec(fmt.Sprintf(`USE %s`, dbname))
-		t.Assert(err, c.IsNil)
-		_, err = db.Exec(`CREATE TABLE deploy_test (data TEXT)`)
-		t.Assert(err, c.IsNil)
-	},
-	assertWriteable: func(t *c.C, r *ct.Release, d *sireniaDeploy) {
-		dbname := "deploy_test"
-		dsn := &mysqlurl.DSN{
-			Host:     fmt.Sprintf("leader.%s.discoverd", d.name) + ":3306",
-			User:     "flynn",
-			Password: r.Env["MYSQL_PWD"],
-			Database: dbname,
-		}
-		db, err := sql.Open("mysql", dsn.String())
-		t.Assert(err, c.IsNil)
-		defer db.Close()
-		_, err = db.Exec(`INSERT INTO deploy_test (data) VALUES ('data')`)
-		t.Assert(err, c.IsNil)
-	},
-}
-
-func (s *MariaDBSuite) TestDeploySingleAsync(t *c.C) {
-	testSireniaDeploy(s.controllerClient(t), s.discoverdClient(t), t, &sireniaDeploy{
-		name:        "mariadb-single-async",
-		db:          sireniaMariaDB,
-		sireniaJobs: 3,
-		webJobs:     2,
-		expected:    testDeploySingleAsync,
-	})
-}
-
-func (s *MariaDBSuite) TestDeployMultipleAsync(t *c.C) {
-	testSireniaDeploy(s.controllerClient(t), s.discoverdClient(t), t, &sireniaDeploy{
-		name:        "mariadb-multiple-async",
-		db:          sireniaMariaDB,
-		sireniaJobs: 5,
-		webJobs:     2,
-		expected:    testDeployMultipleAsync,
-	})
-}
-
 func (s *MariaDBSuite) TestDumpRestore(t *c.C) {
 	r := s.newGitRepo(t, "empty")
 	t.Assert(r.flynn("create"), Succeeds)
 
 	res := r.flynn("resource", "add", "mysql")
 	t.Assert(res, Succeeds)
-	id := strings.Split(res.Output, " ")[2]
-
-	t.Assert(r.flynn("mysql", "console", "--", "-e",
-		"CREATE TABLE T (F text); INSERT INTO T (F) VALUES ('abc')"), Succeeds)
+	id := createdName(res.Output)
+	t.Assert(id, c.Not(c.Equals), "")
+	// mysql:wait reports a primary ready as soon as the resource exists.
+	// The server is registered in discoverd later.
+	t.Assert(r.flynn("mysql", "wait", id), Succeeds)
+	var console *CmdResult
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		console = r.flynn("mysql", "console", "--", "-e",
+			"CREATE TABLE T (F text); INSERT INTO T (F) VALUES ('abc')")
+		if console.Err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Assert(console, Succeeds)
 
 	file := filepath.Join(t.MkDir(), "db.dump")
 	t.Assert(r.flynn("mysql", "dump", "-f", file), Succeeds)

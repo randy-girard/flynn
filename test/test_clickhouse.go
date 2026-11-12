@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"strings"
 
 	c "github.com/flynn/go-check"
 )
@@ -24,51 +24,26 @@ func (s *ClickhouseSuite) TestClickhouseEnv(t *c.C) {
 	client := s.controllerClient(t)
 	release, err := client.GetAppRelease(a.id)
 	t.Assert(err, c.IsNil)
-
-	service, ok := release.Env["FLYNN_CLICKHOUSE"]
-	if !ok {
-		t.Fatal("missing FLYNN_CLICKHOUSE")
+	service := attachedService(t, client, a.id, "FLYNN_CLICKHOUSE")
+	if release.Env["FLYNN_CLICKHOUSE"] != "" {
+		t.Fatalf("app release kept FLYNN_CLICKHOUSE %q; identity stays on the resource", release.Env["FLYNN_CLICKHOUSE"])
 	}
-	clickhouseApp, err := client.GetApp(service)
-	t.Assert(err, c.IsNil)
-	clickhouseRelease, err := client.GetAppRelease(clickhouseApp.ID)
-	t.Assert(err, c.IsNil)
-	t.Assert(clickhouseRelease.Processes, c.HasLen, 2)
-
-	keeperProc, ok := clickhouseRelease.Processes["keeper"]
-	if !ok {
-		t.Fatal("missing keeper process")
+	host := "leader." + service + ".discoverd"
+	if !strings.Contains(release.Env["CLICKHOUSE_URL"], host) {
+		t.Fatalf("CLICKHOUSE_URL %q does not point at %s", release.Env["CLICKHOUSE_URL"], host)
 	}
-	t.Assert(keeperProc.Service, c.Equals, service+"-keeper")
+	if !releaseHasColorURL(release.Env, "FLYNN_CLICKHOUSE_", host) {
+		t.Fatalf("app release missing FLYNN_CLICKHOUSE_<COLOR>_URL for %s: %#v", host, release.Env)
+	}
 
+	clickhouseRelease, err := client.GetAppRelease(service)
+	t.Assert(err, c.IsNil)
+	t.Assert(clickhouseRelease.Processes, c.HasLen, 1)
 	clickhouseProc, ok := clickhouseRelease.Processes["clickhouse"]
 	if !ok {
 		t.Fatal("missing clickhouse process")
 	}
 	t.Assert(clickhouseProc.Service, c.Equals, service)
-
-	password, ok := release.Env["CLICKHOUSE_PASSWORD"]
-	if !ok {
-		t.Fatal("missing CLICKHOUSE_PASSWORD")
-	}
-
-	expected := map[string]string{
-		"CLICKHOUSE_HOST":      fmt.Sprintf("leader.%s.discoverd", service),
-		"CLICKHOUSE_PORT":      "9000",
-		"CLICKHOUSE_HTTP_PORT": "8123",
-		"CLICKHOUSE_USER":      "default",
-		"CLICKHOUSE_PASSWORD":  password,
-		"CLICKHOUSE_CLUSTER":   "flynn",
-	}
-	for key, val := range expected {
-		actual, ok := release.Env[key]
-		if !ok {
-			t.Fatalf("env missing key %q", key)
-		}
-		if actual != val {
-			t.Fatalf("expected %s to be %s, got %s", key, val, actual)
-		}
-	}
 }
 
 func (s *ClickhouseSuite) TestCreateDatabase(t *c.C) {
@@ -76,9 +51,8 @@ func (s *ClickhouseSuite) TestCreateDatabase(t *c.C) {
 
 	t.Assert(a.flynn("resource", "add", "clickhouse"), Succeeds)
 
-	release, err := s.controllerClient(t).GetAppRelease(a.id)
-	t.Assert(err, c.IsNil)
-	a.waitForService(release.Env["FLYNN_CLICKHOUSE"])
+	service := attachedService(t, s.controllerClient(t), a.id, "FLYNN_CLICKHOUSE")
+	a.waitForService(service)
 
 	t.Assert(a.flynn("clickhouse", "databases", "create", "analytics"), Succeeds)
 	t.Assert(a.flynn("clickhouse", "databases", "info", "analytics"), Succeeds)

@@ -133,8 +133,10 @@ flynn clickhouse:databases:info analytics
 flynn clickhouse:databases:destroy analytics
 ```
 
-Database DDL is executed with `ON CLUSTER flynn` and the `Replicated` database
-engine so schema changes are applied consistently across replicas. Create
+Database DDL is executed by the instance admin API with `ON CLUSTER flynn`
+and the `Replicated` database engine so schema changes are applied
+consistently across replicas. The tenant user does not receive the `CLUSTER`
+grant. Create
 tables with `ReplicatedMergeTree` so data is replicated through Keeper; plain
 `MergeTree` tables do not replicate.
 

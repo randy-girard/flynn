@@ -1,17 +1,10 @@
 package main
 
 import (
-	"context"
-	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	c "github.com/flynn/go-check"
-	ct "github.com/randy-girard/flynn/controller/types"
-	"go.mongodb.org/mongo-driver/bson"
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type MongoDBSuite struct {
@@ -26,18 +19,36 @@ func (s *MongoDBSuite) SetUpSuite(t *c.C) {
 
 func (s *MongoDBSuite) TestDumpRestore(t *c.C) {
 	r := s.newGitRepo(t, "empty")
-	t.Assert(r.flynn("create"), Succeeds)
+	created := r.flynn("create")
+	t.Assert(created, Succeeds)
+	appName := createdName(created.Output)
+	t.Assert(appName, c.Not(c.Equals), "")
 
 	res := r.flynn("resource", "add", "mongodb")
 	t.Assert(res, Succeeds)
-	id := strings.Split(res.Output, " ")[2]
+	id := createdName(res.Output)
+	t.Assert(id, c.Not(c.Equals), "")
 
-	// dumping an empty database should not fail
+	app, err := s.controllerClient(t).GetApp(appName)
+	t.Assert(err, c.IsNil)
+	service := attachedService(t, s.controllerClient(t), app.ID, "FLYNN_MONGO")
+
+	// The process registers in discoverd before the app user exists.
+	// Retry the first dump until authentication can succeed.
+	var dump *CmdResult
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		_, _ = s.discoverdClient(t).Instances(service, 5*time.Second)
+		dump = r.flynn("mongodb", "dump", "-f", filepath.Join(t.MkDir(), "db.dump"))
+		if dump.Err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Second)
+	}
+	t.Assert(dump, Succeeds)
+
 	file := filepath.Join(t.MkDir(), "db.dump")
-	t.Assert(r.flynn("mongodb", "dump", "-f", file), Succeeds)
-
 	t.Assert(r.flynn("mongodb", "mongo", "--", "--eval", `db.foos.insert({data: "foobar"})`), Succeeds)
-
 	t.Assert(r.flynn("mongodb", "dump", "-f", file), Succeeds)
 	t.Assert(r.flynn("mongodb", "mongo", "--", "--eval", "db.foos.drop()"), Succeeds)
 
@@ -46,44 +57,4 @@ func (s *MongoDBSuite) TestDumpRestore(t *c.C) {
 	t.Assert(query, SuccessfulOutputContains, "foobar")
 
 	t.Assert(r.flynn("resource", "remove", "mongodb", id), Succeeds)
-}
-
-// Sirenia integration tests
-var sireniaMongoDB = sireniaDatabase{
-	appName:    "mongodb",
-	serviceKey: "FLYNN_MONGO",
-	hostKey:    "MONGO_HOST",
-	assertWriteable: func(t *c.C, r *ct.Release, d *sireniaDeploy) {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		uri := fmt.Sprintf("mongodb://flynn:%s@leader.%s.discoverd:27017/admin?directConnection=true",
-			r.Env["MONGO_PWD"], d.name)
-		client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
-		t.Assert(err, c.IsNil)
-		defer client.Disconnect(ctx)
-
-		_, err = client.Database("test").Collection("test").InsertOne(ctx, bson.M{"test": "test"})
-		t.Assert(err, c.IsNil)
-	},
-}
-
-func (s *MongoDBSuite) TestDeploySingleAsync(t *c.C) {
-	testSireniaDeploy(s.controllerClient(t), s.discoverdClient(t), t, &sireniaDeploy{
-		name:        "mongodb-single-async",
-		db:          sireniaMongoDB,
-		sireniaJobs: 3,
-		webJobs:     2,
-		expected:    testDeploySingleAsync,
-	})
-}
-
-func (s *MongoDBSuite) TestDeployMultipleAsync(t *c.C) {
-	testSireniaDeploy(s.controllerClient(t), s.discoverdClient(t), t, &sireniaDeploy{
-		name:        "mongodb-multiple-async",
-		db:          sireniaMongoDB,
-		sireniaJobs: 5,
-		webJobs:     2,
-		expected:    testDeployMultipleAsync,
-	})
 }

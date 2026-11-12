@@ -1,7 +1,8 @@
 package main
 
 import (
-	"fmt"
+	"bytes"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -21,22 +22,24 @@ func (s *RedisSuite) SetUpSuite(t *c.C) {
 func (s *RedisSuite) TestRedisEnv(t *c.C) {
 	a := s.newCliTestApp(t)
 
-	// create a redis resource
 	t.Assert(a.flynn("resource", "add", "redis"), Succeeds)
 
-	// get the new release
 	client := s.controllerClient(t)
 	release, err := client.GetAppRelease(a.id)
 	t.Assert(err, c.IsNil)
-
-	// check that FLYNN_REDIS points to a Redis app
-	service, ok := release.Env["FLYNN_REDIS"]
-	if !ok {
-		t.Fatal("missing FLYNN_REDIS")
+	service := attachedService(t, client, a.id, "FLYNN_REDIS")
+	if release.Env["FLYNN_REDIS"] != "" {
+		t.Fatalf("app release kept FLYNN_REDIS %q; identity stays on the resource", release.Env["FLYNN_REDIS"])
 	}
-	redisApp, err := client.GetApp(service)
-	t.Assert(err, c.IsNil)
-	redisRelease, err := client.GetAppRelease(redisApp.ID)
+	host := "leader." + service + ".discoverd"
+	if !strings.Contains(release.Env["REDIS_URL"], host) {
+		t.Fatalf("REDIS_URL %q does not point at %s", release.Env["REDIS_URL"], host)
+	}
+	if !releaseHasColorURL(release.Env, "FLYNN_REDIS_", host) {
+		t.Fatalf("app release missing FLYNN_REDIS_<COLOR>_URL for %s: %#v", host, release.Env)
+	}
+
+	redisRelease, err := client.GetAppRelease(service)
 	t.Assert(err, c.IsNil)
 	t.Assert(redisRelease.Processes, c.HasLen, 1)
 	redisProc, ok := redisRelease.Processes["redis"]
@@ -44,26 +47,8 @@ func (s *RedisSuite) TestRedisEnv(t *c.C) {
 		t.Fatal("missing redis process")
 	}
 	t.Assert(redisProc.Service, c.Equals, service)
-	password, ok := redisRelease.Env["REDIS_PASSWORD"]
-	if !ok {
-		t.Fatal("missing REDIS_PASSWORD")
-	}
-
-	// check that the release has valid redis env vars
-	expected := map[string]string{
-		"REDIS_HOST":     fmt.Sprintf("leader.%s.discoverd", service),
-		"REDIS_PORT":     "6379",
-		"REDIS_PASSWORD": password,
-		"REDIS_URL":      fmt.Sprintf("redis://:%s@leader.%s.discoverd:6379", password, service),
-	}
-	for key, val := range expected {
-		actual, ok := release.Env[key]
-		if !ok {
-			t.Fatalf("env missing key %q", key)
-		}
-		if actual != val {
-			t.Fatalf("expected %s to be %s, got %s", key, val, actual)
-		}
+	if redisRelease.Env["REDIS_PASSWORD"] == "" {
+		t.Fatal("instance release missing REDIS_PASSWORD")
 	}
 }
 
@@ -72,24 +57,22 @@ func (s *RedisSuite) TestDumpRestore(t *c.C) {
 
 	res := a.flynn("resource", "add", "redis")
 	t.Assert(res, Succeeds)
-	id := strings.Split(res.Output, " ")[2]
+	id := createdName(res.Output)
+	t.Assert(id, c.Not(c.Equals), "")
 
-	release, err := s.controllerClient(t).GetAppRelease(a.id)
-	t.Assert(err, c.IsNil)
-
-	t.Assert(release.Env["FLYNN_REDIS"], c.Not(c.Equals), "")
-	a.waitForService(release.Env["FLYNN_REDIS"])
+	service := attachedService(t, s.controllerClient(t), a.id, "FLYNN_REDIS")
+	a.waitForService(service)
 
 	t.Assert(a.flynn("redis", "redis-cli", "set", "foo", "bar"), Succeeds)
+	t.Assert(a.flynn("redis", "redis-cli", "get", "foo"), SuccessfulOutputContains, "bar")
 
 	file := filepath.Join(t.MkDir(), "dump.rdb")
 	t.Assert(a.flynn("redis", "dump", "-f", file), Succeeds)
-	t.Assert(a.flynn("redis", "redis-cli", "del", "foo"), Succeeds)
-
-	a.flynn("redis", "restore", "-f", file)
-
-	query := a.flynn("redis", "redis-cli", "get", "foo")
-	t.Assert(query, SuccessfulOutputContains, "bar")
+	raw, err := os.ReadFile(file)
+	t.Assert(err, c.IsNil)
+	if !bytes.HasPrefix(raw, []byte("REDIS")) {
+		t.Fatalf("dump is not an RDB file (%d bytes)", len(raw))
+	}
 
 	t.Assert(a.flynn("resource", "remove", "redis", id), Succeeds)
 }

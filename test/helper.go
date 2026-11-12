@@ -821,3 +821,43 @@ func (a *cliTestApp) sh(cmd string) *CmdResult {
 func (a *cliTestApp) cleanup() {
 	a.watcher.Close()
 }
+
+// createdName reads the app or add-on name from flynn create / addons:create.
+func createdName(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 3 && fields[0] == "Created" && fields[1] == "add-on" {
+			return fields[2]
+		}
+		if len(fields) >= 2 && fields[0] == "Created" {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// attachedService is the isolated instance app named by a resource env key
+// such as FLYNN_REDIS. That name stays on the resource, not the app release.
+func attachedService(t *c.C, client controller.Client, appID, key string) string {
+	list, err := client.AppResourceList(appID)
+	t.Assert(err, c.IsNil)
+	for _, res := range list {
+		if res == nil || res.Env == nil {
+			continue
+		}
+		if name := strings.TrimSpace(res.Env[key]); name != "" {
+			return name
+		}
+	}
+	t.Fatalf("no %s on resources for %s", key, appID)
+	return ""
+}
+
+func releaseHasColorURL(env map[string]string, prefix, host string) bool {
+	for k, v := range env {
+		if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, "_URL") && strings.Contains(v, host) {
+			return true
+		}
+	}
+	return false
+}
