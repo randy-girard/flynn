@@ -1424,6 +1424,14 @@ CREATE TRIGGER notify_tcp_route_certificates_update
     PRIMARY KEY (resource_id, dump_timestamp, database_name)
 )`,
 	)
+	// Postgres continuous availability. manual is the default. A cluster that
+	// is already hosted at migrate time becomes system once. tenancy:mode
+	// does not rewrite the column after that.
+	migrations.Add(85,
+		`ALTER TABLE cluster_settings ADD COLUMN postgres_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_pg_availability_check CHECK (postgres_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET postgres_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

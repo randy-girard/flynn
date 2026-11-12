@@ -376,6 +376,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 	httpRouter.GET("/cluster/app-domain", httphelper.WrapHandler(api.GetAppDomain))
 	httpRouter.PUT("/cluster/app-domain", httphelper.WrapHandler(api.PutAppDomain))
+	httpRouter.GET("/cluster/postgres-availability", httphelper.WrapHandler(api.GetPostgresAvailability))
+	httpRouter.PUT("/cluster/postgres-availability", httphelper.WrapHandler(api.PutPostgresAvailability))
 	httpRouter.GET("/cluster/policy", httphelper.WrapHandler(api.GetClusterPolicy))
 	httpRouter.PUT("/cluster/policy", httphelper.WrapHandler(api.PutClusterPolicy))
 	httpRouter.GET("/cluster/audit", httphelper.WrapHandler(api.ListClusterAudit))

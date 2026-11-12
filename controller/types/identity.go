@@ -12,6 +12,13 @@ type TenancySettings struct {
 	SignupEnabled bool   `json:"signup_enabled"`
 }
 
+// PostgresAvailability is cluster_settings.postgres_continuous_availability.
+// system keeps one platform replica per primary. manual does not.
+// Tenancy mode does not change it after the initial default.
+type PostgresAvailability struct {
+	Mode string `json:"mode"`
+}
+
 // AppDomain is the hostname suffix for apps. Domain is the operator override;
 // empty means new apps use ClusterDomain (the domain Flynn itself runs on).
 // Effective is the suffix actually appended to app names.

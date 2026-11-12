@@ -515,3 +515,32 @@ func (s *S) TestRunnableFormationsIncludeOldRelease(c *C) {
 	c.Assert(rows, HasLen, 1)
 	c.Assert(rows[0].ReleaseID, Equals, current.ID)
 }
+
+func (s *S) TestPostgresAvailabilityRoundTrip(c *C) {
+	repo := NewTenancyRepo(s.db)
+	got, err := repo.GetPostgresAvailability()
+	c.Assert(err, IsNil)
+	c.Assert(got, Equals, "manual")
+
+	c.Assert(repo.SetPostgresAvailability("system"), IsNil)
+	got, err = repo.GetPostgresAvailability()
+	c.Assert(err, IsNil)
+	c.Assert(got, Equals, "system")
+
+	// tenancy:mode must not rewrite the stored value.
+	c.Assert(repo.SetSettings("hosted", nil), IsNil)
+	got, err = repo.GetPostgresAvailability()
+	c.Assert(err, IsNil)
+	c.Assert(got, Equals, "system")
+
+	c.Assert(repo.SetPostgresAvailability("manual"), IsNil)
+	c.Assert(repo.SetSettings("self_hosted", nil), IsNil)
+	got, err = repo.GetPostgresAvailability()
+	c.Assert(err, IsNil)
+	c.Assert(got, Equals, "manual")
+
+	c.Assert(repo.SetPostgresAvailability("nope"), NotNil)
+	got, err = repo.GetPostgresAvailability()
+	c.Assert(err, IsNil)
+	c.Assert(got, Equals, "manual")
+}

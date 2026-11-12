@@ -89,6 +89,8 @@ func TestHTTPAllowed(t *testing.T) {
 		{"app_read_can_get_runtime_settings", appRead, http.MethodGet, "/cluster/runtime-settings", true},
 		{"app_read_can_get_app_domain", appRead, http.MethodGet, "/cluster/app-domain", true},
 		{"app_write_cannot_put_app_domain", appWrite, http.MethodPut, "/cluster/app-domain", false},
+		{"app_read_can_get_postgres_availability", appRead, http.MethodGet, "/cluster/postgres-availability", true},
+		{"app_write_cannot_put_postgres_availability", appWrite, http.MethodPut, "/cluster/postgres-availability", false},
 		{"cluster_key_can_create_runtime", clusterKey, http.MethodPost, "/runtimes", true},
 		{"app_read_can_list_db_runtimes", appRead, http.MethodGet, "/db-runtimes", true},
 		{"app_read_cannot_create_db_runtime", appRead, http.MethodPost, "/db-runtimes", false},

@@ -152,6 +152,7 @@ func TestAuditHTTPAction(t *testing.T) {
 		{"DELETE", "/tokens/t1", "token.delete", ""},
 		{"PUT", "/cluster/runtime-settings", "cluster.runtime_settings.set", ""},
 		{"PUT", "/cluster/app-domain", "cluster.app_domain.set", ""},
+		{"PUT", "/cluster/postgres-availability", "cluster.postgres_availability.set", ""},
 		{"PUT", "/github/app", "github.app.set", ""},
 	} {
 		action, ref, ok := auditHTTPAction(tc.method, tc.path)
