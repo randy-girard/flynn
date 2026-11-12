@@ -97,13 +97,38 @@ standalone writable copy. The dashboard Followers tab can also remove a
 follower while it is still replicating. Remove stops replication and deletes
 the replica.
 
+`flynn-host postgres:availability` is `manual` or `system` for the whole
+cluster. Hosted and self-hosted use the same values. `manual` is the
+self-hosted default and creates no platform replica. `system` is the default
+only for a cluster that was already hosted when the controller migrated, and
+for a fresh `flynn-host plugin:install hosted` that has no Postgres resources
+yet. A cluster admin sets it with that command or on Cluster → Settings.
+Changing it does not deploy the plugin or restart user apps.
+
+`system` keeps one platform replica per primary when another host can take
+the volume's memory, disk, process cap, and persistent-singleton cap. That
+replica is not an add-on and does not count against the resource quota. The
+customer cannot delete, unfollow, or promote it. Deleting the database
+deletes it. The page shows protected only while that replica is streaming
+and at most 16 MiB behind. A one-host cluster stays unprotected. The watch
+runs on one plugin process, fences the running primary before promotion, and
+creates at most one new platform replica every five seconds.
+
+`DATABASE_URL` keeps `leader.<original>.discoverd`. The promoted process
+registers that name. Running apps are not restarted. Replication is
+asynchronous, so a failover can drop commits the primary already
+acknowledged. Scheduled backups remain the copy you restore. Synchronous
+commit stays off.
+
 `flynn addons:create postgres --follow <primary> --auto-failover` (or
-`flynn pg:follow --auto-failover`) places the replica on a different host.
-If the primary job is gone for about 30 seconds, Flynn promotes the replica,
-fences the old primary, and starts a new replica so the pair remains. Failover
-is asynchronous, so any unreplicated writes are lost (RPO is replication lag).
-A single-node cluster cannot use auto-failover. Default `--follow` stays
-manual.
+`flynn pg:follow --auto-failover`) is the manual-mode failover follower. It
+is a real add-on. If another host can take the volume, it is placed there.
+If not, it starts on the primary's host and the page says so. When
+availability is `manual` and the primary job has been gone for about 30
+seconds, Flynn promotes that follower and leaves `DATABASE_URL` on the
+original discoverd name. When availability is `system`, add follower still
+works and those followers stay read-only. The watch does not promote them.
+The add-follower form does not offer automatic failover while `system` is on.
 
 Followers always stream on the same engine version. `flynn pg:upgrade` uses
 logical replication, promotes a new primary, then recreates followers. A

@@ -60,7 +60,7 @@ Flynn's engines suit development, staging, and small production. They are not tu
 
 | Feature | Flynn | Heroku | Vercel | Fly.io | Render | Canine | Railway |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Postgres | **Partial.** Plugin. One node. Optional follower, not automatic failover unless you add one. Not in the cluster backup | **Yes.** HA, forks, and point-in-time rollback on higher plans | **Partial.** Marketplace | **Yes.** Managed, HA, backups | **Partial.** HA and recovery on larger paid plans. Free expires | **Partial.** Add-on or Helm chart. You operate it | **Yes.** Managed |
+| Postgres | **Partial.** Plugin. One node, or a platform replica when `postgres:availability` is `system`. Async failover. Not in the cluster backup | **Yes.** HA, forks, and point-in-time rollback on higher plans | **Partial.** Marketplace | **Yes.** Managed, HA, backups | **Partial.** HA and recovery on larger paid plans. Free expires | **Partial.** Add-on or Helm chart. You operate it | **Yes.** Managed |
 | Redis | **Partial.** No automatic failover. Not in the cluster backup | **Yes.** HA on higher plans | **Partial.** Marketplace | **Partial.** Upstash | **Yes.** Key Value | **Yes.** Add-on | **Yes.** |
 | Kafka | **Partial.** Three brokers. Topic data is not in the cluster backup | **Yes.** Managed | **No.** | **No.** | **No.** | **Partial.** Helm chart, not a managed service | **No.** |
 | MySQL-compatible | **Partial.** MariaDB 10.11. One node. Optional async follower, not automatic failover unless you add one | **Partial.** Marketplace | **Partial.** Marketplace | **No.** | **No.** | **Partial.** Helm or add-on | **No.** |
@@ -79,7 +79,7 @@ Flynn's engines suit development, staging, and small production. They are not tu
 
 ## What the matrix leaves out
 
-The Postgres your apps use is a plugin: one node and one volume. A follower is optional, and automatic failover stays off until you add one. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MariaDB is the same shape: one node, and failover only if you add an async follower. MongoDB starts as one member of its own replica set. `mongodb:scale` grows that set, and on three or more hosts Flynn grows each resource to three members.
+The Postgres your apps use is a plugin: one node and one volume. A follower is optional. `flynn-host postgres:availability system` adds one platform replica per primary when another host can take it, on a hosted or self-hosted cluster. `manual` leaves failover to a follower you add. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MariaDB is the same shape: one node, and failover only if you add an async follower. MongoDB starts as one member of its own replica set. `mongodb:scale` grows that set, and on three or more hosts Flynn grows each resource to three members.
 
 Review Apps can be created for every pull request. Heroku CI and the Container Registry are Cedar-generation features and are not on Fir. Heroku Connect syncs Postgres with Salesforce and opts out of review and CI apps.
 

@@ -6,6 +6,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	v1 "github.com/randy-girard/flynn/controller/client/v1"
+	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
@@ -15,8 +16,10 @@ usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-
 
 Install a plugin from a local path, alias, GitHub URL, or plugin group.
 The hosted group installs dashboard, enterprise, and billing, then sets
-tenancy mode to hosted. billing must resolve from plugins.json and
-plugin:credentials. Signup stays off.
+tenancy mode to hosted. On a cluster with no Postgres resources it also
+sets postgres availability to system. A cluster that already has Postgres
+resources keeps the stored availability. billing must resolve from
+plugins.json and plugin:credentials. Signup stays off.
 
 Options:
 	--no-build                 Reuse dist/ without compiling (fails if dist/ is missing)
@@ -477,5 +480,34 @@ func runPluginGroupInstall(args *docopt.Args) error {
 		return fmt.Errorf("plugin group %s: set tenancy mode %s: %w", group.Name, group.TenancyMode, err)
 	}
 	fmt.Fprintf(os.Stdout, "tenancy mode set to %s (signup stays off unless set separately)\n", group.TenancyMode)
+	if group.TenancyMode == tenancy.ModeHosted {
+		if err := setHostedPostgresAvailability(v); err != nil {
+			return fmt.Errorf("plugin group %s: %w", group.Name, err)
+		}
+	}
+	return nil
+}
+
+// setHostedPostgresAvailability turns system on for a fresh hosted install.
+// Existing Postgres resources, a stored system value, and a resource-list
+// error leave the column unchanged.
+func setHostedPostgresAvailability(v *v1.Client) error {
+	var current ct.PostgresAvailability
+	if err := v.Get("/cluster/postgres-availability", &current); err != nil {
+		return fmt.Errorf("read postgres availability: %w", err)
+	}
+	count := -1
+	resources, err := v.ResourceList("postgres")
+	if err == nil {
+		count = len(resources)
+	}
+	next, set := tenancy.HostedGroupAvailability(current.Mode, count)
+	if !set {
+		return nil
+	}
+	if err := v.Put("/cluster/postgres-availability", map[string]string{"mode": next}, &ct.PostgresAvailability{}); err != nil {
+		return fmt.Errorf("set postgres availability %s: %w", next, err)
+	}
+	fmt.Fprintf(os.Stdout, "postgres availability set to %s\n", next)
 	return nil
 }

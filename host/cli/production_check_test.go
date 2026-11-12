@@ -31,16 +31,18 @@ type stubProductionAPI struct {
 	settingsReads int
 	dbReads       int
 
-	tenancy      ct.TenancySettings
-	tenancyErr   error
-	release      *ct.Release
-	releaseErr   error
-	profiles     []*ct.RuntimeProfile
-	profileErr   error
-	resources    []*ct.Resource
-	resourcesErr error
-	backups      []*ct.TenantBackup
-	backupsErr   error
+	tenancy         ct.TenancySettings
+	tenancyErr      error
+	release         *ct.Release
+	releaseErr      error
+	profiles        []*ct.RuntimeProfile
+	profileErr      error
+	resources       []*ct.Resource
+	resourcesErr    error
+	backups         []*ct.TenantBackup
+	backupsErr      error
+	availability    string
+	availabilityErr error
 }
 
 func (s *stubProductionAPI) Get(path string, out interface{}) error {
@@ -55,6 +57,16 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 			return fmtUnexpected("tenancy decode")
 		}
 		*dst = s.tenancy
+		return nil
+	case "/cluster/postgres-availability":
+		if s.availabilityErr != nil {
+			return s.availabilityErr
+		}
+		dst, ok := out.(*ct.PostgresAvailability)
+		if !ok {
+			return fmtUnexpected("postgres availability decode")
+		}
+		*dst = ct.PostgresAvailability{Mode: s.availability}
 		return nil
 	case "/providers/postgres/resources":
 		if s.resourcesErr != nil {
@@ -110,27 +122,29 @@ func (s *stubProductionAPI) ListDBRuntimes() (*dbruntime.Catalog, error) {
 func fmtUnexpected(msg string) error { return errors.New("unexpected " + msg) }
 
 type productionFixture struct {
-	pool         string
-	tenancy      ct.TenancySettings
-	tenancyErr   error
-	env          map[string]string
-	releaseErr   error
-	profiles     []*ct.RuntimeProfile
-	profileErr   error
-	hosts        []*cluster.Host
-	hostsErr     error
-	meta         []byte
-	metaErr      error
-	zpoolText    string
-	zpoolErr     error
-	modes        map[string]os.FileMode
-	statErr      map[string]error
-	color        bool
-	resources    []*ct.Resource
-	resourcesErr error
-	backups      []*ct.TenantBackup
-	backupsErr   error
-	now          time.Time
+	pool            string
+	tenancy         ct.TenancySettings
+	tenancyErr      error
+	env             map[string]string
+	releaseErr      error
+	profiles        []*ct.RuntimeProfile
+	profileErr      error
+	hosts           []*cluster.Host
+	hostsErr        error
+	meta            []byte
+	metaErr         error
+	zpoolText       string
+	zpoolErr        error
+	modes           map[string]os.FileMode
+	statErr         map[string]error
+	color           bool
+	resources       []*ct.Resource
+	resourcesErr    error
+	backups         []*ct.TenantBackup
+	backupsErr      error
+	availability    string
+	availabilityErr error
+	now             time.Time
 
 	api        *stubProductionAPI
 	hostCalls  int
@@ -146,6 +160,9 @@ func (f *productionFixture) init() {
 	}
 	if f.tenancy.Mode == "" && f.tenancyErr == nil {
 		f.tenancy.Mode = "hosted"
+	}
+	if f.availability == "" && f.availabilityErr == nil {
+		f.availability = "manual"
 	}
 	if f.env == nil && f.releaseErr == nil {
 		// A default name with no parsed type is a Postgres result. This
@@ -184,16 +201,18 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 	t.Helper()
 	f.init()
 	f.api = &stubProductionAPI{
-		tenancy:      f.tenancy,
-		tenancyErr:   f.tenancyErr,
-		release:      &ct.Release{Env: f.env},
-		releaseErr:   f.releaseErr,
-		profiles:     f.profiles,
-		profileErr:   f.profileErr,
-		resources:    f.resources,
-		resourcesErr: f.resourcesErr,
-		backups:      f.backups,
-		backupsErr:   f.backupsErr,
+		tenancy:         f.tenancy,
+		tenancyErr:      f.tenancyErr,
+		release:         &ct.Release{Env: f.env},
+		releaseErr:      f.releaseErr,
+		profiles:        f.profiles,
+		profileErr:      f.profileErr,
+		resources:       f.resources,
+		resourcesErr:    f.resourcesErr,
+		backups:         f.backups,
+		backupsErr:      f.backupsErr,
+		availability:    f.availability,
+		availabilityErr: f.availabilityErr,
 	}
 	var nowFn func() time.Time
 	if !f.now.IsZero() {
@@ -413,10 +432,10 @@ func assertProductionWidth(t *testing.T, got string) {
 	t.Helper()
 	plain := productionANSI.ReplaceAllString(got, "")
 	for _, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
-		// singleton-cap is the widest check name (13). The previous table
-		// fit in 96; that name adds four columns.
-		if n := len([]rune(line)); n > 100 {
-			t.Fatalf("line is %d columns, want at most 100:\n%s", n, line)
+		// postgres-availability is the widest check name (21). singleton-cap
+		// fit in 100; the longer name adds eight columns.
+		if n := len([]rune(line)); n > 112 {
+			t.Fatalf("line is %d columns, want at most 112:\n%s", n, line)
 		}
 	}
 }
@@ -488,6 +507,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "A large cluster runs runtime:reserve"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
+		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
 	})
@@ -501,7 +521,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -524,6 +544,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin", action: "Hosted placement reserves"},
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
+		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
@@ -679,6 +700,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
+		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -712,6 +734,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=unknown", action: "not self-hosted"},
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
+		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -1086,7 +1109,7 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 8 {
+	if len(rows) != 9 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
@@ -1141,7 +1164,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/providers/postgres/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/providers/postgres/resources,/tenant-backups" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
@@ -1187,6 +1210,34 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			t.Fatal(row.action)
 		}
 	})
+}
+
+func TestProductionCheckPostgresAvailabilityIgnoresTenancy(t *testing.T) {
+	one := []*cluster.Host{hostCap("host-a", "4")}
+	two := []*cluster.Host{hostCap("host-a", "4"), hostCap("host-b", "4")}
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		f := &productionFixture{tenancy: ct.TenancySettings{Mode: mode}, availability: "manual", hosts: one}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		mustCheck(t, got, "ok", "postgres-availability", "mode=manual")
+	}
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		f := &productionFixture{tenancy: ct.TenancySettings{Mode: mode}, availability: "system", hosts: one}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		mustCheck(t, got, "warn", "postgres-availability", "mode=system hosts=1")
+		if err != nil {
+			t.Fatal("one-host system must not fail the cluster")
+		}
+	}
+	f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}, availability: "system", hosts: two}
+	got, err := f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "ok", "postgres-availability", "mode=system hosts=2")
+	f = &productionFixture{availabilityErr: errors.New("controller down")}
+	got, err = f.run(t)
+	assertFailed(t, err)
+	mustCheck(t, got, "fail", "postgres-availability", "error=controller down")
 }
 
 func copyTags(in map[string]string) map[string]string {
