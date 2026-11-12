@@ -70,11 +70,16 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 			respondWithError(w, err)
 			return
 		}
+		// A cluster key has no user. Resources it creates with no app stay
+		// unowned, which is how bootstrap and the controller test client
+		// provision. Any other caller needs an account.
 		if account == "" {
-			httphelper.Forbidden(w, "provisioning without an app requires a user account")
-			return
-		}
-		if !c.allowUnattachedOwner(ctx, account) {
+			tok := authz.TokenFromContext(ctx)
+			if tok == nil || !tok.ClusterKey {
+				httphelper.Forbidden(w, "provisioning without an app requires a user account")
+				return
+			}
+		} else if !c.allowUnattachedOwner(ctx, account) {
 			httphelper.Forbidden(w, "provisioning without an app requires an account you administer")
 			return
 		}
@@ -83,7 +88,7 @@ func (c *controllerAPI) ProvisionResource(ctx context.Context, w http.ResponseWr
 			return
 		}
 		owner = account
-		if c.tenancy != nil {
+		if owner != "" && c.tenancy != nil {
 			n, err := c.tenancy.CountResources(owner)
 			if err != nil {
 				respondWithError(w, err)
