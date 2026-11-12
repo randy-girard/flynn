@@ -663,6 +663,33 @@ func TestReplaceHostInfraJobsMovesAppToPulledImageRelease(t *testing.T) {
 	}
 }
 
+// A formation left at scale 1 by an earlier update is still active. The next
+// rollout only used to zero the app's current release, so the probe kept
+// waiting for a second discoverd that never registered.
+func TestReplaceHostInfraJobsZerosLeftoverFormations(t *testing.T) {
+	c := newFakeInfraController(t, "layer-old")
+	stale := &ct.Release{ID: "rel-stale", ArtifactIDs: []string{"art-older"}}
+	c.releases = append(c.releases, stale)
+	c.formations["rel-stale"] = &ct.Formation{
+		AppID: "app-flannel", ReleaseID: "rel-stale", Processes: map[string]int{"app": 1},
+	}
+	h := &fakeInfraHost{id: "n1", jobs: map[string]host.ActiveJob{"a": infraJob("a", "rel-old", "layer-old")}}
+	c.hosts = []*fakeInfraHost{h}
+
+	runHostInfraRollout(t, c, []hostInfraHost{h}, newInfraImage(t))
+
+	if n := c.formations["rel-stale"].Processes["app"]; n != 0 {
+		t.Fatalf("leftover formation app=%d, want 0", n)
+	}
+	if n := c.formations["rel-old"].Processes["app"]; n != 0 {
+		t.Fatalf("previous formation app=%d, want 0", n)
+	}
+	newID := c.created[0].ID
+	if f := c.formations[newID]; f.Processes["app"] != 1 {
+		t.Fatalf("new formation=%+v, want app=1", f)
+	}
+}
+
 // Jobs already on the pulled layers but tagged with the old release (left by
 // earlier updaters) must still move, or the old release restarts on reboot.
 func TestReplaceHostInfraJobsMovesJobOnNewLayersButOldRelease(t *testing.T) {

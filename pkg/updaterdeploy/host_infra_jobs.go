@@ -583,8 +583,35 @@ func (r *hostInfraRollout) finish(log log15.Logger) error {
 	if err := r.putFormation(r.oldRelease.ID, zero, r.oldFormationTags(), log); err != nil {
 		return err
 	}
+	if err := r.zeroOtherFormations(zero, log); err != nil {
+		return err
+	}
 	if log != nil {
 		log.Info("host-infra app moved to pulled image release", "app", r.appID, "release", r.newRelease.ID)
+	}
+	return nil
+}
+
+// zeroOtherFormations scales every release except the new one to zero.
+// finish already scales the app's previous release. An older release left at
+// scale 1 by an interrupted update stays active, and a full-strength probe
+// then waits for a second discoverd that never registers.
+func (r *hostInfraRollout) zeroOtherFormations(zero map[string]int, log log15.Logger) error {
+	releases, err := r.client.AppReleaseList(r.appID)
+	if err != nil {
+		return fmt.Errorf("list host-infra releases: %w", err)
+	}
+	for _, rel := range releases {
+		if rel == nil || rel.ID == "" || rel.ID == r.newRelease.ID {
+			continue
+		}
+		f, err := r.client.GetFormation(r.appID, rel.ID)
+		if err != nil || f == nil || processCount(f.Processes) == 0 {
+			continue
+		}
+		if err := r.putFormation(rel.ID, zero, f.Tags, log); err != nil {
+			return err
+		}
 	}
 	return nil
 }
