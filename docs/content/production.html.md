@@ -43,6 +43,9 @@ volumes, or detach a vdev.
 | `postgres-availability` | `GET /cluster/postgres-availability`. `manual` is `ok` in either tenancy mode. `system` with fewer than two registered hosts is `warn` in either tenancy mode and does not exit 1. `system` with two or more hosts is `ok`. The line does not query replication lag. A controller error is `fail` and is not treated as `manual`. Tenancy does not change the stored value. Set it with `flynn-host postgres:availability` or Cluster → Settings. |
 | `mysql-availability` | Same rule as `postgres-availability`, from `GET /cluster/mysql-availability`. Set it with `flynn-host mysql:availability` or Cluster → Settings. |
 | `redis-availability` | Same rule as `postgres-availability`, from `GET /cluster/redis-availability`. Set it with `flynn-host redis:availability` or Cluster → Settings. |
+| `mongodb-availability` | `GET /cluster/mongodb-availability`. `manual` is `ok` in either tenancy mode. `system` with fewer than three registered hosts is `warn` in either tenancy mode and does not exit 1. `system` with three or more hosts is `ok`. The line does not query replica-set health. A controller error is `fail` and is not treated as `manual`. Tenancy does not change the stored value. Set it with `flynn-host mongodb:availability` or Cluster → Settings. |
+| `kafka-availability` | Same rule as `mongodb-availability`, from `GET /cluster/kafka-availability`. Set it with `flynn-host kafka:availability` or Cluster → Settings. |
+| `clickhouse-availability` | Same rule as `mongodb-availability`, from `GET /cluster/clickhouse-availability`. Set it with `flynn-host clickhouse:availability` or Cluster → Settings. |
 | `backup` | No Postgres primary and no MongoDB, Kafka, or ClickHouse resource: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A Postgres primary or a MongoDB, Kafka, or ClickHouse resource whose last dump is missing or strictly older than 24h plus 1h is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources`, `GET /providers/mongodb/resources`, `GET /providers/kafka/resources`, and `GET /providers/clickhouse/resources`. A 404 on a provider means that engine has no resources. Any other list error fails the line. It reads `GET /tenant-backups` only when at least one counted resource exists. It does not dump. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
@@ -543,8 +546,11 @@ hosts uses the same path for platform Postgres. Only releases that already
 have `SINGLETON=false` are scaled to 3.
 
 MySQL instances (`mysql-<word>-<digits>`) do not set `SINGLETON`, so they stay
-at one process. MongoDB instances set `SINGLETON=true` and are not plugin
-apps, so the same promotion grows each of them to three peers.
+at one process. MongoDB, Kafka, and ClickHouse resource apps are not promoted
+by that scheduler path. `flynn-host mongodb:availability system` (and the Kafka
+and ClickHouse commands) grows each resource one member at a time, up to three
+when three hosts are registered. `manual` leaves the formation alone. Hosted
+and self-hosted clusters use the same path.
 
 ### App Export
 

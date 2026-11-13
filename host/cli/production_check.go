@@ -289,8 +289,11 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	addHostCapLine(add, hosts, hostsErr)
 	addSingletonCapLine(add, hosts, hostsErr)
 	addPostgresAvailabilityLine(add, api, hosts, hostsErr)
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mysql-availability", "/cluster/mysql-availability", "mysql:availability", "The MySQL page shows that.")
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "redis-availability", "/cluster/redis-availability", "redis:availability", "The Redis page shows the offset loss.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mysql-availability", "/cluster/mysql-availability", "mysql:availability", 2, "The MySQL page shows that.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "redis-availability", "/cluster/redis-availability", "redis:availability", 2, "The Redis page shows the offset loss.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mongodb-availability", "/cluster/mongodb-availability", "mongodb:availability", 3, "The MongoDB page says when failover is unavailable.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "kafka-availability", "/cluster/kafka-availability", "kafka:availability", 3, "The Kafka page says when failover is unavailable.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "clickhouse-availability", "/cluster/clickhouse-availability", "clickhouse:availability", 3, "The ClickHouse page says when failover is unavailable.")
 	now := time.Now()
 	if cfg.Now != nil {
 		now = cfg.Now()
@@ -903,10 +906,10 @@ func hostCapLabel(tags map[string]string) (string, bool) {
 }
 
 func addPostgresAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error) {
-	addEngineAvailabilityLine(add, api, hosts, hostsErr, "postgres-availability", "/cluster/postgres-availability", "postgres:availability", "The Postgres page shows that.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "postgres-availability", "/cluster/postgres-availability", "postgres:availability", 2, "The Postgres page shows that.")
 }
 
-func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error, check, path, command, protected string) {
+func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error, check, path, command string, minHosts int, protected string) {
 	var current ct.PostgresAvailability
 	if err := api.Get(path, &current); err != nil {
 		add(productionRow{
@@ -917,9 +920,13 @@ func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts
 	}
 	switch current.Mode {
 	case "manual":
+		manualAction := "Run flynn-host " + command + " system to create platform replicas. Tenancy does not change this."
+		if minHosts >= 3 {
+			manualAction = "Run flynn-host " + command + " system to grow each resource when three hosts are registered. Tenancy does not change this."
+		}
 		add(productionRow{
 			status: "ok", check: check, detail: "mode=manual",
-			action: "Run flynn-host " + command + " system to create platform replicas. Tenancy does not change this.",
+			action: manualAction,
 		})
 	case "system":
 		if hostsErr != nil {
@@ -930,18 +937,26 @@ func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts
 			return
 		}
 		n := len(hosts)
-		if n < 2 {
+		if n < minHosts {
+			action := "Add a second host before a platform replica can leave the primary. This does not fail the cluster."
+			if minHosts >= 3 {
+				action = "Add hosts until three are registered. Failover stays unavailable below that. This does not fail the cluster."
+			}
 			add(productionRow{
 				status: "warn", check: check,
 				detail: fmt.Sprintf("mode=system hosts=%d", n),
-				action: "Add a second host before a platform replica can leave the primary. This does not fail the cluster.",
+				action: action,
 			})
 			return
+		}
+		okAction := "A primary is protected only while its platform replica is caught up. " + protected
+		if minHosts >= 3 {
+			okAction = "A resource is protected only while three members are live on three hosts. " + protected
 		}
 		add(productionRow{
 			status: "ok", check: check,
 			detail: fmt.Sprintf("mode=system hosts=%d", n),
-			action: "A primary is protected only while its platform replica is caught up. " + protected,
+			action: okAction,
 		})
 	default:
 		add(productionRow{

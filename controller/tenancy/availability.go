@@ -18,7 +18,8 @@ func ValidatePostgresAvailability(mode string) error {
 }
 
 // ValidateAvailability accepts only system and manual. The same values apply
-// to Postgres, MySQL, and Redis. Tenancy mode is not a value.
+// to Postgres, MySQL, Redis, MongoDB, Kafka, and ClickHouse. Tenancy mode
+// is not a value.
 func ValidateAvailability(mode string) error {
 	switch mode {
 	case AvailabilitySystem, AvailabilityManual:

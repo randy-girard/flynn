@@ -60,7 +60,7 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 		}
 		*dst = s.tenancy
 		return nil
-	case "/cluster/postgres-availability", "/cluster/mysql-availability", "/cluster/redis-availability":
+	case "/cluster/postgres-availability", "/cluster/mysql-availability", "/cluster/redis-availability", "/cluster/mongodb-availability", "/cluster/kafka-availability", "/cluster/clickhouse-availability":
 		if s.availabilityErr != nil {
 			return s.availabilityErr
 		}
@@ -449,10 +449,9 @@ func assertProductionWidth(t *testing.T, got string) {
 	t.Helper()
 	plain := productionANSI.ReplaceAllString(got, "")
 	for _, line := range strings.Split(strings.TrimSuffix(plain, "\n"), "\n") {
-		// postgres-availability is the widest check name (21). singleton-cap
-		// fit in 100; the longer name adds eight columns.
-		if n := len([]rune(line)); n > 112 {
-			t.Fatalf("line is %d columns, want at most 112:\n%s", n, line)
+		// clickhouse-availability is the widest check name (23).
+		if n := len([]rune(line)); n > 116 {
+			t.Fatalf("line is %d columns, want at most 116:\n%s", n, line)
 		}
 	}
 }
@@ -527,6 +526,9 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
 		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
+		{status: "ok", check: "mongodb-availability", detail: "mode=manual", action: "mongodb:availability"},
+		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
+		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
 	})
@@ -540,7 +542,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -566,6 +568,9 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
 		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
+		{status: "ok", check: "mongodb-availability", detail: "mode=manual", action: "mongodb:availability"},
+		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
+		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
@@ -724,6 +729,9 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
 		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
+		{status: "ok", check: "mongodb-availability", detail: "mode=manual", action: "mongodb:availability"},
+		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
+		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -760,6 +768,9 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
 		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
 		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
+		{status: "ok", check: "mongodb-availability", detail: "mode=manual", action: "mongodb:availability"},
+		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
+		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -1134,7 +1145,7 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 11 {
+	if len(rows) != 14 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
@@ -1189,7 +1200,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
@@ -1343,6 +1354,31 @@ func TestProductionCheckPostgresAvailabilityIgnoresTenancy(t *testing.T) {
 	got, err = f.run(t)
 	assertFailed(t, err)
 	mustCheck(t, got, "fail", "postgres-availability", "error=controller down")
+	mustCheck(t, got, "fail", "mongodb-availability", "error=controller down")
+}
+
+func TestProductionCheckQuorumAvailabilityNeedsThreeHosts(t *testing.T) {
+	two := []*cluster.Host{hostCap("host-a", "4"), hostCap("host-b", "4")}
+	three := []*cluster.Host{hostCap("host-a", "4"), hostCap("host-b", "4"), hostCap("host-c", "4")}
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		f := &productionFixture{tenancy: ct.TenancySettings{Mode: mode}, availability: "system", hosts: two}
+		got, err := f.run(t)
+		assertPassed(t, err)
+		mustCheck(t, got, "ok", "postgres-availability", "mode=system hosts=2")
+		mustCheck(t, got, "warn", "mongodb-availability", "mode=system hosts=2")
+		mustCheck(t, got, "warn", "kafka-availability", "mode=system hosts=2")
+		mustCheck(t, got, "warn", "clickhouse-availability", "mode=system hosts=2")
+	}
+	f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}, availability: "system", hosts: three}
+	got, err := f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "ok", "mongodb-availability", "mode=system hosts=3")
+	mustCheck(t, got, "ok", "kafka-availability", "mode=system hosts=3")
+	mustCheck(t, got, "ok", "clickhouse-availability", "mode=system hosts=3")
+	f = &productionFixture{tenancy: ct.TenancySettings{Mode: "hosted"}, availability: "manual", hosts: two}
+	got, err = f.run(t)
+	assertPassed(t, err)
+	mustCheck(t, got, "ok", "mongodb-availability", "mode=manual")
 }
 
 func copyTags(in map[string]string) map[string]string {

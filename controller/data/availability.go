@@ -52,8 +52,51 @@ func (r *TenancyRepo) SetRedisAvailability(mode string) error {
 	return r.setAvailabilityColumn("redis_continuous_availability", mode)
 }
 
+// GetMongoDBAvailability reads cluster_settings.mongodb_continuous_availability.
+// A missing row is manual. It is not inferred from tenancy_mode.
+func (r *TenancyRepo) GetMongoDBAvailability() (string, error) {
+	return r.getAvailabilityColumn("mongodb_continuous_availability")
+}
+
+// SetMongoDBAvailability stores system or manual. It does not change tenancy_mode.
+func (r *TenancyRepo) SetMongoDBAvailability(mode string) error {
+	return r.setAvailabilityColumn("mongodb_continuous_availability", mode)
+}
+
+// GetKafkaAvailability reads cluster_settings.kafka_continuous_availability.
+// A missing row is manual. It is not inferred from tenancy_mode.
+func (r *TenancyRepo) GetKafkaAvailability() (string, error) {
+	return r.getAvailabilityColumn("kafka_continuous_availability")
+}
+
+// SetKafkaAvailability stores system or manual. It does not change tenancy_mode.
+func (r *TenancyRepo) SetKafkaAvailability(mode string) error {
+	return r.setAvailabilityColumn("kafka_continuous_availability", mode)
+}
+
+// GetClickHouseAvailability reads cluster_settings.clickhouse_continuous_availability.
+// A missing row is manual. It is not inferred from tenancy_mode.
+func (r *TenancyRepo) GetClickHouseAvailability() (string, error) {
+	return r.getAvailabilityColumn("clickhouse_continuous_availability")
+}
+
+// SetClickHouseAvailability stores system or manual. It does not change tenancy_mode.
+func (r *TenancyRepo) SetClickHouseAvailability(mode string) error {
+	return r.setAvailabilityColumn("clickhouse_continuous_availability", mode)
+}
+
+func availabilityColumn(column string) bool {
+	switch column {
+	case "mysql_continuous_availability", "redis_continuous_availability",
+		"mongodb_continuous_availability", "kafka_continuous_availability", "clickhouse_continuous_availability":
+		return true
+	default:
+		return false
+	}
+}
+
 func (r *TenancyRepo) getAvailabilityColumn(column string) (string, error) {
-	if column != "mysql_continuous_availability" && column != "redis_continuous_availability" {
+	if !availabilityColumn(column) {
 		return "", tenancy.ValidateAvailability("nope")
 	}
 	var mode string
@@ -71,7 +114,7 @@ func (r *TenancyRepo) getAvailabilityColumn(column string) (string, error) {
 }
 
 func (r *TenancyRepo) setAvailabilityColumn(column, mode string) error {
-	if column != "mysql_continuous_availability" && column != "redis_continuous_availability" {
+	if !availabilityColumn(column) {
 		return tenancy.ValidateAvailability("nope")
 	}
 	if err := tenancy.ValidateAvailability(mode); err != nil {

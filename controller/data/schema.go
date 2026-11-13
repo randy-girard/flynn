@@ -1443,6 +1443,21 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_redis_availability_check CHECK (redis_continuous_availability IN ('system', 'manual'))`,
 		`UPDATE cluster_settings SET redis_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
 	)
+	// MongoDB, Kafka, and ClickHouse continuous availability. Same default
+	// as Postgres: manual, then system only where tenancy is already hosted.
+	// Later tenancy changes do not rewrite these columns. The grow path does
+	// not read tenancy_mode.
+	migrations.Add(87,
+		`ALTER TABLE cluster_settings ADD COLUMN mongodb_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_mongodb_availability_check CHECK (mongodb_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET mongodb_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+		`ALTER TABLE cluster_settings ADD COLUMN kafka_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_kafka_availability_check CHECK (kafka_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET kafka_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+		`ALTER TABLE cluster_settings ADD COLUMN clickhouse_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_clickhouse_availability_check CHECK (clickhouse_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET clickhouse_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

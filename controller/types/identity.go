@@ -33,6 +33,27 @@ type RedisAvailability struct {
 	Mode string `json:"mode"`
 }
 
+// MongoDBAvailability is cluster_settings.mongodb_continuous_availability.
+// system grows each resource one member at a time up to three on three hosts.
+// manual does not. Tenancy mode does not change it after the initial default.
+type MongoDBAvailability struct {
+	Mode string `json:"mode"`
+}
+
+// KafkaAvailability is cluster_settings.kafka_continuous_availability.
+// system grows each resource one member at a time up to three on three hosts.
+// manual does not. Tenancy mode does not change it after the initial default.
+type KafkaAvailability struct {
+	Mode string `json:"mode"`
+}
+
+// ClickHouseAvailability is cluster_settings.clickhouse_continuous_availability.
+// system grows each resource one member at a time up to three on three hosts.
+// manual does not. Tenancy mode does not change it after the initial default.
+type ClickHouseAvailability struct {
+	Mode string `json:"mode"`
+}
+
 // AppDomain is the hostname suffix for apps. Domain is the operator override;
 // empty means new apps use ClusterDomain (the domain Flynn itself runs on).
 // Effective is the suffix actually appended to app names.

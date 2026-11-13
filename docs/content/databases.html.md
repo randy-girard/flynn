@@ -49,10 +49,10 @@ and `$APP-$TYPE.discoverd` do not resolve from user jobs.
 | platform `postgres` app | PostgreSQL 16 (PostGIS, pgRouting, TimescaleDB) | HA: primary + synchronous replica + async chain. **Not** `addons:create postgres`. System apps only |
 | [`postgres`](databases/postgres.md) | PostgreSQL 16 (plugin) | One node, own app and volume. `flynn addons:create postgres` after `flynn-host plugin:install postgres`. Not sirenia |
 | [`mysql`](databases/mysql.md) | MariaDB 10.11 | One node, own app and volume. Optional async follower. A third host does not add peers |
-| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | One node, own app and volume. `mongodb:scale` grows that set (1–7). Three peers when the cluster has three hosts |
+| [`mongodb`](databases/mongodb.md) | MongoDB 7.0 | One node, own app and volume. `mongodb:availability system` grows that set one member at a time up to three on three hosts |
 | [`redis`](databases/redis.md) | Redis (Ubuntu 24.04 package) | Single process; AOF on a volume, no replicas, not in cluster backup |
-| [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | Three brokers (one on singleton); TLS to clients by default |
-| [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | Three replicas (one on singleton) |
+| [`kafka`](databases/kafka.md) | Apache Kafka 3.9 (KRaft, no ZooKeeper) | One broker until `kafka:scale` or `kafka:availability system`. TLS to clients by default |
+| [`clickhouse`](databases/clickhouse.md) | ClickHouse with ClickHouse Keeper | One replica until `clickhouse:scale` or `clickhouse:availability system` |
 
 The tenant Postgres plugin, MySQL, Redis, Kafka, and ClickHouse do not use the
 sirenia state machine described below. MongoDB runs sirenia inside each
@@ -132,9 +132,12 @@ sizes with `sudo flynn-host db-runtime:allow-custom`.
 On a single-host cluster, the **platform** Postgres appliance runs one peer
 (`SINGLETON=true`). When a third host joins, the scheduler promotes that
 appliance to a three-peer set. Tenant MySQL stays one node per resource; a
-follower is a separate async replica. Each tenant MongoDB resource stays one
-node until `mongodb:scale`, except on three or more hosts, where the scheduler
-promotes that resource to three peers. Tenant Postgres from the plugin stays
+follower is a separate async replica. Tenant MongoDB, Kafka, and ClickHouse
+start at one member. `flynn-host mongodb:availability system` (and the Kafka
+and ClickHouse commands) grows each resource one member at a time up to three
+when three hosts are registered. The scheduler does not do that. `manual` is
+the self-hosted default and leaves scale to the operator. Hosted and
+self-hosted clusters use the same path. Tenant Postgres from the plugin stays
 one node per resource; resize is follow, wait, promote.
 
 ## External TLS access

@@ -481,8 +481,12 @@ compiled-in list.
   Settings. Followers apply to Postgres, MySQL, and Redis only. MongoDB,
   ClickHouse, and Kafka have no followers: each resource is one cluster whose
   node count changes with `flynn mongodb:scale` (1–7), `flynn clickhouse:scale`
-  (1–9), or `flynn kafka:scale` (1–9). Scale-down drains the node first; nodes
-  rejoin automatically when a host returns or the job is rescheduled. Their
+  (1–9), or `flynn kafka:scale` (1–9). `flynn-host mongodb:availability system`
+  (and `kafka:availability`, `clickhouse:availability`) grows each resource one
+  member at a time up to three when three hosts are registered. `manual` leaves
+  scale to the operator. Hosted and self-hosted use the same path. Scale-down
+  drains the node first; a down member rejoins on its existing volume when the
+  host returns. Their
   topology changes appear as events `P19` (node added), `P20` (node removed),
   and `P21` (node rejoined); MongoDB adds `P22` (primary elected) and Kafka
   adds `P22` (active controller changed). Their pages show Overview (with

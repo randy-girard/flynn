@@ -63,13 +63,25 @@ number of brokers with:
 flynn kafka:scale <n> [<resource>]
 ```
 
-`<n>` is 1 to 9. Scaling down drains each removed broker first: its
-partitions are reassigned to the remaining brokers and the broker is
-unregistered before it stops. A scale finishes with a one-at-a-time broker
-roll; each broker keeps its volume and node id. A broker rejoins automatically
-when its Flynn host returns or its job is rescheduled. The dashboard records
-topology changes as events `P19` (node added), `P20` (node removed), `P21`
-(node rejoined), and `P22` (active controller changed).
+`<n>` is 1 to 9. Each new broker joins before the next one starts. Replication
+factor and `min.insync.replicas` follow the brokers that have joined:
+`min(brokers, 3)` and one less than that. RF 3 and `min.insync.replicas` 2 are
+used only when three brokers are in. A topic create that asks for RF 3 while
+two brokers are up fails. The plugin does not set producer `acks`.
+`min.insync.replicas` applies only to `acks=all`. Two brokers keep one
+controller voter, not two.
+
+`flynn-host kafka:availability` is `manual` or `system`, with the same default
+and the same path on hosted and self-hosted clusters as
+[MongoDB](mongodb.md#scaling-the-cluster). `system` does not shrink when set
+back to `manual`. On one or two hosts failover is unavailable. A down broker
+keeps its volume and is not given a new id. Scaling down drains each removed
+broker first. A scale finishes with a one-at-a-time broker roll; each broker
+keeps its volume and node id. A broker rejoins automatically when its Flynn
+host returns or its job is rescheduled. The dashboard records topology changes
+as events `P19` (node added), `P20` (node removed), `P21` (node rejoined), and
+`P22` (active controller changed). Manual scale may place more than one broker
+on a host.
 
 ### Connecting to the cluster
 

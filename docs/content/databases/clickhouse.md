@@ -96,10 +96,21 @@ flynn clickhouse:scale <nodes> [<resource>]
 ```
 
 `<nodes>` is 1 to 9; an odd count is recommended because every node is a
-Keeper voter. Scaling down drains the highest node ids and drops their
-replicas with `SYSTEM DROP REPLICA` before they stop. A node whose job is lost
-comes back with the same id and volume. Resources created before embedded
-Keeper cannot scale; `clickhouse:scale` returns an error for them.
+Keeper voter. Each new node becomes a committed Keeper voter before the next
+one starts. A two-node set stops replicated writes until the missing node
+returns. Only `Replicated` databases and `Replicated*` table engines replicate.
+
+`flynn-host clickhouse:availability` is `manual` or `system`, with the same
+default and the same path on hosted and self-hosted clusters as
+[MongoDB](mongodb.md#scaling-the-cluster). `system` does not shrink when set
+back to `manual`. On one or two hosts failover is unavailable. A down node
+keeps its volume and is not given a new id. Reconcile does not drop a Keeper
+voter while live members are below the formation or without a Keeper majority.
+Scaling down drains the highest node ids and drops their replicas with
+`SYSTEM DROP REPLICA` before they stop. A node whose job is lost comes back
+with the same id and volume. Resources created before embedded Keeper cannot
+scale; `clickhouse:scale` returns an error for them. Manual scale may place
+more than one node on a host.
 
 The plugin reconciles every 30 seconds and removes Keeper voters that stay
 missing. The dashboard records topology changes as events `P19` (node added),

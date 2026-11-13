@@ -82,17 +82,25 @@ flynn mongodb:scale <n> [<resource>]
 `<n>` is 1 to 7. An even count is accepted with a warning: it tolerates no
 more failures than the odd count below it.
 
-On a Flynn cluster with fewer than three hosts, a one-node resource does not
-fail over. On three or more hosts, the scheduler promotes each resource to
-three peers (a new release with `SINGLETON=false`, then a scale to 3). That
-is this resource's replica set, not a shared set other tenants join. Creating
-a resource on a cluster that already has three hosts can overlap that
-promotion, so the first writes can land while the primary is restarting.
-`mongodb:scale` is how you grow the set when the cluster has fewer than three
-hosts.
+`flynn-host mongodb:availability` is `manual` or `system`. Hosted clusters
+start on `system`. Self-hosted clusters start on `manual`. Either cluster can
+flip it, and `tenancy:mode` does not change it afterward. The same code runs
+for a large self-hosted cluster.
+
+`manual` starts one member and leaves the formation to `mongodb:scale`.
+`system` grows each resource one member at a time up to three when three hosts
+are registered, and up to the host count on a smaller cluster. It does not
+shrink when set back to `manual`. On one or two hosts failover is unavailable.
+A set is protected only while three members are live on three hosts. Losing one
+of those hosts leaves a majority of two. Two members elect only while both are
+up, because each member's vote defaults to 1.
+
+The scheduler does not promote a tenant MongoDB app. Provision returns after
+the first member is scheduled. The plugin adds the next member only after the
+previous voter is committed, so create does not overlap an env flip.
 
 * Scaling up from one node first deploys a release with `SINGLETON=false`,
-  which briefly restarts the primary.
+  which briefly restarts the primary, then adds one member at a time.
 * Scaling from more than one node back to 1 is rejected.
 * Scaling down removes only async peers, never the primary or the sync peer.
   Each removed node is taken out of the replica set with `replSetReconfig`

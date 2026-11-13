@@ -16,6 +16,35 @@ func init() {
 	Register("redis:availability", func(args *docopt.Args) error {
 		return runEngineAvailability(args, "redis", "/cluster/redis-availability")
 	}, engineAvailabilityUsage("redis", "Redis"))
+	Register("mongodb:availability", func(args *docopt.Args) error {
+		return runEngineAvailability(args, "mongodb", "/cluster/mongodb-availability")
+	}, quorumAvailabilityUsage("mongodb", "MongoDB"))
+	Register("kafka:availability", func(args *docopt.Args) error {
+		return runEngineAvailability(args, "kafka", "/cluster/kafka-availability")
+	}, quorumAvailabilityUsage("kafka", "Kafka"))
+	Register("clickhouse:availability", func(args *docopt.Args) error {
+		return runEngineAvailability(args, "clickhouse", "/cluster/clickhouse-availability")
+	}, quorumAvailabilityUsage("clickhouse", "ClickHouse"))
+}
+
+func quorumAvailabilityUsage(engine, title string) string {
+	return fmt.Sprintf(`
+usage: flynn-host %s:availability [<mode>]
+
+Show or set %s continuous availability using the local cluster key.
+manual starts one member and leaves %s:scale to the operator. system grows
+each resource one member at a time up to three when three hosts are
+registered, and up to the host count on a smaller cluster. It does not
+shrink when set back to manual. Hosted and self-hosted clusters use the
+same path. Tenancy mode does not change this value. This does not deploy
+the plugin, restart user apps, or place members with flynn-avoid-host-ids.
+
+Examples:
+
+    $ flynn-host %s:availability
+    $ flynn-host %s:availability system
+    $ flynn-host %s:availability manual
+`, engine, title, engine, engine, engine, engine)
 }
 
 func engineAvailabilityUsage(engine, title string) string {

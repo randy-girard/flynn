@@ -485,6 +485,9 @@ func runPluginGroupInstall(args *docopt.Args) error {
 			{"postgres", "/cluster/postgres-availability", "postgres"},
 			{"mysql", "/cluster/mysql-availability", "mysql"},
 			{"redis", "/cluster/redis-availability", "redis"},
+			{"mongodb", "/cluster/mongodb-availability", "mongodb"},
+			{"kafka", "/cluster/kafka-availability", "kafka"},
+			{"clickhouse", "/cluster/clickhouse-availability", "clickhouse"},
 		} {
 			if err := setHostedEngineAvailability(v, engine.label, engine.path, engine.provider); err != nil {
 				return fmt.Errorf("plugin group %s: %w", group.Name, err)

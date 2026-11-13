@@ -77,3 +77,105 @@ func (c *controllerAPI) PutRedisAvailability(ctx context.Context, w http.Respons
 	}
 	c.GetRedisAvailability(ctx, w, req)
 }
+
+func (c *controllerAPI) GetMongoDBAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	mode, err := c.tenancy.GetMongoDBAvailability()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, ct.MongoDBAvailability{Mode: mode})
+}
+
+func (c *controllerAPI) PutMongoDBAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	var body ct.MongoDBAvailability
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if err := tenancy.ValidateAvailability(body.Mode); err != nil {
+		httphelper.ValidationError(w, "mode", err.Error())
+		return
+	}
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	if err := c.tenancy.SetMongoDBAvailability(body.Mode); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	c.GetMongoDBAvailability(ctx, w, req)
+}
+
+func (c *controllerAPI) GetKafkaAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	mode, err := c.tenancy.GetKafkaAvailability()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, ct.KafkaAvailability{Mode: mode})
+}
+
+func (c *controllerAPI) PutKafkaAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	var body ct.KafkaAvailability
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if err := tenancy.ValidateAvailability(body.Mode); err != nil {
+		httphelper.ValidationError(w, "mode", err.Error())
+		return
+	}
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	if err := c.tenancy.SetKafkaAvailability(body.Mode); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	c.GetKafkaAvailability(ctx, w, req)
+}
+
+func (c *controllerAPI) GetClickHouseAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	mode, err := c.tenancy.GetClickHouseAvailability()
+	if err != nil {
+		respondWithError(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, ct.ClickHouseAvailability{Mode: mode})
+}
+
+func (c *controllerAPI) PutClickHouseAvailability(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	var body ct.ClickHouseAvailability
+	if err := httphelper.DecodeJSON(req, &body); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if err := tenancy.ValidateAvailability(body.Mode); err != nil {
+		httphelper.ValidationError(w, "mode", err.Error())
+		return
+	}
+	if c == nil || c.tenancy == nil {
+		respondWithError(w, data.ErrNotFound)
+		return
+	}
+	if err := c.tenancy.SetClickHouseAvailability(body.Mode); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	c.GetClickHouseAvailability(ctx, w, req)
+}
