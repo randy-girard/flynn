@@ -328,7 +328,7 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		}
 		return rkCluster, "", ""
 	case "cluster":
-		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "postgres-availability") {
+		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "postgres-availability" || parts[1] == "mysql-availability" || parts[1] == "redis-availability") {
 			if m == http.MethodGet || m == http.MethodHead {
 				return rkAnyAuth, "", ""
 			}

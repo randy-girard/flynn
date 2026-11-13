@@ -1432,6 +1432,17 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_pg_availability_check CHECK (postgres_continuous_availability IN ('system', 'manual'))`,
 		`UPDATE cluster_settings SET postgres_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
 	)
+	// MySQL and Redis continuous availability. Same default as Postgres:
+	// manual, then system only where tenancy is already hosted. Later
+	// tenancy changes do not rewrite these columns.
+	migrations.Add(86,
+		`ALTER TABLE cluster_settings ADD COLUMN mysql_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_mysql_availability_check CHECK (mysql_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET mysql_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+		`ALTER TABLE cluster_settings ADD COLUMN redis_continuous_availability text NOT NULL DEFAULT 'manual'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_redis_availability_check CHECK (redis_continuous_availability IN ('system', 'manual'))`,
+		`UPDATE cluster_settings SET redis_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

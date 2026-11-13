@@ -544,3 +544,39 @@ func (s *S) TestPostgresAvailabilityRoundTrip(c *C) {
 	c.Assert(err, IsNil)
 	c.Assert(got, Equals, "manual")
 }
+
+func (s *S) TestMySQLAndRedisAvailabilityRoundTrip(c *C) {
+	repo := NewTenancyRepo(s.db)
+	for _, engine := range []struct {
+		get func() (string, error)
+		set func(string) error
+	}{
+		{repo.GetMySQLAvailability, repo.SetMySQLAvailability},
+		{repo.GetRedisAvailability, repo.SetRedisAvailability},
+	} {
+		got, err := engine.get()
+		c.Assert(err, IsNil)
+		c.Assert(got, Equals, "manual")
+
+		c.Assert(engine.set("system"), IsNil)
+		got, err = engine.get()
+		c.Assert(err, IsNil)
+		c.Assert(got, Equals, "system")
+
+		c.Assert(repo.SetSettings("hosted", nil), IsNil)
+		got, err = engine.get()
+		c.Assert(err, IsNil)
+		c.Assert(got, Equals, "system")
+
+		c.Assert(engine.set("manual"), IsNil)
+		c.Assert(repo.SetSettings("self_hosted", nil), IsNil)
+		got, err = engine.get()
+		c.Assert(err, IsNil)
+		c.Assert(got, Equals, "manual")
+
+		c.Assert(engine.set("nope"), NotNil)
+		got, err = engine.get()
+		c.Assert(err, IsNil)
+		c.Assert(got, Equals, "manual")
+	}
+}

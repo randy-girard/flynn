@@ -11,11 +11,20 @@ const (
 
 // ValidatePostgresAvailability accepts only system and manual.
 func ValidatePostgresAvailability(mode string) error {
+	if err := ValidateAvailability(mode); err != nil {
+		return fmt.Errorf("postgres availability must be system or manual")
+	}
+	return nil
+}
+
+// ValidateAvailability accepts only system and manual. The same values apply
+// to Postgres, MySQL, and Redis. Tenancy mode is not a value.
+func ValidateAvailability(mode string) error {
 	switch mode {
 	case AvailabilitySystem, AvailabilityManual:
 		return nil
 	default:
-		return fmt.Errorf("postgres availability must be system or manual")
+		return fmt.Errorf("availability must be system or manual")
 	}
 }
 

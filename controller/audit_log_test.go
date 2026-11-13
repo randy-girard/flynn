@@ -153,6 +153,8 @@ func TestAuditHTTPAction(t *testing.T) {
 		{"PUT", "/cluster/runtime-settings", "cluster.runtime_settings.set", ""},
 		{"PUT", "/cluster/app-domain", "cluster.app_domain.set", ""},
 		{"PUT", "/cluster/postgres-availability", "cluster.postgres_availability.set", ""},
+		{"PUT", "/cluster/mysql-availability", "cluster.mysql_availability.set", ""},
+		{"PUT", "/cluster/redis-availability", "cluster.redis_availability.set", ""},
 		{"PUT", "/github/app", "github.app.set", ""},
 	} {
 		action, ref, ok := auditHTTPAction(tc.method, tc.path)
