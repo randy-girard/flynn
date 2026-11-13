@@ -160,6 +160,35 @@ func TestWaitAppReleaseKeepsPollingAfterStreamEnds(t *testing.T) {
 	}
 }
 
+func TestWaitAppReleaseBlockingPollDoesNotDropCompletion(t *testing.T) {
+	// flynn-host update polls GetDeployment on the same goroutine that reads
+	// the deployment event stream. Stopping the platform Postgres primary
+	// makes that poll block inside the controller. The completion event is
+	// then never read, and the update sits until the 30m stopWait.
+	events := make(chan *ct.DeploymentEvent, 1)
+	stop := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- waitAppRelease(events, func() (*ct.Deployment, error) {
+			<-release
+			return &ct.Deployment{Status: "pending"}, nil
+		}, nil, stop, 10*time.Millisecond, nil)
+	}()
+	time.Sleep(40 * time.Millisecond)
+	events <- &ct.DeploymentEvent{Status: "complete"}
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		close(stop)
+		t.Fatal("a blocking GetDeployment must not prevent the completion event from finishing the wait")
+	}
+}
+
 func TestWaitAppReleaseReportsProgress(t *testing.T) {
 	events := make(chan *ct.DeploymentEvent, 2)
 	events <- &ct.DeploymentEvent{Status: "running", JobType: "postgres", Progress: "replication sync: WAL caught up"}

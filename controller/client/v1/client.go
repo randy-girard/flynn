@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/inconshreveable/log15"
@@ -783,6 +784,9 @@ func deploymentFinished(d *ct.Deployment) bool {
 // waitAppRelease waits for a deployment to finish. It watches the event
 // stream and also polls GetDeployment so a stalled SSE connection after a
 // postgres restart cannot hang flynn-host update until stopWait (30m).
+// The poll runs beside the stream read: GetDeployment blocks while the
+// platform Postgres primary is down, and doing that poll on the stream
+// goroutine drops the completion event.
 func logDeployProgress(e *ct.DeploymentEvent) {
 	if e == nil {
 		return
@@ -808,6 +812,26 @@ func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deploymen
 		}
 		return errors.New("deployment failed")
 	}
+	// One poll at a time, off the select. A GetDeployment that blocks on a
+	// down primary must not stop this loop from reading the event stream.
+	polls := make(chan *ct.Deployment, 1)
+	var polling int32
+	launchPoll := func() {
+		if !atomic.CompareAndSwapInt32(&polling, 0, 1) {
+			return
+		}
+		go func() {
+			dep, err := get()
+			atomic.StoreInt32(&polling, 0)
+			if err != nil || dep == nil {
+				return
+			}
+			select {
+			case polls <- dep:
+			default:
+			}
+		}()
+	}
 	for {
 		select {
 		case e, ok := <-events:
@@ -828,17 +852,15 @@ func waitAppRelease(events <-chan *ct.DeploymentEvent, get func() (*ct.Deploymen
 					onProgress(e)
 				}
 			}
-		case <-tick.C:
-			dep, err := get()
-			if err != nil {
-				continue
-			}
+		case dep := <-polls:
 			if dep.Status == "failed" {
 				return failed()
 			}
 			if deploymentFinished(dep) {
 				return nil
 			}
+		case <-tick.C:
+			launchPoll()
 		case <-stopWait:
 			return errors.New("deploy wait cancelled")
 		}
