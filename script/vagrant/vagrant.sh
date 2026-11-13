@@ -41,6 +41,10 @@ else
   set --
 fi
 export FLYNN_VAGRANT_YES FLYNN_VAGRANT_FORCE_BUILD FLYNN_VAGRANT_SKIP_LAPTOP_CONNECT
+# Listing machines from a pipeline only exports the raised node count in that
+# subshell. Pin here so chaos reports and health checks see every dev-nodeN.
+pin_dev_nodes() { flynn_vagrant_pin_nodes; }
+pin_dev_nodes
 if [[ "${FLYNN_VAGRANT_YES}" == "1" ]]; then
   export DEBIAN_FRONTEND=noninteractive
   export FLYNN_SKIP_UPDATE_CHECK=1
@@ -135,9 +139,9 @@ dev_vm_state() {
   machine_state "${DEV_MACHINE}"
 }
 
-# pin_dev_nodes / list_dev_machines keep extra hosts from .vagrant-dev
-# (machines/dev-nodeN). Shared implementation lives in lib/lifecycle.sh.
-pin_dev_nodes() { flynn_vagrant_pin_nodes; }
+# list_dev_machines keeps extra hosts from .vagrant-dev (machines/dev-nodeN).
+# Shared implementation lives in lib/lifecycle.sh. pin_dev_nodes is defined
+# above so it runs in this shell before commands are dispatched.
 list_dev_machines() { flynn_vagrant_list_machines; }
 
 # reload_dev_machines reboots VMs already in this env. It does not create

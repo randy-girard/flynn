@@ -899,6 +899,53 @@ if grep -Fq "<db>" <<<"${html}"; then
   echo "chaos HTML report must escape failure messages" >&2
   exit 1
 fi
+# The parent shell defaults FLYNN_DEV_NODES to 1. pin_nodes only raises that
+# count inside the process substitution that lists machines, so chaos reports
+# and MIN_HOSTS stay at 1 on a three-node cluster. vagrant.sh must pin in the
+# parent before any command runs.
+if ! grep -Eq '^pin_dev_nodes$' "${script}"; then
+  echo "vagrant.sh must call pin_dev_nodes in the parent shell before dispatching commands" >&2
+  exit 1
+fi
+# While vagrant halt holds the global lock, vagrant status reports every
+# machine unknown, so the running-node list is empty. The check must still
+# use another pinned node, and it must SSH directly so the sample is not
+# stuck behind that lock.
+fallback="$(bash -c 'set -euo pipefail
+flynn_vagrant_running_cluster_nodes() { :; }
+flynn_vagrant_cluster_nodes() { printf "dev-node1\ndev-node2\ndev-node3\n"; }
+source "$1"
+chaos_check_node dev-node1 || true' _ "${mod}/lib/chaos.sh")"
+if [[ "${fallback}" != "dev-node2" ]]; then
+  echo "chaos_check_node must fall back to another pinned node when vagrant status is locked (got: ${fallback:-empty})" >&2
+  exit 1
+fi
+direct_dir="$(mktemp -d)"
+mkdir -p "${direct_dir}/machines/dev-node2/virtualbox"
+touch "${direct_dir}/machines/dev-node2/virtualbox/private_key"
+direct="$(VAGRANT_DOTFILE_PATH="${direct_dir}" bash -c 'set -euo pipefail
+SRC=/src
+flynn_vagrant_running_cluster_nodes() { :; }
+flynn_vagrant_cluster_nodes() { printf "dev-node1\ndev-node2\n"; }
+flynn_vagrant_node_ip() { echo 192.168.57.21; }
+flynn_vagrant_cluster_domain() { echo d; }
+flynn_vagrant_get_nodes() { echo 3; }
+ssh() { printf "ssh %s\n" "$*"; echo "ok cluster: up"; }
+run_as_root_on() { echo "used-vagrant-ssh"; return 1; }
+source "$1"
+chaos_health dev-node1 || true
+printf "%s\n" "${CHAOS_HEALTH_OUT}"' _ "${mod}/lib/chaos.sh")"
+rm -rf "${direct_dir}"
+if grep -Fq "used-vagrant-ssh" <<<"${direct}"; then
+  echo "chaos_health must not use vagrant ssh while another vagrant command can hold the lock" >&2
+  printf '%s\n' "${direct}" >&2
+  exit 1
+fi
+if ! grep -Fq "192.168.57.21" <<<"${direct}" || ! grep -Fq "ok cluster: up" <<<"${direct}"; then
+  echo "chaos_health must SSH to another node when the faulted node is the only one vagrant status can see" >&2
+  printf '%s\n' "${direct}" >&2
+  exit 1
+fi
 # The background monitor must not sample from a node under host-restart or
 # node-reboot: its local discoverd and router are down, so every check fails.
 chaos_stubs='set -euo pipefail; SRC=/src
@@ -929,6 +976,27 @@ done
 rm -rf "${mon_dir}"
 if [[ "$(grep -cF 'rm -f "${CHAOS_RUN_DIR}/avoid"' "${mod}/lib/chaos.sh")" -lt 2 ]]; then
   echo "chaos_cluster must clear the avoid file at each round start and on recovery" >&2
+  exit 1
+fi
+if ! grep -Fq 'chaos_wait_healthy "round ${i}" "${timeout}" "${avoid_node}"' "${mod}/lib/chaos.sh"; then
+  echo "chaos must wait for health from a node other than the one in avoid" >&2
+  exit 1
+fi
+min_hosts="$(bash -c 'set -euo pipefail
+SRC=/src
+FLYNN_DEV_NODES=1
+flynn_vagrant_pin_nodes() { export FLYNN_DEV_NODES=3; }
+flynn_vagrant_get_nodes() { printf "%s" "${FLYNN_DEV_NODES}"; }
+flynn_vagrant_running_cluster_nodes() { echo dev-node2; }
+flynn_vagrant_node_ip() { echo 10.0.0.2; }
+flynn_vagrant_cluster_domain() { echo d; }
+run_as_root_on() { printf "%s\n" "$2"; echo "ok cluster: x"; }
+source "$1"
+chaos_health || true
+printf "%s\n" "${CHAOS_HEALTH_OUT}"' _ "${mod}/lib/chaos.sh")"
+if ! grep -Fq "MIN_HOSTS=3" <<<"${min_hosts}"; then
+  echo "chaos_health must pin the node count before MIN_HOSTS (got a 1-node default on a 3-node cluster)" >&2
+  printf '%s\n' "${min_hosts}" >&2
   exit 1
 fi
 # A check that cannot run (node unreachable) must still say why.

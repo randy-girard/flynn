@@ -8,7 +8,10 @@
 CHAOS_ALL_FAULTS="system-job plugin-job datastore-primary datastore-replica tenant-job host-restart node-reboot"
 CHAOS_HEALTH_OUT=""
 
-# chaos_check_node prints the first running cluster node other than $1.
+# chaos_check_node prints a cluster node other than $1 to sample from.
+# vagrant status takes a global lock, so during halt/up every machine looks
+# unknown and the running list is empty. Fall back to the pinned node list
+# so the sample still runs on a host that is not the one being rebooted.
 chaos_check_node() {
   local avoid="${1:-}" name
   while IFS= read -r name; do
@@ -17,19 +20,50 @@ chaos_check_node() {
       return 0
     fi
   done < <(flynn_vagrant_running_cluster_nodes)
+  while IFS= read -r name; do
+    if [[ -n "${name}" && "${name}" != "${avoid}" ]]; then
+      echo "${name}"
+      return 0
+    fi
+  done < <(flynn_vagrant_cluster_nodes)
   return 1
+}
+
+# chaos_exec_on runs a root command on a node. Direct SSH uses the host-only
+# address and the Vagrant private key so a health sample is not blocked by
+# the vagrant lock held by halt or up of another node.
+chaos_exec_on() {
+  local vm="$1" cmd="$2"
+  local key="" ip
+  if [[ -n "${VAGRANT_DOTFILE_PATH:-}" ]]; then
+    key="${VAGRANT_DOTFILE_PATH}/machines/${vm}/virtualbox/private_key"
+  fi
+  if [[ -n "${key}" && -f "${key}" ]]; then
+    ip="$(flynn_vagrant_node_ip "${vm}")"
+    ssh -i "${key}" \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=8 \
+      -o BatchMode=yes \
+      "vagrant@${ip}" "sudo -n bash -lc $(printf '%q' "${cmd}")"
+    return
+  fi
+  run_as_root_on "${vm}" "${cmd}"
 }
 
 # chaos_health takes one health sample into CHAOS_HEALTH_OUT.
 chaos_health() {
   local node ip st=0
+  if declare -F flynn_vagrant_pin_nodes >/dev/null; then
+    flynn_vagrant_pin_nodes
+  fi
   if ! node="$(chaos_check_node "${1:-}")"; then
     CHAOS_HEALTH_OUT="FAIL nodes: no running cluster node to check from"
     return 1
   fi
   ip="$(flynn_vagrant_node_ip "${node}")"
   set +e
-  CHAOS_HEALTH_OUT="$(run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") EXPECT_RESOURCES=$(printf '%q' "${CHAOS_EXPECT_RESOURCES:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed')"
+  CHAOS_HEALTH_OUT="$(chaos_exec_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=$(flynn_vagrant_cluster_domain) CLUSTER_IP=${ip} MIN_HOSTS=$(flynn_vagrant_get_nodes) BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} TENANT_APPS=$(printf '%q' "${CHAOS_TENANT_APPS:-}") EXPECT_RESOURCES=$(printf '%q' "${CHAOS_EXPECT_RESOURCES:-}") script/vagrant/guest/check-health.sh" 2>&1 | grep -v '^Connection to .* closed' | grep -v '^Warning: Permanently added')"
   st=$?
   set -e
   if [[ "${st}" -ne 0 ]]; then
@@ -404,7 +438,11 @@ chaos_cluster() {
     echo "$(chaos_now) round ${i}/${rounds} ${kind}: ${CHAOS_TARGET}"
     start=${SECONDS}
     sleep "${settle}"
-    if chaos_wait_healthy "round ${i}" "${timeout}"; then
+    avoid_node=""
+    if [[ -f "${CHAOS_RUN_DIR}/avoid" ]]; then
+      avoid_node="$(cat "${CHAOS_RUN_DIR}/avoid")"
+    fi
+    if chaos_wait_healthy "round ${i}" "${timeout}" "${avoid_node}"; then
       rm -f "${CHAOS_RUN_DIR}/avoid"
       echo "$(chaos_now) round ${i}/${rounds} ${kind}: recovered in $((SECONDS - start))s"
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "${i}" "${kind}" "${CHAOS_TARGET}" "${inject_at}" "$(date -u +%s)" recovered "$((SECONDS - start))s" >> "${CHAOS_RUN_DIR}/rounds.tsv"
