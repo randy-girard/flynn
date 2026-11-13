@@ -2,6 +2,7 @@ package main
 
 import (
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/sirenia/ha"
 )
 
@@ -10,11 +11,10 @@ import (
 // SINGLETON=false is a new release at scale 1 (volume handoff), then a later
 // pass scales the data process to 3 once that primary is running.
 //
-// Plugin mysql/mongodb stay singleton until the operator adds nodes
-// (mysql:nodes:add / mongodb:scale). Auto-promoting them on a 3-host
-// Flynn cluster races the first resource:add: ScaleUp sees a primary, then
-// the env flip elects a new replica set and create-user hits
-// NotWritablePrimary.
+// Isolated resource apps are not appliances. A tenant MongoDB app sets
+// SINGLETON=true and is not flynn-plugin, so this loop used to flip it and
+// scale straight to 3. That races provision. The plugin availability lease
+// adds one member at a time.
 func (s *Scheduler) maybePromoteSireniaHA() {
 	if !s.IsLeader() || s.activeHostCount() < ha.MinHosts {
 		return
@@ -24,7 +24,7 @@ func (s *Scheduler) maybePromoteSireniaHA() {
 		if f == nil || f.App == nil || f.Release == nil || !f.Release.IsSirenia() {
 			continue
 		}
-		if f.App.Plugin() {
+		if f.App.Plugin() || resname.IsolatedService(f.App.Name) {
 			continue
 		}
 		appID := f.App.ID

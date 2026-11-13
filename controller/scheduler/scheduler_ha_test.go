@@ -214,6 +214,52 @@ func (TestSuite) TestMaybePromoteSireniaHARequiresLeader(c *C) {
 	c.Assert(active[0].Release.Env["SINGLETON"], Equals, "true")
 }
 
+// Tenant MongoDB sets SINGLETON=true and is not a plugin app. Promoting it
+// on a 3-host cluster flips the env and scales straight to 3, which races
+// provision. Growth belongs to the plugin availability lease.
+func (TestSuite) TestMaybePromoteSireniaHASkipsMongoResource(c *C) {
+	cc := NewFakeControllerClient()
+	app := &ct.App{
+		ID:   "mongodb-grove-48291",
+		Name: "mongodb-grove-48291",
+		Meta: map[string]string{"flynn-datastore": "true", "flynn-system-app": "true"},
+	}
+	release := &ct.Release{
+		ID:  "mongo-inst",
+		Env: map[string]string{"SIRENIA_PROCESS": "mongodb", "SINGLETON": "true"},
+	}
+	c.Assert(cc.CreateApp(app), IsNil)
+	c.Assert(cc.CreateRelease(app.ID, release), IsNil)
+	procs := map[string]int{"mongodb": 1}
+	c.Assert(cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: procs}), IsNil)
+
+	s := NewScheduler(newTestCluster(nil), cc, newFakeDiscoverd(true), log15.New())
+	leader := true
+	s.isLeader = &leader
+	s.formations.Add(NewFormation(&ct.ExpandedFormation{
+		App:       app,
+		Release:   release,
+		Processes: procs,
+	}))
+	for _, id := range []string{"h1", "h2", "h3"} {
+		s.hosts[id] = &Host{ID: id, Healthy: true}
+	}
+	s.jobs["mongo-1"] = &Job{
+		AppID:     app.ID,
+		ReleaseID: release.ID,
+		Type:      "mongodb",
+		State:     JobStateRunning,
+	}
+
+	s.maybePromoteSireniaHA()
+	active, err := cc.FormationListActive()
+	c.Assert(err, IsNil)
+	c.Assert(active, HasLen, 1)
+	c.Assert(active[0].Release.ID, Equals, release.ID)
+	c.Assert(active[0].Release.Env["SINGLETON"], Equals, "true")
+	c.Assert(active[0].Processes["mongodb"], Equals, 1)
+}
+
 func (TestSuite) TestMaybePromoteSireniaHASkipsPluginApps(c *C) {
 	cc := NewFakeControllerClient()
 	app := &ct.App{
