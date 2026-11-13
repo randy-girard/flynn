@@ -9,7 +9,6 @@ import (
 	"github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
-	"github.com/randy-girard/flynn/controller/worker/types"
 	"github.com/randy-girard/flynn/pkg/attempt"
 	"github.com/randy-girard/flynn/pkg/postgres"
 )
@@ -73,7 +72,7 @@ func (c *context) HandleDeployment(job *que.Job) (e error) {
 
 	var f *ct.Formation
 	defer func() {
-		if e == worker.ErrStopped {
+		if deploymentOutcomeFor(e) == outcomeLeaveRunning {
 			return
 		}
 		log.Info("marking the deployment as done")

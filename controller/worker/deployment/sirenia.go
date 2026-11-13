@@ -168,8 +168,14 @@ loop:
 			case discoverd.EventKindServiceMeta:
 				serviceMeta = event.ServiceMeta
 			case discoverd.EventKindUp:
-				if event.Instance.Meta["FLYNN_RELEASE_ID"] == d.NewReleaseID {
-					return loggedErr("sirenia cluster in unexpected state")
+				// A second worker can claim this job after the primary
+				// stop drops the que lock. The new-release peer it sees
+				// was started by the attempt that is still running.
+				// Failing here rolls that formation back and deletes the
+				// only live database.
+				if err := sireniaStartupPeerError(d.NewReleaseID, event.Instance); err != nil {
+					log.Warn("new release peer already registered, leaving the in-progress deploy alone", "addr", event.Instance.Addr)
+					return err
 				}
 			}
 		case <-timeout:

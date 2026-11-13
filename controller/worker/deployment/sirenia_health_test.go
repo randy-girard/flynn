@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -9,10 +10,38 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/randy-girard/flynn/controller/worker/types"
 	"github.com/randy-girard/flynn/discoverd/client"
 	sireniaclient "github.com/randy-girard/flynn/pkg/sirenia/client"
 	"github.com/randy-girard/flynn/pkg/sirenia/state"
 )
+
+func TestReenteredSireniaDeployDoesNotRollBack(t *testing.T) {
+	newPeer := &discoverd.Instance{Meta: map[string]string{"FLYNN_RELEASE_ID": "new-rel"}}
+	err := sireniaStartupPeerError("new-rel", newPeer)
+	if !errors.Is(err, errSireniaDeployActive) {
+		t.Fatalf("startup peer error = %v, want the in-progress deploy sentinel", err)
+	}
+	if deploymentOutcomeFor(err) != outcomeLeaveRunning {
+		t.Fatal("a second worker that sees the new release already up must leave that deploy running")
+	}
+
+	if err := sireniaStartupPeerError("new-rel", &discoverd.Instance{Meta: map[string]string{"FLYNN_RELEASE_ID": "old-rel"}}); err != nil {
+		t.Fatalf("old release peer = %v, want nil", err)
+	}
+	if deploymentOutcomeFor(nil) != outcomeComplete {
+		t.Fatal("a successful deploy must still be marked complete")
+	}
+	if deploymentOutcomeFor(worker.ErrStopped) != outcomeLeaveRunning {
+		t.Fatal("worker shutdown must still leave the deployment unfinished")
+	}
+	if deploymentOutcomeFor(ErrSkipRollback{Err: "skip"}) != outcomeSkipRollback {
+		t.Fatal("skip-rollback errors must still finish without restoring the old formation")
+	}
+	if deploymentOutcomeFor(errors.New("boom")) != outcomeRollback {
+		t.Fatal("a real deploy failure must still roll back")
+	}
+}
 
 func TestAsyncBackupSourceFollowsTheLiveTail(t *testing.T) {
 	a := &discoverd.Instance{ID: "a"}
