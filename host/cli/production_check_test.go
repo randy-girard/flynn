@@ -80,7 +80,7 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 		}
 		*dst = s.resources
 		return nil
-	case "/providers/mongodb/resources":
+	case "/providers/mongodb/resources", "/providers/kafka/resources", "/providers/clickhouse/resources":
 		engine := strings.TrimSuffix(strings.TrimPrefix(path, "/providers/"), "/resources")
 		if err := s.engineErr[engine]; err != nil {
 			return err
@@ -540,7 +540,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -1189,7 +1189,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
@@ -1246,6 +1246,44 @@ func TestProductionCheckBackupLine(t *testing.T) {
 				if !strings.Contains(row.action, want) {
 					t.Fatalf("action %q missing %q", row.action, want)
 				}
+			}
+		})
+		t.Run(mode+"/kafka miss fails", func(t *testing.T) {
+			item := &ct.Resource{ID: "66666666-6666-6666-6666-666666666666"}
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary},
+				engineResources: map[string][]*ct.Resource{
+					"kafka": {item},
+				},
+				backups: []*ct.TenantBackup{{ResourceID: primary.ID, LastSuccessAt: &fresh}},
+				now:     now,
+			}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			row := mustCheck(t, got, "fail", "backup", "kafka resources missing a current dump: 1; tenant volumes are outside flynn-host backup")
+			if !strings.Contains(row.action, "flynn kafka dump") {
+				t.Fatalf("action %q", row.action)
+			}
+		})
+		t.Run(mode+"/clickhouse miss fails", func(t *testing.T) {
+			item := &ct.Resource{ID: "77777777-7777-7777-7777-777777777777"}
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary},
+				engineResources: map[string][]*ct.Resource{
+					"clickhouse": {item},
+				},
+				backups: []*ct.TenantBackup{{ResourceID: primary.ID, LastSuccessAt: &fresh}},
+				now:     now,
+			}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			row := mustCheck(t, got, "fail", "backup", "clickhouse resources missing a current dump: 1; tenant volumes are outside flynn-host backup")
+			if !strings.Contains(row.action, "flynn clickhouse dump") {
+				t.Fatalf("action %q", row.action)
 			}
 		})
 	}

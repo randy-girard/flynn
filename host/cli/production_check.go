@@ -371,6 +371,8 @@ func addBackupLine(add func(productionRow), api productionAPI, now time.Time) {
 	engines := []backupEngine{
 		{"postgres", "/providers/postgres/resources", "primaries", postgresBackupResources},
 		{"mongodb", "/providers/mongodb/resources", "resources", idBackupResources},
+		{"kafka", "/providers/kafka/resources", "resources", idBackupResources},
+		{"clickhouse", "/providers/clickhouse/resources", "resources", idBackupResources},
 	}
 	counted := map[string][]*ct.Resource{}
 	total := 0

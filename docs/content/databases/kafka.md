@@ -111,6 +111,30 @@ broker certificate against the cluster CA rather than by hostname. Set
 `ssl.endpoint.identification.algorithm` to an empty string in your client
 configuration.
 
+### Dumping and restoring
+
+`flynn kafka:dump` copies user-topic records into the platform blobstore and
+prints a timestamp. Internal topics, consumer-group offsets, and the KRaft
+log under `/data/kraft-logs` (including `meta.properties`) are not in the
+object. The SASL password and client key stay out of the object and out of
+the process arguments. `-f` and `-q` are rejected. There is no dump file to
+download.
+
+`flynn kafka:backups` lists timestamps. `flynn kafka:restore` restores the
+newest onto that cluster. `flynn kafka:restore <timestamp>` restores a listed
+timestamp. Replication is `min(saved, brokers up)`, and at least 1. A path or
+object id is rejected.
+
+The object key is `backups/<owner>/<resource UUID>/<timestamp>/records`.
+Empty owner uses `cluster`. The schedule runs on the `kafka-backup`
+discoverd leader, once a day per resource, with the first dump due
+immediately. A postgres blobstore is refused in both hosted and
+self-hosted mode. Run `flynn-host blobstore:set --migrate --delete` first.
+`production:check` fails in both modes until a resource has a dump newer
+than 24 hours plus one hour.
+
+`flynn-host backup` does not contain the volume or this object.
+
 ## Transport security (TLS)
 
 TLS is handled with a private certificate authority that is generated when the

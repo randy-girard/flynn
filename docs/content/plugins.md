@@ -663,8 +663,8 @@ Restore waits for each plugin’s ping URL, then continues. A missing formation
 on the current postgres release does not abort the backup (process counts
 are taken from another scaled formation on that app).
 
-Plugin **volume** data is not in the cluster backup. Redis, MySQL, Kafka,
-and ClickHouse tenant data come back empty. Postgres and MongoDB tenant
+Plugin **volume** data is not in the cluster backup. Redis and MySQL tenant
+data come back empty. Postgres, MongoDB, Kafka, and ClickHouse tenant
 dumps are blobstore objects under `backups/` and are not applied by cluster
 restore. `MYSQL_PWD` and `MONGO_PWD` do not add an appliance dump.
 `pg_dumpall` in the tarball is the **platform** appliance only

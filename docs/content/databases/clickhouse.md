@@ -115,6 +115,30 @@ security changes, as it runs in a container on the Flynn cluster. The CLI uses
 (the private CA is not in the image trust store). External clients should
 still pass `FLYNN_CLICKHOUSE_TRUSTED_CERT`.
 
+### Dumping and restoring
+
+`flynn clickhouse:dump` writes every user database to the platform blobstore
+and prints a timestamp. `system`, `information_schema`, and `INFORMATION_SCHEMA`
+are skipped. `default` is included only when it has tables. Users and quotas
+are not in the object. The password is the `X-ClickHouse-Key` header, not
+the SQL text and not a process argument. The result is not cut off at 512MiB.
+`-f` and `-q` are rejected. There is no dump file to download.
+
+`flynn clickhouse:backups` lists timestamps. `flynn clickhouse:restore`
+restores the newest. `flynn clickhouse:restore <timestamp>` restores a listed
+timestamp. A path or object id is rejected.
+
+Each database is its own object:
+`backups/<owner>/<resource UUID>/<timestamp>/<database>`.
+Empty owner uses `cluster`. The schedule runs on the `clickhouse-backup`
+discoverd leader, once a day per resource, with the first dump due
+immediately. A postgres blobstore is refused in both hosted and
+self-hosted mode. Run `flynn-host blobstore:set --migrate --delete` first.
+`production:check` fails in both modes until a resource has a dump newer
+than 24 hours plus one hour.
+
+`flynn-host backup` does not contain the volume or these objects.
+
 ## Managing databases
 
 Databases must be created before they can be used on a replicated cluster.
