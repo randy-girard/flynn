@@ -160,6 +160,20 @@ func TestGetBackoffDurationBounds(t *testing.T) {
 	}
 }
 
+func TestFormationReconnectWaitGrowsBeforeCurrent(t *testing.T) {
+	first := formationReconnectWait(0)
+	second := formationReconnectWait(1)
+	if first < 100*time.Millisecond {
+		t.Fatalf("first wait %s", first)
+	}
+	if second <= first {
+		t.Fatalf("wait did not grow: %s then %s", first, second)
+	}
+	if formationReconnectWait(20) != 2*time.Second {
+		t.Fatalf("cap %s", formationReconnectWait(20))
+	}
+}
+
 func TestCrashLoopEventRestartsMatchesBackoffCap(t *testing.T) {
 	if ct.CrashLoopEventRestarts < int32(backoffImmediateRestarts) {
 		t.Fatalf("crash_loop fires at %d, before immediate-restart window %d", ct.CrashLoopEventRestarts, backoffImmediateRestarts)

@@ -322,6 +322,27 @@ func main() {
 	shutdown.Exit()
 }
 
+const (
+	formationReconnectMin = 100 * time.Millisecond
+	formationReconnectMax = 2 * time.Second
+)
+
+// formationReconnectWait is the pause before another formation-stream connect.
+// It grows until the scheduler has the current list, then the caller resets.
+func formationReconnectWait(attempt int) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	d := formationReconnectMin
+	for i := 0; i < attempt && d < formationReconnectMax; i++ {
+		d *= 2
+	}
+	if d > formationReconnectMax {
+		d = formationReconnectMax
+	}
+	return d
+}
+
 func (s *Scheduler) streamFormationEvents() {
 	log := s.logger.New("fn", "streamFormationEvents")
 
@@ -341,12 +362,14 @@ func (s *Scheduler) streamFormationEvents() {
 	current := make(chan struct{})
 	go func() {
 		var isCurrent bool
+		attempt := 0
 		for {
 			for {
 				if err := connect(); err == nil {
 					break
 				}
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(formationReconnectWait(attempt))
+				attempt++
 			}
 			for formation := range events {
 				// an empty formation indicates we now have the
@@ -356,6 +379,7 @@ func (s *Scheduler) streamFormationEvents() {
 						isCurrent = true
 						close(current)
 					}
+					attempt = 0
 					continue
 				}
 				since = &formation.UpdatedAt
@@ -369,6 +393,13 @@ func (s *Scheduler) streamFormationEvents() {
 				s.formationEvents <- formation
 			}
 			log.Warn("formation event stream disconnected", "err", stream.Err())
+			// A stream that ends before the current marker must not be
+			// retried immediately. That storm keeps the controller from
+			// finishing the snapshot, so this process never registers.
+			if !isCurrent {
+				time.Sleep(formationReconnectWait(attempt))
+				attempt++
+			}
 		}
 	}()
 
