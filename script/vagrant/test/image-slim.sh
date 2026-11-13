@@ -294,12 +294,16 @@ need "${smoke}" 'pg_available_extensions' \
   "smoke must verify postgres still ships postgis/pgrouting/timescaledb"
 need "${smoke}" 'mongodb dump' \
   "smoke must run flynn mongodb dump against the slimmed mongodump tools"
-mongodb_plugin_json="${ROOT}/../flynn-plugin-mongodb/flynn-plugin.json"
-need_file "${mongodb_plugin_json}" "mongodb dump TLS flags live in flynn-plugin.json"
-grep -q -- '--ssl' "${mongodb_plugin_json}" \
+mongodb_dump_go="${ROOT}/../flynn-plugin-mongodb/backup.go"
+need_file "${mongodb_dump_go}" "mongodb dump TLS flags live in MongoDumpCommand"
+grep -q -- '--ssl' "${mongodb_dump_go}" \
   || { echo "mongodb dump must use mongodump --ssl (database-tools reject --tls)" >&2; exit 1; }
-grep -q -- '--tlsInsecure' "${mongodb_plugin_json}" \
+grep -q -- '--tlsInsecure' "${mongodb_dump_go}" \
   || { echo "mongodb dump must use --tlsInsecure (database-tools reject --tlsAllowInvalidCertificates)" >&2; exit 1; }
+if grep -q '"--tls"' "${mongodb_dump_go}"; then
+  echo "mongodb dump must not pass mongosh --tls to mongodump" >&2
+  exit 1
+fi
 need "${smoke}" 'blobstore.discoverd/.well-known/status' \
   "smoke must hit blobstore status after moving it to busybox"
 need "${ROOT}/dockerbuilder/img/packages.sh" 'runc' \
