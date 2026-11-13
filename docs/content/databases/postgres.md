@@ -105,6 +105,10 @@ for a fresh `flynn-host plugin:install hosted` that has no Postgres resources
 yet. A cluster admin sets it with that command or on Cluster → Settings.
 Changing it does not deploy the plugin or restart user apps.
 
+After a system failover, user followers stay read-only and are repointed at
+`leader.<original>.discoverd`, which the new primary keeps claiming on later
+failovers.
+
 `system` keeps one platform replica per primary when another host can take
 the volume's memory, disk, process cap, and persistent-singleton cap. That
 replica is not an add-on and does not count against the resource quota. The

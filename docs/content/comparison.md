@@ -79,7 +79,7 @@ Flynn's engines suit development, staging, and small production. They are not tu
 
 ## What the matrix leaves out
 
-The Postgres your apps use is a plugin: one node and one volume. A follower is optional. `flynn-host postgres:availability system` adds one platform replica per primary when another host can take it, on a hosted or self-hosted cluster. `manual` leaves failover to a follower you add. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MariaDB is the same shape: one node, and failover only if you add an async follower. MongoDB starts as one member of its own replica set. `mongodb:scale` grows that set, and on three or more hosts Flynn grows each resource to three members.
+The Postgres your apps use is a plugin: one node and one volume. A follower is optional. `flynn-host postgres:availability system` adds one platform replica per primary when another host can take it, on a hosted or self-hosted cluster. `manual` leaves failover to a follower you add. That database is not the highly available Postgres Flynn uses for itself, and it is not in the cluster backup. MySQL and Redis use the same switch (`mysql:availability`, `redis:availability`): one async platform replica when it is `system`, and a follower you add when it is `manual`. MongoDB starts as one member of its own replica set. `mongodb:scale` grows that set, and on three or more hosts Flynn grows each resource to three members.
 
 Review Apps can be created for every pull request. Heroku CI and the Container Registry are Cedar-generation features and are not on Fir. Heroku Connect syncs Postgres with Salesforce and opts out of review and CI apps.
 

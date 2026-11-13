@@ -68,11 +68,12 @@ tag. unlimited, 0, empty, off, none, and auto are no cap. A non-integer
 is no cap and the detail prints that value. The check does not set the
 tag. A host-list error fails this line. Warn does not exit 1.
 
-Postgres availability reads GET /cluster/postgres-availability. manual is
-ok in either tenancy mode. system with fewer than two registered hosts
-warns in either tenancy mode and does not exit 1. system with two or more
-hosts is ok. This line does not query replication lag. A controller error
-fails the line and is not treated as manual. Tenancy is not the switch.
+Postgres, MySQL, and Redis availability each read their own
+GET /cluster/<engine>-availability. manual is ok in either tenancy mode.
+system with fewer than two registered hosts warns in either tenancy mode
+and does not exit 1. system with two or more hosts is ok. These lines do
+not query replication lag. A controller error fails that line and is not
+treated as manual. Tenancy is not the switch.
 
 Backups warn that tenant volumes are outside flynn-host backup when the
 cluster has no Postgres primary. A primary whose last dump is missing, or
@@ -288,6 +289,8 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	addHostCapLine(add, hosts, hostsErr)
 	addSingletonCapLine(add, hosts, hostsErr)
 	addPostgresAvailabilityLine(add, api, hosts, hostsErr)
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "mysql-availability", "/cluster/mysql-availability", "mysql:availability", "The MySQL page shows that.")
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "redis-availability", "/cluster/redis-availability", "redis:availability", "The Redis page shows the offset loss.")
 	now := time.Now()
 	if cfg.Now != nil {
 		now = cfg.Now()
@@ -825,10 +828,14 @@ func hostCapLabel(tags map[string]string) (string, bool) {
 }
 
 func addPostgresAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error) {
+	addEngineAvailabilityLine(add, api, hosts, hostsErr, "postgres-availability", "/cluster/postgres-availability", "postgres:availability", "The Postgres page shows that.")
+}
+
+func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts []*cluster.Host, hostsErr error, check, path, command, protected string) {
 	var current ct.PostgresAvailability
-	if err := api.Get("/cluster/postgres-availability", &current); err != nil {
+	if err := api.Get(path, &current); err != nil {
 		add(productionRow{
-			status: "fail", check: "postgres-availability", detail: "error=" + err.Error(),
+			status: "fail", check: check, detail: "error=" + err.Error(),
 			action: "Fix the controller, then rerun. This is not manual.",
 		})
 		return
@@ -836,13 +843,13 @@ func addPostgresAvailabilityLine(add func(productionRow), api productionAPI, hos
 	switch current.Mode {
 	case "manual":
 		add(productionRow{
-			status: "ok", check: "postgres-availability", detail: "mode=manual",
-			action: "Run flynn-host postgres:availability system to create platform replicas. Tenancy does not change this.",
+			status: "ok", check: check, detail: "mode=manual",
+			action: "Run flynn-host " + command + " system to create platform replicas. Tenancy does not change this.",
 		})
 	case "system":
 		if hostsErr != nil {
 			add(productionRow{
-				status: "warn", check: "postgres-availability", detail: "mode=system hosts=unknown",
+				status: "warn", check: check, detail: "mode=system hosts=unknown",
 				action: "Fix the host list, then rerun. A warn does not exit 1.",
 			})
 			return
@@ -850,21 +857,21 @@ func addPostgresAvailabilityLine(add func(productionRow), api productionAPI, hos
 		n := len(hosts)
 		if n < 2 {
 			add(productionRow{
-				status: "warn", check: "postgres-availability",
+				status: "warn", check: check,
 				detail: fmt.Sprintf("mode=system hosts=%d", n),
 				action: "Add a second host before a platform replica can leave the primary. This does not fail the cluster.",
 			})
 			return
 		}
 		add(productionRow{
-			status: "ok", check: "postgres-availability",
+			status: "ok", check: check,
 			detail: fmt.Sprintf("mode=system hosts=%d", n),
-			action: "A primary is protected only while its platform replica is streaming. The Postgres page shows that.",
+			action: "A primary is protected only while its platform replica is caught up. " + protected,
 		})
 	default:
 		add(productionRow{
-			status: "fail", check: "postgres-availability", detail: "error=unknown postgres availability",
-			action: "Set it: flynn-host postgres:availability manual or system.",
+			status: "fail", check: check, detail: "error=unknown " + check,
+			action: "Set it: flynn-host " + command + " manual or system.",
 		})
 	}
 }

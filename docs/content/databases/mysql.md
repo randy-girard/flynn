@@ -79,6 +79,23 @@ not fail over. The dashboard Followers tab can remove a follower while it is
 still replicating. Remove stops replication and deletes the replica. Unfollow
 leaves a standalone writable copy.
 
+`flynn-host mysql:availability` is `manual` or `system` for the whole cluster.
+Hosted and self-hosted use the same values. `manual` is the self-hosted
+default and creates no platform replica. `system` is the default only for a
+cluster that was already hosted when the controller migrated, and for a fresh
+`flynn-host plugin:install hosted` that has no MySQL resources yet. A cluster
+admin sets it with that command or on Cluster → Settings. Changing it does
+not restart user apps.
+
+`system` keeps one platform replica per primary when another host can take
+the volume. It is not an add-on and it is not a user follower. The watch
+promotes only that replica, after fencing the old primary, and keeps
+`DATABASE_URL` on `leader.<original>.discoverd`. User followers stay
+read-only and are repointed at that same name. A one-host cluster stays
+standby pending. Replication is asynchronous GTID. A failover can drop
+commits the primary already acknowledged. Semi-sync stays off. A stopped
+replica thread is recreated, not promoted.
+
 ### Connecting to the database
 
 Provisioning the database will add a few environment variables to your app

@@ -87,6 +87,23 @@ flynn addons:create redis --follow <primary> --auto-failover
 
 `redis:wait` prints live copy progress (full resync, then streaming catch-up).
 The dashboard Followers tab has **Add follower** and the same progress.
+
+`flynn-host redis:availability` is `manual` or `system` for the whole cluster.
+Hosted and self-hosted use the same values. `manual` is the self-hosted
+default and creates no platform replica. `system` is the default only for a
+cluster that was already hosted when the controller migrated, and for a fresh
+`flynn-host plugin:install hosted` that has no Redis resources yet. A cluster
+admin sets it with that command or on Cluster → Settings. Changing it does
+not restart user apps.
+
+`system` keeps one platform replica per primary when another host can take
+the volume. The watch promotes only that replica, after fencing the old
+primary, and keeps `REDIS_URL` on `leader.<original>.discoverd`. User
+followers stay read-only and are repointed at that name. A fenced primary
+can be reused as the next platform replica. Replication is asynchronous. A
+failover can drop writes the primary acknowledged after the last replica
+offset, within 16 MiB. `master_sync_in_progress` is not caught up.
+Synchronous replication stays off, and `min-replicas-to-write` stays unset.
 **Remove** stops replication and deletes the replica, including while it is
 still copying. Unfollow still leaves a standalone copy. Auto-failover
 places the replica on another host, promotes it if the primary job is gone, then

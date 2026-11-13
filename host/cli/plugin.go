@@ -16,10 +16,10 @@ usage: flynn-host plugin:install [--no-build] [--rebuild] [--ref=REF] [--github-
 
 Install a plugin from a local path, alias, GitHub URL, or plugin group.
 The hosted group installs dashboard, enterprise, and billing, then sets
-tenancy mode to hosted. On a cluster with no Postgres resources it also
-sets postgres availability to system. A cluster that already has Postgres
-resources keeps the stored availability. billing must resolve from
-plugins.json and plugin:credentials. Signup stays off.
+tenancy mode to hosted. On a cluster with no resources for an engine it
+also sets that engine's availability to system. A cluster that already
+has resources for that engine keeps the stored availability. billing must
+resolve from plugins.json and plugin:credentials. Signup stays off.
 
 Options:
 	--no-build                 Reuse dist/ without compiling (fails if dist/ is missing)
@@ -481,23 +481,30 @@ func runPluginGroupInstall(args *docopt.Args) error {
 	}
 	fmt.Fprintf(os.Stdout, "tenancy mode set to %s (signup stays off unless set separately)\n", group.TenancyMode)
 	if group.TenancyMode == tenancy.ModeHosted {
-		if err := setHostedPostgresAvailability(v); err != nil {
-			return fmt.Errorf("plugin group %s: %w", group.Name, err)
+		for _, engine := range []struct{ label, path, provider string }{
+			{"postgres", "/cluster/postgres-availability", "postgres"},
+			{"mysql", "/cluster/mysql-availability", "mysql"},
+			{"redis", "/cluster/redis-availability", "redis"},
+		} {
+			if err := setHostedEngineAvailability(v, engine.label, engine.path, engine.provider); err != nil {
+				return fmt.Errorf("plugin group %s: %w", group.Name, err)
+			}
 		}
 	}
 	return nil
 }
 
-// setHostedPostgresAvailability turns system on for a fresh hosted install.
-// Existing Postgres resources, a stored system value, and a resource-list
-// error leave the column unchanged.
-func setHostedPostgresAvailability(v *v1.Client) error {
+// setHostedEngineAvailability turns system on for a fresh hosted install.
+// Existing resources for that engine, a stored system value, and a
+// resource-list error leave the column unchanged. Tenancy mode itself
+// does not rewrite the column after migration.
+func setHostedEngineAvailability(v *v1.Client, label, path, provider string) error {
 	var current ct.PostgresAvailability
-	if err := v.Get("/cluster/postgres-availability", &current); err != nil {
-		return fmt.Errorf("read postgres availability: %w", err)
+	if err := v.Get(path, &current); err != nil {
+		return fmt.Errorf("read %s availability: %w", label, err)
 	}
 	count := -1
-	resources, err := v.ResourceList("postgres")
+	resources, err := v.ResourceList(provider)
 	if err == nil {
 		count = len(resources)
 	}
@@ -505,9 +512,9 @@ func setHostedPostgresAvailability(v *v1.Client) error {
 	if !set {
 		return nil
 	}
-	if err := v.Put("/cluster/postgres-availability", map[string]string{"mode": next}, &ct.PostgresAvailability{}); err != nil {
-		return fmt.Errorf("set postgres availability %s: %w", next, err)
+	if err := v.Put(path, map[string]string{"mode": next}, &ct.PostgresAvailability{}); err != nil {
+		return fmt.Errorf("set %s availability %s: %w", label, next, err)
 	}
-	fmt.Fprintf(os.Stdout, "postgres availability set to %s\n", next)
+	fmt.Fprintf(os.Stdout, "%s availability set to %s\n", label, next)
 	return nil
 }

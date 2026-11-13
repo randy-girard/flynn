@@ -58,13 +58,13 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 		}
 		*dst = s.tenancy
 		return nil
-	case "/cluster/postgres-availability":
+	case "/cluster/postgres-availability", "/cluster/mysql-availability", "/cluster/redis-availability":
 		if s.availabilityErr != nil {
 			return s.availabilityErr
 		}
 		dst, ok := out.(*ct.PostgresAvailability)
 		if !ok {
-			return fmtUnexpected("postgres availability decode")
+			return fmtUnexpected("availability decode")
 		}
 		*dst = ct.PostgresAvailability{Mode: s.availability}
 		return nil
@@ -508,6 +508,8 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
+		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
+		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
 	})
@@ -521,7 +523,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -545,6 +547,8 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "host-cap", detail: "host-a=4", action: "flynn-max-processes"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
+		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
+		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
@@ -701,6 +705,8 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
+		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
+		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -735,6 +741,8 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "ok", check: "host-cap", detail: "host-a=4"},
 		{status: "warn", check: "singleton-cap", detail: "host-a=missing", action: "flynn-max-persistent-singletons"},
 		{status: "ok", check: "postgres-availability", detail: "mode=manual", action: "postgres:availability"},
+		{status: "ok", check: "mysql-availability", detail: "mode=manual", action: "mysql:availability"},
+		{status: "ok", check: "redis-availability", detail: "mode=manual", action: "redis:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
@@ -1109,7 +1117,7 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 9 {
+	if len(rows) != 11 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
@@ -1164,7 +1172,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/providers/postgres/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/tenant-backups" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
