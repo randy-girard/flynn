@@ -360,28 +360,38 @@ const (
 const backupVolumeDetail = "tenant volumes are outside flynn-host backup"
 const backupVolumeAction = "Back up tenant volumes separately."
 
+type backupEngine struct {
+	name   string
+	path   string
+	noun   string
+	filter func([]*ct.Resource) []*ct.Resource
+}
+
 func addBackupLine(add func(productionRow), api productionAPI, now time.Time) {
-	var resources []*ct.Resource
-	err := api.Get("/providers/postgres/resources", &resources)
-	if err != nil {
-		if productionNotFound(err) {
-			add(productionRow{status: "warn", check: "backup", detail: backupVolumeDetail, action: backupVolumeAction})
+	engines := []backupEngine{
+		{"postgres", "/providers/postgres/resources", "primaries", postgresBackupResources},
+		{"mongodb", "/providers/mongodb/resources", "resources", idBackupResources},
+	}
+	counted := map[string][]*ct.Resource{}
+	total := 0
+	for _, eng := range engines {
+		var resources []*ct.Resource
+		err := api.Get(eng.path, &resources)
+		if err != nil {
+			if productionNotFound(err) {
+				continue
+			}
+			add(productionRow{
+				status: "fail", check: "backup", detail: "error=" + err.Error(),
+				action: "Fix the controller, then rerun. This check does not dump.",
+			})
 			return
 		}
-		add(productionRow{
-			status: "fail", check: "backup", detail: "error=" + err.Error(),
-			action: "Fix the controller, then rerun. This check does not dump.",
-		})
-		return
+		list := eng.filter(resources)
+		counted[eng.name] = list
+		total += len(list)
 	}
-	var primaries []*ct.Resource
-	for _, res := range resources {
-		if res == nil || strings.TrimSpace(res.ID) == "" || !postgresResourceIsPrimary(res.Env) {
-			continue
-		}
-		primaries = append(primaries, res)
-	}
-	if len(primaries) == 0 {
+	if total == 0 {
 		add(productionRow{status: "warn", check: "backup", detail: backupVolumeDetail, action: backupVolumeAction})
 		return
 	}
@@ -400,29 +410,92 @@ func addBackupLine(add func(productionRow), api productionAPI, now time.Time) {
 		}
 		byID[st.ResourceID] = st
 	}
-	miss := 0
-	for _, res := range primaries {
-		var last *time.Time
-		if st := byID[res.ID]; st != nil {
-			last = st.LastSuccessAt
+	var misses []string
+	var missedNames []string
+	var current []string
+	otherMiss := false
+	for _, eng := range engines {
+		list := counted[eng.name]
+		if len(list) == 0 {
+			continue
 		}
-		if tenantBackupMiss(last, now) {
-			miss++
+		miss := 0
+		for _, res := range list {
+			var last *time.Time
+			if st := byID[res.ID]; st != nil {
+				last = st.LastSuccessAt
+			}
+			if tenantBackupMiss(last, now) {
+				miss++
+			}
 		}
+		if miss > 0 {
+			misses = append(misses, fmt.Sprintf("%s %s missing a current dump: %d", eng.name, eng.noun, miss))
+			missedNames = append(missedNames, eng.name)
+			if eng.name != "postgres" {
+				otherMiss = true
+			}
+			continue
+		}
+		current = append(current, fmt.Sprintf("%s dumps current (%d)", eng.name, len(list)))
 	}
-	if miss > 0 {
+	if len(misses) > 0 {
+		detail := strings.Join(misses, "; ")
+		if otherMiss {
+			detail += "; " + backupVolumeDetail
+		}
 		add(productionRow{
-			status: "fail", check: "backup",
-			detail: fmt.Sprintf("postgres primaries missing a current dump: %d", miss),
-			action: "Run flynn pg dump, or wait for the scheduled dump. " + backupVolumeAction,
+			status: "fail", check: "backup", detail: detail,
+			action: backupMissAction(missedNames),
 		})
 		return
 	}
 	add(productionRow{
 		status: "ok", check: "backup",
-		detail: fmt.Sprintf("postgres dumps current (%d); %s", len(primaries), backupVolumeDetail),
+		detail: strings.Join(current, "; ") + "; " + backupVolumeDetail,
 		action: backupVolumeAction,
 	})
+}
+
+func backupMissAction(names []string) string {
+	var cmds []string
+	for _, name := range names {
+		switch name {
+		case "postgres":
+			cmds = append(cmds, "flynn pg dump")
+		default:
+			cmds = append(cmds, "flynn "+name+" dump")
+		}
+	}
+	verb := "Run " + cmds[0]
+	if len(cmds) == 2 {
+		verb = "Run " + cmds[0] + " or " + cmds[1]
+	} else if len(cmds) > 2 {
+		verb = "Run " + strings.Join(cmds[:len(cmds)-1], ", ") + ", or " + cmds[len(cmds)-1]
+	}
+	return verb + ", or wait for the scheduled dump. This check does not dump. " + backupVolumeAction
+}
+
+func postgresBackupResources(resources []*ct.Resource) []*ct.Resource {
+	var out []*ct.Resource
+	for _, res := range resources {
+		if res == nil || strings.TrimSpace(res.ID) == "" || !postgresResourceIsPrimary(res.Env) {
+			continue
+		}
+		out = append(out, res)
+	}
+	return out
+}
+
+func idBackupResources(resources []*ct.Resource) []*ct.Resource {
+	var out []*ct.Resource
+	for _, res := range resources {
+		if res == nil || strings.TrimSpace(res.ID) == "" {
+			continue
+		}
+		out = append(out, res)
+	}
+	return out
 }
 
 func productionNotFound(err error) bool {

@@ -663,10 +663,12 @@ Restore waits for each plugin’s ping URL, then continues. A missing formation
 on the current postgres release does not abort the backup (process counts
 are taken from another scaled formation on that app).
 
-Plugin **volume** data (tenant Postgres instance volumes, Redis AOF, Kafka
-topics, ClickHouse tables) is still not in the cluster backup; those engines
-come back empty. `pg_dumpall` in the tarball is the **platform** appliance
-only (controller, blobstore, and plugin metadata databases attached to
+Plugin **volume** data is not in the cluster backup. Redis, MySQL, Kafka,
+and ClickHouse tenant data come back empty. Postgres and MongoDB tenant
+dumps are blobstore objects under `backups/` and are not applied by cluster
+restore. `MYSQL_PWD` and `MONGO_PWD` do not add an appliance dump.
+`pg_dumpall` in the tarball is the **platform** appliance only
+(controller, blobstore, and plugin metadata databases attached to
 `platform-postgres`). Reinstalling a plugin after restore would only be
 needed if you restored a backup that never had the plugin, or if you are
 adding a plugin that was not installed when the backup was taken.

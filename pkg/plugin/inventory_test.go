@@ -92,20 +92,15 @@ func TestRecordFromAppUsesPluginRecord(t *testing.T) {
 	}
 }
 
-func TestBackupRestoreSpecInference(t *testing.T) {
+func TestBackupRestoreSpecDoesNotInferApplianceDumps(t *testing.T) {
 	p := Installed{Name: "db"}
 	mysql := &ct.ExpandedFormation{Release: &ct.Release{Env: map[string]string{"MYSQL_PWD": "x"}}}
-	b := BackupSpecFor(p, mysql)
-	if b == nil || b.File != "mysql.sql.gz" {
-		t.Fatalf("mysql backup: %+v", b)
-	}
-	r := RestoreSpecFor(p, mysql)
-	if r == nil || r.File != "mysql.sql.gz" || len(r.Args) < 5 || r.Args[4] != "leader.db.discoverd" {
-		t.Fatalf("mysql restore: %+v", r)
+	if BackupSpecFor(p, mysql) != nil || RestoreSpecFor(p, mysql) != nil {
+		t.Fatal("MYSQL_PWD must not invent mysql.sql.gz")
 	}
 	mongo := &ct.ExpandedFormation{Release: &ct.Release{Env: map[string]string{"MONGO_PWD": "y"}}}
-	if BackupSpecFor(p, mongo).File != "mongodb.archive.gz" {
-		t.Fatal("mongo backup")
+	if BackupSpecFor(p, mongo) != nil || RestoreSpecFor(Installed{Name: "mongodb"}, mongo) != nil {
+		t.Fatal("MONGO_PWD must not invent mongodb.archive.gz")
 	}
 }
 
@@ -209,9 +204,8 @@ func TestBackupRestoreSpecExistingAndNil(t *testing.T) {
 		t.Fatal("unknown engine")
 	}
 	mongo := &ct.ExpandedFormation{Release: &ct.Release{Env: map[string]string{"MONGO_PWD": "y"}}}
-	r := RestoreSpecFor(Installed{Name: "mongodb"}, mongo)
-	if r == nil || r.File != "mongodb.archive.gz" || !r.Sirenia {
-		t.Fatalf("mongo restore: %+v", r)
+	if RestoreSpecFor(Installed{Name: "mongodb"}, mongo) != nil {
+		t.Fatal("mongo env must not invent a restore")
 	}
 }
 

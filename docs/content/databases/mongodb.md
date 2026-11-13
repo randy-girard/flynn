@@ -115,46 +115,32 @@ the Flynn cluster.
 
 ### Dumping and restoring
 
-The Flynn CLI provides commands for exporting and restoring database dumps.
+`flynn mongodb:dump` writes one `mongodump --archive --oplog` of
+`leader.<instance>.discoverd` to the platform blobstore and prints a
+timestamp. The dump includes every database except `local`, plus `admin`
+users and roles. It runs as the instance superuser `flynn`, not the app
+user, and uses `--ssl --tlsInsecure`. The password is not a process
+argument. `-f` and `-q` are rejected. There is no dump file to download.
 
-`flynn mongodb:dump` saves a complete copy of the database to a local file.
-The in-cluster job talks to 27017 with mongodump `--ssl --tlsInsecure` (the
-database tools do not accept mongosh's `--tls` flag) and authenticates as the
-resource user against that resource's database.
+`flynn mongodb:backups` lists timestamps. `flynn mongodb:restore` restores
+the newest onto that same primary with `mongorestore --archive --oplogReplay
+--drop`. `flynn mongodb:restore <timestamp>` restores a listed timestamp. A
+path or object id is rejected.
 
-```text
-$ flynn mongodb:dump -f latest.dump
-60.34 MB 8.77 MB/s
-```
+The object key is `backups/<owner>/<resource UUID>/<timestamp>/archive`.
+Empty owner uses `cluster`. The schedule runs on the `mongodb-backup`
+discoverd leader, once a day per resource, with the first dump due
+immediately. A postgres blobstore is refused in both hosted and
+self-hosted mode. Run `flynn-host blobstore:set --migrate --delete` first.
+`production:check` fails in both modes until a resource has a dump newer
+than 24 hours plus one hour.
 
-The file can be used to restore the database with `flynn mongodb:restore`. It may
-also be imported into a local MongoDB database that is not managed by Flynn with
-`mongorestore` and `tar` to extract the Flynn dump:
+The dashboard Backup page lists those timestamps. It has no file input.
+`flynn-host backup` does not contain the volume or this object. A
+`mongodb.archive.gz` appliance dump is not this backup.
 
-```text
-$ mkdir dump # create a temporary directory for the dump
-$ tar -x -C tmp latest.dump # extract the dump to the temporary directory
-$ mongorestore tmp/* # you will need to use --host and auth flags as appropriate
-```
-
-`flynn mongodb:restore` loads a database dump from a local file into a Flynn
-MongoDB database. Any existing collections and objects will be dropped before
-restoring data.
-
-```text
-$ flynn mongodb:restore -f latest.dump
-62.29 MB / 62.29 MB [===================] 100.00 % 4.96 MB/s
-```
-
-The restore command may also be used to restore a database dump from another
-non-Flynn MongoDB database, use `mongodump` and `tar` to create a dump file:
-
-```text
-$ mkdir tmp # create a temporary directory
-$ mongodump -o tmp # you will need to use --host and auth flags as appropriate
-$ cd tmp
-$ tar -cf ../mydb.dump .
-```
+To copy a database to a MongoDB that is not Flynn, expose the instance and
+run `mongodump` yourself. The Flynn command does not write that file.
 
 ### External access
 

@@ -276,33 +276,12 @@ func WriteInstalled(path string, plugins []Installed) error {
 	return os.Rename(tmp, path)
 }
 
-// BackupSpecFor returns the cluster dump spec, inferring mysqldump/mongodump
-// from release env when older installs did not stamp a backup block.
-func BackupSpecFor(p Installed, formation *ct.ExpandedFormation) *BackupSpec {
+// BackupSpecFor returns the cluster dump spec stored on the plugin record.
+// A missing block is not a tenant backup. MYSQL_PWD and MONGO_PWD do not
+// invent mysql.sql.gz or mongodb.archive.gz.
+func BackupSpecFor(p Installed, _ *ct.ExpandedFormation) *BackupSpec {
 	if p.Backup != nil && p.Backup.File != "" && len(p.Backup.Args) > 0 {
 		return p.Backup
-	}
-	if formation == nil || formation.Release == nil {
-		return nil
-	}
-	env := formation.Release.Env
-	if env["MYSQL_PWD"] != "" {
-		return &BackupSpec{
-			File:         "mysql.sql.gz",
-			Process:      firstNonEmpty(p.BackupProcessHint(), p.Name),
-			Args:         []string{"bash", "-c", "set -o pipefail; /usr/bin/mysqldump -h $MYSQL_HOST -u $MYSQL_USER --all-databases --flush-privileges | gzip -9"},
-			Env:          []string{"MYSQL_HOST", "MYSQL_USER", "MYSQL_PWD"},
-			RequireScale: true,
-		}
-	}
-	if env["MONGO_PWD"] != "" {
-		return &BackupSpec{
-			File:         "mongodb.archive.gz",
-			Process:      firstNonEmpty(p.BackupProcessHint(), p.Name),
-			Args:         []string{"bash", "-c", "set -o pipefail; /usr/bin/mongodump --host $MONGO_HOST -u $MONGO_USER -p $MONGO_PWD --authenticationDatabase admin --archive | gzip -9"},
-			Env:          []string{"MONGO_HOST", "MONGO_USER", "MONGO_PWD"},
-			RequireScale: true,
-		}
 	}
 	return nil
 }
@@ -314,32 +293,11 @@ func (p Installed) BackupProcessHint() string {
 	return ""
 }
 
-// RestoreSpecFor returns the cluster restore spec, inferring mysql/mongo load
-// from release env when older backups omitted the restore block.
-func RestoreSpecFor(p Installed, formation *ct.ExpandedFormation) *RestoreSpec {
+// RestoreSpecFor returns the cluster restore spec stored on the plugin record.
+// Release env does not invent an appliance restore.
+func RestoreSpecFor(p Installed, _ *ct.ExpandedFormation) *RestoreSpec {
 	if p.Restore != nil && p.Restore.File != "" && len(p.Restore.Args) > 0 {
 		return p.Restore
-	}
-	if formation == nil || formation.Release == nil {
-		return nil
-	}
-	env := formation.Release.Env
-	leader := "leader." + p.Name + ".discoverd"
-	if env["MYSQL_PWD"] != "" {
-		return &RestoreSpec{
-			File:    "mysql.sql.gz",
-			Sirenia: true,
-			Args:    []string{"mysql", "-u", "flynn", "-h", leader},
-			Env:     []string{"MYSQL_PWD"},
-		}
-	}
-	if env["MONGO_PWD"] != "" {
-		return &RestoreSpec{
-			File:    "mongodb.archive.gz",
-			Sirenia: true,
-			Args:    []string{"mongorestore", "-h", leader, "-u", "flynn", "-p", "${app.MONGO_PWD}", "--archive"},
-			Env:     []string{"MONGO_PWD"},
-		}
 	}
 	return nil
 }

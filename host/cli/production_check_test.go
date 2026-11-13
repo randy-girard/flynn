@@ -39,6 +39,8 @@ type stubProductionAPI struct {
 	profileErr      error
 	resources       []*ct.Resource
 	resourcesErr    error
+	engineResources map[string][]*ct.Resource
+	engineErr       map[string]error
 	backups         []*ct.TenantBackup
 	backupsErr      error
 	availability    string
@@ -77,6 +79,17 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 			return fmtUnexpected("resources decode")
 		}
 		*dst = s.resources
+		return nil
+	case "/providers/mongodb/resources":
+		engine := strings.TrimSuffix(strings.TrimPrefix(path, "/providers/"), "/resources")
+		if err := s.engineErr[engine]; err != nil {
+			return err
+		}
+		dst, ok := out.(*[]*ct.Resource)
+		if !ok {
+			return fmtUnexpected("resources decode")
+		}
+		*dst = s.engineResources[engine]
 		return nil
 	case "/tenant-backups":
 		if s.backupsErr != nil {
@@ -140,6 +153,8 @@ type productionFixture struct {
 	color           bool
 	resources       []*ct.Resource
 	resourcesErr    error
+	engineResources map[string][]*ct.Resource
+	engineErr       map[string]error
 	backups         []*ct.TenantBackup
 	backupsErr      error
 	availability    string
@@ -209,6 +224,8 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 		profileErr:      f.profileErr,
 		resources:       f.resources,
 		resourcesErr:    f.resourcesErr,
+		engineResources: f.engineResources,
+		engineErr:       f.engineErr,
 		backups:         f.backups,
 		backupsErr:      f.backupsErr,
 		availability:    f.availability,
@@ -523,7 +540,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -1172,7 +1189,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/providers/postgres/resources,/providers/mongodb/resources,/tenant-backups" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
@@ -1204,6 +1221,48 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
 		})
 	}
+
+	for _, mode := range []string{"hosted", "self_hosted"} {
+		mode := mode
+		t.Run(mode+"/mongodb miss fails", func(t *testing.T) {
+			mongo := &ct.Resource{ID: "55555555-5555-5555-5555-555555555555"}
+			f := &productionFixture{
+				tenancy:   ct.TenancySettings{Mode: mode},
+				env:       s3,
+				resources: []*ct.Resource{primary},
+				engineResources: map[string][]*ct.Resource{
+					"mongodb": {mongo},
+				},
+				backups: []*ct.TenantBackup{{ResourceID: primary.ID, LastSuccessAt: &fresh}},
+				now:     now,
+			}
+			got, err := f.run(t)
+			assertFailed(t, err)
+			row := mustCheck(t, got, "fail", "backup", "mongodb resources missing a current dump: 1; tenant volumes are outside flynn-host backup")
+			if strings.Contains(row.detail, "postgres primaries missing") {
+				t.Fatalf("fresh postgres dump counted as a miss: %s", row.detail)
+			}
+			for _, want := range []string{"flynn mongodb dump", "does not dump"} {
+				if !strings.Contains(row.action, want) {
+					t.Fatalf("action %q missing %q", row.action, want)
+				}
+			}
+		})
+	}
+
+	t.Run("other engine list error fails", func(t *testing.T) {
+		f := &productionFixture{
+			env:       s3,
+			resources: []*ct.Resource{follower, deposed},
+			engineErr: map[string]error{"mongodb": errors.New("mongodb controller down")},
+		}
+		got, err := f.run(t)
+		assertFailed(t, err)
+		row := mustCheck(t, got, "fail", "backup", "error=mongodb controller down")
+		if !strings.Contains(row.action, "does not dump") {
+			t.Fatal(row.action)
+		}
+	})
 
 	t.Run("status error fails the line", func(t *testing.T) {
 		f := &productionFixture{

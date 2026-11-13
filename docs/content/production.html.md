@@ -43,7 +43,7 @@ volumes, or detach a vdev.
 | `postgres-availability` | `GET /cluster/postgres-availability`. `manual` is `ok` in either tenancy mode. `system` with fewer than two registered hosts is `warn` in either tenancy mode and does not exit 1. `system` with two or more hosts is `ok`. The line does not query replication lag. A controller error is `fail` and is not treated as `manual`. Tenancy does not change the stored value. Set it with `flynn-host postgres:availability` or Cluster → Settings. |
 | `mysql-availability` | Same rule as `postgres-availability`, from `GET /cluster/mysql-availability`. Set it with `flynn-host mysql:availability` or Cluster → Settings. |
 | `redis-availability` | Same rule as `postgres-availability`, from `GET /cluster/redis-availability`. Set it with `flynn-host redis:availability` or Cluster → Settings. |
-| `backup` | No Postgres primary: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A primary whose last dump is missing, or strictly older than 24h plus 1h, is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources` and, only when a primary exists, `GET /tenant-backups`. It does not dump. |
+| `backup` | No Postgres primary and no MongoDB resource: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A Postgres primary or a MongoDB resource whose last dump is missing or strictly older than 24h plus 1h is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources` and `GET /providers/mongodb/resources`. A 404 on a provider means that engine has no resources. Any other list error fails the line. It reads `GET /tenant-backups` only when at least one counted resource exists. It does not dump. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
 ZFS is local, so run the check on each host. The other lines are cluster state,
@@ -485,28 +485,33 @@ individual applications (including their databases).
 
 To take a full-cluster backup, run `flynn-host backup --file backup.tar`.
 A file named `backup.tar` is created with the data needed to stand up a new
-cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus MariaDB and
-MongoDB if they were running), `plugins.json` (which plugins were installed),
+cluster: `flynn.json` (discoverd/flannel/postgres/controller, plus plugin
+apps that were included), `plugins.json` (which plugins were installed), and
 a full `pg_dumpall` of the **platform** Postgres appliance (controller,
 blobstore files including plugin image layers, and plugin metadata databases
-attached to `platform-postgres`), and MariaDB/MongoDB dumps when those
-plugin appliances are scaled above zero. Tenant Postgres instance volumes
-are not in that dump. Each tenant database dump is a custom-format `pg_dump`
-stored in the blobstore under `backups/<owner>/<resource>/<timestamp>/<database>`.
-Those objects are not applied by cluster restore. `flynn-host backup` prints
-that on stderr. [`production:check`](#production-check) warns when there is no
-Postgres primary, and fails in both hosted and self-hosted mode when a
-primary's last success is missing or strictly older than 24 hours plus one
-hour. A postgres blobstore (`DEFAULT_BACKEND` empty or type `postgres`) is
+attached to `platform-postgres`). An installed plugin record that still has
+a `cluster_backup` block is dumped into the tarball. `MYSQL_PWD` and
+`MONGO_PWD` do not create that block. Those appliance archives are not tenant
+data. Tenant volumes are not in the tarball. Tenant Postgres and MongoDB
+dumps are objects under
+`backups/<owner>/<resource>/<timestamp>/<segment>` and are not applied by
+cluster restore. Kafka and ClickHouse volumes are not in the tarball either.
+`flynn-host backup` prints that tenant dumps under `backups/` are not applied
+by cluster restore. [`production:check`](#production-check) warns when there
+is no Postgres primary and no MongoDB resource, and fails in both hosted and
+self-hosted mode when a counted resource's last success is missing or
+strictly older than 24 hours plus one hour. A postgres blobstore (`DEFAULT_BACKEND` empty or type `postgres`) is
 refused for those dumps in both tenancy modes; run
 `flynn-host blobstore:set --migrate --delete` first. That refusal does not
 change the blobstore line above (hosted `fail`, self-hosted `warn`). If the current postgres release has no formation row
 yet (seen after an updater deploy), backup copies process counts from
 another scaled formation on that app instead of failing. Restore does
 **not** re-run `flynn-host plugin:install`; plugin apps come back with
-postgres. Redis, Kafka, ClickHouse, and tenant Postgres keep data on
-volumes that are **not** included; after restore those engines come back
-empty. App slugs and container images stored in the blobstore Postgres
+postgres. Redis and MySQL tenant data, and every database volume, stay
+out of the tarball, so those volumes come back empty. Kafka and ClickHouse
+volumes come back empty too. Restore a tenant Postgres or MongoDB resource
+from its blobstore timestamp after the cluster is up. Those objects are not
+applied by cluster restore. App slugs and container images stored in the blobstore Postgres
 backend are restored from that dump. If blobstore was switched to S3,
 MinIO, GCS, or Azure (`flynn-host blobstore:set` / `DEFAULT_BACKEND`),
 object bytes stay in that bucket; the backup still includes controller env
