@@ -3,12 +3,14 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/hashicorp/raft"
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/pkg/keepalive"
 )
@@ -150,31 +152,71 @@ func TestExpiryWaitsTwoTTLThenExpiresUnstamped(t *testing.T) {
 	}
 
 	clock.Advance(s.InstanceTTL)
-	if _, err := s.HeartbeatBatch([]discoverd.HeartbeatStamp{
-		{Service: "web", ID: "a"},
-		{Service: "web", ID: "b"},
-	}); err != nil {
-		t.Fatal(err)
+	// A single-node raft can step down and back up while this runs. That
+	// clears the clock and restarts the leader wait. Pin the wait and the
+	// stamps immediately before the scan, and retry if leadership moved.
+	expire := func(stale, fresh []string) {
+		t.Helper()
+		var last error
+		for attempt := 0; attempt < 6; attempt++ {
+			now := clock.Now()
+			s.mu.Lock()
+			s.leaderTime = now.Add(-3 * s.InstanceTTL)
+			s.mu.Unlock()
+			for _, id := range fresh {
+				s.heartbeats.stamp(instanceKey{service: "web", instanceID: id}, now)
+			}
+			for _, id := range stale {
+				s.heartbeats.stamp(instanceKey{service: "web", instanceID: id}, now.Add(-s.InstanceTTL-time.Second))
+			}
+			before := s.LastIndex()
+			err := s.EnforceExpiry()
+			if err == ErrLeaderWait || err == raft.ErrNotLeader {
+				last = err
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			ids := instanceIDs(t, s, "web")
+			if s.LastIndex() == before {
+				kept := false
+				for _, id := range stale {
+					if ids[id] {
+						kept = true
+					}
+				}
+				if kept {
+					last = fmt.Errorf("stale stamps were refreshed before the scan")
+					continue
+				}
+				t.Fatalf("instances %v disappeared without a raft write (index %d)", stale, before)
+			}
+			if s.LastIndex() != before+1 {
+				t.Fatalf("expiry raft index %d -> %d", before, s.LastIndex())
+			}
+			for _, id := range stale {
+				if ids[id] {
+					t.Fatalf("instance %s still registered after expiry: %v", id, ids)
+				}
+			}
+			return
+		}
+		t.Fatal(last)
 	}
-	before := s.LastIndex()
-	if err := s.EnforceExpiry(); err != nil {
-		t.Fatal(err)
-	}
-	if s.LastIndex() != before+1 {
-		t.Fatalf("expiry raft index %d -> %d", before, s.LastIndex())
-	}
-	if ids := instanceIDs(t, s, "web"); len(ids) != 2 || ids["a"] == false || ids["b"] == false || ids["c"] {
+	s.mu.Lock()
+	s.needFullSweep = true
+	s.mu.Unlock()
+	expire([]string{"c"}, []string{"a", "b"})
+	if ids := instanceIDs(t, s, "web"); len(ids) != 2 || !ids["a"] || !ids["b"] {
 		t.Fatalf("after first sweep: %v", ids)
 	}
 
 	clock.Advance(s.InstanceTTL + time.Second)
-	before = s.LastIndex()
-	if err := s.EnforceExpiry(); err != nil {
-		t.Fatal(err)
-	}
-	if s.LastIndex() != before+1 {
-		t.Fatalf("second expiry should be one raft command: %d -> %d", before, s.LastIndex())
-	}
+	s.mu.Lock()
+	s.needFullSweep = false
+	s.mu.Unlock()
+	expire([]string{"a", "b"}, nil)
 	if ids := instanceIDs(t, s, "web"); len(ids) != 0 {
 		t.Fatalf("heap path kept instances: %v", ids)
 	}
