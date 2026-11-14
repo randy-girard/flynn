@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -35,10 +36,10 @@ usage: flynn-host production:check [--zpool-name=<name>]
 
 Print a bordered table for tenancy, the blobstore backend, ZFS, runtime
 reservation, the per-host process cap, the persistent-singleton cap,
-backups, and the overlay. Columns are status, check, detail, and what to
-do. Long cells wrap inside the border. Status is green, yellow, or red
-on a terminal. Set NO_COLOR to print plain text. The process exits 1
-when any status is fail. A warn does not.
+backups, the cluster log sink, and the overlay. Columns are status,
+check, detail, and what to do. Long cells wrap inside the border. Status
+is green, yellow, or red on a terminal. Set NO_COLOR to print plain
+text. The process exits 1 when any status is fail. A warn does not.
 
 Tenancy comes from GET /tenancy. A controller error is a fail. It is not
 treated as self_hosted. GetSettings maps only a missing row to self_hosted.
@@ -82,6 +83,18 @@ mode. A dump newer than that is ok, and the detail still says volumes are
 outside the tarball. Tenancy is not the switch. The check reads
 GET /providers/postgres/resources and, only when a primary exists,
 GET /tenant-backups. It does not dump.
+Log sink reads GET /sinks once. It does not call log-sink:list on a
+host and it does not dial. A qualifying sink has kind syslog, an empty
+app id, a syslog+tls URL with a host, insecure false, format empty or
+rfc6587, and an empty prefix. Empty scope is all. Coverage is one such
+sink with scope all, or one system sink and one apps sink. syslog://,
+insecure, newline, prefixed_newline, a prefix, a per-app app id, and
+kind logaggregator do not qualify. Hosted mode fails without coverage.
+Self-hosted mode warns. A large self-hosted cluster needs the same sink.
+The ring is not retention. If tenancy cannot be read, the mode is
+unknown, or GET /sinks fails, this line fails. It is not a self-hosted
+warning. A parsed sink config that does not qualify is not a list error.
+
 Overlay prints the live flannel NETWORK and subnet length. It does not
 hardcode a network. This line is informational.
 
@@ -115,7 +128,7 @@ func (e productionAPIError) ListRuntimeProfiles() ([]*ct.RuntimeProfile, error) 
 
 // productionCheckConfig is the data the check reads. Tests stub every field.
 // A real run uses one tenancy GET, one blobstore release, one profile list,
-// one host list, one flannel meta read, and one zpool status.
+// one host list, one sink list, one flannel meta read, and one zpool status.
 type productionCheckConfig struct {
 	Pool        string
 	API         productionAPI
@@ -299,6 +312,7 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 		now = cfg.Now()
 	}
 	addBackupLine(add, api, now)
+	addLogSinkLine(add, api, mode)
 	addOverlayLine(add, meta, metaErr)
 
 	writeProductionTable(w, rows, cfg.Color)
@@ -963,6 +977,112 @@ func addEngineAvailabilityLine(add func(productionRow), api productionAPI, hosts
 			status: "fail", check: check, detail: "error=unknown " + check,
 			action: "Set it: flynn-host " + command + " manual or system.",
 		})
+	}
+}
+
+const logSinkFixAction = "flynn-host log-sink:add syslog syslog+tls://logs.example:6514/ format rfc6587 and no prefix. A large cluster needs this sink. The ring is not retention."
+
+func addLogSinkLine(add func(productionRow), api productionAPI, mode string) {
+	var sinks []*ct.Sink
+	if err := api.Get("/sinks", &sinks); err != nil {
+		add(productionRow{
+			status: "fail",
+			check:  "log-sink",
+			detail: "error=" + err.Error(),
+			action: "Fix the controller, then rerun. This check does not call log-sink:list.",
+		})
+		return
+	}
+	if mode != tenancy.ModeHosted && mode != tenancy.ModeSelfHosted {
+		add(productionRow{
+			status: "fail",
+			check:  "log-sink",
+			detail: "error=unknown tenancy",
+			action: "Tenancy is unread. This is not a self-hosted warning.",
+		})
+		return
+	}
+	detail, ok := logSinkCoverage(sinks)
+	if ok {
+		add(productionRow{
+			status: "ok",
+			check:  "log-sink",
+			detail: detail,
+			action: "log-sink:add remains the operator command.",
+		})
+		return
+	}
+	status := "fail"
+	if mode == tenancy.ModeSelfHosted {
+		status = "warn"
+	}
+	add(productionRow{
+		status: status,
+		check:  "log-sink",
+		detail: detail,
+		action: logSinkFixAction,
+	})
+}
+
+// logSinkCoverage reports whether controller sinks cover system and app logs.
+// A sink that does not parse is skipped. That is not a list-read error.
+func logSinkCoverage(sinks []*ct.Sink) (string, bool) {
+	all, system, apps := false, false, false
+	for _, sink := range sinks {
+		sys, app := qualifyingLogSink(sink)
+		if sys && app {
+			all = true
+		}
+		system = system || sys
+		apps = apps || app
+	}
+	switch {
+	case all:
+		return "syslog+tls scope=all", true
+	case system && apps:
+		return "syslog+tls scope=system+apps", true
+	case system:
+		return "coverage=system", false
+	case apps:
+		return "coverage=apps", false
+	default:
+		return "coverage=none", false
+	}
+}
+
+func qualifyingLogSink(sink *ct.Sink) (system, apps bool) {
+	if sink == nil || sink.Kind != ct.SinkKindSyslog || strings.TrimSpace(sink.AppID) != "" || sink.Config == nil {
+		return false, false
+	}
+	var cfg ct.SyslogSinkConfig
+	if err := json.Unmarshal(*sink.Config, &cfg); err != nil {
+		return false, false
+	}
+	if cfg.Insecure || strings.TrimSpace(cfg.Prefix) != "" {
+		return false, false
+	}
+	u, err := url.Parse(strings.TrimSpace(cfg.URL))
+	if err != nil || u.Scheme != "syslog+tls" || u.Host == "" {
+		return false, false
+	}
+	switch cfg.Format {
+	case "", ct.SyslogFormatRFC6587:
+	default:
+		return false, false
+	}
+	scope, err := ct.ParseSinkScope(cfg.Scope)
+	if err != nil {
+		return false, false
+	}
+	switch scope {
+	case ct.SinkScopeAll:
+		return true, true
+	case ct.SinkScopeSystem:
+		return true, false
+	case ct.SinkScopeApps:
+		return false, true
+	default:
+		return false, false
 	}
 }
 

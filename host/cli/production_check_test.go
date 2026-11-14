@@ -45,6 +45,8 @@ type stubProductionAPI struct {
 	backupsErr      error
 	availability    string
 	availabilityErr error
+	sinks           []*ct.Sink
+	sinksErr        error
 }
 
 func (s *stubProductionAPI) Get(path string, out interface{}) error {
@@ -100,6 +102,16 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 			return fmtUnexpected("backups decode")
 		}
 		*dst = s.backups
+		return nil
+	case "/sinks":
+		if s.sinksErr != nil {
+			return s.sinksErr
+		}
+		dst, ok := out.(*[]*ct.Sink)
+		if !ok {
+			return fmtUnexpected("sinks decode")
+		}
+		*dst = s.sinks
 		return nil
 	default:
 		return fmtUnexpected("GET " + path)
@@ -159,6 +171,8 @@ type productionFixture struct {
 	backupsErr      error
 	availability    string
 	availabilityErr error
+	sinks           []*ct.Sink
+	sinksErr        error
 	now             time.Time
 
 	api        *stubProductionAPI
@@ -200,6 +214,13 @@ func (f *productionFixture) init() {
 	if f.meta == nil && f.metaErr == nil {
 		f.meta = []byte(`{"config":{"Network":"10.3.0.0/16","SubnetLen":24}}`)
 	}
+	if f.sinks == nil && f.sinksErr == nil {
+		f.sinks = []*ct.Sink{syslogSink("cluster", "", ct.SyslogSinkConfig{
+			URL:    "syslog+tls://logs.example:6514/",
+			Format: ct.SyslogFormatRFC6587,
+			Scope:  ct.SinkScopeAll,
+		})}
+	}
 	if f.zpoolText == "" && f.zpoolErr == nil {
 		f.zpoolText = zpoolStatusText(
 			"NAME STATE READ WRITE CKSUM",
@@ -230,6 +251,8 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 		backupsErr:      f.backupsErr,
 		availability:    f.availability,
 		availabilityErr: f.availabilityErr,
+		sinks:           f.sinks,
+		sinksErr:        f.sinksErr,
 	}
 	var nowFn func() time.Time
 	if !f.now.IsZero() {
@@ -530,6 +553,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
 		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "Back up tenant volumes separately"},
+		{status: "ok", check: "log-sink", detail: "syslog+tls scope=all", action: "log-sink:add"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "Informational"},
 	})
 	if strings.Contains(got, "secret.example") || strings.Contains(got, "AKIASECRET") || strings.Contains(got, "BACKEND_") || strings.Contains(got, "bucket=") {
@@ -542,7 +566,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/sinks" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -572,6 +596,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
 		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup", action: "tenant volumes"},
+		{status: "ok", check: "log-sink", detail: "syslog+tls scope=all", action: "log-sink:add"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24", action: "100.100.0.0/16"},
 	})
 	assertBlobstoreMigrateAction(t, blobstoreAction(t, got))
@@ -733,6 +758,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
 		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
+		{status: "ok", check: "log-sink", detail: "syslog+tls scope=all", action: "log-sink:add"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
 	if strings.Contains(got, "secret.example") || strings.Contains(got, "AKIASECRET") || strings.Contains(got, "BACKEND_") {
@@ -772,6 +798,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 		{status: "ok", check: "kafka-availability", detail: "mode=manual", action: "kafka:availability"},
 		{status: "ok", check: "clickhouse-availability", detail: "mode=manual", action: "clickhouse:availability"},
 		{status: "warn", check: "backup", detail: "tenant volumes are outside flynn-host backup"},
+		{status: "fail", check: "log-sink", detail: "error=unknown tenancy", action: "not a self-hosted warning"},
 		{status: "ok", check: "overlay", detail: "network=10.3.0.0/16 subnet_len=24"},
 	})
 	if f.api.profileReads != 1 || len(f.api.releases) != 1 || f.zpoolCalls != 1 || f.metaCalls != 1 || f.hostCalls != 1 {
@@ -1145,13 +1172,16 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 14 {
+	if len(rows) != 15 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
 	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
 		t.Fatalf("colored blobstore row %+v", rows[1])
 	}
 	assertBlobstoreMigrateAction(t, rows[1].action)
+	if rows[len(rows)-2].status != "ok" || rows[len(rows)-2].check != "log-sink" || rows[len(rows)-2].detail != "syslog+tls scope=all" {
+		t.Fatalf("colored log-sink row %+v", rows[len(rows)-2])
+	}
 }
 
 func TestProductionCheckBackupLine(t *testing.T) {
@@ -1200,7 +1230,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups,/sinks" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})
@@ -1399,4 +1429,236 @@ func sameTags(a, b map[string]string) bool {
 		}
 	}
 	return true
+}
+
+func syslogSink(id, appID string, cfg ct.SyslogSinkConfig) *ct.Sink {
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		panic(err)
+	}
+	msg := json.RawMessage(raw)
+	return &ct.Sink{ID: id, Kind: ct.SinkKindSyslog, AppID: appID, Config: &msg}
+}
+
+func TestProductionCheckLogSinkCoverage(t *testing.T) {
+	good := ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Format: ct.SyslogFormatRFC6587, Scope: ct.SinkScopeAll}
+	cases := []struct {
+		name       string
+		mode       string
+		tenancyErr error
+		sinks      []*ct.Sink
+		sinksErr   error
+		status     string
+		detail     string
+		wantFail   bool
+		action     string
+		hidden     string
+	}{
+		{
+			name:     "hosted-none",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+			action:   "log-sink:add",
+		},
+		{
+			name:   "self-hosted-none",
+			mode:   "self_hosted",
+			sinks:  []*ct.Sink{},
+			status: "warn",
+			detail: "coverage=none",
+			action: "large",
+		},
+		{
+			name:     "self-hosted-read-error",
+			mode:     "self_hosted",
+			sinksErr: errors.New("sink down"),
+			status:   "fail",
+			detail:   "error=sink down",
+			wantFail: true,
+			action:   "Fix the controller",
+		},
+		{
+			name:       "unknown-tenancy-with-sink",
+			tenancyErr: errors.New("controller down"),
+			sinks:      []*ct.Sink{syslogSink("ok", "", good)},
+			status:     "fail",
+			detail:     "error=unknown tenancy",
+			wantFail:   true,
+			action:     "not a self-hosted warning",
+		},
+		{
+			name:   "hosted-all",
+			mode:   "hosted",
+			sinks:  []*ct.Sink{syslogSink("ok", "", good)},
+			status: "ok",
+			detail: "syslog+tls scope=all",
+			action: "log-sink:add",
+		},
+		{
+			name:   "empty-format-and-scope",
+			mode:   "self_hosted",
+			sinks:  []*ct.Sink{syslogSink("ok", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/"})},
+			status: "ok",
+			detail: "syslog+tls scope=all",
+		},
+		{
+			name: "system-and-apps",
+			mode: "hosted",
+			sinks: []*ct.Sink{
+				syslogSink("sys", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Scope: "system"}),
+				syslogSink("apps", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Scope: "apps"}),
+			},
+			status: "ok",
+			detail: "syslog+tls scope=system+apps",
+		},
+		{
+			name:     "system-only",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("sys", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Scope: "system"})},
+			status:   "fail",
+			detail:   "coverage=system",
+			wantFail: true,
+			action:   "log-sink:add",
+		},
+		{
+			name: "good-sink-ignores-bad-neighbor",
+			mode: "hosted",
+			sinks: []*ct.Sink{
+				syslogSink("plain", "", ct.SyslogSinkConfig{URL: "syslog://logs.example:514/", Scope: "all"}),
+				syslogSink("ok", "", good),
+			},
+			status: "ok",
+			detail: "syslog+tls scope=all",
+		},
+		{
+			name:     "syslog-without-tls",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("plain", "", ct.SyslogSinkConfig{URL: "syslog://logs.example:514/"})},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+		{
+			name:   "insecure",
+			mode:   "self_hosted",
+			sinks:  []*ct.Sink{syslogSink("insec", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Insecure: true})},
+			status: "warn",
+			detail: "coverage=none",
+			action: "large",
+		},
+		{
+			name:     "prefix",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("pref", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Prefix: "super-secret-prefix"})},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+			hidden:   "super-secret-prefix",
+		},
+		{
+			name:     "newline",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("nl", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Format: ct.SyslogFormatNewline})},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+		{
+			name:     "prefixed-newline",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("pnl", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Format: ct.SyslogFormatPrefixedNewline})},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+		{
+			name:     "per-app",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("app", "app-1", good)},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+		{
+			name: "logaggregator",
+			mode: "hosted",
+			sinks: []*ct.Sink{{
+				ID:     "agg",
+				Kind:   ct.SinkKindLogaggregator,
+				Config: syslogSink("unused", "", good).Config,
+			}},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+		{
+			name: "bad-json",
+			mode: "self_hosted",
+			sinks: []*ct.Sink{{
+				ID:     "bad",
+				Kind:   ct.SinkKindSyslog,
+				Config: func() *json.RawMessage { m := json.RawMessage(`{`); return &m }(),
+			}},
+			status: "warn",
+			detail: "coverage=none",
+		},
+		{
+			name:   "apps-only",
+			mode:   "self_hosted",
+			sinks:  []*ct.Sink{syslogSink("apps", "", ct.SyslogSinkConfig{URL: "syslog+tls://logs.example:6514/", Scope: "apps"})},
+			status: "warn",
+			detail: "coverage=apps",
+			action: "large",
+		},
+		{
+			name:     "empty-host",
+			mode:     "hosted",
+			sinks:    []*ct.Sink{syslogSink("empty", "", ct.SyslogSinkConfig{URL: "syslog+tls://"})},
+			status:   "fail",
+			detail:   "coverage=none",
+			wantFail: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &productionFixture{
+				tenancy:    ct.TenancySettings{Mode: tc.mode},
+				tenancyErr: tc.tenancyErr,
+				sinks:      tc.sinks,
+				sinksErr:   tc.sinksErr,
+			}
+			got, err := f.run(t)
+			if tc.wantFail {
+				assertFailed(t, err)
+			} else {
+				assertPassed(t, err)
+			}
+			row := mustCheck(t, got, tc.status, "log-sink", tc.detail)
+			if tc.action != "" && !strings.Contains(row.action, tc.action) {
+				t.Fatalf("action %q missing %q", row.action, tc.action)
+			}
+			if tc.hidden != "" && strings.Contains(got, tc.hidden) {
+				t.Fatalf("table leaked %q\n%s", tc.hidden, got)
+			}
+			assertProductionWidth(t, got)
+			n := 0
+			for _, path := range f.api.gets {
+				if path == "/sinks" {
+					n++
+				}
+				if strings.Contains(path, "log-sink") {
+					t.Fatalf("check called %s", path)
+				}
+			}
+			if n != 1 {
+				t.Fatalf("GET /sinks count %d, gets %v", n, f.api.gets)
+			}
+		})
+	}
+	if !strings.Contains(commands["production:check"].usage, "GET /sinks") || !strings.Contains(commands["production:check"].usage, "does not call log-sink:list") {
+		t.Fatal("usage does not describe the controller sink list")
+	}
 }

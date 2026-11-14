@@ -27,10 +27,10 @@ $ sudo flynn-host production:check --zpool-name=flynn-default
 turns the status colors off.
 
 `--zpool-name` defaults to `flynn-default`. The command reads tenancy, the
-blobstore release, runtime profiles, discoverd host tags, flannel service
-metadata, and this host's pool. It does not migrate the blobstore, set
-`flynn-max-processes` or `flynn-max-persistent-singletons`, create or move
-volumes, or detach a vdev.
+blobstore release, runtime profiles, discoverd host tags, `GET /sinks`,
+flannel service metadata, and this host's pool. It does not migrate the
+blobstore, set `flynn-max-processes` or `flynn-max-persistent-singletons`,
+create or move volumes, detach a vdev, or dial a log sink.
 
 | Line | Meaning |
 | --- | --- |
@@ -47,10 +47,13 @@ volumes, or detach a vdev.
 | `kafka-availability` | Same rule as `mongodb-availability`, from `GET /cluster/kafka-availability`. Set it with `flynn-host kafka:availability` or Cluster → Settings. |
 | `clickhouse-availability` | Same rule as `mongodb-availability`, from `GET /cluster/clickhouse-availability`. Set it with `flynn-host clickhouse:availability` or Cluster → Settings. |
 | `backup` | No Postgres primary and no MongoDB, Kafka, or ClickHouse resource: `warn`, and the detail stays `tenant volumes are outside flynn-host backup`. A Postgres primary or a MongoDB, Kafka, or ClickHouse resource whose last dump is missing or strictly older than 24h plus 1h is `fail` in both hosted and self-hosted mode. A current dump is `ok`, and the detail still says volumes are outside the tarball. The check reads `GET /providers/postgres/resources`, `GET /providers/mongodb/resources`, `GET /providers/kafka/resources`, and `GET /providers/clickhouse/resources`. A 404 on a provider means that engine has no resources. Any other list error fails the line. It reads `GET /tenant-backups` only when at least one counted resource exists. It does not dump. |
+| `log-sink` | `GET /sinks` once. It does not call `log-sink:list` on a host and it does not dial. Hosted is `fail` and self-hosted is `warn` unless the list covers system and app logs. A qualifying sink is `kind=syslog`, empty app, `syslog+tls` with a host, `insecure` false, format empty or `rfc6587`, and an empty prefix. Scope `all` (an empty scope is `all`) is enough. So is one `system` sink and one `apps` sink. `syslog://`, `insecure`, `newline`, `prefixed_newline`, a prefix, a per-app sink, and `kind=logaggregator` do not count. A list error, an unknown tenancy mode, or a failed tenancy read is `fail` in either mode. That is not a self-hosted warning. The same mux, disk files, and drop counter run in both modes. `tenancy_mode` only changes this line's severity. |
 | `overlay` | Informational. Prints the live flannel network and subnet length. |
 
-ZFS is local, so run the check on each host. The other lines are cluster state,
-except `host-cap` and `singleton-cap`, which list only the hosts currently registered in discoverd.
+ZFS is local, so run the check on each host. `log-sink` is the controller
+sink list, not the sinks bolted onto one host. The other lines are cluster
+state, except `host-cap` and `singleton-cap`, which list only the hosts
+currently registered in discoverd.
 
 Set a cap with `flynn-host init --max-processes` or
 `flynn-host tags:max-processes`. On a new `host.json`, omitting
@@ -636,13 +639,34 @@ sudo flynn-host otel
 sudo flynn-host otel:remove <id>
 ```
 
-Job logs stay on syslog. `flynn log-sink` is **per app**. `flynn-host log-sink`
-is cluster-wide and accepts `--scope` / `--app` filters:
+Job logs stay on syslog. The in-cluster aggregator keeps the newest 10,000
+lines per app id in each aggregator process. That ring is a live tail.
+`flynn log` reads it. It is not a cluster total and it is not retention.
+Each host also writes `/var/log/flynn/<app-id>.log`, rotating at 100MiB
+with one backup, about 200MB per app on that host. Those files are not a
+cluster total either. A hosted cluster and a large self-hosted cluster
+both need an operator syslog sink for retention. `tenancy_mode` does not
+change the path that copies stdout.
+
+`flynn log-sink` is **per app**. `flynn-host log-sink` is cluster-wide and
+accepts `--scope` / `--app` filters. `production:check` counts only
+cluster sinks: `syslog+tls`, format `rfc6587`, no prefix, covering system
+and app logs. `syslog://`, `--insecure`, `newline`, `prefixed_newline`,
+and a prefix template do not. A prefix is a Go template of the job and can
+print environment variables and secrets. Stdout and stderr are copied as
+the process wrote them.
 
 ```text
-sudo flynn-host log-sink:add syslog --scope system syslog://logs.example:514/
-flynn -a myapp log-sink:add syslog syslog://logs.example:514/
+sudo flynn-host log-sink:add syslog syslog+tls://logs.example:6514/
+flynn -a myapp log-sink:add syslog syslog+tls://logs.example:6514/
 ```
+
+A slow sink drops lines. It does not stall the process. `GET /host/status`
+includes `log_drops` for that host process: sink-buffer drops plus on-disk
+queue drops. Follower timeouts are not included. The count resets when
+`flynn-host` restarts. Do not tail the aggregator's `GET /log`,
+`GET /snapshot`, or TCP port 514. Those listeners are unauthenticated, and
+any app name selects a ring.
 
 The dashboard still shows live metrics for operators who are already logged in.
 `flynn-host metrics` prints a live host snapshot without the dashboard.
@@ -663,8 +687,8 @@ managed as apps in Flynn.
 Logs can be retrieved using several methods.
 
 The `flynn -a $APP_NAME log` command will retrieve up to the last 10,000 lines
-logged by all app processes and can also follow the stream as new log lines are
-emitted.
+per app id from each aggregator process, and can also follow the stream as new
+log lines are emitted. That ring is a live tail. It is not a cluster total.
 
 When a slugbuilder, dockerbuilder, release, or postdeploy job stops, the
 controller stores that job's stdout and stderr in Postgres, gzipped, keeping
@@ -686,9 +710,11 @@ ps -a` command.
 Flynn stores logs from jobs in `/var/log/flynn` on each host. There is one log
 file for jobs from each app that has been run on the host. All logs from jobs
 tagged with the same app ID will go into a file named
-`/var/log/flynn/$APP_ID.log`. When a log file reaches 100MB in size, it is
-rotated and a new file is created. One previous rotated log is kept, for a total
-of a maximum 200MB of logs per app per host.
+`/var/log/flynn/$APP_ID.log`. When a log file reaches 100MiB, it is
+rotated and a new file is created. One previous rotated log is kept, for a
+maximum of about 200MB of logs per app per host. That is not a cluster total.
+Lines dropped because the sink buffer or this file's queue was full are
+counted in that host's `GET /host/status` field `log_drops`.
 
 systemd manages the `flynn-host` daemon. Logs are in `/var/log/flynn/flynn-host.log`
 (also `journalctl -u flynn-host`).
