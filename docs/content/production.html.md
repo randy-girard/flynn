@@ -125,6 +125,12 @@ started after the initial bootstrap act as proxies to the consensus cluster. We
 recommend starting with three or five hosts and adding more hosts when
 necessary.
 
+Discoverd heartbeats use the same path on a hosted cluster and a self-hosted
+one, including a large self-hosted deployment. Steady heartbeats are stamps
+in the leader's memory. User jobs on a host share one batched request, so
+Raft writes do not grow with web process count. Expiry remains one leader
+command with a 10 second TTL. There is no setting for this.
+
 Each host should have a minimum of 2GB of memory, and inter-host network packets
 should have a latency of less than 2ms. Deploying a single Flynn cluster across
 higher latency WAN links is not recommended, as it can have a significant impact

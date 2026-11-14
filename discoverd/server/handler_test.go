@@ -867,6 +867,101 @@ func TestHandler_GetInstancesRedactsAuthKey(t *testing.T) {
 }
 
 // MustNewHTTPRequest returns a new HTTP request. Panic on error.
+func TestHandler_PostHeartbeats(t *testing.T) {
+	h := NewHandler()
+	var got []discoverd.HeartbeatStamp
+	h.Store.HeartbeatBatchFn = func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+		got = stamps
+		return discoverd.HeartbeatBatchResult{Missing: []discoverd.HeartbeatStamp{{Service: "web", ID: "gone"}}}, nil
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("POST", "http://127.0.0.1:1111/heartbeats", strings.NewReader(`{"instances":[{"service":"web","id":"live"},{"service":"web","id":"gone"}]}`)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if len(got) != 2 || !strings.Contains(w.Body.String(), `"id":"gone"`) {
+		t.Fatalf("stamps %+v body %s", got, w.Body.String())
+	}
+}
+
+func TestHandler_PostHeartbeatsRequiresAuth(t *testing.T) {
+	h := NewHandler()
+	h.AuthKey = "cluster-discoverd-secret"
+	h.Store.HeartbeatBatchFn = func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+		t.Fatal("unauthenticated batch reached the store")
+		return discoverd.HeartbeatBatchResult{}, nil
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("POST", "http://127.0.0.1:1111/heartbeats", strings.NewReader(`{"instances":[{"service":"web","id":"a"}]}`)))
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandler_PostHeartbeatsRedirectsWhenNotLeader(t *testing.T) {
+	h := NewHandler()
+	h.Store.LeaderFn = func() string { return "10.0.0.8:1111" }
+	h.Store.HeartbeatBatchFn = func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+		return discoverd.HeartbeatBatchResult{}, server.ErrNotLeader
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("POST", "http://10.0.0.1:1111/heartbeats", strings.NewReader(`{"instances":[{"service":"web","id":"a"}]}`)))
+	if w.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "http://10.0.0.8:1111/heartbeats" {
+		t.Fatalf("Location %s", loc)
+	}
+}
+
+func TestHandler_PostHeartbeatsProxyRedirects(t *testing.T) {
+	h := server.NewHandler(true, []string{"10.1.0.2:1111"})
+	w := httptest.NewRecorder()
+	req := MustNewHTTPRequest("POST", "http://10.1.0.1:1111/heartbeats", strings.NewReader(`{"instances":[{"service":"web","id":"a"}]}`))
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusTemporaryRedirect {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	if loc := w.Header().Get("Location"); loc != "http://10.1.0.2:1111/heartbeats" {
+		t.Fatalf("Location %s", loc)
+	}
+}
+
+func TestHandler_PostHeartbeatsRejectsOversize(t *testing.T) {
+	h := NewHandler()
+	h.Store.HeartbeatBatchFn = func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+		t.Fatal("oversize batch reached the store")
+		return discoverd.HeartbeatBatchResult{}, nil
+	}
+	var b strings.Builder
+	b.WriteString(`{"instances":[`)
+	for i := 0; i < discoverd.MaxHeartbeatBatch+1; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"service":"web","id":"i"}`)
+	}
+	b.WriteString(`]}`)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("POST", "http://127.0.0.1:1111/heartbeats", strings.NewReader(b.String())))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandler_PostHeartbeatsRejectsEmptyID(t *testing.T) {
+	h := NewHandler()
+	h.Store.HeartbeatBatchFn = func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+		t.Fatal("invalid batch reached the store")
+		return discoverd.HeartbeatBatchResult{}, nil
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewHTTPRequest("POST", "http://127.0.0.1:1111/heartbeats", strings.NewReader(`{"instances":[{"service":"web","id":""}]}`)))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func MustNewHTTPRequest(method, urlStr string, body io.Reader) *http.Request {
 	u, err := url.Parse(urlStr)
 	if err != nil {

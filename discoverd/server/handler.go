@@ -65,6 +65,7 @@ func NewHandler(proxy bool, peers []string) *Handler {
 	r.PUT("/services/:service/instances/:instance_id", h.servePutInstance)
 	r.DELETE("/services/:service/instances/:instance_id", h.serveDeleteInstance)
 	r.GET("/services/:service/instances", h.serveGetInstances)
+	r.POST("/heartbeats", h.servePostHeartbeats)
 
 	r.PUT("/services/:service/leader", h.servePutLeader)
 	r.GET("/services/:service/leader", h.serveGetLeader)
@@ -101,6 +102,7 @@ type Handler struct {
 		SetServiceMeta(service string, meta *discoverd.ServiceMeta) error
 		ServiceMeta(service string) *discoverd.ServiceMeta
 		AddInstance(service string, inst *discoverd.Instance) error
+		HeartbeatBatch(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error)
 		RemoveInstance(service, id string) error
 		Instances(service string) ([]*discoverd.Instance, error)
 		Config(service string) *discoverd.ServiceConfig
@@ -319,6 +321,46 @@ func (h *Handler) servePutInstance(w http.ResponseWriter, r *http.Request, param
 		hh.Error(w, err)
 		return
 	}
+}
+
+// servePostHeartbeats stamps ids the leader already has. Missing ids are
+// listed in the body. This route does not create instances or change
+// Addr, Proto, or Meta. Proxies and non-leaders redirect before a 200.
+func (h *Handler) servePostHeartbeats(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	// A batch of 4096 ids is well under a megabyte. Larger bodies are rejected
+	// before the stamp loop so one client cannot pin the leader.
+	if r.ContentLength > 1<<20 {
+		hh.ValidationError(w, "instances", "heartbeat batch is too large")
+		return
+	}
+	var body discoverd.HeartbeatBatch
+	if err := hh.DecodeJSON(r, &body); err != nil {
+		hh.Error(w, err)
+		return
+	}
+	if len(body.Instances) > discoverd.MaxHeartbeatBatch {
+		hh.ValidationError(w, "instances", fmt.Sprintf("at most %d heartbeats per request", discoverd.MaxHeartbeatBatch))
+		return
+	}
+	for _, st := range body.Instances {
+		if err := ValidServiceName(st.Service); err != nil {
+			hh.ValidationError(w, "service", err.Error())
+			return
+		}
+		if st.ID == "" {
+			hh.ValidationError(w, "id", "instance id must be set")
+			return
+		}
+	}
+	res, err := h.Store.HeartbeatBatch(body.Instances)
+	if err == ErrNotLeader {
+		h.redirectToLeader(w, r)
+		return
+	} else if err != nil {
+		hh.Error(w, err)
+		return
+	}
+	hh.JSON(w, 200, res)
 }
 
 // serveDeleteInstance removes an instance from the store by name.

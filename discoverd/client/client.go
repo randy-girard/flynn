@@ -51,6 +51,7 @@ type Client struct {
 	mu      sync.RWMutex
 	Logger  log15.Logger
 	Key     string
+	hb      heartbeatMux
 }
 
 func NewClientWithConfig(config Config) *Client {
@@ -150,9 +151,10 @@ func (c *Client) updateLeader(host string) {
 
 func (c *Client) httpClient(url string) *httpclient.Client {
 	return &httpclient.Client{
-		URL:  url,
-		HTTP: c.hc,
-		Key:  c.authKey(),
+		URL:         url,
+		HTTP:        c.hc,
+		Key:         c.authKey(),
+		ErrNotFound: errRouteMissing,
 	}
 }
 
@@ -320,6 +322,10 @@ func (c *Client) Get(path string, out interface{}) error {
 
 func (c *Client) Put(path string, in, out interface{}) error {
 	return c.Send("PUT", path, in, out)
+}
+
+func (c *Client) Post(path string, in, out interface{}) error {
+	return c.Send("POST", path, in, out)
 }
 
 func (c *Client) Delete(path string) error {

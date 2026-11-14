@@ -1010,6 +1010,7 @@ type MockStore struct {
 	SetServiceMetaFn   func(service string, meta *discoverd.ServiceMeta) error
 	ServiceMetaFn      func(service string) *discoverd.ServiceMeta
 	AddInstanceFn      func(service string, inst *discoverd.Instance) error
+	HeartbeatBatchFn   func(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error)
 	RemoveInstanceFn   func(service, id string) error
 	InstancesFn        func(service string) ([]*discoverd.Instance, error)
 	ConfigFn           func(service string) *discoverd.ServiceConfig
@@ -1044,6 +1045,10 @@ func (s *MockStore) ServiceMeta(service string) *discoverd.ServiceMeta {
 
 func (s *MockStore) AddInstance(service string, inst *discoverd.Instance) error {
 	return s.AddInstanceFn(service, inst)
+}
+
+func (s *MockStore) HeartbeatBatch(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+	return s.HeartbeatBatchFn(stamps)
 }
 
 func (s *MockStore) RemoveInstance(service, id string) error {

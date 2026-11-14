@@ -122,7 +122,9 @@ secret generated at bootstrap, the same size as `CONTROLLER_KEY` /
 system-class containers. `flynn-host bootstrap --from-backup` writes that
 key onto each host and restarts the daemon before starting discoverd, so
 the host can register and `wait-hosts` can finish. The client sends it as an `Auth-Key` header
-(or HTTP basic password). `/ping` and `/.well-known/status` stay
+(or HTTP basic password). `POST /heartbeats` uses that same key. A missing
+key is 401, and a discoverd proxy checks the key before it redirects.
+`/ping` and `/.well-known/status` stay
 unauthenticated so health checks work. Those responses omit `Discoverd-Peers`
 and the raft index unless the request presents `DISCOVERD_AUTH_KEY`.
 Authenticated clients still receive the peer list on those paths and on

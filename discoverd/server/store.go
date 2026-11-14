@@ -85,9 +85,12 @@ type Store struct {
 	data        *raftData
 	subscribers map[string]*list.List
 
-	leaderCh   chan bool                 // channel for notifying when leadership changes
-	leaderTime time.Time                 // time when leadership was established
-	heartbeats map[instanceKey]time.Time // heartbeat recv time for each instance
+	leaderCh   chan bool // channel for notifying when leadership changes
+	leaderTime time.Time // time when leadership was established
+	// heartbeats is the leader-local clock. It is not replicated.
+	heartbeats    *heartbeatClock
+	needFullSweep bool
+	sweepGen      uint64
 
 	// Entries up to replayIndex were in the local log before Open and are
 	// re-applied without broadcasting; subscriptions are refused until
@@ -141,7 +144,7 @@ func NewStore(path string) *Store {
 		subscribers: make(map[string]*list.List),
 
 		leaderCh:   make(chan bool),
-		heartbeats: make(map[instanceKey]time.Time),
+		heartbeats: newHeartbeatClock(),
 
 		closing: make(chan struct{}),
 
@@ -331,15 +334,20 @@ func (s *Store) monitorLeaderCh() {
 		case <-s.closing:
 			return
 		case isLeader, ok := <-incoming:
-			// Update leader time and clear heartbeats.
+			// A new leader starts from an empty clock and must not expire
+			// until 2×TTL has elapsed. Missing stamps are zero, so an
+			// earlier scan would drop every instance.
 			s.mu.Lock()
+			s.sweepGen++
 			if isLeader {
-				s.leaderTime = time.Now()
+				s.leaderTime = s.Now()
+				s.needFullSweep = true
 			} else {
 				s.leaderTime = time.Time{}
+				s.needFullSweep = false
 			}
-			s.heartbeats = make(map[instanceKey]time.Time)
 			s.mu.Unlock()
+			s.heartbeats.clear()
 
 			// If the incoming channel closed then close our leader channel.
 			if !ok {
@@ -500,6 +508,9 @@ func (s *Store) applyRemoveServiceCommand(cmd []byte) error {
 	delete(s.data.Metas, c.Service)
 
 	// Broadcast EventKindDown for all instances on the service.
+	// Instance records stay in the log's data until expiry, matching the
+	// existing command. Deleting them here would make a mixed-version
+	// cluster apply this command differently.
 	for _, inst := range s.data.ServiceInstances(c.Service) {
 		s.broadcast(&discoverd.Event{
 			Service:  c.Service,
@@ -529,25 +540,27 @@ func (s *Store) instances(service string) []*discoverd.Instance {
 }
 
 func (s *Store) AddInstance(service string, inst *discoverd.Instance) error {
-	// Check if it's the leader.
-	// This check is needed because the heartbeats don't go through raft so
-	// it is not verified here like it normally would be when calling raftApply().
+	// Heartbeats are leader-local, so this is checked here. raftApply checks
+	// again for the path that changes Addr, Proto, or Meta.
 	if !s.IsLeader() {
 		return ErrNotLeader
 	}
 
-	s.mu.Lock()
-	// Track heartbeat time, if leader.
-	s.heartbeats[instanceKey{service, inst.ID}] = time.Now()
-
-	// Ignore if instance already exists and it hasn't changed.
+	s.mu.RLock()
+	var unchanged bool
 	if m := s.data.Instances[service]; m != nil {
 		if prev := m[inst.ID]; prev != nil && inst.Equal(prev) {
-			s.mu.Unlock()
-			return nil
+			unchanged = true
 		}
 	}
-	s.mu.Unlock()
+	s.mu.RUnlock()
+
+	// Equal ignores Index. An unchanged heartbeat stamps the leader clock
+	// and returns before raftApply.
+	if unchanged {
+		s.heartbeats.stamp(instanceKey{service, inst.ID}, s.Now())
+		return nil
+	}
 
 	// Serialize command.
 	cmd, err := json.Marshal(&addInstanceCommand{
@@ -562,6 +575,44 @@ func (s *Store) AddInstance(service string, inst *discoverd.Instance) error {
 		return err
 	}
 	return nil
+}
+
+// HeartbeatBatch stamps instances the leader already has. Missing ids are
+// returned and not created. Addr, Proto, and Meta are not applied here.
+func (s *Store) HeartbeatBatch(stamps []discoverd.HeartbeatStamp) (discoverd.HeartbeatBatchResult, error) {
+	if !s.IsLeader() {
+		return discoverd.HeartbeatBatchResult{}, ErrNotLeader
+	}
+	if len(stamps) > discoverd.MaxHeartbeatBatch {
+		return discoverd.HeartbeatBatchResult{}, hh.JSONError{
+			Code:    hh.ValidationErrorCode,
+			Message: fmt.Sprintf("at most %d heartbeats per request", discoverd.MaxHeartbeatBatch),
+		}
+	}
+
+	now := s.Now()
+	var missing []discoverd.HeartbeatStamp
+	var live []instanceKey
+	seen := make(map[instanceKey]struct{}, len(stamps))
+
+	s.mu.RLock()
+	for _, st := range stamps {
+		k := instanceKey{st.Service, st.ID}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		m := s.data.Instances[st.Service]
+		if m == nil || m[st.ID] == nil {
+			missing = append(missing, discoverd.HeartbeatStamp{Service: st.Service, ID: st.ID})
+			continue
+		}
+		live = append(live, k)
+	}
+	s.mu.RUnlock()
+
+	s.heartbeats.stampAll(live, now)
+	return discoverd.HeartbeatBatchResult{Missing: missing}, nil
 }
 
 func (s *Store) applyAddInstanceCommand(cmd []byte, index uint64) error {
@@ -614,6 +665,10 @@ func (s *Store) applyAddInstanceCommand(cmd []byte, index uint64) error {
 	// Update service leader, if necessary.
 	s.invalidateServiceLeader(c.Service)
 
+	// Stamp at apply time so the instance is not born without a clock entry.
+	// This is memory on every peer. Leadership change clears it.
+	s.heartbeats.stamp(instanceKey{c.Service, c.Instance.ID}, s.Now())
+
 	return nil
 }
 
@@ -639,6 +694,8 @@ func (s *Store) applyRemoveInstanceCommand(cmd []byte) error {
 		return err
 	}
 
+	s.heartbeats.remove(instanceKey{c.Service, c.ID})
+
 	// Verify that the service exists.
 	if s.data.Instances[c.Service] == nil {
 		return NotFoundError{Service: c.Service}
@@ -647,7 +704,6 @@ func (s *Store) applyRemoveInstanceCommand(cmd []byte) error {
 	// Remove instance data.
 	inst := s.data.Instances[c.Service][c.ID]
 	delete(s.data.Instances[c.Service], c.ID)
-	delete(s.heartbeats, instanceKey{c.Service, c.ID})
 
 	// Broadcast "down" event for instance.
 	if inst != nil {
@@ -880,73 +936,122 @@ func (s *Store) expirer() {
 	}
 }
 
-// EnforceExpiry checks all instances for expiration and issues an expiration command, if necessary.
-// This function returns raft.ErrNotLeader if this store is not the current leader.
+// EnforceExpiry checks instances for expiration and issues one Raft command
+// when any are due. Steady state peeks the oldest stamp. The first scan after
+// a leadership change walks every instance once, because a missing stamp is
+// zero. Apply does not recheck the clock.
 func (s *Store) EnforceExpiry() error {
-	var cmd []byte
-	if err := func() error {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-
-		// Ignore if this store is not the leader and hasn't been for at least 2 TTLs intervals.
-		if !s.IsLeader() {
-			return raft.ErrNotLeader
-		} else if s.leaderTime.IsZero() || time.Since(s.leaderTime) < (2*s.InstanceTTL) {
-			return ErrLeaderWait
-		}
-
-		// Iterate over services and then instances.
-		var instances []expireInstance
-		for service, m := range s.data.Instances {
-			for _, inst := range m {
-				// Ignore instances that have heartbeated within the TTL.
-				if t := s.heartbeats[instanceKey{service, inst.ID}]; time.Since(t) <= s.InstanceTTL {
-					continue
-				}
-
-				logger.Info("marking instance for expiry",
-					"fn", "EnforceExpiry",
-					"service", service,
-					"instance.id", inst.ID,
-					"instance.addr", inst.Addr,
-				)
-
-				// Add to list of instances to expire.
-				// The current expiry time is added to prevent a race condition of
-				// instances updating their expiry date while this command is applying.
-				instances = append(instances, expireInstance{
-					Service:    service,
-					InstanceID: inst.ID,
-				})
-			}
-		}
-
-		// If we have no instances to expire then exit.
-		if len(instances) == 0 {
-			return nil
-		}
-
-		// Create command to expire instances.
-		buf, err := json.Marshal(&expireInstancesCommand{
-			Instances: instances,
-		})
-		if err != nil {
-			return err
-		}
-		cmd = buf
-
-		return nil
-	}(); err != nil {
+	doomed, full, gen, err := s.collectExpired()
+	if err != nil {
 		return err
-	} else if cmd == nil {
+	}
+	if len(doomed) == 0 {
+		s.finishSweep(full, gen)
 		return nil
 	}
 
-	// Apply command to raft.
-	if _, err := s.raftApply(expireInstancesCommandType, cmd); err != nil {
+	buf, err := json.Marshal(&expireInstancesCommand{Instances: doomed})
+	if err != nil {
 		return err
+	}
+	if _, err := s.raftApply(expireInstancesCommandType, buf); err != nil {
+		return err
+	}
+	s.finishSweep(full, gen)
+	return nil
+}
+
+func (s *Store) finishSweep(full bool, gen uint64) {
+	if !full {
+		return
+	}
+	s.mu.Lock()
+	if s.sweepGen == gen {
+		s.needFullSweep = false
+	}
+	s.mu.Unlock()
+}
+
+func (s *Store) leaderMayExpire(now time.Time) error {
+	if !s.IsLeader() {
+		return raft.ErrNotLeader
+	}
+	if s.leaderTime.IsZero() || now.Sub(s.leaderTime) < 2*s.InstanceTTL {
+		return ErrLeaderWait
 	}
 	return nil
+}
+
+func (s *Store) collectExpired() (doomed []expireInstance, full bool, gen uint64, err error) {
+	now := s.Now()
+	s.mu.Lock()
+	if err = s.leaderMayExpire(now); err != nil {
+		s.mu.Unlock()
+		return nil, false, 0, err
+	}
+	full = s.needFullSweep
+	gen = s.sweepGen
+	ttl := s.InstanceTTL
+	if full {
+		doomed = s.expiredFullLocked(now, ttl)
+		s.mu.Unlock()
+		return doomed, true, gen, nil
+	}
+	s.mu.Unlock()
+
+	keys := s.heartbeats.expired(now, ttl)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err = s.leaderMayExpire(now); err != nil {
+		return nil, false, gen, err
+	}
+	if s.sweepGen != gen {
+		return nil, false, gen, ErrLeaderWait
+	}
+	for _, k := range keys {
+		m := s.data.Instances[k.service]
+		inst := (*discoverd.Instance)(nil)
+		if m != nil {
+			inst = m[k.instanceID]
+		}
+		if inst == nil {
+			s.heartbeats.remove(k)
+			continue
+		}
+		if at, ok := s.heartbeats.get(k); ok && now.Sub(at) <= ttl {
+			continue
+		}
+		s.markExpired(&doomed, k.service, inst)
+	}
+	return doomed, false, gen, nil
+}
+
+func (s *Store) expiredFullLocked(now time.Time, ttl time.Duration) []expireInstance {
+	var doomed []expireInstance
+	for service, m := range s.data.Instances {
+		for id, inst := range m {
+			k := instanceKey{service, id}
+			if at, ok := s.heartbeats.get(k); ok && now.Sub(at) <= ttl {
+				continue
+			}
+			s.markExpired(&doomed, service, inst)
+		}
+	}
+	return doomed
+}
+
+func (s *Store) markExpired(doomed *[]expireInstance, service string, inst *discoverd.Instance) {
+	logger.Info("marking instance for expiry",
+		"fn", "EnforceExpiry",
+		"service", service,
+		"instance.id", inst.ID,
+		"instance.addr", inst.Addr,
+	)
+	*doomed = append(*doomed, expireInstance{
+		Service:    service,
+		InstanceID: inst.ID,
+	})
 }
 
 func (s *Store) applyExpireInstancesCommand(cmd []byte) error {
@@ -955,9 +1060,12 @@ func (s *Store) applyExpireInstancesCommand(cmd []byte) error {
 		return err
 	}
 
-	// Iterate over instances and remove ones with matching expiry times.
+	// Apply does not recheck the clock. A stamp that landed after the scan
+	// still loses, and the key is dropped with the instance.
 	services := make(map[string]struct{})
 	for _, expireInstance := range c.Instances {
+		s.heartbeats.remove(instanceKey{expireInstance.Service, expireInstance.InstanceID})
+
 		// Ignore if the service no longers exists.
 		m := s.data.Instances[expireInstance.Service]
 		if m == nil {
@@ -1083,6 +1191,14 @@ func (s *Store) Restore(r io.ReadCloser) error {
 		return err
 	}
 	s.data = data
+	// The snapshot has no clock. A leader that restored must wait 2×TTL
+	// again so the install cannot expire every instance.
+	s.heartbeats.clear()
+	s.sweepGen++
+	s.needFullSweep = true
+	if !s.leaderTime.IsZero() {
+		s.leaderTime = s.Now()
+	}
 	return nil
 }
 
@@ -1431,6 +1547,8 @@ func ValidServiceName(service string) error {
 
 // ProxyStore implements some of the Store methods as proxy calls.
 // Only the subset of methods required for DNSServer.Store are implemented.
+// Heartbeats are not answered here. Expiry reads the leader clock, so a
+// local answer would drop live instances. Instances and DNS stay unfiltered.
 type ProxyStore struct {
 	Peers []string
 }

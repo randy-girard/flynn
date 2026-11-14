@@ -73,6 +73,16 @@ keep the system up and running, even in the face of individual host failures.
 One of the most important components of Flynn is discoverd, which provides
 service discovery to the cluster. All Flynn components register with discoverd
 and then heartbeat every few seconds to confirm that they are still alive.
+A steady heartbeat is a stamp on the leader's memory, not a Raft write. A
+process that holds many registrations, including `flynn-host` for the user
+jobs on that host, sends those instance ids in one `POST /heartbeats` per
+period. The period is 5 seconds minus a jitter of up to 2 seconds, inside
+the 10 second expiry window. The first registration, an address or metadata
+change, and unregister still go through Raft. While a leader is rolling
+forward, a missing batch route returns 404 and the client uses one PUT per
+instance. Proxies and followers redirect heartbeats to the leader. After a
+leader change, expiry waits 20 seconds so live instances can stamp the new
+leader. Hosted and self-hosted clusters use this same path.
 
 discoverd provides an API over HTTP that provides access to the list of
 registered instances of each service. A compare-and-swap metadata store is also
