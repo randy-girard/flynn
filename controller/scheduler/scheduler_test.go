@@ -16,6 +16,7 @@ import (
 	"github.com/randy-girard/flynn/host/volume"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/random"
+	"github.com/randy-girard/flynn/pkg/stream"
 	"github.com/randy-girard/flynn/pkg/typeconv"
 )
 
@@ -1928,5 +1929,59 @@ func TestIsMissingHostVolumeError(t *testing.T) {
 	}
 	if isMissingHostVolumeError(errors.New("connection refused")) {
 		t.Fatal("unrelated errors must not look like missing volumes")
+	}
+}
+
+type registerGate struct {
+	*fakeDiscoverd
+	done chan struct{}
+}
+
+func (d *registerGate) Register() bool {
+	close(d.done)
+	return d.fakeDiscoverd.Register()
+}
+
+type hangStream struct{}
+
+func (hangStream) Close() error { return nil }
+func (hangStream) Err() error   { return nil }
+
+// blockFormations accepts the formation stream and never sends the current
+// marker, matching a controller snapshot that does not finish.
+type blockFormations struct {
+	*FakeControllerClient
+}
+
+func (b *blockFormations) StreamFormations(*time.Time, chan<- *ct.ExpandedFormation) (stream.Stream, error) {
+	return hangStream{}, nil
+}
+
+func TestRegisterDoesNotWaitForFormationSnapshot(t *testing.T) {
+	disc := &registerGate{fakeDiscoverd: newFakeDiscoverd(false), done: make(chan struct{})}
+	cc := NewFakeControllerClient()
+	app := &ct.App{ID: testAppID, Name: testAppID}
+	artifact := &ct.Artifact{ID: testArtifactId}
+	release := NewRelease(testReleaseID, artifact, map[string]int{testJobType: testJobCount})
+	if err := cc.CreateApp(app); err != nil {
+		t.Fatal(err)
+	}
+	if err := cc.CreateArtifact(artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := cc.CreateRelease(app.ID, release); err != nil {
+		t.Fatal(err)
+	}
+	if err := cc.PutFormation(&ct.Formation{AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{testJobType: testJobCount}}); err != nil {
+		t.Fatal(err)
+	}
+	logger := log15.New()
+	logger.SetHandler(log15.DiscardHandler())
+	sched := NewScheduler(newTestCluster(nil), &blockFormations{FakeControllerClient: cc}, disc, logger)
+	go sched.Run()
+	select {
+	case <-disc.done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("scheduler did not register while the formation snapshot was open")
 	}
 }

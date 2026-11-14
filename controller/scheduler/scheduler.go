@@ -620,13 +620,19 @@ func (s *Scheduler) Run() {
 	// watching all job events, even during a deployment.
 	s.streamHostEvents()
 
+	// Heartbeat before the formation snapshot. AddServiceAndRegister runs
+	// before Register returns, so a snapshot that never sends the current
+	// marker still leaves this process in discoverd. A rolling reload counts
+	// that service. HandleLeaderChange stays after the snapshot so this
+	// process does not lead with an empty formation list.
+	isLeader := s.discoverd.Register()
+
 	s.streamFormationEvents()
 
 	// ensure we have the current list of volumes before starting the main
 	// loop so we don't schedule any jobs using decommissioned volumes
 	s.streamVolumeEvents()
 
-	isLeader := s.discoverd.Register()
 	s.HandleLeaderChange(isLeader)
 	leaderCh := s.discoverd.LeaderCh()
 
