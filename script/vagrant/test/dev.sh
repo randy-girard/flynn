@@ -257,6 +257,10 @@ if ! grep -E '^  update\)' -A20 "${script}" | grep -Fq 'wait_cluster_stable'; th
   echo "vagrant-update must wait for cluster status after flynn-host update (blobstore can be briefly unhealthy)" >&2
   exit 1
 fi
+if ! grep -E '^  update\)' -A25 "${script}" | grep -Fq 'probe_live_cluster_retry'; then
+  echo "vagrant-update final probe must retry; a one-shot probe races a blobstore flap" >&2
+  exit 1
+fi
 if ! grep -Fq 'start_one_cluster_node' "${script}"; then
   echo "rolling reload must start flynn-host on the node that just rebooted before probing" >&2
   exit 1

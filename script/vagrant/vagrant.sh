@@ -511,6 +511,27 @@ probe_live_cluster() {
   run_as_root_on "${node}" "cd ${SRC} && CLUSTER_DOMAIN=${domain} CLUSTER_IP=${ip} MIN_HOSTS=${min_hosts} BUILDER_IP=${FLYNN_DEV_IP:-192.168.57.10} PROBE_QUICK=${PROBE_QUICK:-} PROBE_SIRENIA=${PROBE_SIRENIA:-} PROBE_FULL_STRENGTH=${PROBE_FULL_STRENGTH:-} script/vagrant/guest/probe-cluster.sh"
 }
 
+# probe_live_cluster_retry is the full probe after an update. A quick probe
+# can pass and blobstore can still flap before this one-shot check.
+probe_live_cluster_retry() {
+  local label="${1:-probe}"
+  local tries="${2:-12}"
+  local i st=0
+  for i in $(seq 1 "${tries}"); do
+    set +e
+    probe_live_cluster
+    st=$?
+    set -e
+    if [[ "${st}" -eq 0 ]]; then
+      return 0
+    fi
+    echo "full cluster probe failed after ${label} (${i}/${tries}); retrying"
+    sleep 5
+  done
+  echo "full cluster probe did not pass after ${label}" >&2
+  return 1
+}
+
 # plugin_install_or_update builds a sibling plugin checkout on the first
 # running cluster node, then installs it or updates the installed app.
 plugin_install_or_update() {
@@ -601,7 +622,7 @@ case "${cmd}" in
     # Blobstore (and other Layer 1 apps) can be briefly unhealthy after the
     # rolling deploy even though flynn-host update already printed success.
     wait_cluster_stable "update"
-    probe_live_cluster
+    probe_live_cluster_retry "update"
     ;;
   plugin)
     plugin_install_or_update "${2:-}"
