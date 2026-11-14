@@ -260,8 +260,13 @@ application from the slug.
 ## Log Aggregator
 
 The logaggregator takes log lines from jobs running on each host and buffers
-recent log lines for each app. The lines are sent from flynn-host as
-RFC6587-framed RFC5424 syslog messages over TCP.
+the newest 10,000 lines for each app in that aggregator process. The lines
+are sent from flynn-host as RFC6587-framed RFC5424 syslog messages over TCP.
+The ring is a live tail, not retention. Each host also keeps about 200MB of
+log files per app. A cluster that needs to keep logs adds a syslog sink
+with `flynn-host log-sink:add`. Hosted and self-hosted clusters use that
+same path.
 
 Clients can get live streams of aggregated logs, and retrieve previous log
-messages without sending requests to every host individually.
+messages without sending requests to every host individually. Do not scrape
+the aggregator's log port for retention. It is unauthenticated.

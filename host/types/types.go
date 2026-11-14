@@ -398,6 +398,11 @@ type HostStatus struct {
 	Version   string            `json:"version"`
 	Flags     []string          `json:"flags"`
 	Auth      bool              `json:"auth"`
+	// LogDrops is how many job log lines this host process has dropped
+	// because a sink buffer or the on-disk queue was full. It is copied
+	// from memory when status is read. It resets when flynn-host restarts
+	// and it is not a cluster total.
+	LogDrops uint64 `json:"log_drops"`
 }
 
 type JobEventType string

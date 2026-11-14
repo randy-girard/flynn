@@ -1,7 +1,10 @@
 package logmux
 
 import (
+	"errors"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -9,6 +12,7 @@ import (
 	logagg "github.com/randy-girard/flynn/logaggregator/types"
 	"github.com/randy-girard/flynn/logaggregator/utils"
 	"github.com/randy-girard/flynn/pkg/syslog/rfc5424"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 func newTestMux(t *testing.T) *Mux {
@@ -255,3 +259,223 @@ func (h *hangWriter) Write(p []byte) (int, error) {
 }
 
 func (h *hangWriter) Close() error { return nil }
+
+// A full sink buffer must not hold Follow. The firehose channel is that buffer.
+// Two full subscribers used to cost two broadcast timeouts.
+func TestFullSinkBufferDropsWithoutBlocking(t *testing.T) {
+	old := broadcastTimeout
+	broadcastTimeout = 300 * time.Millisecond
+	defer func() { broadcastTimeout = old }()
+
+	m := newTestMux(t)
+	left := make(chan message, 1)
+	right := make(chan message, 1)
+	defer m.subscribe(firehoseApp, left)()
+	defer m.subscribe(firehoseApp, right)()
+	healthy := make(chan message, 4)
+	defer m.subscribe("app-1", healthy)()
+
+	m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "first")
+	if got := m.Drops(); got != 0 {
+		t.Fatalf("drops=%d, a line that fit in the sink buffer was counted", got)
+	}
+
+	start := time.Now()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "second")
+	}()
+	select {
+	case <-done:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("Write blocked on a full sink buffer")
+	}
+	if got := m.Drops(); got != 2 {
+		t.Fatalf("drops=%d, want 2", got)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-healthy:
+		case <-time.After(time.Second):
+			t.Fatal("healthy follower missed a line")
+		}
+	}
+	if time.Since(start) >= 200*time.Millisecond {
+		t.Fatal("full sink buffer held the writer")
+	}
+}
+
+// N stalled live tails share one deadline. They are not the sink drop counter.
+func TestStalledFollowersShareOneDeadline(t *testing.T) {
+	old := broadcastTimeout
+	broadcastTimeout = 200 * time.Millisecond
+	defer func() { broadcastTimeout = old }()
+
+	m := newTestMux(t)
+	defer m.subscribe("app-1", make(chan message))()
+	defer m.subscribe("app-1", make(chan message))()
+	healthy := make(chan message, 1)
+	defer m.subscribe("app-1", healthy)()
+
+	start := time.Now()
+	m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "line")
+	if time.Since(start) >= 350*time.Millisecond {
+		t.Fatalf("stalled followers stacked the wait: %s", time.Since(start))
+	}
+	if got := m.Drops(); got != 0 {
+		t.Fatalf("follower timeout counted as a sink drop: %d", got)
+	}
+	select {
+	case <-healthy:
+	case <-time.After(time.Second):
+		t.Fatal("healthy follower missed the line")
+	}
+}
+
+func TestDiskQueueDropIncrementsCounter(t *testing.T) {
+	// Mux.Write releases the app log after each line, so each call gets a new
+	// queue. Follow holds one queue for the life of the stream. The disk
+	// writer blocks inside Write after taking one line, and the queue holds
+	// appLogDiskQueue more.
+	m := New("host1", t.TempDir(), log15.New())
+	m.diskWriter = func(string) io.WriteCloser { return &hangWriter{block: make(chan struct{})} }
+	r, w := io.Pipe()
+	stream := m.Follow(r, "", logagg.MsgIDStdout, &Config{
+		AppID:  "app-1",
+		HostID: "host1",
+		JobID:  "job-1",
+	})
+	const extra = 5
+	n := appLogDiskQueue + 1 + extra
+	payload := strings.Repeat("line\n", n)
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		_, _ = io.WriteString(w, payload)
+		w.Close()
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := m.Drops(); got >= extra {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("drops=%d, want at least %d", m.Drops(), extra)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	select {
+	case <-writeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("log write did not finish")
+	}
+	stream.Close()
+}
+
+func TestHostLogFileBounds(t *testing.T) {
+	m := newTestMux(t)
+	l := m.appLog("app-1")
+	defer l.Release()
+	lj, ok := l.w.(*lumberjack.Logger)
+	if !ok {
+		t.Fatalf("writer %T", l.w)
+	}
+	if lj.MaxSize != 100 || lj.MaxBackups != 1 {
+		t.Fatalf("MaxSize=%d MaxBackups=%d, want 100 and 1", lj.MaxSize, lj.MaxBackups)
+	}
+}
+
+type scriptSink struct {
+	mu         sync.Mutex
+	connects   []time.Time
+	writeErrAt time.Time
+	shutdown   chan struct{}
+	once       sync.Once
+}
+
+func newScriptSink() *scriptSink {
+	return &scriptSink{shutdown: make(chan struct{})}
+}
+
+func (s *scriptSink) Info() *SinkInfo { return &SinkInfo{} }
+func (s *scriptSink) Name() string    { return "script" }
+func (s *scriptSink) Connect() error {
+	s.mu.Lock()
+	s.connects = append(s.connects, time.Now())
+	n := len(s.connects)
+	s.mu.Unlock()
+	if n >= 2 {
+		s.Shutdown()
+	}
+	return nil
+}
+func (s *scriptSink) Close()                                      {}
+func (s *scriptSink) GetCursor(string) (*utils.HostCursor, error) { return nil, nil }
+func (s *scriptSink) Write(message) error {
+	s.mu.Lock()
+	if s.writeErrAt.IsZero() {
+		s.writeErrAt = time.Now()
+	}
+	s.mu.Unlock()
+	return errors.New("bad template")
+}
+func (s *scriptSink) Shutdown()                 { s.once.Do(func() { close(s.shutdown) }) }
+func (s *scriptSink) ShutdownCh() chan struct{} { return s.shutdown }
+
+func TestSinkWriteErrorReconnectsAfterDelay(t *testing.T) {
+	old := sinkReconnectDelay
+	sinkReconnectDelay = 80 * time.Millisecond
+	defer func() { sinkReconnectDelay = old }()
+
+	m := New("host1", t.TempDir(), log15.New())
+	sink := newScriptSink()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.addSink(sink)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sink.mu.Lock()
+		n := len(sink.connects)
+		sink.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sink never connected")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		sink.mu.Lock()
+		n := len(sink.connects)
+		sink.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("sink did not reconnect after a write error")
+		}
+		m.Write(logagg.MsgIDSystem, &Config{AppID: "app-1", HostID: "host1", JobID: "j"}, "line")
+		time.Sleep(5 * time.Millisecond)
+	}
+	sink.mu.Lock()
+	if sink.writeErrAt.IsZero() {
+		sink.mu.Unlock()
+		t.Fatal("sink write was not called")
+	}
+	gap := sink.connects[1].Sub(sink.writeErrAt)
+	sink.mu.Unlock()
+	if gap < 50*time.Millisecond {
+		t.Fatalf("reconnected %s after the write error, want the reconnect delay", gap)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("addSink did not return after shutdown")
+	}
+}

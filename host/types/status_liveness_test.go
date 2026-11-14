@@ -8,13 +8,14 @@ import (
 
 func TestLivenessStatusOmitsJobIDsAndSubnet(t *testing.T) {
 	full := &HostStatus{
-		ID:      "host-1",
-		URL:     "http://10.0.0.8:1113",
-		PID:     42,
-		Auth:    true,
-		Version: "v2026.1",
-		Flags:   []string{"tls"},
-		Tags:    map[string]string{"disk": "ssd"},
+		ID:       "host-1",
+		URL:      "http://10.0.0.8:1113",
+		PID:      42,
+		Auth:     true,
+		Version:  "v2026.1",
+		Flags:    []string{"tls"},
+		Tags:     map[string]string{"disk": "ssd"},
+		LogDrops: 7,
 		Discoverd: &DiscoverdConfig{
 			JobID: "discoverd-job-9f3a",
 			URL:   "http://10.0.0.8:1111",
@@ -46,8 +47,11 @@ func TestLivenessStatusOmitsJobIDsAndSubnet(t *testing.T) {
 			t.Fatalf("unauthenticated status leaked %q in %s", leak, body)
 		}
 	}
-	if got.ID != "host-1" || got.URL != "http://10.0.0.8:1113" || !got.Auth || got.Version != "v2026.1" {
+	if got.ID != "host-1" || got.URL != "http://10.0.0.8:1113" || !got.Auth || got.Version != "v2026.1" || got.LogDrops != 7 {
 		t.Fatalf("liveness fields dropped: %+v", got)
+	}
+	if !strings.Contains(body, `"log_drops":7`) {
+		t.Fatalf("liveness omitted log_drops: %s", body)
 	}
 	if full.Discoverd == nil || full.Discoverd.JobID != "discoverd-job-9f3a" || full.Network == nil || full.Network.Subnet != "100.64.9.0/24" {
 		t.Fatal("liveness mutated the stored status")

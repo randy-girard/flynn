@@ -307,9 +307,13 @@ Grep with `flynn log | grep '^metrics '`. Process start/stop/scale lines
 (`Scaling up web process with command \`bin/web\``, `Scaling down web process`)
 use the same system stream. A redeploy logs the new process starting (with its
 command) as well as the old process scaling down. They are emitted asynchronously
-by the host and are best-effort: a `flynn log -f` follower that stops reading is
-skipped after one second rather than stalling the host, so a saturated follower
-may miss lines while other clients and the on-disk log still receive them.
+by the host and are best-effort. A full syslog sink buffer drops the line
+instead of stalling the process. Stalled `flynn log -f` followers share one
+one-second budget, so several of them cannot add a second each. A saturated
+follower may miss lines while other clients and the on-disk log still receive
+them. `GET /host/status` field `log_drops` counts sink-buffer and on-disk
+queue drops on that host. It is not a cluster total and it resets when
+`flynn-host` restarts.
 
 `flynn metrics` prints the latest stored app snapshot the dashboard uses for
 alerts. Add rules with `flynn alert:add` (email or webhook), or from **Add alert**
@@ -341,15 +345,28 @@ See [CLI](cli.md) and [Production — Monitoring](production.html.md#monitoring)
 
 ### External Logs
 
+`flynn log` shows the newest 10,000 lines per app id held by each
+logaggregator process. Host files under `/var/log/flynn` keep about 200MB
+per app on that host (100MiB plus one rotation). Neither number is a
+cluster total, and neither is retention. A hosted cluster and a large
+self-hosted cluster use the same sink path. Add a cluster syslog sink when
+the logs have to outlive the ring.
+
 Apps can stream logs to syslog with `flynn log-sink:add syslog …` (one app) or
-operators can forward **all user apps**, **one app**, or **Flynn system jobs**
-from a host:
+operators can forward **all logs**, **all user apps**, **one app**, or **Flynn system jobs**:
 
 ```text
-flynn -a myapp log-sink:add syslog syslog://logs.example:514/
-sudo flynn-host log-sink:add syslog --scope apps syslog://logs.example:514/
-sudo flynn-host log-sink:add syslog --scope system syslog://logs.example:514/
+sudo flynn-host log-sink:add syslog syslog+tls://logs.example:6514/
+flynn -a myapp log-sink:add syslog syslog+tls://logs.example:6514/
+sudo flynn-host log-sink:add syslog --scope apps syslog+tls://logs.example:6514/
+sudo flynn-host log-sink:add syslog --scope system syslog+tls://logs.example:6514/
 ```
+
+`production:check` accepts `syslog+tls` with format `rfc6587` and no prefix.
+`syslog://`, `--insecure`, newline framing, and a prefix do not satisfy it.
+A prefix template can print a job's environment, including secrets. The
+process stdout is still copied unchanged. A per-app sink does not cover
+the cluster. See [Production — Production check](production.html.md#production-check).
 
 Optional cluster metrics (CPU, memory, disk, load) go to an OTLP collector
 after installing the **otel** plugin. See

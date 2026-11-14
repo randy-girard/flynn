@@ -37,6 +37,10 @@ type Mux struct {
 	logger log15.Logger
 
 	msgSeq uint32
+	// drops counts lines that did not fit in a sink buffer or the on-disk
+	// queue. Follower timeouts are not included. The host status handler
+	// reads this when a status request arrives. It is not a controller write.
+	drops uint64
 
 	jobsMtx sync.Mutex
 	// jobWaits stores WaitGroups for jobs that we're currently following
@@ -107,27 +111,55 @@ func (m *Mux) subscribe(app string, ch chan message) func() {
 	}
 }
 
-// broadcastTimeout bounds how long a writer waits on any single subscriber.
-// Writers include job stdout followers and the host state's lifecycle log
-// lines; a subscriber that has stopped reading (a `flynn log -f` whose client
-// went away mid-upgrade) must cost the writer at most this, never a hang.
+// broadcastTimeout is the one deadline shared by every per-app follower in a
+// single broadcast. A stalled `flynn log -f` must not stack another second
+// per follower, and it must not hang the host. Sink subscribers do not use
+// this timer.
 var broadcastTimeout = time.Second
+
+// sinkReconnectDelay is the wait after a sink connect or write error before
+// the next dial. A bad prefix template returns from Write; without this wait
+// that error reconnects in a tight loop on every host that has the sink.
+var sinkReconnectDelay = 10 * time.Second
+
+// Drops is the number of job log lines this process has dropped because a
+// sink buffer or the on-disk queue was full. It is in-memory and resets when
+// the process exits.
+func (m *Mux) Drops() uint64 {
+	if m == nil {
+		return 0
+	}
+	return atomic.LoadUint64(&m.drops)
+}
+
+// StoreDropsForTest sets the counter so host status tests can read a known
+// value without filling a sink buffer.
+func (m *Mux) StoreDropsForTest(n uint64) {
+	if m == nil {
+		return
+	}
+	atomic.StoreUint64(&m.drops, n)
+}
+
+func (m *Mux) addDrop() {
+	atomic.AddUint64(&m.drops, 1)
+}
 
 func (m *Mux) broadcast(app string, msg message) {
 	m.subscribersMtx.RLock()
 	defer m.subscribersMtx.RUnlock()
 
-	timeout := time.NewTimer(broadcastTimeout)
-	defer timeout.Stop()
 	l := m.logger.New("fn", "broadcast", "sample", "0.1")
 	r := rand.New(rand.NewSource(time.Now().Unix()))
+	// Firehose subscribers are sinks. A full buffer drops the line. Waiting
+	// here holds the job stdout reader, and one timeout per sink stacks.
 	for ch := range m.subscribers[firehoseApp] {
-		timeout.Reset(broadcastTimeout)
 		select {
 		case ch <- msg:
-		case <-timeout.C:
+		default:
+			m.addDrop()
 			if r.Intn(9) == 0 {
-				l.Error("dropping log line due to sink write timeout")
+				l.Error("dropping log line due to full sink buffer")
 			}
 		}
 	}
@@ -135,14 +167,32 @@ func (m *Mux) broadcast(app string, msg message) {
 	// drains the channel on unsubscribe, but a live subscriber that is itself
 	// blocked forwarding to a slow HTTP client never reads, and everything
 	// upstream of this call (appLog.Write, State.sendEvent under s.mtx) hung
-	// with it. Apply the same bounded wait as the firehose.
+	// with it. One deadline covers every follower of this line. A follower
+	// timeout is not a sink drop.
+	timeout := time.NewTimer(broadcastTimeout)
+	defer timeout.Stop()
+	deadlineHit := false
 	for ch := range m.subscribers[app] {
-		timeout.Reset(broadcastTimeout)
+		if deadlineHit {
+			select {
+			case ch <- msg:
+			default:
+				if r.Intn(9) == 0 {
+					l.Error("dropping log line due to follower write timeout", "app", app)
+				}
+			}
+			continue
+		}
 		select {
 		case ch <- msg:
-		case <-timeout.C:
-			if r.Intn(9) == 0 {
-				l.Error("dropping log line due to follower write timeout", "app", app)
+		default:
+			select {
+			case ch <- msg:
+			case <-timeout.C:
+				deadlineHit = true
+				if r.Intn(9) == 0 {
+					l.Error("dropping log line due to follower write timeout", "app", app)
+				}
 			}
 		}
 	}
@@ -164,7 +214,7 @@ func (m *Mux) addSink(sink Sink) {
 				err := sink.Connect()
 				if err != nil {
 					l.Error("error connecting to sink", "err", err)
-					reconnectDelay = 10 * time.Second
+					reconnectDelay = sinkReconnectDelay
 					return
 				}
 				l.Info("connected to sink")
@@ -186,11 +236,12 @@ func (m *Mux) addSink(sink Sink) {
 				}
 
 				bufferedMessages := make(chan message)
-				// Buffer the live firehose so a slow logaggregator write does
-				// not immediately stall Follow. broadcast() still times out if
-				// this fills (sink reconnect, vboxsf, etc.).
+				// Buffer the live firehose so a slow sink write does not drop
+				// the first lines. When this fills, broadcast drops and counts
+				// the line instead of blocking Follow.
 				firehose := make(chan message, 256)
 				done := make(chan struct{})
+				var writeFailed bool
 
 				// subscribe to all messages
 				unsubscribe := m.subscribe(firehoseApp, firehose)
@@ -237,6 +288,7 @@ func (m *Mux) addSink(sink Sink) {
 						}
 						// Send message to sink
 						if err := sink.Write(m); err != nil {
+							writeFailed = true
 							l.Error("failed to write message to sink", "error", err)
 							return
 						}
@@ -299,6 +351,9 @@ func (m *Mux) addSink(sink Sink) {
 				close(bufferedMessages)
 				// Block here until processing goroutine stops
 				<-done
+				if writeFailed {
+					reconnectDelay = sinkReconnectDelay
+				}
 			}()
 		}
 	}
@@ -740,8 +795,13 @@ func (m *Mux) appLog(id string) *appLog {
 	if m.diskWriter != nil {
 		w = m.diskWriter(path)
 	} else {
+		// MaxSize is megabytes. lumberjack treats a megabyte as 1024×1024,
+		// so this file plus MaxBackups 1 is about 200MB for one app on this
+		// host. It is not a cluster total. Do not raise it to pretend the
+		// ring is retention.
 		w = &lumberjack.Logger{
 			Filename:   path,
+			MaxSize:    100,
 			MaxBackups: 1,
 		}
 	}
@@ -794,6 +854,7 @@ func (l *appLog) Write(msg message) {
 	select {
 	case l.diskCh <- cp:
 	default:
+		l.m.addDrop()
 		if rand.Intn(50) == 0 {
 			l.m.logger.Error("dropping job log line, disk queue full", "app.id", l.appID)
 		}

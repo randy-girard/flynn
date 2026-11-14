@@ -688,12 +688,23 @@ func (h *jobAPI) ConfigureNetworking(w http.ResponseWriter, r *http.Request, _ h
 
 func (h *jobAPI) GetStatus(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	h.host.statusMtx.RLock()
-	status := h.host.status
+	stored := h.host.status
 	h.host.statusMtx.RUnlock()
+	var status *host.HostStatus
+	if stored != nil {
+		copied := *stored
+		status = &copied
+	}
+	// Read the counter after releasing the status lock. A line can be
+	// dropped between the copy and this load; the next status read sees it.
+	if status != nil && h.host.state != nil && h.host.state.logMux != nil {
+		status.LogDrops = h.host.state.logMux.Drops()
+	}
 	// No key yet: full status, including discoverd, for bootstrap and the
 	// image builder. After the key is set, unauthenticated callers get
 	// liveness only (id and URL stay so host discovery can match the dialed
 	// peer). A valid Auth-Key or Basic password still receives the topology.
+	// log_drops stays on the liveness body. It is a count, not log text.
 	if h.host.authKey != "" && !h.host.authKeyValid(hostAuthKeyFromRequest(r)) {
 		status = status.Liveness()
 	}
