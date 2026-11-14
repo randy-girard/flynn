@@ -32,6 +32,8 @@ func redisPluginCLI() *plugin.CLI {
 type fakeRedisReleaseClient struct {
 	releases  map[string]*ct.Release
 	resources map[string][]*ct.Resource
+	apps      map[string]*ct.App
+	catalog   []*ct.Resource
 }
 
 func (f fakeRedisReleaseClient) GetAppRelease(appID string) (*ct.Release, error) {
@@ -46,6 +48,19 @@ func (f fakeRedisReleaseClient) AppResourceList(appID string) ([]*ct.Resource, e
 		return nil, nil
 	}
 	return f.resources[appID], nil
+}
+
+func (f fakeRedisReleaseClient) GetApp(id string) (*ct.App, error) {
+	if f.apps != nil {
+		if a, ok := f.apps[id]; ok {
+			return a, nil
+		}
+	}
+	return nil, ct.ErrNotFound
+}
+
+func (f fakeRedisReleaseClient) ResourceListAll() ([]*ct.Resource, error) {
+	return f.catalog, nil
 }
 
 func pgPluginCLI() *plugin.CLI {
@@ -519,6 +534,78 @@ func TestPluginMatchActionPrefersLongestName(t *testing.T) {
 	got = spec.MatchAction(map[string]bool{"topics": true})
 	if got == nil || got.Name != "topics" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestPgDumpUsesAttachedAppWhenAppIsTheResource(t *testing.T) {
+	old := flagApp
+	t.Cleanup(func() { flagApp = old })
+	instance := "postgresql-cedar-55684"
+	client := fakeRedisReleaseClient{
+		releases: map[string]*ct.Release{
+			"shop":            {ID: "shop-rel", Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			instance:          {ID: "inst-rel", Env: map[string]string{"FLYNN_POSTGRES": instance}},
+			"postgres-plugin": {ID: "plugin-rel", Env: map[string]string{"CONTROLLER_KEY": "plugin-key"}},
+		},
+		resources: map[string][]*ct.Resource{
+			"shop": {{
+				Env:      map[string]string{"FLYNN_POSTGRES": instance},
+				Apps:     []string{"shop"},
+				OwnerApp: "shop",
+			}},
+		},
+		apps: map[string]*ct.App{
+			"shop": {ID: "shop", Name: "shop"},
+			instance: {
+				ID:   instance,
+				Name: instance,
+				Meta: map[string]string{"flynn-system-app": "true", "flynn-datastore": "true"},
+			},
+		},
+		catalog: []*ct.Resource{{
+			Env:      map[string]string{"FLYNN_POSTGRES": instance},
+			Apps:     []string{instance, "shop"},
+			OwnerApp: "shop",
+		}},
+	}
+	spec := &plugin.CLI{
+		Command:     "pg",
+		App:         "postgres-plugin",
+		ResourceEnv: "FLYNN_POSTGRES",
+		Actions: []plugin.CLIAction{{
+			Name: "dump",
+			Args: []string{"/bin/flynn-postgres-api", "task", "dump", "${resource}"},
+		}},
+	}
+	parsed := &docopt.Args{String: map[string]string{"<name>": instance}}
+	flagApp = instance
+	cfg, err := pluginJobConfig(client, spec, spec.Action("dump"), parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "shop" {
+		t.Fatalf("job app %q, want the attached user app", cfg.App)
+	}
+	if got := strings.Join(cfg.Args, " "); got != "/bin/flynn-postgres-api task dump "+instance {
+		t.Fatalf("dump args %q", got)
+	}
+
+	flagApp = "shop"
+	cfg, err = pluginJobConfig(client, spec, spec.Action("dump"), parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "shop" {
+		t.Fatalf("explicit user app %q", cfg.App)
+	}
+
+	flagApp = ""
+	cfg, err = pluginJobConfig(client, spec, spec.Action("dump"), parsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.App != "shop" {
+		t.Fatalf("resource name without -a ran on %q", cfg.App)
 	}
 }
 

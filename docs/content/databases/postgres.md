@@ -214,7 +214,10 @@ newest, and `flynn pg:restore <timestamp>` restores a listed timestamp into
 the same database names. When the app has more than one Postgres resource,
 pass the instance name: `flynn pg:dump postgresql-mist-20145`,
 `flynn pg:backups postgresql-mist-20145`, and
-`flynn pg:restore postgresql-mist-20145 20261111T160405Z`. `-f`, `--file`,
+`flynn pg:restore postgresql-mist-20145 20261111T160405Z`. The instance name
+is enough on its own. The job cannot run on the database app, so that command
+uses the user app that owns the database. Pass `-a` only to choose among
+several attached user apps. `-f`, `--file`,
 and `-q` are rejected. There is no dump file to download. The dashboard
 Backup page is the same operation: it shows where backups are stored, a
 warning when the last success is missing or older than 25 hours, **Back up

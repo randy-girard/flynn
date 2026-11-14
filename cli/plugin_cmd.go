@@ -380,14 +380,148 @@ func pluginResourceMatches(spec *plugin.CLI, res *ct.Resource) bool {
 	return false
 }
 
+// pluginCommandApp is the app a plugin one-off runs on. The resource name
+// already selects the database. -a names a user app when one command must
+// pick among several attachments. Passing the database app as -a is refused,
+// so that case uses the user app that owns the resource.
+func pluginCommandApp(client pluginJobClient, resourceName string) (string, error) {
+	resourceName = strings.TrimSpace(resourceName)
+	explicit := strings.TrimSpace(flagApp)
+	if explicit != "" && !strings.EqualFold(explicit, resourceName) {
+		return explicit, nil
+	}
+	if explicit == "" {
+		current, err := app()
+		if err == nil {
+			current = strings.TrimSpace(current)
+		}
+		if current != "" && !strings.EqualFold(current, resourceName) {
+			return current, nil
+		}
+		if resourceName == "" {
+			if err != nil {
+				return "", err
+			}
+			if current == "" {
+				return "", errors.New("no app found, run from a repo with a flynn remote or specify one with -a")
+			}
+			return current, nil
+		}
+	}
+	return attachedUserApp(client, resourceName)
+}
+
+type resourceCatalog interface {
+	ResourceListAll() ([]*ct.Resource, error)
+	GetApp(appID string) (*ct.App, error)
+}
+
+func attachedUserApp(client pluginJobClient, resourceName string) (string, error) {
+	cat, ok := client.(resourceCatalog)
+	if !ok {
+		return "", fmt.Errorf("pass -a <app> that %s is attached to", resourceName)
+	}
+	list, err := cat.ResourceListAll()
+	if err != nil {
+		return "", err
+	}
+	var matches []*ct.Resource
+	for _, r := range list {
+		if resourceMatchesRef(r, resourceName) {
+			matches = append(matches, r)
+		}
+	}
+	if len(matches) == 0 {
+		return "", fmt.Errorf("no resource named %s", resourceName)
+	}
+	seen := map[string]struct{}{}
+	var ids []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return
+		}
+		key := strings.ToLower(id)
+		if _, ok := seen[key]; ok {
+			return
+		}
+		seen[key] = struct{}{}
+		ids = append(ids, id)
+	}
+	var owners []string
+	for _, r := range matches {
+		owner := strings.TrimSpace(r.OwnerApp)
+		if owner == "" && len(r.Apps) > 0 {
+			owner = strings.TrimSpace(r.Apps[len(r.Apps)-1])
+		}
+		if owner != "" {
+			owners = append(owners, owner)
+		}
+		for _, id := range r.Apps {
+			add(id)
+		}
+		add(r.OwnerApp)
+	}
+	nameOf := func(id string) (string, bool) {
+		app, err := cat.GetApp(id)
+		if err != nil || app == nil || app.Datastore() {
+			return "", false
+		}
+		name := strings.TrimSpace(app.Name)
+		if name == "" {
+			name = strings.TrimSpace(app.ID)
+		}
+		if name == "" {
+			name = strings.TrimSpace(id)
+		}
+		if name == "" || strings.EqualFold(name, resourceName) || strings.EqualFold(strings.TrimSpace(app.ID), resourceName) {
+			return "", false
+		}
+		return name, true
+	}
+	for _, id := range owners {
+		if name, ok := nameOf(id); ok {
+			return name, nil
+		}
+	}
+	var users []string
+	have := map[string]struct{}{}
+	for _, id := range ids {
+		name, ok := nameOf(id)
+		if !ok {
+			continue
+		}
+		key := strings.ToLower(name)
+		if _, dup := have[key]; dup {
+			continue
+		}
+		have[key] = struct{}{}
+		users = append(users, name)
+	}
+	sort.Strings(users)
+	switch len(users) {
+	case 0:
+		return "", fmt.Errorf("%s is not attached to an app. Attach it with flynn -a <app> addons:attach %s", resourceName, resourceName)
+	case 1:
+		return users[0], nil
+	default:
+		return "", fmt.Errorf("%s is attached to %s. Pass -a to choose the app", resourceName, strings.Join(users, ", "))
+	}
+}
+
 func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CLIAction, args *docopt.Args) (*runConfig, error) {
 	if action != nil && action.Owned {
 		return ownedPluginJobConfig(client, spec, action, args)
 	}
+	resourceName := resourceNameArg(args)
 	appName := strings.TrimSpace(spec.App)
 	system := action != nil && action.UsesSystemApp()
 	if !system || appName == "" {
-		appName = mustApp()
+		resolved, err := pluginCommandApp(client, resourceName)
+		if err != nil {
+			return nil, err
+		}
+		appName = resolved
 	}
 	appRelease, err := client.GetAppRelease(appName)
 	if err != nil {
@@ -402,12 +536,12 @@ func pluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plugin.CL
 
 	var resources []*ct.Resource
 	if !system {
-		if list, lerr := client.AppResourceList(mustApp()); lerr == nil {
+		if list, lerr := client.AppResourceList(appName); lerr == nil {
 			resources = list
 		}
 	}
 
-	in, resourceRelease, err := pluginInterp(client, spec, appRelease, resources, resourceNameArg(args))
+	in, resourceRelease, err := pluginInterp(client, spec, appRelease, resources, resourceName)
 	if err != nil {
 		return nil, err
 	}
@@ -554,12 +688,16 @@ func ownedPluginJobConfig(client pluginJobClient, spec *plugin.CLI, action *plug
 	if pluginApp == "" {
 		return nil, fmt.Errorf("%s plugin CLI is missing the plugin app name", spec.Command)
 	}
-	appRelease, err := client.GetAppRelease(mustApp())
+	appName, err := pluginCommandApp(client, resourceNameArg(args))
+	if err != nil {
+		return nil, err
+	}
+	appRelease, err := client.GetAppRelease(appName)
 	if err != nil && !isReleaseMissing(err) {
 		return nil, fmt.Errorf("error getting app release: %s", err)
 	}
 	var resources []*ct.Resource
-	if list, lerr := client.AppResourceList(mustApp()); lerr == nil {
+	if list, lerr := client.AppResourceList(appName); lerr == nil {
 		resources = list
 	}
 	names, err := ownedInstanceNames(spec, appRelease, resources, args)
