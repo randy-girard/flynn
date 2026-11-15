@@ -634,11 +634,10 @@ func (p *Peer) evalClusterState() {
 		}
 		// Only the sync normally takes over when the primary disappears. If
 		// primary and sync were on the same host, a reboot takes both down
-		// and the first async is the only caught-up replica left.
-		if whichAsync == 0 && p.Info().State != nil &&
-			p.Info().State.Primary != nil &&
-			!p.peerIsPresent(p.Info().State.Primary) &&
-			(p.Info().State.Sync == nil || !p.peerIsPresent(p.Info().State.Sync)) {
+		// and the first async is the only caught-up replica left. A rolling
+		// replace can also remove that first async: the live replicas are
+		// later in the list, and waiting for index 0 never promotes anyone.
+		if p.canTakeOverAsFirstPresentAsync(whichAsync) {
 			if holdTakeoverForUnknownWAL(p.Info().State.InitWAL) {
 				log.Warn("primary and sync missing from discoverd view and init_wal is empty; waiting for peer resync")
 				return
@@ -1450,6 +1449,28 @@ func (p *Peer) whichAsync() int {
 		}
 	}
 	return -1
+}
+
+// canTakeOverAsFirstPresentAsync reports that this async is the first one
+// still registered in discoverd, and both the primary and the sync are gone.
+// Earlier asyncs that have also left must not block failover.
+func (p *Peer) canTakeOverAsFirstPresentAsync(whichAsync int) bool {
+	st := p.Info().State
+	if st == nil || st.Primary == nil || p.peerIsPresent(st.Primary) {
+		return false
+	}
+	if st.Sync != nil && p.peerIsPresent(st.Sync) {
+		return false
+	}
+	if whichAsync < 0 || whichAsync >= len(st.Async) {
+		return false
+	}
+	for i := 0; i < whichAsync; i++ {
+		if p.peerIsPresent(st.Async[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // watchUpstreamDuringReconfigure consumes discoverd events while Reconfigure

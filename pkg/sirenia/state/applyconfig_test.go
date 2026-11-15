@@ -224,6 +224,82 @@ func TestPostgresSyncTakesOverWhenPrimaryGoneAfterDatabaseStarts(t *testing.T) {
 	}
 }
 
+// A rolling replace can leave the recorded primary, sync, and first async
+// absent while later asyncs are the live replicas. The first live async has
+// to take over. Waiting for async index 0 never happens: that peer is gone.
+func TestLaterAsyncTakesOverWhenEarlierPeersGone(t *testing.T) {
+	db := &reconfigureStartsDB{running: true}
+	dsd := &fakeDiscoverd{}
+
+	self := &discoverd.Instance{Addr: "100.100.35.7:5432", Meta: map[string]string{"POSTGRES_ID": "live-1"}}
+	later := &discoverd.Instance{Addr: "100.100.21.14:5432", Meta: map[string]string{"POSTGRES_ID": "live-2"}}
+	primary := &discoverd.Instance{Addr: "100.100.35.6:5432", Meta: map[string]string{"POSTGRES_ID": "old-primary"}}
+	sync := &discoverd.Instance{Addr: "100.100.21.11:5432", Meta: map[string]string{"POSTGRES_ID": "old-sync"}}
+	first := &discoverd.Instance{Addr: "100.100.60.12:5432", Meta: map[string]string{"POSTGRES_ID": "old-async"}}
+
+	peer := NewPeer(self, "live-1", "POSTGRES_ID", false, dsd, db, log15.New())
+	online := true
+	peer.online = &online
+	peer.setPeers([]*discoverd.Instance{self, later})
+	peer.setState(&State{
+		Generation: 113,
+		Primary:    primary,
+		Sync:       sync,
+		Async:      []*discoverd.Instance{first, self, later},
+		InitWAL:    "0-1-1",
+	})
+	peer.generation = 113
+	peer.setRole(RoleAsync)
+
+	peer.evalClusterState()
+
+	if peer.Info().Role != RolePrimary {
+		t.Fatalf("expected role primary after earlier peers disappeared, got %v", peer.Info().Role)
+	}
+	if dsd.state == nil || dsd.state.State == nil || dsd.state.State.Generation != 114 {
+		t.Fatalf("expected generation 114, got %+v", dsd.state)
+	}
+	if dsd.state.State.Primary == nil || dsd.state.State.Primary.Meta["POSTGRES_ID"] != "live-1" {
+		t.Fatalf("expected live-1 as primary, got %+v", dsd.state.State.Primary)
+	}
+	if dsd.state.State.Sync == nil || dsd.state.State.Sync.Meta["POSTGRES_ID"] != "live-2" {
+		t.Fatalf("expected live-2 as sync, got %+v", dsd.state.State.Sync)
+	}
+}
+
+func TestLaterAsyncDoesNotTakeOverWhileEarlierAsyncPresent(t *testing.T) {
+	db := &reconfigureStartsDB{running: true}
+	dsd := &fakeDiscoverd{}
+
+	earlier := &discoverd.Instance{Addr: "100.100.60.13:5432", Meta: map[string]string{"POSTGRES_ID": "live-0"}}
+	self := &discoverd.Instance{Addr: "100.100.35.7:5432", Meta: map[string]string{"POSTGRES_ID": "live-1"}}
+	primary := &discoverd.Instance{Addr: "100.100.35.6:5432", Meta: map[string]string{"POSTGRES_ID": "old-primary"}}
+	sync := &discoverd.Instance{Addr: "100.100.21.11:5432", Meta: map[string]string{"POSTGRES_ID": "old-sync"}}
+
+	peer := NewPeer(self, "live-1", "POSTGRES_ID", false, dsd, db, log15.New())
+	online := true
+	peer.online = &online
+	peer.setPeers([]*discoverd.Instance{earlier, self})
+	peer.setState(&State{
+		Generation: 113,
+		Primary:    primary,
+		Sync:       sync,
+		Async:      []*discoverd.Instance{earlier, self},
+		InitWAL:    "0-1-1",
+	})
+	peer.generation = 113
+	peer.setRole(RoleAsync)
+
+	peer.evalClusterState()
+
+	if peer.Info().Role != RoleAsync {
+		t.Fatalf("expected to stay async while an earlier async is present, got %v", peer.Info().Role)
+	}
+	if dsd.state != nil {
+		t.Fatal("did not expect a new generation while an earlier async can take over")
+	}
+}
+
 func TestPostgresSyncTakesOverWhenPrimaryGoneWithUnassignedPeer(t *testing.T) {
 	db := &reconfigureStartsDB{}
 	dsd := &fakeDiscoverd{}
