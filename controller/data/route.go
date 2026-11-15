@@ -14,6 +14,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/httphelper"
 	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -51,6 +52,8 @@ func (r *RouteRepo) Add(route *router.Route) error {
 	}
 	if postgres.IsUniquenessError(err, "") {
 		err = ErrRouteConflict
+	} else if postgres.IsPostgresCode(err, postgres.RaiseException) && strings.Contains(err.Error(), tcprouteport.ErrExhausted.Error()) {
+		err = tcprouteport.ErrExhausted
 	} else if postgres.IsPostgresCode(err, postgres.RaiseException) {
 		err = ErrRouteInvalid
 	}
@@ -325,8 +328,8 @@ func (r *RouteRepo) resetManagedCertificateToPending(tx *postgres.DBTx, cert *ct
 }
 
 func (r *RouteRepo) addTCP(tx *postgres.DBTx, route *router.Route) error {
-	if route.Port == 80 || route.Port == 443 {
-		return ErrRouteReserved
+	if err := tcprouteport.Check(int(route.Port)); err != nil {
+		return err
 	}
 	mode := router.NormalizeTLSMode(route.TLSMode)
 	if !router.ValidTLSMode(mode) {
@@ -842,6 +845,14 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 }
 
 func (r *RouteRepo) updateTCP(tx *postgres.DBTx, route *router.Route) error {
+	current, err := scanTCPRoute(tx.QueryRow("tcp_route_select", route.ID))
+	if err != nil {
+		return err
+	}
+	// A pre-bind port (3000–3500) may stay. Changing it must land in the window.
+	if route.Port != current.Port && !tcprouteport.Allowed(int(route.Port)) {
+		return tcprouteport.ErrWindow
+	}
 	mode := router.NormalizeTLSMode(route.TLSMode)
 	if !router.ValidTLSMode(mode) {
 		return ErrRouteInvalid

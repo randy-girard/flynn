@@ -13,6 +13,7 @@ import (
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
 	"github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 	router "github.com/randy-girard/flynn/router/types"
 	"golang.org/x/net/context"
 )
@@ -77,6 +78,9 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		case data.ErrRouteReserved:
 			jsonError.Code = httphelper.ConflictErrorCode
 			jsonError.Message = "Port reserved for HTTP/HTTPS traffic"
+		case tcprouteport.ErrWindow, tcprouteport.ErrExhausted:
+			jsonError.Code = httphelper.ValidationErrorCode
+			jsonError.Message = err.Error()
 		case data.ErrRouteUnreservedHTTP:
 			jsonError.Code = httphelper.ValidationErrorCode
 			jsonError.Message = "Port not reserved for HTTP traffic"

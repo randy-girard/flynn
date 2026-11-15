@@ -26,8 +26,10 @@ TCP routes may store a hostname and a TLS mode:
 * `tls_mode="passthrough"` — backend speaks TLS (datastore export default)
 * `tls_mode="terminate"` — router wraps the listener (certificate or `--auto-tls`)
 
-`flynn resource:expose` creates a TCP route in this range (ports 3000–3500).
-`flynn-host firewall:expose` opens the host port.
+The router pre-binds 3000–3500. New TCP routes are allocated from 10000–29999
+and listen on demand. `flynn addons:expose` uses that window. The host firewall
+opens the allocated port, not the whole window. Existing routes in 3000–3500
+keep working on the pre-bound listeners.
 
 ### Benefits over HAProxy/nginx
 

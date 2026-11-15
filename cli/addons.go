@@ -112,13 +112,13 @@ usage: flynn addons:expose <addon> [--domain <host>] [-p <port>] [--tls-mode <mo
 
 Export one add-on on a TCP route. <addon> is the NAME from addons:list.
 Only types whose plugin opts in can be exposed. The route port is the lowest
-free port in 3000-3500 unless -p is set. The cluster firewall opens that port
-on every host. The printed URL uses the node IP and the route port. Running
-this again prints the same URL.
+free port in 10000-29999 unless -p is set. -p must be inside that window.
+The cluster firewall opens that one port on every host. The printed URL uses
+the node IP and the route port. Running this again prints the same URL.
 
 Options:
 	--domain=<host>        hostname (default: SERVICE.CLUSTERDOMAIN)
-	-p, --port=<port>      TCP port (assigned from 3000-3500 if omitted)
+	-p, --port=<port>      TCP port in 10000-29999 (lowest free port if omitted)
 	--tls-mode=<mode>      off, passthrough, or terminate
 	--auto-tls             Let's Encrypt on a terminate route (requires ACME)
 	-c, --tls-cert=<tls-cert>  PEM cert for tls_mode=terminate, - for stdin

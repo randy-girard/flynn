@@ -121,11 +121,12 @@ flynn redis:restore -f db.dump
 
 ### External access
 
-Export Redis on a TCP route with a stable hostname, then open the host port:
+Export Redis on a TCP route with a stable hostname. The host firewall opens
+that one port:
 
 ```text
 flynn addons:expose redis
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open that one port. Do not open 10000–29999 as a range.
 ```
 
 The default hostname is the Redis app name on the cluster domain (from
@@ -136,11 +137,10 @@ You can still create the route yourself:
 
 ```text
 flynn -a redis-harbor-48291 route:add tcp --service redis-harbor-48291 --leader --domain redis.example.com --tls-mode passthrough
-sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn addons:unexpose redis` then
-`sudo flynn-host firewall:unexpose PORT`. See
+The host daemon opens that port. Remove with `flynn addons:unexpose redis`.
+The daemon closes the port. See
 [Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety

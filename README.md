@@ -36,7 +36,7 @@ It is suitable for development, staging, and small production workloads. Read [S
 - **OS:** Ubuntu 24.04 LTS amd64
 - **Hosts:** 2 GB RAM, 40 GB disk, and 2 CPU cores per node as a minimum; more for appliances and builds
 - **HA:** three or more nodes. A single node (`SINGLETON`) is fine for trying Flynn; do not use it as production
-- **Network:** all UDP and TCP between cluster members; externally, open **80**, **443**, and optionally **3000–3500** for user TCP routes. Internal Flynn ports must not be on the public internet. After install, `flynn-host firewall` manages peer IPs and extra TCP ports on the host UFW rules.
+- **Network:** all UDP and TCP between cluster members; externally, open **80** and **443**. Do not open **3000–3500** or **10000–29999** as a range. The host firewall opens each live TCP route port. Internal Flynn ports must not be on the public internet. After install, `flynn-host firewall` manages peer IPs and extra TCP ports that are not routes.
 - **Storage:** ZFS for database volumes. A trial install uses a sparse file on the host disk. Production passes `--zpool-create-device` on the install command, before `systemctl start flynn-host` or a reboot. `flynn-host production:check` fails while any piece of the pool is still a file, in either tenancy mode. See [Production — Storage](docs/content/production.html.md#storage)
 
 ## Install the CLI

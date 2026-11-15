@@ -481,8 +481,9 @@ updating the route. Enabling HTTPS for a route also enables HTTP/2
 automatically.
 
 Datastores use TCP routes instead of HTTP. `flynn addons:expose postgres`
-creates a TLS-capable TCP route (default **passthrough**) and prints
-`sudo flynn-host firewall:expose PORT`. `--auto-tls` on a TCP route sets
+creates a TLS-capable TCP route (default **passthrough**) on the lowest free
+port in 10000–29999 and prints that the cluster firewall will open that port.
+`--auto-tls` on a TCP route sets
 **terminate** and attaches a Let's Encrypt cert (HTTP-01 still uses 80/443).
 Do not terminate TLS for Postgres or MySQL. See
 [Databases — External TLS access](databases.html.md#external-tls-access).

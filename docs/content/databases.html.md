@@ -143,12 +143,15 @@ one node per resource; resize is follow, wait, promote.
 ## External TLS access
 
 HTTP apps get a hostname on the cluster domain. Datastores use the same idea on
-a TCP port in 3000–3500. From the app that owns the resource:
+the lowest free TCP port in 10000–29999. From the app that owns the resource:
 
 ```text
 flynn addons:expose postgres
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open TCP 10000.
 ```
+
+Do not open 10000–29999, or the older router pre-bind 3000–3500, as a range.
+One live route is one UFW allow.
 
 Default hostname is `<service>.<cluster-domain>` (for example
 `postgres.example.com`). Default TLS mode is **passthrough**: the router
@@ -161,8 +164,9 @@ In-cluster jobs keep using the `*.discoverd` names in `DATABASE_URL` /
 Postgres URLs use `sslmode=require`; plaintext `sslmode=disable` still works
 inside the overlay.
 
-Remove the route with `flynn addons:unexpose <provider>`, then
-`sudo flynn-host firewall:unexpose PORT`. Details are on each engine page and
+Remove the route with `flynn addons:unexpose <provider>`. The host daemon
+closes that port. Run `sudo flynn-host firewall:unexpose PORT` only if you
+pinned it with `firewall:expose`. Details are on each engine page and
 in [Production — Firewalling](production.html.md#firewalling).
 
 ## Per-instance ports

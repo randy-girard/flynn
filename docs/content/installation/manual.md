@@ -78,16 +78,15 @@ ports externally on every node:
 
 * 80 (HTTP)
 * 443 (HTTPS)
-* 3000 to 3500 (user-defined TCP services, optional — datastore exports)
 
-**A firewall with this configuration is required.** Internal Flynn APIs must not
-be reachable from the internet; access to them is equivalent to root on the
-cluster. After install, `flynn-host firewall` manages extra peer IPs and TCP
-ports on the host UFW rules (`firewall:peer:add`, `firewall:expose`,
-`firewall:unexpose`, `firewall:sync`). Public 22/80/443 and private cluster
-CIDRs stay installer-owned. `flynn addons:expose` creates a datastore TCP route
-and the cluster firewall opens that port on every host. It does not print
-`flynn-host firewall:expose`.
+**A firewall with this configuration is required.** Do not open `3000–3500` or
+`10000–29999` as a range. Internal Flynn APIs must not be reachable from the
+internet; access to them is equivalent to root on the cluster. After install,
+`flynn-host firewall` manages extra peer IPs and TCP ports that are not routes
+(`firewall:peer:add`, `firewall:expose`, `firewall:unexpose`, `firewall:sync`).
+Public 22/80/443 and private cluster CIDRs stay installer-owned. `flynn
+addons:expose` creates a datastore TCP route in `10000–29999`. The host daemon
+opens that one port on every host. It does not print `flynn-host firewall:expose`.
 
 Next, start a Layer 0 cluster: run `flynn-host` on every node. The daemon uses
 Raft for leader election and must know its peers.

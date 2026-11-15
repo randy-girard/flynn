@@ -167,12 +167,13 @@ API on :5433 (`/status`, `/stop`) requires the cluster controller key; `GET
 
 `flynn addons:expose postgres` exports **this app's tenant instance** (the
 plugin resource), not the platform appliance. It creates a leader TCP route
-and prints the host command that opens the port:
+on the lowest free port in 10000–29999 and the host firewall opens that one
+port on every host:
 
 ```text
 flynn addons:expose postgres
 # default hostname <service>.<cluster-domain>, tls_mode=passthrough
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open TCP 10000.
 ```
 
 Passthrough is required for Postgres: clients send an SSLRequest in plaintext
@@ -185,11 +186,12 @@ receive its superuser URL.
 
 ```text
 flynn route:add tcp --service postgres --leader --domain postgres.example.com --tls-mode passthrough
-sudo flynn-host firewall:expose PORT
 ```
 
-Remove a tenant export with `flynn addons:unexpose postgres` then
-`sudo flynn-host firewall:unexpose PORT`. Treat the exported port as public;
+The host daemon opens that port. Do not open 10000–29999 as a range. Remove a
+tenant export with `flynn addons:unexpose postgres`. The daemon closes the
+port. Run `sudo flynn-host firewall:unexpose PORT` only if you pinned it.
+Treat the exported port as public;
 prefer a VPN when you can. See
 [Production — Firewalling](../production.html.md#firewalling).
 

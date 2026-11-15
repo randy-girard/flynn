@@ -163,13 +163,13 @@ $ mysqldump mydb > mydb.dump
 
 ### External access
 
-Export the database on a TCP route with a stable hostname, then open the host
-port:
+Export the database on a TCP route with a stable hostname. The host firewall
+opens that one port:
 
 ```text
 flynn addons:expose mysql
 # default hostname mysql.<cluster-domain>, tls_mode=passthrough
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open that one port. Do not open 10000–29999 as a range.
 ```
 
 Passthrough is required for MySQL: clients negotiate SSL after a
@@ -182,13 +182,12 @@ You can still create the route yourself, on the instance app (the value of
 
 ```text
 flynn -a <instance-app> route:add tcp --service <instance-app> --leader --domain mysql.example.com --tls-mode passthrough
-sudo flynn-host firewall:expose PORT
 ```
 
-External clients must use TLS and trust `FLYNN_MYSQL_TRUSTED_CERT`; in-cluster
+The host daemon opens that port. Do not open 10000–29999 as a range. External
+clients must use TLS and trust `FLYNN_MYSQL_TRUSTED_CERT`; in-cluster
 clients keep using the discoverd host in `DATABASE_URL`.
-Remove with `flynn addons:unexpose mysql` then
-`sudo flynn-host firewall:unexpose PORT`. See
+Remove with `flynn addons:unexpose mysql`. The daemon closes the port. See
 [Production — Firewalling](../production.html.md#firewalling).
 
 ## Safety

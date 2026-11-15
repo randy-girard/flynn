@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/randy-girard/flynn/pkg/postgres"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 )
 
 // RouterMigrationStart is the ID of the migration that starts the router
@@ -1488,6 +1489,35 @@ CREATE CONSTRAINT TRIGGER http_route_concurrency_check
 	DEFERRABLE INITIALLY DEFERRED
 	FOR EACH ROW EXECUTE PROCEDURE check_http_route_concurrency()`,
 	)
+
+	// TCP route ports after the 3000–3500 pre-bind is full. The trigger from
+	// migration 45 stays BEFORE INSERT. Assignment runs only when port is 0.
+	// Live rows only, matching tcp_routes_port_key (deleted_at IS NULL).
+	// Existing 3000–3500 rows are not updated. The router pre-bind is unchanged.
+	migrations.AddSteps(89, func(tx *postgres.DBTx) error {
+		stmt := fmt.Sprintf(`
+CREATE OR REPLACE FUNCTION set_tcp_route_port() RETURNS TRIGGER AS $fn$
+BEGIN
+  IF NEW.port <> 0 THEN
+    RETURN NEW;
+  END IF;
+  PERFORM pg_advisory_xact_lock(%d);
+  SELECT gs.port INTO NEW.port
+  FROM generate_series(%d, %d) AS gs(port)
+  WHERE NOT EXISTS (
+    SELECT 1 FROM tcp_routes AS t
+    WHERE t.port = gs.port AND t.deleted_at IS NULL
+  )
+  ORDER BY gs.port
+  LIMIT 1;
+  IF NEW.port IS NULL THEN
+    RAISE EXCEPTION '%s';
+  END IF;
+  RETURN NEW;
+END;
+$fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcprouteport.MaxPort, tcprouteport.ErrExhausted.Error())
+		return tx.Exec(stmt)
+	})
 }
 
 func MigrateDB(db *postgres.DB) error {

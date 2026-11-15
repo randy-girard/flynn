@@ -179,12 +179,12 @@ All `flynn clickhouse` commands run inside a container on the Flynn cluster.
 
 ### External access
 
-Export ClickHouse on a TCP route with a stable hostname, then open the host
-port:
+Export ClickHouse on a TCP route with a stable hostname. The host firewall
+opens that one port:
 
 ```text
 flynn addons:expose clickhouse
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open that one port. Do not open 10000–29999 as a range.
 ```
 
 Default TLS mode is passthrough: the appliance serves TLS on the native port
@@ -196,11 +196,10 @@ You can still create the route yourself:
 
 ```text
 flynn -a $(flynn env:get FLYNN_CLICKHOUSE) route:add tcp --service $(flynn env:get FLYNN_CLICKHOUSE) --leader --domain clickhouse.example.com --tls-mode passthrough
-sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn addons:unexpose clickhouse` then
-`sudo flynn-host firewall:unexpose PORT`. See
+The host daemon opens that port. Remove with `flynn addons:unexpose clickhouse`.
+The daemon closes the port. See
 [Production — Firewalling](../production.html.md#firewalling).
 
 ## Metrics

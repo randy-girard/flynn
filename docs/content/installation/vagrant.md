@@ -43,7 +43,7 @@ vagrant up node1 node2 node3
 
 Set `FLYNN_MAX_NODES` if you need a larger (or singleton) topology.
 
-Reach cluster services on the host-only addresses, not Vagrant NAT port forwards: `http://192.168.56.20/` is node1 HTTP, `.21` is node2, and so on. SSH is still `vagrant ssh` (Vagrant's default NAT forward for guest 22). The private network does not filter ports; Flynn's host firewall does. `22`/`80`/`443` are installer-owned; any other TCP port needs `sudo flynn-host firewall:expose PORT` before a client on the Vagrant host can connect to `nodeIP:PORT`.
+Reach cluster services on the host-only addresses, not Vagrant NAT port forwards: `http://192.168.56.20/` is node1 HTTP, `.21` is node2, and so on. SSH is still `vagrant ssh` (Vagrant's default NAT forward for guest 22). The private network does not filter ports; Flynn's host firewall does. `22`/`80`/`443` are installer-owned. A live TCP route is opened by the host daemon, one port, not the whole `10000–29999` window. `sudo flynn-host firewall:expose PORT` is only for a port that is not a route.
 
 Provisioning a cluster from these VMs is the same as [manual installation](manual.md): install `flynn-host` on each node, `flynn-host init` with `--peer-ips` or a discovery token, then `flynn-host bootstrap`.
 

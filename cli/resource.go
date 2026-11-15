@@ -12,6 +12,7 @@ import (
 	"github.com/randy-girard/flynn/pkg/dbruntime"
 	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -450,6 +451,17 @@ func lookupAttachedResource(client controller.Client, app, ref string) (*ct.Reso
 }
 
 func runResourceExpose(args *docopt.Args, client controller.Client) error {
+	port := 0
+	if args.String["--port"] != "" {
+		var err error
+		port, err = strconv.Atoi(args.String["--port"])
+		if err != nil {
+			return err
+		}
+	}
+	if err := tcprouteport.Check(port); err != nil {
+		return err
+	}
 	res, err := lookupAttachedResource(client, mustApp(), args.String["<resource>"])
 	if err != nil {
 		return err
@@ -466,14 +478,6 @@ func runResourceExpose(args *docopt.Args, client controller.Client) error {
 	if domain == "" {
 		clusterDomain := clusterRouteDomain(client)
 		domain = resourceexpose.DefaultHostname(service, clusterDomain)
-	}
-
-	port := 0
-	if args.String["--port"] != "" {
-		port, err = strconv.Atoi(args.String["--port"])
-		if err != nil {
-			return err
-		}
 	}
 
 	autoTLS := args.Bool["--auto-tls"]

@@ -427,43 +427,47 @@ cap.
 ## Firewalling
 
 A firewall preventing external access must always be configured on or in front
-of Flynn hosts, only these ports should be allowed:
+of Flynn hosts. Open these to the internet:
 
 * 80 (HTTP)
 * 443 (HTTPS)
-* 3000 to 3500 (user-defined TCP services, optional — datastore exports and
-  other TCP routes)
+
+Do not open `3000–3500` or `10000–29999` as a range. Each live TCP route is one
+public listener and one UFW allow from Anywhere, on every host. `flynn-host`
+opens and closes that port from the live route list. `FLYNN_INSTANCE_PORT`
+(`3000–3500`) is a separate allocator and is opened only on the hosts running
+that instance.
 
 Internal cross-host cluster communication happens on a variety of UDP and TCP
 ports and should not be restricted.
 
 The installer owns public 22/80/443 and private cluster CIDRs. After install,
 `flynn-host firewall` shows managed UFW rules. Use it to allow a peer that is
-not in a private CIDR, or to open an extra TCP port (a TCP route or an exported
-datastore). User and build jobs are separately blocked from those host ports and
-from discoverd by overlay iptables, even though UFW allows the cluster CIDR for
-host-to-host traffic.
+not in a private CIDR, or to pin an extra TCP port that is not a route. User
+and build jobs are separately blocked from those host ports and from discoverd
+by overlay iptables, even though UFW allows the cluster CIDR for host-to-host
+traffic.
 
 ```text
 sudo flynn-host firewall
 sudo flynn-host firewall:peer:add <ip>
-sudo flynn-host firewall:expose 3001
+sudo flynn-host firewall:expose 12000
 sudo flynn-host firewall:sync
 ```
 
 `firewall:peer:remove` and `firewall:unexpose` drop those extra allows.
 `--peer-ips` and `--ports` on `firewall:sync` seed extra allows stored for later
-syncs.
+syncs. `firewall:sync` does not read the route list. The host daemon does, every
+15 seconds.
 
 ### Exporting datastores
 
-HTTP apps get a stable hostname on the cluster domain. Datastores use the same
-idea on a TCP port in 3000–3500:
+HTTP apps get a stable hostname on the cluster domain. `addons:expose` assigns
+the lowest free TCP port in `10000–29999` (or `-p` inside that window):
 
 ```text
 flynn -a myapp addons:expose postgres
-# prints: sudo flynn-host firewall:expose PORT
-sudo flynn-host firewall:expose 3001   # on every host
+# The cluster firewall will open TCP 10000.
 ```
 
 `addons:expose` creates a leader TCP route (default hostname
@@ -472,15 +476,18 @@ passthrough so Postgres/MySQL native SSL still works. `--auto-tls` switches the
 route to TLS terminate and attaches a Let's Encrypt cert (HTTP-01 still uses
 ports 80/443). See [Databases](databases.html.md) and each engine page.
 
-`flynn-host` also opens live TCP route ports on its 15s firewall sync (same
-UFW `flynn-expose` rules). `firewall:expose` pins the port in Extra.Ports so it
-stays open if the controller is unreachable. After `addons:unexpose`, run
-`sudo flynn-host firewall:unexpose PORT` on each host.
+The host daemon opens that one port on every host (`flynn-expose` in UFW). It
+does not open the rest of `10000–29999`, and it does not open the router
+pre-bind `3000–3500` unless a live route still uses one of those ports. Ports
+outside the pre-bind listen when the route exists. Existing routes in
+`3000–3500` keep their ports. `firewall:expose` pins a port that is not a
+route so it stays open if the controller is unreachable. After
+`addons:unexpose`, the daemon closes the route port. Run
+`sudo flynn-host firewall:unexpose PORT` only if you pinned it.
 
-Treat an exported datastore port as public. Prefer TLS, restrict who can reach
-3000–3500, and use a VPN when you can. In-cluster apps keep using the
-`*.discoverd` names in `DATABASE_URL` / `REDIS_URL` / etc.; they do not need a
-TCP route.
+Treat an exported datastore port as public. Prefer TLS and a VPN when you can.
+In-cluster apps keep using the `*.discoverd` names in `DATABASE_URL` /
+`REDIS_URL` / etc.; they do not need a TCP route.
 
 Outbound Internet access is required to deploy apps using many of the default
 buildpacks.

@@ -189,9 +189,11 @@ TCP routes have three TLS modes:
   required for Postgres/MySQL SSLRequest)
 * **terminate** — the router wraps the listener (`--auto-tls` or a manual cert)
 
-`flynn addons:expose` creates the TCP route and prints
-`sudo flynn-host firewall:expose PORT` so the host port is opened like HTTP
-routes on 80/443. See [Production — Firewalling](production.html.md#firewalling).
+`flynn addons:expose` creates the TCP route on the lowest free port in
+10000–29999. The host firewall opens that one port on every host, the same way
+it opens 80/443 for HTTP. It does not open the rest of the window. Ports
+outside the router pre-bind (3000–3500) listen when the route exists. See
+[Production — Firewalling](production.html.md#firewalling).
 
 An instance of the router runs on every host so client traffic can land on any
 node. The router uses host networking and binds ports 80 and 443, so

@@ -48,6 +48,18 @@ func TestTCPPortsFromRoutes(t *testing.T) {
 	}
 }
 
+func TestTCPPortsFromRoutesDoesNotExpandWindow(t *testing.T) {
+	got := TCPPortsFromRoutes([]*router.Route{
+		{Type: "tcp", Port: 10000},
+		{Type: "tcp", Port: 29999},
+		{Type: "http", Port: 80},
+	})
+	want := []int{10000, 29999}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want one rule per live route, not the numeric window", got)
+	}
+}
+
 func TestPlanAndDiffPeerAddRemove(t *testing.T) {
 	want := Plan(Desired{PeerIPs: []string{"192.168.56.21", "192.168.56.22"}, SelfIP: "192.168.56.20"})
 	if len(want) != 2 {

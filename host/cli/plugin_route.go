@@ -11,6 +11,7 @@ import (
 	controller "github.com/randy-girard/flynn/controller/client"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/plugin"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 )
 
 func runPluginRoute(args *docopt.Args) error {
@@ -83,6 +84,9 @@ func runPluginRouteAddHTTP(args *docopt.Args, app *ct.App, rt *plugin.PluginRout
 func runPluginRouteAddTCP(args *docopt.Args, app *ct.App, rt *plugin.PluginRouter) error {
 	port, err := pluginRoutePort(args)
 	if err != nil {
+		return err
+	}
+	if err := tcprouteport.Check(port); err != nil {
 		return err
 	}
 	cert, key, err := pluginRouteTLSCert(args)

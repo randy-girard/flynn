@@ -14,6 +14,7 @@ import (
 	"github.com/flynn/go-docopt"
 	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/pkg/resourceexpose"
+	"github.com/randy-girard/flynn/pkg/tcprouteport"
 	router "github.com/randy-girard/flynn/router/types"
 )
 
@@ -38,7 +39,7 @@ Options:
 	--domain=<host>            hostname stored on TCP routes (for TLS identity / DNS)
 	--sticky                   enable cookie-based sticky routing (http only)
 	--leader                   enable leader-only routing mode
-	-p, --port=<port>          port to accept traffic on
+	-p, --port=<port>          TCP listen port (10000-29999; omit to assign the lowest free port)
 	--no-drain-backends        don't wait for in-flight requests to complete before stopping backends
 	--disable-keep-alives      disable keep-alives between the router and backends for the given route
 	--max-concurrent-requests=<n>  in-flight HTTP requests for this app on each router (http only, 1..1000000; default copies the app cap or 512)
@@ -173,11 +174,6 @@ func runRouteList(_ *docopt.Args, client controller.Client) error {
 }
 
 func runRouteAddTCP(args *docopt.Args, client controller.Client) error {
-	service := args.String["--service"]
-	if service == "" {
-		service = mustApp() + "-web"
-	}
-
 	port := 0
 	if args.String["--port"] != "" {
 		p, err := strconv.Atoi(args.String["--port"])
@@ -185,6 +181,14 @@ func runRouteAddTCP(args *docopt.Args, client controller.Client) error {
 			return err
 		}
 		port = p
+	}
+	if err := tcprouteport.Check(port); err != nil {
+		return err
+	}
+
+	service := args.String["--service"]
+	if service == "" {
+		service = mustApp() + "-web"
 	}
 
 	tlsMode := router.NormalizeTLSMode(args.String["--tls-mode"])

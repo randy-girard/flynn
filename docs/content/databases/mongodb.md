@@ -152,12 +152,12 @@ run `mongodump` yourself. The Flynn command does not write that file.
 
 ### External access
 
-Export the database on a TCP route with a stable hostname, then open the host
-port:
+Export the database on a TCP route with a stable hostname. The host firewall
+opens that one port:
 
 ```text
 flynn addons:expose mongodb
-sudo flynn-host firewall:expose PORT   # on every host
+# The cluster firewall will open that one port. Do not open 10000–29999 as a range.
 ```
 
 Default TLS mode is passthrough so `mongod` completes the TLS handshake
@@ -170,11 +170,10 @@ You can still create the route yourself, on the instance app (the value of
 
 ```text
 flynn -a <instance-app> route:add tcp --service <instance-app> --leader --domain mongodb.example.com --tls-mode passthrough
-sudo flynn-host firewall:expose PORT
 ```
 
-Remove with `flynn addons:unexpose mongodb` then
-`sudo flynn-host firewall:unexpose PORT`. See
+The host daemon opens that port. Remove with `flynn addons:unexpose mongodb`.
+The daemon closes the port. See
 [Production — Firewalling](../production.html.md#firewalling).
 
 ## Metrics

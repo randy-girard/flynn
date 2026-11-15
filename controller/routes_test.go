@@ -217,8 +217,22 @@ func (s *S) TestCreateTCPRouteReservedPort(c *C) {
 			Port: port,
 		}.ToRoute())
 		c.Assert(err, NotNil)
-		c.Assert(err.Error(), Equals, "conflict: Port reserved for HTTP/HTTPS traffic")
+		c.Assert(err.Error(), Equals, "validation_error: tcp route port must be in 10000-29999")
 	}
+}
+
+func (s *S) TestCreateTCPRoutePortWindow(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "create-tcp-route-port-window"})
+	for _, port := range []int{22, 53, 80, 443, 1111, 1113, 3000, 3500, 5000, 5002, 9999, 30000, 32768} {
+		err := s.c.CreateRoute(app.ID, (&router.TCPRoute{Service: "foo", Port: port}).ToRoute())
+		c.Assert(err, NotNil, Commentf("port %d", port))
+		c.Assert(err.Error(), Matches, ".*10000-29999.*", Commentf("port %d: %v", port, err))
+	}
+	route := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "foo"}).ToRoute())
+	c.Assert(route.Port >= 10000 && route.Port <= 29999, Equals, true, Commentf("assigned %d", route.Port))
+	c.Assert(s.c.DeleteRoute(app.ID, route.FormattedID()), IsNil)
+	again := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "foo"}).ToRoute())
+	c.Assert(again.Port, Equals, route.Port)
 }
 
 func (s *S) TestDeleteRoute(c *C) {

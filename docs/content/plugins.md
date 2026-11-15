@@ -84,8 +84,8 @@ catalog` uses the cluster database-runtime catalog (`flynn-host db-runtime`).
 `--disk` stay admin-gated and only for types with `custom_sizing`.
 
 `expose` opts the type into `addons:expose` / `addons:unexpose`. The route
-port is the lowest free port in 3000–3500 unless `-p` is set. The printed URL
-is the client URL on the node IP and that port, including when the add-on is
+port is the lowest free port in 10000–29999 unless `-p` is set inside that
+window. The printed URL is the client URL on the node IP and that port, including when the add-on is
 already exposed. The cluster firewall opens and closes that TCP route port on
 every host (the existing 15-second route reconcile). This command does not
 follow the job onto one node.

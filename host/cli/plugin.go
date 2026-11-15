@@ -249,7 +249,7 @@ Options:
 	-s, --service=<service>    service name to route to (defaults to the plugin name)
 	-c, --tls-cert=<tls-cert>  path to PEM encoded certificate for TLS
 	-k, --tls-key=<tls-key>    path to PEM encoded private key for TLS
-	-p, --port=<port>          port to accept traffic on
+	-p, --port=<port>          TCP listen port (10000-29999; omit to assign the lowest free port)
 	--tls-mode=<mode>          TCP TLS: off, passthrough, or terminate
 	--domain=<host>            hostname stored on TCP routes
 
