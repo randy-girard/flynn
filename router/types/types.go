@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+// DefaultMaxConcurrentRequests is the in-flight HTTP request cap for one app
+// on one router process when a route omits max_concurrent_requests. Routers
+// do not multiply it by host count.
+const DefaultMaxConcurrentRequests = 512
+
+// MaxMaxConcurrentRequests is the largest cap stored on an HTTP route.
+const MaxMaxConcurrentRequests = 1000000
+
 // Certificate describes a TLS certificate for one or more routes
 type Certificate struct {
 	// ID is the unique ID of this Certificate
@@ -132,6 +140,12 @@ type Route struct {
 	// router and backends for this route
 	DisableKeepAlives bool `json:"disable_keep_alives,omitempty"`
 
+	// MaxConcurrentRequests is the per-app limit of in-flight HTTP requests
+	// on each router process. Same-app HTTP routes share one value. Zero
+	// means the router default (DefaultMaxConcurrentRequests). TCP routes
+	// leave it unset. This is not a connection or file-descriptor cap.
+	MaxConcurrentRequests int `json:"max_concurrent_requests,omitempty"`
+
 	// Included is set on read for the HTTP route Flynn creates with the app
 	// ({app}.{DEFAULT_ROUTE_DOMAIN}). It is not stored.
 	Included bool `json:"included,omitempty"`
@@ -160,6 +174,7 @@ func (r Route) HTTPRoute() *HTTPRoute {
 		Sticky:                   r.Sticky,
 		Path:                     r.Path,
 		DisableKeepAlives:        r.DisableKeepAlives,
+		MaxConcurrentRequests:    r.MaxConcurrentRequests,
 	}
 }
 
@@ -202,6 +217,7 @@ type HTTPRoute struct {
 	Sticky                   bool
 	Path                     string
 	DisableKeepAlives        bool
+	MaxConcurrentRequests    int
 }
 
 func (r HTTPRoute) FormattedID() string {
@@ -234,6 +250,7 @@ func (r HTTPRoute) ToRoute() *Route {
 		Sticky:                   r.Sticky,
 		Path:                     r.Path,
 		DisableKeepAlives:        r.DisableKeepAlives,
+		MaxConcurrentRequests:    r.MaxConcurrentRequests,
 	}
 }
 

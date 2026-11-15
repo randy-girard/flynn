@@ -417,6 +417,13 @@ Alternatively, a TCP load balancer for ports 80 and 443 can be configured in
 front of the Flynn router, this may increase overhead and complexity but can
 make sense in some environments.
 
+Each router process caps in-flight HTTP requests at 512 per app. A 3-host
+cluster is three separate caps of 512, not one cap of 1536 and not a single
+router enforcing 1536. Idle keep-alives, TCP ports, and file descriptors stay
+uncapped. See [Apps — Routes](apps.md#routes). The router rolls one host at a
+time (`one-down-one-up`); during that roll only the updated hosts enforce the
+cap.
+
 ## Firewalling
 
 A firewall preventing external access must always be configured on or in front

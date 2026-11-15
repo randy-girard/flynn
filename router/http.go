@@ -56,6 +56,10 @@ type HTTPListener struct {
 
 	error503Page []byte
 
+	// caps is the per-app in-flight HTTP limit for this process. The request
+	// path must not take mtx to touch it.
+	caps *httpConcurrency
+
 	preSync  func()
 	postSync func(<-chan struct{})
 
@@ -107,6 +111,7 @@ func (s *HTTPListener) Start() error {
 	s.routes = make(map[string]*httpRoute)
 	s.domains = make(map[string]*node)
 	s.services = make(map[string]*service)
+	s.caps = newHTTPConcurrency()
 
 	if s.cookieKey == nil {
 		s.cookieKey = &[32]byte{}
@@ -272,6 +277,10 @@ func (h *httpSyncHandler) Set(data *router.Route) error {
 	})
 	r.rp.Error503Page = h.l.error503Page
 	r.service = service
+	r.caps = h.l.caps
+	if h.l.caps != nil {
+		h.l.caps.setRoute(data.ID, r.ParentRef, r.MaxConcurrentRequests)
+	}
 	h.l.routes[data.ID] = r
 	domain := net.JoinHostPort(strings.ToLower(r.Domain), strconv.Itoa(r.Port))
 	if data.Path == "/" {
@@ -309,6 +318,9 @@ func (h *httpSyncHandler) Remove(id string) error {
 		delete(h.l.services, r.service.name)
 	}
 
+	if h.l.caps != nil {
+		h.l.caps.removeRoute(id)
+	}
 	delete(h.l.routes, id)
 	domain := net.JoinHostPort(r.Domain, strconv.Itoa(r.Port))
 	if tree, ok := h.l.domains[domain]; ok {
@@ -551,6 +563,7 @@ type httpRoute struct {
 	keypair *tls.Certificate
 	service *service
 	rp      *proxy.ReverseProxy
+	caps    *httpConcurrency
 }
 
 // A service definition: name, and set of backends.
@@ -689,7 +702,34 @@ func (r *httpRoute) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	req.Header.Set("X-Request-Start", strconv.FormatInt(start.UnixNano()/int64(time.Millisecond), 10))
 	setRequestID(req)
 
+	if r.caps != nil {
+		limit, inflight, ok := r.caps.tryAcquire(r.ID, r.ParentRef)
+		if !ok {
+			logger.Error("http concurrency limit",
+				"status", http.StatusServiceUnavailable,
+				"parent_ref", r.ParentRef,
+				"service", r.Service,
+				"domain", r.Domain,
+				"limit", limit,
+				"in_flight", inflight,
+				"request_id", req.Header.Get("X-Request-Id"),
+			)
+			writeHTTPConcurrencyLimited(w)
+			return
+		}
+		defer r.caps.release(r.ID, r.ParentRef)
+	}
+
 	r.rp.ServeHTTP(w, req)
+}
+
+// enforcedHTTPLimit reports the cap currently applied to parent. Tests use it.
+// The request path does not.
+func (s *HTTPListener) enforcedHTTPLimit(parent string) int64 {
+	if s.caps == nil {
+		return 0
+	}
+	return s.caps.limitFor(parent)
 }
 
 func mustPortFromAddr(addr string) string {

@@ -374,6 +374,30 @@ after installing the **otel** plugin. See
 
 ## Routes
 
+Each router process serves at most 512 in-flight HTTP requests for one app.
+The app is the route `parent_ref` (`controller/apps/<app id>`), so a custom
+domain and an `admin-web` service share that cap. Routers are one process per
+host and do not share a counter, so the default is not multiplied by host
+count. On a 3-host cluster each router enforces 512. Spread across the hosts,
+an app can have 512 in flight on each host at the same time. A host that
+receives all of the traffic still stops that app at 512. Other apps on that
+router are still served. System apps use the same cap.
+
+At the cap the router writes `503` with `Retry-After: 1` and the body
+`App HTTP concurrency limit exceeded`, then returns. It does not queue and it
+does not dial a backend. A normal response, a server-sent stream, and an
+upgraded connection each hold one slot until they finish. Idle keep-alive
+connections do not. TCP routes, unmatched hosts, and ACME HTTP-01 challenges
+are not counted. This does not cap every connection or every file descriptor.
+
+A route with no `max_concurrent_requests` uses 512. The allowed range is 1
+through 1000000. Every live HTTP route of the app stores the same number.
+Changing it on one route changes the app. While a raise is still syncing,
+a router keeps enforcing the lower value until every route of that app on
+that process has the new value. A rejection is a router log line
+`http concurrency limit` (`flynn -a router log`). It is not counted in router
+latency metrics, which are backend response time.
+
 Flynn automatically configures a `https://$APPNAME.$CLUSTERDOMAIN` route that
 points at instances of the `web` process type for each app. Apps must bind to
 and accept HTTP requests at the port in the `PORT` environment variable.
