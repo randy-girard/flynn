@@ -418,7 +418,9 @@ resource card, and opening it renders pages the plugin serves. While an app
 deploy is in progress, the app page shows a banner on every tab and the Deploy
 tab polls deployer status (`running` / `pending`, including `git push`). Deleting
 an app from Settings returns to Apps immediately without listing that app
-(controller `DeleteApp` only queues `app_deletion`). After any
+(controller `DeleteApp` only queues `app_deletion`). Settings lists each HTTP
+route's in-flight cap (512 when the API omits it). Changing that number updates
+every HTTP route of the app. After any
 tenant datastore plugin is installed, Workspace also lists **Datastores**
 (cluster-wide database resources, with Add to provision onto an existing app).
 
