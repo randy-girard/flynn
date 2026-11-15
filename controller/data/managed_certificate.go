@@ -212,49 +212,7 @@ func scanTCPRouteFromTx(tx *postgres.DBTx, id string) (*router.Route, error) {
 
 // scanHTTPRouteFromTx queries an HTTP route within a transaction
 func scanHTTPRouteFromTx(tx *postgres.DBTx, id string) (*router.Route, error) {
-	var (
-		route                    router.Route
-		managedCertificateDomain *string
-		certID                   *string
-		certCert                 *string
-		certKey                  *string
-		certCreatedAt            *time.Time
-		certUpdatedAt            *time.Time
-	)
-	if err := tx.QueryRow("http_route_select", id).Scan(
-		&route.ID,
-		&route.ParentRef,
-		&route.Service,
-		&route.Port,
-		&route.Leader,
-		&route.DrainBackends,
-		&route.Domain,
-		&route.Sticky,
-		&route.Path,
-		&route.DisableKeepAlives,
-		&managedCertificateDomain,
-		&route.CreatedAt,
-		&route.UpdatedAt,
-		&certID,
-		&certCert,
-		&certKey,
-		&certCreatedAt,
-		&certUpdatedAt,
-	); err != nil {
-		return nil, err
-	}
-	route.ManagedCertificateDomain = managedCertificateDomain
-	route.Type = "http"
-	if certID != nil {
-		route.Certificate = &router.Certificate{
-			ID:        *certID,
-			Cert:      *certCert,
-			Key:       *certKey,
-			CreatedAt: *certCreatedAt,
-			UpdatedAt: *certUpdatedAt,
-		}
-	}
-	return &route, nil
+	return scanHTTPRoute(tx.QueryRow("http_route_select", id))
 }
 
 func (r *ManagedCertificateRepo) Delete(id string) error {

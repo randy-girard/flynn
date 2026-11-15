@@ -18,12 +18,14 @@ import (
 )
 
 var (
-	ErrRouteNotFound        = errors.New("controller: route not found")
-	ErrRouteConflict        = errors.New("controller: duplicate route")
-	ErrRouteReserved        = errors.New("controller: cannot bind TCP to a reserved port")
-	ErrRouteUnreservedHTTP  = errors.New("controller: cannot route HTTP to a non-HTTP port")
-	ErrRouteUnreservedHTTPS = errors.New("controller: cannot route HTTPS to a non-HTTPS port")
-	ErrRouteInvalid         = errors.New("controller: invalid route")
+	ErrRouteNotFound           = errors.New("controller: route not found")
+	ErrRouteConflict           = errors.New("controller: duplicate route")
+	ErrRouteReserved           = errors.New("controller: cannot bind TCP to a reserved port")
+	ErrRouteUnreservedHTTP     = errors.New("controller: cannot route HTTP to a non-HTTP port")
+	ErrRouteUnreservedHTTPS    = errors.New("controller: cannot route HTTPS to a non-HTTPS port")
+	ErrRouteInvalid            = errors.New("controller: invalid route")
+	ErrHTTPConcurrencyMismatch = errors.New("controller: max_concurrent_requests must match the app's other HTTP routes")
+	ErrHTTPConcurrencyRange    = errors.New("controller: max_concurrent_requests must be between 1 and 1000000")
 )
 
 type RouteRepo struct {
@@ -61,13 +63,16 @@ func (r *RouteRepo) Add(route *router.Route) error {
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return routeCommitErr(tx.Commit())
 }
 
 func (r *RouteRepo) addHTTP(tx *postgres.DBTx, route *router.Route) error {
 	// TODO: support non-default HTTP ports
 	if route.Port > 0 {
 		return ErrRouteInvalid
+	}
+	if err := r.resolveCreateHTTPConcurrency(tx, route); err != nil {
+		return err
 	}
 	if err := tx.QueryRow(
 		"http_route_insert",
@@ -81,6 +86,7 @@ func (r *RouteRepo) addHTTP(tx *postgres.DBTx, route *router.Route) error {
 		route.Path,
 		route.DisableKeepAlives,
 		route.ManagedCertificateDomain,
+		route.MaxConcurrentRequests,
 	).Scan(&route.ID, &route.Path, &route.CreatedAt, &route.UpdatedAt); err != nil {
 		return err
 	}
@@ -462,6 +468,7 @@ func scanHTTPRoute(s postgres.Scanner) (*router.Route, error) {
 		&route.Sticky,
 		&route.Path,
 		&route.DisableKeepAlives,
+		&route.MaxConcurrentRequests,
 		&managedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
@@ -759,10 +766,24 @@ func (r *RouteRepo) Update(route *router.Route) error {
 		tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	return routeCommitErr(tx.Commit())
 }
 
 func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
+	current, err := scanHTTPRoute(tx.QueryRow("http_route_select", route.ID))
+	if err != nil {
+		return err
+	}
+	limit, err := keptHTTPConcurrency(route.MaxConcurrentRequests, current.MaxConcurrentRequests)
+	if err != nil {
+		return err
+	}
+	route.MaxConcurrentRequests = limit
+	if current.ParentRef != "" && limit != current.MaxConcurrentRequests {
+		if err := r.syncHTTPConcurrency(tx, current.ParentRef, limit, route.ID); err != nil {
+			return err
+		}
+	}
 	if err := tx.QueryRow(
 		"http_route_update",
 		route.ParentRef,
@@ -773,6 +794,7 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 		route.Path,
 		route.DisableKeepAlives,
 		route.ManagedCertificateDomain,
+		route.MaxConcurrentRequests,
 		route.ID,
 		route.Domain,
 	).Scan(
@@ -786,6 +808,7 @@ func (r *RouteRepo) updateHTTP(tx *postgres.DBTx, route *router.Route) error {
 		&route.Sticky,
 		&route.Path,
 		&route.DisableKeepAlives,
+		&route.MaxConcurrentRequests,
 		&route.ManagedCertificateDomain,
 		&route.CreatedAt,
 		&route.UpdatedAt,
@@ -864,6 +887,108 @@ func (r *RouteRepo) updateTCP(tx *postgres.DBTx, route *router.Route) error {
 		return nil
 	}
 	return r.addRouteCertWithTx(tx, route)
+}
+
+// resolveCreateHTTPConcurrency stores one cap for every live HTTP route of a
+// parent. An omitted or zero value copies a sibling, or 512 when this is the
+// first route. An explicit value that differs from a sibling is rejected.
+// Create does not retune the other routes.
+func (r *RouteRepo) resolveCreateHTTPConcurrency(tx *postgres.DBTx, route *router.Route) error {
+	if route.MaxConcurrentRequests < 0 || route.MaxConcurrentRequests > router.MaxMaxConcurrentRequests {
+		return ErrHTTPConcurrencyRange
+	}
+	if route.ParentRef == "" {
+		if route.MaxConcurrentRequests == 0 {
+			route.MaxConcurrentRequests = router.DefaultMaxConcurrentRequests
+		}
+		return nil
+	}
+	var sibling int
+	err := tx.QueryRow("http_route_concurrency_for_parent", route.ParentRef).Scan(&sibling)
+	if err == pgx.ErrNoRows {
+		if route.MaxConcurrentRequests == 0 {
+			route.MaxConcurrentRequests = router.DefaultMaxConcurrentRequests
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if route.MaxConcurrentRequests == 0 {
+		route.MaxConcurrentRequests = sibling
+		return nil
+	}
+	if route.MaxConcurrentRequests != sibling {
+		return ErrHTTPConcurrencyMismatch
+	}
+	return nil
+}
+
+// keptHTTPConcurrency keeps the stored cap when an update omits the field.
+// Zero is omitted JSON, not unlimited.
+func keptHTTPConcurrency(incoming, current int) (int, error) {
+	if incoming < 0 || incoming > router.MaxMaxConcurrentRequests {
+		return 0, ErrHTTPConcurrencyRange
+	}
+	if incoming == 0 {
+		if current <= 0 {
+			return router.DefaultMaxConcurrentRequests, nil
+		}
+		return current, nil
+	}
+	return incoming, nil
+}
+
+// syncHTTPConcurrency writes limit onto every other live HTTP route of parent
+// and emits a route event for each one. The route being updated is skipped
+// because Update emits its event after the row write.
+func (r *RouteRepo) syncHTTPConcurrency(tx *postgres.DBTx, parent string, limit int, skipID string) error {
+	if err := tx.Exec("http_route_set_concurrency", parent, limit); err != nil {
+		return err
+	}
+	rows, err := tx.Query("http_route_list_by_parent_ref", parent)
+	if err != nil {
+		return err
+	}
+	seen := map[string]struct{}{}
+	var changed []*router.Route
+	for rows.Next() {
+		route, err := scanHTTPRoute(rows)
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		if route.ID == skipID {
+			continue
+		}
+		if _, ok := seen[route.ID]; ok {
+			continue
+		}
+		seen[route.ID] = struct{}{}
+		changed = append(changed, route)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	// Events use the same connection. Write them after the list is closed.
+	for _, route := range changed {
+		if err := r.createEvent(tx, route, ct.EventTypeRoute); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func routeCommitErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if postgres.IsPostgresCode(err, postgres.RaiseException) && strings.Contains(err.Error(), "max_concurrent_requests") {
+		return ErrHTTPConcurrencyMismatch
+	}
+	return err
 }
 
 func (r *RouteRepo) Delete(route *router.Route) error {

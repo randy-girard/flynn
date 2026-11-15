@@ -834,3 +834,47 @@ func (MigrateSuite) TestMigrateDeploymentType(c *C) {
 		}
 	}
 }
+
+func (MigrateSuite) TestHTTPConcurrencyShared(c *C) {
+	db := setupTestDB(c, "controllertest_http_concurrency_shared")
+	c.Assert(MigrateDB(db), IsNil)
+
+	parent := "controller/apps/same"
+	c.Assert(db.Exec(`INSERT INTO http_routes (parent_ref, service, domain) VALUES ($1, 'svc', 'cap-a.example.com')`, parent), IsNil)
+	var got int
+	c.Assert(db.QueryRow(`SELECT max_concurrent_requests FROM http_routes WHERE domain = 'cap-a.example.com'`).Scan(&got), IsNil)
+	c.Assert(got, Equals, 512)
+
+	err := db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ($1, 'svc', 'cap-b.example.com', 10)`, parent)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_concurrent_requests"), Equals, true)
+
+	c.Assert(db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ($1, 'svc', 'cap-c.example.com', 512)`, parent), IsNil)
+	c.Assert(db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ('controller/apps/other', 'svc', 'cap-d.example.com', 10)`), IsNil)
+
+	err = db.Exec(`UPDATE http_routes SET max_concurrent_requests = 30 WHERE domain = 'cap-a.example.com'`)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_concurrent_requests"), Equals, true)
+
+	tx, err := db.Begin()
+	c.Assert(err, IsNil)
+	c.Assert(tx.Exec(`UPDATE http_routes SET max_concurrent_requests = 20 WHERE parent_ref = $1`, parent), IsNil)
+	c.Assert(tx.Commit(), IsNil)
+	var n int64
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM http_routes WHERE parent_ref = $1 AND max_concurrent_requests = 20`, parent).Scan(&n), IsNil)
+	c.Assert(n, Equals, int64(2))
+
+	tx, err = db.Begin()
+	c.Assert(err, IsNil)
+	c.Assert(tx.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ($1, 'svc', 'cap-tx-a.example.com', 512)`, parent), IsNil)
+	c.Assert(tx.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ($1, 'svc', 'cap-tx-b.example.com', 8)`, parent), IsNil)
+	err = tx.Commit()
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_concurrent_requests"), Equals, true)
+
+	c.Assert(db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ('', 'svc', 'cap-empty-a.example.com', 1)`), IsNil)
+	c.Assert(db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ('', 'svc', 'cap-empty-b.example.com', 2)`), IsNil)
+
+	err = db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ('controller/apps/range', 'svc', 'cap-range.example.com', 0)`)
+	c.Assert(err, NotNil)
+}

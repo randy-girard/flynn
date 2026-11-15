@@ -86,6 +86,9 @@ func (c *controllerAPI) CreateRoute(ctx context.Context, w http.ResponseWriter, 
 		case data.ErrRouteInvalid:
 			jsonError.Code = httphelper.ValidationErrorCode
 			jsonError.Message = "Invalid route"
+		case data.ErrHTTPConcurrencyMismatch, data.ErrHTTPConcurrencyRange:
+			jsonError.Code = httphelper.ValidationErrorCode
+			jsonError.Message = err.Error()
 		default:
 			httphelper.Error(w, err)
 			return
@@ -310,10 +313,17 @@ func (c *controllerAPI) UpdateRoute(ctx context.Context, w http.ResponseWriter, 
 	}
 
 	if err := c.routeRepo.Update(&route); err != nil {
-		if err == data.ErrRouteNotFound {
-			err = ErrNotFound
+		switch err {
+		case data.ErrRouteNotFound:
+			respondWithError(w, ErrNotFound)
+		case data.ErrHTTPConcurrencyMismatch, data.ErrHTTPConcurrencyRange:
+			httphelper.Error(w, httphelper.JSONError{
+				Code:    httphelper.ValidationErrorCode,
+				Message: err.Error(),
+			})
+		default:
+			respondWithError(w, err)
 		}
-		respondWithError(w, err)
 		return
 	}
 	data.MarkIncludedRoutes(c.getApp(ctx), c.appRepo.DefaultDomain(), &route)

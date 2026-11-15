@@ -71,6 +71,12 @@
       "type": "boolean",
       "description": "Whether to disable keep-alives between the router and backends for this route."
     },
+    "max_concurrent_requests": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000,
+      "description": "In-flight HTTP requests this app may hold on each router process. Every live HTTP route of the app stores the same value. Omitted on create copies the app's current cap, or 512 when the app has none. Omitted on update keeps the stored value. TCP routes omit this."
+    },
     "port": {
       "type": "integer",
       "description": "The TCP port to listen on for TCP Routes."

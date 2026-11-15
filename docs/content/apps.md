@@ -390,9 +390,11 @@ upgraded connection each hold one slot until they finish. Idle keep-alive
 connections do not. TCP routes, unmatched hosts, and ACME HTTP-01 challenges
 are not counted. This does not cap every connection or every file descriptor.
 
-A route with no `max_concurrent_requests` uses 512. The allowed range is 1
-through 1000000. Every live HTTP route of the app stores the same number.
-Changing it on one route changes the app. While a raise is still syncing,
+A create that omits `max_concurrent_requests` copies the value already stored
+on that app's HTTP routes, or 512 when the app has none. An update that omits
+it leaves the stored value. Sending a different number changes every live HTTP
+route of the app in one transaction. A create that names a different number is
+rejected. The allowed range is 1 through 1000000. While a raise is still syncing,
 a router keeps enforcing the lower value until every route of that app on
 that process has the new value. A rejection is a router log line
 `http concurrency limit` (`flynn -a router log`). It is not counted in router

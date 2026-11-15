@@ -122,6 +122,8 @@ var preparedStatements = map[string]string{
 	"http_route_insert":                        httpRouteInsertQuery,
 	"http_route_select":                        httpRouteSelectQuery,
 	"http_route_update":                        httpRouteUpdateQuery,
+	"http_route_concurrency_for_parent":        httpRouteConcurrencyForParentQuery,
+	"http_route_set_concurrency":               httpRouteSetConcurrencyQuery,
 	"http_route_delete":                        httpRouteDeleteQuery,
 	"route_list_page":                          routeListPageQuery,
 	"tcp_route_list":                           tcpRouteListQuery,
@@ -897,36 +899,44 @@ RETURNING created_at, updated_at`
 	volumeDecommissionQuery = `
 UPDATE volumes SET updated_at = now(), decommissioned_at = now() WHERE app_id = $1 AND volume_id = $2 RETURNING updated_at, decommissioned_at`
 	httpRouteListQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.max_concurrent_requests, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.deleted_at IS NULL
 ORDER BY r.domain, r.path`
 	httpRouteListByIDsQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.max_concurrent_requests, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.deleted_at IS NULL AND r.id::text = ANY($1::text[])`
 	httpRouteListByParentRefQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.max_concurrent_requests, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.parent_ref = $1 AND r.deleted_at IS NULL
 ORDER BY r.domain, r.path`
 	httpRouteInsertQuery = `
-INSERT INTO http_routes (parent_ref, service, port, leader, drain_backends, domain, sticky, path, disable_keep_alives, managed_certificate_domain)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO http_routes (parent_ref, service, port, leader, drain_backends, domain, sticky, path, disable_keep_alives, managed_certificate_domain, max_concurrent_requests)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING id, path, created_at, updated_at`
 	httpRouteSelectQuery = `
-SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
+SELECT r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.max_concurrent_requests, r.managed_certificate_domain, r.created_at, r.updated_at, c.id, c.cert, c.key, c.created_at, c.updated_at FROM http_routes as r
 LEFT OUTER JOIN route_certificates AS rc on r.id = rc.http_route_id
 LEFT OUTER JOIN certificates AS c ON c.id = rc.certificate_id
 WHERE r.id = $1 AND r.deleted_at IS NULL`
 	httpRouteUpdateQuery = `
 UPDATE http_routes as r
-SET parent_ref = $1, service = $2, port = $3, leader = $4, sticky = $5, path = $6, disable_keep_alives = $7, managed_certificate_domain = $8
-WHERE id = $9 AND domain = $10 AND deleted_at IS NULL
-RETURNING r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.managed_certificate_domain, r.created_at, r.updated_at`
+SET parent_ref = $1, service = $2, port = $3, leader = $4, sticky = $5, path = $6, disable_keep_alives = $7, managed_certificate_domain = $8, max_concurrent_requests = $9
+WHERE id = $10 AND domain = $11 AND deleted_at IS NULL
+RETURNING r.id, r.parent_ref, r.service, r.port, r.leader, r.drain_backends, r.domain, r.sticky, r.path, r.disable_keep_alives, r.max_concurrent_requests, r.managed_certificate_domain, r.created_at, r.updated_at`
+	httpRouteConcurrencyForParentQuery = `
+SELECT max_concurrent_requests FROM http_routes
+WHERE parent_ref = $1 AND deleted_at IS NULL
+LIMIT 1`
+	httpRouteSetConcurrencyQuery = `
+UPDATE http_routes
+SET max_concurrent_requests = $2
+WHERE parent_ref = $1 AND deleted_at IS NULL AND max_concurrent_requests <> $2`
 	httpRouteDeleteQuery = `
 UPDATE http_routes SET deleted_at = now()
 WHERE id = $1`

@@ -1458,6 +1458,36 @@ CREATE TRIGGER notify_tcp_route_certificates_update
 		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_clickhouse_availability_check CHECK (clickhouse_continuous_availability IN ('system', 'manual'))`,
 		`UPDATE cluster_settings SET clickhouse_continuous_availability = 'system' WHERE tenancy_mode = 'hosted'`,
 	)
+
+	// One in-flight HTTP cap per app, stored on every live HTTP route of that
+	// parent_ref. The check is deferred so one transaction can change every
+	// route together. A row trigger would see siblings before they update.
+	migrations.Add(88,
+		`ALTER TABLE http_routes ADD COLUMN max_concurrent_requests integer NOT NULL DEFAULT 512 CHECK (max_concurrent_requests >= 1 AND max_concurrent_requests <= 1000000)`,
+		`
+CREATE OR REPLACE FUNCTION check_http_route_concurrency() RETURNS trigger AS $$
+BEGIN
+	IF NEW.deleted_at IS NOT NULL OR NEW.parent_ref IS NULL OR NEW.parent_ref = '' THEN
+		RETURN NULL;
+	END IF;
+	IF EXISTS (
+		SELECT 1 FROM http_routes
+		WHERE parent_ref = NEW.parent_ref
+			AND deleted_at IS NULL
+			AND id <> NEW.id
+			AND max_concurrent_requests <> NEW.max_concurrent_requests
+	) THEN
+		RAISE EXCEPTION 'max_concurrent_requests must match other HTTP routes for %', NEW.parent_ref;
+	END IF;
+	RETURN NULL;
+END;
+$$ LANGUAGE plpgsql`,
+		`
+CREATE CONSTRAINT TRIGGER http_route_concurrency_check
+	AFTER INSERT OR UPDATE ON http_routes
+	DEFERRABLE INITIALLY DEFERRED
+	FOR EACH ROW EXECUTE PROCEDURE check_http_route_concurrency()`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

@@ -523,3 +523,86 @@ func (s *S) TestIncludedHTTPRouteIsEnforced(c *C) {
 	}
 	c.Assert(found, Equals, true)
 }
+
+func (s *S) TestHTTPRouteConcurrencyShared(c *C) {
+	app := s.createTestApp(c, &ct.App{Name: "http-concurrency"})
+	first := s.createTestRoute(c, app.ID, (&router.HTTPRoute{
+		Domain:  "cap-a.example.com",
+		Service: "http-concurrency-web",
+	}).ToRoute())
+	c.Assert(first.MaxConcurrentRequests, Equals, router.DefaultMaxConcurrentRequests)
+
+	second := s.createTestRoute(c, app.ID, (&router.HTTPRoute{
+		Domain:  "cap-b.example.com",
+		Service: "http-concurrency-admin-web",
+	}).ToRoute())
+	c.Assert(second.MaxConcurrentRequests, Equals, router.DefaultMaxConcurrentRequests)
+
+	err := s.c.CreateRoute(app.ID, (&router.HTTPRoute{
+		Domain:                "cap-c.example.com",
+		Service:               "http-concurrency-web",
+		MaxConcurrentRequests: 10,
+	}).ToRoute())
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_concurrent_requests"), Equals, true)
+
+	err = s.c.CreateRoute(app.ID, (&router.HTTPRoute{
+		Domain:                "cap-d.example.com",
+		Service:               "http-concurrency-web",
+		MaxConcurrentRequests: router.MaxMaxConcurrentRequests + 1,
+	}).ToRoute())
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "max_concurrent_requests"), Equals, true)
+
+	events := make(chan *ct.Event, 8)
+	stream, err := s.c.StreamEvents(ct.StreamEventsOptions{
+		AppID:       app.ID,
+		ObjectTypes: []ct.EventType{ct.EventTypeRoute},
+	}, events)
+	c.Assert(err, IsNil)
+	defer stream.Close()
+
+	first.MaxConcurrentRequests = 40
+	c.Assert(s.c.UpdateRoute(app.ID, first.FormattedID(), first), IsNil)
+	c.Assert(first.MaxConcurrentRequests, Equals, 40)
+
+	got, err := s.c.GetRoute(app.ID, second.FormattedID())
+	c.Assert(err, IsNil)
+	c.Assert(got.MaxConcurrentRequests, Equals, 40)
+
+	seen := map[string]int{}
+	deadline := time.After(10 * time.Second)
+	for len(seen) < 2 {
+		select {
+		case e := <-events:
+			var route router.Route
+			c.Assert(json.Unmarshal(e.Data, &route), IsNil)
+			if route.Type != "http" {
+				continue
+			}
+			seen[route.ID] = route.MaxConcurrentRequests
+		case <-deadline:
+			c.Fatalf("timed out waiting for cap events, saw %v", seen)
+		}
+	}
+	c.Assert(seen[first.ID], Equals, 40)
+	c.Assert(seen[second.ID], Equals, 40)
+
+	// An update that omits the field must not reset the app cap.
+	first.MaxConcurrentRequests = 0
+	c.Assert(s.c.UpdateRoute(app.ID, first.FormattedID(), first), IsNil)
+	c.Assert(first.MaxConcurrentRequests, Equals, 40)
+	got, err = s.c.GetRoute(app.ID, second.FormattedID())
+	c.Assert(err, IsNil)
+	c.Assert(got.MaxConcurrentRequests, Equals, 40)
+
+	other := s.createTestApp(c, &ct.App{Name: "http-concurrency-other"})
+	otherRoute := s.createTestRoute(c, other.ID, (&router.HTTPRoute{
+		Domain:  "cap-other.example.com",
+		Service: "http-concurrency-other-web",
+	}).ToRoute())
+	c.Assert(otherRoute.MaxConcurrentRequests, Equals, router.DefaultMaxConcurrentRequests)
+
+	tcp := s.createTestRoute(c, app.ID, (&router.TCPRoute{Service: "http-concurrency-tcp"}).ToRoute())
+	c.Assert(tcp.MaxConcurrentRequests, Equals, 0)
+}
