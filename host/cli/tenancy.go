@@ -11,8 +11,10 @@ import (
 
 	"github.com/flynn/go-docopt"
 	v1 "github.com/randy-girard/flynn/controller/client/v1"
+	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/host/networkpolicy"
+	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/term"
 )
 
@@ -74,7 +76,11 @@ Mint a personal access token for <email> and print it once.
 usage: flynn-host tenancy:mode [<mode>]
 
 Show or set the cluster tenancy mode (self_hosted or hosted) using the local
-cluster key. Hosted mode does not enable public signup.
+cluster key. The body is {"mode": mode} only. Hosted does not enable signup,
+does not change reserve_resources, and does not run production:check. hosted
+is refused when that check would fail. self_hosted is refused while the
+cluster is hosted and a non-system app still has an owner. That reversal is
+not safe.
 
 Examples:
 
@@ -265,7 +271,13 @@ func runHostUserToken(args *docopt.Args) error {
 	return nil
 }
 
-func runTenancyMode(args *docopt.Args) error {
+// tenancyModeBody is the only JSON tenancy:mode and plugin:install hosted send.
+// signup_enabled is not included.
+func tenancyModeBody(mode string) map[string]string {
+	return map[string]string{"mode": mode}
+}
+
+func runTenancyMode(args *docopt.Args, client *cluster.Client) error {
 	v, err := hostV1()
 	if err != nil {
 		return err
@@ -279,7 +291,17 @@ func runTenancyMode(args *docopt.Args) error {
 		fmt.Printf("mode: %s\nsignup_enabled: %v\n", s.Mode, s.SignupEnabled)
 		return nil
 	}
-	return v.Put("/tenancy", map[string]interface{}{"mode": mode}, &ct.TenancySettings{})
+	if err := tenancy.ValidateMode(mode); err != nil {
+		return err
+	}
+	if mode == tenancy.ModeHosted {
+		// Same rows as production:check, judged as hosted. This does not
+		// print that command or change its lines.
+		if err := hostedProductionBlock(hostProductionCheckConfig(client, "flynn-default")); err != nil {
+			return err
+		}
+	}
+	return v.Put("/tenancy", tenancyModeBody(mode), &ct.TenancySettings{})
 }
 
 func runTenancyNetworkPolicy(args *docopt.Args) error {

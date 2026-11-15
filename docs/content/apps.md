@@ -609,7 +609,9 @@ runtime that must fit. Hosted mode reserves the builtin `small`, `medium`,
 and `large` runtimes even when that stored flag is off. A custom runtime
 reserves in hosted mode only when its flag is on. `tenancy:mode` does not
 change the stored flag. Switching back to self-hosted drops the builtin
-override and leaves the flags as they are.
+override and leaves the flags as they are. That switch is refused while a
+non-system app still has an `owner_account`. It is not a safe reversal.
+See [Production — Tenancy mode](production.html.md#tenancy-mode).
 
 An empty runtime name does not reserve. Database jobs use the database
 runtime catalog and leave the app runtime empty, so this rule does not place

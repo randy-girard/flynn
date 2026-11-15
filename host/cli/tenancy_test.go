@@ -16,6 +16,23 @@ func TestTenancyHostCommandsRegistered(t *testing.T) {
 			t.Fatalf("space in %s", name)
 		}
 	}
+	if commands["tenancy:set"] != nil {
+		t.Fatal("tenancy:set must not exist")
+	}
+}
+
+func TestTenancyModeBodyIsModeOnly(t *testing.T) {
+	body := tenancyModeBody("hosted")
+	if len(body) != 1 || body["mode"] != "hosted" {
+		t.Fatalf("%v", body)
+	}
+	if _, ok := body["signup_enabled"]; ok {
+		t.Fatal("signup_enabled must not be in the body")
+	}
+	self := tenancyModeBody("self_hosted")
+	if len(self) != 1 || self["mode"] != "self_hosted" {
+		t.Fatalf("%v", self)
+	}
 }
 
 func TestNetworkPolicyDryRunDeniesForeignOwner(t *testing.T) {

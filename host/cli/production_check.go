@@ -140,17 +140,40 @@ type productionCheckConfig struct {
 	Color bool
 	// Now is the clock for the backup line. Nil uses time.Now.
 	Now func() time.Time
+	// AssumeMode, when self_hosted or hosted, is the mode used by every
+	// line after a successful tenancy read. production:check leaves it
+	// empty. tenancy:mode hosted sets hosted so warnings that would become
+	// failures after the switch are visible before the PUT. A tenancy read
+	// error is still a failure and is not replaced by AssumeMode.
+	AssumeMode string
 }
 
-func runProductionCheck(args *docopt.Args, client *cluster.Client) error {
-	pool := strings.TrimSpace(args.String["--zpool-name"])
+// hostedProductionBlock reports whether production:check would fail if the
+// cluster were already hosted. Warn rows do not block. The caller does not
+// print the table and does not run the production:check command.
+func hostedProductionBlock(cfg productionCheckConfig) error {
+	cfg.AssumeMode = tenancy.ModeHosted
+	var fails []string
+	for _, row := range collectProductionRows(cfg) {
+		if row.status != "fail" {
+			continue
+		}
+		fails = append(fails, row.check)
+	}
+	if len(fails) == 0 {
+		return nil
+	}
+	return fmt.Errorf("refusing hosted: production:check would fail (%s); run flynn-host production:check", strings.Join(fails, ", "))
+}
+
+func hostProductionCheckConfig(client *cluster.Client, pool string) productionCheckConfig {
 	var api productionAPI
 	if v, err := hostV1(); err != nil {
 		api = productionAPIError{err: err}
 	} else {
 		api = v
 	}
-	return runProductionChecks(os.Stdout, productionCheckConfig{
+	return productionCheckConfig{
 		Pool: pool,
 		API:  api,
 		Hosts: func() ([]*cluster.Host, error) {
@@ -167,8 +190,14 @@ func runProductionCheck(args *docopt.Args, client *cluster.Client) error {
 		FlannelMeta: readFlannelMeta,
 		ZpoolStatus: execZpoolStatus,
 		Stat:        os.Stat,
-		Color:       productionColorEnabled(os.Stdout),
-	})
+	}
+}
+
+func runProductionCheck(args *docopt.Args, client *cluster.Client) error {
+	pool := strings.TrimSpace(args.String["--zpool-name"])
+	cfg := hostProductionCheckConfig(client, pool)
+	cfg.Color = productionColorEnabled(os.Stdout)
+	return runProductionChecks(os.Stdout, cfg)
 }
 
 func productionColorEnabled(w io.Writer) bool {
@@ -214,6 +243,17 @@ func execZpoolStatus(pool string) ([]byte, error) {
 var zpoolNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 
 func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
+	rows := collectProductionRows(cfg)
+	writeProductionTable(w, rows, cfg.Color)
+	for _, row := range rows {
+		if row.status == "fail" {
+			return ErrAlreadyLogged{Err: errors.New("production check failed")}
+		}
+	}
+	return nil
+}
+
+func collectProductionRows(cfg productionCheckConfig) []productionRow {
 	pool := strings.TrimSpace(cfg.Pool)
 	if pool == "" {
 		pool = "flynn-default"
@@ -265,11 +305,7 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 
 	mode := "unknown"
 	var rows []productionRow
-	fail := false
 	add := func(row productionRow) {
-		if row.status == "fail" {
-			fail = true
-		}
 		rows = append(rows, row)
 	}
 
@@ -287,6 +323,11 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 			action = "Quotas are unlimited. Run flynn-host tenancy:mode hosted to switch."
 		}
 		add(productionRow{status: "ok", check: "tenancy", detail: "mode=" + mode, action: action})
+		// The tenancy row stays the stored mode. Later lines use AssumeMode
+		// so a switch can be judged before the row is written.
+		if cfg.AssumeMode == tenancy.ModeHosted || cfg.AssumeMode == tenancy.ModeSelfHosted {
+			mode = cfg.AssumeMode
+		}
 	} else {
 		add(productionRow{
 			status: "fail",
@@ -314,12 +355,7 @@ func runProductionChecks(w io.Writer, cfg productionCheckConfig) error {
 	addBackupLine(add, api, now)
 	addLogSinkLine(add, api, mode)
 	addOverlayLine(add, meta, metaErr)
-
-	writeProductionTable(w, rows, cfg.Color)
-	if fail {
-		return ErrAlreadyLogged{Err: errors.New("production check failed")}
-	}
-	return nil
+	return rows
 }
 
 func addBlobstoreLine(add func(productionRow), mode string, release *ct.Release, err error) {

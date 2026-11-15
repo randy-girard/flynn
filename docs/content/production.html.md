@@ -113,6 +113,46 @@ the network is `/24` or smaller. `100.64.0.0/16` is the Vagrant network. The
 overlay line prints whatever flannel metadata stores. It does not substitute
 a fixed size.
 
+## Tenancy mode
+
+`self_hosted` is the schema default. That is a company running Flynn for
+itself. `flynn-host tenancy:mode hosted` is the line between that and a
+cluster whose customers share it. The command writes only
+`cluster_settings.tenancy_mode`. It does not set `signup_enabled`, the
+dashboard `allow_signup` flag, or `reserve_resources`, and it does not run
+`production:check`.
+
+Run [`production:check`](#production-check) and fix every `fail` before
+switching. `tenancy:mode hosted` judges those same lines as if the mode were
+already `hosted`. A `fail` refuses the change. A `warn` does not. The error
+names the failing checks and points back at `production:check`. Scale already
+passes real process memory into the account quota, and hosted placement
+already reserves CPU and memory for builtin `small`, `medium`, and `large`.
+This command does not repeat either of those. It does not reschedule jobs.
+Reservation is read when a job is placed.
+
+`flynn-host tenancy:mode self_hosted`, while the cluster is hosted, is
+refused when any app that is not a system app (`flynn-system-app=true`)
+still has an `owner_account`. That reversal is not safe. The command does
+not delete `account_quotas` rows, does not clear `reserve_resources`, and
+does not remove owners. A cluster that is already `self_hosted` is not
+blocked by this rule, so a company that already runs Flynn for itself can
+set the same mode again.
+
+When the reversal is allowed, an account with no `account_quotas` row is
+unlimited immediately, including while apps that are still running keep
+running. An explicit quota row still applies, in hosted mode and in
+self-hosted mode.
+
+Public signup stays off unless `signup_enabled` is already true. Cluster
+Settings "Self sign-up" is the dashboard `allow_signup` flag. Public signup
+needs that flag and controller `signup_enabled`. If the dashboard cannot
+read tenancy, the dashboard flag alone allows signup. `tenancy:mode` does
+not write either flag.
+
+`plugin:install hosted` sends the same `{"mode":"hosted"}` body and uses the
+same refuse. There is no `tenancy:set`.
+
 ## Cluster Requirements
 
 At least three hosts are required to deploy Flynn in a highly available

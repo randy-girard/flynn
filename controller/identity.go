@@ -186,9 +186,10 @@ func (c *controllerAPI) GetTenancy(ctx context.Context, w http.ResponseWriter, _
 }
 
 func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, req *http.Request) {
+	// signup_enabled is not a field here. This handler writes tenancy_mode
+	// only, including when the JSON also contains signup_enabled.
 	var body struct {
-		Mode          string `json:"mode"`
-		SignupEnabled *bool  `json:"signup_enabled"`
+		Mode string `json:"mode"`
 	}
 	if err := httphelper.DecodeJSON(req, &body); err != nil {
 		respondWithError(w, err)
@@ -198,12 +199,45 @@ func (c *controllerAPI) PutTenancy(ctx context.Context, w http.ResponseWriter, r
 		httphelper.ValidationError(w, "mode", err.Error())
 		return
 	}
-	if err := c.tenancy.SetSettings(body.Mode, body.SignupEnabled); err != nil {
+	if err := c.rejectUnsafeSelfHosted(body.Mode); err != nil {
+		respondWithError(w, err)
+		return
+	}
+	if err := c.tenancy.SetSettings(body.Mode, nil); err != nil {
 		respondWithError(w, err)
 		return
 	}
 	_ = c.tenancy.Audit(c.actor(ctx), "tenancy.update", "", "", body)
 	c.GetTenancy(ctx, w, req)
+}
+
+// rejectUnsafeSelfHosted refuses hosted → self_hosted while a non-system app
+// still has an owner. That switch makes accounts with no quota row unlimited
+// immediately, including while apps are still running. It does not delete
+// quota rows or clear reserve_resources, and it is not a safe reversal.
+// A cluster that is already self_hosted is left alone.
+func (c *controllerAPI) rejectUnsafeSelfHosted(mode string) error {
+	if c == nil || c.tenancy == nil || mode != tenancy.ModeSelfHosted {
+		return nil
+	}
+	current, err := c.tenancy.GetSettings()
+	if err != nil {
+		return err
+	}
+	if current.Mode != tenancy.ModeHosted {
+		return nil
+	}
+	n, err := c.tenancy.CountNonSystemOwnedApps()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	return ct.ValidationError{
+		Field:   "mode",
+		Message: "refusing self_hosted while a non-system app has an owner_account; this is not a safe reversal and does not delete quota rows or clear reserve_resources",
+	}
 }
 
 func (c *controllerAPI) CreateUser(ctx context.Context, w http.ResponseWriter, req *http.Request) {

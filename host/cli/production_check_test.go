@@ -233,8 +233,7 @@ func (f *productionFixture) init() {
 	}
 }
 
-func (f *productionFixture) run(t *testing.T) (string, error) {
-	t.Helper()
+func (f *productionFixture) checkConfig() productionCheckConfig {
 	f.init()
 	f.api = &stubProductionAPI{
 		tenancy:         f.tenancy,
@@ -259,8 +258,7 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 		now := f.now
 		nowFn = func() time.Time { return now }
 	}
-	var buf bytes.Buffer
-	err := runProductionChecks(&buf, productionCheckConfig{
+	return productionCheckConfig{
 		Pool: f.pool,
 		API:  f.api,
 		Now:  nowFn,
@@ -291,8 +289,71 @@ func (f *productionFixture) run(t *testing.T) (string, error) {
 			return modeFileInfo(mode), nil
 		},
 		Color: f.color,
-	})
+	}
+}
+
+func (f *productionFixture) run(t *testing.T) (string, error) {
+	t.Helper()
+	var buf bytes.Buffer
+	err := runProductionChecks(&buf, f.checkConfig())
 	return buf.String(), err
+}
+
+func TestHostedRefusedWhenProductionCheckWouldFail(t *testing.T) {
+	f := &productionFixture{
+		tenancy: ct.TenancySettings{Mode: "self_hosted"},
+		env:     map[string]string{"DEFAULT_BACKEND": "postgres"},
+	}
+	err := hostedProductionBlock(f.checkConfig())
+	if err == nil || !strings.Contains(err.Error(), "blobstore") {
+		t.Fatalf("postgres blobstore must refuse hosted, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "production:check") {
+		t.Fatalf("error must point at production:check, got %v", err)
+	}
+	// The same cluster, judged as it is now, only warns. The command must
+	// not have changed production:check.
+	got, runErr := f.run(t)
+	if runErr != nil {
+		t.Fatalf("self-hosted postgres is a warn, got %v\n%s", runErr, got)
+	}
+	mustCheck(t, got, "warn", "blobstore", "default=postgres")
+}
+
+func TestHostedAllowedWhenProductionCheckWouldPass(t *testing.T) {
+	// Default fixture is s3, a block device, a numeric host cap, and a
+	// qualifying sink. The missing singleton cap is a warn and must not
+	// refuse hosted. Stored mode is still self_hosted.
+	f := &productionFixture{tenancy: ct.TenancySettings{Mode: "self_hosted"}}
+	if err := hostedProductionBlock(f.checkConfig()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestHostedRefusedOnFileBackedZFS(t *testing.T) {
+	f := &productionFixture{
+		tenancy: ct.TenancySettings{Mode: "self_hosted"},
+		zpoolText: zpoolStatusText(
+			"NAME STATE READ WRITE CKSUM",
+			"flynn-default ONLINE 0 0 0",
+			"  /var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev ONLINE 0 0 0",
+		),
+		modes: map[string]os.FileMode{
+			"/var/lib/flynn/volumes/zfs/vdev/flynn-default-zpool.vdev": 0644,
+		},
+	}
+	err := hostedProductionBlock(f.checkConfig())
+	if err == nil || !strings.Contains(err.Error(), "zfs") {
+		t.Fatalf("file-backed zfs must refuse hosted, got %v", err)
+	}
+}
+
+func TestHostedRefusedWhenTenancyUnreadable(t *testing.T) {
+	f := &productionFixture{tenancyErr: errors.New("controller down")}
+	err := hostedProductionBlock(f.checkConfig())
+	if err == nil || !strings.Contains(err.Error(), "tenancy") {
+		t.Fatalf("unreadable tenancy must refuse hosted, got %v", err)
+	}
 }
 
 func hostCap(id, cap string) *cluster.Host {

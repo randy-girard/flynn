@@ -52,6 +52,19 @@ func (r *TenancyRepo) SetSettings(mode string, signup *bool) error {
 	return r.db.Exec(`UPDATE cluster_settings SET tenancy_mode = $1, signup_enabled = $2 WHERE id = 1`, mode, *signup)
 }
 
+// CountNonSystemOwnedApps is non-deleted apps that are not flynn-system-app
+// and still have an owner_account. PutTenancy uses this to refuse a hosted
+// to self_hosted reversal. System apps and deleted apps do not count.
+func (r *TenancyRepo) CountNonSystemOwnedApps() (int, error) {
+	var n int
+	err := r.db.QueryRow(`
+		SELECT COUNT(*) FROM apps
+		WHERE deleted_at IS NULL
+		  AND COALESCE(owner_account, '') <> ''
+		  AND COALESCE(meta->>'flynn-system-app', '') <> 'true'`).Scan(&n)
+	return n, err
+}
+
 func (r *TenancyRepo) CreateUser(u *ct.User) error {
 	err := r.db.QueryRow(`
 		INSERT INTO users (id, handle, email, password_hash, cluster_admin, disabled, suspended, email_verified)

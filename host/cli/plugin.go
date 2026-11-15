@@ -8,6 +8,7 @@ import (
 	v1 "github.com/randy-girard/flynn/controller/client/v1"
 	"github.com/randy-girard/flynn/controller/tenancy"
 	ct "github.com/randy-girard/flynn/controller/types"
+	"github.com/randy-girard/flynn/pkg/cluster"
 	"github.com/randy-girard/flynn/pkg/plugin"
 )
 
@@ -20,6 +21,8 @@ tenancy mode to hosted. On a cluster with no resources for an engine it
 also sets that engine's availability to system. A cluster that already
 has resources for that engine keeps the stored availability. billing must
 resolve from plugins.json and plugin:credentials. Signup stays off.
+hosted is refused when production:check would fail. The install does not
+run that command.
 
 Options:
 	--no-build                 Reuse dist/ without compiling (fails if dist/ is missing)
@@ -455,6 +458,13 @@ func runPluginGroupInstall(args *docopt.Args) error {
 	if err != nil {
 		return err
 	}
+	if group.TenancyMode == tenancy.ModeHosted {
+		// Refuse before installing the group so a failed production check
+		// does not leave the hosted plugins in place with the mode unchanged.
+		if err := hostedProductionBlock(hostProductionCheckConfig(cluster.NewClient(), "flynn-default")); err != nil {
+			return fmt.Errorf("plugin group %s: %w", group.Name, err)
+		}
+	}
 	in := &plugin.Installer{
 		Client: client,
 		HTTP:   discoverdHTTPClient(),
@@ -476,7 +486,7 @@ func runPluginGroupInstall(args *docopt.Args) error {
 	if !ok {
 		return fmt.Errorf("plugin group %s: controller client cannot set tenancy mode %s", group.Name, group.TenancyMode)
 	}
-	if err := v.Put("/tenancy", map[string]string{"mode": group.TenancyMode}, &ct.TenancySettings{}); err != nil {
+	if err := v.Put("/tenancy", tenancyModeBody(group.TenancyMode), &ct.TenancySettings{}); err != nil {
 		return fmt.Errorf("plugin group %s: set tenancy mode %s: %w", group.Name, group.TenancyMode, err)
 	}
 	fmt.Fprintf(os.Stdout, "tenancy mode set to %s (signup stays off unless set separately)\n", group.TenancyMode)
