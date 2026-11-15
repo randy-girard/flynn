@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"net"
 	"strconv"
+	"time"
 
 	. "github.com/flynn/go-check"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -73,6 +74,44 @@ func assertTCPConn(c *C, addr, prefix string) {
 
 	c.Assert(err, IsNil)
 	c.Assert(string(res), Equals, prefix+"asdf")
+}
+
+func (s *S) TestTCPRouteOutsidePrebindListensOnDemand(c *C) {
+	l := s.newTCPListener(c)
+	defer l.Close()
+	port := l.endPort + 1
+
+	l.mtx.RLock()
+	prebind := len(l.listeners)
+	_, held := l.listeners[port]
+	l.mtx.RUnlock()
+	c.Assert(held, Equals, false)
+	c.Assert(prebind > 0, Equals, true)
+
+	srv := NewTCPTestServer("ondemand")
+	defer srv.Close()
+	r := s.addTCPRoute(c, l, port)
+	unregister := discoverdRegisterTCP(c, l, srv.Addr)
+	assertTCPConn(c, fmt.Sprintf("127.0.0.1:%d", port), "ondemand")
+	unregister()
+
+	l.mtx.RLock()
+	_, inPool := l.listeners[port]
+	l.mtx.RUnlock()
+	c.Assert(inPool, Equals, false)
+
+	wait := waitForEvent(c, l, "remove", r.ID)
+	s.store.delete(r.ToRoute())
+	wait()
+
+	l.mtx.RLock()
+	_, returned := l.listeners[port]
+	left := len(l.listeners)
+	l.mtx.RUnlock()
+	c.Assert(returned, Equals, false)
+	c.Assert(left, Equals, prebind)
+	_, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 250*time.Millisecond)
+	c.Assert(err, NotNil)
 }
 
 func (s *S) TestAddTCPRoute(c *C) {
