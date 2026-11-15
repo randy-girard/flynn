@@ -6,6 +6,7 @@ import (
 
 	"github.com/flynn/go-docopt"
 	"github.com/randy-girard/flynn/pkg/cliutil"
+	router "github.com/randy-girard/flynn/router/types"
 )
 
 func parseCLI(t *testing.T, argv []string) *docopt.Args {
@@ -118,6 +119,46 @@ func TestPluginListKnownParses(t *testing.T) {
 	args = parseCLI(t, []string{"plugin:list", "--check"})
 	if !args.Bool["--check"] {
 		t.Fatal("plugin:list --check")
+	}
+}
+
+func TestRouteHTTPConcurrencyFlag(t *testing.T) {
+	omitted := parseCLI(t, []string{"route:add", "http", "example.com"})
+	if omitted.String["--max-concurrent-requests"] != "" {
+		t.Fatalf("omitted add flag: %q", omitted.String["--max-concurrent-requests"])
+	}
+	added := parseCLI(t, []string{"route:add", "http", "--max-concurrent-requests", "40", "example.com"})
+	if added.String["--max-concurrent-requests"] != "40" {
+		t.Fatalf("add flag: %q", added.String["--max-concurrent-requests"])
+	}
+	updated := parseCLI(t, []string{"route:update", "http/abc", "--max-concurrent-requests", "40"})
+	if updated.String["--max-concurrent-requests"] != "40" {
+		t.Fatalf("update flag: %q", updated.String["--max-concurrent-requests"])
+	}
+	left := parseCLI(t, []string{"route:update", "http/abc"})
+	if left.String["--max-concurrent-requests"] != "" {
+		t.Fatalf("omitted update flag: %q", left.String["--max-concurrent-requests"])
+	}
+
+	route := &router.Route{MaxConcurrentRequests: 40}
+	n, ok, err := httpConcurrencyFlag(left)
+	if err != nil || ok || n != 0 {
+		t.Fatalf("omitted flag: n=%d ok=%v err=%v", n, ok, err)
+	}
+	if route.MaxConcurrentRequests != 40 {
+		t.Fatalf("omitted flag changed the stored cap to %d", route.MaxConcurrentRequests)
+	}
+	n, ok, err = httpConcurrencyFlag(updated)
+	if err != nil || !ok || n != 40 {
+		t.Fatalf("update flag: n=%d ok=%v err=%v", n, ok, err)
+	}
+	route.MaxConcurrentRequests = n
+	if route.MaxConcurrentRequests != 40 {
+		t.Fatalf("stored %d", route.MaxConcurrentRequests)
+	}
+	bad := parseCLI(t, []string{"route:update", "http/abc", "--max-concurrent-requests", "0"})
+	if _, _, err := httpConcurrencyFlag(bad); err == nil {
+		t.Fatal("expected 0 to be rejected")
 	}
 }
 

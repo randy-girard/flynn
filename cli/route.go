@@ -24,7 +24,7 @@ usage: flynn route
 List routes for the application.
 `)
 	register("route:add", runRouteAdd, `
-usage: flynn route:add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] <domain>
+usage: flynn route:add http [-s <service>] [-p <port>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--sticky] [--leader] [--no-leader] [--no-drain-backends] [--disable-keep-alives] [--max-concurrent-requests=<n>] <domain>
        flynn route:add tcp [-s <service>] [-p <port>] [--domain <host>] [--tls-mode <mode>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--leader] [--no-drain-backends]
 
 Add a route to an application.
@@ -41,6 +41,7 @@ Options:
 	-p, --port=<port>          port to accept traffic on
 	--no-drain-backends        don't wait for in-flight requests to complete before stopping backends
 	--disable-keep-alives      disable keep-alives between the router and backends for the given route
+	--max-concurrent-requests=<n>  in-flight HTTP requests for this app on each router (http only, 1..1000000; default copies the app cap or 512)
 
 Examples:
 
@@ -52,7 +53,7 @@ Examples:
 	$ flynn route:add tcp --service postgres --leader --domain postgres.example.com --tls-mode passthrough
 `)
 	register("route:update", runRouteUpdate, `
-usage: flynn route:update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives]
+usage: flynn route:update <id> [-s <service>] [-c <tls-cert> -k <tls-key>] [--auto-tls] [--no-auto-tls] [--sticky] [--no-sticky] [--leader] [--no-leader] [--disable-keep-alives] [--enable-keep-alives] [--max-concurrent-requests=<n>]
 
 Update a route.
 
@@ -68,6 +69,7 @@ Options:
 	--no-leader                disable leader-only routing mode
 	--disable-keep-alives      disable keep-alives between the router and backends
 	--enable-keep-alives       enable keep-alives between the router and backends
+	--max-concurrent-requests=<n>  in-flight HTTP requests for this app on each router (http only; updates every HTTP route of the app)
 `)
 	register("route:remove", runRouteRemove, `
 usage: flynn route:remove <id>
@@ -296,6 +298,11 @@ func runRouteAddHTTP(args *docopt.Args, client controller.Client) error {
 		DrainBackends:     !args.Bool["--no-drain-backends"],
 		DisableKeepAlives: args.Bool["--disable-keep-alives"],
 	}
+	if n, ok, err := httpConcurrencyFlag(args); err != nil {
+		return err
+	} else if ok {
+		hr.MaxConcurrentRequests = n
+	}
 
 	// Set managed certificate domain if auto-TLS is enabled
 	if autoTLS {
@@ -323,6 +330,9 @@ func runRouteUpdateTCP(args *docopt.Args, client controller.Client) error {
 	service := args.String["--service"]
 	if service == "" {
 		return errors.New("No service name given")
+	}
+	if strings.TrimSpace(args.String["--max-concurrent-requests"]) != "" {
+		return errors.New("--max-concurrent-requests applies to HTTP routes")
 	}
 	route.Service = service
 
@@ -395,12 +405,32 @@ func runRouteUpdateHTTP(args *docopt.Args, client controller.Client) error {
 	} else if args.Bool["--enable-keep-alives"] {
 		route.DisableKeepAlives = false
 	}
+	if n, ok, err := httpConcurrencyFlag(args); err != nil {
+		return err
+	} else if ok {
+		route.MaxConcurrentRequests = n
+	}
 
 	if err := client.UpdateRoute(appName, id, route); err != nil {
 		return err
 	}
 	fmt.Printf("updated %s\n", route.FormattedID())
 	return nil
+}
+
+// httpConcurrencyFlag reports whether --max-concurrent-requests was set.
+// An omitted flag leaves the route value alone so create copies the app cap
+// and update keeps the stored value.
+func httpConcurrencyFlag(args *docopt.Args) (int, bool, error) {
+	raw := strings.TrimSpace(args.String["--max-concurrent-requests"])
+	if raw == "" {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 || n > router.MaxMaxConcurrentRequests {
+		return 0, false, fmt.Errorf("invalid --max-concurrent-requests %q (1..%d)", raw, router.MaxMaxConcurrentRequests)
+	}
+	return n, true, nil
 }
 
 func parseTLSCert(args *docopt.Args) (string, string, error) {
