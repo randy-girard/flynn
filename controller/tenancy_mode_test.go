@@ -33,6 +33,31 @@ func (s *S) putTenancyRaw(c *C, body string) (int, hh.JSONError, ct.TenancySetti
 	return res.StatusCode, apiErr, settings
 }
 
+func (s *S) hideNonSystemOwnedApps(c *C) []string {
+	rows, err := s.hc.db.Query(`
+		UPDATE apps SET deleted_at = now()
+		WHERE deleted_at IS NULL
+		  AND COALESCE(owner_account, '') <> ''
+		  AND COALESCE(meta->>'flynn-system-app', '') <> 'true'
+		RETURNING app_id::text`)
+	c.Assert(err, IsNil)
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		c.Assert(rows.Scan(&id), IsNil)
+		ids = append(ids, id)
+	}
+	c.Assert(rows.Err(), IsNil)
+	return ids
+}
+
+func (s *S) restoreHiddenApps(c *C, ids []string) {
+	for _, id := range ids {
+		c.Assert(s.hc.db.Exec(`UPDATE apps SET deleted_at = NULL WHERE app_id = $1`, id), IsNil)
+	}
+}
+
 func (s *S) restoreTenancyDefaults(c *C) {
 	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
 	c.Assert(s.hc.db.Exec(`UPDATE cluster_settings SET signup_enabled = false WHERE id = 1`), IsNil)
@@ -124,8 +149,11 @@ func (s *S) TestPutTenancyRefusesSelfHostedReversal(c *C) {
 	c.Assert(before.UpdatedAt, NotNil)
 	c.Assert(after.UpdatedAt.Equal(*before.UpdatedAt), Equals, true)
 
-	// A system app with an owner does not count. A deleted customer app does not count.
-	c.Assert(s.hc.db.Exec(`UPDATE apps SET deleted_at = now() WHERE app_id = $1`, customer.ID), IsNil)
+	// A system app with an owner does not count. A deleted customer app does not
+	// count. Earlier tests in this process leave their own owned apps, so hide
+	// every non-system owned app for the allow path and put them back after.
+	hidden := s.hideNonSystemOwnedApps(c)
+	defer s.restoreHiddenApps(c, hidden)
 	s.createTestApp(c, &ct.App{
 		Name:         "f1-sys-" + suffix,
 		OwnerAccount: "user:f1-system",
