@@ -21,6 +21,25 @@ import (
 
 const httpCapBody = "App HTTP concurrency limit exceeded\n"
 
+// lockedBuffer is the log capture for cap tests. Request goroutines write
+// log15 lines while the test reads them.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
 // capHold blocks a backend until stop. Handlers also return when the request
 // context ends so a failed assertion can close the server.
 type capHold struct {
@@ -106,7 +125,7 @@ func (s *S) TestHTTPAppConcurrencySharedAcrossRoutes(c *C) {
 	defer discoverdRegisterHTTPService(c, l, "cap-shared-admin", admin.Listener.Addr().String())()
 	defer discoverdRegisterHTTPService(c, l, "cap-other-web", otherSrv.Listener.Addr().String())()
 
-	var buf bytes.Buffer
+	var buf lockedBuffer
 	prev := logger.GetHandler()
 	logger.SetHandler(log15.StreamHandler(&buf, log15.LogfmtFormat()))
 	defer logger.SetHandler(prev)
