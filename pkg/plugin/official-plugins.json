@@ -385,6 +385,12 @@
       "description": "Environments and artifact promotion. Group apps with flynn pipeline after flynn-host plugin:install pipeline."
     },
     {
+      "name": "blueprint",
+      "kind": "app",
+      "repo": "flynn-plugin-blueprint",
+      "description": "Multi-app environments with named env connections. Provision with flynn blueprint after flynn-host plugin:install blueprint."
+    },
+    {
       "name": "enterprise",
       "kind": "app",
       "repo": "flynn-plugin-enterprise",

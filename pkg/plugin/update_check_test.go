@@ -23,6 +23,9 @@ func TestGitHubSourceForInstalled(t *testing.T) {
 	if gh := GitHubSourceForInstalled(Installed{Name: "pipeline"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-pipeline" {
 		t.Fatalf("catalog pipeline: %+v", gh)
 	}
+	if gh := GitHubSourceForInstalled(Installed{Name: "blueprint"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-blueprint" {
+		t.Fatalf("catalog blueprint: %+v", gh)
+	}
 	if gh := GitHubSourceForInstalled(Installed{Name: "custom-local"}, "randy-girard"); gh == nil || gh.Repo != "flynn-plugin-custom-local" {
 		t.Fatalf("name convention: %+v", gh)
 	}

@@ -60,6 +60,9 @@ func TestOfficialCatalogMapsShortNames(t *testing.T) {
 	if cfg.GitHubURL("autoscale") != "https://github.com/randy-girard/flynn-plugin-autoscale.git" {
 		t.Fatalf("autoscale: %s", cfg.GitHubURL("autoscale"))
 	}
+	if cfg.GitHubURL("blueprint") != "https://github.com/randy-girard/flynn-plugin-blueprint.git" {
+		t.Fatalf("blueprint: %s", cfg.GitHubURL("blueprint"))
+	}
 
 	r, err := Resolve(InstallOptions{Source: "mysql"})
 	if err != nil {
@@ -149,7 +152,7 @@ func TestWriteKnownPlugins(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := b.String()
-	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mysql", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "autoscale", "flynn-plugin-autoscale", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "enterprise", "flynn-plugin-enterprise"} {
+	for _, needle := range []string{"NAME", "mariadb", "mysql", "randy-girard/flynn-plugin-mysql", "OpenTelemetry", "scheduler", "flynn-plugin-scheduler", "autoscale", "flynn-plugin-autoscale", "letsencrypt", "flynn-plugin-letsencrypt", "github", "flynn-plugin-github", "pipeline", "flynn-plugin-pipeline", "blueprint", "flynn-plugin-blueprint", "enterprise", "flynn-plugin-enterprise"} {
 		if !strings.Contains(out, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, out)
 		}

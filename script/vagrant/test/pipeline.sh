@@ -18,7 +18,7 @@ need() {
 
 need "${ROOT}/pkg/plugin/official-plugins.json" '"name": "pipeline"' \
   "official catalog must include the pipeline plugin"
-need "${smoke}" 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline' \
+need "${smoke}" 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint' \
   "default plugin install list must include pipeline"
 need "${smoke}" 'pipeline_smoke_wanted' \
   "upgrade smoke must gate pipeline probes on PLUGIN_SMOKE_APPS"

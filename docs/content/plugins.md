@@ -185,6 +185,7 @@ Development layout (relative to the Flynn repo):
 | `autoscale` | `../flynn-plugin-autoscale` | (none; `kind: app`; web dyno scale on CPU, memory, load, or response time; `flynn autoscale` / `autoscale:enable` / `autoscale:disable` / `autoscale:set` / `autoscale:info`) |
 | `github` | `../flynn-plugin-github` | (none; `kind: app`; dashboard **Deploy** and **Cluster → GitHub**) |
 | `pipeline` | `../flynn-plugin-pipeline` | (none; `kind: app`; dashboard **Pipelines** and app **Settings**; `flynn pipeline` / `pipeline:create` / `pipeline:add` / `pipeline:promote`) |
+| `blueprint` | `../flynn-plugin-blueprint` | (none; `kind: app`; dashboard **Blueprints**; `flynn blueprint` / `blueprint:create` / `blueprint:provision`. Add `randy-girard/flynn-plugin-blueprint` to `PLUGIN_RELEASE_REPOS` so Flynn release fan-out builds it.) |
 | `enterprise` | `../flynn-plugin-enterprise` | (none; `kind: app`; **Cluster → Enterprise**; `flynn-host plugin:install enterprise`) |
 | `billing` (private) | `../flynn-plugin-billing` | (none; `kind: app`; hosted only; **Cluster → Billing**; not in `plugin:install billing`) |
 | `hosted` (group) | dashboard + enterprise + billing | Installs those three plugins and sets cluster tenancy mode to `hosted`. Public signup stays off. `billing` resolves only from `plugins.json` plus `plugin:credentials`. |
@@ -216,6 +217,8 @@ sudo flynn-host plugin:install ../flynn-plugin-scheduler
 sudo flynn-host plugin:install ../flynn-plugin-autoscale
 sudo flynn-host plugin:install ../flynn-plugin-github
 sudo flynn-host plugin:install ../flynn-plugin-pipeline
+sudo flynn-host plugin:install ../flynn-plugin-blueprint
+sudo flynn-host plugin:install blueprint
 sudo flynn-host plugin:install enterprise
 sudo flynn-host plugin:install ../flynn-plugin-enterprise
 sudo flynn-host plugin:install hosted
@@ -322,7 +325,7 @@ On macOS, `script/plugin-build` uses Docker Desktop (linux/amd64). Vagrant
 cluster nodes are not the image builder: smoke builds on the laptop if needed,
 syncs plugin checkouts (`flynn-plugin-*`) into `/opt/flynn-plugins/`, then
 runs `flynn-host plugin:install` on node1. Default `PLUGIN_SMOKE_APPS` is
-`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline` (matches `script/vagrant/suite.sh`; Let's Encrypt is omitted because Vagrant has no ACME; tenant `postgres` is a catalog plugin but is not in that default list). Smoke starts a dummy OTLP/HTTP
+`redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint` (matches `script/vagrant/suite.sh`; Let's Encrypt is omitted because Vagrant has no ACME; tenant `postgres` is a catalog plugin but is not in that default list). Smoke starts a dummy OTLP/HTTP
 listener on the host (`:14318`) so the otel plugin has something to POST
 `/v1/metrics` to; it is not a real collector.
 

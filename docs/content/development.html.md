@@ -466,7 +466,7 @@ set in the environment):
 | `KEEP_BUILDER=1` (default) | Keep the builder disk after smoke; halt it after compile. `KEEP_BUILDER=0` destroys it |
 | `SMOKE_DETAIL=1` | Stream command output |
 | `RESUME_AT=bootstrap` or `upgrade` | Continue a partial run (`--item` required if the matrix has several rows) |
-| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline). Tenant `postgres` is a catalog plugin; it is not in that suite.sh default. |
+| `PLUGIN_SMOKE_APPS` | Plugins to install after bootstrap (default: redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint). Tenant `postgres` is a catalog plugin; it is not in that suite.sh default. |
 | `VAGRANT_MEMORY` / `BUILDER_MEMORY` | VM RAM (MB) |
 
 The smoke header in `script/vagrant/suite.sh` lists the rest.

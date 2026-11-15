@@ -181,7 +181,7 @@
 #   PLUGIN_SMOKE_APPS    Space-separated plugin aliases to flynn-host install
 #                        after bootstrap, before addons create (default: redis
 #                        mysql mongodb kafka clickhouse dashboard www
-#                        discovery otel scheduler pipeline). mysql resolves to
+#                        discovery otel scheduler pipeline blueprint). mysql resolves to
 #                        the mariadb checkout via flynn-plugin.json. Restore
 #                        does not install again; plugins.json + postgres
 #                        already list and restore them. Scheduler interval
@@ -412,7 +412,7 @@ SHARED_LOG_DIRS=(builder)
 SMOKE_DATASTORES="${SMOKE_DATASTORES:-postgres mysql mongodb redis kafka clickhouse}"
 DATASTORE_PROVIDERS=()
 PLUGIN_REPO_ROOT="${PLUGIN_REPO_ROOT:-$(cd "${ROOT}/.." && pwd)}"
-PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline}"
+PLUGIN_SMOKE_APPS="${PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint}"
 PLUGIN_SMOKE_APPS_REQUESTED="${PLUGIN_SMOKE_APPS}"
 SKIP_PLUGIN_INSTALL="${SKIP_PLUGIN_INSTALL:-0}"
 PLUGIN_BUILD_CONCURRENCY="${PLUGIN_BUILD_CONCURRENCY:-6}"

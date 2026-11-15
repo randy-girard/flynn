@@ -142,11 +142,11 @@ if grep -q 'Reinstall plugins after restore' "${smoke}"; then
   echo "restore must not reinstall plugins; they come back with the postgres backup" >&2
   exit 1
 fi
-need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline' \
-  "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery, otel, scheduler, pipeline)"
+need 'PLUGIN_SMOKE_APPS:-redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint' \
+  "default plugin install list must include every first-party plugin (datastores, dashboard, www, discovery, otel, scheduler, pipeline, blueprint)"
 catalog="${ROOT}/pkg/plugin/official-plugins.json"
 need_file "${catalog}" "flynn-host must ship pkg/plugin/official-plugins.json for short-name installs"
-for name in redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline; do
+for name in redis mysql mongodb kafka clickhouse dashboard www discovery otel scheduler pipeline blueprint; do
   if ! grep -q "\"name\": \"${name}\"" "${catalog}"; then
     echo "official plugin catalog must include ${name}" >&2
     exit 1
