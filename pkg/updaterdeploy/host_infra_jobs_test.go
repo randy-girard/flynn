@@ -21,11 +21,24 @@ type fakeInfraHost struct {
 	stopErrOnce          bool
 	stopErrCount         int
 	stopErrLeavesRunning bool
+	// lagLists is how many ListJobs calls after the first AddJob omit the
+	// new job. That is the host still accepting the job.
+	lagLists       int
+	listedAfterAdd int
+	hidden         []*host.Job
 }
 
 func (f *fakeInfraHost) ID() string { return f.id }
 
 func (f *fakeInfraHost) ListJobs() (map[string]host.ActiveJob, error) {
+	if len(f.added) > 0 && f.listedAfterAdd < f.lagLists {
+		f.listedAfterAdd++
+		return f.jobs, nil
+	}
+	for _, job := range f.hidden {
+		f.jobs[job.ID] = host.ActiveJob{Job: job, Status: host.StatusRunning}
+	}
+	f.hidden = nil
 	return f.jobs, nil
 }
 
@@ -63,6 +76,10 @@ func (f *fakeInfraHost) StopJob(id string) error {
 
 func (f *fakeInfraHost) AddJob(job *host.Job) error {
 	f.added = append(f.added, job)
+	if f.lagLists > 0 {
+		f.hidden = append(f.hidden, job)
+		return nil
+	}
 	f.jobs[job.ID] = host.ActiveJob{Job: job, Status: host.StatusRunning}
 	return nil
 }
@@ -254,6 +271,35 @@ func TestReplaceHostInfraJobsDedupsDuplicateHostIDs(t *testing.T) {
 	}
 	if len(h.stopped) != 1 || len(h.added) != 1 {
 		t.Fatalf("duplicate host IDs must replace once, stopped=%v added=%d", h.stopped, len(h.added))
+	}
+}
+
+func TestReplaceHostInfraDoesNotStartASecondJobWhileTheFirstIsUnlisted(t *testing.T) {
+	art := squashArtifact(t, "layer-new")
+	h := &fakeInfraHost{
+		id:       "devnode2",
+		lagLists: 1,
+		jobs: map[string]host.ActiveJob{
+			"old": {
+				Status: host.StatusRunning,
+				Job: &host.Job{
+					ID: "old",
+					Metadata: map[string]string{
+						"flynn-controller.app_name": "flannel",
+					},
+					Config: host.ContainerConfig{
+						Env: map[string]string{"FLYNN_JOB_ID": "old"},
+					},
+					Mountspecs: []*host.Mountspec{{ID: "layer-old"}},
+				},
+			},
+		},
+	}
+	if err := replaceHostInfraJobs([]hostInfraHost{h}, map[string]*ct.Artifact{"flannel": art}, nil, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(h.added) != 1 {
+		t.Fatalf("started %d flannel jobs while the first was still unlisted", len(h.added))
 	}
 }
 

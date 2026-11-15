@@ -171,6 +171,10 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 	}
 	adopted := false
 	var adoptedAt time.Time
+	// pendingID is the job we already handed to the host. ListJobs can lag
+	// behind AddJob. Starting another job in that gap replaces flannel in a
+	// loop and none of them stay running.
+	var pendingID string
 	deadline := time.Now().Add(hostInfraReplaceTimeout)
 	for time.Now().Before(deadline) {
 		jobs, err := h.ListJobs()
@@ -182,6 +186,17 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 				log.Info("host-infra job running on pulled image", "host", h.ID(), "app", name, "job", j.ID)
 			}
 			return nil
+		}
+		if pendingID != "" {
+			j, ok := jobs[pendingID]
+			if !ok || j.Status == host.StatusStarting {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+			if j.Status == host.StatusRunning && j.Job != nil && hostInfraJobMatches(j.Job, want, release) {
+				return nil
+			}
+			pendingID = ""
 		}
 		stale := findStaleHostInfraJob(jobs, name, want, release)
 		if stale != nil {
@@ -224,6 +239,7 @@ func replaceHostInfraOnHost(h hostInfraHost, name string, image *ct.Artifact, r 
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		pendingID = job.ID
 		time.Sleep(100 * time.Millisecond)
 	}
 	return fmt.Errorf("%s on %s did not become running on pulled image after %s", name, h.ID(), hostInfraReplaceTimeout)
