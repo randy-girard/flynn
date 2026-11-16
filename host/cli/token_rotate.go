@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/flynn/go-docopt"
-	controller "github.com/randy-girard/flynn/controller/client"
 	"github.com/randy-girard/flynn/controller/servicetoken"
 	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
