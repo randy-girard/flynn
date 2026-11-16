@@ -280,6 +280,23 @@ the build before a job is inserted.
 `build.sh` still relocates a leftover `CONTROLLER_KEY` to
 `/run/secrets/controller_key` and unsets the env if one is present.
 
+The dashboard reads controller events with scope `events:read`, not the
+cluster key, when it has `ACCESS_TOKEN_PRIVATE_KEY`. The token grants
+`events:read` on one app. It is not `cluster:admin`, it does not set the
+cluster-key flag, and it does not expand to `app:env:read`, so release
+events for that app arrive with env stripped. `GET /events` and
+`GET /events/:id` without a granted `app_id` are denied. A token whose
+user id is an account must match the app owner; a watcher id
+`events:<app id>` is bound only by the grant. The dashboard opens at most
+one stream per subscribed app and does not open an unfiltered stream.
+When the signing key is unset, the dashboard still uses the cluster key
+so local Compose keeps working. A controller that has not learned
+`events:read` still accepts the cluster key on those routes. Rotate the
+dashboard signing key on the dashboard release; do not paste
+`CONTROLLER_KEY` into a tenant app to refresh this token. The dashboard
+process still holds `CONTROLLER_KEY` for metrics, user admin, and plugin
+UI. That key is not the events credential.
+
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy
 `ACCESS_TOKEN_KEY` / `ACCESS_TOKEN_SIGNING_KEY`, postgres

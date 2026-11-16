@@ -450,3 +450,35 @@ func TestGitPushAllowed(t *testing.T) {
 		})
 	}
 }
+
+// TestEventsReadScopeIsNotClusterAdmin is the dashboard events credential.
+// It must reach GET /events so the handler can require app_id. It must not
+// be cluster admin, and it must not read release env.
+func TestEventsReadScopeIsNotClusterAdmin(t *testing.T) {
+	tok := &authorizer.Token{
+		UserID: "acct-a",
+		Scopes: []string{"events:read"},
+		AppGrants: []authorizer.AppGrant{{
+			AppID:       "app-a",
+			Permissions: []string{"events:read"},
+		}},
+	}
+	if tok.ClusterKey || tok.HasClusterAdmin() {
+		t.Fatal("events:read must not be cluster admin and must not set ClusterKey")
+	}
+	if MayReadAppEnv(tok, "app-a", "app-a") {
+		t.Fatal("events:read must not read release env")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/events") {
+		t.Fatal("events:read must reach GET /events")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/events/42") {
+		t.Fatal("events:read must reach GET /events/:id")
+	}
+	if HTTPAllowed(tok, http.MethodGet, "/apps/app-b") {
+		t.Fatal("events:read must not read another app")
+	}
+	if HTTPAllowed(tok, http.MethodDelete, "/apps/app-a") || HTTPAllowed(tok, http.MethodPut, "/cluster/settings") {
+		t.Fatal("events:read must not delete the app or change cluster settings")
+	}
+}

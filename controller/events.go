@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/randy-girard/flynn/controller/authorizer"
+	"github.com/randy-girard/flynn/controller/authz"
 	"github.com/randy-girard/flynn/controller/data"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/ctxhelper"
@@ -39,6 +41,9 @@ func (c *controllerAPI) GetEvent(ctx context.Context, w http.ResponseWriter, req
 		respondWithError(w, ErrNotFound)
 		return
 	}
+	if !c.allowEventRead(ctx, w, req, nil, event.AppID) {
+		return
+	}
 	httphelper.JSON(w, 200, presentEvent(ctx, nil, event))
 }
 
@@ -53,6 +58,9 @@ func (c *controllerAPI) Events(ctx context.Context, w http.ResponseWriter, req *
 			return
 		}
 		app = data.(*ct.App)
+	}
+	if !c.allowEventRead(ctx, w, req, app, "") {
+		return
 	}
 
 	if req.Header.Get("Accept") == "application/json" {
@@ -122,6 +130,46 @@ func listEvents(ctx context.Context, w http.ResponseWriter, req *http.Request, a
 	}
 	httphelper.JSON(w, 200, presentEvents(ctx, app, list))
 	return nil
+}
+
+// allowEventRead enforces events:read. Cluster admin, including the cluster
+// key, may omit app_id and receives every app. A scoped token must name an
+// app it is granted, and a mismatched account is denied even if the grant
+// lists that app id. Release env is stripped later by presentEvent because
+// events:read does not expand to app:env:read.
+func (c *controllerAPI) allowEventRead(ctx context.Context, w http.ResponseWriter, req *http.Request, app *ct.App, eventAppID string) bool {
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || tok.HasClusterAdmin() {
+		return true
+	}
+	if app == nil && eventAppID != "" && c.appRepo != nil {
+		if data, err := c.appRepo.Get(eventAppID); err == nil {
+			app, _ = data.(*ct.App)
+		}
+	}
+	method, path := req.Method, req.URL.Path
+	if app == nil {
+		c.rejectScopedEvent(tok, method, path, "app_id required")
+		httphelper.Forbidden(w, "app_id is required")
+		return false
+	}
+	if !authz.EventsGrantAllows(tok, app.ID, app.Name, app.OwnerAccount) {
+		c.rejectScopedEvent(tok, method, path, "app not granted")
+		httphelper.Forbidden(w, "this credential is not allowed to read events for this app")
+		return false
+	}
+	return true
+}
+
+func (c *controllerAPI) rejectScopedEvent(tok *authorizer.Token, method, path, reason string) {
+	authz.NoteScopedReject(tok, method, path, reason)
+	caller := ""
+	scope := ""
+	if tok != nil {
+		caller = tok.UserID
+		scope = strings.Join(tok.Scopes, ",")
+	}
+	logger.Info("scoped token rejected", "scope", scope, "caller", caller, "method", method, "path", path, "reason", reason)
 }
 
 func streamEvents(ctx context.Context, w http.ResponseWriter, req *http.Request, eventListener *data.EventListener, app *ct.App, repo *data.EventRepo) (err error) {

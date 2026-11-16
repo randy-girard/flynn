@@ -420,7 +420,9 @@ hidden on `flynn help` until the matching plugin is installed on the cluster.
 
 ## Dashboard addon pages
 
-The dashboard plugin is a host/shell. Plugin UIs live on each plugin’s
+The dashboard plugin is a host/shell. When it has an access-token signing
+key it reads each subscribed app's controller events with an `events:read`
+token. See [Security](security.md). Plugin UIs live on each plugin’s
 cluster-level `web` process (Heroku add-on style): the dashboard shows a
 resource card, and opening it renders pages the plugin serves. While an app
 deploy is in progress, the app page shows a banner on every tab and the Deploy

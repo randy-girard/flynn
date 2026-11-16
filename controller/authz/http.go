@@ -47,6 +47,10 @@ const (
 	// or an app:write / app:admin grant may reach the handler, which checks
 	// the target app.
 	rkManageProvider
+	// rkEvents is GET /events and GET /events/:id for an events:read token.
+	// The handler still requires app_id and a matching app grant. Cluster
+	// admin is allowed above and may subscribe with no app_id.
+	rkEvents
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -55,6 +59,10 @@ const (
 // app grant, so a leaked build token cannot create artifacts for other apps or
 // touch anything else.
 const ScopeBuildArtifacts = "build:artifacts"
+
+// ScopeEventsRead lets a dashboard process read one app's event stream.
+// It is not cluster:admin and does not expand to app:env:read.
+const ScopeEventsRead = "events:read"
 
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
@@ -82,6 +90,9 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkManageProvider {
 		return tok.UserID != "" || tokenCanManageSomeApp(tok)
+	}
+	if kind == rkEvents {
+		return hasScope(tok, ScopeEventsRead) && hasEventsGrant(tok)
 	}
 	if kind == rkCluster {
 		return false
@@ -275,6 +286,11 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 	}
 
 	switch parts[0] {
+	case "events":
+		if m == http.MethodGet || m == http.MethodHead {
+			return rkEvents, "", ""
+		}
+		return rkCluster, "", ""
 	case "tenancy":
 		if m == http.MethodGet || m == http.MethodHead {
 			return rkAnyAuth, "", ""

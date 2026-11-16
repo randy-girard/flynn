@@ -531,6 +531,10 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 			return
 		}
 		if !authz.HTTPAllowed(auth, r.Method, r.URL.Path) {
+			if auth != nil && !auth.HasClusterAdmin() && len(auth.Scopes) > 0 {
+				authz.NoteScopedReject(auth, r.Method, r.URL.Path, "route")
+				logger.Info("scoped token rejected", "scope", strings.Join(auth.Scopes, ","), "caller", auth.UserID, "method", r.Method, "path", r.URL.Path, "reason", "route")
+			}
 			httphelper.Forbidden(w, "this credential is not allowed to perform this operation on the controller")
 			return
 		}
