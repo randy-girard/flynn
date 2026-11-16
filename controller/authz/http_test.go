@@ -482,3 +482,47 @@ func TestEventsReadScopeIsNotClusterAdmin(t *testing.T) {
 		t.Fatal("events:read must not delete the app or change cluster settings")
 	}
 }
+
+// TestGitreceiveBuildScopeIsNotClusterAdmin is the receiver credential.
+// POST /apps/:id/builds and GET /artifacts/:id are reachable. Another app's
+// env, deleting that app, and cluster settings are not. Listing artifacts
+// stays cluster-only.
+func TestGitreceiveBuildScopeIsNotClusterAdmin(t *testing.T) {
+	tok := &authorizer.Token{
+		UserID: "acct-a",
+		Scopes: []string{"gitreceive:build"},
+		AppGrants: []authorizer.AppGrant{{
+			AppID:       "app-a",
+			Permissions: []string{"app:write"},
+		}},
+	}
+	if tok.ClusterKey || tok.HasClusterAdmin() {
+		t.Fatal("gitreceive:build must not be cluster admin and must not set ClusterKey")
+	}
+	if !MayReadAppEnv(tok, "app-a", "name-a") {
+		t.Fatal("app:write on the app being built must read that app's env")
+	}
+	if MayReadAppEnv(tok, "app-b", "name-b") {
+		t.Fatal("gitreceive:build must not read another app's env")
+	}
+	if !HTTPAllowed(tok, http.MethodPost, "/apps/app-a/builds") {
+		t.Fatal("gitreceive:build must reach POST /apps/:id/builds")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/artifacts/art-1") {
+		t.Fatal("gitreceive:build must reach GET /artifacts/:id")
+	}
+	if HTTPAllowed(tok, http.MethodGet, "/artifacts") || HTTPAllowed(tok, http.MethodPost, "/apps/app-a/builds/job/token") {
+		t.Fatal("listing artifacts and minting build tokens stay cluster-only")
+	}
+	if HTTPAllowed(tok, http.MethodGet, "/apps/app-b/release") || HTTPAllowed(tok, http.MethodDelete, "/apps/app-b") || HTTPAllowed(tok, http.MethodPut, "/cluster/settings") {
+		t.Fatal("gitreceive:build must not read another app, delete it, or change cluster settings")
+	}
+	admin := &authorizer.Token{UserID: "admin", Scopes: []string{"cluster:admin"}}
+	if HTTPAllowed(admin, http.MethodPost, "/apps/app-a/builds") {
+		t.Fatal("a cluster:admin JWT must not create builds")
+	}
+	key := &authorizer.Token{ClusterKey: true}
+	if !HTTPAllowed(key, http.MethodPost, "/apps/app-a/builds") || !HTTPAllowed(key, http.MethodGet, "/artifacts") {
+		t.Fatal("the cluster key must still create builds and list artifacts")
+	}
+}

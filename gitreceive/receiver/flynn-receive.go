@@ -208,6 +208,10 @@ func mintBuildToken(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) 
 func applyBuildCredential(signer *tokensigner.Signer, job *host.Job, app *ct.App, releaseEnv map[string]string) error {
 	if job != nil && job.Config.Env != nil {
 		delete(job.Config.Env, "CONTROLLER_KEY")
+		delete(job.Config.Env, "AUTH_KEY")
+		delete(job.Config.Env, "FLYNN_RECEIVE_TOKEN")
+		delete(job.Config.Env, "ACCESS_TOKEN_SIGNING_KEY")
+		delete(job.Config.Env, "ACCESS_TOKEN_PRIVATE_KEY")
 	}
 	if signer == nil {
 		return fmt.Errorf("ACCESS_TOKEN_SIGNING_KEY is required to mint a scoped build token; CONTROLLER_KEY is no longer placed in build job environment")
@@ -258,8 +262,15 @@ func main() {
 	}
 }
 
+func controllerClient() (controller.Client, error) {
+	if tok := strings.TrimSpace(os.Getenv("FLYNN_RECEIVE_TOKEN")); tok != "" {
+		return controller.NewClientWithToken("", tok)
+	}
+	return controller.NewClient("", os.Getenv("CONTROLLER_KEY"))
+}
+
 func run() error {
-	client, err := controller.NewClient("", os.Getenv("CONTROLLER_KEY"))
+	client, err := controllerClient()
 	if err != nil {
 		return fmt.Errorf("Unable to connect to controller: %s", err)
 	}
@@ -474,7 +485,27 @@ func slugReleaseProcesses(commands map[string]string, prev *ct.Release, appName 
 	return procs
 }
 
+// scrubReleaseEnv removes cluster-root credentials before they are copied
+// onto a user release or into the slug. The receiver process may still hold
+// CONTROLLER_KEY for the build-cache HMAC. That value must not land in the
+// release the slug runs with.
+func scrubReleaseEnv(env map[string]string) {
+	if env == nil {
+		return
+	}
+	for _, k := range []string{
+		"CONTROLLER_KEY",
+		"AUTH_KEY",
+		"FLYNN_RECEIVE_TOKEN",
+		"ACCESS_TOKEN_SIGNING_KEY",
+		"ACCESS_TOKEN_PRIVATE_KEY",
+	} {
+		delete(env, k)
+	}
+}
+
 func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string, stackName string) error {
+	scrubReleaseEnv(releaseEnv)
 	slugbuilderImageID := os.Getenv("SLUGBUILDER_24_IMAGE_ID")
 	slugrunnerImageID := os.Getenv("SLUGRUNNER_24_IMAGE_ID")
 	cfStackName := "cflinuxfs4"
@@ -559,6 +590,7 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 }
 
 func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string) error {
+	scrubReleaseEnv(releaseEnv)
 	dockerbuilderImageID := os.Getenv("DOCKERBUILDER_24_IMAGE_ID")
 	if dockerbuilderImageID == "" {
 		return fmt.Errorf("DOCKERBUILDER_24_IMAGE_ID not configured on gitreceive")

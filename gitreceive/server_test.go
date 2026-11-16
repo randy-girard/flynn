@@ -277,9 +277,22 @@ func TestGitPktLineAndSubCommand(t *testing.T) {
 			found = true
 			break
 		}
+		if strings.HasPrefix(e, "FLYNN_RECEIVE_TOKEN=") {
+			t.Fatal("empty receive token must not be put on the hook env")
+		}
 	}
 	if !found {
 		t.Fatalf("env=%v", cmd.Env)
+	}
+	cmd, _ = gitCommand(gitEnv{App: "demo", ReceiveToken: "receive-token-value"}, "true")
+	found = false
+	for _, e := range cmd.Env {
+		if e == "FLYNN_RECEIVE_TOKEN=receive-token-value" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("git hook env must carry FLYNN_RECEIVE_TOKEN")
 	}
 }
 

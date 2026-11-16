@@ -297,6 +297,22 @@ dashboard signing key on the dashboard release; do not paste
 process still holds `CONTROLLER_KEY` for metrics, user admin, and plugin
 UI. That key is not the events credential.
 
+`gitreceive` still starts with `CONTROLLER_KEY` and looks up the app with
+that client before it checks the push. The hook then receives
+`FLYNN_RECEIVE_TOKEN`, a `gitreceive:build` token whose grant is
+`app:write` on that app only. `flynn-receiver` uses it for controller,
+pipeline, and GitHub calls. If the token is absent (no signing key, or a
+hook from the previous release), those calls still use `CONTROLLER_KEY`.
+The token is removed from the new release env and from the build job env.
+The build job keeps its separate `build:artifacts` secret mount.
+`CONTROLLER_KEY` stays in the gitreceive and router releases so route sync
+and the cache HMAC keep working. It is not copied into a tenant release.
+A token for one app cannot read another app's env, delete that app, or
+change cluster settings. `POST /apps/:id/builds` accepts the cluster key
+or this token for that app, and rejects a `cluster:admin` JWT. Rotate it
+by restarting the gitreceive release after `ACCESS_TOKEN_SIGNING_KEY`
+changes. Do not paste `CONTROLLER_KEY` into the app being built.
+
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy
 `ACCESS_TOKEN_KEY` / `ACCESS_TOKEN_SIGNING_KEY`, postgres

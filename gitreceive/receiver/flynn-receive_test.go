@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -91,6 +92,57 @@ func TestDockerBuildJobEnv(t *testing.T) {
 	env = dockerBuildJobEnv("k", "a", "v", map[string]string{"DOCKERFILE": "Dockerfile.prod"}, "app-1")
 	if env["DOCKERFILE"] != "Dockerfile.prod" {
 		t.Fatalf("DOCKERFILE = %q, want Dockerfile.prod", env["DOCKERFILE"])
+	}
+	env = dockerBuildJobEnv("k", "a", "v", map[string]string{
+		"DOCKERFILE":          "Dockerfile.prod",
+		"CONTROLLER_KEY":      "cluster-god-key",
+		"FLYNN_RECEIVE_TOKEN": "receive-token-value",
+	}, "app-1")
+	if _, ok := env["CONTROLLER_KEY"]; ok {
+		t.Fatal("CONTROLLER_KEY must not be copied into dockerbuilder env from the release")
+	}
+	if _, ok := env["FLYNN_RECEIVE_TOKEN"]; ok {
+		t.Fatal("FLYNN_RECEIVE_TOKEN must not be copied into dockerbuilder env")
+	}
+}
+
+func TestSetControllerAuthUsesReceiveToken(t *testing.T) {
+	req, err := http.NewRequest(http.MethodGet, "http://pipeline.discoverd/apps/a/environment", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLYNN_RECEIVE_TOKEN", "receive-token-value")
+	t.Setenv("CONTROLLER_KEY", "cluster-god-key")
+	setControllerAuth(req)
+	if got := req.Header.Get("Authorization"); got != "Bearer receive-token-value" {
+		t.Fatalf("auth=%q", got)
+	}
+	t.Setenv("FLYNN_RECEIVE_TOKEN", "")
+	req.Header.Del("Authorization")
+	setControllerAuth(req)
+	_, pass, ok := req.BasicAuth()
+	if !ok || pass != "cluster-god-key" {
+		t.Fatalf("basic ok=%v pass=%q", ok, pass)
+	}
+}
+
+func TestScrubReleaseEnvDropsClusterSecrets(t *testing.T) {
+	env := map[string]string{
+		"CONTROLLER_KEY":           "cluster-god-key",
+		"AUTH_KEY":                 "auth",
+		"FLYNN_RECEIVE_TOKEN":      "receive-token-value",
+		"ACCESS_TOKEN_SIGNING_KEY": "sign",
+		"ACCESS_TOKEN_PRIVATE_KEY": "priv",
+		"DATABASE_URL":             "postgres://app",
+	}
+	scrubReleaseEnv(env)
+	for _, k := range []string{"CONTROLLER_KEY", "AUTH_KEY", "FLYNN_RECEIVE_TOKEN", "ACCESS_TOKEN_SIGNING_KEY", "ACCESS_TOKEN_PRIVATE_KEY"} {
+		if _, ok := env[k]; ok {
+			t.Fatalf("user release env still has %s", k)
+		}
+	}
+	if env["DATABASE_URL"] != "postgres://app" {
+		t.Fatalf("app env = %v", env)
 	}
 }
 
@@ -314,8 +366,9 @@ func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	signer, _ := newBuildKeyPair(t)
 	app := &ct.App{ID: "app-1", Name: "myapp"}
 	job := &host.Job{Config: host.ContainerConfig{Env: map[string]string{
-		"CONTROLLER_KEY": "cluster-god-key",
-		"SLUG_IMAGE_ID":  "x",
+		"CONTROLLER_KEY":      "cluster-god-key",
+		"FLYNN_RECEIVE_TOKEN": "receive-token-value",
+		"SLUG_IMAGE_ID":       "x",
 	}}}
 
 	if err := applyBuildCredential(signer, job, app, nil); err != nil {
@@ -323,6 +376,9 @@ func TestApplyBuildCredentialWithSigner(t *testing.T) {
 	}
 	if _, ok := job.Config.Env["CONTROLLER_KEY"]; ok {
 		t.Fatal("CONTROLLER_KEY must not remain in build job env when a scoped token is mounted")
+	}
+	if _, ok := job.Config.Env["FLYNN_RECEIVE_TOKEN"]; ok {
+		t.Fatal("FLYNN_RECEIVE_TOKEN must not be copied into build job env")
 	}
 	if job.Config.Env["SLUG_IMAGE_ID"] != "x" {
 		t.Fatal("unrelated env should be preserved")

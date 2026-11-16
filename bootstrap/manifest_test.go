@@ -49,6 +49,30 @@ func TestTaffyReleaseCanMintBuildTokens(t *testing.T) {
 	}
 }
 
+func TestRouterAndGitreceiveKeepControllerKey(t *testing.T) {
+	data, err := os.ReadFile("manifest_template.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	for _, id := range []string{"router", "gitreceive"} {
+		i := strings.Index(s, `"id": "`+id+`"`)
+		if i < 0 {
+			t.Fatalf("missing %s", id)
+		}
+		rest := s[i:]
+		if j := strings.Index(rest[len(`"id": "`+id+`"`):], `"id":`); j >= 0 {
+			rest = rest[:len(`"id": "`+id+`"`)+j]
+		}
+		if !strings.Contains(rest, `"CONTROLLER_KEY"`) {
+			t.Fatalf("%s release must keep CONTROLLER_KEY", id)
+		}
+	}
+	if strings.Contains(s, "billing") {
+		t.Fatal("bootstrap must not require the billing plugin")
+	}
+}
+
 func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 	data, err := os.ReadFile("manifest_template.json")
 	if err != nil {

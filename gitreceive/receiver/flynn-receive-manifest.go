@@ -156,7 +156,7 @@ func pipelineEnvironment(appID string) (appmanifest.PipelineContext, error) {
 	if err != nil {
 		return appmanifest.PipelineContext{}, err
 	}
-	req.SetBasicAuth("", os.Getenv("CONTROLLER_KEY"))
+	setControllerAuth(req)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return appmanifest.PipelineContext{}, err
@@ -184,7 +184,7 @@ func githubConnected(appID string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	req.SetBasicAuth("", os.Getenv("CONTROLLER_KEY"))
+	setControllerAuth(req)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return false, err
@@ -219,7 +219,7 @@ func connectManifestGitHub(appID string, spec appmanifest.GitHub) error {
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth("", os.Getenv("CONTROLLER_KEY"))
+	setControllerAuth(req)
 	req.Header.Set("Content-Type", "application/json")
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -231,4 +231,18 @@ func connectManifestGitHub(appID string, spec appmanifest.GitHub) error {
 		return fmt.Errorf("github connect: %s", strings.TrimSpace(string(msg)))
 	}
 	return nil
+}
+
+// setControllerAuth sends the per-app receive token when gitreceived minted
+// one. CONTROLLER_KEY remains the fallback for a hook that predates the token
+// or a gitreceive release without a signing key.
+func setControllerAuth(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if tok := strings.TrimSpace(os.Getenv("FLYNN_RECEIVE_TOKEN")); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+		return
+	}
+	req.SetBasicAuth("", os.Getenv("CONTROLLER_KEY"))
 }

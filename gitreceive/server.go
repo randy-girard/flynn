@@ -23,10 +23,13 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/randy-girard/flynn/controller/authorizer"
 	"github.com/randy-girard/flynn/controller/authz"
+	"github.com/randy-girard/flynn/controller/buildtoken"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/tokensigner"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/pkg/archiver"
@@ -64,7 +67,25 @@ func main() {
 	}
 	auth := authorizer.New([]string{key}, nil, tokenKey, tokenMaxValidity)
 
-	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(newGitHandler(cc, auth)))))
+	h := newGitHandler(cc, auth)
+	h.signer = receiveSigner()
+	log.Fatal(http.ListenAndServe(":"+os.Getenv("PORT"), httphelper.ContextInjector("gitreceive", httphelper.NewRequestLogger(h))))
+}
+
+// receiveSigner loads the key that mints per-app receive tokens. A missing
+// or unreadable key leaves the receiver on CONTROLLER_KEY so an old release
+// still accepts pushes during a rolling update.
+func receiveSigner() *tokensigner.Signer {
+	raw := strings.TrimSpace(os.Getenv("ACCESS_TOKEN_SIGNING_KEY"))
+	if raw == "" {
+		return nil
+	}
+	signer, err := tokensigner.ParseSigningKey(raw)
+	if err != nil {
+		log.Printf("gitreceive: ACCESS_TOKEN_SIGNING_KEY: %v", err)
+		return nil
+	}
+	return signer
 }
 
 // appLookup is the GetApp subset gitreceive needs. The cluster-key controller
@@ -76,6 +97,7 @@ type appLookup interface {
 type gitHandler struct {
 	controller appLookup
 	auth       *authorizer.Authorizer
+	signer     *tokensigner.Signer
 	preview    previewLookup
 	webhookURL string
 	httpClient *http.Client
@@ -91,8 +113,9 @@ type gitService struct {
 }
 
 type gitEnv struct {
-	App      string
-	Pipeline string
+	App          string
+	Pipeline     string
+	ReceiveToken string
 }
 
 // Routing table
@@ -197,7 +220,11 @@ func (h *gitHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(repoPath)
 
-	success := g.handleFunc(gitEnv{App: app.ID}, g.rpc, repoPath, w, r)
+	env := gitEnv{App: app.ID}
+	if rpc == "git-receive-pack" {
+		env.ReceiveToken = h.receiveToken(app)
+	}
+	success := g.handleFunc(env, g.rpc, repoPath, w, r)
 	if success && g.rpc == "git-receive-pack" {
 		if err := uploadRepo(repoPath, app.ID); err != nil {
 			logError(w, "uploadRepo", err)
@@ -415,6 +442,18 @@ func subCommand(rpc string) string {
 	return strings.TrimPrefix(rpc, "git-")
 }
 
+func (h *gitHandler) receiveToken(app *ct.App) string {
+	if h == nil || h.signer == nil || app == nil {
+		return ""
+	}
+	tok, err := buildtoken.MintReceive(h.signer, app, 30*time.Minute)
+	if err != nil {
+		log.Printf("gitreceive: receive token: %v", err)
+		return ""
+	}
+	return tok
+}
+
 func gitCommand(env gitEnv, name string, args ...string) (*exec.Cmd, io.Reader) {
 	cmd := exec.Command(name, args...)
 	// Start the command in its own process group (nice for signalling)
@@ -424,6 +463,9 @@ func gitCommand(env gitEnv, name string, args ...string) (*exec.Cmd, io.Reader) 
 		fmt.Sprintf("RECEIVE_APP=%s", env.App),
 		fmt.Sprintf("RECEIVE_PIPELINE=%s", env.Pipeline),
 	)
+	if tok := strings.TrimSpace(env.ReceiveToken); tok != "" {
+		cmd.Env = append(cmd.Env, "FLYNN_RECEIVE_TOKEN="+tok)
+	}
 
 	r, _ := cmd.StdoutPipe()
 	cmd.Stderr = cmd.Stdout

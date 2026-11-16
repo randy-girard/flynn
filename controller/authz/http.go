@@ -51,6 +51,14 @@ const (
 	// The handler still requires app_id and a matching app grant. Cluster
 	// admin is allowed above and may subscribe with no app_id.
 	rkEvents
+	// rkGitreceiveBuild is POST /apps/:id/builds. The cluster key may create
+	// a compile. A gitreceive:build token may create one only for an app it
+	// can write. A cluster:admin JWT may not.
+	rkGitreceiveBuild
+	// rkArtifactGet is GET /artifacts/:id. A gitreceive:build token with any
+	// app grant may fetch one artifact (slugbuilder and slug images). Listing
+	// artifacts stays cluster-only.
+	rkArtifactGet
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -64,15 +72,27 @@ const ScopeBuildArtifacts = "build:artifacts"
 // It is not cluster:admin and does not expand to app:env:read.
 const ScopeEventsRead = "events:read"
 
+// ScopeGitreceiveBuild lets flynn-receiver act on the one app it is building.
+// The grant is app:write for that app. The scope itself is not cluster admin.
+const ScopeGitreceiveBuild = "gitreceive:build"
+
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if tok == nil {
 		return false
 	}
+	kind, appID, perm := httpRequirement(method, rawPath)
+	// Checked before the cluster-admin short-circuit so a cluster:admin JWT
+	// cannot create compiles. The cluster key still can.
+	if kind == rkGitreceiveBuild {
+		if tok.ClusterKey {
+			return true
+		}
+		return hasScope(tok, ScopeGitreceiveBuild) && grantCovers(tok, appID, PermAppWrite)
+	}
 	if tok.HasClusterAdmin() {
 		return true
 	}
-	kind, appID, perm := httpRequirement(method, rawPath)
 	if kind == rkBuildArtifact {
 		return hasScopedBuildArtifact(tok)
 	}
@@ -93,6 +113,9 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkEvents {
 		return hasScope(tok, ScopeEventsRead) && hasEventsGrant(tok)
+	}
+	if kind == rkArtifactGet {
+		return hasScope(tok, ScopeGitreceiveBuild) && hasAnyGrantedApp(tok)
 	}
 	if kind == rkCluster {
 		return false
@@ -273,6 +296,37 @@ func hasScopedBuildArtifact(tok *authorizer.Token) bool {
 	return false
 }
 
+func hasAnyGrantedApp(tok *authorizer.Token) bool {
+	if tok == nil {
+		return false
+	}
+	for _, g := range tok.AppGrants {
+		if g.AppID != "" && len(g.Permissions) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// GitreceiveBuildAllowed reports whether tok may POST /apps/:id/builds.
+// The cluster key may. A gitreceive:build token may only for an app its
+// app:write grant names. Cluster-admin JWTs may not.
+func GitreceiveBuildAllowed(tok *authorizer.Token, appID, appName string) bool {
+	if tok == nil {
+		return false
+	}
+	if tok.ClusterKey {
+		return true
+	}
+	if !hasScope(tok, ScopeGitreceiveBuild) {
+		return false
+	}
+	if grantCovers(tok, appID, PermAppWrite) {
+		return true
+	}
+	return appName != "" && appName != appID && grantCovers(tok, appName, PermAppWrite)
+}
+
 func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string) {
 	path := strings.Trim(rawPath, "/")
 	if path == "" {
@@ -373,6 +427,9 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		if m == http.MethodPost {
 			return rkBuildArtifact, "", ""
 		}
+		if (m == http.MethodGet || m == http.MethodHead) && len(parts) == 2 && parts[1] != "" {
+			return rkArtifactGet, "", ""
+		}
 		return rkCluster, "", ""
 	case "tenant-backups":
 		return rkCluster, "", ""
@@ -390,10 +447,13 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 			return rkCluster, "", ""
 		}
 		appID := parts[1]
-		// Compiles are cluster-key only. The handler rejects cluster:admin
-		// JWTs as well, because HTTPAllowed lets every cluster admin through
-		// before this kind is consulted.
+		// POST /apps/:id/builds is the cluster key or a gitreceive:build
+		// token for that app. Spec, token mint, and other methods stay
+		// cluster-only. The handler also rejects a cluster:admin JWT.
 		if len(parts) >= 3 && parts[2] == "builds" {
+			if m == http.MethodPost && len(parts) == 3 {
+				return rkGitreceiveBuild, appID, ""
+			}
 			return rkCluster, "", ""
 		}
 		if len(parts) >= 3 && (parts[2] == "collaborators" || parts[2] == "transfer") {

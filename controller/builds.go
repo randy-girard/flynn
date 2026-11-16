@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/randy-girard/flynn/controller/authz"
@@ -19,9 +20,20 @@ func clusterKeyOnly(ctx context.Context) bool {
 }
 
 func (c *controllerAPI) CreateBuild(ctx context.Context, w http.ResponseWriter, req *http.Request) {
-	if !clusterKeyOnly(ctx) {
-		httphelper.Forbidden(w, "build creation requires the cluster controller key")
-		return
+	tok := authz.TokenFromContext(ctx)
+	if tok == nil || !tok.ClusterKey {
+		app := c.getApp(ctx)
+		if !authz.GitreceiveBuildAllowed(tok, app.ID, app.Name) {
+			authz.NoteScopedReject(tok, req.Method, req.URL.Path, "build")
+			caller, scope := "", ""
+			if tok != nil {
+				caller = tok.UserID
+				scope = strings.Join(tok.Scopes, ",")
+			}
+			logger.Info("scoped token rejected", "scope", scope, "caller", caller, "method", req.Method, "path", req.URL.Path, "reason", "build")
+			httphelper.Forbidden(w, "build creation requires the cluster controller key or a gitreceive token for this app")
+			return
+		}
 	}
 	var body ct.BuildRequest
 	if err := httphelper.DecodeJSON(req, &body); err != nil {

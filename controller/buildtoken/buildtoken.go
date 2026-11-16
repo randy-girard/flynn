@@ -73,3 +73,29 @@ func Mint(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, e
 		},
 	})
 }
+
+// MintReceive signs the credential flynn-receiver uses for one app.
+// It is not a cluster admin. The lifetime stays inside the normal token
+// cap so a long-running billing or ACME exception is not required.
+func MintReceive(signer *tokensigner.Signer, app *ct.App, ttl time.Duration) (string, error) {
+	if signer == nil {
+		return "", fmt.Errorf("ACCESS_TOKEN_SIGNING_KEY is required to mint a receive token")
+	}
+	if app == nil || strings.TrimSpace(app.ID) == "" {
+		return "", fmt.Errorf("app is required to mint a receive token")
+	}
+	ttl = ClampTTL(ttl)
+	now := time.Now()
+	grants := []*api.AppGrant{{AppId: app.ID, Permissions: []string{"app:write"}}}
+	if name := strings.TrimSpace(app.Name); name != "" && name != app.ID {
+		grants = append(grants, &api.AppGrant{AppId: name, Permissions: []string{"app:write"}})
+	}
+	return signer.Sign(&api.AccessToken{
+		UserId:     UserID(app),
+		UserEmail:  "receive:" + app.Name,
+		IssueTime:  timestamppb.New(now),
+		ExpireTime: timestamppb.New(now.Add(ttl)),
+		Scopes:     []string{authz.ScopeGitreceiveBuild},
+		AppGrants:  grants,
+	})
+}
