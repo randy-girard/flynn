@@ -170,3 +170,18 @@ func TestAuthorizeTokenRejectsMissingKeyAndEncoding(t *testing.T) {
 		t.Fatal("garbage protobuf must fail")
 	}
 }
+
+func TestServiceScopeLifetime(t *testing.T) {
+	if d, ok := ServiceScopeLifetime([]string{"account:quota"}); !ok || d != ServiceTokenMaxValidity {
+		t.Fatalf("quota lifetime %v %v", d, ok)
+	}
+	if d, ok := ServiceScopeLifetime([]string{"acme:issue"}); !ok || d != ServiceTokenMaxValidity {
+		t.Fatalf("acme lifetime %v %v", d, ok)
+	}
+	if _, ok := ServiceScopeLifetime([]string{"account:quota", "cluster:admin"}); ok {
+		t.Fatal("a mixed admin scope must keep the normal cap")
+	}
+	if _, ok := ServiceScopeLifetime(nil); ok {
+		t.Fatal("empty scopes are not a service token")
+	}
+}

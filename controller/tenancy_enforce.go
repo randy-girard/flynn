@@ -62,6 +62,8 @@ func (c *controllerAPI) listVisibleAppsPage(ctx context.Context, includeAll bool
 		// filterVisibleApps leaves a nil token unchanged.
 	case tok.HasClusterAdmin():
 		vis.DropInternal = !includeAll
+	case authz.HasAccountQuota(tok):
+		vis.DropInternal = true
 	default:
 		vis.DropInternal = true
 		vis.UserScope = true
@@ -101,6 +103,9 @@ func (c *controllerAPI) filterVisibleApps(ctx context.Context, includeAll bool, 
 		if includeAll {
 			return apps
 		}
+		return dropInternalCatalogApps(apps)
+	}
+	if authz.HasAccountQuota(tok) {
 		return dropInternalCatalogApps(apps)
 	}
 	// Non-admins never receive the operator catalog, even with ?all=1.

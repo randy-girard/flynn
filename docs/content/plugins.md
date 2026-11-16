@@ -239,9 +239,13 @@ per-resource credentials and limits (Postgres, MariaDB, MongoDB, and Redis
 are the usual candidates; Kafka and ClickHouse stay false until they do).
 
 
-Install reads `flynn-plugin.json` only. Catalog plugins log that their jobs
+Install reads `flynn-plugin.json` only. A `service_token` object mints
+`env` with `scope` (`account:quota` or `acme:issue`) from the controller
+signing key, then deletes every name in `strip` so that release does not
+keep `CONTROLLER_KEY`. Catalog plugins log that their jobs
 receive `CONTROLLER_KEY`, `DISCOVERD_AUTH_KEY`, and access-token keys
-(cluster-admin equivalent) and continue. A third-party source (path, git
+(cluster-admin equivalent) and continue. Billing and ACME are the
+exceptions: after install their releases have the service token instead. A third-party source (path, git
 URL, or `--github-org` that is not Flynn's catalog) prompts on a TTY;
 non-interactive installs must pass **`--yes`**. Manifest **`setup`** prompts run on a TTY
 (or from `FLYNN_PLUGIN_SETUP_<ENV>` / `setup.default` / `setup.generate` when

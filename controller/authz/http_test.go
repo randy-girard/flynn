@@ -526,3 +526,19 @@ func TestGitreceiveBuildScopeIsNotClusterAdmin(t *testing.T) {
 		t.Fatal("the cluster key must still create builds and list artifacts")
 	}
 }
+
+func TestAccountQuotaScopeIsNotClusterAdmin(t *testing.T) {
+	tok := &authorizer.Token{UserID: "billing", Scopes: []string{ScopeAccountQuota}}
+	if tok.ClusterKey || tok.HasClusterAdmin() || MayReadAppEnv(tok, "app-a", "name-a") {
+		t.Fatal("account:quota must not be cluster admin or read env")
+	}
+	if !HTTPAllowed(tok, http.MethodPut, "/accounts/user:a/quota") || !HTTPAllowed(tok, http.MethodPost, "/accounts/user:a/suspend") {
+		t.Fatal("account:quota must reach quota and suspend")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/apps") || !HTTPAllowed(tok, http.MethodGet, "/apps/app-a/formation") {
+		t.Fatal("account:quota must list apps and read formations for metering")
+	}
+	if HTTPAllowed(tok, http.MethodGet, "/apps/app-a/release") || HTTPAllowed(tok, http.MethodPut, "/apps/app-a/formation") || HTTPAllowed(tok, http.MethodPut, "/cluster/settings") {
+		t.Fatal("account:quota must not read release env, change a formation, or change cluster settings")
+	}
+}

@@ -924,6 +924,13 @@ func (in *Installer) deployRelease(app *ct.App, m *Manifest, image *ct.Artifact,
 		PreservePreviousEnv(env, prev.Env)
 	}
 	EnsureClusterAuthEnv(env, cluster)
+	prevEnv := map[string]string{}
+	if prev != nil {
+		prevEnv = prev.Env
+	}
+	if err := ApplyServiceToken(env, prevEnv, cluster, m.ServiceToken); err != nil {
+		return nil, err
+	}
 	release := &ct.Release{
 		ArtifactIDs: []string{image.ID},
 		Env:         env,

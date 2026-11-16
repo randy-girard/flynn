@@ -42,19 +42,32 @@ const (
 	DashboardSurfaceClusterNav      = "cluster.nav"
 )
 
+// ServiceToken is minted into Env at install. Strip names are deleted after
+// the token exists so the plugin release does not keep the cluster key or
+// the signing key. AuthHashEnv, when set, stores sha256(CONTROLLER_KEY) so
+// the plugin can still recognize the cluster key on incoming calls.
+type ServiceToken struct {
+	Env         string   `json:"env"`
+	Scope       string   `json:"scope"`
+	Caller      string   `json:"caller,omitempty"`
+	Strip       []string `json:"strip,omitempty"`
+	AuthHashEnv string   `json:"auth_hash_env,omitempty"`
+}
+
 // Manifest is flynn-plugin.json at the root of a plugin repo.
 type Manifest struct {
-	Name        string            `json:"name"`
-	Kind        string            `json:"kind"`
-	Provider    *Provider         `json:"provider,omitempty"`
-	App         AppSpec           `json:"app"`
-	InjectEnv   []string          `json:"inject_env,omitempty"`
-	ImageEnv    map[string]string `json:"image_env,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	GenerateEnv []string          `json:"generate_env,omitempty"`
-	CLI         *CLI              `json:"cli,omitempty"`
-	Hooks       *Hooks            `json:"hooks,omitempty"`
-	Wait        string            `json:"wait,omitempty"`
+	Name         string            `json:"name"`
+	Kind         string            `json:"kind"`
+	Provider     *Provider         `json:"provider,omitempty"`
+	App          AppSpec           `json:"app"`
+	InjectEnv    []string          `json:"inject_env,omitempty"`
+	ServiceToken *ServiceToken     `json:"service_token,omitempty"`
+	ImageEnv     map[string]string `json:"image_env,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	GenerateEnv  []string          `json:"generate_env,omitempty"`
+	CLI          *CLI              `json:"cli,omitempty"`
+	Hooks        *Hooks            `json:"hooks,omitempty"`
+	Wait         string            `json:"wait,omitempty"`
 	// Setup is operator questions asked during flynn-host plugin:install
 	// when stdin is a TTY. Non-interactive installs use Default, Generate,
 	// existing env, or FLYNN_PLUGIN_SETUP_<ENV>.

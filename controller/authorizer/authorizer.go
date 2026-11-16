@@ -97,6 +97,26 @@ func ParseTokenKey(tk string) (*ecdsa.PublicKey, error) {
 	return tokenKey, nil
 }
 
+// ServiceTokenMaxValidity is the ceiling for account:quota and acme:issue.
+// Every other scope, including a mix with cluster:admin, keeps tokenMaxValidity.
+const ServiceTokenMaxValidity = 180 * 24 * time.Hour
+
+// ServiceScopeLifetime reports the longer ceiling when every scope is a
+// service scope. An empty list or any other scope returns false.
+func ServiceScopeLifetime(scopes []string) (time.Duration, bool) {
+	if len(scopes) == 0 {
+		return 0, false
+	}
+	for _, s := range scopes {
+		switch s {
+		case "account:quota", "acme:issue":
+		default:
+			return 0, false
+		}
+	}
+	return ServiceTokenMaxValidity, true
+}
+
 func ParseTokenMaxValidity(tv string) (time.Duration, error) {
 	if tv == "" {
 		return time.Hour, nil
@@ -171,7 +191,11 @@ func (a *Authorizer) AuthorizeToken(token string) (*Token, error) {
 	if iss.IsZero() || exp.IsZero() {
 		return nil, fmt.Errorf("invalid token timestamp")
 	}
-	if exp.Sub(iss) > a.tokenMaxValidity {
+	max := a.tokenMaxValidity
+	if extra, ok := ServiceScopeLifetime(t.GetScopes()); ok && extra > max {
+		max = extra
+	}
+	if exp.Sub(iss) > max {
 		return nil, fmt.Errorf("invalid token validity period")
 	}
 	if time.Now().After(exp) {

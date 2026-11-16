@@ -313,6 +313,19 @@ or this token for that app, and rejects a `cluster:admin` JWT. Rotate it
 by restarting the gitreceive release after `ACCESS_TOKEN_SIGNING_KEY`
 changes. Do not paste `CONTROLLER_KEY` into the app being built.
 
+Billing quota writes and suspension use scope `account:quota` in
+`QUOTA_TOKEN`. The token lasts up to 180 days. It is not `cluster:admin`.
+It may list tenant apps and read formations so metering still works, and it
+may not read release env or change a formation. Install mints it from the
+controller signing key and then deletes `CONTROLLER_KEY`, `AUTH_KEY`, and
+the signing keys from the billing release. The billing API still accepts
+the cluster key from `flynn-host` because the release stores
+`BILLING_AUTH_HASH` (sha256 of that key), not the key. A cluster without
+the billing plugin boots and accepts git pushes. Rotate with
+`flynn-host token:rotate billing-plugin QUOTA_TOKEN account:quota`.
+Until that release is deployed, a billing process that still has
+`CONTROLLER_KEY` is accepted.
+
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy
 `ACCESS_TOKEN_KEY` / `ACCESS_TOKEN_SIGNING_KEY`, postgres

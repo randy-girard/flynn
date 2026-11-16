@@ -59,6 +59,8 @@ const (
 	// app grant may fetch one artifact (slugbuilder and slug images). Listing
 	// artifacts stays cluster-only.
 	rkArtifactGet
+	// rkAccountQuota is quota read/write and suspend. It is not cluster admin.
+	rkAccountQuota
 )
 
 // ScopeBuildArtifacts is the scope that lets a non-admin token create image
@@ -75,6 +77,10 @@ const ScopeEventsRead = "events:read"
 // ScopeGitreceiveBuild lets flynn-receiver act on the one app it is building.
 // The grant is app:write for that app. The scope itself is not cluster admin.
 const ScopeGitreceiveBuild = "gitreceive:build"
+
+// ScopeAccountQuota lets the billing plugin set quota and suspension.
+// It does not expand to app:env:read.
+const ScopeAccountQuota = "account:quota"
 
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
@@ -116,6 +122,12 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	}
 	if kind == rkArtifactGet {
 		return hasScope(tok, ScopeGitreceiveBuild) && hasAnyGrantedApp(tok)
+	}
+	if kind == rkAccountQuota {
+		return hasScope(tok, ScopeAccountQuota)
+	}
+	if hasScope(tok, ScopeAccountQuota) && accountQuotaRead(method, rawPath) {
+		return true
 	}
 	if kind == rkCluster {
 		return false
@@ -296,6 +308,24 @@ func hasScopedBuildArtifact(tok *authorizer.Token) bool {
 	return false
 }
 
+func accountQuotaRead(method, rawPath string) bool {
+	m := strings.ToUpper(method)
+	if m != http.MethodGet && m != http.MethodHead {
+		return false
+	}
+	path := strings.Trim(rawPath, "/")
+	parts := strings.Split(path, "/")
+	if len(parts) == 1 && parts[0] == "apps" {
+		return true
+	}
+	return len(parts) == 3 && parts[0] == "apps" && parts[2] == "formation"
+}
+
+// HasAccountQuota reports whether tok is the billing quota credential.
+func HasAccountQuota(tok *authorizer.Token) bool {
+	return hasScope(tok, ScopeAccountQuota)
+}
+
 func hasAnyGrantedApp(tok *authorizer.Token) bool {
 	if tok == nil {
 		return false
@@ -365,6 +395,12 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 	case "accounts":
 		if len(parts) >= 3 && parts[2] == "collaborators" {
 			return rkUserSession, "", ""
+		}
+		if len(parts) == 3 && parts[2] == "quota" && (m == http.MethodGet || m == http.MethodHead || m == http.MethodPut) {
+			return rkAccountQuota, "", ""
+		}
+		if len(parts) == 3 && (parts[2] == "suspend" || parts[2] == "unsuspend") && m == http.MethodPost {
+			return rkAccountQuota, "", ""
 		}
 		return rkCluster, "", ""
 	case "providers":
