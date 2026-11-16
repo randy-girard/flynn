@@ -1518,6 +1518,25 @@ END;
 $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcprouteport.MaxPort, tcprouteport.ErrExhausted.Error())
 		return tx.Exec(stmt)
 	})
+
+	// This cluster's region name, and links to other clusters. A region is a
+	// separate install, not a placement tag. 78 added app_domain and is left
+	// unchanged. A backup from before this column restores as US. The link
+	// table has no cluster key.
+	migrations.Add(90,
+		`ALTER TABLE cluster_settings ADD COLUMN region text NOT NULL DEFAULT 'US'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_region_check CHECK (region ~ '^[A-Za-z][A-Za-z0-9-]{0,31}$')`,
+		`CREATE TABLE cluster_region_links (
+			region text PRIMARY KEY,
+			domain text NOT NULL,
+			controller_url text NOT NULL,
+			dashboard_url text NOT NULL,
+			tls_pin text NOT NULL,
+			created_at timestamptz NOT NULL DEFAULT now(),
+			CONSTRAINT cluster_region_links_region_check CHECK (region ~ '^[A-Za-z][A-Za-z0-9-]{0,31}$'),
+			CONSTRAINT cluster_region_links_tls_pin_check CHECK (tls_pin <> '')
+		)`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

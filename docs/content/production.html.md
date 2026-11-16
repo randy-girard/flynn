@@ -185,6 +185,53 @@ should have a latency of less than 2ms. Deploying a single Flynn cluster across
 higher latency WAN links is not recommended, as it can have a significant impact
 on the stability of cluster consensus.
 
+## Regions
+
+A region is another Flynn cluster. It is not more hosts on this Raft group or
+this overlay.
+
+`flynn-host bootstrap --region` stores a short label on this cluster. Omitted
+or empty stores `US`. `flynn-host init` with this cluster's discovery token
+joins this cluster. That is the WAN stretch described above. Do not use
+`firewall:peer:add` to attach a distant host. That command opens one UFW
+address. It does not add a region.
+
+A second region is a separate install: its own discovery token, Raft voters,
+overlay, `CLUSTER_DOMAIN`, and controller. Bootstrap it with its own
+`--region` label. On each cluster that should list the other, run:
+
+```text
+sudo flynn-host region:link --region EU --domain eu.example.com --tls-pin <pin>
+```
+
+The controller dials `https://controller.<domain>/cluster/region`, checks the
+pin, and accepts a response that is only the peer's region name. It does not
+send `CONTROLLER_KEY` and does not store the peer's cluster key. It does not
+copy users, passwords, or sessions. `flynn cluster:add` is the laptop
+`~/.flynnrc` entry and is not this link. `region:list` prints this cluster and
+the links and does not dial them. At most 64 links. `region:unlink` removes
+one row. A tenant cannot register a URL. Linking does not require billing or
+a user account: `flynn-host` uses the cluster key, including on a self-hosted
+cluster that has no accounts yet.
+
+`blobstore:set --region` is the S3 or MinIO location (`us-east-1`). It does
+not change `cluster_settings.region`.
+
+Users pass `--region` to `flynn apps:create`, or pick it on the dashboard
+create form. The create runs on that cluster as the logged-in user. It does
+not create an app here and label it with the other region. If the laptop has
+no `~/.flynnrc` entry and login for that domain, run `flynn cluster:add` and
+`flynn login`. The controller does not store that password.
+
+The dashboard shell lists this cluster and the links on every page. Choosing
+one opens that cluster's dashboard. The app list is that cluster's apps, not
+a merge. The cookie stays on that origin. No account there means that
+cluster's login. This cluster does not provision the user.
+
+The scheduler does not gain a region placement tag or a `PlacementRequest`
+filter. It does not copy database bytes. Sirenia stays inside the cluster
+that holds the volume.
+
 ## TLS / Let's Encrypt
 
 Bootstrap uses a self-signed certificate. For production, install the Let's

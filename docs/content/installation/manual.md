@@ -198,6 +198,10 @@ $ sudo \
 
 Non-interactive bootstrap requires `--admin-email` and `--admin-password`. On a TTY, bootstrap prompts for them. `--from-backup` does not create a new admin.
 
+`--region` names this cluster. Omitted or empty stores `US`. A region is a short label such as `US` or `EU`, not a URL. `--from-backup` keeps the region stored in the backup. A backup from before the column restores as `US`.
+
+A second region is a separate install with its own discovery token, Raft voters, overlay, `CLUSTER_DOMAIN`, and controller. `flynn-host init` with this cluster's discovery token joins this cluster. Do not point `--peer-ips` or `firewall:peer:add` at a distant site. After both clusters exist, `flynn-host region:link` on each one records the other. See [Production — Regions](../production.html.md#regions).
+
 Then run `sudo flynn-host cli-add-command` on a host and `flynn login` on your laptop.
 
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and

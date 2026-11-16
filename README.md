@@ -106,6 +106,8 @@ sudo \
 
 You can skip discovery and pass `--peer-ips 10.0.0.1,10.0.0.2,10.0.0.3` instead. To run discovery on the cluster itself, bootstrap one node with `--peer-ips`, install the discovery plugin, then join extra nodes with that token. Step-by-step instructions are in [Manual installation](docs/content/installation/manual.md). Production notes (dedicated ZFS, blobstore backends, backups) are in [Production](docs/content/production.html.md).
 
+`--region` on bootstrap names this cluster. Omitted or empty stores `US`. A second region is another install, not more hosts on this discovery token. See [Production — Regions](docs/content/production.html.md#regions).
+
 Bootstrap uses a self-signed certificate. Configure ACME/Let's Encrypt next so the dashboard, controller, and app routes can get trusted TLS:
 
 ```bash

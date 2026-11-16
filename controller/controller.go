@@ -376,6 +376,11 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 	httpRouter.PUT("/cluster/runtime-settings", httphelper.WrapHandler(api.UpdateRuntimeSettings))
 	httpRouter.GET("/cluster/app-domain", httphelper.WrapHandler(api.GetAppDomain))
 	httpRouter.PUT("/cluster/app-domain", httphelper.WrapHandler(api.PutAppDomain))
+	httpRouter.GET("/cluster/region", httphelper.WrapHandler(api.GetClusterRegion))
+	httpRouter.PUT("/cluster/region", httphelper.WrapHandler(api.PutClusterRegion))
+	httpRouter.GET("/cluster/regions", httphelper.WrapHandler(api.GetClusterRegions))
+	httpRouter.POST("/cluster/regions", httphelper.WrapHandler(api.PostClusterRegion))
+	httpRouter.DELETE("/cluster/regions/:region", httphelper.WrapHandler(api.DeleteClusterRegion))
 	httpRouter.GET("/cluster/postgres-availability", httphelper.WrapHandler(api.GetPostgresAvailability))
 	httpRouter.PUT("/cluster/postgres-availability", httphelper.WrapHandler(api.PutPostgresAvailability))
 	httpRouter.GET("/cluster/mysql-availability", httphelper.WrapHandler(api.GetMySQLAvailability))
@@ -492,6 +497,12 @@ func muxHandler(main http.Handler, grpcSrv *grpc.Server, authorizer *authorizer.
 		// key is known to be valid. A wrong Basic password used to 401 here
 		// even though the same request with no credentials succeeded.
 		if r.URL.Path == "/ca-cert" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
+			main.ServeHTTP(w, r)
+			return
+		}
+		// GET /cluster/region is the peer dial. A wrong Basic password must
+		// not 401 it, and the handler must not require CONTROLLER_KEY.
+		if authz.ClusterRegionPublic(r.Method, r.URL.Path) {
 			main.ServeHTTP(w, r)
 			return
 		}

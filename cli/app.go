@@ -14,11 +14,15 @@ import (
 
 func init() {
 	register("apps:create", runCreate, `
-usage: flynn apps:create [-r <remote>] [-y] [--owner <owner>] [--manifest=<file>] [<name>]
+usage: flynn apps:create [-r <remote>] [-y] [--owner <owner>] [--region=<region>] [--manifest=<file>] [<name>]
 
 Create an application in Flynn. --owner sets owner_account from a handle
 (user or org). Without it, the current context handle is used when one is
 set. The cluster key with no owner leaves the app unowned (operator/system).
+
+--region creates the app on that linked cluster as the logged-in user. It does
+not label an app on this controller. If ~/.flynnrc has no entry and login for
+that domain, run flynn cluster:add and flynn login.
 
 --manifest reads flynn-app.json (a path, or - for stdin) and applies it.
 See the app manifest docs. A failure before postdeploy deletes the new app.
@@ -33,6 +37,7 @@ Options:
 	-r, --remote=<remote>  Name of git remote to create, empty string for none. [default: flynn]
 	-y, --yes              Skip the confirmation prompt if the git remote already exists.
 	--owner=<owner>        Handle that owns the new app (defaults to the current context)
+	--region=<region>      Linked region to create the app on (default: this cluster)
 	--manifest=<file>      Apply flynn-app.json (path, or - for stdin) before the app is left in place
 
 Examples:
@@ -112,6 +117,13 @@ Examples:
 }
 
 func runCreate(args *docopt.Args, client controller.Client) error {
+	if flag := strings.TrimSpace(args.String["--region"]); flag != "" {
+		next, err := clientForAppRegion(client, flag)
+		if err != nil {
+			return err
+		}
+		client = next
+	}
 	app := &ct.App{}
 	app.Name = args.String["<name>"]
 	remote := args.String["--remote"]

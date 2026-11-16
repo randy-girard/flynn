@@ -86,6 +86,12 @@ const ScopeAccountQuota = "account:quota"
 // It does not read release env or change formations.
 const ScopeACMEIssue = "acme:issue"
 
+// ClusterRegionPublic is the unauthenticated peer read. The body is only
+// this cluster's region name. Linking does not send CONTROLLER_KEY.
+func ClusterRegionPublic(method, path string) bool {
+	return method == http.MethodGet && path == "/cluster/region"
+}
+
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if tok == nil {
@@ -476,6 +482,12 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		}
 		return rkCluster, "", ""
 	case "cluster":
+		// GET /cluster/regions is the list the dashboard and CLI show. Linking
+		// stays cluster-admin. GET /cluster/region (singular) is public and
+		// is served before this check.
+		if len(parts) == 2 && parts[1] == "regions" && (m == http.MethodGet || m == http.MethodHead) {
+			return rkAnyAuth, "", ""
+		}
 		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "postgres-availability" || parts[1] == "mysql-availability" || parts[1] == "redis-availability" || parts[1] == "mongodb-availability" || parts[1] == "kafka-availability" || parts[1] == "clickhouse-availability") {
 			if m == http.MethodGet || m == http.MethodHead {
 				return rkAnyAuth, "", ""

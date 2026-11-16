@@ -21,6 +21,7 @@ import (
 	"github.com/randy-girard/flynn/bootstrap"
 	controller "github.com/randy-girard/flynn/controller/client"
 	controllerdata "github.com/randy-girard/flynn/controller/data"
+	"github.com/randy-girard/flynn/controller/region"
 	ct "github.com/randy-girard/flynn/controller/types"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
 	hostconfig "github.com/randy-girard/flynn/host/config"
@@ -46,9 +47,11 @@ Options:
   --job-timeout=SECS   seconds to wait for jobs to start [default: 120]
   --admin-email=EMAIL  first cluster administrator email
   --admin-password=PW  first cluster administrator password
+  --region=NAME        cluster region label (default US). Ignored with --from-backup
 
 Bootstrap layer 1 using the provided manifest. After a fresh bootstrap, creates
 the first cluster_admin user. --from-backup does not create a new admin.
+Omitted or empty --region stores US. --from-backup keeps the region in the backup.
 `)
 }
 
@@ -63,6 +66,14 @@ var manifest []byte
 
 func runBootstrap(args *docopt.Args) error {
 	log.SetFlags(log.Lmicroseconds)
+	applyRegion, regionName, err := region.BootstrapApply(
+		args.String["--from-backup"] != "",
+		args.String["--steps"] != "",
+		args.String["--region"],
+	)
+	if err != nil {
+		return err
+	}
 	if err := hostconfig.ApplySecretsToEnv(hostconfig.DefaultPath); err != nil {
 		return fmt.Errorf("error loading host config secrets: %s", err)
 	}
@@ -82,7 +93,6 @@ func runBootstrap(args *docopt.Args) error {
 		steps = strings.Split(s, ",")
 	}
 
-	var err error
 	manifest, err = readBootstrapManifest(manifestFile)
 	if err != nil {
 		return fmt.Errorf("Error reading manifest: %s", err)
@@ -152,6 +162,11 @@ func runBootstrap(args *docopt.Args) error {
 	}
 	if err != nil {
 		return err
+	}
+	if applyRegion {
+		if err := putBootstrapRegion(regionName); err != nil {
+			return err
+		}
 	}
 	return createBootstrapAdmin(admin)
 }

@@ -19,7 +19,7 @@ Sources: [Heroku dynos](https://www.heroku.com/dynos/), [pipelines](https://devc
 | Where apps run | **Yes.** Ubuntu hosts you administer | **No.** Heroku's cloud | **No.** Vercel's cloud | **No.** Fly.io's cloud | **No.** Render's cloud | **Yes.** Your Kubernetes, or Canine Cloud | **No.** Railway's cloud |
 | Who operates it | **Yes.** You | **No.** Heroku | **No.** Vercel | **No.** Fly.io | **No.** Render | **Partial.** You, when self-hosted | **No.** Railway |
 | Open source | **Yes.** BSD-3-Clause | **No.** Proprietary | **No.** Proprietary | **No.** Proprietary | **No.** Proprietary | **Yes.** MIT | **No.** Proprietary |
-| More than one region | **No.** One low-latency network | **Yes.** Regions, plus Private Spaces | **Yes.** CDN and many function regions | **Yes.** Machines in many regions | **Yes.** Services placed per region | **Yes.** Every cluster you connect | **Yes.** Replicas across regions |
+| More than one region | **Partial.** Each region is its own cluster. A link names it. Jobs stay on that cluster's overlay | **Yes.** Regions, plus Private Spaces | **Yes.** CDN and many function regions | **Yes.** Machines in many regions | **Yes.** Services placed per region | **Yes.** Every cluster you connect | **Yes.** Replicas across regions |
 
 ## From a repository to a release
 

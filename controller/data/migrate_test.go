@@ -878,3 +878,53 @@ func (MigrateSuite) TestHTTPConcurrencyShared(c *C) {
 	err = db.Exec(`INSERT INTO http_routes (parent_ref, service, domain, max_concurrent_requests) VALUES ('controller/apps/range', 'svc', 'cap-range.example.com', 0)`)
 	c.Assert(err, NotNil)
 }
+
+func (MigrateSuite) TestRegionColumnDefaultsToUS(c *C) {
+	db := setupTestDB(c, "controllertest_region_default")
+	var before postgres.Migrations
+	var regionMig postgres.Migrations
+	for _, m := range *migrations {
+		if m.ID == 90 {
+			regionMig = append(regionMig, m)
+			continue
+		}
+		if m.ID > 90 {
+			c.Fatalf("migration %d is after region; extend this test", m.ID)
+		}
+		before = append(before, m)
+	}
+	c.Assert(len(regionMig), Equals, 1)
+	c.Assert(before.Migrate(db), IsNil)
+
+	var exists bool
+	c.Assert(db.QueryRow(`SELECT EXISTS (
+		SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'cluster_settings' AND column_name = 'region'
+	)`).Scan(&exists), IsNil)
+	c.Assert(exists, Equals, false)
+
+	c.Assert(regionMig.Migrate(db), IsNil)
+	var region string
+	c.Assert(db.QueryRow(`SELECT region FROM cluster_settings WHERE id = 1`).Scan(&region), IsNil)
+	c.Assert(region, Equals, "US")
+
+	err := db.Exec(`UPDATE cluster_settings SET region = 'https://evil.example'`)
+	c.Assert(err, NotNil)
+
+	c.Assert(db.Exec(`INSERT INTO cluster_region_links (region, domain, controller_url, dashboard_url, tls_pin)
+		VALUES ('EU', 'eu.example.com', 'https://controller.eu.example.com', 'https://dashboard.eu.example.com', 'pin')`), IsNil)
+	var keyCols int
+	c.Assert(db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_name = 'cluster_region_links'
+		AND column_name IN ('controller_key', 'cluster_key', 'key', 'password')`).Scan(&keyCols), IsNil)
+	c.Assert(keyCols, Equals, 0)
+
+	// A later controller start runs MigrateDB again. The link and the
+	// restored US default both stay.
+	c.Assert(MigrateDB(db), IsNil)
+	var got string
+	c.Assert(db.QueryRow(`SELECT region FROM cluster_region_links`).Scan(&got), IsNil)
+	c.Assert(got, Equals, "EU")
+	c.Assert(db.QueryRow(`SELECT region FROM cluster_settings WHERE id = 1`).Scan(&region), IsNil)
+	c.Assert(region, Equals, "US")
+}

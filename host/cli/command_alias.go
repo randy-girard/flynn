@@ -158,6 +158,11 @@ var subAliases = map[string]map[string]string{
 	"route": {
 		"add": "route:add",
 	},
+	"region": {
+		"list":   "region:list",
+		"link":   "region:link",
+		"unlink": "region:unlink",
+	},
 	"firewall": {
 		"sync":        "firewall:sync",
 		"peer-add":    "firewall:peer:add",
