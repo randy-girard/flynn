@@ -113,6 +113,55 @@ the network is `/24` or smaller. `100.64.0.0/16` is the Vagrant network. The
 overlay line prints whatever flannel metadata stores. It does not substitute
 a fixed size.
 
+## Production configure
+
+`flynn-host production` lists `check` and `configure`. It does not start the
+wizard. `production configure` is `production:configure`. The same steps run
+for `self_hosted` and `hosted`. The mode only changes the sentence about what
+`production:check` will say. A self-hosted warn can still be a finished wizard
+step. The check's fail and warn rules are unchanged.
+
+```text
+$ sudo flynn-host production
+$ sudo flynn-host production:configure
+$ sudo flynn-host production:configure --zpool-name=flynn-default
+```
+
+It is safe to re-run. The cluster is the saved progress. There is no progress
+file. Each step prints the current value, what it means, and the command it
+will run. A step the cluster already satisfies is not applied again. A step
+they skipped is asked again. Ctrl-C leaves finished steps in place. A missing
+TTY does not migrate, delete, reserve, or install.
+
+The steps are tenancy (unchanged unless they ask), the blobstore, ZFS on this
+host, the per-host process cap, runtime reservation, a cluster log sink,
+Let's Encrypt, a platform backup, the live overlay ceilings, and DNS and
+firewall text. It then runs `production:check`.
+
+`blobstore:set --region` is the S3 or MinIO location. It is not written to
+`cluster_settings.region`. GCS and Azure stay on the `flynn -a blobstore
+env:set` path, then `blobstore:migrate --delete` only after a yes. The wizard
+does not print secret keys and does not scan `files` or `pg_largeobject`. A
+new default is not proof the old copies are gone, and a later `--delete` does
+not retry rows `SetBackend` already moved.
+
+ZFS reads `zpool status -P` and does not attach, detach, or create a pool. A
+file leaf prints the mirror-and-detach procedure under
+[Storage](#storage). Run the wizard on each host.
+
+`unlimited`, `0`, empty, `off`, `none`, and `auto` are not a
+`flynn-max-processes` cap. The wizard asks for a number and does not invent
+one. Hosted placement already reserves builtin `small`, `medium`, and `large`
+when `reserve_resources` is false. `runtime:reserve` only stores the flag.
+Self-hosted placement follows the stored flag. The wizard offers that step in
+both modes.
+
+`flynn-host backup` restores the platform and does not include tenant volumes.
+The overlay line prints the live network, subnet length, and the ceilings from
+that config: container addresses are `2^(32-subnet length)-3` (253 on a `/24`),
+and the host count is flannel's range after the first subnet is skipped (255
+hosts on a `/16` with subnet length 24). It does not change flannel.
+
 ## Tenancy mode
 
 `self_hosted` is the schema default. That is a company running Flynn for
