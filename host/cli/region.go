@@ -76,9 +76,14 @@ func putBootstrapRegion(name string) error {
 	if err != nil {
 		return fmt.Errorf("set cluster region: %w", err)
 	}
-	body := map[string]string{"region": name}
-	if err := v.Put("/cluster/region", body, &body); err != nil {
+	// The response is {region, links}. A string map cannot decode links and
+	// bootstrap would exit after the row was already stored.
+	var list ct.ClusterRegionList
+	if err := v.Put("/cluster/region", map[string]string{"region": name}, &list); err != nil {
 		return fmt.Errorf("set cluster region: %w", err)
+	}
+	if list.Region != "" {
+		name = list.Region
 	}
 	fmt.Printf("cluster region %s\n", name)
 	return nil

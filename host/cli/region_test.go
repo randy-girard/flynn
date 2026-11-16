@@ -58,6 +58,23 @@ func TestFormatRegionListDoesNotDial(t *testing.T) {
 	}
 }
 
+func TestPutBootstrapRegionDecodesTheList(t *testing.T) {
+	// PUT /cluster/region returns {"region","links":[]}. Decoding that into
+	// map[string]string fails with "cannot unmarshal array" after the row is
+	// stored, and bootstrap exits 1 before the admin user exists.
+	b, err := os.ReadFile("region.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if strings.Contains(src, `Put("/cluster/region", body, &body)`) {
+		t.Fatal("bootstrap must not decode the region list into map[string]string")
+	}
+	if !strings.Contains(src, "ClusterRegionList") {
+		t.Fatal("bootstrap must decode PUT /cluster/region as a region list")
+	}
+}
+
 func TestBootstrapRegionFlag(t *testing.T) {
 	apply, name, err := region.BootstrapApply(false, false, "")
 	if err != nil || !apply || name != "US" {
