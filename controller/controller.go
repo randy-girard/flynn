@@ -420,6 +420,8 @@ func appHandler(c handlerConfig) (http.Handler, *grpc.Server, *controllerAPI) {
 
 	httpRouter.GET("/tenancy", httphelper.WrapHandler(api.GetTenancy))
 	httpRouter.PUT("/tenancy", httphelper.WrapHandler(api.PutTenancy))
+	httpRouter.GET("/cluster/placement", httphelper.WrapHandler(api.GetClusterPlacement))
+	httpRouter.PUT("/cluster/placement", httphelper.WrapHandler(api.PutClusterPlacement))
 	httpRouter.GET("/tenant-backups", httphelper.WrapHandler(api.ListTenantBackups))
 	httpRouter.GET("/tenant-backups/:resource_id", httphelper.WrapHandler(api.GetTenantBackup))
 	httpRouter.POST("/tenant-backups/:resource_id/begin", httphelper.WrapHandler(api.BeginTenantBackup))

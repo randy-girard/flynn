@@ -8,6 +8,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/flynn/go-docopt"
+	"github.com/randy-girard/flynn/controller/placement"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/cliutil"
 	"github.com/randy-girard/flynn/pkg/cluster"
@@ -90,14 +91,50 @@ func parseTagPairs(pairs []string) map[string]string {
 
 // formatDaemonTagsArg builds the flynn-host daemon --tags value written by init
 // into host.json. --max-processes wins over a flynn-max-processes --tag.
-// existing is the tag map already stored in host.json. Nil means the file
-// does not exist yet. A non-nil map with no cap stays unlimited.
-func formatDaemonTagsArg(tagPairs []string, maxProcesses string, existing map[string]string) (string, error) {
+// role is core or app and is written as flynn-role. An empty role keeps an
+// existing flynn-role so a later init does not untag the host. existing is
+// the tag map already stored in host.json. Nil means the file does not exist
+// yet. A non-nil map with no cap stays unlimited. Other existing tags are
+// dropped unless this init passes them again.
+func formatDaemonTagsArg(tagPairs []string, maxProcesses, role string, existing map[string]string) (string, error) {
 	tags := parseTagPairs(tagPairs)
 	if err := applyInitMaxProcesses(tags, maxProcesses, existing); err != nil {
 		return "", err
 	}
+	if err := applyInitRole(tags, role, existing); err != nil {
+		return "", err
+	}
 	return formatTagMap(tags), nil
+}
+
+func applyInitRole(tags map[string]string, role string, existing map[string]string) error {
+	role = strings.TrimSpace(role)
+	tagged, hasTag := tags[placement.TagRole]
+	if hasTag {
+		if tagged != placement.RoleCore && tagged != placement.RoleApp {
+			return fmt.Errorf("invalid --tag %s=%s", placement.TagRole, tagged)
+		}
+	}
+	if role != "" {
+		if role != placement.RoleCore && role != placement.RoleApp {
+			return fmt.Errorf("invalid --role %q", role)
+		}
+		if hasTag && tagged != role {
+			return fmt.Errorf("--tag %s=%s conflicts with --role %s", placement.TagRole, tagged, role)
+		}
+		tags[placement.TagRole] = role
+		return nil
+	}
+	if hasTag {
+		return nil
+	}
+	if existing == nil {
+		return nil
+	}
+	if v, ok := existing[placement.TagRole]; ok && (v == placement.RoleCore || v == placement.RoleApp) {
+		tags[placement.TagRole] = v
+	}
+	return nil
 }
 
 func applyInitMaxProcesses(tags map[string]string, raw string, existing map[string]string) error {

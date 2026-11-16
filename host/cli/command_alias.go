@@ -63,6 +63,9 @@ var subAliases = map[string]map[string]string{
 		"mode":           "tenancy:mode",
 		"network-policy": "tenancy:network-policy",
 	},
+	"placement": {
+		"mode": "placement:mode",
+	},
 	"user": {
 		"list":            "user:list",
 		"info":            "user:info",

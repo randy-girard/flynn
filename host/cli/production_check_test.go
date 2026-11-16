@@ -33,6 +33,9 @@ type stubProductionAPI struct {
 
 	tenancy         ct.TenancySettings
 	tenancyErr      error
+	placement       ct.WorkloadPlacement
+	placementErr    error
+	jobReleaseErr   error
 	release         *ct.Release
 	releaseErr      error
 	profiles        []*ct.RuntimeProfile
@@ -61,6 +64,20 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 			return fmtUnexpected("tenancy decode")
 		}
 		*dst = s.tenancy
+		return nil
+	case "/cluster/placement":
+		if s.placementErr != nil {
+			return s.placementErr
+		}
+		dst, ok := out.(*ct.WorkloadPlacement)
+		if !ok {
+			return fmtUnexpected("placement decode")
+		}
+		mode := s.placement.Mode
+		if mode == "" {
+			mode = "mixed"
+		}
+		*dst = ct.WorkloadPlacement{Mode: mode}
 		return nil
 	case "/cluster/postgres-availability", "/cluster/mysql-availability", "/cluster/redis-availability", "/cluster/mongodb-availability", "/cluster/kafka-availability", "/cluster/clickhouse-availability":
 		if s.availabilityErr != nil {
@@ -120,6 +137,9 @@ func (s *stubProductionAPI) Get(path string, out interface{}) error {
 
 func (s *stubProductionAPI) GetAppRelease(appID string) (*ct.Release, error) {
 	s.releases = append(s.releases, appID)
+	if appID != "blobstore" && s.jobReleaseErr != nil {
+		return nil, s.jobReleaseErr
+	}
 	if s.releaseErr != nil {
 		return nil, s.releaseErr
 	}
@@ -150,6 +170,12 @@ type productionFixture struct {
 	pool            string
 	tenancy         ct.TenancySettings
 	tenancyErr      error
+	placement       ct.WorkloadPlacement
+	placementErr    error
+	jobs            []placementJob
+	jobsErr         error
+	jobReleaseErr   error
+	procs           map[string]ct.ProcessType
 	env             map[string]string
 	releaseErr      error
 	profiles        []*ct.RuntimeProfile
@@ -238,7 +264,10 @@ func (f *productionFixture) checkConfig() productionCheckConfig {
 	f.api = &stubProductionAPI{
 		tenancy:         f.tenancy,
 		tenancyErr:      f.tenancyErr,
-		release:         &ct.Release{Env: f.env},
+		placement:       f.placement,
+		placementErr:    f.placementErr,
+		jobReleaseErr:   f.jobReleaseErr,
+		release:         &ct.Release{Env: f.env, Processes: f.procs},
 		releaseErr:      f.releaseErr,
 		profiles:        f.profiles,
 		profileErr:      f.profileErr,
@@ -257,6 +286,11 @@ func (f *productionFixture) checkConfig() productionCheckConfig {
 	if !f.now.IsZero() {
 		now := f.now
 		nowFn = func() time.Time { return now }
+	}
+	var jobsFn func() ([]placementJob, error)
+	if f.jobs != nil || f.jobsErr != nil {
+		jobs, jobsErr := f.jobs, f.jobsErr
+		jobsFn = func() ([]placementJob, error) { return jobs, jobsErr }
 	}
 	return productionCheckConfig{
 		Pool: f.pool,
@@ -289,6 +323,7 @@ func (f *productionFixture) checkConfig() productionCheckConfig {
 			return modeFileInfo(mode), nil
 		},
 		Color: f.color,
+		Jobs:  jobsFn,
 	}
 }
 
@@ -561,6 +596,7 @@ func TestProductionCheckUsage(t *testing.T) {
 		"does not detach",
 		"either tenancy mode",
 		"Tenancy does not change this line",
+		"does not write the mode",
 	} {
 		if !strings.Contains(cmd.usage, want) {
 			t.Fatalf("usage missing %q:\n%s", want, cmd.usage)
@@ -602,6 +638,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	assertPassed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=self_hosted", action: "flynn-host tenancy:mode hosted"},
+		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "warn", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=self_hosted small=false medium=false large=false scheduler=profile_flag", action: "A large cluster runs runtime:reserve"},
@@ -627,7 +664,7 @@ func TestProductionCheckSelfHostedPostgresWarnsAndExitsZero(t *testing.T) {
 	if f.api.profileReads != 1 || f.hostCalls != 1 || f.metaCalls != 1 || f.zpoolCalls != 1 {
 		t.Fatalf("calls profiles=%d hosts=%d meta=%d zpool=%d", f.api.profileReads, f.hostCalls, f.metaCalls, f.zpoolCalls)
 	}
-	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/sinks" || strings.Join(f.api.releases, ",") != "blobstore" {
+	if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/placement,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/sinks" || strings.Join(f.api.releases, ",") != "blobstore" {
 		t.Fatalf("gets %v releases %v", f.api.gets, f.api.releases)
 	}
 	if strings.Join(f.zpoolPools, ",") != "flynn-default" {
@@ -645,6 +682,7 @@ func TestProductionCheckHostedPostgresFails(t *testing.T) {
 	assertFailed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=hosted", action: "Hosted mode is on"},
+		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default", action: "block device"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin", action: "Hosted placement reserves"},
@@ -807,6 +845,7 @@ func TestProductionCheckHostedReadyStillWarnsBackup(t *testing.T) {
 	assertPassed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "ok", check: "tenancy", detail: "mode=hosted"},
+		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "ok", check: "blobstore", detail: "default=s3main", action: "No blobstore change"},
 		{status: "ok", check: "zfs", detail: "pool=flynn-default"},
 		{status: "ok", check: "reserve", detail: "mode=hosted small=true medium=true large=true scheduler=hosted_builtin"},
@@ -847,6 +886,7 @@ func TestProductionCheckTenancyErrorIsNotSelfHosted(t *testing.T) {
 	assertFailed(t, err)
 	requireProductionRows(t, got, []productionRow{
 		{status: "fail", check: "tenancy", detail: "error=controller down", action: "not self-hosted"},
+		{status: "ok", check: "placement", detail: "mode=mixed", action: "flynn-host placement:mode"},
 		{status: "fail", check: "blobstore", detail: "default=postgres", action: "flynn-host blobstore:set --migrate --delete"},
 		{status: "fail", check: "zfs", detail: "pool=flynn-default file=/srv/custom.vdev", action: "zpool detach"},
 		{status: "fail", check: "reserve", detail: "mode=unknown small=false medium=false large=false scheduler=unknown", action: "not self-hosted"},
@@ -1233,13 +1273,19 @@ func TestProductionCheckColorsStatusWhenRequested(t *testing.T) {
 func requireColoredRows(t *testing.T, got string) {
 	t.Helper()
 	rows := productionRows(t, got)
-	if len(rows) != 15 {
+	if len(rows) != 16 {
 		t.Fatalf("colored table rows %d\n%s", len(rows), got)
 	}
-	if rows[1].status != "fail" || rows[1].check != "blobstore" || rows[1].detail != "default=postgres" {
-		t.Fatalf("colored blobstore row %+v", rows[1])
+	if rows[1].status != "ok" || rows[1].check != "placement" || rows[1].detail != "mode=mixed" {
+		t.Fatalf("colored placement row %+v", rows[1])
 	}
-	assertBlobstoreMigrateAction(t, rows[1].action)
+	if !strings.Contains(rows[1].action, "flynn-host placement:mode") || !strings.Contains(rows[1].action, "flynn-host init --role") {
+		t.Fatalf("placement action %q", rows[1].action)
+	}
+	if rows[2].status != "fail" || rows[2].check != "blobstore" || rows[2].detail != "default=postgres" {
+		t.Fatalf("colored blobstore row %+v", rows[2])
+	}
+	assertBlobstoreMigrateAction(t, rows[2].action)
 	if rows[len(rows)-2].status != "ok" || rows[len(rows)-2].check != "log-sink" || rows[len(rows)-2].detail != "syslog+tls scope=all" {
 		t.Fatalf("colored log-sink row %+v", rows[len(rows)-2])
 	}
@@ -1291,7 +1337,7 @@ func TestProductionCheckBackupLine(t *testing.T) {
 			got, err := f.run(t)
 			assertFailed(t, err)
 			mustCheck(t, got, "fail", "backup", "postgres primaries missing a current dump: 1")
-			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups,/sinks" {
+			if strings.Join(f.api.gets, ",") != "/tenancy,/cluster/placement,/cluster/postgres-availability,/cluster/mysql-availability,/cluster/redis-availability,/cluster/mongodb-availability,/cluster/kafka-availability,/cluster/clickhouse-availability,/providers/postgres/resources,/providers/mongodb/resources,/providers/kafka/resources,/providers/clickhouse/resources,/tenant-backups,/sinks" {
 				t.Fatalf("gets %v", f.api.gets)
 			}
 		})

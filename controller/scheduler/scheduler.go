@@ -15,6 +15,7 @@ import (
 	"github.com/inconshreveable/log15"
 	"github.com/randy-girard/flynn/controller/buildadmit"
 	controller "github.com/randy-girard/flynn/controller/client"
+	"github.com/randy-girard/flynn/controller/placement"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	discoverd "github.com/randy-girard/flynn/discoverd/client"
@@ -161,6 +162,12 @@ type Scheduler struct {
 	// successful GET /tenancy. Hosted reserves builtin small, medium, and
 	// large even when the stored flag is off. Self-hosted uses the flag.
 	tenancyMode string
+
+	// workloadPlacement is cluster_settings.workload_placement. Empty until
+	// the first successful read, which behaves as mixed. A failed read keeps
+	// the last mode. split filters new placements by flynn-role and does not
+	// stop jobs that are already running.
+	workloadPlacement string
 
 	// maxRestarts is RuntimeSettings.MaxRestarts: how many consecutive
 	// crashes are restarted before a process is left stopped. 0 is unlimited.
@@ -1243,10 +1250,16 @@ func (s *Scheduler) stopJobsWithMismatchedTags(formation *Formation) {
 // either a new host or a host whose tags have just changed
 func (s *Scheduler) maybeStartBlockedJobs(host *Host) {
 	for _, job := range s.jobs {
-		if job.State == JobStateBlocked && s.jobMatchesHost(job, host) {
-			job.State = JobStatePending
-			go s.StartJob(job)
+		if job.State != JobStateBlocked || !s.jobMatchesHost(job, host) {
+			continue
 		}
+		// A volume that already lives on this host stays here even when the
+		// role does not match. Other blocked jobs wait for a host that does.
+		if !s.hostAllowsRole(job, host) && !s.volumePinsTo(job, host.ID) {
+			continue
+		}
+		job.State = JobStatePending
+		go s.StartJob(job)
 	}
 }
 
@@ -1640,6 +1653,10 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 					req.Error(ErrNoHostsMatchTags)
 					return
 				}
+				if !s.hostAllowsRole(req.Job, host) {
+					log.Info("volume host role does not match workload placement; leaving job on volume host",
+						"vol.id", vol.ID, "host.id", host.ID, "host.role", host.Tags[placement.TagRole])
+				}
 				req.Host = host
 			}
 
@@ -1676,7 +1693,7 @@ func (s *Scheduler) HandlePlacementRequest(req *PlacementRequest) {
 			switch {
 			case s.persistentSingletonCapBlocked(req.Job):
 				req.Error(ErrPersistentSingletonCap)
-			case s.jobReservesResources(req.Job) && s.anyHostMatchesTags(req.Job):
+			case s.jobReservesResources(req.Job) && s.anyHostMatchesPlacement(req.Job):
 				req.Error(ErrNoHostCapacity)
 			default:
 				req.Error(ErrNoHostsMatchTags)

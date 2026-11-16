@@ -140,7 +140,17 @@ $ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 \
 ```
 
 That writes `--tags flynn-max-processes=1,flynn-max-processes-source=operator,role=database` into `/etc/flynn/host.json`.
-Change tags later with `flynn-host tags:set` / `tags:max-processes`.
+`role=database` is a process tag. It is not `flynn-role`. Change tags later with `flynn-host tags:set` / `tags:max-processes`.
+
+To keep control-plane jobs on the install hosts and run user apps on hosts you add later, tag this cluster's install hosts `--role core`, then join further hosts with `--role app`. Those hosts are still this cluster. Raft voters stay the initial consensus set. A `core` tag does not make a discoverd proxy into a voter, and an `app` tag does not remove one.
+
+```
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --external-ip 192.168.56.20 --role core
+$ sudo flynn-host placement:mode split
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --external-ip 192.168.56.60 --role app
+```
+
+`--role` writes `flynn-role=core` or `flynn-role=app` next to any `--tag` values. A database node is an app host that also has the process tag, for example `--role app --tag role=database`. Omitting `--role` on a later init keeps the `flynn-role` already stored in `host.json`. The cluster stays `mixed`, and ignores `flynn-role`, until `placement:mode split`. See [Production — Workload placement](../production.html.md#workload-placement).
 
 Omitting `--max-processes` on a new `host.json` writes `flynn-max-processes=auto`. After the daemon starts, the cap is how many jobs of the smallest published runtime fit in `MemTotal`, and not more than the overlay addresses on the host. Hosted and self-hosted clusters use the same rule. An existing file keeps whatever cap it already has, including no cap. `tags:max-processes <host> --auto` opts a running host in. An explicit number stays put.
 

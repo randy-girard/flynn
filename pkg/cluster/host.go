@@ -22,9 +22,10 @@ import (
 
 // Host is a client for a host daemon.
 type Host struct {
-	id   string
-	tags map[string]string
-	c    *httpclient.Client
+	id       string
+	tags     map[string]string
+	shutdown bool
+	c        *httpclient.Client
 }
 
 // NewHost creates a new Host that uses client to communicate with it.
@@ -62,6 +63,20 @@ func (c *Host) ID() string {
 // Tags returns the hosts tags
 func (c *Host) Tags() map[string]string {
 	return c.tags
+}
+
+// ShuttingDown reports the discoverd shutdown meta. A draining host is still
+// listed by Hosts until the down event.
+func (c *Host) ShuttingDown() bool {
+	return c != nil && c.shutdown
+}
+
+// SetShuttingDown marks a host client shutting down. Hosts sets this from
+// discoverd. Tests use it when they build a host without a service.
+func (c *Host) SetShuttingDown(v bool) {
+	if c != nil {
+		c.shutdown = v
+	}
 }
 
 // Addr returns the IP/port that the host API is listening on.

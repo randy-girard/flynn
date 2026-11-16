@@ -488,7 +488,7 @@ func httpRequirement(method, rawPath string) (kind routeKind, appID, perm string
 		if len(parts) == 2 && parts[1] == "regions" && (m == http.MethodGet || m == http.MethodHead) {
 			return rkAnyAuth, "", ""
 		}
-		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "postgres-availability" || parts[1] == "mysql-availability" || parts[1] == "redis-availability" || parts[1] == "mongodb-availability" || parts[1] == "kafka-availability" || parts[1] == "clickhouse-availability") {
+		if len(parts) >= 2 && (parts[1] == "runtime-settings" || parts[1] == "app-domain" || parts[1] == "placement" || parts[1] == "postgres-availability" || parts[1] == "mysql-availability" || parts[1] == "redis-availability" || parts[1] == "mongodb-availability" || parts[1] == "kafka-availability" || parts[1] == "clickhouse-availability") {
 			if m == http.MethodGet || m == http.MethodHead {
 				return rkAnyAuth, "", ""
 			}

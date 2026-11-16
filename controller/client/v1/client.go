@@ -1497,6 +1497,11 @@ func (c *Client) GetTenancy() (*ct.TenancySettings, error) {
 	return s, c.Get("/tenancy", s)
 }
 
+func (c *Client) GetPlacement() (*ct.WorkloadPlacement, error) {
+	s := &ct.WorkloadPlacement{}
+	return s, c.Get("/cluster/placement", s)
+}
+
 func (c *Client) UpdateRuntimeSettings(settings *ct.RuntimeSettings) error {
 	return c.Put("/cluster/runtime-settings", settings, settings)
 }

@@ -125,7 +125,7 @@ func TestResolveAutoOneJobWhenRuntimeExceedsHost(t *testing.T) {
 }
 
 func TestFormatDaemonTagsArgDynamicDefault(t *testing.T) {
-	got, err := formatDaemonTagsArg(nil, "", nil)
+	got, err := formatDaemonTagsArg(nil, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestFormatDaemonTagsArgDynamicDefault(t *testing.T) {
 		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceOperator,
 		"role":                            "database",
 	}
-	kept, err := formatDaemonTagsArg([]string{"role=database"}, "", existingOperator)
+	kept, err := formatDaemonTagsArg([]string{"role=database"}, "", "", existingOperator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestFormatDaemonTagsArgDynamicDefault(t *testing.T) {
 	if kept != wantKept {
 		t.Fatalf("existing operator: got %q want %q", kept, wantKept)
 	}
-	capOnly, err := formatDaemonTagsArg(nil, "", existingOperator)
+	capOnly, err := formatDaemonTagsArg(nil, "", "", existingOperator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,16 +156,16 @@ func TestFormatDaemonTagsArgDynamicDefault(t *testing.T) {
 		t.Fatalf("re-init without --tag keeps only the cap: got %q want %q", capOnly, wantCapOnly)
 	}
 
-	noCap, err := formatDaemonTagsArg([]string{"role=web"}, "", map[string]string{"role": "web"})
+	noCap, err := formatDaemonTagsArg([]string{"role=web"}, "", "", map[string]string{"role": "web"})
 	if err != nil || noCap != "role=web" {
 		t.Fatalf("existing file without a cap must stay unlimited: %q %v", noCap, err)
 	}
-	bare, err := formatDaemonTagsArg(nil, "", map[string]string{})
+	bare, err := formatDaemonTagsArg(nil, "", "", map[string]string{})
 	if err != nil || bare != "" {
 		t.Fatalf("existing file with no tags must stay unlimited: %q %v", bare, err)
 	}
 
-	cleared, err := formatDaemonTagsArg(nil, "unlimited", map[string]string{
+	cleared, err := formatDaemonTagsArg(nil, "unlimited", "", map[string]string{
 		ct.FormationMaxProcessesTag:       "4",
 		ct.FormationMaxProcessesSourceTag: ct.HostMaxProcessesSourceAuto,
 	})

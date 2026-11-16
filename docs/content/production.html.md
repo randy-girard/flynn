@@ -26,15 +26,17 @@ $ sudo flynn-host production:check --zpool-name=flynn-default
 `WHAT TO DO` names the command or operator step for that row. `NO_COLOR`
 turns the status colors off.
 
-`--zpool-name` defaults to `flynn-default`. The command reads tenancy, the
-blobstore release, runtime profiles, discoverd host tags, `GET /sinks`,
-flannel service metadata, and this host's pool. It does not migrate the
-blobstore, set `flynn-max-processes` or `flynn-max-persistent-singletons`,
-create or move volumes, detach a vdev, or dial a log sink.
+`--zpool-name` defaults to `flynn-default`. The command reads tenancy,
+workload placement, the blobstore release, runtime profiles, discoverd host
+tags, `GET /sinks`, flannel service metadata, and this host's pool. It does
+not migrate the blobstore, set `flynn-max-processes` or
+`flynn-max-persistent-singletons`, write `workload_placement` or
+`flynn-role`, create or move volumes, detach a vdev, or dial a log sink.
 
 | Line | Meaning |
 | --- | --- |
 | `tenancy` | `GET /tenancy` (`cluster_settings.tenancy_mode`). A controller error is `fail` and is not treated as `self_hosted`. |
+| `placement` | `GET /cluster/placement` (`cluster_settings.workload_placement`). `mixed` is `ok`. `split` with no host that is not shutting down and tagged `flynn-role=core` is `fail`. `split` with no `flynn-role=app` host is `warn`. A non-omni job on the wrong role is `warn` and names the app. The check does not write the mode or any tag. Set it with `flynn-host placement:mode` and `flynn-host init --role`. |
 | `blobstore` | Prints the default name only, never `BACKEND_*` values. Empty `DEFAULT_BACKEND`, a `postgres` name (any case), or a parsed `backend` type that is missing or `postgres` (any case) is hosted `fail` and self-hosted `warn`. `s3`, `minio`, `gcs`, and `azure` are `ok`. The check does not migrate. A green line means that release's parsed type is not `postgres`. It is not proof bytes left Postgres. |
 | `zfs` | `zpool status -P` for this host. `fail` in either tenancy mode when any leaf is a regular file, including a mirror that still lists the file. A block device passes. Tenancy does not change this line. A missing pool or `zpool` error is `fail` either way. A green line is this host only. |
 | `reserve` | Hosted is `ok` when the profile list can be read. The scheduler reserves builtin `small`, `medium`, and `large` even when `reserve_resources` is false (`scheduler=hosted_builtin`). `runtime:reserve` only stores the flag. Unknown tenancy is `fail` and is not treated as self-hosted. Self-hosted is `ok` with the flags off. The action tells a large cluster to run `flynn-host runtime:reserve` on profiles that must fit. An empty name does not reserve. One other profile does not stand in for the three builtins. Database runtimes are not read. |
@@ -136,7 +138,9 @@ TTY does not migrate, delete, reserve, or install.
 The steps are tenancy (unchanged unless they ask), the blobstore, ZFS on this
 host, the per-host process cap, runtime reservation, a cluster log sink,
 Let's Encrypt, a platform backup, the live overlay ceilings, and DNS and
-firewall text. It then runs `production:check`.
+firewall text. It then runs `production:check`. It does not set workload
+placement and does not write `flynn-role`. The printed check includes the
+placement line.
 
 `blobstore:set --region` is the S3 or MinIO location. It is not written to
 `cluster_settings.region`. GCS and Azure stay on the `flynn -a blobstore
@@ -280,6 +284,86 @@ cluster's login. This cluster does not provision the user.
 The scheduler does not gain a region placement tag or a `PlacementRequest`
 filter. It does not copy database bytes. Sirenia stays inside the cluster
 that holds the volume.
+
+## Workload placement
+
+Workload placement is not a region. It does not add a Raft group, a DNS
+zone, or an overlay. Install hosts and added hosts stay in this cluster.
+
+`cluster_settings.workload_placement` is `mixed` or `split`. `mixed` is the
+default and is today's scheduler: `flynn-role` is ignored. A cluster that
+never runs the command stays `mixed`, including hosts that already have
+other tags. Bootstrap, Vagrant, and CI do not set the mode and do not set
+`flynn-role`.
+
+```text
+$ sudo flynn-host placement:mode
+$ sudo flynn-host placement:mode split
+$ sudo flynn-host placement mode mixed
+```
+
+`placement mode` is `placement:mode`. The body is `{"mode": mode}` only.
+The cluster key is required to set it. `GET /cluster/placement` is any
+authenticated caller. `split` is refused unless a host that is not shutting
+down has `flynn-role=core`. Zero `flynn-role=app` hosts is allowed. The
+command then says new user and tenant jobs stay pending until an app host
+exists. Existing jobs are left running. Turning `split` on does not stop
+jobs, delete volumes, or allocate new empty ones. A job whose volume
+already exists stays on that host. Platform Postgres and other persistent
+singletons stay put until a separate migrate. The scheduler logs the
+mismatch.
+
+Tag the install hosts when you init them, or later with `tags:set`:
+
+```text
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --role core
+$ sudo flynn-host init --peer-ips 192.168.56.20,192.168.56.21,192.168.56.22 --role app
+```
+
+`--role` writes `flynn-role=core` or `flynn-role=app` next to any `--tag`
+values. It is not `--tag role=database`. A database node is an app host
+that also has the process tag the runtime already uses. A later init that
+omits `--role` keeps the `flynn-role` already in `host.json`. `tags:set`
+can change it. A replacement host can be `--role core`. Whoever you tag
+`core` is an install host, not only the hosts from the first init.
+
+While `split` is on, the scheduler applies the role only as a placement
+filter. It does not write formation tags, and it does not stop jobs because
+the mode or the role tag changed.
+
+- Every host runs omni processes: discoverd, flannel, the controller
+  scheduler, and the router. An added node still runs those. It cannot join
+  the overlay without discoverd and flannel. The router keeps binding 80,
+  443, and 3000–3500 on every host. DNS is unchanged.
+- Core hosts (`flynn-role=core`) run the other control-plane processes:
+  controller web and worker, the platform Postgres app named `postgres`,
+  blobstore, gitreceive, tarreceive, logaggregator, taffy, status, and
+  plugin apps (`flynn-plugin=true`), including postgres-plugin. The plugin
+  API stays on the install hosts.
+- App hosts (`flynn-role=app`) run user apps and tenant datastore apps
+  (`flynn-system-app` plus `flynn-datastore`, or a name such as
+  `redis-<uuid>` / `postgresql-<name>`). Those are not plugin apps and not
+  the platform app named `postgres`.
+- A host with no `flynn-role` runs omni processes only.
+- Process tags and runtime tags still have to match. `flynn-max-processes`
+  still counts tenant jobs only.
+
+One-off jobs follow the app they belong to. `slugbuilder` and
+`dockerbuilder` run on the user app, so a build runs on an app host.
+gitreceive stays on a core host.
+
+Platform Postgres does not leave `SINGLETON` or scale to 3 because app
+hosts were added. While `split` is on, that promotion counts core hosts.
+One core host plus any number of app hosts does not promote it. Plugin
+MySQL and MongoDB are unchanged.
+
+`production:configure` does not set this mode. The dashboard Cluster
+settings page shows it and the command. The dashboard token is not the
+cluster key, and the page does not write the mode.
+
+Raft voters stay the initial consensus set. A `core` tag does not make a
+discoverd proxy into a voter, and an `app` tag does not remove one.
+Replacing a voter stays the steps in [Replacing Hosts](#replacing-hosts).
 
 ## TLS / Let's Encrypt
 
@@ -999,7 +1083,11 @@ running rollback again with `--all-nodes`.
 ## Adding Hosts
 
 Hosts may be added to an existing cluster by running `flynn-host init` with the
-discovery token or list of host IPs that was used to start the cluster.
+discovery token or list of host IPs that was used to start the cluster. Those
+hosts are still this cluster. To run user apps on the added hosts, tag the
+install hosts `--role core`, run `flynn-host placement:mode split`, and join
+the further hosts with `--role app`. See [Workload placement](#workload-placement).
+A `core` tag does not make a discoverd proxy into a Raft voter.
 
 Care should be taken to ensure that the same version of Flynn is installed on
 all hosts. The installed version of Flynn can be checked with `flynn-host

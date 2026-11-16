@@ -1537,6 +1537,15 @@ $fn$ LANGUAGE plpgsql`, tcprouteport.AllocLock, tcprouteport.MinPort, tcproutepo
 			CONSTRAINT cluster_region_links_tls_pin_check CHECK (tls_pin <> '')
 		)`,
 	)
+
+	// Workload placement. mixed is today's scheduler. split places by the
+	// host tag flynn-role. 90 added region and is left unchanged. A backup
+	// from before this column restores as mixed. Turning split on does not
+	// rewrite formations or move volumes.
+	migrations.Add(91,
+		`ALTER TABLE cluster_settings ADD COLUMN workload_placement text NOT NULL DEFAULT 'mixed'`,
+		`ALTER TABLE cluster_settings ADD CONSTRAINT cluster_settings_workload_placement_check CHECK (workload_placement IN ('mixed', 'split'))`,
+	)
 }
 
 func MigrateDB(db *postgres.DB) error {

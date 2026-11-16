@@ -216,7 +216,7 @@ func TestProductionConfigureReadySkipsMutations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.forbid(t, "blobstore:set", "blobstore:migrate", "runtime:reserve", "tags:max-processes", "log-sink:add", "letsencrypt:configure", "plugin:install", "tenancy:mode")
+	log.forbid(t, "blobstore:set", "blobstore:migrate", "runtime:reserve", "tags:max-processes", "log-sink:add", "letsencrypt:configure", "plugin:install", "tenancy:mode", "placement:mode")
 	for _, hidden := range []string{"leakedsecret", "BEGIN PRIVATE KEY", "Secret access key", "Blobstore backend", "Process cap for", "Syslog URL", "Let's Encrypt email"} {
 		if strings.Contains(out, hidden) {
 			t.Fatalf("ready wizard printed %q:\n%s", hidden, out)
@@ -233,6 +233,9 @@ func TestProductionConfigureReadySkipsMutations(t *testing.T) {
 	}
 	if !strings.Contains(out, "follows the stored flag") || !strings.Contains(out, "runtime:reserve only stores the flag") {
 		t.Fatalf("reserve explanation missing:\n%s", out)
+	}
+	if !strings.Contains(out, "mode=mixed") || !strings.Contains(out, "flynn-host placement:mode") {
+		t.Fatalf("placement line missing:\n%s", out)
 	}
 	if headings := configureHeadings(out); strings.Join(headings, "\n") != strings.Join(wantConfigureHeadings(), "\n") {
 		t.Fatalf("headings:\n%v", headings)
@@ -506,7 +509,7 @@ func TestProductionConfigureNoTTYAppliesNothing(t *testing.T) {
 	st.Apps = nil
 	st.Routes = nil
 	out, log, _ := runConfigure(t, st, []string{"yes", "s3", "b", "us-east-1", "AKI", "supersecret", "", "yes", "40", "yes", "syslog://logs.example:514/", "yes", "ops@example.com", "yes", "yes", "yes", "/tmp/p4.tar"}, false)
-	log.forbid(t, "blobstore:set", "blobstore:migrate", "runtime:reserve", "tags:max-processes", "log-sink:add", "letsencrypt:configure", "plugin:install", "backup", "tenancy:mode")
+	log.forbid(t, "blobstore:set", "blobstore:migrate", "runtime:reserve", "tags:max-processes", "log-sink:add", "letsencrypt:configure", "plugin:install", "backup", "tenancy:mode", "placement:mode")
 	if !strings.Contains(out, "no TTY") {
 		t.Fatalf("missing TTY note:\n%s", out)
 	}
@@ -537,7 +540,7 @@ func TestProductionConfigureTenancyMatchDoesNotCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	log.forbid(t, "tenancy:mode")
+	log.forbid(t, "tenancy:mode", "placement:mode")
 }
 
 func TestProductionConfigureOverlayCeilings(t *testing.T) {

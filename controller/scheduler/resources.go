@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/inconshreveable/log15"
+	"github.com/randy-girard/flynn/controller/placement"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/controller/utils"
 	"github.com/randy-girard/flynn/host/resource"
@@ -164,6 +165,58 @@ func (s *Scheduler) anyHostMatchesTags(job *Job) bool {
 			continue
 		}
 		if s.jobMatchesHost(job, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// anyHostMatchesPlacement is anyHostMatchesTags plus the split role filter.
+// A core host that matches process tags is not capacity for a user job.
+func (s *Scheduler) anyHostMatchesPlacement(job *Job) bool {
+	if s == nil || job == nil {
+		return false
+	}
+	for _, h := range s.hosts {
+		if hostCanPlace(h) && s.jobMatchesHost(job, h) && s.hostAllowsRole(job, h) {
+			return true
+		}
+	}
+	return false
+}
+
+// placementMode is mixed until the first successful read, and whenever the
+// stored value is not split.
+func (s *Scheduler) placementMode() string {
+	if s == nil || strings.TrimSpace(s.workloadPlacement) != placement.ModeSplit {
+		return placement.ModeMixed
+	}
+	return placement.ModeSplit
+}
+
+// hostAllowsRole applies flynn-role only while split is on. It is not part of
+// jobMatchesHost, so stopJobsWithMismatchedTags does not stop a job because
+// the mode or the role tag changed.
+func (s *Scheduler) hostAllowsRole(job *Job, h *Host) bool {
+	if job == nil || h == nil {
+		return false
+	}
+	_, omni := job.omniPerHost()
+	var app *ct.App
+	if job.Formation != nil {
+		app = job.Formation.App
+	}
+	return placement.HostAllows(s.placementMode(), placement.Classify(app, omni), h.Tags)
+}
+
+// volumePinsTo reports whether this job already has a persistent volume on hostID.
+func (s *Scheduler) volumePinsTo(job *Job, hostID string) bool {
+	if s == nil || job == nil || hostID == "" {
+		return false
+	}
+	for _, req := range job.VolumeRequests() {
+		vol := s.findVolume(job, &req)
+		if vol != nil && vol.HostID == hostID {
 			return true
 		}
 	}
@@ -347,7 +400,7 @@ func (s *Scheduler) persistentSingletonCapBlocked(job *Job) bool {
 	needReserve := s.jobReservesResources(job)
 	saw := false
 	for _, h := range s.hosts {
-		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) || s.hostAtProcessCap(h, job) {
+		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) || !s.hostAllowsRole(job, h) || s.hostAtProcessCap(h, job) {
 			continue
 		}
 		if needReserve && !s.hostHasCapacity(h, job) {
@@ -462,7 +515,7 @@ func (s *Scheduler) pickHost(job *Job, counts map[string]int) *Host {
 	var fitCount int
 	var fitPack int
 	for _, h := range s.ShuffledHosts() {
-		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) {
+		if !hostCanPlace(h) || !s.jobMatchesHost(job, h) || !s.hostAllowsRole(job, h) {
 			continue
 		}
 		if s.hostAtProcessCap(h, job) {

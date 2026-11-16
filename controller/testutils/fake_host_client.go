@@ -40,8 +40,10 @@ type FakeHostClient struct {
 	eventChannels    map[chan<- *host.Event]struct{}
 	jobsMtx          sync.RWMutex
 	Healthy          bool
-	TestEventHook    chan struct{}
-	tags             map[string]string
+	// Shutdown is discoverd's shutdown meta. Placement refuses to count it.
+	Shutdown      bool
+	TestEventHook chan struct{}
+	tags          map[string]string
 
 	// Hooks are test seams. They run after a snapshot is copied and
 	// without the jobs lock held, so a test can block one host RPC
@@ -55,6 +57,14 @@ type FakeHostClient struct {
 }
 
 func (c *FakeHostClient) ID() string { return c.hostID }
+
+// ShuttingDown reports the discoverd shutdown flag.
+func (c *FakeHostClient) ShuttingDown() bool {
+	if c == nil {
+		return false
+	}
+	return c.Shutdown
+}
 
 func (c *FakeHostClient) Tags() map[string]string {
 	if len(c.tags) == 0 {

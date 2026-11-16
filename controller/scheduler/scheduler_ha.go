@@ -1,13 +1,15 @@
 package main
 
 import (
+	"github.com/randy-girard/flynn/controller/placement"
 	ct "github.com/randy-girard/flynn/controller/types"
 	"github.com/randy-girard/flynn/pkg/resname"
 	"github.com/randy-girard/flynn/pkg/sirenia/ha"
 )
 
 // maybePromoteSireniaHA flips the platform postgres appliance to HA when the
-// cluster has at least three active hosts. Releases are immutable, so
+// cluster has at least three active hosts. While split is on, that count is
+// core hosts that are not shutting down, not every host. Releases are immutable, so
 // SINGLETON=false is a new release at scale 1 (volume handoff), then a later
 // pass scales the data process to 3 once that primary is running.
 //
@@ -16,7 +18,7 @@ import (
 // scale straight to 3. That races provision. The plugin availability lease
 // adds one member at a time.
 func (s *Scheduler) maybePromoteSireniaHA() {
-	if !s.IsLeader() || s.activeHostCount() < ha.MinHosts {
+	if !s.IsLeader() || s.sireniaHostCount() < ha.MinHosts {
 		return
 	}
 	seen := make(map[string]struct{})
@@ -61,6 +63,24 @@ func (s *Scheduler) maybePromoteSireniaHA() {
 			seen[appID] = struct{}{}
 		}
 	}
+}
+
+// sireniaHostCount is activeHostCount while mixed. While split, only core
+// hosts count, so app hosts added for user work do not promote platform Postgres.
+func (s *Scheduler) sireniaHostCount() int {
+	if s.placementMode() != placement.ModeSplit {
+		return s.activeHostCount()
+	}
+	n := 0
+	for _, host := range s.hosts {
+		if host == nil || host.Shutdown {
+			continue
+		}
+		if host.Tags[placement.TagRole] == placement.RoleCore {
+			n++
+		}
+	}
+	return n
 }
 
 func (s *Scheduler) sireniaNonSingletonFormation(appID string) *Formation {

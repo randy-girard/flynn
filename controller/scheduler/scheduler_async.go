@@ -79,17 +79,20 @@ type hostCheckResult struct {
 }
 
 type formationFetch struct {
-	formations  []*ct.ExpandedFormation
-	formErr     error
-	profiles    []*ct.RuntimeProfile
-	profilesOK  bool
-	profileErr  error
-	tenancy     *ct.TenancySettings
-	tenancyOK   bool
-	tenancyErr  error
-	settings    *ct.RuntimeSettings
-	settingsOK  bool
-	settingsErr error
+	formations   []*ct.ExpandedFormation
+	formErr      error
+	profiles     []*ct.RuntimeProfile
+	profilesOK   bool
+	profileErr   error
+	tenancy      *ct.TenancySettings
+	tenancyOK    bool
+	tenancyErr   error
+	placement    *ct.WorkloadPlacement
+	placementOK  bool
+	placementErr error
+	settings     *ct.RuntimeSettings
+	settingsOK   bool
+	settingsErr  error
 }
 
 // deliver runs fn on the scheduler goroutine. It must not be called from
@@ -622,6 +625,7 @@ func (s *Scheduler) loadFormationFetch() formationFetch {
 	}
 	fetch.profiles, fetch.profilesOK, fetch.profileErr = s.fetchRuntimeProfiles()
 	fetch.tenancy, fetch.tenancyOK, fetch.tenancyErr = s.fetchTenancy()
+	fetch.placement, fetch.placementOK, fetch.placementErr = s.fetchPlacement()
 	fetch.settings, fetch.settingsOK, fetch.settingsErr = s.fetchRuntimeSettings()
 	return fetch
 }
@@ -643,6 +647,7 @@ func (s *Scheduler) applyFormationFetch(fetch formationFetch, leader uint64) {
 	}
 	s.applyRuntimeProfiles(log, fetch.profiles, fetch.profilesOK, fetch.profileErr)
 	s.applyTenancy(log, fetch.tenancy, fetch.tenancyOK, fetch.tenancyErr)
+	s.applyPlacement(log, fetch.placement, fetch.placementOK, fetch.placementErr)
 	s.applyRuntimeSettings(log, fetch.settings, fetch.settingsOK, fetch.settingsErr)
 	for _, f := range s.formations {
 		if _, ok := active[f.key()]; !ok && !f.GetProcesses().IsEmpty() {
@@ -732,6 +737,38 @@ func (s *Scheduler) applyTenancy(log log15.Logger, settings *ct.TenancySettings,
 		return
 	}
 	s.tenancyMode = strings.TrimSpace(settings.Mode)
+}
+
+type placementGetter interface {
+	GetPlacement() (*ct.WorkloadPlacement, error)
+}
+
+func (s *Scheduler) fetchPlacement() (*ct.WorkloadPlacement, bool, error) {
+	if s == nil {
+		return nil, false, nil
+	}
+	g, ok := s.ControllerClient.(placementGetter)
+	if !ok {
+		return nil, false, nil
+	}
+	settings, err := g.GetPlacement()
+	return settings, true, err
+}
+
+// applyPlacement stores the mode. A failed read keeps the last one. It does
+// not rectify and does not stop running jobs: the filter applies to the next
+// placement decision only.
+func (s *Scheduler) applyPlacement(log log15.Logger, settings *ct.WorkloadPlacement, ok bool, err error) {
+	if s == nil || !ok {
+		return
+	}
+	if err != nil || settings == nil {
+		if log != nil {
+			log.Error("error getting workload placement", "err", err)
+		}
+		return
+	}
+	s.workloadPlacement = strings.TrimSpace(settings.Mode)
 }
 
 func (s *Scheduler) fetchRuntimeSettings() (*ct.RuntimeSettings, bool, error) {

@@ -889,7 +889,10 @@ func (MigrateSuite) TestRegionColumnDefaultsToUS(c *C) {
 			continue
 		}
 		if m.ID > 90 {
-			c.Fatalf("migration %d is after region; extend this test", m.ID)
+			// Later migrations (workload placement is 91) must not run
+			// before the region column exists. They are applied by the
+			// final MigrateDB call below.
+			continue
 		}
 		before = append(before, m)
 	}
@@ -927,4 +930,17 @@ func (MigrateSuite) TestRegionColumnDefaultsToUS(c *C) {
 	c.Assert(got, Equals, "EU")
 	c.Assert(db.QueryRow(`SELECT region FROM cluster_settings WHERE id = 1`).Scan(&region), IsNil)
 	c.Assert(region, Equals, "US")
+}
+
+func (MigrateSuite) TestWorkloadPlacementDefaultsToMixed(c *C) {
+	db := setupTestDB(c, "controllertest_workload_placement")
+	c.Assert(MigrateDB(db), IsNil)
+	var mode string
+	c.Assert(db.QueryRow(`SELECT workload_placement FROM cluster_settings WHERE id = 1`).Scan(&mode), IsNil)
+	c.Assert(mode, Equals, "mixed")
+	err := db.Exec(`UPDATE cluster_settings SET workload_placement = 'region'`)
+	c.Assert(err, NotNil)
+	c.Assert(db.Exec(`UPDATE cluster_settings SET workload_placement = 'split'`), IsNil)
+	c.Assert(db.QueryRow(`SELECT workload_placement FROM cluster_settings WHERE id = 1`).Scan(&mode), IsNil)
+	c.Assert(mode, Equals, "split")
 }

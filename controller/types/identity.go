@@ -12,6 +12,12 @@ type TenancySettings struct {
 	SignupEnabled bool   `json:"signup_enabled"`
 }
 
+// WorkloadPlacement is cluster_settings.workload_placement. mixed is today's
+// scheduler. split places by the host tag flynn-role. It is not a region.
+type WorkloadPlacement struct {
+	Mode string `json:"mode"`
+}
+
 // PostgresAvailability is cluster_settings.postgres_continuous_availability.
 // system keeps one platform replica per primary. manual does not.
 // Tenancy mode does not change it after the initial default.

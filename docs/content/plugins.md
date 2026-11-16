@@ -176,7 +176,7 @@ Development layout (relative to the Flynn repo):
 | `mongodb` | `../flynn-plugin-mongodb` | `mongodb` |
 | `kafka` | `../flynn-plugin-kafka` | `kafka` |
 | `clickhouse` | `../flynn-plugin-clickhouse` | `clickhouse` |
-| `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`; workspace **Datastores** after a tenant database plugin is installed) |
+| `dashboard` | `../flynn-plugin-dashboard` | (none; `kind: app`; Cluster → Settings shows workload placement and does not write it; workspace **Datastores** after a tenant database plugin is installed) |
 | `discovery` | `../flynn-plugin-discovery` | (none; `kind: app`) |
 | `www` | `../flynn-plugin-www` | (none; `kind: app`) |
 | `otel` / `opentelemetry` | `../flynn-plugin-otel` | (none; `kind: app`) |

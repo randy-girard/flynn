@@ -44,6 +44,11 @@ text. The process exits 1 when any status is fail. A warn does not.
 Tenancy comes from GET /tenancy. A controller error is a fail. It is not
 treated as self_hosted. GetSettings maps only a missing row to self_hosted.
 
+Placement comes from GET /cluster/placement. mixed is ok. split with no
+host that is not shutting down and flynn-role=core fails. split with no
+flynn-role=app host warns. A non-omni job on the wrong role warns and
+names the app. The check does not write the mode or any tag.
+
 Blobstore reads the blobstore release once and parses DEFAULT_BACKEND
 and that name's backend type. Empty DEFAULT_BACKEND is postgres. A name
 whose parsed type is missing or postgres, in any case, fails when hosted and warns
@@ -146,6 +151,9 @@ type productionCheckConfig struct {
 	// failures after the switch are visible before the PUT. A tenancy read
 	// error is still a failure and is not replaced by AssumeMode.
 	AssumeMode string
+	// Jobs samples running jobs for the placement line. Nil means there is
+	// nothing to sample. The check does not stop those jobs.
+	Jobs func() ([]placementJob, error)
 }
 
 // hostedProductionBlock reports whether production:check would fail if the
@@ -190,6 +198,9 @@ func hostProductionCheckConfig(client *cluster.Client, pool string) productionCh
 		FlannelMeta: readFlannelMeta,
 		ZpoolStatus: execZpoolStatus,
 		Stat:        os.Stat,
+		Jobs: func() ([]placementJob, error) {
+			return listPlacementJobs(client)
+		},
 	}
 }
 
@@ -266,6 +277,16 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 	var settings ct.TenancySettings
 	tenancyErr := api.Get("/tenancy", &settings)
 
+	var workload ct.WorkloadPlacement
+	placementErr := api.Get("/cluster/placement", &workload)
+	var (
+		jobs    []placementJob
+		jobsErr error
+	)
+	if cfg.Jobs != nil {
+		jobs, jobsErr = cfg.Jobs()
+	}
+
 	release, releaseErr := api.GetAppRelease("blobstore")
 	profiles, profileErr := api.ListRuntimeProfiles()
 
@@ -337,6 +358,7 @@ func collectProductionRows(cfg productionCheckConfig) []productionRow {
 		})
 	}
 
+	addPlacementLine(add, api, workload, placementErr, hosts, hostsErr, jobs, jobsErr)
 	addBlobstoreLine(add, mode, release, releaseErr)
 	addZFSLine(add, pool, zpoolRun, zpoolOut, zpoolErr, cfg.Stat)
 	addReserveLine(add, mode, profiles, profileErr)

@@ -89,12 +89,16 @@ func (c *Client) Hosts() ([]*Host, error) {
 		if err == nil {
 			hosts := make([]*Host, 0, len(insts))
 			for _, inst := range insts {
-				hosts = append(hosts, NewHost(
+				h := NewHost(
 					inst.Meta["id"],
 					inst.Addr,
 					c.h,
 					HostTagsFromMeta(inst.Meta),
-				))
+				)
+				if _, ok := inst.Meta["shutdown"]; ok {
+					h.shutdown = true
+				}
+				hosts = append(hosts, h)
 			}
 			return UniqueHosts(hosts), nil
 		}
