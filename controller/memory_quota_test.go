@@ -64,6 +64,27 @@ func TestMemoryHostMatchesIgnoresPersistentSingletonCap(t *testing.T) {
 	}
 }
 
+func TestScaleTotalsShrink(t *testing.T) {
+	if !scaleTotalsShrink(8, 7, 8, 7) {
+		t.Fatal("smaller process and memory totals are a shrink")
+	}
+	if !scaleTotalsShrink(8, 8, 8, 7) {
+		t.Fatal("a memory shrink that does not grow the process count is a shrink")
+	}
+	if !scaleTotalsShrink(8, 7, 8, 8) {
+		t.Fatal("a process shrink that does not grow memory is a shrink")
+	}
+	if scaleTotalsShrink(8, 8, 8, 8) {
+		t.Fatal("the same totals are not a shrink")
+	}
+	if scaleTotalsShrink(8, 9, 10, 7) {
+		t.Fatal("a process growth is not a shrink")
+	}
+	if scaleTotalsShrink(8, 7, 8, 9) {
+		t.Fatal("a memory growth is not a shrink")
+	}
+}
+
 func TestQuotaEmptyOwnerSkips(t *testing.T) {
 	api := &controllerAPI{tenancy: &data.TenancyRepo{}}
 	if scaleQuotaApplies(api, &ct.App{}) {
@@ -568,4 +589,119 @@ func (s *S) TestHostedMemoryQuotaRejectsScale(c *C) {
 	c.Assert(s.c.PutFormation(&ct.Formation{
 		AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": 2},
 	}), IsNil)
+}
+
+// F3ScaleDownWhileOverQuota is the formation PUT gate for autoscale.
+// A one-step web decrease that is still over the account quota must succeed.
+// Putting the same counts again while over the limit stays rejected.
+// A web-only body must keep the stored worker count.
+func (s *S) TestF3ScaleDownWhileOverQuota(c *C) {
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
+	var cleanup []formationStop
+	defer func() {
+		s.zeroFormations(c, cleanup)
+		c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
+	}()
+
+	wide := 20
+	mem := 100
+	app := s.createTestApp(c, &ct.App{Name: "f3-shrink", OwnerAccount: "user:f3-shrink"})
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{
+		Account: app.OwnerAccount, MaxProcesses: &wide, MaxMemoryMB: &mem,
+	}), IsNil)
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": oneMiBProcess(), "worker": oneMiBProcess()},
+	})
+	c.Assert(s.api.appRepo.SetRelease(app, release.ID), IsNil)
+	cleanup = append(cleanup, formationStop{app.ID, release.ID, []string{"web", "worker"}})
+	put := func(procs map[string]int) error {
+		return s.c.PutFormation(&ct.Formation{
+			AppID: app.ID, ReleaseID: release.ID, Processes: procs,
+		})
+	}
+	c.Assert(put(map[string]int{"web": 6, "worker": 2}), IsNil)
+
+	tight := 3
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{
+		Account: app.OwnerAccount, MaxProcesses: &tight, MaxMemoryMB: &tight,
+	}), IsNil)
+	err := put(map[string]int{"web": 6, "worker": 2})
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "quota"), Equals, true)
+
+	c.Assert(put(map[string]int{"web": 5}), IsNil)
+	got, err := s.c.GetFormation(app.ID, release.ID)
+	c.Assert(err, IsNil)
+	c.Assert(got.Processes["web"], Equals, 5)
+	c.Assert(got.Processes["worker"], Equals, 2)
+
+	err = put(map[string]int{"web": 8})
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "quota"), Equals, true)
+}
+
+// F3SelfHostedEmptyOwnerUsesClusterCap locks the production rule that an
+// app with no owner still scales, and stops at the cluster per-type cap
+// rather than at an empty-owner refusal.
+func (s *S) TestF3SelfHostedEmptyOwnerUsesClusterCap(c *C) {
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
+	var cleanup []formationStop
+	defer func() {
+		s.zeroFormations(c, cleanup)
+	}()
+
+	app := s.createTestApp(c, &ct.App{Name: "f3-empty-owner"})
+	c.Assert(app.OwnerAccount, Equals, "")
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": oneMiBProcess()},
+	})
+	c.Assert(s.api.appRepo.SetRelease(app, release.ID), IsNil)
+	cleanup = append(cleanup, formationStop{app.ID, release.ID, []string{"web"}})
+	put := func(n int) error {
+		return s.c.PutFormation(&ct.Formation{
+			AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": n},
+		})
+	}
+	c.Assert(put(3), IsNil)
+	err := put(11)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "cluster maximum"), Equals, true)
+	c.Assert(strings.Contains(err.Error(), "quota"), Equals, false)
+}
+
+// F3NilAccountQuotaIsUnlimited locks a nil quota row limit: the account
+// ceiling is gone, and the cluster per-type cap still applies.
+func (s *S) TestF3NilAccountQuotaIsUnlimited(c *C) {
+	c.Assert(s.api.tenancy.SetSettings(tenancy.ModeSelfHosted, nil), IsNil)
+	var cleanup []formationStop
+	defer func() {
+		s.zeroFormations(c, cleanup)
+	}()
+
+	four := 4
+	mem := 100
+	app := s.createTestApp(c, &ct.App{Name: "f3-nil-quota", OwnerAccount: "user:f3-nil-quota"})
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{
+		Account: app.OwnerAccount, MaxProcesses: &four, MaxMemoryMB: &mem,
+	}), IsNil)
+	release := s.createTestRelease(c, app.ID, &ct.Release{
+		Processes: map[string]ct.ProcessType{"web": oneMiBProcess()},
+	})
+	c.Assert(s.api.appRepo.SetRelease(app, release.ID), IsNil)
+	cleanup = append(cleanup, formationStop{app.ID, release.ID, []string{"web"}})
+	put := func(n int) error {
+		return s.c.PutFormation(&ct.Formation{
+			AppID: app.ID, ReleaseID: release.ID, Processes: map[string]int{"web": n},
+		})
+	}
+	c.Assert(put(4), IsNil)
+	err := put(5)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "quota"), Equals, true)
+
+	c.Assert(s.api.tenancy.SetQuota(&ct.AccountQuota{Account: app.OwnerAccount}), IsNil)
+	c.Assert(put(5), IsNil)
+	err = put(11)
+	c.Assert(err, NotNil)
+	c.Assert(strings.Contains(err.Error(), "cluster maximum"), Equals, true)
 }

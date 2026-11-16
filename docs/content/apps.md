@@ -278,7 +278,13 @@ clears it, with `flynn-host runtime:max-processes`. An upgraded cluster
 stays at 10 until that command is used. On a hosted cluster, an app that
 belongs to an account is limited by the account's process count and memory
 quota instead of the per-type cap. An app with no owner still uses the
-per-type cap. A `release` process runs once per deploy and cannot be scaled.
+per-type cap. A nil account limit is unlimited. A scale that shrinks the
+account's process count or memory total, and does not grow the other, is
+accepted while the account is already over its quota. The same counts are
+still rejected, and a growth past the limit is still rejected. The
+autoscale plugin uses this formation PUT for web processes. It does not
+need a hosted account, and an empty owner is not a reason to stop. A
+`release` process runs once per deploy and cannot be scaled.
 The per-host `flynn-max-processes` tag is a separate limit on how many
 tenant jobs one machine will run.
 

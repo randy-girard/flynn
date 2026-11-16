@@ -414,9 +414,10 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *
 	if !scaleQuotaApplies(c, app) {
 		return nil
 	}
-	// ScaleIncreases gates suspension only. Memory is checked on the
-	// formation that will be stored, including a scale-down that is still
-	// over max_memory_mb.
+	// ScaleIncreases gates suspension only. A shrink of the merged process
+	// or memory total skips the quota check so a scale-down can succeed
+	// while the account is already over the limit. The same counts, and
+	// any growth, still go through quotaAllows.
 	if tenancy.ScaleIncreases(oldCounts, newCounts) {
 		if err := c.rejectIfSuspended(app.OwnerAccount); err != nil {
 			return err
@@ -434,6 +435,16 @@ func (c *controllerAPI) enforceScale(ctx context.Context, app *ct.App, release *
 	mem, err := c.projectedScaleMemory(app, release, newCounts, newTags, applyTags)
 	if err != nil {
 		return err
+	}
+	curMem, err := c.projectedScaleMemory(app, release, oldCounts, nil, false)
+	if err != nil {
+		return err
+	}
+	// A shrink is allowed while the account is already over the limit so
+	// autoscale can step down. The same counts, and any growth that exceeds
+	// the limit, still go through quotaAllows.
+	if scaleTotalsShrink(usage.Processes, procs, curMem, mem) {
+		return nil
 	}
 	memArg, err := memoryQuotaArg(mem)
 	if err != nil {

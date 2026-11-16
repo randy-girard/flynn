@@ -271,6 +271,19 @@ func memoryOverflowError() error {
 	return ct.ValidationError{Field: "max_memory_mb", Message: "process memory total overflows"}
 }
 
+// scaleTotalsShrink reports whether a formation change made the account
+// smaller without growing either the process count or the memory total.
+// A same-size formation is not a shrink. enforceScale uses this so a
+// one-step scale-down can succeed while the account is already over its
+// quota. quotaAllows still rejects a same-size put and any growth that
+// exceeds the limit.
+func scaleTotalsShrink(curProcs, newProcs int, curMem, newMem int64) bool {
+	if newProcs > curProcs || newMem > curMem {
+		return false
+	}
+	return newProcs < curProcs || newMem < curMem
+}
+
 // memoryAllows is the max_memory_mb comparison quotaAllows runs. Equal to
 // the limit is allowed. A nil limit is unlimited. Zero used is not a failure.
 func memoryAllows(limit *int, used int64) error {

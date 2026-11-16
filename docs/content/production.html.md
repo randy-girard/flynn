@@ -142,7 +142,16 @@ set the same mode again.
 When the reversal is allowed, an account with no `account_quotas` row is
 unlimited immediately, including while apps that are still running keep
 running. An explicit quota row still applies, in hosted mode and in
-self-hosted mode.
+self-hosted mode. A nil limit on that row is unlimited.
+
+A formation PUT that shrinks the account process count or the account
+memory total, without growing the other one, is accepted even when the
+account is already over its quota. Putting the same counts again while
+over the limit is still rejected. A change that grows past the limit is
+still rejected. Autoscale steps by one and uses that same PUT. It does
+not read the quota API first. An app with no owner is not blocked for
+having an empty `owner_account`. The ceiling that applies without a
+hosted account is `runtime:max-processes`, described above.
 
 Public signup stays off unless `signup_enabled` is already true. Cluster
 Settings "Self sign-up" is the dashboard `allow_signup` flag. Public signup

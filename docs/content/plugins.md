@@ -350,9 +350,17 @@ off, and `autoscale:set` changes min, max, metric, threshold, window, and cooldo
 Only `web` and `*-web` process types move. The trigger is a web-instance metric
 (CPU, memory, host load, or response p50/p95/p99; response p95 is the default).
 The formation scales up by one when that metric stays above the threshold for
-the window, and down by one when it stays at or below. A manual scale is applied
+the window, and down by one when it stays at or below. Minimum is 1.
+A manual scale is applied
 immediately; the next autoscaler decision still enforces min and max and does
-not undo a manual change during cooldown. `flynn-host plugin:uninstall autoscale`
+not undo a manual change during cooldown. Scale-up stops inside the controller
+formation PUT, at the account quota when the app has an owner and a real limit,
+and at `runtime:max-processes` for a self-hosted app or an app with no owner.
+A nil limit is unlimited. `flynn-host runtime:max-processes unlimited` clears
+the per-type cap. An empty owner is not a refusal. A refused scale-up leaves
+the count, records a decision, and waits for cooldown. A scale-down that
+shrinks the account totals still succeeds when the account is already over
+its quota. The plugin runs one web process. `flynn-host plugin:uninstall autoscale`
 stops the loop and leaves formations where they are.
 
 ```text
