@@ -31,3 +31,14 @@ func TestRotateServiceEnvDropsClusterKey(t *testing.T) {
 		t.Fatalf("env=%v", env)
 	}
 }
+
+func TestRotateServiceEnvRefreshesACMEHash(t *testing.T) {
+	env := map[string]string{"CONTROLLER_KEY": "cluster-god-key"}
+	rotateServiceEnv(env, "ACME_TOKEN", "acme-token-value", "acme:issue", "cluster-god-key")
+	if _, ok := env["CONTROLLER_KEY"]; ok {
+		t.Fatal("cluster key was copied onto the letsencrypt app")
+	}
+	if env["ACME_TOKEN"] != "acme-token-value" || env["ACME_AUTH_HASH"] == "" || env["ACME_AUTH_HASH"] == "cluster-god-key" {
+		t.Fatalf("env=%v", env)
+	}
+}

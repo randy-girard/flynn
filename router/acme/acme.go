@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -182,6 +183,16 @@ func (a *ACME) NewService(account *Account, controllerClient ControllerClient, r
 // configPollInterval is how often to poll for ACME configuration changes
 const configPollInterval = 10 * time.Second
 
+// newControllerClient prefers ACME_TOKEN. When that token is set the cluster
+// key is not used, even if CONTROLLER_KEY is also present. An empty token
+// keeps the previous key lookup so a release that has not switched still runs.
+func newControllerClient(meta map[string]string) (controller.Client, error) {
+	if tok := strings.TrimSpace(os.Getenv("ACME_TOKEN")); tok != "" {
+		return controller.NewClientWithToken("", tok)
+	}
+	return controller.NewClient("", controller.KeyFromEnvOrMeta(meta))
+}
+
 // RunService runs an ACME service with configuration from the controller
 func RunService(ctx context.Context) error {
 	log := log15.New("component", "acme")
@@ -206,7 +217,7 @@ func RunService(ctx context.Context) error {
 			return fmt.Errorf("no controller instances available")
 		}
 		inst := instances[0]
-		client, err = controller.NewClient("", controller.KeyFromEnvOrMeta(inst.Meta))
+		client, err = newControllerClient(inst.Meta)
 		return err
 	})
 	if err != nil {

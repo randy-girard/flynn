@@ -82,6 +82,10 @@ const ScopeGitreceiveBuild = "gitreceive:build"
 // It does not expand to app:env:read.
 const ScopeAccountQuota = "account:quota"
 
+// ScopeACMEIssue lets the ACME worker update managed certificates and routes.
+// It does not read release env or change formations.
+const ScopeACMEIssue = "acme:issue"
+
 // HTTPAllowed returns false if the principal may not call this controller route.
 func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 	if tok == nil {
@@ -127,6 +131,9 @@ func HTTPAllowed(tok *authorizer.Token, method, rawPath string) bool {
 		return hasScope(tok, ScopeAccountQuota)
 	}
 	if hasScope(tok, ScopeAccountQuota) && accountQuotaRead(method, rawPath) {
+		return true
+	}
+	if hasScope(tok, ScopeACMEIssue) && acmeIssueAllowed(method, rawPath) {
 		return true
 	}
 	if kind == rkCluster {
@@ -324,6 +331,41 @@ func accountQuotaRead(method, rawPath string) bool {
 // HasAccountQuota reports whether tok is the billing quota credential.
 func HasAccountQuota(tok *authorizer.Token) bool {
 	return hasScope(tok, ScopeAccountQuota)
+}
+
+// HasACMEIssue reports whether tok is the ACME issuance credential.
+func HasACMEIssue(tok *authorizer.Token) bool {
+	return hasScope(tok, ScopeACMEIssue)
+}
+
+func acmeIssueAllowed(method, rawPath string) bool {
+	m := strings.ToUpper(method)
+	parts := strings.Split(strings.Trim(rawPath, "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return false
+	}
+	switch parts[0] {
+	case "managed-certificates":
+		if len(parts) == 1 {
+			return m == http.MethodGet || m == http.MethodHead
+		}
+		return len(parts) == 2 && (m == http.MethodGet || m == http.MethodHead || m == http.MethodPut)
+	case "acme":
+		return len(parts) == 2 && parts[1] == "config" && (m == http.MethodGet || m == http.MethodHead)
+	case "routes":
+		return len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead)
+	case "apps":
+		if len(parts) == 1 && (m == http.MethodGet || m == http.MethodHead) {
+			return true
+		}
+		if len(parts) >= 3 && parts[2] == "routes" {
+			switch m {
+			case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasAnyGrantedApp(tok *authorizer.Token) bool {

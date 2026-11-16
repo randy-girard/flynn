@@ -542,3 +542,19 @@ func TestAccountQuotaScopeIsNotClusterAdmin(t *testing.T) {
 		t.Fatal("account:quota must not read release env, change a formation, or change cluster settings")
 	}
 }
+
+func TestACMEIssueScopeIsNotClusterAdmin(t *testing.T) {
+	tok := &authorizer.Token{UserID: "acme", Scopes: []string{ScopeACMEIssue}}
+	if tok.ClusterKey || tok.HasClusterAdmin() || MayReadAppEnv(tok, "app-a", "name-a") {
+		t.Fatal("acme:issue must not be cluster admin or read env")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/managed-certificates") || !HTTPAllowed(tok, http.MethodPut, "/managed-certificates/cert-1") {
+		t.Fatal("acme:issue must list and update managed certificates")
+	}
+	if !HTTPAllowed(tok, http.MethodGet, "/acme/config") || !HTTPAllowed(tok, http.MethodPost, "/apps/app-a/routes") || !HTTPAllowed(tok, http.MethodDelete, "/apps/app-a/routes/http/r1") {
+		t.Fatal("acme:issue must read ACME config and update routes")
+	}
+	if HTTPAllowed(tok, http.MethodPut, "/acme/config") || HTTPAllowed(tok, http.MethodPut, "/apps/app-a/formation") || HTTPAllowed(tok, http.MethodGet, "/apps/app-a/release") {
+		t.Fatal("acme:issue must not change ACME config, formations, or release env")
+	}
+}

@@ -326,6 +326,16 @@ the billing plugin boots and accepts git pushes. Rotate with
 Until that release is deployed, a billing process that still has
 `CONTROLLER_KEY` is accepted.
 
+Router route sync stays on the cluster key in the router release. Certificate
+issuance runs in the letsencrypt plugin. Scope `acme:issue` (`ACME_TOKEN`)
+may list and update managed certificates, read `GET /acme/config`, list apps
+and routes, and create or change routes. It may not read release env, change
+a formation, or `PUT /acme/config`. Install strips `CONTROLLER_KEY` and the
+signing keys from that release. `ACME_TOKEN` wins over `CONTROLLER_KEY` when
+both are set. An empty token keeps the cluster key so HTTP-01 renewal still
+works during a rolling update. There is no DNS-01 issuer in this tree.
+Rotate with `flynn-host token:rotate letsencrypt-plugin ACME_TOKEN acme:issue`.
+
 `flynn-host update` copies missing cluster secrets onto system-app
 releases (blobstore `AUTH_KEY` / `ACCESS_TOKEN_KEY`, taffy
 `ACCESS_TOKEN_KEY` / `ACCESS_TOKEN_SIGNING_KEY`, postgres

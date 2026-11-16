@@ -19,9 +19,9 @@ usage: flynn-host token:rotate <app> <env> <scope> [--caller=<name>]
 Mint a new account:quota or acme:issue token and deploy it on <app> as <env>.
 
 The cluster key and the signing key stay on the controller release. They are
-not printed and they are not copied onto <app>. account:quota also refreshes
-BILLING_AUTH_HASH from the controller key so the billing API can still
-recognize that key.
+not printed and they are not copied onto <app>. account:quota refreshes
+BILLING_AUTH_HASH and acme:issue refreshes ACME_AUTH_HASH from the controller
+key so those APIs can still recognize that key.
 `)
 }
 
@@ -102,8 +102,15 @@ func rotateServiceEnv(env map[string]string, name, token, scope, clusterKey stri
 			delete(env, k)
 		}
 	}
-	if scope == "account:quota" && clusterKey != "" {
-		sum := sha256.Sum256([]byte(clusterKey))
-		env["BILLING_AUTH_HASH"] = hex.EncodeToString(sum[:])
+	if clusterKey == "" {
+		return
+	}
+	sum := sha256.Sum256([]byte(clusterKey))
+	hash := hex.EncodeToString(sum[:])
+	switch scope {
+	case "account:quota":
+		env["BILLING_AUTH_HASH"] = hash
+	case "acme:issue":
+		env["ACME_AUTH_HASH"] = hash
 	}
 }
