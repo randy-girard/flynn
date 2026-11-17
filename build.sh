@@ -128,7 +128,8 @@ done
 source "${FLYNN_ROOT}/script/lib/release.sh"
 if [[ -z "${VERSION}" ]]; then
   echo "===> Fetching latest tags from remote..."
-  git fetch --tags --force 2>/dev/null || echo "Warning: Could not fetch tags from remote"
+  # Helper prints the warning and the fetch error. Keep building from local tags.
+  flynn_fetch_release_tags || true
   VERSION="$(next_release_version_from_tags)"
 fi
 
