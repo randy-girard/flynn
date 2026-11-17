@@ -590,23 +590,22 @@ func (h *jobAPI) AddJob(w http.ResponseWriter, r *http.Request, ps httprouter.Pa
 	// Drop host network, host PID, device profiles, and bind mounts before the
 	// system-job allow checks. /data volumes stay.
 	netpolicy.StripDatastoreEscape(job)
-	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system or builder job.
+	// SEC-008: reject HostNetwork/HostPIDNamespace unless the job is a system job.
 	// System apps set "flynn-system-app" metadata and use the "system" partition.
 	isSystemJob := job.Metadata["flynn-system-app"] == "true" || job.Partition == "system"
-	isBuilderJob := job.Metadata["flynn-controller.app_name"] == "builder"
-	if job.Config.HostNetwork && !isSystemJob && !isBuilderJob {
+	if job.Config.HostNetwork && !isSystemJob {
 		log.Warn("rejecting non-system job requesting host network")
 		httphelper.ValidationError(w, "host_network", "only allowed for system jobs")
 		h.addJobRateLimitBucket.Put()
 		return
 	}
-	if job.Config.HostPIDNamespace && !isSystemJob && !isBuilderJob {
+	if job.Config.HostPIDNamespace && !isSystemJob {
 		log.Warn("rejecting non-system job requesting host PID namespace")
 		httphelper.ValidationError(w, "host_pid_namespace", "only allowed for system jobs")
 		h.addJobRateLimitBucket.Put()
 		return
 	}
-	if !isSystemJob && !isBuilderJob && !isBuildJob(job) {
+	if !isSystemJob && !isBuildJob(job) {
 		if job.Config.WriteableCgroups {
 			log.Warn("rejecting non-system job requesting writable cgroups")
 			httphelper.ValidationError(w, "writeable_cgroups", "only allowed for system and build jobs")

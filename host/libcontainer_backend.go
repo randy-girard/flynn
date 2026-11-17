@@ -2314,7 +2314,10 @@ func isBuildJob(job *host.Job) bool {
 	if job.Metadata == nil {
 		return false
 	}
-	return job.Metadata["flynn-controller.app_name"] == "builder" ||
+	// The app name alone is not trusted: a tenant must not gain build
+	// privileges (no seccomp, writable cgroups) by naming an app "builder".
+	// The image builder sets flynn-system-app itself.
+	return (job.Metadata["flynn-controller.app_name"] == "builder" && job.Metadata["flynn-system-app"] == "true") ||
 		job.Metadata["flynn-controller.type"] == "slugbuilder" ||
 		job.Metadata["flynn-controller.type"] == "dockerbuilder"
 }
@@ -2324,8 +2327,8 @@ func isBuildJob(job *host.Job) bool {
 // API auth key so they can interact with the cluster.
 //
 // A job is trusted if it is a system app ("flynn-system-app" metadata or the
-// "system" partition), or the maintainer-run image builder ("builder" app,
-// which builds base OS layers and launches host jobs via pkg/exec).
+// "system" partition). The maintainer-run image builder sets
+// "flynn-system-app" itself; the app name "builder" is never trusted.
 //
 // User-facing build jobs (slugbuilder/dockerbuilder) are deliberately EXCLUDED:
 // they execute attacker-controlled code (arbitrary buildpacks and Dockerfile
@@ -2347,8 +2350,7 @@ func isSystemJob(job *host.Job) bool {
 	if job.Metadata == nil {
 		return false
 	}
-	return job.Metadata["flynn-system-app"] == "true" ||
-		job.Metadata["flynn-controller.app_name"] == "builder"
+	return job.Metadata["flynn-system-app"] == "true"
 }
 
 // lockUntrustedJob strips host-escape knobs a tenant release can set

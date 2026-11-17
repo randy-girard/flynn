@@ -1715,6 +1715,7 @@ func (b *Builder) BuildLayer(l *Layer, id, name string, run []string, env map[st
 		},
 		Resources: resource.Defaults(),
 		Metadata: map[string]string{
+			"flynn-system-app":          "true",
 			"flynn-controller.app_name": "builder",
 			"flynn-controller.type":     name,
 		},

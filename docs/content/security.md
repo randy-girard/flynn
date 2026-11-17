@@ -431,7 +431,12 @@ reserved metadata (`flynn-system-app`, `flynn-controller.*`,
 `flynn-datastore`, `flynn-plugin`) stripped, `partition=system` forced
 to `user`, and non-empty device profiles rejected. System apps and
 cluster-admin credentials still run on the system partition with
-existing profiles. The controller strips privileged process fields
+existing profiles. Non-admin callers also cannot set or change those
+reserved keys on an app (`POST /apps`, `PATCH /apps/:id` meta), so a
+tenant cannot mark its app as a plugin or system app to take a reserved
+name. Host trust (the host API key, host network/PID, build-job
+privileges) depends only on `flynn-system-app` or the system partition;
+the app name `builder` alone is never trusted. The controller strips privileged process fields
 from user-app releases at create and again before `PUT /apps/:id/release`
 attaches a release; a cluster-admin or controller key can still create
 privileged releases for system apps. `POST /releases` requires `app_id`

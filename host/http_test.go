@@ -120,8 +120,13 @@ func (SystemJobSuite) TestIsSystemJob(c *C) {
 			// The maintainer-run image builder launches host jobs via pkg/exec
 			// and is trusted infrastructure tooling, so it keeps the key.
 			name: "image builder app (trusted)",
-			job:  &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}},
+			job:  &host.Job{Metadata: map[string]string{"flynn-system-app": "true", "flynn-controller.app_name": "builder"}},
 			want: true,
+		},
+		{
+			name: "tenant app named builder (untrusted)",
+			job:  &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}},
+			want: false,
 		},
 		{
 			name: "user app job",

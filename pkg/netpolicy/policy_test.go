@@ -31,9 +31,9 @@ func TestHostTrustedExcludesDatastoreEngines(t *testing.T) {
 	if !HostTrusted(web) {
 		t.Fatal("postgres web API stays host-trusted")
 	}
-	builder := &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}}
+	builder := &host.Job{Metadata: map[string]string{"flynn-system-app": "true", "flynn-controller.app_name": "builder"}}
 	if !HostTrusted(builder) {
-		t.Fatal("image builder stays host-trusted")
+		t.Fatal("image builder (system app) stays host-trusted")
 	}
 	user := &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "shop", "flynn-controller.type": "web"}}
 	if HostTrusted(user) {
@@ -237,7 +237,7 @@ func TestClassifyJob(t *testing.T) {
 		},
 		{
 			name: "maintainer builder",
-			job:  &host.Job{Metadata: map[string]string{"flynn-controller.app_name": "builder"}},
+			job:  &host.Job{Metadata: map[string]string{"flynn-system-app": "true", "flynn-controller.app_name": "builder"}},
 			want: ClassSystem,
 		},
 	}
@@ -365,5 +365,18 @@ func TestUserDatastoreTCPPortsAreDataPlaneOnly(t *testing.T) {
 		if seen[p] {
 			t.Fatalf("admin/internal port %s must not be reachable from user jobs", p)
 		}
+	}
+}
+
+func TestTenantBuilderNameNotHostTrusted(t *testing.T) {
+	job := &host.Job{
+		Partition: "user",
+		Metadata:  map[string]string{"flynn-controller.app_name": "builder", "flynn-controller.type": "web"},
+	}
+	if HostTrusted(job) {
+		t.Fatal("tenant app named builder must not be host-trusted")
+	}
+	if got := ClassifyJob(job); got != ClassUser {
+		t.Fatalf("ClassifyJob = %s, want user", got)
 	}
 }

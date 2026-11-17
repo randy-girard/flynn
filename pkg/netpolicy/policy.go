@@ -167,8 +167,7 @@ func isSystemJob(job *host.Job) bool {
 	if job.Metadata == nil {
 		return false
 	}
-	return job.Metadata["flynn-system-app"] == "true" ||
-		job.Metadata["flynn-controller.app_name"] == "builder"
+	return job.Metadata["flynn-system-app"] == "true"
 }
 
 func isDatastoreProcess(job *host.Job) bool {

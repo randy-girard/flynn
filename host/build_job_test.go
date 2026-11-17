@@ -16,7 +16,8 @@ func TestIsBuildJob(t *testing.T) {
 		want bool
 	}{
 		{name: "nil metadata", meta: nil, want: false},
-		{name: "builder app", meta: map[string]string{"flynn-controller.app_name": "builder"}, want: true},
+		{name: "system builder app", meta: map[string]string{"flynn-system-app": "true", "flynn-controller.app_name": "builder"}, want: true},
+		{name: "tenant app named builder (untrusted)", meta: map[string]string{"flynn-controller.app_name": "builder", "flynn-controller.type": "web"}, want: false},
 		{name: "slugbuilder", meta: map[string]string{"flynn-controller.type": "slugbuilder"}, want: true},
 		{name: "dockerbuilder", meta: map[string]string{"flynn-controller.type": "dockerbuilder"}, want: true},
 		{name: "regular app", meta: map[string]string{"flynn-controller.app_name": "myapp", "flynn-controller.type": "web"}, want: false},
