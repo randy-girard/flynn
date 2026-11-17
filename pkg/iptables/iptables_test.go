@@ -130,6 +130,52 @@ func TestForwardDropPlanReplacesOverlayDest(t *testing.T) {
 	}
 }
 
+func TestApplyOverlayRulesRemovesStaleExclusion(t *testing.T) {
+	nat := strings.Join([]string{
+		"-P POSTROUTING ACCEPT",
+		"-A POSTROUTING -s 100.100.9.0/24 ! -o flynnbr0 ! -d 100.100.0.0/16 -j MASQUERADE",
+	}, "\n")
+	fwd := strings.Join([]string{
+		"-P FORWARD ACCEPT",
+		"-A FORWARD -m set --match-set flynn-net-data dst -p tcp --dport 5432 -j ACCEPT",
+		"-A FORWARD -m set --match-set flynn-net-user src -d 100.100.0.0/16 -m conntrack --ctstate NEW -j DROP",
+		"-A FORWARD -i flynnbr0 ! -o flynnbr0 -j ACCEPT",
+	}, "\n")
+	var calls []string
+	run := func(args ...string) ([]byte, error) {
+		joined := strings.Join(args, " ")
+		calls = append(calls, joined)
+		if strings.Contains(joined, "-S POSTROUTING") {
+			return []byte(nat), nil
+		}
+		if strings.Contains(joined, "-S FORWARD") {
+			return []byte(fwd), nil
+		}
+		return nil, nil
+	}
+	if err := ApplyOverlayRules(run, "flynnbr0", "100.100.9.1/24", "100.64.0.0/10"); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Join(calls, "\n")
+	if !strings.Contains(body, "-D POSTROUTING") || !strings.Contains(body, "100.100.0.0/16") {
+		t.Fatalf("did not delete inferred masquerade:\n%s", body)
+	}
+	if !strings.Contains(body, "-I POSTROUTING") || !strings.Contains(body, "100.64.0.0/10") {
+		t.Fatalf("did not insert wider masquerade:\n%s", body)
+	}
+	dropInsert := strings.Index(body, "-I FORWARD 3")
+	dropDelete := strings.Index(body, "-D FORWARD")
+	if dropInsert < 0 || !strings.Contains(body, "-d 100.64.0.0/10") {
+		t.Fatalf("did not insert the wider DROP before bridge egress:\n%s", body)
+	}
+	if dropDelete < 0 || dropDelete < dropInsert {
+		t.Fatalf("DROP insert must happen before the stale DROP is deleted:\n%s", body)
+	}
+	if strings.Contains(body, "flynn-net-data") && strings.Contains(body, "-D") && strings.Contains(body, "5432") {
+		t.Fatalf("must not delete datastore accepts:\n%s", body)
+	}
+}
+
 func flatten(rules [][]string) []string {
 	out := make([]string, 0, len(rules))
 	for _, rule := range rules {
