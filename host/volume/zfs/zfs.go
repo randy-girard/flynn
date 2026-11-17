@@ -3,6 +3,7 @@ package zfs
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -343,10 +344,31 @@ func (p *Provider) DestroyVolume(v volume.Volume) error {
 	return p.destroy(vol)
 }
 
+// unmountIfMounted unmounts path when it is a mount point.
+// An ext2 volume is often already gone: GC lazy-unmounts it before destroy,
+// and Unmount then returns EINVAL. That is not a busy dataset, so destroy
+// continues. EBUSY and other errors still fail.
+func unmountIfMounted(path string) error {
+	mounted, err := isMount(path)
+	if err != nil {
+		return err
+	}
+	if !mounted {
+		return nil
+	}
+	if err := syscall.Unmount(path, 0); err != nil {
+		if errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOENT) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
 func (p *Provider) destroy(vol *zfsVolume) error {
 	needsMount := vol.IsSnapshot() || vol.filesystem != nil
 	if needsMount {
-		if err := syscall.Unmount(vol.basemount, 0); err != nil {
+		if err := unmountIfMounted(vol.basemount); err != nil {
 			return err
 		}
 		os.Remove(vol.basemount)
