@@ -276,13 +276,21 @@ func (s *Store) TriggerSnapshot() error {
 	return s.raft.Snapshot().Error()
 }
 
+// LastIndex returns the highest index applied to this store. Raft answers an
+// apply future from its FSM goroutine before it records the applied index, so
+// raft.AppliedIndex alone can lag a write that already returned. The FSM's own
+// index covers that gap; raft's covers a snapshot install.
 func (s *Store) LastIndex() uint64 {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.raft != nil {
-		return s.raft.AppliedIndex()
+	if s.raft == nil {
+		return 0
 	}
-	return 0
+	idx := s.raft.AppliedIndex()
+	if s.appliedIndex > idx {
+		idx = s.appliedIndex
+	}
+	return idx
 }
 
 // Close shuts down the transport and store.

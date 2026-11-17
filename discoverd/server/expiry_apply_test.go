@@ -126,6 +126,25 @@ func TestHeartbeatBatchDoesNotRaftOrCreate(t *testing.T) {
 	}
 }
 
+// Raft answers an apply future from its FSM goroutine before it records the
+// applied index. LastIndex must already cover an entry the FSM has applied,
+// so a caller that just wrote never reads an older index.
+func TestLastIndexCoversFSMAppliedEntry(t *testing.T) {
+	s := openLeaderStore(t)
+	idx := s.LastIndex() + 100
+	cmd, err := json.Marshal(&expireInstancesCommand{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := append([]byte{expireInstancesCommandType}, cmd...)
+	if res := s.Apply(&raft.Log{Index: idx, Type: raft.LogCommand, Data: data}); res != nil {
+		t.Fatalf("apply: %v", res)
+	}
+	if got := s.LastIndex(); got < idx {
+		t.Fatalf("LastIndex %d after the FSM applied index %d", got, idx)
+	}
+}
+
 func TestExpiryWaitsTwoTTLThenExpiresUnstamped(t *testing.T) {
 	clock := newFrozenClock(time.Unix(1_700_000_000, 0).UTC())
 	s := openLeaderStoreAt(t, clock.Now)
