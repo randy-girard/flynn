@@ -288,6 +288,21 @@ func (c *Host) ReclaimDisk() error {
 	return client.Post("/host/reclaim-disk", nil, nil)
 }
 
+// ApplyOverlay tells the host to exclude network from masquerade and to
+// install the flannel.1 link route for it. network is the overlay CIDR.
+func (c *Host) ApplyOverlay(network string) error {
+	var out struct {
+		Network string `json:"network"`
+	}
+	if err := c.c.Post("/host/overlay", map[string]string{"network": network}, &out); err != nil {
+		return err
+	}
+	if out.Network != "" && out.Network != network {
+		return fmt.Errorf("host applied %s, want %s", out.Network, network)
+	}
+	return nil
+}
+
 // CheckOverlay reports whether the host can reach addr over the overlay network.
 func (c *Host) CheckOverlay(addr string) error {
 	return c.c.Get("/host/overlay-check?addr="+url.QueryEscape(addr), nil)

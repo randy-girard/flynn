@@ -321,15 +321,21 @@ func (l *LibcontainerBackend) ConfigureNetworking(config *host.NetworkConfig) er
 	}
 
 	// Set up iptables for outbound traffic masquerading from containers to the
-	// rest of the network.
+	// rest of the network. EnableOutboundNAT excludes the /16 inferred from
+	// the bridge subnet. A wider stored overlay replaces that exclusion.
 	if err := iptables.EnableOutboundNAT(l.BridgeName, l.bridgeNet.String()); err != nil {
 		return err
+	}
+	overlay := iptables.ExclusionCIDR(l.bridgeNet.String(), config.Overlay)
+	if iptables.NeedsExplicitExclusion(l.bridgeNet.String(), config.Overlay) {
+		if err := iptables.UseOverlayExclusion(l.BridgeName, l.bridgeNet.String(), overlay); err != nil {
+			return err
+		}
 	}
 	if err := enableBridgeNetfilter(); err != nil {
 		log.Error("error enabling br_netfilter", "err", err)
 		return err
 	}
-	overlay := iptables.OverlayNetworkFor(l.bridgeNet.String())
 	if err := iptables.EnableJobIsolation(overlay, l.bridgeAddr.String()); err != nil {
 		log.Error("error enabling job isolation", "err", err)
 		return err

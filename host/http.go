@@ -310,8 +310,21 @@ func (h *Host) ConfigureNetworking(config *host.NetworkConfig) {
 	})
 	h.statusMtx.Lock()
 	if h.status.Network != nil {
-		h.status.Network.JobID = config.JobID
-		h.backend.SetNetworkConfig(h.status.Network)
+		refresh := config.Overlay != "" && h.status.Network.Overlay != config.Overlay
+		h.statusMtx.Unlock()
+		if refresh {
+			if _, err := h.ApplyOverlayNetwork(config.Overlay); err != nil {
+				log.Error("error applying overlay", "err", err, "overlay", config.Overlay)
+			}
+		}
+		h.statusMtx.Lock()
+		if h.status.Network != nil {
+			if config.JobID != "" {
+				h.status.Network.JobID = config.JobID
+			}
+			// A notify that omits overlay must not wipe a CIDR overlay:set stored.
+			h.backend.SetNetworkConfig(h.status.Network)
+		}
 	}
 	h.statusMtx.Unlock()
 }
@@ -670,6 +683,24 @@ func (h *jobAPI) ConfigureDiscoverd(w http.ResponseWriter, r *http.Request, _ ht
 	h.host.ConfigureDiscoverd(config)
 }
 
+func (h *jobAPI) ApplyOverlay(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
+	log := h.host.log.New("fn", "ApplyOverlay")
+	var req struct {
+		Network string `json:"network"`
+	}
+	if err := httphelper.DecodeJSON(r, &req); err != nil {
+		httphelper.Error(w, err)
+		return
+	}
+	network, err := h.host.ApplyOverlayNetwork(req.Network)
+	if err != nil {
+		log.Error("error applying overlay", "err", err)
+		httphelper.Error(w, err)
+		return
+	}
+	httphelper.JSON(w, http.StatusOK, map[string]string{"network": network})
+}
+
 func (h *jobAPI) ConfigureNetworking(w http.ResponseWriter, r *http.Request, _ httprouter.Params) {
 	log := h.host.log.New("fn", "ConfigureNetworking")
 
@@ -1022,6 +1053,7 @@ func (h *jobAPI) RegisterRoutes(r *httprouter.Router) error {
 	r.POST("/host/pull/binaries", h.PullBinariesAndConfig)
 	r.POST("/host/discoverd", h.ConfigureDiscoverd)
 	r.POST("/host/network", h.ConfigureNetworking)
+	r.POST("/host/overlay", h.ApplyOverlay)
 	r.GET("/host/status", h.GetStatus)
 	r.GET("/host/stats", h.GetHostStats)
 	r.GET("/host/jobs-stats", h.GetAllJobsStats)

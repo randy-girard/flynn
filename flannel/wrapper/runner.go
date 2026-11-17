@@ -7,12 +7,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 
 	"github.com/randy-girard/flynn/discoverd/client"
 	"github.com/randy-girard/flynn/host/types"
 	"github.com/randy-girard/flynn/pkg/cluster"
 	hh "github.com/randy-girard/flynn/pkg/httphelper"
+	"github.com/randy-girard/flynn/pkg/overlay"
 )
 
 type Config struct {
@@ -45,6 +47,9 @@ func main() {
 	flag.UintVar(&config.Backend.VNI, "vni", 0, "vxlan network identifier")
 	flag.UintVar(&config.Backend.Port, "port", 0, "vxlan communication port (UDP)")
 	flag.Parse()
+	if err := applyFlannelSubnetEnv(&config); err != nil {
+		log.Fatal(err)
+	}
 
 	// wait for discoverd to come up
 	status, err := cluster.WaitForHostStatus(os.Getenv("EXTERNAL_IP"), func(status *host.HostStatus) bool {
@@ -63,8 +68,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	err = client.Service(serviceName).SetMeta(&discoverd.ServiceMeta{Data: data})
-	if err != nil && !hh.IsObjectExistsError(err) {
+	// Index 0 creates metadata only when it is absent. A later overlay:set
+	// must survive a flannel restart, so "already exists" is success.
+	err = overlay.IgnoreExistingMeta(client.Service(serviceName).SetMeta(&discoverd.ServiceMeta{Data: data}))
+	if err != nil {
 		log.Fatalf("error creating discoverd service metadata: %s", err)
 	}
 
@@ -91,4 +98,23 @@ func main() {
 	if err := syscall.Exec(flanneld, args, os.Environ()); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// applyFlannelSubnetEnv fills unset flags from the release env. Flags win.
+// Empty env leaves flannel's own default, which is 24 on a network wider than /24.
+func applyFlannelSubnetEnv(config *Config) error {
+	if config.SubnetLen == 0 {
+		n, err := overlay.ParseSubnetLen(os.Getenv("SUBNET_LEN"))
+		if err != nil {
+			return err
+		}
+		config.SubnetLen = n
+	}
+	if strings.TrimSpace(config.SubnetMin) == "" {
+		config.SubnetMin = strings.TrimSpace(os.Getenv("SUBNET_MIN"))
+	}
+	if strings.TrimSpace(config.SubnetMax) == "" {
+		config.SubnetMax = strings.TrimSpace(os.Getenv("SUBNET_MAX"))
+	}
+	return nil
 }

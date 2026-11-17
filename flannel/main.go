@@ -27,6 +27,7 @@ import (
 	"github.com/randy-girard/flynn/flannel/subnet"
 	"github.com/randy-girard/flynn/pkg/httpclient"
 	"github.com/randy-girard/flynn/pkg/keepalive"
+	"github.com/randy-girard/flynn/pkg/overlay"
 	"github.com/randy-girard/flynn/pkg/status"
 	"github.com/randy-girard/flynn/pkg/version"
 )
@@ -104,18 +105,16 @@ func writeSubnetFile(sn *backend.SubnetDef) error {
 	return os.Rename(tempFile, opts.subnetFile)
 }
 
-func notifyWebhook(sn *backend.SubnetDef) error {
+func notifyWebhook(sn *backend.SubnetDef, overlayNet string) error {
 	if opts.notifyURL == "" {
 		return nil
 	}
 	net := sn.Net
 	net.IP = net.FirstUsable()
-	data := struct {
-		JobID  string `json:"job_id"`
-		Subnet string `json:"subnet"`
-		MTU    int    `json:"mtu"`
-	}{os.Getenv("FLYNN_JOB_ID"), net.String(), sn.MTU}
-	payload, _ := json.Marshal(data)
+	payload, err := overlay.HostNetworkNotify(os.Getenv("FLYNN_JOB_ID"), net.String(), sn.MTU, overlayNet)
+	if err != nil {
+		return err
+	}
 	res, err := httpclient.PostWithHostAuth(opts.notifyURL, "application/json", bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -348,7 +347,11 @@ func run(be backend.Backend, sm *subnet.SubnetManager, exit chan int) {
 	}
 
 	writeSubnetFile(sn)
-	notifyWebhook(sn)
+	overlayNet := ""
+	if sm != nil && sm.GetConfig() != nil {
+		overlayNet = sm.GetConfig().Network.String()
+	}
+	notifyWebhook(sn, overlayNet)
 
 	if err = httpServer(sm, ipaddr.String(), opts.httpPort); err != nil {
 		err = fmt.Errorf("error starting HTTP server: %s", err)
