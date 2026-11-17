@@ -8,9 +8,13 @@ toc_min_level: 2
 
 `flynn-app.json` at the repository root tells Flynn how to provision an app:
 addons, env, formation, routes, and one-shot scripts. The filename is
-`flynn-app.json`. Container image builds use a separate `flynn.yml` (ignored
-on the buildpack stack). A repository may contain both. Ongoing migrations
-stay in the Procfile `release` process.
+`flynn-app.json`. Container image builds use a separate `flynn.yml`. A
+heroku-24 push that contains `flynn.yml` fails before the build and asks for
+the container stack. A repository may contain both; `flynn-app.json` owns
+provisioning and `flynn.yml` setup is ignored. Buildpack migrations stay in
+the Procfile `release` process. Container migrations are `flynn.yml`
+`release`, which replaces a Procfile `release` line while `flynn.yml` is the
+manifest.
 
 ## When Flynn reads the file
 

@@ -1,6 +1,7 @@
 package dockerimage
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -163,13 +164,33 @@ func ListenPortFromArtifact(artifact *ct.Artifact) int {
 }
 
 // ArtifactMeta returns metadata to attach when registering an imported image.
+// Entrypoint and CMD are stored separately so a later flynn.yml can replace
+// CMD and keep ENTRYPOINT. docker:push still starts from the combined Args.
 func ArtifactMeta(build *BuildResult) map[string]string {
 	if build == nil {
 		return nil
 	}
-	return map[string]string{
+	meta := map[string]string{
 		MetaListenPort: strconv.Itoa(build.ListenPort),
 	}
+	if build.Config == nil {
+		return meta
+	}
+	ep := build.Config.Config.Entrypoint
+	if ep == nil {
+		ep = []string{}
+	}
+	cmd := build.Config.Config.Cmd
+	if cmd == nil {
+		cmd = []string{}
+	}
+	if raw, err := json.Marshal(ep); err == nil {
+		meta[MetaEntrypoint] = string(raw)
+	}
+	if raw, err := json.Marshal(cmd); err == nil {
+		meta[MetaCmd] = string(raw)
+	}
+	return meta
 }
 
 // BuildResultFromInspect constructs a BuildResult from docker inspect output.

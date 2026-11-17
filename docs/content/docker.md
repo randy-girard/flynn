@@ -52,8 +52,105 @@ $ flynn stack:set heroku-24
 
 Optional configuration:
 
-- `flynn env:set DOCKERFILE=path/to/Dockerfile` — use a non-default Dockerfile
+- `flynn env:set DOCKERFILE=path/to/Dockerfile` — use a non-default Dockerfile.
+  The build context stays the repository root.
 - `flynn limit:set dockerbuilder memory=4GB` — raise build memory for large images (cluster controller key; see [Apps — Limits](apps.md#limits))
+
+`flynn docker:push` does not read `flynn.yml`. A missing `flynn.yml` keeps the
+single root `Dockerfile` (or `DOCKERFILE`) and one image.
+
+## flynn.yml
+
+A container-stack git push reads `flynn.yml` at the repository root. This is
+the container manifest. Provisioning of an existing app still belongs to
+[`flynn-app.json`](app-manifest.md). `flynn.yml` `setup` runs only on the
+first untouched deploy. The next push does not create another database. When
+the repo also has `flynn-app.json`, that file owns provisioning and the push
+prints `flynn.yml setup ignored`.
+
+A heroku-24 app whose repo contains `flynn.yml` fails before the buildpack
+build:
+
+```
+flynn.yml requires the container stack (flynn stack:set container)
+```
+
+```yaml
+setup:
+  addons:
+    - plan: heroku-postgresql
+      as: DATABASE
+    - type: redis
+  config:
+    S3_BUCKET: my-example-bucket
+build:
+  docker:
+    web: Dockerfile
+    worker:
+      dockerfile: worker/Dockerfile
+      target: production
+    release:
+      dockerfile: Dockerfile
+      target: builder
+  config:
+    RAILS_ENV: development
+    FOO: bar
+release:
+  image: release
+  command:
+    - ./deployment-tasks.sh
+run:
+  web: bundle exec puma -C config/puma.rb
+  worker: python myworker.py
+  asset-syncer:
+    command:
+      - python
+      - asset-syncer.py
+    image: worker
+```
+
+`build.docker` is required. A value is a Dockerfile path, or
+`{dockerfile, target}`. The path must stay inside the repo. `..`, an absolute
+path, and a symlink that leaves the repo fail before the build. The build
+context is the directory that contains that Dockerfile. `target` builds only
+that stage. Two keys with the same Dockerfile and target share one image.
+One `flynn.yml` may build at most 8 images. The file itself must be 1 MiB or
+smaller.
+
+`build.config` values are strings. A number or boolean is rejected. Those
+values are Docker build args for every image. They are not copied onto the
+app env, and the app's runtime env is not passed into the build.
+
+`setup.addons` `plan` or `type` runs on that first deploy. `heroku-postgresql`
+is postgres, `heroku-redis` and `openredis` are redis, `mongolab` and
+`mongodb` are mongodb, and `jawsdb`, `cleardb`, and `jawsdb-maria` are mysql.
+The tier after a colon is ignored (`heroku-postgresql:mini` is still
+postgres). Any other plan or type must be a name from `flynn addons:types`.
+An unknown name fails before the build. `as` is the attachment name.
+`options.runtime` defaults to `small` when the add-on has runtimes.
+`setup.config` is string config on that same first deploy. It cannot repeat
+an add-on URL such as `DATABASE_URL`, `REDIS_URL`, or `<as>_URL`.
+
+`run` is optional. When it is omitted, each built image except `release`
+becomes a process of the same name and uses the image `ENTRYPOINT` and `CMD`.
+A string is a shell command (`sh -c`) unless the image entrypoint already
+consumes the command. An object has `command` (an argv, required) and
+`image` (optional). A missing image fails before the build. `run` replaces
+`CMD`. It does not change scale. `web` listens on `PORT` (default 8080) and
+is registered for the included route. Other process types are not given that
+service.
+
+`release.command` is an argv, not a shell string. It runs once after the
+images are imported and before traffic moves, with the app runtime env,
+including add-on URLs. Its stdout is on the git push. `release.image`
+selects the image. The default is `web` when that image was built, otherwise
+the only built image. When `release` is omitted, no release command runs. A
+Procfile `release` line is ignored while `flynn.yml` is the manifest. A
+`build.docker` key named `release` is that one-shot image and is not scaled.
+
+One image keeps a single artifact on the release. More than one built image
+sets an artifact id on each process. Scaling `worker` starts the worker
+image. The release still lists every image so blob GC sees them.
 
 ## Routing
 

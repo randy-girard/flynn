@@ -338,6 +338,7 @@ Options:
 	}
 
 	buildInput = nil
+	resetFlynnTree()
 	skipDefaultScale = false
 	afterDeploy = nil
 	if err := prepareReceiveManifest(client, app, releaseEnv); err != nil {
@@ -365,11 +366,18 @@ Options:
 	if err != nil {
 		return err
 	}
+	tree, err := flynnTree()
+	if err != nil {
+		return err
+	}
+	if err := rejectFlynnYml(stack, flynnYmlPresent(tree)); err != nil {
+		return err
+	}
 
 	var deployErr error
 	switch stack {
 	case stackContainer:
-		deployErr = deployContainer(client, app, prevRelease, args, releaseEnv, meta)
+		deployErr = deployContainer(client, app, prevRelease, args, releaseEnv, meta, env)
 	default:
 		deployErr = deployBuildpack(client, app, prevRelease, args, releaseEnv, meta, stack)
 	}
@@ -589,8 +597,15 @@ func deployBuildpack(client controller.Client, app *ct.App, prevRelease *ct.Rele
 	return finishDeploy(client, app, prevRelease, release, procs, placeholderID)
 }
 
-func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string) error {
+func deployContainer(client controller.Client, app *ct.App, prevRelease *ct.Release, args *docopt.Args, releaseEnv map[string]string, meta map[string]string, pushEnv map[string]string) error {
 	scrubReleaseEnv(releaseEnv)
+	tree, err := flynnTree()
+	if err != nil {
+		return err
+	}
+	if flynnYmlPresent(tree) {
+		return deployContainerManifest(client, app, prevRelease, args, releaseEnv, meta, pushEnv, tree)
+	}
 	dockerbuilderImageID := os.Getenv("DOCKERBUILDER_24_IMAGE_ID")
 	if dockerbuilderImageID == "" {
 		return fmt.Errorf("DOCKERBUILDER_24_IMAGE_ID not configured on gitreceive")
