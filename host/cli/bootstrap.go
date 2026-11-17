@@ -394,13 +394,10 @@ WHERE release_id IN (SELECT release_id FROM apps WHERE name = 'logaggregator' AN
 		}
 	}
 
-	// ensure flannel has NETWORK set if required
-	if network := os.Getenv("FLANNEL_NETWORK"); network != "" {
-		flannelApp.Release.Env["NETWORK"] = network
-		sqlBuf.WriteString(fmt.Sprintf(`
-UPDATE releases SET env = pg_temp.json_object_update_key(env, 'NETWORK', '%s')
-WHERE release_id = (SELECT release_id FROM apps WHERE name = 'flannel' AND deleted_at IS NULL);
-		`, network))
+	// Install-time flannel settings. Empty variables leave the release alone.
+	// Discoverd metadata that already exists is not rewritten.
+	if err := applyFlannelRestoreEnv(flannelApp, sqlBuf); err != nil {
+		return err
 	}
 
 	// ensure controller / gitreceive have tmp volumes

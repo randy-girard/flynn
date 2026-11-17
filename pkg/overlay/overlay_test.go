@@ -322,6 +322,42 @@ func TestExecuteShrinkWritesMetaFirst(t *testing.T) {
 	}
 }
 
+func TestSubnetLenAndExistingMetaAndNotify(t *testing.T) {
+	n, err := ParseSubnetLen("")
+	if err != nil || n != 0 {
+		t.Fatalf("empty = %d %v", n, err)
+	}
+	n, err = ParseSubnetLen("24")
+	if err != nil || n != 24 {
+		t.Fatalf("24 = %d %v", n, err)
+	}
+	if _, err := ParseSubnetLen("0"); err == nil {
+		t.Fatal("0 must be rejected")
+	}
+	if _, err := ParseSubnetLen("nope"); err == nil {
+		t.Fatal("text must be rejected")
+	}
+	if err := IgnoreExistingMeta(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := IgnoreExistingMeta(hh.ObjectExistsErr("already")); err != nil {
+		t.Fatal("existing flannel metadata must be left alone")
+	}
+	if err := IgnoreExistingMeta(errors.New("boom")); err == nil {
+		t.Fatal("other errors must surface")
+	}
+	body, err := HostNetworkNotify("job-1", "100.100.9.1/24", 1450, "100.64.0.0/10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, want := range []string{`"job_id":"job-1"`, `"subnet":"100.100.9.1/24"`, `"mtu":1450`, `"overlay":"100.64.0.0/10"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("notify missing %s: %s", want, text)
+		}
+	}
+}
+
 func TestExecuteRepeatIsNoOpUnlessHostBehind(t *testing.T) {
 	store := &memStore{data: defaultMeta(), index: 9}
 	hosts := hosts3()

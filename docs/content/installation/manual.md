@@ -212,6 +212,8 @@ Non-interactive bootstrap requires `--admin-email` and `--admin-password`. On a 
 
 A second region is a separate install with its own discovery token, Raft voters, overlay, `CLUSTER_DOMAIN`, and controller. `flynn-host init` with this cluster's discovery token joins this cluster. Do not point `--peer-ips` or `firewall:peer:add` at a distant site. After both clusters exist, `flynn-host region:link` on each one records the other. See [Production — Regions](../production.html.md#regions).
 
+`FLANNEL_NETWORK` sets the overlay CIDR for a new cluster. Empty uses `100.100.0.0/16`. `FLANNEL_SUBNET_LEN` sets the per-host prefix (empty stays flannel's default, 24 on a network wider than `/24`). `FLANNEL_SUBNET_MIN` and `FLANNEL_SUBNET_MAX` are optional bounds. These apply only when flannel metadata does not exist yet. Grow a running cluster with `flynn-host overlay:set`. See [Production — Overlay](../production.html.md#overlay).
+
 Then run `sudo flynn-host cli-add-command` on a host and `flynn login` on your laptop.
 
 If bootstrap fails, confirm traffic can flow on `flannel.1`, `flynnbr0`, and

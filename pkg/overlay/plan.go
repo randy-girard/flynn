@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/randy-girard/flynn/pkg/hostfw"
@@ -640,6 +641,44 @@ func ipInside(cidr, ip string) bool {
 		return false
 	}
 	return n.Contains(addr)
+}
+
+// ParseSubnetLen reads the flannel SUBNET_LEN env. Empty means unset.
+func ParseSubnetLen(raw string) (uint, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.ParseUint(raw, 10, 32)
+	if err != nil || n == 0 || n >= 32 {
+		return 0, fmt.Errorf("invalid SUBNET_LEN %q", raw)
+	}
+	return uint(n), nil
+}
+
+// IgnoreExistingMeta keeps the wrapper from overwriting discoverd metadata
+// that overlay:set already updated. A flannel restart must not revert it.
+func IgnoreExistingMeta(err error) error {
+	if err == nil || hh.IsObjectExistsError(err) {
+		return nil
+	}
+	return err
+}
+
+// HostNetworkNotify is the POST /host/network body. Overlay is included so a
+// new host does not infer a /16 inside a wider network.
+func HostNetworkNotify(jobID, subnet string, mtu int, overlayCIDR string) ([]byte, error) {
+	return json.Marshal(struct {
+		JobID   string `json:"job_id"`
+		Subnet  string `json:"subnet"`
+		MTU     int    `json:"mtu"`
+		Overlay string `json:"overlay,omitempty"`
+	}{
+		JobID:   jobID,
+		Subnet:  subnet,
+		MTU:     mtu,
+		Overlay: strings.TrimSpace(overlayCIDR),
+	})
 }
 
 func canonicalCIDR(cidr string) string {

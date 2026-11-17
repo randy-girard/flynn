@@ -81,6 +81,9 @@
         "DISCOVERD": "none",
         "BACKEND": "{{ getenv \"FLANNEL_BACKEND\" }}",
         "NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}",
+        "SUBNET_LEN": "{{ getenv \"FLANNEL_SUBNET_LEN\" }}",
+        "SUBNET_MIN": "{{ getenv \"FLANNEL_SUBNET_MIN\" }}",
+        "SUBNET_MAX": "{{ getenv \"FLANNEL_SUBNET_MAX\" }}",
         "FLYNN_HOST_AUTH_KEY": "{{ (index .StepData \"host-key\").Data }}",
         "DISCOVERD_AUTH_KEY": "{{ (index .StepData \"discoverd-key\").Data }}"
       },

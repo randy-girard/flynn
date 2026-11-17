@@ -73,6 +73,32 @@ func TestRouterAndGitreceiveKeepControllerKey(t *testing.T) {
 	}
 }
 
+func TestFlannelReleaseReadsSubnetEnv(t *testing.T) {
+	data, err := os.ReadFile("manifest_template.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(data)
+	i := strings.Index(s, `"name": "flannel"`)
+	if i < 0 {
+		t.Fatal("missing flannel app")
+	}
+	rest := s[i:]
+	if j := strings.Index(rest[len(`"name": "flannel"`):], `"name":`); j >= 0 {
+		rest = rest[:len(`"name": "flannel"`)+j]
+	}
+	for _, key := range []string{
+		`"NETWORK": "{{ getenv \"FLANNEL_NETWORK\" }}"`,
+		`"SUBNET_LEN": "{{ getenv \"FLANNEL_SUBNET_LEN\" }}"`,
+		`"SUBNET_MIN": "{{ getenv \"FLANNEL_SUBNET_MIN\" }}"`,
+		`"SUBNET_MAX": "{{ getenv \"FLANNEL_SUBNET_MAX\" }}"`,
+	} {
+		if !strings.Contains(rest, key) {
+			t.Fatalf("flannel release env missing %s", key)
+		}
+	}
+}
+
 func TestManifestGeneratesAndInjectsDiscoverdAuthKey(t *testing.T) {
 	data, err := os.ReadFile("manifest_template.json")
 	if err != nil {

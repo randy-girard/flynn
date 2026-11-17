@@ -380,6 +380,9 @@ type NetworkConfig struct {
 	Subnet    string   `json:"subnet"`
 	MTU       int      `json:"mtu"`
 	Resolvers []string `json:"resolvers"`
+	// Overlay is the live flannel network, when the host has been told it.
+	// Empty means NAT still infers a /16 from Subnet, which matches a default install.
+	Overlay string `json:"overlay,omitempty"`
 }
 
 type DiscoverdConfig struct {
