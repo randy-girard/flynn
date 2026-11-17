@@ -48,15 +48,21 @@ func oneOffJobTrusted(app *ct.App, tok *authorizer.Token) bool {
 	return tok != nil && tok.HasClusterAdmin()
 }
 
-func stripReservedJobMeta(meta map[string]string) {
+// stripReserved removes every reserved Flynn meta key. App and job meta
+// sanitizers share this one list (reservedAppMetaKey).
+func stripReserved(meta map[string]string) {
 	for k := range meta {
-		if reservedJobMetaKey(k) {
+		if reservedAppMetaKey(k) {
 			delete(meta, k)
 		}
 	}
 }
 
-func reservedJobMetaKey(k string) bool {
+func stripReservedJobMeta(meta map[string]string) { stripReserved(meta) }
+
+// reservedAppMetaKey reports whether k is a host-trust or plugin marker that
+// only a cluster-admin credential may set on an app or job.
+func reservedAppMetaKey(k string) bool {
 	switch k {
 	case metaSystemApp, metaDatastore, metaPlugin:
 		return true

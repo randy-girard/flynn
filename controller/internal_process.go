@@ -52,7 +52,7 @@ func stripSystemAppMetaUnlessAdmin(ctx context.Context, meta map[string]string) 
 	if authz.SystemAppAllowed(authz.TokenFromContext(ctx), true) {
 		return
 	}
-	delete(meta, metaSystemApp)
+	stripReserved(meta)
 }
 
 func sanitizeAppMetaUpdate(ctx context.Context, existing *ct.App, meta interface{}) interface{} {
@@ -62,16 +62,41 @@ func sanitizeAppMetaUpdate(ctx context.Context, existing *ct.App, meta interface
 	}
 	m := metaToStringMap(meta)
 	if m == nil {
-		if existing != nil && existing.System() {
-			return map[string]string{metaSystemApp: "true"}
+		// Non-string values: still drop reserved keys so they cannot bypass.
+		if raw, ok := meta.(map[string]interface{}); ok {
+			out := make(map[string]interface{}, len(raw))
+			for k, v := range raw {
+				if !reservedAppMetaKey(k) {
+					out[k] = v
+				}
+			}
+			return out
 		}
-		return meta
+		m = map[string]string{}
+		if existing == nil || len(reservedMeta(existing)) == 0 {
+			return meta
+		}
 	}
-	delete(m, metaSystemApp)
-	if existing != nil && existing.System() {
-		m[metaSystemApp] = "true"
+	stripReserved(m)
+	for k, v := range reservedMeta(existing) {
+		m[k] = v
 	}
 	return m
+}
+
+// reservedMeta returns the reserved keys an app already has, which a tenant
+// update must not remove.
+func reservedMeta(app *ct.App) map[string]string {
+	out := map[string]string{}
+	if app == nil {
+		return out
+	}
+	for k, v := range app.Meta {
+		if reservedAppMetaKey(k) {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func metaToStringMap(v interface{}) map[string]string {

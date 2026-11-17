@@ -302,6 +302,74 @@ func TestStripSystemAppMetaUnlessAdmin(t *testing.T) {
 	}
 }
 
+func tenantCtx() context.Context {
+	return context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{
+		AppGrants: []authorizer.AppGrant{{AppID: "app-1", Permissions: []string{"app:write"}}},
+	})
+}
+
+func TestStripSystemAppMetaRemovesPluginAndDatastore(t *testing.T) {
+	meta := map[string]string{"flynn-plugin": "true", "flynn-datastore": "true", "keep": "yes"}
+	stripSystemAppMetaUnlessAdmin(tenantCtx(), meta)
+	if _, ok := meta["flynn-plugin"]; ok {
+		t.Fatal("tenant must not set flynn-plugin")
+	}
+	if _, ok := meta["flynn-datastore"]; ok {
+		t.Fatal("tenant must not set flynn-datastore")
+	}
+	if meta["keep"] != "yes" {
+		t.Fatalf("meta = %v", meta)
+	}
+	admin := context.WithValue(context.Background(), authz.TokenContextKey, &authorizer.Token{ClusterKey: true})
+	m := map[string]string{"flynn-plugin": "true"}
+	stripSystemAppMetaUnlessAdmin(admin, m)
+	if m["flynn-plugin"] != "true" {
+		t.Fatal("cluster key may set flynn-plugin")
+	}
+}
+
+func TestSanitizeAppMetaUpdateRemovesPlugin(t *testing.T) {
+	got := sanitizeAppMetaUpdate(tenantCtx(), nil, map[string]interface{}{
+		"flynn-plugin": "true", "flynn-datastore": "true", "flynn-controller.x": "1", "keep": "yes",
+	}).(map[string]string)
+	if len(got) != 1 || got["keep"] != "yes" {
+		t.Fatalf("meta = %v", got)
+	}
+	// non-string values must not bypass the sanitizer
+	raw := sanitizeAppMetaUpdate(tenantCtx(), nil, map[string]interface{}{"flynn-plugin": "true", "n": 1})
+	if m, ok := raw.(map[string]interface{}); !ok || m["flynn-plugin"] != nil {
+		t.Fatalf("meta = %v", raw)
+	}
+	// existing reserved keys are preserved on update
+	existing := &ct.App{Meta: map[string]string{"flynn-plugin": "true"}}
+	got = sanitizeAppMetaUpdate(tenantCtx(), existing, map[string]string{"keep": "yes"}).(map[string]string)
+	if got["flynn-plugin"] != "true" || got["keep"] != "yes" {
+		t.Fatalf("meta = %v", got)
+	}
+}
+
+func TestAppMetaSanitizersUseReservedKeys(t *testing.T) {
+	for _, k := range []string{metaSystemApp, metaDatastore, metaPlugin, metaControllerPrefix + "app_name"} {
+		if !reservedAppMetaKey(k) {
+			t.Errorf("%s must be reserved", k)
+		}
+		meta := map[string]string{k: "x"}
+		stripSystemAppMetaUnlessAdmin(tenantCtx(), meta)
+		if len(meta) != 0 {
+			t.Errorf("create sanitizer kept %s", k)
+		}
+		out := sanitizeAppMetaUpdate(tenantCtx(), nil, map[string]string{k: "x"}).(map[string]string)
+		if len(out) != 0 {
+			t.Errorf("update sanitizer kept %s", k)
+		}
+		jm := map[string]string{k: "x"}
+		stripReservedJobMeta(jm)
+		if len(jm) != 0 {
+			t.Errorf("job sanitizer kept %s", k)
+		}
+	}
+}
+
 func TestRedactLogLineOmitsReleaseEnv(t *testing.T) {
 	rel := &ct.Release{
 		Env: map[string]string{
