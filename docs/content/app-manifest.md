@@ -42,7 +42,9 @@ true: a release exists (other than the pipeline preview seed release), a
 resource is attached, a route exists besides the included HTTP route and the
 preview route, strategy is not `all-at-once`, deploy timeout is not 120,
 `protected` is true, meta contains anything other than controller-managed
-keys, or `meta["flynn-app.json"]` is `applied`. Connecting a GitHub
+keys, or `meta["flynn-app.json"]` is `applied`. A blueprint environment is
+the exception: `meta["flynn-blueprint"]` is `pending`, and the new databases
+it created for that app do not skip the file. Connecting a GitHub
 repository does not skip the file. A normal new app uses the root manifest.
 `environments.preview` applies only when the app is a preview.
 The skip line is:

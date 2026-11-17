@@ -38,6 +38,9 @@ const (
 	MetaProtected = "protected"
 	// MetaDescription stores the manifest description.
 	MetaDescription = "description"
+	// MetaBlueprint is pending while a blueprint environment created this app
+	// and its new databases. Those resources do not make the app configured.
+	MetaBlueprint = "flynn-blueprint"
 	// MetaPreviewSeed marks the env release a pipeline writes before the
 	// first preview receive. That release does not make the app configured.
 	MetaPreviewSeed = "flynn-pipeline.preview-seed"

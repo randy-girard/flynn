@@ -173,6 +173,17 @@ func TestDecide(t *testing.T) {
 	if Decide(routed, true) != ActionSkip {
 		t.Fatal("extra route skips")
 	}
+	blueprintDB := base()
+	blueprintDB.Resources = 1
+	blueprintDB.App.Meta["flynn-blueprint"] = "pending"
+	if Decide(blueprintDB, true) != ActionApply {
+		t.Fatal("a blueprint's new database must not skip flynn-app.json")
+	}
+	userDB := base()
+	userDB.Resources = 1
+	if Decide(userDB, true) != ActionSkip {
+		t.Fatal("a database attached by hand still skips")
+	}
 	if SkipLine != "-----> flynn-app.json present, app already configured; skipping" {
 		t.Fatal(SkipLine)
 	}

@@ -49,7 +49,12 @@ func Decide(st AppState, filePresent bool) Action {
 }
 
 func configured(st AppState) bool {
-	if st.Resources > 0 || st.ExtraRoutes > 0 || st.Scaled {
+	if st.ExtraRoutes > 0 || st.Scaled {
+		return true
+	}
+	// A blueprint environment creates a new database on the new app. That
+	// resource must not skip flynn-app.json. A database attached by hand still does.
+	if st.Resources > 0 && metaValue(st.App, MetaBlueprint) != StatusPending {
 		return true
 	}
 	if releaseBlocks(st.Head) {
@@ -99,7 +104,8 @@ func ManagedMeta(key string) bool {
 		MetaPreviewRoute,
 		MetaPreviewBranch,
 		MetaPreviewSHA,
-		"flynn-pipeline.preview-pr":
+		"flynn-pipeline.preview-pr",
+		MetaBlueprint:
 		return true
 	}
 	return key == MetaStatus || strings.HasPrefix(key, MetaStatus+".")
