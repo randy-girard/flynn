@@ -366,6 +366,49 @@ func TestProvisionVolumeCopiesSize(t *testing.T) {
 	}
 }
 
+func TestJobConfigUsesProcessArtifact(t *testing.T) {
+	web := flynnArtifact(t, map[string]*ct.ImageEntrypoint{
+		"_default": {Args: []string{"/web"}},
+	}, []*ct.ImageLayer{{ID: "layer-web", Type: ct.ImageLayerTypeSquashfs, Length: 1}})
+	web.ID = "art-web"
+	worker := flynnArtifact(t, map[string]*ct.ImageEntrypoint{
+		"_default": {Args: []string{"/worker"}},
+	}, []*ct.ImageLayer{{ID: "layer-worker", Type: ct.ImageLayerTypeSquashfs, Length: 1}})
+	worker.ID = "art-worker"
+	f := &ct.ExpandedFormation{
+		App: &ct.App{ID: "app", Name: "demo", Meta: map[string]string{}},
+		Release: &ct.Release{
+			ID:          "rel",
+			ArtifactIDs: []string{"art-web", "art-worker"},
+			Processes: map[string]ct.ProcessType{
+				"web":    {Artifact: "art-web", Args: []string{"/web"}},
+				"worker": {Artifact: "art-worker", Args: []string{"/worker"}},
+			},
+		},
+		Artifacts: []*ct.Artifact{web, worker},
+	}
+	job := JobConfig(f, "worker", "host", "uuid")
+	if len(job.Mountspecs) != 1 || job.Mountspecs[0].ID != "layer-worker" {
+		t.Fatalf("worker mounts %#v", job.Mountspecs)
+	}
+	if strings.Join(job.Config.Args, " ") != "/worker" {
+		t.Fatalf("args %v", job.Config.Args)
+	}
+	f.Release.Processes["worker"] = ct.ProcessType{Artifact: "missing", Args: []string{"/worker"}}
+	missing := JobConfig(f, "worker", "host", "uuid")
+	if len(missing.Mountspecs) != 0 {
+		t.Fatalf("missing artifact must not fall back to every image: %#v", missing.Mountspecs)
+	}
+	ids := JobArtifactIDs(f.Release, "web", nil)
+	if len(ids) != 1 || ids[0] != "art-web" {
+		t.Fatalf("ids %#v", ids)
+	}
+	explicit := JobArtifactIDs(f.Release, "worker", []string{"chosen"})
+	if len(explicit) != 1 || explicit[0] != "chosen" {
+		t.Fatalf("explicit %#v", explicit)
+	}
+}
+
 func TestProvisionVolumeZeroSizeIsUnset(t *testing.T) {
 	h := &fakeVolumeCreator{}
 	job := &host.Job{Metadata: map[string]string{}}

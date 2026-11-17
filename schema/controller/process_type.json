@@ -42,6 +42,10 @@
       "description": "Procfile command or Docker container command shown in the dashboard",
       "type": "string"
     },
+    "artifact": {
+      "description": "Image artifact to run when the release lists more than one. Empty uses every artifact on the release.",
+      "type": "string"
+    },
     "omni": {
       "type": "boolean"
     }

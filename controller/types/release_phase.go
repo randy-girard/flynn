@@ -53,7 +53,7 @@ func ReleasePhaseNewJob(release *Release) *NewJob {
 	if !ok || len(proc.Args) == 0 {
 		return nil
 	}
-	return &NewJob{
+	job := &NewJob{
 		ReleaseID:  release.ID,
 		ReleaseEnv: true,
 		Type:       ProcessTypeRelease,
@@ -62,6 +62,10 @@ func ReleasePhaseNewJob(release *Release) *NewJob {
 		Profiles:   proc.Profiles,
 		MountsFrom: ProcessTypeRelease,
 	}
+	if proc.Artifact != "" {
+		job.ArtifactIDs = []string{proc.Artifact}
+	}
+	return job
 }
 
 // ReleasePhaseCompleted reports a successful `release` job for this release

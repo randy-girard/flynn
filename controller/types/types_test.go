@@ -579,6 +579,14 @@ func TestReleasePhaseNewJob(t *testing.T) {
 	if len(job.Args) != 3 || job.Args[2] != "release" {
 		t.Fatalf("args = %#v", job.Args)
 	}
+	if len(job.ArtifactIDs) != 0 {
+		t.Fatalf("empty process artifact must keep the release artifacts, got %#v", job.ArtifactIDs)
+	}
+	rel.Processes[ProcessTypeRelease] = ProcessType{Args: []string{"./deployment-tasks.sh"}, Artifact: "art-rel"}
+	picked := ReleasePhaseNewJob(rel)
+	if picked == nil || len(picked.ArtifactIDs) != 1 || picked.ArtifactIDs[0] != "art-rel" {
+		t.Fatalf("release image %#v", picked)
+	}
 }
 
 func TestReleasePhaseCompleted(t *testing.T) {

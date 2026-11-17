@@ -19,8 +19,9 @@ import (
 func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.Job {
 	t := f.Release.Processes[name]
 
+	artifacts := processArtifacts(f, name)
 	var entrypoint ct.ImageEntrypoint
-	if e := GetEntrypoint(f.Artifacts, name); e != nil {
+	if e := GetEntrypoint(artifacts, name); e != nil {
 		entrypoint = *e
 	}
 
@@ -84,7 +85,7 @@ func JobConfig(f *ct.ExpandedFormation, name, hostID string, uuid string) *host.
 		job.Config.Args = append(t.DeprecatedEntrypoint, t.DeprecatedCmd...)
 	}
 
-	SetupMountspecs(job, f.Artifacts)
+	SetupMountspecs(job, artifacts)
 	if f.App.Meta["flynn-system-app"] == "true" {
 		job.Partition = "system"
 	}
@@ -128,6 +129,45 @@ func stringSliceEqual(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// processArtifacts is the rootfs for one process. An empty process artifact
+// uses every image on the release. A set id that is not in that list mounts
+// nothing, so a worker cannot fall back onto the web image.
+func processArtifacts(f *ct.ExpandedFormation, name string) []*ct.Artifact {
+	if f == nil {
+		return nil
+	}
+	if f.Release != nil {
+		if proc, ok := f.Release.Processes[name]; ok && proc.Artifact != "" {
+			var out []*ct.Artifact
+			for _, art := range f.Artifacts {
+				if art != nil && art.ID == proc.Artifact {
+					out = append(out, art)
+				}
+			}
+			return out
+		}
+	}
+	return f.Artifacts
+}
+
+// JobArtifactIDs selects the images for a one-off job. Explicit ids win.
+// Otherwise a process artifact id is that one image, and an empty process
+// artifact is every image on the release.
+func JobArtifactIDs(release *ct.Release, procType string, explicit []string) []string {
+	if len(explicit) > 0 {
+		return explicit
+	}
+	if release != nil && procType != "" {
+		if proc, ok := release.Processes[procType]; ok && proc.Artifact != "" {
+			return []string{proc.Artifact}
+		}
+	}
+	if release == nil {
+		return nil
+	}
+	return release.ArtifactIDs
 }
 
 // GetEntrypoint returns an image entrypoint for a process type from a list of

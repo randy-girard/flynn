@@ -556,7 +556,10 @@ type ProcessType struct {
 	// Command is the Procfile line (git/buildpack) or the container command
 	// (docker push / Dockerfile). Args remain the runtime argv (slugrunner
 	// `/runner/init start <type>`, or the image entrypoint+cmd).
-	Command           string             `json:"command,omitempty"`
+	Command string `json:"command,omitempty"`
+	// Artifact is the image to start when a release lists more than one.
+	// Empty keeps today's behavior: the job rootfs is every artifact on the release.
+	Artifact          string             `json:"artifact,omitempty"`
 	Env               map[string]string  `json:"env,omitempty"`
 	Ports             []Port             `json:"ports,omitempty"`
 	Volumes           []VolumeReq        `json:"volumes,omitempty"`

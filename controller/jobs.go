@@ -243,12 +243,10 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		respondWithError(w, err)
 		return
 	}
-	var artifactIDs []string
-	if len(newJob.ArtifactIDs) > 0 {
-		artifactIDs = newJob.ArtifactIDs
-	} else if len(release.ArtifactIDs) > 0 {
-		artifactIDs = release.ArtifactIDs
-	} else {
+	attach := strings.Contains(req.Header.Get("Upgrade"), "flynn-attach/0")
+	procType := ct.NewJobProcessType(newJob, attach)
+	artifactIDs := utils.JobArtifactIDs(release, procType, newJob.ArtifactIDs)
+	if len(artifactIDs) == 0 {
 		httphelper.ValidationError(w, "release.ArtifactIDs", "cannot be empty")
 		return
 	}
@@ -268,8 +266,6 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 		entrypoint = *e
 	}
 
-	attach := strings.Contains(req.Header.Get("Upgrade"), "flynn-attach/0")
-
 	hosts, err := c.clusterClient.Hosts()
 	if err != nil {
 		respondWithError(w, err)
@@ -284,7 +280,6 @@ func (c *controllerAPI) RunJob(ctx context.Context, w http.ResponseWriter, req *
 	uuid := random.UUID()
 	hostID := client.ID()
 	id := cluster.GenerateJobID(hostID, uuid)
-	procType := ct.NewJobProcessType(newJob, attach)
 	name := ""
 	if existing, err := c.jobRepo.List(app.ID); err == nil {
 		var used []string
@@ -476,10 +471,8 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	if err := releaseOwnedByApp(release, app); err != nil {
 		return nil, err
 	}
-	artifactIDs := newJob.ArtifactIDs
-	if len(artifactIDs) == 0 {
-		artifactIDs = release.ArtifactIDs
-	}
+	procType := ct.NewJobProcessType(*newJob, false)
+	artifactIDs := utils.JobArtifactIDs(release, procType, newJob.ArtifactIDs)
 	if len(artifactIDs) == 0 {
 		return nil, ct.ValidationError{Field: "release.ArtifactIDs", Message: "cannot be empty"}
 	}
@@ -506,7 +499,6 @@ func (c *controllerAPI) startDetachedJob(app *ct.App, newJob *ct.NewJob) (*ct.Jo
 	uuid := random.UUID()
 	hostID := client.ID()
 	id := cluster.GenerateJobID(hostID, uuid)
-	procType := ct.NewJobProcessType(*newJob, false)
 	env := make(map[string]string, len(entrypoint.Env)+len(release.Env)+len(newJob.Env)+4)
 	env["FLYNN_APP_ID"] = app.ID
 	env["FLYNN_RELEASE_ID"] = release.ID
