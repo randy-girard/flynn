@@ -335,8 +335,11 @@ not create an app here and label it with the other region. If the laptop has
 no `~/.flynnrc` entry and login for that domain, run `flynn cluster:add` and
 `flynn login`. The controller does not store that password.
 
-The dashboard shell lists this cluster and the links on every page. Choosing
-one opens that cluster's dashboard. The app list is that cluster's apps, not
+The dashboard shell lists this cluster and the links on every page. With one
+cluster the region is text, not a menu. With a link, the region is a menu:
+the name, and under it either "This cluster" or the other dashboard's host.
+Choosing a link opens that cluster's dashboard. The create-app region control
+works the same way. The app list is that cluster's apps, not
 a merge. The cookie stays on that origin. No account there means that
 cluster's login. This cluster does not provision the user.
 
