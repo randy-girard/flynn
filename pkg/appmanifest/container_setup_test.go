@@ -63,6 +63,35 @@ func TestContainerSetupResumesPendingAddon(t *testing.T) {
 	}
 }
 
+func TestContainerSetupAppliesAfterStackRelease(t *testing.T) {
+	backend := newSetupBackend()
+	backend.head = &ct.Release{ID: "stack", Env: map[string]string{"FLYNN_STACK": "container"}}
+	ap := &Applier{b: backend, Catalog: setupCatalog(), Runtimes: dbruntime.BuiltinCatalog(), Log: ioDiscard()}
+	env, err := ap.ApplyContainerSetup("app", []ContainerAddon{{Type: "postgres", As: "DATABASE"}}, map[string]string{"S3_BUCKET": "bucket"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backend.provisions != 1 {
+		t.Fatalf("stack release provisions %d", backend.provisions)
+	}
+	if env["DATABASE_URL"] != "postgres://db" || env["S3_BUCKET"] != "bucket" {
+		t.Fatalf("env %#v", env)
+	}
+	coded := newSetupBackend()
+	coded.head = &ct.Release{
+		ID:        "code",
+		Env:       map[string]string{"FLYNN_STACK": "container"},
+		Processes: map[string]ct.ProcessType{"web": {}},
+	}
+	ap = &Applier{b: coded, Catalog: setupCatalog(), Runtimes: dbruntime.BuiltinCatalog(), Log: ioDiscard()}
+	if _, err := ap.ApplyContainerSetup("app", []ContainerAddon{{Type: "postgres", As: "DATABASE"}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if coded.provisions != 0 {
+		t.Fatalf("code release provisions %d", coded.provisions)
+	}
+}
+
 func TestContainerSetupUnknownTypeProvisionsNothing(t *testing.T) {
 	backend := newSetupBackend()
 	ap := &Applier{b: backend, Catalog: setupCatalog(), Runtimes: dbruntime.BuiltinCatalog(), Log: ioDiscard()}

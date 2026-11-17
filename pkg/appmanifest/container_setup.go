@@ -3,6 +3,9 @@ package appmanifest
 import (
 	"fmt"
 	"io"
+	"strings"
+
+	ct "github.com/randy-girard/flynn/controller/types"
 )
 
 // ContainerAddon is one flynn.yml setup.addons entry after the plan prefix
@@ -26,6 +29,11 @@ func (a *Applier) ApplyContainerSetup(appID string, addons []ContainerAddon, con
 	st, err := a.LoadState(appID)
 	if err != nil {
 		return nil, err
+	}
+	// stack:set writes a release before the first container push. That release
+	// is not a code deploy, so it does not count as the app already being set up.
+	if stackOnlyRelease(st.Head) {
+		st.Head = nil
 	}
 	switch Decide(st, true) {
 	case ActionNone, ActionSkip:
@@ -56,6 +64,25 @@ func (a *Applier) ApplyContainerSetup(appID string, addons []ContainerAddon, con
 		return nil, err
 	}
 	return a.headEnv(appID)
+}
+
+// stackOnlyRelease is the release from stack:set or apps:create: no image,
+// no processes, and no env other than FLYNN_STACK. A later code release has
+// processes and must not provision again.
+func stackOnlyRelease(rel *ct.Release) bool {
+	if rel == nil || strings.TrimSpace(rel.ID) == "" {
+		return false
+	}
+	if len(rel.Processes) > 0 || len(rel.ArtifactIDs) > 0 {
+		return false
+	}
+	for k, v := range rel.Env {
+		if k == "FLYNN_STACK" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (a *Applier) containerAddons(addons []ContainerAddon) ([]Addon, error) {

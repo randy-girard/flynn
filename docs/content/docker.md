@@ -64,7 +64,9 @@ single root `Dockerfile` (or `DOCKERFILE`) and one image.
 A container-stack git push reads `flynn.yml` at the repository root. This is
 the container manifest. Provisioning of an existing app still belongs to
 [`flynn-app.json`](app-manifest.md). `flynn.yml` `setup` runs only on the
-first untouched deploy. The next push does not create another database. When
+first untouched deploy. `flynn stack:set container` writes a release with no
+image and no processes, and that release still counts as untouched. The next
+push does not create another database. When
 the repo also has `flynn-app.json`, that file owns provisioning and the push
 prints `flynn.yml setup ignored`.
 
