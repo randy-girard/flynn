@@ -122,6 +122,19 @@ func TestFormatHelpListsNamespaceCommands(t *testing.T) {
 			t.Fatalf("disk help missing %q:\n%s", want, disk)
 		}
 	}
+	overlayHelp := FormatHelp("overlay")
+	for _, want := range []string{"usage: flynn-host overlay", "Commands:", "overlay:set", "overlay:show"} {
+		if !strings.Contains(overlayHelp, want) {
+			t.Fatalf("overlay help missing %q:\n%s", want, overlayHelp)
+		}
+	}
+	setHelp := FormatHelp("overlay:set")
+	if strings.Contains(setHelp, "\nCommands:") {
+		t.Fatalf("overlay:set is a leaf:\n%s", setHelp)
+	}
+	if !strings.Contains(setHelp, "re-run the same command") || !strings.Contains(setHelp, "--network") {
+		t.Fatalf("overlay:set help should describe recovery and --network:\n%s", setHelp)
+	}
 	reclaim := FormatHelp("disk:reclaim")
 	if strings.Contains(reclaim, "\nCommands:") {
 		t.Fatalf("disk:reclaim is a leaf:\n%s", reclaim)
@@ -166,7 +179,7 @@ func TestRootHelpListsParentsOnly(t *testing.T) {
 			t.Fatalf("uninstalled plugin command %q must not appear in Commands:\n%s", pluginCmd, got)
 		}
 	}
-	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "disk:reclaim", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
+	for _, nested := range []string{"plugin:install", "plugin:list", "otel:add", "volume:gc", "disk:reclaim", "overlay:set", "overlay:show", "acme:configure", "letsencrypt:configure", "blobstore:set"} {
 		if strings.Contains(got, nested) {
 			t.Fatalf("root help should not list %q:\n%s", nested, got)
 		}
@@ -281,6 +294,12 @@ func TestHelpTopicKeepsNamespaceRoots(t *testing.T) {
 	}
 	if got := HelpTopic("disk", []string{"reclaim", "--help"}); got != "disk:reclaim" {
 		t.Fatalf("disk reclaim --help: %q", got)
+	}
+	if got := HelpTopic("overlay", nil); got != "overlay" {
+		t.Fatalf("overlay: %q", got)
+	}
+	if got := HelpTopic("overlay", []string{"set", "--help"}); got != "overlay:set" {
+		t.Fatalf("overlay set --help: %q", got)
 	}
 	if got := HelpTopic("pg", nil); got != "pg" {
 		t.Fatalf("pg: %q", got)

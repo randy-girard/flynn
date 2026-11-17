@@ -13,6 +13,7 @@ var topAliases = map[string]string{
 	"plugin":         "plugin:list",
 	"volume":         "volume:list",
 	"disk":           "disk:reclaim",
+	"overlay":        "overlay:show",
 	"logsink":        "log-sink",
 	"logsink:add":    "log-sink:add",
 	"logsink:list":   "log-sink:list",
@@ -41,6 +42,10 @@ var subAliases = map[string]map[string]string{
 	},
 	"disk": {
 		"reclaim": "disk:reclaim",
+	},
+	"overlay": {
+		"set":  "overlay:set",
+		"show": "overlay:show",
 	},
 	"log-sink": {
 		"list":   "log-sink:list",

@@ -845,6 +845,7 @@ func (w *configureWizard) backup() error {
 func (w *configureWizard) overlay() error {
 	w.heading("Overlay")
 	fmt.Fprintln(w.out, "This prints the live flannel network. It does not change flannel.")
+	fmt.Fprintln(w.out, "Change it with flynn-host overlay:set. Re-run the same command if a host does not apply it.")
 	if w.state.Check.FlannelMeta == nil {
 		fmt.Fprintln(w.out, "flannel metadata is unavailable.")
 		return nil

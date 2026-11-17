@@ -1163,7 +1163,7 @@ func addOverlayLine(add func(productionRow), meta []byte, err error) {
 	add(productionRow{
 		status: "ok", check: "overlay",
 		detail: fmt.Sprintf("network=%s subnet_len=%d", network, subnetLen),
-		action: "Informational. Empty NETWORK is 100.100.0.0/16.",
+		action: "Informational. Empty NETWORK is 100.100.0.0/16. Change it with flynn-host overlay:set.",
 	})
 }
 
